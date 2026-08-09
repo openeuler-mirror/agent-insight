@@ -1,230 +1,557 @@
-# Agent RAS 内核/能力分层与故障域插件化（规划）
+# 故障域自包含插件化（规划）
 
-> 范围：仓根 `agent_ras/` 的 L0/L1 重构。`core/` 下的 `agents/ detectors/ recovery/`
-> **整体上移一层**（内部文件结构原样保留，skills 不迁移），`core/` 收敛为内核；
-> 同时把 detector 注册入口统一，消灭双编排点登记分叉；`ras_embed/` **更名为 `ras_runtime/`**（D7）。
->
-> 约束（用户明确）：**不改变 `detectors/` 内部文件结构**；**skills 不移动到 `agents/`**。
+> 范围：仓根 `agent_ras/`。把「故障模式 = 检测 + 恢复策略 + 文案 + Skill」收成**自包含插件包**；框架启动时目录扫描自动注册。  
+> 目标态：新增故障模式只需新增 `fault_domains/<id>/` 下文件与对应文档，**不修改**框架已有源码。  
+> 状态：**前置已落地，插件方案规划中**。前置「分层搬家 + 注册入口统一」已完成（`b26d497` 三目录上移 + `ras_embed`→`ras_runtime`、`fc1d5fd` 注册表收口，2026-08-09）；自包含 `fault_domains/` 插件包未落地。  
+> 版本：v0.2 · 2026-08-09
+
+---
+
+## 一句话结论
+
+| 项目 | 约定 |
+|------|------|
+| 插件形态 | 自包含目录 + `detector.py`（含 `PLUGIN` 元数据） |
+| 是否需要 manifest.yaml | **不需要**（元数据唯一真源 = `PLUGIN`） |
+| 发现方式 | 扫描 `fault_domains/*/detector.py`，`importlib` 读 `PLUGIN` |
+| 新域触点 | 仅插件目录 + 设计文档；零改 registry / config 字段 / models 枚举 / SessionHub |
 
 ---
 
 ## 1. 背景与问题
 
-### 1.1 现状：`core/` 混合了两类东西
+### 1.1 今天新增一个故障域要改哪里
 
-| 类别 | 内容 |
-|------|------|
-| 内核（契约 + 编排） | `models` `config` `host_control` `monitor` `window` `signal_builder` `reporter` |
-| 能力实现（故障域知识） | `core/detectors/`、`core/recovery/`、`core/agents/` |
+```mermaid
+flowchart TB
+  subgraph today [现状_8plus_触点]
+    C[core/config.py_加Config字段]
+    K[core/models.py_加AnomalyKind]
+    Det[detectors/新文件]
+    Reg[detectors/registry.py_加builder]
+    Eng[recovery/engine.py_KIND_OVERRIDES]
+    Msg[robustness_prompt.py_加文案]
+    Sk[agents/base.py_FAULT_DOMAIN_SKILLS]
+    Hub[session_hub.py_字段与payload白名单]
+  end
+  New[新人要加故障模式] --> today
+```
 
-### 1.2 新增一个故障域的触点清单
+| # | 触点 | 文件 | 问题 |
+|---|------|------|------|
+| 1 | 配置模型 | [`core/config.py`](../../../../agent_ras/core/config.py) | 每域加 `*Config` + `DetectorsConfig` 字段 |
+| 2 | Kind 枚举 | [`core/models.py`](../../../../agent_ras/core/models.py) | `AnomalyKind` 硬枚举，新 kind 必改内核 |
+| 3 | Detector + 注册 | [`detectors/`](../../../../agent_ras/detectors/) + [`registry.py`](../../../../agent_ras/detectors/registry.py) | 手写 `DETECTOR_BUILDERS` |
+| 4 | Recovery 覆盖 | [`recovery/engine.py`](../../../../agent_ras/recovery/engine.py) | `DEFAULT_KIND_OVERRIDES` |
+| 5 | 用户文案 | [`robustness_prompt.py`](../../../../agent_ras/recovery/robustness_prompt.py) | 巨型双语字典 |
+| 6 | Skill 绑定 | [`agents/base.py`](../../../../agent_ras/agents/base.py) | `FAULT_DOMAIN_SKILLS` / `_KIND_TO_FAULT_DOMAIN` |
+| 7 | SessionHub | [`session_hub.py`](../../../../agent_ras/ras_runtime/session_hub.py) | `thinking`/`repeat` 硬字段 + payload 白名单 |
+| 8 | Monitor 兜底 | [`monitor.py`](../../../../agent_ras/core/monitor.py) | 域名 / kind 字面量 fallback |
 
-| | 现状（8+ 处） | 重构后（3~5 处） |
-|---|---|---|
-| 1 | `core/config.py` 加 `*Config` 字段 | 同左（**有意保留**，见 D6） |
-| 2 | `core/models.py` 加 `AnomalyKind` 成员 | 同左（可选，见 D1） |
-| 3 | `core/detectors/registry.py` 加 builder | `detectors/registry.py` 加一行 builder |
-| 4 | `core/recovery/engine.py` 加 `DEFAULT_KIND_OVERRIDES` | 同左（可选；`recovery/engine.py` 原样） |
-| 5 | `core/recovery/robustness_prompt.py` 加文案 | 同左（原样不拆） |
-| 6 | `core/agents/base.py` 注册 `FAULT_DOMAIN_SKILLS` | 同左（仅需要语义 skill 的域） |
-| 7 | `ras_embed/session_hub.py` 加 `SessionState` 字段 + payload 解析分支 | **消除**（注册表驱动，D5） |
-| 8 | skills 目录 | 同左（位置不变） |
+结果：故障域知识散落在「内核 + 能力 + 编排」三处，**无法插件式扩展**。
 
-**核心收益在第 7 行**：新增 detector 不再需要碰 `session_hub.py`，也不存在
-factory / SessionHub 两处登记对齐问题。
+### 1.2 与旧规划文档的关系
 
-### 1.3 结构性问题（本次要解决的）
+此前同名文档聚焦「`core/` 下三目录上移 + 注册入口统一」，并**明确不做**动态发现与配置迁出。  
+部分结构目标（`detectors/` / `recovery/` / `agents/` 顶层、`ras_runtime/`）仓内已基本到位；**本版升级为真正的自包含插件化**，并推翻旧 D1（Kind 保留枚举）与「不做 entry_points / 配置迁出」。
 
-| # | 问题 | 位置 | 本次是否解决 |
-|---|------|------|--------------|
-| C1 | `SessionState` 把 detector 硬编码为 `thinking`/`repeat` 两个字段 + `force_thinking_loop=True` 兼容 hack；与 openjiuwen factory 的 enabled 门控语义不一致 | `session_hub.py:76,104` | ✅ 解决（D5） |
-| C2 | 内核漏入能力细节：`monitor.py:46` import `skill_verdicts`；`monitor.py:637-690` 硬编码 `FAULT_DOMAIN_LLM_THINKING_LOOP` fallback | `core/monitor.py` | ✅ 解决（D4，内容级修改，不动文件结构） |
-| C3 | 协议与实现同目录（`Detector` 在 `detectors/base.py` 等），core 与能力包相互 import | — | ❌ 接受现状（D2），仅路径随上移变化 |
-| C4 | skill 路径按 role 分裂两处（`detectors/skills` / `recovery/skills`），`ROLE_SKILL_DIRS` 硬编码 | `agents/base.py:64` | ❌ 不动（用户约束），路径计算随上移自然成立 |
+```mermaid
+flowchart LR
+  P0[旧规划_分层搬家] --> P1[注册入口统一]
+  P1 --> P2[本方案_自包含插件]
+  P2 --> Goal[新域只加目录]
+```
+
+---
 
 ## 2. 目标与非目标
 
-**目标**
+### 2.1 目标
 
-- G1：`core/` 瘦身为内核文件集合（`models / config / host_control / monitor / window / signal_builder / reporter`），不再包含故障域实现目录
-- G2：`agents/ detectors/ recovery/` 三目录**整体上移一层**，内部文件结构、skills 位置原样保留
-- G3：detector 注册入口唯一化——SessionHub 与 openjiuwen factory 同走 `detectors/registry.build_member_detectors`；消灭 `force_thinking_loop`；`SessionState` 泛化
-- G4：对外稳定契约不破：`core/__init__` 公共导出、`ras_embed.call` wire JSON、配置文件键名
+| ID | 目标 |
+|----|------|
+| G1 | 故障域 = 一个目录：检测实现 + `PLUGIN` 元数据 + 可选文案/Skill + 说明文档 |
+| G2 | 框架启动扫描自动注册；**新域零改** registry / config 静态字段 / models / SessionHub / Monitor |
+| G3 | 无独立 `manifest.yaml`；元数据与工厂同文件，避免 YAML/Python 双源 |
+| G4 | 深挂载 Monitor 与协议 SessionHub **共用** `build_member_detectors`；`enabled` 语义一致 |
+| G5 | Wire 契约不变（`abort_stream` / `emit_notice` / `push_steering`）；Insight 旁路 kind 仍为字符串 |
 
-**非目标（明确不做，记录为未来可选）**
+### 2.2 非目标
 
-- 不抽 `core/ports.py` 协议层（`Detector` / `AgentAdapter` 协议原地保留在 `detectors/base.py` / `agents/base.py`）
-- 不迁移 skills（`detectors/skills/`、`recovery/skills/` 位置不变）
-- 不拆 `robustness_prompt.py`；不把配置模型迁出 `core/config.py`
-- 不做 Monitor vs SessionHub 编排核合并；不做 entry_points 动态发现
-- 不改 `AnomalyKind` 为动态字符串（D1）
+- 不做纯声明式检测（算法仍在插件 `detector.py`）。
+- 不新增 wire 动作类型；不合并 Monitor 与 SessionHub 编排核。
+- Insight [`fault-mode-catalog.ts`](../../../../src/lib/ingest/ras/fault-mode-catalog.ts) / 能力配置 UI **本阶段不自动发现**（环内先生效；看板另立项）。
+- 不要求仓外非 Python 工具只读枚举域列表。
 
-## 3. 目标架构
+---
 
-### 3.1 目录布局（与现状的唯一差异：三个目录上移一层）
+## 3. 目标架构总览
+
+### 3.1 逻辑结构
+
+```mermaid
+flowchart TB
+  subgraph L3 [L3_platform_adapter]
+    Host[HostControl]
+  end
+  subgraph L1 [L1_ras_runtime]
+    Hub[SessionHub]
+  end
+  subgraph L0core [L0_core_内核]
+    Mon[Monitor]
+    Cfg[AgentRASConfig]
+    Models[Signal_Anomaly_str_kind]
+  end
+  subgraph L0cap [L0_能力框架]
+    Loader[FaultDomainLoader]
+    Base[detectors/base_skill_verdicts]
+    RecEng[recovery/engine_operations]
+  end
+  subgraph plugins [fault_domains_插件树]
+    T[llm_thinking_loop]
+    R[repeat_tool]
+    N[新域_只加目录]
+  end
+  Host --> Hub
+  Host --> Mon
+  Hub --> Loader
+  Mon --> Loader
+  Loader --> plugins
+  Loader --> RecEng
+  Hub --> Base
+  Mon --> Base
+  Cfg --> Loader
+  plugins --> Models
+```
+
+**依赖方向**：编排（Monitor / SessionHub）→ Loader → 各插件；插件只依赖 `core.models` / `detectors.base` / `agents` / `fault_domains.types`，**禁止** import 宿主 SDK。
+
+### 3.2 目录布局（目标态）
 
 ```text
 agent_ras/
-  core/                    # 内核
-    __init__.py            # 公共 API（导出保持不变）
-    models.py  config.py  host_control.py
-    monitor.py             # 深挂载编排核（D4 瘦身，仅内容修改）
-    window.py  signal_builder.py  reporter.py
-  detectors/               # 原 core/detectors/ 整体上移，内部结构不变
-    base.py  registry.py  repeat_tool.py  llm_thinking_loop.py  skill_verdicts.py
-    skills/llm-loop-detection/SKILL.md
-  recovery/                # 原 core/recovery/ 整体上移，内部结构不变
-    engine.py  operations.py  state.py  robustness_prompt.py
-    skills/llm-loop-review/SKILL.md
-  agents/                  # 原 core/agents/ 整体上移，内部结构不变
-    base.py  ras_agents.py  host_callback_adapter.py
-  ras_runtime/             # 原 ras_embed/ 更名（D7），内部结构不变
-  platform_adapter/  config/  scripts/  tests/   # 结构不变，仅 import 更新
+  core/                      # 内核：models / config / monitor / host_control / …
+  detectors/                 # 协议与共享算法：base.py / skill_verdicts.py /（通用工具）
+  recovery/                  # 通用恢复引擎 + operations（无域专属字典膨胀）
+  agents/                    # AgentAdapter / RASAgents；skills 表由 Loader 填充
+  fault_domains/             # ★ 插件根
+    types.py                 # FaultDomainPlugin / RecoverySpec
+    loader.py                # 扫描 · 注册 · build_member_detectors
+    _template/               # 脚手架（_ 前缀不加载）
+      detector.py
+      messages.yaml.example
+      README.md
+    llm_thinking_loop/       # 内置域迁入
+      detector.py            # PLUGIN + Detector
+      messages.yaml
+      skills/…
+      README.md
+    repeat_tool/
+      detector.py
+      messages.yaml
+      README.md
+    <new_domain>/            # 新域只加这里
+  ras_runtime/               # SessionHub / facade（SessionState.detectors: list）
+  platform_adapter/
 ```
 
-### 3.2 依赖关系（import 图与现状一致，仅路径变化）
+### 3.3 插件包内部结构
+
+```mermaid
+flowchart TB
+  subgraph pkg ["fault_domains/<domain_id>/"]
+    Det["detector.py\nPLUGIN + factory + Detector"]
+    Msg["messages.yaml\n可选 cn/en 文案"]
+    Sk["skills/\n可选 detection/recovery"]
+    Rd["README.md\n人读说明"]
+  end
+  Det -->|必填| Loader[FaultDomainLoader]
+  Msg -.->|可选合并| MsgTable[文案_lookup]
+  Sk -.->|按 PLUGIN.skills 解析| Agents[RASAgents]
+  Rd -.->|不参与加载| Human[开发者/评审]
+```
+
+| 文件 | 必填 | 职责 |
+|------|------|------|
+| `detector.py` | ✅ | 导出 `PLUGIN` + `factory` + `Detector` 实现 |
+| `messages.yaml` | — | 域专属 steer/notice；缺省走通用模板 |
+| `skills/*/SKILL.md` | — | L3 检测 / recovery review |
+| `README.md` | 建议 | 场景摘要；复杂需求另写 `docs/agent-ras/designs/features/` |
+
+---
+
+## 4. 核心契约：`PLUGIN`（替代 manifest）
+
+### 4.1 为何不要 manifest.yaml
+
+```mermaid
+flowchart LR
+  subgraph bad [双源_易漂移]
+    Y[manifest.yaml]
+    P[detector.py]
+    Y -.->|id_kinds_skills| Drift[字段不一致]
+    P -.-> Drift
+  end
+  subgraph good [单源]
+    D["detector.py\nPLUGIN 唯一真源"]
+  end
+```
+
+| 原设想 manifest 职责 | 落点 |
+|----------------------|------|
+| id / kinds / skills / recovery / anchor | `PLUGIN` |
+| config schema | `PLUGIN.config_model`（Pydantic） |
+| entry 模块 / 工厂名 | 约定文件 `detector.py` + `PLUGIN.factory` |
+| 人读说明 | `README.md` / designs（不参与加载） |
+
+### 4.2 `FaultDomainPlugin` 形状
+
+```python
+# fault_domains/types.py（示意）
+@dataclass(frozen=True)
+class RecoverySpec:
+    kind_overrides: Mapping[str, Sequence[RecoveryAction]]
+    stream_kinds: Sequence[str] = ()   # 走 suppress / abort 分支的 kind
+    anchor: Literal["llm", "tool"] = "llm"
+
+@dataclass(frozen=True)
+class FaultDomainPlugin:
+    id: str                              # == detector.name / 宿主 config 键
+    version: int
+    enabled_by_default: bool
+    kinds: Sequence[str]
+    kind_to_domain: Mapping[str, str]
+    skills: Mapping[str, str]            # detection / recovery（可缺 recovery）
+    recovery: RecoverySpec
+    config_model: type[BaseModel]
+    factory: Callable[[BaseModel, RASAgents], Detector | None]
+```
+
+### 4.3 域内示例（示意）
+
+```python
+# fault_domains/analysis_paralysis/detector.py
+class AnalysisParalysisConfig(BaseModel):
+    enabled: bool = True
+    trigger_window_chars: int = Field(default=2000, ge=100)
+
+def build_detector(cfg: AnalysisParalysisConfig, agents: RASAgents) -> Detector | None:
+    if not cfg.enabled:
+        return None
+    return AnalysisParalysisDetector(cfg, agents=agents)
+
+PLUGIN = FaultDomainPlugin(
+    id="analysis_paralysis",
+    version=1,
+    enabled_by_default=True,
+    kinds=("analysis_paralysis", "analysis_paralysis_severe"),
+    kind_to_domain={
+        "analysis_paralysis": "analysis_paralysis",
+        "analysis_paralysis_severe": "analysis_paralysis",
+    },
+    skills={
+        "detection": "analysis-paralysis-detection",
+        "recovery": "analysis-paralysis-review",
+    },
+    recovery=RecoverySpec(
+        kind_overrides={
+            "analysis_paralysis": [
+                RecoveryAction.OBSERVE_ONLY,
+                RecoveryAction.INJECT_STEERING,
+            ],
+            "analysis_paralysis_severe": [
+                RecoveryAction.REPORT_TO_USER,
+                RecoveryAction.INJECT_STEERING,
+                RecoveryAction.SUPPRESS_STREAM,
+            ],
+        },
+        stream_kinds=("analysis_paralysis", "analysis_paralysis_severe"),
+        anchor="llm",
+    ),
+    config_model=AnalysisParalysisConfig,
+    factory=build_detector,
+)
+```
+
+**规则摘要**
+
+- `Anomaly.kind` ∈ `PLUGIN.kinds`；`Anomaly.detector` == `PLUGIN.id`。
+- L3 调用 `skill_for(PLUGIN.id, "detection")`（表由 Loader 填充）。
+- 禁止 import 宿主 SDK。
+
+---
+
+## 5. 发现与加载流程
+
+### 5.1 扫描规则
+
+| 规则 | 说明 |
+|------|------|
+| 默认根 | `agent_ras/fault_domains/` |
+| 扩展根 | 环境变量 `RAS_FAULT_DOMAIN_PATHS`（`os.pathsep` 分隔） |
+| 合法包 | 子目录含 `detector.py` 且模块导出 `PLUGIN` |
+| 忽略 | 目录名以 `_` 开头（如 `_template`） |
+| 冲突 | 同 `PLUGIN.id` 后者失败并打错误日志，保留先加载者 |
+
+### 5.2 加载时序
+
+```mermaid
+sequenceDiagram
+  participant Boot as SessionHub_or_Monitor
+  participant L as FaultDomainLoader
+  participant FS as filesystem
+  participant Mod as detector_module
+  participant Reg as RuntimeRegistries
+
+  Boot->>L: ensure_domains_loaded
+  L->>FS: list fault_domains/*/detector.py
+  loop each_package
+    L->>Mod: importlib.import_module
+    Mod-->>L: PLUGIN
+    L->>L: validate_PLUGIN
+    L->>Reg: merge_kinds_skills_policy_messages
+  end
+  Boot->>L: build_member_detectors_config_agents
+  L->>Reg: per_domain_config_model_validate
+  L-->>Boot: list_of_Detector
+```
+
+### 5.3 Loader 填充的运行时注册表
+
+```mermaid
+flowchart LR
+  PLUGIN --> Kinds[kind_set]
+  PLUGIN --> K2D[kind_to_domain]
+  PLUGIN --> Skills[FAULT_DOMAIN_SKILLS]
+  PLUGIN --> Pol[kind_overrides]
+  PLUGIN --> Stream[stream_kinds]
+  PLUGIN --> Anchor[anchor_llm_or_tool]
+  MsgYaml[messages.yaml] --> Msgs[message_lookup]
+  Kinds --> Guard[observe后kind校验]
+  Stream --> Ops[operations_suppress分支]
+  Anchor --> HubA[session_hub_锚点选择]
+```
+
+对外稳定 API（替换硬编码 [`detectors/registry.py`](../../../../agent_ras/detectors/registry.py)）：
 
 ```text
-core/monitor.py   ──▶  detectors.base / recovery.engine / agents.base   （维持现状）
-core/config.py    ──▶  recovery.engine（RecoveryAction / DEFAULT_SEVERITY_ACTIONS）
-detectors/*       ──▶  core.models / core.config / agents
-recovery/*        ──▶  core.models / core.host_control
-ras_embed / platform_adapter  ──▶  core + detectors + recovery + agents
+ensure_domains_loaded() -> None
+build_member_detectors(config, agents) -> list[Detector]
+fault_domain_for_kind(kind) -> str | None
+is_stream_kind(kind) -> bool
+anchor_for_kind(kind) -> "llm" | "tool" | None
 ```
 
-明确接受：**core（编排器）import 能力包**这一现状不改造。严格分层（协议抽离、
-core 零能力依赖）需要抽 `ports.py` 并改写 Monitor 接口，代价与收益不匹配，放弃。
+---
 
-`agents/base.py:62` 的 `_AGENT_RAS_ROOT = Path(__file__).parent.parent` 在上移后
-解析为 `agent_ras/`，`ROLE_SKILL_DIRS` 指向 `detectors/skills` / `recovery/skills`
-**自然成立**，skills 路径零改动（C4 不处理也不破）。
+## 6. 框架一次性改造（之后新域零改）
 
-## 4. 关键设计决策
+### 6.1 `Anomaly.kind`：枚举 → 稳定字符串
 
-### D1：`AnomalyKind` 保留为 core 枚举
+```mermaid
+flowchart LR
+  subgraph before [改造前]
+    E["AnomalyKind Enum\n加成员=改内核"]
+  end
+  subgraph after [改造后]
+    S["kind: str\n由 PLUGIN.kinds 声明"]
+  end
+  before --> after
+```
 
-它是 detector ↔ recovery ↔ wire actions ↔ Insight 看板的公共契约。新域需要新 kind
-时在内核枚举加成员，不做动态注册。
+- Wire / Insight 仍吃字符串（如 `"llm_thinking_loop"`），**契约值不变**。
+- 未知 kind：fail-open 打日志，丢弃或降级 `observe_only`（实现期定一种并单测锁死）。
 
-### D2：协议原地保留，接受 core → 能力包 import
+### 6.2 配置：静态字段 → 按域动态校验
 
-`Detector` / `AsyncRecoveryDetector` 留在 `detectors/base.py`，`AgentAdapter` 留在
-`agents/base.py`，`RecoveryAction` 留在 `recovery/engine.py`。core 的 `__init__.py`
-与 `monitor.py` 继续 import 它们——与现状同构，只是路径从 `core.detectors.*`
-变为 `detectors.*`。
+- `DetectorsConfig` 不再为每域加字段；宿主 JSON 保持 `detectors.<domain_id>.*`。
+- Loader 用各域 `config_model` 校验；未知键忽略或 warn（与现 `extra` 策略对齐时写明）。
+- [`_config_from_payload`](../../../../agent_ras/ras_runtime/session_hub.py) **删除** thinking/repeat 白名单，按已发现域 id 分发。
 
-### D3：三个目录纯平移
+### 6.3 SessionHub / Monitor 去硬编码
 
-`git mv core/detectors detectors`（recovery / agents 同理），文件内容在搬家 commit
-中**零编辑**（import 改写单独一个 commit 或同 commit 机械替换，见 §5）。
+| 现状 | 目标 |
+|------|------|
+| `SessionState.thinking` / `.repeat` | `detectors: list[Detector]`，observe 扇出 |
+| `force_thinking_loop=True` | 删除；`enabled:false` 两条路径一致 |
+| `_is_llm_anomaly_kind` 字面量集合 | `anchor_for_kind(kind) == "llm"` |
+| `_THINKING_LOOP_KINDS` | `is_stream_kind(kind)` |
+| Monitor `FAULT_DOMAIN_LLM_THINKING_LOOP` fallback | `fault_domain_for_kind(anomaly.kind)` |
 
-### D4：Monitor 瘦身（内容级，不改文件结构）
+```mermaid
+sequenceDiagram
+  participant Hook as Platform_hook
+  participant Hub as SessionHub
+  participant D1 as Detector_A
+  participant D2 as Detector_B
+  participant Rec as build_recovery_actions
+  participant L2 as applyActions
 
-- 删除 `monitor.py:46` 对 `detectors.skill_verdicts` 的直接 import：L3 reviewer 的
-  verdict 解析经 detector 的 `AsyncRecoveryDetector` 回调带回，或经 `detectors/registry`
-  提供的解析钩子获取。
-- `_fault_domain_for_pending`（`monitor.py:637`）的 thinking-loop 硬编码 fallback
-  改为按 `anomaly.kind` 经注册表反查域；查不到走兜底 notice。
-- 清理残留的 kind 字面量分支，恢复决策一律 policy 驱动。
+  Hook->>Hub: observe_signal
+  Hub->>D1: observe
+  D1-->>Hub: None
+  Hub->>D2: observe
+  D2-->>Hub: Anomaly
+  Hub->>Rec: anomaly_plus_policy
+  Rec-->>Hub: wire_actions
+  Hub-->>L2: abort_notice_steer
+```
 
-### D5：注册入口统一 + SessionState 泛化（本次核心收益）
+### 6.4 Recovery / 文案
 
-- `SessionHub` 与 openjiuwen `factory` 统一走 `detectors/registry.build_member_detectors(config, agents)`（已存在），enabled 门控语义完全一致。
-- `SessionState` 的 `thinking` / `repeat` 硬编码字段泛化为 `detectors: list[Detector]`；observe 扇出遍历列表。
-- 删除 `force_thinking_loop` 参数。**有意的行为修正**：协议路径历史上 thinking-loop
-  恒装（忽略 `enabled: false`）；重构后尊重配置（默认 enabled=true，行为不变；
-  显式关闭才真正不装）。PR 描述中显式声明。
-- `_config_from_payload` 的逐键白名单改为按注册表域名单分发 payload 子 dict
-  （配置模型仍在 `core/config.py`，键名不变），新增域不再改 `session_hub.py`。
+- 默认 `kind_overrides` = 各 `PLUGIN.recovery` 合并；宿主 `policy.kind_overrides` 仍可覆盖。
+- [`robustness_prompt.py`](../../../../agent_ras/recovery/robustness_prompt.py) 只留**通用**模板；域文案来自插件 `messages.yaml`。
+- 新域**不得**改 wire 类型集合。
 
-### D6：配置模型留在 `core/config.py`
+### 6.5 Skill 路径解析
 
-`RepeatToolConfig` / `LlmThinkingLoopConfig` 不迁移。代价：新增域仍需在
-`core/config.py` 加一个字段（触点 1 保留）。换来 `DetectorsConfig` 强类型校验、
-宿主配置键名稳定、本次 diff 可控。
+```mermaid
+flowchart TB
+  Call[skill_for_domain_role] --> Pkg["优先\nfault_domains/<id>/skills/<name>/"]
+  Pkg -->|未找到| Legacy["兼容\ndetectors/skills 或 recovery/skills"]
+```
 
-### D7：`ras_embed/` 更名为 `ras_runtime/`
+---
 
-原名的问题是「embed」只描述了嵌入形态，没说明它是**进程内运行时**（FFI 门面 +
-embed loop + SessionHub 编排核 + 旁路 push）。新名与文档既有术语
-「进程内 runtime」一致。内部文件结构不变。
+## 7. 前后对比：扩展一个故障域
 
-> 注：2026-08-07 的 `037bd69`（扩展多平台 inproc）已把 IPC 迁出本包——
-> 原 `ipc.py` / `ipc_worker.py` 移至 `platform_adapter/common/transport/subprocess_ipc/`，
-> 本包公共 API 收缩为 `call / ensure_runtime / reset_runtime_for_tests`，更名面相应缩小。
+### 7.1 触点对比
 
-**契约面盘点（改名即改约，全部仓内同步，不留别名兼容层）**：
+```mermaid
+flowchart LR
+  subgraph old [改造前]
+    O1[改8plus处框架代码]
+  end
+  subgraph new [改造后]
+    N1[新建fault_domains/id]
+    N2[写detector_PLUGIN]
+    N3[可选skills_messages]
+    N4[写设计文档]
+  end
+  old -->|框架一次性改造| new
+```
 
-| 引用面 | 位置 |
-|--------|------|
-| JS FFI 字符串契约 | `platform_adapter/common/python_bridge.js`：`PyRun_SimpleString` 内 `from ras_embed import call` |
-| Python client | `platform_adapter/common/ras_client.py`、`platform_adapter/xiaoo/hooks.py`、`xiaoo/hooker/hooker_main.py`、`common/insight_anomaly_reporter.py` |
-| transport 层 | `common/transport/subprocess_ipc/worker.py`（`from ras_embed.facade import call`）、`client.py` 内 docstring/错误消息字样 |
-| 打包 | `pyproject.toml` 的 `packages.find` include |
-| 测试 | `tests/unit_tests/ras_embed/` → `ras_runtime/`；harness 下同名目录 |
-| 文档 | `architecture.md` §4 全节、`modules/ras-embed.md` → 更名 `modules/ras-runtime.md`、guides |
+| | 改造前 | 改造后 |
+|---|--------|--------|
+| 框架源码 | 必改多处 | **不改** |
+| 配置 | `config.py` 加字段 | 域内 `config_model` |
+| Kind | `AnomalyKind` 加成员 | `PLUGIN.kinds` |
+| 注册 | `registry.py` 加一行 | 目录扫描 |
+| 文案 | 改 `robustness_prompt` | 域 `messages.yaml` |
+| Skill | 改 `FAULT_DOMAIN_SKILLS` | `PLUGIN.skills` |
+| 文档 | features/*.md | 同左 + 域 README |
 
-**保留不改**：`transport/subprocess_ipc/client.py` 的 socket 文件名 `ras_embed.sock`
-（磁盘上的进程间契约，避免与残留旧 worker 进程不兼容）；仅包名变更。
+### 7.2 新增域操作清单（目标态）
 
-**仓外风险**：若有仓外部署/手写代码 pin 了 `from ras_embed import ...`（独立维护的
-xiaoo / openjiuwen 环境），需同步通知。仓内分发的桥接代码随安装器走，自洽。
+1. 复制 `fault_domains/_template/` → `fault_domains/<id>/`。
+2. 实现 `PLUGIN` + `build_detector` + `Detector`（按需 `AsyncRecoveryDetector`）。
+3. 按需添加 `skills/*`、`messages.yaml`。
+4. 域 `README.md`；复杂需求写 [`docs/agent-ras/designs/features/`](./) 并在 [Agent RAS README](../../README.md) 登记。
+5. 单测 + 冒烟既有 thinking-loop / repeat 不回归。
 
-## 5. 迁移计划
+**禁止清单**：改 `registry` / `config` 静态字段 / `models` 枚举 / `session_hub` / `monitor` / `robustness_prompt` 大字典；**也不新增**独立 manifest。
 
-### P1 结构分层（纯搬家，无行为变化）
+---
 
-1. `git mv` 三目录上移 + `git mv ras_embed ras_runtime`；`agents/base.py` 的 `_AGENT_RAS_ROOT` 无需改（上移后解析不变）
-2. 全量 import 改写：`core.detectors.*` → `detectors.*`、`core.recovery.*` → `recovery.*`、`core.agents.*` → `agents.*`、`ras_embed` → `ras_runtime`（约 40 个 py + JS 桥接字符串 + 测试目录更名）
-3. `pyproject.toml` 的 `packages.find` include 改为 `core*` `detectors*` `recovery*` `agents*` `ras_runtime*` `platform_adapter*`
-4. 跑全量单测确认零行为变化
+## 8. 内置域迁移
 
-### P2 注册入口统一（机制切换，含一处行为修正）
+将现有能力迁为同形态插件，一次性删掉硬编码 builders：
 
-5. D4：Monitor 摘除 `skill_verdicts` 直接依赖与域名硬编码
-6. D5：`SessionState` 泛化为 `detectors: list`；删除 `force_thinking_loop`；`_config_from_payload` 注册表驱动分发
-7. 单测 + E2E 全量验证（§7）
+| 现位置 | 目标插件包 |
+|--------|------------|
+| [`detectors/llm_thinking_loop.py`](../../../../agent_ras/detectors/llm_thinking_loop.py) + skills | `fault_domains/llm_thinking_loop/` |
+| [`detectors/repeat_tool.py`](../../../../agent_ras/detectors/repeat_tool.py) | `fault_domains/repeat_tool/` |
 
-### 不做（未来可选，另行立项）
+`detectors/` 保留：`base.py`、`skill_verdicts.py`、可复用算法片段。  
+宿主配置键 **`detectors.llm_thinking_loop` / `detectors.repeat_tool` 保持兼容**。
 
-- `core/ports.py` 协议抽离（严格分层）
-- skills 统一目录、`robustness_prompt` 拆分、配置模型迁入域文件（完整单文件插件形态）
-- Monitor 与 SessionHub 编排核合并
+---
 
-## 6. 兼容性
+## 9. 兼容性与风险
 
 | 面 | 结论 |
 |----|------|
-| `core/__init__.py` 公共导出 | 不变（`AgentRASConfig` / `HostControl` / `AgentAdapter` / 模型 / `RecoveryAction`，re-export 路径内部调整） |
-| `ras_embed` 包名 | **破**：更名 `ras_runtime`；`call` wire JSON 本身不变，仅 import 路径变（D7 契约面全仓同步，无别名兼容层） |
-| 宿主配置键 | 不变（新增「显式 enabled:false 生效」语义修正，PR 声明） |
-| skills 磁盘路径 | 包内相对路径不变（`detectors/skills/`、`recovery/skills/` 随目录上移，加载逻辑零改动） |
-| 内部 import 路径 | **破**：`core.{detectors,recovery,agents}.*` → `{detectors,recovery,agents}.*`；仓内全部调用方同步改 |
-| Insight 契约 | 不变（AnomalyKind 值不变） |
-
-## 7. 验证计划
-
-1. `cd agent_ras && python -m pytest tests -q` 全量单测
-2. E2E（结构改动触及全部运行路径，必须做端到端验证）：
-   - 深挂载：`python agent_ras/scripts/smoke_l3_runtime.py`、`e2e_l3_thinking_dead_loop.py`、`e2e_l2_similar_clauses.py`
-   - 协议 inproc：`bash agent_ras/scripts/smoke_inproc.sh`（显式 `unset LD_PRELOAD` 路径）
-   - xiaoO：`e2e_xiaoo_inproc_harness.py` / `e2e_xiaoo_cli.py`
-   - 核对：thinking-loop 命中后 wire actions 与重构前一致；`detectors.llm_thinking_loop.enabled=false` 在 SessionHub / factory 两条路径下同语义（均不装）
-3. 未跑 E2E 前不得在 PR 宣称完成
-
-## 8. 文档同步清单
-
-- [ ] `docs/agent-ras/designs/architecture.md`：§3 源码目录、§4.4 文件调用图（`core/detectors` → `detectors` 等）
-- [ ] `docs/agent-ras/designs/modules/detectors.md`：路径更新；「扩展指南」改为新流程（detectors/ 新文件 + registry 一行 + config 字段，**不再**提 SessionState 两边登记）
-- [ ] `docs/agent-ras/designs/modules/recovery.md`、`ras-embed.md`（更名 `ras-runtime.md`）、`monitor.md`：路径与 SessionState 变化
-- [ ] `docs/agent-ras/guides/` 各平台页、`agent_ras/README.md`、`AGENTS.md` §7（如提及目录）
-
-## 9. 风险
+| Wire JSON | 不变 |
+| 宿主配置键名 | 内置域键名不变 |
+| `enabled:false` | SessionHub 与 factory **同语义**（去掉 force_thinking_loop；PR 显式声明） |
+| Insight catalog / 能力 UI | 暂不自动发现；新域环内可用、看板文案可能滞后 |
+| 仓外 pin `AnomalyKind` 枚举 | 破；调用方改用字符串 |
 
 | 风险 | 缓解 |
 |------|------|
-| 大 diff 冲击在途分支 | P1（搬家）/P2（机制）分两个 commit；P1 纯 `git mv` + import 替换 |
-| `enabled:false` 语义修正影响存量宿主 | 默认全启用→行为不变；仅显式关闭者变化，PR 显式声明 |
-| 分层纯度未达成（core 仍 import 能力包） | 明确记录为已接受取舍；未来如需严格分层再抽 ports（§5「不做」） |
-| 仓外 pin `ras_embed` 包名 | 改名前确认仓外部署无手写引用；PR 描述显式声明包名变更 |
-| git blame 噪音 | 搬家 commit 不做逻辑编辑，便于 `git log --follow` |
+| 插件 import 副作用 / 循环依赖 | Loader 只 import `detector` 模块；禁止插件 import Monitor/Hub |
+| 恶意/损坏插件拖垮启动 | 单包校验失败 skip + error log；核心内置域加载失败则 fail-fast |
+| 大 diff 冲击在途分支 | 分 commit：类型+Loader → SessionState 泛化 → 迁内置域 → template |
+| kind 字符串拼写漂移 | Loader 校验 + 单测固定内置 kind 字面量 |
+
+---
+
+## 10. 实现分期与验证
+
+### 10.1 分期
+
+```mermaid
+gantt
+  title 故障域插件化分期
+  dateFormat YYYY-MM-DD
+  section 框架
+  types与Loader           :a1, 2026-08-10, 5d
+  kind字符串与动态配置     :a2, after a1, 4d
+  SessionState与Monitor去硬编码 :a3, after a2, 4d
+  section 迁移
+  迁llm_thinking_loop与repeat_tool :b1, after a3, 5d
+  _template与stub域证明   :b2, after b1, 3d
+  section 验证
+  单测与E2E冒烟           :c1, after b2, 3d
+```
+
+1. `FaultDomainPlugin` + `FaultDomainLoader` + 动态 kind/config。  
+2. SessionState / Monitor / operations 查注册表。  
+3. 迁两个内置域；删除 `DETECTOR_BUILDERS` 硬编码。  
+4. `_template` + stub 域证明「只加目录」。  
+5. 文档：本文件为真源；同步 [detectors.md](../modules/detectors.md) / [recovery.md](../modules/recovery.md) / [architecture.md](../architecture.md) 扩展指南。
+
+### 10.2 验证计划
+
+| 层级 | 内容 |
+|------|------|
+| 单测 | `test_fault_domain_loader.py`：发现、PLUGIN 校验、未知 kind、`enabled=false`、id 冲突 |
+| 回归 | `cd agent_ras && python -m pytest tests -q` |
+| E2E | `e2e_l3_thinking_dead_loop` / `e2e_l2_similar_clauses` / xiaoO inproc / `smoke_inproc` |
+| 插件证明 | stub 域仅新增目录即可被 observe 路径装上（框架 git diff 无登记点改动） |
+
+未跑 E2E 前不得在实现 PR 宣称完成。
+
+---
+
+## 11. 文档与清单同步
+
+- [x] 本文件改写为自包含插件方案真源（v0.2）
+- [ ] 落地实现后更新 [detectors.md](../modules/detectors.md)「扩展指南」
+- [ ] 落地实现后更新 [recovery.md](../modules/recovery.md) / [monitor.md](../modules/monitor.md) / [architecture.md](../architecture.md)
+- [ ] [docs/agent-ras/README.md](../../README.md) 特性表状态随实现推进
+- [ ] [docs/design/README.md](../../../design/README.md) 需求清单描述与实现状态
+
+---
+
+## 附录 A：与旧版决策对照
+
+| 旧决策 | 本版 |
+|--------|------|
+| D1 AnomalyKind 保留枚举 | **推翻** → 动态字符串 |
+| D5 注册入口统一 | **保留并加强** → Loader 为唯一入口 |
+| D6 配置留在 core/config 静态字段 | **推翻** → 域内 `config_model` |
+| 不做 entry_points / 配置迁出 | **推翻** → 目录扫描 + `PLUGIN` |
+| 独立 manifest.yaml（中间稿） | **不做** → `PLUGIN` 单源 |
+
+## 附录 B：消息文件示意
+
+```yaml
+# fault_domains/<id>/messages.yaml
+cn:
+  steer_default: "检测到分析停滞，请收敛结论并开始执行。"
+  notice_default: "可靠性：已中断冗长分析并注入纠正提示。"
+en:
+  steer_default: "Analysis appears stalled; converge and act."
+  notice_default: "Reliability: interrupted overthinking and steered the agent."
+```

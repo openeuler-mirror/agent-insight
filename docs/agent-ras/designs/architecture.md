@@ -6,13 +6,13 @@
 
 **目标**
 
-- 检测/恢复算法**单源**（Python `core/`），禁止其它语言复制 Detector / Recovery 策略
+- 检测/恢复算法**单源**（Python `detectors/` + `recovery/` 能力包），禁止其它语言复制 Detector / Recovery 策略
 - openjiuwen **深挂载不降级**（进程内直连 L0 Monitor）
 - OpenCode / openclaw / Hermes 经统一协议挂载（L3 → L2 → L1 SessionHub → L0），能力深度见平台矩阵
 - runtime 生命周期归宿主进程；平台只写薄适配
 - inproc 不内嵌 UI；人机监控由 Agent Insight 旁路消费落库事件
 
-**在范围内**：环内异常检测与恢复；多平台 HostControl / AgentAdapter；同进程 `ras_embed`。
+**在范围内**：环内异常检测与恢复；多平台 HostControl / AgentAdapter；同进程 `ras_runtime`。
 
 **不在范围内**：用 OTLP **替代**环内恢复；为每个平台重写检测算法；fork openjiuwen.core；Insight 看板实现（见 [`docs/design/`](../../design/) 与 developer-guide）；运行时人工 HITL 确认（现行为自动 L3 Reviewer / wire 投递）。
 
@@ -38,7 +38,7 @@ flowchart TB
     Client[ras_client]
     Apply[applyActions]
   end
-  subgraph L1 [L1_ras_embed]
+  subgraph L1 [L1_ras_runtime]
     Hub[SessionHub]
     Push[insight_push_fail_open]
   end
@@ -76,7 +76,7 @@ flowchart LR
 
 | 职责 | 落点 | 说明 |
 |------|------|------|
-| 决策 | L0 `core/recovery` | Policy / Executor（深挂载）或 `build_recovery_actions`（协议）；文案已渲染 |
+| 决策 | L0 `recovery` | Policy / Executor（深挂载）或 `build_recovery_actions`（协议）；文案已渲染 |
 | 调度 | L2 `applyActions`（协议） | wire type → Host 方法；**不**回写 SessionHub |
 | 投递 | L3 HostControl | 平台 API；不得改写文案或重做策略 |
 
@@ -105,11 +105,11 @@ flowchart TB
 
 runtime 随宿主进程初始化与释放；不监听 RAS 端口，不写 sidecar PID/锁文件。
 
-源码目录：`core/`（L0）、`ras_embed/`（L1）、`platform_adapter/common/`（L2）、`platform_adapter/{openjiuwen,opencode,openclaw,hermes}/`（L3）。
+源码目录：`core/`（L0 契约与通用框架）、`detectors/` `recovery/` `agents/`（L0 能力包，2026-08 自 `core/` 上移一层）、`ras_runtime/`（L1，原 `ras_embed`）、`platform_adapter/common/`（L2）、`platform_adapter/{openjiuwen,opencode,openclaw,hermes}/`（L3）。
 
 ## 4. 协议 inproc：`.so` 加载、实现与模块调用
 
-openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/monitor`）。本节描述 **JS 宿主**（以 OpenCode + Bun 为主）如何把 CPython 嵌进同一进程，以及文件级调用关系。Python 宿主（openclaw / Hermes 骨架）跳过 FFI，直接 `from ras_embed import call`，见 §4.6。
+openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/monitor`）。本节描述 **JS 宿主**（以 OpenCode + Bun 为主）如何把 CPython 嵌进同一进程，以及文件级调用关系。Python 宿主（openclaw / Hermes 骨架）跳过 FFI，直接 `from ras_runtime import call`，见 §4.6。
 
 ### 4.1 加载的是什么 `.so`
 
@@ -120,7 +120,7 @@ openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/mon
 
 要点：
 
-1. Agent RAS **没有**单独编译的 native 扩展作为入口；入口是宿主进程内的 **libpython** + 纯 Python 包 `ras_embed`。
+1. Agent RAS **没有**单独编译的 native 扩展作为入口；入口是宿主进程内的 **libpython** + 纯 Python 包 `ras_runtime`。
 2. Bun 的 `bun:ffi` `dlopen` 默认是 **局部符号绑定**。若只靠它加载 libpython，随后解释器再加载 `_opcode.so` 时会出现 `undefined symbol: PyList_New`。
 3. 因此桥接层先用 **libc `dlopen(libpython, RTLD_NOW | RTLD_GLOBAL)`** 把 `Py*` 挂到进程全局符号表，再 `bun:ffi` 绑定 `Py_Initialize` / `PyRun_SimpleString`。这样**无需** `LD_PRELOAD=libpython` 即可直接跑 `opencode`（见 `scripts/smoke_inproc.sh`）。
 
@@ -145,7 +145,7 @@ sequenceDiagram
   participant Br as python_bridge.js
   participant Libc as libc_dlopen
   participant Py as libpython.so
-  participant Emb as ras_embed.facade.call
+  participant Emb as ras_runtime.facade.call
 
   Plugin->>RC: ensure_or_observe
   RC->>Br: embedReady_embedCall
@@ -155,7 +155,7 @@ sequenceDiagram
   Libc-->>Py: symbols_global
   Br->>Py: bun_ffi_dlopen_bind_Py_API
   Br->>Py: Py_Initialize
-  Br->>Py: PyRun_SimpleString_import_ras_embed
+  Br->>Py: PyRun_SimpleString_import_ras_runtime
   Note over Br,Emb: 每次 call：写临时 result-*.json
   Br->>Py: PyRun_SimpleString_call_write_file
   Py->>Emb: call_op_session_payload
@@ -170,18 +170,18 @@ sequenceDiagram
 2. `require("bun:ffi")`；失败则 inproc 不可用（`embedReady() === false`）。
 3. `preloadLibpythonGlobal`：对 `libc.so.6`（或 macOS `libSystem`）取 `dlopen`/`dlerror`，以 `RTLD_GLOBAL` 打开 `libpython`。
 4. 再用 bun:ffi 打开同一路径，绑定 `Py_IsInitialized` / `Py_Initialize` / `PyRun_SimpleString`。
-5. 设置 `PYTHONHOME`、`PYTHONPATH`（`python_packages` + `repo_root`），`Py_Initialize`，`from ras_embed import call`。
+5. 设置 `PYTHONHOME`、`PYTHONPATH`（`python_packages` + `repo_root`），`Py_Initialize`，`from ras_runtime import call`。
 6. **返回值通道**：`PyRun_SimpleString` 拿不到 Python 返回值，故每次调用把结果写到 `~/.agent-insight/ras/calls/result-{pid}-{ts}-{seq}.json`，JS 读完删除（防多会话串读）。
 
 ### 4.3 进程内 runtime（Python 侧）
 
-[`ras_embed/runtime.py`](../../../agent_ras/ras_embed/runtime.py) 在首次 `call` 时：
+[`ras_runtime/runtime.py`](../../../agent_ras/ras_runtime/runtime.py) 在首次 `call` 时：
 
 - 创建全局 `SessionHub`
-- 起守护线程 `ras_embed_loop`，跑独立 `asyncio` event loop
+- 起守护线程 `ras_runtime_loop`，跑独立 `asyncio` event loop
 - `run_coro(hub.observe(...))`：`asyncio.run_coroutine_threadsafe` + 默认超时 8s，把异步检测桥成 FFI 同步调用
 
-[`ras_embed/facade.py`](../../../agent_ras/ras_embed/facade.py) 是稳定对外 API：`call(op, session_id, payload_json) -> str`。  
+[`ras_runtime/facade.py`](../../../agent_ras/ras_runtime/facade.py) 是稳定对外 API：`call(op, session_id, payload_json) -> str`。  
 ops：`health` | `hello` | `observe` | `reset` | `action_result` | `skill_result` | `bye`。
 
 ### 4.4 模块关系与代码文件调用图
@@ -201,7 +201,7 @@ flowchart TB
   subgraph native [进程内_CPython]
     LP["libpythonX.Y.so"]
   end
-  subgraph L1py [L1_ras_embed]
+  subgraph L1py [L1_ras_runtime]
     FAC["facade.py::call"]
     RT["runtime.py\nensure_runtime / run_coro"]
     HUB["session_hub.py::SessionHub"]
@@ -237,11 +237,11 @@ flowchart TB
 | L3 | `platform_adapter/opencode/plugin.js` | 宿主事件 → `createRasClient().observe`；`onActions` → `applyActions` + `host_control`；L3 判定 → `skill_judge` → `skillResult` |
 | L3 | `opencode/host_control.js` | 仅平台 API；被 `applyActions` 调用 |
 | L2 | `common/ras_client.js` | → `python_bridge.embedCall`；有 actions 时回调 `onActions` |
-| L2 | `common/python_bridge.js` | → libpython → `ras_embed.call` |
+| L2 | `common/python_bridge.js` | → libpython → `ras_runtime.call` |
 | L2 | `common/host_actions.js` | wire `abort_stream`/`emit_notice`/`push_steering` → Host 方法名 |
-| L1 | `ras_embed/facade.py` | → `ensure_runtime` + `SessionHub` 方法 |
-| L1 | `ras_embed/session_hub.py` | 直连 L0 Detectors + `build_recovery_actions`（**不经** `Monitor`） |
-| L0 | `core/detectors/*`、`core/recovery/*` | 算法与决策；与深挂载共用源码 |
+| L1 | `ras_runtime/facade.py` | → `ensure_runtime` + `SessionHub` 方法 |
+| L1 | `ras_runtime/session_hub.py` | 直连 L0 Detectors + `build_recovery_actions`（**不经** `Monitor`） |
+| L0 | `detectors/*`、`recovery/*` | 算法与决策；与深挂载共用源码 |
 
 **与深挂载对照（勿混）：**
 
@@ -284,11 +284,11 @@ sequenceDiagram
   RC->>FAC: action_result → insight_push fail-open
 ```
 
-L3 语义判定（OpenCode）：Detector 经 `HostCallbackAgentAdapter` park 请求 → observe 响应带 `skill_requests` → 插件跑 `skill_judge.js` → `skill_result` 回 SessionHub → 再产出 wire actions。细节见 [`modules/ras-embed.md`](modules/ras-embed.md)。
+L3 语义判定（OpenCode）：Detector 经 `HostCallbackAgentAdapter` park 请求 → observe 响应带 `skill_requests` → 插件跑 `skill_judge.js` → `skill_result` 回 SessionHub → 再产出 wire actions。细节见 [`modules/ras-runtime.md`](modules/ras-runtime.md)。
 
 ### 4.6 Python 宿主 inproc（无 FFI）
 
-[`platform_adapter/common/ras_client.py`](../../../agent_ras/platform_adapter/common/ras_client.py) 同进程 `import ras_embed`，JSON 编解码与 JS client 对齐；openclaw / Hermes hooks 用它 + 各自 `HostControl`。不加载 `python_bridge.js`，也**不**再 dlopen libpython（解释器已是宿主）。
+[`platform_adapter/common/ras_client.py`](../../../agent_ras/platform_adapter/common/ras_client.py) 同进程 `import ras_runtime`，JSON 编解码与 JS client 对齐；openclaw / Hermes hooks 用它 + 各自 `HostControl`。不加载 `python_bridge.js`，也**不**再 dlopen libpython（解释器已是宿主）。
 
 验证：`bash agent_ras/scripts/smoke_inproc.sh`（显式 `unset LD_PRELOAD`，证明 RTLD_GLOBAL 路径成立）。
 
@@ -347,7 +347,7 @@ sequenceDiagram
 - 恢复：Policy 映射 + thinking-loop 自动路径；L3 Reviewer 自动二次判定（**无**运行时人工 ask）
 - 隔离：深挂载按 `session_id` 的 invoke-scoped Monitor；协议路径按 SessionHub session
 
-**组件边界**：Rail/钩子采 Signal；Monitor **或** SessionHub 编排；`recovery` 决策；Host 投递。稳定公共 API：`AgentRASConfig`、核心模型、`RecoveryAction`、`HostControl`、`build_agent_ras_rail` / `ras_embed.call`。
+**组件边界**：Rail/钩子采 Signal；Monitor **或** SessionHub 编排；`recovery` 决策；Host 投递。稳定公共 API：`AgentRASConfig`、核心模型、`RecoveryAction`、`HostControl`、`build_agent_ras_rail` / `ras_runtime.call`。
 
 **数据边界**：检测链路不递归脱敏；evidence 最小原则；旁路 push fail-open。
 

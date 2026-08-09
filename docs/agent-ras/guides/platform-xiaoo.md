@@ -1,6 +1,6 @@
 # xiaoO 平台接入
 
-**原则**：CLI / TUI / daemon 任一入口，检测与恢复同档。走协议 inproc（`ras_embed`），**不**使用 daemon HTTP / SSE。
+**原则**：CLI / TUI / daemon 任一入口，检测与恢复同档。走协议 inproc（`ras_runtime`），**不**使用 daemon HTTP / SSE。
 
 设计真源：[xiaoo-adapter.md](../designs/features/xiaoo-adapter.md)。  
 细节：[INSTALL.md](../../../agent_ras/platform_adapter/xiaoo/INSTALL.md)。

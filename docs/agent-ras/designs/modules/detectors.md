@@ -24,7 +24,7 @@ flowchart TB
 | 字段 | 值 |
 |------|-----|
 | 模块 ID | M-detectors |
-| 路径 | `agent_ras/core/detectors/` |
+| 路径 | `agent_ras/detectors/` |
 | 文件数 | 5 Python + L3 skill 定义 |
 | 规模 | ≈ 1632 行 Python（含 llm_thinking_loop 808 / repeat_tool 540） |
 | 主要语言 | Python |
@@ -179,7 +179,7 @@ sequenceDiagram
 
 | 方向 | 依赖 |
 |------|------|
-| 依赖 | `core.models`, `core.config`, `core.agents`（L3） |
+| 依赖 | `core.models`, `core.config`, `agents`（L3） |
 | 被依赖 | `monitor.py`, `factory.py`, `session_hub.py` |
 
 ---
@@ -206,9 +206,12 @@ sequenceDiagram
 
 ### 扩展指南
 
+> **目标态**见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)：新域落在 `fault_domains/<id>/`，导出 `PLUGIN`，由 Loader 扫描注册，**不再**改 registry / config 静态字段 / SessionHub。  
+> 下列步骤描述**当前代码**仍须手改的路径，落地插件化后以目标态为准。
+
 1. 在 `detectors/` 实现 `Detector`（禁止宿主 SDK import）
 2. 加 `*Config` 到 `core/config.py`
-3. 在 `factory.DETECTOR_BUILDERS` **与** `SessionState.create`（session_hub 内联）分别注册/对齐
+3. 在 `detectors/registry.DETECTOR_BUILDERS` 注册；并核对 SessionHub 路径（历史曾与 factory 门控不一致）
 4. 需要 L3 检测时复用 `RASAgents` + `skill_verdicts` fail-open；复核 skill 在 recovery 侧
 5. 产品方案写到 `designs/features/<topic>.md`
 

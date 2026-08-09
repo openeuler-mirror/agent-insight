@@ -13,7 +13,7 @@
 | 认证 | `x-witty-api-key` Header | 用于关联 Workspace |
 | Content-Type | `application/json` 或 `application/x-protobuf` | |
 
-> **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-embed.md`](../agent-ras/designs/modules/ras-embed.md)；本文件为 Insight ingest **契约真源**。
+> **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-runtime.md`](../agent-ras/designs/modules/ras-runtime.md)；本文件为 Insight ingest **契约真源**。
 
 ## 资源属性 (Resource)
 
@@ -160,7 +160,7 @@ Root Span (agent)                  → Execution (rootExecutionId = NULL)
 | `framework` / `platform` | string | 否 | 平台，如 `opencode` |
 | `payload` | object | 否 | 原始事件体，落库为 `payloadJson` |
 
-落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_embed/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及 `payload.delivery_anchor`（`message_id` 必填才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。**不做**正文匹配兜底。
+落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_runtime/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及 `payload.delivery_anchor`（`message_id` 必填才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。**不做**正文匹配兜底。
 
 ## 版本记录
 

@@ -30,7 +30,7 @@
 | RAS 能力配置与可选同步 | [`../agent-ras/designs/features/capability-config-sync.md`](../agent-ras/designs/features/capability-config-sync.md) | 故障模式页内按 AgentRASConfig 粒度多平台配置；可选同步到 OpenCode 客户端 | Feature | 2026-08-04 | ✅ 已实现（API/同步/浏览器验收通过） | —（待补） |
 | 需求名称 | 目录 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
-| xiaoO 平台 RAS 适配 | [`../agent-ras/designs/features/xiaoo-adapter.md`](../agent-ras/designs/features/xiaoo-adapter.md) | 协议 inproc / 入口无关；复用 common+ras_embed；移除 HTTP/SSE | Feature | 2026-08-04 | 🟢 已落地（inproc/CLI E2E；xiaoO shared 注入） | —（待补） |
+| xiaoO 平台 RAS 适配 | [`../agent-ras/designs/features/xiaoo-adapter.md`](../agent-ras/designs/features/xiaoo-adapter.md) | 协议 inproc / 入口无关；复用 common+ras_runtime；移除 HTTP/SSE | Feature | 2026-08-04 | 🟢 已落地（inproc/CLI E2E；xiaoO shared 注入） | —（待补） |
 | xiaoO OTel 观测接入 | [`../agent-ras/designs/features/xiaoo-observe-ingest.md`](../agent-ras/designs/features/xiaoo-observe-ingest.md) | xiaoO 经 agent-ras 发 OTLP（现网 generic）；RAS join；Insight 非必要不改 | Feature | 2026-08-04 | ✅ 已落地 | — |
 | RAS ingest 契约收紧 | [`../developer-guide/09-otlp-attribute-contract.md`](../developer-guide/09-otlp-attribute-contract.md) | flat+必填 deliveryId+浅路径；见 developer-guide RAS 旁路 | Refactor | 2026-07-31 | ✅ 已实现 | —（待补） |
 | Agent Fault Injection 合并 | [`../agent-fault-injection/`](../agent-fault-injection/README.md) | 仓根 `agent_fault_injection/` **实现模块**；Insight 侧 Task/BFF/Judge/UI；关系见 [ras-fi-insight-relationship](../agent-fault-injection/designs/ras-fi-insight-relationship.md) | Feature | 2026-08-04 | ✅ 已实现（UI 对齐 + opencode/xiaoo 真跑 collect） | —（待补） |
@@ -38,7 +38,7 @@
 | FI 服务端/客户端分离 | [fi-server-client-split](fi-server-client-split/) | 任务下发与展示留服务端；注入编排与能力在本机 FI Worker；curl/`install-fault-injection` 安装对齐 agent-ras | Refactor | 2026-08-05 | ✅ 已实现（浏览器 E2E：dry-run + Worker claim） | — |
 | 记忆故障 FI 方案（文件丢失等） | [`../agent-ras/designs/features/memory-file-loss.md`](../agent-ras/designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒注入方案；FI-P0=`memory-file-loss` 已落地 | Feature | 2026-08-03 | 🟡 FI-P0 已落地；检测器与其余子类规划中 | — |
 | 记忆噪声干扰 FI | [`../agent-ras/designs/features/memory-noise-interference.md`](../agent-ras/designs/features/memory-noise-interference.md) | Skill S1–S3 已落地；S4 压缩失真未实施 | Feature | 2026-08-03 | 🟡 S1–S3 已落地 | — |
-| Agent RAS 内核/能力分层与注册入口统一 | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | core 下 agents/detectors/recovery 整体上移一层（内部结构与 skills 不动）；ras_embed 更名 ras_runtime；SessionHub/factory 统一走 detectors/registry，消灭 force_thinking_loop | Refactor | 2026-08-06 | ⬜ 未实现（设计已对齐） | — |
+| Agent RAS 故障域自包含插件化 | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | `fault_domains/<id>/` 自包含包（detector.py 导出 PLUGIN，无独立 manifest）；Loader 扫描注册；Anomaly.kind 动态字符串；新域零改框架登记点 | Refactor / Feature | 2026-08-06 | 🟡 部分落地（前置分层搬家+注册入口统一已完成 b26d497/fc1d5fd；自包含插件包未实现） | — |
 | FI 证据边界与 inconclusive 语义 | [`../agent-fault-injection/designs/modules/server-judge.md`](../agent-fault-injection/designs/modules/server-judge.md) | 注入工具不写自证快照；Judge 以轨迹为主；`no_trace`→`inconclusive` | Refactor | 2026-08-05 | ✅ 已实现 | — |
 
 ## 字段口径

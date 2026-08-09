@@ -5,7 +5,7 @@
 ## 概述
 
 1. **解决什么问题**：把宿主采到的 Signal / 流 chunk 统一编排成「检测 → 恢复」，并持有流抑制缓冲、L3 Reviewer 异步二次判定与 fail-open 收尾。
-2. **在架构中的角色**：L0 编排中枢；由 `AgentRASRail`（openjiuwen）驱动。**不**经 `ras_embed.SessionHub`（OpenCode inproc 是另一条编排路径）。
+2. **在架构中的角色**：L0 编排中枢；由 `AgentRASRail`（openjiuwen）驱动。**不**经 `ras_runtime.SessionHub`（OpenCode inproc 是另一条编排路径）。
 3. **若移除**：失去环内统一编排；流抑制、L1/L2 立即 abort、L3 Reviewer 状态机均断裂。
 
 ```mermaid

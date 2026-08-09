@@ -1,4 +1,4 @@
-# ras-embed 模块
+# ras-runtime 模块
 
 > AET 模块详情口径：新人读完应能独立修改本模块。模板：`aet-analyzing-project` / `module-detail-template.md`。
 
@@ -13,7 +13,7 @@ libpython 的 `RTLD_GLOBAL` 加载、结果文件回传与 L2/L3 文件级调用
 ```mermaid
 flowchart TB
   L3[L3_opencode_plugin] --> L2[L2_ras_client]
-  L2 --> L1[L1_ras_embed_call]
+  L2 --> L1[L1_ras_runtime_call]
   L1 --> Hub[SessionHub]
   Hub --> L0[Detectors_Recovery]
   Hub -.-> Push[insight_push]
@@ -25,8 +25,8 @@ flowchart TB
 
 | 字段 | 值 |
 |------|-----|
-| 模块 ID | M-ras-embed |
-| 路径 | `agent_ras/ras_embed/` |
+| 模块 ID | M-ras-runtime |
+| 路径 | `agent_ras/ras_runtime/` |
 | 规模 | ≈ 1168 行 |
 | 主要语言 | Python |
 | 所属层 | L1 |
@@ -59,7 +59,7 @@ flowchart TD
 ## 功能树
 
 ```text
-ras_embed
+ras_runtime
   - 同步门面 call(op)
       - health / hello / observe / reset / action_result / skill_result / bye
   - SessionHub：per-session detectors + recovery wire
@@ -125,7 +125,7 @@ Insight 契约真源：[developer-guide/09-otlp-attribute-contract.md](../../../
 sequenceDiagram
   participant P as plugin.js
   participant RC as ras_client
-  participant Call as ras_embed.call
+  participant Call as ras_runtime.call
   participant Hub as SessionHub
   participant AA as applyActions
   P->>RC: observe
@@ -144,7 +144,7 @@ sequenceDiagram
 
 | 依赖 | 用途 |
 |------|------|
-| `core.detectors` / `recovery` / `agents` | 检测与决策 |
+| `detectors` / `recovery` / `agents` | 检测与决策 |
 | 被 `ras_client.py/js`、`python_bridge.js`、`InsightAnomalyReporter` 使用 | |
 
 ---
@@ -161,9 +161,9 @@ sequenceDiagram
 
 | 路径 | 覆盖 |
 |------|------|
-| `tests/unit_tests/ras_embed/test_call.py` | health/hello/observe/reset |
-| `tests/unit_tests/ras_embed/test_skill_result.py` | skill_result + deferred |
-| `tests/unit_tests/harness/agent_ras/ras_embed/test_insight_push.py` | push 配置与 fail-open |
+| `tests/unit_tests/ras_runtime/test_call.py` | health/hello/observe/reset |
+| `tests/unit_tests/ras_runtime/test_skill_result.py` | skill_result + deferred |
+| `tests/unit_tests/harness/agent_ras/ras_runtime/test_insight_push.py` | push 配置与 fail-open |
 
 ---
 

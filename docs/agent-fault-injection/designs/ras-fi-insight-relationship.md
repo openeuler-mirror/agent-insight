@@ -15,7 +15,7 @@
 |------|--------|----------|------------|
 | **agent-insight**（角色：**Insight 服务端**） | 既有观测与编排**平台** | UI、Insight API、数据协议与契约、Prisma/权威库、Judge、鉴权、安装下发面 | 不在用户 Agent 进程内做检测/注入算法 |
 | **FI Client**（角色） | 相对 Insight 的**本机 FI 侧** | 认领/心跳/拉停命令、驱动注入采集、回传 collect-result | 不含 FI UI / 权威库 / Judge / HTTP 契约设计（属 Insight） |
-| **agent-ras** | 环内可靠性**功能实现模块** | Detector / Recovery / ras_embed / 平台薄适配 | 不含前端、Prisma schema、HTTP 契约 |
+| **agent-ras** | 环内可靠性**功能实现模块** | Detector / Recovery / ras_runtime / 平台薄适配 | 不含前端、Prisma schema、HTTP 契约 |
 | **agent-fi**（`agent_fault_injection`） | 故障注入**功能实现模块**（支撑 FI Client） | Fault catalog、注入工具、平台 Adapter、CLI 采集 | 不含 FI UI、FaultInjection* 表、Judge；与 Insight 的控制面由 **FI Client** 角色承担 |
 
 **一句话**：Insight = 服务端平台；**FI Client** = 本机 FI 角色（认领/回传/编排注入）；agent-ras / agent-fi = 实现模块。叙述优先用角色，不先钉死进程名。源码可同仓，**能力归属按上表，不按目录名把 UI/DB 算进模块**。
@@ -31,7 +31,7 @@ flowchart TB
   subgraph client ["用户本机（部署位置）"]
     Host["执行对话与工具调用<br/>· Agent 宿主 opencode/xiaoo"]
     subgraph rasMod ["功能模块 · agent-ras"]
-      RAS["环内异常检测与自动恢复<br/>· Detector / Recovery / ras_embed"]
+      RAS["环内异常检测与自动恢复<br/>· Detector / Recovery / ras_runtime"]
     end
     subgraph fiMod ["角色 · FI Client"]
       FIC["认领任务 / 回传采集 / 拉取停命令<br/>· FI Client"]
@@ -83,7 +83,7 @@ flowchart TB
     Host["跑 Agent 对话与工具<br/>· 宿主 opencode/xiaoo"]
     Local["存放本机配置与 artifacts<br/>· ~/.agent-insight/ 运行目录"]
     subgraph rasMod ["功能模块 · agent-ras"]
-      RAS["检测异常并自动恢复<br/>· Detector / Recovery / ras_embed"]
+      RAS["检测异常并自动恢复<br/>· Detector / Recovery / ras_runtime"]
     end
     subgraph fiMod ["角色 · FI Client"]
       FIC["认领 FI 任务、停杀、回传结果<br/>· FI Client"]
@@ -483,8 +483,8 @@ SessionHub 检出/恢复
 
 | 步骤 | 路径 | 符号 |
 |------|------|------|
-| 触发推送 | [`agent_ras/ras_embed/session_hub.py`](../../../agent_ras/ras_embed/session_hub.py) | 调用 `fire_push_anomaly` / `fire_push_action_result` |
-| 组包与 HTTP | [`agent_ras/ras_embed/insight_push.py`](../../../agent_ras/ras_embed/insight_push.py) | `fire_push_*` → `push_anomaly` / `push_action_result` → `push_event` |
+| 触发推送 | [`agent_ras/ras_runtime/session_hub.py`](../../../agent_ras/ras_runtime/session_hub.py) | 调用 `fire_push_anomaly` / `fire_push_action_result` |
+| 组包与 HTTP | [`agent_ras/ras_runtime/insight_push.py`](../../../agent_ras/ras_runtime/insight_push.py) | `fire_push_*` → `push_anomaly` / `push_action_result` → `push_event` |
 | 路由 | [`src/app/api/ingest/ras-events/route.ts`](../../../src/app/api/ingest/ras-events/route.ts) | `POST` |
 | 归一化 | [`src/lib/ingest/ras/normalize.ts`](../../../src/lib/ingest/ras/normalize.ts) | `normalizeRasIngestBody` |
 | 落库 | [`src/lib/ingest/ras/store.ts`](../../../src/lib/ingest/ras/store.ts) | `upsertRasIngestRecords`（内可 `findRootExecutionId`） |
@@ -538,7 +538,7 @@ fi-worker tick: claim
 |--|-----------|----------|
 | **目的** | 真实会话检测并恢复 | 实验注入并采集 |
 | **OpenCode** | 协议 inproc；可 **libpython.so** 嵌 detectors | 临时隔离 config + **TS 插件** `agent-fault-injection.ts`（无 so） |
-| **xiaoO** | hooks → ras_embed（socket/inproc 等，见 RAS 文档） | config overlay + **Python hooker** 子进程 |
+| **xiaoO** | hooks → ras_runtime（socket/inproc 等，见 RAS 文档） | config overlay + **Python hooker** 子进程 |
 | **与 Insight** | ① ras-events | ②③ FI Client + collect-result |
 | **恢复/评判** | 本机 HostControl 投递 | Insight 服务端 Judge |
 

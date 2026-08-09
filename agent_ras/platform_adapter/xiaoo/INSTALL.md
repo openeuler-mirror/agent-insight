@@ -6,7 +6,7 @@ Protocol inproc L3（入口无关）：
 
 - Shared factory: [`../common/protocol_client.py`](../common/protocol_client.py)
 - Observe helpers: [`../common/observe.py`](../common/observe.py)
-- Shared SessionHub across subprocess hooks: [`../common/transport/subprocess_ipc/`](../common/transport/subprocess_ipc/)（嵌入运输层；SessionHub 仍在 `ras_embed`）
+- Shared SessionHub across subprocess hooks: [`../common/transport/subprocess_ipc/`](../common/transport/subprocess_ipc/)（嵌入运输层；SessionHub 仍在 `ras_runtime`）
 - Embedding modes: [`../common/transport/`](../common/transport/) — `inproc`（OpenCode）vs `subprocess_ipc`（xiaoo）
 - Hooks: [`hooks.py`](hooks.py) → `build_protocol_ras_client` + Host callables（cancel / pending，非 HTTP）
 - Plugin hooker: [`hooker/`](hooker/)

@@ -96,7 +96,7 @@ flowchart LR
 | `emit_notice` | `emitUserNotice` |
 | `push_steering` | `pushSteering` |
 
-Python 镜像：`core/recovery/operations.apply_recovery_actions`。
+Python 镜像：`recovery/operations.apply_recovery_actions`。
 
 ### 入口
 
@@ -112,8 +112,8 @@ Python 镜像：`core/recovery/operations.apply_recovery_actions`。
 | 能力 | openjiuwen | OpenCode | openclaw | Hermes | xiaoo |
 |------|------------|----------|----------|--------|-------|
 | Signal / observe | 深 | partial | 骨架 | 骨架 | partial |
-| Stream 观测 | chunk（write_stream） | part.delta/updated | 视宿主 | turn 级 | LoopEventSink → ras_embed |
-| 检测/恢复算法 | 同一 core | ras_embed inproc | ras_embed | ras_embed | ras_embed |
+| Stream 观测 | chunk（write_stream） | part.delta/updated | 视宿主 | turn 级 | LoopEventSink → ras_runtime |
+| 检测/恢复算法 | 同一 core | ras_runtime inproc | ras_runtime | ras_runtime | ras_runtime |
 | Insight 旁路 | InsightAnomalyReporter | SessionHub → insight_push | hooks+push | hooks+push | hooks+push |
 | abort | abort_stream 流内 | session.abort + 重试 | 宿主映射 | 宿主映射 | cancel_token / CancelActiveTurn |
 | steering | push_steering | idle 后 session.prompt | /steer 等 | inject | pending_user_messages |
@@ -138,7 +138,7 @@ flowchart TB
   end
   subgraph oc [OpenCode_inproc]
     Plugin --> RC[ras_client]
-    RC --> Embed[ras_embed.call]
+    RC --> Embed[ras_runtime.call]
     Embed --> Core2[core_via_SessionHub]
     Plugin --> AA[applyActions]
     AA --> OHC[OpenCodeHost]
@@ -178,7 +178,7 @@ OpenCode：SDK v1/v2 abort 参数兼容、idle 后再 steer，详见 `opencode/I
 
 | 子模块 | 依赖 |
 |--------|------|
-| common | `ras_embed.call`、core reporter 接口 |
+| common | `ras_runtime.call`、core reporter 接口 |
 | openjiuwen | `openjiuwen.core.*`、`core.monitor` |
 | opencode | OpenCode SDK、bun:ffi / libpython |
 
@@ -200,7 +200,7 @@ OpenCode：SDK v1/v2 abort 参数兼容、idle 后再 steer，详见 `opencode/I
 |------|------|
 | `tests/unit_tests/platform_adapter/test_host_actions.mjs` | applyActions + OpenCode host |
 | `tests/unit_tests/harness/agent_ras/test_agent_ras_rail_*` 等 | jiuwen Rail / StreamObserver / DeepAgentAdapter |
-| `tests/unit_tests/ras_embed/test_call.py` | inproc 契约 |
+| `tests/unit_tests/ras_runtime/test_call.py` | inproc 契约 |
 
 ---
 

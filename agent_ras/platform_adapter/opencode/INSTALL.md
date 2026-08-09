@@ -4,7 +4,7 @@
 
 See [docs/agent-ras/designs/modules/platform-adapter.md](../../../docs/agent-ras/designs/modules/platform-adapter.md) and [docs/agent-ras/designs/architecture.md](../../../docs/agent-ras/designs/architecture.md).
 
-- **Has**: `message.part.updated` / tool hooks → `ras_embed`/`core`（L1/L2）；恢复经 L3 [`host_control.js`](./host_control.js)：
+- **Has**: `message.part.updated` / tool hooks → `ras_runtime`/`core`（L1/L2）；恢复经 L3 [`host_control.js`](./host_control.js)：
   - `abort_stream` → `session.abort`（兼容 SDK **v2** `{ sessionID }` 与 **v1** `{ path: { id } }`，按序尝试）+ 可选 `session.interrupt` API + 双次 `tui.executeCommand(session.interrupt)`；限频重试与升级告警
   - `emit_notice` → `tui.showToast({ message, variant, title?, duration? })`（扁平字段）→ fallback `tui.publish` / `noReply` prompt；**正文原样来自 core**，禁止展示 anomaly.summary
   - `push_steering` → idle 后 `session.prompt({ sessionID, parts })`（正文原样，含 `<system-reminder>`）；若 abort 已先到 idle，则立即注入（避免竞态丢恢复）
@@ -13,7 +13,7 @@ See [docs/agent-ras/designs/modules/platform-adapter.md](../../../docs/agent-ras
 
 > SDK 注意：插件注入的 client 可能是 v1 或 v2。**只传一种 abort 参数会 500 / falsy，流继续跑完**。`tui.executeCommand("session.interrupt")` 还要求 TUI focus，且需连按两次才 `session.abort`，不能当唯一停流手段。
 
-分层：检测在同进程 `ras_embed`/`core`；**OpenCode API 只出现在本目录 Host**，由 common `applyActions` 调度。
+分层：检测在同进程 `ras_runtime`/`core`；**OpenCode API 只出现在本目录 Host**，由 common `applyActions` 调度。
 
 ## Install（一条命令）
 

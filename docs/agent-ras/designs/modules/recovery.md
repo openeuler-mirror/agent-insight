@@ -24,7 +24,7 @@ flowchart LR
 | 字段 | 值 |
 |------|-----|
 | 模块 ID | M-recovery |
-| 路径 | `agent_ras/core/recovery/` |
+| 路径 | `agent_ras/recovery/` |
 | 规模 | engine 443 + operations 256 + state 138 + robustness_prompt 693 ≈ 1570 行 |
 | 主要语言 | Python |
 | 所属层 | L0 |

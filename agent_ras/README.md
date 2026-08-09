@@ -6,7 +6,7 @@ Agent RAS（Reliability / Anomaly / Stewardship）：环内异常检测 + 恢复
 
 ```
 core/                         # L0 平台无关核 + HostControl
-ras_embed/                    # L1 同进程门面
+ras_runtime/                    # L1 同进程门面
 platform_adapter/
   common/                     # L2 ras_client + protocol_client
   openjiuwen/                 # L3 深适配

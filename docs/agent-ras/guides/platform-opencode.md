@@ -1,13 +1,13 @@
 # OpenCode 接入
 
-同进程：`ras_embed` + bun:ffi；能力为 partial（非 jiuwen 同级 chunk abort）。
+同进程：`ras_runtime` + bun:ffi；能力为 partial（非 jiuwen 同级 chunk abort）。
 
 **inproc 如何加载 libpython、模块如何互相调用**：见 [architecture.md §4](../designs/architecture.md)。
 
 ```mermaid
 flowchart LR
   Install[install-ras] --> Plugin[opencode_plugin]
-  Plugin --> Embed[ras_embed]
+  Plugin --> Embed[ras_runtime]
   Embed --> Core[L0_core]
   Embed -.-> Insight[insight_push]
 ```
