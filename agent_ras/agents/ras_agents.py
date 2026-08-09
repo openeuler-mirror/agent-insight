@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from core.agents.base import (
+from agents.base import (
     AgentAdapter,
     NoOpAgentAdapter,
 )

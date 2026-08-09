@@ -1,6 +1,6 @@
 # coding: utf-8
-from ras_embed.platform_capabilities import supports_host_skill_judge
-from ras_embed.facade import call
+from ras_runtime.platform_capabilities import supports_host_skill_judge
+from ras_runtime.facade import call
 import json
 
 

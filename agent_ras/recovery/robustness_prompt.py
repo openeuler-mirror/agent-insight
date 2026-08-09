@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.models import Anomaly, AnomalyKind
-from core.recovery.state import PendingRecovery
+from recovery.state import PendingRecovery
 
 # --- robustness_prompts_cn ---
 

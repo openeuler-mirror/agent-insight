@@ -60,7 +60,7 @@ def ensure_runtime() -> tuple[SessionHub, asyncio.AbstractEventLoop]:
             asyncio.set_event_loop(loop)
             loop.run_forever()
 
-        thread = threading.Thread(target=_run, name="ras_embed_loop", daemon=True)
+        thread = threading.Thread(target=_run, name="ras_runtime_loop", daemon=True)
         thread.start()
         _hub = hub
         _loop = loop

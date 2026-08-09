@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from core.config import AgentRASConfig
-from core.detectors.llm_thinking_loop import LlmThinkingLoopDetector
-from core.detectors.registry import build_member_detectors
-from core.detectors.repeat_tool import RepeatToolCallDetector
+from detectors.llm_thinking_loop import LlmThinkingLoopDetector
+from detectors.registry import build_member_detectors
+from detectors.repeat_tool import RepeatToolCallDetector
 
 
 def test_build_member_detectors_respects_enabled() -> None:

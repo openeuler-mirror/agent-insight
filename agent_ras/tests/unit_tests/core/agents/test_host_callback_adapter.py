@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from core.agents.host_callback_adapter import HostCallbackAgentAdapter
+from agents.host_callback_adapter import HostCallbackAgentAdapter
 
 
 @pytest.mark.asyncio

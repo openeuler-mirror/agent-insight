@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from core.models import Anomaly
-from ras_embed.insight_push import fire_push_action_result, fire_push_anomaly
+from ras_runtime.insight_push import fire_push_action_result, fire_push_anomaly
 
 logger = logging.getLogger(__name__)
 

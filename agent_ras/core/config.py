@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from core.models import AnomalyKind, Severity
-from core.recovery.engine import (
+from recovery.engine import (
     DEFAULT_SEVERITY_ACTIONS,
     RecoveryAction,
 )

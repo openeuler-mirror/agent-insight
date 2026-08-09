@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.config import AgentRASConfig
-from core.detectors.repeat_tool import RepeatToolCallDetector
+from detectors.repeat_tool import RepeatToolCallDetector
 from core.monitor import AgentRASMonitor
-from core.recovery.engine import RecoveryExecutor, RecoveryPolicy
-from core.recovery.operations import emit_user_notice
+from recovery.engine import RecoveryExecutor, RecoveryPolicy
+from recovery.operations import emit_user_notice
 from platform_adapter.openjiuwen.host_control import host_control_from_ctx
 
 

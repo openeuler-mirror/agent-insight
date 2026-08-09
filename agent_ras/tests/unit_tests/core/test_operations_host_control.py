@@ -6,15 +6,15 @@ import pytest
 
 from core.host_control import HostControl
 from core.models import Anomaly, AnomalyKind, Severity
-from core.recovery.engine import LocalAutoRecovery, RecoveryPolicy
-from core.recovery.operations import (
+from recovery.engine import LocalAutoRecovery, RecoveryPolicy
+from recovery.operations import (
     apply_recovery_actions,
     build_recovery_actions,
     emit_user_notice,
     inject_steering,
     terminate,
 )
-from core.recovery.robustness_prompt import format_steering
+from recovery.robustness_prompt import format_steering
 
 
 class FakeHost:

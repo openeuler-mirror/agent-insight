@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-"""xiaoO Plugin Hooker entry — thin Signal mapping into shared ras_embed + OTel buffer.
+"""xiaoO Plugin Hooker entry — thin Signal mapping into shared ras_runtime + OTel buffer.
 
 Hook points:
   - ``*.Chat.message.received`` → hello + otel user note

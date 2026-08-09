@@ -43,7 +43,7 @@ def load_scenario2_unit(skill_path: Path) -> str:
 
 
 async def run() -> None:
-    from ras_embed.session_hub import SessionHub
+    from ras_runtime.session_hub import SessionHub
 
     skill = Path(
         os.environ.get("THINKING_DEAD_LOOP_SKILL") or DEFAULT_SKILL

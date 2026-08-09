@@ -1,12 +1,12 @@
 # coding: utf-8
-"""TDD: ras_embed skill_result op for inproc L3."""
+"""TDD: ras_runtime skill_result op for inproc L3."""
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from ras_embed import call, reset_runtime_for_tests
+from ras_runtime import call, reset_runtime_for_tests
 
 
 @pytest.fixture(autouse=True)

@@ -12,21 +12,21 @@ from typing import Any, Optional
 
 from openjiuwen.core.foundation.llm.model import Model
 
-from core.agents.base import AgentAdapter, NoOpAgentAdapter
+from agents.base import AgentAdapter, NoOpAgentAdapter
 from platform_adapter.openjiuwen.deep_agent_adapter import (
     DeepAgentAdapter,
     adapter_config_from_agent_ras,
 )
-from core.agents.ras_agents import RASAgents
+from agents.ras_agents import RASAgents
 from core.config import AgentRASConfig
-from core.detectors.base import Detector
-from core.detectors.registry import (
+from detectors.base import Detector
+from detectors.registry import (
     DETECTOR_BUILDERS,
     build_member_detectors,
 )
 from core.monitor import AgentRASMonitor
 from platform_adapter.openjiuwen.rail import AgentRASRail
-from core.recovery.engine import (
+from recovery.engine import (
     LocalAutoRecovery,
     RecoveryExecutor,
     RecoveryPolicy,

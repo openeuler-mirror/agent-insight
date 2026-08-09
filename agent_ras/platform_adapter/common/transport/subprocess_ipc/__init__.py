@@ -2,7 +2,7 @@
 """Subprocess-hook embedding transport (Unix socket SessionHub + host control).
 
 For hosts that spawn a short-lived hook process per event (e.g. xiaoo).
-Not SessionHub itself — that stays in ``ras_embed``. This package only wires
+Not SessionHub itself — that stays in ``ras_runtime``. This package only wires
 hooks to a shared worker and to ``ras_control.sock``.
 """
 from __future__ import annotations

@@ -20,13 +20,13 @@ import logging
 logger = logging.getLogger(__name__)
 from core.host_control import HostControl, NoOpHostControl
 from core.config import AgentRASConfig
-from core.agents.base import (
+from agents.base import (
     ASYNC_RECOVERY_TIMEOUT_SECONDS,
     FAULT_DOMAIN_LLM_THINKING_LOOP,
     SKILL_TIMEOUT_SECONDS,
     skill_for,
 )
-from core.detectors.base import (
+from detectors.base import (
     AsyncRecoveryHandler,
     is_async_recovery_detector,
 )
@@ -36,22 +36,22 @@ from core.models import (
     Signal,
     SignalKind,
 )
-from core.recovery.engine import (
+from recovery.engine import (
     RecoveryAction,
     RecoveryExecutor,
     RecoveryPolicy,
     StreamRecoveryArgs,
     needs_immediate_apply,
 )
-from core.detectors.skill_verdicts import parse_skill_verdict
-from core.recovery.operations import (
+from detectors.skill_verdicts import parse_skill_verdict
+from recovery.operations import (
     apply_recovery_abnormal,
     apply_recovery_normal,
     emit_user_notice,
     interrupted_abnormal_degrade_notice,
     suppress_and_buffer,
 )
-from core.recovery.state import PendingRecovery
+from recovery.state import PendingRecovery
 from core.reporter import AnomalyReporter
 
 

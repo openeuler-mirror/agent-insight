@@ -31,15 +31,15 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any, Optional
 
-from core.agents.base import (
+from agents.base import (
     FAULT_DOMAIN_LLM_THINKING_LOOP,
     NoOpAgentAdapter,
     SKILL_TIMEOUT_SECONDS,
     skill_for,
 )
-from core.agents.ras_agents import RASAgents
+from agents.ras_agents import RASAgents
 from core.config import LlmThinkingLoopConfig
-from core.detectors.base import AsyncRecoveryHandler
+from detectors.base import AsyncRecoveryHandler
 from core.models import (
     Anomaly,
     AnomalyKind,

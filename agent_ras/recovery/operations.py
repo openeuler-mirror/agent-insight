@@ -12,19 +12,19 @@ from typing import TYPE_CHECKING, Any
 
 from core.host_control import HostControl, NoOpHostControl
 from core.models import Anomaly, AnomalyKind
-from core.recovery.robustness_prompt import (
+from recovery.robustness_prompt import (
     format_steering,
     interrupted_abnormal_degrade_user_notice,
     recovery_steering_on_abnormal,
     recovery_user_notice_for,
 )
-from core.recovery.state import (
+from recovery.state import (
     PendingRecovery,
     SuppressFlushState,
 )
 
 if TYPE_CHECKING:
-    from core.recovery.engine import LocalAutoRecovery, RecoveryPolicy
+    from recovery.engine import LocalAutoRecovery, RecoveryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,7 @@ def build_recovery_actions(
     ``push_steering``. Platforms deliver; they must not re-decide.
     """
     # Lazy import: engine imports operations at module load.
-    from core.recovery.engine import plan_recovery
+    from recovery.engine import plan_recovery
 
     actions: list[dict[str, Any]] = [{"type": "abort_stream"}]
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from ras_embed.session_hub import SessionHub, _anchor_for_anomaly
+from ras_runtime.session_hub import SessionHub, _anchor_for_anomaly
 
 
 def test_observe_keeps_llm_and_tool_anchors_separate() -> None:

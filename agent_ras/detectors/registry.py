@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Callable
 
-from core.agents.base import NoOpAgentAdapter
-from core.agents.ras_agents import RASAgents
+from agents.base import NoOpAgentAdapter
+from agents.ras_agents import RASAgents
 from core.config import AgentRASConfig
-from core.detectors.base import Detector
-from core.detectors.llm_thinking_loop import LlmThinkingLoopDetector
-from core.detectors.repeat_tool import RepeatToolCallDetector
+from detectors.base import Detector
+from detectors.llm_thinking_loop import LlmThinkingLoopDetector
+from detectors.repeat_tool import RepeatToolCallDetector
 
 
 def _build_repeat_tool(

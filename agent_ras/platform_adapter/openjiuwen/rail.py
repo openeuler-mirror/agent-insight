@@ -21,10 +21,10 @@ from openjiuwen.core.common.logging import logger
 from openjiuwen.core.single_agent.rail.base import AgentCallbackContext
 from openjiuwen.harness.rails.base import DeepAgentRail
 
-from core.agents.base import AGENT_RAS_SKILL_ROLES
+from agents.base import AGENT_RAS_SKILL_ROLES
 from core.config import AgentRASConfig, coerce_message_locale
 from core.monitor import AgentRASMonitor
-from core.recovery.operations import emit_user_notice
+from recovery.operations import emit_user_notice
 from core.signal_builder import (
     build_after_model_call_signal,
     build_after_tool_call_signal,

@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 from core.models import Anomaly, AnomalyKind, Severity
-from core.recovery.robustness_prompt import (
+from recovery.robustness_prompt import (
     format_steering,
     generic_steer_text_for,
     recovery_steering_on_abnormal,
     steer_text_for,
 )
-from core.recovery.state import PendingRecovery
+from recovery.state import PendingRecovery
 
 
 def test_format_steering_wraps_body() -> None:

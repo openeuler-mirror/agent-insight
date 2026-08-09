@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any, Callable
 
-from ras_embed import call as embed_call
+from ras_runtime import call as embed_call
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ ActionHandler = Callable[[str, list[dict[str, Any]], dict[str, Any] | None], Non
 
 
 class RasClient:
-    """Thin synchronous wrapper around the in-process ``ras_embed`` facade."""
+    """Thin synchronous wrapper around the in-process ``ras_runtime`` facade."""
 
     def __init__(
         self,

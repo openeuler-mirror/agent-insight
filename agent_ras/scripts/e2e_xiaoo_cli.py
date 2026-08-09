@@ -42,7 +42,7 @@ def main() -> int:
         steer_fn=steers.append,
     )
     sid = f"xiaoo:cli_e2e_{uuid.uuid4().hex[:8]}"
-    assert client.ensure(), "ras_embed health failed"
+    assert client.ensure(), "ras_runtime health failed"
     hello = client.hello(
         sid,
         "xiaoo",

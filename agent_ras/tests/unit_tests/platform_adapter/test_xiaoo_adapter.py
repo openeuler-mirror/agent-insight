@@ -17,7 +17,7 @@ from platform_adapter.common.transport.subprocess_ipc import (
     ensure_worker,
     ipc_available,
 )
-from ras_embed import reset_runtime_for_tests
+from ras_runtime import reset_runtime_for_tests
 
 
 def test_build_xiaoo_ras_client_unwired() -> None:

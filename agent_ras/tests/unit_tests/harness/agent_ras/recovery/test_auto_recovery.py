@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.config import AgentRASConfig, LlmThinkingLoopConfig
-from core.detectors.llm_thinking_loop import (
+from detectors.llm_thinking_loop import (
     LlmThinkingLoopDetector,
 )
 from core.models import (
@@ -21,12 +21,12 @@ from core.models import (
     SignalKind,
 )
 from core.monitor import AgentRASMonitor
-from core.recovery.engine import (
+from recovery.engine import (
     RecoveryAction,
     RecoveryExecutor,
     RecoveryPolicy,
 )
-from core.recovery.state import PendingRecovery
+from recovery.state import PendingRecovery
 from platform_adapter.openjiuwen.host_control import host_control_from_ctx
 
 
@@ -474,7 +474,7 @@ async def test_l3_normal_requires_fresh_chars_before_redetect() -> None:
 @pytest.mark.asyncio
 async def test_apply_abnormal_recovery_uses_active_ctx(monkeypatch) -> None:
     """Abort / steering / notice must target _active_ctx, not a stale param (ZZP-001)."""
-    from core.recovery import operations as ops
+    from recovery import operations as ops
     import core.monitor as monitor_mod
 
     monitor = _monitor()
@@ -509,7 +509,7 @@ async def test_abnormal_recovery_cancel_then_finalize_completes_abnormal(
     monkeypatch,
 ) -> None:
     """Cancel mid abnormal recovery: finalize re-enters and commits (ZZP-004)."""
-    from core.recovery import operations as ops
+    from recovery import operations as ops
 
     monitor = _monitor()
     ctx = _ctx()
@@ -551,7 +551,7 @@ async def test_abnormal_recovery_cancel_then_finalize_completes_abnormal(
 @pytest.mark.asyncio
 async def test_finalize_interrupted_abnormal_pending_none_degrades() -> None:
     """Interrupted with pending lost: degrade to normal + notice (ZZP-004)."""
-    from core.recovery.robustness_prompt import (
+    from recovery.robustness_prompt import (
         interrupted_abnormal_degrade_user_notice,
     )
 
@@ -580,7 +580,7 @@ async def test_finalize_interrupted_with_pending_reinjects_steering(
     monkeypatch,
 ) -> None:
     """interrupted + pending → finalize completes abnormal and injects steering."""
-    from core.recovery import operations as ops
+    from recovery import operations as ops
 
     monitor = _monitor()
     ctx = _ctx()

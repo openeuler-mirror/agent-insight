@@ -9,18 +9,18 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.agents.base import NoOpAgentAdapter
+from agents.base import NoOpAgentAdapter
 from .platform_capabilities import supports_host_skill_judge
-from core.agents.host_callback_adapter import HostCallbackAgentAdapter
-from core.agents.ras_agents import RASAgents
+from agents.host_callback_adapter import HostCallbackAgentAdapter
+from agents.ras_agents import RASAgents
 from core.config import AgentRASConfig, LlmThinkingLoopConfig, RepeatToolConfig, coerce_message_locale
-from core.detectors.llm_thinking_loop import LlmThinkingLoopDetector
-from core.detectors.registry import build_member_detectors
-from core.detectors.repeat_tool import RepeatToolCallDetector
+from detectors.llm_thinking_loop import LlmThinkingLoopDetector
+from detectors.registry import build_member_detectors
+from detectors.repeat_tool import RepeatToolCallDetector
 from core.models import Anomaly, Signal, SignalKind
-from core.recovery.engine import LocalAutoRecovery, RecoveryPolicy
-from core.recovery.operations import build_recovery_actions
-from core.recovery.robustness_prompt import host_messages_for_locale
+from recovery.engine import LocalAutoRecovery, RecoveryPolicy
+from recovery.operations import build_recovery_actions
+from recovery.robustness_prompt import host_messages_for_locale
 from .event_bus import EventBus
 from .insight_push import fire_push_action_result, fire_push_anomaly
 

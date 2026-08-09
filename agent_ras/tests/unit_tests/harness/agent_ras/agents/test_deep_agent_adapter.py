@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.agents.base import skills_dir_for_role
+from agents.base import skills_dir_for_role
 from platform_adapter.openjiuwen.deep_agent_adapter import (
     AdapterConfig,
     DeepAgentAdapter,
 )
-from core.agents.ras_agents import RASAgents
+from agents.ras_agents import RASAgents
 
 
 class TestDeepAgentAdapterCreateKwargs:

@@ -9,7 +9,7 @@ import pytest
 
 from core.config import AgentRASConfig
 from core.monitor import AgentRASMonitor
-from core.recovery.engine import RecoveryExecutor, RecoveryPolicy
+from recovery.engine import RecoveryExecutor, RecoveryPolicy
 from platform_adapter.openjiuwen.rail import AgentRASRail
 
 

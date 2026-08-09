@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.agents.base import (
+from agents.base import (
     FAULT_DOMAIN_LLM_THINKING_LOOP,
     fault_domain_for_kind,
     skill_for,

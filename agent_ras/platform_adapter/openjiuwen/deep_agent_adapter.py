@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable, Optional
 from openjiuwen.core.foundation.llm.model import Model
 from openjiuwen.core.single_agent.schema.agent_card import AgentCard
 from openjiuwen.core.sys_operation.cwd import init_cwd
-from core.agents.base import (
+from agents.base import (
     FAULT_DOMAIN_LLM_THINKING_LOOP,
     MEMBER_MAX_ITERATIONS,
     ROLE_PROMPTS,
@@ -22,7 +22,7 @@ from core.agents.base import (
     skills_dir_for_role,
 )
 from core.config import AgentRASConfig
-from core.detectors.skill_verdicts import (
+from detectors.skill_verdicts import (
     extract_invoke_output_payload,
     extract_json_object_from_text,
     parse_skill_verdict,

@@ -17,15 +17,15 @@ import logging
 logger = logging.getLogger(__name__)
 from core.host_control import HostControl
 from core.models import Anomaly, AnomalyKind, Severity
-from core.recovery.robustness_prompt import (
+from recovery.robustness_prompt import (
     critical_text_for,
     generic_steer_text_for,
     recovery_user_notice_for_anomaly,
     steer_text_for,
     user_notice_text_for,
 )
-from core.recovery.state import SuppressFlushState
-from core.recovery.operations import (
+from recovery.state import SuppressFlushState
+from recovery.operations import (
     emit_user_notice,
     inject_steering,
     pending_from_anomaly,

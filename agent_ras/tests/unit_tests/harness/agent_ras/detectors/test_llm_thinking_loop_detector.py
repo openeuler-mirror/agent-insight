@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from core.config import LlmThinkingLoopConfig
-from core.detectors.llm_thinking_loop import (
+from detectors.llm_thinking_loop import (
     LlmThinkingLoopDetector,
     LoopDetector,
     _clause_similarity,
@@ -632,7 +632,7 @@ class TestPlanExecutionBuffer:
             return real_create_task(coro, *args, **kwargs)
 
         with patch(
-            "core.detectors.llm_thinking_loop.asyncio.create_task",
+            "detectors.llm_thinking_loop.asyncio.create_task",
             side_effect=spy_create_task,
         ):
             await det.observe(_stream_chunk("x" * 200))

@@ -130,8 +130,8 @@ def seed_execution_session(task_id: str, final_result: str) -> str:
 
 
 async def run() -> None:
-    from ras_embed.insight_push import push_action_result, push_anomaly
-    from ras_embed.session_hub import SessionHub
+    from ras_runtime.insight_push import push_action_result, push_anomaly
+    from ras_runtime.session_hub import SessionHub
 
     text = _l2_text()
     hub = SessionHub()

@@ -2,7 +2,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Recovery: policy mapping + atomic operations + robustness prompts."""
 
-from core.recovery.engine import (
+from recovery.engine import (
     DEFAULT_SEVERITY_ACTIONS,
     LocalAutoRecovery,
     RecoveryAction,
@@ -13,12 +13,12 @@ from core.recovery.engine import (
     plan_recovery,
     should_emit_user_notice,
 )
-from core.recovery.operations import (
+from recovery.operations import (
     apply_recovery_actions,
     build_recovery_actions,
 )
-from core.recovery.robustness_prompt import load_message
-from core.recovery.state import (
+from recovery.robustness_prompt import load_message
+from recovery.state import (
     PendingRecovery,
     SuppressFlushState,
 )

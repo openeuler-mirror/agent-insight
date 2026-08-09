@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 
-from ras_embed import session_hub as hub_module
-from ras_embed.session_hub import ABORT_PROBE_WINDOW_S, SessionHub
+from ras_runtime import session_hub as hub_module
+from ras_runtime.session_hub import ABORT_PROBE_WINDOW_S, SessionHub
 
 
 def _make_hub(monkeypatch) -> tuple[SessionHub, list[dict]]:

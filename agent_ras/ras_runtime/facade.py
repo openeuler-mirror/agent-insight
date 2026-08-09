@@ -38,7 +38,7 @@ def call(op: str, session_id: str, payload_json: str = "{}") -> str:
         append_trail(str(op or ""), str(session_id or ""), result)
         return json.dumps(result, ensure_ascii=False)
     except Exception as exc:  # noqa: BLE001 — fail-open JSON for embed host
-        logger.exception("ras_embed.call failed op=%s", op)
+        logger.exception("ras_runtime.call failed op=%s", op)
         err = {"error": str(exc), "op": op, "session_id": session_id}
         append_trail(str(op or ""), str(session_id or ""), err)
         return json.dumps(err)

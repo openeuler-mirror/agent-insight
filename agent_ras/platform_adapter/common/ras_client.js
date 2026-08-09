@@ -2,7 +2,7 @@
  * Shared in-process RAS client for JavaScript hosts.
  *
  * Agent RAS no longer starts or talks to a local HTTP service. JavaScript
- * hosts call ras_embed through the bun:ffi bridge; Python hosts use the
+ * hosts call ras_runtime through the bun:ffi bridge; Python hosts use the
  * matching in-process client in ras_client.py.
  */
 

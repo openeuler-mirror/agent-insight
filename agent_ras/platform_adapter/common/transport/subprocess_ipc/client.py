@@ -172,7 +172,7 @@ def ensure_worker(
         if ipc_available(path):
             return path
         time.sleep(0.05)
-    raise RuntimeError(f"ras_embed ipc worker not ready: {path}")
+    raise RuntimeError(f"ras_runtime ipc worker not ready: {path}")
 
 
 def send_host_control(

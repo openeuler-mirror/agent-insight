@@ -1,5 +1,5 @@
 /**
- * bun:ffi bridge → in-process ras_embed.call (OpenCode plugin runtime).
+ * bun:ffi bridge → in-process ras_runtime.call (OpenCode plugin runtime).
  * Only used when agent_ras.service.transport === "inproc".
  *
  * Loads libpython with libc dlopen(RTLD_GLOBAL) so extension modules
@@ -151,11 +151,11 @@ function ensureInit(svc = null) {
 import sys
 sys.path.insert(0, ${JSON.stringify(pythonPackages || ".")})
 sys.path.insert(0, ${JSON.stringify(repoRoot || ".")})
-from ras_embed import call as _ras_embed_call
+from ras_runtime import call as _ras_runtime_call
 `
     const rc = py.PyRun_SimpleString(cstr(boot))
     if (rc !== 0) {
-      _initError = "failed to import ras_embed inside embedded Python"
+      _initError = "failed to import ras_runtime inside embedded Python"
       console.error("[insight-ras] inproc init failed:", _initError)
       return false
     }
@@ -170,7 +170,7 @@ from ras_embed import call as _ras_embed_call
 }
 
 /**
- * Call ras_embed.call via inproc bridge.
+ * Call ras_runtime.call via inproc bridge.
  *
  * PyRun_SimpleString does not expose the Python return value, so the bridge
  * uses a per-call result file. A unique path prevents concurrent OpenCode
@@ -190,8 +190,8 @@ export function embedCall(op, sessionId, payload) {
     `result-${process.pid}-${Date.now()}-${_callSequence}.json`,
   )
   const scriptFile = `
-from ras_embed import call as _ras_embed_call
-_out = _ras_embed_call(${opLit}, ${sidLit}, ${payLit})
+from ras_runtime import call as _ras_runtime_call
+_out = _ras_runtime_call(${opLit}, ${sidLit}, ${payLit})
 open(${JSON.stringify(outPath)}, "w", encoding="utf-8").write(_out)
 `
   const rc = _py.PyRun_SimpleString(cstr(scriptFile))

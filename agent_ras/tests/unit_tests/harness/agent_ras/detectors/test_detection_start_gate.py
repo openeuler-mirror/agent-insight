@@ -8,7 +8,7 @@ import asyncio
 import pytest
 
 from core.config import LlmThinkingLoopConfig
-from core.detectors.llm_thinking_loop import LlmThinkingLoopDetector
+from detectors.llm_thinking_loop import LlmThinkingLoopDetector
 from core.models import Signal, SignalKind
 
 

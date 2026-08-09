@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from core.models import Anomaly, AnomalyKind, Severity
-from core.recovery.engine import (
+from recovery.engine import (
     LocalAutoRecovery,
     RecoveryAction,
     RecoveryPolicy,

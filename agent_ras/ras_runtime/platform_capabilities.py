@@ -1,5 +1,5 @@
 # coding: utf-8
-"""Platform capability flags for ras_embed (avoid platform-name string branches)."""
+"""Platform capability flags for ras_runtime (avoid platform-name string branches)."""
 from __future__ import annotations
 
 from typing import Any

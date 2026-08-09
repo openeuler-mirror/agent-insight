@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke: bun:ffi → ras_embed.call without LD_PRELOAD (RTLD_GLOBAL in bridge).
+# Smoke: bun:ffi → ras_runtime.call without LD_PRELOAD (RTLD_GLOBAL in bridge).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LIB="${RAS_LIBPYTHON:-/home/iceory/miniconda3/lib/libpython3.13.so}"

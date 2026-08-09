@@ -5,7 +5,7 @@ import time
 import uuid
 from urllib.error import HTTPError, URLError
 
-from ras_embed import insight_push
+from ras_runtime import insight_push
 
 
 def test_push_anomaly_uses_stdlib_http_and_strips_platform_prefix(monkeypatch):
@@ -318,7 +318,7 @@ def test_push_event_records_failure_as_warning_counter(monkeypatch, caplog):
     monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
     insight_push.reset_push_stats()
 
-    with caplog.at_level("WARNING", logger="ras_embed.insight_push"):
+    with caplog.at_level("WARNING", logger="ras_runtime.insight_push"):
         asyncio.run(
             insight_push.push_event(
                 "opencode:ses_fail",

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from platform_adapter.common.transport.subprocess_ipc.client import default_sock_path
-from ras_embed.facade import call as local_call
+from ras_runtime.facade import call as local_call
 
 logger = logging.getLogger(__name__)
 
