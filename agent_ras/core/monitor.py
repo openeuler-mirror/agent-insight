@@ -22,7 +22,6 @@ from core.host_control import HostControl, NoOpHostControl
 from core.config import AgentRASConfig
 from agents.base import (
     ASYNC_RECOVERY_TIMEOUT_SECONDS,
-    FAULT_DOMAIN_LLM_THINKING_LOOP,
     SKILL_TIMEOUT_SECONDS,
     skill_for,
 )
@@ -43,7 +42,7 @@ from recovery.engine import (
     StreamRecoveryArgs,
     needs_immediate_apply,
 )
-from detectors.skill_verdicts import parse_skill_verdict
+from detectors.registry import parse_recovery_verdict
 from recovery.operations import (
     apply_recovery_abnormal,
     apply_recovery_normal,
@@ -635,13 +634,8 @@ class AgentRASMonitor:
 
     @staticmethod
     def _fault_domain_for_pending(pending: PendingRecovery) -> str:
-        """Resolve fault domain for recovery skill lookup."""
-        domain = str(pending.extra.get("fault_domain") or "").strip()
-        if domain:
-            return domain
-        if pending.is_plan_execution or pending.is_text_repetition:
-            return FAULT_DOMAIN_LLM_THINKING_LOOP
-        return FAULT_DOMAIN_LLM_THINKING_LOOP
+        """Fault domain stamped at pending creation (kind -> domain via registry)."""
+        return str(pending.extra.get("fault_domain") or "").strip()
 
     async def _invoke_l3_recovery(self, pending: PendingRecovery) -> bool:
         """Return True only when recovery skill explicitly confirms abnormal."""
@@ -708,7 +702,7 @@ class AgentRASMonitor:
             return False
         # Re-parse so illegal / incomplete recovery payloads stay fail-open even
         # when a test double returns a raw dict (adapter already parses).
-        verdict = parse_skill_verdict(skill_name, result)
+        verdict = parse_recovery_verdict(skill_name, result)
         if verdict.fail_open_reason:
             logger.warning(
                 "Agent RAS L3 recovery fail-open member=%s session=%s "

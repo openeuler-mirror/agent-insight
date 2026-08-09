@@ -10,6 +10,7 @@ from core.config import AgentRASConfig
 from detectors.base import Detector
 from detectors.llm_thinking_loop import LlmThinkingLoopDetector
 from detectors.repeat_tool import RepeatToolCallDetector
+from detectors.skill_verdicts import SkillVerdict, parse_skill_verdict
 
 
 def _build_repeat_tool(
@@ -45,27 +46,37 @@ DETECTOR_BUILDERS: list[
 def build_member_detectors(
     config: AgentRASConfig,
     agents: RASAgents | None = None,
-    *,
-    force_thinking_loop: bool = False,
 ) -> list[Detector]:
-    """Build enabled detectors via the registry.
-
-    ``force_thinking_loop``: protocol SessionHub historically always installs
-    the thinking-loop detector even when config disables it. Prefer False for
-    new callers; SessionHub passes True for back-compat.
-    """
+    """Build enabled detectors via the registry (single entry for Monitor and SessionHub)."""
     agents = agents or RASAgents(NoOpAgentAdapter())
     detectors: list[Detector] = []
-    for name, build in DETECTOR_BUILDERS:
-        if name == "llm_thinking_loop" and force_thinking_loop:
-            detectors.append(
-                LlmThinkingLoopDetector(config.detectors.llm_thinking_loop, agents=agents)
-            )
-            continue
+    for _name, build in DETECTOR_BUILDERS:
         detector = build(config, agents)
         if detector is not None:
             detectors.append(detector)
     return detectors
 
 
-__all__ = ["DETECTOR_BUILDERS", "build_member_detectors"]
+# Domain whose config may arrive as flat top-level payload keys (back-compat
+# with the original protocol wire format). New domains use nested dicts only.
+FLAT_PAYLOAD_DOMAIN = "llm_thinking_loop"
+
+
+def detector_config_models() -> dict[str, type]:
+    """Map registered domain name to its config model class (from AgentRASConfig)."""
+    probe = AgentRASConfig().detectors
+    return {name: type(getattr(probe, name)) for name, _ in DETECTOR_BUILDERS}
+
+
+def parse_recovery_verdict(skill_name: str, result: dict) -> SkillVerdict:
+    """Parse an L3 recovery-skill verdict; registry seam so Monitor stays off detector internals."""
+    return parse_skill_verdict(skill_name, result)
+
+
+__all__ = [
+    "DETECTOR_BUILDERS",
+    "FLAT_PAYLOAD_DOMAIN",
+    "build_member_detectors",
+    "detector_config_models",
+    "parse_recovery_verdict",
+]

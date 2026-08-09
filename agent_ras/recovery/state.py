@@ -49,6 +49,15 @@ class PendingRecovery:
             source = "text_repetition"
         else:
             source = mode or channel or anomaly.kind.value
+        extra = evidence
+        if not str(extra.get("fault_domain") or "").strip():
+            # Deferred import: agents.base -> core.models -> core/__init__ ->
+            # recovery.* would cycle back here if agents.* is the entry module.
+            from agents.base import fault_domain_for_kind
+
+            domain = fault_domain_for_kind(anomaly.kind)
+            if domain:
+                extra["fault_domain"] = domain
         return cls(
             source=source,
             recovery_profile=profile,
@@ -58,7 +67,7 @@ class PendingRecovery:
             start_pos=int(evidence.get("start_pos") or 0),
             scanned_text=str(evidence.get("scanned_text") or ""),
             thinking_excerpt=str(evidence.get("thinking_excerpt") or ""),
-            extra=evidence,
+            extra=extra,
         )
 
     @property

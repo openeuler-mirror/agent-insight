@@ -7,17 +7,20 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from agents.base import NoOpAgentAdapter
 from .platform_capabilities import supports_host_skill_judge
 from agents.host_callback_adapter import HostCallbackAgentAdapter
 from agents.ras_agents import RASAgents
-from core.config import AgentRASConfig, LlmThinkingLoopConfig, RepeatToolConfig, coerce_message_locale
-from detectors.llm_thinking_loop import LlmThinkingLoopDetector
-from detectors.registry import build_member_detectors
-from detectors.repeat_tool import RepeatToolCallDetector
+from core.config import AgentRASConfig, coerce_message_locale
 from core.models import Anomaly, Signal, SignalKind
+from detectors.base import AsyncRecoveryDetector, Detector, is_async_recovery_detector
+from detectors.registry import (
+    FLAT_PAYLOAD_DOMAIN,
+    build_member_detectors,
+    detector_config_models,
+)
 from recovery.engine import LocalAutoRecovery, RecoveryPolicy
 from recovery.operations import build_recovery_actions
 from recovery.robustness_prompt import host_messages_for_locale
@@ -65,34 +68,19 @@ def _anchor_for_anomaly(state: "SessionState", kind: str | None) -> dict[str, An
 
 
 def _config_from_payload(raw: dict[str, Any] | None) -> AgentRASConfig:
+    """Registry-driven: nested per-domain dicts; flat keys only for the legacy domain."""
     raw = dict(raw or {})
-    # Omit semantic_content_enabled so LlmThinkingLoopConfig default (True) applies.
-    thinking_kw: dict[str, Any] = {}
-    for key in (
-        "detection_start_chars",
-        "window_max_chars",
-        "loop_repeat_threshold",
-        "similar_clause_sim_threshold",
-        "semantic_eval_chars",
-        "semantic_content_enabled",
-        "enabled",
-    ):
-        if key in raw:
-            thinking_kw[key] = raw[key]
     cfg = AgentRASConfig()
-    cfg.detectors.llm_thinking_loop = LlmThinkingLoopConfig(
-        **{
-            **cfg.detectors.llm_thinking_loop.model_dump(),
-            **thinking_kw,
-        }
-    )
-    if isinstance(raw.get("repeat_tool"), dict):
-        cfg.detectors.repeat_tool = RepeatToolConfig(
-            **{
-                **cfg.detectors.repeat_tool.model_dump(),
-                **raw["repeat_tool"],
-            }
-        )
+    for name, model_cls in detector_config_models().items():
+        merged = getattr(cfg.detectors, name).model_dump()
+        sub = raw.get(name)
+        if isinstance(sub, dict):
+            merged.update({k: v for k, v in sub.items() if k in merged})
+        if name == FLAT_PAYLOAD_DOMAIN:
+            for key in model_cls.model_fields:
+                if key in raw:
+                    merged[key] = raw[key]
+        setattr(cfg.detectors, name, model_cls(**merged))
     if "notify_user_on_warning" in raw:
         cfg.recovery.notify_user_on_warning = bool(raw["notify_user_on_warning"])
     return cfg
@@ -103,13 +91,21 @@ def _locale_from_payload(raw: dict[str, Any] | None) -> str:
     return coerce_message_locale(str(raw.get("locale") or raw.get("language") or "cn"))
 
 
+async def _dispatch_signal(state: "SessionState", signal: Signal) -> Anomaly | None:
+    """First-hit dispatch across session detectors; irrelevant kinds return None."""
+    for detector in state.detectors:
+        anomaly = await detector.observe(signal)
+        if anomaly is not None:
+            return anomaly
+    return None
+
+
 @dataclass
 class SessionState:
     session_id: str
     platform: str
     config: AgentRASConfig
-    thinking: LlmThinkingLoopDetector
-    repeat: RepeatToolCallDetector | None
+    detectors: list[Detector]
     auto: LocalAutoRecovery
     policy: RecoveryPolicy
     locale: str = "cn"
@@ -131,31 +127,25 @@ class SessionState:
     def create(cls, session_id: str, platform: str, config_payload: dict[str, Any] | None) -> SessionState:
         config = _config_from_payload(config_payload)
         locale = _locale_from_payload(config_payload)
-        loop_cfg = config.detectors.llm_thinking_loop
         host_adapter: HostCallbackAgentAdapter | None = None
-        # L3 host skill judge: capability flag, not platform name string.
-        if supports_host_skill_judge(platform) and bool(loop_cfg.semantic_content_enabled):
+        # L3 host skill judge: capability flag + semantic switch on any domain.
+        semantic_on = any(
+            bool(getattr(getattr(config.detectors, name), "semantic_content_enabled", False))
+            for name in detector_config_models()
+        )
+        if supports_host_skill_judge(platform) and semantic_on:
             host_adapter = HostCallbackAgentAdapter()
             agents = RASAgents(host_adapter)
         else:
             agents = RASAgents(NoOpAgentAdapter())
-        # Protocol path historically always installs thinking-loop detector.
-        detectors = build_member_detectors(
-            config, agents=agents, force_thinking_loop=True
-        )
-        thinking = next(d for d in detectors if isinstance(d, LlmThinkingLoopDetector))
-        repeat = next(
-            (d for d in detectors if isinstance(d, RepeatToolCallDetector)),
-            None,
-        )
+        detectors = build_member_detectors(config, agents=agents)
         policy = RecoveryPolicy.from_config(config.policy)
         auto = LocalAutoRecovery(policy, locale=locale)
         state = cls(
             session_id=session_id,
             platform=platform,
             config=config,
-            thinking=thinking,
-            repeat=repeat,
+            detectors=detectors,
             auto=auto,
             policy=policy,
             locale=locale,
@@ -187,15 +177,16 @@ class SessionState:
                 state.deferred_actions = list(actions)
                 state.deferred_anomaly = anomaly_dict
 
-            thinking.set_async_recovery_handler(_on_async_recovery)
+            for detector in state.detectors:
+                if is_async_recovery_detector(detector):
+                    cast(AsyncRecoveryDetector, detector).set_async_recovery_handler(
+                        _on_async_recovery
+                    )
         return state
 
     def reset(self) -> None:
-        self.thinking.reset()
-        if self.repeat is not None:
-            reset = getattr(self.repeat, "reset", None)
-            if callable(reset):
-                reset()
+        for detector in self.detectors:
+            detector.reset()
         self.last_text.clear()
         self.latched_abort = False
         self.last_anomaly = None
@@ -543,7 +534,10 @@ class SessionHub:
         while time.monotonic() < deadline:
             await asyncio.sleep(0)
             running = [
-                t for t in getattr(state.thinking, "_eval_tasks", ()) if not t.done()
+                t
+                for detector in state.detectors
+                for t in getattr(detector, "_eval_tasks", ())
+                if not t.done()
             ]
             if not running:
                 # One more tick so the recovery handler can finish writing deferred_*.
@@ -599,13 +593,14 @@ class SessionHub:
             state.last_text[channel] = prev + text
         if not delta:
             return None
-        return await state.thinking.observe(
+        return await _dispatch_signal(
+            state,
             Signal(
                 kind=SignalKind.STREAM_CHUNK,
                 member_name=state.session_id,
                 chunk_type=channel,
                 chunk_text=delta,
-            )
+            ),
         )
 
     async def _observe_tool(
@@ -613,8 +608,6 @@ class SessionHub:
         state: SessionState,
         payload: dict[str, Any],
     ) -> Anomaly | None:
-        if state.repeat is None:
-            return None
         tool = payload.get("tool") or {}
         name = str(tool.get("name") or "tool")
         phase = str(tool.get("phase") or "after")
@@ -622,13 +615,14 @@ class SessionHub:
         kind = SignalKind.AFTER_TOOL_CALL if phase != "before" else SignalKind.BEFORE_TOOL_CALL
         if kind == SignalKind.BEFORE_TOOL_CALL:
             return None
-        return await state.repeat.observe(
+        return await _dispatch_signal(
+            state,
             Signal(
                 kind=SignalKind.AFTER_TOOL_CALL,
                 member_name=state.session_id,
                 tool_name=name,
                 tool_args=args,
-            )
+            ),
         )
 
     def _actions_for(self, anomaly: Anomaly, state: SessionState) -> list[dict[str, Any]]:
