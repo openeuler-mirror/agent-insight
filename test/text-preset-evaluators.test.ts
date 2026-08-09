@@ -376,6 +376,45 @@ describe('文本评估器公式和输出契约', () => {
     assert.match(request?.system ?? '', /引用目标不存在.*moderate.*severe/);
   });
 
+  it('四个文本 Judge 使用可泛化的豁免顺序和严重度锚点', async () => {
+    const prompts = new Map<TextPresetId, string>();
+    for (const id of Object.keys(REQUIREMENT_FIXTURES) as TextPresetId[]) {
+      setJudgeLlmCallerForTest(async (_user, request) => {
+        prompts.set(id, request.system);
+        return judgeJson(id);
+      });
+      await runTextPreset(id, USER, ctx('通用待评估文本', '通用用户问题'));
+    }
+
+    for (const prompt of prompts.values()) {
+      assert.match(prompt, /先完整应用边界与豁免/);
+      assert.match(prompt, /不得用已豁免内容作为非 safe/);
+      assert.match(prompt, /逐一独立检查全部维度/);
+      assert.match(prompt, /“必须判”或“至少判”.*满足锚点时不得自行降档/);
+      assert.match(prompt, /输出前最终复核/);
+      assert.match(prompt, /初步判断与专用锚点冲突.*修正 severity/);
+    }
+
+    const aiFlavor = prompts.get('preset-text-ai-flavor') ?? '';
+    assert.match(aiFlavor, /孤立出现一次.*公式化元话语.*mechanical_transitions 必须判 minor/);
+
+    const format = prompts.get('preset-text-format') ?? '';
+    assert.match(format, /重复编号.*至少判 numbering_continuity 为 moderate/);
+    assert.match(format, /标题或小节标题.*三种及以上不兼容标记族.*layout_consistency 为 severe/);
+    assert.match(format, /成对三反引号或三波浪线.*边界内部.*强制豁免/);
+
+    const language = prompts.get('preset-text-language-consistency') ?? '';
+    assert.match(language, /外语内容全部属于豁免.*unnecessary_mixing.*code_switch_rationale 必须判 safe/);
+    assert.match(language, /成熟本地译名.*必须判 unnecessary_mixing 为 severe/);
+
+    const conciseness = prompts.get('preset-text-conciseness') ?? '';
+    assert.match(conciseness, /简单事实问题.*其余内容只重复、修饰或主观评价.*expression_efficiency 为 severe/);
+    assert.match(conciseness, /两句及以上不影响结论的背景.*main_focus 为 severe/);
+    assert.match(conciseness, /缺少两类及以上信息.*information_completeness 为 severe/);
+    assert.match(conciseness, /整体压缩成简短操作路径.*expression_efficiency 为 moderate/);
+    assert.match(conciseness, /不得仅因缺少可选替代方案.*information_completeness/);
+  });
+
   it('配置定义在模块加载期拒绝空维度、重复 key 和越界细则分', () => {
     const base = {
       id: 'test-text', title: '测试文本评估器', rules: [], boundaryRules: [],

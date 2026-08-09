@@ -10,6 +10,8 @@ Judge 只返回六个固定维度的 `safe/minor/moderate/severe` 离散等级�
 
 卡片输出 `score`、`summary` 和六个 `points`，不输出卡级 `evidence`。理由与原文引用写入评分点证据，改写建议使用标准 `EvalPoint.suggestion` 字段，仅在展开评分点时展示。
 
+判档先应用客服、技术文档和自然引用等豁免，再逐维检查。孤立出现一次、可删除且不增加事实信息、只用于宣布后文重要或提醒读者注意的公式化元话语，`mechanical_transitions` 必须判 `minor`；不要求重复出现或形成连接词堆砌，文本较短也不能覆盖已经存在的明确风格信号。同类信号反复出现或支配段落结构时判 `moderate`，多个维度共同主导全文时相应维度可判 `severe`。这些规则描述可泛化的语言现象，不依赖验收题原句。
+
 ## 维度与计分
 
 维度为 `template_opening`、`template_closing`、`mechanical_transitions`、`generic_names`、`empty_summary`、`politeness_overuse`。
