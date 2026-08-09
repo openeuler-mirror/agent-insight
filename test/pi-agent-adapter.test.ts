@@ -143,6 +143,72 @@ test("Pi adapter registry uses complete snapshot replacement", () => {
   assert.equal(adapter.sessionMergeStrategy, "snapshot-replace")
 })
 
+test("Pi adapter keeps a subagent summary only as a fallback when leaf LLM output exists", () => {
+  type Interaction = { spanId?: string; content?: string; usage?: { total?: number } }
+  const root = "1".repeat(16)
+  const spawn = "2".repeat(16)
+  const worker = "3".repeat(16)
+  const workerLlm = "4".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "root",
+      spanId: root,
+      kind: "agent",
+      name: "agent.pi",
+      input: "delegate",
+      output: "done",
+    }),
+    canonical({
+      eventId: "spawn",
+      spanId: spawn,
+      parentSpanId: root,
+      kind: "tool",
+      name: "tool.subagent",
+      tool: { name: "subagent", type: "subagent", arguments: {}, result: "done" },
+    }),
+    canonical({
+      eventId: "worker-summary",
+      spanId: worker,
+      parentSpanId: spawn,
+      kind: "subagent",
+      name: "agent.worker",
+      input: "read project",
+      output: "openEuler",
+      usage: { input: 2, output: 1, total: 3 },
+      attributes: { "pi.subagent.name": "worker", "pi.subagent.exit_code": 0 },
+    }),
+    canonical({
+      eventId: "worker-final",
+      spanId: workerLlm,
+      parentSpanId: worker,
+      kind: "llm",
+      name: "llm.model-a",
+      output: "openEuler",
+      usage: { input: 4, output: 2, total: 106 },
+      attributes: { "pi.usage.cache_read": 100, "pi.usage.cache_write": 0 },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.equal(record.tokens, 106)
+  assert.equal(record.cache_read_input_tokens, 100)
+  const interactions = record.interactions as Interaction[]
+  const summary = interactions.find((item) => item.spanId === worker)
+  assert.ok(summary)
+  assert.equal(summary.content, "")
+  assert.equal(summary.usage, undefined)
+  const tree = buildAgentCallTree(record.interactions)
+  const workerNode = tree?.children.find((node) => node.subagentType === "worker")
+  assert.ok(workerNode)
+  assert.equal(workerNode?.stats.totalTokens, 106)
+  assert.equal(workerNode?.events.filter((event) => event.kind === "llm").length, 1)
+
+  const fallback = aggregateOtelTraceEvents("pi-session", normalize(events.filter((event) => event.spanId !== workerLlm)))
+  const fallbackSummary = (fallback?.interactions as Interaction[] | undefined)?.find((item) => item.spanId === worker)
+  assert.equal(fallbackSummary?.content, "openEuler")
+})
+
 test("Pi adapter preserves three-level SubAgent ancestry and five parallel siblings", () => {
   const rootAgent = "1".repeat(16)
   const rootTool = "2".repeat(16)

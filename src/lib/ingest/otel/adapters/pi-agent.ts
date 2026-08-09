@@ -185,7 +185,16 @@ export function aggregatePiAgentTraceEvents(
   const llmEvents: OtelTraceEvent[] = [];
   const toolEvents: OtelTraceEvent[] = [];
   const agentEvents: OtelTraceEvent[] = [];
+  const subagentsWithVisibleLeafLlm = new Set<string>();
   let toolErrors = 0;
+
+  for (const event of ordered) {
+    if (semanticKind(event) !== 'llm' || !eventOutput(event)) continue;
+    const owner = ownerFor(event, bySpanId);
+    if (owner.event?.spanId && semanticKind(owner.event) === 'subagent') {
+      subagentsWithVisibleLeafLlm.add(owner.event.spanId);
+    }
+  }
 
   for (const event of ordered) {
     const kind = semanticKind(event);
@@ -214,6 +223,7 @@ export function aggregatePiAgentTraceEvents(
 
     if (kind === 'subagent') {
       const subagent = agentName(event);
+      const hasVisibleLeafLlm = Boolean(event.spanId && subagentsWithVisibleLeafLlm.has(event.spanId));
       const parentOwner = ownerFor(
         event.parentSpanId ? bySpanId.get(event.parentSpanId) || event : event,
         bySpanId,
@@ -255,9 +265,14 @@ export function aggregatePiAgentTraceEvents(
           name: subagent,
           sessionId: event.spanId,
         }),
-        content: eventOutput(event) || '',
-        model: eventModel(event),
-        usage: eventUsage(event),
+        // The subagent result is a tree anchor and fallback result. When its
+        // nested LLM messages already contain visible output, rendering this
+        // summary as another LLM duplicates the same final answer and usage.
+        content: hasVisibleLeafLlm ? '' : eventOutput(event) || '',
+        ...(hasVisibleLeafLlm ? {} : {
+          model: eventModel(event),
+          usage: eventUsage(event),
+        }),
       });
       continue;
     }

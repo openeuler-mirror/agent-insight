@@ -510,6 +510,10 @@ test("Pi collector derives worker subagent LLM spans with non-zero durations", a
   assert.equal(workerLlm[1].startTimeMs, 1_700_000_000_100)
   assert.equal(workerLlm[1].endTimeMs, 1_700_000_001_000)
   assert.ok((workerLlm[1].endTimeMs! - workerLlm[1].startTimeMs!) === 900, "second worker LLM duration spans gap")
+  assert.deepEqual(workerLlm.map((event) => event.attributes), [
+    { "pi.usage.cache_read": 3, "pi.usage.cache_write": 1 },
+    { "pi.usage.cache_read": 3, "pi.usage.cache_write": 1 },
+  ])
   // 整体与 subagent span 对齐：最后一条 end 不应超过 subagent span 的 end
   assert.ok((workerLlm[1].endTimeMs!) <= (subagentEvent.endTimeMs!), "last LLM end within subagent span")
 })

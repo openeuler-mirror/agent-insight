@@ -470,6 +470,10 @@ class PiTraceCollector {
             model: message.responseModel || message.model || result?.model,
             provider: message.provider,
             usage: assistantUsage,
+            attributes: {
+              "pi.usage.cache_read": assistantUsage.cacheRead,
+              "pi.usage.cache_write": assistantUsage.cacheWrite,
+            },
           });
           lastLlmSpanId = llmSpanId;
           prevAssistantTs = completedAt;
