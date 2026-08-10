@@ -14,11 +14,18 @@ import logging
 import uuid
 from typing import Any, Callable, Iterator
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 logger = logging.getLogger(__name__)
 
 SseEventHandler = Callable[[dict[str, Any]], None]
+
+
+def urlopen_noproxy(request: Request | str, *, timeout: float):
+    """Open URL without HTTP(S)_PROXY — required for loopback daemon ports."""
+
+    opener = build_opener(ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
 
 
 class XiaooDaemonClient:
@@ -47,16 +54,20 @@ class XiaooDaemonClient:
         title: str | None = None,
         model: str | None = None,
         workspace: str | None = None,
+        runtime_profile_id: str | None = None,
     ) -> dict[str, Any]:
         rid = (runtime_id or "").strip() or f"ras-{uuid.uuid4().hex[:16]}"
         cid = (conversation_id or "").strip() or rid
         sid = (sender_id or "").strip() or self.sender_id
+        entry: dict[str, Any] = {"title": title or rid}
+        if runtime_profile_id and str(runtime_profile_id).strip():
+            entry["runtime_profile_id"] = str(runtime_profile_id).strip()
         body: dict[str, Any] = {
             "runtime_id": rid,
             "conversation_id": cid,
             "sender_id": sid,
             "client_id": self.client_id,
-            "entry": {"title": title or rid},
+            "entry": entry,
         }
         if model and str(model).strip():
             body["llm"] = {"model": str(model).strip()}
@@ -168,7 +179,7 @@ class XiaooDaemonClient:
             if timeout_seconds is not None
             else self.timeout_seconds
         )
-        with urlopen(request, timeout=timeout) as response:
+        with urlopen_noproxy(request, timeout=timeout) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line or line.startswith(":"):
@@ -197,7 +208,7 @@ class XiaooDaemonClient:
             },
         )
         try:
-            with urlopen(request, timeout=60) as response:
+            with urlopen_noproxy(request, timeout=60) as response:
                 payload = response.read().decode("utf-8")
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -212,4 +223,4 @@ class XiaooDaemonClient:
         return value
 
 
-__all__ = ["XiaooDaemonClient"]
+__all__ = ["XiaooDaemonClient", "urlopen_noproxy"]

@@ -59,17 +59,8 @@ function resolveWorkspace(logical, workspaceBase) {
   return path.resolve(workspaceBase, value)
 }
 
-// Prefer fetch for loopback. When HTTP(S)_PROXY is set for remote hosts, use curl
-// with --noproxy and -d @file so large collect-result bodies do not blow argv.
-function isLoopbackHost(urlStr) {
-  try {
-    const host = new URL(urlStr).hostname
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
-  } catch {
-    return false
-  }
-}
-
+// When HTTP(S)_PROXY is set, Node fetch often tunnels even 127.0.0.1 and hangs.
+// Prefer curl --noproxy with -d @file (also avoids huge collect-result argv).
 function hasHttpProxy() {
   return Boolean(
     process.env.http_proxy ||
@@ -81,7 +72,7 @@ function hasHttpProxy() {
 
 async function api(cfg, method, apiPath, body) {
   const url = `${cfg.insightBaseUrl}${apiPath}`
-  const useCurl = hasHttpProxy() && !isLoopbackHost(url)
+  const useCurl = hasHttpProxy()
 
   if (useCurl) {
     const args = [
@@ -250,37 +241,84 @@ function probeInventory(packageRoot) {
   }
 }
 
+function resolveRasRoot(cfg) {
+  if (cfg.rasRoot && fs.existsSync(cfg.rasRoot)) return cfg.rasRoot
+  const sibling = path.join(__dirname, '..', 'agent_ras')
+  if (fs.existsSync(path.join(sibling, 'platform_adapter', 'xiaoo', 'fi_daemon_runner.py'))) {
+    return sibling
+  }
+  return null
+}
+
 function runCollector(cfg, run) {
   return new Promise((resolve, reject) => {
     const workspace = resolveWorkspace(run.workspaceLogical, cfg.workspaceBase)
     fs.mkdirSync(workspace, { recursive: true })
     fs.mkdirSync(cfg.artifactsDir, { recursive: true })
-    const args = [
-      '-m',
-      'agent_fault_injection.cli',
-      'run',
-      '--platform',
-      run.platform,
-      '--agent',
-      run.agent,
-      '--fault',
-      run.fault,
-      '--prompt',
-      run.prompt,
-      '--workspace',
-      workspace,
-      '--output-dir',
-      cfg.artifactsDir,
-      '--run-id',
-      run.runId,
-    ]
+
+    const isXiaoo = String(run.platform || '').trim().toLowerCase() === 'xiaoo'
+    const rasRoot = isXiaoo ? resolveRasRoot(cfg) : null
+    let args
+    let cwd
+    let env = { ...process.env }
+    if (isXiaoo && rasRoot) {
+      // RAS holds Daemon lease so abort → runtimes/cancel works on stock xiaoo.
+      args = [
+        '-m',
+        'platform_adapter.xiaoo.fi_daemon_runner',
+        'run',
+        '--platform',
+        'xiaoo',
+        '--agent',
+        run.agent,
+        '--fault',
+        run.fault,
+        '--prompt',
+        run.prompt,
+        '--workspace',
+        workspace,
+        '--output-dir',
+        cfg.artifactsDir,
+        '--run-id',
+        run.runId,
+      ]
+      cwd = rasRoot
+      env.PYTHONPATH = [rasRoot, env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+      console.log(`[fi-worker] xiaoo via RAS daemon runner root=${rasRoot}`)
+    } else {
+      if (isXiaoo && !rasRoot) {
+        console.warn(
+          '[fi-worker] xiaoo RAS runner missing; falling back to FI CLI (abort may no_effect)',
+        )
+      }
+      args = [
+        '-m',
+        'agent_fault_injection.cli',
+        'run',
+        '--platform',
+        run.platform,
+        '--agent',
+        run.agent,
+        '--fault',
+        run.fault,
+        '--prompt',
+        run.prompt,
+        '--workspace',
+        workspace,
+        '--output-dir',
+        cfg.artifactsDir,
+        '--run-id',
+        run.runId,
+      ]
+      cwd = cfg.packageRoot
+    }
     if (run.model) args.push('--model', run.model)
     if (run.submode) args.push('--submode', run.submode)
     if (run.timeoutSeconds) args.push('--timeout-seconds', String(run.timeoutSeconds))
 
     const child = spawn('python3', args, {
-      cwd: cfg.packageRoot,
-      env: process.env,
+      cwd,
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     })

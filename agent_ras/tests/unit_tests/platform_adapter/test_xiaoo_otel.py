@@ -39,6 +39,58 @@ def test_span_buffer_builds_session_id_and_kinds() -> None:
     assert "gen_ai.span.kind" in tattrs
 
 
+def test_span_buffer_per_turn_timestamps_are_ordered() -> None:
+    buf = SessionSpanBuffer("xiaoo:sess-order")
+    buf.on_user_message("do work")
+    buf.on_assistant_text("thinking plan A", channel="llm_reasoning")
+    buf.on_tool(name="bash", arguments={"cmd": "ls"}, output="a\n", call_id="t1")
+    buf.on_assistant_text("thinking plan B", channel="llm_reasoning")
+    buf.on_tool(name="bash", arguments={"cmd": "pwd"}, output="/tmp\n", call_id="t2")
+    payload = buf.build_resource_spans()
+    spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    llm_spans = [s for s in spans if s["name"].startswith("llm ")]
+    tool_spans = [s for s in spans if s["name"].startswith("tool ")]
+    assert len(llm_spans) == 2
+    assert len(tool_spans) == 2
+    timeline = sorted(
+        [s for s in spans if not s["name"].startswith("agent ")],
+        key=lambda s: int(s["startTimeUnixNano"]),
+    )
+    assert [s["name"] for s in timeline] == [
+        "llm unknown",
+        "tool bash",
+        "llm unknown",
+        "tool bash",
+    ]
+    assert int(llm_spans[0]["startTimeUnixNano"]) < int(tool_spans[0]["startTimeUnixNano"])
+    assert int(tool_spans[0]["startTimeUnixNano"]) <= int(llm_spans[1]["startTimeUnixNano"])
+    assert tool_spans[0]["parentSpanId"] == llm_spans[0]["spanId"]
+    assert tool_spans[1]["parentSpanId"] == llm_spans[1]["spanId"]
+
+
+def test_span_buffer_legacy_dict_migrates() -> None:
+    legacy = {
+        "native_id": "legacy-1",
+        "service_name": "xiaoo",
+        "agent_name": "xiaoo",
+        "trace_id": "a" * 32,
+        "root_span_id": "b" * 16,
+        "started_ns": 1000,
+        "user_text": "hi",
+        "assistant_text": "hello",
+        "reasoning_text": "",
+        "tools": [{"name": "bash", "arguments": {}, "output": "ok", "error": False, "call_id": "c"}],
+        "llm_span_id": "c" * 16,
+        "closed": False,
+    }
+    buf = SessionSpanBuffer.from_dict(legacy)
+    assert len(buf.turns) == 1
+    payload = buf.build_resource_spans()
+    spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    assert any(s["name"].startswith("llm ") for s in spans)
+    assert any(s["name"].startswith("tool ") for s in spans)
+
+
 def test_otel_trace_lifecycle_and_flush(monkeypatch) -> None:
     otel_trace.reset_buffers_for_tests()
     posted: list[dict] = []
