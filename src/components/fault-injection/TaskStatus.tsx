@@ -21,7 +21,7 @@ const TASK_STATUS_I18N: Record<string, { zh: string; en: string }> = {
 const RUN_STATUS_I18N: Record<string, { zh: string; en: string }> = {
   queued: { zh: '排队中', en: 'Queued' },
   running: { zh: '运行中', en: 'Running' },
-  collecting: { zh: '采集中', en: 'Collecting' },
+  collecting: { zh: '注入执行中', en: 'Injecting' },
   judging: { zh: '评判中', en: 'Judging' },
   judge_skipped: { zh: '评判跳过', en: 'Judge skipped' },
   stopping: { zh: '停止中', en: 'Stopping' },
@@ -31,12 +31,35 @@ const RUN_STATUS_I18N: Record<string, { zh: string; en: string }> = {
   stopped: { zh: '已停止', en: 'Stopped' },
 }
 
+const RUN_STATUS_TITLE_I18N: Record<string, { zh: string; en: string }> = {
+  queued: {
+    zh: '等待本机 FI Worker 认领',
+    en: 'Waiting for the local FI worker to claim this run',
+  },
+  collecting: {
+    zh: '本机 FI Worker 正在执行注入会话并采集运行轨迹',
+    en: 'Local FI worker is running the inject session and collecting the trajectory',
+  },
+  judging: {
+    zh: '服务端正在根据采集结果评判故障是否发生与是否恢复',
+    en: 'Server is judging whether the fault occurred and was contained',
+  },
+  judge_skipped: {
+    zh: '未配置评判模型或评判被跳过；轨迹仍已采集',
+    en: 'Judge model missing or skipped; trajectory was still collected',
+  },
+}
+
 export function taskStatusLabel(status: string, locale: Locale = 'zh'): string {
   return TASK_STATUS_I18N[status]?.[locale] ?? status
 }
 
 export function runStatusLabel(status: string, locale: Locale = 'zh'): string {
   return RUN_STATUS_I18N[status]?.[locale] ?? status
+}
+
+export function runStatusTitle(status: string, locale: Locale = 'zh'): string | undefined {
+  return RUN_STATUS_TITLE_I18N[status]?.[locale]
 }
 
 function toneClass(status: string): string {
@@ -87,8 +110,12 @@ export function TaskStatusBadge({ status }: { status: string }) {
 
 export function RunStatusBadge({ status }: { status: string }) {
   const { locale } = useLocale()
+  const title = runStatusTitle(status, locale)
   return (
-    <span className={cn('inline-flex rounded px-2 py-0.5 text-[11px] font-medium', toneClass(status))}>
+    <span
+      title={title}
+      className={cn('inline-flex rounded px-2 py-0.5 text-[11px] font-medium', toneClass(status))}
+    >
       {runStatusLabel(status, locale)}
     </span>
   )

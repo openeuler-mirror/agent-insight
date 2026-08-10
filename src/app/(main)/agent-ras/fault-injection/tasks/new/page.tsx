@@ -7,7 +7,11 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { FiPageShell } from '@/components/fault-injection/FiPageShell'
-import { FaultTable, type FaultTableRow } from '@/components/fault-injection/FaultTable'
+import {
+  FaultTable,
+  expandFaultRows,
+  type FaultTableRow,
+} from '@/components/fault-injection/FaultTable'
 import { WizardSummary } from '@/components/fault-injection/WizardSummary'
 import {
   faultDisplayName,
@@ -256,6 +260,21 @@ function FaultInjectionTaskWizardPage() {
       }
       return next
     })
+  }
+
+  const toggleAll = (select: boolean) => {
+    if (!select) {
+      setSelected(new Map())
+      return
+    }
+    const next = new Map<string, { fault: string; submode: string | null }>()
+    for (const row of expandFaultRows(faults)) {
+      next.set(row.key, {
+        fault: row.fault.id,
+        submode: row.submode?.id || null,
+      })
+    }
+    setSelected(next)
   }
 
   const faultLabels = useMemo(() => {
@@ -519,6 +538,7 @@ function FaultInjectionTaskWizardPage() {
                 className="min-h-0 flex-1"
                 selectedKeys={new Set(selected.keys())}
                 onToggle={toggleRow}
+                onToggleAll={toggleAll}
               />
             ) : null}
 

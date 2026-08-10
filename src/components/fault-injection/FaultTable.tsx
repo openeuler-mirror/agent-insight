@@ -47,6 +47,7 @@ export function FaultTable({
   selectable = false,
   selectedKeys,
   onToggle,
+  onToggleAll,
   className,
   compact = false,
 }: {
@@ -55,6 +56,7 @@ export function FaultTable({
   selectable?: boolean
   selectedKeys?: Set<string>
   onToggle?: (row: FaultTableRow) => void
+  onToggleAll?: (select: boolean) => void
   className?: string
   compact?: boolean
 }) {
@@ -67,6 +69,20 @@ export function FaultTable({
   const tableAreaRef = useRef<HTMLDivElement>(null)
   const theadRef = useRef<HTMLTableSectionElement>(null)
   const rowRef = useRef<HTMLTableRowElement>(null)
+  const selectAllRef = useRef<HTMLInputElement>(null)
+
+  const selectedCount = useMemo(() => {
+    if (!selectedKeys || selectedKeys.size === 0) return 0
+    return rows.reduce((n, row) => n + (selectedKeys.has(row.key) ? 1 : 0), 0)
+  }, [rows, selectedKeys])
+  const allSelected = rows.length > 0 && selectedCount === rows.length
+  const someSelected = selectedCount > 0 && !allSelected
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someSelected
+    }
+  }, [someSelected])
 
   useLayoutEffect(() => {
     if (compact) return
@@ -136,7 +152,19 @@ export function FaultTable({
               className="bg-background-secondary text-[11px] tracking-wide text-foreground-muted"
             >
               <tr>
-                {selectable ? <th className="w-10 px-3 py-2.5" /> : null}
+                {selectable ? (
+                  <th className="w-10 px-3 py-2.5">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allSelected}
+                      disabled={rows.length === 0 || !onToggleAll}
+                      aria-label={zh ? '全选故障模式' : 'Select all fault modes'}
+                      title={zh ? '全选 / 取消全选' : 'Select / clear all'}
+                      onChange={() => onToggleAll?.(!allSelected)}
+                    />
+                  </th>
+                ) : null}
                 <th className="px-3 py-2.5 font-medium">{zh ? '故障模式' : 'Fault mode'}</th>
                 <th className="min-w-[8rem] px-3 py-2.5 font-medium">
                   <span className="inline-flex items-center gap-1">

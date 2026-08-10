@@ -129,7 +129,7 @@ const CONTAINMENT_I18N: LocaleMap = {
 
 const RUN_STATUS_I18N: LocaleMap = {
   queued: { zh: '排队中', en: 'Queued' },
-  collecting: { zh: '采集中', en: 'Collecting' },
+  collecting: { zh: '注入执行中', en: 'Injecting' },
   judging: { zh: '评判中', en: 'Judging' },
   completed: { zh: '运行完成', en: 'Completed' },
   judge_skipped: { zh: '评判跳过', en: 'Judge skipped' },
