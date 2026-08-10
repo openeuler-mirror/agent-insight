@@ -1,12 +1,13 @@
-// 把一个 infra 源在指定时间段的时序数据导出成 CSV，供用户拿去做离线分析 / 喂给大模型。
-// 参数与 /api/observe/infra/history 对齐（sourceId / model / from / to），差别是：
-//   · 不降采样：一行一个原始采样点。画图那条路的降采样对不同列用了不同聚合
-//     （峰值 max、吞吐 avg），混进一张表会把跨列分析带偏，见 history.buildExportRows。
-//   · 多给 p50/p99，并附裸累计计数器，便于独立复核与算区间总量。
+// 把一个 infra 源在指定时间段的时序数据导出，供用户拿去做离线分析 / 喂给大模型。
+// 参数与 /api/observe/infra/history 对齐（sourceId / model / from / to），另加：
+//   · format=csv|md   —— md 给大模型直读（口径说明能写成正经章节），csv 给 Excel/pandas
+//   · metrics=a,b,c   —— 按面板分组挑指标，缺省全选
+// 与画图路径的关键差别：不降采样，一行一个原始采样点。画图那条路的降采样对不同列
+// 用了不同聚合（峰值 max、吞吐 avg），混进一张表会把跨列相关性分析带偏。
 
 import { NextResponse } from 'next/server';
 
-import { csvFileName, toCsv, type ExportContext } from '@/lib/infra/export-csv';
+import { exportFileName, parseGroups, toCsv, toMarkdown, type ExportContext } from '@/lib/infra/export';
 import { buildExportRows, DEFAULT_RATE_WINDOW_MS } from '@/lib/infra/history';
 import { querySamples } from '@/lib/infra/store';
 import { prismaRaw } from '@/lib/storage/prisma';
@@ -30,6 +31,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Invalid time range' }, { status: 400 });
   }
   const rateWindowMs = Math.min(300_000, Math.max(1000, Number(searchParams.get('rateWindowMs') || DEFAULT_RATE_WINDOW_MS)));
+  const format = searchParams.get('format') === 'md' ? 'md' : 'csv';
+  const groups = parseGroups(searchParams.get('metrics'));
 
   const samples = await querySamples(sourceId, fromMs, toMs, model);
   const ctx: ExportContext = {
@@ -43,14 +46,17 @@ export async function GET(req: Request) {
     sampleCount: samples.length,
     generatedAtMs: Date.now(),
   };
-  // BOM：_readme 列是中文，没有 BOM 的话 Excel 双击打开会显示成乱码。
-  // pandas/LLM 侧不受影响（pandas 认 utf-8-sig，读文本更是无所谓）。
-  const csv = `﻿${toCsv(buildExportRows(samples, rateWindowMs), ctx)}`;
+  const rows = buildExportRows(samples, rateWindowMs);
+  // BOM：说明文案是中文，没有 BOM 的话 Excel 双击打开 CSV 会显示成乱码。
+  // pandas/大模型侧不受影响（pandas 认 utf-8-sig，读文本更是无所谓）。
+  const body = format === 'md'
+    ? toMarkdown(rows, ctx, groups)
+    : `﻿${toCsv(rows, ctx, groups)}`;
 
-  return new NextResponse(csv, {
+  return new NextResponse(body, {
     headers: {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="${csvFileName(ctx)}"`,
+      'Content-Type': format === 'md' ? 'text/markdown; charset=utf-8' : 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${exportFileName(ctx, format)}"`,
       'Cache-Control': 'no-store',
     },
   });

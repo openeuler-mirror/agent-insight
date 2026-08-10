@@ -3,6 +3,7 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { ALL_GROUPS, METRIC_GROUPS, type MetricGroup } from '@/lib/infra/export';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 interface Finding { sev: 'critical' | 'warn' | 'healthy' | 'info'; cls: string; title: string; evidence: string; diagnosis: string; remediation: string[]; }
 interface Sli { runningPeak: number; waitingPeak: number; kvPeakPerc: number; genTokPerS: number; ttftP95: number | null; itlP95: number | null; prefixHit: number | null; preemptRate: number; }
@@ -148,6 +149,9 @@ export default function InfraSourceDetailPage() {
   const [scrapeSec, setScrapeSec] = useState(5);
   const [saving, setSaving] = useState(false);
   const [exportHint, setExportHint] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  // 默认全选：多给总比给一份缺列的数据强
+  const [pickedGroups, setPickedGroups] = useState<MetricGroup[]>(ALL_GROUPS);
   const [pushTest, setPushTest] = useState<{ ok: boolean; message: string } | null>(null);
   const [pushTesting, setPushTesting] = useState(false);
   // collector 要推到的本服务地址：默认当前页 origin，但 collector 在别的机器上时 localhost 不通 → 可改成本机可达的 IP/域名。
@@ -218,14 +222,17 @@ export default function InfraSourceDetailPage() {
     return () => { active = false; };
   }, [id, resolveRange, sessPage, tick]);
 
-  // 导出当前时间段的原始时序为 CSV。走 <a download> 而不是 fetch+Blob：
+  // 导出当前时间段的原始时序。走 <a download> 而不是 fetch+Blob：
   // 6h 约 1 万行、24h 约 4.3 万行，让浏览器直接落盘，不必先塞进内存。
-  const exportCsv = useCallback(() => {
+  const runExport = useCallback((format: 'csv' | 'md') => {
     if (!id) return;
     const r = resolveRange();
     if (!r) { setExportHint('请先填写自定义时间段的起始时间'); return; }
-    const qs = new URLSearchParams({ sourceId: id, from: String(r.from), to: String(r.to) });
+    if (pickedGroups.length === 0) { setExportHint('至少勾选一项指标'); return; }
+    const qs = new URLSearchParams({ sourceId: id, from: String(r.from), to: String(r.to), format });
     if (selectedModel) qs.set('model', selectedModel);
+    // 全选时不传 metrics，让 URL 短一些（服务端缺省即全选）
+    if (pickedGroups.length < ALL_GROUPS.length) qs.set('metrics', pickedGroups.join(','));
     const a = document.createElement('a');
     a.href = `/api/observe/infra/export?${qs}`;
     a.download = ''; // 文件名以服务端 Content-Disposition 为准
@@ -234,7 +241,7 @@ export default function InfraSourceDetailPage() {
     a.remove();
     setExportHint(null);
     reportClientUsage('infra', 'infra.export');
-  }, [id, resolveRange, selectedModel]);
+  }, [id, resolveRange, selectedModel, pickedGroups]);
 
   // 自动刷新：每 5s（仅标签可见时）+ 返回页面（bfcache 恢复/切回标签）即刷，自增 tick 驱动上面三个 effect 重取。
   // 大范围（6h/24h/自定义）关掉 5s 周期刷新——那会每 5s 重拉上千行 + 重渲九张图，太重；
@@ -351,11 +358,53 @@ export default function InfraSourceDetailPage() {
               <input type="datetime-local" value={customTo} onChange={(e) => { setCustomTo(e.target.value); setSessPage(1); }} style={field} />
             </span>
           )}
-          <button onClick={exportCsv} style={{ ...field, cursor: 'pointer' }} title="导出当前时间段的逐点原始时序为 CSV（不降采样，含 p50/p95/p99 与裸累计计数器），可直接丢给大模型或 Excel 分析">
-            导出 CSV
+          <button onClick={() => { setExportOpen((v) => !v); setExportHint(null); }} style={{ ...field, cursor: 'pointer' }}
+            title="导出当前时间段的逐点原始时序（不降采样，含 p50/p95/p99 与裸累计计数器），可挑指标、选格式">
+            导出{exportOpen ? ' ▲' : ' ▼'}
           </button>
           {exportHint && <span style={{ fontSize: 12, color: 'var(--warning)' }}>{exportHint}</span>}
         </div>
+
+        {exportOpen && (
+          <div style={{ marginBottom: 20, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12.5, color: 'var(--foreground-secondary)', fontWeight: 600 }}>选择指标</span>
+              <button onClick={() => setPickedGroups(ALL_GROUPS)} style={{ ...field, padding: '2px 8px', fontSize: 11.5, cursor: 'pointer' }}>全选</button>
+              <button onClick={() => setPickedGroups([])} style={{ ...field, padding: '2px 8px', fontSize: 11.5, cursor: 'pointer' }}>全不选</button>
+              <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>时间列（ts_iso / ts_ms）始终导出</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 14px', marginBottom: 12 }}>
+              {METRIC_GROUPS.map((g) => (
+                <label key={g.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--foreground-secondary)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={pickedGroups.includes(g.key)}
+                    onChange={(e) => {
+                      setExportHint(null);
+                      setPickedGroups((cur) => (e.target.checked
+                        ? ALL_GROUPS.filter((k) => k === g.key || cur.includes(k)) // 保持与面板一致的固定顺序
+                        : cur.filter((k) => k !== g.key)));
+                    }}
+                  />
+                  {g.label}
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button onClick={() => runExport('md')} style={{ ...field, cursor: 'pointer', background: 'var(--primary)', color: 'var(--primary-foreground)', border: 'none', padding: '6px 14px' }}>
+                导出 Markdown
+              </button>
+              <button onClick={() => runExport('csv')} style={{ ...field, cursor: 'pointer', padding: '6px 14px' }}>
+                导出 CSV
+              </button>
+              <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                Markdown 给大模型直读（口径说明是独立章节）；CSV 给 Excel / pandas，体积更小。
+                两者都不降采样——当前范围约 {points.length >= 2 ? `${points.length} 个点` : '若干点'}，
+                范围越大文件越大，粘贴给模型前留意长度。
+              </span>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>{item.source.endpoint}</h2>
