@@ -1,5 +1,5 @@
-// 评测「实验」API —— 列表 + 创建（本期仅单组实验 type='single'）。
-// 执行引擎（ExperimentEvalResult 写入）为后续里程碑，POST 仅落 draft。
+// 评测「实验」API —— 列表 + 创建（单组 type='single' + LLM 对比 type='llm'）。
+// 对比类型：createComparisonExperiment + autoPairGroups（跳过 case 校验，case 由配对产生）。
 import { NextResponse } from 'next/server';
 import type { Experiment } from '@prisma/client';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
@@ -9,6 +9,7 @@ import {
   EvaluatorContextValidationError,
   serializeEvaluatorCaseContext,
 } from '@/lib/evaluators/evaluator-case-context';
+import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,7 +81,7 @@ export async function POST(req: Request) {
     const name = String(body.name || '').trim();
     const agentName = String(body.agentName || '').trim();
     const watchMode = body.watchMode === true;
-    const cases: CaseInput[] = Array.isArray(body.cases) ? body.cases : [];
+    const type = String(body.type || 'single');
     const evaluatorIds: string[] = Array.isArray(body.evaluatorIds)
       ? body.evaluatorIds.map((id: unknown) => String(id)).filter(Boolean)
       : [];
@@ -88,15 +89,46 @@ export async function POST(req: Request) {
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });
     }
+    if (evaluatorIds.length < 1) {
+      return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
+    }
+
+    // 对比实验：type='llm' → createComparisonExperiment + autoPairGroups
+    if (type === 'llm') {
+      if (watchMode) {
+        return NextResponse.json({ error: 'comparison experiment does not support watchMode' }, { status: 400 });
+      }
+      const groups = Array.isArray(body.groups) ? body.groups : [];
+      if (groups.length < 2) {
+        return NextResponse.json({ error: 'comparison experiment requires at least 2 groups' }, { status: 400 });
+      }
+      try {
+        const { id } = await createComparisonExperiment({
+          user: username, name, agentName,
+          variableDimension: String(body.variableDimension || 'llm'),
+          groups: groups.map((g: { key?: unknown; value?: unknown }) => ({
+            key: String(g.key ?? ''),
+            value: String(g.value ?? ''),
+          })),
+          evaluatorIds,
+        });
+        // autoPairGroups 查候选 trace + 为可比配对创建 case
+        await autoPairGroups(id);
+        return NextResponse.json({ id });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'comparison creation failed';
+        return NextResponse.json({ error: msg }, { status: 400 });
+      }
+    }
+
+    // 单组实验（type 缺省='single'）
+    const cases: CaseInput[] = Array.isArray(body.cases) ? body.cases : [];
     // 监听模式允许 0 条 case 起步（纯监听，后续该 Agent 新 trace 自动进来评）
     if (!watchMode && cases.length < 1) {
       return NextResponse.json({ error: 'at least one case is required' }, { status: 400 });
     }
     if (watchMode && !agentName) {
       return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
-    }
-    if (evaluatorIds.length < 1) {
-      return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
 
     let normalizedCases: Array<CaseInput & { evaluatorContextJson: string | null }>;
