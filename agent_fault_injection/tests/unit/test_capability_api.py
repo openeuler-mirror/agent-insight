@@ -8,7 +8,7 @@ from agent_fault_injection.fault_inject.catalog.capability_api import (
     allowed_ops,
     validate_skills_tree,
 )
-from agent_fault_injection.fault_inject.catalog.registry import default_skills_root
+from agent_fault_injection.fault_inject.catalog.definition import default_skills_root
 
 
 def test_capability_api_lists_known_ops() -> None:

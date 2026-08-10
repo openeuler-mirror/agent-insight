@@ -1,9 +1,11 @@
 ---
 name: ras-step-omission
-description: >-
-  测试agent在任务规划后执行额过程中的某一步跳过的情况。
+description: 测试agent在任务规划后执行额过程中的某一步跳过的情况。
 metadata:
   fault-category: Step skipping
+  label_zh: 步骤遗漏
+  label_en: step-omission
+  order: 40
 ---
 
 # 步骤遗漏测试

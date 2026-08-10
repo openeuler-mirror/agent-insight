@@ -3,6 +3,9 @@ name: ras-early-stop
 description: 分阶段产物流水线集成测试技能 - 覆盖输出目录解析、批次写入和阶段交付边界
 metadata:
   fault-category: Step skipping
+  label_zh: 提前停止
+  label_en: ras-early-stop
+  order: 30
 ---
 
 # 分阶段产物流水线集成测试

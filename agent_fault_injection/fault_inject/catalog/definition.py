@@ -1,91 +1,37 @@
-"""Create and load fault definitions from the built-in skill catalog."""
+"""Load fault definitions and discover built-in skill catalogs."""
 
 from __future__ import annotations
 
 import json
 import re
 import shutil
+import threading
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from ...pipeline.exceptions import ConfigurationError, InstallationConflictError
+from ...pipeline.exceptions import (
+    ConfigurationError,
+    FaultNotFoundError,
+    InstallationConflictError,
+)
 from .models import FaultDefinition, InjectionStep
+from .skill_md import (
+    metadata_dict,
+    read_frontmatter,
+    write_frontmatter,
+)
 
 _FAULT_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _MANIFEST_NAME = "fault.json"
 _TOOL_REFERENCE = re.compile(r"^\{tool:([^{}]+)\}$")
 
+_default_registry: FaultRegistry | None = None
+_default_lock = threading.Lock()
+
 
 def default_skills_root() -> Path:
     # skills/ lives under fault_inject/, sibling of catalog/
     return Path(__file__).resolve().parent.parent / "skills"
-
-
-def _skill_frontmatter(skill_file: Path) -> dict[str, Any]:
-    try:
-        content = skill_file.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise ConfigurationError(f"Cannot read fault skill {skill_file}: {exc}") from exc
-
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != "---":
-        raise ConfigurationError(
-            f"Fault skill must start with YAML frontmatter: {skill_file}"
-        )
-    try:
-        closing = next(
-            index for index, line in enumerate(lines[1:], start=1)
-            if line.strip() == "---"
-        )
-    except StopIteration as exc:
-        raise ConfigurationError(
-            f"Fault skill has unterminated YAML frontmatter: {skill_file}"
-        ) from exc
-
-    try:
-        value = yaml.safe_load("\n".join(lines[1:closing]))
-    except yaml.YAMLError as exc:
-        raise ConfigurationError(
-            f"Fault skill has invalid YAML frontmatter: {skill_file}: {exc}"
-        ) from exc
-    if not isinstance(value, dict):
-        raise ConfigurationError(
-            f"Fault skill frontmatter must be an object: {skill_file}"
-        )
-    for field in ("name", "description"):
-        if not isinstance(value.get(field), str) or not value[field].strip():
-            raise ConfigurationError(
-                f"Fault skill frontmatter requires a non-empty {field!r}: "
-                f"{skill_file}"
-            )
-    return value
-
-
-def _rewrite_frontmatter_description(skill_file: Path, description: str) -> None:
-    content = skill_file.read_text(encoding="utf-8")
-    lines = content.splitlines(keepends=True)
-    closing = next(
-        index for index, line in enumerate(lines[1:], start=1)
-        if line.strip() == "---"
-    )
-    frontmatter = yaml.safe_load("".join(lines[1:closing]))
-    if not isinstance(frontmatter, dict):
-        raise ConfigurationError(
-            f"Fault skill frontmatter must be an object: {skill_file}"
-        )
-    frontmatter["description"] = description
-    dumped = yaml.safe_dump(
-        frontmatter,
-        allow_unicode=True,
-        sort_keys=False,
-        default_flow_style=False,
-    )
-    skill_file.write_text(
-        f"---\n{dumped}---\n{''.join(lines[closing + 1:])}",
-        encoding="utf-8",
-    )
 
 
 def _validate_fault_name(name: str) -> str:
@@ -120,7 +66,7 @@ def _infer_method_from_runtime(
 
 def load_fault_definition(directory: Path) -> FaultDefinition:
     skill_file = directory / "SKILL.md"
-    frontmatter = _skill_frontmatter(skill_file)
+    frontmatter = read_frontmatter(skill_file)
     manifest_file = directory / _MANIFEST_NAME
 
     if manifest_file.is_file():
@@ -135,8 +81,7 @@ def load_fault_definition(directory: Path) -> FaultDefinition:
                 f"Fault manifest must be an object: {manifest_file}"
             )
     else:
-        metadata = frontmatter.get("metadata")
-        metadata = metadata if isinstance(metadata, dict) else {}
+        metadata = metadata_dict(frontmatter)
         manifest = {
             "name": directory.name,
             "skill_name": frontmatter["name"],
@@ -467,6 +412,9 @@ def add_fault(
     name: str,
     skill_file: Path,
     description: str | None = None,
+    label_zh: str | None = None,
+    label_en: str | None = None,
+    order: int | None = None,
     skills_root: Path | None = None,
 ) -> FaultDefinition:
     """Validate and install one fault without editing Python source."""
@@ -475,7 +423,7 @@ def add_fault(
     source = skill_file.expanduser().resolve()
     if not source.is_file():
         raise ConfigurationError(f"Fault skill does not exist: {source}")
-    _skill_frontmatter(source)
+    read_frontmatter(source)
 
     normalized_description = (
         description.strip() if description is not None else None
@@ -496,11 +444,89 @@ def add_fault(
         created = True
         target = destination / "SKILL.md"
         shutil.copy2(source, target)
+        frontmatter = read_frontmatter(target)
         if normalized_description is not None:
-            _rewrite_frontmatter_description(target, normalized_description)
+            frontmatter["description"] = normalized_description
+        metadata = metadata_dict(frontmatter)
+        metadata = dict(metadata)
+        if label_zh and label_zh.strip():
+            metadata["label_zh"] = label_zh.strip()
+        elif "label_zh" not in metadata:
+            metadata["label_zh"] = normalized_name
+        if label_en and label_en.strip():
+            metadata["label_en"] = label_en.strip()
+        elif "label_en" not in metadata:
+            metadata["label_en"] = normalized_name
+        if order is not None:
+            metadata["order"] = int(order)
+        frontmatter["metadata"] = metadata
+        write_frontmatter(target, frontmatter)
     except BaseException:
         if created:
             shutil.rmtree(destination)
         raise
 
+    invalidate_fault_registry()
+    from .presentation import invalidate_fault_ui_catalog
+
+    invalidate_fault_ui_catalog()
     return load_fault_definition(destination)
+
+
+class FaultRegistry:
+    def __init__(self, skills_root: Path | None = None) -> None:
+        root = skills_root or default_skills_root()
+        self._faults = {
+            definition.name: definition
+            for directory in sorted(root.iterdir())
+            if directory.is_dir() and (directory / "SKILL.md").is_file()
+            for definition in (load_fault_definition(directory),)
+        }
+
+    def get(self, name: str) -> FaultDefinition:
+        normalized = name.strip().lower()
+        try:
+            fault = self._faults[normalized]
+        except KeyError as exc:
+            available = ", ".join(sorted(self._faults))
+            raise FaultNotFoundError(
+                f"Unknown fault {name!r}. Available faults: {available}"
+            ) from exc
+
+        if not fault.skill_file.is_file():
+            raise FaultNotFoundError(
+                f"Fault {name!r} is registered but its SKILL.md is missing"
+            )
+        return fault
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._faults))
+
+
+def get_fault_registry(
+    *,
+    skills_root: Path | None = None,
+    refresh: bool = False,
+) -> FaultRegistry:
+    """Return the process-wide registry for the default skills root.
+
+    Custom ``skills_root`` always constructs a fresh registry (no global cache),
+    so tests and temporary catalogs stay isolated.
+    """
+
+    if skills_root is not None:
+        return FaultRegistry(skills_root)
+
+    global _default_registry
+    with _default_lock:
+        if refresh or _default_registry is None:
+            _default_registry = FaultRegistry()
+        return _default_registry
+
+
+def invalidate_fault_registry() -> None:
+    """Drop the cached default registry so the next get rescans disk."""
+
+    global _default_registry
+    with _default_lock:
+        _default_registry = None

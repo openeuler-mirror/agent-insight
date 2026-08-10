@@ -2,7 +2,7 @@ from pathlib import Path
 from unittest import TestCase
 
 from agent_fault_injection.pipeline.exceptions import FaultNotFoundError
-from agent_fault_injection.fault_inject.catalog.registry import (
+from agent_fault_injection.fault_inject.catalog.definition import (
     FaultRegistry,
     get_fault_registry,
     invalidate_fault_registry,

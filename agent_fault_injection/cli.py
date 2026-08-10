@@ -12,7 +12,7 @@ from typing import Any, Sequence
 
 from .pipeline.exceptions import AgentRasEvalError, ConfigurationError
 from .fault_inject.catalog import add_fault
-from .fault_inject.catalog.registry import FaultRegistry
+from .fault_inject.catalog.definition import FaultRegistry
 from .pipeline.models import (
     RunRequest,
     RunResult,
@@ -223,6 +223,19 @@ defaults:
     fault_add.add_argument(
         "--description",
         help="Optional fault description; defaults to the skill metadata.",
+    )
+    fault_add.add_argument(
+        "--label-zh",
+        help="Optional Chinese UI label written into SKILL.md metadata.",
+    )
+    fault_add.add_argument(
+        "--label-en",
+        help="Optional English UI label written into SKILL.md metadata.",
+    )
+    fault_add.add_argument(
+        "--order",
+        type=int,
+        help="Optional UI sort order written into SKILL.md metadata.",
     )
 
     fault_commands.add_parser(
@@ -476,6 +489,9 @@ def _add_fault(namespace: argparse.Namespace) -> int:
         name=namespace.name,
         skill_file=namespace.skill_file,
         description=namespace.description,
+        label_zh=namespace.label_zh,
+        label_en=namespace.label_en,
+        order=namespace.order,
     )
     print(f"fault: {fault.name}")
     print(f"skill: {fault.skill_name}")

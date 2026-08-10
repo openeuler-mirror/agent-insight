@@ -1,8 +1,16 @@
 ---
 name: ras-memory-file-loss
-description: >-
-  记忆文件丢失故障注入技能 — 工作区 MEMORY.md 已由框架播种后删除全文或关键约束段。
-  当用户要求执行记忆丢失、memory file loss、文件记忆丢失，或点名场景1/case1、场景2/case2 时触发。
+description: 记忆文件丢失故障注入技能 — 工作区 MEMORY.md 已由框架播种后删除全文或关键约束段。 当用户要求执行记忆丢失、memory file
+  loss、文件记忆丢失，或点名场景1/case1、场景2/case2 时触发。
+metadata:
+  label_zh: 记忆文件丢失
+  label_en: memory-file-loss
+  order: 120
+  submodes:
+  - name: 删除全文
+    description: 播种 MEMORY.md 后删除整份文件
+  - name: 删除约束段
+    description: 保留文件但删除
 ---
 
 # 记忆文件丢失（Memory File Loss）故障注入

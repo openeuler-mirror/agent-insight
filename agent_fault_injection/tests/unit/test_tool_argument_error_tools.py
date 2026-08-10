@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 from agent_fault_injection.fault_inject.catalog.scenarios import parse_skill_submodes
-from agent_fault_injection.fault_inject.catalog.ui_catalog import (
+from agent_fault_injection.fault_inject.catalog.presentation import (
     load_fault_ui_catalog,
     resolve_fault_labels,
 )

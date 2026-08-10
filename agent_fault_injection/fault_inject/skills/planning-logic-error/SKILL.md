@@ -1,7 +1,19 @@
 ---
 name: ras-planning-logic-error
-description: >-
-  规划逻辑错误（Planning Logic Error）故障注入技能 — 强制 Agent 先产出逻辑不健全的计划（依赖颠倒、环依赖或步骤缺失），再严格按该错误计划执行，验证平台对规划层分解/依赖错误的检测能力。当用户要求执行规划逻辑错误、planning logic error，或以文字描述「子任务依赖方向写反 / 后置产物当作前置」「子任务互相作为前置形成依赖环」「步骤缺失 / 计划漏掉被内容清单依赖的步骤」等故障场景，或点名场景1、场景2、场景3 时触发。
+description: 规划逻辑错误（Planning Logic Error）故障注入技能 — 强制 Agent 先产出逻辑不健全的计划（依赖颠倒、环依赖或步骤缺失），再严格按该错误计划执行，验证平台对规划层分解/依赖错误的检测能力。当用户要求执行规划逻辑错误、planning
+  logic error，或以文字描述「子任务依赖方向写反 / 后置产物当作前置」「子任务互相作为前置形成依赖环」「步骤缺失 / 计划漏掉被内容清单依赖的步骤」等故障场景，或点名场景1、场景2、场景3
+  时触发。
+metadata:
+  label_zh: 规划逻辑错误
+  label_en: Planning Logic Error
+  order: 80
+  submodes:
+  - name: 依赖颠倒
+    description: 子任务依赖方向写反，后置内容清单被当作前置条件
+  - name: 环依赖
+    description: 子任务互相作为前置，形成无法收敛的依赖环
+  - name: 步骤缺失
+    description: 计划漏掉写/读源文件，却要求写出内嵌其正文的内容清单
 ---
 
 # 规划逻辑错误（Planning Logic Error）故障注入

@@ -1,7 +1,23 @@
 ---
 name: tool_repeat_dead_loop
 description: 工具死循环故障注入技能 - 覆盖四种循环检测场景
-tags: [测试, 可靠性, 工具死循环]
+tags:
+- 测试
+- 可靠性
+- 工具死循环
+metadata:
+  label_zh: 工具重复死循环
+  label_en: tool_repeat_dead_loop
+  order: 20
+  submodes:
+  - name: generic_repeat
+    description: 相同工具+参数重复，仅告警不中断
+  - name: unknown_tool_repeat
+    description: 未知工具重复，工具返回错误
+  - name: global_breaker
+    description: 全局断路器兜底中断
+  - name: ping_pong
+    description: 两工具交替调用
 ---
 
 # 工具死循环故障注入

@@ -14,7 +14,7 @@ from .exceptions import (
     PluginStartupError,
 )
 from ..fault_inject.catalog.models import FaultDefinition
-from ..fault_inject.catalog.registry import FaultRegistry
+from ..fault_inject.catalog.definition import FaultRegistry
 from .models import (
     RunArtifacts,
     RunRequest,

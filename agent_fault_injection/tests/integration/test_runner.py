@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 from agent_fault_injection.pipeline.models import (
     PlatformRunResult,
     RunRequest,

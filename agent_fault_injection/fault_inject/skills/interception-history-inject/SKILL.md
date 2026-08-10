@@ -1,8 +1,11 @@
 ---
 name: ras-interception-history-inject
-description: >-
-  拦截改写（历史注入）故障注入 — messages 可能含伪造先验 TOKEN。
-  当用户要求执行拦截改写、历史注入、messages inject 时触发。
+description: 拦截改写（历史注入）故障注入 — messages 可能含伪造先验 TOKEN。 当用户要求执行拦截改写、历史注入、messages inject
+  时触发。
+metadata:
+  label_zh: 拦截改写（历史注入）
+  label_en: interception-history-inject
+  order: 150
 ---
 
 # 拦截改写：历史注入

@@ -9,7 +9,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from agent_fault_injection.fault_inject.injection.installer import InstallSession
-from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 from agent_fault_injection.pipeline.exceptions import PluginStartupError
 from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
 from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter

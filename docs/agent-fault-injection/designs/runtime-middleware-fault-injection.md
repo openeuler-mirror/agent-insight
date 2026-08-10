@@ -23,7 +23,6 @@
 | `prompt_modify` | 提示词修改 | **已落地**（MAS-FIRE Prompt Modification） |
 | `tool_result_tamper` | 工具结果篡改 | 已落地 |
 | `intercept_rewrite` | 拦截改写 | **已落地 P0**（MAS-FIRE Interception + AutoInject） |
-| `route_manipulate` | 路由操纵（预留） | **不实现** |
 
 ## 2. 平台挂点
 

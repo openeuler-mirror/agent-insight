@@ -1,7 +1,12 @@
 ---
 name: analysis-paralysis
-description: >-
-  过度思考（分析瘫痪）故障注入技能 — 强制 Agent 原样输出长篇方案摇摆与自我质疑推理，验证平台对 analysis paralysis / overthinking 的检测能力。当用户要求执行过度思考、分析瘫痪、analysis paralysis、overthinking 故障注入，或点名场景1/case1 时触发。
+description: 过度思考（分析瘫痪）故障注入技能 — 强制 Agent 原样输出长篇方案摇摆与自我质疑推理，验证平台对 analysis paralysis
+  / overthinking 的检测能力。当用户要求执行过度思考、分析瘫痪、analysis paralysis、overthinking 故障注入，或点名场景1/case1
+  时触发。
+metadata:
+  label_zh: 过度思考
+  label_en: analysis-paralysis
+  order: 0
 ---
 
 # 过度思考（分析瘫痪）故障注入

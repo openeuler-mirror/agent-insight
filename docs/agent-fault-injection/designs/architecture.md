@@ -28,7 +28,7 @@
 | Task 1:N Run；Faults/Tasks/Run 详情 UI | 保留 FastAPI / 独立 Vite |
 | 轨迹唯一真源 `Session.interactions`（Prisma） | 产品契约暴露 trajectory/execution 多文件树；服务端读本机 artifact 路径 |
 | Judge 在 Insight（二维 outcome×containment） | 本机 Python Judge（已删除） |
-| 注入方式五类落地 + `route_manipulate` 预留 | 与环内 RAS detector **混同检测**；写 OTLP spool |
+| 注入方式五类落地 | 与环内 RAS detector **混同检测**；写 OTLP spool |
 | FI Run / Session 观测注入结果 | ~~激活后桥接 `RasAnomalyEvent`~~（已移除；观测靠正常轨迹上报） |
 | 本机 FI Worker claim / heartbeat / stop | Next 进程内 `spawn` collector（已废弃） |
 
@@ -64,7 +64,7 @@ agent_fault_injection/
 
 ## 注入方式（catalog key）
 
-`skill_inject` | `file_tamper` | `prompt_modify` | `tool_result_tamper` | `intercept_rewrite` | `route_manipulate`(不实现)
+`skill_inject` | `file_tamper` | `prompt_modify` | `tool_result_tamper` | `intercept_rewrite`
 
 详见 [fault-inject.md](modules/fault-inject.md) · [fault-catalog.md](fault-catalog.md) · [runtime-middleware-fault-injection.md](runtime-middleware-fault-injection.md)。
 

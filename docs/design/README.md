@@ -40,6 +40,7 @@
 | 记忆噪声干扰 FI | [`../agent-ras/designs/features/memory-noise-interference.md`](../agent-ras/designs/features/memory-noise-interference.md) | Skill S1–S3 已落地；S4 压缩失真未实施 | Feature | 2026-08-03 | 🟡 S1–S3 已落地 | — |
 | Agent RAS 故障域自包含插件化 | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | `fault_domains/<id>/` 自包含包（detector.py 导出 PLUGIN，无独立 manifest）；Loader 扫描注册；Anomaly.kind 动态字符串；新域零改框架登记点 | Refactor / Feature | 2026-08-06 | 🟡 部分落地（前置分层搬家+注册入口统一已完成 b26d497/fc1d5fd；自包含插件包未实现） | — |
 | FI 证据边界与 inconclusive 语义 | [`../agent-fault-injection/designs/modules/server-judge.md`](../agent-fault-injection/designs/modules/server-judge.md) | 注入工具不写自证快照；Judge 以轨迹为主；`no_trace`→`inconclusive` | Refactor | 2026-08-05 | ✅ 已实现 | — |
+| FI 故障模式自包含插件化 | [`../agent-fault-injection/designs/features/fault-mode-plugins.md`](../agent-fault-injection/designs/features/fault-mode-plugins.md) | 展示元数据进 `SKILL.md` metadata；method 标签进 capability_api；删 fault-catalog.yaml；catalog Python 规整 | Refactor | 2026-08-10 | ✅ 已实现 | — |
 
 ## 字段口径
 

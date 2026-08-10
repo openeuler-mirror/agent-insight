@@ -8,7 +8,7 @@ from agent_fault_injection.pipeline.exceptions import (
     InstallationConflictError,
 )
 from agent_fault_injection.fault_inject.catalog import add_fault
-from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 
 
 class FaultCatalogTests(TestCase):

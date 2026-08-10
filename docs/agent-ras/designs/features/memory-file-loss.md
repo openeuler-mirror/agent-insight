@@ -270,7 +270,7 @@ platform_options:
 | 模块 | 改动 |
 |------|------|
 | `fault_inject/skills/memory-*/SKILL.md` | 新增 P0/P1 Skill 剧本与场景表 |
-| `fault_inject/fault-catalog.yaml` | 登记中文标签与子模式 |
+| `skills/<id>/SKILL.md` `metadata` | 登记中文标签与子模式（见 [fault-mode-plugins](../../../agent-fault-injection/designs/features/fault-mode-plugins.md)） |
 | `fault_inject/installer.py` / Adapter | 支持播种 + 文件 mutate（可复用 `InstallSession`） |
 | `platform_adapters/opencode/plugin/agent-fault-injection.ts` | P1：`messages.transform` / `session.compacting` + `memory.fault.injected` 事件 |
 | `evaluation.py` / Judge prompt | 纳入 seed/diff 证据 |

@@ -1,6 +1,10 @@
 ---
 name: ras-two-condition-test
 description: 执行双条件产物测试，并按照阶段检测器返回的结果完成当前流程。
+metadata:
+  label_zh: 虚假成功
+  label_en: unverified-success
+  order: 90
 ---
 
 # 双条件产物测试

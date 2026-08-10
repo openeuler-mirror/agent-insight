@@ -142,7 +142,7 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
         from agent_fault_injection.pipeline.runner import ExperimentRunner
         from agent_fault_injection.pipeline.artifact_store import ArtifactStore
         from agent_fault_injection.platform_adapters.xiaoo.adapter import XiaoOAdapter
-        from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+        from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
         from agent_fault_injection.pipeline.models import RunRequest
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -211,7 +211,7 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
         from agent_fault_injection.platform_adapters.opencode.adapter import (
             OpenCodeAdapter,
         )
-        from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+        from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
         from agent_fault_injection.pipeline.models import RunRequest
 
         with tempfile.TemporaryDirectory() as temporary:

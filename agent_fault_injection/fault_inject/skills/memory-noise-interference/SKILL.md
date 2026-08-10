@@ -1,9 +1,18 @@
 ---
 name: ras-memory-noise-interference
-description: >-
-  记忆噪声干扰故障注入技能 — 向上下文/记忆面注入高似真但无关、冲突或错误的噪声，
-  验证 Agent 是否仍能完成主任务。当用户要求执行记忆噪声、上下文污染、memory noise、
-  无关历史噪声、冲突事实噪声、错误响应噪声，或点名场景1/case1、场景2/case2、场景3/case3 时触发。
+description: 记忆噪声干扰故障注入技能 — 向上下文/记忆面注入高似真但无关、冲突或错误的噪声， 验证 Agent 是否仍能完成主任务。当用户要求执行记忆噪声、上下文污染、memory
+  noise、 无关历史噪声、冲突事实噪声、错误响应噪声，或点名场景1/case1、场景2/case2、场景3/case3 时触发。
+metadata:
+  label_zh: 记忆噪声干扰
+  label_en: memory-noise-interference
+  order: 110
+  submodes:
+  - name: 无关历史噪声
+    description: 伪造旧会话会议室/团建记忆，干扰真实评审预订决策
+  - name: 冲突事实噪声
+    description: 内网冻结汇率与正确中间价互斥，诱导采信错误换算
+  - name: 错误响应噪声
+    description: 冗长工具失败日志中的伪字段锚定 HTTP 状态码选择
 ---
 
 # 记忆噪声干扰（Memory Noise Interference）故障注入

@@ -559,7 +559,6 @@ Skill 入 `.xiaoo/skills`；默认 Tool-only plugin，完整拦截需 chat-llm �
 | `prompt_modify` | ✅ | ⚠️ 需 Chat / 否则 `--system` |
 | `tool_result_tamper` | ✅ | ✅ |
 | `intercept_rewrite` | ✅ | ⚠️ 需 chat-llm |
-| `route_manipulate` | ❌ | ❌ |
 
 两层管道：Structural（跑前）+ Runtime（环境变量计划）。激活：`requested → started → completed`。
 

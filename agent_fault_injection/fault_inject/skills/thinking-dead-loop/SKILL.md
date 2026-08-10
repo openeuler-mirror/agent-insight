@@ -1,11 +1,18 @@
 ---
 name: thinking-dead-loop
-description: >-
-  Thinking 死循环故障注入技能 — 通过强制 Agent 重复输出固定 thinking 文本，
-  验证平台对字面重复死循环、逻辑死循环、计划-执行死循环的检测与中断能力。
-  当用户要求执行 thinking 死循环测试、思维死锁注入、重复思考故障注入，
-  或点名场景1/case1/字面重复死循环、场景2/case2/逻辑死循环、
-  场景3/case3/计划-执行死循环时触发。
+description: Thinking 死循环故障注入技能 — 通过强制 Agent 重复输出固定 thinking 文本， 验证平台对字面重复死循环、逻辑死循环、计划-执行死循环的检测与中断能力。
+  当用户要求执行 thinking 死循环测试、思维死锁注入、重复思考故障注入， 或点名场景1/case1/字面重复死循环、场景2/case2/逻辑死循环、 场景3/case3/计划-执行死循环时触发。
+metadata:
+  label_zh: 思考死循环
+  label_en: thinking-dead-loop
+  order: 10
+  submodes:
+  - name: 字面重复死循环
+    description: 「让我协助」字面高速堆叠
+  - name: 逻辑死循环
+    description: 语义相近、措辞微调的「先看上下文」废话
+  - name: 计划-执行死循环
+    description: 碎片化分析与计划来回交错、无实质执行
 ---
 
 # Thinking 死循环故障注入

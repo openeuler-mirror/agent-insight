@@ -1,8 +1,10 @@
 ---
 name: ras-routing-continuity-test
-description: >-
-  执行分阶段工单路由连续性测试，并通过状态查询、独立路由动作和最终结果
-  记录同一批次在环境阶段切换前后的处理情况。
+description: 执行分阶段工单路由连续性测试，并通过状态查询、独立路由动作和最终结果 记录同一批次在环境阶段切换前后的处理情况。
+metadata:
+  label_zh: 执行目标漂移
+  label_en: execution-goal-drift
+  order: 100
 ---
 
 # 分阶段工单路由连续性测试

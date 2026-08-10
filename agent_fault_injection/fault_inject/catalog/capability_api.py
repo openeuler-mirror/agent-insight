@@ -28,8 +28,39 @@ def allowed_ops(api: dict[str, Any] | None = None) -> set[str]:
 
 def allowed_methods(api: dict[str, Any] | None = None) -> set[str]:
     data = api or load_capability_api()
-    methods = data.get("injection_methods") or []
-    return {str(item) for item in methods}
+    methods = data.get("injection_methods") or {}
+    if isinstance(methods, dict):
+        return {str(key) for key in methods}
+    if isinstance(methods, list):
+        return {str(item) for item in methods}
+    return set()
+
+
+def method_labels(api: dict[str, Any] | None = None) -> dict[str, str]:
+    """Return injection_method id → Chinese label for UI."""
+
+    data = api or load_capability_api()
+    methods = data.get("injection_methods") or {}
+    labels: dict[str, str] = {}
+    if isinstance(methods, dict):
+        for key, value in methods.items():
+            method_id = str(key)
+            if isinstance(value, dict):
+                label = value.get("label_zh")
+                if isinstance(label, str) and label.strip():
+                    labels[method_id] = label.strip()
+                    continue
+            if isinstance(value, str) and value.strip():
+                labels[method_id] = value.strip()
+                continue
+            labels[method_id] = method_id
+    elif isinstance(methods, list):
+        for item in methods:
+            method_id = str(item)
+            labels[method_id] = method_id
+    if "skill_inject" not in labels:
+        labels["skill_inject"] = "Skill 注入"
+    return labels
 
 
 def _ops_from_steps(steps: Any) -> Iterable[str]:

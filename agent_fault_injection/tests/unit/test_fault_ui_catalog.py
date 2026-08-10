@@ -3,11 +3,35 @@ from pathlib import Path
 from unittest import TestCase
 
 from agent_fault_injection.pipeline.exceptions import ConfigurationError
-from agent_fault_injection.fault_inject.catalog.ui_catalog import (
+from agent_fault_injection.fault_inject.catalog.presentation import (
     load_fault_ui_catalog,
     resolve_fault_labels,
+    resolve_fault_platforms,
     resolve_fault_submodes,
 )
+
+
+def _write_skill(
+    root: Path,
+    fault_id: str,
+    *,
+    metadata_lines: list[str] | None = None,
+    body: str = "# Skill Title\n",
+) -> Path:
+    directory = root / fault_id
+    directory.mkdir(parents=True)
+    lines = [
+        "---",
+        f"name: {fault_id}",
+        "description: demo description",
+    ]
+    if metadata_lines:
+        lines.append("metadata:")
+        lines.extend(f"  {line}" for line in metadata_lines)
+    lines.extend(["---", "", body])
+    skill = directory / "SKILL.md"
+    skill.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return skill
 
 
 class FaultUiCatalogTests(TestCase):
@@ -22,22 +46,17 @@ class FaultUiCatalogTests(TestCase):
         self.assertEqual(
             catalog.injection_methods["intercept_rewrite"], "拦截改写"
         )
-        self.assertIn("route_manipulate", catalog.injection_methods)
+        self.assertNotIn("route_manipulate", catalog.injection_methods)
         self.assertNotIn("skill", catalog.injection_methods)
-        self.assertNotIn("file", catalog.injection_methods)
-        self.assertNotIn("middleware", catalog.injection_methods)
-        self.assertNotIn("tool_result", catalog.injection_methods)
-        self.assertNotIn("prompt", catalog.injection_methods)
-        self.assertNotIn("interception", catalog.injection_methods)
-        self.assertNotIn("routing", catalog.injection_methods)
         entry = catalog.entry("ras-early-stop")
         assert entry is not None
         self.assertEqual(entry.label_zh, "提前停止")
         self.assertIsNone(entry.submodes)
+        self.assertEqual(entry.order, 30)
 
     def test_builtin_multi_submodes_id_filled_from_skill(self) -> None:
         catalog = load_fault_ui_catalog()
-        from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+        from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 
         fault = FaultRegistry().get("thinking-dead-loop")
         submodes = resolve_fault_submodes(
@@ -51,46 +70,39 @@ class FaultUiCatalogTests(TestCase):
 
     def test_orders_discovered_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "fault-catalog.yaml"
-            path.write_text(
-                "\n".join(
-                    [
-                        "faults:",
-                        "  - id: beta",
-                        "    label_zh: 乙",
-                        "  - id: alpha",
-                        "    label_zh: 甲",
-                        "  - id: hidden",
-                        "    visible: false",
-                    ]
-                ),
-                encoding="utf-8",
+            root = Path(temporary)
+            _write_skill(
+                root,
+                "beta",
+                metadata_lines=["label_zh: 乙", "order: 10"],
             )
-            catalog = load_fault_ui_catalog(path)
-            ordered = catalog.ordered_ids(["hidden", "gamma", "alpha", "beta"])
+            _write_skill(
+                root,
+                "alpha",
+                metadata_lines=["label_zh: 甲", "order: 20"],
+            )
+            _write_skill(
+                root,
+                "gamma",
+                metadata_lines=["label_zh: 丙"],
+            )
+            catalog = load_fault_ui_catalog(root)
+            ordered = catalog.ordered_ids(["gamma", "alpha", "beta"])
             self.assertEqual(ordered, ["beta", "alpha", "gamma"])
 
-    def test_resolve_labels_prefer_catalog(self) -> None:
+    def test_resolve_labels_prefer_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            catalog_path = root / "fault-catalog.yaml"
-            catalog_path.write_text(
-                "\n".join(
-                    [
-                        "faults:",
-                        "  - id: demo",
-                        "    label_zh: 配置中文名",
-                        "    label_en: demo-en",
-                    ]
-                ),
-                encoding="utf-8",
+            skill = _write_skill(
+                root,
+                "demo",
+                metadata_lines=[
+                    "label_zh: 配置中文名",
+                    "label_en: demo-en",
+                ],
+                body="# Skill Title\n",
             )
-            skill = root / "SKILL.md"
-            skill.write_text(
-                "---\nname: demo\ndescription: d\n---\n\n# Skill Title\n",
-                encoding="utf-8",
-            )
-            catalog = load_fault_ui_catalog(catalog_path)
+            catalog = load_fault_ui_catalog(root)
             zh, en = resolve_fault_labels(
                 fault_id="demo",
                 skill_file=skill,
@@ -99,33 +111,19 @@ class FaultUiCatalogTests(TestCase):
             self.assertEqual(zh, "配置中文名")
             self.assertEqual(en, "demo-en")
 
-    def test_resolve_submodes_prefer_catalog(self) -> None:
+    def test_resolve_submodes_prefer_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            catalog_path = root / "fault-catalog.yaml"
-            catalog_path.write_text(
-                "\n".join(
+            skill = _write_skill(
+                root,
+                "demo",
+                metadata_lines=[
+                    "submodes:",
+                    "  - name: 配置子模式",
+                    "    description: 来自 metadata",
+                ],
+                body="\n".join(
                     [
-                        "faults:",
-                        "  - id: demo",
-                        "    submodes:",
-                        "      - name: 配置子模式",
-                        "        description: 来自 YAML",
-                        "      - name: 隐藏子模式",
-                        "        visible: false",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            skill = root / "SKILL.md"
-            skill.write_text(
-                "\n".join(
-                    [
-                        "---",
-                        "name: demo",
-                        "description: d",
-                        "---",
-                        "",
                         "# Demo",
                         "",
                         "## 场景1：Skill 子模式",
@@ -133,9 +131,8 @@ class FaultUiCatalogTests(TestCase):
                         "## 场景2：另一个",
                     ]
                 ),
-                encoding="utf-8",
             )
-            catalog = load_fault_ui_catalog(catalog_path)
+            catalog = load_fault_ui_catalog(root)
             submodes = resolve_fault_submodes(
                 fault_id="demo",
                 skill_file=skill,
@@ -143,34 +140,25 @@ class FaultUiCatalogTests(TestCase):
             )
             self.assertEqual(
                 submodes,
-                [{"id": "1", "name": "配置子模式", "description": "来自 YAML"}],
+                [{"id": "1", "name": "配置子模式", "description": "来自 metadata"}],
             )
 
     def test_resolve_submodes_fallback_to_skill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            catalog_path = root / "fault-catalog.yaml"
-            catalog_path.write_text(
-                "faults:\n  - id: demo\n    label_zh: Demo\n",
-                encoding="utf-8",
-            )
-            skill = root / "SKILL.md"
-            skill.write_text(
-                "\n".join(
+            skill = _write_skill(
+                root,
+                "demo",
+                metadata_lines=["label_zh: Demo"],
+                body="\n".join(
                     [
-                        "---",
-                        "name: demo",
-                        "description: d",
-                        "---",
-                        "",
                         "# Demo",
                         "",
                         "## 场景1：Skill 子模式",
                     ]
                 ),
-                encoding="utf-8",
             )
-            catalog = load_fault_ui_catalog(catalog_path)
+            catalog = load_fault_ui_catalog(root)
             submodes = resolve_fault_submodes(
                 fault_id="demo",
                 skill_file=skill,
@@ -182,12 +170,12 @@ class FaultUiCatalogTests(TestCase):
     def test_resolve_labels_fallback_to_skill_title(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            skill = root / "SKILL.md"
-            skill.write_text(
-                "---\nname: orphan\ndescription: d\n---\n\n# Orphan Title\n",
-                encoding="utf-8",
+            skill = _write_skill(
+                root,
+                "orphan",
+                body="# Orphan Title\n",
             )
-            catalog = load_fault_ui_catalog(root / "missing.yaml")
+            catalog = load_fault_ui_catalog(root)
             zh, en = resolve_fault_labels(
                 fault_id="orphan",
                 skill_file=skill,
@@ -196,18 +184,17 @@ class FaultUiCatalogTests(TestCase):
             self.assertEqual(zh, "Orphan Title")
             self.assertEqual(en, "orphan")
 
-    def test_rejects_duplicate_ids(self) -> None:
+    def test_platforms_always_default(self) -> None:
+        platforms = resolve_fault_platforms(fault_id="tool-argument-error")
+        self.assertEqual(platforms, ["opencode", "xiaoo"])
+
+    def test_rejects_forbidden_metadata_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "fault-catalog.yaml"
-            path.write_text(
-                "\n".join(
-                    [
-                        "faults:",
-                        "  - id: demo",
-                        "  - id: demo",
-                    ]
-                ),
-                encoding="utf-8",
+            root = Path(temporary)
+            _write_skill(
+                root,
+                "demo",
+                metadata_lines=["platforms: [opencode]", "label_zh: Demo"],
             )
-            with self.assertRaisesRegex(ConfigurationError, "Duplicate"):
-                load_fault_ui_catalog(path)
+            with self.assertRaisesRegex(ConfigurationError, "platforms"):
+                load_fault_ui_catalog(root)

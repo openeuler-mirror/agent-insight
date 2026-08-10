@@ -1,9 +1,11 @@
 ---
 name: ras-tool-selection-error
-description: >-
-  注入三次“语义相近但功能错误”的工具或 API 选择，同时保证替代调用符合参数结构；
+description: 注入三次“语义相近但功能错误”的工具或 API 选择，同时保证替代调用符合参数结构；
 metadata:
   fault-category: tool-use
+  label_zh: 工具选择错误
+  label_en: tool-selection-error
+  order: 60
 ---
 
 # 工具选择错误

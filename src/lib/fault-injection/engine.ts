@@ -29,8 +29,8 @@ function packageRoot(): string {
 export async function listFaultsViaPython(platform?: string): Promise<unknown[]> {
   const script = `
 import json
-from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
-from agent_fault_injection.fault_inject.catalog.ui_catalog import (
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.presentation import (
     get_fault_ui_catalog,
     injection_method_label,
     resolve_fault_labels,
@@ -94,7 +94,7 @@ export async function readSkillMarkdown(faultName: string): Promise<{
   const script = `
 import json
 from pathlib import Path
-from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 fault = FaultRegistry().get(${JSON.stringify(faultName)})
 skill = Path(fault.skill_file)
 print(json.dumps({

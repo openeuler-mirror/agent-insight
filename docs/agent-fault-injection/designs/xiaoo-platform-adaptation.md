@@ -14,7 +14,7 @@
 | Phase 0 框架解耦 | 已完成 | Registry / execution.jsonl / 统一 OpenCode Judge |
 | Phase 1 CLI Adapter | 已完成 | `platform_adapters/xiaoo/` + Hooker + `registry` 注册 |
 | Phase 2 Daemon harness | 已完成 | `platform_options.harness: daemon` + `daemon_url` |
-| Phase 3 Skill 平台可见性 | 已完成 | `fault-catalog.yaml` 的 `platforms`；`tool-argument-error` 仅 opencode |
+| Phase 3 Skill 平台可见性 | 已完成（后调整） | 原 `fault-catalog.yaml` 的 `platforms` 已移除；故障配方面向通用平台，UI 默认双平台。平台能力差异由 Adapter / 文档说明（见 [fault-mode-plugins.md](features/fault-mode-plugins.md)） |
 | Phase 4 产品化 | 已完成 | 示例 YAML、README、集成测 skip |
 
 运行示例见 [`configs/xiaoo-step-omission.example.yaml`](`configs/`（独立仓示例；Insight 用任务表单）xiaoo-step-omission.example.yaml)。

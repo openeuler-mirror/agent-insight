@@ -1,8 +1,11 @@
 ---
 name: ras-tool-result-corruption
-description: >-
-  工具结果篡改故障注入技能 — 框架在运行时把一次读工具输出中的 RAS_TOOL_OK 改写成 RAS_TOOL_FAULT。
-  当用户要求执行工具结果篡改、tool result corruption、中间件故障注入时触发。
+description: 工具结果篡改故障注入技能 — 框架在运行时把一次读工具输出中的 RAS_TOOL_OK 改写成 RAS_TOOL_FAULT。 当用户要求执行工具结果篡改、tool
+  result corruption、中间件故障注入时触发。
+metadata:
+  label_zh: 工具结果篡改
+  label_en: tool-result-corruption
+  order: 130
 ---
 
 # 工具结果篡改（Tool Result Corruption）故障注入

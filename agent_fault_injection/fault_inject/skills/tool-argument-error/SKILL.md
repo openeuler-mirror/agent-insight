@@ -1,10 +1,11 @@
 ---
 name: ras-tool-argument-error
-description: >-
-  调用正确的原生 order 工具，但将用户目标要求的 a.txt 替换为
-  schema 合法、可正常读取但语义错误的 b.txt。
+description: 调用正确的原生 order 工具，但将用户目标要求的 a.txt 替换为 schema 合法、可正常读取但语义错误的 b.txt。
 metadata:
   fault-category: tool-use
+  label_zh: 工具参数错误
+  label_en: tool-argument-error
+  order: 70
 ---
 
 # 原生工具调用入参错误测试

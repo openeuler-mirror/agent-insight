@@ -19,7 +19,7 @@ from agent_fault_injection.fault_inject.injection.file_ops import (
     file_write,
 )
 from agent_fault_injection.fault_inject.catalog.models import InjectionStep
-from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 
 
 class InjectionToolsTests(TestCase):

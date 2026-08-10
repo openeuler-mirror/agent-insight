@@ -1,9 +1,10 @@
 ---
 name: ras-step-order-error
-description: >-
-  测试在agent执行过程中已经计划完毕的任务不按照既定的顺序执行的情况
-
-
+description: 测试在agent执行过程中已经计划完毕的任务不按照既定的顺序执行的情况
+metadata:
+  label_zh: 步骤顺序错误
+  label_en: step-order-error
+  order: 50
 ---
 
 ## 场景1：beta 先于 alpha

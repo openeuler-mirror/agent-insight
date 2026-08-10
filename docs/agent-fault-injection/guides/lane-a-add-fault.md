@@ -4,9 +4,11 @@
 
 | 允许改动 | 禁止改动 |
 |----------|----------|
-| `agent_fault_injection/fault_inject/skills/<id>/`（`SKILL.md`、可选 `fault.json` / `assets/`） | `rewrite_engine` / `file_ops` / 平台 plugin·hooker |
-| `agent_fault_injection/fault_inject/catalog/fault-catalog.yaml` | 在 [`capability_api.yaml`](../../../agent_fault_injection/fault_inject/catalog/capability_api.yaml) 增加新 op/method |
-| 同步 [fault-catalog.md](../designs/fault-catalog.md) 覆盖矩阵 | 在 Insight UI/API 硬编码故障名单 |
+| `agent_fault_injection/fault_inject/skills/<id>/`（`SKILL.md` 含 `metadata` 展示键、可选 `fault.json` / `assets/`） | `rewrite_engine` / `file_ops` / 平台 plugin·hooker |
+| 同步 [fault-catalog.md](../designs/fault-catalog.md) 覆盖矩阵 | 在 [`capability_api.yaml`](../../../agent_fault_injection/fault_inject/catalog/capability_api.yaml) 增加新 op/method（那是 Lane B） |
+| | 在 Insight UI/API 硬编码故障名单 |
+
+插件化设计见 [fault-mode-plugins.md](../designs/features/fault-mode-plugins.md)。
 
 需要清单外的注入原语 → 停，改走 **Lane B**。
 
@@ -59,7 +61,7 @@ agent_fault_injection/fault_inject/skills/<fault-id>/
 | `fault.json` 的 `name` | **必须 = 目录名** | `step-omission` |
 | `fault.json` 的 `skill_name` | **必须 = frontmatter `name`** | `ras-step-omission` |
 
-有 `SKILL.md` 的子目录会被 [`FaultRegistry`](../../../agent_fault_injection/fault_inject/catalog/registry.py) 自动发现；Insight 经 Python 列表拉取，无需改 TS 枚举。
+有 `SKILL.md` 的子目录会被 [`FaultRegistry`](../../../agent_fault_injection/fault_inject/catalog/definition.py) 自动发现；Insight 经 Python 列表拉取，无需改 TS 枚举。
 
 ---
 
@@ -72,6 +74,13 @@ agent_fault_injection/fault_inject/skills/<fault-id>/
 name: ras-your-fault
 description: >-
   一句话说明故障意图与可观测特征（给发现/列表用）。
+metadata:
+  label_zh: 中文名
+  label_en: your-fault-id
+  order: 200                 # 越小越靠前；可省略
+  # submodes:                # 可选；省略则解析正文「场景N」
+  #   - name: 场景一名称
+  #     description: 一句话
 ---
 
 # 故障标题
@@ -96,9 +105,10 @@ description: >-
 要点：
 
 1. frontmatter **必填** `name`、`description`。
-2. 多子模式用 `## 场景N：名称`，或放一张首列为场景 id 的总览表；系统会解析成 UI submode（见 `fault_inject/catalog/scenarios.py`）。
-3. 写清可观测产物/终答，方便 Judge 对照轨迹（不必改 Judge 代码）。
-4. Insight 建任务时合成用户 prompt：`使用 <skill> 技能，执行<子模式名>。`（TS：`compose-prompt.ts`；Python：`compose_fault_prompt`——改文案需双端同步）。
+2. **推荐**在 `metadata` 写 `label_zh` / `label_en` / `order`（及可选 `submodes`）。**禁止**写 `visible` / `platforms` / 嵌套 `ui`。
+3. 多子模式用 `## 场景N：名称`，或放一张首列为场景 id 的总览表；也可在 `metadata.submodes` 覆盖展示名（见 `fault_inject/catalog/scenarios.py` / `presentation.py`）。
+4. 写清可观测产物/终答，方便 Judge 对照轨迹（不必改 Judge 代码）。
+5. Insight 建任务时合成用户 prompt：`使用 <skill> 技能，执行<子模式名>。`（TS：`compose-prompt.ts`；Python：`compose_fault_prompt`——改文案需双端同步）。
 
 纯行为注入参考：[`skills/step-omission/SKILL.md`](../../../agent_fault_injection/fault_inject/skills/step-omission/SKILL.md)。
 
@@ -108,7 +118,9 @@ description: >-
 python -m agent_fault_injection.cli fault add \
   --name your-fault-id \
   --skill-file /path/to/SKILL.md \
-  --description "…"
+  --description "…" \
+  --label-zh "中文名" \
+  --order 200
 ```
 
 ---
@@ -170,23 +182,17 @@ python -m agent_fault_injection.cli fault add \
 
 ---
 
-## 4. 登记 UI 目录
+## 4. UI 展示元数据（写在同一 `SKILL.md`）
 
-在 [`fault-catalog.yaml`](../../../agent_fault_injection/fault_inject/catalog/fault-catalog.yaml) 的 `faults:` 下追加（**不替代发现**，只控标签/顺序/平台/可见子模式）：
+展示字段已收敛到 frontmatter 的 `metadata`（见 §2），**不要**再改 `catalog/` 下任何全局故障表（`fault-catalog.yaml` 已删除）。
 
-```yaml
-  - id: your-fault-id          # = 目录名
-    label_zh: 中文名
-    label_en: your-fault-id
-    platforms: [opencode, xiaoo]   # 可选
-    submodes:                      # 可选；也可完全靠 SKILL.md 解析
-      - name: 场景一名称
-        description: 一句话
-      - name: 场景二名称
-        description: 一句话
-```
+| 键 | 作用 |
+|----|------|
+| `label_zh` / `label_en` | 列表中文 / 英文名 |
+| `order` | UI 排序（越小越靠前） |
+| `submodes` | 可选；覆盖正文解析出的子模式展示 |
 
-`id` 必须与目录名一致；列表顺序即 UI 展示顺序。
+平台可见性由框架默认双平台（`opencode` + `xiaoo`），不在故障配方里声明。
 
 ---
 

@@ -4,12 +4,16 @@
 version: "1"
 
 injection_methods:
-  - skill_inject
-  - file_tamper
-  - prompt_modify
-  - tool_result_tamper
-  - intercept_rewrite
-  - route_manipulate  # reserved; not implemented
+  skill_inject:
+    label_zh: Skill 注入
+  file_tamper:
+    label_zh: 文件篡改
+  prompt_modify:
+    label_zh: 提示词修改
+  tool_result_tamper:
+    label_zh: 工具结果篡改
+  intercept_rewrite:
+    label_zh: 拦截改写
 
 structural_ops:
   - file.write
