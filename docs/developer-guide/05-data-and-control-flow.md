@@ -72,7 +72,9 @@ Pi Agent 是通用 traces 之外的第一方专用路径：Extension 将事件�
 `~/.agent-insight/otel_data/pi-agent/<api-key-hash>/YYYY-MM-DD/events.jsonl`，独立 uploader
 再通过同一 OTLP/HTTP traces endpoint 发送。服务端 `otel/adapters/pi-agent.ts` 按
 `agent.insight.kind` 恢复 Agent、SubAgent、Skill、LLM、Tool 和 MCP，随后转交统一
-`buildAgentCallTree` 与 `deriveSubagentExecutions`；Pi 的上传失败不会阻塞 Hook 事件路径。
+`buildAgentCallTree` 与 `deriveSubagentExecutions`；同一 `spanId` 的 running/completion
+快照在共享聚合器中按结束边界收敛为较新的完成快照。Pi Skill 使用一等 interaction 语义，
+保留加载内容作为 Skill Output，不被投影为额外 LLM Turn；Pi 的上传失败不会阻塞 Hook 事件路径。
 
 Codex 的 `default`、`Memory Agent` 等仍是委派角色，根/子 `Execution.agentName`、
 `observedAgents` 和 `RegisteredAgent` 归一为 `codex`（界面展示 Codex）。Pi 的语义不同：

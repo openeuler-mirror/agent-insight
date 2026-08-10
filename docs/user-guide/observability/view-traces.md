@@ -223,7 +223,7 @@ Agent 是执行任务的主体。列表和详情中既可能出现主 Agent，�
 
 ### Skill Call
 
-Skill Call 表示某个 Skill 在执行过程中被触发的记录。它反映的是 Skill 是否被调用，以及在整条链路中的位置和作用。
+Skill Call 表示某个 Skill 在执行过程中被触发的记录。它反映的是 Skill 是否被调用，以及在整条链路中的位置和作用。Skill 是独立的执行节点，不计为 LLM Turn；选中该节点可查看触发参数和实际加载的 Skill 内容或运行结果。
 
 ### Tool Call
 

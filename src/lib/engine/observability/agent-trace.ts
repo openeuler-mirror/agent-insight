@@ -397,7 +397,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             continue;
         }
 
-        const isSub = (it.role === 'subagent' || it.role === 'trace') && !!it.subagent_session_id;
+        const isSub = (it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 

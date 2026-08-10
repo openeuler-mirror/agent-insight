@@ -30,6 +30,16 @@ function eventOutput(event: OtelTraceEvent): string | undefined {
   return content(attrs(event)['output.value'] ?? attrs(event)['tool.result']);
 }
 
+function skillOutput(event: OtelTraceEvent): string | undefined {
+  const output = eventOutput(event);
+  // New collectors persist a labelled, self-contained Skill source. Historical
+  // Pi snapshots instead copied the final Agent reply into output, but still
+  // retain the loaded <skill> block in their input. Prefer that source block.
+  if (output?.startsWith('Skill:')) return output;
+  const embedded = /<skill\b[^>]*>[\s\S]*?<\/skill>/i.exec(eventInput(event) || '')?.[0];
+  return embedded || output;
+}
+
 function eventEndMs(event: OtelTraceEvent): number {
   return (event.startTimeMs || 0) + Math.max(0, event.latencyMs || 0);
 }
@@ -165,8 +175,26 @@ function dedupeBySpan(events: OtelTraceEvent[]): OtelTraceEvent[] {
     const existing = latest.get(event.spanId);
     if (!existing || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
   }
-  return [...latest.values(), ...withoutSpan]
-    .sort((a, b) => (a.startTimeMs || 0) - (b.startTimeMs || 0) || String(a.spanId).localeCompare(String(b.spanId)));
+  const retained = [...latest.values(), ...withoutSpan];
+  const bySpanId = new Map(
+    retained.filter((event) => event.spanId).map((event) => [event.spanId!, event]),
+  );
+  const isAncestor = (candidate: OtelTraceEvent, descendant: OtelTraceEvent): boolean => {
+    if (!candidate.spanId) return false;
+    let parentId = descendant.parentSpanId;
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      if (parentId === candidate.spanId) return true;
+      visited.add(parentId);
+      parentId = bySpanId.get(parentId)?.parentSpanId;
+    }
+    return false;
+  };
+  return retained.sort((a, b) =>
+    (a.startTimeMs || 0) - (b.startTimeMs || 0) ||
+    (isAncestor(a, b) ? -1 : isAncestor(b, a) ? 1 : 0) ||
+    String(a.spanId).localeCompare(String(b.spanId)),
+  );
 }
 
 export function aggregatePiAgentTraceEvents(
@@ -280,17 +308,22 @@ export function aggregatePiAgentTraceEvents(
     if (kind === 'skill') {
       const name = content(attrs(event)['skill.name']) || String(event.name || '').replace(/^skill\./, '');
       const version = attrs(event)['skill.version'];
+      const output = skillOutput(event);
+      const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();
       if (name && !skillNames.has(name)) {
         skillNames.add(name);
         invokedSkills.push({ name, version: numericSkillVersion(version) });
       }
       interactions.push({
         ...interactionBase(event, owner),
-        content: eventOutput(event) || '',
+        // Skill is a first-class trace step, not an assistant turn that happens
+        // to invoke a tool. The shared tree has a dedicated role for it.
+        role: 'skill',
+        content: '',
         tool_calls: [{
           id: event.spanId,
           type: 'function',
-          state: 'success',
+          state: outcome === 'running' ? 'running' : outcome === 'error' || outcome === 'failed' ? 'error' : 'success',
           function: {
             name: 'skill',
             arguments: JSON.stringify({
@@ -299,8 +332,8 @@ export function aggregatePiAgentTraceEvents(
               trigger_mode: attrs(event)['skill.trigger_mode'],
             }),
           },
-          output: eventOutput(event),
-          result: eventOutput(event),
+          output,
+          result: output,
           timing: {
             started_at: toIso(event.startTimeMs),
             completed_at: toIso(eventEndMs(event)),

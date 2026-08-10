@@ -113,11 +113,24 @@ function readToolPath(args) {
   return args?.path || args?.filePath || args?.file_path || args?.filename || args?.target;
 }
 
-async function skillVersion(skill) {
+async function skillDetails(skill) {
   const source = await fsp.readFile(skill.filePath, "utf8");
   const frontmatter = /^---\s*\r?\n([\s\S]*?)\r?\n---/.exec(source)?.[1] || "";
   const version = /^\s*version\s*:\s*["']?([^"'\r\n]+)["']?\s*$/mi.exec(frontmatter)?.[1]?.trim();
-  return version || sha256(source).slice(0, 12);
+  const baseDir = skill.baseDir || path.dirname(skill.filePath);
+  return {
+    version: version || sha256(source).slice(0, 12),
+    output: [
+      `Skill: ${skill.name}`,
+      baseDir ? `Base directory: ${baseDir}` : "",
+      "",
+      source,
+    ].filter(Boolean).join("\n"),
+  };
+}
+
+async function skillVersion(skill) {
+  return (await skillDetails(skill)).version;
 }
 
 function resultText(result) {
@@ -253,9 +266,9 @@ class PiTraceCollector {
         skill.name,
         this.activeSkills.length,
       ),
-      versionPromise: skill.filePath
-        ? skillVersion(skill).catch(() => "unknown")
-        : Promise.resolve("unknown"),
+      detailsPromise: skill.filePath
+        ? skillDetails(skill).catch(() => ({ version: "unknown", output: "" }))
+        : Promise.resolve({ version: "unknown", output: "" }),
     };
     this.activeSkills.push(span);
     // Skill 的版本解析可能读取磁盘，不能把「开始」事件拖到整个 Agent 收口时才写出。
@@ -525,6 +538,7 @@ class PiTraceCollector {
     const endedAt = this.now();
     const agent = this.currentAgent;
     for (const skill of this.activeSkills) {
+      const details = await skill.detailsPromise;
       this.append({
         eventId: stableEventId(this.sessionId, skill.spanId),
         sessionId: this.sessionId,
@@ -537,10 +551,10 @@ class PiTraceCollector {
         endTimeMs: endedAt,
         status: "success",
         input: agent.input,
-        output: this.lastOutput,
+        output: details.output,
         skill: {
           name: skill.name,
-          version: await skill.versionPromise,
+          version: details.version,
           triggerMode: skill.triggerMode,
         },
       });

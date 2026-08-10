@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createRequire } from "node:module"
 
-import { buildAgentCallTree } from "../src/lib/engine/observability/agent-trace"
+import { buildAgentCallTree, type RawInteraction } from "../src/lib/engine/observability/agent-trace"
 import { getAdapter } from "../src/lib/ingest/adapters/registry"
 import { aggregateOtelTraceEvents } from "../src/lib/ingest/otel/aggregate"
 import { getOtelTraceAdapter } from "../src/lib/ingest/otel/adapter-registry"
@@ -141,6 +141,110 @@ test("Pi adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage",
 test("Pi adapter registry uses complete snapshot replacement", () => {
   const adapter = getAdapter("pi-agent")
   assert.equal(adapter.sessionMergeStrategy, "snapshot-replace")
+})
+
+test("Pi Skill completion snapshot is retained as one first-class Skill node", () => {
+  const agent = "1".repeat(16)
+  const skill = "2".repeat(16)
+  const llmOne = "3".repeat(16)
+  const read = "4".repeat(16)
+  const llmTwo = "5".repeat(16)
+  const startedAt = 1_700_000_000_000
+  const events = normalize([
+    canonical({
+      eventId: "agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.pi",
+      input: "calculate checksum",
+      output: "ALPHA-42-Z9",
+      startTimeMs: startedAt,
+      endTimeMs: startedAt + 4_800,
+    }),
+    canonical({
+      eventId: "skill",
+      spanId: skill,
+      parentSpanId: agent,
+      kind: "skill",
+      name: "skill.zephyr-checksum",
+      input: "<skill>source</skill>",
+      status: "running",
+      startTimeMs: startedAt,
+      endTimeMs: startedAt,
+      skill: { name: "zephyr-checksum", version: "unknown", triggerMode: "explicit" },
+    }),
+    canonical({
+      eventId: "skill",
+      spanId: skill,
+      parentSpanId: agent,
+      kind: "skill",
+      name: "skill.zephyr-checksum",
+      input: "<skill>source</skill>",
+      output: "ALPHA-42-Z9",
+      status: "success",
+      startTimeMs: startedAt,
+      endTimeMs: startedAt + 4_744,
+      skill: { name: "zephyr-checksum", version: "1.0.0", triggerMode: "explicit" },
+    }),
+    canonical({
+      eventId: "llm-one",
+      spanId: llmOne,
+      parentSpanId: skill,
+      kind: "llm",
+      name: "llm.model-a",
+      output: "I will load the skill.",
+      startTimeMs: startedAt + 1,
+      endTimeMs: startedAt + 2_700,
+      usage: { input: 10, output: 2, total: 12 },
+    }),
+    canonical({
+      eventId: "read",
+      spanId: read,
+      parentSpanId: skill,
+      kind: "tool",
+      name: "tool.read",
+      startTimeMs: startedAt + 2_701,
+      endTimeMs: startedAt + 2_704,
+      tool: { name: "read", type: "file", arguments: { path: "SKILL.md" }, result: "source" },
+    }),
+    canonical({
+      eventId: "llm-two",
+      spanId: llmTwo,
+      parentSpanId: skill,
+      kind: "llm",
+      name: "llm.model-a",
+      output: "ALPHA-42-Z9",
+      startTimeMs: startedAt + 2_705,
+      endTimeMs: startedAt + 4_700,
+      usage: { input: 9, output: 3, total: 12 },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.equal(record.llm_call_count, 2)
+  type SkillInteraction = RawInteraction & {
+    tool_calls?: Array<{
+      function?: { arguments?: string }
+      output?: string
+    }>
+  }
+  const interactions = record.interactions as SkillInteraction[]
+  assert.deepEqual(interactions.slice(0, 2).map((item) => item.role), ["user", "skill"])
+  const skillInteraction = interactions.find((item) => item.role === "skill")
+  assert.ok(skillInteraction)
+  assert.equal(skillInteraction.tool_calls?.length, 1)
+  assert.deepEqual(JSON.parse(skillInteraction.tool_calls[0].function.arguments), {
+    name: "zephyr-checksum",
+    version: "1.0.0",
+    trigger_mode: "explicit",
+  })
+  assert.equal(skillInteraction.tool_calls[0].output, "<skill>source</skill>")
+
+  const tree = buildAgentCallTree(interactions)
+  assert.ok(tree)
+  assert.equal(tree.events.filter((event) => event.kind === "skill").length, 1)
+  assert.equal(tree.events.some((event) => event.kind === "llm" && event.summary === "调用工具：skill"), false)
 })
 
 test("Pi adapter keeps a subagent summary only as a fallback when leaf LLM output exists", () => {

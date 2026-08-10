@@ -86,6 +86,35 @@ test("OTel traces: aggregates trace spool events into one execution record", () 
   assert.equal(record.tool_call_count, 1)
 })
 
+test("OTel traces: completion snapshot replaces a same-span running snapshot", () => {
+  const events = [
+    traceEvent({
+      spanId: "span-llm",
+      name: "chat",
+      latencyMs: 0,
+      startTimeMs: 1500,
+      attributes: { "gen_ai.prompt": "hello", "tool.outcome": "running" },
+    }),
+    traceEvent({
+      spanId: "span-llm",
+      name: "chat",
+      latencyMs: 1500,
+      startTimeMs: 1500,
+      attributes: {
+        "gen_ai.prompt": "hello",
+        "gen_ai.completion": "done",
+        "tool.outcome": "success",
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents("session-a", events)
+  assert.ok(record)
+  assert.equal(record.final_result, "done")
+  assert.equal(record.latency, 1500)
+  assert.equal(record.interactions?.length, 1)
+})
+
 test("OTel traces: aggregates Langfuse LangGraph spans into skill, tool, and subagent interactions", () => {
   const sessionId = "server-troubleshooter-langfuse-capture"
   const events: OtelTraceEvent[] = [

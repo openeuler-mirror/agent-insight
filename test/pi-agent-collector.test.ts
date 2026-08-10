@@ -24,6 +24,7 @@ type CapturedEvent = {
   status?: string
   startTimeMs?: number
   endTimeMs?: number
+  output?: string
   tool?: { name?: string }
   usage?: {
     input: number
@@ -180,6 +181,9 @@ test("Pi collector records explicit Skill, exact native usage, Tool ownership, a
   assert.ok(llmEvent)
   assert.equal(skillEvent.skill.version, "2.4.0")
   assert.equal(skillEvent.skill.triggerMode, "explicit")
+  assert.match(skillEvent.output || "", /Skill: fixture-skill/)
+  assert.match(skillEvent.output || "", /# Fixture/)
+  assert.doesNotMatch(skillEvent.output || "", /^answer$/)
   assert.equal(skillStart.eventId, skillEvent.eventId)
   assert.equal(skillStart.spanId, skillEvent.spanId)
   assert.equal(skillStart.startTimeMs, skillStart.endTimeMs)
