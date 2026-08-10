@@ -55,11 +55,12 @@
 - **Trace list pagination**: Trace 页面使用 `/api/observe/data?paginated=1&databasePagination=1` 显式启用数据库分页；在 SQLite/Prisma 主路径将可下推过滤、排序、`skip/take` 与 `count` 放进数据库查询，随后只对当前页附加标签、评测状态和生命周期。仅按计算型状态过滤/排序时保留兼容扫描路径；未传 `databasePagination=1` 的既有分页调用方保持原读取语义。分页响应包含 `records/total/page/pageSize/stats`。
 - **Trace detail loading**: `/api/observe/session` 默认或 `view=full` 保持完整 Session 契约；`view=structure` 返回可建树的轻量 interactions，并在 Langfuse Session 上附加完整 `langfuseTraceNodes`；`view=interaction&index=N` 返回单条完整 interaction，`view=interactions` 在 Prompt/Timeline/搜索确需完整上下文时按需返回全部 interactions。长正文不在存储层截断。Trace 页面与抽屉会把 `Execution.framework` 传给 `AgentTraceView`；`langfuse-langgraph` 使用框架级 `SmartViewerConfigProvider` 将其中所有 JSON 树默认设为完全展开，其他框架保留共享渲染器的两层折叠默认值。
 
-### `GET /api/experiments/traces`
+### `GET /api/experiments/agents` / `GET /api/experiments/traces`
+- **Agent candidates**: `src/app/api/experiments/agents/route.ts` 只聚合当前用户的 root Trace，并通过 `buildExecutionOwnershipWhere('user')` 排除 `RegisteredAgent.agentOwnership='system'` 以及内置系统 Agent；响应中的 trace 数也使用同一归属口径。
 - **Location**: `src/app/api/experiments/traces/route.ts`
-- **Scope**: 新建实验第 ② 步的 root Trace 服务端筛选与分页；基础条件为 `user + agent + isSubagent=false`。
+- **Scope**: 新建实验第 ② 步的 root Trace 服务端筛选与分页；基础条件为 `user + agent + isSubagent=false + agentOwnership=user`，防止同名系统 Agent 的 Trace 混入。
 - **Query contract**: `search` 同时对 `Execution.id`、`taskId`、`query` 做包含匹配；`from` / `to` 接收 ISO 时间并作为闭区间边界；`tagIds` 接收逗号分隔的最多 20 个用户标签 ID，跨版本标签和业务标签使用 AND 语义；`pageSize` 上限 100。响应保持 `{ total, page, pageSize, items }`，其中 `total` 是应用全部筛选后的数量。
-- **Selection contract**: 前端分页和跨页全选必须复用同一组筛选参数；筛选条件只影响已有 Trace 候选，不持久化为 `Experiment.watchMode` 的监听规则。
+- **Selection contract**: 前端分页和跨页全选必须复用同一组筛选参数；筛选条件只影响已有 Trace 候选，不持久化为 `Experiment.watchMode` 的监听规则。监听模式收到新 Trace 后会再次应用用户归属条件，系统 Agent Trace 不进入实验。
 
 ### OTel spool consumer  {#otel-spool-consumer}
 - **External endpoints**: `POST /api/ingest/otel/v1/logs` accepts OTLP http/json payloads. `POST /api/ingest/otel/v1/traces` accepts OTLP http/json and OTLP http/protobuf payloads, normalizes events, appends JSONL spool rows, and returns `status: "accepted"` after the append succeeds. `POST /api/public/otel/v1/traces` is a Langfuse-compatible alias that reuses the same traces handler. `POST /api/ingest/otel/v1/metrics` accepts vLLM OTLP metrics over JSON or protobuf, normalizes them to the infra metric sample shape, persists them best-effort to `InfraMetricSample`, and returns an immediate diagnosis verdict. The response means accepted, not necessarily already visible in every observe query or persisted to `Execution`.

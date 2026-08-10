@@ -35,6 +35,7 @@ import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from 
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
+import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
@@ -1250,46 +1251,21 @@ async function appendExecutionOwnershipWhere(
     ownership?: 'user' | 'system',
 ): Promise<void> {
     if (!ownership) return;
-    const registeredSystemIdentities: any[] = [];
     try {
-        const registeredSystemAgents = await prismaRaw.registeredAgent.findMany({
-            where: { agentOwnership: 'system' },
-            select: { platform: true, name: true },
-        });
-        for (const item of registeredSystemAgents) {
-            if (!item.platform || !item.name) continue;
-            registeredSystemIdentities.push({ framework: item.platform, agentName: item.name });
-        }
+        const ownershipWhere = await buildExecutionOwnershipWhere(ownership);
+        where.AND = [...((where.AND as any[]) ?? []), ownershipWhere];
     } catch (e) {
         console.warn('[readRecords] system agent ownership lookup failed:', (e as Error)?.message);
+        const fallbackWhere = ownership === 'system'
+            ? { agentName: { in: [...SYSTEM_AGENT_NAMES] } }
+            : {
+                OR: [
+                    { agentName: null },
+                    { agentName: { notIn: [...SYSTEM_AGENT_NAMES] } },
+                ],
+            };
+        where.AND = [...((where.AND as any[]) ?? []), fallbackWhere];
     }
-    const ownershipWhere = ownership === 'system'
-        ? {
-            OR: [
-                { agentName: { in: [...SYSTEM_AGENT_NAMES] } },
-                ...registeredSystemIdentities,
-            ],
-        }
-        : {
-            AND: [
-                {
-                    OR: [
-                        { agentName: null },
-                        { agentName: { notIn: [...SYSTEM_AGENT_NAMES] } },
-                    ],
-                },
-                ...(registeredSystemIdentities.length > 0
-                    ? [{
-                        OR: [
-                            { framework: null },
-                            { agentName: null },
-                            { NOT: { OR: registeredSystemIdentities } },
-                        ],
-                    }]
-                    : []),
-            ],
-        };
-    where.AND = [...((where.AND as any[]) ?? []), ownershipWhere];
 }
 
 export async function listObservedAgentNames(user?: string, observedAgentFallback = false): Promise<string[]> {
