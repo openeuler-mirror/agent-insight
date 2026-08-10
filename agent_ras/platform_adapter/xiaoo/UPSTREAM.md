@@ -1,22 +1,34 @@
 # xiaoO upstream notes
 
-Against **current** xiaoO (`/home/iceory/work/agent-reliability/xiaoO`):
+Against **stock** xiaoO `origin/master`（不改上游源码）：
 
 | Capability | RAS 用法 |
 |------------|----------|
-| Shared gateway + `run_agent_loop` | 三端共用；RAS 挂此处 |
-| `SessionRuntimeBindings` cancel / pending | Host：`abort_stream` / steer / notice |
-| `LoopEventSink` + `FanoutLoopEventSink` | 流式 → `ras_embed` observe（非 SSE HTTP） |
-| Plugin hooker (Chat / Tool / Session) | Signal 采点 |
-| `HookAction` | 可扩展 `cancel_active_turn`；本地立即执行 |
-| `POST /api/v1/runtimes/*` | **RAS 不依赖**（非观测/恢复路径） |
+| Shared gateway + `run_agent_loop` | CLI/TUI/daemon 共用 |
+| Plugin hooker (Chat / Tool / Session) | L1 采点；`tool_post` **不** hello |
+| `HookAction` | master 仅 create/switch/send_prompt；**无** `cancel_active_turn`；CLI 丢弃 SendPrompt |
+| `LoopEventSink` | **无配置挂载**；私改注入已废止 |
+| `POST /api/v1/runtimes/open\|input\|cancel\|close` | **正式** Stream/Host：SSE 观测 + cancel/input 恢复（RAS 持有 lease） |
 
-SessionHub 跨 hooker 子进程：`platform_adapter.common.transport.subprocess_ipc`
-（Unix socket worker；非 SessionHub 本体）。
+SessionHub 跨 hooker 子进程：`platform_adapter.common.transport.subprocess_ipc`。
 
-## `ras_control.sock` ack 契约（2026-08-07 起）
+## Daemon 契约（RAS 客户端）
 
-投递改为**请求-响应**：网关执行完 abort/steer/notice 后必须回一行 JSON ack
-（`{"ok": true}` 或 `{"ok": false, "error": "..."}`）。不写回 ack 的监听器
-（含旧版直接关连接）会被如实记为 `ok=false error=no_ack`——
-`action_result` 的 ok 从此以网关确认为准，不再"发出即成功"。
+| 接口 | 用途 |
+|------|------|
+| `POST /api/v1/runtimes/open` | 开会话；body 含 `runtime_id` / `conversation_id` / `sender_id` / `client_id` |
+| `POST /api/v1/runtimes/input` | `Accept: text/event-stream`；字段 `text`（非 prompt） |
+| `POST /api/v1/runtimes/cancel` | lease 持有者取消当前 turn |
+| `POST /api/v1/runtimes/close` | 释放 |
+
+SSE 事件：`text_delta` / `thinking_delta` / `tool_call` / `tool_result` / `done` / `cancelled` / `error` …
+
+实现：[`daemon_client.py`](daemon_client.py)、[`daemon_session.py`](daemon_session.py)。
+
+## `ras_control.sock`（遗留，非 stock 依赖）
+
+仅当本地 gateway 仍监听 sock 时可用。stock master **无**该监听器；恢复必须以 Daemon cancel/input 为准。若仍有 sock ack，语义不变：无 ack → `ok=false`。
+
+## FI
+
+**零改动**。RAS Daemon 路径自持 lease，不依赖 FI adapter 接线。

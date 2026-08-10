@@ -4,11 +4,14 @@
 
 Hook points:
   - ``*.Chat.message.received`` → hello + otel user note
-  - ``*.Tool.*.post`` → tool observe + otel tool span
+  - ``*.Tool.*.post`` → tool observe + otel tool span (**no hello** — preserves detector buffers)
   - ``*.Session.lifecycle.state`` → reset + otel flush on idle/complete
   - ``stream_delta`` → text observe + otel assistant buffer
 
 stdin JSON → RasClient → stdout JSON. Fail-open on RAS/OTel errors.
+
+For stock-master mid-stream thinking + abort, prefer Daemon SSE
+(``DaemonRasSession``); plugin hooks alone lack cancel on CLI.
 """
 from __future__ import annotations
 
@@ -233,18 +236,41 @@ def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
     _otel_safe(otel_trace.note_tool, sid, payload)
     client, _host = _client(native)
     client.ensure()
-    if not client.hello(sid, "xiaoo", _hello_config()):
-        pass
+    # Do NOT hello here — hello rebuilds SessionState and wipes detector buffers.
+    # Session is established in chat_received (or SessionHub.ensure on observe).
     call = payload.get("call") or {}
     # Next assistant stream is a new LLM identity (do not inherit skill call_id).
     _LLM_TURN_MSG.pop(sid, None)
     _LLM_TURN_MSG.pop(native, None)
+    output = call.get("output")
+    is_error = bool(
+        call.get("is_error")
+        or call.get("error")
+        or str(call.get("status") or "").lower() in {"error", "failed", "denied"}
+    )
+    err_text = None
+    if call.get("error"):
+        err_text = str(call.get("error"))
+    elif is_error and isinstance(output, str):
+        err_text = output
+    tool_result = None
+    if isinstance(output, dict):
+        tool_result = output
+    elif output is not None:
+        tool_result = {
+            "output": str(output),
+            "success": not is_error,
+            **({"error": err_text or str(output), "status": "error"} if is_error else {}),
+        }
     result = observe_tool_after(
         client,
         sid,
         name=str(call.get("tool_name") or call.get("name") or "unknown"),
         args=call.get("input") if isinstance(call.get("input"), dict) else {},
         call_id=str(call.get("call_id") or "") or None,
+        result=tool_result,
+        error=err_text,
+        is_error=is_error,
     )
     actions = _wire_actions_from_result(result)
     resp: dict[str, Any] = {"type": "accept"}

@@ -45,10 +45,10 @@
 | [planning-error.md](designs/features/planning-error.md) | 策略层规划错误检测 | 规划中 |
 | [domain-cognitive-bias.md](designs/features/domain-cognitive-bias.md) | 领域认知偏差六类场景 | 规划中 |
 | [memory-file-loss.md](designs/features/memory-file-loss.md) | 记忆丢失/损坏 FI 方案（`memory-file-loss` Skill 已落地） | FI-P0 已落地；检测规划中 |
-| [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（S1–S3 Skill 已落地，S4 未做） | FI S1–S3 已落地 |
-| [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc / 入口无关（无 HTTP/SSE） | 已落地（inproc E2E） |
+| [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（S1–S4 已落地；S5 压缩失真未做） | FI S1–S4 已落地 |
+| [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc + Daemon SSE 控制面（FI 零改动） | 已落地（Daemon harness） |
 | [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO OTel 观测（现网 OTLP + RAS join；Insight 最小侵入） | 已落地 |
-| [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域自包含插件（`fault_domains/<id>/` + `PLUGIN` 扫描注册；无 manifest；新域零改框架） | 部分落地（前置搬家+注册收口完成；插件包规划中） |
+| [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；llm-loop-review 归 review/；无 fault_domains | 部分落地（P0/P1；P2 方案 v0.8） |
 
 ---
 
@@ -60,7 +60,7 @@
 | [configuration.md](guides/configuration.md) | inproc / 宿主配置目录与常用开关 |
 | [platform-openjiuwen.md](guides/platform-openjiuwen.md) | openjiuwen / jiuwenclaw 深挂载与 YAML 片段 |
 | [platform-opencode.md](guides/platform-opencode.md) | OpenCode `install-ras` 同进程接入 |
-| [platform-xiaoo.md](guides/platform-xiaoo.md) | xiaoO 任意入口启用；daemon 可选旁路 |
+| [platform-xiaoo.md](guides/platform-xiaoo.md) | xiaoO hooks + Daemon SSE 闭环验收 |
 
 ---
 

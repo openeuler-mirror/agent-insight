@@ -612,6 +612,11 @@ class SessionHub:
         name = str(tool.get("name") or "tool")
         phase = str(tool.get("phase") or "after")
         args = tool.get("args")
+        tool_result = tool.get("result")
+        err_raw = tool.get("error")
+        error = str(err_raw) if err_raw is not None and str(err_raw).strip() else None
+        if error and tool_result is None:
+            tool_result = {"success": False, "error": error, "status": "error"}
         kind = SignalKind.AFTER_TOOL_CALL if phase != "before" else SignalKind.BEFORE_TOOL_CALL
         if kind == SignalKind.BEFORE_TOOL_CALL:
             return None
@@ -622,6 +627,8 @@ class SessionHub:
                 member_name=state.session_id,
                 tool_name=name,
                 tool_args=args,
+                tool_result=tool_result,
+                error=error,
             ),
         )
 

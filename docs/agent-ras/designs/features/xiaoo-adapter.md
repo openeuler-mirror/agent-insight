@@ -1,82 +1,97 @@
-# xiaoO 平台适配（入口无关 / 协议 inproc）
+# xiaoO 平台适配（入口无关 / Daemon 控制面）
 
-版本：v0.4  
-状态：已落地（协议 inproc；HTTP/SSE 已移除；xiaoO shared 注入 + inproc/CLI E2E）  
+版本：v0.5  
+状态：已落地（协议 inproc + **官方 Daemon SSE 控制面**；FI 零改动）  
 关联：[`architecture.md`](../architecture.md)、[`platform-adapter.md`](../modules/platform-adapter.md)、[`guides/platform-xiaoo.md`](../../guides/platform-xiaoo.md)
 
 ## 1. 目标与原则
 
-为 xiaoO（CLI / TUI / daemon 任一入口）接入 agent-ras，能力同档。
+为 xiaoO（CLI / TUI / daemon）接入 agent-ras。stock master **无**可配置 `LoopEventSink` 挂载；mid-stream 思考检测与 abort/steer **以 Daemon SSE + cancel/input 为主路径**。
 
 | # | 原则 |
 |---|------|
 | P1 | 检测/恢复只在 `core` + `ras_embed`；L3 禁止复制策略 |
-| P2 | **入口无关**：差异只在 Host callable 接线，不在 Detector |
-| P3 | 对齐协议 inproc：hooks → `RasClient` → `SessionHub` → wire → `apply_wire_actions` → `CallableHostControl` |
-| P4 | 检测/恢复复用进 `common` / `ras_embed`；**子进程嵌入运输**放 `common/transport/subprocess_ipc`；`xiaoo/` 仅 hook 映射 + Host 三函数 |
-| P5 | **不**使用 daemon HTTP / SSE 作为观测或恢复路径 |
+| P2 | **入口无关**：差异只在 Host callable / 采点运输，不在 Detector |
+| P3 | 对齐协议 inproc：hooks → `RasClient` → `SessionHub` → wire → `CallableHostControl` |
+| P4 | `xiaoo/` 仅 hook 映射 + Host 三函数 + Daemon 客户端；不改 FI |
+| P5 | **Daemon HTTP/SSE** 为 stock master 上的正式 Stream/Host 路径（lease 由 RAS 持有） |
+
+本地私改 gateway（`agent_ras.rs` / `ras_control.sock` 上游注入）**废止**，不得再改 xiaoO 源码。
 
 ## 2. 架构
 
 ```mermaid
 flowchart LR
-  Entry[CLI_TUI_Daemon] --> GW[xiaoO_shared_gateway]
-  GW -->|hooks_plus_FanoutSink| Embed[ras_embed_SessionHub]
-  Embed -->|wire| Apply[apply_wire_actions]
-  Apply --> Host[CallableHostControl]
-  Host -->|cancel_pending| GW
+  subgraph hookPath [Plugin_hooks_CLI]
+    Hooker[xiaoo_hooker] --> Embed[ras_embed_SessionHub]
+  end
+  subgraph daemonPath [Daemon_SSE_control_plane]
+    Open[runtimes_open]
+    Input[runtimes_input_SSE]
+    Cancel[runtimes_cancel]
+    Open --> Input
+    Input -->|text_thinking_tool| Map[map_sse_event_to_observes]
+    Map --> Embed
+    Embed -->|wire| Host[DaemonHost_cancel_input]
+    Host --> Cancel
+    Host -->|steer_notice| Input
+  end
   Embed -->|insight_push| InsightRAS[ras-events]
-  Hooker[xiaoo_hooker] -->|OTLP| InsightOTel[otel_v1_traces]
 ```
 
-观测旁路见 [`xiaoo-observe-ingest.md`](xiaoo-observe-ingest.md)（Insight 最小侵入；OpenCode 不迁）。
-
 - 装配：[`build_protocol_ras_client`](../../../agent_ras/platform_adapter/common/protocol_client.py)
-- 子进程 hook 共享 SessionHub：[`subprocess_ipc` 运输层](../../../agent_ras/platform_adapter/common/transport/subprocess_ipc/)（嵌入模式；**不是**「平台中性核心」，OpenCode 用 [`inproc`](../../../agent_ras/platform_adapter/common/transport/inproc/)）
-- 流式：gateway `LoopEventSink` fan-out → 同一 embed `observe`
+- Daemon：[`daemon_client.py`](../../../agent_ras/platform_adapter/xiaoo/daemon_client.py) / [`daemon_session.py`](../../../agent_ras/platform_adapter/xiaoo/daemon_session.py)
+- 子进程 hook 共享 SessionHub：[`subprocess_ipc`](../../../agent_ras/platform_adapter/common/transport/subprocess_ipc/)
+- **FI**：不接线、不改代码；黑盒回归即可
 
 ## 3. L3 边界（薄）
 
 | 保留 | 职责 |
 |------|------|
-| `hooker/` | Chat / Tool / lifecycle → hello / observe / reset |
-| `hooks.py` | `build_xiaoo_ras_client` → common 工厂 + Host callables |
+| `hooker/` | Chat / Tool / lifecycle → hello / observe / reset（**tool_post 禁止 hello**） |
+| `hooks.py` | sock Host + `build_xiaoo_daemon_host_fns` |
+| `daemon_*` | open/input/cancel + SSE→Signal |
 | `host_control.py` | `CallableHostControl` 薄别名 |
-
-不设：HttpHost、SSE 泵、平台私有 Host 族、xiaoo/sidecar。
 
 ## 4. 采点映射
 
+### 4.1 Plugin hooks
+
 | 来源 | Signal |
 |------|--------|
-| `*.Session.lifecycle.created` / Chat received | `hello` |
-| `*.Tool.*.post` | `kind=tool`, `phase=after` |
-| LoopEventSink reasoning / message | `assistant_text` / `llm_reasoning` \| `llm_output` via **`hooker_main.py stream_delta`**（**不是** `plugin.json` hook_point） |
+| `*.Chat.message.received` | `hello`（唯一建会话入口） |
+| `*.Tool.*.post` | `kind=tool`, `phase=after`（可带 `result`/`error`） |
+| `stream_delta`（若上游 Sink 直调） | `assistant_text` |
 | Session closed-like | `reset` |
 
-Session id：`xiaoo:{gateway_session_id}`（FI↔RAS 对齐键为剥前缀后的裸 gateway UUID）。
+### 4.2 Daemon SSE → Signal（现网两类检测器）
 
-启用门控（gateway `ras_enabled`）：`AGENT_INSIGHT_RAS_HOME` / `RAS_EMBED_SOCK` **或** 默认 RAS home 下已安装 `xiaoo/hooker/hooker_main.py`。
+| SSE `type` | Signal | Detector |
+|------------|--------|----------|
+| `text_delta` | `STREAM_CHUNK` / `llm_output` | `LlmThinkingLoopDetector` L1/L2 |
+| `thinking_delta` | `STREAM_CHUNK` / `llm_reasoning` | 同上 |
+| `tool_result`（含 `is_error`） | `AFTER_TOOL_CALL` + `tool_result` | `RepeatToolCallDetector`（含 `unknown_tool_repeat`） |
+| `tool_call` status failed/denied | 同上（错误） | 同上 |
 
-`stream_delta` **不**每次 `hello`（避免抹掉 latch）；会话由 `chat_received` 建立，Sink 早到时由 `SessionHub.ensure` 惰性建状态。`ensure_worker` 从 `install.json` 注入 runtime `PYTHONPATH` 再 spawn `platform_adapter.common.transport.subprocess_ipc`，否则子进程找不到模块、sock 起不来、检测静默失败。
+恢复：`abort_stream` → `POST /api/v1/runtimes/cancel`；`emit_notice` / `push_steering` → 再 `POST .../input`（同一 `client_id`）。
 
-`llm_reasoning` 观测依赖宿主是否产出 reasoning 流。xiaoO CLI 对 config 里 `[llm].reasoning_effort` 可能无效；若需该流，在 **agent/用户侧** 配置或由调用方显式传 CLI flag。**FI 不默认代传** `--reasoning-effort`（零观测偏向）。
+L3 语义思考评审：xiaoo `supports_host_skill_judge=False`，本轮非目标。
 
 ## 5. HostControl
 
-| wire | 投递 |
-|------|------|
-| `abort_stream` | gateway `cancel_token` / `CancelActiveTurn` |
-| `emit_notice` / `push_steering` | `pending_user_messages`（可见 `[RAS]` 前缀可选） |
+| wire | sock 路径（遗留） | Daemon 路径（正式） |
+|------|-------------------|---------------------|
+| `abort_stream` | `ras_control.sock` abort | `runtimes/cancel` |
+| `emit_notice` / `push_steering` | pending / steer | `runtimes/input` |
 
 ## 6. 门禁
 
 | # | 通过条件 |
 |---|----------|
-| A | setup 可选 xiaoo；不强制 daemon |
-| B | 进程内 Sink / hook → `llm_*` / tool observe |
-| C | 真实重复 tool / thinking-loop |
-| D | abort / notice / steer 生效 |
+| A | stock xiaoO master；无上游私改 |
+| B | Daemon SSE → `llm_*` / tool observe |
+| C | `tool_repeat_dead_loop` submode 2 + thinking-dead-loop |
+| D | abort / notice / steer `ok`（Daemon lease） |
 | E | Insight `platform=xiaoo` |
-| F | CLI 与其它入口同档（无 HTTP/SSE） |
-| G | 单测 / harness 通过 |
+| F | **`agent_fault_injection/**` 零 diff**；FI 黑盒仍可用 |
+| G | 单测 / `e2e_xiaoo_daemon_harness.py` 通过 |

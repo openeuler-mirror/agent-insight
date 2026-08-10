@@ -45,15 +45,28 @@ def observe_tool_after(
     name: str,
     args: dict[str, Any] | None = None,
     call_id: str | None = None,
+    result: Any | None = None,
+    error: str | None = None,
+    is_error: bool = False,
 ) -> dict[str, Any] | None:
+    tool: dict[str, Any] = {
+        "name": name,
+        "phase": "after",
+        "args": args or {},
+    }
+    if result is not None:
+        tool["result"] = result
+    err = error
+    if err is None and is_error:
+        err = "tool_error"
+    if err is not None:
+        tool["error"] = err
+        if result is None:
+            tool["result"] = {"success": False, "error": err, "status": "error"}
     payload: dict[str, Any] = {
         "platform": platform,
         "kind": "tool",
-        "tool": {
-            "name": name,
-            "phase": "after",
-            "args": args or {},
-        },
+        "tool": tool,
     }
     if call_id:
         payload["trace_anchor"] = {"call_id": call_id, "channel": "tool_call"}

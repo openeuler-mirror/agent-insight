@@ -36,6 +36,9 @@ def observe_tool_after(
     name: str,
     args: dict[str, Any] | None = None,
     call_id: str | None = None,
+    result: Any | None = None,
+    error: str | None = None,
+    is_error: bool = False,
 ) -> dict[str, Any] | None:
     return _observe_tool_after(
         client,
@@ -44,6 +47,9 @@ def observe_tool_after(
         name=name,
         args=args,
         call_id=call_id,
+        result=result,
+        error=error,
+        is_error=is_error,
     )
 
 

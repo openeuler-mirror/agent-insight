@@ -1,5 +1,13 @@
 # coding: utf-8
-"""xiaoO protocol inproc hooks — thin L3 over shared factory + Host callables."""
+"""xiaoO protocol inproc hooks — thin L3 over shared factory + Host callables.
+
+Host delivery modes:
+  - Default: ``ras_control.sock`` (gateway local cancel/pending) when sock exists.
+  - Daemon: use ``DaemonRasSession`` / ``build_xiaoo_daemon_host_fns`` so abort →
+    ``POST .../runtimes/cancel`` and notice/steer → ``.../input`` under the same
+    lease ``client_id``. Stock master has no LoopEventSink plugin mount; mid-stream
+    thinking + recovery must hold the Daemon SSE lease.
+"""
 from __future__ import annotations
 
 import logging
@@ -14,8 +22,7 @@ from platform_adapter.common.transport.subprocess_ipc import send_host_control
 
 logger = logging.getLogger(__name__)
 
-# ack 语义：网关执行完回 {"ok": ...} 才算成功；无 ack 只能证明字节写进了
-# socket，不能证明网关执行了 cancel/steer，按失败上报以避免 action_result 虚报。
+
 def _delivery_result(op: str, rid: str, res: dict[str, Any]) -> dict[str, Any]:
     if not res.get("delivered"):
         logger.warning("xiaoo %s: host control sock unavailable session=%s", op, rid)
@@ -34,10 +41,10 @@ def build_xiaoo_host_fns(
     session_id: str,
     notice_as_steer: bool = True,
 ) -> tuple[Callable[[], Any], Callable[[str], Any], Callable[[str], Any]]:
-    """Map wire Host methods to gateway local control (cancel / pending).
+    """Map wire Host methods to gateway local control via ``ras_control.sock``.
 
-    Delivery goes through ``ras_control.sock`` (xiaoO shared listens). No HTTP.
-    Each fn returns the delivery/ack outcome so callers never report blind ok.
+    Prefer ``DaemonRasSession`` when running against stock master Daemon (no
+    private gateway injection). Each fn returns delivery/ack outcome.
     """
     rid = str(session_id)
 
@@ -52,6 +59,27 @@ def build_xiaoo_host_fns(
         if notice_as_steer:
             return steer_fn(text)
         return _delivery_result("notice", rid, send_host_control("notice", rid, message=text))
+
+    return abort_fn, notice_fn, steer_fn
+
+
+def build_xiaoo_daemon_host_fns(
+    *,
+    cancel_fn: Callable[[], dict[str, Any]],
+    input_fn: Callable[[str], dict[str, Any]],
+    notice_as_steer: bool = True,
+) -> tuple[Callable[[], Any], Callable[[str], Any], Callable[[str], Any]]:
+    """Host callables backed by Daemon ``cancel`` + ``input`` (same lease)."""
+
+    def abort_fn() -> dict[str, Any]:
+        return cancel_fn()
+
+    def steer_fn(message: str) -> dict[str, Any]:
+        return input_fn(message)
+
+    def notice_fn(message: str) -> dict[str, Any]:
+        text = f"[RAS] {message}" if notice_as_steer else message
+        return input_fn(text)
 
     return abort_fn, notice_fn, steer_fn
 
@@ -81,4 +109,5 @@ def build_xiaoo_ras_client(
 __all__ = [
     "build_xiaoo_ras_client",
     "build_xiaoo_host_fns",
+    "build_xiaoo_daemon_host_fns",
 ]
