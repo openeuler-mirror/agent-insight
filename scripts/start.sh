@@ -188,9 +188,23 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+echo "Preparing standalone runtime (static + public)..."
+STANDALONE_SERVER=$(find .next/standalone -maxdepth 2 -name server.js | head -n 1)
+if [ -z "$STANDALONE_SERVER" ]; then
+  echo "  ⛔ 找不到 .next/standalone/**/server.js —— next build 未产出 standalone。"
+  echo "     output:standalone 下不能再用 next start，必须 node .next/standalone/server.js。"
+  exit 1
+fi
+STANDALONE_DIR=$(dirname "$STANDALONE_SERVER")
+mkdir -p "$STANDALONE_DIR/.next/static" "$STANDALONE_DIR/public"
+# 与 docker-entrypoint 一致：静态资源不在 tracing 产物里，启动前必须拷入。
+# 不要跑 prepare-npm-package.js：它会 prune 掉 agent_ras/ 等运行时目录。
+cp -a .next/static/. "$STANDALONE_DIR/.next/static/"
+cp -a public/. "$STANDALONE_DIR/public/"
+
 # 5. Start
 echo "-----------------------------------"
-echo "Starting server..."
+echo "Starting server (standalone)..."
 
 # One last check before start
 if [ -n "$(find_pid_on_port $PORT)" ]; then
@@ -200,10 +214,50 @@ fi
 
 # 运行时堆上限。注意机器 ~15G、opencode 满 5 slot ~4.5G,所以不能调太高(否则系统级 OOM-kill
 # 比堆崩更难查)。6G = 在"真正的修复(评测重试不放大 + 评测行并发硬上限)"之外留点余量。
-NODE_OPTIONS="--max-old-space-size=6144" nohup npm run start > server.log 2>&1 &
-NEW_PID=$!
+# HOSTNAME=0.0.0.0：standalone server 默认可能绑到非 loopback，WSL/代理下 curl 127.0.0.1 会 502。
+# 必须在 standalone 目录下启动：server.js 相对解析 .next/static、public、node_modules。
+LOG_FILE="$(pwd)/server.log"
+: > "$LOG_FILE"
+# 脱离当前 shell 会话，避免 start.sh 退出后把 server 一起带走（仅 nohup 在部分环境下不够）。
+if command -v setsid >/dev/null 2>&1; then
+  (
+    cd "$STANDALONE_DIR" || exit 1
+    setsid env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
+      node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
+    echo $! > "$LOG_FILE.pid"
+  )
+else
+  (
+    cd "$STANDALONE_DIR" || exit 1
+    nohup env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
+      node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
+    echo $! > "$LOG_FILE.pid"
+    disown $! 2>/dev/null || true
+  )
+fi
+NEW_PID=$(cat "$LOG_FILE.pid" 2>/dev/null || true)
+
+echo "Waiting for port $PORT to accept connections..."
+READY=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  sleep 1
+  if curl --noproxy '*' -sS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/" >/dev/null 2>&1 \
+    || curl --noproxy '*' -sS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/trace" >/dev/null 2>&1; then
+    READY=1
+    break
+  fi
+done
+
+if [ "$READY" -ne 1 ]; then
+  echo "CRITICAL ERROR: Server process spawned (PID ${NEW_PID:-unknown}) but http://127.0.0.1:$PORT 无响应。"
+  echo "Check server.log for details."
+  tail -n 40 "$LOG_FILE" 2>/dev/null || true
+  exit 1
+fi
 
 echo "Server started successfully."
-echo "PID: $NEW_PID"
+echo "PID: ${NEW_PID:-$(find_pid_on_port $PORT | tr '\n' ' ')}"
+echo "Standalone: $STANDALONE_DIR/server.js"
 echo "Log file: server.log"
+echo "URL: http://localhost:$PORT"
 echo "-----------------------------------"
