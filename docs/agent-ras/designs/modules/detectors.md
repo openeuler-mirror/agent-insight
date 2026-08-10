@@ -105,11 +105,11 @@ class Detector(Protocol):  # base.py:22
 | `LlmThinkingLoopDetector` | `llm_thinking_loop.py:345` |
 | `RepeatToolCallDetector` | `repeat_tool.py:191` |
 
-### 注册（非自注册插件）
+### 注册（当前：手写 builders；目标：自包含插件）
 
-**openjiuwen**：`factory.DETECTOR_BUILDERS`（`factory.py:70`）按 `config.detectors.*.enabled` 过滤后注入 Monitor。
+**现状（P1 已落地）**：Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors/registry.build_member_detectors`](../../../../agent_ras/detectors/registry.py)；按 `config.detectors.*.enabled` 门控；`SessionState.detectors: list` 首命中分发。仍须在 `DETECTOR_BUILDERS` **手加一行** + `core/config.py` 字段。
 
-**协议 inproc（SessionHub）**：**无** `_build_detectors` / **不共用** `DETECTOR_BUILDERS`。在 `SessionState.create`（`session_hub.py:91-105`）内联构造：`LlmThinkingLoopDetector` **始终**创建；`RepeatToolCallDetector` 按 enabled 条件追加。与 factory 的 enabled 门控**不完全一致**——改注册必须两边分别核对。
+**目标态**：见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)（`fault_domains/<id>/detector.py` 导出 `PLUGIN`，Loader 扫描；无独立 manifest）。
 
 ---
 
