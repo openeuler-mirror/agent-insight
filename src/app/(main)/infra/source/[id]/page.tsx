@@ -3,7 +3,7 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AppTopBar } from '@/components/shell/AppTopBar';
-import { ALL_GROUPS, METRIC_GROUPS, type MetricGroup } from '@/lib/infra/export';
+import { ALL_GROUPS, METRIC_GROUPS, selectColumns, type MetricGroup } from '@/lib/infra/export';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 interface Finding { sev: 'critical' | 'warn' | 'healthy' | 'info'; cls: string; title: string; evidence: string; diagnosis: string; remediation: string[]; }
 interface Sli { runningPeak: number; waitingPeak: number; kvPeakPerc: number; genTokPerS: number; ttftP95: number | null; itlP95: number | null; prefixHit: number | null; preemptRate: number; }
@@ -131,6 +131,7 @@ export default function InfraSourceDetailPage() {
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [points, setPoints] = useState<HistoryPoint[]>([]);
+  const [rawCount, setRawCount] = useState(0); // 原始样本数（图上的 points 已降采样，不能拿来估导出体积）
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [sessTotal, setSessTotal] = useState(0);
   const [sessPage, setSessPage] = useState(1);
@@ -152,6 +153,8 @@ export default function InfraSourceDetailPage() {
   const [exportOpen, setExportOpen] = useState(false);
   // 默认全选：多给总比给一份缺列的数据强
   const [pickedGroups, setPickedGroups] = useState<MetricGroup[]>(ALL_GROUPS);
+  // 0 = 原始全量（默认，不破坏既有行为）；>0 = 分桶时长（毫秒）
+  const [bucketMs, setBucketMs] = useState(0);
   const [pushTest, setPushTest] = useState<{ ok: boolean; message: string } | null>(null);
   const [pushTesting, setPushTesting] = useState(false);
   // collector 要推到的本服务地址：默认当前页 origin，但 collector 在别的机器上时 localhost 不通 → 可改成本机可达的 IP/域名。
@@ -192,7 +195,8 @@ export default function InfraSourceDetailPage() {
         qs += `&from=${Date.now() - (r?.ms ?? 900_000)}`;
       }
       const hi = await (await fetch(`/api/observe/infra/history?${qs}`)).json();
-      if (active) setPoints(hi.points ?? []);
+      // points 是给图用的降采样结果；count 是原始样本数，导出体积预估要用后者
+      if (active) { setPoints(hi.points ?? []); setRawCount(hi.count ?? 0); }
     })();
     return () => { active = false; };
   }, [id, selectedModel, rangeKey, customFrom, customTo, tick]);
@@ -233,6 +237,7 @@ export default function InfraSourceDetailPage() {
     if (selectedModel) qs.set('model', selectedModel);
     // 全选时不传 metrics，让 URL 短一些（服务端缺省即全选）
     if (pickedGroups.length < ALL_GROUPS.length) qs.set('metrics', pickedGroups.join(','));
+    if (bucketMs > 0) qs.set('sample', String(bucketMs));
     const a = document.createElement('a');
     a.href = `/api/observe/infra/export?${qs}`;
     a.download = ''; // 文件名以服务端 Content-Disposition 为准
@@ -241,7 +246,21 @@ export default function InfraSourceDetailPage() {
     a.remove();
     setExportHint(null);
     reportClientUsage('infra', 'infra.export');
-  }, [id, resolveRange, selectedModel, pickedGroups]);
+  }, [id, resolveRange, selectedModel, pickedGroups, bucketMs]);
+
+  // 导出体积粗估：让人在点之前就知道会拿到多大的东西，而不是导完才发现粘不进去。
+  // 实测全 35 列的 Markdown 单行约 208 字符；按「ts_iso(24) + 每列约 12 字符（含分隔符）」摊。
+  const exportEstimate = (() => {
+    const cols = selectColumns(pickedGroups).length;
+    const r = resolveRange();
+    const spanMs = r ? r.to - r.from : 0;
+    // 分桶后行数 ≈ 时间跨度 / 桶长，但不会超过原始样本数（断层处不产生行）
+    const rows = bucketMs > 0
+      ? Math.min(rawCount, Math.ceil(spanMs / bucketMs))
+      : rawCount; // 原始样本数，不是图上降采样后的点数
+    const chars = rows * (27 + cols * 12);
+    return { rows, cols, chars, tokens: Math.round(chars / 4) };
+  })();
 
   // 自动刷新：每 5s（仅标签可见时）+ 返回页面（bfcache 恢复/切回标签）即刷，自增 tick 驱动上面三个 effect 重取。
   // 大范围（6h/24h/自定义）关掉 5s 周期刷新——那会每 5s 重拉上千行 + 重渲九张图，太重；
@@ -390,6 +409,27 @@ export default function InfraSourceDetailPage() {
                 </label>
               ))}
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12.5, color: 'var(--foreground-secondary)', fontWeight: 600 }}>时间粒度</span>
+              <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                {[
+                  { v: 0, l: '原始每个采样点' },
+                  { v: 10_000, l: '每 10 秒一行' },
+                  { v: 60_000, l: '每 1 分钟一行' },
+                  { v: 300_000, l: '每 5 分钟一行' },
+                ].map((o) => (
+                  <button key={o.v} onClick={() => setBucketMs(o.v)}
+                    style={{ padding: '5px 10px', fontSize: 12, border: 'none', cursor: 'pointer', background: bucketMs === o.v ? 'var(--primary)' : 'var(--background)', color: bucketMs === o.v ? 'var(--primary-foreground)' : 'var(--foreground-secondary)' }}>
+                    {o.l}
+                  </button>
+                ))}
+              </div>
+              <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                {bucketMs === 0
+                  ? `原始采集间隔约 ${(item.source.scrapeIntervalMs / 1000).toFixed(0)}s，无信息损失`
+                  : '按时间分桶聚合，列名会带 _max / _avg / _last 后缀标明聚合方式'}
+              </span>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <button onClick={() => runExport('md')} style={{ ...field, cursor: 'pointer', background: 'var(--primary)', color: 'var(--primary-foreground)', border: 'none', padding: '6px 14px' }}>
                 导出 Markdown
@@ -397,11 +437,16 @@ export default function InfraSourceDetailPage() {
               <button onClick={() => runExport('csv')} style={{ ...field, cursor: 'pointer', padding: '6px 14px' }}>
                 导出 CSV
               </button>
-              <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                Markdown 给大模型直读（口径说明是独立章节）；CSV 给 Excel / pandas，体积更小。
-                两者都不降采样——当前范围约 {points.length >= 2 ? `${points.length} 个点` : '若干点'}，
-                范围越大文件越大，粘贴给模型前留意长度。
-              </span>
+              {exportEstimate.rows > 0 && (
+                <span style={{ fontSize: 11.5, color: exportEstimate.tokens > 100_000 ? 'var(--warning)' : 'var(--foreground-muted)' }}>
+                  预计 {exportEstimate.rows.toLocaleString()} 行 × {exportEstimate.cols + 1} 列，
+                  Markdown 约 {(exportEstimate.chars / 1e6).toFixed(2)}M 字符 / {Math.round(exportEstimate.tokens / 1000)}k token
+                  {exportEstimate.tokens > 100_000 && '（偏大，粘贴给模型前建议降采样或少选指标）'}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 8 }}>
+              Markdown 给大模型直读（口径说明是独立章节，还带逐列含义）；CSV 给 Excel / pandas，体积约小 20%。
             </div>
           </div>
         )}

@@ -7,7 +7,7 @@
 
 import { NextResponse } from 'next/server';
 
-import { exportFileName, parseGroups, toCsv, toMarkdown, type ExportContext } from '@/lib/infra/export';
+import { exportFileName, parseGroups, parseSample, toCsv, toMarkdown, type ExportContext } from '@/lib/infra/export';
 import { buildExportRows, DEFAULT_RATE_WINDOW_MS } from '@/lib/infra/history';
 import { querySamples } from '@/lib/infra/store';
 import { prismaRaw } from '@/lib/storage/prisma';
@@ -33,6 +33,8 @@ export async function GET(req: Request) {
   const rateWindowMs = Math.min(300_000, Math.max(1000, Number(searchParams.get('rateWindowMs') || DEFAULT_RATE_WINDOW_MS)));
   const format = searchParams.get('format') === 'md' ? 'md' : 'csv';
   const groups = parseGroups(searchParams.get('metrics'));
+  // sample=raw（默认）逐点导出；sample=<N> 降到约 N 行，列名会带 _max/_avg/_last 后缀标明聚合方式
+  const sampleTarget = parseSample(searchParams.get('sample'));
 
   const samples = await querySamples(sourceId, fromMs, toMs, model);
   const ctx: ExportContext = {
@@ -50,8 +52,8 @@ export async function GET(req: Request) {
   // BOM：说明文案是中文，没有 BOM 的话 Excel 双击打开 CSV 会显示成乱码。
   // pandas/大模型侧不受影响（pandas 认 utf-8-sig，读文本更是无所谓）。
   const body = format === 'md'
-    ? toMarkdown(rows, ctx, groups)
-    : `﻿${toCsv(rows, ctx, groups)}`;
+    ? toMarkdown(rows, ctx, groups, sampleTarget)
+    : `﻿${toCsv(rows, ctx, groups, sampleTarget)}`;
 
   return new NextResponse(body, {
     headers: {

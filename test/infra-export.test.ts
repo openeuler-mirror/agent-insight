@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import {
   ALL_GROUPS, METRIC_GROUPS, README_COLUMN, exportFileName, parseGroups,
-  selectColumns, toCsv, toMarkdown, type ExportContext, type MetricGroup,
+  selectColumns, toCsv, toMarkdown, parseSample, bucketLabel, type ExportContext, type MetricGroup,
 } from '@/lib/infra/export';
 import { buildExportRows } from '@/lib/infra/history';
 import type { Histogram, InfraMetricSample } from '@/lib/infra/types';
@@ -67,7 +67,7 @@ test('CSV：列名自带单位，且与写入顺序严格一致', () => {
   for (const c of ['ttft_p95_s', 'e2e_p99_s', 'itl_p50_ms', 'tpot_p95_ms', 'kv_usage_pct', 'prompt_tok_per_s']) {
     assert.ok(cols.includes(c), `缺列 ${c}`);
   }
-  assert.deepEqual(cols, [...selectColumns(ALL_GROUPS).map((c) => c.key), README_COLUMN], '表头必须与列规格一致');
+  assert.deepEqual(cols, ['ts_iso', ...selectColumns(ALL_GROUPS).map((c) => c.key), README_COLUMN], '表头必须与列规格一致');
   assert.equal(recs.length, 2, '一行一个原始采样点，不降采样');
   // 速率 = 10000 token / 10s
   assert.equal(recs[1].prompt_tok_per_s, '1000');
@@ -96,7 +96,7 @@ test('CSV：裸累计计数器可独立复核速率列 + 精确算区间总量',
   ]);
   const { rows: recs } = parse(toCsv(rows, ctx));
   const dPrompt = Number(recs[1].prompt_tokens_total) - Number(recs[0].prompt_tokens_total);
-  const dtS = (Number(recs[1].ts_ms) - Number(recs[0].ts_ms)) / 1000;
+  const dtS = (Date.parse(recs[1].ts_iso) - Date.parse(recs[0].ts_iso)) / 1000;
   assert.equal(dPrompt, 30_000, '首尾相减 = 区间精确总量');
   assert.equal(Number(recs[1].prompt_tok_per_s), dPrompt / dtS, '速率列应能被裸计数器复现');
 });
@@ -122,7 +122,7 @@ test('CSV：第 1 行就是真表头（Excel 能认），口径说明在最右 _
 test('CSV：说明含逗号也不会撑破列数（RFC4180 引号转义）', () => {
   const samples = Array.from({ length: 30 }, (_, i) => snap(i * 2000, {}));
   const csv = toCsv(buildExportRows(samples), ctx);
-  const expected = selectColumns(ALL_GROUPS).length + 1; // +1 = _readme
+  const expected = selectColumns(ALL_GROUPS).length + 2; // +2 = ts_iso 与 _readme
   for (const [i, line] of csv.trimEnd().split('\n').entries()) {
     assert.equal(splitCsvLine(line).length, expected, `第 ${i + 1} 行列数应为 ${expected}`);
   }
@@ -167,7 +167,7 @@ test('指标选择：只勾吞吐 → 只出吞吐列，时间列仍在', () => 
     snap(10_000, { 'vllm:prompt_tokens_total': 10_000 }, 20),
   ]);
   const { cols } = parse(toCsv(rows, ctx, ['throughput']));
-  assert.deepEqual(cols, ['ts_iso', 'ts_ms', 'prompt_tok_per_s', 'gen_tok_per_s', README_COLUMN]);
+  assert.deepEqual(cols, ['ts_iso', 'prompt_tok_per_s', 'gen_tok_per_s', README_COLUMN]);
 });
 
 test('指标选择：时间列永远在（它是索引，没它整份数据没法用）', () => {
@@ -175,8 +175,8 @@ test('指标选择：时间列永远在（它是索引，没它整份数据没�
   for (const g of ALL_GROUPS) {
     const { cols } = parse(toCsv(rows, ctx, [g]));
     assert.equal(cols[0], 'ts_iso', `分组 ${g} 缺 ts_iso`);
-    assert.equal(cols[1], 'ts_ms', `分组 ${g} 缺 ts_ms`);
-    assert.ok(cols.length > 3, `分组 ${g} 应至少带出一个数据列`);
+    assert.ok(!cols.includes('ts_ms'), 'ts_ms 与 ts_iso 完全冗余，已移除');
+    assert.ok(cols.length > 2, `分组 ${g} 应至少带出一个数据列`);
   }
 });
 
@@ -260,7 +260,7 @@ test('Markdown：口径说明是独立章节（这正是相对 CSV 的优势）�
 test('Markdown：表格结构合法，每行单元格数 = 表头数', () => {
   const rows = buildExportRows(Array.from({ length: 12 }, (_, i) => snap(i * 2000, {}, i + 1)));
   const { header, rows: recs } = mdTable(toMarkdown(rows, ctx, ALL_GROUPS));
-  assert.equal(header.length, selectColumns(ALL_GROUPS).length);
+  assert.equal(header.length, selectColumns(ALL_GROUPS).length + 1); // +1 = ts_iso
   assert.equal(recs.length, 12, '一行一个采样点');
   for (const [i, r] of recs.entries()) {
     assert.equal(r.length, header.length, `第 ${i + 1} 行单元格数不符`);
@@ -297,6 +297,114 @@ test('Markdown：单元格里的 | 被转义，不会撑破表格', () => {
   const md = toMarkdown(buildExportRows([snap(0, {}), snap(2000, {})]), weird, ALL_GROUPS);
   const { header, rows } = mdTable(md);
   for (const r of rows) assert.equal(r.length, header.length);
+});
+
+// ——————————————— 降采样 ———————————————
+
+test('降采样：按时间分桶，每桶时长恒定，列名带聚合后缀', () => {
+  // 300 个点、每 2s 一个 = 600s；按 10s 分桶 → 60 行
+  const samples = Array.from({ length: 300 }, (_, i) => snap(i * 2000, {}, i + 1));
+  const rows = buildExportRows(samples);
+  const { cols, rows: recs } = parse(toCsv(rows, ctx, ['throughput', 'kv'], 10_000));
+  assert.equal(recs.length, 60, '600s / 10s = 60 行');
+  // 峰值类 max、吞吐类 avg —— 后缀必须写进列名，否则下游会拿桶内最大值当瞬时值
+  assert.deepEqual(cols, ['ts_iso', 'kv_usage_pct_max', 'prompt_tok_per_s_avg', 'gen_tok_per_s_avg', README_COLUMN]);
+  // 每行时间戳应对齐到 10s 边界，且间隔恒定
+  const ts = recs.map((r) => Date.parse(r.ts_iso));
+  assert.ok(ts.every((t) => t % 10_000 === 0), '桶起始时刻应对齐到 10s 边界');
+  assert.ok(ts.slice(1).every((t, i) => t - ts[i] === 10_000), '相邻桶间隔恒定');
+});
+
+test('降采样：采集断层处不产生行，也不把不同时长的点混进一个桶', () => {
+  // 0~20s 有点，然后断 5 分钟，再有点 —— 断层期间不该凭空造行
+  const samples = [
+    ...Array.from({ length: 10 }, (_, i) => snap(i * 2000, {}, i + 1)),
+    ...Array.from({ length: 10 }, (_, i) => snap(320_000 + i * 2000, {}, 20 + i)),
+  ];
+  const rows = buildExportRows(samples);
+  const { rows: recs } = parse(toCsv(rows, ctx, ['kv'], 10_000));
+  const ts = recs.map((r) => Date.parse(r.ts_iso));
+  assert.ok(ts.every((t) => t % 10_000 === 0));
+  const gap = Math.max(...ts.slice(1).map((t, i) => t - ts[i]));
+  assert.ok(gap >= 300_000, `断层应原样体现为时间轴空缺，实际最大间隔 ${gap}ms`);
+  assert.ok(recs.length < 40, '断层期间不该产生行');
+});
+
+test('降采样：不采样时列名不带后缀（两种模式列名不同 = 数据确实不同）', () => {
+  const samples = Array.from({ length: 300 }, (_, i) => snap(i * 2000, {}, i + 1));
+  const rows = buildExportRows(samples);
+  const raw = parse(toCsv(rows, ctx, ['kv'], 0));
+  assert.deepEqual(raw.cols, ['ts_iso', 'kv_usage_pct', README_COLUMN]);
+  assert.equal(raw.rows.length, 300, 'bucketMs=0 即原始全量');
+});
+
+test('降采样：桶比采集间隔还细时行为仍正确（每桶最多一个点）', () => {
+  const rows = buildExportRows(Array.from({ length: 10 }, (_, i) => snap(i * 10_000, {}, i + 1)));
+  const { cols, rows: recs } = parse(toCsv(rows, ctx, ['kv'], 1000)); // 1s 桶 < 10s 采集间隔
+  assert.equal(recs.length, 10, '不该丢点，也不该造点');
+  assert.deepEqual(cols, ['ts_iso', 'kv_usage_pct_max', README_COLUMN], '仍是聚合模式，后缀要在');
+});
+
+test('降采样：max 取桶内最大（保尖峰）、avg 取桶内平均（吞吐不高估）', () => {
+  // 4 个点压成 1 桶：KV 依次 10/90/20/30（尖峰 90），prompt 速率恒定
+  const samples = [0, 1, 2, 3].map((i) => {
+    const s = snap(i * 1000, { 'vllm:prompt_tokens_total': i * 100 });
+    s.gauges['vllm:kv_cache_usage_perc'] = [0.1, 0.9, 0.2, 0.3][i];
+    return s;
+  });
+  const rows = buildExportRows(samples);
+  const { rows: recs } = parse(toCsv(rows, ctx, ['kv', 'throughput'], 10_000)); // 4 个点跨 3s，全落一桶
+  assert.equal(recs.length, 1);
+  assert.equal(Number(recs[0].kv_usage_pct_max), 90, 'KV 尖峰必须被 max 保住');
+  const avg = rows.reduce((a, r) => a + r.promptTokPerS, 0) / rows.length;
+  assert.ok(Math.abs(Number(recs[0].prompt_tok_per_s_avg) - avg) < 0.01, '吞吐应为桶内平均');
+});
+
+test('降采样：桶内全空仍留空，不退化成 0', () => {
+  const rows = buildExportRows(Array.from({ length: 20 }, (_, i) => snap(i * 2000, {})));
+  const { rows: recs } = parse(toCsv(rows, ctx, ['ttft'], 10_000));
+  for (const r of recs) assert.equal(r.ttft_p95_s_max, '', '无数据的桶必须留空');
+});
+
+test('降采样：口径说明讲清了桶大小与每个后缀的含义', () => {
+  const rows = buildExportRows(Array.from({ length: 200 }, (_, i) => snap(i * 2000, {}, i + 1)));
+  const md = toMarkdown(rows, ctx, ['kv', 'throughput'], 60_000);
+  assert.match(md, /已降采样/);
+  assert.match(md, /每 1 分钟一个时间桶/, '必须用人话讲粒度，而不是"约 N 行"这种实现细节');
+  assert.match(md, /_max = 桶内最大值/);
+  assert.match(md, /_avg = 桶内平均值/);
+  assert.ok(!md.includes('_last = '), '没导出计数器列就不该讲 _last');
+  assert.match(md, /需要逐点原值请改用「原始全量」导出/);
+  // 不采样时不该出现这段
+  assert.ok(!toMarkdown(rows, ctx, ['kv'], 0).includes('已降采样'));
+});
+
+test('parseSample：raw / 空 / 非法 / 小于 1s → 0（不降采样）', () => {
+  for (const v of [null, undefined, '', 'raw', 'abc', '0', '-5', '500']) {
+    assert.equal(parseSample(v), 0, `${JSON.stringify(v)} 应解析为 0`);
+  }
+  assert.equal(parseSample('10000'), 10_000);
+  assert.equal(parseSample('1e9'), 86_400_000, '上限封顶到 1 天');
+});
+
+test('bucketLabel 说人话', () => {
+  assert.equal(bucketLabel(10_000), '10 秒');
+  assert.equal(bucketLabel(60_000), '1 分钟');
+  assert.equal(bucketLabel(300_000), '5 分钟');
+  assert.equal(bucketLabel(3_600_000), '1 小时');
+});
+
+test('降采样：Markdown 与 CSV 在同一采样参数下仍逐格一致', () => {
+  const rows = buildExportRows(Array.from({ length: 120 }, (_, i) => snap(i * 2000, {}, i + 1)));
+  const groups: MetricGroup[] = ['kv', 'throughput'];
+  const { cols, rows: csvRecs } = parse(toCsv(rows, ctx, groups, 10_000));
+  const { header, rows: mdRecs } = mdTable(toMarkdown(rows, ctx, groups, 10_000));
+  const dataCols = cols.filter((c) => c !== README_COLUMN);
+  assert.deepEqual(header, dataCols);
+  assert.equal(mdRecs.length, csvRecs.length);
+  for (const [i, r] of mdRecs.entries()) {
+    for (const [j, c] of dataCols.entries()) assert.equal(r[j], csvRecs[i][c], `第 ${i + 1} 行 ${c} 不一致`);
+  }
 });
 
 test('分组标签与 key 一一对应，无重复', () => {
