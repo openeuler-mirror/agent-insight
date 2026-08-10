@@ -9,8 +9,11 @@ const { spawnSync } = require('child_process')
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 const RUNTIME_ENTRIES = [
   'core',
+  'detectors',
+  'recovery',
+  'agents',
   'platform_adapter',
-  'ras_embed',
+  'ras_runtime',
   'config',
   'pyproject.toml',
   'README.md',
