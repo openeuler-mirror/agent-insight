@@ -919,14 +919,21 @@ export default function AgentTraceView({
         return n;
     }, [tree]);
 
-    // ── RAS anomaly markers ──────────────────────────────────────────────────
+    // ── FI + RAS anomaly markers (FI may attach to tool/skill/llm; RAS recovery stays on ras rows) ──
     const findEventAnomalies = useCallback((event: AgentEvent): RasAnomalyMarker[] => {
         if (!anomalies?.length) return [];
-        // Recovery is a dedicated RAS row — do not attach markers to LLM/tool for badges.
-        if (event.kind !== 'ras') return [];
+        const fiHits = findRasMarkersForEvent(event, fiOnlyMarkers(anomalies));
+        if (event.kind !== 'ras') return fiHits;
+        const rasMarkers = rasOnlyMarkers(anomalies);
         const markerId = (event.args as { rasMarkerId?: string } | undefined)?.rasMarkerId;
-        if (markerId) return anomalies.filter((marker) => marker.id === markerId);
-        return findRasMarkersForEvent(event, anomalies);
+        const rasHits = markerId
+            ? rasMarkers.filter((marker) => marker.id === markerId)
+            : findRasMarkersForEvent(event, rasMarkers);
+        if (!fiHits.length) return rasHits;
+        if (!rasHits.length) return fiHits;
+        const merged = new Map<string, RasAnomalyMarker>();
+        for (const marker of [...fiHits, ...rasHits]) merged.set(marker.id, marker);
+        return [...merged.values()];
     }, [anomalies]);
 
     const findNodeAnomalies = useCallback((node: AgentNode): RasAnomalyMarker[] => {
@@ -1853,7 +1860,7 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
-                {event.kind === 'ras' && evAnomalyHits.length > 0 && (
+                {evAnomalyHits.length > 0 && (
                     <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
                 )}
                 {secondaryLabel && (
