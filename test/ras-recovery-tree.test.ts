@@ -22,6 +22,11 @@ function root(events: AgentEvent[], children: AgentNode[] = []): AgentNode {
   return {
     id: "root",
     agentName: "agent",
+    subagentType: null,
+    sessionId: "TOP",
+    parentId: null,
+    depth: 0,
+    interactionIndices: [],
     events,
     children,
     stats: {
@@ -30,6 +35,11 @@ function root(events: AgentEvent[], children: AgentNode[] = []): AgentNode {
       toolCalls: 0,
       skillCalls: 0,
       taskCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
       totalTokens: 0,
     },
   }

@@ -12,11 +12,11 @@ function asString(value: unknown): string | undefined {
 }
 
 function interactionText(interaction: RawInteraction): string {
-  const content = interaction.content
+  const content: unknown = interaction.content
   if (typeof content === "string") return content.trim()
   if (Array.isArray(content)) {
     return content
-      .map((part) => {
+      .map((part: unknown) => {
         if (typeof part === "string") return part
         if (part && typeof part === "object" && "text" in part) {
           return String((part as { text?: unknown }).text || "")
