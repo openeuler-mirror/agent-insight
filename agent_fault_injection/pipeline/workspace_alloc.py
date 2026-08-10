@@ -8,17 +8,10 @@ from pathlib import Path
 from uuid import uuid4
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
-_SUGGESTED_DEFAULT_WORKSPACE = Path("/tmp/ras-workspace")
 
 
 class WorkspaceAllocationError(ValueError):
     """Raised when a base workspace cannot be used for allocation."""
-
-
-def package_root() -> Path:
-    """Return the agent-fault-injection repository / package root."""
-
-    return _PACKAGE_ROOT
 
 
 def is_eval_package_root(path: Path | str) -> bool:
@@ -35,17 +28,6 @@ def is_eval_package_root(path: Path | str) -> bool:
     except OSError:
         return False
     return 'name = "agent-fault-injection"' in text or "name = 'agent-fault-injection'" in text
-
-
-def suggested_default_workspace(*, ensure_exists: bool = False) -> Path:
-    """Prefer cwd unless it is the package root; then use ``/tmp/ras-workspace``."""
-
-    cwd = Path.cwd().resolve()
-    if is_eval_package_root(cwd):
-        if ensure_exists:
-            _SUGGESTED_DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
-        return _SUGGESTED_DEFAULT_WORKSPACE.resolve()
-    return cwd
 
 
 def assert_safe_base_workspace(base: Path | str) -> Path:
@@ -104,30 +86,3 @@ def allocate_run_workspace(
     if readme.is_file():
         shutil.copy2(readme, destination / "README.md")
     return destination
-
-
-def allocated_workspace_path(workspace: Path | str) -> Path | None:
-    """Return the path if it is a leaf under ``.ras-runs/<scope>/``, else None."""
-
-    resolved = Path(workspace).expanduser().resolve()
-    parts = resolved.parts
-    try:
-        index = parts.index(".ras-runs")
-    except ValueError:
-        return None
-    # Expect .ras-runs / scope / leaf (at least two components after .ras-runs).
-    if len(parts) < index + 3:
-        return None
-    if not resolved.is_dir():
-        return None
-    return resolved
-
-
-def remove_allocated_workspace(workspace: Path | str) -> bool:
-    """Delete an allocated ``.ras-runs/...`` leaf directory. Never deletes base."""
-
-    target = allocated_workspace_path(workspace)
-    if target is None:
-        return False
-    shutil.rmtree(target)
-    return True

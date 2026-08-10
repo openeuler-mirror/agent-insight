@@ -42,7 +42,6 @@ agent_fault_injection = [
   "fault_inject/skills/*/fault.json",
   "fault_inject/skills/*/scripts/*",
   "fault_inject/skills/*/assets/*",
-  "fault_inject/catalog/fault-catalog.yaml",
   "fault_inject/catalog/capability_api.yaml",
   "platform_adapters/opencode/plugin/*.ts",
   "platform_adapters/opencode/lib/*.ts",

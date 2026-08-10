@@ -17,7 +17,7 @@
 | Phase 3 Skill 平台可见性 | 已完成（后调整） | 原 `fault-catalog.yaml` 的 `platforms` 已移除；故障配方面向通用平台，UI 默认双平台。平台能力差异由 Adapter / 文档说明（见 [fault-mode-plugins.md](features/fault-mode-plugins.md)） |
 | Phase 4 产品化 | 已完成 | 示例 YAML、README、集成测 skip |
 
-运行示例见 [`configs/xiaoo-step-omission.example.yaml`](`configs/`（独立仓示例；Insight 用任务表单）xiaoo-step-omission.example.yaml)。
+运行示例：Insight FI 新建任务表单（包内不再维护 `configs/xiaoo-*.yaml` 示例）。
 
 ---
 

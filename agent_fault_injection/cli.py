@@ -37,8 +37,9 @@ def _parser() -> argparse.ArgumentParser:
             "trajectories. Fault judging runs in Insight after collect."
         ),
         epilog=(
-            "Use 'agent-fault-injection run --help' for experiment options or "
-            "'agent-fault-injection fault --help' to manage fault skills."
+            "Use 'agent-fault-injection run --help' for experiment options, "
+            "'agent-fault-injection fault --help' to manage fault skills, or "
+            "'agent-fault-injection platform inventory --json' for Worker inventory."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -168,33 +169,27 @@ defaults:
     )
     fault_commands = fault.add_subparsers(dest="fault_command", required=True)
 
-    serve = subparsers.add_parser(
-        "serve",
-        help="(Removed) Use Insight /agent-ras/fault-injection instead",
+    platform = subparsers.add_parser(
+        "platform",
+        help="Inspect local agent platforms for FI Worker inventory",
+        description="Enumerate agents/models via platform adapters (catalog).",
+    )
+    platform_commands = platform.add_subparsers(
+        dest="platform_command",
+        required=True,
+    )
+    platform_inventory = platform_commands.add_parser(
+        "inventory",
+        help="JSON inventory of local platforms (agents/models/ready)",
         description=(
-            "Legacy FastAPI/Vite UI was removed. Open Insight at "
-            "/agent-ras/fault-injection and use /api/fault-injection."
+            "Probe opencode/xiaoo via PlatformAdapterRegistry list_* + "
+            "health_check. Intended for FI Worker startup inventory."
         ),
     )
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8787)
-    serve.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("artifacts"),
-        help="Unused (legacy).",
-    )
-    serve.add_argument(
-        "--static-dir",
-        type=Path,
-        default=None,
-        help="Directory containing webui build output (index.html).",
-    )
-    serve.add_argument(
-        "--max-parallel-runs",
-        type=int,
-        default=5,
-        help="Max concurrent experiment runs; excess jobs stay queued (default: 5).",
+    platform_inventory.add_argument(
+        "--json",
+        action="store_true",
+        help="Write inventory JSON to stdout (required for Worker parsing).",
     )
 
     fault_add = fault_commands.add_parser(
@@ -507,6 +502,126 @@ def _list_faults() -> int:
     return 0
 
 
+def _normalize_agent_rows(rows: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        agent_id = str(row.get("id") or row.get("name") or "").strip()
+        if not agent_id:
+            continue
+        name = str(row.get("name") or agent_id).strip() or agent_id
+        label = str(row.get("label") or name or agent_id).strip() or agent_id
+        entry: dict[str, Any] = {"id": agent_id, "name": name, "label": label}
+        mode = row.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            entry["mode"] = mode.strip()
+        description = row.get("description")
+        if isinstance(description, str) and description.strip():
+            entry["description"] = description.strip()
+        out.append(entry)
+    return out
+
+
+def _normalize_model_rows(rows: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        model_id = str(row.get("id") or "").strip()
+        if not model_id:
+            continue
+        name = str(row.get("name") or row.get("modelID") or model_id).strip()
+        entry: dict[str, Any] = {
+            "id": model_id,
+            "name": name,
+            "label": str(row.get("label") or name).strip() or name,
+            "default": bool(row.get("default")),
+        }
+        provider = row.get("providerID")
+        if isinstance(provider, str) and provider.strip():
+            entry["providerID"] = provider.strip()
+        mid = row.get("modelID")
+        if isinstance(mid, str) and mid.strip():
+            entry["modelID"] = mid.strip()
+        out.append(entry)
+    return out
+
+
+def _inventory_for_platform(name: str) -> dict[str, Any]:
+    import shutil
+
+    from .platform_adapters.registry import PlatformAdapterRegistry
+
+    registry = PlatformAdapterRegistry()
+    adapter = registry.get(name)
+    health = adapter.health_check()
+    ready = bool(health.get("ready"))
+    errors = health.get("errors") if isinstance(health.get("errors"), list) else []
+    error_notes = [str(item).strip() for item in errors if str(item).strip()]
+    executable = shutil.which(name)
+
+    if not ready:
+        note = "; ".join(error_notes) if error_notes else f"{name} not ready"
+        return {
+            "ready": False,
+            "executable": executable,
+            "agents": [],
+            "models": [],
+            "note": note,
+        }
+
+    agents_payload = adapter.list_agents()
+    models_payload = adapter.list_models()
+    notes: list[str] = []
+    for payload in (agents_payload, models_payload):
+        if isinstance(payload, dict):
+            raw_note = payload.get("note")
+            if isinstance(raw_note, str) and raw_note.strip():
+                notes.append(raw_note.strip())
+    entry: dict[str, Any] = {
+        "ready": True,
+        "executable": executable,
+        "agents": _normalize_agent_rows(
+            agents_payload.get("agents") if isinstance(agents_payload, dict) else []
+        ),
+        "models": _normalize_model_rows(
+            models_payload.get("models") if isinstance(models_payload, dict) else []
+        ),
+    }
+    if notes:
+        # Prefer the first distinct note; join if both sides contributed.
+        unique = list(dict.fromkeys(notes))
+        entry["note"] = "; ".join(unique)
+    return entry
+
+
+def build_platform_inventory() -> dict[str, Any]:
+    """Build Worker-shaped inventory from platform adapters (catalog truth)."""
+
+    platforms = {
+        "opencode": _inventory_for_platform("opencode"),
+        "xiaoo": _inventory_for_platform("xiaoo"),
+    }
+    return {"platforms": platforms}
+
+
+def _platform_inventory(namespace: argparse.Namespace) -> int:
+    if not namespace.json:
+        print(
+            "agent-fault-injection: platform inventory requires --json",
+            file=sys.stderr,
+        )
+        return 2
+    payload = build_platform_inventory()
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
 def cli(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     namespace = parser.parse_args(argv)
@@ -514,14 +629,8 @@ def cli(argv: Sequence[str] | None = None) -> int:
     try:
         if namespace.command == "run":
             return asyncio.run(_run(namespace))
-        if namespace.command == "serve":
-            print(
-                "agent-fault-injection: 'serve' was removed. "
-                "Use Insight UI /agent-ras/fault-injection and "
-                "BFF /api/fault-injection instead.",
-                file=sys.stderr,
-            )
-            return 2
+        if namespace.command == "platform" and namespace.platform_command == "inventory":
+            return _platform_inventory(namespace)
         if namespace.command == "fault" and namespace.fault_command == "add":
             return _add_fault(namespace)
         if namespace.command == "fault" and namespace.fault_command == "list":
@@ -532,6 +641,7 @@ def cli(argv: Sequence[str] | None = None) -> int:
 
     parser.error(f"Unsupported command: {namespace.command}")
     return 2
+
 
 
 def main() -> None:

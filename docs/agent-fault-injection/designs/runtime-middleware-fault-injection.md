@@ -14,7 +14,7 @@
 | **故障类型** | 注入什么语义故障 | `skills/*` 目录 |
 | **变异模式** | Semantic vs Structure | runtime op 实现策略（P0 均为 Structure） |
 
-## 1. 注入方式（对外六类）
+## 1. 注入方式（对外五类）
 
 | key | 中文 | 状态 |
 |-----|------|------|
@@ -44,7 +44,7 @@
 | `intercept_rewrite` | `interception-history-inject` | `messages.inject` |
 | `intercept_rewrite` | `interception-assistant-corruption` | `assistant.replace_text` |
 
-配置：`configs/*prompt*`、`configs/*interception*`、`configs/tool-result-corruption*`。
+配置示例由 Insight FI 任务表单 / 实验 YAML 提供（不再维护包内 `configs/*` 示例目录）。
 
 ## 4. 边界
 
@@ -62,8 +62,8 @@
 
 | 日期 | 说明 |
 |------|------|
+| 2026-08-10 | `injectionEvidence` 从 collect 协议移除；对外注入方式统一为五类（`route_manipulate` 已废） |
 | 2026-08-05 | 边界重划：injection 仅能力；不写自证快照；Judge 看轨迹/终答 |
-| 2026-08-06 | `injectionEvidence` 产品字段废弃（collect 固定 `{}`）；本机 Judge / evaluation.py 删除；包目录归位 pipeline + catalog/injection |
-| 2026-08-04 | 意译六 key（skill_inject / …）；无旧版兼容；落地 prompt + intercept；route 预留 |
-| 2026-08-04 | 改名六类；落地 prompt + interception P0；routing 预留 |
+| 2026-08-06 | `injectionEvidence` 产品字段废弃（曾固定 `{}`）；本机 Judge / evaluation.py 删除；包目录归位 pipeline + catalog/injection |
+| 2026-08-04 | 意译五 key（skill_inject / …）；无旧版兼容；落地 prompt + intercept；第六类 route 预留后废弃 |
 | 2026-08-04 | 初版 L3 runtime FI |

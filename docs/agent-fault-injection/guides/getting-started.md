@@ -19,7 +19,7 @@
 
 任务创建后一律 `queued`，由本机 Worker claim 后执行。无在线 Worker 时平台不可选、无法下一步；请先完成步骤 1。
 
-向导中的 Agent / Model 来自 **在线 Worker** 的 heartbeat inventory；无 Worker 时 health/platforms 返回引导安装（不静默假目录）。
+向导中的 Agent / Model 来自 **在线 Worker** 的 heartbeat inventory（Worker 启动时经 Python `platform inventory --json` 枚举本机真实 agents/models）；无 Worker 时 health/platforms 返回引导安装（不静默假目录）。
 
 故障激活后，注入细节在 **FI Run** 页查看。可靠性观测 `/agent-ras/trace` 以正常轨迹上报（Execution）为准；**不再**为注入激活合成 `RasAnomalyEvent`。
 

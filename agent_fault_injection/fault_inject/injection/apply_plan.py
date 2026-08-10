@@ -41,6 +41,3 @@ def apply_injection_plan(
         ctx.last_ops.append(result)
         results.append(result)
     return results
-
-
-apply_structural_plan = apply_injection_plan

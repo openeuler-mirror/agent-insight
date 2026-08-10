@@ -14,7 +14,7 @@
 1. 实现 `PlatformAdapter`（`execute` + `map_trajectory`）。
 2. 在 `PlatformAdapterRegistry._load_builtins`（或测试中 `register`）注册平台名。
 3. 写出 `raw/events.jsonl`（含激活事件）与 **`execution.jsonl`**（规范化证据）。
-4. 可选实现 `list_agents` / `list_models` / `health_check` 供 Insight Faults/Platforms API（本机 Worker 侧 catalog）。
+4. 可选实现 `list_agents` / `list_models` / `health_check`；FI Worker 启动时经 `platform inventory --json` 聚合为本机 inventory（Insight platforms API 读 Worker heartbeat）。
 5. **不必**实现平台专用 Judge。
 
 ---

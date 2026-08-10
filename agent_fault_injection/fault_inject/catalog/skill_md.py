@@ -88,12 +88,6 @@ def write_frontmatter(skill_file: Path, frontmatter: dict[str, Any]) -> None:
     )
 
 
-def rewrite_frontmatter_description(skill_file: Path, description: str) -> None:
-    frontmatter = read_frontmatter(skill_file)
-    frontmatter["description"] = description
-    write_frontmatter(skill_file, frontmatter)
-
-
 def title_from_skill(skill_file: Path) -> str | None:
     try:
         for line in skill_file.read_text(encoding="utf-8").splitlines():

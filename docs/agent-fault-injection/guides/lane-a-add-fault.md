@@ -108,7 +108,7 @@ metadata:
 2. **推荐**在 `metadata` 写 `label_zh` / `label_en` / `order`（及可选 `submodes`）。**禁止**写 `visible` / `platforms` / 嵌套 `ui`。
 3. 多子模式用 `## 场景N：名称`，或放一张首列为场景 id 的总览表；也可在 `metadata.submodes` 覆盖展示名（见 `fault_inject/catalog/scenarios.py` / `presentation.py`）。
 4. 写清可观测产物/终答，方便 Judge 对照轨迹（不必改 Judge 代码）。
-5. Insight 建任务时合成用户 prompt：`使用 <skill> 技能，执行<子模式名>。`（TS：`compose-prompt.ts`；Python：`compose_fault_prompt`——改文案需双端同步）。
+5. Insight 建任务时合成用户 prompt：`使用 <skill> 技能，执行<子模式名>。`（仅 TS：[`compose-prompt.ts`](../../../src/lib/fault-injection/compose-prompt.ts)）。
 
 纯行为注入参考：[`skills/step-omission/SKILL.md`](../../../agent_fault_injection/fault_inject/skills/step-omission/SKILL.md)。
 
@@ -251,7 +251,7 @@ Judge → 只看轨迹/终答 vs Skill 规范（不用按故障名写分支）
 | 新造 `file.patch` 之类 op | Lane B，先扩能力面 |
 | 只改 yaml、没建 `SKILL.md` | Registry 扫不到 |
 | 期望 RAS 检测表自动出现 | FI Skill 与 RAS `fault-mode-catalog` 不同步 |
-| 改了 prompt 合成文案只动 TS | Python `compose_fault_prompt` 也要镜像 |
+| 改了 prompt 合成文案 | 改 Insight [`compose-prompt.ts`](../../../src/lib/fault-injection/compose-prompt.ts)（Python 侧已无镜像） |
 
 ---
 

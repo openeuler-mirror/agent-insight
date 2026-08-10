@@ -53,9 +53,6 @@ function sampleCollectPayload(input: {
         payload: { trace_anchor: { message_id: `${sessionId}-assistant` } },
       },
     ],
-    injectionEvidence: {
-      runtime: { note: 'unit e2e collect payload' },
-    },
   }
 }
 

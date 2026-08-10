@@ -1,6 +1,6 @@
 /**
  * Compose the user prompt that activates a fault skill scenario.
- * Mirrors agent_fault_injection.fault_inject.catalog.scenarios.compose_fault_prompt.
+ * Insight task creation SoT — not mirrored in Python CLI.
  */
 export function composeFaultPrompt(input: {
   skillName: string

@@ -16,13 +16,6 @@ export function peekFaultLabelsCache(
   return cached?.[locale] ?? null
 }
 
-export function peekSubmodeLabelsCache(
-  faultId: string,
-): Record<string, string> | null {
-  if (!cached) return null
-  return cached.submodes[faultId] ?? {}
-}
-
 export function resolveSubmodeLabel(
   faultId: string,
   submode: string | null | undefined,
@@ -31,13 +24,6 @@ export function resolveSubmodeLabel(
   const map = cached?.submodes[faultId]
   if (!map) return null
   return map[submode] || map[String(submode).trim()] || null
-}
-
-export async function loadFaultLabelsMap(
-  locale: 'zh' | 'en' = 'zh',
-): Promise<Record<string, string>> {
-  const bundle = await loadFaultLabelsBundle()
-  return bundle[locale]
 }
 
 export async function loadFaultLabelsBundle(): Promise<FaultLabelsBundle> {

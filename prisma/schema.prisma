@@ -870,13 +870,11 @@ model FaultInjectionRun {
   faultActivatedAt         DateTime?
   requestJson              String?
   markersJson              String?
-  injectionEvidenceJson    String?
   outcome                  String?
   faultContainmentStatus   String?
   judgeReason              String?
   judgeRawJson             String?
   judgedAt                 DateTime?
-  artifactDir              String?
   error                    String?
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt

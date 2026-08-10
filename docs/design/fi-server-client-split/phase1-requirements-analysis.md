@@ -1,5 +1,7 @@
 # Phase1：FI 服务端/客户端分离 — 需求分析
 
+> **HISTORICAL** — 已被 [server-client-split.md](../../agent-fault-injection/designs/server-client-split.md) 取代；dry-run 已取消。见本目录 [README](README.md)。
+
 > IR 名称：FI Server-Client Split  
 > 创建时间：2026-08-05  
 > 状态：设计输入（对齐用户口述需求）

@@ -46,7 +46,7 @@ class CliTests(TestCase):
         cases = [
             (
                 ["--help"],
-                ["run --help", "fault --help"],
+                ["run --help", "fault --help", "platform inventory"],
             ),
             (
                 ["run", "--help"],
@@ -61,6 +61,14 @@ class CliTests(TestCase):
             (
                 ["fault", "--help"],
                 ["fault list", "fault add --help"],
+            ),
+            (
+                ["platform", "--help"],
+                ["inventory"],
+            ),
+            (
+                ["platform", "inventory", "--help"],
+                ["--json", "Worker"],
             ),
             (
                 ["fault", "add", "--help"],

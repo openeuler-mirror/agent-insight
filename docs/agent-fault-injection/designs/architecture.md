@@ -4,7 +4,7 @@
 
 将原 `agent-fault-injection`（包名曾用 `agent-ras-eval`）合并进 agent-insight：
 
-- Python：`agent_fault_injection/` — 六类注入 + 跑被测 Agent + 产出 `RawInteraction[]` 与注入证据
+- Python：`agent_fault_injection/` — 五类注入 + 跑被测 Agent + 产出 `RawInteraction[]`
 - Insight：Task/Run 编排、鉴权、Prisma、**服务端 Judge**（`getActiveConfig`）、可靠性 UI
 - 本机：**FI Worker**（`scripts/fi-worker.js`）认领任务、spawn CLI、上传 `collect-result`
 
@@ -38,7 +38,7 @@
 Browser → Next /api/fault-injection（建任务 queued / 展示 / Judge）
 本机 FI Worker → claim → Python CLI(inject+collect)
        → POST /runs/:runId/collect-result
-       → Session.interactions + Run.injectionEvidenceJson（恒为 `{}`，字段已废弃）
+       → Session.interactions + FaultInjectionRun 元数据
        → server judge（写入 FI Run；不写 RasAnomalyEvent）
        → FI Run 页 / AgentTraceView
 
@@ -46,7 +46,7 @@ Browser → Next /api/fault-injection（建任务 queued / 展示 / Judge）
 ```
 
 旧同机 spawn 路径已删除。单机调试 = Next + Worker 两进程。
-Worker inventory：`which` + 静态 builtin agents + 读本地配置 models（**不**在启动时调 `opencode agent list` / `opencode models`）。
+Worker inventory：启动时一次 `python -m agent_fault_injection.cli platform inventory --json`（`PlatformAdapterRegistry` → `list_agents` / `list_models` / `health_check`；OpenCode 经 catalog 跑 `opencode agent list` + 配置/oh-my 过滤）。**不**合成 CLI 未返回的 `build/plan/general/explore`；**不**在每次 heartbeat 重算，也**不**回落 JS 硬编码 builtin。
 
 ## 包目录（Python）
 
@@ -57,7 +57,7 @@ agent_fault_injection/
 │   └── interactions_mapper.py   # 原 trace/
 ├── fault_inject/
 │   ├── skills/
-│   ├── catalog/       # models / registry / ui_catalog / yamls
+│   ├── catalog/       # models / definition / presentation / skill_md / yamls
 │   └── injection/     # installer / apply_plan / file_ops / rewrite_engine
 └── platform_adapters/
 ```
@@ -84,7 +84,7 @@ apply_plan / runtime_env / lifecycle        → 薄胶水
 fault_inject/injection/                     → L3：file_ops + rewrite_engine
 PlatformAdapter Template Method + SPI       → L4：平台只接线
 OpenCode rewrite-runtime.ts（`platform_adapters/opencode/lib/`） → 表驱动薄层（隔离环境拷到 `config/lib/`，勿进 `plugins/`）
-collect_payload                             → interactions（injectionEvidence 固定 `{}`，已废弃）→ Insight Judge
+pipeline/collect_payload                    → interactions → Insight Judge
 ```
 
 不做：完整 Ports 六边形；L2 Method 类 Facade；FI→RasAnomalyEvent bridge。

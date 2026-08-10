@@ -184,7 +184,7 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(collect.get("injectionEvidence"), {})
+            self.assertNotIn("injectionEvidence", collect)
             manifest = json.loads(
                 result.artifacts.manifest_file.read_text(encoding="utf-8")
             )

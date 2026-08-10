@@ -323,7 +323,10 @@ def select_usable_agents(
     config: dict[str, Any] | None = None,
     oh_my_keys: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Keep builtins + non-hidden user agents + oh-my-matched CLI agents."""
+    """Prefer known builtins that appear in CLI, then config users, then oh-my matches.
+
+    Does not synthesize missing ``build``/``plan``/``general``/``explore``.
+    """
     by_id = {
         str(item.get("id") or ""): item
         for item in cli_agents
@@ -333,14 +336,10 @@ def select_usable_agents(
     seen: set[str] = set()
 
     for builtin in _BUILTIN_AGENTS:
-        if builtin in seen:
+        if builtin in seen or builtin not in by_id:
             continue
-        if builtin in by_id:
-            selected.append(by_id[builtin])
-            seen.add(builtin)
-        else:
-            selected.append({"id": builtin, "name": builtin})
-            seen.add(builtin)
+        selected.append(by_id[builtin])
+        seen.add(builtin)
 
     for item in configured_user_agents(config):
         agent_id = str(item["id"])
@@ -400,18 +399,6 @@ def _run_opencode_cli(
         detail = stderr.strip() or f"exit code {completed.returncode}"
         return None, detail
     return stdout, None
-
-
-def configured_provider_ids(config: dict[str, Any] | None) -> set[str]:
-    data = config if isinstance(config, dict) else {}
-    providers = data.get("provider")
-    if not isinstance(providers, dict):
-        return set()
-    return {
-        str(key).strip()
-        for key in providers
-        if isinstance(key, str) and key.strip()
-    }
 
 
 def configured_default_model(config: dict[str, Any] | None) -> str | None:

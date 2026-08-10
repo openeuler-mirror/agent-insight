@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +23,6 @@ from .skill_md import (
 _FAULT_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _MANIFEST_NAME = "fault.json"
 _TOOL_REFERENCE = re.compile(r"^\{tool:([^{}]+)\}$")
-
-_default_registry: FaultRegistry | None = None
-_default_lock = threading.Lock()
 
 
 def default_skills_root() -> Path:
@@ -466,7 +462,6 @@ def add_fault(
             shutil.rmtree(destination)
         raise
 
-    invalidate_fault_registry()
     from .presentation import invalidate_fault_ui_catalog
 
     invalidate_fault_ui_catalog()
@@ -501,32 +496,3 @@ class FaultRegistry:
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._faults))
-
-
-def get_fault_registry(
-    *,
-    skills_root: Path | None = None,
-    refresh: bool = False,
-) -> FaultRegistry:
-    """Return the process-wide registry for the default skills root.
-
-    Custom ``skills_root`` always constructs a fresh registry (no global cache),
-    so tests and temporary catalogs stay isolated.
-    """
-
-    if skills_root is not None:
-        return FaultRegistry(skills_root)
-
-    global _default_registry
-    with _default_lock:
-        if refresh or _default_registry is None:
-            _default_registry = FaultRegistry()
-        return _default_registry
-
-
-def invalidate_fault_registry() -> None:
-    """Drop the cached default registry so the next get rescans disk."""
-
-    global _default_registry
-    with _default_lock:
-        _default_registry = None

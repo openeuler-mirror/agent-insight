@@ -334,36 +334,6 @@ def resolve_document_model_fields(
     return model_id, provider_id
 
 
-def enrich_trace_document_model(
-    document: dict[str, Any],
-    *,
-    events_file: Path,
-    request_file: Path | None = None,
-) -> dict[str, Any]:
-    """Fill missing top-level modelID/providerID on a loaded interactions.json."""
-    if not isinstance(document, dict):
-        return document
-    has_model = isinstance(document.get("modelID"), str) and bool(
-        str(document.get("modelID")).strip()
-    )
-    has_provider = isinstance(document.get("providerID"), str) and bool(
-        str(document.get("providerID")).strip()
-    )
-    if has_model and has_provider:
-        return document
-    interactions = document.get("interactions")
-    model_id, provider_id = resolve_document_model_fields(
-        interactions=interactions if isinstance(interactions, list) else [],
-        events_file=events_file,
-        request_file=request_file,
-    )
-    if not has_model and model_id:
-        document["modelID"] = model_id
-    if not has_provider and provider_id:
-        document["providerID"] = provider_id
-    return document
-
-
 def _normalize_message(entry: Any) -> dict[str, Any] | None:
     """Convert one OpenCode session message into a RawInteraction."""
     if not isinstance(entry, dict):

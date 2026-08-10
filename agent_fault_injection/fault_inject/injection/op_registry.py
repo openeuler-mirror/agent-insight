@@ -24,7 +24,3 @@ def get_op(op_name: str) -> InjectionOp:
         return _REGISTRY[op_name]
     except KeyError as exc:
         raise KeyError(f"Unknown injection op: {op_name}") from exc
-
-
-def known_ops() -> tuple[str, ...]:
-    return tuple(sorted(_REGISTRY))

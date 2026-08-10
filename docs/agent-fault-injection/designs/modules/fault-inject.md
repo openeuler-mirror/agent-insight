@@ -10,7 +10,7 @@
 
 分层：`fault_inject/injection/` 只做副作用（返回结构化结果 / 平台事件）；`fault_inject/catalog/` 的 `fault.json` 定义 plan；`apply_plan` / `runtime_env` 为薄胶水。展示元数据在 `SKILL.md` 的 `metadata`；method 中文名在 `capability_api.yaml`。见 [fault-mode-plugins.md](../features/fault-mode-plugins.md)。
 
-`injectionEvidence` **已废弃**：collect 仍可能带空对象 `{}` 以兼容 schema/DB 列，服务端 Judge **只看轨迹 / 终答**，不再拼进 prompt。详见 [runtime-middleware-fault-injection.md](../runtime-middleware-fault-injection.md)。
+`injectionEvidence` **已从 collect 协议移除**；服务端 Judge **只看轨迹 / 终答**。详见 [runtime-middleware-fault-injection.md](../runtime-middleware-fault-injection.md)。
 
 ## 扩展车道（防债）
 

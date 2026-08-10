@@ -30,7 +30,6 @@ export async function POST(
       faultActivated: run.faultActivated,
       interactions,
       markers: JSON.parse(run.markersJson || '[]'),
-      injectionEvidence: JSON.parse(run.injectionEvidenceJson || '{}'),
     },
   })
   return NextResponse.json({

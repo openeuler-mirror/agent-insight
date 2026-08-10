@@ -69,7 +69,6 @@ export async function POST(
       faultActivatedAt: body.faultActivatedAt,
       interactions: body.interactions || [],
       markers: body.markers || [],
-      injectionEvidence: body.injectionEvidence || {},
     } as CollectPayload
 
     if (stopped) {

@@ -26,14 +26,6 @@ export const faultJudgeResultSchema = z.object({
 
 export type FaultJudgeResult = z.infer<typeof faultJudgeResultSchema>
 
-/** Map legacy stored/judge value `no_trace` → `inconclusive`. */
-export function normalizeContainmentStatus(
-  value: string | null | undefined,
-): FaultContainmentStatus | string | null | undefined {
-  if (value === 'no_trace') return 'inconclusive'
-  return value
-}
-
 export function isValidOutcomeContainmentPair(
   outcome: FaultOutcome,
   containment: FaultContainmentStatus,

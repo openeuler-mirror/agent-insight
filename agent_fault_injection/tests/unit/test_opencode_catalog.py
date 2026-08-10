@@ -106,6 +106,7 @@ class OpenCodeCatalogParseTests(TestCase):
             },
         )
         ids = [item["id"] for item in selected]
+        # Prefer known builtins that appear in CLI, in _BUILTIN_AGENTS order.
         self.assertEqual(ids[:4], ["build", "plan", "general", "explore"])
         self.assertIn("my-custom", ids)
         self.assertIn("Sisyphus - Ultraworker", ids)
@@ -115,6 +116,29 @@ class OpenCodeCatalogParseTests(TestCase):
         self.assertNotIn("aet-implement", ids)
         self.assertNotIn("deepresearch", ids)
         self.assertNotIn("ras-judge", ids)
+
+    def test_select_usable_agents_does_not_synthesize_missing_builtins(self) -> None:
+        selected = select_usable_agents(
+            [],
+            config={"agent": {"my-custom": {"mode": "primary"}}},
+            oh_my_keys={"sisyphus", "oracle"},
+        )
+        ids = [item["id"] for item in selected]
+        self.assertEqual(ids, ["my-custom"])
+        for builtin in ("build", "plan", "general", "explore"):
+            self.assertNotIn(builtin, ids)
+
+    def test_select_usable_agents_omits_builtins_absent_from_cli(self) -> None:
+        selected = select_usable_agents(
+            [{"id": "explore", "name": "explore", "mode": "subagent"}],
+            config={},
+            oh_my_keys=set(),
+        )
+        ids = [item["id"] for item in selected]
+        self.assertEqual(ids, ["explore"])
+        self.assertNotIn("build", ids)
+        self.assertNotIn("plan", ids)
+        self.assertNotIn("general", ids)
 
     def test_list_agents_from_cli_with_oh_my_config(self) -> None:
         result = list_opencode_agents(

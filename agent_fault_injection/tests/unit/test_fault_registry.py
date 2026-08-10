@@ -2,11 +2,7 @@ from pathlib import Path
 from unittest import TestCase
 
 from agent_fault_injection.pipeline.exceptions import FaultNotFoundError
-from agent_fault_injection.fault_inject.catalog.definition import (
-    FaultRegistry,
-    get_fault_registry,
-    invalidate_fault_registry,
-)
+from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 
 
 class FaultRegistryTests(TestCase):
@@ -124,46 +120,3 @@ class FaultRegistryTests(TestCase):
                 fault.description,
                 "Inject one controlled tool timeout.",
             )
-
-    def test_get_fault_registry_reuses_default_singleton(self) -> None:
-        invalidate_fault_registry()
-        first = get_fault_registry()
-        second = get_fault_registry()
-        self.assertIs(first, second)
-
-    def test_invalidate_and_refresh_rebuild_default_registry(self) -> None:
-        invalidate_fault_registry()
-        first = get_fault_registry()
-        invalidate_fault_registry()
-        second = get_fault_registry()
-        self.assertIsNot(first, second)
-        third = get_fault_registry(refresh=True)
-        self.assertIsNot(second, third)
-
-    def test_custom_skills_root_does_not_use_default_cache(self) -> None:
-        import tempfile
-
-        invalidate_fault_registry()
-        default = get_fault_registry()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            fault_dir = root / "custom-only"
-            fault_dir.mkdir()
-            (fault_dir / "SKILL.md").write_text(
-                "\n".join(
-                    [
-                        "---",
-                        "name: ras-custom-only",
-                        "description: Custom root fault.",
-                        "---",
-                        "",
-                        "# Custom",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            custom = get_fault_registry(skills_root=root)
-            self.assertIsNot(custom, default)
-            self.assertEqual(custom.get("custom-only").skill_name, "ras-custom-only")
-            with self.assertRaises(FaultNotFoundError):
-                default.get("custom-only")

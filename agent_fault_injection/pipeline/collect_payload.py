@@ -82,8 +82,6 @@ def build_collect_payload(
         "faultActivatedAt": fault_activated_at,
         "interactions": interactions,
         "markers": markers or [],
-        # Deprecated: Insight Judge uses interactions only; keep empty for schema compat.
-        "injectionEvidence": {},
     }
 
 

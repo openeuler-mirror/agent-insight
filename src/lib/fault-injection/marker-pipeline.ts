@@ -33,12 +33,10 @@ export type PipelineStep = {
 
 const EVAL_REASON_LABELS: Record<FiPipelineLocale, Record<string, string>> = {
   zh: {
-    judge_disabled: '已关闭评判（CLI --no-judge）',
     judge_skipped: 'Insight 评判已跳过',
     fault_not_activated: '故障未注入，跳过评判',
   },
   en: {
-    judge_disabled: 'Judge disabled (CLI --no-judge)',
     judge_skipped: 'Insight judge skipped',
     fault_not_activated: 'Fault not activated; judge skipped',
   },

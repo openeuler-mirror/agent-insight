@@ -236,7 +236,6 @@ export async function ingestCollectAndJudge(input: {
         : null,
       injectionMethod: input.payload.injectionMethod || null,
       markersJson: JSON.stringify(input.payload.markers || []),
-      injectionEvidenceJson: JSON.stringify(input.payload.injectionEvidence || {}),
     },
   })
 

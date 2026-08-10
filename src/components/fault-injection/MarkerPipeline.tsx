@@ -9,8 +9,6 @@ import {
 } from '@/lib/fault-injection/marker-pipeline'
 import { useLocale } from '@/lib/client/locale-context'
 
-export { buildMarkerPipeline } from '@/lib/fault-injection/marker-pipeline'
-
 function CheckDot({
   done,
   skipped,

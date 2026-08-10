@@ -4,8 +4,6 @@ from .definition import (
     FaultRegistry,
     add_fault,
     default_skills_root,
-    get_fault_registry,
-    invalidate_fault_registry,
     load_fault_definition,
 )
 from .models import FaultDefinition, InjectionStep
@@ -17,9 +15,7 @@ __all__ = [
     "InjectionStep",
     "add_fault",
     "default_skills_root",
-    "get_fault_registry",
     "get_fault_ui_catalog",
-    "invalidate_fault_registry",
     "load_fault_definition",
     "load_fault_ui_catalog",
 ]

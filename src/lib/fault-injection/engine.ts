@@ -14,8 +14,6 @@ export type CollectPayload = {
   faultActivatedAt?: number | null
   interactions: unknown[]
   markers?: unknown[]
-  /** @deprecated Always `{}`; Judge uses interactions only. DB column retained. */
-  injectionEvidence?: Record<string, unknown>
 }
 
 function resolvePython(): string {

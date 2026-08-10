@@ -9,7 +9,7 @@
 
 **不再**把 FI 激活桥接成 `RasAnomalyEvent`，也**不**为进可靠性列表合成 `Execution`。注入观测以 FI Run / `FaultInjection*` + Session 为准；可靠性列表只索引平台真实上报的根 `Execution`（OTel / upload）。无行时排查客户端上报链路，不要用 FI collect 兜底造行。
 
-服务端**不**直接打开本机 `artifactDir`；权威交互数据以 POST body / ingest 为准。
+服务端**不**直接打开本机 Worker 产物目录；权威交互数据以 POST body / ingest 为准。
 
 ## 观测入口
 

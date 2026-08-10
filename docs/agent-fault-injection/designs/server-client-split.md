@@ -1,6 +1,6 @@
 # FI 服务端 / 客户端分离
 
-> **状态**：✅ 已落地（2026-08-05）— 浏览器 E2E：无 Worker 提示 / dry-run stub / Worker inventory / claim→collect-result  
+> **状态**：✅ 已落地（2026-08-05）— 浏览器 E2E：无 Worker 提示 / Worker inventory / claim→collect-result
 
 > **完整 SDD**：[phase2-requirements-design.md](../../design/fi-server-client-split/phase2-requirements-design.md)  
 > **开发计划**：[phase3-development-plan.md](../../design/fi-server-client-split/phase3-development-plan.md)  

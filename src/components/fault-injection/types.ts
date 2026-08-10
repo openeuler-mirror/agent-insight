@@ -127,31 +127,6 @@ const CONTAINMENT_I18N: LocaleMap = {
   no_trace: { zh: '证据不足', en: 'Inconclusive' },
 }
 
-const RUN_STATUS_I18N: LocaleMap = {
-  queued: { zh: '排队中', en: 'Queued' },
-  collecting: { zh: '注入执行中', en: 'Injecting' },
-  judging: { zh: '评判中', en: 'Judging' },
-  completed: { zh: '运行完成', en: 'Completed' },
-  judge_skipped: { zh: '评判跳过', en: 'Judge skipped' },
-  failed: { zh: '失败', en: 'Failed' },
-  stopped: { zh: '已停止', en: 'Stopped' },
-}
-
-/** @deprecated Prefer outcomeLabel(value, locale) */
-export const OUTCOME_LABELS: Record<string, string> = Object.fromEntries(
-  Object.entries(OUTCOME_I18N).map(([k, v]) => [k, v.zh]),
-)
-
-/** @deprecated Prefer containmentLabel(value, locale) */
-export const CONTAINMENT_LABELS: Record<string, string> = Object.fromEntries(
-  Object.entries(CONTAINMENT_I18N).map(([k, v]) => [k, v.zh]),
-)
-
-/** @deprecated Prefer fiRunStatusLabel(value, locale) */
-export const RUN_STATUS_LABELS: Record<string, string> = Object.fromEntries(
-  Object.entries(RUN_STATUS_I18N).map(([k, v]) => [k, v.zh]),
-)
-
 function pickLocaleLabel(map: LocaleMap, value: string, locale: FiLocale): string {
   return map[value]?.[locale] ?? value
 }
@@ -164,14 +139,4 @@ export function outcomeLabel(value?: string | null, locale: FiLocale = 'zh'): st
 export function containmentLabel(value?: string | null, locale: FiLocale = 'zh'): string {
   if (!value) return '—'
   return pickLocaleLabel(CONTAINMENT_I18N, value, locale)
-}
-
-export function fiRunStatusLabel(value?: string | null, locale: FiLocale = 'zh'): string {
-  if (!value) return '—'
-  return pickLocaleLabel(RUN_STATUS_I18N, value, locale)
-}
-
-export function labelMap(map: Record<string, string>, value?: string | null): string {
-  if (!value) return '—'
-  return map[value] ?? value
 }

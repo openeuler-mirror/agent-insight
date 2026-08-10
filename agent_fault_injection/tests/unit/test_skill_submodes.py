@@ -5,11 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
-from agent_fault_injection.fault_inject.catalog.scenarios import (
-    compose_fault_prompt,
-    find_submode,
-    parse_skill_submodes,
-)
+from agent_fault_injection.fault_inject.catalog.scenarios import parse_skill_submodes
 
 
 class SkillSubmodeParseTests(TestCase):
@@ -45,7 +41,7 @@ class SkillSubmodeParseTests(TestCase):
         self.assertIn("会议室", submodes[0]["description"])
         self.assertIn("汇率", submodes[1]["description"])
         self.assertIn("HTTP", submodes[2]["description"])
-        self.assertIsNone(find_submode(submodes, "4"))
+        self.assertFalse(any(item["id"] == "4" for item in submodes))
 
     def test_parses_tool_repeat_overview_table(self) -> None:
         fault = FaultRegistry().get("tool_repeat_dead_loop")
@@ -66,16 +62,7 @@ class SkillSubmodeParseTests(TestCase):
         self.assertEqual(submodes[0]["id"], "1")
         self.assertIn("beta", submodes[0]["name"])
 
-    def test_compose_prompt_includes_submode(self) -> None:
-        prompt = compose_fault_prompt(
-            skill_name="thinking-dead-loop",
-            base_prompt="do the task",
-            submode={"id": "2", "name": "逻辑死循环", "description": ""},
-        )
-        self.assertIn("执行逻辑死循环", prompt)
-        self.assertIn("do the task", prompt)
-
-    def test_find_submode_by_id(self) -> None:
+    def test_parses_overview_table_ids(self) -> None:
         with TemporaryDirectory() as temporary:
             skill = Path(temporary) / "SKILL.md"
             skill.write_text(
@@ -97,4 +84,5 @@ class SkillSubmodeParseTests(TestCase):
                 encoding="utf-8",
             )
             submodes = parse_skill_submodes(skill)
-            self.assertEqual(find_submode(submodes, "2")["name"], "Beta")
+            self.assertEqual([item["id"] for item in submodes], ["1", "2"])
+            self.assertEqual(submodes[1]["name"], "Beta")

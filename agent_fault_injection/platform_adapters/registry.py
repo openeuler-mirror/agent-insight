@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 
 from ..pipeline.exceptions import PlatformNotFoundError
 from .base import PlatformAdapter
 
 AdapterFactory = Callable[[], PlatformAdapter]
-
-_default_registry: PlatformAdapterRegistry | None = None
-_default_lock = threading.Lock()
 
 
 class PlatformAdapterRegistry:
@@ -55,21 +51,3 @@ class PlatformAdapterRegistry:
 
         self.register("opencode", OpenCodeAdapter)
         self.register("xiaoo", XiaoOAdapter)
-
-
-def get_platform_adapter_registry(*, refresh: bool = False) -> PlatformAdapterRegistry:
-    """Return the process-wide builtin platform registry."""
-
-    global _default_registry
-    with _default_lock:
-        if refresh or _default_registry is None:
-            _default_registry = PlatformAdapterRegistry()
-        return _default_registry
-
-
-def invalidate_platform_adapter_registry() -> None:
-    """Drop the cached default platform registry."""
-
-    global _default_registry
-    with _default_lock:
-        _default_registry = None

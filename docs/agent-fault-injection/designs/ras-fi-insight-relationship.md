@@ -147,9 +147,8 @@ flowchart TB
 | FI Judge（`judge.ts`） | 二维 outcome × containment；结果落 FI Run |
 | ~~`ras-bridge`~~ | **已移除**：不再为 FI 激活合成 `RasAnomalyEvent`；可靠性观测靠正常轨迹（Execution）+ 真 RAS ① |
 | FI Client 任务占用 / 超时回收（实现可称 lease） | 服务端状态机 |
-| dry-run stub | 不经本机模块 |
 
-**Insight 不做**：在 Agent 进程内跑 Detector/Recovery；在服务端 `spawn` 用户本机的 opencode/xiaoo（已废弃）。
+**Insight 不做**：在 Agent 进程内跑 Detector/Recovery；在服务端 `spawn` 用户本机的 opencode/xiaoo（已废弃）。不再提供 dry-run / stub 产品入口。
 
 ---
 
@@ -216,7 +215,7 @@ flowchart TB
 
 - Fault catalog / Skill、结构注入与 runtime plan
 - 平台 Adapter（OpenCode TS 插件、xiaoO hooker）
-- CLI：`python -m agent_fault_injection.cli run … --no-judge`
+- CLI：`python -m agent_fault_injection.cli run …`（本机只做 inject+collect；Judge 在 Insight）
 - 本机写出 `collect-result.json` 等 artifacts
 
 ### 4.2 与 Insight 的交界
@@ -298,7 +297,7 @@ flowchart LR
 | ⓪ | 主观测 | **OTLP/HTTP**（JSON 或 Protobuf）：`ResourceSpans` / `ResourceLogs` | `/api/ingest/otel/v1/{traces\|logs\|…}` | spool → `Execution` | 通用链路追踪 |
 | ① | RAS 旁路 | **flat JSON**（非 OTLP）：`taskId` / `type` / `deliveryId` / `payload` | `/api/ingest/ras-events` | `RasAnomalyEvent` | 检出/恢复事件；fail-open |
 | ② | FI 控制面 | FI Worker JSON（非 OTLP）：heartbeat / claim / commands | `/api/fault-injection/worker/*` | 任务占用与超时回收 | 无轨迹正文 |
-| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：`interactions` / `markers`（`injectionEvidence` 已废弃，恒 `{}`） | `…/runs/:id/collect-result` | `Session` + `FaultInjectionRun` → Judge | 实验轨迹真源 |
+| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：`interactions` / `markers` | `…/runs/:id/collect-result` | `Session` + `FaultInjectionRun` → Judge | 实验轨迹真源 |
 | ~~④~~ | ~~FI→观测~~ | **已移除** | — | 不再写 `RasAnomalyEvent` | 可靠性观测以 Execution / 真 RAS ① 为准 |
 
 ```mermaid
@@ -330,7 +329,7 @@ flowchart TB
 | `runId` / `taskId` | Run id / 平台 session → `Session.taskId` |
 | `framework` / `fault` / `injectionMethod` | 平台与故障元数据 |
 | `faultActivated` | Judge / FI Run 门闩（**不**再触发观测表写入） |
-| `interactions` / `markers` | 轨迹真源（`injectionEvidence` 已废弃） |
+| `interactions` / `markers` | 轨迹真源 |
 
 ### 5.4 时序（RAS ① 展开）
 
@@ -497,7 +496,7 @@ SessionHub 检出/恢复
 
 ```text
 fi-worker tick: claim
-  → runCollector: spawn cli run --no-judge
+  → runCollector: spawn cli run
   → ExperimentRunner.run
        Adapter.execute（插件/hooker → raw/events.jsonl 等）
        map_trajectory / InsightInteractionsMapper.map
@@ -510,9 +509,9 @@ fi-worker tick: claim
 | 步骤 | 路径 | 符号 |
 |------|------|------|
 | 轮询认领/上传 | [`scripts/fi-worker.js`](../../../scripts/fi-worker.js) | `tick` → `runCollector` → `uploadResult` |
-| CLI / 编排 | [`agent_fault_injection/.../cli.py`](../../../agent_fault_injection/cli.py)、[`runner.py`](../../../agent_fault_injection/runner.py) | `ExperimentRunner.run` |
+| CLI / 编排 | [`agent_fault_injection/.../cli.py`](../../../agent_fault_injection/cli.py)、[`pipeline/runner.py`](../../../agent_fault_injection/pipeline/runner.py) | `ExperimentRunner.run` |
 | 映射 interactions | [`.../pipeline/interactions_mapper.py`](../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
-| 组装/写盘 | [`.../collect_payload.py`](../../../agent_fault_injection/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
+| 组装/写盘 | [`.../pipeline/collect_payload.py`](../../../agent_fault_injection/pipeline/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
 | 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](../../../src/app/api/fault-injection/runs/[runId]/collect-result/route.ts) | `POST` |
 | 入库+评判 | [`src/lib/fault-injection/store.ts`](../../../src/lib/fault-injection/store.ts) | `ingestCollectAndJudge` |
 | ~~④ bridge~~ | **已移除**（原 `ras-bridge.ts`） | — |

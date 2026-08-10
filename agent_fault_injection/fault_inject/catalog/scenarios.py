@@ -141,39 +141,3 @@ def normalize_submode(value: str | None) -> str | None:
     if digits:
         return digits.lstrip("0") or "0"
     return text
-
-
-def find_submode(
-    submodes: list[dict[str, str]], submode_id: str | None
-) -> dict[str, str] | None:
-    if not submode_id:
-        return None
-    needle = submode_id.strip()
-    for item in submodes:
-        if item["id"] == needle or item["name"] == needle:
-            return item
-    lowered = needle.lower()
-    for item in submodes:
-        if item["id"].lower() == lowered or item["name"].lower() == lowered:
-            return item
-    return None
-
-
-def compose_fault_prompt(
-    *,
-    skill_name: str,
-    base_prompt: str,
-    submode: dict[str, str] | None,
-) -> str:
-    """Build the user prompt that activates a skill scenario."""
-
-    if submode is None:
-        instruction = f"使用 {skill_name} 技能。"
-    else:
-        instruction = f"使用 {skill_name} 技能，执行{submode['name']}。"
-    base = base_prompt.strip()
-    if not base:
-        return instruction
-    if instruction.rstrip("。") in base:
-        return base
-    return f"{instruction}\n\n{base}"
