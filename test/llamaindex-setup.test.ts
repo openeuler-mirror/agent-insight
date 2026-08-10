@@ -336,7 +336,7 @@ test('collector archive cache invalidates when bundled source changes', (t) => {
   assert.notDeepEqual(before, after);
 });
 
-test('local npm server package carries collector source without Python package metadata', () => {
+test('local npm server package carries collector source and the relocated README', async (t) => {
   const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as { files: string[] };
   assert.ok(manifest.files.includes('scripts/'));
   assert.ok(manifest.files.includes('docs/user-guide/observability/llamaindex-trace-collector.md'));
@@ -349,6 +349,41 @@ test('local npm server package carries collector source without Python package m
   assert.match(prepare, /copyLlamaIndexCollector/);
   assert.match(prepare, /prunePythonBytecode\(targetRoot\)/);
   assert.doesNotMatch(prepare, /offer it to pip|pyproject\.toml/);
+
+  const packageRoot = mkdtempSync(path.join(tmpdir(), 'llamaindex-package-'));
+  t.after(() => rmSync(packageRoot, { recursive: true, force: true }));
+  const collectorPackage = path.join(
+    packageRoot,
+    'scripts',
+    'llamaindex_extension',
+    'src',
+    'agent_insight_llamaindex',
+  );
+  const readme = path.join(
+    packageRoot,
+    'docs',
+    'user-guide',
+    'observability',
+    'llamaindex-trace-collector.md',
+  );
+  const standalone = path.join(packageRoot, '.next', 'standalone');
+  mkdirSync(collectorPackage, { recursive: true });
+  mkdirSync(path.dirname(readme), { recursive: true });
+  writeFileSync(path.join(collectorPackage, '__init__.py'), 'VERSION = "test"\n');
+  writeFileSync(readme, '# LlamaIndex Trace Collector\n');
+
+  const prepareModule: any = await import('../scripts/prepare-npm-package.js');
+  const copyLlamaIndexCollector = prepareModule.copyLlamaIndexCollector
+    || prepareModule.default?.copyLlamaIndexCollector;
+  assert.equal(typeof copyLlamaIndexCollector, 'function');
+  copyLlamaIndexCollector(packageRoot, standalone);
+
+  const packagedRoot = path.join(standalone, 'scripts', 'llamaindex_extension');
+  assert.equal(readFileSync(path.join(packagedRoot, 'README.md'), 'utf8'), '# LlamaIndex Trace Collector\n');
+  assert.equal(
+    readFileSync(path.join(packagedRoot, 'src', 'agent_insight_llamaindex', '__init__.py'), 'utf8'),
+    'VERSION = "test"\n',
+  );
 });
 
 test('Unix uninstaller removes only LlamaIndex files and preserves trace data by default', {

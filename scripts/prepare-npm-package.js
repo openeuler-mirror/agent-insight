@@ -90,30 +90,35 @@ function copyRuntimeSystemSkills(packageRoot, standaloneDir) {
 function copyLlamaIndexCollector(packageRoot, standaloneDir) {
   const sourceRoot = path.join(packageRoot, 'scripts', 'llamaindex_extension')
   const targetRoot = path.join(standaloneDir, 'scripts', 'llamaindex_extension')
-  // The npm package carries collector source for setup routes to deploy directly.
-  const runtimeEntries = ['src', 'README.md']
+  const sourcePackage = path.join(sourceRoot, 'src')
+  const sourceReadme = path.join(
+    packageRoot,
+    'docs',
+    'user-guide',
+    'observability',
+    'llamaindex-trace-collector.md',
+  )
 
   if (fs.existsSync(targetRoot)) {
     fs.rmSync(targetRoot, { recursive: true, force: true })
   }
-  for (const entry of runtimeEntries) {
-    const source = path.join(sourceRoot, entry)
-    const target = path.join(targetRoot, entry)
-    if (!fs.existsSync(source)) {
-      throw new Error(`Missing LlamaIndex collector runtime entry: ${source}`)
+  for (const required of [sourcePackage, sourceReadme]) {
+    if (!fs.existsSync(required)) {
+      throw new Error(`Missing LlamaIndex collector runtime entry: ${required}`)
     }
-    fs.mkdirSync(path.dirname(target), { recursive: true })
-    fs.cpSync(source, target, {
-      recursive: true,
-      filter: (candidate) => {
-        const name = path.basename(candidate)
-        return name !== '__pycache__'
-          && name !== '.pytest_cache'
-          && !name.endsWith('.pyc')
-          && !fs.lstatSync(candidate).isSymbolicLink()
-      },
-    })
   }
+  fs.mkdirSync(targetRoot, { recursive: true })
+  fs.cpSync(sourcePackage, path.join(targetRoot, 'src'), {
+    recursive: true,
+    filter: (candidate) => {
+      const name = path.basename(candidate)
+      return name !== '__pycache__'
+        && name !== '.pytest_cache'
+        && !name.endsWith('.pyc')
+        && !fs.lstatSync(candidate).isSymbolicLink()
+    },
+  })
+  fs.copyFileSync(sourceReadme, path.join(targetRoot, 'README.md'))
   prunePythonBytecode(targetRoot)
   console.log('✓ LlamaIndex collector copied to standalone')
 }
@@ -168,6 +173,7 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   const llamaIndexRuntimeFiles = [
     path.join('scripts', 'llamaindex_extension', 'src', 'agent_insight_llamaindex', '_bootstrap', 'sitecustomize.py'),
     path.join('scripts', 'llamaindex_extension', 'src', 'agent_insight_llamaindex', '__init__.py'),
+    path.join('scripts', 'llamaindex_extension', 'README.md'),
   ]
   for (const relativeFile of llamaIndexRuntimeFiles) {
     const target = path.join(standaloneDir, relativeFile)
@@ -190,5 +196,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  copyLlamaIndexCollector,
   ensureStandalonePackage,
 }
