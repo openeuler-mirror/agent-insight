@@ -39,6 +39,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'codeagent', label: 'CodeAgent' },
     { value: 'openclaw', label: 'OpenClaw' },
     { value: 'hermes', label: 'Hermes' },
+    { value: 'xiaoo', label: 'xiaoO' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },

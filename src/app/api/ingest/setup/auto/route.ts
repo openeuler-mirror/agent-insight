@@ -1277,6 +1277,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOADER=$skillInsightDir\\opencode_uploader_client.js"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\claude"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$skillInsightDir\\claude_raw_bodies"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\codeagent"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_TOOL_IO=4000"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_EVENT_STRING=20000"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',

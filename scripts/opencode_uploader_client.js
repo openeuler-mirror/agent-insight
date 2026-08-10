@@ -1278,7 +1278,6 @@ export {
   deriveFields,
   extractSessionIdFromText,
   extractTaskChildSessionId,
-  getRequestOptions,
   getSessionInfoFromEvent,
   mergeGraph,
   resolvePartField,
