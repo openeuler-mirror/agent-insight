@@ -128,7 +128,7 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
   const langfuseTraceNodes = session?.langfuseTraceNodes || [];
   const framework = useMemo(() => {
     const fromEvents = (rasEvents || [])
-      .map((event) => String(event.framework || '').trim())
+      .map((event) => String(event.platform || event.framework || '').trim())
       .find(Boolean);
     return fromEvents || undefined;
   }, [rasEvents]);

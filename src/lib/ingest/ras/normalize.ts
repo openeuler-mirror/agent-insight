@@ -5,6 +5,8 @@ export type RasEventRow = {
   deliveryId: string;
   type: string;
   taskId: string;
+  framework?: string | null;
+  platform?: string | null;
   anomalyKind: string | null;
   severity: string | null;
   summary: string | null;

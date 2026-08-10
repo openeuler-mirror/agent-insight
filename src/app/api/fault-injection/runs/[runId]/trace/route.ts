@@ -166,6 +166,8 @@ export async function GET(
       deliveryId: row.deliveryId,
       type: row.type,
       taskId: row.taskId,
+      framework: row.framework,
+      platform: row.platform,
       anomalyKind: row.anomalyKind,
       severity: row.severity,
       summary: row.summary,
