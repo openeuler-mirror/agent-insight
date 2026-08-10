@@ -214,6 +214,24 @@ Pi Adapter 匹配 `serviceName === "pi-agent"` 或
 5. 顶层 Token 对叶子 LLM 求和，避免重复累计 Agent/SubAgent 汇总；
 6. 输出 `framework="pi-agent"` 的统一 `ExecutionRecord`。
 
+### 8.1 Agent 实例命名边界
+
+`AGENT` 表示实际运行的智能体实例，而 `framework` 表示其运行框架。Pi 根 CLI 在公开事件中
+没有单独的 profile 名，因此根节点使用 `Pi`（内部 `pi-agent`）作为进程兜底。官方
+`subagent` 扩展每次按 `agent` 参数选择一个 `agents/*.md` profile，并启动一个隔离的 Pi
+子进程；该 profile 名（例如 `planner`、`reviewer`、`scout`、`worker` 或项目自定义名）就是
+子节点的实际 Agent 名。
+
+因此 Adapter 将子节点的 `agent` 和 `subagent_name` 都写为该 profile，子 Execution 的
+`agentName` 也优先采用它。`Pi` 继续保留在 `framework` 和无 profile 根节点，不能覆盖已知
+子进程名称。调用树在两个字段相同的时候只显示一次名称，避免 `worker · worker`；旧数据中
+`agent=pi-agent, subagent_name=worker` 仍显示为 `Pi · worker`，不需要迁移或删除。
+
+Agent facet 与注册同时包含根和子实例。根/子执行是否出现在列表由既有“范围”筛选决定；选中
+子 profile 并选择“子 Agent”范围时，只匹配该 profile 的子 Execution，不把其父根任务误标为
+该 Agent。本决策不增加 Prisma schema 或 API 类型，复用 `agentName`、`subagentName`、
+`isSubagent` 与 `RegisteredAgent.agentType`。
+
 ## 9. 验收与证据
 
 验收覆盖以下链路：
@@ -243,3 +261,4 @@ Pi Adapter 匹配 `serviceName === "pi-agent"` 或
 | D-005 | 客户端 canonical event + 服务端 OTLP Adapter | 复用统一摄入层 |
 | D-006 | API Key hash 隔离本地状态 | 防止多账号串数据 |
 | D-007 | 不修改 Prisma schema | 现有 `ExecutionRecord` 可表达目标数据 |
+| D-008 | Pi 子 Agent 使用真实 profile 名 | 真实运行的独立 Pi 进程应以 `planner`/`worker` 等 profile 标识；`Pi` 仅是根进程/框架兜底 |

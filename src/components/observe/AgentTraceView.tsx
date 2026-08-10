@@ -1320,10 +1320,7 @@ function UnifiedSpanTree({
                     'flex-1 ml-1.5 text-sm text-foreground truncate min-w-0',
                     depth === 0 ? 'font-semibold' : 'font-medium',
                 )}>
-                    {getAgentDisplayName(node.agentName)}
-                    {node.subagentType && (
-                        <span className="ml-1.5 text-xs text-foreground-muted font-normal">· {node.subagentType}</span>
-                    )}
+                    {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}
                     {node.parallelCallCount && node.parallelCallCount > 1 && (
                         <span className="ml-1.5 text-xs px-1 bg-background-tertiary border border-border rounded-full text-foreground-muted">
                             ×{node.parallelCallCount}
@@ -2377,10 +2374,7 @@ function HierarchicalSpanSnapshot({
                     <KindBadge kind="llm" />
                     <span className="text-sm font-semibold text-foreground">第 {snapshot.llmOrdinal} 次模型调用</span>
                     <span className="text-xs text-foreground-muted">来自 Agent</span>
-                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{getAgentDisplayName(node.agentName)}</span>
-                    {node.subagentType && (
-                        <span className="text-xs text-foreground-muted">· {node.subagentType}</span>
-                    )}
+                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     <span className="ml-auto text-xs text-foreground-muted">event #{event.interactionIndex}</span>
                 </div>
             </div>
@@ -2844,7 +2838,7 @@ function AgentDetail({
             <div style={{ padding: '0.75rem 1rem 0', flexShrink: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem' }}>
                     <span className={cn('size-2 rounded-full shrink-0', STATUS_DOT[status])} />
-                    <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>{getAgentDisplayName(node.agentName)}</h3>
+                    <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</h3>
                     {node.parallelCallCount && node.parallelCallCount > 1 && (
                         <span style={{ fontSize: '0.625rem', padding: '0.125rem 0.4375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 999, fontWeight: 500 }}>
                             ×{node.parallelCallCount} parallel
@@ -2852,7 +2846,7 @@ function AgentDetail({
                     )}
                     <div style={{ flex: 1 }} />
                     <span style={{ fontSize: '0.6875rem', color: 'var(--foreground-muted)' }}>depth: {node.depth}</span>
-                    {node.subagentType && (
+                    {node.subagentType && node.agentName.toLowerCase() !== node.subagentType.toLowerCase() && (
                         <span style={{ fontSize: '0.5625rem', padding: '0.125rem 0.4375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 4 }}>
                             {node.subagentType}
                         </span>

@@ -45,7 +45,7 @@ test("extractObservedAgentNames returns subagent_name for trace filtering", () =
   )
 })
 
-test("Codex and Pi keep delegated role names out of platform Agent registration", () => {
+test("Pi keeps the root fallback while registering a delegated profile as its own Agent", () => {
   const interactions = [
     { role: "assistant", agent: "pi-agent", content: "delegate" },
     { role: "subagent", agent: "worker", subagent_name: "worker", content: "done" },
@@ -56,14 +56,24 @@ test("Codex and Pi keep delegated role names out of platform Agent registration"
   assert.equal(getAgentDisplayName("codex"), "Codex")
   assert.equal(getAgentDisplayName("pi-agent"), "Pi")
   assert.equal(getAgentNodeDisplayLabel("pi-agent", "worker"), "Pi · worker")
+  assert.equal(getAgentNodeDisplayLabel("worker", "worker"), "worker")
   assert.equal(getAgentNodeDisplayLabel("codex", "Memory Agent"), "Codex · Memory Agent")
   assert.deepEqual(
-    extractObservedAgentRegistrations(interactions, "pi-agent", { includeSubagents: false }),
-    [{ name: "pi-agent", agentType: "main" }],
+    extractObservedAgentRegistrations(interactions, "pi-agent"),
+    [
+      { name: "pi-agent", agentType: "main" },
+      { name: "worker", agentType: "subagent" },
+    ],
   )
   assert.deepEqual(
-    extractObservedAgentNames(interactions, "pi-agent", { includeSubagents: false }),
-    ["pi-agent"],
+    extractObservedAgentNames(interactions, "pi-agent"),
+    ["pi-agent", "worker"],
+  )
+  assert.deepEqual(
+    extractObservedAgentNames([
+      { role: "subagent", agent: "worker", subagent_name: "worker" },
+    ], "worker"),
+    ["worker"],
   )
 })
 

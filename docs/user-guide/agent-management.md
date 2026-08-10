@@ -69,6 +69,11 @@ Agent 管理页负责把真实运行中的智能体纳入平台管理，是 Agen
 
 对于 Hermes trace，平台仍然是 `hermes`，主 Agent 名称会从 Hermes 当前 active profile 自动识别：profile 为 `default` 时显示为 `hermes`，其他 profile 显示其 profile 名；子 Agent 名称来自 Hermes 上报的子 Agent role/name。
 
+对于 Pi trace，平台字段固定为 `pi-agent`。根 Pi CLI 没有 profile 名时显示为 `Pi`；通过
+`subagent` 扩展启动的独立 Pi 子进程则显示其实际 profile 名，例如 `planner`、`reviewer`、
+`scout` 或 `worker`。profile 来自用户或项目的 `agents/*.md`，可新增、删除或重命名，不能
+把 `worker` 视为唯一的 Pi 子 Agent。
+
 平台字段用于标识 Agent 所依赖的运行时或执行框架。当前常见平台包括：
 
 - `opencode`

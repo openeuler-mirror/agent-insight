@@ -119,10 +119,10 @@ function ownerFields(owner: ReturnType<typeof ownerFor>): AnyObj {
   if (!owner.sessionId) return { role: 'assistant', agent: 'pi-agent' };
   return {
     role: 'subagent',
-    // `agent` is the stable platform identity used by filtering and the AGENT
-    // label. The delegated runtime name belongs only to `subagent_name`; using
-    // it for both fields renders as e.g. "workerworker" in the call tree.
-    agent: 'pi-agent',
+    // Pi's subagent extension starts a separate Pi process from this profile.
+    // Its profile is therefore the actual AGENT identity; the framework remains
+    // available independently as `pi-agent` on the execution record.
+    agent: owner.name,
     subagent_name: owner.name,
     subagent_session_id: owner.sessionId,
   };
@@ -416,7 +416,12 @@ export function aggregatePiAgentTraceEvents(
     skills: invokedSkills.map((skill) => skill.name),
     agent: 'pi-agent',
     agentName: 'pi-agent',
-    agents: ['pi-agent'],
+    agents: Array.from(new Set([
+      'pi-agent',
+      ...ordered
+        .filter((event) => semanticKind(event) === 'subagent')
+        .map(agentName),
+    ])),
     llm_call_count: llmEvents.length,
     tool_call_count: toolEvents.length,
     tool_call_error_count: toolErrors,

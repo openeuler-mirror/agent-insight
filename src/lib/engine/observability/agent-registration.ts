@@ -38,8 +38,11 @@ export function getAgentDisplayName(name: unknown): string {
  * and registration, but it remains essential context in a task tree.
  */
 export function getAgentNodeDisplayLabel(agent: unknown, subagentName?: unknown): string {
+    const rawAgent = cleanAgentName(agent);
     const displayAgent = getAgentDisplayName(agent);
     const role = cleanAgentName(subagentName);
+    if (!displayAgent) return role;
+    if (!role || rawAgent.toLowerCase() === role.toLowerCase()) return displayAgent;
     return role ? `${displayAgent} · ${role}` : displayAgent;
 }
 
@@ -71,6 +74,10 @@ export function extractObservedAgentRegistrations(
         const agent = cleanAgentName(m.agent);
 
         if (subagentName) {
+            // A projected child Execution uses its own profile as the primary
+            // Agent and repeats it in `subagent_name` for parent linkage. It is
+            // one instance, not a second Agent registration.
+            if (subagentName === primary) continue;
             if (includeSubagents) add(subagentName, 'subagent');
             continue;
         }

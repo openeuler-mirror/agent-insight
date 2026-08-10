@@ -460,7 +460,7 @@ function TracePageContent() {
     const [batchBackflowOpen, setBatchBackflowOpen] = useState(false);
     const [availableTags, setAvailableTags] = useState<TraceUserTag[]>([]);
     const [frameworks, setFrameworks] = useState<string[]>([]);
-    const [mainAgents, setMainAgents] = useState<string[]>([]);
+    const [agentNames, setAgentNames] = useState<string[]>([]);
     const importInputRef = useRef<HTMLInputElement>(null);
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
@@ -517,7 +517,7 @@ function TracePageContent() {
     useEffect(() => {
         if (!user) {
             setFrameworks([]);
-            setMainAgents([]);
+            setAgentNames([]);
             return;
         }
         Promise.all([
@@ -529,12 +529,12 @@ function TracePageContent() {
             setFrameworks(Array.isArray(frameworkRows)
                 ? (frameworkRows as FacetValueRow[]).map(item => String(item?.value || '')).filter(Boolean)
                 : []);
-            setMainAgents(Array.isArray(agentRows?.agents)
+            setAgentNames(Array.isArray(agentRows?.agents)
                 ? agentRows.agents.map((item: unknown) => String(item || '')).filter(Boolean)
                 : []);
         }).catch(() => {
             setFrameworks([]);
-            setMainAgents([]);
+            setAgentNames([]);
         });
     }, [user]);
 
@@ -880,10 +880,10 @@ function TracePageContent() {
         { value: 'all', label: t('common.all') },
         ...frameworks.map(f => ({ value: f, label: f })),
     ];
-    // 主 Agent 下拉选项(全部主 Agent + 当前工作集里出现过的每个主 Agent)。
-    const mainAgentOptions: SelectOption[] = [
-        { value: 'all', label: t('tracePage.filterMainAgentAll') },
-        ...mainAgents.map(a => ({ value: a, label: getAgentDisplayName(a) })),
+    // Agent 下拉包含根和子 Agent；“范围”决定查询哪一种独立执行。
+    const agentOptions: SelectOption[] = [
+        { value: 'all', label: t('tracePage.filterAgentAll') },
+        ...agentNames.map(a => ({ value: a, label: getAgentDisplayName(a) })),
     ];
     return (
         <>
@@ -983,10 +983,10 @@ function TracePageContent() {
                                 onChange={updateUserTagFilters}
                             />
                             <Select
-                                label={t('tracePage.filterMainAgent')}
+                                label={t('tracePage.filterAgent')}
                                 value={agentFilter}
                                 onChange={setAgentFilter}
-                                options={mainAgentOptions}
+                                options={agentOptions}
                                 active={agentFilter !== 'all'}
                             />
                             <Select

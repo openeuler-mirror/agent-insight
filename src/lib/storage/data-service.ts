@@ -26,6 +26,7 @@ import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/openco
 import {
     extractObservedAgentNames,
     extractObservedAgentRegistrations,
+    getFrameworkPrimaryAgentName,
 } from '@/lib/engine/observability/agent-registration';
 import { chooseExecutionLabel } from '@/lib/engine/evaluation/label-utils';
 import { parseLabelSkillVersionBinding } from '@/lib/engine/evaluation/label-skill-binding';
@@ -2216,6 +2217,26 @@ export function getDefaultIngestUser(): string | null {
     return v || null;
 }
 
+async function normalizeFrameworkAgentIdentityHistory(
+    framework: string | undefined,
+    user: string | null,
+    primaryAgentName: string | undefined,
+): Promise<void> {
+    if (!framework || !primaryAgentName) return;
+    const observedAgents = JSON.stringify([primaryAgentName]);
+    await prisma.execution.updateMany({
+        where: { framework, user },
+        data: { agentName: primaryAgentName, observedAgents },
+    });
+    await prisma.registeredAgent.deleteMany({
+        where: { platform: framework, user, name: { not: primaryAgentName } },
+    });
+    await prisma.registeredAgent.updateMany({
+        where: { platform: framework, user, name: primaryAgentName },
+        data: { agentType: 'main' },
+    });
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
@@ -2666,6 +2687,12 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         skillVersion: targetRecord.skill_version ?? null
     });
 
+    const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(targetRecord.framework);
+    const storedAgentName = targetRecord.agentName || frameworkPrimaryAgentName;
+    const observedAgentOptions = targetRecord.framework === 'codex'
+        ? { includeSubagents: false }
+        : undefined;
+
     let agentId: string | undefined = undefined;
     if (targetRecord.framework) {
         const platform = targetRecord.framework;
@@ -2673,7 +2700,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
         const observedAgents = extractObservedAgentRegistrations(
             mergedInteractionsForSession,
-            targetRecord.agentName,
+            storedAgentName,
+            observedAgentOptions,
         );
 
         // 并发安全 + 单点隔离：try/catch 收细到**单个 agent**，一个失败不再中断整条 trace 的其余登记
@@ -2711,7 +2739,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                     }
                 }
 
-                if (existingAgent && observed.agentType === 'main' && observed.name === targetRecord.agentName) {
+                if (existingAgent && observed.agentType === 'main' && observed.name === storedAgentName) {
                     agentId = existingAgent.id;
                 }
             } catch (e) {
@@ -2725,7 +2753,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 无需加载/解析 session interactions。与读侧 extractObservedAgentNames(interactions) 同源同口径
     // (含 opencode 'build' 等只出现在 interactions 里的 agent 名),保证 light 与 heavy 的 agents 一致、不丢数据。
     const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
-        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession))
+        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession, storedAgentName, observedAgentOptions))
         : null;
     await db.upsertExecution({
         where: { id: recordId },
@@ -2751,7 +2779,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
             label: targetRecord.label,
             user: targetRecord.user,
-            agentName: targetRecord.agentName,
+            agentName: storedAgentName,
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
@@ -2789,7 +2817,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
             label: targetRecord.label,
             user: targetRecord.user,
-            agentName: targetRecord.agentName,
+            agentName: storedAgentName,
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
@@ -2874,6 +2902,18 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             });
         } catch (e) {
             console.warn(`[Data-Service] deriveSubagentExecutions failed for parent=${recordId}:`, e);
+        }
+    }
+
+    if (frameworkPrimaryAgentName && targetRecord.framework !== 'pi-agent') {
+        try {
+            await normalizeFrameworkAgentIdentityHistory(
+                targetRecord.framework,
+                targetRecord.user || null,
+                frameworkPrimaryAgentName,
+            );
+        } catch (e) {
+            console.warn(`[Data-Service] normalize framework agent identity failed framework=${targetRecord.framework}:`, e);
         }
     }
 
@@ -3222,12 +3262,17 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
 
         const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
         const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
+        const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(parentFramework);
+        const storedAgentName = node.agentName || frameworkPrimaryAgentName || null;
+        const observedAgentOptions = parentFramework === 'codex'
+            ? { includeSubagents: false }
+            : undefined;
 
         const baseFields = {
             taskId: sessionId,
             framework: parentFramework,
             timestamp,
-            agentName: node.agentName ?? null,
+            agentName: storedAgentName,
             user: parentUser ?? null,
             query: queryText,
             finalResult: projection.finalResult,
@@ -3251,7 +3296,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             subagentName: node.agentName ?? null,
             isSubagent: true,
             // 子 agent 行也 denormalize observedAgents,保证 includeSubagents 的轻量列表 agents 一致。
-            observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions)),
+            observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions, storedAgentName, observedAgentOptions)),
         } as const;
 
         try {

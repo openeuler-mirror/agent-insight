@@ -74,12 +74,14 @@ Pi Agent 是通用 traces 之外的第一方专用路径：Extension 将事件�
 `agent.insight.kind` 恢复 Agent、SubAgent、Skill、LLM、Tool 和 MCP，随后转交统一
 `buildAgentCallTree` 与 `deriveSubagentExecutions`；Pi 的上传失败不会阻塞 Hook 事件路径。
 
-Codex 与 Pi 的 `default`、`worker` 等是一次委派的子任务角色名，而不是独立的平台
-Agent 身份。二者的根/子 `Execution.agentName`、`observedAgents` 和 `RegisteredAgent`
-均归一为 `codex` 或 `pi-agent`（界面展示 Codex/Pi）；角色名只保留在
-`Execution.subagentName` 和 interaction 的 `subagent_name`，供链路树、详情与子任务筛选
-使用。每次写入这两个框架的 trace 时，存储层会对同一用户/平台的历史记录做幂等归一，
-清除遗留的角色名注册；其他框架继续沿用多 Agent 注册语义。
+Codex 的 `default`、`Memory Agent` 等仍是委派角色，根/子 `Execution.agentName`、
+`observedAgents` 和 `RegisteredAgent` 归一为 `codex`（界面展示 Codex）。Pi 的语义不同：
+它的 `subagent` 扩展按 `agents/*.md` profile 启动独立 Pi 子进程，因此 `planner`、`reviewer`、
+`scout`、`worker` 或项目自定义 profile 是子 Execution 的实际 `agentName`，并以
+`RegisteredAgent.agentType=subagent` 登记；`pi-agent` 只用于框架和无 profile 的根 CLI。
+interaction 的 `subagent_name` 继续承载父子匹配，且与实际 profile 相同时不得重复登记。
+存储层不再对 Pi 做跨历史的框架身份覆盖，以免写入后抹掉子进程身份；其他框架保持各自
+的既有归一化策略。
 
 ```mermaid
 flowchart TD

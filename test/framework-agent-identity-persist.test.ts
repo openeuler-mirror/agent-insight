@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { saveExecutionRecord } from '@/lib/storage/data-service';
+import { listObservedAgentNames, saveExecutionRecord } from '@/lib/storage/data-service';
 import { prismaRaw } from '@/lib/storage/prisma';
 
-test('Pi persists delegated work under the Pi Agent identity', async () => {
+test('Pi persists delegated work under the real child profile identity', async () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const user = `test-agent-identity-${suffix}`;
   const rootId = `test-pi-agent-identity-${suffix}`;
@@ -20,7 +20,7 @@ test('Pi persists delegated work under the Pi Agent identity', async () => {
       task_id: rootId,
       framework: 'pi-agent',
       user,
-      agentName: 'worker',
+      agentName: 'pi-agent',
       interactions: [
         { role: 'user', agent: 'pi-agent', content: 'delegate', timestamp },
         {
@@ -61,11 +61,18 @@ test('Pi persists delegated work under the Pi Agent identity', async () => {
       select: { name: true, agentType: true },
     });
 
-    assert.deepEqual(root, { agentName: 'pi-agent', observedAgents: '["pi-agent"]' });
+    assert.deepEqual(root, { agentName: 'pi-agent', observedAgents: '["pi-agent","worker"]' });
     assert.deepEqual(child, {
-      agentName: 'pi-agent', observedAgents: '["pi-agent"]', subagentName: 'worker',
+      agentName: 'worker', observedAgents: '["worker"]', subagentName: 'worker',
     });
-    assert.deepEqual(registrations, [{ name: 'pi-agent', agentType: 'main' }]);
+    assert.deepEqual(
+      registrations.sort((a, b) => a.name.localeCompare(b.name)),
+      [
+        { name: 'pi-agent', agentType: 'main' },
+        { name: 'worker', agentType: 'subagent' },
+      ],
+    );
+    assert.deepEqual((await listObservedAgentNames(user)).sort(), ['pi-agent', 'worker']);
   } finally {
     await prismaRaw.execution.deleteMany({ where: { user, framework: 'pi-agent' } });
     await prismaRaw.registeredAgent.deleteMany({ where: { user, platform: 'pi-agent' } });
