@@ -155,6 +155,64 @@ def apply_assistant_text_rewrite(
     return text, {"applied": False, "op": None}
 
 
+def apply_assistant_tool_call_rewrite(
+    plan: list[dict[str, Any]] | tuple[InjectionStep, ...],
+    *,
+    tool: str,
+    call_index: int,
+    arguments: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply first matching assistant.tool_call.replace_argument step."""
+
+    for step in plan_as_dicts(plan):
+        op = str(step.get("op") or "")
+        if op != "assistant.tool_call.replace_argument":
+            continue
+        when = step.get("when") if isinstance(step.get("when"), dict) else {}
+        if not _when_matches(when, tool=tool, call_index=call_index):
+            continue
+        args = step.get("args") if isinstance(step.get("args"), dict) else {}
+        path = args.get("path")
+        if not isinstance(path, str) or not path.strip():
+            continue
+        if "from" not in args or "to" not in args:
+            continue
+        parts = [part for part in path.split(".") if part]
+        if not parts or any(
+            part in {"__proto__", "prototype", "constructor"} for part in parts
+        ):
+            continue
+        rewritten = json.loads(json.dumps(arguments))
+        parent: dict[str, Any] = rewritten
+        valid = True
+        for part in parts[:-1]:
+            child = parent.get(part)
+            if not isinstance(child, dict):
+                valid = False
+                break
+            parent = child
+        if not valid:
+            continue
+        leaf = parts[-1]
+        if leaf not in parent:
+            continue
+        before = parent[leaf]
+        if before != args["from"] or before == args["to"]:
+            continue
+        parent[leaf] = args["to"]
+        return rewritten, {
+            "applied": True,
+            "op": op,
+            "kind": "assistant_tool_call",
+            "tool": tool,
+            "call_index": call_index,
+            "argument_path": ".".join(parts),
+            "from": args["from"],
+            "to": args["to"],
+        }
+    return arguments, {"applied": False, "op": None}
+
+
 def apply_messages_rewrite(
     plan: list[dict[str, Any]] | tuple[InjectionStep, ...],
     *,

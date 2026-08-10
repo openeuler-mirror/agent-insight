@@ -11,21 +11,22 @@
 | 目录名 (`--fault`) | frontmatter `name` (`skill_name`) | 子模式 (id → 名称) | 关联检测 / 主题 | 示例配置 | 设计文档 |
 |-|-|-|-|-|-|
 | `analysis-paralysis` | `analysis-paralysis` | 1 → 分析瘫痪长文注入 | 过度思考 / Analysis Paralysis | Insight FI 任务表单 | [analysis-paralysis](../../agent-ras/designs/features/analysis-paralysis.md) |
-| `planning-logic-error` | `ras-planning-logic-error` | 1 → 依赖颠倒；2 → 环依赖；3 → 步骤缺失 | Planning Logic Error（规划逻辑错误） | Insight FI 任务表单 | [planning-error](../../agent-ras/designs/features/planning-error.md) |
 | `thinking-dead-loop` | `thinking-dead-loop` | 1 → 字面重复死循环；2 → 逻辑死循环；3 → 计划-执行死循环 | Thinking 死循环 | — | 与 analysis-paralysis 边界见 Skill 正文 |
 | `tool_repeat_dead_loop` | `tool_repeat_dead_loop` | 1–4 → generic / unknown / global / ping_pong | 工具重复死循环 | — | — |
-| `tool-selection-error` | `ras-tool-selection-error` | 见 Skill 场景一 / 场景二 | 工具选择错误 | — | — |
+| `ras-early-stop` | `ras-early-stop` | A → 基础产物 | 分阶段交付 / 早停相关流水线 | — | — |
 | `step-omission` | `ras-step-omission` | 1 → beta 文件遗漏 | 计划正确、执行跳步 | Insight FI 任务表单 | Planning 边界：执行偏离 |
 | `step-order-error` | `ras-step-order-error` | 1 → beta 先于 alpha | 计划正确、执行错序 | — | 同上；对比 planning-logic-error |
-| `ras-early-stop` | `ras-early-stop` | A → 基础产物 | 分阶段交付 / 早停相关流水线 | — | — |
+| `tool-selection-error` | `ras-tool-selection-error` | 见 Skill 场景一 / 场景二 | 工具选择错误 | — | — |
+| `skill-selection-conflict` | `ras-skill-selection-conflict` | 1 → 代码审查语义诱饵 | Skill 选择冲突（`assistant.tool_call.replace_argument`） | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
+| `tool-argument-error` | `ras-tool-argument-error` | 1 → 文件名参数替换 | 工具参数错误（intercept_rewrite） | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
+| `planning-logic-error` | `ras-planning-logic-error` | 1 → 依赖颠倒；2 → 环依赖；3 → 步骤缺失；4 → 规划约束冲突 | Planning Logic Error | Insight FI 任务表单 | [planning-error](../../agent-ras/designs/features/planning-error.md) |
 | `unverified-success` | `ras-two-condition-test` | —（协议型，无子模式表） | 未经验证的成功；可选 `fault.json` + tools + 权威 verifier | — | — |
 | `execution-goal-drift` | `ras-routing-continuity-test` | 1 → 跨阶段批次连续性 | 执行目标漂移；可选 `fault.json` + tools + 权威 verifier | — | — |
-| `memory-noise-interference` | `ras-memory-noise-interference` | 1–3 → 无关历史 / 冲突事实 / 错误响应 | 记忆噪声干扰 | — | [memory-noise-interference](../../agent-ras/designs/features/memory-noise-interference.md) |
+| `memory-noise-interference` | `ras-memory-noise-interference` | 1–3 → 无关历史 / 冲突事实 / 错误响应；4 → 会话记忆虚假先验 | 记忆噪声干扰 | Insight FI 任务表单 | [memory-noise-interference](../../agent-ras/designs/features/memory-noise-interference.md) |
 | `memory-file-loss` | `ras-memory-file-loss` | 1 → 删除全文；2 → 删除约束段 | 记忆文件丢失（文件篡改） | Insight FI 任务表单 | [memory-file-loss](../../agent-ras/designs/features/memory-file-loss.md) |
-| `tool-result-corruption` | `ras-tool-result-corruption` | — | 工具结果篡改 | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
-| `prompt-system-override` | `ras-prompt-system-override` | — | 提示词修改（system 覆盖） | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
-| `interception-history-inject` | `ras-interception-history-inject` | — | 拦截改写（历史注入） | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
-| `interception-assistant-corruption` | `ras-interception-assistant-corruption` | — | 拦截改写（助手文本） | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
+| `tool-observation-delta` | `ras-tool-observation-delta` | 1 → 工具观测似真偏移 | 工具噪声干扰 | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
+| `intermediate-conclusion-drift` | `ras-intermediate-conclusion-drift` | 1 → 中间结论漂移 | 推理错误 / 中间结论漂移 | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
+| `compositional-implicit-intent` | `ras-compositional-implicit-intent` | 1 → 配置外泄 | 组合式隐含意图（Skill 组合涌现） | Insight FI 任务表单 | — |
 
 ## 尚未落地（仅有检测/注入设计）
 
@@ -33,19 +34,23 @@
 |------|------|----------|
 | 领域认知偏差 Domain Cognitive Bias | [domain-cognitive-bias](../../agent-ras/designs/features/domain-cognitive-bias.md) | **无**对应 Skill；FI 仍为 Phase1 方案 |
 | 记忆损坏/投毒 / 会话历史裁剪 | [memory-file-loss](../../agent-ras/designs/features/memory-file-loss.md) | `memory-file-loss` 已落地（FI-P0 文件层）；corruption / poison / history-loss / compacting 未落地 |
-| 记忆噪声 S4 压缩失真 | [memory-noise-interference](../../agent-ras/designs/features/memory-noise-interference.md) | S1–S3 已落地；**S4 未实施**（需 middleware） |
-| Planning 其余子类（constraint_ignorance 等） | [planning-error](../../agent-ras/designs/features/planning-error.md) | FI-P0 仅 `planning-logic-error`；其余见 FI-P1+ |
+| 记忆噪声压缩失真 | [memory-noise-interference](../../agent-ras/designs/features/memory-noise-interference.md) | S1–S4 已落地（S4=假先验 middleware）；**S5 压缩失真未实施** |
+| Planning 其余子类（constraint_ignorance 等） | [planning-error](../../agent-ras/designs/features/planning-error.md) | `planning-logic-error` 含 S1–S3 结构错 + S4 约束冲突；其余见 FI-P1+ |
+| 工具超时歧义 / 限流 / 权限拒绝 / MCP 挂起 | [runtime FI](runtime-middleware-fault-injection.md) | 需新 runtime op；本轮未落地 |
 
 ## 评判边界
 
 本仓隔离 Judge 对照 **Skill 规范 ↔ 实际轨迹**，输出四元组（见 [server-judge.md](modules/server-judge.md)）。  
 这**不等于** agent-insight / `agent_ras` 检测器是否报警；检测器对齐需另接 RAS 观测链路。
 
+TOKEN 探针（旧 `tool-result-corruption` / `prompt-system-override` / `interception-*`）已迁至 [`tests/fixtures/injection-smoke/`](../../../agent_fault_injection/tests/fixtures/injection-smoke/)，**不**出现在 `fault list`。
+
 ## 修订记录
 
 | 日期 | 说明 |
 |------|------|
-| 2026-08-05 | Insight 吸纳：证据边界 / inconclusive；链接改挂 agent-ras features
+| 2026-08-10 | 吸纳独立仓：业务语义四故障 + memory/planning S4；`assistant.tool_call.replace_argument`；TOKEN 探针下沉 smoke |
+| 2026-08-05 | Insight 吸纳：证据边界 / inconclusive；链接改挂 agent-ras features |
 | 2026-08-04 | 注入方式意译六 key（无旧版兼容）；落地 prompt / intercept 示例故障 |
 | 2026-08-04 | 落地 `tool-result-corruption`（L3 中间件 tool_result 改写） |
 | 2026-08-04 | 落地 `memory-file-loss`（文件结构注入）；脚本迁至 `skills/*/scripts/` |

@@ -1,8 +1,8 @@
 {
-  "name": "interception-assistant-corruption",
+  "name": "assistant-corruption-token",
   "skill_name": "ras-interception-assistant-corruption",
   "category": "intercept_rewrite",
-  "description": "拦截改写：将助手回复中的 RAS_ASSIST_OK 替换为 RAS_ASSIST_FAULT。",
+  "description": "[smoke] assistant.replace_text 挂点探针：RAS_ASSIST_OK→FAULT。非产品故障。",
   "injection_method": "intercept_rewrite",
   "injection": {
     "runtime": [

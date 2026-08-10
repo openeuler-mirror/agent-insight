@@ -28,7 +28,7 @@ from ...pipeline.models import (
 )
 from ...pipeline.monitor import ProcessMonitor
 from ..base import PlatformAdapter
-from ..lifecycle import AdapterRunContext, strip_ras_detector_env
+from ..lifecycle import AdapterRunContext, should_expose_fault_skill, strip_ras_detector_env
 from .mapper import OpenCodeTrajectoryMapper
 
 
@@ -308,7 +308,8 @@ class OpenCodeAdapter(PlatformAdapter):
         )
         lib_dest = workspace / ".opencode" / "lib" / "rewrite-runtime.ts"
         installation.install_file(plugin_source, plugin_dest, overwrite=True)
-        installation.install_file(fault.skill_file, skill_dest, overwrite=True)
+        if should_expose_fault_skill(fault):
+            installation.install_file(fault.skill_file, skill_dest, overwrite=True)
 
         rewrite_runtime = (
             Path(__file__).resolve().parent / "lib" / "rewrite-runtime.ts"

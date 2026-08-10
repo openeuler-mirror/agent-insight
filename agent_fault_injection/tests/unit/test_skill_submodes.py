@@ -22,8 +22,9 @@ class SkillSubmodeParseTests(TestCase):
         fault = FaultRegistry().get("planning-logic-error")
         submodes = parse_skill_submodes(fault.skill_file)
 
-        self.assertEqual([item["id"] for item in submodes], ["1", "2", "3"])
+        self.assertEqual([item["id"] for item in submodes], ["1", "2", "3", "4"])
         self.assertEqual(submodes[0]["name"], "依赖颠倒")
+        self.assertEqual(submodes[3]["name"], "规划约束冲突")
         self.assertEqual(submodes[1]["name"], "环依赖")
         self.assertEqual(submodes[2]["name"], "步骤缺失")
         self.assertIn("依赖方向写反", submodes[0]["description"])
@@ -34,14 +35,15 @@ class SkillSubmodeParseTests(TestCase):
         fault = FaultRegistry().get("memory-noise-interference")
         submodes = parse_skill_submodes(fault.skill_file)
 
-        self.assertEqual([item["id"] for item in submodes], ["1", "2", "3"])
+        self.assertEqual([item["id"] for item in submodes], ["1", "2", "3", "4"])
         self.assertEqual(submodes[0]["name"], "无关历史噪声")
         self.assertEqual(submodes[1]["name"], "冲突事实噪声")
         self.assertEqual(submodes[2]["name"], "错误响应噪声")
+        self.assertEqual(submodes[3]["name"], "会话记忆虚假先验")
         self.assertIn("会议室", submodes[0]["description"])
         self.assertIn("汇率", submodes[1]["description"])
         self.assertIn("HTTP", submodes[2]["description"])
-        self.assertFalse(any(item["id"] == "4" for item in submodes))
+        self.assertIn("改签", submodes[3]["description"])
 
     def test_parses_tool_repeat_overview_table(self) -> None:
         fault = FaultRegistry().get("tool_repeat_dead_loop")

@@ -124,6 +124,7 @@ def build_fi_injection_env(
         fault.injection_runtime,
         submode,
     )
+    expose = should_expose_fault_skill(fault)
     return {
         "AGENT_FI_RUN_ID": artifacts.run_id,
         "AGENT_FI_FAULT_SKILL": fault.skill_name,
@@ -133,7 +134,19 @@ def build_fi_injection_env(
         "AGENT_FI_INJECTION_ARTIFACTS": str(
             (artifacts.resolved_fault_dir / "injection").resolve()
         ),
+        "AGENT_FI_EXPOSE_FAULT_SKILL": "1" if expose else "0",
     }
+
+
+def should_expose_fault_skill(fault: FaultDefinition) -> bool:
+    """Hide framework-side tool-call rewrites or hidden eval specs from the Agent."""
+
+    if not fault.expose_skill_to_agent:
+        return False
+    return not any(
+        step.op.startswith("assistant.tool_call.")
+        for step in fault.injection_runtime
+    )
 
 
 def mark_preparing(ctx: AdapterRunContext) -> None:

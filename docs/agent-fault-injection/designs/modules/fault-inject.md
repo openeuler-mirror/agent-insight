@@ -2,11 +2,11 @@
 
 | method | 机制 | 示例 |
 |--------|------|------|
-| `skill_inject` | 装 Skill + prompt | step-omission 等 |
+| `skill_inject` | 装 Skill + prompt | step-omission / compositional-implicit-intent 等 |
 | `file_tamper` | `fault_inject/injection` file ops（`apply_plan`） | memory-file-loss |
-| `prompt_modify` | runtime `system.append`（`rewrite_engine`） | prompt-system-override |
-| `tool_result_tamper` | runtime tool output 改写 | tool-result-corruption |
-| `intercept_rewrite` | messages/assistant 改写 | interception-* |
+| `prompt_modify` | runtime `system.append`（`rewrite_engine`） | planning-logic-error@4 |
+| `tool_result_tamper` | runtime tool output 改写 | tool-observation-delta |
+| `intercept_rewrite` | messages/assistant/tool_call 改写 | intermediate-conclusion-drift / skill-selection-conflict |
 
 分层：`fault_inject/injection/` 只做副作用（返回结构化结果 / 平台事件）；`fault_inject/catalog/` 的 `fault.json` 定义 plan；`apply_plan` / `runtime_env` 为薄胶水。展示元数据在 `SKILL.md` 的 `metadata`；method 中文名在 `capability_api.yaml`。见 [fault-mode-plugins.md](../features/fault-mode-plugins.md)。
 

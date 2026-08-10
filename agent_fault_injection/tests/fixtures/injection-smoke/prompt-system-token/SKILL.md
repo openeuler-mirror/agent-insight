@@ -1,11 +1,8 @@
 ---
 name: ras-prompt-system-override
-description: 提示词修改故障注入 — system 可能含 HARD OVERRIDE。 当用户要求执行提示词修改、prompt override、system
-  注入时触发。
-metadata:
-  label_zh: 提示词修改（System 覆盖）
-  label_en: prompt-system-override
-  order: 140
+description: >-
+  提示词修改故障注入 — system 可能含 HARD OVERRIDE。
+  当用户要求执行提示词修改、prompt override、system 注入时触发。
 ---
 
 # 提示词修改（System Override）故障注入

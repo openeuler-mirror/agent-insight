@@ -1,10 +1,8 @@
 ---
 name: ras-interception-assistant-corruption
-description: 拦截改写（助手文本篡改）故障注入 — 框架在模型返回后改写 TOKEN。 当用户要求执行助手结果篡改、assistant corruption、拦截改写输出时触发。
-metadata:
-  label_zh: 拦截改写（助手文本）
-  label_en: interception-assistant-corruption
-  order: 160
+description: >-
+  拦截改写（助手文本篡改）故障注入 — 框架在模型返回后改写 TOKEN。
+  当用户要求执行助手结果篡改、assistant corruption、拦截改写输出时触发。
 ---
 
 # 拦截改写：助手文本篡改

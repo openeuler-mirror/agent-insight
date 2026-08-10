@@ -31,6 +31,7 @@
 | System / Prompt | `experimental.chat.system.transform` | `*.Chat.system.transform`（或 `--system` 回退） |
 | Messages | `experimental.chat.messages.transform` | `*.Llm.complete.pre` |
 | Assistant 文本 | `experimental.text.complete` / `chat.message` | `*.Llm.complete.post` |
+| Assistant tool call 参数 | provider `fetch` 拦截（JSON/SSE） | **未对称落地**（OpenCode 优先） |
 | Tool 结果 | `tool.execute.after` | `*.Tool.*.post` |
 
 ## 3. 配方与示例
@@ -39,10 +40,11 @@
 
 | method | 示例故障 | 主要 op |
 |--------|----------|---------|
-| `tool_result_tamper` | `tool-result-corruption` | `tool_result.replace_text` |
-| `prompt_modify` | `prompt-system-override` | `system.append` |
-| `intercept_rewrite` | `interception-history-inject` | `messages.inject` |
-| `intercept_rewrite` | `interception-assistant-corruption` | `assistant.replace_text` |
+| `tool_result_tamper` | `tool-observation-delta`（业务）；smoke `tool-result-token` | `tool_result.replace_text` |
+| `prompt_modify` | `planning-logic-error`@4；smoke `prompt-system-token` | `system.append` |
+| `intercept_rewrite` | `memory-noise-interference`@4；smoke `history-inject-token` | `messages.inject` |
+| `intercept_rewrite` | `intermediate-conclusion-drift`；smoke `assistant-corruption-token` | `assistant.replace_text` |
+| `intercept_rewrite` | `skill-selection-conflict` / `tool-argument-error` | `assistant.tool_call.replace_argument` |
 
 配置示例由 Insight FI 任务表单 / 实验 YAML 提供（不再维护包内 `configs/*` 示例目录）。
 
@@ -62,6 +64,7 @@
 
 | 日期 | 说明 |
 |------|------|
+| 2026-08-10 | 吸纳独立仓业务语义故障；新增 `assistant.tool_call.replace_argument`；TOKEN 探针下沉 smoke |
 | 2026-08-10 | `injectionEvidence` 从 collect 协议移除；对外注入方式统一为五类（`route_manipulate` 已废） |
 | 2026-08-05 | 边界重划：injection 仅能力；不写自证快照；Judge 看轨迹/终答 |
 | 2026-08-06 | `injectionEvidence` 产品字段废弃（曾固定 `{}`）；本机 Judge / evaluation.py 删除；包目录归位 pipeline + catalog/injection |

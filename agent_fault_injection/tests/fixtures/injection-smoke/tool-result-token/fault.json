@@ -1,8 +1,8 @@
 {
-  "name": "tool-result-corruption",
+  "name": "tool-result-token",
   "skill_name": "ras-tool-result-corruption",
   "category": "tool_result_tamper",
-  "description": "工具结果篡改：运行时将一次读工具输出中的 RAS_TOOL_OK 替换为 RAS_TOOL_FAULT。",
+  "description": "[smoke] 工具结果篡改挂点探针：RAS_TOOL_OK→RAS_TOOL_FAULT。非产品故障。",
   "injection_method": "tool_result_tamper",
   "injection": {
     "steps": [

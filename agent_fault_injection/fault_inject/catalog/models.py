@@ -37,6 +37,7 @@ class FaultDefinition:
     injection_plan: tuple[InjectionStep, ...] = ()
     injection_runtime: tuple[InjectionStep, ...] = ()
     assets_dir: Path | None = None
+    expose_skill_to_agent: bool = True
 
 
 @dataclass(frozen=True, slots=True)

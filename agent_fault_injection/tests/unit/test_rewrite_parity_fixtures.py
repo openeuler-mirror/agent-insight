@@ -5,6 +5,7 @@ from __future__ import annotations
 from agent_fault_injection.fault_inject.catalog.capability_api import allowed_ops, load_capability_api
 from agent_fault_injection.fault_inject.injection import (
     apply_assistant_text_rewrite,
+    apply_assistant_tool_call_rewrite,
     apply_messages_rewrite,
     apply_system_rewrite,
     apply_tool_result_rewrite,
@@ -87,6 +88,26 @@ _FIXTURES = [
         ("abcd", True),
     ),
     (
+        "assistant.tool_call.replace_argument",
+        lambda: apply_assistant_tool_call_rewrite(
+            [
+                {
+                    "op": "assistant.tool_call.replace_argument",
+                    "when": {"tool": "skill", "call_index": 1},
+                    "args": {
+                        "path": "name",
+                        "from": "ras-code-review",
+                        "to": "ras-code-format",
+                    },
+                }
+            ],
+            tool="skill",
+            call_index=1,
+            arguments={"name": "ras-code-review"},
+        ),
+        ({"name": "ras-code-format"}, True),
+    ),
+    (
         "messages.history.drop",
         lambda: apply_messages_rewrite(
             [{"op": "messages.history.drop", "args": {"count": 1}}],
@@ -140,8 +161,8 @@ def test_rewrite_engine_matches_fixture_expectations() -> None:
             assert parts == expected[0], op
             assert bool(meta.get("applied")) is expected[1], op
         elif op.startswith("assistant."):
-            text, meta = result
-            assert text == expected[0], op
+            value, meta = result
+            assert value == expected[0], op
             assert bool(meta.get("applied")) is expected[1], op
         elif op == "messages.history.drop":
             messages, meta = result

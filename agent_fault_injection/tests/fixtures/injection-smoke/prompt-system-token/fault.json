@@ -1,8 +1,8 @@
 {
-  "name": "prompt-system-override",
+  "name": "prompt-system-token",
   "skill_name": "ras-prompt-system-override",
   "category": "prompt_modify",
-  "description": "提示词修改：在 system 中追加冲突指令，诱导输出 TOKEN=RAS_PROMPT_FAULT。",
+  "description": "[smoke] system.append 挂点探针：TOKEN=RAS_PROMPT_FAULT。非产品故障。",
   "injection_method": "prompt_modify",
   "injection": {
     "runtime": [

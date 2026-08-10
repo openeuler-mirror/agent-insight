@@ -33,7 +33,12 @@ from ...pipeline.models import (
 )
 from ...pipeline.monitor import ProcessMonitor
 from ..base import PlatformAdapter
-from ..lifecycle import AdapterRunContext, build_fi_injection_env, strip_ras_detector_env
+from ..lifecycle import (
+    AdapterRunContext,
+    build_fi_injection_env,
+    should_expose_fault_skill,
+    strip_ras_detector_env,
+)
 from .catalog import list_xiaoo_agents, list_xiaoo_models
 from .config_overlay import load_user_llm_config, prepare_overlay
 from .mapper import XiaoOTrajectoryMapper
@@ -749,6 +754,8 @@ class XiaoOAdapter(PlatformAdapter):
         fault: FaultDefinition,
         workspace: Path,
     ) -> None:
+        if not should_expose_fault_skill(fault):
+            return
         destination = (
             workspace / ".xiaoo" / "skills" / fault.skill_name / "SKILL.md"
         )

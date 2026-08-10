@@ -1,8 +1,8 @@
 {
-  "name": "interception-history-inject",
+  "name": "history-inject-token",
   "skill_name": "ras-interception-history-inject",
   "category": "intercept_rewrite",
-  "description": "拦截改写：向 LLM 请求 messages 注入伪造历史，污染 TOKEN 结论。",
+  "description": "[smoke] messages.inject 挂点探针：TOKEN=RAS_HIST_FAULT。非产品故障。",
   "injection_method": "intercept_rewrite",
   "injection": {
     "runtime": [

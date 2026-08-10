@@ -41,6 +41,7 @@ runtime_ops:
   - messages.inject
   - assistant.replace_text
   - assistant.truncate
+  - assistant.tool_call.replace_argument
 ```
 
 ---
@@ -156,12 +157,12 @@ python -m agent_fault_injection.cli fault add \
 
 ### 3.2 运行时改写
 
-**System 追加** — [`prompt-system-override`](../../../agent_fault_injection/fault_inject/skills/prompt-system-override/fault.json)：
+**System 追加** — 产品示例见 [`planning-logic-error`](../../../agent_fault_injection/fault_inject/skills/planning-logic-error/fault.json) S4；TOKEN 探针见 [`tests/fixtures/injection-smoke/prompt-system-token`](../../../agent_fault_injection/tests/fixtures/injection-smoke/prompt-system-token/fault.json)：
 
 ```json
 {
-  "name": "prompt-system-override",
-  "skill_name": "ras-prompt-system-override",
+  "name": "prompt-system-token",
+  "skill_name": "ras-prompt-system-token",
   "injection_method": "prompt_modify",
   "injection": {
     "runtime": [
@@ -171,9 +172,11 @@ python -m agent_fault_injection.cli fault add \
 }
 ```
 
-**工具结果篡改** — [`tool-result-corruption`](../../../agent_fault_injection/fault_inject/skills/tool-result-corruption/fault.json)：先 `file.write` 探针，再 `tool_result.replace_text`。
+**工具结果篡改** — 产品示例 [`tool-observation-delta`](../../../agent_fault_injection/fault_inject/skills/tool-observation-delta/fault.json)；探针 [`tool-result-token`](../../../agent_fault_injection/tests/fixtures/injection-smoke/tool-result-token/fault.json)：先 `file.write`，再 `tool_result.replace_text`。
 
-**历史注入** — [`interception-history-inject`](../../../agent_fault_injection/fault_inject/skills/interception-history-inject/fault.json)：`messages.inject`。
+**历史注入** — 产品示例 [`memory-noise-interference`](../../../agent_fault_injection/fault_inject/skills/memory-noise-interference/fault.json) S4；探针 [`history-inject-token`](../../../agent_fault_injection/tests/fixtures/injection-smoke/history-inject-token/fault.json)：`messages.inject`。
+
+**工具调用参数改写** — [`skill-selection-conflict`](../../../agent_fault_injection/fault_inject/skills/skill-selection-conflict/fault.json) / [`tool-argument-error`](../../../agent_fault_injection/fault_inject/skills/tool-argument-error/fault.json)：`assistant.tool_call.replace_argument`（OpenCode provider fetch 拦截；Lane B 已落地）。
 
 规则：
 
@@ -236,7 +239,7 @@ Insight 侧：Worker 在线 → 新建任务选到该故障 → Run 详情看注
 SKILL.md 被装到平台 skills/
 composeFaultPrompt →「使用 <skill>，执行<场景>」
 fault.json.steps → Agent 启动前改文件
-fault.json.runtime → AGENT_RAS_INJECTION_RUNTIME → plugin/hooker 改写
+fault.json.runtime → AGENT_FI_INJECTION_RUNTIME → plugin/hooker 改写
 Judge → 只看轨迹/终答 vs Skill 规范（不用按故障名写分支）
 ```
 
@@ -259,4 +262,6 @@ Judge → 只看轨迹/终答 vs Skill 规范（不用按故障名写分支）
 
 1. **纯剧本**：复制 `step-omission` → 改场景与产物约定。
 2. **文件层**：复制 `memory-file-loss` → 换 `assets/` + steps。
-3. **runtime**：复制 `prompt-system-override` / `tool-result-corruption` / `interception-history-inject` → 换 op 参数与可观测 TOKEN。
+3. **runtime 业务故事**：复制 `tool-observation-delta` / `intermediate-conclusion-drift` / `memory-noise-interference` S4 → 换 op 参数与终答探针。
+4. **runtime TOKEN 探针**：复制 `tests/fixtures/injection-smoke/*-token` → 仅用于注入链路冒烟，勿放回产品 `skills/`。
+5. **工具参数改写**：复制 `skill-selection-conflict` / `tool-argument-error` → 换 `when`/`args`（依赖 `assistant.tool_call.replace_argument`）。

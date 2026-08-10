@@ -11,6 +11,13 @@ import {
   applyToolResultRewrite,
   messageRole,
 } from "../lib/rewrite-runtime"
+import {
+  AGENT_FI_CONTEXT_HEADER,
+  applyAssistantToolCallRewrite,
+  hasAssistantToolCallRewrite,
+  providerRequestToolNames,
+  rewriteProviderResponse,
+} from "../lib/provider-tool-call-rewrite"
 
 type JsonValue =
   | null
@@ -132,6 +139,8 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
   const faultSkill = process.env.AGENT_FI_FAULT_SKILL
   const rawDirectory = process.env.AGENT_FI_RAW_DIR
   const runtimePlan = parseRuntimePlan(process.env.AGENT_FI_INJECTION_RUNTIME)
+  const hiddenAssistantToolCallRewrite = hasAssistantToolCallRewrite(runtimePlan)
+  const hiddenFaultSkill = process.env.AGENT_FI_EXPOSE_FAULT_SKILL === "0"
 
   // The plugin can remain installed without affecting normal OpenCode usage.
   if (!runID || !faultSkill || !rawDirectory) {
@@ -146,6 +155,10 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
     rawDirectory,
     "runtime-assistant-call-counts.json",
   )
+  const assistantToolCountsFile = path.join(
+    rawDirectory,
+    "runtime-assistant-tool-call-counts.json",
+  )
 
   await mkdir(rawDirectory, { recursive: true })
 
@@ -156,6 +169,8 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
   let orderCallCount = 0
   const toolCallCounts = new Map<string, number>()
   const assistantCallCounts = new Map<string, number>()
+  const assistantToolCallCounts = new Map<string, number>()
+  let wrappedProviderCount = 0
 
   const loadCallCounts = async (
     file: string,
@@ -200,6 +215,13 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
 
   const nextAssistantCallIndex = async (): Promise<number> =>
     nextIndexedCall(assistantCountsFile, assistantCallCounts, "assistant")
+
+  const nextAssistantToolCallIndex = async (toolName: string): Promise<number> =>
+    nextIndexedCall(
+      assistantToolCountsFile,
+      assistantToolCallCounts,
+      toolName,
+    )
 
   const record = (kind: string, payload: unknown): Promise<void> => {
     const row = `${JSON.stringify({
@@ -374,7 +396,12 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
     output: Record<string, unknown>,
     sessionID?: string,
   ): Promise<boolean> => {
-    if (!runtimePlan.some((step) => String(step.op || "").startsWith("assistant."))) {
+    if (
+      !runtimePlan.some((step) => {
+        const op = String(step.op || "")
+        return op === "assistant.replace_text" || op === "assistant.truncate"
+      })
+    ) {
       return false
     }
 
@@ -433,7 +460,181 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
     return true
   }
 
+  const encodeRequestContext = (sessionID: string): string =>
+    Buffer.from(JSON.stringify({ runID, sessionID }), "utf8").toString("base64url")
+
+  const decodeRequestContext = (
+    value: string | null,
+  ): { runID: string; sessionID: string } | undefined => {
+    if (!value) {
+      return undefined
+    }
+    try {
+      const parsed = JSON.parse(
+        Buffer.from(value, "base64url").toString("utf8"),
+      )
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        typeof parsed.runID === "string" &&
+        typeof parsed.sessionID === "string"
+      ) {
+        return parsed as { runID: string; sessionID: string }
+      }
+    } catch {
+      // Invalid or foreign marker: treat as an ordinary provider request.
+    }
+    return undefined
+  }
+
+  const wrapProviderFetch = (
+    providerID: string,
+    upstreamFetch: typeof fetch,
+  ): typeof fetch =>
+    async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const headers = new Headers(
+        typeof Request !== "undefined" && input instanceof Request
+          ? input.headers
+          : undefined,
+      )
+      new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
+      const context = decodeRequestContext(headers.get(AGENT_FI_CONTEXT_HEADER))
+      headers.delete(AGENT_FI_CONTEXT_HEADER)
+      const declaredTools = context
+        ? await providerRequestToolNames(input, init)
+        : new Set<string>()
+
+      const response = await upstreamFetch(input, { ...init, headers })
+      if (!context || context.runID !== runID) {
+        return response
+      }
+
+      let endpoint = "unknown"
+      try {
+        const raw =
+          typeof input === "string" || input instanceof URL
+            ? String(input)
+            : input.url
+        const parsed = new URL(raw)
+        endpoint = `${parsed.origin}${parsed.pathname}`
+      } catch {
+        // Avoid logging raw input when it cannot be safely normalized.
+      }
+      await record("provider.fetch.observed", {
+        providerID,
+        sessionID: context.sessionID,
+        endpoint,
+        status: response.status,
+        content_type: response.headers.get("content-type"),
+      })
+
+      const fallback = response.clone()
+      try {
+        const rewritten = await rewriteProviderResponse(
+          response,
+          async (toolName, toolInput, callID) => {
+            if (!declaredTools.has(toolName)) {
+              return toolInput
+            }
+            const callIndex = await nextAssistantToolCallIndex(toolName)
+            const result = applyAssistantToolCallRewrite(
+              runtimePlan,
+              toolName,
+              callIndex,
+              toolInput,
+            )
+            if (result.meta.applied) {
+              await record("fault.activation.started", {
+                faultSkill,
+                activation: "assistant_tool_call_rewrite",
+                sessionID: context.sessionID,
+                callID,
+              })
+              await recordRewrite({
+                kind: "assistant_tool_call",
+                meta: result.meta,
+                sessionID: context.sessionID,
+                callID,
+              })
+              await record("fault.activation.completed", {
+                faultSkill,
+                activation: "assistant_tool_call_rewrite",
+                sessionID: context.sessionID,
+                callID,
+              })
+            }
+            return result.input
+          },
+        )
+        await record("provider.fetch.transformed", {
+          providerID,
+          sessionID: context.sessionID,
+          format: rewritten.format,
+          changed: rewritten.changed,
+        })
+        return rewritten.response
+      } catch (error) {
+        await record("provider.fetch.transform_failed", {
+          providerID,
+          sessionID: context.sessionID,
+          error: String(error),
+        })
+        return fallback
+      }
+    }
+
   return {
+    config: async (config) => {
+      if (!hasAssistantToolCallRewrite(runtimePlan)) {
+        return
+      }
+      const providers =
+        config && typeof config === "object" && config.provider && typeof config.provider === "object"
+          ? (config.provider as Record<string, unknown>)
+          : {}
+      let installed = 0
+      for (const [providerID, value] of Object.entries(providers)) {
+        if (!value || typeof value !== "object") {
+          continue
+        }
+        const provider = value as Record<string, unknown>
+        const options =
+          provider.options && typeof provider.options === "object"
+            ? (provider.options as Record<string, unknown>)
+            : {}
+        provider.options = options
+        const existingFetch = options.fetch
+        const upstreamFetch =
+          typeof existingFetch === "function"
+            ? (existingFetch as typeof fetch)
+            : globalThis.fetch.bind(globalThis)
+        options.fetch = wrapProviderFetch(providerID, upstreamFetch)
+        installed += 1
+        await record("provider.fetch.installed", {
+          providerID,
+          composed_existing_fetch: typeof existingFetch === "function",
+        })
+      }
+      wrappedProviderCount = installed
+      if (installed === 0) {
+        await record("provider.fetch.installation_skipped", {
+          reason: "no configured providers",
+        })
+      }
+    },
+
+    "chat.headers": async (input, output) => {
+      if (!hasAssistantToolCallRewrite(runtimePlan) || wrappedProviderCount === 0) {
+        return
+      }
+      if (!output.headers || typeof output.headers !== "object") {
+        return
+      }
+      output.headers[AGENT_FI_CONTEXT_HEADER] = encodeRequestContext(
+        String(input.sessionID),
+      )
+    },
+
     tool: nativeTools,
 
     "experimental.chat.system.transform": async (input, output) => {
@@ -449,7 +650,14 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
         transformedSessions.add(sessionID)
       }
 
-      if (firstTransform) {
+      if (firstTransform && hiddenFaultSkill) {
+        await record("fault.activation.completed", {
+          faultSkill,
+          activation: "hidden_spec",
+          sessionID,
+        })
+      }
+      if (firstTransform && !hiddenAssistantToolCallRewrite && !hiddenFaultSkill) {
         const injectionText = [
           "<agent-fault-injection>",
             `Before executing the user's task, load the "${faultSkill}" skill exactly once.`,

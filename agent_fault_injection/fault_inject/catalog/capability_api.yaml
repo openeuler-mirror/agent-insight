@@ -31,3 +31,4 @@ runtime_ops:
   - messages.inject
   - assistant.replace_text
   - assistant.truncate
+  - assistant.tool_call.replace_argument

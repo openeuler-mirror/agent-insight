@@ -1,12 +1,12 @@
 # 记忆噪声干扰故障注入方案（FI）
 
-> 从独立仓迁入；Skill S1–S3 已落地，S4 未实施。
+> 从独立仓迁入；Skill S1–S4 已落地（S4=会话记忆虚假先验 middleware）；原方案「压缩失真」顺延为 **S5 未实施**。
 
-版本：v0.1  
-最后更新：2026-08-03
+版本：v0.2  
+最后更新：2026-08-10
 
 > 文档类型：Phase1 故障注入方案（FI 设计） | 关联项目：agent-fault-injection  
-> 状态：**Skill S1–S3 已落地**（`memory-noise-interference`）；**S4 未实施**  
+> 状态：**Skill S1–S4 已落地**（`memory-noise-interference`）；**S5 压缩失真未实施**  
 > 关联文档：
 > - [记忆丢失/损坏/投毒总方案](memory-file-loss.md)
 > - [语义层故障注入调研](../../agent-fault-injection/designs/agent-semantic-fault-injection-survey.md)
@@ -21,9 +21,9 @@
 | 问题 | 答案 |
 |------|------|
 | 故障本质是什么？ | 向 Agent 的短期上下文或持久记忆注入**高似真但无关/冲突/过时**信息，干扰检索、规划与工具选择 |
-| 本仓是否已落地？ | **Skill S1–S3 已落地**（`memory-noise-interference`）；**S4 未实施**（需 middleware）。 |
+| 本仓是否已落地？ | **Skill S1–S3 + middleware S4（假先验）已落地**（`memory-noise-interference`）；**S5 压缩失真未实施**。 |
 | 与「记忆幻觉 / 投毒」边界？ | 噪声干扰 = **外部塞入干扰源**；幻觉 = Agent **自行虚构**；投毒 = 植入可跨会话复用的恶意/错误事实（可作噪声的持久化形态） |
-| 推荐落地路径？ | **P0 Skill 注入（S1/S2）→ P1 中间件结构注入 → P2 Compaction/持久 memory 污染** |
+| 推荐落地路径？ | **P0 Skill 注入（S1/S2）→ P1 中间件结构注入（S4）→ P2 Compaction/持久 memory 污染（S5）** |
 | OpenCode 注入面？ | `system.transform` / `messages.transform` / `tool.execute.after` / `session.compacting` / 可选 `.opencode/memory` |
 
 ---
