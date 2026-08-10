@@ -419,6 +419,7 @@ export async function runMergeOperator(args: RunMergeOperatorArgs): Promise<Merg
   const client = new OpenAI({
     apiKey: args.config.apiKey || 'no-api-key-required',
     baseURL: args.config.baseUrl || 'https://api.deepseek.com',
+    defaultHeaders: args.config.headers,
     fetch: customFetch as unknown as typeof fetch,
     timeout: LLM_TIMEOUT_MS,
     maxRetries: 2,

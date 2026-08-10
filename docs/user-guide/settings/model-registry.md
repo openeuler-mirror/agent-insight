@@ -69,7 +69,8 @@ description: "注册外部模型、管理 API Key"
 | **Provider** | 模型供应商，例如 OpenAI、Anthropic、DeepSeek 或兼容接口服务。 |
 | **Model** | 实际调用的模型标识，例如 `gpt-4o`、`deepseek-chat`。 |
 | **Base URL / Endpoint** | 模型服务地址，用于发送推理请求。 |
-| **API Key** | 鉴权凭证，用于访问供应商接口。 |
+| **API Key** | 鉴权凭证，用于访问供应商接口。Local AI 与 Custom（OpenAI Compatible）可留空。 |
+| **自定义请求头** | Local AI 与 Custom（OpenAI Compatible）的可选 HTTP Header，可用于 `Authorization`、`X-API-Key`、租户标识等网关鉴权。请求头值按密钥脱敏。 |
 | **默认状态** | 表示该配置是否作为当前 Workspace 的默认模型。 |
 | **健康状态** | 表示连接检测是否通过，用于判断当前配置是否具备执行条件。 |
 
@@ -91,7 +92,7 @@ description: "注册外部模型、管理 API Key"
 1. 进入 **模型注册** 页面。
 2. 在模型供应商选择面检索目标供应商。
 3. 选择目标供应商卡片，进入配置流程。
-4. 填写模型名称、模型标识、Base URL 与 API Key。
+4. 填写模型名称、模型标识与 Base URL。内置供应商填写 API Key；Local AI 或 Custom（OpenAI Compatible）也可以改用自定义请求头，或连接无需鉴权的本地服务。
 5. 保存配置。
 6. 返回已注册模型管理面，检查模型卡片与状态标签。
 7. 执行健康检查，确认连接可用。
@@ -107,7 +108,7 @@ description: "注册外部模型、管理 API Key"
 
 1. 在模型卡片区定位目标模型。
 2. 执行 **编辑**。
-3. 更新模型标识、Base URL、API Key 或业务名称。
+3. 更新模型标识、Base URL、API Key、自定义请求头或业务名称。
 4. 保存后重新执行健康检查。
 5. 确认状态恢复为可用。
 

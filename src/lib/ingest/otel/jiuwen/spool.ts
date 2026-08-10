@@ -5,7 +5,7 @@
  * snapshot-replace 覆盖落库——所以「全量」必须可靠保存。原实现把全量只攒在内存 Map 里，
  * 进程因大 trace 撑爆内存而重启时，攒了一半的 span 连同 Map 一起丢，随后残缺的批次又把库里
  * 记录整条覆盖 → 永久丢数据。本模块把 span 落到磁盘 JSONL（处理前先落久），重启后仍可读回
- * 重聚合出完整 trace。设计与对照见 docs/designs/agents/jiuwenswarm-tracing/durable-span-spool.md。
+ * 重聚合出完整 trace。设计与对照见 docs/design/jiuwenswarm-tracing/durable-span-spool.md。
  *
  * 布局：
  *   otel_data/jiuwen/buckets/<traceKey>.jsonl   每行一个 JiuwenSpan（按 traceId 分桶）

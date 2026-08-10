@@ -6,6 +6,19 @@ import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guard
 import { reconcileStaleGrayscaleRun } from '@/lib/grayscale/stale-run-reconcile';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
+import {
+    ensureEvalExperiment,
+    addEvalExperimentCase,
+    evaluateEvalExperimentCase,
+    type EvalCaseResultRow,
+} from '@/lib/engine/experiment/run-experiment';
+import {
+    abEvaluatorName,
+    forLegacyRowProjection,
+    normalizeAbEvaluators,
+    TASK_COMPLETION_EVALUATOR_ID,
+    TRACE_EVALUATOR_ID,
+} from '@/lib/grayscale/ab-evaluator-selection';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +47,8 @@ interface GrayscaleConfig {
     evaluationBatchId?: string;
     evaluationBatchTitle?: string;
     evaluationBatchEvaluators?: string[];
+    /** 评测走实验：本 A/B 任务绑定的单组 backing 实验 id（每条 trace 作 case 评测，结果回填双侧）。 */
+    evalExperimentId?: string;
 }
 
 function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
@@ -244,13 +259,6 @@ declare global {
 }
 
 const NONE_VERSION_ID = '__NONE__';
-const TASK_COMPLETION_EVALUATOR_ID = 'preset-agent-task-completion';
-const TRACE_EVALUATOR_ID = 'preset-agent-trace-quality';
-const SUPPORTED_AB_EVALUATORS = new Set([TASK_COMPLETION_EVALUATOR_ID, TRACE_EVALUATOR_ID]);
-const AB_EVALUATOR_NAMES: Record<string, string> = {
-    [TASK_COMPLETION_EVALUATOR_ID]: 'Agent 任务完成度',
-    [TRACE_EVALUATOR_ID]: 'Agent 轨迹质量',
-};
 const STALE_EVALUATION_MS = 15 * 60 * 1000;
 // 本次 next.js server 进程的启动时间。TrajectoryEvalResult.updatedAt 早于此
 // 时间但还停在 pending/running 的, 必然是上一个 server 生命周期遗留的孤儿
@@ -429,18 +437,6 @@ function scoreTier(score: number): 'good' | 'warn' | 'poor' {
     return score >= 80 ? 'good' : score >= 50 ? 'warn' : 'poor';
 }
 
-function normalizeAbEvaluators(value: unknown, fallback?: string): string[] {
-    const raw = Array.isArray(value) ? value : value ? [value] : [];
-    const ids = Array.from(new Set(
-        raw.map(item => String(item || '').trim())
-            .map(item => item === 'trace-quality-evaluator' ? TRACE_EVALUATOR_ID : item)
-            .filter(item => SUPPORTED_AB_EVALUATORS.has(item)),
-    ));
-    if (ids.length > 0) return ids;
-    const fallbackId = fallback === 'trace-quality-evaluator' ? TRACE_EVALUATOR_ID : String(fallback || '').trim();
-    return SUPPORTED_AB_EVALUATORS.has(fallbackId) ? [fallbackId] : [];
-}
-
 function getConfiguredDatasetIds(config: GrayscaleConfig): string[] {
     return Array.from(new Set([
         ...(Array.isArray(config.linkedDatasetIds) ? config.linkedDatasetIds : []),
@@ -516,11 +512,13 @@ function pickTraceEvaluationTraceId(rawAnalysisJson: string | null | undefined):
 }
 
 function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluatorIds?: string[]): RunEvaluation[] {
-    const selected = normalizeAbEvaluators(
+    // 只投影 legacy 行能表达的两个评估器（见 ab-evaluator-selection.ts 的 LEGACY_ROW_EVALUATORS）：
+    // 其余评估器的分在 ExperimentEvalResult 里，由 applyExpRowsToRun 落。
+    const selected = forLegacyRowProjection(normalizeAbEvaluators(
         requestedEvaluatorIds && requestedEvaluatorIds.length > 0
             ? requestedEvaluatorIds
             : selectedEvaluators(row.rawAnalysisJson),
-    );
+    ));
     const resultScore = pickEvaluationResultScore(row.rawAnalysisJson);
     const resultError = pickResultEvaluationError(row.rawAnalysisJson);
     const resultTraceId = pickEvaluationTraceId(row.rawAnalysisJson);
@@ -530,7 +528,7 @@ function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluator
         if (row.status === 'pending' || row.status === 'running') {
             return {
                 evaluatorId,
-                evaluatorName: AB_EVALUATOR_NAMES[evaluatorId] || evaluatorId,
+                evaluatorName: abEvaluatorName(evaluatorId),
                 status: row.status === 'running' ? 'running' : 'pending',
                 evaluatorRunId: row.evaluatorRunId,
                 evaluationResultId: row.id,
@@ -541,7 +539,7 @@ function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluator
             const failed = row.status === 'failed' || typeof score !== 'number';
             return {
                 evaluatorId,
-                evaluatorName: AB_EVALUATOR_NAMES[evaluatorId],
+                evaluatorName: abEvaluatorName(evaluatorId),
                 status: failed ? 'failed' : 'done',
                 evaluatorRunId: row.evaluatorRunId,
                 evaluationResultId: row.id,
@@ -554,7 +552,7 @@ function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluator
         const failed = row.status === 'failed' || typeof score !== 'number';
         return {
             evaluatorId,
-            evaluatorName: AB_EVALUATOR_NAMES[evaluatorId] || evaluatorId,
+            evaluatorName: abEvaluatorName(evaluatorId),
             status: failed ? 'failed' : 'done',
             evaluatorRunId: row.evaluatorRunId,
             evaluationResultId: row.id,
@@ -574,8 +572,9 @@ function isNewerTrajectoryRow(candidate: TrajectoryResultRow, current: Trajector
 
 function mergeRunEvaluations(existing: RunEvaluation[] | undefined, incoming: RunEvaluation[]): RunEvaluation[] {
     const byId = new Map<string, RunEvaluation>();
+    // 保留全部历史条目：这里曾按 2 个 legacy id 过滤，会把实验路径产出的其余评估器结果丢掉。
     for (const item of existing || []) {
-        if (SUPPORTED_AB_EVALUATORS.has(item.evaluatorId)) byId.set(item.evaluatorId, item);
+        if (item.evaluatorId) byId.set(item.evaluatorId, item);
     }
     for (const item of incoming) byId.set(item.evaluatorId, item);
     return Array.from(byId.values());
@@ -925,6 +924,38 @@ function applyTrajectoryRowToRun(run: RunResult, row: TrajectoryResultRow, fallb
     if (row.status === 'done' || row.status === 'failed') {
         markRunCompleted(run, row.updatedAt instanceof Date ? row.updatedAt.toISOString() : undefined);
     }
+}
+
+/**
+ * 把实验引擎同步评测的结果行（EvalCaseResultRow[]）落到 run，逻辑对齐 applyTrajectoryRowToRun：
+ * 实验契约分已是 0-100（无需 ×100）；任一评估器失败 → run 失败，全 done → pass + tier。
+ */
+function applyExpRowsToRun(run: RunResult, rows: EvalCaseResultRow[], evalExperimentId?: string) {
+    const incoming: RunEvaluation[] = rows.map(r => ({
+        evaluatorId: r.evaluatorId,
+        evaluatorName: abEvaluatorName(r.evaluatorId),
+        status: r.status === 'done' ? 'done' : 'failed',
+        evaluatorRunId: evalExperimentId,
+        score: typeof r.score === 'number' ? Math.round(r.score) : undefined,
+        errorMessage: r.status !== 'done' ? (r.errorMessage || '评测失败') : undefined,
+    }));
+    const nextEvaluations = mergeRunEvaluations(run.evaluations, incoming);
+    const nextScore = aggregateEvaluationScore(nextEvaluations);
+    const hasFailed = nextEvaluations.some(item => item.status === 'failed');
+    run.evaluatorRunId = evalExperimentId || run.evaluatorRunId;
+    run.evaluations = nextEvaluations;
+    run.status = hasFailed ? 'fail' : typeof nextScore === 'number' ? 'pass' : 'fail';
+    if (typeof nextScore === 'number') {
+        run.score = nextScore;
+        run.tier = scoreTier(nextScore);
+    } else {
+        delete run.score;
+        delete run.tier;
+    }
+    if (run.status === 'fail') {
+        run.output = nextEvaluations.find(item => item.status === 'failed')?.errorMessage || run.output || '评测失败';
+    }
+    markRunCompleted(run);
 }
 
 function validateTaskSkillBinding(task: Awaited<ReturnType<typeof loadTask>>) {
@@ -1524,58 +1555,6 @@ async function executeSingleAgentRun(args: {
     }
 }
 
-async function startSingleEvaluation(
-    origin: string,
-    user: string,
-    config: GrayscaleConfig,
-    pair: { caseId: string; taskId: string },
-    datasetId?: string,
-    evaluatorId?: string,
-    evaluatorIds?: string[],
-    grayscaleBinding?: GrayscaleBinding,
-    options: { appendToBatch?: boolean } = {},
-) {
-    // 透传评测任务关联: 用户在 A/B 配置卡通过「+ 新增评测任务」对话框创建了批次,
-    // 此 ID 存在 config.evaluationBatchId。这里走 append 模式让 trace 落到同一批次,
-    // 而不是每次启动评测都新建一个 evaluatorRunId (修 "2 case × 3 round 拆成 6 个批次" 问题)。
-    //
-    // evaluator 字段:
-    //   - 关联了批次: 不传, 让后端继承批次创建时配置的 selectedEvaluators (多评估器)。
-    //     这是用户在「新增评测任务」对话框里多选的评估器列表, 应该统一应用。
-    //   - 没关联批次: 沿用老逻辑, 传单 evaluator 让后端新建批次 (向后兼容)。
-    const body: Record<string, unknown> = {
-        user,
-        ...(datasetId ? { datasetId } : {}),
-        ...(getConfiguredDatasetIds(config).length > 0 ? { datasetIds: getConfiguredDatasetIds(config) } : {}),
-        pairs: [pair],
-        ...(grayscaleBinding ? { grayscaleBinding } : {}),
-        // 让评测批次名与 A/B 任务名一致: 建批次时后端用它当批次标题(append 到已有批次时后端忽略)。
-        ...(config.evaluationBatchTitle ? { taskTitle: config.evaluationBatchTitle } : {}),
-    };
-    if (config.evaluationBatchId && options.appendToBatch !== false) {
-        body.evaluatorRunId = config.evaluationBatchId;
-    } else {
-        body.evaluators = normalizeAbEvaluators(evaluatorIds || config.evaluators, evaluatorId || config.evaluatorId);
-    }
-    const res = await fetch(`${origin}/api/eval/trajectory/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.evaluatorRunId) {
-        throw new Error(data.error || 'failed to start trajectory evaluation');
-    }
-    const created = Array.isArray(data.created) ? data.created : [];
-    const evaluationResultId = created.length > 0 ? String(created[0]?.id || '').trim() : '';
-    if (!evaluationResultId) {
-        throw new Error('failed to bind trajectory evaluation result');
-    }
-    return {
-        evaluatorRunId: String(data.evaluatorRunId),
-        evaluationResultId,
-    };
-}
 
 /**
  * "no valid tasks to run" 不是一次真正的评测结果——它是派发器去重判定"这条 trace 已经评过、
@@ -1737,7 +1716,7 @@ async function evaluateSingleRunTarget(args: {
         target.run.evaluations,
         effectiveEvaluatorIds.map(id => ({
             evaluatorId: id,
-            evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+            evaluatorName: abEvaluatorName(id),
             status: 'running',
         })),
     );
@@ -1758,34 +1737,22 @@ async function evaluateSingleRunTarget(args: {
         touchLatestResultAt: true,
     });
 
-    let rehydratedFromExisting = false;
     try {
-        const binding: GrayscaleBinding = {
-            source: 'grayscale-ab',
-            grayscaleTaskId: args.taskId,
-            caseId: target.caseId,
-            side: target.side,
-            runIndex: target.run.runIndex,
-            roundIndex: target.run.roundIndex,
-            executionTraceId: target.run.sessionId!,
-            evaluationClaimId,
-            evaluationAttempt,
-        };
-        const createdEvaluation = await startSingleEvaluation(
-            args.origin,
-            args.user,
-            args.config,
-            { caseId: target.caseId, taskId: target.run.sessionId! },
-            args.caseDatasetIdByCaseId?.get(target.caseId),
-            args.evaluatorId,
-            effectiveEvaluatorIds,
-            binding,
-            { appendToBatch: args.appendToBatch },
-        );
-        evaluatorRunId = createdEvaluation.evaluatorRunId;
-        evaluationResultId = createdEvaluation.evaluationResultId;
-        target.run.evaluatorRunId = evaluatorRunId;
-        target.run.evaluationResultId = evaluationResultId;
+        if (!args.config.evalExperimentId) throw new Error('评测实验未初始化');
+        // 参考答案：A/B 数据集驱动，任务完成度评估器需要（按 case 归属数据集反查 expectedOutput）
+        const datasetId = args.caseDatasetIdByCaseId?.get(target.caseId);
+        let referenceOutput: string | null = null;
+        if (datasetId) {
+            const ds = await findAgentDataset(args.user, datasetId).catch(() => null);
+            referenceOutput = ds?.cases.find(c => c.id === target.caseId)?.expectedOutput ?? null;
+        }
+        // trace 已产生：作为 case 加入 backing 实验、同步跑评估器（引擎按 sessionId 解析 input/output/skill 上下文）
+        const expCaseId = await addEvalExperimentCase(args.config.evalExperimentId, {
+            taskId: target.run.sessionId!, input: '', actualOutput: '', referenceOutput,
+        });
+        const rows = await evaluateEvalExperimentCase(args.config.evalExperimentId, expCaseId, args.user);
+        evaluatorRunId = args.config.evalExperimentId;
+        applyExpRowsToRun(target.run, rows, evaluatorRunId);
         args.states[target.caseId][target.side].evaluatorRunId = evaluatorRunId;
         await persistRunStatePatch({
             taskId: args.taskId,
@@ -1799,62 +1766,22 @@ async function evaluateSingleRunTarget(args: {
             sidePatch: { evaluatorRunId },
             touchLatestResultAt: true,
         });
-
-        const settled = await waitAndApplyEvaluationResult({
-            taskId: args.taskId,
-            user: args.user,
-            origin: args.origin,
-            states: args.states,
-            caseId: target.caseId,
-            side: target.side,
-            run: target.run,
-            evaluationResultId,
-            evaluatorRunId,
-            expectedEvaluationClaimId: evaluationClaimId,
-            config: args.config,
-        });
-        if (settled) {
-            await hydrateExecutionMetrics(args.states);
-        } else {
-            target.run.status = 'evaluating';
-            target.run.output = undefined;
-        }
+        await hydrateExecutionMetrics(args.states);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        // "no valid tasks to run" 不是失败 —— 是去重判定"这条 trace 已经评过、没有新任务可派发"。
-        // 不写失败, 而是从库里把这条 trace 最近一条真正的评测结果回填到 run(详见 rehydrateRunFromExistingEval)。
-        if (/no valid tasks to run/i.test(message) && target.run.sessionId) {
-            rehydratedFromExisting = await rehydrateRunFromExistingEval({
-                user: args.user,
-                run: target.run,
-                sessionId: target.run.sessionId,
-                evaluatorRunId: args.config.evaluationBatchId || evaluatorRunId || undefined,
-            }).catch(() => false);
-        }
-        if (rehydratedFromExisting) {
-            target.run.evalRetryPending = false;
-        } else {
-            // 真失败(评测器真的跑了且失败 / 或确实找不到任何历史结果)→ 照实标失败、可重试。
-            if (evaluationResultId) {
-                await markEvaluatorRowsFailed(args.user, [evaluationResultId], message).catch(() => {});
-            } else if (evaluatorRunId) {
-                await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
-            }
-            target.run.status = 'fail';
-            target.run.evaluations = mergeRunEvaluations(
-                target.run.evaluations,
-                effectiveEvaluatorIds.map(id => ({
-                    evaluatorId: id,
-                    evaluatorName: AB_EVALUATOR_NAMES[id] || id,
-                    status: 'failed',
-                    evaluatorRunId,
-                    evaluationResultId,
-                    errorMessage: message,
-                })),
-            );
-            target.run.output = message;
-            markRunCompleted(target.run);
-        }
+        target.run.status = 'fail';
+        target.run.evaluations = mergeRunEvaluations(
+            target.run.evaluations,
+            effectiveEvaluatorIds.map(id => ({
+                evaluatorId: id,
+                evaluatorName: abEvaluatorName(id),
+                status: 'failed',
+                evaluatorRunId,
+                errorMessage: message,
+            })),
+        );
+        target.run.output = message;
+        markRunCompleted(target.run);
         await persistRunStatePatch({
             taskId: args.taskId,
             user: args.user,
@@ -1871,9 +1798,7 @@ async function evaluateSingleRunTarget(args: {
     // C+D: 评测失败若"可重试且还有重试次数",不进终态——回到「评测中/重试中」并标 evalRetryPending,
     // 让下面的重试循环挑它重跑。失败只在"最终确切失败(不可重试/重试用尽)"时出现,且此后不再变化。
     // 仅对"评测失败"生效:run.failureType 是执行失败(另有语义),不在此列。
-    // rehydratedFromExisting 时跳过:run 已用历史真实结果回填(pass/真失败),不该再被自动重跑(否则
-    // 又派发→又 no valid tasks→又回填,空转)。真失败要重试由用户手动点。
-    if (!rehydratedFromExisting && target.run.status === 'fail' && !target.run.failureType) {
+    if (target.run.status === 'fail' && !target.run.failureType) {
         const failMsg = target.run.output
             || target.run.evaluations?.find(e => e.status === 'failed')?.errorMessage
             || '';
@@ -1908,111 +1833,6 @@ function isTerminalTrajectoryStatus(status: TrajectoryResultStatus | undefined):
     return status === 'done' || status === 'failed';
 }
 
-async function waitAndApplyEvaluationResult(args: {
-    taskId: string;
-    user: string;
-    origin: string;
-    config: GrayscaleConfig;
-    states: CaseStates;
-    caseId: string;
-    side: Side;
-    run: RunResult;
-    evaluationResultId: string;
-    evaluatorRunId: string;
-    expectedEvaluationClaimId: string;
-}): Promise<boolean> {
-    const timeoutMessage = 'evaluation timed out';
-    for (let i = 0; i < 180; i++) {
-        const res = await fetch(`${args.origin}/api/eval/trajectory/results/${encodeURIComponent(args.evaluationResultId)}?user=${encodeURIComponent(args.user)}`);
-        const result = await res.json().catch(() => ({})) as TrajectoryApiResult & { error?: string };
-        if (res.ok) {
-            const binding = readGrayscaleBindingFromRaw(result.rawAnalysis);
-            if (String(result.id || '').trim() !== args.evaluationResultId) {
-                throw new Error(`evaluation result id mismatch: expected ${args.evaluationResultId}, got ${String(result.id || '').trim() || 'N/A'}`);
-            }
-            if (String(result.taskId || '').trim() !== String(args.run.sessionId || '').trim()) {
-                throw new Error(`evaluation result trace mismatch: expected ${String(args.run.sessionId || '').trim() || 'N/A'}, got ${String(result.taskId || '').trim() || 'N/A'}`);
-            }
-            if (!matchesGrayscaleBinding(binding, {
-                taskId: args.taskId,
-                caseId: args.caseId,
-                side: args.side,
-                run: args.run,
-                expectedClaimId: args.expectedEvaluationClaimId,
-            })) {
-                throw new Error('evaluation result binding mismatch');
-            }
-            if (isTerminalTrajectoryStatus(result.status)) {
-                const rowLike: TrajectoryResultRow = {
-                    id: result.id,
-                    evaluatorRunId: result.evaluatorRunId || args.evaluatorRunId,
-                    status: result.status,
-                    taskId: result.taskId,
-                    trajectoryScore: result.trajectoryScore,
-                    errorMessage: result.errorMessage,
-                    rawAnalysisJson: JSON.stringify(result.rawAnalysis || {}),
-                    updatedAt: result.updatedAt ? new Date(result.updatedAt) : undefined,
-                };
-                applyTrajectoryRowToRun(args.run, rowLike, args.evaluatorRunId);
-                await persistRunStatePatch({
-                    taskId: args.taskId,
-                    user: args.user,
-                    config: args.config,
-                    states: args.states,
-                    caseId: args.caseId,
-                    side: args.side,
-                    nextRun: args.run,
-                    expectedEvaluationClaimId: args.expectedEvaluationClaimId,
-                    sidePatch: { evaluatorRunId: args.evaluatorRunId },
-                    touchLatestResultAt: true,
-                });
-                return true;
-            }
-        } else if (res.status !== 404) {
-            throw new Error(result.error || 'failed to load trajectory evaluation result');
-        }
-        await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    try {
-        const res = await fetch(`${args.origin}/api/eval/trajectory/results/${encodeURIComponent(args.evaluationResultId)}?user=${encodeURIComponent(args.user)}`);
-        const result = await res.json().catch(() => ({})) as TrajectoryApiResult & { error?: string };
-        if (res.ok && !isTerminalTrajectoryStatus(result.status)) {
-            return false;
-        }
-    } catch {
-        // ignore: fall through to timeout failure below
-    }
-    await markEvaluatorRowsFailed(args.user, [args.evaluationResultId], timeoutMessage);
-    if (args.run.status === 'evaluating' || args.run.status === 'running') {
-        args.run.status = 'fail';
-        args.run.output = timeoutMessage;
-        args.run.evaluations = mergeRunEvaluations(
-            args.run.evaluations,
-            normalizeAbEvaluators(args.run.evaluations?.map(item => item.evaluatorId) || []).map(id => ({
-                evaluatorId: id,
-                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
-                status: 'failed',
-                evaluatorRunId: args.evaluatorRunId,
-                evaluationResultId: args.evaluationResultId,
-                errorMessage: timeoutMessage,
-            })),
-        );
-        markRunCompleted(args.run);
-        await persistRunStatePatch({
-            taskId: args.taskId,
-            user: args.user,
-            config: args.config,
-            states: args.states,
-            caseId: args.caseId,
-            side: args.side,
-            nextRun: args.run,
-            expectedEvaluationClaimId: args.expectedEvaluationClaimId,
-            sidePatch: { evaluatorRunId: args.evaluatorRunId },
-            touchLatestResultAt: true,
-        }).catch(() => {});
-    }
-    throw new Error(timeoutMessage);
-}
 
 // 把稳定批次 id 落到 task.configJson.evaluationBatchId。只更新 configJson(不碰 caseStatesJson),
 // 避免覆盖并发进行的 case 状态写入。落库后,本任务后续所有评测(全量/补评/重试/重启续跑)都能
@@ -2093,7 +1913,7 @@ async function evaluateRunsWithConcurrency(args: {
                         evaluatorIds: target.evaluatorIds,
                         // 一旦本任务有了稳定批次(config.evaluationBatchId),所有 target——含补评/行级重试——
                         // 都 append 到同一批;没有批次时(seed 那一条)config.evaluationBatchId 为空,
-                        // startSingleEvaluation 自然走"建批次"分支,append 标志不影响。
+                        // 评测入口(/api/eval/trajectory/run)自然走"建批次"分支,append 标志不影响。
                         appendToBatch: true,
                     }),
                     {
@@ -2199,6 +2019,20 @@ async function runGrayscaleTask(args: {
         // 评测批次标题默认用 A/B 任务名, 让「评测结果」里的批次跟 A/B 任务同名、好对应。
         evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
     };
+    // 空评估器列表必须在这里截住：往下走会建出 0 个评估器的 backing 实验 → 评测 0 行 →
+    // 每个 run 落 status='fail'、output='评测失败'，用户看不到任何原因。
+    if (config.evaluators.length === 0) throw new Error('evaluators are required');
+    // 评测走实验：建/复用 backing 单组实验（每条 A/B trace 作 case 评测，结果回填双侧；对比仍在 GrayscaleTask 层）
+    config.evalExperimentId = await ensureEvalExperiment({
+        user,
+        name: `A/B · ${task.skillName || 'skill'} · ${taskId.slice(0, 8)}`,
+        agentName: task.skillName || '',
+        evaluatorIds: config.evaluators,
+        existingId: config.evalExperimentId,
+        scope: 'grayscale-ab',
+        skillName: task.skillName || '',
+        skillVersion: typeof task.skillVersion === 'number' ? task.skillVersion : null,
+    });
     const configuredDatasetIds = getConfiguredDatasetIds(config);
     if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
     const caseConfigMap = await loadConfiguredCaseMap(user, config);

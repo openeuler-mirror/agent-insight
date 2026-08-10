@@ -1,6 +1,7 @@
 // Path A 拉取器：遍历已注册、启用的 pull 源，抓一次 /metrics 落 InfraMetricSample。
 // pollOnce 设计成可被定时器/路由触发；fetch 可注入便于测试。
 
+import { parseAuthHeaders } from '@/lib/infra/auth-headers';
 import { saveSample } from '@/lib/infra/store';
 import { scrapeVllmTargetModels } from '@/lib/ingest/vllm/scrape';
 import { prismaRaw } from '@/lib/storage/prisma';
@@ -34,7 +35,11 @@ export async function pollOnce(
 
   for (const src of sources) {
     try {
-      const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, { fetchImpl, tsMs });
+      const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
+        fetchImpl,
+        tsMs,
+        headers: parseAuthHeaders(src.authHeaders),
+      });
       for (const s of samples) await saveSample(src.id, s);
       polled += 1;
     } catch (e) {
@@ -68,7 +73,11 @@ export async function pollDue(
     }
     lastPollAt.set(src.id, nowMs);
     try {
-      const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, { fetchImpl, tsMs: nowMs });
+      const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
+        fetchImpl,
+        tsMs: nowMs,
+        headers: parseAuthHeaders(src.authHeaders),
+      });
       for (const s of samples) await saveSample(src.id, s);
       polled += 1;
     } catch (e) {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createTraceTag, listTraceTags, TraceTagError } from '@/lib/trace-tags';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +28,12 @@ export async function POST(request: Request) {
     const body = await request.json();
     const user = String(body.user || '').trim();
     const tag = await createTraceTag(user, body);
+
+    // 只有版本标签属于「版本管理」功能；其他 kind 的标签不计。
+    if ((tag as { kind?: string })?.kind === 'version') {
+      recordUsageEvent({ user, featureKey: 'version-management', eventKey: 'version.tag.create' });
+    }
+
     return NextResponse.json(tag, { status: 201 });
   } catch (error) {
     return toErrorResponse(error);

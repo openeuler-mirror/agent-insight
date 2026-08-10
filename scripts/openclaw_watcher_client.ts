@@ -265,7 +265,7 @@ async function uploadExecutionRecord(record: any): Promise<void> {
     const options: http.RequestOptions = {
         hostname: parsedUrl.hostname,
         port: parsedUrl.port || (isHttps ? 443 : 80),
-        path: `${basePath}/api/upload`,
+        path: `${basePath}/api/ingest/upload`,
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

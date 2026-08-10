@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
-import { deleteAgentDataset, findAgentDataset } from '@/server/agent_datasets_storage';
+import {
+  buildAgentDatasetItemsView,
+  deleteAgentDataset,
+  findAgentDataset,
+} from '@/server/agent_datasets_storage';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +22,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
 
-    return NextResponse.json(dataset);
+    const view = searchParams.get('view');
+    if (view === 'case') {
+      const caseId = (searchParams.get('caseId') || '').trim();
+      if (!caseId) return NextResponse.json({ error: 'caseId is required' }, { status: 400 });
+      const datasetCase = dataset.cases.find(item => item.id === caseId);
+      if (!datasetCase) return NextResponse.json({ error: 'dataset case not found' }, { status: 404 });
+      return NextResponse.json(datasetCase);
+    }
+    return NextResponse.json(view === 'items' ? buildAgentDatasetItemsView(dataset) : dataset);
   } catch (error) {
     console.error('agent-datasets [id] GET error:', error);
     return NextResponse.json({ error: 'failed to load dataset' }, { status: 500 });
@@ -38,6 +51,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     if (!removed) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
+
+    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.delete' });
 
     return NextResponse.json({ success: true });
   } catch (error) {

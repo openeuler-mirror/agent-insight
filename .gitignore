@@ -100,6 +100,13 @@ exclude/
 *.iml
 .agents
 .codex
+.qoder/
+
+# Qoder collector plugin builds
+integrations/qoder-desktop/build/
+integrations/qoder-jetbrains/.gradle/
+integrations/qoder-jetbrains/build/
+integrations/qoder-jetbrains/.intellijPlatform/
 
 # AET local artifacts
 .aet/
@@ -113,3 +120,6 @@ docs/series-articles/
 
 # npm pack output (build artifact, never commit)
 *.tgz
+
+# omo tool local data (sessions/handoffs, never commit)
+.omo/

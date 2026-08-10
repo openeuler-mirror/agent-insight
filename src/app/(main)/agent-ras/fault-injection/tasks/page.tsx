@@ -18,6 +18,7 @@ import {
   TaskStatusBadge,
 } from '@/components/fault-injection/TaskStatus'
 import type { ProgressCounts } from '@/components/fault-injection/types'
+import { RelativeTime } from '@/components/text/RelativeTime'
 import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
@@ -307,7 +308,7 @@ export default function FaultInjectionTasksPage() {
                       <TaskProgressBar progress={progress} showCount />
                     </td>
                     <td className="px-3 py-2.5 text-xs text-foreground-muted">
-                      {task.updated_at ? new Date(task.updated_at).toLocaleString() : '—'}
+                      <RelativeTime value={task.updated_at} display="absolute" className="text-xs text-foreground-muted" />
                     </td>
                     <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-0.5">

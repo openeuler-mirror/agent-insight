@@ -91,6 +91,12 @@ export interface TrajectoryEvalOutput {
     keyActionResults?: KeyActionTraceAnalysisResult[];
     rootCauseStep?: string;
     reasonText: string;
+    /**
+     * 一句话结论（说人话、讲具体问题）——实验详情卡头默认只展示它。
+     * 与 reasonText 分开：后者是「执行路径分析」绿框的正文，有固定的
+     * 完整性/工具选择/冗余分段结构，不适合当结论。取不到时回落 reasonText。
+     */
+    conclusionText?: string;
     /** 纯加权分（completeness/tool_choice/redundancy 加权和）。 */
     rawWeightedScore?: number;
     /** 代码侧分数聚合信息：权重、严重度计数、最终分。 */

@@ -58,6 +58,7 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 | OpenCode    | 原生插件    |
 | Claude Code | OTLP 上报 |
 | Hermes      | 原生插件    |
+| Trae IDE | VS Code 插件 |
 | JiuwenSwarm | OTLP 上报 |
 | Langgraph | OTLP 上报 |
 
@@ -107,6 +108,8 @@ Agent RAS inproc 插件。RAS runtime 保存到 `~/.agent-insight/ras/runtime/`�
 git clone https://gitcode.com/openeuler/agent-insight.git
 cd agent-insight
 npm install
+# 构建 Trae IDE 采集器插件（生成 scripts/trae-collector/agent-insight-trae-collector-0.1.0.vsix）
+cd scripts/trae-collector && npm install && npm run build
 ```
 
 #### 方式三：使用 Docker 镜像部署
@@ -149,6 +152,32 @@ docker run -d \
   -v ~/.agent-insight:/data/agent-insight \
   karaggagent/agent-insight:0.5.0
 ```
+
+**用法三：挂载源码运行，代码更新后重启即可生效**
+
+适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
+
+```bash
+git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -e AGENT_INSIGHT_SOURCE_DIR=/src \
+  -v /srv/agent-insight:/src:ro \
+  -v ~/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:latest
+```
+
+之后更新代码只需要 `git pull` 加一次重启，容器会按最新源码重新构建再启动：
+
+```bash
+cd /srv/agent-insight && git pull
+docker restart agent-insight
+```
+
+不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
 
 容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
 
@@ -216,7 +245,7 @@ bash scripts/stop.sh
 
 完整体验在 Agent-Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
 
-> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + 两条示例 Trace + 本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
+> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
 
 ### 注册模型
 

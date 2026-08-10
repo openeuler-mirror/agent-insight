@@ -121,6 +121,42 @@ function loadSkillInsightEnv(): Record<string, string | undefined> {
   return env
 }
 
+/**
+ * .env 里写了、却被进程环境里的同名变量压住的键（值不同才算）。
+ *
+ * 上面那句 `if (env[k] === undefined)` 是「环境变量优先」——保留它是为了让一次性覆盖
+ * （`AGENT_INSIGHT_HOST=... opencode`）继续可用。代价是重跑 setup 把 .env 指向新平台后，
+ * 旧终端里残留的 export 会让上报**继续发往老地址**，而且此前全程无任何提示：日志里的
+ * host 与 .env 明明不一致也没人吭声，只能靠翻日志倒推。这里把它显式喊出来。
+ */
+export function findShadowedEnvKeys(): Array<{ key: string; fromFile: string; actual: string }> {
+  const out: Array<{ key: string; fromFile: string; actual: string }> = []
+  try {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
+      const parsed = parseDotEnvText(fs.readFileSync(file, "utf8"))
+      for (const [k, v] of Object.entries(parsed)) {
+        const actual = process.env[k]
+        if (actual === undefined || actual === v) continue
+        if (out.some((x) => x.key === k)) continue
+        out.push({ key: k, fromFile: v, actual })
+      }
+    }
+  } catch {}
+  return out
+}
+
+/** 拼成一行日志。含 KEY/TOKEN/SECRET 的键只报键名，不打值。 */
+export function describeShadowedEnv(entries: Array<{ key: string; fromFile: string; actual: string }>): string {
+  return entries
+    .map(({ key, fromFile, actual }) =>
+      /KEY|TOKEN|SECRET|PASSWORD/i.test(key)
+        ? `${key}(值不同,已隐藏)`
+        : `${key}(.env=${fromFile} 实际=${actual})`,
+    )
+    .join(" ")
+}
+
 function asBool(v: any): boolean {
   const s = String(v ?? "").toLowerCase().trim()
   return s === "1" || s === "true" || s === "yes" || s === "on"
@@ -253,6 +289,85 @@ export function computeHeartbeatDecision(args: {
   return args.now - since >= args.heartbeatMs ? "kick" : "none"
 }
 
+export type UploaderRuntime = {
+  cmd: string
+  argsPrefix: string[]
+}
+
+const COMMON_UPLOADER_RUNTIMES = [
+  "/usr/local/bin/node",
+  "/usr/bin/node",
+  "/bin/node",
+  "/opt/homebrew/bin/node",
+  "/usr/local/bin/bun",
+  "/usr/bin/bun",
+  "/opt/homebrew/bin/bun",
+]
+
+function runtimeFromExecutable(executable: string, platform: NodeJS.Platform): UploaderRuntime | null {
+  const pathApi = platform === "win32" ? path.win32 : path.posix
+  const name = pathApi.basename(executable).toLowerCase().replace(/\.exe$/, "")
+  if (name === "node") return { cmd: executable, argsPrefix: [] }
+  if (name === "bun") return { cmd: executable, argsPrefix: ["run"] }
+  return null
+}
+
+export function resolveUploaderRuntime(options: {
+  platform?: NodeJS.Platform
+  pathEnv?: string
+  execPath?: string
+  commonPaths?: string[]
+  exists?: (candidate: string) => boolean
+} = {}): UploaderRuntime | null {
+  const platform = options.platform ?? process.platform
+  const pathApi = platform === "win32" ? path.win32 : path.posix
+  const delimiter = platform === "win32" ? ";" : ":"
+  const extensions = platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
+  const exists = options.exists ?? fs.existsSync
+  const pathEnv = options.pathEnv ?? process.env.PATH ?? ""
+
+  const findInPath = (name: string): string | null => {
+    for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+      for (const extension of extensions) {
+        const candidate = pathApi.join(dir, name + extension)
+        try {
+          if (exists(candidate)) return candidate
+        } catch {}
+      }
+    }
+    return null
+  }
+
+  const nodePath = findInPath("node")
+  if (nodePath) return { cmd: nodePath, argsPrefix: [] }
+
+  const bunPath = findInPath("bun")
+  if (bunPath) return { cmd: bunPath, argsPrefix: ["run"] }
+
+  for (const candidate of options.commonPaths ?? COMMON_UPLOADER_RUNTIMES) {
+    try {
+      if (!exists(candidate)) continue
+    } catch {
+      continue
+    }
+    const runtime = runtimeFromExecutable(candidate, platform)
+    if (runtime) return runtime
+  }
+
+  return runtimeFromExecutable(options.execPath ?? process.execPath ?? "", platform)
+}
+
+export function formatUploaderRuntimeForLog(runtime: UploaderRuntime | null): {
+  command: string
+  argsPrefix: string
+} {
+  if (!runtime) return { command: "(unavailable)", argsPrefix: "(none)" }
+  return {
+    command: runtime.cmd,
+    argsPrefix: runtime.argsPrefix.join(" ") || "(none)",
+  }
+}
+
 export default async function WittySkillInsightOtelPlugin() {
   const env = loadSkillInsightEnv()
   const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
@@ -282,36 +397,22 @@ export default async function WittySkillInsightOtelPlugin() {
   const pluginLogPath = path.join(logDir, "opencode_plugin.log")
   const uploaderLogPath = path.join(logDir, "opencode_uploader.log")
 
-  // Pick a runtime that can execute a plain .js file. Opencode bundles bun, so
-  // process.execPath points at *bun* — but `bun /path/to/file.js` is interpreted
-  // as `cd <path>` (errors with "Failed to change directory"). To run JS we
-  // either need system `node` (preferred), or `bun run <path>` form. Resolve
-  // once at plugin load and cache.
-  const findInPath = (name: string): string | null => {
-    const exts = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
-    const dirs = (process.env.PATH || "").split(path.delimiter)
-    for (const dir of dirs) {
-      for (const ext of exts) {
-        const full = path.join(dir, name + ext)
-        try {
-          if (fs.existsSync(full)) return full
-        } catch {}
-      }
-    }
-    return null
-  }
-  const nodePath = findInPath("node")
-  const bunPath = findInPath("bun")
-  const runtime: { cmd: string; argsPrefix: string[] } = nodePath
-    ? { cmd: nodePath, argsPrefix: [] }
-    : bunPath
-    ? { cmd: bunPath, argsPrefix: ["run"] }
-    : { cmd: process.execPath || "node", argsPrefix: ["run"] }
+  const runtime = resolveUploaderRuntime()
+  const runtimeLog = formatUploaderRuntimeForLog(runtime)
 
   appendLogLine(
     pluginLogPath,
-    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtime.cmd} argsPrefix=${runtime.argsPrefix.join(" ")} host=${env.AGENT_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtimeLog.command} argsPrefix=${runtimeLog.argsPrefix} host=${env.AGENT_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
   )
+
+  const shadowed = findShadowedEnvKeys()
+  if (shadowed.length) {
+    appendLogLine(
+      pluginLogPath,
+      `plugin.env.shadowed 进程环境里的同名变量压过了 .env,重跑 setup 改的配置在本进程不生效: ${describeShadowedEnv(shadowed)}` +
+      ` → 在启动 opencode 的终端里 unset 这些变量(或新开终端)后重启 opencode`,
+    )
+  }
 
   const kickUploader = (sessionID: string, force = false, reason = "unspecified"): void => {
     try {
@@ -319,6 +420,13 @@ export default async function WittySkillInsightOtelPlugin() {
         appendLogLine(
           pluginLogPath,
           `kickUploader.skip reason=${reason} sessionID=${sessionID || "(none)"} uploaderMissing=${uploaderPath}`,
+        )
+        return
+      }
+      if (!runtime) {
+        appendLogLine(
+          pluginLogPath,
+          `kickUploader.skip reason=${reason} sessionID=${sessionID || "(none)"} runtimeUnavailable=1 hostExecPath=${process.execPath || "(empty)"}`,
         )
         return
       }

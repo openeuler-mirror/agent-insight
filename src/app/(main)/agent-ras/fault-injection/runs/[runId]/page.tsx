@@ -15,12 +15,14 @@ import AgentTraceView, {
   type RasTimelineEvent,
 } from '@/components/observe/AgentTraceView'
 import type { RawInteraction } from '@/lib/engine/observability/agent-trace'
+import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace'
 import {
   loadFaultLabelsBundle,
   resolveSubmodeLabel,
 } from '@/lib/fault-injection/fault-labels-cache'
 import { buildMarkerPipeline } from '@/lib/fault-injection/marker-pipeline'
 import type { FiPipelineMarker } from '@/lib/fault-injection/trace-markers'
+import { apiFetch } from '@/lib/client/api'
 import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
@@ -58,6 +60,8 @@ export default function FaultInjectionRunTracePage() {
   const [loading, setLoading] = useState(true)
   const [submodeLabel, setSubmodeLabel] = useState<string | null>(null)
   const [pipelineOpen, setPipelineOpen] = useState(false)
+  const [structureInteractions, setStructureInteractions] = useState<RawInteraction[] | null>(null)
+  const [langfuseTraceNodes, setLangfuseTraceNodes] = useState<LangfuseTraceNode[]>([])
   const statusRef = useRef<string | undefined>(undefined)
 
   const load = useCallback(async () => {
@@ -68,6 +72,59 @@ export default function FaultInjectionRunTracePage() {
     setTrace(data)
     statusRef.current = data.status
   }, [params.runId])
+
+  useEffect(() => {
+    const taskId = trace?.taskId
+    if (!taskId) {
+      setStructureInteractions(null)
+      setLangfuseTraceNodes([])
+      return
+    }
+    let cancelled = false
+    void apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
+      .then((body) => {
+        if (cancelled) return
+        setStructureInteractions(Array.isArray(body?.interactions) ? body.interactions : [])
+        setLangfuseTraceNodes(Array.isArray(body?.langfuseTraceNodes) ? body.langfuseTraceNodes : [])
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStructureInteractions(null)
+          setLangfuseTraceNodes([])
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [trace?.taskId])
+
+  const loadInteraction = useCallback(async (index: number) => {
+    const taskId = trace?.taskId
+    if (!taskId) throw new Error('missing taskId')
+    const response = await apiFetch(
+      `/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interaction&index=${index}`,
+    )
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const body = await response.json()
+    return body?.interaction
+  }, [trace?.taskId])
+
+  const loadFullInteractions = useCallback(async () => {
+    const taskId = trace?.taskId
+    if (!taskId) return trace?.interactions || []
+    const response = await apiFetch(
+      `/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interactions`,
+    )
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const body = await response.json()
+    return Array.isArray(body?.interactions) ? body.interactions : []
+  }, [trace?.taskId, trace?.interactions])
+
+  const displayInteractions = structureInteractions ?? trace?.interactions ?? []
 
   useEffect(() => {
     if (!trace?.fault) {
@@ -302,12 +359,18 @@ export default function FaultInjectionRunTracePage() {
                     : 'Filters AGENT / LLM / TOOL spans; call tree on the left, details on the right. FI markers and real RAS markers keep distinct sources. Auto-polls before terminal and tries to keep selection.'}
                 </HelpTip>
                 <span className="text-xs text-foreground-muted">
-                  {(trace.interactions || []).length} interactions
+                  {displayInteractions.length} interactions
                 </span>
               </div>
               <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-card">
                 <AgentTraceView
-                  interactions={trace.interactions || []}
+                  interactions={displayInteractions}
+                  framework={trace.framework}
+                  langfuseTraceNodes={langfuseTraceNodes}
+                  loadInteraction={trace.taskId ? loadInteraction : undefined}
+                  loadAllInteractions={trace.taskId ? loadFullInteractions : undefined}
+                  rootSessionId={trace.taskId || undefined}
+                  rootExecutionId={trace.taskId || params.runId}
                   traceKey={trace.taskId || params.runId}
                   anomalies={[...(trace.rasMarkers || []), ...(trace.markers || [])]}
                   reliabilityEvents={[]}

@@ -4,7 +4,7 @@
  * 输入：skillName + user（从 DB 拉 active SKILL.md 内容）。
  * 输出：~18 条 TriggerItem 草稿（9 正例 + 9 反例 near-miss），落给上游写入 DB。
  *
- * Prompt 模板：docs/designs/agents/skill-eval-datasets/assets/trigger-draft-prompt-template.md。
+ * Prompt 模板：docs/design/skill-eval-datasets/assets/trigger-draft-prompt-template.md。
  * 实证参考：assets/sample-trigger-draft-skill-generator.json。
  *
  * 重点：
@@ -21,6 +21,7 @@ import { createLogger } from '@/lib/logger';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { findTriggerEvalSet, type TriggerItem } from '@/server/skill_trigger_eval_storage';
 import { getActiveConfig, getUserSettings, type ModelConfig } from '@/lib/storage/server-config';
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
 
 const logger = createLogger('skill-generation:draft-trigger-eval-set');
 
@@ -165,8 +166,9 @@ async function resolveDraftModelConfig(
   modelConfigId?: string,
 ): Promise<{
   modelId: string;
-  apiKey: string;
+  apiKey?: string;
   baseUrl?: string;
+  headers?: Record<string, string>;
   provider?: string;
   source: 'explicit' | 'active' | 'env';
 }> {
@@ -174,11 +176,12 @@ async function resolveDraftModelConfig(
   if (modelConfigId) {
     const settings = await getUserSettings(user);
     const cfg: ModelConfig | undefined = settings.configs.find(c => c.id === modelConfigId);
-    if (cfg && cfg.apiKey) {
+    if (cfg && isModelConnectionReady(cfg)) {
       return {
         modelId: cfg.model || 'deepseek-chat',
         apiKey: cfg.apiKey,
         baseUrl: cfg.baseUrl,
+        headers: cfg.headers,
         provider: cfg.provider,
         source: 'explicit',
       };
@@ -191,11 +194,12 @@ async function resolveDraftModelConfig(
 
   // Step 2: active config
   const active = await getActiveConfig(user);
-  if (active && active.apiKey) {
+  if (active && isModelConnectionReady(active)) {
     return {
       modelId: active.model || 'deepseek-chat',
       apiKey: active.apiKey,
       baseUrl: active.baseUrl,
+      headers: active.headers,
       provider: active.provider,
       source: 'active',
     };
@@ -250,6 +254,7 @@ export async function draftTriggerEvalSet(args: DraftTriggerEvalSetArgs): Promis
     modelId: resolved.modelId,
     apiKey: resolved.apiKey,
     baseUrl: resolved.baseUrl,
+    headers: resolved.headers,
     provider: resolved.provider,
   });
   const response = await model.invoke([

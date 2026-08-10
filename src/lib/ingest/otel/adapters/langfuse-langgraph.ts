@@ -2,7 +2,12 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import type { OtelTraceEvent } from '../types';
 import { LANGFUSE_LANGGRAPH_FRAMEWORK } from '../langfuse';
 import type { OtelTraceAdapter } from './types';
-import { buildLangfuseTraceNodes } from './langfuse-trace';
+import {
+  buildLangfuseTraceNodes,
+  langfuseSubagentSessionId,
+  normalizeLangfuseRequestMessages,
+  type LangfuseRequestMessage,
+} from './langfuse-trace';
 
 type AnyObj = Record<string, any>;
 const DEFAULT_REPORT_SUBAGENT = 'report-generator';
@@ -89,7 +94,7 @@ function metadata(event: OtelTraceEvent | undefined, key: string): string | unde
 }
 
 function stableSubagentSession(sessionId: string, tool: OtelTraceEvent | undefined): string {
-  return `${sessionId}:subagent:${tool?.spanId || DEFAULT_REPORT_SUBAGENT}`;
+  return langfuseSubagentSessionId(sessionId, tool?.spanId || DEFAULT_REPORT_SUBAGENT);
 }
 
 function hasAncestor(event: OtelTraceEvent, byId: Map<string, OtelTraceEvent>, predicate: (event: OtelTraceEvent) => boolean): boolean {
@@ -107,51 +112,12 @@ function parsedGenerationOutput(event: OtelTraceEvent): AnyObj {
   return objectFromJson(attr(event, 'langfuse.observation.output'));
 }
 
-function normalizeMessageRole(value: any): string {
-  const role = (firstText(value) || 'user').toLowerCase();
-  if (role === 'human') return 'user';
-  if (role === 'ai') return 'assistant';
-  return role;
-}
-
-// generation 的完整入参消息（系统提示词 + 上下文历史），转成 {role, content} 列表。
-// Langfuse 的 generation input 是 [{role,content},...]（或 {messages:[...]}）。
-//
-// 体积护栏：每个 generation 都带全量历史，第 n 轮带前 n-1 轮 → interactions JSON
-// 平方级膨胀（长会话可到几十 MB），详情页加载/入库都被拖垮。这里对单条消息截长、
-// 对条数封顶（保留开头的 system + 最近的历史）；原始 span 仍完整在 spool 里。
-const REQUEST_MESSAGE_MAX_CHARS = 4_000;
-const REQUEST_MESSAGES_MAX_COUNT = 60;
-
-function requestMessagesFromGeneration(event: OtelTraceEvent): AnyObj[] {
-  const parsed = parseJson(attr(event, 'langfuse.observation.input'));
-  const list = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray(parsed?.messages) ? parsed.messages : [];
-  let out: AnyObj[] = [];
-  for (const message of list) {
-    if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
-    const content = text(message.content);
-    if (!content) continue;
-    const clipped = content.length > REQUEST_MESSAGE_MAX_CHARS
-      ? `${content.slice(0, REQUEST_MESSAGE_MAX_CHARS)}\n…[已截断,原文 ${content.length} 字]`
-      : content;
-    out.push({ role: normalizeMessageRole(message.role ?? message.type), content: clipped });
-  }
-  if (out.length > REQUEST_MESSAGES_MAX_COUNT) {
-    const head = out.slice(0, 2);
-    const tail = out.slice(-(REQUEST_MESSAGES_MAX_COUNT - head.length - 1));
-    out = [
-      ...head,
-      { role: 'system', content: `…[省略 ${out.length - head.length - tail.length} 条历史消息]` },
-      ...tail,
-    ];
-  }
-  return out;
+function requestMessagesFromGeneration(event: OtelTraceEvent): LangfuseRequestMessage[] {
+  return normalizeLangfuseRequestMessages(attr(event, 'langfuse.observation.input'));
 }
 
 // 从入参消息里拼出系统提示词文本（可能有多条 system，拼接）
-function systemTextFromMessages(messages: AnyObj[]): string | undefined {
+function systemTextFromMessages(messages: LangfuseRequestMessage[]): string | undefined {
   const parts = messages.filter((m) => m.role === 'system').map((m) => m.content);
   return parts.length ? parts.join('\n\n---\n\n') : undefined;
 }
@@ -402,7 +368,13 @@ function findRoot(events: OtelTraceEvent[]): OtelTraceEvent | undefined {
     attr(event, 'langfuse.internal.is_app_root') === 'true',
   ));
   if (appRoot) return appRoot;
-  return byLatestEnd(events.filter((event) => event.kind === 'span')) || byLatestEnd(events);
+
+  // Langfuse 按「已结束 span」增量导出：子 agent 往往先结束并先到，真正的应用根
+  // span 最后才出现。父 span 尚未到达时不能把具名 agent 当作临时 root，否则它会
+  // 以 isSubagent=false 短暂进入主 Agent 列表，待根 span 到达后又“消失”。
+  const topLevel = events.filter((event) => !event.parentSpanId);
+  return byLatestEnd(topLevel.filter((event) => event.kind === 'span'))
+    || byLatestEnd(topLevel);
 }
 
 function isSyntheticRunName(value: any): boolean {
@@ -477,6 +449,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   if (!sessionEvents.length) return null;
 
   const selectedRoot = findRoot(sessionEvents);
+  if (!selectedRoot) return null;
   const selectedTraceId = selectedRoot?.traceId;
   const ordered = (selectedTraceId
     ? sessionEvents.filter((event) => event.traceId === selectedTraceId)
@@ -530,6 +503,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
 
   // 就近原则：一个事件属于「最近的子 agent 祖先」的作用域
   const subagentScopeFor = (event: OtelTraceEvent): SubagentScope | undefined => {
+    if (event.spanId) {
+      const ownScope = subagentScopes.get(event.spanId);
+      if (ownScope) return ownScope;
+    }
     let current = event.parentSpanId ? byId.get(event.parentSpanId) : undefined;
     const seen = new Set<string>();
     while (current?.spanId && !seen.has(current.spanId)) {
@@ -648,6 +625,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   const start = Math.min(...ordered.map(eventStart));
   const end = Math.max(...ordered.map(eventEnd));
   const toolEvents = ordered.filter((event) => event.kind === 'tool');
+  const langfuseTraceNodes = buildLangfuseTraceNodes(ordered).map((node) => {
+    const subagentSessionId = subagentScopes.get(node.spanId)?.sessionId;
+    return subagentSessionId ? { ...node, subagentSessionId } : node;
+  });
 
   return {
     task_id: sessionId,
@@ -665,7 +646,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     label: firstText(ordered.find((event) => event.serviceName)?.serviceName) || LANGFUSE_LANGGRAPH_FRAMEWORK,
     user: ordered.find((event) => event.user)?.user || 'anonymous',
     interactions,
-    langfuseTraceNodes: buildLangfuseTraceNodes(ordered),
+    langfuseTraceNodes,
     skill: skillName,
     invokedSkills: skillName ? [{ name: skillName, version: null }] : [],
     skills: skillName ? [skillName] : [],

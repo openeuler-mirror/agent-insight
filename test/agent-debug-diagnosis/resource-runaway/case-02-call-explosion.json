@@ -1,0 +1,2029 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T07:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-02-call-explosion-5181",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-02-call-explosion-5181",
+        "taskId": "jiuwen-case-02-call-explosion-5181",
+        "query": "处理一批相似文件。",
+        "framework": "jiuwenswarm",
+        "tokens": 272060,
+        "cost": 0.1527,
+        "latency": 49.2,
+        "toolCallCount": 62,
+        "llmCallCount": 53,
+        "inputTokens": 248000,
+        "outputTokens": 19100,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": 4960,
+        "timestamp": "2026-08-07T07:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "完成。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "reporter"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-02-call-explosion-5181",
+        "label": "jiuwenswarm",
+        "query": "处理一批相似文件。",
+        "startTime": "2026-08-07T07:00:00.000Z",
+        "endTime": "2026-08-07T07:00:49.200Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "处理一批相似文件。"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，处理文件。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"文件小队\", \"team_desc\": \"处理一批相似文件。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织文件处理。\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reporter 处理文件。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reporter\", \"display_name\": \"文件员\", \"desc\": \"处理相似文件。\", \"prompt\": \"读取并处理文件。\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"处理文件。\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 0",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc0\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 1",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 2",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 3",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 3600,
+              "completed": 4400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 4",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc4\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4400,
+              "completed": 5200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 5",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 5200,
+              "completed": 6000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 6",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 6000,
+              "completed": 6800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 7",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 6800,
+              "completed": 7600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 8",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc8\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 7600,
+              "completed": 8400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 9",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 8400,
+              "completed": 9200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 10",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 9200,
+              "completed": 10000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 11",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 10000,
+              "completed": 10800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 12",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc2\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10800,
+              "completed": 11600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 13",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 11600,
+              "completed": 12400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 14",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 12400,
+              "completed": 13200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 15",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 13200,
+              "completed": 14000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 16",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc6\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14000,
+              "completed": 14800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 17",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 14800,
+              "completed": 15600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 18",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 15600,
+              "completed": 16400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 19",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 16400,
+              "completed": 17200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 20",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc0\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 17200,
+              "completed": 18000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 21",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 18000,
+              "completed": 18800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 22",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 18800,
+              "completed": 19600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 23",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 19600,
+              "completed": 20400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 24",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc4\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 20400,
+              "completed": 21200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 25",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 21200,
+              "completed": 22000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 26",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 22000,
+              "completed": 22800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 27",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 22800,
+              "completed": 23600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 28",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc8\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 23600,
+              "completed": 24400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 29",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 24400,
+              "completed": 25200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 30",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 25200,
+              "completed": 26000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 31",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 26000,
+              "completed": 26800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 32",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc2\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 26800,
+              "completed": 27600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 33",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 27600,
+              "completed": 28400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 34",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 28400,
+              "completed": 29200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 35",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 29200,
+              "completed": 30000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "前部处理 36",
+            "usage": {
+              "input": 3000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 3120
+            },
+            "durationMs": 800,
+            "inputLength": 12000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"doc6\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 30000,
+              "completed": 30800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第1批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 30800,
+              "completed": 32300
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第2批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 32300,
+              "completed": 33800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第3批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 33800,
+              "completed": 35300
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第4批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 35300,
+              "completed": 36800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第5批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 36800,
+              "completed": 38300
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第6批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 38300,
+              "completed": 39800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第7批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 39800,
+              "completed": 41300
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第8批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 41300,
+              "completed": 42800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第9批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 42800,
+              "completed": 44300
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第10批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 44300,
+              "completed": 45800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第11批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 45800,
+              "completed": 47300
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-02-call-explosion_reporter",
+            "content": "尾部重复读取 docX 第12批",
+            "usage": {
+              "input": 9000,
+              "output": 1200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 300,
+              "total": 10500
+            },
+            "durationMs": 1500,
+            "inputLength": 36000,
+            "outputLength": 1600,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              },
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"file\": \"docX\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 47300,
+              "completed": 48800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "完成。",
+            "usage": {
+              "input": 2000,
+              "output": 100,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 20,
+              "total": 2120
+            },
+            "durationMs": 400,
+            "inputLength": 8000,
+            "outputLength": 200,
+            "isCompaction": false,
+            "isSummary": true,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-call-explosion-5181\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 48800,
+              "completed": 49200
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

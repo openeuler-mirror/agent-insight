@@ -81,6 +81,7 @@ export async function deriveRoutingSignature(query: string, user?: string | null
         const client = new OpenAI({
             apiKey: settings.apiKey || 'no-api-key-required',
             baseURL: settings.baseUrl || 'https://api.deepseek.com',
+            defaultHeaders: settings.headers,
             fetch: customFetch,
         });
 

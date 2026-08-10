@@ -5,6 +5,7 @@ import { AlertTriangle, ChevronDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { RelativeTime } from '@/components/text/RelativeTime';
 import { useLocale } from '@/lib/client/locale-context';
 import {
   rasKindLabel,
@@ -209,12 +210,11 @@ export function RasAnomalyStrip({
                     />
                   </div>
                   <div className="text-[11px] tabular-nums text-foreground-muted md:justify-self-end">
-                    {new Date(marker.ts).toLocaleTimeString(zh ? 'zh-CN' : 'en-US', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      second: '2-digit',
-                      hour12: false,
-                    })}
+                    <RelativeTime
+                      value={marker.ts}
+                      display="absolute"
+                      className="text-[11px] tabular-nums text-foreground-muted"
+                    />
                   </div>
                 </button>
               );

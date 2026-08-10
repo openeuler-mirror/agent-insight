@@ -106,6 +106,7 @@ async function getLlmClient(user?: string | null) {
     client: new OpenAI({
       apiKey,
       baseURL,
+      defaultHeaders: config.headers,
       fetch: customFetch,
       timeout: getSemanticMatchTimeoutMs(),
     }),

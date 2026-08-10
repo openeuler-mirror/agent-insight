@@ -1,4 +1,8 @@
-import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
+import {
+    langfuseSubagentSessionId,
+    normalizeLangfuseRequestMessages,
+    type LangfuseTraceNode,
+} from '@/lib/ingest/otel/adapters/langfuse-trace';
 import type {
     AgentEvent,
     AgentNode,
@@ -65,6 +69,118 @@ function contentText(value: unknown): string {
     } catch {
         return String(value);
     }
+}
+
+function llmOutputText(value: unknown): string {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const content = (value as Record<string, unknown>).content;
+        if (content != null) return contentText(content);
+    }
+    return contentText(value);
+}
+
+function llmOutputToolCalls(value: unknown): NonNullable<RawInteraction['tool_calls']> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const output = value as Record<string, unknown>;
+    const additional = output.additional_kwargs && typeof output.additional_kwargs === 'object' && !Array.isArray(output.additional_kwargs)
+        ? output.additional_kwargs as Record<string, unknown>
+        : undefined;
+    const calls = Array.isArray(output.tool_calls)
+        ? output.tool_calls
+        : Array.isArray(additional?.tool_calls)
+            ? additional.tool_calls
+            : [];
+    return calls.flatMap(call => {
+        if (!call || typeof call !== 'object' || Array.isArray(call)) return [];
+        const item = call as Record<string, unknown>;
+        const fn = item.function && typeof item.function === 'object' && !Array.isArray(item.function)
+            ? item.function as Record<string, unknown>
+            : undefined;
+        const name = String(item.name ?? fn?.name ?? '').trim();
+        if (!name) return [];
+        const rawArgs = item.args ?? item.arguments ?? fn?.arguments;
+        const args = typeof rawArgs === 'string'
+            ? rawArgs
+            : rawArgs == null
+                ? ''
+                : JSON.stringify(rawArgs);
+        return [{
+            id: typeof item.id === 'string' ? item.id : undefined,
+            type: typeof item.type === 'string' ? item.type : 'tool_call',
+            function: { name, arguments: args },
+        }];
+    });
+}
+
+type RequestMessage = NonNullable<RawInteraction['requestMessages']>[number];
+
+function comparableRequestMessage(message: RequestMessage): string {
+    const role = String(message.role || 'user').toLowerCase();
+    const content = contentText(message.content).trim();
+    const toolCalls = Array.isArray(message.tool_calls)
+        ? message.tool_calls.map(comparableToolCall).filter(Boolean).join('\u0001')
+        : '';
+    return `${role}\u0000${content}\u0000${toolCalls}\u0000${message.tool_call_id || ''}`;
+}
+
+function comparableToolCall(value: unknown): string {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    const call = value as Record<string, unknown>;
+    const fn = call.function && typeof call.function === 'object' && !Array.isArray(call.function)
+        ? call.function as Record<string, unknown>
+        : undefined;
+    const name = String(call.name ?? fn?.name ?? '').trim();
+    const rawArgs = call.args ?? call.arguments ?? fn?.arguments;
+    let args = rawArgs;
+    if (typeof rawArgs === 'string') {
+        try {
+            args = JSON.parse(rawArgs);
+        } catch {
+            args = rawArgs;
+        }
+    }
+    return `${name}\u0000${typeof args === 'string' ? args : JSON.stringify(args ?? null)}`;
+}
+
+export function langfusePromptHistoryCount(
+    current: RequestMessage[],
+    previous: RequestMessage[] = [],
+    previousResponse = '',
+    previousToolCalls: unknown[] = [],
+): number {
+    if (current.length === 0) return 0;
+    if (previous.length > 0) {
+        const completedPrevious = [...previous];
+        if (previousResponse.trim() || previousToolCalls.length > 0) {
+            completedPrevious.push({
+                role: 'assistant',
+                content: previousResponse,
+                ...(previousToolCalls.length ? { tool_calls: previousToolCalls } : {}),
+            });
+        }
+        let repeated = 0;
+        const max = Math.min(completedPrevious.length, current.length);
+        while (
+            repeated < max
+            && comparableRequestMessage(completedPrevious[repeated]) === comparableRequestMessage(current[repeated])
+        ) {
+            repeated++;
+        }
+        if (repeated > 0) return repeated;
+    }
+
+    let currentStart = current.length - 1;
+    while (currentStart >= 0 && String(current[currentStart].role || '').toLowerCase() === 'system') {
+        currentStart--;
+    }
+    if (currentStart < 0) return current.length;
+    const lastRole = String(current[currentStart].role || '').toLowerCase();
+    if (lastRole === 'tool') {
+        while (currentStart > 0 && String(current[currentStart - 1].role || '').toLowerCase() === 'tool') {
+            currentStart--;
+        }
+    }
+    return currentStart;
 }
 
 function userMessageText(value: unknown): string | undefined {
@@ -180,6 +296,7 @@ function finalizeNode(node: AgentNode, depth: number) {
  */
 export function buildLangfuseAgentTrace(
     sourceNodes: LangfuseTraceNode[],
+    rootSessionId?: string,
 ): LangfuseAgentTraceProjection {
     const nodes = sourceNodes
         .filter(node => node.visibility === 'visible')
@@ -196,9 +313,11 @@ export function buildLangfuseAgentTrace(
 
     for (const observation of nodes) {
         if (observation.kind !== 'agent' || agentBySpanId.has(observation.spanId)) continue;
+        const sessionId = observation.subagentSessionId
+            || (rootSessionId ? langfuseSubagentSessionId(rootSessionId, observation.spanId) : observation.spanId);
         agentBySpanId.set(
             observation.spanId,
-            makeAgentNode(`lf-agent-${observation.spanId}`, observation.name, observation.spanId, root.id),
+            makeAgentNode(`lf-agent-${observation.spanId}`, observation.name, sessionId, root.id),
         );
     }
 
@@ -235,25 +354,23 @@ export function buildLangfuseAgentTrace(
         observation: LangfuseTraceNode,
         spawnedChildId?: string,
     ) => {
-        if (observation.kind === 'llm' && hasContent(observation.input)) {
-            addInteraction(host, {
-                role: 'user',
-                content: contentText(observation.input),
-                timestamp: observation.startedAt,
-                timeInfo: { created: observation.startedAt, completed: observation.startedAt },
-                agent: host.agentName,
-            });
-        }
-
         const usage = usageFromNode(observation);
+        const requestMessages = observation.kind === 'llm'
+            ? normalizeLangfuseRequestMessages(observation.input)
+            : [];
+        const outputToolCalls = observation.kind === 'llm'
+            ? llmOutputToolCalls(observation.output)
+            : [];
         const interaction: RawInteraction = {
             role: observation.kind === 'tool' ? 'opencode' : 'assistant',
-            content: contentText(observation.output),
+            content: observation.kind === 'llm' ? llmOutputText(observation.output) : contentText(observation.output),
             timestamp: observation.startedAt,
             timeInfo: { created: observation.startedAt, completed: observation.completedAt },
             agent: host.agentName,
             model: observation.model,
             usage,
+            ...(requestMessages.length ? { requestMessages } : {}),
+            ...(outputToolCalls.length ? { tool_calls: outputToolCalls } : {}),
         };
         const interactionIndex = addInteraction(host, interaction);
         const kind: AgentEvent['kind'] = observation.kind === 'llm'

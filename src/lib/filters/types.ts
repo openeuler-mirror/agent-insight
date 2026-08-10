@@ -5,7 +5,7 @@
  * (≈ adapter→FilterState→SQL)。每个可过滤列声明一个 FilterType,FilterType 决定它
  * 可用哪些操作符(OPERATORS_BY_TYPE)。前端据此渲染控件,后端据此校验 + 翻译成 Prisma where。
  *
- * 设计与取舍见 docs/designs/agents/langfuse-style-trace-search/design.md §2.5 / §5。
+ * 设计与取舍见 docs/design/langfuse-style-trace-search/design.md §2.5 / §5。
  */
 
 export type FilterType =

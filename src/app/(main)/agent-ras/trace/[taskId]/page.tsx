@@ -126,6 +126,12 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
   const anomalies = rasEvents?.filter(e => e.type === 'anomaly') ?? [];
   const interactions = session?.interactions || [];
   const langfuseTraceNodes = session?.langfuseTraceNodes || [];
+  const framework = useMemo(() => {
+    const fromEvents = (rasEvents || [])
+      .map((event) => String(event.framework || '').trim())
+      .find(Boolean);
+    return fromEvents || undefined;
+  }, [rasEvents]);
   const anomalyMarkers = useMemo(() => {
     const markers = buildRasTraceMarkers(rasEvents || [], locale === 'zh' ? 'zh' : 'en');
     const links = buildRasDeliveryLinks({ markers, interactions });
@@ -199,12 +205,14 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
                 <AgentTraceView
                   key={taskId}
                   interactions={interactions}
+                  framework={framework}
                   langfuseTraceNodes={langfuseTraceNodes}
                   loadInteraction={loadInteraction}
                   loadAllInteractions={loadFullInteractions}
                   onSubagentNavigate={(subTaskId: string) => {
                     router.push(`/agent-ras/trace/${encodeURIComponent(subTaskId)}`);
                   }}
+                  rootSessionId={taskId}
                   rootExecutionId={rootExecutionId || taskId}
                   traceKey={taskId}
                   anomalies={anomalyMarkers}

@@ -10,6 +10,39 @@ export type DatasetKind = 'ideal_output' | 'trajectory';
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
 
 export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type TraceBackflowArtifactSource = 'input' | 'output' | 'trace' | 'none';
+
+export function defaultTraceBackflowSourceForField(key: string): TraceBackflowArtifactSource {
+  switch (key.trim().toLocaleLowerCase()) {
+    case 'input':
+      return 'input';
+    case 'output':
+    case 'expected_output':
+    case 'expectedoutput':
+    case 'reference_output':
+      return 'output';
+    case 'trace':
+    case 'trajectory':
+      return 'trace';
+    default:
+      return 'none';
+  }
+}
+
+export function sortTraceBackflowDatasetsByRecency<T extends { createdAt?: string; updatedAt?: string }>(
+  datasets: readonly T[],
+): T[] {
+  return datasets
+    .map((dataset, index) => ({ dataset, index }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.dataset.updatedAt || left.dataset.createdAt || '');
+      const rightTime = Date.parse(right.dataset.updatedAt || right.dataset.createdAt || '');
+      const normalizedLeft = Number.isFinite(leftTime) ? leftTime : Number.NEGATIVE_INFINITY;
+      const normalizedRight = Number.isFinite(rightTime) ? rightTime : Number.NEGATIVE_INFINITY;
+      return normalizedRight - normalizedLeft || left.index - right.index;
+    })
+    .map(item => item.dataset);
+}
 
 export interface DatasetField {
   id: string;
@@ -70,6 +103,77 @@ export interface AgentDataset {
   cases: DatasetCase[];
   createdAt: string;
   updatedAt: string;
+}
+
+export const EVALUATOR_CATALOG_FIELD_KEYS = ['available_tools', 'available_skills'] as const;
+export type EvaluatorCatalogFieldKey = (typeof EVALUATOR_CATALOG_FIELD_KEYS)[number];
+
+const EVALUATOR_CATALOG_FIELD_DEFINITIONS: Record<EvaluatorCatalogFieldKey, Omit<DatasetField, 'id' | 'label'>> = {
+  available_tools: {
+    key: 'available_tools',
+    type: 'json',
+    description: '任务执行时完整的可用 Tool 目录',
+  },
+  available_skills: {
+    key: 'available_skills',
+    type: 'json',
+    description: '任务执行时完整的可用 Skill 目录',
+  },
+};
+
+const EVALUATOR_CATALOG_FIELD_LABELS: Record<EvaluatorCatalogFieldKey, string> = {
+  available_tools: '可用 Tool',
+  available_skills: '可用 Skill',
+};
+
+export function evaluatorCatalogFieldKeyFromLabel(label: string): EvaluatorCatalogFieldKey | null {
+  const normalized = label.trim().toLocaleLowerCase().replace(/[\s_-]/g, '');
+  if (['availabletools', '可用tool', '可用工具'].includes(normalized)) return 'available_tools';
+  if (['availableskills', '可用skill', '可用技能'].includes(normalized)) return 'available_skills';
+  return null;
+}
+
+export function createEvaluatorCatalogField(
+  key: EvaluatorCatalogFieldKey,
+  label = EVALUATOR_CATALOG_FIELD_LABELS[key],
+): DatasetField {
+  return {
+    id: key,
+    ...EVALUATOR_CATALOG_FIELD_DEFINITIONS[key],
+    label: label.trim() || EVALUATOR_CATALOG_FIELD_LABELS[key],
+  };
+}
+
+export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
+  const fields: DatasetField[] = [
+    { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+    { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
+  ];
+  if (kind === 'trajectory') {
+    fields.push({ id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true });
+  }
+  return fields;
+}
+
+export function withEvaluatorCatalogFields(
+  fields: DatasetField[],
+  cases: Iterable<Pick<DatasetCase, 'values'>>,
+): DatasetField[] {
+  const present = new Set<EvaluatorCatalogFieldKey>();
+  for (const item of cases) {
+    const values = item.values;
+    if (!values) continue;
+    for (const key of EVALUATOR_CATALOG_FIELD_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(values, key)) present.add(key);
+    }
+  }
+  const existing = new Set(fields.map(field => field.key));
+  return [
+    ...fields,
+    ...EVALUATOR_CATALOG_FIELD_KEYS
+      .filter(key => present.has(key) && !existing.has(key))
+      .map(key => createEvaluatorCatalogField(key)),
+  ];
 }
 
 export const TRAJECTORY_PLACEHOLDER = `{

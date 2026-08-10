@@ -36,7 +36,7 @@ Agent 管理页负责把真实运行中的智能体纳入平台管理，是 Agen
 
 在 Agent 管理页，你通常会通过“注册 Agent”弹窗完成登记。常见输入项包括：
 
-- **平台名称**：例如 `opencode`、`openclaw`、`hermes`
+- **平台名称**：例如 `opencode`、`openclaw`、`hermes`、`qoder`
 - **Agent 名称**：建议使用稳定、可区分的名称
 - **Agent 描述**：可选，用来补充用途说明
 

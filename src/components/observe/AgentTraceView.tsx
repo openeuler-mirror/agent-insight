@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { SmartViewer } from '@/components/SmartViewer';
+import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -20,14 +20,16 @@ import {
     AgentNode,
     buildAgentCallTree,
     findNode,
+    firstMeaningfulLine,
     formatDuration,
     formatTokens,
-    InteractionUsage,
     RawInteraction,
-    ToolCall,
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
-import { buildLangfuseAgentTrace } from '@/lib/engine/observability/langfuse-agent-trace';
+import {
+    buildLangfuseAgentTrace,
+    langfusePromptHistoryCount,
+} from '@/lib/engine/observability/langfuse-agent-trace';
 import {
     findRasMarkersForEvent,
     type RasTraceMarker,
@@ -56,11 +58,6 @@ function getStatus(node: AgentNode): NodeStatus {
 }
 
 // docs/design/foundations.md §2 B.4 — status uses semantic tokens, never hardcoded hex.
-const STATUS_TEXT: Record<NodeStatus, string> = {
-    ok:    'text-foreground-muted',
-    slow:  'text-warning',
-    error: 'text-error',
-};
 const STATUS_DOT: Record<NodeStatus, string> = {
     ok:    'bg-foreground-muted',
     slow:  'bg-warning',
@@ -83,6 +80,15 @@ const KIND_META: Record<string, { label: string; chip: string; bar: string; text
         text: 'text-error',
     },
 };
+
+/** Exact token count, down to the unit. The left-hand span tree keeps the
+ *  abbreviated `formatTokens` (fixed-width columns), but that form rounds to the
+ *  nearest 1k above 10k — so a turn-over-turn delta of a few dozen tokens reads
+ *  as "no change", which is exactly what someone opening a span wants to see.
+ *  Every token figure in the right-hand detail panel uses this instead. */
+function exactTokens(n: number): string {
+    return n.toLocaleString();
+}
 
 // Single source of truth for span-type chips (replaces the legacy inline-styled span badges).
 function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs' | 'sm'; className?: string }) {
@@ -279,7 +285,7 @@ function RasReliabilityDetails({ markers }: { markers: RasTraceMarker[] }) {
     return <MarkerSourceSection markers={ras} heading={tt('traceTree.rasEvents')} />;
 }
 
-type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
+type DetailTab = 'timeline' | 'prompt' | 'hooks' | 'overview' | 'skills' | 'infra';
 type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user' | 'ras';
 
 interface TraceSkillCall {
@@ -522,6 +528,7 @@ interface SpanInfo {
 }
 
 interface TraceCtxValue {
+    framework?: string;
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
@@ -561,6 +568,7 @@ export interface RasTimelineEvent {
 
 export interface AgentTraceViewProps {
     interactions: RawInteraction[];
+    framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
@@ -573,6 +581,8 @@ export interface AgentTraceViewProps {
      * 不传则不渲染跳转按钮。
      */
     onSubagentNavigate?: (sessionId: string) => void;
+    /** 当前 trace 对应的 Session.taskId；用于兼容未保存 subagentSessionId 的历史 Langfuse 节点。 */
+    rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
     /**
@@ -594,10 +604,12 @@ export interface AgentTraceViewProps {
 
 export default function AgentTraceView({
     interactions: sourceInteractions,
+    framework,
     langfuseTraceNodes,
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
+    rootSessionId,
     rootExecutionId,
     traceKey,
     anomalies,
@@ -615,9 +627,11 @@ export default function AgentTraceView({
         ?? rootExecutionId
         ?? `anon:${sourceInteractions[0]?.timestamp ?? ''}:${sourceInteractions.length}`;
     const previousTraceKeyRef = React.useRef(stableTraceKey);
+    /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
+    const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
-        () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes) : null,
-        [langfuseTraceNodes],
+        () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes, rootSessionId) : null,
+        [langfuseTraceNodes, rootSessionId],
     );
 
     useEffect(() => {
@@ -644,6 +658,8 @@ export default function AgentTraceView({
         try {
             const loaded = await loadInteraction(index);
             if (previousTraceKeyRef.current !== requestedTraceId) return;
+            // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
+            sameTraceReloadRef.current = true;
             setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
@@ -659,9 +675,14 @@ export default function AgentTraceView({
         if (!fullLoadPromiseRef.current) {
             const requestedTraceId = previousTraceKeyRef.current;
             setFullInteractionLoadError(null);
-            const promise: Promise<RawInteraction[]> = loadAllInteractions()
+            let promise: Promise<RawInteraction[]>;
+            promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousTraceKeyRef.current === requestedTraceId) setInteractions(loaded);
+                    if (previousTraceKeyRef.current === requestedTraceId) {
+                        // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
+                        sameTraceReloadRef.current = true;
+                        setInteractions(loaded);
+                    }
                     return loaded;
                 })
                 .catch(error => {
@@ -742,6 +763,7 @@ export default function AgentTraceView({
     // Only reset selection/expansion when stableTraceKey changes — not when `tree`
     // is rebuilt (lazy payload hydrate / RAS delivery reclassify), and not when
     // rootExecutionId later upgrades from taskId → Execution cuid.
+    // sameTraceReloadRef still short-circuits one reset after same-trace lazy load.
     const initializedTraceScopeRef = React.useRef<string | null>(null);
 
     useEffect(() => {
@@ -765,9 +787,18 @@ export default function AgentTraceView({
         };
     }, [traceSkillCalls.length, user]);
 
+    // tree 由 interactions 派生，为同一条 trace 补数据（懒加载单条 / 补全全部）也会产生新的
+    // interactions 数组 → 新 tree 对象。若无条件跟着 tree 重置，首次点击 span 触发懒加载后
+    // 会被弹回根 Agent，必须点第二次才留得住（手动展开的节点同样会被清掉）。
+    // sameTraceReloadRef 跳过「同一条 trace 补数据」；initializedTraceScopeRef + stableTraceKey
+    // 跳过 RAS tree 重建 / rootExecutionId 身份升级导致的误重置。
     useEffect(() => {
         if (!tree) {
             initializedTraceScopeRef.current = null;
+            return;
+        }
+        if (sameTraceReloadRef.current) {
+            sameTraceReloadRef.current = false;
             return;
         }
         if (initializedTraceScopeRef.current === stableTraceKey) return;
@@ -791,6 +822,10 @@ export default function AgentTraceView({
         });
         return { agents, tasks, chains, tools, skills, llm, ras, tokens };
     }, [tree]);
+    const tokenUsageEstimated = useMemo(
+        () => interactions.some(interaction => interaction.usage?.estimated === true),
+        [interactions],
+    );
 
     const totalStart = tree?.startedAt;
     const totalDuration = tree?.stats.durationMs;
@@ -950,7 +985,7 @@ export default function AgentTraceView({
                 const tok = ev.usage?.total || 0;
                 const label = ev.kind === 'task' && ev.spawnedChildId
                     ? `spawn → ${ev.args?.subagent_type || childNode?.agentName || 'subagent'}`
-                    : ev.name || ev.summary?.split('\n')[0]?.slice(0, 60) || ev.kind;
+                    : ev.name || firstMeaningfulLine(ev.summary) || ev.kind;
                 spans.push({
                     key: evKey, label, kind: ev.kind,
                     durationMs: dur, tokens: tok || undefined,
@@ -1057,6 +1092,7 @@ export default function AgentTraceView({
     }, [focusRasMarkerId, tree]);
 
     const ctxValue: TraceCtxValue = {
+        framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly, anomalyOnly,
         findEventAnomalies,
@@ -1076,8 +1112,9 @@ export default function AgentTraceView({
     }
 
     return (
-        <TraceCtx.Provider value={ctxValue}>
-        <div className="flex flex-col gap-2.5">
+        <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
+            <TraceCtx.Provider value={ctxValue}>
+            <div className="flex flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -1098,7 +1135,11 @@ export default function AgentTraceView({
                     <StatChip label="LLM TURNS"   value={totalStats.llm}   accentClass={KIND_META.llm.text}   isActive={eventTypeFilter === 'llm'}   onClick={() => handleStatChipClick('llm')}   hint={tt('traceTree.filterType') + ' LLM'} />
                     {totalStats.ras > 0 && <StatChip label="RAS EVENTS" value={totalStats.ras} accentClass={KIND_META.ras.text} isActive={eventTypeFilter === 'ras'} onClick={() => handleStatChipClick('ras')} hint={tt('traceTree.filterType') + ' RAS'} />}
                     <Sep />
-                    <StatChip label="TOKENS" value={formatTokens(totalStats.tokens)} />
+                    <StatChip
+                        label="TOKENS"
+                        value={`${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
+                        hint={tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                    />
                     {eventTypeFilter !== 'all' && (
                         <Button variant="ghost" size="sm" onClick={() => setEventTypeFilter('all')} className="ml-auto h-6 text-xs">
                             <XIcon className="size-3" />{tt('traceTree.clearFilter')}
@@ -1308,7 +1349,15 @@ export default function AgentTraceView({
                             </Button>
                         </div>
                     ) : selectedEvent ? (
-                        <EventDetailPanel event={selectedEvent} node={selectedAgentNode} interactions={displayInteractions} />
+                        <EventDetailPanel
+                            event={selectedEvent}
+                            node={selectedAgentNode}
+                            interactions={displayInteractions}
+                            onSelectChild={(id) => {
+                                const n = findNode(tree, id);
+                                if (n) setSelectedKey(agentKey(n.id));
+                            }}
+                        />
                     ) : selectedAgentNode ? (
                         <AgentDetail
                             node={selectedAgentNode}
@@ -1330,8 +1379,9 @@ export default function AgentTraceView({
                     ) : null}
                 </div>
             </div>
-        </div>
-        </TraceCtx.Provider>
+            </div>
+            </TraceCtx.Provider>
+        </SmartViewerConfigProvider>
     );
 }
 
@@ -1721,6 +1771,9 @@ function UnifiedEventRow({
     const spanTokens = event.kind === 'task' && childNode
         ? childNode.stats.totalTokens
         : event.usage?.total || 0;
+    const spanTokensEstimated = event.kind === 'task' && childNode
+        ? childNode.events.some(childEvent => childEvent.usage?.estimated === true)
+        : event.usage?.estimated === true;
 
     // Gantt bar: for task events use child agent start
     const spanStart = event.kind === 'task' && childNode ? childNode.startedAt : event.startedAt;
@@ -1745,7 +1798,7 @@ function UnifiedEventRow({
     const primaryLabel = event.kind === 'task' && event.spawnedChildId
         ? `spawn → ${event.args?.subagent_type || childNode?.agentName || 'subagent'}`
         : event.kind === 'llm'
-            ? (event.summary ? event.summary.split('\n')[0].slice(0, 60) : 'LLM')
+            ? (firstMeaningfulLine(event.summary) || 'LLM')
             : event.name || event.summary?.slice(0, 50) || event.kind;
 
     // Secondary label
@@ -1754,10 +1807,7 @@ function UnifiedEventRow({
         : event.kind === 'llm'
             ? undefined
             : (event.name && event.summary && event.summary !== event.name)
-                ? (event.summary.startsWith(event.name)
-                    ? event.summary.slice(event.name.length).replace(/^[:\s]+/, '')
-                    : event.summary
-                ).slice(0, 50)
+                ? event.summary.slice(event.name.length).replace(/^[:\s]+/, '').slice(0, 50)
                 : undefined;
 
     return (
@@ -1834,7 +1884,7 @@ function UnifiedEventRow({
                 {formatDuration(spanDurationMs)}
             </span>
             <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
-                {spanTokens ? formatTokens(spanTokens) : ''}
+                {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
             </span>
             <span className="w-2 ml-1 flex items-center justify-center">
                 {isSlow && <span className="size-1.5 rounded-full bg-warning" />}
@@ -1932,7 +1982,8 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
     return (
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[800px] max-h-[88vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-3 p-4 border-b border-border space-y-0">
+                {/* pr-12 给 DialogContent 右上角那颗绝对定位的关闭按钮留出车道，否则和 Copy 按钮叠在一起 */}
+                <DialogHeader className="flex-row items-center gap-3 p-4 pr-12 border-b border-border space-y-0">
                     <DialogTitle className="text-sm font-semibold text-foreground">{title}</DialogTitle>
                     <div className="flex-1" />
                     <span className="text-xs text-foreground-muted tabular-nums">{raw.length.toLocaleString()} chars</span>
@@ -1950,324 +2001,6 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
                 </div>
             </DialogContent>
         </Dialog>
-    );
-}
-
-// ─── RoleSection: one message-role block inside the Input group ───────────────
-// 角色颜色仅在 LLM 详情面板内使用，用于区分 system/user/assistant 消息，不对外使用
-const ROLE_ACCENT: Record<string, string> = {
-    system:     '#7C3AED',  // violet — 系统提示用深紫区分
-    user:       '#0284C7',  // sky — 用户消息用蓝区分
-    assistant:  'var(--primary)',
-    compaction: '#D97706',  // amber — context-compaction summary 用琥珀色，提示"摘要替代了原文"
-};
-const ROLE_BG: Record<string, string> = {
-    system:     'rgba(124,58,237,0.03)',
-    user:       'rgba(2,132,199,0.03)',
-    assistant:  'rgba(79,70,229,0.03)',
-    compaction: 'rgba(217,119,6,0.04)',
-};
-
-/** Section rendered between System and User when the current LLM step happens
- *  after a context-compaction boundary. Shows the compaction summary as what
- *  the model actually sees, plus a "view original" expander to inspect the
- *  messages that were folded behind the summary. */
-function CompactionSection({
-    summaryRaw,
-    foldedOriginalRaw,
-    foldedCount,
-    modelLabel,
-    summaryUsage,
-    modalTitleBase,
-}: {
-    summaryRaw: string;
-    foldedOriginalRaw: string | null;
-    foldedCount: number;
-    modelLabel?: string;
-    summaryUsage?: InteractionUsage;
-    modalTitleBase: string;
-}) {
-    const [showSummary, setShowSummary] = useState(false);
-    const [showFolded, setShowFolded] = useState(false);
-    const accent = ROLE_ACCENT.compaction;
-    const bg = ROLE_BG.compaction;
-    const trimmed = summaryRaw.trim();
-    const preview = trimmed.slice(0, PREVIEW_CHARS);
-    const isTruncated = trimmed.length > PREVIEW_CHARS;
-
-    const totalTokens = summaryUsage?.total ?? undefined;
-
-    return (
-        <>
-            <div style={{ borderBottom: '1px solid var(--border)', background: bg }}>
-                {/* Header bar */}
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.3rem 0.625rem',
-                    borderBottom: '1px solid var(--border)',
-                    background: bg,
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent, flexShrink: 0, display: 'inline-block' }} />
-                        <span style={{ fontSize: '0.5625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: accent }}>
-                            Compacted History
-                        </span>
-                        <span style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)' }}>
-                            {foldedCount > 0
-                                ? `${foldedCount} prior turn${foldedCount === 1 ? '' : 's'} replaced by summary`
-                                : 'prior context replaced by summary'}
-                            {modelLabel && <> · via <b style={{ color: 'var(--foreground)' }}>{modelLabel}</b></>}
-                            {totalTokens != null && totalTokens > 0 && <> · {formatTokens(totalTokens)} tok</>}
-                        </span>
-                    </div>
-                    <button
-                        onClick={() => setShowSummary(true)}
-                        style={{ fontSize: '0.5625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
-                    >
-                        查看摘要全文 ›
-                    </button>
-                </div>
-                {/* Summary preview body — what the model now sees in place of the originals */}
-                <div
-                    onClick={() => setShowSummary(true)}
-                    style={{
-                        padding: '0.5rem 0.75rem',
-                        fontSize: '0.75rem',
-                        lineHeight: 1.6,
-                        color: 'var(--foreground)',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        cursor: 'pointer',
-                        maxHeight: 110,
-                        overflow: 'hidden',
-                        position: 'relative',
-                        userSelect: 'none',
-                    }}
-                >
-                    {preview}{isTruncated && ' …'}
-                    {isTruncated && (
-                        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 32, background: `linear-gradient(transparent, ${bg || 'var(--background-secondary)'})` }} />
-                    )}
-                </div>
-                {/* "View original folded messages" link */}
-                {foldedOriginalRaw && foldedCount > 0 && (
-                    <div style={{
-                        padding: '0.25rem 0.75rem 0.4rem',
-                        borderTop: '1px dashed var(--border)',
-                        fontSize: '0.5625rem',
-                        color: 'var(--foreground-muted)',
-                    }}>
-                        <button
-                            onClick={() => setShowFolded(true)}
-                            style={{ fontSize: '0.625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
-                        >
-                            ▸ 查看被折叠的原始消息 ({foldedCount})
-                        </button>
-                        <span style={{ marginLeft: '0.5rem', color: 'var(--foreground-muted)' }}>
-                            — 模型已不再看到这部分，仅供回溯
-                        </span>
-                    </div>
-                )}
-            </div>
-            {showSummary && (
-                <ContentModal
-                    title={`${modalTitleBase} — Compaction Summary`}
-                    raw={summaryRaw}
-                    onClose={() => setShowSummary(false)}
-                />
-            )}
-            {showFolded && foldedOriginalRaw && (
-                <ContentModal
-                    title={`${modalTitleBase} — Folded Original Messages (${foldedCount})`}
-                    raw={foldedOriginalRaw}
-                    onClose={() => setShowFolded(false)}
-                />
-            )}
-        </>
-    );
-}
-
-/** One row per conversation turn in the Input (Prompt) panel. Default state is
- *  a single-line collapsed preview (role badge + position + first line); click
- *  toggles inline-expand to the full content. A "查看全部" link in the expanded
- *  header opens the modal for very long content. This replaces the old "all
- *  users glued together, all assistants glued together" rendering. */
-function TurnPreviewRow({
-    role,
-    content,
-    position,
-    defaultExpanded,
-    modalTitle,
-}: {
-    role: string;
-    content: string;
-    position: number;
-    defaultExpanded?: boolean;
-    modalTitle: string;
-}) {
-    const [expanded, setExpanded] = useState(!!defaultExpanded);
-    const [showModal, setShowModal] = useState(false);
-    const accent = ROLE_ACCENT[role] || 'var(--foreground-muted)';
-    const bg     = ROLE_BG[role]    || 'transparent';
-    const trimmed = (content || '').trim();
-    const firstLine = trimmed.split(/\n/).find(l => l.trim()) || '';
-    const oneLine = firstLine.slice(0, 110);
-    const isEmpty = trimmed.length === 0;
-    const isLong  = trimmed.length > PREVIEW_CHARS;
-
-    return (
-        <>
-            <div style={{ borderBottom: '1px solid var(--border)', background: bg }}>
-                {/* Header row — always visible, click toggles */}
-                <div
-                    onClick={() => !isEmpty && setExpanded(v => !v)}
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        padding: '0.3rem 0.625rem',
-                        cursor: isEmpty ? 'default' : 'pointer',
-                        userSelect: 'none',
-                    }}
-                >
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent, flexShrink: 0, display: 'inline-block' }} />
-                    <span style={{ fontSize: '0.5625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: accent, flexShrink: 0 }}>
-                        {role}
-                    </span>
-                    <span style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>
-                        #{position}
-                    </span>
-                    {/* Inline first-line preview when collapsed (helps scan w/o expanding) */}
-                    {!expanded && !isEmpty && (
-                        <span
-                            style={{
-                                flex: 1,
-                                fontSize: '0.6875rem',
-                                color: 'var(--foreground-muted)',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                            }}
-                        >
-                            {oneLine}{firstLine.length > 110 ? '…' : ''}
-                        </span>
-                    )}
-                    {isEmpty && (
-                        <span style={{ flex: 1, fontSize: '0.6875rem', color: 'var(--foreground-muted)', fontStyle: 'italic' }}>
-                            (无文本内容)
-                        </span>
-                    )}
-                    {/* Spacer when expanded so the chevron sits right */}
-                    {expanded && <span style={{ flex: 1 }} />}
-                    {!isEmpty && (
-                        <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>
-                            {expanded ? '▾' : '▸'}
-                        </span>
-                    )}
-                </div>
-                {/* Expanded body */}
-                {expanded && !isEmpty && (
-                    <div style={{ borderTop: '1px solid var(--border)' }}>
-                        <div
-                            style={{
-                                padding: '0.5rem 0.75rem',
-                                fontSize: '0.75rem',
-                                lineHeight: 1.6,
-                                color: 'var(--foreground)',
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
-                                maxHeight: 280,
-                                overflowY: 'auto',
-                            }}
-                        >
-                            {trimmed}
-                        </div>
-                        {isLong && (
-                            <div
-                                style={{
-                                    padding: '0.25rem 0.75rem 0.4rem',
-                                    borderTop: '1px dashed var(--border)',
-                                    textAlign: 'right',
-                                }}
-                            >
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setShowModal(true); }}
-                                    style={{ fontSize: '0.625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
-                                >
-                                    查看全部 ›
-                                </button>
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
-            {showModal && (
-                <ContentModal title={modalTitle} raw={trimmed} onClose={() => setShowModal(false)} />
-            )}
-        </>
-    );
-}
-
-function RoleSection({ role, label, raw, modalTitle }: { role: string; label: string; raw: string; modalTitle: string }) {
-    const [showModal, setShowModal] = useState(false);
-    const accent = ROLE_ACCENT[role] || 'var(--foreground-muted)';
-    const bg     = ROLE_BG[role]    || 'transparent';
-    const trimmed = raw.trim();
-    const preview = trimmed.slice(0, PREVIEW_CHARS);
-    const isTruncated = trimmed.length > PREVIEW_CHARS;
-
-    return (
-        <>
-            <div style={{ borderBottom: '1px solid var(--border)', background: bg }}>
-                {/* Role header bar */}
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.3rem 0.625rem',
-                    borderBottom: '1px solid var(--border)',
-                    background: `${bg}`,
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent, flexShrink: 0, display: 'inline-block' }} />
-                        <span style={{ fontSize: '0.5625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: accent }}>{label}</span>
-                    </div>
-                    <button
-                        onClick={() => setShowModal(true)}
-                        style={{ fontSize: '0.5625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
-                    >
-                        查看全部 ›
-                    </button>
-                </div>
-                {/* Content preview */}
-                <div
-                    onClick={() => setShowModal(true)}
-                    style={{
-                        padding: '0.5rem 0.75rem',
-                        fontSize: '0.75rem',
-                        lineHeight: 1.6,
-                        color: 'var(--foreground)',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        cursor: 'pointer',
-                        maxHeight: 110,
-                        overflow: 'hidden',
-                        position: 'relative',
-                        userSelect: 'none',
-                    }}
-                >
-                    {preview}{isTruncated && ' …'}
-                    {isTruncated && (
-                        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 32, background: `linear-gradient(transparent, ${bg || 'var(--background-secondary)'})` }} />
-                    )}
-                </div>
-            </div>
-            {showModal && (
-                <ContentModal title={modalTitle} raw={raw} onClose={() => setShowModal(false)} />
-            )}
-        </>
     );
 }
 
@@ -2444,26 +2177,106 @@ function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInterac
     };
 }
 
+/** Same tool calls on both turns? An opencode tool-use turn carries empty
+ *  `content`, so on role+content alone every one of them looks alike — the
+ *  name+args pairs are what actually tell two of them apart. */
+function samePromptToolCalls(a: PromptSnapshotMessage, b: PromptSnapshotMessage): boolean {
+    const x = a.toolCalls || [];
+    const y = b.toolCalls || [];
+    if (x.length !== y.length) return false;
+    return x.every((t, i) => t.name === y[i].name && t.args === y[i].args);
+}
+
 function countRepeatedPromptPrefix(prev: PromptSnapshotMessage[], current: PromptSnapshotMessage[]): number {
     let count = 0;
     const max = Math.min(prev.length, current.length);
     while (count < max) {
         if (prev[count].role !== current[count].role) break;
         if ((prev[count].content || '').trim() !== (current[count].content || '').trim()) break;
+        if (!samePromptToolCalls(prev[count], current[count])) break;
         count++;
     }
     return count;
 }
 
-function buildLlmPromptSnapshot(event: AgentEvent, node: AgentNode, interactions: RawInteraction[]): LlmPromptSnapshot {
+function requestMessageContent(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value == null) return '';
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
+}
+
+function requestMessageToolCalls(message: NonNullable<RawInteraction['requestMessages']>[number]): PromptSnapshotMessage['toolCalls'] {
+    if (!Array.isArray(message.tool_calls)) return undefined;
+    return message.tool_calls
+        .filter((call): call is Record<string, unknown> => !!call && typeof call === 'object' && !Array.isArray(call))
+        .map(call => {
+            const fn = call.function && typeof call.function === 'object'
+                ? call.function as Record<string, unknown>
+                : undefined;
+            const name = String(call.name ?? fn?.name ?? 'tool');
+            const rawArgs = call.args ?? call.arguments ?? fn?.arguments;
+            return {
+                name,
+                args: typeof rawArgs === 'string' ? rawArgs : (rawArgs == null ? '' : JSON.stringify(rawArgs)),
+                output: '',
+            };
+        });
+}
+
+function promptMessagesFromRequest(requestMessages: NonNullable<RawInteraction['requestMessages']>): PromptSnapshotMessage[] {
+    return requestMessages.map((message, index) => ({
+        role: normalizePromptRole(message.role),
+        content: requestMessageContent(message.content),
+        toolCalls: requestMessageToolCalls(message),
+        source: message.role === 'system' ? 'system' : 'history',
+        position: index + 1,
+    }));
+}
+
+function buildLlmPromptSnapshot(
+    event: AgentEvent,
+    node: AgentNode,
+    interactions: RawInteraction[],
+    useLangfuseRequestMessages: boolean,
+): LlmPromptSnapshot {
     const eventIdx = event.interactionIndex;
-    const current = buildInputMessagesForLlmIndex(node, interactions, eventIdx);
     const previousLlmEvents = node.events
         .filter(ev => ev.kind === 'llm' && ev.interactionIndex < eventIdx)
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
+    const requestMessages = event.interaction.requestMessages;
+    if (useLangfuseRequestMessages && Array.isArray(requestMessages) && requestMessages.length > 0) {
+        const previousRequest = Array.isArray(prevEvent?.interaction.requestMessages)
+            ? prevEvent.interaction.requestMessages
+            : [];
+        return {
+            inputMessages: promptMessagesFromRequest(requestMessages),
+            repeatedPrefixCount: langfusePromptHistoryCount(
+                requestMessages,
+                previousRequest,
+                typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
+                prevEvent?.interaction.tool_calls || [],
+            ),
+            activeCompaction: null,
+            foldedOriginalRaw: null,
+            foldedOriginalCount: 0,
+            llmOrdinal: previousLlmEvents.length + 1,
+        };
+    }
+
+    const current = buildInputMessagesForLlmIndex(node, interactions, eventIdx);
+    // The previous call's OUTPUT is part of this call's input, so it belongs to
+    // History — not "本轮新增". Moving the cutoff one interaction further (`+ 1`)
+    // folds that turn into the compared prefix. Only valid for a pure-text reply:
+    // a tool-use turn's interaction also carries the tool result, which genuinely
+    // IS new input this call, so that one has to stay in Current input.
+    const prevReplyIsPureOutput = !!prevEvent && (prevEvent.interaction.tool_calls?.length ?? 0) === 0;
     const prevMessages = prevEvent
-        ? buildInputMessagesForLlmIndex(node, interactions, prevEvent.interactionIndex).inputMessages
+        ? buildInputMessagesForLlmIndex(node, interactions, prevEvent.interactionIndex + (prevReplyIsPureOutput ? 1 : 0)).inputMessages
         : [];
 
     return {
@@ -2549,7 +2362,7 @@ function ThinkingBlock({ text, tokens, durationLabel, modalTitle }: {
     if (!trimmed) return null;
     const summaryLabel = durationLabel ? `Thought for ${durationLabel}` : 'Thought process';
     const meta = [
-        tokens && tokens > 0 ? `${formatTokens(tokens)} tokens` : '',
+        tokens && tokens > 0 ? `${exactTokens(tokens)} tokens` : '',
         `${trimmed.length.toLocaleString()} chars`,
     ].filter(Boolean).join(' · ');
     return (
@@ -2588,7 +2401,7 @@ function ToolBadge({ call, modalTitle }: {
             >
                 {call.name}
             </button>
-            {open && <ContentModal title={`${modalTitle} — ${call.name}`} raw={raw} onClose={() => setOpen(false)} />}
+            {open && <ContentModal title={`${modalTitle} · ${call.name}`} raw={raw} onClose={() => setOpen(false)} />}
         </>
     );
 }
@@ -2653,6 +2466,8 @@ function SnapshotMessageRow({
     // open the Response bar too so the answer is visible without an extra click.
     const responseDefaultOpen = !!defaultExpanded;
     const roleLabel = message.role === 'compaction' ? 'summary' : message.role;
+    // 结构化标题：调用方给到「Input · History」，这里补上「第几条 + 角色」，块级弹窗再往后接 thinking / response / 工具名
+    const rowTitle = `${modalTitle} · #${message.position} ${roleLabel}`;
     const roleClasses = message.role === 'compaction'
         ? 'border-warning-border bg-warning-subtle text-warning'
         : message.role === 'system'
@@ -2694,7 +2509,7 @@ function SnapshotMessageRow({
                                 text={reasoning}
                                 tokens={message.reasoningTokens}
                                 durationLabel={message.reasoningDurationLabel}
-                                modalTitle={`${modalTitle} — thinking`}
+                                modalTitle={`${rowTitle} · thinking`}
                             />
                         )}
                         {trimmed ? (
@@ -2706,7 +2521,7 @@ function SnapshotMessageRow({
                                     text={trimmed}
                                     tone="normal"
                                     defaultOpen={responseDefaultOpen}
-                                    modalTitle={`${modalTitle} — response`}
+                                    modalTitle={`${rowTitle} · response`}
                                 />
                             ) : (
                                 <>
@@ -2724,7 +2539,7 @@ function SnapshotMessageRow({
                             )
                         ) : null}
                         {hasToolCalls && (
-                            <ToolCallList calls={toolCalls} modalTitle={modalTitle} />
+                            <ToolCallList calls={toolCalls} modalTitle={rowTitle} />
                         )}
                         {!trimmed && !hasToolCalls && reasoning ? (
                             <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
@@ -2735,7 +2550,7 @@ function SnapshotMessageRow({
                 )}
             </div>
             {showModal && (
-                <ContentModal title={modalTitle} raw={trimmed} onClose={() => setShowModal(false)} />
+                <ContentModal title={rowTitle} raw={trimmed} onClose={() => setShowModal(false)} />
             )}
         </>
     );
@@ -2764,6 +2579,9 @@ function FoldedMessagesBlock({
     const raw = messages
         .map(m => `#${m.position} [${m.role}]\n${m.content}`)
         .join('\n\n---\n\n');
+    // 弹窗标题只走「区块 · 分组 · 第几条」这条结构路径，不带正文首句 ——
+    // 正文首句当标题会被读成「这个弹窗讲的是这句话」，而它其实是整组消息。
+    const groupTitle = `${modalTitle} · ${label}`;
 
     return (
         <>
@@ -2785,7 +2603,7 @@ function FoldedMessagesBlock({
                                 key={`${message.role}-${message.position}-${index}`}
                                 message={message}
                                 defaultExpanded={expandLast && index === messages.length - 1}
-                                modalTitle={`${modalTitle} — #${message.position}`}
+                                modalTitle={groupTitle}
                             />
                         ))}
                         <div className="border-t border-border px-3 py-1.5 text-right">
@@ -2797,7 +2615,7 @@ function FoldedMessagesBlock({
                 )}
             </div>
             {showModal && (
-                <ContentModal title={`${modalTitle} — ${label}`} raw={raw} onClose={() => setShowModal(false)} />
+                <ContentModal title={groupTitle} raw={raw} onClose={() => setShowModal(false)} />
             )}
         </>
     );
@@ -2837,13 +2655,11 @@ function SnapshotSection({ label, count, subtitle, defaultOpen = true, children 
 }
 
 function HierarchicalSpanSnapshot({
-    title,
     node,
     event,
     snapshot,
     responseText,
 }: {
-    title: string;
     node: AgentNode;
     event: AgentEvent;
     snapshot: LlmPromptSnapshot;
@@ -2868,8 +2684,19 @@ function HierarchicalSpanSnapshot({
     // re-receives every call), so History = system prompt(s) + prior turns.
     const historyAndSystem = [...systemMessages, ...historyMessages];
     const inputCount = historyAndSystem.length + currentInput.length;
-    const spanId = `llm_call_${snapshot.llmOrdinal}`;
-    const threadId = node.sessionId || 'TOP';
+    // History can be thin (or absent) for two very different reasons, and saying
+    // which one it is beats a block that silently shrinks: either this is the
+    // node's first call (nothing came before), or the prefix failed to line up
+    // with the previous call so the prior turns spilled into Current input.
+    const isFirstCall = snapshot.llmOrdinal === 1;
+    const historySubtitle = historyMessages.length
+        ? (systemMessages.length ? 'system + 历史上下文 · 已折叠' : '历史上下文 · 已折叠')
+        : isFirstCall
+            ? '仅 system prompt · 本轮为首次调用，无历史上下文'
+            : '仅 system prompt · 未能与上次调用对齐，历史已并入 Current input';
+    const emptyHistoryHint = isFirstCall
+        ? '本轮为首次调用，无历史上下文；该 agent 的 system prompt 也未上报'
+        : '未采集到 system prompt，且未能与上次调用对齐 —— 历史已并入 Current input';
 
     // An LLM turn has two content blocks: the model's reasoning ("thinking") and
     // its visible response ("content"). OpenCode carries reasoning in `reasoning`
@@ -2894,40 +2721,52 @@ function HierarchicalSpanSnapshot({
 
     return (
         <div className="flex flex-col gap-3">
-            {/* span identity */}
+            {/* span identity — which call this is and whose it is. `llm_call_N` /
+                `thread_id TOP` read like OTel ids but are neither: the ordinal is
+                computed here and TOP is a placeholder. The agent name is what a
+                reader actually needs. `event #N` stays — it is the index into the
+                exported bundle's `session.interactions`, the only anchor back to
+                the raw payload. */}
             <div>
-                <SectionTitle>Trace / Span Snapshot</SectionTitle>
+                <SectionTitle>本次调用</SectionTitle>
                 <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background-secondary px-2.5 py-2">
                     <KindBadge kind="llm" />
-                    <span className="text-sm font-semibold text-foreground">{spanId}</span>
-                    <span className="text-xs text-foreground-muted">thread_id</span>
-                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 font-mono text-xs text-foreground">{threadId}</span>
+                    <span className="text-sm font-semibold text-foreground">第 {snapshot.llmOrdinal} 次模型调用</span>
+                    <span className="text-xs text-foreground-muted">来自 Agent</span>
+                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{node.agentName}</span>
+                    {node.subagentType && (
+                        <span className="text-xs text-foreground-muted">{node.subagentType}</span>
+                    )}
                     <span className="ml-auto text-xs text-foreground-muted">event #{event.interactionIndex}</span>
                 </div>
             </div>
 
             {/* INPUT — two collapsible groups: History (system + prior turns) and Current input */}
             <SnapshotSection label="Input" count={inputCount} defaultOpen>
-                {historyAndSystem.length > 0 && (
+                {historyAndSystem.length > 0 ? (
                     <FoldedMessagesBlock
                         messages={historyAndSystem}
                         label="History"
-                        subtitle="system + 历史上下文 · 已折叠"
-                        modalTitle={`${title} — history`}
+                        subtitle={historySubtitle}
+                        modalTitle="Input"
                     />
-                )}
+                ) : currentInput.length > 0 ? (
+                    <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
+                        {emptyHistoryHint}
+                    </div>
+                ) : null}
                 {currentInput.length > 0 ? (
                     <FoldedMessagesBlock
                         messages={currentInput}
                         label="Current input"
                         subtitle="本轮新增"
-                        modalTitle={`${title} — current input`}
+                        modalTitle="Input"
                         defaultOpen
                     />
                 ) : (
                     <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
                         {historyAndSystem.length
-                            ? '本轮无新增输入（上下文与上次相同）'
+                            ? '本轮无新增外部输入 —— 没有新的用户消息或工具结果，上一轮的模型回复已归入 History'
                             : 'No input messages captured for this span.'}
                     </div>
                 )}
@@ -2949,7 +2788,7 @@ function HierarchicalSpanSnapshot({
                             source: 'history',
                             position: 1,
                         }}
-                        modalTitle={`${title} — output`}
+                        modalTitle="Output"
                     />
                 ) : (
                     <div className="px-3 py-2 text-xs text-foreground-muted">
@@ -2962,18 +2801,144 @@ function HierarchicalSpanSnapshot({
 }
 
 // ─── EventDetailPanel (right panel – event selected) ─────────────────────────
-function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[] }) {
+/** 工具/技能调用是否失败。判定口径与 faithfulness-evaluator 的 status 归类一致。 */
+function isErrorToolStatus(status?: string): boolean {
+    return /error|fail|cancel/i.test(status ?? '');
+}
+
+/** 毫秒级时钟。span 详情用,便于与后端日志、Infra 曲线对时。 */
+function formatClockMs(ts?: number): string | null {
+    if (ts == null) return null;
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+}
+
+/** 可点击复制的 id 芯片(toolCallId 等)。 */
+function CopyableId({ label, value }: { label: string; value: string }) {
+    const [copied, setCopied] = useState(false);
+    return (
+        <button
+            type="button"
+            title={`复制 ${label}`}
+            onClick={async () => {
+                try {
+                    await copyText(value);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                } catch { /* ignore */ }
+            }}
+            className="font-mono text-[0.625rem] px-1.5 py-px rounded-sm border border-border bg-background-secondary text-foreground-secondary hover:border-primary hover:text-primary cursor-pointer shrink-0"
+        >
+            {value} {copied ? '✓' : '⧉'}
+        </button>
+    );
+}
+
+/** 失败 span 的错误区块。数据源为 event.toolStatus + 工具输出(错误正文通常就在 output 里)。 */
+function SpanErrorBlock({ status, text }: { status?: string; text: string | null }) {
+    const [copied, setCopied] = useState(false);
+    const body = (text ?? '').trim();
+    return (
+        <div className="rounded-md border border-error-border bg-error-subtle overflow-hidden">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-error-border">
+                <span className="size-1.5 rounded-full bg-error shrink-0" />
+                <span className="text-xs font-bold text-error">执行失败</span>
+                {status && <span className="font-mono text-[0.625rem] text-error/75">toolStatus: {status}</span>}
+                <span className="flex-1" />
+                {body && (
+                    <button
+                        type="button"
+                        title="复制错误信息"
+                        onClick={async () => {
+                            try {
+                                await copyText(body);
+                                setCopied(true);
+                                setTimeout(() => setCopied(false), 1500);
+                            } catch { /* ignore */ }
+                        }}
+                        className="text-[0.625rem] text-error/70 hover:text-error bg-transparent border-none cursor-pointer p-0"
+                    >
+                        {copied ? '✓ 已复制' : '⧉ 复制'}
+                    </button>
+                )}
+            </div>
+            {body ? (
+                <pre className="m-0 px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-words text-error max-h-72 overflow-auto">{body}</pre>
+            ) : (
+                <div className="px-2.5 py-2 text-xs text-error/80 italic">调用被标记为失败,但未记录错误正文。</div>
+            )}
+        </div>
+    );
+}
+
+/** task span 的子 Agent 汇总卡 —— 不离开面板即可看到子 Agent 概况。 */
+function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSelectChild?: (id: string) => void }) {
+    const ctx = React.useContext(TraceCtx);
+    const status = getStatus(child);
+    const s = child.stats;
+    return (
+        <div className="rounded-md border border-border p-2.5 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+                <KindBadge kind="agent" size="sm" />
+                <span className="flex-1 text-sm font-semibold truncate">{child.agentName}</span>
+                {child.sessionId && ctx.onSubagentNavigate && (
+                    <button
+                        type="button"
+                        title="在独立 Trace 视图中打开此 Sub-Agent"
+                        onClick={() => ctx.onSubagentNavigate?.(child.sessionId!)}
+                        className="px-2 py-0.5 text-xs font-semibold rounded-sm border border-primary text-primary bg-primary/10 hover:bg-primary/20 cursor-pointer shrink-0"
+                    >
+                        查看子 Trace ↗
+                    </button>
+                )}
+                {onSelectChild && (
+                    <button
+                        type="button"
+                        title="在左侧树中选中该子 Agent"
+                        onClick={() => onSelectChild(child.id)}
+                        className="px-2 py-0.5 text-xs font-semibold rounded-sm border border-border text-foreground-secondary hover:bg-background-secondary cursor-pointer shrink-0"
+                    >
+                        定位
+                    </button>
+                )}
+            </div>
+            <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-xs text-foreground-muted">
+                {status !== 'ok' && (
+                    <span className="inline-flex items-center gap-1.5">
+                        状态 <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
+                        <b className="font-semibold text-foreground">{status === 'error' ? '失败' : '慢'}</b>
+                    </span>
+                )}
+                <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(s.durationMs)}</b></span>
+                <span>Token <b className="font-semibold text-foreground tabular-nums">{exactTokens(s.totalTokens)}</b></span>
+                <span>LLM 调用 <b className="font-semibold text-foreground tabular-nums">{s.llmCalls}</b></span>
+                <span>工具调用 <b className="font-semibold text-foreground tabular-nums">{s.toolCalls}</b></span>
+                {s.skillCalls > 0 && <span>Skill <b className="font-semibold text-foreground tabular-nums">{s.skillCalls}</b></span>}
+                {child.children.length > 0 && <span>子 Agent <b className="font-semibold text-foreground tabular-nums">{child.children.length}</b></span>}
+            </div>
+        </div>
+    );
+}
+
+function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null)
         ? formatDuration(event.completedAt - event.startedAt) : null;
-    const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
-    const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || km.label;
+    const startClock = formatClockMs(event.startedAt);
+    const endClock = formatClockMs(event.completedAt);
+    const title = event.name || firstMeaningfulLine(event.summary) || km.label;
+    const hasError = isErrorToolStatus(event.toolStatus);
+    const spawnedChild = event.kind === 'task' && event.spawnedChildId
+        ? node.children.find(c => c.id === event.spawnedChildId)
+        : undefined;
 
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')
         : event.kind === 'user' ? (event.summary || event.interaction?.content || '')
+        : event.kind === 'ras' ? (event.summary || event.interaction?.content || '')
         : '';
 
     const argsStr = event.args !== undefined
@@ -2992,10 +2957,25 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
                     <span className="flex-1 text-base font-semibold truncate text-foreground">{title}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.6875rem', color: 'var(--foreground-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
-                    {time && <span>{time}</span>}
                     {dur && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{dur}</span>}
-                    {event.usage?.total ? <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatTokens(event.usage.total)} tok</span> : null}
+                    {event.usage?.total ? (
+                        <span
+                            title={event.usage.estimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                            style={{ fontVariantNumeric: 'tabular-nums' }}
+                        >
+                            {event.usage.estimated ? '≈' : ''}{exactTokens(event.usage.total)} tok
+                        </span>
+                    ) : null}
+                    {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
+                    {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
+                    {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
                     <span style={{ opacity: 0.6 }}>from: {node.agentName}</span>
+                    {event.toolStatus && !hasError && (
+                        <span className="inline-flex items-center gap-1 text-success font-semibold">
+                            <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
+                        </span>
+                    )}
+                    {event.toolCallId && <CopyableId label="toolCallId" value={event.toolCallId} />}
                 </div>
             </div>
 
@@ -3010,31 +2990,42 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
 
                 {/* ── User message ── */}
                 {event.kind === 'user' && (
-                    <CompactSection label="Message" raw={responseText || null} modalTitle={`${title} — Message`} />
+                    <CompactSection label="Message" raw={responseText || null} />
                 )}
 
                 {/* ── Tool / Skill ── */}
                 {(event.kind === 'tool' || event.kind === 'skill') && (
                     <>
+                        {/* 失败时错误正文置顶;此时 output 就是错误信息,不再重复渲染 Output */}
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
-                        {argsStr == null && outputStr == null && <EmptyDetail />}
+                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
 
                 {/* ── Task spawn ── */}
                 {event.kind === 'task' && event.spawnedChildId && (
-                    <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', padding: '0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6 }}>
-                        已生成子 Agent — 在左侧树中展开 TASK 行查看详情。
-                    </div>
+                    <>
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
+                        <CompactSection label="派生指令" raw={argsStr} modalTitle={`${title} — 派生指令`} />
+                        {spawnedChild ? (
+                            <SpawnedChildSummary child={spawnedChild} onSelectChild={onSelectChild} />
+                        ) : (
+                            <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', padding: '0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6 }}>
+                                已生成子 Agent — 在左侧树中展开 TASK 行查看详情。
+                            </div>
+                        )}
+                    </>
                 )}
 
                 {/* ── Captured task / chain observation ── */}
                 {((event.kind === 'task' && !event.spawnedChildId) || event.kind === 'chain') && (
                     <>
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
-                        {argsStr == null && outputStr == null && <EmptyDetail />}
+                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
 
@@ -3053,6 +3044,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
     interactions: RawInteraction[];
     node: AgentNode;
 }) {
+    const { framework } = React.useContext(TraceCtx);
     const it = event.interaction as RawInteraction & {
         model?: string;
         modelID?: string;
@@ -3087,11 +3079,9 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
 
     const snapshot = useMemo(
-        () => buildLlmPromptSnapshot(event, node, interactions),
-        [event, node, interactions],
+        () => buildLlmPromptSnapshot(event, node, interactions, framework === 'langfuse-langgraph'),
+        [event, node, interactions, framework],
     );
-
-    const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || 'LLM';
 
     return (
         <>
@@ -3134,11 +3124,11 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 1rem', alignItems: 'baseline' }}>
                             {hasUsage && (
                                 <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)' }}>
-                                    {usage!.input != null && usage!.input > 0 && <span>in <b style={{ color: 'var(--foreground)' }}>{formatTokens(usage!.input)}</b> </span>}
-                                    {usage!.output != null && usage!.output > 0 && <span>out <b style={{ color: 'var(--primary)' }}>{formatTokens(usage!.output)}</b> </span>}
-                                    {usage!.cache?.read != null && usage!.cache.read > 0 && <span>cache <b style={{ color: 'var(--success)' }}>{formatTokens(usage!.cache.read)}</b> </span>}
-                                    {usage!.reasoning != null && usage!.reasoning > 0 && <span>think <b style={{ color: 'var(--foreground-secondary)' }}>{formatTokens(usage!.reasoning)}</b> </span>}
-                                    {usage!.total != null && usage!.total > 0 && <span>total <b style={{ color: 'var(--foreground)', fontWeight: 700 }}>{formatTokens(usage!.total)}</b></span>}
+                                    {usage!.input != null && usage!.input > 0 && <span>in <b style={{ color: 'var(--foreground)' }}>{exactTokens(usage!.input)}</b> </span>}
+                                    {usage!.output != null && usage!.output > 0 && <span>out <b style={{ color: 'var(--primary)' }}>{exactTokens(usage!.output)}</b> </span>}
+                                    {usage!.cache?.read != null && usage!.cache.read > 0 && <span>cache <b style={{ color: 'var(--success)' }}>{exactTokens(usage!.cache.read)}</b> </span>}
+                                    {usage!.reasoning != null && usage!.reasoning > 0 && <span>think <b style={{ color: 'var(--foreground-secondary)' }}>{exactTokens(usage!.reasoning)}</b> </span>}
+                                    {usage!.total != null && usage!.total > 0 && <span>total <b style={{ color: 'var(--foreground)', fontWeight: 700 }}>{exactTokens(usage!.total)}</b></span>}
                                 </span>
                             )}
                             {callLatencyMs != null && (
@@ -3153,7 +3143,6 @@ function LLMEventBody({ event, responseText, interactions, node }: {
             )}
 
             <HierarchicalSpanSnapshot
-                title={title}
                 node={node}
                 event={event}
                 snapshot={snapshot}
@@ -3164,7 +3153,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                 <CompactSection
                     label={`Compaction Folded Originals (${snapshot.foldedOriginalCount})`}
                     raw={snapshot.foldedOriginalRaw}
-                    modalTitle={`${title} — Compaction Folded Originals`}
+                    modalTitle="Compaction Folded Originals"
                     emptyText="(empty)"
                 />
             )}
@@ -3173,202 +3162,11 @@ function LLMEventBody({ event, responseText, interactions, node }: {
     );
 }
 
-// ─── ToolCallTriggeredItem & Modal ─────────────────────────────────────────────
-function ToolCallTriggeredItem({ tc }: { tc: ToolCall }) {
-    const [showModal, setShowModal] = useState(false);
-    const name = tc.function?.name || tc.name || 'unknown';
-    const argStr = tc.function?.arguments ?? tc.arguments ?? '';
-    const argPreview = typeof argStr === 'string' ? argStr.slice(0, 80) : '';
-    const isLong = typeof argStr === 'string' && argStr.length > 80;
-
-    return (
-        <>
-            <div
-                onClick={() => { if (isLong) setShowModal(true); }}
-                className={cn(
-                    'flex items-baseline gap-2 px-2 py-1 bg-background-secondary border border-border rounded-md',
-                    isLong ? 'cursor-pointer hover:bg-background-tertiary' : 'cursor-default',
-                )}
-            >
-                <span className={cn('text-xs font-semibold shrink-0', KIND_META.tool.text)}>{name}</span>
-                {argPreview && <span className="text-xs text-foreground-muted truncate">{argPreview}{isLong ? '…' : ''}</span>}
-                {isLong && <span className="ml-auto text-xs text-primary shrink-0 whitespace-nowrap">View full ↗</span>}
-            </div>
-            {showModal && (
-                <ToolCallContentModal name={name} args={argStr as string} onClose={() => setShowModal(false)} />
-            )}
-        </>
-    );
-}
-
-function ToolCallContentModal({ name, args, onClose }: { name: string; args: string; onClose: () => void }) {
-    const [copied, setCopied] = useState(false);
-    const copy = async () => {
-        try {
-            await copyText(args);
-            setCopied(true);
-            toast.success('Copied');
-            setTimeout(() => setCopied(false), 1400);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            console.error('[copy] all methods failed:', msg);
-            toast.error(`Copy failed: ${msg.slice(0, 60)}`);
-        }
-    };
-
-    let displayArgs = args;
-    try {
-        displayArgs = JSON.stringify(JSON.parse(args), null, 2);
-    } catch {}
-
-    return (
-        <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-            <DialogContent className="max-w-[780px] max-h-[88vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-3 p-4 border-b border-border space-y-0">
-                    <span className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">TOOL CALL</span>
-                    <DialogTitle className="text-sm font-semibold text-foreground">{name}</DialogTitle>
-                    <div className="flex-1" />
-                    <span className="text-xs text-foreground-muted tabular-nums">{args.length.toLocaleString()} chars</span>
-                    <Button variant={copied ? 'default' : 'outline'} size="sm" onClick={copy} className="h-7 text-xs">
-                        {copied ? <><Check className="size-3" />Copied</> : <><CopyIcon className="size-3" />Copy</>}
-                    </Button>
-                </DialogHeader>
-                <div className="overflow-y-auto p-6 flex-1">
-                    <ModalCodeBlock value={displayArgs} />
-                </div>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-// ─── PromptMessage ─────────────────────────────────────────────────────────────
-const PROMPT_MSG_LIMIT = 300;
-const ROLE_COLOR: Record<string, string> = {
-    system:    '#7C3AED',
-    user:      '#0284C7',
-    opencode:  '#0284C7',
-    assistant: 'var(--primary)',
-    subagent:  'var(--primary)',
-};
-function PromptMessage({ role, content, toolCalls }: { role: string; content: string; toolCalls?: ToolCall[] }) {
-    const [showModal, setShowModal] = useState(false);
-    const isLong = content.length > PROMPT_MSG_LIMIT;
-    const display = isLong ? content.slice(0, PROMPT_MSG_LIMIT) + '…' : content;
-    // Sub-agent messages are shown with their logical role for readability
-    const displayRole = role === 'opencode' ? 'user' : role === 'subagent' ? 'assistant' : role;
-    const color = ROLE_COLOR[role] || 'var(--foreground-muted)';
-    return (
-        <>
-            <div style={{ padding: '0.375rem 0.5rem', background: 'var(--card-bg)', borderRadius: 4, border: '1px solid var(--border)', fontSize: '0.75rem', lineHeight: 1.5 }}>
-                <div style={{ fontSize: '0.5rem', fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>{displayRole}</div>
-                {content && (
-                    <>
-                        <SmartViewer
-                            text={display}
-                            toolbar={false}
-                            maxHeight="none"
-                            theme="light"
-                            unescape={false}
-                            className="sv-inline sv-compact"
-                        />
-                        {isLong && (
-                            <button onClick={() => setShowModal(true)} style={{ fontSize: '0.5625rem', marginTop: 4, color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                                查看全部
-                            </button>
-                        )}
-                    </>
-                )}
-                {toolCalls && toolCalls.length > 0 && (
-                    <div style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', marginTop: content ? 4 : 0 }}>
-                        [工具调用: {toolCalls.map(tc => tc.function?.name || tc.name || '?').join(', ')}]
-                    </div>
-                )}
-            </div>
-            {showModal && (
-                <MessageContentModal role={role} content={content} onClose={() => setShowModal(false)} />
-            )}
-        </>
-    );
-}
-
-// ─── MessageContentModal ──────────────────────────────────────────────────────
-function MessageContentModal({ role, content, onClose }: { role: string; content: string; onClose: () => void }) {
-    const [copied, setCopied] = useState(false);
-    const copy = async () => {
-        try {
-            await copyText(content);
-            setCopied(true);
-            toast.success('Copied');
-            setTimeout(() => setCopied(false), 1400);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            console.error('[copy] all methods failed:', msg);
-            toast.error(`Copy failed: ${msg.slice(0, 60)}`);
-        }
-    };
-    const displayRole = role === 'opencode' ? 'user' : role === 'subagent' ? 'assistant' : role;
-
-    return (
-        <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-            <DialogContent className="max-w-[780px] max-h-[88vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-3 p-4 border-b border-border space-y-0">
-                    <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">{displayRole} MESSAGE</DialogTitle>
-                    <div className="flex-1" />
-                    <span className="text-xs text-foreground-muted tabular-nums">{content.length.toLocaleString()} chars</span>
-                    <Button variant={copied ? 'default' : 'outline'} size="sm" onClick={copy} className="h-7 text-xs">
-                        {copied ? <><Check className="size-3" />Copied</> : <><CopyIcon className="size-3" />Copy</>}
-                    </Button>
-                </DialogHeader>
-                <div className="overflow-y-auto p-6 flex-1">
-                    <MarkdownContent text={content} />
-                </div>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-function ModelChip({ label, value }: { label: string; value: string }) {
-    return (
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, padding: '0.25rem 0.625rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 5 }}>
-            <span style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--foreground)' }}>{value}</span>
-        </div>
-    );
-}
-
-function TokenPill({ label, value, color, bold }: { label: string; value: number; color: string; bold?: boolean }) {
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0.375rem 0.75rem', background: 'var(--background-secondary)', border: `1px solid var(--border)`, borderRadius: 6, minWidth: 72, textAlign: 'center' }}>
-            <span style={{ fontSize: '1rem', fontWeight: bold ? 700 : 600, color, fontVariantNumeric: 'tabular-nums', lineHeight: 1.3 }}>{value.toLocaleString()}</span>
-            <span style={{ fontSize: '0.5rem', color: 'var(--foreground-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{label}</span>
-        </div>
-    );
-}
-
-function ExpandBtn({ onClick }: { onClick: () => void }) {
-    return (
-        <button onClick={onClick} style={{ fontSize: '0.75rem', color: 'var(--primary)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}>
-            查看完整内容 →
-        </button>
-    );
-}
-
 function EmptyDetail() {
     return (
         <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', textAlign: 'center', paddingTop: '2rem' }}>
             暂无详细数据
         </div>
-    );
-}
-
-function InlineCodeBlock({ text }: { text: string }) {
-    return (
-        <SmartViewer
-            text={text}
-            toolbar={false}
-            maxHeight={340}
-            theme="light"
-        />
     );
 }
 
@@ -3392,6 +3190,7 @@ function AgentDetail({
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
+    const hasHookContexts = !!(node.hookContexts && node.hookContexts.length > 0);
     const visibleEvents = node.events.filter(event => !event.treeHidden);
 
     const tabs: { id: DetailTab; label: string; count?: number }[] = [
@@ -3399,6 +3198,7 @@ function AgentDetail({
         { id: 'timeline', label: '时间线', count: visibleEvents.length },
         { id: 'skills', label: 'Skills', count: traceSkills.length },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
+        ...(hasHookContexts ? [{ id: 'hooks' as DetailTab, label: 'Hook 上下文', count: node.hookContexts!.length }] : []),
         { id: 'infra' as DetailTab, label: 'Infra' },
     ];
 
@@ -3475,6 +3275,7 @@ function AgentDetail({
                 )}
                 {activeTab === 'skills' && <SkillsTab skills={traceSkills} currentUser={currentUser} />}
                 {activeTab === 'prompt' && hasPrompt && <SystemPromptsBlock prompts={node.systemPrompts!} />}
+                {activeTab === 'hooks' && hasHookContexts && <HookContextsBlock entries={node.hookContexts!} />}
                 {activeTab === 'infra' && <InfraTab executionId={rootExecutionId} />}
             </div>
         </div>
@@ -3922,12 +3723,18 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                         { label: 'Cache Read', value: stats.cacheReadTokens },
                         { label: 'Cache Write', value: stats.cacheWriteTokens },
                         { label: 'Total',  value: stats.totalTokens },
-                    ].filter(({ value, label }) => value > 0 || label === 'Total').map(({ label, value }) => (
-                        <div key={label} style={{ padding: '0.5rem 0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, textAlign: 'center' }}>
-                            <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums' }}>{formatTokens(value)}</div>
-                            <div style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{label}</div>
-                        </div>
-                    ))}
+                    ].filter(({ value, label }) => value > 0 || label === 'Total').map(({ label, value }) => {
+                        const text = exactTokens(value);
+                        // Five fixed columns: an exact 7-figure count ("1,594,375") overruns the
+                        // cell at 1rem, so step the size down once it gets that long.
+                        const size = text.length > 8 ? '0.75rem' : text.length > 6 ? '0.875rem' : '1rem';
+                        return (
+                            <div key={label} style={{ padding: '0.5rem 0.5rem', minWidth: 0, background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, textAlign: 'center' }}>
+                                <div style={{ fontSize: size, fontWeight: 700, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums' }}>{text}</div>
+                                <div style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{label}</div>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
@@ -3952,7 +3759,7 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                                         {childStatus !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[childStatus])} />}
                                         <span className="flex-1 text-sm font-medium truncate">{child.agentName}</span>
                                         <span className={cn('text-xs tabular-nums shrink-0 font-mono', childStatus === 'slow' ? 'text-warning' : 'text-foreground-muted')}>{formatDuration(child.stats.durationMs)}</span>
-                                        <span className="text-xs text-foreground-muted tabular-nums shrink-0 font-mono">{formatTokens(child.stats.totalTokens)}</span>
+                                        <span className="text-xs text-foreground-muted tabular-nums shrink-0 font-mono">{exactTokens(child.stats.totalTokens)}</span>
                                         {child.sessionId && overviewCtx.onSubagentNavigate && (
                                             <button
                                                 type="button"
@@ -4030,7 +3837,7 @@ function TopNPanel() {
                         <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
                     ) : items.map((span, i) => {
                         const metric = tab === 'tokens'
-                            ? (span.tokens ? formatTokens(span.tokens) : '-')
+                            ? (span.tokens ? exactTokens(span.tokens) : '-')
                             : (span.durationMs ? formatDuration(span.durationMs) : '-');
                         const isWarn = tab === 'slow' || span.isSlow;
                         return (
@@ -4066,7 +3873,7 @@ function TimelineTab({ events, eventTypeFilter, onEventTypeFilterChange, onSelec
     interactions: RawInteraction[];
 }) {
     const counts = useMemo(() => {
-        const c: Record<string, number> = { llm: 0, tool: 0, skill: 0, task: 0, chain: 0, user: 0, ras: 0 };
+        const c: Record<string, number> = { llm: 0, tool: 0, skill: 0, task: 0, chain: 0, user: 0 };
         events.forEach(ev => { if (c[ev.kind] != null) c[ev.kind]++; });
         return c;
     }, [events]);
@@ -4084,7 +3891,6 @@ function TimelineTab({ events, eventTypeFilter, onEventTypeFilterChange, onSelec
         { kind: 'chain', label: 'Chain' },
         { kind: 'skill', label: 'Skill' },
         { kind: 'user', label: 'User' },
-        { kind: 'ras', label: 'RAS' },
     ];
 
     return (
@@ -4230,7 +4036,7 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
                     <div className="text-xs text-foreground-muted mt-0.5 flex flex-wrap gap-2 items-center">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
-                        {event.usage?.total ? <span className="tabular-nums">{formatTokens(event.usage.total)} tok</span> : null}
+                        {event.usage?.total ? <span className="tabular-nums">{exactTokens(event.usage.total)} tok</span> : null}
                         {event.spawnedChildId && (
                             <button
                                 onClick={e => { e.stopPropagation(); onSelectChild(event.spawnedChildId!); }}
@@ -4289,8 +4095,61 @@ function SystemPromptsBlock({ prompts }: { prompts: NonNullable<AgentNode['syste
     );
 }
 
+// ─── HookContextsBlock ────────────────────────────────────────────────────────
+// Claude Code hooks 通过 hookSpecificOutput.additionalContext 注入的上下文。它不进
+// 官方 OTel 事件,由客户端补传采集(见 /api/ingest/claude/context),这里和 System Prompt
+// 一样按「喂给模型的上下文」展示,不混进时间线。
+function HookContextsBlock({ entries }: { entries: NonNullable<AgentNode['hookContexts']> }) {
+    const [modalIdx, setModalIdx] = useState<number | null>(null);
+    const active = modalIdx !== null ? entries[modalIdx] : null;
+
+    return (
+        <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {entries.map((entry, i) => {
+                    const chars = entry.length ?? entry.text.length;
+                    const firstLine = entry.text.split('\n').find(l => l.trim()) ?? '';
+                    const label = firstLine.length > 72 ? firstLine.slice(0, 72) + '…' : firstLine;
+                    return (
+                        <div key={i} onClick={() => setModalIdx(i)}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.5rem 0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', transition: 'background 0.1s' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--background-tertiary)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'var(--background-secondary)')}
+                        >
+                            <span style={{ fontSize: '0.75rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>🪝</span>
+                            {entry.hookEvent && (
+                                <span style={{ fontSize: '0.625rem', padding: '0.125rem 0.375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 4, flexShrink: 0 }}>{entry.hookEvent}</span>
+                            )}
+                            <span style={{ flex: 1, fontSize: '0.8125rem', color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label || 'Hook Context'}</span>
+                            <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{chars.toLocaleString()} chars</span>
+                            <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>查看 ›</span>
+                        </div>
+                    );
+                })}
+            </div>
+            {active && (
+                <SystemPromptModal
+                    prompt={{ text: active.text, length: active.length }}
+                    index={modalIdx!}
+                    total={entries.length}
+                    onClose={() => setModalIdx(null)}
+                    title={active.hookName ? `HOOK CONTEXT · ${active.hookName}` : 'HOOK CONTEXT'}
+                    badge={active.hookEvent}
+                />
+            )}
+        </>
+    );
+}
+
 // ─── SystemPromptModal ────────────────────────────────────────────────────────
-function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNullable<AgentNode['systemPrompts']>[number]; index: number; total: number; onClose: () => void }) {
+function SystemPromptModal({ prompt, index, total, onClose, title = 'SYSTEM PROMPT', badge }: {
+    prompt: { text: string; length?: number; sha256?: string; modelID?: string };
+    index: number;
+    total: number;
+    onClose: () => void;
+    title?: string;
+    badge?: string;
+}) {
     const [copied, setCopied] = useState(false);
     const copy = async () => {
         try {
@@ -4309,8 +4168,9 @@ function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNulla
     return (
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[780px] max-h-[88vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-3 p-4 border-b border-border space-y-0 flex-wrap">
-                    <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">SYSTEM PROMPT</DialogTitle>
+                <DialogHeader className="flex-row items-center gap-3 p-4 pr-12 border-b border-border space-y-0 flex-wrap">
+                    <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">{title}</DialogTitle>
+                    {badge && <span className="text-xs text-foreground-muted">{badge}</span>}
                     {total > 1 && <span className="text-xs text-foreground-muted">{index + 1} / {total}</span>}
                     <div className="flex-1" />
                     <span className="text-xs text-foreground-muted tabular-nums">{chars.toLocaleString()} chars</span>
@@ -4342,13 +4202,13 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     return (
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[700px] max-h-[82vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-2 p-4 border-b border-border space-y-0">
+                <DialogHeader className="flex-row items-center gap-2 p-4 pr-12 border-b border-border space-y-0">
                     <KindBadge kind={event.kind} size="sm" />
                     <DialogTitle className="flex-1 font-semibold text-sm truncate text-foreground">{title}</DialogTitle>
                     <div className="flex gap-3 items-center shrink-0 text-xs text-foreground-muted">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
-                        {event.usage?.total ? <span className="tabular-nums">{formatTokens(event.usage.total)} tok</span> : null}
+                        {event.usage?.total ? <span className="tabular-nums">{exactTokens(event.usage.total)} tok</span> : null}
                     </div>
                 </DialogHeader>
                 <div className="overflow-auto p-4 flex flex-col gap-4">

@@ -2,10 +2,26 @@ import fs from 'node:fs';
 import type { ExecutionRecord } from '@/lib/storage/data-service';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { resolveAgentInsightHomePath } from '@/lib/env';
+import { CONTEXT_SUPPLEMENT_EVENT } from './context-supplement';
 import { readClaudeOtelEventsForSession } from './spool';
 import type { ClaudeOtelAggregationResult, ClaudeOtelEvent } from './types';
 
 const ROOT_AGENT_NAME = 'Claude Code';
+const INTERNAL_CLAUDE_QUERY_SOURCES = new Set([
+  'generate_session_title',
+  'prompt_suggestion',
+  'prompt_suggestion_generate',
+  'away_summary',
+  'agent_summary',
+]);
+
+function isInternalClaudeQuerySource(value: any): boolean {
+  return INTERNAL_CLAUDE_QUERY_SOURCES.has(asString(value).trim().toLowerCase());
+}
+
+function isInternalClaudeSystemPrompt(value: any): boolean {
+  return /\bGenerate a concise, sentence-case title\b/i.test(asString(value));
+}
 
 function asNumber(value: any, fallback = 0): number {
   if (value === undefined || value === null || value === '') return fallback;
@@ -45,6 +61,11 @@ function eventKey(event: ClaudeOtelEvent): string {
 function promptKey(event: ClaudeOtelEvent): string {
   return event.promptId || '__session__';
 }
+
+// 客户端补传事件(POST /api/ingest/claude/context)。Claude Code 官方 OTel logs 里
+// 请求体只有 `body_ref`(客户端本机绝对路径),system prompt 只存在于请求体里、hook 注入的
+// additionalContext 根本不进 OTel —— 服务端与客户端不同机时两者都拿不到。补传把这两样
+// 从客户端磁盘捞出来,以本事件写进同一份 spool。
 
 function toIsoTimestamp(ms: number | undefined): string | undefined {
   if (ms == null || !Number.isFinite(ms)) return undefined;
@@ -358,6 +379,18 @@ function mergeToolCall(existing: any, incoming: any): any {
   return merged;
 }
 
+function applyMappedSubagentType(toolCall: any, agentType?: string): any {
+  if (toolCall?.name !== 'task' || !agentType?.trim()) return toolCall;
+  const args = parseJsonMaybe(toolCall.arguments) || {};
+  args.subagent_type = normalizeSubagentType(agentType);
+  const serialized = JSON.stringify(args);
+  return {
+    ...toolCall,
+    arguments: serialized,
+    function: { ...(toolCall.function || {}), name: 'task', arguments: serialized },
+  };
+}
+
 function mergeToolCallIntoInteraction(target: any, toolCall: any): void {
   const existing = Array.isArray(target.tool_calls) ? target.tool_calls : [];
   const idx = existing.findIndex((tc: any) => tc.id === toolCall.id);
@@ -378,6 +411,15 @@ function subagentNameFromToolUse(toolUse: any): string {
   const input = toolUse?.input || {};
   if (toolUse?.name === 'Agent') return normalizeSubagentType(input.subagent_type || input.subagentType);
   return input.subagent_type || input.subagentType || toolUse?.name || 'Subagent';
+}
+
+/**
+ * 跨机场景没有 tool_use 块,只能从 tool_result 事件重建出来的那条工具调用里取子 agent 类型
+ * (`tool_input` 里带 subagent_type)。取不到就退回 normalizeSubagentType 的默认值。
+ */
+function subagentNameFromToolCall(toolCall: any): string {
+  const args = parseJsonMaybe(toolCall?.arguments) || {};
+  return normalizeSubagentType(args.subagent_type || args.subagentType);
 }
 
 function dedupeEvents(events: ClaudeOtelEvent[]): ClaudeOtelEvent[] {
@@ -401,6 +443,57 @@ function dedupeEvents(events: ClaudeOtelEvent[]): ClaudeOtelEvent[] {
   return out;
 }
 
+type SystemPromptState = {
+  systemByPromptKey: Map<string, string>;
+  /** 客户端补传的 root system prompt。 */
+  supplementSystemTexts: string[];
+  /** 客户端补传的 child system prompt,按父侧 Agent tool_use_id 隔离。 */
+  supplementSystemTextsByToolId: Map<string, string[]>;
+  emittedSystemScopes: Set<string>;
+};
+
+/**
+ * 该 prompt 要吐出的 system prompt 正文。**真实请求体永远优先**:只有本机读不到
+ * `body_ref`(跨机部署)时才回落到客户端补传,所以同机部署的行为一字不变。
+ */
+function resolveSystemTexts(state: SystemPromptState, key: string, toolUseId?: string): string[] {
+  const real = state.systemByPromptKey.get(key);
+  if (real) return [real];
+  if (toolUseId) return state.supplementSystemTextsByToolId.get(toolUseId) || [];
+  return state.supplementSystemTexts;
+}
+
+/** 同一份 system prompt 每个 scope(root / 各 Agent 子会话)只吐一条。 */
+function pushSystemInteraction(
+  interactions: any[],
+  state: SystemPromptState,
+  systemText: string,
+  args: {
+    event: ClaudeOtelEvent;
+    requestEvent?: ClaudeOtelEvent;
+    subSession?: string;
+    agent: string;
+    model?: any;
+    supplemented: boolean;
+  },
+): void {
+  const scopeKey = `${args.subSession || '__root__'}::${systemText}`;
+  if (state.emittedSystemScopes.has(scopeKey)) return;
+  state.emittedSystemScopes.add(scopeKey);
+  interactions.push({
+    role: 'system',
+    content: systemText,
+    system_prompt_length: systemText.length,
+    ...(args.supplemented ? { system_prompt_source: 'client-supplement' } : {}),
+    timestamp: eventTime(args.event),
+    timeInfo: interactionTimeInfo(args.requestEvent, args.event),
+    agent: args.agent,
+    subagent_session_id: args.subSession,
+    prompt_id: args.event.promptId,
+    model: args.model,
+  });
+}
+
 function appendAssistantFromApiResponse(
   event: ClaudeOtelEvent,
   interactions: any[],
@@ -412,6 +505,8 @@ function appendAssistantFromApiResponse(
     toolUseById: Map<string, any>;
     subagentSessionByToolId: Map<string, string>;
     systemByPromptKey: Map<string, string>;
+    supplementSystemTexts: string[];
+    supplementSystemTextsByToolId: Map<string, string[]>;
     emittedSystemScopes: Set<string>;
   },
 ): void {
@@ -436,24 +531,18 @@ function appendAssistantFromApiResponse(
   // System prompt (top-level `system` of the matching api_request_body). The same
   // prompt repeats on every call of an agent, so emit it once per scope — root, or
   // each Agent sub-session — and let the trace builder stash it on that node.
-  const systemText = state.systemByPromptKey.get(promptKey(event));
-  if (systemText) {
-    const resolvedSubSession = isSubagentResponse ? subagentSessionId || `${event.sessionId}:${linkedToolId}` : undefined;
-    const scopeKey = `${resolvedSubSession || '__root__'}::${systemText}`;
-    if (!state.emittedSystemScopes.has(scopeKey)) {
-      state.emittedSystemScopes.add(scopeKey);
-      interactions.push({
-        role: 'system',
-        content: systemText,
-        system_prompt_length: systemText.length,
-        timestamp: eventTime(event),
-        timeInfo: interactionTimeInfo(requestEvent, event),
-        agent: isSubagentResponse ? subagentName : ROOT_AGENT_NAME,
-        subagent_session_id: resolvedSubSession,
-        prompt_id: event.promptId,
-        model: attrs.model || body.model,
-      });
-    }
+  const key = promptKey(event);
+  const supplemented = !state.systemByPromptKey.has(key);
+  const resolvedSubSession = isSubagentResponse ? subagentSessionId || `${event.sessionId}:${linkedToolId}` : undefined;
+  for (const systemText of resolveSystemTexts(state, key, isSubagentResponse ? linkedToolId : undefined)) {
+    pushSystemInteraction(interactions, state, systemText, {
+      event,
+      requestEvent,
+      subSession: resolvedSubSession,
+      agent: (isSubagentResponse ? subagentName : undefined) || ROOT_AGENT_NAME,
+      model: attrs.model || body.model,
+      supplemented,
+    });
   }
 
   const reasoningParts = reasoningPartsFromContent(content);
@@ -483,6 +572,9 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     .sort((a, b) => eventSortValue(a) - eventSortValue(b));
 
   if (ordered.length === 0) return null;
+  // 补传是给已有 trace 补料的,自己不构成一条 trace。补传先于 OTel 日志到达(或那次会话
+  // 的日志压根没上来)时直接不出记录,免得凭空多出一条只有 system prompt 的空 trace。
+  if (ordered.every((event) => event.eventName === CONTEXT_SUPPLEMENT_EVENT)) return null;
 
   const interactions: any[] = [];
   const responseMetaByKey = new Map<string, { request?: ClaudeOtelEvent; body: any; content: any[] }>();
@@ -512,15 +604,80 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
 
   const systemByPromptKey = new Map<string, string>();
   const emittedSystemScopes = new Set<string>();
+  // 客户端补传:system prompt 走会话级(raw body 里没有 promptId),hook 注入上下文按内容去重。
+  const supplementSystemTexts: string[] = [];
+  const supplementSystemTextsByToolId = new Map<string, string[]>();
+  const emittedHookContexts = new Set<string>();
+  // 工具输出补传:tool_use_id → 输出正文。跨机时请求体读不到,这是唯一来源。
+  const supplementToolOutputById = new Map<string, any>();
+  const emittedSupplementSubagents = new Set<string>();
+  const pendingSupplementSubagents: any[] = [];
+  // 子 agent 归属映射(kind=subagent_map):OTel 事件不带 agent 标识,客户端把子 agent
+  // transcript(subagents/agent-*.jsonl)里的 message uuid 与内部 tool_use_id 传上来,
+  // 聚合器据此把 fallback 路径的轮次逐轮归还给 `<session>:<toolUseId>` 那个子 agent。
+  const subagentMapByToolId = new Map<string, { agentType?: string; spawnDepth?: number }>();
+  const uuidToSubagentToolId = new Map<string, string>();
+  const innerToolIdToSubagentToolId = new Map<string, string>();
+  // 逐轮归属出的子 agent 轮次,按 scope(父侧 toolUseId)攒着,主循环后统一追加
+  const supplementTurnsByScope = new Map<string, any[]>();
+  // 内部工具的 tool_result 先于该 scope 第一轮到达时的暂存
+  const pendingScopeToolCalls = new Map<string, any[]>();
 
   const pendingRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
+  // assistant_response 兜底路径(见下方主循环)要用同一批 api_request 取 usage/时间。
+  // 单独一份队列各自消耗,免得两条路径互相打乱配对顺序。
+  const fallbackRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
+  // 每个 prompt 下"正文真的读到了"的 api_response_body 条数,决定兜底要不要出手。
+  const usableResponseCountByPrompt = new Map<string, number>();
+  const assistantResponseSeenByPrompt = new Map<string, number>();
   for (const event of ordered) {
     if (event.eventName === 'api_request_body') {
+      if (isInternalClaudeQuerySource(event.attributes?.query_source)) continue;
       const body = readBodyPayload(event.attributes || {});
       if (body) {
         collectToolResultOutputsFromRequestBody(body, requestBodyToolOutputById);
         const systemText = stringifyAnthropicSystem(body.system);
-        if (systemText) systemByPromptKey.set(promptKey(event), systemText);
+        if (systemText && !isInternalClaudeSystemPrompt(systemText)) {
+          systemByPromptKey.set(promptKey(event), systemText);
+        }
+      }
+      continue;
+    }
+    if (event.eventName === CONTEXT_SUPPLEMENT_EVENT) {
+      // hook 注入上下文在主循环里落成 interaction;这里只收发射前就得备好的两类。
+      const attrs = event.attributes || {};
+      if (attrs.kind === 'system_prompt') {
+        const text = asString(attrs.text).trim();
+        if (isInternalClaudeSystemPrompt(text)) continue;
+        const toolUseId = asString(attrs.tool_use_id);
+        if (text && toolUseId) {
+          const scoped = supplementSystemTextsByToolId.get(toolUseId) || [];
+          if (!scoped.includes(text)) scoped.push(text);
+          supplementSystemTextsByToolId.set(toolUseId, scoped);
+        } else if (text && !supplementSystemTexts.includes(text)) {
+          supplementSystemTexts.push(text);
+        }
+      } else if (attrs.kind === 'tool_output') {
+        const toolUseId = asString(attrs.tool_use_id);
+        const output = normalizeToolResultOutput(attrs.text);
+        if (toolUseId && output !== undefined) supplementToolOutputById.set(toolUseId, output);
+      } else if (attrs.kind === 'subagent_map') {
+        // 重传的映射(会话继续跑、映射长大)取并集,晚到的 agentType 覆盖
+        const parsed = parseJsonMaybe(attrs.text);
+        const toolUseId = asString(parsed?.toolUseId) || asString(attrs.tool_use_id);
+        if (parsed && toolUseId) {
+          const prev = subagentMapByToolId.get(toolUseId) || {};
+          subagentMapByToolId.set(toolUseId, {
+            agentType: asString(parsed.agentType) || prev.agentType,
+            spawnDepth: Number.isFinite(parsed.spawnDepth) ? parsed.spawnDepth : prev.spawnDepth,
+          });
+          for (const uuid of Array.isArray(parsed.messageUuids) ? parsed.messageUuids : []) {
+            if (typeof uuid === 'string' && uuid) uuidToSubagentToolId.set(uuid, toolUseId);
+          }
+          for (const innerId of Array.isArray(parsed.toolUseIds) ? parsed.toolUseIds : []) {
+            if (typeof innerId === 'string' && innerId) innerToolIdToSubagentToolId.set(innerId, toolUseId);
+          }
+        }
       }
       continue;
     }
@@ -529,12 +686,17 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       const queue = pendingRequestsByPrompt.get(key) || [];
       queue.push(event);
       pendingRequestsByPrompt.set(key, queue);
+      const fallbackQueue = fallbackRequestsByPrompt.get(key) || [];
+      fallbackQueue.push(event);
+      fallbackRequestsByPrompt.set(key, fallbackQueue);
       continue;
     }
     if (event.eventName !== 'api_response_body') continue;
+    if (isInternalClaudeQuerySource(event.attributes?.query_source)) continue;
     const body = readBodyPayload(event.attributes || {});
     if (!body) continue;
     const key = promptKey(event);
+    usableResponseCountByPrompt.set(key, (usableResponseCountByPrompt.get(key) || 0) + 1);
     const request = pendingRequestsByPrompt.get(key)?.shift();
     const content = contentBlocksFromResponseBody(body);
     responseMetaByKey.set(eventKey(event), { request, body, content });
@@ -575,6 +737,31 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     if (!timestamp || Date.parse(eventTime(event)) < Date.parse(timestamp)) timestamp = eventTime(event);
     if (!user && event.user) user = event.user;
 
+    // hook 注入的 additionalContext:是"喂给模型的上下文",不是用户输入,所以单独一类
+    // role,既不进 query/首条 user 的口径,也不被按 user/assistant 取值的下游(评测、
+    // fault-path、call-stats)看见 —— 它们都是按具体 role 白名单取的。
+    if (event.eventName === CONTEXT_SUPPLEMENT_EVENT) {
+      if (attrs.kind !== 'hook_context') continue;
+      const text = asString(attrs.text).trim();
+      if (!text) continue;
+      const hookEvent = asString(attrs.hook_event);
+      const dedupeKey = `${hookEvent}::${asString(attrs.content_hash) || text}`;
+      if (emittedHookContexts.has(dedupeKey)) continue;
+      emittedHookContexts.add(dedupeKey);
+      interactions.push({
+        role: 'hook_context',
+        content: text,
+        hook_event: hookEvent || undefined,
+        hook_name: asString(attrs.hook_name) || undefined,
+        hook_context_length: text.length,
+        timestamp: eventTime(event),
+        timeInfo: { created: eventTime(event), completed: eventTime(event) },
+        agent: ROOT_AGENT_NAME,
+        prompt_id: event.promptId,
+      });
+      continue;
+    }
+
     if (event.eventName === 'user_prompt') {
       const prompt = asString(attrs.prompt) || '[Redacted Claude Code prompt]';
       if (!query && prompt !== '[Redacted Claude Code prompt]') query = prompt;
@@ -610,7 +797,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     }
 
     if (event.eventName === 'api_response_body') {
-      const state = { finalResult, model, responseMetaByKey, responseToToolId, toolUseById, subagentSessionByToolId, systemByPromptKey, emittedSystemScopes };
+      if (isInternalClaudeQuerySource(attrs.query_source)) continue;
+      const state = { finalResult, model, responseMetaByKey, responseToToolId, toolUseById, subagentSessionByToolId, systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
       appendAssistantFromApiResponse(event, interactions, state);
       finalResult = state.finalResult;
       model = state.model || model;
@@ -626,27 +814,238 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       continue;
     }
 
+    // assistant_response 自带完整回复正文(attributes.response),和 api_response_body
+    // 是同一次 LLM 调用的两份记录。api_response_body 的正文走 body_ref 指向【客户端
+    // 本机磁盘】,服务端与客户端不同机时(远端部署 / 容器 / 不同用户)永远读不到 ——
+    // 那条路径会 return 掉整条助手消息,trace 只剩 user、`trace_completed_at` 永远推不出来,
+    // 前端就一直显示"执行中"。所以这里在"本 prompt 没有可用 api_response_body"时兜底,
+    // 保证回复正文与可收敛的完成状态不依赖跨机文件。
+    // 局限(受事件本身所限,非本兜底可解):不含 tool_use 块,故拿不到 subagent 层级。
+    // 系统提示词同样不在事件里,但客户端补传(context_supplement)能补上,见下方发射。
+    if (event.eventName === 'assistant_response') {
+      const key = promptKey(event);
+      const seen = assistantResponseSeenByPrompt.get(key) || 0;
+      assistantResponseSeenByPrompt.set(key, seen + 1);
+      // 队列按 assistant_response 的出现顺序对齐消耗,跳过时也要 shift,否则混合场景错配
+      const requestEvent = fallbackRequestsByPrompt.get(key)?.shift();
+      if (isInternalClaudeQuerySource(attrs.query_source)) continue;
+      if (seen < (usableResponseCountByPrompt.get(key) || 0)) continue;
+      const text = asString(attrs.response);
+      if (!text.trim()) continue;
+      // 子 agent 内部轮次(message.uuid 命中补传映射):归到对应 scope,不算 root 的一轮。
+      // 只有 fallback 路径会走到这里,同机部署(有可读响应体)在上面 seen<usable 就跳过了,
+      // 行为不受影响。不动 finalResult / model / root system / root pending —— 那些都是 root 的。
+      const mappedToolId = uuidToSubagentToolId.get(asString(attrs['message.uuid']));
+      if (mappedToolId) {
+        const map = subagentMapByToolId.get(mappedToolId) || {};
+        const subagentName = normalizeSubagentType(map.agentType);
+        agentNames.add(subagentName);
+        const scope = `${event.sessionId}:${mappedToolId}`;
+        const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
+        for (const systemText of resolveSystemTexts(systemState, key, mappedToolId)) {
+          pushSystemInteraction(interactions, systemState, systemText, {
+            event,
+            requestEvent,
+            subSession: scope,
+            agent: subagentName,
+            model: attrs.model,
+            supplemented: !systemByPromptKey.has(key),
+          });
+        }
+        const turn = {
+          role: 'subagent',
+          content: text,
+          timestamp: eventTime(event),
+          timeInfo: interactionTimeInfo(requestEvent, event),
+          agent: subagentName,
+          subagent_name: subagentName,
+          subagent_session_id: scope,
+          prompt_id: event.promptId,
+          model: attrs.model,
+          usage: normalizeUsage(undefined, requestEvent?.attributes || {}),
+          subagent_source: 'client-supplement',
+        };
+        const turns = supplementTurnsByScope.get(scope) || [];
+        turns.push(turn);
+        supplementTurnsByScope.set(scope, turns);
+        // 早于本轮到达的内部工具调用,现在有轮可挂了
+        for (const pendingCall of pendingScopeToolCalls.get(scope) || []) {
+          mergeToolCallIntoInteraction(turn, pendingCall);
+        }
+        pendingScopeToolCalls.delete(scope);
+        continue;
+      }
+      finalResult = text;
+      if (attrs.model) model = String(attrs.model);
+      // 跨机场景只有这条兜底路径会跑,system prompt 得在这里发射(root scope —— 本事件
+      // 不带 tool_use,分不出子 agent)。同机部署走上面的 api_response_body 路径,不受影响。
+      const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
+      for (const systemText of resolveSystemTexts(systemState, key)) {
+        pushSystemInteraction(interactions, systemState, systemText, {
+          event,
+          requestEvent,
+          agent: ROOT_AGENT_NAME,
+          model: attrs.model,
+          supplemented: !systemByPromptKey.has(key),
+        });
+      }
+      interactions.push({
+        role: 'assistant',
+        content: text,
+        timestamp: eventTime(event),
+        timeInfo: interactionTimeInfo(requestEvent, event),
+        agent: ROOT_AGENT_NAME,
+        prompt_id: event.promptId,
+        model: attrs.model,
+        usage: normalizeUsage(undefined, requestEvent?.attributes || {}),
+      });
+      // 跨机时 tool_result 可能先于本轮助手消息到达 —— 那会儿还没有任何 assistant 可挂,
+      // 工具调用只能滞留在 pendingToolResultById。正常路径靠 api_response_body 分支收口,
+      // 而跨机根本不会走那条,不在这里收就整批工具调用凭空消失(trace 只剩对话)。
+      const assistantTurn = interactions[interactions.length - 1];
+      for (const [pendingId, pendingCall] of pendingToolResultById) {
+        mergeToolCallIntoInteraction(assistantTurn, pendingCall);
+        pendingToolResultById.delete(pendingId);
+      }
+      continue;
+    }
+
     if (event.eventName === 'tool_result') {
       toolCallCount += 1;
       if (String(attrs.success) === 'false') toolCallErrorCount += 1;
       const toolId = attrs.tool_use_id;
       const toolUse = typeof toolId === 'string' ? toolUseById.get(toolId) : undefined;
+      // 输出的取值优先级:真实请求体 → 客户端补传 → 子 agent 回复兜底。
+      // 补传排在请求体之后:同机部署读得到真身时,行为一字不变。
       const fallbackOutput = typeof toolId === 'string'
-        ? (requestBodyToolOutputById.has(toolId) ? requestBodyToolOutputById.get(toolId) : subagentOutputByToolId.get(toolId))
+        ? (requestBodyToolOutputById.has(toolId) ? requestBodyToolOutputById.get(toolId)
+          : supplementToolOutputById.has(toolId) ? supplementToolOutputById.get(toolId)
+            : subagentOutputByToolId.get(toolId))
         : undefined;
-      const toolCall = buildToolCallFromResult(event, toolUse, readToolResultOutput(event, fallbackOutput));
+      const toolCall = applyMappedSubagentType(
+        buildToolCallFromResult(event, toolUse, readToolResultOutput(event, fallbackOutput)),
+        typeof toolId === 'string' && !toolUse ? subagentMapByToolId.get(toolId)?.agentType : undefined,
+      );
+      // 子 agent 内部工具(tool_use_id 命中补传映射):挂到该 scope 最新一轮,而不是 root。
+      // `!toolUse` 兜住同机:读得到响应体正文时 tool_use 块存在,走正常路径,这里不插手。
+      const innerScope = typeof toolId === 'string' && !toolUse ? innerToolIdToSubagentToolId.get(toolId) : undefined;
+      if (innerScope) {
+        const scope = `${event.sessionId}:${innerScope}`;
+        const turns = supplementTurnsByScope.get(scope);
+        if (turns?.length) {
+          mergeToolCallIntoInteraction(turns[turns.length - 1], toolCall);
+        } else {
+          const buf = pendingScopeToolCalls.get(scope) || [];
+          buf.push(toolCall);
+          pendingScopeToolCalls.set(scope, buf);
+        }
+        const innerSkill = parseJsonMaybe(attrs.tool_parameters)?.skill_name || parseJsonMaybe(attrs.tool_input)?.skill;
+        if (typeof innerSkill === 'string' && innerSkill.trim()) skills.add(innerSkill.trim());
+        continue;
+      }
       let target = interactions.find((m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc: any) => tc.id === toolCall.id));
-      if (!target && !toolCall.id) target = [...interactions].reverse().find((m) => m.role === 'assistant');
+      // 读不到 api_response_body 的正文就拿不到 tool_use 块,tool_use_id 永远匹配不上,
+      // 工具调用会全部滞留在 pendingToolResultById 里被丢掉(trace 只有对话没有工具)。
+      // 这种情况就近挂到**同一个 prompt** 里最后一条助手消息。必须限定同 prompt:
+      // tool_result 常先于发起轮自己的 assistant_response 到达(async Task 启动即返回
+      // interim 结果、普通工具在消息流式输出中途完成),不限定就会挂到上一个 prompt 的
+      // 轮次上 —— 实测多轮会话里"启动子 agent"挂到了前一轮闲聊的回复上。
+      // 本 prompt 还没有助手轮就先 pending,发起轮落地时(fallback 分支)收口。
+      // 正文可读的正常路径不能这么挂:那边有 tool_use 块可精确匹配,仍走 pending 等合并。
+      const responseBodyUsable = (usableResponseCountByPrompt.get(promptKey(event)) || 0) > 0;
+      if (!target && (!toolCall.id || !responseBodyUsable)) {
+        target = [...interactions].reverse().find((m) => m.role === 'assistant' && m.prompt_id === event.promptId);
+      }
       if (target) {
         mergeToolCallIntoInteraction(target, toolCall);
       } else if (toolCall.id) {
         const existing = pendingToolResultById.get(toolCall.id);
         pendingToolResultById.set(toolCall.id, existing ? mergeToolCall(existing, toolCall) : toolCall);
       }
+      // 子 agent 那一轮本来只能从响应体正文里拿(responseToToolId → role='subagent'),
+      // 跨机读不到就整棵子树消失、Task 调用永远没人认领。补传拿到这次 Task 的输出后,
+      // 这里补一条 role='subagent',让 buildAgentCallTree 认领上面那条 task 调用长出子节点。
+      // 同机(subagentOutputByToolId 已有值)不进这里,避免双份。
+      // `!toolUse` 是"跨机"的判据:读得到响应体正文时一定有 tool_use 块,那条路径自己会
+      // 产出子 agent 轮次,这里绝不能插手(否则同机会出现两份)。
+      if (
+        toolCall.name === 'task' &&
+        typeof toolId === 'string' &&
+        !toolUse &&
+        !subagentOutputByToolId.has(toolId) &&
+        !emittedSupplementSubagents.has(toolId)
+        // 注意:这里**不能**用"scope 里已有映射轮次"当免合成判据 —— async Task 的
+        // tool_result 在启动时就到(interim 结果),映射轮次都在它之后,判空必然误判。
+        // 合成轮要不要保留,统一延到主循环结束后裁决(见下方追加处的过滤)。
+      ) {
+        const text = textFromContent(supplementToolOutputById.get(toolId) ?? toolCall.output);
+        if (text.trim()) {
+          emittedSupplementSubagents.add(toolId);
+          const subagentName = subagentNameFromToolCall(toolCall);
+          agentNames.add(subagentName);
+          const timing = toolTimingFromResult(event);
+          const scope = `${event.sessionId}:${toolId}`;
+          const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
+          for (const systemText of resolveSystemTexts(systemState, promptKey(event), toolId)) {
+            pushSystemInteraction(interactions, systemState, systemText, {
+              event,
+              subSession: scope,
+              agent: subagentName,
+              supplemented: !systemByPromptKey.has(promptKey(event)),
+            });
+          }
+          // 攒着,主循环结束后再追加:建树时子 agent 那一轮要认领父轮上的 task 调用,
+          // 而跨机的 task 调用可能到本轮助手消息落地时才挂上去(见上面的 pending 收口)。
+          // 先于父轮出现就认领不到,子节点会塌回 root。
+          pendingSupplementSubagents.push({
+            role: 'subagent',
+            content: text,
+            timestamp: eventTime(event),
+            // timeInfo 用 created/completed 命名(下游 getInteractionActivityMs 按这套读),
+            // 起点取工具调用的实际开始时间,子节点时长才是子 agent 真正跑的那段。
+            timeInfo: { created: timing.started_at || eventTime(event), completed: timing.completed_at },
+            agent: subagentName,
+            subagent_name: subagentName,
+            subagent_session_id: scope,
+            prompt_id: event.promptId,
+            subagent_source: 'client-supplement',
+          });
+        }
+      }
+
       const skillName = parseJsonMaybe(attrs.tool_parameters)?.skill_name || parseJsonMaybe(attrs.tool_input)?.skill;
       if (typeof skillName === 'string' && skillName.trim()) skills.add(skillName.trim());
       continue;
     }
+  }
+
+  // 补传出来的子 agent 轮次统一放在最后:此时父轮上的 task 调用一定已经就位,建树能认领到。
+  // (落库合并侧已改为"incoming 顺序优先",这里摆好的顺序能原样存进库。)
+  // 合成轮只在该 scope **没有**逐轮映射轮次时保留:有映射时子 agent 的真实轮次已齐,
+  // 合成轮的内容(Task 输出,async 时只是"launched"的 interim 样板)是纯噪声。
+  const keptSupplementSubagents = pendingSupplementSubagents.filter(
+    (turn) => !supplementTurnsByScope.get(turn.subagent_session_id)?.length,
+  );
+  interactions.push(...keptSupplementSubagents);
+
+  // 逐轮归属的子 agent 轮次:按 spawnDepth 升序追加 —— depth 2 的认领要靠 depth 1
+  // 轮次里挂的 task 调用先出现;同深度按首轮时间,保持时间线可读。
+  const scopeGroups = [...supplementTurnsByScope.entries()].sort(([scopeA, turnsA], [scopeB, turnsB]) => {
+    const depthOf = (scope: string) => subagentMapByToolId.get(scope.slice(scope.lastIndexOf(':') + 1))?.spawnDepth ?? 1;
+    const depthDiff = depthOf(scopeA) - depthOf(scopeB);
+    if (depthDiff !== 0) return depthDiff;
+    const tsOf = (turns: any[]) => Date.parse(turns[0]?.timestamp || '') || 0;
+    return tsOf(turnsA) - tsOf(turnsB);
+  });
+  for (const [, turns] of scopeGroups) {
+    interactions.push(...turns);
+  }
+  // 有映射、有内部工具事件,却始终没等来任何轮次(轮次日志丢失):挂到该 scope 合成的
+  // 兜底轮上(有 Task 输出补传就有它),别让这批工具调用凭空消失。两头都没有才真丢。
+  for (const [scope, calls] of pendingScopeToolCalls) {
+    const fallbackTurn = keptSupplementSubagents.find((turn) => turn.subagent_session_id === scope);
+    if (!fallbackTurn) continue;
+    for (const pendingCall of calls) mergeToolCallIntoInteraction(fallbackTurn, pendingCall);
   }
 
   if (!query) query = `Claude Code Session ${sessionId}`;

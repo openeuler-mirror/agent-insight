@@ -73,7 +73,7 @@ export interface FleetRow {
 /**
  * 硬错误口径成功判定：只看工具错误 + failures。
  * 【刻意不用 isAnswerCorrect】——该字段 schema 默认 false，无法区分「judge 真判错」与「未 judge」，
- * 用它会把成功率系统性打成 ~0。软错误需另接 TraceEvaluation（judge），本层不叠加。
+ * 用它会把成功率系统性打成 ~0。最终答案质量应在评测中心主动实验，本层不叠加。
  */
 export function isSuccess(e: FleetRow): boolean {
     if (e.toolCallErrorCount != null && e.toolCallErrorCount > 0) return false;

@@ -59,6 +59,41 @@ function loadSkillInsightEnv() {
   return env
 }
 
+/**
+ * .env 里写了、却被进程环境里的同名变量压住的键（值不同才算）。
+ *
+ * 上面那句 `if (env[k] === undefined)` 是「环境变量优先」——保留它是为了让一次性覆盖继续
+ * 可用。代价是重跑 setup 把 .env 指向新平台后，旧终端里残留的 export 会让上报**继续发往
+ * 老地址**，而且此前全程无任何提示：日志里的 host 与 .env 明明不一致也没人吭声。
+ */
+function findShadowedEnvKeys() {
+  const out = []
+  try {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
+      const parsed = parseDotEnvText(fs.readFileSync(file, "utf8"))
+      for (const [k, v] of Object.entries(parsed)) {
+        const actual = process.env[k]
+        if (actual === undefined || actual === v) continue
+        if (out.some((x) => x.key === k)) continue
+        out.push({ key: k, fromFile: v, actual })
+      }
+    }
+  } catch {}
+  return out
+}
+
+/** 拼成一行日志。含 KEY/TOKEN/SECRET 的键只报键名，不打值。 */
+function describeShadowedEnv(entries) {
+  return entries
+    .map(({ key, fromFile, actual }) =>
+      /KEY|TOKEN|SECRET|PASSWORD/i.test(key)
+        ? `${key}(值不同,已隐藏)`
+        : `${key}(.env=${fromFile} 实际=${actual})`,
+    )
+    .join(" ")
+}
+
 function nowIso() {
   return new Date().toISOString()
 }
@@ -999,6 +1034,13 @@ async function main() {
   appendUploaderLog(
     `main.start host=${host || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"} force=${process.env.AGENT_INSIGHT_UPLOADER_FORCE === "1" ? "1" : "0"}`,
   )
+  const shadowed = findShadowedEnvKeys()
+  if (shadowed.length) {
+    appendUploaderLog(
+      `main.env.shadowed 进程环境里的同名变量压过了 .env,重跑 setup 改的配置在本进程不生效: ${describeShadowedEnv(shadowed)}` +
+      ` → 在启动 opencode 的终端里 unset 这些变量(或新开终端)后重启 opencode`,
+    )
+  }
   if (!host) {
     appendUploaderLog(`main.skip missingConfig hostPresent=no apiKeyPresent=${apiKey ? "yes" : "no"}`)
     process.exit(0)
@@ -1226,6 +1268,9 @@ export {
   buildMessagesForSession,
   buildSignature,
   buildState,
+  getRequestOptions,
+  findShadowedEnvKeys,
+  describeShadowedEnv,
   collectSessionSubtree,
   isRoundCompleted,
   isSignatureUnchanged,

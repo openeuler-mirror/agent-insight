@@ -32,6 +32,11 @@ import {
     type LlmProvider,
     type LlmProviderCategory,
 } from '@/lib/llm-providers';
+import {
+    isModelConnectionReady,
+    normalizeCustomHeaders,
+    supportsCustomHeaders,
+} from '@/lib/shared/model-connection';
 
 export interface EvalConfigItem {
     id: string;
@@ -40,6 +45,7 @@ export interface EvalConfigItem {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
+    headers?: Record<string, string>;
 }
 
 interface ProviderPreset {
@@ -75,7 +81,7 @@ type HealthState = 'ok' | 'checking' | 'failed' | 'unconfigured';
 
 const isDefaultConfig = (id: string | null) => !!id && id.startsWith('default_');
 
-const initialHealth = (c: EvalConfigItem): HealthState => (c.apiKey ? 'ok' : 'unconfigured');
+const initialHealth = (c: EvalConfigItem): HealthState => (isModelConnectionReady(c) ? 'ok' : 'unconfigured');
 
 function toBackendProvider(catalogId: string): EvalConfigItem['provider'] {
     if (catalogId === 'openai') return 'openai';
@@ -151,11 +157,11 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
         setIsRechecking(true);
         setHealthMap(prev => {
             const n: Record<string, HealthState> = { ...prev };
-            for (const c of allConfigs) n[c.id] = c.apiKey ? 'checking' : 'unconfigured';
+            for (const c of allConfigs) n[c.id] = isModelConnectionReady(c) ? 'checking' : 'unconfigured';
             return n;
         });
         const results = await Promise.all(allConfigs.map(async (c) => {
-            if (!c.apiKey) return [c.id, 'unconfigured' as HealthState] as const;
+            if (!isModelConnectionReady(c)) return [c.id, 'unconfigured' as HealthState] as const;
             try {
                 const res = await apiFetch('/api/eval/settings/test', {
                     method: 'POST',
@@ -165,6 +171,7 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                         apiKey: c.apiKey,
                         baseUrl: c.baseUrl,
                         model: c.model,
+                        headers: c.headers,
                         user,
                         configId: c.id,
                     }),
@@ -197,7 +204,17 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
         setStatus({ type: 'info', msg: locale === 'zh' ? '正在测试连接…' : 'Testing connection…' });
         try {
             let newConfigs = [...allConfigs];
-            const configToSave = { ...tempConfig };
+            const configToSave = {
+                ...tempConfig,
+                headers: supportsCustomHeaders(tempConfig)
+                    ? normalizeCustomHeaders(tempConfig.headers)
+                    : undefined,
+            };
+            if (!isModelConnectionReady(configToSave)) {
+                throw new Error(locale === 'zh'
+                    ? '请填写完整的模型连接信息。Custom 模型至少需要 Base URL 和模型名。'
+                    : 'Complete the model connection. Custom models require a Base URL and model name.');
+            }
             if (configToSave.id === 'new') {
                 configToSave.id = `config_${Date.now()}`;
                 newConfigs.push(configToSave);
@@ -213,8 +230,11 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                     apiKey: configToSave.apiKey,
                     baseUrl: configToSave.baseUrl,
                     model: configToSave.model,
+                    headers: configToSave.headers,
                     user,
                     configId: configToSave.id,
+                    // 用户点保存触发的主动测试才计入用量；recheckHealth 的页面轮询不传这个标记
+                    usageActive: true,
                 }),
             });
             const testData = await testRes.json();
@@ -289,6 +309,7 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
             baseUrl: p.baseUrl,
             model: p.defaultModel,
             apiKey: '',
+            headers: undefined,
         });
         setPickedProvider(p);
         setPickerOpen(false);
@@ -612,11 +633,11 @@ function ModelCard({
                     {effHealth === 'failed' && (
                         <span style={badgeFailed}>
                             <XCircle size={11} strokeWidth={2.4} />
-                            {locale === 'zh' ? 'Key 已失效' : 'Key invalid'}
+                            {locale === 'zh' ? '连接失败' : 'Connection failed'}
                         </span>
                     )}
                     {effHealth === 'unconfigured' && (
-                        <span style={badgeWarn}>{locale === 'zh' ? '未设置 Key' : 'No key'}</span>
+                        <span style={badgeWarn}>{locale === 'zh' ? '配置不完整' : 'Incomplete'}</span>
                     )}
                     {isDefault && <span style={badgeGhost}>{locale === 'zh' ? '系统默认' : 'System'}</span>}
                 </div>
@@ -653,6 +674,11 @@ function ModelCard({
                     ) : (
                         <span style={{ color: 'var(--foreground-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                             {locale === 'zh' ? '(未设置)' : '(not set)'}
+                        </span>
+                    )}
+                    {supportsCustomHeaders(config) && Object.keys(config.headers ?? {}).length > 0 && (
+                        <span style={{ color: 'var(--foreground-muted)', marginLeft: 8 }}>
+                            · {Object.keys(config.headers ?? {}).length} {locale === 'zh' ? '个自定义请求头' : 'custom headers'}
                         </span>
                     )}
                 </div>
@@ -999,8 +1025,8 @@ function ProviderPicker({
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 3 }}>
                         {locale === 'zh'
-                            ? '挑选预置供应商即可自动填写 Base URL 与默认模型，下一步只需录入 API Key。'
-                            : 'Pick a built-in provider — Base URL and default model auto-fill. You only need to paste an API key next.'}
+                            ? '挑选预置供应商即可自动填写 Base URL 与默认模型；本地或自定义端点也可使用自定义请求头鉴权。'
+                            : 'Pick a provider to prefill its Base URL and model. Local and custom endpoints can also authenticate with custom headers.'}
                     </div>
                 </div>
                 <button style={ghostBtn} onClick={onCancel}>{locale === 'zh' ? '返回列表' : 'Back to list'}</button>
@@ -1094,7 +1120,13 @@ function EditForm({
 }) {
     const onProviderChange = (p: EvalConfigItem['provider']) => {
         const preset = PROVIDER_PRESETS[p];
-        setConfig({ ...config, provider: p, baseUrl: preset.baseUrl || config.baseUrl, model: preset.model || config.model });
+        setConfig({
+            ...config,
+            provider: p,
+            baseUrl: preset.baseUrl || config.baseUrl,
+            model: preset.model || config.model,
+            headers: p === 'custom' ? config.headers : undefined,
+        });
     };
 
     return (
@@ -1193,7 +1225,9 @@ function EditForm({
                 </Field>
 
                 <div style={{ gridColumn: '1 / -1' }}>
-                    <Field label={locale === 'zh' ? 'API 密钥' : 'API Key'}>
+                    <Field label={supportsCustomHeaders(config)
+                        ? (locale === 'zh' ? 'API 密钥（可选）' : 'API Key (optional)')
+                        : (locale === 'zh' ? 'API 密钥' : 'API Key')}>
                         <input
                             style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
                             type="text"
@@ -1219,6 +1253,19 @@ function EditForm({
                         )}
                     </Field>
                 </div>
+
+                {supportsCustomHeaders(config) && (
+                    <div style={{ gridColumn: '1 / -1' }}>
+                        <Field label={locale === 'zh' ? '自定义请求头（可选）' : 'Custom Headers (optional)'}>
+                            <HeaderEditor
+                                headers={config.headers}
+                                onChange={headers => setConfig({ ...config, headers })}
+                                disabled={isDefault}
+                                locale={locale}
+                            />
+                        </Field>
+                    </div>
+                )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
@@ -1230,6 +1277,84 @@ function EditForm({
                             : (locale === 'zh' ? '测试连接并保存' : 'Test & Save')}
                     </button>
                 )}
+            </div>
+        </div>
+    );
+}
+
+function HeaderEditor({
+    headers,
+    onChange,
+    disabled,
+    locale,
+}: {
+    headers?: Record<string, string>;
+    onChange: (headers: Record<string, string> | undefined) => void;
+    disabled: boolean;
+    locale: string;
+}) {
+    const entries = Object.entries(headers ?? {});
+    const replaceEntry = (index: number, name: string, value: string) => {
+        const nextEntries = entries.map(([currentName, currentValue], currentIndex) =>
+            currentIndex === index ? [name, value] : [currentName, currentValue],
+        );
+        onChange(Object.fromEntries(nextEntries));
+    };
+    const removeEntry = (index: number) => {
+        const nextEntries = entries.filter((_, currentIndex) => currentIndex !== index);
+        onChange(nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined);
+    };
+    const addEntry = () => {
+        let name = 'Authorization';
+        let suffix = 2;
+        const used = new Set(entries.map(([headerName]) => headerName.toLowerCase()));
+        while (used.has(name.toLowerCase())) {
+            name = `X-Custom-Header-${suffix++}`;
+        }
+        onChange({ ...(headers ?? {}), [name]: '' });
+    };
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {entries.map(([name, value], index) => (
+                <div key={`${index}-${name}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 0.8fr) minmax(220px, 1.2fr) auto', gap: 8 }}>
+                    <input
+                        style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+                        value={name}
+                        disabled={disabled}
+                        aria-label={locale === 'zh' ? '请求头名称' : 'Header name'}
+                        placeholder="Authorization"
+                        onChange={e => replaceEntry(index, e.target.value, value)}
+                    />
+                    <input
+                        style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+                        value={value}
+                        disabled={disabled}
+                        aria-label={locale === 'zh' ? '请求头值' : 'Header value'}
+                        placeholder={locale === 'zh' ? '请求头值' : 'Header value'}
+                        onChange={e => replaceEntry(index, name, e.target.value)}
+                    />
+                    <button
+                        type="button"
+                        style={dangerBtn}
+                        disabled={disabled}
+                        onClick={() => removeEntry(index)}
+                        aria-label={locale === 'zh' ? '删除请求头' : 'Remove header'}
+                    >
+                        <Trash2 size={13} />
+                    </button>
+                </div>
+            ))}
+            <div>
+                <button type="button" style={ghostBtn} disabled={disabled} onClick={addEntry}>
+                    <Plus size={13} />
+                    {locale === 'zh' ? '添加请求头' : 'Add header'}
+                </button>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', lineHeight: 1.5 }}>
+                {locale === 'zh'
+                    ? '请求头会随每次模型调用发送，值将按密钥处理并脱敏显示。'
+                    : 'Headers are sent with every model request. Values are treated as secrets and masked.'}
             </div>
         </div>
     );

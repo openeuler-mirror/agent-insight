@@ -1,14 +1,12 @@
-// Path C 接收端：OTel Collector 把 vLLM 指标经 OTLP/JSON 推到这里。
+// Path C 接收端：OTel Collector 把 vLLM 指标经 OTLP 推到这里。
 // 归一到与 Path A 相同的 InfraMetricSample，并跑同一诊断内核给出即时 verdict。
-// 注：collector 的 otlphttp `encoding: json` 在部分版本未生效（发 protobuf）——
-// 本端点目前处理 http/json；protobuf 解码留作后续（与 logs/traces 一致的限制）。
+// CodeAgent metrics 在解码后、归一化和持久化前按 resource 分区丢弃。
 
 import { gunzipSync } from 'node:zlib';
-
 import { NextResponse } from 'next/server';
-
 import { aggregate, diagnose } from '@/lib/infra/diagnose';
 import { ensureSource, saveSample } from '@/lib/infra/store';
+import { partitionCodeAgentOtlpPayload } from '@/lib/ingest/codeagent-otel/detect';
 import { normalizeEndpoint } from '@/lib/ingest/vllm/scrape';
 import { normalizeOtlpMetrics } from '@/lib/ingest/vllm/otlp-metrics';
 import type { OtlpMetricsPayload } from '@/lib/ingest/vllm/otlp-metrics';
@@ -42,11 +40,21 @@ export async function POST(req: Request) {
       }
     }
 
+    const codeAgentPartition = partitionCodeAgentOtlpPayload(body, 'metrics');
+    if (codeAgentPartition.codeAgentResourceCount > 0 && !codeAgentPartition.hasRemainingResources) {
+      return NextResponse.json({
+        status: 'accepted',
+        framework: 'codeagent',
+        ignored: true,
+        ignoredResourceMetrics: codeAgentPartition.codeAgentResourceCount,
+      });
+    }
+    body = codeAgentPartition.remainingBody;
+
     const sample = normalizeOtlpMetrics(body, { tsMs: Date.now() });
     const diag = diagnose(aggregate(sample));
 
-    // 持久化（best-effort）：优先按推送里带的真实源地址挂到已注册的同名源；
-    // 没有匹配源时才回退到 push://<model>。DB 故障不影响 ack。
+    // 持久化（best-effort）：优先挂到推送携带的真实源；DB 故障不影响 ack。
     let attachedTo: string | null = null;
     try {
       let endpoint: string | null = null;
@@ -55,7 +63,7 @@ export async function POST(req: Request) {
       }
       let src = endpoint ? await prismaRaw.infraSource.findUnique({ where: { endpoint } }) : null;
       if (!src) {
-        // 推送带了真实地址但还没注册 → 用真实地址自动登记为 push 源；否则按 model 兜底
+        // 推送带真实地址但未注册时自动登记；否则按 model 兜底。
         const fallback = endpoint ?? `push://${sample.model ?? 'unknown'}`;
         src = await ensureSource({ endpoint: fallback, scrapeUrl: '', kind: 'push', model: sample.model });
       }
@@ -77,6 +85,9 @@ export async function POST(req: Request) {
       },
       verdict: diag.verdict,
       bottleneck: diag.bottleneck,
+      ...(codeAgentPartition.codeAgentResourceCount > 0 ? {
+        ignored: { codeagent: { resourceMetrics: codeAgentPartition.codeAgentResourceCount } },
+      } : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -86,12 +97,12 @@ export async function POST(req: Request) {
 }
 
 export async function OPTIONS() {
-    return new NextResponse(null, {
-        status: 204,
-        headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-witty-api-key, baggage, traceparent, tracestate',
-        }
-    });
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-witty-api-key, baggage, traceparent, tracestate',
+    },
+  });
 }

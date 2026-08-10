@@ -17,12 +17,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Select, type SelectOption } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
+import { clusterTraceTagsByPrefix, type TraceTagCluster } from '@/lib/trace-tag-clustering';
 import { cn } from '@/lib/utils';
 
 type TraceTagKind = 'version' | 'business';
@@ -70,6 +71,9 @@ function strings(locale: string) {
       versionHint: '用于版本分析的对比与详情',
       businessHint: '用于链路追踪中筛选 Trace',
       traceCount: 'Trace 数',
+      tagCount: '标签数',
+      ungrouped: '未分组',
+      newInGroup: '新建同前缀标签',
       totalTags: '标签总数',
       versionTags: '版本标签',
       businessTags: '业务标签',
@@ -124,6 +128,9 @@ function strings(locale: string) {
     versionHint: 'Used by Version Analysis comparison and detail views',
     businessHint: 'Used to filter traces in Trace',
     traceCount: 'Traces',
+    tagCount: 'Tags',
+    ungrouped: 'Ungrouped',
+    newInGroup: 'New with prefix',
     totalTags: 'Total tags',
     versionTags: 'Version tags',
     businessTags: 'Business tags',
@@ -167,12 +174,6 @@ function strings(locale: string) {
   };
 }
 
-function kindLabel(kind: TraceTagKind, locale: string) {
-  const zh = locale.toLowerCase().startsWith('zh');
-  if (kind === 'version') return zh ? '版本' : 'Version';
-  return zh ? '业务' : 'Business';
-}
-
 async function readApiError(res: Response, fallback: string) {
   try {
     const data = await res.json();
@@ -201,8 +202,8 @@ export default function VersionManagementPage() {
       if (!res.ok) throw new Error(await readApiError(res, copy.loadFailed));
       const data = await res.json();
       setTags(Array.isArray(data) ? data : []);
-    } catch (error: any) {
-      toast.error(error?.message || copy.loadFailed);
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : copy.loadFailed);
       setTags([]);
     } finally {
       setLoading(false);
@@ -210,7 +211,7 @@ export default function VersionManagementPage() {
   }, [copy.loadFailed, user]);
 
   useEffect(() => {
-    loadTags();
+    void Promise.resolve().then(loadTags);
   }, [loadTags]);
 
   const counts = useMemo(() => {
@@ -223,8 +224,8 @@ export default function VersionManagementPage() {
   const versionTags = useMemo(() => tags.filter(tag => tag.kind === 'version').sort((a, b) => a.name.localeCompare(b.name)), [tags]);
   const businessTags = useMemo(() => tags.filter(tag => tag.kind === 'business').sort((a, b) => a.name.localeCompare(b.name)), [tags]);
 
-  const openCreate = (kind: TraceTagKind = 'version') => {
-    setForm({ ...EMPTY_FORM, kind });
+  const openCreate = (kind: TraceTagKind = 'version', prefix?: string | null) => {
+    setForm({ ...EMPTY_FORM, kind, name: prefix ? `${prefix}_` : '' });
     setFormOpen(true);
   };
 
@@ -251,8 +252,8 @@ export default function VersionManagementPage() {
       toast.success(copy.saved);
       setFormOpen(false);
       await loadTags();
-    } catch (error: any) {
-      toast.error(error?.message || copy.saveFailed);
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : copy.saveFailed);
     } finally {
       setSaving(false);
     }
@@ -300,7 +301,7 @@ export default function VersionManagementPage() {
           </div>
         ) : (
           <div className='space-y-4'>
-            <TagTable
+            <TagClusterSection
               title={copy.version}
               hint={copy.versionHint}
               tone='version'
@@ -309,10 +310,11 @@ export default function VersionManagementPage() {
               locale={locale}
               emptyTitle={copy.emptyVersionTitle}
               onCreate={() => openCreate('version')}
+              onCreateInCluster={(prefix) => openCreate('version', prefix)}
               onEdit={openEdit}
               onDelete={setDeleteTarget}
             />
-            <TagTable
+            <TagClusterSection
               title={copy.business}
               hint={copy.businessHint}
               tone='business'
@@ -321,6 +323,7 @@ export default function VersionManagementPage() {
               locale={locale}
               emptyTitle={copy.emptyBusinessTitle}
               onCreate={() => openCreate('business')}
+              onCreateInCluster={(prefix) => openCreate('business', prefix)}
               onEdit={openEdit}
               onDelete={setDeleteTarget}
             />
@@ -406,7 +409,7 @@ export default function VersionManagementPage() {
   );
 }
 
-function TagTable({ title, hint, tone, tags, copy, locale, emptyTitle, onCreate, onEdit, onDelete }: {
+function TagClusterSection({ title, hint, tone, tags, copy, locale, emptyTitle, onCreate, onCreateInCluster, onEdit, onDelete }: {
   title: string;
   hint: string;
   tone: TraceTagKind;
@@ -415,13 +418,15 @@ function TagTable({ title, hint, tone, tags, copy, locale, emptyTitle, onCreate,
   locale: string;
   emptyTitle: string;
   onCreate: () => void;
+  onCreateInCluster: (prefix: string | null) => void;
   onEdit: (tag: TraceTag) => void;
   onDelete: (tag: TraceTag) => void;
 }) {
   const toneColor = tone === 'version' ? 'var(--primary)' : 'var(--success)';
+  const clusters = clusterTraceTagsByPrefix(tags, locale);
   return (
-    <section className='rounded-md border border-border bg-card overflow-hidden'>
-      <div className='flex items-center gap-3 border-b border-border px-4 py-3'>
+    <section className='space-y-3'>
+      <div className='flex items-center gap-3'>
         <span className='size-2 rounded-full' style={{ backgroundColor: toneColor }} />
         <div className='min-w-0'>
           <h2 className='text-sm font-semibold text-foreground'>{title}</h2>
@@ -431,44 +436,21 @@ function TagTable({ title, hint, tone, tags, copy, locale, emptyTitle, onCreate,
         <Button variant='outline' size='sm' onClick={onCreate}><Plus className='size-4' />{tone === 'version' ? copy.newVersion : copy.newBusiness}</Button>
       </div>
       {tags.length === 0 ? (
-        <EmptyState icon={Tag} title={emptyTitle} description={copy.emptyDesc} />
+        <div className='overflow-hidden rounded-md border border-border bg-card'>
+          <EmptyState icon={Tag} title={emptyTitle} description={copy.emptyDesc} />
+        </div>
       ) : (
-        <div className='overflow-x-auto'>
-          <table className='w-full min-w-[760px] text-sm'>
-            <thead className='bg-background-secondary text-xs text-foreground-muted'>
-              <tr>
-                <th className='px-3 py-2 text-left font-medium'>{copy.type}</th>
-                <th className='px-3 py-2 text-left font-medium'>{copy.descriptionColumn}</th>
-                <th className='px-3 py-2 text-left font-medium'>{copy.traceCount}</th>
-                <th className='px-3 py-2 text-left font-medium'>{copy.createdAt}</th>
-                <th className='w-[88px] px-3 py-2 text-center font-medium'>{copy.actions}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tags.map(tag => (
-                <tr key={tag.id} className='border-t border-border hover:bg-background-secondary'>
-                  <td className='px-3 py-2 align-top'>
-                    <div className='flex min-w-0 items-center gap-2'>
-                      <span className='size-2.5 shrink-0 rounded-full' style={{ backgroundColor: tag.color }} />
-                      <div className='min-w-0'>
-                        <div className='truncate font-semibold text-foreground'>{tag.name}</div>
-                        <div className='text-[11px] text-foreground-muted'>{kindLabel(tag.kind, locale)}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className='px-3 py-2 align-top text-foreground-secondary'><span className='line-clamp-2 max-w-[420px]'>{tag.description || copy.noDesc}</span></td>
-                  <td className='px-3 py-2 align-top font-semibold tabular-nums text-foreground'>{(tag.usageCount || 0).toLocaleString()}</td>
-                  <td className='px-3 py-2 align-top text-foreground-secondary'>{formatDate(tag.createdAt)}</td>
-                  <td className='w-[88px] px-3 py-2 align-top text-center'>
-                    <div className='inline-flex justify-center gap-1'>
-                      <Button variant='ghost' size='icon' className='size-7' onClick={() => onEdit(tag)} aria-label={copy.edit}><Edit2 className='size-3.5' /></Button>
-                      <Button variant='ghost' size='icon' className='size-7 text-error hover:text-error' onClick={() => onDelete(tag)} aria-label={copy.delete}><Trash2 className='size-3.5' /></Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className='grid gap-3 lg:grid-cols-2 2xl:grid-cols-3'>
+          {clusters.map(cluster => (
+            <TagClusterCard
+              key={cluster.key}
+              cluster={cluster}
+              copy={copy}
+              onCreate={() => onCreateInCluster(cluster.prefix)}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
+          ))}
         </div>
       )}
     </section>
@@ -484,40 +466,52 @@ function SummaryCard({ label, value }: { label: string; value: number }) {
   );
 }
 
-function TagCard({ tag, locale, copy, onEdit, onDelete }: { tag: TraceTag; locale: string; copy: ReturnType<typeof strings>; onEdit: () => void; onDelete: () => void }) {
+function TagClusterCard({ cluster, copy, onCreate, onEdit, onDelete }: {
+  cluster: TraceTagCluster<TraceTag>;
+  copy: ReturnType<typeof strings>;
+  onCreate: () => void;
+  onEdit: (tag: TraceTag) => void;
+  onDelete: (tag: TraceTag) => void;
+}) {
   return (
-    <div className="rounded-md border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
+    <article className="overflow-hidden rounded-md border border-border bg-card">
+      <div className="flex items-start justify-between gap-3 border-b border-border bg-background-secondary px-4 py-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} />
-            <h2 className="truncate text-sm font-semibold text-foreground">{tag.name}</h2>
-            <span className="rounded-sm border border-border bg-background-secondary px-1.5 py-0.5 text-[11px] font-medium text-foreground-muted">
-              {kindLabel(tag.kind, locale)}
-            </span>
+          <h3 className="truncate text-sm font-semibold text-foreground">{cluster.prefix || copy.ungrouped}</h3>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-muted">
+            <span>{copy.tagCount} <strong className="font-semibold text-foreground">{cluster.tags.length.toLocaleString()}</strong></span>
+            <span>{copy.bindings} <strong className="font-semibold text-foreground">{cluster.usageCount.toLocaleString()}</strong></span>
           </div>
-          <p className="mt-2 line-clamp-2 min-h-10 text-sm leading-5 text-foreground-secondary">{tag.description || copy.noDesc}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button variant="ghost" size="icon" className="size-7" onClick={onEdit} aria-label={copy.edit}>
-            <Edit2 className="size-3.5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="size-7 text-error hover:text-error" onClick={onDelete} aria-label={copy.delete}>
-            <Trash2 className="size-3.5" />
-          </Button>
-        </div>
+        <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1 px-2 text-xs" onClick={onCreate}>
+          <Plus className="size-3.5" />
+          {cluster.prefix ? copy.newInGroup : copy.newTag}
+        </Button>
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-2 border-t border-border pt-3 text-xs">
-        <div>
-          <div className="text-foreground-muted">{copy.traceCount}</div>
-          <div className="mt-0.5 font-semibold tabular-nums text-foreground">{(tag.usageCount || 0).toLocaleString()}</div>
-        </div>
-        <div>
-          <div className="text-foreground-muted">{copy.createdAt}</div>
-          <div className="mt-0.5 truncate font-medium text-foreground-secondary">{formatDate(tag.createdAt)}</div>
-        </div>
+      <div className="divide-y divide-border">
+        {cluster.tags.map(tag => (
+          <div key={tag.id} className="group flex items-start gap-3 px-4 py-3 hover:bg-background-secondary">
+            <span className="mt-1 size-2.5 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold text-foreground" title={tag.name}>{tag.name}</div>
+              <p className="mt-1 line-clamp-2 text-xs leading-5 text-foreground-secondary">{tag.description || copy.noDesc}</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-foreground-muted">
+                <span>{copy.traceCount} <strong className="font-semibold tabular-nums text-foreground">{(tag.usageCount || 0).toLocaleString()}</strong></span>
+                <span>{copy.createdAt} {formatDate(tag.createdAt)}</span>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button variant="ghost" size="icon" className="size-7" onClick={() => onEdit(tag)} aria-label={`${copy.edit} ${tag.name}`}>
+                <Edit2 className="size-3.5" />
+              </Button>
+              <Button variant="ghost" size="icon" className="size-7 text-error hover:text-error" onClick={() => onDelete(tag)} aria-label={`${copy.delete} ${tag.name}`}>
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+          </div>
+        ))}
       </div>
-    </div>
+    </article>
   );
 }
 

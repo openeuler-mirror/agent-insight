@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import archiver from 'archiver';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { findSkillMd, fileContentToString, sanitizeForFilename } from '@/lib/skill-generator/skill-files';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,6 +81,12 @@ export async function GET(
             }
             archive.finalize().catch((err) => controller.error(err));
         },
+    });
+
+    recordUsageEvent({
+        user: session.user,
+        featureKey: 'skill-generator',
+        eventKey: 'skill.generate.download',
     });
 
     return new Response(stream, {

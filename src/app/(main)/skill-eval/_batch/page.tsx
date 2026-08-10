@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { SectionShell, FindingsGrouped } from '@/components/evaluation';
 import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
+import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
 import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
 import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
@@ -136,11 +137,11 @@ interface BatchEvalTask {
     traceEvalStatesJson?: Record<string, TraceEvalStateInfo>;
 }
 
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
-// 内置评估器选项 —— 跟 src/components/EvaluatorsCenter.tsx 的 presetEvaluators 保持同步。
-// 仅列「有真实后端运行时」的预置评估器（status='ready'）；后端 SUPPORTED_TRAJECTORY_EVALUATORS 
-// 也认这三个 id。漏 preset-agent-task-completion 会让用户没法跑结果对照。
+// 内置评估器选项 —— 从 presetEvaluators 派生，列出全部 status='ready' 的预置评估器。
+// 评测走 /api/experiments/eval-traces → 实验引擎，引擎认全部已登记的预置评估器，
+// 这里不做能力过滤。默认勾选哪几个见 DEFAULT_SELECTED_PRESET_IDS。
 const BUILT_IN_EVALUATORS = [
     ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
 ];
@@ -247,10 +248,11 @@ export function BatchEvaluation({
     // Evaluator
     const [userEvaluators, setUserEvaluators] = useState<Array<{id: string; name: string}>>([]);
     const [selectedEvaluatorId, setSelectedEvaluatorId] = useState('preset-agent-trace-quality');
-    // 评估器多选 (AB 式配置): 默认勾选全部预置 ready 评估器; 与 selectedEvaluatorId(老单选) 并存,
-    // 启动评测时以这个数组为准 (透传 evaluators)。
+    // 评估器多选 (AB 式配置): 默认只勾任务完成度 + 轨迹质量; 与 selectedEvaluatorId(老单选) 并存,
+    // 启动评测时以这个数组为准 (透传 evaluators)。下拉框仍列出全部 ready, 用户可自行加勾。
+    // 别改回按 status 派生——见 DEFAULT_SELECTED_PRESET_IDS 的注释。
     const [selectedEvaluatorIds, setSelectedEvaluatorIds] = useState<string[]>(
-        () => BUILT_IN_EVALUATORS.map(e => e.id),
+        () => [...DEFAULT_SELECTED_PRESET_IDS],
     );
     const [showEvalDropdown, setShowEvalDropdown] = useState(false);
 
@@ -260,7 +262,7 @@ export function BatchEvaluation({
         if (!user) { setEvalTasks([]); return; }
         try {
             // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次(A/B 只在 A/B 页看)。
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1&excludeGrayscale=1`);
+            const res = await apiFetch(`/api/experiments/eval-runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1&excludeGrayscale=1`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setEvalTasks(data.runs.map((r: any) => ({
@@ -637,7 +639,7 @@ export function BatchEvaluation({
     useEffect(() => {
         if (!user) return;
         Promise.all([
-            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()),
+            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`).then(r => r.json()),
             apiFetch(`/api/skills?user=${encodeURIComponent(user)}`).then(r => r.json()),
             apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
         ]).then(([ds, sk, ev]) => {
@@ -701,7 +703,7 @@ export function BatchEvaluation({
             const pollEval = async () => {
                 try {
                     const res = await apiFetch(
-                        `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}`
+                        `/api/experiments/eval-results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}`
                     );
                     const data = await res.json();
                     const results: any[] = data.results || [];
@@ -745,7 +747,7 @@ export function BatchEvaluation({
             const pollEval = async () => {
                 try {
                     const res = await apiFetch(
-                        `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}`
+                        `/api/experiments/eval-results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}`
                     );
                     const data = await res.json();
                     const results: any[] = data.results || [];
@@ -1139,23 +1141,22 @@ export function BatchEvaluation({
             // 透传评测任务关联: 用户在「配置」section 关联了批次时, 走 append 模式让 trace
             // 落到同一批次, 不再新建 (修 "拆成多个批次" 问题, 用例分析侧)。
             // 关联了批次时不传 evaluator, 后端继承批次原 selectedEvaluators (多评估器)。
+            // 评测走实验：eval-traces 同步建/复用 backing 实验评测该 case 的 trace。
             const body: Record<string, unknown> = {
                 user: user || 'debug-user',
-                datasetId,
+                name: '用例分析',
+                datasetIds: datasetId ? [datasetId] : undefined,
                 pairs: [{ caseId, taskId: sessionId }],
+                evaluators: [selectedEvaluatorId],
             };
-            if (evaluationBatchId) {
-                body.evaluatorRunId = evaluationBatchId;
-            } else {
-                body.evaluator = selectedEvaluatorId;
-            }
-            const res = await apiFetch('/api/eval/trajectory/run', {
+            if (evaluationBatchId) body.experimentId = evaluationBatchId;
+            const res = await apiFetch('/api/experiments/eval-traces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
             const data = await res.json();
-            if (!res.ok || !data.evaluatorRunId) {
+            if (!res.ok || !data.success || !data.experimentId) {
                 setCaseStates(prev => {
                     const next = { ...prev, [caseId]: { ...(prev[caseId] || {}), status: 'fail' as CaseStatus, output: data.error || '评测提交失败' } };
                     persistCaseStateUpdate(next);
@@ -1163,7 +1164,7 @@ export function BatchEvaluation({
                 });
                 return;
             }
-            evaluatorRunId = data.evaluatorRunId;
+            evaluatorRunId = data.experimentId;
         } catch (err) {
             setCaseStates(prev => {
                 const next = { ...prev, [caseId]: { ...(prev[caseId] || {}), status: 'fail' as CaseStatus, output: String(err) } };
@@ -1184,7 +1185,7 @@ export function BatchEvaluation({
         const pollEval = async () => {
             try {
                 const res = await apiFetch(
-                    `/api/eval/trajectory/results?user=${encodeURIComponent(user || '')}&runId=${encodeURIComponent(evaluatorRunId)}`
+                    `/api/experiments/eval-results?user=${encodeURIComponent(user || '')}&runId=${encodeURIComponent(evaluatorRunId)}`
                 );
                 const data = await res.json();
                 const results: any[] = data.results || [];
@@ -1202,7 +1203,7 @@ export function BatchEvaluation({
                         persistCaseStateUpdate(next);
                         return next;
                     });
-                    router.push(`/eval/trajectory/${encodeURIComponent(sessionId)}`);
+                    void drillTraceEvalUrl(user || '', sessionId).then(url => router.push(url));
                 } else if (result.status === 'failed') {
                     clearInterval(evalPollIntervalsRef.current[caseId]);
                     delete evalPollIntervalsRef.current[caseId];
@@ -1469,24 +1470,22 @@ export function BatchEvaluation({
 
         let evaluatorRunId: string;
         try {
-            // 透传评测任务关联: 同上面 dataset 模式逻辑, Trace 模式也支持 append 到批次。
+            // 评测走实验：eval-traces 同步评测该 trace（trace 模式无 pairs，引擎按 taskId 兜底解析）。
             const body: Record<string, unknown> = {
                 user: user || 'debug-user',
-                datasetId: traceDatasetId,
+                name: '用例分析(trace)',
+                datasetIds: traceDatasetId ? [traceDatasetId] : undefined,
                 taskIds: [taskId],
+                evaluators: [selectedEvaluatorId],
             };
-            if (evaluationBatchId) {
-                body.evaluatorRunId = evaluationBatchId;
-            } else {
-                body.evaluator = selectedEvaluatorId;
-            }
-            const res = await apiFetch('/api/eval/trajectory/run', {
+            if (evaluationBatchId) body.experimentId = evaluationBatchId;
+            const res = await apiFetch('/api/experiments/eval-traces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
             const data = await res.json();
-            if (!res.ok || !data.evaluatorRunId) {
+            if (!res.ok || !data.success || !data.experimentId) {
                 setTraceEvalStates(prev => {
                     const next = { ...prev, [key]: { status: 'fail' as const, taskId } };
                     persistTraceEvalUpdate(next);
@@ -1494,7 +1493,7 @@ export function BatchEvaluation({
                 });
                 return;
             }
-            evaluatorRunId = data.evaluatorRunId;
+            evaluatorRunId = data.experimentId;
         } catch {
             setTraceEvalStates(prev => {
                 const next = { ...prev, [key]: { status: 'fail' as const, taskId } };
@@ -1514,7 +1513,7 @@ export function BatchEvaluation({
         const pollEval = async () => {
             try {
                 const res = await apiFetch(
-                    `/api/eval/trajectory/results?user=${encodeURIComponent(user || '')}&runId=${encodeURIComponent(evaluatorRunId)}`
+                    `/api/experiments/eval-results?user=${encodeURIComponent(user || '')}&runId=${encodeURIComponent(evaluatorRunId)}`
                 );
                 const data = await res.json();
                 const results: any[] = data.results || [];
@@ -1529,7 +1528,7 @@ export function BatchEvaluation({
                         persistTraceEvalUpdate(next);
                         return next;
                     });
-                    router.push(`/eval/trajectory/${encodeURIComponent(taskId)}`);
+                    void drillTraceEvalUrl(user || '', taskId).then(url => router.push(url));
                 } else if (result.status === 'failed') {
                     clearInterval(evalPollIntervalsRef.current[`tr_${key}`]);
                     delete evalPollIntervalsRef.current[`tr_${key}`];
@@ -2383,7 +2382,7 @@ export function BatchEvaluation({
                     failedCount={failedCount}
                     pendingCount={pendingCount}
                     evaluatingCount={evaluatingCount}
-                    onDrillTrace={sessionId => router.push(`/eval/trajectory/${sessionId}`)}
+                    onDrillTrace={sessionId => { void drillTraceEvalUrl(user || '', sessionId).then(url => router.push(url)); }}
                 />
             </SectionShell>{/* /③ 结果 */}
             </>)}{/* /受控模式隐藏 BE 自带 ②/③ */}

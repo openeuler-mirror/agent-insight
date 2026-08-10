@@ -5,7 +5,7 @@
  * （durable spool 设计，保重启不丢），单批成本 = O(session 大小) → 整个 run 累积 O(N²)。
  * 12M-token 级的 team run 后期单批要秒级，几十批串行排队时 exporter 的完成信号
  * （team root span）被压到几十分钟后才落库（实验记录见
- * docs/designs/agents/…（spike jiuwen-exporter-latency）/ IDEAS.md [B12]）。
+ * docs/design/…（spike jiuwen-exporter-latency）/ IDEAS.md [B12]）。
  *
  * 策略：span 照旧每批增量落盘（appendJiuwenSpans 不受影响，掉电不丢）；「重读+重聚合+
  * 落库」按组节流——

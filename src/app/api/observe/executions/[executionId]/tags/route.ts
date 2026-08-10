@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
   addExecutionTraceTags,
   getExecutionTraceTags,
@@ -33,7 +34,11 @@ export async function PUT(request: Request, context: RouteContext) {
   try {
     const { executionId } = await context.params;
     const body = await request.json();
-    const tags = await replaceExecutionTraceTags(executionId, String(body.user || '').trim(), body.tagIds);
+    const user = String(body.user || '').trim();
+    const tags = await replaceExecutionTraceTags(executionId, user, body.tagIds);
+
+    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.tag.bind' });
+
     return NextResponse.json({ tags });
   } catch (error) {
     return toErrorResponse(error);
@@ -44,7 +49,11 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { executionId } = await context.params;
     const body = await request.json();
-    const tags = await addExecutionTraceTags(executionId, String(body.user || '').trim(), body.tagIds);
+    const user = String(body.user || '').trim();
+    const tags = await addExecutionTraceTags(executionId, user, body.tagIds);
+
+    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.tag.bind' });
+
     return NextResponse.json({ tags });
   } catch (error) {
     return toErrorResponse(error);
@@ -55,11 +64,15 @@ export async function DELETE(request: Request, context: RouteContext) {
   try {
     const { executionId } = await context.params;
     const { searchParams } = new URL(request.url);
+    const user = searchParams.get('user') || '';
     const tags = await removeExecutionTraceTag(
       executionId,
-      searchParams.get('user') || '',
+      user,
       searchParams.get('tagId') || '',
     );
+
+    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.tag.unbind' });
+
     return NextResponse.json({ tags });
   } catch (error) {
     return toErrorResponse(error);

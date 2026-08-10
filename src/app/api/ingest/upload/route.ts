@@ -1,5 +1,4 @@
 import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions, getDefaultIngestUser } from '@/lib/storage/data-service';
-import { scheduleResultEvaluation } from '@/lib/engine/evaluation/result-quality-evaluator';
 import { isDeletedOpencodeSessionId } from '@/lib/ingest/opencode-deleted-sessions';
 import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
 import { analyzeFailures, analyzeSession, InvokedSkill, normalizeInteractions } from '@/lib/engine/evaluation/judge';
@@ -10,7 +9,7 @@ import { debounceByKey } from '@/lib/ingest/upload-analysis-debouncer';
 import { getUserSettings } from '@/lib/storage/server-config';
 import { assertActive, finish, startOrReplace, EvaluationCancelledError } from '@/lib/evaluation-task-manager';
 import { getInternalAgentTag } from '@/lib/internal-agent-tag';
-import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
+import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { NextResponse } from 'next/server';
 
 /**
@@ -262,7 +261,7 @@ export async function POST(request: Request) {
         await saveExecutionRecord(quickData);
         if (data.framework === 'opencode' && data.opencode_cli_completed && data.task_id) {
             await db.updateSession(String(data.task_id), { endTime: new Date() });
-            void triggerTrajectoryAutoWatchForTask(username, String(data.task_id), requestOrigin);
+            void triggerExperimentWatchForTask(username, String(data.task_id));
         }
         if (quickSkills.length > 0) {
             console.log(`[Upload-API] Quick save with skills: ${JSON.stringify(quickSkillsWithVersions)}`);
@@ -286,8 +285,7 @@ export async function POST(request: Request) {
     }
 
     // 进行中的 opencode 快照走轻通道：只落库（上面的 quick save 已完成），跳过异步分析。
-    // 异步分析包含三次 LLM 调用（flow-parser 流程图 / result-quality judge 打分 /
-    // analyzeFailures 失败归因）。心跳上报开启后，一个长任务会每分钟推一次快照，
+    // 异步分析包含流程图解析和失败归因。心跳上报开启后，一个长任务会每分钟推一次快照，
     // 若每次都跑完整分析：① 成本随任务时长线性叠加，输入还是越来越大的全量 trace；
     // ② 对一个尚未产出终稿的半截 trace，打分和失败归因本身没有意义，还会用中间态结论
     // 覆盖掉最终那次的正确结论。等 CLI 真正退出（opencode_cli_completed=true）再评一次。
@@ -299,21 +297,23 @@ export async function POST(request: Request) {
             message: 'In-progress snapshot saved; analysis deferred until session completes',
             upload_id: data.task_id,
             auto_evaluation: false,
+            background_analysis: false,
             in_progress: true,
         }, { status: 200 });
     }
 
     const userSettings = await getUserSettings(username);
-    const autoEvaluationEnabled = userSettings.autoEvaluationEnabled ?? true;
-    console.log(`[Upload-API] Auto evaluation enabled: ${autoEvaluationEnabled} for user: ${username}`);
+    const backgroundAnalysisEnabled = userSettings.autoEvaluationEnabled ?? true;
+    console.log(`[Upload-API] Background flow/failure analysis enabled: ${backgroundAnalysisEnabled} for user: ${username}`);
 
-    if (!autoEvaluationEnabled) {
-        console.log(`[Upload-API] Auto evaluation disabled, skipping async analysis for task_id=${data.task_id}`);
+    if (!backgroundAnalysisEnabled) {
+        console.log(`[Upload-API] Background analysis disabled, skipping async analysis for task_id=${data.task_id}`);
         return NextResponse.json({ 
             success: true, 
-            message: 'Upload received, auto evaluation disabled',
+            message: 'Upload received, background analysis disabled',
             upload_id: data.task_id,
-            auto_evaluation: false
+            auto_evaluation: false,
+            background_analysis: false,
         }, { status: 200 });
     }
 
@@ -337,7 +337,8 @@ export async function POST(request: Request) {
         success: true, 
         message: 'Upload received and analyzing in background',
         upload_id: data.task_id,
-        auto_evaluation: true
+        auto_evaluation: false,
+        background_analysis: true,
     }, { status: 200 });
 
   } catch (error) {
@@ -421,7 +422,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
 
     data.skip_evaluation = true;
     data.force_judgment = false;
-    const initialSave = await saveExecutionRecord(data);
+    await saveExecutionRecord(data);
     assertActive(username, taskId, runId);
 
     try {
@@ -450,20 +451,6 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
         console.log(`[Upload-Async] Skipping analyzeFailures for evaluator trace ${taskId} (agent=${data.agentName || data.agent || 'unknown'}) — evaluator output describes evaluated case, not this session`);
         failureAnalysis = { failures: [], skill_issues: [] };
     } else {
-        try {
-            const executionId = initialSave.record.upload_id || data.upload_id || data.task_id;
-            if (executionId) {
-                const resultRun = await scheduleResultEvaluation(executionId, username);
-                const accuracy = resultRun.metrics.accuracy;
-                if (accuracy.score != null) {
-                    data.answer_score = accuracy.score / 100;
-                    data.is_answer_correct = accuracy.score >= 80;
-                    data.judgment_reason = String(accuracy.evidence.reason || '结果准确性评测');
-                }
-            }
-        } catch (e) {
-            console.warn(`[Upload-Async] Result quality evaluation failed for ${taskId}:`, e);
-        }
         failureAnalysis = await analyzeFailures(
             interactions,
             primarySkillName,
@@ -487,7 +474,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
     if (taskId && shouldMarkSessionEnded) {
         try {
             await db.updateSession(taskId, { endTime: new Date() });
-            void triggerTrajectoryAutoWatchForTask(username, taskId, requestOrigin);
+            void triggerExperimentWatchForTask(username, taskId);
         } catch (e) {
             console.warn(`[Upload-Async] Failed to mark session ended for ${taskId}:`, e);
         }

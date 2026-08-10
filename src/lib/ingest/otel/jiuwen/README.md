@@ -55,7 +55,7 @@ init_observability(ObservabilityConfig(
 
 > task fan-out 形态：同理，把跑 `create_deep_agent(add_general_purpose_agent=True)` 的脚本
 > 里的 observability 换成上面这段即可（task fan-out 与 team 是**两种不同机制**，见
-> `docs/designs/agents/jiuwenswarm-tracing/design.md`）。
+> `docs/design/jiuwenswarm-tracing/design.md`）。
 
 ## 4) 看 trace
 
@@ -86,7 +86,7 @@ route.ts ── service.name==='jiuwenswarm'? ──► ingest.ts (spool 攒批 
 - `route.ts`（`src/app/api/ingest/otel/v1/traces/route.ts`）：按 `service.name` 分流。
 - `aggregate.ts`：原始 span → `ExecutionRecord` —— 父链归属成员 / 子 agent 联动 /
   顺序拆分 / timing / tool-output 解包（**由验证过的 Python bridge 移植**，
-  `docs/designs/agents/jiuwenswarm-tracing/assets/insight_bridge.py`）。
+  `docs/design/jiuwenswarm-tracing/assets/insight_bridge.py`）。
 - `ingest.ts`：OTLP 分批推送 → 按 `agentteam.session.id` 攒批的 spool + 每批重聚合
   （配 adapter 的 `snapshot-replace` 覆盖）。
 - `adapters/jiuwen.ts`：FrameworkDescriptor（`onboard=env`, `snapshot-replace`）。
@@ -95,7 +95,7 @@ route.ts ── service.name==='jiuwenswarm'? ──► ingest.ts (spool 攒批 
 会丢掉 jiuwen 的结构性 `agent.* / team.*` span（嵌套多 agent 树装不进扁平模型）。所以 jiuwen
 在 normalize **之前** branch 出自己的 raw-span 路径。**完整校准点 / 踩坑**（新 span 形状、
 联动/顺序/timing 规则、同 task_id 重传合并、ghost session 等）见
-`docs/designs/agents/jiuwenswarm-tracing/design.md`「接新 develop（8b2a384）重验」节。
+`docs/design/jiuwenswarm-tracing/design.md`「接新 develop（8b2a384）重验」节。
 
 ## Caveats（原型 → 产品化待办）
 

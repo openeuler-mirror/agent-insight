@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Pagination } from '@/components/ui/pagination';
 import { IdChip } from '@/components/text/IdChip';
 import { TruncateText } from '@/components/text/TruncateText';
+import { RelativeTime } from '@/components/text/RelativeTime';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
@@ -55,21 +56,6 @@ interface Props {
   deleting?: boolean;
   timeSortDir?: RasTraceTimeSortDir;
   onTimeSortToggle?: () => void;
-}
-
-function formatExactTime(value: string | null | undefined, locale: string): string {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
 }
 
 function SelectionCheckbox({
@@ -400,9 +386,11 @@ export function RasTraceList({
                   />
                 </td>
                 <td className="px-3 py-2 text-sm text-foreground">
-                  <span className="text-xs text-foreground-secondary font-mono whitespace-nowrap tabular-nums">
-                    {formatExactTime(item.latestTs, locale)}
-                  </span>
+                  <RelativeTime
+                    value={item.latestTs}
+                    display="absolute"
+                    className="text-xs text-foreground-secondary font-mono whitespace-nowrap tabular-nums"
+                  />
                 </td>
                 <td className="px-3 py-2 text-sm text-foreground text-center">
                   <span className="text-xs text-foreground-secondary font-mono tabular-nums">

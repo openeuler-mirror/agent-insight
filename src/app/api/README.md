@@ -6,7 +6,7 @@
 |---|---|---|
 | `auth/` | 认证 | `apikey`、`organization` |
 | `guide/` | UI helper | 用户引导状态读写 |
-| `ingest/` | **数据采集层 (Layer 1)** | OTel 接收 (`otel/v1/{traces,logs,metrics}`)、proxy 中转、upload、setup 安装脚本、sync、document 解析、SDK v1 透传 |
+| `ingest/` | **数据采集层 (Layer 1)** | OTel 接收 (`otel/v1/{traces,logs,metrics}`)、proxy 中转、upload、OpenClaw watcher 桥接 (`openclaw/upload`)、setup 安装脚本、sync、document 解析、SDK v1 透传 |
 | `observe/` | **观测引擎 (Layer 3)** | execution 查询 (`data`)、session 详情、execution 流程匹配、task-stats |
 | `eval/` | **评测引擎 (Layer 3)** | 模型配置 (`settings`)、连接测试 (`settings/test`)、重新评测 (`rejudge`)、评测引擎调用 (`evaluation`)、Dataset 配置 (`config*`) |
 | `skills/` | **Skills 服务 (Layer 3)** | 注册、版本管理、benchmark 生成、企业同步 |
@@ -24,6 +24,8 @@
 | `/api/settings*`, `/api/rejudge`, `/api/evaluation`, `/api/config*` | `/api/eval/*` |
 
 外部客户端（OpenCode 插件、watchers、OTel collectors、SDK）继续使用旧路径不会报错。前端 `apiFetch()` 已统一改用新路径。
+
+> ⚠️ **别名会被真实路由静默遮蔽**：`rewrites()` 返回数组等价于 afterFiles，优先级低于 `src/app/api/` 下的真实路由。在上表任一「旧路径」上新建 `route.ts`，别名立刻失效——不报错、不告警，存量客户端安静地打到新 handler 上（真实事故见 `ingest/openclaw/upload/route.ts` 顶部注释）。`test/ingest-endpoint-contract.test.ts` 会拦住这类改动——它把每一路采集端硬编码的 URL 按「真实路由 > rewrite」的顺序解析一遍，断言落到期望的 handler。
 
 ## 添加新端点
 

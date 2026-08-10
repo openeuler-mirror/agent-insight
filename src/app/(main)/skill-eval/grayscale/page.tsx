@@ -1632,7 +1632,7 @@ export function GrayscaleEvaluation({
     useEffect(() => {
         if (!user) return;
         Promise.all([
-            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()),
+            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`).then(r => r.json()),
             apiFetch(`/api/skills?user=${encodeURIComponent(user)}`).then(r => r.json()),
         ]).then(([ds, sk]) => {
             if (Array.isArray(ds)) setDatasets(ds);
@@ -2950,15 +2950,9 @@ export function GrayscaleEvaluation({
                             const boundEvaluation = pickBoundEvaluationResult(recordEvaluations);
                             const boundEvaluatorRunId = boundEvaluation?.evaluatorRunId || record.evaluatorRunId;
                             const boundEvaluationResultId = boundEvaluation?.evaluationResultId || record.evaluationResultId;
-                            const evaluationDetailUrl = record.executionTraceId && boundEvaluatorRunId && boundEvaluationResultId
-                                ? (() => {
-                                    const qs = new URLSearchParams({
-                                        runId: boundEvaluatorRunId,
-                                        resultId: boundEvaluationResultId,
-                                    });
-                                    if (datasetId) qs.set('datasetId', datasetId);
-                                    return `/eval/trajectory/${encodeURIComponent(record.executionTraceId)}?${qs.toString()}`;
-                                })()
+                            // 评测走实验后，评测详情=实验的 Trace 评测详情(evaluatorRunId=experimentId, resultId=caseId)
+                            const evaluationDetailUrl = boundEvaluatorRunId && boundEvaluationResultId
+                                ? `/experiments/${encodeURIComponent(boundEvaluatorRunId)}/cases/${encodeURIComponent(boundEvaluationResultId)}`
                                 : '';
                             const hasScoredEvaluation = recordEvaluations.some(item => item.status === 'done' && typeof item.score === 'number')
                                 || typeof record.score === 'number';

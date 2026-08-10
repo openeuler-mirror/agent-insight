@@ -4,7 +4,17 @@ import { useCallback, useMemo, useState, useEffect, useRef, startTransition, typ
 import { useRouter } from 'next/navigation';
 import { ClipboardList, Pencil, PlayCircle, Trash2 } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
-import { type DatasetKind, type AgentDataset, type DatasetCase, type DatasetField, schemaColumnTags, defaultFieldsForKind, type DatasetDefaultFieldDef } from '@/lib/agent-dataset-model';
+import {
+  type DatasetKind,
+  type AgentDataset,
+  type DatasetCase,
+  type DatasetField,
+  defaultDatasetSchemaFields,
+  defaultFieldsForKind,
+  schemaColumnTags,
+  type DatasetDefaultFieldDef,
+  withEvaluatorCatalogFields,
+} from '@/lib/agent-dataset-model';
 import { parseBatchFromFileContent, readFileAsText } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
 
@@ -18,6 +28,11 @@ interface DatasetDraft {
   fields: DatasetField[];
   cases: DatasetCase[];
 }
+
+type AgentDatasetListItem = Omit<AgentDataset, 'cases'> & {
+  caseCount: number;
+  cases?: DatasetCase[];
+};
 
 const emptyDraft: DatasetDraft = {
   name: '',
@@ -76,16 +91,16 @@ function formatRelativeZh(iso?: string): string {
   return `${Math.floor(days / 365)} 年前`;
 }
 
-function datasetPrimaryStatLine(item: AgentDataset): { label: string; value: string } {
-  const n = item.cases?.length ?? 0;
+function datasetPrimaryStatLine(item: AgentDatasetListItem): { label: string; value: string } {
+  const n = item.caseCount;
   if (item.datasetKind === 'trajectory') {
     return { label: '轨迹样例', value: String(n) };
   }
   return { label: '评测数据', value: String(n) };
 }
 
-function datasetCardStatus(item: AgentDataset): { label: string; tone: 'published' | 'iterating' } {
-  const n = item.cases?.length ?? 0;
+function datasetCardStatus(item: AgentDatasetListItem): { label: string; tone: 'published' | 'iterating' } {
+  const n = item.caseCount;
   if (n >= 1) return { label: '已发布', tone: 'published' };
   return { label: '迭代中', tone: 'iterating' };
 }
@@ -216,7 +231,7 @@ function DefaultFieldsTable({ fields }: { fields: DatasetDefaultFieldDef[] }) {
 export default function AgentDatasetCenter() {
   const router = useRouter();
   const { user } = useAuth();
-  const [datasets, setDatasets] = useState<AgentDataset[]>([]);
+  const [datasets, setDatasets] = useState<AgentDatasetListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -231,14 +246,14 @@ export default function AgentDatasetCenter() {
   const [tableActionError, setTableActionError] = useState('');
 
   const loadDatasets = useCallback(
-    async (opts?: { isRefresh?: boolean }): Promise<AgentDataset[]> => {
+    async (opts?: { isRefresh?: boolean }): Promise<AgentDatasetListItem[]> => {
       if (!user) return [];
       if (opts?.isRefresh) setRefreshing(true);
       else setLoading(true);
       setError('');
-      let list: AgentDataset[] = [];
+      let list: AgentDatasetListItem[] = [];
       try {
-        const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`);
+        const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`);
         const data = await res.json();
         list = Array.isArray(data) ? data : [];
         setDatasets(list);
@@ -304,11 +319,18 @@ export default function AgentDatasetCenter() {
     );
   }, [datasets, searchQuery]);
 
-  const openEditorForDataset = (dataset: AgentDataset) => {
+  const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
+    if (!user) return;
+    setError('');
+    const res = await apiFetch(`/api/agent-datasets/${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`);
+    const detail = await res.json();
+    if (!res.ok) {
+      setTableActionError(detail?.error || '评测集详情加载失败');
+      return;
+    }
     startTransition(() => {
       setCreating(false);
-      setDraft(toDraft(dataset));
-      setError('');
+      setDraft(toDraft(detail as AgentDataset));
       setEditorOpen(true);
     });
   };
@@ -351,6 +373,7 @@ export default function AgentDatasetCenter() {
           ...emptyDraft,
           name: baseName.slice(0, 50),
           datasetKind,
+          fields: withEvaluatorCatalogFields(defaultDatasetSchemaFields(datasetKind), cases),
           cases,
         });
         setError(
@@ -370,7 +393,7 @@ export default function AgentDatasetCenter() {
     setError('');
   };
 
-  const handleDeleteDataset = async (item: AgentDataset) => {
+  const handleDeleteDataset = async (item: AgentDatasetListItem) => {
     if (!user) return;
     if (!globalThis.confirm(`确定删除评测集「${item.name}」？删除后不可恢复。`)) return;
     setTableActionError('');
@@ -440,13 +463,8 @@ export default function AgentDatasetCenter() {
         return;
       }
 
-      const saved =
-        datasetsNext.find(item => item.id === result.dataset?.id) || datasetsNext[0] || null;
-      if (saved) {
-        setCreating(false);
-        setDraft(toDraft(saved));
-        closeEditor();
-      }
+      if (datasetsNext.length > 0) setCreating(false);
+      closeEditor();
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -628,7 +646,7 @@ export default function AgentDatasetCenter() {
                 : 'rgba(245, 158, 11, 0.18)';
             const badgeColor = status.tone === 'published' ? '#15803d' : '#c2410c';
             const evalHint =
-              item.cases?.length && status.tone === 'published' ? '评测：待同步' : '评测：待发起';
+              item.caseCount > 0 && status.tone === 'published' ? '评测：待同步' : '评测：待发起';
             const openDataset = () => router.push(`/dataset/${item.id}`);
             const stopActionPropagation = (event: MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();
@@ -807,7 +825,8 @@ export default function AgentDatasetCenter() {
                     onClick={event => {
                       stopActionPropagation(event);
                       if (item.datasetKind === 'trajectory') {
-                        router.push(`/eval/trajectory?datasetId=${encodeURIComponent(item.id)}`);
+                        // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入参考答案）
+                        router.push('/experiments/new');
                       } else {
                         // 非轨迹评测集暂时仍引导到评估器目录页选评估器
                         router.push('/metrics');

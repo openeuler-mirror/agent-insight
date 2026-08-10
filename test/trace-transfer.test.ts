@@ -32,6 +32,21 @@ const makeBundle = (): TraceBundleV1 => ({
         session: {
             taskId: 'task-root', label: null, query: null,
             startTime: '2026-07-15T00:00:00Z', endTime: null, model: null, interactions: [],
+            langfuseTraceNodes: [{
+                traceId: 'otel-trace',
+                spanId: 'otel-agent-span',
+                subagentSessionId: 'task-child',
+                parentSpanId: 'otel-root-span',
+                sourceParentSpanId: 'otel-root-span',
+                displayParentSpanId: 'otel-root-span',
+                name: 'child-agent',
+                kind: 'agent',
+                startedAt: 1,
+                completedAt: 2,
+                durationMs: 1,
+                status: 'success',
+                visibility: 'visible',
+            }],
         },
     }],
 });
@@ -57,7 +72,9 @@ test('remaps relationships and session references without changing OTel IDs', ()
         ['exec-root', 'new-root'], ['exec-child', 'new-child'], ['task-child', 'new-task'],
     ]));
     const child = mapped.executions.find(node => node.execution.id === 'new-child')!;
+    const root = mapped.executions.find(node => node.execution.id === 'new-root')!;
     const interaction = child.session?.interactions[0] as any;
+    const langfuseNode = root.session?.langfuseTraceNodes?.[0];
     assert.equal(mapped.rootExecutionId, 'new-root');
     assert.equal(child.execution.parentExecutionId, 'new-root');
     assert.equal(child.session?.taskId, 'new-task');
@@ -65,6 +82,10 @@ test('remaps relationships and session references without changing OTel IDs', ()
     assert.equal(JSON.parse(interaction.arguments).session_id, 'new-task');
     assert.equal(interaction.traceId, 'otel-trace');
     assert.equal(interaction.spanId, 'otel-span');
+    assert.equal(langfuseNode?.subagentSessionId, 'new-task');
+    assert.equal(langfuseNode?.traceId, 'otel-trace');
+    assert.equal(langfuseNode?.spanId, 'otel-agent-span');
+    assert.equal(langfuseNode?.parentSpanId, 'otel-root-span');
 });
 
 test('rejects missing parents and cycles', () => {

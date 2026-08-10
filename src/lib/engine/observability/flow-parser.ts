@@ -1,6 +1,7 @@
 import { OpenAI } from "openai";
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { getActiveConfig } from '@/lib/storage/server-config';
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { db } from '@/lib/storage/prisma';
 import { generateFlowParsePrompt, generateExecutionMatchPrompt, generateStepExtractPrompt, generateDynamicOnlyMatchPrompt } from '@/prompts/flow-parse-prompt';
 import { buildAgentCallTree, walkTree, type AgentEvent, type AgentNode, type RawInteraction } from '@/lib/engine/observability/agent-trace';
@@ -44,8 +45,8 @@ async function getLlmClient(user?: string | null) {
     return { client: null, model: null };
   }
 
-  const apiKey = config.apiKey;
-  if (!apiKey) return { client: null, model: null };
+  if (!isModelConnectionReady(config)) return { client: null, model: null };
+  const apiKey = config.apiKey || 'no-api-key-required';
 
   const baseURL = config.baseUrl || "https://api.deepseek.com";
   const { customFetch } = getProxyConfig();
@@ -54,6 +55,7 @@ async function getLlmClient(user?: string | null) {
     client: new OpenAI({
       apiKey, 
       baseURL,
+      defaultHeaders: config.headers,
       fetch: customFetch,
     }),
     model: config.model || "deepseek-chat"

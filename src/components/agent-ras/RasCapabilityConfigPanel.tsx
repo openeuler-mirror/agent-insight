@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Copy, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PlatformSelector } from '@/components/agent-ras/PlatformSelector';
+import { RelativeTime } from '@/components/text/RelativeTime';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -518,10 +519,15 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
           </div>
 
           <div className="sticky bottom-0 z-10 -mx-1 px-1 py-3 bg-background/95 backdrop-blur border-t border-border flex flex-wrap items-center gap-2 justify-between">
-            <div className="text-xs text-foreground-muted font-mono">
-              {envelope
-                ? `rev ${envelope.revision} · ${new Date(envelope.updatedAt).toLocaleString()}`
-                : '—'}
+            <div className="text-xs text-foreground-muted font-mono flex flex-wrap items-center gap-1">
+              {envelope ? (
+                <>
+                  <span>{`rev ${envelope.revision} ·`}</span>
+                  <RelativeTime value={envelope.updatedAt} display="absolute" className="text-xs text-foreground-muted font-mono" />
+                </>
+              ) : (
+                '—'
+              )}
               {dirty && (
                 <span className="ml-2 text-[var(--warning)] font-sans font-medium">
                   {zh ? '未保存' : 'Unsaved'}

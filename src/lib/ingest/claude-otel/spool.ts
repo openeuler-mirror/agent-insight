@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { ClaudeOtelAppendResult, ClaudeOtelEvent, OtelTraceAppendResult, OtelTraceEvent } from './types';
 import { getExistingInsightDir } from '@/lib/agent-insight-paths';
+import { readLegacyEventsForSession } from './legacy-session-index';
 
 export type SpoolCursor = {
   bytes: number;
@@ -126,6 +127,118 @@ export function listOtelTraceSpoolFiles(spoolDir = getOtelTraceSpoolDir()): stri
   return listJsonlSpoolFiles(spoolDir, 'traces.jsonl');
 }
 
+/** 当前写入所用的日期段(= 落盘目录的第一层)。tick 分层扫描要用它区分"当天"和"历史"。 */
+export function currentSpoolDay(): string {
+  return dayString();
+}
+
+export function listClaudeOtelSpoolFilesForDay(day: string, spoolDir = getClaudeOtelSpoolDir()): string[] {
+  const out: string[] = [];
+  collectJsonlSpoolFiles(path.join(spoolDir, day), 'logs.jsonl', out);
+  return out.sort();
+}
+
+export function listOtelTraceSpoolFilesForDay(day: string, spoolDir = getOtelTraceSpoolDir()): string[] {
+  const out: string[] = [];
+  collectJsonlSpoolFiles(path.join(spoolDir, day), 'traces.jsonl', out);
+  return out.sort();
+}
+
+export type SessionSpoolFiles = {
+  /** `<day>/sessions/<safe-session>/<fileName>` —— 只含这个 session 的数据,整读即可。 */
+  shards: string[];
+  /** 分片改造之前的整日平铺文件,里面混着所有 session,要走 byte-range 索引。 */
+  legacy: string[];
+};
+
+function sessionTargetedReadEnabled(): boolean {
+  return process.env.AGENT_INSIGHT_OTEL_SESSION_TARGETED_READ !== '0';
+}
+
+/**
+ * 按 session 定向列出候选文件,复杂度 O(目录数) 而不是 O(spool 总字节数)。
+ *
+ * 关键点是遇到名为 `sessions` 的目录时**不 readdir**,直接拼 `<sessions>/<segment>/<fileName>`
+ * 再 stat —— 否则一天有几千个会话目录时,光遍历目录就够慢的。
+ * 其余层级照常递归,兼容多一层嵌套的部署形态。
+ */
+export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessionId: string): SessionSpoolFiles {
+  const segment = safeSessionPathSegment(sessionId);
+  const shards: string[] = [];
+  const legacy: string[] = [];
+
+  const walk = (dir: string): void => {
+    let entries: Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'sessions') {
+          const target = path.join(fullPath, segment, fileName);
+          try {
+            if (fs.statSync(target).isFile()) shards.push(target);
+          } catch {}
+        } else {
+          walk(fullPath);
+        }
+      } else if (entry.isFile() && entry.name === fileName) {
+        legacy.push(fullPath);
+      }
+    }
+  };
+
+  try {
+    for (const day of fs.readdirSync(spoolDir, { withFileTypes: true })) {
+      if (day.isDirectory()) walk(path.join(spoolDir, day.name));
+    }
+  } catch {}
+
+  return { shards: shards.sort(), legacy: legacy.sort() };
+}
+
+/**
+ * 该 session 当前落盘状态的指纹(各候选文件的路径+大小)。
+ * 用来判断"上次聚合之后有没有新数据",避免 fast/evaluated 两段对同一份数据重复聚合。
+ */
+export function statSessionSpool(spoolDir: string, fileName: string, sessionId: string): string {
+  const { shards, legacy } = listSessionSpoolFiles(spoolDir, fileName, sessionId);
+  const parts: string[] = [];
+  for (const file of [...shards, ...legacy]) {
+    try {
+      parts.push(`${file}:${fs.statSync(file).size}`);
+    } catch {
+      parts.push(`${file}:missing`);
+    }
+  }
+  return parts.join('|');
+}
+
+function readEventsForSession<T extends { sessionId?: string }>(
+  spoolDir: string,
+  fileName: string,
+  sessionId: string,
+): T[] {
+  if (!sessionTargetedReadEnabled()) {
+    const events: T[] = [];
+    for (const file of listJsonlSpoolFiles(spoolDir, fileName)) {
+      events.push(...readJsonlEventsForSession<T>(file, sessionId));
+    }
+    return events;
+  }
+
+  const { shards, legacy } = listSessionSpoolFiles(spoolDir, fileName, sessionId);
+  const events: T[] = [];
+  // 分片只含目标 session,整读;仍按 sessionId 过滤一次兜底(路径段做过 sanitize/hash)。
+  for (const file of shards) events.push(...readJsonlEventsForSession<T>(file, sessionId));
+  // legacy 整日文件不能跳过:跨 6/17 格式边界的长会话,早期 span 只在这里面。
+  for (const file of legacy) events.push(...readLegacyEventsForSession<T>(file, sessionId));
+  return events;
+}
+
 function readJsonlEventsForSession<T extends { sessionId?: string }>(file: string, sessionId: string): T[] {
   const events: T[] = [];
   let fd: number;
@@ -170,19 +283,11 @@ function readJsonlEventsForSession<T extends { sessionId?: string }>(file: strin
 }
 
 export function readClaudeOtelEventsForSession(sessionId: string, spoolDir = getClaudeOtelSpoolDir()): ClaudeOtelEvent[] {
-  const events: ClaudeOtelEvent[] = [];
-  for (const file of listClaudeOtelSpoolFiles(spoolDir)) {
-    events.push(...readJsonlEventsForSession<ClaudeOtelEvent>(file, sessionId));
-  }
-  return events;
+  return readEventsForSession<ClaudeOtelEvent>(spoolDir, 'logs.jsonl', sessionId);
 }
 
 export function readOtelTraceEventsForSession(sessionId: string, spoolDir = getOtelTraceSpoolDir()): OtelTraceEvent[] {
-  const events: OtelTraceEvent[] = [];
-  for (const file of listOtelTraceSpoolFiles(spoolDir)) {
-    events.push(...readJsonlEventsForSession<OtelTraceEvent>(file, sessionId));
-  }
-  return events;
+  return readEventsForSession<OtelTraceEvent>(spoolDir, 'traces.jsonl', sessionId);
 }
 
 export function readNewLinesSince<T = any>(
@@ -196,6 +301,13 @@ export function readNewLinesSince<T = any>(
     return { events: [], nextCursor: { bytes: cursor.bytes || 0 }, lineCount: 0, parseErrors: 0 };
   }
 
+  const start = (cursor.bytes || 0) > stat.size ? 0 : Math.max(0, cursor.bytes || 0);
+  // 没有新字节就别开文件。consumer 每秒对每个 spool 文件都调一次,几千个文件时
+  // 这一个 open+close 就是每秒上万次无用系统调用(实测占 tick 开销的 8/9)。
+  if (start >= stat.size) {
+    return { events: [], nextCursor: { bytes: start }, lineCount: 0, parseErrors: 0 };
+  }
+
   let fd: number;
   try {
     fd = fs.openSync(file, 'r');
@@ -203,7 +315,6 @@ export function readNewLinesSince<T = any>(
     return { events: [], nextCursor: { bytes: cursor.bytes || 0 }, lineCount: 0, parseErrors: 0 };
   }
 
-  const start = (cursor.bytes || 0) > stat.size ? 0 : Math.max(0, cursor.bytes || 0);
   const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
   const decoder = new StringDecoder('utf8');
   const events: T[] = [];

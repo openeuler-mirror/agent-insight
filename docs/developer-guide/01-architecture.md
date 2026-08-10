@@ -23,9 +23,9 @@
 2. **Skill 质量参差不齐** —— 缺乏系统化的方式评测和迭代 Skill。
 3. **Agent 经验无法沉淀** —— 每次优化都从零开始。
 
-**Agent-Insight** 是一个**框架无关、完全自托管**的 Agent 工程底座，让运行在 OpenCode、Claude Code、OpenClaw、LangChain 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化，并将 **Skill（Agent 能力）作为一等公民**，提供从生成、A/B 测试到优化的完整闭环。
+**Agent-Insight** 是一个**框架无关、完全自托管**的 Agent 工程底座，让运行在 OpenCode、Claude Code、Trae IDE、OpenClaw、LangChain 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化，并将 **Skill（Agent 能力）作为一等公民**，提供从生成、A/B 测试到优化的完整闭环。
 
-**形态判断** `[确证]`：这是一个 **Next.js 16 全栈 Web 应用**（前端仪表盘 + 后端 API 路由同进程），辅以一个 **CLI 安装器**（`bin/cli.js`，npm 包 `@witty-ai/skill-insight`）和一组**分发到 Agent 宿主机的客户端接入脚本**（`scripts/*watcher*`、`scripts/opencode_plugin*`、`public/sync_skills.ts`）。`package.json` 声明了 `bin`，但主体是 Web 服务而非 CLI。
+**形态判断** `[确证]`：这是一个 **Next.js 16 全栈 Web 应用**（前端仪表盘 + 后端 API 路由同进程），辅以一个 **CLI 安装器**（`bin/cli.js`，npm 包 `@witty-ai/skill-insight`）和一组**分发到 Agent 宿主机的客户端接入脚本**（`scripts/*watcher*`、`scripts/opencode_plugin*`、`scripts/trae-collector/`、`public/sync_skills.ts`）。`package.json` 声明了 `bin`，但主体是 Web 服务而非 CLI。
 
 ---
 
@@ -35,7 +35,7 @@
 
 从顶层 API 路由（`src/app/api/*`）与仪表盘页面（`src/app/(main)/*`）客观罗列出五大能力域：
 
-- **接入（ingest）** —— 通过 OTel / 插件 / watcher 旁路采集多框架 Agent 运行数据。
+- **接入（ingest）** —— 通过 OTel / 插件 / watcher / VS Code Hook 采集多框架 Agent 运行数据。
 - **观测（observe）** —— trace 列表、执行详情、会话、指标聚合、故障诊断。
 - **评测（eval / evaluation / skill-eval）** —— 静态合规、动态轨迹、触发分析、结果/路由评测、A/B 与灰度。
 - **Skill 全生命周期（skill-generator / skill-opt / skills）** —— 生成、版本管理、优化。
@@ -45,7 +45,7 @@
 
 > 目标属设计意图，代码只能旁证。以下内容基于基础设施信号作出 `[推断]`，并已结合项目背景完成校正。
 
-- **`[推断]` 框架无关性是首要架构目标** —— 依据：存在显式的 `FrameworkAdapter` 注册表设计（`docs/design/framework-adapter-registry/`）、按框架分流的 parser/watcher（`src/lib/engine/observability/{claude,openclaw}-parser.ts`），以及基于 OpenTelemetry 标准协议的接入端点。
+- **`[推断]` 框架无关性是首要架构目标** —— 依据：存在显式的 `FrameworkAdapter` 注册表设计（`docs/design/framework-adapter-registry/`）、按框架分流的 parser/watcher（`src/lib/engine/observability/{claude,openclaw}-parser.ts`）、TRAE 的 VS Code 插件采集路径，以及基于 OpenTelemetry 标准协议的接入端点。
 - **`[推断]` 数据主权 / 自托管是硬约束** —— 依据：README 强调「全栈本地化部署、无外部依赖」，默认 SQLite 落本地文件，安装走 `npx ... install` 单机脚本。
 - **`[推断]` 可观测性是目标** —— 依据：集成 OpenTelemetry SDK + Langfuse，独立 `instrumentation*.ts` 注册。
 - **`[推断]` Skills 全生命周期管理是核心目标** —— 依据：系统同时提供 Skills Hub、Skills 生成、Skills 评测、Skills 优化、版本历史等完整能力链路，覆盖从生成、管理到迭代优化的全过程。
@@ -67,7 +67,7 @@
 | Agent 管理 | `/agents` | `api/agents/**`、`api/auth/**` |
 | 运行观测 · 链路追踪 | `/trace`（+`/details`） | `api/observe/**`、`engine/observability` |
 | 运行观测 · 智能诊断 | `/fault` | `api/fault/**`、`api/debug/**`、`engine/agent-debug` |
-| 运行观测 · 质量监控 | `/quality` | `/api/quality/{agents,report,executions,backfill}` |
+| 运行观测 · 质量监控 | `/quality` | `/api/quality/{agents,report,executions}` |
 | 运行观测 · 推理 Infra | `/infra`（+`/infra/sources`、`/infra/source/:id`） | `api/observe/infra/**`、`lib/infra`、`lib/ingest/vllm` |
 | 评测中心 · 评测数据集 | `/dataset` | `api/agent-datasets/**`、`engine/evaluation` |
 | 评测中心 · 评估器 | `/metrics` | `api/user-evaluators/**`、`engine/evaluation` |
@@ -120,6 +120,7 @@ flowchart TB
     subgraph hosts["Agent 宿主机（外部）"]
         oc["OpenCode 运行时"]
         cc["Claude Code"]
+        trae["Trae IDE"]
         ocl["OpenClaw / LangChain"]
     end
     user["开发者 / 团队<br/>（浏览器）"]
@@ -133,6 +134,7 @@ flowchart TB
     user -->|HTTP 仪表盘| web
     oc -->|OTel / 插件 / 日志旁路| web
     cc -->|watcher 上报| web
+    trae -->|VS Code 插件<br/>Hook 采集 + 上传| web
     ocl -->|watcher / OTel| web
     web -->|Prisma / pg| db
     web -->|生成·评测·优化调用| llm

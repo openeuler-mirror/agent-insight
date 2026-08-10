@@ -38,6 +38,7 @@
 - **新增存储后端**：与 `OpenGaussAdapter` 并列实现 `DatabaseAdapter`（`db-interface.ts`）。
 - **新增 LLM provider**：扩展 `src/lib/llm-providers.ts` 中的 `LlmProvider` 注册表。
 - **新增自定义评测器**：用 `LlmEvaluatorConfig` / `CodeEvaluatorConfig`（`src/lib/evaluators/custom-evaluator-model.ts`）建模；通过 `src/server/user_evaluators_storage.ts` 持久化。
+- **新增预置评估器**：实现放 `src/lib/engine/experiment/<族>-preset-evaluators.ts`（一族一文件），另需在卡片/元数据/分发/守卫测试四处登记。落点、命名与打分方法论见 [10-evaluator-development.md](./10-evaluator-development.md)——**动手前必读**，这条路径上的坑基本都记在那里了。
 - **新增框架接入路径**：在 `src/lib/ingest/*` 下加 parser/watcher 或 OTel 聚合器，并在 `src/lib/ingest/adapters/` 注册 `FrameworkAdapter`（descriptor、skill 抽取、必要的 `normalizeForStorage`）。路由层不要再手写框架分支；通过 `saveExecutionRecord` 归一化为 `Execution`。安装脚本框架清单仍是后续治理范围。
 - **流程闸门**（`AGENTS.md` §4）：对 **Prisma schema** 的任何改动，或任何**新增 API 路由**，都需要先在 `docs/plans/YYYY-MM-DD-<topic>-design.md` 下产出一份 Plan 文档，对齐后再编码。
 
@@ -88,6 +89,42 @@
 - **Build**：`npm run build` · **Start (prod)**：`bash scripts/restart.sh` 或 `npm run start`。
 - **Test**：`npm run test`（`node --import tsx --test "test/**/*.test.ts"`）。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
+
+## SQLite data archive CLI
+
+`scripts/db_archive.sh` 是 SQLite-only 的逻辑归档入口，支持 `create`、`inspect`、`import`
+三个命令。它不经过 `DatabaseAdapter`，也不支持设置了 `DB_HOST` 的 OpenGauss 部署。
+脚本是可脱离仓库复制运行的单文件工具，不读取 `package.json` 或其他项目文件，运行时
+只依赖 `bash`、`sqlite3`、`gzip` 和可用的 SHA-256 命令。
+未显式传 `--database` 时，数据库解析规则与应用默认值保持一致：
+`~/.agent-insight/data/witty_insight.db`；其他相对 `file:` URL 从脚本运行目录解析。
+
+归档格式为 gzip 压缩的裁剪 SQLite 数据库，内部通过 `_ai_archive_manifest`、
+`_ai_archive_counts` 和 `_ai_selected_*` 表记录格式版本、schema hash、时间窗口、逐表数量
+及聚合根。归档生成先使用 `VACUUM INTO` 创建一致性源库快照，再复制被选中的业务聚合；
+因此导出不会读到跨事务的半成品。
+
+- `traces` 提供 `--user` 时，以 `Execution.user` 完全匹配指定账号且非子 Agent 的记录为
+  时间选择根；省略时选择时间窗口内全部账号，manifest 的 user 记为 `<all-users>`。账号
+  范围内不区分用户 Agent 与系统 Agent。选根后沿 `rootExecutionId` 和 `parentExecutionId`
+  收集整棵执行树。Execution、Session、评测、Issue、标签绑定、诊断、infra 关联和被引用
+  的实验 case/result/comment 是 owned rows；Skill/SkillVersion、Tag、InfraSource、
+  Experiment 是只随包携带、不从源库删除的 reference rows。导入时保留原始 user 字段。
+- `infra-metrics` 以 `InfraMetricSample.tsMs` 使用 `[from, to)` 窗口选择数据，
+  `InfraSource` 作为 reference rows 保留；该模型没有 user 字段，因此不接受 `--user`。
+- 时间参数接受带时区的完整 ISO-8601，或只精确到日的 `YYYY-MM-DD`；日期值通过 SQLite
+  `utc` modifier 按运行机器本地时区的当天零点转换，避免依赖 GNU/BSD `date` 的不同参数。
+- `create` 默认归档并清理源数据：它会在新事务里将 live DB 的 owned rows 与归档逐行比对，
+  期间发生新增或更新就通过 CHECK guard 失败并回滚，验证通过后才按子表到父表顺序删除。
+  `--keep-source` 显式切换为只导出；旧 `--purge-source` 仍作为兼容参数接受，但已是默认行为。
+- `import` 要求 canonical schema hash 一致；逐表比较同主键行，相同行幂等跳过、内容不同则
+  CHECK guard 失败。全部插入和外键差异检查位于同一 `BEGIN IMMEDIATE` 事务。
+- `.sqlite.gz.sha256` 用于传输完整性验证；`.sqlite.gz.purged` 是成功清理源库后的收据。
+  外部附件不属于数据库归档范围。
+
+端到端契约测试位于 `test/db-archive-script.test.ts`，覆盖仓库外单文件执行、完整执行树、
+关联行、冲突回滚、幂等恢复和指标半开时间窗口。新增 archive policy 时，需要同时补齐
+复制条件、purge guard、删除顺序、导入顺序和往返测试。
 
 ## Key implementation entry points
 > 重型逻辑所在之处（被调用最多的函数）。仅作指引——需要看实现时再打开文件。

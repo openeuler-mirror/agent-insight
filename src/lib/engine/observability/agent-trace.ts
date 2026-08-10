@@ -10,6 +10,7 @@
  */
 
 import { stringifyClaudeContent } from '@/lib/shared/interaction-content';
+import { isSkillLoaderToolName } from '@/lib/evaluators/evaluator-case-context';
 
 export type InteractionRole = 'user' | 'assistant' | 'opencode' | 'subagent' | string;
 
@@ -19,6 +20,10 @@ export interface InteractionUsage {
     output?: number;
     reasoning?: number;
     cache?: { read?: number; write?: number };
+    estimated?: boolean;
+    source?: string;
+    scope?: string;
+    missing_context?: boolean;
 }
 
 export interface ToolCall {
@@ -56,6 +61,13 @@ export interface RawInteraction {
     subagent_name?: string;
     subagent_session_id?: string;
     tool_calls?: ToolCall[];
+    requestMessages?: Array<{
+        role?: string;
+        content?: unknown;
+        tool_calls?: unknown[];
+        tool_call_id?: string;
+        name?: string;
+    }>;
     usage?: InteractionUsage;
     // LLM request parameters (present when captured via proxy or enriched SDK)
     model?: string;
@@ -163,10 +175,21 @@ export interface AgentNode {
     parallelCallCount?: number;
     /** System prompts attached to this agent (collected from role="system" interactions) */
     systemPrompts?: SystemPromptEntry[];
+    /** Hook 注入的 additionalContext(collected from role="hook_context" interactions) */
+    hookContexts?: HookContextEntry[];
     /** Compaction boundaries inside this slice, chronological. LLM calls whose
      *  interactionIndex is greater than `compactions[k].interactionIndex` saw
      *  the summary of compaction k (and not the original prior context). */
     compactions?: CompactionBoundary[];
+}
+
+export interface HookContextEntry {
+    text: string;
+    /** 触发的 hook 事件,如 UserPromptSubmit / SessionStart */
+    hookEvent?: string;
+    /** 配置里给该 hook 起的名字(有就带上,便于归因到具体钩子) */
+    hookName?: string;
+    length?: number;
 }
 
 export interface SystemPromptEntry {
@@ -267,16 +290,20 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
     }
 
     function takePendingTask(sid: string, sType: string | null): PendingTask | undefined {
+        // 认领要**忽略大小写**:claim 的类型来自 task 调用参数(原样,如 "Explore"),
+        // 而 inferSubagentType 会把子 agent 那一轮的名字小写化 —— 大小写敏感比较会让
+        // 首字母大写的 subagent_type 永远认领不上,子节点直接塌回 root。
+        const sameType = (claimType: string) => claimType.trim().toLowerCase() === (sType || '').trim().toLowerCase();
         const exactIdx = pendingTasks.findIndex(claim =>
             claim.expectedSessionId === sid &&
-            (!sType || claim.subagentType === sType),
+            (!sType || sameType(claim.subagentType)),
         );
         if (exactIdx >= 0) return pendingTasks.splice(exactIdx, 1)[0];
 
         if (!sType) return undefined;
         const typeIdx = pendingTasks.findIndex(claim =>
             !claim.expectedSessionId &&
-            claim.subagentType === sType,
+            sameType(claim.subagentType),
         );
         return typeIdx >= 0 ? pendingTasks.splice(typeIdx, 1)[0] : undefined;
     }
@@ -341,6 +368,24 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
                 if (!pendingSysPrompts.has(subSid)) pendingSysPrompts.set(subSid, []);
                 pendingSysPrompts.get(subSid)!.push(entry);
             }
+            continue;
+        }
+
+        // hook 注入的 additionalContext(Claude Code hooks 的 hookSpecificOutput)。
+        // 和 system prompt 一样是"喂给模型的上下文"而非事件,挂到节点上单独展示,
+        // 不进 events —— 它不是模型的一步动作,混进时间线会让 LLM/工具计数失真。
+        if (it.role === 'hook_context') {
+            const text = stringifyClaudeContent(it.content);
+            if (!text) continue;
+            const entry: HookContextEntry = {
+                text,
+                hookEvent: (it as any).hook_event,
+                hookName: (it as any).hook_name,
+                length: (it as any).hook_context_length ?? text.length,
+            };
+            if (!root.hookContexts) root.hookContexts = [];
+            const dup = root.hookContexts.some(h => h.text === entry.text && h.hookEvent === entry.hookEvent);
+            if (!dup) root.hookContexts.push(entry);
             continue;
         }
 
@@ -448,7 +493,8 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             else if (ev.kind === 'skill') host.stats.skillCalls++;
             else if (ev.kind === 'task') {
                 host.stats.taskCalls++;
-                const sType = ev.args?.subagent_type || ev.args?.subagentType;
+                const rawSubagentType = ev.args?.subagent_type || ev.args?.subagentType;
+                const sType = typeof rawSubagentType === 'string' ? rawSubagentType.trim().toLowerCase() : rawSubagentType;
                 if (sType) {
                     addPendingTask(host, sType, ev, idx);
                 }
@@ -629,7 +675,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         // (drives the per-agent Skill stat / timeline). Other frameworks don't emit it.
         const kind: CallKind = normalizedName === 'task'
             ? 'task'
-            : normalizedName === 'skill' || normalizedName === 'load_skill' || normalizedName === 'skill_view' || normalizedName === 'skill_tool'
+            : isSkillLoaderToolName(normalizedName)
                 ? 'skill'
                 : 'tool';
         const ev: AgentEvent = {
@@ -757,6 +803,8 @@ function extractPartsText(parts: InteractionPart[] | undefined, partType: string
 }
 
 export function inferSubagentType(it: RawInteraction): string | null {
+    const explicit = String((it as any).subagent_type || (it as any).subagentType || '').trim();
+    if (explicit) return explicit.toLowerCase();
     // The subagent_name field looks like "Kuafu (General Diagnostic Executor)".
     // The subagent_type field on the spawning task arg is lowercased: "kuafu".
     // We compare loosely.
@@ -803,6 +851,23 @@ export function totalNodeCount(root: AgentNode): number {
     let count = 0;
     walkTree(root, () => count++);
     return count;
+}
+
+/**
+ * 时间线/详情标题只放得下一行，取正文的**第一条非空行**。
+ *
+ * 不能直接 `split('\n')[0]`：推理模型在 thinking 结束后普遍先吐 `\n\n` 再出正文
+ * （实测 Qwen3.5 的 text part 就是 `"\n\n你好！…"`），首行是空串，而 summary 整体
+ * 非空、走不到调用方的兜底文案 —— 界面上就是「LLM 图标后面什么都没有」，右侧详情
+ * 却有完整的 think 和 response。
+ */
+export function firstMeaningfulLine(text?: string, maxChars = 60): string {
+    if (!text) return '';
+    for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed) return trimmed.slice(0, maxChars);
+    }
+    return '';
 }
 
 /** Format milliseconds as "1h 1m 46s" / "1m 46s" / "1.2s" / "350ms" */

@@ -241,6 +241,134 @@ test("Claude OTel: maps tool_result blocks from request body refs onto tool call
   assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.output, "README contents from body_ref")
 })
 
+// 客户端与服务端不同机时(远端部署 / 容器 / 不同用户),body_ref 指向的是客户端本机磁盘,
+// 服务端读不到 —— 此前整条助手消息都产不出来,trace 只剩 user,`trace_completed_at`
+// 永远推不出来,前端一直显示"执行中"。兜底应从 assistant_response 事件取回正文,
+// 并且工具调用不能跟着一起消失。
+test("Claude OTel: falls back to assistant_response when body_ref is unreachable", () => {
+  const unreachable = path.join(os.tmpdir(), "claude-otel-absent-on-this-host", "abc.response.json")
+  const sid = "session-crossmachine"
+  const common = { "session.id": sid, "prompt.id": "prompt-x" }
+  const body = {
+    resourceLogs: [
+      {
+        resource: { attributes: [attr("service.name", "claude-code")] },
+        scopeLogs: [
+          {
+            logRecords: [
+              logRecord("user_prompt", { ...common, "event.sequence": 1, prompt: "读一下 README" }),
+              logRecord("api_request", {
+                ...common,
+                "event.sequence": 2,
+                model: "claude-sonnet-4-6",
+                input_tokens: 12,
+                output_tokens: 5,
+                duration_ms: 900,
+              }),
+              logRecord("assistant_response", {
+                ...common,
+                "event.sequence": 3,
+                response: "我来读一下 README。",
+                query_source: "repl_main_thread",
+                model: "claude-sonnet-4-6",
+              }),
+              logRecord("api_response_body", {
+                ...common,
+                "event.sequence": 4,
+                model: "claude-sonnet-4-6",
+                body_ref: unreachable,
+              }),
+              logRecord("tool_result", {
+                ...common,
+                "event.sequence": 5,
+                tool_name: "Read",
+                tool_use_id: "toolu_x",
+                success: "true",
+                duration_ms: 40,
+                tool_input: JSON.stringify({ file_path: "README.md" }),
+                tool_result: "README contents",
+              }),
+              logRecord("api_request", {
+                ...common,
+                "event.sequence": 6,
+                model: "claude-sonnet-4-6",
+                input_tokens: 20,
+                output_tokens: 8,
+                duration_ms: 700,
+              }),
+              logRecord("assistant_response", {
+                ...common,
+                "event.sequence": 7,
+                response: "README 讲的是安装方式。",
+                query_source: "repl_main_thread",
+                model: "claude-sonnet-4-6",
+              }),
+              logRecord("api_response_body", {
+                ...common,
+                "event.sequence": 8,
+                model: "claude-sonnet-4-6",
+                body_ref: unreachable,
+              }),
+              // 生成会话标题是内部 LLM 调用,不属于对话内容
+              logRecord("assistant_response", {
+                ...common,
+                "event.sequence": 9,
+                response: '{"title": "读 README"}',
+                query_source: "generate_session_title",
+                model: "claude-sonnet-4-6",
+              }),
+              logRecord("assistant_response", {
+                ...common,
+                "event.sequence": 10,
+                response: "再测一个除法 10÷2",
+                query_source: "prompt_suggestion",
+                model: "claude-sonnet-4-6",
+              }),
+              logRecord("assistant_response", {
+                ...common,
+                "event.sequence": 11,
+                response: "生成中的建议",
+                query_source: "prompt_suggestion_generate",
+                model: "claude-sonnet-4-6",
+              }),
+              logRecord("assistant_response", {
+                ...common,
+                "event.sequence": 12,
+                response: "The user stepped away…",
+                query_source: "away_summary",
+                model: "claude-sonnet-4-6",
+              }),
+              logRecord("assistant_response", {
+                ...common,
+                "event.sequence": 13,
+                response: "Agent summary",
+                query_source: "agent_summary",
+                model: "claude-sonnet-4-6",
+              }),
+            ],
+          },
+        ],
+      },
+    ],
+  }
+
+  const events = normalizeClaudeOtlpLogs(body, { authenticatedUser: "alice" })
+  const record = aggregateClaudeOtelEvents(sid, events)
+  assert.ok(record)
+  assert.deepEqual((record.interactions ?? []).map((m: any) => m.role), ["user", "assistant", "assistant"])
+  assert.equal(record.interactions?.[1]?.content, "我来读一下 README。")
+  assert.equal(record.interactions?.[2]?.content, "README 讲的是安装方式。")
+  assert.equal(record.final_result, "README 讲的是安装方式。")
+  // usage 从配对的 api_request 事件取,两轮各自对上
+  assert.equal(record.interactions?.[1]?.usage?.total, 17)
+  assert.equal(record.interactions?.[2]?.usage?.total, 28)
+  // 工具调用挂在发起它的那一轮助手消息上,不能因为读不到 body 就整个丢掉
+  assert.equal(record.tool_call_count, 1)
+  assert.equal(record.interactions?.[1]?.tool_calls?.length, 1)
+  assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.name, "Read")
+  assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.output, "README contents")
+})
+
 test("Claude OTel: maps Agent tool calls into trace subagent relationships", () => {
   const parentBody = JSON.stringify({
     id: "msg_parent",

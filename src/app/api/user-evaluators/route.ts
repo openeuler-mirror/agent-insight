@@ -6,6 +6,8 @@ import {
   type EvaluatorCard,
 } from '@/lib/evaluators/custom-evaluator-model';
 import { syncCustomEvaluatorRegisteredAgents } from '@/lib/engine/evaluation/custom-llm-evaluator';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { isUsageEnabled } from '@/lib/usage-analytics/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,8 +80,21 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: validationError }, { status: 400 });
     }
 
+    // 评估器没有独立删除接口 —— 删除表现为"保存了一份更短的列表"，用条数变化区分。
+    // 这次额外读取只在统计开启时才做，关闭时保存路径的开销与接入统计前一致
+    // （null 表示没读，事件反正会被 collector 丢弃）。
+    const usageOn = isUsageEnabled();
+    const previousCount = usageOn ? (await readUserCustomEvaluators(user)).length : null;
+
     await writeUserCustomEvaluators(user, raw);
     await syncCustomEvaluatorRegisteredAgents(user, raw as EvaluatorCard[]);
+
+    recordUsageEvent({
+      user,
+      featureKey: 'metrics',
+      eventKey:
+        previousCount !== null && raw.length < previousCount ? 'evaluator.delete' : 'evaluator.save',
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

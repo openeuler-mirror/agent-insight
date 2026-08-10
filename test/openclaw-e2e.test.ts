@@ -6,6 +6,7 @@ import { decodeOtlpProtobuf } from "../src/lib/ingest/claude-otel/otlp-protobuf-
 import { normalizeClaudeOtlpTraces } from "../src/lib/ingest/claude-otel/otlp-json"
 import { guardAttribution } from "../src/lib/ingest/claude-otel/attribution-guard"
 import { openclawAdapter } from "../src/lib/ingest/adapters/openclaw"
+import { aggregateOpenClawOtelTraceEvents } from "../src/lib/ingest/otel/adapters/openclaw"
 
 // ── Helpers ──
 
@@ -19,6 +20,134 @@ function makeSpanAttrs(kind = "llm") {
     attrs.push({ key: "gen_ai.response.usage.output_tokens", value: { intValue: 50 } })
   }
   return attrs
+}
+
+function stringAttr(key: string, value: string) {
+  return { key, value: { stringValue: value } }
+}
+
+function intAttr(key: string, value: number) {
+  return { key, value: { intValue: value } }
+}
+
+function boolAttr(key: string, value: boolean) {
+  return { key, value: { boolValue: value } }
+}
+
+function makeOpenClawContractRequest() {
+  const sessionId = "openclaw-contract-session"
+  const agentSpanId = "0x" + "a1".repeat(8)
+  return makeTraceRequest({
+    instanceId: "instance-must-not-win",
+    spans: [
+      {
+        name: "invoke_agent",
+        spanId: agentSpanId,
+        attributes: [
+          stringAttr("witty.session.id", sessionId),
+          stringAttr("witty.user.id", "openclaw-user"),
+          stringAttr("witty.agent.name", "planner"),
+          stringAttr("witty.agent.id", "planner-1"),
+          stringAttr("gen_ai.span.kind", "agent"),
+        ],
+      },
+      {
+        name: "chat",
+        spanId: "0x" + "a2".repeat(8),
+        parentSpanId: agentSpanId,
+        attributes: [
+          stringAttr("witty.session.id", sessionId),
+          stringAttr("witty.user.id", "openclaw-user"),
+          stringAttr("witty.agent.name", "planner"),
+          stringAttr("gen_ai.span.kind", "llm"),
+          stringAttr("gen_ai.request.model", "gpt-contract"),
+          stringAttr("gen_ai.prompt", "plan a fix"),
+          stringAttr("gen_ai.completion", "done"),
+          intAttr("gen_ai.usage.prompt_tokens", 11),
+          intAttr("gen_ai.usage.completion_tokens", 7),
+          intAttr("gen_ai.usage.total_tokens", 20),
+        ],
+      },
+      {
+        name: "custom_tool_span",
+        spanId: "0x" + "a3".repeat(8),
+        parentSpanId: agentSpanId,
+        attributes: [
+          stringAttr("witty.session.id", sessionId),
+          stringAttr("witty.user.id", "openclaw-user"),
+          stringAttr("witty.tool.name", "search"),
+          stringAttr("witty.tool.input", "query=otel"),
+          stringAttr("witty.tool.result", "found"),
+          boolAttr("witty.tool.error", true),
+        ],
+      },
+      {
+        name: "custom_skill_span",
+        spanId: "0x" + "a4".repeat(8),
+        parentSpanId: agentSpanId,
+        attributes: [
+          stringAttr("witty.session.id", sessionId),
+          stringAttr("witty.user.id", "openclaw-user"),
+          stringAttr("witty.skill.name", "otel-debug"),
+          stringAttr("witty.skill.version", "2"),
+        ],
+      },
+    ],
+  })
+}
+
+function makeOpenClawAggregationRequest() {
+  const body = makeOpenClawContractRequest()
+  const spans = body.resourceSpans[0].scopeSpans[0].spans
+  const rootSpanId = spans[0].spanId
+  const childSpanId = "0x" + "b1".repeat(8)
+  spans.push(
+    {
+      traceId: "0x" + "0a".repeat(16),
+      spanId: childSpanId,
+      parentSpanId: rootSpanId,
+      name: "invoke_agent",
+      kind: 2,
+      startTimeUnixNano: "1782381605000000000",
+      endTimeUnixNano: "1782381609000000000",
+      attributes: [
+        stringAttr("witty.session.id", "openclaw-contract-session"),
+        stringAttr("witty.user.id", "openclaw-user"),
+        stringAttr("witty.agent.name", "researcher"),
+        stringAttr("witty.agent.id", "researcher-1"),
+        stringAttr("gen_ai.span.kind", "agent"),
+      ],
+      status: { code: 0 },
+    } as any,
+    {
+      traceId: "0x" + "0a".repeat(16),
+      spanId: "0x" + "b2".repeat(8),
+      parentSpanId: childSpanId,
+      name: "chat",
+      kind: 3,
+      startTimeUnixNano: "1782381606000000000",
+      endTimeUnixNano: "1782381608000000000",
+      attributes: [
+        stringAttr("witty.session.id", "openclaw-contract-session"),
+        stringAttr("witty.user.id", "openclaw-user"),
+        stringAttr("witty.agent.name", "researcher"),
+        stringAttr("gen_ai.span.kind", "llm"),
+        stringAttr("gen_ai.request.model", "gpt-contract"),
+        stringAttr("gen_ai.prompt", "research otel"),
+        stringAttr("gen_ai.completion", "child answer"),
+        intAttr("gen_ai.usage.prompt_tokens", 3),
+        intAttr("gen_ai.usage.completion_tokens", 2),
+        intAttr("gen_ai.usage.total_tokens", 5),
+      ],
+      status: { code: 0 },
+    } as any,
+  )
+
+  spans.forEach((span: any, index: number) => {
+    span.startTimeUnixNano ||= String(1782381600000000000n + BigInt(index) * 1_000_000_000n)
+    span.endTimeUnixNano ||= String(BigInt(span.startTimeUnixNano) + 500_000_000n)
+  })
+  return body
 }
 
 /** Build a full ExportTraceServiceRequest body (JSON shape) */
@@ -114,6 +243,105 @@ test("TC-002: plugin path e2e - GenAI semantic spans recognized via JSON path", 
     (e: any) => e.attributes?.["gen_ai.span.kind"] === "agent",
   )
   assert.ok(agentEvent, "expected an event with gen_ai.span.kind=agent")
+  assert.equal(agentEvent.kind, "agent")
+})
+
+test("OpenClaw documented witty.* contract preserves session, kinds, user, and token aliases", () => {
+  const events = normalizeClaudeOtlpTraces(makeOpenClawContractRequest())
+  assert.equal(events.length, 4)
+  assert.deepEqual(events.map((event) => event.sessionId), Array(4).fill("openclaw-contract-session"))
+  assert.deepEqual(events.map((event) => event.kind), ["agent", "llm", "tool", "tool"])
+  assert.deepEqual(events.map((event) => event.user), Array(4).fill("openclaw-user"))
+
+  const llm = events.find((event) => event.kind === "llm")!
+  assert.equal(llm.model, "gpt-contract")
+  assert.deepEqual(llm.usage, {
+    input_tokens: 11,
+    output_tokens: 7,
+    reasoning_tokens: undefined,
+    total_tokens: 20,
+  })
+  assert.equal(events.find((event) => event.name === "custom_tool_span")?.attributes["witty.tool.name"], "search")
+  assert.equal(events.find((event) => event.name === "custom_skill_span")?.attributes["witty.skill.name"], "otel-debug")
+})
+
+test("OpenClaw documented contract normalizes equivalently through JSON and protobuf", () => {
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const root = require("@opentelemetry/otlp-transformer/build/src/generated/root")
+  const traceRequestType = root.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
+  const body = makeOpenClawContractRequest()
+  const decoded = decodeOtlpProtobuf(traceRequestType.encode(body).finish())
+  if ("code" in decoded) throw new Error(decoded.message)
+
+  const project = (events: ReturnType<typeof normalizeClaudeOtlpTraces>) => events.map((event) => ({
+    sessionId: event.sessionId,
+    kind: event.kind,
+    user: event.user,
+    model: event.model,
+    usage: event.usage,
+    name: event.name,
+  }))
+
+  assert.deepEqual(
+    project(normalizeClaudeOtlpTraces(decoded.body)),
+    project(normalizeClaudeOtlpTraces(body)),
+  )
+})
+
+test("OpenClaw aggregation keeps LLM, tool, skill, sub-agent, errors, and tokens", () => {
+  const events = normalizeClaudeOtlpTraces(makeOpenClawAggregationRequest(), {
+    receivedAt: "2026-06-25T10:00:00.000Z",
+  })
+  const record = aggregateOpenClawOtelTraceEvents("openclaw-contract-session", events)
+  assert.ok(record)
+  assert.equal(record.query, "plan a fix")
+  assert.equal(record.final_result, "child answer")
+  assert.equal(record.agentName, "planner")
+  assert.deepEqual(record.agents, ["planner", "researcher"])
+  assert.equal(record.llm_call_count, 2)
+  assert.equal(record.tool_call_count, 2)
+  assert.equal(record.tool_call_error_count, 1)
+  assert.equal(record.tokens, 25)
+  assert.equal(record.input_tokens, 14)
+  assert.equal(record.output_tokens, 9)
+
+  const root = record.interactions?.find((interaction: any) => interaction.role === "assistant") as any
+  assert.ok(root)
+  assert.deepEqual(
+    root.tool_calls.map((call: any) => call.function?.name || call.name).sort(),
+    ["search", "skill", "task"],
+  )
+  const child = record.interactions?.find((interaction: any) => interaction.role === "subagent") as any
+  assert.equal(child?.content, "child answer")
+  assert.equal(child?.subagent_name, "researcher")
+  assert.equal(child?.subagent_session_id, "researcher-1")
+
+  const normalized = openclawAdapter.normalizeForStorage!(record.interactions as any[])
+  assert.deepEqual(openclawAdapter.extractSkills!(normalized), [{ name: "otel-debug", version: 2 }])
+})
+
+test("OpenClaw aggregation is stable when the same spans are retransmitted", () => {
+  const events = normalizeClaudeOtlpTraces(makeOpenClawAggregationRequest(), {
+    receivedAt: "2026-06-25T10:00:00.000Z",
+  })
+  const once = aggregateOpenClawOtelTraceEvents("openclaw-contract-session", events)
+  const retransmitted = aggregateOpenClawOtelTraceEvents("openclaw-contract-session", [...events, ...events])
+  assert.deepEqual(retransmitted, once)
+})
+
+test("OpenClaw aggregation falls back to receivedAt when spans omit start time", () => {
+  const receivedAt = "2026-08-05T01:02:03.000Z"
+  const body = makeTraceRequest()
+  const span = body.resourceSpans[0].scopeSpans[0].spans[0] as any
+  delete span.startTime
+  delete span.endTime
+
+  const events = normalizeClaudeOtlpTraces(body, { receivedAt })
+  assert.deepEqual(events.map((event) => event.startTimeMs), [0])
+
+  const record = aggregateOpenClawOtelTraceEvents("inst-001", events)
+  assert.ok(record)
+  assert.equal((record.timestamp as Date).getTime(), Date.parse(receivedAt))
 })
 
 // ── TC-003: JSON vs protobuf equivalence ──

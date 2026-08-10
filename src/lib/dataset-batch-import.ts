@@ -8,6 +8,19 @@ function strVal(v: unknown): string {
   return '';
 }
 
+function pickEvaluatorContextValues(obj: Record<string, unknown>): Record<string, unknown> {
+  const nested = obj.values;
+  const values = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? { ...(nested as Record<string, unknown>) }
+    : {};
+
+  for (const key of ['available_tools', 'available_skills'] as const) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) values[key] = obj[key];
+  }
+
+  return values;
+}
+
 /** 按常见字段名抽取输入与期望输出（含 UI 示例里的 output） */
 export function pickInputOutput(obj: Record<string, unknown>): { input: string; expectedOutput: string; trajectory: string } {
   const inputKeys = ['input', 'question', 'prompt', '用户输入', 'query'];
@@ -121,6 +134,7 @@ export function parseBatchJson(text: string, datasetKind: DatasetKind): BatchImp
       tags: Array.isArray(obj.tags)
         ? obj.tags.map(t => String(t).trim()).filter(Boolean)
         : [],
+      values: pickEvaluatorContextValues(obj),
     });
   }
 
@@ -158,7 +172,7 @@ export function parseBatchCsv(text: string, datasetKind: DatasetKind): BatchImpo
     return { cases: [], skippedEmpty: 0, message: '内容为空' };
   }
 
-  let headerCols = parseCsvLine(lines[0]);
+  const headerCols = parseCsvLine(lines[0]);
   const looksLikeHeader = headerCols.some(c => normalizeHeader(c) !== 'ignore');
 
   let dataLines = lines;

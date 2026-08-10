@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useTheme } from '@/lib/client/theme-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { useSidebar } from '@/lib/client/sidebar-context';
+import { useUsageAccess } from '@/lib/usage-analytics/use-usage-access';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -106,14 +107,22 @@ const RAS_TREE: NavItem = {
     ],
 };
 
+const ICON_EXPERIMENT = (<><path d="M5.5 1.5h3M6 1.5v3.5L2.8 10.5a1.2 1.2 0 0 0 1 1.9h6.4a1.2 1.2 0 0 0 1-1.9L8 5V1.5" /><path d="M4.2 9h5.6" /></>);
+
+// 该项文案未进 locale 字典（本期约定不改字典文件），在本文件内联映射，见 navLabel()。
+const INLINE_NAV_LABELS: Record<string, { zh: string; en: string }> = {
+    'nav.experiments': { zh: '实验', en: 'Experiments' },
+};
+
 const EVAL_TREE: NavItem = {
     key: 'eval-center',
     labelKey: 'nav.evalCenter',
     iconPath: ICON_EVAL,
     children: [
+        // 实验取代评测执行成为评测中心主入口；评测执行页/接口保留（Skill 评测仍依赖），仅从导航移除
+        { key: 'experiments', href: '/experiments', labelKey: 'nav.experiments', iconPath: ICON_EXPERIMENT, matchPrefixes: ['/experiments'] },
         { key: 'dataset', href: '/dataset', labelKey: 'nav.evalDataset', iconPath: ICON_DATASET },
         { key: 'metrics', href: '/metrics', labelKey: 'nav.evalMetrics', iconPath: ICON_METRICS },
-        { key: 'eval', href: '/eval', labelKey: 'nav.evalExecute', iconPath: ICON_EVAL },
         // { key: 'memory', href: '/memory', labelKey: 'nav.memory', iconPath: ICON_MEMORY },
     ],
 };
@@ -166,6 +175,16 @@ const CONFIG_GROUP: NavGroup = {
 
 const GROUPS: NavGroup[] = [AGENT_GROUP, CONFIG_GROUP];
 
+const ICON_USAGE = (<><path d="M2 12h10" /><path d="M4 12V7M7 12V3M10 12V9" /></>);
+
+const USAGE_ITEM: NavItem = {
+    key: 'usage',
+    href: '/usage',
+    labelKey: 'nav.usageAnalytics',
+    iconPath: ICON_USAGE,
+    badge: { text: 'ADMIN', kind: 'g' },
+};
+
 function normalizePath(p: string): string {
     const stripped = p.startsWith(basePath) ? p.slice(basePath.length) : p;
     return stripped || '/';
@@ -189,6 +208,20 @@ export function AppSidebar() {
     const { t, locale, setLocale } = useLocale();
     const { isCollapsed } = useSidebar();
     const [showUserMenu, setShowUserMenu] = useState(false);
+    // t() 的内联兜底：INLINE_NAV_LABELS 中的 key 不走 locale 字典
+    const navLabel = (key: string): string => {
+        const inline = INLINE_NAV_LABELS[key];
+        if (inline) return locale === 'zh' ? inline.zh : inline.en;
+        return t(key);
+    };
+    // 用量统计入口只在功能开启且当前用户是显式配置的平台管理员时出现；
+    // access 请求失败、未配置管理员或功能关闭都保持隐藏。
+    const usageAccess = useUsageAccess();
+    const showUsage = usageAccess.enabled && usageAccess.isAdmin;
+    const groups: NavGroup[] = showUsage
+        ? GROUPS.map(g => (g.key === 'config' ? { ...g, items: [...(g.items || []), USAGE_ITEM] } : g))
+        : GROUPS;
+
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['skills', 'eval-center', 'observe', 'agent-ras']));
 
@@ -267,7 +300,7 @@ export function AppSidebar() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>
-                {GROUPS.map(group => {
+                {groups.map(group => {
                     const collapsed = collapsedGroups.has(group.key);
                     return (
                         <div
@@ -290,7 +323,7 @@ export function AppSidebar() {
                                 onToggle={() => (group.items ? toggleGroup(group.key) : null)}
                                 onClickHref={() => group.href && router.push(group.href)}
                                 pathname={pathname}
-                                t={t}
+                                t={navLabel}
                             />
                             {!collapsed && group.items && (
                                 <div style={{ padding: '0 4px' }}>
@@ -301,7 +334,7 @@ export function AppSidebar() {
                                             pathname={pathname}
                                             expanded={expandedTrees}
                                             onToggle={toggleTree}
-                                            t={t}
+                                            t={navLabel}
                                         />
                                     ))}
                                 </div>

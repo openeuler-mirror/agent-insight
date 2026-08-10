@@ -609,35 +609,23 @@ const GLOSSARY = {
   'quality-monitoring': {
     name: '质量监控',
     tag: 'metric',
-    body: '以单个 Agent 为对象，对其时间窗内全部 trace 做整体度量：四维评分、趋势、统一问题汇总，并可下钻到单条 trace 诊断。回答"这个 Agent 整体好不好、先修哪个问题"。',
+    body: '以单个 Agent 为对象，对其时间窗内全部 trace 做整体度量：过程、成本、错误三维评分、趋势、统一问题汇总，并可下钻到单条 trace 诊断。回答"这个 Agent 运行是否稳定、先修哪个问题"。',
   },
   'quality-composite-score': {
     name: '综合质量分',
     tag: 'metric',
-    body: '把窗口内全部 trace 的四维表现压成的总分（0–100）。按 P0/P1/P2 优先级加权；任一 P0 硬约束命中（如安全违规）时封顶降级标红。状态按绝对阈值判定：≥85 达标 / 70–85 关注 / <70 异常，不与其他 Agent 比排名。',
+    body: '把窗口内全部 trace 的过程、成本与安全信号压成的总分（0–100）。按 P0/P1/P2 优先级加权；任一 P0 硬约束命中（如安全违规）时封顶降级标红。状态按绝对阈值判定：≥85 达标 / 70–85 关注 / <70 异常，不与其他 Agent 比排名。',
     formula: '综合分 = Σ(层均值 × 层权重)；权重 P0 0.55 / P1 0.30 / P2 0.15（缺层时重新归一）',
   },
   'quality-priority-tiers': {
     name: '指标优先级 P0/P1/P2',
     tag: 'metric',
-    body: 'P0 必达基线：任务完成度、安全、工具正确性、成本\nP1 重要进阶：计划效率、约束遵循、工具归因（依赖轨迹评测，无数据记 N/A）\nP2 增益项：如用户满意度（暂未启用）\nN/A 的层不参与综合分加权。',
+    body: 'P0 必达基线：安全、工具正确性、成本\nP1 重要进阶：计划效率、约束遵循、工具归因（依赖轨迹分析，无数据记 N/A）\nP2 增益项：如用户满意度（暂未启用）\nN/A 的层不参与综合分加权。',
   },
   'quality-deterministic-baseline': {
     name: '确定性打底',
     tag: 'eval',
-    body: '没有模型评测分的 trace，其指标由确定性规则推断：有工具报错或失败记录 → 判失败；无任何失败信号 → 视为成功。零模型成本但偏乐观，须结合评测覆盖一起判读。',
-  },
-  'quality-eval-coverage': {
-    name: '评测覆盖',
-    tag: 'eval',
-    body: '窗口内有模型评测分（judge 结果分或轨迹评测分）的 trace 占比。覆盖越低，分数越依赖确定性推断；可通过采样回填提升覆盖。',
-    formula: '评测覆盖 = 已评测 trace 数 ÷ 窗口内 trace 总数',
-  },
-  'quality-pass-rate': {
-    name: '达标率',
-    tag: 'metric',
-    body: '窗口内"无失败信号"的 trace 占比（确定性口径：无工具报错、无失败记录、judge 未判错）。',
-    formula: '达标率 = 成功 trace 数 ÷ trace 总数',
+    body: '质量监控只使用已落库的确定性运行信号和已有轨迹分析数据，不会因 trace 上传而调用结果评估器。工具报错、失败记录、安全命中与成本预算共同形成质量信号。',
   },
   'quality-impact': {
     name: '影响度',
@@ -656,21 +644,10 @@ const GLOSSARY = {
     body: '按 Skill 聚合窗口内未解决的 SkillIssue，回答"哪个 skill 在拖累这个 Agent"。点「去优化」直达 Skills 优化工作台，修复后自动销账。',
     formula: '拖累分 = Σ(未解决问题的严重度权重)；受影响 = 调用该 skill 的 trace 占比',
   },
-  'quality-expected-gain': {
-    name: '预期收益（估）',
-    tag: 'metric',
-    body: '修复该问题后达标率提升的保守估算：按关联 trace 占窗口 trace 的比例推算，封顶于剩余提升空间。仅供排序参考，非承诺值。',
-  },
   'quality-attribution': {
     name: '归因标签',
     tag: 'fault',
     body: '问题该派给谁修：\nagent逻辑：提示词 / Skill / 编排问题\n模型能力：理解偏差、幻觉\n工具&infra：超时、限流、环境故障\n外部输入：用户输入或上游数据问题\n当前由确定性规则、评测信号与诊断结论推断。',
-  },
-  'quality-dim-result': {
-    name: '结果维（做对了吗）',
-    tag: 'metric',
-    body: '完成度与安全两个指标的均值。\n完成度：有 judge 评测分用评测分；没有则确定性推断——有工具报错/失败记录判 0，无失败信号判 100\n安全：失败记录命中注入/越权/PII 即判 0，且综合分硬降级（0 容忍）',
-    formula: '结果 = (完成度均值 + 安全均值) ÷ 2\n基准线：达标 ≥85 · 关注 70–85 · 异常 <70',
   },
   'quality-dim-process': {
     name: '过程维（路径对不对）',
