@@ -3,7 +3,7 @@
 > 范围：仓根 `agent_ras/`。把「故障模式 = 检测 + 恢复策略 + 文案 + Skill」收成**自包含插件包**；框架启动时目录扫描自动注册。  
 > 目标态：新增故障模式只需新增 `fault_domains/<id>/` 下文件与对应文档，**不修改**框架已有源码。  
 > 状态：**前置已落地，插件包未落地**。对照代码日 2026-08-10。  
-> 版本：v0.3 · 2026-08-10
+> 版本：v0.6 · 2026-08-10（Skill 目录名为独立 skill id；role→name 由 PLUGIN 映射）
 
 ---
 
@@ -156,15 +156,23 @@ agent_ras/
       README.md
     llm_thinking_loop/       # 内置域迁入
       detector.py            # PLUGIN + Detector
+      skills/
+        llm-loop-detection/SKILL.md
+        llm-loop-review/SKILL.md
       messages.yaml
-      skills/…
       README.md
     repeat_tool/
       detector.py
       messages.yaml
+      README.md              # 无 skills/ 亦可
+    <new_domain>/
+      detector.py
+      skills/
+        <detection-skill-id>/SKILL.md   # 按需；名=独立 skill id
+        <recovery-skill-id>/SKILL.md
+      messages.yaml
       README.md
-    <new_domain>/            # 新域只加这里
-  ras_runtime/               # SessionHub / facade（SessionState.detectors: list）
+  ras_runtime/
   platform_adapter/
 ```
 
@@ -173,23 +181,24 @@ agent_ras/
 ```mermaid
 flowchart TB
   subgraph pkg ["fault_domains/<domain_id>/"]
-    Det["detector.py\nPLUGIN + factory + Detector"]
-    Msg["messages.yaml\n可选 cn/en 文案"]
-    Sk["skills/\n可选 detection/recovery"]
-    Rd["README.md\n人读说明"]
+    Det["detector.py\nPLUGIN + factory"]
+    Sk["skills/<skill_id>/SKILL.md"]
+    Msg["messages.yaml"]
+    Rd["README.md"]
   end
   Det -->|必填| Loader[FaultDomainLoader]
-  Msg -.->|可选合并| MsgTable[文案_lookup]
-  Sk -.->|按 PLUGIN.skills 解析| Agents[RASAgents]
-  Rd -.->|不参与加载| Human[开发者/评审]
+  Det -->|"PLUGIN.skills role→id"| Sk
+  Sk --> Agents[RASAgents]
+  Msg -.-> MsgTable[文案_lookup]
+  Rd -.-> Human[开发者]
 ```
 
 | 文件 | 必填 | 职责 |
 |------|------|------|
-| `detector.py` | ✅ | 导出 `PLUGIN` + `factory` + `Detector` 实现 |
-| `messages.yaml` | — | 域专属 steer/notice；缺省走通用模板 |
-| `skills/*/SKILL.md` | — | L3 检测 / recovery review |
-| `README.md` | 建议 | 场景摘要；复杂需求另写 `docs/agent-ras/designs/features/` |
+| `detector.py` | ✅ | 导出 `PLUGIN` + `factory` + `Detector` |
+| `skills/<skill_id>/SKILL.md` | — | 符合 Skill 规范；`<skill_id>` 为独立语义名 |
+| `messages.yaml` | — | 域专属 steer/notice |
+| `README.md` | 建议 | 场景摘要 / 链到 designs |
 
 ---
 
@@ -234,7 +243,7 @@ class FaultDomainPlugin:
     enabled_by_default: bool
     kinds: Sequence[str]
     kind_to_domain: Mapping[str, str]
-    skills: Mapping[str, str]            # detection / recovery（可缺 recovery）
+    skills: Mapping[str, str]            # role → skill_id；如 detection→llm-loop-detection
     recovery: RecoverySpec
     config_model: type[BaseModel]
     factory: Callable[[BaseModel, RASAgents], Detector | None]
@@ -243,16 +252,6 @@ class FaultDomainPlugin:
 ### 4.3 域内示例（示意）
 
 ```python
-# fault_domains/analysis_paralysis/detector.py
-class AnalysisParalysisConfig(BaseModel):
-    enabled: bool = True
-    trigger_window_chars: int = Field(default=2000, ge=100)
-
-def build_detector(cfg: AnalysisParalysisConfig, agents: RASAgents) -> Detector | None:
-    if not cfg.enabled:
-        return None
-    return AnalysisParalysisDetector(cfg, agents=agents)
-
 PLUGIN = FaultDomainPlugin(
     id="analysis_paralysis",
     version=1,
@@ -263,21 +262,11 @@ PLUGIN = FaultDomainPlugin(
         "analysis_paralysis_severe": "analysis_paralysis",
     },
     skills={
-        "detection": "analysis-paralysis-detection",
+        "detection": "analysis-paralysis-detection",  # → skills/analysis-paralysis-detection/SKILL.md
         "recovery": "analysis-paralysis-review",
     },
     recovery=RecoverySpec(
-        kind_overrides={
-            "analysis_paralysis": [
-                RecoveryAction.OBSERVE_ONLY,
-                RecoveryAction.INJECT_STEERING,
-            ],
-            "analysis_paralysis_severe": [
-                RecoveryAction.REPORT_TO_USER,
-                RecoveryAction.INJECT_STEERING,
-                RecoveryAction.SUPPRESS_STREAM,
-            ],
-        },
+        kind_overrides={...},
         stream_kinds=("analysis_paralysis", "analysis_paralysis_severe"),
         anchor="llm",
     ),
@@ -289,7 +278,7 @@ PLUGIN = FaultDomainPlugin(
 **规则摘要**
 
 - `Anomaly.kind` ∈ `PLUGIN.kinds`；`Anomaly.detector` == `PLUGIN.id`。
-- L3 调用 `skill_for(PLUGIN.id, "detection")`（表由 Loader 填充）。
+- 路径 = `fault_domains/<domain_id>/skills/<PLUGIN.skills[role]>/SKILL.md`。
 - 禁止 import 宿主 SDK。
 
 ---
@@ -417,12 +406,65 @@ sequenceDiagram
 - [`robustness_prompt.py`](../../../../agent_ras/recovery/robustness_prompt.py) 只留**通用**模板；域文案来自插件 `messages.yaml`。
 - 新域**不得**改 wire 类型集合。
 
-### 6.5 Skill 路径解析
+### 6.5 Detection / Recovery Skill 怎么放
+
+**约定：完整遵守 Skill 包规范 `skills/<skill_id>/SKILL.md`；`<skill_id>` 是独立语义名，不是 RAS role 字面量。**
+
+role（`detection` / `recovery`）是**调用角色**，落在 `PLUGIN.skills` 映射里；磁盘目录名是 **skill 身份**，与 FI 的 `skills/<fault-id>/SKILL.md`、现网 `llm-loop-detection` 一致。
+
+```text
+fault_domains/<domain_id>/
+  detector.py
+  skills/
+    <detection-skill-id>/
+      SKILL.md
+    <recovery-skill-id>/          # 可选
+      SKILL.md
+  messages.yaml
+  README.md
+```
+
+**thinking-loop 示例**
+
+```text
+fault_domains/llm_thinking_loop/
+  detector.py
+  skills/
+    llm-loop-detection/SKILL.md   # 自 detectors/skills 迁入（目录名保留）
+    llm-loop-review/SKILL.md      # 自 recovery/skills 迁入
+```
+
+```python
+skills={
+    "detection": "llm-loop-detection",
+    "recovery": "llm-loop-review",
+},
+# 路径 = <pkg>/skills/<skill_id>/SKILL.md
+# skill_for(domain, role) → skill_id；load_skill_body 拼路径
+```
+
+曾考虑又放弃的方案：
+
+| 方案 | 问题 |
+|------|------|
+| 根目录 `detection.md` 压平 | 不符合 `skills/<id>/SKILL.md` |
+| 固定 `skills/detection/`、`skills/recovery/` | 目录名是 role 不是 skill id，语义不合规范 |
+
+层数：`fault_domains/<id>/skills/<skill_id>/SKILL.md`（相对 `agent_ras/` 为 5）。**接受多一层**，换规范合规与可迁移的 skill 身份；不要为减层牺牲约定。
+
+| 问题 | 答案 |
+|------|------|
+| skill 名谁定？ | 域作者；建议 kebab-case，与现有 `llm-loop-*` 一致 |
+| 无 L3？ | 不建 `skills/`，`PLUGIN.skills` 省略或空 |
+| 只要检测？ | 只声明 `detection` → 一个 skill 目录 |
+| 加载？ | `fault_domains/<id>/skills/<skill_id>/SKILL.md`；迁移期可回退旧全局路径 |
+| 与 FI | 同为 `skills/<id>/SKILL.md`；FI 的 id 是故障模式，RAS 的 id 是检测/复核 skill |
 
 ```mermaid
 flowchart TB
-  Call[skill_for_domain_role] --> Pkg["优先\nfault_domains/<id>/skills/<name>/"]
-  Pkg -->|未找到| Legacy["兼容\ndetectors/skills 或 recovery/skills"]
+  Invoke["invoke_skill domain role"] --> Map["PLUGIN.skills role"]
+  Map --> Id["skill_id"]
+  Id --> Path["fault_domains/domain_id/skills/skill_id/SKILL.md"]
 ```
 
 ---
@@ -452,14 +494,14 @@ flowchart LR
 | Kind | `AnomalyKind` 加成员 | `PLUGIN.kinds` |
 | 注册 | `registry.py` 加一行 | 目录扫描 |
 | 文案 | 改 `robustness_prompt` | 域 `messages.yaml` |
-| Skill | 改 `FAULT_DOMAIN_SKILLS` | `PLUGIN.skills` |
+| Skill | 改 `FAULT_DOMAIN_SKILLS` | 域包 `skills/<skill_id>/SKILL.md` + PLUGIN 映射 |
 | 文档 | features/*.md | 同左 + 域 README |
 
 ### 7.2 新增域操作清单（目标态）
 
 1. 复制 `fault_domains/_template/` → `fault_domains/<id>/`。
 2. 实现 `PLUGIN` + `build_detector` + `Detector`（按需 `AsyncRecoveryDetector`）。
-3. 按需添加 `skills/*`、`messages.yaml`。
+3. 按需添加 `skills/<skill_id>/SKILL.md`，并在 `PLUGIN.skills` 写清 role→id；可选 `messages.yaml`。
 4. 域 `README.md`；复杂需求写 [`docs/agent-ras/designs/features/`](./) 并在 [Agent RAS README](../../README.md) 登记。
 5. 单测 + 冒烟既有 thinking-loop / repeat 不回归。
 
