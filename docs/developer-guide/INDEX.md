@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `(pending merge commit)` |
+| Commit | `75d9aa12be89221957af50e74745850e17df1c23` (`75d9aa1`) |
 | Branch | `dev_agent_ras` |
 | Date | 2026-08-10 |
 | Author | iceory |
 | Subject | `merge: 合并 origin/master 到 dev_agent_ras` |
 
-**如何更新：** `git diff HEAD~1 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 75d9aa1 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
