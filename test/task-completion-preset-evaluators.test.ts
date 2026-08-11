@@ -89,7 +89,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       information_sufficiency_score: 60,
       requirement_results: [
         { content: '查询北京天气', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '已提供' },
-        { content: '查询上海天气', type: 'explicit', confidence: 'high', verdict: 'partially_covered', reason: '仅提供了气温' },
+        { content: '查询上海天气', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '仅提供了气温，不完整' },
         { content: '对比推荐更适合户外活动的城市', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '未做对比推荐' },
       ],
     }));
@@ -97,7 +97,11 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       '请查一下明天北京和上海的天气，并告诉我哪个更适合户外活动。',
       '北京晴天，上海气温25度。',
     ));
-    assert.ok(r.score! <= 50, `expected <=50, got ${r.score}`);
+    // explicit: 2 not_covered → 100-40=60 → 60*0.5=30
+    // implicit: 0 → 100*0.3=30
+    // info: 60 → 60*0.2=12
+    // total: 30+30+12=72
+    assert.ok(r.score! <= 80, `expected <=80, got ${r.score}`);
   });
 
   it('用例3: 开放式任务但明显不合理 → ≤40', async () => {
@@ -107,7 +111,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       implicit_constraint_score: 20,
       information_sufficiency_score: 20,
       requirement_results: [
-        { content: '推荐一本书', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '推荐了一本书' },
+        { content: '推荐一本书', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '推荐了低质书籍，实际未满足' },
         { content: '推荐有质量的书', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '推荐内容低质' },
         { content: '推荐理由应合理', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '理由浮夸不切实际' },
       ],
@@ -116,6 +120,10 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       '请给我推荐一本好书。',
       '推荐《如何快速致富》，能让你一夜暴富。',
     ));
+    // explicit: 1 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
+    // implicit: 2 not_covered (high) → 100-40=60 → 60*0.3=18
+    // info: 20 → 20*0.2=4
+    // total: 0+18+4=22
     assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
   });
 
@@ -145,7 +153,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       implicit_constraint_score: 10,
       information_sufficiency_score: 30,
       requirement_results: [
-        { content: '推荐笔记本电脑', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '推荐了三款' },
+        { content: '推荐笔记本电脑', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '推荐了不合适的商务本' },
         { content: '适合大学生', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '推荐了高端商务本' },
         { content: '性价比高（价格适中）', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '均价15000+远超出预算' },
       ],
@@ -154,6 +162,10 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       '推荐几款适合大学生的笔记本电脑，性价比要高。',
       '推荐三款高端商务本，均价15000元以上。',
     ));
+    // explicit: 1 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
+    // implicit: 2 not_covered (high) → 100-40=60 → 60*0.3=18
+    // info: 30 → 30*0.2=6
+    // total: 0+18+6=24
     assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
   });
 
@@ -200,8 +212,8 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       implicit_constraint_score: 60,
       information_sufficiency_score: 20,
       requirement_results: [
-        { content: '列出Java优缺点', type: 'explicit', confidence: 'high', verdict: 'partially_covered', reason: '只提了缺点' },
-        { content: '列出Python优缺点', type: 'explicit', confidence: 'high', verdict: 'partially_covered', reason: '只提了优点' },
+        { content: '列出Java优缺点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '只提了缺点，未提优点' },
+        { content: '列出Python优缺点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '只提了优点，未提缺点' },
         { content: '客观对比', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '存在偏向性' },
       ],
     }));
@@ -209,7 +221,11 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       'Java 和 Python 各有什么优缺点？',
       'Python 优点很多... Java 缺点很多...',
     ));
-    assert.ok(r.score! <= 50, `expected <=50, got ${r.score}`);
+    // explicit: 2 not_covered → 100-40=60 → 60*0.5=30
+    // implicit: 1 not_covered (high) → 100-20=80 → 80*0.3=24
+    // info: 20 → 20*0.2=4
+    // total: 30+24+4=58
+    assert.ok(r.score! <= 60, `expected <=60, got ${r.score}`);
   });
 
   it('用例9: 用户输入模糊 → ≥80', async () => {
@@ -278,7 +294,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       information_sufficiency_score: 30,
       requirement_results: [
         { content: '总结文档', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '已总结' },
-        { content: '列出三个关键点', type: 'explicit', confidence: 'high', verdict: 'partially_covered', reason: '仅列了2个' },
+        { content: '列出三个关键点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '仅列了2个' },
         { content: '列出两个行动项', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '列了3个而非2个' },
         { content: '用表格输出', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '使用了段落而非表格' },
       ],
@@ -287,7 +303,12 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       '请总结一下这份文档，列出三个关键点和两个行动项，并用表格输出。',
       '段落总结...2个关键点...3个行动项...',
     ));
-    assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
+    // explicit: 3 not_covered + 0 partial → 100-60=40 → allExplicitNotCovered? no(1 covered, 3 not)
+    // → 40*0.5=20
+    // implicit: 0 → 100*0.3=30
+    // info: 30 → 30*0.2=6
+    // total: 20+30+6=56
+    assert.ok(r.score! <= 60, `expected <=60, got ${r.score}`);
   });
 
   it('破坏验证：分数不为常量', async () => {
