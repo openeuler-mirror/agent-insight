@@ -38,6 +38,12 @@ description: "链路追踪、智能诊断与质量监控总览"
 
 对应文档： [质量监控](./quality-monitoring)
 
+### 故障注入与评测
+
+故障注入在真实 Agent 宿主上主动植入故障模式，由本机 FI Worker 执行、Insight 服务端 Judge 评判。适合验证检测/恢复与评测闭环；与「可靠性能力」（环内检测开关）入口不同。
+
+对应文档： [故障注入与评测](./fault-injection)
+
 ### 推理 Infra
 
 推理 Infra 用于登记和观测 vLLM / OpenAI 兼容推理服务的 Prometheus 或 OTLP 指标。平台会把执行记录中的真实 endpoint 与已注册 infra 源关联，在 Trace 详情的 Infra tab 中展示 session 时间窗内的诊断结论、瓶颈类型和指标曲线。
@@ -65,6 +71,7 @@ description: "链路追踪、智能诊断与质量监控总览"
 
 - 查看单次执行细节： [链路追踪](./view-traces)
 - 查看异常样本归因： [智能诊断](./diagnosis)
+- 主动注入评测： [故障注入与评测](./fault-injection)
 - 了解趋势能力当前状态： [质量监控](./quality-monitoring)
 - 将线上问题沉淀为回归验证： [评测中心](../evaluation/index)
 

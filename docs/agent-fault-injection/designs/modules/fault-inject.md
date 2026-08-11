@@ -2,11 +2,13 @@
 
 | method | 机制 | 示例 |
 |--------|------|------|
-| `skill_inject` | 装 Skill + prompt | step-omission / compositional-implicit-intent 等 |
+| `skill_inject` | 装 Skill + prompt；可选附带 `injection.runtime` | step-omission；**planning-logic-error**（S4 附 `system.append`）；**memory-noise-interference**（S4 附 `messages.inject`）；compositional-implicit-intent 等 |
 | `file_tamper` | `fault_inject/injection` file ops（`apply_plan`） | memory-file-loss |
-| `prompt_modify` | runtime `system.append`（`rewrite_engine`） | planning-logic-error@4 |
+| `prompt_modify` | 顶层 method 为 prompt 改写（仅当 `fault.json` **显式**写 `injection_method: prompt_modify`） | 能力清单保留；产品 skill 多用 `skill_inject` + runtime |
 | `tool_result_tamper` | runtime tool output 改写 | tool-observation-delta |
 | `intercept_rewrite` | messages/assistant/tool_call 改写 | intermediate-conclusion-drift / skill-selection-conflict |
+
+**显式 method 优先**：`fault.json` 写了 `injection_method` 则以其为准；**未写**时才按 plan 推断。混合故障（Skill 文案 + runtime op）应标 **`skill_inject`**，runtime 写在 `injection.runtime[]`（可带 `when_submode`）。展示用 method 标签来自 `capability_api.yaml`，与真实 ops 可能并存——以 `fault.json` 为准。
 
 分层：`fault_inject/injection/` 只做副作用（返回结构化结果 / 平台事件）；`fault_inject/catalog/` 的 `fault.json` 定义 plan；`apply_plan` / `runtime_env` 为薄胶水。展示元数据在 `SKILL.md` 的 `metadata`；method 中文名在 `capability_api.yaml`。见 [fault-mode-plugins.md](../features/fault-mode-plugins.md)。
 

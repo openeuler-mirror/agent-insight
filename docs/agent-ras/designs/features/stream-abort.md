@@ -29,7 +29,7 @@ sequenceDiagram
 **涉及代码（示意）：**
 
 - 宿主 agent-core：`rail/base.py`、`react_agent.py`、`session` write_stream
-- 本仓：`agent_ras/core/monitor.py`、`agent_ras/core/recovery/operations.py`
+- 本仓：`agent_ras/core/monitor.py`、`agent_ras/recovery/operations.py`
 - 深挂载：`agent_ras/platform_adapter/openjiuwen/{rail,stream_observer,host_control}.py`
 
 ---

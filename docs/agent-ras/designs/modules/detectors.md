@@ -25,8 +25,8 @@ flowchart TB
 |------|-----|
 | 模块 ID | M-detectors |
 | 路径 | `agent_ras/detectors/` |
-| 文件数 | 5 Python + L3 skill 定义 |
-| 规模 | ≈ 1632 行 Python（含 llm_thinking_loop 808 / repeat_tool 540） |
+| 文件数 | 8 Python 模块（含 loader/registry/types）+ L3 skill 定义 |
+| 规模 | ≈ 2075 行 Python（含 llm_thinking_loop 835 / repeat_tool 568 / loader 302） |
 | 主要语言 | Python |
 | 所属层 | L0 |
 
@@ -37,19 +37,27 @@ flowchart TB
 ```mermaid
 flowchart TD
   init[__init__.py] --> base[base.py]
+  init --> loader[loader.py]
+  init --> reg[registry.py]
+  init --> types[types.py]
   init --> rtl[llm_thinking_loop.py]
   init --> rpt[repeat_tool.py]
   rtl --> verd[skill_verdicts.py]
   rtl --> skill[skills/llm-loop-detection]
+  loader --> rtl
+  loader --> rpt
 ```
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
 | `base.py` | 78 | `Detector` / `AsyncRecoveryDetector` 协议 |
-| `llm_thinking_loop.py` | 808 | L1/L2 字面 + L3 语义 |
-| `repeat_tool.py` | 540 | 工具重复 / ping-pong / 断路器 |
-| `skill_verdicts.py` | 188 | Skill JSON 解析（fail-open） |
-| `__init__.py` | 18 | 公开 re-export |
+| `loader.py` | 302 | DomainLoader：三路扫描 `DETECTOR_PLUGIN` 等 |
+| `registry.py` | 30 | 注册表薄封装 |
+| `types.py` | 60 | 插件 / 域类型 |
+| `llm_thinking_loop.py` | 835 | L1/L2 字面 + L3 语义 |
+| `repeat_tool.py` | 568 | 工具重复 / ping-pong / 断路器 |
+| `skill_verdicts.py` | 188 | L3 skill verdict 解析（fail-open） |
+| `__init__.py` | 14 | 公开 re-export |
 
 ---
 
@@ -173,7 +181,7 @@ sequenceDiagram
   Note over Mon: 另见 monitor.md L3 Reviewer llm_loop_review
 ```
 
-检测 skill 命中后仍可能进入 Monitor 的 **recovery Reviewer**（`llm-loop-review`），不是「检测 skill 即终判」。
+检测 skill 命中后仍可能进入 Monitor 的 **review skill**（`llm-loop-review`，`role=review`），不是「检测 skill 即终判」。
 
 ---
 

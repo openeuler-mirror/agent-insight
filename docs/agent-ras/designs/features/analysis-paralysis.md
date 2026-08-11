@@ -22,7 +22,7 @@ stateDiagram-v2
 
 > 文档类型：Phase1 需求分析 + 方案设计（合并） | 关联项目：agent-insight / agent_ras  
 > 复杂度：**Medium**（新增触发词库 + 二阶段 LLM 判定；复用现有 L3 Skill 检测通道）  
-> 关联模块：[agent_ras/core/detectors/llm_thinking_loop.py](../../../../agent_ras/core/detectors/llm_thinking_loop.py)
+> 关联模块：[agent_ras/detectors/llm_thinking_loop.py](../../../../agent_ras/detectors/llm_thinking_loop.py)
 
 ---
 
@@ -297,7 +297,7 @@ class AnomalyKind(str, Enum):
 #### 3.5.2 新增 `primary_fault` 值
 
 ```python
-# agent_ras/core/detectors/skill_verdicts.py 扩展
+# agent_ras/detectors/skill_verdicts.py 扩展
 class ThinkingLoopFault(str, Enum):
     NONE = "none"
     SEMANTIC_DEADLOCK = "semantic_deadlock"

@@ -21,7 +21,7 @@
 
 ```mermaid
 flowchart LR
-  Hooker[xiaoo_hooker] --> RAS[ras_embed]
+  Hooker[xiaoo_hooker] --> RAS[ras_runtime]
   Hooker --> Buf[xiaoo_otel_buffer]
   Buf --> Builder[common_span_builder]
   Builder --> HTTP[common_otlp_http]

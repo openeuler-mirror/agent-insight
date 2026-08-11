@@ -62,6 +62,7 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 - **链路追踪**：按一次完整任务执行查看全链路 Trace
 - **智能诊断**：对失败执行进行 AI 归因，给出问题类型与证据
 - **质量监控**：从成功率、时延、错误率等角度持续观察质量趋势
+- **故障注入与评测** / **可靠性观测**：主动注入故障并评判；环内 RAS 异常回放（见侧栏 AgentRAS）
 
 ### 评测中心
 
@@ -135,5 +136,6 @@ Skills 是平台里的核心资产，不只是提示词片段，而是一整套�
 - 先理解名词和关系： [核心概念](./concepts)
 - 想从 Agent 资产开始： [Agent 管理](./agent-management)
 - 想先看运行数据： [运行观测](./observability/index)
+- 想做故障注入评测： [故障注入与评测](./observability/fault-injection)
 - 想建立离线评测： [评测中心](./evaluation/index)
 - 想沉淀 Agent 能力： [Skills 能力](./skills/index)

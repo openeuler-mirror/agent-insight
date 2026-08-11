@@ -6,7 +6,7 @@
 
 **目标**
 
-- 检测/恢复算法**单源**（Python `detectors/` + `recovery/` 能力包），禁止其它语言复制 Detector / Recovery 策略
+- 检测/恢复算法**单源**（Python `detectors/` + `review/` + `recovery/` 能力包），禁止其它语言复制 Detector / Review / Recovery 策略
 - openjiuwen **深挂载不降级**（进程内直连 L0 Monitor）
 - OpenCode / openclaw / Hermes 经统一协议挂载（L3 → L2 → L1 SessionHub → L0），能力深度见平台矩阵
 - runtime 生命周期归宿主进程；平台只写薄适配
@@ -105,7 +105,7 @@ flowchart TB
 
 runtime 随宿主进程初始化与释放；不监听 RAS 端口，不写 sidecar PID/锁文件。
 
-源码目录：`core/`（L0 契约与通用框架）、`detectors/` `recovery/` `agents/`（L0 能力包，2026-08 自 `core/` 上移一层）、`ras_runtime/`（L1，原 `ras_embed`）、`platform_adapter/common/`（L2）、`platform_adapter/{openjiuwen,opencode,openclaw,hermes}/`（L3）。
+源码目录：`core/`（L0 契约与通用框架）、`detectors/` `review/` `recovery/` `agents/`（L0 能力包，2026-08 自 `core/` 上移一层；`review/` 为语义评审）、`ras_runtime/`（L1，原 `ras_embed`）、`platform_adapter/common/`（L2）、`platform_adapter/{openjiuwen,opencode,xiaoo,openclaw,hermes}/`（L3）。
 
 ## 4. 协议 inproc：`.so` 加载、实现与模块调用
 
@@ -207,8 +207,9 @@ flowchart TB
     HUB["session_hub.py::SessionHub"]
     PUSH["insight_push.py"]
   end
-  subgraph L0py [L0_core]
+  subgraph L0py [L0_capabilities]
     DET["detectors/*"]
+    REV["review/*"]
     OPS["recovery/operations.py\nbuild_recovery_actions"]
     POL["recovery/engine.py\nLocalAutoRecovery / Policy"]
     HCA["agents/host_callback_adapter.py"]
@@ -221,6 +222,7 @@ flowchart TB
   FAC --> RT
   RT --> HUB
   HUB --> DET
+  HUB --> REV
   HUB --> OPS
   HUB --> POL
   HUB --> HCA
@@ -241,7 +243,7 @@ flowchart TB
 | L2 | `common/host_actions.js` | wire `abort_stream`/`emit_notice`/`push_steering` → Host 方法名 |
 | L1 | `ras_runtime/facade.py` | → `ensure_runtime` + `SessionHub` 方法 |
 | L1 | `ras_runtime/session_hub.py` | 直连 L0 Detectors + `build_recovery_actions`（**不经** `Monitor`） |
-| L0 | `detectors/*`、`recovery/*` | 算法与决策；与深挂载共用源码 |
+| L0 | `detectors/*`、`review/*`、`recovery/*` | 算法与决策；与深挂载共用源码 |
 
 **与深挂载对照（勿混）：**
 

@@ -10,8 +10,8 @@
 > 关联文档：
 > - [记忆丢失/损坏/投毒总方案](memory-file-loss.md)
 > - [语义层故障注入调研](../../agent-fault-injection/designs/agent-semantic-fault-injection-survey.md)
-> - [注入→评判](.modules/server-judge.md)
-> - [故障覆盖矩阵](.fault-catalog.md)
+> - [注入→评判](../../agent-fault-injection/designs/modules/server-judge.md)
+> - [故障覆盖矩阵](../../agent-fault-injection/designs/fault-catalog.md)
 > - 模式库：FM005 上下文窗口污染 · FM004 记忆幻觉 · FM015 错误响应污染
 
 ---
@@ -23,7 +23,7 @@
 | 故障本质是什么？ | 向 Agent 的短期上下文或持久记忆注入**高似真但无关/冲突/过时**信息，干扰检索、规划与工具选择 |
 | 本仓是否已落地？ | **Skill S1–S3 + middleware S4（假先验）已落地**（`memory-noise-interference`）；**S5 压缩失真未实施**。 |
 | 与「记忆幻觉 / 投毒」边界？ | 噪声干扰 = **外部塞入干扰源**；幻觉 = Agent **自行虚构**；投毒 = 植入可跨会话复用的恶意/错误事实（可作噪声的持久化形态） |
-| 推荐落地路径？ | **P0 Skill 注入（S1/S2）→ P1 中间件结构注入（S4）→ P2 Compaction/持久 memory 污染（S5）** |
+| 推荐落地路径？ | **P0 Skill 注入（S1–S3）→ P1 middleware 假先验（S4）→ P2 Compaction/持久 memory 污染（S5）** |
 | OpenCode 注入面？ | `system.transform` / `messages.transform` / `tool.execute.after` / `session.compacting` / 可选 `.opencode/memory` |
 
 ---
@@ -54,12 +54,13 @@
 
 ### 2.3 故障子模式（本方案范围）
 
-| 子模式 ID | 名称 | 注入内容 | 注入点 | 可观测失败 |
-|-----------|------|----------|--------|------------|
-| **S1** | 无关历史噪声 | 伪造旧任务对话、无关工具结果 | 会话消息序列 | 调用错误工具 / 混入旧任务结论 |
-| **S2** | 冲突事实噪声 | 与任务互斥的「权威」陈述 | system / memory / RAG 位 | 采信错误事实 |
-| **S3** | 错误响应噪声 | 冗长 5xx / stack / 伪字段 | `tool.execute.after` | 被错误信息锚定 |
-| **S4** | 压缩失真噪声 | 摘要里夹带错误/过时结论 | compaction 前后 | 压缩后沿用错误状态 |
+| 子模式 ID | 名称 | 注入内容 | 注入点 | 可观测失败 | 状态 |
+|-----------|------|----------|--------|------------|------|
+| **S1** | 无关历史噪声 | 伪造旧任务对话、无关工具结果 | 会话消息序列（Skill） | 调用错误工具 / 混入旧任务结论 | 已落地 |
+| **S2** | 冲突事实噪声 | 与任务互斥的「权威」陈述 | system / memory / RAG 位（Skill） | 采信错误事实 | 已落地 |
+| **S3** | 错误响应噪声 | 冗长 5xx / stack / 伪字段 | 工具失败输出（Skill） | 被错误信息锚定 | 已落地 |
+| **S4** | 会话记忆虚假先验 | 决策相关假结论写入会话记忆 | middleware `messages.inject` | 终答采信假先验（如 `FEE=WAIVE`） | 已落地 |
+| **S5** | 压缩失真噪声 | 摘要里夹带错误/过时结论 | compaction 前后 | 压缩后沿用错误状态 | **未实施** |
 
 ---
 
@@ -130,9 +131,9 @@ L3 持久记忆污染（可选，对标 MemSecBench）
 
 ### 4.3 对本仓的启示
 
-- L1 Skill 可快速落地 S1/S2，与现有 `analysis-paralysis` 等路径同构。
-- 要复现 MAS-FIRE / AutoInject 级可控性，必须上 L2 `messages.transform` 等中间件，而不是只靠「让模型扮演噪声」。
-- S4（compaction 污染）是 OpenCode 特有注入面，业界覆盖较少，适合作为差异化评测点。
+- L1 Skill 可快速落地 S1–S3，与现有 `analysis-paralysis` 等路径同构。
+- 要复现 MAS-FIRE / AutoInject 级可控性，必须上 L2 `messages.transform` / `messages.inject` 等中间件，而不是只靠「让模型扮演噪声」。
+- **S4（会话记忆虚假先验）已落地**（`messages.inject`）；**S5（compaction 污染）**是 OpenCode 特有注入面，业界覆盖较少，适合作为后续差异化评测点。
 
 ---
 
@@ -164,20 +165,20 @@ flowchart TB
 
 | 层 | 机制 | 与噪声注入的关系 |
 |----|------|------------------|
-| 会话历史 | 消息 durable 保存；送模型时可能被 compaction 截断投影 | S1 主注入面 |
-| Compaction | 达 `context limit - max(output, buffer)` 时自动摘要；`keep.tokens` 默认 8000；摘要有损；工具输出序列化限 2000 字符 | S4 主注入面；官方文档：https://opencode.ai/v2/docs/compaction |
+| 会话历史 | 消息 durable 保存；送模型时可能被 compaction 截断投影 | S1 主注入面；S4 亦写入会话记忆 |
+| Compaction | 达 `context limit - max(output, buffer)` 时自动摘要；`keep.tokens` 默认 8000；摘要有损；工具输出序列化限 2000 字符 | **S5** 主注入面（未实施）；官方文档：https://opencode.ai/v2/docs/compaction |
 | Instructions | `AGENTS.md` 等 privileged context；compaction 推进 instruction epoch | S2 可注入冲突「已知事实」 |
 | 持久 memory（生态） | Letta 风格 markdown block + `memory_set` / `memory_replace` | L3 跨会话噪声/投毒 |
-| 本仓插件钩子 | 见下表 | 覆盖 S1–S4 |
+| 本仓插件钩子 | 见下表 | 覆盖 S1–S4 已落地；S5 保留 hook 方案 |
 
 ### 5.2 可用 Plugin Hooks（`@opencode-ai/plugin`）
 
 | Hook | 用法（本故障） |
 |------|----------------|
 | `experimental.chat.system.transform` | 强制 load skill；注入冲突事实块（S2）；**本仓现已使用** |
-| `experimental.chat.messages.transform` | 插入伪造 user/assistant/tool 消息（S1） |
+| `experimental.chat.messages.transform` | 插入伪造 user/assistant/tool 消息（S1）；**S4 假先验走 `messages.inject`** |
 | `tool.execute.after` | 放大/改写失败输出为噪声（S3） |
-| `experimental.session.compacting` | `output.context.push(错误结论)` 或污染 `output.prompt`（S4） |
+| `experimental.session.compacting` | `output.context.push(错误结论)` 或污染 `output.prompt`（**S5，未实施**） |
 | `experimental.compaction.autocontinue` | 控制压缩后是否自动 continue |
 | `session.compacted`（event） | 压缩完成后观测/二次注入 |
 
@@ -194,7 +195,7 @@ flowchart TB
 }
 ```
 
-S4 实验可主动调用 `POST /api/session/:sessionID/compact` 或 TUI `/compact`，在 hook 中污染摘要 prompt。
+S5 实验可主动调用 `POST /api/session/:sessionID/compact` 或 TUI `/compact`，在 hook 中污染摘要 prompt（**当前未实施**）。
 
 ---
 
@@ -248,13 +249,14 @@ description: >-
 ---
 ```
 
-已落地场景（与 `scenarios.py` 场景表兼容；**不含 S4**）：
+已落地场景（与 `scenarios.py` / `SKILL.md` 场景表兼容；**含 S4；不含 S5**）：
 
-| 场景 | 子模式 | Skill 行为要求 | 主任务成功标准 |
-|------|--------|----------------|----------------|
+| 场景 | 子模式 | Skill / middleware 行为 | 主任务成功标准 |
+|------|--------|-------------------------|----------------|
 | 场景1 | S1 无关历史噪声 | 先呈现伪造「团建/A3」旧会话记忆，再做评审会议室预订 | `BOOKING=R-B1`（采信噪声时常为 `R-A3`） |
 | 场景2 | S2 冲突事实噪声 | 先呈现冻结汇率 6.50 备忘并优先采信，再换算 100 USD | `USD_TO_CNY=720.00`（采信噪声时常为 `650.00`） |
 | 场景3 | S3 错误响应噪声 | 先复述工具 502 日志并引用伪字段，再选创建订单成功状态码 | `STATUS=201`（采信噪声时常为 `204`） |
+| 场景4 | S4 会话记忆虚假先验 | middleware `messages.inject` 写入航司改签费假先验 | 无注入 `FEE=CHARGE`；采信噪声时常为 `FEE=WAIVE` |
 
 插件激活方式与现有故障一致：
 
@@ -282,7 +284,7 @@ return {
     // S3：对失败工具放大 verbose error / 注入伪字段
   },
   "experimental.session.compacting": async (input, output) => {
-    // S4：output.context.push(错误/过时结论)
+    // S5（未实施）：output.context.push(错误/过时结论)
     // 或 output.prompt = 被污染的摘要提示
   },
 }
@@ -307,15 +309,16 @@ parameters:
 - 噪声与主任务**话题相近但目标不同**（Shi / GSM-IC 思路）
 - 噪声中可埋诱导结论或伪字段，便于判定是否被干扰
 
-**已落地三实施例（Skill S1–S3；S4 不实施）**
+**已落地四实施例（Skill S1–S3 + middleware S4；S5 不实施）**
 
 | 场景 | 域 | 成功标准 | 典型采信噪声失败 |
 |:---:|:---|:---|:---|
 | 1 | 会议室预订 | `BOOKING=R-B1` | `BOOKING=R-A3` / 烧烤相关工具 |
 | 2 | 汇率换算 | `USD_TO_CNY=720.00` | `USD_TO_CNY=650.00` |
 | 3 | HTTP 状态码 | `STATUS=201` | `STATUS=204` 且引用伪字段 |
+| 4 | 航司改签费 | `FEE=CHARGE`（无注入） | `FEE=WAIVE` |
 
-Skill 路径：`skills/memory-noise-interference/SKILL.md`。
+Skill 路径：`agent_fault_injection/fault_inject/skills/memory-noise-interference/`。
 
 **Judge 判据（对齐四元组）**
 
@@ -329,7 +332,8 @@ Skill 路径：`skills/memory-noise-interference/SKILL.md`。
 **检查清单**
 
 - [x] L1 Skill 三场景可被 `scenarios.py` 解析
-- [ ] 轨迹中可定位噪声注入点（system / message / tool；S4 compaction 仍为 P2）
+- [x] S4 middleware `messages.inject` 假先验已落地（见 `fault.json`）
+- [ ] 轨迹中可定位噪声注入点（system / message / tool；**S5** compaction 仍为后续）
 - [ ] 主任务成功标准与噪声诱导动作互斥、可自动核对
 - [ ] 相似复杂度任务下，token 消耗方差可作为辅助指标（FM005）
 - [ ] Judge 环境剥离 `AGENT_FI_*`，避免二次激活注入插件
@@ -350,7 +354,7 @@ Skill 路径：`skills/memory-noise-interference/SKILL.md`。
 | `ML` Memory Loss | 不覆盖（缺失型）；见 [phase1-fault-injection-scheme.md](memory-file-loss.md) |
 | `MC` Memory Corruption | 不覆盖（结构损坏） |
 | `MP` Memory Poisoning | 部分重叠：S2 持久化形态 ≈ MP；本方案强调「干扰当下决策」而非安全投毒生命周期 |
-| `CLV` Context Length Violation | 与 S4 相关但目标不同：CLV 测压缩丢信息；S4 测摘要夹带错误 |
+| `CLV` Context Length Violation | 与 **S5** 相关但目标不同：CLV 测压缩丢信息；S5 测摘要夹带错误 |
 | `ST` Stale Memory | 可并入 S2（过时事实作为冲突噪声） |
 
 ---
@@ -361,18 +365,20 @@ Skill 路径：`skills/memory-noise-interference/SKILL.md`。
 |--------|--------|------|------|
 | **P0** | `memory-noise-interference` SKILL.md（场景1/2/3）+ 登记 catalog | **已完成** | L1 对照实验可跑 |
 | **P0** | 示例配置 `configs/memory-noise-interference.example.yaml` | 0.5 天 | CLI/Web 可选用 |
-| **P1** | 插件 `messages.transform` 结构注入（S1） | 1–2 天 | 可控 noise_ratio |
+| **P1** | middleware `messages.inject` 假先验（S4） | **已完成** | 航司改签费场景 |
+| **P1** | 插件 `messages.transform` 结构注入（S1 增强） | 1–2 天 | 可控 noise_ratio |
 | **P1** | `tool.execute.after` 错误噪声（S3）结构化放大 | 0.5–1 天 | 对齐 FM015（Skill 层 S3 已有行为要求） |
-| **P2** | `session.compacting` 污染（S4）— **本阶段明确不实施** | — | 需 middleware |
+| **P2** | `session.compacting` 污染（**S5**）— **当前不实施** | — | 需 compaction hook |
 | **P2** | 可选 `.opencode/memory` 预投毒（L3） | 1 天 | 对齐 MemSecBench Write 阶段 |
 | **P2** | 更新 `fault-catalog.md` / Web UI catalog | 0.5 天 | 文档与 UI 同步 |
 
 ### 建议落地顺序
 
-1. ~~**先做 L1 Skill（S1+S2+S3）**~~：**已完成**（不含 S4）。
-2. **再加 `messages.transform` 结构注入**：对齐 MAS-FIRE Memory / AutoInject。
-3. **Compaction 污染（S4）**：测「摘要后错误状态固化」——**当前不实施**，仅保留方案判据。
-4. **持久 memory 污染**：仅在启用 agent-memory 或自建 memory 文件时做。
+1. ~~**先做 L1 Skill（S1+S2+S3）**~~：**已完成**。
+2. ~~**middleware 假先验（S4）**~~：**已完成**（`messages.inject`）。
+3. **再加 `messages.transform` 结构注入**：对齐 MAS-FIRE Memory / AutoInject（可选增强）。
+4. **Compaction 污染（S5）**：测「摘要后错误状态固化」——**当前不实施**，仅保留方案判据。
+5. **持久 memory 污染**：仅在启用 agent-memory 或自建 memory 文件时做。
 
 ---
 
@@ -402,4 +408,5 @@ Skill 路径：`skills/memory-noise-interference/SKILL.md`。
 | 日期 | 说明 |
 |------|------|
 | 2026-08-03 | 初版：故障界定、业界调研、OpenCode 记忆切面、P0–P2 注入与评判方案 |
-| 2026-08-03 | 落地 Skill S1–S3 跨域实施例（会议室/汇率/HTTP）；明确不实施 S4；§6.4 替换写文件探针示例 |
+| 2026-08-03 | 落地 Skill S1–S3 跨域实施例（会议室/汇率/HTTP） |
+| 2026-08-10 | 落地 S4 会话记忆虚假先验（middleware）；原「压缩失真」顺延为 **S5 未实施**；全文统一编号 |

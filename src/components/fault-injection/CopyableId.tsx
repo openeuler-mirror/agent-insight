@@ -25,7 +25,8 @@ export function CopyableId({
         title={copyLabel}
         aria-label={copyLabel}
         className="inline-flex size-6 shrink-0 items-center justify-center rounded text-foreground-muted hover:bg-background-secondary hover:text-foreground"
-        onClick={async () => {
+        onClick={async (e) => {
+          e.stopPropagation()
           try {
             await navigator.clipboard.writeText(value)
             setCopied(true)

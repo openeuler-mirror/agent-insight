@@ -10,7 +10,7 @@
 
 | # | 原则 |
 |---|------|
-| P1 | 检测/恢复只在 `core` + `ras_embed`；L3 禁止复制策略 |
+| P1 | 检测/恢复只在 L0（`detectors`/`review`/`recovery`/`core`）+ `ras_runtime`；L3 禁止复制策略 |
 | P2 | **入口无关**：差异只在 Host callable / 采点运输，不在 Detector |
 | P3 | 对齐协议 inproc：hooks → `RasClient` → `SessionHub` → wire → `CallableHostControl` |
 | P4 | `xiaoo/` 仅 hook 映射 + Host 三函数 + Daemon 客户端；不改 FI |
@@ -23,7 +23,7 @@
 ```mermaid
 flowchart LR
   subgraph hookPath [Plugin_hooks_CLI]
-    Hooker[xiaoo_hooker] --> Embed[ras_embed_SessionHub]
+    Hooker[xiaoo_hooker] --> Embed[ras_runtime_SessionHub]
   end
   subgraph daemonPath [Daemon_SSE_control_plane]
     Open[runtimes_open]

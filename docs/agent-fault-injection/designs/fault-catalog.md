@@ -51,7 +51,7 @@ TOKEN 探针（旧 `tool-result-corruption` / `prompt-system-override` / `interc
 |------|------|
 | 2026-08-10 | 吸纳独立仓：业务语义四故障 + memory/planning S4；`assistant.tool_call.replace_argument`；TOKEN 探针下沉 smoke |
 | 2026-08-05 | Insight 吸纳：证据边界 / inconclusive；链接改挂 agent-ras features |
-| 2026-08-04 | 注入方式意译六 key（无旧版兼容）；落地 prompt / intercept 示例故障 |
+| 2026-08-04 | 注入方式意译五 key（无旧版兼容）；落地 prompt / intercept 示例故障 |
 | 2026-08-04 | 落地 `tool-result-corruption`（L3 中间件 tool_result 改写） |
 | 2026-08-04 | 落地 `memory-file-loss`（文件结构注入）；脚本迁至 `skills/*/scripts/` |
 | 2026-08-03 | 对齐当前内置 Skill；记忆噪声干扰 Skill S1–S3 已落地，S4 未实施 |

@@ -105,10 +105,15 @@ OpenCode 适配器在 `map_trajectory` 末尾会从 stdout/events **派生**写�
 
 ---
 
-## 8. 后续可接（本阶段未实现）
+## 8. 已不做 / 后续可接
+
+**已不做（插件化后）：**
+
+- 按平台过滤故障 catalog（原 `platforms: [opencode, xiaoo]` 字段已删除）；UI 默认双平台，能力差由 Adapter / 文档说明
+
+**后续可接（本阶段未实现）：**
 
 - setuptools entry points：`agent_fault_injection.platforms`
-- 按平台过滤故障 catalog（`platforms: [opencode, xiaoo]`）
 
 ---
 

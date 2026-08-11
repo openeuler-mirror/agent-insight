@@ -536,18 +536,20 @@ fi-worker tick: claim
 | | agent-ras | agent-fi |
 |--|-----------|----------|
 | **目的** | 真实会话检测并恢复 | 实验注入并采集 |
-| **OpenCode** | 协议 inproc；可 **libpython.so** 嵌 detectors | 临时隔离 config + **TS 插件** `agent-fault-injection.ts`（无 so） |
-| **xiaoO** | hooks → ras_runtime（socket/inproc 等，见 RAS 文档） | config overlay + **Python hooker** 子进程 |
+| **OpenCode** | 协议 inproc；可 **libpython.so** 嵌 detectors | 系统 config + workspace **TS 插件** `agent-fault-injection.ts`（无 so；不整份替换用户 config） |
+| **xiaoO** | hooks → ras_runtime（socket/inproc 等，见 RAS 文档） | config overlay（**保留用户 RAS hooker** 再叠加 FI）+ **Python hooker** 子进程 |
 | **与 Insight** | ① ras-events | ②③ FI Client + collect-result |
 | **恢复/评判** | 本机 HostControl 投递 | Insight 服务端 Judge |
 
+**为何两平台 FI 配置策略不同（摘要）：** OpenCode 插件发现是「系统 + workspace」分层叠加，FI 只写入评测 workspace 即可与系统侧 RAS 并存；xiaoO 的 hooker 由**单一** `XIAOO_CONFIG` 的 `[hooker].plugins` 决定，评测又必须用临时 config 避免改用户文件——若不 merge 保留原 plugins，会冲掉 RAS。理由展开见 [xiaoo-platform-adaptation.md §4.1](xiaoo-platform-adaptation.md)。
+
 ### 6.1 FI × OpenCode（模块内）
 
-隔离 config、装 Skill、跑前 structural apply；插件 hooks：`system.transform` / `messages.transform` / `text.complete` / `tool.execute.*`。`tool-argument-error` 仅 OpenCode。
+装 Skill、跑前 structural apply；FI 挂在 workspace `.opencode/plugins/`，继续使用真实系统 env / `~/.config/opencode`（含用户 RAS）。插件 hooks：`system.transform` / `messages.transform` / `text.complete` / `tool.execute.*`。`tool-argument-error` 仅 OpenCode。
 
 ### 6.2 FI × xiaoO（模块内）
 
-Skill 入 `.xiaoo/skills`；默认 Tool-only plugin，完整拦截需 chat-llm 档；无 Chat 时 `system.append` 折入 `--system`。
+Skill 入 `.xiaoo/skills`；临时 `XIAOO_CONFIG` = 用户真实 config 为底 + 保留已有 hooker（含 RAS）+ append FI plugin（`config_overlay.py`）。默认 Tool-only plugin，完整拦截需 chat-llm 档；无 Chat 时 `system.append` 折入 `--system`。
 
 ### 6.3 注入方式矩阵（agent-fi 实现能力）
 

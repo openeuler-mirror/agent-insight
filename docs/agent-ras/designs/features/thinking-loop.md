@@ -66,7 +66,7 @@ stateDiagram-v2
 **样例（摘要）**：字段名与 URL 交叉拼接的乱码粘连；或「再看一下来源 1…等一下…再看来源 2…」语义空转。
 
 **特征**：往往**没有**稳定字面周期或高相似句簇。  
-**影响**：仅靠 L1/L2 不够；需 **L3 语义 Judge**（异步、不阻塞主流式），恢复侧再经独立 recovery skill（当前为 `llm-loop-review`）二次确认后打断 provider 流。
+**影响**：仅靠 L1/L2 不够；需 **L3 语义 Judge**（异步、不阻塞主流式），再经独立 **review skill**（当前为 `llm-loop-review`，`role=review`）二次确认后打断 provider 流。
 
 ---
 
@@ -75,9 +75,9 @@ stateDiagram-v2
 | 价值点 | 说明 |
 |--------|------|
 | **遏制无限思考 token** | 命中后抑制后续 chunk；确认异常后 `request_abort_stream`，避免 provider 继续空转烧 token |
-| **保护用户体验** | 流中即可停更异常输出；L1/L2 直接恢复，L3 以 recovery skill 二次确认降低误杀正常长推理的风险 |
+| **保护用户体验** | 流中即可停更异常输出；L1/L2 直接恢复，L3 以 review skill 二次确认降低误杀正常长推理的风险 |
 | **分层成本可控** | L1/L2 同步、亚毫秒~毫秒级；L3 异步，启动门槛默认 30k、增量门控默认 10k，避免频繁调用 Judge 模型 |
-| **可恢复而非硬杀** | 异常路径注入 steering，同 invoke 内可续跑纠偏；recovery skill 正常 / 超时 / 非法输出 fail-open flush 后继续 |
+| **可恢复而非硬杀** | 异常路径注入 steering，同 invoke 内可续跑纠偏；review skill 正常 / 超时 / 非法输出 fail-open flush 后继续 |
 
 若不做本方案：Case A/B/C 类故障常表现为「前端一直刷字 / 推理条无限加长」，直到超时或人工停任务——成本与体验均不可控。
 
@@ -117,7 +117,7 @@ flowchart TB
   end
 
   subgraph monLayer [2 编排层 Monitor]
-    Mon["AgentRASMonitor\nhandle / on_stream_chunk\ndetection → recovery\nL1/L2 直恢复 / L3 recovery"]
+    Mon["AgentRASMonitor\nhandle / on_stream_chunk\ndetection → review → recovery\nL1/L2 直恢复 / L3 review"]
   end
 
   subgraph detLayer [3 检测层 Detectors]
@@ -125,10 +125,13 @@ flowchart TB
     DetOther["其他 Detector 实例\n如 RepeatToolCallDetector"]
   end
 
+  subgraph revLayer [3b 评审层 Review]
+    Rev["review skill\nllm-loop-review\nrole=review"]
+  end
+
   subgraph recLayer [4 恢复层 Recovery]
     Eng["recovery/engine\nAnomalyKind/Severity → Actions\nRecoveryExecutor"]
     Ops["recovery/operations\nsuppress / steer / notice / abort"]
-    Rev["recovery skill\nllm-loop-review"]
   end
 
   subgraph effects [副作用落点]
@@ -145,13 +148,13 @@ flowchart TB
   Mon -->|"fan-out"| DetOther
   DetTL -->|"Anomaly LLM_THINKING_LOOP"| Mon
   DetOther -->|"Anomaly"| Mon
-  Mon --> Eng
+  Mon -->|"L3 二次复核"| Rev
+  Rev -->|"confirmed abnormal"| Eng
+  Rev -->|"normal / fail-open"| Flush
+  Mon -->|"L1/L2 直恢复"| Eng
   Eng --> Ops
   Ops -->|"SUPPRESS_STREAM"| Stream
-  Mon -->|"L1/L2 或 recovery 确认异常"| Abort
-  Mon -->|"L3 recovery"| Rev
-  Rev -->|"confirmed abnormal"| Abort
-  Rev -->|"normal / fail-open"| Flush
+  Ops -->|"abort 确认后"| Abort
   Ops -->|"INJECT_STEERING"| Steer
 ```
 
@@ -160,16 +163,17 @@ flowchart TB
 | 层 | 模块 | 职责 |
 |----|------|------|
 | **Rail** | `platform_adapter/openjiuwen/{rail,stream_observer}.py`、`core/signal_builder.py` | 采集生命周期与流事件 → Signal；创建/销毁 Monitor；**不做**检测与恢复决策 |
-| **Monitor** | `core/monitor.py` | 编排 `detection` → `recovery`；L1/L2 直接 abort；L3 启动 recovery skill；思考循环走 `on_stream_chunk` |
-| **Detection** | `core/detectors/*`（本方案实例：`llm_thinking_loop.py`） | Signal → `Anomaly`；L1/L2 同步、L3 异步首次 Judge |
-| **Recovery** | `core/recovery/{engine,operations,robustness_prompt}.py`、recovery skill `llm-loop-review` | 映射并执行 `SUPPRESS_STREAM` / steering；L3 recovery 二次复核（`llm-loop-review`） |
+| **Monitor** | `core/monitor.py` | 编排 `detection` → `review` → `recovery`；L1/L2 直接 abort；L3 启动 review skill；思考循环走 `on_stream_chunk` |
+| **Detection** | `detectors/*`（本方案实例：`llm_thinking_loop.py`） | Signal → `Anomaly`；L1/L2 同步、L3 异步首次 Judge |
+| **Review** | `review/llm_thinking_loop.py`、`review/skills/llm-loop-review/`（`role=review`） | L3 二次语义复核；确认异常才进入 Recovery abort |
+| **Recovery** | `recovery/{engine,operations,robustness_prompt}.py` | 映射并执行 `SUPPRESS_STREAM` / steering / abort |
 
 **思考死循环实例路径**：
 
 1. **Rail 采集**：`write_stream` → `StreamObserver` → `Monitor.on_stream_chunk`（`Signal(STREAM_CHUNK)`）。  
 2. **Monitor 编排**：`detection` fan-out → **`LlmThinkingLoopDetector`**。  
 3. **Detection 命中**：产出 `Anomaly(LLM_THINKING_LOOP / LLM_THINKING_DEAD_LOOP)`。  
-4. **Recovery 执行**：截断/抑制流；`text_repetition` 立即 abort + steering；`plan_execution` 先抑制再跑 recovery skill，确认异常才 abort，否则 fail-open flush。
+4. **Recovery 执行**：截断/抑制流；`text_repetition` 立即 abort + steering；`plan_execution` 先抑制再跑 review skill，确认异常才 abort，否则 fail-open flush。
 
 ### 3.3 检测与恢复流程
 
@@ -191,7 +195,7 @@ flowchart TD
   g3 -->|是| L3["异步启动 L3 Judge"]
   L3 --> pass2
   L3 -->|"稍后异常"| suppress["抑制后续 chunk"]
-  suppress --> Rev["Recovery skill"]
+  suppress --> Rev["Review skill"]
   Rev -->|"Confirmed"| abort["abort + steering"]
   Rev -->|"fail-open"| flush["flush + 释放 L3 latch"]
   hit12 --> abort
@@ -205,12 +209,13 @@ flowchart TD
 |----|------|
 | Rail / 流观测 | `agent_ras/platform_adapter/openjiuwen/{rail,stream_observer,factory}.py`；`core/signal_builder.py` |
 | Monitor | `agent_ras/core/monitor.py` |
-| Detection（本方案实例） | `agent_ras/core/detectors/llm_thinking_loop.py` |
-| Skill 注册表 | `agent_ras/core/agents/base.py`（故障域 × `detection`/`recovery` → skill 名） |
-| Recovery | `agent_ras/core/recovery/{engine,operations,robustness_prompt}.py` |
+| Detection（本方案实例） | `agent_ras/detectors/llm_thinking_loop.py` |
+| Review | `agent_ras/review/llm_thinking_loop.py`；`agent_ras/review/skills/llm-loop-review/` |
+| Skill 注册表 | `agent_ras/agents/base.py`（故障域 × `detection`/`review`/`recovery` → skill 名） |
+| Recovery | `agent_ras/recovery/{engine,operations,robustness_prompt}.py` |
 | 配置 | `agent_ras/core/config.py` → `LlmThinkingLoopConfig` |
 | Core 停流契约 | 宿主 `openjiuwen`/`agent-core`：`rail/base.py` abort API；`react_agent.py` 流循环消费 |
-| 协议 inproc | `agent_ras/ras_embed/session_hub.py`（不经 Monitor） |
+| 协议 inproc | `agent_ras/ras_runtime/session_hub.py`（不经 Monitor） |
 
 ---
 
@@ -227,7 +232,7 @@ detectors:
     window_max_chars: 2000          # 近窗 = 扫描间隔 = 最小可检长度
     loop_repeat_threshold: 5        # 周期/相似句簇重复次数阈值
     similar_clause_sim_threshold: 0.95
-    # L3 plan_execution（异步首次 Judge + 恢复侧 recovery skill）
+    # L3 plan_execution（异步首次 Judge + review skill 二次复核）
     semantic_eval_chars: 10000      # 启动后，自上次 eval 的增量字数门
     semantic_content_enabled: true  # 默认启用；显式 false 才关闭语义 Judge
     # skill 名与 skill 超时为内部常量（SKILL_TIMEOUT_SECONDS），不暴露配置
@@ -268,14 +273,14 @@ detectors:
 | **`loop_repeat_threshold` = 5** | 重复 ≥5 才报 | 正常列举/强调常出现 2~4 次相近句；阈值 5 在回归集上区分「偶发重复」与「死循环」，4 次不报、5 次报 | **过低**：正常 checklist 误报；**过高**：死循环拖更久 |
 | **`similar_clause_sim_threshold` = 0.95** | 高相似才聚类 | 压低「口头禅 + 不同后续」误报；配合枚举豁免 | 过低误报 Case 正常叙述；过高漏 Case B |
 | **`semantic_eval_chars` = 10000** | L3 字数门 | 启动后每约 10k 增量调一次 Judge；L3 buffer 上限仍为 `max(window, 2×semantic_eval)` | 过小：Judge 贵且易误判短犹豫；过大：语义空转发现太晚 |
-| **L3 recovery（故障域默认 skill `llm-loop-review`）** | 恢复侧二次复核 | 首次 L3 Judge 仍保留；recovery 确认异常才 abort，超时/异常/非法 JSON fail-open | recovery 失败一律按正常继续，避免误杀 |
+| **L3 review（`llm-loop-review`，`role=review`）** | 评审侧二次复核 | 首次 L3 Judge 仍保留；review 确认异常才 abort，超时/异常/非法 JSON fail-open | review 失败一律按正常继续，避免误杀 |
 | **`semantic_content_enabled` = false** | 显式关 L3 | 默认开启 L3；业务需关异步 Judge/费用时显式设 `false`，仅保留 L1/L2 | 生产防 Case C 保持默认 `true` 并配齐 Skill |
 
 **频率设计原则（摘要）**：
 
 1. **先冷启动、再分层**：未达 `detection_start_chars` 不检；之后 L1/L2 用近窗间隔，L3 用更大增量。  
 2. **快路径相对密、贵路径相对稀**：L1/L2 每 `window_max_chars` 一扫；L3 默认 10k 增量，避免每个小犹豫都调模型。  
-3. **阈值与误报联动**：重复阈值、相似度阈值优先服务「可接受误报率」，再谈灵敏度；L3 另加 recovery skill 降低误杀。
+3. **阈值与误报联动**：重复阈值、相似度阈值优先服务「可接受误报率」，再谈灵敏度；L3 另加 review skill 降低误杀。
 
 ---
 
@@ -332,7 +337,7 @@ detectors:
 ### 5.3 解读
 
 - **L1/L2**：10K 字下仍 **&lt; 2 ms**（原验收门槛 50 ms → **PASS**）。相对流式 token 到达间隔可忽略，**支持 `window_max_chars=2000` 的近窗扫描**。  
-- **L3**：异步、**不阻塞**主流式；真实成本是 **detection Agent 整次 invoke（约 3~5 s 量级，P95 可达数秒~十余秒）**，外加恢复侧 recovery skill 一次短生命周期 invoke。与「启动后每约 10k 增量触发一次 L3」的稀触发配套，适合兜底而非逐 chunk 同步调用。  
+- **L3**：异步、**不阻塞**主流式；真实成本是 **detection Agent 整次 invoke（约 3~5 s 量级，P95 可达数秒~十余秒）**，外加 review skill 一次短生命周期 invoke。与「启动后每约 10k 增量触发一次 L3」的稀触发配套，适合兜底而非逐 chunk 同步调用。  
 - **与频率参数互证**：若把 L1/L2 间隔降到极低，CPU 仍可承受，但误报与调度次数上升；L3 若把门控压得很小，则 Agent 调用次数与尾延迟会明显恶化——故维持 **密 L1/L2 + 稀 L3**。
 
 ### 5.4 功能回归（摘要）
@@ -348,4 +353,4 @@ detectors:
 
 ## 6. 小结
 
-本方案用 **L1/L2 字面快检 + L3 语义兜底 + 恢复侧 recovery skill**，在 `write_stream` 前监测，**自动恢复**（L1/L2 直恢复，L3 双阶段确认），**abort** 打断无限 `llm.stream`，从而在真实 Case A/B/C 上同时控制 **token 浪费、误杀风险与检测开销**。检测频率默认值经过「漏检成本 / 误报成本 / 实测时延」三角权衡；调参时应优先复测 §5 表与正反例集，再改门控数字。
+本方案用 **L1/L2 字面快检 + L3 语义兜底 + review skill 二次复核**，在 `write_stream` 前监测，**自动恢复**（L1/L2 直恢复，L3 双阶段确认），**abort** 打断无限 `llm.stream`，从而在真实 Case A/B/C 上同时控制 **token 浪费、误杀风险与检测开销**。检测频率默认值经过「漏检成本 / 误报成本 / 实测时延」三角权衡；调参时应优先复测 §5 表与正反例集，再改门控数字。

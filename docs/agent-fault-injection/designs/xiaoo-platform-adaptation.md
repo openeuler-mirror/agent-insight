@@ -11,11 +11,11 @@
 
 | 阶段 | 状态 | 说明 |
 |------|------|------|
-| Phase 0 框架解耦 | 已完成 | Registry / execution.jsonl / 统一 OpenCode Judge |
+| Phase 0 框架解耦 | 已完成 | Registry / execution.jsonl / **Insight 服务端 Judge** |
 | Phase 1 CLI Adapter | 已完成 | `platform_adapters/xiaoo/` + Hooker + `registry` 注册 |
 | Phase 2 Daemon harness | 已完成 | `platform_options.harness: daemon` + `daemon_url` |
 | Phase 3 Skill 平台可见性 | 已完成（后调整） | 原 `fault-catalog.yaml` 的 `platforms` 已移除；故障配方面向通用平台，UI 默认双平台。平台能力差异由 Adapter / 文档说明（见 [fault-mode-plugins.md](features/fault-mode-plugins.md)） |
-| Phase 4 产品化 | 已完成 | 示例 YAML、README、集成测 skip |
+| Phase 4 产品化 | 已完成 | Insight 任务向导 + Worker；CLI 真跑；集成测 skip |
 
 运行示例：Insight FI 新建任务表单（包内不再维护 `configs/xiaoo-*.yaml` 示例）。
 
@@ -26,9 +26,9 @@
 | 问题 | 答案 |
 |------|------|
 | xiaoO 要改核心 Rust 吗？ | **不需要**。全部走官方 Skill / Hook 插件 / CLI / Daemon API。 |
-| 故障任务怎么发起？ | **外层**一律由 `agent-fault-injection`（CLI / Web / YAML）发起；**内层被测 harness** 默认用 **`xiaoo --cli run`**，批量/可观测增强可选 **Daemon HTTP+SSE**。 |
+| 故障任务怎么发起？ | **外层**由 Insight「故障注入」任务（BFF）+ 本机 **FI Worker** claim 执行；本地排障可用 `python3 -m agent_fault_injection.cli run`。**内层被测 harness** 默认用 **`xiaoo --cli run`**，批量/可观测增强可选 **Daemon HTTP+SSE**。 |
 | 用不用 TUI / 飞书渠道？ | **评测不用**。交互入口不适合可复现、可超时、可批跑的故障实验。 |
-| Judge 用谁？ | **Insight 服务端**（默认）。本机调试可选用 OpenCode Judge。 |
+| Judge 用谁？ | **仅 Insight 服务端 Judge**（轨迹证据；本机 Python / OpenCode Judge 已删除，不作为产品路径）。 |
 | 故障怎么注入？ | Workspace 安装 `SKILL.md` + 临时 `XIAOO_CONFIG` 挂评测 Hook；Hook 的 `system.transform` 强制先 load 故障 skill（对齐 OpenCode 插件语义）。 |
 
 ---
@@ -37,9 +37,10 @@
 
 ```mermaid
 flowchart TB
-  subgraph outer [外层入口 - agent-fault-injection]
-    CLI["agent-fault-injection run / Web / YAML"]
-    Runner[ExperimentRunner]
+  subgraph outer [外层入口]
+    UI["Insight FI 任务向导"]
+    Worker[FI Worker claim]
+    CLI["CLI 排障: agent_fault_injection.cli run"]
     Faults[FaultRegistry Skills]
   end
 
@@ -63,16 +64,18 @@ flowchart TB
     InsightJudge[Insight 服务端 Judge]
   end
 
-  CLI --> Runner
-  Faults --> Runner
-  Runner --> Prep --> Choice
+  UI --> Worker
+  CLI --> Prep
+  Worker --> Prep
+  Faults --> Prep
+  Prep --> Choice
   Choice -->|默认 Phase1| CliRun
   Choice -->|可选 Phase2| Daemon
   CliRun --> Hook
   Daemon --> Hook
   Hook --> Loop
   Loop --> Events --> Exec --> Traj
-  Runner --> Payload --> InsightJudge
+  Worker --> Payload --> InsightJudge
   Traj --> Payload
 ```
 
@@ -80,9 +83,9 @@ flowchart TB
 
 | 层级 | 谁发起 | 方式 | 职责 |
 |------|--------|------|------|
-| **评测编排** | 用户 / CI / Web | `agent-fault-injection run --platform xiaoo …` | 选故障、分配 workspace、超时、产物、上传 collect |
+| **评测编排** | 用户 / Insight 任务 + FI Worker | Insight 向导创建任务；Worker claim；或 CLI 排障 | 选故障、分配 workspace、超时、产物、上传 collect |
 | **被测 Agent** | `XiaoOAdapter` | **默认 CLI**；可选 Daemon | 在真实 xiaoO 运行时里执行带故障 Skill 的任务 |
-| **评判** | Insight `judge.ts` | 用户 `getActiveConfig` | 轨迹为主，输出两轴判定 |
+| **评判** | Insight `judge.ts` | 服务端激活模型 | 轨迹为主，输出两轴判定 |
 
 ---
 
@@ -118,7 +121,7 @@ AGENT_FI_PLUGIN_READY=.../plugin-ready.json \
 **为何默认 CLI：**
 
 - 实现简单，与 OpenCode 子进程模型一致，易于超时 / kill / 捕获 stdout
-- 每次 run 写临时 `XIAOO_CONFIG`（不改用户文件），但以用户真实 config 为底并叠加 FI hooker，保留用户 RAS 等 plugins
+- 每次 run 写临时 `XIAOO_CONFIG`（不改用户文件），但以用户真实 config 为底并叠加 FI hooker，保留用户 RAS 等 plugins（**为何必须保留**见 §4.1）
 - 适合单次调试与 CI 冒烟
 
 ### 3.2 可选增强：Daemon HTTP + SSE
@@ -170,7 +173,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph common [agent-fault-injection 公共层]
-    R[ExperimentRunner / pipeline]
+    R[pipeline / Adapter 执行]
     FR[FaultRegistry]
   end
 
@@ -203,6 +206,23 @@ flowchart TB
 | 配置策略 | 系统 `~/.config/opencode` + workspace 注入插件 | 系统 `~/.config/xiaoo` 内容合并进临时 `XIAOO_CONFIG`，**保留用户 hooker（含 RAS）并叠加 FI** |
 | Agents / Models | `opencode agent list` / `models` | 解析 `config.toml` 的 `[agent.*]` / `[llm]` |
 | Judge | Insight 服务端 | **同一套** Insight Judge |
+
+### 4.1 为何 xiaoO 要「overlay 保留 RAS hooker」，而 OpenCode 不必
+
+两宿主**都能**在同一次会话里并存 RAS 与 FI，但插件挂载语义不同，因此 FI 的配置策略不能照搬。
+
+| | OpenCode | xiaoO |
+|--|----------|-------|
+| FI 怎么挂上 | 写入评测 workspace 的 `.opencode/plugins/`，宿主按 **系统 + workspace 分层叠加** 发现插件 | 必须进入 **`[hooker].plugins`** 列表；宿主按 **一份** `XIAOO_CONFIG`（或默认 `~/.config/xiaoo/config.toml`）加载 |
+| 不污染用户磁盘 | 只写 workspace，**不动** `~/.config/opencode`；进程继续用真实 `HOME` / 系统 env（含用户已装 RAS） | 不能改用户磁盘上的 `config.toml`，只能写**临时** config 并用 `XIAOO_CONFIG` 指向它 |
+| 若只挂 FI、不管原 plugins | 系统侧 RAS 插件通常仍在 → 一般不丢 | 临时 config 若只列 FI → **整次 run 丢掉**用户已有 hooker（含 RAS） |
+
+因此：
+
+- **OpenCode**：宿主本身支持 workspace 增量挂载 → FI 只塞 `.opencode/plugins/agent-fault-injection.ts`，RAS 自然还在；**不需要**做「整份 config merge + 保留 plugins」逻辑。
+- **xiaoO**：临时 `XIAOO_CONFIG` 是**替换**整份生效配置，而 hooker 列表是替换语义、不是 OpenCode 那种自动叠加 → 必须以用户真实 config 为底，**保留**已有 `[hooker].plugins`（含 RAS），再 **append** FI plugin，写到临时文件（实现：`platform_adapters/xiaoo/config_overlay.py`）。
+
+目标都是：评测 run **不改用户日常配置**，同时同宿主仍可观测 / 检测 / 恢复（RAS）并注入（FI）。关系总览见 [ras-fi-insight-relationship.md §6](ras-fi-insight-relationship.md)。
 
 ---
 
@@ -238,10 +258,10 @@ sequenceDiagram
 1. 校验并分配独立 workspace（`{base}/.ras-runs/...`）。
 2. `InstallSession` 安装可选 `skills/<fault>/scripts/` → `.agent-fault-injection/tools/`。
 3. 复制故障 `SKILL.md` → `.xiaoo/skills/<skill_name>/SKILL.md`（项目级最高优先级）。
-4. 生成 run 私有 `config.toml`：
-   - `[skills].dirs`（如需要）
-   - `[hooker].plugins` → 指向 bundled `ras_eval` 的 `plugin.json`
-   - 可选对齐 `[agent.<name>]`
+4. 生成 run 私有 `config.toml`（`XIAOO_CONFIG`；**不**改用户磁盘文件；理由见 §4.1）：
+   - 以用户真实 `~/.config/xiaoo/config.toml` 为底
+   - **保留**原 `[hooker].plugins`（含 RAS），再 append FI bundled `plugin.json`
+   - `[skills].dirs`（如需要）；可选 model / `[agent.<name>]` 覆盖
 5. 设置 `AGENT_FI_*`；无这些变量时 Hook **空操作**（残留插件安全）。
 
 ### 5.2 Hooker 最小行为
@@ -257,40 +277,45 @@ sequenceDiagram
 | 文件 | 含义 |
 |------|------|
 | `raw/events.jsonl` | 原始/半原始事件流（含激活 kind） |
-| `execution.jsonl` | **规范化证据**（Judge 优先读取） |
+| `execution.jsonl` | **规范化证据**（Insight Judge 优先读取） |
 | `trajectory.jsonl` / `interactions.json` | 轨迹与 insight 兼容导出 |
-| `judge-request.json` / `judge-result.json` | 统一 OpenCode Judge 产物 |
+| `collect-result.json` | Worker 回传 Insight 的采集载荷（**不含**本机 Judge 产物） |
 
 规范化 `execution.jsonl` 行类型示例：`assistant` / `tool` / `final_answer` / `session_error` / `platform_protection`。
+
+> 历史产物名 `judge-request.json` / `judge-result.json`（本机 OpenCode Judge）**已废弃**，勿再写入或依赖。
 
 ---
 
 ## 6. 配置示例
 
+产品路径请在 Insight「故障注入 → 新建任务」选择平台 `xiaoo` 与故障模式；Worker inventory 提供本机 agent/model。本地 CLI 排障示例：
+
+```bash
+python3 -m agent_fault_injection.cli run \
+  --platform xiaoo --agent build \
+  --fault tool_repeat_dead_loop --submode 2 \
+  --prompt "执行场景2 / case2 / unknown" \
+  --workspace ~/.agent-insight/fault-injection/workspaces \
+  --output-dir ~/.agent-insight/fault-injection/artifacts \
+  --timeout-seconds 90
+```
+
+Adapter 侧可选 `platform_options`（示意；由 Worker/CLI 传入，**无**本机 Judge 字段）：
+
 ```yaml
-# configs/xiaoo-step-omission.example.yaml（示意）
-platform: xiaoo
-agent: build          # 对应 ~/.config/xiaoo/config.toml 中 [agent.build]
-fault: step-omission
-prompt: Analyze the project and fix the failing tests
-workspace: /tmp/ras-workspace-xiaoo
-timeout_seconds: 600
 platform_options:
   harness: cli                 # 默认；批量可改为 daemon
   # daemon_url: http://127.0.0.1:18080
-  executable: xiaoo            # 被测二进制
-  judge_enabled: true
-  judge_executable: opencode   # 评判二进制（与被测分离）
-  judge_agent: ras-judge
-  judge_pure: true
-  judge_timeout_seconds: 120
+  executable: xiaoo
   plugin_startup_timeout: 120
 ```
 
 **前置条件：**
 
 - 本机已安装并配置好 **xiaoO**（`config.toml`、LLM provider）
-- 本机仍需可用的 **OpenCode**（仅 Judge）
+- Insight 侧已配置激活模型（**服务端 Judge** 依赖；无模型时仍可 collect，评判为 `judge_skipped`）
+- 本机 FI Worker 在线（产品路径）；CLI 排障可不经 Worker
 - 不要用仓库根目录当 workspace base
 
 ---
@@ -299,13 +324,13 @@ platform_options:
 
 | 阶段 | 内容 | 故障任务发起 |
 |------|------|--------------|
-| Phase 0 | 框架解耦：Adapter Registry、`execution.jsonl`、Judge 去平台硬拒绝、Web 委托 | 无 xiaoO |
+| Phase 0 | 框架解耦：Adapter Registry、`execution.jsonl`、Judge 归 Insight、Web 委托 | 无 xiaoO |
 | Phase 1 | `XiaoOAdapter` + Hooker + CLI harness | **`xiaoo --cli run`** |
 | Phase 2 | Daemon harness 增强 | `harness: daemon` |
 | Phase 3 | Skill 跨平台兼容（工具名 / 暂不支持清单） | 同 Phase 1/2 |
-| Phase 4 | 文档、示例 YAML、集成测 | — |
+| Phase 4 | Insight 任务向导 + Worker + 文档 | — |
 
-新增第三平台时：实现 Adapter + 注入面 + 写出 `execution.jsonl` 并注册即可；**不必**改 Runner / Judge。
+新增第三平台时：实现 Adapter + 注入面 + 写出 `execution.jsonl` 并注册即可；**不必**改 Worker 协议 / Insight Judge。
 
 ---
 
@@ -315,11 +340,11 @@ platform_options:
 |------|------|
 | Skill 正文写死 OpenCode 工具名（如 todo vs `todo_write`） | `platform_overrides` 或优先通用故障；部分故障标 unsupported |
 | CLI `--format json` 事件不全 | Hook 自采为权威源；Phase 2 SSE 补齐 |
-| 测 xiaoO 仍依赖 OpenCode | 文档写明双前置；`judge_executable` 可配 |
+| 部分 runtime op（如 `assistant.tool_call.replace_argument`）仅 OpenCode | 文档与 catalog 标明平台能力差；xiaoo 侧勿假设全 op |
 | Hook 子进程延迟 | 仅挂关键 hook point；事件追加写文件 |
 
 ---
 
 ## 9. 一句话总结
 
-**故障实验由 `agent-fault-injection` 发起；xiaoO 侧默认用 CLI `xiaoo --cli run` 执行带故障 Skill 的真实 Agent；可选 Daemon 做批量与细粒度观测；评判始终走 OpenCode，靠规范化 `execution.jsonl` 吃下 xiaoO 轨迹。**
+**故障实验由 Insight 任务 + 本机 FI Worker（或 CLI 排障）发起；xiaoO 侧默认用 CLI `xiaoo --cli run` 执行带故障 Skill 的真实 Agent；可选 Daemon 做批量与细粒度观测；评判始终走 Insight 服务端 Judge，靠规范化 `execution.jsonl` / interactions 吃下 xiaoO 轨迹。**

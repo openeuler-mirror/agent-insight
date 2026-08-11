@@ -3,6 +3,9 @@
 版本：v0.1  
 最后更新：2026-07-28
 
+> **HISTORICAL 需求稿**：早期以「FI = UI + mock」为主叙事。  
+> **现网**：故障注入已接真实 BFF / Worker（见 [Agent Fault Injection](../../agent-fault-injection/README.md)）；可靠性详情异常展示见 [ras-trace-anomaly-display.md](../../agent-ras/designs/features/ras-trace-anomaly-display.md)。本 phase 文保留设计意图，实现进度以 [docs/design/README.md](../README.md) 清单为准。
+
 > 文档类型：Phase1 需求分析 ｜ 关联项目：agent-insight  
 > 复杂度：**Medium**（新增导航分组 + 两个子页面 + 故障注入 UI；不改 RAS 检测算法）  
 > 关联文档：[agent_ras 整体架构](../../agent-ras/designs/architecture.md)

@@ -210,17 +210,6 @@ export default function FaultInjectionRunTracePage() {
           <p className="text-sm text-foreground-muted">
             Trace ID：
             <CopyableId value={trace.taskId} className="ml-1" />
-            <Link
-              href={`/agent-ras/trace/${encodeURIComponent(trace.taskId)}`}
-              className="ml-2 text-primary hover:underline"
-            >
-              {zh ? '打开可靠性观测' : 'Open reliability'}
-            </Link>
-            <span className="ml-1 text-xs">
-              {zh
-                ? '（同 session 的 RAS 独立事件，若有）'
-                : '(independent RAS events for this session, if any)'}
-            </span>
           </p>
         ) : null}
         {loading && (

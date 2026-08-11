@@ -25,6 +25,7 @@
 | 运行时注入（prompt / tool_result / intercept） | [designs/runtime-middleware-fault-injection.md](designs/runtime-middleware-fault-injection.md) |
 | Task / Worker API（Insight） | [designs/modules/task-orchestration.md](designs/modules/task-orchestration.md) |
 | 最短启用 | [guides/getting-started.md](guides/getting-started.md) |
+| **用户指南（产品路径）** | [user-guide/observability/fault-injection.md](../user-guide/observability/fault-injection.md) |
 
 ## 特性状态
 

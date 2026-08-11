@@ -293,11 +293,7 @@ export default function FaultInjectionTaskDetailPage() {
                         }
                       }}
                     >
-                      <td
-                        className="px-3 py-2.5"
-                        onClick={(ev) => ev.stopPropagation()}
-                        onKeyDown={(ev) => ev.stopPropagation()}
-                      >
+                      <td className="px-3 py-2.5">
                         {traceId ? <CopyableId value={traceId} /> : '—'}
                       </td>
                       <td className="px-3 py-2.5">

@@ -1,4 +1,4 @@
-# 故障域插件化：detectors / review / recovery 三分治（规划）
+# 故障域插件化：detectors / review / recovery 三分治（已落地）
 
 > 范围：仓根 `agent_ras/`。检测、**评审**、恢复三棵树平级扩展；目录扫描 + `*_PLUGIN` 自动注册；**不设** `fault_domains/`。  
 > 状态：**P2 已落地**（DomainLoader + 三分治 PLUGIN；`llm-loop-review` → `review/skills`；role=`review`）。  

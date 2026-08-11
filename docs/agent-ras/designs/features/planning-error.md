@@ -23,7 +23,7 @@ flowchart TB
 
 > 文档类型：Phase1 需求分析 + 方案设计（合并） | 关联项目：agent-insight / agent_ras  
 > 复杂度：**High**（判定依赖任务约束、环境状态、工具契约等外部信息；需按信息完备度分层检测，而非纯文本模式匹配）  
-> 关联模块：[agent_ras/core/detectors/](../../../../agent_ras/core/detectors/)、[agent_ras/core/recovery/](../../../../agent_ras/core/recovery/)、现有 L3 Skill 判定通道  
+> 关联模块：[agent_ras/detectors/](../../../../agent_ras/detectors/)、[agent_ras/recovery/](../../../../agent_ras/recovery/)、现有 L3 Skill 判定通道  
 > 关联调研：[语义层故障注入调研](./analysis-paralysis.md)
 
 ---

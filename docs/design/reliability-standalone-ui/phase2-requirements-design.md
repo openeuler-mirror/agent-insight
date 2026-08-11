@@ -3,6 +3,8 @@
 版本：v0.1  
 最后更新：2026-07-28
 
+> **HISTORICAL 需求稿**：早期含 FI mock 叙事；现网已接真实 BFF / Worker，异常展示见 [ras-trace-anomaly-display.md](../../agent-ras/designs/features/ras-trace-anomaly-display.md)。
+
 > 文档类型：Phase2 需求设计 ｜ 关联 [Phase1](phase1-requirements-analysis.md)  
 > 复杂度：Medium
 

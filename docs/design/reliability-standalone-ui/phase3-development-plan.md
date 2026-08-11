@@ -3,6 +3,8 @@
 版本：v0.1  
 最后更新：2026-07-28
 
+> **HISTORICAL 开发计划**：文中「故障注入不做后端 / mock」已过时；现网见 [agent-fault-injection](../../agent-fault-injection/README.md)。
+
 > 文档类型：Phase3 开发计划 ｜ 关联 [Phase1](phase1-requirements-analysis.md) / [Phase2](phase2-requirements-design.md)  
 > 工作量：Medium ｜ 可并行：YES（T2-T3、T4）
 
