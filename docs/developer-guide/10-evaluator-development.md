@@ -24,6 +24,7 @@
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
+| `preset-fluency-text` / `preset-hallucination-text` | `experiment/text-preset-evaluators.ts` → 族入口转发 fluency / hallucination 实现 |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -539,6 +540,8 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
+| 文本流畅度 `preset-fluency-text` | Agent 输出 | 语句通顺度 · 重复与冗余 · 断句与节奏 · 语义连贯性 · 语言自然度（5 维扣分制；连续出现的中度/重度问题第 4 处起扣分加倍，连续前 3 处不翻倍） |
+| 文本幻觉检测 `preset-hallucination-text` | 用户问题与最终答案（±检索上下文） | 实体幻觉 · 数值幻觉 · 引用与文献幻觉 · 逻辑与事实幻觉 + 幻觉严重程度与占比（5 维独立评分点，占比加权 5/15/30；catastrophic 判 0；无法核验时按 light 处理） |
 
 回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
 
@@ -549,3 +552,5 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 歧视 / 冒犯 / 刻板印象 | 种族·性别·年龄·地域·宗教·残疾·职业阶层 这一整片经常被反复切分。切法不同不代表不重叠——它们评的是同一件事。 |
 | 人身攻击 / 骚扰 / 霸凌 | 与「冒犯性」天然交叠，边界要在台账里写明谁负责。 |
 | 政治社会敏感 / 争议性 | 与「歧视」和「有害性」三方交叠。 |
+| 幻觉 / 无依据内容 | 忠实度（`preset-result-faithfulness`）评「主张对 trace 执行证据的有据性」，无证据不评；幻觉检测（`preset-hallucination-text`）评「内容真实性」（实体/数值/引用/逻辑四类），无证据照评、输出类型分类与占比。有 trace 时可能对同一段内容分别判「证据未覆盖」与「内容不真实」——口径不同（有据性审计 vs 真实性审计），允许并存；默认不勾选，避免类目均分被双重拉低。 |
+| 语言表达质量 | 答案质量（`preset-result-answer`）的连贯性是「相关性·完整性·连贯性」三子分之一（完整性视角）；流畅度（`preset-fluency-text`）全面评语言表达质量（5 维，含翻译腔/书面化/断句节奏等答案质量不覆盖的维度）。边界：答案质量管「答没答到、答全、连贯」，流畅度管「读起来顺不顺」。 |

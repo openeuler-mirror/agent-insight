@@ -48,6 +48,9 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-depth-result': { category: 'res', requires: [] },
   'preset-agent-tool-utilization': { category: 'traj', requires: ['tool_catalog'] },
   'preset-agent-tool-selection': { category: 'traj', requires: ['tool_catalog'] },
+  // 文本质量评估器（流畅度 / 幻觉检测）：只看最终输出，上下文可选不门控
+  'preset-fluency-text': { category: 'res', requires: [] },
+  'preset-hallucination-text': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };

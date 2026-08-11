@@ -15,6 +15,8 @@ export interface JudgeLlmRequest {
   timeoutMs?: number;
   /** opencode session 标题（可观测性用），缺省自动生成 */
   sessionTitle?: string;
+  /** 透传给模型提供方的采样参数（temperature / maxTokens 等）。缺省不传，其他调用方行为不变。 */
+  modelOptions?: Record<string, unknown>;
 }
 
 export type JudgeLlmCaller = (username: string, req: JudgeLlmRequest) => Promise<string>;
@@ -92,6 +94,7 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
                 baseURL: config.baseUrl,
                 headers: config.headers,
               },
+              modelOptions: req.modelOptions,
               system: req.system,
               permission: buildEvaluatorPermissions(),
             },
