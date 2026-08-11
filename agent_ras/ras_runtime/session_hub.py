@@ -55,16 +55,19 @@ def _is_tool_channel(channel: str | None) -> bool:
     return str(channel or "").strip() == "tool_call"
 
 
-def _is_llm_anomaly_kind(kind: str | None) -> bool:
-    value = str(kind or "").strip()
-    return value in {"llm_thinking_loop", "llm_thinking_dead_loop"}
-
-
 def _anchor_for_anomaly(state: "SessionState", kind: str | None) -> dict[str, Any] | None:
     """LLM anomalies bind to LLM identity only; tool anomalies to call_id only."""
-    if _is_llm_anomaly_kind(kind):
+    from detectors.loader import anchor_for_kind
+
+    anchor = anchor_for_kind(kind)
+    if anchor == "llm":
         return dict(state.last_llm_anchor) if state.last_llm_anchor else None
-    return dict(state.last_tool_anchor) if state.last_tool_anchor else None
+    if anchor == "tool":
+        return dict(state.last_tool_anchor) if state.last_tool_anchor else None
+    # Unknown kind: prefer tool anchor when present, else LLM.
+    if state.last_tool_anchor:
+        return dict(state.last_tool_anchor)
+    return dict(state.last_llm_anchor) if state.last_llm_anchor else None
 
 
 def _config_from_payload(raw: dict[str, Any] | None) -> AgentRASConfig:
@@ -163,7 +166,7 @@ class SessionState:
                     ),
                 )
                 anomaly_dict = {
-                    "kind": anomaly.kind.value,
+                    "kind": str(getattr(anomaly.kind, "value", anomaly.kind)),
                     "summary": anomaly.summary,
                     "evidence": anomaly.evidence,
                     "severity": anomaly.severity.value
@@ -447,7 +450,7 @@ class SessionHub:
         actions = self._actions_for(anomaly, state)
         self._mark_abort_requested(state, actions)
         anomaly_dict = {
-            "kind": anomaly.kind.value,
+            "kind": str(getattr(anomaly.kind, "value", anomaly.kind)),
             "summary": anomaly.summary,
             "evidence": anomaly.evidence,
             "severity": anomaly.severity.value
@@ -456,7 +459,9 @@ class SessionHub:
         }
         if state.last_llm_anchor or state.last_tool_anchor:
             # Prefer kind-appropriate bucket; never hang LLM anomalies on tool call_id.
-            selected = _anchor_for_anomaly(state, anomaly.kind.value if hasattr(anomaly.kind, "value") else str(anomaly.kind))
+            selected = _anchor_for_anomaly(
+                state, str(getattr(anomaly.kind, "value", anomaly.kind))
+            )
             if selected:
                 anomaly_dict["trace_anchor"] = selected
         state.last_anomaly = anomaly_dict

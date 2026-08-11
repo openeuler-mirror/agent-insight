@@ -204,9 +204,9 @@ async def test_l3_recovery_abnormal_aborts(caplog) -> None:
         await monitor.complete_async_stream_recovery(_l3_anomaly(), "llm_output")
         await asyncio.sleep(0.05)
 
-    assert any(role == "recovery" for role, *_ in agents.calls)
+    assert any(role == "review" for role, *_ in agents.calls)
     assert any(
-        role == "recovery" and skill == "llm-loop-review"
+        role == "review" and skill == "llm-loop-review"
         for role, skill, *_ in agents.calls
     )
     assert not any(role == "detection" for role, *_ in agents.calls)
@@ -398,7 +398,7 @@ async def test_l3_normal_requires_fresh_chars_before_redetect() -> None:
                 "confidence": 0.9,
                 "rationale": "first",
             },
-            "recovery": {
+            "review": {
                 "abnormal": False,
                 "primary_fault": "none",
                 "confidence": 0.8,
@@ -437,7 +437,7 @@ async def test_l3_normal_requires_fresh_chars_before_redetect() -> None:
     )
     # Wait for detection + recovery normal path (releases L3 latch / advances cursor).
     for _ in range(50):
-        if any(c[0] == "recovery" for c in agents.calls):
+        if any(c[0] == "review" for c in agents.calls):
             break
         await asyncio.sleep(0.02)
     await asyncio.sleep(0.05)

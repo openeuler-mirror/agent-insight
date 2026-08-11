@@ -213,7 +213,7 @@ class DeepAgentAdapter:
         payload: str,
         timeout: float,
     ) -> dict:
-        if role == "recovery":
+        if role == "review":
             user_msg = f"恢复材料:\n{payload}"
         else:
             user_msg = f"待判定 excerpt:\n{payload}"
@@ -263,6 +263,6 @@ class DeepAgentAdapter:
                 skill_name,
                 verdict.fail_open_reason,
             )
-        if role in ("detection", "recovery"):
+        if role in ("detection", "review"):
             return verdict_to_dict(verdict)
         return verdict.raw or {}

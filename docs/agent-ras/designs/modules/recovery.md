@@ -51,7 +51,8 @@ flowchart TD
 | `operations.py` | truncate/suppress/steer/notice/terminate；`build/apply_recovery_actions` |
 | `state.py` | `PendingRecovery`、`SuppressFlushState` |
 | `robustness_prompt.py` | cn/en 文案与 steer/notice 模板 |
-| `skills/llm-loop-review/` | L3 recovery review skill |
+| `llm_thinking_loop.py` | `RECOVERY_PLUGIN`：kind overrides + stream_kinds + 域文案 |
+| `engine.py` / `operations.py` / … | 通用内核（扫描跳过） |
 
 ---
 
@@ -201,7 +202,8 @@ Monitor._apply_abnormal_recovery
 
 1. 新动作：扩展 `RecoveryAction` + Policy + `operations` +（若协议）JS `WIRE_TO_HOST`
 2. 新文案：只改 `robustness_prompt.py`，平台禁止改写 message
-3. 新 kind 映射：改 `DEFAULT_KIND_OVERRIDES` / config，而不是 adapter
+3. 新 kind 映射：在 `recovery/<domain>.py` 的 `RECOVERY_PLUGIN.kind_overrides`（及可选 `messages`），不要改 adapter / 手改 engine 默认表
+4. L3 评审 skill 在 `review/`，不在本树
 
 ### 修改检查清单
 

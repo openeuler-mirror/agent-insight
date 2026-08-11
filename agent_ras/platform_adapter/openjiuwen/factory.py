@@ -8,7 +8,7 @@ drops that monitor in ``after_invoke``; HITL resume state stays on session.state
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from openjiuwen.core.foundation.llm.model import Model
 
@@ -21,7 +21,6 @@ from agents.ras_agents import RASAgents
 from core.config import AgentRASConfig
 from detectors.base import Detector
 from detectors.registry import (
-    DETECTOR_BUILDERS,
     build_member_detectors,
 )
 from core.monitor import AgentRASMonitor
@@ -35,7 +34,6 @@ from core.reporter import AnomalyReporter
 
 # Re-export for callers that imported builders from this module.
 __all__ = [
-    "DETECTOR_BUILDERS",
     "build_member_detectors",
     "build_agent_adapter",
     "build_agent_ras_components",

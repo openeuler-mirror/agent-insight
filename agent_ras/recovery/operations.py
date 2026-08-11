@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from core.host_control import HostControl, NoOpHostControl
-from core.models import Anomaly, AnomalyKind
+from core.models import Anomaly
 from recovery.robustness_prompt import (
     format_steering,
     interrupted_abnormal_degrade_user_notice,
@@ -29,13 +29,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 LLM_STREAM_TYPES = frozenset({"llm_output", "llm_reasoning"})
-
-_THINKING_LOOP_KINDS = frozenset(
-    {
-        AnomalyKind.LLM_THINKING_LOOP,
-        AnomalyKind.LLM_THINKING_DEAD_LOOP,
-    }
-)
 
 
 def truncate_chunk_payload(chunk: Any, content: str) -> None:
@@ -195,10 +188,11 @@ def build_recovery_actions(
     """
     # Lazy import: engine imports operations at module load.
     from recovery.engine import plan_recovery
+    from detectors.loader import is_stream_kind
 
     actions: list[dict[str, Any]] = [{"type": "abort_stream"}]
 
-    if anomaly.kind in _THINKING_LOOP_KINDS:
+    if is_stream_kind(anomaly.kind):
         pending = PendingRecovery.from_anomaly(anomaly)
         notice = recovery_user_notice_for(pending, locale=locale)
         steer = recovery_steering_on_abnormal(pending, locale=locale)

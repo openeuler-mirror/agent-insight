@@ -3,8 +3,11 @@
 """Per-agent Agent RAS configuration (single-Agent)."""
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from core.models import AnomalyKind, Severity
+
+from core.models import Severity
 from recovery.engine import (
     DEFAULT_SEVERITY_ACTIONS,
     RecoveryAction,
@@ -42,8 +45,8 @@ class LlmThinkingLoopConfig(BaseModel):
       on a near-window of the same size (FIFO trim + scan gate + min length)
     - ``plan_execution`` (L3): after start, semantic skill every
       ``semantic_eval_chars`` incremental chars since last eval
-    - Detection / recovery skill names are bound by fault-domain registry
-      (``agents.base``), not host-configurable.
+    - Detection / review skill names are bound by fault-domain plugins
+      (``detectors.loader``), not host-configurable.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -67,14 +70,68 @@ class LlmThinkingLoopConfig(BaseModel):
 
 
 class DetectorsConfig(BaseModel):
-    """Toggle + thresholds for every detector."""
+    """Toggle + thresholds for every detector.
 
-    model_config = ConfigDict(extra="forbid")
+    Built-in domains keep typed fields. Additional DETECTOR_PLUGIN domains are
+    accepted via ``extra="allow"`` and coerced to their ``config_model``.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     repeat_tool: RepeatToolConfig = Field(default_factory=RepeatToolConfig)
     llm_thinking_loop: LlmThinkingLoopConfig = Field(
         default_factory=LlmThinkingLoopConfig,
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_plugin_domains(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        try:
+            from detectors.loader import detector_plugins
+
+            plugins = detector_plugins()
+        except Exception:
+            return data
+        out = dict(data)
+        for domain_id, plugin in plugins.items():
+            raw = out.get(domain_id)
+            if raw is None:
+                continue
+            if isinstance(raw, plugin.config_model):
+                continue
+            if isinstance(raw, BaseModel):
+                out[domain_id] = plugin.config_model(**raw.model_dump())
+            elif isinstance(raw, dict):
+                out[domain_id] = plugin.config_model(**raw)
+        return out
+
+    @model_validator(mode="after")
+    def _fill_plugin_defaults(self) -> "DetectorsConfig":
+        try:
+            from detectors.loader import detector_plugins
+
+            plugins = detector_plugins()
+        except Exception:
+            return self
+        for domain_id, plugin in plugins.items():
+            if getattr(self, domain_id, None) is None:
+                object.__setattr__(self, domain_id, plugin.config_model())
+            else:
+                current = getattr(self, domain_id)
+                if isinstance(current, dict):
+                    object.__setattr__(
+                        self, domain_id, plugin.config_model(**current)
+                    )
+                elif not isinstance(current, plugin.config_model):
+                    if isinstance(current, BaseModel):
+                        object.__setattr__(
+                            self,
+                            domain_id,
+                            plugin.config_model(**current.model_dump()),
+                        )
+        return self
 
 
 class RecoveryConfig(BaseModel):
@@ -94,9 +151,9 @@ class RecoveryPolicyConfig(BaseModel):
     severity_actions: dict[Severity, list[RecoveryAction]] = Field(
         default_factory=lambda: dict(DEFAULT_SEVERITY_ACTIONS),
     )
-    kind_overrides: dict[AnomalyKind, list[RecoveryAction]] = Field(
+    kind_overrides: dict[str, list[RecoveryAction]] = Field(
         default_factory=dict,
-        description="Optional per-AnomalyKind action overrides (empty = use severity only)",
+        description="Optional per-kind action overrides (empty = use severity only)",
     )
 
 

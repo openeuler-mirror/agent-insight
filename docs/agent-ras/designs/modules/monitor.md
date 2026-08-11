@@ -141,7 +141,7 @@ flowchart LR
 |------|------|
 | Orchestrator | `AgentRASMonitor` |
 | Thin Adapter | `AgentRASRail` 只 hooks→Signal→Monitor |
-| Factory + Registry | `DETECTOR_BUILDERS`（`factory.py:70`） |
+| Factory + Registry | `detectors.loader.build_member_detectors`（经 registry 再导出） |
 | Protocol / DIP | `HostControl`、`Detector`、`AnomalyReporter` |
 | Observer | `StreamObserver` 订 `write_stream` |
 | Fail-open | L3 超时/判 normal → flush（`:609–634`, `:933–945`） |
@@ -185,7 +185,7 @@ sequenceDiagram
   participant Agents as RASAgents
   participant Host as HostControl
   Mon->>Mon: _start_l3_review
-  Mon->>Mon: invoke_skill role_recovery llm_loop_review
+  Mon->>Mon: invoke_skill role_review llm_loop_review
   Agents-->>Mon: verdict
   alt abnormal
     Mon->>Host: request_abort_stream
@@ -219,7 +219,7 @@ before/after_tool_call | on_*_exception | before/after_model_call
 |------|------|
 | detectors | `observe` / `AsyncRecoveryDetector` / latch 释放 |
 | recovery | Policy、Executor、operations、state、`parse_skill_verdict` |
-| agents | `invoke_skill(role=recovery)`、超时常量 |
+| agents | `invoke_skill(role=review)`、超时常量 |
 | openjiuwen.core（经 Rail） | DeepAgentRail、`write_stream` 回调框架 |
 
 ---

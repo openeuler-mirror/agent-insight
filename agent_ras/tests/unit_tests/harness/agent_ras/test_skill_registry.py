@@ -23,7 +23,7 @@ def test_fault_domain_for_thinking_loop_kinds() -> None:
         == FAULT_DOMAIN_LLM_THINKING_LOOP
     )
     assert fault_domain_for_kind("llm_thinking_loop") == FAULT_DOMAIN_LLM_THINKING_LOOP
-    assert fault_domain_for_kind(AnomalyKind.REPEAT_TOOL_CALL) is None
+    assert fault_domain_for_kind(AnomalyKind.REPEAT_TOOL_CALL) == "repeat_tool"
     assert fault_domain_for_kind("unknown") is None
 
 
@@ -33,7 +33,7 @@ def test_skill_for_llm_thinking_loop() -> None:
         == "llm-loop-detection"
     )
     assert (
-        skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "recovery")
+        skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "review")
         == "llm-loop-review"
     )
 

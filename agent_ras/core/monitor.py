@@ -674,10 +674,10 @@ class AgentRASMonitor:
         )
         fault_domain = self._fault_domain_for_pending(pending)
         try:
-            skill_name = skill_for(fault_domain, "recovery")
+            skill_name = skill_for(fault_domain, "review")
         except ValueError:
             logger.warning(
-                "Agent RAS L3 recovery fail-open member=%s session=%s "
+                "Agent RAS L3 review fail-open member=%s session=%s "
                 "fault_domain=%s reason=unknown_domain_or_role",
                 self._member,
                 self._session_id,
@@ -686,26 +686,26 @@ class AgentRASMonitor:
             )
             return False
         result = await invoke(
-            role="recovery",
+            role="review",
             skill_name=skill_name,
             payload=payload,
             timeout=float(SKILL_TIMEOUT_SECONDS),
         )
         if not isinstance(result, dict) or not result:
             logger.warning(
-                "Agent RAS L3 recovery fail-open member=%s session=%s "
+                "Agent RAS L3 review fail-open member=%s session=%s "
                 "skill=%s reason=empty_or_non_dict",
                 self._member,
                 self._session_id,
                 skill_name,
             )
             return False
-        # Re-parse so illegal / incomplete recovery payloads stay fail-open even
+        # Re-parse so illegal / incomplete review payloads stay fail-open even
         # when a test double returns a raw dict (adapter already parses).
         verdict = parse_recovery_verdict(skill_name, result)
         if verdict.fail_open_reason:
             logger.warning(
-                "Agent RAS L3 recovery fail-open member=%s session=%s "
+                "Agent RAS L3 review fail-open member=%s session=%s "
                 "skill=%s reason=%s",
                 self._member,
                 self._session_id,

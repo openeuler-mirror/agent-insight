@@ -101,15 +101,17 @@ class Detector(Protocol):  # base.py:22
 
 | 符号 | 定义位置 |
 |------|----------|
-| `Detector` | `base.py:22` |
-| `LlmThinkingLoopDetector` | `llm_thinking_loop.py:345` |
-| `RepeatToolCallDetector` | `repeat_tool.py:191` |
+| `Detector` | `base.py` |
 
-### 注册（当前：手写 builders；目标：自包含插件）
+具体 detector 类从各自域模块导入（如 `detectors.llm_thinking_loop`）；包 `__init__` 保持轻量以免与 `core.config` 循环依赖。
 
-**现状（P1 已落地）**：Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors/registry.build_member_detectors`](../../../../agent_ras/detectors/registry.py)；按 `config.detectors.*.enabled` 门控；`SessionState.detectors: list` 首命中分发。仍须在 `DETECTOR_BUILDERS` **手加一行** + `core/config.py` 字段。
+### 注册（P2：DomainLoader + DETECTOR_PLUGIN）
 
-**目标态**：见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)（`fault_domains/<id>/detector.py` 导出 `PLUGIN`，Loader 扫描；无独立 manifest）。
+Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors.loader.build_member_detectors`](../../../../agent_ras/detectors/loader.py)（经 [`registry.py`](../../../../agent_ras/detectors/registry.py) 再导出）。按 `config.detectors.<domain>.enabled` 门控；`SessionState.detectors: list` 首命中分发。
+
+**新域**：只新增 `detectors/<domain>.py`（导出 `DETECTOR_PLUGIN`）+ 可选 `detectors/skills/<id>/SKILL.md`；**不再**改 registry / 静态 `DETECTOR_BUILDERS`。详见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)。
+
+模板：[`detectors/_template_domain.py.example`](../../../../agent_ras/detectors/_template_domain.py.example)。
 
 ---
 
@@ -128,8 +130,8 @@ class Detector(Protocol):  # base.py:22
 | ping_pong | A↔B 交替 | warning=5；critical=10 **且** no_progress | 同左 |
 | unknown_tool | 连续失败 | critical=`unknown_tool_threshold`；warning=threshold//2 | 同左 |
 
-**AnomalyKind**：L1/L2 → `LLM_THINKING_LOOP`；L3 语义 → `LLM_THINKING_DEAD_LOOP`（HIGH）。  
-**双 skill**：检测 `llm-loop-detection`；Monitor 复核 `llm-loop-review`（recovery/skills，非 host 可配）。  
+**AnomalyKind**：L1/L2 → `LLM_THINKING_LOOP`；L3 语义 → `LLM_THINKING_DEAD_LOOP`（HIGH）。（`Anomaly.kind` 为字符串；枚举仅作内置常量。）  
+**双 skill**：检测 `llm-loop-detection`（`role=detection`）；Monitor 评审 `llm-loop-review`（`role=review`，路径 `review/skills/`，非 host 可配）。  
 **Severity（thinking）**：`suffix_cycle`→LOW；`similar_clauses`→MEDIUM；L3→HIGH。  
 **repeat_tool 检测优先级**：global_breaker → unknown_tool → ping_pong → generic。detector `name`=`repeat_tool_call`。
 
@@ -206,19 +208,19 @@ sequenceDiagram
 
 ### 扩展指南
 
-> **目标态**见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)：新域落在 `fault_domains/<id>/`，导出 `PLUGIN`，由 Loader 扫描注册，**不再**改 registry / config 静态字段 / SessionHub。  
-> 下列步骤描述**当前代码**仍须手改的路径，落地插件化后以目标态为准。
+见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)：新域只新增文件。
 
-1. 在 `detectors/` 实现 `Detector`（禁止宿主 SDK import）
-2. 加 `*Config` 到 `core/config.py`
-3. 在 `detectors/registry.DETECTOR_BUILDERS` 注册；并核对 SessionHub 路径（历史曾与 factory 门控不一致）
-4. 需要 L3 检测时复用 `RASAgents` + `skill_verdicts` fail-open；复核 skill 在 recovery 侧
-5. 产品方案写到 `designs/features/<topic>.md`
+1. 新增 `detectors/<domain>.py`，导出 `DETECTOR_PLUGIN`（`config_model` + `factory`）；可选 `detectors/skills/<id>/SKILL.md`
+2. 需要 L3 评审时：`review/<domain>.py` + `review/skills/<id>/SKILL.md`
+3. 需要恢复策略/文案时：`recovery/<domain>.py`（`RECOVERY_PLUGIN`，策略与文案同文件）
+4. 产品方案写到 `designs/features/<topic>.md`；补单测
+5. **不要**再改 `registry` / `DEFAULT_KIND_OVERRIDES` / skill 手账（新 wire 类型或 Insight UI 除外）
 
 ### 修改检查清单
 
 - [ ] `observe` 仍无直接 Host 副作用
 - [ ] `reset` 清掉 per-session 状态
-- [ ] factory 与 SessionHub 注册/enabled 门控差异已核对
-- [ ] AnomalyKind / evidence 与 recovery policy 对齐
+- [ ] `DETECTOR_PLUGIN` 已导出且 `enabled` 门控正确
+- [ ] kind 字符串 / evidence 与 `RECOVERY_PLUGIN` 对齐
 - [ ] 有单测覆盖阈值边界
+- [ ] L3 走 `role=review` 与 `review/skills`

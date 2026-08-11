@@ -4,40 +4,48 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, runtime_checkable
-
-from core.models import AnomalyKind
+from typing import Any, Protocol, runtime_checkable
 
 # Fault domain ids align with detector.name / config detector keys.
 FAULT_DOMAIN_LLM_THINKING_LOOP = "llm_thinking_loop"
 
-AGENT_RAS_SKILL_ROLES: tuple[str, ...] = ("detection", "recovery")
+AGENT_RAS_SKILL_ROLES: tuple[str, ...] = ("detection", "review")
 
 # Internal member / async-recovery knobs (not host-configurable).
 MEMBER_MAX_ITERATIONS: int = 30
 ASYNC_RECOVERY_TIMEOUT_SECONDS: float = 60.0
 SKILL_TIMEOUT_SECONDS: float = 30.0
 
+# Populated by ``detectors.loader.ensure_domains_loaded`` from *_PLUGIN modules.
+# Seed kept for import-time readers before first load.
 FAULT_DOMAIN_SKILLS: dict[str, dict[str, str]] = {
     FAULT_DOMAIN_LLM_THINKING_LOOP: {
         "detection": "llm-loop-detection",
-        "recovery": "llm-loop-review",
+        "review": "llm-loop-review",
     },
 }
 
 _KIND_TO_FAULT_DOMAIN: dict[str, str] = {
-    AnomalyKind.LLM_THINKING_LOOP.value: FAULT_DOMAIN_LLM_THINKING_LOOP,
-    AnomalyKind.LLM_THINKING_DEAD_LOOP.value: FAULT_DOMAIN_LLM_THINKING_LOOP,
+    "llm_thinking_loop": FAULT_DOMAIN_LLM_THINKING_LOOP,
+    "llm_thinking_dead_loop": FAULT_DOMAIN_LLM_THINKING_LOOP,
 }
 
 
-def fault_domain_for_kind(kind: AnomalyKind | str) -> str | None:
+def _ensure_plugin_tables() -> None:
+    try:
+        from detectors.loader import ensure_domains_loaded
+
+        ensure_domains_loaded()
+    except Exception:
+        # Fail-open: keep seed tables if plugin scan is unavailable.
+        pass
+
+
+def fault_domain_for_kind(kind: Any) -> str | None:
     """Map an anomaly kind to its fault domain, or None if unregistered."""
-    if isinstance(kind, AnomalyKind):
-        key = kind.value
-    else:
-        key = str(kind or "").strip()
-    return _KIND_TO_FAULT_DOMAIN.get(key)
+    _ensure_plugin_tables()
+    key = getattr(kind, "value", kind)
+    return _KIND_TO_FAULT_DOMAIN.get(str(key or "").strip())
 
 
 def skill_for(fault_domain: str, role: str) -> str:
@@ -46,6 +54,7 @@ def skill_for(fault_domain: str, role: str) -> str:
     Raises:
         ValueError: unknown domain or role for that domain.
     """
+    _ensure_plugin_tables()
     domain = str(fault_domain or "").strip()
     role_key = str(role or "").strip()
     if not domain or domain not in FAULT_DOMAIN_SKILLS:
@@ -63,7 +72,7 @@ _AGENT_RAS_ROOT = Path(__file__).resolve().parent.parent
 
 ROLE_SKILL_DIRS: dict[str, Path] = {
     "detection": _AGENT_RAS_ROOT / "detectors" / "skills",
-    "recovery": _AGENT_RAS_ROOT / "recovery" / "skills",
+    "review": _AGENT_RAS_ROOT / "review" / "skills",
 }
 
 ROLE_PROMPTS: dict[str, str] = {
@@ -72,8 +81,8 @@ ROLE_PROMPTS: dict[str, str] = {
         "或任何工具；最终回复只输出 SKILL 规定的 JSON 对象，禁止其他文字，"
         "禁止调用 skill_complete。"
     ),
-    "recovery": (
-        "你是可靠性恢复侧成员。SKILL 正文已由宿主内联提供，禁止调用 skill_tool "
+    "review": (
+        "你是可靠性评审侧成员。SKILL 正文已由宿主内联提供，禁止调用 skill_tool "
         "或任何工具；最终回复只输出 SKILL 规定的 JSON 对象，禁止其他文字，"
         "禁止调用 skill_complete。"
     ),

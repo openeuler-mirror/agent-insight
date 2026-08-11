@@ -12,16 +12,14 @@ const REPO_ROOT = join(HERE, "..", "..")
 const SKILL_PATHS = {
   detection: join(
     REPO_ROOT,
-    "core",
     "detectors",
     "skills",
     "llm-loop-detection",
     "SKILL.md",
   ),
-  recovery: join(
+  review: join(
     REPO_ROOT,
-    "core",
-    "recovery",
+    "review",
     "skills",
     "llm-loop-review",
     "SKILL.md",
@@ -30,7 +28,7 @@ const SKILL_PATHS = {
 
 export function loadSkillBody(role, skillName) {
   const keyed =
-    role === "recovery" ? SKILL_PATHS.recovery : SKILL_PATHS.detection
+    role === "review" ? SKILL_PATHS.review : SKILL_PATHS.detection
   const path = keyed
   if (!existsSync(path)) {
     return `(SKILL \`${skillName || role}\` 未能从本地包路径加载: ${path})`
@@ -41,7 +39,7 @@ export function loadSkillBody(role, skillName) {
 export function buildInlineSkillQuery({ role, skillName, payload }) {
   const body = loadSkillBody(role, skillName).trim()
   const task =
-    role === "recovery"
+    role === "review"
       ? `恢复材料:\n${payload}`
       : `待判定 excerpt:\n${payload}`
   return (
@@ -52,7 +50,6 @@ export function buildInlineSkillQuery({ role, skillName, payload }) {
     `按上述 Skill 要求，最终回复只输出 JSON 对象。`
   )
 }
-
 function extractJsonObject(text) {
   const raw = String(text || "").trim()
   if (!raw) return null

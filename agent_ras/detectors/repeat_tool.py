@@ -263,7 +263,7 @@ class RepeatToolCallDetector:
                 self._last_emissions.pop(sid, None)
                 return None
             signature = (
-                anomaly.kind.value,
+                str(getattr(anomaly.kind, "value", anomaly.kind)),
                 anomaly.severity.value,
                 str(anomaly.evidence.get("detector_kind") or ""),
             )
@@ -408,12 +408,13 @@ class RepeatToolCallDetector:
         tool_name: str,
         evidence: dict[str, Any],
     ) -> Anomaly:
+        kind_value = getattr(kind, "value", kind)
         return Anomaly(
             detector="repeat_tool_call",
-            kind=kind,
+            kind=str(kind_value),
             severity=severity,
             member_name=member_name,
-            summary=f"{kind.value} on {tool_name}",
+            summary=f"{kind_value} on {tool_name}",
             evidence=evidence,
         )
 
@@ -538,3 +539,30 @@ class RepeatToolCallDetector:
                 break
             streak += 1
         return streak
+
+
+def _build_repeat_tool_detector(
+    cfg: RepeatToolConfig,
+    agents: Any,
+) -> RepeatToolCallDetector | None:
+    del agents
+    if not cfg.enabled:
+        return None
+    return RepeatToolCallDetector(cfg)
+
+
+from detectors.types import DetectorPlugin  # noqa: E402
+
+DETECTOR_PLUGIN = DetectorPlugin(
+    id="repeat_tool",
+    kinds=("repeat_tool_call", "tool_call_loop"),
+    kind_to_domain={
+        "repeat_tool_call": "repeat_tool",
+        "tool_call_loop": "repeat_tool",
+    },
+    config_model=RepeatToolConfig,
+    factory=_build_repeat_tool_detector,
+    detection_skill=None,
+    anchor="tool",
+    priority=10,
+)

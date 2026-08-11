@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.models import Anomaly, AnomalyKind
+from core.models import Anomaly
 from recovery.state import PendingRecovery
 
 # --- robustness_prompts_cn ---
@@ -575,18 +575,18 @@ def user_notice_text_for(anomaly: Anomaly, locale: str = "cn") -> str | None:
     return None
 
 
-_KIND_LABELS: dict[str, dict[AnomalyKind, str]] = {
+_KIND_LABELS: dict[str, dict[str, str]] = {
     "cn": {
-        AnomalyKind.LLM_THINKING_LOOP: "思考循环",
-        AnomalyKind.LLM_THINKING_DEAD_LOOP: "思考死循环",
-        AnomalyKind.REPEAT_TOOL_CALL: "工具重复调用",
-        AnomalyKind.TOOL_CALL_LOOP: "工具调用循环",
+        "llm_thinking_loop": "思考循环",
+        "llm_thinking_dead_loop": "思考死循环",
+        "repeat_tool_call": "工具重复调用",
+        "tool_call_loop": "工具调用循环",
     },
     "en": {
-        AnomalyKind.LLM_THINKING_LOOP: "thinking loop",
-        AnomalyKind.LLM_THINKING_DEAD_LOOP: "thinking dead loop",
-        AnomalyKind.REPEAT_TOOL_CALL: "repeat tool call",
-        AnomalyKind.TOOL_CALL_LOOP: "tool call loop",
+        "llm_thinking_loop": "thinking loop",
+        "llm_thinking_dead_loop": "thinking dead loop",
+        "repeat_tool_call": "repeat tool call",
+        "tool_call_loop": "tool call loop",
     },
 }
 
@@ -596,7 +596,8 @@ def _kind_label_for(anomaly: Anomaly, locale: str) -> str:
     if loc == "zh":
         loc = "cn"
     labels = _KIND_LABELS.get(loc) or _KIND_LABELS["cn"]
-    return labels.get(anomaly.kind, anomaly.kind.value)
+    key = str(getattr(anomaly.kind, "value", anomaly.kind))
+    return labels.get(key, key)
 
 
 def interrupted_abnormal_degrade_user_notice(locale: str = "cn") -> str:
@@ -657,7 +658,10 @@ def critical_text_for(anomaly: Anomaly, locale: str = "cn") -> str:
 def generic_steer_text_for(anomaly: Anomaly, locale: str = "cn") -> str:
     template = _GENERIC_STEER_EN if locale == "en" else _GENERIC_STEER_CN
     try:
-        body = template.format(kind=anomaly.kind.value, summary=anomaly.summary)
+        body = template.format(
+            kind=str(getattr(anomaly.kind, "value", anomaly.kind)),
+            summary=anomaly.summary,
+        )
     except (KeyError, IndexError):
         body = template
     return format_steering(body)

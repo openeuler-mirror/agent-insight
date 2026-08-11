@@ -1,8 +1,8 @@
 # 故障域插件化：detectors / review / recovery 三分治（规划）
 
 > 范围：仓根 `agent_ras/`。检测、**评审**、恢复三棵树平级扩展；目录扫描 + `*_PLUGIN` 自动注册；**不设** `fault_domains/`。  
-> 状态：前置 P0/P1 已落地；P2 未落地。对照代码再核 2026-08-10（`c7cce29` 仅文档/xiaoo，无插件 Loader）。  
-> 版本：v0.8.1 · 2026-08-10
+> 状态：**P2 已落地**（DomainLoader + 三分治 PLUGIN；`llm-loop-review` → `review/skills`；role=`review`）。  
+> 版本：v0.8.1 · 2026-08-10（实现对照同日）
 
 ---
 
@@ -150,9 +150,9 @@ RECOVERY_PLUGIN = RecoveryPlugin(
 
 建议仍补：设计文档登记 + 单测（算「新增」，不是改框架）。
 
-### 5.3 今日（P2 未落地）
+### 5.3 历史（P2 落地前）
 
-仍须改 `config` / `models` / `DETECTOR_BUILDERS` / overrides / prompt / skill 表等——正是 P2 要消掉的触点。
+曾须改 `config` / `models` / `DETECTOR_BUILDERS` / overrides / prompt / skill 表——**P2 已消除这些常规触点**。
 
 ---
 
@@ -169,4 +169,4 @@ RECOVERY_PLUGIN = RecoveryPlugin(
 ## 7. 文档同步
 
 - [x] v0.8.1：三分治；文案与策略同文件；新增触点清单  
-- [ ] 落地后更新 modules 指南与 README 状态
+- [x] P2 落地后更新 modules 指南与 README 状态

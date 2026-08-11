@@ -48,7 +48,9 @@ class PendingRecovery:
         elif channel == "text_repetition":
             source = "text_repetition"
         else:
-            source = mode or channel or anomaly.kind.value
+            source = mode or channel or str(
+                getattr(anomaly.kind, "value", anomaly.kind)
+            )
         extra = evidence
         if not str(extra.get("fault_domain") or "").strip():
             # Deferred import: agents.base -> core.models -> core/__init__ ->

@@ -91,9 +91,25 @@ async def run() -> None:
             f"anomaly={out.get('anomaly')!r})"
         )
     req = reqs[0]
+    role = req.get("role")
+    skill_name = req.get("skill_name")
     print(
-        f"[e2e-l3] skill_request ok role={req.get('role')} "
-        f"skill={req.get('skill_name')} id={req.get('request_id')}"
+        f"[e2e-l3] skill_request ok role={role} "
+        f"skill={skill_name} id={req.get('request_id')}"
+    )
+    if role != "detection" or skill_name != "llm-loop-detection":
+        raise SystemExit(
+            f"FAIL: unexpected skill_request role/skill "
+            f"role={role!r} skill={skill_name!r}"
+        )
+    from agents.base import ROLE_SKILL_DIRS, load_skill_body
+
+    review_body = load_skill_body("review", "llm-loop-review")
+    if not review_body or "review" not in ROLE_SKILL_DIRS:
+        raise SystemExit("FAIL: review skill path / body missing after P2")
+    print(
+        f"[e2e-l3] review_skill_ok chars={len(review_body)} "
+        f"dir={ROLE_SKILL_DIRS['review']}"
     )
     payload_preview = str(req.get("payload") or "")[:60].replace("\n", " ")
     print(f"[e2e-l3] payload_preview={payload_preview!r}...")

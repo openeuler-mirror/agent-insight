@@ -20,7 +20,7 @@ class Severity(str, Enum):
 
 
 class AnomalyKind(str, Enum):
-    """The kind of unhealthy behavior a detector identified."""
+    """Built-in anomaly kind constants (plugins may emit other string kinds)."""
 
     REPEAT_TOOL_CALL = "repeat_tool_call"
     TOOL_CALL_LOOP = "tool_call_loop"
@@ -32,7 +32,7 @@ class Anomaly(BaseModel):
     """A detected unhealthy condition awaiting remediation."""
 
     detector: str = Field(..., description="Detector identifier")
-    kind: AnomalyKind = Field(..., description="Anomaly category")
+    kind: str = Field(..., description="Anomaly category (string; see AnomalyKind for builtins)")
     severity: Severity = Field(..., description="Severity level")
     member_name: str = Field(..., description="Affected member")
     summary: str = Field(..., description="One-line description for human/LLM")

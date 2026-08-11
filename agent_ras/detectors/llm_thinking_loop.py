@@ -798,11 +798,38 @@ class LlmThinkingLoopDetector:
         member: str,
         evidence: dict[str, Any],
     ) -> Anomaly:
+        kind_value = getattr(kind, "value", kind)
         return Anomaly(
             detector="llm_thinking_loop",
-            kind=kind,
+            kind=str(kind_value),
             severity=severity,
             member_name=member,
-            summary=f"{kind.value} ({evidence.get('mode', '?')})",
+            summary=f"{kind_value} ({evidence.get('mode', '?')})",
             evidence=evidence,
         )
+
+
+def _build_llm_thinking_loop_detector(
+    cfg: LlmThinkingLoopConfig,
+    agents: RASAgents,
+) -> LlmThinkingLoopDetector | None:
+    if not cfg.enabled:
+        return None
+    return LlmThinkingLoopDetector(cfg, agents=agents)
+
+
+from detectors.types import DetectorPlugin  # noqa: E402
+
+DETECTOR_PLUGIN = DetectorPlugin(
+    id="llm_thinking_loop",
+    kinds=("llm_thinking_loop", "llm_thinking_dead_loop"),
+    kind_to_domain={
+        "llm_thinking_loop": "llm_thinking_loop",
+        "llm_thinking_dead_loop": "llm_thinking_loop",
+    },
+    config_model=LlmThinkingLoopConfig,
+    factory=_build_llm_thinking_loop_detector,
+    detection_skill="llm-loop-detection",
+    anchor="llm",
+    priority=20,
+)

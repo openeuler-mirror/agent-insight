@@ -60,17 +60,13 @@ DEFAULT_SEVERITY_ACTIONS: dict[Severity, list[RecoveryAction]] = {
     Severity.CRITICAL: [RecoveryAction.INJECT_STEERING, RecoveryAction.ESCALATE_USER],
 }
 
-# Kind → set of atomic ops (primary mapping source).
-DEFAULT_KIND_OVERRIDES: dict[AnomalyKind, list[RecoveryAction]] = {
-    AnomalyKind.LLM_THINKING_LOOP: [
-        RecoveryAction.OBSERVE_ONLY,
-        RecoveryAction.SUPPRESS_STREAM,
-    ],
-    AnomalyKind.LLM_THINKING_DEAD_LOOP: [
-        RecoveryAction.OBSERVE_ONLY,
-        RecoveryAction.SUPPRESS_STREAM,
-    ],
-}
+# Kind → set of atomic ops — defaults come from RECOVERY_PLUGIN via loader.
+DEFAULT_KIND_OVERRIDES: dict[str, list[RecoveryAction]] = {}
+
+
+def _kind_key(kind: Any) -> str:
+    return str(getattr(kind, "value", kind) or "").strip()
+
 
 _IMMEDIATE_OPS = frozenset({
     RecoveryAction.INJECT_STEERING,
@@ -91,19 +87,23 @@ class RecoveryPolicy:
     def __init__(
         self,
         severity_actions: dict[Severity, list[RecoveryAction]] | None = None,
-        kind_overrides: dict[AnomalyKind, list[RecoveryAction]] | None = None,
+        kind_overrides: dict[str, list[RecoveryAction]] | None = None,
     ) -> None:
         self._map = dict(severity_actions) if severity_actions else dict(DEFAULT_SEVERITY_ACTIONS)
-        self._kind_overrides = dict(kind_overrides) if kind_overrides else {}
+        self._kind_overrides = {
+            _kind_key(k): list(v) for k, v in (kind_overrides or {}).items()
+        }
 
     def actions_for(
         self,
         severity: Severity,
-        kind: AnomalyKind | None = None,
+        kind: Any = None,
     ) -> list[RecoveryAction]:
         """Return configured ops for ``kind`` override, else severity defaults."""
-        if kind is not None and kind in self._kind_overrides:
-            return list(self._kind_overrides[kind])
+        if kind is not None:
+            key = _kind_key(kind)
+            if key in self._kind_overrides:
+                return list(self._kind_overrides[key])
         return list(self._map.get(severity, []))
 
     def ops_for(self, anomaly: Anomaly) -> set[RecoveryAction]:
@@ -112,9 +112,14 @@ class RecoveryPolicy:
 
     @classmethod
     def from_config(cls, config: Any) -> "RecoveryPolicy":
-        """Build policy with default kind overrides merged over config overrides."""
-        kind_overrides = dict(DEFAULT_KIND_OVERRIDES)
-        kind_overrides.update(getattr(config, "kind_overrides", {}) or {})
+        """Build policy with plugin kind overrides merged over config overrides."""
+        from detectors.loader import recovery_kind_overrides
+
+        kind_overrides: dict[str, list[RecoveryAction]] = {
+            _kind_key(k): list(v) for k, v in recovery_kind_overrides().items()
+        }
+        for k, actions in (getattr(config, "kind_overrides", {}) or {}).items():
+            kind_overrides[_kind_key(k)] = list(actions)
         # Drop legacy DEFER_HITL if present in host overrides.
         for kind, actions in list(kind_overrides.items()):
             kind_overrides[kind] = [
@@ -274,15 +279,21 @@ def plan_recovery(
     if RecoveryAction.TERMINATE in actions:
         if (
             anomaly.severity == Severity.CRITICAL
-            and anomaly.kind in (AnomalyKind.REPEAT_TOOL_CALL, AnomalyKind.TOOL_CALL_LOOP)
+            and str(getattr(anomaly.kind, "value", anomaly.kind))
+            in (
+                AnomalyKind.REPEAT_TOOL_CALL.value,
+                AnomalyKind.TOOL_CALL_LOOP.value,
+            )
         ):
+            kind_label = str(getattr(anomaly.kind, "value", anomaly.kind))
             plan.terminate_message = critical_text_for(anomaly, locale=loc) or (
-                f"[agent_ras] {anomaly.kind.value} detected: {anomaly.summary}"
+                f"[agent_ras] {kind_label} detected: {anomaly.summary}"
             )
             plan.terminate_critical = True
         else:
             plan.terminate_message = (
-                f"[agent_ras] {anomaly.kind.value} detected: {anomaly.summary}"
+                f"[agent_ras] {str(getattr(anomaly.kind, 'value', anomaly.kind))} "
+                f"detected: {anomaly.summary}"
             )
 
     return plan
@@ -405,7 +416,7 @@ class RecoveryExecutor:
         if plan.user_notice and self._allowed(RecoveryAction.REPORT_TO_USER):
             logger.warning(
                 "[RecoveryExecutor] user notice (%s/%s): %s",
-                anomaly.kind.value,
+                getattr(anomaly.kind, "value", anomaly.kind),
                 anomaly.severity.value,
                 plan.user_notice,
             )
@@ -419,7 +430,7 @@ class RecoveryExecutor:
         ):
             logger.warning(
                 "[RecoveryExecutor] recovery notice (%s): %s",
-                anomaly.kind.value,
+                getattr(anomaly.kind, "value", anomaly.kind),
                 plan.recovery_notice,
             )
             await emit_user_notice(ctx, plan.recovery_notice)
@@ -427,7 +438,7 @@ class RecoveryExecutor:
         if plan.steering_text:
             logger.info(
                 "[RecoveryExecutor] steering pushed for %s (%s chars)",
-                anomaly.kind.value,
+                getattr(anomaly.kind, "value", anomaly.kind),
                 len(plan.steering_text),
             )
             await inject_steering(ctx, plan.steering_text)

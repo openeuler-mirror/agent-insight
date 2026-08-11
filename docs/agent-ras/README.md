@@ -29,6 +29,7 @@
 |------|------|
 | [monitor.md](designs/modules/monitor.md) | Monitor 编排、与 Rail / Detector / Recovery / L3 Reviewer 协作 |
 | [detectors.md](designs/modules/detectors.md) | 检测器接入、扩展点、已有检测器摘要 |
+| [review.md](designs/modules/review.md) | L3 语义评审 skill（`role=review`）与 REVIEW_PLUGIN |
 | [recovery.md](designs/modules/recovery.md) | anomaly → wire actions → Host 投递 |
 | [ras-runtime.md](designs/modules/ras-runtime.md) | L1 门面、旁路 push 边界、trace/delivery 锚点 |
 | [platform-adapter.md](designs/modules/platform-adapter.md) | L2/L3 挂载、多平台能力矩阵、HostControl、加平台 checklist |
@@ -48,7 +49,7 @@
 | [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（S1–S4 已落地；S5 压缩失真未做） | FI S1–S4 已落地 |
 | [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc + Daemon SSE 控制面（FI 零改动） | 已落地（Daemon harness） |
 | [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO OTel 观测（现网 OTLP + RAS join；Insight 最小侵入） | 已落地 |
-| [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；llm-loop-review 归 review/；无 fault_domains | 部分落地（P0/P1；P2 方案 v0.8） |
+| [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；llm-loop-review 归 review/；无 fault_domains | **已落地（P0–P2，v0.8.1）** |
 
 ---
 
