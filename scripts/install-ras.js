@@ -117,7 +117,8 @@ function installXiaooHooker(runtimeRoot, rasRoot, home = os.homedir()) {
   }
   const pluginPath = path.join(destRoot, 'plugin.json')
   // Plugin hooks only (Chat / Tool / Session). stream_delta is NOT a hook_point —
-  // xiaoO gateway LoopEventSink invokes hooker_main.py stream_delta directly.
+  // xiaoO gateway LoopEventSink invokes hooker_main.py stream_delta for RAS ①
+  // observe only (no Trace / no Insight note_*).
   const entries = [
     ['agent_ras_chat_received', '*.Chat.message.received', 'chat_received'],
     ['agent_ras_tool_post', '*.Tool.*.post', 'tool_post'],
@@ -497,6 +498,22 @@ function installRas(options = {}) {
     const xiaoo = installXiaooHooker(runtimeRoot, rasRoot, options.home || os.homedir())
     if (!xiaoo.ok) {
       console.warn(`⚠️  xiaoO hooker install skipped: ${xiaoo.error}`)
+    } else {
+      // Insight ⓪ Trace collector (complete link); RAS hooker no longer owns OTel.
+      const collectorInstall = path.join(__dirname, 'xiaoo-trace-collector', 'install.js')
+      if (fs.existsSync(collectorInstall)) {
+        const col = spawnSync(process.execPath, [collectorInstall], {
+          encoding: 'utf8',
+          env,
+        })
+        if (col.status !== 0) {
+          console.warn(
+            `⚠️  xiaoo-trace-collector install skipped: ${(col.stderr || col.stdout || '').trim()}`,
+          )
+        } else if (col.stdout) {
+          process.stdout.write(col.stdout)
+        }
+      }
     }
 
     fs.writeFileSync(
