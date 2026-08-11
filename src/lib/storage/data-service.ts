@@ -1298,21 +1298,26 @@ export async function listObservedAgentNames(user?: string, observedAgentFallbac
     const records = await db.findExecutions(
         where,
         { timestamp: 'desc' },
-        { agentName: true, observedAgents: true },
+        { framework: true, agentName: true, observedAgents: true },
     );
     const names: string[] = [];
     const seen = new Set<string>();
     for (const record of records) {
-        const name = String(
+        const primary = String(
             record?.agentName
             || (observedAgentFallback
                 ? parseObservedAgents(record?.observedAgents).find(agent => !isEvaluatorAgentName(agent))
                 : '')
             || '',
         ).trim();
-        if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
-        seen.add(name);
-        names.push(name);
+        const candidates = record?.framework === 'pi-agent'
+            ? [primary, ...parseObservedAgents(record?.observedAgents)]
+            : [primary];
+        for (const name of candidates) {
+            if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
+            seen.add(name);
+            names.push(name);
+        }
     }
     return names;
 }

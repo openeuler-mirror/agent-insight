@@ -9,6 +9,28 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
+
+// `frameworks` is inserted into generated shell scripts. Keep this an explicit
+// allowlist instead of interpolating arbitrary query values.
+const FRAMEWORKS: { value: string; label: string }[] = [
+    { value: 'opencode', label: 'OpenCode' },
+    { value: 'claude', label: 'Claude Code' },
+    { value: 'codeagent', label: 'CodeAgent' },
+    { value: 'hermes', label: 'Hermes' },
+    { value: 'openclaw', label: 'OpenClaw' },
+    { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'llamaindex', label: 'LlamaIndex' },
+    { value: 'qoder', label: 'Qoder CN product family' },
+    { value: 'trae', label: 'Trae IDE' },
+    { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
+];
+
+function parseFrameworks(raw: string | null): { value: string; label: string }[] {
+    if (!raw) return [];
+    const wanted = new Set(raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean));
+    return FRAMEWORKS.filter(framework => wanted.has(framework.value));
+}
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -44,6 +66,7 @@ export async function GET(request: Request) {
     const llamaIndexPythonMode = requestedPythonMode === 'global' || requestedPythonMode === 'venv'
         ? requestedPythonMode
         : 'auto';
+    const preselected = parseFrameworks(searchParams.get('frameworks'));
 
     if (!apiKey || !hostParam) {
         return new NextResponse('Missing required parameters: apiKey and host', {
@@ -65,14 +88,23 @@ export async function GET(request: Request) {
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        return generatePowerShellScript(baseUrl, hostParam, apiKey, llamaIndexVenv, llamaIndexPythonMode);
+        return generatePowerShellScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
     }
     
-    return generateBashScript(baseUrl, hostParam, apiKey, llamaIndexVenv, llamaIndexPythonMode);
+    return generateBashScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
 }
 
-function generateBashScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
+function generateBashScript(
+    baseUrl: string,
+    hostParam: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    llamaIndexVenv: string,
+    llamaIndexPythonMode: string,
+): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const selectedFrameworks = preselected.map(framework => framework.value).join(',');
+    const frameworksPreselected = preselected.length > 0;
     const script = `#!/bin/bash
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
@@ -112,7 +144,13 @@ mkdir -p "$HOME/.openclaw/agents"
 mkdir -p ".opencode/skills"
 echo "📂 Created necessary directories"
 
-# 2. Interactive Framework Selection with inquirer
+# 2. Framework selection
+FRAMEWORKS_PRESELECTED="${frameworksPreselected ? 'true' : 'false'}"
+SELECTED_FRAMEWORKS="${bashDoubleQuoted(selectedFrameworks)}"
+if [ "$FRAMEWORKS_PRESELECTED" = "true" ]; then
+    echo "✅ 将安装预选组件: $SELECTED_FRAMEWORKS"
+else
+# 2b. Interactive Framework Selection with inquirer
 echo ""
 
 SELECTOR_SCRIPT="$HOME/.agent-insight/framework_selector.mjs"
@@ -139,7 +177,8 @@ const frameworks = [
     { name: 'LlamaIndex', value: 'llamaindex' },
     { name: 'Qoder CN product family', value: 'qoder' },
     { name: 'Trae IDE', value: 'trae' },
-    { name: 'AcTrail', value: 'actrail' }
+    { name: 'AcTrail', value: 'actrail' },
+    { name: 'Pi Agent', value: 'pi-agent' }
 ];
 
 async function select() {
@@ -202,6 +241,7 @@ if [ -f "$SELECTOR_RESULT" ]; then
     rm -f "$SELECTOR_RESULT"
 else
     SELECTED_FRAMEWORKS=""
+fi
 fi
 
 # Set installation flags based on selection
@@ -627,6 +667,17 @@ if [ "$LLAMAINDEX_READY" = "true" ]; then
     fi
 fi
 
+# 6.3 Install Pi Agent collector
+if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
+    echo "⏬ Installing Pi Agent collector..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    PI_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER"
+    if ! sh "$PI_INSTALLER"; then rm -f "$PI_INSTALLER"; exit 1; fi
+    rm -f "$PI_INSTALLER"
+fi
+
 # 6.35 Install Qoder CN product-family collectors
 if [ "$INSTALL_QODER" = "true" ]; then
     if node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop --owner=desktop && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains --owner=jetbrains && node "$QODER_DIST_DIR/qoder_work_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY"; then
@@ -911,6 +962,9 @@ fi
 if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
     echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
+    echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -963,8 +1017,17 @@ echo "------------------------------------------------"
     });
 }
 
-function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
+function generatePowerShellScript(
+    baseUrl: string,
+    hostParam: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    llamaIndexVenv: string,
+    llamaIndexPythonMode: string,
+): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const selectedFrameworks = preselected.map(framework => framework.value).join(',');
+    const frameworksPreselected = preselected.length > 0;
     const script = [
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
@@ -1012,7 +1075,13 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'New-Item -ItemType Directory -Force -Path ".opencode\\skills" | Out-Null',
         'Write-Host "📂 Created necessary directories"',
         '',
-        '# 2. Interactive Framework Selection with inquirer',
+        '# 2. Framework selection',
+        '$FRAMEWORKS_PRESELECTED = ' + (frameworksPreselected ? '$true' : '$false'),
+        '$SELECTED_FRAMEWORKS = "' + powerShellDoubleQuoted(selectedFrameworks) + '"',
+        'if ($FRAMEWORKS_PRESELECTED) {',
+        '    Write-Host "✅ 将安装预选组件: $SELECTED_FRAMEWORKS"',
+        '} else {',
+        '# 2b. Interactive Framework Selection with inquirer',
         'Write-Host ""',
         '',
         '$SELECTOR_SCRIPT = Join-Path $skillInsightDir "framework_selector.mjs"',
@@ -1039,7 +1108,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'LlamaIndex\', value: \'llamaindex\' },"',
         '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
         '    "    { name: \'Trae IDE\', value: \'trae\' },"',
-        '    "    { name: \'AcTrail\', value: \'actrail\' }"',
+        '    "    { name: \'AcTrail\', value: \'actrail\' },"',
+        '    "    { name: \'Pi Agent\', value: \'pi-agent\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1104,6 +1174,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Remove-Item $SELECTOR_RESULT -Force',
         '} else {',
         '    $SELECTED_FRAMEWORKS = ""',
+        '}',
         '}',
         '',
         '# Set installation flags based on selection',
@@ -1522,6 +1593,21 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    }',
         '}',
         '',
+        '# 6.3 Install Pi Agent collector',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") {',
+        '    Write-Host "⏬ Installing Pi Agent collector..."',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $piInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-pi-agent-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '    try {',
+        '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -OutFile $piInstaller',
+        '        & $piInstaller',
+        '        if ($LASTEXITCODE -ne 0) { throw "Pi Agent collector installer failed with exit code $LASTEXITCODE." }',
+        '    } finally {',
+        '        Remove-Item -LiteralPath $piInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        '',
         '# 6.35 Install Qoder CN product-family collectors',
         'if ($INSTALL_QODER) {',
         '    & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli',
@@ -1785,6 +1871,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',

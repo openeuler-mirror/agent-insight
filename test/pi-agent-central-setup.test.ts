@@ -9,9 +9,9 @@ import { GET as getCentralSetup } from "@/app/api/ingest/setup/route"
 import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "pi-agent"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "pi-agent"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "pi-agent"]
+const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "qoder", "trae", "pi-agent"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "qoder", "trae", "pi-agent"]
+const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "qoder", "trae", "pi-agent"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
@@ -103,7 +103,7 @@ test("central setup preselects only Pi and keeps no-parameter installs interacti
     assert.match(script, /SELECTED_FRAMEWORKS="pi-agent"/)
     assert.match(script, /FRAMEWORKS_PRESELECTED="true"/)
     assert.match(script, /api\/ingest\/setup\/pi-agent/)
-    assert.match(script, /INSTALL_PI_AGENT=true/)
+    assert.match(script, /Installing Pi Agent collector/)
   }
 
   assert.match(await centralScript("unix"), /FRAMEWORKS_PRESELECTED="false"/)

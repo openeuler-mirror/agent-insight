@@ -57,6 +57,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },
     { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -105,6 +106,7 @@ function generateBashScript(
 ): string {
     const llamaIndexOnly = preselected.length === 1 && preselected[0].value === 'llamaindex';
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const frameworksPreselected = preselected.length > 0;
     const lines = [
         '#!/bin/bash',
         '# =============================================================================',
@@ -177,6 +179,7 @@ function generateBashScript(
         // 安装页勾选了框架时，SELECTED_FRAMEWORKS 直接写死，跳过下面整段交互式选择——
         // 那段要 npm install inquirer/tsx + npx，内网/离线环境访问不到 registry 就卡死在这里。
         '# 2. Framework selection',
+        'FRAMEWORKS_PRESELECTED="' + (frameworksPreselected ? 'true' : 'false') + '"',
         'SELECTED_FRAMEWORKS="' + preselected.map(f => f.value).join(',') + '"',
         'if [ "$NONINTERACTIVE" = "true" ]; then SELECTED_FRAMEWORKS="$NONINTERACTIVE_FRAMEWORKS"; fi',
         'if [ -n "$SELECTED_FRAMEWORKS" ]; then',
@@ -214,7 +217,8 @@ function generateBashScript(
         '    { name: \'LlamaIndex\', value: \'llamaindex\' },',
         '    { name: \'Qoder CN product family\', value: \'qoder\' },',
         '    { name: \'Trae IDE\', value: \'trae\' },',
-        '    { name: \'AcTrail\', value: \'actrail\' }',
+        '    { name: \'AcTrail\', value: \'actrail\' },',
+        '    { name: \'Pi Agent\', value: \'pi-agent\' }',
         '];',
         '',
         'async function select() {',
@@ -721,6 +725,21 @@ function generateBashScript(
         '    fi',
         'fi',
         '',
+        '# 6.3 Install Pi Agent collector',
+        'if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then',
+        '    if [ -z "$FINAL_KEY" ]; then',
+        '        echo "Warning: Pi Agent collector installation requires an API key; configure one and rerun setup."',
+        '    else',
+        '        echo "⏬ Installing Pi Agent collector..."',
+        '        export AGENT_INSIGHT_API_KEY="$FINAL_KEY"',
+        '        export AGENT_INSIGHT_BASE_URL',
+        '        PI_INSTALLER="$(mktemp)"',
+        '        curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER"',
+        '        if ! sh "$PI_INSTALLER"; then rm -f "$PI_INSTALLER"; exit 1; fi',
+        '        rm -f "$PI_INSTALLER"',
+        '    fi',
+        'fi',
+        '',
         '# 6.35 Install Qoder CN product-family collectors',
         'if [ "$INSTALL_QODER" = "true" ]; then',
         '    if [ -z "$FINAL_KEY" ]; then',
@@ -1053,6 +1072,7 @@ function generateBashScript(
         'if [ "$LLAMAINDEX_READY" = "true" ]; then echo "  ✅ LlamaIndex Trace Collector: $LLAMAINDEX_SOURCE_DIR"; fi',
         'if [ "$INSTALL_TRAE" = "true" ]; then echo "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"; fi',
         'if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"; fi',
+        'if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"; fi',
         '',
         'if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then',
         '    echo ""',
@@ -1073,6 +1093,7 @@ function generateBashScript(
         'if [ "$LLAMAINDEX_READY" = "true" ]; then echo "  6. Restart terminal, then run: \\"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\\" -m agent_insight_llamaindex.cli run -- \\"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\\" app.py"; fi',
         'if [ "$INSTALL_TRAE" = "true" ]; then echo "  6. Restart TRAE IDE to activate the collector"; fi',
         'if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then echo "  7. Use actrailctl launch as usual; AcTrail will upload automatically"; fi',
+        'if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then echo "  7. Start a new Pi session"; fi',
         'echo "------------------------------------------------"',
     ];
     return lines.join('\n');
@@ -1091,6 +1112,7 @@ function generatePowerShellScript(
 ): string {
     const llamaIndexOnly = preselected.length === 1 && preselected[0].value === 'llamaindex';
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const frameworksPreselected = preselected.length > 0;
     const lines = [
         '# =============================================================================',
         '# Agent-insight One-Click Setup (PowerShell)',
@@ -1146,6 +1168,7 @@ function generatePowerShellScript(
         '',
         // 同 bash 侧：安装页勾选后跳过 inquirer 交互，免去 npm registry 依赖。
         '# 2. Framework selection',
+        '$FRAMEWORKS_PRESELECTED = ' + (frameworksPreselected ? '$true' : '$false'),
         '$SELECTED_FRAMEWORKS = "' + preselected.map(f => f.value).join(',') + '"',
         'if ($NONINTERACTIVE) { $SELECTED_FRAMEWORKS = $NONINTERACTIVE_FRAMEWORKS }',
         'if ($SELECTED_FRAMEWORKS) {',
@@ -1183,7 +1206,8 @@ function generatePowerShellScript(
         '    { name: \'LlamaIndex\', value: \'llamaindex\' },',
         '    { name: \'Qoder CN product family\', value: \'qoder\' },',
         '    { name: \'Trae IDE\', value: \'trae\' },',
-        '    { name: \'AcTrail\', value: \'actrail\' }',
+        '    { name: \'AcTrail\', value: \'actrail\' },',
+        '    { name: \'Pi Agent\', value: \'pi-agent\' }',
         '];',
         '',
         'async function select() {',
@@ -1715,6 +1739,25 @@ function generatePowerShellScript(
         '    }',
         '}',
         '',
+        '# 6.3 Install Pi Agent collector',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") {',
+        '    if (-not $FINAL_KEY) {',
+        '        Write-Host "Warning: Pi Agent collector installation requires an API key; configure one and rerun setup."',
+        '    } else {',
+        '        Write-Host "⏬ Installing Pi Agent collector..."',
+        '        $env:AGENT_INSIGHT_API_KEY = $FINAL_KEY',
+        '        $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '        $piInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-pi-agent-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '        try {',
+        '            Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -OutFile $piInstaller',
+        '            & $piInstaller',
+        '            if ($LASTEXITCODE -ne 0) { throw "Pi Agent collector installer failed with exit code $LASTEXITCODE." }',
+        '        } finally {',
+        '            Remove-Item -LiteralPath $piInstaller -Force -ErrorAction SilentlyContinue',
+        '        }',
+        '    }',
+        '}',
+        '',
         '# 6.35 Install Qoder CN product-family collectors',
         'if ($INSTALL_QODER) {',
         '    if (-not $FINAL_KEY) {',
@@ -2029,6 +2072,7 @@ function generatePowerShellScript(
         'if ($LLAMAINDEX_READY) { Write-Host "  ✅ LlamaIndex Trace Collector: $llamaIndexSourceDir" }',
         'if (\$INSTALL_TRAE) { Write-Host "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0" }',
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) { Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $homeDir\\.agent-insight\\collectors\\pi-agent" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2049,6 +2093,7 @@ function generatePowerShellScript(
         'if ($LLAMAINDEX_READY) { Write-Host "  6. Restart PowerShell, then run: & `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" -m agent_insight_llamaindex.cli run -- `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" app.py" }',
         'if ($INSTALL_TRAE) { Write-Host "  6. Restart TRAE IDE to activate the collector" }',
         'if ($INSTALL_ACTRAIL) { Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  7. Start a new Pi session" }',
         'Write-Host "------------------------------------------------"',
     ];
     return lines.join('\n');
