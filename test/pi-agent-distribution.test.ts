@@ -1,11 +1,15 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"
+import { createRequire } from "node:module"
 import path from "node:path"
 import test from "node:test"
 
 import { GET as getInstaller } from "@/app/api/ingest/setup/pi-agent/route"
 import { GET as getAsset } from "@/app/api/ingest/setup/pi-agent/assets/[asset]/route"
+
+const require = createRequire(import.meta.url)
+const { isSupportedPiVersion } = require("../scripts/agent-trace-collectors/pi-agent/install.cjs")
 
 const ASSETS = [
   "package.json",
@@ -91,7 +95,7 @@ test("Pi setup asset route serves only the fixed first-party allowlist", async (
   assert.equal(prototypeAsset.status, 404)
 })
 
-test("Pi package manifest declares the real Extension entry and compatible Pi range", () => {
+test("Pi package manifest declares the real Extension entry and an open-ended compatible Pi range", () => {
   const manifestPath = path.join(
     process.cwd(),
     "scripts",
@@ -101,7 +105,16 @@ test("Pi package manifest declares the real Extension entry and compatible Pi ra
   )
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
   assert.deepEqual(manifest.pi.extensions, ["./extensions/pi-agent-insight.ts"])
-  assert.equal(manifest.peerDependencies["@earendil-works/pi-coding-agent"], ">=0.82.1 <0.83.0")
+  assert.equal(manifest.peerDependencies["@earendil-works/pi-coding-agent"], ">=0.82.1")
+})
+
+test("Pi installer accepts newer semver releases while rejecting unsupported versions", () => {
+  assert.equal(isSupportedPiVersion("pi 0.82.1"), true)
+  assert.equal(isSupportedPiVersion("0.82.2-beta.1"), true)
+  assert.equal(isSupportedPiVersion("0.83.0"), true)
+  assert.equal(isSupportedPiVersion("v1.0.0"), true)
+  assert.equal(isSupportedPiVersion("0.82.0"), false)
+  assert.equal(isSupportedPiVersion("unknown"), false)
 })
 
 test("uninstall script refuses to mutate a source checkout outside the managed package path", () => {

@@ -137,7 +137,7 @@ function resultText(result) {
   return messageText(result) || safeContent(result?.content) || safeContent(result) || "";
 }
 
-// Pi 0.82.x 的 subagent/skill 委派工具会 spawn 一个独立 `pi` 进程执行子任务：
+// Pi 的 subagent/skill 委派工具会 spawn 一个独立 `pi` 进程执行子任务：
 //   pi --mode json -p --no-session [--model ..] [--tools ..] "Task: <task>"
 // 该 worker 进程同样加载本采集器并独立上传一份事件，与主进程 subagent 事件的
 // 派生记录重复（同一个 worker 被记成两条、且出现 "Task: " 前缀的假主记录）。

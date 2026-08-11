@@ -113,8 +113,8 @@ Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id`
 
 ### 流程四：接入 Pi Agent
 
-Pi Agent 采集器支持 `@earendil-works/pi-coding-agent` 0.82.x，并要求 Node.js 22.19.0
-或更高版本。在运行 Pi 的 Linux 或 macOS 终端执行：
+Pi Agent 采集器以 `@earendil-works/pi-coding-agent` 0.82.1 为最低基线，并接受后续
+语义化版本；Node.js 要求 22.19.0 或更高版本。在运行 Pi 的 Linux 或 macOS 终端执行：
 
 ```bash
 export AGENT_INSIGHT_API_KEY="<当前账号 API Key>"
@@ -130,7 +130,8 @@ rm -f "$installer"
 
 安装脚本从当前 Agent Insight 服务下载固定 allowlist 中的 Extension、collector core 和共享
 transport，写入 `~/.agent-insight/collectors/`，再执行 `pi install` 与 self-check。API Key
-只写入权限为 `0600` 的本地 `config.json`，不会出现在资产下载 URL 中。
+只写入权限为 `0600` 的本地 `config.json`，不会出现在资产下载 URL 中；上传前会脱敏 API
+Key、常见密钥赋值文本以及本机绝对路径。
 
 手工安装时可直接把 `pi-agent` package 和相邻的 `shared/trace-transport.cjs` 放入
 `~/.agent-insight/collectors/`，创建同样的 `config.json`，再执行：

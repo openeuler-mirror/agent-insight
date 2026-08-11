@@ -85,6 +85,16 @@ test("transport redacts recursively before Unicode code-point truncation", () =>
   assert.equal(otlp.attributes[0].value.stringValue, "[REDACTED]")
   assert.equal(otlp.attributes[1].value.intValue, "123")
 
+  const privateText = transport.redactString([
+    "AGENT_INSIGHT_API_KEY=private-value",
+    ["C:", "Users", "alice", "project", "secret.txt"].join("\\"),
+    ["", "home", "alice", ".pi", "settings.json"].join("/"),
+    ["", "", "wsl.localhost", "Ubuntu", "home", "alice", "collector"].join("\\"),
+  ].join(" "))
+  assert.match(privateText, /AGENT_INSIGHT_API_KEY=\[REDACTED\]/)
+  assert.match(privateText, /\[LOCAL_PATH\]/)
+  assert.doesNotMatch(privateText, /alice|private-value|C:\\Users|\/home\/alice|wsl\.localhost/)
+
   const unicode = "🙂".repeat(2001)
   const truncated = transport.truncateCodePoints(unicode, 2000)
   assert.equal(Array.from(truncated.slice(0, 4000)).length, 2000)

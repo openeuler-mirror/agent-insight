@@ -36,6 +36,23 @@ function piCommand() {
   return "pi";
 }
 
+const MIN_PI_VERSION = [0, 82, 1];
+
+function parseSemver(value) {
+  const match = /v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?/.exec(String(value || ""));
+  return match ? match.slice(1, 4).map(Number) : null;
+}
+
+function isSupportedPiVersion(value) {
+  const version = parseSemver(value);
+  if (!version) return false;
+  for (let index = 0; index < MIN_PI_VERSION.length; index += 1) {
+    if (version[index] > MIN_PI_VERSION[index]) return true;
+    if (version[index] < MIN_PI_VERSION[index]) return false;
+  }
+  return true;
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
@@ -57,9 +74,9 @@ function assertSupportedRuntime(skipVersionCheck = false) {
   }
   if (skipVersionCheck) return;
   const result = run(piCommand(), ["--version"]);
-  const match = /(\d+)\.(\d+)\.(\d+)/.exec(`${result.stdout}\n${result.stderr}`);
-  if (!match || Number(match[1]) !== 0 || Number(match[2]) !== 82) {
-    throw new Error(`Pi CLI >=0.82.1 <0.83.0 is required; found ${match?.[0] || "unknown"}`);
+  const reportedVersion = `${result.stdout}\n${result.stderr}`;
+  if (!isSupportedPiVersion(reportedVersion)) {
+    throw new Error(`Pi CLI >=0.82.1 is required; found ${parseSemver(reportedVersion)?.join(".") || "unknown"}`);
   }
 }
 
@@ -158,5 +175,6 @@ module.exports = {
   assertSupportedRuntime,
   install,
   installFiles,
+  isSupportedPiVersion,
   parseArgs,
 };

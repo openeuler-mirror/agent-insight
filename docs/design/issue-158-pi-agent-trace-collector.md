@@ -4,7 +4,7 @@
 
 ## 1. 任务与目标
 
-本方案为 Agent Insight 增加 Pi Agent 0.82.x Trace 采集器，使 Pi 在不修改上游源码的前提下，
+本方案为 Agent Insight 增加 Pi Agent Trace 采集器，使 Pi 在不修改上游源码的前提下，
 能够采集 Agent、SubAgent、Skill、Tool、LLM 和 MCP 语义，并统一转换为
 `ExecutionRecord`。
 
@@ -19,8 +19,9 @@
 
 ## 2. 真实接口边界
 
-实现基线为 `@earendil-works/pi-coding-agent@0.82.1`，兼容范围为
-`>=0.82.1 <0.83.0`，Node.js 要求 `>=22.19.0`。
+实现基线为 `@earendil-works/pi-coding-agent@0.82.1`；安装器接受所有 `>=0.82.1` 的
+语义化版本，避免因后续 Pi 小版本或主版本升级被人为拒绝。Node.js 要求 `>=22.19.0`；无法
+解析版本或低于基线时安装会明确失败。
 
 - Pi Extension API 原生提供 session、agent、turn、message、tool、model 和 provider 事件。
 - Pi 的官方 SubAgent 示例通过 `subagent` Tool 启动独立 `pi` 子进程，不存在原生
@@ -254,7 +255,7 @@ Agent facet 与注册同时包含根和子实例。根/子执行是否出现在�
 
 | ID | 决策 | 原因 |
 | --- | --- | --- |
-| D-001 | 使用 Pi 0.82.1 公开 Extension API | 不实现上游不存在的 Hook |
+| D-001 | 使用 Pi 0.82.1 公开 Extension API，并接受后续 semver 版本 | 不实现上游不存在的 Hook，且不以小版本上限阻断兼容 API |
 | D-002 | 从 `details.results` 递归还原 SubAgent | 使用显式父上下文覆盖嵌套与并发 |
 | D-003 | MCP 使用命名或 metadata 契约 | Pi 核心没有 MCP 事件 |
 | D-004 | 自动 Skill 以读取 `SKILL.md` 为信号 | 公开、稳定且可复现 |

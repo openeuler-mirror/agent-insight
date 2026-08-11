@@ -22,6 +22,12 @@ const STRING_PATTERNS = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
 ];
+const INLINE_SECRET_ASSIGNMENT = /\b([A-Za-z][A-Za-z0-9_-]*(?:api[-_]?key|token|secret|password|passwd))\b\s*([=:])\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
+const LOCAL_PATH_PATTERNS = [
+  /\b[A-Za-z]:[\\/][^\s"'`<>|*?]+/g,
+  /\\\\[^\s"'`<>|*?]+(?:\\[^\s"'`<>|*?]+)+/g,
+  /\/(?:Users|home)\/[^\s/"'`]+(?:\/[^\s/"'`]+)*/g,
+];
 
 function sha256(value) {
   return crypto.createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -86,8 +92,12 @@ function truncateCodePoints(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
 
 function redactString(value) {
   let result = String(value);
+  result = result.replace(INLINE_SECRET_ASSIGNMENT, (_match, key, separator) => `${key}${separator}[REDACTED]`);
   for (const pattern of STRING_PATTERNS) {
     result = result.replace(pattern, "[REDACTED]");
+  }
+  for (const pattern of LOCAL_PATH_PATTERNS) {
+    result = result.replace(pattern, "[LOCAL_PATH]");
   }
   return result;
 }
