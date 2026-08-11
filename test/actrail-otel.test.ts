@@ -204,9 +204,13 @@ test('AcTrail OTLP: keeps the latest span revision and builds UI interactions', 
   assert.equal(record.input_tokens, 11);
   assert.equal(record.output_tokens, 7);
   assert.equal(record.reasoning_tokens, 3);
+  assert.equal(new Date(record.trace_started_at!).toISOString(), '1970-01-01T00:00:01.000Z');
+  assert.equal(new Date(record.trace_completed_at!).toISOString(), '1970-01-01T00:00:04.000Z');
+  assert.equal(record.latency, 3);
   assert.deepEqual(record.invokedSkills, [{ name: 'repo-check', version: null }]);
   assert.equal(record.actrail_summary.actionCount, 4);
   assert.equal(record.actrail_summary.pairedLlmCalls, 1);
+  assert.equal(record.actrail_summary.internalLlmCallsFiltered, 0);
   assert.equal(record.interactions.filter((item: any) => item.role === 'user').length, 1);
 
   const tree = buildAgentCallTree(record.interactions);
@@ -215,6 +219,151 @@ test('AcTrail OTLP: keeps the latest span revision and builds UI interactions', 
   assert.equal(tree.stats.skillCalls, 1);
   assert.equal(tree.stats.taskCalls, 1);
   assert.equal(tree.stats.totalTokens, 18);
+});
+
+test('AcTrail OTLP: filters title generation and limits trace time to business calls', () => {
+  const sessionId = '00000000000000000000000000000003';
+  function event(overrides: Partial<OtelTraceEvent>): OtelTraceEvent {
+    return {
+      receivedAt: '2026-07-30T00:00:00.000Z',
+      sessionId,
+      traceId: sessionId,
+      spanId: 'span-default',
+      name: 'AcTrail action',
+      kind: 'llm',
+      serviceName: 'actrail',
+      user: 'alice',
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 0,
+      startTimeMs: 1000,
+      attributes: {},
+      ...overrides,
+    };
+  }
+
+  function llmPair(args: {
+    id: string;
+    startTimeMs: number;
+    endTimeMs: number;
+    prompt: string;
+    content: string;
+    inputTokens: number;
+    outputTokens: number;
+    backgroundKind?: string;
+    toolCalls?: unknown[];
+  }): OtelTraceEvent[] {
+    const requestId = args.id + ':request';
+    const callId = args.id + ':call';
+    const responseId = args.id + ':response';
+    return [
+      event({
+        spanId: requestId,
+        name: 'LLM request',
+        startTimeMs: args.startTimeMs,
+        attributes: {
+          'actrail.action.id': requestId,
+          'actrail.action.kind': 'llm.request',
+          'llm.request.message_preview': args.prompt,
+          ...(args.backgroundKind ? { 'llm.request.background_kind': args.backgroundKind } : {}),
+        },
+      }),
+      event({
+        spanId: callId,
+        name: 'LLM call',
+        model: 'deepseek-v4-flash',
+        startTimeMs: args.startTimeMs,
+        latencyMs: args.endTimeMs - args.startTimeMs,
+        attributes: {
+          'actrail.action.id': callId,
+          'actrail.action.kind': 'llm.call',
+          'llm.call.request_action_id': requestId,
+          'llm.call.response_action_id': responseId,
+        },
+      }),
+      event({
+        spanId: responseId,
+        name: 'LLM response',
+        startTimeMs: args.endTimeMs,
+        usage: {
+          input_tokens: args.inputTokens,
+          output_tokens: args.outputTokens,
+          total_tokens: args.inputTokens + args.outputTokens,
+        },
+        attributes: {
+          'actrail.action.id': responseId,
+          'actrail.action.kind': 'llm.response',
+          'llm.response.content_text': args.content,
+          ...(args.toolCalls ? { 'llm.response.tool_calls_json': JSON.stringify(args.toolCalls) } : {}),
+        },
+      }),
+    ];
+  }
+
+  const events = [
+    event({
+      spanId: 'process-noise',
+      kind: 'span',
+      startTimeMs: 0,
+      latencyMs: 20_000,
+      attributes: {
+        'actrail.action.id': 'process-noise',
+        'actrail.action.kind': 'process.exit',
+      },
+    }),
+    ...llmPair({
+      id: 'title',
+      startTimeMs: 1000,
+      endTimeMs: 2000,
+      prompt: '调用两个子 Agent 检查项目',
+      content: '两个子 Agent 检查项目',
+      inputTokens: 20,
+      outputTokens: 5,
+      backgroundKind: 'title_generation',
+    }),
+    ...llmPair({
+      id: 'main',
+      startTimeMs: 3000,
+      endTimeMs: 6000,
+      prompt: '<SYSTEM>internal instructions</SYSTEM>',
+      content: '',
+      inputTokens: 100,
+      outputTokens: 10,
+      toolCalls: [{
+        id: 'task-1',
+        type: 'function',
+        function: { name: 'task', arguments: JSON.stringify({ description: '检查项目' }) },
+      }],
+    }),
+    ...llmPair({
+      id: 'final',
+      startTimeMs: 7000,
+      endTimeMs: 9000,
+      prompt: '<SYSTEM>internal instructions</SYSTEM>',
+      content: '两个子 Agent 已完成检查',
+      inputTokens: 50,
+      outputTokens: 5,
+    }),
+  ];
+
+  const record = aggregateOtelTraceEvents(sessionId, events);
+  assert.ok(record);
+  assert.equal(record.query, '调用两个子 Agent 检查项目');
+  assert.equal(record.final_result, '两个子 Agent 已完成检查');
+  assert.equal(record.llm_call_count, 2);
+  assert.equal(record.tool_call_count, 1);
+  assert.equal(record.tokens, 165);
+  assert.equal(record.input_tokens, 150);
+  assert.equal(record.output_tokens, 15);
+  assert.equal(record.latency, 6);
+  assert.equal(new Date(record.timestamp!).toISOString(), '1970-01-01T00:00:03.000Z');
+  assert.equal(new Date(record.trace_started_at!).toISOString(), '1970-01-01T00:00:03.000Z');
+  assert.equal(new Date(record.trace_completed_at!).toISOString(), '1970-01-01T00:00:09.000Z');
+  assert.equal(record.interactions.filter((item: any) => item.role === 'user').length, 1);
+  assert.equal(record.interactions.filter((item: any) => item.role === 'assistant').length, 2);
+  assert.equal(record.interactions.some((item: any) => item.content === '两个子 Agent 检查项目'), false);
+  assert.equal(record.actrail_summary.pairedLlmCalls, 2);
+  assert.equal(record.actrail_summary.internalLlmCallsFiltered, 1);
+  assert.equal(record.actrail_summary.userTurnInference, 'title-generation-preview');
 });
 
 test('AcTrail framework registry exposes Skill support without claiming a subagent tree', () => {
