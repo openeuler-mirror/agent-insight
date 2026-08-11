@@ -1,8 +1,6 @@
 import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
 import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
-import { decodeOtlpRequestWithRaw, OtlpDecodeError } from '@/lib/ingest/otel/decode';
-import { appendActrailRawOtlpRequest } from '@/lib/ingest/otel/actrail-raw-spool';
-import { isActrailOtlpTraceBody } from '@/lib/ingest/otel/actrail';
+import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
 import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
 import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
 import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
@@ -91,9 +89,9 @@ export async function POST(req: Request) {
       }
     }
 
-    let decoded;
+    let body;
     try {
-      decoded = await decodeOtlpRequestWithRaw(req, 'traces');
+      body = await decodeOtlpRequest(req, 'traces');
     } catch (err) {
       if (err instanceof OtlpDecodeError) {
         return NextResponse.json({ error: err.message }, { status: err.status });
@@ -101,8 +99,6 @@ export async function POST(req: Request) {
       console.error('[OTel] Failed to decode request body:', err);
       return NextResponse.json({ error: 'Invalid Payload' }, { status: 400 });
     }
-    let body = decoded.body;
-
     const codeAgentPartition = partitionCodeAgentOtlpPayload(body, 'traces');
     if (codeAgentPartition.codeAgentResourceCount > 0 && !codeAgentPartition.hasRemainingResources) {
       return NextResponse.json({
@@ -138,28 +134,11 @@ export async function POST(req: Request) {
 
     const receivedAt = new Date().toISOString();
     const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser });
-    const actrailPayload = isActrailOtlpTraceBody(body);
     const { dirtySessionIds } = appendOtelTraceEvents(events);
-    let rawCaptured: boolean | undefined;
-    if (actrailPayload) {
-      try {
-        appendActrailRawOtlpRequest(decoded, {
-          receivedAt,
-          sessions: dirtySessionIds,
-          authenticatedUser,
-        });
-        rawCaptured = true;
-      } catch (error) {
-        rawCaptured = false;
-        console.error('[OTel] Failed to capture raw AcTrail request:', error);
-      }
-    }
-
     return NextResponse.json({
       status: 'accepted',
       received: events.length,
       sessions: dirtySessionIds,
-      ...(actrailPayload ? { rawCaptured } : {}),
       ...ignoredCodeAgentSpans(codeAgentPartition.codeAgentResourceCount),
     });
   } catch (err: any) {

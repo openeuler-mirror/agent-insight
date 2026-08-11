@@ -187,8 +187,33 @@ function isTruthy(value: unknown): boolean {
   return value === true || value === 1 || ['true', '1', 'yes'].includes(String(value || '').trim().toLowerCase());
 }
 
+function requestPreview(pair: LlmPair): string | undefined {
+  return text(pair.request?.attributes?.['llm.request.message_preview']);
+}
+
+function sessionPrompt(prompt: string | undefined): string | undefined {
+  if (!prompt) return undefined;
+  const match = prompt.match(/<session>\s*([\s\S]*?)\s*<\/session>/i);
+  return text(match?.[1]);
+}
+
 function isTitleGenerationPair(pair: LlmPair): boolean {
-  return text(pair.request?.attributes?.['llm.request.background_kind']) === 'title_generation';
+  if (text(pair.request?.attributes?.['llm.request.background_kind']) === 'title_generation') {
+    return true;
+  }
+
+  const prompt = requestPreview(pair);
+  if (!sessionPrompt(prompt) || !/<\/session>[\s\S]*\bWrite the title\b/i.test(prompt || '')) {
+    return false;
+  }
+
+  const response = parseJson(pair.response?.attributes?.['llm.response.content_text']);
+  return Boolean(
+    response &&
+    typeof response === 'object' &&
+    !Array.isArray(response) &&
+    text((response as AnyObject).title),
+  );
 }
 
 function isInternalLlmPair(pair: LlmPair): boolean {
@@ -200,12 +225,13 @@ function isInternalLlmPair(pair: LlmPair): boolean {
 function primaryTitlePrompt(pairs: LlmPair[]): string | undefined {
   const prompts = pairs
     .filter(isTitleGenerationPair)
-    .map((pair) => text(pair.request?.attributes?.['llm.request.message_preview']))
+    .map((pair) => requestPreview(pair))
     .filter((prompt): prompt is string => Boolean(prompt));
-  return prompts.find((prompt) =>
-    !prompt.startsWith('The following is the text to summarize:') &&
-    !prompt.startsWith('You are a title generator')
+  const prompt = prompts.find((candidate) =>
+    !candidate.startsWith('The following is the text to summarize:') &&
+    !candidate.startsWith('You are a title generator')
   ) || prompts[0];
+  return sessionPrompt(prompt) || prompt;
 }
 
 function pairStartMs(pair: LlmPair): number {

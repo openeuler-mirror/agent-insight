@@ -125,7 +125,7 @@ test("OTLP protobuf decoder converts trace request into JSON-compatible trace ob
   assert.equal(events[1].parentSpanId, "1021324354657687")
 })
 
-test("decodeOtlpRequest accepts OTLP HTTP protobuf trace requests", async () => {
+test("decodeOtlpRequestWithRaw accepts OTLP HTTP protobuf trace requests", async () => {
   const encoded = encodeTraceRequest()
   const req = new Request("http://localhost/v1/traces", {
     method: "POST",

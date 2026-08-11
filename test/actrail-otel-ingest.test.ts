@@ -6,7 +6,6 @@ import test from 'node:test';
 
 import { POST } from '@/app/api/ingest/otel/v1/traces/route';
 import { aggregateOtelTraceSession } from '@/lib/ingest/otel/aggregate';
-import { listActrailRawOtlpSpoolFiles } from '@/lib/ingest/otel/actrail-raw-spool';
 
 const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'actrail-otel-ingest-'));
 process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = spoolDirectory;
@@ -103,17 +102,7 @@ test('AcTrail OTLP endpoint appends events that aggregate into an execution reco
   assert.equal(result.status, 'accepted');
   assert.equal(result.received, 3);
   assert.deepEqual(result.sessions, [traceId]);
-  assert.equal(result.rawCaptured, true);
-
-  const rawFiles = listActrailRawOtlpSpoolFiles(spoolDirectory);
-  assert.equal(rawFiles.length, 1);
-  const rawRecord = JSON.parse(fs.readFileSync(rawFiles[0], 'utf8').trim());
-  assert.equal(rawRecord.encoding, 'json');
-  assert.equal(rawRecord.contentType, 'application/json');
-  assert.deepEqual(rawRecord.sessions, [traceId]);
-  assert.equal(typeof rawRecord.sha256, 'string');
-  assert.equal(rawRecord.sha256.length, 64);
-  assert.deepEqual(JSON.parse(rawRecord.rawBodyText), body);
+  assert.equal('rawCaptured' in result, false);
 
   const aggregation = aggregateOtelTraceSession(traceId, spoolDirectory);
   assert.equal(aggregation.eventCount, 3);
