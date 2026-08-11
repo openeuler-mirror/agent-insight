@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `5ff971da63e47b82b7f9f1588e089f53404e69ba` (`5ff971d`) |
+| Commit | `b396425f8d2cc65cdeb290a9038ae798739fad42` (`b396425`) |
 | Branch | `dev_agent_ras` |
 | Date | 2026-08-11 |
 | Author | iceory |
-| Subject | `fix(fi): 修正 export async 语法以通过 next build` |
+| Subject | `docs: 钉死 xiaoo ⓪/①/③ 归属且 RAS/FI 不做 Trace` |
 
-**如何更新：** `git diff 5ff971d HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff b396425 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
