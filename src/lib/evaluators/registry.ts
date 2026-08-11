@@ -57,6 +57,8 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-ras-reliability': { category: 'traj', requires: [] },
   'preset-ras-reliability-fault-injection': { category: 'traj', requires: [] },
   'preset-ras-reliability-detection-recovery': { category: 'traj', requires: [] },
+  'preset-agent-tool-success-rate': { category: 'traj', requires: [] },
+  'preset-task-completion-no-ref': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
