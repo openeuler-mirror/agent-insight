@@ -109,9 +109,13 @@ print(json.dumps({
 
 function runPython(code: string): Promise<string> {
   return new Promise((resolve, reject) => {
+    // Import path is `agent_fault_injection.*` — parent of the package must be on PYTHONPATH.
+    // cwd alone as packageRoot() makes sys.path[0] the package dir and breaks the import.
+    const repoRoot = path.join(packageRoot(), '..')
+    const pythonPath = [repoRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
     const child = spawn(resolvePython(), ['-c', code], {
-      cwd: packageRoot(),
-      env: process.env,
+      cwd: repoRoot,
+      env: { ...process.env, PYTHONPATH: pythonPath },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let stdout = ''

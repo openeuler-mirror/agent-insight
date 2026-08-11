@@ -38,6 +38,8 @@ function copyTree() {
   const entries = [
     ['insight_xiaoo_chat_received', '*.Chat.message.received', 'chat_received'],
     ['insight_xiaoo_tool_post', '*.Tool.*.post', 'tool_post'],
+    // 4-segment plugin point for assistant text (stream_delta cannot be registered)
+    ['insight_xiaoo_llm_complete_post', '*.Llm.complete.post', 'llm_complete_post'],
     ['insight_xiaoo_session_state', '*.Session.lifecycle.state', 'session_state'],
   ]
   const plugin = entries.map(([id, hook_point, op]) => ({

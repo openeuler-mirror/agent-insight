@@ -6,6 +6,15 @@ import { ingestCollectAndJudge, refreshTaskProgress } from '@/lib/fault-injectio
 
 export const dynamic = 'force-dynamic'
 
+/** True when body carries FI collect signal (markers / activation / Trace ID). */
+function hasFiCollectSignal(body: Record<string, unknown>): boolean {
+  if (body.faultActivated === true) return true
+  if (Array.isArray(body.markers) && body.markers.length > 0) return true
+  if (typeof body.taskId === 'string' && body.taskId.trim()) return true
+  if (typeof body.sessionTaskId === 'string' && body.sessionTaskId.trim()) return true
+  return false
+}
+
 export async function POST(
   req: Request,
   ctx: { params: Promise<{ runId: string }> },
@@ -31,7 +40,7 @@ export async function POST(
       return NextResponse.json({ error: 'run already stopped' }, { status: 409 })
     }
 
-    if (stopped && (body.skipIngest || !Array.isArray(body.interactions))) {
+    if (stopped && (body.skipIngest || !hasFiCollectSignal(body))) {
       await prisma.faultInjectionRun.update({
         where: { id: run.id },
         data: {
@@ -67,7 +76,7 @@ export async function POST(
       injectionMethod: body.injectionMethod,
       faultActivated: body.faultActivated,
       faultActivatedAt: body.faultActivatedAt,
-      interactions: body.interactions || [],
+      interactions: Array.isArray(body.interactions) ? body.interactions : [],
       markers: body.markers || [],
     } as CollectPayload
 
@@ -87,7 +96,7 @@ export async function POST(
       return NextResponse.json({ ok: true, status: 'stopped' })
     }
 
-    if (body.error && !body.interactions?.length) {
+    if (body.error && !hasFiCollectSignal(body)) {
       await prisma.faultInjectionRun.update({
         where: { runId },
         data: { status: 'failed', error: String(body.error) },

@@ -13,7 +13,6 @@ from typing import Any
 
 from ...pipeline.exceptions import (
     ExperimentTimeoutError,
-    PlatformConnectionError,
     PlatformExecutableNotFoundError,
     PluginStartupError,
 )
@@ -175,27 +174,10 @@ class OpenCodeAdapter(PlatformAdapter):
                     )
                     store.update_manifest(artifacts, status=RunStatus.AGENT_RUNNING)
 
-                    retry_limit = int(
-                        request.platform_options.get("provider_retry_limit", 1)
-                    )
-
-                    def provider_health_check() -> None:
-                        failure = self._provider_retry_failure(
-                            artifacts.events_file,
-                            retry_limit=retry_limit,
-                        )
-                        if failure is not None:
-                            raise PlatformConnectionError(failure)
-
                     try:
                         exit_code = await self.monitor.wait_for_exit(
                             process,
                             request.timeout_seconds,
-                            health_check=(
-                                provider_health_check
-                                if retry_limit > 0
-                                else None
-                            ),
                         )
                     except ExperimentTimeoutError:
                         exit_code = 124
@@ -211,10 +193,6 @@ class OpenCodeAdapter(PlatformAdapter):
                 reason = TerminationReason.TIMEOUT
             elif not capture.fault_activated:
                 reason = TerminationReason.FAULT_NOT_ACTIVATED
-            elif capture.session_error:
-                reason = TerminationReason.SESSION_ERROR
-            elif capture.session_idle:
-                reason = TerminationReason.SESSION_IDLE
             elif exit_code == 0:
                 reason = TerminationReason.PROCESS_EXITED
             else:
@@ -362,56 +340,6 @@ class OpenCodeAdapter(PlatformAdapter):
             package_path,
             json.dumps(payload, indent=2) + "\n",
             overwrite=False,
-        )
-
-    @staticmethod
-    def _provider_retry_failure(
-        events_file: Path,
-        *,
-        retry_limit: int,
-    ) -> str | None:
-        if retry_limit <= 0 or not events_file.is_file():
-            return None
-
-        highest_attempt = 0
-        latest_message = ""
-        try:
-            lines = events_file.read_text(
-                encoding="utf-8",
-                errors="replace",
-            ).splitlines()
-        except OSError:
-            return None
-
-        for line in lines:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("kind") != "opencode.event":
-                continue
-            payload = event.get("payload")
-            if not isinstance(payload, dict) or payload.get("type") != "session.status":
-                continue
-            properties = payload.get("properties")
-            if not isinstance(properties, dict):
-                continue
-            status = properties.get("status")
-            if not isinstance(status, dict) or status.get("type") != "retry":
-                continue
-            attempt = status.get("attempt")
-            if not isinstance(attempt, int) or attempt < highest_attempt:
-                continue
-            highest_attempt = attempt
-            message = status.get("message")
-            latest_message = str(message) if message is not None else ""
-
-        if highest_attempt < retry_limit:
-            return None
-        detail = f": {latest_message}" if latest_message else ""
-        return (
-            f"OpenCode model provider remained unavailable after retry "
-            f"attempt {highest_attempt}{detail}"
         )
 
     @classmethod

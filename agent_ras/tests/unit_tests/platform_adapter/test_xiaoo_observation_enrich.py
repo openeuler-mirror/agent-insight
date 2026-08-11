@@ -184,7 +184,6 @@ def test_rewrite_collect_updates_interactions_and_collect(tmp_path: Path) -> Non
         raw_dir=raw,
         resolved_fault_dir=root / "resolved_fault",
         events_file=events,
-        session_file=raw / "session.json",
         stdout_file=raw / "stdout.log",
         stderr_file=raw / "stderr.log",
         trajectory_file=root / "trajectory.jsonl",
@@ -206,7 +205,8 @@ def test_rewrite_collect_updates_interactions_and_collect(tmp_path: Path) -> Non
     assert "明白" in doc["interactions"][1]["content"]
     collect = json.loads(path.read_text(encoding="utf-8"))
     assert collect["faultActivated"] is True
-    assert "明白" in collect["interactions"][1]["content"]
+    # Collect contract: interactions always empty; dialogue stays on ⓪ / interactions.json only.
+    assert collect["interactions"] == []
     # No synthetic response event written
     cli_types = []
     for line in events.read_text(encoding="utf-8").splitlines():

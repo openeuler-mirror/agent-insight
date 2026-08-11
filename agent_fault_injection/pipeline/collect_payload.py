@@ -45,25 +45,20 @@ def build_collect_payload(
     session_id: str | None = None,
     markers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    interactions: list[Any] = []
     interactions_task_id: str | None = None
     interactions_file = artifacts.root / "interactions.json"
     if interactions_file.is_file():
         try:
             data = json.loads(interactions_file.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("interactions"), list):
-                interactions = data["interactions"]
+            if isinstance(data, dict):
                 markers = markers or data.get("markers") or []
                 raw_tid = data.get("taskId")
                 if isinstance(raw_tid, str):
                     interactions_task_id = raw_tid
-            elif isinstance(data, list):
-                interactions = data
         except (json.JSONDecodeError, OSError):
             pass
 
     platform_session_id, session_aligned = resolve_platform_session_id(
-        session_file=artifacts.session_file,
         interactions_task_id=interactions_task_id,
         platform_session_id=session_id,
     )
@@ -80,7 +75,7 @@ def build_collect_payload(
         "injectionMethod": injection_method or "skill_inject",
         "faultActivated": activated,
         "faultActivatedAt": fault_activated_at,
-        "interactions": interactions,
+        "interactions": [],
         "markers": markers or [],
     }
 

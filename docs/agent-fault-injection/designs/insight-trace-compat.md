@@ -3,16 +3,17 @@
 > **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../agent_fault_injection/) 负责注入与采集。 独立 FastAPI/Vite 不纳入产品路径。见 [server-client-split.md](server-client-split.md) · [ras-fi-insight-relationship.md](ras-fi-insight-relationship.md)。
 
 
-This document is the merge contract for `agent-fault-injection` artifacts that must
-align with [agent-insight](https://gitcode.com/openeuler/agent-insight)
-`Session.interactions` / `RawInteraction`.
+This document is the join contract for `agent-fault-injection` artifacts with
+[agent-insight](https://gitcode.com/openeuler/agent-insight) Trace IDs and
+`Session.interactions` / `RawInteraction` (⓪). FI collect **does not** rebuild or
+overwrite the Session dialogue tree.
 
 ## Primary artifact
 
 | File | Role |
 |------|------|
-| `interactions.json` | **Canonical** insight-compatible interaction list |
-| `trajectory.jsonl` | Eval-side event log (run/fault/phase). Not the merge format |
+| `interactions.json` | Markers + Trace ID (`taskId`); `interactions` is always `[]` |
+| `trajectory.jsonl` | Eval-side event log (run/fault/phase). Not the Session merge format |
 | `manifest.json` | Run status + insight-aligned identifiers |
 
 ## Trace API shape
@@ -34,7 +35,7 @@ align with [agent-insight](https://gitcode.com/openeuler/agent-insight)
 
 `runId` identifies the FI experiment only. **Do not** silently fall back to `runId` as `taskId` — that breaks reliability join. When the platform session cannot be resolved, set `sessionAligned: false` and leave `taskId` null.
 
-`raw/session.json` (when present) is an **OpenCode plugin session snapshot** used to rebuild interactions. It is an internal capture artifact, **not** a public association key and must not be introduced as a separate “session id file” join contract. Trace ID resolution prefers platform capture / `interactions.json.taskId`, then falls back to the snapshot’s `session_id` if needed.
+`raw/session.json` is **not** part of the Trace ID contract. OpenCode FI does not write it; Trace ID comes only from platform capture / `interactions.json.taskId`.
 
 ## `RawInteraction` subset (V1)
 
@@ -91,7 +92,7 @@ Markers annotate the timeline without mutating interaction semantics:
 }
 ```
 
-## Manifest identifiers for future ingest
+## Manifest identifiers for join
 
 ```json
 {
@@ -102,6 +103,6 @@ Markers annotate the timeline without mutating interaction semantics:
 }
 ```
 
-When merged into agent-insight, `interactions.json` should be storable as
-`Session.interactions` and renderable by `AgentTraceView` without a second
-adapter.
+`interactions.json.taskId` joins `FaultInjectionRun.sessionTaskId` → Prisma `Session`
+(⓪). Collect ingress must **not** upsert `Session.interactions` from this file;
+Judge / Run UI load the dialogue tree from Session when present.

@@ -74,13 +74,10 @@ class ExperimentRunner:
                 else "finished"
             )
             store.update_manifest(artifacts, status=RunStatus.MAPPING)
-            # Trace ID (= platform session) is passed into mapper/collect;
-            # do not fabricate raw/session.json as a join-key sidecar.
             adapter.map_trajectory(request, fault, artifacts)
             trace_document = InsightInteractionsMapper().map(
                 artifacts,
                 framework=request.platform,
-                prompt=request.prompt,
                 session_id=platform_result.session_id,
             )
             write_interactions_artifact(artifacts, trace_document)
@@ -272,7 +269,6 @@ class ExperimentRunner:
             trace_document = InsightInteractionsMapper().map(
                 artifacts,
                 framework=request.platform,
-                prompt=request.prompt,
                 session_id=session_id,
             )
             write_interactions_artifact(artifacts, trace_document)

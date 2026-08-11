@@ -1,5 +1,5 @@
 /**
- * E2E: create task → collect-shaped payload → ingest session → server judge path.
+ * E2E: create task → collect-shaped payload → FI Run ingest (no Session write).
  * Run with: node --import tsx --test test/fault-injection-e2e.test.ts
  */
 import assert from 'node:assert/strict'
@@ -17,7 +17,6 @@ function sampleCollectPayload(input: {
   runId: string
   fault: string
   platform: string
-  prompt: string
 }): CollectPayload {
   const now = Date.now()
   const sessionId = `ses_fi_e2e_${input.runId}`
@@ -29,20 +28,7 @@ function sampleCollectPayload(input: {
     injectionMethod: 'skill_inject',
     faultActivated: false,
     faultActivatedAt: now,
-    interactions: [
-      {
-        messageID: `${sessionId}-user`,
-        role: 'user',
-        content: input.prompt,
-        timestamp: now,
-      },
-      {
-        messageID: `${sessionId}-assistant`,
-        role: 'assistant',
-        content: `Collect payload for fault ${input.fault}`,
-        timestamp: now + 1000,
-      },
-    ],
+    interactions: [],
     markers: [
       {
         id: `${input.runId}-activation`,
@@ -50,7 +36,7 @@ function sampleCollectPayload(input: {
         label: 'Fault activated',
         timestamp: now,
         severity: 'warning',
-        payload: { trace_anchor: { message_id: `${sessionId}-assistant` } },
+        payload: {},
       },
     ],
   }
@@ -62,7 +48,7 @@ describe('fault-injection e2e ingest', () => {
     assert.ok(prisma.faultInjectionRun)
   })
 
-  it('runs collect ingest + judge_skipped/completed', async () => {
+  it('runs collect ingest + judge_skipped/completed without writing Session', async () => {
     const user = 'fi-e2e-user'
     const { task, runs } = await createTaskWithRuns({
       user,
@@ -80,9 +66,8 @@ describe('fault-injection e2e ingest', () => {
       runId: run.runId,
       fault: 'step-omission',
       platform: 'opencode',
-      prompt: 'e2e prompt',
     })
-    assert.ok(payload.interactions.length >= 2)
+    assert.equal(payload.interactions.length, 0)
     assert.equal(payload.faultActivated, false)
 
     const judged = await ingestCollectAndJudge({
@@ -94,10 +79,12 @@ describe('fault-injection e2e ingest', () => {
     assert.equal(judged.status, 'judge_skipped')
     assert.ok(judged.sessionTaskId)
 
-    const session = await prisma.session.findUnique({ where: { taskId: judged.sessionTaskId! } })
-    assert.ok(session?.interactions)
+    // FI ③ must not mint Session — main tree is Insight ⓪ only.
+    const session = await prisma.session.findUnique({
+      where: { taskId: judged.sessionTaskId! },
+    })
+    assert.equal(session, null)
 
-    // FI collect must not mint reliability Execution (daily Trace is Insight ⓪ only).
     const execution = await prisma.execution.findFirst({
       where: { OR: [{ id: judged.sessionTaskId! }, { taskId: judged.sessionTaskId! }] },
     })
@@ -113,9 +100,6 @@ describe('fault-injection e2e ingest', () => {
 
     await prisma.faultInjectionRun.deleteMany({ where: { fiTaskId: task.id } })
     await prisma.faultInjectionTask.delete({ where: { id: task.id } })
-    if (judged.sessionTaskId) {
-      await prisma.session.delete({ where: { taskId: judged.sessionTaskId } }).catch(() => {})
-    }
     await prisma.$disconnect()
   })
 })

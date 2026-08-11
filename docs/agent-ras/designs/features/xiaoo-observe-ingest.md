@@ -16,7 +16,7 @@
 | P3 | **③ FI** 仅 `collect-result` → Judge；**不**做 Trace，**不**合成可靠性 `Execution` |
 | P4 | 字段保持现网 generic 可解析（`service.name=xiaoo`、`session.id`、`gen_ai.*` / `tool.*`） |
 | P5 | Insight 服务端优先 **零改动**（generic）；不足再加法 |
-| P6 | xiaoO `stream_delta` 由 gateway 直调 RAS hooker，**仅**服务 ① observe；不经 RAS 灌 ⓪（已知：CLI mid-stream 文本不进入 Trace，除非将来 Insight 自有 mid-stream 方案） |
+| P6 | xiaoO `stream_delta` 由 gateway 直调 **RAS** hooker，**仅**服务 ① observe。plugin `hook_point` 必须是 4 段（`a.b.c.d`），**不能**把 `stream_delta` 挂进 Insight collector。⓪ 助手文本走 Insight collector 的 `*.Llm.complete.post` → `note_stream`（非 RAS 转发、非 FI）。该 hook 现网 payload **无** `session_id`，用 chat/lifecycle 记住的 sticky `_active_session.json` 关联（禁止 FI 传 session） |
 
 ## 2. 架构（现）
 
@@ -56,8 +56,8 @@ node scripts/xiaoo-trace-collector/install.js
 
 | 事件 | 谁处理 |
 |------|--------|
-| Chat / Tool / Session lifecycle | Insight collector plugin（note + flush） |
-| stream_delta | RAS hooker → **仅** ① `observe_text_delta`（无 Trace） |
+| Chat / Tool / Llm.complete.post / Session lifecycle | Insight collector plugin（note + flush） |
+| stream_delta | RAS hooker → **仅** ① `observe_text_delta`（无 Trace；且不能注册为 plugin hook_point） |
 | lifecycle idle/complete | Insight collector **flush OTLP**；RAS 仅 `reset` |
 
 无 llm/tool turns 时 collector **不** POST 空 agent 根。
@@ -66,7 +66,8 @@ node scripts/xiaoo-trace-collector/install.js
 
 v0.1：`agent_ras` hooker 内嵌 OTel。  
 v0.2：迁 Insight collector；短暂保留 RAS `stream_delta`→`note_stream` 转发与弃用 shim。  
-v0.3：**拆除** RAS 全部 Trace 路径（shim / common otel_* / 转发）；边界钉死 ⓪=Insight、①=RAS、③=FI。
+v0.3：**拆除** RAS 全部 Trace 路径（shim / common otel_* / 转发）；边界钉死 ⓪=Insight、①=RAS、③=FI。  
+v0.3.1：Insight collector 增加 `*.Llm.complete.post` 作为 ⓪ 助手文本真源；明确 `stream_delta` 不可注册为 plugin hook_point；未解析到 session 时不写 `unknown` 缓冲；`Llm.complete.post` / 部分 Tool 缺 session 时用 sticky 关联。
 
 ## 6. 验收
 

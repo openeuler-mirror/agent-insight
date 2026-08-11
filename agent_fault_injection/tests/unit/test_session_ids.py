@@ -25,7 +25,6 @@ def _artifacts(root: Path) -> RunArtifacts:
         raw_dir=raw,
         resolved_fault_dir=root / "resolved_fault",
         events_file=raw / "events.jsonl",
-        session_file=raw / "session.json",
         stdout_file=raw / "stdout.log",
         stderr_file=raw / "stderr.log",
         trajectory_file=root / "trajectory.jsonl",
@@ -44,35 +43,21 @@ class SessionIdContractTests(unittest.TestCase):
         self.assertTrue(is_platform_session_id("ses_028a561a4ffePqjMxKY7VGbqEs"))
         self.assertTrue(is_platform_session_id("6231e7cc-456d-403d-95e1-2fc8dc9c7a4e"))
 
-    def test_platform_capture_beats_session_snapshot(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            artifacts = _artifacts(root)
-            artifacts.session_file.write_text(
-                json.dumps({"session_id": "ses_stale"}),
-                encoding="utf-8",
-            )
-            sid, aligned = resolve_platform_session_id(
-                session_file=artifacts.session_file,
-                platform_session_id="ses_fresh",
-            )
-            self.assertTrue(aligned)
-            self.assertEqual(sid, "ses_fresh")
+    def test_platform_capture_beats_interactions_task_id(self) -> None:
+        sid, aligned = resolve_platform_session_id(
+            interactions_task_id="ses_stale",
+            platform_session_id="ses_fresh",
+        )
+        self.assertTrue(aligned)
+        self.assertEqual(sid, "ses_fresh")
 
-    def test_session_snapshot_fallback_when_platform_polluted(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            artifacts = _artifacts(root)
-            artifacts.session_file.write_text(
-                json.dumps({"session_id": "ses_real"}),
-                encoding="utf-8",
-            )
-            sid, aligned = resolve_platform_session_id(
-                session_file=artifacts.session_file,
-                platform_session_id="msg_polluted",
-            )
-            self.assertTrue(aligned)
-            self.assertEqual(sid, "ses_real")
+    def test_interactions_task_id_when_platform_polluted(self) -> None:
+        sid, aligned = resolve_platform_session_id(
+            interactions_task_id="ses_real",
+            platform_session_id="msg_polluted",
+        )
+        self.assertTrue(aligned)
+        self.assertEqual(sid, "ses_real")
 
     def test_collect_payload_does_not_use_run_id_as_task_id(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -87,13 +72,20 @@ class SessionIdContractTests(unittest.TestCase):
             self.assertIsNone(payload["taskId"])
             self.assertFalse(payload["sessionAligned"])
             self.assertEqual(payload["runId"], artifacts.run_id)
+            self.assertEqual(payload["interactions"], [])
 
-    def test_collect_payload_prefers_platform_over_snapshot(self) -> None:
+    def test_collect_payload_prefers_platform_over_interactions_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifacts = _artifacts(root)
-            artifacts.session_file.write_text(
-                json.dumps({"session_id": "ses_from_file"}),
+            artifacts.interactions_file.write_text(
+                json.dumps(
+                    {
+                        "taskId": "ses_from_file",
+                        "interactions": [],
+                        "markers": [],
+                    }
+                ),
                 encoding="utf-8",
             )
             payload = build_collect_payload(
@@ -104,13 +96,20 @@ class SessionIdContractTests(unittest.TestCase):
             )
             self.assertEqual(payload["taskId"], "ses_from_platform")
             self.assertTrue(payload["sessionAligned"])
+            self.assertEqual(payload["interactions"], [])
 
-    def test_collect_payload_snapshot_fallback_rejects_message_id(self) -> None:
+    def test_collect_payload_uses_interactions_task_id_when_platform_bad(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifacts = _artifacts(root)
-            artifacts.session_file.write_text(
-                json.dumps({"session_id": "ses_from_file"}),
+            artifacts.interactions_file.write_text(
+                json.dumps(
+                    {
+                        "taskId": "ses_from_file",
+                        "interactions": [],
+                        "markers": [],
+                    }
+                ),
                 encoding="utf-8",
             )
             payload = build_collect_payload(
@@ -122,19 +121,23 @@ class SessionIdContractTests(unittest.TestCase):
             self.assertEqual(payload["taskId"], "ses_from_file")
             self.assertTrue(payload["sessionAligned"])
 
-    def test_opencode_session_id_ignores_message_info_id(self) -> None:
-        payload = {
+    def test_opencode_session_id_only_top_level(self) -> None:
+        self.assertEqual(
+            _session_id({"sessionID": "ses_ok", "faultSkill": "x"}),
+            "ses_ok",
+        )
+        self.assertEqual(
+            _session_id({"session_id": "ses_snake"}),
+            "ses_snake",
+        )
+        # Old message.updated nesting is not a Trace ID source.
+        nested = {
             "type": "message.updated",
             "properties": {
-                "info": {"id": "msg_abc", "sessionID": "ses_ok"},
+                "info": {"id": "msg_abc", "sessionID": "ses_nested"},
             },
         }
-        self.assertEqual(_session_id(payload), "ses_ok")
-        polluted = {
-            "type": "message.updated",
-            "properties": {"info": {"id": "msg_only"}},
-        }
-        self.assertIsNone(_session_id(polluted))
+        self.assertIsNone(_session_id(nested))
 
 
 class BestEffortSessionCaptureTests(unittest.TestCase):
@@ -193,9 +196,6 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
                 store=store,
                 adapter=adapter,
             )
-            # Trace ID lives in collect-result / interactions — not a fabricated
-            # session.json join sidecar.
-            self.assertFalse(artifacts.session_file.is_file())
             collect = json.loads(
                 (artifacts.root / "collect-result.json").read_text(encoding="utf-8")
             )
@@ -204,6 +204,7 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
             )
             self.assertTrue(collect["sessionAligned"])
             self.assertTrue(collect["faultActivated"])
+            self.assertEqual(collect["interactions"], [])
 
     def test_best_effort_collect_does_not_fake_fault_activated(self) -> None:
         from agent_fault_injection.pipeline.runner import ExperimentRunner
@@ -217,7 +218,6 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifacts = _artifacts(root)
-            # No events.jsonl — plugin never started.
             store = ArtifactStore(root.parent / "out")
             request = RunRequest(
                 platform="opencode",
@@ -254,7 +254,6 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifacts = _artifacts(root)
-            # Even a stale/fake collect must not override plugin_start_failed.
             (artifacts.root / "collect-result.json").write_text(
                 json.dumps(
                     {
@@ -283,7 +282,6 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
             )
             self.assertIsNone(recovered)
 
-            # Non-plugin failures may still recover when collect proves activation.
             recovered_ok = ExperimentRunner()._completed_from_collect_if_activated(
                 store=store,
                 artifacts=artifacts,

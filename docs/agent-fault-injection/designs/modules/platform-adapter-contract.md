@@ -13,7 +13,7 @@
 
 1. 实现 `PlatformAdapter`（`execute` + `map_trajectory`）。
 2. 在 `PlatformAdapterRegistry._load_builtins`（或测试中 `register`）注册平台名。
-3. 写出 `raw/events.jsonl`（含激活事件）与 **`execution.jsonl`**（规范化证据）。
+3. 写出 `raw/events.jsonl`（含激活事件）与 `trajectory.jsonl`；`interactions.json` 仅 markers + Trace ID（`interactions` 恒为 `[]`）。平台可另写 `execution.jsonl` 作本地证据，**不是** Insight Judge 真源。
 4. 可选实现 `list_agents` / `list_models` / `health_check`；FI Worker 启动时经 `platform inventory --json` 聚合为本机 inventory（Insight platforms API 读 Worker heartbeat）。
 5. **不必**实现平台专用 Judge。
 
@@ -24,7 +24,7 @@
 | 方法 | 必需 | 说明 |
 |------|------|------|
 | `execute` | 是 | 安装故障资产、启动被测运行时、等待结束，返回 `PlatformRunResult` |
-| `map_trajectory` | 是 | 写 `trajectory.jsonl`；并应写 `execution.jsonl` |
+| `map_trajectory` | 是 | 写 `trajectory.jsonl`；可选写 `execution.jsonl`（本地证据，非 Judge 真源） |
 | `list_agents` | 否 | 默认返回空列表 + note |
 | `list_models` | 否 | 默认返回空列表 + note |
 | `health_check` | 否 | 默认 `{ready: true, errors: []}` |
@@ -49,15 +49,15 @@ registry.register("xiaoo", XiaoOAdapter)
 | `fault.activation.started` | 开始要求加载故障 skill |
 | `fault.activation.completed` | 故障 skill 已成功加载一次（`fault_activated=True`） |
 
-`recorded_at` 建议为毫秒或秒级数值时间戳；Judge 用其过滤激活前证据。
+`recorded_at` 建议为毫秒或秒级数值时间戳；激活窗口与 markers 用其标注注入时点。
 
 ---
 
-## 4. 规范化证据 `execution.jsonl`
+## 4. 规范化证据 `execution.jsonl`（可选本地产物）
 
 路径：`RunArtifacts.execution_file` → `{run_root}/execution.jsonl`。
 
-平台 `map_trajectory` 应写出该文件，供轨迹 / interactions 映射使用（**不再**经本机 `ExecutionEvidenceBuilder` / Judge）。
+平台 `map_trajectory` **可**写出该文件作本地排障/映射中间态。**Insight Judge 不以它为真源**：评判主树来自 Insight ⓪ `Session.interactions`（经 `sessionTaskId` join）；FI ③ 只提供 markers / `faultActivated` / Trace ID。
 
 每行一个 JSON 对象，常用 `type`：
 
@@ -77,7 +77,7 @@ registry.register("xiaoo", XiaoOAdapter)
 {"sequence": 3, "timestamp": 103, "type": "final_answer", "content": "..."}
 ```
 
-OpenCode 适配器在 `map_trajectory` 末尾会从 stdout/events **派生**写出该文件，避免双轨漂移。
+OpenCode 适配器 `map_trajectory` 写 `trajectory.jsonl`（FI kinds）；**不**依赖旧 `opencode.event` / `session.json`。xiaoO 等平台可继续写 `execution.jsonl` 作本地证据。
 
 ---
 
@@ -85,7 +85,7 @@ OpenCode 适配器在 `map_trajectory` 末尾会从 stdout/events **派生**写�
 
 - 产品路径：采集上传后由 Insight `src/lib/fault-injection/judge.ts` 评判（用户 `getActiveConfig`）。
 - 本机 Python Judge / CLI `--judge*` **已删除**；Worker 只跑 inject+collect。
-- 语义：`outcome` × `faultContainmentStatus`（含 `inconclusive`）；以轨迹为主。见 [server-judge.md](server-judge.md)。
+- 语义：`outcome` × `faultContainmentStatus`（含 `inconclusive`）；**主树 join Insight ⓪ `Session.interactions`**，FI markers / `faultActivated` 为注入侧证据。见 [server-judge.md](server-judge.md)。
 
 ---
 

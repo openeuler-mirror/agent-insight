@@ -30,7 +30,6 @@ def _artifacts(root: Path) -> RunArtifacts:
         raw_dir=raw,
         resolved_fault_dir=resolved,
         events_file=raw / "events.jsonl",
-        session_file=raw / "session.json",
         stdout_file=raw / "stdout.log",
         stderr_file=raw / "stderr.log",
         trajectory_file=root / "trajectory.jsonl",
@@ -530,7 +529,6 @@ class XiaoOAdapterUnitTests(unittest.TestCase):
             document = InsightInteractionsMapper().map(
                 artifacts,
                 framework="xiaoo",
-                prompt="task",
             )
             labels = [m["label"] for m in document.markers]
             self.assertIn("Fault activation requested", labels)

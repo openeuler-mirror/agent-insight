@@ -67,7 +67,6 @@ class RunArtifacts:
     raw_dir: Path
     resolved_fault_dir: Path
     events_file: Path
-    session_file: Path
     stdout_file: Path
     stderr_file: Path
     trajectory_file: Path

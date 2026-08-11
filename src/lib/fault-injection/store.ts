@@ -138,57 +138,21 @@ export function isPlatformSessionId(value: string | null | undefined): boolean {
   return true
 }
 
-/** Write-only: persist collect-result ingress into Prisma (Session + Run fields). */
+/** Write-only: persist collect-result into FaultInjectionRun (not Session tree).
+
+FI ③ must not create or overwrite Session.interactions — main tree is ⓪ only.
+Join key is Run.sessionTaskId → existing Session.taskId when Insight already wrote it.
+*/
 export async function persistFiCollectIngress(input: {
   runId: string
   user: string | null
   payload: CollectPayload
 }): Promise<{ sessionAligned: boolean; sessionTaskId: string | null }> {
-  const interactionsJson = JSON.stringify(input.payload.interactions || [])
   const rawTaskId =
     typeof input.payload.taskId === 'string' ? input.payload.taskId.trim() : ''
   const sessionAligned =
     input.payload.sessionAligned !== false && isPlatformSessionId(rawTaskId)
   const sessionTaskId = sessionAligned ? rawTaskId : null
-
-  if (sessionTaskId) {
-    let sessionModel: string | null = null
-    for (const item of input.payload.interactions || []) {
-      if (!item || typeof item !== 'object') continue
-      const row = item as Record<string, unknown>
-      if (row.role !== 'assistant') continue
-      const modelId =
-        (typeof row.modelID === 'string' && row.modelID.trim()) ||
-        (typeof row.model === 'string' && row.model.trim()) ||
-        ''
-      const providerId =
-        (typeof row.providerID === 'string' && row.providerID.trim()) || ''
-      if (modelId) {
-        sessionModel = providerId ? `${providerId}/${modelId}` : modelId
-        break
-      }
-    }
-    const endedAt = new Date()
-    await prisma.session.upsert({
-      where: { taskId: sessionTaskId },
-      create: {
-        taskId: sessionTaskId,
-        label: `FI ${input.payload.fault}`,
-        query: null,
-        interactions: interactionsJson,
-        user: input.user,
-        model: sessionModel,
-        endTime: endedAt,
-      },
-      update: {
-        interactions: interactionsJson,
-        user: input.user || undefined,
-        ...(sessionModel ? { model: sessionModel } : {}),
-        endTime: endedAt,
-      },
-    })
-    // FI must not synthesize reliability Execution / daily Trace (⓪).
-  }
 
   await prisma.faultInjectionRun.update({
     where: { runId: input.runId },
@@ -210,6 +174,100 @@ export async function persistFiCollectIngress(input: {
   return { sessionAligned, sessionTaskId }
 }
 
+function parseSessionInteractionsJson(raw: string | null | undefined): unknown[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+/** ⓪ Session is judge-ready when dialogue has assistant turns or the Trace completed. */
+export function isSessionTraceReadyForJudge(
+  interactions: unknown[],
+  opts?: { endTime?: Date | string | null },
+): boolean {
+  if (!Array.isArray(interactions) || interactions.length === 0) return false
+  if (opts?.endTime) return true
+  return interactions.some((row) => {
+    if (!row || typeof row !== 'object') return false
+    const role = String((row as { role?: string }).role || '').toLowerCase()
+    return role === 'assistant' || role === 'opencode' || role === 'subagent'
+  })
+}
+
+function judgeSessionWaitMs(): number {
+  const raw = process.env.FI_JUDGE_SESSION_WAIT_MS
+  if (raw === undefined || raw === '') return 120_000
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : 120_000
+}
+
+function judgeSessionPollMs(): number {
+  const raw = process.env.FI_JUDGE_SESSION_POLL_MS
+  if (raw === undefined || raw === '') return 1_500
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 50 ? n : 1_500
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * When FI is session-aligned, wait for Insight ⓪ to write Session.interactions
+ * before Judge runs (collect often finishes before OpenCode upload).
+ */
+export async function waitForSessionTraceForJudge(sessionTaskId: string): Promise<{
+  interactions: unknown[]
+  ready: boolean
+  waitedMs: number
+}> {
+  const timeoutMs = judgeSessionWaitMs()
+  const pollMs = judgeSessionPollMs()
+  const started = Date.now()
+
+  const loadOnce = async () => {
+    const session = await prisma.session.findUnique({
+      where: { taskId: sessionTaskId },
+    })
+    const interactions = parseSessionInteractionsJson(session?.interactions)
+    return {
+      interactions,
+      ready: isSessionTraceReadyForJudge(interactions, { endTime: session?.endTime }),
+    }
+  }
+
+  let loaded = await loadOnce()
+  if (loaded.ready || timeoutMs <= 0) {
+    return {
+      interactions: loaded.interactions,
+      ready: loaded.ready,
+      waitedMs: Date.now() - started,
+    }
+  }
+
+  while (Date.now() - started < timeoutMs) {
+    await sleep(pollMs)
+    loaded = await loadOnce()
+    if (loaded.ready) {
+      return {
+        interactions: loaded.interactions,
+        ready: true,
+        waitedMs: Date.now() - started,
+      }
+    }
+  }
+
+  return {
+    interactions: loaded.interactions,
+    ready: false,
+    waitedMs: Date.now() - started,
+  }
+}
+
 /** Load FI Judge / Run inputs from Prisma (never from upload body). */
 export async function loadPersistedFiCollectForJudge(runId: string): Promise<{
   fault: string
@@ -219,23 +277,30 @@ export async function loadPersistedFiCollectForJudge(runId: string): Promise<{
   sessionAligned: boolean
   interactions: unknown[]
   markers: unknown[]
+  sessionTraceReady: boolean
+  sessionWaitMs: number
 }> {
   const run = await prisma.faultInjectionRun.findUnique({ where: { runId } })
   if (!run) {
     throw new Error(`FI run not found: ${runId}`)
   }
   let interactions: unknown[] = []
+  let sessionTraceReady = true
+  let sessionWaitMs = 0
   if (run.sessionTaskId) {
-    const session = await prisma.session.findUnique({
-      where: { taskId: run.sessionTaskId },
-    })
-    if (session?.interactions) {
-      try {
-        const parsed = JSON.parse(session.interactions)
-        interactions = Array.isArray(parsed) ? parsed : []
-      } catch {
-        interactions = []
-      }
+    if (run.faultActivated) {
+      const waited = await waitForSessionTraceForJudge(run.sessionTaskId)
+      interactions = waited.interactions
+      sessionTraceReady = waited.ready
+      sessionWaitMs = waited.waitedMs
+    } else {
+      const session = await prisma.session.findUnique({
+        where: { taskId: run.sessionTaskId },
+      })
+      interactions = parseSessionInteractionsJson(session?.interactions)
+      sessionTraceReady = isSessionTraceReadyForJudge(interactions, {
+        endTime: session?.endTime,
+      })
     }
   }
   let markers: unknown[] = []
@@ -253,6 +318,8 @@ export async function loadPersistedFiCollectForJudge(runId: string): Promise<{
     sessionAligned: Boolean(run.sessionTaskId),
     interactions,
     markers,
+    sessionTraceReady,
+    sessionWaitMs,
   }
 }
 
@@ -265,6 +332,44 @@ export async function finishFiJudgeFromDb(input: {
   user: string | null
 }) {
   const persisted = await loadPersistedFiCollectForJudge(input.runId)
+
+  // Session-aligned + activated: do not LLM-judge on an empty ⓪ tree.
+  if (
+    persisted.sessionAligned &&
+    persisted.faultActivated &&
+    !persisted.sessionTraceReady
+  ) {
+    const reason =
+      `session_trace_not_ready: waited ${persisted.sessionWaitMs}ms for Session.interactions ` +
+      `(taskId join); Insight ⓪ upload missing or late`
+    const markersJson = JSON.stringify(
+      mergeEvaluationMarkers(persisted.markers, {
+        skipped: true,
+        outcome: 'not_occurred',
+        reason,
+        model: null,
+      }),
+    )
+    return prisma.faultInjectionRun.update({
+      where: { runId: input.runId },
+      data: {
+        status: 'failed',
+        outcome: null,
+        faultContainmentStatus: null,
+        judgeReason: reason,
+        judgeRawJson: JSON.stringify({
+          skipped: true,
+          sessionAligned: true,
+          sessionTraceReady: false,
+          sessionWaitMs: persisted.sessionWaitMs,
+        }),
+        markersJson,
+        judgedAt: new Date(),
+        error: reason,
+      },
+    })
+  }
+
   const judged = await judgeFaultInjection({
     user: input.user,
     fault: persisted.fault,
@@ -296,9 +401,12 @@ export async function finishFiJudgeFromDb(input: {
         model: judged.model || null,
         skipped: judged.skipped,
         sessionAligned: persisted.sessionAligned,
+        sessionTraceReady: persisted.sessionTraceReady,
+        sessionWaitMs: persisted.sessionWaitMs,
       }),
       markersJson,
       judgedAt: new Date(),
+      error: null,
       ...(persisted.sessionAligned
         ? {}
         : {

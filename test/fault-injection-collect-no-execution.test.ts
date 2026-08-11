@@ -4,10 +4,14 @@
  * ras-events / markersJson — this test only gates Execution synthesis.
  */
 import assert from 'node:assert/strict'
-import { describe, it, after } from 'node:test'
+import { describe, it, after, before } from 'node:test'
 import { prisma } from '../src/lib/storage/prisma'
 import { ingestCollectAndJudge, newRunId, newTaskKey } from '../src/lib/fault-injection/store'
 import type { CollectPayload } from '../src/lib/fault-injection/engine'
+
+before(() => {
+  process.env.FI_JUDGE_SESSION_WAIT_MS = '0'
+})
 
 describe('FI collect does not synthesize Execution', () => {
   const user = 'fi-no-exec-user'
@@ -15,7 +19,7 @@ describe('FI collect does not synthesize Execution', () => {
   let runId = ''
   let sessionTaskId = ''
 
-  it('upserts Session + markers without Execution', async () => {
+  it('updates Run without creating Session or Execution', async () => {
     const taskKey = newTaskKey()
     runId = newRunId()
     sessionTaskId = `ses_fi_no_exec_${runId.slice(-8)}`
@@ -56,10 +60,7 @@ describe('FI collect does not synthesize Execution', () => {
       fault: 'step-omission',
       injectionMethod: 'skill_inject',
       faultActivated: false,
-      interactions: [
-        { role: 'user', content: 'hello', timestamp: Date.now() },
-        { role: 'assistant', content: 'world', timestamp: Date.now() + 1 },
-      ],
+      interactions: [],
       markers: [],
     }
 
@@ -68,7 +69,7 @@ describe('FI collect does not synthesize Execution', () => {
     assert.equal(judged.status, 'judge_skipped')
 
     const session = await prisma.session.findUnique({ where: { taskId: sessionTaskId } })
-    assert.ok(session?.interactions)
+    assert.equal(session, null)
 
     const execution = await prisma.execution.findFirst({
       where: { OR: [{ id: sessionTaskId }, { taskId: sessionTaskId }] },

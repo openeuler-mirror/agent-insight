@@ -34,7 +34,6 @@ class OpenCodeAdapterTests(TestCase):
                 raw_dir=root / "raw",
                 resolved_fault_dir=root / "resolved",
                 events_file=root / "events",
-                session_file=root / "session",
                 stdout_file=root / "stdout",
                 stderr_file=root / "stderr",
                 trajectory_file=root / "trajectory",
@@ -77,7 +76,6 @@ class OpenCodeAdapterTests(TestCase):
                 raw_dir=root / "raw",
                 resolved_fault_dir=root / "resolved",
                 events_file=root / "events",
-                session_file=root / "session",
                 stdout_file=root / "stdout",
                 stderr_file=root / "stderr",
                 trajectory_file=root / "trajectory",
@@ -113,7 +111,6 @@ class OpenCodeAdapterTests(TestCase):
                 raw_dir=root / "raw",
                 resolved_fault_dir=root / "resolved",
                 events_file=root / "events",
-                session_file=root / "session",
                 stdout_file=root / "stdout",
                 stderr_file=root / "stderr",
                 trajectory_file=root / "trajectory",
@@ -149,7 +146,6 @@ class OpenCodeAdapterTests(TestCase):
                 raw_dir=root / "raw",
                 resolved_fault_dir=root / "resolved",
                 events_file=root / "events",
-                session_file=root / "session",
                 stdout_file=root / "stdout",
                 stderr_file=root / "stderr",
                 trajectory_file=root / "trajectory",
@@ -407,43 +403,6 @@ class OpenCodeAdapterTests(TestCase):
             self.assertFalse(lib_provider.exists())
             self.assertFalse(package_json.exists())
 
-    def test_provider_retry_failure_uses_attempt_not_duplicate_count(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            events_file = Path(temporary) / "events.jsonl"
-            retry = {
-                "kind": "opencode.event",
-                "payload": {
-                    "type": "session.status",
-                    "properties": {
-                        "status": {
-                            "type": "retry",
-                            "attempt": 1,
-                            "message": "Cannot connect",
-                        }
-                    },
-                },
-            }
-            events_file.write_text(
-                "\n".join([json.dumps(retry), json.dumps(retry)]) + "\n",
-                encoding="utf-8",
-            )
-
-            self.assertIsNone(
-                OpenCodeAdapter._provider_retry_failure(
-                    events_file,
-                    retry_limit=2,
-                )
-            )
-            self.assertIn(
-                "attempt 1: Cannot connect",
-                OpenCodeAdapter._provider_retry_failure(
-                    events_file,
-                    retry_limit=1,
-                ),
-            )
-
     def test_is_database_locked_failure_reads_stderr(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -462,7 +421,6 @@ class OpenCodeAdapterTests(TestCase):
                     raw_dir=root / "raw",
                     resolved_fault_dir=root / "resolved",
                     events_file=root / "events",
-                    session_file=root / "session",
                     stdout_file=root / "stdout",
                     stderr_file=stderr_file,
                     trajectory_file=root / "trajectory",
@@ -502,7 +460,6 @@ class OpenCodeAdapterTests(TestCase):
                 raw_dir=raw,
                 resolved_fault_dir=root / "resolved",
                 events_file=raw / "events.jsonl",
-                session_file=raw / "session.json",
                 stdout_file=stdout,
                 stderr_file=stderr,
                 trajectory_file=root / "trajectory",

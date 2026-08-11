@@ -19,7 +19,6 @@ def _artifacts(root: Path) -> RunArtifacts:
         raw_dir=raw,
         resolved_fault_dir=root / "resolved_fault",
         events_file=raw / "events.jsonl",
-        session_file=raw / "session.json",
         stdout_file=raw / "stdout.log",
         stderr_file=raw / "stderr.log",
         trajectory_file=root / "trajectory.jsonl",
@@ -58,11 +57,8 @@ class OpenCodeMapperTests(TestCase):
                 {
                     "sequence": 4,
                     "recorded_at": 40,
-                    "kind": "opencode.event",
-                    "payload": {
-                        "type": "session.idle",
-                        "properties": {"sessionID": "ses_1"},
-                    },
+                    "kind": "fault.tool.after",
+                    "payload": {"sessionID": "ses_1", "tool": "bash"},
                 },
             ]
             artifacts.events_file.write_text(
@@ -85,8 +81,8 @@ class OpenCodeMapperTests(TestCase):
             )
 
             self.assertTrue(summary.fault_activated)
-            self.assertTrue(summary.session_idle)
             self.assertEqual(summary.session_id, "ses_1")
+            self.assertEqual(summary.event_count, 4)
             trajectory = [
                 json.loads(line)
                 for line in artifacts.trajectory_file.read_text(
@@ -102,4 +98,12 @@ class OpenCodeMapperTests(TestCase):
                     "fault_active",
                 ],
             )
-
+            self.assertEqual(
+                [event["kind"] for event in trajectory],
+                [
+                    "plugin.ready",
+                    "fault.activation.started",
+                    "fault.activation.completed",
+                    "fault.tool.after",
+                ],
+            )

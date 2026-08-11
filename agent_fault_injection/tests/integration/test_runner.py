@@ -46,11 +46,8 @@ class FakeOpenCodeAdapter(PlatformAdapter):
             {
                 "sequence": 3,
                 "recorded_at": 3,
-                "kind": "opencode.event",
-                "payload": {
-                    "type": "session.idle",
-                    "properties": {"sessionID": "ses_fake"},
-                },
+                "kind": "fault.tool.after",
+                "payload": {"sessionID": "ses_fake", "tool": "bash"},
             },
         ]
         artifacts.events_file.write_text(
@@ -59,7 +56,7 @@ class FakeOpenCodeAdapter(PlatformAdapter):
         )
         return PlatformRunResult(
             exit_code=0,
-            termination_reason=TerminationReason.SESSION_IDLE,
+            termination_reason=TerminationReason.PROCESS_EXITED,
             session_id="ses_fake",
             fault_activated=True,
         )
@@ -73,7 +70,7 @@ class InterruptedOpenCodeAdapter(FakeOpenCodeAdapter):
         result = await super().execute(request, fault, artifacts, store)
         return PlatformRunResult(
             exit_code=1,
-            termination_reason=TerminationReason.SESSION_ERROR,
+            termination_reason=TerminationReason.PLATFORM_ERROR,
             session_id=result.session_id,
             fault_activated=True,
         )
@@ -167,7 +164,7 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 execution_details["termination_reason"],
-                TerminationReason.SESSION_IDLE,
+                TerminationReason.PROCESS_EXITED,
             )
             self.assertEqual(execution_details["platform"], "opencode")
             self.assertEqual(execution_details["agent"], "build")
@@ -216,7 +213,7 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.status, RunStatus.COMPLETED)
             self.assertEqual(
                 result.termination_reason,
-                TerminationReason.SESSION_ERROR,
+                TerminationReason.PLATFORM_ERROR,
             )
             self.assertEqual(
                 next(

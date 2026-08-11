@@ -29,7 +29,6 @@ def _artifacts(root: Path) -> RunArtifacts:
         raw_dir=raw,
         resolved_fault_dir=root / "resolved_fault",
         events_file=raw / "events.jsonl",
-        session_file=raw / "session.json",
         stdout_file=raw / "stdout.log",
         stderr_file=raw / "stderr.log",
         trajectory_file=root / "trajectory.jsonl",

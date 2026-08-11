@@ -50,7 +50,6 @@ class ArtifactStore:
             raw_dir=raw_dir,
             resolved_fault_dir=resolved_fault_dir,
             events_file=raw_dir / "events.jsonl",
-            session_file=raw_dir / "session.json",
             stdout_file=raw_dir / "stdout.log",
             stderr_file=raw_dir / "stderr.log",
             trajectory_file=root / "trajectory.jsonl",

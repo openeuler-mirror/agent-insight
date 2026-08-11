@@ -134,7 +134,7 @@ function replaceInPlace(target: unknown[], next: unknown[]): void {
   target.splice(0, target.length, ...next)
 }
 
-export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
+export const AgentRasEvalPlugin: Plugin = async ({ directory }) => {
   const runID = process.env.AGENT_FI_RUN_ID
   const faultSkill = process.env.AGENT_FI_FAULT_SKILL
   const rawDirectory = process.env.AGENT_FI_RAW_DIR
@@ -148,7 +148,6 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
   }
 
   const eventsFile = path.join(rawDirectory, "events.jsonl")
-  const sessionFile = path.join(rawDirectory, "session.json")
   const readyFile = path.join(rawDirectory, "plugin-ready.json")
   const callCountsFile = path.join(rawDirectory, "runtime-tool-call-counts.json")
   const assistantCountsFile = path.join(
@@ -340,40 +339,6 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
           }),
         }
       : {}
-
-  const snapshotSession = async (sessionID: string): Promise<void> => {
-    try {
-      const response = await client.session.messages({
-        path: { id: sessionID },
-      })
-      const messages =
-        response && typeof response === "object" && "data" in response
-          ? response.data
-          : response
-
-      await writeFile(
-        sessionFile,
-        `${JSON.stringify(
-          {
-            schema_version: "1",
-            run_id: runID,
-            session_id: sessionID,
-            captured_at: Date.now(),
-            messages: asSerializable(messages),
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      )
-      await record("session.snapshot.saved", { sessionID })
-    } catch (error) {
-      await record("session.snapshot.failed", {
-        sessionID,
-        error: String(error),
-      })
-    }
-  }
 
   await writeFile(
     readyFile,
@@ -796,22 +761,6 @@ export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
         return
       }
       await applyAssistantRewriteToOutput(row, sessionID)
-    },
-
-    event: async ({ event }) => {
-      await record("opencode.event", event)
-
-      if (
-        event.type === "session.idle" ||
-        event.type === "session.error"
-      ) {
-        const properties = event.properties as {
-          sessionID?: string
-        }
-        if (properties.sessionID) {
-          await snapshotSession(properties.sessionID)
-        }
-      }
     },
 
     "tool.execute.before": async (input, output) => {

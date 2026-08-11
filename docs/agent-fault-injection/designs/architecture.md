@@ -4,7 +4,7 @@
 
 将原 `agent-fault-injection`（包名曾用 `agent-ras-eval`）合并进 agent-insight：
 
-- Python：`agent_fault_injection/` — 五类注入 + 跑被测 Agent + 产出 `RawInteraction[]`
+- Python：`agent_fault_injection/` — 五类注入 + 跑被测 Agent + 产出 FI markers / Trace ID join
 - Insight：Task/Run 编排、鉴权、Prisma、**服务端 Judge**（`getActiveConfig`）、可靠性 UI
 - 本机：**FI Worker**（`scripts/fi-worker.js`）认领任务、spawn CLI、上传 `collect-result`
 
@@ -26,8 +26,8 @@
 | 做 | 不做 |
 |----|------|
 | Task 1:N Run；Faults/Tasks/Run 详情 UI | 保留 FastAPI / 独立 Vite |
-| 轨迹唯一真源 `Session.interactions`（Prisma） | 产品契约暴露 trajectory/execution 多文件树；服务端读本机 artifact 路径 |
-| Judge 在 Insight（二维 outcome×containment） | 本机 Python Judge（已删除） |
+| 轨迹唯一真源 `Session.interactions`（Prisma，来自 Insight ⓪） | FI collect 重建/覆盖 Session；服务端读本机 artifact 当主树 |
+| Judge 在 Insight（二维 outcome×containment；主树 join ⓪） | 本机 Python Judge（已删除）；以 `execution.jsonl` 当 Judge 真源 |
 | 注入方式五类落地 | 与环内 RAS detector **混同检测**；写 OTLP spool |
 | FI Run / Session 观测注入结果 | ~~激活后桥接 `RasAnomalyEvent`~~（已移除；观测靠正常轨迹上报） |
 | 本机 FI Worker claim / heartbeat / stop | Next 进程内 `spawn` collector（已废弃） |
@@ -38,8 +38,8 @@
 Browser → Next /api/fault-injection（建任务 queued / 展示 / Judge）
 本机 FI Worker → claim → Python CLI(inject+collect)
        → POST /runs/:runId/collect-result
-       → Session.interactions + FaultInjectionRun 元数据
-       → server judge（写入 FI Run；不写 RasAnomalyEvent）
+       → FaultInjectionRun（markers / faultActivated / sessionTaskId）
+       → Judge join ⓪ Session.interactions（不写 Session；不写 RasAnomalyEvent）
        → FI Run 页 / AgentTraceView
 
 任务创建后一律 `queued`，由本机 Worker claim 执行（不再提供 dry-run / 服务端 stub 产品入口）。
@@ -84,7 +84,7 @@ apply_plan / runtime_env / lifecycle        → 薄胶水
 fault_inject/injection/                     → L3：file_ops + rewrite_engine
 PlatformAdapter Template Method + SPI       → L4：平台只接线
 OpenCode rewrite-runtime.ts（`platform_adapters/opencode/lib/`） → 表驱动薄层（隔离环境拷到 `config/lib/`，勿进 `plugins/`）
-pipeline/collect_payload                    → interactions → Insight Judge
+pipeline/collect_payload                    → markers + taskId → Insight Judge（主树 join ⓪）
 ```
 
 不做：完整 Ports 六边形；L2 Method 类 Facade；FI→RasAnomalyEvent bridge。

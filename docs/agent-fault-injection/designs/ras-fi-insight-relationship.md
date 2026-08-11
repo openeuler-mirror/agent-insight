@@ -231,14 +231,14 @@ xiaoO 现状：⓪ = [`scripts/xiaoo-trace-collector/`](../../../scripts/xiaoo-t
 - CLI：`python -m agent_fault_injection.cli run …`（本机只做 inject+collect；Judge 在 Insight）
 - 本机写出 `collect-result.json` 等 artifacts
 
-**不负责**：日常完整链路 Trace 观测，也不为进 `/agent-ras/trace` **合成**可靠性 `Execution`。③ collect 仅服务 FI Run / Judge；**不**采集非 FI 流水线事件顶主树。日常主树来自 Insight ⓪（OpenCode：upload；xiaoO：`xiaoo-trace-collector` OTLP）。新平台同此边界。
+**不负责**：日常完整链路 Trace 观测，也不为进 `/agent-ras/trace` **合成**可靠性 `Execution`。③ collect 仅写 `FaultInjectionRun`（markers / `faultActivated` / `sessionTaskId` join）；**不**采对话全文、**不**覆盖 `Session.interactions`。日常主树来自 Insight ⓪（OpenCode：upload；xiaoO：`xiaoo-trace-collector` OTLP）。OpenCode FI 插件只 record FI 流水线事件（`fault.*`、注入相关 tool、plugin.ready 等），不 record 全量 `opencode.event` / 不写 `session.json` 快照。
 
 ### 4.2 与 Insight 的交界
 
 | 方向 | 内容 | 归属 |
 |------|------|------|
 | Insight → FI Client | 任务元数据经 claim 下发（platform/fault/prompt/…） | **任务模型与 API = Insight** |
-| FI Client → Insight | 上传 collect-result（interactions / markers / evidence） | **契约与入库 = Insight** |
+| FI Client → Insight | 上传 collect-result（空 interactions / markers / taskId） | **契约与入库 = Insight（只写 Run）** |
 | Insight 内部 | Judge、FI UI | Insight |
 
 **FI Client** 是角色；当前实现里编排常驻进程是 `scripts/fi-worker.js`，注入在 agent-fi 包内。协议与契约属 Insight，叙述默认用角色名。
@@ -312,7 +312,7 @@ flowchart LR
 | ⓪ | 主观测 | **OTLP/HTTP**（JSON 或 Protobuf）：`ResourceSpans` / `ResourceLogs` | `/api/ingest/otel/v1/{traces\|logs\|…}` | spool → `Execution` | 通用链路追踪 |
 | ① | RAS 旁路 | **flat JSON**（非 OTLP）：`taskId` / `type` / `deliveryId` / `payload` | `/api/ingest/ras-events` | `RasAnomalyEvent` | 检出/恢复事件；fail-open |
 | ② | FI 控制面 | FI Worker JSON（非 OTLP）：heartbeat / claim / commands | `/api/fault-injection/worker/*` | 任务占用与超时回收 | 无轨迹正文 |
-| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：`interactions` / `markers` | `…/runs/:id/collect-result` | 写入 `Session` + `FaultInjectionRun`；**Judge/Run 只读 Prisma** | 实验轨迹写入入口；读权威在库 |
+| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：空 `interactions` + `markers` + `taskId` | `…/runs/:id/collect-result` | **只写** `FaultInjectionRun`（join `sessionTaskId`）；**不**写/覆盖 `Session.interactions`；Judge 只读 Prisma ⓪+Run | markers / 激活门闩；主树靠 join ⓪ |
 | ~~④~~ | ~~FI→观测~~ | **已移除** | — | 不再写 `RasAnomalyEvent` | 可靠性观测以 Execution / 真 RAS ① 为准 |
 
 ```mermaid
@@ -332,7 +332,7 @@ flowchart TB
 |----|------|------------|
 | `Execution`（及派生） | ⓪ OTel consumer | `/trace` 等链路追踪 |
 | `RasAnomalyEvent` | ①（真 RAS） | `/agent-ras/trace`（可左连接根 Execution） |
-| `Session.interactions` | ③（及既有 ingest） | FI Run 轨迹等 |
+| `Session.interactions` | ⓪（Insight collectors / upload） | FI Run 轨迹经 `sessionTaskId` join；③ **不**写此列 |
 | `FaultInjection*` | UI + ②/③ | `/agent-ras/fault-injection` |
 
 同 `taskId` / `sessionTaskId` 可互跳；用户归属须一致。
@@ -344,7 +344,8 @@ flowchart TB
 | `runId` / `taskId` | Run id / 平台 session → `Session.taskId` |
 | `framework` / `fault` / `injectionMethod` | 平台与故障元数据 |
 | `faultActivated` | Judge / FI Run 门闩（**不**再触发观测表写入） |
-| `interactions` / `markers` | 轨迹真源 |
+| `interactions` | 固定空列表；对话主树真源是 ⓪ `Session`，经 `taskId`→`sessionTaskId` join |
+| `markers` | FI 流水线 markers（激活 / 注入等）；Judge 侧再 merge 评价 markers |
 
 ### 5.4 时序（RAS ① 展开）
 
@@ -443,9 +444,9 @@ OTLP 可「硬套」attributes，但会变成「穿 OTLP 壳的私有协议」�
 
 - **不是**协议层把 RAS/FI 嵌进 Span，而是落库后用 **Trace ID**（=`taskId`，平台原生会话 ID）对齐。
 - 对齐键 = 剥掉 `opencode:` / `xiaoo:` 后的裸 session（OpenCode `ses_…`、xiaoo gateway UUID）。产品 UI 称 **Trace ID**；Prisma 字段 `FaultInjectionRun.sessionTaskId` 存同一值。`FaultInjectionRun.runId`（`ras-…`）只标识实验 Run，**禁止**静默当作 `Session.taskId` / 可靠性 join key。
-- **不要**新增独立 session id 文件作为对外关联契约。OpenCode 插件可选写出的 `raw/session.json` 仅是会话快照（重建 interactions），不是公开 join 键。
+- **不要**新增独立 session id 文件作为对外关联契约。OpenCode FI 插件**不**写 `raw/session.json`；Trace ID **只**来自平台 capture / `interactions.json.taskId`，无第二真源。
 - RAS 推送会剥平台前缀以对齐 OTel/`Execution.taskId`；可靠性页以根 `Execution` **左连接**同 `taskId` 的 `RasAnomalyEvent`（可含 ras-only、无链路任务）。
-- FI：`collect-result.taskId` 仅在 `sessionAligned=true` 时写入 `Session` / `sessionTaskId`；拿不到平台 session 时标记 `session_unaligned`，注入观测仍在 FI Run；**不再**写 `RasAnomalyEvent`。
+- FI：`collect-result.taskId` 仅在 `sessionAligned=true` 时写入 `FaultInjectionRun.sessionTaskId`（join ⓪）；**不**创建/覆盖 `Session`；拿不到平台 session 时标记 `session_unaligned`，注入观测仍在 FI Run；**不再**写 `RasAnomalyEvent`。
 - 普通 `/trace` **不嵌** RAS 面板；可靠性看 `/agent-ras/trace`（真 RAS / Execution）。
 
 #### 5.6.3 服务端如何展示
@@ -453,7 +454,7 @@ OTLP 可「硬套」attributes，但会变成「穿 OTLP 壳的私有协议」�
 模式：**先落 Prisma，再 API 读库拼视图**（不是边收边流式渲染原始协议）。
 
 1. 写：各 ingest 入口落库（OTel 另经 spool consumer）。
-2. 读：可靠性列表并行查 `Execution` + `RasAnomalyEvent` 后按 `taskId` 合并；FI Run / Judge / rejudge **只读**已落库 `Session.interactions` 与 `FaultInjectionRun`（collect body 仅写入）。
+2. 读：可靠性列表并行查 `Execution` + `RasAnomalyEvent` 后按 `taskId` 合并；FI Run / Judge / rejudge **只读**已落库 `Session.interactions`（⓪）与 `FaultInjectionRun`（③ collect 只更新 Run，不写 Session）。
 3. OTel：`accepted` 只表示进 spool，**不等于**立刻在所有观测查询可见。
 
 #### 5.6.4 FI「下发」为何图上是认领（拉模式）
@@ -518,15 +519,15 @@ fi-worker tick: claim
        build_collect_payload → write_collect_payload（collect-result.json）
   → uploadResult: POST …/collect-result
   → ingestCollectAndJudge
-       persistFiCollectIngress（写 Session / Run）
-       → finishFiJudgeFromDb（只读 Prisma 再 Judge；rejudge 同此读路径）
+       persistFiCollectIngress（只更新 FaultInjectionRun：sessionTaskId / markers / faultActivated…；不写 Session）
+       → finishFiJudgeFromDb（sessionAligned 且已激活时轮询等 ⓪ Session.interactions 就绪；再只读 Prisma 评判）
 ```
 
 | 步骤 | 路径 | 符号 |
 |------|------|------|
 | 轮询认领/上传 | [`scripts/fi-worker.js`](../../../scripts/fi-worker.js) | `tick` → `runCollector` → `uploadResult` |
 | CLI / 编排 | [`agent_fault_injection/.../cli.py`](../../../agent_fault_injection/cli.py)、[`pipeline/runner.py`](../../../agent_fault_injection/pipeline/runner.py) | `ExperimentRunner.run` |
-| 映射 interactions | [`.../pipeline/interactions_mapper.py`](../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
+| 映射 markers + taskId（interactions=[]） | [`.../pipeline/interactions_mapper.py`](../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
 | 组装/写盘 | [`.../pipeline/collect_payload.py`](../../../agent_fault_injection/pipeline/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
 | 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](../../../src/app/api/fault-injection/runs/[runId]/collect-result/route.ts) | `POST` |
 | 入库+评判 | [`src/lib/fault-injection/store.ts`](../../../src/lib/fault-injection/store.ts) | `ingestCollectAndJudge` |

@@ -15,15 +15,12 @@ from ...pipeline.models import RunArtifacts, RunRequest
 @dataclass(frozen=True, slots=True)
 class CaptureSummary:
     session_id: str | None
-    fault_started: bool
     fault_activated: bool
-    session_idle: bool
-    session_error: bool
     event_count: int
 
 
 def _session_id(payload: Any) -> str | None:
-    """Extract OpenCode session id — never message/part ``info.id``."""
+    """Extract OpenCode session id from current FI plugin payload shape."""
 
     if not isinstance(payload, dict):
         return None
@@ -31,19 +28,6 @@ def _session_id(payload: Any) -> str | None:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        value = properties.get("sessionID") or properties.get("session_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-
-        info = properties.get("info")
-        if isinstance(info, dict):
-            # message.updated uses info.id = msg_…; only accept sessionID.
-            value = info.get("sessionID") or info.get("session_id")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
     return None
 
 
@@ -72,10 +56,7 @@ class OpenCodeTrajectoryMapper:
 
     def inspect(self, path: Path) -> CaptureSummary:
         session_id: str | None = None
-        fault_started = False
         fault_activated = False
-        session_idle = False
-        session_error = False
         event_count = 0
 
         for event in self.read_events(path):
@@ -84,21 +65,12 @@ class OpenCodeTrajectoryMapper:
             payload = event.get("payload")
             session_id = _session_id(payload) or session_id
 
-            if kind == "fault.activation.started":
-                fault_started = True
-            elif kind == "fault.activation.completed":
+            if kind == "fault.activation.completed":
                 fault_activated = True
-            elif kind == "opencode.event" and isinstance(payload, dict):
-                event_type = payload.get("type")
-                session_idle = session_idle or event_type == "session.idle"
-                session_error = session_error or event_type == "session.error"
 
         return CaptureSummary(
             session_id=session_id,
-            fault_started=fault_started,
             fault_activated=fault_activated,
-            session_idle=session_idle,
-            session_error=session_error,
             event_count=event_count,
         )
 
@@ -146,4 +118,3 @@ class OpenCodeTrajectoryMapper:
                 stream.write(json.dumps(event, ensure_ascii=False) + "\n")
 
         return summary
-

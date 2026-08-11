@@ -11,7 +11,7 @@
 
 | 阶段 | 状态 | 说明 |
 |------|------|------|
-| Phase 0 框架解耦 | 已完成 | Registry / execution.jsonl / **Insight 服务端 Judge** |
+| Phase 0 框架解耦 | 已完成 | Registry / 可选 execution.jsonl / **Insight 服务端 Judge（join ⓪）** |
 | Phase 1 CLI Adapter | 已完成 | `platform_adapters/xiaoo/` + Hooker + `registry` 注册 |
 | Phase 2 Daemon harness | 已完成 | `platform_options.harness: daemon` + `daemon_url` |
 | Phase 3 Skill 平台可见性 | 已完成（后调整） | 原 `fault-catalog.yaml` 的 `platforms` 已移除；故障配方面向通用平台，UI 默认双平台。平台能力差异由 Adapter / 文档说明（见 [fault-mode-plugins.md](features/fault-mode-plugins.md)） |
@@ -28,7 +28,7 @@
 | xiaoO 要改核心 Rust 吗？ | **不需要**。全部走官方 Skill / Hook 插件 / CLI / Daemon API。 |
 | 故障任务怎么发起？ | **外层**由 Insight「故障注入」任务（BFF）+ 本机 **FI Worker** claim 执行；本地排障可用 `python3 -m agent_fault_injection.cli run`。**内层被测 harness** 默认用 **`xiaoo --cli run`**，批量/可观测增强可选 **Daemon HTTP+SSE**。 |
 | 用不用 TUI / 飞书渠道？ | **评测不用**。交互入口不适合可复现、可超时、可批跑的故障实验。 |
-| Judge 用谁？ | **仅 Insight 服务端 Judge**（轨迹证据；本机 Python / OpenCode Judge 已删除，不作为产品路径）。 |
+| Judge 用谁？ | **仅 Insight 服务端 Judge**（主树 join ⓪ `Session.interactions`；本机 Python / OpenCode Judge 已删除，不作为产品路径）。 |
 | 故障怎么注入？ | Workspace 安装 `SKILL.md` + 临时 `XIAOO_CONFIG` 挂评测 Hook；Hook 的 `system.transform` 强制先 load 故障 skill（对齐 OpenCode 插件语义）。 |
 
 ---
@@ -246,10 +246,10 @@ sequenceDiagram
   XO->>HK: Chat.system.transform / Tool hooks
   HK-->>XA: plugin-ready + events.jsonl
   XO-->>XA: 进程结束 / SSE done
-  XA->>XA: map_trajectory → execution.jsonl
+  XA->>XA: map_trajectory → trajectory / 可选 execution.jsonl
   XA-->>RAS: PlatformRunResult(fault_activated=...)
-  RAS->>RAS: write collect-result.json
-  Note over Insight: Worker 上传后由 Insight Judge
+  RAS->>RAS: write collect-result.json（markers + taskId；interactions=[]）
+  Note over Insight: Worker 上传后 Insight Judge join ⓪ Session
   RAS-->>U: artifacts/ + RunResult
 ```
 
@@ -270,15 +270,15 @@ sequenceDiagram
 |------------|------|
 | `*.Chat.system.transform` | 注入「必须先成功调用 skill 工具加载目标故障 skill 一次」 |
 | `*.Tool.*.post`（或 skill 专用） | 检测激活，写 `fault.activation.completed` |
-| 可选 Tool/Llm hooks | 追加规范化事件，供 `execution.jsonl` |
+| 可选 Tool/Llm hooks | 追加规范化事件，供本地 `execution.jsonl`（非 Judge 真源） |
 
 ### 5.3 产物约定（跨平台）
 
 | 文件 | 含义 |
 |------|------|
 | `raw/events.jsonl` | 原始/半原始事件流（含激活 kind） |
-| `execution.jsonl` | **规范化证据**（Insight Judge 优先读取） |
-| `trajectory.jsonl` / `interactions.json` | 轨迹与 insight 兼容导出 |
+| `execution.jsonl` | 可选本地规范化证据（**非** Insight Judge 真源） |
+| `trajectory.jsonl` / `interactions.json` | 轨迹与 markers + Trace ID（`interactions` 恒为 `[]`） |
 | `collect-result.json` | Worker 回传 Insight 的采集载荷（**不含**本机 Judge 产物） |
 
 规范化 `execution.jsonl` 行类型示例：`assistant` / `tool` / `final_answer` / `session_error` / `platform_protection`。
@@ -324,13 +324,13 @@ platform_options:
 
 | 阶段 | 内容 | 故障任务发起 |
 |------|------|--------------|
-| Phase 0 | 框架解耦：Adapter Registry、`execution.jsonl`、Judge 归 Insight、Web 委托 | 无 xiaoO |
+| Phase 0 | 框架解耦：Adapter Registry、可选 `execution.jsonl`、Judge 归 Insight（join ⓪）、Web 委托 | 无 xiaoO |
 | Phase 1 | `XiaoOAdapter` + Hooker + CLI harness | **`xiaoo --cli run`** |
 | Phase 2 | Daemon harness 增强 | `harness: daemon` |
 | Phase 3 | Skill 跨平台兼容（工具名 / 暂不支持清单） | 同 Phase 1/2 |
 | Phase 4 | Insight 任务向导 + Worker + 文档 | — |
 
-新增第三平台时：实现 Adapter + 注入面 + 写出 `execution.jsonl` 并注册即可；**不必**改 Worker 协议 / Insight Judge。
+新增第三平台时：实现 Adapter + 注入面 + FI events/markers + Trace ID 并注册即可；**不必**改 Worker 协议 / Insight Judge。
 
 ---
 
@@ -347,4 +347,4 @@ platform_options:
 
 ## 9. 一句话总结
 
-**故障实验由 Insight 任务 + 本机 FI Worker（或 CLI 排障）发起；xiaoO 侧默认用 CLI `xiaoo --cli run` 执行带故障 Skill 的真实 Agent；可选 Daemon 做批量与细粒度观测；评判始终走 Insight 服务端 Judge，靠规范化 `execution.jsonl` / interactions 吃下 xiaoO 轨迹。**
+**故障实验由 Insight 任务 + 本机 FI Worker（或 CLI 排障）发起；xiaoO 侧默认用 CLI `xiaoo --cli run` 执行带故障 Skill 的真实 Agent；可选 Daemon 做批量与细粒度观测；评判始终走 Insight 服务端 Judge，主树 join ⓪ `Session.interactions`（FI collect 只提供 markers / Trace ID）。**
