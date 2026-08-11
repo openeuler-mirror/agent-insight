@@ -159,7 +159,7 @@ function parseArguments(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-async export function providerRequestToolNames(
+export async function providerRequestToolNames(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Set<string>> {
@@ -548,7 +548,7 @@ async function rewriteSseResponse(
   return { text: lines.join(newline), changed: true }
 }
 
-async export function rewriteProviderResponse(
+export async function rewriteProviderResponse(
   response: Response,
   rewrite: RewriteToolCall,
 ): Promise<{ response: Response; changed: boolean; format: string }> {
