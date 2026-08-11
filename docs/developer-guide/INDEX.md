@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `285f431013d75416196f3a1fc6a8b43609990c91` (`285f431`) |
-| Branch | `feat/agent-evaluator-suite` |
-| Date | 2026-08-07T11:25:18+08:00 |
-| Author | kaibin-2026 |
-| Subject | `feat(eval): 新增 Agent 专项评估器套件` |
+| Commit | `36e2da85c65de008594137ce490c3081ba595c9e` (`36e2da8`) |
+| Branch | `migration/qwencode-0.8` |
+| Date | 2026-08-11T17:13:29+08:00 |
+| Author | unknown |
+| Subject | `feat(qwencode): migrate native OTLP collector to 0.8` |
 
-**如何更新：** `git diff 285f431 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 36e2da8 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
