@@ -325,6 +325,25 @@ def build_runner() -> ExperimentRunner:
     return ExperimentRunner(platform_registry=registry)
 
 
+def _session_id_from_artifacts(artifacts: RunArtifacts) -> str | None:
+    """Trace ID written by ExperimentRunner (manifest / interactions)."""
+
+    for path in (artifacts.manifest_file, artifacts.interactions_file):
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for key in ("session_id", "taskId", "task_id"):
+            value = doc.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
 def _build_request(args: argparse.Namespace) -> RunRequest:
     workspace_base = Path(args.workspace).expanduser().resolve()
     if not workspace_base.is_dir():
@@ -410,6 +429,7 @@ async def _async_main(argv: list[str] | None = None) -> int:
         injection_method = (
             getattr(fault_def, "injection_method", None) or "skill_inject"
         )
+        session_id = _session_id_from_artifacts(result.artifacts)
         # Prefer activation from rewritten collect / events after enrich.
         rewrite_collect_after_observation_enrich(
             result.artifacts,
@@ -418,7 +438,7 @@ async def _async_main(argv: list[str] | None = None) -> int:
             injection_method=injection_method,
             # Let build_collect_payload derive activation from events.jsonl.
             fault_activated=False,
-            session_id=None,
+            session_id=session_id,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("observation enrich / collect rewrite failed: %s", exc)

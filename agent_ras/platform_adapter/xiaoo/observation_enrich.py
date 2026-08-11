@@ -1,8 +1,10 @@
 # coding: utf-8
 """Map truthful Daemon SSE observation events into FI interactions.
 
-FI Judge consumes interactions only. Do not fabricate platform events and do
-not inject RAS anomaly/steer/notice into Judge inputs.
+FI Judge consumes interactions only. Do not fabricate platform stream events.
+Do not fold RAS anomaly JSON into assistant content. Host-delivered recovery
+prompts in ``turn_done.drained`` are real (parity with OpenCode notice/steer
+appearing as user turns) and MUST be appended so Judge can mark ``recovered``.
 """
 from __future__ import annotations
 
@@ -71,6 +73,38 @@ def extract_observation_text(events_file: Path) -> dict[str, str]:
     return {"thinking": thinking, "output": output}
 
 
+def extract_recovery_drained(events_file: Path) -> list[str]:
+    """Host-delivered recovery prompts from Daemon ``turn_done.drained``."""
+
+    out: list[str] = []
+    if not events_file.is_file():
+        return out
+    with events_file.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get("kind") != "xiaoo.daemon":
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("type") or "") != "turn_done":
+                continue
+            drained = payload.get("drained")
+            if not isinstance(drained, list):
+                continue
+            for item in drained:
+                if isinstance(item, str) and item.strip():
+                    text = item.strip()
+                    if text not in out:
+                        out.append(text)
+    return out
+
+
 def _surface_fault_effect(text: str) -> str:
     """Reorder truthful observation so truncated Judge windows still see loop body.
 
@@ -106,34 +140,43 @@ def enrich_interactions_from_observation_events(
     events_file: Path,
     interactions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Fill assistant content from real thinking/text deltas; leave structure otherwise."""
+    """Fill assistant content from stream deltas; append drained recovery as user turns."""
 
     obs = extract_observation_text(events_file)
     text = compose_assistant_observation(
         thinking=obs["thinking"],
         output=obs["output"],
     )
-    if not text:
-        return list(interactions)
-
     out = [dict(item) if isinstance(item, dict) else item for item in interactions]
-    filled = False
-    for item in out:
-        if not isinstance(item, dict):
-            continue
-        if item.get("role") != "assistant":
-            continue
-        existing = str(item.get("content") or "")
-        if existing.strip():
-            # Keep existing non-empty content; observation already represented.
+    if text:
+        filled = False
+        for item in out:
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") != "assistant":
+                continue
+            existing = str(item.get("content") or "")
+            if existing.strip():
+                # Keep existing non-empty content; observation already represented.
+                filled = True
+                continue
+            item["content"] = text
             filled = True
-            continue
-        item["content"] = text
-        filled = True
-        break
+            break
 
-    if not filled:
-        out.append({"role": "assistant", "content": text})
+        if not filled:
+            out.append({"role": "assistant", "content": text})
+
+    existing_user = {
+        str(item.get("content") or "").strip()
+        for item in out
+        if isinstance(item, dict) and item.get("role") == "user"
+    }
+    for drained in extract_recovery_drained(events_file):
+        if drained in existing_user:
+            continue
+        out.append({"role": "user", "content": drained})
+        existing_user.add(drained)
     return out
 
 
@@ -169,6 +212,8 @@ def rewrite_collect_after_observation_enrich(
         raw_list,
     )
     doc["interactions"] = enriched
+    if session_id and str(session_id).strip():
+        doc["taskId"] = str(session_id).strip()
     interactions_path.write_text(
         json.dumps(doc, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -191,5 +236,6 @@ __all__ = [
     "compose_assistant_observation",
     "enrich_interactions_from_observation_events",
     "extract_observation_text",
+    "extract_recovery_drained",
     "rewrite_collect_after_observation_enrich",
 ]

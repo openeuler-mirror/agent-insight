@@ -142,7 +142,6 @@ def test_hooker_tool_post_skips_hello(monkeypatch) -> None:
     monkeypatch.setattr(hm, "_ensure_path", lambda: None)
     monkeypatch.setattr(hm, "_sync_capability_config", lambda: None)
     monkeypatch.setattr(hm, "_ensure_embed", lambda: None)
-    monkeypatch.setattr(hm, "_otel_safe", lambda *a, **k: None)
     monkeypatch.setattr(hm, "_client", lambda native: (FakeClient(), None))
 
     resp = hm.handle_tool_post(
@@ -157,5 +156,5 @@ def test_hooker_tool_post_skips_hello(monkeypatch) -> None:
             },
         }
     )
-    assert resp["type"] == "accept"
+    assert resp["result"] == "accept"
     assert hellos == [], "tool_post must not call hello"

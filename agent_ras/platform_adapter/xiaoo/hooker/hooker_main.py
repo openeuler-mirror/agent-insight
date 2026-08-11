@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 # coding: utf-8
-"""xiaoO Plugin Hooker entry — thin Signal mapping into shared ras_runtime + OTel buffer.
+"""xiaoO Plugin Hooker entry — thin Signal mapping into shared ras_runtime.
 
 Hook points:
-  - ``*.Chat.message.received`` → hello + otel user note
-  - ``*.Tool.*.post`` → tool observe + otel tool span (**no hello** — preserves detector buffers)
-  - ``*.Session.lifecycle.state`` → reset + otel flush on idle/complete
-  - ``stream_delta`` → text observe + otel assistant buffer
+  - ``*.Chat.message.received`` → hello
+  - ``*.Tool.*.post`` → tool observe (**no hello** — preserves detector buffers)
+  - ``*.Session.lifecycle.state`` → reset on idle/complete
+  - ``stream_delta`` → text observe only (① detect/recover; **no** Trace forward)
 
-stdin JSON → RasClient → stdout JSON. Fail-open on RAS/OTel errors.
+stdin JSON → RasClient → stdout JSON. Fail-open on RAS errors.
+
+Complete-link Trace (⓪) is owned solely by Insight ``xiaoo-trace-collector``.
+This hooker must not buffer/flush OTLP or call Insight ``note_*``.
 
 For stock-master mid-stream thinking + abort, prefer Daemon SSE
 (``DaemonRasSession``); plugin hooks alone lack cancel on CLI.
@@ -185,13 +188,6 @@ def _wire_actions_from_result(result: dict[str, Any] | None) -> list[dict[str, A
     return out
 
 
-def _otel_safe(fn, *args, **kwargs) -> None:
-    try:
-        fn(*args, **kwargs)
-    except Exception as exc:
-        print(f"agent_ras otel: {exc}", file=sys.stderr)
-
-
 def handle_chat_received(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
     _sync_capability_config()
@@ -199,13 +195,11 @@ def handle_chat_received(payload: dict[str, Any]) -> dict[str, Any]:
     sid = _session_key(payload)
     native = _native_id(sid)
     os.environ["XIAOO_RAS_SESSION_ID"] = native
-    from platform_adapter.xiaoo import otel_trace
-
-    _otel_safe(otel_trace.note_chat, sid, payload)
     client, _host = _client(native)
     client.ensure()
     client.hello(sid, "xiaoo", _hello_config())
-    return {"type": "Acknowledged"}
+    # Chat.message.received: only ``accept`` | ``transform`` (xiaoO chat adaptor).
+    return {"result": "accept"}
 
 
 def handle_session_state(payload: dict[str, Any]) -> dict[str, Any]:
@@ -214,14 +208,11 @@ def handle_session_state(payload: dict[str, Any]) -> dict[str, Any]:
     sid = _session_key(payload)
     native = _native_id(sid)
     client, _host = _client(native)
-    from platform_adapter.xiaoo import otel_trace
-
-    do_flush = otel_trace.should_flush_lifecycle(payload)
     state = str(payload.get("state") or payload.get("outcome") or "").lower()
-    if do_flush or state in {"closed", "force_closed", "destroyed", "idle"}:
+    if state in {"closed", "force_closed", "destroyed", "idle"}:
         client.reset(sid)
-        _otel_safe(otel_trace.flush_session, sid)
-    return {"type": "Acknowledged"}
+    # Session.lifecycle.state is event-style: only ``ack`` is valid.
+    return {"result": "ack"}
 
 
 def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
@@ -229,17 +220,13 @@ def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
     _sync_capability_config()
     _ensure_embed()
     from platform_adapter.xiaoo.stream_bridge import observe_tool_after
-    from platform_adapter.xiaoo import otel_trace
 
     sid = _session_key(payload)
     native = _native_id(sid)
-    _otel_safe(otel_trace.note_tool, sid, payload)
     client, _host = _client(native)
     client.ensure()
     # Do NOT hello here — hello rebuilds SessionState and wipes detector buffers.
-    # Session is established in chat_received (or SessionHub.ensure on observe).
     call = payload.get("call") or {}
-    # Next assistant stream is a new LLM identity (do not inherit skill call_id).
     _LLM_TURN_MSG.pop(sid, None)
     _LLM_TURN_MSG.pop(native, None)
     output = call.get("output")
@@ -273,7 +260,7 @@ def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
         is_error=is_error,
     )
     actions = _wire_actions_from_result(result)
-    resp: dict[str, Any] = {"type": "accept"}
+    resp: dict[str, Any] = {"result": "accept"}
     if actions:
         for a in actions:
             if a.get("kind") == "send_prompt" and not a.get("session_id"):
@@ -288,7 +275,6 @@ def handle_stream_delta(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
     _ensure_embed()
     from platform_adapter.xiaoo.stream_bridge import observe_text_delta
-    from platform_adapter.xiaoo import otel_trace
 
     sid = _session_key(payload)
     native = _native_id(sid)
@@ -307,7 +293,6 @@ def handle_stream_delta(payload: dict[str, Any]) -> dict[str, Any]:
         mid = _LLM_TURN_MSG.get(sid) or f"xiaoo-llm-{uuid.uuid4().hex[:16]}"
         _LLM_TURN_MSG[sid] = mid
     _append_fi_llm_turn_event(message_id=mid, channel=channel, session_id=native)
-    _otel_safe(otel_trace.note_stream, sid, text, channel=channel)
     result = observe_text_delta(
         client,
         sid,
@@ -316,7 +301,7 @@ def handle_stream_delta(payload: dict[str, Any]) -> dict[str, Any]:
         message_id=mid,
     )
     actions = _wire_actions_from_result(result)
-    resp: dict[str, Any] = {"type": "accept"}
+    resp: dict[str, Any] = {"result": "accept"}
     if actions:
         for a in actions:
             if a.get("kind") == "send_prompt" and not a.get("session_id"):
@@ -340,7 +325,7 @@ def main(argv: list[str]) -> int:
     handler = HANDLERS.get(op)
     if handler is None:
         print(f"unknown op: {op}", file=sys.stderr)
-        _emit({"type": "accept"})
+        _emit({"result": "accept"})
         return 1
     try:
         payload = _load_stdin()
@@ -348,10 +333,10 @@ def main(argv: list[str]) -> int:
         return 0
     except Exception as exc:
         print(f"agent_ras hooker error: {exc}", file=sys.stderr)
-        if op in ("chat_received", "session_state"):
-            _emit({"type": "Acknowledged"})
+        if op == "session_state":
+            _emit({"result": "ack"})
         else:
-            _emit({"type": "accept"})
+            _emit({"result": "accept"})
         return 0
 
 

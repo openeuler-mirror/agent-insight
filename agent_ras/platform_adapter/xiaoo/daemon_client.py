@@ -56,7 +56,8 @@ class XiaooDaemonClient:
         workspace: str | None = None,
         runtime_profile_id: str | None = None,
     ) -> dict[str, Any]:
-        rid = (runtime_id or "").strip() or f"ras-{uuid.uuid4().hex[:16]}"
+        # Use a bare UUID so FI↔RAS join key is not a ras-* experiment id.
+        rid = (runtime_id or "").strip() or str(uuid.uuid4())
         cid = (conversation_id or "").strip() or rid
         sid = (sender_id or "").strip() or self.sender_id
         entry: dict[str, Any] = {"title": title or rid}

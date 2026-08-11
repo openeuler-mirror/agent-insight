@@ -19,6 +19,49 @@ def _write_events(path: Path, rows: list[dict]) -> None:
     )
 
 
+def test_enrich_fills_empty_assistant_without_ras_anomaly_in_assistant(
+    tmp_path: Path,
+) -> None:
+    events = tmp_path / "events.jsonl"
+    _write_events(
+        events,
+        [
+            {
+                "kind": "xiaoo.cli",
+                "payload": {
+                    "type": "thinking_delta",
+                    "snapshot": "明白，磁盘安全第一。我先看看上下文。",
+                },
+            },
+            {
+                "kind": "xiaoo.daemon",
+                "payload": {
+                    "type": "turn_done",
+                    "stopped": True,
+                    "last_observe": {"anomaly": {"summary": "should-not-appear"}},
+                    "drained": [
+                        "[RAS] 检测到思考循环异常，已执行恢复操作",
+                        "<system-reminder>\n[思考循环锁定]\n</system-reminder>",
+                    ],
+                },
+            },
+        ],
+    )
+    interactions = [
+        {"role": "user", "content": "执行场景2"},
+        {"role": "assistant", "content": ""},
+    ]
+    out = enrich_interactions_from_observation_events(events, interactions)
+    assert out[1]["content"].startswith("明白，磁盘安全第一")
+    assert "should-not-appear" not in out[1]["content"]
+    assert out[2]["role"] == "user"
+    assert "检测到思考循环异常" in out[2]["content"]
+    assert out[3]["role"] == "user"
+    assert "思考循环锁定" in out[3]["content"]
+    blob = json.dumps(out, ensure_ascii=False)
+    assert "should-not-appear" not in blob
+
+
 def test_extract_observation_prefers_longest_snapshot(tmp_path: Path) -> None:
     events = tmp_path / "events.jsonl"
     _write_events(
@@ -56,40 +99,6 @@ def test_extract_observation_prefers_longest_snapshot(tmp_path: Path) -> None:
     assert obs["thinking"] == "明白，我先看看上下文。" * 5
     assert "llm_thinking_loop" not in obs["thinking"]
     assert "[RAS]" not in obs["thinking"]
-
-
-def test_enrich_fills_empty_assistant_without_ras_text(tmp_path: Path) -> None:
-    events = tmp_path / "events.jsonl"
-    _write_events(
-        events,
-        [
-            {
-                "kind": "xiaoo.cli",
-                "payload": {
-                    "type": "thinking_delta",
-                    "snapshot": "明白，磁盘安全第一。我先看看上下文。",
-                },
-            },
-            {
-                "kind": "xiaoo.daemon",
-                "payload": {
-                    "type": "turn_done",
-                    "stopped": True,
-                    "last_observe": {"anomaly": {"summary": "should-not-appear"}},
-                },
-            },
-        ],
-    )
-    interactions = [
-        {"role": "user", "content": "执行场景2"},
-        {"role": "assistant", "content": ""},
-    ]
-    out = enrich_interactions_from_observation_events(events, interactions)
-    assert out[1]["content"].startswith("明白，磁盘安全第一")
-    assert "should-not-appear" not in out[1]["content"]
-    blob = json.dumps(out, ensure_ascii=False)
-    assert "should-not-appear" not in blob
-    assert "[RAS]" not in blob
 
 
 def test_enrich_noop_without_stream_observation(tmp_path: Path) -> None:
