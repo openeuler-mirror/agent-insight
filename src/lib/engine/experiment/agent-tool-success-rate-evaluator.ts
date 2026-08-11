@@ -231,9 +231,7 @@ function computeScore(
   const rate = stats.overallSuccessRate;
   let summary: string;
   if (failed === 0) {
-    summary = stats.totalCalls === 0
-      ? '本次执行无工具调用。'
-      : `全部 ${stats.totalCalls} 次工具调用均成功。`;
+    summary = `全部 ${stats.totalCalls} 次工具调用均成功。`;
   } else if (rate < 50) {
     summary = `${stats.totalCalls} 次调用中 ${failed} 次失败（成功率 ${rate}%），工具链路严重不稳定。`;
   } else if (impact.impact_verdict === 'severe') {
@@ -275,7 +273,10 @@ function computeScore(
 
   // 评分点1：整体成功率
   const overallRate = stats.overallSuccessRate;
-  const rateStatus: EvalPointStatus = overallRate >= 80 ? 'covered' : (overallRate >= 60 ? 'partial' : 'missing');
+  let rateStatus: EvalPointStatus;
+  if (overallRate >= 80) rateStatus = 'covered';
+  else if (overallRate >= 60) rateStatus = 'partial';
+  else rateStatus = 'missing';
   points.push({
     label: '整体成功率',
     score: overallRate,
@@ -288,13 +289,21 @@ function computeScore(
   // 评分点2：按工具聚合（取最高失败率工具判定）
   if (stats.perTool.length > 0) {
     const lines = stats.perTool.map((t) => {
-      const prefix = t.failureRatePct > 50 ? '🔴' : (t.failureRatePct > 0 ? '🟡' : '🟢');
+      let prefix: string;
+      if (t.failureRatePct > 50) prefix = '🔴';
+      else if (t.failureRatePct > 0) prefix = '🟡';
+      else prefix = '🟢';
       return `- ${prefix} **${t.toolName}**: ${t.success}/${t.total} (失败率 ${t.failureRatePct}%)`;
     });
     const maxFailureRate = Math.max(...stats.perTool.map((t) => t.failureRatePct));
-    const perToolScore = maxFailureRate > 50 ? 50 : (maxFailureRate > 20 ? 70 : 100);
-    const perToolStatus: EvalPointStatus = maxFailureRate > 50 ? 'missing'
-      : (maxFailureRate > 20 ? 'partial' : 'covered');
+    let perToolScore: number;
+    if (maxFailureRate > 50) perToolScore = 50;
+    else if (maxFailureRate > 20) perToolScore = 70;
+    else perToolScore = 100;
+    let perToolStatus: EvalPointStatus;
+    if (maxFailureRate > 50) perToolStatus = 'missing';
+    else if (maxFailureRate > 20) perToolStatus = 'partial';
+    else perToolStatus = 'covered';
     points.push({
       label: '按工具聚合失败率',
       score: perToolScore,
@@ -312,8 +321,10 @@ function computeScore(
   const hasRepeatedErrors = judge.error_patterns.some((e) => e.count >= 3);
   const errorScore = judge.error_patterns.length === 0 ? 100
     : (hasRepeatedErrors ? 50 : 70);
-  const errorStatus: EvalPointStatus = judge.error_patterns.length === 0 ? 'covered'
-    : (hasRepeatedErrors ? 'missing' : 'partial');
+  let errorStatus: EvalPointStatus;
+  if (judge.error_patterns.length === 0) errorStatus = 'covered';
+  else if (hasRepeatedErrors) errorStatus = 'missing';
+  else errorStatus = 'partial';
   points.push({
     label: '错误模式分析',
     score: errorScore,
@@ -332,11 +343,17 @@ function computeScore(
     impLines.push(`- Token 浪费: ${impactForPoint.wasted_token_estimate}`);
   }
   impLines.push(`- 影响判定: ${impactForPoint.impact_verdict}`);
-  const impactScore = impactForPoint.impact_verdict === 'none' ? 100
-    : (impactForPoint.impact_verdict === 'minor' ? 80
-      : (impactForPoint.impact_verdict === 'moderate' ? 50 : 20));
-  const impactStatus: EvalPointStatus = impactForPoint.impact_verdict === 'none' ? 'covered'
-    : (impactForPoint.impact_verdict === 'minor' ? 'partial' : 'missing');
+  let impactScore: number;
+  switch (impactForPoint.impact_verdict) {
+    case 'none': impactScore = 100; break;
+    case 'minor': impactScore = 80; break;
+    case 'moderate': impactScore = 50; break;
+    default: impactScore = 20;
+  }
+  let impactStatus: EvalPointStatus;
+  if (impactForPoint.impact_verdict === 'none') impactStatus = 'covered';
+  else if (impactForPoint.impact_verdict === 'minor') impactStatus = 'partial';
+  else impactStatus = 'missing';
   points.push({
     label: '失败影响评估',
     score: impactScore,

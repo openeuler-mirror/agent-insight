@@ -210,10 +210,11 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       overall_reason: '回答存在明显偏向性，未客观对比两种语言。',
       explicit_completion_score: 50,
       implicit_constraint_score: 60,
-      information_sufficiency_score: 20,
+      information_sufficiency_score: 10,
       requirement_results: [
         { content: '列出Java优缺点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '只提了缺点，未提优点' },
         { content: '列出Python优缺点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '只提了优点，未提缺点' },
+        { content: '提供客观比较', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '未提供任何比较' },
         { content: '客观对比', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '存在偏向性' },
       ],
     }));
@@ -221,11 +222,11 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       'Java 和 Python 各有什么优缺点？',
       'Python 优点很多... Java 缺点很多...',
     ));
-    // explicit: 2 not_covered → 100-40=60 → 60*0.5=30
+    // explicit: 3 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
     // implicit: 1 not_covered (high) → 100-20=80 → 80*0.3=24
-    // info: 20 → 20*0.2=4
-    // total: 30+24+4=58
-    assert.ok(r.score! <= 60, `expected <=60, got ${r.score}`);
+    // info: 10 → 10*0.2=2
+    // total: 0+24+2=26
+    assert.ok(r.score! <= 50, `expected <=50, got ${r.score}`);
   });
 
   it('用例9: 用户输入模糊 → ≥80', async () => {
@@ -293,22 +294,22 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
       implicit_constraint_score: 50,
       information_sufficiency_score: 30,
       requirement_results: [
-        { content: '总结文档', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '已总结' },
+        { content: '总结文档', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '使用了段落而非要求的格式' },
         { content: '列出三个关键点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '仅列了2个' },
         { content: '列出两个行动项', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '列了3个而非2个' },
         { content: '用表格输出', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '使用了段落而非表格' },
+        { content: '格式要求', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '要求表格但用了段落' },
       ],
     }));
     const r = await runTaskCompletionNoRef(USER, ctx(
       '请总结一下这份文档，列出三个关键点和两个行动项，并用表格输出。',
       '段落总结...2个关键点...3个行动项...',
     ));
-    // explicit: 3 not_covered + 0 partial → 100-60=40 → allExplicitNotCovered? no(1 covered, 3 not)
-    // → 40*0.5=20
-    // implicit: 0 → 100*0.3=30
+    // explicit: 4 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
+    // implicit: 1 not_covered (high) → 100-20=80 → 80*0.3=24
     // info: 30 → 30*0.2=6
-    // total: 20+30+6=56
-    assert.ok(r.score! <= 60, `expected <=60, got ${r.score}`);
+    // total: 0+24+6=30
+    assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
   });
 
   it('破坏验证：分数不为常量', async () => {

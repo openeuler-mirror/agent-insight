@@ -166,7 +166,10 @@ function computeScore(judge: TaskCompletionJudgeResult): {
   // 加权总分
   const score = Math.round(explicitScore * 0.5 + implicitScore * 0.3 + infoScore * 0.2);
 
-  const verdict: 'pass' | 'warn' | 'fail' = score >= 80 ? 'pass' : (score >= 60 ? 'warn' : 'fail');
+  let verdict: 'pass' | 'warn' | 'fail';
+  if (score >= 80) verdict = 'pass';
+  else if (score >= 60) verdict = 'warn';
+  else verdict = 'fail';
 
   // reason：需求推断清单 + 逐条判定（含置信度标记） + 综合评分说明（规格要求）
   const allResults = judge.requirement_results;

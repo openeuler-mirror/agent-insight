@@ -114,7 +114,7 @@ describe('tool success rate evaluator', () => {
     assert.equal(r.verdict, 'fail');
   });
 
-  it('case3: specific tool high failure rate -> 50~70', async () => {
+  it('case3: specific tool high failure rate -> ~80 (75% overall, moderate impact)', async () => {
     inject(JSON.stringify({
       overall_reason: 'search tool 50% failure rate, others normal.',
       overall_success_rate: 75,
@@ -176,7 +176,7 @@ describe('tool success rate evaluator', () => {
     assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
   });
 
-  it('case5: retry then succeed -> >=80', async () => {
+  it('case5: retry then succeed -> score 50 (2 calls, 1 fail+1 success=50% rate, minor impact)', async () => {
     // 评估器按调用次数计：1 error + 1 completed → 50% 成功率 → base=50
     // LLM 判 minor（非关键路径），不扣分 → 50
     inject(JSON.stringify({
