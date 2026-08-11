@@ -36,6 +36,9 @@ yarn-error.log*
 .env.local
 .env
 
+# Local Qwen Code settings, hooks, and credentials
+.qwen/
+
 # custom model config (copy from custom-models.example.json)
 custom-models.json
 

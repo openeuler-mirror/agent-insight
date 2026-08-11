@@ -36,6 +36,7 @@ import {
     extractSkillsWithVersionsFromJiuwenSession,
     extractSkillsWithVersionsFromOpenClawSession,
     extractSkillsWithVersionsFromOpencodeSession,
+    extractSkillsWithVersionsFromToolInteractions,
     normalizeInteractions,
 } from '@/lib/shared/interaction-utils';
 
@@ -261,6 +262,7 @@ function collectTraceSkillCalls(interactions: RawInteraction[], node?: AgentNode
         ...extractSkillsWithVersionsFromOpenClawSession(normalized),
         ...extractSkillsWithVersionsFromHermesSession(normalized),
         ...extractSkillsWithVersionsFromJiuwenSession(normalized),
+        ...extractSkillsWithVersionsFromToolInteractions(normalized),
     ];
 
     const byKey = new Map<string, TraceSkillCall>();

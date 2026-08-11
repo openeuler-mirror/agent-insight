@@ -7,9 +7,10 @@ import { langfuseLangGraphAdapter } from "./langfuse-langgraph"
 import { openclawAdapter } from "./openclaw"
 import { opencodeAdapter } from "./opencode"
 import { qoderAdapter } from "./qoder"
+import { qwencodeAdapter } from "./qwencode"
 import type { FrameworkAdapter, FrameworkDescriptor } from "./types"
 
-const adapters = [opencodeAdapter, claudeAdapter, codeagentAdapter, openclawAdapter, hermesAdapter, jiuwenAdapter, langfuseLangGraphAdapter, qoderAdapter, traeAdapter] as const
+const adapters = [opencodeAdapter, claudeAdapter, codeagentAdapter, qwencodeAdapter, openclawAdapter, hermesAdapter, jiuwenAdapter, langfuseLangGraphAdapter, qoderAdapter, traeAdapter] as const
 
 const fallbackAdapter: FrameworkAdapter = {
   descriptor: {

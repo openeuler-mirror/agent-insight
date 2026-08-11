@@ -5,6 +5,7 @@ import {
   extractSkillsWithVersionsFromClaudeSession,
   extractSkillsWithVersionsFromOpenClawSession,
   extractSkillsWithVersionsFromOpencodeSession,
+  extractSkillsWithVersionsFromToolInteractions,
   normalizeInteractions,
 } from "../src/lib/shared/interaction-utils"
 import { getAdapter, listFrameworks, resolveFrameworkId } from "../src/lib/ingest/adapters/registry"
@@ -28,6 +29,7 @@ test("registry resolves framework ids and aliases", () => {
   assert.equal(resolveFrameworkId("openjiuwen"), "jiuwenswarm")
   assert.equal(resolveFrameworkId("qoder-cli"), "qoder")
   assert.equal(resolveFrameworkId("qoder-cn"), "qoder")
+  assert.equal(resolveFrameworkId("qwen-code"), "qwencode")
   assert.equal(resolveFrameworkId(null), "")
   assert.equal(getAdapter("claudecode"), getAdapter("claude"))
 })
@@ -35,7 +37,7 @@ test("registry resolves framework ids and aliases", () => {
 test("registry exposes the framework descriptor list", () => {
   assert.deepEqual(
     listFrameworks().map((descriptor) => descriptor.id),
-    ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "qoder", "trae"],
+    ["opencode", "claude", "codeagent", "qwencode", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "qoder", "trae"],
   )
 })
 
@@ -51,6 +53,9 @@ test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("claude").normalizeForStorage, normalizeClaudeCodeInteractionsForStorage)
   assert.equal(getAdapter("codeagent").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
   assert.equal(getAdapter("codeagent").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("qwencode").extractSkills, extractSkillsWithVersionsFromToolInteractions)
+  assert.equal(getAdapter("qwencode").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("qwencode").sessionMergeStrategy, "snapshot-replace")
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
   assert.equal(getAdapter("openclaw").capabilities?.subagentTree, true)
   assert.equal(getAdapter("openclaw").capabilities?.skillScope, "session")

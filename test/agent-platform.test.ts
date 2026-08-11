@@ -14,6 +14,12 @@ test('Agent management recognizes Qoder as a supported platform', () => {
   assert.equal(normalizeAgentPlatform(' Qoder '), 'qoder');
 });
 
+test('Agent management recognizes Qwen Code as a supported platform', () => {
+  assert.ok(AGENT_PLATFORMS.includes('qwencode'));
+  assert.equal(normalizeAgentPlatform('qwencode'), 'qwencode');
+  assert.equal(normalizeAgentPlatform(' QWENCODE '), 'qwencode');
+});
+
 test('Agent management preserves existing platforms and labels unregistered platforms as unknown', () => {
   assert.equal(normalizeAgentPlatform('opencode'), 'opencode');
   assert.equal(normalizeAgentPlatform('openclaw'), 'openclaw');

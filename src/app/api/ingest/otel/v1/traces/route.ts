@@ -5,6 +5,7 @@ import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
 import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
 import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
 import { partitionCodeAgentOtlpPayload } from '@/lib/ingest/codeagent-otel/detect';
+import { isolateQwenCodeOtelEvent, isQwenCodeOtelEvent } from '@/lib/ingest/otel/adapters/qwencode';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
@@ -78,6 +79,7 @@ export async function POST(req: Request) {
   try {
     const apiKey = req.headers.get('x-witty-api-key');
     let authenticatedUser: string | undefined;
+    let hasInvalidApiKey = false;
 
     if (apiKey) {
       const userRecord = await db.findUserByApiKey(apiKey);
@@ -85,7 +87,8 @@ export async function POST(req: Request) {
         authenticatedUser = userRecord.username;
         console.log(`[OTel] Authenticated User: ${authenticatedUser}`);
       } else {
-        console.warn(`[OTel] Invalid API Key provided: ${apiKey}`);
+        hasInvalidApiKey = true;
+        console.warn('[OTel] Trace ingest received an invalid API key');
       }
     }
 
@@ -134,13 +137,45 @@ export async function POST(req: Request) {
     }
 
     const receivedAt = new Date().toISOString();
-    const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser });
-    const { dirtySessionIds } = appendOtelTraceEvents(events);
+    const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser })
+      .map(isolateQwenCodeOtelEvent);
+    const rejectedQwenEvents = hasInvalidApiKey
+      ? events.filter(isQwenCodeOtelEvent)
+      : [];
+    const acceptedEvents = rejectedQwenEvents.length
+      ? events.filter((event) => !isQwenCodeOtelEvent(event))
+      : events;
+
+    if (rejectedQwenEvents.length && acceptedEvents.length === 0) {
+      console.warn('[OTel] Rejected Qwen Code trace ingest: invalid API key');
+      return NextResponse.json(
+        {
+          error: 'Invalid API key',
+          detail: 'The x-witty-api-key does not match a configured user.',
+          hint: 'Update AGENT_INSIGHT_API_KEY to the API key shown for the intended Agent Insight user.',
+        },
+        { status: 401 },
+      );
+    }
+    if (rejectedQwenEvents.length) {
+      console.warn('[OTel] Rejected Qwen Code events from a mixed trace batch: invalid API key', {
+        rejectedEvents: rejectedQwenEvents.length,
+      });
+    }
+    const { dirtySessionIds } = appendOtelTraceEvents(acceptedEvents);
 
     return NextResponse.json({
       status: 'accepted',
-      received: events.length,
+      received: acceptedEvents.length,
       sessions: dirtySessionIds,
+      ...(rejectedQwenEvents.length ? {
+        rejected: {
+          qwencode: {
+            events: rejectedQwenEvents.length,
+            reason: 'invalid-api-key',
+          },
+        },
+      } : {}),
       ...ignoredCodeAgentSpans(codeAgentPartition.codeAgentResourceCount),
     });
   } catch (err: any) {

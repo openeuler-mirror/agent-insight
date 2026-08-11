@@ -130,6 +130,18 @@ const ENDPOINTS: { label: string; url: string; handler: string; sources: string[
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
+    label: "qwen code native OTel logs",
+    url: "/api/ingest/otel/v1/logs",
+    handler: "api/ingest/otel/v1/logs",
+    sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
+  },
+  {
+    label: "qwen code native OTel traces",
+    url: "/api/ingest/otel/v1/traces",
+    handler: "api/ingest/otel/v1/traces",
+    sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
+  },
+  {
     label: "opencode 插件下发",
     url: "/api/setup/opencode",
     handler: "api/ingest/setup/opencode",

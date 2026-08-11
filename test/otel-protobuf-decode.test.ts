@@ -26,12 +26,12 @@ const attr = (key: string, value: any) => ({
         : { stringValue: String(value) },
 })
 
-function buildTraceRequest() {
+function buildTraceRequest(serviceName = "hermes") {
   return {
     resourceSpans: [{
       resource: {
         attributes: [
-          attr("service.name", "hermes"),
+          attr("service.name", serviceName),
           attr("session.id", "unknown"),
           attr("user.id", "resource-user"),
         ],
@@ -163,6 +163,108 @@ test("OTLP traces route accepts protobuf requests and writes trace spool", async
     const spoolFile = files[0]
     const lines = fs.readFileSync(spoolFile, "utf8").trim().split("\n")
     assert.equal(lines.length, 2)
+  } finally {
+    if (prevSpoolDir === undefined) {
+      delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+    } else {
+      process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = prevSpoolDir
+    }
+  }
+})
+
+test("OTLP traces route preserves legacy invalid-key behavior for non-Qwen collectors", async () => {
+  const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-invalid-key-non-qwen-"))
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+
+  try {
+    const req = new Request("http://localhost/v1/traces", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+        "x-witty-api-key": "invalid-otel-api-key",
+      },
+      body: encodeTraceRequest() as BodyInit,
+    })
+
+    const res = await postOtlpTraces(req)
+    const body = await res.json()
+
+    assert.equal(res.status, 200)
+    assert.equal(body.status, "accepted")
+    assert.equal(listOtelTraceSpoolFiles(dir).length, 1)
+  } finally {
+    if (prevSpoolDir === undefined) {
+      delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+    } else {
+      process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = prevSpoolDir
+    }
+  }
+})
+
+test("OTLP traces route rejects an invalid API key for Qwen without writing shared spool", async () => {
+  const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-invalid-key-qwen-"))
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+
+  try {
+    const req = new Request("http://localhost/v1/traces", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+        "x-witty-api-key": "invalid-otel-api-key",
+      },
+      body: encodeTraceRequest(buildTraceRequest("qwencode")) as BodyInit,
+    })
+
+    const res = await postOtlpTraces(req)
+    const body = await res.json()
+
+    assert.equal(res.status, 401)
+    assert.equal(body.error, "Invalid API key")
+    assert.equal(listOtelTraceSpoolFiles(dir).length, 0)
+  } finally {
+    if (prevSpoolDir === undefined) {
+      delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+    } else {
+      process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = prevSpoolDir
+    }
+  }
+})
+
+test("OTLP traces route rejects only Qwen events from a mixed invalid-key batch", async () => {
+  const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-invalid-key-mixed-"))
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+
+  try {
+    const mixedBody = buildTraceRequest("hermes")
+    mixedBody.resourceSpans.push(...buildTraceRequest("qwencode").resourceSpans)
+    const req = new Request("http://localhost/v1/traces", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+        "x-witty-api-key": "invalid-otel-api-key",
+      },
+      body: encodeTraceRequest(mixedBody) as BodyInit,
+    })
+
+    const res = await postOtlpTraces(req)
+    const body = await res.json()
+
+    assert.equal(res.status, 200)
+    assert.equal(body.status, "accepted")
+    assert.equal(body.received, 2)
+    assert.deepEqual(body.sessions, ["00112233445566778899aabbccddeeff"])
+    assert.deepEqual(body.rejected, {
+      qwencode: { events: 2, reason: "invalid-api-key" },
+    })
+
+    const files = listOtelTraceSpoolFiles(dir)
+    assert.equal(files.length, 1)
+    const lines = fs.readFileSync(files[0], "utf8").trim().split("\n")
+    assert.equal(lines.length, 2)
+    assert.ok(lines.every((line) => JSON.parse(line).serviceName === "hermes"))
   } finally {
     if (prevSpoolDir === undefined) {
       delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR

@@ -1,4 +1,4 @@
-export const AGENT_PLATFORMS = ['opencode', 'openclaw', 'hermes', 'trae', 'qoder', 'unknown'] as const;
+export const AGENT_PLATFORMS = ['opencode', 'openclaw', 'hermes', 'trae', 'qoder', 'qwencode', 'unknown'] as const;
 
 export type AgentPlatform = (typeof AGENT_PLATFORMS)[number];
 

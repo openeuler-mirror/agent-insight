@@ -51,6 +51,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },
+    { value: 'qwencode', label: 'Qwen Code' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -78,6 +79,13 @@ function detectPlatform(request: Request): 'windows' | 'unix' {
     return 'unix';
 }
 
+function qwenSetupProtocol(request: Request): 'http' | 'https' {
+    const forwardedProtocol = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+    if (forwardedProtocol === 'http' || forwardedProtocol === 'https') return forwardedProtocol;
+
+    return new URL(request.url).protocol === 'http:' ? 'http' : 'https';
+}
+
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -89,6 +97,7 @@ function powerShellDoubleQuoted(value: string): string {
 function generateBashScript(
     host: string,
     baseUrl: string,
+    qwenBaseUrl: string,
     apiKey: string,
     preselected: { value: string; label: string }[],
     noninteractive: boolean,
@@ -103,6 +112,7 @@ function generateBashScript(
         '',
         'AGENT_INSIGHT_HOST="' + bashDoubleQuoted(host) + '"',
         'AGENT_INSIGHT_BASE_URL="' + bashDoubleQuoted(baseUrl) + '"',
+        'QWENCODE_BASE_URL="' + bashDoubleQuoted(qwenBaseUrl) + '"',
         'AGENT_INSIGHT_SETUP_API_KEY="' + bashDoubleQuoted(apiKey) + '"',
         'QODER_JETBRAINS_RELEASE_URL="' + bashDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         'OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"',
@@ -196,7 +206,8 @@ function generateBashScript(
         '    { name: \'Hermes\', value: \'hermes\' },',
         '    { name: \'JiuwenSwarm\', value: \'jiuwen\' },',
         '    { name: \'Qoder CN product family\', value: \'qoder\' },',
-        '    { name: \'Trae IDE\', value: \'trae\' }',
+        '    { name: \'Trae IDE\', value: \'trae\' },',
+        '    { name: \'Qwen Code\', value: \'qwencode\' }',
         '];',
         '',
         'async function select() {',
@@ -270,6 +281,7 @@ function generateBashScript(
         'INSTALL_JIUWEN=false',
         'INSTALL_QODER=false',
         'INSTALL_TRAE=false',
+        'INSTALL_QWENCODE=false',
         '',
         'if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then',
         '    INSTALL_OPENCODE=true',
@@ -295,9 +307,12 @@ function generateBashScript(
         'if [[ "$SELECTED_FRAMEWORKS" == *"trae"* ]]; then',
         '    INSTALL_TRAE=true',
         'fi',
+        'if [[ "$SELECTED_FRAMEWORKS" == *"qwencode"* ]]; then',
+        '    INSTALL_QWENCODE=true',
+        'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then',
+        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
@@ -487,6 +502,16 @@ function generateBashScript(
         '    echo "  [NOTE] Restart TRAE IDE to activate"',
         'fi',
         '',
+        'if [ "$INSTALL_QWENCODE" = "true" ]; then',
+        '    echo "⏬ Installing Qwen Code Trace Collector..."',
+        '    QWENCODE_COLLECTOR_DIR="$HOME/.agent-insight/qwencode-collector-source"',
+        '    mkdir -p "$QWENCODE_COLLECTOR_DIR"',
+        '    for file in configure.mjs install.mjs; do',
+        '        curl -sSf "$QWENCODE_BASE_URL/api/ingest/setup/qwencode-collector/$file" -o "$QWENCODE_COLLECTOR_DIR/$file"',
+        '    done',
+        '    node "$QWENCODE_COLLECTOR_DIR/install.mjs"',
+        'fi',
+        '',
         '# 4. Configure ~/.agent-insight/.env',
         'AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"',
         'EXISTING_KEY=""',
@@ -608,6 +633,12 @@ function generateBashScript(
         '    else',
         '        echo "Warning: Qoder CN collector installation did not complete; review the errors above."',
         '    fi',
+        'fi',
+        '',
+        '# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist',
+        'if [ "$INSTALL_QWENCODE" = "true" ]; then',
+        '    node "$QWENCODE_COLLECTOR_DIR/install.mjs"',
+        '    echo "✅ Qwen Code native OTLP telemetry configured"',
         'fi',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
@@ -905,6 +936,7 @@ function generateBashScript(
 function generatePowerShellScript(
     host: string,
     baseUrl: string,
+    qwenBaseUrl: string,
     apiKey: string,
     preselected: { value: string; label: string }[],
     noninteractive: boolean,
@@ -918,6 +950,7 @@ function generatePowerShellScript(
         '',
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(host) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
+        '$QWENCODE_BASE_URL = "' + powerShellDoubleQuoted(qwenBaseUrl) + '"',
         '$AGENT_INSIGHT_SETUP_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
         '$NONINTERACTIVE = $' + (noninteractive ? 'true' : 'false'),
         '$NONINTERACTIVE_FRAMEWORKS = "' + powerShellDoubleQuoted(preselected.map(f => f.value).join(',') || 'opencode') + '"',
@@ -995,7 +1028,8 @@ function generatePowerShellScript(
         '    { name: \'Hermes\', value: \'hermes\' },',
         '    { name: \'JiuwenSwarm\', value: \'jiuwen\' },',
         '    { name: \'Qoder CN product family\', value: \'qoder\' },',
-        '    { name: \'Trae IDE\', value: \'trae\' }',
+        '    { name: \'Trae IDE\', value: \'trae\' },',
+        '    { name: \'Qwen Code\', value: \'qwencode\' }',
         '];',
         '',
         'async function select() {',
@@ -1072,6 +1106,7 @@ function generatePowerShellScript(
         '$INSTALL_JIUWEN = $false',
         '$INSTALL_QODER = $false',
         '$INSTALL_TRAE = $false',
+        '$INSTALL_QWENCODE = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1097,9 +1132,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "trae") {',
         '    $INSTALL_TRAE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "qwencode") {',
+        '    $INSTALL_QWENCODE = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_JIUWEN -and -not $INSTALL_QODER -and -not $INSTALL_TRAE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_JIUWEN -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_QWENCODE) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1300,6 +1338,16 @@ function generatePowerShellScript(
         '    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
         '}',
         '',
+        'if ($INSTALL_QWENCODE) {',
+        '    Write-Host "⏬ Installing Qwen Code Trace Collector..."',
+        '    $qwenCollectorSource = Join-Path $homeDir ".agent-insight\\qwencode-collector-source"',
+        '    New-Item -ItemType Directory -Path $qwenCollectorSource -Force | Out-Null',
+        '    @("configure.mjs", "install.mjs") | ForEach-Object {',
+        '        Invoke-WebRequest -Uri "$QWENCODE_BASE_URL/api/ingest/setup/qwencode-collector/$_" -OutFile (Join-Path $qwenCollectorSource $_)',
+        '    }',
+        '    node (Join-Path $qwenCollectorSource "install.mjs")',
+        '}',
+        '',
         '# 4. Configure ~/.agent-insight/.env',
         '$AGENT_INSIGHT_CONFIG_FILE = "$homeDir\\.agent-insight\\.env"',
         '$EXISTING_KEY = ""',
@@ -1442,6 +1490,12 @@ function generatePowerShellScript(
         '            Write-Host "Warning: Qoder CN collector installation did not complete; review the errors above."',
         '        }',
         '    }',
+        '}',
+        '',
+        '# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist',
+        'if ($INSTALL_QWENCODE) {',
+        '    node (Join-Path $qwenCollectorSource "install.mjs")',
+        '    Write-Host "✅ Qwen Code native OTLP telemetry configured"',
         '}',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
@@ -1717,10 +1771,11 @@ export async function GET(request: Request) {
 
     const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '127.0.0.1:3000';
     const protocol = request.headers.get('x-forwarded-proto') || 'https';
-
+    const qwenProtocol = qwenSetupProtocol(request);
     // --- 直接读取环境变量，不再通过 pathname 截取 ---
     const urlPrefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
     const baseUrl = `${protocol}://${host}${urlPrefix}`;
+    const qwenBaseUrl = `${qwenProtocol}://${host}${urlPrefix}`;
     const skillInsightHost = baseUrl;
     const apiKey = requestUrl.searchParams.get('key') || requestUrl.searchParams.get('apiKey') || '';
     const noninteractiveRaw = requestUrl.searchParams.get('yes')
@@ -1745,6 +1800,7 @@ export async function GET(request: Request) {
         const script = generatePowerShellScript(
             skillInsightHost,
             baseUrl,
+            qwenBaseUrl,
             apiKey,
             preselected,
             noninteractive,
@@ -1759,6 +1815,7 @@ export async function GET(request: Request) {
         const script = generateBashScript(
             skillInsightHost,
             baseUrl,
+            qwenBaseUrl,
             apiKey,
             preselected,
             noninteractive,

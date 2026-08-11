@@ -125,7 +125,8 @@ const frameworks = [
     { name: 'OpenClaw', value: 'openclaw' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
     { name: 'Qoder CN product family', value: 'qoder' },
-    { name: 'Trae IDE', value: 'trae' }
+    { name: 'Trae IDE', value: 'trae' },
+    { name: 'Qwen Code', value: 'qwencode' }
 ];
 
 async function select() {
@@ -199,6 +200,7 @@ INSTALL_OPENCLAW=false
 INSTALL_JIUWEN=false
 INSTALL_QODER=false
 INSTALL_TRAE=false
+INSTALL_QWENCODE=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -224,9 +226,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"trae"* ]]; then
     INSTALL_TRAE=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"qwencode"* ]]; then
+    INSTALL_QWENCODE=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -440,6 +445,12 @@ TRAE_PYEOF
     echo "  [NOTE] Restart TRAE IDE to activate"
 fi
 
+if [ "$INSTALL_QWENCODE" = "true" ]; then
+    echo "⏬ Installing Qwen Code Trace Collector from local npm package..."
+    QWENCODE_PACKAGE_ROOT=$(node -p "require('path').dirname(require.resolve('agent-insight/package.json'))")
+    node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
+fi
+
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
 AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
@@ -535,6 +546,12 @@ if [ "$INSTALL_QODER" = "true" ]; then
     else
         echo "Warning: Qoder CN collector installation did not complete; review the errors above."
     fi
+fi
+
+# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist
+if [ "$INSTALL_QWENCODE" = "true" ]; then
+    node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
+    echo "✅ Qwen Code native OTLP telemetry configured"
 fi
 
 # 6.4 Configure Agent Insight Hermes plugin
@@ -889,7 +906,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
         '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
-        '    "    { name: \'Trae IDE\', value: \'trae\' }"',
+        '    "    { name: \'Trae IDE\', value: \'trae\' },"',
+        '    "    { name: \'Qwen Code\', value: \'qwencode\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -965,6 +983,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$INSTALL_JIUWEN = $false',
         '$INSTALL_QODER = $false',
         '$INSTALL_TRAE = $false',
+        '$INSTALL_QWENCODE = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -990,9 +1009,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "trae") {',
         '    $INSTALL_TRAE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "qwencode") {',
+        '    $INSTALL_QWENCODE = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_QODER -and -not $INSTALL_TRAE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_QWENCODE) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1194,6 +1216,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
         '}',
         '',
+        'if ($INSTALL_QWENCODE) {',
+        '    Write-Host "⏬ Installing Qwen Code Trace Collector from local npm package..."',
+        '    $qwenPackageRoot = node -p "require(\'path\').dirname(require.resolve(\'agent-insight/package.json\'))"',
+        '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
+        '}',
+        '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
         '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
@@ -1293,6 +1321,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    } else {',
         '        Write-Host "Warning: Qoder CN collector installation did not complete; review the errors above."',
         '    }',
+        '}',
+        '',
+        '# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist',
+        'if ($INSTALL_QWENCODE) {',
+        '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
+        '    Write-Host "✅ Qwen Code native OTLP telemetry configured"',
         '}',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',

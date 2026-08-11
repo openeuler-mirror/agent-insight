@@ -42,6 +42,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },
+    { value: 'qwencode', label: 'Qwen Code' },
 ];
 
 export default function AccessInstallPage() {

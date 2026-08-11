@@ -357,12 +357,23 @@ return NextResponse.json({
 | Hermes | `adapters/hermes.ts` | `scripts/hermes_agent_insight_plugin.py` | Hook模式，支持subagent |
 | Langfuse LangGraph | `adapters/langfuse-langgraph.ts` | Langfuse SDK自带 | 标准OTLP，支持skill追踪 |
 | JiuwenSwarm | `otel/jiuwenswarm/` | `scripts/jiuwenswarm_extension/` | Telemetry扩展模式 |
+| Qwen Code | `adapters/qwencode.ts` | `scripts/qwencode-collector/` + Qwen Code 原生 OTLP | 原生 Telemetry 模式，支持 Agent/Subagent/LLM/Tool/Skill/MCP/Plan，按账号隔离 spool |
 | Qoder CN 产品家族 | `adapters/qoder.ts` | `scripts/qoder_trace_collector.mjs`、Desktop VSIX、JetBrains Plugin、Work setup | 共享 Hook/OTLP 核心，按产品与账号隔离 spool，支持 Quest/Experts/Subagent/Skill/MCP/连接器 |
 | Generic | `adapters/generic.ts` | 标准OTLP SDK | 兜底适配，支持OpenInference标准 |
 
 ---
 
-## 八、Qoder CN 产品家族已实现链路
+## 八、Qwen Code 原生 OTLP 已实现链路
+
+Qwen Code 通过自身 Telemetry 配置把 traces 与 logs 直接发送到 `/api/ingest/otel/v1/traces` 和 `/api/ingest/otel/v1/logs`。普通 setup 与 auto setup 的 Bash/PowerShell 安装脚本均只追加 `qwencode` 选项，不调整既有框架顺序；安装器在 `~/.qwen/.env` 中管理 Qwen Code 的 OTLP 环境变量，卸载时只移除 Agent Insight 管理的字段，不修改其他采集器配置。
+
+服务端 `src/lib/ingest/otel/adapters/qwencode.ts` 在专用 adapter 内完成事件识别、会话命名空间隔离、父子 Agent 还原以及 LLM/Tool/Skill/MCP/Plan 语义映射，再生成 `ExecutionRecord`。Qwen 日志中的 `skill_launch` 会转换为 Skill 事件；同一次调用同时存在摘要日志和完整 Tool span 时保留完整 span，避免重复计数。内容进入 spool 或服务端事件前执行敏感信息脱敏和 2000 字符截断。
+
+采集器辅助模块位于 `scripts/qwencode-collector/`：安装和迁移脚本负责启用原生 OTLP，storage/uploader 提供 API Key 摘要账号隔离、失败重试、上传归档、watcher 心跳和 SessionEnd 立即 flush。服务端注册点包括通用 framework adapter、OTLP adapter registry、logs/traces ingest 路由和 Agent platform。对应回归测试为 `test/qwencode-*.test.*`，并由 `test/ingest-endpoint-contract.test.ts` 和 `test/setup-noninteractive-compat.test.ts` 固定端点与双平台安装契约。
+
+---
+
+## 九、Qoder CN 产品家族已实现链路
 
 普通 setup 与 auto setup 的 Unix/Windows 安装脚本均在原有框架列表末尾追加 `Qoder CN product family`。选中后，从 `setup/route.ts` 的固定白名单下载 `qoder_setup.mjs`、`qoder_trace_collector.mjs`、`qoder_uploader_client.mjs` 和 `qoder_work_setup.mjs`，再分别安装 CLI、Desktop、JetBrains owner 与 Work 采集器；请求任意非白名单组件返回 404。安装完成后，脚本使用临时文件从两个 Qoder 插件下载接口拉取 Desktop VSIX 与 JetBrains ZIP，成功后原子替换到 `~/.agent-insight/packages/qoder/`；插件包不可用或网络失败只产生警告，不回滚已安装的采集运行时。Desktop 接口从源码动态构建；JetBrains 接口使用 `src/lib/ingest/qoder-plugin-release.ts` 中的默认 Release 附件地址，并允许服务端环境变量 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 覆盖。下载时限制协议、超时和最大 50MB，并校验 ZIP、编译后插件 JAR 与 `META-INF/plugin.xml`，失败后依次回退本地缓存和 IntelliJ/Java 源码构建。当前默认值是贡献分支的临时 Release 附件，正式发布后应迁移为 openEuler 官方附件。`test/qoder-setup-routes.test.ts` 固定断言两个入口原有框架名称、值和顺序不变，Qoder 仅作为末尾新增项，同时校验四个组件分发、默认/覆盖 Release 下载、自动下载命令及生成的 Bash/PowerShell 安装脚本语法。界面 marker 插件仍需在对应 IDE 中从下载文件安装。
 

@@ -3,12 +3,14 @@ import { openclawOtelTraceAdapter } from './adapters/openclaw';
 import { hermesOtelTraceAdapter } from './adapters/hermes';
 import { langfuseLangGraphOtelTraceAdapter } from './adapters/langfuse-langgraph';
 import { qoderOtelTraceAdapter } from './adapters/qoder';
+import { qwenCodeOtelTraceAdapter } from './adapters/qwencode';
 import type { OtelTraceAdapter } from './adapters/types';
 import type { OtelTraceEvent } from './types';
 
 const adapters: readonly OtelTraceAdapter[] = [
   langfuseLangGraphOtelTraceAdapter,
   hermesOtelTraceAdapter,
+  qwenCodeOtelTraceAdapter,
   openclawOtelTraceAdapter,
   qoderOtelTraceAdapter,
   genericOtelTraceAdapter,

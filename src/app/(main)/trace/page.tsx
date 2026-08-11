@@ -64,7 +64,8 @@ import { TruncateText } from '@/components/text/TruncateText';
 import { RelativeTime } from '@/components/text/RelativeTime';
 import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
-import { formatDurationMs, formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs, latencySecondsToMs } from '@/lib/latency-format';
+import { formatDuration } from '@/lib/engine/observability/agent-trace';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -234,6 +235,10 @@ function getFrameworkLabel(framework?: string | null): string {
             return 'Hermes';
         case 'trae':
             return 'Trae IDE';
+        case 'qwencode':
+        case 'qwen-code':
+        case 'qwen_code':
+            return 'Qwen Code';
         default:
             return value;
     }
@@ -1356,7 +1361,20 @@ function TraceDetailView({
         return Array.isArray(body?.interactions) ? body.interactions : [];
     }, [taskId]);
 
-    const { framework, latency, tokens, cost } = execution;
+    const { framework } = execution;
+    // The list row may be a partial snapshot captured while a streaming trace is
+    // still uploading. The structure endpoint is refreshed from the latest
+    // Execution row, so prefer its metrics once available.
+    const latestExecution = session?.execution;
+    const latency = typeof latestExecution?.latency === 'number'
+        ? latestExecution.latency
+        : execution.latency;
+    const tokens = typeof latestExecution?.tokens === 'number'
+        ? latestExecution.tokens
+        : execution.tokens;
+    const cost = typeof latestExecution?.cost === 'number'
+        ? latestExecution.cost
+        : execution.cost;
     const isRunning = execStatus === 'running';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
@@ -1448,7 +1466,10 @@ function TraceDetailView({
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
                 )}
                 {typeof latency === 'number' && latency > 0 && (
-                    <MetricPill label={t('tracePage.metricDuration')} value={formatLatencySeconds(latency)} />
+                    <MetricPill
+                        label={t('tracePage.metricDuration')}
+                        value={formatDuration(latencySecondsToMs(latency) ?? undefined)}
+                    />
                 )}
                 {typeof cost === 'number' && cost > 0 && (
                     <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />
