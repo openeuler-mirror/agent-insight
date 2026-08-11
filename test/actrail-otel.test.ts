@@ -221,7 +221,7 @@ test('AcTrail OTLP: keeps the latest span revision and builds UI interactions', 
   assert.equal(tree.stats.totalTokens, 18);
 });
 
-test('AcTrail OTLP: filters title generation and limits trace time to business calls', () => {
+test('AcTrail OTLP: infers Claude title generation, extracts the session prompt, and limits trace time', () => {
   const sessionId = '00000000000000000000000000000003';
   function event(overrides: Partial<OtelTraceEvent>): OtelTraceEvent {
     return {
@@ -314,11 +314,10 @@ test('AcTrail OTLP: filters title generation and limits trace time to business c
       id: 'title',
       startTimeMs: 1000,
       endTimeMs: 2000,
-      prompt: '调用两个子 Agent 检查项目',
-      content: '两个子 Agent 检查项目',
+      prompt: '<session>\n调用两个子 Agent 检查项目\n</session>\n\nWrite the title in the predominant language of the session',
+      content: '{"title":"两个子 Agent 检查项目"}',
       inputTokens: 20,
       outputTokens: 5,
-      backgroundKind: 'title_generation',
     }),
     ...llmPair({
       id: 'main',
