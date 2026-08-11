@@ -183,6 +183,48 @@ type LlmPair = {
   response?: OtelTraceEvent;
 };
 
+function isTruthy(value: unknown): boolean {
+  return value === true || value === 1 || ['true', '1', 'yes'].includes(String(value || '').trim().toLowerCase());
+}
+
+function isTitleGenerationPair(pair: LlmPair): boolean {
+  return text(pair.request?.attributes?.['llm.request.background_kind']) === 'title_generation';
+}
+
+function isInternalLlmPair(pair: LlmPair): boolean {
+  return isTitleGenerationPair(pair) || [pair.request, pair.call, pair.response].some((event) =>
+    isTruthy(event?.attributes?.['actrail.llm.internal'])
+  );
+}
+
+function primaryTitlePrompt(pairs: LlmPair[]): string | undefined {
+  const prompts = pairs
+    .filter(isTitleGenerationPair)
+    .map((pair) => text(pair.request?.attributes?.['llm.request.message_preview']))
+    .filter((prompt): prompt is string => Boolean(prompt));
+  return prompts.find((prompt) =>
+    !prompt.startsWith('The following is the text to summarize:') &&
+    !prompt.startsWith('You are a title generator')
+  ) || prompts[0];
+}
+
+function pairStartMs(pair: LlmPair): number {
+  const starts = [pair.request, pair.call, pair.response]
+    .map((event) => event?.startTimeMs || 0)
+    .filter((value) => value > 0);
+  return starts.length > 0
+    ? Math.min(...starts)
+    : Date.parse(pair.call.receivedAt) || Date.now();
+}
+
+function pairEndMs(pair: LlmPair): number {
+  const ends = [pair.request, pair.call, pair.response]
+    .filter((event): event is OtelTraceEvent => Boolean(event))
+    .map(eventEndMs)
+    .filter((value) => value > 0);
+  return ends.length > 0 ? Math.max(...ends) : pairStartMs(pair);
+}
+
 function buildLlmPairs(events: OtelTraceEvent[]): LlmPair[] {
   const byActionId = new Map<string, OtelTraceEvent>();
   for (const event of events) {
@@ -209,20 +251,39 @@ export function aggregateActrailTraceEvents(
     .sort((left, right) => left.startTimeMs - right.startTimeMs);
   if (ordered.length === 0) return null;
 
-  const pairs = buildLlmPairs(ordered);
+  const allPairs = buildLlmPairs(ordered);
+  const pairs = allPairs.filter((pair) => !isInternalLlmPair(pair));
   if (pairs.length === 0) return null;
 
   const agentName = selectAgentName(ordered);
   const promptSelection = rootPromptSelection(pairs);
-  const topLevelPrompts = promptSelection.prompts;
+  const titlePrompt = primaryTitlePrompt(allPairs);
+  const topLevelPrompts = titlePrompt ? new Set<string>() : promptSelection.prompts;
   const emittedPrompts = new Set<string>();
   const interactions: AnyObject[] = [];
   const allToolCalls: AnyObject[] = [];
 
+  if (titlePrompt) {
+    const firstPair = pairs[0];
+    const startedAt = pairStartMs(firstPair);
+    interactions.push({
+      role: 'user',
+      content: titlePrompt,
+      agent: agentName,
+      timestamp: toIso(startedAt),
+      timeInfo: {
+        created: toIso(startedAt),
+        completed: toIso(startedAt),
+      },
+      traceId: firstPair.call.traceId,
+      spanId: (firstPair.call.spanId || actionId(firstPair.call) || 'llm') + ':input',
+    });
+  }
+
   for (const pair of pairs) {
     const prompt = text(pair.request?.attributes?.['llm.request.message_preview']);
-    const startedAt = pair.call.startTimeMs || Date.parse(pair.call.receivedAt) || Date.now();
-    const completedAt = eventEndMs(pair.call) || startedAt;
+    const startedAt = pairStartMs(pair);
+    const completedAt = pairEndMs(pair);
 
     if (prompt && topLevelPrompts.has(prompt) && !emittedPrompts.has(prompt)) {
       emittedPrompts.add(prompt);
@@ -284,14 +345,14 @@ export function aggregateActrailTraceEvents(
     { input: 0, output: 0, reasoning: 0, total: 0 },
   );
   const firstEvent = ordered[0];
-  const lastEvent = ordered.reduce((latest, event) =>
-    eventEndMs(event) > eventEndMs(latest) ? event : latest
-  );
+  const traceStartedAt = Math.min(...pairs.map(pairStartMs));
+  const traceCompletedAt = Math.max(...pairs.map(pairEndMs));
   const finalResult = [...interactions]
     .reverse()
     .find((interaction) => interaction.role === 'assistant' && text(interaction.content))
     ?.content || '';
-  const query = interactions.find((interaction) => interaction.role === 'user')?.content ||
+  const query = titlePrompt ||
+    interactions.find((interaction) => interaction.role === 'user')?.content ||
     text(pairs[0]?.request?.attributes?.['llm.request.message_preview']) ||
     'AcTrail Session';
   const invokedSkills = skillCalls(allToolCalls);
@@ -302,7 +363,7 @@ export function aggregateActrailTraceEvents(
   }, {});
   const unmatchedResponses = ordered.filter((event) =>
     actionKind(event) === 'llm.response' &&
-    !pairs.some((pair) => pair.response === event)
+    !allPairs.some((pair) => pair.response === event)
   ).length;
 
   return {
@@ -311,10 +372,11 @@ export function aggregateActrailTraceEvents(
     framework: 'actrail',
     model: pairs.map((pair) => pair.call.model || pair.response?.model).find(Boolean) || 'unknown',
     tokens: totalUsage.total,
-    latency: Math.max(0, eventEndMs(lastEvent) - firstEvent.startTimeMs) / 1000,
+    latency: Math.max(0, traceCompletedAt - traceStartedAt) / 1000,
     final_result: finalResult,
-    trace_completed_at: finalResult ? toIso(eventEndMs(lastEvent)) : undefined,
-    timestamp: new Date(firstEvent.startTimeMs || Date.parse(firstEvent.receivedAt) || Date.now()),
+    trace_started_at: toIso(traceStartedAt),
+    trace_completed_at: finalResult ? toIso(traceCompletedAt) : undefined,
+    timestamp: new Date(traceStartedAt),
     label: 'AcTrail',
     user: firstEvent.user || 'anonymous',
     interactions,
@@ -336,8 +398,9 @@ export function aggregateActrailTraceEvents(
       actionCount: ordered.length,
       actionCounts,
       pairedLlmCalls: pairs.filter((pair) => pair.request && pair.response).length,
+      internalLlmCallsFiltered: allPairs.length - pairs.length,
       unmatchedResponses,
-      userTurnInference: promptSelection.inference,
+      userTurnInference: titlePrompt ? 'title-generation-preview' : promptSelection.inference,
       inferredRootAgentSessionId: promptSelection.rootSessionId,
       observedAgentSessionCount: promptSelection.observedSessionCount,
       subagentTreeAvailable: false,
