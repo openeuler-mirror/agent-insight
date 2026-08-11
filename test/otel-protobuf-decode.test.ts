@@ -8,7 +8,7 @@ import otlpRoot from "@opentelemetry/otlp-transformer/build/src/generated/root"
 import { POST as postOtlpTraces } from "@/app/api/ingest/otel/v1/traces/route"
 import { POST as postLangfusePublicTraces } from "@/app/api/public/otel/v1/traces/route"
 import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
-import { decodeOtlpProtobufBody, decodeOtlpRequest } from "@/lib/ingest/otel/decode"
+import { decodeOtlpProtobufBody, decodeOtlpRequestWithRaw } from "@/lib/ingest/otel/decode"
 import { listOtelTraceSpoolFiles } from "@/lib/ingest/otel/spool"
 import { prismaRaw } from "@/lib/storage/prisma"
 
@@ -126,15 +126,18 @@ test("OTLP protobuf decoder converts trace request into JSON-compatible trace ob
 })
 
 test("decodeOtlpRequest accepts OTLP HTTP protobuf trace requests", async () => {
+  const encoded = encodeTraceRequest()
   const req = new Request("http://localhost/v1/traces", {
     method: "POST",
     headers: { "content-type": "application/x-protobuf" },
-    body: encodeTraceRequest() as BodyInit,
+    body: encoded as BodyInit,
   })
 
-  const decoded = await decodeOtlpRequest(req, "traces")
+  const decoded = await decodeOtlpRequestWithRaw(req, "traces")
 
-  assert.equal(decoded.resourceSpans[0].scopeSpans[0].spans[0].traceId, "00112233445566778899aabbccddeeff")
+  assert.equal(decoded.body.resourceSpans[0].scopeSpans[0].spans[0].traceId, "00112233445566778899aabbccddeeff")
+  assert.equal(decoded.encoding, "protobuf")
+  assert.deepEqual(Buffer.from(decoded.rawBody), Buffer.from(encoded))
 })
 
 test("OTLP traces route accepts protobuf requests and writes trace spool", async () => {

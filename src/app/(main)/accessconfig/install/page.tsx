@@ -40,6 +40,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'hermes', label: 'Hermes' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'qoder', label: 'Qoder CN product family' },
+    { value: 'actrail', label: 'AcTrail' },
 ];
 
 export default function AccessInstallPage() {
