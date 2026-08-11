@@ -292,6 +292,20 @@ class OpenCodeAdapter(PlatformAdapter):
             )
 
     @classmethod
+    def _resolve_opencode_lib_dir(cls, plugin_source: Path) -> Path | None:
+        """Locate bundled ``platform_adapters/opencode/lib`` next to the plugin."""
+
+        candidates = (
+            Path(__file__).resolve().parent / "lib",
+            plugin_source.parent.parent / "lib",
+            plugin_source.parent / "lib",
+        )
+        for candidate in candidates:
+            if candidate.is_dir():
+                return candidate
+        return None
+
+    @classmethod
     def _install_workspace_plugin_and_skill(
         cls,
         *,
@@ -306,24 +320,49 @@ class OpenCodeAdapter(PlatformAdapter):
         skill_dest = (
             workspace / ".opencode" / "skills" / fault.skill_name / "SKILL.md"
         )
-        lib_dest = workspace / ".opencode" / "lib" / "rewrite-runtime.ts"
         installation.install_file(plugin_source, plugin_dest, overwrite=True)
         if should_expose_fault_skill(fault):
             installation.install_file(fault.skill_file, skill_dest, overwrite=True)
 
-        rewrite_runtime = (
-            Path(__file__).resolve().parent / "lib" / "rewrite-runtime.ts"
+        # Plugin imports relative modules from ``../lib/``; missing siblings make
+        # OpenCode skip/fail the workspace plugin without writing plugin-ready.
+        lib_dir = cls._resolve_opencode_lib_dir(plugin_source)
+        if lib_dir is not None:
+            for lib_name in (
+                "rewrite-runtime.ts",
+                "provider-tool-call-rewrite.ts",
+            ):
+                lib_source = lib_dir / lib_name
+                if lib_source.is_file():
+                    installation.install_file(
+                        lib_source,
+                        workspace / ".opencode" / "lib" / lib_name,
+                        overwrite=True,
+                    )
+
+        # Pre-seed dependency so ``@opencode-ai/plugin`` resolves before spawn
+        # (OpenCode may also create this later; do not overwrite user edits).
+        cls._ensure_workspace_opencode_package(installation, workspace)
+
+    @classmethod
+    def _ensure_workspace_opencode_package(
+        cls,
+        installation: InstallSession,
+        workspace: Path,
+    ) -> None:
+        package_path = workspace / ".opencode" / "package.json"
+        if package_path.is_file():
+            return
+        payload = {
+            "dependencies": {
+                "@opencode-ai/plugin": "1.18.4",
+            }
+        }
+        installation.write_text(
+            package_path,
+            json.dumps(payload, indent=2) + "\n",
+            overwrite=False,
         )
-        if not rewrite_runtime.is_file():
-            candidate = plugin_source.parent / "rewrite-runtime.ts"
-            if candidate.is_file():
-                rewrite_runtime = candidate
-            else:
-                sibling_lib = plugin_source.parent.parent / "lib" / "rewrite-runtime.ts"
-                if sibling_lib.is_file():
-                    rewrite_runtime = sibling_lib
-        if rewrite_runtime.is_file():
-            installation.install_file(rewrite_runtime, lib_dest, overwrite=True)
 
     @staticmethod
     def _provider_retry_failure(

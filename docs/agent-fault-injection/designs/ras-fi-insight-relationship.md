@@ -161,6 +161,8 @@ flowchart TB
 - OpenCode 可选 **libpython.so** 同进程嵌入
 - 本机配置目录 `~/.agent-insight/ras/`（运行用，非展示真源）
 
+**不负责**：完整链路 Trace 观测（OTLP / upload / 拼 Session 对话树）。日常完整链路只由 **agent-insight** 平台采集器提供；RAS 仅旁路 ① `ras-events`。新平台接入同此边界（禁止在 RAS 仓「顺便」做完整 Trace）。
+
 ### 3.2 与 Insight 的交界
 
 | 方向 | 内容 | 归属 |
@@ -204,6 +206,7 @@ flowchart TB
 
 - 不把「恢复是否成功」交给 Insight Judge（无 FI 式服务端评判）
 - 不要求 Insight 持有本机 runtime 句柄；断连即 fail-open
+- **不做完整链路 Trace 观测**（不发日常 OTLP/upload、不拼 Session 对话树）；那是 Insight 采集器职责
 
 细节：[agent-ras architecture](../../agent-ras/designs/architecture.md)。
 
@@ -217,6 +220,8 @@ flowchart TB
 - 平台 Adapter（OpenCode TS 插件、xiaoO hooker）
 - CLI：`python -m agent_fault_injection.cli run …`（本机只做 inject+collect；Judge 在 Insight）
 - 本机写出 `collect-result.json` 等 artifacts
+
+**不负责**：日常完整链路 Trace 观测，也不为进 `/agent-ras/trace` **合成**可靠性 `Execution`。③ collect 仅服务 FI Run / Judge；日常主树来自 Insight ⓪（OpenCode：upload；其它：OTLP 等）。新平台同此边界。
 
 ### 4.2 与 Insight 的交界
 
@@ -297,7 +302,7 @@ flowchart LR
 | ⓪ | 主观测 | **OTLP/HTTP**（JSON 或 Protobuf）：`ResourceSpans` / `ResourceLogs` | `/api/ingest/otel/v1/{traces\|logs\|…}` | spool → `Execution` | 通用链路追踪 |
 | ① | RAS 旁路 | **flat JSON**（非 OTLP）：`taskId` / `type` / `deliveryId` / `payload` | `/api/ingest/ras-events` | `RasAnomalyEvent` | 检出/恢复事件；fail-open |
 | ② | FI 控制面 | FI Worker JSON（非 OTLP）：heartbeat / claim / commands | `/api/fault-injection/worker/*` | 任务占用与超时回收 | 无轨迹正文 |
-| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：`interactions` / `markers` | `…/runs/:id/collect-result` | `Session` + `FaultInjectionRun` → Judge | 实验轨迹真源 |
+| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：`interactions` / `markers` | `…/runs/:id/collect-result` | 写入 `Session` + `FaultInjectionRun`；**Judge/Run 只读 Prisma** | 实验轨迹写入入口；读权威在库 |
 | ~~④~~ | ~~FI→观测~~ | **已移除** | — | 不再写 `RasAnomalyEvent` | 可靠性观测以 Execution / 真 RAS ① 为准 |
 
 ```mermaid
@@ -438,7 +443,7 @@ OTLP 可「硬套」attributes，但会变成「穿 OTLP 壳的私有协议」�
 模式：**先落 Prisma，再 API 读库拼视图**（不是边收边流式渲染原始协议）。
 
 1. 写：各 ingest 入口落库（OTel 另经 spool consumer）。
-2. 读：可靠性列表并行查 `Execution` + `RasAnomalyEvent` 后按 `taskId` 合并；FI Run 读已落库 `Session.interactions`。
+2. 读：可靠性列表并行查 `Execution` + `RasAnomalyEvent` 后按 `taskId` 合并；FI Run / Judge / rejudge **只读**已落库 `Session.interactions` 与 `FaultInjectionRun`（collect body 仅写入）。
 3. OTel：`accepted` 只表示进 spool，**不等于**立刻在所有观测查询可见。
 
 #### 5.6.4 FI「下发」为何图上是认领（拉模式）
@@ -503,7 +508,8 @@ fi-worker tick: claim
        build_collect_payload → write_collect_payload（collect-result.json）
   → uploadResult: POST …/collect-result
   → ingestCollectAndJudge
-       Session.interactions + FaultInjectionRun + Judge
+       persistFiCollectIngress（写 Session / Run）
+       → finishFiJudgeFromDb（只读 Prisma 再 Judge；rejudge 同此读路径）
 ```
 
 | 步骤 | 路径 | 符号 |

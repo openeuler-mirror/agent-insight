@@ -4,8 +4,6 @@ import { composeFaultPrompt, findSubmode } from '@/lib/fault-injection/compose-p
 import { listFaultsViaPython, type CollectPayload } from '@/lib/fault-injection/engine'
 import { judgeFaultInjection } from '@/lib/fault-injection/judge'
 import { mergeEvaluationMarkers } from '@/lib/fault-injection/trace-markers'
-import { saveExecutionRecord } from '@/lib/storage/data-service'
-import { pickFiUserQuery } from '@/lib/ingest/ras/trace-summary'
 
 export function newTaskKey(): string {
   return `task-${randomBytes(4).toString('hex')}`
@@ -140,11 +138,12 @@ export function isPlatformSessionId(value: string | null | undefined): boolean {
   return true
 }
 
-export async function ingestCollectAndJudge(input: {
+/** Write-only: persist collect-result ingress into Prisma (Session + Run fields). */
+export async function persistFiCollectIngress(input: {
   runId: string
   user: string | null
   payload: CollectPayload
-}) {
+}): Promise<{ sessionAligned: boolean; sessionTaskId: string | null }> {
   const interactionsJson = JSON.stringify(input.payload.interactions || [])
   const rawTaskId =
     typeof input.payload.taskId === 'string' ? input.payload.taskId.trim() : ''
@@ -152,7 +151,6 @@ export async function ingestCollectAndJudge(input: {
     input.payload.sessionAligned !== false && isPlatformSessionId(rawTaskId)
   const sessionTaskId = sessionAligned ? rawTaskId : null
 
-  // Only upsert Session when aligned — never use runId as Session.taskId.
   if (sessionTaskId) {
     let sessionModel: string | null = null
     for (const item of input.payload.interactions || []) {
@@ -189,37 +187,7 @@ export async function ingestCollectAndJudge(input: {
         endTime: endedAt,
       },
     })
-
-    // /agent-ras/trace list requires Execution; FI collect previously only wrote Session.
-    // Skip OpenCode [search-mode]/[analyze-mode] preambles — they hide the FI prompt.
-    const queryText = pickFiUserQuery(input.payload.interactions || [], input.payload.fault)
-    const finalText = (() => {
-      for (let i = (input.payload.interactions || []).length - 1; i >= 0; i -= 1) {
-        const item = (input.payload.interactions || [])[i]
-        if (!item || typeof item !== 'object') continue
-        const row = item as Record<string, unknown>
-        if (row.role !== 'assistant') continue
-        const content = row.content
-        if (typeof content === 'string' && content.trim()) return content.trim().slice(0, 4000)
-      }
-      return input.payload.faultActivated ? 'fi-collect:fault-activated' : 'fi-collect'
-    })()
-    try {
-      await saveExecutionRecord({
-        upload_id: sessionTaskId,
-        task_id: sessionTaskId,
-        framework: input.payload.framework || 'unknown',
-        agentName: input.payload.framework || null,
-        user: input.user,
-        query: queryText,
-        final_result: finalText,
-        model: sessionModel,
-        timestamp: new Date().toISOString(),
-        is_subagent: false,
-      })
-    } catch (err) {
-      console.error('[fi] saveExecutionRecord failed', sessionTaskId, err)
-    }
+    // FI must not synthesize reliability Execution / daily Trace (⓪).
   }
 
   await prisma.faultInjectionRun.update({
@@ -239,19 +207,76 @@ export async function ingestCollectAndJudge(input: {
     },
   })
 
+  return { sessionAligned, sessionTaskId }
+}
+
+/** Load FI Judge / Run inputs from Prisma (never from upload body). */
+export async function loadPersistedFiCollectForJudge(runId: string): Promise<{
+  fault: string
+  submode: string | null
+  injectionMethod: string | null
+  faultActivated: boolean
+  sessionAligned: boolean
+  interactions: unknown[]
+  markers: unknown[]
+}> {
+  const run = await prisma.faultInjectionRun.findUnique({ where: { runId } })
+  if (!run) {
+    throw new Error(`FI run not found: ${runId}`)
+  }
+  let interactions: unknown[] = []
+  if (run.sessionTaskId) {
+    const session = await prisma.session.findUnique({
+      where: { taskId: run.sessionTaskId },
+    })
+    if (session?.interactions) {
+      try {
+        const parsed = JSON.parse(session.interactions)
+        interactions = Array.isArray(parsed) ? parsed : []
+      } catch {
+        interactions = []
+      }
+    }
+  }
+  let markers: unknown[] = []
+  try {
+    const parsed = JSON.parse(run.markersJson || '[]')
+    markers = Array.isArray(parsed) ? parsed : []
+  } catch {
+    markers = []
+  }
+  return {
+    fault: run.fault,
+    submode: run.submode || null,
+    injectionMethod: run.injectionMethod || null,
+    faultActivated: Boolean(run.faultActivated),
+    sessionAligned: Boolean(run.sessionTaskId),
+    interactions,
+    markers,
+  }
+}
+
+/**
+ * Read path: Judge + evaluation markers only from persisted Prisma rows.
+ * Used after collect ingress and by rejudge (no upload body).
+ */
+export async function finishFiJudgeFromDb(input: {
+  runId: string
+  user: string | null
+}) {
+  const persisted = await loadPersistedFiCollectForJudge(input.runId)
   const judged = await judgeFaultInjection({
     user: input.user,
-    fault: input.payload.fault,
-    injectionMethod: input.payload.injectionMethod,
-    faultActivated: Boolean(input.payload.faultActivated),
-    interactions: input.payload.interactions || [],
+    fault: persisted.fault,
+    injectionMethod: persisted.injectionMethod,
+    faultActivated: persisted.faultActivated,
+    interactions: persisted.interactions,
+    submode: persisted.submode,
   })
 
-  // Skipped judge stays judge_skipped (not completed).
   const status = judged.skipped ? 'judge_skipped' : 'completed'
-
   const markersJson = JSON.stringify(
-    mergeEvaluationMarkers(input.payload.markers || [], {
+    mergeEvaluationMarkers(persisted.markers, {
       skipped: Boolean(judged.skipped),
       outcome: judged.outcome,
       reason: judged.reason,
@@ -259,7 +284,7 @@ export async function ingestCollectAndJudge(input: {
     }),
   )
 
-  const updated = await prisma.faultInjectionRun.update({
+  return prisma.faultInjectionRun.update({
     where: { runId: input.runId },
     data: {
       status,
@@ -270,12 +295,11 @@ export async function ingestCollectAndJudge(input: {
         raw: judged.raw || null,
         model: judged.model || null,
         skipped: judged.skipped,
-        sessionAligned,
+        sessionAligned: persisted.sessionAligned,
       }),
       markersJson,
       judgedAt: new Date(),
-      // Keep unaligned notice; do not wipe with null on success path.
-      ...(sessionAligned
+      ...(persisted.sessionAligned
         ? {}
         : {
             error:
@@ -283,8 +307,15 @@ export async function ingestCollectAndJudge(input: {
           }),
     },
   })
+}
 
-  return updated
+export async function ingestCollectAndJudge(input: {
+  runId: string
+  user: string | null
+  payload: CollectPayload
+}) {
+  await persistFiCollectIngress(input)
+  return finishFiJudgeFromDb({ runId: input.runId, user: input.user })
 }
 
 export async function refreshTaskProgress(taskId: string) {

@@ -341,15 +341,17 @@ class OpenCodeAdapterTests(TestCase):
             / "plugin"
             / "agent-fault-injection.ts"
         )
-        rewrite_source = (
+        lib_dir = (
             Path(__file__).resolve().parents[2]
             / "platform_adapters"
             / "opencode"
             / "lib"
-            / "rewrite-runtime.ts"
         )
+        rewrite_source = lib_dir / "rewrite-runtime.ts"
+        provider_rewrite_source = lib_dir / "provider-tool-call-rewrite.ts"
         self.assertTrue(plugin_source.is_file())
         self.assertTrue(rewrite_source.is_file())
+        self.assertTrue(provider_rewrite_source.is_file())
 
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -368,9 +370,20 @@ class OpenCodeAdapterTests(TestCase):
                 workspace / ".opencode" / "skills" / fault.skill_name / "SKILL.md"
             )
             lib_runtime = workspace / ".opencode" / "lib" / "rewrite-runtime.ts"
+            lib_provider = (
+                workspace / ".opencode" / "lib" / "provider-tool-call-rewrite.ts"
+            )
+            package_json = workspace / ".opencode" / "package.json"
             self.assertTrue(plugin_dest.is_file())
             self.assertTrue(skill_dest.is_file())
             self.assertTrue(lib_runtime.is_file())
+            self.assertTrue(lib_provider.is_file())
+            self.assertTrue(package_json.is_file())
+            package_data = json.loads(package_json.read_text(encoding="utf-8"))
+            self.assertIn(
+                "@opencode-ai/plugin",
+                package_data.get("dependencies", {}),
+            )
             self.assertEqual(
                 sorted(p.name for p in plugins_dir.iterdir() if p.is_file()),
                 ["agent-fault-injection.ts"],
@@ -378,6 +391,10 @@ class OpenCodeAdapterTests(TestCase):
             self.assertFalse((plugins_dir / "rewrite-runtime.ts").exists())
             plugin_text = plugin_dest.read_text(encoding="utf-8")
             self.assertIn('from "../lib/rewrite-runtime"', plugin_text)
+            self.assertIn(
+                'from "../lib/provider-tool-call-rewrite"',
+                plugin_text,
+            )
             self.assertEqual(
                 skill_dest.read_text(encoding="utf-8"),
                 fault.skill_file.read_text(encoding="utf-8"),
@@ -387,6 +404,8 @@ class OpenCodeAdapterTests(TestCase):
             self.assertFalse(plugin_dest.exists())
             self.assertFalse(skill_dest.exists())
             self.assertFalse(lib_runtime.exists())
+            self.assertFalse(lib_provider.exists())
+            self.assertFalse(package_json.exists())
 
     def test_provider_retry_failure_uses_attempt_not_duplicate_count(
         self,

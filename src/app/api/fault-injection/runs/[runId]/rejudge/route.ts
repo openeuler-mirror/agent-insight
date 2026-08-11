@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
 import { prisma } from '@/lib/storage/prisma'
-import { ingestCollectAndJudge } from '@/lib/fault-injection/store'
+import { finishFiJudgeFromDb } from '@/lib/fault-injection/store'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,21 +16,9 @@ export async function POST(
   if (!run.sessionTaskId) {
     return NextResponse.json({ error: 'no session to rejudge' }, { status: 400 })
   }
-  const session = await prisma.session.findUnique({ where: { taskId: run.sessionTaskId } })
-  const interactions = session?.interactions ? JSON.parse(session.interactions) : []
-  const updated = await ingestCollectAndJudge({
+  const updated = await finishFiJudgeFromDb({
     runId,
     user: username || run.user,
-    payload: {
-      runId,
-      taskId: run.sessionTaskId,
-      framework: run.platform,
-      fault: run.fault,
-      injectionMethod: run.injectionMethod || undefined,
-      faultActivated: run.faultActivated,
-      interactions,
-      markers: JSON.parse(run.markersJson || '[]'),
-    },
   })
   return NextResponse.json({
     run_id: updated.runId,

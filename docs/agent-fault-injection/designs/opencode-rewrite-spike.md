@@ -10,10 +10,11 @@
 
 ## 交付
 
-1. [`rewrite-runtime.ts`](../../../../agent_fault_injection/platform_adapters/opencode/lib/rewrite-runtime.ts) — 薄表驱动实现（隔离环境拷到 `config/lib/`，勿放进 `plugins/`）  
-2. [`agent-fault-injection.ts`](../../../../agent_fault_injection/platform_adapters/opencode/plugin/agent-fault-injection.ts) — 只接线 hook，改写委托 rewrite-runtime  
-3. Adapter 拷贝入口插件 + `lib/rewrite-runtime.ts`（不整目录扫 `plugin/*.ts`，避免遗留 `agent-ras-eval.ts` 与辅助模块被当成插件）  
-4. [`test_rewrite_parity_fixtures.py`](../../../../agent_fault_injection/tests/unit/test_rewrite_parity_fixtures.py) — Python runtime op 与 capability 清单对拍（TS handlers 真执行对拍另开）  
+1. [`rewrite-runtime.ts`](../../../../agent_fault_injection/platform_adapters/opencode/lib/rewrite-runtime.ts) — 薄表驱动实现（隔离环境拷到 workspace `.opencode/lib/`，勿放进 `plugins/`）  
+2. [`provider-tool-call-rewrite.ts`](../../../../agent_fault_injection/platform_adapters/opencode/lib/provider-tool-call-rewrite.ts) — provider 工具调用改写辅助（与上项同目录安装）  
+3. [`agent-fault-injection.ts`](../../../../agent_fault_injection/platform_adapters/opencode/plugin/agent-fault-injection.ts) — 只接线 hook，改写委托 rewrite-runtime / provider-tool-call-rewrite  
+4. Adapter 拷贝入口插件 + `lib/{rewrite-runtime,provider-tool-call-rewrite}.ts`，并在缺失时预置 workspace `.opencode/package.json`（`@opencode-ai/plugin`）；不整目录扫 `plugin/*.ts`，避免遗留模块被当成插件  
+5. [`test_rewrite_parity_fixtures.py`](../../../../agent_fault_injection/tests/unit/test_rewrite_parity_fixtures.py) — Python runtime op 与 capability 清单对拍（TS handlers 真执行对拍另开）  
 
 ## 门禁
 

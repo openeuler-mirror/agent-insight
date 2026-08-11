@@ -62,7 +62,7 @@ curl -fsSL "$HOST/api/fault-injection/setup?key=$API_KEY" | bash
 
 ### 4. 查看 Run 与 Judge
 
-进入任务详情，轮询进度。Run 页展示「注入流程」节点与调用树；Judge 在服务端基于轨迹给出结论（含 `inconclusive` 等语义）。
+进入任务详情，轮询进度。Run 页展示「注入流程」节点与调用树；Judge 在服务端基于**已落库**轨迹给出结论（含 `inconclusive` 等语义），不以本机上传包直读。
 
 本机产物目录（排障用；权威数据在平台 DB）：
 

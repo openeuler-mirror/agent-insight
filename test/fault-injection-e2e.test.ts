@@ -27,7 +27,7 @@ function sampleCollectPayload(input: {
     framework: input.platform,
     fault: input.fault,
     injectionMethod: 'skill_inject',
-    faultActivated: true,
+    faultActivated: false,
     faultActivatedAt: now,
     interactions: [
       {
@@ -83,7 +83,7 @@ describe('fault-injection e2e ingest', () => {
       prompt: 'e2e prompt',
     })
     assert.ok(payload.interactions.length >= 2)
-    assert.equal(payload.faultActivated, true)
+    assert.equal(payload.faultActivated, false)
 
     const judged = await ingestCollectAndJudge({
       runId: run.runId,
@@ -91,10 +91,17 @@ describe('fault-injection e2e ingest', () => {
       payload,
     })
     assert.ok(['completed', 'judge_skipped'].includes(judged.status))
+    assert.equal(judged.status, 'judge_skipped')
     assert.ok(judged.sessionTaskId)
 
     const session = await prisma.session.findUnique({ where: { taskId: judged.sessionTaskId! } })
     assert.ok(session?.interactions)
+
+    // FI collect must not mint reliability Execution (daily Trace is Insight ⓪ only).
+    const execution = await prisma.execution.findFirst({
+      where: { OR: [{ id: judged.sessionTaskId! }, { taskId: judged.sessionTaskId! }] },
+    })
+    assert.equal(execution, null)
 
     const markers = buildFiTraceMarkers(JSON.parse(judged.markersJson || '[]'))
     assert.ok(markers.length >= 1)
