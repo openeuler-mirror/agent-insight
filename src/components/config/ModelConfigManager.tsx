@@ -17,6 +17,7 @@ import {
     RefreshCw,
     Loader2,
     XCircle,
+    ExternalLink,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
