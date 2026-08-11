@@ -7,6 +7,7 @@ import {
     addEvalExperimentCase,
     evaluateEvalExperimentCase,
 } from '@/lib/engine/experiment/run-experiment';
+import { resolveBatchEvaluationExperimentId } from '@/lib/eval/batch-case-start';
 
 /**
  * BatchEvalTask 用例分析的核心状态机 (跟 grayscale 对齐, 单 side):
@@ -394,7 +395,7 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
         name: `用例分析 · ${skillName || 'baseline'} · ${taskId.slice(0, 8)}`,
         agentName: skillName || '',
         evaluatorIds,
-        existingId: config.evalExperimentId,
+        existingId: resolveBatchEvaluationExperimentId(config),
         scope: 'skill-case-analysis',
         skillName: skillName || '',
         skillVersion: skillVersion ?? null,
@@ -412,7 +413,7 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
         states[c.id] = {
             status: 'pending',
             input: c.input || '',
-            evaluatorRunId: config.evaluationBatchId,
+            evaluatorRunId: evalExperimentId,
             startedAt: Date.now(),
         };
     }

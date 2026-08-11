@@ -13,6 +13,10 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult, type AbScoreBreakdown, type AbTone } from '@/lib/skill-analysis/ab-scoring';
 import {
+    AB_EVALUATOR_RETRY_DISPATCH_STATUS,
+    buildOptimisticAbRunStates,
+} from '@/lib/skill-analysis/ab-run-start-state';
+import {
     buildGrayscaleTraceCase,
     findLatestRunnableRunIndex,
 } from '@/lib/skill-analysis/grayscale-utils';
@@ -1931,7 +1935,7 @@ export function GrayscaleEvaluation({
                 const next = { ...r, status: 'evaluating' as CaseStatus };
                 const nextEvaluations = (next.evaluations || []).map(item => (
                     retryEvaluatorIds.includes(item.evaluatorId)
-                        ? { ...item, status: 'running' as RunEvaluationStatus, errorMessage: undefined }
+                        ? { ...item, status: AB_EVALUATOR_RETRY_DISPATCH_STATUS as RunEvaluationStatus, errorMessage: undefined }
                         : item
                 ));
                 next.evaluations = nextEvaluations.length > 0
@@ -1939,7 +1943,7 @@ export function GrayscaleEvaluation({
                     : retryEvaluatorIds.map(id => ({
                         evaluatorId: id,
                         evaluatorName: evaluatorNameById.get(id) || id,
-                        status: 'running' as RunEvaluationStatus,
+                        status: AB_EVALUATOR_RETRY_DISPATCH_STATUS as RunEvaluationStatus,
                     }));
                 if (!next.evaluations.some(item => item.status === 'done')) {
                     delete next.evaluatorRunId;
@@ -2146,6 +2150,10 @@ export function GrayscaleEvaluation({
                 : 'Please select at least one sample before running.');
             return;
         }
+        const previousStates = caseStatesRef.current;
+        const optimisticStates = buildOptimisticAbRunStates(checkedCaseIds, repeatRounds);
+        caseStatesRef.current = optimisticStates;
+        setCaseStates(optimisticStates);
         setIsTaskRunInFlight(true);
         setLastRunConfigSignature(currentRunConfigSignature);
         setCurrentTask(prev => prev ? {
@@ -2177,6 +2185,8 @@ export function GrayscaleEvaluation({
                     return;
                 }
                 setIsTaskRunInFlight(false);
+                caseStatesRef.current = previousStates;
+                setCaseStates(previousStates);
                 setCurrentTask(prev => prev ? { ...prev, activeRun: null } : prev);
                 alert(data.error || (locale === 'zh' ? '启动失败' : 'Failed to start'));
                 return;
@@ -2184,6 +2194,8 @@ export function GrayscaleEvaluation({
             pollCurrentTask(currentTask.id);
         } catch (err) {
             setIsTaskRunInFlight(false);
+            caseStatesRef.current = previousStates;
+            setCaseStates(previousStates);
             setCurrentTask(prev => prev ? { ...prev, activeRun: null } : prev);
             alert(String(err));
         }
