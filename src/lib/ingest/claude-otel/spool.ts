@@ -30,6 +30,20 @@ export function getOtelTraceSpoolDir(): string {
 
 const READ_CHUNK_BYTES = 1024 * 1024;
 
+/**
+ * Runtime filesystem join. Prefer over ``path.join(dynamic…)`` so Turbopack
+ * (Next 16) does not treat the call as a project-root file glob and emit
+ * "Overly broad patterns … matches N files" during ``next build``.
+ */
+function joinFs(base: string, ...rest: string[]): string {
+  let out = String(base || '').replace(/[/\\]+$/, '');
+  for (const part of rest) {
+    const clean = String(part ?? '').replace(/^[/\\]+|[/\\]+$/g, '');
+    if (clean) out = `${out}${path.sep}${clean}`;
+  }
+  return out;
+}
+
 function dayString(date = new Date()): string {
   const yyyy = String(date.getFullYear());
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -51,7 +65,7 @@ function safeSessionPathSegment(sessionId: string): string {
 }
 
 function sessionSpoolFile(spoolDir: string, fileName: string, sessionId: string): string {
-  return path.join(spoolDir, dayString(), 'sessions', safeSessionPathSegment(sessionId), fileName);
+  return joinFs(spoolDir, dayString(), 'sessions', safeSessionPathSegment(sessionId), fileName);
 }
 
 function appendJsonl(file: string, rows: any[]): void {
@@ -178,7 +192,7 @@ export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessio
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === 'sessions') {
-          const target = path.join(fullPath, segment, fileName);
+          const target = joinFs(fullPath, segment, fileName);
           try {
             if (fs.statSync(target).isFile()) shards.push(target);
           } catch {}

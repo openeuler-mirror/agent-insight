@@ -219,23 +219,24 @@ fi
 LOG_FILE="$(pwd)/server.log"
 : > "$LOG_FILE"
 # 脱离当前 shell 会话，避免 start.sh 退出后把 server 一起带走（仅 nohup 在部分环境下不够）。
+# PID 用命令替换捕获，不写仓库根目录的 *.pid（避免 untracked 脏文件）。
 if command -v setsid >/dev/null 2>&1; then
-  (
+  NEW_PID=$(
     cd "$STANDALONE_DIR" || exit 1
     setsid env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
       node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
-    echo $! > "$LOG_FILE.pid"
+    echo $!
   )
 else
-  (
+  NEW_PID=$(
     cd "$STANDALONE_DIR" || exit 1
     nohup env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
       node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
-    echo $! > "$LOG_FILE.pid"
-    disown $! 2>/dev/null || true
+    echo $!
   )
 fi
-NEW_PID=$(cat "$LOG_FILE.pid" 2>/dev/null || true)
+# 清掉历史版本留下的旁路文件（若存在）
+rm -f "${LOG_FILE}.pid"
 
 echo "Waiting for port $PORT to accept connections..."
 READY=0
