@@ -6,8 +6,8 @@
  * 2. 扣分查表：语句通顺度 5/10/20、重复与冗余 5/7/10、断句与节奏 5/7/10、
  *    语义连贯性 5/10/15、语言自然度 5/7/10（light/moderate/severe）；
  *    重复类 issue 按 count（出现次数）虚拟展开逐次计分（需求「每处」口径）。
- * 3. 「连续出现的中度/重度问题，第 4 处起扣分 ×2」：按 count 展开后的顺序扫描
- *    连续非 light 段，段内前 3 处不翻倍，第 4 处起（>3）加倍，不设封顶。
+ * 3. 「连续出现的中度问题，第 4 处起扣分 ×2」：按 count 展开后的顺序扫描连续
+ *    中度段，段内前 3 处不翻倍，第 4 处起（>3）加倍；严重问题不参与加倍。不设封顶。
  * 4. score = max(0, 100 - Σ扣分)，保留一位小数；0 分必须保留（typeof number 判断）。
  * 5. Judge 输出缺维度 / 未知 severity / 空 quote / 空 reason 时由 zod 严格解析抛
  *    JudgeOutputParseError（engine 自动重试），不做兜底默认档。
@@ -124,7 +124,7 @@ const FLUENCY_SYSTEM_PROMPT = `你是中文文本流畅度评审专家。请逐�
 ## 规则
 - 只报告确实存在的问题；无法确定时不报告。
 - 每条 issue 必须引用原文片段（quote），并给出判断依据（reason）与修改建议（suggestion）。
-- 按文本中出现顺序完整列出所有问题：连续出现的中度/重度问题中，第 4 处起会被加倍扣分（连续前 3 处不翻倍），不要合并、不要遗漏。
+- 按文本中出现顺序完整列出所有问题：连续出现的中度问题中，第 4 处起会被加倍扣分（连续前 3 处不翻倍；严重问题不参与加倍，按原档扣分），不要合并、不要遗漏。
 - **独立缺陷才拆分上报，同一缺陷不要重复拆**：
   - 长句缺少断句 → 按最明显的 2~3 个断句不当位置各报一条，不要超过 3 条；
   - 同一修饰词/表达重复多次 → **报一条并填 count=该表达实际出现的次数**（同一修饰词出现 4 次就填 count=4，代码按 count 逐次计分、参与连续加倍；同一表达重复 3 次及以上时至少判 moderate，不得判 light；count 只用于同一词/同一表达的多次重复，同义反复即不同近义词堆叠时 count=1）；
@@ -160,9 +160,10 @@ ${text}
 // ── 确定性计分 ──────────────────────────────────────────────────────────────
 
 /**
- * 按 count 虚拟展开后的连续 moderate/severe 序列扫描：展开位段内相对位置 >3
- * （第 4 处起）计为加倍，返回每条 issue 命中的加倍位置数（需求口径：连续 3 处
- * 之后的后续问题才加倍）。不设封顶。
+ * 按 count 虚拟展开后的连续 moderate 序列扫描：展开位段内相对位置 >3（第 4 处起）
+ * 计为加倍，返回每条 issue 命中的加倍位置数。连续加倍只对「连续出现的中度问题」
+ * 生效（需求原文口径：连续 3 处以上中度问题扣分加倍）；严重问题不参与连续段、
+ * 不触发加倍，按原档扣分。不设封顶。
  */
 function countDoubledPositions(issues: FluencyIssue[]): Map<number, number> {
   const expanded: Array<{ issueIndex: number; severity: FluencySeverity }> = [];
@@ -173,12 +174,12 @@ function countDoubledPositions(issues: FluencyIssue[]): Map<number, number> {
   const n = expanded.length;
   let i = 0;
   while (i < n) {
-    if (expanded[i].severity === 'light') {
+    if (expanded[i].severity !== 'moderate') {
       i += 1;
       continue;
     }
     let j = i;
-    while (j < n && expanded[j].severity !== 'light') j += 1;
+    while (j < n && expanded[j].severity === 'moderate') j += 1;
     for (let k = i + 3; k < j; k += 1) {
       const issueIndex = expanded[k].issueIndex;
       doubledByIssue.set(issueIndex, (doubledByIssue.get(issueIndex) ?? 0) + 1);

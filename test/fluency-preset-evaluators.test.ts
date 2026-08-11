@@ -286,6 +286,31 @@ describe('buildFluencyOutput 确定性计分纯函数', () => {
     assert.match((output.evidence as { md?: string }).md ?? '', /扣分加倍/);
   });
 
+  it('严重问题不参与连续加倍（需求原文口径：仅中度）', () => {
+    // [m,m,m,s]：中度段长 3 不翻倍，severe 单独原档 → 10×3 + 20 = 50
+    const mixed = buildFluencyOutput({
+      issues: [
+        issue('sentence_smoothness', 'moderate', 'a', 'r'),
+        issue('sentence_smoothness', 'moderate', 'b', 'r'),
+        issue('sentence_smoothness', 'moderate', 'c', 'r'),
+        issue('sentence_smoothness', 'severe', 'd', 'r'),
+      ],
+    }, '示例文本。');
+    assert.equal(mixed.score, 50);
+    assert.doesNotMatch((mixed.evidence as { md?: string }).md ?? '', /扣分加倍/);
+
+    // 连续 4 处严重 → 全部原档 → 4×20 = 80 → 20
+    const allSevere = buildFluencyOutput({
+      issues: [
+        issue('sentence_smoothness', 'severe', 'a', 'r'),
+        issue('sentence_smoothness', 'severe', 'b', 'r'),
+        issue('sentence_smoothness', 'severe', 'c', 'r'),
+        issue('sentence_smoothness', 'severe', 'd', 'r'),
+      ],
+    }, '示例文本。');
+    assert.equal(allSevere.score, 20);
+  });
+
   it('连续 2 处中度问题 → 不翻倍', () => {
     const output = buildFluencyOutput({
       issues: [
@@ -411,11 +436,11 @@ describe('buildFluencyOutput 确定性计分纯函数', () => {
 
   it('0 分保留 number 类型（不做假值判断）', () => {
     const output = buildFluencyOutput({
-      issues: Array.from({ length: 5 }, () =>
+      issues: Array.from({ length: 8 }, () =>
         issue('semantic_coherence', 'severe', '语义断裂', '逻辑完全断裂')),
     }, '示例文本。');
     assert.equal(typeof output.score, 'number');
-    assert.equal(output.score, 0); // 3×15 + 2×30 = 105 → 0
+    assert.equal(output.score, 0); // 8×15 = 120 → 0（严重问题不参与加倍，原档累加）
     const coherencePoint = output.points?.find((point) => point.label === '语义连贯性');
     assert.equal(coherencePoint?.score, 0);
   });
