@@ -12,6 +12,8 @@
    - 若本机已有 Worker，用**另一账号**的 Key 重跑 setup 时会按新凭证自动重启；同一 Key/host 再跑则保持已有进程。
 2. Insight 设置页配置激活模型（Judge 依赖；无模型时仍可 collect，评判为 `judge_skipped`）
 3. 本机安装 OpenCode 和/或 xiaoo（须与 Worker 同机）
+   - **OpenCode**：FI 插件会写入 workspace `.opencode/plugins/`（含 `rewrite-runtime.ts` **与** `provider-tool-call-rewrite.ts`），并预置 `.opencode/package.json`（`@opencode-ai/plugin`）；缺任一会表现为 `plugin-ready` 失败。日常 ⓪ Trace 仍靠 Insight OpenCode 观测插件 upload，**不是** FI collect。
+   - **xiaoo**：完整链路 ⓪ 需 Insight 采集器：`node scripts/xiaoo-trace-collector/install.js`（`install-ras` 安装 xiaoo hooker 后也会自动调用）。FI overlay **保留**用户 `[hooker].plugins`（含 RAS + collector）再追加 FI。
 4. 打开侧栏「故障注入与评测」（默认 `/agent-ras/fault-injection/tasks`）：
    - **注入任务** → **新建任务**：三步向导（平台 → 故障+submode → 配置）；行级停/再跑/删
    - 标题右上角 **故障目录** → `/agent-ras/fault-injection/faults`：目录表按子模式拆行（`?` 说明）；点「注入方式」看 Skill（与侧栏「可靠性能力」`/agent-ras/fault-modes` 不同）
@@ -30,6 +32,7 @@
 | 平台 | fault | submode |
 |------|-------|---------|
 | opencode | `thinking-dead-loop` | `2`（逻辑死循环） |
+| xiaoo | `thinking-dead-loop` | `2`（逻辑死循环；期望 `faultActivated` + abort + Judge `recovered`） |
 | xiaoo | `tool_repeat_dead_loop` | `2`（unknown） |
 
 超时建议 60–180s。

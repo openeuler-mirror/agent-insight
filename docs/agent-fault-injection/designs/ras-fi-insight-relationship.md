@@ -208,6 +208,16 @@ flowchart TB
 - 不要求 Insight 持有本机 runtime 句柄；断连即 fail-open
 - **不做完整链路 Trace 观测**（不发日常 OTLP/upload、不拼 Session 对话树）；那是 Insight 采集器职责
 
+### 3.5 新平台接入 checklist（钉死 ⓪=Insight）
+
+| # | 必须 | 禁止 |
+|---|------|------|
+| ⓪ | 在 **agent-insight** 落地采集器（如 OpenCode upload、`scripts/xiaoo-trace-collector`）并产生 `Execution` | 在 `agent_ras` / `agent_fault_injection`「顺便」做日常完整 Trace，或代发 OTLP / `note_*` |
+| ① | RAS 仅 `ras-events` + 检测/恢复 | RAS hooker 内嵌 OTLP、向 Insight collector 转发 mid-stream、采集非 RAS 职责事件当主树 |
+| ③ | FI 只 `collect-result` → Run/Judge | FI collect 合成可靠性 `Execution` / 顶主树；采集非 FI 流水线事件当 Trace |
+
+xiaoO 现状：⓪ = [`scripts/xiaoo-trace-collector/`](../../../scripts/xiaoo-trace-collector/)；见 [xiaoo-observe-ingest.md](../../agent-ras/designs/features/xiaoo-observe-ingest.md)。
+
 细节：[agent-ras architecture](../../agent-ras/designs/architecture.md)。
 
 ---
@@ -221,7 +231,7 @@ flowchart TB
 - CLI：`python -m agent_fault_injection.cli run …`（本机只做 inject+collect；Judge 在 Insight）
 - 本机写出 `collect-result.json` 等 artifacts
 
-**不负责**：日常完整链路 Trace 观测，也不为进 `/agent-ras/trace` **合成**可靠性 `Execution`。③ collect 仅服务 FI Run / Judge；日常主树来自 Insight ⓪（OpenCode：upload；其它：OTLP 等）。新平台同此边界。
+**不负责**：日常完整链路 Trace 观测，也不为进 `/agent-ras/trace` **合成**可靠性 `Execution`。③ collect 仅服务 FI Run / Judge；**不**采集非 FI 流水线事件顶主树。日常主树来自 Insight ⓪（OpenCode：upload；xiaoO：`xiaoo-trace-collector` OTLP）。新平台同此边界。
 
 ### 4.2 与 Insight 的交界
 

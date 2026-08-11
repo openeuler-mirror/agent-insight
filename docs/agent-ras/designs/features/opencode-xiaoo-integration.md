@@ -10,7 +10,7 @@ OpenCode 与 xiaoO **共用**协议 inproc 骨架：`hooks → RasClient → Ses
 
 | | OpenCode | xiaoO |
 |--|----------|-------|
-| 一句话 | 同进程 Bun 插件 + libpython + ras-judge | Hooker / Daemon SSE + 本机 Python + OTel |
+| 一句话 | 同进程 Bun 插件 + libpython + ras-judge | Hooker / Daemon SSE + 本机 Python；⓪ Trace 走 Insight collector |
 | L3 Judge | 有（`supports_host_skill_judge=True`） | 无（hello 强制关 semantic） |
 | 正式 mid-stream | `part.delta` | Daemon SSE（CLI hooks 偏 turn/tool） |
 
@@ -45,7 +45,6 @@ flowchart TB
   Hub --> AA
   AA --> Host
   Hub -->|ras-events / config sync| Insight
-  XO -.->|OTLP 仅 xiaoO| Insight
 ```
 
 **设计原则**：检测/恢复算法只在 L0；L3 禁止复制 Detector；runtime 生命周期归宿主；Insight 只旁路消费。
@@ -57,7 +56,7 @@ flowchart TB
 | L0 / L1 | `agent_ras/detectors/`、`recovery/`、`ras_runtime/session_hub.py` |
 | L2 | `agent_ras/platform_adapter/common/`（`ras_client`、`host_actions`、`protocol_client`、`python_bridge.js`、`subprocess_ipc`） |
 | L3 OpenCode | `agent_ras/platform_adapter/opencode/`（`plugin.js`、`host_control.js`、`skill_judge.js`、`config_sync.js`） |
-| L3 xiaoO | `agent_ras/platform_adapter/xiaoo/`（`hooks.py`、`daemon_*.py`、`hooker/`、`otel_trace.py`、`config_sync.py`） |
+| L3 xiaoO | `agent_ras/platform_adapter/xiaoo/`（`hooks.py`、`daemon_*.py`、`hooker/`、`config_sync.py`；OTel 已迁 Insight `scripts/xiaoo-trace-collector/`） |
 | 安装 | `scripts/install-ras.js` → `~/.config/opencode`、`~/.config/xiaoo` |
 | 本机配置 | `~/.agent-insight/ras/config.json`（`agent_ras.platforms.<platform>`） |
 
@@ -115,14 +114,13 @@ flowchart LR
     Host -->|steer_notice| SSE
   end
   Embed -->|insight_push| RAS[ras-events]
-  Hooker -->|OTLP| OTel[otlp traces]
 ```
 
-1. **Hooker（CLI）**：`Chat.received` → hello；`Tool.post` → tool after；lifecycle → reset（偏 turn/tool）
+1. **Hooker（CLI）**：`Chat.received` → hello；`Tool.post` → tool after；lifecycle → reset；`stream_delta` → **仅** ① text observe（**不**转发 Trace）
 2. **Daemon SSE（正式 mid-stream）**：`text_delta` / `thinking_delta` / `tool_*` → observe → SessionHub
 3. **嵌入核**：本机 Python `import ras_runtime`；hooker 经 `subprocess_ipc` 共享 Hub（**无需** libpython FFI）
 4. **无 L3 Judge**：`supports_host_skill_judge=False`
-5. **投递 + 观测**：`POST .../runtimes/cancel` + `.../input`（lease）；旁路 ras-events **+** OTel flush
+5. **投递 + 旁路**：`POST .../runtimes/cancel` + `.../input`（lease）；旁路 **仅** ras-events；完整链路 OTLP **仅** Insight `xiaoo-trace-collector`（RAS/FI 不做 Trace）
 
 本地私改 gateway（`ras_control.sock` 上游注入）**废止**；正式控制面为官方 Daemon HTTP/SSE。
 
@@ -138,7 +136,7 @@ flowchart LR
 | Abort | `session.abort` + 重试 | `POST runtimes/cancel`（lease） |
 | Steer / Notice | toast + idle 后 prompt | `runtimes/input`（可 `[RAS]` 前缀） |
 | L3 语义 Judge | 有（ras-judge） | 无（强制关 semantic） |
-| 观测上报 | ras-events | ras-events + OTLP traces |
+| 观测上报 | ras-events（⓪ 由 Insight OC 插件 upload） | ras-events（⓪ 由 Insight xiaoo-trace-collector OTLP） |
 | 上游侵入 | 官方 Plugin API | 禁止改源码；废止私改 sock |
 | 能力开关 | `platform_capabilities["opencode"].supports_host_skill_judge=True` | `xiaoo=False` |
 
@@ -188,7 +186,7 @@ flowchart TB
 |--|-----|----|
 | **OpenCode** | 协议 inproc；可 libpython 嵌 detectors | 系统 config + workspace TS 插件（无 so；分层叠加，不必 merge 用户 config） |
 | **xiaoO** | hooks / Daemon → ras_runtime | config overlay（保留 RAS hooker）+ Python hooker |
-| **与 Insight** | ① ras-events；XO 另 OTel | ②③ FI Client + collect-result |
+| **与 Insight** | ① ras-events；⓪ 各走 Insight 采集器 | ②③ FI Client + collect-result（不造 Execution） |
 | **恢复/评判** | 本机 HostControl | Insight 服务端 Judge |
 
 同宿主可并存 RAS 与 FI，挂载点与配置隔离；xiaoO 适配设计要求 **`agent_fault_injection/**` 零 diff**（RAS 侧不改 FI）。
@@ -202,12 +200,13 @@ flowchart TB
 ```text
 OpenCode 宿主 (plugin + SDK) ──┐
                                 ├──► L2 common ──► L1 SessionHub ──► L0 core
-xiaoO 宿主 (hooker / Daemon) ──┘         │                │
-                                         │                └──► Insight (config / events)
-                                         └── xiaoO only: OTel
+xiaoO 宿主 (hooker / Daemon) ──┘                          │
+                                                          └──► Insight ① ras-events
+
+⓪ Trace：OpenCode → Insight upload 插件；xiaoO → Insight xiaoo-trace-collector（非 RAS）
 ```
 
-L3 分叉进 L2 后合流；仅 xiaoO 另连 OTel；仅 OpenCode 在 L3 回灌 `skill_result`。
+L3 分叉进 L2 后合流；完整链路 Trace **不经** RAS；仅 OpenCode 在 L3 回灌 `skill_result`。
 
 ---
 
@@ -218,7 +217,7 @@ L3 分叉进 L2 后合流；仅 xiaoO 另连 OTel；仅 OpenCode 在 L3 回灌 `
 | 架构真源 / FFI | [architecture.md](../architecture.md) |
 | 能力矩阵 / 加平台 | [platform-adapter.md](../modules/platform-adapter.md) |
 | xiaoO 设计 | [xiaoo-adapter.md](./xiaoo-adapter.md) |
-| xiaoO OTel | [xiaoo-observe-ingest.md](./xiaoo-observe-ingest.md) |
+| xiaoO ⓪ Trace（Insight collector） | [xiaoo-observe-ingest.md](./xiaoo-observe-ingest.md) |
 | 配置同步 | [capability-config-sync.md](./capability-config-sync.md) |
 | OpenCode 安装验收 | [platform-opencode.md](../../guides/platform-opencode.md) |
 | xiaoO 安装验收 | [platform-xiaoo.md](../../guides/platform-xiaoo.md) |

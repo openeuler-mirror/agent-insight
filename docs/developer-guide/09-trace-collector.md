@@ -359,6 +359,7 @@ return NextResponse.json({
 | JiuwenSwarm | `otel/jiuwenswarm/` | `scripts/jiuwenswarm_extension/` | Telemetry扩展模式 |
 | Qoder CN 产品家族 | `adapters/qoder.ts` | `scripts/qoder_trace_collector.mjs`、Desktop VSIX、JetBrains Plugin、Work setup | 共享 Hook/OTLP 核心，按产品与账号隔离 spool，支持 Quest/Experts/Subagent/Skill/MCP/连接器 |
 | Generic | `adapters/generic.ts` | 标准OTLP SDK | 兜底适配，支持OpenInference标准 |
+| xiaoO | `adapters/generic.ts`（`service.name=xiaoo`） | [`scripts/xiaoo-trace-collector/`](../../scripts/xiaoo-trace-collector/) | Hooker plugin；session buffer → OTLP；**不**经 RAS；安装 `node scripts/xiaoo-trace-collector/install.js`（`install-ras` 会顺带调用） |
 
 ---
 
