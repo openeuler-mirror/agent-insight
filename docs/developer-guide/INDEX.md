@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `PENDING_MERGE_HEAD` (`PENDING`) |
+| Commit | `f2da3f6d839aefe5d6485ff980db4b9ea78c963b` (`f2da3f6`) |
 | Branch | `dev_agent_ras` |
-| Date | 2026-08-12 |
+| Date | 2026-08-12 09:48:09 +0800 |
 | Author | iceory |
 | Subject | `merge: 合并 origin/master 到 dev_agent_ras` |
 
-**如何更新：** `git diff PENDING HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff f2da3f6 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
