@@ -25,6 +25,7 @@ import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
+import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 
 interface AgentOption { name: string; traces: number }
 interface PlatformOption { id: string; label: string }
@@ -1228,16 +1229,12 @@ export default function NewExperimentPage() {
                       />
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 700 }}>
-                          {(c.faultInjectionType && faultModeLabels.get(c.faultInjectionType))
-                            || String(c.values?.fault_label || '').trim()
+                          {formatReliabilityFaultTypeFromCaseValues(c.values, {
+                            faultId: c.faultInjectionType,
+                          })
+                            || (c.faultInjectionType && faultModeLabels.get(c.faultInjectionType))
                             || c.faultInjectionType
                             || '未指定故障'}
-                          {c.values?.submode != null && String(c.values.submode) ? (
-                            <span style={{ fontWeight: 500, color: 'var(--foreground-muted)' }}>
-                              {' · '}
-                              {String(c.values.submode_label || c.values.submode)}
-                            </span>
-                          ) : null}
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {c.input || '（无输入）'}

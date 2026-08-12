@@ -15,12 +15,17 @@ import {
 import {
   getClientConfigView,
   listReliabilityClientsForUser,
+  noteCapabilityIngestPull,
   putClientConfig,
   recordConfigLoad,
   resetClientConfigStoreForTests,
   syncClientConfig,
   upsertReliabilityClientFromWorker,
 } from '@/lib/reliability/client-config-service'
+import {
+  getCapabilityEnvelope,
+  resetCapabilityConfigStoreForTests,
+} from '@/lib/ingest/ras/capability-config-store'
 
 test('builtin schema has design defaults and sections', () => {
   const schema = buildBuiltinConfigSchema('opencode')
@@ -61,7 +66,9 @@ test('override merge + fieldSources + path delete', () => {
 
 test('put/sync/load delivery track with worker-backed client', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cli-cfg-'))
+  const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cap-cfg-'))
   resetClientConfigStoreForTests(dir)
+  resetCapabilityConfigStoreForTests(capDir)
   try {
     const client = upsertReliabilityClientFromWorker({
       user: 'u1',
@@ -102,9 +109,20 @@ test('put/sync/load delivery track with worker-backed client', async () => {
       overrideDiff: { enabled: true, 'textLoop.enabled': true, 'textLoop.repeatThreshold': 7 },
       sync: true,
     })
-    assert.equal(synced.status, 'sync_notified')
+    assert.equal(synced.status, 'written')
     assert.ok(synced.configRef)
     assert.equal(synced.revision, 2)
+
+    const envelope = getCapabilityEnvelope('u1', 'opencode')
+    assert.equal(envelope.syncEnabled, true)
+    assert.equal(envelope.config.enabled, true)
+    assert.equal(
+      (envelope.config.detectors.llm_thinking_loop as { loop_repeat_threshold: number }).loop_repeat_threshold,
+      7,
+    )
+    // 其它平台未被写入
+    const xiaooBefore = getCapabilityEnvelope('u1', 'xiaoo')
+    assert.equal(xiaooBefore.revision, 0)
 
     const again = syncClientConfig({
       user: 'u1',
@@ -112,7 +130,7 @@ test('put/sync/load delivery track with worker-backed client', async () => {
       platform: 'opencode',
       configRef: synced.configRef!,
     })
-    assert.equal(again.status, 'sync_notified')
+    assert.equal(again.status, 'written')
 
     const loaded = recordConfigLoad({
       user: 'u1',
@@ -129,7 +147,83 @@ test('put/sync/load delivery track with worker-backed client', async () => {
     assert.equal(after.delivery?.status, 'ras_loaded')
   } finally {
     resetClientConfigStoreForTests()
+    resetCapabilityConfigStoreForTests()
     fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(capDir, { recursive: true, force: true })
+  }
+})
+
+test('platform configs stay isolated on sync publish', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cli-iso-'))
+  const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cap-iso-'))
+  resetClientConfigStoreForTests(dir)
+  resetCapabilityConfigStoreForTests(capDir)
+  try {
+    const client = upsertReliabilityClientFromWorker({
+      user: 'u-iso',
+      workerId: 'w-iso',
+      hostname: 'iso-host',
+      reportedIp: '10.0.0.2',
+      lastSeenAt: new Date().toISOString(),
+      platforms: [
+        { id: 'opencode', version: '1.0.0', models: [] },
+        { id: 'xiaoo', version: '1.0.0', models: [] },
+      ],
+      online: true,
+    })
+
+    putClientConfig({
+      user: 'u-iso',
+      clientId: client.id,
+      platform: 'opencode',
+      overrideDiff: { enabled: true, 'toolRepeat.warningThreshold': 3 },
+      sync: true,
+    })
+    putClientConfig({
+      user: 'u-iso',
+      clientId: client.id,
+      platform: 'xiaoo',
+      overrideDiff: { enabled: false, 'toolRepeat.warningThreshold': 9, notifyUserOnWarning: true },
+      sync: true,
+    })
+
+    const oc = getCapabilityEnvelope('u-iso', 'opencode')
+    const xo = getCapabilityEnvelope('u-iso', 'xiaoo')
+    assert.equal(oc.config.enabled, true)
+    assert.equal(xo.config.enabled, false)
+    assert.equal(
+      (oc.config.detectors.repeat_tool as { warning_threshold: number }).warning_threshold,
+      3,
+    )
+    assert.equal(
+      (xo.config.detectors.repeat_tool as { warning_threshold: number }).warning_threshold,
+      9,
+    )
+    assert.equal(
+      (xo.config.detectors.llm_thinking_loop as { semantic_content_enabled: boolean }).semantic_content_enabled,
+      false,
+    )
+
+    const ocView = getClientConfigView('u-iso', client.id, 'opencode')
+    const xoView = getClientConfigView('u-iso', client.id, 'xiaoo')
+    assert.equal(ocView.delivery?.status, 'written')
+    assert.equal(xoView.delivery?.status, 'written')
+    assert.notEqual(ocView.delivery?.configRef, xoView.delivery?.configRef)
+
+    // ingest pull 只推进对应平台的 sync_notified → written
+    const storePath = path.join(dir, 'u-iso.json')
+    const raw = JSON.parse(fs.readFileSync(storePath, 'utf8'))
+    raw.configs[client.id].opencode.delivery.status = 'sync_notified'
+    raw.configs[client.id].xiaoo.delivery.status = 'sync_notified'
+    fs.writeFileSync(storePath, JSON.stringify(raw))
+    noteCapabilityIngestPull('u-iso', 'opencode')
+    assert.equal(getClientConfigView('u-iso', client.id, 'opencode').delivery?.status, 'written')
+    assert.equal(getClientConfigView('u-iso', client.id, 'xiaoo').delivery?.status, 'sync_notified')
+  } finally {
+    resetClientConfigStoreForTests()
+    resetCapabilityConfigStoreForTests()
+    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(capDir, { recursive: true, force: true })
   }
 })
 

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { startExperimentRun } from '@/lib/engine/experiment/run-experiment';
 import {
+  awaitFiSessionsAndBindExperimentCases,
   collectFiCasesFromExperiment,
   FiOrchestrateError,
   orchestrateFaultInjection,
@@ -48,6 +49,9 @@ export async function POST(
           where: { id, user: username },
           select: { agentName: true },
         });
+        const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
+          ? generateTrace.timeoutSeconds
+          : 180;
         fi = await orchestrateFaultInjection({
           user: username,
           experimentId: id,
@@ -55,11 +59,54 @@ export async function POST(
           agent: String(generateTrace?.agent || experiment?.agentName || 'default'),
           model: generateTrace?.model != null ? String(generateTrace.model) : null,
           workspace: generateTrace?.workspace != null ? String(generateTrace.workspace) : null,
-          timeoutSeconds: typeof generateTrace?.timeoutSeconds === 'number'
-            ? generateTrace.timeoutSeconds
-            : 180,
+          timeoutSeconds,
           cases,
         });
+
+        // 设计契约：FI → 对齐 sessionTaskId/Case.taskId → 再评测。
+        // 等待放后台，避免 HTTP 阻塞数分钟；勿在空轨迹上立刻 Judge。
+        if (fi && !fi.skipped && fi.runIds.length) {
+          const waitMs = Math.max(60_000, (timeoutSeconds + 60) * 1000);
+          const runIds = fi.runIds;
+          recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
+          void (async () => {
+            try {
+              const bound = await awaitFiSessionsAndBindExperimentCases({
+                runIds,
+                timeoutMs: waitMs,
+              });
+              if (bound.pendingRunIds.length || bound.failedRunIds.length) {
+                console.warn('[experiment-run] FI session bind incomplete', {
+                  experimentId: id,
+                  bound: bound.bound,
+                  ready: bound.readyRunIds.length,
+                  pending: bound.pendingRunIds,
+                  failed: bound.failedRunIds,
+                });
+              }
+              const result = await startExperimentRun(id, username);
+              if (!result) return;
+              await result.completion?.catch((e) => {
+                console.error('[Experiment Run Error]', e);
+              });
+            } catch (e) {
+              console.error('[experiment-run] FI await/start failed', e);
+              try {
+                await prisma.experiment.update({
+                  where: { id },
+                  data: { status: 'failed' },
+                });
+              } catch {
+                /* ignore */
+              }
+            }
+          })();
+          return NextResponse.json({
+            status: 'running',
+            awaitingFiSession: true,
+            fiOrchestrate: fi,
+          });
+        }
       }
     }
 

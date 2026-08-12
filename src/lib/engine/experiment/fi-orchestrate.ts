@@ -2,6 +2,8 @@
  * 外挂 FI 编排：在 startExperimentRun 之前按 case 的 faultInjectionType 创建 FI 任务。
  * 禁止写入 run-experiment 内核 I/O；本模块只调用 store/createTaskWithRuns。
  * FI 元数据写入 ExperimentCase 独立列，禁止污染 evaluatorContextJson。
+ *
+ * 生成 Trace 契约：创建 Run → 等 Worker/collect 回填 sessionTaskId → 写入 Case.taskId → 再评测。
  */
 import { createTaskWithRuns } from '@/lib/fault-injection/store'
 import { listPlatformsFromWorkers } from '@/lib/fault-injection/worker-protocol'
@@ -133,7 +135,8 @@ export async function orchestrateFaultInjection(
       timeoutSeconds: req.timeoutSeconds ?? 180,
       items: [{ fault: item.fault, submode: item.submode || null }],
     })
-    const runId = runs[0]?.id
+    // 必须用业务 runId（ras-…），禁止 Prisma cuid：Worker/collect/API 一律按 runId 关联。
+    const runId = runs[0]?.runId
     taskIds.push(task.id)
     if (runId) runIds.push(runId)
     caseFaults.push({
@@ -156,5 +159,122 @@ export async function orchestrateFaultInjection(
     taskIds,
     runIds,
     caseFaults,
+  }
+}
+
+const FI_TERMINAL_WITHOUT_SESSION = new Set([
+  'failed',
+  'stopped',
+])
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 按业务 runId 或历史误写入的 Prisma id 查找 FI Run。 */
+async function findFiRunByKey(runKey: string) {
+  return prisma.faultInjectionRun.findFirst({
+    where: { OR: [{ runId: runKey }, { id: runKey }] },
+    select: {
+      id: true,
+      runId: true,
+      status: true,
+      sessionTaskId: true,
+      error: true,
+    },
+  })
+}
+
+/**
+ * 把 FI Run.sessionTaskId 回填到 ExperimentCase.taskId（及存在的 Execution.id）。
+ * 兼容历史 fiRunId=cuid 与正确的 ras- runId。
+ */
+export async function bindExperimentCaseToFiSession(input: {
+  fiRunKey: string
+  sessionTaskId: string
+}): Promise<number> {
+  const sessionTaskId = input.sessionTaskId.trim()
+  if (!sessionTaskId) return 0
+
+  const run = await findFiRunByKey(input.fiRunKey)
+  const keys = Array.from(
+    new Set([input.fiRunKey, run?.runId, run?.id].filter((v): v is string => Boolean(v))),
+  )
+  if (!keys.length) return 0
+
+  const execution = await prisma.execution.findFirst({
+    where: { taskId: sessionTaskId },
+    select: { id: true },
+  })
+
+  const result = await prisma.experimentCase.updateMany({
+    where: {
+      fiRunId: { in: keys },
+      OR: [{ taskId: null }, { taskId: '' }],
+    },
+    data: {
+      taskId: sessionTaskId,
+      ...(execution ? { executionId: execution.id } : {}),
+    },
+  })
+  return result.count
+}
+
+/**
+ * 等待 FI collect 对齐平台 Session，并回填 ExperimentCase.taskId。
+ * 超时不抛错：已对齐的 case 照常绑定，未对齐的留给后续评测降级（空轨迹 warn）。
+ */
+export async function awaitFiSessionsAndBindExperimentCases(input: {
+  runIds: string[]
+  timeoutMs?: number
+  pollMs?: number
+}): Promise<{
+  bound: number
+  readyRunIds: string[]
+  pendingRunIds: string[]
+  failedRunIds: string[]
+}> {
+  const runIds = Array.from(new Set(input.runIds.filter(Boolean)))
+  if (!runIds.length) {
+    return { bound: 0, readyRunIds: [], pendingRunIds: [], failedRunIds: [] }
+  }
+
+  const timeoutMs = Math.max(5_000, input.timeoutMs ?? 240_000)
+  const pollMs = Math.max(500, input.pollMs ?? 2_000)
+  const started = Date.now()
+  const ready = new Set<string>()
+  const failed = new Set<string>()
+  let bound = 0
+
+  while (Date.now() - started < timeoutMs) {
+    for (const runKey of runIds) {
+      if (ready.has(runKey) || failed.has(runKey)) continue
+      const run = await findFiRunByKey(runKey)
+      if (!run) {
+        failed.add(runKey)
+        continue
+      }
+      if (run.sessionTaskId) {
+        bound += await bindExperimentCaseToFiSession({
+          fiRunKey: runKey,
+          sessionTaskId: run.sessionTaskId,
+        })
+        ready.add(runKey)
+        continue
+      }
+      if (FI_TERMINAL_WITHOUT_SESSION.has(run.status)) {
+        failed.add(runKey)
+      }
+    }
+    if (ready.size + failed.size >= runIds.length) break
+    await sleep(pollMs)
+  }
+
+  const pendingRunIds = runIds.filter((id) => !ready.has(id) && !failed.has(id))
+  return {
+    bound,
+    readyRunIds: Array.from(ready),
+    pendingRunIds,
+    failedRunIds: Array.from(failed),
   }
 }

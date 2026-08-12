@@ -154,7 +154,7 @@ export async function persistFiCollectIngress(input: {
     input.payload.sessionAligned !== false && isPlatformSessionId(rawTaskId)
   const sessionTaskId = sessionAligned ? rawTaskId : null
 
-  await prisma.faultInjectionRun.update({
+  const updated = await prisma.faultInjectionRun.update({
     where: { runId: input.runId },
     data: {
       status: 'judging',
@@ -170,6 +170,25 @@ export async function persistFiCollectIngress(input: {
       markersJson: JSON.stringify(input.payload.markers || []),
     },
   })
+
+  // 实验「生成 Trace」依赖 Case.taskId；collect 对齐后立刻回填（避免评测时空轨迹）。
+  if (sessionTaskId) {
+    const fiKeys = Array.from(new Set([input.runId, updated.id].filter(Boolean)))
+    const execution = await prisma.execution.findFirst({
+      where: { taskId: sessionTaskId },
+      select: { id: true },
+    })
+    await prisma.experimentCase.updateMany({
+      where: {
+        fiRunId: { in: fiKeys },
+        OR: [{ taskId: null }, { taskId: '' }],
+      },
+      data: {
+        taskId: sessionTaskId,
+        ...(execution ? { executionId: execution.id } : {}),
+      },
+    })
+  }
 
   return { sessionAligned, sessionTaskId }
 }

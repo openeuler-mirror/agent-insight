@@ -30,6 +30,7 @@ import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import styles from '@/components/DatasetItemsPage.module.css';
+import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 
 function IconRefresh({ size = 15 }: { size?: number }) {
   return (
@@ -204,10 +205,16 @@ export default function DatasetItemsPage() {
     id: string;
     name: string;
     injectionMethodLabel?: string;
+    parameters?: Array<{ key: string; label: string }>;
   }>>([]);
 
   const faultModeById = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; injectionMethodLabel?: string }>();
+    const map = new Map<string, {
+      id: string;
+      name: string;
+      injectionMethodLabel?: string;
+      parameters?: Array<{ key: string; label: string }>;
+    }>();
     for (const option of faultModeOptions) map.set(option.id, option);
     return map;
   }, [faultModeOptions]);
@@ -215,14 +222,16 @@ export default function DatasetItemsPage() {
   const formatFaultInjectionType = useCallback((row: DatasetCase, raw: string): string => {
     const id = raw.trim();
     const fromApi = id ? faultModeById.get(id) : undefined;
-    const faultName = fromApi?.name
-      || String(row.values?.fault_label || '').trim()
-      || id;
-    const methodLabel = fromApi?.injectionMethodLabel
-      || String(row.values?.injection_method_label || '').trim();
-    if (faultName && methodLabel) return `${faultName} · ${methodLabel}`;
-    if (methodLabel) return methodLabel;
-    return faultName || raw;
+    const submodeId = String(row.values?.submode || '').trim();
+    const apiSubmodeLabel = submodeId
+      ? (fromApi?.parameters || []).find((p) => p.key === submodeId)?.label
+      : undefined;
+    return formatReliabilityFaultTypeFromCaseValues(row.values, {
+      faultId: id,
+      apiFaultName: fromApi?.name,
+      apiInjectionMethodLabel: fromApi?.injectionMethodLabel,
+      apiSubmodeLabel,
+    });
   }, [faultModeById]);
 
   const load = useCallback(async () => {
@@ -277,12 +286,21 @@ export default function DatasetItemsPage() {
               name?: string;
               injectionMethodLabel?: string;
               injection_method_label?: string;
+              parameters?: Array<{ key?: string; label?: string }>;
             }) => ({
               id: String(item?.id || '').trim(),
               name: String(item?.name || item?.id || '').trim(),
               injectionMethodLabel: String(
                 item?.injectionMethodLabel || item?.injection_method_label || '',
               ).trim() || undefined,
+              parameters: Array.isArray(item?.parameters)
+                ? item.parameters
+                  .map((p) => ({
+                    key: String(p?.key || '').trim(),
+                    label: String(p?.label || p?.key || '').trim(),
+                  }))
+                  .filter((p) => p.key)
+                : undefined,
             }))
             .filter((item: { id: string }) => item.id),
         );

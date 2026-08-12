@@ -17,11 +17,18 @@ function sanitizeUserKey(user: string): string {
   return user.replace(/[^a-zA-Z0-9._@-]/g, '_').slice(0, 128) || 'anonymous'
 }
 
+let testBaseDir: string | undefined
+
+/** 测试注入：覆盖 capability 落盘根目录；传 undefined 恢复默认。 */
+export function resetCapabilityConfigStoreForTests(baseDir?: string) {
+  testBaseDir = baseDir
+}
+
 export function capabilityConfigFilePath(
   user: string,
   baseDir?: string,
 ): string {
-  const root = baseDir ?? resolveAgentInsightDataPath('ras-capability-configs')
+  const root = baseDir ?? testBaseDir ?? resolveAgentInsightDataPath('ras-capability-configs')
   return path.join(root, `${sanitizeUserKey(user)}.json`)
 }
 

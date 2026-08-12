@@ -17,6 +17,15 @@ import {
   nestEffectiveConfig,
   type ReliabilityPlatformId,
 } from '@/lib/reliability/client-config-model'
+import {
+  isRasCapabilityPlatformId,
+  platformSupportsSync,
+  type RasCapabilityConfigEnvelope,
+} from '@/lib/ingest/ras/capability-config'
+import {
+  getCapabilityEnvelope,
+  saveCapabilityEnvelope,
+} from '@/lib/ingest/ras/capability-config-store'
 
 export type DeliveryStatus =
   | 'saved'
@@ -293,6 +302,37 @@ export function getClientConfigView(user: string, clientId: string, platformRaw:
   }
 }
 
+/**
+ * 本轮无 WSS：把「保存并同步」桥到客户端真实拉取通道（user × platform 的 ras-capability）。
+ * 严禁跨平台写入——只更新入参 platform。
+ */
+export function publishClientConfigToCapabilityPullPath(input: {
+  user: string
+  platform: ReliabilityPlatformId
+  effectiveFlat: Record<string, unknown>
+}): void {
+  if (!isRasCapabilityPlatformId(input.platform)) return
+  if (!platformSupportsSync(input.platform)) return
+
+  const body = flatConfigToCapabilityBody(input.effectiveFlat)
+  // xiaoo hello 强制关闭语义内容检测（既有 ingest 约定）。
+  const loop = body.detectors.llm_thinking_loop
+  if (input.platform === 'xiaoo' && loop) {
+    loop.semantic_content_enabled = false
+  }
+
+  const existing = getCapabilityEnvelope(input.user, input.platform)
+  const next: RasCapabilityConfigEnvelope = {
+    platform: input.platform,
+    syncEnabled: true,
+    revision: (existing.revision || 0) + 1,
+    updatedAt: new Date().toISOString(),
+    config: body,
+    platformExtras: existing.platformExtras,
+  }
+  saveCapabilityEnvelope(input.user, next)
+}
+
 function freezeSnapshot(input: {
   store: UserStoreFile
   user: string
@@ -407,6 +447,11 @@ export function putClientConfig(input: {
   })
 
   if (client.status !== 'online') {
+    publishClientConfigToCapabilityPullPath({
+      user: input.user,
+      platform: input.platform,
+      effectiveFlat,
+    })
     cfg.delivery = {
       configRef: frozen.configRef,
       configVersion: frozen.configVersion,
@@ -419,7 +464,7 @@ export function putClientConfig(input: {
       loadedAt: null,
       error: {
         code: 'CLIENT_OFFLINE',
-        message: '配置已保存，但客户端离线，未通知同步',
+        message: '配置已保存并写入拉取通道，但客户端离线，未推送通知',
       },
     }
     writeStore(input.user, store)
@@ -434,28 +479,35 @@ export function putClientConfig(input: {
         status: 'failed',
         error: {
           code: 'CLIENT_OFFLINE',
-          message: '配置已保存，但客户端离线，未通知同步',
+          message: '配置已保存并写入拉取通道，但客户端离线，未推送通知',
         },
       },
     }
   }
 
+  // 无 WSS：发布到 ras-config 拉取通道后标 written（待插件启动合并 / RAS 加载回报）。
+  publishClientConfigToCapabilityPullPath({
+    user: input.user,
+    platform: input.platform,
+    effectiveFlat,
+  })
+  const nowIso = new Date().toISOString()
   cfg.delivery = {
     configRef: frozen.configRef,
     configVersion: frozen.configVersion,
     checksum: frozen.checksum,
     deliveryId: frozen.deliveryId,
     commandId: frozen.commandId,
-    status: 'sync_notified',
-    pulledAt: null,
-    writtenAt: null,
+    status: 'written',
+    pulledAt: nowIso,
+    writtenAt: nowIso,
     loadedAt: null,
     error: null,
   }
   writeStore(input.user, store)
   return {
     revision: cfg.revision,
-    status: 'sync_notified',
+    status: 'written',
     configRef: frozen.configRef,
     configVersion: frozen.configVersion,
     checksum: frozen.checksum,
@@ -521,6 +573,12 @@ export function syncClientConfig(input: {
     err.status = 403
     throw err
   }
+  if (snapshot.platform !== input.platform) {
+    const err = new Error('CONFIG_SNAPSHOT_PLATFORM_MISMATCH') as Error & { code: string; status: number }
+    err.code = 'CONFIG_SNAPSHOT_PLATFORM_MISMATCH'
+    err.status = 409
+    throw err
+  }
   if (client.status !== 'online') {
     const err = new Error('CLIENT_OFFLINE') as Error & { code: string; status: number }
     err.code = 'CLIENT_OFFLINE'
@@ -529,6 +587,14 @@ export function syncClientConfig(input: {
   }
   const deliveryId = newId('delivery')
   const commandId = newId('cmd')
+  const schema = buildBuiltinConfigSchema(input.platform)
+  const effectiveFlat = applyOverrideDiff(schema.defaults, cfg.overrideDiff)
+  publishClientConfigToCapabilityPullPath({
+    user: input.user,
+    platform: input.platform,
+    effectiveFlat,
+  })
+  const nowIso = new Date().toISOString()
   cfg.delivery = {
     ...cfg.delivery,
     configRef: snapshot.configRef,
@@ -536,13 +602,15 @@ export function syncClientConfig(input: {
     checksum: snapshot.checksum,
     deliveryId,
     commandId,
-    status: 'sync_notified',
+    status: 'written',
+    pulledAt: nowIso,
+    writtenAt: nowIso,
     error: null,
   }
   writeStore(input.user, store)
   return {
     revision: cfg.revision,
-    status: 'sync_notified',
+    status: 'written',
     configRef: snapshot.configRef,
     configVersion: snapshot.configVersion,
     checksum: snapshot.checksum,
@@ -594,12 +662,36 @@ export function markSnapshotWritten(user: string, clientId: string, configRef: s
   const store = readStore(user)
   const cfgPlatforms = store.configs[clientId]
   if (!cfgPlatforms) return
-  for (const cfg of Object.values(cfgPlatforms)) {
+  const snapshot = store.snapshots[configRef]
+  for (const [platform, cfg] of Object.entries(cfgPlatforms)) {
     if (cfg.delivery.configRef !== configRef) continue
+    // 只更新命中的平台；有快照时再校验 platform 防串扰。
+    if (snapshot && snapshot.platform !== platform) continue
     cfg.delivery.status = 'written'
     cfg.delivery.writtenAt = new Date().toISOString()
   }
   writeStore(user, store)
+}
+
+/**
+ * 客户端经 /api/ingest/ras-config?platform= 拉取时：仅推进该 platform 的 delivery。
+ */
+export function noteCapabilityIngestPull(user: string, platformRaw: string): void {
+  if (!isReliabilityPlatformId(platformRaw)) return
+  const store = readStore(user)
+  let changed = false
+  const nowIso = new Date().toISOString()
+  for (const plats of Object.values(store.configs)) {
+    const cfg = plats[platformRaw]
+    if (!cfg) continue
+    if (cfg.delivery.status === 'sync_notified' || cfg.delivery.status === 'pulling') {
+      cfg.delivery.status = 'written'
+      cfg.delivery.pulledAt = cfg.delivery.pulledAt || nowIso
+      cfg.delivery.writtenAt = nowIso
+      changed = true
+    }
+  }
+  if (changed) writeStore(user, store)
 }
 
 export function recordConfigLoad(input: {

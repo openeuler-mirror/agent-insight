@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppTopBar } from '@/components/shell/AppTopBar'
 import { PageContainer } from '@/components/shell/PageContainer'
 import { useAuth } from '@/lib/auth/auth-context'
@@ -97,15 +97,38 @@ function sameFlat(a: Record<string, unknown>, b: Record<string, unknown>): boole
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-type SyncBadgeKind = 'unsynced' | 'syncing' | 'active' | 'failed'
+type SyncBadgeKind = 'unsynced' | 'pending_pull' | 'published' | 'active' | 'failed'
+
+type PlatformBadgeSummary = {
+  platform: string
+  overrideCount: number
+  deliveryStatus: string
+}
 
 function syncBadgeKind(status: string | undefined): SyncBadgeKind {
   const s = String(status || '').toLowerCase()
   if (!s || s === 'saved') return 'unsynced'
   if (FAIL_STATUSES.has(s)) return 'failed'
   if (s === 'ras_loaded') return 'active'
-  if (s === 'sync_notified' || s === 'pulling' || s === 'written') return 'syncing'
+  // written = 已写入拉取通道（本轮无 WSS，等同「已发布待 RAS 加载」）
+  if (s === 'written') return 'published'
+  if (s === 'sync_notified' || s === 'pulling') return 'pending_pull'
   return 'unsynced'
+}
+
+function syncBadgeLabelFor(kind: SyncBadgeKind, isZh: boolean): string {
+  if (kind === 'active') return isZh ? '已生效' : 'Active'
+  if (kind === 'published') return isZh ? '已发布' : 'Published'
+  if (kind === 'pending_pull') return isZh ? '待拉取' : 'Pending pull'
+  if (kind === 'failed') return isZh ? '同步失败' : 'Sync failed'
+  return isZh ? '未同步' : 'Not synced'
+}
+
+function syncBadgeColorFor(kind: SyncBadgeKind): string {
+  if (kind === 'active') return 'var(--color-success, #16a34a)'
+  if (kind === 'failed') return 'var(--color-danger, #dc2626)'
+  if (kind === 'published' || kind === 'pending_pull') return 'var(--primary)'
+  return 'var(--muted-foreground)'
 }
 
 export default function AccessClientConfigPage() {
@@ -122,8 +145,11 @@ export default function AccessClientConfigPage() {
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [baseline, setBaseline] = useState<Record<string, unknown>>({})
   const [busy, setBusy] = useState(false)
+  const [configLoading, setConfigLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [platformSummaries, setPlatformSummaries] = useState<PlatformBadgeSummary[]>([])
+  const loadGenRef = useRef(0)
 
   const selected = useMemo(
     () => clients.find((c) => c.id === selectedId) || null,
@@ -159,54 +185,138 @@ export default function AccessClientConfigPage() {
   const loadConfig = useCallback(async (opts?: { resetDraft?: boolean }) => {
     if (!user || !selectedId) return
     const resetDraft = opts?.resetDraft !== false
-    const [schemaRes, cfgRes] = await Promise.all([
-      apiFetch(`/api/reliability/config-schemas/${encodeURIComponent(platform)}`),
-      apiFetch(
-        `/api/reliability/clients/${encodeURIComponent(selectedId)}/config?platform=${encodeURIComponent(platform)}&user=${encodeURIComponent(user)}`,
-      ),
-    ])
-    if (!schemaRes.ok) throw new Error('schema load failed')
-    if (!cfgRes.ok) throw new Error('config load failed')
-    const schemaJson = (await schemaRes.json()) as ConfigSchema
-    const cfgJson = (await cfgRes.json()) as ConfigView
-    applyConfigView(schemaJson, cfgJson, resetDraft)
+    const gen = ++loadGenRef.current
+    const requestPlatform = platform
+    const requestClientId = selectedId
+    setConfigLoading(true)
+    try {
+      const [schemaRes, cfgRes] = await Promise.all([
+        apiFetch(`/api/reliability/config-schemas/${encodeURIComponent(requestPlatform)}`),
+        apiFetch(
+          `/api/reliability/clients/${encodeURIComponent(requestClientId)}/config?platform=${encodeURIComponent(requestPlatform)}&user=${encodeURIComponent(user)}`,
+        ),
+      ])
+      if (!schemaRes.ok) throw new Error('schema load failed')
+      if (!cfgRes.ok) throw new Error('config load failed')
+      const schemaJson = (await schemaRes.json()) as ConfigSchema
+      const cfgJson = (await cfgRes.json()) as ConfigView
+      // 过期响应丢弃，避免平台切换时把 A 的配置画到 B 上。
+      if (gen !== loadGenRef.current) return
+      if (cfgJson.platform && cfgJson.platform !== requestPlatform) return
+      if (schemaJson.platform && schemaJson.platform !== requestPlatform) return
+      applyConfigView(schemaJson, cfgJson, resetDraft)
+    } finally {
+      if (gen === loadGenRef.current) setConfigLoading(false)
+    }
   }, [user, selectedId, platform, applyConfigView])
 
   const refreshDelivery = useCallback(async () => {
     if (!user || !selectedId) return
+    const requestPlatform = platform
     const cfgRes = await apiFetch(
-      `/api/reliability/clients/${encodeURIComponent(selectedId)}/config?platform=${encodeURIComponent(platform)}&user=${encodeURIComponent(user)}`,
+      `/api/reliability/clients/${encodeURIComponent(selectedId)}/config?platform=${encodeURIComponent(requestPlatform)}&user=${encodeURIComponent(user)}`,
     )
     if (!cfgRes.ok) return
     const cfgJson = (await cfgRes.json()) as ConfigView
+    if (cfgJson.platform && cfgJson.platform !== requestPlatform) return
     setView(cfgJson)
+    setPlatformSummaries((prev) => {
+      const next = prev.map((row) =>
+        row.platform === requestPlatform
+          ? {
+              platform: requestPlatform,
+              overrideCount: Object.keys(cfgJson.overrideDiff || {}).length,
+              deliveryStatus: String(cfgJson.delivery?.status || ''),
+            }
+          : row,
+      )
+      if (next.some((row) => row.platform === requestPlatform)) return next
+      return [
+        ...next,
+        {
+          platform: requestPlatform,
+          overrideCount: Object.keys(cfgJson.overrideDiff || {}).length,
+          deliveryStatus: String(cfgJson.delivery?.status || ''),
+        },
+      ]
+    })
   }, [user, selectedId, platform])
 
   useEffect(() => {
     loadClients().catch((err) => setError(String(err?.message || err)))
   }, [loadClients])
 
-  useEffect(() => {
-    if (!selectedId) return
-    const plats = selected?.platforms?.map((p) => p.id).filter(Boolean)
-    if (plats?.length && !plats.includes(platform)) {
-      setPlatform(plats[0])
+  const selectedPlatformIds = useMemo(
+    () => (selected?.platforms || []).map((p) => p.id).filter(Boolean),
+    [selected],
+  )
+  const selectedPlatformKey = selectedPlatformIds.join(',')
+
+  const loadPlatformSummaries = useCallback(async () => {
+    if (!user || !selectedId) {
+      setPlatformSummaries([])
       return
     }
-    loadConfig({ resetDraft: true }).catch((err) => setError(String(err?.message || err)))
-  }, [selectedId, platform, selected, loadConfig])
+    const plats = selectedPlatformKey
+      ? selectedPlatformKey.split(',').filter(Boolean)
+      : [platform]
+    const rows = await Promise.all(
+      plats.map(async (p) => {
+        try {
+          const cfgRes = await apiFetch(
+            `/api/reliability/clients/${encodeURIComponent(selectedId)}/config?platform=${encodeURIComponent(p)}&user=${encodeURIComponent(user)}`,
+          )
+          if (!cfgRes.ok) {
+            return { platform: p, overrideCount: 0, deliveryStatus: '' }
+          }
+          const cfgJson = (await cfgRes.json()) as ConfigView
+          return {
+            platform: p,
+            overrideCount: Object.keys(cfgJson.overrideDiff || {}).length,
+            deliveryStatus: String(cfgJson.delivery?.status || ''),
+          }
+        } catch {
+          return { platform: p, overrideCount: 0, deliveryStatus: '' }
+        }
+      }),
+    )
+    setPlatformSummaries(rows)
+  }, [user, selectedId, selectedPlatformKey, platform])
+
+  useEffect(() => {
+    if (!selectedId) {
+      setPlatformSummaries([])
+      return
+    }
+    loadPlatformSummaries().catch(() => undefined)
+  }, [selectedId, selectedPlatformKey, loadPlatformSummaries])
+
+  useEffect(() => {
+    if (!selectedId) return
+    if (selectedPlatformIds.length && !selectedPlatformIds.includes(platform)) {
+      setPlatform(selectedPlatformIds[0])
+      return
+    }
+    // 切换客户端/平台时清空，杜绝上一平台 draft 残留串扰。
+    setSchema(null)
+    setView(null)
+    setDraft({})
+    setBaseline({})
+    setMessage(null)
+    loadConfig({ resetDraft: true })
+      .then(() => loadPlatformSummaries())
+      .catch((err) => setError(String(err?.message || err)))
+  }, [selectedId, platform, selectedPlatformKey, selectedPlatformIds, loadConfig, loadPlatformSummaries])
 
   useEffect(() => {
     if (!view?.delivery?.status) return
     const status = String(view.delivery.status).toLowerCase()
-    if (status === 'saved' || status === 'ras_loaded' || FAIL_STATUSES.has(status)) return
+    if (status === 'saved' || status === 'ras_loaded' || status === 'written' || FAIL_STATUSES.has(status)) return
     const timer = setInterval(() => {
       refreshDelivery().catch(() => undefined)
     }, 3000)
     return () => clearInterval(timer)
   }, [view?.delivery?.status, refreshDelivery])
-
-  const overrideCount = useMemo(() => Object.keys(view?.overrideDiff || {}).length, [view])
 
   const setField = (key: string, value: unknown) => {
     setDraft((prev) => ({ ...prev, [key]: value }))
@@ -251,10 +361,13 @@ export default function AccessClientConfigPage() {
       if (!res.ok) throw new Error(data.error || data.code || `HTTP ${res.status}`)
       if (data.sync?.status === 'failed') {
         setMessage(data.sync?.error?.message || (isZh ? '已保存，同步失败' : 'Saved, sync failed'))
+      } else if (sync) {
+        setMessage(isZh ? '已保存并发布到该平台拉取通道' : 'Saved and published to platform pull channel')
       } else {
-        setMessage(sync ? (isZh ? '已保存并通知同步' : 'Saved and sync notified') : (isZh ? '仅已保存' : 'Saved'))
+        setMessage(isZh ? '仅已保存' : 'Saved')
       }
       await loadConfig({ resetDraft: true })
+      await loadPlatformSummaries()
     } catch (err) {
       setError(String((err as Error)?.message || err))
     } finally {
@@ -278,6 +391,7 @@ export default function AccessClientConfigPage() {
       if (!res.ok) throw new Error(data.error || data.code || `HTTP ${res.status}`)
       setMessage(isZh ? '已恢复平台默认' : 'Restored platform defaults')
       await loadConfig({ resetDraft: true })
+      await loadPlatformSummaries()
     } catch (err) {
       setError(String((err as Error)?.message || err))
     } finally {
@@ -285,21 +399,14 @@ export default function AccessClientConfigPage() {
     }
   }
 
-  const deliveryStatus = String(view?.delivery?.status || '').toLowerCase()
+  const deliveryStatus = String(
+    (view?.platform === platform ? view?.delivery?.status : null)
+      || platformSummaries.find((row) => row.platform === platform)?.deliveryStatus
+      || '',
+  ).toLowerCase()
   const activeStep = stepIndex(deliveryStatus)
   const syncKind = syncBadgeKind(deliveryStatus)
-  const syncBadgeLabel = (() => {
-    if (syncKind === 'active') return isZh ? '已生效' : 'Active'
-    if (syncKind === 'syncing') return isZh ? '同步中' : 'Syncing'
-    if (syncKind === 'failed') return isZh ? '同步失败' : 'Sync failed'
-    return isZh ? '未同步' : 'Not synced'
-  })()
-  const syncBadgeColor = (() => {
-    if (syncKind === 'active') return 'var(--color-success, #16a34a)'
-    if (syncKind === 'failed') return 'var(--color-danger, #dc2626)'
-    if (syncKind === 'syncing') return 'var(--primary)'
-    return 'var(--muted-foreground)'
-  })()
+  const formReady = Boolean(view && view.platform === platform && !configLoading)
 
   return (
     <>
@@ -403,7 +510,10 @@ export default function AccessClientConfigPage() {
                     <button
                       key={p.id}
                       type="button"
-                      onClick={() => setPlatform(p.id)}
+                      onClick={() => {
+                        if (p.id === platform) return
+                        setPlatform(p.id)
+                      }}
                       style={{
                         border: '1px solid var(--border)',
                         borderRadius: 999,
@@ -427,54 +537,88 @@ export default function AccessClientConfigPage() {
                     border: '1px solid var(--border)',
                     background: 'color-mix(in srgb, var(--foreground) 3%, transparent)',
                     display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
+                    flexDirection: 'column',
+                    gap: 10,
                   }}
                 >
-                  <div style={{ fontSize: 13 }}>
-                    {isZh ? '配置来源：平台内置默认 + 当前客户端覆盖' : 'Source: builtin defaults + client overrides'}
-                    {dirty && (
-                      <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--primary)' }}>
-                        {isZh ? '· 有未保存修改' : '· Unsaved changes'}
-                      </span>
-                    )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 13 }}>
+                      {isZh
+                        ? `配置来源：平台内置默认 + 当前客户端对「${platform}」的覆盖`
+                        : `Source: builtin defaults + client overrides for ${platform}`}
+                      {dirty && formReady && (
+                        <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--primary)' }}>
+                          {isZh ? '· 有未保存修改' : '· Unsaved changes'}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        borderRadius: 999,
-                        padding: '2px 10px',
-                        border: '1px solid var(--border)',
-                      }}
-                    >
-                      {overrideCount > 0 ? (isZh ? '已覆盖' : 'Overridden') : (isZh ? '未覆盖' : 'No override')}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        borderRadius: 999,
-                        padding: '2px 10px',
-                        border: `1px solid ${syncBadgeColor}`,
-                        color: syncBadgeColor,
-                      }}
-                      title={
-                        syncKind === 'syncing'
-                          ? (isZh
-                            ? '已通知客户端；控制通道未接通时会长时间停留在此状态'
-                            : 'Notified; may stay here without control channel')
-                          : undefined
-                      }
-                    >
-                      {syncBadgeLabel}
-                    </span>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {(platformSummaries.length
+                      ? platformSummaries
+                      : [{ platform, overrideCount: 0, deliveryStatus: '' }]
+                    ).map((row) => {
+                      const kind = syncBadgeKind(row.deliveryStatus)
+                      const color = syncBadgeColorFor(kind)
+                      const active = row.platform === platform
+                      return (
+                        <button
+                          key={row.platform}
+                          type="button"
+                          onClick={() => {
+                            if (row.platform !== platform) setPlatform(row.platform)
+                          }}
+                          title={isZh ? `${row.platform} 平台状态（点击切换）` : `${row.platform} status (click to switch)`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            fontSize: 12,
+                            borderRadius: 10,
+                            padding: '6px 10px',
+                            border: `1px solid ${active ? 'var(--primary)' : 'var(--border)'}`,
+                            background: active
+                              ? 'color-mix(in srgb, var(--primary) 10%, transparent)'
+                              : 'transparent',
+                            cursor: 'pointer',
+                            color: 'inherit',
+                          }}
+                        >
+                          <span style={{ fontWeight: 650 }}>{row.platform}</span>
+                          <span
+                            style={{
+                              borderRadius: 999,
+                              padding: '1px 8px',
+                              border: '1px solid var(--border)',
+                            }}
+                          >
+                            {row.overrideCount > 0
+                              ? (isZh ? `已覆盖(${row.overrideCount})` : `Overridden(${row.overrideCount})`)
+                              : (isZh ? '未覆盖' : 'No override')}
+                          </span>
+                          <span
+                            style={{
+                              borderRadius: 999,
+                              padding: '1px 8px',
+                              border: `1px solid ${color}`,
+                              color,
+                            }}
+                          >
+                            {syncBadgeLabelFor(kind, isZh)}
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
 
                 <div style={{ padding: '0 16px 16px', overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {(schema?.sections || []).map((section) => (
+                  {!formReady && (
+                    <div style={{ fontSize: 13, color: 'var(--muted-foreground)', padding: 8 }}>
+                      {isZh ? '正在加载该平台配置…' : 'Loading platform config…'}
+                    </div>
+                  )}
+                  {formReady && (schema?.sections || []).map((section) => (
                     <div key={section.key} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
                       <div style={{ fontWeight: 600, marginBottom: 4 }}>{section.title}</div>
                       {section.description && (
@@ -523,9 +667,13 @@ export default function AccessClientConfigPage() {
                     </div>
                   ))}
 
+                  {formReady && (
                   <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
                     <div style={{ fontWeight: 600, marginBottom: 8 }}>
                       {isZh ? '配置同步与生效状态' : 'Config sync status'}
+                      <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--muted-foreground)' }}>
+                        · {platform}
+                      </span>
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {DELIVERY_STEPS.map((step, idx) => {
@@ -555,19 +703,27 @@ export default function AccessClientConfigPage() {
                         {view?.delivery?.error?.message || deliveryStatus}
                       </div>
                     )}
-                    {syncKind === 'syncing' && (
+                    {syncKind === 'pending_pull' && (
                       <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted-foreground)' }}>
                         {isZh
-                          ? '已通知客户端同步，但本轮未接通控制通道，状态可能长时间停留在「通知客户端同步」。编辑中的表单不会被同步轮询覆盖。'
-                          : 'Sync notified, but control channel is not wired this round — status may stay here. In-progress edits are not overwritten by sync polling.'}
+                          ? '状态停留在「通知客户端同步」：本轮无 WSS。请再点「保存并通知同步」写入该平台拉取通道，或等待插件启动拉取。'
+                          : 'Stuck at sync_notified (no WSS). Re-save & sync to publish this platform’s pull channel, or wait for plugin pull.'}
+                      </div>
+                    )}
+                    {syncKind === 'published' && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted-foreground)' }}>
+                        {isZh
+                          ? '已按当前平台发布到 ras-config 拉取通道。OpenCode 重启插件 / xiaoO 新会话后合并本地配置；「已生效」需 RAS 加载回报（本轮可能仍显示已发布）。'
+                          : 'Published to ras-config pull channel for this platform. Plugin/session restart merges locally; Active needs RAS load report.'}
                       </div>
                     )}
                     <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted-foreground)' }}>
                       {isZh
-                        ? '说明：本地已写入 ≠ RAS 已加载。同步依赖客户端拉取快照与加载回报（本轮不上 WSS）。「未覆盖」指无客户端覆盖项，「未同步/同步中/已生效」指下发状态。'
-                        : 'Note: written ≠ RAS loaded. Sync relies on pull + load report (no WSS). Override badge ≠ sync badge.'}
+                        ? '说明：各平台配置独立存储与下发，互不覆盖。「未覆盖」指无客户端覆盖项，「未同步/待拉取/已发布/已生效」指该平台下发状态。'
+                        : 'Note: each platform’s config is isolated. Override badge ≠ sync badge.'}
                     </div>
                   </div>
+                  )}
                 </div>
 
                 <footer
@@ -587,13 +743,13 @@ export default function AccessClientConfigPage() {
                       {error || message}
                     </span>
                   )}
-                  <button type="button" disabled={busy} onClick={() => restoreDefault()} className="ai-btn-s">
+                  <button type="button" disabled={busy || !formReady} onClick={() => restoreDefault()} className="ai-btn-s">
                     {isZh ? '恢复平台默认' : 'Restore defaults'}
                   </button>
-                  <button type="button" disabled={busy} onClick={() => save(false)} className="ai-btn-s">
+                  <button type="button" disabled={busy || !formReady} onClick={() => save(false)} className="ai-btn-s">
                     {isZh ? '仅保存' : 'Save only'}
                   </button>
-                  <button type="button" disabled={busy} onClick={() => save(true)} className="ai-btn-p">
+                  <button type="button" disabled={busy || !formReady} onClick={() => save(true)} className="ai-btn-p">
                     {isZh ? '保存并通知同步' : 'Save & sync'}
                   </button>
                 </footer>

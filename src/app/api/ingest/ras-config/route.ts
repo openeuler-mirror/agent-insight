@@ -6,6 +6,7 @@ import {
   toIngestPayload,
 } from '@/lib/ingest/ras/capability-config'
 import { getCapabilityEnvelope } from '@/lib/ingest/ras/capability-config-store'
+import { noteCapabilityIngestPull } from '@/lib/reliability/client-config-service'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +37,8 @@ export async function GET(req: Request) {
     }
 
     const envelope = getCapabilityEnvelope(effectiveUser, platform)
+    // 仅推进该 platform 的 delivery，避免多平台串扰。
+    noteCapabilityIngestPull(effectiveUser, platform)
     return NextResponse.json({
       status: 'ok',
       ...toIngestPayload(envelope),

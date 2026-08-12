@@ -1,24 +1,26 @@
 /**
  * 实验引擎的 LLM Judge 薄封装：发一段 system+user prompt，拿回完整文本。
  *
- * - 默认：OpenAI-compatible HTTP（与 FI Judge 同型），避免 ephemeral OpenCode 挂死。
- * - 可选：EXPERIMENT_JUDGE_TRANSPORT=opencode 走临时 opencode server（旧路径）。
- * - 可注入：测试通过 setJudgeLlmCallerForTest 注入 fake judge。
+ * 对齐任务完成度 / 轨迹评估器（opencode-*-evaluator）的现行传输层：
+ * - 默认直连 ChatOpenAI（无 ephemeral opencode 进程）
+ * - EVAL_FORCE_OPENCODE_TRANSPORT=1 强制走旧 ephemeral opencode
+ * - 直连失败时回退 opencode（与 task-completion 一致）
+ * - 测试可 setJudgeLlmCallerForTest 注入
  */
 
-import { isModelConnectionReady, getOpenAICompatibleClientConfig } from '@/lib/shared/model-connection';
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
 
 export interface JudgeLlmRequest {
   system: string;
   user: string;
   timeoutMs?: number;
-  /** opencode session 标题（可观测性用），缺省自动生成 */
+  /** session 标题（直连落库 / opencode 可观测性），缺省自动生成 */
   sessionTitle?: string;
 }
 
 export type JudgeLlmCaller = (username: string, req: JudgeLlmRequest) => Promise<string>;
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.EXPERIMENT_JUDGE_TIMEOUT_MS || 120_000);
+const DEFAULT_TIMEOUT_MS = Number(process.env.EXPERIMENT_JUDGE_TIMEOUT_MS || 180_000);
 
 let injectedCaller: JudgeLlmCaller | null = null;
 
@@ -35,16 +37,38 @@ export function hasJudgeLlmTestInjection(): boolean {
 /** 统一入口：引擎只认这一个函数，实现可被测试替换。 */
 export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Promise<string> {
   if (injectedCaller) return injectedCaller(username, req);
-  const transport = String(process.env.EXPERIMENT_JUDGE_TRANSPORT || 'http').trim().toLowerCase();
-  if (transport === 'opencode') return opencodeJudgeCaller(username, req);
-  return httpJudgeCaller(username, req);
+
+  const { shouldForceOpencodeEvalTransport } = await import(
+    '@/lib/engine/evaluation/evaluator-execution-recorder'
+  );
+
+  if (shouldForceOpencodeEvalTransport()) {
+    return opencodeJudgeCaller(username, req);
+  }
+
+  try {
+    return await directJudgeCaller(username, req);
+  } catch (directErr) {
+    console.warn(
+      '[experiment-judge] direct LLM path failed, falling back to opencode transport:',
+      (directErr as Error)?.message || directErr,
+    );
+    return opencodeJudgeCaller(username, req);
+  }
 }
 
-/** 默认：直连 OpenAI-compatible Chat Completions。 */
-const httpJudgeCaller: JudgeLlmCaller = async (username, req) => {
-  const [{ OpenAI }, { getActiveConfig }] = await Promise.all([
-    import('openai'),
+/** 现行主路径：ChatOpenAI 单轮 invoke（与 task-completion / trajectory 评估器一致）。 */
+const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
+  const [
+    { ChatOpenAI },
+    { HumanMessage, SystemMessage },
+    { getActiveConfig },
+    { recordDirectEvaluatorExecution },
+  ] = await Promise.all([
+    import('@langchain/openai'),
+    import('@langchain/core/messages'),
     import('@/lib/storage/server-config'),
+    import('@/lib/engine/evaluation/evaluator-execution-recorder'),
   ]);
 
   const config = await getActiveConfig(username);
@@ -52,28 +76,55 @@ const httpJudgeCaller: JudgeLlmCaller = async (username, req) => {
     throw new Error('未配置可用的评测模型，请到「模型注册」页完善连接信息');
   }
 
-  const model = (config.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash';
+  const modelId = (config.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash';
   const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const client = new OpenAI({
-    ...getOpenAICompatibleClientConfig(config),
-    timeout: timeoutMs,
-  });
-
-  const completion = await client.chat.completions.create({
-    model,
+  const model = new ChatOpenAI({
+    apiKey: config.apiKey || 'no-api-key',
+    model: modelId,
+    configuration: {
+      baseURL: config.baseUrl || 'https://api.deepseek.com',
+      defaultHeaders: config.headers,
+    },
     temperature: 0,
-    messages: [
-      { role: 'system', content: req.system },
-      { role: 'user', content: req.user },
-    ],
+    topP: 1,
+    timeout: timeoutMs,
+    maxRetries: 2,
+    modelKwargs: { seed: 42 },
   });
 
-  const raw = completion.choices?.[0]?.message?.content || '';
+  const startedAt = new Date();
+  const response = await model.invoke([
+    new SystemMessage(req.system),
+    new HumanMessage(req.user),
+  ]);
+  const completedAt = new Date();
+  const raw = typeof response.content === 'string'
+    ? response.content
+    : JSON.stringify(response.content);
+
   if (!String(raw).trim()) throw new Error('judge 未返回任何文本输出');
+
+  const { randomUUID } = await import('crypto');
+  // 与其它直连评估器一样合成评测 trace（isolate 业务 Agent Trace）；失败不阻断 Judge。
+  void recordDirectEvaluatorExecution({
+    taskId: `experiment-judge-${randomUUID()}`,
+    agentName: 'experiment-judge',
+    user: username,
+    query: (req.sessionTitle || req.user).slice(0, 2000),
+    systemPrompt: req.system,
+    userMessage: req.user,
+    assistantOutput: raw,
+    modelID: modelId,
+    startedAtISO: startedAt.toISOString(),
+    completedAtISO: completedAt.toISOString(),
+  }).catch((err) => {
+    console.warn('[experiment-judge] failed to record direct evaluator trace:', (err as Error)?.message || err);
+  });
+
   return String(raw);
 };
 
-/** 旧路径：per-call 临时 opencode server。 */
+/** 旧路径 / 强制回退：per-call 临时 opencode server。 */
 const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
   const [
     { AgentInsight },
