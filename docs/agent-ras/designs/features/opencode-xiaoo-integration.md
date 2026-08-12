@@ -189,7 +189,7 @@ flowchart TB
 | **与 Insight** | ① ras-events；⓪ 各走 Insight 采集器 | ②③ FI Client + collect-result（不造 Execution） |
 | **恢复/评判** | 本机 HostControl | Insight 服务端 Judge |
 
-同宿主可并存 RAS 与 FI，挂载点与配置隔离；xiaoO 适配设计要求 **`agent_fault_injection/**` 零 diff**（RAS 侧不改 FI）。
+同宿主可并存 RAS 与 FI，挂载点与配置隔离；xiaoO 适配设计要求 **`agent_fault_injection/**` 零 diff**（RAS 侧不改 FI）。FI 实验路径 **不得** 拉起 RAS：Worker 只 spawn FI CLI；RAS 是否在场由平台挂载决定（见 [ras-fi-insight-relationship.md §6.0](../../../agent-fault-injection/designs/ras-fi-insight-relationship.md)）。
 
 **FI 配置为何不对称：** OpenCode 靠 workspace 增量挂 FI，系统侧 RAS 仍在；xiaoO 评测必须临时替换整份 `XIAOO_CONFIG`，而 hooker 列表是替换语义——故 overlay 时必须以用户 config 为底并**保留**原 `[hooker].plugins`（含 RAS）再叠加 FI，否则同跑会丢 RAS。理由与对照表见 [xiaoo-platform-adaptation.md §4.1](../../../agent-fault-injection/designs/xiaoo-platform-adaptation.md)；挂载总览见 [ras-fi-insight-relationship.md §6](../../../agent-fault-injection/designs/ras-fi-insight-relationship.md)。
 

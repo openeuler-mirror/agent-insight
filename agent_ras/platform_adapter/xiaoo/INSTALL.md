@@ -11,7 +11,7 @@ Protocol inproc L3 + **Daemon SSE control plane**（stock master）：
 - Hooks: [`hooks.py`](hooks.py) — sock Host（遗留）+ `build_xiaoo_daemon_host_fns`
 - Plugin hooker: [`hooker/`](hooker/) — `tool_post` **不得** hello
 
-**FI 零改动。** Upstream notes: [`UPSTREAM.md`](UPSTREAM.md).
+**FI 库零改动；FI Worker 不启动 RAS**（见 [`UPSTREAM.md`](UPSTREAM.md)）。
 
 ## Prerequisites
 

@@ -20,6 +20,8 @@ description: "安装 FI Worker、创建注入任务、查看 Run 与 Judge，并
 | 执行位置 | 本机 FI Worker + 被测 Agent | Agent 进程内 RAS（inproc） |
 | 评判 | Insight 服务端 Judge（轨迹证据） | RAS 处置列 / 异常摘要条（非 FI Judge） |
 
+注入实验**不依赖**是否已安装 RAS：FI Worker 只跑本机 FI CLI，不会为评测去启动 RAS。若本机已挂 RAS，宿主侧可自然旁路检测/恢复，那是安装面结果，不是 FI 任务的一部分。
+
 设计关系见 [Insight · RAS · FI](../../agent-fault-injection/designs/ras-fi-insight-relationship.md)。
 
 ## 前置条件

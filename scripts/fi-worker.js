@@ -241,13 +241,31 @@ function probeInventory(packageRoot) {
   }
 }
 
-function resolveRasRoot(cfg) {
-  if (cfg.rasRoot && fs.existsSync(cfg.rasRoot)) return cfg.rasRoot
-  const sibling = path.join(__dirname, '..', 'agent_ras')
-  if (fs.existsSync(path.join(sibling, 'platform_adapter', 'xiaoo', 'fi_daemon_runner.py'))) {
-    return sibling
-  }
-  return null
+/** Build collector argv for FI CLI only — never spawn RAS. */
+function buildCollectorArgs(run, workspace, artifactsDir) {
+  const args = [
+    '-m',
+    'agent_fault_injection.cli',
+    'run',
+    '--platform',
+    run.platform,
+    '--agent',
+    run.agent,
+    '--fault',
+    run.fault,
+    '--prompt',
+    run.prompt,
+    '--workspace',
+    workspace,
+    '--output-dir',
+    artifactsDir,
+    '--run-id',
+    run.runId,
+  ]
+  if (run.model) args.push('--model', run.model)
+  if (run.submode) args.push('--submode', run.submode)
+  if (run.timeoutSeconds) args.push('--timeout-seconds', String(run.timeoutSeconds))
+  return args
 }
 
 function runCollector(cfg, run) {
@@ -256,65 +274,10 @@ function runCollector(cfg, run) {
     fs.mkdirSync(workspace, { recursive: true })
     fs.mkdirSync(cfg.artifactsDir, { recursive: true })
 
-    const isXiaoo = String(run.platform || '').trim().toLowerCase() === 'xiaoo'
-    const rasRoot = isXiaoo ? resolveRasRoot(cfg) : null
-    let args
-    let cwd
-    let env = { ...process.env }
-    if (isXiaoo && rasRoot) {
-      // RAS holds Daemon lease so abort → runtimes/cancel works on stock xiaoo.
-      args = [
-        '-m',
-        'platform_adapter.xiaoo.fi_daemon_runner',
-        'run',
-        '--platform',
-        'xiaoo',
-        '--agent',
-        run.agent,
-        '--fault',
-        run.fault,
-        '--prompt',
-        run.prompt,
-        '--workspace',
-        workspace,
-        '--output-dir',
-        cfg.artifactsDir,
-        '--run-id',
-        run.runId,
-      ]
-      cwd = rasRoot
-      env.PYTHONPATH = [rasRoot, env.PYTHONPATH].filter(Boolean).join(path.delimiter)
-      console.log(`[fi-worker] xiaoo via RAS daemon runner root=${rasRoot}`)
-    } else {
-      if (isXiaoo && !rasRoot) {
-        console.warn(
-          '[fi-worker] xiaoo RAS runner missing; falling back to FI CLI (abort may no_effect)',
-        )
-      }
-      args = [
-        '-m',
-        'agent_fault_injection.cli',
-        'run',
-        '--platform',
-        run.platform,
-        '--agent',
-        run.agent,
-        '--fault',
-        run.fault,
-        '--prompt',
-        run.prompt,
-        '--workspace',
-        workspace,
-        '--output-dir',
-        cfg.artifactsDir,
-        '--run-id',
-        run.runId,
-      ]
-      cwd = cfg.packageRoot
-    }
-    if (run.model) args.push('--model', run.model)
-    if (run.submode) args.push('--submode', run.submode)
-    if (run.timeoutSeconds) args.push('--timeout-seconds', String(run.timeoutSeconds))
+    // FI experiments must not start RAS; RAS presence is platform mount only.
+    const args = buildCollectorArgs(run, workspace, cfg.artifactsDir)
+    const cwd = cfg.packageRoot
+    const env = { ...process.env }
 
     const child = spawn('python3', args, {
       cwd,
@@ -467,7 +430,7 @@ function run() {
   return main()
 }
 
-module.exports = { run }
+module.exports = { run, buildCollectorArgs }
 
 if (require.main === module) {
   main().catch((err) => {

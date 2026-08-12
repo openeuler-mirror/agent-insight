@@ -1,7 +1,7 @@
 # xiaoO 平台适配（入口无关 / Daemon 控制面）
 
 版本：v0.5  
-状态：已落地（协议 inproc + **官方 Daemon SSE 控制面**；FI 零改动）  
+状态：已落地（协议 inproc + **官方 Daemon SSE 控制面**；FI 库零改动；FI Worker 不启动 RAS）  
 关联：[`architecture.md`](../architecture.md)、[`platform-adapter.md`](../modules/platform-adapter.md)、[`guides/platform-xiaoo.md`](../../guides/platform-xiaoo.md)
 
 ## 1. 目标与原则
@@ -42,7 +42,7 @@ flowchart LR
 - 装配：[`build_protocol_ras_client`](../../../agent_ras/platform_adapter/common/protocol_client.py)
 - Daemon：[`daemon_client.py`](../../../agent_ras/platform_adapter/xiaoo/daemon_client.py) / [`daemon_session.py`](../../../agent_ras/platform_adapter/xiaoo/daemon_session.py)
 - 子进程 hook 共享 SessionHub：[`subprocess_ipc`](../../../agent_ras/platform_adapter/common/transport/subprocess_ipc/)
-- **FI**：不接线、不改代码；黑盒回归即可
+- **FI**：不接线、不改 `agent_fault_injection/**`；Insight FI Worker 只跑 FI CLI，**不**拉起 `DaemonRasSession`（RAS 是否在场 = 平台挂载）
 
 ## 3. L3 边界（薄）
 

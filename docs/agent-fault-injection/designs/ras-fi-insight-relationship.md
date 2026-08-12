@@ -550,11 +550,22 @@ fi-worker tick: claim
 
 同一宿主上可并存 RAS 与 FI，**挂载点与职责不同**。
 
+### 6.0 硬约束：FI 实验不拉起 RAS
+
+| 不变量 | 含义 |
+|--------|------|
+| **FI 不启动 RAS** | FI Worker / `agent_fault_injection.cli` **不得** spawn、import 或内嵌 `DaemonRasSession` / SessionHub / 检测恢复栈 |
+| **RAS 是否在场 = 平台挂载** | 仅由 RAS 安装面（hooker / Daemon 产品路径）决定；与本次 FI claim、fault、Worker **无关** |
+| **未挂 RAS 时 FI 仍成功** | 成功标准 = fault 激活 + `collect-result`；**不以** abort/cancel 停流为门禁 |
+| **禁止杂交 runner** | 不得再出现「FI ExperimentRunner + RAS DaemonRasSession」同一采集子进程（历史上曾误用 `fi_daemon_runner`，已废除） |
+
+同机「既有 FI 又有 RAS」= 宿主**已**挂 RAS 后再跑 FI；RAS 旁路是挂载副作用，不是 FI 顺带启动。
+
 | | agent-ras | agent-fi |
 |--|-----------|----------|
 | **目的** | 真实会话检测并恢复 | 实验注入并采集 |
 | **OpenCode** | 协议 inproc；可 **libpython.so** 嵌 detectors | 系统 config + workspace **TS 插件** `agent-fault-injection.ts`（无 so；不整份替换用户 config） |
-| **xiaoO** | hooks → ras_runtime（socket/inproc 等，见 RAS 文档） | config overlay（**保留用户 RAS hooker** 再叠加 FI）+ **Python hooker** 子进程 |
+| **xiaoO** | hooks → ras_runtime（socket/inproc 等，见 RAS 文档） | config overlay（**保留用户 RAS hooker** 再叠加 FI）+ **Python hooker** 子进程；Worker **只**走 `agent_fault_injection.cli` |
 | **与 Insight** | ① ras-events | ②③ FI Client + collect-result |
 | **恢复/评判** | 本机 HostControl 投递 | Insight 服务端 Judge |
 

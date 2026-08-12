@@ -31,4 +31,6 @@ SSE 事件：`text_delta` / `thinking_delta` / `tool_call` / `tool_result` / `do
 
 ## FI
 
-**零改动**。RAS Daemon 路径自持 lease，不依赖 FI adapter 接线。
+**零改动** `agent_fault_injection/**`。RAS Daemon 路径自持 lease，不依赖 FI adapter 接线。
+
+Insight FI Worker **只**跑 `agent_fault_injection.cli`，**不得** spawn RAS（含历史上的 `fi_daemon_runner` 杂交入口，已删除）。RAS 是否参与会话，只由本机是否已挂载 RAS（hooker / Daemon 产品路径）决定。

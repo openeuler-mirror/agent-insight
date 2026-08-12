@@ -47,7 +47,7 @@
 | [domain-cognitive-bias.md](designs/features/domain-cognitive-bias.md) | 领域认知偏差六类场景 | 规划中 |
 | [memory-file-loss.md](designs/features/memory-file-loss.md) | 记忆丢失/损坏 FI 方案（`memory-file-loss` Skill 已落地） | FI-P0 已落地；检测规划中 |
 | [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（S1–S4 已落地；S5 压缩失真未做） | FI S1–S4 已落地 |
-| [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc + Daemon SSE 控制面（FI 零改动） | 已落地（Daemon harness） |
+| [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc + Daemon SSE 控制面（FI 库零改动；Worker 不启 RAS） | 已落地（Daemon harness） |
 | [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO ⓪ Trace（Insight collector → OTLP；RAS 仅 join） | 已迁 Insight |
 | [opencode-xiaoo-integration.md](designs/features/opencode-xiaoo-integration.md) | OpenCode / xiaoO 对接对照：模块关系、机制差异、信号与 FI 边界 | 分析说明 |
 | [capability-config-sync.md](designs/features/capability-config-sync.md) | RAS 能力配置多平台维护；可选同步到 OpenCode / xiaoO 客户端 | 已落地 |
