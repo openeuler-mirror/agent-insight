@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { ensureTraceTagTables } from '@/lib/trace-tags';
+import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import {
   buildExperimentTraceWhere,
   parseExperimentTraceFilters,
@@ -44,7 +45,13 @@ export async function GET(req: Request) {
     const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('pageSize') || '20', 10) || 20));
     const filters = parseExperimentTraceFilters(url.searchParams);
     if (filters.tagIds.length > 0) await ensureTraceTagTables();
-    const where = buildExperimentTraceWhere(username, agent, filters);
+    const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
+    const where = {
+      AND: [
+        buildExperimentTraceWhere(username, agent, filters),
+        userOwnershipWhere,
+      ],
+    };
 
     const [total, rows] = await Promise.all([
       prisma.execution.count({ where }),
