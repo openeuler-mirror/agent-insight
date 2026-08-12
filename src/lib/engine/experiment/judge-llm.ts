@@ -14,7 +14,7 @@ export interface JudgeLlmRequest {
   system: string;
   user: string;
   timeoutMs?: number;
-  /** session 标题（直连落库 / opencode 可观测性），缺省自动生成 */
+  /** session 标题（opencode 回退路径可观测性），缺省自动生成 */
   sessionTitle?: string;
 }
 
@@ -57,18 +57,16 @@ export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Prom
   }
 }
 
-/** 现行主路径：ChatOpenAI 单轮 invoke（与 task-completion / trajectory 评估器一致）。 */
+/** 现行主路径：ChatOpenAI 单轮 invoke；只返回文本，不合成观测 Trace。 */
 const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
   const [
     { ChatOpenAI },
     { HumanMessage, SystemMessage },
     { getActiveConfig },
-    { recordDirectEvaluatorExecution },
   ] = await Promise.all([
     import('@langchain/openai'),
     import('@langchain/core/messages'),
     import('@/lib/storage/server-config'),
-    import('@/lib/engine/evaluation/evaluator-execution-recorder'),
   ]);
 
   const config = await getActiveConfig(username);
@@ -92,35 +90,15 @@ const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
     modelKwargs: { seed: 42 },
   });
 
-  const startedAt = new Date();
   const response = await model.invoke([
     new SystemMessage(req.system),
     new HumanMessage(req.user),
   ]);
-  const completedAt = new Date();
   const raw = typeof response.content === 'string'
     ? response.content
     : JSON.stringify(response.content);
 
   if (!String(raw).trim()) throw new Error('judge 未返回任何文本输出');
-
-  const { randomUUID } = await import('crypto');
-  // 与其它直连评估器一样合成评测 trace（isolate 业务 Agent Trace）；失败不阻断 Judge。
-  void recordDirectEvaluatorExecution({
-    taskId: `experiment-judge-${randomUUID()}`,
-    agentName: 'experiment-judge',
-    user: username,
-    query: (req.sessionTitle || req.user).slice(0, 2000),
-    systemPrompt: req.system,
-    userMessage: req.user,
-    assistantOutput: raw,
-    modelID: modelId,
-    startedAtISO: startedAt.toISOString(),
-    completedAtISO: completedAt.toISOString(),
-  }).catch((err) => {
-    console.warn('[experiment-judge] failed to record direct evaluator trace:', (err as Error)?.message || err);
-  });
-
   return String(raw);
 };
 
