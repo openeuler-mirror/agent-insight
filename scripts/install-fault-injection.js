@@ -4,6 +4,11 @@
  * Usage:
  *   node scripts/install-fault-injection.js [--check] [--start]
  * Env: AGENT_INSIGHT_HOST, AGENT_INSIGHT_API_KEY
+ *
+ * Daily use: curl Insight /api/fault-injection/setup | bash (empty cwd → npx).
+ * Local clone (cwd has scripts/ + agent_fault_injection/): editable install for FI engine dev.
+ * Otherwise: sync package into ~/.agent-insight/fault-injection/python-pkg and pip install
+ * (non-editable) so Worker is not tied to a disposable checkout / npx temp dir.
  */
 const fs = require('fs')
 const os = require('os')
@@ -12,6 +17,7 @@ const { spawn, spawnSync } = require('child_process')
 const { randomBytes } = require('crypto')
 
 const home = path.join(os.homedir(), '.agent-insight', 'fault-injection')
+const stablePkgRoot = path.join(home, 'python-pkg')
 
 function normalizeHost(host) {
   return String(host || '')
@@ -19,7 +25,20 @@ function normalizeHost(host) {
     .replace(/\/$/, '')
 }
 
-function resolvePackageRoot() {
+function resolvePython() {
+  return process.env.AGENT_FI_PYTHON || process.env.PYTHON || 'python3'
+}
+
+/** True when installer runs from an agent-insight checkout (dev convenience). */
+function isLocalDevClone() {
+  return (
+    fs.existsSync(path.join(process.cwd(), 'scripts', 'install-fault-injection.js')) &&
+    (fs.existsSync(path.join(process.cwd(), 'agent_fault_injection', 'pyproject.toml')) ||
+      fs.existsSync(path.join(process.cwd(), 'agent_fault_injection', 'setup.py')))
+  )
+}
+
+function resolvePackageSource() {
   const fromCwd = path.join(process.cwd(), 'agent_fault_injection')
   if (
     fs.existsSync(path.join(fromCwd, 'pyproject.toml')) ||
@@ -28,7 +47,12 @@ function resolvePackageRoot() {
     return fromCwd
   }
   const fromScript = path.join(__dirname, '..', 'agent_fault_injection')
-  if (fs.existsSync(fromScript)) return fromScript
+  if (
+    fs.existsSync(path.join(fromScript, 'pyproject.toml')) ||
+    fs.existsSync(path.join(fromScript, 'setup.py'))
+  ) {
+    return fromScript
+  }
   return fromCwd
 }
 
@@ -36,6 +60,27 @@ function ensureDirs() {
   for (const dir of [home, path.join(home, 'artifacts'), path.join(home, 'workspaces')]) {
     fs.mkdirSync(dir, { recursive: true })
   }
+}
+
+function syncStablePackage(sourceRoot) {
+  fs.mkdirSync(home, { recursive: true })
+  fs.rmSync(stablePkgRoot, { recursive: true, force: true })
+  fs.cpSync(sourceRoot, stablePkgRoot, { recursive: true })
+  return stablePkgRoot
+}
+
+/**
+ * Decide install root + editable flag.
+ * Dev clone: editable against the checkout. Else: copy to stable python-pkg, non-editable.
+ */
+function resolveInstallTarget(sourceRoot) {
+  const dev =
+    isLocalDevClone() &&
+    path.resolve(sourceRoot).startsWith(path.resolve(process.cwd()) + path.sep)
+  if (dev) {
+    return { packageRoot: sourceRoot, editable: true }
+  }
+  return { packageRoot: syncStablePackage(sourceRoot), editable: false }
 }
 
 function writeConfig(packageRoot) {
@@ -59,16 +104,24 @@ function writeConfig(packageRoot) {
     packageRoot,
   }
   fs.writeFileSync(configPath, JSON.stringify(next, null, 2))
-  return next
+  return { config: next, prevPackageRoot: prev.packageRoot || null }
 }
 
-function pythonOk() {
+function pythonOk(python = resolvePython()) {
   const r = spawnSync(
-    'python3',
+    python,
     ['-c', 'import agent_fault_injection; print(agent_fault_injection.__file__)'],
-    { encoding: 'utf8', env: process.env },
+    { encoding: 'utf8', env: process.env, cwd: home },
   )
   return r.status === 0
+}
+
+function pipInstall(packageRoot, { editable }) {
+  const args = editable ? ['install', '-e', packageRoot] : ['install', packageRoot]
+  const r = spawnSync('pip', args, { stdio: 'inherit', env: process.env })
+  if (r.status === 0) return true
+  const r2 = spawnSync('pip3', args, { stdio: 'inherit', env: process.env })
+  return r2.status === 0
 }
 
 function isPidAlive(pid) {
@@ -113,6 +166,7 @@ function readProcessEnvKeys(pid) {
     return {
       apiKey: map.AGENT_INSIGHT_API_KEY || '',
       insightBaseUrl: normalizeHost(map.AGENT_INSIGHT_HOST || ''),
+      packageRoot: map.AGENT_INSIGHT_FI_PACKAGE_ROOT || '',
     }
   } catch {
     return null
@@ -127,10 +181,19 @@ function credentialsMatch(desired, running) {
   )
 }
 
-/** true when existing worker must be killed and replaced for the desired credentials. */
-function shouldRestartWorker(desired, running) {
+function packageRootChanged(desiredRoot, otherRoot) {
+  if (!desiredRoot || !otherRoot) return false
+  return path.resolve(desiredRoot) !== path.resolve(otherRoot)
+}
+
+/** true when existing worker must be killed and replaced. */
+function shouldRestartWorker(desired, running, prevPackageRoot = null) {
   if (!running) return true
-  return !credentialsMatch(desired, running)
+  if (!credentialsMatch(desired, running)) return true
+  if (packageRootChanged(desired.packageRoot, running.packageRoot)) return true
+  if (packageRootChanged(desired.packageRoot, prevPackageRoot)) return true
+  if (desired.packageRoot && !fs.existsSync(desired.packageRoot)) return true
+  return false
 }
 
 function stopWorker(pid, pidPath) {
@@ -171,23 +234,24 @@ function workerEnv(desired) {
     ...process.env,
     AGENT_INSIGHT_API_KEY: desired.apiKey || '',
     AGENT_INSIGHT_HOST: normalizeHost(desired.insightBaseUrl),
+    AGENT_INSIGHT_FI_PACKAGE_ROOT: desired.packageRoot || '',
   }
 }
 
-function startWorkerDaemon(workerScript, { foreground = false, desired = {} } = {}) {
+function startWorkerDaemon(workerScript, { foreground = false, desired = {}, prevPackageRoot = null } = {}) {
   const logPath = path.join(home, 'worker.log')
   const pidPath = path.join(home, 'worker.pid')
   const existingPid = readPidFile(pidPath)
   if (isPidAlive(existingPid)) {
     const running = readProcessEnvKeys(existingPid)
-    if (!shouldRestartWorker(desired, running)) {
+    if (!shouldRestartWorker(desired, running, prevPackageRoot)) {
       console.log(`FI Worker 已在运行 pid=${existingPid}`)
       console.log(`日志: ${logPath}`)
       console.log(`停止: kill $(cat ${pidPath})`)
       return 0
     }
     console.log(
-      `配置已变更（apiKey/host），正在重启 Worker… (旧 pid=${existingPid})`,
+      `配置已变更（apiKey/host/packageRoot），正在重启 Worker… (旧 pid=${existingPid})`,
     )
     stopWorker(existingPid, pidPath)
   }
@@ -243,34 +307,60 @@ function run(_options = {}) {
   const checkOnly = process.argv.includes('--check')
   const startWorker = process.argv.includes('--start')
   const foreground = process.argv.includes('--foreground')
-  const packageRoot = resolvePackageRoot()
-
-  ensureDirs()
-  const config = writeConfig(packageRoot)
+  const sourceRoot = resolvePackageSource()
+  const python = resolvePython()
+  const configPath = path.join(home, 'config.json')
+  const prev =
+    fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {}
+  const prevPackageRoot = prev.packageRoot || null
 
   if (checkOnly) {
+    const packageRoot = prevPackageRoot || sourceRoot
     const ok =
+      Boolean(packageRoot) &&
       fs.existsSync(packageRoot) &&
-      pythonOk() &&
-      Boolean(config.apiKey || process.env.AGENT_INSIGHT_API_KEY)
+      pythonOk(python) &&
+      Boolean(prev.apiKey || process.env.AGENT_INSIGHT_API_KEY)
     console.log(
       ok
-        ? `fault-injection: ok workerId=${config.workerId} host=${config.insightBaseUrl}`
+        ? `fault-injection: ok workerId=${prev.workerId || '?'} host=${prev.insightBaseUrl || '?'} packageRoot=${packageRoot}`
         : 'fault-injection: missing python package and/or apiKey (set AGENT_INSIGHT_API_KEY)',
     )
     process.exit(ok ? 0 : 1)
   }
 
-  if (!pythonOk()) {
-    const r = spawnSync('pip', ['install', '-e', packageRoot], { stdio: 'inherit' })
-    if (r.status !== 0) {
-      const r2 = spawnSync('pip3', ['install', '-e', packageRoot], { stdio: 'inherit' })
-      if (r2.status !== 0) process.exit(r2.status || 1)
+  ensureDirs()
+
+  if (!fs.existsSync(path.join(sourceRoot, 'pyproject.toml')) && !fs.existsSync(path.join(sourceRoot, 'setup.py'))) {
+    console.error(`agent_fault_injection source missing: ${sourceRoot}`)
+    process.exit(1)
+  }
+
+  const { packageRoot, editable } = resolveInstallTarget(sourceRoot)
+
+  const needPip =
+    !pythonOk(python) ||
+    !fs.existsSync(packageRoot) ||
+    (prevPackageRoot && !fs.existsSync(prevPackageRoot)) ||
+    packageRootChanged(packageRoot, prevPackageRoot) ||
+    !editable
+
+  if (needPip) {
+    console.log(
+      editable
+        ? `pip install -e ${packageRoot} (local clone / live reload)`
+        : `pip install ${packageRoot} (stable copy under ${stablePkgRoot})`,
+    )
+    if (!pipInstall(packageRoot, { editable })) {
+      process.exit(1)
     }
   }
 
+  const { config } = writeConfig(packageRoot)
+
   console.log('fault-injection installed; data dir:', home)
   console.log('config:', path.join(home, 'config.json'))
+  console.log('packageRoot:', packageRoot, editable ? '(editable)' : '(stable)')
   if (!config.apiKey) {
     console.log('WARN: apiKey empty — set AGENT_INSIGHT_API_KEY before starting worker')
   }
@@ -282,7 +372,9 @@ function run(_options = {}) {
       desired: {
         apiKey: config.apiKey,
         insightBaseUrl: config.insightBaseUrl,
+        packageRoot: config.packageRoot,
       },
+      prevPackageRoot,
     })
     if (code === null) return
     process.exit(code)
@@ -295,11 +387,17 @@ function run(_options = {}) {
 module.exports = {
   run,
   normalizeHost,
+  resolvePython,
+  isLocalDevClone,
+  resolvePackageSource,
+  resolveInstallTarget,
+  packageRootChanged,
   readProcessEnvKeys,
   credentialsMatch,
   shouldRestartWorker,
   stopWorker,
   workerEnv,
+  stablePkgRoot,
 }
 
 if (require.main === module) {

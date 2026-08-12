@@ -3,6 +3,9 @@
  * FI Worker: claim runs from Insight, run local collector CLI, upload collect-result.
  * Usage: node scripts/fi-worker.js
  * Config: ~/.agent-insight/fault-injection/config.json
+ *
+ * Relies on an installed `agent_fault_injection` module (via install-fault-injection /
+ * setup curl). Does not require spawning with cwd set to a git checkout.
  */
 const fs = require('fs')
 const os = require('os')
@@ -12,6 +15,10 @@ const { randomBytes } = require('crypto')
 
 const homeFi = path.join(os.homedir(), '.agent-insight', 'fault-injection')
 const configPath = path.join(homeFi, 'config.json')
+
+function resolvePython() {
+  return process.env.AGENT_FI_PYTHON || process.env.PYTHON || 'python3'
+}
 
 function loadConfig() {
   const raw = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {}
@@ -31,6 +38,7 @@ function loadConfig() {
     raw.workspaceBase || path.join(homeFi, 'workspaces')
   const artifactsDir = raw.artifactsDir || path.join(homeFi, 'artifacts')
   const packageRoot =
+    process.env.AGENT_INSIGHT_FI_PACKAGE_ROOT ||
     raw.packageRoot ||
     path.join(__dirname, '..', 'agent_fault_injection')
   return {
@@ -57,6 +65,56 @@ function resolveWorkspace(logical, workspaceBase) {
   if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2))
   if (path.isAbsolute(value)) return value
   return path.resolve(workspaceBase, value)
+}
+
+/** Stable cwd for CLI spawn — never a missing path (Node reports that as spawn ENOENT). */
+function resolveCollectorCwd(cfg) {
+  if (cfg.packageRoot && fs.existsSync(cfg.packageRoot)) return cfg.packageRoot
+  fs.mkdirSync(homeFi, { recursive: true })
+  return homeFi
+}
+
+function pythonModuleOk(python, env = process.env, cwd = homeFi) {
+  const r = spawnSync(
+    python,
+    ['-c', 'import agent_fault_injection'],
+    { encoding: 'utf8', env, cwd },
+  )
+  return r.status === 0
+}
+
+function formatSpawnError(err, { python, cwd }) {
+  if (err && err.code === 'ENOENT') {
+    if (!cwd || !fs.existsSync(cwd)) {
+      return (
+        `packageRoot missing: ${cwd || '(empty)'} ` +
+        `(Node reports spawn ENOENT; re-run curl setup or install-fault-injection --start)`
+      )
+    }
+    return `python executable not found: ${python}`
+  }
+  return err instanceof Error ? err.message : String(err)
+}
+
+function assertWorkerReady(cfg) {
+  const python = resolvePython()
+  if (cfg.packageRoot && !fs.existsSync(cfg.packageRoot)) {
+    console.error(`[fi-worker] packageRoot does not exist: ${cfg.packageRoot}`)
+    console.error(
+      'Re-run: curl -fsSL "$HOST/api/fault-injection/setup?key=$API_KEY" | bash',
+    )
+    console.error('  or: npx agent-insight install-fault-injection --start')
+    process.exit(1)
+  }
+  const cwd = resolveCollectorCwd(cfg)
+  if (!pythonModuleOk(python, process.env, cwd)) {
+    console.error(
+      `[fi-worker] cannot import agent_fault_injection with ${python} (cwd=${cwd})`,
+    )
+    console.error('Re-run install-fault-injection / setup so the FI package is installed.')
+    process.exit(1)
+  }
+  return { python, cwd }
 }
 
 // When HTTP(S)_PROXY is set, Node fetch often tunnels even 127.0.0.1 and hangs.
@@ -159,16 +217,13 @@ function emptyPlatform(note, executable = null) {
 }
 
 /** Startup inventory via Python catalog (opencode agent list + config). No JS builtins. */
-function probeInventory(packageRoot) {
-  const python =
-    process.env.AGENT_FI_PYTHON ||
-    process.env.PYTHON ||
-    'python3'
+function probeInventory(cfg, python) {
+  const cwd = resolveCollectorCwd(cfg)
   const result = spawnSync(
     python,
     ['-m', 'agent_fault_injection.cli', 'platform', 'inventory', '--json'],
     {
-      cwd: packageRoot,
+      cwd,
       encoding: 'utf8',
       timeout: INVENTORY_TIMEOUT_MS,
       env: process.env,
@@ -179,7 +234,7 @@ function probeInventory(packageRoot) {
     const note =
       result.error.code === 'ETIMEDOUT'
         ? `platform inventory timed out after ${INVENTORY_TIMEOUT_MS}ms`
-        : result.error.message || String(result.error)
+        : formatSpawnError(result.error, { python, cwd })
     console.error(`[fi-worker] inventory failed: ${note}`)
     return {
       platforms: {
@@ -268,7 +323,7 @@ function buildCollectorArgs(run, workspace, artifactsDir) {
   return args
 }
 
-function runCollector(cfg, run) {
+function runCollector(cfg, run, python = resolvePython()) {
   return new Promise((resolve, reject) => {
     const workspace = resolveWorkspace(run.workspaceLogical, cfg.workspaceBase)
     fs.mkdirSync(workspace, { recursive: true })
@@ -276,10 +331,10 @@ function runCollector(cfg, run) {
 
     // FI experiments must not start RAS; RAS presence is platform mount only.
     const args = buildCollectorArgs(run, workspace, cfg.artifactsDir)
-    const cwd = cfg.packageRoot
+    const cwd = resolveCollectorCwd(cfg)
     const env = { ...process.env }
 
-    const child = spawn('python3', args, {
+    const child = spawn(python, args, {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -292,7 +347,7 @@ function runCollector(cfg, run) {
     })
     child.on('error', (err) => {
       activeChildren.delete(run.runId)
-      reject(err)
+      reject(new Error(formatSpawnError(err, { python, cwd })))
     })
     child.on('close', (code) => {
       activeChildren.delete(run.runId)
@@ -357,6 +412,7 @@ async function main() {
     )
     process.exit(1)
   }
+  const { python } = assertWorkerReady(cfg)
   saveConfigPatch({
     insightBaseUrl: cfg.insightBaseUrl,
     apiKey: cfg.apiKey,
@@ -368,10 +424,11 @@ async function main() {
     packageRoot: cfg.packageRoot,
   })
   console.log(`[fi-worker] workerId=${cfg.workerId} host=${cfg.insightBaseUrl}`)
+  console.log(`[fi-worker] python=${python} packageRoot=${cfg.packageRoot}`)
 
   let busy = 0
   console.log('[fi-worker] probing platform inventory via Python catalog…')
-  const inventory = probeInventory(cfg.packageRoot)
+  const inventory = probeInventory(cfg, python)
   for (const [name, info] of Object.entries(inventory.platforms || {})) {
     const agents = Array.isArray(info.agents) ? info.agents.length : 0
     const models = Array.isArray(info.models) ? info.models.length : 0
@@ -401,7 +458,7 @@ async function main() {
         busy += 1
         void (async () => {
           try {
-            const payload = await runCollector(cfg, run)
+            const payload = await runCollector(cfg, run, python)
             await uploadResult(cfg, run.runId, payload)
             console.log(`[fi-worker] completed ${run.runId}`)
           } catch (err) {
@@ -430,7 +487,14 @@ function run() {
   return main()
 }
 
-module.exports = { run, buildCollectorArgs }
+module.exports = {
+  run,
+  buildCollectorArgs,
+  resolvePython,
+  resolveCollectorCwd,
+  formatSpawnError,
+  pythonModuleOk,
+}
 
 if (require.main === module) {
   main().catch((err) => {

@@ -72,11 +72,18 @@ flowchart TB
 |----|------|----------|
 | Node.js | 可执行 `node`（Worker 与安装器） | setup 脚本直接 exit |
 | Python 3 | `python3` 在 PATH；可 `import agent_fault_injection`（或允许 pip 安装） | pip 安装失败则整体失败 |
-| pip / pip3 | 首次装 editable 包 | 安装中断 |
+| pip / pip3 | 首次安装 FI 包（日常路径为**非 editable** 稳定副本；仓内开发可为 `-e`） | 安装中断 |
 | 网络 | 本机能访问 Insight `$HOST`（HTTP）；若走 `npx` 还需访问 npm | npx / 心跳失败 |
 | API Key | **当前登录账号**的 Key（Worker 按用户隔离） | 心跳无人认领 / 页面仍显示无 Worker |
 | 被测平台 | 本机已装 **OpenCode** 和/或 **xiaoO**（与 Worker **同机**） | inventory 空，向导无法选平台/模型 |
 | 写权限 | `~/.agent-insight/fault-injection/` | 无法写 config / pid / log |
+
+**安装面选择（重要）**
+
+| 场景 | 怎么装 | `packageRoot` |
+|------|--------|----------------|
+| **日常使用** | `curl …/api/fault-injection/setup?key=… \| bash`，或空目录 `npx agent-insight install-fault-injection --start` | 同步到 `~/.agent-insight/fault-injection/python-pkg` 后 pip 安装，与某次 git checkout **解耦** |
+| **只开发 FI 引擎** | 在仓根跑 `node scripts/install-fault-injection.js --start` | `pip install -e` 绑当前 checkout（搬迁/清空工作树后需重装） |
 
 常用环境变量：
 
@@ -85,7 +92,9 @@ flowchart TB
 | `AGENT_INSIGHT_HOST` | Insight 基址（写入 config，Worker 请求用） |
 | `AGENT_INSIGHT_API_KEY` | Worker 鉴权头 |
 | `AGENT_INSIGHT_FI_WORKER_ID` | 可选覆盖 workerId |
+| `AGENT_INSIGHT_FI_PACKAGE_ROOT` | 可选覆盖 packageRoot（install 启动 Worker 时会写入） |
 | `AGENT_INSIGHT_FI_WORKER_FOREGROUND=1` | 前台跑 Worker |
+| `AGENT_FI_PYTHON` / `PYTHON` | 覆盖默认 `python3` |
 
 ---
 
@@ -109,8 +118,9 @@ sequenceDiagram
   else 普通机器
     U->>N: mktemp + cd tmp && npx --yes agent-insight install-fault-injection --start
   end
-  I->>I: ensureDirs + writeConfig
-  I->>I: pip install -e（若尚未 import 成功）
+  I->>I: ensureDirs + resolveInstallTarget
+  I->>I: 日常：同步到 python-pkg 后 pip install；仓内开发：pip install -e
+  I->>I: writeConfig（packageRoot）
   I->>W: spawn detached fi-worker.js
   W->>A: heartbeat（inventory）
   Note over U: 打印 pid / 日志路径后可关终端
@@ -144,23 +154,23 @@ sequenceDiagram
 ```mermaid
 flowchart TD
   A[run] --> B[ensureDirs]
-  B --> C[writeConfig → config.json]
-  C --> D{--check?}
-  D -->|是| E[检查 package + import + apiKey]
-  D -->|否| F{python import agent_fault_injection?}
-  F -->|否| G[pip / pip3 install -e packageRoot]
-  F -->|是| H[跳过 pip]
-  G --> H
-  H --> I{--start?}
-  I -->|否| J[打印手动启动提示]
-  I -->|是| K[startWorkerDaemon]
-  K --> L{已有存活 pid?}
-  L -->|凭证相同| M[复用进程 · 打印已有 pid]
-  L -->|凭证不同或不可读| N[SIGTERM/SIGKILL 旧进程]
-  N --> O[detached spawn fi-worker.js]
-  O --> P[写 worker.pid · 追加 worker.log]
-  P --> Q[2.5s 后确认仍存活]
+  B --> C[resolveInstallTarget]
+  C -->|仓内开发| D[pip install -e checkout]
+  C -->|日常/npx| E[同步 python-pkg + pip install]
+  D --> F[writeConfig]
+  E --> F
+  F --> G{--start?}
+  G -->|否| H[打印手动启动提示]
+  G -->|是| I[startWorkerDaemon]
+  I --> J{已有存活 pid?}
+  J -->|凭证与 packageRoot 相同| K[复用进程]
+  J -->|变更或不可读| L[停旧进程]
+  L --> M[detached spawn fi-worker.js]
+  M --> N[写 worker.pid · 追加 worker.log]
+  N --> O[2.5s 后确认仍存活]
 ```
+
+> `--check` 只读检查 config/`packageRoot`/import/apiKey，不改安装态。
 
 ### 6.1 目录
 
@@ -290,10 +300,12 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 | setup 400 | 未带 `key=` | 使用当前账号 API Key |
 | `Node.js is required` / `python3 is required` | PATH 缺工具 | 安装 Node 20+、Python3 |
 | `npx install failed` | 网络或 registry；或在错误 cwd | 检查 npm；或在仓根用本地 installer 分支 |
-| Worker 启动后立即退出 | Key/Host 错、依赖缺 | 看 `worker.log` 尾部；`--foreground` 复现 |
+| Worker 启动后立即退出 | Key/Host 错、依赖缺；或 `packageRoot` 失效 | 看 `worker.log` 尾部；`--foreground` 复现；重跑 setup |
+| `spawn python3 ENOENT` / `packageRoot missing` | **多半不是缺 python3**：config 里 `packageRoot` 指向已删/已迁的 checkout；Node 在 cwd 不存在时也会报 spawn ENOENT | 查 `~/.agent-insight/fault-injection/config.json`；用 **curl setup / 空目录 npx** 重装（不要只 kill 重启）；确认 `python-pkg` 或有效路径存在 |
 | 页面仍无 Worker | Key 属于别的用户；防火墙挡心跳；Worker 未起 | 确认 Key；本机 curl Insight；查 pid |
 | 有 Worker 但平台空 | 本机未装 OpenCode/xiaoO 或不在 PATH | 同机安装并保证 inventory 能枚举 |
 | 换账号后任务不对人 | 旧 Worker 仍用旧 Key | 用新 Key 重跑 setup（应自动重启） |
+| 搬迁 git 工作树后 run 全失败 | 曾用仓内 `-e` 安装，editable / packageRoot 仍指旧路径 | 重跑 setup（稳定副本）或在新仓根重装 |
 
 ---
 

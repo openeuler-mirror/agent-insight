@@ -3,7 +3,22 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { buildCollectorArgs } = require('../scripts/fi-worker.js')
+const { buildCollectorArgs, resolvePython } = require('../scripts/fi-worker.js')
+
+test('resolvePython matches install-fault-injection precedence', () => {
+  const prevFi = process.env.AGENT_FI_PYTHON
+  const prevPy = process.env.PYTHON
+  try {
+    delete process.env.AGENT_FI_PYTHON
+    delete process.env.PYTHON
+    assert.equal(resolvePython(), 'python3')
+  } finally {
+    if (prevFi === undefined) delete process.env.AGENT_FI_PYTHON
+    else process.env.AGENT_FI_PYTHON = prevFi
+    if (prevPy === undefined) delete process.env.PYTHON
+    else process.env.PYTHON = prevPy
+  }
+})
 
 test('buildCollectorArgs always uses FI CLI (never RAS runner)', () => {
   const args = buildCollectorArgs(
