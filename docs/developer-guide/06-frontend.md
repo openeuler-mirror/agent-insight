@@ -30,55 +30,38 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
 ## 导航信息架构（功能模块）
-侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。两个一级分组、若干可折叠子树：
+侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。830 转测导航只展示链路追踪、评测、模型注册和安装指导；其他页面与 API 继续保留，不从侧边栏暴露。
 
 ```
 AGENT WORKSPACE  (nav.groupAgentWorkspace)
-├─ 概览                 → /dashboard
-├─ Agent 管理           → /agents
 ├─ 运行观测 (groupObserve)
-│  ├─ 链路追踪           → /trace   (matchPrefixes: /trace, /details)
-│  ├─ 版本分析           → /version-analysis
-│  ├─ 智能诊断           → /fault
-│  ├─ 质量监控           → /quality
-│  └─ 推理 Infra         → /infra
-├─ 评测中心 (evalCenter)
-│  ├─ 评测数据集         → /dataset
-│  ├─ 评估器             → /metrics
-│  ├─ 评测执行           → /eval
-│  └─ (记忆评估 → /memory) 代码注释掉，未暴露
-└─ Skills 能力 (groupSkills)
-   ├─ Skills Hub        → /skills   (matchPrefixes: /skills, /skill-history, /skill-detail)
-   ├─ Skills 生成        → /skill-generator
-   ├─ Skills 评测        → /skill-eval
-   └─ Skills 优化        → /skill-opt
+│  └─ 链路追踪           → /trace
+└─ 评测中心 (evalCenter)
+   ├─ 实验               → /experiments
+   ├─ 评测数据集         → /dataset
+   └─ 评估器             → /metrics
 
 配置  (nav.configGroup)
 ├─ 模型注册             → /modelconfig/registry
-├─ 联网搜索             → /modelconfig/web-search
-├─ 版本管理             → /version-management
 └─ 安装指导             → /accessconfig/install
-   (接入通道/Webhook/健康检查 → /accessconfig/{channels,webhooks,health}) 代码注释掉，"后端能力未稳定"
 ```
 
 **显示名 ↔ 路由的非直觉映射**（改导航或写文档时易踩坑）：
 
 | 侧边栏显示名 | 实际路由 | 备注 |
 |---|---|---|
-| 智能诊断 | `/fault` | 故障诊断页，非独立 `/diagnosis` |
 | 评估器 | `/metrics` | 评测器中心（`MetricsPage` + `metrics/evaluators/[id]`） |
-| Skills Hub | `/skills` | Skill 目录 |
 | 安装指导 | `/accessconfig/install` | 客户端接入分发 |
 
 **导航可达性矩阵**——磁盘存在的页面分三类：
 
 | 状态 | 路由 | 说明 |
 |---|---|---|
-| ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/fault` `/quality` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达；`/quality` 的 `QualityPage` 展示过程、成本和错误三维运行质量 |
-| 🔁 间接可达 | `/skill-history` `/skill-detail`（经 Skills Hub）、`/details`（经链路追踪）、`/eval/run/[runId]`、`/skill-opt/[name]/[version]` 等子路由 | 由父页面跳转，无独立 nav 项 |
-| 🚫 存在但未挂导航 | `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | nav 中注释或未引用；多为半成品/已下线，源码保留 |
+| ✅ 导航可达 | `/trace` `/experiments` `/dataset` `/metrics` `/modelconfig/registry` `/accessconfig/install` | 830 转测导航只展示四个功能域；评测域展开为三个页面 |
+| 🔁 间接可达 | `/experiments/new`、`/experiments/[id]`、`/experiments/[id]/cases/[caseId]`、`/dataset/[id]`、`/metrics/evaluators/[id]` | 由评测中心父页面跳转，无独立 nav 项 |
+| 🚫 存在但未挂导航 | 其他已有页面 | 页面和 API 源码保留，避免破坏内部依赖；本次只收口侧边栏 |
 
-> 折叠状态：`AppSidebar` 默认展开 `['skills','eval-center','observe']` 三棵子树（`useState` 初值），并在路由命中时自动展开对应祖先。
+> 折叠状态：`AppSidebar` 默认展开 `['observe','eval-center']` 两棵子树（`useState` 初值），并在路由命中时自动展开对应祖先。
 
 ## 组件组织
 组件按功能与可复用基础组件进行分组（`src/components/`）：

@@ -241,11 +241,10 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 
 2. 完成登录，进入默认 Workspace。
 3. 确认左侧导航中可以看到以下模块：
-   - **Agent 管理**
-   - **运行观测**
+   - **链路追踪**
    - **评测中心**
-   - **Skills 能力**
-   - **配置**
+   - **模型注册**
+   - **安装指导**
 
 > **Tip**
 > 如果你同时维护开发、预发和生产环境，建议为不同环境分别创建独立 Agent，

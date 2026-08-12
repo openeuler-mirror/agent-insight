@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `2b113dfa4533dbe7ac0daf8e5fd576d389643a52` (`2b113dfa`) |
-| Branch | `codex/backport-pr-280-to-830` |
-| Date | 2026-08-11T19:19:37+08:00 |
-| Author | ljnkirito |
-| Subject | `fix: 修正 AcTrail 标题解析并移除原始数据留存` |
+| Commit | `a23b45644bed2e59a5b9ed7e3dce1ddf1426f0ca` (`a23b4564`) |
+| Branch | `830` |
+| Date | 2026-08-12T17:00:32+08:00 |
+| Author | gyctl |
+| Subject | `feat: 收口830转测导航范围` |
 
-**如何更新：** `git diff 2b113dfa HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a23b4564 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
