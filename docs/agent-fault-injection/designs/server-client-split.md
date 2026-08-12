@@ -51,6 +51,7 @@ npx agent-insight install-fault-injection --start
 npx agent-insight install-fault-injection --check
 ```
 
+本机逐步过程（图文）：[guides/local-install-process.md](../guides/local-install-process.md)。  
 细节与接口表见完整 SDD。
 
 **评审**：初评 conditionally passed（71）→ 修订后四维约 83，见 [design-dimensions-review.md](../../design/fi-server-client-split/review/design-dimensions-review.md)。

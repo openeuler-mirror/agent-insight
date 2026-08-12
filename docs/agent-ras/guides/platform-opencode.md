@@ -22,7 +22,8 @@ npx agent-insight install-ras
 # 检查：node scripts/install-ras.js --check
 ```
 
-安装器写入 `~/.agent-insight/ras/`，合并 `ras-judge` 等到 OpenCode 配置。详细步骤见源码旁 [`platform_adapter/opencode/INSTALL.md`](../../../agent_ras/platform_adapter/opencode/INSTALL.md)。
+安装器写入 `~/.agent-insight/ras/`，合并 `ras-judge` 等到 OpenCode 配置。详细步骤见源码旁 [`platform_adapter/opencode/INSTALL.md`](../../../agent_ras/platform_adapter/opencode/INSTALL.md)。  
+看板 curl / `npm pack` / 本机目录树与数据源见 [local-install-process.md](local-install-process.md)。
 
 ## 注意
 

@@ -16,6 +16,7 @@ flowchart LR
 | OpenCode | [platform-opencode.md](platform-opencode.md) |
 | xiaoO | [platform-xiaoo.md](platform-xiaoo.md) |
 | 配置项说明 | [configuration.md](configuration.md) |
+| **安装命令本机过程**（curl / `install-ras` 逐步） | [local-install-process.md](local-install-process.md) |
 
 架构与模块：[../designs/architecture.md](../designs/architecture.md)。  
 源码包说明：[`agent_ras/README.md`](../../../agent_ras/README.md)。

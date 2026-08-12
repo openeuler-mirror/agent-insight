@@ -19,12 +19,14 @@
 |------|------|
 | **Insight · RAS · FI 关系说明** | [designs/ras-fi-insight-relationship.md](designs/ras-fi-insight-relationship.md) · [图文](designs/ras-fi-insight-relationship.html) · [三产品逻辑图](designs/agent-insight-ras-fi-logic.html) |
 | **服务端/客户端分离（FI）** | [designs/server-client-split.md](designs/server-client-split.md) · [phase2 SDD](../design/fi-server-client-split/phase2-requirements-design.md) |
+| **本机 curl 安装过程** | [guides/local-install-process.md](guides/local-install-process.md) |
 | FI 模块架构摘要 | [designs/architecture.md](designs/architecture.md) |
 | 内置故障覆盖矩阵 | [designs/fault-catalog.md](designs/fault-catalog.md) |
 | **Lane A：新增故障模式** | [guides/lane-a-add-fault.md](guides/lane-a-add-fault.md) · [插件化设计](designs/features/fault-mode-plugins.md) |
 | 运行时注入（prompt / tool_result / intercept） | [designs/runtime-middleware-fault-injection.md](designs/runtime-middleware-fault-injection.md) |
 | Task / Worker API（Insight） | [designs/modules/task-orchestration.md](designs/modules/task-orchestration.md) |
 | 最短启用 | [guides/getting-started.md](guides/getting-started.md) |
+| **本机安装过程**（curl setup 逐步：目录 / Worker / 数据源） | [guides/local-install-process.md](guides/local-install-process.md) |
 | **用户指南（产品路径）** | [user-guide/observability/fault-injection.md](../user-guide/observability/fault-injection.md) |
 
 ## 特性状态

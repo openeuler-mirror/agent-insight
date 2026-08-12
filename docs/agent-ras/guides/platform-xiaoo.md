@@ -7,7 +7,7 @@
 
 ## 最短路径
 
-1. Insight setup 勾选 **xiaoO**，或 `node scripts/install-ras.js`  
+1. Insight setup 勾选 **xiaoO**，或 `node scripts/install-ras.js`（本机过程见 [local-install-process.md](local-install-process.md)）  
 2. 确保 subprocess IPC worker：`python -m platform_adapter.common.transport.subprocess_ipc`  
 3. **Daemon 闭环（推荐验收）**：启动 stock `xiaoo-daemon`（默认 `0.0.0.0:18080`），用 RAS 自有客户端持有 lease：
    ```bash

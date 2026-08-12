@@ -618,6 +618,11 @@ export AGENT_INSIGHT_API_KEY=<key>
 npx agent-insight install-fault-injection --start
 ```
 
+本机逐步说明（图文）：
+
+- RAS：[guides/local-install-process.md](../../agent-ras/guides/local-install-process.md)
+- FI：[guides/local-install-process.md](../guides/local-install-process.md)
+
 ---
 
 ## 9. 参考分册

@@ -10,6 +10,7 @@
    - `$API_KEY` 必须是**当前登录账号**的 API Key（Worker 心跳按用户隔离）。
    - setup/`--start` 会把 Worker **后台常驻**，打印 pid 与日志路径后退出终端；日志默认 `~/.agent-insight/fault-injection/worker.log`。需要前台排障时加 `--foreground`。
    - 若本机已有 Worker，用**另一账号**的 Key 重跑 setup 时会按新凭证自动重启；同一 Key/host 再跑则保持已有进程。
+   - **本机逐步发生了什么**（目录树、config、npx vs 本地仓、数据源、排障表）：见 [local-install-process.md](local-install-process.md)。
 2. Insight 设置页配置激活模型（Judge 依赖；无模型时仍可 collect，评判为 `judge_skipped`）
 3. 本机安装 OpenCode 和/或 xiaoo（须与 Worker 同机）
    - **OpenCode**：FI 插件会写入 workspace `.opencode/plugins/`（含 `rewrite-runtime.ts` **与** `provider-tool-call-rewrite.ts`），并预置 `.opencode/package.json`（`@opencode-ai/plugin`）；缺任一会表现为 `plugin-ready` 失败。日常 ⓪ Trace 仍靠 Insight OpenCode 观测插件 upload，**不是** FI collect。

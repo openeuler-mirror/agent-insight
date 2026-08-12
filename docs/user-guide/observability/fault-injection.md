@@ -45,7 +45,9 @@ curl -fsSL "$HOST/api/fault-injection/setup?key=$API_KEY" | bash
 - setup 会把 Worker **后台常驻**；日志默认 `~/.agent-insight/fault-injection/worker.log`。前台排障可加 `--foreground`。
 - 无在线 Worker 时，新建任务向导中平台不可选、无法下一步。
 
-更多细节：[FI getting-started](../../agent-fault-injection/guides/getting-started.md)。
+更多细节：[FI getting-started](../../agent-fault-injection/guides/getting-started.md)。  
+本机 curl 逐步说明（落盘目录、Worker 生命周期、数据从哪来）：[FI local-install-process](../../agent-fault-injection/guides/local-install-process.md)。  
+RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-install-process.md)。
 
 ### 2. 新建注入任务
 
