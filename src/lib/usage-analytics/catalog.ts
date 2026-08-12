@@ -19,7 +19,7 @@ export const USAGE_FEATURES: UsageFeatureDefinition[] = [
     {
         key: 'agents',
         labelKey: 'nav.agents',
-        label: 'Agent 管理',
+        label: 'Agent 概览',
         // 设计文档里的 agent.register / agent.sync 在当前代码中没有对应的用户操作入口：
         // /api/agents 只有 GET，其中的 registeredAgent.create 是列表查询时的后台自动推断，
         // 按"后台自动同步不计"的口径不能埋点。将来加了主动注册/同步按钮再补回来。
@@ -53,7 +53,7 @@ export const USAGE_FEATURES: UsageFeatureDefinition[] = [
     {
         key: 'fault',
         labelKey: 'nav.fault',
-        label: '故障诊断',
+        label: '诊断分析',
         uses: [
             c('fault.history.view', '查看已诊断历史', '用户主动选择历史记录且详情成功加载；列表轮询不计'),
             s('fault.diagnosis.run', '启动诊断', '/api/fault/diagnosis/stream 成功创建诊断任务'),
@@ -63,7 +63,7 @@ export const USAGE_FEATURES: UsageFeatureDefinition[] = [
     {
         key: 'infra',
         labelKey: 'nav.infra',
-        label: '推理 Infra',
+        label: '推理基础设施',
         // Infra 的接口不带 user，页面也没有 auth context（见 (main)/infra/*），
         // 服务端无从归属身份，因此这三项在客户端成功后上报。
         uses: [
@@ -187,7 +187,7 @@ export const USAGE_FEATURES: UsageFeatureDefinition[] = [
     {
         key: 'access-install',
         labelKey: 'nav.accessInstall',
-        label: '接入安装',
+        label: '客户端安装',
         uses: [
             // 接入命令是页面本地拼出来的，没有服务端调用，只能客户端上报
             c('access.config.generate', '生成接入配置', '用户改变接入组件选择并成功重新生成命令'),

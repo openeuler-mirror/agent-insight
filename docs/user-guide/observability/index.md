@@ -1,6 +1,6 @@
 ---
 title: "运行观测"
-description: "链路追踪、智能诊断与质量监控总览"
+description: "Agent 概览、链路追踪与推理基础设施总览"
 ---
 
 # 运行观测
@@ -8,7 +8,7 @@ description: "链路追踪、智能诊断与质量监控总览"
 运行观测用于还原 Agent 在真实环境中的执行事实，并支撑问题定位、样本筛选与后续分析。其核心关注点包括：一次执行具体发生了什么、异常更可能出在哪里、哪些样本值得继续沉淀，以及推理基础设施是否参与了异常。
 
 > **Note**
-> 如果 Agent 管理回答的是“有哪些资产”，那么运行观测回答的是“这些资产最近实际运行得如何”。
+> Agent 概览回答“有哪些资产”，链路追踪与推理基础设施回答“这些资产最近实际运行得如何”。
 
 ## 核心作用
 
@@ -26,17 +26,11 @@ description: "链路追踪、智能诊断与质量监控总览"
 
 对应文档： [链路追踪](./view-traces)
 
-### 智能诊断
+### Agent 概览
 
-智能诊断基于 Trace 上下文对失败、异常或效果偏差样本做归因分析，输出问题类型、证据节点与建议方向。它更适合作为 Trace 阅读之后的辅助判断层，而不是替代原始执行事实。
+Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent，并处理登记、归属与接入信息。
 
-对应文档： [智能诊断](./diagnosis)
-
-### 质量监控
-
-质量监控面向趋势观察与持续巡检，但当前页面暂未开放使用。现阶段如需查看执行细节或定位异常，仍以链路追踪和智能诊断为主要路径。
-
-对应文档： [质量监控](./quality-monitoring)
+对应文档： [Agent 概览](../agent-management)
 
 ### 推理 Infra
 
@@ -49,28 +43,27 @@ description: "链路追踪、智能诊断与质量监控总览"
 1. 先在链路追踪里找到异常执行
 2. 进入详情看 Trace、Span 和上下文
 3. 如果怀疑是推理服务慢或不可用，查看 Trace 详情里的 Infra tab 或进入推理 Infra 页面
-4. 对失败或偏差样本使用智能诊断
+4. 对失败或偏差样本进入独立的诊断分析模块
 5. 对重复出现或高价值样本沉淀为评测数据集或优化输入
 
-## 运行观测和评测中心有什么区别
+## 运行观测和评估与实验有什么区别
 
 这两个模块经常配合使用，但职责边界不同：
 
 - **运行观测**：看真实线上执行发生了什么
-- **评测中心**：把问题转成可重复、可回归的离线验证
+- **评估与实验**：把问题转成可重复、可回归的离线验证
 
 前者偏向发现与还原问题，后者偏向验证与回归问题。
 
 ## 下一步
 
 - 查看单次执行细节： [链路追踪](./view-traces)
-- 查看异常样本归因： [智能诊断](./diagnosis)
-- 了解趋势能力当前状态： [质量监控](./quality-monitoring)
-- 将线上问题沉淀为回归验证： [评测中心](../evaluation/index)
+- 查看异常样本归因： [诊断分析](./diagnosis)
+- 将线上问题沉淀为回归验证： [评估与实验](../evaluation/index)
 
 ## Hermes 接入
 
-安装指导页下发的普通交互版 setup 和 auto setup 都支持选择 Hermes。选择后脚本会从 Agent Insight 服务下载固定版本的轻量插件到 `$HERMES_HOME/plugins/agent_insight_hermes/`（未设置 `HERMES_HOME` 时默认为 `~/.hermes`），写入 `plugin.yaml` 与 `config.json`，然后启用 `agent_insight_hermes`。该插件只使用 Python 标准库，不需要访问 GitHub、探测 Hermes venv 或额外安装 OpenTelemetry Python 依赖。setup 不会启用、禁用或改写其他 Hermes 插件；上游 `hermes_otel` 可以继续用于 Langfuse 等独立目的。若两个插件都被配置为向同一个 Agent Insight 端点上报，同一轮对话可能产生重复 telemetry，需要由用户自行调整其中一个插件的 endpoint 或启用状态。
+客户端安装页下发的普通交互版 setup 和 auto setup 都支持选择 Hermes。选择后脚本会从 Agent Insight 服务下载固定版本的轻量插件到 `$HERMES_HOME/plugins/agent_insight_hermes/`（未设置 `HERMES_HOME` 时默认为 `~/.hermes`），写入 `plugin.yaml` 与 `config.json`，然后启用 `agent_insight_hermes`。该插件只使用 Python 标准库，不需要访问 GitHub、探测 Hermes venv 或额外安装 OpenTelemetry Python 依赖。setup 不会启用、禁用或改写其他 Hermes 插件；上游 `hermes_otel` 可以继续用于 Langfuse 等独立目的。若两个插件都被配置为向同一个 Agent Insight 端点上报，同一轮对话可能产生重复 telemetry，需要由用户自行调整其中一个插件的 endpoint 或启用状态。
 
 Hermes 插件会把 hook 数据编码为标准 OTLP/HTTP JSON，并直接上报到平台 `/api/ingest/otel/v1/traces`。它优先采集每次 API 调用的真实 assistant content，工具结果最多保留 200000 字符并附带截断元数据；subagent start/stop hook 会把 parent、root、child session 关系编码到同一 trace。插件按已完成 span 发送 delta payload；平台从服务端 session spool 重读已收到的全部 span，继续按 span tree 生成用户输入、工具步骤、中间 LLM 回复和最终回复。
 
@@ -100,7 +93,7 @@ CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会�
 
 用户显式选择或创建具名 Agent 时，平台保留该名称。列表中的 `AGENT` 列展示 Agent 名称；产品来源可在 Trace 详情和来源属性中确认，因此 Desktop/JetBrains 的普通根 Agent 显示为 `Qoder` 是预期行为。
 
-在平台的“安装指导”中执行 curl/PowerShell 安装命令，或使用本地制作的 Agent Insight npm 包执行 `npx agent-insight install` 时，可在不影响原有框架选项的前提下勾选 **Qoder CN product family**。安装器会配置 CLI、Desktop、JetBrains 和 Work 的 Hook、运行脚本及上传器，并自动把 Desktop VSIX 与 JetBrains ZIP 下载到 `~/.agent-insight/packages/qoder/`。单个插件包下载失败只会显示警告，不会撤销已经完成的采集器安装；可在服务端补齐插件包来源或构建环境后重新执行安装命令。Desktop VSIX 由服务端从 `integrations/qoder-desktop/` 源码构建；JetBrains ZIP 可由服务端从受信任的 Release 附件下载，或在有 IntelliJ/Java 构建环境时从 `integrations/qoder-jetbrains/` 源码构建。两类产物都缓存到 `.next/cache/qoder-plugins/`，仓库及本地 npm 包不携带预编译二进制。
+在平台的“客户端安装”中执行 curl/PowerShell 安装命令，或使用本地制作的 Agent Insight npm 包执行 `npx agent-insight install` 时，可在不影响原有框架选项的前提下勾选 **Qoder CN product family**。安装器会配置 CLI、Desktop、JetBrains 和 Work 的 Hook、运行脚本及上传器，并自动把 Desktop VSIX 与 JetBrains ZIP 下载到 `~/.agent-insight/packages/qoder/`。单个插件包下载失败只会显示警告，不会撤销已经完成的采集器安装；可在服务端补齐插件包来源或构建环境后重新执行安装命令。Desktop VSIX 由服务端从 `integrations/qoder-desktop/` 源码构建；JetBrains ZIP 可由服务端从受信任的 Release 附件下载，或在有 IntelliJ/Java 构建环境时从 `integrations/qoder-jetbrains/` 源码构建。两类产物都缓存到 `.next/cache/qoder-plugins/`，仓库及本地 npm 包不携带预编译二进制。
 
 ### Qoder CN Desktop
 
@@ -173,5 +166,3 @@ node scripts/qoder_work_setup.mjs uninstall --purge
 所有形态默认截断正文到 2000 字符，并对 API Key、token、authorization、cookie、password 等字段脱敏。工具耗时通常取 Pre/Post Hook；异步 Hook 时间戳重合时自动回退到 transcript 的真实调用与返回时间，避免短 MCP 调用误显示为 `0ms`。采集器按 `diagnostics/Hook 精确值 > Desktop/JetBrains 本地 SQLite 精确值 >（显式开启时）Desktop/JetBrains 可见 transcript 估算 > 不可用` 选择 Token 来源。CLI 与 Work 依赖安装器配置的 `QODERCN_EXPOSE_TOKEN_USAGE=1` 保留 diagnostics 精确值；Desktop 自动只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db`，JetBrains 自动只读查询 `~/.qoder/shared_client/cache/db/local.db`。SQLite 读取仅访问 `chat_message` 的会话、请求、模型和 `token_info` 字段，不修改 Qoder 数据。SQLite Schema 与 Token 暴露开关都属于 Qoder 客户端内部接口；版本不兼容、数据库忙、变量未被客户端进程继承或当前 Node 不支持内置 SQLite 时会安全回退为 Token 不可用。
 
 仅在前两种精确来源都不可用时，才可在 `~/.agent-insight/config` 中显式设置 `AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS=1`，实验性地估算当前轮 transcript 中可见的用户消息、助手输出、工具参数和工具结果。Trace 详情以 `≈` 标识，并记录 `local_visible_transcript`、`visible_transcript` 和 `missing_context=true`。估算不包含客户端隐藏的 system prompt、Rules、Skill/MCP schema、内部推理与被压缩上下文，在真实 Agent 会话中可能严重低估，因此不能用于账单核对，也不会填充执行记录的精确 input/output Token 字段。CLI/Work 未提供 usage 时仍显示不可用，不启用该兜底。
-
-

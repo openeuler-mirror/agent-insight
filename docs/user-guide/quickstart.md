@@ -7,6 +7,8 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 
 本指南带你用最短路径跑通 Agent Insight 的第一条完整闭环：完成基础配置、接入一个 Agent，并在平台里看到真实链路。
 
+登录后可直接点击左侧 **快速开始**。页面按 **快速接入、运行观测、评估与实验、诊断分析、持续优化** 五个阶段汇总当前可用入口；下面的步骤是“快速接入”阶段的完整操作说明。
+
 完成后你会得到：
 
 - 一个已登记的 Agent
@@ -220,8 +222,8 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 1. 登录看板并进入当前 Workspace
 
 2. 在 **模型注册** 中先配置模型
-3. 在 **Agent 管理** 中创建一个 Agent
-4. 在 **安装指导** 中完成接入
+3. 在 **运行观测 → Agent 概览** 中创建一个 Agent
+4. 在 **配置 → 客户端安装** 中完成接入
 5. 触发一次真实执行
 6. 在 **链路追踪** 中确认第一条 Trace
 
@@ -241,10 +243,12 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 
 2. 完成登录，进入默认 Workspace。
 3. 确认左侧导航中可以看到以下模块：
-   - **Agent 管理**
+   - **快速开始**
    - **运行观测**
-   - **评测中心**
-   - **Skills 能力**
+   - **Agent 概览**
+   - **评估与实验**
+   - **诊断分析**
+   - **持续优化**
    - **配置**
 
 > **Tip**
@@ -275,7 +279,7 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 
 ## 步骤三：注册 Agent
 
-进入侧边栏 **Agent Workspace → Agent 管理**：
+进入侧边栏 **运行观测 → Agent 概览**：
 
 1. 点击注册 Agent
 2. 输入 Agent 名称
@@ -291,9 +295,9 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 ---
 
-## 步骤四：按安装指导完成接入
+## 步骤四：通过客户端安装完成接入
 
-进入 **配置 → 安装指导**，按页面提示完成接入。
+进入 **配置 → 客户端安装**，按页面提示完成接入。
 
 通常你会完成这些动作：
 
@@ -301,7 +305,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 2. 复制页面生成的安装命令
 
    <p align="center">
-     <img src="../images/install_guide.png" alt="安装指导页面" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../images/install_guide.png" alt="客户端安装页面" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 3. 在 Agent 所在机器上执行该命令
@@ -364,8 +368,8 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 ## 继续阅读
 
 - 想先看产品整体结构 → [Agent Insight](./home)
-- 想补齐基础配置 → [模型注册](./settings/model-registry) / [安装指导](./settings/access-control)
+- 想补齐基础配置 → [模型注册](./settings/model-registry) / [客户端安装](./settings/access-control)
 - 想理解平台核心名词 → [核心概念](./concepts)
 - 想继续排查和分析线上执行 → [运行观测](./observability/index)
-- 想建立第一套离线评测 → [评测中心](./evaluation/index)
-- 想沉淀可复用能力 → [Skills 能力](./skills/index)
+- 想建立第一套离线评测 → [评估与实验](./evaluation/index)
+- 想沉淀可复用能力 → [持续优化 · Skill](./skills/index)

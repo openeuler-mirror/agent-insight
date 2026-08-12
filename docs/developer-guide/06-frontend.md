@@ -10,6 +10,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/` | `Home` (`src/app/page.tsx`) | 落地页 / 重定向 |
 | `/login` | `LoginPage` (`src/app/login/page.tsx`) | 邮箱登录 |
 | `/(main)/dashboard` | `DashboardPage` (`(main)/dashboard/page.tsx`) | 概览：健康度、趋势、告警、agents |
+| `/(main)/quickstart` | `QuickstartPage` (`(main)/quickstart/page.tsx`) | 五阶段推荐使用路径与现有模块入口 |
 | `/(main)/agents` | `AgentsPage` (`(main)/agents/page.tsx`) | 已注册/已观测的 agents |
 | `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；列表由服务端过滤、排序和数据库分页，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
@@ -30,62 +31,59 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
 ## 导航信息架构（功能模块）
-侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。两个一级分组、若干可折叠子树：
+侧边栏是产品的**功能模块入口**。语义配置的权威定义在 `src/components/shell/sidebar-navigation.ts`，`AppSidebar.tsx` 只负责渲染，显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。当前结构为统一模块树：
 
 ```
-AGENT WORKSPACE  (nav.groupAgentWorkspace)
-├─ 概览                 → /dashboard
-├─ Agent 管理           → /agents
-├─ 运行观测 (groupObserve)
-│  ├─ 链路追踪           → /trace   (matchPrefixes: /trace, /details)
-│  ├─ 版本分析           → /version-analysis
-│  ├─ 智能诊断           → /fault
-│  ├─ 质量监控           → /quality
-│  └─ 推理 Infra         → /infra
-├─ 评测中心 (evalCenter)
-│  ├─ 评测数据集         → /dataset
-│  ├─ 评估器             → /metrics
-│  ├─ 评测执行           → /eval
-│  └─ (记忆评估 → /memory) 代码注释掉，未暴露
-└─ Skills 能力 (groupSkills)
-   ├─ Skills Hub        → /skills   (matchPrefixes: /skills, /skill-history, /skill-detail)
-   ├─ Skills 生成        → /skill-generator
-   ├─ Skills 评测        → /skill-eval
-   └─ Skills 优化        → /skill-opt
-
-配置  (nav.configGroup)
-├─ 模型注册             → /modelconfig/registry
-├─ 联网搜索             → /modelconfig/web-search
-├─ 版本管理             → /version-management
-└─ 安装指导             → /accessconfig/install
-   (接入通道/Webhook/健康检查 → /accessconfig/{channels,webhooks,health}) 代码注释掉，"后端能力未稳定"
+仪表盘                         → /dashboard
+快速开始                       → /quickstart
+运行观测 (groupObserve)
+├─ Agent 概览                  → /agents
+├─ 链路追踪                     → /trace
+└─ 推理基础设施                 → /infra
+评估与实验 (evalCenter)
+├─ 实验                         → /experiments
+├─ 评测数据集                   → /dataset
+└─ 评估器                       → /metrics
+诊断分析                       → /fault
+持续优化 (groupSkills)
+└─ Skill                       → /skills
+   ├─ SkillHub tab             → /skills
+   ├─ 生成 tab                  → /skill-generator
+   ├─ 评测 tab                  → /skill-eval
+   └─ 优化 tab                  → /skill-opt
+配置 (configGroup)
+├─ 模型注册                     → /modelconfig/registry
+├─ 联网搜索                     → /modelconfig/web-search
+└─ 客户端安装                   → /accessconfig/install
 ```
+
+Skill 在侧边栏中只有一个入口。`SkillWorkspaceTabs` 在四个既有首页上提供 SkillHub、生成、评测、优化页签；路由和页面主体保持独立，详情路由仍由各自父页面进入。`/skill-history`、`/skill-detail`、`/skill-eval/**` 与 `/skill-opt/**` 都会保持侧边栏 Skill 激活。
 
 **显示名 ↔ 路由的非直觉映射**（改导航或写文档时易踩坑）：
 
 | 侧边栏显示名 | 实际路由 | 备注 |
 |---|---|---|
-| 智能诊断 | `/fault` | 故障诊断页，非独立 `/diagnosis` |
+| 诊断分析 | `/fault` | 复用既有智能诊断页，非独立 `/diagnosis` |
 | 评估器 | `/metrics` | 评测器中心（`MetricsPage` + `metrics/evaluators/[id]`） |
-| Skills Hub | `/skills` | Skill 目录 |
-| 安装指导 | `/accessconfig/install` | 客户端接入分发 |
+| Skill | `/skills` | 统一入口；四个页签继续使用原有路由 |
+| 客户端安装 | `/accessconfig/install` | 客户端接入分发 |
 
 **导航可达性矩阵**——磁盘存在的页面分三类：
 
 | 状态 | 路由 | 说明 |
 |---|---|---|
-| ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/fault` `/quality` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达；`/quality` 的 `QualityPage` 展示过程、成本和错误三维运行质量 |
-| 🔁 间接可达 | `/skill-history` `/skill-detail`（经 Skills Hub）、`/details`（经链路追踪）、`/eval/run/[runId]`、`/skill-opt/[name]/[version]` 等子路由 | 由父页面跳转，无独立 nav 项 |
-| 🚫 存在但未挂导航 | `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | nav 中注释或未引用；多为半成品/已下线，源码保留 |
+| ✅ 侧边栏直达 | `/dashboard` `/quickstart` `/agents` `/trace` `/infra` `/experiments` `/dataset` `/metrics` `/fault` `/skills` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 快速开始串联五阶段推荐路径；Skill 的四个业务页由一个侧边栏入口承载 |
+| 🔁 页签或页面内可达 | `/skill-generator` `/skill-eval` `/skill-opt`、`/skill-history` `/skill-detail`、`/details`、`/skill-opt/[name]/[version]` 等子路由 | 由 Skill 页签或父页面跳转，无独立 nav 项 |
+| 🚫 存在但未挂导航 | `/version-analysis` `/quality` `/eval` `/version-management` `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | 源码保留，但当前信息架构不提供侧边栏入口 |
 
-> 折叠状态：`AppSidebar` 默认展开 `['skills','eval-center','observe']` 三棵子树（`useState` 初值），并在路由命中时自动展开对应祖先。
+> 折叠状态：`AppSidebar` 默认展开运行观测、评估与实验、持续优化和配置，并在路由命中时自动展开对应祖先。
 
 ## 组件组织
 组件按功能与可复用基础组件进行分组（`src/components/`）：
 - **应用外壳** — `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader,providers}.tsx`。页面在 `<PageContainer>` 内渲染（左对齐、全幅——不要手写居中）。
 - **评测** — `eval/*`（`Dashboard`、`SkillEvaluation`、`TrajectoryEvalCenter`、`EvaluationRunDetailView`、`ExecutionRecordsTable`、`EvaluatorFindingsView`）以及 `evaluation/*`（`EvaluationContent`、`EvaluationFindings`）。
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。Version Analysis page: `app/(main)/version-analysis/page.tsx`; Version Management page: `app/(main)/version-management/page.tsx`。
-- **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`）、`skill-generator/*`。
+- **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`、`SkillWorkspaceTabs`）、`skill-generator/*`；`skill-workspace-navigation.ts` 定义四个页签的路由归属。
 - **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。
 - **实验向导** — `app/(main)/experiments/new/page.tsx` 第 ① 步的待评测 Agent 只展示用户归属 Agent；第 ② 步通过 `/api/experiments/traces` 服务端分页选择该用户 Agent 的 root Trace。搜索同时匹配 `Execution.id`、`taskId` 与 `query`，时间支持预设窗口和自定义起止时间，用户标签多选使用 AND 语义。筛选栏下方的独立已选区读取跨页 `selected` Map，支持单条移除和全部清空；筛选状态不清空跨页已选 case，跨页全选沿用当前筛选参数并受 500 条上限保护。这些筛选不持久化为监听模式规则；监听运行时仍会拒绝系统归属 Agent 的新 Trace。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
