@@ -206,6 +206,7 @@ export const en = {
     resetColumns: 'Reset columns',
     columnSettings: 'Columns',
     filterBusinessTag: 'Business tag',
+    filterUserTag: 'User tags',
     editTags: 'Edit tags',
     addTag: 'Tag',
     noUserTags: 'No tags',
