@@ -72,11 +72,11 @@ opencode    # 可直接启动；桥接层会 RTLD_GLOBAL 加载 libpython，无�
     "enabled": true,
     "service": {
       "transport": "inproc",
-      "python": "/home/iceory/miniconda3/bin/python3",
-      "libpython": "/home/iceory/miniconda3/lib/libpython3.13.so",
-      "python_home": "/home/iceory/miniconda3",
-      "repo_root": "/home/iceory/.agent-insight/ras/runtime/<version>",
-      "python_packages": "/home/iceory/.agent-insight/ras/runtime/<version>/.python-packages"
+      "python": "/path/to/python3",
+      "libpython": "/path/to/libpython3.X.so",
+      "python_home": "/path/to/python-prefix",
+      "repo_root": "~/.agent-insight/ras/runtime/<fingerprint>",
+      "python_packages": "~/.agent-insight/ras/runtime/<fingerprint>/.python-packages"
     },
     "llm_thinking_loop": {
       "detection_start_chars": 30000,
@@ -88,6 +88,8 @@ opencode    # 可直接启动；桥接层会 RTLD_GLOBAL 加载 libpython，无�
   }
 }
 ```
+
+`service.*` 路径由 `agent-insight install-ras` 按本机探测写入；上表仅为形状说明，不要把真实 home/conda 路径提交进 Git。
 
 改完后**新开一轮对话**（或重启 OpenCode）才会 `hello` 带上新阈值。联调 L1/L2 可把 `detection_start_chars` 临时改成 `200`～`500`（只改运行时 `~/.agent-insight/ras/config.json`，不要改仓库默认值）。
 

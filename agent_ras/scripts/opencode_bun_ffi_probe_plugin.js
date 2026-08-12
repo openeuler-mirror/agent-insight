@@ -37,18 +37,28 @@ function probe() {
     },
   }
 
-  const libPath =
-    process.env.RAS_LIBPYTHON ||
-    "/home/iceory/miniconda3/lib/libpython3.13.so"
-  const repoRoot =
-    process.env.AGENT_RAS_ROOT ||
-    "/home/iceory/work/agent-reliability/agent_ras"
+  const libPath = process.env.RAS_LIBPYTHON
+  const repoRoot = process.env.AGENT_RAS_ROOT
 
-  result.libPath = libPath
-  result.libExists = existsSync(libPath)
-  result.repoRoot = repoRoot
+  result.libPath = libPath || null
+  result.libExists = Boolean(libPath && existsSync(libPath))
+  result.repoRoot = repoRoot || null
 
-  try {
+  if (!libPath) {
+    result.error = {
+      message: "RAS_LIBPYTHON is required (path to shared libpython)",
+      stack: null,
+      name: "MissingEnv",
+    }
+    log(`probe skipped: ${result.error.message}`)
+  } else if (!repoRoot) {
+    result.error = {
+      message: "AGENT_RAS_ROOT is required (path to agent_ras package root)",
+      stack: null,
+      name: "MissingEnv",
+    }
+    log(`probe skipped: ${result.error.message}`)
+  } else try {
     result.steps.import_bun_ffi = { ok: true }
     const { symbols: py } = dlopen(libPath, {
       Py_Initialize: { args: [], returns: FFIType.void },

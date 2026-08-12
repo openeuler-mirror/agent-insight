@@ -3,11 +3,11 @@
     "enabled": true,
     "service": {
       "transport": "inproc",
-      "python": "/home/iceory/miniconda3/bin/python3",
-      "libpython": "/home/iceory/miniconda3/lib/libpython3.13.so",
-      "python_home": "/home/iceory/miniconda3",
-      "repo_root": "/home/iceory/.agent-insight/ras/runtime/<version>",
-      "python_packages": "/home/iceory/.agent-insight/ras/runtime/<version>/.python-packages"
+      "python": "/path/to/python3",
+      "libpython": "/path/to/libpython3.X.so",
+      "python_home": "/path/to/python-prefix",
+      "repo_root": "~/.agent-insight/ras/runtime/<fingerprint>",
+      "python_packages": "~/.agent-insight/ras/runtime/<fingerprint>/.python-packages"
     },
     "llm_thinking_loop": {
       "detection_start_chars": 200,

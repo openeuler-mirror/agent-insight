@@ -9,6 +9,9 @@ deterministic mock judge (no nested OpenCode session).
 Usage:
   python scripts/e2e_l3_thinking_dead_loop.py
   THINKING_DEAD_LOOP_SKILL=/path/to/SKILL.md python scripts/e2e_l3_thinking_dead_loop.py
+
+Default skill (when env unset):
+  <repo>/agent_fault_injection/fault_inject/skills/thinking-dead-loop/SKILL.md
 """
 from __future__ import annotations
 
@@ -19,11 +22,17 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DEFAULT_SKILL = Path(
-    "/home/iceory/work/agent-reliability/fault_inject_skills/thinking_dead_loop/SKILL.md"
+DEFAULT_SKILL = (
+    REPO_ROOT
+    / "agent_fault_injection"
+    / "fault_inject"
+    / "skills"
+    / "thinking-dead-loop"
+    / "SKILL.md"
 )
 
 

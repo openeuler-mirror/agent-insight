@@ -2,10 +2,21 @@
 # Smoke: bun:ffi → ras_runtime.call without LD_PRELOAD (RTLD_GLOBAL in bridge).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LIB="${RAS_LIBPYTHON:-/home/iceory/miniconda3/lib/libpython3.13.so}"
+
+if [[ -z "${RAS_LIBPYTHON:-}" ]]; then
+  echo "RAS_LIBPYTHON is required (path to shared libpython, e.g. libpython3.X.so)" >&2
+  echo "Also set PYTHONHOME to the Python prefix if needed." >&2
+  exit 1
+fi
+if [[ -z "${PYTHONHOME:-}" ]]; then
+  echo "PYTHONHOME is required (Python prefix directory)" >&2
+  exit 1
+fi
+
+LIB="$RAS_LIBPYTHON"
 # Explicitly clear preload to prove bridge does not need it.
 unset LD_PRELOAD || true
-export PYTHONHOME="${PYTHONHOME:-/home/iceory/miniconda3}"
+export PYTHONHOME
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export AGENT_RAS_ROOT="$ROOT"
 export RAS_LIBPYTHON="$LIB"
