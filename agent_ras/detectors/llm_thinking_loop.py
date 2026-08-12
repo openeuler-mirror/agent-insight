@@ -818,6 +818,7 @@ def _build_llm_thinking_loop_detector(
     return LlmThinkingLoopDetector(cfg, agents=agents)
 
 
+from catalog.presentations_data import PRESENTATION_LLM_THINKING_LOOP  # noqa: E402
 from detectors.types import DetectorPlugin  # noqa: E402
 
 DETECTOR_PLUGIN = DetectorPlugin(
@@ -832,4 +833,5 @@ DETECTOR_PLUGIN = DetectorPlugin(
     detection_skill="llm-loop-detection",
     anchor="llm",
     priority=20,
+    presentation=PRESENTATION_LLM_THINKING_LOOP,
 )

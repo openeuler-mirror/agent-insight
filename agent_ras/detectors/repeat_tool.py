@@ -551,6 +551,7 @@ def _build_repeat_tool_detector(
     return RepeatToolCallDetector(cfg)
 
 
+from catalog.presentations_data import PRESENTATION_REPEAT_TOOL  # noqa: E402
 from detectors.types import DetectorPlugin  # noqa: E402
 
 DETECTOR_PLUGIN = DetectorPlugin(
@@ -565,4 +566,5 @@ DETECTOR_PLUGIN = DetectorPlugin(
     detection_skill=None,
     anchor="tool",
     priority=10,
+    presentation=PRESENTATION_REPEAT_TOOL,
 )

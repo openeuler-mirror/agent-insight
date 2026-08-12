@@ -15,6 +15,44 @@ Anchor = Literal["llm", "tool"]
 
 
 @dataclass(frozen=True)
+class PromptPresentation:
+    key: str
+    role: Literal["steering", "notice", "critical"]
+    severity_band: str | None = None
+    label: Mapping[str, str] | None = None
+    template_zh: str | None = None
+    template_en: str | None = None
+
+
+@dataclass(frozen=True)
+class SubmodePresentation:
+    """UI row for one sub-mode; ``runtime_keys`` maps to anomaly.evidence."""
+
+    id: str
+    parent_id: str
+    parent: Mapping[str, str]
+    sub_mode: Mapping[str, str]
+    anomaly_kind: str
+    detection_level: Literal["L1", "L2", "L3"] | None
+    severities: Sequence[str]
+    detects: Mapping[str, str]
+    recovery_summary: Mapping[str, str]
+    recovery_actions: Sequence[str]
+    runtime_keys: Mapping[str, str] = field(default_factory=dict)
+    prompts: Sequence[PromptPresentation] = ()
+    primary_faults: Sequence[str] = ()
+
+
+@dataclass(frozen=True)
+class DomainPresentation:
+    """Optional Insight UI metadata attached to ``DetectorPlugin``."""
+
+    order: int = 100
+    label: Mapping[str, str] | None = None
+    submodes: Sequence[SubmodePresentation] = ()
+
+
+@dataclass(frozen=True)
 class DetectorPlugin:
     """Detection-side domain registration (lives under ``detectors/``)."""
 
@@ -29,6 +67,7 @@ class DetectorPlugin:
     anchor: Anchor | None = None
     # Lower runs first in the member detector list (first-hit dispatch).
     priority: int = 100
+    presentation: DomainPresentation | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +94,9 @@ class RecoveryPlugin:
 __all__ = [
     "Anchor",
     "DetectorPlugin",
+    "DomainPresentation",
+    "PromptPresentation",
     "RecoveryPlugin",
     "ReviewPlugin",
+    "SubmodePresentation",
 ]
