@@ -14,7 +14,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；列表由服务端过滤、排序和数据库分页，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集（不含 RAS 徽章；可靠性见 `/agent-ras/*`） |
 | `/(main)/agent-ras/trace` | `AgentRasTracePage` (`(main)/agent-ras/trace/page.tsx`) | 可靠性观测：故障等级汇总 + Trace 列表（左连接 RAS） |
 | `/(main)/agent-ras/trace/[taskId]` | `AgentRasTraceDetailPage` (`(main)/agent-ras/trace/[taskId]/page.tsx`) | 可靠性详情：`RasAnomalyStrip`（可折叠摘要条 + 单故障单行）+ 复用 `AgentTraceView`（叠 marker；点选行 `focusRasMarkerId` 联动） |
-| `/(main)/agent-ras/fault-modes` | `AgentRasFaultModesPage` (`(main)/agent-ras/fault-modes/page.tsx`) | 能力目录 + 平台配置双视图（`?view=configure`）；配置对齐 `AgentRASConfig`，可选同步 OpenCode |
+| `/(main)/agent-ras/fault-modes` | `AgentRasFaultModesPage` (`(main)/agent-ras/fault-modes/page.tsx`) | 能力目录 + 平台配置双视图（`?view=configure`）；目录/表单消费 `GET /api/agent-ras/catalog`；配置对齐 `AgentRASConfig`，可选同步 OpenCode |
 | `/(main)/agent-ras/fault-injection` | redirect → `/tasks`（与侧栏入口对齐） | — |
 | `/(main)/agent-ras/fault-injection/faults` | 故障目录（子模式拆行 + HelpTip + Skill 对话框）；经标题右上角「故障目录」进入 | BFF `/api/fault-injection/faults`（`resolve_fault_submodes`） |
 | `/(main)/agent-ras/fault-injection/tasks` | 任务列表（侧栏默认入口；表内工具栏/行级图标操作/轮询） | `GET/POST /api/fault-injection/tasks` |

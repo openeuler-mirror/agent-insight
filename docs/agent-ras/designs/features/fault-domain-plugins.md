@@ -119,34 +119,36 @@ RECOVERY_PLUGIN = RecoveryPlugin(
 
 ## 5. 新增故障模式：改哪些文件？
 
-### 5.1 目标态（P2 完成后）：只新增
+### 5.1 目标态：只新增（+ 改参数模板）
 
-| 能力 | 新增文件 |
-|------|----------|
-| 检测 | `detectors/my_domain.py` |
-| 检测 skill（可选） | `detectors/skills/<id>/SKILL.md` |
-| 评审（可选） | `review/my_domain.py` |
-| 评审 skill（可选） | `review/skills/<id>/SKILL.md` |
-| 恢复策略 + 文案（可选） | **仅** `recovery/my_domain.py`（两者同文件） |
+| 能力 | 文件 |
+|------|------|
+| 检测 | **新增** `detectors/my_domain.py`（含 `DETECTOR_PLUGIN` + `presentation` + `config_model`） |
+| 检测 skill（可选） | **新增** `detectors/skills/<id>/SKILL.md` |
+| 评审（可选） | **新增** `review/my_domain.py` |
+| 评审 skill（可选） | **新增** `review/skills/<id>/SKILL.md` |
+| 恢复策略 + 文案（可选） | **新增** `recovery/my_domain.py` |
+| **默认参数（唯一共用可改）** | **修改** `agent_ras/config/agent_ras_config.default.yaml` 的 `detectors.<id>` |
 | 设计/单测（建议） | `docs/agent-ras/designs/features/...`、测试文件 |
+
+Insight 能力目录与配置面板由 `presentation` + `config_model` schema **自动发现**（见 [capability-catalog-decouple.md](capability-catalog-decouple.md)），**不要**再改 `fault-mode-catalog.ts` / 配置 Panel / `normalize` kind 白名单 / `inproc.example`。
 
 ### 5.2 除上表外，还要改框架吗？
 
 **一般不用。** Loader 扫描后自动注册。下列**不要**再改：
 
-- `detectors/registry.py` / `loader.py` / `types.py`
+- `detectors/registry.py` / `loader.py` / `types.py`（除非扩展 PLUGIN 契约本身）
 - `core/config.py` 静态域字段、`core/models.py` AnomalyKind 枚举
 - `recovery/engine.py` 默认 overrides、`robustness_prompt.py` 大字典
 - `agents/base.py` 的 skill 手账
 - `session_hub` / `monitor` / `operations` 的 kind 字面量表
+- Insight 故障模式 UI / 宿主配置面板（已解耦）
 
 **例外（非本方案常规扩展）**
 
 | 情况 | 是否要改框架 |
 |------|----------------|
 | 需要**新的 wire 动作类型** | 要（另立项；本方案非目标） |
-| Insight 故障模式 UI / catalog 展示 | 要（本阶段明确不做自动发现） |
-| 宿主能力配置面板新表单项 | 要（Insight 侧） |
 
 建议仍补：设计文档登记 + 单测（算「新增」，不是改框架）。
 
