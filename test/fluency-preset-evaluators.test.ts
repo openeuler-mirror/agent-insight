@@ -165,16 +165,6 @@ describe('流畅度预置评估器', () => {
     assert.equal(naturalnessPoint?.score, 78);
   });
 
-  it('族内 judge 通道固定传 temperature 0 + maxTokens 8192（S1/S4，不影响其他评估器）', async () => {
-    let captured: { modelOptions?: Record<string, unknown> } = {};
-    setJudgeLlmCallerForTest(async (_user, request) => {
-      captured = request;
-      return JSON.stringify({ issues: [] });
-    });
-    await runFluencyPreset('preset-fluency-text', 'u', fluencyContext('示例文本。'));
-    assert.deepEqual(captured.modelOptions, { temperature: 0, maxTokens: 8192 });
-  });
-
   it('空文本：跳过评估，不调用 judge，100 分（用例 7）', async () => {
     let called = false;
     setJudgeLlmCallerForTest(async () => {

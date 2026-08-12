@@ -9,7 +9,7 @@ function parseJsonObject(candidate: string): Record<string, unknown> | null {
     }
 }
 
-function repairUnescapedQuotesInJsonStrings(candidate: string): string {
+export function repairUnescapedQuotesInJsonStrings(candidate: string): string {
     let repaired = '';
     let inString = false;
     let escaped = false;

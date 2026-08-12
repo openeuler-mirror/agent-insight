@@ -3,12 +3,13 @@
  * 不改动其他评估器共用的 specialized-evaluator-common）。
  *
  * 与共享通道的唯一差异：judge 输出 JSON 解析失败时先自动修复再走严格 schema——
- * ① 字符串内裸引号/裸换行转义（内联自 task-completion-json 的修复器，保持族内自包含）；
+ * ① 字符串内裸引号/裸换行转义（复用 task-completion-json 导出的修复器）；
  * ② 截断补全（max_tokens 打满 / 流中断导致输出中途切断时，回退到最近完整结构边界）。
  * 修复产物仍受 zod 严格校验，不兜底默认档。
  */
 import { z } from 'zod';
 import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
+import { repairUnescapedQuotesInJsonStrings } from '@/lib/engine/evaluation/task-completion-json';
 
 export interface TextPresetJudgePrompt {
   stage?: string;
@@ -24,69 +25,7 @@ function tryParseJson(text: string): unknown | null {
   }
 }
 
-/** 转义 JSON 字符串内的裸引号与裸换行（同 task-completion-json 的修复器）。 */
-function repairUnescapedQuotesInJsonStrings(candidate: string): string {
-  let repaired = '';
-  let inString = false;
-  let escaped = false;
-
-  for (let index = 0; index < candidate.length; index += 1) {
-    const char = candidate[index];
-
-    if (!inString) {
-      if (char === '"') inString = true;
-      repaired += char;
-      continue;
-    }
-
-    if (escaped) {
-      repaired += char;
-      escaped = false;
-      continue;
-    }
-
-    if (char === '\\') {
-      repaired += char;
-      escaped = true;
-      continue;
-    }
-
-    if (char === '"') {
-      let lookahead = index + 1;
-      while (lookahead < candidate.length && /\s/.test(candidate[lookahead])) {
-        lookahead += 1;
-      }
-      const next = candidate[lookahead] || '';
-      if (next === ':' || next === ',' || next === '}' || next === ']') {
-        inString = false;
-        repaired += char;
-      } else {
-        repaired += '\\"';
-      }
-      continue;
-    }
-
-    if (char === '\n') {
-      repaired += '\\n';
-      continue;
-    }
-    if (char === '\r') {
-      repaired += '\\r';
-      continue;
-    }
-    if (char === '\t') {
-      repaired += '\\t';
-      continue;
-    }
-
-    repaired += char;
-  }
-
-  return repaired;
-}
-
-/**
- * 截断修复：输出中途被切断时，扫描定位最近的结构完整边界（字符串闭合 / 逗号 /
+/** 截断修复：输出中途被切断时，扫描定位最近的结构完整边界（字符串闭合 / 逗号 /
  * 括号），从该处截断并补全未闭合括号。仅当原始片段足够长（≥24 字符）且截断点后
  * 仍有字段时才尝试，避免把零碎垃圾静默成「无问题」输出；产物仍走严格 schema 校验。
  */
@@ -167,9 +106,7 @@ function extractAndValidateJudgeOutput<T>(rawText: string, schema: z.ZodType<T>)
   return result.data;
 }
 
-/** 族内 Judge 调用：callJudgeLlm → 自动修复解析 → 严格 schema 校验。
- *  固定传 temperature 0（判定确定性化，压严重度/条数波动）+ maxTokens 8192（防长输出截断）；
- *  仅本族评估器使用，其他评估器不传 modelOptions，行为不变。 */
+/** 族内 Judge 调用：callJudgeLlm → 自动修复解析 → 严格 schema 校验。 */
 export async function invokeTextPresetJudge<T>(
   user: string,
   prompt: TextPresetJudgePrompt,
@@ -180,7 +117,6 @@ export async function invokeTextPresetJudge<T>(
     system: prompt.system,
     user: prompt.user,
     sessionTitle: `exp-judge-${prompt.stage ?? 'text'}`,
-    modelOptions: { temperature: 0, maxTokens: 8192 },
   });
   return extractAndValidateJudgeOutput(rawText, schema);
 }
