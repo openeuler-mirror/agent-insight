@@ -58,7 +58,7 @@ fi
 
 echo "==> Setup finished. Worker runs in the background; you can close this terminal."
 echo "    If a Worker was previously started with another API key, this run restarts it with the new key."
-echo "    Refresh /agent-ras/fault-injection/tasks/new to confirm Worker is online."
+echo "    Refresh /experiments/new (reliability dataset) or Worker health to confirm Worker is online."
 `
 
   return new NextResponse(script, {

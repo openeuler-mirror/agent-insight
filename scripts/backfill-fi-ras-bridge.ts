@@ -7,6 +7,6 @@
  */
 console.error(
   'backfill-fi-ras-bridge is retired: FI→RasAnomalyEvent bridge was removed. ' +
-    'Use /agent-ras/fault-injection runs for injection evidence; fix trajectory reporting if a run is missing from reliability observation.',
+    'Use experiment reliability results and FI Worker runs for injection evidence; fix trajectory reporting if a run is missing from reliability observation.',
 )
 process.exit(1)

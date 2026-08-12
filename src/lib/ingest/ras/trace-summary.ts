@@ -1,6 +1,6 @@
 /**
  * OpenCode (and similar agents) often prepend mode directives as the first
- * "user" message. Those must not become the /agent-ras/trace list summary,
+ * "user" message. Those must not become the /trace list summary,
  * or FI runs like thinking-dead-loop look like unrelated search sessions.
  */
 const MODE_PREAMBLE_RE = /^\s*\[(?:search|analyze|plan|build|implement)-mode\]/i

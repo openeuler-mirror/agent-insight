@@ -1,7 +1,7 @@
 /**
  * FI collect must not mint reliability Execution (Insight ⓪ owns daily Trace).
- * Frontend still shows RAS on /agent-ras/trace and RAS+FI on FI Run pages via
- * ras-events / markersJson — this test only gates Execution synthesis.
+ * Frontend shows RAS on /trace and reliability details via ras-events / markers —
+ * this test only gates Execution synthesis.
  */
 import assert from 'node:assert/strict'
 import { describe, it, after, before } from 'node:test'
