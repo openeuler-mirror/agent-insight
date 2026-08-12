@@ -9,6 +9,7 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
+import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -65,6 +66,7 @@ export async function GET(request: Request) {
 
 function generateBashScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const packageSpec = getAgentInsightClientPackageSpec();
     const script = `#!/bin/bash
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
@@ -73,7 +75,10 @@ function generateBashScript(baseUrl: string, hostParam: string, apiKey: string):
 AGENT_INSIGHT_HOST="${hostParam}"
 AGENT_INSIGHT_BASE_URL="${baseUrl}"
 AGENT_INSIGHT_API_KEY="${apiKey}"
+AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
+
+${getAgentInsightRasBashInstaller()}
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -501,6 +506,12 @@ echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG
 echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
+
+# 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
+if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ]; then
+    echo "🛡️  Installing Agent RAS runtime..."
+    install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
+fi
 
 # 6.35 Install Qoder CN product-family collectors
 if [ "$INSTALL_QODER" = "true" ]; then
@@ -1264,6 +1275,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
+        '',
+        '# 6.34 Agent RAS (Windows host): inproc requires Linux/macOS; use WSL on Windows',
+        'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW) {',
+        '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
+        '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
+        '}',
         '',
         '# 6.35 Install Qoder CN product-family collectors',
         'if ($INSTALL_QODER) {',

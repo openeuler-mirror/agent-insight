@@ -85,6 +85,66 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   assert.deepEqual(detail.results, []);
 });
 
+test('experiments API: reliability FI fields stay off evaluatorContextJson', async (t) => {
+  const user = `exp-fi-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+
+  const createRes = await createExperiment(postReq({
+    user,
+    name: '可靠性 FI 分离',
+    agentName: 'fi-agent',
+    cases: [
+      {
+        input: 'inject me',
+        faultInjectionType: 'analysis-paralysis',
+        values: { fault_injection_type: 'analysis-paralysis', scene: 'e2e' },
+      },
+      {
+        input: 'with tools + fi',
+        faultInjectionType: 'tool-failure',
+        evaluatorContext: {
+          schemaVersion: 1,
+          availableTools: [{ name: 'bash' }],
+        },
+      },
+    ],
+    evaluatorIds: ['preset-ras-reliability'],
+  }));
+  assert.equal(createRes.status, 200);
+  const { id } = await createRes.json();
+
+  const rows = await prisma.experimentCase.findMany({
+    where: { experimentId: id },
+    orderBy: { createdAt: 'asc' },
+  });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].faultInjectionType, 'analysis-paralysis');
+  assert.equal(rows[0].evaluatorContextJson, null);
+  assert.match(String(rows[0].caseValuesJson), /analysis-paralysis/);
+  assert.equal(rows[1].faultInjectionType, 'tool-failure');
+  assert.deepEqual(JSON.parse(String(rows[1].evaluatorContextJson)), {
+    schemaVersion: 1,
+    availableTools: [{ name: 'bash' }],
+  });
+
+  const detailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${id}?user=${user}`),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.equal(detail.cases[0].faultInjectionType, 'analysis-paralysis');
+  assert.equal(detail.cases[0].evaluatorContext, null);
+  assert.equal(detail.cases[0].evaluatorContextError, null);
+  assert.equal(detail.cases[1].faultInjectionType, 'tool-failure');
+  assert.deepEqual(detail.cases[1].evaluatorContext, {
+    schemaVersion: 1,
+    availableTools: [{ name: 'bash' }],
+  });
+});
+
 test('experiments API: POST validation rejects empty payloads', async () => {
   const noName = await createExperiment(postReq({
     user: TEST_USER, name: '', agentName: 'a',

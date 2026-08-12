@@ -19,6 +19,9 @@ interface CaseInput {
   actualOutput?: string;
   referenceOutput?: string | null;
   evaluatorContext?: unknown;
+  /** IF-M02：可靠性 case 的故障模式 id，落盘到 ExperimentCase.faultInjectionType */
+  faultInjectionType?: string;
+  values?: Record<string, unknown>;
 }
 
 export async function GET(req: Request) {
@@ -99,12 +102,35 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
 
-    let normalizedCases: Array<CaseInput & { evaluatorContextJson: string | null }>;
+    let normalizedCases: Array<Omit<CaseInput, 'faultInjectionType'> & {
+      evaluatorContextJson: string | null
+      faultInjectionType: string | null
+      caseValuesJson: string | null
+    }>;
     try {
-      normalizedCases = cases.map((item) => ({
-        ...item,
-        evaluatorContextJson: serializeEvaluatorCaseContext(item.evaluatorContext),
-      }));
+      normalizedCases = cases.map((item) => {
+        const evaluatorContextJson = serializeEvaluatorCaseContext(item.evaluatorContext);
+        const fault =
+          (typeof item.faultInjectionType === 'string' && item.faultInjectionType.trim()) ||
+          (typeof item.values?.fault_injection_type === 'string'
+            ? String(item.values.fault_injection_type).trim()
+            : '') ||
+          null;
+        const caseValuesJson =
+          item.values && typeof item.values === 'object'
+            ? JSON.stringify({
+                ...item.values,
+                ...(fault ? { fault_injection_type: fault } : {}),
+              })
+            : null;
+        const { faultInjectionType: _ignoredFault, ...rest } = item;
+        return {
+          ...rest,
+          evaluatorContextJson,
+          faultInjectionType: fault,
+          caseValuesJson,
+        };
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'invalid evaluatorContext';
       return NextResponse.json(
@@ -134,6 +160,8 @@ export async function POST(req: Request) {
                 ? String(c.referenceOutput)
                 : null,
             evaluatorContextJson: c.evaluatorContextJson,
+            faultInjectionType: c.faultInjectionType,
+            caseValuesJson: c.caseValuesJson,
           })),
         },
       },

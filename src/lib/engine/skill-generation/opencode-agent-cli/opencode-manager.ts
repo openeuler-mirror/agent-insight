@@ -472,7 +472,7 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
   const fallback: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     provider: {
-      deepseek: { options: {}, models: { 'deepseek-reasoner': {}, 'deepseek-chat': {} } },
+      deepseek: { options: {}, models: { 'deepseek-v4-flash': {}, 'deepseek-v4-pro': {} } },
     },
     plugin: [],
     permission: OPENCODE_CONFIG_PERMISSION,

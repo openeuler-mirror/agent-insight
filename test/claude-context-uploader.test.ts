@@ -870,14 +870,24 @@ test("uploader: --enqueue 子进程不等待网络,detached worker 每轮上传�
   await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve))
   const address = server.address()
   assert.ok(address && typeof address === "object")
+  const mockHost = `http://127.0.0.1:${address.port}`
   fs.writeFileSync(path.join(insightDir, ".env"), [
-    `AGENT_INSIGHT_HOST=http://127.0.0.1:${address.port}`,
+    `AGENT_INSIGHT_HOST=${mockHost}`,
     "AGENT_INSIGHT_API_KEY=test-key",
     `AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:${rawDir}`,
   ].join("\n") + "\n", "utf8")
 
   const script = path.join(process.cwd(), "scripts", "claude_context_uploader.js")
-  const childEnv = { ...process.env, HOME: dir, USERPROFILE: dir }
+  // conf() 优先读 process.env；本地/CI 常已注入 AGENT_INSIGHT_HOST（如 localhost:3000），
+  // 若不在 childEnv 覆盖，detached worker 会打到真实服务而测试 mock server 收不到请求。
+  const childEnv = {
+    ...process.env,
+    HOME: dir,
+    USERPROFILE: dir,
+    AGENT_INSIGHT_HOST: mockHost,
+    AGENT_INSIGHT_API_KEY: "test-key",
+    AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES: `file:${rawDir}`,
+  }
   const hookPayload = { session_id: SESSION, transcript_path: transcript, hook_event_name: "Stop" }
 
   // 服务端故意不响应;若 --enqueue 仍同步等网络,这个子进程就不会先退出。

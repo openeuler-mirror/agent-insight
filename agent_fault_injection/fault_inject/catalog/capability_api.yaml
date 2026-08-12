@@ -1,0 +1,34 @@
+# L2 injection capability surface (closed set).
+# Fault modes (skills/*/fault.json) may only reference methods/ops listed here.
+# Evolving this file is an infrastructure change (lane B), not a fault-mode PR (lane A).
+version: "1"
+
+injection_methods:
+  skill_inject:
+    label_zh: Skill 注入
+  file_tamper:
+    label_zh: 文件篡改
+  prompt_modify:
+    label_zh: 提示词修改
+  tool_result_tamper:
+    label_zh: 工具结果篡改
+  intercept_rewrite:
+    label_zh: 拦截改写
+
+structural_ops:
+  - file.write
+  - file.delete
+  - file.delete_section
+  - file.truncate
+  - file.replace_text
+
+runtime_ops:
+  - tool_result.replace_text
+  - tool_result.replace_all
+  - system.append
+  - system.replace_text
+  - messages.history.drop
+  - messages.inject
+  - assistant.replace_text
+  - assistant.truncate
+  - assistant.tool_call.replace_argument

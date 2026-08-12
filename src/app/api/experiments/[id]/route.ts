@@ -3,7 +3,10 @@
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
 import { NextResponse } from 'next/server';
 import type { ExperimentCase, ExperimentEvalResult } from '@prisma/client';
-import { parseStoredEvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
+import {
+  extractLegacyFiFromEvaluatorContextJson,
+  parseExperimentCaseEvaluatorContext,
+} from '@/lib/engine/experiment/case-fi-meta';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
@@ -129,7 +132,25 @@ export async function GET(
       breakdown,
       cases: pagedCases.map((c) => {
         const ex = c.taskId ? execFallback.get(c.taskId) : undefined;
-        const evaluatorContext = parseStoredEvaluatorCaseContext(c.evaluatorContextJson);
+        const evaluatorContext = parseExperimentCaseEvaluatorContext(c.evaluatorContextJson);
+        const legacyFi = extractLegacyFiFromEvaluatorContextJson(c.evaluatorContextJson);
+        const faultInjectionType =
+          (typeof c.faultInjectionType === 'string' && c.faultInjectionType.trim()) ||
+          legacyFi.faultInjectionType ||
+          null;
+        let caseValues: Record<string, unknown> | null = null;
+        if (c.caseValuesJson) {
+          try {
+            const parsed = JSON.parse(c.caseValuesJson) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              caseValues = parsed as Record<string, unknown>;
+            }
+          } catch {
+            caseValues = null;
+          }
+        } else if (legacyFi.values) {
+          caseValues = legacyFi.values;
+        }
         return {
           id: c.id,
           executionId: c.executionId,
@@ -137,6 +158,10 @@ export async function GET(
           input: c.input || ex?.query || '',
           actualOutput: c.actualOutput || ex?.finalResult || '',
           referenceOutput: c.referenceOutput,
+          faultInjectionType,
+          caseValues,
+          fiTaskId: c.fiTaskId || legacyFi.fiTaskId,
+          fiRunId: c.fiRunId || legacyFi.fiRunId,
           evaluatorContext: evaluatorContext.context,
           evaluatorContextError: evaluatorContext.error,
         };

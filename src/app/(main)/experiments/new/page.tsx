@@ -19,14 +19,21 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAuth } from '@/lib/auth/auth-context';
-import { apiFetch } from '@/lib/client/api';
+import { apiFetch, getApiUrl } from '@/lib/client/api';
 import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/engine/experiment/dataset-match';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
+import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 
 interface AgentOption { name: string; traces: number }
+interface PlatformOption { id: string; label: string }
+
+function defaultExperimentName(now = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `可靠性评测 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
 
 interface TraceItem {
   id: string;
@@ -54,14 +61,18 @@ interface SelectedCase {
   actualOutput: string;
   referenceOutput: string | null;
   evaluatorContext: EvaluatorCaseContext | null;
+  faultInjectionType?: string | null;
+  values?: Record<string, unknown>;
 }
 
 interface DatasetOption {
   id: string;
   name: string;
+  datasetKind?: string;
   targetAgent?: string;
   caseCount?: number;
   cases?: Array<{
+    id?: string;
     input?: string;
     expectedOutput?: string;
     values?: Record<string, unknown>;
@@ -271,9 +282,23 @@ export default function NewExperimentPage() {
   const [maxVisited, setMaxVisited] = useState(1);
 
   // ① 实验设计
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => defaultExperimentName());
   const [agentName, setAgentName] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [genPlatform, setGenPlatform] = useState('opencode');
+  const [genModel, setGenModel] = useState('');
+  const [fiPlatforms, setFiPlatforms] = useState<PlatformOption[]>([]);
+  const [fiAgents, setFiAgents] = useState<PlatformOption[]>([]);
+  const [fiModels, setFiModels] = useState<PlatformOption[]>([]);
+  const [fiInventoryHint, setFiInventoryHint] = useState('');
+  const [reliabilityCases, setReliabilityCases] = useState<SelectedCase[]>([]);
+  const [workerStatus, setWorkerStatus] = useState<'checking' | 'ok' | 'missing'>('checking');
+  const workerOk = workerStatus === 'ok';
+  const [fiSetupCmd, setFiSetupCmd] = useState('');
+  const [fiSetupCopied, setFiSetupCopied] = useState(false);
+  const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
   // 监听模式：开启后本实验绑定该 Agent，其新上报的 trace 自动进来评测（圈选已有 trace 变可选）
@@ -324,9 +349,47 @@ export default function NewExperimentPage() {
       .then((d) => setCustomEvaluators(Array.isArray(d) ? d : []))
       .catch(() => setCustomEvaluators([]));
     apiFetch(`/api/tags?user=${encodeURIComponent(user)}`)
-      .then((r) => r.ok ? r.json() : [])
+      .then((r) => (r.ok ? r.json() : []))
       .then((d) => setTraceTags(Array.isArray(d) ? d : []))
       .catch(() => setTraceTags([]));
+    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setWizardDatasets(Array.isArray(d) ? d : []))
+      .catch(() => setWizardDatasets([]));
+    apiFetch('/api/fault-injection/platforms', {
+      headers: (() => {
+        const apiKey = typeof window !== 'undefined' ? localStorage.getItem('api_key') || '' : '';
+        return apiKey ? { 'x-witty-api-key': apiKey } : undefined;
+      })(),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        const rows = Array.isArray(d?.platforms) ? d.platforms : [];
+        setFiPlatforms(
+          rows
+            .map((p: { id?: string; label?: string }) => ({
+              id: String(p.id || '').trim(),
+              label: String(p.label || p.id || '').trim(),
+            }))
+            .filter((p: PlatformOption) => p.id),
+        );
+      })
+      .catch(() => setFiPlatforms([]));
+    apiFetch('/api/reliability/fault-modes')
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((d) => {
+        const items = Array.isArray(d?.items) ? d.items : [];
+        const next = new Map<string, string>();
+        for (const item of items) {
+          const id = String(item?.id || '').trim();
+          if (!id) continue;
+          const name = String(item?.name || id).trim() || id;
+          const method = String(item?.injectionMethodLabel || item?.injection_method_label || '').trim();
+          next.set(id, method ? `${name} · ${method}` : name);
+        }
+        setFaultModeLabels(next);
+      })
+      .catch(() => setFaultModeLabels(new Map()));
   }, [user]);
 
   useEffect(() => {
@@ -644,11 +707,161 @@ export default function NewExperimentPage() {
     return () => window.clearTimeout(timer);
   }, [watchMode, allEvaluators]);
 
+  const selectedDataset = useMemo(
+    () => wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
+    [wizardDatasets, selectedDatasetId],
+  );
+  const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
+
+  useEffect(() => {
+    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('api_key') || '' : '';
+    if (typeof window !== 'undefined') {
+      const base = `${window.location.protocol}//${window.location.host}`;
+      const setupPath = getApiUrl('/api/fault-injection/setup');
+      const q = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
+      setFiSetupCmd(`curl -fsSL "${base}${setupPath}${q}" | bash`);
+    }
+    let cancelled = false;
+    const headers = apiKey ? { 'x-witty-api-key': apiKey } : undefined;
+    const poll = async () => {
+      try {
+        const res = await apiFetch('/api/fault-injection/health', { headers });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const ok = Boolean(data?.ok) && !Boolean(data?.needsWorker);
+        setWorkerStatus(ok ? 'ok' : 'missing');
+        if (!ok) {
+          setFiInventoryHint(String(data?.error || '本机需安装并启动 FI Worker'));
+        }
+      } catch {
+        if (!cancelled) {
+          setWorkerStatus('missing');
+          setFiInventoryHint('无法检查 FI Worker 状态');
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !genPlatform || !workerOk) {
+      if (!workerOk) {
+        setFiAgents([]);
+        setFiModels([{ id: '', label: '平台默认' }]);
+      }
+      return;
+    }
+    let cancelled = false;
+    setFiInventoryHint('');
+    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('api_key') || '' : '';
+    const fiHeaders = apiKey ? { 'x-witty-api-key': apiKey } : undefined;
+    Promise.all([
+      apiFetch(`/api/fault-injection/platforms/${encodeURIComponent(genPlatform)}/agents`, {
+        headers: fiHeaders,
+      }),
+      apiFetch(`/api/fault-injection/platforms/${encodeURIComponent(genPlatform)}/models`, {
+        headers: fiHeaders,
+      }),
+    ])
+      .then(async ([agentsRes, modelsRes]) => {
+        const agentsJson = await agentsRes.json().catch(() => ({}));
+        const modelsJson = await modelsRes.json().catch(() => ({}));
+        if (cancelled) return;
+        const nextAgents: PlatformOption[] = Array.isArray(agentsJson?.agents)
+          ? agentsJson.agents
+              .map((a: { id?: string; label?: string }) => ({
+                id: String(a.id || '').trim(),
+                label: String(a.label || a.id || '').trim(),
+              }))
+              .filter((a: PlatformOption) => a.id)
+              .filter((a: PlatformOption) => a.id !== 'ras-judge')
+          : [];
+        const nextModels: PlatformOption[] = Array.isArray(modelsJson?.models)
+          ? modelsJson.models
+              .map((m: { id?: string; label?: string }) => ({
+                id: String(m.id || '').trim(),
+                label: String(m.label || m.id || '平台默认').trim(),
+              }))
+          : [{ id: '', label: '平台默认' }];
+        setFiAgents(nextAgents);
+        setFiModels(nextModels.length ? nextModels : [{ id: '', label: '平台默认' }]);
+        if (!agentsRes.ok) {
+          setFiInventoryHint(String(agentsJson?.error || '无法从 FI Worker 获取 Agent 列表'));
+          setWorkerStatus('missing');
+        }
+        setAgentName((prev) => {
+          if (prev && nextAgents.some((a) => a.id === prev)) return prev;
+          if (prev && !isReliabilityDataset && agents.some((a) => a.name === prev)) return prev;
+          return nextAgents[0]?.id || prev || '';
+        });
+        setGenModel((prev) => {
+          if (nextModels.some((m) => m.id === prev)) return prev;
+          return '';
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFiAgents([]);
+        setFiModels([{ id: '', label: '平台默认' }]);
+        setFiInventoryHint('无法从 FI Worker 获取平台 inventory');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [genPlatform, user, workerOk, isReliabilityDataset, agents]);
+
+  useEffect(() => {
+    if (!isReliabilityDataset) {
+      setReliabilityCases([]);
+      return;
+    }
+    setWatchMode(false);
+    setSelectedEvaluators(new Set(['preset-ras-reliability']));
+    const cases = selectedDataset?.cases || [];
+    const pool: SelectedCase[] = cases.map((item) => {
+      const fault = String(item.values?.fault_injection_type || '').trim();
+      const key = String(item.id || `${fault}:${item.input || ''}`);
+      return {
+        executionId: key,
+        taskId: null,
+        input: String(item.input || ''),
+        actualOutput: '',
+        referenceOutput: item.expectedOutput != null ? String(item.expectedOutput) : null,
+        evaluatorContext: null,
+        faultInjectionType: fault || null,
+        values: {
+          ...(item.values || {}),
+          ...(fault ? { fault_injection_type: fault } : {}),
+        },
+      };
+    });
+    setReliabilityCases(pool);
+    const next = new Map<string, SelectedCase>();
+    for (const item of pool) next.set(item.executionId, item);
+    setSelected(next);
+  }, [isReliabilityDataset, selectedDatasetId, selectedDataset]);
+
   const submit = async () => {
+
     if (!user || submitting) return;
     setSubmitting(true);
     setSubmitError('');
     try {
+      const casesPayload = selectedList.map((c) => ({
+        executionId: isReliabilityDataset ? undefined : c.executionId,
+        taskId: c.taskId || undefined,
+        input: c.input,
+        actualOutput: c.actualOutput,
+        referenceOutput: c.referenceOutput,
+        evaluatorContext: c.evaluatorContext,
+        faultInjectionType: c.faultInjectionType || undefined,
+        values: c.values,
+      }));
       const res = await apiFetch('/api/experiments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -656,8 +869,8 @@ export default function NewExperimentPage() {
           user,
           name,
           agentName,
-          watchMode,
-          cases: selectedList,
+          watchMode: isReliabilityDataset ? false : watchMode,
+          cases: casesPayload,
           evaluatorIds: Array.from(selectedEvaluators),
         }),
       });
@@ -665,9 +878,27 @@ export default function NewExperimentPage() {
       if (!res.ok) throw new Error(String(data?.error || '创建实验失败'));
       // 「开始实验」= 创建后立即真跑评估器；详情页落地即 running 状态并自动轮询进度。
       // run 触发失败不阻塞跳转——详情页仍可手动「开始执行」兜底。
-      await apiFetch(`/api/experiments/${encodeURIComponent(data.id)}/run?user=${encodeURIComponent(user)}`, {
+      const runBody = isReliabilityDataset
+        ? {
+            fiOrchestrate: true,
+            traceSource: 'generate',
+            generateTrace: {
+              platform: genPlatform,
+              agent: agentName,
+              model: genModel || null,
+              timeoutSeconds: 180,
+            },
+          }
+        : {};
+      const runRes = await apiFetch(`/api/experiments/${encodeURIComponent(data.id)}/run?user=${encodeURIComponent(user)}`, {
         method: 'POST',
-      }).catch(() => { /* 忽略：详情页兜底 */ });
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(runBody),
+      }).catch(() => null);
+      if (runRes && !runRes.ok) {
+        const err = await runRes.json().catch(() => ({}));
+        throw new Error(String(err?.error || err?.code || '启动实验失败'));
+      }
       router.push(`/experiments/${data.id}`);
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : '创建实验失败');
@@ -675,15 +906,19 @@ export default function NewExperimentPage() {
     }
   };
 
-  const step1Valid = name.trim() !== '' && agentName !== '';
+  const step1Ok = isReliabilityDataset
+    ? name.trim() !== '' && !!selectedDatasetId && workerOk && agentName !== ''
+    : name.trim() !== '' && agentName !== '' && !!selectedDatasetId;
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
-  const step2Valid = watchMode || selected.size >= 1;
+  const step2Valid = isReliabilityDataset
+    ? selected.size >= 1
+    : (watchMode || selected.size >= 1);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const stepSummaries = [
-    `${name.trim() || '未命名'} · 单组`,
-    `已选 ${selected.size} 条 trace`,
-    `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
+    `${name.trim() || '未命名'} · ${selectedDataset?.name || '未选数据集'}`,
+    isReliabilityDataset ? `生成 Trace · ${selected.size} case` : `已选 ${selected.size} 条 trace`,
+    isReliabilityDataset ? '可靠性 case 预期已从数据集带入' : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
     `已选 ${selectedEvaluators.size} 个`,
   ];
 
@@ -744,27 +979,168 @@ export default function NewExperimentPage() {
                   />
                 </div>
                 <div>
-                  <label style={FIELDLBL}>待评测 Agent</label>
+                  <label style={FIELDLBL}>评测数据集</label>
                   <select
                     style={{ ...INPUT, cursor: 'pointer' }}
-                    value={agentName}
+                    value={selectedDatasetId}
                     onChange={(e) => {
-                      setAgentName(e.target.value);
-                      // 换 Agent 意味换 trace 池，已圈选 case 一并作废
+                      const nextId = e.target.value;
+                      setSelectedDatasetId(nextId);
                       setSelected(new Map());
-                      setPage(1);
                     }}
                   >
-                    <option value="">请选择 Agent…</option>
-                    {agents.map((a) => (
-                      <option key={a.name} value={a.name}>{a.name}（{a.traces} 条 trace）</option>
+                    <option value="">请选择数据集…</option>
+                    {wizardDatasets.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}{d.datasetKind === 'reliability' ? ' · 可靠性' : ''}（{d.cases?.length ?? d.caseCount ?? 0}）
+                      </option>
                     ))}
                   </select>
                   <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
-                    实验所评测的对象——trace 圈选与评估都作用于它
+                    可靠性数据集将仅支持「生成 Trace」，并锁定可靠性评估器
                   </div>
                 </div>
               </div>
+
+              <div style={{ marginBottom: 16 }}>
+                  {workerStatus === 'missing' && (
+                    <div style={{
+                      border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 12,
+                      background: 'var(--background-secondary)',
+                    }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>需要安装 FI Worker</div>
+                      <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 10, lineHeight: 1.5 }}>
+                        本机需安装并启动 FI Worker，API Key 须与当前登录账号一致。安装完成后本页会自动刷新状态。可靠性评测需要 Worker；普通实验也可先用历史 Agent。
+                      </div>
+                      <div style={{
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        fontSize: 11, padding: '10px 12px', borderRadius: 8,
+                        border: '1px solid var(--border)', background: 'var(--card-bg)',
+                        wordBreak: 'break-all', marginBottom: 8,
+                      }}>
+                        {fiSetupCmd || '正在生成安装命令…'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          style={BTN_GHOST}
+                          disabled={!fiSetupCmd}
+                          onClick={async () => {
+                            if (!fiSetupCmd) return;
+                            try {
+                              await navigator.clipboard.writeText(fiSetupCmd);
+                              setFiSetupCopied(true);
+                              window.setTimeout(() => setFiSetupCopied(false), 1500);
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                        >
+                          {fiSetupCopied ? '已复制' : '复制命令'}
+                        </button>
+                        <span style={{ fontSize: 11, color: 'var(--foreground-muted)', alignSelf: 'center' }}>
+                          每 2 秒自动检测 Worker…
+                        </span>
+                      </div>
+                      {fiInventoryHint && (
+                        <div style={{ fontSize: 11, color: 'var(--color-danger, #b91c1c)', marginTop: 8 }}>
+                          {fiInventoryHint}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                    <div>
+                      <label style={FIELDLBL}>平台</label>
+                      <select
+                        style={{ ...INPUT, cursor: workerOk ? 'pointer' : 'not-allowed', opacity: workerOk ? 1 : 0.6 }}
+                        value={genPlatform}
+                        disabled={!workerOk}
+                        onChange={(e) => {
+                          setGenPlatform(e.target.value);
+                          setAgentName('');
+                          setGenModel('');
+                        }}
+                      >
+                        {(fiPlatforms.length ? fiPlatforms : [
+                          { id: 'opencode', label: 'opencode' },
+                          { id: 'xiaoo', label: 'xiaoo' },
+                          { id: 'openjiuwen', label: 'openjiuwen' },
+                        ]).map((p) => (
+                          <option key={p.id} value={p.id}>{p.label || p.id}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={FIELDLBL}>待评测 Agent</label>
+                      {workerOk || isReliabilityDataset ? (
+                        <select
+                          style={{ ...INPUT, cursor: workerOk ? 'pointer' : 'not-allowed', opacity: workerOk ? 1 : 0.6 }}
+                          value={agentName}
+                          disabled={!workerOk}
+                          onChange={(e) => {
+                            setAgentName(e.target.value);
+                            setSelected(new Map());
+                            setPage(1);
+                          }}
+                        >
+                          <option value="">{fiAgents.length ? '请选择 Agent…' : '暂无可用 Agent'}</option>
+                          {fiAgents.map((a) => (
+                            <option key={a.id} value={a.id}>{a.label || a.id}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <>
+                          <select
+                            style={{ ...INPUT, cursor: 'pointer' }}
+                            value={agents.some((a) => a.name === agentName) || agentName === '' ? agentName : '__custom__'}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === '__custom__') {
+                                setAgentName('build');
+                              } else {
+                                setAgentName(v);
+                              }
+                              setSelected(new Map());
+                              setPage(1);
+                            }}
+                          >
+                            <option value="">请选择 Agent…</option>
+                            {agents.map((a) => (
+                              <option key={a.name} value={a.name}>{a.name}（{a.traces} 条 trace）</option>
+                            ))}
+                            <option value="__custom__">自定义 / FI Agent（如 build）</option>
+                          </select>
+                          {(!agents.some((a) => a.name === agentName) && agentName !== '') && (
+                            <input
+                              style={{ ...INPUT, marginTop: 8 }}
+                              value={agentName}
+                              placeholder="Agent 名，如 build"
+                              onChange={(e) => setAgentName(e.target.value)}
+                            />
+                          )}
+                        </>
+                      )}
+                    </div>
+                    <div>
+                      <label style={FIELDLBL}>模型</label>
+                      <select
+                        style={{ ...INPUT, cursor: workerOk ? 'pointer' : 'not-allowed', opacity: workerOk ? 1 : 0.6 }}
+                        value={genModel}
+                        disabled={!workerOk}
+                        onChange={(e) => setGenModel(e.target.value)}
+                      >
+                        {fiModels.map((m) => (
+                          <option key={m.id || '__default__'} value={m.id}>{m.label || m.id || '平台默认'}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 6 }}>
+                    Agent / 模型来自目标平台 FI Worker inventory；未选可靠性数据集时平台/模型不参与普通实验执行
+                  </div>
+                </div>
+
               <label style={FIELDLBL}>实验类型</label>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 <span style={{
@@ -788,12 +1164,92 @@ export default function NewExperimentPage() {
                   </span>
                 ))}
               </div>
-              {footer({ nextDisabled: !step1Valid })}
+              {footer({ nextDisabled: !step1Ok })}
             </div>
           </div>
         )}
 
-        {step === 2 && (
+        {step === 2 && isReliabilityDataset && (
+          <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>生成 Trace（可靠性）</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+                已禁用「选择 Trace」。将通过 FI Worker（{genPlatform} / {agentName || '—'}
+                {genModel ? ` / ${genModel}` : ''}）按所选 case 生成 Trace。
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case（{selected.size}/{reliabilityCases.length}）</div>
+                <span style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  style={BTN_GHOST}
+                  onClick={() => {
+                    const next = new Map<string, SelectedCase>();
+                    for (const item of reliabilityCases) next.set(item.executionId, item);
+                    setSelected(next);
+                  }}
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  style={BTN_GHOST}
+                  onClick={() => setSelected(new Map())}
+                >
+                  取消全选
+                </button>
+              </div>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', maxHeight: 360, overflowY: 'auto' }}>
+                {reliabilityCases.length === 0 ? (
+                  <div style={{ padding: 16, fontSize: 12, color: 'var(--foreground-muted)' }}>数据集暂无 case</div>
+                ) : (
+                  reliabilityCases.map((c) => (
+                    <label
+                      key={c.executionId}
+                      style={{
+                        display: 'flex',
+                        gap: 10,
+                        padding: '10px 12px',
+                        borderBottom: '1px solid var(--border)',
+                        cursor: 'pointer',
+                        background: selected.has(c.executionId) ? 'var(--primary-subtle)' : 'transparent',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.has(c.executionId)}
+                        onChange={() => {
+                          setSelected((prev) => {
+                            const next = new Map(prev);
+                            if (next.has(c.executionId)) next.delete(c.executionId);
+                            else next.set(c.executionId, c);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>
+                          {formatReliabilityFaultTypeFromCaseValues(c.values, {
+                            faultId: c.faultInjectionType,
+                          })
+                            || (c.faultInjectionType && faultModeLabels.get(c.faultInjectionType))
+                            || c.faultInjectionType
+                            || '未指定故障'}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {c.input || '（无输入）'}
+                        </div>
+                      </span>
+                    </label>
+                  ))
+                )}
+              </div>
+              {footer({ nextDisabled: !step2Valid, nextLabel: '下一步：预期答案 →' })}
+            </div>
+          </div>
+        )}
+
+        {step === 2 && !isReliabilityDataset && (
           <div style={PANEL}>
             <label style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', marginBottom: 12,
@@ -1310,10 +1766,14 @@ export default function NewExperimentPage() {
                 为本次实验挑选评估器（可多选）。依赖参考数据或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
-                {allEvaluators.map((card) => {
+                {allEvaluators
+                  .filter((card) => !isReliabilityDataset || card.id === 'preset-ras-reliability')
+                  .map((card) => {
                   const meta = getEvaluatorMeta(card);
                   // 监听模式的新 trace 没有逐条参考答案或 Tool/Skill 目录，带前置条件的评估器不可用。
-                  const gate = watchMode && meta.requires.length > 0
+                  const gate = isReliabilityDataset
+                    ? { usable: true, reason: '' }
+                    : watchMode && meta.requires.length > 0
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
                     : gateEvaluator(meta, gateCases);
                   const checked = selectedEvaluators.has(card.id);

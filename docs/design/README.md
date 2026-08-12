@@ -5,6 +5,7 @@
 
 > 说明:子目录里的设计文档**只描述设计意图,不记录实现进度**。「是否实现」这类执行状态统一在本清单跟踪。
 >
+> **Agent RAS** 相关设计见 [`docs/agent-ras/`](../agent-ras/README.md)（本表 RAS 行链接指向该处 designs/features 或 guides）；使用指南见 [`docs/agent-ras/guides/`](../agent-ras/guides/)。
 > 少数早期以 spike 形式记录的需求(如 jiuwenswarm-tracing、langfuse-style-trace-search)不按三阶段拆分,
 > 而是 `design.md` + `assets/` + 可选的 `index.html`(给人读的渲染版)。它们原先放在已废弃的 `docs/designs/`
 > 目录下,现已并入本目录统一索引。
@@ -28,6 +29,34 @@
 | 安全与创意预置评估器 | [build-in-evaluators](build-in-evaluators/) | 新增不敏感性、争议性、性别歧视性、创造性 4 个 LLM Judge 预置评估器，专项检测 Agent 输出文本的安全风险与创意质量 | Feature | 2026-07-26 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | [#160](https://gitcode.com/openeuler/opensource-intern/issues/160) |
 | JiuwenSwarm 接入追踪（OTEL seam） | [jiuwenswarm-tracing](jiuwenswarm-tracing/) | 把 agent-insight 接入 openJiuwen / JiuwenSwarm，通过 OTEL seam 端到端追踪一次执行；含持久化 span spool 与 token 归属边界记录 | Feature | 2026-06-13 | ✅ 已验证（spike 结论已落地，见 design.md status: validated） | —（待补） |
 | 链路追踪搜索/过滤改造（langfuse operator 模型） | [langfuse-style-trace-search](langfuse-style-trace-search/) | `/trace` 列表的搜索与过滤对齐 langfuse 的 operator 模型（搜索栏 + 左侧 facet 侧栏） | Feature | 2026-06-15 | 🟡 实现中（front-half 已落地：搜索栏 + facet 侧栏 + skill 接线） | —（待补） |
+| agent_ras 环内 runtime | [`../agent-ras/designs/architecture.md`](../agent-ras/designs/architecture.md) | 仓根 `agent_ras/` 同进程检测与恢复；旁路经 **`/api/ingest/ras-events`**（见 developer-guide） | Feature | 2026-07-25 | ✅ inproc 已实现 | 安装器 + 可靠性链路 + ingest API |
+| AgentRAS 可靠性独立页面 | [reliability-standalone-ui](reliability-standalone-ui/) | 独立导航「AgentRAS 可靠性」；可靠性追踪 + 故障模式 + 故障注入与评测（已接真实 BFF；UI 含 RasAnomalyStrip） | Feature | 2026-07-28 | ✅ 已实现 | —（待补） |
+| LLM 思考死循环检测与恢复 | [`../agent-ras/designs/features/thinking-loop.md`](../agent-ras/designs/features/thinking-loop.md) | L1/L2 字面 + L3 语义 + review skill；流中 abort | Feature | 2026-07-15 | ✅ 已实现 | — |
+| Stream Abort 停流 | [`../agent-ras/designs/features/stream-abort.md`](../agent-ras/designs/features/stream-abort.md) | 环内打断 `llm.stream`；依赖宿主 abort 契约 | Feature | 2026-07-15 | ✅ 已实现 | — |
+| Provider 断连停推理调研 | [`../agent-ras/designs/features/provider-disconnect.md`](../agent-ras/designs/features/provider-disconnect.md) | Provider 断连能力调研 | Spike | 2026-07-20 | ✅ 调研完成 | — |
+| RAS Trace 异常展示 | [`../agent-ras/designs/features/ras-trace-anomaly-display.md`](../agent-ras/designs/features/ras-trace-anomaly-display.md) | 可折叠摘要条；单 anomaly 一行；marker 联动 | Feature | 2026-08-10 | ✅ 已实现 | — |
+| LLM 过度思考（Analysis Paralysis）二阶段检测 | [`../agent-ras/designs/features/analysis-paralysis.md`](../agent-ras/designs/features/analysis-paralysis.md) | 触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道 | Feature | 2026-07-29 | ⬜ 未实现（规划中） | —（待补） |
+| LLM Agent 规划错误（Planning Error）检测 | [`../agent-ras/designs/features/planning-error.md`](../agent-ras/designs/features/planning-error.md) | 策略层规划错误；按信息完备度分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
+| LLM Agent 领域认知偏差（Domain Cognitive Bias） | [`../agent-ras/designs/features/domain-cognitive-bias.md`](../agent-ras/designs/features/domain-cognitive-bias.md) | 六类信念层故障；认知层三角覆盖 | Research / Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
+| Agent 可靠性开源生态调研 | [`../agent-ras/designs/features/ecosystem-survey.md`](../agent-ras/designs/features/ecosystem-survey.md) | 开源检测/恢复对照与定位 | Research | 2026-07-29 | ✅ 已完成 | —（待补） |
+| RAS 能力配置与可选同步 | [`../agent-ras/designs/features/capability-config-sync.md`](../agent-ras/designs/features/capability-config-sync.md) | 故障模式页内按 AgentRASConfig 粒度多平台配置；可选同步到 OpenCode 客户端 | Feature | 2026-08-04 | ✅ 已实现（API/同步/浏览器验收通过） | —（待补） |
+| RAS 能力目录与配置解耦 | [`../agent-ras/designs/features/capability-catalog-decouple.md`](../agent-ras/designs/features/capability-catalog-decouple.md) | Insight 目录/表单消费 PLUGIN presentation + catalog API；`agent_ras_config.default.yaml` | Refactor | 2026-08-12 | ✅ 已实现 | — |
+| Agent RAS 可靠性闭环（服务端与客户端交互） | [`../agent-ras/designs/features/Agent RAS 可靠性闭环-服务端与客户端交互设计.md`](../agent-ras/designs/features/Agent%20RAS%20可靠性闭环-服务端与客户端交互设计.md) | 常驻客户端 + configRef 控制面；Trace 异常维度；可靠性数据集/评估器闭环；能力默认关闭 | Feature | 2026-08-11 | 🟡 部分落地（评测集 reliability / IF-N16 / FI 外挂编排 / Trace anomaly；ExperimentCase FI 独立列） | 集成分支 `codex/reliability-ras-fi-integrate` |
+| xiaoO 平台 RAS 适配 | [`../agent-ras/designs/features/xiaoo-adapter.md`](../agent-ras/designs/features/xiaoo-adapter.md) | 协议 inproc + Daemon SSE 控制面；FI 零改动；废止上游私改 | Feature | 2026-08-10 | 🟢 已落地（Daemon harness + sock 遗留） | —（待补） |
+| xiaoO 完整链路观测（Insight collector） | [`../agent-ras/designs/features/xiaoo-observe-ingest.md`](../agent-ras/designs/features/xiaoo-observe-ingest.md) | xiaoO 经 Insight `xiaoo-trace-collector` 发 OTLP（现网 generic）；RAS 仅 join；历史曾经 RAS | Feature | 2026-08-04 | ✅ 已迁 Insight | — |
+| OpenCode / xiaoO RAS 对接对照 | [`../agent-ras/designs/features/opencode-xiaoo-integration.md`](../agent-ras/designs/features/opencode-xiaoo-integration.md) | 协议 inproc 共享骨架；挂载/嵌入核/控制面/Judge/OTel 差异；FI 边界 | Docs / Research | 2026-08-11 | ✅ 分析说明已落地 | — |
+| RAS ingest 契约收紧 | [`../developer-guide/09-otlp-attribute-contract.md`](../developer-guide/09-otlp-attribute-contract.md) | flat+必填 deliveryId+浅路径；见 developer-guide RAS 旁路 | Refactor | 2026-07-31 | ✅ 已实现 | —（待补） |
+| Agent Fault Injection 合并 | [`../agent-fault-injection/`](../agent-fault-injection/README.md) | 仓根 `agent_fault_injection/` **实现模块**；Insight 侧 Task/BFF/Judge/UI；关系见 [ras-fi-insight-relationship](../agent-fault-injection/designs/ras-fi-insight-relationship.md) | Feature | 2026-08-04 | ✅ 已实现（UI 对齐 + opencode/xiaoo 真跑 collect） | —（待补） |
+| Insight · RAS · FI 关系说明 | [`../agent-fault-injection/designs/ras-fi-insight-relationship.md`](../agent-fault-injection/designs/ras-fi-insight-relationship.md) | 平台 vs 实现模块边界；部署与四条上报通道；前端/DB 归 Insight | Docs | 2026-08-05 | ✅ 文档已落地 | — |
+| RAS 本机安装过程说明 | [`../agent-ras/guides/local-install-process.md`](../agent-ras/guides/local-install-process.md) | curl/`install-ras` 本机逐步：tarball、目录树、预检、排障 | Docs | 2026-08-12 | ✅ 文档已落地 | — |
+| FI 本机安装过程说明 | [`../agent-fault-injection/guides/local-install-process.md`](../agent-fault-injection/guides/local-install-process.md) | curl `/api/fault-injection/setup` 本机逐步：Worker、config、数据源 | Docs | 2026-08-12 | ✅ 文档已落地 | — |
+| FI 服务端/客户端分离 | [fi-server-client-split](fi-server-client-split/)（**HISTORICAL SDD**；现网见 [server-client-split.md](../agent-fault-injection/designs/server-client-split.md)） | 任务下发与展示留服务端；注入编排与能力在本机 FI Worker；curl/`install-fault-injection` 安装对齐 agent-ras | Refactor | 2026-08-05 | ✅ 已实现（浏览器 E2E：Worker claim + collect-result） | — |
+| FI 死字段清理 | [fi-dead-field-cleanup](fi-dead-field-cleanup/) | 删除 `FaultInjectionRun.injectionEvidenceJson` / `artifactDir`；collect 协议已不含 injectionEvidence | Refactor | 2026-08-10 | ✅ 已实现 | — |
+| 记忆故障 FI 方案（文件丢失等） | [`../agent-ras/designs/features/memory-file-loss.md`](../agent-ras/designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒注入方案；FI-P0=`memory-file-loss` 已落地 | Feature | 2026-08-03 | 🟡 FI-P0 已落地；检测器与其余子类规划中 | — |
+| 记忆噪声干扰 FI | [`../agent-ras/designs/features/memory-noise-interference.md`](../agent-ras/designs/features/memory-noise-interference.md) | Skill S1–S3 + middleware S4（假先验）已落地；S5 压缩失真未实施 | Feature | 2026-08-03 | ✅ S1–S4 已落地 | — |
+| Agent RAS 故障域插件化（detectors/review/recovery） | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | P0–P2 ✅：三平级 PLUGIN 扫描；review 独立模块；设计 v0.8.1 | Refactor / Feature | 2026-08-06 | ✅ 已实现 | — |
+| FI 证据边界与 inconclusive 语义 | [`../agent-fault-injection/designs/modules/server-judge.md`](../agent-fault-injection/designs/modules/server-judge.md) | 注入工具不写自证快照；Judge 以轨迹为主；`no_trace`→`inconclusive` | Refactor | 2026-08-05 | ✅ 已实现 | — |
+| FI 故障模式自包含插件化 | [`../agent-fault-injection/designs/features/fault-mode-plugins.md`](../agent-fault-injection/designs/features/fault-mode-plugins.md) | 展示元数据进 `SKILL.md` metadata；method 标签进 capability_api；删 fault-catalog.yaml；catalog Python 规整 | Refactor | 2026-08-10 | ✅ 已实现 | — |
 
 ## 字段口径
 
