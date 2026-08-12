@@ -43,7 +43,6 @@ const ICON_OBSERVE = (<><circle cx="7" cy="7" r="5.5" /><path d="M4.5 7c0-1.38 1
 const ICON_TRACE = <path d="M2 4h10M2 7h7M2 10h9" />;
 const ICON_VERSION_ANALYSIS = (<><path d="M2 11h10" /><path d="M3.5 9V6.5M7 9V3M10.5 9V5" /><circle cx="3.5" cy="5.5" r="1" /><circle cx="7" cy="2.5" r="1" /><circle cx="10.5" cy="4" r="1" /></>);
 const ICON_TAGS = (<><path d="M2 3.5V8l4 4 5.5-5.5-4-4H3a1 1 0 0 0-1 1z" /><circle cx="5" cy="5.5" r="1" /></>);
-const ICON_FAULT = (<><path d="M7 2.5v4.5M7 10v.5" /><circle cx="7" cy="7" r="5.5" /></>);
 const ICON_EVAL = (<><path d="M4.5 7l2 2 3-3" /><circle cx="7" cy="7" r="5.5" /></>);
 const ICON_DATASET = (<><ellipse cx="7" cy="4.5" rx="4.5" ry="2" /><path d="M2.5 4.5v3c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2v-3" /><path d="M2.5 7.5v3c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2v-3" /></>);
 const ICON_METRICS = <path d="M2 12h10M3 12V8h2v4M6 12V4h2v8M9 12V6h2v6" />;
@@ -97,7 +96,6 @@ const OBSERVE_TREE: NavItem = {
     iconPath: ICON_OBSERVE,
     children: [
         { key: 'trace', href: '/trace', labelKey: 'nav.trace', iconPath: ICON_TRACE, matchPrefixes: ['/trace'] },
-        { key: 'fault', href: '/fault', labelKey: 'nav.fault', iconPath: ICON_FAULT },
     ],
 };
 
@@ -108,6 +106,7 @@ const AGENT_GROUP: NavGroup = {
     iconPath: <path d="M1 3h8M1 5h8M1 7h8" />,
     items: [
         OBSERVE_TREE,
+        EVAL_TREE,
     ],
 };
 
@@ -153,7 +152,7 @@ export function AppSidebar() {
         return t(key);
     };
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['observe']));
+    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['observe', 'eval-center']));
 
     useEffect(() => {
         setExpandedTrees(prev => {
