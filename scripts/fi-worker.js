@@ -20,13 +20,31 @@ function resolvePython() {
   return process.env.AGENT_FI_PYTHON || process.env.PYTHON || 'python3'
 }
 
+function normalizeInsightBaseUrl(host) {
+  let value = String(host || '')
+    .trim()
+    .replace(/\/$/, '')
+  if (!value) return value
+  try {
+    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value) ? value : `http://${value}`
+    const u = new URL(withScheme)
+    if (u.hostname === '0.0.0.0' || u.hostname === '::' || u.hostname === '[::]') {
+      u.hostname = '127.0.0.1'
+      value = u.toString().replace(/\/$/, '')
+    }
+  } catch {
+    /* keep raw */
+  }
+  return value
+}
+
 function loadConfig() {
   const raw = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {}
-  const insightBaseUrl = (
+  const insightBaseUrl = normalizeInsightBaseUrl(
     process.env.AGENT_INSIGHT_HOST ||
     raw.insightBaseUrl ||
-    ''
-  ).replace(/\/$/, '')
+    '',
+  )
   const apiKey = process.env.AGENT_INSIGHT_API_KEY || raw.apiKey || ''
   const workerId =
     raw.workerId ||
@@ -404,6 +422,23 @@ async function uploadResult(cfg, runId, payload, extra = {}) {
   })
 }
 
+/** First non-internal IPv4 (never prefer 127.x). */
+function pickReportedIp() {
+  const nets = os.networkInterfaces() || {}
+  const candidates = []
+  for (const entries of Object.values(nets)) {
+    for (const entry of entries || []) {
+      const family = entry.family
+      const isV4 = family === 'IPv4' || family === 4
+      if (!isV4 || entry.internal) continue
+      const address = String(entry.address || '').trim()
+      if (!address || address.startsWith('127.')) continue
+      candidates.push(address)
+    }
+  }
+  return candidates[0] || null
+}
+
 async function main() {
   const cfg = loadConfig()
   if (!cfg.insightBaseUrl || !cfg.apiKey) {
@@ -428,7 +463,13 @@ async function main() {
 
   let busy = 0
   console.log('[fi-worker] probing platform inventory via Python catalog…')
-  const inventory = probeInventory(cfg, python)
+  const probed = probeInventory(cfg, python)
+  const reportedIp = pickReportedIp()
+  const inventory = {
+    ...probed,
+    ...(reportedIp ? { reportedIp } : {}),
+  }
+  if (reportedIp) console.log(`[fi-worker] reportedIp=${reportedIp}`)
   for (const [name, info] of Object.entries(inventory.platforms || {})) {
     const agents = Array.isArray(info.agents) ? info.agents.length : 0
     const models = Array.isArray(info.models) ? info.models.length : 0

@@ -76,7 +76,7 @@ export async function POST(request: Request) {
         const completion = await client.chat.completions.create({
             messages: [{ role: "user", content: "Hi" }],
             model: model ||
-                   (provider === 'deepseek-official' || provider === 'deepseek' ? "deepseek-chat" :
+                   (provider === 'deepseek-official' || provider === 'deepseek' ? "deepseek-v4-flash" :
                     provider === 'siliconflow' ? "deepseek-ai/DeepSeek-V3" :
                     "gpt-3.5-turbo"),
             max_tokens: 5

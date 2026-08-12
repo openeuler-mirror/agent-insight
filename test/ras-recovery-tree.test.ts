@@ -188,3 +188,65 @@ test("buildRasRecoveryEvent embeds marker id", () => {
   assert.equal(built.kind, "ras")
   assert.equal((built.args as { rasMarkerId: string }).rasMarkerId, "anomaly-1")
 })
+
+test("applyRasRecoveryTree: strips notice/steer USER by exact text when delivery ids missing", () => {
+  const orphan: RasTraceMarker = {
+    ...marker,
+    deliveryMessageIds: [],
+    actionResults: [
+      { action: "emit_notice", ok: true, message: "notice body", ts: 2100 },
+      { action: "push_steering", ok: true, message: "steer body", ts: 2200 },
+    ],
+  }
+  const tree = root([
+    event({ kind: "user", startedAt: 500, interaction: { role: "user", content: "real user" } }),
+    event({ kind: "skill", name: "skill", toolCallId: "call_function_1", startedAt: 1500 }),
+    event({
+      kind: "user",
+      startedAt: 2100,
+      interaction: { role: "user", content: "notice body", messageID: "orphan_notice" },
+    }),
+    event({
+      kind: "user",
+      startedAt: 2200,
+      interaction: { role: "user", content: "steer body" },
+    }),
+  ])
+  const next = applyRasRecoveryTree(tree, [orphan])
+  assert.deepEqual(
+    next.events.map((item) => item.kind),
+    ["user", "skill", "ras"],
+  )
+  assert.equal(next.events[0].interaction?.content, "real user")
+})
+
+test("applyRasRecoveryTree: strips USER by notice text when interaction lacks messageID", () => {
+  const withIds: RasTraceMarker = {
+    ...marker,
+    deliveryMessageIds: ["msg_notice", "msg_steer"],
+    actionResults: [
+      { action: "emit_notice", ok: true, message: "检测到思考循环异常，已执行恢复操作", ts: 2100, deliveryMessageId: "msg_notice" },
+      { action: "push_steering", ok: true, message: "<system-reminder>\nsteer\n</system-reminder>", ts: 2200, deliveryMessageId: "msg_steer" },
+    ],
+  }
+  const tree = root([
+    event({ kind: "user", startedAt: 500, interaction: { role: "user", content: "real prompt" } }),
+    event({ kind: "skill", name: "skill", toolCallId: "call_function_1", startedAt: 1500 }),
+    event({
+      kind: "user",
+      startedAt: 2100,
+      interaction: { role: "user", content: "检测到思考循环异常，已执行恢复操作" },
+    }),
+    event({
+      kind: "user",
+      startedAt: 2200,
+      interaction: { role: "user", content: "<system-reminder>\nsteer\n</system-reminder>" },
+    }),
+  ])
+  const next = applyRasRecoveryTree(tree, [withIds])
+  assert.deepEqual(
+    next.events.map((item) => item.kind),
+    ["user", "skill", "ras"],
+  )
+  assert.equal(next.events[0].interaction?.content, "real prompt")
+})

@@ -18,7 +18,7 @@ import {
   resolveFiWorkspaceOnClient,
 } from '../src/lib/fault-injection/workspace'
 import { composeFaultPrompt, findSubmode } from '../src/lib/fault-injection/compose-prompt'
-import { normalizeFault } from '../src/components/fault-injection/types'
+import { normalizeFault } from '../src/lib/fault-injection/types'
 
 describe('fault-injection judge-result', () => {
   it('accepts valid pairs', () => {

@@ -11,6 +11,7 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from './actrail-setup';
+import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
 const QODER_SETUP_COMPONENTS = new Set([
     'qoder_setup.mjs',
     'qoder_token_usage_env.mjs',
@@ -100,6 +101,7 @@ function generateBashScript(
     forceNoKey: boolean,
 ): string {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const packageSpec = getAgentInsightClientPackageSpec();
     const lines = [
         '#!/bin/bash',
         '# =============================================================================',
@@ -109,6 +111,7 @@ function generateBashScript(
         'AGENT_INSIGHT_HOST="' + bashDoubleQuoted(host) + '"',
         'AGENT_INSIGHT_BASE_URL="' + bashDoubleQuoted(baseUrl) + '"',
         'AGENT_INSIGHT_SETUP_API_KEY="' + bashDoubleQuoted(apiKey) + '"',
+        'AGENT_INSIGHT_PACKAGE_SPEC="' + bashDoubleQuoted(packageSpec) + '"',
         'QODER_JETBRAINS_RELEASE_URL="' + bashDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         'OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"',
         'NONINTERACTIVE=' + (noninteractive ? 'true' : 'false'),
@@ -124,6 +127,8 @@ function generateBashScript(
         'if [ "${AGENT_INSIGHT_NONINTERACTIVE:-}" = "1" ] || [ "${AGENT_INSIGHT_NONINTERACTIVE:-}" = "true" ]; then NONINTERACTIVE=true; fi',
         'if [ -n "${AGENT_INSIGHT_FRAMEWORKS:-}" ]; then NONINTERACTIVE=true; NONINTERACTIVE_FRAMEWORKS="$AGENT_INSIGHT_FRAMEWORKS"; fi',
         'if [ "${AGENT_INSIGHT_NO_KEY:-}" = "1" ] || [ "${AGENT_INSIGHT_NO_KEY:-}" = "true" ]; then FORCE_NO_KEY=true; fi',
+        '',
+        getAgentInsightRasBashInstaller(),
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -573,6 +578,12 @@ function generateBashScript(
         'echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"',
         'rm "${AGENT_INSIGHT_CONFIG_FILE}.bak"',
         'echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
+        '',
+        '# 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)',
+        'if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ]; then',
+        '    echo "🛡️  Installing Agent RAS runtime..."',
+        '    install_agent_insight_ras "$FINAL_HOST" "$FINAL_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."',
+        'fi',
         '',
         '# 6.35 Install Qoder CN product-family collectors',
         'if [ "$INSTALL_QODER" = "true" ]; then',
@@ -1406,6 +1417,12 @@ function generatePowerShellScript(
         'Add-Content $AGENT_INSIGHT_CONFIG_FILE "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
         'Remove-Item "$AGENT_INSIGHT_CONFIG_FILE.bak" -Force',
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
+        '',
+        '# 6.34 Agent RAS (Windows host): inproc requires Linux/macOS; use WSL on Windows',
+        'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW) {',
+        '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
+        '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
+        '}',
         '',
         '# 6.35 Install Qoder CN product-family collectors',
         'if ($INSTALL_QODER) {',

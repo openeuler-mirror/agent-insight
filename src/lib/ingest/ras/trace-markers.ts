@@ -112,8 +112,11 @@ export function buildRasTraceMarkers(
         channel: asString(payload.channel),
         error: asString(payload.error),
         message: asString(payload.message),
-        deliveryMessageId: asString(delivery.message_id),
-        deliveryPartId: asString(delivery.part_id),
+        deliveryMessageId:
+          asString(delivery.message_id)
+          || asString(delivery.messageId)
+          || asString(delivery.id),
+        deliveryPartId: asString(delivery.part_id) || asString(delivery.partId),
         deliveryChannel: asString(delivery.channel),
         ts: new Date(row.ts).getTime(),
       }

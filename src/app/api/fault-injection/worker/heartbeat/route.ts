@@ -4,6 +4,7 @@ import {
   sweepStaleClaims,
   upsertWorkerHeartbeat,
 } from '@/lib/fault-injection/worker-protocol'
+import { clientIpFromRequest } from '@/lib/reliability/client-ip'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,12 +19,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'workerId required' }, { status: 400 })
     }
     await sweepStaleClaims(username)
+    const observedIp = clientIpFromRequest(req)
+    const baseInventory =
+      body.inventory && typeof body.inventory === 'object' && !Array.isArray(body.inventory)
+        ? (body.inventory as Record<string, unknown>)
+        : {}
+    const inventory = {
+      ...baseInventory,
+      ...(observedIp ? { observedIp } : {}),
+    }
     const worker = await upsertWorkerHeartbeat({
       user: username,
       workerId: body.workerId,
       hostname: body.hostname || null,
       version: body.version || null,
-      inventory: body.inventory,
+      inventory,
       busySlots: typeof body.busySlots === 'number' ? body.busySlots : 0,
     })
     return NextResponse.json({

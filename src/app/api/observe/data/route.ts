@@ -10,6 +10,7 @@ import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experimen
 import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
 import { listTraceTags } from '@/lib/trace-tags';
 import { parseObserveTraceTagFilters } from '@/lib/trace-tag-filters';
+import { deriveAnomalyStatus, normalizeAnomalyFilter } from '@/lib/reliability/anomaly-status';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -308,6 +309,7 @@ export async function GET(request: Request) {
         ? ownershipParam
         : undefined;
     const statusParam = searchParams.get('status') || 'all';
+    const anomalyParam = normalizeAnomalyFilter(searchParams.get('anomaly'));
     const sortParam = searchParams.get('sort') || 'timestamp';
     const sortDirParam = searchParams.get('dir') === 'asc' ? 'asc' : 'desc';
     const sortKey = sortParam === 'agent'
@@ -432,6 +434,7 @@ export async function GET(request: Request) {
     // 走真正数据库分页。
     const requiresComputedPass = paginated && databasePagination && (
         statusParam !== 'all'
+        || anomalyParam !== 'all'
         || sortParam === 'status'
         || sortParam === 'cost'
     );
@@ -473,6 +476,35 @@ export async function GET(request: Request) {
         }
     }
     const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null; at: number }>();
+    const anomalyCountByTaskId = new Map<string, number>();
+    const anomalyCountByExecutionId = new Map<string, number>();
+    if (recordTaskIdsForEvalLookup.length > 0) {
+        try {
+            const anomalyRows = await prisma.rasAnomalyEvent.groupBy({
+                by: ['taskId'],
+                where: { taskId: { in: recordTaskIdsForEvalLookup } },
+                _count: { _all: true },
+            });
+            for (const row of anomalyRows) {
+                if (row.taskId) anomalyCountByTaskId.set(row.taskId, row._count._all);
+            }
+            const executionIds = Array.from(new Set(
+                data.map((r) => String(r.upload_id || r.id || '').trim()).filter(Boolean),
+            ));
+            if (executionIds.length > 0) {
+                const byExec = await prisma.rasAnomalyEvent.groupBy({
+                    by: ['executionId'],
+                    where: { executionId: { in: executionIds } },
+                    _count: { _all: true },
+                });
+                for (const row of byExec) {
+                    if (row.executionId) anomalyCountByExecutionId.set(row.executionId, row._count._all);
+                }
+            }
+        } catch (e) {
+            console.warn('[Data-API] failed to fetch RAS anomaly summary:', (e as Error)?.message);
+        }
+    }
     if (user && recordTaskIdsForEvalLookup.length > 0) {
         try {
             const recentEvalRows = await prisma.trajectoryEvalResult.findMany({
@@ -537,6 +569,12 @@ export async function GET(request: Request) {
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
+        const execId = String(record.upload_id || record.id || '').trim();
+        const anomalyCount = Math.max(
+            recordTaskId ? (anomalyCountByTaskId.get(recordTaskId) || 0) : 0,
+            execId ? (anomalyCountByExecutionId.get(execId) || 0) : 0,
+        );
+        const anomalyStatus = deriveAnomalyStatus({ eventCount: anomalyCount });
         if (skipAutoEvalReady) {
             const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
                 ? baseTraceLifecycle
@@ -550,6 +588,9 @@ export async function GET(request: Request) {
                 last_eval_error,
                 trajectory_score,
                 trajectoryScore: trajectory_score,
+                anomalyStatus,
+                anomaly_status: anomalyStatus,
+                anomalyCount,
                 trace_status: traceLifecycle.traceStatus,
                 traceStatus: traceLifecycle.traceStatus,
                 trace_completed_at: traceLifecycle.traceCompletedAt,
@@ -569,6 +610,9 @@ export async function GET(request: Request) {
             last_eval_error,
             trajectory_score,
             trajectoryScore: trajectory_score,
+            anomalyStatus,
+            anomaly_status: anomalyStatus,
+            anomalyCount,
             trace_status: traceLifecycle.traceStatus,
             traceStatus: traceLifecycle.traceStatus,
             trace_completed_at: traceLifecycle.traceCompletedAt,
@@ -586,9 +630,13 @@ export async function GET(request: Request) {
     let responseTotal = pageResult?.total ?? enrichedData.length;
     let responseStats = pageResult?.stats ?? null;
     if (requiresComputedPass) {
-        const statusFiltered = statusParam === 'all'
+        const statusFiltered = (statusParam === 'all'
             ? enrichedData
-            : enrichedData.filter((record) => String(record.trace_status ?? record.traceStatus ?? '') === statusParam);
+            : enrichedData.filter((record) => String(record.trace_status ?? record.traceStatus ?? '') === statusParam)
+        ).filter((record) => {
+            if (anomalyParam === 'all') return true;
+            return String(record.anomalyStatus ?? record.anomaly_status ?? 'unknown') === anomalyParam;
+        });
         const statusOrder: Record<string, number> = { running: 0, failed: 1, success: 2 };
         statusFiltered.sort((a, b) => {
             let cmp = 0;

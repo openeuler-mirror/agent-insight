@@ -129,7 +129,7 @@
 | `UserSettings` | 按用户维度的设置 | `settingsJson`（ServerSettingsV2） |
 | `ParsedFlow` / `ExecutionMatch` | skill 流程 + 静态/动态对齐 | `flowJson`/`mermaidCode`；`matchJson`、`staticMermaid`、`dynamicMermaid` |
 | `AgentEvalDataset` | 行为评测数据集 | `fieldsJson` 保存动态字段 schema；`casesJson` 保存完整样本；`caseCount` 与 `referenceCasesJson` 是不含轨迹的读取投影，`projectionReady` 标记历史数据是否已回填；另有 `datasetKind`、`targetSkill` |
-| `Experiment` / `ExperimentCase` / `ExperimentEvalResult` | 离线评测实验、样本和单项结果 | `ExperimentCase.evaluatorContextJson` 保存可空的版本化 Tool/Skill 目录；结果按 case × evaluator 持久化 |
+| `Experiment` / `ExperimentCase` / `ExperimentEvalResult` | 离线评测实验、样本和单项结果 | `ExperimentCase.evaluatorContextJson` 仅存可空的版本化 Tool/Skill 目录；可靠性 FI 元数据用独立列 `faultInjectionType` / `caseValuesJson` / `fiTaskId` / `fiRunId`（禁止塞进 evaluatorContextJson） |
 | `BatchEvalTask` / `GrayscaleTask` | 批量与 A/B 编排状态 | `configJson`、`caseStatesJson` |
 | `DebugJobResult` / `DebugHistory` | 调试/运行任务结果 | `output`、`sessionId` |
 | `TrajectoryEvalResult` | 一条轨迹评测结果 | `trajectoryScore`、`dimensionScoresJson`、`deviationStepsJson`、`evaluatorRunId` |

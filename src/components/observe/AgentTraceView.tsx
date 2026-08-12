@@ -1,6 +1,6 @@
 'use client';
 
-import React, { ReactNode, useEffect, useMemo, useState } from 'react';
+import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
@@ -26,6 +26,16 @@ import {
     RawInteraction,
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
+import {
+    applyRasRecoveryTree,
+    alignInteractionsToRasAnchors,
+} from '@/lib/ingest/ras/recovery-tree';
+import type { RasTraceMarker } from '@/lib/ingest/ras/trace-markers';
+import {
+    RasNodeBadge,
+    RasReliabilityDetails,
+    findEventAnomaliesForMarkers,
+} from '@/components/observe/RasReliabilityDetails';
 import {
     buildLangfuseAgentTrace,
     langfusePromptHistoryCount,
@@ -64,6 +74,7 @@ const KIND_META: Record<string, { label: string; chip: string; bar: string; text
     skill: { label: 'SKILL', ...SPAN_KIND_CLASSES.skill },
     llm:   { label: 'LLM',   ...SPAN_KIND_CLASSES.llm },
     user:  { label: 'USER',  ...SPAN_KIND_CLASSES.user },
+    ras:   { label: 'RAS',   ...SPAN_KIND_CLASSES.ras },
 };
 
 /** Exact token count, down to the unit. The left-hand span tree keeps the
@@ -350,6 +361,7 @@ interface TraceCtxValue {
     slowNodesList: SpanInfo[];
     /** sub-agent 节点上"打开独立 trace"按钮的点击回调；未注入则不渲染按钮 */
     onSubagentNavigate?: (sessionId: string) => void;
+    findEventAnomalies?: (event: AgentEvent) => RasTraceMarker[];
 }
 
 const defaultCtx: TraceCtxValue = {
@@ -358,6 +370,7 @@ const defaultCtx: TraceCtxValue = {
     onJumpToKey: () => {},
     topNDuration: [], topNTokens: [], slowNodesList: [],
     onSubagentNavigate: undefined,
+    findEventAnomalies: undefined,
 };
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
@@ -380,6 +393,8 @@ export interface AgentTraceViewProps {
     rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
+    /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
+    rasMarkers?: RasTraceMarker[];
 }
 
 export default function AgentTraceView({
@@ -391,6 +406,7 @@ export default function AgentTraceView({
     onSubagentNavigate,
     rootSessionId,
     rootExecutionId,
+    rasMarkers = [],
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
@@ -472,10 +488,14 @@ export default function AgentTraceView({
     }, [interactions, langfuseProjection, loadAllInteractions]);
 
     const displayInteractions = langfuseProjection?.interactions || interactions;
-    const tree = useMemo(
-        () => langfuseProjection?.tree || buildAgentCallTree(interactions || []),
-        [interactions, langfuseProjection],
-    );
+    const tree = useMemo(() => {
+        const aligned = rasMarkers.length
+            ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
+            : (displayInteractions || [])
+        const base = langfuseProjection?.tree || buildAgentCallTree(aligned)
+        if (!base) return base
+        return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers) : base
+    }, [interactions, langfuseProjection, displayInteractions, rasMarkers]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
@@ -779,12 +799,18 @@ export default function AgentTraceView({
         }, 80);
     };
 
+    const findEventAnomalies = useCallback(
+        (event: AgentEvent) => findEventAnomaliesForMarkers(event, rasMarkers),
+        [rasMarkers],
+    );
+
     const ctxValue: TraceCtxValue = {
         framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList,
         onSubagentNavigate,
+        findEventAnomalies,
     };
 
     const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly;
@@ -1410,6 +1436,8 @@ function UnifiedEventRow({
     totalStart?: number; totalDuration?: number;
 }) {
     const km = KIND_META[event.kind] ?? KIND_META.tool;
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const evAnomalyHits = findEventAnomalies?.(event) ?? [];
 
     // Duration: for task events, use child agent duration
     const spanDurationMs = event.kind === 'task' && childNode
@@ -1499,6 +1527,9 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
+                {evAnomalyHits.length > 0 && (
+                    <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
+                )}
                 {secondaryLabel && (
                     <span className="ml-1.5 text-xs text-foreground-muted">{secondaryLabel}</span>
                 )}
@@ -2565,6 +2596,8 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
 }
 
 function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null)
         ? formatDuration(event.completedAt - event.startedAt) : null;
@@ -2579,6 +2612,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')
         : event.kind === 'user' ? (event.summary || event.interaction?.content || '')
+        : event.kind === 'ras' ? (event.summary || event.interaction?.content || '')
         : '';
 
     const argsStr = event.args !== undefined
@@ -2621,6 +2655,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
 
             {/* Body — all sections use CompactSection for consistent truncated-preview + modal pattern */}
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.875rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                <RasReliabilityDetails markers={eventAnomalies} />
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
@@ -3630,6 +3665,8 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
     node: AgentNode; interactions: RawInteraction[];
 }) {
     const [modalOpen, setModalOpen] = useState(false);
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const meta = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null) ? formatDuration(event.completedAt - event.startedAt) : null;
     const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
@@ -3663,6 +3700,9 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
                     <div className="text-sm text-foreground line-clamp-2 break-words leading-snug">
                         {summaryText}
                     </div>
+                    {eventAnomalies.length > 0 && (
+                        <RasNodeBadge markers={eventAnomalies} className="mt-1" />
+                    )}
                     <div className="text-xs text-foreground-muted mt-0.5 flex flex-wrap gap-2 items-center">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
@@ -3824,6 +3864,8 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     dur: string | null; time: string; onClose: () => void;
     node: AgentNode; interactions: RawInteraction[];
 }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const title = event.name || event.summary?.slice(0, 60) || km.label;
 
@@ -3840,6 +3882,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                     </div>
                 </DialogHeader>
                 <div className="overflow-auto p-4 flex flex-col gap-4">
+                    <RasReliabilityDetails markers={eventAnomalies} />
                     {event.kind === 'llm' && (
                         <LLMEventBody
                             event={event}
@@ -3849,8 +3892,8 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                         />
                     )}
                     {event.kind === 'user' && (event.summary || event.interaction?.content) && <ModalSection label="Message"><LLMContent text={event.summary || event.interaction?.content || ''} /></ModalSection>}
-                    {event.kind !== 'llm' && event.args !== undefined && <ModalSection label="Input"><ModalCodeBlock value={event.args} /></ModalSection>}
-                    {event.kind !== 'llm' && event.output !== undefined && event.output !== null && <ModalSection label="Output"><ModalCodeBlock value={event.output} /></ModalSection>}
+                    {event.kind !== 'llm' && event.kind !== 'ras' && event.args !== undefined && <ModalSection label="Input"><ModalCodeBlock value={event.args} /></ModalSection>}
+                    {event.kind !== 'llm' && event.kind !== 'ras' && event.output !== undefined && event.output !== null && <ModalSection label="Output"><ModalCodeBlock value={event.output} /></ModalSection>}
                     {event.spawnedChildId && <div className="text-sm text-primary">Sub-agent spawned — click in the tree to jump.</div>}
                 </div>
             </DialogContent>

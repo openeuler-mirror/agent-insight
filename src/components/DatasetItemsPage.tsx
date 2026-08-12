@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
@@ -11,6 +11,7 @@ import {
   type DatasetCase,
   type DatasetField,
   type DatasetFieldType,
+  coerceDatasetKind,
   createEvaluatorCatalogField,
   createEmptyCase,
   evaluatorCatalogFieldKeyFromLabel,
@@ -199,6 +200,30 @@ export default function DatasetItemsPage() {
   const [batchModalError, setBatchModalError] = useState('');
   const [batchDropActive, setBatchDropActive] = useState(false);
   const batchFileInputRef = useRef<HTMLInputElement>(null);
+  const [faultModeOptions, setFaultModeOptions] = useState<Array<{
+    id: string;
+    name: string;
+    injectionMethodLabel?: string;
+  }>>([]);
+
+  const faultModeById = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; injectionMethodLabel?: string }>();
+    for (const option of faultModeOptions) map.set(option.id, option);
+    return map;
+  }, [faultModeOptions]);
+
+  const formatFaultInjectionType = useCallback((row: DatasetCase, raw: string): string => {
+    const id = raw.trim();
+    const fromApi = id ? faultModeById.get(id) : undefined;
+    const faultName = fromApi?.name
+      || String(row.values?.fault_label || '').trim()
+      || id;
+    const methodLabel = fromApi?.injectionMethodLabel
+      || String(row.values?.injection_method_label || '').trim();
+    if (faultName && methodLabel) return `${faultName} · ${methodLabel}`;
+    if (methodLabel) return methodLabel;
+    return faultName || raw;
+  }, [faultModeById]);
 
   const load = useCallback(async () => {
     if (!user || !id) return;
@@ -218,7 +243,7 @@ export default function DatasetItemsPage() {
         targetAgent: d.targetAgent || '',
         targetSkill: d.targetSkill || '',
         tags: d.tags || [],
-        datasetKind: d.datasetKind === 'trajectory' ? 'trajectory' : 'ideal_output',
+        datasetKind: coerceDatasetKind(d.datasetKind),
         fields: Array.isArray(d.fields) ? d.fields : [],
         cases: Array.isArray(d.cases) ? d.cases : [],
         createdAt: d.createdAt,
@@ -232,6 +257,43 @@ export default function DatasetItemsPage() {
       setLoading(false);
     }
   }, [user, id]);
+
+  useEffect(() => {
+    if (!dataset || dataset.datasetKind !== 'reliability') {
+      setFaultModeOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await apiFetch('/api/reliability/fault-modes');
+        const data = await res.json();
+        if (!res.ok || cancelled) return;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        setFaultModeOptions(
+          items
+            .map((item: {
+              id?: string;
+              name?: string;
+              injectionMethodLabel?: string;
+              injection_method_label?: string;
+            }) => ({
+              id: String(item?.id || '').trim(),
+              name: String(item?.name || item?.id || '').trim(),
+              injectionMethodLabel: String(
+                item?.injectionMethodLabel || item?.injection_method_label || '',
+              ).trim() || undefined,
+            }))
+            .filter((item: { id: string }) => item.id),
+        );
+      } catch {
+        if (!cancelled) setFaultModeOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dataset]);
 
   const loadFullDataset = async (): Promise<AgentDataset> => {
     if (!user || !id) throw new Error('缺少数据集信息');
@@ -531,6 +593,7 @@ export default function DatasetItemsPage() {
   if (!dataset) return null;
 
   const isTraj = dataset.datasetKind === 'trajectory';
+  const isReliability = dataset.datasetKind === 'reliability';
   const catalogDraftKey = evaluatorCatalogFieldKeyFromLabel(fieldDraft.label);
 
   return (
@@ -576,7 +639,7 @@ export default function DatasetItemsPage() {
             </span>
           )}
           <span className="ai-badge ai-badge-gr">
-            {isTraj ? '轨迹评测集' : '理想输出评测集'}
+            {isTraj ? '轨迹评测集' : isReliability ? '可靠性评测集' : '理想输出评测集'}
           </span>
         </div>
         <div style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>
@@ -675,12 +738,15 @@ export default function DatasetItemsPage() {
                       </td>
                       {dataset.fields.map(field => {
                         const fullText = fieldText(row, field.key);
+                        const displayText = field.key === 'fault_injection_type' && isReliability
+                          ? formatFaultInjectionType(row, fullText)
+                          : fullText;
                         const isTrajectoryField = ['trace', 'trajectory'].includes(field.key.trim().toLocaleLowerCase());
                         return (
                         <TooltipCell
                           key={field.id}
-                          shortText={shorten(fullText, field.type === 'json' ? 40 : 80)}
-                          fullText={fullText}
+                          shortText={shorten(displayText, field.type === 'json' ? 40 : 80)}
+                          fullText={displayText}
                           tdStyle={{
                             maxWidth: field.type === 'json' ? 220 : 260,
                             ...(field.type === 'json' ? { fontFamily: 'ui-monospace, monospace', fontSize: 12 } : {}),
@@ -936,6 +1002,21 @@ export default function DatasetItemsPage() {
                       checked={Boolean(fieldValue(rowEditor.row, field.key))}
                       onChange={e => setEditorFieldValue(field, e.target.checked)}
                       style={{ width: 18, height: 18 }}
+                    />
+                  ) : field.key === 'fault_injection_type' && isReliability ? (
+                    <Select
+                      value={fieldText(rowEditor.row, field.key)}
+                      onChange={value => setEditorFieldValue(field, value)}
+                      options={[
+                        { value: '', label: '选择故障模式…' },
+                        ...faultModeOptions.map(option => ({
+                          value: option.id,
+                          label: option.injectionMethodLabel
+                            ? `${option.name} · ${option.injectionMethodLabel}`
+                            : option.name,
+                        })),
+                      ]}
+                      aria-label="故障注入类型"
                     />
                   ) : (
                     <textarea

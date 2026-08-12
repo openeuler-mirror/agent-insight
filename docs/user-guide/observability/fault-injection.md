@@ -102,9 +102,11 @@ python3 -m agent_fault_injection.cli run \
 
 ## 常见注意点
 
+- **看板登录用户 ≡ Worker 配置里的 API Key 对应用户**。用 admin 跑实验时，Worker 也必须用 admin 的 Key 安装/启动；否则可靠性编排会返回 503（无在线 FI Worker），而不是静默跳过注入。
 - **注入不会**为「可靠性观测」合成假 RAS 异常事件；观测页以真实轨迹 / RAS 上报为准。
 - 部分运行时注入能力（如工具参数改写）可能**仅部分平台**支持；目录与设计文档会标明差异。
 - Worker 换账号 Key 重跑 setup 时会按新凭证重启；同 Key/host 再跑则保持已有进程。
+- 本地探测看板请优先 `curl --noproxy '*' http://127.0.0.1:<port>/...`（企业代理下可避免 loopback 被误代理）。
 
 ## 下一步
 

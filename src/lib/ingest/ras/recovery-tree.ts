@@ -71,16 +71,52 @@ export function alignInteractionsToRasAnchors(
 export function stripDeliveryEventsFromTree(
   node: AgentNode,
   deliveryIds: Set<string>,
+  deliveryTexts: Set<string> = new Set(),
 ): AgentNode {
-  if (!deliveryIds.size) return node
+  if (!deliveryIds.size && !deliveryTexts.size) return node
   return {
     ...node,
     events: node.events.filter((event) => {
-      const messageId = asString(event.interaction?.messageID)
-      return !(messageId && deliveryIds.has(messageId))
+      if (event.kind !== "user") return true
+      const messageId =
+        asString(event.interaction?.messageID)
+        || asString((event.interaction as { messageId?: string } | undefined)?.messageId)
+        || asString((event.interaction as { id?: string } | undefined)?.id)
+      if (messageId && deliveryIds.has(messageId)) return false
+      // Fallback when action_result lacked delivery_anchor: exact notice/steering text only.
+      if (deliveryTexts.size) {
+        const text = interactionText(event.interaction)
+        if (text && deliveryTexts.has(text)) return false
+      }
+      return true
     }),
-    children: node.children.map((child) => stripDeliveryEventsFromTree(child, deliveryIds)),
+    children: node.children.map((child) =>
+      stripDeliveryEventsFromTree(child, deliveryIds, deliveryTexts),
+    ),
   }
+}
+
+function collectDeliveryStripTexts(markers: RasTraceMarker[]): Set<string> {
+  const texts = new Set<string>()
+  for (const marker of markers) {
+    for (const result of marker.actionResults || []) {
+      const action = String(result.action || "").toLowerCase()
+      if (!action.includes("notice") && !action.includes("steering") && !action.includes("steer")) {
+        continue
+      }
+      const message = asString(result.message)
+      if (message) texts.add(message)
+    }
+    for (const action of marker.actions || []) {
+      const type = String(action.type || "").toLowerCase()
+      if (!type.includes("notice") && !type.includes("steering") && !type.includes("steer")) {
+        continue
+      }
+      const message = asString(action.message)
+      if (message) texts.add(message)
+    }
+  }
+  return texts
 }
 
 function markerAnchorIndex(events: AgentEvent[], marker: RasTraceMarker): number {
@@ -210,6 +246,7 @@ export function applyRasRecoveryTree(
   const deliveryIds = new Set(
     markers.flatMap((marker) => marker.deliveryMessageIds || []),
   )
-  const stripped = stripDeliveryEventsFromTree(tree, deliveryIds)
+  const deliveryTexts = collectDeliveryStripTexts(markers)
+  const stripped = stripDeliveryEventsFromTree(tree, deliveryIds, deliveryTexts)
   return injectRasRecoveryEvents(stripped, markers)
 }

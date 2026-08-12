@@ -48,6 +48,8 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-depth-result': { category: 'res', requires: [] },
   'preset-agent-tool-utilization': { category: 'traj', requires: ['tool_catalog'] },
   'preset-agent-tool-selection': { category: 'traj', requires: ['tool_catalog'] },
+  // 可靠性：挂 traj（本期不扩 EvaluatorCategory）；依赖 Trace/故障事件，不强制参考答案
+  'preset-ras-reliability': { category: 'traj', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };

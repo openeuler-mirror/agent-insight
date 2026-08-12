@@ -41,6 +41,10 @@ import {
   AGENT_TOOL_PRESET_IDS,
   isAgentToolPresetId,
 } from '../src/lib/engine/experiment/agent-tool-preset-evaluators';
+import {
+  RAS_RELIABILITY_PRESET_ID,
+  isRasReliabilityPresetId,
+} from '../src/lib/engine/experiment/ras-reliability-evaluator';
 
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
@@ -57,6 +61,11 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     name: 'agent-tool-preset-evaluators.ts',
     claims: isAgentToolPresetId,
     ids: AGENT_TOOL_PRESET_IDS,
+  },
+  {
+    name: 'ras-reliability-evaluator.ts',
+    claims: isRasReliabilityPresetId,
+    ids: [RAS_RELIABILITY_PRESET_ID],
   },
 ];
 

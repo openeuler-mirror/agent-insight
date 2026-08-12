@@ -84,4 +84,9 @@ export const SPAN_KIND_CLASSES: Record<string, { chip: string; bar: string; text
     bar:  'bg-foreground-muted',
     text: 'text-foreground-muted',
   },
+  ras: {
+    chip: 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-400/30',
+    bar:  'bg-amber-500 dark:bg-amber-400',
+    text: 'text-amber-800 dark:text-amber-300',
+  },
 };

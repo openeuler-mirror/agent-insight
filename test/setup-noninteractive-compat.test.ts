@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { GET } from '@/app/api/ingest/setup/route';
 
-const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,xiaoo,jiuwen,qoder,trae,actrail';
+const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,jiuwen,qoder,trae,actrail';
 
 async function getScript(query: string, platform: 'unix' | 'windows'): Promise<string> {
   const response = await GET(new Request(`http://localhost/api/ingest/setup?${query}`, {

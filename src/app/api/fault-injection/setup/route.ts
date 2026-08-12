@@ -5,10 +5,18 @@ export const dynamic = 'force-dynamic'
 /**
  * curl -fsSL "$HOST/api/fault-injection/setup?key=$API_KEY" | bash
  */
+function normalizeClientBaseUrl(reqUrl: URL): string {
+  const base = new URL(`${reqUrl.protocol}//${reqUrl.host}`)
+  if (base.hostname === '0.0.0.0' || base.hostname === '::' || base.hostname === '[::]') {
+    base.hostname = '127.0.0.1'
+  }
+  return base.origin
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url)
   const key = url.searchParams.get('key') || ''
-  const base = `${url.protocol}//${url.host}`
+  const base = normalizeClientBaseUrl(url)
   if (!key) {
     return new NextResponse('Missing key query param\n', { status: 400 })
   }

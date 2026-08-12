@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
 import { getLatestWorkerInventory } from '@/lib/fault-injection/worker-protocol'
-import type { PlatformOption } from '@/components/fault-injection/types'
+import type { PlatformOption } from '@/lib/fault-injection/types'
 
 export const dynamic = 'force-dynamic'
 

@@ -4,7 +4,12 @@ import type {
   RootCauseItem,
 } from './dataset-case-root-causes';
 
-export type DatasetKind = 'ideal_output' | 'trajectory';
+export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability';
+
+export function coerceDatasetKind(value: unknown): DatasetKind {
+  if (value === 'trajectory' || value === 'reliability') return value;
+  return 'ideal_output';
+}
 
 /** Case 来源；'user' = 用户手填，'skill-gen-draft' = skill 生成时自动起草。 */
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
@@ -147,8 +152,17 @@ export function createEvaluatorCatalogField(
 export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
   const fields: DatasetField[] = [
     { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
-    { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
   ];
+  if (kind === 'reliability') {
+    fields.push({
+      id: 'fault_injection_type',
+      key: 'fault_injection_type',
+      label: '故障注入类型',
+      type: 'text',
+      system: true,
+    });
+  }
+  fields.push({ id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true });
   if (kind === 'trajectory') {
     fields.push({ id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true });
   }
@@ -182,9 +196,13 @@ export const TRAJECTORY_PLACEHOLDER = `{
 }`;
 
 export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'>): string[] {
-  return dataset.datasetKind === 'trajectory'
-    ? ['input', 'reference_output', 'trajectory']
-    : ['input', 'reference_output'];
+  if (dataset.datasetKind === 'trajectory') {
+    return ['input', 'reference_output', 'trajectory'];
+  }
+  if (dataset.datasetKind === 'reliability') {
+    return ['input', 'fault_injection_type', 'reference_output'];
+  }
+  return ['input', 'reference_output'];
 }
 
 /** 轨迹列占位示例（纯文本，可按需填写） */
@@ -227,16 +245,24 @@ export function defaultFieldsForKind(kind: DatasetKind): DatasetDefaultFieldDef[
     {
       key: 'input',
       dataType: 'String',
-      required: '否',
+      required: kind === 'reliability' ? '是' : '否',
       description: '作为输入投递给评测对象',
     },
-    {
-      key: 'reference_output',
-      dataType: 'String',
-      required: '否',
-      description: '预期理想输出，可作为评估时的参考标准',
-    },
   ];
+  if (kind === 'reliability') {
+    base.push({
+      key: 'fault_injection_type',
+      dataType: 'String',
+      required: '是',
+      description: '故障模式 id（须来自 GET /api/reliability/fault-modes）',
+    });
+  }
+  base.push({
+    key: 'reference_output',
+    dataType: 'String',
+    required: '否',
+    description: '预期理想输出，可作为评估时的参考标准',
+  });
   if (kind === 'trajectory') {
     base.push({
       key: 'trajectory',

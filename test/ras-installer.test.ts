@@ -176,9 +176,8 @@ test("OpenCode setup scripts install RAS on the Agent host and fail open", () =>
     assert.match(source, /getAgentInsightClientPackageSpec/)
     assert.match(source, /Agent RAS installation (failed|skipped); telemetry setup will continue/)
     assert.match(source, /use WSL on Windows/)
-    assert.match(source, /api\/ingest\/setup\/opencode/)
-    // Qoder/Trae 仍走 /api/setup/...（next rewrite 到 ingest）；OpenCode 插件路径必须留在 ingest 下。
-    assert.doesNotMatch(source, /\$AGENT_INSIGHT_BASE_URL\/api\/setup\/opencode/)
+    // 目标观测栈：OpenCode 组件经 /api/setup/*（rewrite 到 ingest），与 Qoder/Trae 一致。
+    assert.match(source, /\$AGENT_INSIGHT_BASE_URL\/api\/setup\/opencode/)
     assert.doesNotMatch(
       source,
       /npx --yes --package="\$AGENT_INSIGHT_PACKAGE_SPEC" agent-insight install-ras/,

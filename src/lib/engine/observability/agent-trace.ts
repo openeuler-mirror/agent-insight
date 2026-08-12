@@ -93,9 +93,11 @@ export interface RawInteraction {
     finish?: string;
     variant?: string | null;
     parts?: InteractionPart[];
+    /** Platform message id (OpenCode / RAS delivery anchor alignment). */
+    messageID?: string;
 }
 
-export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
+export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user' | 'ras';
 
 export interface AgentEvent {
     kind: CallKind;

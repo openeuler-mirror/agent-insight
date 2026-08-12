@@ -20,9 +20,21 @@ const home = path.join(os.homedir(), '.agent-insight', 'fault-injection')
 const stablePkgRoot = path.join(home, 'python-pkg')
 
 function normalizeHost(host) {
-  return String(host || '')
+  let value = String(host || '')
     .trim()
     .replace(/\/$/, '')
+  if (!value) return value
+  try {
+    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value) ? value : `http://${value}`
+    const u = new URL(withScheme)
+    if (u.hostname === '0.0.0.0' || u.hostname === '::' || u.hostname === '[::]') {
+      u.hostname = '127.0.0.1'
+      value = u.toString().replace(/\/$/, '')
+    }
+  } catch {
+    /* keep raw */
+  }
+  return value
 }
 
 function resolvePython() {
