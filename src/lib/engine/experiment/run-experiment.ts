@@ -465,10 +465,9 @@ export async function startExperimentRun(
       }
     }
 
-    // 每行完成后立刻 settle：避免「行已 done、实验仍 running」的观察窗口（轮询/单测会踩中）。
-    const completion = Promise.all(
-      scheduledRows.map((row) => row.completion.then(() => settleExperimentStatus(experimentId))),
-    ).finally(() => { running.delete(experimentId); });
+    const completion = Promise.all(scheduledRows.map((row) => row.completion))
+      .then(() => settleExperimentStatus(experimentId))
+      .finally(() => { running.delete(experimentId); });
     return { status: 'running', completion };
   } catch (e) {
     running.delete(experimentId);
@@ -755,10 +754,8 @@ export async function startEvalExperimentCases(
       }
     }
 
-    // 每行完成后立刻 settle：最后一行 done 时实验终态已落库，与行状态无可见窗口。
-    const completion = Promise.all(
-      scheduledRows.map((row) => row.completion.then(() => settleExperimentStatus(experimentId))),
-    );
+    const completion = Promise.all(scheduledRows.map((row) => row.completion))
+      .then(() => settleExperimentStatus(experimentId));
     return { status: 'running', completion };
   });
 }
