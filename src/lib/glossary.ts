@@ -152,6 +152,16 @@ const GLOSSARY = {
     tag: 'fault',
     body: '对当前 Trace 触发 AI 归因分析，跳转到智能诊断页面。',
   },
+  'ras-severity': {
+    name: 'RAS 严重等级',
+    tag: 'fault',
+    body: '可靠性检测器对异常的分级。思考循环保持 L1=低危、L2=中危、L3=高危；处置是否成功由执行状态和动作结果单独表示。',
+  },
+  'ras-no-fault': {
+    name: '无故障',
+    tag: 'fault',
+    body: '该 Trace 已进入普通链路观测，但当前没有关联到 RAS 异常事件；不等同于业务结果已经通过评测。',
+  },
 
   // ===== §4 智能诊断 =====
   'execution-session': {

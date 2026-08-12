@@ -15,6 +15,8 @@
 
 OpenClaw 应直接访问自己的模型供应商；Agent Insight 只接收遥测。历史 URL `POST /api/proxy/v1/chat/completions` 仅返回 410，不是 OTLP 链路，也不会代转模型请求。
 
+> **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-runtime.md`](../agent-ras/designs/modules/ras-runtime.md)；本文件为 Insight ingest **契约真源**。
+
 ## 资源属性 (Resource)
 
 客户端在 `resource.attributes` 中设置以下字段：
@@ -174,9 +176,26 @@ setup wrapper 只设置 `CODEAGENT3_ENABLE_TELEMETRY=1`、OTLP base endpoint、J
 
 setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `http/json`，Logs 与 Traces 分别指向 `/v1/logs`、`/v1/traces`。两者只是两种配置呈现方式，不应与 watcher 同时启用。
 
+## RAS 旁路属性
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `taskId` | string | 是 | 与 OTLP / Execution 的 session 对齐 |
+| `type` | string | 是 | `anomaly` / `actions` / `action_result` / `skill_*` |
+| `deliveryId` | string | 是 | 一次逻辑投递的 UUID；重试复用，独立事件必须不同 |
+| `anomalyKind` | string | 否 | 如 `repeat_tool_call`、`llm_thinking_dead_loop` |
+| `severity` | string | 否 | `low` / `medium` / `high` / `critical` |
+| `summary` | string | 否 | 人可读摘要 |
+| `actionTypes` | string | 否 | 逗号分隔动作类型 |
+| `framework` / `platform` | string | 否 | 平台，如 `opencode` |
+| `payload` | object | 否 | 原始事件体，落库为 `payloadJson` |
+
+落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_runtime/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及 `payload.delivery_anchor`（`message_id` 必填才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。**不做**正文匹配兜底。
+
 ## 版本记录
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义 |
+| 1.2 | 2026-07-31 | RAS 契约收紧：仅 flat+必填 deliveryId；移除 witty.* / rasEventId / 深路径 rewrite / 正文兜底 |
+| 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义；补充 RAS 旁路 ingest（非 OTLP） |
 | 1.0 | 2026-07-14 | 初版，定义 OTLP 属性契约 (FR-011) |

@@ -248,3 +248,178 @@ test("opencode uploader: recovers user input from text part when chat.message.me
   assert.ok(user, "应当存在 user 消息")
   assert.equal(user.content, "nihao", "messageID 缺失时仍应从 text part 还原用户输入")
 })
+
+test("opencode uploader: rebuilds aborted assistant output from message.part.delta", async () => {
+  const uploader = await uploaderPromise
+  const baseEvent = {
+    kind: "event",
+    sessionID: "ses_root",
+  }
+  const state = uploader.buildState([
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.updated",
+        event: {
+          id: "evt_message",
+          properties: {
+            info: {
+              id: "msg_asst",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1 },
+            },
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.updated",
+        event: {
+          id: "evt_part",
+          properties: {
+            part: {
+              id: "prt_text",
+              messageID: "msg_asst",
+              sessionID: "ses_root",
+              type: "text",
+              text: "",
+            },
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_1",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_2",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+    // A second telemetry plugin can write the same OpenCode event. Event IDs
+    // must make the merge idempotent instead of duplicating streamed text.
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_2",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  assert.equal(messages[0]?.content, "让我协助让我协助")
+  assert.equal(messages[0]?.parts?.[0]?.text, "让我协助让我协助")
+})
+
+test("opencode uploader: preserves streamed reasoning parts after interruption", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.updated",
+        event: {
+          id: "evt_reasoning_message",
+          properties: {
+            info: {
+              id: "msg_asst",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1 },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          id: "evt_reasoning_part",
+          properties: {
+            part: {
+              id: "prt_reasoning",
+              messageID: "msg_asst",
+              sessionID: "ses_root",
+              type: "reasoning",
+              text: "",
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_reasoning_delta",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_reasoning",
+            field: "text",
+            delta: "正在分析工具调用",
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  assert.equal(messages[0]?.parts?.[0]?.type, "reasoning")
+  assert.equal(messages[0]?.parts?.[0]?.text, "正在分析工具调用")
+})
+
+test("opencode uploader: getRequestOptions preserves host basePath on ingest upload", async () => {
+  const uploader = await uploaderPromise
+  const root = uploader.getRequestOptions(new URL("http://localhost:3000"), "wi_key", 2)
+  assert.equal(root.path, "/api/ingest/upload")
+
+  const prefixed = uploader.getRequestOptions(new URL("http://localhost:3000/insight/"), "wi_key", 2)
+  assert.equal(prefixed.path, "/insight/api/ingest/upload")
+
+  const apiSuffix = uploader.getRequestOptions(new URL("http://localhost:3000/insight/api"), "wi_key", 2)
+  assert.equal(apiSuffix.path, "/insight/api/ingest/upload")
+})

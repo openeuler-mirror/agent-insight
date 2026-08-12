@@ -130,6 +130,10 @@ async function run(options) {
 
   try {
     console.log('Syncing database schema...')
+    await runCommand('node scripts/prepare-ras-sqlite-schema.js', {
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
     await runCommand('npx prisma db push', {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, DATABASE_URL: dbUrl }
@@ -234,8 +238,12 @@ async function run(options) {
       console.log(`  Log: ${logPath}`)
       console.log(`  URL: http://localhost:${port}`)
       try {
-        await syncAdminApiKey({ port, dataRoot, host: `http://localhost:${port}` })
-        console.log('✓ Admin API key synced to client env')
+        const syncResult = await syncAdminApiKey({ port, dataRoot, host: `http://localhost:${port}` })
+        console.log(
+          syncResult.preservedClientApiKey
+            ? '✓ Admin API key saved; existing client identity preserved'
+            : '✓ Admin API key synced to client env',
+        )
       } catch (error) {
         console.log('⚠️  Failed to sync admin API key:', error.message)
       }
