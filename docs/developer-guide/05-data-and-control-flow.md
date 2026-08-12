@@ -83,13 +83,13 @@ flowchart TD
 关键函数：接入路由处理器（`processUploadAsync`、OTel `POST`）→ CodeAgent logs 的 `codeagent-otel/{detect,spool,aggregator}.ts` → `otel-consumer/sources.ts`，或 OTel traces 路由的 `decodeOtlpRequest` → `otel/normalize.ts:normalizeOtlpTraces` + `otel/spool.ts:appendOtelTraceEvents` → `otel-consumer/consumer.ts:startOtelSpoolConsumer` / `runOtelSpoolConsumerTick` → `otel/aggregate.ts:aggregateOtelTraceEvents` → `otel/adapter-registry.ts:getOtelTraceAdapter` → `otel/adapters/{actrail,openclaw,langfuse-langgraph,hermes,generic}.ts` → `ingest/adapters/registry.ts:getAdapter` / `storage/data-service.ts:extractInvokedSkillsFromSessionInteractions` → `agent-trace.ts:buildAgentCallTree` → `storage/data-service.ts:saveExecutionRecord` / `deriveSubagentExecutions`。OTel trace adapter 负责 transport-normalized span 到 `ExecutionRecord` 的纯转换，FrameworkAdapter 负责框架能力、skill 抽取和存储合并策略，两者都不直接写库。
 
 ## 后端流水线：Trace 标签
-Trace 用户标签分为版本标签和业务标签。标签定义写入 `Tag`，Trace 绑定写入 `ExecutionTag`；系统标签不持久化为 `Tag`，由前端根据 `Execution` 派生。`GET/POST /api/tags` 与 `PUT/DELETE /api/tags/[id]` 维护标签定义；`GET/PUT/POST/DELETE /api/observe/executions/[executionId]/tags` 维护单条 Trace 的绑定。`GET /api/observe/data?includeTags=1` 在 `readRecords` 批量 hydrate 阶段通过 `getTraceTagsByExecutionIds` 附加 `ExecutionRecord.userTags`；`bizTag=<tagId>` 会先经 `ExecutionTag` 反查 executionId，再与其它 where 条件取交集。Trace 列表默认将 `isSubagent=false` 作为独立的层级硬约束；Skill、标签等内容过滤不得放开它，只有显式 `includeSubagents`、`onlySubagents` 或按 task/parent 下钻才改变层级范围。`facet=tags&kind=business` 返回业务标签及使用次数，供 Trace 页快捷筛选。实验向导的 Agent 候选、`GET /api/experiments/traces` 和监听模式新 Trace 都通过 `buildExecutionOwnershipWhere('user')` 排除系统归属 Agent。关联 Trace 接口同时接受版本标签与业务标签，并为每个所选标签生成一个带用户与标签类型约束的 `Execution.executionTags.some` 关系条件；这些条件以 AND 合并，再与 Agent、用户归属、root-only、文本和时间条件一起进入 Prisma 分页查询。
+Trace 用户标签分为版本标签和业务标签。标签定义写入 `Tag`，Trace 绑定写入 `ExecutionTag`；系统标签不持久化为 `Tag`，由前端根据 `Execution` 派生。`GET/POST /api/tags` 与 `PUT/DELETE /api/tags/[id]` 维护标签定义；`GET/PUT/POST/DELETE /api/observe/executions/[executionId]/tags` 维护单条 Trace 的绑定。`GET /api/observe/data?includeTags=1` 在 `readRecords` 批量 hydrate 阶段通过 `getTraceTagsByExecutionIds` 附加 `ExecutionRecord.userTags`；`tagIds=<id,...>` 同时接受版本标签和业务标签，先经带用户与类型约束的 `ExecutionTag` 反查 executionId，再保留同时命中全部标签的 Trace。旧 `bizTag` 保持业务标签 OR 筛选兼容，同时存在时以 `tagIds` 为准。Trace 列表默认将 `isSubagent=false` 作为独立的层级硬约束；Skill、标签等内容过滤不得放开它，只有显式 `includeSubagents`、`onlySubagents` 或按 task/parent 下钻才改变层级范围。`GET /api/tags` 返回两类用户标签及使用次数，供 Trace 页多选筛选与打标。实验向导的 Agent 候选、`GET /api/experiments/traces` 和监听模式新 Trace 都通过 `buildExecutionOwnershipWhere('user')` 排除系统归属 Agent。关联 Trace 接口同样接受两类用户标签，并为每个所选标签生成一个带用户与标签类型约束的 `Execution.executionTags.some` 关系条件；这些条件以 AND 合并，再与 Agent、用户归属、root-only、文本和时间条件一起进入 Prisma 分页查询。
 
 ```mermaid
 flowchart TD
-    ui["TracePage 标签列 / 业务标签筛选"] --> tagsApi["/api/tags"]
+    ui["TracePage 标签列 / 用户标签多选"] --> tagsApi["/api/tags"]
     ui --> bindApi["/api/observe/executions/:executionId/tags"]
-    ui --> dataApi["/api/observe/data?includeTags=1&bizTag=..."]
+    ui --> dataApi["/api/observe/data?includeTags=1&tagIds=..."]
     experimentUi["Experiment Wizard / 关联 Trace"] --> experimentApi["/api/experiments/traces?search&from&to&tagIds"]
     tagsApi --> tagTable[(Tag)]
     bindApi --> linkTable[(ExecutionTag)]

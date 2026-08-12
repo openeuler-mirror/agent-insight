@@ -9,6 +9,7 @@ import { isActive } from '@/lib/evaluation-task-manager';
 import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
 import { listTraceTags } from '@/lib/trace-tags';
+import { parseObserveTraceTagFilters } from '@/lib/trace-tag-filters';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -345,12 +346,7 @@ export async function GET(request: Request) {
     const skillVersion = skillVersionStr ? parseInt(skillVersionStr, 10) : undefined;
     const attachEvaluations = includeEvaluationsParam === '1' || includeEvaluationsParam === 'true';
     const includeTags = searchParams.get('includeTags') === '1' || searchParams.get('includeTags') === 'true';
-    const bizTagParam = searchParams.get('bizTag') || '';
-    const businessTagIds = bizTagParam
-        .split(',')
-        .map(item => item.trim())
-        .filter(Boolean)
-        .slice(0, 50);
+    const { userTagIds, legacyBusinessTagIds } = parseObserveTraceTagFilters(searchParams);
 
     // facet=skills：返回该 user 可见的全部 skill(name + 版本)给前端下拉用。来自 ExecutionSkill(agent 作用域,
     // 含 sub-agent 用到的 skill),与"按 skill 服务端筛选"同源,避免下拉项随筛选结果塌缩。
@@ -358,7 +354,7 @@ export async function GET(request: Request) {
     if (facet === 'skills') {
         return NextResponse.json(await listObservedSkills(user));
     }
-    // facet=tags&kind=business|version：返回用户标签 + 使用次数，给业务标签筛选/打标控件使用。
+    // facet=tags&kind=business|version：返回用户标签 + 使用次数，给用户标签筛选/打标控件使用。
     if (facet === 'tags') {
         return NextResponse.json(await listTraceTags(user || '', searchParams.get('kind')));
     }
@@ -425,7 +421,8 @@ export async function GET(request: Request) {
         onlySubagents,
         parentExecutionId,
         clauses,
-        businessTagIds: businessTagIds.length > 0 ? businessTagIds : undefined,
+        userTagIds: userTagIds.length > 0 ? userTagIds : undefined,
+        businessTagIds: legacyBusinessTagIds.length > 0 ? legacyBusinessTagIds : undefined,
         timestampFrom,
         ownership,
         observedAgentFallback: databasePagination,
