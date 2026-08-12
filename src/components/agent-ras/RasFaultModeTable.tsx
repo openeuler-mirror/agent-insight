@@ -1,16 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Pencil, RotateCcw } from 'lucide-react';
+import { Loader2, Pencil, RotateCcw } from 'lucide-react';
+import { useAuth } from '@/lib/auth/auth-context';
+import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
-import {
-  RAS_FAULT_MODE_CATALOG,
-  type RasFaultModeCatalogItem,
-  type RasFaultModeId,
-  type RasFaultSeverity,
-  type RasRecoveryPrompt,
-  type RasRecoveryPromptRole,
-} from '@/lib/ingest/ras/fault-mode-catalog';
+import type {
+  RasCatalogPrompt,
+  RasCatalogSubmode,
+  RasCapabilityCatalog,
+} from '@/lib/ingest/ras/catalog-engine';
 import {
   loadFaultModeSubLabelOverrides,
   resetFaultModeSubLabel,
@@ -18,7 +17,11 @@ import {
   saveFaultModeSubLabelOverrides,
   type FaultModeSubLabelOverrides,
 } from '@/lib/ingest/ras/fault-mode-label-store';
-import { rasSeverityLabel, severityToStatusKind } from '@/lib/ingest/ras/normalize';
+import {
+  rasSeverityLabel,
+  setAnomalyKindLabelOverrides,
+  severityToStatusKind,
+} from '@/lib/ingest/ras/normalize';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { Button } from '@/components/ui/button';
 import {
@@ -28,17 +31,18 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-const PROMPT_ROLE_LABEL: Record<RasRecoveryPromptRole, { zh: string; en: string }> = {
+const PROMPT_ROLE_LABEL: Record<string, { zh: string; en: string }> = {
   steering: { zh: '注入 steering', en: 'Inject steering' },
   notice: { zh: '用户通知', en: 'User notice' },
   critical: { zh: '严重提示', en: 'Critical notice' },
 };
 
-function promptTemplate(prompt: RasRecoveryPrompt, locale: 'zh' | 'en'): string {
-  return locale === 'zh' ? prompt.templateZh : prompt.templateEn;
+function promptTemplate(prompt: RasCatalogPrompt, locale: 'zh' | 'en'): string {
+  const text = locale === 'zh' ? prompt.templateZh : prompt.templateEn;
+  return text || '';
 }
 
-function SeverityCell({ severities, locale }: { severities: RasFaultSeverity[]; locale: 'zh' | 'en' }) {
+function SeverityCell({ severities, locale }: { severities: string[]; locale: 'zh' | 'en' }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {severities.map((s) => (
@@ -60,13 +64,14 @@ function SubModeCell({
   onSave,
   onReset,
 }: {
-  item: RasFaultModeCatalogItem;
+  item: RasCatalogSubmode;
   locale: 'zh' | 'en';
   overrides: FaultModeSubLabelOverrides;
-  onSave: (id: RasFaultModeId, value: string) => void;
-  onReset: (id: RasFaultModeId) => void;
+  onSave: (id: string, value: string) => void;
+  onReset: (id: string) => void;
 }) {
-  const display = resolveFaultModeSubLabel(item.id, locale, overrides);
+  const defaultLabel = item.subMode[locale];
+  const display = resolveFaultModeSubLabel(item.id, locale, overrides, defaultLabel);
   const isOverridden = Boolean(overrides[item.id]);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(display);
@@ -77,7 +82,7 @@ function SubModeCell({
 
   const commit = () => {
     const next = draft.trim();
-    if (!next || next === item.subMode[locale]) {
+    if (!next || next === defaultLabel) {
       onReset(item.id);
     } else {
       onSave(item.id, next);
@@ -144,9 +149,12 @@ function SubModeCell({
   );
 }
 
-function promptActionLabel(prompt: RasRecoveryPrompt, locale: 'zh' | 'en'): string {
-  if (prompt.label) return prompt.label[locale];
-  const roleLabel = PROMPT_ROLE_LABEL[prompt.role][locale];
+function promptActionLabel(prompt: RasCatalogPrompt, locale: 'zh' | 'en'): string {
+  if (prompt.label?.[locale]) return prompt.label[locale]!;
+  if (prompt.label?.zh || prompt.label?.en) {
+    return (locale === 'zh' ? prompt.label.zh : prompt.label.en) || prompt.key;
+  }
+  const roleLabel = PROMPT_ROLE_LABEL[prompt.role]?.[locale] || prompt.role;
   const band = prompt.severityBand
     ? rasSeverityLabel(prompt.severityBand, locale)
     : null;
@@ -158,9 +166,9 @@ function RecoveryCell({
   locale,
   onOpenPrompt,
 }: {
-  item: RasFaultModeCatalogItem;
+  item: RasCatalogSubmode;
   locale: 'zh' | 'en';
-  onOpenPrompt: (item: RasFaultModeCatalogItem, prompt: RasRecoveryPrompt) => void;
+  onOpenPrompt: (item: RasCatalogSubmode, prompt: RasCatalogPrompt) => void;
 }) {
   const summary = item.recoverySummary[locale];
   return (
@@ -186,30 +194,95 @@ function RecoveryCell({
 
 export function RasFaultModeTable() {
   const { locale } = useLocale();
+  const { apiKey } = useAuth();
+  const zh = locale === 'zh';
   const [overrides, setOverrides] = useState<FaultModeSubLabelOverrides>({});
+  const [rows, setRows] = useState<RasCatalogSubmode[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [activeItem, setActiveItem] = useState<RasFaultModeCatalogItem | null>(null);
-  const [activePrompt, setActivePrompt] = useState<RasRecoveryPrompt | null>(null);
+  const [activeItem, setActiveItem] = useState<RasCatalogSubmode | null>(null);
+  const [activePrompt, setActivePrompt] = useState<RasCatalogPrompt | null>(null);
 
   useEffect(() => {
     setOverrides(loadFaultModeSubLabelOverrides());
   }, []);
 
-  const handleSave = (id: RasFaultModeId, value: string) => {
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const headers: HeadersInit = {};
+        if (apiKey) headers['x-witty-api-key'] = apiKey;
+        const res = await apiFetch('/api/agent-ras/catalog', { headers });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
+        }
+        const data = await res.json();
+        const catalog = data.catalog as RasCapabilityCatalog;
+        if (cancelled) return;
+        if (catalog.kindLabels) {
+          setAnomalyKindLabelOverrides(catalog.kindLabels);
+        }
+        setRows(Array.isArray(catalog.submodes) ? catalog.submodes : []);
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setRows([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiKey]);
+
+  const handleSave = (id: string, value: string) => {
     const next = { ...overrides, [id]: value };
     saveFaultModeSubLabelOverrides(next);
     setOverrides(next);
   };
 
-  const handleReset = (id: RasFaultModeId) => {
+  const handleReset = (id: string) => {
     setOverrides(resetFaultModeSubLabel(id, overrides));
   };
 
-  const openPrompt = (item: RasFaultModeCatalogItem, prompt: RasRecoveryPrompt) => {
+  const openPrompt = (item: RasCatalogSubmode, prompt: RasCatalogPrompt) => {
     setActiveItem(item);
     setActivePrompt(prompt);
     setDialogOpen(true);
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-12 text-sm text-foreground-muted">
+        <Loader2 className="size-4 animate-spin" />
+        {zh ? '加载能力目录…' : 'Loading catalog…'}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-[var(--radius-md)] border border-[var(--error)]/30 bg-[var(--error-subtle)] px-3 py-2 text-sm text-[var(--error)]">
+        {zh ? `加载能力目录失败：${error}` : `Failed to load catalog: ${error}`}
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-[var(--radius-md)] border border-border px-3 py-8 text-center text-sm text-foreground-muted">
+        {zh ? '暂无能力目录数据' : 'No catalog entries'}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -238,7 +311,7 @@ export function RasFaultModeTable() {
             </tr>
           </thead>
           <tbody>
-            {RAS_FAULT_MODE_CATALOG.map((item) => (
+            {rows.map((item) => (
               <tr key={item.id} className="border-b border-card-border last:border-b-0 align-top hover:bg-background-secondary/60">
                 <td className="px-3 py-3 text-foreground">
                   <div className="font-medium">{item.parent[locale]}</div>
@@ -281,7 +354,12 @@ export function RasFaultModeTable() {
                 : (locale === 'zh' ? '恢复提示词' : 'Recovery prompt')}
               {activeItem && (
                 <span className="ml-2 font-normal text-foreground-muted">
-                  · {resolveFaultModeSubLabel(activeItem.id, locale, overrides)}
+                  · {resolveFaultModeSubLabel(
+                    activeItem.id,
+                    locale,
+                    overrides,
+                    activeItem.subMode[locale],
+                  )}
                 </span>
               )}
             </DialogTitle>

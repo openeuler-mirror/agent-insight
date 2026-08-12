@@ -1,9 +1,7 @@
-import type { RasFaultModeId } from '@/lib/ingest/ras/fault-mode-catalog'
-import { RAS_FAULT_MODE_CATALOG } from '@/lib/ingest/ras/fault-mode-catalog'
-
 export const FAULT_MODE_SUB_LABEL_STORAGE_KEY = 'agent-ras.fault-mode.subLabels.v1'
 
-export type FaultModeSubLabelOverrides = Partial<Record<RasFaultModeId, string>>
+/** Sub-mode display overrides keyed by catalog submode id (string). */
+export type FaultModeSubLabelOverrides = Record<string, string>
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
@@ -19,9 +17,10 @@ export function loadFaultModeSubLabelOverrides(
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
     const out: FaultModeSubLabelOverrides = {}
-    for (const item of RAS_FAULT_MODE_CATALOG) {
-      const v = (parsed as Record<string, unknown>)[item.id]
-      if (typeof v === 'string' && v.trim()) out[item.id] = v.trim()
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof key === 'string' && key && typeof value === 'string' && value.trim()) {
+        out[key] = value.trim()
+      }
     }
     return out
   } catch {
@@ -35,9 +34,10 @@ export function saveFaultModeSubLabelOverrides(
 ): void {
   if (!storage) return
   const cleaned: FaultModeSubLabelOverrides = {}
-  for (const item of RAS_FAULT_MODE_CATALOG) {
-    const v = overrides[item.id]
-    if (typeof v === 'string' && v.trim()) cleaned[item.id] = v.trim()
+  for (const [key, value] of Object.entries(overrides)) {
+    if (typeof key === 'string' && key && typeof value === 'string' && value.trim()) {
+      cleaned[key] = value.trim()
+    }
   }
   if (Object.keys(cleaned).length === 0) {
     storage.removeItem(FAULT_MODE_SUB_LABEL_STORAGE_KEY)
@@ -47,7 +47,7 @@ export function saveFaultModeSubLabelOverrides(
 }
 
 export function resetFaultModeSubLabel(
-  id: RasFaultModeId,
+  id: string,
   current: FaultModeSubLabelOverrides,
   storage?: Pick<Storage, 'setItem' | 'removeItem'> | null,
 ): FaultModeSubLabelOverrides {
@@ -58,12 +58,12 @@ export function resetFaultModeSubLabel(
 }
 
 export function resolveFaultModeSubLabel(
-  id: RasFaultModeId,
+  id: string,
   locale: 'zh' | 'en',
   overrides: FaultModeSubLabelOverrides,
+  defaultLabel?: string,
 ): string {
   const override = overrides[id]
   if (override) return override
-  const item = RAS_FAULT_MODE_CATALOG.find((row) => row.id === id)
-  return item ? item.subMode[locale] : id
+  return defaultLabel ?? id
 }

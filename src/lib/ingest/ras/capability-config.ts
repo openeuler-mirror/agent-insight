@@ -31,10 +31,7 @@ export type RasLlmThinkingLoopConfig = {
 
 export type RasCapabilityConfigBody = {
   enabled: boolean
-  detectors: {
-    repeat_tool: RasRepeatToolConfig
-    llm_thinking_loop: RasLlmThinkingLoopConfig
-  }
+  detectors: Record<string, Record<string, unknown>>
   recovery: {
     notify_user_on_warning: boolean
   }
@@ -75,8 +72,8 @@ export function defaultCapabilityConfigBody(): RasCapabilityConfigBody {
   return {
     enabled: true,
     detectors: {
-      repeat_tool: defaultRepeatToolConfig(),
-      llm_thinking_loop: defaultLlmThinkingLoopConfig(),
+      repeat_tool: defaultRepeatToolConfig() as unknown as Record<string, unknown>,
+      llm_thinking_loop: defaultLlmThinkingLoopConfig() as unknown as Record<string, unknown>,
     },
     recovery: {
       notify_user_on_warning: true,
@@ -127,50 +124,41 @@ export function validateCapabilityConfigBody(raw: unknown): ValidateCapabilityRe
     return { ok: false, error: 'config must be an object' }
   }
   const src = raw as Record<string, unknown>
-  const detectors = (src.detectors && typeof src.detectors === 'object'
+  const detectorsIn = (src.detectors && typeof src.detectors === 'object' && !Array.isArray(src.detectors)
     ? (src.detectors as Record<string, unknown>)
-    : {}) as Record<string, unknown>
-  const repeatRaw = (detectors.repeat_tool && typeof detectors.repeat_tool === 'object'
-    ? detectors.repeat_tool
-    : {}) as Record<string, unknown>
-  const loopRaw = (detectors.llm_thinking_loop && typeof detectors.llm_thinking_loop === 'object'
-    ? detectors.llm_thinking_loop
     : {}) as Record<string, unknown>
   const recoveryRaw = (src.recovery && typeof src.recovery === 'object'
     ? src.recovery
     : {}) as Record<string, unknown>
 
   const defaults = defaultCapabilityConfigBody()
-  const warning = asFiniteNumber(repeatRaw.warning_threshold, defaults.detectors.repeat_tool.warning_threshold)
-  const critical = asFiniteNumber(repeatRaw.critical_threshold, defaults.detectors.repeat_tool.critical_threshold)
+  const repeatDefault = defaults.detectors.repeat_tool as RasRepeatToolConfig
+  const loopDefault = defaults.detectors.llm_thinking_loop as RasLlmThinkingLoopConfig
+  const repeatRaw = (detectorsIn.repeat_tool && typeof detectorsIn.repeat_tool === 'object'
+    ? detectorsIn.repeat_tool
+    : {}) as Record<string, unknown>
+  const loopRaw = (detectorsIn.llm_thinking_loop && typeof detectorsIn.llm_thinking_loop === 'object'
+    ? detectorsIn.llm_thinking_loop
+    : {}) as Record<string, unknown>
+
+  const warning = asFiniteNumber(repeatRaw.warning_threshold, repeatDefault.warning_threshold)
+  const critical = asFiniteNumber(repeatRaw.critical_threshold, repeatDefault.critical_threshold)
   const globalBreaker = asFiniteNumber(
     repeatRaw.global_breaker_threshold,
-    defaults.detectors.repeat_tool.global_breaker_threshold,
+    repeatDefault.global_breaker_threshold,
   )
   const unknownTool = asFiniteNumber(
     repeatRaw.unknown_tool_threshold,
-    defaults.detectors.repeat_tool.unknown_tool_threshold,
+    repeatDefault.unknown_tool_threshold,
   )
-  const startChars = asFiniteNumber(
-    loopRaw.detection_start_chars,
-    defaults.detectors.llm_thinking_loop.detection_start_chars,
-  )
-  const windowMax = asFiniteNumber(
-    loopRaw.window_max_chars,
-    defaults.detectors.llm_thinking_loop.window_max_chars,
-  )
-  const loopRepeat = asFiniteNumber(
-    loopRaw.loop_repeat_threshold,
-    defaults.detectors.llm_thinking_loop.loop_repeat_threshold,
-  )
+  const startChars = asFiniteNumber(loopRaw.detection_start_chars, loopDefault.detection_start_chars)
+  const windowMax = asFiniteNumber(loopRaw.window_max_chars, loopDefault.window_max_chars)
+  const loopRepeat = asFiniteNumber(loopRaw.loop_repeat_threshold, loopDefault.loop_repeat_threshold)
   const similar = asFiniteNumber(
     loopRaw.similar_clause_sim_threshold,
-    defaults.detectors.llm_thinking_loop.similar_clause_sim_threshold,
+    loopDefault.similar_clause_sim_threshold,
   )
-  const semanticChars = asFiniteNumber(
-    loopRaw.semantic_eval_chars,
-    defaults.detectors.llm_thinking_loop.semantic_eval_chars,
-  )
+  const semanticChars = asFiniteNumber(loopRaw.semantic_eval_chars, loopDefault.semantic_eval_chars)
 
   const nums = [
     ['warning_threshold', warning, 2],
@@ -192,31 +180,38 @@ export function validateCapabilityConfigBody(raw: unknown): ValidateCapabilityRe
     return { ok: false, error: 'similar_clause_sim_threshold must be between 0 and 1' }
   }
 
+  const detectors: Record<string, Record<string, unknown>> = {
+    ...defaults.detectors,
+  }
+  for (const [key, value] of Object.entries(detectorsIn)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    detectors[key] = { ...(detectors[key] || {}), ...(value as Record<string, unknown>) }
+  }
+  detectors.repeat_tool = {
+    enabled: asBool(repeatRaw.enabled, repeatDefault.enabled),
+    warning_threshold: warning!,
+    critical_threshold: critical!,
+    global_breaker_threshold: globalBreaker!,
+    unknown_tool_threshold: unknownTool!,
+  }
+  detectors.llm_thinking_loop = {
+    enabled: asBool(loopRaw.enabled, loopDefault.enabled),
+    detection_start_chars: startChars!,
+    window_max_chars: windowMax!,
+    loop_repeat_threshold: loopRepeat!,
+    similar_clause_sim_threshold: similar,
+    semantic_eval_chars: semanticChars!,
+    semantic_content_enabled: asBool(
+      loopRaw.semantic_content_enabled,
+      loopDefault.semantic_content_enabled,
+    ),
+  }
+
   return {
     ok: true,
     config: {
       enabled: asBool(src.enabled, defaults.enabled),
-      detectors: {
-        repeat_tool: {
-          enabled: asBool(repeatRaw.enabled, defaults.detectors.repeat_tool.enabled),
-          warning_threshold: warning!,
-          critical_threshold: critical!,
-          global_breaker_threshold: globalBreaker!,
-          unknown_tool_threshold: unknownTool!,
-        },
-        llm_thinking_loop: {
-          enabled: asBool(loopRaw.enabled, defaults.detectors.llm_thinking_loop.enabled),
-          detection_start_chars: startChars!,
-          window_max_chars: windowMax!,
-          loop_repeat_threshold: loopRepeat!,
-          similar_clause_sim_threshold: similar,
-          semantic_eval_chars: semanticChars!,
-          semantic_content_enabled: asBool(
-            loopRaw.semantic_content_enabled,
-            defaults.detectors.llm_thinking_loop.semantic_content_enabled,
-          ),
-        },
-      },
+      detectors,
       recovery: {
         notify_user_on_warning: asBool(
           recoveryRaw.notify_user_on_warning,
@@ -307,30 +302,18 @@ export function exportCapabilityJson(envelope: RasCapabilityConfigEnvelope): str
 
 export function exportCapabilityYaml(envelope: RasCapabilityConfigEnvelope): string {
   const c = envelope.config
-  const rt = c.detectors.repeat_tool
-  const loop = c.detectors.llm_thinking_loop
-  return [
-    'agent_ras:',
-    `  enabled: ${c.enabled}`,
-    '  detectors:',
-    '    repeat_tool:',
-    `      enabled: ${rt.enabled}`,
-    `      warning_threshold: ${rt.warning_threshold}`,
-    `      critical_threshold: ${rt.critical_threshold}`,
-    `      global_breaker_threshold: ${rt.global_breaker_threshold}`,
-    `      unknown_tool_threshold: ${rt.unknown_tool_threshold}`,
-    '    llm_thinking_loop:',
-    `      enabled: ${loop.enabled}`,
-    `      semantic_content_enabled: ${loop.semantic_content_enabled}`,
-    `      detection_start_chars: ${loop.detection_start_chars}`,
-    `      window_max_chars: ${loop.window_max_chars}`,
-    `      loop_repeat_threshold: ${loop.loop_repeat_threshold}`,
-    `      similar_clause_sim_threshold: ${loop.similar_clause_sim_threshold}`,
-    `      semantic_eval_chars: ${loop.semantic_eval_chars}`,
-    '  recovery:',
-    `    notify_user_on_warning: ${c.recovery.notify_user_on_warning}`,
-    '',
-  ].join('\n')
+  const lines = ['agent_ras:', `  enabled: ${c.enabled}`, '  detectors:']
+  for (const [domainId, raw] of Object.entries(c.detectors)) {
+    lines.push(`    ${domainId}:`)
+    const fields = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    for (const [k, v] of Object.entries(fields)) {
+      lines.push(`      ${k}: ${v}`)
+    }
+  }
+  lines.push('  recovery:')
+  lines.push(`    notify_user_on_warning: ${c.recovery.notify_user_on_warning}`)
+  lines.push('')
+  return lines.join('\n')
 }
 
 export type RasCapabilitySyncMeta = {
@@ -371,12 +354,14 @@ export function mergeCapabilityIntoLocalRasConfig(
     syncedFrom.updatedAt = meta.updatedAt
   }
 
+  const detectorsOut: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(body.detectors || {})) {
+    detectorsOut[key] = { ...(value as Record<string, unknown>) }
+  }
+
   const slice: Record<string, unknown> = {
     enabled: body.enabled,
-    detectors: {
-      repeat_tool: { ...body.detectors.repeat_tool },
-      llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
-    },
+    detectors: detectorsOut,
     recovery: { ...body.recovery },
   }
   if (Object.keys(syncedFrom).length > 0) {
@@ -393,13 +378,12 @@ export function mergeCapabilityIntoLocalRasConfig(
   const nextRas: Record<string, unknown> = {
     ...prevRas,
     enabled: body.enabled,
-    detectors: {
-      repeat_tool: { ...body.detectors.repeat_tool },
-      llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
-    },
+    detectors: detectorsOut,
     recovery: { ...body.recovery },
     // Keep flat llm_thinking_loop in sync for older plugin readers.
-    llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
+    llm_thinking_loop: {
+      ...((body.detectors.llm_thinking_loop as Record<string, unknown>) || {}),
+    },
     platforms: prevPlatforms,
   }
   delete nextRas.ras_config_revisions

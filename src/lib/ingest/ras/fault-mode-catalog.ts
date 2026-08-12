@@ -1,6 +1,14 @@
 /**
- * Static catalog of Agent RAS fault modes currently implemented in runtime.
- * Aligned with:
+ * DEPRECATED — NO LONGER the source of truth for fault-mode / capability catalog.
+ *
+ * Runtime truth is:
+ * - `getRasCapabilityCatalog()` in `@/lib/ingest/ras/catalog-engine`
+ * - `GET /api/agent-ras/catalog`
+ *
+ * This module is retained only as typed fixtures for legacy imports / offline
+ * reference. Do not use `RAS_FAULT_MODE_CATALOG` to drive UI or API responses.
+ *
+ * Historical alignment notes (fixtures may drift):
  * - agent_ras/core/detectors/llm_thinking_loop.py
  * - agent_ras/core/detectors/repeat_tool.py
  * - agent_ras/core/detectors/skill_verdicts.py

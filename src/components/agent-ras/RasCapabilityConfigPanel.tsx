@@ -11,6 +11,10 @@ import { Switch } from '@/components/ui/switch';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
+import type {
+  RasCatalogDomain,
+  RasCapabilityCatalog,
+} from '@/lib/ingest/ras/catalog-engine';
 import {
   defaultCapabilityConfigBody,
   platformSupportsSync,
@@ -18,15 +22,46 @@ import {
   type RasCapabilityConfigEnvelope,
   type RasCapabilityPlatformId,
 } from '@/lib/ingest/ras/capability-config';
-
-type DetectorKey = 'llm_thinking_loop' | 'repeat_tool';
+import { setAnomalyKindLabelOverrides } from '@/lib/ingest/ras/normalize';
 
 interface Props {
-  focusDetector?: DetectorKey | null;
+  focusDetector?: string | null;
 }
 
 function cloneConfig(config: RasCapabilityConfigBody): RasCapabilityConfigBody {
   return JSON.parse(JSON.stringify(config));
+}
+
+function domainSortKey(domain: RasCatalogDomain): number {
+  return Number(domain.priority ?? domain.order ?? 0);
+}
+
+function schemaPropertyType(
+  schema: Record<string, unknown> | undefined,
+  key: string,
+): string | null {
+  const props = schema?.properties as Record<string, Record<string, unknown>> | undefined;
+  const prop = props?.[key];
+  if (!prop) return null;
+  const t = prop.type;
+  return typeof t === 'string' ? t : null;
+}
+
+function schemaPropertyMin(
+  schema: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const props = schema?.properties as Record<string, Record<string, unknown>> | undefined;
+  const prop = props?.[key];
+  if (!prop || typeof prop.minimum !== 'number') return undefined;
+  return prop.minimum;
+}
+
+function fieldKeysForDomain(domain: RasCatalogDomain): string[] {
+  const props = (domain.configSchema?.properties || {}) as Record<string, unknown>;
+  const fromSchema = Object.keys(props);
+  if (fromSchema.length > 0) return fromSchema;
+  return Object.keys(domain.configDefaults || {});
 }
 
 function NumberField({
@@ -57,6 +92,22 @@ function NumberField({
   );
 }
 
+function updateDetectorField(
+  config: RasCapabilityConfigBody,
+  domainId: string,
+  field: string,
+  value: unknown,
+): RasCapabilityConfigBody {
+  const prev = (config.detectors[domainId] || {}) as Record<string, unknown>;
+  return {
+    ...config,
+    detectors: {
+      ...config.detectors,
+      [domainId]: { ...prev, [field]: value },
+    },
+  };
+}
+
 export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
   const { locale } = useLocale();
   const { apiKey } = useAuth();
@@ -66,13 +117,11 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
   const [envelope, setEnvelope] = useState<RasCapabilityConfigEnvelope | null>(null);
   const [draftConfig, setDraftConfig] = useState<RasCapabilityConfigBody>(defaultCapabilityConfigBody());
   const [draftSync, setDraftSync] = useState(false);
+  const [domains, setDomains] = useState<RasCatalogDomain[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Record<DetectorKey, boolean>>({
-    llm_thinking_loop: false,
-    repeat_tool: false,
-  });
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (focusDetector) {
@@ -94,14 +143,30 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiFetch(`/api/agent-ras/config?platform=${encodeURIComponent(plat)}`, {
-        headers: { 'x-witty-api-key': apiKey },
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
+      const headers = { 'x-witty-api-key': apiKey };
+      const [catalogRes, configRes] = await Promise.all([
+        apiFetch('/api/agent-ras/catalog', { headers }),
+        apiFetch(`/api/agent-ras/config?platform=${encodeURIComponent(plat)}`, { headers }),
+      ]);
+      if (!catalogRes.ok) {
+        const text = await catalogRes.text().catch(() => '');
+        throw new Error(`catalog HTTP ${catalogRes.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
       }
-      const data = await res.json();
+      if (!configRes.ok) {
+        const text = await configRes.text().catch(() => '');
+        throw new Error(`config HTTP ${configRes.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
+      }
+      const catalogData = await catalogRes.json();
+      const catalog = catalogData.catalog as RasCapabilityCatalog;
+      if (catalog.kindLabels) {
+        setAnomalyKindLabelOverrides(catalog.kindLabels);
+      }
+      const sorted = [...(catalog.domains || [])].sort(
+        (a, b) => domainSortKey(a) - domainSortKey(b),
+      );
+      setDomains(sorted);
+
+      const data = await configRes.json();
       const env = data.envelope as RasCapabilityConfigEnvelope;
       setEnvelope(env);
       setDraftConfig(cloneConfig(env.config));
@@ -181,19 +246,17 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
     }
   };
 
-  const detectorMeta: Record<DetectorKey, { title: string; summary: string }> = {
-    llm_thinking_loop: {
-      title: zh ? '思考 / 文本循环' : 'Thinking / text loop',
-      summary: zh
-        ? 'L1 字面周期 · L2 相似分句 · 可选 L3 语义 Judge'
-        : 'L1 suffix cycle · L2 similar clauses · optional L3 semantic judge',
-    },
-    repeat_tool: {
-      title: zh ? '工具调用重复' : 'Repeat tool calls',
-      summary: zh
-        ? '同参重复 · ping-pong · 未知工具 · 全局熔断'
-        : 'Generic repeat · ping-pong · unknown tool · global breaker',
-    },
+  const domainTitle = (domain: RasCatalogDomain) => {
+    if (domain.label) {
+      return (zh ? domain.label.zh : domain.label.en) || domain.id;
+    }
+    return domain.id;
+  };
+
+  const domainSummary = (domain: RasCatalogDomain) => {
+    const kinds = domain.kinds || [];
+    if (kinds.length === 0) return domain.id;
+    return kinds.join(' · ');
   };
 
   return (
@@ -271,10 +334,12 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
             </div>
           </div>
 
-          {(Object.keys(detectorMeta) as DetectorKey[]).map((key) => {
-            const meta = detectorMeta[key]
-            const det = draftConfig.detectors[key]
-            const open = expanded[key] || focusDetector === key
+          {domains.map((domain) => {
+            const key = domain.id;
+            const det = (draftConfig.detectors[key] || domain.configDefaults || {}) as Record<string, unknown>;
+            const open = Boolean(expanded[key]) || focusDetector === key;
+            const enabled = Boolean(det.enabled);
+            const fieldKeys = fieldKeysForDomain(domain).filter((f) => f !== 'enabled');
             return (
               <div
                 key={key}
@@ -295,21 +360,15 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
                       <ChevronRight className="size-4 shrink-0 text-foreground-muted" />
                     )}
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold text-foreground">{meta.title}</div>
-                      <div className="text-xs text-foreground-muted truncate">{meta.summary}</div>
+                      <div className="text-sm font-semibold text-foreground">{domainTitle(domain)}</div>
+                      <div className="text-xs text-foreground-muted truncate">{domainSummary(domain)}</div>
                     </div>
                   </button>
                   <Switch
-                    checked={det.enabled}
+                    checked={enabled}
                     disabled={!draftConfig.enabled}
                     onCheckedChange={(v) =>
-                      setDraftConfig((c) => ({
-                        ...c,
-                        detectors: {
-                          ...c.detectors,
-                          [key]: { ...c.detectors[key], enabled: v },
-                        },
-                      }))
+                      setDraftConfig((c) => updateDetectorField(c, key, 'enabled', v))
                     }
                   />
                 </div>
@@ -318,183 +377,59 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-foreground-muted mb-2">
                       {zh ? '高级阈值' : 'Advanced thresholds'}
                     </div>
-                    {key === 'llm_thinking_loop' ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        <NumberField
-                          label="detection_start_chars"
-                          value={draftConfig.detectors.llm_thinking_loop.detection_start_chars}
-                          min={1}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                llm_thinking_loop: {
-                                  ...c.detectors.llm_thinking_loop,
-                                  detection_start_chars: n,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                        <NumberField
-                          label="window_max_chars"
-                          value={draftConfig.detectors.llm_thinking_loop.window_max_chars}
-                          min={100}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                llm_thinking_loop: {
-                                  ...c.detectors.llm_thinking_loop,
-                                  window_max_chars: n,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                        <NumberField
-                          label="loop_repeat_threshold"
-                          value={draftConfig.detectors.llm_thinking_loop.loop_repeat_threshold}
-                          min={2}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                llm_thinking_loop: {
-                                  ...c.detectors.llm_thinking_loop,
-                                  loop_repeat_threshold: n,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                        <NumberField
-                          label="similar_clause_sim_threshold"
-                          value={draftConfig.detectors.llm_thinking_loop.similar_clause_sim_threshold}
-                          min={0}
-                          step={0.01}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                llm_thinking_loop: {
-                                  ...c.detectors.llm_thinking_loop,
-                                  similar_clause_sim_threshold: n,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                        <NumberField
-                          label="semantic_eval_chars"
-                          value={draftConfig.detectors.llm_thinking_loop.semantic_eval_chars}
-                          min={1}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                llm_thinking_loop: {
-                                  ...c.detectors.llm_thinking_loop,
-                                  semantic_eval_chars: n,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                        <div className="flex items-center justify-between gap-3 sm:col-span-2 lg:col-span-1 rounded-[var(--radius-md)] border border-border px-3 py-2">
-                          <span className="text-xs text-foreground-secondary">semantic_content_enabled</span>
-                          <Switch
-                            checked={draftConfig.detectors.llm_thinking_loop.semantic_content_enabled}
-                            onCheckedChange={(v) =>
-                              setDraftConfig((c) => ({
-                                ...c,
-                                detectors: {
-                                  ...c.detectors,
-                                  llm_thinking_loop: {
-                                    ...c.detectors.llm_thinking_loop,
-                                    semantic_content_enabled: v,
-                                  },
-                                },
-                              }))
-                            }
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                        <NumberField
-                          label="warning_threshold"
-                          value={draftConfig.detectors.repeat_tool.warning_threshold}
-                          min={2}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                repeat_tool: { ...c.detectors.repeat_tool, warning_threshold: n },
-                              },
-                            }))
-                          }
-                        />
-                        <NumberField
-                          label="critical_threshold"
-                          value={draftConfig.detectors.repeat_tool.critical_threshold}
-                          min={2}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                repeat_tool: { ...c.detectors.repeat_tool, critical_threshold: n },
-                              },
-                            }))
-                          }
-                        />
-                        <NumberField
-                          label="global_breaker_threshold"
-                          value={draftConfig.detectors.repeat_tool.global_breaker_threshold}
-                          min={2}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                repeat_tool: {
-                                  ...c.detectors.repeat_tool,
-                                  global_breaker_threshold: n,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                        <NumberField
-                          label="unknown_tool_threshold"
-                          value={draftConfig.detectors.repeat_tool.unknown_tool_threshold}
-                          min={2}
-                          onChange={(n) =>
-                            setDraftConfig((c) => ({
-                              ...c,
-                              detectors: {
-                                ...c.detectors,
-                                repeat_tool: {
-                                  ...c.detectors.repeat_tool,
-                                  unknown_tool_threshold: n,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                      </div>
-                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {fieldKeys.map((field) => {
+                        const type =
+                          schemaPropertyType(domain.configSchema, field)
+                          ?? (typeof det[field] === 'boolean'
+                            ? 'boolean'
+                            : typeof det[field] === 'number'
+                              ? 'number'
+                              : typeof (domain.configDefaults || {})[field] === 'boolean'
+                                ? 'boolean'
+                                : typeof (domain.configDefaults || {})[field] === 'number'
+                                  ? 'number'
+                                  : null);
+                        if (type === 'boolean') {
+                          return (
+                            <div
+                              key={field}
+                              className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border px-3 py-2"
+                            >
+                              <span className="text-xs text-foreground-secondary">{field}</span>
+                              <Switch
+                                checked={Boolean(det[field])}
+                                onCheckedChange={(v) =>
+                                  setDraftConfig((c) => updateDetectorField(c, key, field, v))
+                                }
+                              />
+                            </div>
+                          );
+                        }
+                        if (type === 'number' || type === 'integer') {
+                          const raw = det[field] ?? (domain.configDefaults || {})[field] ?? 0;
+                          const value = typeof raw === 'number' ? raw : Number(raw) || 0;
+                          const min = schemaPropertyMin(domain.configSchema, field);
+                          return (
+                            <NumberField
+                              key={field}
+                              label={field}
+                              value={value}
+                              min={min}
+                              step={type === 'number' && !Number.isInteger(min ?? value) ? 0.01 : undefined}
+                              onChange={(n) =>
+                                setDraftConfig((c) => updateDetectorField(c, key, field, n))
+                              }
+                            />
+                          );
+                        }
+                        return null;
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
-            )
+            );
           })}
 
           <div className="rounded-[var(--radius-lg)] border border-border bg-card-bg px-4 py-3 flex items-center justify-between gap-4">

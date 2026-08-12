@@ -14,6 +14,7 @@ const RUNTIME_ENTRIES = [
   'agents',
   'platform_adapter',
   'ras_runtime',
+  'catalog',
   'config',
   'pyproject.toml',
   'README.md',
@@ -42,10 +43,88 @@ function isSupportedPythonVersion(version) {
   return Boolean(parsed && (parsed.major > 3 || (parsed.major === 3 && parsed.minor >= 10)))
 }
 
+function loadCapabilityTemplate(packageRoot = PACKAGE_ROOT) {
+  const yamlPath = path.join(packageRoot, 'agent_ras', 'config', 'agent_ras_config.default.yaml')
+  if (!fs.existsSync(yamlPath)) return null
+  const agentRasRoot = path.join(packageRoot, 'agent_ras')
+  const pyCode = [
+    'import json,sys',
+    'from pathlib import Path',
+    `sys.path.insert(0, ${JSON.stringify(agentRasRoot)})`,
+    'from catalog.build import build_capability_catalog',
+    'cat = build_capability_catalog()',
+    'dets = {d["id"]: d["configDefaults"] for d in cat.get("domains", [])}',
+    'rec = (cat.get("recovery") or {}).get("global") or {"notify_user_on_warning": True}',
+    'print(json.dumps({"agent_ras": {"enabled": True, "detectors": dets, "recovery": rec}}))',
+  ].join('\n')
+  const py = spawnSync(
+    process.env.RAS_PYTHON || process.env.PYTHON || 'python3',
+    ['-c', pyCode],
+    { encoding: 'utf8', cwd: packageRoot },
+  )
+  if (py.status === 0 && py.stdout.trim()) {
+    try {
+      return JSON.parse(py.stdout.trim())
+    } catch {
+      /* fall through */
+    }
+  }
+  return parseCapabilityYamlFallback(fs.readFileSync(yamlPath, 'utf8'))
+}
+
+/** Minimal indented YAML object parser for agent_ras_config.default.yaml shape. */
+function parseCapabilityYamlFallback(text) {
+  const root = {}
+  const stack = [{ indent: -1, obj: root }]
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '')
+    if (!line.trim()) continue
+    const indent = raw.match(/^\s*/)[0].length
+    const m = line.trim().match(/^([A-Za-z0-9_]+):\s*(.*)$/)
+    if (!m) continue
+    const key = m[1]
+    let value = m[2]
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop()
+    const parent = stack[stack.length - 1].obj
+    if (value === '') {
+      const child = {}
+      parent[key] = child
+      stack.push({ indent, obj: child })
+      continue
+    }
+    if (value === 'true') value = true
+    else if (value === 'false') value = false
+    else if (/^-?\d+(\.\d+)?$/.test(value)) value = Number(value)
+    else value = value.replace(/^["']|["']$/g, '')
+    parent[key] = value
+  }
+  return root
+}
+
+function deepMergeMissing(target, source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return target
+  const out = target && typeof target === 'object' && !Array.isArray(target) ? target : {}
+  for (const [key, value] of Object.entries(source)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      out[key] = deepMergeMissing(
+        out[key] && typeof out[key] === 'object' ? out[key] : {},
+        value,
+      )
+    } else if (out[key] === undefined) {
+      out[key] = value
+    }
+  }
+  return out
+}
+
 function mergeRasConfig(existing, values) {
   const output = existing && typeof existing === 'object' && !Array.isArray(existing)
     ? structuredClone(existing)
     : {}
+  const template = loadCapabilityTemplate(values.packageRoot || PACKAGE_ROOT)
+  if (template?.agent_ras) {
+    output.agent_ras = deepMergeMissing(output.agent_ras || {}, template.agent_ras)
+  }
   const ras = output.agent_ras && typeof output.agent_ras === 'object'
     ? output.agent_ras
     : {}
@@ -54,6 +133,8 @@ function mergeRasConfig(existing, values) {
   const loop = ras.llm_thinking_loop && typeof ras.llm_thinking_loop === 'object'
     ? ras.llm_thinking_loop
     : {}
+  const detectors = ras.detectors && typeof ras.detectors === 'object' ? ras.detectors : {}
+  const recovery = ras.recovery && typeof ras.recovery === 'object' ? ras.recovery : {}
 
   ras.enabled = true
   Object.assign(service, {
@@ -72,6 +153,8 @@ function mergeRasConfig(existing, values) {
   ras.service = service
   ras.insight = insight
   ras.llm_thinking_loop = loop
+  ras.detectors = detectors
+  ras.recovery = recovery
   output.agent_ras = ras
   return output
 }

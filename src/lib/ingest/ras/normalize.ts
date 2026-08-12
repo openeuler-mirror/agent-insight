@@ -45,16 +45,27 @@ export const ANOMALY_KIND_LABEL = {
   tool_call_loop: { zh: "工具调用循环", en: "tool call loop" },
 } as const
 
+/** Filled from GET /api/agent-ras/catalog kindLabels when available. */
+let anomalyKindLabelOverrides: Record<string, { zh: string; en: string }> = {}
+
+export function setAnomalyKindLabelOverrides(
+  labels: Record<string, { zh: string; en: string }>,
+): void {
+  anomalyKindLabelOverrides = { ...labels }
+}
+
+export function rasKindLabel(kind: string, locale: "zh" | "en" = "zh"): string {
+  const hit =
+    anomalyKindLabelOverrides[kind] ||
+    (ANOMALY_KIND_LABEL as Record<string, { zh: string; en: string }>)[kind]
+  return hit ? hit[locale] : kind
+}
+
 export const SEVERITY_LABEL: Record<string, { zh: string; en: string }> = {
   low: { zh: "低危", en: "Low" },
   medium: { zh: "中危", en: "Medium" },
   high: { zh: "高危", en: "High" },
   critical: { zh: "严重", en: "Critical" },
-}
-
-export function rasKindLabel(kind: string, locale: "zh" | "en" = "zh"): string {
-  const hit = (ANOMALY_KIND_LABEL as Record<string, { zh: string; en: string }>)[kind]
-  return hit ? hit[locale] : kind
 }
 
 export function rasSeverityLabel(severity: string | null | undefined, locale: "zh" | "en" = "zh"): string {
