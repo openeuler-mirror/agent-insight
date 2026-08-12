@@ -166,6 +166,28 @@ async function run(options) {
   const nextDir = path.join(PACKAGE_ROOT, '.next')
   const isProduction = fs.existsSync(nextDir) && fs.existsSync(path.join(nextDir, 'BUILD_ID'))
 
+  // Next standalone 不会自动带上 browser 静态资源；缺了就会 404 → 前端 Application error。
+  if (isStandalone) {
+    const standaloneRoot = path.join(PACKAGE_ROOT, '.next', 'standalone')
+    const staticSrc = path.join(PACKAGE_ROOT, '.next', 'static')
+    const staticDest = path.join(standaloneRoot, '.next', 'static')
+    const publicSrc = path.join(PACKAGE_ROOT, 'public')
+    const publicDest = path.join(standaloneRoot, 'public')
+    fs.mkdirSync(path.join(standaloneRoot, '.next'), { recursive: true })
+    if (fs.existsSync(staticSrc)) {
+      fs.rmSync(staticDest, { recursive: true, force: true })
+      fs.cpSync(staticSrc, staticDest, { recursive: true })
+      console.log('✓ Synced .next/static → standalone')
+    } else {
+      console.warn('⚠️  Missing .next/static; UI chunks will 404 until you run npm run build')
+    }
+    if (fs.existsSync(publicSrc)) {
+      fs.rmSync(publicDest, { recursive: true, force: true })
+      fs.cpSync(publicSrc, publicDest, { recursive: true })
+      console.log('✓ Synced public → standalone')
+    }
+  }
+
   console.log(`Starting server on port ${port}...`)
 
   const logPath = path.join(dataRoot, 'server.log')
