@@ -1,161 +1,96 @@
 ---
 title: "安装指导"
-description: "生成客户端接入命令并获取当前账号 API Key"
+description: "为 AcTrail 配置 Agent Insight 链路上报"
 ---
 
 # 安装指导
 
-安装指导用于生成客户端接入命令、提供当前账号的接入凭证，并明确平台地址与上报路径，是运行数据能否进入 Agent Insight 的关键配置页面。
+安装指导页面只提供 **AcTrail** 接入方式。它会生成带当前平台地址和 API Key 的配置命令，让已安装的 AcTrail 通过官方 `otel-http` 插件向 Agent Insight 上报链路数据。
 
 > **Note**
-> Agent 已完成登记、模型已完成注册，但链路追踪仍无数据时，通常应优先检查安装命令、API Key 归属与上报地址配置。
-
-## 功能定位
-
-安装指导承担四项核心职责：
-
-- 按目标操作系统生成可直接执行的接入命令
-- 提供当前账号对应的 API Key
-- 展示服务端地址与上报路径等接入参数
-- 为链路采集与数据归属提供统一入口
+> Agent Insight 不安装或包装 AcTrail。开始前请先安装并启动 AcTrail，并确认官方 `otel-http` 插件可用。
 
 ## 页面结构
 
-安装指导页面通常由三个功能区组成：
+页面包含三个区域：
 
-1. **安装命令区**
-   按操作系统展示一键接入命令。
-2. **凭证与接入信息区**
-   展示当前 API Key、账号信息、平台地址与上报路径。
-3. **相关文档区**
-   提供 API Key、客户端接入与常见问题的辅助说明入口。
-
-### 安装命令区
-
-安装命令区通常包含：
-
-- **Linux / macOS 命令**：用于 Bash 环境的一键接入
-- **Windows PowerShell 命令**：用于 PowerShell 环境的一键接入
-- **Langfuse Python SDK 环境变量**：用于已经接入 Langfuse Python SDK 或 LangChain CallbackHandler 的项目
-- **复制按钮**：用于复制对应平台命令
-- **说明提示区**：说明命令执行后通常需要输入 API Key，并完成后续初始化
-
-### 凭证与接入信息区
-
-凭证与接入信息区通常包含：
-
-- **当前 API Key 面板**：展示当前账号的接入凭证，并提供复制能力
-- **接入信息面板**：展示邮箱、平台地址、API Key 状态与上报路径
-- **相关文档面板**：提供 API Key、客户端配置和常见问题说明入口
+1. **AcTrail 接入命令**
+   提供在 Linux / WSL 中执行的一键命令。
+2. **凭证与接入信息**
+   展示当前账号、API Key、平台地址和 OTLP traces 上报路径。
+3. **相关文档**
+   提供使用手册及接入排障入口。
 
 <p align="center">
-  <img src="../../images/config/client_config.png" alt="安装指导页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../images/config/actrail_install_guide.png" alt="AcTrail 安装指导页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
-该页面的核心目标是完成“命令生成、凭证提供、地址确认、接入执行”这一最短闭环。
+页面生成的命令固定选择 `actrail`，不会进入其他框架的交互式安装流程。
 
-## 关键配置项说明
+## 接入前提
 
-| 配置项 | 说明 |
-| --- | --- |
-| **安装命令** | 按目标操作系统生成的接入脚本入口，用于初始化客户端配置。 |
-| **API Key** | 当前账号的接入凭证，用于绑定上报身份与数据归属。 |
-| **平台地址** | Agent Insight 服务端地址，客户端通过该地址上报执行数据。 |
-| **上报路径** | 平台接收链路数据的接口路径，用于确认客户端上报目标。 |
-| **当前账号** | 当前登录态对应的用户身份，用于确认数据归属是否正确。 |
-| **API Key 状态** | 当前凭证的展示状态，用于辅助判断是否需要重新复制或更新。 |
-| **Langfuse 环境变量** | 将已有 Langfuse 上报目标重定向到 Agent Insight；`LANGFUSE_PUBLIC_KEY` 填当前 Agent Insight 用户名，`LANGFUSE_SECRET_KEY` 填该用户的 Agent Insight API Key，二者不对应时平台会拒绝上报；`session_id` 继续按 Langfuse 原语义作为跨 trace 会话归组字段。 |
+执行命令前确认：
 
-## API Key 归属机制
+- `actraild` 已安装并运行
+- AcTrail 官方 `otel-http` 插件存在
+- 当前终端位于 AcTrail 实际运行的 Linux / WSL 环境
+- 当前登录账号和页面右侧 API Key 归属一致
 
-API Key 决定客户端上报数据的身份归属与接入上下文。错误的 API Key 或错误的登录态通常会导致：
-
-- 数据归属到其他账号
-- 当前 Workspace 无法看到对应 Trace
-- 客户端执行正常，但平台侧表现为“未接入”或“无数据”
-
-> **Warning**
-> 账号切换后，应重新确认当前登录态、重新复制命令与 API Key，再执行接入流程。旧会话中的缓存信息可能导致凭证混用。
+Windows 用户应进入安装 AcTrail 的 WSL 发行版后执行页面中的 Unix 命令，不要直接在 PowerShell 中执行。
 
 ## 操作流程
 
-### 流程一：首次接入客户端
+1. 进入 **配置 → 安装指导**。
+2. 确认右侧账号、API Key 和平台地址。
+3. 复制 **Linux / WSL** 命令。
+4. 在 AcTrail 所在环境执行命令。
+5. 脚本生成 `~/.agent-insight/actrail/otel-http.config.toml`，并通过 `actraild plugin load --persist` 加载 `agent-insight.otel-http` 实例。
+6. 继续使用原有命令启动 Agent：
 
-1. 在 [Agent 管理](../agent-management) 中完成目标 Agent 登记。
-2. 进入 **安装指导** 页面。
-3. 在安装命令区选择目标操作系统。
-4. 复制对应的一键接入命令。
-5. 在目标 Agent 所在运行环境执行该命令。
-6. 按流程提示填入当前 API Key。
-7. 触发一次最小执行。
-8. 在 [链路追踪](../observability/view-traces) 中确认首条 Trace 是否生成。
+   ``bash
+   sudo actrailctl launch --name <名称> -- <Agent 命令>
+   ``
 
-### 流程二：重新部署或迁移客户端
+7. 进入 [链路追踪](../observability/view-traces) 确认新的 Trace。
 
-1. 进入 **安装指导** 页面。
-2. 重新确认平台地址与上报路径。
-3. 重新复制当前操作系统对应命令。
-4. 在新的运行环境执行初始化命令。
-5. 使用当前 API Key 完成配置。
-6. 触发一次验证执行并观察链路数据是否恢复。
+AcTrail 使用 `/api/ingest/otel/v1/traces` 上报 protobuf OTLP traces，并在请求中携带当前用户的 API Key。
 
-### 流程三：接入已有 Langfuse Python SDK 项目
+## 非默认安装目录
 
-适用于项目代码已经使用 Langfuse Python SDK、LangChain CallbackHandler 或兼容的 Langfuse OTLP 上报方式。
+默认情况下，安装脚本查找：
 
-1. 进入 **安装指导** 页面。
-2. 复制 **Langfuse Python SDK** 区域中的环境变量。
-3. 在目标项目运行环境中设置这些变量。
-4. 重新运行一次真实 agent 请求。
-5. 在 [链路追踪](../observability/view-traces) 中确认是否出现新的 Trace。
+- AcTrail operator 配置：`/etc/actrail/actraild.conf`
+- 官方插件：`~/.actrail/plugins/otel-http/`、`/usr/share/actrail/plugins/otel-http/` 或 `/etc/actrail/plugins/otel-http/`
 
-Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id` 只是跨 trace 的会话归组字段，不参与生成 Agent Insight 执行 ID。Langfuse 兼容上报会校验 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：public key 必须是 Agent Insight 用户名，secret key 必须是该用户的 Agent Insight API Key。
+使用非默认目录时，在执行页面命令前设置：
 
-### 流程四：排查“无数据上报”
-
-1. 回到安装指导页确认当前账号、API Key 与平台地址。
-2. 确认执行命令的机器就是目标 Agent 实际运行环境。
-3. 确认客户端已完成至少一次真实执行。
-4. 确认服务端地址与上报路径可达。
-5. 进入链路追踪确认是否已有新 Trace 写入。
-
-## 维护建议
-
-### 环境隔离
-
-开发、测试、生产环境建议分别完成独立接入，并为 Agent 使用清晰的环境命名，避免接入配置混用。
-
-### 凭证复核
-
-涉及账号切换、客户端重装、环境迁移时，建议重新复制 API Key，而不是复用历史命令或旧凭证。
-
-### 接入验证最小闭环
-
-每次接入完成后，建议立即执行一次最小请求，并在链路追踪中确认首条 Trace 是否成功生成，以缩短排障路径。
+```bash
+export ACTRAIL_OPERATOR_CONFIG=/path/to/actraild.conf
+export ACTRAIL_PLUGIN_DIR=/path/to/plugins
+```
 
 ## 常见异常
 
-### 命令执行成功，但平台中没有 Trace
+### 未找到 actraild
 
-常见原因包括：
+确认 AcTrail 已安装，并确保 `actraild` 位于 `PATH`；也可以通过 `ACTRAILD_BIN` 指定可执行文件。
 
-- 执行环境不是目标 Agent 的实际运行环境
-- API Key 错误、过期或归属错误
-- 平台地址不可达
-- 客户端尚未产生真实执行
-- 上报路径配置异常
+### 未找到 otel-http 插件
 
-### 页面中的 API Key 与预期不一致
+升级或重新安装包含官方 `otel-http` 插件的 AcTrail，或通过 `ACTRAIL_PLUGIN_DIR` 指定插件目录。
 
-常见原因包括：
+### 配置完成但没有 Trace
 
-- 登录态已经切换，但页面未同步刷新
-- 本地缓存保留了旧账号信息
-- 当前工作会话与预期账号不一致
+依次检查：
+
+1. `agent-insight.otel-http` 插件实例是否已加载
+2. AcTrail 所在环境能否访问页面显示的平台地址
+3. API Key 是否属于当前登录账号
+4. 是否使用 `actrailctl launch` 触发了一次真实 Agent 执行
+5. `/api/ingest/otel/v1/traces` 是否可达
 
 ## 下一步
 
 - 完成 Agent 资产登记： [Agent 管理](../agent-management)
 - 验证链路是否成功上报： [链路追踪](../observability/view-traces)
 - 继续完成整体接入流程： [5 分钟上手](../quickstart)
-- 配置后续模型能力： [模型注册](./model-registry)
