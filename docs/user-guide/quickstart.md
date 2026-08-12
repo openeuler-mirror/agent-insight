@@ -295,32 +295,20 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 进入 **配置 → 安装指导**，按页面提示完成接入。
 
-通常你会完成这些动作：
+按下面步骤完成 AcTrail 接入：
 
-1. 选择当前环境对应的安装方式，例如 **Linux / macOS** 或 **Windows (PowerShell)**
-2. 复制页面生成的安装命令
+1. 先安装并启动 AcTrail，确认官方 `otel-http` 插件可用。
+2. 在页面复制 **Linux / WSL** 命令。
 
-   <p align="center">
-     <img src="../images/install_guide.png" alt="安装指导页面" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
+3. 在 AcTrail 实际运行的 Linux / WSL 环境执行命令。Windows 用户应先进入对应 WSL 发行版。
+4. 脚本会生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给 AcTrail 官方 `otel-http` 插件，并持久化加载 `agent-insight.otel-http` 实例。
+5. 继续使用原来的启动方式运行 Agent：
 
-3. 在 Agent 所在机器上执行该命令
-4. 使用右侧显示的 API Key 和接入信息完成配置
+   ``bash
+   sudo actrailctl launch --name <名称> -- <Agent 命令>
+   ``
 
-   下面以 `opencode` 作为客户端为例：
-
-   <p align="center">
-     <img src="../images/install_client.png" alt="以 opencode 为例的客户端安装输出" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
-
-安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
-
-你也可以选择 **OpenClaw**。安装脚本会生成一个同名命令包装函数，在调用原始 `openclaw` 命令时注入 OTel 环境变量；OpenClaw 仍直接访问自己的模型供应商，Agent Insight 只接收遥测数据，不代理模型请求。
-
-如果使用 **AcTrail**，先自行完成 AcTrail 安装并启动守护进程，再在安装指导中选择 AcTrail 并于 AcTrail 所在的 Linux/WSL 环境运行 Unix 命令。脚本不会安装或包装 AcTrail，只会生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给 AcTrail 官方 `otel-http` 插件，并持久化加载 `agent-insight.otel-http` 实例。之后继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>`；AcTrail 会自动上报。若 AcTrail 使用非默认配置或插件目录，可在运行脚本前分别设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
-
-默认接入使用 OTLP/HTTP JSON：Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/otel/v1/traces`。安装脚本末尾也会输出一份可手动复制的纯配置环境变量块。旧版 watcher 仅作为兼容方式保留；同一 OpenClaw 实例只能选择 OTel 或 watcher 其中一种，避免重复 Trace。
-
+如果 AcTrail 使用非默认配置或插件目录，可在运行脚本前分别设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
 
 ---
 
@@ -328,13 +316,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 完成安装或配置后，按下面两步验证是否已生成 Trace。
 
-1. 在 `opencode` 中发送一次真实请求，例如执行一个简单任务，让 Agent 实际运行起来。
-
-   下面以 `opencode` 为例：
-
-   <p align="center">
-     <img src="../images/opencode_example.png" alt="opencode 请求示例" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
+1. 使用 `sudo actrailctl launch --name <名称> -- <Agent 命令>` 发起一次真实 Agent 执行。
 
 2. 回到平台，进入 **运行观测 → 链路追踪**，确认是否出现新的 Trace。
 
@@ -356,7 +338,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 > **Warning**
 > 如果 30 秒后仍然看不到数据，按下面顺序排查：
 >
-> 1. 先查看客户端日志文件 `~/.agent-insight/logs/opencode_uploader.log`
+> 1. 检查 `actraild plugin status --instance agent-insight.otel-http` 的状态
 > 2. 确认客户端到服务端的网络是否通顺
 > 3. 是否选中了正确的 Workspace
 > 4. Agent 使用的 API Key / 配置是否来自当前 Agent

@@ -59,9 +59,14 @@ test('false/no/0 不会误开启非交互或无 key 模式，framework 单数别
   assert.match(script, /^SELECTED_FRAMEWORKS="claude"$/m);
 });
 
-test('安装页只在已选框架时生成 yes=1 的全程非交互命令', () => {
+test('安装页固定生成 AcTrail 全程非交互命令且不展示其他接入方式', () => {
   const page = fs.readFileSync(path.resolve(__dirname, '../src/app/(main)/accessconfig/install/page.tsx'), 'utf8');
-  assert.match(page, /frameworks\.length \? `yes=1` : ''/);
+  assert.match(page, /'yes=1'/);
+  assert.match(page, /'frameworks=actrail'/);
+  assert.doesNotMatch(page, /FRAMEWORK_OPTIONS|FrameworkPicker|LangfuseEnvCard/);
+  for (const hidden of ['OpenCode', 'Claude Code', 'CodeAgent', 'OpenClaw', 'Hermes', 'JiuwenSwarm', 'Qoder CN product family']) {
+    assert.doesNotMatch(page, new RegExp(hidden));
+  }
 });
 
 test('OpenClaw 纯配置输出与已安装 wrapper 使用相同的 JSON logs/traces 端点', async () => {

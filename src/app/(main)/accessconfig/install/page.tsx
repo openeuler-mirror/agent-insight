@@ -3,7 +3,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import {
     Terminal,
-    SquareTerminal,
     Key,
     Copy,
     Check,
@@ -11,9 +10,7 @@ import {
     BookOpen,
     ExternalLink,
     CircleCheck,
-    Cloud,
     UserCircle,
-    Boxes,
 } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -27,21 +24,6 @@ import { Term } from '@/components/text/Term';
  * 视觉/交互语言对齐 ModelConfigManager(registry 页):pageWrap/pageInner 骨架、
  * introRow(描述)、双列网格(主区 + 300px sidebar)、panelCard、lucide 图标统一。
  */
-
-/**
- * 可勾选的采集端框架。value 必须与 /api/ingest/setup 的白名单一致——
- * 勾选结果以 ?frameworks=a,b 传给脚本，脚本据此跳过终端内的交互选择。
- */
-const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
-    { value: 'opencode', label: 'OpenCode' },
-    { value: 'claude', label: 'Claude Code' },
-    { value: 'codeagent', label: 'CodeAgent' },
-    { value: 'openclaw', label: 'OpenClaw' },
-    { value: 'hermes', label: 'Hermes' },
-    { value: 'jiuwen', label: 'JiuwenSwarm' },
-    { value: 'qoder', label: 'Qoder CN product family' },
-    { value: 'actrail', label: 'AcTrail' },
-];
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
@@ -82,30 +64,20 @@ export default function AccessInstallPage() {
     // useMemo 同步跑——server 端返回空、client 首次渲染返回实际命令,触发 hydration mismatch。
     // 改成 mount 后再算,server 与 client 首次都渲染空,effect 之后再填入命令。
     const [linuxCmd, setLinuxCmd] = useState('');
-    const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
-    // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
-    const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
     useEffect(() => {
         const protocol = window.location.protocol;
         const h = window.location.host;
         const baseUrl = `${protocol}//${h}`;
         const setupUrl = getApiUrl('/api/ingest/setup');
-        // 逗号在 query 里合法，不编码——命令行里可读性更好。
         const query = [
             apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
-            frameworks.length ? `yes=1` : '',
-            frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
+            'yes=1',
+            'frameworks=actrail',
         ].filter(Boolean).join('&');
-        const suffix = query ? `?${query}` : '';
-        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
-        setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
+        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}?${query}" | bash`);
         setHost(baseUrl);
-    }, [apiKey, frameworks]);
-
-    const toggleFramework = (value: string) => {
-        setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
-    };
+    }, [apiKey]);
 
     const handleCopy = async (text: string, key: string) => {
         // 不弹任何提示——成功就让按钮变绿,失败也静默
@@ -143,14 +115,6 @@ export default function AccessInstallPage() {
     };
 
     const keyReady = !!apiKey;
-    const langfuseUser = user || (isZh ? '<你的用户名>' : '<your-username>');
-    const langfuseSecret = apiKey || (isZh ? '<你的 Agent Insight API Key>' : '<your Agent Insight API key>');
-    const langfuseHost = host ? `${host}${getApiUrl('')}` : 'http://localhost:3000';
-    const langfuseEnv = [
-        `LANGFUSE_BASE_URL=${langfuseHost}`,
-        `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
-        `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
-    ].join('\n');
 
     return (
         <>
@@ -162,24 +126,24 @@ export default function AccessInstallPage() {
                         <div style={descText}>
                             <p style={introLead}>
                                 {isZh
-                                    ? <>按<b style={descStrong}>项目类型</b>(而非操作系统)选择接入方式:</>
-                                    : <>Pick your integration path by <b style={descStrong}>project type</b>, not OS:</>}
+                                    ? <>将已安装的 <b style={descStrong}>AcTrail</b> 接入 Agent Insight:</>
+                                    : <>Connect your existing <b style={descStrong}>AcTrail</b> installation to Agent Insight:</>}
                             </p>
                             <ul style={introList}>
                                 <li style={introItem}>
                                     <span style={introDot} />
                                     <span>
                                         {isZh
-                                            ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / OpenCode / OpenClaw 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
-                                            : <><b style={descStrong}>Command-line agents</b> (Claude Code, OpenCode, OpenClaw, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
+                                            ? <>请先安装并启动 AcTrail,同时确保官方 <code style={inlineCode}>otel-http</code> 插件可用。</>
+                                            : <>Install and start AcTrail first, and make sure its official <code style={inlineCode}>otel-http</code> plugin is available.</>}
                                     </span>
                                 </li>
                                 <li style={introItem}>
                                     <span style={introDot} />
                                     <span>
                                         {isZh
-                                            ? <><b style={descStrong}>LangChain / LangGraph</b> 的 Python 项目:无需安装,只改环境变量;Windows / Linux / macOS 写法相同。</>
-                                            : <><b style={descStrong}>LangChain / LangGraph</b> Python projects: no install needed — just set environment variables; identical on Windows, Linux and macOS.</>}
+                                            ? <>在 AcTrail 实际运行的 <b style={descStrong}>Linux / WSL</b> 环境执行下方命令;脚本只配置上报插件,不会安装或包装 AcTrail。</>
+                                            : <>Run the command below in the <b style={descStrong}>Linux / WSL</b> environment where AcTrail runs. The script only configures telemetry; it does not install or wrap AcTrail.</>}
                                     </span>
                                 </li>
                             </ul>
@@ -193,58 +157,22 @@ export default function AccessInstallPage() {
                             <div style={sectionHeading}>
                                 <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
                                 <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                    {isZh ? '命令行 Agent 安装' : 'Command-line Agents'}
+                                    {isZh ? 'AcTrail 接入' : 'AcTrail integration'}
                                 </span>
-                                <span style={countPill}>{frameworks.length}</span>
+                                <span style={countPill}>OTLP</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '先勾选框架,再按系统二选一' : 'Pick your frameworks, then your OS'}
+                                    {isZh ? '在 AcTrail 所在环境执行' : 'Run where AcTrail is installed'}
                                 </span>
                             </div>
-
-                            <FrameworkPicker
-                                options={FRAMEWORK_OPTIONS}
-                                selected={frameworks}
-                                onToggle={toggleFramework}
-                                locale={locale}
-                            />
 
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
-                                label="Linux / macOS"
-                                hint={isZh ? '运行 bash / zsh 的终端' : 'bash / zsh shells'}
+                                label="Linux / WSL"
+                                hint={isZh ? '使用 AcTrail 所在环境的 bash / zsh 终端' : 'Use a bash / zsh shell in the AcTrail environment'}
                                 cmd={linuxCmd}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
-                                locale={locale}
-                            />
-
-                            <CommandCard
-                                icon={<SquareTerminal size={14} strokeWidth={2.2} />}
-                                label="Windows (PowerShell)"
-                                hint={isZh ? '以管理员身份运行 PowerShell' : 'Run PowerShell as administrator'}
-                                cmd={windowsCmd}
-                                copied={copied === 'windows'}
-                                onCopy={() => handleCopy(windowsCmd, 'windows')}
-                                locale={locale}
-                            />
-
-                            <div style={{ ...sectionHeading, marginTop: 8 }}>
-                                <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
-                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                    {isZh ? 'LangChain / LangGraph 接入' : 'LangChain / LangGraph'}
-                                </span>
-                                <span style={countPill}>env</span>
-                                <span style={{ flex: 1 }} />
-                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? 'Python 项目,任何系统只改环境变量' : 'Python — env vars only, any OS'}
-                                </span>
-                            </div>
-
-                            <LangfuseEnvCard
-                                envText={langfuseEnv}
-                                copied={copied === 'langfuse-env'}
-                                onCopy={() => handleCopy(langfuseEnv, 'langfuse-env')}
                                 locale={locale}
                             />
 
@@ -253,8 +181,8 @@ export default function AccessInstallPage() {
                                 <div style={hintIcon}><Info size={16} /></div>
                                 <div style={{ flex: 1, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
                                     <b style={{ color: 'var(--foreground)', fontWeight: 600 }}>{isZh ? '提示' : 'Tip'}</b> · {isZh
-                                        ? '若 API Key 切换了账号没刷新,请先退出并重新登录平台再复制 —— 客户端使用错误的 Key 上报时,trace 会落到原账号名下而非当前账号。'
-                                        : 'If you switched accounts but the API key did not refresh, log out and log back in before copying — a stale key sends traces to the old account.'}
+                                        ? <>Windows 用户请进入安装 AcTrail 的 WSL 发行版后执行上述命令。配置完成后,继续使用原来的 <code style={inlineCode}>sudo actrailctl launch --name &lt;名称&gt; -- &lt;Agent 命令&gt;</code>。</>
+                                        : <>On Windows, enter the WSL distribution that hosts AcTrail before running the command. Continue launching agents with <code style={inlineCode}>sudo actrailctl launch --name &lt;name&gt; -- &lt;agent command&gt;</code>.</>}
                                 </div>
                             </div>
                         </div>
@@ -283,57 +211,6 @@ export default function AccessInstallPage() {
 }
 
 /* ====================== Sub-components ====================== */
-
-function FrameworkPicker({
-    options, selected, onToggle, locale,
-}: {
-    options: { value: string; label: string }[];
-    selected: string[];
-    onToggle: (value: string) => void;
-    locale: string;
-}) {
-    const isZh = locale === 'zh';
-    return (
-        <article style={commandCard}>
-            <header style={commandCardHeader}>
-                <span style={commandIconBox}><Boxes size={14} strokeWidth={2.2} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
-                        {isZh ? '选择要接入的框架' : 'Frameworks to integrate'}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
-                        {isZh ? '可多选,下方命令会跟着变' : 'Multi-select — the commands below update accordingly'}
-                    </div>
-                </div>
-            </header>
-            <div style={chipRow}>
-                {options.map(o => {
-                    const active = selected.includes(o.value);
-                    return (
-                        <button
-                            key={o.value}
-                            type="button"
-                            onClick={() => onToggle(o.value)}
-                            style={active ? frameworkChipActive : frameworkChip}
-                        >
-                            {active && <Check size={12} strokeWidth={2.6} />}
-                            {o.label}
-                        </button>
-                    );
-                })}
-            </div>
-            <div style={langfuseNote}>
-                {selected.length === 0
-                    ? (isZh
-                        ? '未勾选任何框架 —— 命令不带 frameworks 参数,脚本会在终端里让你交互选择(该步骤需要访问 npm 源)。'
-                        : 'Nothing selected — the command omits the frameworks parameter and the script prompts inside the terminal (that step needs npm registry access).')
-                    : (isZh
-                        ? '已勾选的框架会写进命令,脚本跳过终端内的交互选择 —— 内网/离线环境无需访问 npm 源。'
-                        : 'Selected frameworks are baked into the command, so the script skips the terminal prompt — no npm registry access needed on offline or intranet machines.')}
-            </div>
-        </article>
-    );
-}
 
 function CommandCard({
     icon, label, hint, cmd, copied, onCopy, locale,
@@ -456,53 +333,12 @@ function ConnectionPanel({
                 />
                 <KvRow
                     label={isZh ? 'OTEL 上报' : 'OTEL trace'}
-                    value="/api/public/otel/v1/traces"
+                    value="/api/ingest/otel/v1/traces"
                     mono
                     ellipsis
                 />
             </ul>
         </section>
-    );
-}
-
-function LangfuseEnvCard({
-    envText, copied, onCopy, locale,
-}: {
-    envText: string;
-    copied: boolean;
-    onCopy: () => void;
-    locale: string;
-}) {
-    const isZh = locale === 'zh';
-    return (
-        <article style={commandCard}>
-            <header style={commandCardHeader}>
-                <span style={commandIconBox}><Cloud size={14} strokeWidth={2.2} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
-                        {isZh ? '环境变量配置' : 'Environment variables'}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
-                        {isZh ? 'LangChain / LangGraph 项目通用,Windows / Linux / macOS 写法一致' : 'Same for LangChain / LangGraph on Windows, Linux or macOS'}
-                    </div>
-                </div>
-                <button onClick={onCopy} style={copied ? copiedBtn : ghostBtn}>
-                    {copied
-                        ? <><Check size={13} strokeWidth={2.5} />{isZh ? '已复制' : 'Copied'}</>
-                        : <><Copy size={13} strokeWidth={2.2} />{isZh ? '复制' : 'Copy'}</>}
-                </button>
-            </header>
-            <div style={commandBox}>
-                <code style={{ ...commandCode, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {envText}
-                </code>
-            </div>
-            <div style={langfuseNote}>
-                {isZh
-                    ? '这些以 LANGFUSE_ 开头的变量由 LangChain / LangGraph 的追踪回调读取,填好即可、无需改代码。PUBLIC_KEY 填当前 Agent Insight 用户名,SECRET_KEY 填该用户的 Agent Insight API Key;两者不对应时平台会拒绝上报。'
-                    : 'These LANGFUSE_-prefixed variables are read by the LangChain / LangGraph tracing callback — no code changes needed. Set PUBLIC_KEY to your Agent Insight username and SECRET_KEY to that user\'s Agent Insight API key. Mismatched credentials are rejected.'}
-            </div>
-        </article>
     );
 }
 
@@ -749,37 +585,6 @@ const commandIconBox: CSSProperties = {
     flexShrink: 0,
 };
 
-const chipRow: CSSProperties = {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 8,
-};
-
-const frameworkChip: CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
-    padding: '6px 13px',
-    background: 'var(--background-secondary)',
-    color: 'var(--foreground-secondary)',
-    borderWidth: 1,
-    borderStyle: 'solid',
-    borderColor: 'var(--border)',
-    borderRadius: 999,
-    fontSize: 12.5,
-    fontWeight: 500,
-    cursor: 'pointer',
-    transition: 'all .12s ease',
-    lineHeight: 1.4,
-};
-
-const frameworkChipActive: CSSProperties = {
-    ...frameworkChip,
-    background: 'var(--primary-subtle)',
-    color: 'var(--primary)',
-    borderColor: 'var(--primary-subtle-border)',
-    fontWeight: 600,
-};
 
 const commandBox: CSSProperties = {
     background: 'var(--background-secondary)',
@@ -880,12 +685,6 @@ const hintIcon: CSSProperties = {
     flexShrink: 0,
 };
 
-const langfuseNote: CSSProperties = {
-    fontSize: 12,
-    lineHeight: 1.6,
-    color: 'var(--foreground-secondary)',
-    padding: '0 2px',
-};
 
 const inlineCode: CSSProperties = {
     background: 'var(--background-secondary)',
