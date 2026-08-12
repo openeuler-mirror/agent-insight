@@ -203,6 +203,7 @@ export const zh = {
     resetColumns: '恢复默认列',
     columnSettings: '列设置',
     filterBusinessTag: '业务标签',
+    filterUserTag: '用户标签',
     editTags: '编辑标签',
     addTag: '打标',
     noUserTags: '无标签',

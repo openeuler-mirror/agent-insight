@@ -10,6 +10,10 @@ import {
     getAgentInsightClientPackageSpec,
     getAgentInsightRasBashInstaller,
 } from '@/lib/ingest/setup-package';
+import {
+  ACTRAIL_UNIX_SETUP_BLOCK,
+  ACTRAIL_WINDOWS_SETUP_BLOCK,
+} from '../actrail-setup';
 
 function detectPlatform(request: Request): 'windows' | 'unix' {
     const userAgent = request.headers.get('user-agent') || '';
@@ -138,7 +142,8 @@ const frameworks = [
     { name: 'xiaoO', value: 'xiaoo' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
     { name: 'Qoder CN product family', value: 'qoder' },
-    { name: 'Trae IDE', value: 'trae' }
+    { name: 'Trae IDE', value: 'trae' },
+    { name: 'AcTrail', value: 'actrail' }
 ];
 
 async function select() {
@@ -213,6 +218,7 @@ INSTALL_XIAOO=false
 INSTALL_JIUWEN=false
 INSTALL_QODER=false
 INSTALL_TRAE=false
+INSTALL_ACTRAIL=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -241,9 +247,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"trae"* ]]; then
     INSTALL_TRAE=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"actrail"* ]]; then
+    INSTALL_ACTRAIL=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -690,6 +699,8 @@ fi
 
 ${CODEAGENT_UNIX_SETUP_BLOCK}
 
+${ACTRAIL_UNIX_SETUP_BLOCK}
+
 # 7. Create Watcher Startup/Stop Scripts
 NEEDS_WATCHER_SCRIPTS=false
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
@@ -802,6 +813,9 @@ fi
 if [ "$INSTALL_XIAOO" = "true" ]; then
     echo "  ✅ xiaoO: RAS hooks selected"
 fi
+if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
+    echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -840,6 +854,9 @@ if [ "$INSTALL_TRAE" = "true" ]; then
 fi
 if [ "$INSTALL_XIAOO" = "true" ]; then
     echo "  7. Restart xiaoO / use RAS-enabled workflow"
+fi
+if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
+    echo "  8. Use actrailctl launch as usual; AcTrail will upload automatically"
 fi
 echo "------------------------------------------------"
 `;
@@ -927,7 +944,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'xiaoO\', value: \'xiaoo\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
         '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
-        '    "    { name: \'Trae IDE\', value: \'trae\' }"',
+        '    "    { name: \'Trae IDE\', value: \'trae\' },"',
+        '    "    { name: \'AcTrail\', value: \'actrail\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1004,6 +1022,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$INSTALL_JIUWEN = $false',
         '$INSTALL_QODER = $false',
         '$INSTALL_TRAE = $false',
+        '$INSTALL_ACTRAIL = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1032,9 +1051,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "trae") {',
         '    $INSTALL_TRAE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "actrail") {',
+        '    $INSTALL_ACTRAIL = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_QODER -and -not $INSTALL_TRAE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1457,6 +1479,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '',
         ...CODEAGENT_WINDOWS_SETUP_BLOCK.split('\n'),
         '',
+        ...ACTRAIL_WINDOWS_SETUP_BLOCK.split('\n'),
+        '',
         '# 7. Create Watcher Startup/Stop Scripts',
         '$NEEDS_WATCHER_SCRIPTS = $INSTALL_OPENCLAW',
         '',
@@ -1553,6 +1577,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_XIAOO) {',
         '    Write-Host "  ✅ xiaoO: RAS hooks selected"',
         '}',
+        'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
+        '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
+        '}',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -1591,6 +1618,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($INSTALL_XIAOO) {',
         '    Write-Host "  7. Restart xiaoO / use RAS-enabled workflow (WSL/Linux/macOS)"',
+        '}',
+        'if ($INSTALL_ACTRAIL) {',
+        '    Write-Host "  8. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
