@@ -21,10 +21,6 @@ description: "为 AcTrail 配置 Agent Insight 链路上报"
 3. **相关文档**
    提供使用手册及接入排障入口。
 
-<p align="center">
-  <img src="../../images/config/actrail_install_guide.png" alt="AcTrail 安装指导页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-</p>
-
 页面生成的命令固定选择 `actrail`，不会进入其他框架的交互式安装流程。
 
 ## 接入前提

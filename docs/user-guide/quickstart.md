@@ -300,10 +300,6 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 1. 先安装并启动 AcTrail，确认官方 `otel-http` 插件可用。
 2. 在页面复制 **Linux / WSL** 命令。
 
-   <p align="center">
-     <img src="../images/config/actrail_install_guide.png" alt="AcTrail 安装指导页面" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
-
 3. 在 AcTrail 实际运行的 Linux / WSL 环境执行命令。Windows 用户应先进入对应 WSL 发行版。
 4. 脚本会生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给 AcTrail 官方 `otel-http` 插件，并持久化加载 `agent-insight.otel-http` 实例。
 5. 继续使用原来的启动方式运行 Agent：
