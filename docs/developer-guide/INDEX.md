@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a23b45644bed2e59a5b9ed7e3dce1ddf1426f0ca` (`a23b4564`) |
+| Commit | `764ff443e2fdbb7cecc069b8fafcacc11ce4d70a` (`764ff443`) |
 | Branch | `830` |
-| Date | 2026-08-12T17:00:32+08:00 |
+| Date | 2026-08-12T21:43:51+08:00 |
 | Author | gyctl |
-| Subject | `feat: 收口830转测导航范围` |
+| Subject | `merge: 同步830安装指导变更` |
 
-**如何更新：** `git diff a23b4564 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 764ff443 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

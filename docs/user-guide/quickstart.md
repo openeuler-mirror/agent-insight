@@ -1,16 +1,16 @@
 ---
 title: "5 分钟上手"
-description: "登录看板、注册模型、创建 Agent、完成接入，并在 UI 中看到第一条链路。"
+description: "登录看板、注册模型、通过 AcTrail 完成接入，并在 UI 中看到第一条链路。"
 ---
 
 # 5 分钟上手
 
-本指南带你用最短路径跑通 Agent Insight 的第一条完整闭环：完成基础配置、接入一个 Agent，并在平台里看到真实链路。
+本指南带你用最短路径跑通 Agent Insight 的第一条完整闭环：完成基础配置、通过 AcTrail 接入 Agent，并在平台里看到真实链路。
 
 完成后你会得到：
 
-- 一个已登记的 Agent
 - 一份可用的模型配置
+- 一套可用的 AcTrail 上报配置
 - 一条真实上报并可查看详情的 Trace
 
 > **Note**
@@ -21,7 +21,7 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 
 - 你可以访问 Agent Insight 看板
 - 你拥有一个可用的模型 API Key，例如 OpenAI、DeepSeek 或其他兼容供应商
-- 你有一个准备接入的 Agent 运行环境
+- 你有一个已安装 AcTrail 的 Linux / WSL Agent 运行环境
 - 如果要走代码集成路径，准备好 Python 3.9+ 或 Node.js 18+
 
 ---
@@ -218,12 +218,10 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 对于大多数用户，建议按下面顺序操作：
 
 1. 登录看板并进入当前 Workspace
-
 2. 在 **模型注册** 中先配置模型
-3. 在 **Agent 管理** 中创建一个 Agent
-4. 在 **安装指导** 中完成接入
-5. 触发一次真实执行
-6. 在 **链路追踪** 中确认第一条 Trace
+3. 在 **安装指导** 中完成 AcTrail 接入
+4. 触发一次真实执行
+5. 在 **链路追踪** 中确认第一条 Trace
 
 > **Tip**
 > 如果你是开发者，且希望直接在代码里手工埋点，可以直接查看文末的
@@ -272,25 +270,7 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 
 ---
 
-## 步骤三：注册 Agent
-
-进入侧边栏 **Agent Workspace → Agent 管理**：
-
-1. 点击注册 Agent
-2. 输入 Agent 名称
-3. 根据页面提示填写信息
-4. 保存后进入 Agent 详情页
-
-   <p align="center">
-     <img src="../images/agent_signup.png" alt="Agent 注册弹窗" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
-
-注册agent是把客户端实际使用的 Agent 注册到平台。只有注册后的 Agent，平台才会展示它的执行数据。
-Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认的agent是 `plan` 和 `build`。
-
----
-
-## 步骤四：按安装指导完成接入
+## 步骤三：按安装指导完成接入
 
 进入 **配置 → 安装指导**，按页面提示完成接入。
 
@@ -303,15 +283,15 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 4. 脚本会生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给 AcTrail 官方 `otel-http` 插件，并持久化加载 `agent-insight.otel-http` 实例。
 5. 继续使用原来的启动方式运行 Agent：
 
-   ``bash
+   ```bash
    sudo actrailctl launch --name <名称> -- <Agent 命令>
-   ``
+   ```
 
 如果 AcTrail 使用非默认配置或插件目录，可在运行脚本前分别设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
 
 ---
 
-## 步骤五：验证生成的 Trace
+## 步骤四：验证生成的 Trace
 
 完成安装或配置后，按下面两步验证是否已生成 Trace。
 
@@ -332,7 +312,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 第一次验证时，不需要追求数据很完整，先确认“**有数据、能展开、能看懂主要步骤**”即可。
 
-确认生成 Trace 后，你就已经完成了平台配置、Agent 注册和接入验证。
+确认生成 Trace 后，你就已经完成了平台配置和 AcTrail 接入验证。
 
 > **Warning**
 > 如果 30 秒后仍然看不到数据，按下面顺序排查：

@@ -21,7 +21,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/skill-history`, `/(main)/skill-release`, `/(main)/skills` | `SkillHistoryPage`, `SkillReleasePage`, `SkillsPage` | Skill 生命周期 |
 | `/(main)/metrics`, `/(main)/metrics/evaluators/[id]` | `MetricsPage`, `CustomEvaluatorDetailPage` | 指标与自定义评测器 |
 | `/(main)/modelconfig`, `/(main)/modelconfig/registry`, `/(main)/modelconfig/web-search` | `ModelConfigPage`, `ModelRegistryPage`, `WebSearchConfigPage` | 模型注册表与搜索配置 |
-| `/(main)/accessconfig`, `/(main)/accessconfig/{install,health,channels,webhooks}` | `AccessConfigPage`, `AccessInstallPage`, … | 客户端安装 / 接入访问 |
+| `/(main)/accessconfig`, `/(main)/accessconfig/{install,health,channels,webhooks}` | `AccessConfigPage`, `AccessInstallPage`, … | AcTrail 安装接入与访问配置 |
 | `/(main)/{quality,security,memory,optapi,evaluation/[id]}` | `QualityPage`, `SecurityPage`, `MemoryPage`, `OptApiPage`, `EvaluationDetailPage` | 其他仪表盘 |
 | `/details`, `/skill-detail` | `DetailPage`, `SkillDetailPage` | 可分享的详情视图 |
 
@@ -51,7 +51,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 | 侧边栏显示名 | 实际路由 | 备注 |
 |---|---|---|
 | 评估器 | `/metrics` | 评测器中心（`MetricsPage` + `metrics/evaluators/[id]`） |
-| 安装指导 | `/accessconfig/install` | 客户端接入分发 |
+| 安装指导 | `/accessconfig/install` | 生成 AcTrail 的 Linux / WSL 接入命令 |
 
 **导航可达性矩阵**——磁盘存在的页面分三类：
 
