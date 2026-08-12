@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -361,6 +362,57 @@ test('syncCapabilityConfigFromInsight skips when sync disabled', async () => {
   })
   assert.equal(result.applied, false)
   assert.equal(result.reason, 'sync_disabled_or_empty')
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('defaultRasConfigFetch to closed loopback finishes within 5s', async () => {
+  const { defaultRasConfigFetch, RAS_CONFIG_CURL_MAX_S } = await loadSyncMod()
+  assert.ok(RAS_CONFIG_CURL_MAX_S <= 3)
+  const srv = net.createServer()
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve))
+  const { port } = srv.address()
+  await new Promise((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve())))
+  const url = `http://127.0.0.1:${port}/api/ingest/ras-config?platform=opencode`
+  const started = Date.now()
+  await assert.rejects(() => defaultRasConfigFetch(url, { method: 'GET' }))
+  const elapsed = Date.now() - started
+  assert.ok(
+    elapsed < 5000,
+    `loopback curl must fail-open quickly, took ${elapsed}ms (limit 5000ms)`,
+  )
+})
+
+test('syncCapabilityConfigFromInsight fail-opens when loopback Insight is down', async () => {
+  const { syncCapabilityConfigFromInsight } = await loadSyncMod()
+  const srv = net.createServer()
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve))
+  const { port } = srv.address()
+  await new Promise((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve())))
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-sync-'))
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({
+      agent_ras: {
+        insight: {
+          enabled: true,
+          events_url: `http://127.0.0.1:${port}/api/ingest/ras-events`,
+          api_key: 'test-key',
+        },
+      },
+    }),
+    'utf8',
+  )
+
+  const started = Date.now()
+  const result = await syncCapabilityConfigFromInsight({ rasHome: dir })
+  const elapsed = Date.now() - started
+  assert.equal(result.applied, false)
+  assert.equal(result.reason, 'exception')
+  assert.ok(
+    elapsed < 5000,
+    `sync must fail-open within 5s when Insight is down, took ${elapsed}ms`,
+  )
   fs.rmSync(dir, { recursive: true, force: true })
 })
 

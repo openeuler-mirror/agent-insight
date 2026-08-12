@@ -167,22 +167,44 @@ function isLoopbackUrl(urlStr) {
   }
 }
 
+/** Loopback ras-config curl connect timeout (seconds). Keep short: runs on OpenCode plugin init. */
+export const RAS_CONFIG_CURL_CONNECT_S = 2
+/** Loopback ras-config curl total timeout (seconds). */
+export const RAS_CONFIG_CURL_MAX_S = 3
+/** execFileSync hard cap (ms); slightly above curl max so curl exits first. */
+export const RAS_CONFIG_CURL_EXEC_MS = 4000
+/** Fallback fetch AbortSignal timeout when curl binary is missing (ms). */
+export const RAS_CONFIG_FETCH_FALLBACK_MS = 3000
+
 /**
  * Default fetch that bypasses HTTP(S)_PROXY for loopback Insight URLs.
  * Corporate proxies often 502 localhost and would silently skip sync (fail-open).
+ * Hard timeouts so a down Insight board cannot block OpenCode plugin load (~2min curl default).
  */
 export async function defaultRasConfigFetch(url, init = {}) {
   if (isLoopbackUrl(url)) {
     try {
       const { execFileSync } = await import("node:child_process")
       const headers = init.headers || {}
-      const args = ["--noproxy", "*", "-sS", "-f", "-X", init.method || "GET"]
+      const args = [
+        "--noproxy",
+        "*",
+        "-sS",
+        "-f",
+        "--connect-timeout",
+        String(RAS_CONFIG_CURL_CONNECT_S),
+        "--max-time",
+        String(RAS_CONFIG_CURL_MAX_S),
+        "-X",
+        init.method || "GET",
+      ]
       for (const [k, v] of Object.entries(headers)) {
         args.push("-H", `${k}: ${v}`)
       }
       args.push(String(url))
       const out = execFileSync("curl", args, {
         encoding: "utf8",
+        timeout: RAS_CONFIG_CURL_EXEC_MS,
         env: {
           ...process.env,
           http_proxy: "",
@@ -204,8 +226,17 @@ export async function defaultRasConfigFetch(url, init = {}) {
         },
       }
     } catch (err) {
-      // fall through to native fetch
+      // curl missing → timed native fetch. Any other failure (down board, timeout):
+      // rethrow so syncCapabilityConfigFromInsight fail-opens without proxied fetch hang.
+      const code = err && typeof err === "object" ? err.code : undefined
+      if (code !== "ENOENT") throw err
       if (!globalThis.fetch) throw err
+      const signal =
+        init.signal ||
+        (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+          ? AbortSignal.timeout(RAS_CONFIG_FETCH_FALLBACK_MS)
+          : undefined)
+      return globalThis.fetch(url, { ...init, signal })
     }
   }
   if (!globalThis.fetch) {

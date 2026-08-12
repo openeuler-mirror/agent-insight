@@ -58,8 +58,8 @@ interface RasCapabilityConfigEnvelope {
 
 1. Insight 存期望配置（user × platform）。服务端 envelope 仍有 `revision` / `updatedAt`（UI / 审计 / PUT 乐观并发），**不作为客户端合并游标**。
 2. 客户端拉取（fail-open）：
-   - OpenCode 插件启动 → `GET .../ras-config?platform=opencode`
-   - xiaoO hooker 会话开始（chat/tool，TTL 节流，**按 platform 分 stamp**）→ `?platform=xiaoo`
+   - OpenCode 插件启动（仅一次）→ `GET .../ras-config?platform=opencode`。loopback 走 `curl --noproxy`，硬上限 **connect 2s / total 3s**（`execFileSync` 再兜底 4s）；超时或看板不可达则跳过合并，**不阻塞** OpenCode 启动。
+   - xiaoO hooker 会话开始（chat/tool，TTL 节流，**按 platform 分 stamp**）→ `?platform=xiaoo`（HTTP 超时 8s）
 3. 合并条件（Insight 为源）：`syncEnabled` 且远端 `config` 存在，并且：
    - **能力字段内容指纹** 与本地该平台切片不一致 → 合并（`merged` / `content_drift`）
    - 指纹相同但本地仍有遗留 `ras_config_revision(s)` 或缺 `syncedFrom.contentHash` → 写盘迁移布局（`layout_migrate`），不改阈值
