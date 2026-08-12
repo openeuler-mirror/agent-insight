@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `035e93d2f4402628c52d0ff5ac270a88c21680bc` (`035e93d2`) |
-| Branch | `codex/openclaw-otel-rebuild` |
-| Date | 2026-08-07T09:44:03+08:00 |
-| Author | gyctl |
-| Subject | `chore: 合并 upstream/master 并解决 OpenClaw 冲突` |
+| Commit | `2b113dfa4533dbe7ac0daf8e5fd576d389643a52` (`2b113dfa`) |
+| Branch | `codex/backport-pr-280-to-830` |
+| Date | 2026-08-11T19:19:37+08:00 |
+| Author | ljnkirito |
+| Subject | `fix: 修正 AcTrail 标题解析并移除原始数据留存` |
 
-**如何更新：** `git diff 035e93d2 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 2b113dfa HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -58,5 +58,5 @@
 - **Grayscale (A/B)**：在一个数据集上对两个 Skill 版本进行对比（`GrayscaleTask`、`ab-scoring.ts`）。
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
-- **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（OpenCode、Claude、OpenClaw）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
+- **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。
