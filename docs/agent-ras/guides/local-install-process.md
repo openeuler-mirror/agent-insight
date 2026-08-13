@@ -313,9 +313,7 @@ flowchart LR
 1. 用户启动 `opencode` / `xiaoo`（等）  
 2. 宿主加载已挂载的插件 / hooker  
 3. 同进程加载 `libpython` + `ras_runtime`  
-4. 检测 → 恢复动作回投宿主；异常旁路 → Insight  
-
-详见 [architecture.md](../designs/architecture.md)、[platform-opencode.md](platform-opencode.md)、[platform-xiaoo.md](platform-xiaoo.md)。
+4. 检测 → 恢复动作回投宿主；异常旁路 → Insight
 
 ---
 
@@ -367,5 +365,4 @@ test -f ~/.config/opencode/plugins/agent-insight-ras.js && echo opencode_plugin_
 | [`src/app/api/ingest/setup/auto/route.ts`](../../../src/app/api/ingest/setup/auto/route.ts) | 一键部署 auto_setup |
 | [`scripts/install-ras.js`](../../../scripts/install-ras.js) | 本机 RAS 安装器 |
 | [`agent_ras/platform_adapter/opencode/INSTALL.md`](../../../agent_ras/platform_adapter/opencode/INSTALL.md) | OpenCode 适配安装摘要 |
-| [configuration.md](configuration.md) | 配置项 |
-| [getting-started.md](getting-started.md) | 按平台最短路径 |
+| [getting-started.md](getting-started.md) | 按平台最短路径与配置项 |

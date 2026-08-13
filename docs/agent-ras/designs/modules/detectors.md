@@ -85,7 +85,7 @@ flowchart TD
 
 **不做什么**
 
-- 不 abort / steer / notice（见 [recovery.md](recovery.md)）
+- 不 abort / steer / notice（由 recovery 投递）
 - 不消费 `tool_calls.delta` 类增量（见 detector docstring）
 - 不做跨 session 全局聚合
 
@@ -117,7 +117,7 @@ class Detector(Protocol):  # base.py:22
 
 Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors.loader.build_member_detectors`](../../../../agent_ras/detectors/loader.py)（经 [`registry.py`](../../../../agent_ras/detectors/registry.py) 再导出）。按 `config.detectors.<domain>.enabled` 门控；`SessionState.detectors: list` 首命中分发。
 
-**新域**：只新增 `detectors/<domain>.py`（导出 `DETECTOR_PLUGIN`）+ 可选 `detectors/skills/<id>/SKILL.md`；**不再**改 registry / 静态 `DETECTOR_BUILDERS`。详见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)。
+**新域**：只新增 `detectors/<domain>.py`（导出 `DETECTOR_PLUGIN`）+ 可选 `detectors/skills/<id>/SKILL.md`；**不再**改 registry / 静态 `DETECTOR_BUILDERS`。
 
 模板：[`detectors/_template_domain.py.example`](../../../../agent_ras/detectors/_template_domain.py.example)。
 
@@ -218,7 +218,7 @@ sequenceDiagram
 
 ### 扩展指南
 
-见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)：新域只新增文件。
+新域只新增文件。
 
 1. 新增 `detectors/<domain>.py`，导出 `DETECTOR_PLUGIN`（`config_model` + `factory`）；可选 `detectors/skills/<id>/SKILL.md`
 2. 需要 L3 评审时：`review/<domain>.py` + `review/skills/<id>/SKILL.md`

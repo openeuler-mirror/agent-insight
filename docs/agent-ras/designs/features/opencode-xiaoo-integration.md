@@ -161,6 +161,27 @@ sequenceDiagram
 | P5 | Daemon HTTP/SSE 为 stock master 正式 Stream/Host 路径（lease 由 RAS 持有） |
 | P6 | FI Worker **不**拉起 `DaemonRasSession`；RAS 是否在场 = 平台挂载 |
 
+### 4.0.1 stock master 契约
+
+针对 **stock** xiaoO `origin/master`，不改上游源码。CLI/TUI/daemon 共用 gateway + `run_agent_loop`。实现在 `daemon_client.py` / `daemon_session.py`。
+
+| 上游能力 | RAS 用法 |
+|----------|----------|
+| Plugin hooker（Chat / Tool / Session） | L1 采点；`tool_post` **不** hello |
+| `HookAction` | master 仅 create/switch/send_prompt；**无** `cancel_active_turn`；CLI 丢弃 SendPrompt |
+| `LoopEventSink` | **无配置挂载**；不能靠 sink 做 mid-stream |
+| `POST /api/v1/runtimes/open\|input\|cancel\|close` | **正式** Stream/Host：SSE 观测 + cancel/input 恢复（RAS 持有 lease） |
+| `ras_control.sock` | stock **无**此监听器；遗留 Host 路径已删 |
+
+Daemon HTTP（RAS 客户端）：
+
+- `open` body：`runtime_id` / `conversation_id` / `sender_id` / `client_id`
+- `input`：`Accept: text/event-stream`；字段 **`text`（非 prompt）**
+- `cancel`：lease 持有者取消当前 turn；`close` 释放
+- SSE 事件名：`text_delta` / `thinking_delta` / `tool_call` / `tool_result` / `done` / `cancelled` / `error`（→ Signal 见 §4.3）
+
+Plugin hooker 将 wire 映射为 stdout HookAction；恢复必须以 Daemon `cancel`/`input` 为准。`agent_fault_injection/**` **零改动**；Insight FI Worker 只跑 `agent_fault_injection.cli`，不得 spawn RAS。
+
 ### 4.1 设计目标：互补双路径
 
 hooker 与 Daemon 不是两套 RAS，而是 **同一 Hub 上的两种采点/控制来源**：

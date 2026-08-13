@@ -3,7 +3,7 @@
 Insight「可靠性能力」目录与平台配置表单改为消费 `agent_ras` 插件元数据 + JSON Schema；按 `AgentRASConfig` 粒度维护多平台期望配置，并可按平台选择是否同步到客户端。新增故障域时除参数模板外不改共用前端/框架文件。
 
 > 状态：已落地（catalog API + 哑 UI + `agent_ras_config.default.yaml` + install 合并 + 多平台同步）  
-> 关联：[fault-domain-plugins.md](./fault-domain-plugins.md) §5（新增域触点）、[../modules/detectors.md](../modules/detectors.md)（catalog.py）、[../../guides/configuration.md](../../guides/configuration.md)（使用侧）
+> 关联：[../../guides/getting-started.md](../../guides/getting-started.md)（使用侧）
 
 ---
 
@@ -46,7 +46,7 @@ Insight「可靠性能力」目录与平台配置表单改为消费 `agent_ras` 
 | 新增（可选） | `review/`、`recovery/`、`skills/<id>/SKILL.md` |
 | **改（唯一共用）** | `agent_ras/config/agent_ras_config.default.yaml` 的 `detectors.<id>` |
 
-禁止再改：`types`/`loader`（一次性除外）、`fault-mode-catalog.ts`、Panel 硬编码、`normalize` kind 表、`inproc.example`。Kind 文案走 catalog `kindLabels`。详见 [fault-domain-plugins.md §5](./fault-domain-plugins.md)。
+禁止再改：`types`/`loader`（一次性除外）、`fault-mode-catalog.ts`、Panel 硬编码、`normalize` kind 表、`inproc.example`。Kind 文案走 catalog `kindLabels`。
 
 ---
 

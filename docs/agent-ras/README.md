@@ -56,9 +56,8 @@
 
 | 文档 | 内容 |
 |------|------|
-| [getting-started.md](guides/getting-started.md) | 选平台与最短启用路径 |
+| [getting-started.md](guides/getting-started.md) | 选平台、安装、配置目录与常用开关、Insight 同步 |
 | [local-install-process.md](guides/local-install-process.md) | **curl / install-ras 时本机逐步发生了什么**（数据源、目录树、预检、排障） |
-| [configuration.md](guides/configuration.md) | inproc / 宿主配置目录与常用开关 |
 | [platform-openjiuwen.md](guides/platform-openjiuwen.md) | openjiuwen / jiuwenclaw 深挂载与 YAML 片段 |
 | [platform-opencode.md](guides/platform-opencode.md) | OpenCode `install-ras` 同进程接入 |
 | [platform-xiaoo.md](guides/platform-xiaoo.md) | xiaoO hooks + Daemon SSE 闭环验收 |

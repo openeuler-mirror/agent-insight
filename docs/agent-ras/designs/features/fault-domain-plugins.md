@@ -128,7 +128,7 @@ RECOVERY_PLUGIN = RecoveryPlugin(
 | **默认参数（唯一共用可改）** | **修改** `agent_ras/config/agent_ras_config.default.yaml` 的 `detectors.<id>` |
 | 设计/单测（建议） | `docs/agent-ras/designs/features/...`、测试文件 |
 
-Insight 能力目录与配置面板由 `presentation` + `config_model` schema **自动发现**（见 [capability-config.md](capability-config.md)），**不要**再改 `fault-mode-catalog.ts` / 配置 Panel / `normalize` kind 白名单 / `inproc.example`。
+Insight 能力目录与配置面板由 `presentation` + `config_model` schema **自动发现**，**不要**再改 `fault-mode-catalog.ts` / 配置 Panel / `normalize` kind 白名单 / `inproc.example`。
 
 ### 5.2 除上表外，还要改框架吗？
 

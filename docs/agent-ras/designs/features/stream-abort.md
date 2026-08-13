@@ -4,12 +4,6 @@
 
 本文按讨论顺序整理 Agent RAS 场景下「**如何停止进行中的 `llm.stream`**」相关问题，澄清各机制的职责边界，避免误以为 `close_stream` 等输出侧操作会自动级联停止 provider 流。
 
-**相关文档：**
-
-- [thinking-loop.md](./thinking-loop.md) — LLM 思考死循环检测与恢复
-- [modules/platform-adapter.md](../modules/platform-adapter.md) — HostControl / abort 契约摘要
-- [modules/monitor.md](../modules/monitor.md) — 自动恢复编排（L3 Reviewer，非人工 HITL）
-
 **涉及代码（示意）：**
 
 - 宿主 agent-core：`rail/base.py`、`react_agent.py`、`session` write_stream

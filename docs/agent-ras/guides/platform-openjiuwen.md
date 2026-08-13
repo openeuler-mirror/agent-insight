@@ -40,6 +40,3 @@ agent_ras:
   recovery:
     notify_user_on_warning: true
 ```
-
-更多能力深度见 [../designs/modules/platform-adapter.md](../designs/modules/platform-adapter.md)。  
-包入口：[`agent_ras/README.md`](../../../agent_ras/README.md)。

@@ -56,7 +56,7 @@ flowchart LR
 | common | `ras_client.py/js`, `host_actions.js`, `protocol_client.py`, `python_bridge.js`, `insight_anomaly_reporter.py` | L2 契约、FFI / 协议工厂、① ras-events 旁路（**无** OTLP） |
 | openjiuwen | `factory.py`, `rail.py`, `host_control.py`, `stream_observer.py`, `deep_agent_adapter.py` | 深挂载 |
 | opencode | `plugin.js`, `host_control.js`, `skill_judge.js`, `INSTALL.md` | inproc 插件 |
-| xiaoo | `hooks.py`, `daemon_*.py`, `hooker/`, `INSTALL.md` | Hook 映射 + Daemon Host；见 [opencode-xiaoo-integration](../features/opencode-xiaoo-integration.md) §4 |
+| xiaoo | `hooks.py`, `daemon_*.py`, `hooker/`, `INSTALL.md` | Hook 映射 + Daemon Host |
 
 ---
 

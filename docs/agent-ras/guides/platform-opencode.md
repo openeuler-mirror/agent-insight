@@ -33,4 +33,4 @@ npx agent-insight install-ras
 - 语义 Judge 默认开；可在配置中关闭
 - 旁路事件 fail-open；UI 契约见 developer-guide
 
-配置：[configuration.md](configuration.md)。能力矩阵：[../designs/modules/platform-adapter.md](../designs/modules/platform-adapter.md)。
+配置见 [getting-started.md](getting-started.md)。

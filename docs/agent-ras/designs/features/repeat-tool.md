@@ -2,13 +2,13 @@
 
 > 适用范围：仓根 `agent_ras/`（`RepeatToolCallDetector` + `recovery/repeat_tool.py`）  
 > 算法来源：jiuwenswarm `fix/circuit_breaker_recovery` → `circuit_breaker_rail.py`；落地形态以当前 `agent_ras` 为准。  
-> 对照：思考/文本死循环见 [thinking-loop.md](./thinking-loop.md)（流内 abort + L3 Reviewer）。本域 **不**引入 detection/review skill。
+> 本域 **不**引入 detection/review skill。
 
 ---
 
 ## 1. 问题场景与子模式
 
-Agent 在工具轮次上原地踏步：同一调用反复发出、失败工具死磕、两个工具互相踢皮球，或同参同结果反复空转。这类故障发生在 **一次工具调用已经返回之后**，而不是正在进行的 `llm.stream` 内部（与思考死循环的边界见 [stream-abort.md](./stream-abort.md)）。
+Agent 在工具轮次上原地踏步：同一调用反复发出、失败工具死磕、两个工具互相踢皮球，或同参同结果反复空转。这类故障发生在 **一次工具调用已经返回之后**，而不是正在进行的 `llm.stream` 内部。
 
 | 子模式 | `detector_kind` | 现象 | AnomalyKind | 默认严重度 |
 |--------|-----------------|------|-------------|------------|
@@ -210,8 +210,6 @@ stateDiagram-v2
 | Insight 能力目录 | `DETECTOR_PLUGIN.presentation`（与检测器同文件） |
 | FI 注入剧本 | [`agent_fault_injection/fault_inject/skills/tool_repeat_dead_loop/SKILL.md`](../../../../agent_fault_injection/fault_inject/skills/tool_repeat_dead_loop/SKILL.md) |
 
-模块摘要：[detectors.md](../modules/detectors.md) · [recovery.md](../modules/recovery.md) · [monitor.md](../modules/monitor.md)。
-
 ---
 
 ## 4. 配置
@@ -253,7 +251,7 @@ recovery:
 
 **FI**：故障名为 `tool_repeat_dead_loop`，子模式 1–4 对应上表四类。Skill 场景总览里的次数（generic ≥10、global_breaker ≥30、ping_pong CRITICAL ≥20）是 **注入剧本** 的目标调用次数，用来保证「跑得足够长」；**并非** RAS 检测阈值。现行 RAS 默认 5 / 10 / 10，因此同一剧本会 **早于 Skill 表格** 告警或断路。本文与 RAS 文档 **均不修改** FI Skill 阈值。
 
-验收参考：xiaoO 常用 submode 2（unknown，连续失败次数 ≥ RAS `unknown_tool_threshold`）→ 检出 + cancel/恢复。详见 [platform-xiaoo.md](../../guides/platform-xiaoo.md)。
+验收参考：xiaoO 常用 submode 2（unknown，连续失败次数 ≥ RAS `unknown_tool_threshold`）→ 检出 + cancel/恢复。
 
 ---
 

@@ -4,12 +4,6 @@
 **范围：** DeepSeek / GLM（智谱）/ Kimi（Moonshot）/ MiniMax / OpenAI / Claude（Anthropic）/ MiMo（小米）  
 **核心问题：** 客户端拆掉 HTTP/SSE 连接后，服务端是否取消继续生成，从而避免「本地已停、远端仍无限吐 token 计费」
 
-**相关文档：**
-
-- [stream-abort.md](./stream-abort.md) — 本仓库 abort / `aclose` 停流契约
-- [thinking-loop.md](./thinking-loop.md) — LLM 思考死循环检测与恢复
-- [modules/platform-adapter.md](../modules/platform-adapter.md) — `request_abort_stream` / HostControl 摘要
-
 ---
 
 ## 1. 问题场景
@@ -29,7 +23,7 @@ Agent 在单次 `llm.stream` 中陷入思考/文本死循环时，本地会：
 2. ReAct 在 chunk 边界 `break`（宿主流循环消费 abort）
 3. 调用 `stream_iter.aclose()`（**语言标准**方法；触发的客户端 `close()` 为宿主既有清理路径）
 
-**归属区分：** `aclose` ≠ 本仓自造 API；本仓依赖宿主 abort 信号并在 abort 后主动 `aclose`。详见 [stream-abort.md](./stream-abort.md)。
+**归属区分：** `aclose` ≠ 本仓自造 API；本仓依赖宿主 abort 信号并在 abort 后主动 `aclose`。
 
 **本地不再收 chunk ≠ 服务端一定停推理。**  
 协议层通常**没有**统一的「stop 业务报文」，停流依赖服务端是否感知 TCP/HTTP disconnect 并 cancel 生成任务。

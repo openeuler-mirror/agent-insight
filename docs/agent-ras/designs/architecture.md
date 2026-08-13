@@ -1,6 +1,6 @@
 # Agent RAS 整体架构
 
-环内可靠性包 `agent_ras/` 的唯一架构真源：目标与边界、四层同进程、拓扑、**协议 inproc（JS 宿主 libpython / Python 宿主直连 / 子进程 IPC 共享 Hub）**、主流程、与 Insight·FI 的通道不变量、当前能力摘要。模块细节见 [`modules/`](modules/)；OpenCode / xiaoO 接入见 [`features/opencode-xiaoo-integration.md`](features/opencode-xiaoo-integration.md)；平台对照见 [`modules/platform-adapter.md`](modules/platform-adapter.md)。
+环内可靠性包 `agent_ras/` 的唯一架构真源：目标与边界、四层同进程、拓扑、**协议 inproc（JS 宿主 libpython / Python 宿主直连 / 子进程 IPC 共享 Hub）**、主流程、与 Insight·FI 的通道不变量、当前能力摘要。
 
 ## 1. 设计目标与边界
 
@@ -300,7 +300,7 @@ sequenceDiagram
   RC->>FAC: action_result → insight_push fail-open
 ```
 
-L3 语义判定（协议 inproc：OpenCode / xiaoO）：Detector 经 `HostCallbackAgentAdapter` park 请求 → observe 响应带 `skill_requests` → 宿主履行后 `skill_result` 回 SessionHub → 再产出 wire actions。OpenCode 的 host runner 是 `skill_judge.js` + ras-judge；xiaoO 走 Python `RasClient.skill_result`。细节见 [`modules/ras-runtime.md`](modules/ras-runtime.md)。
+L3 语义判定（协议 inproc：OpenCode / xiaoO）：Detector 经 `HostCallbackAgentAdapter` park 请求 → observe 响应带 `skill_requests` → 宿主履行后 `skill_result` 回 SessionHub → 再产出 wire actions。OpenCode 的 host runner 是 `skill_judge.js` + ras-judge；xiaoO 走 Python `RasClient.skill_result`。
 
 ### 4.6 Python 宿主 inproc（无 FFI）
 
@@ -318,7 +318,7 @@ xiaoO gateway 会为 hook 场景 fork 短生命周期 Python 子进程。若每�
 2. worker 进程 `python -m platform_adapter.common.transport.subprocess_ipc` 持有**唯一** SessionHub；启动时设 `RAS_EMBED_IPC_FORCE_LOCAL=1`，避免 worker 再转发自己。
 3. 可用 `RAS_EMBED_USE_IPC=0` 关闭转发（仅调试）。Daemon SSE 路径本身已是长生命周期 Python 进程，一般走 §4.6 直连，不依赖 hooker IPC。
 
-实现：[`platform_adapter/common/transport/subprocess_ipc/`](../../../agent_ras/platform_adapter/common/transport/subprocess_ipc/)。安装见 xiaoO `INSTALL.md`。
+实现：[`platform_adapter/common/transport/subprocess_ipc/`](../../../agent_ras/platform_adapter/common/transport/subprocess_ipc/)。操作见 `guides/platform-xiaoo.md`。
 
 ---
 
@@ -403,4 +403,4 @@ Insight 看板与 `POST /api/ingest/ras-events` 契约见 [developer-guide](../.
 
 ## 8. 加新平台
 
-只实现 L3：采点钩子 + HostControl + INSTALL。禁止复制 detector/recovery。协议路径优先复用 `common` 的 `RasClient` + `applyActions`（避免 hooks 内联重复 wire 分发）。步骤与能力矩阵见 [`modules/platform-adapter.md`](modules/platform-adapter.md)。
+只实现 L3：采点钩子 + HostControl + INSTALL。禁止复制 detector/recovery。协议路径优先复用 `common` 的 `RasClient` + `applyActions`（避免 hooks 内联重复 wire 分发）。

@@ -1,23 +1,17 @@
 # xiaoO adapter — INSTALL
 
-## Status
+Protocol inproc L3 + Daemon SSE（stock master）。`tool_post` 不得 hello；plugin hooker Host unwired。
 
-Protocol inproc L3 + **Daemon SSE control plane**（stock master）：
+约束见 [opencode-xiaoo-integration.md](../../../docs/agent-ras/designs/features/opencode-xiaoo-integration.md) §4；操作见 [`platform-xiaoo.md`](../../../docs/agent-ras/guides/platform-xiaoo.md)。
+
+## 文件地图
 
 - Shared factory: [`../common/protocol_client.py`](../common/protocol_client.py)
 - Observe helpers: [`../common/observe.py`](../common/observe.py)
 - Daemon client/session: [`daemon_client.py`](daemon_client.py) / [`daemon_session.py`](daemon_session.py)
 - Shared SessionHub across subprocess hooks: [`../common/transport/subprocess_ipc/`](../common/transport/subprocess_ipc/)
-- Hooks: [`hooks.py`](hooks.py) — `build_xiaoo_daemon_host_fns`（plugin hooker Host unwired）
-- Plugin hooker: [`hooker/`](hooker/) — `tool_post` **不得** hello
-
-**FI 库零改动；FI Worker 不启动 RAS**（见 [`UPSTREAM.md`](UPSTREAM.md)）。
-
-## Prerequisites
-
-- `xiaoo` / `xiaoo-daemon` on PATH（Daemon 闭环验收需要 daemon）
-- Agent RAS via Insight setup / `install-ras`（select **xiaoO**）
-- LLM key when跑真实 agent turn
+- Hooks: [`hooks.py`](hooks.py) — `build_xiaoo_daemon_host_fns`
+- Plugin hooker: [`hooker/`](hooker/)
 
 ## Daemon 闭环
 
@@ -27,8 +21,6 @@ cd agent_ras
 PYTHONPATH=. python scripts/e2e_xiaoo_daemon_harness.py
 XIAOO_DAEMON_URL=http://127.0.0.1:18080 PYTHONPATH=. python scripts/e2e_xiaoo_daemon_harness.py
 ```
-
-SSE→Signal 覆盖：`text_delta` / `thinking_delta` → thinking loop；`tool_result`（`is_error`）→ `unknown_tool_repeat`。恢复：`cancel` + 再 `input`。
 
 ## Subprocess IPC worker
 
@@ -46,11 +38,6 @@ cd agent_ras
 PYTHONPATH=. python scripts/e2e_xiaoo_inproc_harness.py
 ```
 
-## Hooker install
+## Hooker
 
-`install-ras` copies `hooker/` → `~/.agent-insight/ras/xiaoo/hooker/` and merges
-`~/.config/xiaoo/config.toml` `[hooker].plugins`.
-
-## Capability
-
-See [docs/agent-ras/designs/features/opencode-xiaoo-integration.md](../../../docs/agent-ras/designs/features/opencode-xiaoo-integration.md) §4.
+`install-ras` 复制 `hooker/` → `~/.agent-insight/ras/xiaoo/hooker/`，并合并 `~/.config/xiaoo/config.toml` `[hooker].plugins`。

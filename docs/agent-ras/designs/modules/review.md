@@ -22,7 +22,7 @@ agent_ras/review/
 
 ## 扩展
 
-见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)：新增 `review/<domain>.py` + `review/skills/<id>/SKILL.md`。
+新增 `review/<domain>.py` + `review/skills/<id>/SKILL.md`。
 
 ## 相关
 
