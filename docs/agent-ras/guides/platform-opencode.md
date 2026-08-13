@@ -4,6 +4,8 @@
 
 **inproc 如何加载 libpython、模块如何互相调用**：见 [architecture.md §4](../designs/architecture.md)。
 
+## 架构
+
 ```mermaid
 flowchart LR
   Install[install-ras] --> Plugin[opencode_plugin]

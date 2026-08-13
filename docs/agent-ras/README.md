@@ -52,8 +52,7 @@
 | [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc + Daemon SSE 控制面（FI 库零改动；Worker 不启 RAS） | 已落地（Daemon harness） |
 | [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO ⓪ Trace（Insight collector → OTLP；RAS 仅 join） | 已迁 Insight |
 | [opencode-xiaoo-integration.md](designs/features/opencode-xiaoo-integration.md) | OpenCode / xiaoO 对接对照：模块关系、机制差异、信号与 FI 边界 | 分析说明 |
-| [capability-config-sync.md](designs/features/capability-config-sync.md) | RAS 能力配置多平台维护；可选同步到 OpenCode / xiaoO 客户端 | 已落地 |
-| [capability-catalog-decouple.md](designs/features/capability-catalog-decouple.md) | Insight 能力目录/配置表单解耦：PLUGIN presentation + catalog API；模板 `agent_ras_config.default.yaml` | 已落地 |
+| [capability-config.md](designs/features/capability-config.md) | 能力配置：目录解耦（PLUGIN presentation + catalog API）+ 多平台可选同步；模板 `agent_ras_config.default.yaml` | 已落地 |
 | [Agent RAS 可靠性闭环-服务端与客户端交互设计.md](designs/features/Agent%20RAS%20可靠性闭环-服务端与客户端交互设计.md) | 可靠性闭环：常驻客户端、configRef 控制面、Trace 异常维度、可靠性数据集与评估器 | 部分落地（评测集/IF-N16/FI 外挂/Trace anomaly/ExperimentCase FI 独立列） |
 | [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；P3 共同文件只留 yaml | **已落地（P0–P3）** |
 | [ras-trace-anomaly-display.md](designs/features/ras-trace-anomaly-display.md) | 可靠性观测详情：可折叠异常摘要条、单 anomaly 一行、marker 联动 | 已落地 |

@@ -2,13 +2,6 @@
 
 各 Provider 在断连/取消时停止推理的能力边界调研。
 
-```mermaid
-flowchart LR
-  Abort[Host_abort] --> Prov[Provider_stream]
-  Prov -->|supports_cancel| Stop[Stop_generation]
-  Prov -->|best_effort| Drain[May_emit_extra_tokens]
-```
-
 ---
 
 # 流式断连停推理：Provider 能力调研报告
@@ -26,6 +19,13 @@ flowchart LR
 ---
 
 ## 1. 问题场景
+
+```mermaid
+flowchart LR
+  Abort[Host_abort] --> Prov[Provider_stream]
+  Prov -->|supports_cancel| Stop[Stop_generation]
+  Prov -->|best_effort| Drain[May_emit_extra_tokens]
+```
 
 ### 1.1 场景定义
 

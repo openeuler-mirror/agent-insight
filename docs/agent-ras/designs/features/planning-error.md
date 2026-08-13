@@ -2,18 +2,6 @@
 
 策略层规划错误：约束忽略、不可行动作、低效计划、错误工具选择等。
 
-```mermaid
-flowchart TB
-  Task[Task_constraints] --> Gate{Info_complete}
-  Env[Env_state] --> Gate
-  Tools[Tool_contracts] --> Gate
-  Gate -->|partial| Heuristic[Heuristic_layer]
-  Gate -->|full| Semantic[Semantic_layer]
-  Heuristic --> Anom[Anomaly]
-  Semantic --> Anom
-  Anom --> Rec[Recovery_steer_or_notice]
-```
-
 ---
 
 # LLM Agent 规划错误（Planning Error）检测 — 需求分析与方案
@@ -303,6 +291,18 @@ flowchart TB
 ---
 
 ## 四、解决方案
+
+```mermaid
+flowchart TB
+  Task[Task_constraints] --> Gate{Info_complete}
+  Env[Env_state] --> Gate
+  Tools[Tool_contracts] --> Gate
+  Gate -->|partial| Heuristic[Heuristic_layer]
+  Gate -->|full| Semantic[Semantic_layer]
+  Heuristic --> Anom[Anomaly]
+  Semantic --> Anom
+  Anom --> Rec[Recovery_steer_or_notice]
+```
 
 ### 4.1 总体原则
 

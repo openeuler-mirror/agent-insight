@@ -45,6 +45,6 @@ npx agent-insight install-ras
 | 同步到客户端 | **OpenCode** / **xiaoO** 支持；开启后分别在插件启动 / hooker 会话开始时 `GET /api/ingest/ras-config?platform=...`，按 **内容指纹** 合并到本地 `config.json` 的 `platforms.<platform>`（并写入 `syncedFrom` 溯源；不覆盖 `service.*` / `insight.*`；两平台可并存不同阈值） |
 | 导出 | YAML / JSON 复制，供 openjiuwen 等人工落盘 |
 
-新增故障域 checklist：见 [fault-domain-plugins.md §5.1](../designs/features/fault-domain-plugins.md) 与 [capability-catalog-decouple.md](../designs/features/capability-catalog-decouple.md)。
+新增故障域 checklist：见 [fault-domain-plugins.md §5.1](../designs/features/fault-domain-plugins.md) 与 [capability-config.md](../designs/features/capability-config.md)。
 
-设计见 [capability-config-sync.md](../designs/features/capability-config-sync.md)。
+设计见 [capability-config.md](../designs/features/capability-config.md)。

@@ -2,16 +2,6 @@
 
 环内打断进行中的 `llm.stream`：依赖宿主 abort 契约；thinking-loop 经 Monitor 自动恢复（L1/L2 立即 abort，L3 Reviewer 二次判定）。
 
-```mermaid
-sequenceDiagram
-  participant Mon as Monitor
-  participant Ctx as CallbackContext
-  participant Agent as ReAct_or_Host
-  Mon->>Ctx: request_abort_stream
-  Agent->>Ctx: consume_abort_at_chunk
-  Agent->>Agent: aclose_provider_stream
-```
-
 ---
 
 # `llm.stream` 停流机制分析
@@ -215,6 +205,16 @@ asyncio 默认也**不会**像进程组那样做「父 task 结束 → 子 task 
 ---
 
 ## 6. 真正有效的停流路径：`request_abort_stream`
+
+```mermaid
+sequenceDiagram
+  participant Mon as Monitor
+  participant Ctx as CallbackContext
+  participant Agent as ReAct_or_Host
+  Mon->>Ctx: request_abort_stream
+  Agent->>Ctx: consume_abort_at_chunk
+  Agent->>Agent: aclose_provider_stream
+```
 
 ### 6.1 契约（`base.py`）
 

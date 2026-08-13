@@ -2,22 +2,6 @@
 
 六类信念层故障；与分析瘫痪、规划错误形成认知层三角覆盖。
 
-```mermaid
-flowchart TB
-  Belief[Belief_layer] --> A[Stale_knowledge]
-  Belief --> B[Confirmation_bias]
-  Belief --> C[Authority_blind]
-  Belief --> D[Cross_source_conflict]
-  Belief --> E[Policy_violation]
-  Belief --> F[False_premise]
-  A --> Det[Detect_and_recover]
-  B --> Det
-  C --> Det
-  D --> Det
-  E --> Det
-  F --> Det
-```
-
 ---
 
 # LLM Agent 领域认知偏差（Domain Cognitive Bias）— 业界方案调研与场景说明书
@@ -33,6 +17,24 @@ flowchart TB
 > - 现有错误词表：[skills/agent-debug-diagnosis/references/02-error-taxonomy.md](../../../../skills/agent-debug-diagnosis/references/02-error-taxonomy.md)
 
 ---
+
+## 概述
+
+```mermaid
+flowchart TB
+  Belief[Belief_layer] --> A[Stale_knowledge]
+  Belief --> B[Confirmation_bias]
+  Belief --> C[Authority_blind]
+  Belief --> D[Cross_source_conflict]
+  Belief --> E[Policy_violation]
+  Belief --> F[False_premise]
+  A --> Det[Detect_and_recover]
+  B --> Det
+  C --> Det
+  D --> Det
+  E --> Det
+  F --> Det
+```
 
 ## 目录
 

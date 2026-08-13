@@ -2,6 +2,8 @@
 
 深挂载：L3 Rail 直连 L0，流内 abort / steer / notice；thinking-loop 含 L3 自动 Reviewer。
 
+## 架构
+
 ```mermaid
 flowchart LR
   YAML[config_yaml] --> Factory[create_deep_agent]

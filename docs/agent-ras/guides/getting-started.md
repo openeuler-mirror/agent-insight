@@ -2,6 +2,8 @@
 
 在宿主中启用 Agent RAS（环内检测 + 恢复）的最短路径。
 
+## 流程
+
 ```mermaid
 flowchart LR
   Pick[Choose_platform] --> Install[Install_or_dependency]

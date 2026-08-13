@@ -2,7 +2,7 @@
 
 版本：v1.0  
 状态：分析说明（对齐现网实现；非新特性立项）  
-关联：[architecture.md](../architecture.md)、[platform-adapter.md](../modules/platform-adapter.md)、[xiaoo-adapter.md](./xiaoo-adapter.md)、[xiaoo-observe-ingest.md](./xiaoo-observe-ingest.md)、[capability-config-sync.md](./capability-config-sync.md)、[guides/platform-opencode.md](../../guides/platform-opencode.md)、[guides/platform-xiaoo.md](../../guides/platform-xiaoo.md)、[ras-fi-insight-relationship.md](../../../agent-fault-injection/designs/ras-fi-insight-relationship.md)
+关联：[architecture.md](../architecture.md)、[platform-adapter.md](../modules/platform-adapter.md)、[xiaoo-adapter.md](./xiaoo-adapter.md)、[xiaoo-observe-ingest.md](./xiaoo-observe-ingest.md)、[capability-config.md](./capability-config.md)、[guides/platform-opencode.md](../../guides/platform-opencode.md)、[guides/platform-xiaoo.md](../../guides/platform-xiaoo.md)、[ras-fi-insight-relationship.md](../../../agent-fault-injection/designs/ras-fi-insight-relationship.md)
 
 ## 1. 结论
 
@@ -62,7 +62,7 @@ flowchart TB
 
 ### 2.2 配置同步
 
-Insight `GET /api/ingest/ras-config?platform=opencode|xiaoo` → 客户端合并写入本机 RAS 配置。详见 [capability-config-sync.md](./capability-config-sync.md)。xiaoo hello 仍强制 `semantic_content_enabled=false`。
+Insight `GET /api/ingest/ras-config?platform=opencode|xiaoo` → 客户端合并写入本机 RAS 配置。详见 [capability-config.md](./capability-config.md)。xiaoo hello：凡含 `semantic_content_enabled` 的 detector 字段强制 `false`。
 
 ---
 
@@ -218,7 +218,7 @@ L3 分叉进 L2 后合流；完整链路 Trace **不经** RAS；仅 OpenCode 在
 | 能力矩阵 / 加平台 | [platform-adapter.md](../modules/platform-adapter.md) |
 | xiaoO 设计 | [xiaoo-adapter.md](./xiaoo-adapter.md) |
 | xiaoO ⓪ Trace（Insight collector） | [xiaoo-observe-ingest.md](./xiaoo-observe-ingest.md) |
-| 配置同步 | [capability-config-sync.md](./capability-config-sync.md) |
+| 配置同步 | [capability-config.md](./capability-config.md) |
 | OpenCode 安装验收 | [platform-opencode.md](../../guides/platform-opencode.md) |
 | xiaoO 安装验收 | [platform-xiaoo.md](../../guides/platform-xiaoo.md) |
 | RAS · FI · Insight | [ras-fi-insight-relationship.md](../../../agent-fault-injection/designs/ras-fi-insight-relationship.md) |
