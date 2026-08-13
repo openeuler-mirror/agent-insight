@@ -6,7 +6,10 @@
  * 生成 Trace 契约：创建 Run → 等 Worker/collect 回填 sessionTaskId → 写入 Case.taskId → 再评测。
  */
 import { createTaskWithRuns } from '@/lib/fault-injection/store'
-import { listPlatformsFromWorkers } from '@/lib/fault-injection/worker-protocol'
+import {
+  listPlatformsFromWorkers,
+  listWorkerExecutionTargets,
+} from '@/lib/fault-injection/worker-protocol'
 import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
 import { prisma } from '@/lib/storage/prisma'
 import { resolveCaseFaultInjectionType } from '@/lib/engine/experiment/case-fi-meta'
@@ -24,6 +27,7 @@ export type FiOrchestrateRequest = {
   platform: string
   agent: string
   model?: string | null
+  targetWorkerId?: string | null
   workspace?: string | null
   timeoutSeconds?: number
   cases: FiOrchestrateCaseSpec[]
@@ -50,7 +54,7 @@ export class FiOrchestrateError extends Error {
   }
 }
 
-/** 从实验 case 中提取需要 FI 的条目（已有 execution/task 的跳过）。 */
+/** 从实验 case 中提取需要 FI 的条目（只有已绑定有效 Execution 的才跳过）。 */
 export async function collectFiCasesFromExperiment(experimentId: string): Promise<FiOrchestrateCaseSpec[]> {
   const cases = await prisma.experimentCase.findMany({
     where: { experimentId },
@@ -58,7 +62,7 @@ export async function collectFiCasesFromExperiment(experimentId: string): Promis
   })
   const out: FiOrchestrateCaseSpec[] = []
   for (const item of cases) {
-    if (item.executionId || item.taskId) continue
+    if (item.executionId) continue
     const fault = resolveCaseFaultInjectionType(item)
     if (!fault) continue
     let submode: string | null = null
@@ -103,19 +107,33 @@ export async function orchestrateFaultInjection(
     return { skipped: true, reason: 'no_fi_cases', taskIds: [], runIds: [], caseFaults: [] }
   }
 
-  const { platforms, ok } = await listPlatformsFromWorkers(req.user)
-  if (!ok) {
-    throw new FiOrchestrateError(
-      'no_online_worker',
-      '无在线 FI Worker；请用与当前登录账号相同的 API Key 安装并启动 Worker',
-    )
-  }
-  const platformInfo = platforms.find((p) => p.id === req.platform)
-  if (!platformInfo || platformInfo.readiness !== 'ready') {
-    throw new FiOrchestrateError(
-      `platform_not_ready:${req.platform}`,
-      `平台 ${req.platform} 不可用（需在线 Worker 上报就绪）`,
-    )
+  if (req.targetWorkerId) {
+    const targets = await listWorkerExecutionTargets(req.user)
+    const target = targets.find((item) =>
+      item.workerId === req.targetWorkerId
+      && item.platform === req.platform
+      && item.agent === req.agent)
+    if (!target) {
+      throw new FiOrchestrateError(
+        'execution_target_unavailable',
+        '所选运行主机已离线，或不再提供该 Agent 的执行能力',
+      )
+    }
+  } else {
+    const { platforms, ok } = await listPlatformsFromWorkers(req.user)
+    if (!ok) {
+      throw new FiOrchestrateError(
+        'no_online_worker',
+        '无在线 FI Worker；请检查客户端配置与在线状态',
+      )
+    }
+    const platformInfo = platforms.find((p) => p.id === req.platform)
+    if (!platformInfo || platformInfo.readiness !== 'ready') {
+      throw new FiOrchestrateError(
+        `platform_not_ready:${req.platform}`,
+        `平台 ${req.platform} 不可用（需在线客户端上报就绪）`,
+      )
+    }
   }
 
   const workspace = normalizeFiWorkspaceInput(req.workspace)
@@ -133,6 +151,7 @@ export async function orchestrateFaultInjection(
       workspace,
       model: req.model || null,
       timeoutSeconds: req.timeoutSeconds ?? 180,
+      targetWorkerId: req.targetWorkerId || null,
       items: [{ fault: item.fault, submode: item.submode || null }],
     })
     // 必须用业务 runId（ras-…），禁止 Prisma cuid：Worker/collect/API 一律按 runId 关联。
@@ -167,6 +186,16 @@ const FI_TERMINAL_WITHOUT_SESSION = new Set([
   'stopped',
 ])
 
+export function hasUsableTraceInteractions(value: string | null | undefined): boolean {
+  if (!value) return false
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return Array.isArray(parsed) && parsed.length > 0
+  } catch {
+    return false
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -181,12 +210,13 @@ async function findFiRunByKey(runKey: string) {
       status: true,
       sessionTaskId: true,
       error: true,
+      user: true,
     },
   })
 }
 
 /**
- * 把 FI Run.sessionTaskId 回填到 ExperimentCase.taskId（及存在的 Execution.id）。
+ * 仅当 sessionTaskId 已经对应到非空 Session trace 与 Execution 时，才把它们回填到 Case。
  * 兼容历史 fiRunId=cuid 与正确的 ras- runId。
  */
 export async function bindExperimentCaseToFiSession(input: {
@@ -202,27 +232,34 @@ export async function bindExperimentCaseToFiSession(input: {
   )
   if (!keys.length) return 0
 
-  const execution = await prisma.execution.findFirst({
-    where: { taskId: sessionTaskId },
-    select: { id: true },
-  })
+  const [execution, session] = await Promise.all([
+    prisma.execution.findFirst({
+      where: { taskId: sessionTaskId, isSubagent: false, ...(run?.user ? { user: run.user } : {}) },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true },
+    }),
+    prisma.session.findUnique({
+      where: { taskId: sessionTaskId },
+      select: { interactions: true },
+    }),
+  ])
+  if (!execution || !hasUsableTraceInteractions(session?.interactions)) return 0
 
   const result = await prisma.experimentCase.updateMany({
     where: {
       fiRunId: { in: keys },
-      OR: [{ taskId: null }, { taskId: '' }],
     },
     data: {
       taskId: sessionTaskId,
-      ...(execution ? { executionId: execution.id } : {}),
+      executionId: execution.id,
     },
   })
   return result.count
 }
 
 /**
- * 等待 FI collect 对齐平台 Session，并回填 ExperimentCase.taskId。
- * 超时不抛错：已对齐的 case 照常绑定，未对齐的留给后续评测降级（空轨迹 warn）。
+ * 等待 FI collect 对齐平台 Session，并在 Trace 完整可用后回填 ExperimentCase。
+ * 超时不抛错：调用方只允许 readyRunIds 对应的 Case 进入评估。
  */
 export async function awaitFiSessionsAndBindExperimentCases(input: {
   runIds: string[]
@@ -255,12 +292,15 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
         continue
       }
       if (run.sessionTaskId) {
-        bound += await bindExperimentCaseToFiSession({
+        const count = await bindExperimentCaseToFiSession({
           fiRunKey: runKey,
           sessionTaskId: run.sessionTaskId,
         })
-        ready.add(runKey)
-        continue
+        if (count > 0) {
+          bound += count
+          ready.add(runKey)
+          continue
+        }
       }
       if (FI_TERMINAL_WITHOUT_SESSION.has(run.status)) {
         failed.add(runKey)

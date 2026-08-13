@@ -21,6 +21,7 @@ interface ExperimentRow {
   watchMode?: boolean;
   caseCount: number;
   evaluatorCount: number;
+  overallScore: number | null;
   createdAt: string;
 }
 
@@ -113,12 +114,17 @@ export default function ExperimentsPage() {
     }
   }, [user, page, pageSize]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   // 页码/每页条数变化后若越界（如切大页码后减小 pageSize），回夹到末页
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
+    if (page <= totalPages) return;
+    const timer = window.setTimeout(() => setPage(totalPages), 0);
+    return () => window.clearTimeout(timer);
   }, [page, totalPages]);
 
   return (
@@ -162,6 +168,7 @@ export default function ExperimentsPage() {
                   <th style={TH}>实验类型</th>
                   <th style={{ ...TH, textAlign: 'right' }}>Case</th>
                   <th style={{ ...TH, textAlign: 'right' }}>评估器</th>
+                  <th style={{ ...TH, textAlign: 'right' }}>综合分</th>
                   <th style={TH}>状态</th>
                   <th style={TH}>创建</th>
                 </tr>
@@ -180,6 +187,12 @@ export default function ExperimentsPage() {
                     <td style={TD}><TypeChip /></td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>
+                    <td style={{
+                      ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                      fontWeight: 700, color: typeof r.overallScore === 'number' ? 'var(--primary)' : 'var(--foreground-muted)',
+                    }}>
+                      {typeof r.overallScore === 'number' ? r.overallScore.toFixed(1).replace(/\.0$/, '') : '—'}
+                    </td>
                     <td style={TD}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                         <StatusChip status={r.status} />

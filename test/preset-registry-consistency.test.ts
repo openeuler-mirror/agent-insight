@@ -42,7 +42,8 @@ import {
   isAgentToolPresetId,
 } from '../src/lib/engine/experiment/agent-tool-preset-evaluators';
 import {
-  RAS_RELIABILITY_PRESET_ID,
+  RAS_DETECTION_RECOVERY_PRESET_ID,
+  RAS_FAULT_INJECTION_PRESET_ID,
   isRasReliabilityPresetId,
 } from '../src/lib/engine/experiment/ras-reliability-evaluator';
 
@@ -65,7 +66,7 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
   {
     name: 'ras-reliability-evaluator.ts',
     claims: isRasReliabilityPresetId,
-    ids: [RAS_RELIABILITY_PRESET_ID],
+    ids: [RAS_FAULT_INJECTION_PRESET_ID, RAS_DETECTION_RECOVERY_PRESET_ID],
   },
 ];
 

@@ -282,7 +282,7 @@ async function evaluateOnce(
     return runAgentToolPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isRasReliabilityPresetId(evaluatorId)) {
-    return runRasReliabilityPreset(user, runtime.faithfulCtx);
+    return runRasReliabilityPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
@@ -438,11 +438,13 @@ export interface StartExperimentRunResult {
 }
 
 /**
- * 触发实验执行。同 experiment 已在 running（内存或 DB 状态）时直接返回当前状态，不重复起跑。
+ * 触发实验执行。同 experiment 已在 running（内存或 DB 状态）时直接返回当前状态，不重复起跑；
+ * 生成 Trace 的后台绑定流程可在 DB 已提前标记 running 后显式继续调度。
  */
 export async function startExperimentRun(
   experimentId: string,
   user: string,
+  options: { allowPersistedRunning?: boolean; caseIds?: string[] } = {},
 ): Promise<StartExperimentRunResult | null> {
   const running = getRunningSet();
   if (running.has(experimentId)) return { status: 'running', alreadyRunning: true };
@@ -452,14 +454,20 @@ export async function startExperimentRun(
     include: { cases: { orderBy: { createdAt: 'asc' } } },
   });
   if (!experiment) return null;
-  if (experiment.status === 'running') return { status: 'running', alreadyRunning: true };
+  if (experiment.status === 'running' && !options.allowPersistedRunning) {
+    return { status: 'running', alreadyRunning: true };
+  }
 
   let evaluatorIds: string[] = [];
   try {
     const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
     if (Array.isArray(parsed)) evaluatorIds = parsed.map(String).filter(Boolean);
   } catch { /* 忽略脏数据 */ }
-  if (!evaluatorIds.length || !experiment.cases.length) {
+  const allowedCaseIds = options.caseIds ? new Set(options.caseIds) : null;
+  const casesToRun = allowedCaseIds
+    ? experiment.cases.filter((item: { id: string }) => allowedCaseIds.has(item.id))
+    : experiment.cases;
+  if (!evaluatorIds.length || !casesToRun.length) {
     return { status: experiment.status };
   }
 
@@ -471,7 +479,7 @@ export async function startExperimentRun(
     });
 
     const scheduledRows: ScheduledResultRun[] = [];
-    for (const c of experiment.cases) {
+    for (const c of casesToRun) {
       for (const evaluatorId of evaluatorIds) {
         scheduledRows.push(await resetAndScheduleResultRun({
           experimentId, caseId: c.id, evaluatorId, user,
