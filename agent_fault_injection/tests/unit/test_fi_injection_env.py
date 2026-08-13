@@ -45,6 +45,7 @@ def test_strip_ras_detector_env_drops_parent_overrides() -> None:
             "PATH": "/usr/bin",
             "RAS_DETECTION_START_CHARS": "200",
             "RAS_SEMANTIC_EVAL_CHARS": "1500",
+            "RAS_DET_EXAMPLE_THRESHOLD": "9",
             "AGENT_FI_RUN_ID": "run-1",
         }
     )
@@ -52,6 +53,7 @@ def test_strip_ras_detector_env_drops_parent_overrides() -> None:
     assert cleaned["AGENT_FI_RUN_ID"] == "run-1"
     assert "RAS_DETECTION_START_CHARS" not in cleaned
     assert "RAS_SEMANTIC_EVAL_CHARS" not in cleaned
+    assert "RAS_DET_EXAMPLE_THRESHOLD" not in cleaned
 
 
 def test_opencode_runtime_env_strips_detector_keys(monkeypatch) -> None:
