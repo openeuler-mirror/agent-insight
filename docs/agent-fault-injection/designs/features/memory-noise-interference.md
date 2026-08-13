@@ -8,10 +8,10 @@
 > 文档类型：Phase1 故障注入方案（FI 设计） | 关联项目：agent-fault-injection  
 > 状态：**Skill S1–S4 已落地**（`memory-noise-interference`）；**S5 压缩失真未实施**  
 > 关联文档：
-> - [记忆丢失/损坏/投毒总方案](memory-file-loss.md)
-> - [语义层故障注入调研](../../agent-fault-injection/designs/agent-semantic-fault-injection-survey.md)
-> - [注入→评判](../../agent-fault-injection/designs/modules/server-judge.md)
-> - [故障覆盖矩阵](../../agent-fault-injection/designs/fault-catalog.md)
+> - [记忆丢失/损坏/投毒总方案](../../agent-fault-injection/designs/features/memory-file-loss.md)
+> - [语义层故障注入调研](../agent-semantic-fault-injection-survey.md)
+> - [注入→评判](../modules/server-judge.md)
+> - [故障覆盖矩阵](../fault-catalog.md)
 > - 模式库：FM005 上下文窗口污染 · FM004 记忆幻觉 · FM015 错误响应污染
 
 ---
@@ -102,7 +102,7 @@ L3 持久记忆污染（可选，对标 MemSecBench）
   → 跨 session / 抗 compaction
 ```
 
-> 重要：本仓当前默认路径是 **L1 Skill 注入**。L2/L3 为扩展注入层，勿与「当前已实现」混为一谈（见 [survey §5.0](../../agent-fault-injection/designs/agent-semantic-fault-injection-survey.md)）。
+> 重要：本仓当前默认路径是 **L1 Skill 注入**。L2/L3 为扩展注入层，勿与「当前已实现」混为一谈（见 [survey §5.0](../agent-semantic-fault-injection-survey.md)）。
 
 ---
 
@@ -351,7 +351,7 @@ Skill 路径：`agent_fault_injection/fault_inject/skills/memory-noise-interfere
 
 | 总方案子类 | 本方案覆盖 |
 |------------|------------|
-| `ML` Memory Loss | 不覆盖（缺失型）；见 [phase1-fault-injection-scheme.md](memory-file-loss.md) |
+| `ML` Memory Loss | 不覆盖（缺失型）；见 [phase1-fault-injection-scheme.md](../../agent-fault-injection/designs/features/memory-file-loss.md) |
 | `MC` Memory Corruption | 不覆盖（结构损坏） |
 | `MP` Memory Poisoning | 部分重叠：S2 持久化形态 ≈ MP；本方案强调「干扰当下决策」而非安全投毒生命周期 |
 | `CLV` Context Length Violation | 与 **S5** 相关但目标不同：CLV 测压缩丢信息；S5 测摘要夹带错误 |
@@ -386,9 +386,9 @@ Skill 路径：`agent_fault_injection/fault_inject/skills/memory-noise-interfere
 
 ### 内部
 
-- [记忆丢失/损坏/投毒总方案](memory-file-loss.md)
-- [agent-semantic-fault-injection-survey.md](../../agent-fault-injection/designs/agent-semantic-fault-injection-survey.md) — MAS-FIRE Memory / AutoInject
-- [server-judge.md](../../agent-fault-injection/designs/modules/server-judge.md) — Skill → Judge 主链路
+- [记忆丢失/损坏/投毒总方案](../../agent-fault-injection/designs/features/memory-file-loss.md)
+- [agent-semantic-fault-injection-survey.md](../agent-semantic-fault-injection-survey.md) — MAS-FIRE Memory / AutoInject
+- [server-judge.md](../modules/server-judge.md) — Skill → Judge 主链路
 - 模式库 `FM005-context-window-contamination` / `FM004-memory-confabulation`
 
 ### 外部

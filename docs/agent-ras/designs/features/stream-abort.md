@@ -1,9 +1,3 @@
-# Stream Abort 停流机制（已落地）
-
-环内打断进行中的 `llm.stream`：依赖宿主 abort 契约；thinking-loop 经 Monitor 自动恢复（L1/L2 立即 abort，L3 Reviewer 二次判定）。
-
----
-
 # `llm.stream` 停流机制分析
 
 ## 1. 文档目的

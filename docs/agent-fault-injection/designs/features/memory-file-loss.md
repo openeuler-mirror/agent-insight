@@ -8,7 +8,7 @@
 
 > 文档类型：Phase1 故障注入方案（FI 设计） | 关联项目：agent-insight / agent_ras · FI 实现：`agent_fault_injection`  
 > 复杂度：**High**（记忆载体跨会话历史、压缩摘要、工作区文件与外部 KB；OpenCode 无统一 Memory API）  
-> 关联文档：[语义层故障注入调研](../../agent-fault-injection/designs/agent-semantic-fault-injection-survey.md) · [注入→评判](.modules/server-judge.md) · [故障覆盖矩阵](.fault-catalog.md)
+> 关联文档：[语义层故障注入调研](../agent-semantic-fault-injection-survey.md) · [注入→评判](../modules/server-judge.md) · [故障覆盖矩阵](../fault-catalog.md)
 
 ---
 
@@ -244,7 +244,7 @@ platform_options:
 
 ## 6. 评判设计
 
-对齐 [server-judge.md](../../agent-fault-injection/designs/modules/server-judge.md) 四元组；Judge 额外输入：
+对齐 [server-judge.md](../modules/server-judge.md) 四元组；Judge 额外输入：
 
 1. `memory_seed`（播种真相）  
 2. `memory_after_inject`（注入后快照或 diff）  
@@ -270,7 +270,7 @@ platform_options:
 | 模块 | 改动 |
 |------|------|
 | `fault_inject/skills/memory-*/SKILL.md` | 新增 P0/P1 Skill 剧本与场景表 |
-| `skills/<id>/SKILL.md` `metadata` | 登记中文标签与子模式（见 [fault-mode-plugins](../../../agent-fault-injection/designs/features/fault-mode-plugins.md)） |
+| `skills/<id>/SKILL.md` `metadata` | 登记中文标签与子模式（见 [fault-mode-plugins](fault-mode-plugins.md)） |
 | `fault_inject/installer.py` / Adapter | 支持播种 + 文件 mutate（可复用 `InstallSession`） |
 | `platform_adapters/opencode/plugin/agent-fault-injection.ts` | P1：`messages.transform` / `session.compacting` + `memory.fault.injected` 事件 |
 | `evaluation.py` / Judge prompt | 纳入 seed/diff 证据 |

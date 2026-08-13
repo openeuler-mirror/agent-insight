@@ -1,9 +1,3 @@
-# 故障域插件化：detectors / review / recovery 三分治（已落地）
-
-检测、评审、恢复三棵树平级扩展；目录扫描 + `*_PLUGIN` 自动注册；不设 `fault_domains/`。
-
----
-
 # 故障域插件化：detectors / review / recovery 三分治
 
 版本：v0.8.1  

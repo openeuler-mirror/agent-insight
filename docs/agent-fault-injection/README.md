@@ -44,6 +44,9 @@
 | [task-orchestration.md](designs/modules/task-orchestration.md) | Insight FI API | ✅ |
 | [fault-inject.md](designs/modules/fault-inject.md) | 五类 injection_method + 扩展车道 | ✅ |
 | [fault-mode-plugins.md](designs/features/fault-mode-plugins.md) | 故障模式自包含插件化（metadata + capability） | ✅ 已落地（2026-08-10） |
+| [memory-file-loss.md](designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒 FI 方案（FI-P0 文件层已落地；检测器属 RAS 规划） | 🟡 FI-P0 已落地 |
+| [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（Skill S1–S3 + middleware S4 已落地；S5 压缩失真未实施） | ✅ S1–S4 已落地 |
+| [domain-cognitive-bias.md](designs/features/domain-cognitive-bias.md) | 领域认知偏差六类场景（FI 剧本 Phase1；检测器属 RAS 规划） | ⬜ 未实现（规划中） |
 | [lane-a-add-fault.md](guides/lane-a-add-fault.md) | Lane A 新增故障模式操作指南 | ✅ |
 | [platform-adapter-contract.md](designs/modules/platform-adapter-contract.md) | Adapter 接入契约 | ✅ |
 | [platform-adapter-spi.md](designs/modules/platform-adapter-spi.md) | Template Method SPI 对照 | ✅ |

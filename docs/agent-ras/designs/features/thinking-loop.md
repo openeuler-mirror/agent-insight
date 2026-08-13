@@ -1,9 +1,3 @@
-# Thinking Loop 检测与恢复（已落地）
-
-LLM 思考/文本死循环：L1/L2 字面 + 可选 L3 语义。
-
----
-
 # LLM 思考死循环检测与恢复方案
 
 > 适用范围：仓根 `agent_ras/`（`LlmThinkingLoopDetector` + 自动恢复 + abort）  

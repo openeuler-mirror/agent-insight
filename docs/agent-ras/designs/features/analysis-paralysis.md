@@ -1,9 +1,3 @@
-# Analysis Paralysis 检测（规划中）
-
-二阶段检测：触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道。
-
----
-
 # LLM 过度思考（Analysis Paralysis）二阶段检测 — 需求分析与方案
 
 版本：v0.1  

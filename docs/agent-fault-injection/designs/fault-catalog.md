@@ -22,8 +22,8 @@
 | `planning-logic-error` | `ras-planning-logic-error` | 1 → 依赖颠倒；2 → 环依赖；3 → 步骤缺失；4 → 规划约束冲突 | Planning Logic Error | Insight FI 任务表单 | [planning-error](../../agent-ras/designs/features/planning-error.md) |
 | `unverified-success` | `ras-two-condition-test` | —（协议型，无子模式表） | 未经验证的成功；可选 `fault.json` + tools + 权威 verifier | — | — |
 | `execution-goal-drift` | `ras-routing-continuity-test` | 1 → 跨阶段批次连续性 | 执行目标漂移；可选 `fault.json` + tools + 权威 verifier | — | — |
-| `memory-noise-interference` | `ras-memory-noise-interference` | 1–3 → 无关历史 / 冲突事实 / 错误响应；4 → 会话记忆虚假先验 | 记忆噪声干扰 | Insight FI 任务表单 | [memory-noise-interference](../../agent-ras/designs/features/memory-noise-interference.md) |
-| `memory-file-loss` | `ras-memory-file-loss` | 1 → 删除全文；2 → 删除约束段 | 记忆文件丢失（文件篡改） | Insight FI 任务表单 | [memory-file-loss](../../agent-ras/designs/features/memory-file-loss.md) |
+| `memory-noise-interference` | `ras-memory-noise-interference` | 1–3 → 无关历史 / 冲突事实 / 错误响应；4 → 会话记忆虚假先验 | 记忆噪声干扰 | Insight FI 任务表单 | [memory-noise-interference](../features/memory-noise-interference.md) |
+| `memory-file-loss` | `ras-memory-file-loss` | 1 → 删除全文；2 → 删除约束段 | 记忆文件丢失（文件篡改） | Insight FI 任务表单 | [memory-file-loss](../features/memory-file-loss.md) |
 | `tool-observation-delta` | `ras-tool-observation-delta` | 1 → 工具观测似真偏移 | 工具噪声干扰 | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
 | `intermediate-conclusion-drift` | `ras-intermediate-conclusion-drift` | 1 → 中间结论漂移 | 推理错误 / 中间结论漂移 | Insight FI 任务表单 | [runtime FI](runtime-middleware-fault-injection.md) |
 | `compositional-implicit-intent` | `ras-compositional-implicit-intent` | 1 → 配置外泄 | 组合式隐含意图（Skill 组合涌现） | Insight FI 任务表单 | — |
@@ -32,9 +32,9 @@
 
 | 主题 | 文档 | 本仓状态 |
 |------|------|----------|
-| 领域认知偏差 Domain Cognitive Bias | [domain-cognitive-bias](../../agent-ras/designs/features/domain-cognitive-bias.md) | **无**对应 Skill；FI 仍为 Phase1 方案 |
-| 记忆损坏/投毒 / 会话历史裁剪 | [memory-file-loss](../../agent-ras/designs/features/memory-file-loss.md) | `memory-file-loss` 已落地（FI-P0 文件层）；corruption / poison / history-loss / compacting 未落地 |
-| 记忆噪声压缩失真 | [memory-noise-interference](../../agent-ras/designs/features/memory-noise-interference.md) | S1–S4 已落地（S4=假先验 middleware）；**S5 压缩失真未实施** |
+| 领域认知偏差 Domain Cognitive Bias | [domain-cognitive-bias](../features/domain-cognitive-bias.md) | **无**对应 Skill；FI 仍为 Phase1 方案 |
+| 记忆损坏/投毒 / 会话历史裁剪 | [memory-file-loss](../features/memory-file-loss.md) | `memory-file-loss` 已落地（FI-P0 文件层）；corruption / poison / history-loss / compacting 未落地 |
+| 记忆噪声压缩失真 | [memory-noise-interference](../features/memory-noise-interference.md) | S1–S4 已落地（S4=假先验 middleware）；**S5 压缩失真未实施** |
 | Planning 其余子类（constraint_ignorance 等） | [planning-error](../../agent-ras/designs/features/planning-error.md) | `planning-logic-error` 含 S1–S3 结构错 + S4 约束冲突；其余见 FI-P1+ |
 | 工具超时歧义 / 限流 / 权限拒绝 / MCP 挂起 | [runtime FI](runtime-middleware-fault-injection.md) | 需新 runtime op；本轮未落地 |
 
