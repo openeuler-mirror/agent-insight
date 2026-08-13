@@ -25,14 +25,49 @@ from typing import Any
 
 import logging
 logger = logging.getLogger(__name__)
-from core.config import RepeatToolConfig
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from core.models import (
     Anomaly,
-    AnomalyKind,
     Severity,
     Signal,
     SignalKind,
 )
+from detectors.types import (
+    DetectorPlugin,
+    DomainPresentation,
+    PromptPresentation,
+    SubmodePresentation,
+)
+
+KIND_REPEAT_TOOL_CALL = "repeat_tool_call"
+KIND_TOOL_CALL_LOOP = "tool_call_loop"
+
+
+class RepeatToolConfig(BaseModel):
+    """Thresholds for repeat / loop tool-call detection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    warning_threshold: int = Field(default=5, ge=2)
+    critical_threshold: int = Field(default=10, ge=2)
+    global_breaker_threshold: int = Field(default=10, ge=2)
+    unknown_tool_threshold: int = Field(default=10, ge=2)
+
+    @property
+    def history_size(self) -> int:
+        return max(
+            4 * self.critical_threshold,
+            2 * self.global_breaker_threshold,
+            2 * self.unknown_tool_threshold,
+        )
+
+    @model_validator(mode="after")
+    def _validate_thresholds(self) -> "RepeatToolConfig":
+        if self.critical_threshold < self.warning_threshold:
+            raise ValueError("critical_threshold must be >= warning_threshold")
+        return self
 
 _TOOL_ARGUMENTS_MAX_LEN = 400
 
@@ -311,13 +346,14 @@ class RepeatToolCallDetector:
         no_progress = self._get_no_progress_streak(history, tool_name, args_hash)
         if no_progress >= cfg.global_breaker_threshold:
             return self._build(
-                AnomalyKind.TOOL_CALL_LOOP,
+                KIND_TOOL_CALL_LOOP,
                 Severity.CRITICAL,
                 member_name,
                 tool_name,
                 {
                     "detector_kind": "global_circuit_breaker",
                     "msg_key": "global_circuit_breaker",
+                    "critical_key": "repeat_tool_global_breaker_critical",
                     "count": no_progress,
                     "tool_arguments": tool_arguments,
                 },
@@ -328,26 +364,29 @@ class RepeatToolCallDetector:
         unknown_warning = self._unknown_tool_warning_threshold(cfg)
         if unknown_streak >= unknown_critical:
             return self._build(
-                AnomalyKind.REPEAT_TOOL_CALL,
+                KIND_REPEAT_TOOL_CALL,
                 Severity.CRITICAL,
                 member_name,
                 tool_name,
                 {
                     "detector_kind": "unknown_tool_repeat",
                     "msg_key": "unknown_tool_repeat",
+                    "critical_key": "repeat_tool_unknown_tool_critical",
                     "count": unknown_streak,
                     "tool_arguments": tool_arguments,
                 },
             )
         if unknown_streak >= unknown_warning:
             return self._build(
-                AnomalyKind.REPEAT_TOOL_CALL,
+                KIND_REPEAT_TOOL_CALL,
                 Severity.LOW,
                 member_name,
                 tool_name,
                 {
                     "detector_kind": "unknown_tool_repeat",
                     "msg_key": "unknown_tool_repeat_warning",
+                    "steer_key": "repeat_tool_unknown_steering",
+                    "notice_key": "repeat_tool_unknown_user",
                     "count": unknown_streak,
                     "tool_arguments": tool_arguments,
                 },
@@ -356,13 +395,14 @@ class RepeatToolCallDetector:
         ping_pong = self._get_ping_pong_streak(history, args_hash)
         if ping_pong.count >= cfg.critical_threshold and ping_pong.no_progress:
             return self._build(
-                AnomalyKind.TOOL_CALL_LOOP,
+                KIND_TOOL_CALL_LOOP,
                 Severity.CRITICAL,
                 member_name,
                 tool_name,
                 {
                     "detector_kind": "ping_pong",
                     "msg_key": "ping_pong_critical",
+                    "critical_key": "repeat_tool_pingpong_critical",
                     "count": ping_pong.count,
                     "paired_tool": ping_pong.paired_tool,
                     "tool_arguments": tool_arguments,
@@ -370,13 +410,15 @@ class RepeatToolCallDetector:
             )
         if ping_pong.count >= cfg.warning_threshold:
             return self._build(
-                AnomalyKind.TOOL_CALL_LOOP,
+                KIND_TOOL_CALL_LOOP,
                 Severity.LOW,
                 member_name,
                 tool_name,
                 {
                     "detector_kind": "ping_pong",
                     "msg_key": "ping_pong_warning",
+                    "steer_key": "repeat_tool_pingpong_steering",
+                    "notice_key": "repeat_tool_pingpong_user",
                     "count": ping_pong.count,
                     "paired_tool": ping_pong.paired_tool,
                     "tool_arguments": tool_arguments,
@@ -386,13 +428,15 @@ class RepeatToolCallDetector:
         recent = self._count_recent_same(history, tool_name, args_hash)
         if recent >= cfg.warning_threshold:
             return self._build(
-                AnomalyKind.REPEAT_TOOL_CALL,
+                KIND_REPEAT_TOOL_CALL,
                 Severity.LOW,
                 member_name,
                 tool_name,
                 {
                     "detector_kind": "generic_repeat",
                     "msg_key": "generic_repeat",
+                    "steer_key": "repeat_tool_generic_steering",
+                    "notice_key": "repeat_tool_generic_user",
                     "count": recent,
                     "tool_arguments": tool_arguments,
                 },
@@ -402,7 +446,7 @@ class RepeatToolCallDetector:
 
     @staticmethod
     def _build(
-        kind: AnomalyKind,
+        kind: str,
         severity: Severity,
         member_name: str,
         tool_name: str,
@@ -551,8 +595,210 @@ def _build_repeat_tool_detector(
     return RepeatToolCallDetector(cfg)
 
 
-from catalog.presentations_data import PRESENTATION_REPEAT_TOOL  # noqa: E402
-from detectors.types import DetectorPlugin  # noqa: E402
+_PARENT = {
+    "thinking_loop": {"zh": "思考循环", "en": "Thinking loop"},
+    "thinking_dead_loop": {"zh": "思考死循环", "en": "Thinking dead loop"},
+    "tool_repeat_dead_loop": {
+        "zh": "工具重复死循环",
+        "en": "Tool-call repeat dead loop",
+    },
+}
+
+PRESENTATION_REPEAT_TOOL = DomainPresentation(
+    order=10,
+    label={"zh": "工具重复死循环", "en": "Tool-call repeat"},
+    submodes=(
+        SubmodePresentation(
+            id="generic_repeat",
+            parent_id="tool_repeat_dead_loop",
+            parent=_PARENT["tool_repeat_dead_loop"],
+            sub_mode={"zh": "同参重复调用", "en": "Generic repeat"},
+            anomaly_kind="repeat_tool_call",
+            detection_level=None,
+            severities=("low",),
+            detects={
+                "zh": "同一工具 + 相同参数重复调用达到阈值（默认 ≥5）。",
+                "en": "Same tool + identical arguments repeated to threshold (default ≥5).",
+            },
+            recovery_summary={
+                "zh": "观察 + 注入 steering（低危默认策略）。",
+                "en": "Observe + inject steering (low-severity default policy).",
+            },
+            recovery_actions=("observe_only", "inject_steering"),
+            runtime_keys={"detector_kind": "generic_repeat"},
+            prompts=(
+                PromptPresentation(
+                    key="repeat_tool_generic_steering",
+                    role="steering",
+                    template_zh=(
+                        "你已多次使用完全相同参数重复调用同一工具，且未取得进展。\n"
+                        "重复工具调用检测结果：\n"
+                        "- 工具：{tool_name}\n"
+                        "- 重复次数：{count}\n"
+                        "- 参数：{tool_arguments}\n"
+                        "上述重复调用未产生有效进展。请勿再次使用完全相同的工具与参数进行调用。\n"
+                        "请分析导致工具重复调用的原因，并采取应对方案：立刻停止工具重复调用，"
+                        "调整参数、更换工具/策略，或在已有证据充分时结束任务。"
+                    ),
+                    template_en=(
+                        "You have repeatedly called the same tool with identical parameters many times.\n"
+                        "Repeated tool call detected:\n"
+                        "- tool: {tool_name}\n"
+                        "- repeated_times: {count}\n"
+                        "- arguments: {tool_arguments}\n"
+                        "The previous repeated calls did not make progress. "
+                        "Do not call this exact same tool with the exact same arguments again.\n"
+                        "Analyze why the tool is being called repeatedly and take corrective action: "
+                        "stop repeating the same tool call immediately, adjust parameters, switch tools/strategy, "
+                        "or finish the task if enough evidence has been gathered."
+                    ),
+                ),
+            ),
+        ),
+        SubmodePresentation(
+            id="unknown_tool_repeat",
+            parent_id="tool_repeat_dead_loop",
+            parent=_PARENT["tool_repeat_dead_loop"],
+            sub_mode={"zh": "失败工具连打", "en": "Unknown/failing tool repeat"},
+            anomaly_kind="repeat_tool_call",
+            detection_level=None,
+            severities=("medium", "critical"),
+            detects={
+                "zh": "失败或未知工具连续重试；警告约阈值/2，严重度达阈值。",
+                "en": "Failing/unknown tool retried in a streak; warning ≈ threshold/2, critical at threshold.",
+            },
+            recovery_summary={
+                "zh": "中危：注入 steering；严重：注入 steering + 升级用户通知。",
+                "en": "Medium: inject steering; critical: steering + escalate user notice.",
+            },
+            recovery_actions=("inject_steering", "escalate_user", "report_to_user"),
+            runtime_keys={"detector_kind": "unknown_tool_repeat"},
+            prompts=(
+                PromptPresentation(
+                    key="repeat_tool_unknown_steering",
+                    role="steering",
+                    severity_band="medium",
+                    template_zh=(
+                        "未知或失败的工具已被连续多次调用，且未取得进展。\n"
+                        "重复工具调用检测结果：\n"
+                        "- 工具：{tool_name}\n"
+                        "- 重复次数：{count}\n"
+                        "- 参数：{tool_arguments}\n"
+                        "上述重复调用未产生有效进展。请勿再次使用完全相同的工具与参数进行调用。\n"
+                        "请分析导致工具重复调用的原因，并采取应对方案：立刻停止工具重复调用，"
+                        "调整参数、更换工具/策略，或在已有证据充分时结束任务。"
+                    ),
+                    template_en=(
+                        "An unknown or failing tool has been called repeatedly with no progress.\n"
+                        "Repeated tool call detected:\n"
+                        "- tool: {tool_name}\n"
+                        "- repeated_times: {count}\n"
+                        "- arguments: {tool_arguments}\n"
+                        "The previous repeated calls did not make progress. "
+                        "Do not call this exact same tool with the exact same arguments again.\n"
+                        "Analyze why the tool is being called repeatedly and take corrective action: "
+                        "stop repeating the same tool call immediately, adjust parameters, switch tools/strategy, "
+                        "or finish the task if enough evidence has been gathered."
+                    ),
+                ),
+                PromptPresentation(
+                    key="repeat_tool_unknown_user",
+                    role="notice",
+                    severity_band="medium",
+                    template_zh="[工具调用异常] 工具 {tool_name} 已连续失败 {count} 次。",
+                    template_en="[Tool Call Anomaly] Tool {tool_name} has failed {count} times in a row.",
+                ),
+                PromptPresentation(
+                    key="repeat_tool_unknown_tool_critical",
+                    role="critical",
+                    severity_band="critical",
+                    template_zh="未知工具 {tool_name} 连续调用 {count} 次，停止重试",
+                    template_en="Unknown tool {tool_name} called {count} times in a row, stopping retries",
+                ),
+            ),
+        ),
+        SubmodePresentation(
+            id="ping_pong",
+            parent_id="tool_repeat_dead_loop",
+            parent=_PARENT["tool_repeat_dead_loop"],
+            sub_mode={"zh": "ping_pong", "en": "ping_pong"},
+            anomaly_kind="tool_call_loop",
+            detection_level=None,
+            severities=("medium", "critical"),
+            detects={
+                "zh": "工具 A↔B 交替调用；警告 ≥5 轮，严重 ≥10 轮且无进展。",
+                "en": "Alternating A↔B tool calls; warning ≥5 rounds, critical ≥10 with no progress.",
+            },
+            recovery_summary={
+                "zh": "中危：注入 steering；严重：注入 steering + 升级用户通知。",
+                "en": "Medium: inject steering; critical: steering + escalate user notice.",
+            },
+            recovery_actions=("inject_steering", "escalate_user", "report_to_user"),
+            runtime_keys={"detector_kind": "ping_pong"},
+            prompts=(
+                PromptPresentation(
+                    key="repeat_tool_pingpong_steering",
+                    role="steering",
+                    severity_band="medium",
+                    template_zh=(
+                        "检测到 Ping-Pong 交替工具调用且未取得进展。\n"
+                        "- 交替轮次：{count}\n"
+                        "- 最新工具：{tool_name}\n"
+                        "请停止 A↔B 工具循环。合并步骤、更换策略或换路径；若已有证据充分，请结束任务。"
+                    ),
+                    template_en=(
+                        "Ping-pong alternating tool calls detected with no progress.\n"
+                        "- rounds: {count}\n"
+                        "- latest tool: {tool_name}\n"
+                        "Stop the A↔B tool loop. Merge steps, change approach, "
+                        "or finish the task if enough evidence has been gathered."
+                    ),
+                ),
+                PromptPresentation(
+                    key="repeat_tool_pingpong_user",
+                    role="notice",
+                    severity_band="medium",
+                    template_zh="[工具调用异常] Ping-Pong 交替调用已持续 {count} 轮。",
+                    template_en="[Tool Call Anomaly] Ping-pong alternating calls have continued for {count} rounds.",
+                ),
+                PromptPresentation(
+                    key="repeat_tool_pingpong_critical",
+                    role="critical",
+                    severity_band="critical",
+                    template_zh="Ping-Pong 循环: {count} 轮交替无进展，阻断",
+                    template_en="Ping-pong loop: {count} alternating calls with no progress, blocked",
+                ),
+            ),
+        ),
+        SubmodePresentation(
+            id="global_circuit_breaker",
+            parent_id="tool_repeat_dead_loop",
+            parent=_PARENT["tool_repeat_dead_loop"],
+            sub_mode={"zh": "全局断路", "en": "Global circuit breaker"},
+            anomaly_kind="tool_call_loop",
+            detection_level=None,
+            severities=("critical",),
+            detects={
+                "zh": "同工具+参数连续无进展达到全局断路阈值（默认 ≥10）。",
+                "en": "Same tool+args with no progress hits global circuit-breaker threshold (default ≥10).",
+            },
+            recovery_summary={
+                "zh": "注入 steering + 升级用户通知（严重默认策略）。",
+                "en": "Inject steering + escalate user notice (critical default policy).",
+            },
+            recovery_actions=("inject_steering", "escalate_user"),
+            runtime_keys={"detector_kind": "global_circuit_breaker"},
+            prompts=(
+                PromptPresentation(
+                    key="repeat_tool_global_breaker_critical",
+                    role="critical",
+                    template_zh="全局断路器: {tool_name} 连续 {count} 次无进展",
+                    template_en="Circuit breaker: {tool_name} made no progress for {count} consecutive calls",
+                ),
+            ),
+        ),
+    ),
+)
 
 DETECTOR_PLUGIN = DetectorPlugin(
     id="repeat_tool",

@@ -19,20 +19,11 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
-class AnomalyKind(str, Enum):
-    """Built-in anomaly kind constants (plugins may emit other string kinds)."""
-
-    REPEAT_TOOL_CALL = "repeat_tool_call"
-    TOOL_CALL_LOOP = "tool_call_loop"
-    LLM_THINKING_LOOP = "llm_thinking_loop"
-    LLM_THINKING_DEAD_LOOP = "llm_thinking_dead_loop"
-
-
 class Anomaly(BaseModel):
     """A detected unhealthy condition awaiting remediation."""
 
     detector: str = Field(..., description="Detector identifier")
-    kind: str = Field(..., description="Anomaly category (string; see AnomalyKind for builtins)")
+    kind: str = Field(..., description="Anomaly category (plugin-defined string)")
     severity: Severity = Field(..., description="Severity level")
     member_name: str = Field(..., description="Affected member")
     summary: str = Field(..., description="One-line description for human/LLM")

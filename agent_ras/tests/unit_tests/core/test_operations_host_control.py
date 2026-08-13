@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.host_control import HostControl
-from core.models import Anomaly, AnomalyKind, Severity
+from core.models import Anomaly, Severity
 from recovery.engine import LocalAutoRecovery, RecoveryPolicy
 from recovery.operations import (
     apply_recovery_actions,
@@ -91,7 +91,7 @@ async def test_apply_recovery_actions_maps_wire() -> None:
 def test_build_recovery_actions_thinking_loop() -> None:
     anomaly = Anomaly(
         detector="llm_thinking_loop",
-        kind=AnomalyKind.LLM_THINKING_LOOP,
+        kind="llm_thinking_loop",
         severity=Severity.MEDIUM,
         member_name="m",
         summary="loop",

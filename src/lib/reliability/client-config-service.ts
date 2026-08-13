@@ -315,10 +315,12 @@ export function publishClientConfigToCapabilityPullPath(input: {
   if (!platformSupportsSync(input.platform)) return
 
   const body = flatConfigToCapabilityBody(input.effectiveFlat)
-  // xiaoo hello 强制关闭语义内容检测（既有 ingest 约定）。
-  const loop = body.detectors.llm_thinking_loop
-  if (input.platform === 'xiaoo' && loop) {
-    loop.semantic_content_enabled = false
+  if (input.platform === 'xiaoo') {
+    for (const detector of Object.values(body.detectors)) {
+      if (detector && Object.prototype.hasOwnProperty.call(detector, 'semantic_content_enabled')) {
+        detector.semantic_content_enabled = false
+      }
+    }
   }
 
   const existing = getCapabilityEnvelope(input.user, input.platform)

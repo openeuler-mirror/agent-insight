@@ -2,7 +2,6 @@
 """Agent runtime layer for Agent RAS semantic skills (platform-agnostic)."""
 from agents.base import (
     AGENT_RAS_SKILL_ROLES,
-    FAULT_DOMAIN_LLM_THINKING_LOOP,
     FAULT_DOMAIN_SKILLS,
     AgentAdapter,
     NoOpAgentAdapter,
@@ -17,7 +16,6 @@ from agents.ras_agents import RASAgents
 __all__ = [
     "AGENT_RAS_SKILL_ROLES",
     "AgentAdapter",
-    "FAULT_DOMAIN_LLM_THINKING_LOOP",
     "FAULT_DOMAIN_SKILLS",
     "HostCallbackAgentAdapter",
     "NoOpAgentAdapter",

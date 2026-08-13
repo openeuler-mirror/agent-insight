@@ -32,6 +32,7 @@ class XiaooConfigSyncTests(unittest.TestCase):
                 "insight": {"api_key": "k", "events_url": "http://x/ras-events"},
                 "ras_config_revision": 1,
                 "ras_config_revisions": {"xiaoo": 1},
+                "llm_thinking_loop": {"detection_start_chars": 300},
             }
         }
         body = {
@@ -58,7 +59,7 @@ class XiaooConfigSyncTests(unittest.TestCase):
         self.assertEqual(ras["platforms"]["xiaoo"]["syncedFrom"]["contentHash"], "deadbeef")
         self.assertEqual(ras["platforms"]["xiaoo"]["syncedFrom"]["revision"], 3)
         self.assertEqual(ras["detectors"]["llm_thinking_loop"]["detection_start_chars"], 777)
-        self.assertEqual(ras["llm_thinking_loop"]["detection_start_chars"], 777)
+        self.assertNotIn("llm_thinking_loop", ras)
 
     def test_sync_merges_on_fingerprint_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -427,10 +428,15 @@ class XiaooConfigSyncTests(unittest.TestCase):
             }
             with mock.patch.dict("os.environ", env, clear=True):
                 cfg = load_hello_config_from_ras_config(home)
-            self.assertEqual(cfg["detection_start_chars"], 888)
-            self.assertEqual(cfg["semantic_content_enabled"], False)
-            self.assertEqual(cfg["repeat_tool"]["warning_threshold"], 7)
+            self.assertEqual(
+                cfg["detectors"]["llm_thinking_loop"]["detection_start_chars"], 888
+            )
+            self.assertEqual(
+                cfg["detectors"]["llm_thinking_loop"]["semantic_content_enabled"], False
+            )
+            self.assertEqual(cfg["detectors"]["repeat_tool"]["warning_threshold"], 7)
             self.assertEqual(cfg["notify_user_on_warning"], False)
+            self.assertNotIn("llm_thinking_loop", cfg)
 
 
 if __name__ == "__main__":

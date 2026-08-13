@@ -38,13 +38,6 @@ export interface RasIngestRecord {
   rasSessionKey: string | null
 }
 
-export const ANOMALY_KIND_LABEL = {
-  llm_thinking_loop: { zh: "思考循环", en: "thinking loop" },
-  llm_thinking_dead_loop: { zh: "思考死循环", en: "thinking dead loop" },
-  repeat_tool_call: { zh: "工具重复调用", en: "repeat tool call" },
-  tool_call_loop: { zh: "工具调用循环", en: "tool call loop" },
-} as const
-
 /** Filled from GET /api/agent-ras/catalog kindLabels when available. */
 let anomalyKindLabelOverrides: Record<string, { zh: string; en: string }> = {}
 
@@ -55,9 +48,7 @@ export function setAnomalyKindLabelOverrides(
 }
 
 export function rasKindLabel(kind: string, locale: "zh" | "en" = "zh"): string {
-  const hit =
-    anomalyKindLabelOverrides[kind] ||
-    (ANOMALY_KIND_LABEL as Record<string, { zh: string; en: string }>)[kind]
+  const hit = anomalyKindLabelOverrides[kind]
   return hit ? hit[locale] : kind
 }
 

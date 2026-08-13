@@ -3,7 +3,7 @@
 """Tests for standard steering ``<system-reminder>`` envelope."""
 from __future__ import annotations
 
-from core.models import Anomaly, AnomalyKind, Severity
+from core.models import Anomaly, Severity
 from recovery.robustness_prompt import (
     format_steering,
     generic_steer_text_for,
@@ -30,7 +30,7 @@ def test_format_steering_idempotent() -> None:
 def test_steer_text_for_uses_envelope() -> None:
     anomaly = Anomaly(
         detector="repeat_tool",
-        kind=AnomalyKind.REPEAT_TOOL_CALL,
+        kind="repeat_tool_call",
         severity=Severity.MEDIUM,
         member_name="read_file",
         summary="repeat",
@@ -56,6 +56,10 @@ def test_recovery_steering_on_abnormal_uses_envelope() -> None:
         mode="suffix_cycle",
         count=5,
         scanned_text="abc" * 20,
+        extra={
+            "fault_domain": "llm_thinking_loop",
+            "steer_key": "thinking_loop_lock_steering_recovery",
+        },
     )
     text = recovery_steering_on_abnormal(pending, locale="cn")
     assert text.startswith("<system-reminder>\n")
@@ -70,7 +74,7 @@ def test_recovery_steering_on_abnormal_uses_envelope() -> None:
 def test_generic_steer_uses_envelope() -> None:
     anomaly = Anomaly(
         detector="x",
-        kind=AnomalyKind.LLM_THINKING_LOOP,
+        kind="llm_thinking_loop",
         severity=Severity.LOW,
         member_name="m",
         summary="s",

@@ -10,14 +10,16 @@ from unittest.mock import patch
 
 import pytest
 
-from core.config import LlmThinkingLoopConfig
 from detectors.llm_thinking_loop import (
+    KIND_LLM_THINKING_DEAD_LOOP,
+    KIND_LLM_THINKING_LOOP,
+    LlmThinkingLoopConfig,
     LlmThinkingLoopDetector,
     LoopDetector,
     _clause_similarity,
     _extract_lexical_key,
 )
-from core.models import AnomalyKind, Severity, Signal, SignalKind
+from core.models import Severity, Signal, SignalKind
 
 # ---------------------------------------------------------------------------
 # Synthetic L2 windows (anonymized; structure mirrors real FP shapes)
@@ -194,7 +196,7 @@ class TestSuffixCycle:
         text = pattern * 15  # >= window_max_chars (100)
         a = await det.observe(_stream_chunk(text))
         assert a is not None
-        assert a.kind == AnomalyKind.LLM_THINKING_LOOP
+        assert a.kind == KIND_LLM_THINKING_LOOP
         assert a.severity == Severity.LOW
         assert a.evidence.get("mode") == "suffix_cycle"
         assert a.evidence.get("channel") == "text_repetition"
@@ -253,7 +255,7 @@ class TestSimilarClauses:
         text = ("前缀填充。" * 10) + core
         a = await det.observe(_stream_chunk(text))
         assert a is not None
-        assert a.kind == AnomalyKind.LLM_THINKING_LOOP
+        assert a.kind == KIND_LLM_THINKING_LOOP
         assert a.evidence.get("mode") == "similar_clauses"
 
     def test_p_l2_bare_step_digits_share_lexical_key(self):
@@ -410,7 +412,7 @@ class TestSkillTrigger:
         assert len(captured) == 1
         anomaly, chunk_type = captured[0]
         assert chunk_type == "llm_output"
-        assert anomaly.kind == AnomalyKind.LLM_THINKING_DEAD_LOOP
+        assert anomaly.kind == KIND_LLM_THINKING_DEAD_LOOP
         assert anomaly.evidence.get("mode") == "plan_execution_loop_lock"
         assert anomaly.evidence.get("channel") == "plan_execution"
         assert anomaly.evidence.get("thinking_excerpt") == "x" * 200
@@ -444,7 +446,7 @@ class TestSkillTrigger:
             await asyncio.sleep(0.01)
         assert len(captured) == 1
         anomaly = captured[0]
-        assert anomaly.kind == AnomalyKind.LLM_THINKING_DEAD_LOOP
+        assert anomaly.kind == KIND_LLM_THINKING_DEAD_LOOP
         assert anomaly.evidence.get("primary_fault") == "text_degradation"
         assert anomaly.evidence.get("skill_rationale") == "garbled text"
 

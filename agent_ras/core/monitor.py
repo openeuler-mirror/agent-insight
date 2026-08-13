@@ -566,7 +566,7 @@ class AgentRASMonitor:
             self._review_task is not None and not self._review_task.done()
         ):
             return
-        if pending.is_plan_execution:
+        if self._pending_needs_l3_review(pending):
             self._start_l3_review(self._host, pending)
             return
         await self._apply_abnormal_recovery(self._host, pending)
@@ -637,6 +637,17 @@ class AgentRASMonitor:
         """Fault domain stamped at pending creation (kind -> domain via registry)."""
         return str(pending.extra.get("fault_domain") or "").strip()
 
+    def _pending_needs_l3_review(self, pending: PendingRecovery) -> bool:
+        extra = pending.extra or {}
+        if not extra.get("needs_l3_review"):
+            return False
+        domain = self._fault_domain_for_pending(pending)
+        try:
+            skill_for(domain, "review")
+        except ValueError:
+            return False
+        return True
+
     async def _invoke_l3_recovery(self, pending: PendingRecovery) -> bool:
         """Return True only when recovery skill explicitly confirms abnormal."""
         agents = self._agents
@@ -657,6 +668,11 @@ class AgentRASMonitor:
                 self._session_id,
             )
             return False
+        excerpt = (
+            pending.thinking_excerpt
+            or pending.scanned_text
+            or str((pending.extra or {}).get("excerpt") or "")
+        )
         payload = json.dumps(
             {
                 "first_verdict": {
@@ -666,9 +682,9 @@ class AgentRASMonitor:
                     "confidence": pending.extra.get("skill_confidence"),
                     "rationale": pending.extra.get("skill_rationale") or "",
                 },
-                "thinking_excerpt": (
-                    pending.thinking_excerpt or pending.scanned_text or ""
-                ),
+                "excerpt": excerpt,
+                "thinking_excerpt": excerpt,
+                "evidence": dict(pending.extra or {}),
             },
             ensure_ascii=False,
         )
@@ -935,7 +951,7 @@ class AgentRASMonitor:
         await self._apply_normal_recovery(
             self._host,
             pending,
-            release_plan_execution=pending.is_plan_execution,
+            release_plan_execution=self._pending_needs_l3_review(pending),
         )
 
     def take_notice(self) -> str | None:

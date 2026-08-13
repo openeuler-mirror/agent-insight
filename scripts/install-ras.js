@@ -14,7 +14,6 @@ const RUNTIME_ENTRIES = [
   'agents',
   'platform_adapter',
   'ras_runtime',
-  'catalog',
   'config',
   'pyproject.toml',
   'README.md',
@@ -51,7 +50,7 @@ function loadCapabilityTemplate(packageRoot = PACKAGE_ROOT) {
     'import json,sys',
     'from pathlib import Path',
     `sys.path.insert(0, ${JSON.stringify(agentRasRoot)})`,
-    'from catalog.build import build_capability_catalog',
+    'from detectors.catalog import build_capability_catalog',
     'cat = build_capability_catalog()',
     'dets = {d["id"]: d["configDefaults"] for d in cat.get("domains", [])}',
     'rec = (cat.get("recovery") or {}).get("global") or {"notify_user_on_warning": True}',
@@ -117,6 +116,33 @@ function deepMergeMissing(target, source) {
   return out
 }
 
+const RAS_KEEP_KEYS = new Set([
+  'enabled',
+  'service',
+  'insight',
+  'detectors',
+  'recovery',
+  'platforms',
+  'debug',
+])
+
+function stripLegacyRasKeys(ras) {
+  if (!ras || typeof ras !== 'object' || Array.isArray(ras)) return ras
+  for (const key of Object.keys(ras)) {
+    if (key === 'ras_config_revision' || key === 'ras_config_revisions') {
+      delete ras[key]
+    } else if (
+      !RAS_KEEP_KEYS.has(key)
+      && ras[key]
+      && typeof ras[key] === 'object'
+      && !Array.isArray(ras[key])
+    ) {
+      delete ras[key]
+    }
+  }
+  return ras
+}
+
 function mergeRasConfig(existing, values) {
   const output = existing && typeof existing === 'object' && !Array.isArray(existing)
     ? structuredClone(existing)
@@ -130,9 +156,6 @@ function mergeRasConfig(existing, values) {
     : {}
   const service = ras.service && typeof ras.service === 'object' ? ras.service : {}
   const insight = ras.insight && typeof ras.insight === 'object' ? ras.insight : {}
-  const loop = ras.llm_thinking_loop && typeof ras.llm_thinking_loop === 'object'
-    ? ras.llm_thinking_loop
-    : {}
   const detectors = ras.detectors && typeof ras.detectors === 'object' ? ras.detectors : {}
   const recovery = ras.recovery && typeof ras.recovery === 'object' ? ras.recovery : {}
 
@@ -148,13 +171,12 @@ function mergeRasConfig(existing, values) {
   insight.enabled = insight.enabled !== false
   if (values.eventsUrl) insight.events_url = values.eventsUrl
   if (values.apiKey !== undefined) insight.api_key = values.apiKey
-  if (loop.semantic_content_enabled === undefined) loop.semantic_content_enabled = true
 
   ras.service = service
   ras.insight = insight
-  ras.llm_thinking_loop = loop
   ras.detectors = detectors
   ras.recovery = recovery
+  stripLegacyRasKeys(ras)
   output.agent_ras = ras
   return output
 }
@@ -664,6 +686,7 @@ module.exports = {
   mergeOpenCodeConfig,
   mergeRasConfig,
   parsePythonVersion,
+  stripLegacyRasKeys,
   probePython,
   printResult,
   readJsonWithBackup,

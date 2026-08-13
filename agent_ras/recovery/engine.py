@@ -16,7 +16,7 @@ from typing import Any, Optional
 import logging
 logger = logging.getLogger(__name__)
 from core.host_control import HostControl
-from core.models import Anomaly, AnomalyKind, Severity
+from core.models import Anomaly, Severity
 from recovery.robustness_prompt import (
     critical_text_for,
     generic_steer_text_for,
@@ -277,22 +277,20 @@ def plan_recovery(
             plan.primary_action = RecoveryAction.SUPPRESS_STREAM
 
     if RecoveryAction.TERMINATE in actions:
+        from detectors.loader import recovery_terminate_kinds
+
+        kind_label = str(getattr(anomaly.kind, "value", anomaly.kind))
         if (
             anomaly.severity == Severity.CRITICAL
-            and str(getattr(anomaly.kind, "value", anomaly.kind))
-            in (
-                AnomalyKind.REPEAT_TOOL_CALL.value,
-                AnomalyKind.TOOL_CALL_LOOP.value,
-            )
+            and kind_label in recovery_terminate_kinds()
         ):
-            kind_label = str(getattr(anomaly.kind, "value", anomaly.kind))
             plan.terminate_message = critical_text_for(anomaly, locale=loc) or (
                 f"[agent_ras] {kind_label} detected: {anomaly.summary}"
             )
             plan.terminate_critical = True
         else:
             plan.terminate_message = (
-                f"[agent_ras] {str(getattr(anomaly.kind, 'value', anomaly.kind))} "
+                f"[agent_ras] {kind_label} "
                 f"detected: {anomaly.summary}"
             )
 

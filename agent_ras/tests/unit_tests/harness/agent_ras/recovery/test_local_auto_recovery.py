@@ -3,7 +3,7 @@
 """Unit tests for LocalAutoRecovery per-invoke rate limit."""
 from __future__ import annotations
 
-from core.models import Anomaly, AnomalyKind, Severity
+from core.models import Anomaly, Severity
 from recovery.engine import (
     LocalAutoRecovery,
     RecoveryAction,
@@ -15,7 +15,7 @@ from recovery.engine import (
 def _anomaly() -> Anomaly:
     return Anomaly(
         detector="repeat_tool",
-        kind=AnomalyKind.REPEAT_TOOL_CALL,
+        kind="repeat_tool_call",
         severity=Severity.LOW,
         member_name="m",
         summary="repeat",

@@ -1,4 +1,4 @@
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import path from 'path'
 
 function resolvePython(): string {
@@ -68,19 +68,17 @@ export type RasCapabilityCatalog = {
 let cached: { at: number; catalog: RasCapabilityCatalog } | null = null
 const CACHE_MS = 5_000
 
-export async function getRasCapabilityCatalog(opts?: { force?: boolean }): Promise<RasCapabilityCatalog> {
-  if (!opts?.force && cached && Date.now() - cached.at < CACHE_MS) {
-    return cached.catalog
-  }
-  const root = agentRasRoot()
-  const code = `
+function catalogPythonCode(root: string): string {
+  return `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(root)})
-from catalog.build import build_capability_catalog
+from detectors.catalog import build_capability_catalog
 print(json.dumps(build_capability_catalog(), ensure_ascii=False))
 `
-  const raw = await runPython(code, root)
-  const catalog = JSON.parse(raw) as RasCapabilityCatalog
+}
+
+function normalizeCatalog(raw: RasCapabilityCatalog): RasCapabilityCatalog {
+  const catalog = raw
   const kindLabels: Record<string, { zh: string; en: string }> = { ...(catalog.kindLabels || {}) }
   for (const domain of catalog.domains || []) {
     if (domain.label) {
@@ -96,6 +94,36 @@ print(json.dumps(build_capability_catalog(), ensure_ascii=False))
     Object.assign(kindLabels, domain.kindLabels || {})
   }
   catalog.kindLabels = kindLabels
+  return catalog
+}
+
+export async function getRasCapabilityCatalog(opts?: { force?: boolean }): Promise<RasCapabilityCatalog> {
+  if (!opts?.force && cached && Date.now() - cached.at < CACHE_MS) {
+    return cached.catalog
+  }
+  const root = agentRasRoot()
+  const raw = await runPython(catalogPythonCode(root), root)
+  const catalog = normalizeCatalog(JSON.parse(raw) as RasCapabilityCatalog)
+  cached = { at: Date.now(), catalog }
+  return catalog
+}
+
+/** Sync catalog load for request-path validation / form schema (cached). */
+export function getRasCapabilityCatalogSync(opts?: { force?: boolean }): RasCapabilityCatalog {
+  if (!opts?.force && cached && Date.now() - cached.at < CACHE_MS) {
+    return cached.catalog
+  }
+  const root = agentRasRoot()
+  const pythonPath = [root, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+  const result = spawnSync(resolvePython(), ['-c', catalogPythonCode(root)], {
+    cwd: root,
+    env: { ...process.env, PYTHONPATH: pythonPath },
+    encoding: 'utf8',
+  })
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || `catalog spawn exited ${result.status}`)
+  }
+  const catalog = normalizeCatalog(JSON.parse(String(result.stdout || '').trim()) as RasCapabilityCatalog)
   cached = { at: Date.now(), catalog }
   return catalog
 }

@@ -31,7 +31,6 @@ npx agent-insight install-ras
 | `detectors.*.enabled` | 单检测器开关 |
 | `semantic_content_enabled` | L3 语义检测；默认 true |
 | `recovery.notify_user_on_warning` | LOW 是否可见 notice |
-| `RAS_DET_<DOMAIN_ID>_<FIELD>` | 覆盖对应 `detectors.<id>` 字段；旧 `RAS_DETECTION_START_CHARS` 等仍按字段名套用（deprecated） |
 
 ## Insight 期望配置（可选同步）
 

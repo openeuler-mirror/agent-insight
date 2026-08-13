@@ -156,10 +156,7 @@ def _hello_config() -> dict[str, Any]:
     except Exception as exc:
         print(f"agent_ras hello_config: {exc}", file=sys.stderr)
         return {
-            "detection_start_chars": int(os.environ.get("RAS_DETECTION_START_CHARS", "300")),
-            "window_max_chars": int(os.environ.get("RAS_WINDOW_MAX_CHARS", "1000")),
-            "loop_repeat_threshold": int(os.environ.get("RAS_LOOP_REPEAT_THRESHOLD", "5")),
-            "semantic_content_enabled": False,
+            "detectors": {},
         }
 
 

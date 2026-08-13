@@ -1,23 +1,17 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Structured skill output schemas and parsers (detector layer)."""
+"""Structured skill output schemas and generic parsers (detector layer)."""
 from __future__ import annotations
 
 import json
 import re
-from enum import Enum
 from typing import Any, Callable
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
+VerdictParser = Callable[[str | dict[str, Any]], "SkillVerdict"]
 
-class ThinkingLoopFault(str, Enum):
-    """Primary fault types for llm-loop-detection."""
-
-    NONE = "none"
-    SEMANTIC_DEADLOCK = "semantic_deadlock"
-    TEXT_DEGRADATION = "text_degradation"
-    OVERTHINKING = "overthinking"
+_PARSERS: dict[str, VerdictParser] = {}
 
 
 class SkillVerdict(BaseModel):
@@ -31,31 +25,15 @@ class SkillVerdict(BaseModel):
     fail_open_reason: str = ""
 
 
-class LlmLoopDetectionVerdict(SkillVerdict):
-    """Verdict for llm-loop-detection skill."""
+def register_skill_parser(skill_name: str, parser: VerdictParser) -> None:
+    name = str(skill_name or "").strip()
+    if not name:
+        return
+    _PARSERS[name] = parser
 
-    primary_fault: ThinkingLoopFault = ThinkingLoopFault.NONE
 
-    @field_validator("primary_fault", mode="before")
-    @classmethod
-    def _coerce_fault(cls, value: Any) -> ThinkingLoopFault:
-        if isinstance(value, ThinkingLoopFault):
-            return value
-        text = str(value or "").strip().lower()
-        try:
-            return ThinkingLoopFault(text)
-        except ValueError as e:
-            raise ValueError(f"unknown primary_fault: {value!r}") from e
-
-    def model_post_init(self, __context: Any) -> None:
-        if self.fail_open_reason:
-            return
-        abnormal = self.abnormal
-        fault_abnormal = self.primary_fault != ThinkingLoopFault.NONE
-        if abnormal != fault_abnormal:
-            raise ValueError(
-                f"abnormal ({abnormal}) inconsistent with primary_fault ({self.primary_fault})"
-            )
+def clear_skill_parsers() -> None:
+    _PARSERS.clear()
 
 
 def extract_json_object_from_text(raw: str) -> dict[str, Any] | None:
@@ -122,10 +100,9 @@ def extract_report_payload(raw: str | dict[str, Any]) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def fail_open_verdict(reason: str = "invalid_or_empty") -> LlmLoopDetectionVerdict:
-    return LlmLoopDetectionVerdict(
+def fail_open_verdict(reason: str = "invalid_or_empty") -> SkillVerdict:
+    return SkillVerdict(
         abnormal=False,
-        primary_fault=ThinkingLoopFault.NONE,
         confidence=0.0,
         rationale="",
         raw={},
@@ -133,20 +110,16 @@ def fail_open_verdict(reason: str = "invalid_or_empty") -> LlmLoopDetectionVerdi
     )
 
 
-def parse_llm_loop_verdict(raw: str | dict[str, Any]) -> LlmLoopDetectionVerdict:
-    """Parse llm-loop-detection output; invalid or legacy formats fail-open."""
+def parse_generic_verdict(raw: str | dict[str, Any]) -> SkillVerdict:
+    """Parse {abnormal, confidence, rationale}; extra fields stay in raw."""
     payload = extract_report_payload(raw)
     if payload is None:
         return fail_open_verdict("unparseable_payload")
-
-    required = {"abnormal", "primary_fault"}
-    if not required.issubset(payload.keys()):
+    if "abnormal" not in payload:
         return fail_open_verdict("missing_required_fields")
-
     try:
-        verdict = LlmLoopDetectionVerdict(
+        return SkillVerdict(
             abnormal=bool(payload.get("abnormal")),
-            primary_fault=payload.get("primary_fault"),
             confidence=float(payload.get("confidence") or 0.0),
             rationale=str(payload.get("rationale") or ""),
             raw=dict(payload),
@@ -154,21 +127,16 @@ def parse_llm_loop_verdict(raw: str | dict[str, Any]) -> LlmLoopDetectionVerdict
     except (ValueError, TypeError):
         return fail_open_verdict("schema_validation_failed")
 
-    if verdict.primary_fault != ThinkingLoopFault.NONE and not verdict.abnormal:
-        return fail_open_verdict("abnormal_primary_fault_inconsistent")
-    return verdict
-
-
-SKILL_VERDICT_PARSERS: dict[str, Callable[[str | dict[str, Any]], SkillVerdict]] = {
-    "llm-loop-detection": parse_llm_loop_verdict,
-    "llm-loop-review": parse_llm_loop_verdict,
-}
-
 
 def parse_skill_verdict(skill_name: str, raw: str | dict[str, Any]) -> SkillVerdict:
-    parser = SKILL_VERDICT_PARSERS.get(skill_name)
-    if parser is None:
-        return fail_open_verdict("unknown_skill")
+    if not _PARSERS:
+        try:
+            from detectors.loader import ensure_domains_loaded
+
+            ensure_domains_loaded()
+        except Exception:
+            pass
+    parser = _PARSERS.get(str(skill_name or "").strip()) or parse_generic_verdict
     return parser(raw)
 
 
@@ -181,8 +149,6 @@ def verdict_to_dict(verdict: SkillVerdict) -> dict[str, Any]:
     }
     if verdict.fail_open_reason:
         data["fail_open_reason"] = verdict.fail_open_reason
-    if isinstance(verdict, LlmLoopDetectionVerdict):
-        data["primary_fault"] = verdict.primary_fault.value
     if verdict.raw:
         data.update({k: v for k, v in verdict.raw.items() if k not in data})
     return data

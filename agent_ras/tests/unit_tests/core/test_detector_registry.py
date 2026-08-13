@@ -28,10 +28,18 @@ def test_build_member_detectors_partial_enabled() -> None:
 
 def test_session_hub_gating_consistent_with_registry() -> None:
     """SessionHub 与 Monitor 同一注册入口：config 关停即不安装，无协议侧特权。"""
-    state = SessionState.create("s1", "unknown_platform", {"enabled": False})
+    state = SessionState.create(
+        "s1",
+        "unknown_platform",
+        {"llm_thinking_loop": {"enabled": False}},
+    )
     assert not any(isinstance(d, LlmThinkingLoopDetector) for d in state.detectors)
 
-    state_on = SessionState.create("s2", "unknown_platform", {"enabled": True})
+    state_on = SessionState.create(
+        "s2",
+        "unknown_platform",
+        {"llm_thinking_loop": {"enabled": True}},
+    )
     assert any(isinstance(d, LlmThinkingLoopDetector) for d in state_on.detectors)
 
 

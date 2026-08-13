@@ -7,7 +7,7 @@ from typing import Any
 
 from core.host_control import HostControl, NoOpHostControl
 from core.config import AgentRASConfig
-from core.models import Anomaly, AnomalyKind, Severity, Signal, SignalKind
+from core.models import Anomaly, Severity, Signal, SignalKind
 
 # Capability packages (agents/ recovery/) import core.models; eager re-export
 # here would cycle core/__init__ <-> agents.base. Resolve lazily (PEP 562).
@@ -21,7 +21,6 @@ __all__ = [
     "AgentAdapter",
     "AgentRASConfig",
     "Anomaly",
-    "AnomalyKind",
     "HostControl",
     "NoOpAgentAdapter",
     "NoOpHostControl",

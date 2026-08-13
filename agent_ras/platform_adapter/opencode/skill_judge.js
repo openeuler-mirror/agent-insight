@@ -9,29 +9,19 @@ import { fileURLToPath } from "node:url"
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(HERE, "..", "..")
 
-const SKILL_PATHS = {
-  detection: join(
-    REPO_ROOT,
-    "detectors",
-    "skills",
-    "llm-loop-detection",
-    "SKILL.md",
-  ),
-  review: join(
-    REPO_ROOT,
-    "review",
-    "skills",
-    "llm-loop-review",
-    "SKILL.md",
-  ),
+function skillMdPath(role, skillName) {
+  const name = String(skillName || "").trim()
+  if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) {
+    return null
+  }
+  const dir = role === "review" ? "review" : "detectors"
+  return join(REPO_ROOT, dir, "skills", name, "SKILL.md")
 }
 
 export function loadSkillBody(role, skillName) {
-  const keyed =
-    role === "review" ? SKILL_PATHS.review : SKILL_PATHS.detection
-  const path = keyed
-  if (!existsSync(path)) {
-    return `(SKILL \`${skillName || role}\` 未能从本地包路径加载: ${path})`
+  const path = skillMdPath(role, skillName)
+  if (!path || !existsSync(path)) {
+    return `(SKILL \`${skillName || role}\` 未能从本地包路径加载: ${path || "invalid_skill_name"})`
   }
   return readFileSync(path, "utf8")
 }
@@ -110,9 +100,13 @@ export async function runSkillJudge(opts, req) {
   const client = opts?.client
   const directory = opts?.directory || ""
   const role = String(req?.role || "detection")
-  const skillName = String(req?.skillName || "llm-loop-detection")
+  const skillName = String(req?.skillName || "").trim()
   const payload = String(req?.payload || "")
   const timeoutMs = Number(req?.timeoutMs) > 0 ? Number(req.timeoutMs) : 30000
+
+  if (!skillName) {
+    return { ok: false, error: "missing_skill_name", sessionID: null, result: null }
+  }
 
   if (!client?.session?.create || !client?.session?.prompt) {
     return { ok: false, error: "session_api_missing", sessionID: null, result: null }

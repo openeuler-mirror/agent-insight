@@ -32,10 +32,10 @@ test('builtin schema has design defaults and sections', () => {
   assert.equal(schema.platform, 'opencode')
   assert.equal(schema.editable, false)
   assert.equal(schema.source, 'builtin')
-  assert.equal(schema.defaults['enabled'], false)
-  assert.equal(schema.defaults['textLoop.enabled'], false)
-  assert.ok(schema.sections.some((s) => s.key === 'textLoop'))
-  assert.ok(schema.sections.some((s) => s.key === 'toolRepeat'))
+  assert.equal(schema.defaults['enabled'], true)
+  assert.equal(schema.defaults['detectors.llm_thinking_loop.enabled'], true)
+  assert.ok(schema.sections.some((s) => s.key === 'detectors.llm_thinking_loop'))
+  assert.ok(schema.sections.some((s) => s.key === 'detectors.repeat_tool'))
 })
 
 test('override merge + fieldSources + path delete', () => {
@@ -47,17 +47,24 @@ test('override merge + fieldSources + path delete', () => {
   }
   const effectiveFlat = applyOverrideDiff(schema.defaults, override)
   assert.equal(effectiveFlat.enabled, true)
-  assert.equal(effectiveFlat['textLoop.repeatThreshold'], 6)
-  assert.equal(effectiveFlat['toolRepeat.warningThreshold'], 5)
+  assert.equal(effectiveFlat['detectors.llm_thinking_loop.loop_repeat_threshold'], 6)
+  assert.equal(effectiveFlat['detectors.repeat_tool.warning_threshold'], 5)
 
   const sources = buildFieldSources(schema.defaults, override)
   assert.equal(sources.enabled, 'client_override')
-  assert.equal(sources['textLoop.repeatThreshold'], 'client_override')
-  assert.equal(sources['toolRepeat.warningThreshold'], 'builtin')
+  assert.equal(sources['detectors.llm_thinking_loop.loop_repeat_threshold'], 'client_override')
+  assert.equal(sources['detectors.repeat_tool.warning_threshold'], 'builtin')
 
   const nested = nestEffectiveConfig(effectiveFlat)
-  assert.equal((nested.textLoop as { repeatThreshold: number }).repeatThreshold, 6)
-  assert.deepEqual(flattenEffectiveConfig(nested)['textLoop.repeatThreshold'], 6)
+  assert.equal(
+    ((nested.detectors as { llm_thinking_loop: { loop_repeat_threshold: number } }).llm_thinking_loop)
+      .loop_repeat_threshold,
+    6,
+  )
+  assert.deepEqual(
+    flattenEffectiveConfig(nested)['detectors.llm_thinking_loop.loop_repeat_threshold'],
+    6,
+  )
 
   const afterDelete = deleteOverridePath(override, 'textLoop.repeatThreshold')
   assert.equal(afterDelete['textLoop.repeatThreshold'], undefined)

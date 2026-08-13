@@ -15,21 +15,23 @@ import { existsSync, readFileSync, renameSync, writeFileSync, mkdirSync } from "
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
 
+function copyDetectorMap(detectors) {
+  const out = {}
+  if (!detectors || typeof detectors !== "object" || Array.isArray(detectors)) return out
+  for (const [key, value] of Object.entries(detectors)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      out[key] = { ...value }
+    }
+  }
+  return out
+}
+
 function capabilitySlice(body) {
   const detectors = body?.detectors && typeof body.detectors === "object" ? body.detectors : {}
-  const repeatTool =
-    detectors.repeat_tool && typeof detectors.repeat_tool === "object" ? detectors.repeat_tool : {}
-  const thinking =
-    detectors.llm_thinking_loop && typeof detectors.llm_thinking_loop === "object"
-      ? detectors.llm_thinking_loop
-      : {}
   const recovery = body?.recovery && typeof body.recovery === "object" ? body.recovery : {}
   return {
     enabled: Boolean(body?.enabled ?? true),
-    detectors: {
-      repeat_tool: { ...repeatTool },
-      llm_thinking_loop: { ...thinking },
-    },
+    detectors: copyDetectorMap(detectors),
     recovery: { ...recovery },
   }
 }
@@ -81,10 +83,7 @@ export function resolvePlatformCapabilityFromRas(ras, platform) {
  * @param {Record<string, unknown>} localConfig
  * @param {{
  *   enabled: boolean
- *   detectors: {
- *     repeat_tool: Record<string, unknown>
- *     llm_thinking_loop: Record<string, unknown>
- *   }
+ *   detectors: Record<string, Record<string, unknown>>
  *   recovery: Record<string, unknown>
  * }} body
  * @param {{ revision?: number, updatedAt?: string, contentHash?: string } | number | null | undefined} syncMeta
@@ -131,17 +130,18 @@ export function mergeCapabilityIntoLocalRasConfig(localConfig, body, syncMeta, p
   const nextRas = {
     ...prevRas,
     enabled: slice.enabled,
-    detectors: {
-      repeat_tool: { ...slice.detectors.repeat_tool },
-      llm_thinking_loop: { ...slice.detectors.llm_thinking_loop },
-    },
+    detectors: copyDetectorMap(slice.detectors),
     recovery: { ...slice.recovery },
-    llm_thinking_loop: { ...slice.detectors.llm_thinking_loop },
     platforms: prevPlatforms,
   }
-  // Drop legacy integer revision maps — fingerprint + syncedFrom replace them.
-  delete nextRas.ras_config_revisions
-  delete nextRas.ras_config_revision
+  const keep = new Set(["enabled", "service", "insight", "detectors", "recovery", "platforms", "debug"])
+  for (const key of Object.keys(nextRas)) {
+    if (key === "ras_config_revisions" || key === "ras_config_revision") {
+      delete nextRas[key]
+    } else if (!keep.has(key) && nextRas[key] && typeof nextRas[key] === "object" && !Array.isArray(nextRas[key])) {
+      delete nextRas[key]
+    }
+  }
 
   root.agent_ras = nextRas
   return root
