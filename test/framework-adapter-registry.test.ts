@@ -37,7 +37,7 @@ test("registry resolves framework ids and aliases", () => {
 test("registry exposes the framework descriptor list", () => {
   assert.deepEqual(
     listFrameworks().map((descriptor) => descriptor.id),
-    ["opencode", "claude", "codeagent", "qwencode", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "qoder", "trae"],
+    ["opencode", "claude", "codeagent", "qwencode", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "qoder", "trae", "actrail"],
   )
 })
 

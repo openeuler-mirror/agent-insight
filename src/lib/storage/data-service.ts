@@ -43,6 +43,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
+    findExecutionIdsByUserTags,
     getTraceTagsByExecutionIds,
     type TraceTagDto,
 } from '@/lib/trace-tags';
@@ -1190,8 +1191,10 @@ interface ReadRecordFilters {
      * (execution / observedAgents);skill / 计算列(status/ownership)由各自既有通道处理。
      */
     clauses?: FilterClause[];
-    /** business 标签筛选，值为 Tag.id，支持多个 OR 命中 */
+    /** 兼容旧 bizTag 参数的业务标签筛选，支持多个 OR 命中 */
     businessTagIds?: string[];
+    /** 用户标签筛选，值为版本或业务 Tag.id，多个标签按 AND 命中 */
+    userTagIds?: string[];
     /** Trace 列表顶部时间筛选换算后的起始时间。 */
     timestampFrom?: Date;
     /** Trace 列表 Agent 归属筛选；按现有 RegisteredAgent + 内置系统 Agent 规则下推。 */
@@ -1898,6 +1901,21 @@ async function readRecordsInternal(
     if (businessTagIds.length > 0) {
         const taggedExecutionIds = await findExecutionIdsByBusinessTags(user, businessTagIds).catch((e: unknown) => {
             console.warn('[readRecords] business tag filter failed:', e);
+            return [] as string[];
+        });
+        if (taggedExecutionIds) {
+            const current = Array.isArray(where.id?.in) ? where.id.in.map((v: unknown) => String(v)) : null;
+            const next = current
+                ? current.filter((id: string) => taggedExecutionIds.includes(id))
+                : taggedExecutionIds;
+            where.id = { in: next };
+        }
+    }
+
+    const userTagIds = Array.from(new Set((filters?.userTagIds ?? []).map(v => String(v || '').trim()).filter(Boolean)));
+    if (userTagIds.length > 0) {
+        const taggedExecutionIds = await findExecutionIdsByUserTags(user, userTagIds).catch((e: unknown) => {
+            console.warn('[readRecords] user tag filter failed:', e);
             return [] as string[];
         });
         if (taggedExecutionIds) {

@@ -3,7 +3,12 @@ import { getOtelTraceAdapter } from './adapter-registry';
 import type { OtelTraceAggregationResult, OtelTraceEvent } from './types';
 
 function dedupeKey(event: OtelTraceEvent): string {
-  return event.spanId || [event.sessionId, event.traceId || '', event.name || '', event.kind, event.startTimeMs || ''].join('|');
+  return event.spanId || [event.sessionId, event.traceId || "", event.name || "", event.kind, event.startTimeMs || ""].join("|");
+}
+
+function isActrailEvent(event: OtelTraceEvent): boolean {
+  return event.serviceName === "actrail" ||
+    event.attributes?.["actrail.action.kind"] !== undefined;
 }
 
 function preferredDuplicate(existing: OtelTraceEvent, incoming: OtelTraceEvent): OtelTraceEvent {
@@ -11,7 +16,9 @@ function preferredDuplicate(existing: OtelTraceEvent, incoming: OtelTraceEvent):
     && ['qwencode', 'qwen-code'].includes(existing.serviceName)
     && new Set([existing.name, incoming.name]).has('qwen-code.skill')
     && new Set([existing.name, incoming.name]).has('qwen-code.tool');
-  if (!sameQwenSkill) return existing;
+  if (!sameQwenSkill) {
+    return isActrailEvent(existing) || isActrailEvent(incoming) ? incoming : existing;
+  }
 
   // Qwen emits the same Skill invocation twice with the same spanId: a
   // skill_launch Log (0ms, summary only) and the native Tool span (real timing,
@@ -20,14 +27,18 @@ function preferredDuplicate(existing: OtelTraceEvent, incoming: OtelTraceEvent):
   return incoming.name === 'qwen-code.tool' ? incoming : existing;
 }
 
-export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEvent[]) {
+function dedupeEvents(events: OtelTraceEvent[]): OtelTraceEvent[] {
   const unique = new Map<string, OtelTraceEvent>();
-  for (const event of events.filter((item) => item.sessionId === sessionId)) {
+  for (const event of events) {
     const key = dedupeKey(event);
     const existing = unique.get(key);
     unique.set(key, existing ? preferredDuplicate(existing, event) : event);
   }
-  const ordered = [...unique.values()]
+  return [...unique.values()];
+}
+
+export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEvent[]) {
+  const ordered = dedupeEvents(events.filter((event) => event.sessionId === sessionId))
     .sort((a, b) => (a.startTimeMs || 0) - (b.startTimeMs || 0));
   if (!ordered.length) return null;
   return getOtelTraceAdapter(ordered).aggregate(sessionId, ordered);

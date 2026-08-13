@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `36e2da85c65de008594137ce490c3081ba595c9e` (`36e2da8`) |
-| Branch | `migration/qwencode-0.8` |
-| Date | 2026-08-11T17:13:29+08:00 |
+| Commit | `444e987583a26abb379427626f75b04f32375274` (`444e9875`) |
+| Branch | `migration/qwencode-0.8-refresh` |
+| Date | 2026-08-13T19:54:39+08:00 |
 | Author | unknown |
-| Subject | `feat(qwencode): migrate native OTLP collector to 0.8` |
+| Subject | `test(qwencode): preserve actrail registry coverage` |
 
-**如何更新：** `git diff 36e2da8 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 444e9875 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -59,5 +59,5 @@
 - **Grayscale (A/B)**：在一个数据集上对两个 Skill 版本进行对比（`GrayscaleTask`、`ab-scoring.ts`）。
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
-- **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（OpenCode、Claude、OpenClaw）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
+- **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。
