@@ -111,5 +111,5 @@ python3 -m agent_fault_injection.cli run \
 ## 下一步
 
 - 环内异常回放： [链路追踪 / 可靠性观测](./view-traces)
-- 开发者新增故障模式： [Lane A 指南](../../agent-fault-injection/guides/lane-a-add-fault.md)
+- 开发者新增故障模式： [故障模式插件化](../../agent-fault-injection/designs/features/fault-mode-plugins.md)
 - 模块设计入口： [docs/agent-fault-injection](../../agent-fault-injection/README.md)

@@ -20,11 +20,11 @@
 | **Insight · RAS · FI 关系说明** | [designs/modules/ras-fi-insight-relationship.md](designs/modules/ras-fi-insight-relationship.md) |
 | **服务端/客户端分离（FI）** | [designs/features/server-client-split.md](designs/features/server-client-split.md) · [phase2 SDD](../design/fi-server-client-split/phase2-requirements-design.md) |
 | **本机 curl 安装过程** | [guides/local-install-process.md](guides/local-install-process.md) |
-| FI 模块架构摘要 | [designs/modules/architecture.md](designs/modules/architecture.md) |
+| FI 模块架构摘要 | [designs/architecture.md](designs/architecture.md) |
 | 内置故障覆盖矩阵 | [designs/modules/fault-catalog.md](designs/modules/fault-catalog.md) |
-| **Lane A：新增故障模式** | [guides/lane-a-add-fault.md](guides/lane-a-add-fault.md) · [插件化设计](designs/features/fault-mode-plugins.md) |
+| **新增故障模式** | [designs/features/fault-mode-plugins.md](designs/features/fault-mode-plugins.md) |
 | 运行时注入（prompt / tool_result / intercept） | [designs/features/runtime-middleware-fault-injection.md](designs/features/runtime-middleware-fault-injection.md) |
-| Task / Worker API（Insight） | [designs/modules/task-orchestration.md](designs/modules/task-orchestration.md) |
+| Task / Worker / Judge（Insight） | [designs/features/server-client-split.md](designs/features/server-client-split.md) |
 | 最短启用 | [guides/getting-started.md](guides/getting-started.md) |
 | **用户指南（产品路径）** | [user-guide/observability/fault-injection.md](../user-guide/observability/fault-injection.md) |
 
@@ -32,33 +32,33 @@
 
 ## designs/ — 设计
 
+### 架构
+
+| 文档 | 内容 | 状态 |
+|------|------|------|
+| [architecture.md](designs/architecture.md) | FI 模块边界摘要 | ✅ |
+
 ### 模块
 
 | 文档 | 内容 | 状态 |
 |------|------|------|
 | [ras-fi-insight-relationship.md](designs/modules/ras-fi-insight-relationship.md) | 三者关系设计说明 | ✅ |
-| [architecture.md](designs/modules/architecture.md) | FI 模块边界摘要 | ✅ |
 | [fault-catalog.md](designs/modules/fault-catalog.md) | 内置故障覆盖矩阵 | ✅ |
 | [xiaoo-platform-adaptation.md](designs/modules/xiaoo-platform-adaptation.md) | xiaoO 被测平台适配 | ✅ |
-| [insight-trace-compat.md](designs/modules/insight-trace-compat.md) | interactions 契约 | ✅ |
-| [task-orchestration.md](designs/modules/task-orchestration.md) | Insight FI API | ✅ |
-| [fault-inject.md](designs/modules/fault-inject.md) | 五类 injection_method + 扩展车道 | ✅ |
-| [platform-adapter-contract.md](designs/modules/platform-adapter-contract.md) | Adapter 接入契约 | ✅ |
-| [platform-adapter-spi.md](designs/modules/platform-adapter-spi.md) | Template Method SPI 对照 | ✅ |
-| [opencode-rewrite-spike.md](designs/modules/opencode-rewrite-spike.md) | OpenCode 消镜像 spike | ✅ |
-| [server-judge.md](designs/modules/server-judge.md) | Insight Judge（含 inconclusive） | ✅ |
-| [insight-bridge.md](designs/modules/insight-bridge.md) | Session 采集（已去 RAS bridge） | ✅ |
+| [opencode-platform-adaptation.md](designs/modules/opencode-platform-adaptation.md) | OpenCode 被测平台适配 | ✅ |
 
 ### 特性
 
 | 文档 | 内容 | 状态 |
 |------|------|------|
-| [server-client-split.md](designs/features/server-client-split.md) | 远程任务 + 本机 Worker | ✅ 已落地（2026-08-05 浏览器 E2E） |
-| [runtime-middleware-fault-injection.md](designs/features/runtime-middleware-fault-injection.md) | 文件/运行时注入与证据边界 | ✅ |
-| [agent-semantic-fault-injection-survey.md](designs/features/agent-semantic-fault-injection-survey.md) | 语义层 FI 调研附录 | ✅ |
-| [fault-mode-plugins.md](designs/features/fault-mode-plugins.md) | 故障模式自包含插件化（metadata + capability） | ✅ 已落地（2026-08-10） |
+| [server-client-split.md](designs/features/server-client-split.md) | 远程任务 + 本机 Worker；collect/Judge/Trace join | ✅ 已落地（2026-08-05 浏览器 E2E） |
+| [runtime-middleware-fault-injection.md](designs/features/runtime-middleware-fault-injection.md) | 运行时数据面注入方案：挂点、步骤契约、表驱动同源 | ✅ |
+| [platform-adapter.md](designs/features/platform-adapter.md) | Adapter SPI 与最小接入 | ✅ |
+| [fault-mode-plugins.md](designs/features/fault-mode-plugins.md) | 故障模式插件化：五类 method、能力面、配方契约 | ✅ 已落地（2026-08-10） |
 | [memory-file-loss.md](designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒 FI 方案（FI-P0 文件层已落地；检测器属 RAS 规划） | 🟡 FI-P0 已落地 |
 | [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（Skill S1–S3 + middleware S4 已落地；S5 压缩失真未实施） | ✅ S1–S4 已落地 |
+| [thinking-dead-loop.md](designs/features/thinking-dead-loop.md) | 思考死循环 FI（Skill 三场景已落地；检测属 RAS） | ✅ |
+| [tool-repeat-dead-loop.md](designs/features/tool-repeat-dead-loop.md) | 工具重复死循环 FI（Skill 四场景已落地；检测属 RAS） | ✅ |
 | [domain-cognitive-bias.md](designs/features/domain-cognitive-bias.md) | 领域认知偏差六类场景（FI 剧本 Phase1；检测器属 RAS 规划） | ⬜ 未实现（规划中） |
 
 ---
@@ -69,4 +69,3 @@
 |------|------|------|
 | [getting-started.md](guides/getting-started.md) | 最短启用 | ✅ |
 | [local-install-process.md](guides/local-install-process.md) | curl setup 逐步：目录 / Worker / 数据源 | ✅ |
-| [lane-a-add-fault.md](guides/lane-a-add-fault.md) | Lane A 新增故障模式操作指南 | ✅ |

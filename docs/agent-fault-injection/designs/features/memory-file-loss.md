@@ -15,7 +15,7 @@
 
 | 问题 | 答案 |
 |------|------|
-| 本仓是否已有 Memory 类故障？ | **否**。现有内置 Skill 覆盖 Planning / Thinking / Tool-loop / Early-stop / Verification 等（数量与清单以 `fault-catalog.md` 与 `agent-fault-injection fault list` 为准）；Memory Loss 仅出现在调研/本方案文档。 |
+| 本仓是否已有 Memory 类故障？ | **否**。现有内置 Skill 覆盖 Planning / Thinking / Tool-loop / Early-stop / Verification 等（数量以 `agent-fault-injection fault list` 为准）；Memory Loss 仅出现在调研/本方案文档。 |
 | OpenCode 有没有原生 `MEMORY.md`？ | **没有**。核心是 Session + Message + Compaction；长期记忆依赖 `AGENTS.md` / notepad / 外部 memoriki·mempalace / 可选 agentmemory 插件。 |
 | 推荐注入层级？ | **P0 文件层结构注入** + **P1 会话历史裁剪**；Skill 文案仅作辅（P2）。 |
 | 最短落地路径？ | 播种受控记忆文件 → `InstallSession` 删改 → 现有 Judge 扩展四元组判定。 |
@@ -243,7 +243,7 @@ platform_options:
 
 ## 6. 评判设计
 
-对齐 `server-judge.md` 四元组；Judge 额外输入：
+对齐四元组；Judge 额外输入：
 
 1. `memory_seed`（播种真相）  
 2. `memory_after_inject`（注入后快照或 diff）  
@@ -269,11 +269,11 @@ platform_options:
 | 模块 | 改动 |
 |------|------|
 | `fault_inject/skills/memory-*/SKILL.md` | 新增 P0/P1 Skill 剧本与场景表 |
-| `skills/<id>/SKILL.md` `metadata` | 登记中文标签与子模式（见 `fault-mode-plugins.md`） |
+| `skills/<id>/SKILL.md` `metadata` | 登记中文标签与子模式 |
 | `fault_inject/installer.py` / Adapter | 支持播种 + 文件 mutate（可复用 `InstallSession`） |
 | `platform_adapters/opencode/plugin/agent-fault-injection.ts` | P1：`messages.transform` / `session.compacting` + `memory.fault.injected` 事件 |
 | `evaluation.py` / Judge prompt | 纳入 seed/diff 证据 |
-| `docs/fault-catalog.md` | 「尚未落地」表更新为本方案链接，落地后移入覆盖矩阵 |
+| 覆盖矩阵 | 落地后从「尚未落地」移入已覆盖 |
 | 测试 | 单元：prune 规则、文件 mutate；集成：poison 后 agent 是否读到错误 URL |
 
 **非目标（本 Phase）：**

@@ -84,7 +84,7 @@ flowchart LR
 | 异常类型 | 特征 | 现有覆盖 |
 |---------|------|---------|
 | 文本死循环 / 相似句式 | 字面或句式重复 | ✅ L1/L2 |
-| 规划错误（Planning Error） | 策略层不可行 / 忽略约束 | ⚠️ 方案中（`planning-error.md`） |
+| 规划错误（Planning Error） | 策略层不可行 / 忽略约束 | ⚠️ 方案中（RAS 规划错误检测，未落地） |
 | 记忆幻觉 / 结果误读 | 引用不存在事实、误读工具输出 | ✅ AgentDebug 词表部分覆盖 |
 | **领域认知偏差** | 偏置的领域信念、证据选择或策略遵循 | ⚠️ **无独立 AnomalyKind / 检测通道** |
 
@@ -507,7 +507,7 @@ flowchart TD
 
 ## 六、故障注入方案
 
-> 开放场景很少有「正确答案」作 oracle。评测真值来自**注入剧本标签**（`fault_type` + `injection_point` + `expected_detection`），而不是领域金标准答案。通用语义注入机制深拆见 `agent-semantic-fault-injection-survey.md`。
+> 开放场景很少有「正确答案」作 oracle。评测真值来自**注入剧本标签**（`fault_type` + `injection_point` + `expected_detection`），而不是领域金标准答案。
 
 ### 6.1 设计原则
 
@@ -990,7 +990,7 @@ DOMAIN_COGNITIVE_BIAS = "domain_cognitive_bias"
 
 11. **Yao et al.** "τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains." arXiv:2406.12045. https://arxiv.org/abs/2406.12045  
 12. **Huang et al.** "On the Resilience of LLM-Based Multi-Agent Collaboration with Faulty Agents (AutoTransform/AutoInject)." ICML 2025. 开源：https://github.com/CUHK-ARISE/MAS-Resilience  
-13. **Jia et al.** "MAS-FIRE: Fault Injection and Reliability Evaluation for LLM-Based Multi-Agent Systems." arXiv:2602.19843, 2026. 数据：https://github.com/wxhhxn/MASFIRE；本仓拆解见 `agent-semantic-fault-injection-survey.md`  
+13. **Jia et al.** "MAS-FIRE: Fault Injection and Reliability Evaluation for LLM-Based Multi-Agent Systems." arXiv:2602.19843, 2026. 数据：https://github.com/wxhhxn/MASFIRE  
 14. **Kong et al.** "AEGIS: Automated Error Generation and Identification for Multi-Agent Systems." arXiv:2509.14295, 2025. 开源：https://github.com/kfq20/AEGIS  
 15. **Debenedetti et al.** "AgentDojo: A Dynamic Environment to Evaluate Prompt Injection Attacks and Defenses for LLM Agents." NeurIPS 2024 Datasets. 开源：https://github.com/ethz-spylab/agentdojo  
 16. **ConflictQA** 基准仓库：https://github.com/Tianzhe26/ConflictQA  
@@ -998,9 +998,7 @@ DOMAIN_COGNITIVE_BIAS = "domain_cognitive_bias"
 
 ### 10.4 本仓关联
 
-18. `planning-error.md`（含同构的故障注入章节）  
-19. [AgentDebug 错误词表](../../../../skills/agent-debug-diagnosis/references/02-error-taxonomy.md)  
-20. `agent-semantic-fault-injection-survey.md`
+18. [AgentDebug 错误词表](../../../../skills/agent-debug-diagnosis/references/02-error-taxonomy.md)
 ---
 
 ## 附录 A：一页纸速查卡

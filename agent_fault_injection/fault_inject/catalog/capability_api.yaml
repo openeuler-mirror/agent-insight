@@ -1,6 +1,6 @@
 # L2 injection capability surface (closed set).
 # Fault modes (skills/*/fault.json) may only reference methods/ops listed here.
-# Evolving this file is an infrastructure change (lane B), not a fault-mode PR (lane A).
+# Evolving this file is an infrastructure change (capability surface), not a fault-mode PR.
 version: "1"
 
 injection_methods:

@@ -97,7 +97,7 @@ L3 持久记忆污染（可选，对标 MemSecBench）
   → 跨 session / 抗 compaction
 ```
 
-> 重要：本仓当前默认路径是 **L1 Skill 注入**。L2/L3 为扩展注入层，勿与「当前已实现」混为一谈（见调研文档 §5.0）。
+> 重要：本仓当前默认路径是 **L1 Skill 注入**。L2/L3 为扩展注入层，勿与「当前已实现」混为一谈。
 
 ---
 
@@ -346,7 +346,7 @@ Skill 路径：`agent_fault_injection/fault_inject/skills/memory-noise-interfere
 
 | 总方案子类 | 本方案覆盖 |
 |------------|------------|
-| `ML` Memory Loss | 不覆盖（缺失型）；见 `memory-file-loss.md` |
+| `ML` Memory Loss | 不覆盖（缺失型：历史/文件被删） |
 | `MC` Memory Corruption | 不覆盖（结构损坏） |
 | `MP` Memory Poisoning | 部分重叠：S2 持久化形态 ≈ MP；本方案强调「干扰当下决策」而非安全投毒生命周期 |
 | `CLV` Context Length Violation | 与 **S5** 相关但目标不同：CLV 测压缩丢信息；S5 测摘要夹带错误 |
@@ -365,7 +365,7 @@ Skill 路径：`agent_fault_injection/fault_inject/skills/memory-noise-interfere
 | **P1** | `tool.execute.after` 错误噪声（S3）结构化放大 | 0.5–1 天 | 对齐 FM015（Skill 层 S3 已有行为要求） |
 | **P2** | `session.compacting` 污染（**S5**）— **当前不实施** | — | 需 compaction hook |
 | **P2** | 可选 `.opencode/memory` 预投毒（L3） | 1 天 | 对齐 MemSecBench Write 阶段 |
-| **P2** | 更新 `fault-catalog.md` / Web UI catalog | 0.5 天 | 文档与 UI 同步 |
+| **P2** | 更新覆盖矩阵 / Web UI catalog | 0.5 天 | 文档与 UI 同步 |
 
 ### 建议落地顺序
 
@@ -381,9 +381,6 @@ Skill 路径：`agent_fault_injection/fault_inject/skills/memory-noise-interfere
 
 ### 内部
 
-- `memory-file-loss.md` — 记忆丢失/损坏/投毒总方案
-- `agent-semantic-fault-injection-survey.md` — MAS-FIRE Memory / AutoInject
-- `server-judge.md` — Skill → Judge 主链路
 - 模式库 `FM005-context-window-contamination` / `FM004-memory-confabulation`
 
 ### 外部
