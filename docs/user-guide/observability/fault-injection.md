@@ -45,19 +45,19 @@ curl -fsSL "$HOST/api/fault-injection/setup?key=$API_KEY" | bash
 - setup 会把 Worker **后台常驻**；日志默认 `~/.agent-insight/fault-injection/worker.log`。前台排障可加 `--foreground`。
 - 无在线 Worker 时，新建任务向导中平台不可选、无法下一步。
 
-更多细节：[FI getting-started](../../agent-fault-injection/guides/getting-started.md)。  
-本机 curl 逐步说明（落盘目录、Worker 生命周期、数据从哪来）：[FI local-install-process](../../agent-fault-injection/guides/local-install-process.md)。  
+最短启用：[FI getting-started](../../agent-fault-injection/guides/getting-started.md)。  
+本机 curl 逐步说明（落盘目录、Worker 生命周期、排障）：[FI local-install-process](../../agent-fault-injection/guides/local-install-process.md)。  
 RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-install-process.md)。
 
 ### 2. 新建注入任务
 
 侧栏 **故障注入与评测** → **注入任务** → **新建任务**，三步向导：
 
-1. **平台**（来自在线 Worker 的 inventory，枚举本机真实 agents/models）
+1. **平台**（来自在线 Worker 心跳里的 inventory：Worker 启动时跑 `platform inventory --json`，枚举本机真实 agents/models。无 Worker 时 health/platforms 只给安装引导，**不**静默填假目录）
 2. **故障模式 + 子模式**
 3. **配置**（提示词、超时等）
 
-创建后任务一律 `queued`，由本机 Worker claim 后执行。
+创建后任务一律 `queued`，由本机 Worker claim 后执行。任务列表支持行级 **停 / 再跑 / 删**。
 
 ### 3. 看故障目录（可选）
 
@@ -66,7 +66,7 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 
 ### 4. 查看 Run 与 Judge
 
-进入任务详情，轮询进度。Run 页展示「注入流程」节点与调用树；Judge 在服务端基于**已落库**轨迹给出结论（含 `inconclusive` 等语义），不以本机上传包直读。
+进入任务详情，轮询进度。Run 页展示「注入流程」**四节点**与调用树；注入细节只在 **FI Run** 看。Judge 在服务端基于**已落库**轨迹给出结论（含 `inconclusive` 等语义），不以本机上传包直读。
 
 本机产物目录（排障用；权威数据在平台 DB）：
 
@@ -84,6 +84,7 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 | 平台 | fault | submode |
 |------|-------|---------|
 | opencode | `thinking-dead-loop` | `2`（逻辑死循环） |
+| xiaoo | `thinking-dead-loop` | `2`（逻辑死循环；期望 `faultActivated` + abort + Judge `recovered`） |
 | xiaoo | `tool_repeat_dead_loop` | `2`（unknown） |
 
 超时建议 60–180s。本地 CLI 排障也可用（不经 Worker）：
@@ -103,7 +104,7 @@ python3 -m agent_fault_injection.cli run \
 ## 常见注意点
 
 - **看板登录用户 ≡ Worker 配置里的 API Key 对应用户**。用 admin 跑实验时，Worker 也必须用 admin 的 Key 安装/启动；否则可靠性编排会返回 503（无在线 FI Worker），而不是静默跳过注入。
-- **注入不会**为「可靠性观测」合成假 RAS 异常事件；观测页以真实轨迹 / RAS 上报为准。
+- **注入不会**为「可靠性观测」合成 `RasAnomalyEvent`；`/agent-ras/trace` 以正常轨迹（Execution）+ 真 RAS 上报为准。日常完整链路 ⓪ **不是** FI collect：OpenCode 靠 Insight 观测插件 upload；xiaoO 需 `node scripts/xiaoo-trace-collector/install.js`（`install-ras` 装 hooker 后也会自动调用）。
 - 部分运行时注入能力（如工具参数改写）可能**仅部分平台**支持；目录与设计文档会标明差异。
 - Worker 换账号 Key 重跑 setup 时会按新凭证重启；同 Key/host 再跑则保持已有进程。
 - 本地探测看板请优先 `curl --noproxy '*' http://127.0.0.1:<port>/...`（企业代理下可避免 loopback 被误代理）。
