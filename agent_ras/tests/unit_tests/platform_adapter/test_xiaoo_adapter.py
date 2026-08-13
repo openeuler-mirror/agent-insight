@@ -24,6 +24,29 @@ def test_build_xiaoo_ras_client_unwired() -> None:
     assert host.platform == "xiaoo"
 
 
+def test_unwired_client_does_not_report_action_result() -> None:
+    client, _host = build_xiaoo_ras_client()
+    reported: list[object] = []
+    client.report_action_result = lambda *args, **kwargs: reported.append((args, kwargs))
+    assert client.on_actions is not None
+    client.on_actions("xiaoo:s1", [{"type": "abort_stream"}], None)
+    assert reported == []
+
+
+def test_wired_client_reports_action_result() -> None:
+    client, _host = build_xiaoo_ras_client(
+        abort_fn=lambda: {"ok": True},
+        notice_fn=lambda _m: {"ok": True},
+        steer_fn=lambda _m: {"ok": True},
+    )
+    reported: list[dict] = []
+    client.report_action_result = lambda _sid, result: reported.append(result)
+    assert client.on_actions is not None
+    client.on_actions("xiaoo:s1", [{"type": "abort_stream"}], None)
+    assert reported
+    assert reported[0].get("ok") is True
+
+
 def test_observe_helpers_call_client() -> None:
     class FakeClient:
         def __init__(self) -> None:

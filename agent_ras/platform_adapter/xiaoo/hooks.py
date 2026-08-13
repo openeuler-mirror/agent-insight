@@ -51,7 +51,8 @@ def build_xiaoo_ras_client(
 
     Unwired Host when no callables are passed (plugin hooker stdout path).
     """
-    if abort_fn is None and notice_fn is None and steer_fn is None:
+    unwired = abort_fn is None and notice_fn is None and steer_fn is None
+    if unwired:
         logger.debug("xiaoo Host fns unwired: pass abort/notice/steer for Daemon delivery")
 
     return build_protocol_ras_client(
@@ -59,6 +60,7 @@ def build_xiaoo_ras_client(
         abort_fn=abort_fn,
         notice_fn=notice_fn,
         steer_fn=steer_fn,
+        report_results=not unwired,
     )
 
 

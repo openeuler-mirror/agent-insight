@@ -158,3 +158,73 @@ def test_hooker_tool_post_skips_hello(monkeypatch) -> None:
     )
     assert resp["result"] == "accept"
     assert hellos == [], "tool_post must not call hello"
+
+
+def test_session_key_rejects_unknown_and_empty() -> None:
+    from platform_adapter.xiaoo.hooker import hooker_main as hm
+
+    assert hm._session_key({"session_id": "s1"}) == "xiaoo:s1"
+    assert hm._session_key({"session_id": "xiaoo:s1"}) == "xiaoo:s1"
+    assert hm._session_key({}) is None
+    assert hm._session_key({"session_id": "unknown"}) is None
+    assert hm._session_key({"session_id": "xiaoo:unknown"}) is None
+    assert hm._session_key({"session_id": ""}) is None
+
+
+def test_hooker_skips_observe_without_session(monkeypatch, capsys) -> None:
+    from platform_adapter.xiaoo.hooker import hooker_main as hm
+
+    observes: list[object] = []
+    hellos: list[object] = []
+
+    class FakeClient:
+        def ensure(self):
+            return True
+
+        def hello(self, *args, **kwargs):
+            hellos.append(args)
+            return {"type": "welcome"}
+
+        def observe(self, session_id, payload):
+            observes.append((session_id, payload))
+            return {"session_id": session_id, "actions": [], "anomaly": None}
+
+        def reset(self, session_id):
+            observes.append(("reset", session_id))
+
+    monkeypatch.setattr(hm, "_ensure_path", lambda: None)
+    monkeypatch.setattr(hm, "_sync_capability_config", lambda: None)
+    monkeypatch.setattr(hm, "_ensure_embed", lambda: None)
+    monkeypatch.setattr(hm, "_client", lambda native: (FakeClient(), None))
+
+    assert hm.handle_chat_received({})["result"] == "accept"
+    assert hm.handle_tool_post({"call": {"tool_name": "bash"}})["result"] == "accept"
+    assert hm.handle_stream_delta({"text": "hi"})["result"] == "accept"
+    assert hm.handle_session_state({"state": "idle"})["result"] == "ack"
+    assert hellos == []
+    assert observes == []
+    err = capsys.readouterr().err
+    assert "missing session id" in err
+
+
+def test_hooker_hello_with_real_session(monkeypatch) -> None:
+    from platform_adapter.xiaoo.hooker import hooker_main as hm
+
+    hellos: list[tuple] = []
+
+    class FakeClient:
+        def ensure(self):
+            return True
+
+        def hello(self, sid, platform, config):
+            hellos.append((sid, platform))
+            return {"type": "welcome"}
+
+    monkeypatch.setattr(hm, "_ensure_path", lambda: None)
+    monkeypatch.setattr(hm, "_sync_capability_config", lambda: None)
+    monkeypatch.setattr(hm, "_ensure_embed", lambda: None)
+    monkeypatch.setattr(hm, "_client", lambda native: (FakeClient(), None))
+
+    resp = hm.handle_chat_received({"session_id": "abc-uuid"})
+    assert resp["result"] == "accept"
+    assert hellos == [("xiaoo:abc-uuid", "xiaoo")]
