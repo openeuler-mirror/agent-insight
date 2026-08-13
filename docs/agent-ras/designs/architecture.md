@@ -8,7 +8,7 @@
 
 - 检测/恢复算法**单源**（Python `detectors/` + `review/` + `recovery/` 能力包），禁止其它语言复制 Detector / Review / Recovery 策略
 - openjiuwen **深挂载不降级**（进程内直连 L0 Monitor）
-- OpenCode / openclaw / Hermes 经统一协议挂载（L3 → L2 → L1 SessionHub → L0），能力深度见平台矩阵
+- OpenCode / xiaoO 经统一协议挂载（L3 → L2 → L1 SessionHub → L0），能力深度见平台矩阵
 - runtime 生命周期归宿主进程；平台只写薄适配
 - inproc 不内嵌 UI；人机监控由 Agent Insight 旁路消费落库事件
 
@@ -105,11 +105,11 @@ flowchart TB
 
 runtime 随宿主进程初始化与释放；不监听 RAS 端口，不写 sidecar PID/锁文件。
 
-源码目录：`core/`（L0 契约与通用框架）、`detectors/` `review/` `recovery/` `agents/`（L0 能力包，2026-08 自 `core/` 上移一层；`review/` 为语义评审）、`ras_runtime/`（L1，原 `ras_embed`）、`platform_adapter/common/`（L2）、`platform_adapter/{openjiuwen,opencode,xiaoo,openclaw,hermes}/`（L3）。
+源码目录：`core/`（L0 契约与通用框架）、`detectors/` `review/` `recovery/` `agents/`（L0 能力包，2026-08 自 `core/` 上移一层；`review/` 为语义评审）、`ras_runtime/`（L1，原 `ras_embed`）、`platform_adapter/common/`（L2）、`platform_adapter/{openjiuwen,opencode,xiaoo}/`（L3）。OpenClaw / Hermes **没有** RAS 环内适配（Insight 观测仍走 OTel）。
 
 ## 4. 协议 inproc：`.so` 加载、实现与模块调用
 
-openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/monitor`）。本节描述 **JS 宿主**（以 OpenCode + Bun 为主）如何把 CPython 嵌进同一进程，以及文件级调用关系。Python 宿主（openclaw / Hermes 骨架）跳过 FFI，直接 `from ras_runtime import call`，见 §4.6。
+openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/monitor`）。本节描述 **JS 宿主**（以 OpenCode + Bun 为主）如何把 CPython 嵌进同一进程，以及文件级调用关系。Python 宿主（xiaoO hooker）跳过 FFI，直接 `from ras_runtime import call`，见 §4.6。
 
 ### 4.1 加载的是什么 `.so`
 
@@ -290,7 +290,7 @@ L3 语义判定（OpenCode）：Detector 经 `HostCallbackAgentAdapter` park 请
 
 ### 4.6 Python 宿主 inproc（无 FFI）
 
-[`platform_adapter/common/ras_client.py`](../../../agent_ras/platform_adapter/common/ras_client.py) 同进程 `import ras_runtime`，JSON 编解码与 JS client 对齐；openclaw / Hermes hooks 用它 + 各自 `HostControl`。不加载 `python_bridge.js`，也**不**再 dlopen libpython（解释器已是宿主）。
+[`platform_adapter/common/ras_client.py`](../../../agent_ras/platform_adapter/common/ras_client.py) 同进程 `import ras_runtime`，JSON 编解码与 JS client 对齐；xiaoO hooker / Daemon 用它 + `CallableHostControl`。不加载 `python_bridge.js`，也**不**再 dlopen libpython（解释器已是宿主）。
 
 验证：`bash agent_ras/scripts/smoke_inproc.sh`（显式 `unset LD_PRELOAD`，证明 RTLD_GLOBAL 路径成立）。
 

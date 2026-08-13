@@ -27,7 +27,6 @@ flowchart TB
 |------|-----|
 | 模块 ID | M-ras-runtime |
 | 路径 | `agent_ras/ras_runtime/` |
-| 规模 | ≈ 1168 行 |
 | 主要语言 | Python |
 | 所属层 | L1 |
 
@@ -44,13 +43,13 @@ flowchart TD
   hub --> core[core_detectors_recovery]
 ```
 
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `facade.py` | 108 | 稳定 FFI：`call` / ops 分发 |
-| `session_hub.py` | 553 | hello/observe/actions/skill_result/bye |
-| `insight_push.py` | 285 | HTTP 旁路 ingest |
-| `runtime.py` | 74 | daemon 线程 + asyncio loop |
-| `event_bus.py` / `trail.py` / `platform_capabilities.py` | — | 辅助 |
+| 文件 | 职责 |
+|------|------|
+| `facade.py` | 稳定 FFI：`call` / ops 分发 |
+| `session_hub.py` | hello/observe/actions/skill_result/bye |
+| `insight_push.py` | HTTP 旁路 ingest |
+| `runtime.py` | daemon 线程 + asyncio loop |
+| `event_bus.py` / `trail.py` / `platform_capabilities.py` | 辅助 |
 
 **公开导出**（`__init__.py`）：仅 `call`、`reset_runtime_for_tests`。
 

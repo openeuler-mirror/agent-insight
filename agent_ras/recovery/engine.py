@@ -120,12 +120,6 @@ class RecoveryPolicy:
         }
         for k, actions in (getattr(config, "kind_overrides", {}) or {}).items():
             kind_overrides[_kind_key(k)] = list(actions)
-        # Drop legacy DEFER_HITL if present in host overrides.
-        for kind, actions in list(kind_overrides.items()):
-            kind_overrides[kind] = [
-                action for action in actions
-                if getattr(action, "value", action) != "defer_hitl"
-            ]
         return cls(
             getattr(config, "severity_actions", None),
             kind_overrides=kind_overrides,

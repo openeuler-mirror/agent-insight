@@ -25,9 +25,9 @@ SSE 事件：`text_delta` / `thinking_delta` / `tool_call` / `tool_result` / `do
 
 实现：[`daemon_client.py`](daemon_client.py)、[`daemon_session.py`](daemon_session.py)。
 
-## `ras_control.sock`（遗留，非 stock 依赖）
+## 控制面
 
-仅当本地 gateway 仍监听 sock 时可用。stock master **无**该监听器；恢复必须以 Daemon cancel/input 为准。若仍有 sock ack，语义不变：无 ack → `ok=false`。
+stock master **无** `ras_control.sock` 监听器。该遗留 Host 路径已从 RAS 删除；恢复必须以 Daemon `cancel`/`input` 为准。Plugin hooker 将 wire 映射为 stdout HookAction。
 
 ## FI
 

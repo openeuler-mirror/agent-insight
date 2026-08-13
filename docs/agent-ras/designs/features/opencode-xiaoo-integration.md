@@ -122,7 +122,7 @@ flowchart LR
 4. **无 L3 Judge**：`supports_host_skill_judge=False`
 5. **投递 + 旁路**：`POST .../runtimes/cancel` + `.../input`（lease）；旁路 **仅** ras-events；完整链路 OTLP **仅** Insight `xiaoo-trace-collector`（RAS/FI 不做 Trace）
 
-本地私改 gateway（`ras_control.sock` 上游注入）**废止**；正式控制面为官方 Daemon HTTP/SSE。
+本地私改 gateway（`ras_control.sock` 上游注入）**已移除**；正式控制面为官方 Daemon HTTP/SSE。
 
 ---
 

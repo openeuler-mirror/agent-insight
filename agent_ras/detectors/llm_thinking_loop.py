@@ -530,9 +530,6 @@ class LlmThinkingLoopDetector:
         self.release_text_repetition_latch()
         self.release_plan_execution_latch()
 
-    # Backward-compatible alias used by older tests / callers.
-    release_after_hitl_yes = release_after_recovery_normal
-
     def _cancel_eval_tasks(self) -> None:
         for task in list(self._eval_tasks):
             task.cancel()

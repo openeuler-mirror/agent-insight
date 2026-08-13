@@ -25,8 +25,6 @@ flowchart TB
 |------|-----|
 | 模块 ID | M-detectors |
 | 路径 | `agent_ras/detectors/` |
-| 文件数 | 9 Python 模块（含 loader/registry/types/catalog）+ L3 skill 定义 |
-| 规模 | ≈ 2280 行 Python（含 llm_thinking_loop / repeat_tool / loader / catalog） |
 | 主要语言 | Python |
 | 所属层 | L0 |
 
@@ -50,16 +48,16 @@ flowchart TD
   cat --> loader
 ```
 
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `base.py` | 78 | `Detector` / `AsyncRecoveryDetector` 协议 |
+| 文件 | 职责 |
+|------|------|
+| `base.py` | `Detector` / `AsyncRecoveryDetector` 协议 |
 | `loader.py` | DomainLoader：三路扫描 `DETECTOR_PLUGIN` 等；`config_model` / `presentation` 均来自域模块 |
 | `registry.py` | 注册表薄封装 |
 | `types.py` | 插件 / 域类型 |
 | `catalog.py` | `build_capability_catalog`：把插件 `presentation` 拼成 Insight 能力目录 JSON |
 | `<domain>.py` | 检测器 + `config_model` + `presentation` + `DETECTOR_PLUGIN` |
 | `skill_verdicts.py` | L3 skill verdict 解析（fail-open） |
-| `__init__.py` | 14 | 公开 re-export |
+| `__init__.py` | 公开 re-export |
 
 ---
 

@@ -104,7 +104,6 @@ function ensureInit(svc = null) {
   let dlopen
   let FFIType
   try {
-    // Dynamic so http transport never loads bun:ffi.
     ;({ dlopen, FFIType } = require("bun:ffi"))
   } catch (e) {
     _initError = `bun:ffi unavailable: ${e?.message || e}`

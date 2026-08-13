@@ -160,10 +160,10 @@ def _hello_config() -> dict[str, Any]:
         }
 
 
-def _client(session_native: str):
+def _client(_session_native: str):
     from platform_adapter.xiaoo.hooks import build_xiaoo_ras_client
 
-    return build_xiaoo_ras_client(session_id=session_native)
+    return build_xiaoo_ras_client()
 
 
 def _wire_actions_from_result(result: dict[str, Any] | None) -> list[dict[str, Any]]:

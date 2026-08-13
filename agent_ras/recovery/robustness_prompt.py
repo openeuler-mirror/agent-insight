@@ -45,9 +45,6 @@ robustness_prompts_en: dict[str, str] = {
     ),
 }
 
-cn_messages = robustness_prompts_cn
-en_messages = robustness_prompts_en
-
 _LOCALES: dict[str, dict[str, str]] = {
     "cn": robustness_prompts_cn,
     "zh": robustness_prompts_cn,

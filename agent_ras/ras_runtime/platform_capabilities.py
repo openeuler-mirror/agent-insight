@@ -12,12 +12,6 @@ _PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
     "openjiuwen": {
         "supports_host_skill_judge": False,
     },
-    "hermes": {
-        "supports_host_skill_judge": False,
-    },
-    "openclaw": {
-        "supports_host_skill_judge": False,
-    },
     "xiaoo": {
         "supports_host_skill_judge": False,
     },

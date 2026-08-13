@@ -3,7 +3,7 @@
 
 Wire delivery mirrors JS ``applyActions`` (message as decided by core; no
 re-wrapping). New platforms should use ``build_protocol_ras_client`` instead of
-copying openclaw/hermes stubs.
+copying per-platform stubs.
 """
 from __future__ import annotations
 

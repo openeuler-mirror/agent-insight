@@ -13,7 +13,7 @@ Insight 前端按 `AgentRASConfig` 粒度维护多平台期望配置，并可按
 - 子故障模式独立开关
 - Prisma schema 变更
 - openjiuwen 自动写宿主配置
-- hermes/openclaw 能力配置（已从选择器移除）
+- hermes/openclaw 能力配置（无 RAS 环内适配；观测仍走 OTel）
 - 新增侧栏导航项
 
 ## 入口 UX

@@ -8,7 +8,7 @@ Protocol inproc L3 + **Daemon SSE control plane**（stock master）：
 - Observe helpers: [`../common/observe.py`](../common/observe.py)
 - Daemon client/session: [`daemon_client.py`](daemon_client.py) / [`daemon_session.py`](daemon_session.py)
 - Shared SessionHub across subprocess hooks: [`../common/transport/subprocess_ipc/`](../common/transport/subprocess_ipc/)
-- Hooks: [`hooks.py`](hooks.py) — sock Host（遗留）+ `build_xiaoo_daemon_host_fns`
+- Hooks: [`hooks.py`](hooks.py) — `build_xiaoo_daemon_host_fns`（plugin hooker Host unwired）
 - Plugin hooker: [`hooker/`](hooker/) — `tool_post` **不得** hello
 
 **FI 库零改动；FI Worker 不启动 RAS**（见 [`UPSTREAM.md`](UPSTREAM.md)）。

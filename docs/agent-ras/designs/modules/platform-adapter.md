@@ -15,7 +15,6 @@ flowchart TB
   Core --> Common
   Common --> JW[openjiuwen_deep]
   Common --> OC[opencode_inproc]
-  Common --> Sk[openclaw_hermes_skeleton]
   Common --> XO[xiaoo_protocol]
 ```
 
@@ -36,17 +35,16 @@ flowchart TB
 
 | ID | 名称 | 职责 | 路径 |
 |----|------|------|------|
-| M-pa.common | common | RasClient、applyActions、FFI bridge、Insight RAS reporter、**OTLP HTTP + witty/现网 span builder**、**embedding transports**（`transport/inproc` vs `transport/subprocess_ipc`） | `common/` |
+| M-pa.common | common | RasClient、applyActions、FFI bridge、Insight RAS reporter、embedding transport（`subprocess_ipc` 共享 SessionHub） | `common/` |
 | M-pa.jiuwen | openjiuwen | Rail 深挂载 + Monitor + StreamObserver | `openjiuwen/` |
 | M-pa.opencode | opencode | Plugin + HostControl + skill_judge | `opencode/` |
-| M-pa.skel | openclaw/hermes | 骨架 hooks/host | `openclaw/`, `hermes/` |
-| M-pa.xiaoo | xiaoo | 协议 inproc 薄适配（hook 映射 + Host callables）；入口无关 | `xiaoo/` |
+| M-pa.xiaoo | xiaoo | 协议 inproc 薄适配（hook 映射 + Daemon Host）；入口无关 | `xiaoo/` |
 
 ```mermaid
 flowchart LR
   common --> jiuwen
   common --> opencode
-  common --> skel
+  common --> xiaoo
 ```
 
 ---
@@ -58,7 +56,7 @@ flowchart LR
 | common | `ras_client.py/js`, `host_actions.js`, `protocol_client.py`, `python_bridge.js`, `insight_anomaly_reporter.py` | L2 契约、FFI / 协议工厂、① ras-events 旁路（**无** OTLP） |
 | openjiuwen | `factory.py`, `rail.py`, `host_control.py`, `stream_observer.py`, `deep_agent_adapter.py` | 深挂载 |
 | opencode | `plugin.js`, `host_control.js`, `skill_judge.js`, `INSTALL.md` | inproc 插件 |
-| xiaoo | `hooks.py`, `host_control.py`, `hooker/`, `INSTALL.md` | Hook 映射 + CallableHost；见 [xiaoo-adapter](../features/xiaoo-adapter.md) |
+| xiaoo | `hooks.py`, `daemon_*.py`, `hooker/`, `INSTALL.md` | Hook 映射 + Daemon Host；见 [xiaoo-adapter](../features/xiaoo-adapter.md) |
 
 ---
 
@@ -86,7 +84,7 @@ flowchart LR
 
 平台实现：`request_abort_stream`、`push_steering`、`emit_user_notice`、`request_force_finish`、`write_stream_content` 等。
 
-**ok 语义（2026-08-07 收紧）**：返回值必须以宿主**执行确认**为准，禁止"调用没抛异常即 ok=true"。fn 返回 `{"ok": ...}` 时 `CallableHostControl` 原样透出；xiaoo 走 `ras_control.sock` 请求-响应（网关回 ack 才算成功，无 ack 记 `no_ack` 失败）。SessionHub 另有 abort 生效性探针：abort 后 3s 窗口内仍有新 assistant 文本到达，补记 `abort_stream ok=false error=no_effect`。
+**ok 语义（2026-08-07 收紧）**：返回值必须以宿主**执行确认**为准，禁止"调用没抛异常即 ok=true"。fn 返回 `{"ok": ...}` 时 `CallableHostControl` 原样透出；xiaoo Daemon 路径以 `runtimes/cancel` / `runtimes/input` 的执行结果为准。SessionHub 另有 abort 生效性探针：abort 后 3s 窗口内仍有新 assistant 文本到达，补记 `abort_stream ok=false error=no_effect`。
 
 ### L2 Wire（`host_actions.js`）
 
@@ -102,26 +100,27 @@ Python 镜像：`recovery/operations.apply_recovery_actions`。
 
 | 平台 | 入口 |
 |------|------|
-| openjiuwen | `build_agent_ras_rail`（`factory.py:127`） |
+| openjiuwen | `build_agent_ras_rail`（`factory.py`） |
 | OpenCode | `AgentRasPlugin`（`plugin.js`）+ `npx agent-insight install-ras` |
+| xiaoO | hooker stdout + `DaemonRasSession` / `build_xiaoo_daemon_host_fns` |
 
 ---
 
 ## 能力矩阵
 
-| 能力 | openjiuwen | OpenCode | openclaw | Hermes | xiaoo |
-|------|------------|----------|----------|--------|-------|
-| Signal / observe | 深 | partial | 骨架 | 骨架 | partial |
-| Stream 观测 | chunk（write_stream） | part.delta/updated | 视宿主 | turn 级 | LoopEventSink → ras_runtime |
-| 检测/恢复算法 | 同一 core | ras_runtime inproc | ras_runtime | ras_runtime | ras_runtime |
-| Insight 旁路 | InsightAnomalyReporter | SessionHub → insight_push | hooks+push | hooks+push | hooks+push |
-| abort | abort_stream 流内 | session.abort + 重试 | 宿主映射 | 宿主映射 | cancel_token / CancelActiveTurn |
-| steering | push_steering | idle 后 session.prompt | /steer 等 | inject | pending_user_messages |
-| notice | 写流 | toast → 可见回退 | 视宿主 | 视宿主 | pending（`[RAS]` 前缀可选） |
-| L3 AgentAdapter | DeepAgentAdapter | HostCallback + ras-judge | 可选 | 可选 | 无 |
-| 首期 | 全量 | 协议客户端+闸 | 骨架 | 骨架 | 协议 inproc / 入口无关 |
+| 能力 | openjiuwen | OpenCode | xiaoo |
+|------|------------|----------|-------|
+| Signal / observe | 深 | partial | partial |
+| Stream 观测 | chunk（write_stream） | part.delta/updated | Daemon SSE mid-stream；hooker turn 级 |
+| 检测/恢复算法 | 同一 core | ras_runtime inproc | ras_runtime |
+| Insight 旁路 | InsightAnomalyReporter | SessionHub → insight_push | hooks+push |
+| abort | abort_stream 流内 | session.abort + 重试 | Daemon `runtimes/cancel` |
+| steering | push_steering | idle 后 session.prompt | Daemon `runtimes/input` |
+| notice | 写流 | toast → 可见回退 | Daemon `runtimes/input`（`[RAS]` 前缀可选） |
+| L3 AgentAdapter | DeepAgentAdapter | HostCallback + ras-judge | 无 |
+| 首期 | 全量 | 协议客户端+闸 | 协议 inproc / Daemon 控制面 |
 
-图例：深 = 与 jiuwen 同级；partial = 可用但不等价；骨架 = 可接、钩子待填。
+图例：深 = 与 jiuwen 同级；partial = 可用但不等价。OpenClaw / Hermes **无** RAS 环内适配（Insight 观测仍走 OTel）。
 
 ---
 
@@ -156,7 +155,7 @@ flowchart LR
 ```
 
 1. 新建 `platform_adapter/<name>/`：hooks + HostControl + INSTALL  
-2. 协议路径优先复用 `common` 的 `RasClient` + **`applyActions`**（openclaw/hermes 骨架目前 hooks **内联** wire 三分支，未复用 `applyActions`——新平台勿再复制）；或 Python Monitor 深挂载  
+2. 协议路径优先复用 `common` 的 `RasClient` + **`applyActions`**；或 Python Monitor 深挂载  
 3. **禁止**复制 detectors/recovery  
 4. 更新本文件能力矩阵  
 5. 使用说明链到 [`../../guides/`](../../guides/)
@@ -189,7 +188,7 @@ OpenCode：SDK v1/v2 abort 参数兼容、idle 后再 steer，详见 `opencode/I
 | 风险 | 说明 |
 |------|------|
 | 算法泄漏到 L3 | 审查 PR 禁止复制 detector |
-| JS/Python wire 漂移 | 成对改 `host_actions.js` 与 `operations.py`；骨架 hooks 内联分发易漂移 |
+| JS/Python wire 漂移 | 成对改 `host_actions.js` 与 `operations.py` |
 | OpenCode abort 误用 | 只传一种 SDK 参数会导致流跑完 |
 | `TERMINATE` 不可达 inproc | wire 无 terminate；CRITICAL tool loop force-finish 仅深挂载 |
 | 测试缺口 | `plugin.js` / `ras_client` 缺单测；依赖 `test_host_actions.mjs` |

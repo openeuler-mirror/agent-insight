@@ -10,6 +10,7 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..')
 const RUNTIME_ENTRIES = [
   'core',
   'detectors',
+  'review',
   'recovery',
   'agents',
   'platform_adapter',

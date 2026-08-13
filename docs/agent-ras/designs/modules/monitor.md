@@ -25,7 +25,6 @@ flowchart LR
 |------|-----|
 | 模块 ID | M-monitor |
 | 路径 | `agent_ras/core/monitor.py`；装配/采点：`platform_adapter/openjiuwen/{rail,factory,stream_observer}.py` |
-| 主文件规模 | `monitor.py` ≈ 1083 行；`rail.py` 374；`stream_observer.py` 185；`factory.py` 202 |
 | 主要语言 | Python |
 | 所属层 | L0 编排 + L3 采点（Rail） |
 | 稳定导出 | `core/__init__.py` **不**导出 Monitor；经 `build_agent_ras_rail` 使用 |
@@ -47,14 +46,14 @@ flowchart TD
   mon --> hc[host_control]
 ```
 
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `core/monitor.py` | 1083 | `AgentRASMonitor`、`RingBuffer`；检测+恢复编排 |
-| `core/signal_builder.py` | 127 | Rail 生命周期钩子用 `build_*_signal` |
-| `openjiuwen/rail.py` | 374 | DeepAgent 钩子 → Monitor；session Monitor 缓存 |
-| `openjiuwen/factory.py` | 202 | `build_agent_ras_rail` / detectors 装配 |
-| `openjiuwen/stream_observer.py` | 185 | `{session_id}write_stream` 回调 |
-| `openjiuwen/host_control.py` | 132 | `JiuwenHostControl`、`host_control_from_ctx` |
+| 文件 | 职责 |
+|------|------|
+| `core/monitor.py` | `AgentRASMonitor`、`RingBuffer`；检测+恢复编排 |
+| `core/signal_builder.py` | Rail 生命周期钩子用 `build_*_signal` |
+| `openjiuwen/rail.py` | DeepAgent 钩子 → Monitor；session Monitor 缓存 |
+| `openjiuwen/factory.py` | `build_agent_ras_rail` / detectors 装配 |
+| `openjiuwen/stream_observer.py` | `{session_id}write_stream` 回调 |
+| `openjiuwen/host_control.py` | `JiuwenHostControl`、`host_control_from_ctx` |
 
 ---
 
@@ -199,7 +198,6 @@ sequenceDiagram
 |------|------|
 | L1/L2 | 立即 `_apply_abnormal_recovery` |
 | L3 | 后台 Reviewer；`after_model_call` → `finalize_stream_recovery` 等待或 fail-open |
-| Legacy | `release_after_hitl_yes` 仅为 detector 别名 → `release_after_recovery_normal` |
 
 ### 流程 3：Rail 生命周期 `handle`
 

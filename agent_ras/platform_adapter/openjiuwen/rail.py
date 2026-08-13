@@ -4,10 +4,9 @@
 
 Builds ``Signal`` objects from DeepAgent lifecycle hooks and forwards them to
 an invoke-scoped :class:`AgentRASMonitor`. Runtime state lives in a per-session
-monitor cache that ``after_invoke`` clears; only HITL resume data is persisted
-on ``session.state``. The rail does not read recovery policy or apply side
-effects itself (except flushing a deferred user notice before the next model
-call).
+monitor cache that ``after_invoke`` clears. The rail does not read recovery
+policy or apply side effects itself (except flushing a deferred user notice
+before the next model call).
 """
 from __future__ import annotations
 
@@ -38,7 +37,7 @@ from platform_adapter.openjiuwen.host_control import host_control_from_ctx
 
 
 class AgentRASRail(DeepAgentRail):
-    """Thin collection layer: hooks -> Signal -> Monitor.handle / stream / HITL.
+    """Thin collection layer: hooks -> Signal -> Monitor.handle / stream.
 
     Runtime isolation: ``monitor_factory(session_id)`` builds one Monitor
     (detectors + executor) for the active invoke. ``after_invoke`` stops and

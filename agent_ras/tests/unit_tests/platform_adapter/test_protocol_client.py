@@ -68,7 +68,7 @@ def test_apply_wire_actions_propagates_fn_failure() -> None:
 
 def test_apply_wire_actions_dispatches_in_order() -> None:
     host = CallableHostControl(
-        platform="openclaw",
+        platform="other",
         abort_fn=lambda: None,
         notice_fn=lambda _m: None,
         steer_fn=lambda _m: None,
@@ -92,7 +92,7 @@ def test_apply_wire_actions_dispatches_in_order() -> None:
 def test_build_protocol_ras_client_wires_on_actions() -> None:
     noticed: list[str] = []
     client, host = build_protocol_ras_client(
-        platform="hermes",
+        platform="other",
         abort_fn=lambda: None,
         notice_fn=noticed.append,
         steer_fn=lambda _m: None,
@@ -100,7 +100,7 @@ def test_build_protocol_ras_client_wires_on_actions() -> None:
     assert host is not None
     assert client.on_actions is not None
     client.on_actions(
-        "hermes:s1",
+        "other:s1",
         [
             {"type": "abort_stream"},
             {"type": "emit_notice", "message": "hi"},

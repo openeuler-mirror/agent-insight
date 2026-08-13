@@ -4,7 +4,7 @@
 
 ``build_agent_ras_rail`` installs a ``monitor_factory`` so each invoke gets an
 ``AgentRASMonitor`` keyed by session id (detectors + executor state). The rail
-drops that monitor in ``after_invoke``; HITL resume state stays on session.state.
+drops that monitor in ``after_invoke``.
 """
 from __future__ import annotations
 

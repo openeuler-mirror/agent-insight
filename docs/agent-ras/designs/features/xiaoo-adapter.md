@@ -16,7 +16,7 @@
 | P4 | `xiaoo/` 仅 hook 映射 + Host 三函数 + Daemon 客户端；不改 FI |
 | P5 | **Daemon HTTP/SSE** 为 stock master 上的正式 Stream/Host 路径（lease 由 RAS 持有） |
 
-本地私改 gateway（`agent_ras.rs` / `ras_control.sock` 上游注入）**废止**，不得再改 xiaoO 源码。
+本地私改 gateway（`agent_ras.rs` / `ras_control.sock` 上游注入）**已移除**，不得再改 xiaoO 源码。
 
 ## 2. 架构
 
@@ -49,9 +49,8 @@ flowchart LR
 | 保留 | 职责 |
 |------|------|
 | `hooker/` | Chat / Tool / lifecycle → hello / observe / reset（**tool_post 禁止 hello**） |
-| `hooks.py` | sock Host + `build_xiaoo_daemon_host_fns` |
+| `hooks.py` | `build_xiaoo_daemon_host_fns`；plugin hooker Host 保持 unwired（stdout HookAction） |
 | `daemon_*` | open/input/cancel + SSE→Signal |
-| `host_control.py` | `CallableHostControl` 薄别名 |
 
 ## 4. 采点映射
 
@@ -79,10 +78,12 @@ L3 语义思考评审：xiaoo `supports_host_skill_judge=False`，本轮非目�
 
 ## 5. HostControl
 
-| wire | sock 路径（遗留） | Daemon 路径（正式） |
-|------|-------------------|---------------------|
-| `abort_stream` | `ras_control.sock` abort | `runtimes/cancel` |
-| `emit_notice` / `push_steering` | pending / steer | `runtimes/input` |
+| wire | Daemon 路径（正式） |
+|------|---------------------|
+| `abort_stream` | `runtimes/cancel` |
+| `emit_notice` / `push_steering` | `runtimes/input` |
+
+Plugin hooker 不接线 Host；恢复动作映射为 stdout HookAction。
 
 ## 6. 门禁
 

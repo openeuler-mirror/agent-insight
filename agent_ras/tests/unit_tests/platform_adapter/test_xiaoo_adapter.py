@@ -1,19 +1,16 @@
 # coding: utf-8
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
 from platform_adapter.common.observe import observe_assistant_text, observe_tool_after
-from platform_adapter.xiaoo.hooks import build_xiaoo_host_fns, build_xiaoo_ras_client
+from platform_adapter.xiaoo.hooks import build_xiaoo_ras_client
 from platform_adapter.xiaoo.stream_bridge import (
     observe_text_delta,
     observe_tool_after as xiaoo_observe_tool,
 )
 from platform_adapter.common.transport.subprocess_ipc import (
     call_ipc,
-    default_sock_path,
     ensure_worker,
     ipc_available,
 )
@@ -25,71 +22,6 @@ def test_build_xiaoo_ras_client_unwired() -> None:
     assert client.on_actions is not None
     assert host.request_abort_stream()["ok"] is False
     assert host.platform == "xiaoo"
-
-
-def test_build_xiaoo_host_fns_publish(monkeypatch) -> None:
-    seen: list[tuple[str, str, str | None]] = []
-
-    def fake_send(op, session_id, message=None, sock_path=None, ack_timeout=2.0):
-        del sock_path, ack_timeout
-        seen.append((op, session_id, message))
-        return {"delivered": True, "ack": {"ok": True}, "error": None}
-
-    monkeypatch.setattr(
-        "platform_adapter.xiaoo.hooks.send_host_control",
-        fake_send,
-    )
-    abort, notice, steer = build_xiaoo_host_fns(session_id="sess-1")
-    assert abort() == {"ok": True, "error": None}
-    assert steer("go") == {"ok": True, "error": None}
-    assert notice("hi")["ok"] is True
-    assert seen[0] == ("abort", "sess-1", None)
-    assert seen[1][0] == "steer" and seen[1][2] == "go"
-    assert seen[2][0] == "steer" and "[RAS]" in (seen[2][2] or "")
-
-
-def test_build_xiaoo_host_fns_delivery_failure_not_ok(monkeypatch) -> None:
-    def fake_send(op, session_id, message=None, sock_path=None, ack_timeout=2.0):
-        del op, session_id, message, sock_path, ack_timeout
-        return {"delivered": False, "ack": None, "error": "socket unavailable"}
-
-    monkeypatch.setattr(
-        "platform_adapter.xiaoo.hooks.send_host_control",
-        fake_send,
-    )
-    abort, notice, steer = build_xiaoo_host_fns(session_id="sess-1")
-    assert abort()["ok"] is False
-    assert "socket unavailable" in abort()["error"]
-    assert steer("go")["ok"] is False
-    assert notice("hi")["ok"] is False
-
-
-def test_build_xiaoo_host_fns_no_ack_not_ok(monkeypatch) -> None:
-    def fake_send(op, session_id, message=None, sock_path=None, ack_timeout=2.0):
-        del op, session_id, message, sock_path, ack_timeout
-        return {"delivered": True, "ack": None, "error": None}
-
-    monkeypatch.setattr(
-        "platform_adapter.xiaoo.hooks.send_host_control",
-        fake_send,
-    )
-    abort, _notice, _steer = build_xiaoo_host_fns(session_id="sess-1")
-    result = abort()
-    assert result["ok"] is False
-    assert "no_ack" in result["error"]
-
-
-def test_build_xiaoo_host_fns_ack_failure_propagates(monkeypatch) -> None:
-    def fake_send(op, session_id, message=None, sock_path=None, ack_timeout=2.0):
-        del op, session_id, message, sock_path, ack_timeout
-        return {"delivered": True, "ack": {"ok": False, "error": "cancel rejected"}, "error": None}
-
-    monkeypatch.setattr(
-        "platform_adapter.xiaoo.hooks.send_host_control",
-        fake_send,
-    )
-    abort, _notice, _steer = build_xiaoo_host_fns(session_id="sess-1")
-    assert abort() == {"ok": False, "error": "cancel rejected"}
 
 
 def test_observe_helpers_call_client() -> None:
