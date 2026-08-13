@@ -8,8 +8,10 @@ const commands = {
   logs: () => require('../scripts/logs.js'),
   install: () => require('../scripts/install.js'),
   'install-ras': () => require('../scripts/install-ras.js'),
+  'install-ras-client': () => require('../scripts/install-ras-client.js'),
   'install-fault-injection': () => require('../scripts/install-fault-injection.js'),
   'fi-worker': () => require('../scripts/fi-worker.js'),
+  'ras-client': () => require('../scripts/reliability-client.js'),
 }
 
 function parseOptions(args) {

@@ -54,6 +54,7 @@
 | [capability-config-sync.md](designs/features/capability-config-sync.md) | RAS 能力配置多平台维护；可选同步到 OpenCode / xiaoO 客户端 | 已落地 |
 | [capability-catalog-decouple.md](designs/features/capability-catalog-decouple.md) | Insight 能力目录/配置表单解耦：PLUGIN presentation + catalog API；模板 `agent_ras_config.default.yaml` | 已落地 |
 | [Agent RAS 可靠性闭环-服务端与客户端交互设计.md](designs/features/Agent%20RAS%20可靠性闭环-服务端与客户端交互设计.md) | 可靠性闭环：常驻客户端、configRef 控制面、Trace 异常维度、可靠性数据集与评估器 | 部分落地（评测集/IF-N16/FI 外挂/Trace anomaly/ExperimentCase FI 独立列） |
+| [reliability-client-control-plane.md](designs/features/reliability-client-control-plane.md) | 客户端控制面：统一安装、systemd/launchd 保活、配置下发、WSS 双向通信；新客户端吸收 FI Worker | 开发中 |
 | [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；llm-loop-review 归 review/；无 fault_domains | **已落地（P0–P2，v0.8.1）** |
 | [ras-trace-anomaly-display.md](designs/features/ras-trace-anomaly-display.md) | 可靠性观测详情：可折叠异常摘要条、单 anomaly 一行、marker 联动 | 已落地 |
 

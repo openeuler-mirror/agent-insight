@@ -834,26 +834,26 @@ model InfraSource {
 
 /// 故障注入编排任务（1:N Run）。
 model FaultInjectionTask {
-  id              String   @id @default(cuid())
-  taskKey         String   @unique // task-{hex}
-  name            String
-  status          String   // queued | running | completed | failed | stopped
-  platform        String
-  agent           String
-  prompt          String
-  workspace       String   // logical: __default__ | relative | client absolute (never server-expanded ~)
-  model           String?
-  requestJson     String?  // timeouts, auto, etc.
-  itemsJson       String   // TaskFaultItem[]
-  progressJson    String?
-  error           String?
-  user            String?
-  startedAt       DateTime?
-  finishedAt      DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String    @id @default(cuid())
+  taskKey      String    @unique // task-{hex}
+  name         String
+  status       String // queued | running | completed | failed | stopped
+  platform     String
+  agent        String
+  prompt       String
+  workspace    String // logical: __default__ | relative | client absolute (never server-expanded ~)
+  model        String?
+  requestJson  String? // timeouts, auto, etc.
+  itemsJson    String // TaskFaultItem[]
+  progressJson String?
+  error        String?
+  user         String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  runs            FaultInjectionRun[]
+  runs FaultInjectionRun[]
 
   @@index([user, createdAt])
   @@index([status, createdAt])
@@ -861,35 +861,35 @@ model FaultInjectionTask {
 
 /// 单次故障注入采集 + 服务端评判。
 model FaultInjectionRun {
-  id                       String   @id @default(cuid())
-  runId                    String   @unique // ras-...
-  fiTaskId                 String?
-  fiTask                   FaultInjectionTask? @relation(fields: [fiTaskId], references: [id], onDelete: SetNull)
-  itemId                   String?
-  user                     String?
-  platform                 String
-  agent                    String
-  fault                    String
-  submode                  String?
-  injectionMethod          String?
-  status                   String   // queued|collecting|judging|completed|failed|judge_skipped|stopped
-  workerId                 String?
-  stopRequested            Boolean  @default(false)
-  queuedAt                 DateTime @default(now())
-  claimedAt                DateTime?
-  sessionTaskId            String?  // Trace ID = Session.taskId / Execution.taskId (platform session)
-  faultActivated           Boolean  @default(false)
-  faultActivatedAt         DateTime?
-  requestJson              String?
-  markersJson              String?
-  outcome                  String?
-  faultContainmentStatus   String?
-  judgeReason              String?
-  judgeRawJson             String?
-  judgedAt                 DateTime?
-  error                    String?
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                     String              @id @default(cuid())
+  runId                  String              @unique // ras-...
+  fiTaskId               String?
+  fiTask                 FaultInjectionTask? @relation(fields: [fiTaskId], references: [id], onDelete: SetNull)
+  itemId                 String?
+  user                   String?
+  platform               String
+  agent                  String
+  fault                  String
+  submode                String?
+  injectionMethod        String?
+  status                 String // queued|collecting|judging|completed|failed|judge_skipped|stopped
+  workerId               String?
+  stopRequested          Boolean             @default(false)
+  queuedAt               DateTime            @default(now())
+  claimedAt              DateTime?
+  sessionTaskId          String? // Trace ID = Session.taskId / Execution.taskId (platform session)
+  faultActivated         Boolean             @default(false)
+  faultActivatedAt       DateTime?
+  requestJson            String?
+  markersJson            String?
+  outcome                String?
+  faultContainmentStatus String?
+  judgeReason            String?
+  judgeRawJson           String?
+  judgedAt               DateTime?
+  error                  String?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
 
   @@index([user, createdAt])
   @@index([fiTaskId])
@@ -900,16 +900,16 @@ model FaultInjectionRun {
 
 /// 本机 FI Worker 注册与 inventory 缓存。
 model FaultInjectionWorker {
-  id             String   @id @default(cuid())
-  workerId       String   @unique
-  user           String
-  hostname       String?
-  version        String?
-  lastSeenAt     DateTime
-  inventoryJson  String   @default("{}")
-  busySlots      Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(cuid())
+  workerId      String   @unique
+  user          String
+  hostname      String?
+  version       String?
+  lastSeenAt    DateTime
+  inventoryJson String   @default("{}")
+  busySlots     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([user, lastSeenAt])
 }
@@ -999,27 +999,27 @@ model Experiment {
 /// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的参考输出，
 /// null=未标注——依赖参考数据的评估器在 ④ 步按此硬门控。
 model ExperimentCase {
-  id              String     @id @default(cuid())
-  experimentId    String
-  experiment      Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
-  executionId     String?
-  taskId          String?
+  id                   String     @id @default(cuid())
+  experimentId         String
+  experiment           Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  executionId          String?
+  taskId               String?
   /// 冗余展示字段（Case 明细/详情页免跨表拼装）
-  input           String     @default("")
-  actualOutput    String     @default("")
-  referenceOutput String?
+  input                String     @default("")
+  actualOutput         String     @default("")
+  referenceOutput      String?
   /// 评估器专用 case 上下文（EvaluatorCaseContextV1 JSON）；null=未提供。
   /// availableTools: [] 表示调用方明确确认本任务无需工具。
   /// 禁止写入 FI 元数据（faultInjectionType / fi* 走独立列）。
   evaluatorContextJson String?
   /// 可靠性 case 故障模式 id（对齐数据集 values.fault_injection_type）
-  faultInjectionType String?
+  faultInjectionType   String?
   /// 数据集 values 快照 JSON（不受后续数据集修改影响）
-  caseValuesJson     String?
+  caseValuesJson       String?
   /// FI 编排回填（排障用；评估器不依赖）
-  fiTaskId           String?
-  fiRunId            String?
-  createdAt       DateTime   @default(now())
+  fiTaskId             String?
+  fiRunId              String?
+  createdAt            DateTime   @default(now())
 
   results ExperimentEvalResult[]
 
@@ -1118,4 +1118,177 @@ model PlatformUsageDaily {
   @@index([dateKey, featureKey])
   @@index([featureKey, dateKey])
   @@index([user, dateKey])
+}
+
+// ---------------------------------------------------------------------------
+// Agent RAS 客户端控制面
+// 设计：docs/agent-ras/designs/features/reliability-client-control-plane.md
+// ---------------------------------------------------------------------------
+
+/// 一次性安装令牌：只保存哈希，注册成功即消费。
+model ReliabilityInstallToken {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  user       String
+  name       String?
+  platform   String?
+  expiresAt  DateTime
+  consumedAt DateTime?
+  clientId   String?
+  createdAt  DateTime  @default(now())
+
+  @@index([user, createdAt])
+}
+
+/// 独立常驻客户端。status 是网络在线度，serviceHealth 是本机进程健康度，两者不可合并。
+model ReliabilityClient {
+  id                   String    @id @default(cuid())
+  clientId             String    @unique
+  user                 String
+  name                 String
+  hostname             String?
+  reportedIp           String?
+  observedIp           String?
+  os                   String?
+  arch                 String?
+  status               String    @default("offline") // online|offline|degraded|disabled
+  serviceHealth        String    @default("unknown") // healthy|degraded|unknown
+  supervisor           String? // systemd|launchd
+  processStartedAt     DateTime?
+  restartCount         Int       @default(0)
+  lastSeenAt           DateTime
+  agentVersion         String?
+  capabilitiesJson     String    @default("{}")
+  capabilitiesRevision String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  credentials ReliabilityClientCredential[]
+  commands    ReliabilityCommand[]
+  configs     ReliabilityClientConfig[]
+  deliveries  ReliabilityConfigDelivery[]
+
+  @@index([user, lastSeenAt])
+  @@index([user, status])
+}
+
+/// 设备凭证：只存哈希，可撤销，按客户端隔离。
+model ReliabilityClientCredential {
+  id             String            @id @default(cuid())
+  clientId       String
+  client         ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  credentialHash String            @unique
+  createdAt      DateTime          @default(now())
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+
+  @@index([clientId, revokedAt])
+}
+
+/// 控制指令审计与幂等。在线不代表送达——只有 receivedAt 非空才算 ACK。
+model ReliabilityCommand {
+  id           String            @id @default(cuid())
+  commandId    String            @unique
+  clientId     String
+  client       ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user         String
+  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|REFRESH_CAPABILITIES
+  payloadJson  String            @default("{}")
+  status       String            @default("CREATED") // CREATED|SENT|RECEIVED|RUNNING|SUCCEEDED|FAILED|EXPIRED|DELIVERY_FAILED
+  channel      String? // wss|poll
+  expiresAt    DateTime
+  sentAt       DateTime?
+  receivedAt   DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorCode    String?
+  errorMessage String?
+  resultJson   String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([clientId, status])
+  @@index([user, createdAt])
+  @@index([status, expiresAt])
+}
+
+/// 客户端差异项：只存被修改的 JSON Path，恢复默认等价于删除覆盖项。
+model ReliabilityClientConfig {
+  id            String            @id @default(cuid())
+  clientId      String
+  client        ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user          String
+  platform      String
+  schemaVersion String            @default("1.0")
+  revision      Int               @default(0)
+  overrideJson  String            @default("{}")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@unique([clientId, platform])
+  @@index([user, platform])
+}
+
+/// 不可变权威配置快照。创建后不修改；configRef 只允许绑定客户端拉取。
+model ReliabilityConfigSnapshot {
+  id              String   @id @default(cuid())
+  configRef       String   @unique
+  clientId        String
+  user            String
+  platform        String
+  scope           String   @default("client") // client|experiment
+  schemaVersion   String   @default("1.0")
+  configVersion   String
+  checksum        String
+  configJson      String
+  correlationJson String?
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  @@index([clientId, platform])
+  @@index([expiresAt])
+}
+
+/// 一次配置通知 → 拉取 → 写入 → 加载的完整状态。服务端只能写 saved/sync_notified/notify_failed。
+model ReliabilityConfigDelivery {
+  id            String            @id @default(cuid())
+  deliveryId    String            @unique
+  clientId      String
+  client        ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user          String
+  platform      String
+  configRef     String
+  configVersion String
+  checksum      String
+  commandId     String?
+  status        String            @default("saved") // saved|sync_notified|pulling|written|ras_loaded|notify_failed|pull_failed|write_failed|load_failed|version_mismatch
+  pulledAt      DateTime?
+  writtenAt     DateTime?
+  loadedAt      DateTime?
+  errorCode     String?
+  errorMessage  String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([clientId, platform, createdAt])
+  @@index([configRef])
+}
+
+/// RAS 加载回报历史。只有成功回报后页面才能显示「RAS 已加载」。
+model ReliabilityConfigLoad {
+  id            String   @id @default(cuid())
+  clientId      String
+  user          String
+  platform      String
+  scope         String   @default("client")
+  configVersion String
+  checksum      String?
+  rasProcessId  String?
+  status        String // loaded|failed|version_mismatch
+  errorCode     String?
+  errorMessage  String?
+  loadedAt      DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([clientId, platform, loadedAt])
 }
