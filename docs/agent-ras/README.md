@@ -22,7 +22,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [architecture.md](designs/architecture.md) | 目标与边界、L0–L3、双路径、**inproc 的 libpython 加载与文件级调用**、主流程、能力摘要 |
+| [architecture.md](designs/architecture.md) | 目标与边界、L0–L3、双路径、inproc / IPC、Insight·FI 通道、主流程、能力摘要 |
 
 ### 模块（改哪里）
 
@@ -45,9 +45,7 @@
 | [provider-disconnect.md](designs/features/provider-disconnect.md) | Provider 断连停推理能力调研 | 已完成 |
 | [analysis-paralysis.md](designs/features/analysis-paralysis.md) | 分析瘫痪二阶段检测 | 规划中 |
 | [planning-error.md](designs/features/planning-error.md) | 策略层规划错误检测 | 规划中 |
-| [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc + Daemon SSE 控制面（FI 库零改动；Worker 不启 RAS） | 已落地（Daemon harness） |
-| [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO ⓪ Trace（Insight collector → OTLP；RAS 仅 join） | 已迁 Insight |
-| [opencode-xiaoo-integration.md](designs/features/opencode-xiaoo-integration.md) | OpenCode / xiaoO 对接对照：模块关系、机制差异、信号与 FI 边界 | 分析说明 |
+| [opencode-xiaoo-integration.md](designs/features/opencode-xiaoo-integration.md) | OpenCode / xiaoO 平台接入：共享骨架、采点/Host、⓪ Trace、机制差异与 FI 边界 | 已落地 |
 | [capability-config.md](designs/features/capability-config.md) | 能力配置：目录解耦（PLUGIN presentation + catalog API）+ 多平台可选同步；模板 `agent_ras_config.default.yaml` | 已落地 |
 | [Agent RAS 可靠性闭环-服务端与客户端交互设计.md](designs/features/Agent%20RAS%20可靠性闭环-服务端与客户端交互设计.md) | 可靠性闭环：常驻客户端、configRef 控制面、Trace 异常维度、可靠性数据集与评估器 | 部分落地（评测集/IF-N16/FI 外挂/Trace anomaly/ExperimentCase FI 独立列） |
 | [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；P3 共同文件只留 yaml | **已落地（P0–P3）** |

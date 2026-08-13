@@ -68,7 +68,7 @@ ras_runtime
 
 ### 职责边界
 
-**做什么**：协议会话、构建 detectors、调用 `build_recovery_actions`、返回 wire actions、推送 Insight、承接 OpenCode `skill_result`。SessionHub 是 inproc **编排核**（直连 Detectors + recovery wire），不是 Monitor 薄封装。  
+**做什么**：协议会话、构建 detectors、调用 `build_recovery_actions`、返回 wire actions、推送 Insight、承接 inproc `skill_result`（OpenCode / xiaoO）。SessionHub 是 inproc **编排核**（直连 Detectors + recovery wire），不是 Monitor 薄封装。  
 **不做什么**：不调用 OpenCode SDK；不重做 recovery 决策；不替代 jiuwen Rail/Monitor。
 
 ---
@@ -83,7 +83,7 @@ ras_runtime
 | `hello` | 创建 session（platform、能力） |
 | `observe` | Signal 观测 → 可选 actions/anomaly/skill_requests |
 | `action_result` | Host 投递 ack + anchors → push |
-| `skill_result` | L3 host judge 回填（OpenCode） |
+| `skill_result` | L3 host judge 回填（OpenCode / xiaoO inproc） |
 | `reset` / `bye` | 清理 |
 
 ### Anchor 字段

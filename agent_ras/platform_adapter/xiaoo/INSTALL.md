@@ -53,4 +53,4 @@ PYTHONPATH=. python scripts/e2e_xiaoo_inproc_harness.py
 
 ## Capability
 
-See [docs/agent-ras/designs/features/xiaoo-adapter.md](../../../docs/agent-ras/designs/features/xiaoo-adapter.md).
+See [docs/agent-ras/designs/features/opencode-xiaoo-integration.md](../../../docs/agent-ras/designs/features/opencode-xiaoo-integration.md) §4.

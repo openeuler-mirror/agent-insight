@@ -56,7 +56,7 @@ flowchart LR
 | common | `ras_client.py/js`, `host_actions.js`, `protocol_client.py`, `python_bridge.js`, `insight_anomaly_reporter.py` | L2 契约、FFI / 协议工厂、① ras-events 旁路（**无** OTLP） |
 | openjiuwen | `factory.py`, `rail.py`, `host_control.py`, `stream_observer.py`, `deep_agent_adapter.py` | 深挂载 |
 | opencode | `plugin.js`, `host_control.js`, `skill_judge.js`, `INSTALL.md` | inproc 插件 |
-| xiaoo | `hooks.py`, `daemon_*.py`, `hooker/`, `INSTALL.md` | Hook 映射 + Daemon Host；见 [xiaoo-adapter](../features/xiaoo-adapter.md) |
+| xiaoo | `hooks.py`, `daemon_*.py`, `hooker/`, `INSTALL.md` | Hook 映射 + Daemon Host；见 [opencode-xiaoo-integration](../features/opencode-xiaoo-integration.md) §4 |
 
 ---
 
@@ -117,7 +117,7 @@ Python 镜像：`recovery/operations.apply_recovery_actions`。
 | abort | abort_stream 流内 | session.abort + 重试 | Daemon `runtimes/cancel` |
 | steering | push_steering | idle 后 session.prompt | Daemon `runtimes/input` |
 | notice | 写流 | toast → 可见回退 | Daemon `runtimes/input`（`[RAS]` 前缀可选） |
-| L3 AgentAdapter | DeepAgentAdapter | HostCallback + ras-judge | 无 |
+| L3 AgentAdapter | DeepAgentAdapter | HostCallback + ras-judge | HostCallback + `skill_result` |
 | 首期 | 全量 | 协议客户端+闸 | 协议 inproc / Daemon 控制面 |
 
 图例：深 = 与 jiuwen 同级；partial = 可用但不等价。OpenClaw / Hermes **无** RAS 环内适配（Insight 观测仍走 OTel）。

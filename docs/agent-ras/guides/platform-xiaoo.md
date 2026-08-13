@@ -2,7 +2,7 @@
 
 **原则**：检测与恢复走协议 inproc（`ras_runtime`）。stock master 上 mid-stream 思考/工具环与 abort/steer 以 **官方 Daemon SSE 控制面** 为主；插件 hooks 仍负责 Chat/Tool/lifecycle。**不改 FI**。
 
-设计真源：[xiaoo-adapter.md](../designs/features/xiaoo-adapter.md)。  
+设计真源：[opencode-xiaoo-integration.md](../designs/features/opencode-xiaoo-integration.md) §4。  
 细节：[INSTALL.md](../../../agent_ras/platform_adapter/xiaoo/INSTALL.md) · [UPSTREAM.md](../../../agent_ras/platform_adapter/xiaoo/UPSTREAM.md)。
 
 ## 最短路径

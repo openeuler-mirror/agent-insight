@@ -216,7 +216,7 @@ flowchart TB
 | ① | RAS 仅 `ras-events` + 检测/恢复 | RAS hooker 内嵌 OTLP、向 Insight collector 转发 mid-stream、采集非 RAS 职责事件当主树 |
 | ③ | FI 只 `collect-result` → Run/Judge | FI collect 合成可靠性 `Execution` / 顶主树；采集非 FI 流水线事件当 Trace |
 
-xiaoO 现状：⓪ = [`scripts/xiaoo-trace-collector/`](../../../scripts/xiaoo-trace-collector/)；见 [xiaoo-observe-ingest.md](../../agent-ras/designs/features/xiaoo-observe-ingest.md)。
+xiaoO 现状：⓪ = `scripts/xiaoo-trace-collector/` → OTLP；① RAS 仅 `ras-events`；RAS / FI 不做日常完整 Trace。
 
 细节：[agent-ras architecture](../../agent-ras/designs/architecture.md)。
 
