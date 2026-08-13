@@ -35,6 +35,7 @@
 | Stream Abort 停流 | [`../agent-ras/designs/features/stream-abort.md`](../agent-ras/designs/features/stream-abort.md) | 环内打断 `llm.stream`；依赖宿主 abort 契约 | Feature | 2026-07-15 | ✅ 已实现 | — |
 | Provider 断连停推理调研 | [`../agent-ras/designs/features/provider-disconnect.md`](../agent-ras/designs/features/provider-disconnect.md) | Provider 断连能力调研 | Spike | 2026-07-20 | ✅ 调研完成 | — |
 | RAS Trace 异常展示 | [`../agent-ras/designs/features/ras-trace-anomaly-display.md`](../agent-ras/designs/features/ras-trace-anomaly-display.md) | 可折叠摘要条；单 anomaly 一行；marker 联动 | Feature | 2026-08-10 | ✅ 已实现 | — |
+| Agent RAS 可靠性评估器拆分 | [`../agent-ras/designs/features/ras-reliability-evaluator-split.md`](../agent-ras/designs/features/ras-reliability-evaluator-split.md) | 将旧五维评估器拆成独立的故障注入与故障检测恢复评估器，删除最终任务结果维度，补齐评估器总分与列表综合分 | Refactor / Feature | 2026-08-13 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
 | LLM 过度思考（Analysis Paralysis）二阶段检测 | [`../agent-ras/designs/features/analysis-paralysis.md`](../agent-ras/designs/features/analysis-paralysis.md) | 触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道 | Feature | 2026-07-29 | ⬜ 未实现（规划中） | —（待补） |
 | LLM Agent 规划错误（Planning Error）检测 | [`../agent-ras/designs/features/planning-error.md`](../agent-ras/designs/features/planning-error.md) | 策略层规划错误；按信息完备度分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
 | LLM Agent 领域认知偏差（Domain Cognitive Bias） | [`../agent-ras/designs/features/domain-cognitive-bias.md`](../agent-ras/designs/features/domain-cognitive-bias.md) | 六类信念层故障；认知层三角覆盖 | Research / Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |

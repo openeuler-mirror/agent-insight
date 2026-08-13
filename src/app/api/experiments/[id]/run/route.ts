@@ -41,6 +41,17 @@ export async function POST(
       body.traceSource === 'generate' ||
       Boolean(generateTrace);
 
+    const currentExperiment = await prisma.experiment.findFirst({
+      where: { id, user: username },
+      select: { status: true },
+    });
+    if (!currentExperiment) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (currentExperiment.status === 'running') {
+      return NextResponse.json({ status: 'running', alreadyRunning: true });
+    }
+
     let fi: Awaited<ReturnType<typeof orchestrateFaultInjection>> | null = null;
     if (wantFi) {
       const cases = await collectFiCasesFromExperiment(id);
@@ -58,6 +69,7 @@ export async function POST(
           platform: String(generateTrace?.platform || body.platform || 'opencode'),
           agent: String(generateTrace?.agent || experiment?.agentName || 'default'),
           model: generateTrace?.model != null ? String(generateTrace.model) : null,
+          targetWorkerId: generateTrace?.workerId != null ? String(generateTrace.workerId) : null,
           workspace: generateTrace?.workspace != null ? String(generateTrace.workspace) : null,
           timeoutSeconds,
           cases,
@@ -68,6 +80,10 @@ export async function POST(
         if (fi && !fi.skipped && fi.runIds.length) {
           const waitMs = Math.max(60_000, (timeoutSeconds + 60) * 1000);
           const runIds = fi.runIds;
+          await prisma.experiment.updateMany({
+            where: { id, user: username },
+            data: { status: 'running' },
+          });
           recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
           void (async () => {
             try {
@@ -84,7 +100,21 @@ export async function POST(
                   failed: bound.failedRunIds,
                 });
               }
-              const result = await startExperimentRun(id, username);
+              const readyRunIds = new Set(bound.readyRunIds);
+              const readyCaseIds = fi.caseFaults
+                .filter((item) => item.runId && readyRunIds.has(item.runId))
+                .map((item) => item.caseId);
+              if (!readyCaseIds.length) {
+                await prisma.experiment.updateMany({
+                  where: { id, user: username },
+                  data: { status: 'failed' },
+                });
+                return;
+              }
+              const result = await startExperimentRun(id, username, {
+                allowPersistedRunning: true,
+                caseIds: readyCaseIds,
+              });
               if (!result) return;
               await result.completion?.catch((e) => {
                 console.error('[Experiment Run Error]', e);
@@ -107,6 +137,19 @@ export async function POST(
             fiOrchestrate: fi,
           });
         }
+        await prisma.experiment.updateMany({
+          where: { id, user: username },
+          data: { status: 'failed' },
+        });
+        return NextResponse.json(
+          { error: 'Trace 生成任务未成功创建，未启动评估' },
+          { status: 503 },
+        );
+      } else {
+        return NextResponse.json(
+          { error: '没有可生成 Trace 的 Case，未启动评估' },
+          { status: 409 },
+        );
       }
     }
 

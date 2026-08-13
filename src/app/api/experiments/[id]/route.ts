@@ -10,9 +10,28 @@ import {
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
+import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
+
+function parseJsonValue(value: string | null): unknown {
+  if (!value) return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+type GeneratedTraceStatus = 'pending' | 'ready' | 'failed';
+
+function deriveGeneratedTraceStatus(input: {
+  usable: boolean;
+  runStatus?: string | null;
+  experimentStatus: string;
+}): GeneratedTraceStatus {
+  if (input.usable) return 'ready';
+  if (input.runStatus === 'failed' || input.runStatus === 'stopped') return 'failed';
+  if (input.experimentStatus === 'failed' || input.experimentStatus === 'done') return 'failed';
+  return 'pending';
+}
 
 export async function GET(
   req: Request,
@@ -51,15 +70,6 @@ export async function GET(
       where: { experimentId: id },
       select: { caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
     });
-    const progress = {
-      total: allResults.length,
-      done: allResults.filter((r: { status: string }) => r.status === 'done').length,
-      failed: allResults.filter((r: { status: string }) => r.status === 'failed').length,
-      pending: allResults.filter((r: { status: string }) => r.status === 'pending' || r.status === 'running').length,
-    };
-    const overall = overallAverage(allResults);
-    const breakdown = evaluatorBreakdown(allResults);
-
     // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
     // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
     const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
@@ -72,12 +82,129 @@ export async function GET(
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
+    const generatedCases = await prisma.experimentCase.findMany({
+      where: { experimentId: id, fiRunId: { not: null } },
+      select: { id: true, executionId: true, taskId: true, fiRunId: true },
+    }) as Array<{ id: string; executionId: string | null; taskId: string | null; fiRunId: string | null }>;
+    const fiRunKeys = Array.from(new Set(
+      generatedCases.map((item) => item.fiRunId).filter((value): value is string => Boolean(value)),
+    ));
+    const generatedUserWhere = username ? { user: username } : {};
+    const fiRuns = (fiRunKeys.length
+      ? await prisma.faultInjectionRun.findMany({
+        where: {
+          ...generatedUserWhere,
+          OR: [{ id: { in: fiRunKeys } }, { runId: { in: fiRunKeys } }],
+        },
+        select: { id: true, runId: true, status: true, sessionTaskId: true, error: true },
+      })
+      : []) as Array<{
+        id: string;
+        runId: string;
+        status: string;
+        sessionTaskId: string | null;
+        error: string | null;
+      }>;
+    const fiRunByKey = new Map<string, typeof fiRuns[number]>();
+    for (const run of fiRuns) {
+      fiRunByKey.set(run.id, run);
+      fiRunByKey.set(run.runId, run);
+    }
+    const generatedTaskIds = Array.from(new Set(
+      generatedCases
+        .map((item) => item.taskId || (item.fiRunId ? fiRunByKey.get(item.fiRunId)?.sessionTaskId : null))
+        .filter((value): value is string => Boolean(value)),
+    ));
+    const [generatedExecutionsRaw, generatedSessionsRaw] = await Promise.all([
+      generatedTaskIds.length
+        ? prisma.execution.findMany({
+          where: { ...generatedUserWhere, taskId: { in: generatedTaskIds }, isSubagent: false },
+          orderBy: { timestamp: 'desc' },
+          select: { id: true, taskId: true, query: true, finalResult: true },
+        })
+        : [],
+      generatedTaskIds.length
+        ? prisma.session.findMany({
+          where: { ...generatedUserWhere, taskId: { in: generatedTaskIds } },
+          select: { taskId: true, interactions: true },
+        })
+        : [],
+    ]);
+    const generatedExecutions = generatedExecutionsRaw as Array<{
+      id: string;
+      taskId: string | null;
+      query: string | null;
+      finalResult: string | null;
+    }>;
+    const generatedSessions = generatedSessionsRaw as Array<{
+      taskId: string;
+      interactions: string | null;
+    }>;
+    const generatedExecutionByTask = new Map<string, typeof generatedExecutions[number]>();
+    for (const execution of generatedExecutions) {
+      if (execution.taskId && !generatedExecutionByTask.has(execution.taskId)) {
+        generatedExecutionByTask.set(execution.taskId, execution);
+      }
+    }
+    const generatedSessionByTask = new Map(
+      generatedSessions.map((session) => [session.taskId, session]),
+    );
+    const traceStateByCase = new Map<string, {
+      status: GeneratedTraceStatus;
+      error: string | null;
+      taskId: string | null;
+      executionId: string | null;
+    }>();
+    for (const item of generatedCases) {
+      const run = item.fiRunId ? fiRunByKey.get(item.fiRunId) : undefined;
+      const taskId = item.taskId || run?.sessionTaskId || null;
+      const execution = taskId ? generatedExecutionByTask.get(taskId) : undefined;
+      const session = taskId ? generatedSessionByTask.get(taskId) : undefined;
+      const usable = Boolean(execution && hasUsableTraceInteractions(session?.interactions));
+      const status = deriveGeneratedTraceStatus({
+        usable,
+        runStatus: run?.status,
+        experimentStatus: experiment.status,
+      });
+      traceStateByCase.set(item.id, {
+        status,
+        error: status === 'failed'
+          ? (run?.error || 'Trace 未上报、轨迹为空或等待超时')
+          : null,
+        taskId,
+        executionId: item.executionId || execution?.id || null,
+      });
+    }
+    const traceStates = Array.from(traceStateByCase.values());
+    const traceProgress = traceStates.length ? {
+      total: traceStates.length,
+      ready: traceStates.filter((item) => item.status === 'ready').length,
+      failed: traceStates.filter((item) => item.status === 'failed').length,
+      pending: traceStates.filter((item) => item.status === 'pending').length,
+    } : null;
+    const invalidGeneratedCaseIds = new Set(
+      Array.from(traceStateByCase.entries())
+        .filter(([, state]) => state.status !== 'ready')
+        .map(([caseId]) => caseId),
+    );
+    const effectiveAllResults = allResults.filter(
+      (result: { caseId: string }) => !invalidGeneratedCaseIds.has(result.caseId),
+    );
+    const progress = {
+      total: effectiveAllResults.length,
+      done: effectiveAllResults.filter((r: { status: string }) => r.status === 'done').length,
+      failed: effectiveAllResults.filter((r: { status: string }) => r.status === 'failed').length,
+      pending: effectiveAllResults.filter((r: { status: string }) => r.status === 'pending' || r.status === 'running').length,
+    };
+    const overall = overallAverage(effectiveAllResults);
+    const breakdown = evaluatorBreakdown(effectiveAllResults);
+
     // input/actualOutput 兜底：trace/监听模式建的 case 这两字段存空，从对应 Execution
     // 的 query/finalResult 兜底（与评估时 loadCaseRuntime 口径一致），否则详情页显示为 "-"。
     const needExecTaskIds = Array.from(new Set(
       pagedCases
-        .filter((c) => c.taskId && (!c.input || !c.actualOutput))
-        .map((c) => c.taskId as string),
+        .map((c) => c.taskId || traceStateByCase.get(c.id)?.taskId)
+        .filter((taskId): taskId is string => Boolean(taskId)),
     ));
     const execFallback = new Map<string, { query: string; finalResult: string }>();
     if (needExecTaskIds.length) {
@@ -93,12 +220,8 @@ export async function GET(
       }
     }
 
-    const parseJson = (s: string | null): unknown => {
-      if (!s) return null;
-      try { return JSON.parse(s); } catch { return null; }
-    };
     const results = pagedCases.flatMap((c) =>
-      c.results.map((r) => ({
+      (invalidGeneratedCaseIds.has(c.id) ? [] : c.results).map((r) => ({
         id: r.id,
         caseId: r.caseId,
         evaluatorId: r.evaluatorId,
@@ -106,8 +229,8 @@ export async function GET(
         verdict: r.verdict,
         summary: r.summary,
         score: r.score,
-        points: parseJson(r.pointsJson),
-        evidence: parseJson(r.evidenceJson),
+        points: parseJsonValue(r.pointsJson),
+        evidence: parseJsonValue(r.evidenceJson),
         humanScore: r.humanScore,
         humanReason: r.humanReason,
         humanBy: r.humanBy,
@@ -131,7 +254,9 @@ export async function GET(
       overall,
       breakdown,
       cases: pagedCases.map((c) => {
-        const ex = c.taskId ? execFallback.get(c.taskId) : undefined;
+        const traceState = traceStateByCase.get(c.id);
+        const effectiveTaskId = c.taskId || traceState?.taskId || null;
+        const ex = effectiveTaskId ? execFallback.get(effectiveTaskId) : undefined;
         const evaluatorContext = parseExperimentCaseEvaluatorContext(c.evaluatorContextJson);
         const legacyFi = extractLegacyFiFromEvaluatorContextJson(c.evaluatorContextJson);
         const faultInjectionType =
@@ -153,8 +278,8 @@ export async function GET(
         }
         return {
           id: c.id,
-          executionId: c.executionId,
-          taskId: c.taskId,
+          executionId: c.executionId || traceState?.executionId || null,
+          taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
           actualOutput: c.actualOutput || ex?.finalResult || '',
           referenceOutput: c.referenceOutput,
@@ -164,10 +289,13 @@ export async function GET(
           fiRunId: c.fiRunId || legacyFi.fiRunId,
           evaluatorContext: evaluatorContext.context,
           evaluatorContextError: evaluatorContext.error,
+          traceStatus: traceState?.status || null,
+          traceError: traceState?.error || null,
         };
       }),
       results,
       progress,
+      traceProgress,
       caseTotal,
       casePage,
       casePageSize,

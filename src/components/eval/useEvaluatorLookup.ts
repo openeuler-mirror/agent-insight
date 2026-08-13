@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { apiFetch } from '@/lib/client/api';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { legacyPresetEvaluators, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { deriveEvaluatorTags, getEvaluatorMeta, type EvaluatorCategory } from '@/lib/evaluators/registry';
 
 export interface EvaluatorLookup {
@@ -36,7 +36,7 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
 
   return useMemo(() => {
     const byId = new Map<string, EvaluatorCard>();
-    for (const card of presetEvaluators) byId.set(card.id, card);
+    for (const card of [...presetEvaluators, ...legacyPresetEvaluators]) byId.set(card.id, card);
     for (const card of customCards) byId.set(card.id, card);
     return {
       nameOf: (id: string) => byId.get(id)?.name || id,

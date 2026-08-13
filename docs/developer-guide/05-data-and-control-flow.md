@@ -83,14 +83,18 @@ flowchart TD
 关键函数：接入路由处理器（`processUploadAsync`、OTel `POST`）→ CodeAgent logs 的 `codeagent-otel/{detect,spool,aggregator}.ts` → `otel-consumer/sources.ts`，或 OTel traces 路由的 `decodeOtlpRequest` → `otel/normalize.ts:normalizeOtlpTraces` + `otel/spool.ts:appendOtelTraceEvents` → `otel-consumer/consumer.ts:startOtelSpoolConsumer` / `runOtelSpoolConsumerTick` → `otel/aggregate.ts:aggregateOtelTraceEvents` → `otel/adapter-registry.ts:getOtelTraceAdapter` → `otel/adapters/{actrail,openclaw,langfuse-langgraph,hermes,generic}.ts` → `ingest/adapters/registry.ts:getAdapter` / `storage/data-service.ts:extractInvokedSkillsFromSessionInteractions` → `agent-trace.ts:buildAgentCallTree` → `storage/data-service.ts:saveExecutionRecord` / `deriveSubagentExecutions`。OTel trace adapter 负责 transport-normalized span 到 `ExecutionRecord` 的纯转换，FrameworkAdapter 负责框架能力、skill 抽取和存储合并策略，两者都不直接写库。
 
 ## 后端流水线：Trace 标签
-Trace 用户标签分为版本标签和业务标签。标签定义写入 `Tag`，Trace 绑定写入 `ExecutionTag`；系统标签不持久化为 `Tag`，由前端根据 `Execution` 派生。`GET/POST /api/tags` 与 `PUT/DELETE /api/tags/[id]` 维护标签定义；`GET/PUT/POST/DELETE /api/observe/executions/[executionId]/tags` 维护单条 Trace 的绑定。`GET /api/observe/data?includeTags=1` 在 `readRecords` 批量 hydrate 阶段通过 `getTraceTagsByExecutionIds` 附加 `ExecutionRecord.userTags`；`tagIds=<id,...>` 同时接受版本标签和业务标签，先经带用户与类型约束的 `ExecutionTag` 反查 executionId，再保留同时命中全部标签的 Trace。旧 `bizTag` 保持业务标签 OR 筛选兼容，同时存在时以 `tagIds` 为准。Trace 列表默认将 `isSubagent=false` 作为独立的层级硬约束；Skill、标签等内容过滤不得放开它，只有显式 `includeSubagents`、`onlySubagents` 或按 task/parent 下钻才改变层级范围。`GET /api/tags` 返回两类用户标签及使用次数，供 Trace 页多选筛选与打标。实验向导的 Agent 候选、`GET /api/experiments/traces` 和监听模式新 Trace 都通过 `buildExecutionOwnershipWhere('user')` 排除系统归属 Agent。关联 Trace 接口同样接受两类用户标签，并为每个所选标签生成一个带用户与标签类型约束的 `Execution.executionTags.some` 关系条件；这些条件以 AND 合并，再与 Agent、用户归属、root-only、文本和时间条件一起进入 Prisma 分页查询。
+Trace 用户标签分为版本标签和业务标签。标签定义写入 `Tag`，Trace 绑定写入 `ExecutionTag`；系统标签不持久化为 `Tag`，由前端根据 `Execution` 派生。`GET/POST /api/tags` 与 `PUT/DELETE /api/tags/[id]` 维护标签定义；`GET/PUT/POST/DELETE /api/observe/executions/[executionId]/tags` 维护单条 Trace 的绑定。`GET /api/observe/data?includeTags=1` 在 `readRecords` 批量 hydrate 阶段通过 `getTraceTagsByExecutionIds` 附加 `ExecutionRecord.userTags`；`tagIds=<id,...>` 同时接受版本标签和业务标签，先经带用户与类型约束的 `ExecutionTag` 反查 executionId，再保留同时命中全部标签的 Trace。旧 `bizTag` 保持业务标签 OR 筛选兼容，同时存在时以 `tagIds` 为准。Trace 列表默认将 `isSubagent=false` 作为独立的层级硬约束；Skill、标签等内容过滤不得放开它，只有显式 `includeSubagents`、`onlySubagents` 或按 task/parent 下钻才改变层级范围。`GET /api/tags` 返回两类用户标签及使用次数，供 Trace 页多选筛选与打标。实验向导的历史 Agent 候选、`GET /api/experiments/traces` 和监听模式新 Trace 都通过 `buildExecutionOwnershipWhere('user')` 排除系统归属 Agent；`GET /api/experiments/agents` 另通过 `listWorkerExecutionTargets` 合并所有在线客户端上报的可执行 Agent target。关联 Trace 接口接受两类用户标签，并为每个所选标签生成一个带用户与标签类型约束的 `Execution.executionTags.some` 关系条件；这些条件以 AND 合并，再与 Agent、用户归属、root-only、文本和时间条件一起进入 Prisma 分页查询。
+
+实验向导的“开始实验”是唯一启动入口：创建实验后必须成功调用 run 路由，服务端确认进入运行流程后前端才跳转详情；启动请求失败时前端复用已创建的 experiment id 重试，避免生成重复实验。生成 Trace 时，前端将所选 target 的 `workerId`、`platform`、Agent 与模型提交到实验 run 路由。`orchestrateFaultInjection` 在创建 FI run 前重新校验该 target 仍在线且仍提供对应 Agent；`createTaskWithRuns` 把 `targetWorkerId` 写入 `FaultInjectionRun.requestJson`，`claimQueuedRuns` 仅允许目标 Worker 领取。FI run 创建成功后，run 路由先把 `Experiment.status` 更新为 `running` 并立即响应，再在后台等待 session。`sessionTaskId` 只作为候选关联：`bindExperimentCaseToFiSession` 必须同时找到 root Execution 与含非空 interactions 的 Session，才把 `taskId/executionId` 写回 Case 并将该 run 计为 ready。run 路由只把 ready run 对应的 Case ID 传给 `startExperimentRun`；零条 ready Case 时将实验置为 `failed`，部分 ready 时只创建成功 Case 的评估行。详情 API 通过 FI run、Execution 与 Session 动态返回 `traceProgress` 及逐 Case `traceStatus/traceError`。已有 Trace 路径不进入 FI 编排，直接由 `startExperimentRun` 评估已绑定的 execution。
 
 ```mermaid
 flowchart TD
     ui["TracePage 标签列 / 用户标签多选"] --> tagsApi["/api/tags"]
     ui --> bindApi["/api/observe/executions/:executionId/tags"]
     ui --> dataApi["/api/observe/data?includeTags=1&tagIds=..."]
-    experimentUi["Experiment Wizard / 关联 Trace"] --> experimentApi["/api/experiments/traces?search&from&to&tagIds"]
+    experimentUi["Experiment Wizard / 选择 Trace"] --> experimentApi["/api/experiments/traces?search&from&to&tagIds"]
+    experimentUi --> agentApi["/api/experiments/agents"]
+    agentApi --> workerInventory["online client inventory / per-host targets"]
     tagsApi --> tagTable[(Tag)]
     bindApi --> linkTable[(ExecutionTag)]
     dataApi --> readRecords["readRecords / hydrateAndNormalizeBatch"]
@@ -148,6 +152,8 @@ flowchart TD
 最终答案的准确性、答案质量、忠实度和指令遵循属于评测中心。用户主动运行实验后，`run-experiment.ts` 将四个结果类预置 evaluator id 分发到 `experiment/result-preset-evaluators.ts`，后者惰性加载 `evaluation/result-metric-evaluator.ts` 及各叶子评估器，并将结果写入 `ExperimentEvalResult`。这条链路不由 trace 上传触发，也不向质量监控回写结果分。
 
 Skills 用例分析的批量 Trace 入口采用“先登记、后执行”：`POST /api/experiments/eval-traces` 先把整批 `ExperimentCase` 与 `ExperimentEvalResult` 落库并返回 `202`，再由 `startEvalExperimentCases` 通过跨实验共享的行级并发池执行。运行中重复提交同一实验/Trace 会复用已有结果任务。前端因此能立即展示全部已选 Trace；结果评估进入终态后，再执行 `analyze-match` 写入轨迹对齐与归因，避免两个写入链路并发覆盖；切换 Skill、版本或重新启动时会中止旧轮询，防止旧任务更新新上下文。
+
+RAS 可靠性执行由 `run-experiment.ts` 将两个新 ID 分发到 `ras-reliability-evaluator.ts`：故障注入 profile 只要求 `fault_occurred`，检测恢复 profile 只要求 `fault_detected/mitigation_triggered/fault_mitigated`。Prompt 与 Zod schema 都按 profile 收窄，`task_outcome` 仅保留给旧 `preset-ras-reliability` 的历史重评。每个新评估器总分由所属维度等权平均；列表与详情继续走通用 `overallAverage`，按实际执行评估器的有效总分求平均，旧 ID 不进入新建实验的预置目录。
 
 “从数据集生成”路径中的 `BatchEvalTask.configJson.evaluationBatchId` 是用户选择的评测任务，也是 case/result 的唯一写入与读取目标；兼容字段 `evalExperimentId` 只在用户未选择评测任务时作为回退。case 状态中的 `evaluatorRunId` 必须写实际使用的 Experiment id，避免执行状态挂在任务 A、评分却落到任务 B。
 

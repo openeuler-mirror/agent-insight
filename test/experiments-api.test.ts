@@ -62,6 +62,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   assert.equal(items[0].status, 'draft');
   assert.equal(items[0].caseCount, 2);
   assert.equal(items[0].evaluatorCount, 2);
+  assert.equal(items[0].overallScore, null);
 
   // 详情
   const detailRes = await getExperiment(
