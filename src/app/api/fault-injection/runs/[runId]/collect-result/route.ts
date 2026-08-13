@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveWorkerCaller } from '@/lib/reliability/worker-dual-auth'
 import { prisma } from '@/lib/storage/prisma'
 import type { CollectPayload } from '@/lib/fault-injection/engine'
 import { ingestCollectAndJudge, refreshTaskProgress } from '@/lib/fault-injection/store'
@@ -20,10 +20,15 @@ export async function POST(
   ctx: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const { username } = await resolveUser(req)
-    if (!username) {
-      return NextResponse.json({ error: 'API key required' }, { status: 401 })
+    // 常驻客户端用设备凭证上传结果；存量 FI Worker 仍走 API Key。
+    const caller = await resolveWorkerCaller(req)
+    if (!caller) {
+      return NextResponse.json(
+        { error: 'API key or device credential required' },
+        { status: 401 },
+      )
     }
+    const username = caller.username
     const { runId } = await ctx.params
     const run = await prisma.faultInjectionRun.findFirst({
       where: { runId, user: username },

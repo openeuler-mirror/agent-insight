@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveWorkerCaller } from '@/lib/reliability/worker-dual-auth'
 import {
   claimQueuedRuns,
   listStopCommandsForWorker,
@@ -10,22 +10,25 @@ export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
   try {
-    const { username } = await resolveUser(req)
-    if (!username) {
-      return NextResponse.json({ error: 'API key required' }, { status: 401 })
+    const caller = await resolveWorkerCaller(req)
+    if (!caller) {
+      return NextResponse.json({ error: 'API key or device credential required' }, { status: 401 })
     }
+    const username = caller.username
     const body = await req.json()
-    if (!body.workerId || typeof body.workerId !== 'string') {
+    // 设备凭证路径下 workerId 恒等于 clientId，不接受请求体伪造他人身份。
+    const workerId = caller.clientId || body.workerId
+    if (!workerId || typeof workerId !== 'string') {
       return NextResponse.json({ error: 'workerId required' }, { status: 400 })
     }
     const limit = typeof body.limit === 'number' ? body.limit : 1
     await sweepStaleClaims(username)
     const runs = await claimQueuedRuns({
       user: username,
-      workerId: body.workerId,
+      workerId,
       limit,
     })
-    const commands = await listStopCommandsForWorker(username, body.workerId)
+    const commands = await listStopCommandsForWorker(username, workerId)
     return NextResponse.json({ runs, commands })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)

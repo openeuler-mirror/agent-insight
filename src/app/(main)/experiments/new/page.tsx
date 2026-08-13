@@ -731,12 +731,12 @@ export default function NewExperimentPage() {
         const ok = Boolean(data?.ok) && !Boolean(data?.needsWorker);
         setWorkerStatus(ok ? 'ok' : 'missing');
         if (!ok) {
-          setFiInventoryHint(String(data?.error || '本机需安装并启动 FI Worker'));
+          setFiInventoryHint(String(data?.error || '本机尚未纳管：请在「客户端安装」页安装常驻客户端'));
         }
       } catch {
         if (!cancelled) {
           setWorkerStatus('missing');
-          setFiInventoryHint('无法检查 FI Worker 状态');
+          setFiInventoryHint('无法检查本机纳管状态');
         }
       }
     };
@@ -1008,19 +1008,41 @@ export default function NewExperimentPage() {
                       border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 12,
                       background: 'var(--background-secondary)',
                     }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>需要安装 FI Worker</div>
-                      <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 10, lineHeight: 1.5 }}>
-                        本机需安装并启动 FI Worker，API Key 须与当前登录账号一致。安装完成后本页会自动刷新状态。可靠性评测需要 Worker；普通实验也可先用历史 Agent。
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>本机尚未纳管</div>
+                      <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 10, lineHeight: 1.6 }}>
+                        推荐在「客户端安装」页生成一条命令，一次装完常驻客户端与故障注入组件 ——
+                        装完后本机会同时出现在「客户端配置」与本页。安装完成后本页每 2 秒自动刷新。
+                        <br />
+                        可靠性评测需要本机纳管；普通实验也可先用历史 Agent。
                       </div>
-                      <div style={{
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                        fontSize: 11, padding: '10px 12px', borderRadius: 8,
-                        border: '1px solid var(--border)', background: 'var(--card-bg)',
-                        wordBreak: 'break-all', marginBottom: 8,
-                      }}>
-                        {fiSetupCmd || '正在生成安装命令…'}
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <a
+                          href="/accessconfig/install"
+                          style={{
+                            ...BTN_GHOST,
+                            textDecoration: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                          }}
+                        >
+                          前往客户端安装 →
+                        </a>
+                        <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
+                          每 2 秒自动检测…
+                        </span>
                       </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <details style={{ marginTop: 10 }}>
+                        <summary style={{ fontSize: 11, color: 'var(--foreground-muted)', cursor: 'pointer' }}>
+                          仅安装 FI Worker（旧方式，兼容保留）
+                        </summary>
+                        <div style={{
+                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                          fontSize: 11, padding: '10px 12px', borderRadius: 8,
+                          border: '1px solid var(--border)', background: 'var(--card-bg)',
+                          wordBreak: 'break-all', margin: '8px 0',
+                        }}>
+                          {fiSetupCmd || '正在生成安装命令…'}
+                        </div>
                         <button
                           type="button"
                           style={BTN_GHOST}
@@ -1038,10 +1060,7 @@ export default function NewExperimentPage() {
                         >
                           {fiSetupCopied ? '已复制' : '复制命令'}
                         </button>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-muted)', alignSelf: 'center' }}>
-                          每 2 秒自动检测 Worker…
-                        </span>
-                      </div>
+                      </details>
                       {fiInventoryHint && (
                         <div style={{ fontSize: 11, color: 'var(--color-danger, #b91c1c)', marginTop: 8 }}>
                           {fiInventoryHint}

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
-import { syncReliabilityClientsFromWorkers } from '@/lib/reliability/clients-from-workers'
 import { syncClientConfig } from '@/lib/reliability/client-config-service'
 
 export const dynamic = 'force-dynamic'
@@ -17,8 +16,7 @@ export async function POST(
     if (!username) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
     const { clientId } = await ctx.params
     const platform = url.searchParams.get('platform') || String(body.platform || 'opencode')
-    await syncReliabilityClientsFromWorkers(username)
-    const result = syncClientConfig({
+    const result = await syncClientConfig({
       user: username,
       clientId,
       platform,

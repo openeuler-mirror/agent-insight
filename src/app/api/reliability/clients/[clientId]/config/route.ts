@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
-import { syncReliabilityClientsFromWorkers } from '@/lib/reliability/clients-from-workers'
 import {
   deleteClientConfig,
   getClientConfigView,
@@ -32,8 +31,7 @@ export async function GET(
     if (!username) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
     const { clientId } = await ctx.params
     const platform = url.searchParams.get('platform') || 'opencode'
-    await syncReliabilityClientsFromWorkers(username)
-    const view = getClientConfigView(username, clientId, platform)
+    const view = await getClientConfigView(username, clientId, platform)
     return NextResponse.json(view)
   } catch (error) {
     return errorResponse(error)
@@ -52,8 +50,7 @@ export async function PUT(
     if (!username) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
     const { clientId } = await ctx.params
     const platform = url.searchParams.get('platform') || String(body.platform || 'opencode')
-    await syncReliabilityClientsFromWorkers(username)
-    const result = putClientConfig({
+    const result = await putClientConfig({
       user: username,
       clientId,
       platform,
@@ -91,8 +88,7 @@ export async function DELETE(
     const platform = url.searchParams.get('platform') || 'opencode'
     const pathKey = url.searchParams.get('path')
     const sync = url.searchParams.get('sync') === 'true'
-    await syncReliabilityClientsFromWorkers(username)
-    const result = deleteClientConfig({
+    const result = await deleteClientConfig({
       user: username,
       clientId,
       platform,
