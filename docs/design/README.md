@@ -31,6 +31,7 @@
 | 链路追踪搜索/过滤改造（langfuse operator 模型） | [langfuse-style-trace-search](langfuse-style-trace-search/) | `/trace` 列表的搜索与过滤对齐 langfuse 的 operator 模型（搜索栏 + 左侧 facet 侧栏） | Feature | 2026-06-15 | 🟡 实现中（front-half 已落地：搜索栏 + facet 侧栏 + skill 接线） | —（待补） |
 | agent_ras 环内 runtime | [`../agent-ras/designs/architecture.md`](../agent-ras/designs/architecture.md) | 仓根 `agent_ras/` 同进程检测与恢复；旁路经 **`/api/ingest/ras-events`**（见 developer-guide） | Feature | 2026-07-25 | ✅ inproc 已实现 | 安装器 + 可靠性链路 + ingest API |
 | AgentRAS 可靠性独立页面 | [reliability-standalone-ui](reliability-standalone-ui/) | 独立导航「AgentRAS 可靠性」；可靠性追踪 + 故障模式 + 故障注入与评测（已接真实 BFF；UI 含 RasAnomalyStrip） | Feature | 2026-07-28 | ✅ 已实现 | —（待补） |
+| 工具重复死循环检测与恢复 | [`../agent-ras/designs/features/repeat-tool.md`](../agent-ras/designs/features/repeat-tool.md) | 同参重复 / 失败连打 / ping-pong / 全局断路；steering + notice | Feature | 2026-08-13 | ✅ 已实现 | — |
 | LLM 思考死循环检测与恢复 | [`../agent-ras/designs/features/thinking-loop.md`](../agent-ras/designs/features/thinking-loop.md) | L1/L2 字面 + L3 语义 + review skill；流中 abort | Feature | 2026-07-15 | ✅ 已实现 | — |
 | Stream Abort 停流 | [`../agent-ras/designs/features/stream-abort.md`](../agent-ras/designs/features/stream-abort.md) | 环内打断 `llm.stream`；依赖宿主 abort 契约 | Feature | 2026-07-15 | ✅ 已实现 | — |
 | Provider 断连停推理调研 | [`../agent-ras/designs/features/provider-disconnect.md`](../agent-ras/designs/features/provider-disconnect.md) | Provider 断连能力调研 | Spike | 2026-07-20 | ✅ 调研完成 | — |

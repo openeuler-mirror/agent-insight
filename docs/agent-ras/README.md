@@ -39,6 +39,7 @@
 
 | 文档 | 内容 | 状态 |
 |------|------|------|
+| [repeat-tool.md](designs/features/repeat-tool.md) | 工具重复死循环检测与恢复 | 已落地 |
 | [thinking-loop.md](designs/features/thinking-loop.md) | LLM 思考/文本死循环检测与恢复 | 已落地 |
 | [stream-abort.md](designs/features/stream-abort.md) | 环内打断 `llm.stream` | 已落地 |
 | [provider-disconnect.md](designs/features/provider-disconnect.md) | Provider 断连停推理能力调研 | 已完成 |
