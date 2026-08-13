@@ -17,6 +17,8 @@ OpenClaw 应直接访问自己的模型供应商；Agent Insight 只接收遥测
 
 > **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-runtime.md`](../agent-ras/designs/modules/ras-runtime.md)；本文件为 Insight ingest **契约真源**。
 
+> **客户端身份与主机快照**：OpenCode 的非 OTLP `POST /api/ingest/upload` 使用 `client_id`、`host.reported_ip`、`host.hostname`。服务端自行补充 `observedIp`，并把它们保存到根/child `Execution`。`clientId` 是稳定关联键，IP/hostname 是每条 Trace 的历史快照；客户端不得上报/覆盖 `observedIp`，实现不得复用表示模型推理源的 `Execution.endpoint`。OpenCode uploader 和旧 FI Worker 优先复用正式客户端的 `~/.agent-insight/client/config.json`；未安装正式客户端时才幂等创建兼容身份 `~/.agent-insight/client.json`。
+
 ## 资源属性 (Resource)
 
 客户端在 `resource.attributes` 中设置以下字段：

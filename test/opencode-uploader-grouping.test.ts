@@ -1,9 +1,76 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
 process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = "1"
 
 const uploaderPromise = import("../scripts/opencode_uploader_client.js")
+
+test("opencode uploader: persists a stable machine client identity", async () => {
+  const uploader = await uploaderPromise
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-client-id-"))
+  try {
+    const first = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      hostname: "host-a",
+      now: () => new Date("2026-08-13T00:00:00.000Z"),
+    })
+    const second = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      hostname: "host-b",
+    })
+
+    assert.equal(first.clientId, "cli_12345678-1234-1234-1234-123456789abc")
+    assert.deepEqual(second, first)
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(dataDir, "client.json"), "utf8")),
+      first,
+    )
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: prefers the registered reliability client identity", async () => {
+  const uploader = await uploaderPromise
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-registered-client-id-"))
+  try {
+    const registeredDir = path.join(dataDir, "client")
+    fs.mkdirSync(registeredDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(registeredDir, "config.json"),
+      JSON.stringify({ clientId: "cli_registered-12345678" }),
+    )
+
+    const identity = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+    })
+
+    assert.equal(identity.clientId, "cli_registered-12345678")
+    assert.equal(fs.existsSync(path.join(dataDir, "client.json")), false)
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: reports the first external IPv4 address", async () => {
+  const uploader = await uploaderPromise
+  assert.equal(
+    uploader.pickReportedIp({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", mac: "00:00:00:00:00:00", cidr: "127.0.0.1/8" }],
+      eth0: [
+        { address: "2001:db8::1", family: "IPv6", internal: false, scopeid: 0, netmask: "ffff:ffff:ffff:ffff::", mac: "00:00:00:00:00:01", cidr: "2001:db8::1/64" },
+        { address: "10.20.30.40", family: "IPv4", internal: false, netmask: "255.255.255.0", mac: "00:00:00:00:00:02", cidr: "10.20.30.40/24" },
+      ],
+    }),
+    "10.20.30.40",
+  )
+})
 
 test("opencode uploader: recognizes session.created properties.info.parentID", async () => {
   const uploader = await uploaderPromise

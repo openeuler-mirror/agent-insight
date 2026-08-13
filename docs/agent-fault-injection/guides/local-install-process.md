@@ -11,6 +11,8 @@
 
 FI 安装命令在用户本机启用 **FI Client**：把 Python 包 `agent_fault_injection` 装好、写好 Worker 配置，并（默认）**后台常驻** `fi-worker`。Worker 向远程 Insight **心跳 / claim / 回传 collect-result**；真正注入由本机 CLI 驱动 OpenCode / xiaoO。**服务端**负责任务编排与 Judge，不在用户机跑注入算法。
 
+旧 Worker 启动时优先读取正式客户端 `~/.agent-insight/client/config.json`，未安装正式客户端时才读取或创建 `~/.agent-insight/client.json`，并在心跳中携带稳定 `clientId`。它与 OpenCode uploader 共用身份优先级；`workerId` 仍只标识 Worker 实例。该变化不新增安装项或进程。
+
 ```mermaid
 flowchart TB
   subgraph remote ["Insight 服务端（可远程）"]

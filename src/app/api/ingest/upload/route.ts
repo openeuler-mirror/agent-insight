@@ -11,6 +11,8 @@ import { assertActive, finish, startOrReplace, EvaluationCancelledError } from '
 import { getInternalAgentTag } from '@/lib/internal-agent-tag';
 import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { NextResponse } from 'next/server';
+import { clientIpFromRequest } from '@/lib/reliability/client-ip';
+import { normalizeTraceClientMetadata } from '@/lib/reliability/trace-client';
 
 /**
  * 这一发 opencode 上报是不是"进行中快照"——是的话只落库，不跑异步 LLM 分析。
@@ -151,6 +153,12 @@ export async function POST(request: Request) {
     if (data.endpoint) {
         data.endpoint = normalizeEndpointUrl(data.endpoint) ?? undefined;
     }
+
+    const clientMetadata = normalizeTraceClientMetadata(data, clientIpFromRequest(request));
+    data.clientId = clientMetadata.clientId ?? undefined;
+    data.hostIp = clientMetadata.hostIp ?? undefined;
+    data.hostName = clientMetadata.hostName ?? undefined;
+    data.observedIp = clientMetadata.observedIp ?? undefined;
 
     if (data.framework === 'opencode' && data.task_id && isDeletedOpencodeSessionId(data.task_id)) {
         console.log(`[Upload-API] 🪦 Skipping deleted opencode session: task_id=${data.task_id}`);

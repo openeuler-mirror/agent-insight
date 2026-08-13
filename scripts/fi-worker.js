@@ -11,10 +11,52 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { spawn, spawnSync } = require('child_process')
-const { randomBytes } = require('crypto')
+const { randomBytes, randomUUID } = require('crypto')
 
 const homeFi = path.join(os.homedir(), '.agent-insight', 'fault-injection')
-const configPath = path.join(homeFi, 'config.json')
+const configPath = path.join(homeFi, "config.json")
+
+function isValidClientId(value) {
+  return typeof value === "string" && /^cli_[A-Za-z0-9][A-Za-z0-9._-]{7,123}$/.test(value)
+}
+
+function readClientIdentity(clientFile) {
+  try {
+    const value = JSON.parse(fs.readFileSync(clientFile, "utf8"))
+    return isValidClientId(value?.clientId) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function ensureClientIdentity(options = {}) {
+  const dataDir = options.dataDir || path.join(os.homedir(), ".agent-insight")
+  const registeredFile = options.registeredClientFile || path.join(dataDir, "client", "config.json")
+  const registered = readClientIdentity(registeredFile)
+  if (registered) return registered
+  const clientFile = path.join(dataDir, "client.json")
+  const existing = readClientIdentity(clientFile)
+  if (existing) return existing
+
+  fs.mkdirSync(dataDir, { recursive: true })
+  const identity = {
+    schemaVersion: 1,
+    clientId: "cli_" + (options.randomUUID || randomUUID)(),
+    hostname: options.hostname || os.hostname() || null,
+    createdAt: (options.now || (() => new Date()))().toISOString(),
+  }
+  try {
+    fs.writeFileSync(clientFile, JSON.stringify(identity, null, 2) + "\n", {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    })
+    return identity
+  } catch (error) {
+    if (error?.code === "EEXIST") return readClientIdentity(clientFile)
+    throw error
+  }
+}
 
 function resolvePython() {
   return process.env.AGENT_FI_PYTHON || process.env.PYTHON || 'python3'
@@ -464,9 +506,11 @@ async function main() {
   let busy = 0
   console.log('[fi-worker] probing platform inventory via Python catalog…')
   const probed = probeInventory(cfg, python)
+  const clientIdentity = ensureClientIdentity()
   const reportedIp = pickReportedIp()
   const inventory = {
     ...probed,
+    ...(clientIdentity?.clientId ? { clientId: clientIdentity.clientId } : {}),
     ...(reportedIp ? { reportedIp } : {}),
   }
   if (reportedIp) console.log(`[fi-worker] reportedIp=${reportedIp}`)
@@ -481,8 +525,9 @@ async function main() {
 
   async function tick() {
     try {
-      await api(cfg, 'POST', '/api/fault-injection/worker/heartbeat', {
+      await api(cfg, "POST", "/api/fault-injection/worker/heartbeat", {
         workerId: cfg.workerId,
+        ...(clientIdentity?.clientId ? { clientId: clientIdentity.clientId } : {}),
         hostname: os.hostname(),
         version: '0.1.0',
         inventory,
@@ -531,6 +576,8 @@ function run() {
 module.exports = {
   run,
   buildCollectorArgs,
+  ensureClientIdentity,
+  isValidClientId,
   resolvePython,
   resolveCollectorCwd,
   formatSpawnError,

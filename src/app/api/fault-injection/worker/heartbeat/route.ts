@@ -28,6 +28,7 @@ export async function POST(req: Request) {
         : {}
     const inventory = {
       ...baseInventory,
+      ...(typeof body.clientId === "string" ? { clientId: body.clientId } : {}),
       ...(observedIp ? { observedIp } : {}),
     }
     const worker = await upsertWorkerHeartbeat({

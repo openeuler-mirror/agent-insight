@@ -1,5 +1,6 @@
 import http from "node:http"
 import https from "node:https"
+import { randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
@@ -102,6 +103,58 @@ function safeMkdirp(dir) {
   try {
     fs.mkdirSync(dir, { recursive: true })
   } catch {}
+}
+
+function isValidClientId(value) {
+  return typeof value === "string" && /^cli_[A-Za-z0-9][A-Za-z0-9._-]{7,123}$/.test(value)
+}
+
+function readClientIdentity(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"))
+    return isValidClientId(value?.clientId) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function ensureClientIdentity(options = {}) {
+  const dataDir = options.dataDir || getPreferredInsightDir()
+  const registeredFile = options.registeredClientFile || path.join(dataDir, "client", "config.json")
+  const registered = readClientIdentity(registeredFile)
+  if (registered) return registered
+  const file = path.join(dataDir, "client.json")
+  if (fs.existsSync(file)) return readClientIdentity(file)
+
+  safeMkdirp(dataDir)
+  const identity = {
+    schemaVersion: 1,
+    clientId: `cli_${(options.randomUUID || randomUUID)()}`,
+    hostname: String(options.hostname || os.hostname() || "").trim() || null,
+    createdAt: (options.now || (() => new Date()))().toISOString(),
+  }
+  try {
+    fs.writeFileSync(file, `${JSON.stringify(identity, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    })
+    return identity
+  } catch (error) {
+    if (error?.code === "EEXIST") return readClientIdentity(file)
+    return null
+  }
+}
+
+function pickReportedIp(networkInterfaces = os.networkInterfaces()) {
+  for (const entries of Object.values(networkInterfaces || {})) {
+    for (const entry of entries || []) {
+      const isV4 = entry.family === "IPv4" || entry.family === 4
+      const address = String(entry.address || "").trim()
+      if (isV4 && !entry.internal && address && !address.startsWith("127.")) return address
+    }
+  }
+  return null
 }
 
 function appendUploaderLog(message) {
@@ -1049,6 +1102,13 @@ async function main() {
     appendUploaderLog(`main.keyless no api key — uploading anyway (server attributes via AGENT_INSIGHT_DEFAULT_INGEST_USER)`)
   }
 
+  const clientIdentity = ensureClientIdentity()
+  const reportedIp = pickReportedIp()
+  appendUploaderLog(
+    `main.client clientId=${clientIdentity?.clientId || "(missing)"} ` +
+    `hostname=${os.hostname() || "(missing)"} reportedIp=${reportedIp || "(missing)"}`,
+  )
+
   const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
   // 账号级隔离: spool / checkpoint 都按 API key 分目录(setup 写入 per-account 路径),
   // 否则同一台机器切账号会复用机器级 spool/checkpoint, 把历史 trace 错误归到当前 key。
@@ -1172,6 +1232,11 @@ async function main() {
       task_id: rootSid,
       query,
       framework: "opencode",
+      ...(clientIdentity?.clientId ? { client_id: clientIdentity.clientId } : {}),
+      host: {
+        hostname: os.hostname() || clientIdentity?.hostname || undefined,
+        ...(reportedIp ? { reported_ip: reportedIp } : {}),
+      },
       model: derived.model,
       tokens: derived.tokens,
       latency: derived.latency,
@@ -1266,6 +1331,9 @@ export {
   buildMessagesForSession,
   buildSignature,
   buildState,
+  ensureClientIdentity,
+  isValidClientId,
+  pickReportedIp,
   getRequestOptions,
   findShadowedEnvKeys,
   describeShadowedEnv,

@@ -252,6 +252,8 @@ flowchart TD
 ```text
 ~/.agent-insight/
 ├── .env                          # 可选；HOST / API_KEY 回退源
+├── client/config.json            # 正式常驻客户端身份与设备凭证
+├── client.json                   # 未安装正式客户端时的兼容 clientId
 └── ras/
     ├── install.json              # 安装标记
     ├── config.json               # inproc + insight 旁路
@@ -323,10 +325,16 @@ flowchart LR
 
 安装**不会**留下「RAS Worker」进程。运行时：
 
-1. 用户启动 `opencode` / `xiaoo`（等）  
-2. 宿主加载已挂载的插件 / hooker  
-3. 同进程加载 `libpython` + `ras_runtime`  
-4. 检测 → 恢复动作回投宿主；异常旁路 → Insight
+1. OpenCode uploader 优先读取 `~/.agent-insight/client/config.json`；正式客户端不存在时才读取或创建 `~/.agent-insight/client.json`
+2. uploader 将 `clientId`、hostname 与当次探测到的主机 IP 随 Trace 上报；服务端另外记录连接来源 IP
+3. 用户启动 `opencode` / `xiaoo`（等）
+4. 宿主加载已挂载的插件 / hooker
+5. 同进程加载 `libpython` + `ras_runtime`
+6. 检测 → 恢复动作回投宿主；异常旁路 → Insight
+
+这不会新增守护进程或插件；uploader 与旧 FI Worker 使用同一套身份优先级。IP 是 Trace 产生时的历史快照，变化后只影响新 Trace。
+
+详见 [architecture.md](../designs/architecture.md)、[platform-opencode.md](platform-opencode.md)、[platform-xiaoo.md](platform-xiaoo.md)。
 
 ---
 

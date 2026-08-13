@@ -15,7 +15,30 @@ const {
   pipInstall,
 } = require('../scripts/install-fault-injection.js')
 
-test('normalizeHost strips trailing slash and trims', () => {
+test("FI worker reuses the persisted machine client identity", () => {
+  const { ensureClientIdentity } = require("../scripts/fi-worker.js")
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fi-client-id-"))
+  try {
+    const first = ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      hostname: "host-a",
+      now: () => new Date("2026-08-13T00:00:00.000Z"),
+    })
+    const second = ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      hostname: "host-b",
+    })
+
+    assert.equal(first.clientId, "cli_12345678-1234-1234-1234-123456789abc")
+    assert.deepEqual(second, first)
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test("normalizeHost strips trailing slash and trims", () => {
   assert.equal(normalizeHost('http://localhost:3000/'), 'http://localhost:3000')
   assert.equal(normalizeHost('  http://127.0.0.1:3000  '), 'http://127.0.0.1:3000')
   assert.equal(normalizeHost(''), '')

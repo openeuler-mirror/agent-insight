@@ -52,6 +52,10 @@ export type ReliabilityTraceItem = {
   platform: string | null
   framework: string | null
   agentName: string | null
+  clientId: string | null
+  hostIp: string | null
+  hostName: string | null
+  observedIp: string | null
 }
 
 export function dedupeRasEvents<T extends RasEventForDedupe>(rows: T[]): T[] {
@@ -302,6 +306,10 @@ export async function listReliabilityTraces(opts: {
         timestamp: true,
         framework: true,
         agentName: true,
+        clientId: true,
+        hostIp: true,
+        hostName: true,
+        observedIp: true,
         query: true,
       },
     }),
@@ -383,6 +391,10 @@ export async function listReliabilityTraces(opts: {
       platform,
       framework: execution.framework,
       agentName: execution.agentName,
+      clientId: execution.clientId,
+      hostIp: execution.hostIp,
+      hostName: execution.hostName,
+      observedIp: execution.observedIp,
     })
   }
 
