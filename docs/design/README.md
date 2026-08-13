@@ -54,7 +54,7 @@
 | FI 死字段清理 | [fi-dead-field-cleanup](fi-dead-field-cleanup/) | 删除 `FaultInjectionRun.injectionEvidenceJson` / `artifactDir`；collect 协议已不含 injectionEvidence | Refactor | 2026-08-10 | ✅ 已实现 | — |
 | 记忆故障 FI 方案（文件丢失等） | [`../agent-ras/designs/features/memory-file-loss.md`](../agent-ras/designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒注入方案；FI-P0=`memory-file-loss` 已落地 | Feature | 2026-08-03 | 🟡 FI-P0 已落地；检测器与其余子类规划中 | — |
 | 记忆噪声干扰 FI | [`../agent-ras/designs/features/memory-noise-interference.md`](../agent-ras/designs/features/memory-noise-interference.md) | Skill S1–S3 + middleware S4（假先验）已落地；S5 压缩失真未实施 | Feature | 2026-08-03 | ✅ S1–S4 已落地 | — |
-| Agent RAS 故障域插件化（detectors/review/recovery） | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | P0–P2 ✅：三平级 PLUGIN 扫描；review 独立模块；设计 v0.8.1 | Refactor / Feature | 2026-08-06 | ✅ 已实现 | — |
+| Agent RAS 故障域插件化（detectors/review/recovery） | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | P0–P3 ✅：三平级 PLUGIN；共同文件只留 yaml | Refactor / Feature | 2026-08-06 | ✅ 已实现 | — |
 | FI 证据边界与 inconclusive 语义 | [`../agent-fault-injection/designs/modules/server-judge.md`](../agent-fault-injection/designs/modules/server-judge.md) | 注入工具不写自证快照；Judge 以轨迹为主；`no_trace`→`inconclusive` | Refactor | 2026-08-05 | ✅ 已实现 | — |
 | FI 故障模式自包含插件化 | [`../agent-fault-injection/designs/features/fault-mode-plugins.md`](../agent-fault-injection/designs/features/fault-mode-plugins.md) | 展示元数据进 `SKILL.md` metadata；method 标签进 capability_api；删 fault-catalog.yaml；catalog Python 规整 | Refactor | 2026-08-10 | ✅ 已实现 | — |
 

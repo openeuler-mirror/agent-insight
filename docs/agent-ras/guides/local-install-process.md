@@ -203,7 +203,9 @@ flowchart TD
 - `insight.enabled`（默认保持 true）
 - `insight.events_url` ← 由 Host 推导或 `AGENT_INSIGHT_RAS_EVENTS_URL`
 - `insight.api_key` ← 环境变量或 `~/.agent-insight/.env`
-- 保留用户已有阈值（如 `llm_thinking_loop`）
+- 保留用户已有阈值（`platforms.<platform>.detectors` / 顶层 `detectors` 镜像）
+- 清除插件化之前的顶层扁平域块（`agent_ras.llm_thinking_loop` 等）与废弃的 `ras_config_revision(s)`
+- 删除 `runtime/` 下非当前指纹的旧副本
 
 ### 6.4 OpenCode 挂载
 

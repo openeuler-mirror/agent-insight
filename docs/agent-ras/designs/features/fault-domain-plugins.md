@@ -1,8 +1,8 @@
 # 故障域插件化：detectors / review / recovery 三分治（已落地）
 
 > 范围：仓根 `agent_ras/`。检测、**评审**、恢复三棵树平级扩展；目录扫描 + `*_PLUGIN` 自动注册；**不设** `fault_domains/`。  
-> 状态：**P2 已落地**（DomainLoader + 三分治 PLUGIN；`llm-loop-review` → `review/skills`；role=`review`）。  
-> 版本：v0.8.1 · 2026-08-10（实现对照同日）
+> 状态：**P3 已落地**（共同文件只留 yaml；hello 透传整份 detectors；文案/TERMINATE/L3 均走插件）。  
+> 版本：v0.8.1 · 2026-08-13（P3 收口）
 
 ---
 
@@ -74,6 +74,7 @@ agent_ras/
   recovery/
     engine.py / operations.py / state.py / robustness_prompt.py  # 通用内核
     llm_thinking_loop.py          # RECOVERY_PLUGIN + 域文案（同文件）
+    repeat_tool.py                # RECOVERY_PLUGIN + 域文案（同文件）
   agents/
 ```
 
@@ -156,6 +157,36 @@ Insight 能力目录与配置面板由 `presentation` + `config_model` schema **
 
 曾须改 `config` / `models` / `DETECTOR_BUILDERS` / overrides / prompt / skill 表——**P2 已消除这些常规触点**。
 
+### 5.4 P3 收口：共同文件只留 yaml
+
+新增**同类**可靠性能力（复用现有 `SignalKind` + 现有 wire `abort_stream` / `emit_notice` / `push_steering`）只允许：
+
+- **新增** `detectors/<id>.py`（`DETECTOR_PLUGIN` + `config_model` + `presentation`）
+- **新增**（可选）`review/<id>.py`、`recovery/<id>.py`、对应 `skills/*/SKILL.md`、单测、设计文档
+- **修改** 唯一共同文件：`agent_ras/config/agent_ras_config.default.yaml`
+
+禁止再改：loader / registry / `core/config.py` / monitor / session_hub / robustness_prompt / engine / config_sync / capability-config.ts / client-config-model.ts / plugin.js。
+
+**永久例外（扩框架另立项）**：新 `SignalKind`、新 wire / `HostControl` 方法、新平台、仓外 entry_points。
+
+**`hello` 不是新接口**：协议 inproc 已有 `health | hello | observe | reset | action_result | skill_result | bye`。`hello` = 按 session 建档（platform + **整份** `detectors` 能力配置），返回 `welcome`。命名取协议握手惯例，不是业务打招呼；不删除、不改名。
+
+#### Detector `evidence` 键约定
+
+框架只渲染，不选句。Detector 在 `anomaly.evidence` 里给出：
+
+| 键 | 作用 |
+|----|------|
+| `msg_key` / `steer_key` / `notice_key` / `critical_key` | 选文案；缺省则用该域 `steer_default` / `notice_default` / `critical_default` |
+| `needs_l3_review` | 为真且该域有 review skill → Monitor 走 L3；否则立即 abort |
+| `recovery_profile` / `source` | 原样进入 `PendingRecovery`（不再从 channel 推断） |
+| `fault_domain` | 可选；缺省由 kind→domain 注册表补齐 |
+| `excerpt` / `thinking_excerpt` | L3 review payload 用 `excerpt`，并保留 `thinking_excerpt` 别名 |
+
+`RecoveryPlugin.terminate_kinds` 声明可 `TERMINATE` 的 kind；`engine` 从 loader join，不再写死白名单。
+
+配置同步与 hello：切片为 `enabled` + **整份** `detectors`（value 必须是 object）+ `recovery`。Insight 默认值解析 yaml；表单/校验走 catalog `configSchema`。
+
 ---
 
 ## 6. 实现分期（P2）
@@ -171,4 +202,4 @@ Insight 能力目录与配置面板由 `presentation` + `config_model` schema **
 ## 7. 文档同步
 
 - [x] v0.8.1：三分治；文案与策略同文件；新增触点清单  
-- [x] P2 落地后更新 modules 指南与 README 状态
+- [x] P3：共同文件只留 yaml；evidence key / hello 透传 / catalog schema

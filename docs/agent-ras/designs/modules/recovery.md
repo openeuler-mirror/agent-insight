@@ -50,8 +50,8 @@ flowchart TD
 | `engine.py` | `RecoveryAction`、Policy、`plan_recovery`、`RecoveryExecutor`、限流 |
 | `operations.py` | truncate/suppress/steer/notice/terminate；`build/apply_recovery_actions` |
 | `state.py` | `PendingRecovery`、`SuppressFlushState` |
-| `robustness_prompt.py` | cn/en 文案与 steer/notice 模板 |
-| `llm_thinking_loop.py` | `RECOVERY_PLUGIN`：kind overrides + stream_kinds + 域文案 |
+| `robustness_prompt.py` | 通用 locale 合并与 `render` / `format_steering`；真正跨域句。域文案在 `recovery/<id>.py` |
+| `<domain>.py` | `RECOVERY_PLUGIN`：kind overrides + stream_kinds + `terminate_kinds` + 域文案 |
 | `engine.py` / `operations.py` / … | 通用内核（扫描跳过） |
 
 ---
@@ -90,9 +90,9 @@ flowchart TD
 | HIGH | REPORT_TO_USER, INJECT_STEERING |
 | CRITICAL | INJECT_STEERING, ESCALATE_USER（**默认不含** `TERMINATE`） |
 
-**Kind override**（仅两种）：`LLM_THINKING_LOOP` / `LLM_THINKING_DEAD_LOOP` → `OBSERVE_ONLY` + `SUPPRESS_STREAM`。
+**Kind override**：由各域 `RECOVERY_PLUGIN.kind_overrides` 经 loader join，框架不维护域名表。
 
-**`TERMINATE`**：仅当 policy **显式**含该动作且 kind∈`REPEAT_TOOL_CALL`/`TOOL_CALL_LOOP` 时由 `RecoveryExecutor.apply` 调 `request_force_finish`。协议 wire **无** `terminate` 类型，inproc 路径无法 force-finish。
+**`TERMINATE`**：仅当 policy **显式**含该动作且 kind∈`RECOVERY_PLUGIN.terminate_kinds`（loader join）时由 `RecoveryExecutor.apply` 调 `request_force_finish`。`repeat_tool` 登记了 `repeat_tool_call` / `tool_call_loop`，但 **CRITICAL 默认不含** `TERMINATE`。协议 wire **无** `terminate` 类型，inproc 路径无法 force-finish。
 
 ### 关键函数
 
@@ -163,6 +163,11 @@ Monitor._apply_abnormal_recovery
   → apply_recovery_abnormal → inject_steering
   → emit_user_notice
 ```
+
+### 工具重复（immediate，非 stream）
+
+深挂载：`Monitor.handle` → `recovery(phase=immediate)` → `RecoveryExecutor.apply`（notice + steering；可选 terminate）。**不**走 `_dispatch_automatic_recovery`。  
+协议路径：`build_recovery_actions` 恒先 `abort_stream`。
 
 ---
 

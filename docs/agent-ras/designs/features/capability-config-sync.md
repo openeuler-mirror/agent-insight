@@ -67,9 +67,9 @@ interface RasCapabilityConfigEnvelope {
 4. 写入共享 `~/.agent-insight/ras/config.json`：
    - `agent_ras.platforms.<platform>` ← `enabled` / `detectors` / `recovery`
    - `agent_ras.platforms.<platform>.syncedFrom` ← `{ contentHash, revision?, updatedAt? }`（溯源元数据，**不参与下次比对决策**）
-   - 合并时清除遗留的 `ras_config_revision` / `ras_config_revisions`（独立整数计数器已废弃）
-   - 顶层 `detectors` / `recovery` 仅作 **最后一次 merge 的遗留镜像**；运行时读取优先 `platforms.<platform>`（OpenCode `loadThinkingConfig`、xiaoo `load_hello_config_from_ras_config`）。
-5. 不覆盖 `service.*` / `insight.*`。xiaoo hello 仍强制 `semantic_content_enabled=false`。
+   - 合并时清除遗留的 `ras_config_revision` / `ras_config_revisions`（独立整数计数器已废弃），以及插件化之前写在 `agent_ras` 顶层的扁平域块（`llm_thinking_loop` / `repeat_tool`）。阈值只保留在 `platforms.<platform>.detectors`（顶层 `detectors` 仍是最后一次 merge 的镜像）。
+   - 顶层 `detectors` / `recovery` 仅作 **最后一次 merge 的遗留镜像**；运行时读取优先 `platforms.<platform>`（OpenCode `loadCapabilityConfig`、xiaoo `load_hello_config_from_ras_config`）。切片透传**整份** `detectors`，不再构造域名白名单。
+5. 不覆盖 `service.*` / `insight.*`。xiaoo hello：凡含 `semantic_content_enabled` 的 detector 字段强制 `false`（不点名域）。
 
 可检测场景：远端内容变了（含 revision 未涨）→ 指纹变 → 合并；本地手工改了切片 → 指纹与远端不一致 → Insight 覆盖。
 
