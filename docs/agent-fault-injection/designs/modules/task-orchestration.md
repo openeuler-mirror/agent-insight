@@ -1,6 +1,6 @@
 # Task 编排
 
-> **当前实现**：服务端只写 `queued`；本机 FI Worker `claim` 后执行。协议见 [server-client-split.md](../server-client-split.md) / [phase2 SDD](../../../design/fi-server-client-split/phase2-requirements-design.md)。
+> **当前实现**：服务端只写 `queued`；本机 FI Worker `claim` 后执行。
 
 ## 模型
 

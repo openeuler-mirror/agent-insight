@@ -1,11 +1,10 @@
 # xiaoO 平台适配方案
 
-> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../agent_fault_injection/) 负责注入与采集。 独立 FastAPI/Vite 不纳入产品路径。见 [server-client-split.md](server-client-split.md) · [ras-fi-insight-relationship.md](ras-fi-insight-relationship.md)。
+> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../../agent_fault_injection/) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。
 
 
 > 面向 `agent-fault-injection`：如何把 **xiaoO**（openEuler AgentOS 智能中枢）作为被测 Agent 平台接入故障注入评测。  
-> 产品评判在 **Insight 服务端 Judge**（本机 Python Judge 已删除）。  
-> 相关：主设计 [server-judge.md](modules/server-judge.md)；故障矩阵 [fault-catalog.md](fault-catalog.md)；接入契约 [platform-adapter-contract.md](modules/platform-adapter-contract.md)。
+> 产品评判在 **Insight 服务端 Judge**（本机 Python Judge 已删除）。
 
 ## 实现状态
 
@@ -14,7 +13,7 @@
 | Phase 0 框架解耦 | 已完成 | Registry / 可选 execution.jsonl / **Insight 服务端 Judge（join ⓪）** |
 | Phase 1 CLI Adapter | 已完成 | `platform_adapters/xiaoo/` + Hooker + `registry` 注册 |
 | Phase 2 Daemon harness | 已完成 | `platform_options.harness: daemon` + `daemon_url` |
-| Phase 3 Skill 平台可见性 | 已完成（后调整） | 原 `fault-catalog.yaml` 的 `platforms` 已移除；故障配方面向通用平台，UI 默认双平台。平台能力差异由 Adapter / 文档说明（见 [fault-mode-plugins.md](features/fault-mode-plugins.md)） |
+| Phase 3 Skill 平台可见性 | 已完成（后调整） | 原 `fault-catalog.yaml` 的 `platforms` 已移除；故障配方面向通用平台，UI 默认双平台。平台能力差异由 Adapter / 文档说明 |
 | Phase 4 产品化 | 已完成 | Insight 任务向导 + Worker；CLI 真跑；集成测 skip |
 
 运行示例：Insight FI 新建任务表单（包内不再维护 `configs/xiaoo-*.yaml` 示例）。
@@ -223,7 +222,7 @@ flowchart TB
 - **OpenCode**：宿主本身支持 workspace 增量挂载 → FI 只塞 `.opencode/plugins/agent-fault-injection.ts`，RAS 自然还在；**不需要**做「整份 config merge + 保留 plugins」逻辑。
 - **xiaoO**：临时 `XIAOO_CONFIG` 是**替换**整份生效配置，而 hooker 列表是替换语义、不是 OpenCode 那种自动叠加 → 必须以用户真实 config 为底，**保留**已有 `[hooker].plugins`（含 RAS），再 **append** FI plugin，写到临时文件（实现：`platform_adapters/xiaoo/config_overlay.py`）。
 
-目标都是：评测 run **不改用户日常配置**，同时同宿主仍可观测 / 检测 / 恢复（RAS）并注入（FI）。关系总览见 [ras-fi-insight-relationship.md §6](ras-fi-insight-relationship.md)。
+目标都是：评测 run **不改用户日常配置**，同时同宿主仍可观测 / 检测 / 恢复（RAS）并注入（FI）。
 
 ---
 

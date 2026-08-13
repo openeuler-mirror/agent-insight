@@ -1,10 +1,6 @@
 # 运行时故障注入：工具结果篡改 / 提示词修改 / 拦截改写
 
-> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../agent_fault_injection/) 负责注入与采集。 独立 FastAPI/Vite 不纳入产品路径。见 [server-client-split.md](server-client-split.md) · [ras-fi-insight-relationship.md](ras-fi-insight-relationship.md)。
-
-
-> 非侵入：不修改 OpenCode / xiaoO 源码，仅经官方插件 / Hooker 改写数据面。  
-> 关联：[架构总览](architecture.md) · [xiaoo 适配](xiaoo-platform-adaptation.md) · [业界调研](agent-semantic-fault-injection-survey.md)
+> 非侵入：不修改 OpenCode / xiaoO 源码，仅经官方插件 / Hooker 改写数据面。
 
 ## 0. 三维模型
 

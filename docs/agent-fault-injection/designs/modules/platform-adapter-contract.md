@@ -1,11 +1,10 @@
 # Platform Adapter 接入契约
 
-> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../agent_fault_injection/) 负责注入与采集。 独立 FastAPI/Vite 不纳入产品路径。见 [server-client-split.md](../server-client-split.md) · [ras-fi-insight-relationship.md](../ras-fi-insight-relationship.md)。
+> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../../agent_fault_injection/) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。
 
 
 > 面向在 `agent-fault-injection` 中新增被测 Agent 平台（如 xiaoO）。  
-> 产品评判走 Insight 服务端 Judge；被测平台只负责注入、执行与轨迹映射（本机 Python Judge 已删除）。  
-> 另见 [../xiaoo-platform-adaptation.md](../xiaoo-platform-adaptation.md)、[server-judge.md](server-judge.md)。
+> 产品评判走 Insight 服务端 Judge；被测平台只负责注入、执行与轨迹映射（本机 Python Judge 已删除）。
 
 ---
 
@@ -85,7 +84,7 @@ OpenCode 适配器 `map_trajectory` 写 `trajectory.jsonl`（FI kinds）；**不
 
 - 产品路径：采集上传后由 Insight `src/lib/fault-injection/judge.ts` 评判（用户 `getActiveConfig`）。
 - 本机 Python Judge / CLI `--judge*` **已删除**；Worker 只跑 inject+collect。
-- 语义：`outcome` × `faultContainmentStatus`（含 `inconclusive`）；**主树 join Insight ⓪ `Session.interactions`**，FI markers / `faultActivated` 为注入侧证据。见 [server-judge.md](server-judge.md)。
+- 语义：`outcome` × `faultContainmentStatus`（含 `inconclusive`）；**主树 join Insight ⓪ `Session.interactions`**，FI markers / `faultActivated` 为注入侧证据。
 
 ---
 
@@ -101,7 +100,7 @@ OpenCode 适配器 `map_trajectory` 写 `trajectory.jsonl`（FI kinds）；**不
 
 ## 7. Insight / Worker 目录委托
 
-平台与故障目录由 Insight BFF（`/api/fault-injection/...`）聚合；本机 Worker 通过 Python `FaultRegistry` / `PlatformAdapterRegistry` 执行。独立 FastAPI/Vite **不**纳入本仓产品路径（见 [server-client-split.md](../server-client-split.md)）。
+平台与故障目录由 Insight BFF（`/api/fault-injection/...`）聚合；本机 Worker 通过 Python `FaultRegistry` / `PlatformAdapterRegistry` 执行。独立 FastAPI/Vite **不**纳入本仓产品路径。
 
 ---
 
@@ -119,6 +118,6 @@ OpenCode 适配器 `map_trajectory` 写 `trajectory.jsonl`（FI kinds）；**不
 
 ## 9. 扩展约定（防债）
 
-- 新平台：实现 [`platform-adapter-spi.md`](platform-adapter-spi.md) SPI；**不要**复制 OpenCode/xiaoO 整段 `execute`。
+- 新平台：实现 `platform-adapter-spi.md` 所述 SPI；**不要**复制 OpenCode/xiaoO 整段 `execute`。
 - **不做**完整 Ports 六边形 / L2 Method 类 Facade；能力面以 `capability_api.yaml` + CI 为准。
-- OpenCode runtime 改写：见 [opencode-rewrite-spike.md](../opencode-rewrite-spike.md)。
+- OpenCode runtime 改写见 `opencode-rewrite-spike.md`。

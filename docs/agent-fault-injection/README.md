@@ -11,45 +11,62 @@
 | 部署 | 服务端（可远程） | 用户本机 · 宿主同进程 | 用户本机 · Worker/CLI |
 | 不含 | — | 前端 / schema / 契约设计 | 前端 / FaultInjection* 表 / Judge |
 
-展开：[designs/ras-fi-insight-relationship.md](designs/ras-fi-insight-relationship.md) §0–§1。
+展开：[designs/modules/ras-fi-insight-relationship.md](designs/modules/ras-fi-insight-relationship.md) §0–§1。
 
 ## 先读什么
 
 | 目的 | 打开 |
 |------|------|
-| **Insight · RAS · FI 关系说明** | [designs/ras-fi-insight-relationship.md](designs/ras-fi-insight-relationship.md) · [图文](designs/ras-fi-insight-relationship.html) · [三产品逻辑图](designs/agent-insight-ras-fi-logic.html) |
-| **服务端/客户端分离（FI）** | [designs/server-client-split.md](designs/server-client-split.md) · [phase2 SDD](../design/fi-server-client-split/phase2-requirements-design.md) |
+| **Insight · RAS · FI 关系说明** | [designs/modules/ras-fi-insight-relationship.md](designs/modules/ras-fi-insight-relationship.md) |
+| **服务端/客户端分离（FI）** | [designs/features/server-client-split.md](designs/features/server-client-split.md) · [phase2 SDD](../design/fi-server-client-split/phase2-requirements-design.md) |
 | **本机 curl 安装过程** | [guides/local-install-process.md](guides/local-install-process.md) |
-| FI 模块架构摘要 | [designs/architecture.md](designs/architecture.md) |
-| 内置故障覆盖矩阵 | [designs/fault-catalog.md](designs/fault-catalog.md) |
+| FI 模块架构摘要 | [designs/modules/architecture.md](designs/modules/architecture.md) |
+| 内置故障覆盖矩阵 | [designs/modules/fault-catalog.md](designs/modules/fault-catalog.md) |
 | **Lane A：新增故障模式** | [guides/lane-a-add-fault.md](guides/lane-a-add-fault.md) · [插件化设计](designs/features/fault-mode-plugins.md) |
-| 运行时注入（prompt / tool_result / intercept） | [designs/runtime-middleware-fault-injection.md](designs/runtime-middleware-fault-injection.md) |
+| 运行时注入（prompt / tool_result / intercept） | [designs/features/runtime-middleware-fault-injection.md](designs/features/runtime-middleware-fault-injection.md) |
 | Task / Worker API（Insight） | [designs/modules/task-orchestration.md](designs/modules/task-orchestration.md) |
 | 最短启用 | [guides/getting-started.md](guides/getting-started.md) |
-| **本机安装过程**（curl setup 逐步：目录 / Worker / 数据源） | [guides/local-install-process.md](guides/local-install-process.md) |
 | **用户指南（产品路径）** | [user-guide/observability/fault-injection.md](../user-guide/observability/fault-injection.md) |
 
-## 特性状态
+---
+
+## designs/ — 设计
+
+### 模块
 
 | 文档 | 内容 | 状态 |
 |------|------|------|
-| [ras-fi-insight-relationship.md](designs/ras-fi-insight-relationship.md) | 三者关系设计说明 | ✅ |
-| [server-client-split.md](designs/server-client-split.md) | 远程任务 + 本机 Worker | ✅ 已落地（2026-08-05 浏览器 E2E） |
-| [architecture.md](designs/architecture.md) | FI 模块边界摘要 | ✅ |
-| [fault-catalog.md](designs/fault-catalog.md) | 内置故障覆盖矩阵 | ✅ |
-| [runtime-middleware-fault-injection.md](designs/runtime-middleware-fault-injection.md) | 文件/运行时注入与证据边界 | ✅ |
-| [xiaoo-platform-adaptation.md](designs/xiaoo-platform-adaptation.md) | xiaoO 被测平台适配 | ✅ |
-| [insight-trace-compat.md](designs/insight-trace-compat.md) | interactions 契约 | ✅ |
-| [agent-semantic-fault-injection-survey.md](designs/agent-semantic-fault-injection-survey.md) | 语义层 FI 调研附录 | ✅ |
+| [ras-fi-insight-relationship.md](designs/modules/ras-fi-insight-relationship.md) | 三者关系设计说明 | ✅ |
+| [architecture.md](designs/modules/architecture.md) | FI 模块边界摘要 | ✅ |
+| [fault-catalog.md](designs/modules/fault-catalog.md) | 内置故障覆盖矩阵 | ✅ |
+| [xiaoo-platform-adaptation.md](designs/modules/xiaoo-platform-adaptation.md) | xiaoO 被测平台适配 | ✅ |
+| [insight-trace-compat.md](designs/modules/insight-trace-compat.md) | interactions 契约 | ✅ |
 | [task-orchestration.md](designs/modules/task-orchestration.md) | Insight FI API | ✅ |
 | [fault-inject.md](designs/modules/fault-inject.md) | 五类 injection_method + 扩展车道 | ✅ |
+| [platform-adapter-contract.md](designs/modules/platform-adapter-contract.md) | Adapter 接入契约 | ✅ |
+| [platform-adapter-spi.md](designs/modules/platform-adapter-spi.md) | Template Method SPI 对照 | ✅ |
+| [opencode-rewrite-spike.md](designs/modules/opencode-rewrite-spike.md) | OpenCode 消镜像 spike | ✅ |
+| [server-judge.md](designs/modules/server-judge.md) | Insight Judge（含 inconclusive） | ✅ |
+| [insight-bridge.md](designs/modules/insight-bridge.md) | Session 采集（已去 RAS bridge） | ✅ |
+
+### 特性
+
+| 文档 | 内容 | 状态 |
+|------|------|------|
+| [server-client-split.md](designs/features/server-client-split.md) | 远程任务 + 本机 Worker | ✅ 已落地（2026-08-05 浏览器 E2E） |
+| [runtime-middleware-fault-injection.md](designs/features/runtime-middleware-fault-injection.md) | 文件/运行时注入与证据边界 | ✅ |
+| [agent-semantic-fault-injection-survey.md](designs/features/agent-semantic-fault-injection-survey.md) | 语义层 FI 调研附录 | ✅ |
 | [fault-mode-plugins.md](designs/features/fault-mode-plugins.md) | 故障模式自包含插件化（metadata + capability） | ✅ 已落地（2026-08-10） |
 | [memory-file-loss.md](designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒 FI 方案（FI-P0 文件层已落地；检测器属 RAS 规划） | 🟡 FI-P0 已落地 |
 | [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（Skill S1–S3 + middleware S4 已落地；S5 压缩失真未实施） | ✅ S1–S4 已落地 |
 | [domain-cognitive-bias.md](designs/features/domain-cognitive-bias.md) | 领域认知偏差六类场景（FI 剧本 Phase1；检测器属 RAS 规划） | ⬜ 未实现（规划中） |
+
+---
+
+## guides/ — 使用
+
+| 文档 | 内容 | 状态 |
+|------|------|------|
+| [getting-started.md](guides/getting-started.md) | 最短启用 | ✅ |
+| [local-install-process.md](guides/local-install-process.md) | curl setup 逐步：目录 / Worker / 数据源 | ✅ |
 | [lane-a-add-fault.md](guides/lane-a-add-fault.md) | Lane A 新增故障模式操作指南 | ✅ |
-| [platform-adapter-contract.md](designs/modules/platform-adapter-contract.md) | Adapter 接入契约 | ✅ |
-| [platform-adapter-spi.md](designs/modules/platform-adapter-spi.md) | Template Method SPI 对照 | ✅ |
-| [opencode-rewrite-spike.md](designs/opencode-rewrite-spike.md) | OpenCode 消镜像 spike | ✅ |
-| [server-judge.md](designs/modules/server-judge.md) | Insight Judge（含 inconclusive） | ✅ |
-| [insight-bridge.md](designs/modules/insight-bridge.md) | Session 采集（已去 RAS bridge） | ✅ |

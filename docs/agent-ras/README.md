@@ -7,7 +7,7 @@
 | 目的 | 打开 |
 |------|------|
 | 理解四层同进程与主流程 | [designs/architecture.md](designs/architecture.md) |
-| **与 Insight / FI 的边界** | [../agent-fault-injection/designs/ras-fi-insight-relationship.md](../agent-fault-injection/designs/ras-fi-insight-relationship.md) |
+| **与 Insight / FI 的边界** | [../agent-fault-injection/designs/modules/ras-fi-insight-relationship.md](../agent-fault-injection/designs/modules/ras-fi-insight-relationship.md) |
 | **curl / install-ras 本机过程** | [guides/local-install-process.md](guides/local-install-process.md) |
 | 改 Monitor / 检测 / 恢复 / 适配代码 | [designs/modules/](designs/modules/) 对应篇 |
 | 装上并跑起来 | [guides/getting-started.md](guides/getting-started.md) |
@@ -70,5 +70,5 @@
 |------|------|
 | Insight「AgentRAS 可靠性」UI | [docs/design/reliability-standalone-ui](../design/reliability-standalone-ui/) |
 | RAS 旁路 ingest API 契约 | [developer-guide/09-otlp-attribute-contract.md](../developer-guide/09-otlp-attribute-contract.md) |
-| **故障注入 / 与 Insight·RAS 关系** | [docs/agent-fault-injection/](../agent-fault-injection/) · [关系设计说明](../agent-fault-injection/designs/ras-fi-insight-relationship.md) |
+| **故障注入 / 与 Insight·RAS 关系** | [docs/agent-fault-injection/](../agent-fault-injection/) · [关系设计说明](../agent-fault-injection/designs/modules/ras-fi-insight-relationship.md) |
 | 源码与安装 | [`agent_ras/README.md`](../../agent_ras/README.md) |

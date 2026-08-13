@@ -1,11 +1,9 @@
 # Agent 语义层故障注入技术调研
 
-> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../agent_fault_injection/) 负责注入与采集。 独立 FastAPI/Vite 不纳入产品路径。见 [server-client-split.md](server-client-split.md) · [ras-fi-insight-relationship.md](ras-fi-insight-relationship.md)。
+> **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../../agent_fault_injection/) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。
 
 
 > 聚焦 AutoTransform/AutoInject（ICML 2025）与 MAS-FIRE（2026）的故障注入设计深度拆解
->
-> 关联文档: [文档索引](./README.md) · [过度思考 / analysis-paralysis](../../agent-ras/designs/features/analysis-paralysis.md) · [故障覆盖矩阵](fault-catalog.md) · [注入→评判](modules/server-judge.md)
 
 ---
 
@@ -600,9 +598,9 @@ flowchart TD
 
 | 主题 | 本仓 Skill | 文档 |
 |------|------------|------|
-| 过度思考 / 分析瘫痪 | `analysis-paralysis`（强制长文摇摆输出 ×3） | [fault-catalog.md](fault-catalog.md)、[analysis-paralysis](../../agent-ras/designs/features/analysis-paralysis.md) |
-| 规划逻辑错误 Planning Logic Error | `planning-logic-error` | [planning-error](../../agent-ras/designs/features/planning-error.md) |
-| 端到端评判 | 隔离 LLM Judge（Skill 规范 ↔ 轨迹） | [server-judge.md](modules/server-judge.md) |
+| 过度思考 / 分析瘫痪 | `analysis-paralysis`（强制长文摇摆输出 ×3） | `fault-catalog.md`、`analysis-paralysis.md` |
+| 规划逻辑错误 Planning Logic Error | `planning-logic-error` | `planning-error.md` |
+| 端到端评判 | 隔离 LLM Judge（Skill 规范 ↔ 轨迹） | `server-judge.md` |
 
 下文 5.1–5.3 的 Prompt/Rewriting/O-L-S 仍适用于 **扩展注入层与检测侧指标**，勿与「当前已实现的 Skill 注入」混为一谈。
 

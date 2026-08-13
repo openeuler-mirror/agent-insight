@@ -1,6 +1,6 @@
 # 入门
 
-> **拓扑**：远程 Insight 负责任务/Judge/展示；本机 **FI Worker** 认领并执行注入。设计见 [server-client-split.md](../designs/server-client-split.md)。
+> **拓扑**：远程 Insight 负责任务/Judge/展示；本机 **FI Worker** 认领并执行注入。
 
 1. 安装 FI + Worker（**以页面生成的命令为准**）：
    - 打开 `/agent-ras/fault-injection/tasks/new`，在无 Worker 提示中复制 setup 命令并在本机执行；或：

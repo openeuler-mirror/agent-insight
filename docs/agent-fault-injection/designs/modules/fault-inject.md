@@ -10,9 +10,9 @@
 
 **显式 method 优先**：`fault.json` 写了 `injection_method` 则以其为准；**未写**时才按 plan 推断。混合故障（Skill 文案 + runtime op）应标 **`skill_inject`**，runtime 写在 `injection.runtime[]`（可带 `when_submode`）。展示用 method 标签来自 `capability_api.yaml`，与真实 ops 可能并存——以 `fault.json` 为准。
 
-分层：`fault_inject/injection/` 只做副作用（返回结构化结果 / 平台事件）；`fault_inject/catalog/` 的 `fault.json` 定义 plan；`apply_plan` / `runtime_env` 为薄胶水。展示元数据在 `SKILL.md` 的 `metadata`；method 中文名在 `capability_api.yaml`。见 [fault-mode-plugins.md](../features/fault-mode-plugins.md)。
+分层：`fault_inject/injection/` 只做副作用（返回结构化结果 / 平台事件）；`fault_inject/catalog/` 的 `fault.json` 定义 plan；`apply_plan` / `runtime_env` 为薄胶水。展示元数据在 `SKILL.md` 的 `metadata`；method 中文名在 `capability_api.yaml`。
 
-`injectionEvidence` **已从 collect 协议移除**；服务端 Judge **只看轨迹 / 终答**。详见 [runtime-middleware-fault-injection.md](../runtime-middleware-fault-injection.md)。
+`injectionEvidence` **已从 collect 协议移除**；服务端 Judge **只看轨迹 / 终答**。
 
 ## 扩展车道（防债）
 
@@ -20,7 +20,7 @@
 
 | 车道 | 做什么 | 允许改动 |
 |------|--------|----------|
-| **A 加故障模式** | 日常产品扩展 | 仅 `fault_inject/skills/<id>/`（`SKILL.md` 含 `metadata` / 可选 `fault.json` / assets）。只引用能力清单内已有 method/op；**禁止**改 `rewrite_engine` / `file_ops` / 平台插件业务逻辑。**操作指南 →** [guides/lane-a-add-fault.md](../../guides/lane-a-add-fault.md) |
+| **A 加故障模式** | 日常产品扩展 | 仅 `fault_inject/skills/<id>/`（`SKILL.md` 含 `metadata` / 可选 `fault.json` / assets）。只引用能力清单内已有 method/op；**禁止**改 `rewrite_engine` / `file_ops` / 平台插件业务逻辑。 |
 | **B 演进能力面** | 基础设施 | 更新 `capability_api.yaml`（含 method `label_zh`）+ L3 实现 + 对拍测试；再让故障模式调用 |
 | **C 加平台** | 稀缺 | 实现 Adapter SPI；禁止复制 execute / rewrite |
 

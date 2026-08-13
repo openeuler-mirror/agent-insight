@@ -1,14 +1,12 @@
 # Lane A：新增故障模式（指导）
 
-日常扩展故障模式走 **Lane A**：只加配方，不改注入引擎。设计边界见 [fault-inject.md](../designs/modules/fault-inject.md)「扩展车道」。
+日常扩展故障模式走 **Lane A**：只加配方，不改注入引擎。
 
 | 允许改动 | 禁止改动 |
 |----------|----------|
 | `agent_fault_injection/fault_inject/skills/<id>/`（`SKILL.md` 含 `metadata` 展示键、可选 `fault.json` / `assets/`） | `rewrite_engine` / `file_ops` / 平台 plugin·hooker |
-| 同步 [fault-catalog.md](../designs/fault-catalog.md) 覆盖矩阵 | 在 [`capability_api.yaml`](../../../agent_fault_injection/fault_inject/catalog/capability_api.yaml) 增加新 op/method（那是 Lane B） |
+| 同步 `fault-catalog.md` 覆盖矩阵 | 在 [`capability_api.yaml`](../../../agent_fault_injection/fault_inject/catalog/capability_api.yaml) 增加新 op/method（那是 Lane B） |
 | | 在 Insight UI/API 硬编码故障名单 |
-
-插件化设计见 [fault-mode-plugins.md](../designs/features/fault-mode-plugins.md)。
 
 需要清单外的注入原语 → 停，改走 **Lane B**。
 
@@ -201,7 +199,7 @@ python -m agent_fault_injection.cli fault add \
 
 ## 5. 同步覆盖矩阵
 
-在 [fault-catalog.md](../designs/fault-catalog.md) 表格加一行：目录名、skill_name、子模式、主题。
+在 `fault-catalog.md` 表格加一行：目录名、skill_name、子模式、主题。
 
 ---
 

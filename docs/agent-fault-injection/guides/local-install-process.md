@@ -3,7 +3,6 @@
 > **读者**：需要理解「执行 FI setup curl 后，用户机器上发生了什么」的使用者与排障者。  
 > **范围**：本机 **FI Client / Worker** 的安装、落盘与常驻进程；不含故障 Skill 内容与服务端 Judge 算法。  
 > **真源**：[`src/app/api/fault-injection/setup/route.ts`](../../../src/app/api/fault-injection/setup/route.ts)、[`scripts/install-fault-injection.js`](../../../scripts/install-fault-injection.js)、[`scripts/fi-worker.js`](../../../scripts/fi-worker.js)。  
-> **关系总览**：[Insight · RAS · FI](../designs/ras-fi-insight-relationship.md) · [server-client-split](../designs/server-client-split.md)。  
 > **产品操作**：[user-guide/observability/fault-injection.md](../../user-guide/observability/fault-injection.md)。
 
 ---
@@ -331,5 +330,3 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 | [`scripts/fi-worker.js`](../../../scripts/fi-worker.js) | 心跳 / claim / CLI / collect |
 | [`bin/cli.js`](../../../bin/cli.js) | `install-fault-injection` / `fi-worker` 子命令 |
 | [getting-started.md](getting-started.md) | 最短启用 |
-| [task-orchestration.md](../designs/modules/task-orchestration.md) | Insight FI API |
-| [server-client-split.md](../designs/server-client-split.md) | 拓扑与废弃路径 |

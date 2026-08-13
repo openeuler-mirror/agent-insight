@@ -65,4 +65,4 @@ injection_methods:
 
 ## Lane A
 
-只改 `skills/<id>/`（+ 可选覆盖矩阵文档）。详见 [lane-a-add-fault.md](../../guides/lane-a-add-fault.md)。
+只改 `skills/<id>/`（+ 可选覆盖矩阵文档）。操作指南见 `lane-a-add-fault.md`。

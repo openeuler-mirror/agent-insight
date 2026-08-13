@@ -3,7 +3,7 @@
 > **读者**：需要理解「执行安装命令后，用户机器上发生了什么」的使用者与排障者。  
 > **范围**：环内 RAS（`agent_ras`）的**安装面**与本机落盘；不含检测器算法细节。  
 > **真源**：[`scripts/install-ras.js`](../../../scripts/install-ras.js)、[`src/lib/ingest/setup-package.ts`](../../../src/lib/ingest/setup-package.ts)、看板 [`/api/ingest/setup`](../../../src/app/api/ingest/setup/route.ts)。  
-> **关系总览**：[Insight · RAS · FI](../../agent-fault-injection/designs/ras-fi-insight-relationship.md)。
+> **关系总览**：[Insight · RAS · FI](../../agent-fault-injection/designs/modules/ras-fi-insight-relationship.md)。
 
 ---
 

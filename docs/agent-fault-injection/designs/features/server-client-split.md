@@ -2,10 +2,9 @@
 
 > **状态**：✅ 已落地（2026-08-05）— 浏览器 E2E：无 Worker 提示 / Worker inventory / claim→collect-result
 
-> **完整 SDD**：[phase2-requirements-design.md](../../design/fi-server-client-split/phase2-requirements-design.md)  
-> **开发计划**：[phase3-development-plan.md](../../design/fi-server-client-split/phase3-development-plan.md)  
-> **需求输入**：[phase1-requirements-analysis.md](../../design/fi-server-client-split/phase1-requirements-analysis.md)  
-> **读者总览**：[ras-fi-insight-relationship.md](./ras-fi-insight-relationship.md)（Insight · RAS · FI 关系说明）
+> **完整 SDD**：[phase2-requirements-design.md](../../../design/fi-server-client-split/phase2-requirements-design.md)  
+> **开发计划**：[phase3-development-plan.md](../../../design/fi-server-client-split/phase3-development-plan.md)  
+> **需求输入**：[phase1-requirements-analysis.md](../../../design/fi-server-client-split/phase1-requirements-analysis.md)
 
 ## 一句话
 
@@ -51,7 +50,6 @@ npx agent-insight install-fault-injection --start
 npx agent-insight install-fault-injection --check
 ```
 
-本机逐步过程（图文）：[guides/local-install-process.md](../guides/local-install-process.md)。  
 细节与接口表见完整 SDD。
 
-**评审**：初评 conditionally passed（71）→ 修订后四维约 83，见 [design-dimensions-review.md](../../design/fi-server-client-split/review/design-dimensions-review.md)。
+**评审**：初评 conditionally passed（71）→ 修订后四维约 83，见 [design-dimensions-review.md](../../../design/fi-server-client-split/review/design-dimensions-review.md)。

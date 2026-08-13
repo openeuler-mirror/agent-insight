@@ -19,8 +19,6 @@
 
 **前端与 Prisma（含 FaultInjection* / RasAnomalyEvent）一律属 Insight**，不算进 agent-fi / agent-ras 模块。
 
-展开见关系说明：[ras-fi-insight-relationship.md](./ras-fi-insight-relationship.md)。分离拓扑：[server-client-split.md](./server-client-split.md)。
-
 ## 边界
 
 | 做 | 不做 |
@@ -65,8 +63,6 @@ agent_fault_injection/
 ## 注入方式（catalog key）
 
 `skill_inject` | `file_tamper` | `prompt_modify` | `tool_result_tamper` | `intercept_rewrite`
-
-详见 [fault-inject.md](modules/fault-inject.md) · [fault-catalog.md](fault-catalog.md) · [runtime-middleware-fault-injection.md](runtime-middleware-fault-injection.md)。
 
 ## 注入能力分层（三维）
 
