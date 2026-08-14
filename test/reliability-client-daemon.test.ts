@@ -36,6 +36,10 @@ const client = require_('../scripts/reliability-client.js') as {
   writeRasRuntimeConfig: (snapshot: Record<string, unknown>) => Promise<void>
 }
 const installer = require_('../scripts/install-ras-client.js') as {
+  CLIENT_SCRIPT: string
+  RUNTIME_DIR: string
+  installRuntime?: () => void
+  writeSystemdUnit?: () => string
   parseArgs: (argv: string[]) => Record<string, unknown>
   SERVICE_NAME: string
   LAUNCHD_LABEL: string
@@ -241,4 +245,34 @@ test('client writes the config.json that RAS actually reads', async () => {
     else process.env.AGENT_INSIGHT_RAS_HOME = prev
     fs.rmSync(rasHome, { recursive: true, force: true })
   }
+})
+
+test('service points at a stable runtime path, never a temp extraction dir', () => {
+  // 安装器可能从服务端制品解压到 /tmp 后执行，装完临时目录即被删除。
+  // 若 systemd/launchd 指向那里，服务会以 MODULE_NOT_FOUND 反复崩溃。
+  const unit = installer.writeSystemdUnit
+    ? String(installer.writeSystemdUnit.toString())
+    : ''
+  assert.ok(
+    !/__dirname/.test(unit) || /RUNTIME_DIR|CLIENT_SCRIPT/.test(unit),
+    'unit 必须引用固化路径',
+  )
+  // CLIENT_SCRIPT 应位于 ~/.agent-insight/client/runtime 下，而非包目录或临时目录。
+  const script = installer.CLIENT_SCRIPT || ''
+  assert.match(
+    script,
+    /\.agent-insight[/\\]client[/\\]runtime[/\\]reliability-client\.js$/,
+    `服务入口应在稳定目录，实际: ${script}`,
+  )
+  assert.ok(!/\/(tmp|T)\//.test(script), '服务入口不得位于临时目录')
+})
+
+test('runtime bundle carries config_sync.js next to the client script', () => {
+  // 客户端被固化到 runtime/ 后，__dirname/../agent_ras 不再存在。
+  // 若 config_sync.js 没跟着走，写 RAS 运行时配置会静默跳过 ——
+  // 页面显示「已写入」，RAS 却永远读到旧值。
+  const runtimeDir = installer.RUNTIME_DIR || ''
+  assert.match(runtimeDir, /\.agent-insight[/\\]client[/\\]runtime$/)
+  const src = installer.installRuntime ? String(installer.installRuntime.toString()) : ''
+  assert.match(src, /config_sync\.js/, 'installRuntime 必须固化 config_sync.js')
 })

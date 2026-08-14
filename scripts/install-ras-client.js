@@ -18,7 +18,52 @@ const { spawnSync } = require('child_process')
 const CLIENT_HOME = path.join(os.homedir(), '.agent-insight', 'client')
 const CONFIG_PATH = path.join(CLIENT_HOME, 'config.json')
 const PACKAGE_ROOT = path.join(__dirname, '..')
-const CLIENT_SCRIPT = path.join(PACKAGE_ROOT, 'scripts', 'reliability-client.js')
+/**
+ * 常驻进程的运行位置。
+ *
+ * **不能**直接用 __dirname：安装器可能是从服务端制品解压到 /tmp 后执行的，
+ * 装完临时目录就被删，systemd/launchd 会指向一个不存在的文件而反复崩溃。
+ * 因此把运行时拷到这个稳定目录，服务只引用它。
+ */
+const RUNTIME_DIR = path.join(CLIENT_HOME, 'runtime')
+const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.js')
+
+/** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
+const RUNTIME_FILES = ['reliability-client.js', 'ws-client.js']
+
+function installRuntime() {
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true })
+  for (const name of RUNTIME_FILES) {
+    const src = path.join(PACKAGE_ROOT, 'scripts', name)
+    if (!fs.existsSync(src)) {
+      fail(`缺少运行时文件: ${src}`, '制品不完整；请重新执行安装命令。')
+    }
+    fs.copyFileSync(src, path.join(RUNTIME_DIR, name))
+  }
+  // 配置合并要用 OpenCode 插件自己的 config_sync.js（复用它保证两条写入路径
+  // 结构一致）。运行时被搬到 RUNTIME_DIR 后相对路径失效，故与主脚本放在一起。
+  const syncSrc = path.join(
+    PACKAGE_ROOT,
+    'agent_ras',
+    'platform_adapter',
+    'opencode',
+    'config_sync.js',
+  )
+  if (fs.existsSync(syncSrc)) {
+    fs.copyFileSync(syncSrc, path.join(RUNTIME_DIR, 'config_sync.js'))
+  } else {
+    console.warn('[install-ras-client] ⚠ 未找到 config_sync.js，RAS 运行时配置将无法写入')
+  }
+
+  // FI 采集要用到 agent_fault_injection 源码；解压目录会被删，故一并固化。
+  const fiSrc = path.join(PACKAGE_ROOT, 'agent_fault_injection')
+  const fiDest = path.join(CLIENT_HOME, 'agent_fault_injection')
+  if (fs.existsSync(fiSrc) && path.resolve(fiSrc) !== path.resolve(fiDest)) {
+    fs.rmSync(fiDest, { recursive: true, force: true })
+    fs.cpSync(fiSrc, fiDest, { recursive: true })
+  }
+  log(`✓ 运行时已部署到 ${RUNTIME_DIR}`)
+}
 
 const SERVICE_NAME = 'agent-insight-client'
 const LAUNCHD_LABEL = 'ai.agent-insight.client'
@@ -146,6 +191,8 @@ function installFaultInjection() {
     env: { ...process.env },
   })
   if (r.status === 0) {
+    // 同 venv 分支：探测目录必须是固化副本，不能是临时解压目录。
+    patchClientConfig({ fiPackageRoot: path.join(CLIENT_HOME, 'agent_fault_injection') })
     log('✓ 故障注入组件已安装（由常驻客户端统一领取任务，不另起 fi-worker 进程）')
     return true
   }
@@ -182,7 +229,11 @@ function installFaultInjectionViaVenv() {
   if (verify.status !== 0) return false
 
   // 客户端后续 spawn 采集器必须用同一个解释器，否则又会 import 不到。
-  patchClientConfig({ fiPython: venvPython })
+  // fiPackageRoot 指向固化副本而非安装源：后者可能是稍后被删的临时目录。
+  patchClientConfig({
+    fiPython: venvPython,
+    fiPackageRoot: path.join(CLIENT_HOME, 'agent_fault_injection'),
+  })
   log(`✓ 故障注入组件已安装到 venv: ${venv}`)
   return true
 }
@@ -397,6 +448,9 @@ async function main() {
     log('已存在注册信息，跳过注册')
   }
 
+  // 必须先固化运行时：安装器可能跑在稍后被删除的临时解压目录里。
+  installRuntime()
+
   const fiOk = args.withFi ? installFaultInjection() : false
   if (!args.withFi) log('已按 --no-fi 跳过故障注入组件')
 
@@ -413,6 +467,9 @@ async function main() {
 }
 
 module.exports = {
+  CLIENT_SCRIPT,
+  installRuntime,
+  RUNTIME_DIR,
   writeSystemdUnit,
   writeLaunchdPlist,
   parseArgs,
