@@ -7,33 +7,52 @@ function dedupeKey(event: OtelTraceEvent): string {
 }
 
 function isActrailEvent(event: OtelTraceEvent): boolean {
-  return event.serviceName === "actrail" ||
-    event.attributes?.["actrail.action.kind"] !== undefined;
+  return event.serviceName === 'actrail' ||
+    event.attributes?.['actrail.action.kind'] !== undefined;
 }
 
-function dedupeEvents(events: OtelTraceEvent[]): OtelTraceEvent[] {
-  if (!events.some(isActrailEvent)) {
-    const seen = new Set<string>();
-    return events.filter((event) => {
-      const key = dedupeKey(event);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
+function snapshotEndMs(event: OtelTraceEvent): number {
+  return (event.startTimeMs || 0) + Math.max(0, event.latencyMs || 0);
+}
 
-  const latestByKey = new Map<string, OtelTraceEvent>();
-  for (const event of events) {
-    latestByKey.set(dedupeKey(event), event);
-  }
-  return [...latestByKey.values()];
+function isTerminalSnapshot(event: OtelTraceEvent): boolean {
+  const outcome = String(event.attributes?.['tool.outcome'] || '').toLowerCase();
+  return outcome === 'success' || outcome === 'completed' || outcome === 'error' || outcome === 'failed';
+}
+
+function shouldReplaceSnapshot(existing: OtelTraceEvent, candidate: OtelTraceEvent): boolean {
+  const existingEnd = snapshotEndMs(existing);
+  const candidateEnd = snapshotEndMs(candidate);
+  if (candidateEnd !== existingEnd) return candidateEnd > existingEnd;
+
+  const existingTerminal = isTerminalSnapshot(existing);
+  const candidateTerminal = isTerminalSnapshot(candidate);
+  if (candidateTerminal !== existingTerminal) return candidateTerminal;
+
+  const existingOutput = String(existing.attributes?.['output.value'] ?? existing.attributes?.['tool.result'] ?? '');
+  const candidateOutput = String(candidate.attributes?.['output.value'] ?? candidate.attributes?.['tool.result'] ?? '');
+  if (Boolean(candidateOutput) !== Boolean(existingOutput)) return Boolean(candidateOutput);
+
+  return Date.parse(candidate.receivedAt || '') >= Date.parse(existing.receivedAt || '');
 }
 
 export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEvent[]) {
-  const ordered = dedupeEvents(events.filter((event) => event.sessionId === sessionId))
-    .sort((a, b) => (a.startTimeMs || 0) - (b.startTimeMs || 0));
-  if (!ordered.length) return null;
-  return getOtelTraceAdapter(ordered).aggregate(sessionId, ordered);
+  const selected = new Map<string, OtelTraceEvent>();
+  for (const event of events) {
+    if (event.sessionId !== sessionId) continue;
+    const key = dedupeKey(event);
+    const existing = selected.get(key);
+    // AcTrail emits revised events for a span. Other span-less legacy events
+    // retain their established first-event fallback behavior.
+    if (!event.spanId && existing && !isActrailEvent(event)) continue;
+    if (!existing || shouldReplaceSnapshot(existing, event)) selected.set(key, event);
+  }
+  const retained = Array.from(selected.values());
+  const sorted = retained.sort((a, b) => (a.startTimeMs || 0) - (b.startTimeMs || 0));
+  if (!sorted.length) return null;
+  const adapter = getOtelTraceAdapter(sorted);
+  // Keep a foreign framework's raw spool for the server that owns its adapter.
+  return adapter?.aggregate(sessionId, sorted) || null;
 }
 
 export function aggregateOtelTraceSession(sessionId: string, spoolDir?: string): OtelTraceAggregationResult {

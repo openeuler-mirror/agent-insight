@@ -86,6 +86,35 @@ test("OTel traces: aggregates trace spool events into one execution record", () 
   assert.equal(record.tool_call_count, 1)
 })
 
+test("OTel traces: completion snapshot replaces a same-span running snapshot", () => {
+  const events = [
+    traceEvent({
+      spanId: "span-llm",
+      name: "chat",
+      latencyMs: 0,
+      startTimeMs: 1500,
+      attributes: { "gen_ai.prompt": "hello", "tool.outcome": "running" },
+    }),
+    traceEvent({
+      spanId: "span-llm",
+      name: "chat",
+      latencyMs: 1500,
+      startTimeMs: 1500,
+      attributes: {
+        "gen_ai.prompt": "hello",
+        "gen_ai.completion": "done",
+        "tool.outcome": "success",
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents("session-a", events)
+  assert.ok(record)
+  assert.equal(record.final_result, "done")
+  assert.equal(record.latency, 1500)
+  assert.equal(record.interactions?.length, 1)
+})
+
 test("OTel traces: aggregates Langfuse LangGraph spans into skill, tool, and subagent interactions", () => {
   const sessionId = "server-troubleshooter-langfuse-capture"
   const events: OtelTraceEvent[] = [
@@ -1262,7 +1291,7 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
   // 顺序即优先级：专用适配器都排在 generic 兜底之前。新增适配器要显式登记在这里。
   assert.deepEqual(
     listOtelTraceAdapters().map(adapter => adapter.id),
-    ["actrail", "langfuse-langgraph", "hermes", "openclaw", "llamaindex", "qoder", "generic"],
+    ["actrail", "langfuse-langgraph", "hermes", "openclaw", "llamaindex", "qoder", "pi-agent", "generic"],
   );
   assert.equal(getOtelTraceAdapter([hermesEvent]).id, "hermes");
   assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");
@@ -1331,6 +1360,27 @@ test("OTel traces: LlamaIndex adapter maps required fields and system prompts", 
   assert.equal(record.tool_call_error_count, 0)
   assert.equal(record.interactions?.find((item: any) => item.role === "system")?.content, "Use evidence only.")
   assert.equal(record.interactions?.find((item: any) => item.role === "assistant")?.provider, "deepseek")
+});
+
+test("OTel trace adapter registry leaves a foreign Codex trace for its owning server", () => {
+  const foreignEvent = traceEvent({
+    serviceName: "codex",
+    attributes: { "agent.insight.framework": "codex" },
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
+  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+});
+
+test("OTel trace adapter registry leaves a top-level foreign Codex spool event untouched", () => {
+  const foreignEvent = traceEvent({
+    sessionId: "foreign-codex-canonical",
+    framework: "codex",
+    attributes: {},
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
+  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
 });
 
 test("OTel traces: Hermes adapter preserves subagent ownership and builds a child tree", () => {

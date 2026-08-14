@@ -68,6 +68,23 @@ Qoder CLI、Desktop、JetBrains 通过 `scripts/qoder_setup.mjs` 共享 session�
 
 OTel spool 新写入按 day + session 分片：ClaudeCode logs 使用 `otel_data/claude/YYYY-MM-DD/sessions/<safe-session>/logs.jsonl`，CodeAgent logs 使用 `otel_data/codeagent/YYYY-MM-DD/sessions/<safe-session>/logs.jsonl`，Hermes/通用 traces 使用 `otel_data/traces/YYYY-MM-DD/sessions/<safe-session>/traces.jsonl`。Consumer 递归发现 JSONL shard，并继续兼容旧的 `YYYY-MM-DD/logs.jsonl` / `YYYY-MM-DD/traces.jsonl` 日文件。
 
+Pi Agent 是通用 traces 之外的第一方专用路径：Extension 将事件写入
+`~/.agent-insight/otel_data/pi-agent/<api-key-hash>/YYYY-MM-DD/events.jsonl`，独立 uploader
+再通过同一 OTLP/HTTP traces endpoint 发送。服务端 `otel/adapters/pi-agent.ts` 按
+`agent.insight.kind` 恢复 Agent、SubAgent、Skill、LLM、Tool 和 MCP，随后转交统一
+`buildAgentCallTree` 与 `deriveSubagentExecutions`；同一 `spanId` 的 running/completion
+快照在共享聚合器中按结束边界收敛为较新的完成快照。Pi Skill 使用一等 interaction 语义，
+保留加载内容作为 Skill Output，不被投影为额外 LLM Turn；Pi 的上传失败不会阻塞 Hook 事件路径。
+
+Codex 的 `default`、`Memory Agent` 等仍是委派角色，根/子 `Execution.agentName`、
+`observedAgents` 和 `RegisteredAgent` 归一为 `codex`（界面展示 Codex）。Pi 的语义不同：
+它的 `subagent` 扩展按 `agents/*.md` profile 启动独立 Pi 子进程，因此 `planner`、`reviewer`、
+`scout`、`worker` 或项目自定义 profile 是子 Execution 的实际 `agentName`，并以
+`RegisteredAgent.agentType=subagent` 登记；`pi-agent` 只用于框架和无 profile 的根 CLI。
+interaction 的 `subagent_name` 继续承载父子匹配，且与实际 profile 相同时不得重复登记。
+存储层不再对 Pi 做跨历史的框架身份覆盖，以免写入后抹掉子进程身份；其他框架保持各自
+的既有归一化策略。
+
 ```mermaid
 flowchart TD
     client["client plugin/uploader/OTel"] --> route["POST /api/ingest/{upload,otel/*}"]

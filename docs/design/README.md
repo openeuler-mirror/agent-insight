@@ -1,9 +1,13 @@
 # 需求清单（agent-insight 设计文档索引）
 
-本目录收录 agent-insight 的所有需求设计。**每个需求一个子目录**,内部按三阶段组织:
+本目录收录 agent-insight 的所有需求设计。默认每个需求一个子目录，内部按三阶段组织：
 `phase1 需求分析` → `phase2 需求设计` → `phase3 开发计划`。
 
-> 说明:子目录里的设计文档**只描述设计意图,不记录实现进度**。「是否实现」这类执行状态统一在本清单跟踪。
+当 issue 或维护者明确要求“一 issue 一份文档”时，使用
+`issue-<number>-<slug>.md`，在同一文件内组织需求、设计与验收；该明确格式要求优先于默认
+三阶段目录模板。
+
+> 说明：设计文档**只描述设计意图，不记录实现进度**。「是否实现」这类执行状态统一在本清单跟踪。
 >
 > 少数早期以 spike 形式记录的需求(如 jiuwenswarm-tracing、langfuse-style-trace-search)不按三阶段拆分,
 > 而是 `design.md` + `assets/` + 可选的 `index.html`(给人读的渲染版)。它们原先放在已废弃的 `docs/designs/`
@@ -11,8 +15,9 @@
 
 ## 清单
 
-| 需求名称 | 目录 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
+| 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| Pi Agent Trace 采集器 | [issue-158-pi-agent-trace-collector.md](issue-158-pi-agent-trace-collector.md) | 通过 Pi Extension API、结构化 SubAgent 结果和 durable JSONL spool 采集 Agent/SubAgent/Skill/Tool/LLM/MCP Trace，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#158](https://atomgit.com/openeuler/opensource-intern/issues/158) |
 | Hermes 平台适配（OTel/OTLP 接入） | [hermes-otel-adapter](hermes-otel-adapter/) | 让运行在 hermes 平台的 Agent 通过标准 OpenTelemetry(OTLP)协议把链路数据上报到 agent-insight,被解析、按会话归并、标记 `framework=hermes` 并在观测看板呈现;子 Agent 与 skill 对齐 opencode 成为一等公民(可评测/注册/A-B) | Feature | 2026-06-02 | 🟨 MVP 实现中（仓库内置轻量插件、OTLP JSON 高保真采集与 subagent 关联开发中；原生事件上报作为备用方案） | —（待补） |
 | Framework 适配器注册表 | [framework-adapter-registry](framework-adapter-registry/) | 把散落在数十处的「按框架走分支」收进统一的 `FrameworkAdapter` 注册表;第一刀治理三块:skill 抽取重复(4~5 份拷贝)、claude 入库归一化(5 个调用点)、框架名值域不统一(`claude`/`claudecode`) | Refactor | 2026-06-04 | 🟡 实现中（注册表骨架已落地,旧调用点切换与验证待开发） | —（待补） |
 | AgentDebug 与 Skills 分析并行化 | [agentdebug-parallel-skills-analysis](agentdebug-parallel-skills-analysis/) | 将 AgentDebug 主诊断与 Skills 步骤核验拆成独立存储和独立轮询链路,支持点击诊断后并行运行、先完成先展示;不兼容旧 `reportJson.skillsAnalysis` 数据 | Feature | 2026-06-05 | ✅ 已实现 | —（待补） |
@@ -32,7 +37,7 @@
 
 ## 字段口径
 
-- **创建时间**:取该需求 phase1 起草日期。
+- **创建时间**:取该需求首次起草日期。
 - **是否实现**取值:
   - ⬜ **未实现** —— 仅有设计,代码未动
   - 🟡 **实现中** —— 部分落地
@@ -41,6 +46,7 @@
 
 ## 新增需求时的约定
 
-1. 在本目录下新建一个**短横线命名**的子目录(如 `xxx-yyy`)。
-2. 子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
-3. **回到本清单追加一行**,填齐上表各列。
+1. 默认在本目录下新建一个**短横线命名**的子目录(如 `xxx-yyy`)。
+2. 默认在子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
+3. issue 或维护者明确要求单文档时，改用 `issue-<number>-<slug>.md`，不再创建三阶段目录。
+4. **回到本清单追加一行**,填齐上表各列。

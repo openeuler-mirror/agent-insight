@@ -44,6 +44,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },
     { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
 ];
 
 export default function AccessInstallPage() {

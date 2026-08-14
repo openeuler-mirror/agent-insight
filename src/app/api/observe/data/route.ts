@@ -613,7 +613,7 @@ export async function GET(request: Request) {
             total: responseTotal,
             failedCount: statusFiltered.filter(item => String(item.trace_status ?? item.traceStatus) === 'failed').length,
             avgLatencyMs: responseTotal > 0
-                ? statusFiltered.reduce((sum, item) => sum + ((item.latency ?? 0) * 1000), 0) / responseTotal
+                ? statusFiltered.reduce((sum, item) => sum + (item.latency ?? 0), 0) / responseTotal
                 : 0,
             toolErrorRate: totalTools > 0
                 ? Math.round((totalToolErrors / totalTools) * 1000) / 10
