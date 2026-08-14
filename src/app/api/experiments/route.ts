@@ -9,6 +9,10 @@ import {
   EvaluatorContextValidationError,
   serializeEvaluatorCaseContext,
 } from '@/lib/evaluators/evaluator-case-context';
+import {
+  EvaluatorRunConfigValidationError,
+  serializeEvaluatorRunConfigs,
+} from '@/lib/evaluators/evaluator-run-config';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,6 +103,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
 
+    let evaluatorConfigsJson: string;
+    try {
+      evaluatorConfigsJson = serializeEvaluatorRunConfigs(body.evaluatorConfigs, evaluatorIds);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'invalid evaluatorConfigs';
+      return NextResponse.json(
+        { error: error instanceof EvaluatorRunConfigValidationError ? message : 'invalid evaluatorConfigs' },
+        { status: 400 },
+      );
+    }
+
     let normalizedCases: Array<CaseInput & { evaluatorContextJson: string | null }>;
     try {
       normalizedCases = cases.map((item) => ({
@@ -120,6 +135,7 @@ export async function POST(req: Request) {
         type: 'single',
         agentName,
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
+        evaluatorConfigsJson,
         status: 'draft',
         watchMode,
         watchEnabledAt: watchMode ? new Date() : null,

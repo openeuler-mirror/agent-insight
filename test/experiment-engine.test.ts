@@ -62,6 +62,7 @@ async function createExperiment(
   evaluatorIds: string[],
   referenceOutput: string | null = 'ref answer',
   evaluatorContextJson: string | null = null,
+  evaluatorConfigsJson: string = '{}',
 ): Promise<{ experimentId: string; caseId: string }> {
   const exp = await prisma.experiment.create({
     data: {
@@ -70,6 +71,7 @@ async function createExperiment(
       type: 'single',
       agentName: 'engine-test-agent',
       evaluatorIdsJson: JSON.stringify(evaluatorIds),
+      evaluatorConfigsJson,
       status: 'draft',
       cases: {
         create: [{
@@ -148,6 +150,39 @@ test('engine: 忠实版预置 + 自建 LLM 两行成功落库，实验终态 don
   assert.equal(llmRow.attempts, 1);
   assert.ok(typeof llmRow.durationMs === 'number');
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 持久化的文本评估器配置会传入 Code 评分器', async () => {
+  const executionId = await createExecution();
+  const evaluatorConfigsJson = JSON.stringify({
+    schemaVersion: 1,
+    configs: {
+      'preset-text-exact-match': {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        whitespaceNormalization: true,
+        widthNormalization: true,
+        multiCandidateScoring: 'any',
+      },
+    },
+  });
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-text-exact-match'],
+    '答案是 42！',
+    null,
+    evaluatorConfigsJson,
+  );
+
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirst({ where: { experimentId } });
+  assert.equal(row?.status, 'done');
+  assert.equal(row?.score, 100);
+  const evidence = JSON.parse(row!.evidenceJson!);
+  assert.equal(evidence.json.config.punctuationInsensitive, true);
+  assert.equal(evidence.json.config.caseSensitive, false);
 });
 
 test('engine: judge 输出非法 JSON → 重试用尽 → failed + errorMessage，全失败实验终态 failed', async () => {

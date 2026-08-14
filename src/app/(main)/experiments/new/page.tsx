@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { TextEvaluatorConfigDialog } from '@/components/eval/TextEvaluatorConfigDialog';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/engine/experiment/dataset-match';
@@ -25,6 +26,14 @@ import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
+import {
+  isConfigurableTextEvaluatorId,
+  summarizeEvaluatorRunConfig,
+  type ConfigurableTextEvaluatorId,
+  type EntityF1RunConfig,
+  type EvaluatorRunConfigMap,
+  type ExactMatchRunConfig,
+} from '@/lib/evaluators/evaluator-run-config';
 
 interface AgentOption { name: string; traces: number }
 
@@ -310,6 +319,8 @@ export default function NewExperimentPage() {
   // ④ 评估器
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
   const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
+  const [evaluatorConfigs, setEvaluatorConfigs] = useState<EvaluatorRunConfigMap>({});
+  const [configuringEvaluatorId, setConfiguringEvaluatorId] = useState<ConfigurableTextEvaluatorId | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
@@ -649,6 +660,10 @@ export default function NewExperimentPage() {
     setSubmitting(true);
     setSubmitError('');
     try {
+      const selectedEvaluatorIds = Array.from(selectedEvaluators);
+      const selectedEvaluatorConfigs = Object.fromEntries(
+        Object.entries(evaluatorConfigs).filter(([id]) => selectedEvaluators.has(id)),
+      );
       const res = await apiFetch('/api/experiments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -658,7 +673,8 @@ export default function NewExperimentPage() {
           agentName,
           watchMode,
           cases: selectedList,
-          evaluatorIds: Array.from(selectedEvaluators),
+          evaluatorIds: selectedEvaluatorIds,
+          evaluatorConfigs: selectedEvaluatorConfigs,
         }),
       });
       const data = await res.json();
@@ -1317,6 +1333,10 @@ export default function NewExperimentPage() {
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
                     : gateEvaluator(meta, gateCases);
                   const checked = selectedEvaluators.has(card.id);
+                  const configurableId = isConfigurableTextEvaluatorId(card.id) ? card.id : null;
+                  const configSummary = configurableId
+                    ? summarizeEvaluatorRunConfig(configurableId, evaluatorConfigs[configurableId])
+                    : null;
                   return (
                     <div
                       key={card.id}
@@ -1362,6 +1382,32 @@ export default function NewExperimentPage() {
                           <span key={tag} style={CHIP_MUT}>{tag}</span>
                         ))}
                       </div>
+                      {configurableId && gate.usable && (
+                        <div style={{
+                          marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)',
+                          display: 'flex', alignItems: 'center', gap: 8,
+                        }}>
+                          <span style={{
+                            flex: 1, minWidth: 0, fontSize: 10.5, lineHeight: 1.45,
+                            color: checked ? 'var(--foreground-secondary)' : 'var(--foreground-muted)',
+                          }}>
+                            {configSummary}
+                          </span>
+                          <button
+                            type="button"
+                            style={{ ...BTN_OUTLINE_SM, flexShrink: 0 }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (!checked) {
+                                setSelectedEvaluators((prev) => new Set(prev).add(card.id));
+                              }
+                              setConfiguringEvaluatorId(configurableId);
+                            }}
+                          >
+                            ⚙ 配置
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1378,6 +1424,20 @@ export default function NewExperimentPage() {
               })}
             </div>
           </div>
+        )}
+
+        {configuringEvaluatorId && (
+          <TextEvaluatorConfigDialog
+            key={configuringEvaluatorId}
+            evaluatorId={configuringEvaluatorId}
+            configs={evaluatorConfigs}
+            onOpenChange={(open) => {
+              if (!open) setConfiguringEvaluatorId(null);
+            }}
+            onSave={(id, config: ExactMatchRunConfig | EntityF1RunConfig) => {
+              setEvaluatorConfigs((prev) => ({ ...prev, [id]: config }));
+            }}
+          />
         )}
 
         {/* ③ 从数据集导入：选一个数据集，按输入精确匹配回填 */}

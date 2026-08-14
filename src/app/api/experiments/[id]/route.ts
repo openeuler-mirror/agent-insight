@@ -8,6 +8,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,8 @@ export async function GET(
       where: { id, ...(username ? { user: username } : {}) },
       select: {
         id: true, name: true, type: true, agentName: true, status: true,
-        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true, createdAt: true,
+        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true,
+        evaluatorConfigsJson: true, createdAt: true,
       },
     });
     if (!experiment) {
@@ -41,6 +43,10 @@ export async function GET(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
+    const evaluatorConfigs = parseStoredEvaluatorRunConfigs(
+      experiment.evaluatorConfigsJson,
+      evaluatorIds,
+    );
 
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
@@ -124,6 +130,7 @@ export async function GET(
       watchMode: experiment.watchMode,
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
+      evaluatorConfigs,
       createdAt: experiment.createdAt,
       overall,
       breakdown,

@@ -47,6 +47,13 @@ import {
   type FaithfulPresetContext,
 } from './faithful-preset-evaluators';
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
+import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
+import {
+  isConfigurableTextEvaluatorId,
+  parseStoredEvaluatorRunConfigs,
+  type ConfigurableTextEvaluatorId,
+  type EvaluatorRunConfigMap,
+} from '@/lib/evaluators/evaluator-run-config';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
 import { isSafetyPresetId, runSafetyPreset } from './safety-preset-evaluators';
@@ -242,6 +249,7 @@ async function evaluateOnce(
   user: string,
   evaluatorId: string,
   runtime: CaseRuntime,
+  evaluatorConfig?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
@@ -250,6 +258,9 @@ async function evaluateOnce(
   // 结果评测预置评估器：复用可靠性页同一 canonical 结果评估能力
   if (isResultPresetId(evaluatorId)) {
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isTextPresetId(evaluatorId)) {
+    return runTextPreset(evaluatorId, runtime.faithfulCtx, evaluatorConfig);
   }
   // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
@@ -289,7 +300,15 @@ async function evaluateOnce(
 export async function executeResultRow(user: string, resultId: string): Promise<'done' | 'failed'> {
   const row = await prisma.experimentEvalResult.findUnique({
     where: { id: resultId },
-    include: { case: true },
+    include: {
+      case: {
+        include: {
+          experiment: {
+            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true },
+          },
+        },
+      },
+    },
   });
   if (!row) throw new Error(`ExperimentEvalResult ${resultId} 不存在`);
 
@@ -308,8 +327,25 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     localAttempts = attempt;
     try {
+      let evaluatorConfig: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined;
+      const evaluatorId = String(row.evaluatorId);
+      if (isConfigurableTextEvaluatorId(evaluatorId)) {
+        let evaluatorIds: string[];
+        try {
+          const parsed = JSON.parse(row.case.experiment.evaluatorIdsJson || '[]');
+          if (!Array.isArray(parsed)) throw new Error('evaluatorIdsJson 必须是数组');
+          evaluatorIds = parsed.map(String);
+        } catch {
+          throw new Error('实验评估器列表不是有效 JSON 数组');
+        }
+        const configs = parseStoredEvaluatorRunConfigs(
+          row.case.experiment.evaluatorConfigsJson,
+          evaluatorIds,
+        );
+        evaluatorConfig = configs[evaluatorId];
+      }
       const out = await withTimeout(
-        evaluateOnce(user, row.evaluatorId, runtime),
+        evaluateOnce(user, row.evaluatorId, runtime, evaluatorConfig),
         experimentEngineConfig.rowTimeoutMs,
       );
       await prisma.experimentEvalResult.update({

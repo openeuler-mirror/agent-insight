@@ -22,6 +22,10 @@ import { apiFetch } from '@/lib/client/api';
 import { categorySummary, effectiveScore, groupByCategory } from '@/lib/engine/experiment/detail-agg';
 import { deriveVerdict, displaySummary, isEvidenceRedundant, VERDICT_LABELS, type EvalVerdict } from '@/lib/evaluators/eval-output';
 import type { EvaluatorCategory } from '@/lib/evaluators/registry';
+import {
+  summarizeEvaluatorRunConfig,
+  type EvaluatorRunConfigMap,
+} from '@/lib/evaluators/evaluator-run-config';
 
 interface ResultRow {
   id: string;
@@ -44,6 +48,7 @@ interface ExperimentDetail {
   id: string;
   name: string;
   status: string;
+  evaluatorConfigs: EvaluatorRunConfigMap;
   cases: Array<{
     id: string;
     taskId: string | null;
@@ -564,6 +569,10 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                       const shownScore = effectiveScore(r);
                       const summary = displaySummary(r.summary, r.evidence);
                       const rowComments = filterComments(comments, { resultId: r.id });
+                      const configSummary = summarizeEvaluatorRunConfig(
+                        r.evaluatorId,
+                        detail.evaluatorConfigs?.[r.evaluatorId as keyof EvaluatorRunConfigMap],
+                      );
                       // 卡体永远可展开：不止评分点/证据，还有人工修正与评论
                       return (
                         <div key={r.id} style={{
@@ -614,6 +623,15 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                               </>
                             )}
                           </div>
+
+                          {configSummary && (
+                            <div style={{
+                              marginTop: 6, fontSize: 10.5, lineHeight: 1.5,
+                              color: 'var(--primary)',
+                            }}>
+                              运行配置：{configSummary}
+                            </div>
+                          )}
 
                           {/* 卡头第二行：一句话结论——这是用户要一眼看到的东西，永远展示 */}
                           {!failed && !pendingLike && summary && (

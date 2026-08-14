@@ -22,6 +22,10 @@ import {
   isResultPresetId,
 } from '../src/lib/engine/experiment/result-preset-evaluators';
 import {
+  TEXT_PRESET_IDS,
+  isTextPresetId,
+} from '../src/lib/engine/experiment/text-preset-evaluators';
+import {
   CONTENT_PRESET_IDS,
   isContentPresetId,
 } from '../src/lib/engine/experiment/content-preset-evaluators';
@@ -49,6 +53,7 @@ import {
 const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids: readonly string[] }> = [
   { name: 'faithful-preset-evaluators.ts', claims: isFaithfulPresetId, ids: FAITHFUL_PRESET_IDS },
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
+  { name: 'text-preset-evaluators.ts', claims: isTextPresetId, ids: TEXT_PRESET_IDS },
   { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },
   { name: 'creativity-preset-evaluators.ts', claims: isCreativityPresetId, ids: CREATIVITY_PRESET_IDS },
   { name: 'safety-preset-evaluators.ts', claims: isSafetyPresetId, ids: SAFETY_PRESET_IDS },
