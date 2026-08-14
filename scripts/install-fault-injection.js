@@ -128,12 +128,16 @@ function pythonOk(python = resolvePython()) {
   return r.status === 0
 }
 
-function pipInstall(packageRoot, { editable }) {
-  const args = editable ? ['install', '-e', packageRoot] : ['install', packageRoot]
-  const r = spawnSync('pip', args, { stdio: 'inherit', env: process.env })
-  if (r.status === 0) return true
-  const r2 = spawnSync('pip3', args, { stdio: 'inherit', env: process.env })
-  return r2.status === 0
+function pipInstall(
+  packageRoot,
+  { editable, python = resolvePython(), runner = spawnSync },
+) {
+  const installArgs = editable ? ['install', '-e', packageRoot] : ['install', packageRoot]
+  const r = runner(python, ['-m', 'pip', ...installArgs], {
+    stdio: 'inherit',
+    env: process.env,
+  })
+  return r.status === 0
 }
 
 function isPidAlive(pid) {
@@ -400,6 +404,7 @@ module.exports = {
   run,
   normalizeHost,
   resolvePython,
+  pipInstall,
   isLocalDevClone,
   resolvePackageSource,
   resolveInstallTarget,

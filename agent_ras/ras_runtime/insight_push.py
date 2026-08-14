@@ -10,6 +10,7 @@ at warning level and counted so operators can see Insight ingest gaps.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future as ConcurrentFuture
 import json
 import logging
 import os
@@ -24,11 +25,14 @@ from urllib import request
 logger = logging.getLogger(__name__)
 _MAX_POST_ATTEMPTS = 3
 _RETRY_DELAYS_S = (0.25, 0.75)
+_MAX_RECEIPTS_PER_SESSION = 256
 
 # Process-local counters for operators / tests (fail-open does not raise).
 _PUSH_FAILURES = 0
 _PUSH_SUCCESSES = 0
 _PUSH_LOCK = threading.Lock()
+_PENDING_PUSHES: dict[str, dict[str, asyncio.Future[bool] | ConcurrentFuture[bool]]] = {}
+_PUSH_RECEIPTS: dict[str, dict[str, bool]] = {}
 
 
 def get_push_stats() -> dict[str, int]:
@@ -41,6 +45,12 @@ def reset_push_stats() -> None:
     with _PUSH_LOCK:
         _PUSH_SUCCESSES = 0
         _PUSH_FAILURES = 0
+
+
+def reset_pending_pushes_for_tests() -> None:
+    with _PUSH_LOCK:
+        _PENDING_PUSHES.clear()
+        _PUSH_RECEIPTS.clear()
 
 
 def _record_push_success() -> None:
@@ -110,14 +120,14 @@ async def push_anomaly(
     platform: str,
     anomaly_dict: dict[str, Any],
     actions: list[dict[str, Any]] | None = None,
-) -> None:
+) -> bool:
     """Non-blocking: POST anomaly event to Insight API."""
     action_types = (
         ",".join(a.get("type", "") for a in actions) if actions else None
     )
     payload = dict(anomaly_dict)
     payload["actions"] = [dict(action) for action in actions or []]
-    await push_event(
+    return await push_event(
         session_id,
         platform,
         "anomaly",
@@ -140,11 +150,11 @@ async def push_event(
     summary: str | None = None,
     action_types: str | None = None,
     delivery_id: str | None = None,
-) -> None:
+) -> bool:
     """POST one structured RAS event to the existing Insight ingest route."""
     _ensure_loaded()
     if not _LOADED_KEY or not _LOADED_URL:
-        return
+        return True
 
     task_id = session_id
     # Strip "{platform}:" prefix (e.g. "opencode:ses_xxx" → "ses_xxx")
@@ -198,11 +208,13 @@ async def push_event(
                 event_type,
                 failures,
             )
+            return False
         else:
             _record_push_success()
             logger.debug(
                 "insight push ok session=%s type=%s", session_id, event_type
             )
+            return True
     except Exception as exc:
         failures = _record_push_failure()
         logger.warning(
@@ -213,24 +225,122 @@ async def push_event(
             exc,
             exc_info=True,
         )
+        return False
+
+
+def _register_push(
+    session_id: str,
+    token: str,
+    handle: asyncio.Future[bool] | ConcurrentFuture[bool],
+) -> None:
+    with _PUSH_LOCK:
+        _PENDING_PUSHES.setdefault(session_id, {})[token] = handle
+
+    def _settled(done: asyncio.Future[bool] | ConcurrentFuture[bool]) -> None:
+        try:
+            acked = bool(done.result())
+        except BaseException:
+            acked = False
+            logger.warning(
+                "insight push background task failed session=%s", session_id,
+                exc_info=True,
+            )
+        with _PUSH_LOCK:
+            pending = _PENDING_PUSHES.get(session_id)
+            if pending is not None:
+                pending.pop(token, None)
+                if not pending:
+                    _PENDING_PUSHES.pop(session_id, None)
+            receipts = _PUSH_RECEIPTS.setdefault(session_id, {})
+            receipts[token] = acked
+            while len(receipts) > _MAX_RECEIPTS_PER_SESSION:
+                receipts.pop(next(iter(receipts)))
+
+    handle.add_done_callback(_settled)
 
 
 def _schedule_coro(
-    factory: Callable[[], Awaitable[None]],
+    session_id: str,
+    factory: Callable[[], Awaitable[bool]],
     *,
     thread_name: str,
 ) -> None:
-    """Run coroutine on the current loop, or a daemon thread if none is running."""
+    """Run and retain a push until a later bounded flush observes its receipt."""
+    token = str(uuid.uuid4())
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        handle: ConcurrentFuture[bool] = ConcurrentFuture()
+        _register_push(session_id, token, handle)
+
+        def _run() -> None:
+            try:
+                handle.set_result(asyncio.run(factory()))
+            except Exception as exc:
+                handle.set_exception(exc)
+
         threading.Thread(
-            target=lambda: asyncio.run(factory()),
+            target=_run,
             name=thread_name,
             daemon=True,
         ).start()
         return
-    loop.create_task(factory())
+    task = loop.create_task(factory())
+    _register_push(session_id, token, task)
+
+
+async def flush_pending_pushes(
+    session_id: str,
+    timeout_ms: int = 2500,
+) -> dict[str, int | bool]:
+    """Wait for the session's current push snapshot without cancelling on timeout."""
+    with _PUSH_LOCK:
+        pending = dict(_PENDING_PUSHES.get(session_id, {}))
+        receipts = dict(_PUSH_RECEIPTS.get(session_id, {}))
+        snapshot_tokens = set(pending) | set(receipts)
+
+    timeout_s = max(0.0, min(float(timeout_ms) / 1000.0, 30.0))
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while any(not handle.done() for handle in pending.values()):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(0.01, remaining))
+    await asyncio.sleep(0)
+
+    with _PUSH_LOCK:
+        current_receipts = _PUSH_RECEIPTS.get(session_id, {})
+        acked = 0
+        failed = 0
+        still_pending = 0
+        for token in snapshot_tokens:
+            if token in receipts:
+                result = receipts[token]
+            else:
+                handle = pending[token]
+                if not handle.done():
+                    still_pending += 1
+                    continue
+                try:
+                    result = bool(handle.result())
+                except BaseException:
+                    result = False
+            if result:
+                acked += 1
+            else:
+                failed += 1
+        for token in snapshot_tokens:
+            current_receipts.pop(token, None)
+        if not current_receipts:
+            _PUSH_RECEIPTS.pop(session_id, None)
+
+    return {
+        "attempted": len(snapshot_tokens),
+        "acked": acked,
+        "failed": failed,
+        "pending": still_pending,
+        "timed_out": still_pending > 0,
+    }
 
 
 def fire_push_anomaly(
@@ -244,6 +354,7 @@ def fire_push_anomaly(
     if not _LOADED_KEY or not _LOADED_URL:
         return
     _schedule_coro(
+        session_id,
         lambda: push_anomaly(session_id, platform, anomaly_dict, actions),
         thread_name="ras-insight-anomaly-push",
     )
@@ -253,14 +364,14 @@ async def push_action_result(
     session_id: str,
     platform: str,
     result: dict[str, Any],
-) -> None:
+) -> bool:
     action = str(result.get("action") or "")
     ok = bool(result.get("ok"))
     channel = str(result.get("channel") or "")
     summary = f"{action or 'action'} {'succeeded' if ok else 'failed'}"
     if channel:
         summary += f" via {channel}"
-    await push_event(
+    return await push_event(
         session_id,
         platform,
         "action_result",
@@ -280,6 +391,7 @@ def fire_push_action_result(
     if not _LOADED_KEY or not _LOADED_URL:
         return
     _schedule_coro(
+        session_id,
         lambda: push_action_result(session_id, platform, result),
         thread_name="ras-insight-action-push",
     )

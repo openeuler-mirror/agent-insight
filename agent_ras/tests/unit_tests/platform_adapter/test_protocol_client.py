@@ -108,3 +108,18 @@ def test_build_protocol_ras_client_wires_on_actions() -> None:
         None,
     )
     assert noticed == ["hi"]
+
+
+def test_build_protocol_ras_client_flushes_after_reporting_action_results() -> None:
+    calls: list[str] = []
+    client, _host = build_protocol_ras_client(
+        platform="hermes",
+        abort_fn=lambda: None,
+    )
+    client.report_action_result = lambda _sid, _result: calls.append("result") or True
+    client.flush = lambda _sid: calls.append("flush") or {}
+
+    assert client.on_actions is not None
+    client.on_actions("hermes:s1", [{"type": "abort_stream"}], None)
+
+    assert calls == ["result", "flush"]

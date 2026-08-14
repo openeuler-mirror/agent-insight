@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import Future
 import json
 import threading
 import time
@@ -330,3 +331,176 @@ def test_push_event_records_failure_as_warning_counter(monkeypatch, caplog):
 
     assert insight_push.get_push_stats()["failures"] == 1
     assert any("insight push failed" in rec.message for rec in caplog.records)
+
+
+def test_flush_pending_pushes_waits_for_http_ack(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def fake_urlopen(req, timeout):
+        started.set()
+        assert release.wait(2.0)
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+
+    async def scenario():
+        insight_push.fire_push_anomaly(
+            "opencode:ses_flush",
+            "opencode",
+            {"kind": "llm_thinking_loop", "severity": "low", "summary": "loop"},
+            [{"type": "abort_stream"}],
+        )
+        assert await asyncio.to_thread(started.wait, 1.0)
+        release.set()
+        return await insight_push.flush_pending_pushes("opencode:ses_flush", 2000)
+
+    result = asyncio.run(scenario())
+    assert result == {
+        "attempted": 1,
+        "acked": 1,
+        "failed": 0,
+        "pending": 0,
+        "timed_out": False,
+    }
+
+
+def test_flush_timeout_is_fail_open_and_keeps_upload_running(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def fake_urlopen(req, timeout):
+        started.set()
+        assert release.wait(2.0)
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+
+    async def scenario():
+        insight_push.fire_push_action_result(
+            "opencode:ses_timeout",
+            "opencode",
+            {"action": "abort_stream", "ok": True},
+        )
+        assert await asyncio.to_thread(started.wait, 1.0)
+        timed_out = await insight_push.flush_pending_pushes(
+            "opencode:ses_timeout", 10
+        )
+        release.set()
+        completed = await insight_push.flush_pending_pushes(
+            "opencode:ses_timeout", 2000
+        )
+        return timed_out, completed
+
+    timed_out, completed = asyncio.run(scenario())
+    assert timed_out["timed_out"] is True
+    assert timed_out["pending"] == 1
+    assert completed["acked"] == 1
+    assert completed["pending"] == 0
+
+
+def test_completed_receipts_are_bounded_without_flush():
+    insight_push.reset_pending_pushes_for_tests()
+    session_id = "openjiuwen:session_long_lived"
+    tokens = [
+        f"receipt-{index}"
+        for index in range(insight_push._MAX_RECEIPTS_PER_SESSION + 5)
+    ]
+
+    for token in tokens:
+        handle: Future[bool] = Future()
+        handle.set_result(True)
+        insight_push._register_push(session_id, token, handle)
+
+    receipts = insight_push._PUSH_RECEIPTS[session_id]
+    assert len(receipts) == insight_push._MAX_RECEIPTS_PER_SESSION
+    assert tokens[0] not in receipts
+    assert tokens[-1] in receipts
+
+
+def test_concurrent_flushes_report_the_same_completed_snapshot(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def fake_urlopen(req, timeout):
+        started.set()
+        assert release.wait(2.0)
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+
+    async def scenario():
+        insight_push.fire_push_anomaly(
+            "opencode:ses_concurrent_flush",
+            "opencode",
+            {"kind": "llm_thinking_loop", "severity": "low", "summary": "loop"},
+        )
+        assert await asyncio.to_thread(started.wait, 1.0)
+        flushes = [
+            asyncio.create_task(
+                insight_push.flush_pending_pushes(
+                    "opencode:ses_concurrent_flush", 2000
+                )
+            )
+            for _ in range(2)
+        ]
+        await asyncio.sleep(0.02)
+        release.set()
+        return await asyncio.gather(*flushes)
+
+    results = asyncio.run(scenario())
+    assert results == [
+        {
+            "attempted": 1,
+            "acked": 1,
+            "failed": 0,
+            "pending": 0,
+            "timed_out": False,
+        },
+        {
+            "attempted": 1,
+            "acked": 1,
+            "failed": 0,
+            "pending": 0,
+            "timed_out": False,
+        },
+    ]

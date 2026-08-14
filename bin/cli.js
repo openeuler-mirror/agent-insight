@@ -11,7 +11,7 @@ const commands = {
   'install-ras-client': () => require('../scripts/install-ras-client.js'),
   'install-fault-injection': () => require('../scripts/install-fault-injection.js'),
   'fi-worker': () => require('../scripts/fi-worker.js'),
-  'ras-client': () => require('../scripts/reliability-client.js'),
+  'ras-client': () => require('../scripts/reliability-client.cjs'),
 }
 
 function parseOptions(args) {

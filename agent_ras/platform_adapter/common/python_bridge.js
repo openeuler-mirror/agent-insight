@@ -142,8 +142,12 @@ function ensureInit(svc = null) {
       Py_Initialize: { args: [], returns: FFIType.void },
       Py_IsInitialized: { args: [], returns: FFIType.i32 },
       PyRun_SimpleString: { args: [FFIType.cstring], returns: FFIType.i32 },
+      PyEval_SaveThread: { args: [], returns: FFIType.ptr },
+      PyGILState_Ensure: { args: [], returns: FFIType.i32 },
+      PyGILState_Release: { args: [FFIType.i32], returns: FFIType.void },
     })
-    if (!py.Py_IsInitialized()) {
+    const alreadyInitialized = Boolean(py.Py_IsInitialized())
+    if (!alreadyInitialized) {
       py.Py_Initialize()
     }
     const boot = `
@@ -152,7 +156,15 @@ sys.path.insert(0, ${JSON.stringify(pythonPackages || ".")})
 sys.path.insert(0, ${JSON.stringify(repoRoot || ".")})
 from ras_runtime import call as _ras_runtime_call
 `
-    const rc = py.PyRun_SimpleString(cstr(boot))
+    let gilState = null
+    if (alreadyInitialized) gilState = py.PyGILState_Ensure()
+    let rc
+    try {
+      rc = py.PyRun_SimpleString(cstr(boot))
+    } finally {
+      if (alreadyInitialized) py.PyGILState_Release(gilState)
+      else py.PyEval_SaveThread()
+    }
     if (rc !== 0) {
       _initError = "failed to import ras_runtime inside embedded Python"
       console.error("[insight-ras] inproc init failed:", _initError)
@@ -193,7 +205,13 @@ from ras_runtime import call as _ras_runtime_call
 _out = _ras_runtime_call(${opLit}, ${sidLit}, ${payLit})
 open(${JSON.stringify(outPath)}, "w", encoding="utf-8").write(_out)
 `
-  const rc = _py.PyRun_SimpleString(cstr(scriptFile))
+  const gilState = _py.PyGILState_Ensure()
+  let rc
+  try {
+    rc = _py.PyRun_SimpleString(cstr(scriptFile))
+  } finally {
+    _py.PyGILState_Release(gilState)
+  }
   if (rc !== 0) {
     console.error("[insight-ras] inproc call failed op=", op)
     return null

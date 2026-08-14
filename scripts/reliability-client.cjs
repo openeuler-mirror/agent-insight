@@ -18,7 +18,7 @@ const path = require('path')
 const { spawn, spawnSync } = require('child_process')
 const { randomBytes } = require('crypto')
 
-const { connectWebSocket } = require('./ws-client')
+const { connectWebSocket } = require('./ws-client.cjs')
 
 const CLIENT_HOME = path.join(os.homedir(), '.agent-insight', 'client')
 const CONFIG_PATH = path.join(CLIENT_HOME, 'config.json')

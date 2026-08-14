@@ -136,7 +136,7 @@ openjiuwen **深挂载不走本节**（进程内已是 Python，直连 `core/mon
 
 1. Agent RAS **没有**单独编译的 native 扩展作为入口；入口是宿主进程内的 **libpython** + 纯 Python 包 `ras_runtime`。
 2. Bun 的 `bun:ffi` `dlopen` 默认是 **局部符号绑定**。若只靠它加载 libpython，随后解释器再加载 `_opcode.so` 时会出现 `undefined symbol: PyList_New`。
-3. 因此桥接层先用 **libc `dlopen(libpython, RTLD_NOW | RTLD_GLOBAL)`** 把 `Py*` 挂到进程全局符号表，再 `bun:ffi` 绑定 `Py_Initialize` / `PyRun_SimpleString`。这样**无需** `LD_PRELOAD=libpython` 即可直接跑 `opencode`（见 `scripts/smoke_inproc.sh`）。
+3. 因此桥接层先用 **libc `dlopen(libpython, RTLD_NOW | RTLD_GLOBAL)`** 把 `Py*` 挂到进程全局符号表，再 `bun:ffi` 绑定 `Py_Initialize` / `PyRun_SimpleString`。初始化和 import 完成后以 `PyEval_SaveThread` 释放 GIL；每次 `embedCall` 通过成对的 `PyGILState_Ensure` / `PyGILState_Release` 进入 Python。这样**无需** `LD_PRELOAD=libpython` 即可直接跑 `opencode`，且 Python runtime loop / HTTP worker 能在两次 FFI 调用之间继续运行（见 `scripts/smoke_inproc.sh`）。
 
 配置字段（示例见 [`agent_ras/config/agent_ras.inproc.example.json`](../../../agent_ras/config/agent_ras.inproc.example.json)）：
 
@@ -170,8 +170,11 @@ sequenceDiagram
   Br->>Py: bun_ffi_dlopen_bind_Py_API
   Br->>Py: Py_Initialize
   Br->>Py: PyRun_SimpleString_import_ras_runtime
+  Br->>Py: PyEval_SaveThread
   Note over Br,Emb: 每次 call：写临时 result-*.json
+  Br->>Py: PyGILState_Ensure
   Br->>Py: PyRun_SimpleString_call_write_file
+  Br->>Py: PyGILState_Release
   Py->>Emb: call_op_session_payload
   Emb-->>Py: JSON_string
   Py-->>Br: file_written
@@ -196,7 +199,7 @@ sequenceDiagram
 - `run_coro(hub.observe(...))`：`asyncio.run_coroutine_threadsafe` + 默认超时 8s，把异步检测桥成 FFI 同步调用
 
 [`ras_runtime/facade.py`](../../../agent_ras/ras_runtime/facade.py) 是稳定对外 API：`call(op, session_id, payload_json) -> str`。  
-ops：`health` | `hello` | `observe` | `reset` | `action_result` | `skill_result` | `bye`。
+ops：`health` | `hello` | `observe` | `reset` | `action_result` | `skill_result` | `flush` | `bye`。其中 `flush` 有界等待当前 session 的 anomaly/action_result HTTP receipt；超时保持 fail-open 且不取消仍在发送的任务。
 
 ### 4.4 模块关系与代码文件调用图
 

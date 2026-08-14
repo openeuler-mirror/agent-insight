@@ -60,9 +60,9 @@ flowchart TD
 ```text
 ras_runtime
   - 同步门面 call(op)
-      - health / hello / observe / reset / action_result / skill_result / bye
+      - health / hello / observe / reset / action_result / skill_result / flush / bye
   - SessionHub：per-session detectors + recovery wire
-  - insight_push：anomaly / action_result（fail-open）
+  - insight_push：anomaly / action_result（pending receipt + bounded flush，fail-open）
   - platform_capabilities：是否支持 host skill judge
 ```
 
@@ -84,6 +84,7 @@ ras_runtime
 | `observe` | Signal 观测 → 可选 actions/anomaly/skill_requests |
 | `action_result` | Host 投递 ack + anchors → push |
 | `skill_result` | L3 host judge 回填（OpenCode / xiaoO inproc） |
+| `flush` | 有界等待当前 session 的 anomaly / action_result HTTP 2xx；超时不取消上传、不向 Agent 抛错 |
 | `reset` / `bye` | 清理 |
 
 ### Anchor 字段
@@ -103,7 +104,8 @@ Insight 契约真源：[developer-guide/09-otlp-attribute-contract.md](../../../
 |------|------|------|
 | `run_coro` | `runtime.py` | 同步 call 调度到 embed loop |
 | `SessionState` | `session_hub.py` | per-session detectors / last_trace_anchor |
-| `fire_push_*` | `insight_push.py` | 缺配置跳过；失败只打日志 |
+| `fire_push_*` | `insight_push.py` | 注册 per-session pending handle 与完成 receipt；未 flush receipt 每 session 上限 256；缺配置跳过，失败只打日志 |
+| `flush_pending_pushes` | `insight_push.py` | 本地快照等待当前 pending；并发调用独立结算，返回 attempted/acked/failed/pending/timed_out，超时不 cancel |
 | capabilities | `platform_capabilities.py` | OpenCode / xiaoO 支持 host skill judge；openjiuwen 深挂载走 DeepAgentAdapter |
 
 ### 设计模式
@@ -135,7 +137,14 @@ sequenceDiagram
   RC->>AA: onActions
   AA->>P: HostControl
   P->>RC: action_result
+  P->>RC: flush
+  RC->>Call: flush(timeout_ms)
+  Call->>Hub: await pending HTTP receipts
 ```
+
+`onActions` 在异常和全部恢复动作结果入队后执行一次主 flush；idle/dispose/bye 只作兜底。`reset` 不清理 pending handle，避免 OpenCode 的 idle 与最后一条 `action_result` 交错时丢事件。flush 最多等待配置的窗口并保持 fail-open；它只能保证正常短生命周期结束，不能替代进程崩溃场景所需的持久化 outbox。
+
+JS 嵌入侧初始化 CPython 后调用 `PyEval_SaveThread` 释放初始化线程持有的 GIL；每次 `embedCall` 使用成对的 `PyGILState_Ensure` / `PyGILState_Release`。所有 SessionHub 操作统一 marshal 到 `ras_runtime_loop`，避免释放 GIL 后暴露跨线程 SessionHub 访问。
 
 ---
 
@@ -153,8 +162,9 @@ sequenceDiagram
 | 风险 | 说明 |
 |------|------|
 | 与 Monitor 双编排 | 改 detector 注册/恢复必须同步 session_hub |
-| FFI/线程 | runtime loop 卡死影响所有 call |
+| FFI/线程 | GIL 必须在初始化后释放、每次调用成对获取；SessionHub 只允许 runtime loop 访问 |
 | push 配置 | 依赖 `~/.agent-insight/ras/config.json` |
+| 正常退出与强杀 | bounded flush 覆盖正常短生命周期退出；SIGKILL/断电仍需 durable outbox 才能保证不丢 |
 
 ### 测试
 
@@ -162,7 +172,7 @@ sequenceDiagram
 |------|------|
 | `tests/unit_tests/ras_runtime/test_call.py` | health/hello/observe/reset |
 | `tests/unit_tests/ras_runtime/test_skill_result.py` | skill_result + deferred |
-| `tests/unit_tests/harness/agent_ras/ras_runtime/test_insight_push.py` | push 配置与 fail-open |
+| `tests/unit_tests/harness/agent_ras/ras_runtime/test_insight_push.py` | push 配置、pending/receipt、flush timeout 与 fail-open |
 
 ---
 
@@ -179,4 +189,6 @@ sequenceDiagram
 - [ ] `call` JSON 契约向后兼容或显式 bump
 - [ ] SessionHub 与 factory 的 detector **enabled 门控差异**已核对（SessionHub 始终建 thinking-loop detector）
 - [ ] push 失败不影响 observe 返回
+- [ ] anomaly 与全部 action_result 后有界 flush；timeout 不 cancel pending
+- [ ] CPython GIL acquire/release 成对，SessionHub 操作只在 runtime loop
 - [ ] anchors 白名单未引入启发式正文匹配；Insight 必填规则写在 developer-guide 而非夸大 SessionHub 校验
