@@ -68,7 +68,9 @@ function eventUsage(event: OtelTraceEvent) {
   };
 }
 
-function agentName(event: OtelTraceEvent): string {
+function agentName(event: OtelTraceEvent, displayNames?: Map<string, string>): string {
+  const mapped = event.spanId ? displayNames?.get(event.spanId) : undefined;
+  if (mapped) return mapped;
   return content(attrs(event)['codex.agent.name']) ||
     String(event.name || '').replace(/^agent\./, '') ||
     'codex';
@@ -83,6 +85,7 @@ function toolName(event: OtelTraceEvent): string {
 function ownerFor(
   event: OtelTraceEvent,
   bySpanId: Map<string, OtelTraceEvent>,
+  displayNames?: Map<string, string>,
 ): { event?: OtelTraceEvent; name: string; sessionId?: string } {
   let parentId = event.parentSpanId;
   const visited = new Set<string>();
@@ -91,35 +94,118 @@ function ownerFor(
     const parent = bySpanId.get(parentId);
     if (!parent) break;
     if (semanticKind(parent) === 'subagent') {
-      return { event: parent, name: agentName(parent), sessionId: parent.spanId };
+      return { event: parent, name: agentName(parent, displayNames), sessionId: parent.spanId };
     }
     parentId = parent.parentSpanId;
   }
   return { name: 'codex' };
 }
 
+function codexOwnerFor(
+  event: OtelTraceEvent,
+  bySpanId: Map<string, OtelTraceEvent>,
+  displayNames?: Map<string, string>,
+): ReturnType<typeof ownerFor> {
+  const owner = ownerFor(event, bySpanId, displayNames);
+  if (!owner.sessionId || semanticKind(event) !== 'llm') return owner;
+  const child = owner.event;
+  const childStartedAt = child?.startTimeMs || 0;
+  // Codex can export root response.completed only after a worker has been
+  // started. Its response start remains before the child lifecycle, so retain
+  // root ownership instead of using the collector's later active-agent state.
+  if (childStartedAt > 0 && (event.startTimeMs || 0) < childStartedAt) {
+    return { name: 'codex' };
+  }
+  return owner;
+}
+
 function subagentParentOwner(
   event: OtelTraceEvent,
   bySpanId: Map<string, OtelTraceEvent>,
+  displayNames?: Map<string, string>,
 ): ReturnType<typeof ownerFor> {
   const directParent = event.parentSpanId ? bySpanId.get(event.parentSpanId) : undefined;
   if (directParent && semanticKind(directParent) === 'subagent') {
     return {
       event: directParent,
-      name: agentName(directParent),
+      name: agentName(directParent, displayNames),
       sessionId: directParent.spanId,
     };
   }
-  return ownerFor(directParent || event, bySpanId);
+  return ownerFor(directParent || event, bySpanId, displayNames);
+}
+
+function spawnTaskName(event: OtelTraceEvent): string | undefined {
+  const raw = event as AnyObj;
+  const rawTool = raw.tool as AnyObj | undefined;
+  const value = attrs(event)['tool.arguments'] ?? rawTool?.arguments;
+  let parsed: AnyObj | undefined;
+  if (value && typeof value === 'object') parsed = value as AnyObj;
+  else if (typeof value === 'string') {
+    try { parsed = JSON.parse(value) as AnyObj; } catch { /* malformed tool args */ }
+  }
+  const direct = content(parsed?.task_name);
+  if (direct) return direct.replace(/^\/root\//, '');
+  const result = eventOutput(event);
+  if (result) {
+    try {
+      const parsedResult = JSON.parse(result) as AnyObj;
+      const fromResult = content(parsedResult?.task_name);
+      if (fromResult) return fromResult.replace(/^\/root\//, '');
+    } catch { /* result is not structured JSON */ }
+  }
+  return undefined;
+}
+
+function inferSubagentDisplayNames(
+  events: OtelTraceEvent[],
+): Map<string, string> {
+  const spawns = events
+    .filter((event) => semanticKind(event) === 'tool' &&
+      /(?:spawn_agent|spawnagent|collaboration)/i.test(toolName(event)))
+    .map((event) => ({ event, name: spawnTaskName(event) }))
+    .filter((item): item is { event: OtelTraceEvent; name: string } => Boolean(item.name));
+  const names = new Map<string, string>();
+  const usedSpawns = new Set<OtelTraceEvent>();
+  for (const child of events.filter((event) => semanticKind(event) === 'subagent')) {
+    const runtimeName = content(attrs(child)['codex.agent.name']) ||
+      String(child.name || '').replace(/^agent\./, '');
+    // A real Codex runtime role wins. `default` is the CLI's sentinel for a
+    // worker created by collaboration.spawn_agent, so only that sentinel may
+    // be replaced by the user-facing task_name.
+    if (!['', 'default'].includes(runtimeName.trim().toLowerCase())) continue;
+    const childStart = child.startTimeMs || 0;
+    const childConversation = content(attrs(child)['codex.conversation.id']);
+    const candidates = spawns.filter(({ event }) => {
+      if (usedSpawns.has(event)) return false;
+      // The worker is a forked execution: its session/trace ids are different
+      // from the parent spawn tool. Codex keeps the conversation id stable,
+      // which is the safe cross-execution association key.
+      const spawnConversation = content(attrs(event)['codex.conversation.id']);
+      if (!childConversation || !spawnConversation || childConversation !== spawnConversation) return false;
+      return (event.startTimeMs || 0) <= childStart;
+    });
+    if (candidates.length === 0) continue;
+    candidates.sort((left, right) =>
+      Math.abs(childStart - (right.event.startTimeMs || 0)) -
+      Math.abs(childStart - (left.event.startTimeMs || 0)));
+    const nearest = candidates[candidates.length - 1];
+    const previous = candidates[candidates.length - 2];
+    const nearestDistance = Math.abs(childStart - (nearest.event.startTimeMs || 0));
+    const previousDistance = previous ? Math.abs(childStart - (previous.event.startTimeMs || 0)) : Infinity;
+    if (nearestDistance < previousDistance) {
+      names.set(child.spanId || '', nearest.name);
+      usedSpawns.add(nearest.event);
+    }
+  }
+  return names;
 }
 
 function ownerFields(owner: ReturnType<typeof ownerFor>): AnyObj {
   if (!owner.sessionId) return { role: 'assistant', agent: 'codex' };
   return {
     role: 'subagent',
-    // Keep the framework identity stable for filtering. The specialised
-    // execution role belongs in subagent_name, not in the Agent field.
-    agent: 'codex',
+    agent: owner.name,
     subagent_name: owner.name,
     subagent_session_id: owner.sessionId,
   };
@@ -177,6 +263,31 @@ function finalReplyInteraction(
     parentSpanId: event.spanId,
     name: 'llm.final',
     source: 'hook-final-reply',
+    turn_id: attrs(event)['codex.turn.id'],
+    model: model || eventModel(event),
+  };
+}
+
+function finalSubagentReplyInteraction(
+  event: OtelTraceEvent,
+  owner: ReturnType<typeof ownerFor>,
+  reply: string,
+  model?: string,
+): AnyObj {
+  const completedAt = eventEndMs(event) || event.startTimeMs || Date.parse(event.receivedAt) || Date.now();
+  return {
+    ...ownerFields(owner),
+    content: reply,
+    timestamp: toIso(completedAt),
+    timeInfo: {
+      created: toIso(completedAt),
+      completed: toIso(completedAt),
+    },
+    traceId: event.traceId,
+    spanId: `${event.spanId || event.traceId || 'codex-subagent'}:output`,
+    parentSpanId: event.spanId,
+    name: 'llm.subagent.final',
+    source: 'hook-subagent-final-reply',
     turn_id: attrs(event)['codex.turn.id'],
     model: model || eventModel(event),
   };
@@ -405,11 +516,38 @@ function orderCodexEvents(events: OtelTraceEvent[]): OtelTraceEvent[] {
   return ordered;
 }
 
+function reparentPreChildLlms(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  const bySpanId = new Map(
+    events.filter((event) => event.spanId).map((event) => [event.spanId!, event]),
+  );
+  return events.map((event) => {
+    if (semanticKind(event) !== 'llm') return event;
+    let parentId = event.parentSpanId;
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = bySpanId.get(parentId);
+      if (!parent) break;
+      if (semanticKind(parent) === 'subagent') {
+        const childStartedAt = parent.startTimeMs || 0;
+        if (childStartedAt > 0 && (event.startTimeMs || 0) < childStartedAt) {
+          return { ...event, parentSpanId: parent.parentSpanId };
+        }
+        break;
+      }
+      parentId = parent.parentSpanId;
+    }
+    return event;
+  });
+}
+
 export function aggregateCodexTraceEvents(
   sessionId: string,
   events: OtelTraceEvent[],
 ): ExecutionRecord | null {
-  const ordered = orderCodexEvents(events.filter((event) => event.sessionId === sessionId));
+  const ordered = orderCodexEvents(reparentPreChildLlms(
+    events.filter((event) => event.sessionId === sessionId),
+  ));
   if (ordered.length === 0) return null;
   // An automatic unit without a unique/direct parent is retained in the spool
   // for a later correlated replay, but must never become a visible root task.
@@ -420,6 +558,7 @@ export function aggregateCodexTraceEvents(
   const bySpanId = new Map(
     ordered.filter((event) => event.spanId).map((event) => [event.spanId!, event]),
   );
+  const displayNames = inferSubagentDisplayNames(ordered);
   const interactions: AnyObj[] = [];
   const invokedSkills: InvokedSkill[] = [];
   const skillNames = new Set<string>();
@@ -429,11 +568,12 @@ export function aggregateCodexTraceEvents(
   const subagentEvents: OtelTraceEvent[] = [];
   const rootLlmEvents: OtelTraceEvent[] = [];
   const rootLlmInteractions: AnyObj[] = [];
+  const pendingSubagentOutcomes: Array<{ event: OtelTraceEvent; interaction: AnyObj }> = [];
   let toolErrors = 0;
 
   for (const event of ordered) {
     const kind = semanticKind(event);
-    const owner = ownerFor(event, bySpanId);
+    const owner = codexOwnerFor(event, bySpanId, displayNames);
     if (kind === 'agent') {
       rootEvents.push(event);
       const input = eventInput(event);
@@ -458,8 +598,8 @@ export function aggregateCodexTraceEvents(
 
     if (kind === 'subagent') {
       subagentEvents.push(event);
-      const subagent = agentName(event);
-      const parentOwner = subagentParentOwner(event, bySpanId);
+      const subagent = agentName(event, displayNames);
+      const parentOwner = subagentParentOwner(event, bySpanId, displayNames);
       const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();
       interactions.push({
         ...ownerFields(parentOwner),
@@ -492,12 +632,16 @@ export function aggregateCodexTraceEvents(
           },
         }],
       });
-      interactions.push({
+      const interaction = {
         ...interactionBase(event, { event, name: subagent, sessionId: event.spanId }),
         content: eventOutput(event) || '',
         model: eventModel(event),
         usage: eventUsage(event),
-      });
+      };
+      // SubagentStop is a lifecycle snapshot whose output is produced after the
+      // child's work. Parent-before-child ordering would otherwise place that
+      // result before every child LLM/Tool in the rendered tree.
+      pendingSubagentOutcomes.push({ event, interaction });
       continue;
     }
 
@@ -568,6 +712,50 @@ export function aggregateCodexTraceEvents(
         } : {}),
       });
     }
+  }
+
+  for (const { event, interaction } of pendingSubagentOutcomes) {
+    const childInteractions = interactions.filter((candidate) =>
+      candidate.subagent_session_id === event.spanId);
+    const hasChildActivity = childInteractions.length > 0;
+    // The TASK spawn interaction already carries the worker's final output.
+    // When the child has its own LLM/Tool stream, retain native LLM telemetry
+    // unchanged and emit the lifecycle result as its own terminal reply. Codex
+    // can export several LLM snapshots whose start spans overlap tool work, so
+    // no individual native LLM span can safely represent this Stop-time result.
+    const outcome = eventOutput(event);
+    const lastChildLlmEvent = [...ordered].reverse().find((candidate) =>
+      semanticKind(candidate) === 'llm' && ownerFor(candidate, bySpanId, displayNames).sessionId === event.spanId);
+    const childLlmAlreadyHasOutput = Boolean(lastChildLlmEvent && eventOutput(lastChildLlmEvent));
+    const hasChildTool = childInteractions.some((candidate) =>
+      Array.isArray(candidate.tool_calls) && candidate.tool_calls.length > 0);
+    if (outcome && !childLlmAlreadyHasOutput && hasChildTool) {
+      const childOwner = { event, name: agentName(event, displayNames), sessionId: event.spanId };
+      interactions.push(finalSubagentReplyInteraction(
+        event,
+        childOwner,
+        outcome,
+        lastChildLlmEvent ? eventModel(lastChildLlmEvent) : undefined,
+      ));
+      continue;
+    }
+    if (hasChildActivity) continue;
+    const childEnd = eventEndMs(event);
+    let insertAfter = -1;
+    for (let index = interactions.length - 1; index >= 0; index -= 1) {
+      const candidate = interactions[index];
+      if (candidate.subagent_session_id !== event.spanId) continue;
+      const candidateTimeInfo = candidate.timeInfo as AnyObj | undefined;
+      const candidateStart = Date.parse(String(candidateTimeInfo?.created || candidate.timestamp || ''));
+      if (!Number.isFinite(candidateStart) || candidateStart <= childEnd) {
+        insertAfter = index;
+        break;
+      }
+    }
+    // A lifecycle-only child still needs to claim the matching TASK spawn. The
+    // claim must appear after the parent spawn interaction, otherwise the call
+    // tree sees the child first and cannot construct its TASK node.
+    interactions.splice(insertAfter >= 0 ? insertAfter + 1 : interactions.length, 0, interaction);
   }
 
   const delegated = ordered.some((event) =>
@@ -668,7 +856,12 @@ export function aggregateCodexTraceEvents(
     skills: invokedSkills.map((skill) => skill.name),
     agent: 'codex',
     agentName: 'codex',
-    agents: ['codex'],
+    agents: Array.from(new Set([
+      'codex',
+      ...ordered
+        .filter((event) => semanticKind(event) === 'subagent')
+        .map((event) => agentName(event, displayNames)),
+    ])),
     // spawn_agent 委派产生的 fork session：标记为子代理（不显示为独立主任务，
     // 见 issue-159-codex-open.md Bug 8）。parent 由后续关联或 UI 处理。
     ...(delegated ? { isSubagent: true, subagentName: 'subagent' } : {}),

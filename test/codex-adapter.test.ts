@@ -1,11 +1,15 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { createRequire } from "node:module"
 
 import { buildAgentCallTree } from "../src/lib/engine/observability/agent-trace"
 import { getAdapter } from "../src/lib/ingest/adapters/registry"
 import { aggregateOtelTraceEvents } from "../src/lib/ingest/otel/aggregate"
 import { getOtelTraceAdapter } from "../src/lib/ingest/otel/adapter-registry"
-import { computeOwnSkills } from "../src/lib/storage/data-service"
+import { normalizeOtlpTraces } from "../src/lib/ingest/otel/normalize"
+
+const require = createRequire(import.meta.url)
+const { canonicalEventsToOtlp } = require("../scripts/agent-trace-collectors/shared/trace-transport.cjs")
 
 function canonical(overrides: Record<string, unknown>) {
   return {
@@ -19,64 +23,11 @@ function canonical(overrides: Record<string, unknown>) {
   }
 }
 
-function otelKind(semanticKind: string): string {
-  if (semanticKind === "llm") return "llm"
-  if (semanticKind === "tool" || semanticKind === "mcp") return "tool"
-  if (semanticKind === "skill") return "chain"
-  return "agent"
-}
-
 function normalize(events: Record<string, unknown>[]) {
-  return events.map((event: any) => {
-    const semanticKind = String(event.kind || "span")
-    const kind = otelKind(semanticKind)
-    const attributes = {
-      "agent.insight.framework": "codex",
-      "agent.insight.kind": semanticKind,
-      "agent.insight.event_id": event.eventId,
-      "session.id": event.sessionId,
-      "input.value": event.input,
-      "output.value": event.output,
-      "llm.model_name": event.model,
-      "llm.provider": event.provider,
-      "llm.token_count.prompt": event.usage?.input,
-      "llm.token_count.completion": event.usage?.output,
-      "llm.token_count.reasoning": event.usage?.reasoning,
-      "llm.token_count.total": event.usage?.total,
-      "tool.name": event.tool?.name,
-      "tool.type": event.tool?.type,
-      "tool.arguments": event.tool?.arguments,
-      "tool.result": event.tool?.result,
-      "tool.outcome": event.status,
-      "skill.name": event.skill?.name,
-      "skill.version": event.skill?.version,
-      "skill.trigger_mode": event.skill?.triggerMode,
-      "mcp.server.name": event.mcp?.serverName,
-      "mcp.tool.name": event.mcp?.toolName,
-      ...(event.attributes || {}),
-    }
-    return {
-      receivedAt: new Date(event.endTimeMs).toISOString(),
-      sessionId: event.sessionId,
-      traceId: event.traceId,
-      spanId: event.spanId,
-      parentSpanId: event.parentSpanId,
-      name: event.name,
-      kind,
-      serviceName: "codex",
-      user: "alice",
-      model: event.model,
-      usage: {
-        input_tokens: Number(event.usage?.input) || 0,
-        output_tokens: Number(event.usage?.output) || 0,
-        reasoning_tokens: Number(event.usage?.reasoning) || 0,
-        total_tokens: Number(event.usage?.total) || 0,
-      },
-      latencyMs: Math.max(0, Number(event.endTimeMs) - Number(event.startTimeMs)),
-      startTimeMs: Number(event.startTimeMs),
-      attributes,
-    }
-  })
+  return normalizeOtlpTraces(
+    canonicalEventsToOtlp(events, { framework: "codex" }),
+    { authenticatedUser: "alice" },
+  )
 }
 
 test("Codex OTLP adapter matches first-party framework attributes before generic", () => {
@@ -93,7 +44,6 @@ test("Codex OTLP adapter matches first-party framework attributes before generic
   assert.equal(getOtelTraceAdapter(events).id, "codex")
   assert.equal(getAdapter("codex").descriptor.label, "Codex")
 })
-
 test("Codex adapter accepts collector canonical events before OTLP normalization", () => {
   const agent = "c".repeat(16)
   const llm = "d".repeat(16)
@@ -318,6 +268,252 @@ test("Codex adapter never promotes a subagent reply to the root final response",
   assert.equal(record.interactions.at(-1)?.spanId, subagentLlm)
   assert.equal(record.interactions.at(-1)?.content, "worker result")
   assert.equal(record.interactions.some((item: { name?: string }) => item.name === "llm.final"), false)
+})
+
+test("Codex adapter does not duplicate a native subagent reply with a terminal lifecycle reply", () => {
+  const agent = "1".repeat(16)
+  const subagent = "2".repeat(16)
+  const subagentLlm = "3".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "native-child-output-root",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "delegate one reader",
+      endTimeMs: 1_700_000_000_500,
+    }),
+    canonical({
+      eventId: "native-child-output-worker",
+      spanId: subagent,
+      parentSpanId: agent,
+      kind: "subagent",
+      name: "agent.reader",
+      output: "openEuler",
+      endTimeMs: 1_700_000_000_300,
+      attributes: { "codex.agent.name": "reader" },
+    }),
+    canonical({
+      eventId: "native-child-output-llm",
+      spanId: subagentLlm,
+      parentSpanId: subagent,
+      kind: "llm",
+      name: "llm.model-a",
+      output: "openEuler",
+      startTimeMs: 1_700_000_000_100,
+      endTimeMs: 1_700_000_000_290,
+      usage: { input: 7, output: 2, total: 9 },
+    }),
+    canonical({
+      eventId: "native-child-output-tool",
+      spanId: "4".repeat(16),
+      parentSpanId: subagent,
+      kind: "tool",
+      name: "tool.Bash",
+      tool: { name: "Bash", result: "openEuler" },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  assert.equal(record.interactions.filter((item: { name?: string }) => item.name === "llm.subagent.final").length, 0)
+  assert.equal(record.interactions.find((item: { spanId?: string }) => item.spanId === subagentLlm)?.content, "openEuler")
+  assert.equal(record.llm_call_count, 1)
+})
+
+test("Codex adapter orders a subagent outcome after its child activity", () => {
+  const agent = "c".repeat(16)
+  const subagent = "d".repeat(16)
+  const childLlm = "e".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "ordered-root",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "delegate one read",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_000_900,
+    }),
+    canonical({
+      eventId: "ordered-child",
+      spanId: subagent,
+      parentSpanId: agent,
+      kind: "subagent",
+      name: "agent.read_project",
+      output: "openEuler",
+      startTimeMs: 1_700_000_000_300,
+      endTimeMs: 1_700_000_000_800,
+      attributes: { "codex.agent.name": "read_project" },
+    }),
+    canonical({
+      eventId: "ordered-child-llm",
+      spanId: childLlm,
+      parentSpanId: subagent,
+      kind: "llm",
+      name: "llm.gpt-test",
+      startTimeMs: 1_700_000_000_400,
+      endTimeMs: 1_700_000_000_700,
+      usage: { input: 8, output: 2, total: 10 },
+    }),
+    canonical({
+      eventId: "ordered-child-tool",
+      spanId: "9".repeat(16),
+      parentSpanId: subagent,
+      kind: "tool",
+      name: "tool.Bash",
+      startTimeMs: 1_700_000_000_450,
+      endTimeMs: 1_700_000_000_650,
+      tool: { name: "Bash", result: "openEuler" },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  const childInteractions = record.interactions.filter((item: { subagent_session_id?: string }) =>
+    item.subagent_session_id === subagent)
+  assert.equal(childInteractions.at(-1)?.spanId, `${subagent}:output`)
+  assert.equal(childInteractions.at(-1)?.name, "llm.subagent.final")
+  assert.equal(childInteractions.at(-1)?.content, "openEuler")
+  assert.equal(childInteractions.some((item: { spanId?: string }) => item.spanId === subagent), false)
+})
+
+test("Codex adapter emits a terminal subagent reply after overlapping native work", () => {
+  const agent = "a".repeat(16)
+  const subagent = "b".repeat(16)
+  const childLlm = "c".repeat(16)
+  const overlappingLlm = "e".repeat(16)
+  const childTool = "d".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "terminal-order-root",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "delegate then write",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_020_000,
+    }),
+    canonical({
+      eventId: "terminal-order-child",
+      spanId: subagent,
+      parentSpanId: agent,
+      kind: "subagent",
+      name: "agent.read_project",
+      output: "openEuler",
+      startTimeMs: 1_700_000_001_000,
+      endTimeMs: 1_700_000_018_000,
+      attributes: { "codex.agent.name": "read_project" },
+    }),
+    canonical({
+      eventId: "terminal-order-llm",
+      spanId: childLlm,
+      parentSpanId: subagent,
+      kind: "llm",
+      name: "llm.gpt-test",
+      startTimeMs: 1_700_000_002_000,
+      endTimeMs: 1_700_000_017_000,
+      usage: { input: 8, output: 2, total: 10 },
+    }),
+    canonical({
+      eventId: "terminal-order-tool",
+      spanId: childTool,
+      parentSpanId: subagent,
+      kind: "tool",
+      name: "tool.Bash",
+      startTimeMs: 1_700_000_003_000,
+      endTimeMs: 1_700_000_005_000,
+      tool: { name: "Bash", result: "openEuler" },
+    }),
+    canonical({
+      eventId: "terminal-order-overlap",
+      spanId: overlappingLlm,
+      parentSpanId: subagent,
+      kind: "llm",
+      name: "llm.gpt-test",
+      startTimeMs: 1_700_000_004_000,
+      endTimeMs: 1_700_000_017_500,
+      usage: { input: 9, output: 1, total: 10 },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  const childInteractions = record.interactions.filter((item: { subagent_session_id?: string }) =>
+    item.subagent_session_id === subagent)
+  assert.ok(childInteractions.findIndex((item: { spanId?: string }) => item.spanId === childTool) >= 0)
+  assert.ok(childInteractions.findIndex((item: { spanId?: string }) => item.spanId === childTool) < childInteractions.length - 1)
+  assert.equal(childInteractions.at(-1)?.spanId, `${subagent}:output`)
+  assert.equal(childInteractions.at(-1)?.name, "llm.subagent.final")
+  assert.equal(childInteractions.at(-1)?.content, "openEuler")
+  assert.equal(childInteractions.at(-1)?.timeInfo?.created,
+    new Date(1_700_000_018_000).toISOString())
+  assert.equal(childInteractions.filter((item: { name?: string }) => item.name === "llm.subagent.final").length, 1)
+  assert.equal(childInteractions.find((item: { spanId?: string }) => item.spanId === childLlm)?.content, "")
+  assert.equal(childInteractions.find((item: { spanId?: string }) => item.spanId === overlappingLlm)?.content, "")
+  assert.equal(record.llm_call_count, 2)
+
+  const tree = buildAgentCallTree(record.interactions)
+  const childNode = tree?.children.find((node) => node.sessionId === subagent)
+  assert.ok(childNode)
+  assert.equal(childNode?.events.at(-1)?.summary, "openEuler")
+  assert.equal(childNode?.events.at(-1)?.usage, undefined)
+})
+
+test("Codex adapter keeps a delayed pre-worker LLM on the root", () => {
+  const agent = "f".repeat(16)
+  const subagent = "a".repeat(16)
+  const delayedRootLlm = "b".repeat(16)
+  const childLlm = "c".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "late-root-agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "plan then delegate",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_001_000,
+    }),
+    canonical({
+      eventId: "late-root-child",
+      spanId: subagent,
+      parentSpanId: agent,
+      kind: "subagent",
+      name: "agent.read_project",
+      output: "openEuler",
+      startTimeMs: 1_700_000_000_300,
+      endTimeMs: 1_700_000_000_900,
+      attributes: { "codex.agent.name": "read_project" },
+    }),
+    canonical({
+      eventId: "late-root-llm",
+      spanId: delayedRootLlm,
+      parentSpanId: subagent,
+      kind: "llm",
+      name: "llm.gpt-test",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_000_450,
+      usage: { input: 20, output: 4, total: 24 },
+    }),
+    canonical({
+      eventId: "late-root-child-llm",
+      spanId: childLlm,
+      parentSpanId: subagent,
+      kind: "llm",
+      name: "llm.gpt-test",
+      startTimeMs: 1_700_000_000_500,
+      endTimeMs: 1_700_000_000_800,
+      usage: { input: 8, output: 2, total: 10 },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  const rootLlm = record.interactions.find((item: { spanId?: string }) => item.spanId === delayedRootLlm)
+  const childLlmInteraction = record.interactions.find((item: { spanId?: string }) => item.spanId === childLlm)
+  assert.equal(rootLlm?.subagent_session_id, undefined)
+  assert.equal(childLlmInteraction?.subagent_session_id, subagent)
 })
 
 test("Codex adapter keeps an existing final LLM reply without duplicating it", () => {
@@ -652,7 +848,8 @@ test("Codex adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usag
       parentSpanId: agent,
       kind: "skill",
       name: "skill.fixture",
-      skill: { name: "fixture", version: "1.0.0", triggerMode: "explicit" },
+      output: "Skill: fixture\n# Fixture output",
+      skill: { name: "fixture", version: "3", triggerMode: "explicit" },
     }),
     canonical({
       eventId: "llm",
@@ -706,7 +903,10 @@ test("Codex adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usag
   assert.equal(record.llm_call_count, 1)
   assert.equal(record.tool_call_count, 2)
   assert.equal(record.tool_call_error_count, 1)
-  assert.deepEqual(record.invokedSkills, [{ name: "fixture", version: 1 }])
+  assert.deepEqual(record.invokedSkills, [{ name: "fixture", version: 3 }])
+  const skillInteraction = record.interactions.find((item: { tool_calls?: Array<{ function?: { name?: string } }> }) =>
+    item.tool_calls?.[0]?.function?.name === "skill")
+  assert.match(String(skillInteraction?.tool_calls?.[0]?.output || ""), /# Fixture output/)
   assert.equal(record.user, "alice")
   assert.equal(record.interactions.some((item: { mcp?: { server_name?: string } }) => item.mcp?.server_name === "fixture"), true)
 })
@@ -720,8 +920,6 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
   const nestedToolTwo = "6".repeat(16)
   const levelThree = "7".repeat(16)
   const parallelTool = "8".repeat(16)
-  const rootSkill = "e".repeat(16)
-  const childSkill = "f".repeat(16)
   const parallel = Array.from({ length: 5 }, (_, index) => (index + 9).toString(16).repeat(16))
   const events = [
     canonical({
@@ -731,14 +929,6 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
       name: "agent.codex",
       input: "delegate",
       output: "done",
-    }),
-    canonical({
-      eventId: "root-skill",
-      spanId: rootSkill,
-      parentSpanId: rootAgent,
-      kind: "skill",
-      name: "skill.root",
-      skill: { name: "root-skill", version: "1" },
     }),
     canonical({
       eventId: "root-tool",
@@ -757,14 +947,6 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
       input: "one",
       output: "one done",
       attributes: { "codex.agent.name": "level-one", "codex.agent.id": "level-one" },
-    }),
-    canonical({
-      eventId: "child-skill",
-      spanId: childSkill,
-      parentSpanId: levelOne,
-      kind: "skill",
-      name: "skill.child",
-      skill: { name: "child-skill", version: "2" },
     }),
     canonical({
       eventId: "nested-tool",
@@ -824,57 +1006,120 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
 
   const record = aggregateOtelTraceEvents("codex-session", normalize(events))
   assert.ok(record)
-  assert.deepEqual(record.agents, ["codex"])
+  assert.deepEqual(record.agents, ["codex", "level-one", "level-two", "level-three", "worker-0", "worker-1", "worker-2", "worker-3", "worker-4"])
   const tree = buildAgentCallTree(record.interactions)
   assert.ok(tree)
   const levelOneNode = tree.children.find((node) => node.sessionId === levelOne)
-  assert.equal(levelOneNode?.agentName, "codex")
+  assert.equal(levelOneNode?.agentName, "level-one")
   assert.equal(levelOneNode?.subagentType, "level-one")
   assert.equal(levelOneNode?.children[0]?.sessionId, levelTwo)
-  assert.equal(levelOneNode?.children[0]?.agentName, "codex")
+  assert.equal(levelOneNode?.children[0]?.agentName, "level-two")
   assert.equal(levelOneNode?.children[0]?.children[0]?.sessionId, levelThree)
   const workers = tree.children.filter((node) => parallel.includes(node.sessionId))
   assert.equal(workers.length, 5)
-  assert.equal(workers.every((node) => node.agentName === "codex"), true)
+  assert.equal(workers.every((node, index) => node.agentName === `worker-${index}`), true)
   assert.equal(new Set(workers.map((node) => node.sessionId)).size, 5)
-  assert.deepEqual(computeOwnSkills("codex", record.interactions).map((skill) => skill.name), ["root-skill"])
 })
 
-test("Codex adapter retains direct SubAgent parents and normalizes failed spawn outcomes", () => {
+test("Codex adapter uses spawn_agent task_name for a runtime-default child", () => {
   const root = "1".repeat(16)
-  const parent = "2".repeat(16)
+  const spawn = "2".repeat(16)
   const child = "3".repeat(16)
-  const record = aggregateOtelTraceEvents("codex-session", normalize([
-    canonical({ eventId: "root", spanId: root, kind: "agent", name: "agent.codex" }),
+  const events = normalize([
     canonical({
-      eventId: "parent",
-      spanId: parent,
+      eventId: "named-root",
+      spanId: root,
+      kind: "agent",
+      name: "agent.codex",
+      input: "delegate a named worker",
+    }),
+    canonical({
+      eventId: "named-spawn",
+      spanId: spawn,
+      parentSpanId: root,
+      kind: "tool",
+      name: "tool.collaborationspawn_agent",
+      tool: {
+        name: "collaborationspawn_agent",
+        type: "custom",
+        arguments: { task_name: "named_worker_alpha", message: "return ALPHA_OK" },
+        result: JSON.stringify({ task_name: "/root/named_worker_alpha" }),
+      },
+      attributes: { "codex.conversation.id": "conversation-named" },
+    }),
+    canonical({
+      eventId: "runtime-default-child",
+      spanId: child,
       parentSpanId: root,
       kind: "subagent",
-      name: "agent.parent",
-      attributes: { "codex.agent.name": "parent" },
+      name: "agent.default",
+      input: "return ALPHA_OK",
+      output: "ALPHA_OK",
+      attributes: {
+        "codex.conversation.id": "conversation-named",
+        "codex.agent.name": "default",
+        "codex.agent.id": "child-runtime-id",
+      },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  const tree = buildAgentCallTree(record.interactions)
+  assert.ok(tree)
+  const childNode = tree.children.find((node) => node.sessionId === child)
+  assert.equal(childNode?.agentName, "named_worker_alpha")
+  assert.equal(childNode?.subagentType, "named_worker_alpha")
+})
+
+test("Codex adapter preserves a non-default runtime child name", () => {
+  const root = "4".repeat(16)
+  const spawn = "5".repeat(16)
+  const child = "6".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "runtime-named-root",
+      spanId: root,
+      kind: "agent",
+      name: "agent.codex",
+      input: "delegate a reviewer",
     }),
     canonical({
-      eventId: "child",
-      spanId: child,
-      parentSpanId: parent,
-      kind: "subagent",
-      name: "agent.child",
-      status: "Failed",
-      attributes: { "codex.agent.name": "child" },
+      eventId: "runtime-named-spawn",
+      spanId: spawn,
+      parentSpanId: root,
+      kind: "tool",
+      name: "tool.collaborationspawn_agent",
+      tool: {
+        name: "collaborationspawn_agent",
+        type: "custom",
+        arguments: { task_name: "display_task_name", message: "review" },
+      },
+      attributes: { "codex.conversation.id": "conversation-runtime" },
     }),
-  ]))
-  assert.ok(record)
-  const childSpawn = record.interactions.find((item) => item.spanId === `${child}:spawn`)
-  assert.equal(childSpawn?.role, "subagent")
-  assert.equal(childSpawn?.subagent_session_id, parent)
-  assert.equal(childSpawn?.tool_calls?.[0]?.state, "error")
+    canonical({
+      eventId: "runtime-named-child",
+      spanId: child,
+      parentSpanId: root,
+      kind: "subagent",
+      name: "agent.code_reviewer",
+      input: "review",
+      output: "reviewed",
+      attributes: {
+        "codex.conversation.id": "conversation-runtime",
+        "codex.agent.name": "code_reviewer",
+        "codex.agent.id": "runtime-child-id",
+      },
+    }),
+  ])
 
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
   const tree = buildAgentCallTree(record.interactions)
-  const parentNode = tree?.children.find((node) => node.subagentType === "parent")
-  assert.equal(parentNode?.agentName, "codex")
-  assert.equal(parentNode?.children[0]?.agentName, "codex")
-  assert.equal(parentNode?.children[0]?.subagentType, "child")
+  assert.ok(tree)
+  const childNode = tree.children.find((node) => node.sessionId === child)
+  assert.equal(childNode?.agentName, "code_reviewer")
+  assert.equal(childNode?.subagentType, "code_reviewer")
 })
 
 test("Codex adapter keeps Memory Agent under its user root and includes child tokens", () => {
@@ -932,11 +1177,11 @@ test("Codex adapter keeps Memory Agent under its user root and includes child to
   assert.ok(record)
   assert.equal(record.task_id, executionId)
   assert.equal(record.tokens, 27)
-  assert.deepEqual(record.agents, ["codex"])
+  assert.deepEqual(record.agents, ["codex", "Memory Agent"])
   const tree = buildAgentCallTree(record.interactions)
   assert.ok(tree)
-  assert.equal(tree.children[0]?.agentName, "codex")
-  assert.equal(tree.children[0]?.subagentType, "Memory Agent")
+  assert.equal(tree.children[0]?.agentName, "Memory Agent")
+  assert.equal(tree.children[0]?.subagentType, "memory agent")
   assert.equal(tree.children[0]?.sessionId, memory)
   assert.equal(tree.stats.totalTokens, 0)
   assert.equal(tree.children[0]?.stats.totalTokens, 27)
@@ -1132,69 +1377,17 @@ test("Codex adapter projects native cache token usage", () => {
   assert.equal(record?.max_single_call_tokens, 15)
 })
 
-test("Codex adapter latency includes child work that outlives the root lifecycle span", () => {
-  const events = normalize([
+test("Codex tree keeps usage for textless LLM turns", () => {
+  const record = aggregateOtelTraceEvents("textless-llm", normalize([
+    canonical({ sessionId: "textless-llm", eventId: "agent", spanId: "1".repeat(16), kind: "agent", name: "agent.codex", input: "inspect", output: "done" }),
     canonical({
-      eventId: "agent",
-      spanId: "1".repeat(16),
-      kind: "agent",
-      name: "agent.codex",
-      input: "task",
-      startTimeMs: 1_700_000_000_000,
-      endTimeMs: 1_700_000_100_000,
+      sessionId: "textless-llm", eventId: "llm", spanId: "2".repeat(16), parentSpanId: "1".repeat(16), kind: "llm", name: "llm.model",
+      usage: { input: 120, output: 4, reasoning: 2, total: 126 },
     }),
-    // 子 LLM 属于当前 execution，即使根生命周期先结束，也应计入完整任务耗时。
-    canonical({
-      eventId: "llm",
-      spanId: "2".repeat(16),
-      parentSpanId: "1".repeat(16),
-      kind: "llm",
-      name: "llm.model",
-      usage: { input: 10, output: 5, total: 15 },
-      startTimeMs: 1_700_000_200_000,
-      endTimeMs: 1_700_000_300_000,
-    }),
-  ])
-  const record = aggregateOtelTraceEvents("codex-session", events)
-  assert.equal(record?.latency, 300_000)
-})
-
-test("Codex adapter marks delegated fork sessions as subagent", () => {
-  const events = normalize([
-    canonical({
-      eventId: "agent",
-      sessionId: "delegated-session",
-      spanId: "1".repeat(16),
-      kind: "agent",
-      name: "agent.codex",
-      attributes: { "codex.delegated.session": "true" },
-    }),
-    canonical({
-      eventId: "llm",
-      sessionId: "delegated-session",
-      spanId: "2".repeat(16),
-      parentSpanId: "1".repeat(16),
-      kind: "llm",
-      name: "llm.model",
-      usage: { input: 10, output: 5, total: 15 },
-    }),
-  ])
-  const record = aggregateOtelTraceEvents("delegated-session", events)
-  assert.equal(record?.isSubagent, true)
-  assert.equal(record?.subagentName, "subagent")
-})
-
-test("Codex adapter does not mark normal sessions as subagent", () => {
-  const events = normalize([
-    canonical({
-      eventId: "agent",
-      sessionId: "normal-session",
-      spanId: "1".repeat(16),
-      kind: "agent",
-      name: "agent.codex",
-      input: "normal task",
-    }),
-  ])
-  const record = aggregateOtelTraceEvents("normal-session", events)
-  assert.equal(record?.isSubagent, undefined)
+  ]))
+  assert.ok(record, "textless fixture did not aggregate")
+  const tree = buildAgentCallTree(record.interactions)
+  const llm = tree?.events.find((event) => event.kind === "llm")
+  assert.equal(llm?.usage?.total, 126)
+  assert.equal(tree?.stats.totalTokens, 126)
 })

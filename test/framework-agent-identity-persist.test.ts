@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { saveExecutionRecord } from '@/lib/storage/data-service';
+import { listObservedAgentNames, saveExecutionRecord } from '@/lib/storage/data-service';
 import { prismaRaw } from '@/lib/storage/prisma';
 
-test('Codex persists delegated work under the Codex Agent identity', async () => {
+test('Codex persists delegated work under its runtime child Agent identity', async () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const user = `test-agent-identity-${suffix}`;
   const rootId = `test-codex-agent-identity-${suffix}`;
@@ -20,7 +20,7 @@ test('Codex persists delegated work under the Codex Agent identity', async () =>
       task_id: rootId,
       framework: 'codex',
       user,
-      agentName: 'default',
+      agentName: 'codex',
       interactions: [
         { role: 'user', agent: 'codex', content: 'delegate', timestamp },
         {
@@ -61,11 +61,77 @@ test('Codex persists delegated work under the Codex Agent identity', async () =>
       select: { name: true, agentType: true },
     });
 
-    assert.deepEqual(root, { agentName: 'codex', observedAgents: '["codex"]' });
+    assert.deepEqual(root, { agentName: 'codex', observedAgents: '["codex","default"]' });
     assert.deepEqual(child, {
-      agentName: 'codex', observedAgents: '["codex"]', subagentName: 'default',
+      agentName: 'default', observedAgents: '["default"]', subagentName: 'default',
     });
-    assert.deepEqual(registrations, [{ name: 'codex', agentType: 'main' }]);
+    assert.deepEqual(
+      registrations.sort((a, b) => a.name.localeCompare(b.name)),
+      [
+        { name: 'codex', agentType: 'main' },
+        { name: 'default', agentType: 'subagent' },
+      ],
+    );
+    assert.deepEqual((await listObservedAgentNames(user)).sort(), ['codex', 'default']);
+  } finally {
+    await prismaRaw.execution.deleteMany({ where: { user, framework: 'codex' } });
+    await prismaRaw.registeredAgent.deleteMany({ where: { user, platform: 'codex' } });
+  }
+});
+
+test('Codex persists Memory Agent as its named implicit child identity', async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const user = `test-codex-memory-role-${suffix}`;
+  const rootId = `test-codex-memory-role-${suffix}`;
+  const childSessionId = `${rootId}-memory`;
+  const timestamp = new Date().toISOString();
+
+  try {
+    await saveExecutionRecord({
+      upload_id: rootId,
+      task_id: rootId,
+      framework: 'codex',
+      user,
+      interactions: [
+        { role: 'user', agent: 'codex', content: 'consolidate memory', timestamp },
+        {
+          role: 'assistant',
+          agent: 'codex',
+          timestamp,
+          tool_calls: [{
+            id: `${rootId}-task`,
+            type: 'function',
+            function: {
+              name: 'task',
+              arguments: JSON.stringify({
+                subagent_type: 'Memory Agent',
+                session_id: childSessionId,
+              }),
+            },
+          }],
+        },
+        {
+          role: 'subagent',
+          agent: 'Memory Agent',
+          subagent_name: 'Memory Agent',
+          subagent_session_id: childSessionId,
+          content: 'memory consolidated',
+          timestamp,
+        },
+      ],
+    });
+
+    const child = await prismaRaw.execution.findFirst({
+      where: { parentExecutionId: rootId },
+      select: { agentName: true, subagentName: true, observedAgents: true },
+    });
+
+    assert.deepEqual(child, {
+      agentName: 'Memory Agent',
+      subagentName: 'Memory Agent',
+      observedAgents: '["Memory Agent"]',
+    });
+    assert.deepEqual((await listObservedAgentNames(user)).sort(), ['Memory Agent', 'codex']);
   } finally {
     await prismaRaw.execution.deleteMany({ where: { user, framework: 'codex' } });
     await prismaRaw.registeredAgent.deleteMany({ where: { user, platform: 'codex' } });
@@ -293,7 +359,9 @@ test('Codex removes empty legacy sessions and keeps meaningful sessions with a n
     ]);
 
     assert.equal(empty, null);
-    assert.deepEqual(meaningful, { query: 'Codex execution', tokens: 42, latency: 1234 });
+    assert.equal(meaningful?.query, 'Codex execution');
+    assert.equal(meaningful?.tokens, 42);
+    assert.equal(meaningful?.latency, 1234);
   } finally {
     await prismaRaw.execution.deleteMany({ where: { user, framework: 'codex' } });
   }

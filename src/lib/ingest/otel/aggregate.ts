@@ -40,6 +40,7 @@ export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEve
   const sessionEvents = events.filter((event) => event.sessionId === sessionId);
   if (!sessionEvents.length) return null;
   const adapter = getOtelTraceAdapter(sessionEvents);
+  if (!adapter) return null;
   const prepared = adapter.preprocessEvents
     ? adapter.preprocessEvents(sessionEvents)
     : sessionEvents;
@@ -56,7 +57,7 @@ export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEve
   const sorted = retained.sort((a, b) => (a.startTimeMs || 0) - (b.startTimeMs || 0));
   if (!sorted.length) return null;
   // Keep a foreign framework's raw spool for the server that owns its adapter.
-  return adapter?.aggregate(sessionId, sorted) || null;
+  return adapter.aggregate(sessionId, sorted) || null;
 }
 
 export function aggregateOtelTraceSession(sessionId: string, spoolDir?: string): OtelTraceAggregationResult {

@@ -20,7 +20,9 @@ Agent、SubAgent、Skill、Tool、LLM 和编辑器事件统一转换为 `Executi
 
 ## 2. 真实接口边界
 
-实现基线为 `@openai/codex@0.145.0`，兼容范围为 `>=0.145.0 <0.146.0`。
+实现基线为 `@openai/codex@0.145.0`。安装器只要求可解析且语义版本不低于
+`0.145.0`，没有上限；`0.147.x`、后续 `0.x` 与 `1.x` 均可安装。低于基线、
+`0.145.0` 的预发布版本与不可解析输出会被拒绝。
 
 - Codex 支持 `SessionStart`、`SessionEnd`、`UserPromptSubmit`、`PreToolUse`、
   `PostToolUse`、`PreCompact`、`PostCompact`、`SubagentStart`、`SubagentStop`、
@@ -214,8 +216,10 @@ shell history 或终端输出。
 - handler 只向 `127.0.0.1` relay 发送，relay 使用随机 install secret 鉴权；
 - API Key 只进入权限为 `0600` 的 collector config 和请求 header，不进入 Hook command、
   事件、日志、checkpoint 或资源 URL；
-- 默认保持 `otel.log_user_prompt=false`，FileEdit 不上传完整文件，Terminal 不读取环境变量、
-  输出和历史。
+- 托管配置启用 `otel.log_user_prompt=true`，以保留用户任务边界和可读任务名；写入 spool 与
+  上传前会递归脱敏 API Key、token、secret、password 等字段和内联赋值值，以及 Windows、
+  UNC、`/Users/...`、`/home/...` 本地路径；数值型 Token 用量不变；
+- FileEdit 不上传完整文件，Terminal 不读取环境变量、输出和历史。
 
 ## 8. 安装、卸载与中央接入
 

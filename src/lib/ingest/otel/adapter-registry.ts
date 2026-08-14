@@ -1,4 +1,3 @@
-import { actrailOtelTraceAdapter } from './adapters/actrail';
 import { genericOtelTraceAdapter } from './adapters/generic';
 import { openclawOtelTraceAdapter } from './adapters/openclaw';
 import { hermesOtelTraceAdapter } from './adapters/hermes';
@@ -26,6 +25,12 @@ const adapters: readonly OtelTraceAdapter[] = [
   genericOtelTraceAdapter,
 ];
 
+/**
+ * Framework-specific collectors may emit their identity either in the OTLP
+ * attribute or as a retained top-level field in canonical spool events. A
+ * worktree that does not own that framework must leave the trace alone instead
+ * of letting the generic fallback invent tool calls in the shared Session row.
+ */
 function claimsFrameworkSpecificOwnership(events: OtelTraceEvent[]): boolean {
   return events.some((event) => {
     const claims = [event.framework, event.attributes?.['agent.insight.framework']];
