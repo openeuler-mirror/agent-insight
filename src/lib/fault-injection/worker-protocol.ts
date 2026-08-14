@@ -1,6 +1,7 @@
 import type { FaultInjectionWorker } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
 import { refreshTaskProgress } from '@/lib/fault-injection/store'
+import { pickDisplayClientIp } from '@/lib/reliability/client-ip'
 
 export function claimTimeoutMs(): number {
   const sec = Number(process.env.AGENT_INSIGHT_FI_CLAIM_TIMEOUT_SEC || 300)
@@ -78,6 +79,19 @@ export type ClaimedRunPayload = {
   stopRequested: boolean
 }
 
+export function runCanBeClaimedByWorker(
+  requestJson: string | null | undefined,
+  workerId: string,
+): boolean {
+  try {
+    const request = JSON.parse(requestJson || '{}') as { targetWorkerId?: unknown }
+    const targetWorkerId = String(request.targetWorkerId || '').trim()
+    return !targetWorkerId || targetWorkerId === workerId
+  } catch {
+    return true
+  }
+}
+
 export async function claimQueuedRuns(input: {
   user: string
   workerId: string
@@ -87,14 +101,17 @@ export async function claimQueuedRuns(input: {
   const claimed: ClaimedRunPayload[] = []
 
   for (let i = 0; i < limit; i += 1) {
-    const next = await prisma.faultInjectionRun.findFirst({
+    const candidates = await prisma.faultInjectionRun.findMany({
       where: {
         user: input.user,
         status: 'queued',
         stopRequested: false,
       },
       orderBy: { queuedAt: 'asc' },
+      take: 100,
     })
+    const next = candidates.find((candidate: { requestJson: string | null }) =>
+      runCanBeClaimedByWorker(candidate.requestJson, input.workerId))
     if (!next) break
 
     const result = await prisma.faultInjectionRun.updateMany({
@@ -247,6 +264,92 @@ export type OnlineWorkerSummary = {
   hostname: string | null
   lastSeenAt: string
   version: string | null
+}
+
+export type WorkerExecutionTarget = {
+  workerId: string
+  host: string
+  hostname: string | null
+  platform: string
+  agent: string
+  agentLabel: string
+  models: Array<{ id: string; label: string }>
+  lastSeenAt: string
+}
+
+function inventoryOption(row: unknown): { id: string; label: string } | null {
+  if (typeof row === 'string') {
+    const id = row.trim()
+    return id ? { id, label: id } : null
+  }
+  if (!row || typeof row !== 'object') return null
+  const rec = row as Record<string, unknown>
+  const id = String(rec.id || rec.modelID || rec.name || '').trim()
+  if (!id) return null
+  return { id, label: String(rec.label || rec.name || id).trim() || id }
+}
+
+export function executionTargetsFromWorker(
+  worker: Pick<FaultInjectionWorker, 'workerId' | 'hostname' | 'inventoryJson' | 'lastSeenAt'>,
+): WorkerExecutionTarget[] {
+  try {
+    const inventory = JSON.parse(worker.inventoryJson || '{}') as {
+      reportedIp?: string
+      ip?: string
+      observedIp?: string
+      platforms?: Record<string, { ready?: boolean; agents?: unknown[]; models?: unknown[] }>
+    }
+    const host = pickDisplayClientIp({
+      reportedIp: inventory.reportedIp || inventory.ip || null,
+      observedIp: inventory.observedIp || null,
+    }) || worker.hostname || worker.workerId
+    const out: WorkerExecutionTarget[] = []
+    for (const [platform, info] of Object.entries(inventory.platforms || {})) {
+      if (!info?.ready) continue
+      const agents = (Array.isArray(info.agents) ? info.agents : [])
+        .map(inventoryOption)
+        .filter((row): row is { id: string; label: string } => Boolean(row))
+      const models = (Array.isArray(info.models) ? info.models : [])
+        .map(inventoryOption)
+        .filter((row): row is { id: string; label: string } => Boolean(row))
+      for (const agent of agents) {
+        out.push({
+          workerId: worker.workerId,
+          host,
+          hostname: worker.hostname,
+          platform,
+          agent: agent.id,
+          agentLabel: agent.label,
+          models: [{ id: '', label: '平台默认' }, ...models],
+          lastSeenAt: worker.lastSeenAt.toISOString(),
+        })
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/** All executable Agent targets reported by online configured clients. */
+export async function listWorkerExecutionTargets(user: string | null): Promise<WorkerExecutionTarget[]> {
+  if (!user) return []
+  const cutoff = new Date(Date.now() - workerOnlineMs())
+  let workers: FaultInjectionWorker[]
+  try {
+    workers = await prisma.faultInjectionWorker.findMany({
+      where: { user, lastSeenAt: { gte: cutoff } },
+      orderBy: { lastSeenAt: 'desc' },
+      take: 100,
+    })
+  } catch {
+    return []
+  }
+  const out: WorkerExecutionTarget[] = []
+  for (const worker of workers) {
+    out.push(...executionTargetsFromWorker(worker))
+  }
+  return out
 }
 
 /** Platform readiness from online FI Worker inventory (not server PATH). */

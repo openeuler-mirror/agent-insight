@@ -36,7 +36,7 @@
 - 实验使用已有 Trace，或在指定客户端、Agent 平台和模型上生成新 Trace。
 - 可靠性数据集维护故障模式及 Case；可靠性数据集只能选择可靠性评估器。
 - RAS/客户端上报可与 Trace、Span、实验 Case 关联的故障事实。
-- 可靠性评估器输出故障发生、检测、处置、消解和最终任务结果。
+- 可靠性评估拆成独立的故障注入评估器（故障发生）与故障检测恢复评估器（故障检测、触发处置、故障消解）；最终任务结果不再属于新可靠性评估维度。
 - Trace 列表展示轻量异常状态，详情展示完整证据。
 
 ### 2.2 不在本期开放的能力
@@ -424,8 +424,12 @@ sequenceDiagram
         R->>T: 故障事实事件
         C-->>G: Agent 进程执行结果
         T->>E: Trace 已关联到 caseRun
-        E->>V: Trace + 故障事实 + Case 预期 + 配置快照
-        V-->>E: EvaluatorOutput
+        alt Execution 存在且 Session interactions 非空
+            E->>V: Trace + 故障事实 + Case 预期 + 配置快照
+            V-->>E: EvaluatorOutput
+        else Trace 缺失、为空或等待超时
+            E->>E: Case 标记 Trace 失败并跳过评估
+        end
     end
     E-->>U: 实验完成或部分失败
 ```
@@ -456,24 +460,23 @@ agent.insight.platform
 - 故障事实：故障、检测、处置和恢复事件。
 - 配置快照：内置配置版本、客户端 override、实验配置版本和校验值。
 
-评估器至少输出以下判断点：
+可靠性评估拆成两个独立、可单选或多选的评估器：
 
-| 判断点 | 含义 |
-|---|---|
-| 故障是否发生 | Trace 或故障事实中是否有与预期故障模式一致的证据 |
-| 故障是否被检测 | RAS 是否产生检测事件，检测是否发生在合理时间内 |
-| 是否触发处置 | 是否出现恢复、熔断、重试、降级等 RAS 动作 |
-| 故障是否消解 | 后续 Trace 是否恢复到可继续执行的状态 |
-| 最终任务结果 | Agent 最终成功、失败或部分完成，成本/时延是否显著恶化 |
+| 评估器 | 判断点 | 含义 |
+|---|---|---|
+| 故障注入评估器 | 故障发生 | Trace 或故障事实中是否有与预期故障模式一致的证据 |
+| 故障检测恢复评估器 | 故障检测 | RAS 是否产生检测事件，检测是否发生在合理时间内 |
+| 故障检测恢复评估器 | 触发处置 | 是否出现恢复、熔断、重试、降级等 RAS 动作 |
+| 故障检测恢复评估器 | 故障消解 | 后续 Trace 是否恢复到可继续执行的状态 |
 
-推荐初始评分为五个判断点各 20 分，同时把每个点作为 `points[]` 输出。证据不足时允许不输出总分，只返回 `warn` 和缺失证据说明；不能把“没有收到故障事件”直接等价为“没有发生故障”。
+每个评估器总分为其实际维度的算术平均，并把每个维度作为 `points[]` 输出；同时运行两个评估器时，与通用评估器一致，实验综合分按两个评估器总分的算术平均计算。缺少模型或 Judge 输出非法时不输出总分，只返回 `warn` 和原因；“没有收到故障事件”不能直接等价为“没有发生故障”，仍需结合 Trace 判断。
 
 评估器中心页面保持现有布局和交互，仅在预置评估器注册信息中新增可靠性分类，不单独改造评估器管理页面：
 
 ```json
 {
-  "id": "preset-ras-reliability",
-  "name": "Agent RAS 可靠性评估器",
+  "id": "preset-ras-reliability-fault-injection",
+  "name": "Agent RAS 可靠性故障注入评估器",
   "source": "preset",
   "category": "reliability",
   "targetTypes": ["轨迹", "故障事件"],
@@ -481,6 +484,8 @@ agent.insight.platform
   "runtimeNote": "ras-reliability-evaluator.ts"
 }
 ```
+
+检测恢复评估器 ID 为 `preset-ras-reliability-detection-recovery`。旧 `preset-ras-reliability` 只保留历史结果与重评兼容，不进入新建实验和评估器目录。
 
 非可靠性评估器的 `category` 读取时按 `general` 兜底，避免要求迁移全部存量自定义评估器。数据集与评估器门控只读取注册元数据，不根据名称或标签字符串猜测。
 
@@ -492,11 +497,9 @@ agent.insight.platform
   "summary": "模型超时故障已发生，RAS 在 1.8 秒内检测并通过备用模型完成恢复。",
   "score": 100,
   "points": [
-    { "label": "故障发生", "score": 100, "status": "covered" },
     { "label": "故障检测", "score": 100, "status": "covered" },
     { "label": "触发处置", "score": 100, "status": "covered" },
-    { "label": "故障消解", "score": 100, "status": "covered" },
-    { "label": "最终任务结果", "score": 100, "status": "covered" }
+    { "label": "故障消解", "score": 100, "status": "covered" }
   ],
   "evidence": {
     "json": {
@@ -1216,7 +1219,10 @@ If-None-Match: "sha256:..."
     "name": "code-review-agent",
     "framework": "opencode"
   },
-  "evaluatorIds": ["preset-ras-reliability"],
+  "evaluatorIds": [
+    "preset-ras-reliability-fault-injection",
+    "preset-ras-reliability-detection-recovery"
+  ],
   "traceSource": "generate",
   "generateTrace": {
     "clientId": "cli_01J...",
@@ -1238,7 +1244,7 @@ If-None-Match: "sha256:..."
     "name": "code-review-agent",
     "framework": "opencode"
   },
-  "evaluatorIds": ["preset-ras-reliability"],
+  "evaluatorIds": ["preset-ras-reliability-detection-recovery"],
   "traceSource": "existing",
   "existingTrace": {
     "executionIds": ["exec_01", "exec_02"]
@@ -1576,7 +1582,7 @@ anomaly=all|normal|abnormal|detecting|unknown
     }
   ],
   "evaluation": {
-    "evaluatorId": "preset-ras-reliability",
+    "evaluatorId": "preset-ras-reliability-detection-recovery",
     "evaluatorVersion": "1.0.0",
     "verdict": "pass",
     "score": 100,
@@ -1695,7 +1701,7 @@ anomaly=all|normal|abnormal|detecting|unknown
 4. 创建实验时可靠性数据集和评估器门控正确；Trace 选择分页和筛选有效。
 5. 生成 Trace 可在选定客户端、平台和模型执行 Case，并将 Trace 关联回实验 Case。
 6. 故障事实与 Trace/Span/Case 正确关联；重复上报不产生重复事件。
-7. 可靠性评估器能输出故障发生、检测、处置、消解和最终结果，并保留证据。
+7. 两个可靠性评估器能独立执行：注入评估器只输出故障发生，检测恢复评估器输出检测、处置和消解；总分按实际维度平均且不含最终任务结果，并保留证据。
 8. Trace 列表只显示轻量异常状态，执行成功但发生并恢复故障时显示“成功 + 有异常”。
 9. 任一链路失败时页面能区分：客户端离线、未 ACK、拉取失败、写入失败、RAS 未加载、Agent 执行失败、Trace 未到达、评估失败。
 

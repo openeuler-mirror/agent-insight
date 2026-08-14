@@ -9,6 +9,7 @@ import {
   EvaluatorContextValidationError,
   serializeEvaluatorCaseContext,
 } from '@/lib/evaluators/evaluator-case-context';
+import { overallAverage } from '@/lib/engine/experiment/detail-agg';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,15 @@ interface CaseInput {
   /** IF-M02：可靠性 case 的故障模式 id，落盘到 ExperimentCase.faultInjectionType */
   faultInjectionType?: string;
   values?: Record<string, unknown>;
+}
+
+interface ExperimentScoreRow {
+  experimentId: string
+  caseId: string
+  evaluatorId: string
+  status: string
+  score: number | null
+  humanScore: number | null
 }
 
 export async function GET(req: Request) {
@@ -45,6 +55,26 @@ export async function GET(req: Request) {
       }),
     ]);
     const rows = rawRows as Array<Experiment & { _count: { cases: number } }>;
+    const experimentIds = rows.map((row) => row.id);
+    const scoreRows = (experimentIds.length
+      ? await prisma.experimentEvalResult.findMany({
+          where: { experimentId: { in: experimentIds } },
+          select: {
+            experimentId: true,
+            caseId: true,
+            evaluatorId: true,
+            status: true,
+            score: true,
+            humanScore: true,
+          },
+        })
+      : []) as ExperimentScoreRow[];
+    const scoreRowsByExperiment = new Map<string, ExperimentScoreRow[]>();
+    for (const row of scoreRows) {
+      const list = scoreRowsByExperiment.get(row.experimentId) || [];
+      list.push(row);
+      scoreRowsByExperiment.set(row.experimentId, list);
+    }
 
     const items = rows.map((r) => {
       let evaluatorCount = 0;
@@ -61,6 +91,7 @@ export async function GET(req: Request) {
         watchMode: r.watchMode,
         caseCount: r._count.cases,
         evaluatorCount,
+        overallScore: overallAverage(scoreRowsByExperiment.get(r.id) || []),
         createdAt: r.createdAt,
       };
     });
@@ -124,6 +155,7 @@ export async function POST(req: Request) {
               })
             : null;
         const { faultInjectionType: _ignoredFault, ...rest } = item;
+        void _ignoredFault;
         return {
           ...rest,
           evaluatorContextJson,
