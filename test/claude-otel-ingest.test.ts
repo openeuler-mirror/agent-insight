@@ -703,7 +703,7 @@ test("Claude OTel: classifies Pi and OpenInference semantic span kinds", () => {
   }, { receivedAt: new Date().toISOString() })
 
   for (const item of cases) {
-    const event = record.find((candidate: any) => candidate.name === item.name)
+    const event = record.find(candidate => candidate.name === item.name)
     assert.ok(event, `${item.name} event present`)
     assert.equal(event.kind, item.expected, item.name)
   }
