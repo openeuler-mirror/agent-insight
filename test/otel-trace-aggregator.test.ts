@@ -1296,46 +1296,42 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
   assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");
 });
 
-test("OTel trace adapter registry leaves a foreign Pi trace for its owning server", () => {
+test("OTel trace adapter registry selects the Pi adapter when Pi is installed", () => {
   const foreignEvent = traceEvent({
     serviceName: "pi-agent",
     attributes: { "agent.insight.framework": "pi-agent" },
   });
 
-  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
-  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "pi-agent");
 });
 
-test("OTel trace adapter registry leaves a top-level foreign Pi spool event untouched", () => {
+test("OTel trace adapter registry selects Pi for canonical spool events", () => {
   const foreignEvent = traceEvent({
     sessionId: "foreign-pi-canonical",
     framework: "pi-agent",
     attributes: {},
   });
 
-  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
-  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "pi-agent");
 });
 
-test("OTel trace adapter registry leaves a foreign Codex trace for its owning server", () => {
+test("OTel trace adapter registry selects the Codex adapter", () => {
   const foreignEvent = traceEvent({
     serviceName: "codex",
     attributes: { "agent.insight.framework": "codex" },
   });
 
-  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
-  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "codex");
 });
 
-test("OTel trace adapter registry leaves a top-level foreign Codex spool event untouched", () => {
+test("OTel trace adapter registry selects Codex for canonical spool events", () => {
   const foreignEvent = traceEvent({
     sessionId: "foreign-codex-canonical",
     framework: "codex",
     attributes: {},
   });
 
-  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
-  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "codex");
 });
 
 test("OTel traces: Hermes adapter preserves subagent ownership and builds a child tree", () => {
