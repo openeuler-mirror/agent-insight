@@ -78,7 +78,7 @@
 | AC1 | 已实现（当前发布模式） | npm 安装 Agent Insight 服务端并携带采集器源码；setup/auto setup 在所选 Python 中用 pip 安装官方 OTel 依赖，再直接下载、校验和部署 Agent Insight 运行时归档。采集器本体不是 PyPI 包。 |
 | AC2-AC4 | 已实现 | 新增公开 `setup()`；默认创建 `~/.agent-insight/otel_data/llamaindex/account-<key摘要>/spool/`，切换 API Key 自动换隔离目录且不暴露 key。 |
 | AC5-AC8 | 已实现 | ReActAgent、AgentWorkflow、Multi-Agent handoff、嵌套 Workflow 真实 LlamaIndex 测试及浏览器 Trace 树已通过。 |
-| AC9-AC11 | 通过 | 真实 DeepSeek Agent 调用了 FunctionTool、QueryEngineTool 与 `McpToolSpec` Tool；名称、参数、结果、耗时和所属 Agent 均通过验证。远程 MCP transport 是增强项。 |
+| AC9-AC11 | 通过 | 确定性 ReAct 控制器在单条 Agent trace 内调用 FunctionTool、QueryEngineTool 与 `McpToolSpec` Tool，QueryEngineTool 内执行真实 DeepSeek 调用；名称、参数、结果、耗时和所属 Agent 均通过验证。远程 MCP transport 是增强项。 |
 | AC12-AC15 | 通过 | 真实 DeepSeek chat/reasoner 的 model、provider、usage、latency 均采集；超过 2000 字符的 prompt/response 正确截断并保留元数据。 |
 | AC16-AC18 | 已实现 | Retriever 节点来源、score、文档数，Synthesizer 输出及 Workflow Step 名称/状态/耗时已有 Python 与 TypeScript 测试。 |
 | AC19 | 已实现 | 周期扫描继续保留；root Agent/Workflow 完成 span 现在立即落 spool 并唤醒 uploader。 |
