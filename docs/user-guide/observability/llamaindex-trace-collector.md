@@ -433,9 +433,10 @@ python -m mypy src
 Workflow、MCP Tool、spool 原子写入和恢复、容量保护、上传重试、进程退出、重复注册卸载、
 以及同一 Agent 任务三次执行的结构一致性。
 
-采集器单测当前为 `42 passed`；服务端 LlamaIndex 专项测试为
+采集器单测当前为 `45 passed`；服务端 LlamaIndex 专项测试为
 `38 passed, 1 platform skip`。
-仓库外的标准化验收用例位于开发工作区 `demos/`，覆盖 AC5～AC34。每个用例启动前都通过
+仓库外的标准化验收用例位于开发工作区 `demos/`，覆盖 Agent/子 Agent、Tool、LLM、RAG、
+Workflow、上传恢复、性能、卸载重装和数据正确性。每个用例启动前都通过
 `llamaindex_case_bootstrap.ps1` 选择当前源码或已部署采集器，并由
 `llamaindex_case_common.py` 断言以下运行时信息：
 
