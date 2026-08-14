@@ -24,13 +24,12 @@
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
-| `preset-text-*` | `experiment/text-preset-evaluators.ts` → 复用 `evaluation/*-grader.ts` 的确定性算法 |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
 > 这张表只列到「族」级别；具体有哪些预置卡以 `preset-evaluators.ts` 为准，别在文档里再抄一份 id 清单——抄了必然过期。
 
-> **canonical 提醒**：`result-*` 系列的公共分发与模型传输在 `engine/evaluation/result-metric-evaluator.ts`；`text-*` 系列的 ROUGE、Exact Match、Entity F1 叶子算法分别在 `engine/evaluation/*-grader.ts`。它们只服务评测中心的主动实验，质量监控与 trace 上传不调用这套能力。
+> **canonical 提醒**：`result-*` 系列的公共分发与模型传输在 `engine/evaluation/result-metric-evaluator.ts`，只服务评测中心的主动实验。质量监控与 trace 上传不调用这套能力。
 
 ---
 
@@ -376,8 +375,6 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 
 只有当多个评估器确实共享叶子算法或传输时，才把实现体放 `engine/evaluation/`、在 `engine/experiment/` 留一层适配（`result-preset-evaluators.ts` 就是范例）。质量监控不属于该复用边界。
 
-纯代码评估器也采用这一分层：`engine/evaluation/` 的叶子函数使用 0～1 分数并接受算法配置，`engine/experiment/` 的预置适配层映射到平台 0～100 分，并生成 `summary`、`points` 与 `evidence`。Exact Match 与 Entity F1 的实验级配置契约集中在 `lib/evaluators/evaluator-run-config.ts`：创建实验时由 API 白名单校验并版本化写入 `Experiment.evaluatorConfigsJson`，执行结果行再从所属实验读取配置传给预置适配层。旧实验的 `{}` 按严格默认值解释；配置粒度是实验而不是 case。涉及结构化文本时要明确输入协议；例如实体 F1 预置要求严格 JSON 字符串数组，不能从自由文本中猜实体。
-
 > **`engine/experiment/` 的文件顶层只许 import 轻量模块**（`eval-output` 及类型）。`engine/evaluation/` 下的重能力一律用函数内 `await import()` 惰性加载——既有两族都这么写，是为了单测能 `node --test` 直接 import 而不拉起 server-only 依赖。
 
 #### 命名
@@ -535,9 +532,6 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 答案质量 `preset-result-answer` | 最终答案 | 相关性 · 完整性 · 连贯性 |
 | 忠实度 `preset-result-faithfulness` | 实际输出主张 | 对 trace 证据判有据（防脑补） |
 | 指令遵循 `preset-result-instruction` | 输出约束 | 约束达成比例（无约束时不计分） |
-| ROUGE 指标评估 `preset-text-rouge` | Agent 输出与参考答案 | 纯英文按词、含汉字按 Unicode 字符计算 ROUGE-1 · ROUGE-2 · ROUGE-L F1（三项等权） |
-| 完全精确匹配 `preset-text-exact-match` | Agent 输出与一个或多个参考答案 | 严格文本完全匹配（多候选任一命中） |
-| 实体 F1 匹配 `preset-text-entity-f1` | Agent 与参考答案的 JSON 实体数组 | 实体精确率 · 实体召回率 · 实体 F1（一对一匹配） |
 | 不敏感性 `preset-content-insensitivity` | Agent 输出 | 人群身份 · 地域 · 职业阶层 · 年龄外貌 · 文化宗教（5 维扣分制，性别交性别歧视评估器） |
 | 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
 | 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
