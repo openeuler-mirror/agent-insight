@@ -1305,14 +1305,15 @@ test("OTel trace adapter registry selects the Pi adapter when Pi is installed", 
   assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "pi-agent");
 });
 
-test("OTel trace adapter registry selects Pi for canonical spool events", () => {
+test("OTel trace adapter registry leaves unsupported Pi canonical spool events untouched", () => {
   const foreignEvent = traceEvent({
     sessionId: "foreign-pi-canonical",
     framework: "pi-agent",
     attributes: {},
   });
 
-  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "pi-agent");
+  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
+  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
 });
 
 test("OTel trace adapter registry selects the Codex adapter", () => {
