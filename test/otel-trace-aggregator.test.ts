@@ -1260,9 +1260,77 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
   const genericEvent = traceEvent({ serviceName: "another-agent" });
 
   // 顺序即优先级：专用适配器都排在 generic 兜底之前。新增适配器要显式登记在这里。
-  assert.deepEqual(listOtelTraceAdapters().map(adapter => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "openclaw", "qoder", "generic"]);
+  assert.deepEqual(
+    listOtelTraceAdapters().map(adapter => adapter.id),
+    ["actrail", "langfuse-langgraph", "hermes", "openclaw", "llamaindex", "qoder", "generic"],
+  );
   assert.equal(getOtelTraceAdapter([hermesEvent]).id, "hermes");
   assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");
+});
+
+test("OTel traces: LlamaIndex adapter maps required fields and system prompts", () => {
+  const sessionId = "llamaindex-standard"
+  const events = [
+    traceEvent({
+      sessionId,
+      traceId: "trace-llamaindex",
+      spanId: "agent-root",
+      name: "AgentWorkflow.run",
+      kind: "agent",
+      serviceName: "llamaindex",
+      model: undefined,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 500,
+      startTimeMs: 1000,
+      attributes: {
+        "agent.insight.framework": "llamaindex",
+        "agent.insight.span.kind": "agent",
+        "agent.name": "Coordinator",
+        "agent.query": "find evidence",
+        "output.value": "final answer",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-llamaindex",
+      spanId: "llm-child",
+      parentSpanId: "agent-root",
+      name: "OpenAILike.chat",
+      kind: "llm",
+      serviceName: "llamaindex",
+      model: "deepseek-chat",
+      usage: { input_tokens: 8, output_tokens: 3, total_tokens: 11 },
+      latencyMs: 100,
+      startTimeMs: 1100,
+      attributes: {
+        "agent.insight.framework": "llamaindex",
+        "agent.insight.span.kind": "llm",
+        "agent.name": "Coordinator",
+        "gen_ai.provider.name": "deepseek",
+        "input.value": JSON.stringify([
+          { role: "system", content: "Use evidence only." },
+          { role: "user", content: "find evidence" },
+        ]),
+        "output.value": "final answer",
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents(sessionId, events)
+
+  assert.ok(record)
+  assert.equal(record.task_id, sessionId)
+  assert.equal(record.framework, "llamaindex")
+  assert.equal(record.query, "find evidence")
+  assert.equal(record.model, "deepseek-chat")
+  assert.equal(record.tokens, 11)
+  assert.equal(record.final_result, "final answer")
+  assert.equal(record.agentName, "Coordinator")
+  assert.equal(record.llm_call_count, 1)
+  assert.equal(record.tool_call_count, 0)
+  assert.equal(record.tool_call_error_count, 0)
+  assert.equal(record.interactions?.find((item: any) => item.role === "system")?.content, "Use evidence only.")
+  assert.equal(record.interactions?.find((item: any) => item.role === "assistant")?.provider, "deepseek")
 });
 
 test("OTel traces: Hermes adapter preserves subagent ownership and builds a child tree", () => {

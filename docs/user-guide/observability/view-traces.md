@@ -140,7 +140,8 @@ Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 spa
 
 - **AGENTS**：参与当前执行的 Agent 数量
 - **TASK SPAWNS**：执行过程中派生的新任务数量
-- **CHAIN SPANS**：Langfuse Trace 中保留的业务链路节点数量
+- **CHAIN SPANS**：Langfuse、LlamaIndex 等框架归一后保留的业务链路节点数量；已知的低价值
+  SDK/运行时包装节点不会计入
 - **TOOL CALLS**：工具调用次数
 - **SKILL CALLS**：Skill 触发次数
 - **LLM TURNS**：模型交互轮次
