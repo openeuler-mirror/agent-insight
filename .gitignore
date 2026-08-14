@@ -77,7 +77,6 @@ _local_legacy/
 
 # OpenCode OTel local capture samples (dev-only)
 scripts/otel_data/opencode/
-test/pi-agent-trace/out/
 
 # workspace 目录不纳入版本控制
 workspace/
