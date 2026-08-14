@@ -239,12 +239,11 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
   }).filter((p) => p.score !== undefined || p.evidence); // 空维度（无分且无任何说明）才略去
 
   // 轨迹评估器没有 isCorrect 之类的达成判定，verdict 留空由呈现层按分数派生。
-  // summary 取 conclusionText（说人话的一句话结论）；模型没给才回落 reasonText——
-  // 后者是「执行路径分析」绿框的正文，带完整性/工具选择/冗余分段结构，当结论读着费劲。
+  // summary 取 conclusionText（说人话的一句话结论）；模型没给才回落 reasonText。
+  // 各维度依据已经进入 points，不再重复写卡级 evidence。
   return normalizeEvaluatorOutput({
     summary: out.conclusionText || out.reasonText,
     score: to100(out.trajectoryScore),
     points: points.length ? points : undefined,
-    evidence: out.reasonText ? { md: out.reasonText } : undefined,
   });
 }

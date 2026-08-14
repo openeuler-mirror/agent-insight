@@ -15,6 +15,18 @@ export const DEFAULT_SELECTED_PRESET_IDS: readonly string[] = [
   'preset-agent-trace-quality',
 ];
 
+/** 当前测试范围外的评估器仍保留注册与执行能力，只从前端入口隐藏。 */
+export const HIDDEN_PRESET_EVALUATOR_IDS: readonly string[] = [
+  'preset-content-insensitivity',
+  'preset-content-controversy',
+  'preset-content-gender-discrimination',
+  'preset-creativity-expression',
+  'preset-safety-maliciousness',
+  'preset-safety-harmfulness',
+  'preset-safety-criminality',
+  'preset-safety-refusal',
+];
+
 export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-agent-task-completion',
@@ -26,7 +38,7 @@ export const presetEvaluators: EvaluatorCard[] = [
     objectives: ['任务完成', '内容质量'],
     scenarios: ['Agent通用评测'],
     runMode: 'LLM Judge',
-    scoreRange: '0-1',
+    scoreRange: '0-100',
     popularity: 96,
     mappedMetrics: ['目标达成', '步骤完整', '答案可用'],
     status: 'ready',
@@ -43,7 +55,7 @@ export const presetEvaluators: EvaluatorCard[] = [
     objectives: ['轨迹质量'],
     scenarios: ['Agent通用评测', '轨迹评测'],
     runMode: 'Trace Judge (opencode)',
-    scoreRange: '0-1',
+    scoreRange: '0-100',
     popularity: 91,
     mappedMetrics: ['轨迹准确性', '推理连续性', '异常处理'],
     status: 'ready',
@@ -247,3 +259,10 @@ export const presetEvaluators: EvaluatorCard[] = [
     runtimeNote: 'safety-preset-evaluators.ts · text-refusal',
   },
 ];
+
+const hiddenPresetEvaluatorIds = new Set(HIDDEN_PRESET_EVALUATOR_IDS);
+
+/** 新建实验、用例分析及评估器中心等前端入口可展示的预置评估器。 */
+export const selectablePresetEvaluators: EvaluatorCard[] = presetEvaluators.filter(
+  (card) => !hiddenPresetEvaluatorIds.has(card.id),
+);

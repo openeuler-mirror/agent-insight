@@ -21,7 +21,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/engine/experiment/dataset-match';
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { selectablePresetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 
@@ -579,7 +579,7 @@ export default function NewExperimentPage() {
   );
 
   const allEvaluators = useMemo(
-    () => [...presetEvaluators, ...customEvaluators],
+    () => [...selectablePresetEvaluators, ...customEvaluators],
     [customEvaluators],
   );
 

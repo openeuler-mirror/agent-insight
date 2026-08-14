@@ -11,7 +11,12 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '../src/lib/evaluators/preset-evaluators';
+import {
+  DEFAULT_SELECTED_PRESET_IDS,
+  HIDDEN_PRESET_EVALUATOR_IDS,
+  presetEvaluators,
+  selectablePresetEvaluators,
+} from '../src/lib/evaluators/preset-evaluators';
 import { hasPresetMeta } from '../src/lib/evaluators/registry';
 import {
   FAITHFUL_PRESET_IDS,
@@ -51,6 +56,19 @@ test('预置卡 id 唯一', () => {
   for (const card of presetEvaluators) {
     assert.ok(!seen.has(card.id), `预置卡 id 重复：${card.id}`);
     seen.add(card.id);
+  }
+});
+
+test('前端可选清单隐藏测试范围外的 8 个评估器，核心评估器采用百分制', () => {
+  const selectableIds = new Set(selectablePresetEvaluators.map((card) => card.id));
+  assert.equal(HIDDEN_PRESET_EVALUATOR_IDS.length, 8);
+  for (const id of HIDDEN_PRESET_EVALUATOR_IDS) {
+    assert.ok(!selectableIds.has(id), `${id} 不应出现在前端可选清单`);
+    assert.ok(presetEvaluators.some((card) => card.id === id), `${id} 仍应保留在后端注册表`);
+  }
+  for (const id of DEFAULT_SELECTED_PRESET_IDS) {
+    const card = selectablePresetEvaluators.find((item) => item.id === id);
+    assert.equal(card?.scoreRange, '0-100', `${id} 应展示为 0-100 分`);
   }
 });
 

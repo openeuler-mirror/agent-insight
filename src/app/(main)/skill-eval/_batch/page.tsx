@@ -137,13 +137,13 @@ interface BatchEvalTask {
     traceEvalStatesJson?: Record<string, TraceEvalStateInfo>;
 }
 
-import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { DEFAULT_SELECTED_PRESET_IDS, selectablePresetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
-// 内置评估器选项 —— 从 presetEvaluators 派生，列出全部 status='ready' 的预置评估器。
+// 内置评估器选项 —— 从当前前端可见清单派生，列出 status='ready' 的预置评估器。
 // 评测走 /api/experiments/eval-traces → 实验引擎，引擎认全部已登记的预置评估器，
 // 这里不做能力过滤。默认勾选哪几个见 DEFAULT_SELECTED_PRESET_IDS。
 const BUILT_IN_EVALUATORS = [
-    ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
+    ...selectablePresetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
 ];
 
 
