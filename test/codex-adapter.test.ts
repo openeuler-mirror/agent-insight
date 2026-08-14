@@ -7,6 +7,7 @@ import { getAdapter } from "../src/lib/ingest/adapters/registry"
 import { aggregateOtelTraceEvents } from "../src/lib/ingest/otel/aggregate"
 import { getOtelTraceAdapter } from "../src/lib/ingest/otel/adapter-registry"
 import { normalizeOtlpTraces } from "../src/lib/ingest/otel/normalize"
+import type { OtelTraceEvent } from "../src/lib/ingest/otel/types"
 
 const require = createRequire(import.meta.url)
 const { canonicalEventsToOtlp } = require("../scripts/agent-trace-collectors/shared/trace-transport.cjs")
@@ -66,7 +67,7 @@ test("Codex adapter accepts collector canonical events before OTLP normalization
       output: "done",
       usage: { input: 9, output: 3, reasoning: 2, total: 12 },
     }),
-  ] as any[]
+  ] as unknown as OtelTraceEvent[]
 
   assert.equal(getOtelTraceAdapter(events).id, "codex")
   const record = aggregateOtelTraceEvents("codex-session", events)
