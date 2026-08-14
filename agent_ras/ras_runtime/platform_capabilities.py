@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# Explicit registry: add platforms here when L3 gains capabilities.
+# OpenCode / xiaoO: HostCallback + skill_result. openjiuwen deep-mount uses DeepAgentAdapter.
 _PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
     "opencode": {
         "supports_host_skill_judge": True,
@@ -13,7 +13,7 @@ _PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
         "supports_host_skill_judge": False,
     },
     "xiaoo": {
-        "supports_host_skill_judge": False,
+        "supports_host_skill_judge": True,
     },
 }
 

@@ -315,10 +315,12 @@ test('restore default deletes the override path', async () => {
     const view = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
     assert.equal(view.overrideDiff['textLoop.repeatThreshold'], undefined)
     assert.equal(view.overrideDiff.enabled, true)
-    assert.equal(view.fieldSources['textLoop.repeatThreshold'], 'builtin')
-    // 恢复默认后取内置默认值
+    assert.equal(view.fieldSources['detectors.llm_thinking_loop.loop_repeat_threshold'], 'builtin')
     assert.equal(
-      (view.effectiveConfig.textLoop as { repeatThreshold: number }).repeatThreshold,
+      (
+        (view.effectiveConfig.detectors as { llm_thinking_loop: { loop_repeat_threshold: number } })
+          .llm_thinking_loop
+      ).loop_repeat_threshold,
       5,
     )
   } finally {
@@ -426,11 +428,10 @@ test('platform configs stay isolated', async () => {
       (xo.config.detectors.repeat_tool as { warning_threshold: number }).warning_threshold,
       9,
     )
-    // xiaoO 强制关闭语义内容检测
     assert.equal(
       (xo.config.detectors.llm_thinking_loop as { semantic_content_enabled: boolean })
         .semantic_content_enabled,
-      false,
+      true,
     )
 
     const ocView = await getClientConfigView(TEST_USER, client.clientId, 'opencode')

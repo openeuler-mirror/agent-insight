@@ -392,9 +392,9 @@ def load_hello_config_from_ras_config(ras_home: Path | None = None) -> dict[str,
     """Build SessionHub hello payload from local config.json.
 
     Prefers ``platforms.xiaoo``; falls back to legacy top-level detectors.
-    xiaoO has no L3 host skill judge — any detector field named
-    ``semantic_content_enabled`` is forced False.
-    Env overrides still win for the classic RAS_* knobs when set.
+    ``semantic_content_enabled`` is passed through (default true; explicit false
+    turns L3 off). xiaoO uses the same HostCallback + ``skill_result`` path as
+    OpenCode. Env overrides still win for the classic RAS_* knobs when set.
     """
     config_path = resolve_config_path(ras_home)
     detectors: dict[str, dict[str, Any]] = {}
@@ -433,8 +433,6 @@ def load_hello_config_from_ras_config(ras_home: Path | None = None) -> dict[str,
         "loop_repeat_threshold": _env_int("RAS_LOOP_REPEAT_THRESHOLD"),
     }
     for cfg in detectors.values():
-        if "semantic_content_enabled" in cfg:
-            cfg["semantic_content_enabled"] = False
         for field, value in deprecated_fields.items():
             if value is not None and field in cfg:
                 cfg[field] = value

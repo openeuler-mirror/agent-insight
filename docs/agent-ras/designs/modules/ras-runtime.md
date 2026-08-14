@@ -104,7 +104,7 @@ Insight 契约真源：[developer-guide/09-otlp-attribute-contract.md](../../../
 | `run_coro` | `runtime.py` | 同步 call 调度到 embed loop |
 | `SessionState` | `session_hub.py` | per-session detectors / last_trace_anchor |
 | `fire_push_*` | `insight_push.py` | 缺配置跳过；失败只打日志 |
-| capabilities | `platform_capabilities.py` | `opencode` 支持 host skill judge |
+| capabilities | `platform_capabilities.py` | OpenCode / xiaoO 支持 host skill judge；openjiuwen 深挂载走 DeepAgentAdapter |
 
 ### 设计模式
 

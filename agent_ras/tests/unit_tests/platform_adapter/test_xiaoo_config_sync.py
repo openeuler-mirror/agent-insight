@@ -383,7 +383,7 @@ class XiaooConfigSyncTests(unittest.TestCase):
             self.assertFalse(result["applied"])
             self.assertEqual(result["reason"], "sync_disabled_or_empty")
 
-    def test_hello_config_forces_no_l3(self) -> None:
+    def test_hello_config_passes_through_semantic_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             (home / "config.json").write_text(
@@ -432,7 +432,7 @@ class XiaooConfigSyncTests(unittest.TestCase):
                 cfg["detectors"]["llm_thinking_loop"]["detection_start_chars"], 888
             )
             self.assertEqual(
-                cfg["detectors"]["llm_thinking_loop"]["semantic_content_enabled"], False
+                cfg["detectors"]["llm_thinking_loop"]["semantic_content_enabled"], True
             )
             self.assertEqual(cfg["detectors"]["repeat_tool"]["warning_threshold"], 7)
             self.assertEqual(cfg["notify_user_on_warning"], False)
