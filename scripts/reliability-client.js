@@ -416,9 +416,16 @@ async function writeRasRuntimeConfig(snapshot) {
 
   let merged
   try {
-    const mod = await import(
-      path.join(__dirname, '..', 'agent_ras', 'platform_adapter', 'opencode', 'config_sync.js')
-    )
+    // 运行时可能被固化到 ~/.agent-insight/client/runtime（见安装器 installRuntime），
+    // 此时 __dirname/.. 不再是包根，必须逐个候选实测而不是假定布局。
+    const candidates = [
+      path.join(__dirname, 'config_sync.js'),
+      path.join(__dirname, '..', 'agent_ras', 'platform_adapter', 'opencode', 'config_sync.js'),
+      path.join(CLIENT_HOME, 'agent_ras', 'platform_adapter', 'opencode', 'config_sync.js'),
+    ]
+    const found = candidates.find((p) => fs.existsSync(p))
+    if (!found) throw new Error(`config_sync.js not found (tried ${candidates.length} paths)`)
+    const mod = await import(found)
     // 某些加载器（tsx / ts-node）会把 ESM 包一层 default，取不到就是 undefined。
     const merge =
       mod.mergeCapabilityIntoLocalRasConfig || mod.default?.mergeCapabilityIntoLocalRasConfig
