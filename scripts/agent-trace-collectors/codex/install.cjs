@@ -52,22 +52,24 @@ function parseArgs(argv) {
 }
 
 function parseCodexVersion(output) {
-  const match = /(?:codex(?:-cli)?\s+)?(\d+)\.(\d+)\.(\d+)/i.exec(String(output || ""));
-  return match ? {
+  const match = /(?:^|\s)(?:codex(?:-cli)?\s+)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?=\s|$)/i.exec(String(output || ""));
+  if (!match) return undefined;
+  const version = {
     major: Number(match[1]),
     minor: Number(match[2]),
     patch: Number(match[3]),
-    raw: match[0],
-  } : undefined;
+    raw: match[0].trim(),
+  };
+  if (match[4]) version.prerelease = match[4];
+  return version;
 }
 
 function isSupportedCodexVersion(version) {
-  return Boolean(
-    version &&
-    version.major === 0 &&
-    version.minor >= 145 &&
-    version.minor <= 146,
-  );
+  if (!version) return false;
+  if (version.major !== 0) return version.major > 0;
+  if (version.minor !== 145) return version.minor > 145;
+  if (version.patch !== 0) return version.patch > 0;
+  return !version.prerelease;
 }
 
 function assertSupportedRuntime(options = {}) {
@@ -86,7 +88,7 @@ function assertSupportedRuntime(options = {}) {
     throw new Error("Codex CLI >=0.145.0 is required and must be available on PATH");
   }
   if (!isSupportedCodexVersion(version)) {
-    throw new Error(`Codex CLI >=0.145.0 <0.147.0 is required; found ${version.raw}`);
+    throw new Error(`Codex CLI >=0.145.0 is required; found ${version.raw}`);
   }
   return version;
 }

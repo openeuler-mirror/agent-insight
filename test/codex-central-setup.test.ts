@@ -11,9 +11,9 @@ import { aggregateOtelTraceEvents } from "@/lib/ingest/otel/aggregate"
 import type { OtelTraceEvent } from "@/lib/ingest/otel/types"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "codex"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "codex"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "codex"]
+const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "codex"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "codex"]
+const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "codex"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
@@ -123,19 +123,18 @@ test("Codex is appended without reordering any existing central framework list",
 })
 
 test("central setup preselects only Codex and keeps no-parameter installs interactive", async () => {
-  for (const script of [
-    await centralScript("unix", "codex"),
-    await autoScript("unix", "codex"),
-  ]) {
+  const central = await centralScript("unix", "codex")
+  const auto = await autoScript("unix", "codex")
+  for (const script of [central, auto]) {
     assert.match(script, /SELECTED_FRAMEWORKS="codex"/)
-    assert.match(script, /FRAMEWORKS_PRESELECTED="true"/)
     assert.match(script, /api\/ingest\/setup\/codex/)
     assert.match(script, /INSTALL_CODEX=true/)
     assert.match(script, /CODEX_INSTALLER="\$\(mktemp\)"/)
     assert.doesNotMatch(script, /setup\/codex"\s*\|\s*sh/)
   }
-
-  assert.match(await centralScript("unix"), /FRAMEWORKS_PRESELECTED="false"/)
+  assert.match(central, /NONINTERACTIVE_FRAMEWORKS="codex"/)
+  assert.match(auto, /FRAMEWORKS_PRESELECTED="true"/)
+  assert.doesNotMatch(await centralScript("unix"), /SELECTED_FRAMEWORKS="codex"/)
   assert.match(await autoScript("unix"), /FRAMEWORKS_PRESELECTED="false"/)
 })
 

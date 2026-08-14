@@ -23,6 +23,7 @@ const {
   uninstallOtelBlock,
 } = require("../scripts/agent-trace-collectors/codex/config-core.cjs")
 const {
+  assertSupportedRuntime,
   install,
   isSupportedCodexVersion,
   parseCodexVersion,
@@ -448,7 +449,7 @@ test("setup route returns the PowerShell staging installer for Windows", async (
   assert.doesNotMatch(source, /apiKey=/)
 })
 
-test("Codex version parser accepts the tested 0.145.x and 0.146.x compatibility line", () => {
+test("Codex version parser accepts the baseline and newer semantic releases", () => {
   const supported = parseCodexVersion("codex-cli 0.146.0")
   assert.deepEqual(supported, {
     major: 0,
@@ -457,10 +458,46 @@ test("Codex version parser accepts the tested 0.145.x and 0.146.x compatibility 
     raw: "codex-cli 0.146.0",
   })
   assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.145.9")), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.145.1-beta.1")), true)
   assert.equal(isSupportedCodexVersion(supported), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.147.0")), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.147.0-beta.1")), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 1.0.0")), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.145.0-beta.1")), false)
   assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.144.9")), false)
-  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.147.0")), false)
   assert.equal(parseCodexVersion("not a version"), undefined)
+})
+
+test("installer accepts a future Codex CLI from an isolated PATH", async (t) => {
+  const binDir = await tempDir(t)
+  const homeDir = await tempDir(t)
+  const commandName = process.platform === "win32" ? "codex.cmd" : "codex"
+  const commandPath = path.join(binDir, commandName)
+  const command = process.platform === "win32"
+    ? "@echo off\r\necho codex-cli 0.147.0\r\n"
+    : "#!/bin/sh\necho 'codex-cli 0.147.0'\n"
+  await fsp.writeFile(commandPath, command, "utf8")
+  if (process.platform !== "win32") await fsp.chmod(commandPath, 0o755)
+
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") || "PATH"
+  const originalPath = process.env[pathKey]
+  const previousKey = process.env.AGENT_INSIGHT_API_KEY
+  process.env[pathKey] = `${binDir}${path.delimiter}${originalPath || ""}`
+  process.env.AGENT_INSIGHT_API_KEY = "test-api-key"
+  t.after(() => {
+    process.env[pathKey] = originalPath
+    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY
+    else process.env.AGENT_INSIGHT_API_KEY = previousKey
+  })
+
+  assert.equal(assertSupportedRuntime().minor, 147)
+  const result = await install({
+    homeDir,
+    sourceDir: path.join(process.cwd(), "scripts", "agent-trace-collectors", "codex"),
+    startRelay: false,
+    installEditors: false,
+  })
+  assert.equal(result.collectorDir, path.join(homeDir, ".agent-insight", "collectors", "codex"))
 })
 
 test("source checkout uninstaller refuses recursive removal outside managed path", () => {
