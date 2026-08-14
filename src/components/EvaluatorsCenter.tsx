@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Info } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { selectablePresetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { deriveEvaluatorTags } from '@/lib/evaluators/registry';
 import EvaluatorDetailModal from '@/components/eval/EvaluatorDetailModal';
 import {
@@ -50,8 +50,8 @@ const evaluatorTypes: EvaluatorType[] = ['LLM'];
 const tagFilterOptions = ['LLM Judge', '看结果', '看轨迹', '依赖参考数据'];
 // 场景：评估对象——"结果" 指评估 agent 最终答复的质量，"轨迹" 指评估 agent 内部执行链路。
 // 老词是 'Agent'，含义模糊（agent 既可指评估主体也可指被评估面），统一改成"结果"避免歧义。
-const targetTypes = Array.from(new Set(presetEvaluators.flatMap(card => card.targetTypes)));
-const objectives = Array.from(new Set(presetEvaluators.flatMap(card => card.objectives)));
+const targetTypes = Array.from(new Set(selectablePresetEvaluators.flatMap(card => card.targetTypes)));
+const objectives = Array.from(new Set(selectablePresetEvaluators.flatMap(card => card.objectives)));
 
 /** System Prompt 占位符插入按钮（与 CUSTOM_EVALUATOR_ALLOWED_VARIABLES 对齐） */
 const placeholderButtons = [
@@ -234,7 +234,7 @@ export default function EvaluatorsCenter() {
   }, [user, evaluatorsHydrated, customEvaluators]);
 
   const visibleCards = useMemo(() => {
-    if (activeTab === 'preset') return presetEvaluators.filter(card => matchesFilter(card, filters));
+    if (activeTab === 'preset') return selectablePresetEvaluators.filter(card => matchesFilter(card, filters));
     return customEvaluators.filter(card => matchesCustomToolbar(card, customToolbar, user));
   }, [activeTab, customEvaluators, filters, customToolbar, user]);
 

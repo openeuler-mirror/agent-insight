@@ -645,7 +645,9 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
 
                               {/* 完整判断依据：与卡头那句结论逐字相同就不重复渲染。
                                   （此前这段在有评分点时被 else 分支吃掉，永远显示不出来。） */}
-                              {r.evidence && !isEvidenceRedundant(r.summary, r.evidence) ? (
+                              {r.evaluatorId !== 'preset-agent-trace-quality'
+                                && r.evidence
+                                && !isEvidenceRedundant(r.summary, r.evidence) ? (
                                 <div style={{ marginTop: 9 }}>
                                   <EvidenceBlock evidence={r.evidence} />
                                 </div>

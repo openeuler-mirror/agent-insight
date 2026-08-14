@@ -20,7 +20,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/client/api';
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { selectablePresetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
 export interface NewBatchCreated {
     evaluatorRunId: string;
@@ -55,7 +55,7 @@ interface EvaluatorOption {
 
 // 跟 BatchEvaluation / GrayscaleEvaluation 里的 BUILT_IN_EVALUATORS 保持一致——只暴露
 // status='ready' 的预置评估器, 隔离掉还在 WIP 的占位卡。
-const READY_PRESETS: EvaluatorOption[] = presetEvaluators
+const READY_PRESETS: EvaluatorOption[] = selectablePresetEvaluators
     .filter(e => e.status === 'ready')
     .map(e => ({
         id: e.id,

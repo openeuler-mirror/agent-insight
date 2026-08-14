@@ -890,10 +890,10 @@ function mergeServerCaseStates(
     return merged;
 }
 
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { selectablePresetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
 const BUILT_IN_EVALUATORS = [
-    ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
+    ...selectablePresetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
 ];
 const BUILT_IN_EVALUATOR_IDS = new Set(BUILT_IN_EVALUATORS.map(e => e.id));
 
