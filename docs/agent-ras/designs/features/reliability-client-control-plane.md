@@ -121,6 +121,31 @@ type CommandStatusFrame = {
 
 ### 送达语义
 
+### 制品由服务端下发，不依赖 npm 与执行目录
+
+安装脚本原先只能 `npm pack` 取制品，导致在仓库外执行时拿到 npm 上版本号相同但内容滞后的包，
+内网/离线环境更是直接失败。curl 命令里唯一确定可达的是服务端自身，故新增
+`GET /api/ingest/setup/bundle?name=ras|client`：把服务端安装目录里的源码打 tar 返回
+（白名单查表，绝不把参数拼进路径）。
+
+RAS 与客户端安装统一为三级回退：
+
+```
+1. 本地 checkout      → 开发者改完立即生效
+2. 服务端 bundle 接口  → 与执行目录、npm registry 均无关
+3. npm pack           → 兼容尚无该接口的旧服务端
+```
+
+**客户端运行时必须固化**：安装器可能是从 bundle 解压到 /tmp 后执行的，装完临时目录即被删除。
+若 systemd/launchd 指向那里，服务会以 `MODULE_NOT_FOUND` 反复崩溃。因此把
+`reliability-client.js`、`ws-client.js` 与 `config_sync.js` 一并拷到
+`~/.agent-insight/client/runtime/`，服务只引用该稳定路径。
+`config_sync.js` 少拷会让 RAS 运行时配置**静默跳过写入** —— 页面显示「已写入」，
+RAS 却永远读到旧值。
+
+pydantic 等第三方依赖仍走 pip（PEP 668 环境自动回退 venv）。完全离线需要预置 wheel，
+属独立议题，需先定 OS/arch/Python 版本矩阵。
+
 ### Trace 采集器安装顺带纳管本机
 
 Trace 采集与主机纳管仍是两个独立安装项（采集器要覆盖 10 种 Agent 平台且支持 Windows，
