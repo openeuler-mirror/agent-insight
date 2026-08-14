@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
 from ras_runtime import call, reset_runtime_for_tests
+from ras_runtime import insight_push
 
 
 @pytest.fixture(autouse=True)
@@ -78,3 +80,49 @@ def test_reset_and_bye():
 def test_unknown_op_returns_error_json():
     out = json.loads(call("nope", "s", "{}"))
     assert "error" in out
+
+
+def test_action_result_can_be_flushed_before_short_lived_host_exits(monkeypatch):
+    received = threading.Event()
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def fake_urlopen(req, timeout):
+        json.loads(req.data.decode("utf-8"))
+        received.set()
+        return Response()
+
+    monkeypatch.setattr(insight_push.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(insight_push, "_LOADED", True)
+    monkeypatch.setattr(insight_push, "_LOADED_KEY", "wi_test")
+    monkeypatch.setattr(insight_push, "_LOADED_URL", "http://localhost/events")
+    insight_push.reset_pending_pushes_for_tests()
+
+    call(
+        "hello",
+        "opencode:ses_flush",
+        json.dumps({"platform": "opencode", "config": {}}),
+    )
+    action = json.loads(
+        call(
+            "action_result",
+            "opencode:ses_flush",
+            json.dumps({"action": "abort_stream", "ok": True}),
+        )
+    )
+    flushed = json.loads(
+        call("flush", "opencode:ses_flush", json.dumps({"timeout_ms": 2000}))
+    )
+
+    assert action["ok"] is True
+    assert received.is_set()
+    assert flushed["acked"] == 1
+    assert flushed["pending"] == 0
+    assert flushed["timed_out"] is False

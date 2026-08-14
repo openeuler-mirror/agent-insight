@@ -109,6 +109,13 @@ class RasClient:
         )
         return bool(response and response.get("ok"))
 
+    def flush(
+        self,
+        session_id: str,
+        timeout_ms: int = 2500,
+    ) -> dict[str, Any] | None:
+        return self._call("flush", session_id, {"timeout_ms": timeout_ms})
+
     def skill_result(
         self,
         session_id: str,
@@ -124,6 +131,7 @@ class RasClient:
         return result
 
     def bye(self, session_id: str) -> None:
+        self.flush(session_id)
         self._call("bye", session_id, {})
 
 

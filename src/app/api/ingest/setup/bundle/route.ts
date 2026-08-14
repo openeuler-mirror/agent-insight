@@ -28,8 +28,8 @@ const BUNDLES: Record<string, string[]> = {
   // 缺了会静默跳过运行时写入（页面显示已写入，RAS 却读不到新值）。
   client: [
     'scripts/install-ras-client.js',
-    'scripts/reliability-client.js',
-    'scripts/ws-client.js',
+    'scripts/reliability-client.cjs',
+    'scripts/ws-client.cjs',
     'scripts/install-fault-injection.js',
     'scripts/fi-worker.js',
     'agent_ras/platform_adapter/opencode/config_sync.js',

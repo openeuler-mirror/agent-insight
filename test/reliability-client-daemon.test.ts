@@ -6,7 +6,7 @@ import test from 'node:test'
 import { createRequire } from 'node:module'
 
 const require_ = createRequire(import.meta.url)
-const client = require_('../scripts/reliability-client.js') as {
+const client = require_('../scripts/reliability-client.cjs') as {
   buildCollectorArgs: (
     run: Record<string, unknown>,
     workspace: string,
@@ -40,7 +40,14 @@ const installer = require_('../scripts/install-ras-client.js') as {
   RUNTIME_DIR: string
   installRuntime?: () => void
   writeSystemdUnit?: () => string
+  writeLaunchdPlist?: () => string
   parseArgs: (argv: string[]) => Record<string, unknown>
+  resolvePythonExecutable?: (
+    runner: (command: string, args: string[], options: Record<string, unknown>) => {
+      status: number | null
+      stdout?: string
+    },
+  ) => string | null
   SERVICE_NAME: string
   LAUNCHD_LABEL: string
 }
@@ -192,6 +199,15 @@ test('installer defaults to installing FI, and --no-fi opts out', () => {
   assert.equal(installer.parseArgs(['--with-fi']).withFi, true)
 })
 
+test('installer resolves an absolute Python path for the launchd runtime', () => {
+  assert.equal(typeof installer.resolvePythonExecutable, 'function')
+  const resolved = installer.resolvePythonExecutable?.(() => ({
+    status: 0,
+    stdout: '/opt/homebrew/opt/python@3.13/bin/python3.13\n',
+  }))
+  assert.equal(resolved, '/opt/homebrew/opt/python@3.13/bin/python3.13')
+})
+
 // ------------------------------------------------- start.sh（无 WSS）部署路径
 
 test('control urls follow the current base, not the stale registered value', () => {
@@ -261,10 +277,17 @@ test('service points at a stable runtime path, never a temp extraction dir', () 
   const script = installer.CLIENT_SCRIPT || ''
   assert.match(
     script,
-    /\.agent-insight[/\\]client[/\\]runtime[/\\]reliability-client\.js$/,
+    /\.agent-insight[/\\]client[/\\]runtime[/\\]reliability-client\.cjs$/,
     `服务入口应在稳定目录，实际: ${script}`,
   )
   assert.ok(!/\/(tmp|T)\//.test(script), '服务入口不得位于临时目录')
+})
+
+test('launchd service preserves the installer PATH for Agent executables', () => {
+  assert.equal(typeof installer.writeLaunchdPlist, 'function')
+  const source = String(installer.writeLaunchdPlist)
+  assert.match(source, /<key>PATH<\/key>/)
+  assert.match(source, /process\.env\.PATH/)
 })
 
 test('runtime bundle carries config_sync.js next to the client script', () => {

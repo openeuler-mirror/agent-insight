@@ -26,10 +26,10 @@ const PACKAGE_ROOT = path.join(__dirname, '..')
  * 因此把运行时拷到这个稳定目录，服务只引用它。
  */
 const RUNTIME_DIR = path.join(CLIENT_HOME, 'runtime')
-const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.js')
+const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['reliability-client.js', 'ws-client.js']
+const RUNTIME_FILES = ['reliability-client.cjs', 'ws-client.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })
@@ -163,6 +163,16 @@ async function register({ host, token, name }) {
 
 // ------------------------------------------------------------- fault injection
 
+function resolvePythonExecutable(runner = spawnSync) {
+  const probe = runner(
+    'python3',
+    ['-c', 'import sys; print(sys.executable)'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+  )
+  const executable = probe.status === 0 ? String(probe.stdout || '').trim() : ''
+  return executable && path.isAbsolute(executable) ? executable : null
+}
+
 /**
  * 安装故障注入组件（Python 包 + 数据目录）。
  *
@@ -178,7 +188,8 @@ function installFaultInjection() {
     console.warn('[install-ras-client] ⚠ 未找到故障注入安装器，跳过（客户端仍可用于配置下发与观测）')
     return false
   }
-  if (spawnSync('python3', ['--version'], { stdio: 'ignore' }).status !== 0) {
+  const python = resolvePythonExecutable()
+  if (!python) {
     console.warn('[install-ras-client] ⚠ 未找到 python3，跳过故障注入组件')
     console.warn('  客户端仍会上线；实验页会显示「FI 未就绪」。装好 python3 后重跑本命令即可。')
     return false
@@ -188,11 +199,14 @@ function installFaultInjection() {
   // 独立子进程：install-fault-injection.js 内部会 process.exit()，不能直接 require。
   const r = spawnSync(process.execPath, [installer], {
     stdio: 'inherit',
-    env: { ...process.env },
+    env: { ...process.env, AGENT_FI_PYTHON: python },
   })
   if (r.status === 0) {
     // 同 venv 分支：探测目录必须是固化副本，不能是临时解压目录。
-    patchClientConfig({ fiPackageRoot: path.join(CLIENT_HOME, 'agent_fault_injection') })
+    patchClientConfig({
+      fiPython: python,
+      fiPackageRoot: path.join(CLIENT_HOME, 'agent_fault_injection'),
+    })
     log('✓ 故障注入组件已安装（由常驻客户端统一领取任务，不另起 fi-worker 进程）')
     return true
   }
@@ -316,6 +330,12 @@ function writeLaunchdPlist() {
   const plistPath = launchdPlistPath()
   fs.mkdirSync(path.dirname(plistPath), { recursive: true })
   const logPath = path.join(CLIENT_HOME, 'client.log')
+  const servicePath = String(process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
   // launchd 没有 watchdog 概念；KeepAlive.SuccessfulExit=false 覆盖崩溃重启，
   // 假死检测由服务端心跳窗口体现为 offline，需人工介入。
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -331,6 +351,7 @@ function writeLaunchdPlist() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>AGENT_INSIGHT_SUPERVISOR</key><string>launchd</string>
+    <key>PATH</key><string>${servicePath}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key>
@@ -474,6 +495,7 @@ module.exports = {
   writeLaunchdPlist,
   parseArgs,
   installFaultInjection,
+  resolvePythonExecutable,
   SERVICE_NAME,
   LAUNCHD_LABEL,
 }

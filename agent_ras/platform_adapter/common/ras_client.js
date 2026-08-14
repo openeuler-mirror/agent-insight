@@ -77,6 +77,10 @@ export function createRasClient(options = {}) {
       })
       return Boolean(out?.ok)
     },
+    async flush(sessionId, timeoutMs = 2500) {
+      if (!ready) return null
+      return call("flush", sessionId, { timeout_ms: timeoutMs })
+    },
     async skillResult(sessionId, payload) {
       return dispatchActions(
         await call("skill_result", sessionId, payload || {}),
@@ -85,6 +89,7 @@ export function createRasClient(options = {}) {
     },
     async bye(sessionId) {
       if (!ready) return
+      await call("flush", sessionId, { timeout_ms: 2500 })
       await call("bye", sessionId, {})
     },
     setOnActions(handler) {

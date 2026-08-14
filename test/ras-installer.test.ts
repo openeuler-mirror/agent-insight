@@ -236,6 +236,32 @@ test("OpenCode RAS defers embedded Python initialization until an observed event
   assert.match(source, /await ras\.hello\(/)
 })
 
+test("OpenCode RAS flushes anomaly and action-result uploads before action handling returns", () => {
+  const pluginSource = fs.readFileSync(
+    path.join(process.cwd(), "agent_ras/platform_adapter/opencode/plugin.js"),
+    "utf8",
+  )
+  const clientSource = fs.readFileSync(
+    path.join(process.cwd(), "agent_ras/platform_adapter/common/ras_client.js"),
+    "utf8",
+  )
+  const bridgeSource = fs.readFileSync(
+    path.join(process.cwd(), "agent_ras/platform_adapter/common/python_bridge.js"),
+    "utf8",
+  )
+
+  assert.match(clientSource, /async flush\(sessionId, timeoutMs = 2500\)/)
+  assert.match(clientSource, /call\("flush", sessionId, \{ timeout_ms: timeoutMs \}\)/)
+  const onActions = pluginSource.slice(
+    pluginSource.indexOf("onActions: async"),
+    pluginSource.indexOf("onSkillRequests: async"),
+  )
+  assert.match(onActions, /await ras\.reportActionResult[\s\S]*await ras\.flush\(sessionId\)/)
+  assert.match(bridgeSource, /PyEval_SaveThread/)
+  assert.match(bridgeSource, /PyGILState_Ensure/)
+  assert.match(bridgeSource, /PyGILState_Release/)
+})
+
 test("prepack removes duplicate RAS source from standalone output", () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), "scripts/prepare-npm-package.js"),

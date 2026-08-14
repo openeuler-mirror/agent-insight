@@ -138,10 +138,16 @@ RAS 与客户端安装统一为三级回退：
 
 **客户端运行时必须固化**：安装器可能是从 bundle 解压到 /tmp 后执行的，装完临时目录即被删除。
 若 systemd/launchd 指向那里，服务会以 `MODULE_NOT_FOUND` 反复崩溃。因此把
-`reliability-client.js`、`ws-client.js` 与 `config_sync.js` 一并拷到
+`reliability-client.cjs`、`ws-client.cjs` 与 `config_sync.js` 一并拷到
 `~/.agent-insight/client/runtime/`，服务只引用该稳定路径。
+两份守护进程脚本使用 `.cjs`，避免被用户目录上层 `package.json` 的
+`"type": "module"` 误判为 ESM；`config_sync.js` 仍保持 ESM 并由客户端动态导入。
 `config_sync.js` 少拷会让 RAS 运行时配置**静默跳过写入** —— 页面显示「已写入」，
 RAS 却永远读到旧值。
+
+安装 FI 时，安装器必须用同一个绝对 Python 路径执行 `python -m pip`，并把该路径写入
+客户端配置；macOS launchd 还要继承安装时的 `PATH`，否则常驻进程会找不到用户目录中的
+`opencode`。这两项都是守护环境与交互式终端环境之间的显式契约。
 
 pydantic 等第三方依赖仍走 pip（PEP 668 环境自动回退 venv）。完全离线需要预置 wheel，
 属独立议题，需先定 OS/arch/Python 版本矩阵。
@@ -193,7 +199,7 @@ OS 不会通知客户端，只等 `close` 事件会永远挂住 —— 表现为
 
 ## 客户端
 
-`scripts/reliability-client.js`，配置根 `~/.agent-insight/client/`。
+`scripts/reliability-client.cjs`，配置根 `~/.agent-insight/client/`。
 
 | 模块 | 职责 |
 |------|------|

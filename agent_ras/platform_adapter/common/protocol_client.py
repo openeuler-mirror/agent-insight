@@ -212,7 +212,10 @@ def build_protocol_ras_client(
                 return
             client.report_action_result(session_id, result)
 
-        apply_wire_actions(host, actions, on_result=_on_result)
+        try:
+            apply_wire_actions(host, actions, on_result=_on_result)
+        finally:
+            client.flush(session_id)
 
     client = RasClient(on_actions=on_actions)
     return client, host

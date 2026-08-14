@@ -12,6 +12,7 @@ const {
   shouldRestartWorker,
   packageRootChanged,
   resolvePython,
+  pipInstall,
 } = require('../scripts/install-fault-injection.js')
 
 test('normalizeHost strips trailing slash and trims', () => {
@@ -144,6 +145,26 @@ test('resolvePython respects AGENT_FI_PYTHON then PYTHON', () => {
     if (prevPy === undefined) delete process.env.PYTHON
     else process.env.PYTHON = prevPy
   }
+})
+
+test('pip install uses the exact Python selected for the client runtime', () => {
+  assert.equal(typeof pipInstall, 'function')
+  const calls: Array<{ command: string; args: string[] }> = []
+  const ok = pipInstall('/tmp/agent_fault_injection', {
+    editable: true,
+    python: '/opt/homebrew/bin/python3',
+    runner: (command: string, args: string[]) => {
+      calls.push({ command, args })
+      return { status: 0 }
+    },
+  })
+  assert.equal(ok, true)
+  assert.deepEqual(calls, [
+    {
+      command: '/opt/homebrew/bin/python3',
+      args: ['-m', 'pip', 'install', '-e', '/tmp/agent_fault_injection'],
+    },
+  ])
 })
 
 test('resolveCollectorCwd never returns a missing packageRoot', () => {

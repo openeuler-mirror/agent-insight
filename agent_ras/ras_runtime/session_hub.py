@@ -25,7 +25,11 @@ from recovery.engine import LocalAutoRecovery, RecoveryPolicy
 from recovery.operations import build_recovery_actions
 from recovery.robustness_prompt import host_messages_for_locale
 from .event_bus import EventBus
-from .insight_push import fire_push_action_result, fire_push_anomaly
+from .insight_push import (
+    fire_push_action_result,
+    fire_push_anomaly,
+    flush_pending_pushes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +301,13 @@ class SessionHub:
             session_id=session_id,
             platform=platform,
         )
+
+    async def flush(
+        self,
+        session_id: str,
+        timeout_ms: int = 2500,
+    ) -> dict[str, int | bool]:
+        return await flush_pending_pushes(session_id, timeout_ms)
 
     async def action_result(
         self,

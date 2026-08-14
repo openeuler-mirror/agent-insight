@@ -263,6 +263,11 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
       } catch {
         /* ignore */
       }
+      try {
+        await ras.flush(sessionId)
+      } catch {
+        /* fail open */
+      }
     },
   })
 
@@ -525,6 +530,11 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
           } catch {
             /* ignore */
           }
+        }
+        try {
+          await ras.flush(sid)
+        } catch {
+          /* fail open */
         }
         return
       }

@@ -20,7 +20,7 @@ def call(op: str, session_id: str, payload_json: str = "{}") -> str:
     """
     Synchronous JSON in/out entry for JS FFI.
 
-    op: health | hello | observe | reset | action_result | skill_result | bye
+    op: health | hello | observe | reset | action_result | skill_result | flush | bye
 
     When a long-lived IPC worker is available (subprocess hook hosts), route
     through it so SessionHub state is shared. Worker sets
@@ -85,54 +85,86 @@ def _dispatch(op: str, session_id: str, payload_json: str | None) -> dict[str, A
     hub, _ = ensure_runtime()
 
     if op == "health":
-        return {
-            "status": "ok",
-            "transport": "inproc",
-            "protocol_version": PROTOCOL_VERSION,
-            "session_count": len(hub.list_sessions()),
-        }
+        async def _health() -> dict[str, Any]:
+            return {
+                "status": "ok",
+                "transport": "inproc",
+                "protocol_version": PROTOCOL_VERSION,
+                "session_count": len(hub.list_sessions()),
+            }
+
+        return run_coro(_health())
 
     if op == "hello":
         platform = _require_platform(payload)
         if not platform:
             return {"error": "missing platform", "op": op, "session_id": session_id}
-        state = hub.hello(session_id, platform, payload.get("config"))
-        return {
-            "protocol_version": PROTOCOL_VERSION,
-            "type": "welcome",
-            "session_id": session_id,
-            "platform": platform,
-            "locale": state.locale,
-            "host_messages": hub.host_messages(session_id),
-        }
+        async def _hello() -> dict[str, Any]:
+            state = hub.hello(session_id, platform, payload.get("config"))
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "type": "welcome",
+                "session_id": session_id,
+                "platform": platform,
+                "locale": state.locale,
+                "host_messages": hub.host_messages(session_id),
+            }
+
+        return run_coro(_hello())
 
     if op == "observe":
-        if hub.get(session_id) is None:
-            platform = _require_platform(payload)
-            if not platform:
-                return {"error": "missing platform", "op": op, "session_id": session_id}
-            hub.ensure(session_id, platform, payload.get("config"))
         return run_coro(hub.observe(session_id, payload))
 
     if op == "reset":
-        hub.reset(session_id)
-        return {"session_id": session_id, "ok": True}
+        async def _reset() -> dict[str, Any]:
+            hub.reset(session_id)
+            return {"session_id": session_id, "ok": True}
+
+        return run_coro(_reset())
 
     if op == "action_result":
-        if hub.get(session_id) is None:
-            platform = _require_platform(payload)
-            if not platform:
-                return {"error": "missing platform", "op": op, "session_id": session_id}
-            hub.ensure(session_id, platform, payload.get("config"))
-        return run_coro(hub.action_result(session_id, payload))
+        async def _action_result() -> dict[str, Any]:
+            if hub.get(session_id) is None:
+                platform = _require_platform(payload)
+                if not platform:
+                    return {
+                        "error": "missing platform",
+                        "op": op,
+                        "session_id": session_id,
+                    }
+                hub.ensure(session_id, platform, payload.get("config"))
+            return await hub.action_result(session_id, payload)
+
+        return run_coro(_action_result())
 
     if op == "skill_result":
-        if hub.get(session_id) is None:
-            return {"session_id": session_id, "ok": False, "error": "unknown_session"}
-        return run_coro(hub.skill_result(session_id, payload))
+        async def _skill_result() -> dict[str, Any]:
+            if hub.get(session_id) is None:
+                return {
+                    "session_id": session_id,
+                    "ok": False,
+                    "error": "unknown_session",
+                }
+            return await hub.skill_result(session_id, payload)
+
+        return run_coro(_skill_result())
+
+    if op == "flush":
+        try:
+            timeout_ms = int(payload.get("timeout_ms") or 2500)
+        except (TypeError, ValueError):
+            timeout_ms = 2500
+        return run_coro(
+            hub.flush(session_id, timeout_ms),
+            timeout=max(1.0, min(timeout_ms / 1000.0 + 1.0, 31.0)),
+        )
 
     if op == "bye":
-        hub.bye(session_id)
-        return {"session_id": session_id, "ok": True}
+        async def _bye() -> dict[str, Any]:
+            flushed = await hub.flush(session_id, 2500)
+            hub.bye(session_id)
+            return {"session_id": session_id, "ok": True, "flush": flushed}
+
+        return run_coro(_bye(), timeout=4.0)
 
     return {"error": f"unknown op: {op}", "op": op}
