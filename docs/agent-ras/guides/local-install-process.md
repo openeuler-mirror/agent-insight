@@ -294,7 +294,7 @@ ${TMPDIR:-/tmp}/agent-insight-ras.XXXXXX/
 | Python 依赖 | 本机 `pip` 装进 runtime 的 `.python-packages` |
 | API Key / Host | setup 查询参数 → 环境变量 → 写入 `ras/config.json` / `.env` |
 | 预检 | 本机 `curl` 打 Insight RAS ingest（只读） |
-| 常驻客户端运行时 | `~/.agent-insight/client/runtime/`（`reliability-client.js` / `ws-client.js` / `config_sync.js`） |
+| 常驻客户端运行时 | `~/.agent-insight/client/runtime/`（`reliability-client.cjs` / `ws-client.cjs` / `config_sync.js`） |
 
 ```mermaid
 flowchart LR

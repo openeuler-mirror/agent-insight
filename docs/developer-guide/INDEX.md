@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `MERGE_PLACEHOLDER` (`pending`) |
+| Commit | `4c935adca25b6fc6649dc410905dbf015b56636c` (`4c935adc`) |
 | Branch | `feat/ras-fault-domain-plugins` |
-| Date | pending |
+| Date | 2026-08-14 16:17:14 +0800 |
 | Author | iceory |
 | Subject | `merge: 再次合并 origin/codex/reliability-development 到 feat/ras-fault-domain-plugins` |
 
-**如何更新：** `git diff MERGE_PLACEHOLDER HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 4c935adc HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
