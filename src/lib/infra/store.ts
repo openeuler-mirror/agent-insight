@@ -41,6 +41,20 @@ export function serializeSample(sourceId: string, s: InfraMetricSample): InfraSa
   };
 }
 
+// 直方图最后一个桶的上界是 +Inf，但 JSON.stringify(Infinity) === 'null'，落库再读回来
+// le 就变成了 null。histQuantile 里 `b.le === Infinity` 的守卫因此失效，会走到插值分支，
+// null 被强制转成 0 → 算出 prevLe*(1-frac)，把最坏尾延迟**静默缩小**
+// （实测 e2e p95 显示 384s，实际应为 7680s）。解析器产出的是真 Infinity，
+// 所以这个 bug 只在「读库」路径出现，实时抓取看不出来 —— 在反序列化边界还原回去。
+function reviveHistograms(raw: string): Record<string, Histogram> {
+  const hs = JSON.parse(raw) as Record<string, Histogram>;
+  for (const h of Object.values(hs)) {
+    if (!h?.buckets) continue;
+    for (const b of h.buckets) if (b.le == null) b.le = Infinity;
+  }
+  return hs;
+}
+
 /** 落库行 → InfraMetricSample（与 serialize 互逆）。 */
 export function deserializeRow(row: {
   tsMs: number;
@@ -58,7 +72,7 @@ export function deserializeRow(row: {
     model: row.model,
     gauges: JSON.parse(row.gauges) as Record<string, number>,
     counters: JSON.parse(row.counters) as Record<string, number>,
-    histograms: JSON.parse(row.histograms) as Record<string, Histogram>,
+    histograms: reviveHistograms(row.histograms),
     waitingByReason: row.waitingByReason ? (JSON.parse(row.waitingByReason) as Record<string, number>) : {},
   };
 }
