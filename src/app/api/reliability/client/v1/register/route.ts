@@ -45,13 +45,17 @@ export async function POST(req: Request) {
       agentVersion: client.agentVersion ? String(client.agentVersion) : null,
       supervisor: client.supervisor ? String(client.supervisor) : null,
       capabilities: body.capabilities,
+      previousClientId: body.previousClientId ? String(body.previousClientId) : null,
     })
 
     const { websocketUrl, pollUrl } = controlUrls(req)
     return NextResponse.json(
       {
         clientId: result.clientId,
+        // 归属写进客户端配置，作为下次安装判断是否需要改绑的依据。
+        user: result.user,
         deviceCredential: result.deviceCredential,
+        unboundPrevious: result.unboundPrevious,
         control: {
           websocketUrl,
           pollUrl,
