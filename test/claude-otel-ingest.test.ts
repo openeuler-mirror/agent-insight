@@ -666,31 +666,45 @@ test("Claude parser: maps tool_result blocks back onto tool_calls output", async
   }
 })
 
-test("Claude OTel: classifies Pi agent.insight.kind spans correctly", () => {
-  // Pi 采集器上传的 agent 事件（agent.insight.kind=agent）不应被降级当 llm
+test("Claude OTel: classifies Pi and OpenInference semantic span kinds", () => {
+  const cases = [
+    { name: "agent.pi", insightKind: "agent", openinferenceKind: "AGENT", expected: "agent" },
+    { name: "agent.worker", insightKind: "subagent", expected: "agent" },
+    { name: "skill.memory", insightKind: "skill", expected: "agent" },
+    { name: "tool.shell", insightKind: "tool", expected: "tool" },
+    { name: "tool.mcp", insightKind: "mcp", expected: "tool" },
+    { name: "llm.pi", insightKind: "llm", expected: "llm" },
+    { name: "agent.chain", openinferenceKind: "CHAIN", expected: "agent" },
+    { name: "tool.openinference", openinferenceKind: "TOOL", expected: "tool" },
+    { name: "llm.openinference", openinferenceKind: "LLM", expected: "llm" },
+  ] as const
+
   const record = normalizeClaudeOtlpTraces({
     resourceSpans: [{
       resource: { attributes: [{ key: "service.name", value: { stringValue: "pi-agent" } }] },
       scopeSpans: [{
         scope: { name: "agent-insight-pi-agent" },
-        spans: [{
-          traceId: "a".repeat(32),
-          spanId: "1".repeat(16),
-          name: "agent.pi",
+        spans: cases.map((item, index) => ({
+          traceId: String(index).padStart(32, "a"),
+          spanId: String(index).padStart(16, "1"),
+          name: item.name,
           kind: 1,
           startTimeUnixNano: "1700000000000000000",
           endTimeUnixNano: "1700000001000000000",
           attributes: [
             { key: "session.id", value: { stringValue: "session-pi" } },
-            { key: "agent.insight.kind", value: { stringValue: "agent" } },
             { key: "agent.insight.framework", value: { stringValue: "pi-agent" } },
-            { key: "openinference.span.kind", value: { stringValue: "AGENT" } },
+            ...(item.insightKind ? [{ key: "agent.insight.kind", value: { stringValue: item.insightKind } }] : []),
+            ...(item.openinferenceKind ? [{ key: "openinference.span.kind", value: { stringValue: item.openinferenceKind } }] : []),
           ],
-        }],
+        })),
       }],
     }],
   }, { receivedAt: new Date().toISOString() })
-  const agentEvent = record.find((ev: any) => ev.name === "agent.pi")
-  assert.ok(agentEvent, "agent event present")
-  assert.equal(agentEvent.kind, "agent")
+
+  for (const item of cases) {
+    const event = record.find((candidate: any) => candidate.name === item.name)
+    assert.ok(event, `${item.name} event present`)
+    assert.equal(event.kind, item.expected, item.name)
+  }
 })
