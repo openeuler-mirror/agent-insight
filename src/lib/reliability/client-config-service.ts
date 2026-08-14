@@ -1,12 +1,15 @@
 /**
- * Reliability client + config control plane (IF-N09/N11/N12/N17).
- * File-backed per user; clients can be upserted from FI Worker heartbeats.
+ * 客户端配置中心（IF-N10/N11/N12/N17），Prisma 存储。
+ *
+ * 状态权威来源分工 —— 服务端不得代客户端确认：
+ *   saved / sync_notified / notify_failed  ← 服务端
+ *   pulling                                ← 客户端 GET config-snapshots
+ *   written                                ← 客户端 COMMAND_STATUS SUCCEEDED(WRITTEN)
+ *   ras_loaded                             ← RAS POST config-loads
  */
 import { createHash, randomBytes } from 'node:crypto'
-import fs from 'node:fs'
-import path from 'node:path'
 
-import { resolveAgentInsightDataPath } from '@/lib/env'
+import { prisma } from '@/lib/storage/prisma'
 import {
   applyOverrideDiff,
   buildBuiltinConfigSchema,
@@ -26,6 +29,18 @@ import {
   getCapabilityEnvelope,
   saveCapabilityEnvelope,
 } from '@/lib/ingest/ras/capability-config-store'
+import {
+  ReliabilityError,
+  deriveStatus,
+  requireOwnedClient,
+} from '@/lib/reliability/client-registry'
+import {
+  createCommand,
+  markSent,
+  sweepUnackedCommands,
+} from '@/lib/reliability/command-bus'
+import { isConnected } from '@/lib/reliability/control-hub'
+import { dispatchCommand } from '@/lib/reliability/control-dispatch'
 
 export type DeliveryStatus =
   | 'saved'
@@ -39,36 +54,11 @@ export type DeliveryStatus =
   | 'load_failed'
   | 'version_mismatch'
 
-export type ReliabilityClientPlatform = {
-  id: string
-  version?: string
-  models?: string[]
-}
-
-export type ReliabilityClientRecord = {
-  id: string
-  user: string
-  name: string
-  hostname: string | null
-  reportedIp: string | null
-  observedIp: string | null
-  os: string | null
-  arch: string | null
-  status: 'online' | 'offline'
-  serviceHealth: 'healthy' | 'unknown' | 'degraded'
-  processStartedAt: string | null
-  restartCount: number
-  lastSeenAt: string
-  agentVersion: string | null
-  platforms: ReliabilityClientPlatform[]
-  workerId?: string | null
-}
-
 export type ConfigDelivery = {
+  deliveryId: string | null
   configRef: string | null
   configVersion: string | null
   checksum: string | null
-  deliveryId: string | null
   commandId: string | null
   status: DeliveryStatus
   pulledAt: string | null
@@ -77,95 +67,29 @@ export type ConfigDelivery = {
   error: { code: string; message: string } | null
 }
 
-export type ClientPlatformConfig = {
-  revision: number
-  schemaVersion: string
-  overrideDiff: Record<string, unknown>
-  updatedAt: string
-  delivery: ConfigDelivery
-}
-
-export type ConfigSnapshot = {
-  configRef: string
-  clientId: string
-  user: string
-  platform: ReliabilityPlatformId
-  scope: 'client' | 'experiment'
-  schemaVersion: string
-  configVersion: string
-  checksum: string
-  config: Record<string, unknown>
-  expiresAt: string
-  createdAt: string
-  correlation?: Record<string, unknown>
-}
-
-type UserStoreFile = {
-  clients: Record<string, ReliabilityClientRecord>
-  configs: Record<string, Record<string, ClientPlatformConfig>>
-  snapshots: Record<string, ConfigSnapshot>
-}
-
-let testBaseDir: string | undefined
-
-export function resetClientConfigStoreForTests(baseDir?: string) {
-  testBaseDir = baseDir
-}
-
-function sanitizeUserKey(user: string): string {
-  return user.replace(/[^a-zA-Z0-9._@-]/g, '_').slice(0, 128) || 'anonymous'
-}
-
-function storeRoot(): string {
-  return testBaseDir ?? resolveAgentInsightDataPath('reliability-control')
-}
-
-function storePath(user: string): string {
-  return path.join(storeRoot(), `${sanitizeUserKey(user)}.json`)
-}
-
-function emptyStore(): UserStoreFile {
-  return { clients: {}, configs: {}, snapshots: {} }
-}
-
-function readStore(user: string): UserStoreFile {
-  const file = storePath(user)
-  try {
-    if (!fs.existsSync(file)) return emptyStore()
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as UserStoreFile
-    return {
-      clients: raw.clients && typeof raw.clients === 'object' ? raw.clients : {},
-      configs: raw.configs && typeof raw.configs === 'object' ? raw.configs : {},
-      snapshots: raw.snapshots && typeof raw.snapshots === 'object' ? raw.snapshots : {},
-    }
-  } catch {
-    return emptyStore()
-  }
-}
-
-function writeStore(user: string, data: UserStoreFile): void {
-  const file = storePath(user)
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
-  fs.renameSync(tmp, file)
-}
+const SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 function newId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${randomBytes(4).toString('hex')}`
+  return `${prefix}_${Date.now().toString(36)}_${randomBytes(5).toString('hex')}`
 }
 
 function checksumOf(config: unknown): string {
-  const hash = createHash('sha256').update(JSON.stringify(config)).digest('hex')
-  return `sha256:${hash}`
+  return `sha256:${createHash('sha256').update(JSON.stringify(config)).digest('hex')}`
+}
+
+function requirePlatform(platform: string): ReliabilityPlatformId {
+  if (!isReliabilityPlatformId(platform)) {
+    throw new ReliabilityError('PLATFORM_SCHEMA_NOT_FOUND', `未知平台: ${platform}`, 404)
+  }
+  return platform
 }
 
 function emptyDelivery(): ConfigDelivery {
   return {
+    deliveryId: null,
     configRef: null,
     configVersion: null,
     checksum: null,
-    deliveryId: null,
     commandId: null,
     status: 'saved',
     pulledAt: null,
@@ -175,135 +99,115 @@ function emptyDelivery(): ConfigDelivery {
   }
 }
 
-function clientIdFromWorker(workerId: string): string {
-  const safe = workerId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 48)
-  return `cli_worker_${safe}`
+type DeliveryRow = {
+  deliveryId: string
+  configRef: string
+  configVersion: string
+  checksum: string
+  commandId: string | null
+  status: string
+  pulledAt: Date | null
+  writtenAt: Date | null
+  loadedAt: Date | null
+  errorCode: string | null
+  errorMessage: string | null
 }
 
-export function upsertReliabilityClientFromWorker(input: {
-  user: string
-  workerId: string
-  hostname?: string | null
-  reportedIp?: string | null
-  observedIp?: string | null
-  lastSeenAt: string
-  platforms: ReliabilityClientPlatform[]
-  online: boolean
-  agentVersion?: string | null
-}): ReliabilityClientRecord {
-  const store = readStore(input.user)
-  const id = clientIdFromWorker(input.workerId)
-  const existing = store.clients[id]
-  const reportedIp = input.reportedIp || existing?.reportedIp || null
-  const hostname = input.hostname || existing?.hostname || null
-  const record: ReliabilityClientRecord = {
-    id,
-    user: input.user,
-    name: reportedIp ? `主机-${reportedIp}` : hostname || id,
-    hostname,
-    reportedIp,
-    observedIp: input.observedIp ?? existing?.observedIp ?? null,
-    os: existing?.os ?? null,
-    arch: existing?.arch ?? null,
-    status: input.online ? 'online' : 'offline',
-    serviceHealth: input.online ? 'healthy' : 'unknown',
-    processStartedAt: existing?.processStartedAt ?? null,
-    restartCount: existing?.restartCount ?? 0,
-    lastSeenAt: input.lastSeenAt,
-    agentVersion: input.agentVersion ?? existing?.agentVersion ?? null,
-    platforms: input.platforms.length ? input.platforms : existing?.platforms || [],
-    workerId: input.workerId,
+function toDelivery(row: DeliveryRow | null): ConfigDelivery {
+  if (!row) return emptyDelivery()
+  return {
+    deliveryId: row.deliveryId,
+    configRef: row.configRef,
+    configVersion: row.configVersion,
+    checksum: row.checksum,
+    commandId: row.commandId,
+    status: row.status as DeliveryStatus,
+    pulledAt: row.pulledAt ? row.pulledAt.toISOString() : null,
+    writtenAt: row.writtenAt ? row.writtenAt.toISOString() : null,
+    loadedAt: row.loadedAt ? row.loadedAt.toISOString() : null,
+    error: row.errorCode
+      ? { code: row.errorCode, message: row.errorMessage || row.errorCode }
+      : null,
   }
-  store.clients[id] = record
-  writeStore(input.user, store)
-  return record
 }
 
-export function listReliabilityClientsForUser(
-  user: string,
-  opts?: { page?: number; pageSize?: number; status?: string; keyword?: string },
-): { items: ReliabilityClientRecord[]; page: number; pageSize: number; total: number } {
-  const store = readStore(user)
-  let items = Object.values(store.clients)
-  const status = String(opts?.status || '').trim()
-  if (status === 'online' || status === 'offline') {
-    items = items.filter((item) => item.status === status)
-  }
-  const keyword = String(opts?.keyword || '').trim().toLowerCase()
-  if (keyword) {
-    items = items.filter((item) => {
-      const hay = [item.reportedIp, item.hostname, item.name, item.id]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      return hay.includes(keyword)
-    })
-  }
-  items.sort((a, b) => String(b.lastSeenAt).localeCompare(String(a.lastSeenAt)))
-  const page = Math.max(1, Number(opts?.page) || 1)
-  const pageSize = Math.min(100, Math.max(1, Number(opts?.pageSize) || 20))
-  const total = items.length
-  const start = (page - 1) * pageSize
-  return { items: items.slice(start, start + pageSize), page, pageSize, total }
+async function latestDelivery(clientId: string, platform: string) {
+  return prisma.reliabilityConfigDelivery.findFirst({
+    where: { clientId, platform },
+    orderBy: { createdAt: 'desc' },
+  })
 }
 
-function requireClient(store: UserStoreFile, clientId: string): ReliabilityClientRecord {
-  const client = store.clients[clientId]
-  if (!client) {
-    const err = new Error('CLIENT_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'CLIENT_NOT_FOUND'
-    err.status = 404
-    throw err
-  }
-  return client
-}
-
-function getOrInitConfig(
-  store: UserStoreFile,
-  clientId: string,
-  platform: ReliabilityPlatformId,
-): ClientPlatformConfig {
-  if (!store.configs[clientId]) store.configs[clientId] = {}
-  const existing = store.configs[clientId][platform]
+async function getOrInitConfig(user: string, clientId: string, platform: ReliabilityPlatformId) {
+  const existing = await prisma.reliabilityClientConfig.findUnique({
+    where: { clientId_platform: { clientId, platform } },
+  })
   if (existing) return existing
-  const created: ClientPlatformConfig = {
-    revision: 0,
-    schemaVersion: '1.0',
-    overrideDiff: {},
-    updatedAt: new Date().toISOString(),
-    delivery: emptyDelivery(),
-  }
-  store.configs[clientId][platform] = created
-  return created
+  return prisma.reliabilityClientConfig.create({
+    data: { clientId, user, platform, revision: 0, overrideJson: '{}' },
+  })
 }
 
-export function getClientConfigView(user: string, clientId: string, platformRaw: string) {
-  if (!isReliabilityPlatformId(platformRaw)) {
-    const err = new Error('PLATFORM_SCHEMA_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'PLATFORM_SCHEMA_NOT_FOUND'
-    err.status = 404
-    throw err
+function parseOverride(json: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(json || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
   }
-  const store = readStore(user)
-  requireClient(store, clientId)
-  const schema = buildBuiltinConfigSchema(platformRaw)
-  const cfg = getOrInitConfig(store, clientId, platformRaw)
-  const effectiveFlat = applyOverrideDiff(schema.defaults, cfg.overrideDiff)
+}
+
+export async function getClientConfigView(user: string, clientId: string, platformRaw: string) {
+  const platform = requirePlatform(platformRaw)
+  await requireOwnedClient(user, clientId)
+  await sweepUnackedCommands(user)
+
+  const schema = buildBuiltinConfigSchema(platform)
+  const cfg = await getOrInitConfig(user, clientId, platform)
+  const override = parseOverride(cfg.overrideJson)
+  const effectiveFlat = applyOverrideDiff(schema.defaults, override)
+  const delivery = await reconcileDelivery(await latestDelivery(clientId, platform))
+
   return {
     clientId,
-    platform: platformRaw,
+    platform,
     schemaVersion: cfg.schemaVersion,
     builtinConfigVersion: schema.configVersion,
     revision: cfg.revision,
-    overrideDiff: { ...cfg.overrideDiff },
+    overrideDiff: { ...override },
     effectiveConfig: nestEffectiveConfig(effectiveFlat),
-    fieldSources: buildFieldSources(schema.defaults, cfg.overrideDiff),
-    delivery: { ...cfg.delivery },
+    fieldSources: buildFieldSources(schema.defaults, override),
+    delivery,
   }
 }
 
 /**
- * 本轮无 WSS：把「保存并同步」桥到客户端真实拉取通道（user × platform 的 ras-capability）。
+ * 指令投递失败会把 delivery 从 sync_notified 落到 notify_failed —— 这一步必须发生在
+ * 读取时，否则页面会一直停在「已通知」，而实际上指令早已 ACK 超时。
+ */
+async function reconcileDelivery(row: DeliveryRow | null): Promise<ConfigDelivery> {
+  if (!row || !row.commandId) return toDelivery(row)
+  if (row.status !== 'sync_notified') return toDelivery(row)
+  const command = await prisma.reliabilityCommand.findUnique({
+    where: { commandId: row.commandId },
+  })
+  if (!command) return toDelivery(row)
+  if (command.status === 'DELIVERY_FAILED' || command.status === 'EXPIRED') {
+    const updated = await prisma.reliabilityConfigDelivery.update({
+      where: { deliveryId: row.deliveryId },
+      data: {
+        status: 'notify_failed',
+        errorCode: command.errorCode || 'ACK_TIMEOUT',
+        errorMessage: command.errorMessage || '客户端未确认接收指令',
+      },
+    })
+    return toDelivery(updated)
+  }
+  return toDelivery(row)
+}
+
+/**
+ * 兼容既有 RAS 拉取通道（/api/ingest/ras-config）：把生效配置发布到 user × platform 的 capability envelope。
  * 严禁跨平台写入——只更新入参 platform。
  */
 export function publishClientConfigToCapabilityPullPath(input: {
@@ -315,12 +219,10 @@ export function publishClientConfigToCapabilityPullPath(input: {
   if (!platformSupportsSync(input.platform)) return
 
   const body = flatConfigToCapabilityBody(input.effectiveFlat)
-  if (input.platform === 'xiaoo') {
-    for (const detector of Object.values(body.detectors)) {
-      if (detector && Object.prototype.hasOwnProperty.call(detector, 'semantic_content_enabled')) {
-        detector.semantic_content_enabled = false
-      }
-    }
+  // xiaoO 强制关闭语义内容检测（既有 ingest 约定）。
+  const loop = body.detectors.llm_thinking_loop
+  if (input.platform === 'xiaoo' && loop) {
+    loop.semantic_content_enabled = false
   }
 
   const existing = getCapabilityEnvelope(input.user, input.platform)
@@ -335,40 +237,37 @@ export function publishClientConfigToCapabilityPullPath(input: {
   saveCapabilityEnvelope(input.user, next)
 }
 
-function freezeSnapshot(input: {
-  store: UserStoreFile
+async function freezeSnapshot(input: {
   user: string
   clientId: string
   platform: ReliabilityPlatformId
   effectiveFlat: Record<string, unknown>
-}): { configRef: string; configVersion: string; checksum: string; deliveryId: string; commandId: string } {
+  scope?: 'client' | 'experiment'
+  correlation?: Record<string, unknown>
+  expiresAt?: Date
+}) {
   const configRef = newId('cfgref')
   const configVersion = newId('cfg')
   const nested = nestEffectiveConfig(input.effectiveFlat)
   const capability = flatConfigToCapabilityBody(input.effectiveFlat)
   const config = { ...nested, capability }
   const checksum = checksumOf(config)
-  const snapshot: ConfigSnapshot = {
-    configRef,
-    clientId: input.clientId,
-    user: input.user,
-    platform: input.platform,
-    scope: 'client',
-    schemaVersion: '1.0',
-    configVersion,
-    checksum,
-    config,
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-    createdAt: new Date().toISOString(),
-  }
-  input.store.snapshots[configRef] = snapshot
-  return {
-    configRef,
-    configVersion,
-    checksum,
-    deliveryId: newId('delivery'),
-    commandId: newId('cmd'),
-  }
+
+  await prisma.reliabilityConfigSnapshot.create({
+    data: {
+      configRef,
+      clientId: input.clientId,
+      user: input.user,
+      platform: input.platform,
+      scope: input.scope || 'client',
+      configVersion,
+      checksum,
+      configJson: JSON.stringify(config),
+      correlationJson: input.correlation ? JSON.stringify(input.correlation) : null,
+      expiresAt: input.expiresAt || new Date(Date.now() + SNAPSHOT_TTL_MS),
+    },
+  })
+  return { configRef, configVersion, checksum }
 }
 
 export type PutClientConfigResult = {
@@ -384,383 +283,398 @@ export type PutClientConfigResult = {
   httpStatus: number
 }
 
-export function putClientConfig(input: {
+/**
+ * 通知客户端同步：冻结快照 → 建指令 → 经 WSS 投递。
+ * 状态只到 sync_notified —— 拉取与写入由客户端回执推进。
+ */
+async function notifyClientSync(input: {
+  user: string
+  clientId: string
+  platform: ReliabilityPlatformId
+  configRef: string
+  configVersion: string
+  checksum: string
+  online: boolean
+}): Promise<{ delivery: ConfigDelivery; commandId: string | null }> {
+  const deliveryId = newId('delivery')
+
+  if (!input.online) {
+    // 保存不回滚，但不排队等待重连（需求文档 §6.2）。
+    const row = await prisma.reliabilityConfigDelivery.create({
+      data: {
+        deliveryId,
+        clientId: input.clientId,
+        user: input.user,
+        platform: input.platform,
+        configRef: input.configRef,
+        configVersion: input.configVersion,
+        checksum: input.checksum,
+        status: 'notify_failed',
+        errorCode: 'CLIENT_OFFLINE',
+        errorMessage: '配置已保存，但客户端离线，未通知同步',
+      },
+    })
+    return { delivery: toDelivery(row), commandId: null }
+  }
+
+  const frame = await createCommand({
+    user: input.user,
+    clientId: input.clientId,
+    action: 'APPLY_CLIENT_CONFIG',
+    payload: {
+      platform: input.platform,
+      scope: 'client',
+      configRef: input.configRef,
+      configVersion: input.configVersion,
+      checksum: input.checksum,
+    },
+  })
+
+  const sent = await dispatchCommand(input.clientId, frame)
+  if (sent.delivered) {
+    await markSent(frame.commandId, 'wss')
+  }
+
+  const row = await prisma.reliabilityConfigDelivery.create({
+    data: {
+      deliveryId,
+      clientId: input.clientId,
+      user: input.user,
+      platform: input.platform,
+      configRef: input.configRef,
+      configVersion: input.configVersion,
+      checksum: input.checksum,
+      commandId: frame.commandId,
+      // 未经 socket 投递也留在 sync_notified：客户端可能走长轮询取指令。
+      status: 'sync_notified',
+    },
+  })
+  return { delivery: toDelivery(row), commandId: frame.commandId }
+}
+
+/**
+ * 客户端能否收到指令。
+ *
+ * WSS 已连当然能收；**但 WSS 不是唯一通道** —— 部署形态若不带控制网关
+ * （如 start.sh 直接跑 Next standalone），客户端会自动降级到 IF-N07 长轮询。
+ * 这时只要心跳新鲜，指令照样能被取走，不该判定为离线。
+ * 只用 isConnected() 把关会让这类部署永远无法下发配置。
+ */
+function canReceiveCommands(
+  client: { status: string; lastSeenAt: Date },
+  clientId: string,
+): boolean {
+  if (isConnected(clientId)) return true
+  return deriveStatus(client) === 'online'
+}
+
+export async function putClientConfig(input: {
   user: string
   clientId: string
   platform: string
   overrideDiff?: Record<string, unknown>
   expectedRevision?: number
   sync?: boolean
-}): PutClientConfigResult {
-  if (!isReliabilityPlatformId(input.platform)) {
-    const err = new Error('PLATFORM_SCHEMA_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'PLATFORM_SCHEMA_NOT_FOUND'
-    err.status = 404
-    throw err
-  }
-  const store = readStore(input.user)
-  const client = requireClient(store, input.clientId)
-  const schema = buildBuiltinConfigSchema(input.platform)
-  const cfg = getOrInitConfig(store, input.clientId, input.platform)
+}): Promise<PutClientConfigResult> {
+  const platform = requirePlatform(input.platform)
+  const client = await requireOwnedClient(input.user, input.clientId)
+  const schema = buildBuiltinConfigSchema(platform)
+  const cfg = await getOrInitConfig(input.user, input.clientId, platform)
 
   if (
-    input.expectedRevision != null
-    && Number.isFinite(input.expectedRevision)
-    && Number(input.expectedRevision) !== cfg.revision
+    input.expectedRevision != null &&
+    Number.isFinite(input.expectedRevision) &&
+    Number(input.expectedRevision) !== cfg.revision
   ) {
-    const err = new Error('CONFIG_REVISION_CONFLICT') as Error & {
-      code: string
-      status: number
-      revision: number
-    }
-    err.code = 'CONFIG_REVISION_CONFLICT'
-    err.status = 409
-    err.revision = cfg.revision
-    throw err
+    throw new ReliabilityError('CONFIG_REVISION_CONFLICT', '配置版本冲突', 409, {
+      revision: cfg.revision,
+    })
   }
 
   const nextOverride =
     input.overrideDiff && typeof input.overrideDiff === 'object' && !Array.isArray(input.overrideDiff)
       ? { ...input.overrideDiff }
-      : { ...cfg.overrideDiff }
+      : parseOverride(cfg.overrideJson)
 
-  cfg.overrideDiff = nextOverride
-  cfg.revision += 1
-  cfg.updatedAt = new Date().toISOString()
-
-  const effectiveFlat = applyOverrideDiff(schema.defaults, cfg.overrideDiff)
-  const wantSync = input.sync === true
-
-  if (!wantSync) {
-    cfg.delivery = {
-      ...emptyDelivery(),
-      status: 'saved',
-    }
-    writeStore(input.user, store)
-    return { revision: cfg.revision, status: 'saved', saved: true, httpStatus: 200 }
-  }
-
-  const frozen = freezeSnapshot({
-    store,
-    user: input.user,
-    clientId: input.clientId,
-    platform: input.platform,
-    effectiveFlat,
+  const updated = await prisma.reliabilityClientConfig.update({
+    where: { clientId_platform: { clientId: input.clientId, platform } },
+    data: { overrideJson: JSON.stringify(nextOverride), revision: { increment: 1 } },
   })
 
-  if (client.status !== 'online') {
-    publishClientConfigToCapabilityPullPath({
-      user: input.user,
-      platform: input.platform,
-      effectiveFlat,
-    })
-    cfg.delivery = {
+  const effectiveFlat = applyOverrideDiff(schema.defaults, nextOverride)
+
+  if (input.sync !== true) {
+    return { revision: updated.revision, status: 'saved', saved: true, httpStatus: 200 }
+  }
+
+  // 兼容通道：RAS 走 /api/ingest/ras-config 主动拉取时读到的是这份。
+  publishClientConfigToCapabilityPullPath({ user: input.user, platform, effectiveFlat })
+
+  const frozen = await freezeSnapshot({
+    user: input.user,
+    clientId: input.clientId,
+    platform,
+    effectiveFlat,
+  })
+  const online = canReceiveCommands(client, input.clientId)
+  const { delivery, commandId } = await notifyClientSync({
+    user: input.user,
+    clientId: input.clientId,
+    platform,
+    ...frozen,
+    online,
+  })
+
+  if (delivery.status === 'notify_failed') {
+    return {
+      revision: updated.revision,
+      status: 'notify_failed',
+      saved: true,
       configRef: frozen.configRef,
       configVersion: frozen.configVersion,
       checksum: frozen.checksum,
-      deliveryId: frozen.deliveryId,
-      commandId: frozen.commandId,
-      status: 'notify_failed',
-      pulledAt: null,
-      writtenAt: null,
-      loadedAt: null,
-      error: {
-        code: 'CLIENT_OFFLINE',
-        message: '配置已保存并写入拉取通道，但客户端离线，未推送通知',
-      },
-    }
-    writeStore(input.user, store)
-    return {
-      revision: cfg.revision,
-      status: 'notify_failed',
-      saved: true,
-      configVersion: frozen.configVersion,
-      checksum: frozen.checksum,
+      deliveryId: delivery.deliveryId || undefined,
       httpStatus: 200,
       sync: {
         status: 'failed',
-        error: {
-          code: 'CLIENT_OFFLINE',
-          message: '配置已保存并写入拉取通道，但客户端离线，未推送通知',
-        },
+        error: delivery.error || { code: 'CLIENT_OFFLINE', message: '客户端离线' },
       },
     }
   }
 
-  // 无 WSS：发布到 ras-config 拉取通道后标 written（待插件启动合并 / RAS 加载回报）。
-  publishClientConfigToCapabilityPullPath({
-    user: input.user,
-    platform: input.platform,
-    effectiveFlat,
-  })
-  const nowIso = new Date().toISOString()
-  cfg.delivery = {
-    configRef: frozen.configRef,
-    configVersion: frozen.configVersion,
-    checksum: frozen.checksum,
-    deliveryId: frozen.deliveryId,
-    commandId: frozen.commandId,
-    status: 'written',
-    pulledAt: nowIso,
-    writtenAt: nowIso,
-    loadedAt: null,
-    error: null,
-  }
-  writeStore(input.user, store)
   return {
-    revision: cfg.revision,
-    status: 'written',
+    revision: updated.revision,
+    status: delivery.status,
     configRef: frozen.configRef,
     configVersion: frozen.configVersion,
     checksum: frozen.checksum,
-    deliveryId: frozen.deliveryId,
-    commandId: frozen.commandId,
+    deliveryId: delivery.deliveryId || undefined,
+    commandId: commandId || undefined,
     httpStatus: 202,
   }
 }
 
-export function deleteClientConfig(input: {
+export async function deleteClientConfig(input: {
   user: string
   clientId: string
   platform: string
   path?: string | null
   sync?: boolean
-}): PutClientConfigResult {
-  if (!isReliabilityPlatformId(input.platform)) {
-    const err = new Error('PLATFORM_SCHEMA_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'PLATFORM_SCHEMA_NOT_FOUND'
-    err.status = 404
-    throw err
-  }
-  const store = readStore(input.user)
-  requireClient(store, input.clientId)
-  const cfg = getOrInitConfig(store, input.clientId, input.platform)
-  const nextOverride = deleteOverridePath(cfg.overrideDiff, input.path)
+}): Promise<PutClientConfigResult> {
+  const platform = requirePlatform(input.platform)
+  await requireOwnedClient(input.user, input.clientId)
+  const cfg = await getOrInitConfig(input.user, input.clientId, platform)
+  const nextOverride = deleteOverridePath(parseOverride(cfg.overrideJson), input.path)
   return putClientConfig({
     user: input.user,
     clientId: input.clientId,
-    platform: input.platform,
+    platform,
     overrideDiff: nextOverride,
     expectedRevision: cfg.revision,
     sync: input.sync === true,
   })
 }
 
-export function syncClientConfig(input: {
+/** 复用已冻结的快照重新通知，不产生新的配置 revision。 */
+export async function syncClientConfig(input: {
   user: string
   clientId: string
   platform: string
   configRef?: string
-}): PutClientConfigResult {
-  if (!isReliabilityPlatformId(input.platform)) {
-    const err = new Error('PLATFORM_SCHEMA_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'PLATFORM_SCHEMA_NOT_FOUND'
-    err.status = 404
-    throw err
+}): Promise<PutClientConfigResult> {
+  const platform = requirePlatform(input.platform)
+  const client = await requireOwnedClient(input.user, input.clientId)
+  const cfg = await getOrInitConfig(input.user, input.clientId, platform)
+  const previous = await latestDelivery(input.clientId, platform)
+  const configRef = String(input.configRef || previous?.configRef || '').trim()
+  if (!configRef) {
+    throw new ReliabilityError('CONFIG_SNAPSHOT_NOT_FOUND', '没有可用的配置快照', 404)
   }
-  const store = readStore(input.user)
-  const client = requireClient(store, input.clientId)
-  const cfg = getOrInitConfig(store, input.clientId, input.platform)
-  const configRef = String(input.configRef || cfg.delivery.configRef || '').trim()
-  if (!configRef || !store.snapshots[configRef]) {
-    const err = new Error('CONFIG_SNAPSHOT_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'CONFIG_SNAPSHOT_NOT_FOUND'
-    err.status = 404
-    throw err
+  const snapshot = await prisma.reliabilityConfigSnapshot.findUnique({ where: { configRef } })
+  if (!snapshot) {
+    throw new ReliabilityError('CONFIG_SNAPSHOT_NOT_FOUND', '配置快照不存在', 404)
   }
-  const snapshot = store.snapshots[configRef]
-  if (snapshot.clientId !== input.clientId) {
-    const err = new Error('CONFIG_SNAPSHOT_FORBIDDEN') as Error & { code: string; status: number }
-    err.code = 'CONFIG_SNAPSHOT_FORBIDDEN'
-    err.status = 403
-    throw err
+  if (snapshot.clientId !== input.clientId || snapshot.user !== input.user) {
+    throw new ReliabilityError('CONFIG_SNAPSHOT_FORBIDDEN', '配置快照不属于该客户端', 403)
   }
-  if (snapshot.platform !== input.platform) {
-    const err = new Error('CONFIG_SNAPSHOT_PLATFORM_MISMATCH') as Error & { code: string; status: number }
-    err.code = 'CONFIG_SNAPSHOT_PLATFORM_MISMATCH'
-    err.status = 409
-    throw err
+  if (snapshot.platform !== platform) {
+    throw new ReliabilityError('CONFIG_SNAPSHOT_PLATFORM_MISMATCH', '配置快照平台不匹配', 409)
   }
-  if (client.status !== 'online') {
-    const err = new Error('CLIENT_OFFLINE') as Error & { code: string; status: number }
-    err.code = 'CLIENT_OFFLINE'
-    err.status = 503
-    throw err
+  if (!canReceiveCommands(client, input.clientId)) {
+    throw new ReliabilityError('CLIENT_OFFLINE', '客户端离线，无法通知同步', 503)
   }
-  const deliveryId = newId('delivery')
-  const commandId = newId('cmd')
-  const schema = buildBuiltinConfigSchema(input.platform)
-  const effectiveFlat = applyOverrideDiff(schema.defaults, cfg.overrideDiff)
-  publishClientConfigToCapabilityPullPath({
+
+  const { delivery, commandId } = await notifyClientSync({
     user: input.user,
-    platform: input.platform,
-    effectiveFlat,
-  })
-  const nowIso = new Date().toISOString()
-  cfg.delivery = {
-    ...cfg.delivery,
+    clientId: input.clientId,
+    platform,
     configRef: snapshot.configRef,
     configVersion: snapshot.configVersion,
     checksum: snapshot.checksum,
-    deliveryId,
-    commandId,
-    status: 'written',
-    pulledAt: nowIso,
-    writtenAt: nowIso,
-    error: null,
-  }
-  writeStore(input.user, store)
+    online: true,
+  })
+
   return {
     revision: cfg.revision,
-    status: 'written',
+    status: delivery.status,
     configRef: snapshot.configRef,
     configVersion: snapshot.configVersion,
     checksum: snapshot.checksum,
-    deliveryId,
-    commandId,
+    deliveryId: delivery.deliveryId || undefined,
+    commandId: commandId || undefined,
     httpStatus: 202,
   }
 }
 
-export function getConfigSnapshot(input: {
-  user: string
+/** IF-N17：客户端按 configRef 拉取；拉取动作本身把 delivery 推进到 pulling。 */
+export async function getConfigSnapshot(input: {
   clientId: string
   configRef: string
-}): ConfigSnapshot {
-  const store = readStore(input.user)
-  const snapshot = store.snapshots[input.configRef]
+}) {
+  const snapshot = await prisma.reliabilityConfigSnapshot.findUnique({
+    where: { configRef: input.configRef },
+  })
   if (!snapshot) {
-    const err = new Error('CONFIG_SNAPSHOT_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'CONFIG_SNAPSHOT_NOT_FOUND'
-    err.status = 404
-    throw err
+    throw new ReliabilityError('CONFIG_SNAPSHOT_NOT_FOUND', '配置快照不存在', 404)
   }
-  if (snapshot.clientId !== input.clientId || snapshot.user !== input.user) {
-    const err = new Error('CONFIG_SNAPSHOT_FORBIDDEN') as Error & { code: string; status: number }
-    err.code = 'CONFIG_SNAPSHOT_FORBIDDEN'
-    err.status = 403
-    throw err
+  if (snapshot.clientId !== input.clientId) {
+    throw new ReliabilityError('CONFIG_SNAPSHOT_FORBIDDEN', '配置快照不属于该客户端', 403)
   }
-  if (new Date(snapshot.expiresAt).getTime() < Date.now()) {
-    const err = new Error('CONFIG_SNAPSHOT_EXPIRED') as Error & { code: string; status: number }
-    err.code = 'CONFIG_SNAPSHOT_EXPIRED'
-    err.status = 410
-    throw err
+  if (snapshot.expiresAt.getTime() < Date.now()) {
+    throw new ReliabilityError('CONFIG_SNAPSHOT_EXPIRED', '配置快照已过期', 410)
   }
-  const cfg = getOrInitConfig(store, input.clientId, snapshot.platform)
-  if (cfg.delivery.configRef === snapshot.configRef && cfg.delivery.status === 'sync_notified') {
-    cfg.delivery.status = 'pulling'
-    cfg.delivery.pulledAt = new Date().toISOString()
-    writeStore(input.user, store)
-  } else if (cfg.delivery.configRef === snapshot.configRef && cfg.delivery.status === 'pulling') {
-    cfg.delivery.status = 'written'
-    cfg.delivery.writtenAt = new Date().toISOString()
-    writeStore(input.user, store)
+
+  await prisma.reliabilityConfigDelivery.updateMany({
+    where: {
+      clientId: input.clientId,
+      configRef: input.configRef,
+      status: { in: ['sync_notified', 'notify_failed'] },
+    },
+    data: { status: 'pulling', pulledAt: new Date() },
+  })
+
+  return {
+    configRef: snapshot.configRef,
+    clientId: snapshot.clientId,
+    platform: snapshot.platform,
+    scope: snapshot.scope,
+    schemaVersion: snapshot.schemaVersion,
+    configVersion: snapshot.configVersion,
+    checksum: snapshot.checksum,
+    correlation: snapshot.correlationJson ? JSON.parse(snapshot.correlationJson) : undefined,
+    expiresAt: snapshot.expiresAt.toISOString(),
+    config: JSON.parse(snapshot.configJson),
   }
-  return snapshot
 }
 
-export function markSnapshotWritten(user: string, clientId: string, configRef: string): void {
-  const store = readStore(user)
-  const cfgPlatforms = store.configs[clientId]
-  if (!cfgPlatforms) return
-  const snapshot = store.snapshots[configRef]
-  for (const [platform, cfg] of Object.entries(cfgPlatforms)) {
-    if (cfg.delivery.configRef !== configRef) continue
-    // 只更新命中的平台；有快照时再校验 platform 防串扰。
-    if (snapshot && snapshot.platform !== platform) continue
-    cfg.delivery.status = 'written'
-    cfg.delivery.writtenAt = new Date().toISOString()
-  }
-  writeStore(user, store)
+/** 客户端回执 SUCCEEDED(WRITTEN) 时调用 —— 这是 written 的唯一来源。 */
+export async function markDeliveryWritten(input: {
+  clientId: string
+  configRef: string
+  checksum?: string
+}): Promise<void> {
+  await prisma.reliabilityConfigDelivery.updateMany({
+    where: { clientId: input.clientId, configRef: input.configRef },
+    data: { status: 'written', writtenAt: new Date(), errorCode: null, errorMessage: null },
+  })
 }
 
-/**
- * 客户端经 /api/ingest/ras-config?platform= 拉取时：仅推进该 platform 的 delivery。
- */
-export function noteCapabilityIngestPull(user: string, platformRaw: string): void {
-  if (!isReliabilityPlatformId(platformRaw)) return
-  const store = readStore(user)
-  let changed = false
-  const nowIso = new Date().toISOString()
-  for (const plats of Object.values(store.configs)) {
-    const cfg = plats[platformRaw]
-    if (!cfg) continue
-    if (cfg.delivery.status === 'sync_notified' || cfg.delivery.status === 'pulling') {
-      cfg.delivery.status = 'written'
-      cfg.delivery.pulledAt = cfg.delivery.pulledAt || nowIso
-      cfg.delivery.writtenAt = nowIso
-      changed = true
-    }
-  }
-  if (changed) writeStore(user, store)
+export async function markDeliveryFailed(input: {
+  clientId: string
+  configRef: string
+  stage: 'pull' | 'write'
+  code?: string
+  message?: string
+}): Promise<void> {
+  await prisma.reliabilityConfigDelivery.updateMany({
+    where: { clientId: input.clientId, configRef: input.configRef },
+    data: {
+      status: input.stage === 'pull' ? 'pull_failed' : 'write_failed',
+      errorCode: input.code || (input.stage === 'pull' ? 'PULL_FAILED' : 'WRITE_FAILED'),
+      errorMessage: input.message || null,
+    },
+  })
 }
 
-export function recordConfigLoad(input: {
+/** IF-N12：RAS 加载回报 —— ras_loaded 的唯一来源。 */
+export async function recordConfigLoad(input: {
   user: string
   clientId: string
   platform: string
+  scope?: string
   configVersion: string
   checksum?: string
+  rasProcessId?: string
   status: 'loaded' | 'failed' | 'version_mismatch'
   loadedAt?: string
   error?: { code?: string; message?: string }
-}): { deliveryStatus: DeliveryStatus } {
-  if (!isReliabilityPlatformId(input.platform)) {
-    const err = new Error('PLATFORM_SCHEMA_NOT_FOUND') as Error & { code: string; status: number }
-    err.code = 'PLATFORM_SCHEMA_NOT_FOUND'
-    err.status = 404
-    throw err
-  }
-  const store = readStore(input.user)
-  requireClient(store, input.clientId)
-  const cfg = getOrInitConfig(store, input.clientId, input.platform)
-  if (
-    cfg.delivery.configVersion
-    && cfg.delivery.configVersion !== input.configVersion
-  ) {
-    cfg.delivery.status = 'version_mismatch'
-    cfg.delivery.error = {
-      code: 'VERSION_MISMATCH',
-      message: 'reported configVersion does not match active delivery',
-    }
-    writeStore(input.user, store)
+}): Promise<{ deliveryStatus: DeliveryStatus }> {
+  const platform = requirePlatform(input.platform)
+  await requireOwnedClient(input.user, input.clientId)
+  const loadedAt = input.loadedAt ? new Date(input.loadedAt) : new Date()
+
+  await prisma.reliabilityConfigLoad.create({
+    data: {
+      clientId: input.clientId,
+      user: input.user,
+      platform,
+      scope: input.scope || 'client',
+      configVersion: input.configVersion,
+      checksum: input.checksum || null,
+      rasProcessId: input.rasProcessId || null,
+      status: input.status,
+      errorCode: input.error?.code || null,
+      errorMessage: input.error?.message || null,
+      loadedAt,
+    },
+  })
+
+  const delivery = await latestDelivery(input.clientId, platform)
+  if (!delivery) return { deliveryStatus: 'saved' }
+
+  if (delivery.configVersion && delivery.configVersion !== input.configVersion) {
+    await prisma.reliabilityConfigDelivery.update({
+      where: { deliveryId: delivery.deliveryId },
+      data: {
+        status: 'version_mismatch',
+        errorCode: 'VERSION_MISMATCH',
+        errorMessage: 'RAS 回报的 configVersion 与当前 delivery 不一致',
+      },
+    })
     return { deliveryStatus: 'version_mismatch' }
   }
+
+  let status: DeliveryStatus
+  const data: Record<string, unknown> = {}
   if (input.status === 'loaded') {
-    cfg.delivery.status = 'ras_loaded'
-    cfg.delivery.loadedAt = input.loadedAt || new Date().toISOString()
-    cfg.delivery.error = null
+    status = 'ras_loaded'
+    data.loadedAt = loadedAt
+    data.errorCode = null
+    data.errorMessage = null
   } else if (input.status === 'version_mismatch') {
-    cfg.delivery.status = 'version_mismatch'
-    cfg.delivery.error = {
-      code: input.error?.code || 'VERSION_MISMATCH',
-      message: input.error?.message || 'RAS reported version mismatch',
-    }
+    status = 'version_mismatch'
+    data.errorCode = input.error?.code || 'VERSION_MISMATCH'
+    data.errorMessage = input.error?.message || 'RAS 回报版本不一致'
   } else {
-    cfg.delivery.status = 'load_failed'
-    cfg.delivery.error = {
-      code: input.error?.code || 'LOAD_FAILED',
-      message: input.error?.message || 'RAS failed to load config',
-    }
+    status = 'load_failed'
+    data.errorCode = input.error?.code || 'LOAD_FAILED'
+    data.errorMessage = input.error?.message || 'RAS 加载配置失败'
   }
-  writeStore(input.user, store)
-  return { deliveryStatus: cfg.delivery.status }
+  await prisma.reliabilityConfigDelivery.update({
+    where: { deliveryId: delivery.deliveryId },
+    data: { ...data, status },
+  })
+  return { deliveryStatus: status }
 }
 
-/** Find any user's store that owns this configRef (device credential path). */
-export function findSnapshotAcrossUsers(configRef: string): ConfigSnapshot | null {
-  const root = storeRoot()
-  if (!fs.existsSync(root)) return null
-  for (const name of fs.readdirSync(root)) {
-    if (!name.endsWith('.json')) continue
-    try {
-      const raw = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')) as UserStoreFile
-      const snap = raw.snapshots?.[configRef]
-      if (snap) return snap
-    } catch {
-      /* skip */
-    }
-  }
-  return null
+/**
+ * 客户端经 /api/ingest/ras-config?platform= 拉取时：仅推进该 platform 的 delivery 到 pulling。
+ * 兼容路径 —— 该通道没有 configRef，因此只能表示「拉走了」，不能推进到 written。
+ */
+export async function noteCapabilityIngestPull(user: string, platformRaw: string): Promise<void> {
+  if (!isReliabilityPlatformId(platformRaw)) return
+  await prisma.reliabilityConfigDelivery.updateMany({
+    where: { user, platform: platformRaw, status: 'sync_notified' },
+    data: { status: 'pulling', pulledAt: new Date() },
+  })
 }

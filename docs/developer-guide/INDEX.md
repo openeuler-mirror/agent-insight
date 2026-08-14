@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `1c90a9d6fc3b6b858c8d421e7c631e64c11ee3e9` (`1c90a9d`) |
-| Branch | `codex/reliability-development` |
+| Commit | `1c90a9d6fc3b6b858c8d421e7c631e64c11ee3e9` (`1c90a9d6`) |
+| Branch | `reliability-add-data` |
 | Date | 2026-08-12 21:22:49 +0800 |
 | Author | openeuler-ci-bot |
 | Subject | `!287 feat(reliability): 接入 RAS/FI 到实验与观测主路径，并去除 Judge 合成 Trace` |
 
-**如何更新：** `git diff 1c90a9d HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 1c90a9d6 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

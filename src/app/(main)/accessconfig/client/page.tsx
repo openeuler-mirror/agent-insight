@@ -14,7 +14,16 @@ type ClientItem = {
   reportedIp: string | null
   observedIp?: string | null
   status: string
+  serviceHealth?: string
+  supervisor?: string | null
+  processStartedAt?: string | null
+  restartCount?: number
   lastSeenAt: string
+  agentVersion?: string | null
+  controlChannel?: string
+  /** 存量 FI Worker 的只读行：没有设备凭证，不能接收控制指令。 */
+  legacy?: boolean
+  faultInjection?: { ready: boolean; note?: string }
   platforms: Array<{ id: string; version?: string; models?: string[] }>
 }
 
@@ -110,7 +119,7 @@ function syncBadgeKind(status: string | undefined): SyncBadgeKind {
   if (!s || s === 'saved') return 'unsynced'
   if (FAIL_STATUSES.has(s)) return 'failed'
   if (s === 'ras_loaded') return 'active'
-  // written = 已写入拉取通道（本轮无 WSS，等同「已发布待 RAS 加载」）
+  // written 来自客户端回执，表示本地已原子写入；RAS 是否加载另算。
   if (s === 'written') return 'published'
   if (s === 'sync_notified' || s === 'pulling') return 'pending_pull'
   return 'unsynced'
@@ -129,6 +138,71 @@ function syncBadgeColorFor(kind: SyncBadgeKind): string {
   if (kind === 'failed') return 'var(--color-danger, #dc2626)'
   if (kind === 'published' || kind === 'pending_pull') return 'var(--primary)'
   return 'var(--muted-foreground)'
+}
+
+function ClientFactCard({
+  label,
+  value,
+  tone,
+  hint,
+  note,
+}: {
+  label: string
+  value: string
+  tone: 'ok' | 'warn' | 'muted'
+  hint?: string
+  /** 未就绪原因直接显示，不只放 tooltip —— 用户需要知道差什么才能修。 */
+  note?: string
+}) {
+  const color =
+    tone === 'ok'
+      ? 'var(--color-success, #16a34a)'
+      : tone === 'warn'
+        ? 'var(--color-warning, #d97706)'
+        : 'var(--muted-foreground)'
+  return (
+    <div
+      title={hint}
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-sm, 6px)',
+        padding: '8px 10px',
+        background: 'var(--card, transparent)',
+        minWidth: 0,
+      }}
+    >
+      <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{label}</div>
+      <div
+        style={{
+          marginTop: 3,
+          fontSize: 12.5,
+          fontWeight: 600,
+          color,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {value}
+      </div>
+      {note ? (
+        <div
+          style={{
+            marginTop: 3,
+            fontSize: 10.5,
+            color: 'var(--muted-foreground)',
+            lineHeight: 1.45,
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+          }}
+        >
+          {note}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 export default function AccessClientConfigPage() {
@@ -439,8 +513,19 @@ export default function AccessClientConfigPage() {
             />
             <div style={{ overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
               {clients.length === 0 && (
-                <div style={{ color: 'var(--muted-foreground)', fontSize: 13, padding: 8 }}>
-                  {isZh ? '暂无客户端。请先启动本机 FI Worker。' : 'No clients. Start FI Worker first.'}
+                <div style={{ color: 'var(--muted-foreground)', fontSize: 13, padding: 8, lineHeight: 1.7 }}>
+                  {isZh ? '暂无客户端。' : 'No clients yet.'}
+                  <br />
+                  {isZh
+                    ? '需要在目标主机安装「常驻客户端」——它与 Trace 采集器是两个不同的安装项。'
+                    : 'Install the resident client on the target host — it is a different install from the trace collector.'}
+                  <br />
+                  <a
+                    href="/accessconfig/install"
+                    style={{ color: 'var(--primary)', textDecoration: 'underline' }}
+                  >
+                    {isZh ? '前往客户端安装 →' : 'Go to client install →'}
+                  </a>
                 </div>
               )}
               {clients.map((client) => {
@@ -503,6 +588,92 @@ export default function AccessClientConfigPage() {
                     {selected.id} · {selected.status === 'online' ? (isZh ? '在线' : 'online') : (isZh ? '离线' : 'offline')} ·{' '}
                     {isZh ? '最近心跳' : 'last seen'} {selected.lastSeenAt} · rev {view?.revision ?? 0}
                   </div>
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    <ClientFactCard
+                      label={isZh ? '常驻客户端服务' : 'Resident service'}
+                      value={
+                        selected.legacy
+                          ? isZh
+                            ? '存量 FI Worker'
+                            : 'Legacy FI worker'
+                          : selected.supervisor
+                            ? `${selected.supervisor} ${isZh ? '托管' : 'managed'}`
+                            : isZh
+                              ? '未托管'
+                              : 'unmanaged'
+                      }
+                      tone={selected.legacy ? 'warn' : selected.supervisor ? 'ok' : 'muted'}
+                    />
+                    <ClientFactCard
+                      label={isZh ? '自动恢复' : 'Auto recovery'}
+                      value={
+                        selected.legacy
+                          ? isZh
+                            ? '不支持'
+                            : 'unsupported'
+                          : `${selected.serviceHealth || 'unknown'} · ${isZh ? '重启' : 'restarts'} ${selected.restartCount ?? 0}`
+                      }
+                      tone={
+                        selected.legacy
+                          ? 'warn'
+                          : selected.serviceHealth === 'healthy'
+                            ? 'ok'
+                            : 'muted'
+                      }
+                    />
+                    <ClientFactCard
+                      label={isZh ? '双向控制连接' : 'Control channel'}
+                      value={
+                        selected.controlChannel === 'wss'
+                          ? isZh
+                            ? 'WSS 已连接'
+                            : 'WSS connected'
+                          : isZh
+                            ? '未连接（轮询兜底）'
+                            : 'not connected (poll)'
+                      }
+                      tone={selected.controlChannel === 'wss' ? 'ok' : 'muted'}
+                    />
+                    <ClientFactCard
+                      label={isZh ? '故障注入能力' : 'Fault injection'}
+                      value={
+                        selected.faultInjection?.ready
+                          ? isZh
+                            ? '可用'
+                            : 'ready'
+                          : isZh
+                            ? '未就绪'
+                            : 'not ready'
+                      }
+                      tone={selected.faultInjection?.ready ? 'ok' : 'warn'}
+                      hint={selected.faultInjection?.note || undefined}
+                      note={selected.faultInjection?.ready ? undefined : selected.faultInjection?.note}
+                    />
+                  </div>
+                  {selected.legacy ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: '8px 10px',
+                        borderRadius: 'var(--radius-sm, 6px)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--muted)',
+                        fontSize: 12,
+                        color: 'var(--muted-foreground)',
+                      }}
+                    >
+                      {isZh
+                        ? '该主机仍是存量 FI Worker：没有设备凭证，无法接收配置下发。重装为常驻客户端后即可配置。'
+                        : 'Legacy FI worker: no device credential, cannot receive config. Reinstall as resident client to configure.'}
+                    </div>
+                  ) : null}
                 </header>
 
                 <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8 }}>

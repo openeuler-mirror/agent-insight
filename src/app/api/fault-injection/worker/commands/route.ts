@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveWorkerCaller } from '@/lib/reliability/worker-dual-auth'
 import {
   listStopCommandsForWorker,
   sweepStaleClaims,
@@ -9,11 +9,15 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request) {
   try {
-    const { username } = await resolveUser(req)
-    if (!username) {
-      return NextResponse.json({ error: 'API key required' }, { status: 401 })
+    const caller = await resolveWorkerCaller(req)
+    if (!caller) {
+      return NextResponse.json(
+        { error: 'API key or device credential required' },
+        { status: 401 },
+      )
     }
-    const workerId = new URL(req.url).searchParams.get('workerId')
+    const username = caller.username
+    const workerId = caller.clientId || new URL(req.url).searchParams.get('workerId')
     if (!workerId) {
       return NextResponse.json({ error: 'workerId required' }, { status: 400 })
     }

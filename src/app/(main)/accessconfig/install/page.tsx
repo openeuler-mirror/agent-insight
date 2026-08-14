@@ -14,6 +14,8 @@ import {
     Cloud,
     UserCircle,
     Boxes,
+    ShieldCheck,
+    RefreshCw,
 } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -196,6 +198,7 @@ export default function AccessInstallPage() {
                     <div style={twoColGrid}>
                         {/* --- Main column --- */}
                         <div style={mainCol}>
+                            <ResidentClientSection isZh={isZh} user={user || ''} />
                             <div style={sectionHeading}>
                                 <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
                                 <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
@@ -539,6 +542,147 @@ function DocsPanel({ locale }: { locale: string }) {
                     </li>
                 ))}
             </ul>
+        </section>
+    );
+}
+
+
+/**
+ * 常驻客户端安装（IF-N01/N02）。
+ *
+ * 与上方的 Trace 采集器安装是两件事：这里装的是独立常驻服务，由 systemd / launchd 守护，
+ * 不随 Agent 平台启停，负责配置下发与双向控制通道。
+ */
+function ResidentClientSection({ isZh, user }: { isZh: boolean; user: string }) {
+    const [expiresAt, setExpiresAt] = useState<string>('');
+    const [command, setCommand] = useState<string>('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string>('');
+    const [copied, setCopied] = useState(false);
+
+    const generate = async () => {
+        setBusy(true);
+        setError('');
+        try {
+            const res = await apiFetch('/api/reliability/install-tokens', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ user, expiresInSeconds: 600 }),
+            });
+            const json = await res.json();
+            if (!res.ok) {
+                throw new Error(json?.error?.message || (isZh ? '生成失败' : 'Failed to generate'));
+            }
+            // 令牌只出现在命令串里，不单独留存 —— 避免多处渲染泄漏。
+            setExpiresAt(json.expiresAt);
+            setCommand(json.commands?.unix || '');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const copy = async () => {
+        if (!command) return;
+        try {
+            await navigator.clipboard.writeText(command);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch { /* 静默 */ }
+    };
+
+    const steps = isZh
+        ? [
+            { t: '生成安装命令', d: '令牌一次性，10 分钟内有效。' },
+            { t: '安装并独立拉起', d: '注册 systemd / launchd，客户端不随 Agent 框架启停。' },
+            { t: '守护与能力发现', d: '配置失败重启与 watchdog，同时发现 IP、平台与模型。' },
+        ]
+        : [
+            { t: 'Generate command', d: 'One-time token, valid for 10 minutes.' },
+            { t: 'Install as a service', d: 'Registers systemd / launchd; independent of agent frameworks.' },
+            { t: 'Supervise & discover', d: 'Restart-on-failure and watchdog; discovers IP, platforms, models.' },
+        ];
+
+    return (
+        <section style={{ ...panelCard, marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <ShieldCheck size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 650 }}>
+                    {isZh ? '常驻客户端（Agent RAS）' : 'Resident client (Agent RAS)'}
+                </h3>
+            </div>
+            <p style={{ margin: '0 0 14px', fontSize: 12.5, color: 'var(--foreground-muted)', lineHeight: 1.6 }}>
+                {isZh
+                    ? '安装独立常驻客户端与 RAS 组件，建立双向控制通道并配置进程自动恢复。仅支持 Linux 与 macOS。'
+                    : 'Installs the resident client and RAS components, opens a bidirectional control channel, and configures automatic process recovery. Linux and macOS only.'}
+            </p>
+
+            <ol style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, listStyle: 'none', padding: 0, margin: '0 0 14px' }}>
+                {steps.map((s, i) => (
+                    <li key={s.t} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-sm, 6px)', padding: '9px 11px' }}>
+                        <div style={{ fontSize: 11, color: 'var(--foreground-muted)', fontFamily: 'var(--font-mono)' }}>{`0${i + 1}`}</div>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 2 }}>{s.t}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 3, lineHeight: 1.5 }}>{s.d}</div>
+                    </li>
+                ))}
+            </ol>
+
+            <button
+                type="button"
+                onClick={generate}
+                disabled={busy}
+                style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    border: '1px solid var(--border)', borderRadius: 'var(--radius-sm, 6px)',
+                    padding: '6px 12px', fontSize: 12.5, fontWeight: 600,
+                    background: 'var(--primary)', color: 'var(--primary-foreground, #fff)',
+                    cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
+                }}
+            >
+                <RefreshCw size={13} strokeWidth={2.2} />
+                {busy ? (isZh ? '生成中…' : 'Generating…') : (isZh ? '生成安装命令' : 'Generate install command')}
+            </button>
+
+            {error ? (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--color-danger, #dc2626)' }}>{error}</div>
+            ) : null}
+
+            {command ? (
+                <div style={{ marginTop: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 5 }}>
+                        <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                            {isZh ? '令牌一次性使用，有效期至 ' : 'One-time token, expires '}
+                            {expiresAt ? new Date(expiresAt).toLocaleString() : '—'}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={copy}
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                                border: '1px solid var(--border)', borderRadius: 'var(--radius-sm, 6px)',
+                                padding: '3px 9px', fontSize: 11.5, cursor: 'pointer',
+                                background: 'transparent',
+                                color: copied ? 'var(--color-success, #16a34a)' : 'var(--foreground)',
+                            }}
+                        >
+                            {copied ? <Check size={12} strokeWidth={2.4} /> : <Copy size={12} strokeWidth={2.2} />}
+                            {copied ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制' : 'Copy')}
+                        </button>
+                    </div>
+                    <pre style={{
+                        margin: 0, padding: '10px 12px', overflowX: 'auto',
+                        background: 'var(--muted)', border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-sm, 6px)',
+                        fontSize: 11.5, fontFamily: 'var(--font-mono)', lineHeight: 1.6,
+                    }}>{command}</pre>
+                    <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--foreground-muted)', lineHeight: 1.6 }}>
+                        {isZh
+                            ? '客户端只接受固定动作白名单（配置写入、运行实验 Case 等），不开放任意命令执行。'
+                            : 'The client only accepts a fixed action whitelist (config write, run experiment case); arbitrary command execution is not exposed.'}
+                    </p>
+                </div>
+            ) : null}
         </section>
     );
 }

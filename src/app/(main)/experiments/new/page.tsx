@@ -19,20 +19,35 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAuth } from '@/lib/auth/auth-context';
-import { apiFetch, getApiUrl } from '@/lib/client/api';
+import { apiFetch } from '@/lib/client/api';
 import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/engine/experiment/dataset-match';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
-interface AgentOption { name: string; traces: number }
-interface PlatformOption { id: string; label: string }
+interface AgentTargetOption {
+  workerId: string;
+  host: string;
+  hostname: string | null;
+  platform: string;
+  models: Array<{ id: string; label: string }>;
+  lastSeenAt: string;
+}
+
+interface AgentOption {
+  name: string;
+  traces: number;
+  frameworks: string[];
+  executable: boolean;
+  targets: AgentTargetOption[];
+}
 
 function defaultExperimentName(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `可靠性评测 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return `Agent 评测 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
 interface TraceItem {
@@ -70,6 +85,7 @@ interface DatasetOption {
   name: string;
   datasetKind?: string;
   targetAgent?: string;
+  tags?: string[];
   caseCount?: number;
   cases?: Array<{
     id?: string;
@@ -79,8 +95,32 @@ interface DatasetOption {
   }>;
 }
 
-const STEPS = ['实验设计', '关联 Trace', '预期答案', '评估器'];
-const NEXT_LABELS = ['下一步：关联 Trace →', '下一步：预期答案 →', '下一步：评估器 →', '🚀 开始实验'];
+function reliabilityCasesFromDataset(dataset: DatasetOption | null): SelectedCase[] {
+  return (dataset?.cases || []).map((item) => {
+    const fault = String(item.values?.fault_injection_type || '').trim();
+    const key = String(item.id || `${fault}:${item.input || ''}`);
+    return {
+      executionId: key,
+      taskId: null,
+      input: String(item.input || ''),
+      actualOutput: '',
+      referenceOutput: item.expectedOutput != null ? String(item.expectedOutput) : null,
+      evaluatorContext: null,
+      faultInjectionType: fault || null,
+      values: {
+        ...(item.values || {}),
+        ...(fault ? { fault_injection_type: fault } : {}),
+      },
+    };
+  });
+}
+
+const STEPS = ['实验设计', 'Trace 来源', '预期答案', '评估器与执行'];
+const NEXT_LABELS = ['下一步：Trace 来源 →', '下一步：预期答案 →', '下一步：评估器与执行 →', '🚀 开始实验'];
+const RELIABILITY_EVALUATOR_IDS = new Set([
+  'preset-ras-reliability-fault-injection',
+  'preset-ras-reliability-detection-recovery',
+]);
 const PAGE_SIZE = 10;
 /** 跨页全选安全上限：避免一次圈选过多 case 拖垮后续评测 */
 const SELECT_ALL_CAP = 500;
@@ -287,28 +327,21 @@ export default function NewExperimentPage() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
-  const [genPlatform, setGenPlatform] = useState('opencode');
   const [genModel, setGenModel] = useState('');
-  const [fiPlatforms, setFiPlatforms] = useState<PlatformOption[]>([]);
-  const [fiAgents, setFiAgents] = useState<PlatformOption[]>([]);
-  const [fiModels, setFiModels] = useState<PlatformOption[]>([]);
-  const [fiInventoryHint, setFiInventoryHint] = useState('');
-  const [reliabilityCases, setReliabilityCases] = useState<SelectedCase[]>([]);
-  const [workerStatus, setWorkerStatus] = useState<'checking' | 'ok' | 'missing'>('checking');
-  const workerOk = workerStatus === 'ok';
-  const [fiSetupCmd, setFiSetupCmd] = useState('');
-  const [fiSetupCopied, setFiSetupCopied] = useState(false);
+  const [selectedTargetKey, setSelectedTargetKey] = useState('');
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
   // 监听模式：开启后本实验绑定该 Agent，其新上报的 trace 自动进来评测（圈选已有 trace 变可选）
   const [watchMode, setWatchMode] = useState(false);
+  const [traceMode, setTraceMode] = useState<'existing' | 'generate'>('existing');
   const [traces, setTraces] = useState<TraceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [tracesLoading, setTracesLoading] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
   const [selected, setSelected] = useState<Map<string, SelectedCase>>(new Map());
+  const [selectedGenerated, setSelectedGenerated] = useState<Map<string, SelectedCase>>(new Map());
   const [traceSearchDraft, setTraceSearchDraft] = useState('');
   const [traceSearch, setTraceSearch] = useState('');
   const [timePreset, setTimePreset] = useState<TimePreset>('7d');
@@ -337,6 +370,29 @@ export default function NewExperimentPage() {
   const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [createdExperimentId, setCreatedExperimentId] = useState('');
+
+  const selectedDataset = useMemo(
+    () => wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
+    [wizardDatasets, selectedDatasetId],
+  );
+  const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
+  const selectedAgent = useMemo(
+    () => agents.find((agent) => agent.name === agentName) || null,
+    [agentName, agents],
+  );
+  const targetOptions = useMemo(() => selectedAgent?.targets || [], [selectedAgent]);
+  const selectedTarget = targetOptions.find(
+    (target) => `${target.workerId}::${target.platform}` === selectedTargetKey,
+  ) || targetOptions[0] || null;
+  const effectiveTargetKey = selectedTarget
+    ? `${selectedTarget.workerId}::${selectedTarget.platform}`
+    : '';
+  const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const reliabilityCases = useMemo(
+    () => reliabilityCasesFromDataset(isReliabilityDataset ? selectedDataset : null),
+    [isReliabilityDataset, selectedDataset],
+  );
 
   useEffect(() => {
     if (!user) return;
@@ -354,27 +410,10 @@ export default function NewExperimentPage() {
       .catch(() => setTraceTags([]));
     apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setWizardDatasets(Array.isArray(d) ? d : []))
+      .then((d) => setWizardDatasets(
+        Array.isArray(d) ? d.filter((item) => isBuiltinReliabilityDataset(item)) : [],
+      ))
       .catch(() => setWizardDatasets([]));
-    apiFetch('/api/fault-injection/platforms', {
-      headers: (() => {
-        const apiKey = typeof window !== 'undefined' ? localStorage.getItem('api_key') || '' : '';
-        return apiKey ? { 'x-witty-api-key': apiKey } : undefined;
-      })(),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        const rows = Array.isArray(d?.platforms) ? d.platforms : [];
-        setFiPlatforms(
-          rows
-            .map((p: { id?: string; label?: string }) => ({
-              id: String(p.id || '').trim(),
-              label: String(p.label || p.id || '').trim(),
-            }))
-            .filter((p: PlatformOption) => p.id),
-        );
-      })
-      .catch(() => setFiPlatforms([]));
     apiFetch('/api/reliability/fault-modes')
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d) => {
@@ -441,10 +480,10 @@ export default function NewExperimentPage() {
   }, [agentName, traceQuery, user]);
 
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 2 || traceMode !== 'existing') return;
     const timer = window.setTimeout(() => void loadTraces(1), 0);
     return () => window.clearTimeout(timer);
-  }, [loadTraces, step]);
+  }, [loadTraces, step, traceMode]);
 
   const goTo = (s: number) => {
     setStep(s);
@@ -452,14 +491,38 @@ export default function NewExperimentPage() {
   };
 
   // 全选：表头复选框控当前页；总数超过一页时另给「选择全部 N 条」跨页入口
-  const toSelectedCase = (t: TraceItem): SelectedCase => ({
-    executionId: t.id,
-    taskId: t.taskId,
-    input: t.query || '',
-    actualOutput: t.finalResult || '',
-    referenceOutput: null,
-    evaluatorContext: null,
-  });
+  const toSelectedCase = (t: TraceItem): SelectedCase => {
+    const base: SelectedCase = {
+      executionId: t.id,
+      taskId: t.taskId,
+      input: t.query || '',
+      actualOutput: t.finalResult || '',
+      referenceOutput: null,
+      evaluatorContext: null,
+    };
+    if (!isReliabilityDataset) return base;
+    const datasetCase = (selectedDataset?.cases || []).find(
+      (item) => String(item.input || '').trim() === base.input.trim(),
+    );
+    if (!datasetCase) return base;
+    const match = matchDatasetCases(
+      [{ key: base.executionId, input: base.input }],
+      [{
+        input: String(datasetCase.input || ''),
+        expectedOutput: String(datasetCase.expectedOutput || ''),
+        values: datasetCase.values,
+      }],
+      true,
+    );
+    const fault = String(datasetCase.values?.fault_injection_type || '').trim();
+    return {
+      ...base,
+      referenceOutput: match.updates[base.executionId] || null,
+      evaluatorContext: match.contextUpdates[base.executionId] || null,
+      faultInjectionType: fault || null,
+      values: datasetCase.values,
+    };
+  };
 
   const pageAllSelected = traces.length > 0 && traces.every((t) => selected.has(t.id));
   const pageSomeSelected = traces.some((t) => selected.has(t.id));
@@ -549,14 +612,7 @@ export default function NewExperimentPage() {
       if (next.has(t.id)) {
         next.delete(t.id);
       } else {
-        next.set(t.id, {
-          executionId: t.id,
-          taskId: t.taskId,
-          input: t.query || '',
-          actualOutput: t.finalResult || '',
-          referenceOutput: null,
-          evaluatorContext: null,
-        });
+        next.set(t.id, toSelectedCase(t));
       }
       return next;
     });
@@ -570,7 +626,10 @@ export default function NewExperimentPage() {
     });
   };
 
-  const selectedList = useMemo(() => Array.from(selected.values()), [selected]);
+  const selectedList = useMemo(
+    () => Array.from((traceMode === 'generate' ? selectedGenerated : selected).values()),
+    [selected, selectedGenerated, traceMode],
+  );
   const annotated = selectedList.filter((c) => !!c.referenceOutput).length;
   const capabilityCatalogAnnotated = selectedList.filter((c) => c.evaluatorContext !== null).length;
   const persistable = selectedList.filter((c) => c.referenceOutput || c.evaluatorContext).length;
@@ -707,145 +766,6 @@ export default function NewExperimentPage() {
     return () => window.clearTimeout(timer);
   }, [watchMode, allEvaluators]);
 
-  const selectedDataset = useMemo(
-    () => wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
-    [wizardDatasets, selectedDatasetId],
-  );
-  const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
-
-  useEffect(() => {
-    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('api_key') || '' : '';
-    if (typeof window !== 'undefined') {
-      const base = `${window.location.protocol}//${window.location.host}`;
-      const setupPath = getApiUrl('/api/fault-injection/setup');
-      const q = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
-      setFiSetupCmd(`curl -fsSL "${base}${setupPath}${q}" | bash`);
-    }
-    let cancelled = false;
-    const headers = apiKey ? { 'x-witty-api-key': apiKey } : undefined;
-    const poll = async () => {
-      try {
-        const res = await apiFetch('/api/fault-injection/health', { headers });
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        const ok = Boolean(data?.ok) && !Boolean(data?.needsWorker);
-        setWorkerStatus(ok ? 'ok' : 'missing');
-        if (!ok) {
-          setFiInventoryHint(String(data?.error || '本机需安装并启动 FI Worker'));
-        }
-      } catch {
-        if (!cancelled) {
-          setWorkerStatus('missing');
-          setFiInventoryHint('无法检查 FI Worker 状态');
-        }
-      }
-    };
-    void poll();
-    const timer = window.setInterval(poll, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [user]);
-
-  useEffect(() => {
-    if (!user || !genPlatform || !workerOk) {
-      if (!workerOk) {
-        setFiAgents([]);
-        setFiModels([{ id: '', label: '平台默认' }]);
-      }
-      return;
-    }
-    let cancelled = false;
-    setFiInventoryHint('');
-    const apiKey = typeof window !== 'undefined' ? localStorage.getItem('api_key') || '' : '';
-    const fiHeaders = apiKey ? { 'x-witty-api-key': apiKey } : undefined;
-    Promise.all([
-      apiFetch(`/api/fault-injection/platforms/${encodeURIComponent(genPlatform)}/agents`, {
-        headers: fiHeaders,
-      }),
-      apiFetch(`/api/fault-injection/platforms/${encodeURIComponent(genPlatform)}/models`, {
-        headers: fiHeaders,
-      }),
-    ])
-      .then(async ([agentsRes, modelsRes]) => {
-        const agentsJson = await agentsRes.json().catch(() => ({}));
-        const modelsJson = await modelsRes.json().catch(() => ({}));
-        if (cancelled) return;
-        const nextAgents: PlatformOption[] = Array.isArray(agentsJson?.agents)
-          ? agentsJson.agents
-              .map((a: { id?: string; label?: string }) => ({
-                id: String(a.id || '').trim(),
-                label: String(a.label || a.id || '').trim(),
-              }))
-              .filter((a: PlatformOption) => a.id)
-              .filter((a: PlatformOption) => a.id !== 'ras-judge')
-          : [];
-        const nextModels: PlatformOption[] = Array.isArray(modelsJson?.models)
-          ? modelsJson.models
-              .map((m: { id?: string; label?: string }) => ({
-                id: String(m.id || '').trim(),
-                label: String(m.label || m.id || '平台默认').trim(),
-              }))
-          : [{ id: '', label: '平台默认' }];
-        setFiAgents(nextAgents);
-        setFiModels(nextModels.length ? nextModels : [{ id: '', label: '平台默认' }]);
-        if (!agentsRes.ok) {
-          setFiInventoryHint(String(agentsJson?.error || '无法从 FI Worker 获取 Agent 列表'));
-          setWorkerStatus('missing');
-        }
-        setAgentName((prev) => {
-          if (prev && nextAgents.some((a) => a.id === prev)) return prev;
-          if (prev && !isReliabilityDataset && agents.some((a) => a.name === prev)) return prev;
-          return nextAgents[0]?.id || prev || '';
-        });
-        setGenModel((prev) => {
-          if (nextModels.some((m) => m.id === prev)) return prev;
-          return '';
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setFiAgents([]);
-        setFiModels([{ id: '', label: '平台默认' }]);
-        setFiInventoryHint('无法从 FI Worker 获取平台 inventory');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [genPlatform, user, workerOk, isReliabilityDataset, agents]);
-
-  useEffect(() => {
-    if (!isReliabilityDataset) {
-      setReliabilityCases([]);
-      return;
-    }
-    setWatchMode(false);
-    setSelectedEvaluators(new Set(['preset-ras-reliability']));
-    const cases = selectedDataset?.cases || [];
-    const pool: SelectedCase[] = cases.map((item) => {
-      const fault = String(item.values?.fault_injection_type || '').trim();
-      const key = String(item.id || `${fault}:${item.input || ''}`);
-      return {
-        executionId: key,
-        taskId: null,
-        input: String(item.input || ''),
-        actualOutput: '',
-        referenceOutput: item.expectedOutput != null ? String(item.expectedOutput) : null,
-        evaluatorContext: null,
-        faultInjectionType: fault || null,
-        values: {
-          ...(item.values || {}),
-          ...(fault ? { fault_injection_type: fault } : {}),
-        },
-      };
-    });
-    setReliabilityCases(pool);
-    const next = new Map<string, SelectedCase>();
-    for (const item of pool) next.set(item.executionId, item);
-    setSelected(next);
-  }, [isReliabilityDataset, selectedDatasetId, selectedDataset]);
-
   const submit = async () => {
 
     if (!user || submitting) return;
@@ -853,7 +773,7 @@ export default function NewExperimentPage() {
     setSubmitError('');
     try {
       const casesPayload = selectedList.map((c) => ({
-        executionId: isReliabilityDataset ? undefined : c.executionId,
+        executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
         input: c.input,
         actualOutput: c.actualOutput,
@@ -862,63 +782,67 @@ export default function NewExperimentPage() {
         faultInjectionType: c.faultInjectionType || undefined,
         values: c.values,
       }));
-      const res = await apiFetch('/api/experiments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user,
-          name,
-          agentName,
-          watchMode: isReliabilityDataset ? false : watchMode,
-          cases: casesPayload,
-          evaluatorIds: Array.from(selectedEvaluators),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(String(data?.error || '创建实验失败'));
+      let experimentId = createdExperimentId;
+      if (!experimentId) {
+        const res = await apiFetch('/api/experiments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user,
+            name,
+            agentName,
+            watchMode: traceMode === 'existing' ? watchMode : false,
+            cases: casesPayload,
+            evaluatorIds: Array.from(selectedEvaluators),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(String(data?.error || '创建实验失败'));
+        experimentId = String(data.id || '');
+        if (!experimentId) throw new Error('创建实验后未返回实验 ID');
+        setCreatedExperimentId(experimentId);
+      }
       // 「开始实验」= 创建后立即真跑评估器；详情页落地即 running 状态并自动轮询进度。
-      // run 触发失败不阻塞跳转——详情页仍可手动「开始执行」兜底。
-      const runBody = isReliabilityDataset
+      const runBody = traceMode === 'generate' && selectedTarget
         ? {
             fiOrchestrate: true,
             traceSource: 'generate',
             generateTrace: {
-              platform: genPlatform,
+              workerId: selectedTarget.workerId,
+              platform: selectedTarget.platform,
               agent: agentName,
               model: genModel || null,
               timeoutSeconds: 180,
             },
           }
         : {};
-      const runRes = await apiFetch(`/api/experiments/${encodeURIComponent(data.id)}/run?user=${encodeURIComponent(user)}`, {
+      const runRes = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(runBody),
-      }).catch(() => null);
-      if (runRes && !runRes.ok) {
+      });
+      if (!runRes.ok) {
         const err = await runRes.json().catch(() => ({}));
         throw new Error(String(err?.error || err?.code || '启动实验失败'));
       }
-      router.push(`/experiments/${data.id}`);
+      router.push(`/experiments/${experimentId}`);
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : '创建实验失败');
       setSubmitting(false);
     }
   };
 
-  const step1Ok = isReliabilityDataset
-    ? name.trim() !== '' && !!selectedDatasetId && workerOk && agentName !== ''
-    : name.trim() !== '' && agentName !== '' && !!selectedDatasetId;
+  const step1Ok = name.trim() !== '' && agentName !== '';
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
-  const step2Valid = isReliabilityDataset
-    ? selected.size >= 1
+  const step2Valid = traceMode === 'generate'
+    ? generateAvailable && selectedGenerated.size >= 1
     : (watchMode || selected.size >= 1);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const stepSummaries = [
     `${name.trim() || '未命名'} · ${selectedDataset?.name || '未选数据集'}`,
-    isReliabilityDataset ? `生成 Trace · ${selected.size} case` : `已选 ${selected.size} 条 trace`,
-    isReliabilityDataset ? '可靠性 case 预期已从数据集带入' : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
+    traceMode === 'generate' ? `生成 Trace · ${selectedGenerated.size} case` : `选择 Trace · ${selected.size} 条`,
+    traceMode === 'generate' ? `数据集预期 ${annotated}/${selectedList.length}` : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
     `已选 ${selectedEvaluators.size} 个`,
   ];
 
@@ -979,167 +903,62 @@ export default function NewExperimentPage() {
                   />
                 </div>
                 <div>
-                  <label style={FIELDLBL}>评测数据集</label>
+                  <label style={FIELDLBL}>待执行 Agent *</label>
                   <select
                     style={{ ...INPUT, cursor: 'pointer' }}
-                    value={selectedDatasetId}
+                    value={agentName}
                     onChange={(e) => {
-                      const nextId = e.target.value;
-                      setSelectedDatasetId(nextId);
+                      setAgentName(e.target.value);
                       setSelected(new Map());
+                      setSelectedTargetKey('');
+                      setGenModel('');
+                      setPage(1);
                     }}
                   >
-                    <option value="">请选择数据集…</option>
-                    {wizardDatasets.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}{d.datasetKind === 'reliability' ? ' · 可靠性' : ''}（{d.cases?.length ?? d.caseCount ?? 0}）
+                    <option value="">请选择 Agent…</option>
+                    {agents.map((agent) => (
+                      <option key={agent.name} value={agent.name}>
+                        {agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
+                        {agent.traces ? ` · ${agent.traces} 条 Trace` : ''}
+                        {agent.targets.length ? ` · 可执行 ${agent.targets.length} 台` : ''}
                       </option>
                     ))}
                   </select>
                   <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
-                    可靠性数据集将仅支持「生成 Trace」，并锁定可靠性评估器
+                    候选项为具有历史 Trace 的 Agent 与所有在线客户端可执行 Agent 的并集
                   </div>
                 </div>
               </div>
 
               <div style={{ marginBottom: 16 }}>
-                  {workerStatus === 'missing' && (
-                    <div style={{
-                      border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 12,
-                      background: 'var(--background-secondary)',
-                    }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>需要安装 FI Worker</div>
-                      <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 10, lineHeight: 1.5 }}>
-                        本机需安装并启动 FI Worker，API Key 须与当前登录账号一致。安装完成后本页会自动刷新状态。可靠性评测需要 Worker；普通实验也可先用历史 Agent。
-                      </div>
-                      <div style={{
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                        fontSize: 11, padding: '10px 12px', borderRadius: 8,
-                        border: '1px solid var(--border)', background: 'var(--card-bg)',
-                        wordBreak: 'break-all', marginBottom: 8,
-                      }}>
-                        {fiSetupCmd || '正在生成安装命令…'}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button
-                          type="button"
-                          style={BTN_GHOST}
-                          disabled={!fiSetupCmd}
-                          onClick={async () => {
-                            if (!fiSetupCmd) return;
-                            try {
-                              await navigator.clipboard.writeText(fiSetupCmd);
-                              setFiSetupCopied(true);
-                              window.setTimeout(() => setFiSetupCopied(false), 1500);
-                            } catch {
-                              /* ignore */
-                            }
-                          }}
-                        >
-                          {fiSetupCopied ? '已复制' : '复制命令'}
-                        </button>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-muted)', alignSelf: 'center' }}>
-                          每 2 秒自动检测 Worker…
-                        </span>
-                      </div>
-                      {fiInventoryHint && (
-                        <div style={{ fontSize: 11, color: 'var(--color-danger, #b91c1c)', marginTop: 8 }}>
-                          {fiInventoryHint}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-                    <div>
-                      <label style={FIELDLBL}>平台</label>
-                      <select
-                        style={{ ...INPUT, cursor: workerOk ? 'pointer' : 'not-allowed', opacity: workerOk ? 1 : 0.6 }}
-                        value={genPlatform}
-                        disabled={!workerOk}
-                        onChange={(e) => {
-                          setGenPlatform(e.target.value);
-                          setAgentName('');
-                          setGenModel('');
-                        }}
-                      >
-                        {(fiPlatforms.length ? fiPlatforms : [
-                          { id: 'opencode', label: 'opencode' },
-                          { id: 'xiaoo', label: 'xiaoo' },
-                          { id: 'openjiuwen', label: 'openjiuwen' },
-                        ]).map((p) => (
-                          <option key={p.id} value={p.id}>{p.label || p.id}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label style={FIELDLBL}>待评测 Agent</label>
-                      {workerOk || isReliabilityDataset ? (
-                        <select
-                          style={{ ...INPUT, cursor: workerOk ? 'pointer' : 'not-allowed', opacity: workerOk ? 1 : 0.6 }}
-                          value={agentName}
-                          disabled={!workerOk}
-                          onChange={(e) => {
-                            setAgentName(e.target.value);
-                            setSelected(new Map());
-                            setPage(1);
-                          }}
-                        >
-                          <option value="">{fiAgents.length ? '请选择 Agent…' : '暂无可用 Agent'}</option>
-                          {fiAgents.map((a) => (
-                            <option key={a.id} value={a.id}>{a.label || a.id}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <>
-                          <select
-                            style={{ ...INPUT, cursor: 'pointer' }}
-                            value={agents.some((a) => a.name === agentName) || agentName === '' ? agentName : '__custom__'}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              if (v === '__custom__') {
-                                setAgentName('build');
-                              } else {
-                                setAgentName(v);
-                              }
-                              setSelected(new Map());
-                              setPage(1);
-                            }}
-                          >
-                            <option value="">请选择 Agent…</option>
-                            {agents.map((a) => (
-                              <option key={a.name} value={a.name}>{a.name}（{a.traces} 条 trace）</option>
-                            ))}
-                            <option value="__custom__">自定义 / FI Agent（如 build）</option>
-                          </select>
-                          {(!agents.some((a) => a.name === agentName) && agentName !== '') && (
-                            <input
-                              style={{ ...INPUT, marginTop: 8 }}
-                              value={agentName}
-                              placeholder="Agent 名，如 build"
-                              onChange={(e) => setAgentName(e.target.value)}
-                            />
-                          )}
-                        </>
-                      )}
-                    </div>
-                    <div>
-                      <label style={FIELDLBL}>模型</label>
-                      <select
-                        style={{ ...INPUT, cursor: workerOk ? 'pointer' : 'not-allowed', opacity: workerOk ? 1 : 0.6 }}
-                        value={genModel}
-                        disabled={!workerOk}
-                        onChange={(e) => setGenModel(e.target.value)}
-                      >
-                        {fiModels.map((m) => (
-                          <option key={m.id || '__default__'} value={m.id}>{m.label || m.id || '平台默认'}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 6 }}>
-                    Agent / 模型来自目标平台 FI Worker inventory；未选可靠性数据集时平台/模型不参与普通实验执行
-                  </div>
+                <label style={FIELDLBL}>评测数据集（可选）</label>
+                <select
+                  style={{ ...INPUT, cursor: 'pointer' }}
+                  value={selectedDatasetId}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    const nextDataset = wizardDatasets.find((item) => item.id === nextId) || null;
+                    const generatedCases = reliabilityCasesFromDataset(nextDataset);
+                    setSelectedDatasetId(nextId);
+                    setSelected(new Map());
+                    setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+                    setSelectedEvaluators(new Set());
+                    if (!nextDataset) {
+                      setTraceMode('existing');
+                    }
+                  }}
+                >
+                  <option value="">不选择数据集</option>
+                  {wizardDatasets.map((dataset) => (
+                    <option key={dataset.id} value={dataset.id}>
+                      {dataset.name} · 可靠性（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
+                    </option>
+                  ))}
+                </select>
+                <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
+                  当前仅开放内置可靠性数据集；选择后可生成 Trace，并在第 ④ 步独立选择故障注入或故障检测恢复评估器
                 </div>
+              </div>
 
               <label style={FIELDLBL}>实验类型</label>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1169,16 +988,55 @@ export default function NewExperimentPage() {
           </div>
         )}
 
-        {step === 2 && isReliabilityDataset && (
+        {step === 2 && traceMode === 'generate' && (
           <div style={PANEL}>
             <div style={PANEL_B}>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>生成 Trace（可靠性）</div>
-              <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
-                已禁用「选择 Trace」。将通过 FI Worker（{genPlatform} / {agentName || '—'}
-                {genModel ? ` / ${genModel}` : ''}）按所选 case 生成 Trace。
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>选择 Trace 来源</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 12 }}>
+                选择运行主机 IP 与模型，再从数据集 Case 中选择需要运行的条目。
+              </div>
+              <div style={{ display: 'inline-flex', gap: 4, padding: 4, border: '1px solid var(--border)', borderRadius: 10, marginBottom: 14 }}>
+                <button type="button" style={{ ...BTN_GHOST, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
+                <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('generate')}>生成 Trace</button>
+              </div>
+
+              {!generateAvailable ? (
+                <div style={{ padding: 18, border: '1px dashed var(--border-dark)', borderRadius: 10, color: 'var(--foreground-secondary)', fontSize: 12, lineHeight: 1.6 }}>
+                  {!selectedDataset
+                    ? '生成 Trace 需要数据集 Case，请返回第一步选择内置可靠性数据集。'
+                    : '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'}
+                </div>
+              ) : (
+                <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+                <div>
+                  <label style={FIELDLBL}>运行主机 IP *</label>
+                  <select
+                    style={{ ...INPUT, cursor: 'pointer' }}
+                    value={effectiveTargetKey}
+                    onChange={(e) => {
+                      setSelectedTargetKey(e.target.value);
+                      setGenModel('');
+                    }}
+                  >
+                    {targetOptions.map((target) => (
+                      <option key={`${target.workerId}::${target.platform}`} value={`${target.workerId}::${target.platform}`}>
+                        {target.host} · {target.platform}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={FIELDLBL}>运行模型 *</label>
+                  <select style={{ ...INPUT, cursor: 'pointer' }} value={genModel} onChange={(e) => setGenModel(e.target.value)}>
+                    {(selectedTarget?.models || [{ id: '', label: '平台默认' }]).map((model) => (
+                      <option key={model.id || '__default__'} value={model.id}>{model.label || model.id || '平台默认'}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case（{selected.size}/{reliabilityCases.length}）</div>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case（{selectedGenerated.size}/{reliabilityCases.length}）</div>
                 <span style={{ flex: 1 }} />
                 <button
                   type="button"
@@ -1186,7 +1044,7 @@ export default function NewExperimentPage() {
                   onClick={() => {
                     const next = new Map<string, SelectedCase>();
                     for (const item of reliabilityCases) next.set(item.executionId, item);
-                    setSelected(next);
+                    setSelectedGenerated(next);
                   }}
                 >
                   全选
@@ -1194,7 +1052,7 @@ export default function NewExperimentPage() {
                 <button
                   type="button"
                   style={BTN_GHOST}
-                  onClick={() => setSelected(new Map())}
+                  onClick={() => setSelectedGenerated(new Map())}
                 >
                   取消全选
                 </button>
@@ -1212,14 +1070,14 @@ export default function NewExperimentPage() {
                         padding: '10px 12px',
                         borderBottom: '1px solid var(--border)',
                         cursor: 'pointer',
-                        background: selected.has(c.executionId) ? 'var(--primary-subtle)' : 'transparent',
+                        background: selectedGenerated.has(c.executionId) ? 'var(--primary-subtle)' : 'transparent',
                       }}
                     >
                       <input
                         type="checkbox"
-                        checked={selected.has(c.executionId)}
+                        checked={selectedGenerated.has(c.executionId)}
                         onChange={() => {
-                          setSelected((prev) => {
+                          setSelectedGenerated((prev) => {
                             const next = new Map(prev);
                             if (next.has(c.executionId)) next.delete(c.executionId);
                             else next.set(c.executionId, c);
@@ -1244,13 +1102,38 @@ export default function NewExperimentPage() {
                   ))
                 )}
               </div>
+                </>
+              )}
               {footer({ nextDisabled: !step2Valid, nextLabel: '下一步：预期答案 →' })}
             </div>
           </div>
         )}
 
-        {step === 2 && !isReliabilityDataset && (
+        {step === 2 && traceMode === 'existing' && (
           <div style={PANEL}>
+            <div style={{ ...PANEL_B, paddingBottom: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>选择 Trace 来源</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 12 }}>
+                从该 Agent 已执行的 Trace 中选择评测样本，自动监听和筛选逻辑保持不变。
+              </div>
+              <div style={{ display: 'inline-flex', gap: 4, padding: 4, border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12 }}>
+                <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
+                <button
+                  type="button"
+                  disabled={!selectedDataset || targetOptions.length === 0}
+                  title={!selectedDataset ? '请先在第一步选择数据集' : targetOptions.length === 0 ? '该 Agent 没有在线可执行主机' : '按数据集 Case 生成 Trace'}
+                  style={{ ...BTN_GHOST, height: 30, opacity: !selectedDataset || targetOptions.length === 0 ? 0.45 : 1, cursor: !selectedDataset || targetOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                  onClick={() => {
+                    if (selectedDataset && targetOptions.length > 0) {
+                      setTraceMode('generate');
+                      setWatchMode(false);
+                    }
+                  }}
+                >
+                  生成 Trace
+                </button>
+              </div>
+            </div>
             <label style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', marginBottom: 12,
               borderRadius: 10, border: `1px solid ${watchMode ? 'var(--primary)' : 'var(--border)'}`,
@@ -1630,11 +1513,60 @@ export default function NewExperimentPage() {
           </div>
         )}
 
-        {step === 3 && (
+        {step === 3 && traceMode === 'generate' && (
+          <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>检查数据集预期答案</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+                Trace 尚未生成，本步骤只检查所选数据集 Case 的预期答案与故障元数据；开始实验后再生成实际输出。
+              </div>
+              <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--background-secondary)', marginBottom: 12, fontSize: 12 }}>
+                <b>数据集预期答案覆盖 {annotated} / {selectedList.length}</b>
+                <span style={{ marginLeft: 8, color: 'var(--foreground-muted)' }}>
+                  {annotated === selectedList.length ? '覆盖完整' : '缺失预期答案的 Case 仍可执行，但依赖参考数据的评估器可能不可用'}
+                </span>
+              </div>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'auto', maxHeight: 420 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+                  <thead><tr>
+                    <th style={STICKY_TH}>任务输入</th>
+                    <th style={STICKY_TH}>故障注入类型</th>
+                    <th style={STICKY_TH}>预期答案</th>
+                    <th style={STICKY_TH}>状态</th>
+                  </tr></thead>
+                  <tbody>
+                    {selectedList.map((item) => (
+                      <tr key={item.executionId}>
+                        <td style={{ ...TD, color: 'var(--foreground)', maxWidth: 320 }}>{truncate(item.input, 90)}</td>
+                        <td style={TD}>{formatReliabilityFaultTypeFromCaseValues(item.values, { faultId: item.faultInjectionType }) || item.faultInjectionType || '—'}</td>
+                        <td style={{ ...TD, maxWidth: 360 }}>{truncate(item.referenceOutput, 110)}</td>
+                        <td style={TD}>
+                          <span style={item.referenceOutput
+                            ? { ...CHIP, background: 'var(--success-subtle)', color: 'var(--success)', border: '1px solid var(--success-subtle-border)' }
+                            : CHIP_MUT}>
+                            {item.referenceOutput ? '数据集已提供' : '未标注'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--foreground-muted)', marginTop: 10 }}>
+                这里展示的是本次实验的数据集快照，不回写原数据集。
+              </div>
+              {footer({})}
+            </div>
+          </div>
+        )}
+
+        {step === 3 && traceMode === 'existing' && (
           <div style={PANEL}>
             <div style={PANEL_H}>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', flex: 1, minWidth: 260, lineHeight: 1.6 }}>
-                参考答案和 Tool/Skill 目录可从数据集按输入精确导入；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。
+                {isReliabilityDataset
+                  ? '已按任务输入从内置可靠性数据集自动导入预期答案与故障元数据；未匹配条目仍可手工标注。'
+                  : '参考答案和 Tool/Skill 目录可从数据集按输入精确导入；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。'}
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 200 }}>
                 <span style={{ flex: 1, height: 7, borderRadius: 4, background: 'var(--background-secondary)', overflow: 'hidden' }}>
@@ -1649,9 +1581,11 @@ export default function NewExperimentPage() {
                 </span>
               </span>
               <span style={{ display: 'flex', gap: 8 }}>
-                <button style={BTN_OUTLINE_SM} onClick={openImport} title="按任务输入精确匹配，回填参考输出；已标注的条目跳过">
-                  📥 从数据集导入匹配
-                </button>
+                {!isReliabilityDataset && (
+                  <button style={BTN_OUTLINE_SM} onClick={openImport} title="按任务输入精确匹配，回填参考输出；已标注的条目跳过">
+                    📥 从数据集导入匹配
+                  </button>
+                )}
                 <button
                   style={{ ...BTN_OUTLINE_SM, opacity: persistable > 0 ? 1 : 0.5, cursor: persistable > 0 ? 'pointer' : 'not-allowed' }}
                   disabled={persistable === 0}
@@ -1762,12 +1696,38 @@ export default function NewExperimentPage() {
         {step === 4 && (
           <div style={PANEL}>
             <div style={PANEL_B}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>评估器与执行</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 12 }}>
+                确认 Trace 来源与运行范围，再选择本次实验使用的评估器。
+              </div>
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 1, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden',
+                background: 'var(--border)', marginBottom: 14,
+              }}>
+                {[
+                  ['实验', name || '未命名'],
+                  ['Agent', agentName || '—'],
+                  ['数据集', selectedDataset?.name || '未选择'],
+                  ['Trace 来源', traceMode === 'generate' ? `生成 Trace · ${selectedGenerated.size} 个 Case` : `选择 Trace · ${selected.size} 条${watchMode ? ' · 自动监听' : ''}`],
+                  ['预期答案', `${annotated} / ${selectedList.length}`],
+                  ...(traceMode === 'generate' ? [[
+                    '主机 / 模型',
+                    `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
+                  ]] : []),
+                ].map(([label, value]) => (
+                  <div key={label} style={{ padding: '10px 12px', background: 'var(--background-secondary)' }}>
+                    <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{value}</div>
+                  </div>
+                ))}
+              </div>
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
                 为本次实验挑选评估器（可多选）。依赖参考数据或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
                 {allEvaluators
-                  .filter((card) => !isReliabilityDataset || card.id === 'preset-ras-reliability')
+                  .filter((card) => !isReliabilityDataset || RELIABILITY_EVALUATOR_IDS.has(card.id))
                   .map((card) => {
                   const meta = getEvaluatorMeta(card);
                   // 监听模式的新 trace 没有逐条参考答案或 Tool/Skill 目录，带前置条件的评估器不可用。

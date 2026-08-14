@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveWorkerCaller } from '@/lib/reliability/worker-dual-auth'
 import {
   sweepStaleClaims,
   upsertWorkerHeartbeat,
@@ -10,12 +10,14 @@ export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
   try {
-    const { username } = await resolveUser(req)
-    if (!username) {
-      return NextResponse.json({ error: 'API key required' }, { status: 401 })
+    const caller = await resolveWorkerCaller(req)
+    if (!caller) {
+      return NextResponse.json({ error: 'API key or device credential required' }, { status: 401 })
     }
+    const username = caller.username
     const body = await req.json()
-    if (!body.workerId || typeof body.workerId !== 'string') {
+    const workerId = caller.clientId || body.workerId
+    if (!workerId || typeof workerId !== 'string') {
       return NextResponse.json({ error: 'workerId required' }, { status: 400 })
     }
     await sweepStaleClaims(username)
@@ -30,7 +32,7 @@ export async function POST(req: Request) {
     }
     const worker = await upsertWorkerHeartbeat({
       user: username,
-      workerId: body.workerId,
+      workerId,
       hostname: body.hostname || null,
       version: body.version || null,
       inventory,

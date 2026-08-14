@@ -192,20 +192,32 @@ async function run(options) {
 
   const logPath = path.join(dataRoot, 'server.log')
 
+  // WSS 控制通道要接管 upgrade 事件，Next 的 Route Handler 做不到，
+  // 因此 standalone 下由 control-server.js 承载 Next + WSS。
+  const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || port + 1)
+
   const env = {
     ...process.env,
     ...fileEnv,
     DATABASE_URL: dbUrl,
     PORT: port.toString(),
-    HOSTNAME: '0.0.0.0'
+    HOSTNAME: '0.0.0.0',
+    AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
   let command, args
 
   if (isStandalone) {
-    console.log('Mode: production (standalone)')
-    command = 'node'
-    args = [standaloneServer]
+    const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
+    if (fs.existsSync(controlServer)) {
+      console.log('Mode: production (standalone + control channel)')
+      command = 'node'
+      args = [controlServer]
+    } else {
+      console.log('Mode: production (standalone)')
+      command = 'node'
+      args = [standaloneServer]
+    }
   } else if (isProduction) {
     console.log('Mode: production')
     command = 'npm'

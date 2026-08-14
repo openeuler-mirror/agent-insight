@@ -1,23 +1,24 @@
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+
+import { reliabilityErrorResponse } from '@/lib/reliability/api-error'
+import { authenticateDevice } from '@/lib/reliability/client-registry'
 import { recordConfigLoad } from '@/lib/reliability/client-config-service'
 
 export const dynamic = 'force-dynamic'
 
-/** IF-N12 */
+/** IF-N12：RAS 加载回报。设备凭证鉴权。 */
 export async function POST(req: Request) {
   try {
-    const body = await req.json()
-    const { username } = await resolveUser(req, body.user)
-    const clientId = String(body.clientId || '').trim()
+    const { clientId, user } = await authenticateDevice(req)
+    const body = await req.json().catch(() => ({}))
     const platform = String(body.platform || '').trim()
     const configVersion = String(body.configVersion || '').trim()
     const statusRaw = String(body.status || '').trim()
-    if (!clientId || !platform || !configVersion || !statusRaw) {
-      return NextResponse.json({ error: 'clientId, platform, configVersion, status required' }, { status: 400 })
-    }
-    if (!username) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
+    if (!platform || !configVersion || !statusRaw) {
+      return NextResponse.json(
+        { error: { code: 'BAD_REQUEST', message: 'platform, configVersion, status required' } },
+        { status: 400 },
+      )
     }
     const status =
       statusRaw === 'loaded'
@@ -25,23 +26,34 @@ export async function POST(req: Request) {
         : statusRaw === 'version_mismatch'
           ? 'version_mismatch'
           : 'failed'
-    const result = recordConfigLoad({
-      user: username,
+
+    const result = await recordConfigLoad({
+      user,
       clientId,
       platform,
+      scope: body.scope ? String(body.scope) : undefined,
       configVersion,
       checksum: body.checksum ? String(body.checksum) : undefined,
+      rasProcessId: body.rasProcessId ? String(body.rasProcessId) : undefined,
       status,
       loadedAt: body.loadedAt ? String(body.loadedAt) : undefined,
       error: body.error,
     })
+
+    if (result.deliveryStatus === 'version_mismatch' && status === 'loaded') {
+      return NextResponse.json(
+        {
+          error: {
+            code: 'CONFIG_VERSION_MISMATCH',
+            message: '回报的 configVersion 与当前 delivery 不一致',
+          },
+          deliveryStatus: result.deliveryStatus,
+        },
+        { status: 409 },
+      )
+    }
     return NextResponse.json({ ok: true, deliveryStatus: result.deliveryStatus })
   } catch (error) {
-    const err = error as { code?: string; status?: number; message?: string }
-    if (err?.code && err?.status) {
-      return NextResponse.json({ error: err.message || err.code, code: err.code }, { status: err.status })
-    }
-    console.error('[reliability/config-loads]', error)
-    return NextResponse.json({ error: 'internal error' }, { status: 500 })
+    return reliabilityErrorResponse(error, 'reliability/config-loads')
   }
 }

@@ -24,6 +24,7 @@ export async function createTaskWithRuns(input: {
   model?: string | null
   items: Array<{ fault: string; submode?: string | null }>
   timeoutSeconds?: number | null
+  targetWorkerId?: string | null
   initialStatus?: 'queued' | 'running'
 }) {
   const taskKey = newTaskKey()
@@ -108,6 +109,7 @@ export async function createTaskWithRuns(input: {
           workspace: input.workspace,
           model: input.model || null,
           timeoutSeconds: input.timeoutSeconds ?? null,
+          targetWorkerId: input.targetWorkerId || null,
         }),
       },
     })
