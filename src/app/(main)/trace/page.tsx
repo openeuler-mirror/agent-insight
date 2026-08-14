@@ -19,6 +19,7 @@ import {
     Columns3,
     Plus,
     Check,
+    ChevronDown,
     Database,
 } from 'lucide-react';
 import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
@@ -67,6 +68,7 @@ import { cn } from '@/lib/utils';
 import { formatDurationMs, formatLatencySeconds } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
+const MAX_TRACE_TAG_FILTERS = 20;
 
 interface InvokedSkill {
     name: string;
@@ -234,6 +236,8 @@ function getFrameworkLabel(framework?: string | null): string {
             return 'Hermes';
         case 'trae':
             return 'Trae IDE';
+        case 'actrail':
+            return 'AcTrail';
         default:
             return value;
     }
@@ -467,7 +471,8 @@ function TracePageContent() {
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', parseAsString.withDefault('all'));
     const [agentFilter, setAgentFilter] = useQueryState('agent', parseAsString.withDefault('all'));
     const [skillFilter, setSkillFilter] = useQueryState('skill', parseAsString.withDefault('all'));
-    const [businessTagFilter, setBusinessTagFilter] = useQueryState('bizTag', parseAsString.withDefault('all'));
+    const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', parseAsString.withDefault(''));
+    const [legacyBusinessTagFilter, setLegacyBusinessTagFilter] = useQueryState('bizTag', parseAsString);
     const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', parseAsString.withDefault('user'));
     const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', parseAsString.withDefault('root'));
     const [sortKey, setSortKey] = useQueryState('sort', parseAsString.withDefault('timestamp'));
@@ -547,15 +552,22 @@ function TracePageContent() {
         setAvailableTags(prev => mergeTraceTags(prev, tag));
     }, []);
 
-    const businessTagOptions: SelectOption[] = useMemo(() => [
-        { value: 'all', label: locale === 'zh' ? '全部业务标签' : 'All business tags' },
-        ...availableTags
-            .filter(tag => tag.kind === 'business')
-            .map(tag => ({
-                value: tag.id,
-                label: tag.usageCount ? `${tag.name} (${tag.usageCount})` : tag.name,
-            })),
-    ], [availableTags, locale]);
+    const selectedUserTagIds = useMemo(() => {
+        const source = userTagIdsRaw || (
+            legacyBusinessTagFilter && legacyBusinessTagFilter !== 'all'
+                ? legacyBusinessTagFilter
+                : ''
+        );
+        return Array.from(new Set(source.split(',').map(value => value.trim()).filter(Boolean)))
+            .slice(0, MAX_TRACE_TAG_FILTERS);
+    }, [legacyBusinessTagFilter, userTagIdsRaw]);
+
+    const updateUserTagFilters = useCallback((tagIds: string[]) => {
+        const normalized = Array.from(new Set(tagIds.map(value => value.trim()).filter(Boolean)))
+            .slice(0, MAX_TRACE_TAG_FILTERS);
+        void setUserTagIdsRaw(normalized.length > 0 ? normalized.join(',') : null);
+        if (legacyBusinessTagFilter) void setLegacyBusinessTagFilter(null);
+    }, [legacyBusinessTagFilter, setLegacyBusinessTagFilter, setUserTagIdsRaw]);
 
     const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
         traceId: t('tracePage.columnTraceId'),
@@ -606,7 +618,7 @@ function TracePageContent() {
     const listFilterKey = useMemo(() => JSON.stringify([
         agentScopeFilter,
         skillFilter,
-        businessTagFilter,
+        selectedUserTagIds,
         search,
         clausesRaw,
         frameworkFilter,
@@ -620,7 +632,7 @@ function TracePageContent() {
     ]), [
         agentScopeFilter,
         skillFilter,
-        businessTagFilter,
+        selectedUserTagIds,
         search,
         clausesRaw,
         frameworkFilter,
@@ -686,11 +698,13 @@ function TracePageContent() {
         const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
         const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
         const filtersParam = clauses.length ? `&filters=${encodeURIComponent(JSON.stringify(clauses))}` : '';
-        const bizTagParam = businessTagFilter !== 'all' ? `&bizTag=${encodeURIComponent(businessTagFilter)}` : '';
+        const tagIdsParam = selectedUserTagIds.length > 0
+            ? `&tagIds=${encodeURIComponent(selectedUserTagIds.join(','))}`
+            : '';
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${bizTagParam}${frameworkParam}${agentParam}${ownershipParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`)
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -717,7 +731,7 @@ function TracePageContent() {
         user,
         agentScopeFilter,
         skillFilter,
-        businessTagFilter,
+        selectedUserTagIds,
         search,
         clausesRaw,
         frameworkFilter,
@@ -825,7 +839,7 @@ function TracePageContent() {
         if (page > totalPages) setPage(totalPages);
     }, [page, totalPages, setPage]);
 
-    const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || businessTagFilter !== 'all'
+    const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
         || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
@@ -833,7 +847,7 @@ function TracePageContent() {
         setOwnershipFilter('all');
         setAgentFilter('all');
         setSkillFilter('all');
-        setBusinessTagFilter('all');
+        updateUserTagFilters([]);
         setAnomalyFilter('all');
         setTimeFilter('all');
         setFrameworkFilter('all');
@@ -962,12 +976,10 @@ function TracePageContent() {
                                 options={frameworkOptions}
                                 active={frameworkFilter !== 'all'}
                             />
-                            <Select
-                                label={t('tracePage.filterBusinessTag')}
-                                value={businessTagFilter}
-                                onChange={setBusinessTagFilter}
-                                options={businessTagOptions}
-                                active={businessTagFilter !== 'all'}
+                            <UserTagFilter
+                                tags={availableTags}
+                                selectedIds={selectedUserTagIds}
+                                onChange={updateUserTagFilters}
                             />
                             <Select
                                 label={t('tracePage.filterMainAgent')}
@@ -2212,6 +2224,165 @@ function TraceTagCell({
                 </div>
             </PopoverContent>
         </Popover>
+    );
+}
+
+function UserTagFilter({
+    tags,
+    selectedIds,
+    onChange,
+}: {
+    tags: TraceUserTag[];
+    selectedIds: string[];
+    onChange: (tagIds: string[]) => void;
+}) {
+    const { t, locale } = useLocale();
+    const [search, setSearch] = useState('');
+    const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+    const selectedTags = useMemo(
+        () => selectedIds.map(id => tags.find(tag => tag.id === id)).filter((tag): tag is TraceUserTag => Boolean(tag)),
+        [selectedIds, tags],
+    );
+    const normalizedSearch = search.trim().toLocaleLowerCase(locale);
+    const visibleTags = useMemo(() => (
+        normalizedSearch
+            ? tags.filter(tag => tag.name.toLocaleLowerCase(locale).includes(normalizedSearch))
+            : tags
+    ), [locale, normalizedSearch, tags]);
+    const versionClusters = useMemo(
+        () => clusterTraceTagsByPrefix(visibleTags.filter(tag => tag.kind === 'version'), locale),
+        [locale, visibleTags],
+    );
+    const businessClusters = useMemo(
+        () => clusterTraceTagsByPrefix(visibleTags.filter(tag => tag.kind === 'business'), locale),
+        [locale, visibleTags],
+    );
+
+    const summary = selectedIds.length === 0
+        ? (locale === 'zh' ? '全部用户标签' : 'All user tags')
+        : selectedTags.length > 0
+            ? `${selectedTags[0].name}${selectedIds.length > 1 ? ` +${selectedIds.length - 1}` : ''}`
+            : (locale === 'zh' ? `已选 ${selectedIds.length} 个` : `${selectedIds.length} selected`);
+
+    const toggleTag = (tagId: string) => {
+        if (selectedIdSet.has(tagId)) {
+            onChange(selectedIds.filter(id => id !== tagId));
+            return;
+        }
+        if (selectedIds.length < MAX_TRACE_TAG_FILTERS) onChange([...selectedIds, tagId]);
+    };
+
+    const renderClusters = (clusters: ReturnType<typeof clusterTraceTagsByPrefix<TraceUserTag>>) => {
+        const ungroupedLabel = locale === 'zh' ? '未分组' : 'Ungrouped';
+        return clusters.map(cluster => (
+            <div key={cluster.key} className="flex items-start gap-3 px-2 py-1.5">
+                <div
+                    className="w-16 shrink-0 truncate pt-1.5 text-xs font-medium text-foreground-muted"
+                    title={cluster.prefix || ungroupedLabel}
+                >
+                    {cluster.prefix || ungroupedLabel}
+                </div>
+                <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                    {cluster.tags.map(tag => {
+                        const selected = selectedIdSet.has(tag.id);
+                        return (
+                            <button
+                                key={tag.id}
+                                type="button"
+                                aria-pressed={selected}
+                                disabled={!selected && selectedIds.length >= MAX_TRACE_TAG_FILTERS}
+                                onClick={() => toggleTag(tag.id)}
+                                className={cn(
+                                    'inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground transition-colors',
+                                    'hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
+                                    selected && 'border-primary-border bg-primary-subtle text-primary',
+                                )}
+                                title={tag.name}
+                            >
+                                {selected ? (
+                                    <Check className="size-3.5 shrink-0" aria-hidden />
+                                ) : (
+                                    <span
+                                        className="size-1.5 shrink-0 rounded-[2px]"
+                                        style={{ backgroundColor: tag.color }}
+                                        aria-hidden
+                                    />
+                                )}
+                                <span className="max-w-44 truncate">{tag.name}</span>
+                                <span className="shrink-0 tabular-nums text-foreground-muted">{tag.usageCount || 0}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+        ));
+    };
+
+    return (
+        <DropdownMenu onOpenChange={open => { if (!open) setSearch(''); }}>
+            <DropdownMenuTrigger
+                aria-label={t('tracePage.filterUserTag')}
+                className={cn(
+                    'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    selectedIds.length > 0
+                        ? 'border-primary-border bg-primary-subtle text-primary'
+                        : 'border-border bg-card text-foreground hover:bg-background-secondary',
+                )}
+            >
+                <span className={cn('font-medium', selectedIds.length > 0 ? 'text-primary' : 'text-foreground-muted')}>
+                    {t('tracePage.filterUserTag')}
+                </span>
+                <span className="max-w-[14rem] truncate">{summary}</span>
+                <ChevronDown className="size-3 shrink-0 text-foreground-muted" aria-hidden />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+                align="start"
+                sideOffset={4}
+                className="w-[32rem] max-w-[calc(100vw-2rem)] p-0"
+            >
+                <div className="border-b border-border p-2">
+                    <div className="mb-2 flex items-center justify-between gap-2 px-1 text-xs text-foreground-muted">
+                        <span>
+                            {locale === 'zh'
+                                ? `同时包含全部所选标签（AND，最多 ${MAX_TRACE_TAG_FILTERS} 个）`
+                                : `Contains all selected tags (AND, up to ${MAX_TRACE_TAG_FILTERS})`}
+                        </span>
+                        {selectedIds.length > 0 && (
+                            <button
+                                type="button"
+                                className="shrink-0 text-primary hover:underline"
+                                onClick={() => onChange([])}
+                            >
+                                {locale === 'zh' ? '清空' : 'Clear'}
+                            </button>
+                        )}
+                    </div>
+                    <Input
+                        value={search}
+                        onChange={event => setSearch(event.target.value)}
+                        onKeyDown={event => event.stopPropagation()}
+                        placeholder={locale === 'zh' ? '搜索标签名称或前缀…' : 'Search tag name or prefix…'}
+                        className="h-8 text-xs"
+                    />
+                </div>
+                <div className="max-h-80 overflow-y-auto p-1">
+                    <DropdownMenuLabel className="px-2 py-1.5 text-xs font-semibold text-foreground">
+                        {locale === 'zh' ? '版本标签' : 'Version tags'}
+                    </DropdownMenuLabel>
+                    {versionClusters.length > 0
+                        ? renderClusters(versionClusters)
+                        : <div className="px-2 py-2 text-xs text-foreground-muted">{locale === 'zh' ? '暂无匹配的版本标签' : 'No matching version tags'}</div>}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="px-2 py-1.5 text-xs font-semibold text-foreground">
+                        {locale === 'zh' ? '业务标签' : 'Business tags'}
+                    </DropdownMenuLabel>
+                    {businessClusters.length > 0
+                        ? renderClusters(businessClusters)
+                        : <div className="px-2 py-2 text-xs text-foreground-muted">{locale === 'zh' ? '暂无匹配的业务标签' : 'No matching business tags'}</div>}
+                </div>
+            </DropdownMenuContent>
+        </DropdownMenu>
     );
 }
 

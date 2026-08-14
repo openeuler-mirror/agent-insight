@@ -3,6 +3,8 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { ALL_GROUPS, METRIC_GROUPS, selectColumns, type MetricGroup } from '@/lib/infra/export';
+import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 interface Finding { sev: 'critical' | 'warn' | 'healthy' | 'info'; cls: string; title: string; evidence: string; diagnosis: string; remediation: string[]; }
 interface Sli { runningPeak: number; waitingPeak: number; kvPeakPerc: number; genTokPerS: number; ttftP95: number | null; itlP95: number | null; prefixHit: number | null; preemptRate: number; }
 interface SourceObj { id: string; endpoint: string; scrapeUrl: string; kind: string; model: string | null; hardwareName: string | null; memBandwidthGBs: number | null; scrapeIntervalMs: number; enabled: boolean; }
@@ -25,6 +27,17 @@ const SEV_COLOR: Record<string, string> = { critical: 'var(--error)', warn: 'var
 const field = { padding: '5px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--background)', color: 'var(--foreground)', fontSize: 13 } as const;
 function fmt(n: number | null | undefined, d = 2, s = '') { return n == null ? 'n/a' : `${n.toFixed(d)}${s}`; }
 function hhmmss(ms: number) { const dt = new Date(ms); return `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}:${String(dt.getSeconds()).padStart(2, '0')}`; }
+// 纵轴刻度：压到最多 4~5 个字符（1200 → 1.2k，0.035 → 0.04），避免长数字被轴宽截断。
+function yTick(v: number): string {
+  if (!Number.isFinite(v)) return '';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 10_000) return `${Math.round(v / 1000)}k`;
+  if (a >= 1000) return `${Number((v / 1000).toFixed(1))}k`;
+  if (a >= 10) return String(Math.round(v));
+  if (a >= 1) return String(Number(v.toFixed(1)));
+  return String(Number(v.toFixed(2)));
+}
 const RANGES: { key: string; label: string; ms: number }[] = [
   { key: '5m', label: '5 分钟', ms: 5 * 60_000 },
   { key: '15m', label: '15 分钟', ms: 15 * 60_000 },
@@ -97,10 +110,12 @@ function MiniChart({ title, explain, data, series, yDomain }: { title: string; e
       </div>
       <div style={{ width: '100%', height: 140 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
+          {/* left 不能给负值：负 margin 会把 YAxis 的刻度文字挤出 SVG 视窗左边被裁掉，
+              1200 这种数只剩尾部两位显示成 "00"。轴宽由 YAxis width 控制，margin 保持 0。 */}
+          <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="tsMs" tickFormatter={hhmmss} stroke="var(--foreground-muted)" tick={{ fontSize: 9 }} interval="preserveStartEnd" minTickGap={40} />
-            <YAxis stroke="var(--foreground-muted)" tick={{ fontSize: 9 }} width={36} domain={yDomain ?? [0, 'auto']} />
+            <YAxis stroke="var(--foreground-muted)" tick={{ fontSize: 9 }} tickFormatter={yTick} width={38} domain={yDomain ?? [0, 'auto']} />
             <Tooltip labelFormatter={(v) => hhmmss(Number(v))} contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
             {series.map((s) => <Line key={String(s.key)} type="monotone" dataKey={s.key as string} name={s.name} stroke={s.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />)}
           </LineChart>
@@ -116,6 +131,7 @@ export default function InfraSourceDetailPage() {
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [points, setPoints] = useState<HistoryPoint[]>([]);
+  const [rawCount, setRawCount] = useState(0); // 原始样本数（图上的 points 已降采样，不能拿来估导出体积）
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [sessTotal, setSessTotal] = useState(0);
   const [sessPage, setSessPage] = useState(1);
@@ -133,6 +149,12 @@ export default function InfraSourceDetailPage() {
   const [enabled, setEnabled] = useState(true);
   const [scrapeSec, setScrapeSec] = useState(5);
   const [saving, setSaving] = useState(false);
+  const [exportHint, setExportHint] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  // 默认全选：多给总比给一份缺列的数据强
+  const [pickedGroups, setPickedGroups] = useState<MetricGroup[]>(ALL_GROUPS);
+  // 0 = 原始全量（默认，不破坏既有行为）；>0 = 分桶时长（毫秒）
+  const [bucketMs, setBucketMs] = useState(0);
   const [pushTest, setPushTest] = useState<{ ok: boolean; message: string } | null>(null);
   const [pushTesting, setPushTesting] = useState(false);
   // collector 要推到的本服务地址：默认当前页 origin，但 collector 在别的机器上时 localhost 不通 → 可改成本机可达的 IP/域名。
@@ -173,30 +195,72 @@ export default function InfraSourceDetailPage() {
         qs += `&from=${Date.now() - (r?.ms ?? 900_000)}`;
       }
       const hi = await (await fetch(`/api/observe/infra/history?${qs}`)).json();
-      if (active) setPoints(hi.points ?? []);
+      // points 是给图用的降采样结果；count 是原始样本数，导出体积预估要用后者
+      if (active) { setPoints(hi.points ?? []); setRawCount(hi.count ?? 0); }
     })();
     return () => { active = false; };
   }, [id, selectedModel, rangeKey, customFrom, customTo, tick]);
+  // 当前选中的时间段 → [from, to]。自定义但没填起始时间 → null（调用方各自处理）。
+  // 会话列表与导出共用，保证「导出的就是屏幕上这段」。
+  const resolveRange = useCallback((): { from: number; to: number } | null => {
+    if (rangeKey === 'custom') {
+      if (!customFrom) return null;
+      return { from: new Date(customFrom).getTime(), to: customTo ? new Date(customTo).getTime() : Date.now() };
+    }
+    const to = Date.now();
+    return { from: to - (RANGES.find((x) => x.key === rangeKey)?.ms ?? 900_000), to };
+  }, [rangeKey, customFrom, customTo]);
+
   // 相关会话：与历史趋势同一时间段，列出命中该源 endpoint 的 execution（哪些 session 在这段时间干活），分页
   useEffect(() => {
     if (!id) return;
     let active = true;
     (async () => {
       await Promise.resolve();
-      let from: number; let to: number;
-      if (rangeKey === 'custom') {
-        if (!customFrom) { if (active) { setSessions([]); setSessTotal(0); } return; }
-        from = new Date(customFrom).getTime();
-        to = customTo ? new Date(customTo).getTime() : Date.now();
-      } else {
-        to = Date.now();
-        from = to - (RANGES.find((x) => x.key === rangeKey)?.ms ?? 900_000);
-      }
+      const r = resolveRange();
+      if (!r) { if (active) { setSessions([]); setSessTotal(0); } return; }
+      const { from, to } = r;
       const body = await (await fetch(`/api/observe/infra/sources/sessions?sourceId=${encodeURIComponent(id)}&from=${from}&to=${to}&page=${sessPage}&pageSize=${SESS_PAGE_SIZE}`)).json();
       if (active) { setSessions(body.sessions ?? []); setSessTotal(body.total ?? 0); }
     })();
     return () => { active = false; };
-  }, [id, rangeKey, customFrom, customTo, sessPage, tick]);
+  }, [id, resolveRange, sessPage, tick]);
+
+  // 导出当前时间段的原始时序。走 <a download> 而不是 fetch+Blob：
+  // 6h 约 1 万行、24h 约 4.3 万行，让浏览器直接落盘，不必先塞进内存。
+  const runExport = useCallback((format: 'csv' | 'md') => {
+    if (!id) return;
+    const r = resolveRange();
+    if (!r) { setExportHint('请先填写自定义时间段的起始时间'); return; }
+    if (pickedGroups.length === 0) { setExportHint('至少勾选一项指标'); return; }
+    const qs = new URLSearchParams({ sourceId: id, from: String(r.from), to: String(r.to), format });
+    if (selectedModel) qs.set('model', selectedModel);
+    // 全选时不传 metrics，让 URL 短一些（服务端缺省即全选）
+    if (pickedGroups.length < ALL_GROUPS.length) qs.set('metrics', pickedGroups.join(','));
+    if (bucketMs > 0) qs.set('sample', String(bucketMs));
+    const a = document.createElement('a');
+    a.href = `/api/observe/infra/export?${qs}`;
+    a.download = ''; // 文件名以服务端 Content-Disposition 为准
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setExportHint(null);
+    reportClientUsage('infra', 'infra.export');
+  }, [id, resolveRange, selectedModel, pickedGroups, bucketMs]);
+
+  // 导出体积粗估：让人在点之前就知道会拿到多大的东西，而不是导完才发现粘不进去。
+  // 实测全 35 列的 Markdown 单行约 208 字符；按「ts_iso(24) + 每列约 12 字符（含分隔符）」摊。
+  const exportEstimate = (() => {
+    const cols = selectColumns(pickedGroups).length;
+    const r = resolveRange();
+    const spanMs = r ? r.to - r.from : 0;
+    // 分桶后行数 ≈ 时间跨度 / 桶长，但不会超过原始样本数（断层处不产生行）
+    const rows = bucketMs > 0
+      ? Math.min(rawCount, Math.ceil(spanMs / bucketMs))
+      : rawCount; // 原始样本数，不是图上降采样后的点数
+    const chars = rows * (27 + cols * 12);
+    return { rows, cols, chars, tokens: Math.round(chars / 4) };
+  })();
 
   // 自动刷新：每 5s（仅标签可见时）+ 返回页面（bfcache 恢复/切回标签）即刷，自增 tick 驱动上面三个 effect 重取。
   // 大范围（6h/24h/自定义）关掉 5s 周期刷新——那会每 5s 重拉上千行 + 重渲九张图，太重；
@@ -313,7 +377,79 @@ export default function InfraSourceDetailPage() {
               <input type="datetime-local" value={customTo} onChange={(e) => { setCustomTo(e.target.value); setSessPage(1); }} style={field} />
             </span>
           )}
+          <button onClick={() => { setExportOpen((v) => !v); setExportHint(null); }} style={{ ...field, cursor: 'pointer' }}
+            title="导出当前时间段的逐点原始时序（不降采样，含 p50/p95/p99 与裸累计计数器），可挑指标、选格式">
+            导出{exportOpen ? ' ▲' : ' ▼'}
+          </button>
+          {exportHint && <span style={{ fontSize: 12, color: 'var(--warning)' }}>{exportHint}</span>}
         </div>
+
+        {exportOpen && (
+          <div style={{ marginBottom: 20, padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12.5, color: 'var(--foreground-secondary)', fontWeight: 600 }}>选择指标</span>
+              <button onClick={() => setPickedGroups(ALL_GROUPS)} style={{ ...field, padding: '2px 8px', fontSize: 11.5, cursor: 'pointer' }}>全选</button>
+              <button onClick={() => setPickedGroups([])} style={{ ...field, padding: '2px 8px', fontSize: 11.5, cursor: 'pointer' }}>全不选</button>
+              <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>时间列（ts_iso / ts_ms）始终导出</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '4px 14px', marginBottom: 12 }}>
+              {METRIC_GROUPS.map((g) => (
+                <label key={g.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--foreground-secondary)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={pickedGroups.includes(g.key)}
+                    onChange={(e) => {
+                      setExportHint(null);
+                      setPickedGroups((cur) => (e.target.checked
+                        ? ALL_GROUPS.filter((k) => k === g.key || cur.includes(k)) // 保持与面板一致的固定顺序
+                        : cur.filter((k) => k !== g.key)));
+                    }}
+                  />
+                  {g.label}
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12.5, color: 'var(--foreground-secondary)', fontWeight: 600 }}>时间粒度</span>
+              <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                {[
+                  { v: 0, l: '原始每个采样点' },
+                  { v: 10_000, l: '每 10 秒一行' },
+                  { v: 60_000, l: '每 1 分钟一行' },
+                  { v: 300_000, l: '每 5 分钟一行' },
+                ].map((o) => (
+                  <button key={o.v} onClick={() => setBucketMs(o.v)}
+                    style={{ padding: '5px 10px', fontSize: 12, border: 'none', cursor: 'pointer', background: bucketMs === o.v ? 'var(--primary)' : 'var(--background)', color: bucketMs === o.v ? 'var(--primary-foreground)' : 'var(--foreground-secondary)' }}>
+                    {o.l}
+                  </button>
+                ))}
+              </div>
+              <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                {bucketMs === 0
+                  ? `原始采集间隔约 ${(item.source.scrapeIntervalMs / 1000).toFixed(0)}s，无信息损失`
+                  : '按时间分桶聚合，列名会带 _max / _avg / _last 后缀标明聚合方式'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button onClick={() => runExport('md')} style={{ ...field, cursor: 'pointer', background: 'var(--primary)', color: 'var(--primary-foreground)', border: 'none', padding: '6px 14px' }}>
+                导出 Markdown
+              </button>
+              <button onClick={() => runExport('csv')} style={{ ...field, cursor: 'pointer', padding: '6px 14px' }}>
+                导出 CSV
+              </button>
+              {exportEstimate.rows > 0 && (
+                <span style={{ fontSize: 11.5, color: exportEstimate.tokens > 100_000 ? 'var(--warning)' : 'var(--foreground-muted)' }}>
+                  预计 {exportEstimate.rows.toLocaleString()} 行 × {exportEstimate.cols + 1} 列，
+                  Markdown 约 {(exportEstimate.chars / 1e6).toFixed(2)}M 字符 / {Math.round(exportEstimate.tokens / 1000)}k token
+                  {exportEstimate.tokens > 100_000 && '（偏大，粘贴给模型前建议降采样或少选指标）'}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 8 }}>
+              Markdown 给大模型直读（口径说明是独立章节，还带逐列含义）；CSV 给 Excel / pandas，体积约小 20%。
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>{item.source.endpoint}</h2>

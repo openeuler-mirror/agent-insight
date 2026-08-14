@@ -35,6 +35,7 @@ import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from 
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
+import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
@@ -42,12 +43,21 @@ import type { FilterClause } from '@/lib/filters/types';
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
+    findExecutionIdsByUserTags,
     getTraceTagsByExecutionIds,
     type TraceTagDto,
 } from '@/lib/trace-tags';
 
 /** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
-const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'claudecode']);
+const SUBAGENT_TREE_FRAMEWORKS = new Set([
+    'opencode',
+    'openclaw',
+    'hermes',
+    'langfuse-langgraph',
+    'codeagent',
+    'claudecode',
+    'llamaindex',
+]);
 
 export interface InvokedSkill {
     name: string;
@@ -181,9 +191,9 @@ async function persistExecutionSkills(
 
 /**
  * 给定一条 Execution(= 某一层 agent)的 session interactions,算出**本层 agent 自己显式调用**的 skill。
- *   - opencode：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
+ *   - adapter 声明 skillScope=agent-tree 的框架：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
  *     (root 行的 session 是全量;sub-agent 行的 session 是它自己的切片——两者切片的 tree 根都恰是该层 agent。)
- *   - claude / openclaw：单 agent,既有显式抽取即本层口径。
+ *   - 其余框架：既有显式抽取即本层口径。
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
@@ -1191,8 +1201,10 @@ interface ReadRecordFilters {
      * (execution / observedAgents);skill / 计算列(status/ownership)由各自既有通道处理。
      */
     clauses?: FilterClause[];
-    /** business 标签筛选，值为 Tag.id，支持多个 OR 命中 */
+    /** 兼容旧 bizTag 参数的业务标签筛选，支持多个 OR 命中 */
     businessTagIds?: string[];
+    /** 用户标签筛选，值为版本或业务 Tag.id，多个标签按 AND 命中 */
+    userTagIds?: string[];
     /** Trace 列表顶部时间筛选换算后的起始时间。 */
     timestampFrom?: Date;
     /** Trace 列表 Agent 归属筛选；按现有 RegisteredAgent + 内置系统 Agent 规则下推。 */
@@ -1250,46 +1262,21 @@ async function appendExecutionOwnershipWhere(
     ownership?: 'user' | 'system',
 ): Promise<void> {
     if (!ownership) return;
-    const registeredSystemIdentities: any[] = [];
     try {
-        const registeredSystemAgents = await prismaRaw.registeredAgent.findMany({
-            where: { agentOwnership: 'system' },
-            select: { platform: true, name: true },
-        });
-        for (const item of registeredSystemAgents) {
-            if (!item.platform || !item.name) continue;
-            registeredSystemIdentities.push({ framework: item.platform, agentName: item.name });
-        }
+        const ownershipWhere = await buildExecutionOwnershipWhere(ownership);
+        where.AND = [...((where.AND as any[]) ?? []), ownershipWhere];
     } catch (e) {
         console.warn('[readRecords] system agent ownership lookup failed:', (e as Error)?.message);
+        const fallbackWhere = ownership === 'system'
+            ? { agentName: { in: [...SYSTEM_AGENT_NAMES] } }
+            : {
+                OR: [
+                    { agentName: null },
+                    { agentName: { notIn: [...SYSTEM_AGENT_NAMES] } },
+                ],
+            };
+        where.AND = [...((where.AND as any[]) ?? []), fallbackWhere];
     }
-    const ownershipWhere = ownership === 'system'
-        ? {
-            OR: [
-                { agentName: { in: [...SYSTEM_AGENT_NAMES] } },
-                ...registeredSystemIdentities,
-            ],
-        }
-        : {
-            AND: [
-                {
-                    OR: [
-                        { agentName: null },
-                        { agentName: { notIn: [...SYSTEM_AGENT_NAMES] } },
-                    ],
-                },
-                ...(registeredSystemIdentities.length > 0
-                    ? [{
-                        OR: [
-                            { framework: null },
-                            { agentName: null },
-                            { NOT: { OR: registeredSystemIdentities } },
-                        ],
-                    }]
-                    : []),
-            ],
-        };
-    where.AND = [...((where.AND as any[]) ?? []), ownershipWhere];
 }
 
 export async function listObservedAgentNames(user?: string, observedAgentFallback = false): Promise<string[]> {
@@ -1924,6 +1911,21 @@ async function readRecordsInternal(
     if (businessTagIds.length > 0) {
         const taggedExecutionIds = await findExecutionIdsByBusinessTags(user, businessTagIds).catch((e: unknown) => {
             console.warn('[readRecords] business tag filter failed:', e);
+            return [] as string[];
+        });
+        if (taggedExecutionIds) {
+            const current = Array.isArray(where.id?.in) ? where.id.in.map((v: unknown) => String(v)) : null;
+            const next = current
+                ? current.filter((id: string) => taggedExecutionIds.includes(id))
+                : taggedExecutionIds;
+            where.id = { in: next };
+        }
+    }
+
+    const userTagIds = Array.from(new Set((filters?.userTagIds ?? []).map(v => String(v || '').trim()).filter(Boolean)));
+    if (userTagIds.length > 0) {
+        const taggedExecutionIds = await findExecutionIdsByUserTags(user, userTagIds).catch((e: unknown) => {
+            console.warn('[readRecords] user tag filter failed:', e);
             return [] as string[];
         });
         if (taggedExecutionIds) {

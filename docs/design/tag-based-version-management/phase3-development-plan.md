@@ -17,7 +17,7 @@
 - 新增 Trace 标签绑定 API。
 - 扩展 Trace 查询与筛选，支持业务标签过滤和标签返回。
 - 新增版本管理页面。
-- 改造链路追踪标签列、系统标签列、列显隐、业务标签筛选。
+- 改造链路追踪标签列、系统标签列、列显隐、用户标签多选筛选。
 - 新增版本分析页面，包括版本对比和版本详情。
 - 补充测试与用户/开发者指南。
 
@@ -53,7 +53,7 @@
 |-|-|-|
 | T2-1 | 实现 `/api/tags` 与 `/api/tags/[id]` | GET/POST/PUT/DELETE 均按 user 隔离 |
 | T2-2 | 实现 `/api/observe/executions/[executionId]/tags` | 可获取、替换、增量添加、删除 Trace 标签 |
-| T2-3 | 扩展 `/api/observe/data` 返回标签和支持业务标签筛选 | `bizTag` 或统一 filter 均能命中正确 Trace |
+| T2-3 | 扩展 `/api/observe/data` 返回标签并支持用户标签多选筛选 | `tagIds` 可混选版本/业务标签并按 AND 命中；旧 `bizTag` 保持兼容 |
 | T2-4 | 实现 `/api/observe/version-analysis/compare` | 返回版本标签聚合指标，版本按名称排序 |
 | T2-5 | 实现 `/api/observe/version-analysis/tags/[tagId]/traces` | 返回指定版本下 Trace 明细和详情页所需指标 |
 
@@ -62,7 +62,7 @@
 | 任务 | 内容 | 通过标准 |
 |-|-|-|
 | T3-1 | 扩展 Trace 行类型，接入用户标签和系统标签 | 列表能渲染两类标签 |
-| T3-2 | 增加业务标签筛选入口 | 点击业务标签后列表只显示命中 Trace |
+| T3-2 | 增加用户标签多选筛选入口 | 版本/业务标签按类型和前缀聚类；列表只显示同时命中全部所选标签的 Trace |
 | T3-3 | 增加标签添加/移除交互 | 操作后刷新仍存在，失败时有提示 |
 | T3-4 | 增加系统标签列和列显隐配置 | 系统标签默认隐藏，用户标签默认展示 |
 | T3-5 | 保持现有搜索、筛选、排序、详情抽屉行为不退化 | 现有 Trace golden path 仍可用 |
@@ -105,7 +105,7 @@
 |-|-|
 | Tag CRUD 单测 | 创建、重名校验、编辑、删除、user 隔离 |
 | ExecutionTag 单测 | 绑定唯一性、删除标签级联、删除 Execution 级联 |
-| Trace 查询测试 | `bizTag` 筛选只返回命中 Trace |
+| Trace 查询测试 | `tagIds` 跨类型多选只返回同时命中全部标签的 Trace；`bizTag` 保持旧兼容语义 |
 | 版本聚合测试 | answerScore 均值、覆盖率、Token 均值、p95 latency、成本；运行成功率如实现则按 Trace 状态派生 |
 | 空值测试 | answerScore / tokens / latency / cost 缺失时不污染聚合 |
 | 系统标签派生测试 | Multi-Agent、Skills、SUB、framework 标签派生正确 |
@@ -118,7 +118,7 @@
 1. 创建一个版本标签和一个业务标签。
 2. 在 Trace 列表给一条 Trace 打两个标签。
 3. 刷新页面，确认标签仍显示。
-4. 按业务标签筛选，确认列表只剩命中 Trace。
+4. 混合选择一个版本标签和一个业务标签，确认列表只剩同时命中二者的 Trace。
 5. 打开版本分析，确认版本标签出现在横轴。
 6. 进入版本详情，点击 Trace 明细能打开对应 Trace 详情。
 7. 关闭系统标签列后刷新，确认列配置符合预期策略。

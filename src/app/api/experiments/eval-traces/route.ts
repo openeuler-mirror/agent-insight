@@ -3,13 +3,13 @@
 // 评测结果统一落 ExperimentEvalResult（一次调用 ↔ 一个 backing 单组实验，可复用 experimentId）。
 //
 // 运行 Agent、A/B 对比、流程图对齐(analyze-match) 都不在这里；这里只做「评测」。
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { prisma } from '@/lib/storage/prisma';
 import {
   ensureEvalExperiment,
   addEvalExperimentCase,
-  evaluateEvalExperimentCase,
+  startEvalExperimentCases,
 } from '@/lib/engine/experiment/run-experiment';
 import { findAgentDataset } from '@/server/agent_datasets_storage';
 import { matchAgentDatasetCase } from '@/lib/engine/evaluation/dataset-case-match';
@@ -216,26 +216,45 @@ export async function POST(req: Request) {
             : (await resolveTraceToolCatalog(username, t, datasetIds)) ?? undefined,
         })));
 
-    const results = [];
+    const prepared = [];
     for (const t of targets) {
       const expCaseId = await addEvalExperimentCase(experimentId, {
         taskId: t.taskId, input: '', actualOutput: '', referenceOutput: t.referenceOutput,
         evaluatorContext: t.evaluatorContext,
       });
-      const rows = await evaluateEvalExperimentCase(experimentId, expCaseId, username);
-      const done = rows.filter((r) => r.status === 'done' && typeof r.score === 'number');
-      const score = done.length ? Math.round(done.reduce((s, r) => s + (r.score as number), 0) / done.length) : null;
-      results.push({
-        taskId: t.taskId,
-        caseId: t.caseId,
-        experimentCaseId: expCaseId,
-        status: rows.length && done.length === 0 ? 'failed' : 'done',
-        score,
-        evaluations: rows.map((r) => ({ evaluatorId: r.evaluatorId, status: r.status, score: r.score, errorMessage: r.errorMessage })),
-      });
+      prepared.push({ target: t, experimentCaseId: expCaseId });
     }
 
-    return NextResponse.json({ success: true, experimentId, results });
+    const run = await startEvalExperimentCases(
+      experimentId,
+      prepared.map((item) => item.experimentCaseId),
+      username,
+    );
+    if (!run) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    const completion = run.completion.catch((error) => {
+      console.error('[eval-traces background Error]', error);
+    });
+    try {
+      after(() => completion);
+    } catch {
+      // 直接调用 route handler 的单测没有 Next request context；Promise 本身仍已启动。
+    }
+
+    const results = prepared.map(({ target: t, experimentCaseId }) => ({
+        taskId: t.taskId,
+        caseId: t.caseId,
+        experimentCaseId,
+        status: 'running',
+        score: null,
+        evaluations: [],
+      }));
+
+    return NextResponse.json(
+      { success: true, experimentId, status: run.status, results },
+      { status: 202 },
+    );
   } catch (error) {
     console.error('[eval-traces POST Error]', error);
     if (error instanceof EvaluatorContextValidationError) {

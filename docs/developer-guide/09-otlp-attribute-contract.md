@@ -157,6 +157,26 @@ Logs 中的 `api_request` / `api_response`、`tool_request` / `tool_response`、
 
 setup wrapper 只设置 `CODEAGENT3_ENABLE_TELEMETRY=1`、OTLP base endpoint、JSON protocol 和认证 header，不写 `OTEL_TRACES_EXPORTER=none` / `OTEL_METRICS_EXPORTER=none`；CodeAgent 当前会覆盖这类关闭变量。
 
+## LlamaIndex 兼容契约
+
+LlamaIndex 客户端复用官方 `llama-index-observability-otel==0.6.4` 创建 OTel span，并由 Agent Insight Handler 子类补充以下属性。客户端使用独立 `TracerProvider`，不会替换应用已有的全局 Provider；`SimpleSpanProcessor` 调用的自定义 exporter 只做 `ReadableSpan → SpanRecord → put_nowait`，不会在 span 结束线程中执行磁盘或网络 I/O。
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `agent.insight.framework` | string | 固定为 `llamaindex` |
+| `agent.insight.span.kind` | string | `agent`、`workflow`、`workflow_step`、`tool`、`llm`、`retriever`、`synthesizer`、`chain` 或 `span` |
+| `session.id` | string | 业务上下文提供的 sessionId；缺省为 OTel traceId |
+| `agent.instance.id` | string | 多 Agent/Workflow Context 中稳定的 Agent 实例标识 |
+| `gen_ai.request.model` | string | LLM 模型名称 |
+| `gen_ai.provider.name` | string | 模型提供方 |
+| `gen_ai.usage.input_tokens` | int | 输入 Token |
+| `gen_ai.usage.output_tokens` | int | 输出 Token |
+| `gen_ai.usage.total_tokens` | int | 总 Token |
+
+Tool 使用 `tool.name`、`tool.arguments`、`tool.output`；Retriever 使用 `retrieval.query`、`retrieval.nodes`；Workflow step 使用 `workflow.step.name`、`workflow.step.input_event`。正文属性由客户端按配置截断，并用 `<key>.truncated` 与 `<key>.original_chars` 标记。
+
+`session.id` 的优先级为显式 `trace_context(session_id=...)`、父 Span 继承、OTel traceId。独立 Retriever/LLM 保留真实根 Span，不生成 synthetic Agent root。服务端 LlamaIndex Adapter 负责包装 LLM Span 去重、错误摘要、Agent 所有者和子 Agent 关系归一化；共享 renderer 不读取 LlamaIndex 私有属性，也不按框架名分支。
+
 ## 环境变量 (OpenClaw 侧)
 
 以下环境变量控制 OpenClaw 的 OTel 导出行为：

@@ -2,7 +2,7 @@
 
 import { NextResponse } from 'next/server';
 
-import { buildHistorySeries } from '@/lib/infra/history';
+import { buildHistorySeries, DEFAULT_RATE_WINDOW_MS } from '@/lib/infra/history';
 import { latestSamples, querySamples } from '@/lib/infra/store';
 
 export const dynamic = 'force-dynamic';
@@ -19,6 +19,9 @@ export async function GET(req: Request) {
   // 服务端降采样目标点数：超过就按时间桶合并，前端无论选多大范围都只拿恒定量级的点（默认 500）。
   // 0 = 关闭降采样（取原始全量）。小范围本就 <500 点 → 无影响；24h 这类大范围才会被压。
   const maxPoints = Math.min(2000, Math.max(0, Number(searchParams.get('maxPoints') || 500)));
+  // counter 速率（tok/s、抢占次/s）的回看窗口。默认 30s：vLLM 计数器是突发式跳变 + 推送间隔抖动，
+  // 相邻帧差分会把一坨 token 除以随机小间隔，读数虚高 1~2 个数量级。可调小看尖峰、调大更平滑。
+  const rateWindowMs = Math.min(300_000, Math.max(1000, Number(searchParams.get('rateWindowMs') || DEFAULT_RATE_WINDOW_MS)));
 
   let samples;
   if (fromRaw) {
@@ -31,5 +34,5 @@ export async function GET(req: Request) {
     const limit = Math.min(5000, Math.max(2, Number(searchParams.get('limit') || 200)));
     samples = await latestSamples(sourceId, limit, model);
   }
-  return NextResponse.json({ points: buildHistorySeries(samples, maxPoints), count: samples.length });
+  return NextResponse.json({ points: buildHistorySeries(samples, maxPoints, rateWindowMs), count: samples.length, rateWindowMs });
 }

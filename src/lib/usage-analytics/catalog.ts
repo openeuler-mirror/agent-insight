@@ -70,6 +70,7 @@ export const USAGE_FEATURES: UsageFeatureDefinition[] = [
             c('infra.diagnose', '启动 Infra 诊断', '诊断请求成功返回结果'),
             c('infra.source.save', '保存指标源', '/api/observe/infra/sources 保存成功'),
             c('infra.source.test', '测试指标源连接', '/api/observe/infra/sources/test 完成一次主动测试'),
+            c('infra.export', '导出时序 CSV', '源详情页按当前时间段导出 CSV 成功触发下载'),
         ],
     },
     {

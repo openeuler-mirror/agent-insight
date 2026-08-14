@@ -119,3 +119,15 @@ test('histQuantile 桶内线性插值 + 边界', () => {
   assert.equal(histQuantile(undefined, 0.95), null);
   assert.equal(histAvg(empty), null);
 });
+
+test('histQuantile：le 为 null 的桶等同 +Inf（JSON 往返后的形态），不能被当成 0', () => {
+  // JSON.stringify(Infinity) === 'null' → 落库读回来最后一个桶就是 { le: null }。
+  // 少了兜底会走插值分支把 null 当 0 算，得到 prevLe*(1-frac)，把最坏尾延迟静默缩小。
+  const roundTripped = JSON.parse(JSON.stringify({
+    buckets: [{ le: 100, count: 1 }, { le: Infinity, count: 10 }], sum: 0, count: 10,
+  })) as Histogram;
+  assert.equal(roundTripped.buckets[1].le, null, '前提：JSON 往返后 +Inf 变成 null');
+
+  // p95 落在 +Inf 桶（只有 1 个请求 ≤100s，其余 9 个更慢）→ 应回退到最后一个有限边界 100
+  assert.equal(histQuantile(roundTripped, 0.95), 100);
+});

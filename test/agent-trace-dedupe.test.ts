@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { buildAgentCallTree } from "../src/lib/engine/observability/agent-trace"
+import { buildAgentCallTree, type RawInteraction } from "../src/lib/engine/observability/agent-trace"
 import { buildFaultPathSteps } from "../src/lib/engine/observability/fault-path"
 
 test("agent trace: duplicate tool calls with the same id render once", () => {
@@ -39,7 +39,7 @@ test("agent trace: duplicate tool calls with the same id render once", () => {
         },
       ],
     },
-  ] as any)
+  ] as RawInteraction[])
 
   assert.ok(tree)
   assert.equal(tree!.events.filter((e) => e.kind === "task").length, 1)
@@ -177,6 +177,22 @@ test("fault path: tool-only llm step exposes its tool-call summary as output", (
 
   const llmStep = steps.find((step) => step.kind === "llm")
   assert.equal(llmStep?.rawOutput, "1 个工具调用: read")
+})
+
+test("agent trace: failed LLM summary fallback is framework-neutral", () => {
+  const tree = buildAgentCallTree([
+    { role: "user", content: "go", timestamp: 1 },
+    {
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+      status: "error",
+      error_summary: "provider quota exhausted",
+    },
+  ] as RawInteraction[])
+
+  assert.ok(tree)
+  assert.equal(tree!.events.find((event) => event.kind === "llm")?.summary, "provider quota exhausted")
 })
 
 test("agent trace: ISO timestamps produce finite durations", () => {

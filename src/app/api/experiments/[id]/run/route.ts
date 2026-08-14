@@ -1,8 +1,11 @@
 // 触发实验执行：置 running + 逐行异步执行（fire-and-forget），立即返回当前状态。
+// 按 type 分流：type='llm' → startComparisonRun；type='single' → startExperimentRun（G4 保持 200+alreadyRunning）。
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { startExperimentRun } from '@/lib/engine/experiment/run-experiment';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { startComparisonRun } from '@/lib/engine/experiment/comparison-runner';
+import { prisma } from '@/lib/storage/prisma';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +21,15 @@ export async function POST(
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
-    const result = await startExperimentRun(id, username);
+    // 按 type 分流
+    const exp = await prisma.experiment.findUnique({ where: { id }, select: { type: true } });
+    if (!exp) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+
+    const result = exp.type === 'llm'
+      ? await startComparisonRun(id, username)
+      : await startExperimentRun(id, username);
     if (!result) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
     }

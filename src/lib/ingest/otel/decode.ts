@@ -2,6 +2,13 @@ import otlpRoot from '@opentelemetry/otlp-transformer/build/src/generated/root';
 
 export type OtlpSignal = 'traces';
 
+export type DecodedOtlpRequest = {
+  body: any;
+  rawBody: Uint8Array;
+  contentType: string;
+  encoding: 'json' | 'protobuf';
+};
+
 export class OtlpDecodeError extends Error {
   readonly status: number;
 
@@ -80,24 +87,41 @@ export function decodeOtlpProtobufBody(data: Uint8Array, signal: OtlpSignal): an
   throw new OtlpDecodeError(415, `OTLP ${signal} protobuf is not supported`);
 }
 
-export async function decodeOtlpRequest(req: Request, signal: OtlpSignal): Promise<any> {
+export async function decodeOtlpRequestWithRaw(
+  req: Request,
+  signal: OtlpSignal,
+): Promise<DecodedOtlpRequest> {
   const contentType = req.headers.get('content-type') || '';
+  const rawBody = new Uint8Array(await req.arrayBuffer());
 
   if (isJsonContentType(contentType)) {
     try {
-      return await req.json();
+      return {
+        body: JSON.parse(Buffer.from(rawBody).toString('utf8')),
+        rawBody,
+        contentType,
+        encoding: 'json',
+      };
     } catch (err: any) {
       throw new OtlpDecodeError(400, `Invalid OTLP ${signal} JSON payload: ${err?.message || 'parse failed'}`);
     }
   }
 
   if (isProtobufContentType(contentType)) {
-    const body = new Uint8Array(await req.arrayBuffer());
-    return decodeOtlpProtobufBody(body, signal);
+    return {
+      body: decodeOtlpProtobufBody(rawBody, signal),
+      rawBody,
+      contentType,
+      encoding: 'protobuf',
+    };
   }
 
   throw new OtlpDecodeError(
     415,
     `Unsupported OTLP ${signal} content type: ${contentType || '<missing>'}. Use application/json or application/x-protobuf.`,
   );
+}
+
+export async function decodeOtlpRequest(req: Request, signal: OtlpSignal): Promise<any> {
+  return (await decodeOtlpRequestWithRaw(req, signal)).body;
 }

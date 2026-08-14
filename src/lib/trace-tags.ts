@@ -1,4 +1,5 @@
 import { prismaRaw } from '@/lib/storage/prisma';
+import { executionIdsMatchingAllTags } from '@/lib/trace-tag-filters';
 
 export type TraceTagKind = 'version' | 'business';
 
@@ -327,4 +328,21 @@ export async function findExecutionIdsByBusinessTags(userInput: string | undefin
     select: { executionId: true },
   });
   return Array.from(new Set(rows.map((row: any) => row.executionId)));
+}
+
+export async function findExecutionIdsByUserTags(userInput: string | undefined, tagIdsInput: string[]): Promise<string[] | null> {
+  if (!tagsSupported()) return null;
+  await ensureTraceTagTables();
+  const user = cleanUser(userInput);
+  const tagIds = uniqueStrings(tagIdsInput);
+  if (tagIds.length === 0) return null;
+  const rows = await (prismaRaw as any).executionTag.findMany({
+    where: {
+      user,
+      tagId: { in: tagIds },
+      tag: { user, kind: { in: ['version', 'business'] } },
+    },
+    select: { executionId: true, tagId: true },
+  });
+  return executionIdsMatchingAllTags(rows, tagIds);
 }

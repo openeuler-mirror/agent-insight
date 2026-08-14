@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
+import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,10 +11,16 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));
     const userFilter = username ? { user: username } : {};
+    const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
 
     const grouped = await prisma.execution.groupBy({
       by: ['agentName'],
-      where: { ...userFilter, isSubagent: false, agentName: { not: null } },
+      where: {
+        ...userFilter,
+        isSubagent: false,
+        agentName: { not: null },
+        AND: [userOwnershipWhere],
+      },
       _count: { agentName: true },
       orderBy: { _count: { agentName: 'desc' } },
       take: 50,

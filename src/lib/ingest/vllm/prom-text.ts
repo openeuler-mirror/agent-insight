@@ -175,12 +175,15 @@ export function histQuantile(hist: Histogram | undefined, q: number): number | n
   let prevLe = 0;
   let prevCount = 0;
   for (const b of hist.buckets) {
+    // le == null 也当成 +Inf：JSON.stringify(Infinity) 是 'null'，经过落库往返的桶就长这样。
+    // 少了这层兜底，下面的插值会把 null 当 0 算，静默缩小最坏尾延迟（见 store.reviveHistograms）。
+    const le = b.le == null ? Infinity : b.le;
     if (b.count >= target) {
-      if (b.le === Infinity) return prevLe; // +Inf 桶：回退到最后一个有限边界
+      if (le === Infinity) return prevLe; // +Inf 桶：回退到最后一个有限边界
       const frac = (target - prevCount) / (b.count - prevCount || 1);
-      return prevLe + (b.le - prevLe) * frac;
+      return prevLe + (le - prevLe) * frac;
     }
-    prevLe = b.le;
+    prevLe = le;
     prevCount = b.count;
   }
   return prevLe;

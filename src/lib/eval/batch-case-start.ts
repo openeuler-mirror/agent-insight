@@ -3,6 +3,17 @@ export interface BatchCaseStartState {
   evaluatorRunId?: string;
 }
 
+export interface BatchEvaluationBinding {
+  evaluationBatchId?: string;
+  evalExperimentId?: string;
+}
+
+export function resolveBatchEvaluationExperimentId(
+  config: BatchEvaluationBinding,
+): string | undefined {
+  return config.evaluationBatchId || config.evalExperimentId || undefined;
+}
+
 export function isBatchCaseStartable(
   state: BatchCaseStartState | undefined,
   currentEvaluatorRunId: string,
