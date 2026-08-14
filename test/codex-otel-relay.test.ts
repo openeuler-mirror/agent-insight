@@ -659,8 +659,12 @@ test("Codex LLM spans get non-zero durations from adjacent sse_event timestamps"
   }))
   const llms = writer.events.filter((event) => event.kind === "llm")
   assert.equal(llms.length, 2)
-  assert.ok(llms[0]?.endTimeMs! - llms[0]?.startTimeMs! > 0, "first LLM duration > 0")
-  assert.ok(llms[1]?.endTimeMs! - llms[1]?.startTimeMs! > 0, "second LLM duration > 0")
+  const firstLlm = llms[0]
+  const secondLlm = llms[1]
+  assert.ok(firstLlm)
+  assert.ok(secondLlm)
+  assert.ok(firstLlm.endTimeMs - firstLlm.startTimeMs > 0, "first LLM duration > 0")
+  assert.ok(secondLlm.endTimeMs - secondLlm.startTimeMs > 0, "second LLM duration > 0")
   // 第二条 start = 第一条 end（相邻 sse_event）
-  assert.equal(llms[1]?.startTimeMs, llms[0]?.endTimeMs)
+  assert.equal(secondLlm.startTimeMs, firstLlm.endTimeMs)
 })
