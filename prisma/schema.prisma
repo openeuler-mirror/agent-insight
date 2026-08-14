@@ -1160,6 +1160,10 @@ model ReliabilityClient {
   agentVersion         String?
   capabilitiesJson     String    @default("{}")
   capabilitiesRevision String?
+  // 同一台机器改绑到别的账号时，旧记录保留但标记解绑：配置下发历史仍可追溯，
+  // 页面据此显示「已解绑」而非「离线」——后者会让人以为机器只是掉线了。
+  unboundAt            DateTime?
+  unboundToClientId    String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 

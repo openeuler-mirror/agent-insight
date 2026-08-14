@@ -75,6 +75,8 @@ function parseArgs(argv) {
     const arg = argv[i]
     if (arg === '--host') out.host = argv[++i]
     else if (arg === '--token') out.token = argv[++i]
+    // 令牌对应的账号，由安装脚本从 install-tokens 响应带入，用于判断是否改绑。
+    else if (arg === '--user') out.user = argv[++i]
     else if (arg === '--name') out.name = argv[++i]
     else if (arg === '--no-start') out.start = false
     else if (arg === '--start') out.start = true
@@ -112,7 +114,17 @@ function pickReportedIp() {
 
 // ------------------------------------------------------------- register
 
-async function register({ host, token, name }) {
+/** 读取本机已有绑定；文件缺失或损坏都按「未绑定」处理，不阻断安装。 */
+function readExistingBinding() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+    return { clientId: raw.clientId || null, user: raw.user || null }
+  } catch {
+    return { clientId: null, user: null }
+  }
+}
+
+async function register({ host, token, name, previousClientId }) {
   const base = String(host || '').replace(/\/$/, '')
   const res = await fetch(`${base}/api/reliability/client/v1/register`, {
     method: 'POST',
@@ -129,6 +141,9 @@ async function register({ host, token, name }) {
         supervisor: process.platform === 'darwin' ? 'launchd' : 'systemd',
       },
       capabilities: { platforms: [], actions: [] },
+      // 改绑时告诉服务端解绑哪一个：旧凭证要立即撤销，
+      // 否则原账号仍能向这台机器下发配置。
+      previousClientId: previousClientId || null,
     }),
   })
   const text = await res.text()
@@ -147,6 +162,8 @@ async function register({ host, token, name }) {
   fs.mkdirSync(CLIENT_HOME, { recursive: true, mode: 0o700 })
   const config = {
     insightBaseUrl: base,
+    // 归属落盘：下次安装靠它判断是否需要改绑，缺了就只能盲目跳过。
+    user: json.user || null,
     clientId: json.clientId,
     // 设备凭证只返回一次，且只能当前用户可读。
     deviceCredential: json.deviceCredential,
@@ -157,7 +174,10 @@ async function register({ host, token, name }) {
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 })
   fs.renameSync(tmp, CONFIG_PATH)
   fs.chmodSync(CONFIG_PATH, 0o600)
-  log(`✓ 注册成功: clientId=${json.clientId}`)
+  log(`✓ 注册成功: clientId=${json.clientId}${json.user ? ` user=${json.user}` : ''}`)
+  if (json.unboundPrevious) {
+    log(`  已解绑原账号 ${json.unboundPrevious.user}（旧凭证已撤销，其页面将显示「已解绑」）`)
+  }
   return config
 }
 
@@ -434,7 +454,7 @@ async function main() {
 
   if (args.help) {
     console.log(`用法:
-  install-ras-client --host <url> --token <installToken> [--no-start] [--no-fi]
+  install-ras-client --host <url> --token <installToken> [--user <account>] [--no-start] [--no-fi]
   install-ras-client --status
   install-ras-client --uninstall
 
@@ -462,7 +482,27 @@ async function main() {
 
   if (args.token) {
     if (!args.host) fail('缺少 --host')
-    await register({ host: args.host, token: args.token, name: args.name })
+    const existing = readExistingBinding()
+    // 归属一致才跳过。只看「配置文件在不在」会导致换账号后静默沿用旧绑定：
+    // Trace 上报跟着新账号走，纳管却留在旧账号，一台机器裂成两半。
+    const sameOwner =
+      existing.clientId && args.user && existing.user && existing.user === args.user
+    if (sameOwner) {
+      log(`已绑定到 ${existing.user}，跳过注册`)
+    } else {
+      if (existing.clientId && existing.user && args.user && existing.user !== args.user) {
+        log(`检测到账号变更：${existing.user} → ${args.user}，正在改绑…`)
+      } else if (existing.clientId && !existing.user) {
+        // 旧版本客户端没记录归属，无法判断是否同账号，一律改绑以消除歧义。
+        log('本机绑定信息缺少归属（旧版本安装），正在重新绑定…')
+      }
+      await register({
+        host: args.host,
+        token: args.token,
+        name: args.name,
+        previousClientId: existing.clientId,
+      })
+    }
   } else if (!fs.existsSync(CONFIG_PATH)) {
     fail('缺少 --token 且本机尚未注册', '请在「客户端安装」页生成安装命令。')
   } else {
