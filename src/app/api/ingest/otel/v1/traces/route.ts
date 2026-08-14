@@ -94,7 +94,7 @@ export async function POST(req: Request) {
       }
     }
 
-    let body: any;
+    let body;
     try {
       body = await decodeOtlpRequest(req, 'traces');
     } catch (err) {
@@ -104,7 +104,6 @@ export async function POST(req: Request) {
       console.error('[OTel] Failed to decode request body:', err);
       return NextResponse.json({ error: 'Invalid Payload' }, { status: 400 });
     }
-
     const codeAgentPartition = partitionCodeAgentOtlpPayload(body, 'traces');
     if (codeAgentPartition.codeAgentResourceCount > 0 && !codeAgentPartition.hasRemainingResources) {
       return NextResponse.json({
@@ -149,7 +148,6 @@ export async function POST(req: Request) {
     const receivedAt = new Date().toISOString();
     const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser });
     const { dirtySessionIds } = appendOtelTraceEvents(events);
-
     return NextResponse.json({
       status: 'accepted',
       received: events.length,

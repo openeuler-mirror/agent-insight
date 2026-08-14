@@ -1,0 +1,1524 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T03:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-03-task-starvation-59697",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-03-task-starvation-59697",
+        "taskId": "jiuwen-case-03-task-starvation-59697",
+        "query": "多个子任务中 t3 优先级低，需要被认领执行。",
+        "framework": "jiuwenswarm",
+        "tokens": 344100,
+        "cost": null,
+        "latency": 20.4,
+        "toolCallCount": 51,
+        "llmCallCount": 51,
+        "inputTokens": 333000,
+        "outputTokens": 11100,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T03:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "任务 t3 始终处于 pending 未被任何 worker 认领，而 t1/t2 被反复占用，t3 任务饥饿。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "worker-a",
+          "worker-b"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-03-task-starvation-59697",
+        "label": "jiuwenswarm",
+        "query": "多个子任务中 t3 优先级低，需要被认领执行。",
+        "startTime": "2026-08-07T03:00:00.000Z",
+        "endTime": "2026-08-07T03:00:20.400Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "多个子任务中 t3 优先级低，需要被认领执行。"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队并创建多个任务。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"饥饿小队\", \"team_desc\": \"t3 低优先级，一直未被认领。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"负责调度多个子任务。\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 500
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t1（高优先级）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t1\", \"title\": \"高优先级任务\", \"content\": \"重要任务。\"}]}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t2（中优先级）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t2\", \"title\": \"中优先级任务\", \"content\": \"普通任务。\"}]}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t3（低优先级）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t3\", \"title\": \"低优先级任务\", \"content\": \"低优先级任务。\"}]}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 worker-a 和 worker-b。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"worker-a\", \"display_name\": \"工作者A\", \"desc\": \"执行任务。\", \"prompt\": \"认领任务执行。\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"worker-b\", \"display_name\": \"工作者B\", \"desc\": \"执行任务。\", \"prompt\": \"认领任务执行。\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"认领任务开始。\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3200,
+              "completed": 3600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "update_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "update_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"assignee\": \"worker-a\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3600,
+              "completed": 4000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4000,
+              "completed": 4400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "update_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "update_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"assignee\": \"worker-b\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4400,
+              "completed": 4800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4800,
+              "completed": 5200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "t3 始终未被认领。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'claimed','assignee':'worker-a'},{'task_id':'t2','status':'claimed','assignee':'worker-b'},{'task_id':'t3','status':'pending','assignee':None}],'count':3} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 5200,
+              "completed": 5600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 5600,
+              "completed": 6000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6000,
+              "completed": 6400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6400,
+              "completed": 6800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6800,
+              "completed": 7200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 7200,
+              "completed": 7600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 7600,
+              "completed": 8000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8000,
+              "completed": 8400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8400,
+              "completed": 8800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8800,
+              "completed": 9200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 9200,
+              "completed": 9600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 9600,
+              "completed": 10000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10000,
+              "completed": 10400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10400,
+              "completed": 10800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10800,
+              "completed": 11200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 11200,
+              "completed": 11600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 11600,
+              "completed": 12000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12000,
+              "completed": 12400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12400,
+              "completed": 12800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12800,
+              "completed": 13200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 13200,
+              "completed": 13600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 13600,
+              "completed": 14000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14000,
+              "completed": 14400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14400,
+              "completed": 14800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14800,
+              "completed": 15200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 15200,
+              "completed": 15600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 15600,
+              "completed": 16000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16000,
+              "completed": 16400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16400,
+              "completed": 16800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16800,
+              "completed": 17200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 17200,
+              "completed": 17600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 17600,
+              "completed": 18000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18000,
+              "completed": 18400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18400,
+              "completed": 18800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18800,
+              "completed": 19200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-03-task-starvation_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 19200,
+              "completed": 19600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-03-task-starvation_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 19600,
+              "completed": 20000
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "再次检查，t3 仍 pending 未被认领。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-03-task-starvation-59697\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'claimed','assignee':'worker-a'},{'task_id':'t2','status':'claimed','assignee':'worker-b'},{'task_id':'t3','status':'pending','assignee':None}],'count':3} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 20000,
+              "completed": 20400
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

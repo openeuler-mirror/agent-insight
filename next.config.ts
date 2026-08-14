@@ -9,6 +9,9 @@ config();
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',
   output: 'standalone',
+  typescript: {
+    tsconfigPath: 'tsconfig.next.json',
+  },
   serverExternalPackages: ["node-fetch", "pg"],
   // Keep local/temp & non-runtime dirs out of the standalone bundle, otherwise
   // next build sweeps them in (e.g. the gitignored ./exclude scratch dir can be

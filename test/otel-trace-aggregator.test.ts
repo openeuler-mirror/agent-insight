@@ -1262,7 +1262,7 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
   // 顺序即优先级：专用适配器都排在 generic 兜底之前。新增适配器要显式登记在这里。
   assert.deepEqual(
     listOtelTraceAdapters().map(adapter => adapter.id),
-    ["langfuse-langgraph", "hermes", "openclaw", "llamaindex", "qoder", "generic"],
+    ["actrail", "langfuse-langgraph", "hermes", "openclaw", "llamaindex", "qoder", "generic"],
   );
   assert.equal(getOtelTraceAdapter([hermesEvent]).id, "hermes");
   assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");

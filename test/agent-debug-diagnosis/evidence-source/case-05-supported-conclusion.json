@@ -1,0 +1,235 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T04:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-05-supported-conclusion-86294",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-05-supported-conclusion-86294",
+        "taskId": "jiuwen-case-05-supported-conclusion-86294",
+        "query": "确认服务当前监听的端口号。",
+        "framework": "jiuwenswarm",
+        "tokens": 49600,
+        "cost": null,
+        "latency": 10.0,
+        "toolCallCount": 6,
+        "llmCallCount": 6,
+        "inputTokens": 48000,
+        "outputTokens": 1600,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T04:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "完成。服务端口为 9090。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "reporter"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-05-supported-conclusion-86294",
+        "label": "jiuwenswarm",
+        "query": "确认服务当前监听的端口号。",
+        "startTime": "2026-08-07T04:00:00.000Z",
+        "endTime": "2026-08-07T04:00:10.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "确认服务当前监听的端口号。",
+            "kind": "user"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，查询服务端口。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"端口小队\", \"team_desc\": \"查询服务监听端口。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织端口查询。\"}, {\"session\": \"session:jiuwen-case-05-supported-conclusion-86294\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 500
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reporter 查询端口。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reporter\", \"display_name\": \"查询员\", \"desc\": \"读取配置确认端口。\", \"prompt\": \"读取 config.js 并上报端口。\"}, {\"session\": \"session:jiuwen-case-05-supported-conclusion-86294\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"查询端口。\"}, {\"session\": \"session:jiuwen-case-05-supported-conclusion-86294\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-supported-conclusion_reporter",
+            "content": "读取 config.js。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_reporter",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"config.js\"}, {\"session\": \"session:jiuwen-case-05-supported-conclusion-86294\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={\"task_id\":\"q5\",\"value\":9090,\"source\":\"config.js\"} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-supported-conclusion_reporter",
+            "content": "端口是 9090。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reporter",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"team_leader\", \"content\": \"端口 9090\", \"summary\": \"reporter 上报端口 9090\"}, {\"session\": \"session:jiuwen-case-05-supported-conclusion-86294\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "端口为 9090。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-05-supported-conclusion-86294\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'q5','status':'completed','value':9090,'source':'config.js'}],'count':1} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

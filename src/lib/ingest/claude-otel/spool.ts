@@ -151,6 +151,8 @@ export type SessionSpoolFiles = {
   legacy: string[];
 };
 
+type SessionSpoolFileName = 'logs.jsonl' | 'traces.jsonl';
+
 function sessionTargetedReadEnabled(): boolean {
   return process.env.AGENT_INSIGHT_OTEL_SESSION_TARGETED_READ !== '0';
 }
@@ -162,7 +164,11 @@ function sessionTargetedReadEnabled(): boolean {
  * 再 stat —— 否则一天有几千个会话目录时,光遍历目录就够慢的。
  * 其余层级照常递归,兼容多一层嵌套的部署形态。
  */
-export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessionId: string): SessionSpoolFiles {
+export function listSessionSpoolFiles(
+  spoolDir: string,
+  fileName: SessionSpoolFileName,
+  sessionId: string,
+): SessionSpoolFiles {
   const segment = safeSessionPathSegment(sessionId);
   const shards: string[] = [];
   const legacy: string[] = [];
@@ -178,9 +184,12 @@ export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessio
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === 'sessions') {
-          const target = path.join(fullPath, segment, fileName);
+          const sessionDir = path.join(/* turbopackIgnore: true */ fullPath, segment);
+          const target = fileName === 'logs.jsonl'
+            ? path.join(sessionDir, 'logs.jsonl')
+            : path.join(sessionDir, 'traces.jsonl');
           try {
-            if (fs.statSync(target).isFile()) shards.push(target);
+            if (fs.statSync(/* turbopackIgnore: true */ target).isFile()) shards.push(target);
           } catch {}
         } else {
           walk(fullPath);
@@ -204,7 +213,7 @@ export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessio
  * 该 session 当前落盘状态的指纹(各候选文件的路径+大小)。
  * 用来判断"上次聚合之后有没有新数据",避免 fast/evaluated 两段对同一份数据重复聚合。
  */
-export function statSessionSpool(spoolDir: string, fileName: string, sessionId: string): string {
+export function statSessionSpool(spoolDir: string, fileName: SessionSpoolFileName, sessionId: string): string {
   const { shards, legacy } = listSessionSpoolFiles(spoolDir, fileName, sessionId);
   const parts: string[] = [];
   for (const file of [...shards, ...legacy]) {
@@ -219,7 +228,7 @@ export function statSessionSpool(spoolDir: string, fileName: string, sessionId: 
 
 function readEventsForSession<T extends { sessionId?: string }>(
   spoolDir: string,
-  fileName: string,
+  fileName: SessionSpoolFileName,
   sessionId: string,
 ): T[] {
   if (!sessionTargetedReadEnabled()) {

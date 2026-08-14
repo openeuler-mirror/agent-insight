@@ -5,6 +5,10 @@ import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
 } from '../codeagent-setup';
+import {
+  ACTRAIL_UNIX_SETUP_BLOCK,
+  ACTRAIL_WINDOWS_SETUP_BLOCK,
+} from '../actrail-setup';
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -134,7 +138,8 @@ const frameworks = [
     { name: 'JiuwenSwarm', value: 'jiuwen' },
     { name: 'LlamaIndex', value: 'llamaindex' },
     { name: 'Qoder CN product family', value: 'qoder' },
-    { name: 'Trae IDE', value: 'trae' }
+    { name: 'Trae IDE', value: 'trae' },
+    { name: 'AcTrail', value: 'actrail' }
 ];
 
 async function select() {
@@ -210,6 +215,7 @@ INSTALL_LLAMAINDEX=false
 LLAMAINDEX_READY=false
 INSTALL_QODER=false
 INSTALL_TRAE=false
+INSTALL_ACTRAIL=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -238,9 +244,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"trae"* ]]; then
     INSTALL_TRAE=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"actrail"* ]]; then
+    INSTALL_ACTRAIL=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -790,6 +799,8 @@ fi
 
 ${CODEAGENT_UNIX_SETUP_BLOCK}
 
+${ACTRAIL_UNIX_SETUP_BLOCK}
+
 # 7. Create Watcher Startup/Stop Scripts
 NEEDS_WATCHER_SCRIPTS=false
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
@@ -897,6 +908,9 @@ fi
 if [ "$INSTALL_TRAE" = "true" ]; then
     echo "  [OK] Trae IDE Collector: installed"
 fi
+if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
+    echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -935,6 +949,9 @@ if [ "$INSTALL_JIUWEN" = "true" ]; then
 fi
 if [ "$LLAMAINDEX_READY" = "true" ]; then
     echo "  6. Restart terminal, then run: \"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\" -m agent_insight_llamaindex.cli run -- \"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\" app.py"
+fi
+if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
+    echo "  7. Use actrailctl launch as usual; AcTrail will upload automatically"
 fi
 echo "------------------------------------------------"
 `;
@@ -1021,7 +1038,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
         '    "    { name: \'LlamaIndex\', value: \'llamaindex\' },"',
         '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
-        '    "    { name: \'Trae IDE\', value: \'trae\' }"',
+        '    "    { name: \'Trae IDE\', value: \'trae\' },"',
+        '    "    { name: \'AcTrail\', value: \'actrail\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1099,6 +1117,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$LLAMAINDEX_READY = $false',
         '$INSTALL_QODER = $false',
         '$INSTALL_TRAE = $false',
+        '$INSTALL_ACTRAIL = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1127,9 +1146,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "trae") {',
         '    $INSTALL_TRAE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "actrail") {',
+        '    $INSTALL_ACTRAIL = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1664,6 +1686,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '',
         ...CODEAGENT_WINDOWS_SETUP_BLOCK.split('\n'),
         '',
+        ...ACTRAIL_WINDOWS_SETUP_BLOCK.split('\n'),
+        '',
         '# 7. Create Watcher Startup/Stop Scripts',
         '$NEEDS_WATCHER_SCRIPTS = $INSTALL_OPENCLAW',
         '',
@@ -1758,6 +1782,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_TRAE) {',
         '    Write-Host "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"',
         '}',
+        'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
+        '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
+        '}',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -1793,6 +1820,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($LLAMAINDEX_READY) {',
         '    Write-Host "  6. Restart PowerShell, then run: & `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" -m agent_insight_llamaindex.cli run -- `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" app.py"',
+        '}',
+        'if ($INSTALL_ACTRAIL) {',
+        '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
