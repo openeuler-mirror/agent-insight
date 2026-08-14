@@ -112,3 +112,4 @@ docs/series-articles/
 
 # omo tool local data (sessions/handoffs, never commit)
 .omo/
+.aet/
