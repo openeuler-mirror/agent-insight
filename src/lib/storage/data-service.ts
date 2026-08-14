@@ -2471,7 +2471,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
                 // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
                 // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework)
+                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true'
                     || targetRecord.complete_session_snapshot === true;
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
@@ -2728,9 +2728,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
     const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(targetRecord.framework);
     const storedAgentName = targetRecord.agentName || frameworkPrimaryAgentName;
-    const observedAgentOptions = frameworkPrimaryAgentName && targetRecord.framework !== 'codex'
-        ? { includeSubagents: false }
-        : undefined;
+    const observedAgentOptions = undefined;
 
     let agentId: string | undefined = undefined;
     if (targetRecord.framework) {
@@ -3322,9 +3320,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
             const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(parentFramework);
             const storedAgentName = node.agentName || frameworkPrimaryAgentName || null;
-            const observedAgentOptions = frameworkPrimaryAgentName && parentFramework !== 'codex'
-            ? { includeSubagents: false }
-            : undefined;
+            const observedAgentOptions = undefined;
         const baseFields = {
             taskId: sessionId,
             framework: parentFramework,

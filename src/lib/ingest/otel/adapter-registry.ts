@@ -1,4 +1,5 @@
 import { genericOtelTraceAdapter } from './adapters/generic';
+import { actrailOtelTraceAdapter } from './adapters/actrail';
 import { openclawOtelTraceAdapter } from './adapters/openclaw';
 import { hermesOtelTraceAdapter } from './adapters/hermes';
 import { langfuseLangGraphOtelTraceAdapter } from './adapters/langfuse-langgraph';
