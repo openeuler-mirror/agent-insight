@@ -11,9 +11,9 @@ import { aggregateOtelTraceEvents } from "@/lib/ingest/otel/aggregate"
 import type { OtelTraceEvent } from "@/lib/ingest/otel/types"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "codex"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "codex"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "codex"]
+const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex"]
+const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
@@ -209,11 +209,11 @@ test("CLI exposes framework preselection and detects the installed local package
   assert.match(installSource, /isCurrentPackageInstalledInCwd\(\)/)
 })
 
-test("generic OTel duplicate spans retain the first snapshot", () => {
+test("generic OTel duplicate spans retain the latest complete snapshot", () => {
   const record = aggregateOtelTraceEvents("generic-session", [
     genericEvent("first snapshot", 10),
     genericEvent("later snapshot", 500),
   ])
   assert.equal(record?.framework, "generic-fixture")
-  assert.equal(record?.final_result, "first snapshot")
+  assert.equal(record?.final_result, "later snapshot")
 })
