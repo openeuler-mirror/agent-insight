@@ -10,6 +10,7 @@ import {
 } from './checkpoint';
 import { compactProcessedSpoolFiles } from './retention';
 import { listSources, type SpoolAggregationResult, type SpoolSource } from './sources';
+import { acquireConsumerProcessLocks, type ConsumerProcessLocks } from './process-lock';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type IntervalHandle = ReturnType<typeof setInterval>;
@@ -64,6 +65,7 @@ export type OtelSpoolConsumerState = {
   pendingFiles: Map<string, PendingFile>;
   sessions: Map<string, SessionState>;
   fileLists: Map<string, FileListCache>;
+  processLocks: ConsumerProcessLocks;
   saveExecution: SaveExecution;
   shortMs: number;
   longMs: number;
@@ -137,8 +139,11 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerState {
-  const sources = options.sources || listSources();
+function createState(
+  options: OtelSpoolConsumerOptions,
+  sources: SpoolSource[],
+  processLocks: ConsumerProcessLocks,
+): OtelSpoolConsumerState {
   return {
     stopped: false,
     ticking: false,
@@ -147,6 +152,7 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     pendingFiles: new Map(),
     sessions: new Map(),
     fileLists: new Map(),
+    processLocks,
     saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.log || console.log),
     shortMs: options.shortMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_SHORT_MS', 3000),
     longMs: options.longMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LONG_MS', 30000),
@@ -517,7 +523,10 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
     try {
       const result = aggregateForSession(state, session, source);
       if (!result.record) {
-        markSourceDone(state, session.sessionId, sourceId);
+        // A framework adapter may be installed later, or a pending Codex unit
+        // may gain its parent correlation in a later append. Keep the disk
+        // cursor unchanged until a record has actually been persisted.
+        session.failures = 0;
         continue;
       }
 
@@ -707,7 +716,15 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
 
 export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): void {
   stopOtelSpoolConsumer();
-  const state = createState(options);
+  const sources = options.sources || listSources();
+  const processLocks = acquireConsumerProcessLocks(sources.map(source => source.spoolDir()));
+  if (!processLocks) {
+    (options.warn || console.warn)('[OTelConsumer] spool is owned by another process', {
+      sources: sources.map(source => source.id),
+    });
+    return;
+  }
+  const state = createState(options, sources, processLocks);
 
   if (state.seedOnStart) {
     for (const source of state.sources) {
@@ -736,6 +753,7 @@ export function stopOtelSpoolConsumer(): void {
   state.stopped = true;
   if (state.interval) clearInterval(state.interval);
   if (state.dispatchTimer) clearTimeout(state.dispatchTimer);
+  state.processLocks.release();
   globalThis.__otelSpoolConsumer = undefined;
 }
 

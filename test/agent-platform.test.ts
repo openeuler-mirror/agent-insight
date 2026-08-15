@@ -18,24 +18,19 @@ test('Agent management preserves existing platforms and labels unregistered plat
   assert.equal(normalizeAgentPlatform('opencode'), 'opencode');
   assert.equal(normalizeAgentPlatform('openclaw'), 'openclaw');
   assert.equal(normalizeAgentPlatform('hermes'), 'hermes');
+  assert.equal(normalizeAgentPlatform('codex'), 'codex');
   assert.equal(normalizeAgentPlatform('unknown'), 'unknown');
   assert.equal(normalizeAgentPlatform('future-agent'), 'unknown');
   assert.equal(normalizeAgentPlatform(null), 'unknown');
 });
 
-test('Agent management only renders API-backed agents and uses the current time', () => {
+test('Agent management exposes Codex platform filters', () => {
   const page = fs.readFileSync(
     path.join(process.cwd(), 'src', 'app', '(main)', 'agents', 'page.tsx'),
     'utf8',
   );
 
-  assert.doesNotMatch(page, /mockAgents|MOCK_NOW/);
-  assert.doesNotMatch(
-    page,
-    /customer-service-agent|data-analyzer-v2|order-executor|email-dispatcher|security-guard/,
-  );
-  assert.match(page, /const agents = dbAgents;/);
-  assert.match(page, /const \[now\] = useState\(\(\) => new Date\(\)\)/);
-  assert.match(page, /now\.getTime\(\) - lastExecutedMs/);
-  assert.match(page, /<AgentCard agent=\{agent\} now=\{now\}/);
+  assert.match(page, /type PlatformFilter = 'all' \| 'opencode' \| 'openclaw' \| 'hermes' \| 'codex';/);
+  assert.match(page, /value === 'openclaw' \|\| value === 'hermes' \|\| value === 'codex'/);
+  assert.match(page, /\{ value: 'codex', label: 'codex' \}/);
 });

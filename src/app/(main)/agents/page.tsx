@@ -21,7 +21,7 @@ import { apiFetch } from '@/lib/client/api';
 
 type AgentOwnership = 'system' | 'user';
 type AgentLayer = 'main' | 'subagent';
-type PlatformFilter = 'all' | 'opencode' | 'openclaw' | 'hermes';
+type PlatformFilter = 'all' | 'opencode' | 'openclaw' | 'hermes' | 'codex';
 type ExecutionTimeFilter = 'all' | '1h' | '24h' | '7d' | 'exact';
 type SortOption = 'lastExecutedDesc' | 'lastExecutedAsc' | 'platformAsc' | 'nameAsc';
 type AgentLayerFilter = 'all' | AgentLayer;
@@ -138,7 +138,7 @@ function sortAgents(agents: Agent[], sortBy: SortOption) {
 }
 
 function normalizePlatform(value: string): Exclude<PlatformFilter, 'all'> {
-    if (value === 'openclaw' || value === 'hermes') return value;
+    if (value === 'openclaw' || value === 'hermes' || value === 'codex') return value;
     return 'opencode';
 }
 
@@ -662,6 +662,7 @@ function AgentsPageInner() {
             { value: 'opencode', label: 'opencode' },
             { value: 'openclaw', label: 'openclaw' },
             { value: 'hermes', label: 'hermes' },
+            { value: 'codex', label: 'codex' },
         ],
         executionTimes: [
             { value: 'all', label: t('nav.filterDefaultOption') },
