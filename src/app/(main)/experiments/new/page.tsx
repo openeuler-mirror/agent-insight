@@ -118,7 +118,6 @@ function reliabilityCasesFromDataset(dataset: DatasetOption | null): SelectedCas
 const STEPS = ['实验设计', 'Trace 来源', '预期答案', '评估器与执行'];
 const NEXT_LABELS = ['下一步：Trace 来源 →', '下一步：预期答案 →', '下一步：评估器与执行 →', '🚀 开始实验'];
 const RELIABILITY_EVALUATOR_IDS = new Set([
-  'preset-ras-reliability-fault-injection',
   'preset-ras-reliability-detection-recovery',
 ]);
 const PAGE_SIZE = 10;

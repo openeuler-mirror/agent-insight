@@ -79,22 +79,27 @@ export function generateRasReliabilityPrompt(
   profile: RasReliabilityProfile,
 ): { stage: string; system: string; user: string } {
   const dimensions = rasReliabilityDimensionsForProfile(profile)
+  const gated = profile === 'detection-recovery'
   const dimensionLines = dimensions
     .map((dimension, index) => `${index + 1}) ${dimension.key}（${dimension.label}）：${DIMENSION_GUIDANCE[dimension.key]}`)
     .join('\n')
   const dimensionJson = dimensions
     .map((dimension) => `    { "dimension": "${dimension.key}", "verdict": "met|partial|missing", "reason": "...", "suggestion": "..." }`)
     .join(',\n')
-  const system = `你是 Agent RAS 可靠性评测 Judge。根据「期望故障模式 + Trace 摘要 + RAS 故障事件」对以下 ${dimensions.length} 个判断点分别给出 met / partial / missing。
+  const system = `你是 Agent RAS 可靠性评测 Judge。根据「期望故障模式 + Trace 摘要 + RAS 故障事件」${gated ? '先判断预期故障是否真实发生；只有明确发生时，才' : ''}对以下 ${dimensions.length} 个判断点分别给出 met / partial / missing。
 
 判断点含义：
 ${dimensionLines}
 
 规则：
 - 只输出一个 JSON 对象，不要 Markdown。
-- 上述 ${dimensions.length} 个 dimension 必须齐全、各出现一次，不得输出其他 dimension。
+- ${gated ? '当 faultOccurred.verdict=met 时，上述' : '上述'} ${dimensions.length} 个 dimension 必须齐全、各出现一次，不得输出其他 dimension。
 - met=有充分正面证据；partial=证据不足或仅部分成立；missing=无证据或明确未发生。
 - 「没有收到故障事件」不能直接等价为「没有发生故障」，应结合 Trace 判断并在 reason 说明证据边界。
+${gated ? `- faultOccurred 是评分前置条件：先结合 Trace 与故障事实判断预期故障是否真实发生。
+- 仅当 faultOccurred.verdict=met 时，dimensions 必须返回上述 3 个判断点。
+- 当 faultOccurred.verdict=partial/missing 时，dimensions 必须返回空数组；不要评价检测、处置或消解能力。
+- faultOccurred.verdict=partial/missing 时必须提供非空 suggestion。` : ''}
 - partial/missing 必须提供非空 suggestion。
 - summary 用中文，不超过 200 字。`
 
@@ -118,7 +123,7 @@ ${input.stepsText.trim() || '(无步骤)'}
 请返回 JSON：
 {
   "summary": "<中文总评>",
-  "dimensions": [
+${gated ? '  "faultOccurred": { "verdict": "met|partial|missing", "reason": "...", "suggestion": "..." },\n' : ''}  "dimensions": [
 ${dimensionJson}
   ]
 }`
