@@ -26,6 +26,7 @@ import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/openco
 import {
     extractObservedAgentNames,
     extractObservedAgentRegistrations,
+    getFrameworkPrimaryAgentName,
 } from '@/lib/engine/observability/agent-registration';
 import { chooseExecutionLabel } from '@/lib/engine/evaluation/label-utils';
 import { parseLabelSkillVersionBinding } from '@/lib/engine/evaluation/label-skill-binding';
@@ -49,7 +50,16 @@ import {
 } from '@/lib/trace-tags';
 
 /** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
-const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'claudecode']);
+const SUBAGENT_TREE_FRAMEWORKS = new Set([
+    'opencode',
+    'openclaw',
+    'hermes',
+    'langfuse-langgraph',
+    'codeagent',
+    'claudecode',
+    'llamaindex',
+    'pi-agent',
+]);
 
 export interface InvokedSkill {
     name: string;
@@ -63,6 +73,13 @@ export interface InvokedSkill {
 const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
+
+/** semver 如 "1.0.0"（skill frontmatter 常用格式）解析为整数主版本号；无法解析返回 null。 */
+function numericSemverMajor(value: unknown): number | null {
+    if (value === undefined || value === null || value === '') return null;
+    const semver = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value).trim());
+    return semver ? Number(semver[1]) : null;
+}
 
 export function inferUserQueryFromInteractions(interactions: unknown): string | undefined {
     if (!Array.isArray(interactions)) return undefined;
@@ -104,7 +121,7 @@ export function extractExplicitSkillsFromNode(node: AgentNode): InvokedSkill[] {
         if (!SKILL_NAME_PATTERN.test(s) || seen.has(s)) continue;
         seen.add(s);
         const v = a.version != null ? Number(a.version) : null;
-        out.push({ name: s, version: v !== null && !isNaN(v) ? v : null });
+        out.push({ name: s, version: v !== null && !isNaN(v) ? v : numericSemverMajor(a.version) });
     }
     return out;
 }
@@ -181,9 +198,9 @@ async function persistExecutionSkills(
 
 /**
  * 给定一条 Execution(= 某一层 agent)的 session interactions,算出**本层 agent 自己显式调用**的 skill。
- *   - opencode：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
+ *   - adapter 声明 skillScope=agent-tree 的框架：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
  *     (root 行的 session 是全量;sub-agent 行的 session 是它自己的切片——两者切片的 tree 根都恰是该层 agent。)
- *   - claude / openclaw：单 agent,既有显式抽取即本层口径。
+ *   - 其余框架：既有显式抽取即本层口径。
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
@@ -1279,21 +1296,26 @@ export async function listObservedAgentNames(user?: string, observedAgentFallbac
     const records = await db.findExecutions(
         where,
         { timestamp: 'desc' },
-        { agentName: true, observedAgents: true },
+        { framework: true, agentName: true, observedAgents: true },
     );
     const names: string[] = [];
     const seen = new Set<string>();
     for (const record of records) {
-        const name = String(
+        const primary = String(
             record?.agentName
             || (observedAgentFallback
                 ? parseObservedAgents(record?.observedAgents).find(agent => !isEvaluatorAgentName(agent))
                 : '')
             || '',
         ).trim();
-        if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
-        seen.add(name);
-        names.push(name);
+        const candidates = record?.framework === 'pi-agent'
+            ? [primary, ...parseObservedAgents(record?.observedAgents)]
+            : [primary];
+        for (const name of candidates) {
+            if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
+            seen.add(name);
+            names.push(name);
+        }
     }
     return names;
 }
@@ -2198,6 +2220,26 @@ export function getDefaultIngestUser(): string | null {
     return v || null;
 }
 
+async function normalizeFrameworkAgentIdentityHistory(
+    framework: string | undefined,
+    user: string | null,
+    primaryAgentName: string | undefined,
+): Promise<void> {
+    if (!framework || !primaryAgentName) return;
+    const observedAgents = JSON.stringify([primaryAgentName]);
+    await prisma.execution.updateMany({
+        where: { framework, user },
+        data: { agentName: primaryAgentName, observedAgents },
+    });
+    await prisma.registeredAgent.deleteMany({
+        where: { platform: framework, user, name: { not: primaryAgentName } },
+    });
+    await prisma.registeredAgent.updateMany({
+        where: { platform: framework, user, name: primaryAgentName },
+        data: { agentType: 'main' },
+    });
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
@@ -2393,7 +2435,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
                 // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
                 // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
+                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework)
+                    || targetRecord.complete_session_snapshot === true;
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
                     let existingInteractions = existingSession?.interactions
@@ -2647,6 +2690,12 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         skillVersion: targetRecord.skill_version ?? null
     });
 
+    const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(targetRecord.framework);
+    const storedAgentName = targetRecord.agentName || frameworkPrimaryAgentName;
+    const observedAgentOptions = targetRecord.framework === 'codex'
+        ? { includeSubagents: false }
+        : undefined;
+
     let agentId: string | undefined = undefined;
     if (targetRecord.framework) {
         const platform = targetRecord.framework;
@@ -2654,7 +2703,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
         const observedAgents = extractObservedAgentRegistrations(
             mergedInteractionsForSession,
-            targetRecord.agentName,
+            storedAgentName,
+            observedAgentOptions,
         );
 
         // 并发安全 + 单点隔离：try/catch 收细到**单个 agent**，一个失败不再中断整条 trace 的其余登记
@@ -2692,7 +2742,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                     }
                 }
 
-                if (existingAgent && observed.agentType === 'main' && observed.name === targetRecord.agentName) {
+                if (existingAgent && observed.agentType === 'main' && observed.name === storedAgentName) {
                     agentId = existingAgent.id;
                 }
             } catch (e) {
@@ -2706,7 +2756,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 无需加载/解析 session interactions。与读侧 extractObservedAgentNames(interactions) 同源同口径
     // (含 opencode 'build' 等只出现在 interactions 里的 agent 名),保证 light 与 heavy 的 agents 一致、不丢数据。
     const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
-        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession))
+        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession, storedAgentName, observedAgentOptions))
         : null;
     await db.upsertExecution({
         where: { id: recordId },
@@ -2732,7 +2782,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
             label: targetRecord.label,
             user: targetRecord.user,
-            agentName: targetRecord.agentName,
+            agentName: storedAgentName,
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
@@ -2770,7 +2820,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
             label: targetRecord.label,
             user: targetRecord.user,
-            agentName: targetRecord.agentName,
+            agentName: storedAgentName,
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
@@ -2855,6 +2905,18 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             });
         } catch (e) {
             console.warn(`[Data-Service] deriveSubagentExecutions failed for parent=${recordId}:`, e);
+        }
+    }
+
+    if (frameworkPrimaryAgentName && targetRecord.framework !== 'pi-agent') {
+        try {
+            await normalizeFrameworkAgentIdentityHistory(
+                targetRecord.framework,
+                targetRecord.user || null,
+                frameworkPrimaryAgentName,
+            );
+        } catch (e) {
+            console.warn(`[Data-Service] normalize framework agent identity failed framework=${targetRecord.framework}:`, e);
         }
     }
 
@@ -3203,12 +3265,17 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
 
         const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
         const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
+        const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(parentFramework);
+        const storedAgentName = node.agentName || frameworkPrimaryAgentName || null;
+        const observedAgentOptions = parentFramework === 'codex'
+            ? { includeSubagents: false }
+            : undefined;
 
         const baseFields = {
             taskId: sessionId,
             framework: parentFramework,
             timestamp,
-            agentName: node.agentName ?? null,
+            agentName: storedAgentName,
             user: parentUser ?? null,
             query: queryText,
             finalResult: projection.finalResult,
@@ -3232,7 +3299,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             subagentName: node.agentName ?? null,
             isSubagent: true,
             // 子 agent 行也 denormalize observedAgents,保证 includeSubagents 的轻量列表 agents 一致。
-            observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions)),
+            observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions, storedAgentName, observedAgentOptions)),
         } as const;
 
         try {

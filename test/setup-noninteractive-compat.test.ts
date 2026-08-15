@@ -59,9 +59,10 @@ test('false/no/0 不会误开启非交互或无 key 模式，framework 单数别
   assert.match(script, /^SELECTED_FRAMEWORKS="claude"$/m);
 });
 
-test('安装页只在已选框架时生成 yes=1 的全程非交互命令', () => {
+test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python 选择', () => {
   const page = fs.readFileSync(path.resolve(__dirname, '../src/app/(main)/accessconfig/install/page.tsx'), 'utf8');
   assert.match(page, /frameworks\.length \? `yes=1` : ''/);
+  assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
 });
 
 test('OpenClaw 纯配置输出与已安装 wrapper 使用相同的 JSON logs/traces 端点', async () => {

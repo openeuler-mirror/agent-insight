@@ -1,4 +1,5 @@
 import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
+import { isLlamaIndexOtlpTraceBody } from '@/lib/ingest/otel/llamaindex';
 import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
 import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
 import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
@@ -87,8 +88,14 @@ export async function POST(req: Request) {
         authenticatedUser = userRecord.username;
         console.log(`[OTel] Authenticated User: ${authenticatedUser}`);
       } else {
-        hasInvalidApiKey = true;
-        console.warn('[OTel] Trace ingest received an invalid API key');
+        // Never echo credentials into application logs. An explicitly supplied
+        // key is an authentication attempt, so a mismatch must not fall back to
+        // resource-level user attribution.
+        console.warn('[OTel] Rejected trace ingest: invalid x-witty-api-key');
+        return NextResponse.json(
+          { error: 'Invalid x-witty-api-key' },
+          { status: 401 },
+        );
       }
     }
 
@@ -121,6 +128,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: 'Invalid Langfuse credentials' }, { status: 401 });
       }
       console.log('[OTel] Langfuse Authenticated User:', authenticatedUser);
+    }
+
+    // The managed LlamaIndex collector always receives an Agent Insight API
+    // key during configuration. Do not let an unauthenticated client choose an
+    // arbitrary owner through OTLP resource.user.id.
+    if (!authenticatedUser && isLlamaIndexOtlpTraceBody(body)) {
+      console.warn('[OTel] Rejected LlamaIndex trace ingest: missing x-witty-api-key');
+      return NextResponse.json({ error: 'Missing x-witty-api-key' }, { status: 401 });
     }
 
     // Jiuwen 的结构 span 需要走自包含的 raw-span 聚合路径。

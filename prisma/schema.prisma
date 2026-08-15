@@ -850,13 +850,14 @@ model InfraMetricSample {
   @@index([sourceId, tsMs])
 }
 
-/// ─── 评测「实验」域（本期仅单组实验；对比实验后续在此扩展分组字段）───
-/// 实验 = 一批 case × 一组评估器。单组实验为原「评测执行」的演进形态。
+/// ─── 评测「实验」域（单组实验 + LLM 对比实验）───
+/// 实验 = 一批 case × 一组评估器。单组实验为原「评测执行」的演进形态；
+/// LLM 对比实验 = 1 个 Experiment(type='llm') + N 个 ExperimentGroup + 带 groupId的 ExperimentCase。
 model Experiment {
   id               String    @id @default(cuid())
   user             String
   name             String
-  /// 'single'（本期）| 'llm' | 'framework' | 'skill'（对比实验预留）
+  /// 'single'（默认）| 'llm'（对比实验）| 'framework' | 'skill'（预留 stub）
   type             String    @default("single")
   /// 待评测 Agent（Execution.agentName）
   agentName        String    @default("")
@@ -879,14 +880,33 @@ model Experiment {
 
   cases    ExperimentCase[]
   comments ExperimentEvalComment[]
+  groups   ExperimentGroup[]
 
   @@index([user, createdAt])
   @@index([user, scope, skillName])
   @@index([watchMode, agentName])
 }
 
+/// 对比实验的分组记录。1 个 Experiment(type='llm') 关联 N（本期固定 2：A/B）个 Group。
+/// variableValue 为该组变量取值（LLM 维度对应 Execution.model）。
+model ExperimentGroup {
+  id            String   @id @default(cuid())
+  experimentId  String
+  experiment    Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  /// 'A' | 'B'（本期固定）
+  key           String
+  /// 该组的变量取值（LLM 维度对应 Execution.model 值）
+  variableValue String
+  createdAt     DateTime @default(now())
+  cases         ExperimentCase[]
+
+  @@unique([experimentId, key])
+  @@index([experimentId])
+}
+
 /// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的参考输出，
 /// null=未标注——依赖参考数据的评估器在 ④ 步按此硬门控。
+/// groupId 关联 ExperimentGroup（对比实验用）；单组实验的 case groupId=null 完全向后兼容。
 model ExperimentCase {
   id              String     @id @default(cuid())
   experimentId    String
@@ -900,12 +920,17 @@ model ExperimentCase {
   /// 评估器专用 case 上下文（EvaluatorCaseContextV1 JSON）；null=未提供。
   /// availableTools: [] 表示调用方明确确认本任务无需工具。
   evaluatorContextJson String?
+  /// 对比实验分组关联（单组实验为 null）；onDelete: SetNull 保历史（trace 删时 case 不删）
+  groupId         String?
+  group           ExperimentGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   createdAt       DateTime   @default(now())
 
   results ExperimentEvalResult[]
 
   @@index([experimentId])
   @@index([executionId])
+  @@index([groupId])
+  @@unique([experimentId, taskId, groupId])
 }
 
 /// 一行 = 一个 case × 一个评估器，按统一契约落库（见 src/lib/evaluators/eval-output.ts）：

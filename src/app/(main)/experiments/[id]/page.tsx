@@ -9,6 +9,7 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react';
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
+import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -175,7 +176,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
 
   // 重评：逐行重试该 case 下所有 failed 结果行
   const retryCase = useCallback(async (caseId: string) => {
-    if (!user || retryingCaseId || !detail) return;
+    if (!user || retryingCaseId || !detail || detail.type === 'llm' || !detail.results) return;
     const failedRows = detail.results.filter((r) => r.caseId === caseId && r.status === 'failed');
     if (!failedRows.length) return;
     setRetryingCaseId(caseId);
@@ -222,8 +223,9 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   const overall = detail?.overall ?? null;
   const breakdown = detail?.breakdown ?? [];
   // caseRows = 当前页 case（服务端已分页）+ 逐 case 得分（用本页结果算）
+  // 对比模式（type='llm'）不走 caseRows——ComparisonDetail 自带 pairing 数据；guard 避免 undefined.map()
   const caseRows = useMemo(() => {
-    if (!detail) return [];
+    if (!detail || detail.type === 'llm' || !detail.cases || !detail.results) return [];
     return detail.cases.map((c) => ({
       ...c,
       scores: caseScore(detail.results.filter((r) => r.caseId === c.id), lookup.categoryOf),
@@ -254,6 +256,13 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>{error}</div>
         ) : !detail ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>实验不存在</div>
+        ) : detail.type === 'llm' ? (
+          <>
+            {error && (
+              <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
+            )}
+            <ComparisonDetail detail={detail as unknown as import('@/lib/engine/experiment/comparison-runner').ComparisonDetailData} />
+          </>
         ) : (
           <>
             {error && (

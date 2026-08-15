@@ -165,7 +165,20 @@ export type SpanClassification = {
 function classifyOtelSpan(span: any, attributes: Record<string, any>): SpanClassification {
   const name = (span?.name || '').toLowerCase();
   const spanKind = attributes['gen_ai.span.kind'];
- 
+  const insightKind = String(attributes['agent.insight.kind'] || '').toLowerCase();
+  const openinferenceKind = String(attributes['openinference.span.kind'] || '').toLowerCase();
+
+  if (insightKind === 'agent' || insightKind === 'subagent' || insightKind === 'skill'
+    || openinferenceKind === 'agent' || openinferenceKind === 'chain') {
+    return { recognized: true, skip: false, kind: 'agent', degraded: false };
+  }
+  if (insightKind === 'tool' || insightKind === 'mcp' || openinferenceKind === 'tool') {
+    return { recognized: true, skip: false, kind: 'tool', degraded: false };
+  }
+  if (insightKind === 'llm' || openinferenceKind === 'llm') {
+    return { recognized: true, skip: false, kind: 'llm', degraded: false };
+  }
+
   // 生命周期 / 基础设施 span（openclaw 特有）
   const lifecyclePatterns = [
     'session_start', 'session_end', 'session.start', 'session.end',

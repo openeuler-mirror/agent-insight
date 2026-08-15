@@ -57,6 +57,10 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 - **仅子 Agent**：适合排查派生任务、分工任务和协作路径
 - **主 Agent + 子 Agent**：适合完整回看整条协作链路
 
+Agent 下拉同时列出已观测的主 Agent 和子 Agent。选择子 Agent（例如 Pi 的 `planner`
+或 `worker`）后，配合“仅子 Agent”范围查看该 profile 的独立执行；根 Pi CLI 没有可用
+profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和实际执行主体，不能互相替代。
+
 #### 3. 执行记录表格
 
 表格是列表页的核心区域，通常包含以下字段：
@@ -140,7 +144,8 @@ Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 spa
 
 - **AGENTS**：参与当前执行的 Agent 数量
 - **TASK SPAWNS**：执行过程中派生的新任务数量
-- **CHAIN SPANS**：Langfuse Trace 中保留的业务链路节点数量
+- **CHAIN SPANS**：Langfuse、LlamaIndex 等框架归一后保留的业务链路节点数量；已知的低价值
+  SDK/运行时包装节点不会计入
 - **TOOL CALLS**：工具调用次数
 - **SKILL CALLS**：Skill 触发次数
 - **LLM TURNS**：模型交互轮次
@@ -205,6 +210,9 @@ Span 是 Trace 中最小的可观测执行单元，代表一段具体动作，�
 ### Agent
 
 Agent 是执行任务的主体。列表和详情中既可能出现主 Agent，也可能出现派生出来的子 Agent。
+对于以 profile 启动独立子进程的运行时，子 Agent 显示其实际 profile 名，而不是父运行时
+或框架名。例如 Pi 子进程可显示 `planner`、`reviewer`、`scout` 或 `worker`；这些名称取决于
+当前用户或项目配置，并非平台的固定列表。
 
 ### 主 Agent / 子 Agent
 
@@ -215,7 +223,7 @@ Agent 是执行任务的主体。列表和详情中既可能出现主 Agent，�
 
 ### Skill Call
 
-Skill Call 表示某个 Skill 在执行过程中被触发的记录。它反映的是 Skill 是否被调用，以及在整条链路中的位置和作用。
+Skill Call 表示某个 Skill 在执行过程中被触发的记录。它反映的是 Skill 是否被调用，以及在整条链路中的位置和作用。Skill 是独立的执行节点，不计为 LLM Turn；选中该节点可查看触发参数和实际加载的 Skill 内容或运行结果。
 
 ### Tool Call
 

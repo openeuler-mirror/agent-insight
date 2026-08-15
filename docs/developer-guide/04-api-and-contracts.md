@@ -78,6 +78,7 @@
 - **Consumer API**: `startOtelSpoolConsumer(options?)`, `stopOtelSpoolConsumer()`, and `runOtelSpoolConsumerTick(state)` live in `src/lib/ingest/otel-consumer/consumer.ts`.
 - **Source API**: `SpoolSource` in `src/lib/ingest/otel-consumer/sources.ts` registers `claude-otel-logs` and `otel-traces`. Sources own aggregation; the consumer owns scheduling/checkpoints and must not branch on framework names.
 - **State files**: checkpoints are stored as `consumer-checkpoint.json` beside each spool root and keyed by relative JSONL path, including nested `sessions/<safe-session>/...` shards. Checkpoints advance only after fast save succeeds; if a file is truncated or recreated and the stored byte offset points past EOF, the next read restarts at byte `0` and persists the new cursor. Duplicate protection is handled by source-level dedupe plus `saveExecutionRecord` upsert keys.
+- **LlamaIndex adapter**: 运行时信息来自 LlamaIndex instrumentation dispatcher；`scripts/llamaindex_extension` 只注册 Agent Insight 自定义 Handler，并继承官方 `llama-index-observability-otel` 的 Handler 基类来复用 OTel span/context 生命周期，不并行注册官方默认 Handler。客户端使用隔离 `TracerProvider` 和 `SimpleSpanProcessor`；自定义 `AgentInsightSpanExporter` 只把结束的 `ReadableSpan` 转为 `SpanRecord` 并执行非阻塞入队，磁盘与 HTTP 均由后台线程处理。它输出 `service.name=llamaindex` 的 OTLP/HTTP JSON span，但不替换进程全局 Provider。`src/lib/ingest/otel/llamaindex.ts` 负责来源识别，`src/lib/ingest/otel/adapters/llamaindex.ts` 按 `agent.instance.id` 重建 Agent 实例、同名并发与多级父子关系，去除同一逻辑调用的 LLM 包装 Span，并把 Tool、LLM、Retriever、Synthesizer、Workflow step 归一化为既有 `ExecutionRecord`/interaction 契约。服务端 Adapter 负责从 `CompletionResponse`/`ChatResponse` 提取可读正文、将 ReAct `Action`/`Action Input` 留给 Tool/Skill Interaction、规范化 LlamaIndex 工具包装名，并从展示投影排除 `init_run`、`setup_agent`、`parse_agent_output`、`aggregate_tool_results` 等低价值步骤；`run_agent_step`、自定义 Workflow Step、Retriever 和 Synthesizer 仍保留。通用 `agent-trace.ts` 只消费归一化字段，并为 Skill 版本及安全标量 Tool 参数生成框架无关摘要。npm 安装 Agent Insight 服务端并携带采集器源码；setup/auto setup 在所选解释器中安装固定版本 `llama-index-observability-otel==0.6.4`，再从只读 zip 路由取得 Agent Insight 运行时归档并直接部署到 `~/.agent-insight/collectors/llamaindex/current/`。归档把 `docs/user-guide/observability/llamaindex-trace-collector.md` 作为根目录 `README.md`，避免项目指南与离线说明维护两份副本。安装后 CLI 将 endpoint 与 API Key 写入 `~/.agent-insight/llamaindex.json`。卸载只移除 Agent Insight 专属源码、入口、配置与可选 spool，不卸载共享官方 OTel 包。
 
 ### `getAdapter(framework)` / `resolveFrameworkId(framework)` / `listFrameworks()`  {#framework-adapter-registry}
 - **Location**: `src/lib/ingest/adapters/registry.ts`
@@ -123,7 +124,7 @@
 | `DebugJobResult` / `DebugHistory` | 调试/运行任务结果 | `output`、`sessionId` |
 | `TrajectoryEvalResult` | 一条轨迹评测结果 | `trajectoryScore`、`dimensionScoresJson`、`deviationStepsJson`、`evaluatorRunId` |
 | `TraceEvaluation` | 历史 trace 结果评测数据（兼容保留） | 当前质量监控与上传链路均不读写；未做物理迁移或历史数据清理 |
-| `RegisteredAgent` | 已知的 agent 身份 | `platform`+`name`+`user` 唯一、`agentType`、`agentOwnership` |
+| `RegisteredAgent` | 可筛选的实际 agent 身份 | `platform`+`name`+`user` 唯一、`agentType`、`agentOwnership`；Codex/Pi 的委派角色名不登记为 Agent |
 | `FaultDiagnosisSession` / `Message` | 故障诊断对话 | 关联到 `executionId` |
 | `AgentDebugReport` | 存储的 AgentDebug 主诊断报告 | `reportJson`、`interactionsHash`、`status`；不再承载 Skills 分析 |
 | `AgentDebugSkillsAnalysis` | AgentDebug 专用 Skills 步骤核验缓存 | `analysisJson`、`interactionsHash`、`status`、`keyActionCount` |
@@ -134,7 +135,7 @@
 核心接口（形状节选；完整成员见源码）：
 - **Version analysis** - `VersionCompareResponse` / `VersionTracesResponse` (`lib/version-analysis.ts`): compare APIs only aggregate `Execution.isSubagent=false` traces bound to `Tag.kind=version`; `VersionCompareResponse.summary` is the de-duplicated global summary for the current user/agent/framework/time-window, while `versions` can be narrowed by `questionKey` for single-question comparison; `questionKey` is normalized from `Execution.query`. `taskCompletionScore` comes from the latest successful `ExperimentEvalResult` whose evaluator is `preset-agent-task-completion`, joined through `ExperimentCase.executionId`; legacy cases without that key fall back to `taskId`. Effective score is `humanScore ?? score`, stored and returned on the 0–100 experiment scale. Aggregates expose `taskCompletionScoreAvg` and `taskCompletionScoreCoverage`; `Execution.answerScore` is not used. Run success rate is derived from `Session.endTime` and is not stored.
 - **Ingest / records** — `ExecutionRecord`（`storage/data-service.ts`）：`{ upload_id; task_id; query; framework; tokens; cost; latency; endpoint; final_result; trace_started_at; trace_completed_at; skill; invokedSkills: InvokedSkill[]; userTags: TraceTagDto[]; is_skill_correct; is_answer_correct; ... }`；`latency` 统一以秒落库，前端展示通过 `latency-format.ts` 换算为 ms/s/m/h；`trace_started_at/trace_completed_at` 是同一次调用的两个边界而非相同时间；`endpoint` 归一为 `scheme://host:port`，用于 session 与 infra 源关联；`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem`、`InvokedSkill { name; version }`。
-- **Framework adapters** — `FrameworkAdapter`（`ingest/adapters/types.ts`）：`{ descriptor; extractSkills?; normalizeForStorage? }`；`FrameworkDescriptor { id; aliases?; label; onboard; platform? }`。
+- **Framework adapters** — `FrameworkAdapter`（`ingest/adapters/types.ts`）：`{ descriptor; capabilities?; extractSkills?; normalizeForStorage? }`；`FrameworkDescriptor { id; aliases?; label; onboard; platform? }`。`capabilities.ownSkillsFromTree=true` 表示写入根 Execution 的 Skill 时必须从 Agent Tree 根节点提取，以剥离子 Agent Skill；`false` 或未声明时继续使用 adapter 的原生 `extractSkills`，不能仅因框架支持 `subagentTree` 就切换解析路径。
 - **Evaluation** — `EvaluationResult`（`evaluation/evaluation-types.ts`）：维度得分（`functionalScore`/`efficiencyScore`/`practicalityScore`/`economicScore`：`DimensionScore`）+ `overallScore`/`weightedScore`；`JudgmentResult { is_correct; score; reason }`、`JudgeCriteria`、`TrajectoryEvalInput/Output`、`ABExperiment`、`TestCase`、`QualityBenchmark`。
 - **Evaluator case context** — `EvaluatorCaseContext`（`lib/evaluators/evaluator-case-context.ts`）指向持久化契约 `EvaluatorCaseContextV1`：`{ schemaVersion: 1; availableTools: EvaluatorToolDescriptor[]; availableSkills?: EvaluatorSkillDescriptor[] }`。缺少上下文表示无法评价工具使用；显式空数组表示已确认没有可用能力。`POST /api/experiments` 接受 `cases[].evaluatorContext`；`POST /api/experiments/eval-traces` 接受请求级默认值和 `pairs[].evaluatorContext`，并序列化到 `ExperimentCase.evaluatorContextJson`。目录也可从数据集的 `values.available_tools` 和可选 `values.available_skills` 导入；trace 只提供已发生调用，不用于反推执行时完整的可用能力目录。工具利用率先由 Judge 对目录能力分类，再确定性计算必要能力覆盖率（50%）、调用匹配率（25%）和调用节制率（25%）；分母为零的维度不参与聚合。
 - **Trace batch evaluation** — `POST /api/experiments/eval-traces` 对非 `createOnly` 请求返回 `202 Accepted`。路由先为全部目标 Trace 创建或复用 `ExperimentCase`，再为本批 case × 实验评估器预创建 `ExperimentEvalResult`，将实验置为 `running` 后启动后台执行，并通过 Next `after()` 把 completion 注册到请求后生命周期。响应中的 `results[].status` 初始为 `running`；客户端通过 `GET /api/experiments/eval-results?runId=...` 轮询。后台所有实验共用 `experimentEngineConfig.concurrency` 指定的行级并发池；运行中重复提交同一实验/Trace 时复用已有结果任务，不重置或重复执行。任一结果仍为 `pending/running` 时实验不得进入终态，全部结束后才收敛为 `done` 或 `failed`。客户端切换 Skill、版本或重新发起评测时必须取消旧轮询，每次状态请求也受独立超时控制；`createOnly` 仍同步返回 `200` 和空结果。
@@ -147,6 +148,23 @@
 - **Datasets** — `AgentDataset`、`DatasetCase`、`RootCauseItem`（`lib/agent-dataset-model.ts`、`server/agent_datasets_storage.ts`）。
 - **Config / models** — `ModelConfig`、`UserSettings`（`storage/server-config.ts`）、`LlmProvider`（`lib/llm-providers.ts`）、`ModelPricing`（`shared/model-config.ts`）。
 - **Skill gen/opt bridges** — `StreamSkillGeneratorOpts/Result`、`StreamSkillOptOpts/Result`（`lib/skill-generator-opencode-bridge.ts`、`lib/skill-opt-bridge.ts`）。
+
+### `RawInteraction` 归一化字段约定
+
+`RawInteraction` 是各框架 adapter 与共享 Trace 树构建器之间的内部契约。框架差异必须在 adapter 中完成归一化；共享渲染与树构建代码不得按框架名分支。所有字段都是可选增量，未提供时不得改变其他 adapter 的既有行为。
+
+| 字段 | 统一语义 | 填写方与约束 |
+|---|---|---|
+| `status` | 当前 interaction 的执行状态；错误统一写为 `error` | 任意 adapter；不得用它表示整个 session 状态 |
+| `error` | 原始或结构化错误，当前支持字符串或 `{ message }` | 任意 adapter；供详情与通用兜底读取 |
+| `error_summary` | 已脱敏、可直接展示的错误摘要 | adapter 在框架原始错误需要归一化时填写；共享渲染器只消费，不解释框架结构 |
+| `trace_kind` | 结构 Trace 的类别；当前 `chain` 表示非 LLM/Tool 的链路节点 | 产生 Workflow/RAG/Chain 节点的 adapter |
+| `trace_name` | 结构节点的稳定显示名称 | 与 `trace_kind` 同时填写 |
+| `trace_args` / `trace_output` | 结构节点的归一化输入与输出 | adapter 应在此之前完成截断、脱敏和框架格式解析 |
+| `trace_status` | 结构节点状态 | 仅描述对应 `trace_kind` 节点，不替代 session 状态 |
+| `trace_synthetic` | 此 interaction 是 adapter 为表达父子/结构关系生成的占位节点，不代表一次真实 LLM turn | 仅结构归一化 adapter 可设为 `true`；共享树构建器会禁止把它计作 LLM 调用，但仍解析其 Tool/Task 关系 |
+
+例如 LlamaIndex adapter 将 dispatcher span 的失败信息归一到 `status/error/error_summary`，将 Retriever、Synthesizer 与 Workflow step 归一到 `trace_*`；共享 `agent-trace.ts` 只按上述字段生成通用事件。新增 adapter 应复用这些语义，而不是增加框架名判断或重新定义字段含义。
 
 ## Extension points
 分析器报告了约 290 个导出的接口/抽象类（潜在的实现/扩展点）。其中影响力最大的几个：

@@ -93,6 +93,15 @@ export interface RawInteraction {
     finish?: string;
     variant?: string | null;
     parts?: InteractionPart[];
+    trace_kind?: 'chain' | string;
+    trace_name?: string;
+    trace_args?: unknown;
+    trace_output?: unknown;
+    trace_status?: string;
+    trace_synthetic?: boolean;
+    status?: string;
+    error?: string | { message?: string };
+    error_summary?: string;
 }
 
 export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
@@ -388,7 +397,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             continue;
         }
 
-        const isSub = it.role === 'subagent' && !!it.subagent_session_id;
+        const isSub = (it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 
@@ -591,6 +600,22 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
 
     const calls = dedupeToolCalls(it.tool_calls || []);
 
+    if (it.role === 'trace' && it.trace_kind === 'chain') {
+        out.push({
+            kind: 'chain',
+            name: it.trace_name || 'chain',
+            args: it.trace_args,
+            output: it.trace_output,
+            toolStatus: it.trace_status,
+            interaction: it,
+            interactionIndex: idx,
+            startedAt: baseTs,
+            completedAt,
+            summary: contentText || it.trace_name || 'chain',
+        });
+        return out;
+    }
+
     // user message → user event
     if (it.role === 'user' && contentText.trim()) {
         out.push({
@@ -610,7 +635,8 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     // the event summary. Without this, tool-only turns produce no llm event, the
     // tool calls orphan-attach to an earlier turn, and the LLM steps disappear
     // from the timeline entirely.
-    const isAssistantLike = it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode';
+    const isAssistantLike = !it.trace_synthetic
+        && (it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode');
     // Summary fallback chain: visible text → reasoning → tool names. Tool-only turns
     // with no reasoning (content deliberately left empty by adapters) otherwise render
     // a blank LLM row in the timeline while the right-hand output panel has content.
@@ -622,7 +648,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     };
     const llmSummary = contentText.trim()
         ? contentText
-        : extractPartsText(it.parts, 'reasoning') || toolNamesSummary();
+        : extractPartsText(it.parts, 'reasoning') || toolNamesSummary() || errorSummaryOf(it);
 
     if (calls.length === 0) {
         // Pure LLM response with no tool calls — emit an llm event if it produced
@@ -702,6 +728,15 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     }
 
     return out;
+}
+
+/** Framework-neutral display fallback for failed normalized interactions. */
+function errorSummaryOf(it: RawInteraction): string {
+    if (String(it.status || '').toLowerCase() !== 'error') return '';
+    const normalized = typeof it.error_summary === 'string' ? it.error_summary.trim() : '';
+    if (normalized) return normalized;
+    const raw = typeof it.error === 'string' ? it.error : it.error?.message;
+    return String(raw || '').trim() || 'LLM 调用失败';
 }
 
 function toMsTimestamp(v: any): number | undefined {
@@ -822,17 +857,32 @@ export function inferSubagentType(it: RawInteraction): string | null {
 
 function summarizeToolCall(name: string, args: any): string {
     if (!args || typeof args !== 'object') return name;
-    if (name === 'task') {
+    const normalizedName = name.toLowerCase();
+    if (normalizedName === 'task') {
         const desc = args.description || args.subagent_type || '';
         const subType = args.subagent_type ? `[${args.subagent_type}]` : '';
         return `task ${subType} ${desc}`.trim();
     }
-    if (name === 'skill') return `skill: ${args.name || ''}`;
-    if (name === 'bash') return `bash: ${(args.command || '').slice(0, 80)}`;
-    if (name === 'read') return `read: ${args.path || args.file_path || ''}`;
-    if (name === 'write') return `write: ${args.path || args.file_path || ''}`;
-    if (name === 'glob') return `glob: ${args.pattern || ''}`;
-    return name;
+    if (['skill', 'load_skill', 'skill_view', 'skill_tool'].includes(normalizedName)) {
+        const skillName = args.name || args.skill_name || args.skill || '';
+        const version = args.version ?? args.skill_version;
+        return `skill: ${skillName}${version != null && version !== '' ? `@${version}` : ''}`;
+    }
+    if (normalizedName === 'bash') return `bash: ${(args.command || '').slice(0, 80)}`;
+    if (normalizedName === 'read') return `read: ${args.path || args.file_path || ''}`;
+    if (normalizedName === 'write') return `write: ${args.path || args.file_path || ''}`;
+    if (normalizedName === 'glob') return `glob: ${args.pattern || ''}`;
+
+    const preview = Object.entries(args)
+        .filter(([key, value]) =>
+            value != null
+            && ['string', 'number', 'boolean'].includes(typeof value)
+            && !/(?:api[_-]?key|authorization|password|secret|token)$/i.test(key)
+        )
+        .slice(0, 2)
+        .map(([key, value]) => `${key}=${String(value).slice(0, 40)}`)
+        .join(', ');
+    return preview ? `${name} (${preview})` : name;
 }
 
 /** Walk the tree depth-first. */

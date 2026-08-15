@@ -6,6 +6,12 @@ function trimFixed(value: number, digits: number): string {
     return value.toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 }
 
+/**
+ * 注意：Execution.latency 全链路统一为毫秒（主记录与子记录一致，2026-08-03 起）。
+ * 本函数输入为「秒」，仅保留给确实持有秒值的外部数据源使用；业务代码请直接用
+ * formatDurationMs(毫秒)。误用会把毫秒再放大 1000 倍（见
+ * docs/tasks/bugs/issue-158-pi-agent-open.md Bug 4）。
+ */
 export function latencySecondsToMs(latencySeconds?: number | null): number | null {
     if (latencySeconds == null || !Number.isFinite(latencySeconds) || latencySeconds <= 0) return null;
     return latencySeconds * SECOND_MS;

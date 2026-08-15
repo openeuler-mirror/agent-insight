@@ -2,6 +2,8 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 
 export type OtelTraceEvent = {
   receivedAt: string;
+  /** Framework identity retained when collectors write canonical spool events directly. */
+  framework?: string;
   sessionId: string;
   traceId?: string;
   spanId?: string;
