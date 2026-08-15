@@ -26,27 +26,18 @@ function read(relativePath: string): string {
 }
 
 function parsePowerShell(source: string): void {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-codex-ps-"))
-  const scriptPath = path.join(tempDir, "setup.ps1")
-  try {
-    fs.writeFileSync(scriptPath, source)
-    const command = [
-      "$tokens = $null",
-      "$errors = $null",
-      "[System.Management.Automation.Language.Parser]::ParseFile($env:AGENT_INSIGHT_PARSE_TARGET, [ref]$tokens, [ref]$errors) | Out-Null",
-      "if ($errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }",
-    ].join("; ")
-    const result = spawnSync("pwsh", ["-NoProfile", "-Command", command], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        AGENT_INSIGHT_PARSE_TARGET: scriptPath,
-      },
-    })
-    assert.equal(result.status, 0, result.stderr || result.stdout)
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  }
+  const command = [
+    "$source = [Console]::In.ReadToEnd()",
+    "$tokens = $null",
+    "$errors = $null",
+    "[System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors) | Out-Null",
+    "if ($errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }",
+  ].join("; ")
+  const result = spawnSync("pwsh", ["-NoProfile", "-Command", command], {
+    encoding: "utf8",
+    input: source,
+  })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
 }
 
 async function centralScript(platform: "unix" | "windows", frameworks?: string): Promise<string> {

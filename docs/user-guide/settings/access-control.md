@@ -171,6 +171,8 @@ node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
 Codex setup 不把 API Key写入 Hook command。凭据和 relay install secret 只保存在权限受限的
 collector config 中。若 `config.toml` 已配置非空 `[otel]` exporter，setup 会保留原配置并
 报告 `otel_conflict`；在明确选择 exporter 策略前，原生 Token/TTFT 数据不会进入 relay。
+安装载荷由 Agent Insight 服务端以单个 ZIP 提供；安装脚本会在解压和执行前核对内嵌的
+SHA-256。摘要不匹配时安装立即停止，不会运行包内的 `install.cjs`。
 
 编辑器 Settings 中的 `cloudAgentId` 是用户手工关联值，事件会标记 `source=user`。只有
 Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台才把它计为自动 Cloud

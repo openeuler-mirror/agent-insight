@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
+import { createHash } from "node:crypto"
+import http from "node:http"
 import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { createRequire } from "node:module"
+import AdmZip from "adm-zip"
 
 import { GET as getInstaller } from "@/app/api/ingest/setup/codex/route"
 import { GET as getAsset } from "@/app/api/ingest/setup/codex/assets/[asset]/route"
@@ -32,7 +35,7 @@ const {
   buildVsix,
 } = require("../scripts/agent-trace-collectors/codex/build-vsix.cjs")
 
-const ASSETS = [
+const LEGACY_ASSETS = [
   "trace-transport.cjs",
   "codex-trace-core.cjs",
   "config-core.cjs",
@@ -49,10 +52,203 @@ const ASSETS = [
   "Content_Types.xml",
 ]
 
+const BUNDLE_ENTRIES = [
+  "codex/build-vsix.cjs",
+  "codex/codex-trace-core.cjs",
+  "codex/config-core.cjs",
+  "codex/hook-handler.cjs",
+  "codex/install.cjs",
+  "codex/relay.cjs",
+  "codex/self-check.cjs",
+  "codex/uninstall.cjs",
+  "codex/vscode-extension/[Content_Types].xml",
+  "codex/vscode-extension/extension.cjs",
+  "codex/vscode-extension/extension.vsixmanifest",
+  "codex/vscode-extension/ide-trace-core.cjs",
+  "codex/vscode-extension/package.json",
+  "shared/trace-transport.cjs",
+]
+
+function resolveBashCommand(): string | undefined {
+  const candidates = process.platform === "win32"
+    ? [
+        path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "bin", "bash.exe"),
+        path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "usr", "bin", "bash.exe"),
+      ]
+    : ["bash"]
+  return candidates.find((candidate) => {
+    const probe = spawnSync(candidate, ["--version"], { encoding: "utf8", windowsHide: true })
+    return probe.status === 0 && /GNU bash/.test(probe.stdout)
+  })
+}
+
+const BASH_COMMAND = resolveBashCommand()
+
 async function tempDir(t: test.TestContext) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-install-"))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   return dir
+}
+
+function runProcess(
+  command: string,
+  args: string[],
+  options: { input?: string; env?: NodeJS.ProcessEnv } = {},
+) {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      env: options.env,
+      windowsHide: true,
+    })
+    let stdout = ""
+    let stderr = ""
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (chunk) => { stdout += chunk })
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    child.on("error", reject)
+    child.on("close", (code) => resolve({ code, stdout, stderr }))
+    if (options.input !== undefined) child.stdin.end(options.input)
+  })
+}
+
+function closeServer(server: http.Server) {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve())
+  })
+}
+
+async function bundleBytes(): Promise<Buffer> {
+  const response = await getAsset(
+    new Request("https://insight.example/assets/codex-collector-bundle.zip"),
+    { params: Promise.resolve({ asset: "codex-collector-bundle.zip" }) },
+  )
+  assert.equal(response.status, 200)
+  return Buffer.from(await response.arrayBuffer())
+}
+
+async function serveBundle(t: test.TestContext, bundle: Buffer): Promise<string> {
+  const server = http.createServer((request, response) => {
+    if (request.url === "/api/ingest/setup/codex/assets/codex-collector-bundle.zip") {
+      response.writeHead(200, { "content-type": "application/zip" })
+      response.end(bundle)
+      return
+    }
+    response.writeHead(404)
+    response.end()
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  t.after(() => closeServer(server))
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+  return `http://127.0.0.1:${address.port}`
+}
+
+async function runBashInstaller(source: string, homeDir: string) {
+  assert.ok(BASH_COMMAND, "Bash is unavailable")
+  return runProcess(BASH_COMMAND, [
+    "-s",
+    "--",
+    "--home",
+    homeDir,
+    "--no-start",
+    "--skip-editor-install",
+    "--skip-version-check",
+  ], {
+    input: source,
+    env: {
+      ...process.env,
+      AGENT_INSIGHT_API_KEY: "test-codex-key",
+    },
+  })
+}
+
+async function runPowerShellInstaller(source: string, homeDir: string) {
+  const command = [
+    "$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AGENT_INSIGHT_CODEX_INSTALLER_SOURCE))",
+    "& ([ScriptBlock]::Create($source)) '--home' $env:AGENT_INSIGHT_CODEX_INSTALLER_HOME '--no-start' '--skip-editor-install' '--skip-version-check'",
+    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+  ].join("; ")
+  return runProcess("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], {
+    env: {
+      ...process.env,
+      AGENT_INSIGHT_API_KEY: "test-codex-key",
+      AGENT_INSIGHT_CODEX_INSTALLER_HOME: homeDir,
+      AGENT_INSIGHT_CODEX_INSTALLER_SOURCE: Buffer.from(source).toString("base64"),
+    },
+  })
+}
+
+async function assertInstallerLifecycle(
+  t: test.TestContext,
+  platform: "unix" | "windows",
+  runInstaller: (source: string, homeDir: string) => Promise<{
+    code: number | null
+    stdout: string
+    stderr: string
+  }>,
+) {
+  const origin = await serveBundle(t, await bundleBytes())
+  const response = await getInstaller(new Request(
+    `${origin}/api/ingest/setup/codex`,
+    { headers: { "x-platform": platform } },
+  ))
+  const source = await response.text()
+  const homeDir = await tempDir(t)
+  const collectorDir = path.join(homeDir, ".agent-insight", "collectors", "codex")
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const installed = await runInstaller(source, homeDir)
+    assert.equal(installed.code, 0, installed.stderr || installed.stdout)
+    assert.match(installed.stdout, /Agent Insight Codex collector installed/)
+    assert.equal(
+      await fsp.readFile(path.join(collectorDir, "vscode-extension", "[Content_Types].xml"), "utf8")
+        .then(() => true, () => false),
+      true,
+    )
+
+    if (attempt === 0) {
+      const removed = spawnSync(process.execPath, [
+        path.join(collectorDir, "uninstall.cjs"),
+        "--home",
+        homeDir,
+        "--keep-extension",
+      ], { encoding: "utf8", windowsHide: true })
+      assert.equal(removed.status, 0, removed.stderr || removed.stdout)
+      assert.equal(await fsp.stat(collectorDir).then(() => true, () => false), false)
+    }
+  }
+}
+
+async function assertTamperedBundleRejected(
+  t: test.TestContext,
+  platform: "unix" | "windows",
+  runInstaller: (source: string, homeDir: string) => Promise<{
+    code: number | null
+    stdout: string
+    stderr: string
+  }>,
+) {
+  const tamperedBundle = await bundleBytes()
+  tamperedBundle[tamperedBundle.length - 1] ^= 0xff
+  const origin = await serveBundle(t, tamperedBundle)
+  const response = await getInstaller(new Request(
+    `${origin}/api/ingest/setup/codex`,
+    { headers: { "x-platform": platform } },
+  ))
+  const homeDir = await tempDir(t)
+  const result = await runInstaller(await response.text(), homeDir)
+  assert.notEqual(result.code, 0, result.stderr || result.stdout)
+  assert.match(`${result.stdout}\n${result.stderr}`, /bundle SHA-256 mismatch/i)
+  assert.equal(
+    await fsp.stat(path.join(homeDir, ".agent-insight", "collectors", "codex"))
+      .then(() => true, () => false),
+    false,
+  )
 }
 
 test("hooks installer appends all 11 handlers, honors matcher support, and is idempotent", () => {
@@ -402,51 +598,123 @@ test("VSIX builder creates the standard manifest and extension payload", async (
   assert.deepEqual(archive, await fsp.readFile(repeatedOutputPath))
 })
 
-test("setup route is self-contained and assets use a fixed allowlist", async () => {
-  const installer = await getInstaller(
-    new Request("https://insight.example/api/ingest/setup/codex"),
-  )
-  const source = await installer.text()
-  assert.equal(installer.status, 200)
-  assert.match(source, /AGENT_INSIGHT_API_KEY/)
-  assert.match(source, /Node\.js >=20/)
-  assert.match(source, /api\/ingest\/setup\/codex\/assets/)
-  assert.match(source, /node "\$STAGING_DIR\/codex\/install\.cjs"/)
-  assert.doesNotMatch(source, /apiKey=/)
+test("setup route escapes forwarded origins for Bash and PowerShell", async () => {
+  const forwardedHost = 'proxy.example/$HOME-$(touch codex-pwn)-`id`-"quoted"-$env:USERPROFILE'
+  const bash = await getInstaller(new Request(
+    "https://insight.example/api/ingest/setup/codex",
+    { headers: { "x-forwarded-host": forwardedHost, "x-forwarded-proto": "https" } },
+  )).then((response) => response.text())
+  const powerShell = await getInstaller(new Request(
+    "https://insight.example/api/ingest/setup/codex",
+    {
+      headers: {
+        "x-forwarded-host": forwardedHost,
+        "x-forwarded-proto": "https",
+        "x-platform": "windows",
+      },
+    },
+  )).then((response) => response.text())
 
-  for (const asset of ASSETS) {
+  assert.ok(bash.includes('https://proxy.example/\\$HOME-\\$(touch codex-pwn)-\\`id\\`-\\"quoted\\"-\\$env:USERPROFILE'))
+  assert.ok(powerShell.includes('https://proxy.example/`$HOME-`$(touch codex-pwn)-``id``-`"quoted`"-`$env:USERPROFILE'))
+})
+
+test("setup serves one deterministic Codex bundle whose digest covers all 14 assets", async () => {
+  const bashResponse = await getInstaller(new Request("https://insight.example/api/ingest/setup/codex"))
+  const powerShellResponse = await getInstaller(new Request(
+    "https://insight.example/api/ingest/setup/codex",
+    { headers: { "x-platform": "windows" } },
+  ))
+  const bash = await bashResponse.text()
+  const powerShell = await powerShellResponse.text()
+  const bashDigest = /EXPECTED_BUNDLE_SHA256="([0-9a-f]{64})"/.exec(bash)?.[1]
+  const powerShellDigest = /\$expectedBundleSha256 = "([0-9a-f]{64})"/.exec(powerShell)?.[1]
+  assert.ok(bashDigest, "Bash bootstrap must embed a concrete bundle digest")
+  assert.equal(powerShellDigest, bashDigest)
+  assert.match(bash, /codex-collector-bundle\.zip/)
+  assert.match(powerShell, /codex-collector-bundle\.zip/)
+  assert.ok(bash.indexOf("ACTUAL_BUNDLE_SHA256") < bash.indexOf("unzip -q"))
+  assert.ok(bash.indexOf("unzip -q") < bash.indexOf('node "$STAGING_DIR/codex/install.cjs"'))
+  assert.ok(powerShell.indexOf("Get-FileHash") < powerShell.indexOf("Expand-Archive"))
+  assert.ok(powerShell.indexOf("Expand-Archive") < powerShell.indexOf("& node"))
+  assert.doesNotMatch(bash, /apiKey=/)
+  assert.doesNotMatch(powerShell, /apiKey=/)
+
+  const first = await bundleBytes()
+  const second = await bundleBytes()
+  assert.equal(createHash("sha256").update(first).digest("hex"), bashDigest)
+  assert.deepEqual(first, second)
+  assert.deepEqual(
+    new AdmZip(first).getEntries().map((entry) => entry.entryName).sort(),
+    BUNDLE_ENTRIES,
+  )
+
+  const probe = [
+    'import { codexCollectorBundle } from "./src/app/api/ingest/setup/codex/bundle.ts"',
+    "process.stdout.write(codexCollectorBundle(process.cwd()).sha256)",
+  ].join("; ")
+  const digests = ["UTC", "Asia/Shanghai", "America/Los_Angeles"].map((timezone) => {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", probe], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, TZ: timezone },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout
+  })
+  assert.deepEqual(new Set(digests), new Set([bashDigest]))
+})
+
+test("legacy Codex assets are deprecated read-only responses and unknown keys stay 404", async () => {
+  for (const asset of ["constructor", "toString", "../../package.json"]) {
+    const response = await getAsset(
+      new Request(`https://insight.example/assets/${encodeURIComponent(asset)}`),
+      { params: Promise.resolve({ asset }) },
+    )
+    assert.equal(response.status, 404, asset)
+  }
+  for (const asset of LEGACY_ASSETS) {
     const response = await getAsset(
       new Request(`https://insight.example/assets/${asset}`),
       { params: Promise.resolve({ asset }) },
     )
     assert.equal(response.status, 200, asset)
     assert.ok((await response.text()).length > 20, asset)
-    assert.equal(response.headers.get("x-content-type-options"), "nosniff")
+    assert.equal(response.headers.get("deprecation"), "true", asset)
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff", asset)
   }
-  const denied = await getAsset(
-    new Request("https://insight.example/assets/../../package.json"),
-    { params: Promise.resolve({ asset: "../../package.json" }) },
-  )
-  assert.equal(denied.status, 404)
-  const prototypeAsset = await getAsset(
-    new Request("https://insight.example/assets/constructor"),
-    { params: Promise.resolve({ asset: "constructor" }) },
-  )
-  assert.equal(prototypeAsset.status, 404)
 })
 
-test("setup route returns the PowerShell staging installer for Windows", async () => {
-  const installer = await getInstaller(new Request(
-    "https://insight.example/api/ingest/setup/codex",
-    { headers: { "x-platform": "windows" } },
-  ))
-  const source = await installer.text()
-  assert.equal(installer.status, 200)
-  assert.equal(installer.headers.get("content-type"), "application/x-powershell; charset=utf-8")
-  assert.match(source, /install\.cjs/)
-  assert.match(source, /Invoke-WebRequest/)
-  assert.match(source, /--source-dir/)
-  assert.doesNotMatch(source, /apiKey=/)
+test("Bash bootstrap rejects a tampered bundle before installation", async (t) => {
+  if (!BASH_COMMAND) {
+    t.skip("Bash is unavailable")
+    return
+  }
+  await assertTamperedBundleRejected(t, "unix", runBashInstaller)
+})
+
+test("PowerShell bootstrap rejects a tampered bundle before installation", async (t) => {
+  if (spawnSync("pwsh", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], { windowsHide: true }).error) {
+    t.skip("PowerShell is unavailable")
+    return
+  }
+  await assertTamperedBundleRejected(t, "windows", runPowerShellInstaller)
+})
+
+test("Bash bundle installer supports install, uninstall, and reinstall", async (t) => {
+  if (!BASH_COMMAND) {
+    t.skip("Bash is unavailable")
+    return
+  }
+  await assertInstallerLifecycle(t, "unix", runBashInstaller)
+})
+
+test("PowerShell bundle installer supports install, uninstall, and reinstall", async (t) => {
+  if (spawnSync("pwsh", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], { windowsHide: true }).error) {
+    t.skip("PowerShell is unavailable")
+    return
+  }
+  await assertInstallerLifecycle(t, "windows", runPowerShellInstaller)
 })
 
 test("Codex version parser accepts the baseline and newer semantic releases", () => {

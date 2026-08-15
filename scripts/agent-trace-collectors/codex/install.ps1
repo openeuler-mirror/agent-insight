@@ -9,35 +9,22 @@ if (-not $env:AGENT_INSIGHT_API_KEY) {
     throw "AGENT_INSIGHT_API_KEY is required."
 }
 
-$assetUrl = "$baseUrl/api/ingest/setup/codex/assets"
+$bundleUrl = "$baseUrl/api/ingest/setup/codex/assets/codex-collector-bundle.zip"
+$expectedBundleSha256 = "__CODEX_COLLECTOR_BUNDLE_SHA256__"
 $stageRoot = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-codex-" + [guid]::NewGuid().ToString("N"))
 $sourceDir = Join-Path $stageRoot "codex"
-$extensionDir = Join-Path $sourceDir "vscode-extension"
-$sharedDir = Join-Path $stageRoot "shared"
+$bundlePath = Join-Path $stageRoot "codex-collector-bundle.zip"
 
 try {
-    New-Item -ItemType Directory -Force -Path $sourceDir | Out-Null
-    New-Item -ItemType Directory -Force -Path $extensionDir | Out-Null
-    New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
-
-    $assets = @{
-        "trace-transport.cjs" = Join-Path $sharedDir "trace-transport.cjs"
-        "codex-trace-core.cjs" = Join-Path $sourceDir "codex-trace-core.cjs"
-        "config-core.cjs" = Join-Path $sourceDir "config-core.cjs"
-        "hook-handler.cjs" = Join-Path $sourceDir "hook-handler.cjs"
-        "relay.cjs" = Join-Path $sourceDir "relay.cjs"
-        "install.cjs" = Join-Path $sourceDir "install.cjs"
-        "uninstall.cjs" = Join-Path $sourceDir "uninstall.cjs"
-        "self-check.cjs" = Join-Path $sourceDir "self-check.cjs"
-        "build-vsix.cjs" = Join-Path $sourceDir "build-vsix.cjs"
-        "extension-package.json" = Join-Path $extensionDir "package.json"
-        "extension.cjs" = Join-Path $extensionDir "extension.cjs"
-        "ide-trace-core.cjs" = Join-Path $extensionDir "ide-trace-core.cjs"
-        "extension.vsixmanifest" = Join-Path $extensionDir "extension.vsixmanifest"
-        "Content_Types.xml" = Join-Path $extensionDir "[Content_Types].xml"
+    New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
+    Invoke-WebRequest -UseBasicParsing -Uri $bundleUrl -OutFile $bundlePath
+    $actualBundleSha256 = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualBundleSha256, $expectedBundleSha256)) {
+        throw "Codex collector bundle SHA-256 mismatch."
     }
-    foreach ($asset in $assets.GetEnumerator()) {
-        Invoke-WebRequest -UseBasicParsing -Uri "$assetUrl/$($asset.Key)" -OutFile $asset.Value
+    Expand-Archive -LiteralPath $bundlePath -DestinationPath $stageRoot -Force
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceDir "install.cjs") -PathType Leaf)) {
+        throw "Codex collector bundle is incomplete."
     }
 
     & node (Join-Path $sourceDir "install.cjs") --source-dir $sourceDir @args

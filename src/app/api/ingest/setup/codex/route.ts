@@ -3,11 +3,21 @@ import path from 'node:path';
 
 import { NextResponse } from 'next/server';
 
+import { codexCollectorBundle } from './bundle';
+
 function publicOrigin(request: Request): string {
   const url = new URL(request.url);
   const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || url.host;
   const protocol = request.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
   return `${protocol}://${host}`;
+}
+
+function bashDoubleQuoted(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+}
+
+function powerShellDoubleQuoted(value: string): string {
+  return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
 }
 
 export async function GET(request: Request) {
@@ -25,7 +35,13 @@ export async function GET(request: Request) {
   );
   try {
     const source = await readFile(installerPath, 'utf8');
-    const script = source.replaceAll('__AGENT_INSIGHT_BASE_URL__', publicOrigin(request));
+    const origin = publicOrigin(request);
+    const script = source
+      .replaceAll(
+        '__AGENT_INSIGHT_BASE_URL__',
+        isWindows ? powerShellDoubleQuoted(origin) : bashDoubleQuoted(origin),
+      )
+      .replaceAll('__CODEX_COLLECTOR_BUNDLE_SHA256__', codexCollectorBundle().sha256);
     return new NextResponse(script, {
       headers: {
         'Content-Type': isWindows

@@ -3,8 +3,10 @@ import path from 'node:path';
 
 import { NextResponse } from 'next/server';
 
+import { codexCollectorBundle } from '../../bundle';
+
 const ROOT = path.join(process.cwd(), 'scripts', 'agent-trace-collectors');
-const ASSETS: Record<string, { path: string[]; contentType: string }> = {
+const LEGACY_ASSETS: Record<string, { path: string[]; contentType: string }> = {
   'trace-transport.cjs': {
     path: ['shared', 'trace-transport.cjs'],
     contentType: 'text/javascript; charset=utf-8',
@@ -68,16 +70,30 @@ export async function GET(
   { params }: { params: Promise<{ asset: string }> },
 ) {
   const { asset } = await params;
-  const descriptor = Object.prototype.hasOwnProperty.call(ASSETS, asset) ? ASSETS[asset] : undefined;
-  if (!descriptor) {
+  const legacy = Object.prototype.hasOwnProperty.call(LEGACY_ASSETS, asset)
+    ? LEGACY_ASSETS[asset]
+    : undefined;
+  if (asset !== 'codex-collector-bundle.zip' && !legacy) {
     return NextResponse.json({ error: 'Unknown Codex collector asset.' }, { status: 404 });
   }
   try {
-    const source = await readFile(path.join(ROOT, ...descriptor.path), 'utf8');
+    if (asset === 'codex-collector-bundle.zip') {
+      const { buffer } = codexCollectorBundle();
+      return new NextResponse(new Uint8Array(buffer), {
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': 'attachment; filename="codex-collector-bundle.zip"',
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+    const source = await readFile(path.join(ROOT, ...legacy!.path), 'utf8');
     return new NextResponse(source, {
       headers: {
-        'Content-Type': descriptor.contentType,
+        'Content-Type': legacy!.contentType,
         'Cache-Control': 'no-store',
+        'Deprecation': 'true',
         'X-Content-Type-Options': 'nosniff',
       },
     });
