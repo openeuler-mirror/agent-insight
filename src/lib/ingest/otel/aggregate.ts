@@ -62,5 +62,8 @@ export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEve
 
 export function aggregateOtelTraceSession(sessionId: string, spoolDir?: string): OtelTraceAggregationResult {
   const events = readOtelTraceEventsForSession(sessionId, spoolDir);
-  return { sessionId, eventCount: events.length, record: aggregateOtelTraceEvents(sessionId, events) };
+  const record = aggregateOtelTraceEvents(sessionId, events);
+  return record
+    ? { sessionId, eventCount: events.length, record, disposition: 'persisted' }
+    : { sessionId, eventCount: events.length, record: null, disposition: 'retry-later' };
 }

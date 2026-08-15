@@ -522,19 +522,30 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
     if (!source) continue;
     try {
       const result = aggregateForSession(state, session, source);
-      if (!result.record) {
-        // A framework adapter may be installed later, or a pending Codex unit
-        // may gain its parent correlation in a later append. Keep the disk
-        // cursor unchanged until a record has actually been persisted.
+      if (result.disposition === 'retry-later') {
         session.failures = 0;
         continue;
       }
 
+      if (result.disposition === 'discard') {
+        session.failures = 0;
+        markSourceDone(state, session.sessionId, sourceId);
+        session.sourceIds.delete(sourceId);
+        if (session.pendingFileKeys.size === 0) {
+          session.fastDueAt = undefined;
+          session.evaluatedDueAt = undefined;
+          session.maxDueAt = undefined;
+        }
+        session.lastAggregate = undefined;
+        continue;
+      }
+
       if (mode === 'fast') {
-        await state.saveExecution({
+        const saved = await state.saveExecution({
           ...result.record,
           skip_evaluation: source.defaultSkipEvaluation(),
         });
+        if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
         markSourceDone(state, session.sessionId, sourceId);
       } else {
@@ -544,6 +555,7 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
           skip_internal_judgment: true,
           force_judgment: true,
         });
+        if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
         // 存量积压场景下 fast 和 evaluated 会同时到点，dispatcher 直接跑 evaluated 跳过 fast，
         // 所以这里必须也推进文件归属簿记 —— 否则 pendingFiles 永远不减、checkpoint 游标永不推进，
