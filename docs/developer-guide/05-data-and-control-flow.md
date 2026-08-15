@@ -75,6 +75,10 @@ Pi Agent 是通用 traces 之外的第一方专用路径：Extension 将事件�
 `buildAgentCallTree` 与 `deriveSubagentExecutions`；同一 `spanId` 的 running/completion
 快照在共享聚合器中按结束边界收敛为较新的完成快照。Pi Skill 使用一等 interaction 语义，
 保留加载内容作为 Skill Output，不被投影为额外 LLM Turn；Pi 的上传失败不会阻塞 Hook 事件路径。
+Pi 的 framework-specific setup 只分发一个由固定普通文件清单生成的确定性 ZIP；Bash/PowerShell
+bootstrap 内嵌该归档的 SHA-256，并保证校验发生在解压和 `install.cjs` 执行之前。asset route
+对旧的逐文件下载名称只保留带 `Deprecation: true` 的只读兼容，新 bootstrap 不再引用。
+同源摘要用于内容完整性与版本一致性，不替代发布签名。
 
 Codex 的 `default`、`Memory Agent` 等仍是委派角色，根/子 `Execution.agentName`、
 `observedAgents` 和 `RegisteredAgent` 归一为 `codex`（界面展示 Codex）。Pi 的语义不同：

@@ -3,6 +3,8 @@ import path from 'node:path';
 
 import { NextResponse } from 'next/server';
 
+import { piAgentBundle } from './bundle';
+
 function publicOrigin(request: Request): string {
   const url = new URL(request.url);
   const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || url.host;
@@ -31,10 +33,12 @@ export async function GET(request: Request) {
   try {
     const source = await readFile(installerPath, 'utf8');
     const origin = publicOrigin(request);
-    const script = source.replaceAll(
-      '__AGENT_INSIGHT_BASE_URL__',
-      isWindows ? powerShellDoubleQuoted(origin) : bashDoubleQuoted(origin),
-    );
+    const script = source
+      .replaceAll(
+        '__AGENT_INSIGHT_BASE_URL__',
+        isWindows ? powerShellDoubleQuoted(origin) : bashDoubleQuoted(origin),
+      )
+      .replaceAll('__PI_AGENT_BUNDLE_SHA256__', piAgentBundle().sha256);
     return new NextResponse(script, {
       headers: {
         'Content-Type': 'text/x-shellscript; charset=utf-8',
