@@ -130,6 +130,18 @@ test("atomic checkpoint replacement preserves the latest valid document", async 
   assert.equal(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")).length, 0)
 })
 
+test("atomic JSON replacement removes its temp file when rename fails", async (t) => {
+  const dir = await tempDir(t)
+  const target = path.join(dir, "occupied-target")
+  await fsp.mkdir(target)
+
+  await assert.rejects(() => transport.atomicWriteJson(target, { value: "cannot replace a directory" }))
+  assert.deepEqual(
+    (await fsp.readdir(dir)).filter((name) => name.startsWith("occupied-target.")),
+    [],
+  )
+})
+
 test("process lock prevents concurrent uploaders and verifies ownership on release", async (t) => {
   const dir = await tempDir(t)
   const lockPath = path.join(dir, "uploader.lock")

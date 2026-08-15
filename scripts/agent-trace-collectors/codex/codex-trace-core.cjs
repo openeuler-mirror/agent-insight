@@ -40,6 +40,7 @@ const MATCHER_EVENTS = new Set([
 const IDE_ORIGINATORS = /(?:vscode|cursor|windsurf|ide)/i;
 const SKILL_PROMPT_PATTERN = /(?:^|\s)(?:\/skill:|\$)([a-z0-9][a-z0-9._-]*)\b/i;
 const SKILL_PATH_PATTERN = /(?:^|[\s"'`])((?:[A-Za-z]:)?[\\/]?(?:[^\\/"'`\s]+[\\/])*skills[\\/]([^\\/"'`\s]+)[\\/]SKILL\.md)(?=$|[\s"'`])/i;
+const DEFAULT_STATE_RETENTION_MS = 6 * 60 * 60 * 1000;
 
 function asString(value) {
   if (value === undefined || value === null) return undefined;
@@ -297,6 +298,7 @@ class CodexTraceCore {
     this.leases = new Map();
     this.callScopes = new Map();
     this.implicitPromptScopes = new Map();
+    this.stateRetentionMs = options.stateRetentionMs ?? DEFAULT_STATE_RETENTION_MS;
   }
 
   ensureSession(sessionId, metadata = {}) {
@@ -1153,10 +1155,12 @@ class CodexTraceCore {
   }
 
   status() {
+    this.pruneState();
     const activeTurns = [];
+    const now = this.now();
     for (const session of this.sessions.values()) {
       for (const turn of session.turns.values()) {
-        if (turn.closed) continue;
+        if (turn.closed || Math.abs(now - turn.updatedAt) > 120_000) continue;
         activeTurns.push({
           sessionId: session.sessionId,
           turnId: turn.turnId,
@@ -1174,7 +1178,60 @@ class CodexTraceCore {
     };
   }
 
+  pruneState(timestampMs = this.now()) {
+    const cutoff = timestampMs - this.stateRetentionMs;
+    const liveExecutionIds = new Set();
+
+    for (const [sessionId, session] of this.sessions) {
+      const hadTurns = session.turns.size > 0;
+      for (const [turnId, turn] of session.turns) {
+        if (Number(turn.updatedAt) < cutoff) session.turns.delete(turnId);
+      }
+      for (const [rawTurnId, canonicalTurnId] of session.turnAliases) {
+        if (!session.turns.has(canonicalTurnId)) session.turnAliases.delete(rawTurnId);
+      }
+      for (const [agentId, agent] of session.agents) {
+        if ((agent.parentTurnId && !session.turns.has(agent.parentTurnId)) ||
+          Number(agent.startedAt) < cutoff) {
+          session.agents.delete(agentId);
+        }
+      }
+      for (const [key, tool] of session.tools) {
+        if (Number(tool.startedAt) < cutoff) session.tools.delete(key);
+      }
+      for (const [key, skill] of session.skills) {
+        if (Number(skill.startedAt) < cutoff) session.skills.delete(key);
+      }
+      for (const turnId of session.ttftByTurn.keys()) {
+        if (!session.turns.has(turnId)) session.ttftByTurn.delete(turnId);
+      }
+
+      if (session.turns.size === 0 && (hadTurns || Number(session.updatedAt) < cutoff)) {
+        this.sessions.delete(sessionId);
+        continue;
+      }
+      for (const turn of session.turns.values()) {
+        liveExecutionIds.add(turn.executionId);
+        if (turn.parentScope?.executionId) liveExecutionIds.add(turn.parentScope.executionId);
+      }
+    }
+
+    for (const [callId, scope] of this.callScopes) {
+      if (!scope?.executionId || !liveExecutionIds.has(scope.executionId)) {
+        this.callScopes.delete(callId);
+      }
+    }
+    for (const [prompt, binding] of this.implicitPromptScopes) {
+      if (Number(binding?.timestampMs) < cutoff ||
+        !binding?.scope?.executionId ||
+        !liveExecutionIds.has(binding.scope.executionId)) {
+        this.implicitPromptScopes.delete(prompt);
+      }
+    }
+  }
+
   snapshot() {
+    this.pruneState();
     return {
       version: 4,
       unattributed: this.unattributed,
@@ -1222,6 +1279,7 @@ class CodexTraceCore {
       if (!item?.sessionId) continue;
       const session = this.ensureSession(item.sessionId, item);
       session.startedAt = Number(item.startedAt) || session.startedAt;
+      session.updatedAt = Number(item.updatedAt) || session.updatedAt;
       session.closed = Boolean(item.closed);
       session.delegatedParent = item.delegatedParent;
       for (const [rawTurnId, canonicalTurnId] of item.turnAliases || []) {
@@ -1248,6 +1306,7 @@ class CodexTraceCore {
         session.turnAliases.set(turn.turnId, turn.turnId);
       }
     }
+    this.pruneState();
   }
 }
 

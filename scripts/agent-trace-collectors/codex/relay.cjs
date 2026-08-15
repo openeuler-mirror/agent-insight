@@ -165,6 +165,8 @@ async function createRelay(options = {}) {
   let lock;
   let server;
   let rawPending = Promise.resolve();
+  let statePersistPending = Promise.resolve();
+  const stateWriter = options.stateWriter || atomicWriteJson;
 
   try {
     core.restore(JSON.parse(await fsp.readFile(sessionStatePath, "utf8")));
@@ -172,8 +174,12 @@ async function createRelay(options = {}) {
     if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
   }
 
-  const persistState = async () => {
-    await atomicWriteJson(sessionStatePath, core.snapshot());
+  const persistState = () => {
+    const persistence = statePersistPending
+      .catch(() => undefined)
+      .then(() => stateWriter(sessionStatePath, core.snapshot()));
+    statePersistPending = persistence.catch(() => undefined);
+    return persistence;
   };
 
   const flushSoon = () => {
@@ -280,6 +286,7 @@ async function createRelay(options = {}) {
       if (!lock) throw new Error("Codex relay is already running");
       await replayRawOtel(stateDir, core);
       await writer.flush();
+      await persistState();
       server = http.createServer((request, response) => {
         handler(request, response).catch((error) => {
           if (!response.headersSent) writeJson(response, 500, { error: error.message });
@@ -319,6 +326,7 @@ async function createRelay(options = {}) {
         await new Promise((resolve) => server.close(resolve));
         server = undefined;
       }
+      await statePersistPending;
       await fsp.unlink(processStatePath).catch((error) => {
         if (error?.code !== "ENOENT") throw error;
       });

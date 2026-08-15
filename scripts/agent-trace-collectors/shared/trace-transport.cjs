@@ -210,14 +210,19 @@ async function readJsonlBatch(filePath, offset = 0, options = {}) {
 async function atomicWriteJson(filePath, value) {
   await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  const handle = await fsp.open(tempPath, "wx", 0o600);
+  let handle;
   try {
+    handle = await fsp.open(tempPath, "wx", 0o600);
     await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
     await handle.sync();
-  } finally {
     await handle.close();
+    handle = undefined;
+    await fsp.rename(tempPath, filePath);
+  } catch (error) {
+    if (handle) await handle.close().catch(() => undefined);
+    await fsp.unlink(tempPath).catch(() => undefined);
+    throw error;
   }
-  await fsp.rename(tempPath, filePath);
 }
 
 async function readCheckpoint(filePath) {

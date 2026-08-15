@@ -271,6 +271,66 @@ test("restored relay state keeps a Hook prompt for later native OTel attribution
   assert.equal(llm?.attributes?.["codex.association.pending"], undefined)
 })
 
+test("restored relay state prunes expired sessions and their correlation scopes", () => {
+  const now = 1_700_000_000_000
+  const core = new CodexTraceCore({
+    writer: new MemoryWriter(),
+    now: () => now,
+    stateRetentionMs: 60_000,
+  })
+  const makeSession = (
+    sessionId: string,
+    turnId: string,
+    updatedAt: number,
+    sessionUpdatedAt = updatedAt,
+  ) => ({
+    sessionId,
+    startedAt: updatedAt - 1_000,
+    updatedAt: sessionUpdatedAt,
+    closed: false,
+    turnAliases: [[turnId, turnId]],
+    agents: [],
+    turns: [{
+      turnId,
+      input: `${sessionId} prompt`,
+      startedAt: updatedAt - 1_000,
+      updatedAt,
+      closed: false,
+      promptSources: ["hook"],
+    }],
+  })
+  core.restore({
+    version: 4,
+    unattributed: 0,
+    callScopes: [
+      ["expired-call", { executionId: "expired:turn:old", rootSpanId: "expired-root" }],
+      ["recent-call", { executionId: "recent:turn:live", rootSpanId: "recent-root" }],
+    ],
+    implicitPromptScopes: [
+      ["expired prompt", {
+        scope: { executionId: "expired:turn:old", rootSpanId: "expired-root" },
+        timestampMs: now - 120_000,
+      }],
+      ["recent prompt", {
+        scope: { executionId: "recent:turn:live", rootSpanId: "recent-root" },
+        timestampMs: now - 1_000,
+      }],
+    ],
+    sessions: [
+      // v1-v4 restore used to refresh session.updatedAt on every relay restart.
+      // An expired turn must still remove that legacy session shell.
+      makeSession("expired", "old", now - 120_000, now),
+      makeSession("recent", "live", now - 1_000),
+    ],
+  })
+
+  const snapshot = core.snapshot()
+  assert.deepEqual(snapshot.sessions.map((session: { sessionId: string }) => session.sessionId), ["recent"])
+  assert.deepEqual(snapshot.callScopes.map(([callId]: [string]) => callId), ["recent-call"])
+  assert.deepEqual(snapshot.implicitPromptScopes.map(([prompt]: [string]) => prompt), ["recent prompt"])
+  assert.deepEqual(core.status().activeTurns.map((turn: { sessionId: string }) => turn.sessionId), ["recent"])
+})
+
 test("uncorrelated native OTel activity remains pending instead of creating a root", async () => {
   const writer = new MemoryWriter()
   const core = new CodexTraceCore({ writer })
@@ -554,6 +614,56 @@ test("relay rejects unauthenticated loopback writers", async (t) => {
     hook("SessionStart"),
   )
   assert.equal(response.status, 401)
+})
+
+test("relay serializes concurrent session-state persistence", async (t) => {
+  const dir = await tempDir(t)
+  let activeWrites = 0
+  let maxActiveWrites = 0
+  let sessionStateWrites = 0
+  const relay = await createRelay({
+    config: {
+      apiKey: "test-key",
+      endpoint: "http://127.0.0.1:1/api/ingest/otel/v1/traces",
+      installSecret: "relay-secret",
+      relayPort: 43191,
+      uploadIntervalMs: 300_000,
+      homeDir: dir,
+    },
+    stateDir: dir,
+    uploader: new MemoryUploader(),
+    port: 0,
+    stateWriter: async (filePath: string, value: unknown) => {
+      sessionStateWrites += 1
+      activeWrites += 1
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      try {
+        await transport.atomicWriteJson(filePath, value)
+      } finally {
+        activeWrites -= 1
+      }
+    },
+  })
+  const address = await relay.start()
+  t.after(() => relay.stop().catch(() => {}))
+
+  const responses = await Promise.all(Array.from({ length: 12 }, (_, index) => httpJson(
+    address.port,
+    "/hook",
+    "relay-secret",
+    hook("UserPromptSubmit", {
+      session_id: `concurrent-session-${index}`,
+      turn_id: `turn-${index}`,
+      prompt: `prompt ${index}`,
+    }),
+  )))
+  assert.ok(responses.every((response) => response.status === 200))
+  assert.equal(sessionStateWrites, 13)
+  assert.equal(maxActiveWrites, 1)
+  const persisted = JSON.parse(await fsp.readFile(path.join(dir, "relay-session-state.json"), "utf8"))
+  assert.equal(persisted.sessions.length, 12)
+  assert.equal((await fsp.readdir(dir)).filter((name) => name.includes("relay-session-state.json.")).length, 0)
 })
 
 test("relay recovers its serialized raw queue after one bad OTel batch", async (t) => {
