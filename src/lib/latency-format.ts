@@ -41,7 +41,9 @@ export function resolveTraceTimelineDurationMs(
     executionDurationMs?: number,
 ): number | undefined {
     const candidates = [treeDurationMs, executionDurationMs]
-        .filter((value): value is number => Number.isFinite(value) && value > 0);
+        .filter((value): value is number =>
+            typeof value === 'number' && Number.isFinite(value) && value > 0
+        );
     return candidates.length ? Math.max(...candidates) : undefined;
 }
 
