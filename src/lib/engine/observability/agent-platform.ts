@@ -7,6 +7,7 @@ export const AGENT_PLATFORMS = [
   'qoder',
   'codex',
   'qwencode',
+  'pi-agent',
   'unknown',
 ] as const;
 export type AgentPlatform = (typeof AGENT_PLATFORMS)[number];

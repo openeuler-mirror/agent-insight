@@ -25,6 +25,9 @@ test('Agent management preserves existing platforms and labels unregistered plat
   assert.equal(normalizeAgentPlatform('openclaw'), 'openclaw');
   assert.equal(normalizeAgentPlatform('hermes'), 'hermes');
   assert.equal(normalizeAgentPlatform('codex'), 'codex');
+  assert.ok(AGENT_PLATFORMS.includes('pi-agent'));
+  assert.equal(normalizeAgentPlatform('pi-agent'), 'pi-agent');
+  assert.equal(normalizeAgentPlatform(' Pi-Agent '), 'pi-agent');
   assert.equal(normalizeAgentPlatform('unknown'), 'unknown');
   assert.equal(normalizeAgentPlatform('future-agent'), 'unknown');
   assert.equal(normalizeAgentPlatform(null), 'unknown');
