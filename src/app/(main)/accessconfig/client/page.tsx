@@ -82,6 +82,38 @@ const FAIL_STATUSES = new Set([
   'version_mismatch',
 ])
 
+/**
+ * 客户端状态的展示形态。
+ *
+ * 「已解绑」必须和「离线」区分开：前者是这台机器已经改绑到别的账号、再也不会
+ * 回来，后者只是暂时掉线、等它自己恢复即可。混在一起会让人一直干等。
+ */
+function clientStatusView(status: string | undefined, isZh: boolean): {
+  label: string
+  dot: string
+  tone: string
+} {
+  if (status === 'unbound') {
+    return {
+      label: isZh ? '已解绑' : 'unbound',
+      dot: 'var(--color-warning, #d97706)',
+      tone: 'var(--color-warning, #d97706)',
+    }
+  }
+  if (status === 'online') {
+    return {
+      label: isZh ? '在线' : 'online',
+      dot: 'var(--color-success, #16a34a)',
+      tone: 'var(--color-success, #16a34a)',
+    }
+  }
+  return {
+    label: isZh ? '离线' : 'offline',
+    dot: 'var(--muted-foreground)',
+    tone: 'var(--muted-foreground)',
+  }
+}
+
 function stepIndex(status: string | undefined): number {
   const s = String(status || '').toLowerCase()
   if (s === 'notify_failed') return 0
@@ -550,13 +582,18 @@ export default function AccessClientConfigPage() {
                           width: 8,
                           height: 8,
                           borderRadius: 99,
-                          background: client.status === 'online' ? 'var(--color-success, #16a34a)' : 'var(--muted-foreground)',
+                          background: clientStatusView(client.status, isZh).dot,
                         }}
                       />
                       {client.reportedIp || client.observedIp || client.hostname || client.id}
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 4 }}>
                       {client.hostname || '—'} · {client.platforms?.length || 0} platforms
+                      {client.status === 'unbound' ? (
+                        <span style={{ color: 'var(--color-warning, #d97706)' }}>
+                          {isZh ? ' · 已解绑' : ' · unbound'}
+                        </span>
+                      ) : null}
                     </div>
                   </button>
                 )
@@ -585,7 +622,7 @@ export default function AccessClientConfigPage() {
                     {selected.reportedIp || selected.observedIp || '—'} · {selected.hostname || '—'}
                   </div>
                   <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted-foreground)' }}>
-                    {selected.id} · {selected.status === 'online' ? (isZh ? '在线' : 'online') : (isZh ? '离线' : 'offline')} ·{' '}
+                    {selected.id} · {clientStatusView(selected.status, isZh).label} ·{' '}
                     {isZh ? '最近心跳' : 'last seen'} {selected.lastSeenAt} · rev {view?.revision ?? 0}
                   </div>
                   <div

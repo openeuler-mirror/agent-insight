@@ -222,3 +222,19 @@ test('different machines under one account stay separate', async () => {
     await cleanup()
   }
 })
+
+test('UI renders unbound distinctly from offline', () => {
+  // 「已解绑」是机器改绑走了、不会回来；「离线」只是暂时掉线、等它恢复即可。
+  // 混成同一个文案会让人一直干等一台永远不会回来的机器。
+  const src = require_('node:fs').readFileSync(
+    require_('node:path').join(__dirname, '..', 'src', 'app', '(main)', 'accessconfig', 'client', 'page.tsx'),
+    'utf8',
+  ) as string
+  assert.match(src, /clientStatusView/, '状态展示应走统一 helper')
+  assert.match(src, /已解绑/, '必须有「已解绑」文案')
+  assert.doesNotMatch(
+    src,
+    /status === 'online' \? \(isZh \? '在线' : 'online'\) : \(isZh \? '离线' : 'offline'\)/,
+    '不得再用「在线/离线」二选一判断',
+  )
+})
