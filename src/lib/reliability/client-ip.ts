@@ -108,7 +108,7 @@ export function clientIpFromRequest(
 
   // Next.js direct server fills x-forwarded-for from socket.remoteAddress when
   // the uploader did not send that header. Only authenticated OpenCode uploads
-  // enable this path; legacy uploads cannot opt themselves in.
+  // enable this path; unauthenticated uploads cannot opt themselves in.
   const directPeer = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
   const publicPeer = normalizePublicIp(directPeer)
   if (publicPeer) return publicPeer

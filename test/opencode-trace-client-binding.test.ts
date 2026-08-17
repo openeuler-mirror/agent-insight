@@ -10,6 +10,7 @@ import {
 import { prismaRaw } from '@/lib/storage/prisma'
 
 const TEST_USER = `trace-client-binding-${process.pid}`
+const TEST_API_KEY = 'sk_trace_client_binding_' + process.pid
 
 test('OpenCode Trace only binds a verified client and preserves its first IP snapshot', async () => {
   const firstTaskId = `trace-client-first-${process.pid}-${Date.now()}`
@@ -21,6 +22,9 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
 
   delete process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER
   try {
+    await prismaRaw.user.create({
+      data: { username: TEST_USER, apiKey: TEST_API_KEY },
+    })
     const { installToken } = await createInstallToken({
       user: TEST_USER,
       expiresInSeconds: 600,
@@ -112,6 +116,7 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        'x-witty-api-key': TEST_API_KEY,
         'x-forwarded-for': '1.1.1.1',
       },
       body: JSON.stringify({
@@ -127,7 +132,7 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       where: { id: legacyTaskId },
       select: { clientId: true, observedIp: true },
     })
-    assert.deepEqual(legacyStored, { clientId: null, observedIp: null })
+    assert.deepEqual(legacyStored, { clientId: null, observedIp: '1.1.1.1' })
 
     const mismatch = await upload(
       mismatchTaskId,
@@ -153,5 +158,6 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       await prismaRaw.reliabilityClient.deleteMany({ where: { clientId } })
     }
     await prismaRaw.reliabilityInstallToken.deleteMany({ where: { user: TEST_USER } })
+    await prismaRaw.user.deleteMany({ where: { username: TEST_USER } })
   }
 })

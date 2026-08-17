@@ -189,7 +189,7 @@ export async function POST(request: Request) {
       const clientMetadata = {
         ...reportedClientMetadata,
         observedIp: clientIpFromRequest(request, {
-          allowDirectConnection: Boolean(deviceIdentity),
+          allowDirectConnection: Boolean(deviceIdentity) || userResolutionPath === 'api-key',
           clientHostName: reportedClientMetadata.hostName,
         }),
       };
