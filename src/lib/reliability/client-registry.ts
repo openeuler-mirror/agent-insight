@@ -122,6 +122,8 @@ export async function registerClient(input: {
   agentVersion?: string | null
   supervisor?: string | null
   capabilities?: ClientCapabilities
+  /** 稳定机器标识；同机同账号据此复用原记录，避免重复建条目。 */
+  machineId?: string | null
   /**
    * 本机上一次绑定的 clientId（改绑到别的账号时由安装器传入）。
    *
@@ -135,6 +137,7 @@ export async function registerClient(input: {
   user: string
   deviceCredential: string
   unboundPrevious: { clientId: string; user: string } | null
+  reused: boolean
 }> {
   const tokenHash = sha256(String(input.installToken || ''))
   const record = await prisma.reliabilityInstallToken.findUnique({ where: { tokenHash } })
@@ -148,7 +151,17 @@ export async function registerClient(input: {
     throw new ReliabilityError('INSTALL_TOKEN_EXPIRED', '安装令牌已过期', 410)
   }
 
-  const clientId = newId('cli')
+  // 同一台机器 + 同一账号 → 复用原记录，而不是新建。
+  // 否则每次重装（或本机 config.json 被删）都会多出一条，同一台机器在页面上
+  // 堆成好几个「离线」条目；A→B→A 绕回来时 A 也拿不回自己原来的配置历史。
+  const machineId = input.machineId?.trim() || null
+  const existing = machineId
+    ? await prisma.reliabilityClient.findUnique({
+        where: { user_machineId: { user: record.user, machineId } },
+      })
+    : null
+
+  const clientId = existing?.clientId || newId('cli')
   const credential = newSecret('dc')
   const now = new Date()
   const capabilities = normalizeCapabilities(input.capabilities)
@@ -165,26 +178,43 @@ export async function registerClient(input: {
     : null
   const shouldUnbind = Boolean(previous && !previous.unboundAt && previous.clientId !== clientId)
 
+  const clientFields = {
+    user: record.user,
+    name: displayName,
+    hostname: input.hostname || null,
+    reportedIp: input.reportedIp || null,
+    observedIp: input.observedIp || null,
+    os: input.os || null,
+    arch: input.arch || null,
+    status: 'online',
+    serviceHealth: 'healthy',
+    supervisor: input.supervisor || null,
+    processStartedAt: now,
+    lastSeenAt: now,
+    agentVersion: input.agentVersion || null,
+    capabilitiesJson: JSON.stringify(capabilities),
+    machineId,
+  }
+
   await prisma.$transaction([
-    prisma.reliabilityClient.create({
-      data: {
-        clientId,
-        user: record.user,
-        name: displayName,
-        hostname: input.hostname || null,
-        reportedIp: input.reportedIp || null,
-        observedIp: input.observedIp || null,
-        os: input.os || null,
-        arch: input.arch || null,
-        status: 'online',
-        serviceHealth: 'healthy',
-        supervisor: input.supervisor || null,
-        processStartedAt: now,
-        lastSeenAt: now,
-        agentVersion: input.agentVersion || null,
-        capabilitiesJson: JSON.stringify(capabilities),
-      },
-    }),
+    existing
+      ? prisma.reliabilityClient.update({
+          where: { clientId },
+          // 复用即「重新绑定」：清掉解绑标记，否则 A→B→A 绕回来后
+          // A 拿回的是一条仍标着「已解绑」的记录。
+          data: { ...clientFields, unboundAt: null, unboundToClientId: null },
+        })
+      : prisma.reliabilityClient.create({ data: { clientId, ...clientFields } }),
+    // 复用时旧凭证必须作废：安装器拿不回原凭证，只能换发新的，
+    // 留着旧的等于多一把还能用的钥匙。
+    ...(existing
+      ? [
+          prisma.reliabilityClientCredential.updateMany({
+            where: { clientId, revokedAt: null },
+            data: { revokedAt: now },
+          }),
+        ]
+      : []),
     prisma.reliabilityClientCredential.create({
       data: { clientId, credentialHash: sha256(credential) },
     }),
@@ -212,6 +242,7 @@ export async function registerClient(input: {
     user: record.user,
     deviceCredential: credential,
     unboundPrevious: shouldUnbind ? { clientId: previous!.clientId, user: previous!.user } : null,
+    reused: Boolean(existing),
   }
 }
 

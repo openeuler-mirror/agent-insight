@@ -163,6 +163,32 @@ Trace 采集与主机纳管仍是两个独立安装项（采集器要覆盖 10 �
 本地 checkout 走 `./scripts/install-ras-client.js`；npm 安装场景回退到 `npm pack` 解包，
 包内不含该安装器时明确报错而非静默跳过。
 
+### 「同一台机器」的判定依据
+
+原先只有 `clientId`，且每次注册都新生成 —— 服务端没有机器的概念。去重完全依赖
+本机 `config.json` 里的 `previousClientId`，那个文件一删（重装、换盘、清理），
+服务端就认不出是同一台机器，于是每装一次多一条记录，页面上同一主机堆成好几个条目；
+A→B→A 绕回来时 A 拿到的也是第三个全新 id，配置下发历史断档。
+
+现在以**机器指纹**为准：
+
+| 平台 | 来源 |
+|---|---|
+| macOS | `IOPlatformUUID`（`ioreg -rd1 -c IOPlatformExpertDevice`） |
+| Linux | `/etc/machine-id`，回退 `/var/lib/dbus/machine-id` |
+| 兜底 | `sha256(hostname + 首个非回环 MAC)`，前缀 `fallback:` |
+| 覆盖 | 环境变量 `AGENT_INSIGHT_MACHINE_ID` —— 容器/克隆虚拟机可能共用 machine-id |
+
+`ReliabilityClient.machineId` + `@@unique([user, machineId])`；注册时命中
+`(user, machineId)` 就**复用原 clientId**（换发凭证、清 `unboundAt`），未命中才新建。
+
+要点：
+- 字段可空：旧版本客户端装的记录没有指纹，SQL 中 NULL 互不相等，不会因唯一约束冲突，
+  行为退回原样（无法判定同机）
+- 复用时必须撤销该 clientId 下的旧凭证 —— 安装器拿不回原凭证只能换发，
+  留着旧的等于多一把还能用的钥匙
+- 与换账号解绑逻辑正交：换账号仍是新建+解绑，绕回来时才走复用
+
 ### 换账号：一台机器只能属于一个账号
 
 数据面在本机只有一份 —— OpenCode 插件只读一份 `.env`，RAS 只读一份 `config.json`，

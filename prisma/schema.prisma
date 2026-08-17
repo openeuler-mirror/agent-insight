@@ -1201,6 +1201,10 @@ model ReliabilityClient {
   // 页面据此显示「已解绑」而非「离线」——后者会让人以为机器只是掉线了。
   unboundAt            DateTime?
   unboundToClientId    String?
+  // 稳定的机器标识（macOS IOPlatformUUID / Linux machine-id）。
+  // 没有它就只能靠本机 config.json 认机器，文件一删就会重复建记录。
+  // 可空：旧版本客户端装的记录没有，SQL 里 NULL 互不相等，不会互相冲突。
+  machineId            String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -1209,6 +1213,7 @@ model ReliabilityClient {
   configs     ReliabilityClientConfig[]
   deliveries  ReliabilityConfigDelivery[]
 
+  @@unique([user, machineId])
   @@index([user, lastSeenAt])
   @@index([user, status])
 }

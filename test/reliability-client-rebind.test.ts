@@ -16,15 +16,18 @@ const require_ = createRequire(import.meta.url)
 const USER_A = `rebind-a-${process.pid}`
 const USER_B = `rebind-b-${process.pid}`
 
-async function bind(user: string, previousClientId?: string) {
+async function bind(user: string, previousClientId?: string, machineId?: string | null) {
   const { installToken } = await createInstallToken({ user, expiresInSeconds: 600 })
   return registerClient({
     installToken,
     hostname: 'same-host',
     reportedIp: '10.0.0.9',
     previousClientId: previousClientId ?? null,
+    machineId: machineId === undefined ? MACHINE : machineId,
   })
 }
+
+const MACHINE = `machine-${process.pid}`
 
 function credentialRequest(clientId: string, credential: string): Request {
   return new Request('https://insight.test/api/reliability/client/v1/heartbeat', {
@@ -135,4 +138,87 @@ test('installer skips only when the account matches, never on file existence alo
   // 只看文件是否存在会导致换账号后静默沿用旧绑定（Trace 归新账号、纳管归旧账号）
   assert.match(src, /existing\.user === args\.user/, '跳过条件必须比对账号')
   assert.match(src, /检测到账号变更/, '账号变更应有明确日志而非静默')
+})
+
+// ---------------------------------------------- 机器指纹去重
+
+test('same machine + same account reuses the existing record instead of creating a new one', async () => {
+  try {
+    const first = await bind(USER_A)
+    assert.equal(first.reused, false, '首次注册是新建')
+
+    // 模拟本机 config.json 被删（重装、换磁盘）—— 不传 previousClientId。
+    // 没有机器指纹时这里会新建第二条，页面上就会出现两台同名机器。
+    const second = await bind(USER_A)
+    assert.equal(second.reused, true, '同机同账号必须复用')
+    assert.equal(second.clientId, first.clientId, 'clientId 应保持不变')
+
+    const listed = await listClients(USER_A, {})
+    assert.equal(listed.items.length, 1, '同一台机器只应有一条记录')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('reuse issues a fresh credential and revokes the previous one', async () => {
+  try {
+    const first = await bind(USER_A)
+    const second = await bind(USER_A)
+    assert.notEqual(second.deviceCredential, first.deviceCredential, '必须换发新凭证')
+
+    // 安装器拿不回原凭证，留着旧的等于多一把还能用的钥匙。
+    await assert.rejects(
+      () => authenticateDevice(credentialRequest(first.clientId, first.deviceCredential)),
+      (err: Error & { code?: string }) => err.code === 'DEVICE_UNAUTHORIZED',
+      '旧凭证必须已撤销',
+    )
+    const ok = await authenticateDevice(credentialRequest(second.clientId, second.deviceCredential))
+    assert.equal(ok.user, USER_A)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('A to B to A returns the original record, not a third one', async () => {
+  try {
+    const a1 = await bind(USER_A)
+    const b = await bind(USER_B, a1.clientId)
+    assert.notEqual(b.clientId, a1.clientId, '换账号是另一条记录')
+
+    // 绕回 A：应拿回 A 原来那条（配置下发历史不断档），而不是第三个新 id
+    const a2 = await bind(USER_A, b.clientId)
+    assert.equal(a2.clientId, a1.clientId, 'A 应拿回原记录')
+    assert.equal(a2.reused, true)
+
+    const listedA = await listClients(USER_A, {})
+    assert.equal(listedA.items.length, 1, 'A 名下不应堆积多条')
+    assert.equal(listedA.items[0].status, 'online', '复用后解绑标记应被清掉')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('clients without a machine id keep the legacy behaviour', async () => {
+  try {
+    // 旧版本客户端不上报指纹；NULL 之间互不相等，不能因唯一约束而互相冲突。
+    const first = await bind(USER_A, undefined, null)
+    const second = await bind(USER_A, undefined, null)
+    assert.equal(first.reused, false)
+    assert.equal(second.reused, false, '无指纹时无法判定同机，沿用旧行为')
+    assert.notEqual(second.clientId, first.clientId)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('different machines under one account stay separate', async () => {
+  try {
+    const m1 = await bind(USER_A, undefined, `${MACHINE}-x`)
+    const m2 = await bind(USER_A, undefined, `${MACHINE}-y`)
+    assert.notEqual(m2.clientId, m1.clientId, '不同机器必须各自独立')
+    const listed = await listClients(USER_A, {})
+    assert.equal(listed.items.length, 2)
+  } finally {
+    await cleanup()
+  }
 })
