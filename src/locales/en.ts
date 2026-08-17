@@ -195,6 +195,7 @@ export const en = {
     statToolErrorRate: 'Tool error rate',
     columnTraceId: 'Trace ID',
     columnAgent: 'Agent',
+    columnIp: 'IP',
     columnStatus: 'Status',
     columnAnomaly: 'Anomaly Events',
     columnTags: 'Tags',

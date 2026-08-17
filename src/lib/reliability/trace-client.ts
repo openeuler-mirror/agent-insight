@@ -1,10 +1,23 @@
 import { isIP } from 'node:net'
+import { normalizePublicIp } from './client-ip'
 
 export type TraceClientMetadata = {
   clientId: string | null
   hostIp: string | null
   hostName: string | null
   observedIp: string | null
+}
+
+export function resolveTraceClientSnapshot(
+  existing: Partial<TraceClientMetadata> | null | undefined,
+  incoming: Partial<TraceClientMetadata> | null | undefined,
+): TraceClientMetadata {
+  return {
+    clientId: existing?.clientId || incoming?.clientId || null,
+    hostIp: existing?.hostIp || incoming?.hostIp || null,
+    hostName: existing?.hostName || incoming?.hostName || null,
+    observedIp: existing?.observedIp || incoming?.observedIp || null,
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -51,6 +64,6 @@ export function normalizeTraceClientMetadata(
     hostName: normalizeHostName(
       host.hostname ?? host.host_name ?? root.host_name ?? root.hostName,
     ),
-    observedIp: normalizeHostIp(observedIp),
+    observedIp: normalizePublicIp(observedIp),
   }
 }

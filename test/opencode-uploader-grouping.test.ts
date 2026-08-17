@@ -43,7 +43,11 @@ test("opencode uploader: prefers the registered reliability client identity", as
     fs.mkdirSync(registeredDir, { recursive: true })
     fs.writeFileSync(
       path.join(registeredDir, "config.json"),
-      JSON.stringify({ clientId: "cli_registered-12345678" }),
+      JSON.stringify({
+        user: "alice",
+        clientId: "cli_registered-12345678",
+        deviceCredential: "dc_registered-secret",
+      }),
     )
 
     const identity = uploader.ensureClientIdentity({
@@ -52,6 +56,7 @@ test("opencode uploader: prefers the registered reliability client identity", as
     })
 
     assert.equal(identity.clientId, "cli_registered-12345678")
+    assert.equal(identity.deviceCredential, "dc_registered-secret")
     assert.equal(fs.existsSync(path.join(dataDir, "client.json")), false)
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true })
@@ -493,4 +498,30 @@ test("opencode uploader: getRequestOptions preserves host basePath on ingest upl
 
   const apiSuffix = uploader.getRequestOptions(new URL("http://localhost:3000/insight/api"), "wi_key", 2)
   assert.equal(apiSuffix.path, "/insight/api/ingest/upload")
+})
+
+test("opencode uploader: authenticates registered clients with their device credential", async () => {
+  const uploader = await uploaderPromise
+  const options = uploader.getRequestOptions(
+    new URL("https://insight.test"),
+    "wi_key",
+    2,
+    {
+      clientId: "cli_registered-12345678",
+      deviceCredential: "dc_registered-secret",
+    },
+  )
+
+  assert.equal(options.headers.Authorization, "Bearer dc_registered-secret")
+  assert.equal(options.headers["x-agent-insight-client-id"], "cli_registered-12345678")
+  assert.equal(options.headers["x-witty-api-key"], "wi_key")
+
+  const legacy = uploader.getRequestOptions(
+    new URL("https://insight.test"),
+    "wi_key",
+    2,
+    { clientId: "cli_legacy-12345678" },
+  )
+  assert.equal(legacy.headers.Authorization, undefined)
+  assert.equal(legacy.headers["x-agent-insight-client-id"], undefined)
 })

@@ -135,6 +135,7 @@ interface Execution {
     judgment_reason?: string;
     failures?: any[];
     agentOwnership?: string | null;
+    observedIp?: string | null;
     user?: string | null;
     userTags?: TraceUserTag[];
 }
@@ -165,15 +166,16 @@ type SortDir = 'asc' | 'desc';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 
-type TraceColumnKey = 'traceId' | 'agent' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
+type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
 
-const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'status', 'anomaly', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
+const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'ip', 'status', 'anomaly', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     traceId:    130,
     task:       280,
     agent:      170,
+    ip:         160,
     status:     110,
     anomaly:    110,
     userTags:   220,
@@ -186,6 +188,7 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
     traceId:    90,
     task:       280,
     agent:      100,
+    ip:         120,
     status:     80,
     anomaly:    80,
     userTags:   150,
@@ -197,6 +200,7 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
 const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
     traceId: true,
     agent: true,
+    ip: false,
     status: true,
     anomaly: true,
     userTags: true,
@@ -620,6 +624,7 @@ function TracePageContent() {
     const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
         traceId: t('tracePage.columnTraceId'),
         agent: t('tracePage.columnAgent'),
+        ip: t('tracePage.columnIp'),
         status: t('tracePage.columnStatus'),
         anomaly: t('tracePage.columnAnomaly'),
         userTags: t('tracePage.columnUserTags'),
@@ -1194,6 +1199,7 @@ function TracePageContent() {
                                                 <col style={{ width: taskWidthCustomized ? widths.task : undefined }} />
                                             )}
                                             {columnVisibility.agent && <col style={{ width: widths.agent }} />}
+                                            {columnVisibility.ip && <col style={{ width: widths.ip }} />}
                                             {columnVisibility.status && <col style={{ width: widths.status }} />}
                                             {columnVisibility.anomaly && <col style={{ width: widths.anomaly }} />}
                                             {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
@@ -1226,6 +1232,11 @@ function TracePageContent() {
                                                     <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
                                                         <Term id="agent" label={t('tracePage.columnAgent')} />
                                                     </SortableTh>
+                                                )}
+                                                {columnVisibility.ip && (
+                                                    <Th colKey="ip" currentWidth={widths.ip} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnIp')}
+                                                    </Th>
                                                 )}
                                                 {columnVisibility.status && (
                                                     <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>
@@ -1909,6 +1920,13 @@ function Row({
                     <TruncateText className="text-foreground text-sm">
                         {e.agent || (e.agents && e.agents.length > 0 ? e.agents[0] : null) || e.framework || '-'}
                     </TruncateText>
+                </Td>
+            )}
+            {columnVisibility.ip && (
+                <Td>
+                    <span className="text-xs text-foreground-secondary font-mono whitespace-nowrap" title={e.observedIp || undefined}>
+                        {e.observedIp || '—'}
+                    </span>
                 </Td>
             )}
             {columnVisibility.status && (

@@ -3,6 +3,7 @@ import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
 import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
+import { resolveTraceClientSnapshot } from '@/lib/reliability/trace-client';
 import { computeCallStats } from '@/lib/fleet/call-stats';
 import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
 import { getModelPricing, calculateCost, getModelContextWindow, DEFAULT_CACHE_READ_RATIO, DEFAULT_CACHE_CREATION_RATIO } from '@/lib/shared/model-config';
@@ -2295,6 +2296,14 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     }
 
     targetRecord = { ...targetRecord, ...data };
+    const clientSnapshot = resolveTraceClientSnapshot(
+        existingRecord,
+        data,
+    );
+    targetRecord.clientId = clientSnapshot.clientId ?? undefined;
+    targetRecord.hostIp = clientSnapshot.hostIp ?? undefined;
+    targetRecord.hostName = clientSnapshot.hostName ?? undefined;
+    targetRecord.observedIp = clientSnapshot.observedIp ?? undefined;
 
     const guarded = resolveImmutableSkillVersion({
         isUpdate,

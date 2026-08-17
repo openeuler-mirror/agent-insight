@@ -418,7 +418,13 @@ function shouldSkipProxy(targetHostname) {
   return segments.some((s) => s === "*" || targetHostname.toLowerCase().endsWith(s))
 }
 
-function getRequestOptions(targetUrl, apiKey, bodyLength) {
+/**
+ * @param {URL} targetUrl
+ * @param {string | null | undefined} apiKey
+ * @param {number} bodyLength
+ * @param {{clientId?: string, deviceCredential?: string} | null} clientIdentity
+ */
+function getRequestOptions(targetUrl, apiKey, bodyLength, clientIdentity = null) {
   const protocol = targetUrl.protocol
   const proxy =
     (protocol === "https:"
@@ -427,6 +433,7 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
     process.env.all_proxy ||
     process.env.ALL_PROXY
 
+  /** @type {Record<string, string | number>} */
   const headers = {
     "Content-Type": "application/json",
     "Content-Length": bodyLength,
@@ -435,6 +442,10 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
   // AGENT_INSIGHT_DEFAULT_INGEST_USER 归属。若强行带上空/undefined 值，服务端会把它
   // 当成一把无效 key → 401，反而上不去。
   if (apiKey) headers["x-witty-api-key"] = apiKey
+  if (clientIdentity?.deviceCredential && isValidClientId(clientIdentity?.clientId)) {
+    headers.Authorization = `Bearer ${clientIdentity.deviceCredential}`
+    headers["x-agent-insight-client-id"] = clientIdentity.clientId
+  }
   const options = {
     hostname: targetUrl.hostname,
     port: targetUrl.port || (protocol === "https:" ? 443 : 80),
@@ -465,7 +476,7 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
   return options
 }
 
-function postJson(host, apiKey, payload) {
+function postJson(host, apiKey, payload, clientIdentity = null) {
   return new Promise((resolve) => {
     let targetUrl
     try {
@@ -476,7 +487,7 @@ function postJson(host, apiKey, payload) {
     }
 
     const body = Buffer.from(JSON.stringify(payload))
-    const options = getRequestOptions(targetUrl, apiKey, body.length)
+    const options = getRequestOptions(targetUrl, apiKey, body.length, clientIdentity)
     const reqModule = targetUrl.protocol === "https:" ? https : http
     appendUploaderLog(
       `postJson.request host=${targetUrl.origin} path=${options.path} task_id=${payload?.task_id || "(none)"} bodyBytes=${body.length}`,
@@ -1306,7 +1317,7 @@ async function main() {
       continue
     }
 
-    const res = await postJson(host, apiKey, payload)
+    const res = await postJson(host, apiKey, payload, clientIdentity)
     if (res.ok) {
       ckpt[rootSid] = sig
       saveCheckpoint(checkpointFile, ckpt)
