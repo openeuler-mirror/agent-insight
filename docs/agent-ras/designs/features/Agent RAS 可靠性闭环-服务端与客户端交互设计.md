@@ -438,6 +438,18 @@ sequenceDiagram
 
 ### 7.5 Trace 与故障事实关联
 
+客户端安装器在 `~/.agent-insight/client.json` 生成一次并持久化机器级 `clientId`。
+OpenCode Trace uploader、RAS 和 FI Worker 共享该文件；重装或网络变化不得改变
+`clientId`。FI Worker 的 `workerId` 仅标识 Worker 安装/进程实例，不再作为新客户端
+的主机身份。旧 Worker 未上报 `clientId` 时，服务端仍可用 `workerId` 派生的兼容 ID
+展示，但不用它回填历史 Trace。
+
+Trace 关联使用 `clientId`，IP 不作关联主键。每条根 Trace 同时保存产生当时的
+`hostIp/hostName/observedIp` 快照：`hostIp` 由客户端从本机非回环网卡获取，
+`observedIp` 由服务端从受信反向代理头/连接来源推导。DHCP、VPN、NAT、多网卡、
+WSL/容器等导致 IP 改变时，历史 Trace 仍按 `clientId` 归属，不按当前 IP 重写。
+子 Agent Execution 继承根 Trace 的客户端身份与主机快照。
+
 生成 Trace 时客户端必须注入以下 OTLP resource/span attributes：
 
 ```text
@@ -542,7 +554,7 @@ agent.insight.platform
 | `AgentEvalDataset` | `datasetKind` 增加 `reliability` | 区分可靠性数据集并触发评估器门控 |
 | `Experiment` | `datasetId/traceSource/clientId/platform/model` | 保存向导选择与可追溯快照 |
 | `ExperimentCase` | `datasetCaseId/faultInjectionType/caseValuesJson` | 保留数据集 Case 快照，不受后续数据集修改影响 |
-| `Execution` | `anomalyStatus/anomalyCount/reliabilityUpdatedAt` | Trace 列表轻量读取，避免逐行聚合故障事件 |
+| `Execution` | `clientId/hostIp/hostName/observedIp/anomalyStatus/anomalyCount/reliabilityUpdatedAt` | `clientId` 稳定绑定客户端；主机/IP 保存 Trace 产生时快照；异常摘要支持列表轻量读取 |
 
 `ExperimentEvalResult` 继续保存可靠性评估结果，不新建第二套评分表；结构化可靠性结论放入现有 `evidenceJson`，主结论仍使用 `verdict/summary/score/pointsJson`。
 
@@ -1516,6 +1528,22 @@ UNRECOVERED
 关联属性非法时不得拒绝整批合法 Span；拒绝关联并记录受限日志，Trace 仍按普通 Trace 摄取，但对应实验 Case 最终可能进入 `TRACE_CORRELATION_MISSING`。
 
 成功仍表示“已受理写入 spool”，不表示已经生成 `Execution` 或完成实验评估。实验编排器必须等待关联后的 `Execution` 出现，不能以 OTLP HTTP `200` 作为 Trace 已可评估的依据。
+
+OpenCode watcher/uploader 的非 OTLP `POST /api/ingest/upload` 使用等价字段：
+
+```json
+{
+  "client_id": "cli_01J...",
+  "host": {
+    "reported_ip": "10.20.3.18",
+    "hostname": "agent-host-03"
+  }
+}
+```
+
+服务端只接受受限长度/格式的 `client_id`、IP 和 hostname，并自行生成 `observedIp`；
+不接受客户端覆盖 `observedIp`。这些字段与 Trace 一起幂等更新根 `Execution`，不得
+复用表示模型推理源的 `Execution.endpoint`。
 
 ### 10.21 IF-M08：Trace 列表异常状态
 

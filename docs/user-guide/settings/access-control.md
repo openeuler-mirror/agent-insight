@@ -138,6 +138,8 @@ Trace 与 RAS 事件来自同一套客户端组件，并使用同一个账号 AP
 也可以先执行接入命令；配置和插件会预先落位，之后安装 OpenCode 即可加载。之后重启
 Agent Insight 只会同步平台地址；已写入的客户端 API Key 不会被内部 `admin` Key 覆盖。
 
+OpenCode uploader 优先复用 `~/.agent-insight/client/config.json` 中的 `clientId` 和设备凭据，把 Trace 关联到已注册客户端；重新执行一键接入并切换账号后，新配置会自动使用新的客户端身份。正式客户端未安装成功时仍可使用兼容 `~/.agent-insight/client.json` 上传 Trace，但该文件中的自报 ID 不建立可信客户端绑定。链路追踪列表提供默认隐藏的 **IP** 列。Agent Insight 直接部署在公网 `IP:3000` 时，带有效 API Key 或设备凭证的 OpenCode uploader 无需额外配置：外部电脑运行 OpenCode，显示这台电脑访问服务端时的公网出口 IP；服务端本机运行 OpenCode 并通过自身公网地址上报，显示该服务端公网 IP。没有有效 API Key 或设备凭证的未认证上传不建立这项可信 IP 绑定，显示 `—`。hostname 和本地网卡 IP 只作为历史排障快照。这里没有新增插件或后台进程。完整部署矩阵、代理配置要求和查看步骤见 [链路追踪](../observability/view-traces) 中的“OpenCode Trace 公网 IP”。
+
 ### 流程二：重新部署或迁移客户端
 
 1. 进入 **客户端安装** 页面。

@@ -195,6 +195,7 @@ export const zh = {
     statToolErrorRate: '工具错误率',
     columnTraceId: 'Trace ID',
     columnAgent: 'Agent',
+    columnIp: 'IP',
     columnStatus: '执行状态',
     columnAnomaly: '异常事件',
     columnTags: '标签',
