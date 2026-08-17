@@ -134,7 +134,7 @@
 | `ExperimentTraceAttempt` | 普通实验 Case 的一次 Trace 生成尝试 | `attemptNo`、运行目标、`commandId`、`traceId`、状态与失败原因 |
 | `FaultInjectionWorker` | 本机 Worker 注册 | `lastSeenAt`、`inventoryJson` |
 | `ReliabilityInstallToken` | 一次性安装令牌 | `tokenHash`（只存哈希）、`expiresAt`、`consumedAt` |
-| `ReliabilityClient` | 常驻客户端 | `clientId`、`status`（网络在线度）、`serviceHealth`（进程健康度，两者不可合并）、`supervisor`、`restartCount`、`capabilitiesJson` |
+| `ReliabilityClient` | 常驻客户端 | `clientId`、`status`（网络在线度）、`serviceHealth`（进程健康度，两者不可合并）、`supervisor`、`restartCount`、`capabilitiesJson`；换账号改绑时旧记录写 `unboundAt`/`unboundToClientId`，`deriveStatus` 对已解绑返回 `unbound`（不是 `offline`） |
 | `ReliabilityClientCredential` | 设备凭证 | `credentialHash`（只存哈希）、`revokedAt`；按客户端隔离、可单独撤销 |
 | `ReliabilityCommand` | 控制指令审计与幂等 | `commandId`、`action`（白名单）、`status`、`receivedAt`（非空才算送达）、`expiresAt` |
 | `ReliabilityClientConfig` | 客户端差异项 | `clientId+platform` 唯一、`overrideJson`（只存被改的 JSON Path）、`revision`（乐观锁） |
