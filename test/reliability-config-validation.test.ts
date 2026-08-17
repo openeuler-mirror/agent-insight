@@ -10,13 +10,18 @@ import {
 const require_ = createRequire(import.meta.url)
 const schema = buildBuiltinConfigSchema('opencode')
 
-test('rejects values outside the schema range', () => {
-  // Schema 声明 repeatThreshold ∈ [2,100]；越界值曾能一路存进快照下发给 RAS。
-  const tooBig = validateConfigValues(schema, { 'textLoop.repeatThreshold': 333 })
-  assert.equal(tooBig.length, 1)
-  assert.match(tooBig[0].message, /不能大于 100/)
+const LOOP_THRESHOLD = 'detectors.llm_thinking_loop.loop_repeat_threshold'
+const DETECTION_START = 'detectors.llm_thinking_loop.detection_start_chars'
+const WINDOW_MAX = 'detectors.llm_thinking_loop.window_max_chars'
+const SIM_THRESHOLD = 'detectors.llm_thinking_loop.similar_clause_sim_threshold'
 
-  const tooSmall = validateConfigValues(schema, { 'textLoop.detectionStartChars': 0 })
+test('rejects values outside the schema range', () => {
+  // catalog/yaml：similar_clause_sim_threshold ∈ [0,1]；越界值不得写入快照下发。
+  const tooBig = validateConfigValues(schema, { [SIM_THRESHOLD]: 1.5 })
+  assert.equal(tooBig.length, 1)
+  assert.match(tooBig[0].message, /不能大于 1/)
+
+  const tooSmall = validateConfigValues(schema, { [DETECTION_START]: 0 })
   assert.equal(tooSmall.length, 1)
   assert.match(tooSmall[0].message, /不能小于 1/)
 })
@@ -24,34 +29,36 @@ test('rejects values outside the schema range', () => {
 test('accepts boundary values', () => {
   assert.deepEqual(
     validateConfigValues(schema, {
-      'textLoop.repeatThreshold': 2,
-      'textLoop.detectionStartChars': 1,
-      'textLoop.windowMaxChars': 100000,
+      [LOOP_THRESHOLD]: 2,
+      [DETECTION_START]: 1,
+      [WINDOW_MAX]: 100,
+      [SIM_THRESHOLD]: 0,
     }),
     [],
   )
+  assert.deepEqual(validateConfigValues(schema, { [SIM_THRESHOLD]: 1 }), [])
 })
 
 test('rejects non-numeric and non-integer input', () => {
-  assert.match(validateConfigValues(schema, { 'textLoop.repeatThreshold': 'abc' })[0].message, /必须是数字/)
-  assert.match(validateConfigValues(schema, { 'textLoop.repeatThreshold': 2.5 })[0].message, /必须是整数/)
+  assert.match(validateConfigValues(schema, { [LOOP_THRESHOLD]: 'abc' })[0].message, /必须是数字/)
+  assert.match(validateConfigValues(schema, { [LOOP_THRESHOLD]: 2.5 })[0].message, /必须是整数/)
   // NaN 曾能进状态，JSON.stringify 后变 null 污染下发配置。
-  assert.match(validateConfigValues(schema, { 'textLoop.repeatThreshold': Number.NaN })[0].message, /必须是数字/)
+  assert.match(validateConfigValues(schema, { [LOOP_THRESHOLD]: Number.NaN })[0].message, /必须是数字/)
 })
 
 test('empty means empty, not zero', () => {
   // Number('') === 0 曾让「清空输入框」变成写入 0，而 0 往往低于 min。
-  const errs = validateConfigValues(schema, { 'textLoop.repeatThreshold': '' })
+  const errs = validateConfigValues(schema, { [LOOP_THRESHOLD]: '' })
   assert.equal(errs.length, 1)
   assert.match(errs[0].message, /不能为空/)
 })
 
 test('leading zeros parse to the intended number', () => {
-  // 前导零是编辑中间态，值本身合法就该放行（"0333" → 333，在 [2,100] 外故报错）。
-  assert.deepEqual(validateConfigValues(schema, { 'textLoop.repeatThreshold': '03' }), [])
+  // 前导零是编辑中间态，值本身合法就该放行。
+  assert.deepEqual(validateConfigValues(schema, { [LOOP_THRESHOLD]: '03' }), [])
   assert.match(
-    validateConfigValues(schema, { 'textLoop.repeatThreshold': '0333' })[0].message,
-    /不能大于 100/,
+    validateConfigValues(schema, { [SIM_THRESHOLD]: '0333' })[0].message,
+    /不能大于 1/,
   )
 })
 
