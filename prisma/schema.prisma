@@ -988,8 +988,9 @@ model Experiment {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  cases    ExperimentCase[]
-  comments ExperimentEvalComment[]
+  cases         ExperimentCase[]
+  traceAttempts ExperimentTraceAttempt[]
+  comments      ExperimentEvalComment[]
 
   @@index([user, createdAt])
   @@index([user, scope, skillName])
@@ -999,33 +1000,69 @@ model Experiment {
 /// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的参考输出，
 /// null=未标注——依赖参考数据的评估器在 ④ 步按此硬门控。
 model ExperimentCase {
-  id                   String     @id @default(cuid())
-  experimentId         String
-  experiment           Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
-  executionId          String?
-  taskId               String?
+  id                       String     @id @default(cuid())
+  experimentId             String
+  experiment               Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  executionId              String?
+  taskId                   String?
   /// 冗余展示字段（Case 明细/详情页免跨表拼装）
-  input                String     @default("")
-  actualOutput         String     @default("")
-  referenceOutput      String?
+  input                    String     @default("")
+  actualOutput             String     @default("")
+  referenceOutput          String?
   /// 评估器专用 case 上下文（EvaluatorCaseContextV1 JSON）；null=未提供。
   /// availableTools: [] 表示调用方明确确认本任务无需工具。
   /// 禁止写入 FI 元数据（faultInjectionType / fi* 走独立列）。
-  evaluatorContextJson String?
+  evaluatorContextJson     String?
   /// 可靠性 case 故障模式 id（对齐数据集 values.fault_injection_type）
-  faultInjectionType   String?
+  faultInjectionType       String?
   /// 数据集 values 快照 JSON（不受后续数据集修改影响）
-  caseValuesJson       String?
+  caseValuesJson           String?
   /// FI 编排回填（排障用；评估器不依赖）
-  fiTaskId             String?
-  fiRunId              String?
-  createdAt            DateTime   @default(now())
+  fiTaskId                 String?
+  fiRunId                  String?
+  /// 普通评测数据集生成 Trace 时下发的客户端控制指令；不复用 FI 字段。
+  traceGenerationCommandId String?
+  /// 客户端执行失败、Trace 为空或等待超时；成功绑定 Trace 后清空。
+  traceGenerationError     String?
+  createdAt                DateTime   @default(now())
 
-  results ExperimentEvalResult[]
+  results       ExperimentEvalResult[]
+  traceAttempts ExperimentTraceAttempt[]
 
   @@index([experimentId])
   @@index([executionId])
   @@index([faultInjectionType])
+  @@index([traceGenerationCommandId])
+}
+
+/// 普通评测数据集生成 Trace 的单次尝试。Trace ID 是唯一运行关联键；输入文本不参与绑定。
+model ExperimentTraceAttempt {
+  id             String         @id @default(cuid())
+  experimentId   String
+  experiment     Experiment     @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  caseId         String
+  case           ExperimentCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  attemptNo      Int
+  workerId       String
+  platform       String
+  agent          String
+  model          String?
+  timeoutSeconds Int            @default(180)
+  commandId      String?
+  traceId        String?
+  /// queued|dispatching|running|waiting_trace|retry_wait|ready|failed|cancelled|superseded
+  status         String         @default("queued")
+  failureCode    String?
+  errorMessage   String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([caseId, attemptNo])
+  @@index([experimentId, status])
+  @@index([commandId])
+  @@index([traceId])
 }
 
 /// 一行 = 一个 case × 一个评估器，按统一契约落库（见 src/lib/evaluators/eval-output.ts）：

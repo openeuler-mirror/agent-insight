@@ -16,7 +16,7 @@ test('实验详情是纯进度视图，不提供二次启动和重复返回入�
   assert.doesNotMatch(detailPage, /\/experiments\/[^`]*\/run/);
 });
 
-test('向导仅在 run 请求成功后进入详情，并复用已创建实验进行重试', () => {
+test('向导仅在 run 请求成功后进入详情，启动失败回滚临时实验', () => {
   const wizardPage = fs.readFileSync(
     path.join(root, 'src/app/(main)/experiments/new/page.tsx'),
     'utf8',
@@ -28,8 +28,9 @@ test('向导仅在 run 请求成功后进入详情，并复用已创建实验进
   assert.ok(runRequest >= 0);
   assert.ok(runSuccessCheck > runRequest);
   assert.ok(detailNavigation > runSuccessCheck);
-  assert.match(wizardPage, /let experimentId = createdExperimentId;/);
-  assert.match(wizardPage, /setCreatedExperimentId\(experimentId\);/);
+  assert.match(wizardPage, /method: 'DELETE'/);
+  assert.match(wizardPage, /rollbackRes\?\.status === 409/);
+  assert.doesNotMatch(wizardPage, /createdExperimentId/);
 });
 
 test('生成 Trace 先进入 running，绑定完成后显式继续调度评估', () => {

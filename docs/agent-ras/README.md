@@ -57,7 +57,7 @@
 | [reliability-client-control-plane.md](designs/features/reliability-client-control-plane.md) | 客户端控制面：统一安装、systemd/launchd 保活、配置下发、WSS 双向通信；新客户端吸收 FI Worker | 开发中 |
 | [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；llm-loop-review 归 review/；无 fault_domains | **已落地（P0–P2，v0.8.1）** |
 | [ras-trace-anomaly-display.md](designs/features/ras-trace-anomaly-display.md) | 可靠性观测详情：可折叠异常摘要条、单 anomaly 一行、marker 联动 | 已落地 |
-| [ras-reliability-evaluator-split.md](designs/features/ras-reliability-evaluator-split.md) | 可靠性评估器拆分：故障注入与故障检测恢复独立选择、评估器总分平均与历史兼容 | 代码与自动化验证完成，浏览器验收待确认 |
+| [ras-reliability-evaluator-split.md](designs/features/ras-reliability-evaluator-split.md) | 可靠性检测恢复评估器：故障发生前置门控、未发生时无分、历史评估器兼容 | 代码与自动化验证完成，浏览器验收待确认 |
 
 ---
 

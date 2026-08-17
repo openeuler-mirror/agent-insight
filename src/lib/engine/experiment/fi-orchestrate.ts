@@ -240,10 +240,10 @@ export async function bindExperimentCaseToFiSession(input: {
     }),
     prisma.session.findUnique({
       where: { taskId: sessionTaskId },
-      select: { interactions: true },
+      select: { interactions: true, endTime: true },
     }),
   ])
-  if (!execution || !hasUsableTraceInteractions(session?.interactions)) return 0
+  if (!execution || !session?.endTime || !hasUsableTraceInteractions(session.interactions)) return 0
 
   const result = await prisma.experimentCase.updateMany({
     where: {
@@ -302,7 +302,7 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
           continue
         }
       }
-      if (FI_TERMINAL_WITHOUT_SESSION.has(run.status)) {
+      if (FI_TERMINAL_WITHOUT_SESSION.has(run.status) && !run.sessionTaskId) {
         failed.add(runKey)
       }
     }
