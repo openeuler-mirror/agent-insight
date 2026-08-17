@@ -29,8 +29,16 @@ const client = require_('../scripts/reliability-client.cjs') as {
   buildCapabilities: (
     cfg: Record<string, unknown>,
     opts?: { refresh?: boolean },
-  ) => { faultInjection: { ready: boolean; note?: string } }
+  ) => {
+    platforms: Array<{
+      id: string
+      agents: string[]
+      runExperimentCase?: { version: number; returnsTraceId: boolean }
+    }>
+    faultInjection: { ready: boolean; note?: string }
+  }
   normalizeModelIds: (models: unknown) => string[]
+  extractTraceIdFromJsonLine: (line: string) => string | null
   controlUrls: (cfg: Record<string, unknown>) => { websocketUrl: string; pollUrl: string }
   rasRuntimeConfigPath: () => string
   writeRasRuntimeConfig: (snapshot: Record<string, unknown>) => Promise<void>
@@ -191,6 +199,41 @@ test('model ids normalize from strings and objects alike', () => {
     ['qwen3-32b', 'deepseek-v3', 'glm-4'],
   )
   assert.deepEqual(client.normalizeModelIds(undefined), [])
+})
+
+test('OpenCode JSON events expose the platform Trace ID', () => {
+  assert.equal(
+    client.extractTraceIdFromJsonLine(JSON.stringify({
+      type: 'step_start',
+      sessionID: 'ses_trace_01',
+      part: { id: 'part_01' },
+    })),
+    'ses_trace_01',
+  )
+  assert.equal(client.extractTraceIdFromJsonLine('not-json'), null)
+})
+
+test('generic execution reports Trace ID before exit and force-kills timed-out process groups', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(source, /state: 'TRACE_STARTED', traceId, startedAt/)
+  assert.match(source, /detached: process\.platform !== 'win32'/)
+  assert.match(source, /signalProcessTree\(child, 'SIGTERM'\)/)
+  assert.match(source, /signalProcessTree\(child, 'SIGKILL'\)/)
+  assert.match(source, /if \(reliabilityChild\) signalProcessTree\(reliabilityChild, 'SIGKILL'\)/)
+})
+
+test('client advertises Trace-ID-safe generic execution only for supported platforms', () => {
+  const caps = client.buildCapabilities(
+    { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
+    { refresh: true },
+  )
+  const opencode = caps.platforms.find((platform) => platform.id === 'opencode')
+  const xiaoo = caps.platforms.find((platform) => platform.id === 'xiaoo')
+  assert.deepEqual(opencode?.runExperimentCase, { version: 2, returnsTraceId: true })
+  assert.equal(xiaoo?.runExperimentCase?.returnsTraceId, false)
 })
 
 test('installer defaults to installing FI, and --no-fi opts out', () => {

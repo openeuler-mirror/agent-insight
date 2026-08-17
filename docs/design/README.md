@@ -23,6 +23,7 @@
 | 标签化版本管理与版本分析 | [tag-based-version-management](tag-based-version-management/) | 通过系统标签、版本标签、业务标签三类标签重构版本管理、链路追踪打标/筛选与版本分析；版本分析只做已有 Trace 指标汇总，不做模型分析 | Feature | 2026-07-06 | 🟡 MVP implemented; browser validation pending | —（待补） |
 | Trace 回流到评测数据集 | [trace-to-dataset-backflow](trace-to-dataset-backflow/) | 支持 Trace 单条/批量回流到评测数据集、数据集新增自定义字段，以及逐条编辑样本字段值；input/output 使用评测执行已有逻辑处理后写入 | Feature | 2026-07-15 | 🟡 实现中（代码与目标测试已完成，浏览器验收待确认） | —（待补） |
 | 评测数据集加载性能优化 | [agent-dataset-loading-performance](agent-dataset-loading-performance/) | 为评测数据集增加样本数与参考答案轻量投影，列表和实验导入不再传输完整轨迹，并在数据库层按用户过滤 | Performance | 2026-08-04 | 🟡 实现中 | —（待补） |
+| 通用实验 Trace 生成 | [generic-experiment-trace-generation](generic-experiment-trace-generation/) | 新建实验可选择任意评测数据集，以 Case input 驱动 Agent 生成 Trace；普通数据走客户端通用执行，可靠性数据保留 FI，再统一进入评估 | Feature | 2026-08-15 | ✅ 已实现（定向测试） | —（待补） |
 | Openclaw 平台适配 | [openclaw-adapter](openclaw-adapter/) | (待补充:定义 Openclaw 平台的接入适配设计,包括链路数据上报、解析及面板呈现等) | Feature | 2026-06-17 | ⬜ 未实现（设计起草中） | —（待补） |
 | Trace Bundle 导入导出 | [trace-bundle-import-export](trace-bundle-import-export/) | 将链路追踪详情导出的 Trace 作为版本化 Bundle 重新导入平台，保留无冲突 ID，并完整恢复多 Agent 父子树 | Feature | 2026-07-15 | 🟡 实现中（代码与自动化验证已完成，浏览器验收待确认） | —（待补） |
 | Langfuse Trace 完整展示 | [langfuse-trace-fidelity](langfuse-trace-fidelity/) | 为 Langfuse OTLP 增加独立完整节点快照，保留业务 CHAIN/AGENT/TOOL 与真实时序，同时保持其他框架和现有 interactions 行为不变 | Bugfix | 2026-07-21 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
@@ -35,7 +36,7 @@
 | Stream Abort 停流 | [`../agent-ras/designs/features/stream-abort.md`](../agent-ras/designs/features/stream-abort.md) | 环内打断 `llm.stream`；依赖宿主 abort 契约 | Feature | 2026-07-15 | ✅ 已实现 | — |
 | Provider 断连停推理调研 | [`../agent-ras/designs/features/provider-disconnect.md`](../agent-ras/designs/features/provider-disconnect.md) | Provider 断连能力调研 | Spike | 2026-07-20 | ✅ 调研完成 | — |
 | RAS Trace 异常展示 | [`../agent-ras/designs/features/ras-trace-anomaly-display.md`](../agent-ras/designs/features/ras-trace-anomaly-display.md) | 可折叠摘要条；单 anomaly 一行；marker 联动 | Feature | 2026-08-10 | ✅ 已实现 | — |
-| Agent RAS 可靠性评估器拆分 | [`../agent-ras/designs/features/ras-reliability-evaluator-split.md`](../agent-ras/designs/features/ras-reliability-evaluator-split.md) | 将旧五维评估器拆成独立的故障注入与故障检测恢复评估器，删除最终任务结果维度，补齐评估器总分与列表综合分 | Refactor / Feature | 2026-08-13 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
+| Agent RAS 可靠性检测恢复评估器门控 | [`../agent-ras/designs/features/ras-reliability-evaluator-split.md`](../agent-ras/designs/features/ras-reliability-evaluator-split.md) | 新实验移除故障注入评估器；检测恢复评估器仅在确认故障发生后评分，未确认时输出无分理由 | Refactor / Feature | 2026-08-15 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
 | LLM 过度思考（Analysis Paralysis）二阶段检测 | [`../agent-ras/designs/features/analysis-paralysis.md`](../agent-ras/designs/features/analysis-paralysis.md) | 触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道 | Feature | 2026-07-29 | ⬜ 未实现（规划中） | —（待补） |
 | LLM Agent 规划错误（Planning Error）检测 | [`../agent-ras/designs/features/planning-error.md`](../agent-ras/designs/features/planning-error.md) | 策略层规划错误；按信息完备度分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
 | LLM Agent 领域认知偏差（Domain Cognitive Bias） | [`../agent-ras/designs/features/domain-cognitive-bias.md`](../agent-ras/designs/features/domain-cognitive-bias.md) | 六类信念层故障；认知层三角覆盖 | Research / Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |

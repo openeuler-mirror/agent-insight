@@ -4,6 +4,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { listWorkerExecutionTargets } from '@/lib/fault-injection/worker-protocol';
+import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,7 @@ export async function GET(req: Request) {
     const userFilter = username ? { user: username } : {};
     const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
 
-    const [grouped, executionTargets] = await Promise.all([
+    const [grouped, faultInjectionTargets, genericTraceTargets] = await Promise.all([
       prisma.execution.groupBy({
       by: ['agentName', 'framework'],
       where: {
@@ -28,13 +29,18 @@ export async function GET(req: Request) {
       take: 200,
       }),
       listWorkerExecutionTargets(username),
+      listClientTraceGenerationTargets(username),
     ]);
 
+    type CandidateTarget = (typeof faultInjectionTargets)[number] & {
+      supportsGenericTrace: boolean;
+      supportsFaultInjection: boolean;
+    };
     type Candidate = {
       name: string;
       traces: number;
       frameworks: Set<string>;
-      targets: typeof executionTargets;
+      targets: CandidateTarget[];
     };
     const byName = new Map<string, Candidate>();
     for (const row of grouped) {
@@ -51,9 +57,12 @@ export async function GET(req: Request) {
       if (framework) current.frameworks.add(framework);
       byName.set(name, current);
     }
-    for (const target of executionTargets) {
+    const attachTarget = (
+      target: (typeof faultInjectionTargets)[number],
+      capability: 'generic' | 'fault-injection',
+    ) => {
       const name = target.agent.trim();
-      if (!name || name === 'ras-judge') continue;
+      if (!name || name === 'ras-judge') return;
       const current = byName.get(name) || {
         name,
         traces: 0,
@@ -61,8 +70,28 @@ export async function GET(req: Request) {
         targets: [],
       };
       current.frameworks.add(target.platform);
-      current.targets.push(target);
+      const existing = current.targets.find((item) =>
+        item.workerId === target.workerId && item.platform === target.platform);
+      if (existing) {
+        existing.supportsGenericTrace ||= capability === 'generic';
+        existing.supportsFaultInjection ||= capability === 'fault-injection';
+        const models = new Map(existing.models.map((model) => [model.id, model]));
+        for (const model of target.models) models.set(model.id, model);
+        existing.models = Array.from(models.values());
+      } else {
+        current.targets.push({
+          ...target,
+          supportsGenericTrace: capability === 'generic',
+          supportsFaultInjection: capability === 'fault-injection',
+        });
+      }
       byName.set(name, current);
+    };
+    for (const target of genericTraceTargets) {
+      attachTarget(target, 'generic');
+    }
+    for (const target of faultInjectionTargets) {
+      attachTarget(target, 'fault-injection');
     }
 
     const agents = Array.from(byName.values())
@@ -80,6 +109,8 @@ export async function GET(req: Request) {
           platform: target.platform,
           models: target.models,
           lastSeenAt: target.lastSeenAt,
+          supportsGenericTrace: target.supportsGenericTrace,
+          supportsFaultInjection: target.supportsFaultInjection,
         })),
       }));
 

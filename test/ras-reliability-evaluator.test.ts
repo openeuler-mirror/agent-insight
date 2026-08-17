@@ -37,10 +37,20 @@ function judgmentJson(
   profile: RasReliabilityProfile,
   verdicts: Partial<Record<RasReliabilityDimension, 'met' | 'partial' | 'missing'>> = {},
   summary = '可靠性判断完成。',
+  faultOccurred: 'met' | 'partial' | 'missing' = 'met',
 ) {
   return JSON.stringify({
     summary,
-    dimensions: rasReliabilityDimensionsForProfile(profile).map(({ key }) => {
+    ...(profile === 'detection-recovery' ? {
+      faultOccurred: {
+        verdict: faultOccurred,
+        reason: '故障发生前置判断',
+        suggestion: faultOccurred === 'met' ? '' : '先确认故障注入链路',
+      },
+    } : {}),
+    dimensions: (profile === 'detection-recovery' && faultOccurred !== 'met'
+      ? []
+      : rasReliabilityDimensionsForProfile(profile)).map(({ key }) => {
       const verdict = verdicts[key] || 'met'
       return {
         dimension: key,
@@ -69,11 +79,12 @@ describe('ras-reliability-evaluator', () => {
     assert.equal(isRasReliabilityPresetId('preset-other'), false)
   })
 
-  it('新目录只暴露两个拆分评估器，旧评估器仅留在兼容目录', () => {
+  it('新目录只暴露检测恢复评估器，故障注入与旧五维评估器仅留在兼容目录', () => {
     const selectable = new Set(presetEvaluators.map((card) => card.id))
-    assert.equal(selectable.has(RAS_FAULT_INJECTION_PRESET_ID), true)
+    assert.equal(selectable.has(RAS_FAULT_INJECTION_PRESET_ID), false)
     assert.equal(selectable.has(RAS_DETECTION_RECOVERY_PRESET_ID), true)
     assert.equal(selectable.has(LEGACY_RAS_RELIABILITY_PRESET_ID), false)
+    assert.equal(legacyPresetEvaluators.some((card) => card.id === RAS_FAULT_INJECTION_PRESET_ID), true)
     assert.equal(legacyPresetEvaluators.some((card) => card.id === LEGACY_RAS_RELIABILITY_PRESET_ID), true)
   })
 
@@ -88,7 +99,7 @@ describe('ras-reliability-evaluator', () => {
     assert.deepEqual(output.points?.map((point) => point.label), ['故障发生'])
   })
 
-  it('故障检测恢复评估器按三个维度等权平均，不包含最终任务结果', () => {
+  it('明确检测到故障发生时，检测恢复评估器按三个维度等权平均', () => {
     const output = buildRasReliabilityEvaluatorOutput({
       evaluatorId: RAS_DETECTION_RECOVERY_PRESET_ID,
       expectedFault: 'thinking-dead-loop',
@@ -104,6 +115,24 @@ describe('ras-reliability-evaluator', () => {
     assert.equal(output.points?.some((point) => point.label === '最终任务结果'), false)
   })
 
+  it('未检测到故障发生时，检测恢复评估器保留三个维度理由但不产生分数', () => {
+    const output = buildRasReliabilityEvaluatorOutput({
+      evaluatorId: RAS_DETECTION_RECOVERY_PRESET_ID,
+      expectedFault: 'thinking-dead-loop',
+      events: [],
+      judgment: JSON.parse(judgmentJson('detection-recovery', {}, '无法确认故障。', 'missing')),
+    })
+    assert.equal(output.verdict, 'warn')
+    assert.equal(output.score, undefined)
+    assert.deepEqual(output.points?.map((point) => point.label), ['故障检测', '触发处置', '故障消解'])
+    assert.equal(output.points?.every((point) => point.score === undefined), true)
+    assert.equal(output.points?.every((point) => point.status === undefined), true)
+    assert.equal(output.points?.every((point) => (
+      point.evidence && 'md' in point.evidence && point.evidence.md.includes('未检测到故障发生')
+    )), true)
+    assert.match(String(output.summary || ''), /未检测到故障发生/)
+  })
+
   it('旧评估器仍按历史五维契约构建结果', () => {
     const output = build(LEGACY_RAS_RELIABILITY_PRESET_ID, 'legacy')
     assert.equal(output.score, 100)
@@ -114,9 +143,11 @@ describe('ras-reliability-evaluator', () => {
   it('只调用并解析用户选择的故障检测恢复维度', async () => {
     let sawDetection = false
     let sawTaskOutcome = false
+    let sawFaultGate = false
     setJudgeLlmCallerForTest(async (_user, req) => {
       sawDetection = req.system.includes('fault_detected')
       sawTaskOutcome = req.system.includes('task_outcome')
+      sawFaultGate = req.system.includes('faultOccurred')
       return judgmentJson('detection-recovery', {}, 'LLM 判定通过')
     })
     const output = await runRasReliabilityPreset(
@@ -126,8 +157,23 @@ describe('ras-reliability-evaluator', () => {
     )
     assert.equal(sawDetection, true)
     assert.equal(sawTaskOutcome, false)
+    assert.equal(sawFaultGate, true)
     assert.equal(output.summary, 'LLM 判定通过')
     assert.equal(output.points?.length, 3)
+  })
+
+  it('Judge 未确认故障时允许省略三个恢复维度并返回无分结果', async () => {
+    setJudgeLlmCallerForTest(async () => (
+      judgmentJson('detection-recovery', {}, '故障证据不足。', 'partial')
+    ))
+    const output = await runRasReliabilityPreset(
+      RAS_DETECTION_RECOVERY_PRESET_ID,
+      'tester@example.com',
+      baseCtx,
+    )
+    assert.equal(output.score, undefined)
+    assert.equal(output.points?.length, 3)
+    assert.match(String(output.summary || ''), /未检测到故障发生/)
   })
 
   it('未配置评测模型时返回对应评估器的无分 warn', async () => {

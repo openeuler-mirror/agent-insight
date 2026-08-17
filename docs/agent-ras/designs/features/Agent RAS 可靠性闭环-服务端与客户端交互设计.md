@@ -36,7 +36,7 @@
 - 实验使用已有 Trace，或在指定客户端、Agent 平台和模型上生成新 Trace。
 - 可靠性数据集维护故障模式及 Case；可靠性数据集只能选择可靠性评估器。
 - RAS/客户端上报可与 Trace、Span、实验 Case 关联的故障事实。
-- 可靠性评估拆成独立的故障注入评估器（故障发生）与故障检测恢复评估器（故障检测、触发处置、故障消解）；最终任务结果不再属于新可靠性评估维度。
+- 新实验只提供故障检测恢复评估器；故障发生作为前置门控，未确认发生时三个维度均无分且不参与聚合；故障注入与旧五维评估器仅保留历史兼容。
 - Trace 列表展示轻量异常状态，详情展示完整证据。
 
 ### 2.2 不在本期开放的能力
@@ -460,23 +460,23 @@ agent.insight.platform
 - 故障事实：故障、检测、处置和恢复事件。
 - 配置快照：内置配置版本、客户端 override、实验配置版本和校验值。
 
-可靠性评估拆成两个独立、可单选或多选的评估器：
+新实验只提供故障检测恢复评估器；故障是否发生作为该评估器的前置门控：
 
 | 评估器 | 判断点 | 含义 |
 |---|---|---|
-| 故障注入评估器 | 故障发生 | Trace 或故障事实中是否有与预期故障模式一致的证据 |
+| 故障检测恢复评估器（门控） | 故障发生 | Trace 或故障事实中是否有与预期故障模式一致的证据；不作为评分维度 |
 | 故障检测恢复评估器 | 故障检测 | RAS 是否产生检测事件，检测是否发生在合理时间内 |
 | 故障检测恢复评估器 | 触发处置 | 是否出现恢复、熔断、重试、降级等 RAS 动作 |
 | 故障检测恢复评估器 | 故障消解 | 后续 Trace 是否恢复到可继续执行的状态 |
 
-每个评估器总分为其实际维度的算术平均，并把每个维度作为 `points[]` 输出；同时运行两个评估器时，与通用评估器一致，实验综合分按两个评估器总分的算术平均计算。缺少模型或 Judge 输出非法时不输出总分，只返回 `warn` 和原因；“没有收到故障事件”不能直接等价为“没有发生故障”，仍需结合 Trace 判断。
+门控明确为 `met` 时，三个检测恢复维度的算术平均为评估器总分，并把每个维度作为 `points[]` 输出。门控为 `partial/missing` 时不输出总分，三个维度也不带分数，只保留“未检测到故障发生，因此该维度不适用”的原因，且不参与综合分。缺少模型或 Judge 输出非法时同样不输出总分，但使用不同原因；“没有收到故障事件”不能直接等价为“没有发生故障”，仍需结合 Trace 判断。
 
 评估器中心页面保持现有布局和交互，仅在预置评估器注册信息中新增可靠性分类，不单独改造评估器管理页面：
 
 ```json
 {
-  "id": "preset-ras-reliability-fault-injection",
-  "name": "Agent RAS 可靠性故障注入评估器",
+  "id": "preset-ras-reliability-detection-recovery",
+  "name": "Agent RAS 可靠性故障检测恢复评估器",
   "source": "preset",
   "category": "reliability",
   "targetTypes": ["轨迹", "故障事件"],
@@ -485,7 +485,7 @@ agent.insight.platform
 }
 ```
 
-检测恢复评估器 ID 为 `preset-ras-reliability-detection-recovery`。旧 `preset-ras-reliability` 只保留历史结果与重评兼容，不进入新建实验和评估器目录。
+故障注入评估器 `preset-ras-reliability-fault-injection` 与旧 `preset-ras-reliability` 只保留历史结果与重评兼容，不进入新建实验和评估器目录。
 
 非可靠性评估器的 `category` 读取时按 `general` 兜底，避免要求迁移全部存量自定义评估器。数据集与评估器门控只读取注册元数据，不根据名称或标签字符串猜测。
 
@@ -1219,10 +1219,7 @@ If-None-Match: "sha256:..."
     "name": "code-review-agent",
     "framework": "opencode"
   },
-  "evaluatorIds": [
-    "preset-ras-reliability-fault-injection",
-    "preset-ras-reliability-detection-recovery"
-  ],
+  "evaluatorIds": ["preset-ras-reliability-detection-recovery"],
   "traceSource": "generate",
   "generateTrace": {
     "clientId": "cli_01J...",

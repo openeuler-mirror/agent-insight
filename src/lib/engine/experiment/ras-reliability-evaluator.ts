@@ -71,20 +71,34 @@ const dimensionSchema = z.object({
   }
 })
 
+const faultOccurredSchema = z.object({
+  verdict: z.enum(VERDICTS),
+  reason: z.string().trim().min(1),
+  suggestion: z.string(),
+}).superRefine((value, ctx) => {
+  if (value.verdict !== 'met' && !value.suggestion.trim()) {
+    ctx.addIssue({ code: 'custom', path: ['suggestion'], message: 'partial/missing 必须提供改进建议' })
+  }
+})
+
 function rasReliabilityJudgeSchema(profile: RasReliabilityProfile) {
   const keys = rasReliabilityDimensionsForProfile(profile).map((dimension) => dimension.key)
   return z.object({
     summary: z.string().trim().min(1).max(200).optional(),
-    dimensions: z.array(dimensionSchema).length(keys.length),
+    faultOccurred: profile === 'detection-recovery' ? faultOccurredSchema : z.never().optional(),
+    dimensions: z.array(dimensionSchema),
   }).superRefine((value, ctx) => {
+    const expectedKeys = profile === 'detection-recovery' && value.faultOccurred?.verdict !== 'met'
+      ? []
+      : keys
     const actual = value.dimensions.map((dimension) => dimension.dimension)
-    for (const key of keys) {
+    for (const key of expectedKeys) {
       if (!actual.includes(key)) {
         ctx.addIssue({ code: 'custom', path: ['dimensions'], message: `缺少维度 ${key}` })
       }
     }
     for (const key of actual) {
-      if (!keys.includes(key)) {
+      if (!expectedKeys.includes(key)) {
         ctx.addIssue({ code: 'custom', path: ['dimensions'], message: `不允许维度 ${key}` })
       }
     }
@@ -96,6 +110,11 @@ function rasReliabilityJudgeSchema(profile: RasReliabilityProfile) {
 
 export type RasReliabilityJudgeResult = {
   summary?: string
+  faultOccurred?: {
+    verdict: DimensionJudgment<RasReliabilityDimension>['verdict']
+    reason: string
+    suggestion: string
+  }
   dimensions: Array<DimensionJudgment<RasReliabilityDimension>>
 }
 
@@ -157,6 +176,29 @@ export function buildRasReliabilityEvaluatorOutput(input: {
   const profile = rasReliabilityProfileForPreset(input.evaluatorId)
   const dimensions = rasReliabilityDimensionsForProfile(profile)
   const dimensionKeys = dimensions.map((dimension) => dimension.key)
+  if (profile === 'detection-recovery' && input.judgment.faultOccurred?.verdict !== 'met') {
+    const gateReason = input.judgment.faultOccurred?.reason.trim() || '现有证据不足以确认预期故障真实发生。'
+    const noScoreReason = '未检测到故障发生，因此该维度不适用，本次评估不产生分数。'
+    return normalizeEvaluatorOutput({
+      verdict: 'warn',
+      summary: `${gateReason} 未检测到故障发生，故障检测、触发处置和故障消解均不评分。`,
+      points: dimensionKeys.map((key) => ({
+        label: RAS_RELIABILITY_POINT_LABELS[key],
+        evidence: { md: `${gateReason}\n\n${noScoreReason}` },
+      })),
+      evidence: {
+        json: {
+          rubricVersion: SPECIALIZED_RUBRIC_VERSION,
+          faultType: input.expectedFault || null,
+          faultEventIds: input.events.map((e) => e.id),
+          anomalyKinds: input.events.map((e) => e.anomalyKind || e.type),
+          faultOccurred: input.judgment.faultOccurred || null,
+          dimensions: [],
+          note: 'fault_not_detected_no_score',
+        },
+      },
+    })
+  }
   const byDimension = indexCompleteDimensions(
     dimensionKeys,
     input.judgment.dimensions as Array<DimensionJudgment<RasReliabilityDimension>>,
@@ -187,6 +229,7 @@ export function buildRasReliabilityEvaluatorOutput(input: {
         faultType: input.expectedFault || null,
         faultEventIds: input.events.map((e) => e.id),
         anomalyKinds: input.events.map((e) => e.anomalyKind || e.type),
+        ...(profile === 'detection-recovery' ? { faultOccurred: input.judgment.faultOccurred } : {}),
         dimensions: input.judgment.dimensions,
       },
     },

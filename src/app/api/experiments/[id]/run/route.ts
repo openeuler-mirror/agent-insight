@@ -8,6 +8,12 @@ import {
   FiOrchestrateError,
   orchestrateFaultInjection,
 } from '@/lib/engine/experiment/fi-orchestrate';
+import {
+  assertTraceGenerationTarget,
+  collectTraceGenerationCases,
+  generateExperimentTraces,
+  TraceGenerationError,
+} from '@/lib/engine/experiment/trace-generation';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { prisma } from '@/lib/storage/prisma';
 
@@ -32,14 +38,12 @@ export async function POST(
       body = {};
     }
 
-    // IF-M03 外挂：generateTrace / fi 参数存在时先创建 FI 任务（Worker 过渡路径）。
+    // generate Trace 的运行参数；普通数据走通用客户端指令，可靠性数据才走 FI。
     const generateTrace = (body.generateTrace && typeof body.generateTrace === 'object')
       ? body.generateTrace as Record<string, unknown>
       : null;
-    const wantFi =
-      body.fiOrchestrate === true ||
-      body.traceSource === 'generate' ||
-      Boolean(generateTrace);
+    const wantGenerate = body.traceSource === 'generate' || Boolean(generateTrace);
+    const wantFi = body.fiOrchestrate === true;
 
     const currentExperiment = await prisma.experiment.findFirst({
       where: { id, user: username },
@@ -50,6 +54,72 @@ export async function POST(
     }
     if (currentExperiment.status === 'running') {
       return NextResponse.json({ status: 'running', alreadyRunning: true });
+    }
+
+    if (wantGenerate && !wantFi) {
+      const cases = await collectTraceGenerationCases(id);
+      if (!cases.length) {
+        return NextResponse.json(
+          { error: '没有可生成 Trace 的 Case，未启动评估' },
+          { status: 409 },
+        );
+      }
+      const workerId = String(generateTrace?.workerId || '').trim();
+      const platform = String(generateTrace?.platform || body.platform || 'opencode').trim();
+      const experiment = await prisma.experiment.findFirst({
+        where: { id, user: username },
+        select: { agentName: true },
+      });
+      const agent = String(generateTrace?.agent || experiment?.agentName || '').trim();
+      await assertTraceGenerationTarget({ user: username, workerId, platform, agent });
+      const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
+        ? generateTrace.timeoutSeconds
+        : 180;
+
+      await prisma.experiment.updateMany({
+        where: { id, user: username },
+        data: { status: 'running' },
+      });
+      recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
+      void (async () => {
+        try {
+          const generated = await generateExperimentTraces({
+            user: username,
+            experimentId: id,
+            workerId,
+            platform,
+            agent,
+            model: generateTrace?.model != null ? String(generateTrace.model) : null,
+            timeoutSeconds,
+            cases,
+          });
+          if (!generated.readyCaseIds.length) {
+            await prisma.experiment.updateMany({
+              where: { id, user: username },
+              data: { status: 'failed' },
+            });
+            return;
+          }
+          const result = await startExperimentRun(id, username, {
+            allowPersistedRunning: true,
+            caseIds: generated.readyCaseIds,
+          });
+          await result?.completion?.catch((error) => {
+            console.error('[Experiment Run Error]', error);
+          });
+        } catch (error) {
+          console.error('[experiment-run] trace generation/start failed', error);
+          await prisma.experiment.updateMany({
+            where: { id, user: username },
+            data: { status: 'failed' },
+          }).catch(() => undefined);
+        }
+      })();
+      return NextResponse.json({
+        status: 'running',
+        awaitingTraceGeneration: true,
+        traceGeneration: { total: cases.length },
+      });
     }
 
     let fi: Awaited<ReturnType<typeof orchestrateFaultInjection>> | null = null;
@@ -78,7 +148,7 @@ export async function POST(
         // 设计契约：FI → 对齐 sessionTaskId/Case.taskId → 再评测。
         // 等待放后台，避免 HTTP 阻塞数分钟；勿在空轨迹上立刻 Judge。
         if (fi && !fi.skipped && fi.runIds.length) {
-          const waitMs = Math.max(60_000, (timeoutSeconds + 60) * 1000);
+          const waitMs = Math.max(60_000, (timeoutSeconds + 180) * 1000);
           const runIds = fi.runIds;
           await prisma.experiment.updateMany({
             where: { id, user: username },
@@ -172,6 +242,12 @@ export async function POST(
       ...(fi ? { fiOrchestrate: fi } : {}),
     });
   } catch (error) {
+    if (error instanceof TraceGenerationError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: error.httpStatus },
+      );
+    }
     if (error instanceof FiOrchestrateError) {
       return NextResponse.json(
         { error: error.message, code: error.code, fiOrchestrate: { skipped: false, reason: error.code } },
