@@ -438,3 +438,28 @@ test('mergeCapabilityIntoLocalRasConfig is pure', async () => {
   assert.equal(merged.agent_ras.platforms.opencode.syncedFrom.revision, 2)
   assert.equal(merged.agent_ras.service.x, 1)
 })
+
+test('mergeCapabilityIntoLocalRasConfig drops leftover flat domain keys', async () => {
+  const { mergeCapabilityIntoLocalRasConfig } = await loadSyncMod()
+  const merged = mergeCapabilityIntoLocalRasConfig(
+    {
+      agent_ras: {
+        llm_thinking_loop: { detection_start_chars: 300 },
+        ras_config_revisions: { opencode: 9 },
+      },
+    },
+    {
+      enabled: true,
+      detectors: { llm_thinking_loop: { detection_start_chars: 8888 } },
+      recovery: { notify_user_on_warning: true },
+    },
+    { revision: 2 },
+    'opencode',
+  )
+  assert.equal(merged.agent_ras.llm_thinking_loop, undefined)
+  assert.equal(merged.agent_ras.ras_config_revisions, undefined)
+  assert.equal(
+    merged.agent_ras.platforms.opencode.detectors.llm_thinking_loop.detection_start_chars,
+    8888,
+  )
+})

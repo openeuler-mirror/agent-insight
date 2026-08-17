@@ -73,19 +73,12 @@ function summarizeSdkFailure(label, raw) {
   return `${label} returned falsy: ${summarizeRaw(raw)}`
 }
 
-function allocateDeliveryMessageId() {
-  const rand =
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID().replace(/-/g, "")
-      : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`
-  return `msg_${rand.slice(0, 26)}`
-}
-
 /**
  * Best-effort extract OpenCode message/part ids from session.prompt responses.
  * Shapes vary by SDK version (hey-api fields, bare info, parts array).
- * prompt_async / HTTP 204 often return no body — callers should pre-allocate
- * messageID and pass it through prompted.deliveryMessageId.
+ * Prefer sync prompt (not prompt_async 204) so delivery_anchor can be recovered.
+ * Do NOT client-preallocate UUID messageIDs — OpenCode exits the agent loop via
+ * string compare `lastUser.id < lastAssistant.id`; non-ascending ids cause spin.
  */
 function extractDeliveryIds(raw) {
   const roots = []
@@ -146,21 +139,17 @@ function withDeliveryAnchor(result, prompted, channel) {
     extractDeliveryIds(prompted?.raw) ||
     extractDeliveryIds(prompted) ||
     {}
-  // Prefer the client-preallocated messageID. Sync/async prompt responses may
-  // include a different message (e.g. assistant turn) that must not steal the
-  // delivery link used by Insight USER→RAS reclassification.
-  const preallocated = String(prompted?.deliveryMessageId || "").trim()
-  const messageId = preallocated || String(extracted.message_id || "").trim()
+  // Prefer OpenCode-assigned ids from the prompt response. Legacy
+  // client-preallocated deliveryMessageId is fallback only when extract fails.
+  const extractedId = String(extracted.message_id || "").trim()
+  const fallback = String(prompted?.deliveryMessageId || "").trim()
+  const messageId = extractedId || fallback
   if (!messageId) return result
-  const partId =
-    !preallocated || extracted.message_id === preallocated
-      ? extracted.part_id
-      : undefined
   return {
     ...result,
     delivery_anchor: {
       message_id: messageId,
-      ...(partId ? { part_id: partId } : {}),
+      ...(extracted.part_id ? { part_id: extracted.part_id } : {}),
       channel,
     },
   }
@@ -482,11 +471,10 @@ export function createOpenCodeHost({
   }
 
   async function injectNoReplyNotice(s, text) {
-    const deliveryMessageId = allocateDeliveryMessageId()
     const prompted = await callSessionPrompt(
       s.nativeId,
       [{ type: "text", text }],
-      { noReply: true, messageID: deliveryMessageId },
+      { noReply: true, preferSync: true },
     )
     if (!prompted.ok) {
       console.error("[insight-ras] noReply notice failed", prompted.error)
@@ -494,25 +482,33 @@ export function createOpenCodeHost({
         ok: false,
         error: prompted.error,
         raw: prompted.raw,
-        deliveryMessageId,
+        deliveryMessageId: prompted.deliveryMessageId,
       }
     }
     return {
       ok: true,
       raw: prompted.raw,
       channel: prompted.channel,
-      deliveryMessageId: prompted.deliveryMessageId || deliveryMessageId,
+      deliveryMessageId: prompted.deliveryMessageId,
     }
   }
 
   async function callSessionPrompt(nativeId, parts, extra = {}) {
     const promptAsyncFn = client?.session?.promptAsync || client?.promptAsync
     const promptFn = client?.session?.prompt || client?.prompt
+    const preferSync = Boolean(extra.preferSync)
+    // Only pass messageID when the caller explicitly supplies one (legacy).
+    // Recovery notice/steer must NOT invent UUID ids — let OpenCode allocate.
     const deliveryMessageId = String(
       extra.messageID || extra.messageId || extra._rasDeliveryMessageId || "",
     ).trim()
     const promptExtra = { ...extra }
     delete promptExtra._rasDeliveryMessageId
+    delete promptExtra.preferSync
+    if (!deliveryMessageId) {
+      delete promptExtra.messageID
+      delete promptExtra.messageId
+    }
     const body = {
       parts,
       ...promptExtra,
@@ -539,9 +535,9 @@ export function createOpenCodeHost({
     let lastRaw = null
     let sawBadPath = false
 
-    // Prefer sync prompt when we need a delivery_anchor: prompt_async is 204 void
-    // and historically left notice/steering rows unlabeled as plain USER in Insight.
-    const fnOrder = deliveryMessageId
+    // preferSync (notice/steer): sync prompt returns body with OC-assigned ids;
+    // prompt_async is often 204 void and cannot supply delivery_anchor.
+    const fnOrder = preferSync || deliveryMessageId
       ? [promptFn, promptAsyncFn]
       : [promptAsyncFn, promptFn]
 
@@ -552,12 +548,14 @@ export function createOpenCodeHost({
           const raw = await fn.call(client.session || client, args)
           lastRaw = raw
           if (sdkOk(raw) || raw == null) {
+            const extracted = extractDeliveryIds(raw)
             return {
               ok: true,
               raw,
               args,
               channel: "session.prompt",
-              deliveryMessageId: deliveryMessageId || undefined,
+              deliveryMessageId:
+                deliveryMessageId || extracted?.message_id || undefined,
             }
           }
           lastError = summarizeSdkFailure("session.prompt", raw)
@@ -752,11 +750,10 @@ export function createOpenCodeHost({
     }
     s.steer = ""
     s.idleArrivedEarly = false
-    const deliveryMessageId = allocateDeliveryMessageId()
     const prompted = await callSessionPrompt(
       s.nativeId,
       [{ type: "text", text }],
-      { messageID: deliveryMessageId },
+      { preferSync: true },
     )
     if (prompted.ok) {
       s.phase = "steered"
@@ -766,10 +763,7 @@ export function createOpenCodeHost({
           steered: true,
           channel: prompted.channel || "session.prompt",
         },
-        {
-          ...prompted,
-          deliveryMessageId: prompted.deliveryMessageId || deliveryMessageId,
-        },
+        prompted,
         "ras_steering",
       )
     }

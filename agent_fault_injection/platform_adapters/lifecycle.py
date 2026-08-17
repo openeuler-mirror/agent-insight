@@ -103,7 +103,7 @@ def strip_ras_detector_env(environment: dict[str, str]) -> dict[str, str]:
     return {
         key: value
         for key, value in environment.items()
-        if key not in _RAS_DETECTOR_ENV_KEYS
+        if key not in _RAS_DETECTOR_ENV_KEYS and not key.startswith("RAS_DET_")
     }
 
 

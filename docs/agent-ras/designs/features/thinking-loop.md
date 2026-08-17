@@ -1,22 +1,3 @@
-# Thinking Loop 检测与恢复（已落地）
-
-LLM 思考/文本死循环：L1/L2 字面 + 可选 L3 语义。
-
-```mermaid
-stateDiagram-v2
-  [*] --> Accumulating
-  Accumulating --> L1L2: window_ready
-  L1L2 --> Anomaly: repeat_hit
-  L1L2 --> L3Detect: semantic_threshold
-  L3Detect --> Anomaly: judge_abnormal
-  L3Detect --> Accumulating: normal
-  Anomaly --> AutoRecover: L1L2_immediate_or_L3_review
-  AutoRecover --> AbortSteer: confirmed_abnormal
-  AutoRecover --> Resume: fail_open_or_normal
-```
-
----
-
 # LLM 思考死循环检测与恢复方案
 
 > 适用范围：仓根 `agent_ras/`（`LlmThinkingLoopDetector` + 自动恢复 + abort）  
@@ -84,6 +65,19 @@ stateDiagram-v2
 ---
 
 ## 3. 整体方案
+
+```mermaid
+stateDiagram-v2
+  [*] --> Accumulating
+  Accumulating --> L1L2: window_ready
+  L1L2 --> Anomaly: repeat_hit
+  L1L2 --> L3Detect: semantic_threshold
+  L3Detect --> Anomaly: judge_abnormal
+  L3Detect --> Accumulating: normal
+  Anomaly --> AutoRecover: L1L2_immediate_or_L3_review
+  AutoRecover --> AbortSteer: confirmed_abnormal
+  AutoRecover --> Resume: fail_open_or_normal
+```
 
 ### 3.1 能力分层
 

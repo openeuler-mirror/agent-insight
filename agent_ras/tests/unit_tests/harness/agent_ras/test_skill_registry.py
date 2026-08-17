@@ -6,24 +6,23 @@ from __future__ import annotations
 import pytest
 
 from agents.base import (
-    FAULT_DOMAIN_LLM_THINKING_LOOP,
     fault_domain_for_kind,
     skill_for,
 )
-from core.models import AnomalyKind
+from detectors.llm_thinking_loop import FAULT_DOMAIN_LLM_THINKING_LOOP
 
 
 def test_fault_domain_for_thinking_loop_kinds() -> None:
     assert (
-        fault_domain_for_kind(AnomalyKind.LLM_THINKING_LOOP)
+        fault_domain_for_kind("llm_thinking_loop")
         == FAULT_DOMAIN_LLM_THINKING_LOOP
     )
     assert (
-        fault_domain_for_kind(AnomalyKind.LLM_THINKING_DEAD_LOOP)
+        fault_domain_for_kind("llm_thinking_dead_loop")
         == FAULT_DOMAIN_LLM_THINKING_LOOP
     )
     assert fault_domain_for_kind("llm_thinking_loop") == FAULT_DOMAIN_LLM_THINKING_LOOP
-    assert fault_domain_for_kind(AnomalyKind.REPEAT_TOOL_CALL) == "repeat_tool"
+    assert fault_domain_for_kind("repeat_tool_call") == "repeat_tool"
     assert fault_domain_for_kind("unknown") is None
 
 

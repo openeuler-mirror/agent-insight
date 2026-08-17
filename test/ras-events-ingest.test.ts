@@ -7,6 +7,7 @@ import {
   buildRasIngestRecord,
   normalizeRasIngestBody,
   rasKindLabel,
+  setAnomalyKindLabelOverrides,
 } from "@/lib/ingest/ras/normalize"
 import { dedupeRasEvents } from "@/lib/ingest/ras/store"
 import {
@@ -104,10 +105,16 @@ test("buildRasIngestRecord: batches multiple events", () => {
   assert.equal(r.records?.length, 2)
 })
 
-test("rasKindLabel: known kinds", () => {
+test("rasKindLabel: catalog overrides, else kind id", () => {
+  setAnomalyKindLabelOverrides({
+    llm_thinking_dead_loop: { zh: "思考死循环", en: "thinking dead loop" },
+    repeat_tool_call: { zh: "工具重复调用", en: "repeat tool call" },
+  })
   assert.equal(rasKindLabel("llm_thinking_dead_loop", "zh"), "思考死循环")
   assert.equal(rasKindLabel("repeat_tool_call", "en"), "repeat tool call")
   assert.equal(rasKindLabel("unknown_kind", "zh"), "unknown_kind")
+  setAnomalyKindLabelOverrides({})
+  assert.equal(rasKindLabel("llm_thinking_dead_loop", "zh"), "llm_thinking_dead_loop")
 })
 
 test("buildRasIngestRecord helper mirrors single-event normalize", () => {

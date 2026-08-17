@@ -25,8 +25,6 @@ flowchart TB
 |------|-----|
 | 模块 ID | M-detectors |
 | 路径 | `agent_ras/detectors/` |
-| 文件数 | 8 Python 模块（含 loader/registry/types）+ L3 skill 定义 |
-| 规模 | ≈ 2075 行 Python（含 llm_thinking_loop 835 / repeat_tool 568 / loader 302） |
 | 主要语言 | Python |
 | 所属层 | L0 |
 
@@ -40,24 +38,26 @@ flowchart TD
   init --> loader[loader.py]
   init --> reg[registry.py]
   init --> types[types.py]
+  init --> cat[catalog.py]
   init --> rtl[llm_thinking_loop.py]
   init --> rpt[repeat_tool.py]
   rtl --> verd[skill_verdicts.py]
   rtl --> skill[skills/llm-loop-detection]
   loader --> rtl
   loader --> rpt
+  cat --> loader
 ```
 
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `base.py` | 78 | `Detector` / `AsyncRecoveryDetector` 协议 |
-| `loader.py` | 302 | DomainLoader：三路扫描 `DETECTOR_PLUGIN` 等 |
-| `registry.py` | 30 | 注册表薄封装 |
-| `types.py` | 60 | 插件 / 域类型 |
-| `llm_thinking_loop.py` | 835 | L1/L2 字面 + L3 语义 |
-| `repeat_tool.py` | 568 | 工具重复 / ping-pong / 断路器 |
-| `skill_verdicts.py` | 188 | L3 skill verdict 解析（fail-open） |
-| `__init__.py` | 14 | 公开 re-export |
+| 文件 | 职责 |
+|------|------|
+| `base.py` | `Detector` / `AsyncRecoveryDetector` 协议 |
+| `loader.py` | DomainLoader：三路扫描 `DETECTOR_PLUGIN` 等；`config_model` / `presentation` 均来自域模块 |
+| `registry.py` | 注册表薄封装 |
+| `types.py` | 插件 / 域类型 |
+| `catalog.py` | `build_capability_catalog`：把插件 `presentation` 拼成 Insight 能力目录 JSON |
+| `<domain>.py` | 检测器 + `config_model` + `presentation` + `DETECTOR_PLUGIN` |
+| `skill_verdicts.py` | L3 skill verdict 解析（fail-open） |
+| `__init__.py` | 公开 re-export |
 
 ---
 
@@ -85,7 +85,7 @@ flowchart TD
 
 **不做什么**
 
-- 不 abort / steer / notice（见 [recovery.md](recovery.md)）
+- 不 abort / steer / notice（由 recovery 投递）
 - 不消费 `tool_calls.delta` 类增量（见 detector docstring）
 - 不做跨 session 全局聚合
 
@@ -117,7 +117,7 @@ class Detector(Protocol):  # base.py:22
 
 Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors.loader.build_member_detectors`](../../../../agent_ras/detectors/loader.py)（经 [`registry.py`](../../../../agent_ras/detectors/registry.py) 再导出）。按 `config.detectors.<domain>.enabled` 门控；`SessionState.detectors: list` 首命中分发。
 
-**新域**：只新增 `detectors/<domain>.py`（导出 `DETECTOR_PLUGIN`）+ 可选 `detectors/skills/<id>/SKILL.md`；**不再**改 registry / 静态 `DETECTOR_BUILDERS`。详见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)。
+**新域**：只新增 `detectors/<domain>.py`（导出 `DETECTOR_PLUGIN`）+ 可选 `detectors/skills/<id>/SKILL.md`；**不再**改 registry / 静态 `DETECTOR_BUILDERS`。
 
 模板：[`detectors/_template_domain.py.example`](../../../../agent_ras/detectors/_template_domain.py.example)。
 
@@ -134,7 +134,8 @@ Monitor（含 openjiuwen factory）与 SessionHub **共用** [`detectors.loader.
 | `suffix_cycle` | 尾窗重复 pattern | `loop_repeat_threshold=5` | 同左 |
 | `similar_clauses` | 分句相似度连通分量 | sim≥`0.95`，重复≥5 | 同左 |
 | L3 检测 skill | `llm-loop-detection`（`role=detection`） | 每 `semantic_eval_chars=10000`；`semantic_content_enabled` 可关 | 同左 |
-| global_breaker | 同 tool+args 无进展 | threshold=10 → CRITICAL | `repeat_tool.py` |
+| generic_repeat | 同 tool+args 连续次数 | warning=5 → LOW | `repeat_tool.py` |
+| global_breaker | 同 tool+args 且结果哈希不变 | threshold=10 → CRITICAL | 同左 |
 | ping_pong | A↔B 交替 | warning=5；critical=10 **且** no_progress | 同左 |
 | unknown_tool | 连续失败 | critical=`unknown_tool_threshold`；warning=threshold//2 | 同左 |
 
@@ -208,6 +209,7 @@ sequenceDiagram
 |------|------|
 | `.../detectors/test_llm_thinking_loop_detector.py` | L1/L2/L3、latch |
 | `.../detectors/test_detection_start_gate.py` | `detection_start_chars` |
+| `.../detectors/test_capability_catalog.py` | `build_capability_catalog` 内置域与 submode |
 | `.../recovery/test_auto_recovery.py` | 端到端 |
 
 ---
@@ -216,7 +218,7 @@ sequenceDiagram
 
 ### 扩展指南
 
-见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)：新域只新增文件。
+新域只新增文件。
 
 1. 新增 `detectors/<domain>.py`，导出 `DETECTOR_PLUGIN`（`config_model` + `factory`）；可选 `detectors/skills/<id>/SKILL.md`
 2. 需要 L3 评审时：`review/<domain>.py` + `review/skills/<id>/SKILL.md`

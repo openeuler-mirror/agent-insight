@@ -1,30 +1,8 @@
-# Stream Abort 停流机制（已落地）
-
-环内打断进行中的 `llm.stream`：依赖宿主 abort 契约；thinking-loop 经 Monitor 自动恢复（L1/L2 立即 abort，L3 Reviewer 二次判定）。
-
-```mermaid
-sequenceDiagram
-  participant Mon as Monitor
-  participant Ctx as CallbackContext
-  participant Agent as ReAct_or_Host
-  Mon->>Ctx: request_abort_stream
-  Agent->>Ctx: consume_abort_at_chunk
-  Agent->>Agent: aclose_provider_stream
-```
-
----
-
 # `llm.stream` 停流机制分析
 
 ## 1. 文档目的
 
 本文按讨论顺序整理 Agent RAS 场景下「**如何停止进行中的 `llm.stream`**」相关问题，澄清各机制的职责边界，避免误以为 `close_stream` 等输出侧操作会自动级联停止 provider 流。
-
-**相关文档：**
-
-- [thinking-loop.md](./thinking-loop.md) — LLM 思考死循环检测与恢复
-- [modules/platform-adapter.md](../modules/platform-adapter.md) — HostControl / abort 契约摘要
-- [modules/monitor.md](../modules/monitor.md) — 自动恢复编排（L3 Reviewer，非人工 HITL）
 
 **涉及代码（示意）：**
 
@@ -215,6 +193,16 @@ asyncio 默认也**不会**像进程组那样做「父 task 结束 → 子 task 
 ---
 
 ## 6. 真正有效的停流路径：`request_abort_stream`
+
+```mermaid
+sequenceDiagram
+  participant Mon as Monitor
+  participant Ctx as CallbackContext
+  participant Agent as ReAct_or_Host
+  Mon->>Ctx: request_abort_stream
+  Agent->>Ctx: consume_abort_at_chunk
+  Agent->>Agent: aclose_provider_stream
+```
 
 ### 6.1 契约（`base.py`）
 

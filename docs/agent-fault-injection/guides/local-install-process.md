@@ -3,7 +3,6 @@
 > **读者**：需要理解「执行 FI setup curl 后，用户机器上发生了什么」的使用者与排障者。  
 > **范围**：本机 **FI Client / Worker** 的安装、落盘与常驻进程；不含故障 Skill 内容与服务端 Judge 算法。  
 > **真源**：[`src/app/api/fault-injection/setup/route.ts`](../../../src/app/api/fault-injection/setup/route.ts)、[`scripts/install-fault-injection.js`](../../../scripts/install-fault-injection.js)、[`scripts/fi-worker.js`](../../../scripts/fi-worker.js)。  
-> **关系总览**：[Insight · RAS · FI](../designs/ras-fi-insight-relationship.md) · [server-client-split](../designs/server-client-split.md)。  
 > **产品操作**：[user-guide/observability/fault-injection.md](../../user-guide/observability/fault-injection.md)。
 
 ---
@@ -229,12 +228,12 @@ flowchart LR
   Collect --> HB
 ```
 
-- **inventory**：本机真实 agents/models，供新建任务向导选平台  
-- **claim**：领取 `queued` 任务，在隔离 workspace 注入并采集  
-- **collect-result**：回传后由 **Insight 服务端 Judge** 评判（本机不再跑产品 Judge）  
-- **不**启动 RAS；若宿主已挂 RAS，那是安装指导/install-ras 的结果，与 FI 任务解耦  
+- **inventory**：Worker 启动时跑 `python3 -m agent_fault_injection.cli platform inventory --json`，把本机真实 agents/models 经 heartbeat 上报。无 Worker 时 Insight health/platforms 只返回安装引导，**不**静默填假目录。
+- **claim**：领取 `queued` 任务，在隔离 workspace 注入并采集。
+- **collect-result**：回传 markers / `faultActivated` / Trace ID，由 **Insight 服务端 Judge** 评判（本机不再跑产品 Judge）。**不**写 `Session.interactions`，**不**合成 `RasAnomalyEvent`。
+- **不**启动 RAS；若宿主已挂 RAS，那是安装指导 / `install-ras` 的结果，与 FI 任务解耦。
 
-本机排障产物（权威仍在 DB）：
+本机排障产物（权威仍在 Prisma）：
 
 ```text
 ~/.agent-insight/fault-injection/artifacts/<runId>/
@@ -304,6 +303,7 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 | `spawn python3 ENOENT` / `packageRoot missing` | **多半不是缺 python3**：config 里 `packageRoot` 指向已删/已迁的 checkout；Node 在 cwd 不存在时也会报 spawn ENOENT | 查 `~/.agent-insight/fault-injection/config.json`；用 **curl setup / 空目录 npx** 重装（不要只 kill 重启）；确认 `python-pkg` 或有效路径存在 |
 | 页面仍无 Worker | Key 属于别的用户；防火墙挡心跳；Worker 未起 | 确认 Key；本机 curl Insight；查 pid |
 | 有 Worker 但平台空 | 本机未装 OpenCode/xiaoO 或不在 PATH | 同机安装并保证 inventory 能枚举 |
+| OpenCode `plugin-ready` 超时 | 评测 workspace 缺插件 / `lib/` / `.opencode/package.json` | Adapter 会拷齐；布局见 [OpenCode 适配 §4.2](../designs/modules/opencode-platform-adaptation.md)（`rewrite-*.ts` 在 **`lib/`**，不要放进 `plugins/`） |
 | 换账号后任务不对人 | 旧 Worker 仍用旧 Key | 用新 Key 重跑 setup（应自动重启） |
 | 搬迁 git 工作树后 run 全失败 | 曾用仓内 `-e` 安装，editable / packageRoot 仍指旧路径 | 重跑 setup（稳定副本）或在新仓根重装 |
 
@@ -318,7 +318,14 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 | 装 RAS？ | 否 | 是 | 否（可同一次脚本顺带） |
 | 文档 | 本文 | [RAS 本机安装过程](../../agent-ras/guides/local-install-process.md) | developer-guide / user-guide 各平台页 |
 
-完整链路建议（xiaoo 举例）：先按安装指导装观测 +（可选）RAS，再单独 curl FI setup；FI overlay 会保留用户已有 hooker 插件再追加注入能力。
+完整链路 ⓪ 与 FI 解耦：日常 Trace **不是** FI collect。
+
+| 平台 | 日常 ⓪ | FI 怎么挂上（不冲掉观测 / RAS） |
+|------|---------|--------------------------------|
+| OpenCode | Insight 观测插件 upload（系统侧） | 只写评测 workspace `.opencode/plugins/` + `lib/`；宿主按系统 + workspace **分层叠加**，不必改 `~/.config/opencode` |
+| xiaoO | `node scripts/xiaoo-trace-collector/install.js`（`install-ras` 装 hooker 后也会自动调用） | 临时 `XIAOO_CONFIG` **保留**用户 `[hooker].plugins`（含 RAS + collector）再 append FI；见 [xiaoO 适配 §4.1](../designs/modules/xiaoo-platform-adaptation.md) |
+
+建议顺序：先装观测 +（可选）RAS，再单独 curl FI setup。`/agent-ras/trace` 以 Execution / 真 RAS 为准，FI **不再**为注入激活合成 `RasAnomalyEvent`。
 
 ---
 
@@ -331,5 +338,4 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 | [`scripts/fi-worker.js`](../../../scripts/fi-worker.js) | 心跳 / claim / CLI / collect |
 | [`bin/cli.js`](../../../bin/cli.js) | `install-fault-injection` / `fi-worker` 子命令 |
 | [getting-started.md](getting-started.md) | 最短启用 |
-| [task-orchestration.md](../designs/modules/task-orchestration.md) | Insight FI API |
-| [server-client-split.md](../designs/server-client-split.md) | 拓扑与废弃路径 |
+| [user-guide · 故障注入](../../user-guide/observability/fault-injection.md) | 向导、停止、冒烟与本地 CLI |

@@ -6,9 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-# Fault domain ids align with detector.name / config detector keys.
-FAULT_DOMAIN_LLM_THINKING_LOOP = "llm_thinking_loop"
-
 AGENT_RAS_SKILL_ROLES: tuple[str, ...] = ("detection", "review")
 
 # Internal member / async-recovery knobs (not host-configurable).
@@ -17,18 +14,8 @@ ASYNC_RECOVERY_TIMEOUT_SECONDS: float = 60.0
 SKILL_TIMEOUT_SECONDS: float = 30.0
 
 # Populated by ``detectors.loader.ensure_domains_loaded`` from *_PLUGIN modules.
-# Seed kept for import-time readers before first load.
-FAULT_DOMAIN_SKILLS: dict[str, dict[str, str]] = {
-    FAULT_DOMAIN_LLM_THINKING_LOOP: {
-        "detection": "llm-loop-detection",
-        "review": "llm-loop-review",
-    },
-}
-
-_KIND_TO_FAULT_DOMAIN: dict[str, str] = {
-    "llm_thinking_loop": FAULT_DOMAIN_LLM_THINKING_LOOP,
-    "llm_thinking_dead_loop": FAULT_DOMAIN_LLM_THINKING_LOOP,
-}
+FAULT_DOMAIN_SKILLS: dict[str, dict[str, str]] = {}
+_KIND_TO_FAULT_DOMAIN: dict[str, str] = {}
 
 
 def _ensure_plugin_tables() -> None:
@@ -161,7 +148,6 @@ def build_inline_skill_query(*, role: str, skill_name: str, task_block: str) -> 
 __all__ = [
     "AGENT_RAS_SKILL_ROLES",
     "ASYNC_RECOVERY_TIMEOUT_SECONDS",
-    "FAULT_DOMAIN_LLM_THINKING_LOOP",
     "FAULT_DOMAIN_SKILLS",
     "MEMBER_MAX_ITERATIONS",
     "ROLE_PROMPTS",

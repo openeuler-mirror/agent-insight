@@ -1,20 +1,3 @@
-# Analysis Paralysis 检测（规划中）
-
-二阶段检测：触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道。
-
-```mermaid
-stateDiagram-v2
-  [*] --> Idle
-  Idle --> Stage1: stream_text
-  Stage1 --> Stage2: trigger_hit
-  Stage1 --> Idle: no_trigger
-  Stage2 --> Anomaly: semantic_stagnation
-  Stage2 --> Idle: normal
-  Anomaly --> Recovery: monitor
-```
-
----
-
 # LLM 过度思考（Analysis Paralysis）二阶段检测 — 需求分析与方案
 
 版本：v0.1  
@@ -93,6 +76,17 @@ stateDiagram-v2
 ---
 
 ## 三、解决方案
+
+```mermaid
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Stage1: stream_text
+  Stage1 --> Stage2: trigger_hit
+  Stage1 --> Idle: no_trigger
+  Stage2 --> Anomaly: semantic_stagnation
+  Stage2 --> Idle: normal
+  Anomaly --> Recovery: monitor
+```
 
 ### 3.1 总体架构
 

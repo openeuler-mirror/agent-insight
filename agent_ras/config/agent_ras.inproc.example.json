@@ -8,13 +8,6 @@
       "python_home": "/path/to/python-prefix",
       "repo_root": "~/.agent-insight/ras/runtime/<fingerprint>",
       "python_packages": "~/.agent-insight/ras/runtime/<fingerprint>/.python-packages"
-    },
-    "llm_thinking_loop": {
-      "detection_start_chars": 200,
-      "window_max_chars": 2000,
-      "loop_repeat_threshold": 5,
-      "similar_clause_sim_threshold": 0.95,
-      "semantic_content_enabled": true
     }
   }
 }

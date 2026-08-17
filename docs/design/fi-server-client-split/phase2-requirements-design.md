@@ -12,9 +12,9 @@ update_time: 2026-08-05 10:40:00 (UTC+8)
 
 # Phase2：FI 服务端/客户端分离 — 需求设计
 
-> 设计主文档（FI 读者入口同步）：[`docs/agent-fault-injection/designs/server-client-split.md`](../../agent-fault-injection/designs/server-client-split.md)  
+> 设计主文档（FI 读者入口同步）：[`docs/agent-fault-injection/designs/features/server-client-split.md`](../../agent-fault-injection/designs/features/server-client-split.md)  
 > 需求输入：[`phase1-requirements-analysis.md`](./phase1-requirements-analysis.md)  
-> 现状对照：[`ras-fi-insight-relationship.md`](../../agent-fault-injection/designs/ras-fi-insight-relationship.md)（Insight · RAS · FI 关系；旧「同机 spawn」已废弃）
+> 现状对照：[`ras-fi-insight-relationship.md`](../../agent-fault-injection/designs/modules/ras-fi-insight-relationship.md)（Insight · RAS · FI 关系；旧「同机 spawn」已废弃）
 
 ## §1 设计概要
 

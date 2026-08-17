@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.config import AgentRASConfig, LlmThinkingLoopConfig
+from core.config import AgentRASConfig
 from detectors.llm_thinking_loop import (
+    LlmThinkingLoopConfig,
     LlmThinkingLoopDetector,
 )
 from core.models import (
     Anomaly,
-    AnomalyKind,
     Severity,
     Signal,
     SignalKind,
@@ -65,11 +65,11 @@ class _CaptureAgents:
 def _policy() -> RecoveryPolicy:
     return RecoveryPolicy(
         kind_overrides={
-            AnomalyKind.LLM_THINKING_LOOP: [
+            "llm_thinking_loop": [
                 RecoveryAction.OBSERVE_ONLY,
                 RecoveryAction.SUPPRESS_STREAM,
             ],
-            AnomalyKind.LLM_THINKING_DEAD_LOOP: [
+            "llm_thinking_dead_loop": [
                 RecoveryAction.OBSERVE_ONLY,
                 RecoveryAction.SUPPRESS_STREAM,
             ],
@@ -109,7 +109,7 @@ def _monitor(agents: _CaptureAgents | None = None) -> AgentRASMonitor:
 def _l1_anomaly() -> Anomaly:
     return Anomaly(
         detector="llm_thinking_loop",
-        kind=AnomalyKind.LLM_THINKING_LOOP,
+        kind="llm_thinking_loop",
         severity=Severity.MEDIUM,
         member_name="m",
         summary="loop",
@@ -129,7 +129,7 @@ def _l1_anomaly() -> Anomaly:
 def _l3_anomaly() -> Anomaly:
     return Anomaly(
         detector="llm_thinking_loop",
-        kind=AnomalyKind.LLM_THINKING_DEAD_LOOP,
+        kind="llm_thinking_dead_loop",
         severity=Severity.HIGH,
         member_name="m",
         summary="dead loop",
@@ -143,6 +143,7 @@ def _l3_anomaly() -> Anomaly:
             "primary_fault": "semantic_deadlock",
             "skill_rationale": "first judge",
             "skill_confidence": 0.8,
+            "needs_l3_review": True,
             "stream_chunk_keep_len": 0,
         },
     )

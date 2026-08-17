@@ -67,12 +67,14 @@
   `~/.agent-insight/ras/runtime/<fingerprint>/`，再幂等配置 OpenCode。生产安装只装
   Python 基础包；RAS 开发测试使用 `pip install -e "agent_ras[dev]"`。平台 `start`
   与源码启动脚本不检查、不安装 Agent 主机 RAS；OpenCode 安装指导是唯一自动安装入口。
-  setup 脚本默认绑定 `${package.name}@${package.version}`，源码/私有包联调可通过
-  `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` 指向 Agent 主机可访问的 `.tgz` URL。setup
-  使用隔离 cache 的 `npm pack --ignore-scripts` 获取 tarball，校验
-  `scripts/install-ras.js` 与 `agent_ras/pyproject.toml` 后直接运行安装器，避免
+  setup 脚本默认绑定 `${package.name}@${package.version}`。取制品三级回退：本地
+  checkout（`./scripts/install-ras.js` + `agent_ras/pyproject.toml`）→
+  `GET /api/ingest/setup/bundle?name=ras`（服务端白名单 tar）→ 隔离 cache 的
+  `npm pack --ignore-scripts`。源码/私有包联调仍可通过
+  `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` 覆盖 npm 兜底。校验安装器后直接运行，避免
   `npx` 解析整套应用依赖和共享 `_npx` 锁竞争；安装成功后以当前用户 Key 对 RAS GET
-  端点做只读预检。
+  端点做只读预检。常驻客户端同样三级回退（`bundle?name=client`），运行时固化到
+  `~/.agent-insight/client/runtime/`。
 - **Client identity**：平台启动仍生成内部 admin key 并保存到 `.admin_api_key`，但只在
   `~/.agent-insight/.env` 缺少客户端 Key 时初始化它。安装指导已经注册的邮箱用户 Key
   必须保留，普通 OpenCode telemetry 与 RAS config 使用同一个身份。

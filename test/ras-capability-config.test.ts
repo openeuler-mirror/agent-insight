@@ -112,6 +112,7 @@ test('mergeCapabilityIntoLocalRasConfig preserves service paths', () => {
   assert.equal((ras.service as Record<string, unknown>).python, '/keep/python')
   assert.equal(ras.ras_config_revision, undefined)
   assert.equal(ras.ras_config_revisions, undefined)
+  assert.equal(ras.llm_thinking_loop, undefined)
   assert.equal(
     (ras.detectors as { llm_thinking_loop: { detection_start_chars: number } }).llm_thinking_loop
       .detection_start_chars,
@@ -161,4 +162,25 @@ test('exportCapabilityYaml includes detector keys', () => {
   assert.match(yaml, /llm_thinking_loop:/)
   assert.match(yaml, /repeat_tool:/)
   assert.match(yaml, /notify_user_on_warning:/)
+})
+
+test('validate and merge pass through a third detector domain', () => {
+  const ok = validateCapabilityConfigBody({
+    enabled: true,
+    detectors: {
+      synth_probe: { enabled: true, threshold: 9 },
+    },
+    recovery: { notify_user_on_warning: true },
+  })
+  assert.equal(ok.ok, true)
+  if (!ok.ok) return
+  assert.equal((ok.config.detectors.synth_probe as { threshold: number }).threshold, 9)
+
+  const merged = mergeCapabilityIntoLocalRasConfig({}, ok.config, { revision: 1 }, 'opencode')
+  const ras = merged.agent_ras as {
+    detectors: Record<string, Record<string, unknown>>
+    platforms: { opencode: { detectors: Record<string, Record<string, unknown>> } }
+  }
+  assert.equal(ras.detectors.synth_probe.threshold, 9)
+  assert.equal(ras.platforms.opencode.detectors.synth_probe.threshold, 9)
 })

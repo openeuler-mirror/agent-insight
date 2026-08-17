@@ -2,8 +2,6 @@
 
 > **文档性质**：说明既有平台 **agent-insight** 与新增功能模块 **agent-ras**、**agent-fi** 的边界、部署与数据关系  
 > **对齐实现**：2026-08-05（FI 已切 Insight 服务端 + 本机 FI Client；RAS 环内旁路上报已落地）  
-> **图文版**：[ras-fi-insight-relationship.html](./ras-fi-insight-relationship.html)  
-> **三产品逻辑图**：[agent-insight-ras-fi-logic.html](./agent-insight-ras-fi-logic.html)（AgentInsight · AgentRAS · AgentFI）  
 > **图示约定**：节点一律 **「功能简述 · 角色/模块名」**（功能在前）；优先写**角色**，实现进程名仅作注记。  
 > **方向约定**：实线 = 主动调用/投递；虚线 = 响应回程（如 claim 下发 runs）。RAS↔Host 为同进程双向（事件进、恢复出）。②③ 由 **FI Client** 发起，不是注入算法包绕过 Client 直连 API。
 
@@ -18,7 +16,34 @@
 | **agent-ras** | 环内可靠性**功能实现模块** | Detector / Recovery / ras_runtime / 平台薄适配 | 不含前端、Prisma schema、HTTP 契约 |
 | **agent-fi**（`agent_fault_injection`） | 故障注入**功能实现模块**（支撑 FI Client） | Fault catalog、注入工具、平台 Adapter、CLI 采集 | 不含 FI UI、FaultInjection* 表、Judge；与 Insight 的控制面由 **FI Client** 角色承担 |
 
-**一句话**：Insight = 服务端平台；**FI Client** = 本机 FI 角色（认领/回传/编排注入）；agent-ras / agent-fi = 实现模块。叙述优先用角色，不先钉死进程名。源码可同仓，**能力归属按上表，不按目录名把 UI/DB 算进模块**。
+**一句话**：Insight = 服务端平台；**FI Client** = 本机 FI 角色（认领/回传/编排注入）；agent-ras / agent-fi = 实现模块。叙述优先用角色，不先钉死进程名。源码可同仓，**能力归属按上表，不按目录名把 UI/DB 算进模块**。命名对照：AgentInsight ≈ agent-insight；AgentRAS ≈ agent-ras；AgentFI ≈ agent-fi + FI Client。
+
+### 关系边
+
+| 从 | 到 | 关系 | 通道 |
+|----|----|------|------|
+| Agent 宿主 / 插件 | **AgentInsight** | 通用链路追踪上报 | ⓪ OTLP → spool → Prisma |
+| **AgentRAS** | Agent 宿主 | 环内：收事件 / 投递恢复 | 同进程 hooks |
+| **AgentRAS** | **AgentInsight** | 旁路上报异常事件（fail-open） | ① ras-events（非 OTLP） |
+| **AgentFI**（FI Client） | **AgentInsight** | 认领任务、拉停、回传采集 | ②③（非 OTLP） |
+| **AgentInsight** | **AgentFI**（FI Client） | claim 响应下发 runs（虚线回程） | ② |
+| **AgentFI** | Agent 宿主 | 挂载插件/hooker 并驱动被测执行 | 本机编排 |
+| **AgentInsight** 内部 | — | Judge（无 FI→RAS bridge） | — |
+| **AgentRAS** | **AgentFI** | *无直接依赖*；同机可并存，经 Insight 观测面汇聚 | — |
+
+OTel 是 Insight **既有**主观测进水管；RAS/FI 是另两条业务口径。三者最终多写入 **Prisma**，不是互相替换。
+
+### 归属一览
+
+| 能力 | AgentInsight | AgentRAS | AgentFI |
+|------|--------------|----------|---------|
+| 前端 / 导航「AgentRAS 可靠性」 | ✔ | — | — |
+| Prisma / HTTP 契约 | ✔ | — | — |
+| OTel ingest + spool consumer | ✔（既有） | — | — |
+| 环内检测与自动恢复 | — | ✔ | — |
+| 故障注入与轨迹采集 | — | — | ✔ |
+| FI 认领 / 回传（角色） | 协议属 Insight | — | ✔ FI Client |
+| 注入结果 Judge | ✔ | — | — |
 
 ```mermaid
 flowchart TB
@@ -138,7 +163,7 @@ flowchart TB
 | `POST /api/ingest/ras-events` | RAS 旁路事件契约（**非 OTLP**；Insight 拥有） |
 | `/api/fault-injection/*` | FI 任务、FI Client 控制面、collect-result、setup（Insight 拥有） |
 
-> OTel 与 Prisma **不是二选一**：OTel 是进水管口径之一；Prisma 是权威库访问层。契约细节见 [09-otlp-attribute-contract](../../developer-guide/09-otlp-attribute-contract.md)。
+> OTel 与 Prisma **不是二选一**：OTel 是进水管口径之一；Prisma 是权威库访问层。契约细节见 [09-otlp-attribute-contract](../../../developer-guide/09-otlp-attribute-contract.md)。
 
 ### 2.3 服务端逻辑
 
@@ -216,9 +241,9 @@ flowchart TB
 | ① | RAS 仅 `ras-events` + 检测/恢复 | RAS hooker 内嵌 OTLP、向 Insight collector 转发 mid-stream、采集非 RAS 职责事件当主树 |
 | ③ | FI 只 `collect-result` → Run/Judge | FI collect 合成可靠性 `Execution` / 顶主树；采集非 FI 流水线事件当 Trace |
 
-xiaoO 现状：⓪ = [`scripts/xiaoo-trace-collector/`](../../../scripts/xiaoo-trace-collector/)；见 [xiaoo-observe-ingest.md](../../agent-ras/designs/features/xiaoo-observe-ingest.md)。
+xiaoO 现状：⓪ = `scripts/xiaoo-trace-collector/` → OTLP；① RAS 仅 `ras-events`；RAS / FI 不做日常完整 Trace。
 
-细节：[agent-ras architecture](../../agent-ras/designs/architecture.md)。
+细节见 RAS 架构文档。
 
 ---
 
@@ -288,7 +313,7 @@ Insight 主观测走 **OpenTelemetry Protocol（OTLP）**：宿主 / 框架 expo
 | 载荷形态 | OTLP `ResourceSpans` / `ResourceLogs`（含 resource + span/log attributes） |
 | 落库 | spool → consumer → Prisma `Execution` / `Session` |
 
-契约真源：[OTLP 属性契约](../../developer-guide/09-otlp-attribute-contract.md)。
+契约真源：[OTLP 属性契约](../../../developer-guide/09-otlp-attribute-contract.md)。
 
 ```mermaid
 flowchart LR
@@ -498,13 +523,13 @@ SessionHub 检出/恢复
 
 | 步骤 | 路径 | 符号 |
 |------|------|------|
-| 触发推送 | [`agent_ras/ras_runtime/session_hub.py`](../../../agent_ras/ras_runtime/session_hub.py) | 调用 `fire_push_anomaly` / `fire_push_action_result` |
-| 组包与 HTTP | [`agent_ras/ras_runtime/insight_push.py`](../../../agent_ras/ras_runtime/insight_push.py) | `fire_push_*` → `push_anomaly` / `push_action_result` → `push_event` |
-| 路由 | [`src/app/api/ingest/ras-events/route.ts`](../../../src/app/api/ingest/ras-events/route.ts) | `POST` |
-| 归一化 | [`src/lib/ingest/ras/normalize.ts`](../../../src/lib/ingest/ras/normalize.ts) | `normalizeRasIngestBody` |
-| 落库 | [`src/lib/ingest/ras/store.ts`](../../../src/lib/ingest/ras/store.ts) | `upsertRasIngestRecords`（内可 `findRootExecutionId`） |
+| 触发推送 | [`agent_ras/ras_runtime/session_hub.py`](../../../../agent_ras/ras_runtime/session_hub.py) | 调用 `fire_push_anomaly` / `fire_push_action_result` |
+| 组包与 HTTP | [`agent_ras/ras_runtime/insight_push.py`](../../../../agent_ras/ras_runtime/insight_push.py) | `fire_push_*` → `push_anomaly` / `push_action_result` → `push_event` |
+| 路由 | [`src/app/api/ingest/ras-events/route.ts`](../../../../src/app/api/ingest/ras-events/route.ts) | `POST` |
+| 归一化 | [`src/lib/ingest/ras/normalize.ts`](../../../../src/lib/ingest/ras/normalize.ts) | `normalizeRasIngestBody` |
+| 落库 | [`src/lib/ingest/ras/store.ts`](../../../../src/lib/ingest/ras/store.ts) | `upsertRasIngestRecords`（内可 `findRootExecutionId`） |
 
-载荷：`{ events: [{ taskId, type, deliveryId, framework, anomalyKind, severity, summary, actionTypes, payload }] }`。契约见 [OTLP 文档 RAS 旁路节](../../developer-guide/09-otlp-attribute-contract.md#ras-旁路属性)。
+载荷：`{ events: [{ taskId, type, deliveryId, framework, anomalyKind, severity, summary, actionTypes, payload }] }`。契约见 [OTLP 文档 RAS 旁路节](../../../developer-guide/09-otlp-attribute-contract.md#ras-旁路属性)。
 
 #### 5.7.3 ③ FI 采集（Run 完成后整包）
 
@@ -525,12 +550,12 @@ fi-worker tick: claim
 
 | 步骤 | 路径 | 符号 |
 |------|------|------|
-| 轮询认领/上传 | [`scripts/fi-worker.js`](../../../scripts/fi-worker.js) | `tick` → `runCollector` → `uploadResult` |
-| CLI / 编排 | [`agent_fault_injection/.../cli.py`](../../../agent_fault_injection/cli.py)、[`pipeline/runner.py`](../../../agent_fault_injection/pipeline/runner.py) | `ExperimentRunner.run` |
-| 映射 markers + taskId（interactions=[]） | [`.../pipeline/interactions_mapper.py`](../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
-| 组装/写盘 | [`.../pipeline/collect_payload.py`](../../../agent_fault_injection/pipeline/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
-| 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](../../../src/app/api/fault-injection/runs/[runId]/collect-result/route.ts) | `POST` |
-| 入库+评判 | [`src/lib/fault-injection/store.ts`](../../../src/lib/fault-injection/store.ts) | `ingestCollectAndJudge` |
+| 轮询认领/上传 | [`scripts/fi-worker.js`](../../../../scripts/fi-worker.js) | `tick` → `runCollector` → `uploadResult` |
+| CLI / 编排 | [`agent_fault_injection/.../cli.py`](../../../../agent_fault_injection/cli.py)、[`pipeline/runner.py`](../../../../agent_fault_injection/pipeline/runner.py) | `ExperimentRunner.run` |
+| 映射 markers + taskId（interactions=[]） | [`.../pipeline/interactions_mapper.py`](../../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
+| 组装/写盘 | [`.../pipeline/collect_payload.py`](../../../../agent_fault_injection/pipeline/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
+| 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](../../../../src/app/api/fault-injection/runs/[runId]/collect-result/route.ts) | `POST` |
+| 入库+评判 | [`src/lib/fault-injection/store.ts`](../../../../src/lib/fault-injection/store.ts) | `ingestCollectAndJudge` |
 | ~~④ bridge~~ | **已移除**（原 `ras-bridge.ts`） | — |
 
 运行中插件只往本机 `raw/` append；**对 Insight 的 ③ 是 Run 结束一次 POST**。控制面 ②（heartbeat/claim）与 ③ 分开，可周期发生。
@@ -539,8 +564,8 @@ fi-worker tick: claim
 
 | 步骤 | 路径（示意） | 说明 |
 |------|----------------|------|
-| 接入 | [`src/app/api/ingest/otel/v1/traces/route.ts`](../../../src/app/api/ingest/otel/v1/traces/route.ts) 等 | OTLP/HTTP |
-| 消费 | [`src/lib/ingest/otel-consumer/`](../../../src/lib/ingest/otel-consumer/) | spool → `Execution` |
+| 接入 | [`src/app/api/ingest/otel/v1/traces/route.ts`](../../../../src/app/api/ingest/otel/v1/traces/route.ts) 等 | OTLP/HTTP |
+| 消费 | [`src/lib/ingest/otel-consumer/`](../../../../src/lib/ingest/otel-consumer/) | spool → `Execution` |
 
 与 ①/③ 仅靠 `taskId` 对齐展示，互不替代。
 
@@ -569,7 +594,7 @@ fi-worker tick: claim
 | **与 Insight** | ① ras-events | ②③ FI Client + collect-result |
 | **恢复/评判** | 本机 HostControl 投递 | Insight 服务端 Judge |
 
-**为何两平台 FI 配置策略不同（摘要）：** OpenCode 插件发现是「系统 + workspace」分层叠加，FI 只写入评测 workspace 即可与系统侧 RAS 并存；xiaoO 的 hooker 由**单一** `XIAOO_CONFIG` 的 `[hooker].plugins` 决定，评测又必须用临时 config 避免改用户文件——若不 merge 保留原 plugins，会冲掉 RAS。理由展开见 [xiaoo-platform-adaptation.md §4.1](xiaoo-platform-adaptation.md)。
+**为何两平台 FI 配置策略不同（摘要）：** OpenCode 插件发现是「系统 + workspace」分层叠加，FI 只写入评测 workspace 即可与系统侧 RAS 并存；xiaoO 的 hooker 由**单一** `XIAOO_CONFIG` 的 `[hooker].plugins` 决定，评测又必须用临时 config 避免改用户文件——若不 merge 保留原 plugins，会冲掉 RAS。
 
 ### 6.1 FI × OpenCode（模块内）
 
@@ -617,24 +642,6 @@ export AGENT_INSIGHT_HOST=https://insight.example
 export AGENT_INSIGHT_API_KEY=<key>
 npx agent-insight install-fault-injection --start
 ```
-
-本机逐步说明（图文）：
-
-- RAS：[guides/local-install-process.md](../../agent-ras/guides/local-install-process.md)
-- FI：[guides/local-install-process.md](../guides/local-install-process.md)
-
----
-
-## 9. 参考分册
-
-| 文档 | 归属视角 |
-|------|----------|
-| [agent-ras architecture](../../agent-ras/designs/architecture.md) | RAS **模块**实现 |
-| [agent-fault-injection architecture](./architecture.md) | FI **模块** + 与 Insight 交界摘要 |
-| [server-client-split.md](./server-client-split.md) / [phase2 SDD](../../design/fi-server-client-split/phase2-requirements-design.md) | Insight FI 远程编排 |
-| [modules/task-orchestration.md](./modules/task-orchestration.md) 等 | Insight FI API / Judge / bridge |
-| [guides/getting-started.md](../guides/getting-started.md) | FI 启用 |
-| developer-guide ingest / OTLP 契约 | Insight **协议** |
 
 ---
 

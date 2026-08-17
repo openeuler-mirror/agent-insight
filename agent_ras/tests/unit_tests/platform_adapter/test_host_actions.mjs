@@ -385,15 +385,25 @@ describe("opencode host_control", () => {
     assert.equal(host._state("s1b").phase, "failed")
   })
 
-  it("headless notice includes delivery_anchor from prompt response", async () => {
+  it("headless notice includes delivery_anchor from OpenCode-assigned prompt id", async () => {
+    const prompts = []
     const client = {
       session: {
         async prompt(req) {
-          const mid = req.messageID || req.body?.messageID || "msg_notice_1"
+          prompts.push(req)
+          assert.equal(req.messageID, undefined)
+          assert.equal(req.body?.messageID, undefined)
           return {
             data: {
-              info: { id: mid },
-              parts: [{ id: "prt_notice_1", type: "text", text: "headless notice", messageID: mid }],
+              info: { id: "msg_00abcnotice000000000001" },
+              parts: [
+                {
+                  id: "prt_notice_1",
+                  type: "text",
+                  text: "headless notice",
+                  messageID: "msg_00abcnotice000000000001",
+                },
+              ],
             },
             response: { ok: true, status: 200 },
           }
@@ -408,45 +418,50 @@ describe("opencode host_control", () => {
     const host = createOpenCodeHost({ client, tuiAvailable: false })
     const r = await host.forSession("opencode:headless-anchor").emitUserNotice("headless notice")
     assert.equal(r.ok, true)
-    assert.ok(r.delivery_anchor?.message_id?.startsWith("msg_"))
+    assert.equal(r.delivery_anchor.message_id, "msg_00abcnotice000000000001")
     assert.equal(r.delivery_anchor.part_id, "prt_notice_1")
     assert.equal(r.delivery_anchor.channel, "ras_notice")
+    assert.ok(prompts.every((p) => !p.messageID && !p.body?.messageID))
   })
 
-  it("prompt_async void response still yields delivery_anchor via preallocated messageID", async () => {
+  it("void prompt response succeeds without fabricating delivery_anchor", async () => {
     const prompts = []
     const client = {
       session: {
-        async promptAsync(req) {
+        async prompt(req) {
           prompts.push(req)
           return { response: { ok: true, status: 204 } }
         },
-        async prompt() {
-          throw new Error("sync prompt should not be required when async accepts")
-        },
       },
-    }
-    // Force async-only by making prompt throw after promptAsync — actually
-    // with delivery messageID we prefer sync first. Stub sync as 204-like void
-    // so extract falls back to preallocated id.
-    client.session.prompt = async (req) => {
-      prompts.push(req)
-      return { response: { ok: true, status: 204 } }
     }
     const host = createOpenCodeHost({ client, tuiAvailable: false })
     const r = await host.forSession("opencode:async-anchor").emitUserNotice("async notice")
     assert.equal(r.ok, true)
-    assert.ok(r.delivery_anchor?.message_id?.startsWith("msg_"))
-    assert.equal(r.delivery_anchor.channel, "ras_notice")
-    assert.ok(prompts.some((p) => (p.messageID || p.body?.messageID || "").startsWith("msg_")))
+    assert.equal(r.delivery_anchor, undefined)
+    assert.ok(prompts.every((p) => !p.messageID && !p.body?.messageID))
   })
 
-  it("steering includes delivery_anchor when prompt returns empty body", async () => {
+  it("steering uses OpenCode-assigned id and does not pass messageID", async () => {
+    const prompts = []
     const client = {
       session: {
         async prompt(req) {
-          assert.ok((req.messageID || req.body?.messageID || "").startsWith("msg_"))
-          return true
+          prompts.push(req)
+          assert.equal(req.messageID, undefined)
+          return {
+            data: {
+              info: { id: "msg_00abcsteer0000000000001" },
+              parts: [
+                {
+                  id: "prt_steer_1",
+                  type: "text",
+                  text: "<system-reminder>\nstop\n</system-reminder>",
+                  messageID: "msg_00abcsteer0000000000001",
+                },
+              ],
+            },
+            response: { ok: true, status: 200 },
+          }
         },
         async abort() {
           return true
@@ -458,20 +473,20 @@ describe("opencode host_control", () => {
     host._state("steer-anchor").idleArrivedEarly = true
     const r = await session.pushSteering("<system-reminder>\nstop\n</system-reminder>")
     assert.equal(r.ok, true)
-    assert.ok(r.delivery_anchor?.message_id?.startsWith("msg_"))
+    assert.equal(r.delivery_anchor.message_id, "msg_00abcsteer0000000000001")
+    assert.equal(r.delivery_anchor.part_id, "prt_steer_1")
     assert.equal(r.delivery_anchor.channel, "ras_steering")
+    assert.ok(prompts.every((p) => !p.messageID && !p.body?.messageID))
   })
 
-  it("prefers preallocated delivery messageID over unrelated prompt response ids", async () => {
+  it("delivery_anchor prefers extracted OpenCode id from prompt response", async () => {
     const client = {
       session: {
-        async prompt(req) {
-          const mid = req.messageID || req.body?.messageID
+        async prompt() {
           return {
             data: {
-              // Simulate OpenCode returning an assistant/other message id.
-              info: { id: "msg_assistant_other_turn" },
-              parts: [{ id: "prt_other", type: "text", text: "assistant" }],
+              info: { id: "msg_00abcfromhost00000000001" },
+              parts: [{ id: "prt_host", type: "text", text: "notice" }],
             },
             response: { ok: true, status: 200 },
           }
@@ -479,10 +494,10 @@ describe("opencode host_control", () => {
       },
     }
     const host = createOpenCodeHost({ client, tuiAvailable: false })
-    const r = await host.forSession("opencode:prefer-prealloc").emitUserNotice("notice")
+    const r = await host.forSession("opencode:prefer-extract").emitUserNotice("notice")
     assert.equal(r.ok, true)
-    assert.notEqual(r.delivery_anchor.message_id, "msg_assistant_other_turn")
-    assert.ok(r.delivery_anchor.message_id.startsWith("msg_"))
+    assert.equal(r.delivery_anchor.message_id, "msg_00abcfromhost00000000001")
+    assert.equal(r.delivery_anchor.part_id, "prt_host")
   })
 
   it("pushSteering flushes on idle", async () => {

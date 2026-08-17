@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from core.host_control import HostControl, NoOpHostControl
+from core.host_control import HostControl
 from core.models import Anomaly
 from recovery.robustness_prompt import (
     format_steering,
@@ -243,8 +243,3 @@ async def apply_recovery_actions(
                 await inject_steering(host, message)
         else:
             logger.warning("apply_recovery_actions: unknown type %r", atype)
-
-
-# Back-compat alias for callers still typing host loosely
-def ensure_host(host: HostControl | None) -> HostControl:
-    return host if host is not None else NoOpHostControl()

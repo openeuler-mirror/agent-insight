@@ -22,10 +22,11 @@ agent_ras/review/
 
 ## 扩展
 
-见 [fault-domain-plugins.md](../features/fault-domain-plugins.md)：新增 `review/<domain>.py` + `review/skills/<id>/SKILL.md`。
+新增 `review/<domain>.py` + `review/skills/<id>/SKILL.md`。
 
 ## 相关
 
-- Monitor L3：`AgentRASMonitor` → `skill_for(..., "review")` → `role="review"`
+- Monitor L3：`evidence.needs_l3_review` 且 `skill_for(domain, "review")` 存在 → `_start_l3_review`；否则立即 abort。
+- review payload：`excerpt` + `evidence` + `first_verdict`；保留 `thinking_excerpt` 别名以兼容现有 `llm-loop-review` SKILL。
 - 检测 skill：`detectors/skills/`
 - 恢复策略与文案：`recovery/<domain>.py`

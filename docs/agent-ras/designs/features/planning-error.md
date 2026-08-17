@@ -1,21 +1,3 @@
-# Planning Error 检测（规划中）
-
-策略层规划错误：约束忽略、不可行动作、低效计划、错误工具选择等。
-
-```mermaid
-flowchart TB
-  Task[Task_constraints] --> Gate{Info_complete}
-  Env[Env_state] --> Gate
-  Tools[Tool_contracts] --> Gate
-  Gate -->|partial| Heuristic[Heuristic_layer]
-  Gate -->|full| Semantic[Semantic_layer]
-  Heuristic --> Anom[Anomaly]
-  Semantic --> Anom
-  Anom --> Rec[Recovery_steer_or_notice]
-```
-
----
-
 # LLM Agent 规划错误（Planning Error）检测 — 需求分析与方案
 
 版本：v0.2  
@@ -23,8 +5,7 @@ flowchart TB
 
 > 文档类型：Phase1 需求分析 + 方案设计（合并） | 关联项目：agent-insight / agent_ras  
 > 复杂度：**High**（判定依赖任务约束、环境状态、工具契约等外部信息；需按信息完备度分层检测，而非纯文本模式匹配）  
-> 关联模块：[agent_ras/detectors/](../../../../agent_ras/detectors/)、[agent_ras/recovery/](../../../../agent_ras/recovery/)、现有 L3 Skill 判定通道  
-> 关联调研：[语义层故障注入调研](./analysis-paralysis.md)
+> 关联模块：[agent_ras/detectors/](../../../../agent_ras/detectors/)、[agent_ras/recovery/](../../../../agent_ras/recovery/)、现有 L3 Skill 判定通道
 
 ---
 
@@ -304,6 +285,18 @@ flowchart TB
 
 ## 四、解决方案
 
+```mermaid
+flowchart TB
+  Task[Task_constraints] --> Gate{Info_complete}
+  Env[Env_state] --> Gate
+  Tools[Tool_contracts] --> Gate
+  Gate -->|partial| Heuristic[Heuristic_layer]
+  Gate -->|full| Semantic[Semantic_layer]
+  Heuristic --> Anom[Anomaly]
+  Semantic --> Anom
+  Anom --> Rec[Recovery_steer_or_notice]
+```
+
 ### 4.1 总体原则
 
 不假设「只看 token 流就能确诊规划错误」。采用 **信息感知的分层级联**：
@@ -520,7 +513,7 @@ Anomaly evidence 示例：
 
 ## 六、故障注入方案
 
-> 开放域很少有「金标准计划」。评测用真值来自**注入剧本标签**（注入点 + 期望 `primary_fault`），而不是世界最优路径。通用语义注入机制的深度拆解见 [analysis-paralysis.md](./analysis-paralysis.md)。
+> 开放域很少有「金标准计划」。评测用真值来自**注入剧本标签**（注入点 + 期望 `primary_fault`），而不是世界最优路径。通用语义注入机制的深度拆解见本仓过度思考（analysis paralysis）调研。
 
 ### 6.1 设计原则
 
@@ -669,7 +662,7 @@ sequenceDiagram
 10. **Aegis / AEGIS.** "Automated Error Generation and Attribution for Multi-Agent Systems." arXiv:2509.14295. https://github.com/kfq20/AEGIS  
     - 成功轨迹上上下文感知注入，产出带标签失败轨。
 
-11. 本仓 [语义层故障注入调研](./analysis-paralysis.md) — AutoInject / MAS-FIRE 机制深拆与过度思考注入草案。
+11. 本仓过度思考（analysis paralysis）调研 — AutoInject / MAS-FIRE 机制深拆与过度思考注入草案。
 
 ---
 

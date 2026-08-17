@@ -89,48 +89,73 @@ function isUserPromptEcho(assistantText, userText) {
   return false
 }
 
-function loadThinkingConfig() {
+function copyDetectorMap(detectors) {
+  const out = {}
+  if (!detectors || typeof detectors !== "object" || Array.isArray(detectors)) return out
+  for (const [key, value] of Object.entries(detectors)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      out[key] = { ...value }
+    }
+  }
+  return out
+}
+
+function loadCapabilityConfig() {
+  let detectors = {}
+  let recovery = {}
+  let debug = false
   try {
     const rasHome = process.env.AGENT_INSIGHT_RAS_HOME || join(homedir(), ".agent-insight", "ras")
     const p = join(rasHome, "config.json")
-    // Default L3 on (matches LlmThinkingLoopConfig); explicit false still wins via ...loop.
-    let loop = {}
     if (existsSync(p)) {
       const cfg = JSON.parse(readFileSync(p, "utf8"))
       const ras = cfg?.agent_ras || {}
       const platformSlice = resolvePlatformCapabilityFromRas(ras, "opencode")
-      loop =
-        platformSlice?.detectors?.llm_thinking_loop ||
-        ras.llm_thinking_loop ||
-        ras.detectors?.llm_thinking_loop ||
-        {}
-      loop = {
-        semantic_content_enabled: true,
-        ...loop,
-        // Plugin breadcrumbs only; not sent to core detectors.
-        debug: Boolean(ras.debug || loop.debug),
+      if (platformSlice?.detectors) {
+        detectors = copyDetectorMap(platformSlice.detectors)
+      } else {
+        detectors = copyDetectorMap(ras.detectors)
       }
-    } else {
-      loop = { semantic_content_enabled: true }
+      recovery =
+        (platformSlice?.recovery && typeof platformSlice.recovery === "object"
+          ? platformSlice.recovery
+          : ras.recovery) || {}
+      debug = Boolean(ras.debug)
     }
-    // Optional RAS process-env overrides (RAS-owned; not set by FI).
-    const envInt = (key) => {
-      const raw = process.env[key]
-      if (!raw || !String(raw).trim()) return null
-      const n = Number(raw)
-      return Number.isFinite(n) && n > 0 ? n : null
-    }
-    const start = envInt("RAS_DETECTION_START_CHARS")
-    if (start != null) loop.detection_start_chars = start
-    const window = envInt("RAS_WINDOW_MAX_CHARS")
-    if (window != null) loop.window_max_chars = window
-    const threshold = envInt("RAS_LOOP_REPEAT_THRESHOLD")
-    if (threshold != null) loop.loop_repeat_threshold = threshold
-    const semanticEval = envInt("RAS_SEMANTIC_EVAL_CHARS")
-    if (semanticEval != null) loop.semantic_eval_chars = semanticEval
-    return loop
   } catch {
-    return { semantic_content_enabled: true }
+    detectors = {}
+    recovery = {}
+  }
+  const envInt = (key) => {
+    const raw = process.env[key]
+    if (!raw || !String(raw).trim()) return null
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+  const deprecatedFields = {
+    detection_start_chars: envInt("RAS_DETECTION_START_CHARS"),
+    window_max_chars: envInt("RAS_WINDOW_MAX_CHARS"),
+    loop_repeat_threshold: envInt("RAS_LOOP_REPEAT_THRESHOLD"),
+    semantic_eval_chars: envInt("RAS_SEMANTIC_EVAL_CHARS"),
+  }
+  for (const [, cfg] of Object.entries(detectors)) {
+    for (const [field, value] of Object.entries(deprecatedFields)) {
+      if (value != null && field in cfg) cfg[field] = value
+    }
+    if (cfg.debug === undefined) cfg.debug = debug
+  }
+  const starts = Object.values(detectors)
+    .map((cfg) => Number(cfg?.detection_start_chars))
+    .filter((n) => Number.isFinite(n) && n > 0)
+  return {
+    helloPayload: {
+      detectors: copyDetectorMap(detectors),
+      notify_user_on_warning: recovery.notify_user_on_warning,
+      recovery: { ...recovery },
+      debug,
+    },
+    detectionStart: starts.length ? Math.min(...starts) : undefined,
+    debug,
   }
 }
 
@@ -138,8 +163,8 @@ function shouldObserveText(text, prevLen, { detectionStart, aborting }) {
   if (!text || text.length < 32) return false
   const growth = text.length - prevLen
   if (growth <= 0) return false
-  const start = Number(detectionStart) || 30000
   if (aborting) return false
+  const start = Number(detectionStart) || 30000
   // OpenCode 1.18 streams many message.part.delta tokens — cadence ~40 chars
   // so we still sample before window_max without per-token HTTP flood.
   if (text.length >= Math.max(100, start * 0.8)) {
@@ -201,11 +226,11 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
     if (rasDebugEarly) console.error(...args)
   }
 
-  // Optional Insight → local config sync (fail-open). Must run before loadThinkingConfig.
+  // Optional Insight → local config sync (fail-open). Must run before hello config load.
   await syncCapabilityConfigFromInsight({ log: rasLogEarly })
 
-  const thinkingConfig = loadThinkingConfig()
-  const detectionStart = thinkingConfig.detection_start_chars
+  const capabilityConfig = loadCapabilityConfig()
+  const detectionStart = capabilityConfig.detectionStart
   const hostApi = createOpenCodeHost({
     client,
     directory: directory || process.cwd(),
@@ -216,7 +241,7 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
   })
 
   const rasDebug =
-    rasDebugEarly || Boolean(thinkingConfig.debug)
+    rasDebugEarly || Boolean(capabilityConfig.debug)
 
   const rasLog = (...args) => {
     if (rasDebug) console.error(...args)
@@ -282,6 +307,20 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
   }
 
   async function runOneSkillJudge(sid, req) {
+    const skillName = String(req.skill_name || "").trim()
+    if (!skillName) {
+      console.error("[insight-ras] skill_request missing skill_name; fail-open")
+      try {
+        await ras.skillResult(sid, {
+          request_id: req.request_id,
+          error: "missing_skill_name",
+          timeout: 2,
+        })
+      } catch (e) {
+        console.error("[insight-ras] skill_result failed:", e?.message || e)
+      }
+      return
+    }
     const timeoutMs = Math.max(
       1000,
       Math.floor(Number(req.timeout || 30) * 1000),
@@ -290,7 +329,7 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
       { client, directory: directory || process.cwd() },
       {
         role: req.role || "detection",
-        skillName: req.skill_name || "llm-loop-detection",
+        skillName,
         payload: req.payload || "",
         timeoutMs,
       },
@@ -392,7 +431,7 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
 
     try {
       if (!greeted.has(sid)) {
-        const welcome = await ras.hello(sid, "opencode", thinkingConfig)
+        const welcome = await ras.hello(sid, "opencode", capabilityConfig.helloPayload)
         if (welcome?.host_messages) {
           hostApi.setHostMessages(welcome.host_messages)
         }
@@ -453,7 +492,7 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
       const sid = sessionKey("opencode", nativeId)
       try {
         if (!greeted.has(sid)) {
-          const welcome = await ras.hello(sid, "opencode", thinkingConfig)
+          const welcome = await ras.hello(sid, "opencode", capabilityConfig.helloPayload)
           if (welcome?.host_messages) {
             hostApi.setHostMessages(welcome.host_messages)
           }

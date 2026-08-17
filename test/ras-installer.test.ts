@@ -27,7 +27,7 @@ test("RAS config merge preserves user thresholds and updates runtime fields", ()
         enabled: false,
         service: { transport: "http", custom: "keep" },
         insight: { enabled: false, custom: "keep" },
-        llm_thinking_loop: { detection_start_chars: 1234 },
+        detectors: { llm_thinking_loop: { detection_start_chars: 1234 } },
       },
       customRoot: true,
     },
@@ -50,8 +50,44 @@ test("RAS config merge preserves user thresholds and updates runtime fields", ()
   assert.equal(merged.agent_ras.insight.enabled, false)
   assert.equal(merged.agent_ras.insight.custom, "keep")
   assert.equal(merged.agent_ras.insight.api_key, "secret")
-  assert.equal(merged.agent_ras.llm_thinking_loop.detection_start_chars, 1234)
-  assert.equal(merged.agent_ras.llm_thinking_loop.semantic_content_enabled, true)
+  assert.equal(merged.agent_ras.detectors.llm_thinking_loop.detection_start_chars, 1234)
+  assert.equal(merged.agent_ras.detectors.llm_thinking_loop.semantic_content_enabled, true)
+})
+
+test("RAS config merge drops leftover flat domain keys from older installs", () => {
+  const merged = installer.mergeRasConfig(
+    {
+      agent_ras: {
+        llm_thinking_loop: { detection_start_chars: 300 },
+        repeat_tool: { warning_threshold: 5 },
+        ras_config_revision: 4,
+        ras_config_revisions: { opencode: 4 },
+        detectors: { llm_thinking_loop: { detection_start_chars: 1234 } },
+        platforms: {
+          opencode: {
+            detectors: { llm_thinking_loop: { detection_start_chars: 1234 } },
+          },
+        },
+      },
+    },
+    {
+      python: "/usr/bin/python3",
+      pythonHome: "/usr",
+      libpython: "/usr/lib/libpython3.so",
+      runtimeRoot: "/tmp/runtime",
+      pythonPackages: "/tmp/runtime/.python-packages",
+    },
+  )
+
+  assert.equal(merged.agent_ras.llm_thinking_loop, undefined)
+  assert.equal(merged.agent_ras.repeat_tool, undefined)
+  assert.equal(merged.agent_ras.ras_config_revision, undefined)
+  assert.equal(merged.agent_ras.ras_config_revisions, undefined)
+  assert.equal(merged.agent_ras.detectors.llm_thinking_loop.detection_start_chars, 1234)
+  assert.equal(
+    merged.agent_ras.platforms.opencode.detectors.llm_thinking_loop.detection_start_chars,
+    1234,
+  )
 })
 
 test("OpenCode config merge is idempotent and preserves existing agents", () => {

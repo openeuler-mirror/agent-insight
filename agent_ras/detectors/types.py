@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from pydantic import BaseModel
 
@@ -62,6 +62,7 @@ class DetectorPlugin:
     config_model: type[BaseModel]
     factory: Callable[[BaseModel, RASAgents], Detector | None]
     detection_skill: str | None = None
+    verdict_parser: Callable[[str | dict[str, Any]], Any] | None = None
     enabled_by_default: bool = True
     version: int = 1
     anchor: Anchor | None = None
@@ -76,6 +77,7 @@ class ReviewPlugin:
 
     id: str
     review_skill: str
+    verdict_parser: Callable[[str | dict[str, Any]], Any] | None = None
     version: int = 1
 
 
@@ -88,6 +90,9 @@ class RecoveryPlugin:
     stream_kinds: Sequence[str] = ()
     anchor: Anchor = "llm"
     messages: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    terminate_kinds: Sequence[str] = ()
+    # role ("steer" | "notice" | "critical") → {evidence.msg_key: template key}
+    msg_key_templates: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     version: int = 1
 
 

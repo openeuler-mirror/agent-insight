@@ -38,19 +38,9 @@ class PendingRecovery:
         channel = str(evidence.pop("channel", "") or "")
         mode = str(evidence.get("mode") or "")
         profile = str(evidence.get("recovery_profile") or "")
-        if not profile:
-            if mode == "plan_execution_loop_lock" or channel == "plan_execution":
-                profile = "thinking_loop_plan_exec"
-            elif channel == "text_repetition":
-                profile = "thinking_loop_text_rep"
-        if mode == "plan_execution_loop_lock" or channel == "plan_execution":
-            source = "plan_execution_loop_lock"
-        elif channel == "text_repetition":
-            source = "text_repetition"
-        else:
-            source = mode or channel or str(
-                getattr(anomaly.kind, "value", anomaly.kind)
-            )
+        source = str(evidence.get("source") or "").strip() or (
+            mode or channel or str(getattr(anomaly.kind, "value", anomaly.kind))
+        )
         extra = evidence
         if not str(extra.get("fault_domain") or "").strip():
             # Deferred import: agents.base -> core.models -> core/__init__ ->
@@ -70,21 +60,6 @@ class PendingRecovery:
             scanned_text=str(evidence.get("scanned_text") or ""),
             thinking_excerpt=str(evidence.get("thinking_excerpt") or ""),
             extra=extra,
-        )
-
-    @property
-    def is_plan_execution(self) -> bool:
-        return (
-            self.source == "plan_execution_loop_lock"
-            or self.recovery_profile == "thinking_loop_plan_exec"
-            or self.mode == "plan_execution_loop_lock"
-        )
-
-    @property
-    def is_text_repetition(self) -> bool:
-        return (
-            self.source == "text_repetition"
-            or self.recovery_profile == "thinking_loop_text_rep"
         )
 
 

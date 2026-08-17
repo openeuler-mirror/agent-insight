@@ -24,12 +24,29 @@ def test_callable_host_abort_notice_steer_channels() -> None:
     steer = host.push_steering("s1")
 
     assert abort == {"ok": True, "channel": "xiaoo.abort"}
-    assert notice["ok"] is True
-    assert notice["channel"] == "xiaoo.notice"
-    assert notice["delivery_anchor"]["channel"] == "ras_notice"
-    assert steer["ok"] is True
-    assert steer["channel"] == "xiaoo.steer"
+    assert notice == {"ok": True, "channel": "xiaoo.notice"}
+    assert "delivery_anchor" not in notice
+    assert steer == {"ok": True, "channel": "xiaoo.steer"}
+    assert "delivery_anchor" not in steer
     assert calls == [("abort", None), ("notice", "n1"), ("steer", "s1")]
+
+
+def test_callable_host_forwards_delivery_anchor_from_fn() -> None:
+    anchor = {"message_id": "msg_platform_1", "channel": "ras_notice"}
+    host = CallableHostControl(
+        platform="xiaoo",
+        notice_fn=lambda _m: {"ok": True, "delivery_anchor": anchor},
+        steer_fn=lambda _m: {
+            "ok": True,
+            "delivery_anchor": {"message_id": "msg_platform_2", "channel": "ras_steering"},
+        },
+    )
+    notice = host.emit_user_notice("n1")
+    steer = host.push_steering("s1")
+    assert notice["ok"] is True
+    assert notice["delivery_anchor"] == anchor
+    assert steer["delivery_anchor"]["message_id"] == "msg_platform_2"
+    assert steer["delivery_anchor"]["channel"] == "ras_steering"
 
 
 def test_callable_host_unwired_returns_ok_false() -> None:
@@ -68,7 +85,7 @@ def test_apply_wire_actions_propagates_fn_failure() -> None:
 
 def test_apply_wire_actions_dispatches_in_order() -> None:
     host = CallableHostControl(
-        platform="openclaw",
+        platform="other",
         abort_fn=lambda: None,
         notice_fn=lambda _m: None,
         steer_fn=lambda _m: None,
@@ -92,7 +109,7 @@ def test_apply_wire_actions_dispatches_in_order() -> None:
 def test_build_protocol_ras_client_wires_on_actions() -> None:
     noticed: list[str] = []
     client, host = build_protocol_ras_client(
-        platform="hermes",
+        platform="other",
         abort_fn=lambda: None,
         notice_fn=noticed.append,
         steer_fn=lambda _m: None,
@@ -100,7 +117,7 @@ def test_build_protocol_ras_client_wires_on_actions() -> None:
     assert host is not None
     assert client.on_actions is not None
     client.on_actions(
-        "hermes:s1",
+        "other:s1",
         [
             {"type": "abort_stream"},
             {"type": "emit_notice", "message": "hi"},

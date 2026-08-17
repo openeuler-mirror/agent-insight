@@ -29,11 +29,33 @@ function interactionText(interaction: RawInteraction): string {
   return ""
 }
 
+function interactionTimeMs(interaction: RawInteraction): number | null {
+  const raw = interaction as RawInteraction & {
+    timestamp?: unknown
+    time?: unknown
+    timeInfo?: { created?: unknown }
+  }
+  const candidates = [raw.timestamp, raw.timeInfo?.created, raw.time]
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) return value
+    if (typeof value === "string") {
+      const text = value.trim()
+      if (!text) continue
+      if (/^\d+$/.test(text)) {
+        const n = Number(text)
+        if (Number.isFinite(n)) return n
+      }
+      const parsed = Date.parse(text)
+      if (Number.isFinite(parsed)) return parsed
+    }
+  }
+  return null
+}
+
 /**
- * Align Session interactions to RAS LLM anchors (OpenCode parity).
- * Xiaoo FI often omits messageID on assistant turns while RAS emits
- * `xiaoo-msg-*`; stamp the anomaly message_id onto the best text assistant
- * so recovery-tree can hang after that LLM — not by hardcoding position.
+ * Align Session interactions to RAS LLM anchors when platform messageIDs are missing.
+ * Stamp only the latest text assistant with ts ≤ marker.ts (detection time).
+ * If none qualify (missing timestamps or all after detection), leave interactions unchanged.
  */
 export function alignInteractionsToRasAnchors(
   interactions: RawInteraction[],
@@ -52,16 +74,22 @@ export function alignInteractionsToRasAnchors(
     const channel = asString(marker.channel) || ""
     if (channel && !channel.startsWith("llm")) continue
 
-    let best = -1
+    let bestBefore = -1
+    let bestBeforeTs = Number.NEGATIVE_INFINITY
     for (let i = 0; i < out.length; i += 1) {
       const item = out[i]
       if (item.role !== "assistant") continue
       if (asString(item.messageID)) continue
       if (!interactionText(item)) continue
-      best = i
+      const ts = interactionTimeMs(item)
+      if (ts == null || ts > marker.ts) continue
+      if (ts >= bestBeforeTs) {
+        bestBefore = i
+        bestBeforeTs = ts
+      }
     }
-    if (best < 0) continue
-    out[best] = { ...out[best], messageID: messageId }
+    if (bestBefore < 0) continue
+    out[bestBefore] = { ...out[bestBefore], messageID: messageId }
     used.add(messageId)
   }
   return out

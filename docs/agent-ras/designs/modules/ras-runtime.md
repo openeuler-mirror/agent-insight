@@ -27,7 +27,6 @@ flowchart TB
 |------|-----|
 | 模块 ID | M-ras-runtime |
 | 路径 | `agent_ras/ras_runtime/` |
-| 规模 | ≈ 1168 行 |
 | 主要语言 | Python |
 | 所属层 | L1 |
 
@@ -44,13 +43,13 @@ flowchart TD
   hub --> core[core_detectors_recovery]
 ```
 
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `facade.py` | 108 | 稳定 FFI：`call` / ops 分发 |
-| `session_hub.py` | 553 | hello/observe/actions/skill_result/bye |
-| `insight_push.py` | 285 | HTTP 旁路 ingest |
-| `runtime.py` | 74 | daemon 线程 + asyncio loop |
-| `event_bus.py` / `trail.py` / `platform_capabilities.py` | — | 辅助 |
+| 文件 | 职责 |
+|------|------|
+| `facade.py` | 稳定 FFI：`call` / ops 分发 |
+| `session_hub.py` | hello/observe/actions/skill_result/bye |
+| `insight_push.py` | HTTP 旁路 ingest |
+| `runtime.py` | daemon 线程 + asyncio loop |
+| `event_bus.py` / `trail.py` / `platform_capabilities.py` | 辅助 |
 
 **公开导出**（`__init__.py`）：仅 `call`、`reset_runtime_for_tests`。
 
@@ -69,7 +68,7 @@ ras_runtime
 
 ### 职责边界
 
-**做什么**：协议会话、构建 detectors、调用 `build_recovery_actions`、返回 wire actions、推送 Insight、承接 OpenCode `skill_result`。SessionHub 是 inproc **编排核**（直连 Detectors + recovery wire），不是 Monitor 薄封装。  
+**做什么**：协议会话、构建 detectors、调用 `build_recovery_actions`、返回 wire actions、推送 Insight、承接 inproc `skill_result`（OpenCode / xiaoO）。SessionHub 是 inproc **编排核**（直连 Detectors + recovery wire），不是 Monitor 薄封装。  
 **不做什么**：不调用 OpenCode SDK；不重做 recovery 决策；不替代 jiuwen Rail/Monitor。
 
 ---
@@ -84,7 +83,7 @@ ras_runtime
 | `hello` | 创建 session（platform、能力） |
 | `observe` | Signal 观测 → 可选 actions/anomaly/skill_requests |
 | `action_result` | Host 投递 ack + anchors → push |
-| `skill_result` | L3 host judge 回填（OpenCode） |
+| `skill_result` | L3 host judge 回填（OpenCode / xiaoO inproc） |
 | `flush` | 有界等待当前 session 的 anomaly / action_result HTTP 2xx；超时不取消上传、不向 Agent 抛错 |
 | `reset` / `bye` | 清理 |
 
@@ -107,7 +106,7 @@ Insight 契约真源：[developer-guide/09-otlp-attribute-contract.md](../../../
 | `SessionState` | `session_hub.py` | per-session detectors / last_trace_anchor |
 | `fire_push_*` | `insight_push.py` | 注册 per-session pending handle 与完成 receipt；未 flush receipt 每 session 上限 256；缺配置跳过，失败只打日志 |
 | `flush_pending_pushes` | `insight_push.py` | 本地快照等待当前 pending；并发调用独立结算，返回 attempted/acked/failed/pending/timed_out，超时不 cancel |
-| capabilities | `platform_capabilities.py` | `opencode` 支持 host skill judge |
+| capabilities | `platform_capabilities.py` | OpenCode / xiaoO 支持 host skill judge；openjiuwen 深挂载走 DeepAgentAdapter |
 
 ### 设计模式
 

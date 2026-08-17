@@ -11,8 +11,7 @@ platform_adapter/
   common/                     # L2 ras_client + protocol_client
   openjiuwen/                 # L3 深适配
   opencode/                   # L3 薄插件
-  xiaoo/                      # L3 Hooker + stream bridge
-  openclaw/ hermes/           # L3 骨架（薄封装 shared factory）
+  xiaoo/                      # L3 Hooker + Daemon SSE
 tests/
 pyproject.toml
 ```

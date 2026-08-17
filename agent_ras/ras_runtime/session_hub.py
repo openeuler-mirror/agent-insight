@@ -17,7 +17,6 @@ from core.config import AgentRASConfig, coerce_message_locale
 from core.models import Anomaly, Signal, SignalKind
 from detectors.base import AsyncRecoveryDetector, Detector, is_async_recovery_detector
 from detectors.registry import (
-    FLAT_PAYLOAD_DOMAIN,
     build_member_detectors,
     detector_config_models,
 )
@@ -75,21 +74,45 @@ def _anchor_for_anomaly(state: "SessionState", kind: str | None) -> dict[str, An
 
 
 def _config_from_payload(raw: dict[str, Any] | None) -> AgentRASConfig:
-    """Registry-driven: nested per-domain dicts; flat keys only for the legacy domain."""
+    """Nested per-domain dicts; unique top-level field names overlay one domain."""
     raw = dict(raw or {})
+    nested = raw.get("detectors") if isinstance(raw.get("detectors"), dict) else {}
     cfg = AgentRASConfig()
-    for name, model_cls in detector_config_models().items():
-        merged = getattr(cfg.detectors, name).model_dump()
-        sub = raw.get(name)
+    models = detector_config_models()
+    field_owners: dict[str, str] = {}
+    for name, model_cls in models.items():
+        for field_name in model_cls.model_fields:
+            if field_name in field_owners:
+                field_owners[field_name] = ""
+            else:
+                field_owners[field_name] = name
+    for name, model_cls in models.items():
+        current = getattr(cfg.detectors, name, None)
+        if current is not None and hasattr(current, "model_dump"):
+            merged = current.model_dump()
+        else:
+            merged = model_cls().model_dump()
+        sub = nested.get(name) if isinstance(nested.get(name), dict) else None
+        if not isinstance(sub, dict):
+            maybe = raw.get(name)
+            sub = maybe if isinstance(maybe, dict) else None
         if isinstance(sub, dict):
             merged.update({k: v for k, v in sub.items() if k in merged})
-        if name == FLAT_PAYLOAD_DOMAIN:
-            for key in model_cls.model_fields:
-                if key in raw:
-                    merged[key] = raw[key]
-        setattr(cfg.detectors, name, model_cls(**merged))
+        for field_name, owner in field_owners.items():
+            if owner == name and field_name in raw and (
+                not isinstance(sub, dict) or field_name not in sub
+            ):
+                merged[field_name] = raw[field_name]
+        extras = cfg.detectors.__pydantic_extra__
+        if extras is None:
+            extras = {}
+            object.__setattr__(cfg.detectors, "__pydantic_extra__", extras)
+        extras[name] = model_cls(**merged)
+    recovery = raw.get("recovery") if isinstance(raw.get("recovery"), dict) else {}
     if "notify_user_on_warning" in raw:
         cfg.recovery.notify_user_on_warning = bool(raw["notify_user_on_warning"])
+    elif "notify_user_on_warning" in recovery:
+        cfg.recovery.notify_user_on_warning = bool(recovery["notify_user_on_warning"])
     return cfg
 
 

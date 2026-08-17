@@ -104,17 +104,36 @@ def _ensure_path() -> None:
             sys.path.insert(0, c)
 
 
-def _session_key(payload: dict[str, Any]) -> str:
-    sid = (
+def _session_key(payload: dict[str, Any]) -> str | None:
+    meta = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    hooker = payload.get("hooker") if isinstance(payload.get("hooker"), dict) else {}
+    raw = (
         payload.get("session_id")
         or payload.get("runtime_id")
-        or (payload.get("metadata") or {}).get("session_id")
-        or (payload.get("hooker") or {}).get("session_id")
+        or meta.get("session_id")
+        or hooker.get("session_id")
         or payload.get("prompt_session")
-        or "unknown"
     )
-    sid = str(sid)
+    if raw is None:
+        return None
+    sid = str(raw).strip()
+    if not sid:
+        return None
+    native = sid.removeprefix("xiaoo:")
+    if not native or native.lower() == "unknown":
+        return None
     return sid if sid.startswith("xiaoo:") else f"xiaoo:{sid}"
+
+
+def _require_session(payload: dict[str, Any], *, op: str) -> str | None:
+    sid = _session_key(payload)
+    if sid is None:
+        print(
+            f"agent_ras hooker {op}: missing session id; skip observe",
+            file=sys.stderr,
+        )
+        return None
+    return sid
 
 
 def _native_id(sid: str) -> str:
@@ -156,17 +175,14 @@ def _hello_config() -> dict[str, Any]:
     except Exception as exc:
         print(f"agent_ras hello_config: {exc}", file=sys.stderr)
         return {
-            "detection_start_chars": int(os.environ.get("RAS_DETECTION_START_CHARS", "300")),
-            "window_max_chars": int(os.environ.get("RAS_WINDOW_MAX_CHARS", "1000")),
-            "loop_repeat_threshold": int(os.environ.get("RAS_LOOP_REPEAT_THRESHOLD", "5")),
-            "semantic_content_enabled": False,
+            "detectors": {},
         }
 
 
-def _client(session_native: str):
+def _client(_session_native: str):
     from platform_adapter.xiaoo.hooks import build_xiaoo_ras_client
 
-    return build_xiaoo_ras_client(session_id=session_native)
+    return build_xiaoo_ras_client()
 
 
 def _wire_actions_from_result(result: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -190,9 +206,11 @@ def _wire_actions_from_result(result: dict[str, Any] | None) -> list[dict[str, A
 
 def handle_chat_received(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
+    sid = _require_session(payload, op="chat_received")
+    if sid is None:
+        return {"result": "accept"}
     _sync_capability_config()
     _ensure_embed()
-    sid = _session_key(payload)
     native = _native_id(sid)
     os.environ["XIAOO_RAS_SESSION_ID"] = native
     client, _host = _client(native)
@@ -204,8 +222,10 @@ def handle_chat_received(payload: dict[str, Any]) -> dict[str, Any]:
 
 def handle_session_state(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
+    sid = _require_session(payload, op="session_state")
+    if sid is None:
+        return {"result": "ack"}
     _ensure_embed()
-    sid = _session_key(payload)
     native = _native_id(sid)
     client, _host = _client(native)
     state = str(payload.get("state") or payload.get("outcome") or "").lower()
@@ -217,11 +237,13 @@ def handle_session_state(payload: dict[str, Any]) -> dict[str, Any]:
 
 def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
+    sid = _require_session(payload, op="tool_post")
+    if sid is None:
+        return {"result": "accept"}
     _sync_capability_config()
     _ensure_embed()
     from platform_adapter.xiaoo.stream_bridge import observe_tool_after
 
-    sid = _session_key(payload)
     native = _native_id(sid)
     client, _host = _client(native)
     client.ensure()
@@ -273,10 +295,12 @@ def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
 
 def handle_stream_delta(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
+    sid = _require_session(payload, op="stream_delta")
+    if sid is None:
+        return {"result": "accept"}
     _ensure_embed()
     from platform_adapter.xiaoo.stream_bridge import observe_text_delta
 
-    sid = _session_key(payload)
     native = _native_id(sid)
     client, _host = _client(native)
     client.ensure()

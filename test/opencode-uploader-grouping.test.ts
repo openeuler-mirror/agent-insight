@@ -247,6 +247,10 @@ test("opencode uploader: recovers user input from text part when chat.message.me
   const user = messages.find((m: any) => m.role === "user")
   assert.ok(user, "应当存在 user 消息")
   assert.equal(user.content, "nihao", "messageID 缺失时仍应从 text part 还原用户输入")
+  assert.equal(user.messageID, "msg_user")
+  const asst = messages.find((m: any) => m.role === "assistant")
+  assert.ok(asst)
+  assert.equal(asst.messageID, "msg_asst")
 })
 
 test("opencode uploader: rebuilds aborted assistant output from message.part.delta", async () => {

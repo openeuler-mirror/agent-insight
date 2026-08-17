@@ -14,74 +14,14 @@ from recovery.engine import (
 )
 
 
-class RepeatToolConfig(BaseModel):
-    """Thresholds for repeat / loop tool-call detection."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    warning_threshold: int = Field(default=5, ge=2)
-    critical_threshold: int = Field(default=10, ge=2)
-    global_breaker_threshold: int = Field(default=10, ge=2)
-    unknown_tool_threshold: int = Field(default=10, ge=2)
-
-    @property
-    def history_size(self) -> int:
-        return max(
-            4 * self.critical_threshold,
-            2 * self.global_breaker_threshold,
-            2 * self.unknown_tool_threshold,
-        )
-
-
-class LlmThinkingLoopConfig(BaseModel):
-    """Thresholds for LLM thinking-loop detection.
-
-    Character-based gates (``len(text)``), not word counts:
-
-    - ``detection_start_chars``: no L1/L2/L3 until cumulative stream length
-      reaches this threshold
-    - ``text_repetition`` (L1/L2): after start, scan every ``window_max_chars``
-      on a near-window of the same size (FIFO trim + scan gate + min length)
-    - ``plan_execution`` (L3): after start, semantic skill every
-      ``semantic_eval_chars`` incremental chars since last eval
-    - Detection / review skill names are bound by fault-domain plugins
-      (``detectors.loader``), not host-configurable.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    detection_start_chars: int = Field(
-        default=30000, ge=1,
-        description="Cumulative chars before any L1/L2/L3 detection runs",
-    )
-    window_max_chars: int = Field(
-        default=2000, ge=100,
-        description="L1/L2 near-window size, scan interval, and min detect length",
-    )
-    loop_repeat_threshold: int = Field(default=5, ge=2)
-    similar_clause_sim_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
-    semantic_eval_chars: int = Field(
-        default=10000, ge=1,
-        description="Incremental chars since last L3 eval before next detection",
-    )
-    semantic_content_enabled: bool = True
-
-
 class DetectorsConfig(BaseModel):
     """Toggle + thresholds for every detector.
 
-    Built-in domains keep typed fields. Additional DETECTOR_PLUGIN domains are
-    accepted via ``extra="allow"`` and coerced to their ``config_model``.
+    Domain configs live on each ``DETECTOR_PLUGIN.config_model`` and are
+    coerced here via ``extra="allow"``.
     """
 
     model_config = ConfigDict(extra="allow")
-
-    repeat_tool: RepeatToolConfig = Field(default_factory=RepeatToolConfig)
-    llm_thinking_loop: LlmThinkingLoopConfig = Field(
-        default_factory=LlmThinkingLoopConfig,
-    )
 
     @model_validator(mode="before")
     @classmethod
@@ -115,22 +55,19 @@ class DetectorsConfig(BaseModel):
             plugins = detector_plugins()
         except Exception:
             return self
+        extras = self.__pydantic_extra__
+        if extras is None:
+            extras = {}
+            object.__setattr__(self, "__pydantic_extra__", extras)
         for domain_id, plugin in plugins.items():
-            if getattr(self, domain_id, None) is None:
-                object.__setattr__(self, domain_id, plugin.config_model())
-            else:
-                current = getattr(self, domain_id)
-                if isinstance(current, dict):
-                    object.__setattr__(
-                        self, domain_id, plugin.config_model(**current)
-                    )
-                elif not isinstance(current, plugin.config_model):
-                    if isinstance(current, BaseModel):
-                        object.__setattr__(
-                            self,
-                            domain_id,
-                            plugin.config_model(**current.model_dump()),
-                        )
+            current = extras.get(domain_id, getattr(self, domain_id, None))
+            if current is None:
+                extras[domain_id] = plugin.config_model()
+            elif isinstance(current, dict):
+                extras[domain_id] = plugin.config_model(**current)
+            elif not isinstance(current, plugin.config_model):
+                if isinstance(current, BaseModel):
+                    extras[domain_id] = plugin.config_model(**current.model_dump())
         return self
 
 
@@ -180,10 +117,3 @@ class AgentRASConfig(BaseModel):
     detectors: DetectorsConfig = Field(default_factory=DetectorsConfig)
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
     policy: RecoveryPolicyConfig = Field(default_factory=RecoveryPolicyConfig)
-
-    @model_validator(mode="after")
-    def _validate_thresholds(self) -> "AgentRASConfig":
-        repeat = self.detectors.repeat_tool
-        if repeat.critical_threshold < repeat.warning_threshold:
-            raise ValueError("critical_threshold must be >= warning_threshold")
-        return self

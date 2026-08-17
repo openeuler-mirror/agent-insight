@@ -14,11 +14,9 @@ from openjiuwen.core.foundation.llm.model import Model
 from openjiuwen.core.single_agent.schema.agent_card import AgentCard
 from openjiuwen.core.sys_operation.cwd import init_cwd
 from agents.base import (
-    FAULT_DOMAIN_LLM_THINKING_LOOP,
     MEMBER_MAX_ITERATIONS,
     ROLE_PROMPTS,
     build_inline_skill_query,
-    skill_for,
     skills_dir_for_role,
 )
 from core.config import AgentRASConfig
@@ -53,18 +51,9 @@ def _rebind_member_cwd(role: str) -> str:
 
 @dataclass
 class AdapterConfig:
-    """Runtime knobs for DeepAgentAdapter (skill names from fault-domain registry)."""
+    """Runtime knobs for DeepAgentAdapter (skill names come with each invoke)."""
 
     max_iterations: int = MEMBER_MAX_ITERATIONS
-    default_fault_domain: str = FAULT_DOMAIN_LLM_THINKING_LOOP
-
-    def skill_for_role(
-        self,
-        role: str,
-        fault_domain: str | None = None,
-    ) -> str:
-        domain = fault_domain or self.default_fault_domain
-        return skill_for(domain, role)
 
 
 def adapter_config_from_agent_ras(config: AgentRASConfig) -> AdapterConfig:

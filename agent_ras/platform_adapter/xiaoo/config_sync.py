@@ -41,21 +41,22 @@ def resolve_config_path(ras_home: Path | None = None) -> Path:
     return (ras_home or resolve_ras_home()) / "config.json"
 
 
+def _copy_detector_map(detectors: Any) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    if not isinstance(detectors, dict):
+        return out
+    for key, value in detectors.items():
+        if isinstance(value, dict):
+            out[str(key)] = dict(value)
+    return out
+
+
 def _capability_slice(body: dict[str, Any]) -> dict[str, Any]:
     detectors = body.get("detectors") if isinstance(body.get("detectors"), dict) else {}
-    repeat_tool = detectors.get("repeat_tool") if isinstance(detectors.get("repeat_tool"), dict) else {}
-    thinking = (
-        detectors.get("llm_thinking_loop")
-        if isinstance(detectors.get("llm_thinking_loop"), dict)
-        else {}
-    )
     recovery = body.get("recovery") if isinstance(body.get("recovery"), dict) else {}
     return {
         "enabled": bool(body.get("enabled", True)),
-        "detectors": {
-            "repeat_tool": dict(repeat_tool),
-            "llm_thinking_loop": dict(thinking),
-        },
+        "detectors": _copy_detector_map(detectors),
         "recovery": dict(recovery),
     }
 
@@ -108,7 +109,6 @@ def merge_capability_into_local_ras_config(
     prev = root.get("agent_ras")
     prev_ras = dict(prev) if isinstance(prev, dict) else {}
     slice_ = _capability_slice(body)
-    thinking = slice_["detectors"]["llm_thinking_loop"]
 
     prev_platforms = (
         dict(prev_ras["platforms"])
@@ -145,16 +145,24 @@ def merge_capability_into_local_ras_config(
         **prev_ras,
         # Legacy top-level mirror (last merged platform). Prefer platforms.*.
         "enabled": slice_["enabled"],
-        "detectors": {
-            "repeat_tool": dict(slice_["detectors"]["repeat_tool"]),
-            "llm_thinking_loop": dict(thinking),
-        },
+        "detectors": _copy_detector_map(slice_["detectors"]),
         "recovery": dict(slice_["recovery"]),
-        "llm_thinking_loop": dict(thinking),
         "platforms": prev_platforms,
     }
-    next_ras.pop("ras_config_revisions", None)
-    next_ras.pop("ras_config_revision", None)
+    _KEEP = {
+        "enabled",
+        "service",
+        "insight",
+        "detectors",
+        "recovery",
+        "platforms",
+        "debug",
+    }
+    for key in list(next_ras):
+        if key in {"ras_config_revisions", "ras_config_revision"}:
+            next_ras.pop(key, None)
+        elif key not in _KEEP and isinstance(next_ras.get(key), dict):
+            next_ras.pop(key, None)
 
     root["agent_ras"] = next_ras
     return root
@@ -384,12 +392,12 @@ def load_hello_config_from_ras_config(ras_home: Path | None = None) -> dict[str,
     """Build SessionHub hello payload from local config.json.
 
     Prefers ``platforms.xiaoo``; falls back to legacy top-level detectors.
-    xiaoO has no L3 host skill judge — ``semantic_content_enabled`` is forced False.
-    Env overrides still win for the classic RAS_* knobs when set.
+    ``semantic_content_enabled`` is passed through (default true; explicit false
+    turns L3 off). xiaoO uses the same HostCallback + ``skill_result`` path as
+    OpenCode. Env overrides still win for the classic RAS_* knobs when set.
     """
     config_path = resolve_config_path(ras_home)
-    thinking: dict[str, Any] = {}
-    repeat_tool: dict[str, Any] | None = None
+    detectors: dict[str, dict[str, Any]] = {}
     notify: bool | None = None
 
     if config_path.is_file():
@@ -398,31 +406,19 @@ def load_hello_config_from_ras_config(ras_home: Path | None = None) -> dict[str,
             ras = local.get("agent_ras") if isinstance(local.get("agent_ras"), dict) else {}
             slice_ = resolve_platform_capability_from_ras(ras, "xiaoo")
             if slice_ is None:
-                detectors = ras.get("detectors") if isinstance(ras.get("detectors"), dict) else {}
-                nested = detectors.get("llm_thinking_loop")
-                flat = ras.get("llm_thinking_loop")
-                if isinstance(nested, dict):
-                    thinking = dict(nested)
-                elif isinstance(flat, dict):
-                    thinking = dict(flat)
-                rt = detectors.get("repeat_tool")
-                if isinstance(rt, dict):
-                    repeat_tool = dict(rt)
+                detectors = _copy_detector_map(ras.get("detectors"))
                 recovery = ras.get("recovery") if isinstance(ras.get("recovery"), dict) else {}
                 if isinstance(recovery.get("notify_user_on_warning"), bool):
                     notify = recovery["notify_user_on_warning"]
             else:
-                thinking = dict(slice_["detectors"].get("llm_thinking_loop") or {})
-                rt = slice_["detectors"].get("repeat_tool")
-                if isinstance(rt, dict):
-                    repeat_tool = dict(rt)
+                detectors = _copy_detector_map(slice_.get("detectors"))
                 recovery = slice_.get("recovery") if isinstance(slice_.get("recovery"), dict) else {}
                 if isinstance(recovery.get("notify_user_on_warning"), bool):
                     notify = recovery["notify_user_on_warning"]
         except Exception:
-            thinking = {}
+            detectors = {}
 
-    def _env_int(name: str, default: int) -> int:
+    def _env_int(name: str, default: int | None = None) -> int | None:
         raw = os.environ.get(name)
         if raw is None or raw == "":
             return default
@@ -431,30 +427,20 @@ def load_hello_config_from_ras_config(ras_home: Path | None = None) -> dict[str,
         except ValueError:
             return default
 
-    payload: dict[str, Any] = {
-        "detection_start_chars": _env_int(
-            "RAS_DETECTION_START_CHARS",
-            int(thinking.get("detection_start_chars") or 300),
-        ),
-        "window_max_chars": _env_int(
-            "RAS_WINDOW_MAX_CHARS",
-            int(thinking.get("window_max_chars") or 1000),
-        ),
-        "loop_repeat_threshold": _env_int(
-            "RAS_LOOP_REPEAT_THRESHOLD",
-            int(thinking.get("loop_repeat_threshold") or 5),
-        ),
-        "similar_clause_sim_threshold": float(
-            thinking.get("similar_clause_sim_threshold") or 0.95
-        ),
-        "semantic_eval_chars": int(thinking.get("semantic_eval_chars") or 10000),
-        # xiaoO cannot host L3 skill judge.
-        "semantic_content_enabled": False,
+    deprecated_fields = {
+        "detection_start_chars": _env_int("RAS_DETECTION_START_CHARS"),
+        "window_max_chars": _env_int("RAS_WINDOW_MAX_CHARS"),
+        "loop_repeat_threshold": _env_int("RAS_LOOP_REPEAT_THRESHOLD"),
     }
-    if "enabled" in thinking:
-        payload["llm_thinking_loop_enabled"] = bool(thinking.get("enabled"))
-    if repeat_tool is not None:
-        payload["repeat_tool"] = repeat_tool
+    for cfg in detectors.values():
+        for field, value in deprecated_fields.items():
+            if value is not None and field in cfg:
+                cfg[field] = value
+
+    payload: dict[str, Any] = {
+        "detectors": _copy_detector_map(detectors),
+    }
     if notify is not None:
         payload["notify_user_on_warning"] = notify
+        payload["recovery"] = {"notify_user_on_warning": notify}
     return payload
