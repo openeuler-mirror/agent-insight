@@ -13,6 +13,11 @@ export type ClientPlatformCapability = {
   id: string
   version?: string
   models?: string[]
+  agents?: string[]
+  runExperimentCase?: {
+    version: number
+    returnsTraceId: boolean
+  }
   actions?: string[]
 }
 
@@ -258,6 +263,18 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
             models: Array.isArray(rec.models)
               ? rec.models.map((m) => String(m).trim()).filter(Boolean)
               : [],
+            agents: Array.isArray(rec.agents)
+              ? rec.agents.map((agent) => String(agent).trim()).filter(Boolean)
+              : [],
+            runExperimentCase: rec.runExperimentCase
+              && typeof rec.runExperimentCase === 'object'
+              ? {
+                  version: Number.isFinite(Number(rec.runExperimentCase.version))
+                    ? Number(rec.runExperimentCase.version)
+                    : 1,
+                  returnsTraceId: rec.runExperimentCase.returnsTraceId === true,
+                }
+              : undefined,
             actions: Array.isArray(rec.actions) ? rec.actions.map((a) => String(a)) : undefined,
           }
         })

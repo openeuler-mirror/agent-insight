@@ -248,12 +248,25 @@ function buildCapabilities(cfg, opts) {
     id,
     version: info?.version ? String(info.version) : undefined,
     models: normalizeModelIds(info?.models),
+    agents: normalizeModelIds(info?.agents),
+    runExperimentCase: {
+      version: 2,
+      returnsTraceId: id === 'opencode',
+    },
     actions: [...WHITELIST],
   }))
   if (!platforms.length) {
     // 没有 FI inventory 时仍上报本机可见的平台可执行文件，配置下发不依赖 FI。
     for (const id of ['opencode', 'xiaoo']) {
-      if (which(id)) platforms.push({ id, models: [], actions: [...WHITELIST] })
+      if (which(id)) {
+        platforms.push({
+          id,
+          models: [],
+          agents: [],
+          runExperimentCase: { version: 2, returnsTraceId: id === 'opencode' },
+          actions: [...WHITELIST],
+        })
+      }
     }
   }
   return {
@@ -453,6 +466,7 @@ const activeChildren = new Map()
 /** 可靠性 Case 独占槽：持有期间不领 FI run，避免多个故障注入互相污染。 */
 let reliabilitySlotHeld = false
 let fiBusy = 0
+let reliabilityChild = null
 
 function resolveWorkspace(logical, workspaceBase) {
   const value = String(logical || '__default__').trim()
@@ -592,16 +606,20 @@ async function executeAction(cfg, frame, sendStatus) {
   }
 
   if (action === 'RUN_EXPERIMENT_CASE') {
-    if (fiBusy > 0) {
+    if (fiBusy > 0 || reliabilitySlotHeld) {
       await sendStatus('FAILED', {
-        error: { code: 'CLIENT_BUSY', message: '本机正在执行故障注入任务，拒绝并发运行可靠性 Case' },
+        error: { code: 'CLIENT_BUSY', message: '本机已有 Agent 或故障注入任务运行，拒绝并发执行实验 Case' },
       })
       return
     }
     reliabilitySlotHeld = true
     await sendStatus('RUNNING', {})
     try {
-      const result = await runExperimentCase(cfg, payload)
+      const result = await runExperimentCase(cfg, payload, async ({ traceId, startedAt }) => {
+        await sendStatus('RUNNING', {
+          result: { state: 'TRACE_STARTED', traceId, startedAt },
+        })
+      })
       await sendStatus('SUCCEEDED', { result })
     } catch (err) {
       await sendStatus('FAILED', {
@@ -617,11 +635,29 @@ async function executeAction(cfg, frame, sendStatus) {
  * 通过已安装的平台适配器启动 Case。
  * 平台可执行文件、工作目录和启动参数都由本地决定 —— 指令只给结构化输入。
  */
-async function runExperimentCase(cfg, payload) {
+function signalProcessTree(child, signal) {
+  if (!child?.pid) return
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-child.pid, signal)
+      return
+    } catch {
+      /* fall through to the direct child */
+    }
+  }
+  try {
+    child.kill(signal)
+  } catch {
+    /* already exited */
+  }
+}
+
+async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   const platform = String(payload.platform || '')
+  const agent = String(payload.agent || '')
   const model = payload.model ? String(payload.model) : null
   const input = String(payload.input || '')
-  if (!platform || !input) throw new Error('platform 与 input 必填')
+  if (!platform || !agent || !input) throw new Error('platform、agent 与 input 必填')
 
   const executable = which(platform)
   if (!executable) {
@@ -640,43 +676,139 @@ async function runExperimentCase(cfg, payload) {
     AGENT_INSIGHT_CONFIG_VERSION: String(payload.configVersion || ''),
     AGENT_INSIGHT_PLATFORM: platform,
   }
-  const args = ['run', input]
-  if (model) args.push('--model', model)
+  const args = buildExperimentCaseArgs(executable, { platform, agent, model, input, correlation })
   const timeoutMs = Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
+  const startedAt = new Date().toISOString()
 
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd: cfg.workspaceBase,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     })
+    reliabilityChild = child
     fs.mkdirSync(cfg.workspaceBase, { recursive: true })
     let stderr = ''
+    let stdoutBuffer = ''
+    let traceId = null
+    let traceReport = Promise.resolve()
+    const captureTraceId = (candidate) => {
+      if (traceId || !candidate) return
+      traceId = candidate
+      traceReport = Promise.resolve(onTraceId({ traceId, startedAt })).catch((err) => {
+        logErr(`early trace id report failed (${traceId}):`, err.message)
+      })
+    }
+    child.stdout.on('data', (c) => {
+      stdoutBuffer += String(c)
+      const lines = stdoutBuffer.split(/\r?\n/)
+      stdoutBuffer = lines.pop() || ''
+      for (const line of lines) captureTraceId(extractTraceIdFromJsonLine(line))
+      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
+      if (stdoutBuffer.length > 1024 * 1024) stdoutBuffer = stdoutBuffer.slice(-1024 * 1024)
+    })
     child.stderr.on('data', (c) => {
       stderr += String(c)
     })
+    let forceKillTimer = null
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        /* ignore */
-      }
+      signalProcessTree(child, 'SIGTERM')
+      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 5_000)
     }, timeoutMs)
     child.on('error', (err) => {
       clearTimeout(timer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (reliabilityChild === child) reliabilityChild = null
       reject(err)
     })
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       clearTimeout(timer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (reliabilityChild === child) reliabilityChild = null
+      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
+      if (!traceId) {
+        const err = new Error(`平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`)
+        err.code = platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED'
+        reject(err)
+        return
+      }
+      await traceReport
       // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
       resolve({
         state: 'AGENT_EXITED',
+        traceId,
         exitCode: code,
         stderr: stderr.slice(-2000) || undefined,
+        startedAt,
         finishedAt: new Date().toISOString(),
       })
     })
   })
+}
+
+function buildExperimentCaseArgs(executable, input) {
+  if (input.platform === 'opencode') {
+    const args = ['run', '--format', 'json', '--agent', input.agent]
+    if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
+    if (input.model) args.push('--model', input.model)
+    args.push(input.input)
+    return args
+  }
+  if (input.platform === 'xiaoo') {
+    let helpText = ''
+    try {
+      const help = spawnSync(executable, ['--help'], { encoding: 'utf8', timeout: 15_000 })
+      helpText = `${help.stdout || ''}\n${help.stderr || ''}`
+    } catch {
+      helpText = ''
+    }
+    const args = /(?:^|\s)--cli(?:\s|,|$)/.test(helpText) && helpText.includes('xiaoo --cli')
+      ? ['--cli', 'run']
+      : ['run']
+    args.push('-p', input.input, '--agent', input.agent)
+    if (input.model) args.push('--model', input.model)
+    return args
+  }
+  const args = ['run', '--agent', input.agent]
+  if (input.model) args.push('--model', input.model)
+  args.push(input.input)
+  return args
+}
+
+function traceIdFromJson(value, depth = 0) {
+  if (!value || depth > 8) return null
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = traceIdFromJson(item, depth + 1)
+      if (found) return found
+    }
+    return null
+  }
+  if (typeof value !== 'object') return null
+  for (const key of ['sessionID', 'sessionId', 'session_id']) {
+    const candidate = value[key]
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+  }
+  if (value.session && typeof value.session === 'object') {
+    const candidate = value.session.id || value.session.sessionID || value.session.sessionId
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+  }
+  for (const nested of Object.values(value)) {
+    const found = traceIdFromJson(nested, depth + 1)
+    if (found) return found
+  }
+  return null
+}
+
+function extractTraceIdFromJsonLine(line) {
+  const text = String(line || '').trim()
+  if (!text) return null
+  try {
+    return traceIdFromJson(JSON.parse(text))
+  } catch {
+    return null
+  }
 }
 
 // ---------------------------------------------------------------- reporting
@@ -1015,6 +1147,7 @@ async function fiLoop(cfg) {
 }
 
 function shutdown() {
+  if (reliabilityChild) signalProcessTree(reliabilityChild, 'SIGKILL')
   for (const runId of activeChildren.keys()) killRun(runId)
   process.exit(0)
 }
@@ -1029,6 +1162,7 @@ module.exports = {
   buildFiInventory,
   buildCapabilities,
   normalizeModelIds,
+  extractTraceIdFromJsonLine,
   buildCollectorArgs,
   readCollectResult,
   configTargetPath,

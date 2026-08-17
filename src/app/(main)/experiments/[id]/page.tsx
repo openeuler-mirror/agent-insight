@@ -1,7 +1,7 @@
 'use client';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
-// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 重评失败行）→ 实验级评论。
+// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
@@ -34,6 +34,8 @@ interface ExperimentDetail {
     referenceOutput: string | null;
     traceStatus: 'pending' | 'ready' | 'failed' | null;
     traceError: string | null;
+    traceAttemptNo: number | null;
+    traceAttemptStatus: string | null;
   }>;
   results: Array<{
     id: string;
@@ -58,7 +60,7 @@ interface ExperimentDetail {
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
-  draft: { label: '草稿', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
+  draft: { label: '启动中', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
   running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
   failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
@@ -75,7 +77,7 @@ const TD: React.CSSProperties = {
   padding: '9px 12px', fontSize: 12, color: 'var(--foreground)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'top',
 };
-// 操作列按钮：详情/重评同尺寸同形状，只用颜色区分主次
+// 操作列按钮：详情/重试同尺寸同形状，只用颜色区分主次
 const ACTION_BTN: React.CSSProperties = {
   fontSize: 11.5, padding: '3px 10px', borderRadius: 6, lineHeight: 1.5,
   border: '1px solid var(--border)', background: 'var(--card-bg)',
@@ -167,24 +169,20 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     return () => clearInterval(timer);
   }, [detail?.status, load]);
 
-  // 重评：逐行重试该 case 下所有 failed 结果行
+  // 同一入口由服务端判断：Trace 未生成则重跑并绑定；否则重试失败的评估行。
   const retryCase = useCallback(async (caseId: string) => {
     if (!user || retryingCaseId || !detail) return;
-    const failedRows = detail.results.filter((r) => r.caseId === caseId && r.status === 'failed');
-    if (!failedRows.length) return;
     setRetryingCaseId(caseId);
     try {
-      for (const row of failedRows) {
-        const res = await apiFetch(
-          `/api/experiments/${encodeURIComponent(id)}/results/${encodeURIComponent(row.id)}/retry?user=${encodeURIComponent(user)}`,
-          { method: 'POST' },
-        );
-        const data = await res.json();
-        if (!res.ok) throw new Error(String(data?.error || '重评失败'));
-      }
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(caseId)}/retry?user=${encodeURIComponent(user)}`,
+        { method: 'POST' },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(String(data?.error || '重试失败'));
       await load(true);
     } catch (e: unknown) {
-      setError(errorMessage(e, '重评失败'));
+      setError(errorMessage(e, '重试失败'));
     } finally {
       setRetryingCaseId('');
     }
@@ -432,10 +430,12 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
                           {c.traceStatus === 'failed' ? (
                             <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
-                              Trace 生成失败
+                              Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
                             </span>
                           ) : c.traceStatus === 'pending' ? (
-                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>正在生成 Trace…</span>
+                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
+                              正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
+                            </span>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
                             <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
                           ) : truncate(c.actualOutput, 80)}
@@ -464,7 +464,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                             >
                               详情
                             </Link>
-                            {c.scores.failed > 0 && (
+                            {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
                                 disabled={!!retryingCaseId}
@@ -474,7 +474,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                                   opacity: retryingCaseId && retryingCaseId !== c.id ? 0.5 : 1,
                                 }}
                               >
-                                {retryingCaseId === c.id ? '重评中…' : '重评'}
+                                {retryingCaseId === c.id ? '重试中…' : '重试'}
                               </button>
                             )}
                           </div>
