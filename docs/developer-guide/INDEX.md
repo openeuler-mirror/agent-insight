@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `8455d9a43c5017077002cef70e65d1bd839a098f` (`8455d9a4`) |
+| Commit | `6524dac639bb1ae958c78985556e7e0a45a242ae` (`6524dac6`) |
 | Branch | `feat/ras-fault-domain-plugins` |
-| Date | 2026-08-17 10:04:50 +0800 |
+| Date | 2026-08-17 14:53:23 +0800 |
 | Author | iceory |
-| Subject | `docs: 对齐合并后可靠性契约与 INDEX provenance` |
+| Subject | `merge: 合并 origin/codex/reliability-development 到 feat/ras-fault-domain-plugins` |
 
-**如何更新：** `git diff 8455d9a4 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 6524dac6 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

@@ -845,6 +845,7 @@ function buildMessagesForSession(state, sid) {
     const m = {
       role,
       content,
+      messageID: mid,
       parts: partsOut,
       tool_calls: tool_calls.length ? tool_calls : undefined,
       usage: u,

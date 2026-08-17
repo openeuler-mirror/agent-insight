@@ -183,6 +183,74 @@ test("alignInteractionsToRasAnchors: stamps missing messageID onto text assistan
   assert.equal(aligned[1].messageID, "xiaoo-msg-1")
 })
 
+test("alignInteractionsToRasAnchors: prefers assistant at or before marker.ts over later recovery", () => {
+  const aligned = alignInteractionsToRasAnchors(
+    [
+      { role: "assistant", content: "looping", timestamp: "2026-08-17T06:30:35.000Z" },
+      { role: "user", content: "notice" },
+      { role: "assistant", content: "recovery done", timestamp: "2026-08-17T06:30:43.000Z" },
+    ],
+    [{
+      ...marker,
+      messageId: "msg_loop",
+      channel: "llm_output",
+      callId: undefined,
+      ts: Date.parse("2026-08-17T06:30:42.000Z"),
+    }],
+  )
+  assert.equal(aligned[0].messageID, "msg_loop")
+  assert.equal(aligned[2].messageID, undefined)
+})
+
+test("alignInteractionsToRasAnchors: leaves interactions alone when messageID already matches", () => {
+  const aligned = alignInteractionsToRasAnchors(
+    [
+      { role: "assistant", content: "loop", messageID: "msg_loop" },
+      { role: "assistant", content: "recovery", messageID: "msg_recovery" },
+    ],
+    [{ ...marker, messageId: "msg_loop", channel: "llm_output", callId: undefined }],
+  )
+  assert.equal(aligned[0].messageID, "msg_loop")
+  assert.equal(aligned[1].messageID, "msg_recovery")
+})
+
+test("applyRasRecoveryTree: after time-window align, ras sits between loop and recovery", () => {
+  const llmMarker: RasTraceMarker = {
+    ...marker,
+    callId: undefined,
+    messageId: "msg_loop",
+    channel: "llm_output",
+    ts: 2000,
+    deliveryMessageIds: [],
+    actionResults: [],
+  }
+  const aligned = alignInteractionsToRasAnchors(
+    [
+      { role: "assistant", content: "loop body", timestamp: 1500 },
+      { role: "assistant", content: "recovery body", timestamp: 3000 },
+    ],
+    [llmMarker],
+  )
+  assert.equal(aligned[0].messageID, "msg_loop")
+  const tree = root([
+    event({
+      kind: "llm",
+      startedAt: 1500,
+      interaction: { role: "assistant", content: "loop body", messageID: aligned[0].messageID },
+    }),
+    event({
+      kind: "llm",
+      startedAt: 3000,
+      interaction: { role: "assistant", content: "recovery body", messageID: aligned[1].messageID },
+    }),
+  ])
+  const next = applyRasRecoveryTree(tree, [llmMarker])
+  assert.deepEqual(
+    next.events.map((item) => item.kind),
+    ["llm", "ras", "llm"],
+  )
+})
+
 test("buildRasRecoveryEvent embeds marker id", () => {
   const built = buildRasRecoveryEvent(marker)
   assert.equal(built.kind, "ras")
