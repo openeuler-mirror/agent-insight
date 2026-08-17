@@ -484,6 +484,8 @@ function buildState(records) {
   const msgInfo = new Map()
   const msgParts = new Map()
   const partText = new Map()
+  const partDeltas = new Map()
+  const seenDeltaEventIds = new Set()
   const userTextByMsg = new Map()
   const sysPrompts = new Map()
   const cliCompletedSessions = new Set()
@@ -638,9 +640,27 @@ function buildState(records) {
       }
       continue
     }
+
+    if (t === "message.part.delta") {
+      const props = ev?.properties || {}
+      const mid = props.messageID
+      const sid = props.sessionID || r.sessionID
+      const pid = props.partID
+      const field = typeof props.field === "string" && props.field ? props.field : "text"
+      const delta = typeof props.delta === "string" ? props.delta : ""
+      if (!sid || !mid || !pid || !delta) continue
+      const eventId = typeof ev?.id === "string" ? ev.id : ""
+      if (eventId && seenDeltaEventIds.has(eventId)) continue
+      if (eventId) seenDeltaEventIds.add(eventId)
+      ensureSession(sid).messageIDs.add(mid)
+      recordSessionPid(sid, r)
+      const key = `${mid}:${pid}:${field}`
+      partDeltas.set(key, `${partDeltas.get(key) || ""}${delta}`)
+      continue
+    }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
 }
 
 // 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
@@ -721,21 +741,32 @@ function isSignatureUnchanged(prevSig, nextSig) {
 // Join all text-type parts of a message into one string. Prefers the
 // streamed-complete text (text.complete hook) over the partial captured on
 // message.part.updated. Shared by user and assistant message rendering.
-function collectTextPartContent(parts, mid, partText) {
+function resolvePartField(part, mid, partText, partDeltas, field = "text") {
+  const key = `${mid}:${part.id}`
+  const completed = field === "text" ? partText.get(key) : undefined
+  if (typeof completed === "string" && completed) return completed
+
+  const snapshot = typeof part?.[field] === "string" ? part[field] : ""
+  const streamed = partDeltas.get(`${key}:${field}`) || ""
+  if (!streamed) return snapshot
+  if (!snapshot) return streamed
+  if (snapshot === streamed || snapshot.includes(streamed)) return snapshot
+  if (streamed.includes(snapshot)) return streamed
+  return streamed.length >= snapshot.length ? streamed : snapshot
+}
+
+function collectTextPartContent(parts, mid, partText, partDeltas) {
   const buf = []
   for (const p of parts || []) {
     if ((p?.type || "").toLowerCase() !== "text") continue
-    const key = `${mid}:${p.id}`
-    const streamed = partText.get(key)
-    const fallback = typeof p?.text === "string" ? p.text : ""
-    const out = typeof streamed === "string" && streamed ? streamed : fallback
+    const out = resolvePartField(p, mid, partText, partDeltas)
     if (out) buf.push(out)
   }
   return buf.join("")
 }
 
 function buildMessagesForSession(state, sid) {
-  const { msgInfo, msgParts, partText, userTextByMsg } = state
+  const { msgInfo, msgParts, partText, partDeltas, userTextByMsg } = state
   const messages = []
 
   for (const [mid, info] of msgInfo.entries()) {
@@ -755,11 +786,11 @@ function buildMessagesForSession(state, sid) {
       //   - info.system (last-ditch fallback) is now null on user messages —
       //     and was the system prompt, not the query, anyway.
       // With both broken the query uploaded empty. Keep them only as fallbacks.
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
       if (!content) content = userTextByMsg.get(mid) || ""
       if (!content && typeof info?.system === "string") content = info.system
     } else {
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
     }
 
     const tool_calls = []
@@ -800,12 +831,12 @@ function buildMessagesForSession(state, sid) {
     const partsOut = rawParts.length
       ? rawParts.map((p) => {
           const { messageID: _mid, sessionID: _sid, ...rest } = p || {}
-          // For text parts, prefer the streamed-complete text from text.complete
-          // hook over whatever partial we captured on message.part.updated.
-          if ((rest?.type || "").toLowerCase() === "text") {
-            const key = `${mid}:${rest.id}`
-            const finalText = partText.get(key)
-            if (typeof finalText === "string" && finalText) rest.text = finalText
+          // For text and reasoning parts, preserve deltas when interruption
+          // prevents OpenCode from emitting a final part snapshot.
+          const partType = (rest?.type || "").toLowerCase()
+          if (partType === "text" || partType === "reasoning") {
+            const resolvedText = resolvePartField(rest, mid, partText, partDeltas)
+            if (resolvedText) rest.text = resolvedText
           }
           return rest
         })
