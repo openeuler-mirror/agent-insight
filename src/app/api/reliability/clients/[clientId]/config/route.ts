@@ -9,10 +9,22 @@ import {
 export const dynamic = 'force-dynamic'
 
 function errorResponse(error: unknown) {
-  const err = error as { code?: string; status?: number; revision?: number; message?: string }
+  const err = error as {
+    code?: string
+    status?: number
+    revision?: number
+    message?: string
+    details?: Record<string, unknown>
+  }
   if (err?.code && err?.status) {
     return NextResponse.json(
-      { error: err.message || err.code, code: err.code, revision: err.revision },
+      {
+        error: err.message || err.code,
+        code: err.code,
+        revision: err.revision,
+        // 带上逐字段原因：只说「字段不合法」，调用方无从知道是哪个字段、差在哪。
+        details: err.details,
+      },
       { status: err.status },
     )
   }
