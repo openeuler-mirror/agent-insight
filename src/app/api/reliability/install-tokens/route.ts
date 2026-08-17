@@ -41,6 +41,8 @@ export async function POST(req: Request) {
       {
         installToken,
         expiresAt,
+        // 安装脚本据此判断本机是否已绑定到别的账号（决定跳过还是改绑）。
+        user: username,
         commands: {
           unix: `curl -sSf '${base}/api/ingest/setup/ras-client?platform=unix' | bash -s -- --token '${installToken}'`,
         },

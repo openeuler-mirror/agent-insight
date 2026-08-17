@@ -25,10 +25,19 @@ type GeneratedTraceStatus = 'pending' | 'ready' | 'failed';
 function deriveGeneratedTraceStatus(input: {
   usable: boolean;
   runStatus?: string | null;
+  commandStatus?: string | null;
+  attemptStatus?: string | null;
+  generationError?: string | null;
   experimentStatus: string;
 }): GeneratedTraceStatus {
   if (input.usable) return 'ready';
+  if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(input.attemptStatus || '')) {
+    return 'pending';
+  }
+  if (input.generationError) return 'failed';
+  if (input.attemptStatus === 'failed') return 'failed';
   if (input.runStatus === 'failed' || input.runStatus === 'stopped') return 'failed';
+  if (['FAILED', 'EXPIRED', 'DELIVERY_FAILED'].includes(input.commandStatus || '')) return 'failed';
   if (input.experimentStatus === 'failed' || input.experimentStatus === 'done') return 'failed';
   return 'pending';
 }
@@ -83,33 +92,91 @@ export async function GET(
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
     const generatedCases = await prisma.experimentCase.findMany({
-      where: { experimentId: id, fiRunId: { not: null } },
-      select: { id: true, executionId: true, taskId: true, fiRunId: true },
-    }) as Array<{ id: string; executionId: string | null; taskId: string | null; fiRunId: string | null }>;
+      where: {
+        experimentId: id,
+        OR: [
+          { fiRunId: { not: null } },
+          { traceGenerationCommandId: { not: null } },
+          { traceAttempts: { some: {} } },
+        ],
+      },
+      select: {
+        id: true,
+        executionId: true,
+        taskId: true,
+        fiRunId: true,
+        traceGenerationCommandId: true,
+        traceGenerationError: true,
+        traceAttempts: {
+          orderBy: { attemptNo: 'desc' },
+          take: 1,
+          select: {
+            attemptNo: true,
+            status: true,
+            failureCode: true,
+            errorMessage: true,
+            traceId: true,
+          },
+        },
+      },
+    }) as Array<{
+      id: string;
+      executionId: string | null;
+      taskId: string | null;
+      fiRunId: string | null;
+      traceGenerationCommandId: string | null;
+      traceGenerationError: string | null;
+      traceAttempts: Array<{
+        attemptNo: number;
+        status: string;
+        failureCode: string | null;
+        errorMessage: string | null;
+        traceId: string | null;
+      }>;
+    }>;
     const fiRunKeys = Array.from(new Set(
       generatedCases.map((item) => item.fiRunId).filter((value): value is string => Boolean(value)),
     ));
     const generatedUserWhere = username ? { user: username } : {};
-    const fiRuns = (fiRunKeys.length
-      ? await prisma.faultInjectionRun.findMany({
+    const commandIds = Array.from(new Set(
+      generatedCases
+        .map((item) => item.traceGenerationCommandId)
+        .filter((value): value is string => Boolean(value)),
+    ));
+    const [fiRunsRaw, generationCommandsRaw] = await Promise.all([
+      fiRunKeys.length ? prisma.faultInjectionRun.findMany({
         where: {
           ...generatedUserWhere,
           OR: [{ id: { in: fiRunKeys } }, { runId: { in: fiRunKeys } }],
         },
         select: { id: true, runId: true, status: true, sessionTaskId: true, error: true },
-      })
-      : []) as Array<{
-        id: string;
-        runId: string;
-        status: string;
-        sessionTaskId: string | null;
-        error: string | null;
-      }>;
+      }) : [],
+      commandIds.length ? prisma.reliabilityCommand.findMany({
+        where: { ...generatedUserWhere, commandId: { in: commandIds } },
+        select: { commandId: true, status: true, errorMessage: true, errorCode: true },
+      }) : [],
+    ]);
+    const fiRuns = fiRunsRaw as Array<{
+      id: string;
+      runId: string;
+      status: string;
+      sessionTaskId: string | null;
+      error: string | null;
+    }>;
+    const generationCommands = generationCommandsRaw as Array<{
+      commandId: string;
+      status: string;
+      errorMessage: string | null;
+      errorCode: string | null;
+    }>;
     const fiRunByKey = new Map<string, typeof fiRuns[number]>();
     for (const run of fiRuns) {
       fiRunByKey.set(run.id, run);
       fiRunByKey.set(run.runId, run);
     }
+    const generationCommandById = new Map(
+      generationCommands.map((command) => [command.commandId, command]),
+    );
     const generatedTaskIds = Array.from(new Set(
       generatedCases
         .map((item) => item.taskId || (item.fiRunId ? fiRunByKey.get(item.fiRunId)?.sessionTaskId : null))
@@ -154,9 +221,15 @@ export async function GET(
       error: string | null;
       taskId: string | null;
       executionId: string | null;
+      attemptNo: number | null;
+      attemptStatus: string | null;
     }>();
     for (const item of generatedCases) {
       const run = item.fiRunId ? fiRunByKey.get(item.fiRunId) : undefined;
+      const command = item.traceGenerationCommandId
+        ? generationCommandById.get(item.traceGenerationCommandId)
+        : undefined;
+      const attempt = item.traceAttempts[0];
       const taskId = item.taskId || run?.sessionTaskId || null;
       const execution = taskId ? generatedExecutionByTask.get(taskId) : undefined;
       const session = taskId ? generatedSessionByTask.get(taskId) : undefined;
@@ -164,15 +237,28 @@ export async function GET(
       const status = deriveGeneratedTraceStatus({
         usable,
         runStatus: run?.status,
+        commandStatus: command?.status,
+        attemptStatus: attempt?.status,
+        generationError: item.traceGenerationError,
         experimentStatus: experiment.status,
       });
       traceStateByCase.set(item.id, {
         status,
         error: status === 'failed'
-          ? (run?.error || 'Trace 未上报、轨迹为空或等待超时')
+          ? (
+            item.traceGenerationError
+            || attempt?.errorMessage
+            || attempt?.failureCode
+            || run?.error
+            || command?.errorMessage
+            || command?.errorCode
+            || 'Trace 未上报、轨迹为空或等待超时'
+          )
           : null,
         taskId,
         executionId: item.executionId || execution?.id || null,
+        attemptNo: attempt?.attemptNo || null,
+        attemptStatus: attempt?.status || null,
       });
     }
     const traceStates = Array.from(traceStateByCase.values());
@@ -291,6 +377,8 @@ export async function GET(
           evaluatorContextError: evaluatorContext.error,
           traceStatus: traceState?.status || null,
           traceError: traceState?.error || null,
+          traceAttemptNo: traceState?.attemptNo || null,
+          traceAttemptStatus: traceState?.attemptStatus || null,
         };
       }),
       results,
@@ -338,5 +426,44 @@ export async function PATCH(
   } catch (error) {
     console.error('[Experiment PATCH Error]', error);
     return NextResponse.json({ error: 'Failed to update experiment' }, { status: 500 });
+  }
+}
+
+// 创建页启动失败时的补偿操作。只允许删除仍未启动的内部 draft；如果 run 已经
+// 把状态推进到 running/done/failed，则拒绝删除，避免响应丢失时误删真实实验。
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+    const url = new URL(req.url);
+    const { username } = await resolveUser(req, url.searchParams.get('user'));
+    if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+
+    const experiment = await prisma.experiment.findFirst({
+      where: { id, user: username },
+      select: { status: true },
+    });
+    if (!experiment) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (experiment.status !== 'draft') {
+      return NextResponse.json({
+        error: 'experiment has already started',
+        status: experiment.status,
+      }, { status: 409 });
+    }
+
+    const deleted = await prisma.experiment.deleteMany({
+      where: { id, user: username, status: 'draft' },
+    });
+    if (deleted.count === 0) {
+      return NextResponse.json({ error: 'experiment has already started' }, { status: 409 });
+    }
+    return NextResponse.json({ deleted: true });
+  } catch (error) {
+    console.error('[Experiment DELETE Error]', error);
+    return NextResponse.json({ error: 'Failed to rollback experiment' }, { status: 500 });
   }
 }

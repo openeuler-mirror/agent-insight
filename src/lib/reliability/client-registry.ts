@@ -6,13 +6,18 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
 import { prisma } from '@/lib/storage/prisma'
 
-export type ClientStatus = 'online' | 'offline' | 'degraded' | 'disabled'
+export type ClientStatus = 'online' | 'offline' | 'degraded' | 'disabled' | 'unbound'
 export type ServiceHealth = 'healthy' | 'degraded' | 'unknown'
 
 export type ClientPlatformCapability = {
   id: string
   version?: string
   models?: string[]
+  agents?: string[]
+  runExperimentCase?: {
+    version: number
+    returnsTraceId: boolean
+  }
   actions?: string[]
 }
 
@@ -57,6 +62,7 @@ type PrismaClientRow = {
   lastSeenAt: Date
   agentVersion: string | null
   capabilitiesJson: string
+  unboundAt: Date | null
 }
 
 export function clientOnlineWindowMs(): number {
@@ -116,7 +122,20 @@ export async function registerClient(input: {
   agentVersion?: string | null
   supervisor?: string | null
   capabilities?: ClientCapabilities
-}): Promise<{ clientId: string; user: string; deviceCredential: string }> {
+  /**
+   * 本机上一次绑定的 clientId（改绑到别的账号时由安装器传入）。
+   *
+   * 一台机器只能属于一个账号：数据面（Trace 上报、RAS 配置）在本机只有一份，
+   * 无法同时归属两边。所以改绑必须是**完整交接** —— 旧记录标为已解绑、
+   * 旧凭证立即撤销，否则原账号仍能向这台机器下发配置。
+   */
+  previousClientId?: string | null
+}): Promise<{
+  clientId: string
+  user: string
+  deviceCredential: string
+  unboundPrevious: { clientId: string; user: string } | null
+}> {
   const tokenHash = sha256(String(input.installToken || ''))
   const record = await prisma.reliabilityInstallToken.findUnique({ where: { tokenHash } })
   if (!record) {
@@ -138,6 +157,13 @@ export async function registerClient(input: {
     (input.reportedIp ? `主机-${input.reportedIp}` : null) ||
     input.hostname ||
     clientId
+
+  // 解绑旧绑定必须和新注册在同一个事务里：否则中途失败会留下
+  //「旧凭证已撤销、新客户端没建成」的半态，本机彻底失联且无法自愈。
+  const previous = input.previousClientId
+    ? await prisma.reliabilityClient.findUnique({ where: { clientId: input.previousClientId } })
+    : null
+  const shouldUnbind = Boolean(previous && !previous.unboundAt && previous.clientId !== clientId)
 
   await prisma.$transaction([
     prisma.reliabilityClient.create({
@@ -166,9 +192,27 @@ export async function registerClient(input: {
       where: { tokenHash },
       data: { consumedAt: now, clientId },
     }),
+    ...(shouldUnbind
+      ? [
+          prisma.reliabilityClient.update({
+            where: { clientId: previous!.clientId },
+            data: { unboundAt: now, unboundToClientId: clientId, status: 'offline' },
+          }),
+          // 撤销而非删除：旧账号立即失去控制权，但配置下发历史仍可追溯。
+          prisma.reliabilityClientCredential.updateMany({
+            where: { clientId: previous!.clientId, revokedAt: null },
+            data: { revokedAt: now },
+          }),
+        ]
+      : []),
   ])
 
-  return { clientId, user: record.user, deviceCredential: credential }
+  return {
+    clientId,
+    user: record.user,
+    deviceCredential: credential,
+    unboundPrevious: shouldUnbind ? { clientId: previous!.clientId, user: previous!.user } : null,
+  }
 }
 
 /** Resolve `Authorization: Bearer <deviceCredential>` to its client. */
@@ -219,6 +263,18 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
             models: Array.isArray(rec.models)
               ? rec.models.map((m) => String(m).trim()).filter(Boolean)
               : [],
+            agents: Array.isArray(rec.agents)
+              ? rec.agents.map((agent) => String(agent).trim()).filter(Boolean)
+              : [],
+            runExperimentCase: rec.runExperimentCase
+              && typeof rec.runExperimentCase === 'object'
+              ? {
+                  version: Number.isFinite(Number(rec.runExperimentCase.version))
+                    ? Number(rec.runExperimentCase.version)
+                    : 1,
+                  returnsTraceId: rec.runExperimentCase.returnsTraceId === true,
+                }
+              : undefined,
             actions: Array.isArray(rec.actions) ? rec.actions.map((a) => String(a)) : undefined,
           }
         })
@@ -329,7 +385,11 @@ export function parseCapabilities(json: string | null | undefined): ClientCapabi
 export function deriveStatus(row: {
   status: string
   lastSeenAt: Date
+  unboundAt?: Date | null
 }): ClientStatus {
+  // 已解绑优先于一切：这台机器已改绑到别的账号，不再是「离线」——
+  // 显示成离线会让人以为机器只是掉线了，等它自己回来。
+  if (row.unboundAt) return 'unbound'
   if (row.status === 'disabled') return 'disabled'
   const fresh = Date.now() - row.lastSeenAt.getTime() <= clientOnlineWindowMs()
   if (!fresh) return 'offline'

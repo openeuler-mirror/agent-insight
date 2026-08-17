@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { GET as listExperiments, POST as createExperiment } from '@/app/api/experiments/route';
-import { GET as getExperiment } from '@/app/api/experiments/[id]/route';
+import { DELETE as deleteExperiment, GET as getExperiment } from '@/app/api/experiments/[id]/route';
 import { prisma } from '@/lib/storage/prisma';
 
 const TEST_USER = `exp-smoke-${Date.now()}`;
@@ -49,20 +49,28 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   const { id } = await createRes.json();
   assert.ok(typeof id === 'string' && id.length > 0);
 
-  // 列表
+  // draft 仅用于创建与启动之间的内部衔接，不出现在用户列表。
   const listRes = await listExperiments(
     new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
   );
   assert.equal(listRes.status, 200);
   const { items } = await listRes.json();
-  assert.equal(items.length, 1);
-  assert.equal(items[0].id, id);
-  assert.equal(items[0].name, '冒烟实验');
-  assert.equal(items[0].type, 'single');
-  assert.equal(items[0].status, 'draft');
-  assert.equal(items[0].caseCount, 2);
-  assert.equal(items[0].evaluatorCount, 2);
-  assert.equal(items[0].overallScore, null);
+  assert.equal(items.length, 0);
+
+  await prisma.experiment.update({ where: { id }, data: { status: 'running' } });
+  const runningListRes = await listExperiments(
+    new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
+  );
+  assert.equal(runningListRes.status, 200);
+  const { items: runningItems } = await runningListRes.json();
+  assert.equal(runningItems.length, 1);
+  assert.equal(runningItems[0].id, id);
+  assert.equal(runningItems[0].name, '冒烟实验');
+  assert.equal(runningItems[0].type, 'single');
+  assert.equal(runningItems[0].status, 'running');
+  assert.equal(runningItems[0].caseCount, 2);
+  assert.equal(runningItems[0].evaluatorCount, 2);
+  assert.equal(runningItems[0].overallScore, null);
 
   // 详情
   const detailRes = await getExperiment(
@@ -84,6 +92,43 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   });
   assert.equal(detail.cases[1].evaluatorContext, null);
   assert.deepEqual(detail.results, []);
+});
+
+test('experiments API: rollback deletes drafts but never started experiments', async (t) => {
+  const user = `exp-rollback-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+
+  const create = async (name: string) => {
+    const response = await createExperiment(postReq({
+      user,
+      name,
+      agentName: 'rollback-agent',
+      cases: [{ input: 'q', actualOutput: 'a' }],
+      evaluatorIds: ['preset-agent-task-completion'],
+    }));
+    assert.equal(response.status, 200);
+    return String((await response.json()).id);
+  };
+
+  const draftId = await create('待回滚');
+  const deleteDraft = await deleteExperiment(
+    new Request(`http://localhost/api/experiments/${draftId}?user=${user}`, { method: 'DELETE' }),
+    { params: Promise.resolve({ id: draftId }) },
+  );
+  assert.equal(deleteDraft.status, 200);
+  assert.equal(await prisma.experiment.count({ where: { id: draftId } }), 0);
+
+  const runningId = await create('已启动');
+  await prisma.experiment.update({ where: { id: runningId }, data: { status: 'running' } });
+  const deleteRunning = await deleteExperiment(
+    new Request(`http://localhost/api/experiments/${runningId}?user=${user}`, { method: 'DELETE' }),
+    { params: Promise.resolve({ id: runningId }) },
+  );
+  assert.equal(deleteRunning.status, 409);
+  assert.equal((await deleteRunning.json()).status, 'running');
+  assert.equal(await prisma.experiment.count({ where: { id: runningId } }), 1);
 });
 
 test('experiments API: reliability FI fields stay off evaluatorContextJson', async (t) => {

@@ -26,7 +26,6 @@ import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
-import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
 interface AgentTargetOption {
   workerId: string;
@@ -35,6 +34,8 @@ interface AgentTargetOption {
   platform: string;
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
+  supportsGenericTrace: boolean;
+  supportsFaultInjection: boolean;
 }
 
 interface AgentOption {
@@ -95,17 +96,26 @@ interface DatasetOption {
   }>;
 }
 
-function reliabilityCasesFromDataset(dataset: DatasetOption | null): SelectedCase[] {
-  return (dataset?.cases || []).map((item) => {
+function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase[] {
+  return (dataset?.cases || []).map((item, index) => {
     const fault = String(item.values?.fault_injection_type || '').trim();
-    const key = String(item.id || `${fault}:${item.input || ''}`);
+    const key = String(item.id || `dataset-case-${index}:${item.input || ''}`);
+    const match = matchDatasetCases(
+      [{ key, input: String(item.input || '') }],
+      [{
+        input: String(item.input || ''),
+        expectedOutput: String(item.expectedOutput || ''),
+        values: item.values,
+      }],
+      true,
+    );
     return {
       executionId: key,
       taskId: null,
       input: String(item.input || ''),
       actualOutput: '',
-      referenceOutput: item.expectedOutput != null ? String(item.expectedOutput) : null,
-      evaluatorContext: null,
+      referenceOutput: match.updates[key] || null,
+      evaluatorContext: match.contextUpdates[key] || null,
       faultInjectionType: fault || null,
       values: {
         ...(item.values || {}),
@@ -118,9 +128,13 @@ function reliabilityCasesFromDataset(dataset: DatasetOption | null): SelectedCas
 const STEPS = ['实验设计', 'Trace 来源', '预期答案', '评估器与执行'];
 const NEXT_LABELS = ['下一步：Trace 来源 →', '下一步：预期答案 →', '下一步：评估器与执行 →', '🚀 开始实验'];
 const RELIABILITY_EVALUATOR_IDS = new Set([
-  'preset-ras-reliability-fault-injection',
   'preset-ras-reliability-detection-recovery',
 ]);
+const DATASET_KIND_LABELS: Record<string, string> = {
+  ideal_output: '结果评测',
+  trajectory: '轨迹评测',
+  reliability: '可靠性',
+};
 const PAGE_SIZE = 10;
 /** 跨页全选安全上限：避免一次圈选过多 case 拖垮后续评测 */
 const SELECT_ALL_CAP = 500;
@@ -327,6 +341,9 @@ export default function NewExperimentPage() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [selectedDatasetDetail, setSelectedDatasetDetail] = useState<DatasetOption | null>(null);
+  const [selectedDatasetLoading, setSelectedDatasetLoading] = useState(false);
+  const datasetRequestIdRef = useRef(0);
   const [genModel, setGenModel] = useState('');
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
@@ -370,18 +387,23 @@ export default function NewExperimentPage() {
   const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [createdExperimentId, setCreatedExperimentId] = useState('');
 
   const selectedDataset = useMemo(
-    () => wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
-    [wizardDatasets, selectedDatasetId],
+    () => selectedDatasetDetail?.id === selectedDatasetId
+      ? selectedDatasetDetail
+      : wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
+    [selectedDatasetDetail, wizardDatasets, selectedDatasetId],
   );
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.name === agentName) || null,
     [agentName, agents],
   );
-  const targetOptions = useMemo(() => selectedAgent?.targets || [], [selectedAgent]);
+  const targetOptions = useMemo(
+    () => (selectedAgent?.targets || []).filter((target) =>
+      isReliabilityDataset ? target.supportsFaultInjection : target.supportsGenericTrace),
+    [isReliabilityDataset, selectedAgent],
+  );
   const selectedTarget = targetOptions.find(
     (target) => `${target.workerId}::${target.platform}` === selectedTargetKey,
   ) || targetOptions[0] || null;
@@ -389,9 +411,9 @@ export default function NewExperimentPage() {
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
-  const reliabilityCases = useMemo(
-    () => reliabilityCasesFromDataset(isReliabilityDataset ? selectedDataset : null),
-    [isReliabilityDataset, selectedDataset],
+  const generationCases = useMemo(
+    () => generationCasesFromDataset(selectedDataset),
+    [selectedDataset],
   );
 
   useEffect(() => {
@@ -408,11 +430,9 @@ export default function NewExperimentPage() {
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setTraceTags(Array.isArray(d) ? d : []))
       .catch(() => setTraceTags([]));
-    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`)
+    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setWizardDatasets(
-        Array.isArray(d) ? d.filter((item) => isBuiltinReliabilityDataset(item)) : [],
-      ))
+      .then((d) => setWizardDatasets(Array.isArray(d) ? d : []))
       .catch(() => setWizardDatasets([]));
     apiFetch('/api/reliability/fault-modes')
       .then((r) => (r.ok ? r.json() : { items: [] }))
@@ -430,6 +450,38 @@ export default function NewExperimentPage() {
       })
       .catch(() => setFaultModeLabels(new Map()));
   }, [user]);
+
+  const selectWizardDataset = async (nextId: string) => {
+    const requestId = ++datasetRequestIdRef.current;
+    setSelectedDatasetId(nextId);
+    setSelectedDatasetDetail(null);
+    setSelected(new Map());
+    setSelectedGenerated(new Map());
+    setSelectedEvaluators(new Set());
+    if (!nextId || !user) {
+      setSelectedDatasetLoading(false);
+      setTraceMode('existing');
+      return;
+    }
+    setSelectedDatasetLoading(true);
+    try {
+      const response = await apiFetch(
+        `/api/agent-datasets/${encodeURIComponent(nextId)}?user=${encodeURIComponent(user)}&view=items`,
+      );
+      if (!response.ok) throw new Error('数据集加载失败');
+      const detail = await response.json() as DatasetOption;
+      if (datasetRequestIdRef.current !== requestId) return;
+      setSelectedDatasetDetail(detail);
+      const generatedCases = generationCasesFromDataset(detail);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+    } catch {
+      if (datasetRequestIdRef.current !== requestId) return;
+      setSelectedDatasetDetail(null);
+      setSelectedGenerated(new Map());
+    } finally {
+      if (datasetRequestIdRef.current === requestId) setSelectedDatasetLoading(false);
+    }
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => setTraceSearch(traceSearchDraft.trim()), 300);
@@ -500,7 +552,6 @@ export default function NewExperimentPage() {
       referenceOutput: null,
       evaluatorContext: null,
     };
-    if (!isReliabilityDataset) return base;
     const datasetCase = (selectedDataset?.cases || []).find(
       (item) => String(item.input || '').trim() === base.input.trim(),
     );
@@ -782,30 +833,26 @@ export default function NewExperimentPage() {
         faultInjectionType: c.faultInjectionType || undefined,
         values: c.values,
       }));
-      let experimentId = createdExperimentId;
-      if (!experimentId) {
-        const res = await apiFetch('/api/experiments', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user,
-            name,
-            agentName,
-            watchMode: traceMode === 'existing' ? watchMode : false,
-            cases: casesPayload,
-            evaluatorIds: Array.from(selectedEvaluators),
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(String(data?.error || '创建实验失败'));
-        experimentId = String(data.id || '');
-        if (!experimentId) throw new Error('创建实验后未返回实验 ID');
-        setCreatedExperimentId(experimentId);
-      }
+      const res = await apiFetch('/api/experiments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user,
+          name,
+          agentName,
+          watchMode: traceMode === 'existing' ? watchMode : false,
+          cases: casesPayload,
+          evaluatorIds: Array.from(selectedEvaluators),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(String(data?.error || '创建实验失败'));
+      const experimentId = String(data.id || '');
+      if (!experimentId) throw new Error('创建实验后未返回实验 ID');
       // 「开始实验」= 创建后立即真跑评估器；详情页落地即 running 状态并自动轮询进度。
       const runBody = traceMode === 'generate' && selectedTarget
         ? {
-            fiOrchestrate: true,
+            fiOrchestrate: isReliabilityDataset,
             traceSource: 'generate',
             generateTrace: {
               workerId: selectedTarget.workerId,
@@ -816,14 +863,26 @@ export default function NewExperimentPage() {
             },
           }
         : {};
-      const runRes = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(runBody),
-      });
-      if (!runRes.ok) {
-        const err = await runRes.json().catch(() => ({}));
-        throw new Error(String(err?.error || err?.code || '启动实验失败'));
+      try {
+        const runRes = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(runBody),
+        });
+        if (!runRes.ok) {
+          const err = await runRes.json().catch(() => ({}));
+          throw new Error(String(err?.error || err?.code || '启动实验失败'));
+        }
+      } catch (runError) {
+        const rollbackRes = await apiFetch(
+          `/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`,
+          { method: 'DELETE' },
+        ).catch(() => null);
+        if (rollbackRes?.status === 409) {
+          router.push(`/experiments/${experimentId}`);
+          return;
+        }
+        throw runError;
       }
       router.push(`/experiments/${experimentId}`);
     } catch (e: unknown) {
@@ -936,27 +995,20 @@ export default function NewExperimentPage() {
                   style={{ ...INPUT, cursor: 'pointer' }}
                   value={selectedDatasetId}
                   onChange={(e) => {
-                    const nextId = e.target.value;
-                    const nextDataset = wizardDatasets.find((item) => item.id === nextId) || null;
-                    const generatedCases = reliabilityCasesFromDataset(nextDataset);
-                    setSelectedDatasetId(nextId);
-                    setSelected(new Map());
-                    setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
-                    setSelectedEvaluators(new Set());
-                    if (!nextDataset) {
-                      setTraceMode('existing');
-                    }
+                    void selectWizardDataset(e.target.value);
                   }}
                 >
                   <option value="">不选择数据集</option>
                   {wizardDatasets.map((dataset) => (
                     <option key={dataset.id} value={dataset.id}>
-                      {dataset.name} · 可靠性（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
+                      {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
                     </option>
                   ))}
                 </select>
                 <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
-                  当前仅开放内置可靠性数据集；选择后可生成 Trace，并在第 ④ 步独立选择故障注入或故障检测恢复评估器
+                  {selectedDatasetLoading
+                    ? '正在加载数据集 Case…'
+                    : '可选择任意评测数据集；生成 Trace 时，每条 Case 的输入会作为 Agent 的用户输入'}
                 </div>
               </div>
 
@@ -1003,8 +1055,10 @@ export default function NewExperimentPage() {
               {!generateAvailable ? (
                 <div style={{ padding: 18, border: '1px dashed var(--border-dark)', borderRadius: 10, color: 'var(--foreground-secondary)', fontSize: 12, lineHeight: 1.6 }}>
                   {!selectedDataset
-                    ? '生成 Trace 需要数据集 Case，请返回第一步选择内置可靠性数据集。'
-                    : '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'}
+                    ? '生成 Trace 需要数据集 Case，请返回第一步选择评测数据集。'
+                    : isReliabilityDataset
+                      ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
+                      : '当前 Agent 没有在线且支持回传 Trace ID 的客户端，请检查客户端状态；旧客户端需要升级后才能用于普通数据集生成 Trace。'}
                 </div>
               ) : (
                 <>
@@ -1036,14 +1090,14 @@ export default function NewExperimentPage() {
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case（{selectedGenerated.size}/{reliabilityCases.length}）</div>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case（{selectedGenerated.size}/{generationCases.length}）</div>
                 <span style={{ flex: 1 }} />
                 <button
                   type="button"
                   style={BTN_GHOST}
                   onClick={() => {
                     const next = new Map<string, SelectedCase>();
-                    for (const item of reliabilityCases) next.set(item.executionId, item);
+                    for (const item of generationCases) next.set(item.executionId, item);
                     setSelectedGenerated(next);
                   }}
                 >
@@ -1058,10 +1112,10 @@ export default function NewExperimentPage() {
                 </button>
               </div>
               <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', maxHeight: 360, overflowY: 'auto' }}>
-                {reliabilityCases.length === 0 ? (
+                {generationCases.length === 0 ? (
                   <div style={{ padding: 16, fontSize: 12, color: 'var(--foreground-muted)' }}>数据集暂无 case</div>
                 ) : (
-                  reliabilityCases.map((c) => (
+                  generationCases.map((c) => (
                     <label
                       key={c.executionId}
                       style={{
@@ -1087,16 +1141,20 @@ export default function NewExperimentPage() {
                       />
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 700 }}>
-                          {formatReliabilityFaultTypeFromCaseValues(c.values, {
-                            faultId: c.faultInjectionType,
-                          })
-                            || (c.faultInjectionType && faultModeLabels.get(c.faultInjectionType))
-                            || c.faultInjectionType
-                            || '未指定故障'}
+                          {isReliabilityDataset
+                            ? formatReliabilityFaultTypeFromCaseValues(c.values, {
+                                faultId: c.faultInjectionType,
+                              })
+                              || (c.faultInjectionType && faultModeLabels.get(c.faultInjectionType))
+                              || c.faultInjectionType
+                              || '未指定故障'
+                            : truncate(c.input, 120)}
                         </div>
-                        <div style={{ fontSize: 11, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {c.input || '（无输入）'}
-                        </div>
+                        {isReliabilityDataset && (
+                          <div style={{ fontSize: 11, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.input || '（无输入）'}
+                          </div>
+                        )}
                       </span>
                     </label>
                   ))
@@ -1518,7 +1576,7 @@ export default function NewExperimentPage() {
             <div style={PANEL_B}>
               <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>检查数据集预期答案</div>
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
-                Trace 尚未生成，本步骤只检查所选数据集 Case 的预期答案与故障元数据；开始实验后再生成实际输出。
+                Trace 尚未生成，本步骤只检查所选数据集 Case 的预期答案{isReliabilityDataset ? '与故障元数据' : '和评估上下文'}；开始实验后再生成实际输出。
               </div>
               <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--background-secondary)', marginBottom: 12, fontSize: 12 }}>
                 <b>数据集预期答案覆盖 {annotated} / {selectedList.length}</b>
@@ -1530,7 +1588,7 @@ export default function NewExperimentPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr>
                     <th style={STICKY_TH}>任务输入</th>
-                    <th style={STICKY_TH}>故障注入类型</th>
+                    {isReliabilityDataset && <th style={STICKY_TH}>故障注入类型</th>}
                     <th style={STICKY_TH}>预期答案</th>
                     <th style={STICKY_TH}>状态</th>
                   </tr></thead>
@@ -1538,7 +1596,9 @@ export default function NewExperimentPage() {
                     {selectedList.map((item) => (
                       <tr key={item.executionId}>
                         <td style={{ ...TD, color: 'var(--foreground)', maxWidth: 320 }}>{truncate(item.input, 90)}</td>
-                        <td style={TD}>{formatReliabilityFaultTypeFromCaseValues(item.values, { faultId: item.faultInjectionType }) || item.faultInjectionType || '—'}</td>
+                        {isReliabilityDataset && (
+                          <td style={TD}>{formatReliabilityFaultTypeFromCaseValues(item.values, { faultId: item.faultInjectionType }) || item.faultInjectionType || '—'}</td>
+                        )}
                         <td style={{ ...TD, maxWidth: 360 }}>{truncate(item.referenceOutput, 110)}</td>
                         <td style={TD}>
                           <span style={item.referenceOutput

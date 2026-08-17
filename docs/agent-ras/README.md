@@ -50,7 +50,7 @@
 | [Agent RAS 可靠性闭环-服务端与客户端交互设计.md](designs/features/Agent%20RAS%20可靠性闭环-服务端与客户端交互设计.md) | 可靠性闭环：常驻客户端、configRef 控制面、Trace 异常维度、可靠性数据集与评估器 | 部分落地（评测集/IF-N16/FI 外挂/Trace anomaly/ExperimentCase FI 独立列） |
 | [reliability-client-control-plane.md](designs/features/reliability-client-control-plane.md) | 客户端控制面：统一安装、systemd/launchd 保活、配置下发、WSS 双向通信；新客户端吸收 FI Worker | 开发中 |
 | [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 故障域插件化：`detectors`/`review`/`recovery` 三平级扫描 PLUGIN；P3 共同文件只留 yaml | **已落地（P0–P3）** |
-| [ras-reliability-evaluator-split.md](designs/features/ras-reliability-evaluator-split.md) | 可靠性评估器拆分：故障注入与故障检测恢复独立选择、评估器总分平均与历史兼容 | 代码与自动化验证完成，浏览器验收待确认 |
+| [ras-reliability-evaluator-split.md](designs/features/ras-reliability-evaluator-split.md) | 可靠性检测恢复评估器：故障发生前置门控、未发生时无分、历史评估器兼容 | 代码与自动化验证完成，浏览器验收待确认 |
 
 ---
 

@@ -1,5 +1,5 @@
 // 评测「实验」API —— 列表 + 创建（本期仅单组实验 type='single'）。
-// 执行引擎（ExperimentEvalResult 写入）为后续里程碑，POST 仅落 draft。
+// POST 创建的 draft 只用于 create → run 之间的内部事务衔接，不对用户展示。
 import { NextResponse } from 'next/server';
 import type { Experiment } from '@prisma/client';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
@@ -40,14 +40,15 @@ export async function GET(req: Request) {
     const q = url.searchParams;
     const { username } = await resolveUser(req, q.get('user'));
     const userFilter = username ? { user: username } : {};
+    const listFilter = { ...userFilter, status: { not: 'draft' } };
 
     const limit = Math.min(Math.max(Number(q.get('limit')) || 20, 1), 100);
     const offset = Math.max(Number(q.get('offset')) || 0, 0);
 
     const [total, rawRows] = await Promise.all([
-      prisma.experiment.count({ where: userFilter }),
+      prisma.experiment.count({ where: listFilter }),
       prisma.experiment.findMany({
-        where: userFilter,
+        where: listFilter,
         orderBy: { createdAt: 'desc' },
         skip: offset,
         take: limit,
