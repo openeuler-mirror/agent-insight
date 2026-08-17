@@ -17,7 +17,7 @@ OpenClaw 应直接访问自己的模型供应商；Agent Insight 只接收遥测
 
 > **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-runtime.md`](../agent-ras/designs/modules/ras-runtime.md)；本文件为 Insight ingest **契约真源**。
 
-> **OpenCode 客户端身份与公网出口 IP 快照**：非 OTLP `POST /api/ingest/upload` 使用 `client_id`、`host.reported_ip`、`host.hostname`。正式 `~/.agent-insight/client/config.json` 同时提供 `clientId` 与 `deviceCredential`；uploader 发送 `Authorization: Bearer <deviceCredential>` 和 `x-agent-insight-client-id`，服务端只把凭据解析出的 ID 保存为可信 `Execution.clientId`，API Key 与设备凭据跨账号或请求体 ID 不一致时拒绝绑定。兼容 `~/.agent-insight/client.json` 仍可上传，但其自报 ID 不建立客户端绑定。服务端仅在配置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=x-forwarded-for|x-real-ip|cf-connecting-ip` 时读取对应、由最外层代理清洗覆盖的头，并只保存公网地址；未配置、localhost、私网、回环或保留地址均保存 `null`。四个客户端/主机字段均采用首次非空快照，后续重传不覆盖；根/child `Execution` 继承同一快照，且不复用表示模型推理源的 `Execution.endpoint`。
+> **OpenCode 客户端身份与公网出口 IP 快照**：非 OTLP `POST /api/ingest/upload` 使用 `client_id`、`host.reported_ip`、`host.hostname`。正式 `~/.agent-insight/client/config.json` 同时提供 `clientId` 与 `deviceCredential`；uploader 发送 `Authorization: Bearer <deviceCredential>` 和 `x-agent-insight-client-id`，服务端只把凭据解析出的 ID 保存为可信 `Execution.clientId`，API Key 与设备凭据跨账号或请求体 ID 不一致时拒绝绑定。兼容 `~/.agent-insight/client.json` 仍可上传，但其自报 ID 不建立客户端绑定。正式 uploader 直接访问公网 `IP:3000` 时无需代理配置：服务端读取 Next.js 从 TCP 连接补入的来源地址并只保存公网 IP；若 uploader 运行在服务端本机，连接来源是回环或私网地址，则仅在已认证 uploader 上报的 hostname 与服务端一致时，保存请求目标中的公网 IP。经过代理部署时仍由 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=x-forwarded-for|x-real-ip|cf-connecting-ip` 指定、且必须由最外层代理清洗覆盖的来源头。兼容旧 uploader 不启用直连 IP 绑定。四个客户端/主机字段均采用首次非空快照，后续重传不覆盖；根/child `Execution` 继承同一快照，且不复用表示模型推理源的 `Execution.endpoint`。
 
 ## 资源属性 (Resource)
 
@@ -200,7 +200,7 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 1.4 | 2026-08-17 | `delivery_anchor.message_id` 必须为平台分配；拿不到真 id 时省略锚点，禁止客户端伪造 |
+| 1.4 | 2026-08-17 | `delivery_anchor.message_id` 必须为平台分配；OpenCode 已认证 uploader 直连公网 `IP:3000` 时记录来源公网 IP，并支持服务端本机通过自身公网地址上报 |
 | 1.3 | 2026-08-14 | RAS 旁路上传增加 per-session receipt、正常退出前 bounded flush，并明确 GIL/线程生命周期 |
 | 1.2 | 2026-07-31 | RAS 契约收紧：仅 flat+必填 deliveryId；移除 witty.* / rasEventId / 深路径 rewrite / 正文兜底 |
 | 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义；补充 RAS 旁路 ingest（非 OTLP） |

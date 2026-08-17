@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { hostname } from 'node:os'
 import test from 'node:test'
 
 import { POST } from '@/app/api/ingest/upload/route'
@@ -12,12 +13,13 @@ const TEST_USER = `trace-client-binding-${process.pid}`
 
 test('OpenCode Trace only binds a verified client and preserves its first IP snapshot', async () => {
   const firstTaskId = `trace-client-first-${process.pid}-${Date.now()}`
+  const serverTaskId = `trace-client-server-${process.pid}-${Date.now()}`
   const legacyTaskId = `trace-client-legacy-${process.pid}-${Date.now()}`
   const mismatchTaskId = `trace-client-mismatch-${process.pid}-${Date.now()}`
   const previousTrustedHeader = process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER
   let clientId: string | null = null
 
-  process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER = 'x-forwarded-for'
+  delete process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER
   try {
     const { installToken } = await createInstallToken({
       user: TEST_USER,
@@ -34,7 +36,7 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       taskId: string,
       payload: Record<string, unknown>,
       forwardedFor: string,
-    ) => POST(new Request('https://insight.test/api/ingest/upload', {
+    ) => POST(new Request('http://119.3.152.42:3000/api/ingest/upload', {
       method: 'POST',
       headers: {
         authorization: `Bearer ${registered.deviceCredential}`,
@@ -88,6 +90,24 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       user: TEST_USER,
     })
 
+    const serverUpload = await upload(
+      serverTaskId,
+      {
+        client_id: registered.clientId,
+        host: { hostname: hostname(), reported_ip: '10.0.0.8' },
+      },
+      '::ffff:127.0.0.1',
+    )
+    assert.equal(serverUpload.status, 200)
+    const serverStored = await prismaRaw.execution.findUnique({
+      where: { id: serverTaskId },
+      select: { clientId: true, observedIp: true },
+    })
+    assert.deepEqual(serverStored, {
+      clientId: registered.clientId,
+      observedIp: '119.3.152.42',
+    })
+
     const legacy = await POST(new Request('https://insight.test/api/ingest/upload', {
       method: 'POST',
       headers: {
@@ -107,7 +127,7 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       where: { id: legacyTaskId },
       select: { clientId: true, observedIp: true },
     })
-    assert.deepEqual(legacyStored, { clientId: null, observedIp: '1.1.1.1' })
+    assert.deepEqual(legacyStored, { clientId: null, observedIp: null })
 
     const mismatch = await upload(
       mismatchTaskId,
@@ -126,7 +146,7 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER = previousTrustedHeader
     }
     await prismaRaw.execution.deleteMany({
-      where: { id: { in: [firstTaskId, legacyTaskId, mismatchTaskId] } },
+      where: { id: { in: [firstTaskId, serverTaskId, legacyTaskId, mismatchTaskId] } },
     })
     if (clientId) {
       await prismaRaw.reliabilityClientCredential.deleteMany({ where: { clientId } })

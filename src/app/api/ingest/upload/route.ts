@@ -185,7 +185,14 @@ export async function POST(request: Request) {
     }
 
     if (isOpenCodeTrace) {
-      const clientMetadata = normalizeTraceClientMetadata(data, clientIpFromRequest(request));
+      const reportedClientMetadata = normalizeTraceClientMetadata(data);
+      const clientMetadata = {
+        ...reportedClientMetadata,
+        observedIp: clientIpFromRequest(request, {
+          allowDirectConnection: Boolean(deviceIdentity),
+          clientHostName: reportedClientMetadata.hostName,
+        }),
+      };
       if (
         deviceIdentity &&
         clientMetadata.clientId &&
