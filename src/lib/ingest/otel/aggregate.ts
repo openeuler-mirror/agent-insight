@@ -68,7 +68,6 @@ function shouldReplaceSnapshot(
   return Date.parse(candidate.receivedAt || '')
     >= Date.parse(existing.receivedAt || '');
 }
-}
 
 export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEvent[]) {
   const selected = new Map<string, OtelTraceEvent>();

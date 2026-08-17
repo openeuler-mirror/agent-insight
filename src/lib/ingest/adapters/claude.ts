@@ -25,6 +25,4 @@ export const claudeAdapter: FrameworkAdapter = {
   // 缩水护栏兜住:incoming 更小则保留库里现有记录。
   sessionMergeStrategy: 'snapshot-replace',
   extractSkills: extractSkillsWithVersionsFromClaudeSession,
-  isPlaceholderQuery: (query, framework) => framework === "claudecode"
-    && /^Claude Code Session [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query),
 }

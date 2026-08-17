@@ -101,6 +101,9 @@ export function shouldRefreshStoredQueryFromInteractions(
     if (!current) return true;
     const fw = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
     if (!fw) return false;
+    if (fw === 'claudecode') {
+        return /^Claude Code Session [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(current);
+    }
     if (getAdapter(fw).isPlaceholderQuery?.(current, fw)) return true;
     return current.toLowerCase() === `${fw} session`;
 }
