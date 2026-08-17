@@ -175,12 +175,36 @@ test("alignInteractionsToRasAnchors: stamps missing messageID onto text assistan
   const aligned = alignInteractionsToRasAnchors(
     [
       { role: "assistant", content: "", tool_calls: [{ id: "c1" }] },
-      { role: "assistant", content: "looping text here" },
+      { role: "assistant", content: "looping text here", timestamp: 1500 },
     ],
     [{ ...marker, messageId: "xiaoo-msg-1", channel: "llm_output", callId: undefined }],
   )
   assert.equal(aligned[0].messageID, undefined)
   assert.equal(aligned[1].messageID, "xiaoo-msg-1")
+})
+
+test("alignInteractionsToRasAnchors: does not stamp when assistants lack timestamps", () => {
+  const aligned = alignInteractionsToRasAnchors(
+    [
+      { role: "assistant", content: "looping" },
+      { role: "assistant", content: "recovery" },
+    ],
+    [{ ...marker, messageId: "msg_loop", channel: "llm_output", callId: undefined }],
+  )
+  assert.equal(aligned[0].messageID, undefined)
+  assert.equal(aligned[1].messageID, undefined)
+})
+
+test("alignInteractionsToRasAnchors: does not stamp when all assistants are after marker.ts", () => {
+  const aligned = alignInteractionsToRasAnchors(
+    [
+      { role: "assistant", content: "late loop", timestamp: 2500 },
+      { role: "assistant", content: "recovery", timestamp: 3000 },
+    ],
+    [{ ...marker, messageId: "msg_loop", channel: "llm_output", callId: undefined, ts: 2000 }],
+  )
+  assert.equal(aligned[0].messageID, undefined)
+  assert.equal(aligned[1].messageID, undefined)
 })
 
 test("alignInteractionsToRasAnchors: prefers assistant at or before marker.ts over later recovery", () => {

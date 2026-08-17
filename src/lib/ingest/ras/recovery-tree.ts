@@ -54,8 +54,8 @@ function interactionTimeMs(interaction: RawInteraction): number | null {
 
 /**
  * Align Session interactions to RAS LLM anchors when platform messageIDs are missing.
- * Prefer the latest text assistant at or before marker.ts (detection time). Never default
- * to the global last assistant — that wrongly anchors after post-recovery replies.
+ * Stamp only the latest text assistant with ts ≤ marker.ts (detection time).
+ * If none qualify (missing timestamps or all after detection), leave interactions unchanged.
  */
 export function alignInteractionsToRasAnchors(
   interactions: RawInteraction[],
@@ -76,13 +76,11 @@ export function alignInteractionsToRasAnchors(
 
     let bestBefore = -1
     let bestBeforeTs = Number.NEGATIVE_INFINITY
-    let bestAny = -1
     for (let i = 0; i < out.length; i += 1) {
       const item = out[i]
       if (item.role !== "assistant") continue
       if (asString(item.messageID)) continue
       if (!interactionText(item)) continue
-      bestAny = i
       const ts = interactionTimeMs(item)
       if (ts == null || ts > marker.ts) continue
       if (ts >= bestBeforeTs) {
@@ -90,9 +88,8 @@ export function alignInteractionsToRasAnchors(
         bestBeforeTs = ts
       }
     }
-    const best = bestBefore >= 0 ? bestBefore : bestAny
-    if (best < 0) continue
-    out[best] = { ...out[best], messageID: messageId }
+    if (bestBefore < 0) continue
+    out[bestBefore] = { ...out[bestBefore], messageID: messageId }
     used.add(messageId)
   }
   return out
