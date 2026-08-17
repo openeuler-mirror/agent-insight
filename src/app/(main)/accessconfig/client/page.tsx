@@ -10,7 +10,7 @@ import {
   validateConfigValues,
   type BuiltinSchemaSection,
   type ConfigFieldError,
-} from '@/lib/reliability/client-config-model'
+} from '@/lib/reliability/client-config-validation'
 
 type ClientItem = {
   id: string
