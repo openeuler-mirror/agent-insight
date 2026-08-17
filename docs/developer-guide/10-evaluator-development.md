@@ -29,6 +29,7 @@
 | `preset-fluency-text` / `preset-hallucination-text` | `experiment/fluency-preset-evaluators.ts` / `experiment/hallucination-preset-evaluators.ts`（run-experiment 直接分发） |
 | `preset-rigor-content` | `experiment/rigor-preset-evaluators.ts` |
 | `preset-text-*` | `experiment/text-preset-evaluators.ts` |
+| `preset-similarity-*` | `experiment/similarity-preset-evaluators.ts`（文本相似度 / 客观答案匹配） |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -602,6 +603,8 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
+| 文本相似度 `preset-similarity-text` | 生成文本 vs 参考文本 | 语义相似度（同义改写 / 语序变化 / 细节增减判定），阈值固定 80 判 PASS/FAIL |
+| 客观答案匹配 `preset-similarity-answer-match` | 用户问题 + 模型回答 vs 标准答案 | 关键信息点覆盖（数值 / 专有名词 / 核心结论 / 必要条件）；结论/数值缺失额外扣分 |
 
 回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
 
