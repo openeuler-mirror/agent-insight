@@ -17,7 +17,32 @@ OpenClaw 应直接访问自己的模型供应商；Agent Insight 只接收遥测
 
 > **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-runtime.md`](../agent-ras/designs/modules/ras-runtime.md)；本文件为 Insight ingest **契约真源**。
 
-> **OpenCode 客户端身份与公网出口 IP 快照**：非 OTLP `POST /api/ingest/upload` 使用 `client_id`、`host.reported_ip`、`host.hostname`。正式 `~/.agent-insight/client/config.json` 同时提供 `clientId` 与 `deviceCredential`；uploader 发送 `Authorization: Bearer <deviceCredential>` 和 `x-agent-insight-client-id`，服务端只把凭据解析出的 ID 保存为可信 `Execution.clientId`，API Key 与设备凭据跨账号或请求体 ID 不一致时拒绝绑定。兼容 `~/.agent-insight/client.json` 仍可上传，但其自报 ID 不建立客户端绑定。通过设备凭证或有效 API Key 认证的 uploader 直接访问公网 `IP:3000` 时无需代理配置：服务端读取 Next.js 从 TCP 连接补入的来源地址并只保存公网 IP；若 uploader 运行在服务端本机，连接来源是回环或私网地址，则仅在已认证 uploader 上报的 hostname 与服务端一致时，保存请求目标中的公网 IP。经过代理部署时仍由 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=x-forwarded-for|x-real-ip|cf-connecting-ip` 指定、且必须由最外层代理清洗覆盖的来源头。未认证 uploader 不启用直连 IP 绑定。四个客户端/主机字段均采用首次非空快照，后续重传不覆盖；根/child `Execution` 继承同一快照，且不复用表示模型推理源的 `Execution.endpoint`。
+### OpenCode Trace 公网 IP 快照（非 OTLP）
+
+适用范围只有 `framework=opencode` 的 `POST /api/ingest/upload`，结果保存到 `Execution.observedIp` 并显示在链路追踪列表的 IP 列。Claude Code、Hermes、xiaoO 等其他框架尚未写入该字段；可靠性常驻客户端注册和心跳对直连模式也不启用该分支，它们仍只读取显式配置的可信代理头。
+
+OpenCode uploader 上报 `client_id`、`host.reported_ip` 和 `host.hostname`。正式 `~/.agent-insight/client/config.json` 提供 `clientId + deviceCredential`；兼容 `~/.agent-insight/client.json` 的自报 ID 不建立可信客户端绑定。直连 IP 识别要求上传通过设备凭证或有效 `x-witty-api-key` 认证；仅在请求体填写 `user` 的未认证上传不能启用直连识别。
+
+服务端按以下顺序解析：
+
+1. 如果配置了 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER`，先读取该头的公网地址。`x-forwarded-for` 只取最左侧地址。
+2. 对已认证 OpenCode 直连上传，读取 Next.js 在请求未携带 `x-forwarded-for` 时从 TCP socket 补入的来源地址；来源本身是公网地址时直接保存。官方 uploader 不主动发送该头。
+3. 如果来源是服务端自身的回环或本机网卡地址，且 uploader 上报的 hostname 与服务端 hostname 一致，则把请求目标中的**公网 IP 字面量**保存为服务器公网 IP。域名、`localhost` 和私网地址不会在该步骤做 DNS 或公网反查。
+4. 其余情况保存 `null`。私网、回环、链路本地、保留地址和文档示例地址都会被过滤。
+
+| 部署方式 | 当前支持 | 服务端配置 | 结果 |
+|---|---|---|---|
+| 外部 OpenCode 直连公网 IP 或公网域名的 `:3000` 服务 | 支持 | 无；上传需通过 API Key 或设备凭证认证 | 客户端网络的公网出口 IP |
+| OpenCode 与服务端同机，访问服务端公网 IP 字面量 | 支持 | 无；上传需认证，来源必须是服务端自身地址，hostname 必须一致 | 请求目标中的服务器公网 IP |
+| OpenCode 与服务端同机，访问公网域名 | 有条件支持 | 无 | TCP 来源已是公网地址时可保存；本地回环或私网路径下为 `null` |
+| Nginx、Apache、负载均衡或 API 网关 | 有条件支持 | 代理覆盖真实来源头；服务端设置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=x-forwarded-for` 或 `x-real-ip` | 可信头中的公网 IP |
+| Cloudflare | 有条件支持 | 服务端设置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=cf-connecting-ip` | Cloudflare 提供的客户端公网 IP |
+| Docker、Kubernetes Ingress | 有条件支持 | 推荐由 Ingress 或网关覆盖真实来源头并配置对应环境变量 | 保留公网来源时可保存；只剩容器或节点私网地址时为 `null` |
+| `localhost`、服务器私网 IP、局域网、VPN 私网或 SSH 隧道 | 不支持公网 IP 绑定 | 无 | `null` |
+
+`AGENT_INSIGHT_TRUSTED_PROXY_HEADER` 只接受 `x-forwarded-for`、`x-real-ip`、`cf-connecting-ip`。最外层可信代理必须删除或覆盖客户端传入的同名头；使用追加式 `X-Forwarded-For` 而不清洗最左侧值会允许客户端伪造展示 IP。修改服务端环境变量后必须重启 Agent Insight。
+
+`observedIp` 是 Trace 产生时的首次非空快照：重传不会覆盖已有值，根/child `Execution` 继承同一快照，也不复用表示模型推理源的 `Execution.endpoint`。该字段只用于展示和网络排障，不用于认证或唯一标识机器；NAT 后的多台电脑会共享同一个公网出口 IP。
 
 ## 资源属性 (Resource)
 
@@ -200,7 +225,7 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 1.4 | 2026-08-17 | `delivery_anchor.message_id` 必须为平台分配；OpenCode 已认证 uploader 直连公网 `IP:3000` 时记录来源公网 IP，并支持服务端本机通过自身公网地址上报 |
+| 1.4 | 2026-08-17 | `delivery_anchor.message_id` 必须为平台分配；OpenCode 已认证 uploader 支持直连公网 IP 与服务端同机上报，并明确直连、代理、容器、私网部署矩阵 |
 | 1.3 | 2026-08-14 | RAS 旁路上传增加 per-session receipt、正常退出前 bounded flush，并明确 GIL/线程生命周期 |
 | 1.2 | 2026-07-31 | RAS 契约收紧：仅 flat+必填 deliveryId；移除 witty.* / rasEventId / 深路径 rewrite / 正文兜底 |
 | 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义；补充 RAS 旁路 ingest（非 OTLP） |

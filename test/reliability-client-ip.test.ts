@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { hostname } from 'node:os'
+import { hostname, networkInterfaces } from 'node:os'
 import test from 'node:test'
 
 import {
@@ -88,6 +88,48 @@ test('clientIpFromRequest uses the public request host for OpenCode on the serve
     }),
     null,
   )
+})
+
+test('clientIpFromRequest recognizes a server private interface on a public-IP hairpin route', (t) => {
+  const localAddress = Object.values(networkInterfaces())
+    .flatMap((entries) => entries || [])
+    .find((entry) => !entry.internal)?.address
+  if (!localAddress) {
+    t.skip('no external server interface')
+    return
+  }
+  const req = new Request('http://119.3.152.42:3000/api/ingest/upload', {
+    headers: { 'x-forwarded-for': localAddress },
+  })
+  assert.equal(
+    clientIpFromRequest(req, {
+      trustedHeader: null,
+      allowDirectConnection: true,
+      clientHostName: hostname(),
+    }),
+    '119.3.152.42',
+  )
+})
+
+test('clientIpFromRequest does not invent a public IP for local, private, or same-server domain access', () => {
+  for (const url of [
+    'http://localhost:3000/api/ingest/upload',
+    'http://10.0.0.8:3000/api/ingest/upload',
+    'https://insight.example.com/api/ingest/upload',
+  ]) {
+    const req = new Request(url, {
+      headers: { 'x-forwarded-for': '::ffff:127.0.0.1' },
+    })
+    assert.equal(
+      clientIpFromRequest(req, {
+        trustedHeader: null,
+        allowDirectConnection: true,
+        clientHostName: hostname(),
+      }),
+      null,
+      url,
+    )
+  }
 })
 
 test('clientIpFromRequest returns null for localhost even when the header is trusted', () => {
