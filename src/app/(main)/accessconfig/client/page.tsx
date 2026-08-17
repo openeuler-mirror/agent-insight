@@ -6,6 +6,11 @@ import { PageContainer } from '@/components/shell/PageContainer'
 import { useAuth } from '@/lib/auth/auth-context'
 import { apiFetch } from '@/lib/client/api'
 import { useLocale } from '@/lib/client/locale-context'
+import {
+  validateConfigValues,
+  type BuiltinSchemaSection,
+  type ConfigFieldError,
+} from '@/lib/reliability/client-config-model'
 
 type ClientItem = {
   id: string
@@ -27,21 +32,9 @@ type ClientItem = {
   platforms: Array<{ id: string; version?: string; models?: string[] }>
 }
 
-type SchemaField = {
-  key: string
-  label: string
-  type: string
-  min?: number
-  max?: number
-}
-
-type SchemaSection = {
-  key: string
-  title: string
-  description?: string
-  enabledField?: string
-  fields: SchemaField[]
-}
+// 复用服务端的 Schema 类型：本地再定义一份，required 之类的字段迟早对不上，
+// 而校验器正依赖它们。
+type SchemaSection = BuiltinSchemaSection
 
 type ConfigSchema = {
   platform: string
@@ -81,6 +74,38 @@ const FAIL_STATUSES = new Set([
   'load_failed',
   'version_mismatch',
 ])
+
+/**
+ * 客户端状态的展示形态。
+ *
+ * 「已解绑」必须和「离线」区分开：前者是这台机器已经改绑到别的账号、再也不会
+ * 回来，后者只是暂时掉线、等它自己恢复即可。混在一起会让人一直干等。
+ */
+function clientStatusView(status: string | undefined, isZh: boolean): {
+  label: string
+  dot: string
+  tone: string
+} {
+  if (status === 'unbound') {
+    return {
+      label: isZh ? '已解绑' : 'unbound',
+      dot: 'var(--color-warning, #d97706)',
+      tone: 'var(--color-warning, #d97706)',
+    }
+  }
+  if (status === 'online') {
+    return {
+      label: isZh ? '在线' : 'online',
+      dot: 'var(--color-success, #16a34a)',
+      tone: 'var(--color-success, #16a34a)',
+    }
+  }
+  return {
+    label: isZh ? '离线' : 'offline',
+    dot: 'var(--muted-foreground)',
+    tone: 'var(--muted-foreground)',
+  }
+}
 
 function stepIndex(status: string | undefined): number {
   const s = String(status || '').toLowerCase()
@@ -231,6 +256,13 @@ export default function AccessClientConfigPage() {
   )
 
   const dirty = useMemo(() => !sameFlat(draft, baseline), [draft, baseline])
+
+  // 与服务端共用同一个校验器：页面先拦一道，服务端仍会再校验一次（可绕过前端）。
+  const fieldErrors: ConfigFieldError[] = useMemo(
+    () => (schema ? validateConfigValues(schema, draft) : []),
+    [schema, draft],
+  )
+  const hasFieldError = fieldErrors.length > 0
 
   const loadClients = useCallback(async () => {
     if (!user) return
@@ -550,13 +582,18 @@ export default function AccessClientConfigPage() {
                           width: 8,
                           height: 8,
                           borderRadius: 99,
-                          background: client.status === 'online' ? 'var(--color-success, #16a34a)' : 'var(--muted-foreground)',
+                          background: clientStatusView(client.status, isZh).dot,
                         }}
                       />
                       {client.reportedIp || client.observedIp || client.hostname || client.id}
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--muted-foreground)', marginTop: 4 }}>
                       {client.hostname || '—'} · {client.platforms?.length || 0} platforms
+                      {client.status === 'unbound' ? (
+                        <span style={{ color: 'var(--color-warning, #d97706)' }}>
+                          {isZh ? ' · 已解绑' : ' · unbound'}
+                        </span>
+                      ) : null}
                     </div>
                   </button>
                 )
@@ -585,7 +622,7 @@ export default function AccessClientConfigPage() {
                     {selected.reportedIp || selected.observedIp || '—'} · {selected.hostname || '—'}
                   </div>
                   <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted-foreground)' }}>
-                    {selected.id} · {selected.status === 'online' ? (isZh ? '在线' : 'online') : (isZh ? '离线' : 'offline')} ·{' '}
+                    {selected.id} · {clientStatusView(selected.status, isZh).label} ·{' '}
                     {isZh ? '最近心跳' : 'last seen'} {selected.lastSeenAt} · rev {view?.revision ?? 0}
                   </div>
                   <div
@@ -801,6 +838,7 @@ export default function AccessClientConfigPage() {
                         {section.fields.map((field) => {
                           const source = view?.fieldSources?.[field.key] || 'builtin'
                           const value = draft[field.key]
+                          const fieldError = fieldErrors.find((e) => e.key === field.key)
                           return (
                             <label key={field.key} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
                               <span style={{ fontSize: 13 }}>
@@ -816,20 +854,37 @@ export default function AccessClientConfigPage() {
                                   onChange={(e) => setField(field.key, e.target.checked)}
                                 />
                               ) : (
-                                <input
-                                  type="number"
-                                  value={Number(value ?? 0)}
-                                  min={field.min}
-                                  max={field.max}
-                                  onChange={(e) => setField(field.key, Number(e.target.value))}
-                                  style={{
-                                    width: 120,
-                                    border: '1px solid var(--border)',
-                                    borderRadius: 8,
-                                    padding: '6px 8px',
-                                    background: 'var(--background)',
-                                  }}
-                                />
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+                                  <input
+                                    type="number"
+                                    // 受控值保持字符串：type=number 的受控输入用宽松比较，
+                                    // 若这里回写数字，"03333" == 3333 会让 React 跳过 DOM 更新，
+                                    // 界面停在带前导零的旧文本，与实际状态不一致。
+                                    value={value === null || value === undefined ? '' : String(value)}
+                                    min={field.min}
+                                    max={field.max}
+                                    onChange={(e) => setField(field.key, e.target.value)}
+                                    onBlur={(e) => {
+                                      // 失焦才归一：编辑途中允许空串和 "0" 开头的中间态。
+                                      const raw = e.target.value.trim()
+                                      if (raw === '') return
+                                      const num = Number(raw)
+                                      if (Number.isFinite(num)) setField(field.key, num)
+                                    }}
+                                    style={{
+                                      width: 120,
+                                      border: `1px solid ${fieldError ? 'var(--color-danger, #dc2626)' : 'var(--border)'}`,
+                                      borderRadius: 8,
+                                      padding: '6px 8px',
+                                      background: 'var(--background)',
+                                    }}
+                                  />
+                                  {fieldError ? (
+                                    <span style={{ fontSize: 11, color: 'var(--color-danger, #dc2626)' }}>
+                                      {fieldError.message}
+                                    </span>
+                                  ) : null}
+                                </div>
                               )}
                             </label>
                           )
@@ -917,10 +972,10 @@ export default function AccessClientConfigPage() {
                   <button type="button" disabled={busy || !formReady} onClick={() => restoreDefault()} className="ai-btn-s">
                     {isZh ? '恢复平台默认' : 'Restore defaults'}
                   </button>
-                  <button type="button" disabled={busy || !formReady} onClick={() => save(false)} className="ai-btn-s">
+                  <button type="button" disabled={busy || !formReady || hasFieldError} onClick={() => save(false)} className="ai-btn-s">
                     {isZh ? '仅保存' : 'Save only'}
                   </button>
-                  <button type="button" disabled={busy || !formReady} onClick={() => save(true)} className="ai-btn-p">
+                  <button type="button" disabled={busy || !formReady || hasFieldError} onClick={() => save(true)} className="ai-btn-p">
                     {isZh ? '保存并通知同步' : 'Save & sync'}
                   </button>
                 </footer>
