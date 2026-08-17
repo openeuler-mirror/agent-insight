@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `6524dac639bb1ae958c78985556e7e0a45a242ae` (`6524dac6`) |
+| Commit | `d390dbd0846816c2c13af3d196737de13800064c` (`d390dbd0`) |
 | Branch | `feat/ras-fault-domain-plugins` |
-| Date | 2026-08-17 14:53:23 +0800 |
+| Date | 2026-08-17 15:22:34 +0800 |
 | Author | iceory |
-| Subject | `merge: 合并 origin/codex/reliability-development 到 feat/ras-fault-domain-plugins` |
+| Subject | `fix(ras): 上传 messageID 并对齐恢复树，避免 RAS 挂到末条回复` |
 
-**如何更新：** `git diff 6524dac6 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff d390dbd0 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
