@@ -8,7 +8,6 @@ copying per-platform stubs.
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any, Callable
 
 from platform_adapter.common.ras_client import RasClient
@@ -18,10 +17,6 @@ logger = logging.getLogger(__name__)
 AbortFn = Callable[[], Any]
 NoticeFn = Callable[[str], Any]
 SteerFn = Callable[[str], Any]
-
-
-def _msg_id() -> str:
-    return f"msg_{uuid.uuid4().hex[:26]}"
 
 
 class CallableHostControl:
@@ -50,6 +45,9 @@ class CallableHostControl:
             out: dict[str, Any] = {"ok": bool(raw.get("ok")), "channel": channel}
             if raw.get("error"):
                 out["error"] = raw["error"]
+            anchor = raw.get("delivery_anchor")
+            if isinstance(anchor, dict) and anchor:
+                out["delivery_anchor"] = anchor
             return out
         return None
 
@@ -78,11 +76,7 @@ class CallableHostControl:
             outcome = self._fn_outcome(self._notice_fn(message), channel)
             if outcome is not None:
                 return outcome
-            return {
-                "ok": True,
-                "channel": channel,
-                "delivery_anchor": {"message_id": _msg_id(), "channel": "ras_notice"},
-            }
+            return {"ok": True, "channel": channel}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "channel": channel}
 
@@ -97,11 +91,7 @@ class CallableHostControl:
             outcome = self._fn_outcome(self._steer_fn(message), channel)
             if outcome is not None:
                 return outcome
-            return {
-                "ok": True,
-                "channel": channel,
-                "delivery_anchor": {"message_id": _msg_id(), "channel": "ras_steering"},
-            }
+            return {"ok": True, "channel": channel}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "channel": channel}
 

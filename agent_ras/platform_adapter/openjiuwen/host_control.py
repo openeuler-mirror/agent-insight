@@ -9,7 +9,6 @@ from typing import Any
 from openjiuwen.core.single_agent.rail.base import AgentCallbackContext
 
 from core.host_control import HostControl
-from platform_adapter.common.insight_anomaly_reporter import allocate_delivery_message_id
 
 logger = logging.getLogger(__name__)
 _USER_NOTICE_STREAM_TYPE = "retry_notification"
@@ -40,15 +39,7 @@ class JiuwenHostControl:
             )
             return {"ok": False, "error": "steering_queue is None", "channel": "steering"}
         self._ctx.push_steering(message)
-        message_id = allocate_delivery_message_id()
-        return {
-            "ok": True,
-            "channel": "steering_queue",
-            "delivery_anchor": {
-                "message_id": message_id,
-                "channel": "ras_steering",
-            },
-        }
+        return {"ok": True, "channel": "steering_queue"}
 
     def request_force_finish(self, payload: dict[str, Any]) -> None:
         self._ctx.request_force_finish(payload)
@@ -73,15 +64,7 @@ class JiuwenHostControl:
                     },
                 )
             )
-            message_id = allocate_delivery_message_id()
-            return {
-                "ok": True,
-                "channel": _USER_NOTICE_STREAM_TYPE,
-                "delivery_anchor": {
-                    "message_id": message_id,
-                    "channel": "ras_notice",
-                },
-            }
+            return {"ok": True, "channel": _USER_NOTICE_STREAM_TYPE}
         except Exception as exc:
             logger.warning("emit_user_notice failed", exc_info=True)
             return {"ok": False, "error": str(exc), "channel": "stream"}

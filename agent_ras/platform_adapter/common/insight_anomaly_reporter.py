@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any
 
 from core.models import Anomaly
@@ -35,10 +34,6 @@ class InsightAnomalyReporter:
 
     def push_action_result(self, result: dict[str, Any]) -> None:
         fire_push_action_result(self._session_id, self._platform, result)
-
-
-def allocate_delivery_message_id() -> str:
-    return f"msg_{uuid.uuid4().hex[:26]}"
 
 
 def default_insight_reporter_factory(

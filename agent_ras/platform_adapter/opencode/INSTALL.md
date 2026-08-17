@@ -9,6 +9,7 @@ See [docs/agent-ras/designs/modules/platform-adapter.md](../../../docs/agent-ras
   - `emit_notice` → `tui.showToast({ message, variant, title?, duration? })`（扁平字段）→ fallback `tui.publish` / `noReply` prompt；**正文原样来自 core**，禁止展示 anomaly.summary
   - `push_steering` → idle 后 `session.prompt({ sessionID, parts })`（正文原样，含 `<system-reminder>`）；若 abort 已先到 idle，则立即注入（避免竞态丢恢复）
   - abort 升级文案 → hello 下发的 `host_messages.platform_abort_unconfirmed_user_notice`
+  - **禁止**为 notice/steer 自造非升序 `messageID`（UUID 等）。OpenCode agent loop 用字符串比较 `lastUser.id < lastAssistant.id` 决定退出；破坏排序会导致 `finish=stop` 后仍空转。`delivery_anchor.message_id` 从 sync `session.prompt` 响应回读宿主分配的 id。
 - **Does not have**: chunk suppress、同构 StreamBus、deep mid-stream abort
 
 > SDK 注意：插件注入的 client 可能是 v1 或 v2。**只传一种 abort 参数会 500 / falsy，流继续跑完**。`tui.executeCommand("session.interrupt")` 还要求 TUI focus，且需连按两次才 `session.abort`，不能当唯一停流手段。

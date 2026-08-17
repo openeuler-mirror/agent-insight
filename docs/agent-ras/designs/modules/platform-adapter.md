@@ -73,8 +73,8 @@ flowchart LR
 
 ### 职责边界
 
-**做什么**：宿主 API 映射、session id 规范化、delivery_anchor 分配、安装说明。  
-**不做什么**：不实现 LoopDetector/RecoveryPolicy；不改 wire message 文案；不监听 RAS 端口。
+**做什么**：宿主 API 映射、session id 规范化、delivery_anchor 回读（平台原生 message id）、安装说明。  
+**不做什么**：不实现 LoopDetector/RecoveryPolicy；不改 wire message 文案；不监听 RAS 端口；**不**客户端发明会话 `message_id`。
 
 ---
 
@@ -209,7 +209,7 @@ OpenCode：SDK v1/v2 abort 参数兼容、idle 后再 steer，详见 `opencode/I
 
 - Host 返回的 notice/steer **正文必须来自 core wire**，禁止改写成 summary  
 - Session id：OpenCode 使用 `opencode:{nativeId}`  
-- delivery_anchor：投递成功后带回 `message_id`
+- delivery_anchor：**message 身份归平台**。Host 仅在投递成功后回读原生 `message_id`/`part_id` 写入锚点；**禁止** RAS/适配器自造 `msg_<uuid>` 填入 `delivery_anchor` 或传入会写入会话历史的平台 API。拿不到真 id 时省略锚点（投递仍可 `ok`），不做正文匹配兜底。OpenCode 须从 sync prompt 响应回读升序 id，否则会破坏 `lastUser.id < lastAssistant.id` 退出条件导致空转。
 
 ### 修改检查清单
 

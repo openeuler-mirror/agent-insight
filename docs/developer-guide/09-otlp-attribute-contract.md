@@ -190,7 +190,7 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 | `framework` / `platform` | string | 否 | 平台，如 `opencode` |
 | `payload` | object | 否 | 原始事件体，落库为 `payloadJson` |
 
-落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_runtime/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及 `payload.delivery_anchor`（`message_id` 必填才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。**不做**正文匹配兜底。
+落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_runtime/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及可选的 `payload.delivery_anchor`（`message_id` 必须是**平台分配**的投递消息 id，才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。拿不到平台真 id 时**省略** `delivery_anchor`，**禁止**客户端伪造 id。**不做**正文匹配兜底。
 
 宿主上传生命周期：`fire_push_*` 注册 per-session pending handle；平台在异常与全部 `action_result` 入队后调用内部 `flush(timeout_ms)`，以 HTTP 2xx 作为 ack。flush 只等待调用时的 pending 快照，返回 `attempted/acked/failed/pending/timed_out`；并发 flush 各自使用本地快照结算，不会互相消费回执。未 flush 的完成回执按 session 最多保留 256 条，避免长驻宿主无界增长。超时不得取消上传或向 Agent 主流程抛错。OpenCode 的主 flush 点是 `onActions` 末尾，idle/bye 仅兜底，`reset` 不清理 pending。该有界 drain 保证正常短生命周期结束；SIGKILL/断电保证需另建持久化 outbox。
 
@@ -198,6 +198,7 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.4 | 2026-08-17 | `delivery_anchor.message_id` 必须为平台分配；拿不到真 id 时省略锚点，禁止客户端伪造 |
 | 1.3 | 2026-08-14 | RAS 旁路上传增加 per-session receipt、正常退出前 bounded flush，并明确 GIL/线程生命周期 |
 | 1.2 | 2026-07-31 | RAS 契约收紧：仅 flat+必填 deliveryId；移除 witty.* / rasEventId / 深路径 rewrite / 正文兜底 |
 | 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义；补充 RAS 旁路 ingest（非 OTLP） |
