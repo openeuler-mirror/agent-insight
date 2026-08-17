@@ -342,3 +342,28 @@ test('runtime bundle carries config_sync.js next to the client script', () => {
   const src = installer.installRuntime ? String(installer.installRuntime.toString()) : ''
   assert.match(src, /config_sync\.js/, 'installRuntime 必须固化 config_sync.js')
 })
+
+test('long-poll cadence stays under the server command TTL', () => {
+  // 退避只该作用于 WSS 重连。若长轮询夹在重连退避之间，backoff 涨到 60s 上限后
+  // 轮询空窗会超过指令 TTL（默认 30s），指令还没被取走就 COMMAND_EXPIRED。
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(src, /async function pollLoop/, '长轮询必须是独立循环')
+  assert.match(src, /pollLoop\(cfg\)/, '必须在 main 里启动')
+
+  // 最坏一轮 = 服务端 long-poll 等待 + 失败重试间隔，须小于 TTL。
+  const retryMs = Number(/POLL_RETRY_MS = ([\d_]+)/.exec(src)?.[1]?.replace(/_/g, '') || 0)
+  const waitSec = Number(/waitSeconds=(\d+)/.exec(src)?.[1] || 0)
+  const ttlSec = 30
+  assert.ok(retryMs > 0 && waitSec > 0, '应能解析出轮询参数')
+  assert.ok(
+    waitSec + retryMs / 1000 < ttlSec,
+    `最坏轮询间隔 ${waitSec + retryMs / 1000}s 必须小于指令 TTL ${ttlSec}s`,
+  )
+
+  // 退避常量不得出现在轮询循环里，否则又会把两件事耦合回去。
+  const pollBody = /async function pollLoop[\s\S]*?\n}/.exec(src)?.[0] || ''
+  assert.doesNotMatch(pollBody, /backoff|RECONNECT_MAX_MS/, '轮询不得受重连退避影响')
+})

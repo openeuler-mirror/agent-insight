@@ -18,6 +18,7 @@ import {
   flatConfigToCapabilityBody,
   isReliabilityPlatformId,
   nestEffectiveConfig,
+  validateConfigValues,
   type ReliabilityPlatformId,
 } from '@/lib/reliability/client-config-model'
 import {
@@ -383,6 +384,15 @@ export async function putClientConfig(input: {
   ) {
     throw new ReliabilityError('CONFIG_REVISION_CONFLICT', '配置版本冲突', 409, {
       revision: cfg.revision,
+    })
+  }
+
+  // 服务端是底线：页面的 min/max 只是 HTML 属性，拦不住直接调 API，
+  // 越界值会一路写进快照、下发到 RAS。与前端共用同一个校验器（需求文档 §5.1）。
+  const fieldErrors = validateConfigValues(schema, input.overrideDiff || {})
+  if (fieldErrors.length) {
+    throw new ReliabilityError('CONFIG_FIELD_INVALID', '配置字段不合法', 400, {
+      fields: fieldErrors,
     })
   }
 

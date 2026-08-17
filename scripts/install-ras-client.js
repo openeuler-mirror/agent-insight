@@ -99,6 +99,50 @@ function fail(message, hint) {
   process.exit(1)
 }
 
+/**
+ * 稳定的机器标识，服务端据此判断「是不是同一台机器」。
+ *
+ * 不能用 hostname 或 IP：前者会改、且多台机器可能重名（一堆 localhost），
+ * 后者换网络就变。也不能只靠本机 config.json —— 那个文件一删，服务端就
+ * 完全认不出这是同一台机器，于是每次安装都新建一条记录。
+ *
+ * 优先取系统级 UUID（重装才变）：macOS 的 IOPlatformUUID、Linux 的 machine-id。
+ * 容器或克隆的虚拟机可能共用同一个 machine-id，此时用环境变量覆盖。
+ */
+function resolveMachineId(runner = spawnSync) {
+  const override = String(process.env.AGENT_INSIGHT_MACHINE_ID || '').trim()
+  if (override) return override
+
+  if (process.platform === 'darwin') {
+    const r = runner('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { encoding: 'utf8' })
+    const uuid = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(String(r.stdout || ''))?.[1]
+    if (uuid) return uuid.trim()
+  } else {
+    for (const p of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
+      try {
+        const id = fs.readFileSync(p, 'utf8').trim()
+        if (id) return id
+      } catch {
+        /* 换下一个候选 */
+      }
+    }
+  }
+
+  // 回退：主机名 + 首个非回环 MAC。比 hostname 单独用可靠，但换网卡会变，
+  // 因此只作兜底 —— 取不到系统 UUID 的环境本就少见。
+  const nets = os.networkInterfaces() || {}
+  const mac = Object.values(nets)
+    .flat()
+    .map((e) => e && e.mac)
+    .find((m) => m && m !== '00:00:00:00:00:00')
+  if (!mac) return null
+  return `fallback:${require('crypto')
+    .createHash('sha256')
+    .update(`${os.hostname()}|${mac}`)
+    .digest('hex')
+    .slice(0, 32)}`
+}
+
 function pickReportedIp() {
   const nets = os.networkInterfaces() || {}
   for (const entries of Object.values(nets)) {
@@ -139,6 +183,8 @@ async function register({ host, token, name, previousClientId }) {
         arch: process.arch,
         agentVersion: '1.0.0',
         supervisor: process.platform === 'darwin' ? 'launchd' : 'systemd',
+        // 服务端据此认出「同一台机器」，避免每次安装都新建一条记录。
+        machineId: resolveMachineId(),
       },
       capabilities: { platforms: [], actions: [] },
       // 改绑时告诉服务端解绑哪一个：旧凭证要立即撤销，
@@ -174,7 +220,10 @@ async function register({ host, token, name, previousClientId }) {
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 })
   fs.renameSync(tmp, CONFIG_PATH)
   fs.chmodSync(CONFIG_PATH, 0o600)
-  log(`✓ 注册成功: clientId=${json.clientId}${json.user ? ` user=${json.user}` : ''}`)
+  log(
+    `✓ ${json.reused ? '复用本机原记录' : '注册成功'}: clientId=${json.clientId}` +
+      `${json.user ? ` user=${json.user}` : ''}`,
+  )
   if (json.unboundPrevious) {
     log(`  已解绑原账号 ${json.unboundPrevious.user}（旧凭证已撤销，其页面将显示「已解绑」）`)
   }
@@ -528,6 +577,7 @@ async function main() {
 }
 
 module.exports = {
+  resolveMachineId,
   CLIENT_SCRIPT,
   installRuntime,
   RUNTIME_DIR,

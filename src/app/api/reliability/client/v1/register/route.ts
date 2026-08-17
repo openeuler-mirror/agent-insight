@@ -44,6 +44,7 @@ export async function POST(req: Request) {
       arch: client.arch ? String(client.arch) : null,
       agentVersion: client.agentVersion ? String(client.agentVersion) : null,
       supervisor: client.supervisor ? String(client.supervisor) : null,
+      machineId: client.machineId ? String(client.machineId) : null,
       capabilities: body.capabilities,
       previousClientId: body.previousClientId ? String(body.previousClientId) : null,
     })
@@ -56,6 +57,7 @@ export async function POST(req: Request) {
         user: result.user,
         deviceCredential: result.deviceCredential,
         unboundPrevious: result.unboundPrevious,
+        reused: result.reused,
         control: {
           websocketUrl,
           pollUrl,

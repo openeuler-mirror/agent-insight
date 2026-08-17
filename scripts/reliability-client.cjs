@@ -42,6 +42,9 @@ const RECONNECT_MAX_MS = 60_000
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
 const LIVENESS_TIMEOUT_MS = 75_000
 const LIVENESS_CHECK_MS = 15_000
+// 长轮询失败后的重试间隔。必须远小于服务端指令 TTL（默认 30s），
+// 否则指令会在两次轮询的空窗里过期。
+const POLL_RETRY_MS = 3_000
 
 function log(...args) {
   console.log(`[ras-client ${new Date().toISOString()}]`, ...args)
@@ -840,6 +843,10 @@ async function reportCapabilities(cfg) {
 
 const processStartedAt = new Date().toISOString()
 
+/** WSS 是否已接管；长轮询据此让路，避免两条通道重复取同一条指令。 */
+let wssConnected = false
+let warnedNoWss = false
+
 async function sendHeartbeat(cfg) {
   await api(cfg, 'POST', '/api/reliability/client/v1/heartbeat', {
     agentVersion: AGENT_VERSION,
@@ -962,6 +969,7 @@ async function main() {
 
   fiLoop(cfg)
   controlLoop(cfg)
+  pollLoop(cfg)
 }
 
 async function sendCommandStatus(cfg, commandId, status, extra = {}) {
@@ -1018,6 +1026,8 @@ async function controlLoop(cfg) {
       })
       log('control channel connected (wss)')
       backoff = RECONNECT_BASE_MS
+      wssConnected = true
+      warnedNoWss = false
 
       const sendVia = async (commandId, status, extra) => {
         const frame = {
@@ -1070,13 +1080,43 @@ async function controlLoop(cfg) {
         })
       })
       log('control channel closed; reconnecting')
+      wssConnected = false
     } catch (err) {
-      logErr(`control channel unavailable (${err.message}); falling back to long-poll`)
-      // WSS 不可用时用长轮询兜底，直到下次重连成功。
-      await pollOnce(cfg).catch(() => {})
+      wssConnected = false
+      // 只记一次，避免无 WSS 的部署把日志刷满。
+      if (!warnedNoWss) {
+        logErr(`control channel unavailable (${err.message}); falling back to long-poll`)
+        warnedNoWss = true
+      }
     }
+    // 退避只作用于 WSS 重连（避免猛敲服务端）。长轮询在另一个循环里独立跑，
+    // 不受这里影响 —— 否则 backoff 涨到上限后轮询空窗会超过指令 TTL，
+    // 指令还没被取走就过期了（COMMAND_EXPIRED）。
     await new Promise((r) => setTimeout(r, backoff))
     backoff = Math.min(RECONNECT_MAX_MS, backoff * 2)
+  }
+}
+
+/**
+ * 长轮询兜底（IF-N07）。
+ *
+ * 必须独立于 WSS 重连退避：它是 WSS 不可用时的**唯一**取指令通道，
+ * 一旦间隔超过服务端的指令 TTL（默认 30s），指令就会在空窗期过期。
+ * 因此这里的节奏只由 TTL 决定，与重连快慢无关。
+ */
+async function pollLoop(cfg) {
+  for (;;) {
+    if (wssConnected) {
+      // WSS 已接管，不必重复取指令，短睡后再看。
+      await new Promise((r) => setTimeout(r, 1_000))
+      continue
+    }
+    try {
+      await pollOnce(cfg)
+    } catch {
+      // 服务端不可达时别空转打满 CPU，稍等再试。
+      await new Promise((r) => setTimeout(r, POLL_RETRY_MS))
+    }
   }
 }
 
