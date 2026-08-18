@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `c6fc5c8058610504ade981d5d485aff0d227815c` (`c6fc5c80`) |
-| Branch | `local-submit/pi-installer-bundle-integrity` |
-| Date | 2026-08-15T14:54:16+08:00 |
+| Commit | `4a6d24fef519767a745fe6551058bd1270f55088` (`4a6d24fe`) |
+| Branch | `local-integration/codex-full` |
+| Date | 2026-08-18T13:44:10+08:00 |
 | Author | duanzhoutao |
-| Subject | `fix(pi): verify bundled installer assets` |
+| Subject | `fix(setup): support PowerShell 5.1 and standalone start` |
 
-**如何更新：** `git diff c6fc5c80 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 4a6d24fe HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 
 ## Documents
