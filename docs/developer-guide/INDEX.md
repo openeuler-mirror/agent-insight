@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `4a6d24fef519767a745fe6551058bd1270f55088` (`4a6d24fe`) |
+| Commit | `db3192a6de82f56016a5d116e20b517d4d63b483` (`db3192a6`) |
 | Branch | `local-integration/codex-full` |
-| Date | 2026-08-18T13:44:10+08:00 |
+| Date | 2026-08-18T18:12:32+08:00 |
 | Author | duanzhoutao |
-| Subject | `fix(setup): support PowerShell 5.1 and standalone start` |
+| Subject | `fix(integration): clean upstream merge artifacts` |
 
-**如何更新：** `git diff 4a6d24fe HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff db3192a6 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 
 ## Documents
