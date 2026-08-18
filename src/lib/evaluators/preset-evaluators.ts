@@ -233,7 +233,7 @@ export const presetEvaluators: EvaluatorCard[] = [
     runMode: 'LLM Judge (离散 rubric)',
     scoreRange: '0-100',
     popularity: 74,
-    mappedMetrics: ['主语言匹配', '非必要混杂', '切换合理', '双语处理'],
+    mappedMetrics: ['主语言匹配', '非必要混杂', '语种切换合理性', '双语处理'],
     status: 'ready',
     runtimeNote: 'text-preset-evaluators.ts · language-consistency',
   },

@@ -361,6 +361,16 @@ describe('文本评估器公式和输出契约', () => {
     assert.equal(configuredDeductionScore(make('unnecessary_mixing', 'severe'), TEXT_LANGUAGE_RISK_CONFIG), 10);
   });
 
+  it('语种切换合理性使用新的中文维度名称，内部 key 保持兼容', async () => {
+    setJudgeLlmCallerForTest(async () => judgeJson('preset-text-language-consistency'));
+    const output = await runTextPreset(
+      'preset-text-language-consistency',
+      USER,
+      ctx('回复内容', '用户问题'),
+    );
+    assert.equal(output.points?.[2]?.label, '语种切换合理性');
+  });
+
   it('简洁性使用固定权重的加权几何平均，仅保留信息完整性兜底', () => {
     assert.deepEqual(TEXT_CONCISENESS_WEIGHTS, {
       expression_efficiency: 0.3,

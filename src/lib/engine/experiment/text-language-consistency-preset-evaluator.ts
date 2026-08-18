@@ -27,7 +27,7 @@ const DEFINITION = defineTextJudgeDefinition({
   dimensions: [
     { key: 'primary_language_match', label: '主语言一致性', description: '回复主语言是否匹配用户问题主语言；完全错语种属于 severe。' },
     { key: 'unnecessary_mixing', label: '非必要语言混杂', description: '排除标准技术术语、专有名称、通用寒暄、引用和翻译对照后，识别不必要的完整外语句或词组。' },
-    { key: 'code_switch_rationale', label: '代码切换合理性', description: '语言切换是否有翻译、术语解释、原文引用或技术标准等合理理由。' },
+    { key: 'code_switch_rationale', label: '语种切换合理性', description: '语言切换是否有翻译、术语解释、原文引用或技术标准等合理理由。' },
     { key: 'bilingual_handling', label: '双语场景处理', description: '用户混合语言提问时，回复是否覆盖两种语言的信息需求；逐词教学翻译属于合理处理。' },
   ] satisfies readonly TextDimension[],
   rules: [
