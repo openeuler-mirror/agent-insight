@@ -49,11 +49,11 @@ type Fixture = {
 const REQUIREMENT_FIXTURES: Record<TextPresetId, readonly Fixture[]> = {
   'preset-text-ai-flavor': [
     { name: '完全自然的文本', output: '今天约了老王打球，结果这货放我鸽子。算了，下次再说吧。', exact: 100 },
-    { name: '模板化开篇 + 模板化结尾', output: '在当今这个信息技术飞速发展的时代，人工智能已经深刻改变了人们的生活方式。………综上所述，人工智能在带来便利的同时也带来了挑战，值得我们深思。', findings: { template_opening: { severity: 'moderate' }, template_closing: { severity: 'moderate' } }, max: 40 },
-    { name: '机械连接词堆砌', output: '首先，我们需要了解问题的背景。其次，分析其产生的原因。再次，探讨可能的解决方案。最后，总结经验教训。值得注意的是，在实施过程中还需要考虑多方面因素。', findings: { mechanical_transitions: { severity: 'severe' } }, max: 40 },
-    { name: '泛化人物名称', output: '小明和小红是一对好朋友。有一天，小明对小红说：我们去公园玩吧。小红高兴地答应了。', findings: { generic_names: { severity: 'severe' } }, max: 40 },
-    { name: '空洞总结段落', output: '（长文论述后）总之，环境保护是一个非常重要的议题，关系到我们每个人的未来。我们应该共同努力，为子孙后代留下一个美好的家园。这不仅是一个责任，更是一种使命。', findings: { empty_summary: { severity: 'severe' } }, max: 40 },
-    { name: '过度礼貌用语', output: '亲，您好呀～请问您需要什么样的帮助呢？随时都可以跟我说哦，不要客气啦～我会尽全力为您服务的呢～', findings: { politeness_overuse: { severity: 'severe' } }, max: 40 },
+    { name: '模板化开篇 + 模板化结尾', output: '在当今这个信息技术飞速发展的时代，人工智能已经深刻改变了人们的生活方式。………综上所述，人工智能在带来便利的同时也带来了挑战，值得我们深思。', findings: { template_opening: { severity: 'moderate' }, template_closing: { severity: 'moderate' } }, max: 30 },
+    { name: '机械连接词堆砌', output: '首先，我们需要了解问题的背景。其次，分析其产生的原因。再次，探讨可能的解决方案。最后，总结经验教训。值得注意的是，在实施过程中还需要考虑多方面因素。', findings: { mechanical_transitions: { severity: 'severe' } }, max: 30 },
+    { name: '泛化人物名称', output: '小明和小红是一对好朋友。有一天，小明对小红说：我们去公园玩吧。小红高兴地答应了。', findings: { generic_names: { severity: 'severe' } }, max: 30 },
+    { name: '空洞总结段落', output: '（长文论述后）总之，环境保护是一个非常重要的议题，关系到我们每个人的未来。我们应该共同努力，为子孙后代留下一个美好的家园。这不仅是一个责任，更是一种使命。', findings: { empty_summary: { severity: 'severe' } }, max: 30 },
+    { name: '过度礼貌用语', output: '亲，您好呀～请问您需要什么样的帮助呢？随时都可以跟我说哦，不要客气啦～我会尽全力为您服务的呢～', findings: { politeness_overuse: { severity: 'severe' } }, max: 30 },
     { name: '边界——客服场景合理礼貌', input: '用户进入客服咨询', output: '您好，请问您需要什么帮助？请描述您遇到的问题，我会尽快为您处理。', findings: { politeness_overuse: { severity: 'minor' } }, min: 80 },
     { name: '多重 AI 味模式叠加', output: '在当今这个快速发展的时代，阅读越来越受到人们的重视。首先，阅读可以增长知识。其次，阅读可以开阔视野。再次，阅读可以陶冶情操。最后，阅读可以提升修养。总之，阅读是一种重要的学习方式，我们应该养成良好的阅读习惯。——小明同学，你觉得呢？', findings: { template_opening: { severity: 'moderate' }, mechanical_transitions: { severity: 'moderate' }, generic_names: { severity: 'moderate' }, empty_summary: { severity: 'moderate' } }, max: 20 },
     { name: '边界——技术文档自然表达', output: '执行 npm install 安装依赖，然后运行 npm run dev 启动开发服务器。如果遇到端口冲突，可以在 .env 中修改 PORT 环境变量。', exact: 100 },
@@ -223,11 +223,11 @@ describe('文本评估器公式和输出契约', () => {
     }));
     assert.equal(aggregateTextAiFlavorScore(make(['safe', 'safe', 'safe', 'safe', 'safe', 'safe'])), 100);
     assert.equal(aggregateTextAiFlavorScore(make(['minor', 'safe', 'safe', 'safe', 'safe', 'safe'])), 80);
-    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'safe', 'safe', 'safe', 'safe', 'safe'])), 60);
-    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'moderate', 'safe', 'safe', 'safe', 'safe'])), 36);
-    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'safe', 'safe', 'safe', 'safe', 'safe'])), 40);
+    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'safe', 'safe', 'safe', 'safe', 'safe'])), 50);
+    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'moderate', 'safe', 'safe', 'safe', 'safe'])), 25);
+    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'safe', 'safe', 'safe', 'safe', 'safe'])), 30);
     assert.equal(aggregateTextAiFlavorScore(make(['minor', 'minor', 'safe', 'safe', 'safe', 'safe'])), 64);
-    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'moderate', 'moderate', 'minor', 'minor', 'safe'])), 14);
+    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'moderate', 'moderate', 'minor', 'minor', 'safe'])), 8);
     assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'severe', 'severe', 'severe', 'moderate'])), 1);
     assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'severe', 'severe', 'severe', 'severe'])), 0);
     assert.deepEqual(AI_FLAVOR_POINT_SCORES, { safe: 100, minor: 80, moderate: 20, severe: 0 });

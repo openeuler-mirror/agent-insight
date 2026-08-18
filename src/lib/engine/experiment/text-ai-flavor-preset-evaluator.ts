@@ -20,16 +20,18 @@ export const AI_FLAVOR_POINT_SCORES = {
 const AI_FLAVOR_RETENTION = {
   safe: 1,
   minor: 0.8,
-  moderate: 0.6,
-  severe: 0.4,
+  moderate: 0.5,
+  severe: 0.3,
 } satisfies Readonly<Record<TextSeverity, number>>;
 
 export function aggregateTextAiFlavorScore(verdicts: readonly TextVerdict[]): number {
+  if (!verdicts.length) return 100;
+  if (verdicts.every((verdict) => verdict.severity === 'severe')) return 0;
   const score = verdicts.reduce(
     (product, verdict) => product * AI_FLAVOR_RETENTION[verdict.severity],
     100,
   );
-  return Math.max(0, Math.min(100, Math.round(score)));
+  return Math.max(1, Math.min(100, Math.round(score)));
 }
 
 const DEFINITION = defineTextJudgeDefinition({
