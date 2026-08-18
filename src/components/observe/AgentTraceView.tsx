@@ -346,6 +346,14 @@ interface SpanInfo {
     parentKeys: string[];
 }
 
+interface RasSpanInfo {
+    key: string;
+    label: string;
+    severity: string;
+    marker?: RasTraceMarker;
+    parentKeys: string[];
+}
+
 interface TraceCtxValue {
     framework?: string;
     searchQuery: string;
@@ -359,6 +367,7 @@ interface TraceCtxValue {
     topNDuration: SpanInfo[];
     topNTokens: SpanInfo[];
     slowNodesList: SpanInfo[];
+    rasNodeList: RasSpanInfo[];
     /** sub-agent 节点上"打开独立 trace"按钮的点击回调；未注入则不渲染按钮 */
     onSubagentNavigate?: (sessionId: string) => void;
     findEventAnomalies?: (event: AgentEvent) => RasTraceMarker[];
@@ -368,7 +377,7 @@ const defaultCtx: TraceCtxValue = {
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
     treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
     onJumpToKey: () => {},
-    topNDuration: [], topNTokens: [], slowNodesList: [],
+    topNDuration: [], topNTokens: [], slowNodesList: [], rasNodeList: [],
     onSubagentNavigate: undefined,
     findEventAnomalies: undefined,
 };
@@ -677,9 +686,11 @@ export default function AgentTraceView({
     };
 
     // ── Flat span list for search + TopN ────────────────────────────────────
-    const allSpans = useMemo<SpanInfo[]>(() => {
-        if (!tree) return [];
+    const { allSpans, rasNodeList } = useMemo<{ allSpans: SpanInfo[]; rasNodeList: RasSpanInfo[] }>(() => {
+        if (!tree) return { allSpans: [], rasNodeList: [] };
         const spans: SpanInfo[] = [];
+        const rasList: RasSpanInfo[] = [];
+        const markerById = new Map(rasMarkers.map(m => [m.id, m]));
         const visit = (node: AgentNode, parentKeys: string[]) => {
             const aKey = agentKey(node.id);
             spans.push({
@@ -721,6 +732,18 @@ export default function AgentTraceView({
                     ].filter(Boolean).join(' ').toLowerCase(),
                     parentKeys: eventParents,
                 });
+                if (ev.kind === 'ras') {
+                    const marker = (ev.args && typeof ev.args === 'object' && ev.args.rasMarkerId)
+                        ? markerById.get(ev.args.rasMarkerId)
+                        : undefined;
+                    rasList.push({
+                        key: evKey,
+                        label: label || ev.name || 'RAS',
+                        severity: marker?.severity || (ev.args && typeof ev.args === 'object' ? ev.args.severity : undefined) || 'low',
+                        marker,
+                        parentKeys: eventParents,
+                    });
+                }
                 const childParents = [...eventParents, evKey];
                 entry.children.forEach(child => visitEvent(child, childParents));
                 if (childNode) {
@@ -732,8 +755,8 @@ export default function AgentTraceView({
             node.children.filter(child => !handledChildIds.has(child.id)).forEach(child => visit(child, myParents));
         };
         visit(tree, []);
-        return spans;
-    }, [tree, nodeMap]);
+        return { allSpans: spans, rasNodeList: rasList };
+    }, [tree, nodeMap, rasMarkers]);
 
     const searchMatches = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
@@ -808,7 +831,7 @@ export default function AgentTraceView({
         framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
-        onJumpToKey, topNDuration, topNTokens, slowNodesList,
+        onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
         onSubagentNavigate,
         findEventAnomalies,
     };
@@ -3467,15 +3490,16 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
 
 // ─── TopNPanel ────────────────────────────────────────────────────────────────
 function TopNPanel() {
-    const { topNDuration, topNTokens, slowNodesList, onJumpToKey } = React.useContext(TraceCtx);
-    const [tab, setTab] = useState<'duration' | 'tokens' | 'slow'>('duration');
+    const { topNDuration, topNTokens, slowNodesList, rasNodeList, onJumpToKey } = React.useContext(TraceCtx);
+    const [tab, setTab] = useState<'duration' | 'tokens' | 'slow' | 'ras'>('duration');
 
-    if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0) return null;
+    if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0 && rasNodeList.length === 0) return null;
 
-    const tabs: { id: 'duration' | 'tokens' | 'slow'; icon: string; label: string; count: number }[] = [
+    const tabs: { id: 'duration' | 'tokens' | 'slow' | 'ras'; icon: string; label: string; count: number }[] = [
         { id: 'duration', icon: '⏱', label: '耗时 Top 5', count: topNDuration.length },
         { id: 'tokens',   icon: '💬', label: 'Token Top 5', count: topNTokens.length },
         { id: 'slow',     icon: '⚠', label: '异常节点', count: slowNodesList.length },
+        { id: 'ras',      icon: '🛡', label: 'RAS 节点', count: rasNodeList.length },
     ];
 
     const items = tab === 'duration' ? topNDuration : tab === 'tokens' ? topNTokens : slowNodesList;
@@ -3494,7 +3518,7 @@ function TopNPanel() {
                             cursor: 'pointer', fontWeight: tab === t.id ? 600 : 400, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
                         }}>
                             <span>{t.icon}</span>
-                            <span style={{ display: 'none' }}>{t.label}</span>
+                            <span style={{ whiteSpace: 'nowrap' }}>{t.label}</span>
                             <span style={{ fontSize: '0.5rem', padding: '0 3px', borderRadius: 6, background: tab === t.id ? 'var(--primary-subtle)' : 'var(--background-tertiary)', color: tab === t.id ? 'var(--primary)' : 'var(--foreground-muted)', minWidth: 14, textAlign: 'center' }}>
                                 {t.count}
                             </span>
@@ -3503,9 +3527,28 @@ function TopNPanel() {
                 </div>
                 {/* Items */}
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    {items.length === 0 ? (
+                    {tab !== 'ras' && items.length === 0 ? (
                         <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
-                    ) : items.map((span, i) => {
+                    ) : tab === 'ras' && rasNodeList.length === 0 ? (
+                        <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
+                    ) : tab === 'ras' ? rasNodeList.map((ras, i) => {
+                        return (
+                            <div
+                                key={ras.key}
+                                onClick={() => onJumpToKey(ras.key)}
+                                className={cn(
+                                    'flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors hover:bg-background-secondary',
+                                    i < rasNodeList.length - 1 && 'border-b border-border',
+                                )}
+                            >
+                                <span className="text-xs text-foreground-muted tabular-nums w-3 shrink-0 text-right">{i + 1}</span>
+                                {ras.marker && <RasNodeBadge markers={[ras.marker]} compact className="shrink-0" />}
+                                {!ras.marker && <span className="inline-flex items-center rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 text-foreground-muted">RAS</span>}
+                                <span className="flex-1 text-xs text-foreground truncate">{ras.label}</span>
+                                <span className="text-xs text-primary shrink-0">→</span>
+                            </div>
+                        );
+                    }) : items.map((span, i) => {
                         const metric = tab === 'tokens'
                             ? (span.tokens ? exactTokens(span.tokens) : '-')
                             : (span.durationMs ? formatDuration(span.durationMs) : '-');
