@@ -192,9 +192,15 @@ Agent Insight 的三个用户入口均在现有框架列表末尾追加
 
 中央 route 支持 Bash、PowerShell、空选择和 `frameworks` 预选；预选值只通过固定白名单
 解析。框架专属 `GET /api/ingest/setup/pi-agent` 默认返回 Bash，`x-platform: windows`
-返回 PowerShell staging script，资源只从固定 allowlist 分发。
+返回 PowerShell staging script。服务端把固定 allowlist 中的 7 个普通文件打成单一、确定性的
+`pi-agent-bundle.zip`，并把归档 SHA-256 写入 staging script；客户端只下载一次归档，必须
+先核对摘要、再解压、最后执行 `install.cjs`。旧的逐文件资产名称只为已保存的旧 bootstrap
+保留只读兼容，并返回 `Deprecation: true`；新生成的 Bash/PowerShell 不再引用这些 URL。
+摘要用于检测传输损坏、缓存错配和非原子资产组合，不替代独立代码签名，也不宣称能够抵御
+Agent Insight 服务端本身失陷。
 
-Bash 与 PowerShell 复用跨平台 Node 安装核心，执行版本检查、资源复制、权限配置、
+Bash（需要 `unzip`）与 PowerShell（使用 `Expand-Archive`）复用跨平台 Node 安装核心，
+执行版本检查、资源复制、权限配置、
 `pi install` 和 self-check。本地 npm 包链通过
 `scripts/install.js -> /api/setup/auto -> Pi installer`，已安装的本地 tarball 不被 registry
 版本替换。
@@ -263,3 +269,4 @@ Agent facet 与注册同时包含根和子实例。根/子执行是否出现在�
 | D-006 | API Key hash 隔离本地状态 | 防止多账号串数据 |
 | D-007 | 不修改 Prisma schema | 现有 `ExecutionRecord` 可表达目标数据 |
 | D-008 | Pi 子 Agent 使用真实 profile 名 | 真实运行的独立 Pi 进程应以 `planner`/`worker` 等 profile 标识；`Pi` 仅是根进程/框架兜底 |
+| D-009 | Pi 安装资产使用单一 ZIP 并在解压前校验 SHA-256 | 为一次安装建立原子内容边界，阻止损坏或错配资产进入执行阶段；同源摘要不冒充代码签名 |

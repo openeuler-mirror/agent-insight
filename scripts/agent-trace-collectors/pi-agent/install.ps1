@@ -9,28 +9,22 @@ if (-not $env:AGENT_INSIGHT_API_KEY) {
     throw "AGENT_INSIGHT_API_KEY is required."
 }
 
-$assetUrl = "$baseUrl/api/ingest/setup/pi-agent/assets"
+$bundleUrl = "$baseUrl/api/ingest/setup/pi-agent/assets/pi-agent-bundle.zip"
+$expectedBundleSha256 = "__PI_AGENT_BUNDLE_SHA256__"
 $stageRoot = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-pi-" + [guid]::NewGuid().ToString("N"))
 $sourceDir = Join-Path $stageRoot "pi-agent"
-$sharedDir = Join-Path $stageRoot "shared"
+$bundlePath = Join-Path $stageRoot "pi-agent-bundle.zip"
 
 try {
-    New-Item -ItemType Directory -Force -Path (Join-Path $sourceDir "extensions") | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $sourceDir "lib") | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $sourceDir "scripts") | Out-Null
-    New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
-
-    $assets = @{
-        "package.json" = Join-Path $sourceDir "package.json"
-        "pi-agent-insight.ts" = Join-Path $sourceDir "extensions\pi-agent-insight.ts"
-        "pi-trace-core.cjs" = Join-Path $sourceDir "lib\pi-trace-core.cjs"
-        "self-check.cjs" = Join-Path $sourceDir "scripts\self-check.cjs"
-        "uninstall.cjs" = Join-Path $sourceDir "scripts\uninstall.cjs"
-        "install.cjs" = Join-Path $sourceDir "install.cjs"
-        "trace-transport.cjs" = Join-Path $sharedDir "trace-transport.cjs"
+    New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
+    Invoke-WebRequest -UseBasicParsing -Uri $bundleUrl -OutFile $bundlePath
+    $actualBundleSha256 = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualBundleSha256, $expectedBundleSha256)) {
+        throw "Pi Agent collector bundle SHA-256 mismatch."
     }
-    foreach ($asset in $assets.GetEnumerator()) {
-        Invoke-WebRequest -UseBasicParsing -Uri "$assetUrl/$($asset.Key)" -OutFile $asset.Value
+    Expand-Archive -LiteralPath $bundlePath -DestinationPath $stageRoot -Force
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceDir "install.cjs") -PathType Leaf)) {
+        throw "Pi Agent collector bundle is incomplete."
     }
 
     & node (Join-Path $sourceDir "install.cjs") --source-dir $sourceDir @args
