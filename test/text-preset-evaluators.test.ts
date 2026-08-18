@@ -414,7 +414,7 @@ describe('文本评估器公式和输出契约', () => {
     assert.equal(output.points?.[2]?.label, '语种切换合理性');
   });
 
-  it('简洁性使用固定权重的加权几何平均，仅保留信息完整性兜底', () => {
+  it('简洁性使用需求权重的加权算术平均，并向最低维度收敛', () => {
     assert.deepEqual(TEXT_CONCISENESS_WEIGHTS, {
       expression_efficiency: 0.3,
       cliche_condensation: 0.2,
@@ -429,11 +429,11 @@ describe('文本评估器公式和输出契约', () => {
       suggestion: '',
     }));
     assert.equal(aggregateTextConcisenessScore(make('safe')), 100);
-    assert.equal(aggregateTextConcisenessScore(make('severe')), 0);
-    assert.equal(aggregateTextConcisenessScore(make('moderate')), 62);
-    assert.equal(aggregateTextConcisenessScore(make('minor')), 94);
+    assert.equal(aggregateTextConcisenessScore(make('severe')), 18);
+    assert.equal(aggregateTextConcisenessScore(make('moderate')), 59);
+    assert.equal(aggregateTextConcisenessScore(make('minor')), 84);
     assert.equal(aggregateTextConcisenessScore(make('moderate', 'information_completeness')), 60);
-    assert.equal(CONCISENESS_POINT_SCORES.moderate, 20);
+    assert.equal(CONCISENESS_POINT_SCORES.moderate, 50);
   });
 
   it('细则 0 分被完整保留，summary 被压缩到 80 字以内', async () => {

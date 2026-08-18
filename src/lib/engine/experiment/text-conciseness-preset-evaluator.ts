@@ -13,7 +13,7 @@ export const TEXT_CONCISENESS_PRESET_ID = 'preset-text-conciseness';
 export const CONCISENESS_POINT_SCORES: Readonly<Record<TextSeverity, number>> = {
   safe: 100,
   minor: 80,
-  moderate: 20,
+  moderate: 50,
   severe: 0,
 };
 
@@ -25,24 +25,21 @@ export const TEXT_CONCISENESS_WEIGHTS = {
 } as const;
 
 export function aggregateTextConcisenessScore(verdicts: readonly TextVerdict[]): number {
-  // A weighted geometric mean is a single, monotone penalty formula.  Each
-  // dimension contributes multiplicatively according to its existing product
-  // weight, so a severe dimension cannot be diluted by safe dimensions and
-  // there are no dimension-specific score ceilings to tune.
-  const geometricScore = verdicts.reduce((product, verdict) => {
+  if (!verdicts.length) return 100;
+  // Preserve the requirement's dimension weights in a weighted arithmetic
+  // mean, then move one actual-dimension share from that mean toward the
+  // weakest dimension. This keeps the weakest issue visible without adding a
+  // coefficient inferred from acceptance examples.
+  let weightedAverage = 0;
+  let weakestScore = 100;
+  for (const verdict of verdicts) {
     const weight = TEXT_CONCISENESS_WEIGHTS[verdict.dimension as keyof typeof TEXT_CONCISENESS_WEIGHTS];
     if (weight === undefined) throw new Error(`未知文本简洁性维度: ${verdict.dimension}`);
     const pointScore = CONCISENESS_POINT_SCORES[verdict.severity];
-    return pointScore === 0 ? 0 : product * (pointScore / 100) ** weight;
-  }, 100);
-  // Information completeness is explicitly a fallback dimension in the
-  // product rubric: a materially incomplete answer must not score above 60,
-  // even when the other dimensions are clean. This is the only dimension-
-  // specific safeguard; all other dimensions use the same formula above.
-  const informationVerdict = verdicts.find((verdict) => verdict.dimension === 'information_completeness');
-  const score = informationVerdict?.severity === 'moderate'
-    ? Math.min(geometricScore, 60)
-    : geometricScore;
+    weightedAverage += pointScore * weight;
+    weakestScore = Math.min(weakestScore, pointScore);
+  }
+  const score = weakestScore + (weightedAverage - weakestScore) / verdicts.length;
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
