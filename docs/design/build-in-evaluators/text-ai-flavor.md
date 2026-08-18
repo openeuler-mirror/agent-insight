@@ -18,14 +18,22 @@ Judge 只返回六个固定维度的 `safe/minor/moderate/severe` 离散等级�
 
 维度为 `template_opening`、`template_closing`、`mechanical_transitions`、`generic_names`、`empty_summary`、`politeness_overuse`。
 
-| 等级 | 评分点 | 综合分扣分 |
+| 等级 | 评分点 | 综合分保留系数 |
 |---|---:|---:|
-| `safe` | 100 | 0 |
-| `minor` | 80 | 20 |
-| `moderate` | 20 | 80 |
-| `severe` | 0 | 100 |
+| `safe` | 100 | 1.0 |
+| `minor` | 80 | 0.8 |
+| `moderate` | 60 | 0.6 |
+| `severe` | 0 | 0.4 |
 
-综合分沿用安全评估器的扣分聚合：令 `d_i` 为各维度扣分，`M=max(d_i)`，`D=M+(Σd_i-M)/N`，其中 `N` 为维度总数，最终 `score=clamp(round(100-D),0,100)`。最大问题完整扣除，其余问题按维度数均摊追加；每个新增问题都会继续扣分，任一维度升档时总分不会上升，多个模板信号叠加可降至 20 分以下。
+AI 味评估器没有关键维度，综合分用于表示模板化风格信号在全文中的叠加浓度，因此不沿用安全风险评估器的关键/普通扣分公式。令每个维度的保留系数为 `r_i`，综合分为：
+
+```text
+score = clamp(round(100 × Π r_i), 0, 100)
+```
+
+每个维度都会影响总分，且任一维度升档时总分不会上升。单个 `severe` 保留 40 分，多个 `severe` 会继续乘法衰减，避免单个风格问题直接把整张卡片归零，同时让多维度共同主导的 AI 味显著降低总分。
+
+典型组合：全 `safe` 为 100；一个 `minor` 为 80；一个 `moderate` 为 60；一个 `severe` 为 40；两个 `severe` 为 16；三个 `severe` 为 6；六个 `severe` 约为 0.4，四舍五入为 0。
 
 ## 边界与测试
 

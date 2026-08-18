@@ -13,15 +13,15 @@ export const TEXT_AI_FLAVOR_PRESET_ID = 'preset-text-ai-flavor';
 export const AI_FLAVOR_POINT_SCORES = {
   safe: 100,
   minor: 80,
-  moderate: 50,
+  moderate: 60,
   severe: 0,
 } satisfies Readonly<Record<TextSeverity, number>>;
 
 const AI_FLAVOR_RETENTION = {
   safe: 1,
   minor: 0.8,
-  moderate: 0.5,
-  severe: 0.3,
+  moderate: 0.6,
+  severe: 0.4,
 } satisfies Readonly<Record<TextSeverity, number>>;
 
 export function aggregateTextAiFlavorScore(verdicts: readonly TextVerdict[]): number {
