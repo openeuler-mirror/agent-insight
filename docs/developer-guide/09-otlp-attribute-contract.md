@@ -201,3 +201,4 @@ setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `htt
 | 1.2 | 2026-08-11 | 新增 Pi Agent canonical span 与 Adapter 映射 |
 | 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义 |
 | 1.0 | 2026-07-14 | 初版，定义 OTLP 属性契约 (FR-011) |
+<!-- Codex canonical traces use agent.insight.framework=codex and redact inline secrets and local paths before spool persistence while preserving numeric usage fields. -->

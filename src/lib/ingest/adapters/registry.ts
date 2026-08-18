@@ -2,6 +2,7 @@ import { traeAdapter } from "./trae"
 import { actrailAdapter } from "./actrail"
 import { claudeAdapter } from "./claude"
 import { codeagentAdapter } from "./codeagent"
+import { codexAdapter } from "./codex"
 import { hermesAdapter } from "./hermes"
 import { jiuwenAdapter } from "./jiuwen"
 import { langfuseLangGraphAdapter } from "./langfuse-langgraph"
@@ -20,6 +21,7 @@ const adapters = [
   qwencodeAdapter,
   openclawAdapter,
   hermesAdapter,
+  codexAdapter,
   jiuwenAdapter,
   langfuseLangGraphAdapter,
   llamaIndexAdapter,

@@ -1084,9 +1084,14 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
 
 export function aggregateClaudeOtelSession(sessionId: string): ClaudeOtelAggregationResult {
   const events = readClaudeOtelEventsForSession(sessionId);
+  const record = aggregateClaudeOtelEvents(sessionId, events);
+  if (record) return { sessionId, eventCount: events.length, record, disposition: 'persisted' };
   return {
     sessionId,
     eventCount: events.length,
-    record: aggregateClaudeOtelEvents(sessionId, events),
+    record: null,
+    disposition: events.length > 0 && events.every((event) => event.eventName === CONTEXT_SUPPLEMENT_EVENT)
+      ? 'discard'
+      : 'retry-later',
   };
 }

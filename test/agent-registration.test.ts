@@ -77,6 +77,21 @@ test("Pi keeps the root fallback while registering a delegated profile as its ow
   )
 })
 
+test("Codex can exclude delegated roles from platform Agent registration", () => {
+  const interactions = [
+    { role: "assistant", agent: "codex", content: "delegate" },
+    { role: "subagent", agent: "default", subagent_name: "default", content: "done" },
+  ]
+  assert.deepEqual(
+    extractObservedAgentRegistrations(interactions, "codex", { includeSubagents: false }),
+    [{ name: "codex", agentType: "main" }],
+  )
+  assert.deepEqual(
+    extractObservedAgentNames(interactions, "codex", { includeSubagents: false }),
+    ["codex"],
+  )
+})
+
 test("getPrimaryObservedAgentName prefers the main business agent over evaluator tags", () => {
   assert.equal(
     getPrimaryObservedAgentName([

@@ -298,7 +298,7 @@ function toTrace(
   const completedAt = taskId ? sessionEndByTaskId.get(taskId) ?? null : null;
   // Execution.latency 已是毫秒（全链路统一口径），直接使用；
   // 此前误用 latencySecondsToMs 会把它再放大 1000 倍（见
-  // docs/tasks/bugs/issue-158-pi-agent-open.md Bug 4）。
+  // Pi/Codex Trace 单位同步修复）。
   const latencyMs = toNumber(execution.latency);
   return {
     id: execution.id,

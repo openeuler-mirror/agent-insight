@@ -31,8 +31,16 @@ export type OtelTraceAppendResult = {
   dirtySessionIds: string[];
 };
 
-export type OtelTraceAggregationResult = {
-  sessionId: string;
-  record: ExecutionRecord | null;
-  eventCount: number;
-};
+export type OtelTraceAggregationResult =
+  | {
+    sessionId: string;
+    record: ExecutionRecord;
+    eventCount: number;
+    disposition: 'persisted';
+  }
+  | {
+    sessionId: string;
+    record: null;
+    eventCount: number;
+    disposition: 'retry-later';
+  };

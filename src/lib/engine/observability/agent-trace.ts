@@ -303,8 +303,11 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         // 首字母大写的 subagent_type 永远认领不上,子节点直接塌回 root。
         const sameType = (claimType: string) => claimType.trim().toLowerCase() === (sType || '').trim().toLowerCase();
         const exactIdx = pendingTasks.findIndex(claim =>
-            claim.expectedSessionId === sid &&
-            (!sType || sameType(claim.subagentType)),
+            // A runtime-provided session id is the direct parent-child proof.
+            // Role labels may intentionally be human-readable ("Memory Agent")
+            // while the child interaction normalizes them ("memory"). Do not
+            // discard an exact session match because those presentation labels differ.
+            claim.expectedSessionId === sid,
         );
         if (exactIdx >= 0) return pendingTasks.splice(exactIdx, 1)[0];
 

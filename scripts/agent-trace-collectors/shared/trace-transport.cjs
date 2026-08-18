@@ -22,7 +22,7 @@ const STRING_PATTERNS = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
 ];
-const INLINE_SECRET_ASSIGNMENT = /\b([A-Za-z][A-Za-z0-9_-]*(?:api[-_]?key|token|secret|password|passwd))\b\s*([=:])\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
+const INLINE_SECRET_ASSIGNMENT = /\b((?:api[-_]?key|token|secret|password|passwd)|[A-Za-z][A-Za-z0-9_-]*?(?:api[-_]?key|token|secret|password|passwd))\b\s*([=:])\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
 const LOCAL_PATH_PATTERNS = [
   /\b[A-Za-z]:[\\/][^\s"'`<>|*?]+/g,
   /\\\\[^\s"'`<>|*?]+(?:\\[^\s"'`<>|*?]+)+/g,
@@ -210,14 +210,19 @@ async function readJsonlBatch(filePath, offset = 0, options = {}) {
 async function atomicWriteJson(filePath, value) {
   await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  const handle = await fsp.open(tempPath, "wx", 0o600);
+  let handle;
   try {
+    handle = await fsp.open(tempPath, "wx", 0o600);
     await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
     await handle.sync();
-  } finally {
     await handle.close();
+    handle = undefined;
+    await fsp.rename(tempPath, filePath);
+  } catch (error) {
+    if (handle) await handle.close().catch(() => undefined);
+    await fsp.unlink(tempPath).catch(() => undefined);
+    throw error;
   }
-  await fsp.rename(tempPath, filePath);
 }
 
 async function readCheckpoint(filePath) {

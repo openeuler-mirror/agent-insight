@@ -114,7 +114,8 @@ Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id`
 ### 流程四：接入 Pi Agent
 
 Pi Agent 采集器以 `@earendil-works/pi-coding-agent` 0.82.1 为最低基线，并接受后续
-语义化版本；Node.js 要求 22.19.0 或更高版本。在运行 Pi 的 Linux 或 macOS 终端执行：
+语义化版本；Node.js 要求 22.19.0 或更高版本，Linux/macOS 还需提供 `unzip`。在运行 Pi
+的终端执行：
 
 ```bash
 export AGENT_INSIGHT_API_KEY="<当前账号 API Key>"
@@ -128,10 +129,13 @@ rm -f "$installer"
 
 生产部署请使用受信任证书的 HTTPS 地址；下载完成后先检查脚本内容，再执行。
 
-安装脚本从当前 Agent Insight 服务下载固定 allowlist 中的 Extension、collector core 和共享
-transport，写入 `~/.agent-insight/collectors/`，再执行 `pi install` 与 self-check。API Key
-只写入权限为 `0600` 的本地 `config.json`，不会出现在资产下载 URL 中；上传前会脱敏 API
-Key、常见密钥赋值文本以及本机绝对路径。
+安装脚本从当前 Agent Insight 服务下载一个包含固定 allowlist 内容的
+`pi-agent-bundle.zip`，先与脚本内嵌的 SHA-256 对比，校验通过后才解压并执行安装；旧的
+逐文件下载路径仅为已保存的旧脚本保留兼容，新脚本不再使用。该摘要可以发现传输损坏或版本
+错配，但不是独立代码签名。安装完成
+后文件位于 `~/.agent-insight/collectors/`，并执行 `pi install` 与 self-check。API Key 只写入
+权限为 `0600` 的本地 `config.json`，不会出现在资产下载 URL 中；上传前会脱敏 API Key、
+常见密钥赋值文本以及本机绝对路径。
 
 手工安装时可直接把 `pi-agent` package 和相邻的 `shared/trace-transport.cjs` 放入
 `~/.agent-insight/collectors/`，创建同样的 `config.json`，再执行：
@@ -155,6 +159,28 @@ node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
 3. 确认客户端已完成至少一次真实执行。
 4. 确认服务端地址与上报路径可达。
 5. 进入链路追踪确认是否已有新 Trace 写入。
+
+### 流程五：接入 Codex CLI 与 VS Code-family 编辑器
+
+1. 确认目标机器安装了兼容的 Codex CLI、Node.js 20 或更高版本。
+2. 以当前 Agent Insight API Key 和服务端地址运行 Codex setup 命令。
+3. 启动 Codex，运行 `/hooks`，逐项核对 Agent Insight handler 的绝对路径并选择
+   Trust。安装器不会代替 Codex 写入信任状态。
+4. 退出并重新启动 Codex，运行
+   `node ~/.agent-insight/collectors/codex/self-check.cjs`。
+5. 对 IDE 场景，确认 `openeuler.agent-insight-codex-trace` 已通过 VSIX 安装到 VS Code、
+   Cursor 或 Windsurf。
+6. 触发一次最小 Codex 任务，在链路追踪中确认 Agent、Tool 和 LLM 节点。
+
+Codex setup 不把 API Key写入 Hook command。凭据和 relay install secret 只保存在权限受限的
+collector config 中。若 `config.toml` 已配置非空 `[otel]` exporter，setup 会保留原配置并
+报告 `otel_conflict`；在明确选择 exporter 策略前，原生 Token/TTFT 数据不会进入 relay。
+安装载荷由 Agent Insight 服务端以单个 ZIP 提供；安装脚本会在解压和执行前核对内嵌的
+SHA-256。摘要不匹配时安装立即停止，不会运行包内的 `install.cjs`。
+
+编辑器 Settings 中的 `cloudAgentId` 是用户手工关联值，事件会标记 `source=user`。只有
+Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台才把它计为自动 Cloud
+关联证据。
 
 ## 维护建议
 

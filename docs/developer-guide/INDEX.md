@@ -9,13 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `444e987583a26abb379427626f75b04f32375274` (`444e9875`) |
-| Branch | `migration/qwencode-0.8-refresh` |
-| Date | 2026-08-13T19:54:39+08:00 |
-| Author | unknown |
-| Subject | `test(qwencode): preserve actrail registry coverage` |
+| Commit | `c6fc5c8058610504ade981d5d485aff0d227815c` (`c6fc5c80`) |
+| Branch | `local-submit/pi-installer-bundle-integrity` |
+| Date | 2026-08-15T14:54:16+08:00 |
+| Author | duanzhoutao |
+| Subject | `fix(pi): verify bundled installer assets` |
 
-**如何更新：** `git diff 444e9875 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff c6fc5c80 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

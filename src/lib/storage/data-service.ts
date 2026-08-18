@@ -36,7 +36,6 @@ import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from 
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
-import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
@@ -44,7 +43,6 @@ import type { FilterClause } from '@/lib/filters/types';
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
-    findExecutionIdsByUserTags,
     getTraceTagsByExecutionIds,
     type TraceTagDto,
 } from '@/lib/trace-tags';
@@ -57,6 +55,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'langfuse-langgraph',
     'codeagent',
     'claudecode',
+    'codex',
     'llamaindex',
     'pi-agent',
 ]);
@@ -201,28 +200,17 @@ async function persistExecutionSkills(
 
 /**
  * 给定一条 Execution(= 某一层 agent)的 session interactions,算出**本层 agent 自己显式调用**的 skill。
- *   - adapter 声明 skillScope=agent-tree 的框架：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
+ *   - opencode：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
  *     (root 行的 session 是全量;sub-agent 行的 session 是它自己的切片——两者切片的 tree 根都恰是该层 agent。)
- *   - 其余框架：既有显式抽取即本层口径。
+ *   - claude / openclaw：单 agent,既有显式抽取即本层口径。
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    const capabilities = getAdapter(framework).capabilities;
-    if (capabilities?.skills !== true) return [];
-    if (capabilities.skillScope === 'agent-tree') {
+    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'langfuse-langgraph' || framework === 'codeagent') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
     return extractInvokedSkillsFromSessionInteractions(framework, interactions) ?? [];
-}
-
-export function allowsSnapshotShrinkForFramework(framework: string | null | undefined): boolean {
-    const adapter = getAdapter(framework);
-    return adapter.capabilities?.allowSnapshotShrink === true
-        || (
-            adapter.descriptor.id === 'jiuwenswarm'
-            && process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true'
-        );
 }
 
 /**
@@ -292,11 +280,6 @@ export async function recomputeExecutionSkills(
 }
 
 export interface ExecutionRecord {
-    /**
-     * Internal ingest provenance. This is consumed before persistence and is
-     * intentionally not stored in the Execution table.
-     */
-    authenticated_ingest?: boolean;
     upload_id?: string;
     task_id?: string;
     query?: string;
@@ -1211,10 +1194,8 @@ interface ReadRecordFilters {
      * (execution / observedAgents);skill / 计算列(status/ownership)由各自既有通道处理。
      */
     clauses?: FilterClause[];
-    /** 兼容旧 bizTag 参数的业务标签筛选，支持多个 OR 命中 */
+    /** business 标签筛选，值为 Tag.id，支持多个 OR 命中 */
     businessTagIds?: string[];
-    /** 用户标签筛选，值为版本或业务 Tag.id，多个标签按 AND 命中 */
-    userTagIds?: string[];
     /** Trace 列表顶部时间筛选换算后的起始时间。 */
     timestampFrom?: Date;
     /** Trace 列表 Agent 归属筛选；按现有 RegisteredAgent + 内置系统 Agent 规则下推。 */
@@ -1242,24 +1223,6 @@ interface ReadRecordsOptions {
     databasePagination?: boolean;
 }
 
-export function resolveExecutionSubagentFilter(filters?: {
-    includeSubagents?: boolean;
-    onlySubagents?: boolean;
-    parentExecutionId?: string | null;
-    taskId?: string;
-    taskIds?: string[];
-    skill?: string;
-}): boolean | undefined {
-    if (filters?.onlySubagents === true) return true;
-    if (
-        filters?.includeSubagents === true
-        || filters?.parentExecutionId !== undefined
-        || filters?.taskId
-        || filters?.taskIds?.length
-    ) return undefined;
-    return false;
-}
-
 export interface ReadRecordPageStats {
     total: number;
     failedCount: number;
@@ -1272,25 +1235,50 @@ async function appendExecutionOwnershipWhere(
     ownership?: 'user' | 'system',
 ): Promise<void> {
     if (!ownership) return;
+    const registeredSystemIdentities: any[] = [];
     try {
-        const ownershipWhere = await buildExecutionOwnershipWhere(ownership);
-        where.AND = [...((where.AND as any[]) ?? []), ownershipWhere];
+        const registeredSystemAgents = await prismaRaw.registeredAgent.findMany({
+            where: { agentOwnership: 'system' },
+            select: { platform: true, name: true },
+        });
+        for (const item of registeredSystemAgents) {
+            if (!item.platform || !item.name) continue;
+            registeredSystemIdentities.push({ framework: item.platform, agentName: item.name });
+        }
     } catch (e) {
         console.warn('[readRecords] system agent ownership lookup failed:', (e as Error)?.message);
-        const fallbackWhere = ownership === 'system'
-            ? { agentName: { in: [...SYSTEM_AGENT_NAMES] } }
-            : {
-                OR: [
-                    { agentName: null },
-                    { agentName: { notIn: [...SYSTEM_AGENT_NAMES] } },
-                ],
-            };
-        where.AND = [...((where.AND as any[]) ?? []), fallbackWhere];
     }
+    const ownershipWhere = ownership === 'system'
+        ? {
+            OR: [
+                { agentName: { in: [...SYSTEM_AGENT_NAMES] } },
+                ...registeredSystemIdentities,
+            ],
+        }
+        : {
+            AND: [
+                {
+                    OR: [
+                        { agentName: null },
+                        { agentName: { notIn: [...SYSTEM_AGENT_NAMES] } },
+                    ],
+                },
+                ...(registeredSystemIdentities.length > 0
+                    ? [{
+                        OR: [
+                            { framework: null },
+                            { agentName: null },
+                            { NOT: { OR: registeredSystemIdentities } },
+                        ],
+                    }]
+                    : []),
+            ],
+        };
+    where.AND = [...((where.AND as any[]) ?? []), ownershipWhere];
 }
 
 export async function listObservedAgentNames(user?: string, observedAgentFallback = false): Promise<string[]> {
-    const where: any = { isSubagent: false };
+    const where: any = {};
     if (user) {
         // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
         where.user = user;
@@ -1304,17 +1292,14 @@ export async function listObservedAgentNames(user?: string, observedAgentFallbac
     const names: string[] = [];
     const seen = new Set<string>();
     for (const record of records) {
-        const primary = String(
-            record?.agentName
-            || (observedAgentFallback
-                ? parseObservedAgents(record?.observedAgents).find(agent => !isEvaluatorAgentName(agent))
-                : '')
-            || '',
-        ).trim();
-        const candidates = record?.framework === 'pi-agent'
-            ? [primary, ...parseObservedAgents(record?.observedAgents)]
-            : [primary];
-        for (const name of candidates) {
+        const candidates = [
+            record?.agentName,
+            ...(observedAgentFallback || record?.observedAgents
+                ? parseObservedAgents(record?.observedAgents)
+                : []),
+        ];
+        for (const candidate of candidates) {
+            const name = String(candidate || '').trim();
             if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
             seen.add(name);
             names.push(name);
@@ -1838,8 +1823,14 @@ async function readRecordsInternal(
         where.user = user;
     }
 
-    // 默认列表严格只显示 root execution；显式选择 sub-agent / 全部层级，或按 taskId
-    // 下钻时才放开。Skill 是内容过滤条件，不能覆盖用户选择的 Agent 层级。
+    // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
+    // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
+    // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
+    const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
+    // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
+    // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
+    // skill 既可来自单值 filters.skill(旧路径 / ?skill= 深链),也可来自结构化过滤的
+    // `skill any of [...]` clause(左侧栏 facet 多选)。合并成一组 skillName 一次反查。
     const skillNamesFromClauses = (filters?.clauses ?? [])
         .filter((c) => c.column === 'skill' && (c.operator === 'any of' || c.operator === '='))
         .flatMap((c) => (Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []))
@@ -1849,8 +1840,16 @@ async function readRecordsInternal(
         ...skillNamesFromClauses,
     ]));
     const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
-    const subagentFilter = resolveExecutionSubagentFilter(filters);
-    if (subagentFilter !== undefined) where.isSubagent = subagentFilter;
+    if (filters?.onlySubagents === true) {
+        where.isSubagent = true;
+    } else if (
+        filters?.includeSubagents !== true &&
+        filters?.parentExecutionId === undefined &&
+        !hasExplicitTaskIdFilter &&
+        !skillFilterActive
+    ) {
+        where.isSubagent = false;
+    }
 
     if (filters?.parentExecutionId !== undefined) {
         where.parentExecutionId = filters.parentExecutionId;
@@ -1926,21 +1925,6 @@ async function readRecordsInternal(
     if (businessTagIds.length > 0) {
         const taggedExecutionIds = await findExecutionIdsByBusinessTags(user, businessTagIds).catch((e: unknown) => {
             console.warn('[readRecords] business tag filter failed:', e);
-            return [] as string[];
-        });
-        if (taggedExecutionIds) {
-            const current = Array.isArray(where.id?.in) ? where.id.in.map((v: unknown) => String(v)) : null;
-            const next = current
-                ? current.filter((id: string) => taggedExecutionIds.includes(id))
-                : taggedExecutionIds;
-            where.id = { in: next };
-        }
-    }
-
-    const userTagIds = Array.from(new Set((filters?.userTagIds ?? []).map(v => String(v || '').trim()).filter(Boolean)));
-    if (userTagIds.length > 0) {
-        const taggedExecutionIds = await findExecutionIdsByUserTags(user, userTagIds).catch((e: unknown) => {
-            console.warn('[readRecords] user tag filter failed:', e);
             return [] as string[];
         });
         if (taggedExecutionIds) {
@@ -2055,7 +2039,8 @@ async function readRecordsInternal(
             total,
             // 当前生命周期读路径只产出 running/success；failed 保留在 API enrichment 后兼容计算。
             failedCount: 0,
-            avgLatencyMs: (aggregate._avg.latency ?? 0) * 1000,
+            // Execution.latency 已是毫秒，不再 ×1000（见 issue-159-codex-fixed.md Bug 10）
+            avgLatencyMs: (aggregate._avg.latency ?? 0),
             toolErrorRate: totalTools > 0
                 ? Math.round((totalToolErrors / totalTools) * 1000) / 10
                 : 0,
@@ -2067,7 +2052,8 @@ async function readRecordsInternal(
             total,
             failedCount: 0,
             avgLatencyMs: out.length > 0
-                ? out.reduce((sum, item) => sum + ((item.latency ?? 0) * 1000), 0) / out.length
+                // Execution.latency 已是毫秒，不再 ×1000（见 issue-159-codex-fixed.md Bug 10）
+                ? out.reduce((sum, item) => sum + (item.latency ?? 0), 0) / out.length
                 : 0,
             toolErrorRate: totalTools > 0
                 ? Math.round((totalToolErrors / totalTools) * 1000) / 10
@@ -2243,9 +2229,53 @@ async function normalizeFrameworkAgentIdentityHistory(
     });
 }
 
+/**
+ * 修复旧版 Codex adapter 写入的会话占位标题。空生命周期不是真实执行，删除；
+ * 有实际执行信号但已无法可靠反推原始提示词的记录保留并降级为稳定中性标题。
+ */
+async function normalizeLegacyCodexSessionHistory(
+    framework: string | undefined,
+    user: string | null,
+): Promise<void> {
+    if (framework !== 'codex') return;
+
+    const baseWhere = { framework, user, query: 'Codex Session', isSubagent: false };
+    await prisma.execution.deleteMany({
+        where: {
+            ...baseWhere,
+            tokens: 0,
+            latency: 0,
+            toolCallCount: 0,
+            llmCallCount: 0,
+            finalResult: '',
+        },
+    });
+    await prisma.execution.updateMany({
+        where: {
+            ...baseWhere,
+            OR: [
+                { tokens: { gt: 0 } },
+                { latency: { gt: 0 } },
+                { toolCallCount: { gt: 0 } },
+                { llmCallCount: { gt: 0 } },
+                { finalResult: { not: '' } },
+            ],
+        },
+        data: { query: 'Codex execution' },
+    });
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
+
+    // A Codex automatic unit without direct/unique parent evidence is written to
+    // the spool with a `pending:` execution id. It is retained there for a later
+    // correlated replay, but is never a user-authored root task and must not
+    // leak through a generic ingestion fallback into the execution list.
+    if (String(data.framework || '').toLowerCase() === 'codex' && recordId.startsWith('pending:')) {
+        return { success: true, record: { ...data, task_id: data.task_id || recordId, interactions: [] } };
+    }
 
     if (data.task_id) {
         try {
@@ -2316,6 +2346,13 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     const allowQueryOverwrite = !!data.force_query_update;
     const existingQuery = typeof existingRecord?.query === 'string' ? existingRecord.query.trim() : '';
     const incomingQuery = typeof data.query === 'string' ? data.query.trim() : '';
+    // A raw collector spool row may be consumed before the same event has been
+    // normalized to OTLP. Older builds stored that generic fallback as "OTel
+    // Session"; it is a system placeholder, not user-authored task content,
+    // and must yield to the later Codex aggregate for this exact execution.
+    const replaceCodexOtelPlaceholder = existingQuery === 'OTel Session' &&
+        String(data.framework || existingRecord?.framework || '').toLowerCase() === 'codex' &&
+        Boolean(incomingQuery);
 
     let explicitSkillVersionRewrite = false;
     if (typeof data.label === 'string') {
@@ -2349,7 +2386,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         targetRecord.agentName = targetRecord.agent;
     }
 
-    if (existingQuery && !allowQueryOverwrite) {
+    if (existingQuery && !allowQueryOverwrite && !replaceCodexOtelPlaceholder) {
         targetRecord.query = existingQuery;
     } else if (!existingQuery && incomingQuery) {
         targetRecord.query = incomingQuery;
@@ -2438,7 +2475,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
                 // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
                 // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework)
+                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true'
                     || targetRecord.complete_session_snapshot === true;
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
@@ -2452,7 +2489,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                         console.warn(
                             `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
                             `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
-                            `Jiuwen 可由服务端设置 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 放行。`,
+                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
                         );
                         return { success: true, record: targetRecord };
                     }
@@ -2695,9 +2732,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
     const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(targetRecord.framework);
     const storedAgentName = targetRecord.agentName || frameworkPrimaryAgentName;
-    const observedAgentOptions = targetRecord.framework === 'codex'
-        ? { includeSubagents: false }
-        : undefined;
+    const observedAgentOptions = undefined;
 
     let agentId: string | undefined = undefined;
     if (targetRecord.framework) {
@@ -2893,11 +2928,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if (
-        getAdapter(targetRecord.framework).capabilities?.subagentTree === true
-        && targetRecord.task_id
-        && Array.isArray(mergedInteractionsForSession)
-    ) {
+    if (typeof targetRecord.framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework) && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
@@ -2911,7 +2942,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
-    if (frameworkPrimaryAgentName && targetRecord.framework !== 'pi-agent') {
+    if (frameworkPrimaryAgentName && !['pi-agent', 'codex'].includes(targetRecord.framework || '')) {
         try {
             await normalizeFrameworkAgentIdentityHistory(
                 targetRecord.framework,
@@ -2921,6 +2952,12 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         } catch (e) {
             console.warn(`[Data-Service] normalize framework agent identity failed framework=${targetRecord.framework}:`, e);
         }
+    }
+
+    try {
+        await normalizeLegacyCodexSessionHistory(targetRecord.framework, targetRecord.user || null);
+    } catch (e) {
+        console.warn(`[Data-Service] normalize legacy Codex session history failed user=${targetRecord.user}:`, e);
     }
 
     const explicitTraceStartedAt = targetRecord.trace_started_at
@@ -3113,6 +3150,20 @@ function findSubagentSpawnDescription(interactions: any[], sessionId: string): s
     return null;
 }
 
+function findSubagentRoleName(
+    node: AgentNode,
+    interactions: Array<Record<string, unknown>>,
+): string {
+    for (const index of node.interactionIndices || []) {
+        const role = interactions[index]?.subagent_name;
+        if (typeof role === 'string' && role.trim()) return role.trim();
+    }
+    if (typeof node.subagentType === 'string' && node.subagentType.trim()) {
+        return node.subagentType.trim();
+    }
+    return 'Codex subagent';
+}
+
 export function projectAgentNodeExecution(node: AgentNode, interactions: any[]): AgentNodeExecutionProjection {
     const ownTurns = (node.interactionIndices || []).map((index) => interactions[index]).filter(Boolean);
     const textTurns = ownTurns
@@ -3146,7 +3197,9 @@ export function projectAgentNodeExecution(node: AgentNode, interactions: any[]):
         reasoningTokens: node.stats.reasoningTokens,
         cacheReadInputTokens: node.stats.cacheReadTokens,
         cacheCreationInputTokens: node.stats.cacheWriteTokens,
-        latency: node.stats.durationMs != null ? node.stats.durationMs / 1000 : null,
+        // 与主记录 Execution.latency 统一为毫秒（此前派生子记录存的是秒，
+        // 导致调用方无法区分单位，见 docs/tasks/bugs/issue-159-codex-open.md Bug 2）。
+        latency: node.stats.durationMs != null ? node.stats.durationMs : null,
         llmCallCount: meteredLlmEvents.length || fallbackLlmCalls,
         toolCallCount: toolEvents.length,
         toolCallErrorCount: toolEvents.filter(isFailedAgentToolEvent).length,
@@ -3256,6 +3309,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         const childInteractions = [...sliceSystemPrompts, ...sliceTurns];
         const projection = projectAgentNodeExecution(node, interactions);
         const spawnDescription = findSubagentSpawnDescription(interactions, sessionId);
+        const subagentRoleName = findSubagentRoleName(node, interactions);
         const queryText = (spawnDescription || projection.query).slice(0, 500);
         let ownSkills = extractExplicitSkillsFromNode(node);
         if (EXECUTION_SKILL_ENABLED) {
@@ -3268,12 +3322,9 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
 
         const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
         const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
-        const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(parentFramework);
-        const storedAgentName = node.agentName || frameworkPrimaryAgentName || null;
-        const observedAgentOptions = parentFramework === 'codex'
-            ? { includeSubagents: false }
-            : undefined;
-
+            const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(parentFramework);
+            const storedAgentName = node.agentName || frameworkPrimaryAgentName || null;
+            const observedAgentOptions = undefined;
         const baseFields = {
             taskId: sessionId,
             framework: parentFramework,
@@ -3299,7 +3350,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             rootExecutionId: parentExecutionId,
             agentSessionId: sessionId,
             subagentType: node.subagentType ?? null,
-            subagentName: node.agentName ?? null,
+            subagentName: subagentRoleName,
             isSubagent: true,
             // 子 agent 行也 denormalize observedAgents,保证 includeSubagents 的轻量列表 agents 一致。
             observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions, storedAgentName, observedAgentOptions)),
@@ -3330,14 +3381,14 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
                 sessionId,
                 {
                     taskId: sessionId,
-                    label: node.agentName ?? null,
+                    label: subagentRoleName,
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),
                     ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
                 },
                 {
-                    label: node.agentName ?? null,
+                    label: subagentRoleName,
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),

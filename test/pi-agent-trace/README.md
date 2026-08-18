@@ -10,6 +10,7 @@ node --import tsx --test \
   test/trace-transport.test.ts \
   test/pi-agent-collector.test.ts \
   test/pi-agent-adapter.test.ts \
+  test/pi-agent-central-setup.test.ts \
   test/pi-agent-distribution.test.ts
 ```
 
@@ -17,7 +18,10 @@ The tests cover API Key isolation, redaction, Unicode truncation, torn JSONL
 tails, process locking, checkpoint recovery, retry backoff, Agent/LLM/Tool
 lifecycle, explicit and automatic Skill invocation, MCP mapping, three-level
 SubAgent nesting, five parallel SubAgents, deterministic structure, install
-asset allowlisting, and uninstall path safety.
+bundle allowlisting and SHA-256 verification, tampered-bundle rejection before
+execution, and uninstall path safety. The central setup suite additionally parses
+generated PowerShell directly from memory so Windows temp-file policy does not
+affect syntax results.
 
 ## Real Pi package lifecycle
 
