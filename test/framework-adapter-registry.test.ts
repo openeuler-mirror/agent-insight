@@ -37,25 +37,22 @@ test("registry resolves framework ids and aliases", () => {
 test("registry exposes the framework descriptor list", () => {
   assert.deepEqual(
     listFrameworks().map((descriptor) => descriptor.id),
-    assert.deepEqual(
-      listFrameworks().map((descriptor) => descriptor.id),
-      [
-        "opencode",
-        "claude",
-        "codeagent",
-        "qwencode",
-        "openclaw",
-        "hermes",
-        "codex",
-        "jiuwenswarm",
-        "langfuse-langgraph",
-        "llamaindex",
-        "qoder",
-        "trae",
-        "actrail",
-        "pi-agent",
-      ]
-    )
+    [
+      "opencode",
+      "claude",
+      "codeagent",
+      "qwencode",
+      "openclaw",
+      "hermes",
+      "codex",
+      "jiuwenswarm",
+      "langfuse-langgraph",
+      "llamaindex",
+      "qoder",
+      "trae",
+      "actrail",
+      "pi-agent",
+    ],
   )
 })
 
@@ -74,7 +71,7 @@ test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("qwencode").extractSkills, extractSkillsWithVersionsFromToolInteractions)
   assert.equal(getAdapter("qwencode").capabilities?.subagentTree, true)
   assert.equal(getAdapter("qwencode").sessionMergeStrategy, "snapshot-replace")
-assert.equal(getAdapter("codeagent").capabilities?.skillScope, "agent-tree")
+  assert.equal(getAdapter("codeagent").capabilities?.skillScope, "agent-tree")
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
   assert.equal(getAdapter("openclaw").capabilities?.subagentTree, true)
   assert.equal(getAdapter("openclaw").capabilities?.skillScope, "session")
