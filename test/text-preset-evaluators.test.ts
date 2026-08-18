@@ -12,20 +12,17 @@ import {
   type TextSeverity,
   type TextVerdict,
 } from '../src/lib/engine/experiment/text-judge-common';
-import { aggregateTextConcisenessScore } from '../src/lib/engine/experiment/text-conciseness-preset-evaluator';
+import {
+  aggregateTextConcisenessScore,
+  CONCISENESS_POINT_SCORES,
+  TEXT_CONCISENESS_WEIGHTS,
+} from '../src/lib/engine/experiment/text-conciseness-preset-evaluator';
 import { TEXT_FORMAT_RISK_CONFIG } from '../src/lib/engine/experiment/text-format-preset-evaluator';
 import { TEXT_LANGUAGE_RISK_CONFIG } from '../src/lib/engine/experiment/text-language-consistency-preset-evaluator';
 import { runTextPreset, type TextPresetId } from '../src/lib/engine/experiment/text-preset-evaluators';
 
 const USER = 'text-evaluator-test';
 const SEVERITIES = ['safe', 'minor', 'moderate', 'severe'] as const;
-const CONCISENESS_POINT_SCORES: Readonly<Record<TextSeverity, number>> = {
-  safe: 100,
-  minor: 70,
-  moderate: 40,
-  severe: 0,
-};
-
 const dimensions: Record<TextPresetId, readonly string[]> = {
   'preset-text-ai-flavor': ['template_opening', 'template_closing', 'mechanical_transitions', 'generic_names', 'empty_summary', 'politeness_overuse'],
   'preset-text-format': ['numbering_continuity', 'citation_mark_correctness', 'list_hierarchy', 'punctuation_standardization', 'layout_consistency', 'tabular_format', 'special_format_correctness'],
@@ -327,6 +324,28 @@ describe('文本评估器公式和输出契约', () => {
     }));
     assert.equal(configuredDeductionScore(make('primary_language_match', 'severe'), TEXT_LANGUAGE_RISK_CONFIG), 0);
     assert.equal(configuredDeductionScore(make('unnecessary_mixing', 'severe'), TEXT_LANGUAGE_RISK_CONFIG), 10);
+  });
+
+  it('简洁性使用固定权重的加权几何平均，仅保留信息完整性兜底', () => {
+    assert.deepEqual(TEXT_CONCISENESS_WEIGHTS, {
+      expression_efficiency: 0.3,
+      cliche_condensation: 0.2,
+      main_focus: 0.3,
+      information_completeness: 0.2,
+    });
+    const make = (severity: TextSeverity, dimension = 'expression_efficiency'): TextVerdict[] => dimensions['preset-text-conciseness'].map((key) => ({
+      dimension: key,
+      severity: key === dimension ? severity : 'safe',
+      quote: '',
+      reason: '',
+      suggestion: '',
+    }));
+    assert.equal(aggregateTextConcisenessScore(make('safe')), 100);
+    assert.equal(aggregateTextConcisenessScore(make('severe')), 0);
+    assert.equal(aggregateTextConcisenessScore(make('moderate')), 62);
+    assert.equal(aggregateTextConcisenessScore(make('minor')), 94);
+    assert.equal(aggregateTextConcisenessScore(make('moderate', 'information_completeness')), 60);
+    assert.equal(CONCISENESS_POINT_SCORES.moderate, 20);
   });
 
   it('细则 0 分被完整保留，summary 被压缩到 80 字以内', async () => {

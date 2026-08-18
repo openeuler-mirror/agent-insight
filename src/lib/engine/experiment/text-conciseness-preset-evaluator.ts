@@ -4,24 +4,45 @@ import { defineTextJudgeDefinition, runTextJudge, type TextDimension, type TextS
 
 export const TEXT_CONCISENESS_PRESET_ID = 'preset-text-conciseness';
 
-const POINT_SCORES: Readonly<Record<TextSeverity, number>> = { safe: 100, minor: 70, moderate: 40, severe: 0 };
+/**
+ * The shared text rubric uses these four discrete point values.  They are
+ * point-level outcomes, not card-level caps: safe has no penalty, minor keeps
+ * most of the score, moderate represents a substantial loss, and severe is a
+ * complete failure for that dimension.
+ */
+export const CONCISENESS_POINT_SCORES: Readonly<Record<TextSeverity, number>> = {
+  safe: 100,
+  minor: 80,
+  moderate: 20,
+  severe: 0,
+};
+
+export const TEXT_CONCISENESS_WEIGHTS = {
+  expression_efficiency: 0.3,
+  cliche_condensation: 0.2,
+  main_focus: 0.3,
+  information_completeness: 0.2,
+} as const;
 
 export function aggregateTextConcisenessScore(verdicts: readonly TextVerdict[]): number {
-  const weights: Record<string, number> = {
-    expression_efficiency: 0.3,
-    cliche_condensation: 0.2,
-    main_focus: 0.3,
-    information_completeness: 0.2,
-  };
-  const byKey = new Map(verdicts.map((verdict) => [verdict.dimension, verdict]));
-  let score = verdicts.reduce((sum, verdict) => sum + POINT_SCORES[verdict.severity] * weights[verdict.dimension], 0);
-  const capSevere = (key: string, ceiling: number) => { if (byKey.get(key)?.severity === 'severe') score = Math.min(score, ceiling); };
-  capSevere('expression_efficiency', 30);
-  capSevere('cliche_condensation', 40);
-  capSevere('main_focus', 40);
-  if (byKey.get('information_completeness')?.severity === 'severe') score = Math.min(score, 50);
-  if (byKey.get('information_completeness')?.severity === 'moderate') score = Math.min(score, 60);
-  if (byKey.get('expression_efficiency')?.severity === 'moderate') score = Math.min(score, 70);
+  // A weighted geometric mean is a single, monotone penalty formula.  Each
+  // dimension contributes multiplicatively according to its existing product
+  // weight, so a severe dimension cannot be diluted by safe dimensions and
+  // there are no dimension-specific score ceilings to tune.
+  const geometricScore = verdicts.reduce((product, verdict) => {
+    const weight = TEXT_CONCISENESS_WEIGHTS[verdict.dimension as keyof typeof TEXT_CONCISENESS_WEIGHTS];
+    if (weight === undefined) throw new Error(`未知文本简洁性维度: ${verdict.dimension}`);
+    const pointScore = CONCISENESS_POINT_SCORES[verdict.severity];
+    return pointScore === 0 ? 0 : product * (pointScore / 100) ** weight;
+  }, 100);
+  // Information completeness is explicitly a fallback dimension in the
+  // product rubric: a materially incomplete answer must not score above 60,
+  // even when the other dimensions are clean. This is the only dimension-
+  // specific safeguard; all other dimensions use the same formula above.
+  const informationVerdict = verdicts.find((verdict) => verdict.dimension === 'information_completeness');
+  const score = informationVerdict?.severity === 'moderate'
+    ? Math.min(geometricScore, 60)
+    : geometricScore;
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
@@ -61,7 +82,7 @@ const DEFINITION = defineTextJudgeDefinition({
   ],
   buildInput: (ctx) => JSON.stringify({ user_question: ctx.caseInput, agent_output: ctx.actualOutput }, null, 2),
   aggregate: aggregateTextConcisenessScore,
-  pointScore: POINT_SCORES,
+  pointScore: CONCISENESS_POINT_SCORES,
 });
 
 export function runTextConcisenessPreset(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
