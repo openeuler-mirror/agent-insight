@@ -203,14 +203,14 @@ describe('需求自带的 54 条文本质量用例', () => {
 describe('文本评估器公式和输出契约', () => {
   it('文本评估器卡片使用面向场景的指定标签，其他标签保持不变', () => {
     const cards = new Map(presetEvaluators.map((card) => [card.id, card]));
-    assert.deepEqual(cards.get('preset-text-ai-flavor')?.objectives, ['内容质量', '内容创作']);
-    assert.deepEqual(cards.get('preset-text-format')?.objectives, ['内容质量', '格式验收']);
-    assert.deepEqual(cards.get('preset-text-language-consistency')?.objectives, ['内容质量', '多语场景']);
-    assert.deepEqual(cards.get('preset-text-conciseness')?.objectives, ['内容质量', '高效沟通']);
-    assert.deepEqual(cards.get('preset-text-ai-flavor')?.scenarios, ['文本质量审查', 'Agent通用评测']);
-    assert.deepEqual(cards.get('preset-text-format')?.scenarios, ['文本质量审查', 'Agent通用评测']);
-    assert.deepEqual(cards.get('preset-text-language-consistency')?.scenarios, ['文本质量审查', 'Agent通用评测']);
-    assert.deepEqual(cards.get('preset-text-conciseness')?.scenarios, ['文本质量审查', 'Agent通用评测']);
+    assert.deepEqual(cards.get('preset-text-ai-flavor')?.objectives, ['内容质量']);
+    assert.deepEqual(cards.get('preset-text-format')?.objectives, ['内容质量']);
+    assert.deepEqual(cards.get('preset-text-language-consistency')?.objectives, ['内容质量']);
+    assert.deepEqual(cards.get('preset-text-conciseness')?.objectives, ['内容质量']);
+    assert.deepEqual(cards.get('preset-text-ai-flavor')?.scenarios, ['客服对话', '内容创作']);
+    assert.deepEqual(cards.get('preset-text-format')?.scenarios, ['报告生成', '内容创作']);
+    assert.deepEqual(cards.get('preset-text-language-consistency')?.scenarios, ['双语对话', 'AI翻译']);
+    assert.deepEqual(cards.get('preset-text-conciseness')?.scenarios, ['问答助手', '摘要生成']);
   });
 
   it('AI 味聚合让单个 severe 保留分数，多个 severe 才逐步归零', () => {
