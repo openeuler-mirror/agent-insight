@@ -18,6 +18,7 @@
             "pages": [
               "user-guide/home",
               "user-guide/quickstart",
+              "user-guide/rpm-build-and-test",
               "user-guide/example-walkthrough",
               "user-guide/example-walkthrough-cost",
               "user-guide/concepts",

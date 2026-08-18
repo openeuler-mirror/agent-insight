@@ -30,6 +30,10 @@ description: "登录看板、注册模型、通过 AcTrail 完成接入，并在
 
 如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
 
+### 可选：通过 RPM 部署
+
+需要在 openEuler 等 RPM 系 Linux 上从当前源码构建、验包、安装或升级时，请参阅 [RPM 构建与测试](./rpm-build-and-test)。
+
 ### 用法一：在线拉取 Docker Hub 镜像
 
 ```bash
