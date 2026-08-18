@@ -17,6 +17,7 @@
 
 **如何更新：** `git diff c6fc5c80 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
+
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
 - [01-architecture.md](01-architecture.md)：系统形态、技术栈、分层、模块依赖图、入口面。

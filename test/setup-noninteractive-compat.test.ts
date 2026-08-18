@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { GET } from '@/app/api/ingest/setup/route';
 
-const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,jiuwen,qoder,trae,actrail';
+const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,jiuwen,qoder,trae,actrail,qwencode';
 
 async function getScript(query: string, platform: 'unix' | 'windows'): Promise<string> {
   const response = await GET(new Request(`http://localhost/api/ingest/setup?${query}`, {
@@ -30,7 +30,7 @@ test('Bash 恢复 URL、CLI 和环境变量非交互入口，并保留全部框�
   assert.match(script, /if \[ "\$FORCE_NO_KEY" = "true" \]; then/);
   assert.match(script, /if \[ "\$NONINTERACTIVE" = "true" \]; then/);
 
-  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL']) {
+  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE']) {
     assert.match(script, new RegExp(`INSTALL_${flag}=true`));
   }
 });
@@ -47,7 +47,7 @@ test('PowerShell 恢复 URL 与环境变量非交互入口并可强制清空 key
   assert.match(script, /if \(\$FORCE_NO_KEY\) \{/);
   assert.match(script, /if \(\$NONINTERACTIVE\) \{/);
 
-  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL']) {
+  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE']) {
     assert.match(script, new RegExp(`\\$INSTALL_${flag} = \\$true`));
   }
 });

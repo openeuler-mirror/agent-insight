@@ -239,6 +239,10 @@ function getFrameworkLabel(framework?: string | null): string {
             return 'Trae IDE';
         case 'actrail':
             return 'AcTrail';
+        case 'qwencode':
+        case 'qwen-code':
+        case 'qwen_code':
+            return 'Qwen Code';
         default:
             return value;
     }
@@ -1369,7 +1373,20 @@ function TraceDetailView({
         return Array.isArray(body?.interactions) ? body.interactions : [];
     }, [taskId]);
 
-    const { framework, latency, tokens, cost } = execution;
+    const { framework } = execution;
+    // The list row may be a partial snapshot captured while a streaming trace is
+    // still uploading. The structure endpoint is refreshed from the latest
+    // Execution row, so prefer its metrics once available.
+    const latestExecution = session?.execution;
+    const latency = typeof latestExecution?.latency === 'number'
+        ? latestExecution.latency
+        : execution.latency;
+    const tokens = typeof latestExecution?.tokens === 'number'
+        ? latestExecution.tokens
+        : execution.tokens;
+    const cost = typeof latestExecution?.cost === 'number'
+        ? latestExecution.cost
+        : execution.cost;
     const isRunning = execStatus === 'running';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
@@ -1461,7 +1478,14 @@ function TraceDetailView({
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
                 )}
                 {typeof latency === 'number' && latency > 0 && (
-                    <MetricPill label={t('tracePage.metricDuration')} value={formatDurationMs(latency)} />
+                    // Never echo credentials into application logs. An explicitly supplied
+                    // key is an authentication attempt, so a mismatch must not fall back to
+                    // resource-level user attribution.
+                    console.warn('[OTel] Rejected trace ingest: invalid x-witty-api-key');
+                    return NextResponse.json(
+                      { error: 'Invalid x-witty-api-key' },
+                      { status: 401 },
+                    );
                 )}
                 {typeof cost === 'number' && cost > 0 && (
                     <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />

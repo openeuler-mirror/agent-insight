@@ -76,6 +76,12 @@ Hermes 插件会把 hook 数据编码为标准 OTLP/HTTP JSON，并直接上报�
 
 插件不会只把待发送数据放在内存里。每个已完成 span 的 delta payload 先写入 `~/.agent-insight/data/hermes-otel-spool/`，上传成功后删除；断网、HTTP 408/429/5xx 会自动退避重试，进程重启后也会继续发送残留 delta 文件。运行日志位于 `~/.agent-insight/logs/hermes-plugin.log`，滚动文件为同目录下的 `hermes-plugin.log.1`。日志不记录 API key 或对话正文。
 
+## Qwen Code 接入
+
+安装指导页的普通 setup 和 auto setup 都支持选择 Qwen Code。脚本启用 Qwen Code 原生 OpenTelemetry，并在 `~/.qwen/.env` 中写入其 OTLP/HTTP Trace endpoint、认证 Header 和 `service.name=qwencode`；不会改写其他采集器配置。上报地址固定为当前平台地址加 `/api/ingest/otel/v1/traces`。单独执行采集器的 `install.mjs` 时，也会从 `~/.agent-insight/.env` 读取当前 host 和 API Key 并同步原生 Telemetry 配置。
+
+采集器会先将 Qwen Code 的会话、工具、LLM、Skill、子 Agent 和 Hook 数据写入 `~/.agent-insight/otel_data/qwencode/` 下按账号隔离的 spool，再异步上传。安装后发送一次真实 Qwen Code 请求；如果页面仍没有新 Trace，先确认 `.qwen/.env` 中的 endpoint 与当前平台地址一致，再检查该 spool 目录是否持续堆积。上传连续失败时，最新的会话编号和失败原因会写入同一账号目录下的 `logs/last-upload-failures.json`；该文件不会写入 API Key 或服务端响应正文。
+
 ## CodeAgent 接入
 
 普通交互版 setup 和 auto setup 都支持选择 CodeAgent。setup 不修改 CodeAgent 源码：Unix 安装 `~/.agent-insight/bin/codeagent`，并由 `codeagent_otel_env.sh` 通过 shell profile 将该目录放到 PATH 前面；Windows 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` 和 `codeagent-wrapper.ps1`，同时把该目录置于用户级 PATH 前面，`codeagent_otel_env.ps1` 负责刷新当前 PowerShell 会话并清理旧 Alias/函数。两端包装器每次都会排除自身目录查找当前环境中的真实 CodeAgent，找不到时回退到安装时记录的路径，只为 CodeAgent 子进程注入 OTel 配置。重启终端或加载环境脚本后仍使用原来的 `codeagent` 命令；Shell、PowerShell、CMD、Python、Node 等继承 PATH 的子脚本都会经过包装器。cron、systemd、容器、Windows 服务等不继承用户 PATH 的独立环境需显式加入对应 `~/.agent-insight/bin` 目录或直接调用包装器。

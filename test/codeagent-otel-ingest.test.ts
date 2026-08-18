@@ -15,6 +15,7 @@ import {
 } from '@/lib/ingest/codeagent-otel/detect';
 import { listCodeAgentOtelSpoolFiles } from '@/lib/ingest/codeagent-otel/spool';
 import type { ClaudeOtelEvent } from '@/lib/ingest/claude-otel/types';
+import { listClaudeOtelSpoolFiles, listOtelTraceSpoolFiles } from '@/lib/ingest/claude-otel/spool';
 import { listSources } from '@/lib/ingest/otel-consumer/sources';
 import { computeOwnSkills, extractExplicitSkillsFromNode } from '@/lib/storage/data-service';
 
@@ -134,6 +135,47 @@ test('CodeAgent logs are written only to the independent codeagent spool', async
     else process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR = previousCodeAgentDir;
     if (previousClaudeDir === undefined) delete process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR;
     else process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = previousClaudeDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Qwen native logs never create a phantom Claude execution', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qwen-log-route-'));
+  const claudeDir = path.join(root, 'claude');
+  const traceDir = path.join(root, 'traces');
+  const previousClaudeDir = process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR;
+  const previousTraceDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
+  process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = claudeDir;
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = traceDir;
+
+  try {
+    const sessionId = 'qwen-native-log-session';
+    const body = {
+      resourceLogs: [resourceGroup('qwencode', 'scopeLogs', [{
+        logRecords: [
+          logRecord('qwen-code.config', sessionId, 1, { model: 'qwen3' }),
+          logRecord('qwen-code.skill_launch', sessionId, 2, { skill_name: 'project-info', success: true }),
+        ],
+      }])],
+    };
+    const response = await postLogs(new Request('http://localhost/api/ingest/otel/v1/logs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+    const result = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(result.frameworks.qwencode.received, 2);
+    assert.equal(result.frameworks.qwencode.skills, 1);
+    assert.equal(result.frameworks.other.received, 0);
+    assert.equal(listClaudeOtelSpoolFiles(claudeDir).length, 0);
+    assert.equal(listOtelTraceSpoolFiles(traceDir).length, 1);
+  } finally {
+    if (previousClaudeDir === undefined) delete process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = previousClaudeDir;
+    if (previousTraceDir === undefined) delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = previousTraceDir;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

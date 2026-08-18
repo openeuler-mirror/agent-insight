@@ -17,10 +17,32 @@ function snapshotEndMs(event: OtelTraceEvent): number {
 
 function isTerminalSnapshot(event: OtelTraceEvent): boolean {
   const outcome = String(event.attributes?.['tool.outcome'] || '').toLowerCase();
-  return outcome === 'success' || outcome === 'completed' || outcome === 'error' || outcome === 'failed';
+  return outcome === 'success'
+    || outcome === 'completed'
+    || outcome === 'error'
+    || outcome === 'failed';
 }
 
-function shouldReplaceSnapshot(existing: OtelTraceEvent, candidate: OtelTraceEvent): boolean {
+function isSameQwenSkill(
+  existing: OtelTraceEvent,
+  candidate: OtelTraceEvent,
+): boolean {
+  return existing.serviceName === candidate.serviceName
+    && ['qwencode', 'qwen-code'].includes(existing.serviceName)
+    && new Set([existing.name, candidate.name]).has('qwen-code.skill')
+    && new Set([existing.name, candidate.name]).has('qwen-code.tool');
+}
+
+function shouldReplaceSnapshot(
+  existing: OtelTraceEvent,
+  candidate: OtelTraceEvent,
+): boolean {
+  // Qwen 会为同一次 Skill 产生 Log 摘要和完整 Tool span。
+  // 始终保留包含真实耗时、参数和结果的 Tool span。
+  if (isSameQwenSkill(existing, candidate)) {
+    return candidate.name === 'qwen-code.tool';
+  }
+
   const existingEnd = snapshotEndMs(existing);
   const candidateEnd = snapshotEndMs(candidate);
   if (candidateEnd !== existingEnd) return candidateEnd > existingEnd;
@@ -29,11 +51,22 @@ function shouldReplaceSnapshot(existing: OtelTraceEvent, candidate: OtelTraceEve
   const candidateTerminal = isTerminalSnapshot(candidate);
   if (candidateTerminal !== existingTerminal) return candidateTerminal;
 
-  const existingOutput = String(existing.attributes?.['output.value'] ?? existing.attributes?.['tool.result'] ?? '');
-  const candidateOutput = String(candidate.attributes?.['output.value'] ?? candidate.attributes?.['tool.result'] ?? '');
-  if (Boolean(candidateOutput) !== Boolean(existingOutput)) return Boolean(candidateOutput);
+  const existingOutput = String(
+    existing.attributes?.['output.value']
+      ?? existing.attributes?.['tool.result']
+      ?? '',
+  );
+  const candidateOutput = String(
+    candidate.attributes?.['output.value']
+      ?? candidate.attributes?.['tool.result']
+      ?? '',
+  );
+  if (Boolean(candidateOutput) !== Boolean(existingOutput)) {
+    return Boolean(candidateOutput);
+  }
 
-  return Date.parse(candidate.receivedAt || '') >= Date.parse(existing.receivedAt || '');
+  return Date.parse(candidate.receivedAt || '')
+    >= Date.parse(existing.receivedAt || '');
 }
 
 export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEvent[]) {

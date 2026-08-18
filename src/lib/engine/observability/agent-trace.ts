@@ -706,9 +706,15 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             : isSkillLoaderToolName(normalizedName)
                 ? 'skill'
                 : 'tool';
+        const skillDisplayName = kind === 'skill' && args && typeof args === 'object'
+            ? args.skill ?? args.name ?? args.skill_name ?? args.skillName
+            : undefined;
+        const displayName = typeof skillDisplayName === 'string' && skillDisplayName.trim()
+            ? skillDisplayName.trim()
+            : name;
         const ev: AgentEvent = {
             kind,
-            name,
+            name: displayName,
             args,
             output: tc.output ?? tc.result,
             toolCallId: tc.id,
@@ -717,7 +723,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             interactionIndex: idx,
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,
             completedAt: toMsTimestamp(tc.timing?.completed_at),
-            summary: summarizeToolCall(name, args),
+            summary: summarizeToolCall(displayName, args),
         };
         (ev as any)._toolCallId = tc.id;
         (ev as any).splitParallelTask = !!tc.trace_split_parallel_task;

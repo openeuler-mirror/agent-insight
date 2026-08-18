@@ -11,9 +11,25 @@ import { openclawAdapter } from "./openclaw"
 import { opencodeAdapter } from "./opencode"
 import { piAgentAdapter } from "./pi-agent"
 import { qoderAdapter } from "./qoder"
+import { qwencodeAdapter } from "./qwencode"
 import type { FrameworkAdapter, FrameworkDescriptor } from "./types"
 
-const adapters = [opencodeAdapter, claudeAdapter, codeagentAdapter, openclawAdapter, hermesAdapter, codexAdapter, jiuwenAdapter, langfuseLangGraphAdapter, llamaIndexAdapter, qoderAdapter, traeAdapter, actrailAdapter, piAgentAdapter] as const
+const adapters = [
+  opencodeAdapter,
+  claudeAdapter,
+  codeagentAdapter,
+  qwencodeAdapter,
+  openclawAdapter,
+  hermesAdapter,
+  codexAdapter,
+  jiuwenAdapter,
+  langfuseLangGraphAdapter,
+  llamaIndexAdapter,
+  qoderAdapter,
+  traeAdapter,
+  actrailAdapter,
+  piAgentAdapter,
+] as const
 
 const fallbackAdapter: FrameworkAdapter = {
   descriptor: {

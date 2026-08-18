@@ -45,8 +45,9 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'trae', label: 'Trae IDE' },
     { value: 'actrail', label: 'AcTrail' },
     { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'qwencode', label: 'Qwen Code' },
     { value: 'codex', label: 'Codex' },
-];
+
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
