@@ -13,7 +13,7 @@ export const TEXT_AI_FLAVOR_PRESET_ID = 'preset-text-ai-flavor';
 export const AI_FLAVOR_POINT_SCORES = {
   safe: 100,
   minor: 80,
-  moderate: 60,
+  moderate: 20,
   severe: 0,
 } satisfies Readonly<Record<TextSeverity, number>>;
 

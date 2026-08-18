@@ -213,7 +213,7 @@ describe('文本评估器公式和输出契约', () => {
     assert.deepEqual(cards.get('preset-text-conciseness')?.scenarios, ['问答助手', '摘要生成']);
   });
 
-  it('AI 味聚合让单个 severe 保留分数，多个 severe 才逐步归零', () => {
+  it('AI 味聚合按各档保留系数进行乘法累计，小项分映射保持独立', () => {
     const make = (severities: TextSeverity[]): TextVerdict[] => severities.map((severity, index) => ({
       dimension: `d${index}`,
       severity,
@@ -224,11 +224,53 @@ describe('文本评估器公式和输出契约', () => {
     assert.equal(aggregateTextAiFlavorScore(make(['safe', 'safe', 'safe', 'safe', 'safe', 'safe'])), 100);
     assert.equal(aggregateTextAiFlavorScore(make(['minor', 'safe', 'safe', 'safe', 'safe', 'safe'])), 80);
     assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'safe', 'safe', 'safe', 'safe', 'safe'])), 60);
+    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'moderate', 'safe', 'safe', 'safe', 'safe'])), 36);
     assert.equal(aggregateTextAiFlavorScore(make(['severe', 'safe', 'safe', 'safe', 'safe', 'safe'])), 40);
-    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'safe', 'safe', 'safe', 'safe'])), 16);
-    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'severe', 'safe', 'safe', 'safe'])), 6);
+    assert.equal(aggregateTextAiFlavorScore(make(['minor', 'minor', 'safe', 'safe', 'safe', 'safe'])), 64);
+    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'moderate', 'moderate', 'minor', 'minor', 'safe'])), 14);
+    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'severe', 'severe', 'severe', 'moderate'])), 1);
     assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'severe', 'severe', 'severe', 'severe'])), 0);
-    assert.equal(AI_FLAVOR_POINT_SCORES.moderate, 60);
+    assert.deepEqual(AI_FLAVOR_POINT_SCORES, { safe: 100, minor: 80, moderate: 20, severe: 0 });
+  });
+
+  it('AI 味乘法聚合随任一维度升档时总分不升', () => {
+    const base = dimensions['preset-text-ai-flavor'].map((dimension) => ({
+      dimension,
+      severity: 'safe' as TextSeverity,
+      quote: '',
+      reason: '',
+      suggestion: '',
+    }));
+    for (const dimension of dimensions['preset-text-ai-flavor']) {
+      let previous = 101;
+      for (const severity of SEVERITIES) {
+        const verdicts = base.map((verdict) => verdict.dimension === dimension ? { ...verdict, severity } : verdict);
+        const score = aggregateTextAiFlavorScore(verdicts);
+        assert.ok(score <= previous, `${dimension}: ${severity} 时 ${score} > ${previous}`);
+        previous = score;
+      }
+    }
+  });
+
+  it('AI 味聚合仅在全部维度 severe 时归零', () => {
+    const combinations = SEVERITIES.length ** dimensions['preset-text-ai-flavor'].length;
+    for (let encoded = 0; encoded < combinations; encoded += 1) {
+      let cursor = encoded;
+      const severities = dimensions['preset-text-ai-flavor'].map(() => {
+        const severity = SEVERITIES[cursor % SEVERITIES.length];
+        cursor = Math.floor(cursor / SEVERITIES.length);
+        return severity;
+      });
+      const verdicts = severities.map((severity, index) => ({
+        dimension: `d${index}`,
+        severity,
+        quote: '',
+        reason: '',
+        suggestion: '',
+      } satisfies TextVerdict));
+      const score = aggregateTextAiFlavorScore(verdicts);
+      assert.equal(score === 0, severities.every((severity) => severity === 'severe'), severities.join(','));
+    }
   });
 
   it('需求 fixture 数量固定为 14 + 14 + 14 + 12 = 54', () => {
