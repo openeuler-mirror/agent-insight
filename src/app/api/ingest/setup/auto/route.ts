@@ -1151,7 +1151,7 @@ function generatePowerShellScript(
         '    "    { name: \'AcTrail\', value: \'actrail\' },"',
         '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
         '    "    { name: \'Codex\', value: \'codex\' },"',
-        '    "    { name: \'Qwen Code\', value: \'qwencode\' }"'
+        '    "    { name: \'Qwen Code\', value: \'qwencode\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
