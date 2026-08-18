@@ -13,6 +13,10 @@ import {
   type TextVerdict,
 } from '../src/lib/engine/experiment/text-judge-common';
 import {
+  aggregateTextAiFlavorScore,
+  AI_FLAVOR_POINT_SCORES,
+} from '../src/lib/engine/experiment/text-ai-flavor-preset-evaluator';
+import {
   aggregateTextConcisenessScore,
   CONCISENESS_POINT_SCORES,
   TEXT_CONCISENESS_WEIGHTS,
@@ -20,6 +24,7 @@ import {
 import { TEXT_FORMAT_RISK_CONFIG } from '../src/lib/engine/experiment/text-format-preset-evaluator';
 import { TEXT_LANGUAGE_RISK_CONFIG } from '../src/lib/engine/experiment/text-language-consistency-preset-evaluator';
 import { runTextPreset, type TextPresetId } from '../src/lib/engine/experiment/text-preset-evaluators';
+import { presetEvaluators } from '../src/lib/evaluators/preset-evaluators';
 
 const USER = 'text-evaluator-test';
 const SEVERITIES = ['safe', 'minor', 'moderate', 'severe'] as const;
@@ -139,6 +144,7 @@ function judgeJson(id: TextPresetId, findings: Record<string, ExpectedFinding> =
 }
 
 function expectedPointScore(id: TextPresetId, _dimension: string, severity: TextSeverity): number {
+  if (id === 'preset-text-ai-flavor') return AI_FLAVOR_POINT_SCORES[severity];
   if (id === 'preset-text-conciseness') return CONCISENESS_POINT_SCORES[severity];
   return TEXT_POINT_SCORES[severity];
 }
@@ -195,6 +201,35 @@ describe('需求自带的 54 条文本质量用例', () => {
 });
 
 describe('文本评估器公式和输出契约', () => {
+  it('文本评估器卡片使用面向场景的指定标签，其他标签保持不变', () => {
+    const cards = new Map(presetEvaluators.map((card) => [card.id, card]));
+    assert.deepEqual(cards.get('preset-text-ai-flavor')?.objectives, ['内容质量', '内容创作']);
+    assert.deepEqual(cards.get('preset-text-format')?.objectives, ['内容质量', '格式验收']);
+    assert.deepEqual(cards.get('preset-text-language-consistency')?.objectives, ['内容质量', '多语场景']);
+    assert.deepEqual(cards.get('preset-text-conciseness')?.objectives, ['内容质量', '高效沟通']);
+    assert.deepEqual(cards.get('preset-text-ai-flavor')?.scenarios, ['文本质量审查', 'Agent通用评测']);
+    assert.deepEqual(cards.get('preset-text-format')?.scenarios, ['文本质量审查', 'Agent通用评测']);
+    assert.deepEqual(cards.get('preset-text-language-consistency')?.scenarios, ['文本质量审查', 'Agent通用评测']);
+    assert.deepEqual(cards.get('preset-text-conciseness')?.scenarios, ['文本质量审查', 'Agent通用评测']);
+  });
+
+  it('AI 味聚合让单个 severe 保留分数，多个 severe 才逐步归零', () => {
+    const make = (severities: TextSeverity[]): TextVerdict[] => severities.map((severity, index) => ({
+      dimension: `d${index}`,
+      severity,
+      quote: '',
+      reason: '',
+      suggestion: '',
+    }));
+    assert.equal(aggregateTextAiFlavorScore(make(['safe', 'safe', 'safe', 'safe', 'safe', 'safe'])), 100);
+    assert.equal(aggregateTextAiFlavorScore(make(['minor', 'safe', 'safe', 'safe', 'safe', 'safe'])), 80);
+    assert.equal(aggregateTextAiFlavorScore(make(['moderate', 'safe', 'safe', 'safe', 'safe', 'safe'])), 50);
+    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'safe', 'safe', 'safe', 'safe', 'safe'])), 30);
+    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'safe', 'safe', 'safe', 'safe'])), 9);
+    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'severe', 'safe', 'safe', 'safe'])), 3);
+    assert.equal(aggregateTextAiFlavorScore(make(['severe', 'severe', 'severe', 'severe', 'severe', 'severe'])), 0);
+  });
+
   it('需求 fixture 数量固定为 14 + 14 + 14 + 12 = 54', () => {
     assert.deepEqual(Object.values(REQUIREMENT_FIXTURES).map((fixtures) => fixtures.length), [14, 14, 14, 12]);
     assert.equal(Object.values(REQUIREMENT_FIXTURES).flat().length, 54);

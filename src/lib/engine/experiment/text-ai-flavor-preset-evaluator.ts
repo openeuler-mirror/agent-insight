@@ -1,8 +1,36 @@
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { deductionScore, defineTextJudgeDefinition, runTextJudge, type TextDimension } from './text-judge-common';
+import {
+  defineTextJudgeDefinition,
+  runTextJudge,
+  type TextDimension,
+  type TextSeverity,
+  type TextVerdict,
+} from './text-judge-common';
 
 export const TEXT_AI_FLAVOR_PRESET_ID = 'preset-text-ai-flavor';
+
+export const AI_FLAVOR_POINT_SCORES = {
+  safe: 100,
+  minor: 80,
+  moderate: 50,
+  severe: 0,
+} satisfies Readonly<Record<TextSeverity, number>>;
+
+const AI_FLAVOR_RETENTION = {
+  safe: 1,
+  minor: 0.8,
+  moderate: 0.5,
+  severe: 0.3,
+} satisfies Readonly<Record<TextSeverity, number>>;
+
+export function aggregateTextAiFlavorScore(verdicts: readonly TextVerdict[]): number {
+  const score = verdicts.reduce(
+    (product, verdict) => product * AI_FLAVOR_RETENTION[verdict.severity],
+    100,
+  );
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
 
 const DEFINITION = defineTextJudgeDefinition({
   id: 'text-ai-flavor',
@@ -31,7 +59,8 @@ const DEFINITION = defineTextJudgeDefinition({
     '本评估器只评模板化风格，不评价观点新颖性或文采；后两者由创造性评估器负责。',
   ],
   buildInput: (ctx) => JSON.stringify({ user_question: ctx.caseInput, agent_output: ctx.actualOutput }, null, 2),
-  aggregate: (verdicts) => deductionScore(verdicts),
+  aggregate: aggregateTextAiFlavorScore,
+  pointScore: AI_FLAVOR_POINT_SCORES,
 });
 
 export function runTextAiFlavorPreset(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
