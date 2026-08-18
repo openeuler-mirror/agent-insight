@@ -37,6 +37,8 @@ const RUN_FORBIDDEN = ['command', 'shell', 'args', 'cwd', 'executable', 'script'
 
 const AGENT_VERSION = '1.0.0'
 const HEARTBEAT_MS = 30_000
+// Type=notify + WatchdogSec=30s：systemd 要求约每半周期喂狗，不能绑在 30s HTTP 心跳上。
+const WATCHDOG_MS = 10_000
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 60_000
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
@@ -884,18 +886,33 @@ async function sendFiHeartbeat(cfg) {
   }
 }
 
-/** systemd WatchdogSec：向 NOTIFY_SOCKET 发 WATCHDOG=1，无第三方依赖。 */
-function notifyWatchdog() {
-  const socketPath = process.env.NOTIFY_SOCKET
-  if (!socketPath) return
+/**
+ * systemd Type=notify / WatchdogSec。
+ * Node 核心 dgram 不支持 unix_dgram（仅 udp4/udp6），故走 systemd-notify CLI；
+ * 必须带 --pid=本进程，否则 systemd 会把通知记到短命子进程上而忽略。
+ */
+function sdNotify(payload) {
+  if (!process.env.NOTIFY_SOCKET || !payload) return false
   try {
-    const dgram = require('dgram')
-    const client = dgram.createSocket('unix_dgram')
-    const addr = socketPath.startsWith('@') ? `\0${socketPath.slice(1)}` : socketPath
-    client.send(Buffer.from('WATCHDOG=1'), addr, () => client.close())
+    const args = [`--pid=${process.pid}`, String(payload)]
+    const r = spawnSync('systemd-notify', args, {
+      stdio: 'ignore',
+      env: process.env,
+      timeout: 2_000,
+    })
+    return r.status === 0
   } catch {
-    /* watchdog 通知失败不应影响主循环 */
+    /* notify 失败不应拖垮主循环（前台/launchd 无 NOTIFY_SOCKET） */
+    return false
   }
+}
+
+function notifyReady() {
+  return sdNotify('READY=1')
+}
+
+function notifyWatchdog() {
+  return sdNotify('WATCHDOG=1')
 }
 
 // ---------------------------------------------------------------- spool
@@ -953,7 +970,10 @@ async function main() {
   fs.mkdirSync(CLIENT_HOME, { recursive: true })
   log(`clientId=${cfg.clientId} host=${cfg.insightBaseUrl}`)
 
-  await reportCapabilities(cfg).catch((err) => logErr('capabilities failed', err.message))
+  // Type=notify：必须在 capabilities / 网络探测之前 READY，否则 TimeoutStartSec≈90s 杀进程。
+  notifyReady()
+  setInterval(notifyWatchdog, WATCHDOG_MS)
+  notifyWatchdog()
 
   const heartbeatAll = () => {
     sendHeartbeat(cfg).catch((err) => logErr('heartbeat failed', err.message))
@@ -966,6 +986,9 @@ async function main() {
   setInterval(() => {
     flushSpool(cfg).catch(() => {})
   }, 15_000)
+
+  // 能力探测可能 spawn opencode / FI inventory，耗时长；不得阻塞 systemd 就绪与喂狗。
+  reportCapabilities(cfg).catch((err) => logErr('capabilities failed', err.message))
 
   fiLoop(cfg)
   controlLoop(cfg)
@@ -1208,9 +1231,13 @@ module.exports = {
   configTargetPath,
   atomicWriteJson,
   probeFaultInjection,
+  sdNotify,
+  notifyReady,
+  notifyWatchdog,
   WHITELIST,
   CONFIG_FORBIDDEN,
   RUN_FORBIDDEN,
+  WATCHDOG_MS,
 }
 
 if (require.main === module) {

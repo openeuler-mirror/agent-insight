@@ -325,7 +325,7 @@ FI run 在跑        → 拒绝 RUN_EXPERIMENT_CASE，回 FAILED(CLIENT_BUSY)
 | macOS | launchd `LaunchAgent` | `KeepAlive.SuccessfulExit=false` `ThrottleInterval=10` |
 
 客户端**不得**通过递归拉起自身实现守护。连续失败超阈值后由进程管理器停止重启，客户端状态置 `DISABLED` 并在页面告警。
-systemd watchdog 通过 `sd_notify` 的 `WATCHDOG=1`；Node 侧以写 `NOTIFY_SOCKET` 数据报实现，无第三方依赖。
+`Type=notify` 必须先 `sd_notify(READY=1)`（在 capabilities 等慢探测之前），再按约 `WatchdogSec/2` 周期发 `WATCHDOG=1`；`StartLimitIntervalSec` / `StartLimitBurst` 写在 `[Unit]`。Node 核心无 unix datagram，经 `systemd-notify --pid=<client>` 投递（无第三方依赖）。
 
 ## 安全
 
