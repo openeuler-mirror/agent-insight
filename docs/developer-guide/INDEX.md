@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a5d53a258cbb6041b882faecddd6bb1397ff5f65` (`a5d53a25`) |
+| Commit | `e09027716a609e011c7c15b8210c5ccea06099ee` (`e0902771`) |
 | Branch | `local-integration/codex-full` |
-| Date | 2026-08-18T18:22:24+08:00 |
+| Date | 2026-08-18T18:27:42+08:00 |
 | Author | duanzhoutao |
-| Subject | `test(codex): align setup list with official baseline` |
+| Subject | `fix(integration): close official setup framework list` |
 
-**如何更新：** `git diff a5d53a25 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff e0902771 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 
 ## Documents
