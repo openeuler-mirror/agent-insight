@@ -42,7 +42,7 @@ type SessionForReadiness = {
     endTime?: unknown;
 };
 
-type TraceLifecycleStatus = 'running' | 'success' | 'failed';
+type TraceLifecycleStatus = 'running' | 'success' | 'failed' | 'interrupted';
 
 const opencodeCliExitCache = new Map<string, { value: boolean | null; expiresAt: number }>();
 let opencodeTelemetryIndexCache: {
@@ -114,11 +114,26 @@ function toIsoTimestamp(value: unknown): string | null {
     return ms != null && ms > 0 ? new Date(ms).toISOString() : null;
 }
 
-function getTraceLifecycle(completedAt: unknown): {
+function getTraceLifecycle(completedAt: unknown, executionStatus?: unknown): {
     traceStatus: TraceLifecycleStatus;
     traceCompletedAt: string | null;
     traceStatusReason: string;
 } {
+    const explicitStatus = String(executionStatus || '').trim().toLowerCase();
+    if (explicitStatus === 'interrupted') {
+        return {
+            traceStatus: 'interrupted',
+            traceCompletedAt: toIsoTimestamp(completedAt),
+            traceStatusReason: 'execution-interrupted',
+        };
+    }
+    if (explicitStatus === 'failed') {
+        return {
+            traceStatus: 'failed',
+            traceCompletedAt: toIsoTimestamp(completedAt),
+            traceStatusReason: 'execution-failed',
+        };
+    }
     const completedIso = toIsoTimestamp(completedAt);
     if (completedIso) {
         return {
@@ -301,6 +316,7 @@ export async function GET(request: Request) {
         .filter(Boolean)
         .slice(0, 200);
     const framework = searchParams.get('framework') || undefined;
+    const sourceKind = searchParams.get('sourceKind') || undefined;
     const skill = searchParams.get('skill') || undefined;
     const agentName = searchParams.get('agentName') || undefined;
     const ownershipParam = searchParams.get('ownership') || '';
@@ -374,6 +390,10 @@ export async function GET(request: Request) {
             upload_id: single.id,
             task_id: single.taskId,
             framework: single.framework,
+            trace_thread_id: single.traceThreadId,
+            source_execution_id: single.sourceExecutionId,
+            source_kind: single.sourceKind,
+            execution_status: single.executionStatus,
             agentName: single.agentName,
             timestamp: single.timestamp,
             // 单条查询带上 final_result:供 fault 详情在列表走 fields=light(不带 final_result)后按需回填。
@@ -415,6 +435,7 @@ export async function GET(request: Request) {
         taskIds: taskIds.length > 0 ? taskIds : undefined,
         agentName,
         framework,
+        sourceKind,
         skill,
         skillVersion,
         includeSubagents,
@@ -533,7 +554,10 @@ export async function GET(request: Request) {
         const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
         const last_eval_status = lastEval?.status ?? null;
         const last_eval_error = lastEval?.errorMessage ?? null;
-        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null);
+        const baseTraceLifecycle = getTraceLifecycle(
+            recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null,
+            record.executionStatus ?? record.execution_status,
+        );
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
@@ -541,7 +565,10 @@ export async function GET(request: Request) {
             const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
                 ? baseTraceLifecycle
                 : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
-                    ? getTraceLifecycle((await getAutoEvalReadiness(record)).traceCompletedAt)
+                    ? getTraceLifecycle(
+                        (await getAutoEvalReadiness(record)).traceCompletedAt,
+                        record.executionStatus ?? record.execution_status,
+                    )
                     : baseTraceLifecycle;
             return {
                 ...record,
@@ -561,7 +588,7 @@ export async function GET(request: Request) {
         const readiness = await getAutoEvalReadiness(record);
         const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
             ? baseTraceLifecycle
-            : getTraceLifecycle(readiness.traceCompletedAt);
+            : getTraceLifecycle(readiness.traceCompletedAt, record.executionStatus ?? record.execution_status);
         return {
             ...record,
             is_evaluating,
@@ -589,7 +616,7 @@ export async function GET(request: Request) {
         const statusFiltered = statusParam === 'all'
             ? enrichedData
             : enrichedData.filter((record) => String(record.trace_status ?? record.traceStatus ?? '') === statusParam);
-        const statusOrder: Record<string, number> = { running: 0, failed: 1, success: 2 };
+        const statusOrder: Record<string, number> = { running: 0, interrupted: 1, failed: 2, success: 3 };
         statusFiltered.sort((a, b) => {
             let cmp = 0;
             if (sortParam === 'status') {

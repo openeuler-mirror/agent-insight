@@ -18,7 +18,11 @@ const {
 const { sha256 } = require("../shared/trace-transport.cjs");
 
 const COLLECTOR_FILES = [
+  "app-server-proxy.cjs",
   "codex-trace-core.cjs",
+  "lifecycle-reducer.cjs",
+  "source-classifier.cjs",
+  "rollout-reader.cjs",
   "config-core.cjs",
   "hook-handler.cjs",
   "relay.cjs",
@@ -34,6 +38,7 @@ function parseArgs(argv) {
     startRelay: true,
     installEditors: true,
     skipVersionCheck: false,
+    desktopRolloutIngress: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -43,6 +48,7 @@ function parseArgs(argv) {
     else if (arg === "--no-start") result.startRelay = false;
     else if (arg === "--skip-editor-install") result.installEditors = false;
     else if (arg === "--skip-version-check") result.skipVersionCheck = true;
+    else if (arg === "--enable-desktop-rollout") result.desktopRolloutIngress = true;
     else throw new Error(`Unknown install argument: ${arg}`);
   }
   if (!Number.isInteger(result.relayPort) || result.relayPort < 1024 || result.relayPort > 65535) {
@@ -251,6 +257,8 @@ async function install(options) {
     relayPort: options.relayPort,
     uploadIntervalMs: 5 * 60 * 1000,
     homeDir: options.homeDir,
+    desktopRolloutIngress: options.desktopRolloutIngress,
+    desktopRolloutScanIntervalMs: 10_000,
   };
   await atomicWriteFile(configPath, `${JSON.stringify(collectorConfig, null, 2)}\n`);
   const extensionInstall = options.installEditors

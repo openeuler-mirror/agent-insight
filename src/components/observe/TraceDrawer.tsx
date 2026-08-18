@@ -32,6 +32,7 @@ export interface TraceDrawerExecutionMeta {
 export interface TraceDrawerProps {
     open: boolean;
     execution: TraceDrawerExecutionMeta | null;
+    user?: string | null;
     onClose: () => void;
 }
 
@@ -39,7 +40,7 @@ export interface TraceDrawerProps {
  * Right-side slide-out panel. Lazy-loads the session interactions for the
  * given execution and renders AgentTraceView inside it.
  */
-export default function TraceDrawer({ open, execution, onClose }: TraceDrawerProps) {
+export default function TraceDrawer({ open, execution, user, onClose }: TraceDrawerProps) {
     const { locale } = useLocale();
     const [session, setSession] = useState<SessionPayload | null>(null);
     const [loading, setLoading] = useState(false);
@@ -51,13 +52,18 @@ export default function TraceDrawer({ open, execution, onClose }: TraceDrawerPro
             return;
         }
         const taskId = execution.taskId;
+        if (!user) {
+            setSession({ error: 'Missing user' });
+            setLoading(false);
+            return;
+        }
         setLoading(true);
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}`)
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then((j: SessionPayload) => setSession(j))
             .catch(() => setSession({ error: 'Network error' }))
             .finally(() => setLoading(false));
-    }, [open, execution?.taskId]);
+    }, [open, execution?.taskId, user]);
 
     // ESC to close
     useEffect(() => {

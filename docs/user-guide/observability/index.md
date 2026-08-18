@@ -200,6 +200,33 @@ node scripts/qoder_work_setup.mjs uninstall --purge
 
 ## Codex CLI 与 IDE Extension 接入
 
+### Codex Desktop 与 App Server（实验性）
+
+桌面版本默认不读取 `~/.codex/sessions`，也不会监听 Codex Desktop 已建立的私有连接。需要采集
+桌面任务时，必须在安装后显式启用只读 rollout reader：
+
+```bash
+node ~/.agent-insight/collectors/codex/install.cjs --home "$HOME" --enable-desktop-rollout
+```
+
+Windows PowerShell 使用同一 Node 命令，将 `"$HOME"` 换成 `$env:USERPROFILE`。启用后 relay
+只增量读取新的 rollout 文件，保留断尾 offset；不会自动回填启用前的历史，也不会修改、移动或上传
+原始 rollout。卸载只停止 Agent Insight reader，保留 Codex 原文件和已写入的 Trace。
+
+桌面生命周期按以下口径展示：同一 App Server `turn/steer` 是一个 Execution 的新 phase；桌面
+UI 若实际发出 `interrupt + new task`，前一个 Execution 标记为 `interrupted`，后一个单独计数，
+两者通过 thread transition 关联。`compaction` 只出现在 thread 时间线，不创建任务，也不污染前后
+Execution 的 Token、LLM 或 Tool 统计。来源属性区分 `desktop`、`app_server`、`cli` 与 `ide`；
+证据不足时保留 `unknown`，不根据相邻时间猜测。
+
+App Server proxy 同样默认不启动。需要代理一个显式 client 时，以
+`node ~/.agent-insight/collectors/codex/app-server-proxy.cjs` 代替 `codex app-server` 启动命令；
+该进程原样双向转发 JSONL，并把成功的 lifecycle 事件发送给同机 loopback relay。只有经过
+Agent Insight proxy 的 JSON-RPC 连接才会记录成功的
+`turn/start`、`turn/steer`、`turn/interrupt` 和 `contextCompaction`，不会宣称能够观察已运行的
+Desktop 私有连接。详情与开发边界见
+[Codex App Server 与 Desktop Trace 升级设计](../../design/codex-app-server-desktop-trace-upgrade/design.md)。
+
 Codex 通过公开 Hook 与原生 OTel Logs 双通道采集，使用 loopback relay 合并为同一条 Trace；安装器接受 `>=0.145.0` 的可解析 Codex CLI 版本。可在安装指导中勾选 **Codex**，完成后启动 Codex、运行 `/hooks` 并信任 Agent Insight handlers。采集器不会读取 `transcript_path`，写入 spool 与上报前会递归脱敏 API Key、token、secret、password 等密钥赋值以及本地 Windows、UNC、`/Users/...`、`/home/...` 路径；Token 用量字段保留数值。VS Code、Cursor 与 Windsurf 可安装同一 VSIX，以公开 API 采集 FileEdit 和 Terminal 事件。
 
 仅在前两种精确来源都不可用时，才可在 `~/.agent-insight/config` 中显式设置 `AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS=1`，实验性地估算当前轮 transcript 中可见的用户消息、助手输出、工具参数和工具结果。Trace 详情以 `≈` 标识，并记录 `local_visible_transcript`、`visible_transcript` 和 `missing_context=true`。估算不包含客户端隐藏的 system prompt、Rules、Skill/MCP schema、内部推理与被压缩上下文，在真实 Agent 会话中可能严重低估，因此不能用于账单核对，也不会填充执行记录的精确 input/output Token 字段。CLI/Work 未提供 usage 时仍显示不可用，不启用该兜底。

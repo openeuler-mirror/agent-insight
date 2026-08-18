@@ -10,6 +10,8 @@ const {
   stableSpanId,
   stableTraceId,
 } = require("../shared/trace-transport.cjs");
+const { createCodexLifecycleReducer } = require("./lifecycle-reducer.cjs");
+const { classifyCodexSource } = require("./source-classifier.cjs");
 
 const HOOK_EVENTS = Object.freeze([
   "SessionStart",
@@ -299,6 +301,7 @@ class CodexTraceCore {
     this.callScopes = new Map();
     this.implicitPromptScopes = new Map();
     this.stateRetentionMs = options.stateRetentionMs ?? DEFAULT_STATE_RETENTION_MS;
+    this.lifecycleReducer = createCodexLifecycleReducer();
   }
 
   ensureSession(sessionId, metadata = {}) {
@@ -315,6 +318,7 @@ class CodexTraceCore {
         model: metadata.model,
         originator: metadata.originator,
         terminalType: metadata.terminalType,
+        sourceKind: classifyCodexSource(metadata).sourceKind,
         input: undefined,
         output: undefined,
         closed: false,
@@ -335,6 +339,14 @@ class CodexTraceCore {
     session.model = metadata.model || session.model;
     session.originator = metadata.originator || session.originator;
     session.terminalType = metadata.terminalType || session.terminalType;
+    const classified = classifyCodexSource({
+      ...metadata,
+      originator: metadata.originator || session.originator,
+      terminalType: metadata.terminalType || session.terminalType,
+    });
+    if (classified.sourceKind !== "unknown" || !session.sourceKind) {
+      session.sourceKind = classified.sourceKind;
+    }
     session.updatedAt = metadata.timestampMs || this.now();
     return session;
   }
@@ -470,6 +482,7 @@ class CodexTraceCore {
         "codex.execution.id": scope.executionId,
         "codex.conversation.id": session.sessionId,
         "codex.turn.id": turn.turnId,
+        "codex.source.kind": session.sourceKind || "unknown",
         ...(pendingAssociation ? { "codex.association.pending": "true" } : {}),
         ...overrides.attributes,
       },
@@ -1148,6 +1161,99 @@ class CodexTraceCore {
     return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
   }
 
+  async processLifecycleEvent(event) {
+    const result = this.lifecycleReducer.apply(event);
+    if (result.duplicate || result.pending) return result;
+    const threadId = event.sourceThreadId;
+    const session = this.ensureSession(threadId, {
+      timestampMs: event.timestampMs,
+      originator: event.payload?.originator,
+      terminalType: event.payload?.terminalType,
+    });
+    for (const snapshot of result.snapshots || []) {
+      const payload = snapshot.payload || {};
+      if (snapshot.eventType === "execution_snapshot") {
+        const executionId = `codex:${threadId}:turn:${snapshot.sourceExecutionId}`;
+        await this.writer.append(eventBase(session, {
+          sessionId: executionId,
+          traceId: stableTraceId("codex", executionId),
+          spanId: stableSpanId("codex-lifecycle", executionId),
+          parentSpanId: undefined,
+          kind: "agent",
+          name: "agent.codex",
+          input: payload.query,
+          output: payload.output,
+          status: payload.status === "failed" ? "error" : payload.status,
+          startTimeMs: payload.startedAt || snapshot.timestampMs,
+          endTimeMs: payload.updatedAt || snapshot.timestampMs,
+          attributes: {
+            "agent.insight.lifecycle": "execution",
+            "codex.lifecycle.event_type": "execution_snapshot",
+            "codex.execution.id": executionId,
+            "codex.conversation.id": threadId,
+            "codex.turn.id": snapshot.sourceExecutionId,
+            "codex.source.kind": snapshot.sourceKind,
+            "codex.source.thread_id": threadId,
+            "codex.source.execution_id": snapshot.sourceExecutionId,
+            "codex.execution.status": payload.status,
+            "codex.input.history": JSON.stringify(payload.inputs || []),
+            "codex.input.phases": JSON.stringify(payload.phases || []),
+          },
+        }));
+      } else if (snapshot.eventType === "compaction_snapshot") {
+        await this.writer.append(eventBase(session, {
+          sessionId: threadId,
+          traceId: stableTraceId("codex", threadId),
+          spanId: stableSpanId("codex-lifecycle", "compaction", snapshot.sourceItemId),
+          kind: "span",
+          name: "context.compaction",
+          input: undefined,
+          output: undefined,
+          startTimeMs: payload.startedAt || snapshot.timestampMs,
+          endTimeMs: payload.completedAt || snapshot.timestampMs,
+          attributes: {
+            "agent.insight.lifecycle": "compaction",
+            "codex.lifecycle.event_type": "compaction_snapshot",
+            "codex.conversation.id": threadId,
+            "codex.source.kind": snapshot.sourceKind,
+            "codex.source.thread_id": threadId,
+            "codex.compaction.item_id": snapshot.sourceItemId,
+            "codex.compaction.status": payload.status,
+            "codex.compaction.duration_ms": payload.durationMs,
+            "codex.compaction.payload": JSON.stringify(payload),
+          },
+        }));
+      } else if (snapshot.eventType === "thread_event_snapshot") {
+        await this.writer.append(eventBase(session, {
+          sessionId: threadId,
+          traceId: stableTraceId("codex", threadId),
+          spanId: stableSpanId("codex-lifecycle", "thread-event", snapshot.sourceItemId),
+          parentSpanId: undefined,
+          kind: "span",
+          name: "thread.execution_transition",
+          input: undefined,
+          output: undefined,
+          startTimeMs: snapshot.timestampMs,
+          endTimeMs: snapshot.timestampMs,
+          attributes: {
+            "agent.insight.lifecycle": "thread_event",
+            "codex.lifecycle.event_type": "thread_event_snapshot",
+            "codex.conversation.id": threadId,
+            "codex.source.kind": snapshot.sourceKind,
+            "codex.source.thread_id": threadId,
+            "codex.thread.event_id": snapshot.sourceItemId,
+            "codex.thread.event_kind": payload.kind,
+            "codex.thread.previous_execution_id": payload.previousSourceExecutionId,
+            "codex.thread.next_execution_id": payload.nextSourceExecutionId,
+            "codex.thread.transition_kind": payload.transitionKind,
+            "codex.thread.confidence": payload.confidence,
+          },
+        }));
+      }
+    }
+    return result;
+  }
+
   updateLease(clientId, action) {
     if (!clientId) return;
     if (action === "release") this.leases.delete(clientId);
@@ -1166,6 +1272,7 @@ class CodexTraceCore {
           turnId: turn.turnId,
           originator: session.originator,
           terminalType: session.terminalType,
+          sourceKind: session.sourceKind,
           cwd: session.cwd,
         });
       }
@@ -1245,6 +1352,7 @@ class CodexTraceCore {
         model: session.model,
         originator: session.originator,
         terminalType: session.terminalType,
+        sourceKind: session.sourceKind,
         closed: session.closed,
         delegatedParent: session.delegatedParent,
         turnAliases: [...session.turnAliases.entries()],
@@ -1265,6 +1373,7 @@ class CodexTraceCore {
           promptSources: [...(turn.promptSources || [])],
         })),
       })),
+      lifecycle: this.lifecycleReducer.snapshot(),
     };
   }
 
@@ -1275,9 +1384,11 @@ class CodexTraceCore {
     this.implicitPromptScopes = new Map(
       Array.isArray(snapshot.implicitPromptScopes) ? snapshot.implicitPromptScopes : [],
     );
+    this.lifecycleReducer.restore(snapshot.lifecycle);
     for (const item of snapshot.sessions) {
       if (!item?.sessionId) continue;
       const session = this.ensureSession(item.sessionId, item);
+      session.sourceKind = item.sourceKind || session.sourceKind || "unknown";
       session.startedAt = Number(item.startedAt) || session.startedAt;
       session.updatedAt = Number(item.updatedAt) || session.updatedAt;
       session.closed = Boolean(item.closed);

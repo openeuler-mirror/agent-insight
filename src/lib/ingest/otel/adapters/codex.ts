@@ -1,4 +1,9 @@
-import type { ExecutionRecord, InvokedSkill } from '@/lib/storage/data-service';
+import type {
+  ExecutionRecord,
+  InvokedSkill,
+  TraceThreadEventRecord,
+  TraceThreadRecord,
+} from '@/lib/storage/data-service';
 import type { OtelTraceEvent } from '../types';
 import type { OtelTraceAdapter } from './types';
 
@@ -27,6 +32,19 @@ function eventInput(event: OtelTraceEvent): string | undefined {
   // Codex emits this placeholder for lifecycle events when a prompt is not
   // exported. It is not a user task boundary and must not create a root.
   return value?.trim() === '[REDACTED]' ? undefined : value;
+}
+
+function inputHistory(event: OtelTraceEvent): AnyObj[] {
+  const raw = attrs(event)['codex.input.history'];
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is AnyObj => Boolean(item && typeof item === 'object'))
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function eventOutput(event: OtelTraceEvent): string | undefined {
@@ -240,6 +258,10 @@ function interactionBase(event: OtelTraceEvent, owner: ReturnType<typeof ownerFo
     turn_id: attrs(event)['codex.turn.id'],
     ttft_ms: attrs(event)['codex.ttft_ms'],
     cloud: cloudMetadata(event),
+    source_kind: attrs(event)['codex.source.kind'],
+    source_thread_id: attrs(event)['codex.source.thread_id'],
+    source_execution_id: attrs(event)['codex.source.execution_id'],
+    execution_status: attrs(event)['codex.execution.status'],
   };
 }
 
@@ -541,6 +563,127 @@ function reparentPreChildLlms(events: OtelTraceEvent[]): OtelTraceEvent[] {
   });
 }
 
+function parsedObject(value: unknown): AnyObj {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as AnyObj;
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as AnyObj : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildTraceThread(events: OtelTraceEvent[]): TraceThreadRecord | undefined {
+  const sourceThreadId = events
+    .map((event) => content(attrs(event)['codex.source.thread_id'] || attrs(event)['codex.conversation.id']))
+    .find(Boolean);
+  if (!sourceThreadId) return undefined;
+  const sourceKind = events.map((event) => content(attrs(event)['codex.source.kind'])).find(Boolean);
+  const records = new Map<string, TraceThreadEventRecord>();
+
+  for (const event of events) {
+    const eventAttrs = attrs(event);
+    const lifecycle = content(eventAttrs['agent.insight.lifecycle']);
+    const sourceExecutionId = content(eventAttrs['codex.source.execution_id'] || eventAttrs['codex.turn.id']);
+    if (lifecycle === 'thread_event') {
+      const previousSourceExecutionId = content(eventAttrs['codex.thread.previous_execution_id']);
+      const nextSourceExecutionId = content(eventAttrs['codex.thread.next_execution_id']);
+      const eventKey = content(eventAttrs['codex.thread.event_id']) || event.spanId ||
+        `codex:${sourceThreadId}:transition:${previousSourceExecutionId}:${nextSourceExecutionId}`;
+      records.set(eventKey, {
+        eventKey,
+        kind: content(eventAttrs['codex.thread.event_kind']) || 'execution_transition',
+        status: 'completed',
+        sourceTurnId: previousSourceExecutionId,
+        relatedSourceTurnId: nextSourceExecutionId,
+        startedAt: new Date(event.startTimeMs || Date.parse(event.receivedAt) || Date.now()),
+        completedAt: new Date(eventEndMs(event)),
+        payload: {
+          previousSourceExecutionId,
+          nextSourceExecutionId,
+          transitionKind: content(eventAttrs['codex.thread.transition_kind']) || 'interrupt_followed_by_execution',
+          confidence: content(eventAttrs['codex.thread.confidence']) || 'pending',
+          sourceKind,
+        },
+      });
+    }
+
+    if (lifecycle === 'compaction') {
+      const itemId = content(eventAttrs['codex.compaction.item_id']) || event.spanId || String(event.startTimeMs || 'unknown');
+      const eventKey = `codex:${sourceThreadId}:compaction:${itemId}`;
+      const rawPayload = parsedObject(eventAttrs['codex.compaction.payload']);
+      const maintenanceUsage = parsedObject(rawPayload.maintenanceUsage || rawPayload.maintenance_usage);
+      records.set(eventKey, {
+        eventKey,
+        kind: 'context_compaction',
+        status: content(eventAttrs['codex.compaction.status']) || 'completed',
+        startedAt: new Date(event.startTimeMs || Date.parse(event.receivedAt) || Date.now()),
+        completedAt: new Date(eventEndMs(event)),
+        payload: {
+          sourceKind,
+          itemId,
+          durationMs: Number(eventAttrs['codex.compaction.duration_ms']) || Math.max(0, eventEndMs(event) - (event.startTimeMs || 0)),
+          windowId: content(rawPayload.window_id || rawPayload.windowId),
+          previousWindowId: content(rawPayload.previous_window_id || rawPayload.previousWindowId),
+          firstWindowId: content(rawPayload.first_window_id || rawPayload.firstWindowId),
+          windowNumber: Number(rawPayload.window_number ?? rawPayload.windowNumber) || undefined,
+          ...(Object.keys(maintenanceUsage).length > 0 ? { maintenanceUsage } : {}),
+        },
+      });
+    }
+
+    if (lifecycle === 'execution' && sourceExecutionId) {
+      for (const input of inputHistory(event)) {
+        if (content(input.input_kind) !== 'steer') continue;
+        const phaseId = content(input.phase_id);
+        const clientMessageId = content(input.client_message_id);
+        const inputIndex = Number(input.input_index);
+        const eventKey = `codex:${sourceThreadId}:steer:${sourceExecutionId}:${clientMessageId || phaseId || inputIndex}`;
+        records.set(eventKey, {
+          eventKey,
+          kind: 'input_steer',
+          status: 'completed',
+          sourceTurnId: sourceExecutionId,
+          phaseId,
+          startedAt: input.timestamp ? new Date(String(input.timestamp)) : new Date(event.startTimeMs || Date.now()),
+          completedAt: input.timestamp ? new Date(String(input.timestamp)) : new Date(event.startTimeMs || Date.now()),
+          payload: {
+            sourceKind,
+            inputIndex: Number.isFinite(inputIndex) ? inputIndex : undefined,
+            clientMessageId,
+            confidence: 'direct',
+          },
+        });
+      }
+      if (content(eventAttrs['codex.execution.status']) === 'interrupted') {
+        const eventKey = `codex:${sourceThreadId}:interrupt:${sourceExecutionId}`;
+        records.set(eventKey, {
+          eventKey,
+          kind: 'interrupt',
+          status: 'completed',
+          sourceTurnId: sourceExecutionId,
+          startedAt: new Date(eventEndMs(event)),
+          completedAt: new Date(eventEndMs(event)),
+          payload: { sourceKind, reason: 'interrupted', confidence: 'direct' },
+        });
+      }
+    }
+  }
+
+  const startedAt = Math.min(...events.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now()));
+  const updatedAt = Math.max(...events.map(eventEndMs));
+  return {
+    sourceThreadId,
+    sourceKind,
+    startedAt: new Date(startedAt),
+    updatedAt: new Date(updatedAt),
+    metadata: { sourceKind },
+    events: [...records.values()].sort((left, right) =>
+      new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime()),
+  };
+}
+
 export function aggregateCodexTraceEvents(
   sessionId: string,
   events: OtelTraceEvent[],
@@ -574,23 +717,56 @@ export function aggregateCodexTraceEvents(
   for (const event of ordered) {
     const kind = semanticKind(event);
     const owner = codexOwnerFor(event, bySpanId, displayNames);
+    if (attrs(event)['agent.insight.lifecycle'] === 'compaction') {
+      interactions.push({
+        role: 'system',
+        type: 'context_compaction',
+        content: '',
+        timestamp: toIso(event.startTimeMs),
+        timeInfo: {
+          created: toIso(event.startTimeMs),
+          completed: toIso(eventEndMs(event)),
+        },
+        traceId: event.traceId,
+        spanId: event.spanId,
+        parentSpanId: event.parentSpanId,
+        source_kind: attrs(event)['codex.source.kind'],
+        compaction_status: attrs(event)['codex.compaction.status'],
+        compaction_item_id: attrs(event)['codex.compaction.item_id'],
+        compaction_duration_ms: attrs(event)['codex.compaction.duration_ms'],
+      });
+      continue;
+    }
     if (kind === 'agent') {
       rootEvents.push(event);
-      const input = eventInput(event);
-      if (input) {
+      const history = inputHistory(event);
+      const inputs = history.length > 0 ? history : (eventInput(event) ? [{
+        content: eventInput(event),
+        input_kind: 'initial',
+        input_index: 0,
+        phase_id: 'phase-0',
+      }] : []);
+      for (const input of inputs) {
+        const contentValue = content(input.content ?? input.input ?? input.prompt);
+        if (!contentValue) continue;
         interactions.push({
           role: 'user',
           agent: 'codex',
-          content: input,
-          timestamp: toIso(event.startTimeMs),
+          content: contentValue,
+          timestamp: input.timestamp || toIso(event.startTimeMs),
           timeInfo: {
-            created: toIso(event.startTimeMs),
-            completed: toIso(event.startTimeMs),
+            created: input.timestamp || toIso(event.startTimeMs),
+            completed: input.timestamp || toIso(event.startTimeMs),
           },
           traceId: event.traceId,
-          spanId: `${event.spanId}:input`,
+          spanId: `${event.spanId}:input:${input.input_index ?? 0}`,
           parentSpanId: event.spanId,
           turn_id: attrs(event)['codex.turn.id'],
+          input_kind: input.input_kind,
+          input_index: input.input_index,
+          phase_id: input.phase_id,
+          client_message_id: input.client_message_id,
+          source: input.source || attrs(event)['codex.source.kind'],
         });
       }
       continue;
@@ -714,6 +890,16 @@ export function aggregateCodexTraceEvents(
     }
   }
 
+  const first = ordered[0];
+  const traceThread = buildTraceThread(ordered);
+  const sourceKind = traceThread?.sourceKind || ordered
+    .map((event) => content(attrs(event)['codex.source.kind']))
+    .find(Boolean);
+  const sourceThreadId = traceThread?.sourceThreadId;
+  const sourceExecutionId = ordered
+    .map((event) => content(attrs(event)['codex.source.execution_id'] || attrs(event)['codex.turn.id']))
+    .find(Boolean);
+
   for (const { event, interaction } of pendingSubagentOutcomes) {
     const childInteractions = interactions.filter((candidate) =>
       candidate.subagent_session_id === event.spanId);
@@ -764,9 +950,20 @@ export function aggregateCodexTraceEvents(
     Boolean(eventInput(event) || eventOutput(event)));
   if (!hasMeaningfulRootSignal && llmEvents.length === 0 && toolEvents.length === 0 &&
     invokedSkills.length === 0 && subagentEvents.length === 0) {
-    return null;
+    if (!traceThread?.events?.length) return null;
+    return {
+      task_id: `codex:${sourceThreadId}:thread-events`,
+      framework: 'codex',
+      label: 'codex-thread',
+      user: first.user || 'anonymous',
+      timestamp: traceThread.startedAt || new Date(),
+      sourceThreadId,
+      sourceKind,
+      traceThread,
+      threadOnly: true,
+      interactions: [],
+    };
   }
-  const first = ordered[0];
   // Execution 已按 turn 边界拆分；从根 agent 的开始到该 execution 内最后一个
   // child event 的结束，才能覆盖真实的 LLM、Tool、Skill 与子 Agent 链路。
   // 不能只取根生命周期 snapshot 的结束时间，否则根节点可能短于实际执行数分钟。
@@ -831,11 +1028,15 @@ export function aggregateCodexTraceEvents(
   const model = llmEvents.map(eventModel).find(Boolean) ||
     rootEvents.map(eventModel).find(Boolean) ||
     'unknown';
+  const executionStatus = ordered.map((event) => content(attrs(event)['codex.execution.status'])).find(Boolean);
 
   return {
     task_id: sessionId,
     query,
     framework: 'codex',
+    sourceThreadId,
+    sourceExecutionId,
+    traceThread,
     model,
     tokens,
     latency: Math.max(0, endedAt - startedAt),
@@ -856,6 +1057,8 @@ export function aggregateCodexTraceEvents(
     skills: invokedSkills.map((skill) => skill.name),
     agent: 'codex',
     agentName: 'codex',
+    sourceKind,
+    executionStatus,
     agents: Array.from(new Set([
       'codex',
       ...ordered

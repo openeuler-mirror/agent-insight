@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import { resolveAgentInsightDataPath } from '@/lib/env';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
 import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
@@ -284,6 +285,13 @@ export interface ExecutionRecord {
     task_id?: string;
     query?: string;
     framework?: string;
+    sourceThreadId?: string;
+    sourceExecutionId?: string;
+    sourceKind?: string;
+    executionStatus?: string;
+    traceThreadId?: string;
+    traceThread?: TraceThreadRecord;
+    threadOnly?: boolean;
     tokens?: number;
     cost?: number;
     latency?: number;
@@ -345,6 +353,27 @@ export interface ExecutionRecord {
     routing_evaluation?: RoutingEvaluationSnapshot;
     outcome_evaluation?: OutcomeEvaluationSnapshot;
     [key: string]: any;
+}
+
+export interface TraceThreadEventRecord {
+    eventKey: string;
+    kind: 'execution_transition' | 'context_compaction' | 'input_steer' | 'interrupt' | string;
+    status?: string;
+    sourceTurnId?: string;
+    relatedSourceTurnId?: string;
+    phaseId?: string;
+    startedAt: string | Date;
+    completedAt?: string | Date | null;
+    payload?: Record<string, unknown>;
+}
+
+export interface TraceThreadRecord {
+    sourceThreadId: string;
+    sourceKind?: string;
+    startedAt?: string | Date | null;
+    updatedAt?: string | Date | null;
+    metadata?: Record<string, unknown>;
+    events?: TraceThreadEventRecord[];
 }
 
 function toTraceLifecycleMs(value: unknown): number | null {
@@ -1180,6 +1209,7 @@ interface ReadRecordFilters {
     taskIds?: string[];
     agentName?: string;
     framework?: string;
+    sourceKind?: string;
     skill?: string;
     skillVersion?: number;
     showAllUsers?: boolean;
@@ -1355,7 +1385,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
  * 某个分类列的观测值 + 出现次数,给过滤器值下拉(facet)用 —— 对标 langfuse SUGGESTIONS 的「值 + 件数」。
  * 仅允许白名单内的真实标量列 groupBy(防任意列注入);root 作用域、按 user 隔离,与其它 facet 口径一致。
  */
-const FACETABLE_COLUMNS = new Set(['framework', 'agentName', 'model', 'subagentType']);
+const FACETABLE_COLUMNS = new Set(['framework', 'sourceKind', 'agentName', 'model', 'subagentType']);
 export async function listObservedFieldValues(
     column: string,
     user?: string,
@@ -1432,7 +1462,8 @@ export async function listObservedTraceIds(
 // 注意:必须只含真实列名——例如 expectedSkillVersion 不是 Execution 列(今天即恒 undefined→null),不能放入。
 // 导出供测试断言"不含 finalResult"。
 export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
-    id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
+    id: true, taskId: true, query: true, framework: true, traceThreadId: true,
+    sourceExecutionId: true, sourceKind: true, executionStatus: true, tokens: true, cost: true, latency: true,
     toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
     cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
     timestamp: true, model: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
@@ -1709,6 +1740,15 @@ async function hydrateAndNormalizeBatch(
             task_id: r.taskId || undefined,
             query: r.query || undefined,
             framework: r.framework || undefined,
+            traceThreadId: r.traceThreadId || undefined,
+            sourceThreadId: r.traceThread?.sourceThreadId || undefined,
+            sourceExecutionId: r.sourceExecutionId || undefined,
+            sourceKind: r.sourceKind || undefined,
+            executionStatus: r.executionStatus || undefined,
+            trace_thread_id: r.traceThreadId || undefined,
+            source_execution_id: r.sourceExecutionId || undefined,
+            source_kind: r.sourceKind || undefined,
+            execution_status: r.executionStatus || undefined,
             agent: r.agentName || undefined,
             agentName: r.agentName || undefined,
             // 归属兜底：已知系统/内置 Agent 名（评估器等）一律判 system，与 framework 无关。
@@ -1876,6 +1916,7 @@ async function readRecordsInternal(
         }
     }
     if (filters?.framework) where.framework = filters.framework;
+    if (filters?.sourceKind) where.sourceKind = filters.sourceKind;
 
     if (skillFilterActive) {
         // 反查 ExecutionSkill 得到真正用到这些 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。
@@ -2265,6 +2306,142 @@ async function normalizeLegacyCodexSessionHistory(
     });
 }
 
+const TRACE_THREAD_STORAGE_ENABLED = !process.env.DB_HOST;
+
+function traceThreadDate(value: string | Date | null | undefined): Date | undefined {
+    if (!value) return undefined;
+    const parsed = value instanceof Date ? value : new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed : undefined;
+}
+
+function traceThreadPayload(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return value as Record<string, unknown>;
+}
+
+export function scopeTraceThreadEventKey(
+    user: string,
+    framework: string,
+    sourceThreadId: string,
+    eventKey: string,
+): string {
+    const scope = createHash('sha256')
+        .update(`${user}\u0000${framework}\u0000${sourceThreadId}`)
+        .digest('hex')
+        .slice(0, 24);
+    return `trace-thread:${scope}:${eventKey}`;
+}
+
+async function persistTraceThreadRecord(
+    data: ExecutionRecord,
+    recordId?: string,
+): Promise<string | undefined> {
+    const input = data.traceThread;
+    if (!TRACE_THREAD_STORAGE_ENABLED || !input?.sourceThreadId || !data.framework || !data.user) {
+        return data.traceThreadId;
+    }
+
+    const startedAt = traceThreadDate(input.startedAt);
+    const updatedAt = traceThreadDate(input.updatedAt) || startedAt;
+    const thread = await prismaRaw.traceThread.upsert({
+        where: {
+            user_framework_sourceThreadId: {
+                user: data.user,
+                framework: data.framework,
+                sourceThreadId: input.sourceThreadId,
+            },
+        },
+        create: {
+            framework: data.framework,
+            sourceThreadId: input.sourceThreadId,
+            sourceKind: input.sourceKind || data.sourceKind,
+            user: data.user,
+            startedAt,
+            updatedAt,
+            metadataJson: input.metadata ? JSON.stringify(input.metadata) : null,
+        },
+        update: {
+            sourceKind: input.sourceKind || data.sourceKind,
+            ...(startedAt ? { startedAt } : {}),
+            ...(updatedAt ? { updatedAt } : {}),
+            ...(input.metadata ? { metadataJson: JSON.stringify(input.metadata) } : {}),
+        },
+    });
+
+    for (const event of input.events || []) {
+        const eventStartedAt = traceThreadDate(event.startedAt);
+        if (!event.eventKey || !event.kind || !eventStartedAt) continue;
+        const scopedEventKey = scopeTraceThreadEventKey(
+            data.user,
+            data.framework,
+            input.sourceThreadId,
+            event.eventKey,
+        );
+        const eventCompletedAt = traceThreadDate(event.completedAt);
+        const primaryExecutionId = !data.threadOnly && recordId && event.sourceTurnId === data.sourceExecutionId
+            ? recordId
+            : undefined;
+        const payload = {
+            ...traceThreadPayload(event.payload),
+            ...(event.relatedSourceTurnId ? { relatedSourceExecutionId: event.relatedSourceTurnId } : {}),
+        };
+        const values = {
+            traceThreadId: thread.id,
+            executionId: primaryExecutionId,
+            relatedExecutionId: undefined,
+            kind: event.kind,
+            status: event.status,
+            sourceTurnId: event.sourceTurnId,
+            phaseId: event.phaseId,
+            startedAt: eventStartedAt,
+            completedAt: eventCompletedAt,
+            payloadJson: Object.keys(payload).length > 0 ? JSON.stringify(payload) : null,
+        };
+        await prismaRaw.traceThreadEvent.upsert({
+            where: { eventKey: scopedEventKey },
+            create: { eventKey: scopedEventKey, ...values },
+            update: values,
+        });
+    }
+    return thread.id;
+}
+
+async function reconcileTraceThreadExecutions(traceThreadId: string | undefined): Promise<void> {
+    if (!TRACE_THREAD_STORAGE_ENABLED || !traceThreadId) return;
+    const executions = await prismaRaw.execution.findMany({
+        where: { traceThreadId, sourceExecutionId: { not: null } },
+        select: { id: true, sourceExecutionId: true },
+    });
+    const bySourceId = new Map(executions
+        .filter((item) => item.sourceExecutionId)
+        .map((item) => [item.sourceExecutionId as string, item.id]));
+    if (bySourceId.size === 0) return;
+
+    const events = await prismaRaw.traceThreadEvent.findMany({
+        where: { traceThreadId },
+        select: {
+            id: true,
+            sourceTurnId: true,
+            executionId: true,
+            relatedExecutionId: true,
+            payloadJson: true,
+        },
+    });
+    for (const event of events) {
+        let payload: Record<string, unknown> = {};
+        try { payload = traceThreadPayload(event.payloadJson ? JSON.parse(event.payloadJson) : {}); } catch {}
+        const primarySourceId = event.sourceTurnId || String(payload.previousSourceExecutionId || '');
+        const relatedSourceId = String(payload.relatedSourceExecutionId || payload.nextSourceExecutionId || '');
+        const executionId = primarySourceId ? bySourceId.get(primarySourceId) : undefined;
+        const relatedExecutionId = relatedSourceId ? bySourceId.get(relatedSourceId) : undefined;
+        if (executionId === event.executionId && relatedExecutionId === event.relatedExecutionId) continue;
+        await prismaRaw.traceThreadEvent.update({
+            where: { id: event.id },
+            data: { executionId, relatedExecutionId },
+        });
+    }
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
@@ -2292,6 +2469,15 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         } catch {}
     }
 
+    const persistedTraceThreadId = await persistTraceThreadRecord(data, recordId);
+    if (data.threadOnly) {
+        await reconcileTraceThreadExecutions(persistedTraceThreadId);
+        return {
+            success: true,
+            record: { ...data, traceThreadId: persistedTraceThreadId, interactions: [] },
+        };
+    }
+
     let existingRecord: ExecutionRecord | null = null;
     const dbRecord = await db.findExecutionById(recordId);
 
@@ -2302,6 +2488,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             task_id: dbRecord.taskId || undefined,
             query: dbRecord.query || undefined,
             framework: dbRecord.framework || undefined,
+            traceThreadId: dbRecord.traceThreadId || undefined,
+            sourceExecutionId: dbRecord.sourceExecutionId || undefined,
+            sourceKind: dbRecord.sourceKind || undefined,
+            executionStatus: dbRecord.executionStatus || undefined,
             tokens: dbRecord.tokens ?? undefined,
             cost: dbRecord.cost ?? undefined,
             latency: dbRecord.latency ?? undefined,
@@ -2729,6 +2919,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         skill: targetRecord.skill,
         skillVersion: targetRecord.skill_version ?? null
     });
+    targetRecord.traceThreadId = persistedTraceThreadId || targetRecord.traceThreadId;
 
     const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(targetRecord.framework);
     const storedAgentName = targetRecord.agentName || frameworkPrimaryAgentName;
@@ -2803,6 +2994,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             taskId: targetRecord.task_id,
             query: targetRecord.query,
             framework: targetRecord.framework,
+            traceThreadId: targetRecord.traceThreadId,
+            sourceExecutionId: targetRecord.sourceExecutionId,
+            sourceKind: targetRecord.sourceKind,
+            executionStatus: targetRecord.executionStatus,
             tokens: targetRecord.tokens,
             cost: targetRecord.cost,
             latency: targetRecord.latency,
@@ -2841,6 +3036,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             taskId: targetRecord.task_id,
             query: targetRecord.query,
             framework: targetRecord.framework,
+            traceThreadId: targetRecord.traceThreadId,
+            sourceExecutionId: targetRecord.sourceExecutionId,
+            sourceKind: targetRecord.sourceKind,
+            executionStatus: targetRecord.executionStatus,
             tokens: targetRecord.tokens,
             cost: targetRecord.cost,
             latency: targetRecord.latency,
@@ -2876,6 +3075,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             observedAgents: observedAgentsJson,
         }
     });
+    await reconcileTraceThreadExecutions(targetRecord.traceThreadId);
 
     if (data.upload_id && data.task_id && data.upload_id !== recordId) {
         try {

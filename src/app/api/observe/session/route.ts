@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
-import { db } from '@/lib/storage/prisma';
+import { db, prismaRaw } from '@/lib/storage/prisma';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { NextResponse } from 'next/server';
@@ -9,14 +9,37 @@ import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trac
 
 type ParsedSession = {
     session: any;
-    interactions: any[];
-    langfuseTraceNodes: LangfuseTraceNode[];
-    executionSummary: {
+    execution?: {
+        status?: string;
+        sourceKind?: string;
+        sourceExecutionId?: string;
         latency: number | null;
         tokens: number | null;
         cost: number | null;
         timestamp: Date | null;
-    } | null;
+    };
+    thread?: TraceThreadDto;
+    interactions: any[];
+    langfuseTraceNodes: LangfuseTraceNode[];
+};
+
+type TraceThreadDto = {
+    id: string;
+    sourceKind?: string;
+    previousExecutionId?: string;
+    nextExecutionId?: string;
+    events: Array<{
+        id: string;
+        kind: string;
+        status?: string;
+        sourceTurnId?: string;
+        phaseId?: string;
+        startedAt: string;
+        completedAt?: string;
+        executionId?: string;
+        relatedExecutionId?: string;
+        payload?: Record<string, unknown>;
+    }>;
 };
 
 const SESSION_CACHE_TTL_MS = 45_000;
@@ -27,20 +50,28 @@ const parsedSessionCache = new Map<string, {
     value: ParsedSession;
 }>();
 
-function sessionSignature(session: any, execution: any): string {
+function sessionSignature(
+    session: any,
+    framework: unknown,
+    execution?: Record<string, unknown>,
+    thread?: TraceThreadDto,
+): string {
     const raw = [session?.interactions, session?.langfuseTraceNodes]
         .map(value => typeof value === 'string' ? value : '')
         .join('\n');
-    const executionVersion = [
-        execution?.framework,
-        execution?.latency,
-        execution?.tokens,
-        execution?.cost,
-        execution?.timestamp instanceof Date
-            ? execution.timestamp.getTime()
-            : execution?.timestamp,
-    ].map(value => String(value ?? '')).join(':');
-    return `${executionVersion}:${createHash('sha1').update(raw).digest('base64url')}`;
+    const executionSignature = execution
+        ? JSON.stringify([
+            execution.sourceKind,
+            execution.sourceExecutionId,
+            execution.executionStatus,
+            execution.latency,
+            execution.tokens,
+            execution.cost,
+            execution.timestamp instanceof Date ? execution.timestamp.getTime() : execution.timestamp,
+        ])
+        : '';
+    const threadSignature = thread ? JSON.stringify(thread) : '';
+    return `${String(framework || '')}:${executionSignature}:${createHash('sha1').update(`${raw}\n${threadSignature}`).digest('base64url')}`;
 }
 
 function rememberParsedSession(taskId: string, signature: string, value: ParsedSession): void {
@@ -57,18 +88,79 @@ function rememberParsedSession(taskId: string, signature: string, value: ParsedS
     }
 }
 
-async function loadParsedSession(taskId: string): Promise<ParsedSession | null> {
-    const session = await db.findSessionByTaskId(taskId);
-    if (!session) return null;
+function parsePayload(raw: string | null | undefined): Record<string, unknown> | undefined {
+    if (!raw) return undefined;
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : undefined;
+    } catch {
+        return undefined;
+    }
+}
 
-    const executions = await db.findExecutions(
-        { taskId },
-        { timestamp: 'desc' },
-        { framework: true, latency: true, tokens: true, cost: true, timestamp: true },
-    );
-    const latestExecution = executions?.[0] ?? null;
-    const framework = latestExecution?.framework;
-    const signature = sessionSignature(session, latestExecution);
+async function loadTraceThread(traceThreadId: string | null | undefined, user: string, currentExecutionId: string): Promise<TraceThreadDto | undefined> {
+    if (!traceThreadId || process.env.DB_HOST) return undefined;
+    const thread = await prismaRaw.traceThread.findFirst({
+        where: { id: traceThreadId, user },
+        include: {
+            events: { orderBy: { startedAt: 'asc' } },
+            executions: {
+                orderBy: { timestamp: 'asc' },
+                select: { id: true, taskId: true, sourceExecutionId: true },
+            },
+        },
+    });
+    if (!thread) return undefined;
+    const taskIdByExecutionId = new Map(thread.executions.map((item) => [item.id, item.taskId || item.id]));
+    const currentIndex = thread.executions.findIndex((item) => item.id === currentExecutionId);
+    const previous = currentIndex > 0 ? thread.executions[currentIndex - 1] : undefined;
+    const next = currentIndex >= 0 && currentIndex < thread.executions.length - 1
+        ? thread.executions[currentIndex + 1]
+        : undefined;
+    return {
+        id: thread.id,
+        sourceKind: thread.sourceKind || undefined,
+        previousExecutionId: previous ? previous.taskId || previous.id : undefined,
+        nextExecutionId: next ? next.taskId || next.id : undefined,
+        events: thread.events.map((event) => ({
+            id: event.id,
+            kind: event.kind,
+            status: event.status || undefined,
+            sourceTurnId: event.sourceTurnId || undefined,
+            phaseId: event.phaseId || undefined,
+            startedAt: event.startedAt.toISOString(),
+            completedAt: event.completedAt?.toISOString(),
+            executionId: event.executionId ? taskIdByExecutionId.get(event.executionId) : undefined,
+            relatedExecutionId: event.relatedExecutionId ? taskIdByExecutionId.get(event.relatedExecutionId) : undefined,
+            payload: parsePayload(event.payloadJson),
+        })),
+    };
+}
+
+async function loadParsedSession(taskId: string, user: string): Promise<ParsedSession | null> {
+    const session = await db.findSessionByTaskId(taskId);
+    if (!session || session.user !== user) return null;
+
+    const executions = await db.findExecutions({ taskId, user }, { timestamp: 'desc' }, {
+        id: true,
+        framework: true,
+        latency: true,
+        tokens: true,
+        cost: true,
+        timestamp: true,
+        traceThreadId: true,
+        sourceKind: true,
+        sourceExecutionId: true,
+        executionStatus: true,
+    });
+    const executionRow = executions?.[0];
+    const framework = executionRow?.framework;
+    const thread = executionRow
+        ? await loadTraceThread(executionRow.traceThreadId, user, executionRow.id)
+        : undefined;
+    const signature = sessionSignature(session, framework, executionRow, thread);
     const cached = parsedSessionCache.get(taskId);
     if (cached && cached.signature === signature && cached.expiresAt > Date.now()) {
         return cached.value;
@@ -84,13 +176,16 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
         ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
-    const executionSummary = latestExecution ? {
-        latency: latestExecution.latency ?? null,
-        tokens: latestExecution.tokens ?? null,
-        cost: latestExecution.cost ?? null,
-        timestamp: latestExecution.timestamp ?? null,
-    } : null;
-    const value = { session, interactions, langfuseTraceNodes, executionSummary };
+    const execution = executionRow ? {
+        status: executionRow.executionStatus || undefined,
+        sourceKind: executionRow.sourceKind || undefined,
+        sourceExecutionId: executionRow.sourceExecutionId || undefined,
+        latency: executionRow.latency ?? null,
+        tokens: executionRow.tokens ?? null,
+        cost: executionRow.cost ?? null,
+        timestamp: executionRow.timestamp ?? null,
+    } : undefined;
+    const value = { session, execution, thread, interactions, langfuseTraceNodes };
     rememberParsedSession(taskId, signature, value);
     return value;
 }
@@ -224,18 +319,22 @@ export function toTraceStructureInteractions(interactions: any[]): any[] {
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const taskId = searchParams.get('taskId');
+    const user = searchParams.get('user');
     const view = searchParams.get('view') || 'full';
 
     if (!taskId) {
         return NextResponse.json({ error: 'Missing taskId' }, { status: 400 });
     }
+    if (!user) {
+        return NextResponse.json({ error: 'Missing user' }, { status: 400 });
+    }
 
     try {
-        const parsed = await loadParsedSession(taskId);
+        const parsed = await loadParsedSession(taskId, user);
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
-        const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
+        const { session, execution, thread, interactions, langfuseTraceNodes } = parsed;
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);
@@ -246,6 +345,8 @@ export async function GET(request: Request) {
                 taskId: session.taskId,
                 index,
                 interaction: interactions[index],
+                ...(execution ? { execution } : {}),
+                ...(thread ? { thread } : {}),
             });
         }
 
@@ -258,7 +359,8 @@ export async function GET(request: Request) {
                 startTime: session.startTime.getTime(),
                 interactionCount: interactions.length,
                 interactions: toTraceStructureInteractions(interactions),
-                execution: executionSummary,
+                ...(execution ? { execution } : {}),
+                ...(thread ? { thread } : {}),
                 ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
             });
         }
@@ -267,6 +369,8 @@ export async function GET(request: Request) {
             return NextResponse.json({
                 taskId: session.taskId,
                 interactions,
+                ...(execution ? { execution } : {}),
+                ...(thread ? { thread } : {}),
             });
         }
 
@@ -290,6 +394,8 @@ export async function GET(request: Request) {
             user: session.user,
             startTime: session.startTime.getTime(),
             interactions,
+            ...(execution ? { execution } : {}),
+            ...(thread ? { thread } : {}),
             ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
         });
     } catch (e) {

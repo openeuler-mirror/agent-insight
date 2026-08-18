@@ -30,10 +30,36 @@ function relayStatus(config) {
           reject(new Error(`Relay returned HTTP ${response.statusCode}`));
           return;
         }
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve({ ...JSON.parse(Buffer.concat(chunks).toString("utf8")), connected: true });
       });
     });
     request.on("timeout", () => request.destroy(new Error("Relay status timed out")));
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+function relayDesktopStatus(config) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: "127.0.0.1",
+      port: config.relayPort,
+      path: "/desktop/status",
+      method: "GET",
+      headers: { "x-agent-insight-relay": config.installSecret },
+      timeout: 500,
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        if (response.statusCode !== 200) {
+          reject(new Error(`Relay desktop status returned HTTP ${response.statusCode}`));
+          return;
+        }
+        resolve({ ...JSON.parse(Buffer.concat(chunks).toString("utf8")), connected: true });
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("Relay desktop status timed out")));
     request.on("error", reject);
     request.end();
   });
@@ -57,16 +83,27 @@ async function check(configPath) {
   const codexConfig = await fs.readFile(state.codexConfigPath, "utf8");
   const otelConfigured = codexConfig.includes(OTEL_BEGIN) && codexConfig.includes(OTEL_END);
   const status = await relayStatus(config).catch((error) => ({ connected: false, error: error.message }));
+  const desktopStatus = await relayDesktopStatus(config).catch((error) => ({ connected: false, error: error.message }));
+  const appServerProxyPath = path.join(collectorDir, "app-server-proxy.cjs");
+  const rolloutReaderPath = path.join(collectorDir, "rollout-reader.cjs");
+  const desktopAssetsPresent = await Promise.all([
+    fs.access(appServerProxyPath),
+    fs.access(rolloutReaderPath),
+  ]).then(() => true).catch(() => false);
   return {
     ok: missingHooks.length === 0 &&
       handlerHash === state.handlerSha256 &&
       (otelConfigured || Boolean(state.otelConflict)) &&
-      status.connected === true,
+      status.connected === true &&
+      desktopStatus.connected === true &&
+      desktopAssetsPresent,
     missingHooks,
     handlerHashMatches: handlerHash === state.handlerSha256,
     otelConfigured,
     otelConflict: state.otelConflict,
     relay: status,
+    desktop: desktopStatus,
+    desktopAssetsPresent,
   };
 }
 
@@ -88,4 +125,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { check, relayStatus };
+module.exports = { check, relayStatus, relayDesktopStatus };

@@ -440,3 +440,29 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 - `integrations/qoder-jetbrains/`：JetBrains Plugin SDK 插件、状态栏、设置、IDE marker 和动态卸载清理。
 - `src/lib/ingest/otel/adapters/qoder.ts`：服务端 Qoder OTLP 聚合。
 - `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装卸载、四端启动预算和首 Token 开销验证。
+
+## 九、Codex Desktop 与 App Server 生命周期契约
+
+Codex 的 CLI、IDE、Desktop rollout 和 App Server proxy 必须先归一化为同一套 lifecycle event，再
+进入 `lifecycle-reducer.cjs`。产品来源由 `source-classifier.cjs` 解析，不能用 `source=exec` 或
+`source=vscode` 单独推断产品形态；来源不确定时保留 `unknown`。
+
+- 同一 App Server `turn/steer` 复用原 `sourceExecutionId`，追加 `input_kind=steer` 和 phase；首个
+  input 永远作为 `Execution.query`。
+- Desktop UI 如果证据是 `turn_aborted` 后新的 `task_started + user_message`，必须产生两个
+  Execution；前一个状态为 `interrupted`，线程事件使用 `interrupt_followed_by_execution`，不得假标为
+  同 turn steer。
+- `compacted` 与兼容 `context_compacted` 合并为一个 ThreadEvent。高保真 window/item id 优先；无
+  ID 的 legacy completed 信号只有在同线程、5 秒内存在高保真 compaction 时才复用其 key，否则保留
+  独立但可追溯的兼容事件。
+- rollout `timestamp` 同时支持数值和 ISO-8601 字符串；解析失败才回退采集时刻，避免重放改变事件
+  顺序和幂等键。
+- compaction 使用 `threadOnly` batch，不能创建假 Execution，也不能增加用户 Tool/LLM/Token 或
+  latency；`TraceThreadEvent` 保存 transition、interrupt、steer 和 compaction 的时间线。
+
+实现入口：`scripts/agent-trace-collectors/codex/rollout-reader.cjs`、
+`scripts/agent-trace-collectors/codex/lifecycle-reducer.cjs`、
+`scripts/agent-trace-collectors/codex/app-server-proxy.cjs`、
+`src/lib/ingest/otel/adapters/codex.ts`、`src/lib/storage/data-service.ts` 和
+`src/components/observe/CodexThreadTimeline.tsx`。回归入口为
+`test/codex-desktop-rollout.test.ts`。

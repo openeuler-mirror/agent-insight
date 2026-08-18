@@ -53,13 +53,17 @@ const LEGACY_ASSETS = [
 ]
 
 const BUNDLE_ENTRIES = [
+  "codex/app-server-proxy.cjs",
   "codex/build-vsix.cjs",
   "codex/codex-trace-core.cjs",
   "codex/config-core.cjs",
   "codex/hook-handler.cjs",
   "codex/install.cjs",
+  "codex/lifecycle-reducer.cjs",
   "codex/relay.cjs",
+  "codex/rollout-reader.cjs",
   "codex/self-check.cjs",
+  "codex/source-classifier.cjs",
   "codex/uninstall.cjs",
   "codex/vscode-extension/[Content_Types].xml",
   "codex/vscode-extension/extension.cjs",
@@ -619,7 +623,7 @@ test("setup route escapes forwarded origins for Bash and PowerShell", async () =
   assert.ok(powerShell.includes('https://proxy.example/`$HOME-`$(touch codex-pwn)-``id``-`"quoted`"-`$env:USERPROFILE'))
 })
 
-test("setup serves one deterministic Codex bundle whose digest covers all 14 assets", async () => {
+test("setup serves one deterministic Codex bundle whose digest covers all 18 assets", async () => {
   const bashResponse = await getInstaller(new Request("https://insight.example/api/ingest/setup/codex"))
   const powerShellResponse = await getInstaller(new Request(
     "https://insight.example/api/ingest/setup/codex",
