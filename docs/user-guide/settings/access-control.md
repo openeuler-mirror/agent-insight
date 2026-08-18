@@ -156,6 +156,28 @@ node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
 4. 确认服务端地址与上报路径可达。
 5. 进入链路追踪确认是否已有新 Trace 写入。
 
+### 流程五：接入 Codex CLI 与 VS Code-family 编辑器
+
+1. 确认目标机器安装了兼容的 Codex CLI、Node.js 20 或更高版本。
+2. 以当前 Agent Insight API Key 和服务端地址运行 Codex setup 命令。
+3. 启动 Codex，运行 `/hooks`，逐项核对 Agent Insight handler 的绝对路径并选择
+   Trust。安装器不会代替 Codex 写入信任状态。
+4. 退出并重新启动 Codex，运行
+   `node ~/.agent-insight/collectors/codex/self-check.cjs`。
+5. 对 IDE 场景，确认 `openeuler.agent-insight-codex-trace` 已通过 VSIX 安装到 VS Code、
+   Cursor 或 Windsurf。
+6. 触发一次最小 Codex 任务，在链路追踪中确认 Agent、Tool 和 LLM 节点。
+
+Codex setup 不把 API Key写入 Hook command。凭据和 relay install secret 只保存在权限受限的
+collector config 中。若 `config.toml` 已配置非空 `[otel]` exporter，setup 会保留原配置并
+报告 `otel_conflict`；在明确选择 exporter 策略前，原生 Token/TTFT 数据不会进入 relay。
+安装载荷由 Agent Insight 服务端以单个 ZIP 提供；安装脚本会在解压和执行前核对内嵌的
+SHA-256。摘要不匹配时安装立即停止，不会运行包内的 `install.cjs`。
+
+编辑器 Settings 中的 `cloudAgentId` 是用户手工关联值，事件会标记 `source=user`。只有
+Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台才把它计为自动 Cloud
+关联证据。
+
 ## 维护建议
 
 ### 环境隔离

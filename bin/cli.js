@@ -10,7 +10,7 @@ const commands = {
 }
 
 const INSTALLABLE_FRAMEWORKS = new Set([
-  'opencode', 'openclaw', 'claude', 'codeagent', 'hermes', 'jiuwen', 'codex',
+  'opencode', 'openclaw', 'claude', 'codeagent', 'hermes', 'jiuwen', 'llamaindex', 'qoder', 'trae', 'actrail', 'pi-agent', 'codex',
 ])
 
 function parseOptions(args) {
