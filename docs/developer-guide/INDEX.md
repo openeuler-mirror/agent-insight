@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `37deb502abeab00a29dbac5427d745ddf16ae9fb` (`37deb502`) |
+| Commit | `a5d53a258cbb6041b882faecddd6bb1397ff5f65` (`a5d53a25`) |
 | Branch | `local-integration/codex-full` |
-| Date | 2026-08-18T18:20:24+08:00 |
+| Date | 2026-08-18T18:22:24+08:00 |
 | Author | duanzhoutao |
-| Subject | `fix(integration): repair generated setup array` |
+| Subject | `test(codex): align setup list with official baseline` |
 
-**如何更新：** `git diff 37deb502 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a5d53a25 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 
 ## Documents
