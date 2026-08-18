@@ -42,6 +42,10 @@ const client = require_('../scripts/reliability-client.cjs') as {
   controlUrls: (cfg: Record<string, unknown>) => { websocketUrl: string; pollUrl: string }
   rasRuntimeConfigPath: () => string
   writeRasRuntimeConfig: (snapshot: Record<string, unknown>) => Promise<void>
+  sdNotify: (payload: string) => boolean
+  notifyReady: () => boolean
+  notifyWatchdog: () => boolean
+  WATCHDOG_MS: number
 }
 const installer = require_('../scripts/install-ras-client.js') as {
   CLIENT_SCRIPT: string
@@ -304,6 +308,51 @@ test('client writes the config.json that RAS actually reads', async () => {
     else process.env.AGENT_INSIGHT_RAS_HOME = prev
     fs.rmSync(rasHome, { recursive: true, force: true })
   }
+})
+
+test('systemd unit uses Type=notify with StartLimit in Unit section', () => {
+  assert.equal(typeof installer.writeSystemdUnit, 'function')
+  const unitPath = installer.writeSystemdUnit()
+  const unit = fs.readFileSync(unitPath, 'utf8')
+  assert.match(unit, /^\[Unit\][\s\S]*StartLimitIntervalSec=300[\s\S]*StartLimitBurst=5[\s\S]*\[Service\]/m)
+  assert.match(unit, /Type=notify/)
+  assert.match(unit, /WatchdogSec=30s/)
+  assert.doesNotMatch(
+    unit,
+    /\[Service\][\s\S]*StartLimitIntervalSec/,
+    'StartLimit* 不得写在 [Service]',
+  )
+})
+
+test('sd_notify READY precedes capabilities and watchdog is faster than WatchdogSec/2', () => {
+  assert.equal(typeof client.sdNotify, 'function')
+  assert.equal(typeof client.notifyReady, 'function')
+  assert.equal(typeof client.notifyWatchdog, 'function')
+  assert.ok(client.WATCHDOG_MS > 0 && client.WATCHDOG_MS <= 15_000)
+
+  const prev = process.env.NOTIFY_SOCKET
+  delete process.env.NOTIFY_SOCKET
+  try {
+    assert.equal(client.sdNotify('READY=1'), false)
+  } finally {
+    if (prev === undefined) delete process.env.NOTIFY_SOCKET
+    else process.env.NOTIFY_SOCKET = prev
+  }
+
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'reliability-client.cjs'),
+    'utf8',
+  )
+  const mainBody = /async function main\(\) \{[\s\S]*?\n\}/.exec(src)?.[0] || ''
+  assert.match(mainBody, /notifyReady\(\)/)
+  assert.match(mainBody, /setInterval\(notifyWatchdog,\s*WATCHDOG_MS\)/)
+  const readyAt = mainBody.indexOf('notifyReady()')
+  const capsAt = mainBody.indexOf('reportCapabilities(')
+  assert.ok(readyAt >= 0 && capsAt > readyAt, 'READY 必须早于 reportCapabilities')
+  assert.doesNotMatch(mainBody, /await reportCapabilities/)
+  // Node dgram 无 unix_dgram；必须经 systemd-notify 且带本进程 pid。
+  assert.match(src, /systemd-notify/)
+  assert.match(src, /--pid=\$\{process\.pid\}/)
 })
 
 test('service points at a stable runtime path, never a temp extraction dir', () => {

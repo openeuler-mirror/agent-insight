@@ -342,11 +342,13 @@ function writeSystemdUnit() {
   const unitPath = systemdUnitPath()
   fs.mkdirSync(path.dirname(unitPath), { recursive: true })
   const nodeBin = process.execPath
-  // WatchdogSec 配合客户端心跳里的 sd_notify(WATCHDOG=1)：
-  // 进程假死（心跳停但进程还在）时由 systemd 重启，这是客户端自身做不到的。
+  // Type=notify 要求客户端先 sd_notify(READY=1)；WatchdogSec 再收 WATCHDOG=1。
+  // StartLimit* 必须在 [Unit]：写在 [Service] 会被较新 systemd 忽略。
   const unit = `[Unit]
 Description=Agent Insight Reliability Client
 After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=notify
@@ -355,8 +357,6 @@ ExecStart=${nodeBin} ${CLIENT_SCRIPT}
 Environment=AGENT_INSIGHT_SUPERVISOR=systemd
 Restart=on-failure
 RestartSec=5s
-StartLimitIntervalSec=300
-StartLimitBurst=5
 WatchdogSec=30s
 StandardOutput=append:${path.join(CLIENT_HOME, 'client.log')}
 StandardError=append:${path.join(CLIENT_HOME, 'client.log')}
