@@ -2250,9 +2250,9 @@ export async function GET(request: Request) {
             noninteractive,
             forceNoKey,
         );
-        return new NextResponse(script, {
+        return new NextResponse('\uFEFF' + script, {
             headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Type': 'application/x-powershell; charset=utf-8',
             },
         });
     } else {
