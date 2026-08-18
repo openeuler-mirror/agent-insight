@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e09027716a609e011c7c15b8210c5ccea06099ee` (`e0902771`) |
+| Commit | `ae6f92eab4e8c39a84383f53772693a13bbe53f1` (`ae6f92ea`) |
 | Branch | `local-integration/codex-full` |
-| Date | 2026-08-18T18:27:42+08:00 |
+| Date | 2026-08-18T18:32:53+08:00 |
 | Author | duanzhoutao |
-| Subject | `fix(integration): close official setup framework list` |
+| Subject | `fix(integration): restore trace duration metric` |
 
-**如何更新：** `git diff e0902771 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff ae6f92ea HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 
 ## Documents
