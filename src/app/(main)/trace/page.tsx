@@ -1571,10 +1571,10 @@ function TraceDetailView({
                         interactions={session.interactions || []}
                         framework={execution.framework}
                         langfuseTraceNodes={session.langfuseTraceNodes}
+                        executionDurationMs={latency}
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
-                        rootSessionId={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
                     />
                 ) : (

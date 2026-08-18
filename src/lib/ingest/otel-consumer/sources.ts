@@ -15,11 +15,19 @@ import {
 } from '@/lib/ingest/codeagent-otel/spool';
 import { getOtelTraceSpoolDir, listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
 
-export type SpoolAggregationResult = {
-  sessionId: string;
-  record: ExecutionRecord | null;
-  eventCount: number;
-};
+export type SpoolAggregationResult =
+  | {
+    sessionId: string;
+    record: ExecutionRecord;
+    eventCount: number;
+    disposition: 'persisted';
+  }
+  | {
+    sessionId: string;
+    record: null;
+    eventCount: number;
+    disposition: 'retry-later' | 'discard';
+  };
 
 export type SpoolSource = {
   id: string;
