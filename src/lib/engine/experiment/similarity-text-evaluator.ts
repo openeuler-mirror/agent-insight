@@ -6,11 +6,21 @@
 import { callJudgeLlm } from './judge-llm';
 import { SimilarityJudgeParseError, extractJson, str } from './similarity-preset-evaluators'
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint } from '../../evaluators/eval-output';
+import type { SimilarityTextRunConfig } from '../../evaluators/evaluator-run-config';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 
 
-/** 文本相似度合格阈值：score >= 80 -> PASS，否则 FAIL（暂时先写死）。 */
-export const TEXT_SIMILARITY_THRESHOLD = 80;
+/** 文本相似度默认合格阈值 */
+export const DEFAULT_THRESHOLD = 80;
+
+export function resolveTextSimilarityThreshold(
+  config: SimilarityTextRunConfig | null | undefined,
+): number {
+  const raw = config?.threshold;
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  if (Number.isFinite(n) && n >= 0 && n <= 100) return Math.round(n);
+  return DEFAULT_THRESHOLD;
+}
 
 /** 五档锚定（离散判断 + 确定性汇总） */
 const SIMILARITY_LEVELS: Record<string, { score: number; label: string }> = {
@@ -52,6 +62,7 @@ function buildSimilarityPoints(
   reason: string,
   passed: boolean,
   deviation: number,
+  threshold: number,
 ): EvalPoint[] {
   return [
     {
@@ -61,17 +72,21 @@ function buildSimilarityPoints(
       evidence: reason ? { md: reason } : undefined,
     },
     {
-      label: `阈值判定（≥${TEXT_SIMILARITY_THRESHOLD} 通过）`,
+      label: `阈值判定（≥${threshold} 通过）`,
       score: passed ? 100 : 0,
       status: passed ? 'covered' : 'missing',
       evidence: {
-        md: `${passed ? 'PASS' : 'FAIL'}：相似度 ${levelDef.score} ${passed ? '≥' : '<'} ${TEXT_SIMILARITY_THRESHOLD}，偏差 ${deviation >= 0 ? '+' : ''}${deviation}`,
+        md: `${passed ? 'PASS' : 'FAIL'}：相似度 ${levelDef.score} ${passed ? '≥' : '<'} ${threshold}，偏差 ${deviation >= 0 ? '+' : ''}${deviation}`,
       },
     },
   ];
 }
 
-export async function runTextSimilarity(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
+export async function runTextSimilarity(
+  user: string,
+  ctx: FaithfulPresetContext,
+  config?: SimilarityTextRunConfig | null,
+): Promise<EvaluatorOutput> {
   const generated = (ctx.actualOutput ?? '').trim();
   const reference = (ctx.referenceOutput ?? '').trim();
   if (!generated || !reference) {
@@ -101,20 +116,21 @@ export async function runTextSimilarity(user: string, ctx: FaithfulPresetContext
   }
   const reason = str(raw.reason).trim();
   const score = levelDef.score;
-  const passed = score >= TEXT_SIMILARITY_THRESHOLD;
-  const deviation = score - TEXT_SIMILARITY_THRESHOLD;
+  const threshold = resolveTextSimilarityThreshold(config);
+  const passed = score >= threshold;
+  const deviation = score - threshold;
 
   const summary = passed
-    ? `生成与参考文本语义${levelDef.label}（相似度 ${score}），达到阈值 ${TEXT_SIMILARITY_THRESHOLD}（偏差 +${deviation}）——PASS。`
-    : `生成与参考文本${levelDef.label}（相似度 ${score}），未达阈值 ${TEXT_SIMILARITY_THRESHOLD}（偏差 ${deviation}）——FAIL。`;
+    ? `生成与参考文本语义${levelDef.label}（相似度 ${score}），达到阈值 ${threshold}（偏差 +${deviation}）——PASS。`
+    : `生成与参考文本${levelDef.label}（相似度 ${score}），未达阈值 ${threshold}（偏差 ${deviation}）——FAIL。`;
 
   return normalizeEvaluatorOutput({
     verdict: passed ? 'pass' : 'fail',
     summary,
     score,
-    points: buildSimilarityPoints(levelDef, reason, passed, deviation),
+    points: buildSimilarityPoints(levelDef, reason, passed, deviation, threshold),
     evidence: reason
-      ? { md: `档位：${levelDef.label}（${score} 分）\n\n原因：${reason}\n\n阈值判定（≥${TEXT_SIMILARITY_THRESHOLD}）：${passed ? 'PASS' : 'FAIL'}，偏差 ${deviation >= 0 ? '+' : ''}${deviation}` }
+      ? { md: `档位：${levelDef.label}（${score} 分）\n\n原因：${reason}\n\n阈值判定（≥${threshold}）：${passed ? 'PASS' : 'FAIL'}，偏差 ${deviation >= 0 ? '+' : ''}${deviation}` }
       : undefined,
   });
 }

@@ -7,6 +7,7 @@
  */
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import { JudgeOutputParseError } from '../../evaluators/judge-assembly';
+import type { SimilarityTextRunConfig } from '../../evaluators/evaluator-run-config';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 import { runTextSimilarity } from './similarity-text-evaluator'
 import { runAnswerMatch } from './similarity-answer-match-evaluator'
@@ -59,8 +60,9 @@ export async function runSimilarityPreset(
   id: SimilarityPresetId,
   user: string,
   ctx: FaithfulPresetContext,
+  config?: SimilarityTextRunConfig | null,
 ): Promise<EvaluatorOutput> {
-  if (id === 'preset-similarity-text') return runTextSimilarity(user, ctx);
+  if (id === 'preset-similarity-text') return runTextSimilarity(user, ctx, config);
   return runAnswerMatch(user, ctx);
 }
 

@@ -4,7 +4,7 @@
  * 注入点在 setJudgeLlmCallerForTest（judge 边界），测试完整走：
  * 提取 JSON → 档位映射 / 信息点归组 → 代码层匹配 → 计分汇总。
  *
- * 文本相似度：LLM 五档判定 → 固定分数；阈值写死 80。
+ * 文本相似度：LLM 五档判定 → 固定分数；合格阈值可由实验级运行配置覆盖（默认 80）。
  * 客观答案匹配：信息点提取(LLM) → 代码层精确匹配(数值/专有名词) → LLM 层语义判同 → 加权扣分。
  */
 import { afterEach, describe, it } from 'node:test';
@@ -13,8 +13,10 @@ import { setJudgeLlmCallerForTest } from '../src/lib/engine/experiment/judge-llm
 import type { FaithfulPresetContext } from '../src/lib/engine/experiment/faithful-preset-evaluators';
 import {
   runTextSimilarity,
-  TEXT_SIMILARITY_THRESHOLD,
+  DEFAULT_THRESHOLD,
+  resolveTextSimilarityThreshold,
 } from '../src/lib/engine/experiment/similarity-text-evaluator';
+import type { SimilarityTextRunConfig } from '../src/lib/evaluators/evaluator-run-config';
 import {
   runAnswerMatch,
   transferChineseNumber,
@@ -23,7 +25,11 @@ import {
 
 const USER = 'test';
 
-function simCtx(actualOutput: string, referenceOutput: string | null, caseInput = ''): FaithfulPresetContext {
+function simCtx(
+  actualOutput: string,
+  referenceOutput: string | null,
+  caseInput = '',
+): FaithfulPresetContext {
   return {
     caseInput,
     actualOutput,
@@ -158,8 +164,33 @@ describe('文本相似度评估器', () => {
     assert.strictEqual(r.verdict, 'pass');
   });
 
-  it('阈值常量写死 80', () => {
-    assert.strictEqual(TEXT_SIMILARITY_THRESHOLD, 80);
+  it('阈值默认 80（未配置时回退）', () => {
+    assert.strictEqual(DEFAULT_THRESHOLD, 80);
+    assert.strictEqual(resolveTextSimilarityThreshold(null), 80);
+    assert.strictEqual(resolveTextSimilarityThreshold(undefined), 80);
+    assert.strictEqual(resolveTextSimilarityThreshold({ threshold: 150 }), 80); // 越界回退
+    assert.strictEqual(
+      resolveTextSimilarityThreshold({ threshold: 'abc' } as unknown as SimilarityTextRunConfig),
+      80,
+    ); // 非法回退
+  });
+
+  it('阈值可配置：threshold=60 → partially_similar(65) PASS（默认 80 下该档 FAIL）', async () => {
+    inject(JSON.stringify({ level: 'partially_similar', reason: '部分语义重合' }));
+    const r = await runTextSimilarity(USER, simCtx('a', 'b'), { threshold: 60 });
+    assert.strictEqual(r.score, 65);
+    assert.strictEqual(r.verdict, 'pass');
+    assert.match(((r.points![1].evidence as { md?: string } | undefined)?.md ?? ''), /PASS/);
+    assert.match(((r.points![1].evidence as { md?: string } | undefined)?.md ?? ''), /≥ 60|≥60/);
+  });
+
+  it('阈值可配置：threshold=90 → mostly_similar(85) FAIL（默认 80 下该档 PASS）', async () => {
+    inject(JSON.stringify({ level: 'mostly_similar', reason: '高度相似' }));
+    const r = await runTextSimilarity(USER, simCtx('a', 'b'), { threshold: 90 });
+    assert.strictEqual(r.score, 85);
+    assert.strictEqual(r.verdict, 'fail');
+    assert.match(((r.points![1].evidence as { md?: string } | undefined)?.md ?? ''), /FAIL/);
+    assert.match(((r.points![1].evidence as { md?: string } | undefined)?.md ?? ''), /< 90/);
   });
 
   it('LLM 返回未知档位 → 抛解析错误（可重试）', async () => {

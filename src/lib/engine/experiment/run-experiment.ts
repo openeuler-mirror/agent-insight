@@ -400,7 +400,12 @@ async function evaluateOnce(
     return runHallucinationPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isSimilarityPresetId(evaluatorId)) {
-    return runSimilarityPreset(evaluatorId, user, runtime.faithfulCtx);
+    return runSimilarityPreset(
+      evaluatorId,
+      user,
+      runtime.faithfulCtx,
+      evaluatorConfig && 'threshold' in evaluatorConfig ? evaluatorConfig : undefined,
+    );
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);

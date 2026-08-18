@@ -1,9 +1,11 @@
 export const EXACT_MATCH_EVALUATOR_ID = 'preset-text-exact-match' as const;
 export const ENTITY_F1_EVALUATOR_ID = 'preset-text-entity-f1' as const;
+export const SIMILARITY_TEXT_EVALUATOR_ID = 'preset-similarity-text' as const;
 
 export const CONFIGURABLE_TEXT_EVALUATOR_IDS = [
   EXACT_MATCH_EVALUATOR_ID,
   ENTITY_F1_EVALUATOR_ID,
+  SIMILARITY_TEXT_EVALUATOR_ID,
 ] as const;
 
 export type ConfigurableTextEvaluatorId = (typeof CONFIGURABLE_TEXT_EVALUATOR_IDS)[number];
@@ -26,9 +28,14 @@ export interface EntityF1RunConfig {
   whitespaceNormalization: boolean;
 }
 
+export interface SimilarityTextRunConfig {
+  threshold: number;
+}
+
 export interface EvaluatorRunConfigMap {
   [EXACT_MATCH_EVALUATOR_ID]?: ExactMatchRunConfig;
   [ENTITY_F1_EVALUATOR_ID]?: EntityF1RunConfig;
+  [SIMILARITY_TEXT_EVALUATOR_ID]?: SimilarityTextRunConfig;
 }
 
 interface StoredEvaluatorRunConfigsV1 {
@@ -50,6 +57,10 @@ export const DEFAULT_ENTITY_F1_RUN_CONFIG: Readonly<EntityF1RunConfig> = Object.
   caseSensitive: true,
   widthNormalization: false,
   whitespaceNormalization: false,
+});
+
+export const DEFAULT_SIMILARITY_TEXT_RUN_CONFIG: Readonly<SimilarityTextRunConfig> = Object.freeze({
+  threshold: 80,
 });
 
 export class EvaluatorRunConfigValidationError extends Error {
@@ -189,6 +200,22 @@ export function normalizeEntityF1RunConfig(value: unknown): EntityF1RunConfig {
   };
 }
 
+export function normalizeSimilarityTextRunConfig(value: unknown): SimilarityTextRunConfig {
+  if (value === undefined || value === null) return { ...DEFAULT_SIMILARITY_TEXT_RUN_CONFIG };
+  if (!isPlainObject(value)) {
+    throw new EvaluatorRunConfigValidationError(`${SIMILARITY_TEXT_EVALUATOR_ID} 配置必须是对象`);
+  }
+  assertKnownFields(SIMILARITY_TEXT_EVALUATOR_ID, value, ['threshold']);
+  const raw = value.threshold ?? DEFAULT_SIMILARITY_TEXT_RUN_CONFIG.threshold;
+  const threshold = Number(raw);
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+    throw new EvaluatorRunConfigValidationError(
+      `${SIMILARITY_TEXT_EVALUATOR_ID}.threshold 必须是 0 到 100 之间的数`,
+    );
+  }
+  return { threshold: Math.round(threshold) };
+}
+
 export function normalizeEvaluatorRunConfigs(
   value: unknown,
   selectedEvaluatorIds: readonly string[],
@@ -214,6 +241,9 @@ export function normalizeEvaluatorRunConfigs(
   }
   if (selected.has(ENTITY_F1_EVALUATOR_ID)) {
     configs[ENTITY_F1_EVALUATOR_ID] = normalizeEntityF1RunConfig(raw[ENTITY_F1_EVALUATOR_ID]);
+  }
+  if (selected.has(SIMILARITY_TEXT_EVALUATOR_ID)) {
+    configs[SIMILARITY_TEXT_EVALUATOR_ID] = normalizeSimilarityTextRunConfig(raw[SIMILARITY_TEXT_EVALUATOR_ID]);
   }
   return configs;
 }
@@ -283,6 +313,10 @@ export function summarizeEvaluatorRunConfig(
       normalized.widthNormalization ? '统一全半角' : null,
     ].filter(Boolean);
     return [modes[normalized.matchMode], ...normalization].join(' · ');
+  }
+  if (id === SIMILARITY_TEXT_EVALUATOR_ID) {
+    const normalized = normalizeSimilarityTextRunConfig(config);
+    return `合格阈值 ${normalized.threshold}`;
   }
   return null;
 }

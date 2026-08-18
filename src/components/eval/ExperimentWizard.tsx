@@ -47,9 +47,7 @@ import {
   isConfigurableTextEvaluatorId,
   summarizeEvaluatorRunConfig,
   type ConfigurableTextEvaluatorId,
-  type EntityF1RunConfig,
   type EvaluatorRunConfigMap,
-  type ExactMatchRunConfig,
 } from '@/lib/evaluators/evaluator-run-config';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
@@ -3289,7 +3287,7 @@ export function ExperimentWizard({
             onOpenChange={(open) => {
               if (!open) setConfiguringEvaluatorId(null);
             }}
-            onSave={(id, config: ExactMatchRunConfig | EntityF1RunConfig) => {
+            onSave={(id, config) => {
               setEvaluatorConfigs((prev) => ({ ...prev, [id]: config }));
             }}
           />

@@ -566,7 +566,7 @@ export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-similarity-text',
     name: '文本相似度',
-    description: '调用 LLM Judge 从语义层面衡量生成文本与参考文本的相似度。',
+    description: '调用 LLM Judge 从语义层面衡量生成文本与参考文本的相似度；合格阈值可在创建实验时按实验配置（默认 80）。',
     evaluatorType: 'LLM',
     source: 'preset',
     targetTypes: ['结果'],
