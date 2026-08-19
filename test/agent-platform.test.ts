@@ -39,7 +39,18 @@ test('Agent management exposes Codex platform filters', () => {
     'utf8',
   );
 
-  assert.match(page, /type PlatformFilter = 'all' \| 'opencode' \| 'openclaw' \| 'hermes' \| 'codex';/);
+  assert.match(page, /type PlatformFilter = 'all' \| 'opencode' \| 'openclaw' \| 'hermes' \| 'codex'/);
   assert.match(page, /value === 'openclaw' \|\| value === 'hermes' \|\| value === 'codex'/);
   assert.match(page, /\{ value: 'codex', label: 'codex' \}/);
+});
+
+test('Agent management recognizes Pi Agent as a page platform filter', () => {
+  const page = fs.readFileSync(
+    path.join(process.cwd(), 'src', 'app', '(main)', 'agents', 'page.tsx'),
+    'utf8',
+  );
+
+  assert.match(page, /type PlatformFilter = 'all' \| 'opencode' \| 'openclaw' \| 'hermes' \| 'codex' \| 'pi-agent';/);
+  assert.match(page, /value === 'pi-agent'/);
+  assert.match(page, /\{ value: 'pi-agent', label: 'pi-agent' \}/);
 });
