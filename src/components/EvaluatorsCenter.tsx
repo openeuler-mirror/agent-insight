@@ -67,7 +67,7 @@ const systemPromptPlaceholder = `请编写评估器的 system prompt。可引用
 {{reference_output}}：预期输出
 {{trajectory}}：trace 轨迹
 
-这些字段都不是必填；目前仅支持以上四个变量。评估器最终需要输出 score 和 reason。`;
+这些字段都不是必填；目前仅支持以上四个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
 
 const blankLlmDraft = (): LlmEvaluatorDraft => ({
   name: '',
@@ -291,7 +291,7 @@ export default function EvaluatorsCenter() {
       objectives: ['任务完成', '内容质量'],
       scenarios: ['Agent通用评测'],
       runMode: 'LLM Judge',
-      scoreRange: '0-1',
+      scoreRange: '0-100',
       popularity: 0,
       mappedMetrics: llmConfig.model ? ['LLM 评测', llmConfig.model] : ['LLM 评测'],
       status: 'draft',
@@ -699,7 +699,7 @@ function EvaluatorCardView({
       </div>
 
       <div style={{ marginTop: 'auto' }}>
-        <MiniMeta label="评分" value={card.scoreRange} />
+        <MiniMeta label="评分" value={card.source === 'custom' ? '0-100' : card.scoreRange} />
       </div>
 
       {/* 可执行评估器：单独一行显示当前会用什么模型，带「修改」链接 */}
@@ -1127,7 +1127,7 @@ function LlmEvaluatorCreatePanel({
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.65 }}>
           <strong style={{ color: 'var(--foreground)' }}>得分：</strong>
-          最终须给出 0.0～1.0 的数值型分数：1.0 表示完全符合标准，0.0 表示完全不符合。
+          最终须给出 0～100 的数值型分数：100 表示完全符合标准，0 表示完全不符合。
         </p>
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.65 }}>
           <strong style={{ color: 'var(--foreground)' }}>原因：</strong>
