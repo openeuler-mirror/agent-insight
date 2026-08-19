@@ -48,6 +48,7 @@ test('setup and CLI retain upstream collectors and reliability installers', () =
   }
   assert.match(autoSetup, /install_agent_insight_ras/)
   assert.match(setup, /install_agent_insight_client/)
+  assert.match(setup, /\$INSTALL_XIAOO" = "false"[\s\S]*\$INSTALL_QWENCODE" = "false"/)
   assert.match(cli, /install \[--frameworks <comma-list>\]/)
   const installableFrameworks = /const INSTALLABLE_FRAMEWORKS = new Set\(\[([\s\S]*?)\]\)/.exec(cli)?.[1] || ''
   for (const framework of ['xiaoo', 'qwencode', 'codex', 'pi-agent']) {
@@ -55,4 +56,11 @@ test('setup and CLI retain upstream collectors and reliability installers', () =
   }
   assert.match(cli, /install-ras/)
   assert.match(cli, /install-fault-injection/)
+})
+
+test('trace detail renders persisted millisecond latency without multiplying it again', () => {
+  const tracePage = read('src/app/(main)/trace/page.tsx')
+
+  assert.match(tracePage, /value=\{formatDurationMs\(latency\)\}/)
+  assert.doesNotMatch(tracePage, /value=\{formatLatencySeconds\(latency\)\}/)
 })

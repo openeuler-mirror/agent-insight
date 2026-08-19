@@ -65,7 +65,7 @@ import { TruncateText } from '@/components/text/TruncateText';
 import { RelativeTime } from '@/components/text/RelativeTime';
 import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
-import { formatDurationMs, formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs } from '@/lib/latency-format';
 import { getAgentDisplayName } from '@/lib/engine/observability/agent-registration';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
@@ -1583,7 +1583,7 @@ function TraceDetailView({
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
                 )}
                 {typeof latency === 'number' && latency > 0 && (
-                    <MetricPill label={t('tracePage.metricDuration')} value={formatLatencySeconds(latency)} />
+                    <MetricPill label={t('tracePage.metricDuration')} value={formatDurationMs(latency)} />
                 )}
                 {typeof cost === 'number' && cost > 0 && (
                     <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />
