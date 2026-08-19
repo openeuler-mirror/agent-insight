@@ -349,8 +349,7 @@ function generateBashScript(
         'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then',TALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ]; then',
->>>>>>> master
+        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
