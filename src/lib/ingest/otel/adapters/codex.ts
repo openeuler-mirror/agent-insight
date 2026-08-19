@@ -946,10 +946,23 @@ export function aggregateCodexTraceEvents(
 
   const delegated = ordered.some((event) =>
     attrs(event)['codex.delegated.session'] === 'true');
+  // Codex 内部会话（任务标题生成、建议生成、worker 系统提示词等）以根 agent
+  // input 出现但没有任何真实工作。只凭根 input/输出会把这些内部会话当成用户
+  // 任务；必须保留"有真实工作（LLM/Tool/Skill/子 Agent）或生命周期执行信号"
+  // 的可见执行。没有工作、也没有生命周期、且根 input 是 Codex 内部系统提示词
+  // 的会话不生成可见执行记录。
+  const INTERNAL_ROOT_INPUT = /(?:You are a helpful assistant|You are in a fork of an existing Codex thread|You are an expert at upholding safety|hyperpersonalized suggestions|Generate a concise UI title)/i;
+  const hasWork = llmEvents.length > 0 || toolEvents.length > 0 ||
+    invokedSkills.length > 0 || subagentEvents.length > 0;
+  const hasLifecycleExecution = rootEvents.some((event) =>
+    attrs(event)['agent.insight.lifecycle'] === 'execution');
   const hasMeaningfulRootSignal = rootEvents.some((event) =>
     Boolean(eventInput(event) || eventOutput(event)));
-  if (!hasMeaningfulRootSignal && llmEvents.length === 0 && toolEvents.length === 0 &&
-    invokedSkills.length === 0 && subagentEvents.length === 0) {
+  const internalOnlyRoot = rootEvents.some((event) => {
+    const input = eventInput(event);
+    return Boolean(input) && INTERNAL_ROOT_INPUT.test(input);
+  });
+  if (!hasWork && !hasLifecycleExecution && (!hasMeaningfulRootSignal || internalOnlyRoot)) {
     if (!traceThread?.events?.length) return null;
     return {
       task_id: `codex:${sourceThreadId}:thread-events`,
