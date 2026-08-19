@@ -18,7 +18,7 @@ test("buildRasTaskSummaries: abort + action_result ok → recovery success", () 
       severity: "high",
       summary: "loop",
       actionTypes: null,
-      payloadJson: JSON.stringify({ evidence: { detection_level: "L1" } }),
+      payloadJson: JSON.stringify({ evidence: { mode: "suffix_cycle" } }),
       ts,
     },
     {
@@ -47,7 +47,6 @@ test("buildRasTaskSummaries: abort + action_result ok → recovery success", () 
   assert.equal(s.recoveryStarted, true)
   assert.equal(s.recoveryOutcome, "success")
   assert.equal(s.abortedStream, true)
-  assert.equal(s.detectionLevel, "L1")
 })
 
 test("buildRasTaskSummaries: abort without action_result → recovery unknown", () => {

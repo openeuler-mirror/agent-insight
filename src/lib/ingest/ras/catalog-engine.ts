@@ -25,7 +25,6 @@ export type RasCatalogSubmode = {
   parent: { zh: string; en: string }
   subMode: { zh: string; en: string }
   anomalyKind: string
-  detectionLevel: 'L1' | 'L2' | 'L3' | null
   severities: string[]
   detects: { zh: string; en: string }
   recoverySummary: { zh: string; en: string }

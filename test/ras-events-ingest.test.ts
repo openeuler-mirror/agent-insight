@@ -137,7 +137,7 @@ test("dedupeRasEvents uses deliveryId without collapsing equal occurrences", () 
     severity: "high",
     summary: "same payload",
     actionTypes: "abort_stream",
-    payloadJson: JSON.stringify({ evidence: { detection_level: "L1" } }),
+    payloadJson: JSON.stringify({ evidence: { mode: "suffix_cycle" } }),
   }
   const rows = dedupeRasEvents([
     { ...base, id: "first", deliveryId: "delivery-1", ts: new Date("2026-07-29T11:31:09.398Z") },
@@ -214,7 +214,7 @@ test("buildRasTraceMarkers preserves recovery prompt content and anchored result
       summary: "loop",
       actionTypes: "abort_stream,emit_notice,push_steering",
       payloadJson: JSON.stringify({
-        evidence: { detection_level: "L1" },
+        evidence: { mode: "suffix_cycle" },
         actions: [
           { type: "abort_stream" },
           { type: "emit_notice", message: "notice body" },

@@ -922,21 +922,13 @@ class LlmThinkingLoopDetector:
         evidence: dict[str, Any],
     ) -> Anomaly:
         kind_value = getattr(kind, "value", kind)
-        payload = dict(evidence)
-        mode = str(payload.get("mode") or "")
-        if not payload.get("detection_level") and mode:
-            for sm in PRESENTATION_LLM_THINKING_LOOP.submodes:
-                keys = sm.runtime_keys or {}
-                if keys.get("mode") == mode and sm.detection_level:
-                    payload["detection_level"] = sm.detection_level
-                    break
         return Anomaly(
             detector="llm_thinking_loop",
             kind=str(kind_value),
             severity=severity,
             member_name=member,
-            summary=f"{kind_value} ({payload.get('mode', '?')})",
-            evidence=payload,
+            summary=f"{kind_value} ({evidence.get('mode', '?')})",
+            evidence=evidence,
         )
 
 
@@ -1022,7 +1014,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
                 "en": "Output crash — exact literal loop",
             },
             anomaly_kind="llm_thinking_loop",
-            detection_level="L1",
             severities=("low",),
             detects={
                 "zh": "检测 LLM 输出末尾的严格周期重复（字面死循环）。",
@@ -1039,7 +1030,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
             parent=_PARENT["thinking_loop"],
             sub_mode={"zh": "逻辑死循环", "en": "Logical dead loop"},
             anomaly_kind="llm_thinking_loop",
-            detection_level="L2",
             severities=("medium",),
             detects={
                 "zh": "检测输出中高度相似的分句/模板循环。",
@@ -1059,7 +1049,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
                 "en": "Plan-execution semantic judge",
             },
             anomaly_kind="llm_thinking_dead_loop",
-            detection_level="L3",
             severities=("high",),
             detects={
                 "zh": (
