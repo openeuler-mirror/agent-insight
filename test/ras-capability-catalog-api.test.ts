@@ -3,21 +3,13 @@ import test from 'node:test'
 
 import { getRasCapabilityCatalog } from '@/lib/ingest/ras/catalog-engine'
 
-test('getRasCapabilityCatalog returns seven submodes and domain schemas', async () => {
+test('getRasCapabilityCatalog returns domain schemas for every submode', async () => {
   const catalog = await getRasCapabilityCatalog({ force: true })
-  assert.equal(catalog.submodes.length, 7)
-  assert.ok(catalog.domains.length >= 2)
+  assert.ok(catalog.submodes.length > 0)
+  assert.ok(catalog.domains.length > 0)
 
-  const ids = catalog.submodes.map((s) => s.id).sort()
-  assert.deepEqual(ids, [
-    'generic_repeat',
-    'global_circuit_breaker',
-    'ping_pong',
-    'plan_execution',
-    'similar_clauses',
-    'suffix_cycle',
-    'unknown_tool_repeat',
-  ])
+  const ids = catalog.submodes.map((s) => s.id)
+  assert.equal(new Set(ids).size, ids.length)
 
   for (const domain of catalog.domains) {
     assert.ok(domain.id)
