@@ -552,11 +552,11 @@ function LangfuseEnvCard({
 function DocsPanel({ locale }: { locale: string }) {
     const isZh = locale === 'zh';
     const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: '客户端高级配置', href: '#' },
         { label: '常见接入问题排查', href: '#' },
     ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: 'User manual', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: 'Advanced client configuration', href: '#' },
         { label: 'Troubleshooting installation', href: '#' },
     ];
