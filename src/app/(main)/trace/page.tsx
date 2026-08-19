@@ -1478,14 +1478,7 @@ function TraceDetailView({
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
                 )}
                 {typeof latency === 'number' && latency > 0 && (
-                    // Never echo credentials into application logs. An explicitly supplied
-                    // key is an authentication attempt, so a mismatch must not fall back to
-                    // resource-level user attribution.
-                    console.warn('[OTel] Rejected trace ingest: invalid x-witty-api-key');
-                    return NextResponse.json(
-                      { error: 'Invalid x-witty-api-key' },
-                      { status: 401 },
-                    );
+                    <MetricPill label={t('tracePage.metricDuration')} value={formatDurationMs(latency)} />
                 )}
                 {typeof cost === 'number' && cost > 0 && (
                     <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />

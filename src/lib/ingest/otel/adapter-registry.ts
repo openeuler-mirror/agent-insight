@@ -7,7 +7,7 @@ import { llamaIndexOtelTraceAdapter } from './adapters/llamaindex';
 import { piAgentOtelTraceAdapter } from './adapters/pi-agent';
 import { qoderOtelTraceAdapter } from './adapters/qoder';
 import { codexOtelTraceAdapter } from './adapters/codex';
-import { qwenCodeOtelTraceAdapter } from './adapters/qwencode';r
+import { qwenCodeOtelTraceAdapter } from './adapters/qwencode';
 import type { OtelTraceAdapter } from './adapters/types';
 import type { OtelTraceEvent } from './types';
 

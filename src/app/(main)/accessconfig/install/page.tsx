@@ -47,7 +47,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'pi-agent', label: 'Pi Agent' },
     { value: 'qwencode', label: 'Qwen Code' },
     { value: 'codex', label: 'Codex' },
-
+];
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
