@@ -75,10 +75,8 @@ export function dedupeRasEvents<T extends RasEventForDedupe>(rows: T[]): T[] {
 function detectionLevelFromPayload(payloadJson: string): "L1" | "L2" | "L3" | null {
   try {
     const payload = JSON.parse(payloadJson)
-    const mode = String(payload?.evidence?.mode || "")
-    if (mode === "suffix_cycle") return "L1"
-    if (mode === "similar_clauses") return "L2"
-    if (mode === "plan_execution_loop_lock") return "L3"
+    const level = String(payload?.evidence?.detection_level || "")
+    if (level === "L1" || level === "L2" || level === "L3") return level
   } catch {
     return null
   }

@@ -18,7 +18,7 @@ test("buildRasTaskSummaries: abort + action_result ok → recovery success", () 
       severity: "high",
       summary: "loop",
       actionTypes: null,
-      payloadJson: JSON.stringify({ evidence: { mode: "suffix_cycle" } }),
+      payloadJson: JSON.stringify({ evidence: { detection_level: "L1" } }),
       ts,
     },
     {

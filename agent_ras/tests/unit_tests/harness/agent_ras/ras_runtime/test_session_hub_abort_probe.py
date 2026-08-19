@@ -16,7 +16,9 @@ def _make_hub(monkeypatch) -> tuple[SessionHub, list[dict]]:
         lambda sid, platform, body: pushed.append({"sid": sid, **body}),
     )
     hub = SessionHub()
-    hub.hello("s1", "xiaoo", {"semantic_content_enabled": False})
+    hub.hello("s1", "xiaoo", {
+        "llm_thinking_loop": {"semantic_content_enabled": False},
+    })
     return hub, pushed
 
 
@@ -71,7 +73,9 @@ def test_probe_disarmed_by_session_reset(monkeypatch) -> None:
 
 def test_mark_abort_requested_arms_probe() -> None:
     hub = SessionHub()
-    hub.hello("s1", "xiaoo", {"semantic_content_enabled": False})
+    hub.hello("s1", "xiaoo", {
+        "llm_thinking_loop": {"semantic_content_enabled": False},
+    })
     state = hub.get("s1")
     assert state is not None
     assert state.last_abort_ts is None

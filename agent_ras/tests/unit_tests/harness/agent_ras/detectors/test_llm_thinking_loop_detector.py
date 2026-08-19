@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from detectors.llm_thinking_loop import (
+    FAULT_DOMAIN_LLM_THINKING_LOOP,
     KIND_LLM_THINKING_DEAD_LOOP,
     KIND_LLM_THINKING_LOOP,
     LlmThinkingLoopConfig,
@@ -786,3 +787,42 @@ class TestWindowTruncation:
         for _ in range(10):
             await det.observe(_stream_chunk("x" * 100))
         assert len(det._buffers["llm_output"][0]) <= config.window_max_chars
+
+
+def test_build_anomaly_sets_detection_level_from_presentation() -> None:
+    anomaly = LlmThinkingLoopDetector._build_anomaly(
+        KIND_LLM_THINKING_LOOP,
+        Severity.LOW,
+        "m",
+        {"mode": "suffix_cycle"},
+    )
+    assert anomaly.evidence["detection_level"] == "L1"
+    l2 = LlmThinkingLoopDetector._build_anomaly(
+        KIND_LLM_THINKING_LOOP,
+        Severity.MEDIUM,
+        "m",
+        {"mode": "similar_clauses"},
+    )
+    assert l2.evidence["detection_level"] == "L2"
+    l3 = LlmThinkingLoopDetector._build_anomaly(
+        KIND_LLM_THINKING_DEAD_LOOP,
+        Severity.HIGH,
+        "m",
+        {"mode": "plan_execution_loop_lock"},
+    )
+    assert l3.evidence["detection_level"] == "L3"
+
+
+def test_thinking_loop_kind_and_skills() -> None:
+    from agents.base import fault_domain_for_kind, skill_for
+    from detectors.loader import is_stream_kind
+
+    assert fault_domain_for_kind(KIND_LLM_THINKING_LOOP) == FAULT_DOMAIN_LLM_THINKING_LOOP
+    assert (
+        fault_domain_for_kind(KIND_LLM_THINKING_DEAD_LOOP)
+        == FAULT_DOMAIN_LLM_THINKING_LOOP
+    )
+    assert is_stream_kind(KIND_LLM_THINKING_LOOP)
+    assert is_stream_kind(KIND_LLM_THINKING_DEAD_LOOP)
+    assert skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "detection") == "llm-loop-detection"
+    assert skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "review") == "llm-loop-review"
