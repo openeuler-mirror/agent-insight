@@ -39,6 +39,7 @@ describe('评估器输出统一契约 normalizeEvaluatorOutput', () => {
     assert.equal(normalizeEvaluatorOutput({ score: -5 }).score, 0);
     assert.equal(normalizeEvaluatorOutput({ score: '88' }).score, 88);
     assert.equal(normalizeEvaluatorOutput({ score: 0.85 }).score, 85);
+    assert.equal(normalizeEvaluatorOutput({ score: 1 }).score, 100);
     assert.equal(normalizeEvaluatorOutput({ score: 'abc' }).score, undefined);
   });
 

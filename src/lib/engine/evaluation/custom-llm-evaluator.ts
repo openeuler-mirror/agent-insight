@@ -31,6 +31,7 @@ import {
     type EvaluatorCard,
     type LlmEvaluatorConfig,
 } from '@/lib/evaluators/custom-evaluator-model';
+import { parseCustomEvaluatorScore } from '@/lib/evaluators/custom-evaluator-score';
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.CUSTOM_EVAL_LLM_TIMEOUT_MS || 120_000);
 const OPENCODE_FALLBACK_AGENT_NAME = 'build';
@@ -53,7 +54,7 @@ export interface CustomEvaluatorInput {
 export interface CustomEvaluatorResult {
     evaluatorId: string;
     evaluatorName: string;
-    /** 0-1 之间的分数；解析失败时为 null */
+    /** 0-100 之间的分数；解析失败时为 null */
     score: number | null;
     reason: string;
     rawResponse: string;
@@ -129,67 +130,16 @@ function buildSystemPrompt(config: LlmEvaluatorConfig, input: CustomEvaluatorInp
 【输出要求】
 只输出严格 JSON，不要输出 Markdown 或额外解释：
 {
-  "score": 0.0,
+  "score": 0,
   "reason": "中文说明"
 }
 
-score 必须是 0.0 到 1.0 之间的数字；reason 说明评分依据。`;
+score 必须是 0 到 100 之间的数字；100 表示完全符合标准，0 表示完全不符合；reason 说明评分依据。`;
 }
 
 function buildUserMessage(config: LlmEvaluatorConfig, input: CustomEvaluatorInput): string {
     const prompt = applyPlaceholders(config.userPrompt || '', input).trim();
     return prompt || '请根据 system prompt 完成本次评估，并按要求输出 JSON。';
-}
-
-const SCORE_HINT_PATTERNS = [
-    // "因此，应该给出 [0.85] 是合理的评分" / 默认模板的尾句
-    /因此[,，][^。]*?\[?\s*([01](?:\.\d+)?)\s*\]?/,
-    /应该给出\s*\[?\s*([01](?:\.\d+)?)\s*\]?\s*是合理的评分/,
-    /\b(?:score|分数|评分)\s*[:：=]\s*([01](?:\.\d+)?)/i,
-    /\b(?:score|分数|评分)\s*[:：=]\s*([0-9]{1,3})\s*\/\s*100\b/i,
-];
-
-function parseScore(raw: string): number | null {
-    if (!raw) return null;
-
-    // JSON 输出优先
-    const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    const candidates = [fence?.[1], raw].filter((s): s is string => !!s);
-    for (const c of candidates) {
-        try {
-            const obj = JSON.parse(c);
-            const direct = pickScoreFromObject(obj);
-            if (direct != null) return direct;
-        } catch {}
-        // 截取首个 {...} 再试
-        const a = c.indexOf('{');
-        const b = c.lastIndexOf('}');
-        if (a !== -1 && b > a) {
-            try {
-                const obj = JSON.parse(c.slice(a, b + 1));
-                const direct = pickScoreFromObject(obj);
-                if (direct != null) return direct;
-            } catch {}
-        }
-    }
-
-    for (const pattern of SCORE_HINT_PATTERNS) {
-        const m = raw.match(pattern);
-        if (m) {
-            const n = Number(m[1]);
-            if (!Number.isFinite(n)) continue;
-            if (pattern.source.includes('100')) return clamp(n / 100);
-            return clamp(n);
-        }
-    }
-
-    // 兜底：取首个看起来像 0-1 的小数
-    const generic = raw.match(/\b(0(?:\.\d+)?|1(?:\.0+)?)\b/);
-    if (generic) {
-        const n = Number(generic[1]);
-        if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
-    }
-    return null;
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> | null {
@@ -215,28 +165,6 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
         }
     }
     return null;
-}
-
-function pickScoreFromObject(obj: unknown): number | null {
-    if (!obj || typeof obj !== 'object') return null;
-    const o = obj as Record<string, unknown>;
-    const candidates = ['score', 'final_score', 'overall_score', 'rating', '分数', '评分'];
-    for (const key of candidates) {
-        const v = o[key];
-        if (typeof v === 'number') return clamp(v > 1 ? v / 100 : v);
-        if (typeof v === 'string') {
-            const n = Number(v);
-            if (Number.isFinite(n)) return clamp(n > 1 ? n / 100 : n);
-        }
-    }
-    return null;
-}
-
-function clamp(n: number): number {
-    if (!Number.isFinite(n)) return 0;
-    if (n < 0) return 0;
-    if (n > 1) return 1;
-    return n;
 }
 
 function deriveReason(raw: string): string {
@@ -512,7 +440,7 @@ export async function runCustomLlmEvaluator(
     }
 
     if (runtimeError) {
-        const salvagedScore = parseScore(raw || runtimeError.message);
+        const salvagedScore = parseCustomEvaluatorScore(raw || runtimeError.message);
         if (salvagedScore == null) {
             return {
                 evaluatorId: bundle.id,
@@ -527,7 +455,7 @@ export async function runCustomLlmEvaluator(
         }
     }
 
-    const score = parseScore(raw);
+    const score = parseCustomEvaluatorScore(raw);
     const reason = deriveReason(raw);
 
     return {
@@ -538,7 +466,7 @@ export async function runCustomLlmEvaluator(
         rawResponse: raw,
         model,
         durationMs: Date.now() - startedAt,
-        error: score == null ? '未能从模型响应中解析出 0-1 分数' : undefined,
+        error: score == null ? '未能从模型响应中解析出 0-100 分数' : undefined,
     };
    });
   }, {
