@@ -49,7 +49,7 @@
 | `storage/server-config.ts` | storage | `getActiveConfig`、`getUserSettings`、`saveUserSettings`；`ModelConfig`、`UserSettings` |
 | `auth/auth.ts` | auth | `resolveUser`、`canAccessSkill`；`AuthResult` |
 | `ingest/proxy-config.ts` / `proxy-store.ts` | ingest | `getProxyConfig`；`ProxyConfig`、`SessionData` |
-| `ingest/adapters/{registry,types,opencode,claude,codeagent,openclaw,hermes,langfuse-langgraph,qoder,trae,actrail}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
+| `ingest/adapters/{registry,types,opencode,claude,codeagent,openclaw,hermes,llamaindex,langfuse-langgraph,qoder,trae,actrail}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/codeagent-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
 | `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
@@ -57,6 +57,7 @@
 | `ingest/setup-package.ts` | ingest setup | 生成 bash 内嵌 `install_agent_insight_ras`：本地 checkout → `GET /api/ingest/setup/bundle?name=ras` → `npm pack` 三级回退；`AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` 可覆盖 npm 兜底 |
 | `engine/observability/langfuse-agent-trace.ts` | engine | Langfuse 可见 observation → 原 Agent Trace 节点/事件模型；不含业务节点名称规则 |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
+| `ingest/otel/{llamaindex,adapters/llamaindex}.ts` / `scripts/llamaindex_extension/` / `docs/user-guide/observability/llamaindex-trace-collector.md` | ingest | LlamaIndex OTLP 识别与 Agent/Tool/LLM/RAG/Workflow 聚合；复用官方 `llama-index-observability-otel` Handler 基类、隔离 TracerProvider、持久 spool 与异步上传；用户指南是安装 ZIP 中 `README.md` 的唯一内容源 |
 | `ingest/otel/adapters/qoder.ts` / `scripts/qoder_{trace_collector,uploader_client,setup,work_setup,token_usage_env}.mjs` | ingest | Qoder CN 家族 hooks、产品/账号隔离 spool、Token usage 环境变量生命周期、异步上传及 Qoder OTLP snapshot 转换 |
 | `integrations/qoder-desktop/` / `integrations/qoder-jetbrains/` / `api/ingest/setup/qoder-*` | integration | Qoder Desktop VSIX 与 JetBrains 插件的状态栏、设置、owner 安装、卸载清理及服务端安装包下载 |
 | `ingest/otel/actrail.ts` / `ingest/otel/adapters/actrail.ts` | ingest | AcTrail semantic actions 归一、Span 修订合并与 Trace 投影 |
@@ -103,7 +104,7 @@
 ## API routes (`src/app/api/`) — grouped
 | Group | Route files (under `api/`) | Purpose |
 |---|---|---|
-| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/ras-events`、`ingest/ras-config`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/bundle` 白名单 tar 下发 ras/client 制品、共享的 `setup/codeagent-setup.ts` 与 `setup/hermes-plugin`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据（含 RAS 旁路与能力配置拉取）；下发客户端安装脚本、RAS/常驻客户端源码 bundle、跨平台 CodeAgent PATH 包装器与 Hermes 插件源码 |
+| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/ras-events`、`ingest/ras-config`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/bundle` 白名单 tar 下发 ras/client 制品、共享的 `setup/codeagent-setup.ts`、`setup/hermes-plugin` 与 `setup/llamaindex-collector`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据（含 RAS 旁路与能力配置拉取）；下发客户端安装脚本、RAS/常驻客户端源码 bundle、跨平台 CodeAgent PATH 包装器、Hermes 插件源码与 LlamaIndex 直接部署归档 |
 | agent | `agent/{run,respond,stream}` | 驱动内部的通用 agent |
 | skills | `skills`、`skills/[id]/*`、`skills/by-name/*`、`skills/{publish,upload,automation/*,sync-enterprise,logs}` | skill 增删改查、版本、发布、企业同步 |
 | skill-eval | `skill-eval/trigger/[skillName]/*` | 触发评测集/评测运行 |

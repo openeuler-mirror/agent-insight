@@ -1,0 +1,93 @@
+{
+  "name": "agent-insight-codex-trace",
+  "displayName": "Agent Insight Codex Trace",
+  "description": "Correlates Codex IDE file and terminal activity with Agent Insight traces.",
+  "version": "0.1.0",
+  "publisher": "openeuler",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:agentInsight.codexTrace.openSettings",
+    "onCommand:agentInsight.codexTrace.openLogs",
+    "onCommand:agentInsight.codexTrace.flush",
+    "onCommand:agentInsight.codexTrace.linkCloudAgent",
+    "onCommand:agentInsight.codexTrace.unlinkCloudAgent"
+  ],
+  "main": "./extension.cjs",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentInsight.codexTrace.openSettings",
+        "title": "Agent Insight Codex Trace: Open Settings"
+      },
+      {
+        "command": "agentInsight.codexTrace.openLogs",
+        "title": "Agent Insight Codex Trace: Open Logs"
+      },
+      {
+        "command": "agentInsight.codexTrace.flush",
+        "title": "Agent Insight Codex Trace: Flush Spool"
+      },
+      {
+        "command": "agentInsight.codexTrace.linkCloudAgent",
+        "title": "Agent Insight Codex Trace: Link Cloud Agent"
+      },
+      {
+        "command": "agentInsight.codexTrace.unlinkCloudAgent",
+        "title": "Agent Insight Codex Trace: Unlink Cloud Agent"
+      }
+    ],
+    "configuration": {
+      "title": "Agent Insight Codex Trace",
+      "properties": {
+        "agentInsight.codexTrace.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Codex IDE trace correlation."
+        },
+        "agentInsight.codexTrace.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:3000",
+          "scope": "machine",
+          "description": "Agent Insight base URL used by the installed relay."
+        },
+        "agentInsight.codexTrace.apiKey": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional installer input. The running extension reads the protected collector config instead."
+        },
+        "agentInsight.codexTrace.relayPort": {
+          "type": "number",
+          "default": 43191,
+          "minimum": 1024,
+          "maximum": 65535,
+          "scope": "machine",
+          "description": "Loopback relay port."
+        },
+        "agentInsight.codexTrace.captureFileEdits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture file edit ranges and character counts during an active Codex IDE turn."
+        },
+        "agentInsight.codexTrace.captureTerminal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture Terminal Shell Execution lifecycle during an active Codex IDE turn."
+        },
+        "agentInsight.codexTrace.cloudAgentId": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional user-supplied Cloud Agent ID. It is marked as user-provided and is not automatic Cloud evidence."
+        }
+      }
+    }
+  }
+}

@@ -24,4 +24,5 @@ export interface FrameworkAdapter {
   readonly sessionMergeStrategy?: SessionMergeStrategy
   normalizeForStorage?(interactions: CanonicalInteraction[]): CanonicalInteraction[]
   extractSkills?(normalized: CanonicalInteraction[]): InvokedSkill[]
+  isPlaceholderQuery?(query: string, framework: string): boolean
 }

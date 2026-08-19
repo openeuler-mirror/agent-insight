@@ -86,6 +86,34 @@ test("OTel traces: aggregates trace spool events into one execution record", () 
   assert.equal(record.tool_call_count, 1)
 })
 
+test("OTel traces: completion snapshot replaces a same-span running snapshot", () => {
+  const events = [
+    traceEvent({
+      spanId: "span-llm",
+      name: "chat",
+      latencyMs: 0,
+      startTimeMs: 1500,
+      attributes: { "gen_ai.prompt": "hello", "tool.outcome": "running" },
+    }),
+    traceEvent({
+      spanId: "span-llm",
+      name: "chat",
+      latencyMs: 1500,
+      startTimeMs: 1500,
+      attributes: {
+        "gen_ai.prompt": "hello",
+        "gen_ai.completion": "done",
+        "tool.outcome": "success",
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents("session-a", events)
+  assert.ok(record)
+  assert.equal(record.final_result, "done")
+  assert.equal(record.latency, 1500)
+  assert.equal(record.interactions?.length, 1)
+})
 test("OTel traces: aggregates Langfuse LangGraph spans into skill, tool, and subagent interactions", () => {
   const sessionId = "server-troubleshooter-langfuse-capture"
   const events: OtelTraceEvent[] = [
@@ -1260,9 +1288,62 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
   const genericEvent = traceEvent({ serviceName: "another-agent" });
 
   // 顺序即优先级：专用适配器都排在 generic 兜底之前。新增适配器要显式登记在这里。
-  assert.deepEqual(listOtelTraceAdapters().map(adapter => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "openclaw", "qoder", "generic"]);
+    assert.deepEqual(
+      listOtelTraceAdapters().map(adapter => adapter.id),
+      [
+        "actrail",
+        "langfuse-langgraph",
+        "hermes",
+        "qwencode",
+        "openclaw",
+        "codex",
+        "llamaindex",
+        "qoder",
+        "pi-agent",
+        "generic",
+      ],
+    );
   assert.equal(getOtelTraceAdapter([hermesEvent]).id, "hermes");
   assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");
+});
+
+test("OTel trace adapter registry selects the Pi adapter when Pi is installed", () => {
+  const foreignEvent = traceEvent({
+    serviceName: "pi-agent",
+    attributes: { "agent.insight.framework": "pi-agent" },
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "pi-agent");
+});
+
+test("OTel trace adapter registry leaves unsupported Pi canonical spool events untouched", () => {
+  const foreignEvent = traceEvent({
+    sessionId: "foreign-pi-canonical",
+    framework: "pi-agent",
+    attributes: {},
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
+  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+});
+
+test("OTel trace adapter registry selects the Codex adapter", () => {
+  const foreignEvent = traceEvent({
+    serviceName: "codex",
+    attributes: { "agent.insight.framework": "codex" },
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "codex");
+});
+
+test("OTel trace adapter registry selects Codex for canonical spool events", () => {
+  const foreignEvent = traceEvent({
+    sessionId: "foreign-codex-canonical",
+    framework: "codex",
+    attributes: {},
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent])?.id, "codex");
 });
 
 test("OTel traces: Hermes adapter preserves subagent ownership and builds a child tree", () => {

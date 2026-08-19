@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'

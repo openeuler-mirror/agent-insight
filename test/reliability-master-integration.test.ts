@@ -28,8 +28,12 @@ test('experiment UI and run route keep comparison and generated trace flows sepa
   assert.match(page, /expType === 'single' && traceMode === 'generate'/)
   assert.match(runRoute, /startComparisonRun/)
   assert.match(runRoute, /generateExperimentTraces/)
+  const comparisonDispatch = runRoute.indexOf("currentExperiment.type === 'llm'")
+  const generatedTraceDispatch = runRoute.indexOf('const wantGenerate')
+  assert.notEqual(comparisonDispatch, -1, 'comparison dispatch guard must exist')
+  assert.notEqual(generatedTraceDispatch, -1, 'generated-trace dispatch must exist')
   assert.ok(
-    runRoute.indexOf("exp.type === 'llm'") < runRoute.indexOf('const wantGenerate'),
+    comparisonDispatch < generatedTraceDispatch,
     'comparison dispatch must happen before generated-trace orchestration',
   )
 })
@@ -45,6 +49,10 @@ test('setup and CLI retain upstream collectors and reliability installers', () =
   assert.match(autoSetup, /install_agent_insight_ras/)
   assert.match(setup, /install_agent_insight_client/)
   assert.match(cli, /install \[--frameworks <comma-list>\]/)
+  const installableFrameworks = /const INSTALLABLE_FRAMEWORKS = new Set\(\[([\s\S]*?)\]\)/.exec(cli)?.[1] || ''
+  for (const framework of ['xiaoo', 'qwencode', 'codex', 'pi-agent']) {
+    assert.match(installableFrameworks, new RegExp(`['"]${framework}['"]`))
+  }
   assert.match(cli, /install-ras/)
   assert.match(cli, /install-fault-injection/)
 })

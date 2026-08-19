@@ -10,6 +10,31 @@ import {
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
 import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+
+// `frameworks` is inserted into generated shell scripts. Keep this an explicit
+// allowlist instead of interpolating arbitrary query values.
+const FRAMEWORKS: { value: string; label: string }[] = [
+    { value: 'opencode', label: 'OpenCode' },
+    { value: 'claude', label: 'Claude Code' },
+    { value: 'codeagent', label: 'CodeAgent' },
+    { value: 'hermes', label: 'Hermes' },
+    { value: 'openclaw', label: 'OpenClaw' },
+    { value: 'xiaoo', label: 'xiaoO' },
+    { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'llamaindex', label: 'LlamaIndex' },
+    { value: 'qoder', label: 'Qoder CN product family' },
+    { value: 'trae', label: 'Trae IDE' },
+    { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'qwencode', label: 'Qwen Code' },
+];
+
+function parseFrameworks(raw: string | null): { value: string; label: string }[] {
+    if (!raw) return [];
+    const wanted = new Set(raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean));
+    return FRAMEWORKS.filter(framework => wanted.has(framework.value));
+}
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -37,6 +62,16 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const apiKey = searchParams.get('apiKey');
     const hostParam = searchParams.get('host');
+    const rawFrameworks = searchParams.get('frameworks');
+    const preselected = parseFrameworks(rawFrameworks);
+    const llamaIndexVenv = (searchParams.get('llamaindexVenv') || '')
+        .replace(/[\0\r\n]/g, '')
+        .trim()
+        .slice(0, 2048);
+    const requestedPythonMode = searchParams.get('llamaindexPython');
+    const llamaIndexPythonMode = requestedPythonMode === 'global' || requestedPythonMode === 'venv'
+        ? requestedPythonMode
+        : 'auto';
 
     if (!apiKey || !hostParam) {
         return new NextResponse('Missing required parameters: apiKey and host', {
@@ -58,23 +93,32 @@ export async function GET(request: Request) {
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        return generatePowerShellScript(baseUrl, hostParam, apiKey);
+        return generatePowerShellScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
     }
     
-    return generateBashScript(baseUrl, hostParam, apiKey);
+    return generateBashScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
 }
 
-function generateBashScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
+function generateBashScript(
+    baseUrl: string,
+    hostParam: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    llamaIndexVenv: string,
+    llamaIndexPythonMode: string,
+): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const packageSpec = getAgentInsightClientPackageSpec();
+    const selectedFrameworks = preselected.map(framework => framework.value).join(',');
+    const frameworksPreselected = preselected.length > 0;
     const script = `#!/bin/bash
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
 # =============================================================================
 
-AGENT_INSIGHT_HOST="${hostParam}"
-AGENT_INSIGHT_BASE_URL="${baseUrl}"
-AGENT_INSIGHT_API_KEY="${apiKey}"
+AGENT_INSIGHT_HOST="${bashDoubleQuoted(hostParam)}"
+AGENT_INSIGHT_BASE_URL="${bashDoubleQuoted(baseUrl)}"
+AGENT_INSIGHT_API_KEY="${bashDoubleQuoted(apiKey)}"
 AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
@@ -109,7 +153,13 @@ mkdir -p "$HOME/.openclaw/agents"
 mkdir -p ".opencode/skills"
 echo "📂 Created necessary directories"
 
-# 2. Interactive Framework Selection with inquirer
+# 2. Framework selection
+FRAMEWORKS_PRESELECTED="${frameworksPreselected ? 'true' : 'false'}"
+SELECTED_FRAMEWORKS="${bashDoubleQuoted(selectedFrameworks)}"
+if [ "$FRAMEWORKS_PRESELECTED" = "true" ]; then
+    echo "✅ 将安装预选组件: $SELECTED_FRAMEWORKS"
+else
+# 2b. Interactive Framework Selection with inquirer
 echo ""
 
 SELECTOR_SCRIPT="$HOME/.agent-insight/framework_selector.mjs"
@@ -132,11 +182,15 @@ const frameworks = [
     { name: 'CodeAgent', value: 'codeagent' },
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
+    { name: 'xiaoO', value: 'xiaoo' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
+    { name: 'LlamaIndex', value: 'llamaindex' },
     { name: 'Qoder CN product family', value: 'qoder' },
     { name: 'Trae IDE', value: 'trae' },
-    { name: 'AcTrail', value: 'actrail' }
-];
+    { name: 'AcTrail', value: 'actrail' },
+    { name: 'Pi Agent', value: 'pi-agent' },
+    { name: 'Codex', value: 'codex' },
+    { name: 'Qwen Code', value: 'qwencode' }
 
 async function select() {
     console.log('');
@@ -199,6 +253,7 @@ if [ -f "$SELECTOR_RESULT" ]; then
 else
     SELECTED_FRAMEWORKS=""
 fi
+fi
 
 # Set installation flags based on selection
 INSTALL_OPENCODE=false
@@ -206,10 +261,16 @@ INSTALL_CLAUDE=false
 INSTALL_CODEAGENT=false
 INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
+INSTALL_XIAOO=false
 INSTALL_JIUWEN=false
+INSTALL_LLAMAINDEX=false
+LLAMAINDEX_READY=false
 INSTALL_QODER=false
 INSTALL_TRAE=false
 INSTALL_ACTRAIL=false
+INSTALL_ACTRAIL=false
+INSTALL_CODEX=false
+INSTALL_QWENCODE=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -226,8 +287,14 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"openclaw"* ]]; then
     INSTALL_OPENCLAW=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"xiaoo"* ]]; then
+    INSTALL_XIAOO=true
+fi
 if [[ "$SELECTED_FRAMEWORKS" == *"jiuwen"* ]]; then
     INSTALL_JIUWEN=true
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"llamaindex"* ]]; then
+    INSTALL_LLAMAINDEX=true
 fi
 if [[ "$SELECTED_FRAMEWORKS" == *"qoder"* ]]; then
     INSTALL_QODER=true
@@ -238,9 +305,15 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"actrail"* ]]; then
     INSTALL_ACTRAIL=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"codex"* ]]; then
+    INSTALL_CODEX=true
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"qwencode"* ]]; then
+    INSTALL_QWENCODE=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -315,7 +388,7 @@ provides_hooks:
   - on_session_end
 HERMES_PLUGIN_EOF
     if command -v hermes >/dev/null 2>&1; then
-        hermes plugins enable agent_insight_hermes || echo "Warning: enable the plugin manually with: hermes plugins enable agent_insight_hermes"
+        hermes plugins enable agent_insight_hermes --no-allow-tool-override || echo "Warning: enable the plugin manually with: hermes plugins enable agent_insight_hermes --no-allow-tool-override"
     else
         echo "Warning: hermes command not found. The plugin files were installed; enable agent_insight_hermes after installing Hermes."
     fi
@@ -344,6 +417,110 @@ config_schema:
   type: object
 JIUWEN_EXT_EOF
     echo "✅ JiuwenSwarm extension installed at $JW_EXT_DIR"
+fi
+
+if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
+    LLAMAINDEX_CONFIGURED_VENV="${bashDoubleQuoted(llamaIndexVenv)}"
+    LLAMAINDEX_CONFIGURED_MODE="${bashDoubleQuoted(llamaIndexPythonMode)}"
+    LLAMAINDEX_VENV=""
+    LLAMAINDEX_PYTHON=""
+    if [ "$LLAMAINDEX_CONFIGURED_MODE" = "venv" ]; then
+        LLAMAINDEX_VENV="$LLAMAINDEX_CONFIGURED_VENV"
+    elif [ "$LLAMAINDEX_CONFIGURED_MODE" = "global" ]; then
+        LLAMAINDEX_PYTHON_MODE="global PATH"
+    else
+        LLAMAINDEX_PYTHON="\${AGENT_INSIGHT_LLAMAINDEX_PYTHON:-}"
+        if [ -z "$LLAMAINDEX_PYTHON" ]; then LLAMAINDEX_VENV="\${AGENT_INSIGHT_LLAMAINDEX_VENV:-$LLAMAINDEX_CONFIGURED_VENV}"; fi
+    fi
+    case "$LLAMAINDEX_VENV" in
+        "~") LLAMAINDEX_VENV="$HOME" ;;
+        "~/"*) LLAMAINDEX_VENV="$HOME/\${LLAMAINDEX_VENV#\~/}" ;;
+    esac
+    LLAMAINDEX_PYTHON_MODE="\${LLAMAINDEX_PYTHON_MODE:-explicit interpreter}"
+    if [ -z "$LLAMAINDEX_PYTHON" ] && [ -n "$LLAMAINDEX_VENV" ]; then
+        LLAMAINDEX_PYTHON_MODE="virtual environment"
+        if [ -x "$LLAMAINDEX_VENV/bin/python" ]; then LLAMAINDEX_PYTHON="$LLAMAINDEX_VENV/bin/python"; elif [ -x "$LLAMAINDEX_VENV/Scripts/python.exe" ]; then LLAMAINDEX_PYTHON="$LLAMAINDEX_VENV/Scripts/python.exe"; fi
+    elif [ -z "$LLAMAINDEX_PYTHON" ]; then
+        LLAMAINDEX_PYTHON_MODE="global PATH"
+        if command -v python3 >/dev/null 2>&1; then LLAMAINDEX_PYTHON=$(command -v python3); elif command -v python >/dev/null 2>&1; then LLAMAINDEX_PYTHON=$(command -v python); fi
+    fi
+    if [ -z "$LLAMAINDEX_PYTHON" ]; then
+        if [ -n "$LLAMAINDEX_VENV" ]; then echo "❌ No Python interpreter found in virtual environment: $LLAMAINDEX_VENV"; else echo "❌ Python 3.10+ is required for the LlamaIndex collector."; fi
+    elif ! "$LLAMAINDEX_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"; then
+        echo "❌ $LLAMAINDEX_PYTHON must be Python 3.10 or newer."
+    else
+        echo "🐍 LlamaIndex Python ($LLAMAINDEX_PYTHON_MODE): $LLAMAINDEX_PYTHON"
+        if ! "$LLAMAINDEX_PYTHON" -c "import llama_index.core" >/dev/null 2>&1; then
+            echo "ℹ️  LlamaIndex is not installed in $LLAMAINDEX_PYTHON; deployment will continue. Activate the observed project environment before running the Agent."
+        fi
+        if ! "$LLAMAINDEX_PYTHON" -m pip install --disable-pip-version-check "llama-index-observability-otel==0.6.4"; then
+            echo "❌ Unable to install llama-index-observability-otel 0.6.4 in $LLAMAINDEX_PYTHON."
+        else
+        LLAMAINDEX_ARCHIVE=$(mktemp "\${TMPDIR:-/tmp}/agent-insight-llamaindex.XXXXXX.zip")
+        LLAMAINDEX_PACKAGE_URL="$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"
+        LLAMAINDEX_ROOT="$HOME/.agent-insight/collectors/llamaindex"
+        LLAMAINDEX_SOURCE_DIR="$LLAMAINDEX_ROOT/current"
+        LLAMAINDEX_STAGING="$LLAMAINDEX_ROOT/.install-$$"
+        LLAMAINDEX_BACKUP="$LLAMAINDEX_ROOT/.previous-$$"
+        mkdir -p "$LLAMAINDEX_ROOT"
+        rm -rf "$LLAMAINDEX_STAGING" "$LLAMAINDEX_BACKUP"
+        mkdir -p "$LLAMAINDEX_STAGING"
+        if curl -sSf "$LLAMAINDEX_PACKAGE_URL" -o "$LLAMAINDEX_ARCHIVE" && "$LLAMAINDEX_PYTHON" -m zipfile -e "$LLAMAINDEX_ARCHIVE" "$LLAMAINDEX_STAGING" && [ -f "$LLAMAINDEX_STAGING/agent_insight_llamaindex/__init__.py" ]; then
+            [ ! -d "$LLAMAINDEX_SOURCE_DIR" ] || mv "$LLAMAINDEX_SOURCE_DIR" "$LLAMAINDEX_BACKUP"
+            if mv "$LLAMAINDEX_STAGING" "$LLAMAINDEX_SOURCE_DIR"; then
+                rm -rf "$LLAMAINDEX_BACKUP"
+                LLAMAINDEX_READY=true
+                echo "✅ LlamaIndex Trace Collector deployed at $LLAMAINDEX_SOURCE_DIR"
+            else
+                [ ! -d "$LLAMAINDEX_BACKUP" ] || mv "$LLAMAINDEX_BACKUP" "$LLAMAINDEX_SOURCE_DIR"
+                echo "❌ Unable to activate the downloaded LlamaIndex collector."
+            fi
+        else
+            echo "❌ Unable to download or extract the LlamaIndex collector."
+        fi
+        rm -f "$LLAMAINDEX_ARCHIVE"
+        rm -rf "$LLAMAINDEX_STAGING" "$LLAMAINDEX_BACKUP"
+        if [ "$LLAMAINDEX_READY" = "true" ]; then
+            cat > "$HOME/.agent-insight/llamaindex_env.sh" << 'LLAMAINDEX_ENV_EOF'
+# Agent Insight LlamaIndex collector path (direct deployment)
+LLAMAINDEX_COLLECTOR_DIR="$HOME/.agent-insight/collectors/llamaindex/current"
+case ":\${PYTHONPATH:-}:" in
+  *":$LLAMAINDEX_COLLECTOR_DIR:"*) ;;
+  *) export PYTHONPATH="$LLAMAINDEX_COLLECTOR_DIR\${PYTHONPATH:+:$PYTHONPATH}" ;;
+esac
+LLAMAINDEX_ENV_EOF
+            printf 'export AGENT_INSIGHT_LLAMAINDEX_PYTHON=%q\n' "$LLAMAINDEX_PYTHON" >> "$HOME/.agent-insight/llamaindex_env.sh"
+            if [ -n "$LLAMAINDEX_VENV" ]; then printf 'export AGENT_INSIGHT_LLAMAINDEX_VENV=%q\n' "$LLAMAINDEX_VENV" >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
+            if [ -z "$LLAMAINDEX_VENV" ]; then echo 'unset AGENT_INSIGHT_LLAMAINDEX_VENV' >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
+            . "$HOME/.agent-insight/llamaindex_env.sh"
+            case "\${SHELL:-}" in */zsh) SHELL_RC="$HOME/.zshrc" ;; *) SHELL_RC="$HOME/.bashrc" ;; esac
+            touch "$SHELL_RC"
+            if ! grep -q "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC"; then
+                echo "source \"$HOME/.agent-insight/llamaindex_env.sh\"" >> "$SHELL_RC"
+            fi
+            cat > "$HOME/.agent-insight/uninstall_llamaindex_collector.sh" << 'LLAMAINDEX_UNINSTALL_EOF'
+#!/bin/bash
+set -e
+if [ "\${1:-}" = "--purge" ]; then
+  rm -rf "$HOME/.agent-insight/otel_data/llamaindex"
+  rm -f "$HOME/.agent-insight/llamaindex.json" "$HOME/.agent-insight/llamaindex.env"
+fi
+rm -rf "$HOME/.agent-insight/collectors/llamaindex"
+rm -f "$HOME/.agent-insight/llamaindex_env.sh"
+for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  if [ -f "$SHELL_RC" ]; then
+    CLEANED_RC="\${SHELL_RC}.agent-insight-llamaindex.$$"
+    grep -v "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC" > "$CLEANED_RC" || true
+    mv "$CLEANED_RC" "$SHELL_RC"
+  fi
+done
+rm -f "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+echo "LlamaIndex collector removed. Restart running Python processes to unload existing handlers."
+LLAMAINDEX_UNINSTALL_EOF
+            chmod +x "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+        fi
+        fi
+    fi
 fi
 
 if [ "$INSTALL_QODER" = "true" ]; then
@@ -454,6 +631,12 @@ TRAE_PYEOF
     echo "  [NOTE] Restart TRAE IDE to activate"
 fi
 
+if [ "$INSTALL_QWENCODE" = "true" ]; then
+    echo "⏬ Installing Qwen Code Trace Collector from local npm package..."
+    QWENCODE_PACKAGE_ROOT=$(node -p "require('path').dirname(require.resolve('agent-insight/package.json'))")
+    node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
+fi
+
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
 AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
@@ -507,8 +690,36 @@ echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
 
+if [ "$INSTALL_CODEX" = "true" ]; then
+    echo "⏬ Installing Codex collector..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    CODEX_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" -o "$CODEX_INSTALLER"
+    if ! sh "$CODEX_INSTALLER"; then rm -f "$CODEX_INSTALLER"; exit 1; fi
+    rm -f "$CODEX_INSTALLER"
+fi
+
+if [ "$LLAMAINDEX_READY" = "true" ]; then
+    if ! PYTHONPATH="$LLAMAINDEX_SOURCE_DIR\${PYTHONPATH:+:$PYTHONPATH}" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" "$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli configure --endpoint "$AGENT_INSIGHT_HOST"; then
+        echo "❌ Unable to configure the LlamaIndex collector."
+        LLAMAINDEX_READY=false
+    fi
+fi
+
+# 6.3 Install Pi Agent collector
+if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
+    echo "⏬ Installing Pi Agent collector..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    PI_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER"
+    if ! sh "$PI_INSTALLER"; then rm -f "$PI_INSTALLER"; exit 1; fi
+    rm -f "$PI_INSTALLER"
+fi
+
 # 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
-if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ]; then
+if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
     echo "🛡️  Installing Agent RAS runtime..."
     install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
 fi
@@ -555,6 +766,12 @@ if [ "$INSTALL_QODER" = "true" ]; then
     else
         echo "Warning: Qoder CN collector installation did not complete; review the errors above."
     fi
+fi
+
+# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist
+if [ "$INSTALL_QWENCODE" = "true" ]; then
+    node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
+    echo "✅ Qwen Code native OTLP telemetry configured"
 fi
 
 # 6.4 Configure Agent Insight Hermes plugin
@@ -788,11 +1005,20 @@ fi
 if [ "$INSTALL_JIUWEN" = "true" ]; then
     echo "  ✅ JiuwenSwarm Extension: \${JIUWENSWARM_DATA_DIR:-$HOME/.jiuwenswarm}/extensions/agent-insight-observability (telemetry in config/.env)"
 fi
+if [ "$LLAMAINDEX_READY" = "true" ]; then
+    echo "  ✅ LlamaIndex Trace Collector: $LLAMAINDEX_SOURCE_DIR"
+fi
 if [ "$INSTALL_TRAE" = "true" ]; then
     echo "  [OK] Trae IDE Collector: installed"
 fi
 if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
     echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
+    echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"
+fi
+if [ "$INSTALL_CODEX" = "true" ]; then
+    echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
 fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
@@ -830,8 +1056,14 @@ fi
 if [ "$INSTALL_JIUWEN" = "true" ]; then
     echo "  5. Restart JiuwenSwarm (agentserver), then start a conversation"
 fi
+if [ "$LLAMAINDEX_READY" = "true" ]; then
+    echo "  6. Restart terminal, then run: \"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\" -m agent_insight_llamaindex.cli run -- \"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\" app.py"
+fi
 if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
     echo "  7. Use actrailctl launch as usual; AcTrail will upload automatically"
+fi
+if [ "$INSTALL_CODEX" = "true" ]; then
+    echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
 fi
 echo "------------------------------------------------"
 `;
@@ -843,16 +1075,25 @@ echo "------------------------------------------------"
     });
 }
 
-function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
+function generatePowerShellScript(
+    baseUrl: string,
+    hostParam: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    llamaIndexVenv: string,
+    llamaIndexPythonMode: string,
+): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const selectedFrameworks = preselected.map(framework => framework.value).join(',');
+    const frameworksPreselected = preselected.length > 0;
     const script = [
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
         '# =============================================================================',
         '',
-        '$AGENT_INSIGHT_HOST = "' + hostParam + '"',
-        '$AGENT_INSIGHT_BASE_URL = "' + baseUrl + '"',
-        '$AGENT_INSIGHT_API_KEY = "' + apiKey + '"',
+        '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(hostParam) + '"',
+        '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
+        '$AGENT_INSIGHT_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
         '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -892,7 +1133,13 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'New-Item -ItemType Directory -Force -Path ".opencode\\skills" | Out-Null',
         'Write-Host "📂 Created necessary directories"',
         '',
-        '# 2. Interactive Framework Selection with inquirer',
+        '# 2. Framework selection',
+        '$FRAMEWORKS_PRESELECTED = ' + (frameworksPreselected ? '$true' : '$false'),
+        '$SELECTED_FRAMEWORKS = "' + powerShellDoubleQuoted(selectedFrameworks) + '"',
+        'if ($FRAMEWORKS_PRESELECTED) {',
+        '    Write-Host "✅ 将安装预选组件: $SELECTED_FRAMEWORKS"',
+        '} else {',
+        '# 2b. Interactive Framework Selection with inquirer',
         'Write-Host ""',
         '',
         '$SELECTOR_SCRIPT = Join-Path $skillInsightDir "framework_selector.mjs"',
@@ -915,10 +1162,15 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'CodeAgent\', value: \'codeagent\' },"',
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
+        '    "    { name: \'xiaoO\', value: \'xiaoo\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
+        '    "    { name: \'LlamaIndex\', value: \'llamaindex\' },"',
         '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
         '    "    { name: \'Trae IDE\', value: \'trae\' },"',
-        '    "    { name: \'AcTrail\', value: \'actrail\' }"',
+        '    "    { name: \'AcTrail\', value: \'actrail\' },"',
+        '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
+        '    "    { name: \'Codex\', value: \'codex\' },"',
+        '    "    { name: \'Qwen Code\', value: \'qwencode\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -984,6 +1236,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '} else {',
         '    $SELECTED_FRAMEWORKS = ""',
         '}',
+        '}',
         '',
         '# Set installation flags based on selection',
         '$INSTALL_OPENCODE = $false',
@@ -991,10 +1244,15 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$INSTALL_CODEAGENT = $false',
         '$INSTALL_HERMES = $false',
         '$INSTALL_OPENCLAW = $false',
+        '$INSTALL_XIAOO = $false',
         '$INSTALL_JIUWEN = $false',
+        '$INSTALL_LLAMAINDEX = $false',
+        '$LLAMAINDEX_READY = $false',
         '$INSTALL_QODER = $false',
         '$INSTALL_TRAE = $false',
         '$INSTALL_ACTRAIL = $false',
+        '$INSTALL_CODEX = $false',
+        '$INSTALL_QWENCODE = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1011,8 +1269,14 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "openclaw") {',
         '    $INSTALL_OPENCLAW = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "xiaoo") {',
+        '    $INSTALL_XIAOO = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "jiuwen") {',
         '    $INSTALL_JIUWEN = $true',
+        '}',
+        'if ($SELECTED_FRAMEWORKS -match "llamaindex") {',
+        '    $INSTALL_LLAMAINDEX = $true',
         '}',
         'if ($SELECTED_FRAMEWORKS -match "qoder") {',
         '    $INSTALL_QODER = $true',
@@ -1023,9 +1287,15 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "actrail") {',
         '    $INSTALL_ACTRAIL = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "codex") {',
+        '    $INSTALL_CODEX = $true',
+        '}',
+        'if ($SELECTED_FRAMEWORKS -match "qwencode") {',
+        '    $INSTALL_QWENCODE = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1074,7 +1344,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    @("name: agent_insight_hermes", "version: 0.2.0", "description: Agent Insight telemetry for Hermes", "provides_hooks:", "  - pre_llm_call", "  - post_llm_call", "  - pre_api_request", "  - post_api_request", "  - api_request_error", "  - pre_tool_call", "  - post_tool_call", "  - subagent_start", "  - subagent_stop", "  - on_session_end") | Set-Content -Path (Join-Path $hermesPluginDir "plugin.yaml") -Encoding UTF8',
         '    $hermesCmd = Get-Command hermes -ErrorAction SilentlyContinue',
         '    if ($hermesCmd) {',
-        '        & $hermesCmd.Source plugins enable agent_insight_hermes',
+        '        & $hermesCmd.Source plugins enable agent_insight_hermes --no-allow-tool-override',
         '    } else {',
         '        Write-Host "Warning: hermes command not found. The plugin files were installed; enable agent_insight_hermes after installing Hermes."',
         '    }',
@@ -1094,6 +1364,117 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/jiuwen-extension" -OutFile (Join-Path $jwExtDir "extension.py")',
         '    @(\'id: agent-insight-observability\', \'name: agent-insight-observability\', \'version: 0.1.0\', \'description: Zero-code observability onboarding for JiuwenSwarm via agent-core OTLP.\', \'author: agent-insight\', \'min_jiuwenswarm_version: "0.2.0"\', \'dependencies: {}\', \'config_schema:\', \'  type: object\') | Set-Content -Path (Join-Path $jwExtDir "extension.yaml") -Encoding UTF8',
         '    Write-Host "✅ JiuwenSwarm extension installed at $jwExtDir"',
+        '}',
+        '',
+        'if ($INSTALL_LLAMAINDEX) {',
+        '    $llamaIndexConfiguredVenv = "' + powerShellDoubleQuoted(llamaIndexVenv) + '"',
+        '    $llamaIndexConfiguredMode = "' + powerShellDoubleQuoted(llamaIndexPythonMode) + '"',
+        '    $llamaIndexVenv = ""',
+        '    $llamaIndexPython = ""',
+        '    if ($llamaIndexConfiguredMode -eq "venv") {',
+        '        $llamaIndexVenv = $llamaIndexConfiguredVenv',
+        '    } elseif ($llamaIndexConfiguredMode -eq "global") {',
+        '        $llamaIndexPythonMode = "global PATH"',
+        '    } else {',
+        '        $llamaIndexPython = $env:AGENT_INSIGHT_LLAMAINDEX_PYTHON',
+        '        if (-not $llamaIndexPython) { $llamaIndexVenv = if ($env:AGENT_INSIGHT_LLAMAINDEX_VENV) { $env:AGENT_INSIGHT_LLAMAINDEX_VENV } else { $llamaIndexConfiguredVenv } }',
+        '    }',
+        '    if ($llamaIndexVenv) {',
+        '        $llamaIndexVenv = [Environment]::ExpandEnvironmentVariables($llamaIndexVenv)',
+        '        if ($llamaIndexVenv -eq "~") { $llamaIndexVenv = $env:USERPROFILE } elseif ($llamaIndexVenv.StartsWith("~\\")) { $llamaIndexVenv = Join-Path $env:USERPROFILE $llamaIndexVenv.Substring(2) }',
+        '    }',
+        '    if (-not $llamaIndexPythonMode) { $llamaIndexPythonMode = "explicit interpreter" }',
+        '    if (-not $llamaIndexPython -and $llamaIndexVenv) {',
+        '        $llamaIndexPythonMode = "virtual environment"',
+        '        $venvPython = Join-Path $llamaIndexVenv "Scripts\\python.exe"',
+        '        $posixVenvPython = Join-Path $llamaIndexVenv "bin\\python"',
+        '        if (Test-Path -LiteralPath $venvPython -PathType Leaf) { $llamaIndexPython = $venvPython } elseif (Test-Path -LiteralPath $posixVenvPython -PathType Leaf) { $llamaIndexPython = $posixVenvPython }',
+        '    } elseif (-not $llamaIndexPython) {',
+        '        $llamaIndexPythonMode = "global PATH"',
+        '        $pyLauncher = Get-Command py -CommandType Application -ErrorAction SilentlyContinue',
+        '        if ($pyLauncher) {',
+        '            $detectedPython = & $pyLauncher.Source -3 -c "import sys; print(sys.executable)" 2>$null',
+        '            if ($LASTEXITCODE -eq 0 -and $detectedPython) { $llamaIndexPython = [string]($detectedPython | Select-Object -First 1) }',
+        '        }',
+        '        if (-not $llamaIndexPython) {',
+        '            $pythonCommand = Get-Command python -CommandType Application -ErrorAction SilentlyContinue',
+        '            if ($pythonCommand) { $llamaIndexPython = $pythonCommand.Source }',
+        '        }',
+        '    }',
+        '    if (-not $llamaIndexPython) {',
+        '        if ($llamaIndexVenv) { Write-Host "❌ No Python interpreter found in virtual environment: $llamaIndexVenv" -ForegroundColor Red } else { Write-Host "❌ Python 3.10+ is required for the LlamaIndex collector." -ForegroundColor Red }',
+        '    } else {',
+        '        $llamaIndexNonce = [Guid]::NewGuid().ToString("N")',
+        '        $llamaIndexArchive = Join-Path ([System.IO.Path]::GetTempPath()) "agent-insight-llamaindex-$llamaIndexNonce.zip"',
+        '        $llamaIndexPackageUrl = "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"',
+        '        $llamaIndexRoot = Join-Path $env:USERPROFILE ".agent-insight\\collectors\\llamaindex"',
+        '        $llamaIndexSourceDir = Join-Path $llamaIndexRoot "current"',
+        '        $llamaIndexStaging = Join-Path $llamaIndexRoot ".install-$llamaIndexNonce"',
+        '        $llamaIndexBackup = Join-Path $llamaIndexRoot ".previous-$llamaIndexNonce"',
+        '        try {',
+        '            & $llamaIndexPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"',
+        '            if ($LASTEXITCODE -ne 0) { throw "$llamaIndexPython must be Python 3.10 or newer" }',
+        '            Write-Host "🐍 LlamaIndex Python ($llamaIndexPythonMode): $llamaIndexPython"',
+        '            & $llamaIndexPython -c "import llama_index.core" 2>$null',
+        '            if ($LASTEXITCODE -ne 0) { Write-Host "ℹ️  LlamaIndex is not installed in $llamaIndexPython; deployment will continue. Activate the observed project environment before running the Agent." }',
+        '            & $llamaIndexPython -m pip install --disable-pip-version-check "llama-index-observability-otel==0.6.4"',
+        '            if ($LASTEXITCODE -ne 0) { throw "unable to install llama-index-observability-otel 0.6.4" }',
+        '            New-Item -ItemType Directory -Path $llamaIndexRoot, $llamaIndexStaging -Force | Out-Null',
+        '            Invoke-WebRequest -Uri $llamaIndexPackageUrl -OutFile $llamaIndexArchive',
+        '            & $llamaIndexPython -m zipfile -e $llamaIndexArchive $llamaIndexStaging',
+        '            if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $llamaIndexStaging "agent_insight_llamaindex\\__init__.py"))) { throw "downloaded collector archive is invalid" }',
+        '            if (Test-Path -LiteralPath $llamaIndexSourceDir) { Move-Item -LiteralPath $llamaIndexSourceDir -Destination $llamaIndexBackup }',
+        '            Move-Item -LiteralPath $llamaIndexStaging -Destination $llamaIndexSourceDir',
+        '            Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue',
+        '            $LLAMAINDEX_READY = $true',
+        '            Write-Host "✅ LlamaIndex Trace Collector deployed at $llamaIndexSourceDir"',
+        '        } catch {',
+        '            if (-not (Test-Path -LiteralPath $llamaIndexSourceDir) -and (Test-Path -LiteralPath $llamaIndexBackup)) { Move-Item -LiteralPath $llamaIndexBackup -Destination $llamaIndexSourceDir }',
+        '            Write-Host "❌ Unable to deploy the LlamaIndex collector: $($_.Exception.Message)" -ForegroundColor Red',
+        '        } finally {',
+        '            Remove-Item -LiteralPath $llamaIndexArchive -Force -ErrorAction SilentlyContinue',
+        '            Remove-Item -LiteralPath $llamaIndexStaging -Recurse -Force -ErrorAction SilentlyContinue',
+        '            if ($LLAMAINDEX_READY) { Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue }',
+        '        }',
+        '        if ($LLAMAINDEX_READY) {',
+        '            $llamaIndexEnvPath = Join-Path $env:USERPROFILE ".agent-insight\\llamaindex_env.ps1"',
+        '            $llamaIndexEnvScript = @\'',
+        '$llamaIndexCollectorDir = Join-Path $HOME ".agent-insight\\collectors\\llamaindex\\current"',
+        'if ($env:PYTHONPATH) {',
+        '  $llamaIndexPaths = $env:PYTHONPATH -split [IO.Path]::PathSeparator',
+        '  if ($llamaIndexPaths -notcontains $llamaIndexCollectorDir) { $env:PYTHONPATH = "$llamaIndexCollectorDir$([IO.Path]::PathSeparator)$env:PYTHONPATH" }',
+        '} else { $env:PYTHONPATH = $llamaIndexCollectorDir }',
+        '\'@',
+        '            $llamaIndexPythonLiteral = $llamaIndexPython.Replace(([string][char]39), [string]::Concat([char]39, [char]39))',
+        '            $llamaIndexEnvScript += [Environment]::NewLine + "`$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON = \'$llamaIndexPythonLiteral\'"',
+        '            if ($llamaIndexVenv) {',
+        '                $llamaIndexVenvLiteral = $llamaIndexVenv.Replace(([string][char]39), [string]::Concat([char]39, [char]39))',
+        '                $llamaIndexEnvScript += [Environment]::NewLine + "`$env:AGENT_INSIGHT_LLAMAINDEX_VENV = \'$llamaIndexVenvLiteral\'"',
+        '            }',
+        '            if (-not $llamaIndexVenv) { $llamaIndexEnvScript += [Environment]::NewLine + \'Remove-Item Env:AGENT_INSIGHT_LLAMAINDEX_VENV -ErrorAction SilentlyContinue\' }',
+        '            Set-Content -Path $llamaIndexEnvPath -Value $llamaIndexEnvScript -Encoding UTF8',
+        '            if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }',
+        '            if (-not ((Get-Content $PROFILE -Raw) -match "llamaindex_env.ps1")) { Add-Content -Path $PROFILE -Value ". `"$llamaIndexEnvPath`"" }',
+        '            . $llamaIndexEnvPath',
+        '            $llamaIndexUninstallPath = Join-Path $env:USERPROFILE ".agent-insight\\uninstall_llamaindex_collector.ps1"',
+        '            $llamaIndexUninstallScript = @\'',
+        'param([switch]$Purge)',
+        '$agentInsightHome = Join-Path $HOME ".agent-insight"',
+        'if ($Purge) {',
+        '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "otel_data\\llamaindex") -Recurse -Force -ErrorAction SilentlyContinue',
+        '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "llamaindex.json"), (Join-Path $agentInsightHome "llamaindex.env") -Force -ErrorAction SilentlyContinue',
+        '}',
+        'Remove-Item -LiteralPath (Join-Path $agentInsightHome "collectors\\llamaindex") -Recurse -Force -ErrorAction SilentlyContinue',
+        'Remove-Item -LiteralPath (Join-Path $agentInsightHome "llamaindex_env.ps1") -Force -ErrorAction SilentlyContinue',
+        'if (Test-Path $PROFILE) {',
+        '  @(Get-Content $PROFILE | Where-Object { $_ -notmatch "llamaindex_env\\.ps1" }) | Set-Content $PROFILE',
+        '}',
+        'Write-Host "LlamaIndex collector removed. Restart running Python processes to unload existing handlers."',
+        'Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue',
+        '\'@',
+        '            Set-Content -Path $llamaIndexUninstallPath -Value $llamaIndexUninstallScript -Encoding UTF8',
+        '        }',
+        '    }',
         '}',
         '',
         'if ($INSTALL_QODER) {',
@@ -1227,6 +1608,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
         '}',
         '',
+        'if ($INSTALL_QWENCODE) {',
+        '    Write-Host "⏬ Installing Qwen Code Trace Collector from local npm package..."',
+        '    $qwenPackageRoot = node -p "require(\'path\').dirname(require.resolve(\'agent-insight/package.json\'))"',
+        '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
+        '}',
+        '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
         '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
@@ -1276,8 +1663,46 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
         '',
+        'if ($INSTALL_CODEX) {',
+        '    Write-Host "⏬ Installing Codex collector..."',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $codexInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-codex-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '    try {',
+        '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" -OutFile $codexInstaller',
+        '        & $codexInstaller',
+        '        if ($LASTEXITCODE -ne 0) { throw "Codex collector installer failed with exit code $LASTEXITCODE." }',
+        '    } finally {',
+        '        Remove-Item -LiteralPath $codexInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        '',
+        'if ($LLAMAINDEX_READY) {',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    & $llamaIndexPython -m agent_insight_llamaindex.cli configure --endpoint $AGENT_INSIGHT_HOST',
+        '    if ($LASTEXITCODE -ne 0) {',
+        '        Write-Host "❌ Unable to configure the LlamaIndex collector." -ForegroundColor Red',
+        '        $LLAMAINDEX_READY = $false',
+        '    }',
+        '}',
+        '',
+        '# 6.3 Install Pi Agent collector',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") {',
+        '    Write-Host "⏬ Installing Pi Agent collector..."',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $piInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-pi-agent-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '    try {',
+        '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -OutFile $piInstaller',
+        '        & $piInstaller',
+        '        if ($LASTEXITCODE -ne 0) { throw "Pi Agent collector installer failed with exit code $LASTEXITCODE." }',
+        '    } finally {',
+        '        Remove-Item -LiteralPath $piInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        '',
         '# 6.34 Agent RAS (Windows host): inproc requires Linux/macOS; use WSL on Windows',
-        'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW) {',
+        'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW -or $INSTALL_XIAOO) {',
         '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
         '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
         '}',
@@ -1332,6 +1757,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    } else {',
         '        Write-Host "Warning: Qoder CN collector installation did not complete; review the errors above."',
         '    }',
+        '}',
+        '',
+        '# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist',
+        'if ($INSTALL_QWENCODE) {',
+        '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
+        '    Write-Host "✅ Qwen Code native OTLP telemetry configured"',
         '}',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
@@ -1538,12 +1969,15 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"',
         '}',
         'if ($INSTALL_JIUWEN) { $summaryJwHome = if ($env:JIUWENSWARM_DATA_DIR) { $env:JIUWENSWARM_DATA_DIR } else { Join-Path $env:USERPROFILE ".jiuwenswarm" }; Write-Host "  ✅ JiuwenSwarm Extension: $summaryJwHome\\extensions\\agent-insight-observability (telemetry in config\\.env)" }',
+        'if ($LLAMAINDEX_READY) { Write-Host "  ✅ LlamaIndex Trace Collector: $llamaIndexSourceDir" }',
         'if ($INSTALL_TRAE) {',
         '    Write-Host "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"',
         '}',
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
+        'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -1577,9 +2011,13 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_JIUWEN) {',
         '    Write-Host "  5. Restart JiuwenSwarm (agentserver), then start a conversation"',
         '}',
+        'if ($LLAMAINDEX_READY) {',
+        '    Write-Host "  6. Restart PowerShell, then run: & `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" -m agent_insight_llamaindex.cli run -- `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" app.py"',
+        '}',
         'if ($INSTALL_ACTRAIL) {',
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
+        'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 

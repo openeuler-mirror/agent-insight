@@ -14,7 +14,7 @@
  *
  * 故意不依赖 opencode SDK / DB，纯 fs + child_process，便于单测（同 edit-scope-guard.ts 的取向）。
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync } from 'child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

@@ -1,6 +1,8 @@
 // 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
+// 对比实验（type='llm'）：按 type 分流调 getComparisonDetail（含 groups+pairing）；
+// 单组实验（type='single'）：走原聚合路径（响应 shape 不变，AC-019）。
 import { NextResponse } from 'next/server';
 import type { ExperimentCase, ExperimentEvalResult } from '@prisma/client';
 import {
@@ -12,6 +14,7 @@ import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,9 +56,27 @@ export async function GET(
     const { username } = await resolveUser(req, q.get('user'));
     const casePageSize = Math.min(Math.max(Number(q.get('casePageSize')) || 20, 1), 100);
     const casePageRaw = Math.max(Number(q.get('casePage')) || 1, 1);
-    // caseId：精确取单条 case（Trace 评测详情页下钻用，绕过 case 列表分页）
     const wantCaseId = q.get('caseId') || '';
 
+    const experimentMeta = await prisma.experiment.findFirst({
+      where: { id, ...(username ? { user: username } : {}) },
+      select: { id: true, type: true },
+    });
+    if (!experimentMeta) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+
+    // 对比实验：分流到 getComparisonDetail（含 groups + pairing）
+    if (experimentMeta.type === 'llm') {
+      const detail = await getComparisonDetail(id, {
+        casePage: casePageRaw,
+        casePageSize,
+        caseId: wantCaseId || undefined,
+      });
+      return NextResponse.json(detail);
+    }
+
+    // 单组实验：走原聚合路径（响应 shape 不变）
     const experiment = await prisma.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
       select: {
