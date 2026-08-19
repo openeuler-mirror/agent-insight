@@ -24,7 +24,6 @@ export type RasTaskSummary = {
   maxSeverity: string | null
   summaries: string[]
   latestTs: string | null
-  detectionLevel: "L1" | "L2" | "L3" | null
   actionTypes: string[]
   hasFault: boolean
   recoveryStarted: boolean
@@ -38,7 +37,6 @@ export type ReliabilityTraceItem = {
   latestTs: string
   completedAt: string | null
   anomalyKind: string
-  detectionLevel: "L1" | "L2" | "L3" | null
   severity: string | null
   summary: string | null
   eventCount: number
@@ -70,17 +68,6 @@ export function dedupeRasEvents<T extends RasEventForDedupe>(rows: T[]): T[] {
   }
 
   return out
-}
-
-function detectionLevelFromPayload(payloadJson: string): "L1" | "L2" | "L3" | null {
-  try {
-    const payload = JSON.parse(payloadJson)
-    const level = String(payload?.evidence?.detection_level || "")
-    if (level === "L1" || level === "L2" || level === "L3") return level
-  } catch {
-    return null
-  }
-  return null
 }
 
 export async function findRootExecutionId(taskId: string): Promise<string | null> {
@@ -184,7 +171,6 @@ function emptyRasTaskSummary(): RasTaskSummary & { actionResultSeen: boolean; ac
     maxSeverity: null,
     summaries: [],
     latestTs: null,
-    detectionLevel: null,
     actionTypes: [],
     hasFault: false,
     recoveryStarted: false,
@@ -207,10 +193,6 @@ export function buildRasTaskSummaries(rows: RasEventForSummary[]): Record<string
       cur.hasFault = true
       if (row.anomalyKind && !cur.kinds.includes(row.anomalyKind)) cur.kinds.push(row.anomalyKind)
       if (row.summary && cur.summaries.length < 3) cur.summaries.push(row.summary)
-      const level = detectionLevelFromPayload(row.payloadJson)
-      if (level && (!cur.detectionLevel || level > cur.detectionLevel)) {
-        cur.detectionLevel = level
-      }
       const prev = cur.maxSeverity ? sevRank[cur.maxSeverity] || 0 : 0
       const next = row.severity ? sevRank[row.severity] || 0 : 0
       if (next >= prev) cur.maxSeverity = row.severity
@@ -247,7 +229,6 @@ export function buildRasTaskSummaries(rows: RasEventForSummary[]): Record<string
       maxSeverity: cur.maxSeverity,
       summaries: cur.summaries,
       latestTs: cur.latestTs,
-      detectionLevel: cur.detectionLevel,
       actionTypes: cur.actionTypes,
       hasFault: cur.hasFault,
       recoveryStarted: cur.recoveryStarted,
@@ -372,7 +353,6 @@ export async function listReliabilityTraces(opts: {
       latestTs: anomaly?.latestTs || execution.timestamp.toISOString(),
       completedAt,
       anomalyKind: anomaly?.kinds[0] || "",
-      detectionLevel: anomaly?.detectionLevel || null,
       severity: anomaly?.maxSeverity || null,
       summary: pickReliabilityTraceSummary({
         anomalySummary: anomaly?.summaries[0],

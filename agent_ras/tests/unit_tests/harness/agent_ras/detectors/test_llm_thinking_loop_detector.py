@@ -786,27 +786,3 @@ class TestWindowTruncation:
         for _ in range(10):
             await det.observe(_stream_chunk("x" * 100))
         assert len(det._buffers["llm_output"][0]) <= config.window_max_chars
-
-
-def test_build_anomaly_sets_detection_level_from_presentation() -> None:
-    anomaly = LlmThinkingLoopDetector._build_anomaly(
-        KIND_LLM_THINKING_LOOP,
-        Severity.LOW,
-        "m",
-        {"mode": "suffix_cycle"},
-    )
-    assert anomaly.evidence["detection_level"] == "L1"
-    l2 = LlmThinkingLoopDetector._build_anomaly(
-        KIND_LLM_THINKING_LOOP,
-        Severity.MEDIUM,
-        "m",
-        {"mode": "similar_clauses"},
-    )
-    assert l2.evidence["detection_level"] == "L2"
-    l3 = LlmThinkingLoopDetector._build_anomaly(
-        KIND_LLM_THINKING_DEAD_LOOP,
-        Severity.HIGH,
-        "m",
-        {"mode": "plan_execution_loop_lock"},
-    )
-    assert l3.evidence["detection_level"] == "L3"
