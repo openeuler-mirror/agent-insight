@@ -10,7 +10,6 @@ import {
   getRasCapabilityCatalogSync,
   type RasCatalogDomain,
 } from '@/lib/ingest/ras/catalog-engine'
-import { INSIGHT_LEGACY_FLAT_ALIASES } from '@/lib/ingest/ras/insight-legacy-flat-aliases'
 
 export const RAS_CAPABILITY_PLATFORMS = [
   'opencode',
@@ -104,11 +103,6 @@ export function defaultCapabilityConfigBody(): RasCapabilityConfigBody {
       notify_user_on_warning: recovery.notify_user_on_warning !== false,
     },
   }
-}
-
-/** Old IF-N10 flat keys → nested detectors/recovery paths (frozen; new domains skip). */
-export function legacyFlatAliases(): Record<string, string> {
-  return { ...INSIGHT_LEGACY_FLAT_ALIASES }
 }
 
 export function defaultEnvelope(
