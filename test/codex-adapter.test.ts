@@ -1304,6 +1304,56 @@ test("Codex adapter skips an empty lifecycle and names real untitled work withou
   assert.equal(untitled.query, "Codex tool: shell")
 })
 
+test("Codex adapter suppresses internal utility sessions whose only signal is a system-prompt root input", () => {
+  // Codex 内部会话（任务标题生成、建议生成、worker 系统提示词等）以根 agent
+  // input 出现但没有任何 LLM/Tool/Skill/子 Agent 工作，也没有生命周期执行信号。
+  // 这些不是真实用户任务，不应成为可见执行记录。
+  const phantom = aggregateOtelTraceEvents("phantom-session", normalize([
+    canonical({
+      sessionId: "phantom-session",
+      eventId: "phantom-agent",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.codex",
+      model: "gpt-5.6-luna",
+      input: "You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task.",
+      status: "ok",
+    }),
+    canonical({
+      sessionId: "phantom-session",
+      eventId: "phantom-api-1",
+      spanId: "2".repeat(16),
+      parentSpanId: "1".repeat(16),
+      kind: "api",
+      name: "api.codex",
+      status: "ok",
+    }),
+  ]))
+  assert.equal(phantom, null)
+
+  // 生命周期执行（rollout reader 产出，agent.insight.lifecycle=execution）即使
+  // 没有 hook 工作也必须保留为可见任务。
+  const lifecycle = aggregateOtelTraceEvents("lifecycle-session", normalize([
+    canonical({
+      sessionId: "lifecycle-session",
+      eventId: "lifecycle-start",
+      spanId: "3".repeat(16),
+      kind: "agent",
+      name: "agent.codex",
+      input: "查询今天最重要的科技新闻",
+      attributes: {
+        "agent.insight.lifecycle": "execution",
+        "codex.source.kind": "desktop",
+        "codex.execution.status": "completed",
+      },
+    }),
+  ]))
+  assert.ok(lifecycle)
+  assert.equal(lifecycle.sourceKind, "desktop")
+  assert.equal(lifecycle.executionStatus, "completed")
+  assert.equal(lifecycle.query, "查询今天最重要的科技新闻")
+})
+
 test("Codex adapter output is deterministic for the same canonical structure", () => {
   const source = [
     canonical({

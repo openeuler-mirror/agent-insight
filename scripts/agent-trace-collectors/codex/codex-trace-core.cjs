@@ -42,6 +42,13 @@ const MATCHER_EVENTS = new Set([
 const IDE_ORIGINATORS = /(?:vscode|cursor|windsurf|ide)/i;
 const SKILL_PROMPT_PATTERN = /(?:^|\s)(?:\/skill:|\$)([a-z0-9][a-z0-9._-]*)\b/i;
 const SKILL_PATH_PATTERN = /(?:^|[\s"'`])((?:[A-Za-z]:)?[\\/]?(?:[^\\/"'`\s]+[\\/])*skills[\\/]([^\\/"'`\s]+)[\\/]SKILL\.md)(?=$|[\s"'`])/i;
+
+/** 技能的真正执行以这些工具运行形态出现；读取 SKILL.md 的普通工具不在此列。 */
+const SKILL_RUNNER_TOOLS = new Set(["skill", "skill_view", "load_skill", "load-skill", "run_skill", "run-skill", "skill.run", "skill_run"]);
+
+function isSkillRunnerTool(toolName) {
+  return SKILL_RUNNER_TOOLS.has(String(toolName || "").toLowerCase());
+}
 const DEFAULT_STATE_RETENTION_MS = 6 * 60 * 60 * 1000;
 
 function asString(value) {
@@ -634,6 +641,41 @@ class CodexTraceCore {
     return stored;
   }
 
+  /** 技能完成：把宿主工具带回的输出补写到同一个 skill span（Bug 52）。
+   *
+   * emitSkill 在（Pre）ToolUse 时写入，此时技能结果尚未产生；技能结果随宿主工具
+   * 的 PostToolUse tool_response 返回。这里以同一 spanId 追加一份带 output 的完成
+   * 快照，endTimeMs 更新为宿主工具完成时刻。服务端 keepLatestCodexSpanSnapshots
+   * 按 spanId 只保留 endTime 最新的一份，因此完成快照会覆盖 start 快照，UI 的
+   * skill 节点能显示输出。宿主工具无输出时不追加，避免空快照。 */
+  async completeActiveSkill(session, turn, output, timestampMs, isError) {
+    const spanId = turn.activeSkillSpanId;
+    if (!spanId) return;
+    const stored = [...session.skills.values()].find((s) => s.spanId === spanId);
+    if (!stored) return;
+    if (output == null) return;
+    await this.append(session, turn, {
+      eventId: stableEventId("codex", session.sessionId, turn.turnId, "skill", stored.name),
+      spanId,
+      parentSpanId: turn.parentScope?.rootSpanId || turn.rootSpanId,
+      kind: "skill",
+      name: `skill.${stored.name}`,
+      startTimeMs: stored.startedAt,
+      endTimeMs: timestampMs,
+      input: turn.input,
+      output,
+      status: isError ? "error" : "ok",
+      skill: {
+        name: stored.name,
+        version: stored.version,
+        triggerMode: stored.triggerMode,
+      },
+      attributes: {
+        "codex.turn.id": turn.turnId,
+      },
+    });
+  }
+
   toolParent(session, turn) {
     if (!turn) return session.rootSpanId;
     if (turn.activeSkillSpanId) return turn.activeSkillSpanId;
@@ -740,13 +782,24 @@ class CodexTraceCore {
           detected.version = await skillVersion(detected.filePath);
           await this.emitSkill(session, turn, detected, timestampMs);
           tool.parentSpanId = turn.activeSkillSpanId;
+          turn.skillCarrierCallId = callId;
         }
       } else {
         tool.output = input.tool_response ?? input.tool_result ?? input.result ?? input.output;
         tool.isError = Boolean(input.is_error || input.error);
         tool.error = asString(input.error?.message || input.error);
         tool.exitCode = asNumber(input.exit_code ?? input.tool_response?.exit_code);
-        await this.emitTool(session, turn, tool, timestampMs);
+        // 技能宿主工具完成：结果并入 skill 完成快照，不再单独发 tool.skill 事件，
+        // 避免同一技能在 UI 里被同时渲染成 SKILL 节点和 tool 节点（重复显示 Bug 52
+        // 的配套整理）。其余普通工具照常发 tool 事件。
+        const isSkillCarrierCompletion = turn.activeSkillSpanId
+          && callId === turn.skillCarrierCallId
+          && isSkillRunnerTool(name);
+        if (isSkillCarrierCompletion) {
+          await this.completeActiveSkill(session, turn, tool.output, timestampMs, tool.isError);
+        } else {
+          await this.emitTool(session, turn, tool, timestampMs);
+        }
       }
     } else if (eventName === "SubagentStart" || eventName === "SubagentStop") {
       const agentId = asString(input.agent_id || input.subagent_id) ||
