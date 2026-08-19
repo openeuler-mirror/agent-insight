@@ -15,6 +15,7 @@ from detectors.loader import (
     build_member_detectors,
     detector_plugins,
     ensure_domains_loaded,
+    is_stream_kind,
     reset_domains_for_tests,
     skill_for,
 )
@@ -26,37 +27,26 @@ def test_builtin_domains_join() -> None:
     reset_domains_for_tests()
     ensure_domains_loaded(force=True)
     plugins = detector_plugins()
-    assert plugins
-    for plugin in plugins.values():
-        for kind, domain in plugin.kind_to_domain.items():
-            assert KIND_TO_DOMAIN[kind] == domain
-            if plugin.anchor:
-                assert anchor_for_kind(kind) == plugin.anchor
-        skills = DOMAIN_SKILLS.get(plugin.id, {})
-        if plugin.detection_skill:
-            assert skills.get("detection") == plugin.detection_skill
-            assert skill_for(plugin.id, "detection") == plugin.detection_skill
+    assert "llm_thinking_loop" in plugins
+    assert "repeat_tool" in plugins
+    assert KIND_TO_DOMAIN["llm_thinking_dead_loop"] == "llm_thinking_loop"
+    assert DOMAIN_SKILLS["llm_thinking_loop"]["detection"] == "llm-loop-detection"
+    assert DOMAIN_SKILLS["llm_thinking_loop"]["review"] == "llm-loop-review"
+    assert "llm_thinking_loop" in STREAM_KINDS
+    assert KIND_OVERRIDES["llm_thinking_dead_loop"]
+    assert anchor_for_kind("llm_thinking_loop") == "llm"
+    assert anchor_for_kind("repeat_tool_call") == "tool"
+    assert is_stream_kind("llm_thinking_dead_loop")
+    assert not is_stream_kind("repeat_tool_call")
+    assert skill_for("llm_thinking_loop", "review") == "llm-loop-review"
 
 
 def test_build_member_detectors_order() -> None:
     reset_domains_for_tests()
     ensure_domains_loaded(force=True)
-    cfg = AgentRASConfig()
-    dets = build_member_detectors(cfg)
-    plugins = detector_plugins()
-
-    def _plugin_for(detector) -> DetectorPlugin | None:
-        for plugin in plugins.values():
-            if detector.name in plugin.kinds or detector.name == plugin.id:
-                return plugin
-        return None
-
-    prios = []
-    for detector in dets:
-        plugin = _plugin_for(detector)
-        assert plugin is not None
-        prios.append((plugin.priority, plugin.id))
-    assert prios == sorted(prios)
+    dets = build_member_detectors(AgentRASConfig())
+    names = [type(d).__name__ for d in dets]
+    assert names == ["RepeatToolCallDetector", "LlmThinkingLoopDetector"]
 
 
 def test_partial_plugins_join(monkeypatch) -> None:
