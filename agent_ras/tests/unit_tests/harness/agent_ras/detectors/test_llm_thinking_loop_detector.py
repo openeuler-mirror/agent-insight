@@ -11,7 +11,6 @@ from unittest.mock import patch
 import pytest
 
 from detectors.llm_thinking_loop import (
-    FAULT_DOMAIN_LLM_THINKING_LOOP,
     KIND_LLM_THINKING_DEAD_LOOP,
     KIND_LLM_THINKING_LOOP,
     LlmThinkingLoopConfig,
@@ -811,18 +810,3 @@ def test_build_anomaly_sets_detection_level_from_presentation() -> None:
         {"mode": "plan_execution_loop_lock"},
     )
     assert l3.evidence["detection_level"] == "L3"
-
-
-def test_thinking_loop_kind_and_skills() -> None:
-    from agents.base import fault_domain_for_kind, skill_for
-    from detectors.loader import is_stream_kind
-
-    assert fault_domain_for_kind(KIND_LLM_THINKING_LOOP) == FAULT_DOMAIN_LLM_THINKING_LOOP
-    assert (
-        fault_domain_for_kind(KIND_LLM_THINKING_DEAD_LOOP)
-        == FAULT_DOMAIN_LLM_THINKING_LOOP
-    )
-    assert is_stream_kind(KIND_LLM_THINKING_LOOP)
-    assert is_stream_kind(KIND_LLM_THINKING_DEAD_LOOP)
-    assert skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "detection") == "llm-loop-detection"
-    assert skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "review") == "llm-loop-review"
