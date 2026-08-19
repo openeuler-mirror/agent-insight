@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a2c2af138ab36c4a00dbc4cf64c1abc916fc544a` (`a2c2af13`) |
+| Commit | `789bfd06df4f4f6950cc042e1aab08196df9d15c` (`789bfd06`) |
 | Branch | `codex/reliability-development` |
-| Date | 2026-08-19 10:05:27 +0800 |
+| Date | 2026-08-19 17:26:04 +0800 |
 | Author | gyctl |
-| Subject | `fix: resolve reliability merge conflicts` |
+| Subject | `fix: resolve PR 312 conflicts with latest master` |
 
-**如何更新：** `git diff a2c2af13 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 789bfd06 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
