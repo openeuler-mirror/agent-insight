@@ -13,7 +13,11 @@ import {
   getCodeAgentOtelSpoolDir,
   listCodeAgentOtelSpoolFiles,
 } from '@/lib/ingest/codeagent-otel/spool';
-import { getOtelTraceSpoolDir, listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
+import {
+  getActrailOtelTraceSpoolDir,
+  getOtelTraceSpoolDir,
+  listOtelTraceSpoolFiles,
+} from '@/lib/ingest/otel/spool';
 
 export type SpoolAggregationResult = {
   sessionId: string;
@@ -60,6 +64,15 @@ export function listSources(): SpoolSource[] {
       aggregate: aggregateClaudeOtelSession,
       statSession: (sessionId) => statSessionSpool(getClaudeOtelSpoolDir(), 'logs.jsonl', sessionId),
       defaultSkipEvaluation,
+    },
+    {
+      id: 'actrail-otel-traces',
+      spoolDir: getActrailOtelTraceSpoolDir,
+      listFiles: () => listOtelTraceSpoolFiles(getActrailOtelTraceSpoolDir()),
+      listFilesForDay: (day) => listOtelTraceSpoolFilesForDay(day, getActrailOtelTraceSpoolDir()),
+      aggregate: (sessionId) => aggregateOtelTraceSession(sessionId, getActrailOtelTraceSpoolDir()),
+      statSession: (sessionId) => statSessionSpool(getActrailOtelTraceSpoolDir(), 'traces.jsonl', sessionId),
+      defaultSkipEvaluation: () => true,
     },
     {
       id: 'otel-traces',

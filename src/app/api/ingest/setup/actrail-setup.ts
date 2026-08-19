@@ -88,8 +88,8 @@ const lines = [
   '[action_kinds]',
   'default = false',
   '',
-  '"process.exec" = true',
-  '"process.exit" = true',
+  '"process.exec" = false',
+  '"process.exit" = false',
   '"agent.identity" = true',
   '"agent.exit" = true',
   '"file.modify" = false',
@@ -101,6 +101,8 @@ const lines = [
   '"llm.call" = true',
   '"llm.request" = true',
   '"llm.response" = true',
+  '"llm.tool_call" = true',
+  '"llm.tool_result" = true',
   '"mcp.tool_call" = true',
   '"mcp.request" = true',
   '"mcp.response" = true',
@@ -108,10 +110,10 @@ const lines = [
   '"mcp.stdout" = true',
   '"sse.stream" = false',
   '"sse.event" = false',
-  '"enforcement.decision" = true',
+  '"enforcement.decision" = false',
   '"process.fork_attempt" = false',
   '"agent.invocation" = true',
-  '"command.invocation" = true',
+  '"command.invocation" = false',
 ];
 process.stdout.write(lines.join('\\n') + '\\n');
 ACTRAIL_CONFIG_EOF
@@ -124,6 +126,105 @@ ACTRAIL_CONFIG_EOF
         else
             echo "⚠️  AcTrail 插件控制需要 root 权限，但当前环境没有 sudo。"
             return 1
+        fi
+
+        ACTRAIL_OPERATOR_CANDIDATE="$ACTRAIL_INSIGHT_DIR/actraild.conf.agent-insight"
+        ACTRAIL_OPERATOR_BACKUP="$ACTRAIL_INSIGHT_DIR/actraild.conf.before-agent-insight"
+        if ! $ACTRAIL_PRIVILEGE env ACTRAIL_OPERATOR_CONFIG="$ACTRAIL_OPERATOR_CONFIG" \
+            node > "$ACTRAIL_OPERATOR_CANDIDATE" <<'ACTRAIL_OPERATOR_EOF'
+const fs = require('fs');
+const source = fs.readFileSync(process.env.ACTRAIL_OPERATOR_CONFIG, 'utf8');
+const newline = String.fromCharCode(10);
+const lines = source.replace(/\\r\\n/g, newline).split(newline);
+
+function tableName(line) {
+  const match = line.match(/^\\s*\\[([^\\[\\]]+)\\]\\s*(?:#.*)?$/);
+  return match ? match[1].trim() : '';
+}
+
+function upsertTable(name, values) {
+  let start = lines.findIndex(line => tableName(line) === name);
+  if (start < 0) {
+    if (lines.length > 0 && lines[lines.length - 1].trim()) lines.push('');
+    lines.push('[' + name + ']');
+    start = lines.length - 1;
+  }
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (tableName(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+
+  for (const [key, value] of Object.entries(values)) {
+    const keyPattern = new RegExp('^\\\\s*' + key + '\\\\s*=');
+    let existing = -1;
+    for (let index = start + 1; index < end; index += 1) {
+      if (keyPattern.test(lines[index])) {
+        existing = index;
+        break;
+      }
+    }
+    const rendered = key + ' = ' + value;
+    if (existing >= 0) {
+      lines[existing] = rendered;
+    } else {
+      lines.splice(end, 0, rendered);
+      end += 1;
+    }
+  }
+}
+
+upsertTable('agent_invocation', {
+  enabled: 'true',
+});
+upsertTable('semantic_retention.l0_llm_call', {
+  enabled: 'true',
+  request_content: '"canonical_blocks"',
+  request_body_export: '"canonical_json"',
+  request_body_export_max_bytes: '131072',
+  tool_calls: '"assembled_json"',
+  tool_result_content_export: '"canonical_json"',
+  tool_result_content_export_max_bytes: '131072',
+});
+
+while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop();
+process.stdout.write(lines.join(newline) + newline);
+ACTRAIL_OPERATOR_EOF
+        then
+            echo "⚠️  无法生成 AcTrail 守护进程数据导出配置。"
+            return 1
+        fi
+        chmod 0600 "$ACTRAIL_OPERATOR_CANDIDATE"
+
+        if ! $ACTRAIL_PRIVILEGE "$ACTRAILD_BIN" --config "$ACTRAIL_OPERATOR_CANDIDATE" init >/dev/null; then
+            echo "⚠️  当前 actraild 不支持 Agent Insight 所需的完整请求和工具结果导出配置，请升级 AcTrail。"
+            return 1
+        fi
+
+        ACTRAIL_OPERATOR_CHANGED=false
+        if ! cmp -s "$ACTRAIL_OPERATOR_CANDIDATE" "$ACTRAIL_OPERATOR_CONFIG"; then
+            if ! $ACTRAIL_PRIVILEGE cp -p "$ACTRAIL_OPERATOR_CONFIG" "$ACTRAIL_OPERATOR_BACKUP"; then
+                echo "⚠️  无法备份 AcTrail 守护进程配置。"
+                return 1
+            fi
+            if ! $ACTRAIL_PRIVILEGE cp "$ACTRAIL_OPERATOR_CANDIDATE" "$ACTRAIL_OPERATOR_CONFIG"; then
+                echo "⚠️  无法更新 AcTrail 守护进程配置。"
+                return 1
+            fi
+            ACTRAIL_OPERATOR_CHANGED=true
+        fi
+
+        if [ "$ACTRAIL_OPERATOR_CHANGED" = "true" ] && \
+            $ACTRAIL_PRIVILEGE "$ACTRAILD_BIN" --config "$ACTRAIL_OPERATOR_CONFIG" status >/dev/null 2>&1; then
+            if ! $ACTRAIL_PRIVILEGE "$ACTRAILD_BIN" --config "$ACTRAIL_OPERATOR_CONFIG" restart >/dev/null; then
+                $ACTRAIL_PRIVILEGE cp "$ACTRAIL_OPERATOR_BACKUP" "$ACTRAIL_OPERATOR_CONFIG" || true
+                $ACTRAIL_PRIVILEGE "$ACTRAILD_BIN" --config "$ACTRAIL_OPERATOR_CONFIG" restart >/dev/null 2>&1 || true
+                echo "⚠️  AcTrail 守护进程重新加载失败，已恢复原配置。"
+                return 1
+            fi
         fi
 
         ACTRAIL_OTEL_INSTANCE="agent-insight.otel-http"
@@ -143,7 +244,8 @@ ACTRAIL_CONFIG_EOF
 
         ACTRAIL_SETUP_OK=true
         echo "✅ 已完成 AcTrail 数据对接配置"
-        echo "   配置文件：$ACTRAIL_OTEL_CONFIG"
+        echo "   守护进程配置：$ACTRAIL_OPERATOR_CONFIG"
+        echo "   上报插件配置：$ACTRAIL_OTEL_CONFIG"
         echo "   上报地址：$ACTRAIL_OTEL_ENDPOINT"
     }
 

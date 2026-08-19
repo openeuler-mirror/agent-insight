@@ -621,7 +621,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     };
     const llmSummary = contentText.trim()
         ? contentText
-        : extractPartsText(it.parts, 'reasoning') || toolNamesSummary();
+        : extractPartsText(it.parts, 'reasoning') || toolNamesSummary() || errorSummaryOf(it);
 
     if (calls.length === 0) {
         // Pure LLM response with no tool calls — emit an llm event if it produced
@@ -695,6 +695,15 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     }
 
     return out;
+}
+
+/** Framework-neutral display fallback for failed normalized interactions. */
+function errorSummaryOf(it: RawInteraction): string {
+    if (String(it.status || '').toLowerCase() !== 'error') return '';
+    const normalized = typeof it.error_summary === 'string' ? it.error_summary.trim() : '';
+    if (normalized) return normalized;
+    const raw = typeof it.error === 'string' ? it.error : it.error?.message;
+    return String(raw || '').trim() || 'LLM 调用失败';
 }
 
 function toMsTimestamp(v: any): number | undefined {

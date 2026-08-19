@@ -1,7 +1,8 @@
 import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
-import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
+import { appendOtelTraceEvents, getActrailOtelTraceSpoolDir } from '@/lib/ingest/otel/spool';
 import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
 import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
+import { isActrailOtlpTraceBody } from '@/lib/ingest/otel/actrail';
 import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
 import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
 import { partitionCodeAgentOtlpPayload } from '@/lib/ingest/codeagent-otel/detect';
@@ -132,9 +133,13 @@ export async function POST(req: Request) {
       });
     }
 
+    const actrailPayload = isActrailOtlpTraceBody(body);
     const receivedAt = new Date().toISOString();
     const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser });
-    const { dirtySessionIds } = appendOtelTraceEvents(events);
+    const { dirtySessionIds } = appendOtelTraceEvents(
+      events,
+      actrailPayload ? getActrailOtelTraceSpoolDir() : undefined,
+    );
     return NextResponse.json({
       status: 'accepted',
       received: events.length,

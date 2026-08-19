@@ -27,6 +27,7 @@ import {
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
 import {
+    actrailPromptHistoryCount,
     buildLangfuseAgentTrace,
     langfusePromptHistoryCount,
 } from '@/lib/engine/observability/langfuse-agent-trace';
@@ -1884,7 +1885,7 @@ function buildLlmPromptSnapshot(
     event: AgentEvent,
     node: AgentNode,
     interactions: RawInteraction[],
-    useLangfuseRequestMessages: boolean,
+    reportedRequestMessagesSource: 'langfuse' | 'actrail' | null,
 ): LlmPromptSnapshot {
     const eventIdx = event.interactionIndex;
     const previousLlmEvents = node.events
@@ -1892,18 +1893,20 @@ function buildLlmPromptSnapshot(
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
     const requestMessages = event.interaction.requestMessages;
-    if (useLangfuseRequestMessages && Array.isArray(requestMessages) && requestMessages.length > 0) {
+    if (reportedRequestMessagesSource && Array.isArray(requestMessages) && requestMessages.length > 0) {
         const previousRequest = Array.isArray(prevEvent?.interaction.requestMessages)
             ? prevEvent.interaction.requestMessages
             : [];
         return {
             inputMessages: promptMessagesFromRequest(requestMessages),
-            repeatedPrefixCount: langfusePromptHistoryCount(
-                requestMessages,
-                previousRequest,
-                typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
-                prevEvent?.interaction.tool_calls || [],
-            ),
+            repeatedPrefixCount: reportedRequestMessagesSource === 'actrail'
+                ? actrailPromptHistoryCount(requestMessages)
+                : langfusePromptHistoryCount(
+                    requestMessages,
+                    previousRequest,
+                    typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
+                    prevEvent?.interaction.tool_calls || [],
+                ),
             activeCompaction: null,
             foldedOriginalRaw: null,
             foldedOriginalCount: 0,
@@ -2714,7 +2717,14 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
 
     const snapshot = useMemo(
-        () => buildLlmPromptSnapshot(event, node, interactions, framework === 'langfuse-langgraph'),
+        () => buildLlmPromptSnapshot(
+            event,
+            node,
+            interactions,
+            framework === 'actrail'
+                ? 'actrail'
+                : framework === 'langfuse-langgraph' ? 'langfuse' : null,
+        ),
         [event, node, interactions, framework],
     );
 
