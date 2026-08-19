@@ -922,13 +922,21 @@ class LlmThinkingLoopDetector:
         evidence: dict[str, Any],
     ) -> Anomaly:
         kind_value = getattr(kind, "value", kind)
+        payload = dict(evidence)
+        mode = str(payload.get("mode") or "")
+        if not payload.get("detection_level") and mode:
+            for sm in PRESENTATION_LLM_THINKING_LOOP.submodes:
+                keys = sm.runtime_keys or {}
+                if keys.get("mode") == mode and sm.detection_level:
+                    payload["detection_level"] = sm.detection_level
+                    break
         return Anomaly(
             detector="llm_thinking_loop",
             kind=str(kind_value),
             severity=severity,
             member_name=member,
-            summary=f"{kind_value} ({evidence.get('mode', '?')})",
-            evidence=evidence,
+            summary=f"{kind_value} ({payload.get('mode', '?')})",
+            evidence=payload,
         )
 
 
