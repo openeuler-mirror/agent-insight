@@ -39,6 +39,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'codeagent', label: 'CodeAgent' },
     { value: 'openclaw', label: 'OpenClaw' },
     { value: 'hermes', label: 'Hermes' },
+    { value: 'xiaoo', label: 'xiaoO' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'llamaindex', label: 'LlamaIndex' },
     { value: 'qoder', label: 'Qoder CN product family' },
@@ -217,7 +218,9 @@ export default function AccessInstallPage() {
                                 <span style={countPill}>{frameworks.length}</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '先勾选框架,再按系统二选一' : 'Pick your frameworks, then your OS'}
+                                    {isZh
+                                        ? '先勾选框架,再按系统二选一 —— 同时完成本机纳管'
+                                        : 'Pick frameworks, then your OS — also registers this host'}
                                 </span>
                             </div>
 
@@ -579,6 +582,14 @@ function DocsPanel({ locale }: { locale: string }) {
         </section>
     );
 }
+
+
+/**
+ * 常驻客户端安装（IF-N01/N02）。
+ *
+ * 与上方的 Trace 采集器安装是两件事：这里装的是独立常驻服务，由 systemd / launchd 守护，
+ * 不随 Agent 平台启停，负责配置下发与双向控制通道。
+ */
 
 function KvRow({
     label, value, mono, bold, ellipsis, icon,

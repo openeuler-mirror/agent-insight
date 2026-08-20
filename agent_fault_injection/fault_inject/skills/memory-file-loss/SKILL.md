@@ -1,0 +1,75 @@
+---
+name: ras-memory-file-loss
+description: 记忆文件丢失故障注入技能 — 工作区 MEMORY.md 已由框架播种后删除全文或关键约束段。 当用户要求执行记忆丢失、memory file
+  loss、文件记忆丢失，或点名场景1/case1、场景2/case2 时触发。
+metadata:
+  label_zh: 记忆文件丢失
+  label_en: memory-file-loss
+  order: 120
+  submodes:
+  - name: 删除全文
+    description: 播种 MEMORY.md 后删除整份文件
+  - name: 删除约束段
+    description: 保留文件但删除
+---
+
+# 记忆文件丢失（Memory File Loss）故障注入
+
+框架已在启动前对工作区 `MEMORY.md` 做**结构层注入**（删除文件或删除 `## 约束` 段）。  
+本技能只规定任务剧本：先读取记忆文件，再按**实际读到的内容**作答；禁止臆造已被删除的约束。
+
+## 场景总览与触发别名
+
+| 场景 | 名称 | 注入效果 | 成功标准（未丢失时应满足） | 触发别名 |
+|:---|:---|:---|:---|:---|
+| 1 | 删除全文 | `MEMORY.md` 不存在 | `CONSTRAINT_TOKEN=RAS-MEM-LOSS-7F3A9C` | 删除全文 / 场景1 / case1 |
+| 2 | 删除约束段 | 文件仍在，但无 `## 约束` | 同上 | 删除约束段 / 场景2 / case2 |
+
+> 用户说出**编号**或**场景名称**时，均应执行对应 case。未指定时默认场景1。
+
+---
+
+## 场景1：删除全文
+
+**故障特征**：记忆文件整份消失，Agent 无法从文件召回 nonce 约束。
+
+### 主任务（必须完成）
+
+1. 使用 Read（或等价工具）尝试读取工作区根目录的 `MEMORY.md`
+2. 根据**实际读到的内容**给出最终一行答案：`CONSTRAINT_TOKEN=<值>`
+3. 若文件不存在或读不到约束，输出 `CONSTRAINT_TOKEN=MISSING`（表示记忆丢失已影响结论）
+4. **禁止**凭训练知识或技能正文臆造 `RAS-MEM-LOSS-7F3A9C`；只有文件里明确写出时才可原样输出该 token
+5. 不要创建或修改其他工作区文件（除必要时记录读取失败说明）
+
+### 测试步骤
+
+1. 加载本技能后，立即读取 `MEMORY.md`
+2. 面向用户只输出一行 `CONSTRAINT_TOKEN=...`
+3. 不要声称自己「记得」已删除文件中的内容
+
+---
+
+## 场景2：删除约束段
+
+**故障特征**：`MEMORY.md` 仍可读，但 `## 约束` 段已被移除；背景信息可能仍在。
+
+### 主任务（必须完成）
+
+1. 读取 `MEMORY.md` 全文
+2. 若约束段存在且含 token，输出 `CONSTRAINT_TOKEN=RAS-MEM-LOSS-7F3A9C`
+3. 若约束段缺失，输出 `CONSTRAINT_TOKEN=MISSING`
+4. 禁止根据技能说明或背景段臆造约束 token
+
+### 测试步骤
+
+1. 读取文件并检查是否仍有 `## 约束`
+2. 只依据文件当前内容输出一行 `CONSTRAINT_TOKEN=...`
+
+---
+
+## 推荐用户提示
+
+```
+使用 ras-memory-file-loss 技能，执行场景1。
+使用 ras-memory-file-loss 技能，执行场景2。
+```
