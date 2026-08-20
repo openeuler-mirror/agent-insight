@@ -887,15 +887,10 @@ function TracePageContent() {
                     />
                 ) : (
                     <>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                             <StatCard
                                 label={<Term id="trace" label={t('tracePage.statTotal')} />}
                                 value={stats.total.toLocaleString()}
-                            />
-                            <StatCard
-                                label={<Term id="fault-item" label={t('tracePage.statFailed')} />}
-                                value={String(stats.failedCount)}
-                                accent={stats.failedCount > 0 ? 'error' : undefined}
                             />
                             <StatCard label={t('tracePage.statAvgLatency')} value={formatDurationMs(stats.avgLatencyMs)} />
                             <StatCard
