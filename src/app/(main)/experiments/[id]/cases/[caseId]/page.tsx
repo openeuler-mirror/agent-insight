@@ -144,6 +144,9 @@ const SPECIALIZED_PRESET_IDS = new Set([
   'preset-depth-result',
   'preset-agent-tool-utilization',
   'preset-agent-tool-selection',
+  'preset-ras-reliability',
+  'preset-ras-reliability-fault-injection',
+  'preset-ras-reliability-detection-recovery',
 ]);
 
 /** 评分点的「状态 / 可归因 skill」标签组（评分点与子项复用）。 */
@@ -421,9 +424,9 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
       setDetail(data);
       setError('');
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (!silent) {
-        setError(e?.message || '加载实验失败');
+        setError(e instanceof Error ? e.message : '加载实验失败');
         setDetail(null);
       }
     } finally {
@@ -431,8 +434,14 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
     }
   }, [user, id, caseId]);
 
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { loadComments(); }, [loadComments]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadComments(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadComments]);
 
   const retryResult = useCallback(async (resultId: string) => {
     if (!user || retryingId) return;
@@ -445,8 +454,8 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '重评失败'));
       await load(true);
-    } catch (e: any) {
-      setError(e?.message || '重评失败');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '重评失败');
     } finally {
       setRetryingId('');
     }
@@ -601,10 +610,11 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                               <>
                                 <VerdictChip verdict={r.verdict} score={shownScore} />
                                 <span style={{
-                                  fontSize: 15, fontWeight: 700,
+                                  fontSize: 12, fontWeight: 700,
                                   color: adjusted ? 'var(--warning)' : 'var(--accent)',
                                 }}>
-                                  {typeof shownScore === 'number' ? shownScore : '—'}
+                                  总分&nbsp;
+                                  <span style={{ fontSize: 15 }}>{typeof shownScore === 'number' ? shownScore : '—'}</span>
                                 </span>
                                 {adjusted && (
                                   <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>

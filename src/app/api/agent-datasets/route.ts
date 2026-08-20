@@ -18,6 +18,8 @@ import {
   type AgentDatasetRecord,
 } from '@/server/agent_datasets_storage';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { listFaultModeIds } from '@/lib/reliability/fault-modes';
+import { ensureBuiltinReliabilityDataset } from '@/server/builtin-example/ensure-reliability-dataset';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +31,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
+    await ensureBuiltinReliabilityDataset(user).catch(() => undefined);
     // 可选过滤：?targetSkill=<name> 拉挂在某 skill 上的；?targetSkill=__none__ 拉通用 agent eval（targetSkill === ''）。
     // 不传则全部。
     const targetSkillParam = searchParams.get('targetSkill');
@@ -83,11 +86,21 @@ export async function POST(request: Request) {
       );
     }
     const normalizedCases = normalizeCases(body.cases);
-    const validationErrors = validateCasesForKind(normalizedCases, datasetKind);
+    const allowedFaultModeIds =
+      datasetKind === 'reliability' ? await listFaultModeIds() : undefined;
+    const validationErrors = validateCasesForKind(normalizedCases, datasetKind, {
+      allowedFaultModeIds,
+    });
     if (validationErrors.length > 0) {
       return NextResponse.json(
-        { error: validationErrors[0].message, details: validationErrors },
-        { status: 400 },
+        {
+          error: validationErrors[0].message,
+          details: validationErrors.map((item) => ({
+            caseId: item.caseId,
+            field: item.field,
+          })),
+        },
+        { status: 422 },
       );
     }
     const { cases, warnings } = await prepareDatasetCasesForPersistence({
@@ -160,13 +173,23 @@ export async function PATCH(request: Request) {
     const inputCases = body.cases !== undefined ? normalizeCases(body.cases) : current.cases;
 
     // datasetKind 或 cases 任一变化时都要重新校验：
-    // 比如把已有 ideal_output 数据集改成 trajectory，原 case 可能没有 trajectory 字段。
+    // 比如把已有 ideal_output 数据集改成 reliability，原 case 可能没有 fault_injection_type。
     if (body.cases !== undefined || body.datasetKind !== undefined) {
-      const validationErrors = validateCasesForKind(inputCases, nextDatasetKind);
+      const allowedFaultModeIds =
+        nextDatasetKind === 'reliability' ? await listFaultModeIds() : undefined;
+      const validationErrors = validateCasesForKind(inputCases, nextDatasetKind, {
+        allowedFaultModeIds,
+      });
       if (validationErrors.length > 0) {
         return NextResponse.json(
-          { error: validationErrors[0].message, details: validationErrors },
-          { status: 400 },
+          {
+            error: validationErrors[0].message,
+            details: validationErrors.map((item) => ({
+              caseId: item.caseId,
+              field: item.field,
+            })),
+          },
+          { status: 422 },
         );
       }
     }

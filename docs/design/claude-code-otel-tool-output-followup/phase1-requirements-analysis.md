@@ -64,12 +64,12 @@ OTEL_LOGS_EXPORTER=otlp
 本机配置已经是：
 
 ```sh
-AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:/home/ljnkirito/.agent-insight/claude_raw_bodies
+AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:~/.agent-insight/claude_raw_bodies
 ```
 
 source wrapper 后变量值也确认为上述 file 模式。
 
-但 `245c...` 的 OTel event 仍然是 inline `body`，没有 `body_ref`。同时 `/home/ljnkirito/.agent-insight/claude_raw_bodies` 目录不存在。
+但 `245c...` 的 OTel event 仍然是 inline `body`，没有 `body_ref`。同时 `~/.agent-insight/claude_raw_bodies` 目录不存在。
 
 这说明至少存在一个运行态问题：
 
@@ -80,7 +80,7 @@ source wrapper 后变量值也确认为上述 file 模式。
 
 ### 5. Claude native transcript 中确实有工具输出正文
 
-`/home/ljnkirito/.claude/projects/-home-ljnkirito-agent-witty-skill-insight/245c42b6-280b-4d83-a52a-447d8fe446c5.jsonl` 存在。
+`~/.claude/projects/<project-slug>/245c42b6-280b-4d83-a52a-447d8fe446c5.jsonl` 存在。
 
 其中：
 

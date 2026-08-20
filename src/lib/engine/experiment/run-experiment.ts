@@ -16,7 +16,7 @@
  *   → parseJudgeText → normalizeEvaluatorOutput。
  *
  * 专项评估器上下文数据流：ExperimentCase.evaluatorContextJson 在 loadCaseRuntime 中解析为
- * evaluatorContext，并与 caseInput、actualOutput、interactions 一起传给对应评估器。目录缺失或
+ * evaluatorContext；faultInjectionType 取自独立列（兼容历史污染 JSON）。目录缺失或
  * 存量 JSON 非法时，工具类评估器返回不计分结果；回答深度性不依赖该目录。
  *
  * 失败处理：异常写 status='failed' + errorMessage + attempts；JudgeOutputParseError /
@@ -34,9 +34,12 @@ import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import {
   normalizeEvaluatorCaseContext,
-  parseStoredEvaluatorCaseContext,
   type EvaluatorCaseContext,
 } from '@/lib/evaluators/evaluator-case-context';
+import {
+  parseExperimentCaseEvaluatorContext,
+  resolveCaseFaultInjectionType,
+} from '@/lib/engine/experiment/case-fi-meta';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import {
@@ -58,6 +61,10 @@ import {
   isAgentToolPresetId,
   runAgentToolPreset,
 } from './agent-tool-preset-evaluators';
+import {
+  isRasReliabilityPresetId,
+  runRasReliabilityPreset,
+} from './ras-reliability-evaluator';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -145,6 +152,7 @@ async function loadCaseRuntime(caseRow: {
   actualOutput: string;
   referenceOutput: string | null;
   evaluatorContextJson: string | null;
+  faultInjectionType?: string | null;
 }, user: string): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
@@ -191,7 +199,9 @@ async function loadCaseRuntime(caseRow: {
   // 用 Execution.query / Execution.finalResult 兜底（trace 模式无 dataset case）。
   const caseInput = caseRow.input || execution?.query || '';
   const actualOutput = caseRow.actualOutput || execution?.finalResult || '';
-  const evaluatorContextResult = parseStoredEvaluatorCaseContext(caseRow.evaluatorContextJson);
+  const evaluatorContextResult = parseExperimentCaseEvaluatorContext(caseRow.evaluatorContextJson);
+  const faultInjectionType =
+    resolveCaseFaultInjectionType(caseRow) || null;
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
@@ -208,6 +218,7 @@ async function loadCaseRuntime(caseRow: {
     interactions: rawInteractions,
     evaluatorContext: evaluatorContextResult.context,
     evaluatorContextError: evaluatorContextResult.error,
+    faultInjectionType,
     taskId,
     executionId: caseRow.executionId,
     user,
@@ -269,6 +280,9 @@ async function evaluateOnce(
   }
   if (isAgentToolPresetId(evaluatorId)) {
     return runAgentToolPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isRasReliabilityPresetId(evaluatorId)) {
+    return runRasReliabilityPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
@@ -424,11 +438,13 @@ export interface StartExperimentRunResult {
 }
 
 /**
- * 触发实验执行。同 experiment 已在 running（内存或 DB 状态）时直接返回当前状态，不重复起跑。
+ * 触发实验执行。同 experiment 已在 running（内存或 DB 状态）时直接返回当前状态，不重复起跑；
+ * 生成 Trace 的后台绑定流程可在 DB 已提前标记 running 后显式继续调度。
  */
 export async function startExperimentRun(
   experimentId: string,
   user: string,
+  options: { allowPersistedRunning?: boolean; caseIds?: string[] } = {},
 ): Promise<StartExperimentRunResult | null> {
   const running = getRunningSet();
   if (running.has(experimentId)) return { status: 'running', alreadyRunning: true };
@@ -438,14 +454,20 @@ export async function startExperimentRun(
     include: { cases: { orderBy: { createdAt: 'asc' } } },
   });
   if (!experiment) return null;
-  if (experiment.status === 'running') return { status: 'running', alreadyRunning: true };
+  if (experiment.status === 'running' && !options.allowPersistedRunning) {
+    return { status: 'running', alreadyRunning: true };
+  }
 
   let evaluatorIds: string[] = [];
   try {
     const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
     if (Array.isArray(parsed)) evaluatorIds = parsed.map(String).filter(Boolean);
   } catch { /* 忽略脏数据 */ }
-  if (!evaluatorIds.length || !experiment.cases.length) {
+  const allowedCaseIds = options.caseIds ? new Set(options.caseIds) : null;
+  const casesToRun = allowedCaseIds
+    ? experiment.cases.filter((item: { id: string }) => allowedCaseIds.has(item.id))
+    : experiment.cases;
+  if (!evaluatorIds.length || !casesToRun.length) {
     return { status: experiment.status };
   }
 
@@ -457,7 +479,7 @@ export async function startExperimentRun(
     });
 
     const scheduledRows: ScheduledResultRun[] = [];
-    for (const c of experiment.cases) {
+    for (const c of casesToRun) {
       for (const evaluatorId of evaluatorIds) {
         scheduledRows.push(await resetAndScheduleResultRun({
           experimentId, caseId: c.id, evaluatorId, user,

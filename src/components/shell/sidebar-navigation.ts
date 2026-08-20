@@ -105,6 +105,7 @@ const CONFIG_CHILDREN: SidebarNavItem[] = [
     { key: 'model-registry', href: '/modelconfig/registry', labelKey: 'nav.modelRegistry', icon: 'model' },
     { key: 'web-search', href: '/modelconfig/web-search', labelKey: 'nav.webSearch', icon: 'web' },
     { key: 'access-install', href: '/accessconfig/install', labelKey: 'nav.accessInstall', icon: 'install' },
+    { key: 'access-client', href: '/accessconfig/client', labelKey: 'nav.accessClient', icon: 'install' },
 ];
 
 const USAGE_ITEM: SidebarNavItem = {

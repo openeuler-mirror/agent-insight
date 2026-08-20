@@ -83,6 +83,12 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 npx agent-insight install
 ```
 
+一键安装会启动平台并执行 Agent 接入流程；选择 OpenCode 时，接入脚本会同时安装
+Agent RAS inproc 插件。RAS runtime 保存到 `~/.agent-insight/ras/runtime/`，重复安装
+会复用当前版本。平台与 OpenCode 不在同一运行环境时，应先启动平台，再在 OpenCode
+实际运行的机器执行看板“安装指导”生成的命令。也可以稍后单独执行
+`npx agent-insight install-ras`。
+
 **平台服务管理命令参考：**
 
 | 命令                                    | 说明               |
@@ -94,6 +100,7 @@ npx agent-insight install
 | `npx agent-insight restart`           | 重启服务             |
 | `npx agent-insight status`            | 查看服务运行状态         |
 | `npx agent-insight logs`              | 查看服务日志           |
+| `npx agent-insight install-ras`       | 安装或更新 Agent RAS  |
 
 #### 方式二：基于源码构建
 
@@ -175,6 +182,13 @@ docker restart agent-insight
 不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
 
 容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
+
+Docker 容器只运行 Agent Insight 服务端，不会修改宿主机的 OpenCode 配置。选择
+OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行看板“安装指导”生成的
+命令；该命令会使用与服务端匹配的 Agent Insight npm 包版本安装 RAS，不会跟随不确定的
+`latest`。安装脚本只下载该版本 tarball，不会通过 `npx` 安装整套看板依赖；完成后会
+只读预检 RAS 事件端点。源码联调若使用尚未发布的版本，可在平台进程设置
+`AGENT_INSIGHT_CLIENT_PACKAGE_SPEC=<可由 Agent 主机访问的 .tgz URL>`。
 
 更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
 

@@ -11,9 +11,9 @@ import { aggregateOtelTraceEvents } from "@/lib/ingest/otel/aggregate"
 import type { OtelTraceEvent } from "@/lib/ingest/otel/types"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex"]
+const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex"]
+const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
