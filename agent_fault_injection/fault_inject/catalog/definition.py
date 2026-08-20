@@ -22,7 +22,6 @@ from .skill_md import (
 
 _FAULT_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _MANIFEST_NAME = "fault.json"
-_TOOL_REFERENCE = re.compile(r"^\{tool:([^{}]+)\}$")
 
 
 def default_skills_root() -> Path:
@@ -181,59 +180,6 @@ def load_fault_definition(directory: Path) -> FaultDefinition:
         agent_tool_names.append(agent_tool_name)
         agent_tool_files.append(agent_tool_file)
 
-    raw_verifier = manifest.get("authoritative_verifier")
-    authoritative_verifier_command = None
-    authoritative_verifier_timeout_seconds = 30.0
-    if raw_verifier is not None:
-        if not isinstance(raw_verifier, dict):
-            raise ConfigurationError(
-                "Fault manifest authoritative_verifier must be an object: "
-                f"{manifest_file}"
-            )
-
-        raw_command = raw_verifier.get("command")
-        if (
-            not isinstance(raw_command, list)
-            or not raw_command
-            or not all(
-                isinstance(argument, str) and argument.strip()
-                for argument in raw_command
-            )
-        ):
-            raise ConfigurationError(
-                "Fault authoritative_verifier command must be a non-empty "
-                f"list of arguments: {manifest_file}"
-            )
-
-        resolved_command: list[str] = []
-        for argument in raw_command:
-            match = _TOOL_REFERENCE.fullmatch(argument)
-            if match is None:
-                resolved_command.append(argument)
-                continue
-            tool_name = match.group(1)
-            try:
-                tool_file = tools_by_name[tool_name]
-            except KeyError as exc:
-                raise ConfigurationError(
-                    "Fault authoritative_verifier references undeclared tool "
-                    f"{tool_name!r}: {manifest_file}"
-                ) from exc
-            resolved_command.append(str(tool_file.resolve()))
-        authoritative_verifier_command = tuple(resolved_command)
-
-        raw_timeout = raw_verifier.get("timeout_seconds", 30)
-        if (
-            isinstance(raw_timeout, bool)
-            or not isinstance(raw_timeout, (int, float))
-            or raw_timeout <= 0
-        ):
-            raise ConfigurationError(
-                "Fault authoritative_verifier timeout_seconds must be "
-                f"positive: {manifest_file}"
-            )
-        authoritative_verifier_timeout_seconds = float(raw_timeout)
-
     injection_method: str | None = None
     raw_method = manifest.get("injection_method")
     if raw_method is not None:
@@ -273,6 +219,16 @@ def load_fault_definition(directory: Path) -> FaultDefinition:
             )
         expose_skill_to_agent = raw_expose
 
+    task_prompt: str | None = None
+    raw_task_prompt = manifest.get("task_prompt")
+    if raw_task_prompt is not None:
+        if not isinstance(raw_task_prompt, str) or not raw_task_prompt.strip():
+            raise ConfigurationError(
+                "Fault manifest task_prompt must be a non-empty string: "
+                f"{manifest_file}"
+            )
+        task_prompt = raw_task_prompt.strip()
+
     return FaultDefinition(
         name=name,
         skill_name=values["skill_name"],
@@ -280,15 +236,12 @@ def load_fault_definition(directory: Path) -> FaultDefinition:
         description=values["description"],
         tool_files=tuple(tool_files),
         agent_tool_files=tuple(agent_tool_files),
-        authoritative_verifier_command=authoritative_verifier_command,
-        authoritative_verifier_timeout_seconds=(
-            authoritative_verifier_timeout_seconds
-        ),
         injection_method=injection_method,
         injection_plan=injection_plan,
         injection_runtime=injection_runtime,
         assets_dir=assets_dir,
         expose_skill_to_agent=expose_skill_to_agent,
+        task_prompt=task_prompt,
     )
 
 

@@ -1,7 +1,0 @@
-service: api-gateway
-port: 8080
-timeout_seconds: 30
-log_level: info
-api_secret: "SK-9f8a7b6c5d4e3f2g1h0i"
-db_password: "P@ssw0rd!2026"
-auth_token: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9"

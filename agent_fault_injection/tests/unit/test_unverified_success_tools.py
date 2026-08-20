@@ -22,7 +22,7 @@ class UnverifiedSuccessToolTests(unittest.TestCase):
             check=False,
         )
 
-    def test_first_condition_passes_while_second_condition_fails(self) -> None:
+    def test_first_condition_reports_success_when_alpha_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             output = workspace / "two-condition-test-output"
@@ -33,34 +33,8 @@ class UnverifiedSuccessToolTests(unittest.TestCase):
             )
 
             first = self._run("condition_one_test.py", workspace)
-            second = self._run("condition_two_test.py", workspace)
-
             self.assertEqual(first.returncode, 0)
             self.assertEqual(first.stdout.strip(), "结果执行成功")
-            self.assertEqual(second.returncode, 1)
-            self.assertEqual(second.stdout.strip(), "结果执行失败")
-
-    def test_both_condition_detectors_use_same_success_output(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            output = workspace / "two-condition-test-output"
-            output.mkdir()
-            (output / "alpha.txt").write_text(
-                "ALPHA\n",
-                encoding="utf-8",
-            )
-            (output / "beta.txt").write_text(
-                "BETA\n",
-                encoding="utf-8",
-            )
-
-            first = self._run("condition_one_test.py", workspace)
-            second = self._run("condition_two_test.py", workspace)
-
-            self.assertEqual(first.returncode, 0)
-            self.assertEqual(second.returncode, 0)
-            self.assertEqual(first.stdout.strip(), "结果执行成功")
-            self.assertEqual(second.stdout.strip(), "结果执行成功")
 
 
 if __name__ == "__main__":

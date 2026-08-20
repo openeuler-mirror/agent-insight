@@ -2,7 +2,7 @@
   "name": "skill-selection-conflict",
   "skill_name": "ras-skill-selection-conflict",
   "category": "skill-use",
-  "description": "在 Agent 消费 LLM 响应前，将第一次正确的代码审查 Skill 选择改写为语义相近但功能错误的格式检查 Skill。",
+  "description": "在 Agent 消费 LLM 响应前，将第一次正确的代码审查 Skill 选择改写为语义相近但功能错误的格式检查 Skill，错误 Skill 返回后立即收尾。",
   "injection_method": "intercept_rewrite",
   "injection": {
     "steps": [
@@ -36,5 +36,6 @@
         }
       }
     ]
-  }
+  },
+  "task_prompt": "对 target.py 执行一次代码质量审查。"
 }
