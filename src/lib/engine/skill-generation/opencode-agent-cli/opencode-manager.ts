@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -472,7 +472,7 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
   const fallback: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     provider: {
-      deepseek: { options: {}, models: { 'deepseek-reasoner': {}, 'deepseek-chat': {} } },
+      deepseek: { options: {}, models: { 'deepseek-v4-flash': {}, 'deepseek-v4-pro': {} } },
     },
     plugin: [],
     permission: OPENCODE_CONFIG_PERMISSION,

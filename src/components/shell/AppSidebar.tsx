@@ -2,217 +2,72 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useTheme } from '@/lib/client/theme-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { useSidebar } from '@/lib/client/sidebar-context';
 import { useUsageAccess } from '@/lib/usage-analytics/use-usage-access';
+import {
+    getSidebarNavigation,
+    isSidebarItemActive,
+    type SidebarIconKey,
+    type SidebarNavItem,
+} from './sidebar-navigation';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
-type BadgeKind = 'r' | 'y' | 'g';
-
-interface NavItem {
-    key: string;
-    href?: string;
-    labelKey: string;
-    iconPath?: React.ReactNode;
-    matchPrefixes?: string[];
-    badge?: { text: string; kind: BadgeKind };
-    pending?: boolean;
-    children?: NavItem[];
-}
-
-interface NavGroup {
-    key: string;
-    labelKey: string;
-    iconPath: React.ReactNode;
-    variant?: 'agent' | 'plain';
-    href?: string;
-    items?: NavItem[];
-}
-
 const ICON_AGENT = (<><circle cx="7" cy="4.5" r="2.2" /><path d="M2.5 12c0-2.49 2.02-4.5 4.5-4.5s4.5 2.01 4.5 4.5" /><circle cx="12" cy="3.5" r="1.4" /><path d="M12 6.5c1 .28 1.8 1.12 1.8 2.2" /></>);
 const ICON_SKILLS = (<><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1" /><rect x="8" y="1.5" width="4.5" height="4.5" rx="1" /><rect x="1.5" y="8" width="4.5" height="4.5" rx="1" /><rect x="8" y="8" width="4.5" height="4.5" rx="1" /></>);
-const ICON_PLAYGROUND = (<><rect x="1.5" y="3" width="11" height="8" rx="1.5" /><path d="M4.5 6.5l2 2 3-3" /></>);
-const ICON_DEBUG = (<><path d="M4 2h6v2l1.5 1.5v5.5H2.5V5.5L4 4V2z" /><path d="M5 10v1.5M7 10v1.5M9 10v1.5" /></>);
-const ICON_RELEASE = (<><circle cx="7" cy="7" r="5.5" /><path d="M5 7l2 2 2-4" /></>);
 const ICON_DASHBOARD = (<><rect x="2" y="2" width="4.5" height="4.5" rx="1" /><rect x="7.5" y="2" width="4.5" height="4.5" rx="1" /><rect x="2" y="7.5" width="4.5" height="4.5" rx="1" /><rect x="7.5" y="7.5" width="4.5" height="4.5" rx="1" /></>);
+const ICON_QUICKSTART = (<><path d="M3 11c2.8-4.9 5.3-7.3 8-8" /><path d="M7.5 3H11v3.5" /><circle cx="3" cy="11" r="1.3" /></>);
 const ICON_OBSERVE = (<><circle cx="7" cy="7" r="5.5" /><path d="M4.5 7c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5" /><circle cx="7" cy="7" r="1.5" /></>);
 const ICON_TRACE = <path d="M2 4h10M2 7h7M2 10h9" />;
-const ICON_VERSION_ANALYSIS = (<><path d="M2 11h10" /><path d="M3.5 9V6.5M7 9V3M10.5 9V5" /><circle cx="3.5" cy="5.5" r="1" /><circle cx="7" cy="2.5" r="1" /><circle cx="10.5" cy="4" r="1" /></>);
-const ICON_TAGS = (<><path d="M2 3.5V8l4 4 5.5-5.5-4-4H3a1 1 0 0 0-1 1z" /><circle cx="5" cy="5.5" r="1" /></>);
 const ICON_FAULT = (<><path d="M7 2.5v4.5M7 10v.5" /><circle cx="7" cy="7" r="5.5" /></>);
 const ICON_EVAL = (<><path d="M4.5 7l2 2 3-3" /><circle cx="7" cy="7" r="5.5" /></>);
 const ICON_DATASET = (<><ellipse cx="7" cy="4.5" rx="4.5" ry="2" /><path d="M2.5 4.5v3c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2v-3" /><path d="M2.5 7.5v3c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2v-3" /></>);
 const ICON_METRICS = <path d="M2 12h10M3 12V8h2v4M6 12V4h2v8M9 12V6h2v6" />;
-const ICON_MEMORY = (<><ellipse cx="7" cy="4.5" rx="4.5" ry="2" /><path d="M2.5 4.5v2.5c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2V4.5" /><path d="M2.5 7v2.5c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2V7" /></>);
-const ICON_QUALITY = <path d="M2 9.5l2.5-2.5 2.5 2.5 5-6" />;
-const ICON_SECURITY = <path d="M7 1.5L2 4v4.5c0 3 2.5 4.5 5 5 2.5-.5 5-2 5-5V4l-5-2.5z" />;
 const ICON_MODEL = (<><path d="M2 4.5h10M2 9.5h10" /><circle cx="4.5" cy="4.5" r="1.5" /><circle cx="9.5" cy="9.5" r="1.5" /></>);
-const ICON_ACCESS = (<><path d="M2 2.5h10M2 7h10M2 11.5h10" /><circle cx="7" cy="2.5" r="1" /><circle cx="7" cy="7" r="1" /><circle cx="7" cy="11.5" r="1" /></>);
-const ICON_KEY = (<><circle cx="4" cy="9" r="2.2" /><path d="M5.5 7.5l5-5M9 4l1.5 1.5M11 6l1-1" /></>);
-const ICON_DEFAULT = (<><circle cx="7" cy="7" r="5.5" /><path d="M7 4v3l2 2" /></>);
-const ICON_WEBHOOK = (<><circle cx="3.5" cy="10" r="1.6" /><circle cx="10.5" cy="4" r="1.6" /><circle cx="7" cy="11" r="1.6" /><path d="M5 10l4-4M9 10.5l1-5" /></>);
-const ICON_HEALTH = <path d="M2 7h2.5l1.5-3 2 6 1.5-3H12" />;
 const ICON_INSTALL = (<><path d="M7 1.5v7M4 6l3 3 3-3" /><path d="M2 11h10" /></>);
 const ICON_WEB = (<><circle cx="7" cy="7" r="5" /><path d="M2 7h10M7 2a8 8 0 0 1 0 10M7 2a8 8 0 0 0 0 10" /></>);
-
-const SKILLS_TREE: NavItem = {
-    key: 'skills',
-    labelKey: 'nav.groupSkills',
-    iconPath: ICON_SKILLS,
-    children: [
-        { key: 'skillsmgr', href: '/skills', labelKey: 'nav.skillsManage', iconPath: ICON_SKILLS, matchPrefixes: ['/skills', '/skill-history', '/skill-detail'] },
-        { key: 'skill-generator', href: '/skill-generator', labelKey: 'nav.skillGenerator', iconPath: ICON_PLAYGROUND },
-        { key: 'skill-eval', href: '/skill-eval', labelKey: 'nav.skillEval', iconPath: ICON_DEBUG },
-        { key: 'skill-opt', href: '/skill-opt', labelKey: 'nav.skillOpt', iconPath: ICON_SKILLS },
-    ],
-};
-
 const ICON_EXPERIMENT = (<><path d="M5.5 1.5h3M6 1.5v3.5L2.8 10.5a1.2 1.2 0 0 0 1 1.9h6.4a1.2 1.2 0 0 0 1-1.9L8 5V1.5" /><path d="M4.2 9h5.6" /></>);
-
-// 该项文案未进 locale 字典（本期约定不改字典文件），在本文件内联映射，见 navLabel()。
-const INLINE_NAV_LABELS: Record<string, { zh: string; en: string }> = {
-    'nav.experiments': { zh: '实验', en: 'Experiments' },
-};
-
-const EVAL_TREE: NavItem = {
-    key: 'eval-center',
-    labelKey: 'nav.evalCenter',
-    iconPath: ICON_EVAL,
-    children: [
-        // 实验取代评测执行成为评测中心主入口；评测执行页/接口保留（Skill 评测仍依赖），仅从导航移除
-        { key: 'experiments', href: '/experiments', labelKey: 'nav.experiments', iconPath: ICON_EXPERIMENT, matchPrefixes: ['/experiments'] },
-        { key: 'dataset', href: '/dataset', labelKey: 'nav.evalDataset', iconPath: ICON_DATASET },
-        { key: 'metrics', href: '/metrics', labelKey: 'nav.evalMetrics', iconPath: ICON_METRICS },
-        // { key: 'memory', href: '/memory', labelKey: 'nav.memory', iconPath: ICON_MEMORY },
-    ],
-};
-
-const OBSERVE_TREE: NavItem = {
-    key: 'observe',
-    labelKey: 'nav.groupObserve',
-    iconPath: ICON_OBSERVE,
-    children: [
-        { key: 'trace', href: '/trace', labelKey: 'nav.trace', iconPath: ICON_TRACE, matchPrefixes: ['/trace'] },
-        { key: 'version-analysis', href: '/version-analysis', labelKey: 'nav.versionAnalysis', iconPath: ICON_VERSION_ANALYSIS },
-        { key: 'fault', href: '/fault', labelKey: 'nav.fault', iconPath: ICON_FAULT },
-        { key: 'quality', href: '/quality', labelKey: 'nav.quality', iconPath: ICON_QUALITY },
-        { key: 'infra', href: '/infra', labelKey: 'nav.infra', iconPath: ICON_METRICS, matchPrefixes: ['/infra'] },
-    ],
-};
-
-const AGENT_GROUP: NavGroup = {
-    key: 'agent-workspace',
-    labelKey: 'nav.groupAgentWorkspace',
-    variant: 'agent',
-    iconPath: <path d="M1 3h8M1 5h8M1 7h8" />,
-    items: [
-        { key: 'dashboard', href: '/dashboard', labelKey: 'nav.dashboard', iconPath: ICON_DASHBOARD },
-        { key: 'agents', href: '/agents', labelKey: 'nav.agents', iconPath: ICON_AGENT },
-        OBSERVE_TREE,
-        EVAL_TREE,
-        SKILLS_TREE,
-    ],
-};
-
-const CONFIG_GROUP: NavGroup = {
-    key: 'config',
-    labelKey: 'nav.configGroup', // We need to add this to locales
-    iconPath: ICON_MODEL,
-    items: [
-        { key: 'model-registry', href: '/modelconfig/registry', labelKey: 'nav.modelRegistry', iconPath: ICON_MODEL },
-        { key: 'web-search', href: '/modelconfig/web-search', labelKey: 'nav.webSearch', iconPath: ICON_WEB },
-        { key: 'version-management', href: '/version-management', labelKey: 'nav.versionManagement', iconPath: ICON_TAGS },
-        { key: 'access-install', href: '/accessconfig/install', labelKey: 'nav.accessInstall', iconPath: ICON_INSTALL },
-        // 暂时屏蔽 channels / webhooks / health —— 后端能力未稳定,先不暴露给用户。
-        // 页面源码保留在 src/app/(main)/accessconfig/{channels,webhooks,health} 下,
-        // 恢复时取消下面三行注释即可。
-        // { key: 'access-channels', href: '/accessconfig/channels', labelKey: 'nav.accessChannels', iconPath: ICON_ACCESS },
-        // { key: 'access-webhooks', href: '/accessconfig/webhooks', labelKey: 'nav.accessWebhooks', iconPath: ICON_WEBHOOK },
-        // { key: 'access-health', href: '/accessconfig/health', labelKey: 'nav.accessHealth', iconPath: ICON_HEALTH },
-    ],
-};
-
-const GROUPS: NavGroup[] = [AGENT_GROUP, CONFIG_GROUP];
-
 const ICON_USAGE = (<><path d="M2 12h10" /><path d="M4 12V7M7 12V3M10 12V9" /></>);
 
-const USAGE_ITEM: NavItem = {
-    key: 'usage',
-    href: '/usage',
-    labelKey: 'nav.usageAnalytics',
-    iconPath: ICON_USAGE,
-    badge: { text: 'ADMIN', kind: 'g' },
+const NAV_ICONS: Record<SidebarIconKey, ReactNode> = {
+    dashboard: ICON_DASHBOARD,
+    quickstart: ICON_QUICKSTART,
+    observe: ICON_OBSERVE,
+    agent: ICON_AGENT,
+    trace: ICON_TRACE,
+    infra: ICON_METRICS,
+    evaluation: ICON_EVAL,
+    experiment: ICON_EXPERIMENT,
+    dataset: ICON_DATASET,
+    metrics: ICON_METRICS,
+    diagnosis: ICON_FAULT,
+    optimization: ICON_SKILLS,
+    skill: ICON_SKILLS,
+    config: ICON_MODEL,
+    model: ICON_MODEL,
+    web: ICON_WEB,
+    install: ICON_INSTALL,
+    usage: ICON_USAGE,
 };
-
-function normalizePath(p: string): string {
-    const stripped = p.startsWith(basePath) ? p.slice(basePath.length) : p;
-    return stripped || '/';
-}
-
-function isItemActive(item: NavItem, pathname: string): boolean {
-    if (!item.href) {
-        return (item.children || []).some(c => isItemActive(c, pathname));
-    }
-    const current = normalizePath(pathname);
-    if (current === item.href) return true;
-    const prefixes = item.matchPrefixes ?? [item.href];
-    return prefixes.some(p => current === p || current.startsWith(p + '/'));
-}
 
 export function AppSidebar() {
     const pathname = usePathname() || '/';
-    const router = useRouter();
     const { user, logout } = useAuth();
     const { isDark, toggleTheme } = useTheme();
     const { t, locale, setLocale } = useLocale();
     const { isCollapsed } = useSidebar();
     const [showUserMenu, setShowUserMenu] = useState(false);
-    // t() 的内联兜底：INLINE_NAV_LABELS 中的 key 不走 locale 字典
-    const navLabel = (key: string): string => {
-        const inline = INLINE_NAV_LABELS[key];
-        if (inline) return locale === 'zh' ? inline.zh : inline.en;
-        return t(key);
-    };
-    // 用量统计入口只在功能开启且当前用户是显式配置的平台管理员时出现；
-    // access 请求失败、未配置管理员或功能关闭都保持隐藏。
     const usageAccess = useUsageAccess();
     const showUsage = usageAccess.enabled && usageAccess.isAdmin;
-    const groups: NavGroup[] = showUsage
-        ? GROUPS.map(g => (g.key === 'config' ? { ...g, items: [...(g.items || []), USAGE_ITEM] } : g))
-        : GROUPS;
-
-    const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['skills', 'eval-center', 'observe']));
-
-    useEffect(() => {
-        setExpandedTrees(prev => {
-            const next = new Set(prev);
-            const visit = (item: NavItem, ancestors: string[]) => {
-                if (item.children) {
-                    if (item.children.some(c => isItemActive(c, pathname))) {
-                        ancestors.forEach(a => next.add(a));
-                        next.add(item.key);
-                    }
-                    item.children.forEach(c => visit(c, [...ancestors, item.key]));
-                }
-            };
-            GROUPS.forEach(g => (g.items || []).forEach(it => visit(it, [])));
-            return next.size === prev.size ? prev : next;
-        });
-    }, [pathname]);
-
-    const toggleGroup = (key: string) =>
-        setCollapsedGroups(s => {
-            const next = new Set(s);
-            if (next.has(key)) next.delete(key);
-            else next.add(key);
-            return next;
-        });
+    const navigation = useMemo(() => getSidebarNavigation(showUsage), [showUsage]);
+    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(
+        new Set(['observe', 'evaluation', 'continuous-optimization', 'config']),
+    );
 
     const toggleTree = (key: string) =>
         setExpandedTrees(s => {
@@ -263,49 +118,18 @@ export function AppSidebar() {
                 />
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>
-                {groups.map(group => {
-                    const collapsed = collapsedGroups.has(group.key);
-                    return (
-                        <div
-                            key={group.key}
-                            style={{
-                                margin: '2px 6px',
-                                borderRadius: 10,
-                                background: group.variant === 'agent'
-                                    ? 'linear-gradient(135deg, var(--card-bg) 0%, var(--background-secondary) 100%)'
-                                    : 'var(--card-bg)',
-                                border: '1px solid var(--card-border)',
-                                overflow: 'hidden',
-                                transition: 'all 0.3s ease-out',
-                                paddingBottom: collapsed || !group.items ? 0 : 6,
-                            }}
-                        >
-                            <GroupLabel
-                                group={group}
-                                collapsed={collapsed}
-                                onToggle={() => (group.items ? toggleGroup(group.key) : null)}
-                                onClickHref={() => group.href && router.push(group.href)}
-                                pathname={pathname}
-                                t={navLabel}
-                            />
-                            {!collapsed && group.items && (
-                                <div style={{ padding: '0 4px' }}>
-                                    {group.items.map(item => (
-                                        <NavTree
-                                            key={item.key}
-                                            item={item}
-                                            pathname={pathname}
-                                            expanded={expandedTrees}
-                                            onToggle={toggleTree}
-                                            t={navLabel}
-                                        />
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    );
-                })}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '8px 6px' }}>
+                {navigation.map(item => (
+                    <NavTree
+                        key={item.key}
+                        item={item}
+                        pathname={pathname}
+                        expanded={expandedTrees}
+                        onToggle={toggleTree}
+                        t={t}
+                        depth={0}
+                    />
+                ))}
             </div>
 
             <div style={{ padding: '8px 12px 10px', borderTop: '1px solid var(--sidebar-border)' }}>
@@ -404,97 +228,37 @@ export function AppSidebar() {
     );
 }
 
-function GroupLabel({
-    group, collapsed, onToggle, onClickHref, pathname, t,
-}: {
-    group: NavGroup;
-    collapsed: boolean;
-    onToggle: () => void;
-    onClickHref: () => void;
-    pathname: string;
-    t: (k: string) => string;
-}) {
-    const isClickable = !!group.href;
-    const active = group.href ? normalizePath(pathname) === group.href : false;
-    const fg = active
-        ? 'var(--primary)'
-        : 'var(--foreground-muted)';
-
-    return (
-        <div
-            onClick={() => (isClickable ? onClickHref() : onToggle())}
-            style={{
-                padding: '6px 10px',
-                fontSize: 9.5,
-                fontWeight: 600,
-                color: fg,
-                letterSpacing: '0.9px',
-                textTransform: 'uppercase',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                cursor: 'pointer',
-                userSelect: 'none',
-                transition: 'background 0.2s',
-                background: active ? 'var(--primary-subtle)' : 'transparent',
-            }}
-            onMouseEnter={e => {
-                if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--background-secondary)';
-            }}
-            onMouseLeave={e => {
-                if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent';
-            }}
-        >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" style={{ opacity: 0.8, flexShrink: 0 }}>
-                {group.iconPath}
-            </svg>
-            <span style={{ flex: 1 }}>{t(group.labelKey)}</span>
-            {!isClickable && (
-                <svg
-                    width="10" height="10" viewBox="0 0 10 10"
-                    fill="none" stroke="currentColor" strokeWidth="1.5"
-                    style={{
-                        marginLeft: 'auto', opacity: 0.5,
-                        transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
-                        transition: 'transform 0.2s',
-                    }}
-                >
-                    <path d="M2 3l3 3 3-3" />
-                </svg>
-            )}
-        </div>
-    );
-}
-
 function NavTree({
-    item, pathname, expanded, onToggle, t,
+    item, pathname, expanded, onToggle, t, depth,
 }: {
-    item: NavItem;
+    item: SidebarNavItem;
     pathname: string;
     expanded: Set<string>;
     onToggle: (key: string) => void;
     t: (k: string) => string;
+    depth: number;
 }) {
     const hasChildren = !!(item.children && item.children.length > 0);
-    const active = isItemActive(item, pathname);
-    const open = expanded.has(item.key);
+    const active = isSidebarItemActive(item, pathname, basePath);
+    const open = expanded.has(item.key) || active;
 
     if (item.href && !hasChildren) {
-        return <LeafLink item={item} active={active} t={t} />;
+        return <LeafLink item={item} active={active} t={t} depth={depth} />;
     }
 
     return (
         <div>
             <button
                 onClick={() => onToggle(item.key)}
+                aria-expanded={open}
                 style={{
                     display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '4px 10px 4px 12px', margin: '1px 5px',
+                    padding: '7px 10px', margin: '3px 0 1px',
                     borderRadius: 7, fontSize: 11.5,
                     color: active ? 'var(--sidebar-active-fg)' : 'var(--foreground-secondary)',
                     background: active ? 'var(--sidebar-active-bg)' : 'transparent',
-                    fontWeight: active ? 500 : 400,
-                    border: 'none', width: 'calc(100% - 10px)',
+                    fontWeight: active ? 600 : 500,
+                    border: 'none', width: '100%',
                     textAlign: 'left', cursor: 'pointer',
                     transition: 'all 0.12s',
                 }}
@@ -512,11 +276,9 @@ function NavTree({
                 }}
             >
                 <span style={{ width: 14, height: 14, flexShrink: 0, display: 'inline-flex', opacity: active ? 1 : 0.75 }}>
-                    {item.iconPath && (
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                            {item.iconPath}
-                        </svg>
-                    )}
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        {NAV_ICONS[item.icon]}
+                    </svg>
                 </span>
                 <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
                 <svg
@@ -534,16 +296,16 @@ function NavTree({
             {hasChildren && open && (
                 <div
                     style={{
-                        paddingLeft: 12, marginBottom: 4,
+                        paddingLeft: 8, marginBottom: 5,
                         borderLeft: '1px solid var(--border)',
-                        marginLeft: 20,
+                        marginLeft: 7,
                     }}
                 >
                     {item.children!.map(child => (
                         <NavTree
                             key={child.key} item={child}
                             pathname={pathname} expanded={expanded}
-                            onToggle={onToggle} t={t}
+                            onToggle={onToggle} t={t} depth={depth + 1}
                         />
                     ))}
                 </div>
@@ -552,28 +314,35 @@ function NavTree({
     );
 }
 
-function LeafLink({ item, active, t }: { item: NavItem; active: boolean; t: (k: string) => string }) {
-    const pendingColor = item.pending ? 'var(--tag-amber-fg)' : null;
-    const color = pendingColor || (active ? 'var(--sidebar-active-fg)' : 'var(--foreground-secondary)');
+function LeafLink({
+    item, active, t, depth,
+}: {
+    item: SidebarNavItem;
+    active: boolean;
+    t: (k: string) => string;
+    depth: number;
+}) {
+    const color = active ? 'var(--sidebar-active-fg)' : 'var(--foreground-secondary)';
 
     return (
         <Link
             href={item.href!}
             prefetch={false}
+            aria-current={active ? 'page' : undefined}
             style={{
                 display: 'flex', alignItems: 'center', gap: 8,
-                padding: '4px 10px 4px 12px', margin: '1px 5px',
+                padding: depth === 0 ? '7px 10px' : '6px 10px',
+                margin: depth === 0 ? '3px 0' : '1px 0',
                 borderRadius: 7, fontSize: 11.5,
                 color,
                 background: active ? 'var(--sidebar-active-bg)' : 'transparent',
-                fontWeight: active ? 500 : 400,
-                opacity: item.pending ? 0.85 : 1,
+                fontWeight: active ? 600 : 400,
                 textDecoration: 'none', transition: 'all 0.12s',
             }}
             onMouseEnter={e => {
                 if (!active) {
                     e.currentTarget.style.background = 'var(--sidebar-hover)';
-                    if (!pendingColor) e.currentTarget.style.color = 'var(--foreground)';
+                    e.currentTarget.style.color = 'var(--foreground)';
                 }
             }}
             onMouseLeave={e => {
@@ -584,11 +353,9 @@ function LeafLink({ item, active, t }: { item: NavItem; active: boolean; t: (k: 
             }}
         >
             <span style={{ width: 14, height: 14, flexShrink: 0, display: 'inline-flex', opacity: active ? 1 : 0.75 }}>
-                {item.iconPath && (
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        {item.iconPath}
-                    </svg>
-                )}
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    {NAV_ICONS[item.icon]}
+                </svg>
             </span>
             <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
             {item.badge && (

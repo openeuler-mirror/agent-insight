@@ -11,6 +11,10 @@ import { assertActive, finish, startOrReplace, EvaluationCancelledError } from '
 import { getInternalAgentTag } from '@/lib/internal-agent-tag';
 import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { NextResponse } from 'next/server';
+import { clientIpFromRequest } from '@/lib/reliability/client-ip';
+import { normalizeTraceClientMetadata } from '@/lib/reliability/trace-client';
+import { authenticateDevice } from '@/lib/reliability/client-registry';
+import { reliabilityErrorResponse } from '@/lib/reliability/api-error';
 
 /**
  * 这一发 opencode 上报是不是"进行中快照"——是的话只落库，不跑异步 LLM 分析。
@@ -47,6 +51,19 @@ export async function POST(request: Request) {
     const headers = request.headers;
     const apiKey = headers.get('x-witty-api-key');
     const requestOrigin = new URL(request.url).origin;
+    const isOpenCodeTrace = String(data.framework || '').toLowerCase() === 'opencode';
+    const authorization = headers.get('authorization') || '';
+    const deviceAuthRequested = isOpenCodeTrace && Boolean(
+      headers.get('x-agent-insight-client-id') || /^Bearer\s+dc_/i.test(authorization.trim()),
+    );
+    let deviceIdentity: { clientId: string; user: string } | null = null;
+    if (deviceAuthRequested) {
+      try {
+        deviceIdentity = await authenticateDevice(request);
+      } catch (error) {
+        return reliabilityErrorResponse(error, 'trace-upload-device-auth');
+      }
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // User 解析：硬拒绝原则
@@ -63,7 +80,7 @@ export async function POST(request: Request) {
     //   3. apiKey 没提供 + payload.user 也没有 → 400 reject + 报错
     // ─────────────────────────────────────────────────────────────────────
     let username: string | undefined;
-    let userResolutionPath: 'api-key' | 'payload-user-unauth' | 'default-ingest-user' | 'none' = 'none';
+    let userResolutionPath: 'api-key' | 'device-credential' | 'payload-user-unauth' | 'default-ingest-user' | 'none' = 'none';
 
     if (apiKey) {
       const user = await db.findUserByApiKey(apiKey);
@@ -97,6 +114,21 @@ export async function POST(request: Request) {
           { status: 401 },
         );
       }
+    }
+
+    if (deviceIdentity) {
+      if (username && username !== deviceIdentity.user) {
+        return NextResponse.json(
+          {
+            error: 'Device account mismatch',
+            detail: '设备凭证与 API Key 不属于同一账号，已拒绝客户端绑定。',
+          },
+          { status: 403 },
+        );
+      }
+      username = deviceIdentity.user;
+      data.user = username;
+      userResolutionPath = apiKey ? 'api-key' : 'device-credential';
     }
 
     if (!username && data.user) {
@@ -152,6 +184,31 @@ export async function POST(request: Request) {
         data.endpoint = normalizeEndpointUrl(data.endpoint) ?? undefined;
     }
 
+    if (isOpenCodeTrace) {
+      const reportedClientMetadata = normalizeTraceClientMetadata(data);
+      const clientMetadata = {
+        ...reportedClientMetadata,
+        observedIp: clientIpFromRequest(request, {
+          allowDirectConnection: Boolean(deviceIdentity) || userResolutionPath === 'api-key',
+          clientHostName: reportedClientMetadata.hostName,
+        }),
+      };
+      if (
+        deviceIdentity &&
+        clientMetadata.clientId &&
+        clientMetadata.clientId !== deviceIdentity.clientId
+      ) {
+        return NextResponse.json(
+          { error: 'Device client mismatch', detail: '设备凭证与 Trace 中的 clientId 不一致。' },
+          { status: 403 },
+        );
+      }
+      data.clientId = deviceIdentity?.clientId ?? undefined;
+      data.hostIp = clientMetadata.hostIp ?? undefined;
+      data.hostName = clientMetadata.hostName ?? undefined;
+      data.observedIp = clientMetadata.observedIp ?? undefined;
+    }
+
     if (data.framework === 'opencode' && data.task_id && isDeletedOpencodeSessionId(data.task_id)) {
         console.log(`[Upload-API] 🪦 Skipping deleted opencode session: task_id=${data.task_id}`);
         return NextResponse.json({ success: true, skipped: true, reason: 'deleted-opencode-session' });
@@ -197,6 +254,9 @@ export async function POST(request: Request) {
                 console.log(`[Upload-API] ⭐ 归属修正: ${username} → ${tag.user} (internal agent ${tag.agentName}, task_id=${data.task_id})`);
                 username = tag.user;
                 data.user = tag.user;
+                if (deviceIdentity && tag.user !== deviceIdentity.user) {
+                    data.clientId = undefined;
+                }
             }
             console.log(`[Upload-API] ⭐ Internal agent tag applied for task_id=${data.task_id}: agentName=${tag.agentName} skill=${tag.skill ?? '-'} user=${username}`);
         }

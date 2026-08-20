@@ -1,34 +1,77 @@
 ---
-title: "安装指导"
+title: "客户端安装"
 description: "生成客户端接入命令并获取当前账号 API Key"
 ---
 
-# 安装指导
+# 客户端安装
 
-安装指导用于生成客户端接入命令、提供当前账号的接入凭证，并明确平台地址与上报路径，是运行数据能否进入 Agent Insight 的关键配置页面。
+客户端安装用于生成客户端接入命令、提供当前账号的接入凭证，并明确平台地址与上报路径，是运行数据能否进入 Agent Insight 的关键配置页面。
 
 > **Note**
 > Agent 已完成登记、模型已完成注册，但链路追踪仍无数据时，通常应优先检查安装命令、API Key 归属与上报地址配置。
 
 ## 功能定位
 
-安装指导承担四项核心职责：
+客户端安装承担四项核心职责：
 
 - 按目标操作系统生成可直接执行的接入命令
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
+- 选择 OpenCode 时，在 Agent 主机安装普通观测插件与同进程 Agent RAS
 
 ## 页面结构
 
-安装指导页面通常由三个功能区组成：
+客户端安装页面通常由四个功能区组成：
 
-1. **安装命令区**
+1. **常驻客户端区（Agent RAS）**
+   生成带一次性令牌的安装命令，安装独立常驻客户端服务。
+2. **安装命令区**
    按操作系统展示一键接入命令。
-2. **凭证与接入信息区**
+3. **凭证与接入信息区**
    展示当前 API Key、账号信息、平台地址与上报路径。
-3. **相关文档区**
+4. **相关文档区**
    提供 API Key、客户端接入与常见问题的辅助说明入口。
+
+### 常驻客户端区（Agent RAS）
+
+与下方的 Trace 采集器安装是两件不同的事：
+
+| | Trace 采集器 | 常驻客户端 |
+|---|---|---|
+| 作用 | 上报运行数据 | 接收配置下发、执行受控任务 |
+| 形态 | 随 Agent 平台运行 | 独立常驻进程 |
+| 守护 | 无 | systemd / launchd 自动重启 |
+| 凭证 | 账号 API Key | 设备凭证（一机一把，可单独撤销） |
+| 支持平台 | 全部 | 仅 Linux 与 macOS |
+
+点击「生成安装命令」后会得到一条带一次性令牌的命令，**令牌 10 分钟内有效且只能使用一次**；过期或已被使用时需重新生成。
+
+> **Note**
+> 安装 Trace 采集器（`/api/ingest/setup`）时会**顺带注册常驻客户端**，本机随即出现在「客户端配置」页。
+> 该步骤失败只告警不中断 —— Trace 采集照常工作，只是本机暂时无法在配置页管理；
+> 届时按下方命令单独安装即可。
+
+安装完成后客户端会：
+
+- 注册为系统服务，崩溃后由操作系统自动拉起，不随 Agent 平台启停
+- 主动建立出站 WSS 控制连接（不监听任何入站端口）
+- 自动发现本机 IP、Agent 平台、可用模型并上报
+- **同时纳管故障注入能力** —— 本机会一并出现在「实验」与「故障注入」页面，
+  无需再单独执行 FI Worker 的安装命令
+
+> **Note**
+> 该命令默认会一并安装故障注入组件。若本机没有可用的 Python 环境，安装会跳过这一步并给出提示，
+> **客户端仍然正常上线**：实验页能看到本机，只是标记「FI 未就绪」并说明原因（如缺 python3）。
+> 装好 Python 后重跑同一条命令即可补齐。
+>
+> 在 Homebrew / Debian 等「受管控 Python」环境下（PEP 668），全局安装会被系统拒绝，
+> 安装器会自动改用独立虚拟环境重试，无需手工处理。
+
+客户端只接受固定动作白名单（配置写入、运行实验 Case 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。
+
+> **Note**
+> 未安装 Python 或故障注入组件的主机同样可以正常上线，只是「故障注入能力」显示为不可用，不影响配置下发与观测。
 
 ### 安装命令区
 
@@ -49,7 +92,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 - **相关文档面板**：提供 API Key、客户端配置和常见问题说明入口
 
 <p align="center">
-  <img src="../../images/config/client_config.png" alt="安装指导页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../images/config/client_config.png" alt="客户端安装页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 该页面的核心目标是完成“命令生成、凭证提供、地址确认、接入执行”这一最短闭环。
@@ -81,18 +124,25 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 ### 流程一：首次接入客户端
 
-1. 在 [Agent 管理](../agent-management) 中完成目标 Agent 登记。
-2. 进入 **安装指导** 页面。
+1. 在 [Agent 概览](../agent-management) 中完成目标 Agent 登记。
+2. 进入 **客户端安装** 页面。
 3. 在安装命令区选择目标操作系统。
 4. 复制对应的一键接入命令。
 5. 在目标 Agent 所在运行环境执行该命令。
-6. 按流程提示填入当前 API Key。
+6. 脚本写入当前账号 API Key；选择 OpenCode 时同时安装普通观测插件和 Agent RAS。
 7. 触发一次最小执行。
 8. 在 [链路追踪](../observability/view-traces) 中确认首条 Trace 是否生成。
 
+接入脚本会绑定生成它的 Agent Insight 服务端版本，不直接跟随 npm `latest`。因此普通
+Trace 与 RAS 事件来自同一套客户端组件，并使用同一个账号 API Key。OpenCode 尚未安装时
+也可以先执行接入命令；配置和插件会预先落位，之后安装 OpenCode 即可加载。之后重启
+Agent Insight 只会同步平台地址；已写入的客户端 API Key 不会被内部 `admin` Key 覆盖。
+
+OpenCode uploader 优先复用 `~/.agent-insight/client/config.json` 中的 `clientId` 和设备凭据，把 Trace 关联到已注册客户端；重新执行一键接入并切换账号后，新配置会自动使用新的客户端身份。正式客户端未安装成功时仍可使用兼容 `~/.agent-insight/client.json` 上传 Trace，但该文件中的自报 ID 不建立可信客户端绑定。链路追踪列表提供默认隐藏的 **IP** 列。Agent Insight 直接部署在公网 `IP:3000` 时，带有效 API Key 或设备凭证的 OpenCode uploader 无需额外配置：外部电脑运行 OpenCode，显示这台电脑访问服务端时的公网出口 IP；服务端本机运行 OpenCode 并通过自身公网地址上报，显示该服务端公网 IP。没有有效 API Key 或设备凭证的未认证上传不建立这项可信 IP 绑定，显示 `—`。hostname 和本地网卡 IP 只作为历史排障快照。这里没有新增插件或后台进程。完整部署矩阵、代理配置要求和查看步骤见 [链路追踪](../observability/view-traces) 中的“OpenCode Trace 公网 IP”。
+
 ### 流程二：重新部署或迁移客户端
 
-1. 进入 **安装指导** 页面。
+1. 进入 **客户端安装** 页面。
 2. 重新确认平台地址与上报路径。
 3. 重新复制当前操作系统对应命令。
 4. 在新的运行环境执行初始化命令。
@@ -103,7 +153,7 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 适用于项目代码已经使用 Langfuse Python SDK、LangChain CallbackHandler 或兼容的 Langfuse OTLP 上报方式。
 
-1. 进入 **安装指导** 页面。
+1. 进入 **客户端安装** 页面。
 2. 复制 **Langfuse Python SDK** 区域中的环境变量。
 3. 在目标项目运行环境中设置这些变量。
 4. 重新运行一次真实 agent 请求。
@@ -154,7 +204,7 @@ node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
 
 ### 流程五：排查“无数据上报”
 
-1. 回到安装指导页确认当前账号、API Key 与平台地址。
+1. 回到客户端安装页确认当前账号、API Key 与平台地址。
 2. 确认执行命令的机器就是目标 Agent 实际运行环境。
 3. 确认客户端已完成至少一次真实执行。
 4. 确认服务端地址与上报路径可达。
@@ -218,7 +268,7 @@ Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台�
 
 ## 下一步
 
-- 完成 Agent 资产登记： [Agent 管理](../agent-management)
+- 完成 Agent 资产登记： [Agent 概览](../agent-management)
 - 验证链路是否成功上报： [链路追踪](../observability/view-traces)
 - 继续完成整体接入流程： [5 分钟上手](../quickstart)
 - 配置后续模型能力： [模型注册](./model-registry)

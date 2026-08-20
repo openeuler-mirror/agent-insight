@@ -79,6 +79,11 @@ try {
 
   console.log('Syncing database schema...')
   try {
+    execSync('node scripts/prepare-ras-sqlite-schema.js', {
+      stdio: 'inherit',
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
     execSync('npx prisma db push', {
       stdio: 'inherit',
       cwd: PACKAGE_ROOT,

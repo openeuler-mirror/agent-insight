@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "grade": "conditionally passed",
+  "score": 71,
+  "dimensions": {
+    "reasonableness": 80,
+    "feasibility": 60,
+    "maintainability": 75,
+    "usability": 68
+  },
+  "comments": [
+    "[ERROR][Fact] IF-N01「CLI run --run-id」误导：现网 CLI 的 --run-id 仅为产物 ID，platform/agent/fault/prompt/workspace 等仍须由 Worker 从 claim 回包拼齐（对齐 engine.runCollector）。",
+    "[ERROR][Omission] Workspace 默认由服务端 os.homedir() 展开写入 DB；分离后 Worker 本机执行会拿到错误绝对路径。须规定本机 workspaceBase 解析并禁止服务端展开 ~。",
+    "[ERROR][Omission] dryRun / AGENT_INSIGHT_FI_DRY_RUN 同步 stub 路径在禁止服务端 spawn 后未选型，E2E/联调悬空。",
+    "[ERROR][Feasibility] 未本机化 workspace 时远程 Insight 默认建任务→claim→CLI 主路径不可行。",
+    "[WARNING][Fact] IF-E01b taskId 与现网 taskIds[] 不一致；Task queued 语义与 refreshTaskProgress 现网恒为 running 冲突；状态机缺 dry_run。",
+    "[WARNING][Omission] claim 超时回收无调度主体且 timeout 错放 Worker config；stop 立即终态化与 collect-result 竞态未钉死；rerun/health/faults 入口覆盖不全。",
+    "[WARNING][Feasibility] claim 伪代码 SELECT+UPDATE 有 TOCTOU；install-fault-injection 相对目标落差大且无常驻 supervisor；engine 拷贝迁移有双实现风险。",
+    "[INFO] 现状诊断正确（queue spawn、platforms 服务端 which、files 含 agent_fault_injection、无 Worker 表）；短轮询+条件更新+Judge 留云技术上成熟。"
+  ],
+  "suggestions": [
+    "在 SDD 增补 Workspace 契约：服务端只存逻辑路径/哨兵；Worker 用 ~/.agent-insight/fault-injection/workspaces（或 config.workspaceBase）解析；迁移存量绝对路径。",
+    "明确 dry-run：推荐服务端 buildStubCollectPayload（零 spawn，不违反 D-001）或强制 Worker stub；同步改 E2E。",
+    "将 claimTimeoutSec 定为服务端配置；在 heartbeat/claim 路径或轻量 sweep 中回收 collecting；写清 stopRequested→kill→终态/partial upload/409 规则。",
+    "修正 IF-N01 为「CLI run + claim 下发全量参数」；IF-E01b 对齐 taskIds[]；状态机与 refreshTaskProgress 纳入 queued/dry_run。",
+    "模块变更表补 rerun/health；faults 声明仍走服务端包内 Python 或静态 catalog；安装器写 config + fi-worker 启动与保活指引。"
+  ]
+}

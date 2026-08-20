@@ -15,6 +15,35 @@
 
 OpenClaw 应直接访问自己的模型供应商；Agent Insight 只接收遥测。历史 URL `POST /api/proxy/v1/chat/completions` 仅返回 410，不是 OTLP 链路，也不会代转模型请求。
 
+> **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-runtime.md`](../agent-ras/designs/modules/ras-runtime.md)；本文件为 Insight ingest **契约真源**。
+
+### OpenCode Trace 公网 IP 快照（非 OTLP）
+
+适用范围只有 `framework=opencode` 的 `POST /api/ingest/upload`，结果保存到 `Execution.observedIp` 并显示在链路追踪列表的 IP 列。Claude Code、Hermes、xiaoO 等其他框架尚未写入该字段；可靠性常驻客户端注册和心跳对直连模式也不启用该分支，它们仍只读取显式配置的可信代理头。
+
+OpenCode uploader 上报 `client_id`、`host.reported_ip` 和 `host.hostname`。正式 `~/.agent-insight/client/config.json` 提供 `clientId + deviceCredential`；兼容 `~/.agent-insight/client.json` 的自报 ID 不建立可信客户端绑定。直连 IP 识别要求上传通过设备凭证或有效 `x-witty-api-key` 认证；仅在请求体填写 `user` 的未认证上传不能启用直连识别。
+
+服务端按以下顺序解析：
+
+1. 如果配置了 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER`，先读取该头的公网地址。`x-forwarded-for` 只取最左侧地址。
+2. 对已认证 OpenCode 直连上传，读取 Next.js 在请求未携带 `x-forwarded-for` 时从 TCP socket 补入的来源地址；来源本身是公网地址时直接保存。官方 uploader 不主动发送该头。
+3. 如果来源是服务端自身的回环或本机网卡地址，且 uploader 上报的 hostname 与服务端 hostname 一致，则把请求目标中的**公网 IP 字面量**保存为服务器公网 IP。域名、`localhost` 和私网地址不会在该步骤做 DNS 或公网反查。
+4. 其余情况保存 `null`。私网、回环、链路本地、保留地址和文档示例地址都会被过滤。
+
+| 部署方式 | 当前支持 | 服务端配置 | 结果 |
+|---|---|---|---|
+| 外部 OpenCode 直连公网 IP 或公网域名的 `:3000` 服务 | 支持 | 无；上传需通过 API Key 或设备凭证认证 | 客户端网络的公网出口 IP |
+| OpenCode 与服务端同机，访问服务端公网 IP 字面量 | 支持 | 无；上传需认证，来源必须是服务端自身地址，hostname 必须一致 | 请求目标中的服务器公网 IP |
+| OpenCode 与服务端同机，访问公网域名 | 有条件支持 | 无 | TCP 来源已是公网地址时可保存；本地回环或私网路径下为 `null` |
+| Nginx、Apache、负载均衡或 API 网关 | 有条件支持 | 代理覆盖真实来源头；服务端设置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=x-forwarded-for` 或 `x-real-ip` | 可信头中的公网 IP |
+| Cloudflare | 有条件支持 | 服务端设置 `AGENT_INSIGHT_TRUSTED_PROXY_HEADER=cf-connecting-ip` | Cloudflare 提供的客户端公网 IP |
+| Docker、Kubernetes Ingress | 有条件支持 | 推荐由 Ingress 或网关覆盖真实来源头并配置对应环境变量 | 保留公网来源时可保存；只剩容器或节点私网地址时为 `null` |
+| `localhost`、服务器私网 IP、局域网、VPN 私网或 SSH 隧道 | 不支持公网 IP 绑定 | 无 | `null` |
+
+`AGENT_INSIGHT_TRUSTED_PROXY_HEADER` 只接受 `x-forwarded-for`、`x-real-ip`、`cf-connecting-ip`。最外层可信代理必须删除或覆盖客户端传入的同名头；使用追加式 `X-Forwarded-For` 而不清洗最左侧值会允许客户端伪造展示 IP。修改服务端环境变量后必须重启 Agent Insight。
+
+`observedIp` 是 Trace 产生时的首次非空快照：重传不会覆盖已有值，根/child `Execution` 继承同一快照，也不复用表示模型推理源的 `Execution.endpoint`。该字段只用于展示和网络排障，不用于认证或唯一标识机器；NAT 后的多台电脑会共享同一个公网出口 IP。
+
 ## 资源属性 (Resource)
 
 客户端在 `resource.attributes` 中设置以下字段：
@@ -194,11 +223,32 @@ Tool 使用 `tool.name`、`tool.arguments`、`tool.output`；Retriever 使用 `r
 
 setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `http/json`，Logs 与 Traces 分别指向 `/v1/logs`、`/v1/traces`。两者只是两种配置呈现方式，不应与 watcher 同时启用。
 
+## RAS 旁路属性
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `taskId` | string | 是 | 与 OTLP / Execution 的 session 对齐 |
+| `type` | string | 是 | `anomaly` / `actions` / `action_result` / `skill_*` |
+| `deliveryId` | string | 是 | 一次逻辑投递的 UUID；重试复用，独立事件必须不同 |
+| `anomalyKind` | string | 否 | 如 `repeat_tool_call`、`llm_thinking_dead_loop` |
+| `severity` | string | 否 | `low` / `medium` / `high` / `critical` |
+| `summary` | string | 否 | 人可读摘要 |
+| `actionTypes` | string | 否 | 逗号分隔动作类型 |
+| `framework` / `platform` | string | 否 | 平台，如 `opencode` |
+| `payload` | object | 否 | 原始事件体，落库为 `payloadJson` |
+
+落库模型：`RasAnomalyEvent`。实现：`src/lib/ingest/ras/*`、`src/app/api/ingest/ras-events`；推送方：同进程 `agent_ras/ras_runtime/insight_push.py`（fail-open）。同一 `taskId + deliveryId` 幂等更新；相同内容的两次真实异常使用不同 `deliveryId`，不会被错误合并。`payload.actions[]` 保留动作类型及完整 `message`；`payload.trace_anchor` 使用 `message_id + part_id + channel` 定位**检测点**，或使用 `call_id + channel=tool_call` 定位工具调用。`action_result` 携带同一检测锚点、实际投递内容，以及可选的 `payload.delivery_anchor`（`message_id` 必须是**平台分配**的投递消息 id，才可把投递交互重分类为 RAS；`channel` 为 `ras_notice` 或 `ras_steering`）。拿不到平台真 id 时**省略** `delivery_anchor`，**禁止**客户端伪造 id。**不做**正文匹配兜底。
+
+宿主上传生命周期：`fire_push_*` 注册 per-session pending handle；平台在异常与全部 `action_result` 入队后调用内部 `flush(timeout_ms)`，以 HTTP 2xx 作为 ack。flush 只等待调用时的 pending 快照，返回 `attempted/acked/failed/pending/timed_out`；并发 flush 各自使用本地快照结算，不会互相消费回执。未 flush 的完成回执按 session 最多保留 256 条，避免长驻宿主无界增长。超时不得取消上传或向 Agent 主流程抛错。OpenCode 的主 flush 点是 `onActions` 末尾，idle/bye 仅兜底，`reset` 不清理 pending。该有界 drain 保证正常短生命周期结束；SIGKILL/断电保证需另建持久化 outbox。
+
 ## 版本记录
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.4 | 2026-08-17 | `delivery_anchor.message_id` 必须为平台分配；OpenCode 已认证 uploader 支持直连公网 IP 与服务端同机上报，并明确直连、代理、容器、私网部署矩阵 |
+| 1.3 | 2026-08-14 | RAS 旁路上传增加 per-session receipt、正常退出前 bounded flush，并明确 GIL/线程生命周期 |
+| 1.2 | 2026-07-31 | RAS 契约收紧：仅 flat+必填 deliveryId；移除 witty.* / rasEventId / 深路径 rewrite / 正文兜底 |
+| 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义；补充 RAS 旁路 ingest（非 OTLP） |
 | 1.2 | 2026-08-11 | 新增 Pi Agent canonical span 与 Adapter 映射 |
-| 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义 |
 | 1.0 | 2026-07-14 | 初版，定义 OTLP 属性契约 (FR-011) |
 <!-- Codex canonical traces use agent.insight.framework=codex and redact inline secrets and local paths before spool persistence while preserving numeric usage fields. -->
