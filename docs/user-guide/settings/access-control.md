@@ -1,18 +1,18 @@
 ---
-title: "安装指导"
+title: "客户端安装"
 description: "生成客户端接入命令并获取当前账号 API Key"
 ---
 
-# 安装指导
+# 客户端安装
 
-安装指导用于生成客户端接入命令、提供当前账号的接入凭证，并明确平台地址与上报路径，是运行数据能否进入 Agent Insight 的关键配置页面。
+客户端安装用于生成客户端接入命令、提供当前账号的接入凭证，并明确平台地址与上报路径，是运行数据能否进入 Agent Insight 的关键配置页面。
 
 > **Note**
 > Agent 已完成登记、模型已完成注册，但链路追踪仍无数据时，通常应优先检查安装命令、API Key 归属与上报地址配置。
 
 ## 功能定位
 
-安装指导承担四项核心职责：
+客户端安装承担四项核心职责：
 
 - 按目标操作系统生成可直接执行的接入命令
 - 提供当前账号对应的 API Key
@@ -21,7 +21,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 
 ## 页面结构
 
-安装指导页面通常由三个功能区组成：
+客户端安装页面通常由三个功能区组成：
 
 1. **安装命令区**
    按操作系统展示一键接入命令。
@@ -49,7 +49,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 - **相关文档面板**：提供 API Key、客户端配置和常见问题说明入口
 
 <p align="center">
-  <img src="../../images/config/client_config.png" alt="安装指导页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../images/config/client_config.png" alt="客户端安装页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 该页面的核心目标是完成“命令生成、凭证提供、地址确认、接入执行”这一最短闭环。
@@ -81,8 +81,8 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 ### 流程一：首次接入客户端
 
-1. 在 [Agent 管理](../agent-management) 中完成目标 Agent 登记。
-2. 进入 **安装指导** 页面。
+1. 在 [Agent 概览](../agent-management) 中完成目标 Agent 登记。
+2. 进入 **客户端安装** 页面。
 3. 在安装命令区选择目标操作系统。
 4. 复制对应的一键接入命令。
 5. 在目标 Agent 所在运行环境执行该命令。
@@ -92,7 +92,7 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 ### 流程二：重新部署或迁移客户端
 
-1. 进入 **安装指导** 页面。
+1. 进入 **客户端安装** 页面。
 2. 重新确认平台地址与上报路径。
 3. 重新复制当前操作系统对应命令。
 4. 在新的运行环境执行初始化命令。
@@ -103,7 +103,7 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 适用于项目代码已经使用 Langfuse Python SDK、LangChain CallbackHandler 或兼容的 Langfuse OTLP 上报方式。
 
-1. 进入 **安装指导** 页面。
+1. 进入 **客户端安装** 页面。
 2. 复制 **Langfuse Python SDK** 区域中的环境变量。
 3. 在目标项目运行环境中设置这些变量。
 4. 重新运行一次真实 agent 请求。
@@ -154,7 +154,7 @@ node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
 
 ### 流程五：排查“无数据上报”
 
-1. 回到安装指导页确认当前账号、API Key 与平台地址。
+1. 回到客户端安装页确认当前账号、API Key 与平台地址。
 2. 确认执行命令的机器就是目标 Agent 实际运行环境。
 3. 确认客户端已完成至少一次真实执行。
 4. 确认服务端地址与上报路径可达。
@@ -218,7 +218,7 @@ Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台�
 
 ## 下一步
 
-- 完成 Agent 资产登记： [Agent 管理](../agent-management)
+- 完成 Agent 资产登记： [Agent 概览](../agent-management)
 - 验证链路是否成功上报： [链路追踪](../observability/view-traces)
 - 继续完成整体接入流程： [5 分钟上手](../quickstart)
 - 配置后续模型能力： [模型注册](./model-registry)

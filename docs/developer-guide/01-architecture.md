@@ -57,25 +57,25 @@
 
 ### 3.1 功能范围 `[确证]`
 
-> 按**产品导航信息架构**组织——即用户在侧边栏看到的功能模块分组（权威来源：`src/components/shell/AppSidebar.tsx` + 标签 `src/locales/zh.ts`）。注意「显示名 ↔ 路由」有若干不对应处（*智能诊断*→`/fault`、*评估器*→`/metrics`、*Skills Hub*→`/skills`），下表以路由为准。
+> 按**产品导航信息架构**组织——即用户在侧边栏看到的功能模块分组（权威来源：`src/components/shell/sidebar-navigation.ts` + 标签 `src/locales/zh.ts`）。注意「显示名 ↔ 路由」有若干不对应处（*诊断分析*→`/fault`、*评估器*→`/metrics`、*Skill*→`/skills`），下表以路由为准。
 
-**一级分组 `AGENT WORKSPACE`（`nav.groupAgentWorkspace`）**
+**业务模块**
 
 | 模块 / 子项 | 路由 | 后端引擎 / API 域 |
 |---|---|---|
-| 概览 | `/dashboard` | `api/dashboard/**` |
-| Agent 管理 | `/agents` | `api/agents/**`、`api/auth/**` |
+| 仪表盘 | `/dashboard` | `api/dashboard/**` |
+| 快速开始 | `/quickstart` | 纯前端推荐路径，跳转到当前已开放模块 |
+| 运行观测 · Agent 概览 | `/agents` | `api/agents/**`、`api/auth/**` |
 | 运行观测 · 链路追踪 | `/trace`（+`/details`） | `api/observe/**`、`engine/observability` |
-| 运行观测 · 智能诊断 | `/fault` | `api/fault/**`、`api/debug/**`、`engine/agent-debug` |
-| 运行观测 · 质量监控 | `/quality` | `/api/quality/{agents,report,executions}` |
-| 运行观测 · 推理 Infra | `/infra`（+`/infra/sources`、`/infra/source/:id`） | `api/observe/infra/**`、`lib/infra`、`lib/ingest/vllm` |
-| 评测中心 · 评测数据集 | `/dataset` | `api/agent-datasets/**`、`engine/evaluation` |
-| 评测中心 · 评估器 | `/metrics` | `api/user-evaluators/**`、`engine/evaluation` |
-| 评测中心 · 评测执行 | `/eval` | `api/eval/**`、`api/evaluation/**`、`engine/evaluation` |
-| Skills 能力 · Skills Hub | `/skills`（+`/skill-history`、`/skill-detail`） | `api/skills/**` |
-| Skills 能力 · Skills 生成 | `/skill-generator` | `api/skill-generator/**`、`engine/skill-generation` |
-| Skills 能力 · Skills 评测 | `/skill-eval` | `api/skill-eval/**`、`engine/skill-issues` |
-| Skills 能力 · Skills 优化 | `/skill-opt` | `api/skill-opt/**`、`engine/skill-generation` |
+| 运行观测 · 推理基础设施 | `/infra`（+`/infra/sources`、`/infra/source/:id`） | `api/observe/infra/**`、`lib/infra`、`lib/ingest/vllm` |
+| 评估与实验 · 实验 | `/experiments` | `api/experiments/**`、`engine/experiment` |
+| 评估与实验 · 评测数据集 | `/dataset` | `api/agent-datasets/**`、`engine/evaluation` |
+| 评估与实验 · 评估器 | `/metrics` | `api/user-evaluators/**`、`engine/evaluation` |
+| 诊断分析 | `/fault` | `api/fault/**`、`api/debug/**`、`engine/agent-debug` |
+| 持续优化 · Skill · SkillHub | `/skills`（+`/skill-history`、`/skill-detail`） | `api/skills/**` |
+| 持续优化 · Skill · 生成 | `/skill-generator` | `api/skill-generator/**`、`engine/skill-generation` |
+| 持续优化 · Skill · 评测 | `/skill-eval` | `api/skill-eval/**`、`engine/skill-issues` |
+| 持续优化 · Skill · 优化 | `/skill-opt` | `api/skill-opt/**`、`engine/skill-generation` |
 
 **一级分组 `配置`（`nav.configGroup`）**
 
@@ -83,11 +83,11 @@
 |---|---|---|
 | 模型注册 | `/modelconfig/registry` | `api/eval/settings/**` |
 | 联网搜索 | `/modelconfig/web-search` | `api/eval/settings/**` |
-| 安装指导 | `/accessconfig/install` | `api/ingest/setup/**` |
+| 客户端安装 | `/accessconfig/install` | `api/ingest/setup/**` |
 
-**数据接入（无独立导航入口，由"安装指导"分发的客户端回传）** `[确证]`：`api/ingest/**`（otel `/v1/{traces,logs,metrics}`、upload、proxy、setup、sync）+ `scripts/*watcher*` / `opencode_plugin*` / `public/sync_skills.ts`。
+**数据接入（由“客户端安装”分发的客户端回传）** `[确证]`：`api/ingest/**`（otel `/v1/{traces,logs,metrics}`、upload、proxy、setup、sync）+ `scripts/*watcher*` / `opencode_plugin*` / `public/sync_skills.ts`。
 
-**已存在但未挂载到导航的页面** `[确证]`（源码保留、nav 中注释或未引用，多为半成品/已下线）：`/memory`（记忆评估，nav 注释）、`/optapi`、`/security`、`/skill-release`、`/modelconfig`（index）、`/accessconfig/{channels,webhooks,health}`（nav 注释，"后端能力未稳定"）。导航 IA 与可达性标注详见 [06-frontend.md](06-frontend.md#导航信息架构功能模块)。
+**已存在但未挂载到导航的页面** `[确证]`：`/version-analysis`、`/quality`、`/eval`、`/version-management`、`/memory`、`/optapi`、`/security`、`/skill-release`、`/modelconfig`（index）、`/accessconfig/{channels,webhooks,health}`。源码保留，导航 IA 与可达性标注详见 [06-frontend.md](06-frontend.md#导航信息架构功能模块)。
 
 ### 3.2 关键质量属性（NFR）—— 推断节
 
