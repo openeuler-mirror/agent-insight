@@ -159,6 +159,7 @@ export interface RunTriggerEvalLiveResult {
 
 interface SingleRunOutcome {
   triggered: boolean;
+  sessionId?: string;
   /** 结束原因。聚合时据此分出"跑完/超时/出错"，前端可见。 */
   endReason: TriggerEndReason;
   /** opencode session.error 文本；非空表示这次 run 实际没跑成（不是"没命中"，是根本没问到模型）。 */
@@ -380,6 +381,7 @@ async function evalOne(
   // 外部终止（用户点终止）也会 abort，但那条路径上层会 throwIfAborted 抛掉、不进聚合，这里不单独分类。
   return {
     triggered,
+    sessionId: sessionId || undefined,
     endReason: classifyEndReason({ triggered, sessionError, timedOut }),
     competingSkill,
     sessionError,
@@ -896,6 +898,7 @@ export async function runTriggerEvalLive(
       runsTimedOut,
       runsErrored,
       errorMessage,
+      sessionIds: runs.map(r => r.sessionId).filter((id): id is string => Boolean(id)),
     };
   });
 

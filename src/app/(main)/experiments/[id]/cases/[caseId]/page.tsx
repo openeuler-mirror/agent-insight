@@ -177,7 +177,7 @@ function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId
       {point.evidence ? <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} /> : null}
       {point.suggestion && (
         <div style={{ marginTop: point.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
-          ↗ 建议：{point.suggestion}
+          ↗ Skill 建议：{point.suggestion}
         </div>
       )}
       {point.anchors && point.anchors.length > 0 && (
@@ -375,8 +375,17 @@ function ScoreAdjuster({
   );
 }
 
-export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: string; caseId: string }> }) {
-  const { id, caseId } = use(params);
+export function ExperimentCaseDetail({
+  id,
+  caseId,
+  embedded = false,
+  onBack,
+}: {
+  id: string;
+  caseId: string;
+  embedded?: boolean;
+  onBack?: () => void;
+}) {
   const { user } = useAuth();
   const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
@@ -475,8 +484,8 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
 
   return (
     <>
-      <AppTopBar title="Trace 评测详情" />
-      <PageContainer>
+      {!embedded && <AppTopBar title="Trace 评测详情" />}
+      <PageContainer className={embedded ? "[&>*]:shrink-0" : undefined}>
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : !detail || !caseRow ? (
@@ -491,16 +500,30 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
 
             {/* 页头 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-              <Link
-                href={`/experiments/${encodeURIComponent(id)}`}
-                style={{
-                  fontSize: 12, color: 'var(--foreground-secondary)', textDecoration: 'none',
-                  padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
-                  background: 'var(--background-secondary)',
-                }}
-              >
-                ‹ 返回实验详情
-              </Link>
+              {embedded && onBack ? (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  style={{
+                    fontSize: 12, color: 'var(--foreground-secondary)',
+                    padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
+                    background: 'var(--background-secondary)', cursor: 'pointer',
+                  }}
+                >
+                  ‹ 返回实验详情
+                </button>
+              ) : (
+                <Link
+                  href={`/experiments/${encodeURIComponent(id)}`}
+                  style={{
+                    fontSize: 12, color: 'var(--foreground-secondary)', textDecoration: 'none',
+                    padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
+                    background: 'var(--background-secondary)',
+                  }}
+                >
+                  ‹ 返回实验详情
+                </Link>
+              )}
               <span style={{
                 fontSize: 13, fontWeight: 600, maxWidth: 520, overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -780,4 +803,9 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
       </PageContainer>
     </>
   );
+}
+
+export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: string; caseId: string }> }) {
+  const { id, caseId } = use(params);
+  return <ExperimentCaseDetail id={id} caseId={caseId} />;
 }

@@ -5,7 +5,7 @@ description: "从需求生成结构化 Skill 包"
 
 # Skills 生成
 
-Skills 生成是 Agent Insight 在「持续优化 → Skill」工作区中的生成页签，用于把自然语言需求转换为结构化 Skill 包。
+Skills 生成现在从「持续优化 → Skill」对话工作台左侧的 **生成一个 Skill** 开始，用于把自然语言需求转换为结构化 Skill 包。旧生成页在兼容期继续可用。
 
 它面向这样的场景：你已经知道希望 Agent 具备什么能力，但还没有现成的 `SKILL.md`、脚本和参考文档，希望平台直接生成一套可预览、可编辑、可发布的 Skill 工件。
 
@@ -16,7 +16,7 @@ Skills 生成是 Agent Insight 在「持续优化 → Skill」工作区中的生
 - **Skills 评测**：验证 Skill 的质量与效果
 - **Skills 优化**：基于评测结果持续迭代
 
-完整链路通常为：**生成 -> 评测 -> 优化 -> 入库 -> 复用**。
+完整链路通常为：**生成并应用质量规则 → 查看工作快照 → 用户确认发布 → 实验 → 优化候选 → 复测 → 再发布**。
 
 <p align="center">
   <img src="../../images/skills/generator.png" alt="Skills 生成功能示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
@@ -33,7 +33,7 @@ Skills 生成用于将需求转换为标准化 Skill 包，面向 Skill 的生�
 - **场景选择**：支持按业务场景调整生成策略
 - **联网搜索增强**：按需引入外部资料，提升专业准确性
 - **下载技能包**：导出完整 `skill.zip`
-- **保存并发布**：发布到 Skills Hub 供团队复用
+- **确认后发布**：生成完成只形成工作快照；平台按当前文件 hash 完成静态评估且无高风险问题、用户二次确认后，才追加正式版本。评估中、结果过期或存在 `high` 问题时发布按钮不可用；门禁未通过时可点击 **AI 修复问题**，让优化 Agent 按问题清单修改当前快照并自动复验
 - **对话式迭代**：支持在同一会话中持续补充需求并生成新版本
 
 ## 使用方式

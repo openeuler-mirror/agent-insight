@@ -4,6 +4,10 @@ import type { SkillOptIssueLite, SkillOptPlanItemLite } from '@/lib/engine/gener
 import { prismaRaw } from '@/lib/storage/prisma';
 import { createBlockMirror } from '@/lib/chat/block-mirror';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import {
+  beginWorkbenchOptimizationRun,
+  finishWorkbenchOptimizationRun,
+} from '@/lib/skill-workbench/optimization-adapter';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +46,7 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400 });
   }
 
-  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, mock, planId } = body || {};
+  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, mock, planId, runId } = body || {};
 
   const missing: string[] = [];
   if (!user) missing.push('user');
@@ -137,9 +141,9 @@ export async function POST(req: NextRequest) {
   try {
     const session = await (prismaRaw as any).skillOptSession.findUnique({
       where: { id: threadId },
-      select: { id: true, title: true },
+      select: { id: true, title: true, user: true },
     });
-    sessionExists = !!session;
+    sessionExists = !!session && session.user === user;
     if (sessionExists) {
       await (prismaRaw as any).skillOptMessage.create({
         data: { sessionId: threadId, role: 'user', content: userMessageText, blocks: '[]' },
@@ -163,24 +167,37 @@ export async function POST(req: NextRequest) {
     console.warn('[skill-opt route] pre-stream persistence failed:', err?.message || err);
   }
 
+  const workbenchRun = sessionExists
+    ? await beginWorkbenchOptimizationRun({
+        user,
+        optSessionId: threadId,
+        runId: typeof runId === 'string' && runId.trim() ? runId.trim() : `${threadId}:${Date.now()}`,
+      }).catch((error) => {
+        console.error('[skill-opt route] start workbench task failed:', error);
+        return null;
+      })
+    : null;
+
   // ── mock 模式：固定脚本回放，不调 LLM。让前端在没有真实模型配置时也能联调 ──
   if (mock) {
     const readable = new ReadableStream({
       async start(controller) {
         const { send, getBlocks } = createBlockMirror(controller, encoder);
         let agentText = '';
+        let finalFiles: Record<string, any> = {};
+        let chatError: string | null = null;
         try {
           // 包一层把 send 投递的 text 也累计到 agentText（fallback content 列）
           const trackedSend = (mode: string, payload: any) => {
             if (mode === 'text' && typeof payload === 'string') agentText += payload;
+            if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
             send(mode, payload);
           };
           await runMockScript({ skillName, baseVersion, issues: issuesNormalized, feedback, send: trackedSend });
           send('done', { reason: 'completed' });
         } catch (err: any) {
+          chatError = err?.message || String(err);
           try { send('error', err?.message || String(err)); } catch { /* closed */ }
-        } finally {
-          try { controller.close(); } catch { /* already closed */ }
         }
 
         // 落 agent message + blocks（mock 模式也存，方便前端调试历史）
@@ -194,10 +211,26 @@ export async function POST(req: NextRequest) {
                 blocks: JSON.stringify(getBlocks()),
               },
             });
+            await (prismaRaw as any).skillOptSession.update({
+              where: { id: threadId },
+              data: { files: JSON.stringify(finalFiles) },
+            });
           } catch (err: any) {
             console.warn('[skill-opt route] mock post-stream persistence failed:', err?.message || err);
+            chatError ||= err?.message || String(err);
           }
         }
+        if (workbenchRun) {
+          await finishWorkbenchOptimizationRun({
+            user,
+            workbenchSessionId: workbenchRun.workbenchSessionId,
+            taskId: workbenchRun.taskId,
+            sourceKind: issuesNormalized.length ? 'evaluation' : 'user',
+            sourceRefs: issuesNormalized.map((issue) => ({ type: 'issue', id: issue.id })),
+            error: chatError,
+          });
+        }
+        try { controller.close(); } catch { /* already closed */ }
       },
     });
     return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
@@ -209,6 +242,7 @@ export async function POST(req: NextRequest) {
       const { send, getBlocks } = createBlockMirror(controller, encoder);
       let agentText = '';
       let finalFiles: Record<string, any> = {};
+      let chatError: string | null = null;
       try {
         const trackedSend = (mode: string, payload: any) => {
           if (mode === 'text' && typeof payload === 'string') agentText += payload;
@@ -228,10 +262,9 @@ export async function POST(req: NextRequest) {
           send: trackedSend,
         });
       } catch (err: any) {
+        chatError = err?.message || String(err);
         console.error('[skill-opt route] streamSkillOptOpencode threw:', err?.message || err);
         try { send('error', err?.message || String(err)); } catch { /* closed */ }
-      } finally {
-        try { controller.close(); } catch { /* already closed */ }
       }
 
       // 落 agent message + blocks + 最终 files（skill-generator 同款，区别是表名 + 新增字段不存）
@@ -251,8 +284,20 @@ export async function POST(req: NextRequest) {
           });
         } catch (err: any) {
           console.warn('[skill-opt route] post-stream persistence failed:', err?.message || err);
+          chatError ||= err?.message || String(err);
         }
       }
+      if (workbenchRun) {
+        await finishWorkbenchOptimizationRun({
+          user,
+          workbenchSessionId: workbenchRun.workbenchSessionId,
+          taskId: workbenchRun.taskId,
+          sourceKind: issuesNormalized.length ? 'evaluation' : 'user',
+          sourceRefs: issuesNormalized.map((issue) => ({ type: 'issue', id: issue.id })),
+          error: chatError,
+        });
+      }
+      try { controller.close(); } catch { /* already closed */ }
     },
   });
 

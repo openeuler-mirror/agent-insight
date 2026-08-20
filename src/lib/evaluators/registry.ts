@@ -27,6 +27,7 @@ export interface EvaluatorMeta {
 
 /** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。 */
 const PRESET_META: Record<string, EvaluatorMeta> = {
+  'skill-trigger-analyzer': { category: 'res', requires: [] },
   // 任务完成度：对照参考答案判定目标达成（团队评审确定为依赖参考数据）
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖参考数据

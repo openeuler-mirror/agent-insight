@@ -135,7 +135,7 @@ const quickstartStages: Record<'zh' | 'en', QuickstartStage[]> = {
       advice: '从 SkillHub 选择或创建 Skill，完成生成与评测，再依据问题样本进入优化并重新验证。',
       icon: Sparkles,
       capabilities: [
-        { name: 'Skill', description: '进入统一 Skill 工作区，在 SkillHub、生成、评测和优化之间顺畅切换。', href: '/skills', icon: LayoutGrid },
+        { name: 'Skill', description: '在一个对话工作台中完成 Skill 生成、评估、实验、优化、复测与发布。', href: '/skills', icon: LayoutGrid },
       ],
     },
   ],
@@ -183,7 +183,7 @@ const quickstartStages: Record<'zh' | 'en', QuickstartStage[]> = {
       description: 'Bring SkillHub, generation, evaluation, and optimization into a versioned improvement loop.',
       advice: 'Choose or create a Skill in SkillHub, evaluate it, optimize against problem samples, and verify again.',
       capabilities: [
-        { name: 'Skill', description: 'Move between SkillHub, generation, evaluation, and optimization in one workspace.', href: '/skills', icon: LayoutGrid },
+        { name: 'Skill', description: 'Generate, evaluate, experiment, optimize, retest, and publish in one conversational workbench.', href: '/skills', icon: LayoutGrid },
       ],
     },
   ],

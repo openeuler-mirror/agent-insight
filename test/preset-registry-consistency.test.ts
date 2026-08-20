@@ -45,12 +45,21 @@ import {
   RAS_DETECTION_RECOVERY_PRESET_ID,
   isRasReliabilityPresetId,
 } from '../src/lib/engine/experiment/ras-reliability-evaluator';
+import {
+  SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+  isSkillTriggerAnalyzerId,
+} from '../src/lib/skill-workbench/trigger-evaluator';
 
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
  * 新增一族预置评估器时，在 evaluateOnce 里接了分发，就同步在这里登记一行。
  */
 const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids: readonly string[] }> = [
+  {
+    name: 'trigger-evaluator.ts',
+    claims: isSkillTriggerAnalyzerId,
+    ids: [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID],
+  },
   { name: 'faithful-preset-evaluators.ts', claims: isFaithfulPresetId, ids: FAITHFUL_PRESET_IDS },
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
   { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },

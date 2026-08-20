@@ -21,6 +21,7 @@ import {
   addEvalExperimentCase,
   evaluateEvalExperimentCase,
 } from '@/lib/engine/experiment/run-experiment';
+import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
 
 const TEST_USER = `exp-engine-${Date.now()}`;
 
@@ -337,4 +338,41 @@ test('engine: skill 评测接入——ensure/add/evaluate 单 case 走实验后�
   assert.equal(JSON.parse(stored!.pointsJson!)[0].label, '目标达成');
 
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 已有 Trace 的触发分析使用真实 Skill 命中事实确定性计分', async () => {
+  const skillName = 'engine-trigger-skill';
+  const executionId = await createExecution({ skill: null });
+  await prisma.executionSkill.create({
+    data: { executionId, skillName, skillVersion: 1, user: TEST_USER, isPrimary: true },
+  });
+  const experiment = await prisma.experiment.create({
+    data: {
+      user: TEST_USER,
+      name: '已有 Trace 触发分析',
+      agentName: 'engine-test-agent',
+      evaluatorIdsJson: JSON.stringify([SKILL_TRIGGER_ANALYZER_EVALUATOR_ID]),
+      scope: 'skill-workbench',
+      skillName,
+      skillVersion: 1,
+      preset: 'trigger',
+      cases: {
+        create: [{
+          executionId,
+          input: '应命中当前 Skill',
+          actualOutput: '历史 Trace',
+          caseValuesJson: JSON.stringify({ should_trigger: true }),
+        }],
+      },
+    },
+  });
+
+  const start = await startExperimentRun(experiment.id, TEST_USER);
+  await start!.completion;
+  const result = await prisma.experimentEvalResult.findFirst({ where: { experimentId: experiment.id } });
+  assert.equal(result!.evaluatorId, SKILL_TRIGGER_ANALYZER_EVALUATOR_ID);
+  assert.equal(result!.status, 'done');
+  assert.equal(result!.score, 100);
+  assert.equal(result!.summary, '实际触发结果与预期标注一致。');
+  assert.equal(JSON.parse(result!.pointsJson!)[0].label, '触发准确率');
 });

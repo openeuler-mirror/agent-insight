@@ -6,6 +6,7 @@
  * 实际 Prompt、轨迹统计和确定性计分位于 src/lib/engine/experiment/。
  */
 import type { EvaluatorCard } from './custom-evaluator-model';
+import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
 
 /**
  * 「用例分析」「批量测试」里默认勾选的评估器。
@@ -23,6 +24,23 @@ export const DEFAULT_SELECTED_PRESET_IDS: readonly string[] = [
 ];
 
 export const presetEvaluators: EvaluatorCard[] = [
+  {
+    id: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+    name: 'skill-trigger-analyzer',
+    description: '逐条比较数据集应触发标注与当前 Skill 的真实路由结果，每条 Case 只输出一个「触发准确率」评分点。',
+    evaluatorType: 'Code',
+    source: 'preset',
+    category: 'res',
+    targetTypes: ['路由'],
+    objectives: ['触发准确率'],
+    scenarios: ['Skill 触发分析'],
+    runMode: '确定性路由判定',
+    scoreRange: '0-100',
+    popularity: 100,
+    mappedMetrics: ['触发准确率'],
+    status: 'ready',
+    runtimeNote: '实时路由 / 已有 Trace · should_trigger === skill_triggered',
+  },
   {
     id: 'preset-agent-task-completion',
     name: 'Agent 任务完成度',

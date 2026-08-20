@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { loadServerModelForUserById } from '@/lib/engine/general-agent/server-model-config';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guards';
 import { reconcileStaleGrayscaleRun } from '@/lib/grayscale/stale-run-reconcile';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
+import { runTriggerEvalLive } from '@/lib/engine/skill-generation/evaluator/runners/triggerEval';
+import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
 import {
     ensureEvalExperiment,
@@ -19,6 +22,10 @@ import {
     TASK_COMPLETION_EVALUATOR_ID,
     TRACE_EVALUATOR_ID,
 } from '@/lib/grayscale/ab-evaluator-selection';
+import {
+    evaluateSkillTriggerAnalysis,
+    SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+} from '@/lib/skill-workbench/trigger-evaluator';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,10 +44,18 @@ interface GrayscaleConfig {
     runCount?: number;
     repeatRounds?: number;
     agentMaxConcurrency?: number;
+    modelConfigId?: string | null;
+    modelOptions?: Record<string, unknown>;
+    interactionPolicy?: 'auto-allow' | 'auto-deny';
+    timeoutMs?: number;
+    idleTimeoutMs?: number;
     autoEval?: boolean;
     recordTriggerDetails?: boolean;
+    triggerRouting?: boolean;
     evaluatorId?: string;
     evaluators?: string[];
+    /** Skill 工作台单组实验只执行当前 Skill（B 侧）；缺省仍保持传统 A/B 双侧。 */
+    executionSides?: Side[];
     latestResultAt?: string;
     // 关联到「评测执行」页的批次 ID (evaluatorRunId)。前端通过「+ 新增评测任务」对话框创建,
     // 后续启动评测时透传给 /api/eval/trajectory/run 作 evaluatorRunId append (下一步迭代)。
@@ -60,6 +75,13 @@ function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
         evaluatorId: evaluatorIds[0] || '',
         evaluators: evaluatorIds,
     };
+}
+
+function configuredExecutionSides(config: GrayscaleConfig): Side[] {
+    const sides = Array.isArray(config.executionSides)
+        ? config.executionSides.filter((side): side is Side => side === 'a' || side === 'b')
+        : [];
+    return sides.length ? Array.from(new Set(sides)) : ['a', 'b'];
 }
 
 interface RunResult {
@@ -1454,12 +1476,20 @@ async function executeSingleAgentRun(args: {
     // 持有 agentPromise 引用, 让 finally 在超时路径下也能等 ephemeral opencode 清理跑完 (见 finally 注释)。
     let pendingAgent: Promise<unknown> | undefined;
     try {
+        const timeoutMs = Math.max(5_000, Number(args.config.timeoutMs) || GRAYSCALE_AGENT_TIMEOUT_MS);
+        const idleTimeoutMs = Math.max(5_000, Number(args.config.idleTimeoutMs) || GRAYSCALE_AGENT_IDLE_TIMEOUT_MS);
+        const frozenModel = args.config.modelConfigId
+            ? await loadServerModelForUserById(args.user, args.config.modelConfigId)
+            : null;
+        if (args.config.modelConfigId && !frozenModel) {
+            throw new Error(`frozen model config is unavailable: ${args.config.modelConfigId}`);
+        }
         const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutTimer = setTimeout(() => {
                 didTimeout = true;
                 abortController.abort();
-                reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(GRAYSCALE_AGENT_TIMEOUT_MS / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
-            }, GRAYSCALE_AGENT_TIMEOUT_MS);
+                reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(timeoutMs / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
+            }, timeoutMs);
         });
         const grayAgentName = args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
         const agentPromise = runGeneralAgent({
@@ -1472,7 +1502,9 @@ async function executeSingleAgentRun(args: {
             // 错绑到 B 的 skill, 在用例分析按 skill 筛选时和 B 一起冒出来 (期望只出真正用了该 skill 的 trace)。
             tagSkill: args.version?.skillName ?? undefined,
             system: buildGrayscaleExecutionSystem(args.version),
-            interactionPolicy: 'auto-deny',
+            model: frozenModel || undefined,
+            modelOptions: args.config.modelOptions,
+            interactionPolicy: args.config.interactionPolicy || 'auto-deny',
             systemAgentName: grayAgentName,
             // 后台批量任务: 每次起独立 opencode 进程,跑完杀,保证拿最新 skill 内容
             ephemeralServer: true,
@@ -1482,9 +1514,9 @@ async function executeSingleAgentRun(args: {
             recordTraceAs: grayAgentName,
             sessionTitle: `grayscale ${target.side.toUpperCase()} r${target.roundIndex} · ${args.user} · ${args.taskId}`,
             workspaceTag: `grayscale-${args.taskId}-${target.side}-${target.caseId}-r${target.roundIndex}`,
-            timeoutMs: GRAYSCALE_AGENT_TIMEOUT_MS,
+            timeoutMs,
             chatOptions: {
-                idleTimeoutMs: GRAYSCALE_AGENT_IDLE_TIMEOUT_MS,
+                idleTimeoutMs,
                 signal: abortController.signal,
             },
             handlers: {
@@ -1501,7 +1533,7 @@ async function executeSingleAgentRun(args: {
         void agentPromise.catch(() => {});
         const result = await Promise.race([agentPromise, timeoutPromise]);
         if (didTimeout) {
-            throw new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(GRAYSCALE_AGENT_TIMEOUT_MS / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`);
+            throw new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(timeoutMs / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`);
         }
         const blocked = summarizeBlockedInteraction(result);
         if (blocked) {
@@ -1996,6 +2028,183 @@ async function evaluateRunsWithConcurrency(args: {
     return evaluatorRunIds[evaluatorRunIds.length - 1] || null;
 }
 
+async function runWorkbenchTriggerTask(args: {
+    taskId: string;
+    user: string;
+    caseIds: string[];
+    evaluatorIds?: string[];
+    signal?: AbortSignal;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        versionBId: task.skillVersionId,
+        evaluators: [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID],
+    };
+    if (!config.evalExperimentId) throw new Error('评测实验未初始化');
+    const caseMap = await loadConfiguredCaseMap(args.user, config);
+    const caseIds = args.caseIds.filter(caseId => caseMap.has(caseId));
+    if (!caseIds.length || caseIds.length !== args.caseIds.length) throw new Error('trigger cases are missing');
+    const now = new Date().toISOString();
+    const states: CaseStates = {};
+    for (const caseId of caseIds) {
+        states[caseId] = {
+            a: { status: 'executed', runs: [], runCount: 0, output: '触发分析不运行基线侧' },
+            b: {
+                status: 'running',
+                runCount: 1,
+                runs: [{ status: 'running', caseId, runIndex: 1, roundIndex: 1 }],
+            },
+        };
+    }
+    await persistTaskState(args.taskId, args.user, config, states);
+    await prisma.experiment.updateMany({
+        where: { id: config.evalExperimentId, user: args.user },
+        data: { status: 'running' },
+    });
+
+    const result = await runTriggerEvalLive({
+        triggerSet: {
+            id: `workbench:${config.evalExperimentId}`,
+            user: args.user,
+            skillName: task.skillName,
+            version: 1,
+            versionSource: 'manual',
+            versionNote: 'Skill 工作台实验冻结快照',
+            description: 'Skill 工作台触发分析',
+            items: caseIds.map(caseId => {
+                const item = caseMap.get(caseId)!.caseEntry;
+                return {
+                    id: caseId,
+                    query: item.input,
+                    shouldTrigger: item.values?.should_trigger === true,
+                    rationale: typeof item.values?.trigger_rationale === 'string'
+                        ? item.values.trigger_rationale
+                        : item.evaluationFocus || undefined,
+                    source: 'user-edited' as const,
+                };
+            }),
+            draftedFromSkillHash: null,
+            status: 'ready',
+            createdAt: now,
+            updatedAt: now,
+        },
+        skillName: task.skillName,
+        skillVersion: task.skillVersion,
+        workspaceRoot: ensureSessionWorkspace(
+            args.user,
+            `workbench-trigger-${task.skillName}-v${task.skillVersion}-${Date.now()}`,
+        ),
+        user: args.user,
+        modelConfigId: config.modelConfigId || undefined,
+        runsPerQuery: 1,
+        triggerThreshold: 0.5,
+        timeoutMs: Math.max(5_000, Number(config.timeoutMs) || 60_000),
+        concurrency: Math.max(1, Number(config.agentMaxConcurrency) || 1),
+        signal: args.signal,
+    });
+
+    const active = activeRuns().get(`${args.user}:${args.taskId}`);
+    if (active) active.status = 'evaluating';
+    for (const item of result.items) {
+        const datasetCase = caseMap.get(item.itemId)!.caseEntry;
+        const taskId = item.sessionIds?.[0] || null;
+        const experimentCaseId = await addEvalExperimentCase(config.evalExperimentId, {
+            taskId,
+            input: item.query,
+            actualOutput: item.runsTriggered > 0 ? 'Skill 已触发' : 'Skill 未触发',
+            referenceOutput: item.shouldTrigger ? 'Skill 应触发' : 'Skill 不应触发',
+        });
+        await prisma.experimentCase.update({
+            where: { id: experimentCaseId },
+            data: {
+                caseValuesJson: JSON.stringify({
+                    ...(datasetCase.values || {}),
+                    should_trigger: item.shouldTrigger,
+                    skill_triggered: item.runsTriggered > 0,
+                    trigger_rate: item.triggerRate,
+                    competing_skill: item.competingSkill || null,
+                }),
+            },
+        });
+        const exactEvaluation = evaluateSkillTriggerAnalysis({
+            shouldTrigger: item.shouldTrigger,
+            skillTriggered: item.runsTriggered > 0,
+            reason: typeof datasetCase.values?.trigger_rationale === 'string'
+                ? datasetCase.values.trigger_rationale
+                : datasetCase.evaluationFocus || undefined,
+            facts: {
+                runsTriggered: item.runsTriggered,
+                runsTotal: item.runsTotal,
+                triggerRate: item.triggerRate,
+                latencyMsAvg: item.latencyMsAvg,
+                competingSkill: item.competingSkill || null,
+                runsTimedOut: item.runsTimedOut || 0,
+                runsErrored: item.runsErrored || 0,
+                errorMessage: item.errorMessage || null,
+            },
+        });
+        const exactScore = exactEvaluation.score!;
+        const exactIds = new Set([SKILL_TRIGGER_ANALYZER_EVALUATOR_ID]);
+        const selectedExactIds = config.evaluators.filter(id => exactIds.has(id));
+        const nonExactIds = config.evaluators.filter(id => !exactIds.has(id));
+        const rows = nonExactIds.length
+            ? await evaluateEvalExperimentCase(config.evalExperimentId, experimentCaseId, args.user)
+            : [];
+        const exactData = {
+            status: 'done',
+            score: exactScore,
+            verdict: exactEvaluation.verdict || null,
+            summary: exactEvaluation.summary || null,
+            pointsJson: JSON.stringify(exactEvaluation.points || []),
+            evidenceJson: exactEvaluation.evidence ? JSON.stringify(exactEvaluation.evidence) : null,
+            errorMessage: null,
+            attempts: 1,
+        };
+        await Promise.all(selectedExactIds.map(evaluatorId => prisma.experimentEvalResult.upsert({
+            where: { caseId_evaluatorId: { caseId: experimentCaseId, evaluatorId } },
+            create: {
+                experimentId: config.evalExperimentId!,
+                caseId: experimentCaseId,
+                evaluatorId,
+                ...exactData,
+            },
+            update: exactData,
+        })));
+        const adjustedRows: EvalCaseResultRow[] = [
+            ...selectedExactIds.map(evaluatorId => ({
+                evaluatorId,
+                status: 'done',
+                score: exactScore,
+                pointsJson: exactData.pointsJson,
+                evidenceJson: exactData.evidenceJson,
+                errorMessage: null,
+            })),
+            ...rows.filter(row => !exactIds.has(row.evaluatorId)),
+        ];
+        const run = states[item.itemId].b.runs![0];
+        run.status = 'executed';
+        run.sessionId = taskId || undefined;
+        run.traceIds = item.sessionIds || [];
+        run.skillTriggered = item.runsTriggered > 0;
+        run.timeCost = `${(item.latencyMsAvg / 1000).toFixed(1)}s`;
+        run.output = item.runsTriggered > 0 ? 'Skill 已触发' : 'Skill 未触发';
+        applyExpRowsToRun(run, adjustedRows, config.evalExperimentId);
+        states[item.itemId].b = rebuildSideAggregate(states[item.itemId].b, 1);
+        await persistTaskState(args.taskId, args.user, config, states);
+    }
+    const failed = await prisma.experimentEvalResult.count({
+        where: { experimentId: config.evalExperimentId, status: 'failed' },
+    });
+    await prisma.experiment.updateMany({
+        where: { id: config.evalExperimentId, user: args.user },
+        data: { status: failed ? 'failed' : 'done' },
+    });
+}
+
 async function runGrayscaleTask(args: {
     taskId: string;
     user: string;
@@ -2049,20 +2258,21 @@ async function runGrayscaleTask(args: {
 
     const versionA = await resolveVersion(config.skillId, config.versionAId);
     const versionB = await resolveVersion(config.skillId, config.versionBId);
+    const executionSides = configuredExecutionSides(config);
     const states: CaseStates = {};
     const totalRunsPerSide = repeatRounds;
 
     for (const caseId of caseIds) {
         states[caseId] = {
-            a: { status: 'pending', runs: [], runCount: totalRunsPerSide },
-            b: { status: 'pending', runs: [], runCount: totalRunsPerSide },
+            a: { status: executionSides.includes('a') ? 'pending' : 'pass', runs: [], runCount: executionSides.includes('a') ? totalRunsPerSide : 0 },
+            b: { status: executionSides.includes('b') ? 'pending' : 'pass', runs: [], runCount: executionSides.includes('b') ? totalRunsPerSide : 0 },
         };
     }
 
     const work: ExecutionTarget[] = [];
     for (let roundIndex = 1; roundIndex <= repeatRounds; roundIndex++) {
         for (const caseId of caseIds) {
-            for (const side of ['a', 'b'] as Side[]) {
+            for (const side of executionSides) {
                 const run: RunResult = {
                     status: 'pending',
                     caseId,
@@ -2076,7 +2286,14 @@ async function runGrayscaleTask(args: {
     }
     for (const caseId of caseIds) {
         for (const side of ['a', 'b'] as Side[]) {
-            states[caseId][side] = rebuildSideAggregate(states[caseId][side], totalRunsPerSide);
+            states[caseId][side] = rebuildSideAggregate(
+                states[caseId][side],
+                executionSides.includes(side) ? totalRunsPerSide : 0,
+            );
+            if (!executionSides.includes(side)) {
+                states[caseId][side].status = 'executed';
+                states[caseId][side].output = '未参与本次单组实验';
+            }
         }
     }
     await persistTaskState(taskId, user, config, states);
@@ -2375,6 +2592,12 @@ export async function POST(
                     if (patchedCount > 0) {
                         await persistTaskState(taskId, user, taskRow.configJson, states);
                     }
+                    if (taskRow.configJson.evalExperimentId) {
+                        await prisma.experiment.updateMany({
+                            where: { id: taskRow.configJson.evalExperimentId, user },
+                            data: { status: 'cancelled' },
+                        });
+                    }
                 }
             } catch (e) {
                 console.warn('[GRAYSCALE_TASKS_ABORT] persist fail patch failed:', e);
@@ -2413,6 +2636,12 @@ export async function POST(
         } catch (err) {
             return NextResponse.json({ error: err instanceof Error ? err.message : 'invalid task skill binding' }, { status: 400 });
         }
+        if (action === 'start' && task.configJson.evalExperimentId) {
+            await prisma.experiment.updateMany({
+                where: { id: task.configJson.evalExperimentId, user, status: 'draft' },
+                data: { status: 'running' },
+            });
+        }
         const origin = req.nextUrl.origin;
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const abortController = new AbortController();
@@ -2428,7 +2657,9 @@ export async function POST(
 
         const job = action === 'evaluate'
             ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, onlyMissingEvaluation })
-            : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, agentMaxConcurrency });
+            : task.configJson.triggerRouting
+                ? runWorkbenchTriggerTask({ taskId, user, caseIds, evaluatorIds, signal: abortController.signal })
+                : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, agentMaxConcurrency });
 
         void job
             .catch(async err => {
@@ -2446,6 +2677,12 @@ export async function POST(
                         }
                     }
                     await persistTaskState(taskId, user, task.configJson, states).catch(() => {});
+                    if (task.configJson.evalExperimentId) {
+                        await prisma.experiment.updateMany({
+                            where: { id: task.configJson.evalExperimentId, user },
+                            data: { status: 'failed' },
+                        }).catch(() => undefined);
+                    }
                 }
             })
             .finally(() => {

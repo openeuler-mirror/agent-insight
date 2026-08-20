@@ -534,6 +534,123 @@ model SkillOptIteration {
   @@index([sessionId, createdAt])
 }
 
+/// Skill 对话工作台会话。作为正式编排层复用但不替代生成/优化旧会话；
+/// generatorSessionId / optSessionId 仅保存兼容引用，避免给旧模型增加反向关系。
+model SkillWorkbenchSession {
+  id                  String                    @id @default(cuid())
+  user                String
+  title               String                    @default("新对话")
+  skillName           String?
+  workVersion         Int?
+  source              String?
+  activeView          String                    @default("detail")
+  stage               String                    @default("empty")
+  filesJson           String                    @default("{}")
+  generatorSessionId  String?
+  optSessionId        String?
+  messages            SkillWorkbenchMessage[]
+  tasks               SkillWorkbenchTask[]
+  optimizations       SkillOptimizationRecord[]
+  snapshotEvaluations SkillSnapshotEvaluation[]
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  @@index([user, updatedAt])
+  @@index([user, skillName, workVersion])
+}
+
+/// 工作台消息只负责恢复呈现；评估、实验、优化等领域真状态由 task/result 引用恢复。
+model SkillWorkbenchMessage {
+  id         String                @id @default(cuid())
+  sessionId  String
+  session    SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role       String
+  content    String                @default("")
+  blocksJson String                @default("[]")
+  taskId     String?
+  createdAt  DateTime              @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([taskId])
+}
+
+/// 用户显式启动的一次确定性任务。idempotencyKey 防止重复点击创建重复运行。
+model SkillWorkbenchTask {
+  id             String                @id @default(cuid())
+  sessionId      String
+  session        SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type           String
+  status         String                @default("pending")
+  idempotencyKey String
+  progressJson   String                @default("{}")
+  resultType     String?
+  resultId       String?
+  errorMessage   String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([sessionId, idempotencyKey])
+  @@index([sessionId, status, updatedAt])
+}
+
+/// 一次优化从证据到候选、复测和发布的完整记录。
+/// 候选文件在发布前不写 SkillVersion，避免未验证内容进入正式版本历史。
+model SkillOptimizationRecord {
+  id                    String                @id @default(cuid())
+  sessionId             String
+  session               SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user                  String
+  skillName             String
+  baseVersion           Int
+  candidateVersionLabel String
+  candidateFilesJson    String                @default("{}")
+  candidateContentHash  String?
+  summary               String                @default("")
+  diffJson              String                @default("[]")
+  sourceKind            String                @default("user")
+  sourceRefsJson        String                @default("[]")
+  staticEvaluationId    String?
+  sourceExperimentId    String?
+  retestExperimentId    String?
+  status                String                @default("optimizing")
+  publishedVersion      Int?
+  errorMessage          String?
+  completedAt           DateTime?
+  publishedAt           DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  @@index([user, skillName, createdAt])
+  @@index([sessionId, status, updatedAt])
+  @@index([sourceExperimentId])
+  @@index([retestExperimentId])
+}
+
+/// 未发布工作快照的静态质量评估。现有 Evaluation 强制关联正式 Skill，
+/// 因此候选内容单独落此表，避免为评估而提前创建 SkillVersion。
+model SkillSnapshotEvaluation {
+  id              String                @id @default(cuid())
+  sessionId       String
+  session         SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user            String
+  skillName       String
+  proposedVersion Int
+  contentHash     String
+  generator       String
+  status          String                @default("pending")
+  scoresJson      String?
+  issuesJson      String                @default("[]")
+  errorMessage    String?
+  durationMs      Int?
+  trigger         String                @default("manual")
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@index([sessionId, createdAt])
+  @@index([user, skillName, proposedVersion, createdAt])
+  @@index([contentHash, generator, status])
+}
+
 /// 用户自建评估器列表（整段 JSON）；预置评估器不入库。
 model CustomEvaluatorList {
   user      String   @id // username，与其它表的 user 一致
@@ -971,29 +1088,39 @@ model InfraMetricSample {
 /// ─── 评测「实验」域（本期仅单组实验；对比实验后续在此扩展分组字段）───
 /// 实验 = 一批 case × 一组评估器。单组实验为原「评测执行」的演进形态。
 model Experiment {
-  id               String    @id @default(cuid())
-  user             String
-  name             String
+  id                   String    @id @default(cuid())
+  user                 String
+  name                 String
   /// 'single'（本期）| 'llm' | 'framework' | 'skill'（对比实验预留）
-  type             String    @default("single")
+  type                 String    @default("single")
   /// 待评测 Agent（Execution.agentName）
-  agentName        String    @default("")
+  agentName            String    @default("")
   /// 选中的评估器 id 列表（JSON string[]；预置/自建统一 id 空间）
-  evaluatorIdsJson String    @default("[]")
+  evaluatorIdsJson     String    @default("[]")
   /// draft | running | done | failed
-  status           String    @default("draft")
-  /// 来源标记：''=用户手建；'skill-case-analysis'=skill 用例分析评测后端；
-  /// 'grayscale-ab'=A/B 灰度评测后端；'batch'=批次评测后端。供评测任务列表按来源过滤。
-  scope            String    @default("")
+  status               String    @default("draft")
+  /// 来源标记：''=全局实验；'skill-workbench'=Skill 工作台实验；
+  /// 其他历史值由对应评测后端维护。列表必须按数据域过滤，不能跨域混排。
+  scope                String    @default("")
   /// backing 实验绑定的 skill（评测任务列表按 skill 过滤显示用；来自 eval-traces 落库）
-  skillName        String    @default("")
-  skillVersion     Int?
+  skillName            String    @default("")
+  skillVersion         Int?
+  /// Skill 工作台预设；旧实验为空，不参与旧执行分支判断。
+  preset               String?
+  /// 版本化 JSON：参与实验的 Skill 名称、版本或候选快照引用。
+  skillContextJson     String?
+  /// 冻结的 Agent、运行目标、模型、数据集、Case 顺序、评估器与运行参数。
+  configSnapshotJson   String?
+  /// 复测来源实验；只存审计引用，不级联删除旧实验。
+  sourceExperimentId   String?
+  /// 关联 SkillOptimizationRecord；只存审计引用，旧实验为空。
+  optimizationRecordId String?
   /// 监听模式：开启后 agentName 指定的 Agent 新上报的 trace 自动进本实验评测（取代旧 autoWatch）
-  watchMode        Boolean   @default(false)
+  watchMode            Boolean   @default(false)
   /// 监听开启时刻——只自动评此后新产生的 trace，避免把历史 trace 全灌进来
-  watchEnabledAt   DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  watchEnabledAt       DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   cases         ExperimentCase[]
   traceAttempts ExperimentTraceAttempt[]
@@ -1002,6 +1129,8 @@ model Experiment {
   @@index([user, createdAt])
   @@index([user, scope, skillName])
   @@index([watchMode, agentName])
+  @@index([sourceExperimentId])
+  @@index([optimizationRecordId])
 }
 
 /// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的参考输出，

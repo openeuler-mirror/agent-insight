@@ -87,6 +87,7 @@ export const zh = {
     security: '安全设计',
     fault: '诊断分析',
     skillWorkspace: 'Skill',
+    skillManagement: 'Skill 管理中心',
     skillWorkspaceHub: 'SkillHub',
     skillWorkspaceGenerate: '生成',
     skillWorkspaceEvaluate: '评测',

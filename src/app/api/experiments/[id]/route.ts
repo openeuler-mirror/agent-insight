@@ -61,6 +61,8 @@ export async function GET(
       select: {
         id: true, name: true, type: true, agentName: true, status: true,
         watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true, createdAt: true,
+        scope: true, skillName: true, skillVersion: true, preset: true,
+        skillContextJson: true, configSnapshotJson: true, sourceExperimentId: true,
       },
     });
     if (!experiment) {
@@ -292,17 +294,48 @@ export async function GET(
         .map((c) => c.taskId || traceStateByCase.get(c.id)?.taskId)
         .filter((taskId): taskId is string => Boolean(taskId)),
     ));
-    const execFallback = new Map<string, { query: string; finalResult: string }>();
-    if (needExecTaskIds.length) {
+    const needExecutionIds = Array.from(new Set(
+      pagedCases.map((c) => c.executionId).filter((executionId): executionId is string => Boolean(executionId)),
+    ));
+    type ExecutionFallback = {
+      id: string;
+      query: string;
+      finalResult: string;
+      skill: string | null;
+      executionSkills: Array<{ skillName: string; skillVersion: number | null }>;
+    };
+    const execFallback = new Map<string, ExecutionFallback>();
+    const execFallbackById = new Map<string, ExecutionFallback>();
+    if (needExecTaskIds.length || needExecutionIds.length) {
       const execs = await prisma.execution.findMany({
-        where: { taskId: { in: needExecTaskIds } },
+        where: {
+          OR: [
+            ...(needExecTaskIds.length ? [{ taskId: { in: needExecTaskIds } }] : []),
+            ...(needExecutionIds.length ? [{ id: { in: needExecutionIds } }] : []),
+          ],
+        },
         orderBy: { timestamp: 'desc' },
-        select: { taskId: true, query: true, finalResult: true },
+        select: {
+          id: true,
+          taskId: true,
+          query: true,
+          finalResult: true,
+          skill: true,
+          executionSkills: { select: { skillName: true, skillVersion: true } },
+        },
       });
       for (const e of execs) {
+        const fallback = {
+          id: e.id,
+          query: e.query || '',
+          finalResult: e.finalResult || '',
+          skill: e.skill,
+          executionSkills: e.executionSkills,
+        };
         if (e.taskId && !execFallback.has(e.taskId)) {
-          execFallback.set(e.taskId, { query: e.query || '', finalResult: e.finalResult || '' });
+          execFallback.set(e.taskId, fallback);
         }
+        execFallbackById.set(e.id, fallback);
       }
     }
 
@@ -337,12 +370,20 @@ export async function GET(
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
       createdAt: experiment.createdAt,
+      scope: experiment.scope,
+      skillName: experiment.skillName,
+      skillVersion: experiment.skillVersion,
+      preset: experiment.preset,
+      skillContext: parseJsonValue(experiment.skillContextJson),
+      configSnapshot: parseJsonValue(experiment.configSnapshotJson),
+      sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
       cases: pagedCases.map((c) => {
         const traceState = traceStateByCase.get(c.id);
         const effectiveTaskId = c.taskId || traceState?.taskId || null;
-        const ex = effectiveTaskId ? execFallback.get(effectiveTaskId) : undefined;
+        const ex = (c.executionId ? execFallbackById.get(c.executionId) : undefined)
+          || (effectiveTaskId ? execFallback.get(effectiveTaskId) : undefined);
         const evaluatorContext = parseExperimentCaseEvaluatorContext(c.evaluatorContextJson);
         const legacyFi = extractLegacyFiFromEvaluatorContextJson(c.evaluatorContextJson);
         const faultInjectionType =
@@ -375,6 +416,12 @@ export async function GET(
           fiRunId: c.fiRunId || legacyFi.fiRunId,
           evaluatorContext: evaluatorContext.context,
           evaluatorContextError: evaluatorContext.error,
+          skillTriggered: experiment.preset === 'trigger'
+            ? Boolean(ex && (
+                ex.skill === experiment.skillName
+                || ex.executionSkills.some((item) => item.skillName === experiment.skillName)
+              ))
+            : null,
           traceStatus: traceState?.status || null,
           traceError: traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,

@@ -24,6 +24,7 @@
 | Trace 回流到评测数据集 | [trace-to-dataset-backflow](trace-to-dataset-backflow/) | 支持 Trace 单条/批量回流到评测数据集、数据集新增自定义字段，以及逐条编辑样本字段值；input/output 使用评测执行已有逻辑处理后写入 | Feature | 2026-07-15 | 🟡 实现中（代码与目标测试已完成，浏览器验收待确认） | —（待补） |
 | 评测数据集加载性能优化 | [agent-dataset-loading-performance](agent-dataset-loading-performance/) | 为评测数据集增加样本数与参考答案轻量投影，列表和实验导入不再传输完整轨迹，并在数据库层按用户过滤 | Performance | 2026-08-04 | 🟡 实现中 | —（待补） |
 | 通用实验 Trace 生成 | [generic-experiment-trace-generation](generic-experiment-trace-generation/) | 新建实验可选择任意评测数据集，以 Case input 驱动 Agent 生成 Trace；普通数据走客户端通用执行，可靠性数据保留 FI，再统一进入评估 | Feature | 2026-08-15 | ✅ 已实现（定向测试） | —（待补） |
+| Skill 对话工作台重构 | [skill-workbench-refactor](skill-workbench-refactor/) | 将 Skill 生成、上传、静态评估、三类统一实验、候选优化、原实验复测与确认发布收敛到共享工作版本和会话上下文，并保留旧入口与 API 兼容 | Refactor / Feature | 2026-08-19 | 🟡 代码与专项测试完成，待浏览器验收 | —（待补） |
 | Openclaw 平台适配 | [openclaw-adapter](openclaw-adapter/) | (待补充:定义 Openclaw 平台的接入适配设计,包括链路数据上报、解析及面板呈现等) | Feature | 2026-06-17 | ⬜ 未实现（设计起草中） | —（待补） |
 | Trace Bundle 导入导出 | [trace-bundle-import-export](trace-bundle-import-export/) | 将链路追踪详情导出的 Trace 作为版本化 Bundle 重新导入平台，保留无冲突 ID，并完整恢复多 Agent 父子树 | Feature | 2026-07-15 | 🟡 实现中（代码与自动化验证已完成，浏览器验收待确认） | —（待补） |
 | Langfuse Trace 完整展示 | [langfuse-trace-fidelity](langfuse-trace-fidelity/) | 为 Langfuse OTLP 增加独立完整节点快照，保留业务 CHAIN/AGENT/TOOL 与真实时序，同时保持其他框架和现有 interactions 行为不变 | Bugfix | 2026-07-21 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |

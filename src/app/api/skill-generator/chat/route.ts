@@ -5,76 +5,13 @@ import path from 'path';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
+import { createBlockMirror } from '@/lib/chat/block-mirror';
+import {
+    beginWorkbenchGenerationRun,
+    finishWorkbenchGenerationRun,
+} from '@/lib/skill-workbench/generation-service';
 
 export const dynamic = 'force-dynamic';
-
-/**
- * Mirrors every emitted SSE event into a server-side `blocks` array so the
- * full UI state (thinking / tool_call / tool_result / download blocks) can be
- * persisted to SkillGeneratorMessage.blocks and restored on page reload.
- *
- * The shape mirrors the frontend `Block` union in src/app/(main)/skill-generator/
- * page.tsx — keep them in sync if either side adds a new block kind.
- */
-function createBlockMirror(controller: ReadableStreamDefaultController, encoder: TextEncoder) {
-    const blocks: any[] = [];
-    const send = (mode: string, payload: any) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode, payload })}\n\n`));
-
-        if (mode === 'text') {
-            const tail = blocks[blocks.length - 1];
-            if (tail && tail.kind === 'text') tail.text += payload;
-            else blocks.push({ kind: 'text', id: `text_${blocks.length}`, text: payload });
-        } else if (mode === 'thinking') {
-            const { id, delta, done } = payload || {};
-            if (!id) return;
-            const idx = blocks.findIndex((b: any) => b.kind === 'thinking' && b.id === id);
-            if (idx === -1) blocks.push({ kind: 'thinking', id, text: delta || '', done: !!done });
-            else {
-                if (delta) blocks[idx].text += delta;
-                if (done) blocks[idx].done = true;
-            }
-        } else if (mode === 'tool_call') {
-            const { id, name, args, status } = payload || {};
-            if (!id) return;
-            blocks.push({ kind: 'tool', id, name, args, status: status || 'running' });
-        } else if (mode === 'tool_result') {
-            const { id, status, summary, error, finalArgs } = payload || {};
-            if (!id) return;
-            const idx = blocks.findIndex((b: any) => b.kind === 'tool' && b.id === id);
-            if (idx !== -1) {
-                if (status) blocks[idx].status = status;
-                if (summary) blocks[idx].summary = summary;
-                if (error) blocks[idx].error = error;
-                // start phase 时 args 通常是空 {}，end phase bridge 会带上完整 input；
-                // 用它覆盖 block.args 让 TodoBlock 等下游 args 依赖的渲染能正常工作。
-                if (finalArgs && typeof finalArgs === 'object') {
-                    blocks[idx].args = finalArgs;
-                }
-            }
-        } else if (mode === 'download') {
-            const { id, skillName, fileCount, sizeBytes } = payload || {};
-            if (!id) return;
-            blocks.push({ kind: 'download', id, skillName, fileCount, sizeBytes });
-        } else if (mode === 'question') {
-            // agent 提问 → 持久化为可恢复的 question block（pending 状态）
-            const { id, question, choices } = payload || {};
-            if (!id) return;
-            blocks.push({ kind: 'question', id, question: question || '', choices, status: 'pending' });
-        } else if (mode === 'question_answered') {
-            // 答复回来 / 超时 / 跳过 → 更新对应 question block 的状态
-            const { id, status, answer } = payload || {};
-            if (!id) return;
-            const idx = blocks.findIndex((b: any) => b.kind === 'question' && b.id === id);
-            if (idx !== -1) {
-                if (status) blocks[idx].status = status;
-                if (answer !== undefined) blocks[idx].answer = answer;
-            }
-        }
-        // 'vfs_patch' / 'done' / 'error' are runtime-only and not persisted.
-    };
-    return { send, getBlocks: () => blocks };
-}
 
 function readMockDirectory(dirPath: string, rootPath: string, result: Record<string, any> = {}) {
     const items = fs.readdirSync(dirPath);
@@ -95,7 +32,7 @@ function readMockDirectory(dirPath: string, rootPath: string, result: Record<str
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { message, user, threadId, files, modelId, webSearchEnabled, mock = true } = body;
+        const { message, user, threadId, files, modelId, webSearchEnabled, mock = true, runId } = body;
 
         if (!message || !user || !threadId) {
             return new Response(JSON.stringify({ error: "Missing required fields" }), { status: 400 });
@@ -132,6 +69,15 @@ export async function POST(req: NextRequest) {
                 data: { title: newTitle }
             });
         }
+
+        const workbenchRun = await beginWorkbenchGenerationRun({
+            user,
+            generatorSessionId: threadId,
+            runId: typeof runId === 'string' && runId.trim() ? runId.trim() : `${threadId}:${Date.now()}`,
+        }).catch((error) => {
+            console.error('[skill-generator/chat] start workbench task failed:', error);
+            return null;
+        });
 
         const encoder = new TextEncoder();
 
@@ -251,7 +197,15 @@ export async function POST(req: NextRequest) {
                         data: { files: JSON.stringify(mockFilesState) }
                     });
 
-                    controller.close();
+                    if (workbenchRun) {
+                        await finishWorkbenchGenerationRun({
+                            user,
+                            workbenchSessionId: workbenchRun.workbenchSessionId,
+                            taskId: workbenchRun.taskId,
+                        });
+                    }
+
+                    try { controller.close(); } catch { /* client disconnected */ }
                 }
             });
 
@@ -307,9 +261,16 @@ export async function POST(req: NextRequest) {
                     });
                 } catch (saveErr) {
                     console.error('[skill-generator/chat] persist agent message failed:', saveErr);
-                } finally {
-                    try { controller.close(); } catch { /* already closed */ }
                 }
+                if (workbenchRun) {
+                    await finishWorkbenchGenerationRun({
+                        user,
+                        workbenchSessionId: workbenchRun.workbenchSessionId,
+                        taskId: workbenchRun.taskId,
+                        error: chatErr?.message || null,
+                    });
+                }
+                try { controller.close(); } catch { /* already closed */ }
             }
         });
 

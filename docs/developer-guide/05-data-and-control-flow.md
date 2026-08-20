@@ -181,6 +181,31 @@ flowchart TD
 ```
 引擎：`engine/skill-generation/index.ts:generateSkill*`、`general-agent/runner.ts:runGeneralAgent`、`lib/skill-generator-opencode-bridge.ts`、`lib/skill-opt-bridge.ts`。静态合规检查：`engine/skill-issues/static-evaluator/index.ts:runStaticEvaluation`。
 
+### Skill 工作台
+
+`/skills` 是正式 Skill 工作台；`/skill-workbench` 保留为兼容别名，`/config/skills` 渲染原资产管理能力。旧生成、评测、A/B 与优化 API 未删除，工作台通过服务端适配层复用它们。生成和优化的 SSE 是可丢弃的实时视图，领域执行与最终同步由服务端持久化任务完成；评估、实验和复测同样以数据库状态作为恢复真源，因此任何站内导航都不会取消已接受的运行。生成/上传与优化候选在发布前都只保存不可执行的文件快照。静态评估状态按当前文件 hash 恢复，UI 将“评估器执行状态”和“无 high 的质量门禁状态”分开显示；评估中持续轮询并禁用发布，完成后清理旧的门禁错误。门禁阻断时，UI 可显式把当前问题集交给既有 Skill 优化 Agent；生成/上传来源会把 Agent 输出回写为同版本工作快照并重新静态评估，正式管理版本则继续形成独立 `SkillOptimizationRecord`，二者都不会自动发布。Skill 实验与全局实验共用执行模型但按 `scope` 隔离列表。实验创建时冻结模型配置 ID、模型参数、权限、并发、超时、数据集、Case 顺序、评估器和版本；灰度适配器与优化复测都按该快照执行，模型密钥仍只从服务端配置读取。
+
+```mermaid
+flowchart LR
+    start["新工作台会话"] --> choose["管理中心选择 name + version"]
+    start --> generate["生成 Agent + 共享质量规则"]
+    start --> upload["上传 UTF-8 Skill 目录"]
+    choose --> snapshot["会话工作快照"]
+    upload --> snapshot
+    generate --> snapshot
+    snapshot --> detail["文件详情与下载"]
+    snapshot --> eval["同口径静态评估"]
+    choose --> experiment["Experiment + GrayscaleTask\ntrigger / use-case / skill-ab"]
+    eval --> candidate["优化 Agent → SkillOptimizationRecord"]
+    experiment --> candidate
+    candidate --> gate["静态门禁 → 待复测 / 放弃"]
+    gate --> retest["复制来源配置，仅替换候选 Skill"]
+    retest --> decision{"真实得分达到来源基线？"}
+    decision -- 否 --> failed["复测失败，记录保留"]
+    decision -- 是 --> confirm["用户二次确认"]
+    confirm --> version["追加并激活 SkillVersion"]
+```
+
 ## 后端流水线：故障诊断
 `POST /api/fault/diagnosis/stream` 从某个 session/Execution 构建上下文，读取 AgentDebug 上游分析结果并以流式方式回答追问。上游分析由观测页触发：`POST /api/observe/executions/:executionId/agent-debug` 将 `AgentDebugReport` 写成 `running` 后启动 Node 进程内后台任务，任务完成后将 `AgentDebugReportPayload` 持久化到 `AgentDebugReport`；`POST /api/observe/executions/:executionId/agent-debug/skills-analysis` 同样将 `AgentDebugSkillsAnalysis` 写成 `running` 后独立启动 Skills 步骤核验，完成后持久化到 `AgentDebugSkillsAnalysis`。前端 `components/observe/AgentDebugCard.tsx` 会并行触发两条链路，分别轮询 `/agent-debug` 和 `/agent-debug/skills-analysis`，任一结果完成后独立刷新对应区块。后台任务使用 `interactionsHash` 做条件写入，避免旧任务晚完成后覆盖新结果；进程内 active map 用于防重复启动和识别服务重启后的失活 `running`。故障追问上下文读取主诊断报告和新 Skills 分析缓存，不读取旧 `reportJson.skillsAnalysis`。
 统一 `agent-debug-diagnosis` Skill 承载三条路线：一键诊断运行 AgentDebug 五模块和全部适用专项诊断器；普通追问保持现有上下文问答；定向查因只在用户症状命中诊断器清单时调用对应专项诊断器，不启动五模块。专项诊断器位于 `skills/agent-debug-diagnosis/detectors/<name>/`，每个目录通过自己的 `detector.json` 自注册，公共 `scripts/detector_runner.py` 扫描、匹配和执行；服务端不维护诊断器名称注册表，也不运行专项诊断器。

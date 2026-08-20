@@ -154,7 +154,21 @@
 | `AgentDebugReport` | 存储的 AgentDebug 主诊断报告 | `reportJson`、`interactionsHash`、`status`；不再承载 Skills 分析 |
 | `AgentDebugSkillsAnalysis` | AgentDebug 专用 Skills 步骤核验缓存 | `analysisJson`、`interactionsHash`、`status`、`keyActionCount` |
 | `SkillGeneratorSession`/`Message`、`SkillOptSession`/`Message`/`Iteration` | playground 与优化对话历史 | `opencodeSessionId`、`files`（JSON），优化 `iterations` 带 `draftNumber` |
+| `SkillWorkbenchSession` / `Message` / `Task` | Skill 工作台上下文、恢复消息和确定性任务 | `skillName`+`workVersion`、`source`、`activeView`、`filesJson`；任务以 `(sessionId,idempotencyKey)` 唯一 |
+| `SkillSnapshotEvaluation` | 未发布生成、上传和优化快照的静态质量结果 | 绑定会话、候选版本、内容 hash 与 generator；不要求提前创建 `SkillVersion` |
+| `SkillOptimizationRecord` | 发布前候选的证据、文件快照和复测状态 | `baseVersion`、`candidateFilesJson`、`candidateContentHash`、`sourceRefsJson`、`status`；发布前不创建 `SkillVersion` |
 | `SkillTriggerEvalSet` / `Run` | 触发准确率数据集与运行 | `itemsJson`、`resultsJson`、`passRate`/`truePositiveRate`/`falsePositiveRate` |
+
+### Skill 工作台契约
+
+- **会话 BFF**：`/api/skill-workbench/sessions` 负责创建/恢复；`/:sessionId/context` 只按 `skillName + version` 绑定可访问的正式版本；`/:sessionId/upload` 只保存 UTF-8 文本工作快照，不创建 Skill 或版本，也不自动评估。
+- **管理中心**：`GET /api/skill-management/skills` 在数据库查询阶段执行名称/描述、分类、来源过滤，再按默认 9 条分页。返回版本列表供用户显式选择，不在客户端全量过滤。
+- **生成/优化适配**：`/:sessionId/generation` 与 `/:sessionId/optimization` 桥接已有流式 Agent 会话，同时为每次运行创建持久化 `SkillWorkbenchTask`。SSE 只负责实时投影；客户端断开后服务端仍继续生成或优化、持久化消息和文件，并自动完成工作快照/候选同步及共享静态质量。公共或他人的 Skill 保持只读。
+- **静态评估**：`/api/skill-workbench/skills/:name/versions/:version/evaluations` 对正式版本复用 `runStaticEvaluation`，对未发布内容写 `SkillSnapshotEvaluation`；二者使用同一 L1/L2 口径。快照查询必须用当前全部文件的 `contentHash` 精确匹配，任务幂等键也包含该 hash，避免把旧快照结果投影到新文件；显式 `force` 可重评。返回的 `gate.state` 区分 `not_started`、`running`、`failed`、`stale`、`blocked` 和 `passed`，其中评估记录 `status='ok'` 只表示评估器执行成功，不代表质量门禁通过。公共 LLM 结果解析会拒绝非法空分数、按维度保留证据最完整的唯一结果，并把缺少证据和原因的 `high` 降为 `medium`；门禁读取历史记录时也只统计有 `evidence` 或 `reasoning` 支撑的 high。
+- **统一执行、隔离列表**：三类 Skill 预设都落同一 `Experiment` 数据模型并复用实验执行内核，但固定写入 `scope='skill-workbench'`。Skill 列表只由 `/api/skill-workbench/skills/:name/experiments` 读取该 scope；创建到执行接收之间的内部 `draft` 对工作台投影为 `running`，调试执行端接受 `start` 时立即把持久化状态推进为 `running`，异步失败再落 `failed`。全局 `GET /api/experiments` 固定排除该 scope 以及历史 `skill-case-analysis`、`grayscale-ab` scope，避免触发分析、用例分析、Skill A/B 与候选复测混入全局实验列表。已有 Trace 的触发/用例分析直接调用标准 create/run 契约；平台生成 Trace 时由工作台 BFF 创建该 `Experiment`，并用现有 `GrayscaleTask` 承载运行状态，尚未被执行端接受的启动失败沿用 draft-only DELETE 契约回滚。触发分析以 `triggerRouting=true` 调用真实路由 runner，让隔离环境中的 Agent 自主决定是否加载冻结版本，并固定用预置评估器 `skill-trigger-analyzer` 对 `should_trigger` 与真实命中事实做确定性 0/100 计分。每条 Case 只落一个「触发准确率」评分点和一句话结论；错误项的证据合并实际触发观察与数据集 `rationale`，并将原建议写入评分点 `suggestion`。误选、漏选、TPR 和 FPR 均由同一事实派生，不是额外评估器，也不调用通用结果或轨迹 Judge。用例分析通过 `executionSides=['b']` 只运行当前版本，Skill A/B 保持双侧运行。`configSnapshotJson` 冻结 Trace 来源、Agent、模型配置 ID 与非密钥描述、模型参数、权限策略、并发、超时、重试口径、数据集、Case 顺序、评估器、版本与重复次数。执行器按冻结 ID 从服务端重新解析密钥，不把密钥写进实验快照；配置被删除时实验明确失败。`/trigger-datasets` 复用现有触发样本起草器并写标准 Agent 数据集，默认名称包含生成日期和 `HH:mm:ss`。
+- **优化候选**：`/api/skill-workbench/skills/:name/optimizations` 保存候选文件、证据、质量结果与来源实验。`/:recordId/retest` 复制来源配置并运行候选；`/:recordId/publish` 只接受 `retest_passed + confirmed=true`，发布只追加 `SkillVersion`。失败、放弃和已发布记录均保留。
+- **工作快照发布**：`/:sessionId/publish` 只接受生成/上传快照，读取当前内容 hash 的最新评估；未评估、评估中、评估失败、hash 已过期和存在 high 问题分别返回明确错误。只有最新结果为 `ok|partial` 且无 high、版本号未冲突并且 `confirmed=true` 时才发布。
+- **隔离边界**：这些端点不替换 `/api/skills`、`/api/skill-generator`、`/api/skill-eval` 或 `/api/skill-opt`。预览完成前 `/skills` 与正式导航保持原样。
 
 ## Key TypeScript data contracts (`types`)
 核心接口（形状节选；完整成员见源码）：

@@ -20,8 +20,15 @@ export function createBlockMirror(
   encoder: TextEncoder,
 ) {
   const blocks: any[] = [];
+  let clientConnected = true;
   const send = (mode: string, payload: any) => {
-    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode, payload })}\n\n`));
+    if (clientConnected) {
+      try {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ mode, payload })}\n\n`));
+      } catch {
+        clientConnected = false;
+      }
+    }
 
     if (mode === 'text') {
       const tail = blocks[blocks.length - 1];

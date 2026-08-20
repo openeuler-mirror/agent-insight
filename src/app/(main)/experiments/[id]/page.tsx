@@ -21,6 +21,7 @@ interface ExperimentDetail {
   type: string;
   agentName: string;
   status: string;
+  preset?: string | null;
   watchMode?: boolean;
   watchEnabledAt?: string | null;
   evaluatorIds: string[];
@@ -60,7 +61,7 @@ interface ExperimentDetail {
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
-  draft: { label: '启动中', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
+  draft: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
   failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
@@ -104,8 +105,17 @@ function errorMessage(error: unknown, fallback: string): string {
 
 const CASE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
-export default function ExperimentDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export function ExperimentDetail({
+  id,
+  embedded = false,
+  onBack,
+  onOpenCase,
+}: {
+  id: string;
+  embedded?: boolean;
+  onBack?: () => void;
+  onOpenCase?: (caseId: string) => void;
+}) {
   const { user } = useAuth();
   const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
@@ -240,8 +250,11 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <>
-      <AppTopBar title={detail ? detail.name : '实验详情'} />
+      {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
       <PageContainer className="[&>*]:shrink-0">
+        {embedded && onBack && (
+          <button type="button" onClick={onBack} style={{ ...ACTION_BTN, marginBottom: 12 }}>‹ 返回实验记录</button>
+        )}
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : error && !detail ? (
@@ -353,7 +366,14 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                     <div key={row.evaluatorId} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                       <div style={{ width: 240, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {lookup.nameOf(row.evaluatorId)}
+                          {detail.preset === 'trigger'
+                              ? ({
+                                'skill-trigger-analyzer': 'skill-trigger-analyzer',
+                                'skill-trigger-accuracy': 'skill-trigger-analyzer（历史结果）',
+                                'preset-agent-task-completion': 'skill-trigger-analyzer（历史结果）',
+                                'preset-result-accuracy': 'skill-trigger-analyzer（历史结果）',
+                              }[row.evaluatorId] || lookup.nameOf(row.evaluatorId))
+                            : lookup.nameOf(row.evaluatorId)}
                         </div>
                         <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', marginTop: 2 }}>
                           {lookup.tagsOf(row.evaluatorId).join(' · ') || row.evaluatorId}
@@ -458,12 +478,22 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                           background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)',
                         }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                            <Link
-                              href={`/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(c.id)}`}
-                              style={{ ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)' }}
-                            >
-                              详情
-                            </Link>
+                            {embedded && onOpenCase ? (
+                              <button
+                                type="button"
+                                onClick={() => onOpenCase(c.id)}
+                                style={{ ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+                              >
+                                详情
+                              </button>
+                            ) : (
+                              <Link
+                                href={`/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(c.id)}`}
+                                style={{ ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+                              >
+                                详情
+                              </Link>
+                            )}
                             {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
@@ -567,4 +597,9 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
       </PageContainer>
     </>
   );
+}
+
+export default function ExperimentDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  return <ExperimentDetail id={id} />;
 }

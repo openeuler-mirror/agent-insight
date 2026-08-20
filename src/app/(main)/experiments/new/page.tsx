@@ -5,7 +5,7 @@
 // 对照仓库根目录「评测实验-高保真.html」的单组流程。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, Search, X } from 'lucide-react';
+import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
@@ -26,6 +26,7 @@ import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
+import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
 
 interface AgentTargetOption {
   workerId: string;
@@ -84,17 +85,73 @@ interface SelectedCase {
 interface DatasetOption {
   id: string;
   name: string;
+  description?: string;
   datasetKind?: string;
   targetAgent?: string;
+  targetSkill?: string;
   tags?: string[];
+  fields?: unknown[];
   caseCount?: number;
   cases?: Array<{
     id?: string;
     input?: string;
     expectedOutput?: string;
+    evaluationFocus?: string;
     values?: Record<string, unknown>;
   }>;
 }
+
+export type SkillExperimentPreset = 'trigger' | 'use-case' | 'skill-ab';
+
+export interface SkillExperimentContext {
+  sessionId: string;
+  skillName: string;
+  skillVersion: number;
+  preset: SkillExperimentPreset;
+  versions: Array<{ id: string; version: number }>;
+  optimizationRecordId?: string;
+}
+
+interface ExperimentWizardProps {
+  embedded?: boolean;
+  skillContext?: SkillExperimentContext;
+  onBack?: () => void;
+  onCreated?: (experimentId: string) => void;
+}
+
+const SKILL_PRESET_LABELS: Record<SkillExperimentPreset, string> = {
+  trigger: '触发分析',
+  'use-case': '用例分析',
+  'skill-ab': 'A/B 测试',
+};
+
+const SKILL_PRESET_EVALUATORS: Record<SkillExperimentPreset, Array<{
+  id: string;
+  name: string;
+  description: string;
+  selected: boolean;
+}>> = {
+  trigger: [
+    {
+      id: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+      name: 'skill-trigger-analyzer',
+      description: '逐条判定当前 Skill 的实际触发结果是否与数据集标注一致。',
+      selected: true,
+    },
+  ],
+  'use-case': [
+    { id: 'preset-agent-task-completion', name: '任务结果正确性', description: '对照预期答案检查 Agent 是否正确、完整地完成任务。', selected: true },
+    { id: 'preset-agent-trace-quality', name: 'Agent 轨迹质量', description: '评估规划、工具选择、中间结果和异常处理。', selected: true },
+    { id: 'preset-result-faithfulness', name: '证据忠实度', description: '判断最终结论是否有执行轨迹与工具证据支撑。', selected: true },
+    { id: 'preset-safety-harmfulness', name: '安全合规', description: '检查输出中的危险建议、不当引导与其他安全风险。', selected: false },
+  ],
+  'skill-ab': [
+    { id: 'preset-agent-task-completion', name: '任务结果正确性', description: '在相同任务输入下比较两个 Skill 版本的任务完成质量。', selected: true },
+    { id: 'preset-result-accuracy', name: 'Skill 版本回归', description: '对照预期答案和基线版本，识别新版本的退化用例。', selected: true },
+    { id: 'preset-agent-trace-quality', name: '执行成本', description: '在相同 Case 上对照轨迹长度、工具调用、时延和 Token 开销。', selected: true },
+    { id: 'preset-safety-harmfulness', name: '安全合规', description: '分别检查两个版本的危险建议与安全风险。', selected: false },
+  ],
+};
 
 function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase[] {
   return (dataset?.cases || []).map((item, index) => {
@@ -119,6 +176,7 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
       faultInjectionType: fault || null,
       values: {
         ...(item.values || {}),
+        ...(item.evaluationFocus ? { trigger_rationale: item.evaluationFocus } : {}),
         ...(fault ? { fault_injection_type: fault } : {}),
       },
     };
@@ -328,15 +386,18 @@ function Stepper({ step, maxVisited, summaries, onJump }: {
   );
 }
 
-export default function NewExperimentPage() {
+export function ExperimentWizard({ embedded = false, skillContext, onBack, onCreated }: ExperimentWizardProps = {}) {
   const router = useRouter();
   const { user } = useAuth();
+  const skillPreset = skillContext?.preset;
 
   const [step, setStep] = useState(1);
   const [maxVisited, setMaxVisited] = useState(1);
 
   // ① 实验设计
-  const [name, setName] = useState(() => defaultExperimentName());
+  const [name, setName] = useState(() => skillContext
+    ? `${skillContext.skillName} · ${SKILL_PRESET_LABELS[skillContext.preset]} · v${skillContext.skillVersion}`
+    : defaultExperimentName());
   const [agentName, setAgentName] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
@@ -351,7 +412,9 @@ export default function NewExperimentPage() {
   // ② 关联 Trace
   // 监听模式：开启后本实验绑定该 Agent，其新上报的 trace 自动进来评测（圈选已有 trace 变可选）
   const [watchMode, setWatchMode] = useState(false);
-  const [traceMode, setTraceMode] = useState<'existing' | 'generate'>('existing');
+  const [traceMode, setTraceMode] = useState<'existing' | 'generate'>(() => (
+    skillPreset === 'trigger' || skillPreset === 'skill-ab' ? 'generate' : 'existing'
+  ));
   const [traces, setTraces] = useState<TraceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -387,6 +450,14 @@ export default function NewExperimentPage() {
   const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [generatingTriggerDataset, setGeneratingTriggerDataset] = useState(false);
+  const [savingTriggerDataset, setSavingTriggerDataset] = useState(false);
+  const [triggerDatasetExpanded, setTriggerDatasetExpanded] = useState(false);
+  const [triggerDatasetDirty, setTriggerDatasetDirty] = useState(false);
+  const [versionAEnabled, setVersionAEnabled] = useState(true);
+  const [compareVersion, setCompareVersion] = useState<number | null>(() => (
+    skillContext?.versions.find((item) => item.version !== skillContext.skillVersion)?.version ?? null
+  ));
 
   const selectedDataset = useMemo(
     () => selectedDatasetDetail?.id === selectedDatasetId
@@ -394,6 +465,12 @@ export default function NewExperimentPage() {
       : wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
     [selectedDatasetDetail, wizardDatasets, selectedDatasetId],
   );
+  const eligibleWizardDatasets = useMemo(() => wizardDatasets.filter((dataset) => {
+    if (!skillContext) return true;
+    if (dataset.targetSkill && dataset.targetSkill !== skillContext.skillName) return false;
+    if (skillPreset !== 'trigger') return true;
+    return dataset.tags?.includes('trigger') || dataset.datasetKind === 'trigger';
+  }), [skillContext, skillPreset, wizardDatasets]);
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.name === agentName) || null,
@@ -451,6 +528,12 @@ export default function NewExperimentPage() {
       .catch(() => setFaultModeLabels(new Map()));
   }, [user]);
 
+  useEffect(() => {
+    if (!skillContext || agentName || agents.length === 0) return;
+    const preferred = agents.find((agent) => agent.executable) || agents[0];
+    setAgentName(preferred?.name || '');
+  }, [agentName, agents, skillContext]);
+
   const selectWizardDataset = async (nextId: string) => {
     const requestId = ++datasetRequestIdRef.current;
     setSelectedDatasetId(nextId);
@@ -458,9 +541,10 @@ export default function NewExperimentPage() {
     setSelected(new Map());
     setSelectedGenerated(new Map());
     setSelectedEvaluators(new Set());
+    setTriggerDatasetExpanded(false);
+    setTriggerDatasetDirty(false);
     if (!nextId || !user) {
       setSelectedDatasetLoading(false);
-      setTraceMode('existing');
       return;
     }
     setSelectedDatasetLoading(true);
@@ -480,6 +564,123 @@ export default function NewExperimentPage() {
       setSelectedGenerated(new Map());
     } finally {
       if (datasetRequestIdRef.current === requestId) setSelectedDatasetLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!skillContext || selectedDatasetId || eligibleWizardDatasets.length === 0) return;
+    const timer = window.setTimeout(() => void selectWizardDataset(eligibleWizardDatasets[0].id), 0);
+    return () => window.clearTimeout(timer);
+  }, [eligibleWizardDatasets, selectedDatasetId, skillContext]);
+
+  const generateTriggerDataset = async () => {
+    if (!user || !skillContext || skillPreset !== 'trigger' || generatingTriggerDataset) return;
+    setGeneratingTriggerDataset(true);
+    setSubmitError('');
+    try {
+      const response = await apiFetch(`/api/skill-workbench/skills/${encodeURIComponent(skillContext.skillName)}/trigger-datasets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '生成触发分析数据集失败');
+      const dataset = result.dataset as DatasetOption;
+      setWizardDatasets((current) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
+      await selectWizardDataset(dataset.id);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '生成触发分析数据集失败');
+    } finally {
+      setGeneratingTriggerDataset(false);
+    }
+  };
+
+  const updateTriggerDatasetCase = (caseId: string, patch: { input?: string; shouldTrigger?: boolean }) => {
+    setSelectedDatasetDetail((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        cases: (current.cases || []).map((item, index) => {
+          const itemId = String(item.id || `dataset-case-${index}:${item.input || ''}`);
+          if (itemId !== caseId) return item;
+          const shouldTrigger = patch.shouldTrigger ?? Boolean(item.values?.should_trigger);
+          return {
+            ...item,
+            input: patch.input ?? item.input,
+            expectedOutput: shouldTrigger ? 'Skill should trigger' : 'Skill should not trigger',
+            values: { ...(item.values || {}), should_trigger: shouldTrigger },
+          };
+        }),
+      };
+      const generatedCases = generationCasesFromDataset(next);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+      setTriggerDatasetDirty(true);
+      return next;
+    });
+  };
+
+  const deleteTriggerDatasetCase = (caseId: string) => {
+    setSelectedDatasetDetail((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        cases: (current.cases || []).filter((item, index) => (
+          String(item.id || `dataset-case-${index}:${item.input || ''}`) !== caseId
+        )),
+      };
+      const generatedCases = generationCasesFromDataset(next);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+      setTriggerDatasetDirty(true);
+      return next;
+    });
+  };
+
+  const addTriggerDatasetCase = () => {
+    const id = `trigger-case-${Date.now()}`;
+    setSelectedDatasetDetail((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        cases: [
+          ...(current.cases || []),
+          { id, input: '', expectedOutput: 'Skill should trigger', values: { should_trigger: true } },
+        ],
+      };
+      const generatedCases = generationCasesFromDataset(next);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+      setTriggerDatasetDirty(true);
+      return next;
+    });
+  };
+
+  const saveTriggerDataset = async () => {
+    if (!user || !selectedDatasetDetail || savingTriggerDataset) return;
+    const cases = selectedDatasetDetail.cases || [];
+    if (cases.length === 0 || cases.some((item) => !String(item.input || '').trim())) {
+      setSubmitError('触发分析用例的输入不能为空');
+      return;
+    }
+    const labels = cases.map((item) => Boolean(item.values?.should_trigger));
+    if (!labels.includes(true) || !labels.includes(false)) {
+      setSubmitError('触发分析数据集必须同时包含应触发与不应触发用例');
+      return;
+    }
+    setSavingTriggerDataset(true);
+    setSubmitError('');
+    try {
+      const response = await apiFetch('/api/agent-datasets', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...selectedDatasetDetail, user, id: selectedDatasetDetail.id }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '保存触发分析数据集失败');
+      setSelectedDatasetDetail(result.dataset as DatasetOption);
+      setTriggerDatasetDirty(false);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '保存触发分析数据集失败');
+    } finally {
+      setSavingTriggerDataset(false);
     }
   };
 
@@ -571,7 +772,10 @@ export default function NewExperimentPage() {
       referenceOutput: match.updates[base.executionId] || null,
       evaluatorContext: match.contextUpdates[base.executionId] || null,
       faultInjectionType: fault || null,
-      values: datasetCase.values,
+      values: {
+        ...(datasetCase.values || {}),
+        ...(datasetCase.evaluationFocus ? { trigger_rationale: datasetCase.evaluationFocus } : {}),
+      },
     };
   };
 
@@ -789,10 +993,23 @@ export default function NewExperimentPage() {
     [selectedList],
   );
 
-  const allEvaluators = useMemo(
-    () => [...presetEvaluators, ...customEvaluators],
-    [customEvaluators],
-  );
+  const allEvaluators = useMemo(() => {
+    if (!skillPreset) return [...presetEvaluators, ...customEvaluators];
+    const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));
+    return SKILL_PRESET_EVALUATORS[skillPreset].flatMap((entry) => {
+      const card = catalog.get(entry.id);
+      return card ? [{ ...card, name: entry.name, description: entry.description }] : [];
+    });
+  }, [customEvaluators, skillPreset]);
+
+  useEffect(() => {
+    if (!skillContext || selectedEvaluators.size > 0 || allEvaluators.length === 0) return;
+    const defaults = (skillPreset
+      ? SKILL_PRESET_EVALUATORS[skillPreset].filter((item) => item.selected).map((item) => item.id)
+      : ['preset-agent-task-completion', 'preset-agent-trace-quality'])
+      .filter((id) => allEvaluators.some((item) => item.id === id));
+    if (defaults.length) setSelectedEvaluators(new Set(defaults));
+  }, [allEvaluators, selectedEvaluators.size, skillContext]);
 
   const toggleEvaluator = (id: string) => {
     setSelectedEvaluators((prev) => {
@@ -833,6 +1050,87 @@ export default function NewExperimentPage() {
         faultInjectionType: c.faultInjectionType || undefined,
         values: c.values,
       }));
+      if (skillContext && (skillPreset === 'skill-ab' || traceMode === 'generate')) {
+        if (skillPreset === 'skill-ab' && compareVersion == null) throw new Error('A/B 测试需要另一个 Skill 版本');
+        let abDatasetId = selectedDatasetId;
+        let abCaseIds = Array.from(selectedGenerated.keys());
+        if (skillPreset === 'skill-ab' && traceMode === 'existing') {
+          const snapshotResponse = await apiFetch('/api/agent-datasets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user,
+              name: `${name.trim() || skillContext.skillName} · 已有 Trace 输入快照`,
+              description: `Skill A/B 实验的冻结输入快照，来源于 ${selected.size} 条已选 Trace。`,
+              targetAgent: agentName,
+              targetSkill: skillContext.skillName,
+              datasetKind: 'ideal_output',
+              tags: ['skill-workbench', 'ab-trace-snapshot'],
+              fields: [
+                { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+                { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
+              ],
+              cases: selectedList.map((item) => ({
+                input: item.input,
+                expectedOutput: item.referenceOutput || '',
+                values: item.values || {},
+              })),
+            }),
+          });
+          const snapshotResult = await snapshotResponse.json();
+          if (!snapshotResponse.ok) throw new Error(snapshotResult.error || '冻结已有 Trace 输入失败');
+          abDatasetId = String(snapshotResult.dataset?.id || '');
+          abCaseIds = Array.isArray(snapshotResult.dataset?.cases)
+            ? snapshotResult.dataset.cases.map((item: { id?: string }) => String(item.id || '')).filter(Boolean)
+            : [];
+        }
+        if (!abDatasetId || abCaseIds.length === 0) throw new Error('Skill 实验需要至少一个有效 Case');
+        const createResponse = await apiFetch(`/api/skill-workbench/skills/${encodeURIComponent(skillContext.skillName)}/experiments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user,
+            sessionId: skillContext.sessionId,
+            version: skillContext.skillVersion,
+            preset: skillPreset,
+            datasetId: abDatasetId,
+            ...(skillPreset === 'skill-ab' ? { compareVersion, versionAEnabled } : {}),
+            optimizationRecordId: skillContext.optimizationRecordId,
+            name,
+            agentName,
+            evaluatorIds: Array.from(selectedEvaluators),
+            caseIds: abCaseIds,
+            traceSource: traceMode,
+          }),
+        });
+        const created = await createResponse.json();
+        if (!createResponse.ok) throw new Error(created.error || '创建 Skill 实验失败');
+        const experimentId = String(created.experiment?.id || '');
+        const taskId = String(created.grayscaleTask?.id || '');
+        const caseIds = Array.isArray(created.configSnapshot?.caseIds) ? created.configSnapshot.caseIds : [];
+        if (!experimentId || !taskId || caseIds.length === 0) throw new Error('Skill 实验缺少执行配置');
+        try {
+          const runResponse = await apiFetch(`/api/debug/grayscale-tasks/${encodeURIComponent(taskId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user, action: 'start', caseIds, evaluators: Array.from(selectedEvaluators) }),
+          });
+          const runResult = await runResponse.json().catch(() => ({}));
+          if (!runResponse.ok) throw new Error(runResult.error || '启动 Skill 实验失败');
+        } catch (runError) {
+          const rollbackRes = await apiFetch(
+            `/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`,
+            { method: 'DELETE' },
+          ).catch(() => null);
+          if (rollbackRes?.status === 409) {
+            if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
+            return;
+          }
+          throw runError;
+        }
+        if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
+        return;
+      }
       const res = await apiFetch('/api/experiments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -843,6 +1141,29 @@ export default function NewExperimentPage() {
           watchMode: traceMode === 'existing' ? watchMode : false,
           cases: casesPayload,
           evaluatorIds: Array.from(selectedEvaluators),
+          ...(skillContext ? {
+            scope: 'skill-workbench',
+            skillName: skillContext.skillName,
+            skillVersion: skillContext.skillVersion,
+            preset: skillPreset,
+            skillContext: {
+              sessionId: skillContext.sessionId,
+              skillName: skillContext.skillName,
+              versionA: null,
+              versionB: skillContext.skillVersion,
+            },
+            configSnapshot: {
+              schemaVersion: 1,
+              preset: skillPreset,
+              datasetId: selectedDatasetId || null,
+              caseIds: selectedList.map((item) => item.executionId),
+              evaluatorIds: Array.from(selectedEvaluators),
+              traceSource: traceMode,
+              agentName,
+              versionA: null,
+              versionB: skillContext.skillVersion,
+            },
+          } : {}),
         }),
       });
       const data = await res.json();
@@ -879,19 +1200,28 @@ export default function NewExperimentPage() {
           { method: 'DELETE' },
         ).catch(() => null);
         if (rollbackRes?.status === 409) {
-          router.push(`/experiments/${experimentId}`);
+          if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
           return;
         }
         throw runError;
       }
-      router.push(`/experiments/${experimentId}`);
+      if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : '创建实验失败');
       setSubmitting(false);
     }
   };
 
-  const step1Ok = name.trim() !== '' && agentName !== '';
+  const triggerDatasetReady = skillPreset !== 'trigger' || Boolean(
+    selectedDatasetDetail
+    && !triggerDatasetDirty
+    && (selectedDatasetDetail.cases || []).length > 0
+    && (selectedDatasetDetail.cases || []).every((item) => String(item.input || '').trim())
+    && (selectedDatasetDetail.cases || []).some((item) => Boolean(item.values?.should_trigger))
+    && (selectedDatasetDetail.cases || []).some((item) => !Boolean(item.values?.should_trigger)),
+  );
+  const step1Ok = name.trim() !== '' && agentName !== '' && triggerDatasetReady
+    && (skillPreset !== 'skill-ab' || compareVersion !== null);
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
   const step2Valid = traceMode === 'generate'
     ? generateAvailable && selectedGenerated.size >= 1
@@ -930,17 +1260,22 @@ export default function NewExperimentPage() {
 
   return (
     <>
-      <AppTopBar title="新建实验" />
+      {!embedded && <AppTopBar title="新建实验" />}
       <PageContainer className="[&>*]:shrink-0">
         {/* 页头 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0 12px' }}>
           <button
             style={{ ...BTN_GHOST, height: 26, padding: '0 9px', fontSize: 11.5 }}
-            onClick={() => router.push('/experiments')}
+            onClick={() => onBack ? onBack() : router.push('/experiments')}
           >
             ‹ 返回
           </button>
-          <h1 style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>新建实验</h1>
+          <div>
+            <h1 style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>新建实验</h1>
+            {skillContext && <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>复用平台标准四步实验向导，当前 Skill 上下文已自动带入。</p>}
+          </div>
+          <span style={{ flex: 1 }} />
+          {skillPreset && <span style={{ ...CHIP, color: 'var(--primary)', background: 'var(--primary-subtle)' }}>{SKILL_PRESET_LABELS[skillPreset]}</span>}
         </div>
 
         <Stepper step={step} maxVisited={maxVisited} summaries={stepSummaries} onJump={goTo} />
@@ -991,20 +1326,27 @@ export default function NewExperimentPage() {
 
               <div style={{ marginBottom: 16 }}>
                 <label style={FIELDLBL}>评测数据集（可选）</label>
-                <select
-                  style={{ ...INPUT, cursor: 'pointer' }}
-                  value={selectedDatasetId}
-                  onChange={(e) => {
-                    void selectWizardDataset(e.target.value);
-                  }}
-                >
-                  <option value="">不选择数据集</option>
-                  {wizardDatasets.map((dataset) => (
-                    <option key={dataset.id} value={dataset.id}>
-                      {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
-                    </option>
-                  ))}
-                </select>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <select
+                    style={{ ...INPUT, cursor: 'pointer', flex: 1 }}
+                    value={selectedDatasetId}
+                    onChange={(e) => {
+                      void selectWizardDataset(e.target.value);
+                    }}
+                  >
+                    <option value="">{skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集'}</option>
+                    {eligibleWizardDatasets.map((dataset) => (
+                      <option key={dataset.id} value={dataset.id}>
+                        {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
+                      </option>
+                    ))}
+                  </select>
+                  {skillPreset === 'trigger' && (
+                    <button type="button" style={{ ...BTN_OUTLINE_SM, height: 34 }} disabled={generatingTriggerDataset} onClick={() => void generateTriggerDataset()}>
+                      {generatingTriggerDataset ? '生成中…' : 'AI 新建触发分析数据集'}
+                    </button>
+                  )}
+                </div>
                 <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
                   {selectedDatasetLoading
                     ? '正在加载数据集 Case…'
@@ -1012,16 +1354,103 @@ export default function NewExperimentPage() {
                 </div>
               </div>
 
+              {skillPreset === 'trigger' && selectedDatasetDetail && (
+                <div style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ ...PANEL_H, padding: '9px 12px' }}>
+                    <b style={{ fontSize: 12 }}>{selectedDatasetDetail.name}</b>
+                    <span style={{ ...CHIP, color: 'var(--success)', background: 'var(--tag-green-bg)' }}>
+                      {triggerDatasetDirty ? '已修改' : '已生成'} {selectedDatasetDetail.cases?.length || 0} 条
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    <button type="button" style={{ ...BTN_GHOST, height: 26, padding: '0 8px', fontSize: 11 }} onClick={() => setTriggerDatasetExpanded((value) => !value)}>
+                      {triggerDatasetExpanded ? '收起用例' : `查看 ${selectedDatasetDetail.cases?.length || 0} 条用例`}
+                    </button>
+                  </div>
+                  {[true, false].map((shouldTrigger) => {
+                    const cases = (selectedDatasetDetail.cases || []).filter((item) => Boolean(item.values?.should_trigger) === shouldTrigger);
+                    const sample = cases[0];
+                    return (
+                      <div key={String(shouldTrigger)} style={{ display: 'grid', gridTemplateColumns: '105px minmax(0,1fr) 80px', gap: 10, alignItems: 'center', padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 11.5 }}>
+                        <span style={{ ...CHIP, justifyContent: 'center', color: shouldTrigger ? 'var(--success)' : 'var(--error)', background: shouldTrigger ? 'var(--tag-green-bg)' : 'var(--tag-red-bg)' }}>
+                          {shouldTrigger ? '应触发' : '不应触发'} {cases.length}
+                        </span>
+                        <b style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sample?.input || '暂无用例'}</b>
+                        <span style={{ color: 'var(--foreground-muted)', textAlign: 'right' }}>{shouldTrigger ? '应触发' : '不触发'}</span>
+                      </div>
+                    );
+                  })}
+                  {triggerDatasetExpanded && (
+                    <div style={{ borderTop: '1px solid var(--border)', background: 'var(--background-secondary)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px' }}>
+                        <b style={{ fontSize: 12 }}>用例明细</b>
+                        <span style={{ flex: 1 }} />
+                        <span style={{ ...CHIP, color: triggerDatasetDirty ? 'var(--warning)' : 'var(--success)', background: triggerDatasetDirty ? 'var(--tag-amber-bg)' : 'var(--tag-green-bg)' }}>
+                          {triggerDatasetDirty ? '有未保存修改' : '已保存'}
+                        </span>
+                      </div>
+                      {[true, false].map((shouldTrigger) => {
+                        const cases = (selectedDatasetDetail.cases || []).map((item, index) => ({ item, index })).filter(({ item }) => Boolean(item.values?.should_trigger) === shouldTrigger);
+                        return (
+                          <div key={String(shouldTrigger)} style={{ padding: '0 12px 12px' }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 7, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+                              <span style={{ ...CHIP, color: shouldTrigger ? 'var(--success)' : 'var(--error)', background: shouldTrigger ? 'var(--tag-green-bg)' : 'var(--tag-red-bg)' }}>
+                                {shouldTrigger ? '应触发' : '不应触发'} {cases.length}
+                              </span>
+                              {shouldTrigger ? '这些输入应调用当前 Skill' : '这些输入不应调用当前 Skill'}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {cases.map(({ item, index }) => {
+                                const caseId = String(item.id || `dataset-case-${index}:${item.input || ''}`);
+                                return (
+                                  <div key={caseId} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                                    <input aria-label="用例输入" style={{ ...INPUT, height: 30, flex: 1 }} value={item.input || ''} onChange={(event) => updateTriggerDatasetCase(caseId, { input: event.target.value })} />
+                                    <button type="button" onClick={() => updateTriggerDatasetCase(caseId, { shouldTrigger: !shouldTrigger })} style={{ ...BTN_OUTLINE_SM, minWidth: 88 }}>
+                                      {shouldTrigger ? '转为不触发' : '转为应触发'}
+                                    </button>
+                                    <button type="button" aria-label="删除用例" onClick={() => deleteTriggerDatasetCase(caseId)} style={{ ...BTN_GHOST, width: 28, padding: 0, color: 'var(--foreground-muted)' }}><Trash2 size={13} /></button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderTop: '1px solid var(--border)' }}>
+                        <button type="button" style={BTN_OUTLINE_SM} onClick={addTriggerDatasetCase}><Plus size={13} /> 新增用例</button>
+                        <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>新用例默认为“应触发”，可一键转换。</span>
+                        <span style={{ flex: 1 }} />
+                        <button type="button" style={{ ...BTN_PRIMARY, height: 28 }} disabled={!triggerDatasetDirty || savingTriggerDataset} onClick={() => void saveTriggerDataset()}>
+                          {savingTriggerDataset ? '保存中…' : '保存变更'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  </div>
+              )}
+
+              {skillPreset === 'trigger' && !triggerDatasetReady && (
+                <div style={{ margin: '-6px 0 14px', fontSize: 10.5, color: 'var(--warning)' }}>
+                  请选择触发数据集，确保同时有应触发/不应触发用例，并先保存已编辑的变更。
+                </div>
+              )}
+
               <label style={FIELDLBL}>实验类型</label>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <span style={{
+                {skillPreset !== 'skill-ab' && <span style={{
                   ...FCHIP,
                   background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
                   color: 'var(--primary)', cursor: 'default',
                 }}>
                   🎯 无变量 · 单组
-                </span>
-                {['LLM 对比', 'Agent 框架对比', 'Skill 版本对比'].map((t) => (
+                </span>}
+                {skillPreset === 'skill-ab' && <span style={{
+                  ...FCHIP,
+                  background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
+                  color: 'var(--primary)', cursor: 'default',
+                }}>
+                  Skill 版本对比
+                </span>}
+                {!skillContext && ['LLM 对比', 'Agent 框架对比', 'Skill 版本对比'].map((t) => (
                   <span
                     key={t}
                     title="即将支持"
@@ -1035,6 +1464,27 @@ export default function NewExperimentPage() {
                   </span>
                 ))}
               </div>
+              {skillContext && skillPreset === 'skill-ab' && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14, marginTop: 14 }}>
+                  <div>
+                    <label style={FIELDLBL}>A 组 · 当前工作版本</label>
+                    <select style={{ ...INPUT, cursor: 'pointer' }} value={versionAEnabled ? 'current' : 'none'} onChange={(event) => setVersionAEnabled(event.target.value === 'current')}>
+                      <option value="current">v{skillContext.skillVersion} · 当前工作版本</option>
+                      <option value="none">无 Skill</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={FIELDLBL}>B 组 · 对比版本</label>
+                    <select style={{ ...INPUT, cursor: 'pointer' }} value={compareVersion ?? ''} onChange={(event) => setCompareVersion(Number(event.target.value))}>
+                      <option value="">请选择另一个版本</option>
+                      {skillContext.versions.filter((item) => item.version !== skillContext.skillVersion).map((item) => (
+                        <option key={item.id} value={item.version}>v{item.version}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              {submitError && <p style={{ margin: '10px 0 0', color: 'var(--error)', fontSize: 12 }}>{submitError}</p>}
               {footer({ nextDisabled: !step1Ok })}
             </div>
           </div>
@@ -1051,6 +1501,12 @@ export default function NewExperimentPage() {
                 <button type="button" style={{ ...BTN_GHOST, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
                 <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('generate')}>生成 Trace</button>
               </div>
+
+              {skillPreset === 'skill-ab' && (
+                <div style={{ padding: '9px 11px', marginBottom: 12, borderRadius: 8, background: 'var(--primary-subtle)', color: 'var(--foreground-secondary)', fontSize: 11.5 }}>
+                  <b style={{ color: 'var(--primary)' }}>Skill 版本对比</b>：相同 Case 将分别使用两个版本生成 Trace，并按任务输入自动配对。
+                </div>
+              )}
 
               {!generateAvailable ? (
                 <div style={{ padding: 18, border: '1px dashed var(--border-dark)', borderRadius: 10, color: 'var(--foreground-secondary)', fontSize: 12, lineHeight: 1.6 }}>
@@ -1941,4 +2397,8 @@ export default function NewExperimentPage() {
       </PageContainer>
     </>
   );
+}
+
+export default function NewExperimentPage() {
+  return <ExperimentWizard />;
 }

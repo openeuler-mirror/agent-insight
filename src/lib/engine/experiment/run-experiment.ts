@@ -65,6 +65,10 @@ import {
   isRasReliabilityPresetId,
   runRasReliabilityPreset,
 } from './ras-reliability-evaluator';
+import {
+  evaluateSkillTriggerAnalysis,
+  isSkillTriggerAnalyzerId,
+} from '@/lib/skill-workbench/trigger-evaluator';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -95,6 +99,11 @@ interface CaseRuntime {
   /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文；
    *  安全与创意评估器也共用此类型（见 §4.3 实现签名）。 */
   faithfulCtx: FaithfulPresetContext;
+  trigger?: {
+    shouldTrigger: boolean;
+    skillTriggered: boolean;
+    reason?: string;
+  };
 }
 
 function parseFailureSummaries(failures: string | null | undefined): string[] {
@@ -153,7 +162,8 @@ async function loadCaseRuntime(caseRow: {
   referenceOutput: string | null;
   evaluatorContextJson: string | null;
   faultInjectionType?: string | null;
-}, user: string): Promise<CaseRuntime> {
+  caseValuesJson?: string | null;
+}, user: string, targetSkillName?: string | null): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
   const execution = caseRow.executionId
@@ -229,7 +239,34 @@ async function loadCaseRuntime(caseRow: {
     } : null,
   };
 
-  return { judgeCtx, faithfulCtx };
+  let shouldTrigger: boolean | undefined;
+  let triggerReason: string | undefined;
+  if (caseRow.caseValuesJson) {
+    try {
+      const values = JSON.parse(caseRow.caseValuesJson) as Record<string, unknown>;
+      if (typeof values.should_trigger === 'boolean') shouldTrigger = values.should_trigger;
+      if (typeof values.trigger_rationale === 'string' && values.trigger_rationale.trim()) {
+        triggerReason = values.trigger_rationale.trim();
+      }
+    } catch { /* 由触发评估器给出缺少标注的明确错误 */ }
+  }
+  const targetSkillInvoked = execution && targetSkillName
+    ? Boolean(
+        execution.skill === targetSkillName
+        || await prisma.executionSkill.findFirst({
+          where: { executionId: execution.id, skillName: targetSkillName },
+          select: { id: true },
+        }),
+      )
+    : false;
+
+  return {
+    judgeCtx,
+    faithfulCtx,
+    ...(typeof shouldTrigger === 'boolean'
+      ? { trigger: { shouldTrigger, skillTriggered: targetSkillInvoked, ...(triggerReason ? { reason: triggerReason } : {}) } }
+      : {}),
+  };
 }
 
 // ── 单行执行（含重试/超时）────────────────────────────────────────────────
@@ -257,6 +294,10 @@ async function evaluateOnce(
   evaluatorId: string,
   runtime: CaseRuntime,
 ): Promise<EvaluatorOutput> {
+  if (isSkillTriggerAnalyzerId(evaluatorId)) {
+    if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
+    return evaluateSkillTriggerAnalysis(runtime.trigger);
+  }
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
     return runFaithfulPreset(evaluatorId, user, runtime.faithfulCtx);
@@ -306,7 +347,7 @@ async function evaluateOnce(
 export async function executeResultRow(user: string, resultId: string): Promise<'done' | 'failed'> {
   const row = await prisma.experimentEvalResult.findUnique({
     where: { id: resultId },
-    include: { case: true },
+    include: { case: { include: { experiment: { select: { skillName: true } } } } },
   });
   if (!row) throw new Error(`ExperimentEvalResult ${resultId} 不存在`);
 
@@ -320,7 +361,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   let localAttempts = 0;
   let lastError: unknown = null;
 
-  const runtime = await loadCaseRuntime(row.case, user);
+  const runtime = await loadCaseRuntime(row.case, user, row.case.experiment.skillName);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     localAttempts = attempt;

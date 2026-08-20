@@ -14,6 +14,7 @@
 | Date | 2026-08-17 15:22:34 +0800 |
 | Author | iceory |
 | Subject | `fix(ras): 上传 messageID 并对齐恢复树，避免 RAS 挂到末条回复` |
+| Working tree overlay | Skill 工作台重构已在本地工作树完成代码、入口与文档切换，尚无可填写的新 commit；提交后必须把本区块整体刷新到该 commit。 |
 
 **如何更新：** `git diff d390dbd0 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 

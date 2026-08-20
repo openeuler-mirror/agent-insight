@@ -148,6 +148,7 @@ async function streamSkillOptOpencodeImpl(
   };
 
   let agentText = '';
+  const textFullByMessageId = new Map<string, string>();
   let openThinkingId: string | null = null;
   const reasoningFullByThinkId = new Map<string, string>();
   const announcedTools = new Set<string>();
@@ -171,8 +172,18 @@ async function streamSkillOptOpencodeImpl(
     onText: (e) => {
       armIdleWatchdog();
       closeThinkingIfOpen();
-      agentText += e.delta;
-      send('text', e.delta);
+      const key = e.messageID || e.partID || 'default';
+      const lastFull = textFullByMessageId.get(key) ?? '';
+      const incomingFull = e.fullText && typeof e.fullText === 'string'
+        ? e.fullText
+        : lastFull + e.delta;
+      if (incomingFull.length <= lastFull.length) return;
+      const realDelta = incomingFull.startsWith(lastFull)
+        ? incomingFull.slice(lastFull.length)
+        : e.delta;
+      textFullByMessageId.set(key, incomingFull);
+      agentText += realDelta;
+      send('text', realDelta);
     },
     onReasoning: (e) => {
       armIdleWatchdog();

@@ -90,6 +90,7 @@ const CONTINUOUS_OPTIMIZATION_ITEM: SidebarNavItem = {
             labelKey: 'nav.skillWorkspace',
             icon: 'skill',
             matchPrefixes: [
+                '/skill-workbench',
                 '/skills',
                 '/skill-history',
                 '/skill-detail',
@@ -102,6 +103,7 @@ const CONTINUOUS_OPTIMIZATION_ITEM: SidebarNavItem = {
 };
 
 const CONFIG_CHILDREN: SidebarNavItem[] = [
+    { key: 'skill-management', href: '/config/skills', labelKey: 'nav.skillManagement', icon: 'skill' },
     { key: 'model-registry', href: '/modelconfig/registry', labelKey: 'nav.modelRegistry', icon: 'model' },
     { key: 'web-search', href: '/modelconfig/web-search', labelKey: 'nav.webSearch', icon: 'web' },
     { key: 'access-install', href: '/accessconfig/install', labelKey: 'nav.accessInstall', icon: 'install' },

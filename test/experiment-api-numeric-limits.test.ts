@@ -42,7 +42,7 @@ test.before(async () => {
       type: 'single',
       scope: 'numeric-limit',
       evaluatorIdsJson: '[]',
-      status: 'draft',
+      status: 'running',
     })),
   });
 
