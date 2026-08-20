@@ -36,6 +36,7 @@
             "pages": [
               "user-guide/observability/index",
               "user-guide/observability/view-traces",
+              "user-guide/observability/fault-injection",
               "user-guide/observability/diagnosis",
               "user-guide/observability/quality-monitoring"
             ]

@@ -72,7 +72,11 @@ test('统计表不与任何业务表建关系（不改变既有查询计划）',
     const path = await import('node:path');
     const schema = fs.readFileSync(path.join(process.cwd(), 'prisma', 'schema.prisma'), 'utf8');
 
-    const usagePart = schema.slice(schema.indexOf('model PlatformUsageEvent'));
+    const usageStart = schema.indexOf('model PlatformUsageEvent');
+    const usageEnd = schema.indexOf('model ReliabilityInstallToken');
+    const usagePart = usageEnd > usageStart
+        ? schema.slice(usageStart, usageEnd)
+        : schema.slice(usageStart);
     assert.ok(!/@relation/.test(usagePart), '用量表不得有 @relation');
 
     // 反向：既有业务模型不得出现指向用量表的字段
