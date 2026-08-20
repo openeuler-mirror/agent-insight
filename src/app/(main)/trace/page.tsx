@@ -130,9 +130,13 @@ interface Execution {
     traceCompletedAt?: string | null;
     trace_status_reason?: string | null;
     traceStatusReason?: string | null;
+    anomalyStatus?: 'normal' | 'abnormal' | 'detecting' | 'unknown' | string | null;
+    anomaly_status?: 'normal' | 'abnormal' | 'detecting' | 'unknown' | string | null;
+    anomalyCount?: number | null;
     judgment_reason?: string;
     failures?: any[];
     agentOwnership?: string | null;
+    observedIp?: string | null;
     user?: string | null;
     userTags?: TraceUserTag[];
 }
@@ -163,16 +167,18 @@ type SortDir = 'asc' | 'desc';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 
-type TraceColumnKey = 'traceId' | 'agent' | 'status' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
+type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
 
-const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'status', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
+const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'ip', 'status', 'anomaly', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     traceId:    130,
     task:       280,
     agent:      170,
+    ip:         160,
     status:     110,
+    anomaly:    110,
     userTags:   220,
     systemTags: 220,
     tokens:     110,
@@ -183,7 +189,9 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
     traceId:    90,
     task:       280,
     agent:      100,
+    ip:         120,
     status:     80,
+    anomaly:    80,
     userTags:   150,
     systemTags: 140,
     tokens:     70,
@@ -193,7 +201,9 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
 const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
     traceId: true,
     agent: true,
+    ip: false,
     status: true,
+    anomaly: true,
     userTags: true,
     systemTags: false,
     task: true,
@@ -204,7 +214,7 @@ const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
 const MAX_COLUMN_WIDTH = 640;
 const MAX_TASK_COLUMN_WIDTH = 1600;
 const COL_WIDTHS_STORAGE_KEY = 'trace.columnWidths.v1';
-const COL_VISIBILITY_STORAGE_KEY = 'trace.columnVisibility.v1';
+const COL_VISIBILITY_STORAGE_KEY = 'trace.columnVisibility.v2';
 function getInvokedSkillNames(execution: Execution): string[] {
     const invoked = Array.isArray(execution.invoked_skills)
         ? execution.invoked_skills
@@ -221,6 +231,47 @@ function getExecStatus(e: Execution): 'running' | 'success' | 'failed' {
     const status = String(e.trace_status ?? e.traceStatus ?? '').trim().toLowerCase();
     if (status === 'running' || status === 'success' || status === 'failed') return status;
     return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
+}
+
+function ReliabilityAnomalyChip({
+    executionId,
+    locale,
+}: {
+    executionId: string
+    locale: 'zh' | 'en'
+}) {
+    const [status, setStatus] = useState<string | null>(null)
+    useEffect(() => {
+        const id = executionId.trim()
+        if (!id) return
+        let cancelled = false
+        void apiFetch(`/api/observe/executions/${encodeURIComponent(id)}/reliability`)
+            .then(async (res) => {
+                if (!res.ok) return null
+                return res.json()
+            })
+            .then((data) => {
+                if (cancelled || !data) return
+                setStatus(String(data.anomalyStatus || 'unknown'))
+            })
+            .catch(() => {
+                if (!cancelled) setStatus(null)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [executionId])
+    if (status !== 'abnormal' && status !== 'detecting') return null
+    return (
+        <StatusBadge
+            status={status === 'detecting' ? 'running' : 'error'}
+            label={
+                status === 'detecting'
+                    ? (locale === 'zh' ? '检测中' : 'Detecting')
+                    : (locale === 'zh' ? '有异常' : 'Abnormal')
+            }
+        />
+    )
 }
 
 function getFrameworkLabel(framework?: string | null): string {
@@ -473,6 +524,7 @@ function TracePageContent() {
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', parseAsString.withDefault('all'));
+    const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', parseAsString.withDefault('all'));
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', parseAsString.withDefault('all'));
     const [agentFilter, setAgentFilter] = useQueryState('agent', parseAsString.withDefault('all'));
     const [skillFilter, setSkillFilter] = useQueryState('skill', parseAsString.withDefault('all'));
@@ -577,7 +629,9 @@ function TracePageContent() {
     const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
         traceId: t('tracePage.columnTraceId'),
         agent: t('tracePage.columnAgent'),
+        ip: t('tracePage.columnIp'),
         status: t('tracePage.columnStatus'),
+        anomaly: t('tracePage.columnAnomaly'),
         userTags: t('tracePage.columnUserTags'),
         systemTags: t('tracePage.columnSystemTags'),
         task: t('tracePage.columnTask'),
@@ -709,7 +763,7 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`)
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -743,6 +797,7 @@ function TracePageContent() {
         agentFilter,
         ownershipFilter,
         anomalyFilter,
+        reliabilityAnomalyFilter,
         timeFilter,
         sortKey,
         sortDir,
@@ -845,7 +900,7 @@ function TracePageContent() {
     }, [page, totalPages, setPage]);
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
-        || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
+        || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
     const resetFilters = () => {
@@ -854,6 +909,7 @@ function TracePageContent() {
         setSkillFilter('all');
         updateUserTagFilters([]);
         setAnomalyFilter('all');
+        setReliabilityAnomalyFilter('all');
         setTimeFilter('all');
         setFrameworkFilter('all');
         setAgentScopeFilter('root');
@@ -872,6 +928,12 @@ function TracePageContent() {
         { value: 'running', label: t('tracePage.statusRunning') },
         { value: 'success', label: t('tracePage.statusSuccess') },
         { value: 'failed', label: t('tracePage.statusFailed') },
+    ];
+    const reliabilityAnomalyOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        { value: 'abnormal', label: locale === 'zh' ? '有异常' : 'Abnormal' },
+        { value: 'detecting', label: locale === 'zh' ? '检测中' : 'Detecting' },
+        { value: 'normal', label: locale === 'zh' ? '无异常' : 'No anomaly' },
     ];
     const timeOptions: SelectOption[] = [
         { value: 'all', label: t('common.allTime') },
@@ -966,6 +1028,13 @@ function TracePageContent() {
                                 onChange={setAnomalyFilter}
                                 options={statusOptions}
                                 active={anomalyFilter !== 'all'}
+                            />
+                            <Select
+                                label={locale === 'zh' ? '可靠性异常' : 'Reliability'}
+                                value={reliabilityAnomalyFilter}
+                                onChange={setReliabilityAnomalyFilter}
+                                options={reliabilityAnomalyOptions}
+                                active={reliabilityAnomalyFilter !== 'all'}
                             />
                             <Select
                                 label={t('tracePage.filterTime')}
@@ -1135,7 +1204,9 @@ function TracePageContent() {
                                                 <col style={{ width: taskWidthCustomized ? widths.task : undefined }} />
                                             )}
                                             {columnVisibility.agent && <col style={{ width: widths.agent }} />}
+                                            {columnVisibility.ip && <col style={{ width: widths.ip }} />}
                                             {columnVisibility.status && <col style={{ width: widths.status }} />}
+                                            {columnVisibility.anomaly && <col style={{ width: widths.anomaly }} />}
                                             {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
                                             {columnVisibility.systemTags && <col style={{ width: widths.systemTags }} />}
                                             {columnVisibility.tokens && <col style={{ width: widths.tokens }} />}
@@ -1167,10 +1238,20 @@ function TracePageContent() {
                                                         <Term id="agent" label={t('tracePage.columnAgent')} />
                                                     </SortableTh>
                                                 )}
+                                                {columnVisibility.ip && (
+                                                    <Th colKey="ip" currentWidth={widths.ip} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnIp')}
+                                                    </Th>
+                                                )}
                                                 {columnVisibility.status && (
                                                     <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>
                                                         <Term id="chain-status" label={t('tracePage.columnStatus')} />
                                                     </SortableTh>
+                                                )}
+                                                {columnVisibility.anomaly && (
+                                                    <Th colKey="anomaly" currentWidth={widths.anomaly} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnAnomaly')}
+                                                    </Th>
                                                 )}
                                                 {columnVisibility.userTags && <Th colKey="userTags" currentWidth={widths.userTags} onResize={setColumnWidth}>{t('tracePage.columnUserTags')}</Th>}
                                                 {columnVisibility.systemTags && <Th colKey="systemTags" currentWidth={widths.systemTags} onResize={setColumnWidth}>{t('tracePage.columnSystemTags')}</Th>}
@@ -1329,9 +1410,29 @@ function TraceDetailView({
     const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running');
     const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
     const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
+    const [rasMarkers, setRasMarkers] = useState<any[]>([]);
 
     const sessionRef = useRef<any | null>(null);
     useEffect(() => { sessionRef.current = session; }, [session]);
+
+    useEffect(() => {
+        const executionId = String(execution.upload_id || '').trim();
+        if (!executionId) {
+            setRasMarkers([]);
+            return;
+        }
+        let cancelled = false;
+        apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/reliability?locale=${locale === 'zh' ? 'zh' : 'en'}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (cancelled) return;
+                setRasMarkers(Array.isArray(data?.markers) ? data.markers : []);
+            })
+            .catch(() => {
+                if (!cancelled) setRasMarkers([]);
+            });
+        return () => { cancelled = true; };
+    }, [execution.upload_id, locale]);
 
     const fetchSession = useCallback((silent = false) => {
         if (!taskId) return;
@@ -1459,6 +1560,10 @@ function TraceDetailView({
                         : execStatus === 'failed' ? t('tracePage.statusFailed')
                         : t('tracePage.statusNormal')
                     }
+                />
+                <ReliabilityAnomalyChip
+                    executionId={String(execution.upload_id || '')}
+                    locale={locale === 'zh' ? 'zh' : 'en'}
                 />
                 {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
 
@@ -1593,6 +1698,7 @@ function TraceDetailView({
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
+                        rasMarkers={rasMarkers}
                     />
                 ) : (
                     <div className="rounded-md border border-card-border bg-card">
@@ -1834,9 +1940,33 @@ function Row({
                     </TruncateText>
                 </Td>
             )}
+            {columnVisibility.ip && (
+                <Td>
+                    <span className="text-xs text-foreground-secondary font-mono whitespace-nowrap" title={e.observedIp || undefined}>
+                        {e.observedIp || '—'}
+                    </span>
+                </Td>
+            )}
             {columnVisibility.status && (
                 <Td>
                     <StatusBadge status={statusKind} label={statusLabel} />
+                </Td>
+            )}
+            {columnVisibility.anomaly && (
+                <Td>
+                    {(() => {
+                        const anomaly = String(e.anomalyStatus ?? e.anomaly_status ?? '');
+                        if (anomaly === 'abnormal') {
+                            return <StatusBadge status="error" label={locale === 'zh' ? '有异常' : 'Abnormal'} />;
+                        }
+                        if (anomaly === 'detecting') {
+                            return <StatusBadge status="running" label={locale === 'zh' ? '检测中' : 'Detecting'} />;
+                        }
+                        if (anomaly === 'normal') {
+                            return <StatusBadge status="success" label={locale === 'zh' ? '无异常' : 'No anomaly'} />;
+                        }
+                        return <span className="text-xs text-foreground-muted">—</span>;
+                    })()}
                 </Td>
             )}
             {columnVisibility.userTags && (

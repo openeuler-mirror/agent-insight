@@ -3,6 +3,7 @@ import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
 import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
+import { resolveTraceClientSnapshot } from '@/lib/reliability/trace-client';
 import { computeCallStats } from '@/lib/fleet/call-stats';
 import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
 import { getModelPricing, calculateCost, getModelContextWindow, DEFAULT_CACHE_READ_RATIO, DEFAULT_CACHE_CREATION_RATIO } from '@/lib/shared/model-config';
@@ -323,6 +324,10 @@ export interface ExecutionRecord {
     model?: string | null;
     /** 真实推理源 URL（scheme://host:port），session↔infra 关联键。 */
     endpoint?: string | null;
+    clientId?: string | null;
+    hostIp?: string | null;
+    hostName?: string | null;
+    observedIp?: string | null;
     agent?: string | null;
     agentName?: string | null;
     agentType?: string | null;
@@ -1435,7 +1440,7 @@ export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
     id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
     toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
     cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
-    timestamp: true, model: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
+    timestamp: true, model: true, clientId: true, hostIp: true, hostName: true, observedIp: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
     isSkillCorrect: true, isAnswerCorrect: true, answerScore: true, skillScore: true, judgmentReason: true,
     failures: true, skillIssues: true, skillVersion: true, label: true, user: true, skillTriggerRate: true,
     parentExecutionId: true, rootExecutionId: true, agentSessionId: true, subagentType: true,
@@ -2323,6 +2328,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             expected_skill_version: dbRecord.expectedSkillVersion ?? null,
             skill_trigger_rate: dbRecord.skillTriggerRate ?? null,
             model: dbRecord.model || undefined,
+            clientId: dbRecord.clientId || undefined,
+            hostIp: dbRecord.hostIp || undefined,
+            hostName: dbRecord.hostName || undefined,
+            observedIp: dbRecord.observedIp || undefined,
             tool_call_count: dbRecord.toolCallCount ?? undefined,
             llm_call_count: dbRecord.llmCallCount ?? undefined,
             input_tokens: dbRecord.inputTokens ?? undefined,
@@ -2367,6 +2376,14 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     }
 
     targetRecord = { ...targetRecord, ...data };
+    const clientSnapshot = resolveTraceClientSnapshot(
+        existingRecord,
+        data,
+    );
+    targetRecord.clientId = clientSnapshot.clientId ?? undefined;
+    targetRecord.hostIp = clientSnapshot.hostIp ?? undefined;
+    targetRecord.hostName = clientSnapshot.hostName ?? undefined;
+    targetRecord.observedIp = clientSnapshot.observedIp ?? undefined;
 
     const guarded = resolveImmutableSkillVersion({
         isUpdate,
@@ -2825,6 +2842,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
             endpoint: normalizeEndpointUrl(targetRecord.endpoint),
+            clientId: targetRecord.clientId,
+            hostIp: targetRecord.hostIp,
+            hostName: targetRecord.hostName,
+            observedIp: targetRecord.observedIp,
             toolCallCount: targetRecord.tool_call_count,
             llmCallCount: targetRecord.llm_call_count,
             inputTokens: targetRecord.input_tokens,
@@ -2863,6 +2884,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
             endpoint: normalizeEndpointUrl(targetRecord.endpoint),
+            clientId: targetRecord.clientId,
+            hostIp: targetRecord.hostIp,
+            hostName: targetRecord.hostName,
+            observedIp: targetRecord.observedIp,
             toolCallCount: targetRecord.tool_call_count,
             llmCallCount: targetRecord.llm_call_count,
             inputTokens: targetRecord.input_tokens,
@@ -2935,6 +2960,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 parentTaskId: targetRecord.task_id,
                 parentFramework: targetRecord.framework,
                 parentUser: targetRecord.user,
+                clientId: targetRecord.clientId,
+                hostIp: targetRecord.hostIp,
+                hostName: targetRecord.hostName,
+                observedIp: targetRecord.observedIp,
                 interactions: mergedInteractionsForSession,
             });
         } catch (e) {
@@ -3061,6 +3090,10 @@ interface DeriveSubagentArgs {
     parentTaskId: string;
     parentFramework?: string | null;
     parentUser?: string | null;
+    clientId?: string | null;
+    hostIp?: string | null;
+    hostName?: string | null;
+    observedIp?: string | null;
     interactions: any[];
 }
 
@@ -3227,7 +3260,7 @@ export function projectAgentNodeExecution(node: AgentNode, interactions: any[]):
  * 同 sessionID 多次 parallel spawn → 合并成同一 execution（取第一次的父）。
  */
 export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promise<void> {
-    const { parentExecutionId, parentTaskId, parentFramework, parentUser, interactions } = args;
+    const { parentExecutionId, parentTaskId, parentFramework, parentUser, clientId, hostIp, hostName, observedIp, interactions } = args;
     if (!Array.isArray(interactions) || interactions.length === 0) return;
 
     const tree = buildAgentCallTree(interactions as any);
@@ -3331,6 +3364,10 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             timestamp,
             agentName: storedAgentName,
             user: parentUser ?? null,
+            clientId: clientId ?? null,
+            hostIp: hostIp ?? null,
+            hostName: hostName ?? null,
+            observedIp: observedIp ?? null,
             query: queryText,
             finalResult: projection.finalResult,
             model: projection.model,
