@@ -372,6 +372,7 @@ describe('文本评估器公式和输出契约', () => {
       return judgeJson('preset-text-format');
     });
     await runTextPreset('preset-text-format', USER, ctx('根据资料 [1]，结论成立。\n[1] 示例资料'));
+    assert.deepEqual(request?.modelOptions, { temperature: 0 });
     assert.match(request?.system ?? '', /引用样式不统一.*minor/);
     assert.match(request?.system ?? '', /引用目标不存在.*moderate.*severe/);
   });
@@ -393,24 +394,46 @@ describe('文本评估器公式和输出契约', () => {
       assert.match(prompt, /“必须判”或“至少判”.*满足锚点时不得自行降档/);
       assert.match(prompt, /输出前最终复核/);
       assert.match(prompt, /初步判断与专用锚点冲突.*修正 severity/);
+      assert.match(prompt, /文字结论为 safe、字段却为 minor\/moderate\/severe.*自相矛盾/);
     }
 
     const aiFlavor = prompts.get('preset-text-ai-flavor') ?? '';
     assert.match(aiFlavor, /孤立出现一次.*公式化元话语.*mechanical_transitions 必须判 minor/);
+    assert.match(aiFlavor, /开头和结尾.*template_opening 与 template_closing 都至少判 moderate/);
+    assert.match(aiFlavor, /占位式默认姓名.*generic_names 必须判 severe/);
 
     const format = prompts.get('preset-text-format') ?? '';
     assert.match(format, /重复编号.*至少判 numbering_continuity 为 moderate/);
+    assert.match(format, /不同层级采用不同编号体系.*列表项或操作步骤/);
+    assert.match(format, /系统性混用.*punctuation_standardization 至少判 moderate/);
+    assert.match(format, /成对标点只有开符号而没有闭符号.*至少判 moderate/);
     assert.match(format, /标题或小节标题.*三种及以上不兼容标记族.*layout_consistency 为 severe/);
+    assert.match(format, /严格 Markdown 表格规范.*完整的起止列界.*tabular_format 至少判 moderate/);
+    assert.match(format, /Markdown 标题标记与不缩进的中文序号标题.*layout_consistency 必须判 severe/);
+    assert.match(format, /三种及以上互不兼容的表示法.*special_format_correctness 至少判 moderate/);
     assert.match(format, /成对三反引号或三波浪线.*边界内部.*强制豁免/);
+    assert.match(format, /理由或总结.*围栏代码块内.*severity 字段必须填写 safe/);
 
     const language = prompts.get('preset-text-language-consistency') ?? '';
     assert.match(language, /外语内容全部属于豁免.*unnecessary_mixing.*code_switch_rationale 必须判 safe/);
     assert.match(language, /成熟本地译名.*必须判 unnecessary_mixing 为 severe/);
+    assert.match(language, /逐字引用外文资料.*相邻位置已用主语言说明.*必须判 safe/);
+    assert.match(language, /少量通用外语寒暄.*必须将 unnecessary_mixing.*判 safe/);
+    assert.match(language, /两种语言提出彼此独立.*bilingual_handling 至少判 moderate/);
+    assert.match(language, /概念名称、简要释义、概括或转述.*必须判 safe/);
+    assert.match(language, /知识性问答中.*原文引述.*具备引用理由/);
 
     const conciseness = prompts.get('preset-text-conciseness') ?? '';
     assert.match(conciseness, /简单事实问题.*其余内容只重复、修饰或主观评价.*expression_efficiency 为 severe/);
-    assert.match(conciseness, /两句及以上不影响结论的背景.*main_focus 为 severe/);
+    assert.match(conciseness, /没有 user_question.*同义强化词.*expression_efficiency 为 severe/);
+    assert.match(conciseness, /答案没有在开头明确给出.*占据回复主要篇幅.*main_focus 为 severe/);
+    assert.match(conciseness, /二元判断或单一事实.*两类及以上可删除的非必要信息.*main_focus 为 severe/);
+    assert.match(conciseness, /reason 或 summary.*答案被多句背景延后.*main_focus.*severe/);
     assert.match(conciseness, /缺少两类及以上信息.*information_completeness 为 severe/);
+    assert.match(conciseness, /任何产品都适用的通用界面动作.*information_completeness 必须判 severe/);
+    assert.match(conciseness, /大部分从句.*导航或点击动作.*expression_efficiency 必须判 moderate/);
+    assert.match(conciseness, /简单比较或单一事实问题.*占回复文字的一半或以上.*main_focus 必须判 severe/);
+    assert.match(conciseness, /没有实质性回答或可执行内容.*main_focus.*severe/);
     assert.match(conciseness, /整体压缩成简短操作路径.*expression_efficiency 为 moderate/);
     assert.match(conciseness, /不得仅因缺少可选替代方案.*information_completeness/);
   });

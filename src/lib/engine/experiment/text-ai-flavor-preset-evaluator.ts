@@ -18,9 +18,11 @@ const DEFINITION = defineTextJudgeDefinition({
   rules: [
     '只评价 agent_output；user_question 仅用于理解文体与服务场景。',
     '模板句偶尔且符合语境时可判 minor；多个模板开头、连接词和结尾叠加时提高严重度。',
+    '当回复开头和结尾都各有一整句或一整段可删除的公式化铺垫/收束，template_opening 与 template_closing 都至少判 moderate；不得只因正文包含有效信息就把两端模板降为 minor。',
     '孤立出现一次、可删除且不增加事实信息、只用于宣布后文重要或提醒读者注意的公式化元话语，mechanical_transitions 必须判 minor；不得因其余文本自然就判 safe。',
     '任何用于引导读者注意后续命题、但删除后命题含义与信息量完全不变的宣告性元话语都命中上述 minor 锚点；不要求重复出现，也不要求形成连接词堆砌。',
     '同类公式化信号反复出现或明显支配段落结构时判 moderate；多个维度共同主导全文时，相应维度可判 severe。',
+    '叙事或示例把占位式默认姓名作为主要人物并反复使用、人物没有可区分语境时，generic_names 必须判 severe；只有单次、附带且不承担主要角色的占位名称才可判 minor。',
     '问题频率、覆盖范围和对读者的实际影响共同决定严重度，不因单个关键词自动扣分。',
   ],
   boundaryRules: [

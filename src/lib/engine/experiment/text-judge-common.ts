@@ -152,6 +152,7 @@ function buildPrompt(definition: TextJudgeDefinition, ctx: FaithfulPresetContext
     '【输出前最终复核】',
     '- 逐条复核判定规则中的“必须判”“至少判”和强制豁免。若初步判断与专用锚点冲突，必须按专用锚点修正 severity 后再输出。',
     '- 若可疑内容完全位于强制豁免范围，相应维度必须改为 safe；若非豁免内容命中不可降档锚点，不得保留 safe 或较轻等级。',
+    '- 最后逐项核对 severity 字段与 quote、reason、suggestion、summary 的文字结论完全一致。若理由写明“豁免”“未发现问题”或“应判 safe”，severity 必须填 safe，且 quote/reason/suggestion 留空；不得出现文字结论为 safe、字段却为 minor/moderate/severe 的自相矛盾输出。',
     '',
     '必须逐一返回全部维度，dimension 只能使用给定英文 key，不能缺失、重复或新增。',
     '非 safe 维度必须提供原文 quote、中文 reason 和可执行 suggestion；safe 维度可为空。',
@@ -191,7 +192,11 @@ export async function runTextJudge(
   if (definition.requiresCaseInput && !ctx.caseInput.trim()) {
     throw new Error(`${definition.title}需要非空用户问题（caseInput）`);
   }
-  const raw = await callJudgeLlm(user, { ...buildPrompt(definition, ctx), sessionTitle: `exp-judge-${definition.id}` });
+  const raw = await callJudgeLlm(user, {
+    ...buildPrompt(definition, ctx),
+    sessionTitle: `exp-judge-${definition.id}`,
+    modelOptions: { temperature: 0 },
+  });
   const { verdicts, summary } = parseVerdicts(raw, definition.dimensions);
   const points = definition.dimensions.map((dimension, index) => {
     const verdict = verdicts[index];
