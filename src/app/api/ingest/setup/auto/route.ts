@@ -9,6 +9,7 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
+import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
 
 // `frameworks` is inserted into generated shell scripts. Keep this an explicit
 // allowlist instead of interpolating arbitrary query values.
@@ -18,6 +19,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'codeagent', label: 'CodeAgent' },
     { value: 'hermes', label: 'Hermes' },
     { value: 'openclaw', label: 'OpenClaw' },
+    { value: 'xiaoo', label: 'xiaoO' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'llamaindex', label: 'LlamaIndex' },
     { value: 'qoder', label: 'Qoder CN product family' },
@@ -25,6 +27,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'actrail', label: 'AcTrail' },
     { value: 'pi-agent', label: 'Pi Agent' },
     { value: 'codex', label: 'Codex' },
+    { value: 'qwencode', label: 'Qwen Code' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -105,6 +108,7 @@ function generateBashScript(
     llamaIndexPythonMode: string,
 ): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const packageSpec = getAgentInsightClientPackageSpec();
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
     const frameworksPreselected = preselected.length > 0;
     const script = `#!/bin/bash
@@ -115,7 +119,10 @@ function generateBashScript(
 AGENT_INSIGHT_HOST="${bashDoubleQuoted(hostParam)}"
 AGENT_INSIGHT_BASE_URL="${bashDoubleQuoted(baseUrl)}"
 AGENT_INSIGHT_API_KEY="${bashDoubleQuoted(apiKey)}"
+AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
+
+${getAgentInsightRasBashInstaller()}
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -175,6 +182,7 @@ const frameworks = [
     { name: 'CodeAgent', value: 'codeagent' },
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
+    { name: 'xiaoO', value: 'xiaoo' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
     { name: 'LlamaIndex', value: 'llamaindex' },
     { name: 'Qoder CN product family', value: 'qoder' },
@@ -253,6 +261,7 @@ INSTALL_CLAUDE=false
 INSTALL_CODEAGENT=false
 INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
+INSTALL_XIAOO=false
 INSTALL_JIUWEN=false
 INSTALL_LLAMAINDEX=false
 LLAMAINDEX_READY=false
@@ -278,6 +287,9 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"openclaw"* ]]; then
     INSTALL_OPENCLAW=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"xiaoo"* ]]; then
+    INSTALL_XIAOO=true
+fi
 if [[ "$SELECTED_FRAMEWORKS" == *"jiuwen"* ]]; then
     INSTALL_JIUWEN=true
 fi
@@ -301,7 +313,7 @@ if [[ "$SELECTED_FRAMEWORKS" == *"qwencode"* ]]; then
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -704,6 +716,12 @@ if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER"
     if ! sh "$PI_INSTALLER"; then rm -f "$PI_INSTALLER"; exit 1; fi
     rm -f "$PI_INSTALLER"
+fi
+
+# 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
+if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
+    echo "🛡️  Installing Agent RAS runtime..."
+    install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
 fi
 
 # 6.35 Install Qoder CN product-family collectors
@@ -1144,6 +1162,7 @@ function generatePowerShellScript(
         '    "    { name: \'CodeAgent\', value: \'codeagent\' },"',
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
+        '    "    { name: \'xiaoO\', value: \'xiaoo\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
         '    "    { name: \'LlamaIndex\', value: \'llamaindex\' },"',
         '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
@@ -1225,6 +1244,7 @@ function generatePowerShellScript(
         '$INSTALL_CODEAGENT = $false',
         '$INSTALL_HERMES = $false',
         '$INSTALL_OPENCLAW = $false',
+        '$INSTALL_XIAOO = $false',
         '$INSTALL_JIUWEN = $false',
         '$INSTALL_LLAMAINDEX = $false',
         '$LLAMAINDEX_READY = $false',
@@ -1249,6 +1269,9 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "openclaw") {',
         '    $INSTALL_OPENCLAW = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "xiaoo") {',
+        '    $INSTALL_XIAOO = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "jiuwen") {',
         '    $INSTALL_JIUWEN = $true',
         '}',
@@ -1272,7 +1295,7 @@ function generatePowerShellScript(
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1676,6 +1699,12 @@ function generatePowerShellScript(
         '    } finally {',
         '        Remove-Item -LiteralPath $piInstaller -Force -ErrorAction SilentlyContinue',
         '    }',
+        '}',
+        '',
+        '# 6.34 Agent RAS (Windows host): inproc requires Linux/macOS; use WSL on Windows',
+        'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW -or $INSTALL_XIAOO) {',
+        '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
+        '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
         '}',
         '',
         '# 6.35 Install Qoder CN product-family collectors',
