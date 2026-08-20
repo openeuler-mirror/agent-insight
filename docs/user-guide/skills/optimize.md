@@ -5,7 +5,7 @@ description: "基于线上问题与评测证据迭代已发布 Skill"
 
 # Skills 优化
 
-Skills 优化是 Agent Insight 在「Skills 能力」中的闭环改进模块，用于把线上真实运行中暴露出来的问题，转化为对已有 Skill 的定向修改，并产出新的候选版本。
+Skills 优化是 Agent Insight 在「持续优化 → Skill」工作区中的优化页签，用于把线上真实运行中暴露出来的问题，转化为对已有 Skill 的定向修改，并产出新的候选版本。
 
 它不是从零重新写一个 Skill，而是基于现有版本、结合观测证据、通过自动化优化 Agent 完成一次可追踪、可评审、可发布的迭代。
 
@@ -14,9 +14,9 @@ Skills 优化是 Agent Insight 在「Skills 能力」中的闭环改进模块，
 > 先看到真实问题，再决定改什么，通常比“凭感觉重写一遍”更稳定。
 
 - **适用对象**：Agent 运维、Prompt 工程师、平台管理员
-- **模块路径**：`Skills 能力 -> Skills 优化`
+- **模块路径**：`持续优化 -> Skill -> 优化`
 
-在 Skills 能力体系中，它通常处于这条链路的末端：
+在 Skill 工作区中，它通常处于这条链路的末端：
 
 `运行观测 -> 质量监控 / 智能诊断 -> Skills 优化 -> 新版本发布 -> 再观测`
 
@@ -242,4 +242,4 @@ Skills 优化负责把“发现问题”推进到“落地修复”。如果说 
 - 想先定位问题证据： [Skills 评测总览](./evaluation/overview)
 - 想查看和管理 Skill 资产： [Skills 管理](./manage)
 - 想从需求重新起草 Skill： [Skills 生成](./generate)
-- 想回到 Skills 模块总览： [Skills 能力](./index)
+- 想回到 Skill 工作区总览： [持续优化 · Skill](./index)
