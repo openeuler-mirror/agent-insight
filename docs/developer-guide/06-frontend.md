@@ -9,7 +9,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 |---|---|---|
 | `/` | `Home` (`src/app/page.tsx`) | 落地页 / 重定向 |
 | `/login` | `LoginPage` (`src/app/login/page.tsx`) | 邮箱登录 |
-| `/(main)/dashboard` | `DashboardPage` (`(main)/dashboard/page.tsx`) | 概览：健康度、趋势、告警、agents |
+| `/(main)/dashboard` | `DashboardPage` (`(main)/dashboard/page.tsx`) | 概览：健康度、趋势、RAS 可靠性、性能、模型/工具/Agent/编排监控 |
 | `/(main)/quickstart` | `QuickstartPage` (`(main)/quickstart/page.tsx`) | 五阶段推荐使用路径与现有模块入口 |
 | `/(main)/agents` | `AgentsPage` (`(main)/agents/page.tsx`) | 已注册/已观测的 agents |
 | `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；列表由服务端过滤、排序和数据库分页，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
@@ -27,6 +27,8 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/details`, `/skill-detail` | `DetailPage`, `SkillDetailPage` | 可分享的详情视图 |
 
 API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-file-map.md](03-file-map.md#api-routes-srcappapi--grouped)。
+
+仪表盘按页签懒加载数据。`/api/fleet/trends` 提供常驻健康总览和系统趋势；`/api/fleet/reliability` 将窗口内 root Execution 与 `RasAnomalyEvent` 按 taskId 关联，支持 `platform` / `agent` 筛选并返回 RAS KPI、趋势、恢复结果、最高 severity 分布、故障模式、Agent 聚合和近期故障 Trace。无 RAS anomaly 的 Trace 按无故障统计；只有 recoveryOutcome=success 才算已恢复。接口同时返回单独标注来源的 Execution/Judge 失败补充，不把它们并入 RAS KPI。`/api/fleet/breakdowns` 的 `performance` 字段只承载端到端时延、上下文峰值和慢 Trace，其余 model/tool/agent/orchestration 契约保持不变。
 
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 

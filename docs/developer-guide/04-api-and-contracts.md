@@ -56,6 +56,12 @@
 - **Trace user-tag filter**: `/api/observe/data` 的 `tagIds` 接收逗号分隔的最多 20 个版本标签或业务标签 ID；标签必须属于当前用户，多个标签使用 AND 语义。旧 `bizTag` 参数继续兼容，仅匹配业务标签，逗号分隔的多个值保持 OR 语义；同时传入时以 `tagIds` 为准。
 - **Trace detail loading**: `/api/observe/session` 默认或 `view=full` 保持完整 Session 契约；`view=structure` 返回可建树的轻量 interactions，并在 Langfuse Session 上附加完整 `langfuseTraceNodes`；`view=interaction&index=N` 返回单条完整 interaction，`view=interactions` 在 Prompt/Timeline/搜索确需完整上下文时按需返回全部 interactions。长正文不在存储层截断。Trace 页面与抽屉会把 `Execution.framework` 传给 `AgentTraceView`；`langfuse-langgraph` 使用框架级 `SmartViewerConfigProvider` 将其中所有 JSON 树默认设为完全展开，其他框架保留共享渲染器的两层折叠默认值。
 
+### `GET /api/fleet/reliability` / `GET /api/fleet/breakdowns`
+
+- **可靠性查询**：`GET /api/fleet/reliability?window=1d|1w|1m&user=&platform=&agent=`。服务端只读取窗口内 root Execution，再按 `taskId` 分批关联 `RasAnomalyEvent`；响应包含 `filters`、`kpi`、`trend`、`recovery`、`severity`、`modes`、`agents`、`failureSupplement` 和 `recentFaultTraces`。
+- **可靠性口径**：无 RAS anomaly 的 Trace（观察列表中的 `anomalyStatus=unknown`）算无故障；同一 Trace 的 severity 取 `critical > high > medium > low` 的最高值，故障但缺 severity 归“未标注”；只有 RAS 摘要的 `recoveryOutcome=success` 算已恢复，failed/unknown/none 都算未恢复。`failureSupplement` 来自 Execution 硬错误、callStats 和 Judge failures，不进入 RAS KPI。
+- **性能查询**：`GET /api/fleet/breakdowns` 的 `performance` 字段返回 `latHist/latP50/latP95/ctxHist/slowTraces`；慢 Trace 包含 `platform`。原混合 `reliability` 字段不再返回，模型、工具、Agent、编排以及 `callStatsCoverage` 字段保持原契约。
+
 ### `GET /api/experiments/agents` / `GET /api/experiments/traces`
 - **Agent candidates**: `src/app/api/experiments/agents/route.ts` 将两类来源按 Agent 名合并：当前用户 root Trace 中的用户归属 Agent，以及 `listWorkerExecutionTargets` 从全部在线客户端 inventory 展开的可执行 Agent。历史 Trace 仍通过 `buildExecutionOwnershipWhere('user')` 排除 `RegisteredAgent.agentOwnership='system'` 与内置系统 Agent；`ras-judge` 不进入可执行候选。每项返回 `name`、`traces`、`frameworks`、`executable` 和逐客户端 `targets[]`；target 包含 `workerId`、显示 IP、平台、该主机模型列表与最后心跳时间。总数上限 50。
 - **Location**: `src/app/api/experiments/traces/route.ts`
