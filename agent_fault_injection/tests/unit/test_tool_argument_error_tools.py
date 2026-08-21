@@ -1,8 +1,3 @@
-import hashlib
-import json
-import subprocess
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,12 +7,6 @@ from agent_fault_injection.fault_inject.catalog.presentation import (
     load_fault_ui_catalog,
     resolve_fault_labels,
 )
-
-
-FIXTURE_CONTENT = {
-    "a.txt": "TARGET FILE\nrequest-id: A-001\n",
-    "b.txt": "DECOY FILE\nrequest-id: B-002\n",
-}
 
 
 class ToolArgumentErrorToolTests(unittest.TestCase):
@@ -33,82 +22,22 @@ class ToolArgumentErrorToolTests(unittest.TestCase):
             / "agent-fault-injection.ts"
         )
 
-    def _run_verifier(
-        self,
-        workspace: Path,
-    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, str(self.tools["verify_order_argument.py"])],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    def _write_native_run(
-        self,
-        workspace: Path,
-        *,
-        selected_txt: str,
-        call_count: int = 1,
-    ) -> None:
-        output = workspace / "tool-argument-error-output"
-        fixtures = output / "fixtures"
-        fixtures.mkdir(parents=True)
-        for filename, content in FIXTURE_CONTENT.items():
-            (fixtures / filename).write_text(content, encoding="utf-8")
-
-        selected_content = FIXTURE_CONTENT[selected_txt].encode()
-        file_info = {
-            "txt": selected_txt,
-            "size_bytes": len(selected_content),
-            "sha256": hashlib.sha256(selected_content).hexdigest(),
-            "preview": selected_content.decode().splitlines()[0],
-        }
-        events = []
-        for sequence in range(1, call_count + 1):
-            events.append(
-                {
-                    "sequence": sequence,
-                    "type": "tool_call",
-                    "expected_tool": "order",
-                    "actual_tool": "order",
-                    "tool_matches": True,
-                    "expected_arguments": {"txt": "a.txt"},
-                    "actual_arguments": {"txt": selected_txt},
-                    "argument_schema_valid": True,
-                    "argument_value_matches": selected_txt == "a.txt",
-                    "tool_succeeded": True,
-                    "file_info": file_info,
-                }
-            )
-        (output / "events.jsonl").write_text(
-            "".join(json.dumps(event) + "\n" for event in events),
-            encoding="utf-8",
-        )
-        result = {
-            "schema_version": 1,
-            "completed": True,
-            "call_count": call_count,
-            **events[-1],
-        }
-        (output / "result.json").write_text(
-            json.dumps(result) + "\n",
-            encoding="utf-8",
-        )
-
-    def test_registry_keeps_only_the_verifier_hidden(self) -> None:
+    def test_registry_has_no_injected_tools(self) -> None:
         self.assertEqual(self.fault.skill_name, "ras-tool-argument-error")
-        self.assertEqual(
-            tuple(path.name for path in self.fault.tool_files),
-            ("verify_order_argument.py",),
-        )
+        self.assertEqual(self.fault.tool_files, ())
         self.assertEqual(self.fault.agent_tool_files, ())
-        self.assertIsNotNone(self.fault.authoritative_verifier_command)
+        self.assertEqual(len(self.fault.injection_runtime), 1)
         self.assertEqual(
-            Path(self.fault.authoritative_verifier_command[1]).name,
-            "verify_order_argument.py",
+            self.fault.injection_runtime[0].when_map(),
+            {"tool": "order", "call_index": 1},
         )
+
+    def test_hidden_task_keeps_fault_constraints_out_of_prompt(self) -> None:
+        self.assertIn("读取一次 a.txt", self.fault.task_prompt or "")
+        self.assertNotIn("不再调用工具、复核或继续思考", self.fault.task_prompt or "")
+        skill = self.fault.skill_file.read_text(encoding="utf-8")
+        self.assertIn("调用次数必须恰好为 1", skill)
+        self.assertIn("禁止第二次工具调用", skill)
 
     def test_skill_exposes_one_native_argument_submode(self) -> None:
         submodes = parse_skill_submodes(self.fault.skill_file)
@@ -139,40 +68,17 @@ class ToolArgumentErrorToolTests(unittest.TestCase):
         self.assertIn('.enum(["a.txt", "b.txt"])', content)
         self.assertIn("actual_arguments: { txt: args.txt }", content)
 
-    def test_healthy_native_a_txt_call_passes_verifier(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            self._write_native_run(workspace, selected_txt="a.txt")
+    def test_native_order_returns_only_success_to_the_agent(self) -> None:
+        content = self.plugin_source.read_text(encoding="utf-8")
+        return_block = content.split(
+            'await record("native.order.executed", event)', 1
+        )[1].split("            },", 1)[0]
 
-            verification = self._run_verifier(workspace)
-            self.assertEqual(verification.returncode, 0, verification.stdout)
-            self.assertIn("argument verification succeeded", verification.stdout)
-
-    def test_native_b_txt_call_succeeds_but_fails_verifier(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            self._write_native_run(workspace, selected_txt="b.txt")
-
-            verification = self._run_verifier(workspace)
-            self.assertEqual(verification.returncode, 1)
-            self.assertIn(
-                "tool argument mismatch: expected 'a.txt', got 'b.txt'",
-                verification.stdout,
-            )
-
-    def test_verifier_rejects_more_than_one_native_order_call(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            self._write_native_run(
-                workspace,
-                selected_txt="a.txt",
-                call_count=2,
-            )
-
-            verification = self._run_verifier(workspace)
-            self.assertEqual(verification.returncode, 1)
-            self.assertIn("expected one native tool call", verification.stdout)
-
+        self.assertIn('title: "工具调用成功"', return_block)
+        self.assertIn('output: "工具调用成功"', return_block)
+        self.assertIn("metadata: { completed: true }", return_block)
+        self.assertNotIn("JSON.stringify(result", return_block)
+        self.assertNotIn("metadata: event", return_block)
 
 if __name__ == "__main__":
     unittest.main()

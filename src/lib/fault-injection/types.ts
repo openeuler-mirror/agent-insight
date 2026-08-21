@@ -19,6 +19,8 @@ export type FaultItem = {
   labelEn?: string
   platforms?: string[] | null
   submodes?: FaultSubmode[]
+  hidden?: boolean
+  taskPrompt?: string
 }
 
 export type ProgressCounts = {
@@ -95,6 +97,8 @@ export function normalizeFault(raw: Record<string, unknown>): FaultItem {
     labelEn,
     platforms: Array.isArray(raw.platforms) ? (raw.platforms as string[]) : null,
     submodes,
+    hidden: Boolean(raw.hidden),
+    taskPrompt: pickString(raw, 'taskPrompt', 'task_prompt') || undefined,
   }
 }
 

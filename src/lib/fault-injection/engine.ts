@@ -35,6 +35,7 @@ from agent_fault_injection.fault_inject.catalog.presentation import (
     resolve_fault_platforms,
     resolve_fault_submodes,
 )
+from agent_fault_injection.platform_adapters.lifecycle import should_expose_fault_skill
 reg = FaultRegistry()
 catalog = get_fault_ui_catalog()
 rows = []
@@ -68,6 +69,8 @@ for name in catalog.ordered_ids(list(reg.names())):
         "labelEn": label_en,
         "label_en": label_en,
         "submodes": submodes,
+        "taskPrompt": getattr(fault, "task_prompt", None),
+        "hidden": not should_expose_fault_skill(fault),
     })
 print(json.dumps(rows, ensure_ascii=False))
 `

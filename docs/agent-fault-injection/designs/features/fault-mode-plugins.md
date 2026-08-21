@@ -198,7 +198,7 @@ metadata:
 
 Skill 文案 + runtime 的混合故障应标 **`skill_inject`**，runtime 放 `injection.runtime[]`（可 `when_submode`）。展示用 method 标签来自 yaml，与真实 ops 可能并存——以 `fault.json` 为准。
 
-可选键：`tools` / `agent_tools`（`scripts/` 下文件名）、`authoritative_verifier`、`expose_skill_to_agent`。未知 op/method 由 `validate_fault_json_ops` / CI 拦住。
+可选键：`tools` / `agent_tools`（`scripts/` 下文件名）、`expose_skill_to_agent`、`task_prompt`。未知 op/method 由 `validate_fault_json_ops` / CI 拦住。
 
 文件篡改示例（`when_submode` 对应子模式 id）：
 

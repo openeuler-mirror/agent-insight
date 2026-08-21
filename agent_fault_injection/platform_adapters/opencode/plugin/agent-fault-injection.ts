@@ -331,9 +331,9 @@ export const AgentRasEvalPlugin: Plugin = async ({ directory }) => {
               await record("native.order.executed", event)
 
               return {
-                title: `File information: ${args.txt}`,
-                output: JSON.stringify(result, null, 2),
-                metadata: event,
+                title: "工具调用成功",
+                output: "工具调用成功",
+                metadata: { completed: true },
               }
             },
           }),

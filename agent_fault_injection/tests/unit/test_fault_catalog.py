@@ -121,7 +121,6 @@ class FaultCatalogTests(TestCase):
             self.assertEqual(fault.skill_name, "demo-fault")
             self.assertEqual(fault.description, "来自 SKILL 的中文说明")
             self.assertEqual(fault.tool_files, ())
-            self.assertIsNone(fault.authoritative_verifier_command)
 
     def test_rejects_manifest_tool_that_does_not_exist(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -151,90 +150,3 @@ class FaultCatalogTests(TestCase):
                 "Fault tool does not exist",
             ):
                 FaultRegistry(root / "skills")
-
-    def test_rejects_verifier_reference_to_undeclared_tool(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            fault_dir = root / "skills" / "tool-timeout"
-            scripts_dir = fault_dir / "scripts"
-            fault_dir.mkdir(parents=True)
-            scripts_dir.mkdir(parents=True)
-            skill = self._skill(root)
-            (fault_dir / "SKILL.md").write_text(
-                skill.read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-            (scripts_dir / "probe.sh").write_text(
-                "#!/bin/sh\nexit 0\n",
-                encoding="utf-8",
-            )
-            (fault_dir / "fault.json").write_text(
-                json.dumps(
-                    {
-                        "name": "tool-timeout",
-                        "skill_name": "ras-tool-timeout",
-                        "category": "tool",
-                        "description": "Inject one controlled timeout.",
-                        "tools": ["probe.sh"],
-                        "authoritative_verifier": {
-                            "command": ["{tool:missing.sh}"],
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(
-                ConfigurationError,
-                "references undeclared tool",
-            ):
-                FaultRegistry(root / "skills")
-
-    def test_resolves_non_python_authoritative_tool_command(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            fault_dir = root / "skills" / "tool-timeout"
-            scripts_dir = fault_dir / "scripts"
-            fault_dir.mkdir(parents=True)
-            scripts_dir.mkdir(parents=True)
-            skill = self._skill(root)
-            (fault_dir / "SKILL.md").write_text(
-                skill.read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-            probe = scripts_dir / "probe.sh"
-            probe.write_text(
-                "#!/bin/sh\nexit 0\n",
-                encoding="utf-8",
-            )
-            (fault_dir / "fault.json").write_text(
-                json.dumps(
-                    {
-                        "name": "tool-timeout",
-                        "skill_name": "ras-tool-timeout",
-                        "category": "tool",
-                        "description": "Inject one controlled timeout.",
-                        "tools": ["probe.sh"],
-                        "authoritative_verifier": {
-                            "command": [
-                                "{tool:probe.sh}",
-                                "--mode",
-                                "check",
-                            ],
-                            "timeout_seconds": 7,
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            fault = FaultRegistry(root / "skills").get("tool-timeout")
-
-            self.assertEqual(
-                fault.authoritative_verifier_command,
-                (str(probe.resolve()), "--mode", "check"),
-            )
-            self.assertEqual(
-                fault.authoritative_verifier_timeout_seconds,
-                7,
-            )

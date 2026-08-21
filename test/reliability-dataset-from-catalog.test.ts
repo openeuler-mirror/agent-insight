@@ -83,3 +83,33 @@ test('buildCasesFromCatalog emits one case per expanded row with composeFaultPro
   assert.equal(cases[2].values?.submode, undefined)
   assert.equal(cases[2].input, '使用 ras-tool-selection-error 技能。')
 })
+
+test('composeFaultPrompt uses taskPrompt for hidden faults instead of skill name', () => {
+  const hidden = composeFaultPrompt({
+    skillName: 'ras-skill-selection-conflict',
+    basePrompt: '',
+    submode: { id: '1', name: '代码审查语义诱馅' },
+    hidden: true,
+    taskPrompt: 'Review the code quality of target.py.',
+  })
+  assert.equal(hidden, 'Review the code quality of target.py.')
+  assert.ok(!hidden.includes('ras-skill-selection-conflict'))
+
+  // Hidden without taskPrompt falls back to submode name
+  const noTask = composeFaultPrompt({
+    skillName: 'ras-skill-selection-conflict',
+    basePrompt: '',
+    submode: { id: '1', name: 'fallback' },
+    hidden: true,
+  })
+  assert.equal(noTask, 'fallback')
+
+  // Non-hidden fault still uses skill template
+  const normal = composeFaultPrompt({
+    skillName: 'thinking-dead-loop',
+    basePrompt: '',
+    submode: { id: '2', name: '逻辑死循环' },
+  })
+  assert.ok(normal.includes('thinking-dead-loop'))
+  assert.ok(normal.includes('执行'))
+})

@@ -3,7 +3,7 @@
 > **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](../../../../agent_fault_injection/) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。
 
 
-> 权威发现方式：`python -m agent_fault_injection.cli fault list`。每个故障目录**必须**含 `SKILL.md`（YAML frontmatter 必填 `name` / `description`）。多数故障仅需该文件；若需声明 tools / `agent_tools` / `authoritative_verifier`，可另加**可选**的 `fault.json`。  
+> 权威发现方式：`python -m agent_fault_injection.cli fault list`。每个故障目录**必须**含 `SKILL.md`（YAML frontmatter 必填 `name` / `description`）。多数故障仅需该文件；若需声明 tools / `agent_tools` 或机械注入步骤，可另加**可选**的 `fault.json`。
 > 子模式由 `fault_inject/catalog/scenarios.py` 从「场景总览」表或 `## 场景N：…` 标题解析；Insight 建任务用 TS `compose-prompt.ts` 合成用户任务。  
 > 注入方式 key（`injection_method`）：`skill_inject` / `file_tamper` / `prompt_modify` / `tool_result_tamper` / `intercept_rewrite`；无旧版别名。纯 Skill 故障默认 `skill_inject`。展示标签见各 `skills/*/SKILL.md` 的 `metadata`；method 中文名见 `capability_api.yaml`。
 
@@ -16,11 +16,12 @@
 | `step-omission` | `ras-step-omission` | 1 → beta 文件遗漏 | 计划正确、执行跳步 | Insight FI 任务表单 |
 | `step-order-error` | `ras-step-order-error` | 1 → beta 先于 alpha | 计划正确、执行错序 | Insight FI 任务表单 |
 | `tool-selection-error` | `ras-tool-selection-error` | 见 Skill 场景一 / 场景二 | 工具选择错误 | — |
-| `skill-selection-conflict` | `ras-skill-selection-conflict` | 1 → 代码审查语义诱饵 | Skill 选择冲突（`assistant.tool_call.replace_argument`） | Insight FI 任务表单 |
-| `tool-argument-error` | `ras-tool-argument-error` | 1 → 文件名参数替换 | 工具参数错误（intercept_rewrite） | Insight FI 任务表单 |
+| `skill-selection-conflict` | `ras-skill-selection-conflict` | 1 → 代码审查语义诱饵 | 第一次 Skill 选择改写，错误 Skill 返回后立即收尾 | Insight FI 任务表单 |
+| `tool-argument-error` | `ras-tool-argument-error` | 1 → 文件名参数替换 | 第一次工具参数改写，错误调用返回后立即收尾 | Insight FI 任务表单 |
+| `skill-rule-conflict` | `ras-skill-rule-conflict` | 1 → CSV 规范化冲突 | 两个业务 Skill 规则矛盾；强制执行完整 `init → normalize → analyze → finish` 流水线 | Insight FI 任务表单 |
 | `planning-logic-error` | `ras-planning-logic-error` | 1 → 依赖颠倒；2 → 环依赖；3 → 步骤缺失；4 → 规划约束冲突 | Planning Logic Error | Insight FI 任务表单 |
-| `unverified-success` | `ras-two-condition-test` | —（协议型，无子模式表） | 未经验证的成功；可选 `fault.json` + tools + 权威 verifier | — |
-| `execution-goal-drift` | `ras-routing-continuity-test` | 1 → 跨阶段批次连续性 | 执行目标漂移；可选 `fault.json` + tools + 权威 verifier | — |
+| `unverified-success` | `ras-two-condition-test` | —（协议型，无子模式表） | 未经验证的成功；可选 `fault.json` + Agent 工具 | — |
+| `execution-goal-drift` | `ras-routing-continuity-test` | 1 → 跨阶段批次连续性 | 执行目标漂移；可选 `fault.json` + Agent 工具 | — |
 | `memory-noise-interference` | `ras-memory-noise-interference` | 1–3 → 无关历史 / 冲突事实 / 错误响应；4 → 会话记忆虚假先验 | 记忆噪声干扰 | Insight FI 任务表单 |
 | `memory-file-loss` | `ras-memory-file-loss` | 1 → 删除全文；2 → 删除约束段 | 记忆文件丢失（文件篡改） | Insight FI 任务表单 |
 | `tool-observation-delta` | `ras-tool-observation-delta` | 1 → 工具观测似真偏移 | 工具噪声干扰 | Insight FI 任务表单 |
