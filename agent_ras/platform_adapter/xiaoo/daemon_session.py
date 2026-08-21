@@ -143,12 +143,7 @@ class DaemonRasSession:
         self.daemon = XiaooDaemonClient(
             base_url, client_id=client_id, timeout_seconds=timeout_seconds
         )
-        self.hello_config = hello_config or {
-            "detection_start_chars": 300,
-            "window_max_chars": 1000,
-            "loop_repeat_threshold": 5,
-            "semantic_content_enabled": False,
-        }
+        self.hello_config = hello_config or {}
         self._lock = threading.Lock()
         self._stop_stream = False
         self._sse_active = False

@@ -389,12 +389,10 @@ def sync_capability_config_from_insight(
 
 
 def load_hello_config_from_ras_config(ras_home: Path | None = None) -> dict[str, Any]:
-    """Build SessionHub hello payload from local config.json.
+    """Build SessionHub hello payload from the local runtime config copy.
 
     Prefers ``platforms.xiaoo``; falls back to legacy top-level detectors.
-    ``semantic_content_enabled`` is passed through (default true; explicit false
-    turns L3 off). xiaoO uses the same HostCallback + ``skill_result`` path as
-    OpenCode. Env overrides still win for the classic RAS_* knobs when set.
+    Nested ``detectors.<id>`` is passed through as-is (no env field-name overlay).
     """
     config_path = resolve_config_path(ras_home)
     detectors: dict[str, dict[str, Any]] = {}
@@ -417,25 +415,6 @@ def load_hello_config_from_ras_config(ras_home: Path | None = None) -> dict[str,
                     notify = recovery["notify_user_on_warning"]
         except Exception:
             detectors = {}
-
-    def _env_int(name: str, default: int | None = None) -> int | None:
-        raw = os.environ.get(name)
-        if raw is None or raw == "":
-            return default
-        try:
-            return int(raw)
-        except ValueError:
-            return default
-
-    deprecated_fields = {
-        "detection_start_chars": _env_int("RAS_DETECTION_START_CHARS"),
-        "window_max_chars": _env_int("RAS_WINDOW_MAX_CHARS"),
-        "loop_repeat_threshold": _env_int("RAS_LOOP_REPEAT_THRESHOLD"),
-    }
-    for cfg in detectors.values():
-        for field, value in deprecated_fields.items():
-            if value is not None and field in cfg:
-                cfg[field] = value
 
     payload: dict[str, Any] = {
         "detectors": _copy_detector_map(detectors),
