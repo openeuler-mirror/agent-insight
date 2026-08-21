@@ -40,12 +40,14 @@
 Run:
 
 ```bash
-curl -fsS 'http://127.0.0.1:3100/api/health'
+curl -fsS -o /dev/null -w '%{http_code}\n' \
+  'http://127.0.0.1:3100/api/skills?user=deepseek-harness-e2e%40local.test'
 /Users/guoyichen/.npm-global/bin/dsh --version
-curl -fsS 'http://127.0.0.1:3100/api/model-config?user=deepseek-harness-e2e%40local.test'
+curl -fsS 'http://127.0.0.1:3100/api/eval/settings?user=deepseek-harness-e2e%40local.test' \
+  | jq '{activeConfigId, autoEvaluationEnabled, configs: [.configs[] | {id, name, provider, model, baseUrlPresent: ((.baseUrl // "") | length > 0), apiKeyPresent: ((.apiKey // "") | length > 0)}]}'
 ```
 
-Expected: 服务返回成功；DSH 为 upstream master 安装得到的 `0.1.0-rc.8` 或当前已验证 commit 对应版本；模型响应只确认 active provider/model，不打印密钥字段。
+Expected: 平台 API 返回 HTTP 200；DSH 为 upstream master 安装得到的 `0.1.0-rc.8` 或当前已验证 commit 对应版本；模型响应只确认 active provider/model 和密钥是否存在，不打印密钥字段。
 
 **Step 2: 创建隔离项目并转换 Skill 发现目录**
 
