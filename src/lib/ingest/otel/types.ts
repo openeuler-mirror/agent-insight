@@ -6,6 +6,11 @@ export type OtelTraceEvent = {
   traceId?: string;
   spanId?: string;
   parentSpanId?: string;
+  links?: Array<{
+    traceId?: string;
+    spanId?: string;
+    attributes: Record<string, any>;
+  }>;
   name?: string;
   kind: 'llm' | 'tool' | 'agent' | 'chain' | 'span';
   serviceName: string;
