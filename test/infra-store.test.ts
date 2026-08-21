@@ -13,7 +13,13 @@ function sample(tsMs: number): InfraMetricSample {
     model: 'M',
     gauges: { 'vllm:num_requests_running': 3 },
     counters: { 'vllm:generation_tokens_total': 1000 },
-    histograms: { 'vllm:time_to_first_token_seconds': { buckets: [{ le: 1, count: 2 }], sum: 1.5, count: 2 } },
+    // 末桶 le=+Inf 是 vLLM 直方图的真实形态，务必留着：JSON.stringify(Infinity) 是 'null'，
+    // 这个 fixture 正好让「往返保真」用例守住 +Inf 被落库吃掉的回归。
+    histograms: {
+      'vllm:time_to_first_token_seconds': {
+        buckets: [{ le: 1, count: 2 }, { le: Infinity, count: 2 }], sum: 1.5, count: 2,
+      },
+    },
     waitingByReason: { capacity: 1 },
   };
 }
@@ -28,6 +34,15 @@ test('serialize/deserialize 往返保真', () => {
   assert.deepEqual(back.counters, s.counters);
   assert.deepEqual(back.histograms, s.histograms);
   assert.deepEqual(back.waitingByReason, s.waitingByReason);
+});
+
+test('反序列化把 +Inf 桶还原回来（JSON 会把 Infinity 存成 null）', () => {
+  const row = serializeSample('src1', sample(1));
+  assert.match(row.histograms, /"le":null/, '前提：落库 JSON 里 +Inf 确实变成了 null');
+
+  const back = deserializeRow({ ...row, source: null });
+  const buckets = back.histograms['vllm:time_to_first_token_seconds'].buckets;
+  assert.equal(buckets[buckets.length - 1].le, Infinity, '读回来必须还原成 +Inf，否则分位算法会把它当 0');
 });
 
 test('DB 往返：ensureSource + saveSample + 窗口查询', async () => {

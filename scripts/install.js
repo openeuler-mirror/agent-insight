@@ -96,13 +96,18 @@ async function getApiKey(port) {
   })
 }
 
-async function callAutoSetup(port, apiKey) {
+async function callAutoSetup(port, apiKey, frameworks) {
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32'
+    const setupParams = new URLSearchParams({
+      apiKey,
+      host: `localhost:${port}`
+    })
+    if (frameworks) setupParams.set('frameworks', frameworks)
     const options = {
       hostname: 'localhost',
       port: port,
-      path: `/api/setup/auto?apiKey=${encodeURIComponent(apiKey)}&host=localhost:${port}`,
+      path: `/api/setup/auto?${setupParams.toString()}`,
       method: 'GET',
       headers: {
         'x-platform': isWindows ? 'windows' : 'unix'
@@ -127,6 +132,23 @@ async function callAutoSetup(port, apiKey) {
 
     req.end()
   })
+}
+
+function isCurrentPackageInstalledInCwd() {
+  const packageRoot = path.resolve(__dirname, '..')
+  const installedRoot = path.join(process.cwd(), 'node_modules', 'agent-insight')
+  try {
+    return fs.realpathSync(packageRoot) === fs.realpathSync(installedRoot)
+  } catch (error) {
+    if (!['ENOSYS', 'EPERM', 'EACCES'].includes(error?.code)) return false
+    try {
+      const packageStat = fs.statSync(packageRoot)
+      const installedStat = fs.statSync(installedRoot)
+      return packageStat.dev === installedStat.dev && packageStat.ino === installedStat.ino
+    } catch {
+      return path.resolve(packageRoot) === path.resolve(installedRoot)
+    }
+  }
 }
 
 async function run(options = {}) {
@@ -181,12 +203,16 @@ async function run(options = {}) {
     console.log('   📄 当前目录无 package.json，已生成最小清单，安装将固定在本目录')
   }
 
-  try {
-    await runCommand('npm install agent-insight', { silent: true })
-    console.log('   ✅ npm 包安装成功\n')
-  } catch (error) {
-    errors.push({ step: 1, message: `npm install 失败: ${error.message}` })
-    console.log(`   ❌ npm 包安装失败: ${error.message}\n`)
+  if (isCurrentPackageInstalledInCwd()) {
+    console.log('   ✅ 当前目录已安装正在运行的 agent-insight，本地包保持不变\n')
+  } else {
+    try {
+      await runCommand('npm install agent-insight', { silent: true })
+      console.log('   ✅ npm 包安装成功\n')
+    } catch (error) {
+      errors.push({ step: 1, message: `npm install 失败: ${error.message}` })
+      console.log(`   ❌ npm 包安装失败: ${error.message}\n`)
+    }
   }
 
   const availablePort = findAvailablePort(port)
@@ -232,13 +258,13 @@ async function run(options = {}) {
     console.log(`\n   ❌ 获取 API Key 失败: ${error.message}\n`)
   }
 
-  console.log('🔌 【步骤 4/5】安装插件组件...')
+  console.log('🔌 【步骤 4/5】安装 Agent 接入组件...')
   try {
     if (!apiKey) {
       throw new Error('没有可用的 API Key，跳过自动配置')
     }
 
-    const scriptContent = await callAutoSetup(port, apiKey)
+    const scriptContent = await callAutoSetup(port, apiKey, options.frameworks)
     const isWindows = process.platform === 'win32'
     const scriptDir = getPreferredHomeDataRoot()
 
@@ -249,13 +275,13 @@ async function run(options = {}) {
       scriptPath = path.join(scriptDir, 'auto_setup.ps1')
       fs.writeFileSync(scriptPath, scriptContent)
       console.log('   ✅ 配置脚本已下载 (PowerShell)')
-      console.log('   📋 请选择要安装的框架...')
+      console.log(options.frameworks ? `   📋 已预选框架: ${options.frameworks}` : '   📋 请选择要安装的框架...')
       executeCommand = `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`
     } else {
       scriptPath = path.join(scriptDir, 'auto_setup.sh')
       fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 })
       console.log('   ✅ 配置脚本已下载 (Shell)')
-      console.log('   📋 请选择要安装的框架...')
+      console.log(options.frameworks ? `   📋 已预选框架: ${options.frameworks}` : '   📋 请选择要安装的框架...')
       executeCommand = `bash "${scriptPath}"`
     }
 
@@ -301,4 +327,4 @@ async function run(options = {}) {
   console.log('')
 }
 
-module.exports = { run }
+module.exports = { callAutoSetup, isCurrentPackageInstalledInCwd, run }

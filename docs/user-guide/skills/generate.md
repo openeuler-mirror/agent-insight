@@ -5,11 +5,11 @@ description: "从需求生成结构化 Skill 包"
 
 # Skills 生成
 
-Skills 生成是 Agent Insight 在「Skills 能力」中的核心生产模块，用于把自然语言需求转换为结构化 Skill 包。
+Skills 生成是 Agent Insight 在「持续优化 → Skill」工作区中的生成页签，用于把自然语言需求转换为结构化 Skill 包。
 
 它面向这样的场景：你已经知道希望 Agent 具备什么能力，但还没有现成的 `SKILL.md`、脚本和参考文档，希望平台直接生成一套可预览、可编辑、可发布的 Skill 工件。
 
-在 Skills 能力体系中，它与其他模块的关系是：
+在 Skill 工作区中，它与其他页签的关系是：
 
 - **Skills Hub**：管理和复用已生成的 Skill
 - **Skills 生成**：从需求生成新 Skill
@@ -220,4 +220,4 @@ sudo bash scripts/collect.sh | tee /tmp/auth_collect.json
 - 想管理已生成的 Skill： [Skills 管理](./manage)
 - 想验证生成结果质量： [Skills 评测总览](./evaluation/overview)
 - 想继续迭代 Skill： [Skills 优化](./optimize)
-- 想回到 Skills 总览： [Skills 能力](./index)
+- 想回到 Skill 工作区总览： [持续优化 · Skill](./index)

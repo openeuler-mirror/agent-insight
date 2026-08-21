@@ -68,7 +68,7 @@ test('首次注册会注入 Agent、Skill、数据集和 3 条 Trace 示例', as
 
   assert.deepEqual(
     { agents, skills, versions, datasets, sessions, executions },
-    { agents: 1, skills: 1, versions: 1, datasets: 1, sessions: 3, executions: 3 },
+    { agents: 1, skills: 1, versions: 1, datasets: 2, sessions: 3, executions: 3 },
   );
 });
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { ReactNode, useEffect, useMemo, useState } from 'react';
+import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
@@ -15,6 +15,8 @@ import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
+import { resolveTraceTimelineDurationMs } from '@/lib/latency-format';
+import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
 import {
     AgentEvent,
     AgentNode,
@@ -27,6 +29,16 @@ import {
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
 import {
+    applyRasRecoveryTree,
+    alignInteractionsToRasAnchors,
+} from '@/lib/ingest/ras/recovery-tree';
+import type { RasTraceMarker } from '@/lib/ingest/ras/trace-markers';
+import {
+    RasNodeBadge,
+    RasReliabilityDetails,
+    findEventAnomaliesForMarkers,
+} from '@/components/observe/RasReliabilityDetails';
+import {
     buildLangfuseAgentTrace,
     langfusePromptHistoryCount,
 } from '@/lib/engine/observability/langfuse-agent-trace';
@@ -36,6 +48,7 @@ import {
     extractSkillsWithVersionsFromJiuwenSession,
     extractSkillsWithVersionsFromOpenClawSession,
     extractSkillsWithVersionsFromOpencodeSession,
+    extractSkillsWithVersionsFromToolInteractions,
     normalizeInteractions,
 } from '@/lib/shared/interaction-utils';
 
@@ -64,6 +77,7 @@ const KIND_META: Record<string, { label: string; chip: string; bar: string; text
     skill: { label: 'SKILL', ...SPAN_KIND_CLASSES.skill },
     llm:   { label: 'LLM',   ...SPAN_KIND_CLASSES.llm },
     user:  { label: 'USER',  ...SPAN_KIND_CLASSES.user },
+    ras:   { label: 'RAS',   ...SPAN_KIND_CLASSES.ras },
 };
 
 /** Exact token count, down to the unit. The left-hand span tree keeps the
@@ -261,6 +275,7 @@ function collectTraceSkillCalls(interactions: RawInteraction[], node?: AgentNode
         ...extractSkillsWithVersionsFromOpenClawSession(normalized),
         ...extractSkillsWithVersionsFromHermesSession(normalized),
         ...extractSkillsWithVersionsFromJiuwenSession(normalized),
+        ...extractSkillsWithVersionsFromToolInteractions(normalized),
     ];
 
     const byKey = new Map<string, TraceSkillCall>();
@@ -335,6 +350,14 @@ interface SpanInfo {
     parentKeys: string[];
 }
 
+interface RasSpanInfo {
+    key: string;
+    label: string;
+    severity: string;
+    marker?: RasTraceMarker;
+    parentKeys: string[];
+}
+
 interface TraceCtxValue {
     framework?: string;
     searchQuery: string;
@@ -348,16 +371,19 @@ interface TraceCtxValue {
     topNDuration: SpanInfo[];
     topNTokens: SpanInfo[];
     slowNodesList: SpanInfo[];
+    rasNodeList: RasSpanInfo[];
     /** sub-agent 节点上"打开独立 trace"按钮的点击回调；未注入则不渲染按钮 */
     onSubagentNavigate?: (sessionId: string) => void;
+    findEventAnomalies?: (event: AgentEvent) => RasTraceMarker[];
 }
 
 const defaultCtx: TraceCtxValue = {
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
     treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
     onJumpToKey: () => {},
-    topNDuration: [], topNTokens: [], slowNodesList: [],
+    topNDuration: [], topNTokens: [], slowNodesList: [], rasNodeList: [],
     onSubagentNavigate: undefined,
+    findEventAnomalies: undefined,
 };
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
@@ -365,6 +391,11 @@ export interface AgentTraceViewProps {
     interactions: RawInteraction[];
     framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
+    /**
+     * Persisted execution elapsed time. It can exceed the root Agent span when
+     * a delegated child continues after the parent's last direct event.
+     */
+    executionDurationMs?: number;
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
     /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
@@ -380,17 +411,21 @@ export interface AgentTraceViewProps {
     rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
+    /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
+    rasMarkers?: RasTraceMarker[];
 }
 
 export default function AgentTraceView({
     interactions: sourceInteractions,
     framework,
     langfuseTraceNodes,
+    executionDurationMs,
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
     rootSessionId,
     rootExecutionId,
+    rasMarkers = [],
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
@@ -472,10 +507,14 @@ export default function AgentTraceView({
     }, [interactions, langfuseProjection, loadAllInteractions]);
 
     const displayInteractions = langfuseProjection?.interactions || interactions;
-    const tree = useMemo(
-        () => langfuseProjection?.tree || buildAgentCallTree(interactions || []),
-        [interactions, langfuseProjection],
-    );
+    const tree = useMemo(() => {
+        const aligned = rasMarkers.length
+            ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
+            : (displayInteractions || [])
+        const base = langfuseProjection?.tree || buildAgentCallTree(aligned)
+        if (!base) return base
+        return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers) : base
+    }, [interactions, langfuseProjection, displayInteractions, rasMarkers]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
@@ -560,7 +599,7 @@ export default function AgentTraceView({
     );
 
     const totalStart = tree?.startedAt;
-    const totalDuration = tree?.stats.durationMs;
+    const totalDuration = resolveTraceTimelineDurationMs(tree?.stats.durationMs, executionDurationMs);
 
     // Resolve selected node/event for right panel
     const { selectedAgentNode, selectedEvent } = useMemo(() => {
@@ -657,13 +696,15 @@ export default function AgentTraceView({
     };
 
     // ── Flat span list for search + TopN ────────────────────────────────────
-    const allSpans = useMemo<SpanInfo[]>(() => {
-        if (!tree) return [];
+    const { allSpans, rasNodeList } = useMemo<{ allSpans: SpanInfo[]; rasNodeList: RasSpanInfo[] }>(() => {
+        if (!tree) return { allSpans: [], rasNodeList: [] };
         const spans: SpanInfo[] = [];
+        const rasList: RasSpanInfo[] = [];
+        const markerById = new Map(rasMarkers.map(m => [m.id, m]));
         const visit = (node: AgentNode, parentKeys: string[]) => {
             const aKey = agentKey(node.id);
             spans.push({
-                key: aKey, label: node.agentName, kind: 'agent',
+                key: aKey, label: getAgentNodeDisplayLabel(node.agentName, node.subagentType), kind: 'agent',
                 durationMs: node.stats.durationMs ?? undefined,
                 tokens: node.stats.totalTokens || undefined,
                 isSlow: (node.stats.durationMs ?? 0) > SLOW_MS,
@@ -701,6 +742,18 @@ export default function AgentTraceView({
                     ].filter(Boolean).join(' ').toLowerCase(),
                     parentKeys: eventParents,
                 });
+                if (ev.kind === 'ras') {
+                    const marker = (ev.args && typeof ev.args === 'object' && ev.args.rasMarkerId)
+                        ? markerById.get(ev.args.rasMarkerId)
+                        : undefined;
+                    rasList.push({
+                        key: evKey,
+                        label: label || ev.name || 'RAS',
+                        severity: marker?.severity || (ev.args && typeof ev.args === 'object' ? ev.args.severity : undefined) || 'low',
+                        marker,
+                        parentKeys: eventParents,
+                    });
+                }
                 const childParents = [...eventParents, evKey];
                 entry.children.forEach(child => visitEvent(child, childParents));
                 if (childNode) {
@@ -712,8 +765,8 @@ export default function AgentTraceView({
             node.children.filter(child => !handledChildIds.has(child.id)).forEach(child => visit(child, myParents));
         };
         visit(tree, []);
-        return spans;
-    }, [tree, nodeMap]);
+        return { allSpans: spans, rasNodeList: rasList };
+    }, [tree, nodeMap, rasMarkers]);
 
     const searchMatches = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
@@ -779,12 +832,18 @@ export default function AgentTraceView({
         }, 80);
     };
 
+    const findEventAnomalies = useCallback(
+        (event: AgentEvent) => findEventAnomaliesForMarkers(event, rasMarkers),
+        [rasMarkers],
+    );
+
     const ctxValue: TraceCtxValue = {
         framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
-        onJumpToKey, topNDuration, topNTokens, slowNodesList,
+        onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
         onSubagentNavigate,
+        findEventAnomalies,
     };
 
     const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly;
@@ -1319,10 +1378,7 @@ function UnifiedSpanTree({
                     'flex-1 ml-1.5 text-sm text-foreground truncate min-w-0',
                     depth === 0 ? 'font-semibold' : 'font-medium',
                 )}>
-                    {node.agentName}
-                    {node.subagentType && (
-                        <span className="ml-1.5 text-xs text-foreground-muted font-normal">{node.subagentType}</span>
-                    )}
+                    {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}
                     {node.parallelCallCount && node.parallelCallCount > 1 && (
                         <span className="ml-1.5 text-xs px-1 bg-background-tertiary border border-border rounded-full text-foreground-muted">
                             ×{node.parallelCallCount}
@@ -1410,6 +1466,8 @@ function UnifiedEventRow({
     totalStart?: number; totalDuration?: number;
 }) {
     const km = KIND_META[event.kind] ?? KIND_META.tool;
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const evAnomalyHits = findEventAnomalies?.(event) ?? [];
 
     // Duration: for task events, use child agent duration
     const spanDurationMs = event.kind === 'task' && childNode
@@ -1499,6 +1557,9 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
+                {evAnomalyHits.length > 0 && (
+                    <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
+                )}
                 {secondaryLabel && (
                     <span className="ml-1.5 text-xs text-foreground-muted">{secondaryLabel}</span>
                 )}
@@ -2376,10 +2437,7 @@ function HierarchicalSpanSnapshot({
                     <KindBadge kind="llm" />
                     <span className="text-sm font-semibold text-foreground">第 {snapshot.llmOrdinal} 次模型调用</span>
                     <span className="text-xs text-foreground-muted">来自 Agent</span>
-                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{node.agentName}</span>
-                    {node.subagentType && (
-                        <span className="text-xs text-foreground-muted">{node.subagentType}</span>
-                    )}
+                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     <span className="ml-auto text-xs text-foreground-muted">event #{event.interactionIndex}</span>
                 </div>
             </div>
@@ -2524,7 +2582,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
         <div className="rounded-md border border-border p-2.5 flex flex-col gap-2">
             <div className="flex items-center gap-2">
                 <KindBadge kind="agent" size="sm" />
-                <span className="flex-1 text-sm font-semibold truncate">{child.agentName}</span>
+                <span className="flex-1 text-sm font-semibold truncate">{getAgentNodeDisplayLabel(child.agentName, child.subagentType)}</span>
                 {child.sessionId && ctx.onSubagentNavigate && (
                     <button
                         type="button"
@@ -2565,6 +2623,8 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
 }
 
 function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null)
         ? formatDuration(event.completedAt - event.startedAt) : null;
@@ -2579,6 +2639,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')
         : event.kind === 'user' ? (event.summary || event.interaction?.content || '')
+        : event.kind === 'ras' ? (event.summary || event.interaction?.content || '')
         : '';
 
     const argsStr = event.args !== undefined
@@ -2609,7 +2670,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                     {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
                     {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
                     {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
-                    <span style={{ opacity: 0.6 }}>from: {node.agentName}</span>
+                    <span style={{ opacity: 0.6 }}>from: {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     {event.toolStatus && !hasError && (
                         <span className="inline-flex items-center gap-1 text-success font-semibold">
                             <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
@@ -2621,6 +2682,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
 
             {/* Body — all sections use CompactSection for consistent truncated-preview + modal pattern */}
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.875rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                <RasReliabilityDetails markers={eventAnomalies} />
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
@@ -2843,7 +2905,7 @@ function AgentDetail({
             <div style={{ padding: '0.75rem 1rem 0', flexShrink: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem' }}>
                     <span className={cn('size-2 rounded-full shrink-0', STATUS_DOT[status])} />
-                    <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>{node.agentName}</h3>
+                    <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</h3>
                     {node.parallelCallCount && node.parallelCallCount > 1 && (
                         <span style={{ fontSize: '0.625rem', padding: '0.125rem 0.4375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 999, fontWeight: 500 }}>
                             ×{node.parallelCallCount} parallel
@@ -2851,7 +2913,7 @@ function AgentDetail({
                     )}
                     <div style={{ flex: 1 }} />
                     <span style={{ fontSize: '0.6875rem', color: 'var(--foreground-muted)' }}>depth: {node.depth}</span>
-                    {node.subagentType && (
+                    {node.subagentType && node.agentName.toLowerCase() !== node.subagentType.toLowerCase() && (
                         <span style={{ fontSize: '0.5625rem', padding: '0.125rem 0.4375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 4 }}>
                             {node.subagentType}
                         </span>
@@ -3392,7 +3454,7 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                                 >
                                     <div className={cn('flex items-center gap-2', pct > 0 && 'mb-1.5')}>
                                         {childStatus !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[childStatus])} />}
-                                        <span className="flex-1 text-sm font-medium truncate">{child.agentName}</span>
+                                        <span className="flex-1 text-sm font-medium truncate">{getAgentNodeDisplayLabel(child.agentName, child.subagentType)}</span>
                                         <span className={cn('text-xs tabular-nums shrink-0 font-mono', childStatus === 'slow' ? 'text-warning' : 'text-foreground-muted')}>{formatDuration(child.stats.durationMs)}</span>
                                         <span className="text-xs text-foreground-muted tabular-nums shrink-0 font-mono">{exactTokens(child.stats.totalTokens)}</span>
                                         {child.sessionId && overviewCtx.onSubagentNavigate && (
@@ -3432,15 +3494,16 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
 
 // ─── TopNPanel ────────────────────────────────────────────────────────────────
 function TopNPanel() {
-    const { topNDuration, topNTokens, slowNodesList, onJumpToKey } = React.useContext(TraceCtx);
-    const [tab, setTab] = useState<'duration' | 'tokens' | 'slow'>('duration');
+    const { topNDuration, topNTokens, slowNodesList, rasNodeList, onJumpToKey } = React.useContext(TraceCtx);
+    const [tab, setTab] = useState<'duration' | 'tokens' | 'slow' | 'ras'>('duration');
 
-    if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0) return null;
+    if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0 && rasNodeList.length === 0) return null;
 
-    const tabs: { id: 'duration' | 'tokens' | 'slow'; icon: string; label: string; count: number }[] = [
+    const tabs: { id: 'duration' | 'tokens' | 'slow' | 'ras'; icon: string; label: string; count: number }[] = [
         { id: 'duration', icon: '⏱', label: '耗时 Top 5', count: topNDuration.length },
         { id: 'tokens',   icon: '💬', label: 'Token Top 5', count: topNTokens.length },
         { id: 'slow',     icon: '⚠', label: '异常节点', count: slowNodesList.length },
+        { id: 'ras',      icon: '🛡', label: 'RAS 节点', count: rasNodeList.length },
     ];
 
     const items = tab === 'duration' ? topNDuration : tab === 'tokens' ? topNTokens : slowNodesList;
@@ -3459,7 +3522,7 @@ function TopNPanel() {
                             cursor: 'pointer', fontWeight: tab === t.id ? 600 : 400, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
                         }}>
                             <span>{t.icon}</span>
-                            <span style={{ display: 'none' }}>{t.label}</span>
+                            <span style={{ whiteSpace: 'nowrap' }}>{t.label}</span>
                             <span style={{ fontSize: '0.5rem', padding: '0 3px', borderRadius: 6, background: tab === t.id ? 'var(--primary-subtle)' : 'var(--background-tertiary)', color: tab === t.id ? 'var(--primary)' : 'var(--foreground-muted)', minWidth: 14, textAlign: 'center' }}>
                                 {t.count}
                             </span>
@@ -3468,9 +3531,28 @@ function TopNPanel() {
                 </div>
                 {/* Items */}
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    {items.length === 0 ? (
+                    {tab !== 'ras' && items.length === 0 ? (
                         <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
-                    ) : items.map((span, i) => {
+                    ) : tab === 'ras' && rasNodeList.length === 0 ? (
+                        <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
+                    ) : tab === 'ras' ? rasNodeList.map((ras, i) => {
+                        return (
+                            <div
+                                key={ras.key}
+                                onClick={() => onJumpToKey(ras.key)}
+                                className={cn(
+                                    'flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors hover:bg-background-secondary',
+                                    i < rasNodeList.length - 1 && 'border-b border-border',
+                                )}
+                            >
+                                <span className="text-xs text-foreground-muted tabular-nums w-3 shrink-0 text-right">{i + 1}</span>
+                                {ras.marker && <RasNodeBadge markers={[ras.marker]} compact className="shrink-0" />}
+                                {!ras.marker && <span className="inline-flex items-center rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 text-foreground-muted">RAS</span>}
+                                <span className="flex-1 text-xs text-foreground truncate">{ras.label}</span>
+                                <span className="text-xs text-primary shrink-0">→</span>
+                            </div>
+                        );
+                    }) : items.map((span, i) => {
                         const metric = tab === 'tokens'
                             ? (span.tokens ? exactTokens(span.tokens) : '-')
                             : (span.durationMs ? formatDuration(span.durationMs) : '-');
@@ -3630,6 +3712,8 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
     node: AgentNode; interactions: RawInteraction[];
 }) {
     const [modalOpen, setModalOpen] = useState(false);
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const meta = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null) ? formatDuration(event.completedAt - event.startedAt) : null;
     const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
@@ -3663,6 +3747,9 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
                     <div className="text-sm text-foreground line-clamp-2 break-words leading-snug">
                         {summaryText}
                     </div>
+                    {eventAnomalies.length > 0 && (
+                        <RasNodeBadge markers={eventAnomalies} className="mt-1" />
+                    )}
                     <div className="text-xs text-foreground-muted mt-0.5 flex flex-wrap gap-2 items-center">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
@@ -3824,6 +3911,8 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     dur: string | null; time: string; onClose: () => void;
     node: AgentNode; interactions: RawInteraction[];
 }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const title = event.name || event.summary?.slice(0, 60) || km.label;
 
@@ -3840,6 +3929,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                     </div>
                 </DialogHeader>
                 <div className="overflow-auto p-4 flex flex-col gap-4">
+                    <RasReliabilityDetails markers={eventAnomalies} />
                     {event.kind === 'llm' && (
                         <LLMEventBody
                             event={event}
@@ -3849,8 +3939,8 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                         />
                     )}
                     {event.kind === 'user' && (event.summary || event.interaction?.content) && <ModalSection label="Message"><LLMContent text={event.summary || event.interaction?.content || ''} /></ModalSection>}
-                    {event.kind !== 'llm' && event.args !== undefined && <ModalSection label="Input"><ModalCodeBlock value={event.args} /></ModalSection>}
-                    {event.kind !== 'llm' && event.output !== undefined && event.output !== null && <ModalSection label="Output"><ModalCodeBlock value={event.output} /></ModalSection>}
+                    {event.kind !== 'llm' && event.kind !== 'ras' && event.args !== undefined && <ModalSection label="Input"><ModalCodeBlock value={event.args} /></ModalSection>}
+                    {event.kind !== 'llm' && event.kind !== 'ras' && event.output !== undefined && event.output !== null && <ModalSection label="Output"><ModalCodeBlock value={event.output} /></ModalSection>}
                     {event.spawnedChildId && <div className="text-sm text-primary">Sub-agent spawned — click in the tree to jump.</div>}
                 </div>
             </DialogContent>

@@ -142,6 +142,41 @@ export function extractSkillsWithVersionsFromOpencodeSession(interactions: any[]
   return skills
 }
 
+/** Extract skill calls from normalized tool interactions whose calls can live
+ * on the envelope, response message, or request-message history. */
+export function extractSkillsWithVersionsFromToolInteractions(interactions: any[]): InvokedSkill[] {
+  const seen = new Set<string>()
+  const skills: InvokedSkill[] = []
+
+  const collectFromMsg = (msg: any) => {
+    if (!msg) return
+    const calls = msg.tool_calls || msg.toolCalls || []
+    for (const tc of calls) {
+      const toolName = String(tc?.function?.name ?? tc?.name ?? "").toLowerCase()
+      if (toolName !== "skill" && toolName !== "load_skill") continue
+      const raw = tc?.function?.arguments ?? tc?.arguments ?? ""
+      try {
+        const args = typeof raw === "string" ? JSON.parse(raw) : raw
+        const rawName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill
+        if (rawName == null || !String(rawName).trim()) continue
+        const name = String(rawName).trim().replace(/^['"]+|['"]+$/g, "")
+        if (!SKILL_NAME_PATTERN.test(name) || seen.has(name)) continue
+        seen.add(name)
+        const rawVersion = args?.version
+        const version = rawVersion != null ? Number(rawVersion) : null
+        skills.push({ name, version: version !== null && !Number.isNaN(version) ? version : null })
+      } catch {}
+    }
+  }
+
+  for (const interaction of interactions) {
+    collectFromMsg(interaction)
+    collectFromMsg(interaction.responseMessage)
+    for (const message of interaction.requestMessages || []) collectFromMsg(message)
+  }
+  return skills
+}
+
 export function extractSkillsWithVersionsFromHermesSession(interactions: any[]): InvokedSkill[] {
   const seen = new Set<string>()
   const skills: InvokedSkill[] = []

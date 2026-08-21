@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-fault-injection"
+version = "0.1.0"
+description = "Fault-injection and execution-context capture for coding agents"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+  "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+agent-fault-injection = "agent_fault_injection.cli:main"
+
+[tool.setuptools.package-dir]
+agent_fault_injection = "."
+
+[tool.setuptools]
+packages = [
+  "agent_fault_injection",
+  "agent_fault_injection.pipeline",
+  "agent_fault_injection.fault_inject",
+  "agent_fault_injection.fault_inject.catalog",
+  "agent_fault_injection.fault_inject.injection",
+  "agent_fault_injection.platform_adapters",
+  "agent_fault_injection.platform_adapters.opencode",
+  "agent_fault_injection.platform_adapters.xiaoo",
+  "agent_fault_injection.platform_adapters.xiaoo.hooker",
+]
+
+[tool.setuptools.package-data]
+agent_fault_injection = [
+  "fault_inject/skills/*/SKILL.md",
+  "fault_inject/skills/*/fault.json",
+  "fault_inject/skills/*/scripts/*",
+  "fault_inject/skills/*/assets/*",
+  "fault_inject/catalog/capability_api.yaml",
+  "platform_adapters/opencode/plugin/*.ts",
+  "platform_adapters/opencode/lib/*.ts",
+  "platform_adapters/xiaoo/hooker/*",
+]
+
+[tool.pytest.ini_options]
+# Repo root so `import agent_fault_injection` resolves this directory by name.
+pythonpath = [".."]
+testpaths = ["tests"]

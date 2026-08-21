@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -9,6 +9,7 @@ import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk'
 import { resolveAgentInsightDataPath } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
 import { isModelConnectionReady } from '@/lib/shared/model-connection'
+import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -471,7 +472,7 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
   const fallback: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     provider: {
-      deepseek: { options: {}, models: { 'deepseek-reasoner': {}, 'deepseek-chat': {} } },
+      deepseek: { options: {}, models: { 'deepseek-v4-flash': {}, 'deepseek-v4-pro': {} } },
     },
     plugin: [],
     permission: OPENCODE_CONFIG_PERMISSION,
@@ -933,8 +934,7 @@ async function startServerForUser(
       // 不会把它 spawnSync 出的 .opencode 子进程一起带走——只有进程组 kill 才行。
       // 不调 .unref()——我们仍然要 wait child 的 exit 事件，event loop 不能 detach。
       detached: true,
-      env: {
-        ...process.env,
+      env: buildOpencodeSpawnEnv(process.env, {
         OPENCODE_PORT: String(port),
         // 屏蔽用户全局 ~/.config/opencode/ 下的配置/插件。详见 prepareIsolatedXdgConfigHome 注释。
         XDG_CONFIG_HOME: xdgRoot,
@@ -944,7 +944,7 @@ async function startServerForUser(
         // 强制让 plugin 上报到本机 + 归属触发 user (详见 buildPluginUploadEnvOverride 注释)
         ...pluginUploadEnv,
         ...(telemetryEnabled === false ? { AGENT_INSIGHT_OPENCODE_OTEL_ENABLE: 'false' } : {}),
-      },
+      }),
     },
   )
 

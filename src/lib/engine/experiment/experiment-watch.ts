@@ -1,6 +1,7 @@
 // 监听模式实验（取代旧 autoWatch）：某 Agent 新上报的 trace 自动进入其监听实验并评测。
 // 触发点：trace 摄取完成的钩子（ingest/observe），传入 (user, taskId)。
 import { prisma } from '@/lib/storage/prisma';
+import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { addEvalExperimentCase, evaluateEvalExperimentCase } from './run-experiment';
 
 // 同一 (user,taskId) 并发去重（多个摄取钩子可能同时触发）
@@ -21,8 +22,14 @@ export async function triggerExperimentWatchForTask(
   if (inFlight.has(key)) return;
   inFlight.add(key);
   try {
+    const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
     const execution = await prisma.execution.findFirst({
-      where: { taskId: safeTaskId, OR: [{ user: safeUser }, { user: null }] },
+      where: {
+        AND: [
+          { taskId: safeTaskId, OR: [{ user: safeUser }, { user: null }] },
+          userOwnershipWhere,
+        ],
+      },
       orderBy: { timestamp: 'desc' },
       select: { id: true, agentName: true, timestamp: true },
     });

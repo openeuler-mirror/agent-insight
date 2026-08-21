@@ -2,6 +2,8 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 
 export type OtelTraceEvent = {
   receivedAt: string;
+  /** Framework identity retained when collectors write canonical spool events directly. */
+  framework?: string;
   sessionId: string;
   traceId?: string;
   spanId?: string;
@@ -29,8 +31,16 @@ export type OtelTraceAppendResult = {
   dirtySessionIds: string[];
 };
 
-export type OtelTraceAggregationResult = {
-  sessionId: string;
-  record: ExecutionRecord | null;
-  eventCount: number;
-};
+export type OtelTraceAggregationResult =
+  | {
+    sessionId: string;
+    record: ExecutionRecord;
+    eventCount: number;
+    disposition: 'persisted';
+  }
+  | {
+    sessionId: string;
+    record: null;
+    eventCount: number;
+    disposition: 'retry-later';
+  };

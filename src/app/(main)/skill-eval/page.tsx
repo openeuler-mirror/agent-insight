@@ -5,8 +5,10 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { waitForExperimentTasksTerminal } from '@/lib/client/experiment-eval-polling';
 import { isInternalSystemAgentTrace, shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
 import {
     buildFallbackDiagnosis,
@@ -693,6 +695,12 @@ function SkillAnalysisPage() {
     const [traceEvaluationBatchTitle, setTraceEvaluationBatchTitle] = useState('');
     const [traceEvaluationBatchEvaluators, setTraceEvaluationBatchEvaluators] = useState<string[]>([]);
     const pendingTraceEvalBatchIdRef = useRef<string>('');
+    const traceEvaluationWaitAbortRef = useRef<AbortController | null>(null);
+
+    useEffect(() => () => {
+        traceEvaluationWaitAbortRef.current?.abort();
+        traceEvaluationWaitAbortRef.current = null;
+    }, [user, selectedSkillId, selectedVersion]);
 
     // 用例分析 AB 式配置区: 共享的「数据集多选」+「评估器多选」。
     // 数据集作为评测参考集 (后端按 datasetIds 收窄 trace↔case 匹配)，评估器多选决定开始评测时调用哪些评估器。
@@ -1287,6 +1295,9 @@ function SkillAnalysisPage() {
     }> => {
         const empty = { resultErrors: [] as string[], trajectoryErrors: new Map<string, string>() };
         if (!user || taskIds.length === 0) return empty;
+        traceEvaluationWaitAbortRef.current?.abort();
+        const waitController = new AbortController();
+        traceEvaluationWaitAbortRef.current = waitController;
         // resultRun 是一次入队多条，要么整体成功要么整体失败；trajRun 是逐条独立扇出，
         // 每条都可能有自己的失败原因（如 skill 缺 mermaid 那种 per-trace 的前提缺失）。
         //
@@ -1295,8 +1306,10 @@ function SkillAnalysisPage() {
         // 能读到评测器写好的 tool_choice/redundancy，用 alignment 覆盖率当 completeness 走代码侧聚合层
         // 算出统一轨迹分（0.45/0.35/0.20）。两者并发时会因 last-write-wins 互相覆盖、口径不稳。
         const resultErrors: string[] = [];
+        let resultEvaluationReady = false;
         try {
-            // 评测走实验：eval-traces 同步建/复用 backing 实验评测这批 trace。复用已关联批次时传 experimentId。
+            // 评测走实验：eval-traces 会先登记整批 case/result 后立即返回，评估器在后台受控并发执行。
+            // 复用已关联批次时传 experimentId，避免每次分析拆成多个任务。
             const body: Record<string, unknown> = {
                 user, taskIds, name: '用例分析 · 批量',
                 // 评估器：多选决定调用哪些；未选兜底任务完成度（复用实验时以实验存的为准，此处仅供校验/新建）
@@ -1314,21 +1327,40 @@ function SkillAnalysisPage() {
             if (!res.ok || !data.success) {
                 throw new Error(data?.error || `结果评估失败 (HTTP ${res.status})`);
             }
-            if (typeof data.experimentId === 'string') setTraceEvaluationBatchId(data.experimentId);
+            const resultRunId = typeof data.experimentId === 'string' ? data.experimentId : '';
+            if (!resultRunId) throw new Error('结果评估未返回评测任务 ID');
+            setTraceEvaluationBatchId(resultRunId);
+
+            // analyze-match 必须等结果/轨迹评估器全部落终态后再写 attribution，避免并发写入
+            // 造成 last-write-wins 覆盖。后端单行最多 5min 且可重试 2 次，这里给足 17min。
+            await waitForExperimentTasksTerminal({
+                user,
+                experimentId: resultRunId,
+                taskIds,
+                signal: waitController.signal,
+            });
+            resultEvaluationReady = true;
         } catch (e) {
             resultErrors.push(String(e instanceof Error ? e.message : e));
+        }
+        if (waitController.signal.aborted) {
+            if (traceEvaluationWaitAbortRef.current === waitController) {
+                traceEvaluationWaitAbortRef.current = null;
+            }
+            return empty;
         }
         // 评测入队完成后再跑 analyze-match（轨迹对齐 + Skill 归因 + 统一轨迹分聚合）。
         // 每个 trajectory 任务跑完单独 catch,把错误信息按 taskId 记下来,
         // 之前 throw + Promise.allSettled 只能拿到错误文本但丢失了对应的 taskId,
         // 导致前端没法精确告诉用户"哪条 trace 的轨迹评测因为什么没跑成"。
         const trajectoryErrors = new Map<string, string>();
-        const trajRuns = taskIds.map(id => (async () => {
+        const trajRuns = resultEvaluationReady ? taskIds.map(id => (async () => {
             try {
                 const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(id)}/analyze-match`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user, mode: 'compare' }),
+                    signal: waitController.signal,
                 });
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
@@ -1338,18 +1370,22 @@ function SkillAnalysisPage() {
             } catch (e) {
                 trajectoryErrors.set(id, e instanceof Error ? e.message : '网络/解析错误');
             }
-        })());
+        })()) : [];
         await Promise.all(trajRuns);
+        if (waitController.signal.aborted) {
+            if (traceEvaluationWaitAbortRef.current === waitController) {
+                traceEvaluationWaitAbortRef.current = null;
+            }
+            return empty;
+        }
         if (resultErrors.length > 0 || trajectoryErrors.size > 0) {
             console.warn('[skill-eval] batch analyze partial failures:', { resultErrors, trajectoryErrors });
         }
-        // 短轮询几轮，让概览卡和详情页都能接住异步落库后的最新分数。
-        // 之前是 5 × 900ms = 4.5s 窗口，太短：批量 3 条 trace 时后端 concurrency=3
-        // 每条 eval（semantic match + opencode evaluator）通常 10-30s，5s 内只能看
-        // 到第 1 条完成，剩下 2 条还在跑前端就停止 poll，造成"显示了一个"假象。
-        // 拉长到 30 × 3000ms = 90s 窗口覆盖典型批量评测时长。每次轮询都拉一次
-        // trace 列表，状态徽章会实时切换 pending→done。
-        await reloadTraces({ retries: 30, retryDelayMs: 3000 });
+        // 结果评估和 analyze-match 均已结束，只需刷新一次；避免完成后再固定等待 90 秒。
+        await reloadTraces();
+        if (traceEvaluationWaitAbortRef.current === waitController) {
+            traceEvaluationWaitAbortRef.current = null;
+        }
         return { resultErrors, trajectoryErrors };
     }, [user, reloadTraces, traceEvaluationBatchId, caseEvaluatorIds, caseDatasetIds]);
 
@@ -1532,6 +1568,7 @@ function SkillAnalysisPage() {
                 title={title}
                 showDefaultActions={false}
             />
+            <SkillWorkspaceTabs />
 
             <main className="sa-main">
                 {/* view === 'batch' DetailHeader 分支已删——'batch' 视图整体下线，
@@ -1893,6 +1930,12 @@ function AnalysisOverview({
     smartRunBusy: boolean;
     onSmartRunBusyChange: (busy: boolean) => void;
 }) {
+    const traceEvaluationWaitAbortRef = useRef<AbortController | null>(null);
+    useEffect(() => () => {
+        traceEvaluationWaitAbortRef.current?.abort();
+        traceEvaluationWaitAbortRef.current = null;
+    }, [user, selectedSkill?.id, selectedVersion]);
+
     // 后台 opencode 任务实时状态——给 A/B 卡和 触发 卡顶部的 banner 喂数。
     // 静态合规走 LLM/linter，不过 concurrency-limiter，不需要这条线。
     // A/B 不按 taskType 过滤：它在跑时会同时驱动 trajectory-eval +
@@ -2301,8 +2344,11 @@ function AnalysisOverview({
         if (!user || !selectedTraceId || !tracePrimarySkill?.name) {
             throw new Error('用例分析当前缺少可执行 Trace 或主 Skill 信息。');
         }
-        const resultPromise = (async () => {
-            // 评测走实验：eval-traces 同步建实验+评测已产生的 trace，返回后结果即就绪（trace 列表随即显示）
+        traceEvaluationWaitAbortRef.current?.abort();
+        const waitController = new AbortController();
+        traceEvaluationWaitAbortRef.current = waitController;
+        try {
+            // eval-traces 先登记结果行并返回 202；进入终态后再执行流程图对齐，避免互相覆盖。
             const res = await apiFetch('/api/experiments/eval-traces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2319,27 +2365,31 @@ function AnalysisOverview({
             if (!res.ok || !data.success) {
                 throw new Error(data.error || '启动结果评估失败');
             }
-        })();
-        const tracePromise = (async () => {
+            const resultRunId = typeof data.experimentId === 'string' ? data.experimentId : '';
+            if (!resultRunId) throw new Error('结果评估未返回评测任务 ID');
+            await waitForExperimentTasksTerminal({
+                user,
+                experimentId: resultRunId,
+                taskIds: [selectedTraceId],
+                signal: waitController.signal,
+            });
+
             const analyzeRes = await apiFetch(`/api/observe/executions/${encodeURIComponent(selectedTraceId)}/analyze-match`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ user, mode: 'compare' }),
+                signal: waitController.signal,
             });
             const analyzeData = await analyzeRes.json().catch(() => ({}));
             if (!analyzeRes.ok || !analyzeData.success) {
                 throw new Error(analyzeData.error || '流程图比对分析失败');
             }
-        })();
-        const outcomes = await Promise.allSettled([resultPromise, tracePromise]);
-        const failures = outcomes.filter((item): item is PromiseRejectedResult => item.status === 'rejected');
-        if (failures.length === outcomes.length) {
-            throw new Error(failures[0]?.reason instanceof Error ? failures[0].reason.message : '用例分析启动失败');
+            await onReloadTraces({ retries: 5, retryDelayMs: 900 });
+        } finally {
+            if (traceEvaluationWaitAbortRef.current === waitController) {
+                traceEvaluationWaitAbortRef.current = null;
+            }
         }
-        if (failures.length > 0) {
-            throw new Error(failures.map(item => item.reason instanceof Error ? item.reason.message : '部分流程启动失败').join('；'));
-        }
-        await onReloadTraces({ retries: 5, retryDelayMs: 900 });
     };
 
     const startTriggerRunFromOverview = async () => {

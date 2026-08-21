@@ -1,7 +1,7 @@
 'use client';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
-// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 重评失败行）→ 实验级评论。
+// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
@@ -9,6 +9,7 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react';
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
+import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -32,6 +33,10 @@ interface ExperimentDetail {
     input: string;
     actualOutput: string;
     referenceOutput: string | null;
+    traceStatus: 'pending' | 'ready' | 'failed' | null;
+    traceError: string | null;
+    traceAttemptNo: number | null;
+    traceAttemptStatus: string | null;
   }>;
   results: Array<{
     id: string;
@@ -47,6 +52,7 @@ interface ExperimentDetail {
     durationMs: number | null;
   }>;
   progress: { total: number; done: number; failed: number; pending: number };
+  traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
   overall: number | null;
   breakdown: EvaluatorBreakdownRow[];
   caseTotal: number;
@@ -55,7 +61,7 @@ interface ExperimentDetail {
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
-  draft: { label: '草稿', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
+  draft: { label: '启动中', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
   running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
   failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
@@ -72,7 +78,7 @@ const TD: React.CSSProperties = {
   padding: '9px 12px', fontSize: 12, color: 'var(--foreground)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'top',
 };
-// 操作列按钮：详情/重评同尺寸同形状，只用颜色区分主次
+// 操作列按钮：详情/重试同尺寸同形状，只用颜色区分主次
 const ACTION_BTN: React.CSSProperties = {
   fontSize: 11.5, padding: '3px 10px', borderRadius: 6, lineHeight: 1.5,
   border: '1px solid var(--border)', background: 'var(--card-bg)',
@@ -93,6 +99,10 @@ function fmtScore(v: number | null): string {
   return typeof v === 'number' ? String(v) : '—';
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 const CASE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 export default function ExperimentDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -102,7 +112,6 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [starting, setStarting] = useState(false);
   const [retryingCaseId, setRetryingCaseId] = useState('');
   const [casePage, setCasePage] = useState(1);
   const [casePageSize, setCasePageSize] = useState(20);
@@ -123,7 +132,10 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     }
   }, [user, id]);
 
-  useEffect(() => { loadComments(); }, [loadComments]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadComments(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadComments]);
 
   const load = useCallback(async (silent = false) => {
     if (!user) return;
@@ -136,9 +148,9 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
       setDetail(data);
       setError('');
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (!silent) {
-        setError(e?.message || '加载实验失败');
+        setError(errorMessage(e, '加载实验失败'));
         setDetail(null);
       }
     } finally {
@@ -146,7 +158,10 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     }
   }, [user, id, casePage, casePageSize]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   // running 时 5s 轮询进度
   useEffect(() => {
@@ -155,42 +170,20 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     return () => clearInterval(timer);
   }, [detail?.status, load]);
 
-  const startRun = useCallback(async () => {
-    if (!user || starting) return;
-    setStarting(true);
+  // 同一入口由服务端判断：Trace 未生成则重跑并绑定；否则重试失败的评估行。
+  const retryCase = useCallback(async (caseId: string) => {
+    if (!user || retryingCaseId || !detail) return;
+    setRetryingCaseId(caseId);
     try {
       const res = await apiFetch(
-        `/api/experiments/${encodeURIComponent(id)}/run?user=${encodeURIComponent(user)}`,
+        `/api/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(caseId)}/retry?user=${encodeURIComponent(user)}`,
         { method: 'POST' },
       );
       const data = await res.json();
-      if (!res.ok) throw new Error(String(data?.error || '启动执行失败'));
+      if (!res.ok) throw new Error(String(data?.error || '重试失败'));
       await load(true);
-    } catch (e: any) {
-      setError(e?.message || '启动执行失败');
-    } finally {
-      setStarting(false);
-    }
-  }, [user, id, starting, load]);
-
-  // 重评：逐行重试该 case 下所有 failed 结果行
-  const retryCase = useCallback(async (caseId: string) => {
-    if (!user || retryingCaseId || !detail) return;
-    const failedRows = detail.results.filter((r) => r.caseId === caseId && r.status === 'failed');
-    if (!failedRows.length) return;
-    setRetryingCaseId(caseId);
-    try {
-      for (const row of failedRows) {
-        const res = await apiFetch(
-          `/api/experiments/${encodeURIComponent(id)}/results/${encodeURIComponent(row.id)}/retry?user=${encodeURIComponent(user)}`,
-          { method: 'POST' },
-        );
-        const data = await res.json();
-        if (!res.ok) throw new Error(String(data?.error || '重评失败'));
-      }
-      await load(true);
-    } catch (e: any) {
-      setError(e?.message || '重评失败');
+    } catch (e: unknown) {
+      setError(errorMessage(e, '重试失败'));
     } finally {
       setRetryingCaseId('');
     }
@@ -209,8 +202,8 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '停止监听失败'));
       await load(true);
-    } catch (e: any) {
-      setError(e?.message || '停止监听失败');
+    } catch (e: unknown) {
+      setError(errorMessage(e, '停止监听失败'));
     } finally {
       setStoppingWatch(false);
     }
@@ -222,8 +215,9 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   const overall = detail?.overall ?? null;
   const breakdown = detail?.breakdown ?? [];
   // caseRows = 当前页 case（服务端已分页）+ 逐 case 得分（用本页结果算）
+  // 对比模式（type='llm'）不走 caseRows——ComparisonDetail 自带 pairing 数据；guard 避免 undefined.map()
   const caseRows = useMemo(() => {
-    if (!detail) return [];
+    if (!detail || detail.type === 'llm' || !detail.cases || !detail.results) return [];
     return detail.cases.map((c) => ({
       ...c,
       scores: caseScore(detail.results.filter((r) => r.caseId === c.id), lookup.categoryOf),
@@ -241,7 +235,9 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   const pagedRows = caseRows;
   // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
   useEffect(() => {
-    if (casePage > totalPages) setCasePage(totalPages);
+    if (casePage <= totalPages) return;
+    const timer = window.setTimeout(() => setCasePage(totalPages), 0);
+    return () => window.clearTimeout(timer);
   }, [casePage, totalPages]);
 
   return (
@@ -254,25 +250,18 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>{error}</div>
         ) : !detail ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>实验不存在</div>
+        ) : detail.type === 'llm' ? (
+          <>
+            {error && (
+              <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
+            )}
+            <ComparisonDetail detail={detail as unknown as import('@/lib/engine/experiment/comparison-runner').ComparisonDetailData} />
+          </>
         ) : (
           <>
             {error && (
               <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
             )}
-
-            {/* 返回实验列表 */}
-            <div style={{ marginBottom: 14 }}>
-              <Link
-                href="/experiments"
-                style={{
-                  fontSize: 12, color: 'var(--foreground-secondary)', textDecoration: 'none',
-                  padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
-                  background: 'var(--background-secondary)',
-                }}
-              >
-                ‹ 返回实验列表
-              </Link>
-            </div>
 
             {/* 监听中横幅 */}
             {detail.watchMode && (
@@ -328,20 +317,23 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                   {detail.progress.done} 完成 / {detail.progress.failed} 失败 / {detail.progress.pending} 待执行
                 </span>
               )}
-              {detail.status === 'draft' && (
-                <button
-                  onClick={startRun}
-                  disabled={starting}
-                  style={{
-                    marginLeft: 'auto', fontSize: 12, padding: '5px 14px', borderRadius: 7,
-                    border: '1px solid var(--border)', background: 'var(--accent)',
-                    color: '#fff', cursor: starting ? 'default' : 'pointer', opacity: starting ? 0.6 : 1,
-                  }}
-                >
-                  {starting ? '启动中…' : '开始执行'}
-                </button>
+              {detail.traceProgress && (
+                <span>
+                  <span style={{ color: 'var(--foreground-muted)' }}>Trace：</span>
+                  {detail.traceProgress.ready} 已生成 / {detail.traceProgress.failed} 失败 / {detail.traceProgress.pending} 生成中
+                </span>
               )}
             </div>
+
+            {detail.traceProgress && detail.traceProgress.failed > 0 && (
+              <div style={{
+                ...CARD, padding: '10px 14px', marginBottom: 14, fontSize: 12,
+                background: 'var(--tag-red-bg)', color: 'var(--tag-red-fg)',
+              }}>
+                {detail.traceProgress.failed} 个 Case 未生成有效 Trace，已跳过评估且不计入综合得分。
+                {detail.traceProgress.ready > 0 && ` 其余 ${detail.traceProgress.ready} 个 Case 正常评估。`}
+              </div>
+            )}
 
             {/* 整体表现卡（整行） */}
             <div style={{ ...CARD, padding: '18px 20px', marginBottom: 14 }}>
@@ -445,7 +437,17 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                             : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
                         </td>
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
-                          {truncate(c.actualOutput, 80)}
+                          {c.traceStatus === 'failed' ? (
+                            <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
+                              Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
+                            </span>
+                          ) : c.traceStatus === 'pending' ? (
+                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
+                              正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
+                            </span>
+                          ) : c.traceStatus === 'ready' && !c.actualOutput ? (
+                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
+                          ) : truncate(c.actualOutput, 80)}
                         </td>
                         <td style={{ ...TD, fontWeight: 700 }}>
                           {fmtScore(c.scores.overall)}
@@ -471,7 +473,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                             >
                               详情
                             </Link>
-                            {c.scores.failed > 0 && (
+                            {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
                                 disabled={!!retryingCaseId}
@@ -481,7 +483,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                                   opacity: retryingCaseId && retryingCaseId !== c.id ? 0.5 : 1,
                                 }}
                               >
-                                {retryingCaseId === c.id ? '重评中…' : '重评'}
+                                {retryingCaseId === c.id ? '重试中…' : '重试'}
                               </button>
                             )}
                           </div>

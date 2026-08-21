@@ -1,9 +1,81 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
 process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = "1"
 
 const uploaderPromise = import("../scripts/opencode_uploader_client.js")
+
+test("opencode uploader: persists a stable machine client identity", async () => {
+  const uploader = await uploaderPromise
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-client-id-"))
+  try {
+    const first = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      hostname: "host-a",
+      now: () => new Date("2026-08-13T00:00:00.000Z"),
+    })
+    const second = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      hostname: "host-b",
+    })
+
+    assert.equal(first.clientId, "cli_12345678-1234-1234-1234-123456789abc")
+    assert.deepEqual(second, first)
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(dataDir, "client.json"), "utf8")),
+      first,
+    )
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: prefers the registered reliability client identity", async () => {
+  const uploader = await uploaderPromise
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-registered-client-id-"))
+  try {
+    const registeredDir = path.join(dataDir, "client")
+    fs.mkdirSync(registeredDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(registeredDir, "config.json"),
+      JSON.stringify({
+        user: "alice",
+        clientId: "cli_registered-12345678",
+        deviceCredential: "dc_registered-secret",
+      }),
+    )
+
+    const identity = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+    })
+
+    assert.equal(identity.clientId, "cli_registered-12345678")
+    assert.equal(identity.deviceCredential, "dc_registered-secret")
+    assert.equal(fs.existsSync(path.join(dataDir, "client.json")), false)
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: reports the first external IPv4 address", async () => {
+  const uploader = await uploaderPromise
+  assert.equal(
+    uploader.pickReportedIp({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", mac: "00:00:00:00:00:00", cidr: "127.0.0.1/8" }],
+      eth0: [
+        { address: "2001:db8::1", family: "IPv6", internal: false, scopeid: 0, netmask: "ffff:ffff:ffff:ffff::", mac: "00:00:00:00:00:01", cidr: "2001:db8::1/64" },
+        { address: "10.20.30.40", family: "IPv4", internal: false, netmask: "255.255.255.0", mac: "00:00:00:00:00:02", cidr: "10.20.30.40/24" },
+      ],
+    }),
+    "10.20.30.40",
+  )
+})
 
 test("opencode uploader: recognizes session.created properties.info.parentID", async () => {
   const uploader = await uploaderPromise
@@ -247,4 +319,209 @@ test("opencode uploader: recovers user input from text part when chat.message.me
   const user = messages.find((m: any) => m.role === "user")
   assert.ok(user, "应当存在 user 消息")
   assert.equal(user.content, "nihao", "messageID 缺失时仍应从 text part 还原用户输入")
+  assert.equal(user.messageID, "msg_user")
+  const asst = messages.find((m: any) => m.role === "assistant")
+  assert.ok(asst)
+  assert.equal(asst.messageID, "msg_asst")
+})
+
+test("opencode uploader: rebuilds aborted assistant output from message.part.delta", async () => {
+  const uploader = await uploaderPromise
+  const baseEvent = {
+    kind: "event",
+    sessionID: "ses_root",
+  }
+  const state = uploader.buildState([
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.updated",
+        event: {
+          id: "evt_message",
+          properties: {
+            info: {
+              id: "msg_asst",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1 },
+            },
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.updated",
+        event: {
+          id: "evt_part",
+          properties: {
+            part: {
+              id: "prt_text",
+              messageID: "msg_asst",
+              sessionID: "ses_root",
+              type: "text",
+              text: "",
+            },
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_1",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_2",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+    // A second telemetry plugin can write the same OpenCode event. Event IDs
+    // must make the merge idempotent instead of duplicating streamed text.
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_2",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  assert.equal(messages[0]?.content, "让我协助让我协助")
+  assert.equal(messages[0]?.parts?.[0]?.text, "让我协助让我协助")
+})
+
+test("opencode uploader: preserves streamed reasoning parts after interruption", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.updated",
+        event: {
+          id: "evt_reasoning_message",
+          properties: {
+            info: {
+              id: "msg_asst",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1 },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          id: "evt_reasoning_part",
+          properties: {
+            part: {
+              id: "prt_reasoning",
+              messageID: "msg_asst",
+              sessionID: "ses_root",
+              type: "reasoning",
+              text: "",
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_reasoning_delta",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_reasoning",
+            field: "text",
+            delta: "正在分析工具调用",
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  assert.equal(messages[0]?.parts?.[0]?.type, "reasoning")
+  assert.equal(messages[0]?.parts?.[0]?.text, "正在分析工具调用")
+})
+
+test("opencode uploader: getRequestOptions preserves host basePath on ingest upload", async () => {
+  const uploader = await uploaderPromise
+  const root = uploader.getRequestOptions(new URL("http://localhost:3000"), "wi_key", 2)
+  assert.equal(root.path, "/api/ingest/upload")
+
+  const prefixed = uploader.getRequestOptions(new URL("http://localhost:3000/insight/"), "wi_key", 2)
+  assert.equal(prefixed.path, "/insight/api/ingest/upload")
+
+  const apiSuffix = uploader.getRequestOptions(new URL("http://localhost:3000/insight/api"), "wi_key", 2)
+  assert.equal(apiSuffix.path, "/insight/api/ingest/upload")
+})
+
+test("opencode uploader: authenticates registered clients with their device credential", async () => {
+  const uploader = await uploaderPromise
+  const options = uploader.getRequestOptions(
+    new URL("https://insight.test"),
+    "wi_key",
+    2,
+    {
+      clientId: "cli_registered-12345678",
+      deviceCredential: "dc_registered-secret",
+    },
+  )
+
+  assert.equal(options.headers.Authorization, "Bearer dc_registered-secret")
+  assert.equal(options.headers["x-agent-insight-client-id"], "cli_registered-12345678")
+  assert.equal(options.headers["x-witty-api-key"], "wi_key")
+
+  const legacy = uploader.getRequestOptions(
+    new URL("https://insight.test"),
+    "wi_key",
+    2,
+    { clientId: "cli_legacy-12345678" },
+  )
+  assert.equal(legacy.headers.Authorization, undefined)
+  assert.equal(legacy.headers["x-agent-insight-client-id"], undefined)
 })

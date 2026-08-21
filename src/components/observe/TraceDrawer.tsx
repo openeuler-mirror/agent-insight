@@ -5,7 +5,7 @@ import AgentTraceView from '@/components/observe/AgentTraceView';
 import { copyText } from '@/lib/copy-text';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
-import { formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs } from '@/lib/latency-format';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
@@ -246,7 +246,7 @@ function Header({ execution, onClose, locale }: { execution: TraceDrawerExecutio
                 )}
                 {model && <Pair label={locale === 'zh' ? '模型' : 'Model'} value={model} />}
                 {typeof latency === 'number' && (
-                    <Pair label={locale === 'zh' ? '延迟' : 'Latency'} value={formatLatencySeconds(latency)} />
+                    <Pair label={locale === 'zh' ? '延迟' : 'Latency'} value={formatDurationMs(latency)} />
                 )}
                 {typeof tokens === 'number' && tokens > 0 && (
                     <Pair label="Tokens" value={tokens.toLocaleString()} />
