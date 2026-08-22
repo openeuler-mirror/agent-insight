@@ -153,6 +153,10 @@ flowchart TD
 
 Skills 用例分析的批量 Trace 入口采用“先登记、后执行”：`POST /api/experiments/eval-traces` 先把整批 `ExperimentCase` 与 `ExperimentEvalResult` 落库并返回 `202`，再由 `startEvalExperimentCases` 通过跨实验共享的行级并发池执行。运行中重复提交同一实验/Trace 会复用已有结果任务。前端因此能立即展示全部已选 Trace；结果评估进入终态后，再执行 `analyze-match` 写入轨迹对齐与归因，避免两个写入链路并发覆盖；切换 Skill、版本或重新启动时会中止旧轮询，防止旧任务更新新上下文。
 
+Skill 工作台的用例分析与 A/B 通过 `GrayscaleTask` 编排 Agent 运行，并将每条运行作为 case 写入 backing `Experiment`。用例分析以 4 路并发生成 Trace；A/B 先按 `datasetCaseId + roundIndex` 形成配对，2 个配对并发、每对 A/B 同时执行。执行开始和结束都通过单 run 的 CAS 合并写入 `caseStatesJson`，避免并发任务整份覆盖状态。全部可评估 Trace 登记完成后，`startEvalExperimentCases` 先预创建整批 `case × evaluator` 结果行，再交给标准 4 路行级池执行；评估结果全部收敛后一次回填运行状态并调用 `settleExperimentStatus`。触发分析不走通用 Agent + Judge 链路，继续复用旧页面的 `runTriggerEvalLive` 路由评测服务，默认并发 5。结算完成后，实验评分点经 `syncExperimentSkillIssues` 归一化为 Skill 优化台账：只有显式 Skill 归因且带具体建议的用例/触发评分点进入 `SkillIssue`，同一建议跨 Case 依靠稳定 `dedupKey` 累计 prevalence。自动重试把失败评估器 ID 子集一路传到底层，只重置目标行，成功结果保持不变；同步层按 experiment/result 稳定来源替换该实验旧投影，避免重评重复计数。详情 API 按冻结的 `caseIds × executionSides × repeatRounds × evaluatorIds` 返回固定进度总数，并把执行失败折算为对应失败单元，因此响应不允许同时出现 `status=done` 与 `pending>0`。前端轮询串行执行并用请求序号丢弃晚到旧响应；顶部聚合分和 A/B 结论只在全批完成后发布，运行中仅展示固定进度与单条明细。
+
+实验建议同步按稳定 `runId + dedupKey` 更新已有派生行，保留 SkillIssue ID 与优化写入的解决状态。候选质量通过且产生真实文件差异后，执行项、归并计划与相同 dedupKey 的源问题在同一事务中完成状态回写；失败、冲突与 backlog 保持待处理。
+
 RAS 可靠性执行由 `run-experiment.ts` 将可靠性 ID 分发到 `ras-reliability-evaluator.ts`。新实验只暴露检测恢复 profile：Judge 先通过 `faultOccurred` 判断预期故障是否真实发生；仅当 verdict 为 `met` 时，Zod 契约才接受齐全的 `fault_detected/mitigation_triggered/fault_mitigated` 三维结果并等权计分。门控为 `partial/missing` 时契约要求 `dimensions=[]`，适配器输出三个带原因但无 `score/status` 的评分点，评估器总分为空，通用 `overallAverage` 不把它计入分母。`preset-ras-reliability-fault-injection` 和旧 `preset-ras-reliability` 仅保留历史运行、名称解析与结果展示兼容，不进入新建实验的预置目录；`task_outcome` 也只保留给旧五维历史重评。
 
 “从数据集生成”路径中的 `BatchEvalTask.configJson.evaluationBatchId` 是用户选择的评测任务，也是 case/result 的唯一写入与读取目标；兼容字段 `evalExperimentId` 只在用户未选择评测任务时作为回退。case 状态中的 `evaluatorRunId` 必须写实际使用的 Experiment id，避免执行状态挂在任务 A、评分却落到任务 B。
@@ -184,6 +188,8 @@ flowchart TD
 ### Skill 工作台
 
 `/skills` 是正式 Skill 工作台；`/skill-workbench` 保留为兼容别名，`/config/skills` 渲染原资产管理能力。旧生成、评测、A/B 与优化 API 未删除，工作台通过服务端适配层复用它们。生成和优化的 SSE 是可丢弃的实时视图，领域执行与最终同步由服务端持久化任务完成；评估、实验和复测同样以数据库状态作为恢复真源，因此任何站内导航都不会取消已接受的运行。生成/上传与优化候选在发布前都只保存不可执行的文件快照。静态评估状态按当前文件 hash 恢复，UI 将“评估器执行状态”和“无 high 的质量门禁状态”分开显示；评估中持续轮询并禁用发布，完成后清理旧的门禁错误。门禁阻断时，UI 可显式把当前问题集交给既有 Skill 优化 Agent；生成/上传来源会把 Agent 输出回写为同版本工作快照并重新静态评估，正式管理版本则继续形成独立 `SkillOptimizationRecord`，二者都不会自动发布。Skill 实验与全局实验共用执行模型但按 `scope` 隔离列表。实验创建时冻结模型配置 ID、模型参数、权限、并发、超时、数据集、Case 顺序、评估器和版本；灰度适配器与优化复测都按该快照执行，模型密钥仍只从服务端配置读取。
+
+工作台会话首次从管理中心选择时写入固定 `skillName` 和起始 `workVersion`。会话内每次成功发布只推进 `workVersion`，不会改变 `skillName`；历史任务和优化记录继续保存各轮精确基线。顶部资产选择器是独立的右栏资产状态，不持久化到会话；详情、正式评估、实验和优化记录都读取该 `skillName + version`。正式评估和实验不为资产创建过程会话。重新打开历史会话、开始生成或开始优化时，前端才以过程会话保存的 `skillName + workVersion` 恢复右侧资产。
 
 ```mermaid
 flowchart LR

@@ -33,6 +33,7 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
 import { extractCoreOutput } from "./core-output";
+import { MirroredDeltaGuard } from "./stream-event-dedupe";
 
 // =============================================================================
 // 类型定义
@@ -825,6 +826,8 @@ export class AgentInsight {
     const reasoningAcc = new Map<string, string>();
     const textPartAcc = new Map<string, string>();
     const reasoningPartAcc = new Map<string, string>();
+    const textDeltaGuard = new MirroredDeltaGuard();
+    const reasoningDeltaGuard = new MirroredDeltaGuard();
     // 工具状态机：partID → 上一次状态，防止重复 start
     const toolStatusSeen = new Map<string, string>();
     const toolInputAcc = new Map<string, string>();
@@ -1030,6 +1033,9 @@ export class AgentInsight {
                       : part.text;
                 textAcc.set(pMessage, part.text);
                 if (typeof pId === "string" && pId) textPartAcc.set(pId, part.text);
+                if (typeof evt.properties?.delta === "string" && incomingDelta) {
+                  textDeltaGuard.remember(`${pMessage}:${pId || 'text'}`, evt.properties.delta);
+                }
 
                 if (incomingDelta) {
                   textDeltaCount += 1;
@@ -1068,6 +1074,9 @@ export class AgentInsight {
                       : part.text;
                 reasoningAcc.set(pMessage, part.text);
                 if (typeof pId === "string" && pId) reasoningPartAcc.set(pId, part.text);
+                if (typeof evt.properties?.delta === "string" && delta) {
+                  reasoningDeltaGuard.remember(`${pMessage}:${pId || 'reasoning'}`, evt.properties.delta);
+                }
 
                 if (isSubagent) {
                   onSubagent?.({
@@ -1222,6 +1231,7 @@ export class AgentInsight {
                 typeof partID === "string" && partID.length > 0 && reasoningPartAcc.has(partID);
 
               if (field === "text" && !isReasoningPart) {
+                if (textDeltaGuard.consume(`${messageID}:${partID || 'text'}`, delta)) break;
                 const messageFullText = (textAcc.get(messageID) ?? "") + delta;
                 textAcc.set(messageID, messageFullText);
                 textDeltaCount += 1;
@@ -1252,6 +1262,7 @@ export class AgentInsight {
                   });
                 }
               } else if (field === "reasoning" || isReasoningPart) {
+                if (reasoningDeltaGuard.consume(`${messageID}:${partID || 'reasoning'}`, delta)) break;
                 const messageFullText = (reasoningAcc.get(messageID) ?? "") + delta;
                 reasoningAcc.set(messageID, messageFullText);
                 const partFullText =

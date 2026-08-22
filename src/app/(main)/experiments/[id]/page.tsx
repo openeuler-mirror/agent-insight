@@ -4,7 +4,7 @@
 // → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
@@ -127,6 +127,7 @@ export function ExperimentDetail({
   const [addCasesOpen, setAddCasesOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [comments, setComments] = useState<EvalCommentRow[]>([]);
+  const loadSequence = useRef(0);
 
   const loadComments = useCallback(async () => {
     if (!user) return;
@@ -148,6 +149,7 @@ export function ExperimentDetail({
 
   const load = useCallback(async (silent = false) => {
     if (!user) return;
+    const sequence = ++loadSequence.current;
     if (!silent) setLoading(true);
     try {
       const res = await apiFetch(
@@ -155,29 +157,43 @@ export function ExperimentDetail({
       );
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
+      if (sequence !== loadSequence.current) return;
       setDetail(data);
       setError('');
     } catch (e: unknown) {
-      if (!silent) {
+      if (!silent && sequence === loadSequence.current) {
         setError(errorMessage(e, '加载实验失败'));
         setDetail(null);
       }
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && sequence === loadSequence.current) setLoading(false);
     }
   }, [user, id, casePage, casePageSize]);
+
+  useEffect(() => () => { loadSequence.current += 1; }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  // running 时 5s 轮询进度
+  // 运行中或仍有未收敛子任务时持续轮询；串行发请求，避免旧响应覆盖新快照。
   useEffect(() => {
-    if (detail?.status !== 'running') return;
-    const timer = setInterval(() => { load(true); }, 5000);
-    return () => clearInterval(timer);
-  }, [detail?.status, load]);
+    if (!detail || (detail.status !== 'running' && detail.progress.pending === 0 && !detail.traceProgress?.pending)) return;
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await load(true);
+        if (!cancelled) schedule();
+      }, 5000);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [detail, load]);
 
   // 同一入口由服务端判断：Trace 未生成则重跑并绑定；否则重试失败的评估行。
   const retryCase = useCallback(async (caseId: string) => {
@@ -251,7 +267,10 @@ export function ExperimentDetail({
   return (
     <>
       {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
-      <PageContainer className="[&>*]:shrink-0">
+      <PageContainer
+        variant={embedded ? 'canvas' : 'default'}
+        className={embedded ? 'overflow-visible [&>*]:shrink-0' : '[&>*]:shrink-0'}
+      >
         {embedded && onBack && (
           <button type="button" onClick={onBack} style={{ ...ACTION_BTN, marginBottom: 12 }}>‹ 返回实验记录</button>
         )}

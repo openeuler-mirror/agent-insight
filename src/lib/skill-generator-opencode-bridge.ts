@@ -652,6 +652,7 @@ async function streamSkillGeneratorOpencodeImpl(
     await clearOpencodeSessionId(threadId);
     // 把 handlers 里累积的状态重置——不然第二轮会跟第一轮的"空"叠在一起。
     agentText = '';
+    textFullByMessageId.clear();
     openThinkingId = null;
     reasoningFullByThinkId.clear();
     announcedTools.clear();
@@ -900,7 +901,7 @@ export function scanWorkspaceFiles(workspaceDir: string): Record<string, FileDat
         continue;
       }
       // utf-8 读到 NUL 字节多半是二进制，跳过
-      if (content.includes(' ')) continue;
+      if (content.includes('\0')) continue;
       const rel = path.relative(workspaceDir, fullPath).replace(/\\/g, '/');
       const vfsPath = `${VFS_PREFIX}${rel}`;
       result[vfsPath] = {

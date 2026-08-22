@@ -53,11 +53,11 @@ export type SkillOptimizationStatus = (typeof OPTIMIZATION_STATUSES)[number];
 
 const OPTIMIZATION_TRANSITIONS: Record<SkillOptimizationStatus, ReadonlySet<SkillOptimizationStatus>> = {
   optimizing: new Set(['pending_retest', 'optimization_failed', 'optimization_cancelled']),
-  pending_retest: new Set(['retesting', 'abandoned']),
-  retesting: new Set(['retest_passed', 'retest_failed', 'retest_cancelled']),
+  pending_retest: new Set(['retesting', 'published', 'abandoned']),
+  retesting: new Set(['retest_passed', 'retest_failed', 'retest_cancelled', 'published']),
   retest_passed: new Set(['published', 'optimizing', 'abandoned']),
-  retest_failed: new Set(['optimizing', 'retesting', 'abandoned']),
-  retest_cancelled: new Set(['retesting', 'abandoned']),
+  retest_failed: new Set(['optimizing', 'retesting', 'published', 'abandoned']),
+  retest_cancelled: new Set(['retesting', 'published', 'abandoned']),
   published: new Set(),
   abandoned: new Set(),
   optimization_failed: new Set(),

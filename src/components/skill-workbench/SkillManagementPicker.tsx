@@ -37,11 +37,12 @@ interface SkillManagementPickerProps {
   open: boolean;
   user: string;
   selecting: boolean;
+  purpose: 'bind' | 'browse';
   onClose: () => void;
   onSelect: (skillName: string, version: number) => Promise<void>;
 }
 
-export function SkillManagementPicker({ open, user, selecting, onClose, onSelect }: SkillManagementPickerProps) {
+export function SkillManagementPicker({ open, user, selecting, purpose, onClose, onSelect }: SkillManagementPickerProps) {
   const [draftSearch, setDraftSearch] = useState('');
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
@@ -104,14 +105,18 @@ export function SkillManagementPicker({ open, user, selecting, onClose, onSelect
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-bg)] p-6" role="dialog" aria-modal="true" aria-label="选择 Skill">
-      <div className="flex max-h-[86vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
+      <div className="flex max-h-[86vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
         <header className="flex items-center gap-3 border-b border-border px-5 py-4">
           <span className="flex size-9 items-center justify-center rounded-lg bg-primary-subtle text-primary">
             <FolderSearch className="size-4.5" />
           </span>
           <div>
             <h2 className="text-sm font-semibold text-foreground">从 Skill 管理中心选择</h2>
-            <p className="mt-0.5 text-xs text-foreground-muted">选择明确版本作为本会话的工作快照，不会修改线上激活版本。</p>
+            <p className="mt-0.5 text-xs text-foreground-muted">
+              {purpose === 'bind'
+                ? '选择明确版本作为本会话的起始工作版本，不会修改线上激活版本。'
+                : '切换右侧全部页签使用的 Skill 和版本，不会改变当前会话绑定。'}
+            </p>
           </div>
           <button
             type="button"
@@ -124,33 +129,45 @@ export function SkillManagementPicker({ open, user, selecting, onClose, onSelect
           </button>
         </header>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background-secondary px-5 py-3">
-          <div className="flex h-8 min-w-56 flex-1 items-center rounded-md border border-border bg-card px-2">
-            <Search className="mr-2 size-3.5 text-foreground-muted" />
-            <input
-              value={draftSearch}
-              onChange={(event) => setDraftSearch(event.target.value)}
-              onKeyDown={(event) => event.key === 'Enter' && submitSearch()}
-              placeholder="搜索名称或描述"
-              className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-foreground-muted"
-            />
-            <button type="button" onClick={submitSearch} className="text-[11px] font-medium text-primary">搜索</button>
+        <div className="border-b border-border bg-background-secondary px-5 py-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="flex min-w-0 flex-1 items-center gap-2 lg:min-w-[28rem]">
+              <div className="flex h-10 min-w-0 flex-1 items-center rounded-md border border-border bg-card px-3 focus-within:border-primary">
+                <Search className="mr-2 size-4 shrink-0 text-foreground-muted" />
+                <input
+                  value={draftSearch}
+                  onChange={(event) => setDraftSearch(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && submitSearch()}
+                  placeholder="搜索 Skill 名称或描述"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-foreground-muted"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={submitSearch}
+                className="inline-flex h-10 shrink-0 items-center rounded-md bg-primary px-4 text-xs font-medium text-primary-foreground"
+              >
+                搜索
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 lg:shrink-0">
+              <input
+                value={category}
+                onChange={(event) => { setCategory(event.target.value); setPage(1); }}
+                placeholder="全部分类"
+                className="h-10 min-w-40 flex-1 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none placeholder:text-foreground-muted focus:border-primary lg:w-40 lg:flex-none"
+              />
+              <select
+                value={source}
+                onChange={(event) => { setSource(event.target.value as typeof source); setPage(1); }}
+                className="h-10 min-w-32 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary"
+              >
+                <option value="all">全部来源</option>
+                <option value="generated">平台生成</option>
+                <option value="uploaded">上传导入</option>
+              </select>
+            </div>
           </div>
-          <input
-            value={category}
-            onChange={(event) => { setCategory(event.target.value); setPage(1); }}
-            placeholder="全部分类"
-            className="h-8 w-32 rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none placeholder:text-foreground-muted focus:border-primary"
-          />
-          <select
-            value={source}
-            onChange={(event) => { setSource(event.target.value as typeof source); setPage(1); }}
-            className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground outline-none focus:border-primary"
-          >
-            <option value="all">全部来源</option>
-            <option value="generated">平台生成</option>
-            <option value="uploaded">上传导入</option>
-          </select>
         </div>
 
         <div className="min-h-[430px] flex-1 overflow-y-auto p-5">

@@ -37,68 +37,73 @@ function safeRelativePath(filePath: string) {
 export async function publishWorkbenchSnapshot(input: {
   user: string;
   sessionId: string;
-  confirmed: boolean;
+  confirmed?: boolean;
 }) {
-  if (!input.confirmed) throw new WorkbenchPublishError('发布前必须二次确认', 400);
   const session = await prismaRaw.skillWorkbenchSession.findFirst({
     where: { id: input.sessionId, user: input.user },
   });
   if (!session?.skillName || session.workVersion == null || session.source === 'management') {
     throw new WorkbenchPublishError('当前会话没有可发布的工作快照', 409);
   }
+  const usesLegacyGenerationGate = session.source === 'generated';
+  if (!usesLegacyGenerationGate && !input.confirmed) {
+    throw new WorkbenchPublishError('发布前必须二次确认', 400);
+  }
   const files = parseFiles(session.filesJson);
   const skillContent = files['SKILL.md'];
   if (!skillContent) throw new WorkbenchPublishError('工作快照缺少 SKILL.md', 422);
   const declaredName = frontmatterValue(skillContent, 'name');
-  if (declaredName && declaredName !== session.skillName) {
+  if (!usesLegacyGenerationGate && declaredName && declaredName !== session.skillName) {
     throw new WorkbenchPublishError(`SKILL.md name 已变为 ${declaredName}，请重新同步工作上下文`, 409);
   }
 
-  const contentHash = computeSkillSnapshotHash(files);
-  const quality = await prismaRaw.skillSnapshotEvaluation.findFirst({
-    where: {
-      sessionId: session.id,
-      user: input.user,
-      skillName: session.skillName,
-      proposedVersion: session.workVersion,
-      contentHash,
-    },
-    orderBy: { createdAt: 'desc' },
-  });
-  if (!quality) {
-    const previous = await prismaRaw.skillSnapshotEvaluation.findFirst({
+  if (!usesLegacyGenerationGate) {
+    const contentHash = computeSkillSnapshotHash(files);
+    const quality = await prismaRaw.skillSnapshotEvaluation.findFirst({
       where: {
         sessionId: session.id,
         user: input.user,
         skillName: session.skillName,
         proposedVersion: session.workVersion,
+        contentHash,
       },
-      select: { id: true },
+      orderBy: { createdAt: 'desc' },
     });
-    throw new WorkbenchPublishError(
-      previous
-        ? '当前工作快照内容已变化，请重新运行静态质量评估'
-        : '当前工作快照尚未运行静态质量评估',
-      409,
-    );
-  }
-  if (quality.status === 'pending') {
-    throw new WorkbenchPublishError('当前工作快照正在进行静态质量评估，请等待完成后再发布', 409);
-  }
-  if (quality.status === 'failed') {
-    throw new WorkbenchPublishError(`静态质量评估执行失败：${quality.errorMessage || '请重新评估'}`, 422);
-  }
-  if (!['ok', 'partial'].includes(quality.status)) {
-    throw new WorkbenchPublishError('当前工作快照没有有效的静态质量评估结果', 409);
-  }
-  const issues = JSON.parse(quality.issuesJson || '[]') as Array<{
-    severity?: string;
-    evidence?: string;
-    reasoning?: string;
-  }>;
-  const highIssueCount = issues.filter(isBlockingStaticQualityIssue).length;
-  if (highIssueCount > 0) {
-    throw new WorkbenchPublishError(`静态质量评估发现 ${highIssueCount} 个高风险问题，请修复并重新评估后发布`, 422);
+    if (!quality) {
+      const previous = await prismaRaw.skillSnapshotEvaluation.findFirst({
+        where: {
+          sessionId: session.id,
+          user: input.user,
+          skillName: session.skillName,
+          proposedVersion: session.workVersion,
+        },
+        select: { id: true },
+      });
+      throw new WorkbenchPublishError(
+        previous
+          ? '当前工作快照内容已变化，请重新运行静态质量评估'
+          : '当前工作快照尚未运行静态质量评估',
+        409,
+      );
+    }
+    if (quality.status === 'pending') {
+      throw new WorkbenchPublishError('当前工作快照正在进行静态质量评估，请等待完成后再发布', 409);
+    }
+    if (quality.status === 'failed') {
+      throw new WorkbenchPublishError(`静态质量评估执行失败：${quality.errorMessage || '请重新评估'}`, 422);
+    }
+    if (!['ok', 'partial'].includes(quality.status)) {
+      throw new WorkbenchPublishError('当前工作快照没有有效的静态质量评估结果', 409);
+    }
+    const issues = JSON.parse(quality.issuesJson || '[]') as Array<{
+      severity?: string;
+      evidence?: string;
+      reasoning?: string;
+    }>;
+    const highIssueCount = issues.filter(isBlockingStaticQualityIssue).length;
+    if (highIssueCount > 0) {
+      throw new WorkbenchPublishError(`静态质量评估发现 ${highIssueCount} 个高风险问题，请修复并重新评估后发布`, 422);
+    }
   }
 
   let skill = await prismaRaw.skill.findFirst({ where: { name: session.skillName, user: input.user } });
@@ -106,7 +111,7 @@ export async function publishWorkbenchSnapshot(input: {
     where: { skillId: skill.id }, orderBy: { version: 'desc' }, select: { version: true, content: true },
   }) : null;
   const expectedVersion = (latest?.version ?? -1) + 1;
-  if (expectedVersion !== session.workVersion) {
+  if (!usesLegacyGenerationGate && expectedVersion !== session.workVersion) {
     throw new WorkbenchPublishError(`版本已变化：候选为 v${session.workVersion}，当前应发布 v${expectedVersion}`, 409);
   }
   if (latest?.content === skillContent) throw new WorkbenchPublishError('候选与最新正式版本内容相同', 409);
@@ -115,7 +120,8 @@ export async function publishWorkbenchSnapshot(input: {
     skill = await prismaRaw.skill.create({
       data: {
         name: session.skillName,
-        description: frontmatterValue(skillContent, 'description') || 'Published from Skill Workbench',
+        description: frontmatterValue(skillContent, 'description')
+          || (usesLegacyGenerationGate ? 'Published from Playground' : 'Published from Skill Workbench'),
         visibility: 'private',
         activeVersion: 0,
         user: input.user,
@@ -123,7 +129,7 @@ export async function publishWorkbenchSnapshot(input: {
     });
   }
 
-  const version = session.workVersion;
+  const version = usesLegacyGenerationGate ? expectedVersion : session.workVersion;
   const storageBase = getSkillVersionStorageDir(skill.id, version);
   if (fs.existsSync(storageBase) && fs.readdirSync(storageBase).length > 0) {
     throw new WorkbenchPublishError(`版本 v${version} 的资产目录已存在，已阻止覆盖`, 409);
@@ -173,13 +179,14 @@ export async function publishOptimizationCandidate(input: {
   recordId: string;
   confirmed: boolean;
 }) {
+  const publishableStatuses = ['pending_retest', 'retesting', 'retest_passed', 'retest_failed', 'retest_cancelled'];
   if (!input.confirmed) throw new WorkbenchPublishError('发布前必须二次确认', 400);
   const record = await prismaRaw.skillOptimizationRecord.findFirst({
     where: { id: input.recordId, user: input.user, skillName: input.skillName },
   });
   if (!record) throw new WorkbenchPublishError('优化候选不存在', 404);
-  if (record.status !== 'retest_passed') {
-    throw new WorkbenchPublishError('只有同配置复测通过的候选才能发布', 409);
+  if (!publishableStatuses.includes(record.status)) {
+    throw new WorkbenchPublishError('只有质量规则通过的候选才能发布', 409);
   }
   const skill = await prismaRaw.skill.findFirst({
     where: { name: input.skillName, user: input.user },
@@ -212,8 +219,12 @@ export async function publishOptimizationCandidate(input: {
     },
   });
   if (!quality) throw new WorkbenchPublishError('候选静态质量评估无效或未通过', 409);
-  const issues = JSON.parse(quality.issuesJson || '[]') as Array<{ severity?: string }>;
-  if (issues.some((issue) => issue.severity === 'high')) {
+  const issues = JSON.parse(quality.issuesJson || '[]') as Array<{
+    severity?: string;
+    evidence?: string;
+    reasoning?: string;
+  }>;
+  if (issues.some(isBlockingStaticQualityIssue)) {
     throw new WorkbenchPublishError('候选仍有高风险质量问题，已阻止发布', 422);
   }
 
@@ -234,7 +245,7 @@ export async function publishOptimizationCandidate(input: {
 
   const published = await prismaRaw.$transaction(async (tx) => {
     const claimed = await tx.skillOptimizationRecord.updateMany({
-      where: { id: record.id, status: 'retest_passed', publishedVersion: null },
+      where: { id: record.id, status: { in: publishableStatuses }, publishedVersion: null },
       data: { status: 'published', publishedVersion: version, publishedAt: new Date(), completedAt: new Date() },
     });
     if (claimed.count === 0) throw new WorkbenchPublishError('候选已被其他发布操作处理', 409);
@@ -249,6 +260,38 @@ export async function publishOptimizationCandidate(input: {
       },
     });
     await tx.skill.update({ where: { id: skill.id }, data: { activeVersion: version } });
+    const processSession = await tx.skillWorkbenchSession.findUnique({
+      where: { id: record.sessionId },
+      select: { optSessionId: true },
+    });
+    const previousOptimization = processSession?.optSessionId
+      ? await tx.skillOptSession.findUnique({
+        where: { id: processSession.optSessionId },
+        include: { messages: { orderBy: { createdAt: 'asc' } } },
+      })
+      : null;
+    const nextOptimization = previousOptimization
+      ? await tx.skillOptSession.create({
+        data: {
+          user: previousOptimization.user,
+          skillName: previousOptimization.skillName,
+          baseVersion: version,
+          title: previousOptimization.title,
+          files: JSON.stringify(files),
+          agentName: previousOptimization.agentName,
+          agentTraceSkill: previousOptimization.agentTraceSkill,
+          messages: {
+            create: previousOptimization.messages.map((message) => ({
+              role: message.role,
+              content: message.content,
+              blocks: message.blocks,
+              createdAt: message.createdAt,
+            })),
+          },
+        },
+        select: { id: true },
+      })
+      : null;
     await tx.skillWorkbenchSession.update({
       where: { id: record.sessionId },
       data: {
@@ -257,7 +300,7 @@ export async function publishOptimizationCandidate(input: {
         activeView: 'optimization',
         workVersion: version,
         filesJson: JSON.stringify(files),
-        optSessionId: null,
+        optSessionId: nextOptimization?.id || processSession?.optSessionId || null,
       },
     });
     return created;

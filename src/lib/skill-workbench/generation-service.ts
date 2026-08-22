@@ -1,7 +1,6 @@
 import { findSkillMd, fileContentToString, type PlaygroundFiles } from '@/lib/skill-generator/skill-files';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { getSkillWorkbenchSession } from './session-service';
-import { runSnapshotStaticEvaluation } from './snapshot-evaluator';
 import { createOrReuseSkillWorkbenchTask, updateSkillWorkbenchTask } from './task-service';
 
 function parseFiles(value: string): PlaygroundFiles {
@@ -73,9 +72,10 @@ export async function syncWorkbenchGeneration(user: string, sessionId: string) {
 
   const files = parseFiles(generator.files);
   const skillMd = findSkillMd(files);
-  if (!skillMd?.name) return { kind: 'incomplete' as const, reason: '生成结果还没有包含有效 name 的 SKILL.md' };
+  if (!skillMd) return { kind: 'incomplete' as const, reason: '生成结果还没有包含 SKILL.md' };
+  const skillName = skillMd.name || 'untitled-skill';
   const existing = await prismaRaw.skill.findFirst({
-    where: { name: skillMd.name, user },
+    where: { name: skillName, user },
     select: { versions: { orderBy: { version: 'desc' }, take: 1, select: { version: true } } },
   });
   const candidateVersion = (existing?.versions[0]?.version ?? -1) + 1;
@@ -83,8 +83,8 @@ export async function syncWorkbenchGeneration(user: string, sessionId: string) {
   await prismaRaw.skillWorkbenchSession.updateMany({
     where: { id: sessionId, user },
     data: {
-      title: generator.title || skillMd.name,
-      skillName: skillMd.name,
+      title: generator.title || skillName,
+      skillName,
       workVersion: candidateVersion,
       source: 'generated',
       stage: 'ready',
@@ -92,20 +92,11 @@ export async function syncWorkbenchGeneration(user: string, sessionId: string) {
       activeView: 'detail',
     },
   });
-  const quality = await runSnapshotStaticEvaluation({
-    user,
-    sessionId,
-    skillName: skillMd.name,
-    proposedVersion: candidateVersion,
-    files: snapshot,
-    trigger: 'generation',
-  });
   return {
     kind: 'ready' as const,
     session: await getSkillWorkbenchSession(user, sessionId),
     candidateVersion,
     targetExists: Boolean(existing),
-    quality,
   };
 }
 
@@ -162,7 +153,7 @@ export async function finishWorkbenchGenerationRun(input: {
     await updateSkillWorkbenchTask({
       taskId: input.taskId,
       status: 'running',
-      progress: { stage: '保存并评估快照', percent: 85 },
+      progress: { stage: '保存工作快照', percent: 85 },
     });
     const result = await syncWorkbenchGeneration(input.user, input.workbenchSessionId);
     if (result.kind !== 'ready') {
@@ -179,8 +170,8 @@ export async function finishWorkbenchGenerationRun(input: {
       taskId: input.taskId,
       status: 'done',
       progress: { stage: '完成', percent: 100 },
-      resultType: 'snapshot-evaluation',
-      resultId: result.quality.id,
+      resultType: 'workbench-snapshot',
+      resultId: input.workbenchSessionId,
       errorMessage: null,
     });
     return result;

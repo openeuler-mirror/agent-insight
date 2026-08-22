@@ -16,6 +16,11 @@ import {
   formatWorkbenchTriggerDatasetTimestamp,
   SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
 } from './trigger-evaluator';
+import {
+  getSkillExperimentConcurrencyPolicy,
+  isSkillExperimentDatasetEligible,
+  isSkillExperimentEvaluatorEligible,
+} from './experiment-policy';
 
 export const WORKBENCH_EXPERIMENT_PRESETS = ['trigger', 'use-case', 'skill-ab'] as const;
 export type WorkbenchExperimentPreset = (typeof WORKBENCH_EXPERIMENT_PRESETS)[number];
@@ -31,15 +36,16 @@ async function resolveSkill(user: string, skillName: string) {
   });
 }
 
-export async function listWorkbenchExperiments(user: string, skillName: string) {
+export async function listWorkbenchExperiments(user: string, skillName: string, skillVersion: number) {
   const skill = await resolveSkill(user, skillName);
-  if (!skill) return null;
+  if (!skill || !skill.versions.some((version) => version.version === skillVersion)) return null;
   const [datasets, experiments] = await Promise.all([
     readAgentDatasetReferences(user),
     prismaRaw.experiment.findMany({
       where: {
         user,
         skillName,
+        skillVersion,
         scope: 'skill-workbench',
         preset: { in: [...WORKBENCH_EXPERIMENT_PRESETS, 'retest'] },
       },
@@ -55,10 +61,10 @@ export async function listWorkbenchExperiments(user: string, skillName: string) 
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
   return {
     versions: skill.versions.map((version) => ({ id: version.id, version: version.version })),
-    datasets: datasets.filter((dataset) => !dataset.targetSkill || dataset.targetSkill === skillName),
+    datasets,
     evaluators: [...DEFAULT_SELECTED_PRESET_IDS],
     experiments: experiments.map((experiment) => {
-      const snapshot = parseJson<Record<string, any>>(experiment.configSnapshotJson, {});
+      const snapshot = parseJson<Record<string, unknown> & { grayscaleTaskId?: string }>(experiment.configSnapshotJson, {});
       const task = snapshot.grayscaleTaskId ? taskMap.get(snapshot.grayscaleTaskId) : null;
       return {
         ...experiment,
@@ -79,7 +85,7 @@ export async function listWorkbenchExperiments(user: string, skillName: string) 
 
 export async function createWorkbenchExperiment(input: {
   user: string;
-  sessionId: string;
+  sessionId?: string;
   skillName: string;
   version: number;
   preset: WorkbenchExperimentPreset;
@@ -94,13 +100,19 @@ export async function createWorkbenchExperiment(input: {
   traceSource?: 'existing' | 'generate';
   modelConfigId?: string | null;
 }) {
-  const session = await prismaRaw.skillWorkbenchSession.findFirst({
-    where: {
-      id: input.sessionId, user: input.user, skillName: input.skillName,
-      workVersion: input.version, source: 'management',
-    },
-  });
-  if (!session) return { kind: 'invalid_context' as const };
+  if (input.sessionId) {
+    const session = await prismaRaw.skillWorkbenchSession.findFirst({
+      where: {
+        id: input.sessionId,
+        user: input.user,
+        skillName: input.skillName,
+        workVersion: input.version,
+        source: 'management',
+      },
+      select: { id: true },
+    });
+    if (!session) return { kind: 'invalid_context' as const };
+  }
   const skill = await resolveSkill(input.user, input.skillName);
   const currentVersion = skill?.versions.find((version) => version.version === input.version);
   if (!skill || !currentVersion) return { kind: 'not_found' as const };
@@ -112,7 +124,11 @@ export async function createWorkbenchExperiment(input: {
     return { kind: 'invalid_compare' as const };
   }
   const dataset = await findAgentDataset(input.user, input.datasetId);
-  if (!dataset || dataset.cases.length === 0 || (dataset.targetSkill && dataset.targetSkill !== input.skillName)) {
+  if (
+    !dataset
+    || dataset.cases.length === 0
+    || !isSkillExperimentDatasetEligible(input.preset, dataset, input.skillName)
+  ) {
     return { kind: 'invalid_dataset' as const };
   }
   if (input.preset === 'trigger') {
@@ -132,9 +148,13 @@ export async function createWorkbenchExperiment(input: {
     ? [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID]
     : Array.from(new Set((input.evaluatorIds || []).map((id) => id.trim()).filter(Boolean)));
   if (evaluatorIds.length === 0) evaluatorIds.push(...DEFAULT_SELECTED_PRESET_IDS);
+  if (evaluatorIds.some((id) => !isSkillExperimentEvaluatorEligible(input.preset, id))) {
+    return { kind: 'invalid_evaluators' as const };
+  }
   const activeModel = input.modelConfigId
     ? await getActiveConfig(input.user).then((config) => config?.id === input.modelConfigId ? config : null)
     : await getActiveConfig(input.user);
+  const concurrencyPolicy = getSkillExperimentConcurrencyPolicy(input.preset);
   const runtime = {
     agentName: 'grayscale-skill-agent',
     modelConfigId: activeModel?.id || null,
@@ -148,7 +168,11 @@ export async function createWorkbenchExperiment(input: {
     interactionPolicy: 'auto-deny' as const,
     timeoutMs: 3 * 60 * 1000,
     idleTimeoutMs: 45 * 1000,
-    agentMaxConcurrency: 1,
+    executionConcurrency: concurrencyPolicy.executionConcurrency,
+    abPairConcurrency: concurrencyPolicy.abPairConcurrency,
+    evaluationConcurrency: concurrencyPolicy.evaluationConcurrency,
+    triggerConcurrency: concurrencyPolicy.triggerConcurrency,
+    agentMaxConcurrency: concurrencyPolicy.executionConcurrency,
     retryLimit: 2,
   };
   const created = await prismaRaw.$transaction(async (tx) => {
@@ -165,7 +189,7 @@ export async function createWorkbenchExperiment(input: {
         skillVersion: input.version,
         preset: input.preset,
         skillContextJson: JSON.stringify({
-          sessionId: input.sessionId,
+          ...(input.sessionId ? { sessionId: input.sessionId } : {}),
           skillName: input.skillName,
           versionA: versionA?.version ?? null,
           versionB: versionB?.version ?? null,
@@ -184,6 +208,7 @@ export async function createWorkbenchExperiment(input: {
           skillId: skill.id,
           versionAId: versionA?.id || '__NONE__',
           versionBId: versionB!.id,
+          boundSide: input.preset === 'skill-ab' ? 'a' : 'b',
           linkedDatasetIds: [dataset.id],
           evaluators: evaluatorIds,
           runCount: selectedCases.length,
@@ -198,6 +223,10 @@ export async function createWorkbenchExperiment(input: {
           interactionPolicy: runtime.interactionPolicy,
           timeoutMs: runtime.timeoutMs,
           idleTimeoutMs: runtime.idleTimeoutMs,
+          executionConcurrency: runtime.executionConcurrency,
+          abPairConcurrency: runtime.abPairConcurrency,
+          evaluationConcurrency: runtime.evaluationConcurrency,
+          triggerConcurrency: runtime.triggerConcurrency,
           agentMaxConcurrency: runtime.agentMaxConcurrency,
           ...(input.preset === 'skill-ab' ? {} : { executionSides: ['b'] }),
         }),
@@ -211,6 +240,7 @@ export async function createWorkbenchExperiment(input: {
       evaluatorIds,
       versionAId: versionA?.id || '__NONE__',
       versionBId: versionB!.id,
+      boundSide: input.preset === 'skill-ab' ? 'a' : 'b',
       baselineSide: versionA ? 'a' : 'b',
       executionSides: input.preset === 'skill-ab' ? ['a', 'b'] : ['b'],
       traceSource: input.traceSource || 'generate',
@@ -222,7 +252,7 @@ export async function createWorkbenchExperiment(input: {
     const updated = await tx.experiment.update({
       where: { id: experiment.id }, data: { configSnapshotJson: JSON.stringify(configSnapshot) },
     });
-    if (input.optimizationRecordId) {
+    if (input.optimizationRecordId && input.sessionId) {
       const record = await tx.skillOptimizationRecord.findFirst({
         where: {
           id: input.optimizationRecordId,
@@ -249,14 +279,16 @@ export async function createWorkbenchExperiment(input: {
     }
     return { experiment: updated, grayscaleTask: task, configSnapshot };
   });
-  await createOrReuseSkillWorkbenchTask({
-    user: input.user,
-    sessionId: input.sessionId,
-    type: 'experiment',
-    skillName: input.skillName,
-    version: input.version,
-    targetRef: created.experiment.id,
-  });
+  if (input.sessionId) {
+    await createOrReuseSkillWorkbenchTask({
+      user: input.user,
+      sessionId: input.sessionId,
+      type: 'experiment',
+      skillName: input.skillName,
+      version: input.version,
+      targetRef: created.experiment.id,
+    });
+  }
   return { kind: 'created' as const, ...created };
 }
 

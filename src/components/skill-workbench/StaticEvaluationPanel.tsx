@@ -7,6 +7,8 @@ interface StaticIssue {
   severity: string;
   summary: string;
   dimension: string;
+  evidence?: string | null;
+  reasoning?: string | null;
   suggestedFix: string | null;
 }
 

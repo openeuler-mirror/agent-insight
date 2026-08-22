@@ -2,7 +2,7 @@
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
 import { NextResponse } from 'next/server';
-import type { ExperimentCase, ExperimentEvalResult } from '@prisma/client';
+import type { ExperimentCase, ExperimentEvalResult, Prisma } from '@prisma/client';
 import {
   extractLegacyFiFromEvaluatorContextJson,
   parseExperimentCaseEvaluatorContext,
@@ -74,6 +74,7 @@ export async function GET(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
+    const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
 
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
@@ -278,12 +279,61 @@ export async function GET(
     const effectiveAllResults = allResults.filter(
       (result: { caseId: string }) => !invalidGeneratedCaseIds.has(result.caseId),
     );
+    const doneResultCount = effectiveAllResults.filter((r: { status: string }) => r.status === 'done').length;
+    const failedResultCount = effectiveAllResults.filter((r: { status: string }) => r.status === 'failed').length;
+    let expectedResultTotal = effectiveAllResults.length;
+    let syntheticExecutionFailures = 0;
+    if (experiment.scope === 'skill-workbench' && configSnapshot) {
+      const frozenCaseIds = Array.isArray(configSnapshot.caseIds)
+        ? configSnapshot.caseIds.map(String).filter(Boolean)
+        : [];
+      const executionSides = Array.isArray(configSnapshot.executionSides)
+        ? configSnapshot.executionSides.filter((side) => side === 'a' || side === 'b')
+        : experiment.preset === 'skill-ab' ? ['a', 'b'] : ['b'];
+      const repeatRounds = Math.max(1, Number(configSnapshot.repeatRounds) || 1);
+      expectedResultTotal = Math.max(
+        expectedResultTotal,
+        frozenCaseIds.length * executionSides.length * repeatRounds * evaluatorIds.length,
+      );
+
+      const grayscaleTaskId = typeof configSnapshot.grayscaleTaskId === 'string'
+        ? configSnapshot.grayscaleTaskId
+        : '';
+      if (grayscaleTaskId && evaluatorIds.length) {
+        const grayscaleTask = await prisma.grayscaleTask.findFirst({
+          where: { id: grayscaleTaskId, ...(username ? { user: username } : {}) },
+          select: { caseStatesJson: true },
+        });
+        const caseStates = parseJsonValue(grayscaleTask?.caseStatesJson || null) as Record<string, unknown> | null;
+        if (caseStates) {
+          for (const state of Object.values(caseStates)) {
+            if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
+            for (const side of executionSides) {
+              const sideState = (state as Record<string, unknown>)[String(side)];
+              if (!sideState || typeof sideState !== 'object' || Array.isArray(sideState)) continue;
+              const runs = (sideState as Record<string, unknown>).runs;
+              if (!Array.isArray(runs)) continue;
+              syntheticExecutionFailures += runs.filter((run) => {
+                if (!run || typeof run !== 'object' || Array.isArray(run)) return false;
+                const value = run as Record<string, unknown>;
+                return value.status === 'fail' && typeof value.failureType === 'string' && value.failureType.length > 0;
+              }).length * evaluatorIds.length;
+            }
+          }
+        }
+      }
+    }
+    const failed = Math.min(expectedResultTotal, failedResultCount + syntheticExecutionFailures);
     const progress = {
-      total: effectiveAllResults.length,
-      done: effectiveAllResults.filter((r: { status: string }) => r.status === 'done').length,
-      failed: effectiveAllResults.filter((r: { status: string }) => r.status === 'failed').length,
-      pending: effectiveAllResults.filter((r: { status: string }) => r.status === 'pending' || r.status === 'running').length,
+      total: expectedResultTotal,
+      done: doneResultCount,
+      failed,
+      pending: Math.max(0, expectedResultTotal - doneResultCount - failed),
     };
+    const responseStatus = experiment.status === 'done'
+      && (progress.pending > 0 || Boolean(traceProgress?.pending))
+      ? 'running'
+      : experiment.status;
     const overall = overallAverage(effectiveAllResults);
     const breakdown = evaluatorBreakdown(effectiveAllResults);
 
@@ -365,7 +415,7 @@ export async function GET(
       name: experiment.name,
       type: experiment.type,
       agentName: experiment.agentName,
-      status: experiment.status,
+      status: responseStatus,
       watchMode: experiment.watchMode,
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
@@ -375,7 +425,7 @@ export async function GET(
       skillVersion: experiment.skillVersion,
       preset: experiment.preset,
       skillContext: parseJsonValue(experiment.skillContextJson),
-      configSnapshot: parseJsonValue(experiment.configSnapshotJson),
+      configSnapshot,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
@@ -490,7 +540,7 @@ export async function DELETE(
 
     const experiment = await prisma.experiment.findFirst({
       where: { id, user: username },
-      select: { status: true },
+      select: { status: true, scope: true, configSnapshotJson: true },
     });
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
@@ -502,8 +552,30 @@ export async function DELETE(
       }, { status: 409 });
     }
 
-    const deleted = await prisma.experiment.deleteMany({
-      where: { id, user: username, status: 'draft' },
+    let grayscaleTaskId = '';
+    if (experiment.scope === 'skill-workbench') {
+      try {
+        const snapshot = JSON.parse(experiment.configSnapshotJson || '{}') as { grayscaleTaskId?: unknown };
+        grayscaleTaskId = typeof snapshot.grayscaleTaskId === 'string' ? snapshot.grayscaleTaskId : '';
+      } catch { /* ignore malformed rollback metadata */ }
+    }
+    const rollbackTask = grayscaleTaskId
+      ? await prisma.grayscaleTask.findFirst({ where: { id: grayscaleTaskId, user: username } })
+      : null;
+    const rollbackTaskConfig = rollbackTask ? parseJsonValue(rollbackTask.configJson) : null;
+    const canDeleteTask = rollbackTask
+      && rollbackTaskConfig
+      && typeof rollbackTaskConfig === 'object'
+      && !Array.isArray(rollbackTaskConfig)
+      && (rollbackTaskConfig as { evalExperimentId?: unknown }).evalExperimentId === id;
+    const deleted = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const result = await tx.experiment.deleteMany({
+        where: { id, user: username, status: 'draft' },
+      });
+      if (result.count > 0 && canDeleteTask) {
+        await tx.grayscaleTask.deleteMany({ where: { id: grayscaleTaskId, user: username } });
+      }
+      return result;
     });
     if (deleted.count === 0) {
       return NextResponse.json({ error: 'experiment has already started' }, { status: 409 });

@@ -1,4 +1,5 @@
 import { prismaRaw } from '@/lib/storage/prisma';
+import { resolveSkillVersionFiles } from './session-service';
 
 export const SKILL_MANAGEMENT_PAGE_SIZE = 9;
 export const SKILL_MANAGEMENT_MAX_PAGE_SIZE = 36;
@@ -97,5 +98,36 @@ export async function listManagedSkills(user: string, query: SkillManagementQuer
     page: query.page,
     pageSize: query.pageSize,
     pages: Math.max(1, Math.ceil(total / query.pageSize)),
+  };
+}
+
+export async function getManagedSkillVersionAsset(user: string, skillName: string, version: number) {
+  const skill = await prismaRaw.skill.findFirst({
+    where: {
+      name: skillName,
+      AND: [
+        { OR: [{ user }, { user: null }, { visibility: 'public' }] },
+        { versions: { some: { version } } },
+      ],
+    },
+    select: {
+      id: true,
+      name: true,
+      activeVersion: true,
+      versions: {
+        where: { version },
+        take: 1,
+        select: { version: true, content: true, files: true },
+      },
+    },
+  });
+  const selectedVersion = skill?.versions[0];
+  if (!skill || !selectedVersion) return null;
+  return {
+    id: skill.id,
+    name: skill.name,
+    version: selectedVersion.version,
+    activeVersion: skill.activeVersion,
+    files: resolveSkillVersionFiles(skill.id, selectedVersion.version, selectedVersion.files, selectedVersion.content),
   };
 }

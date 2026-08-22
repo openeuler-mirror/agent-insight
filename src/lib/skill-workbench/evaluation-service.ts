@@ -163,6 +163,8 @@ export async function getWorkbenchEvaluationOverview(input: {
         severity: displayStaticQualitySeverity(issue),
         summary: String(issue.summary || ''),
         dimension: String(issue.dimension || ''),
+        evidence: issue.evidence == null ? null : String(issue.evidence),
+        reasoning: issue.reasoning == null ? null : String(issue.reasoning),
         suggestedFix: issue.suggestedFix == null ? null : String(issue.suggestedFix),
       })),
     },
@@ -171,11 +173,31 @@ export async function getWorkbenchEvaluationOverview(input: {
 
 export async function runWorkbenchStaticEvaluation(input: {
   user: string;
-  sessionId: string;
+  sessionId?: string;
   skillName: string;
   version: number;
   force?: boolean;
+  formalAsset?: boolean;
 }) {
+  if (input.formalAsset) {
+    const skill = await resolveVersionTarget(input.user, input.skillName, input.version);
+    if (!skill) return { kind: 'not_found' as const };
+    const result = await runStaticEvaluation({
+      skillId: skill.id,
+      version: input.version,
+      user: input.user,
+      trigger: 'manual',
+    });
+    const succeeded = result.status === 'ok' || result.status === 'partial';
+    return {
+      kind: succeeded ? 'done' as const : 'failed' as const,
+      task: null,
+      result,
+      overview: await getWorkbenchStaticEvaluation(input),
+      reused: false,
+    };
+  }
+  if (!input.sessionId) return { kind: 'invalid_context' as const };
   const session = await prismaRaw.skillWorkbenchSession.findFirst({
     where: {
       id: input.sessionId,
@@ -207,7 +229,7 @@ export async function runWorkbenchStaticEvaluation(input: {
     return {
       kind: 'done' as const,
       task: taskResult.task,
-      overview: await getWorkbenchEvaluationOverview(input),
+      overview: await getWorkbenchEvaluationOverview({ ...input, sessionId: input.sessionId }),
       reused: true,
     };
   }
@@ -269,7 +291,7 @@ export async function runWorkbenchStaticEvaluation(input: {
     kind: succeeded ? 'done' as const : 'failed' as const,
     task,
     result,
-    overview: await getWorkbenchEvaluationOverview(input),
+    overview: await getWorkbenchEvaluationOverview({ ...input, sessionId: input.sessionId }),
     reused: taskResult.reused,
   };
 }

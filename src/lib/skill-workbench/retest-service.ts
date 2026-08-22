@@ -162,6 +162,20 @@ export async function retestOptimizationCandidate(input: {
     const candidateScore = average(scores);
     const passed = candidateScore != null && candidateScore >= sourceScore;
     await prismaRaw.experiment.update({ where: { id: retest.id }, data: { status: 'done' } });
+    const latestRecord = await prismaRaw.skillOptimizationRecord.findUnique({
+      where: { id: record.id },
+      select: { sourceRefsJson: true },
+    });
+    const latestSourceRefs = parseJson<unknown[]>(latestRecord?.sourceRefsJson || record.sourceRefsJson, []);
+    await prismaRaw.skillOptimizationRecord.update({
+      where: { id: record.id },
+      data: {
+        sourceRefsJson: JSON.stringify([
+          ...latestSourceRefs.filter((item) => !(item && typeof item === 'object' && (item as { type?: string }).type === 'retest-result')),
+          { type: 'retest-result', experimentId: retest.id, sourceScore, candidateScore, passed },
+        ]),
+      },
+    });
     await transitionSkillOptimizationRecord({
       user: input.user,
       skillName: input.skillName,

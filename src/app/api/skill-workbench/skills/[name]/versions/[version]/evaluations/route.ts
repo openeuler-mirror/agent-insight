@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
 import {
+  getWorkbenchStaticEvaluation,
   getWorkbenchEvaluationOverview,
   runWorkbenchStaticEvaluation,
 } from '@/lib/skill-workbench/evaluation-service';
@@ -21,13 +22,19 @@ export async function GET(
     const { name, version: rawVersion } = await context.params;
     const version = parseVersion(rawVersion);
     const sessionId = request.nextUrl.searchParams.get('sessionId');
-    if (version === null || !sessionId) return NextResponse.json({ error: '会话或版本不合法' }, { status: 400 });
-    const overview = await getWorkbenchEvaluationOverview({
-      user: username,
-      sessionId,
-      skillName: decodeURIComponent(name),
-      version,
-    });
+    if (version === null) return NextResponse.json({ error: '版本不合法' }, { status: 400 });
+    const overview = sessionId
+      ? await getWorkbenchEvaluationOverview({
+          user: username,
+          sessionId,
+          skillName: decodeURIComponent(name),
+          version,
+        })
+      : await getWorkbenchStaticEvaluation({
+          user: username,
+          skillName: decodeURIComponent(name),
+          version,
+        });
     if (!overview) return NextResponse.json({ error: 'Skill 或版本不存在，或无访问权限' }, { status: 404 });
     return NextResponse.json(overview);
   } catch (error) {
@@ -46,15 +53,17 @@ export async function POST(
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { name, version: rawVersion } = await context.params;
     const version = parseVersion(rawVersion);
-    if (version === null || typeof body.sessionId !== 'string') {
-      return NextResponse.json({ error: '会话或版本不合法' }, { status: 400 });
+    const formalAsset = body.formalAsset === true;
+    if (version === null || (!formalAsset && typeof body.sessionId !== 'string')) {
+      return NextResponse.json({ error: '评估目标或版本不合法' }, { status: 400 });
     }
     const result = await runWorkbenchStaticEvaluation({
       user: username,
-      sessionId: body.sessionId,
+      sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
       skillName: decodeURIComponent(name),
       version,
       force: body.force === true,
+      formalAsset,
     });
     if (result.kind === 'invalid_context') {
       return NextResponse.json({ error: '工作台会话或工作版本已变化' }, { status: 409 });

@@ -20,12 +20,13 @@ import {
 } from '../src/lib/skill-workbench/trigger-evaluator';
 import { resolveStaticQualityGate } from '../src/lib/skill-workbench/evaluation-service';
 
-test('候选版必须经过待复测和复测通过后才能发布', () => {
+test('候选版质量规则通过后可直接发布，并兼容历史复测状态', () => {
   assert.equal(canTransitionOptimization('optimizing', 'pending_retest'), true);
+  assert.equal(canTransitionOptimization('pending_retest', 'published'), true);
   assert.equal(canTransitionOptimization('pending_retest', 'retesting'), true);
+  assert.equal(canTransitionOptimization('retesting', 'published'), true);
   assert.equal(canTransitionOptimization('retesting', 'retest_passed'), true);
   assert.equal(canTransitionOptimization('retest_passed', 'published'), true);
-  assert.equal(canTransitionOptimization('pending_retest', 'published'), false);
   assert.throws(
     () => assertOptimizationTransition('optimizing', 'published'),
     /Invalid skill optimization transition/,

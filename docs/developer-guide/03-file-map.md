@@ -32,7 +32,7 @@
 | `engine/skill-issues/index.ts` | skill-issues | `IssueWithPrevalence`、`AggregateResult`（普遍度聚合） |
 | `engine/skill-issues/static-evaluator/index.ts` | skill-issues | `runStaticEvaluation`；`RunArgs`、`RunResult` |
 | `engine/skill-issues/static-evaluator/{linter,llm-evaluator,content-loader}.ts` | skill-issues | 静态合规扫描 |
-| `skill-workbench/*` | skill-workbench | 工作台会话、管理查询、生成/优化适配、快照评估、统一实验、同源复测与门禁发布；旧 Skill API 继续作为兼容内核 |
+| `skill-workbench/*` | skill-workbench | Skill/版本资产导航、过程会话、生成/优化适配、候选根目录归一化、静态阻断自动 repair、快照评估、统一实验、A/B Case 配对聚合、跨会话优化记录、同源复测与发布；生成快照沿用旧生成发布门禁，上传与优化保留各自规则 |
 | `engine/agent-debug/types.ts` | agent-debug | `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`DebugTurn` |
 | `engine/agent-debug/runner.ts` / `trace-adapter.ts`；`skills/agent-debug-diagnosis/scripts/{agentdebug_static,agentdebug_inspect,agentdebug_validate,detector_runner}.py` | agent-debug | 调试报告生成 |
 | `engine/observability/agent-trace.ts` | observability | `buildAgentCallTree`、`walkTree`、`findNode`、`formatTokens`；`AgentNode`、`AgentEvent`、`ToolCall` |
@@ -100,7 +100,7 @@
 | `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader}.tsx` | 应用外壳 |
 | `ui/*` | 可复用基础组件（button、card、dialog、select 等）—— 复用它们，不要自行实现 |
 | `feedback/{EmptyState,ErrorState,StatusBadge}.tsx` | 标准状态组件 |
-| `skill-workbench/*` | `/skills` 工作台的会话外壳、生成/优化对话、管理选择器、文件详情、静态评估、统一实验和优化记录视图 |
+| `skill-workbench/*` | `/skills` 工作台的资产/版本选择器、会话外壳、生成/优化对话、文件详情、静态评估、统一实验和跨会话优化记录视图 |
 
 ## API routes (`src/app/api/`) — grouped
 | Group | Route files (under `api/`) | Purpose |
@@ -111,8 +111,8 @@
 | skill-eval | `skill-eval/trigger/[skillName]/*` | 触发评测集/评测运行 |
 | skill-opt | `skill-opt/{chat,sessions/*}` | skill 优化对话 + 历史 |
 | skill-generator | `skill-generator/{chat,sessions/*,files/*,attachments,download/*}` | skill 生成 playground 后端 |
-| skill-workbench | `skill-workbench/{sessions/*,skills/[name]/*}` | 会话、工作快照、快照/正式评估、三类实验、触发数据集、候选复测和门禁发布；Skill 对外 key 使用 name |
-| skill-management | `skill-management/skills` | 管理中心服务端搜索、筛选和每页 9 条分页 |
+| skill-workbench | `skill-workbench/{sessions/*,skills/[name]/*}` | 会话、工作快照、快照/正式评估、三类实验、触发数据集、候选复测和按来源发布；Skill 对外 key 使用 name |
+| skill-management | `skill-management/skills` | 管理中心服务端搜索、筛选和分页；传入精确 `name + version` 时返回正式版本文件快照 |
 | eval | `eval/{config/*,evaluation,rejudge,settings,trajectory/*}` | 数据集配置、评测运行、轨迹评测 |
 | debug | `debug/{batch-tasks/*,grayscale-tasks/*,execute/*,history/*}` | 批量与灰度（A/B）执行编排 |
 | observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*,version-analysis/*}` | Observability data, infra observation, execution analysis, Trace tag binding, and version-analysis aggregation |

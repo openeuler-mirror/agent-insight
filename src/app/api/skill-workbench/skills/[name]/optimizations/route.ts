@@ -20,10 +20,17 @@ export async function GET(request: NextRequest, context: { params: Promise<{ nam
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { name } = await context.params;
+    const sessionId = request.nextUrl.searchParams.get('sessionId') || undefined;
+    const versionParam = request.nextUrl.searchParams.get('version');
+    const baseVersion = versionParam == null ? undefined : Number(versionParam);
+    if (versionParam !== null && (!Number.isInteger(baseVersion) || (baseVersion as number) < 0)) {
+      return NextResponse.json({ error: 'Skill 版本不合法' }, { status: 400 });
+    }
     const records = await listSkillOptimizationRecords({
       user: username,
       skillName: decodeURIComponent(name),
-      sessionId: request.nextUrl.searchParams.get('sessionId') || undefined,
+      baseVersion,
+      sessionId,
     });
     return NextResponse.json({ records });
   } catch (error) {

@@ -48,14 +48,12 @@ const STATUS_LABELS: Record<string, string> = {
 
 export function ExperimentPanel({
   user,
-  sessionId,
   skillName,
   version,
   optimizationRecordId,
   onError,
 }: {
   user: string;
-  sessionId: string;
   skillName: string;
   version: number;
   optimizationRecordId?: string;
@@ -71,7 +69,7 @@ export function ExperimentPanel({
     setLoading(true);
     try {
       const contextResponse = await apiFetch(
-        `/api/skill-workbench/skills/${encodeURIComponent(skillName)}/experiments?user=${encodeURIComponent(user)}`,
+        `/api/skill-workbench/skills/${encodeURIComponent(skillName)}/experiments?user=${encodeURIComponent(user)}&version=${version}`,
         { cache: 'no-store' },
       );
       const context = await contextResponse.json();
@@ -84,19 +82,22 @@ export function ExperimentPanel({
     } finally {
       setLoading(false);
     }
-  }, [onError, skillName, user]);
+  }, [onError, skillName, user, version]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   if (detailId) {
-    return <SkillExperimentResult user={user} skillName={skillName} experimentId={detailId} onBack={() => { setDetailId(null); void load(); }} />;
+    return <SkillExperimentResult user={user} skillName={skillName} version={version} experimentId={detailId} onBack={() => { setDetailId(null); void load(); }} />;
   }
 
   if (preset) {
     return (
       <ExperimentWizard
         embedded
-        skillContext={{ sessionId, skillName, skillVersion: version, preset, versions, optimizationRecordId }}
+        skillContext={{ skillName, skillVersion: version, preset, versions, optimizationRecordId }}
         onBack={() => { setPreset(null); void load(); }}
         onCreated={(experimentId) => { setPreset(null); setDetailId(experimentId); }}
       />
@@ -137,12 +138,12 @@ export function ExperimentPanel({
           <div className="flex items-center border-b border-border px-4 py-3">
             <FlaskConical className="mr-2 size-4 text-primary" />
             <h3 className="text-sm font-semibold text-foreground">实验记录</h3>
-            <span className="ml-auto text-[10px] text-foreground-muted">仅展示当前 Skill 的实验记录</span>
+            <span className="ml-auto text-[10px] text-foreground-muted">仅展示当前 Skill · v{version} 的实验记录</span>
           </div>
           {loading ? (
             <div className="flex h-28 items-center justify-center text-xs text-foreground-muted"><Loader2 className="mr-2 size-4 animate-spin" />加载实验记录</div>
           ) : rows.length === 0 ? (
-            <div className="p-10 text-center text-xs text-foreground-muted">当前 Skill 还没有实验记录</div>
+            <div className="p-10 text-center text-xs text-foreground-muted">当前 Skill · v{version} 还没有实验记录</div>
           ) : (
             <table className="w-full border-collapse text-left">
               <thead className="bg-background-secondary text-[10px] text-foreground-muted">

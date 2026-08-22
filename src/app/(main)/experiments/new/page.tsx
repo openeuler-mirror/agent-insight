@@ -27,6 +27,10 @@ import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/eval
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
+import {
+  isSkillExperimentDatasetEligible,
+  isSkillExperimentEvaluatorEligible,
+} from '@/lib/skill-workbench/experiment-policy';
 
 interface AgentTargetOption {
   workerId: string;
@@ -104,7 +108,7 @@ interface DatasetOption {
 export type SkillExperimentPreset = 'trigger' | 'use-case' | 'skill-ab';
 
 export interface SkillExperimentContext {
-  sessionId: string;
+  sessionId?: string;
   skillName: string;
   skillVersion: number;
   preset: SkillExperimentPreset;
@@ -127,29 +131,25 @@ const SKILL_PRESET_LABELS: Record<SkillExperimentPreset, string> = {
 
 const SKILL_PRESET_EVALUATORS: Record<SkillExperimentPreset, Array<{
   id: string;
-  name: string;
-  description: string;
   selected: boolean;
 }>> = {
   trigger: [
     {
       id: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
-      name: 'skill-trigger-analyzer',
-      description: '逐条判定当前 Skill 的实际触发结果是否与数据集标注一致。',
       selected: true,
     },
   ],
   'use-case': [
-    { id: 'preset-agent-task-completion', name: '任务结果正确性', description: '对照预期答案检查 Agent 是否正确、完整地完成任务。', selected: true },
-    { id: 'preset-agent-trace-quality', name: 'Agent 轨迹质量', description: '评估规划、工具选择、中间结果和异常处理。', selected: true },
-    { id: 'preset-result-faithfulness', name: '证据忠实度', description: '判断最终结论是否有执行轨迹与工具证据支撑。', selected: true },
-    { id: 'preset-safety-harmfulness', name: '安全合规', description: '检查输出中的危险建议、不当引导与其他安全风险。', selected: false },
+    { id: 'preset-agent-task-completion', selected: true },
+    { id: 'preset-agent-trace-quality', selected: true },
+    { id: 'preset-result-faithfulness', selected: true },
+    { id: 'preset-safety-harmfulness', selected: false },
   ],
   'skill-ab': [
-    { id: 'preset-agent-task-completion', name: '任务结果正确性', description: '在相同任务输入下比较两个 Skill 版本的任务完成质量。', selected: true },
-    { id: 'preset-result-accuracy', name: 'Skill 版本回归', description: '对照预期答案和基线版本，识别新版本的退化用例。', selected: true },
-    { id: 'preset-agent-trace-quality', name: '执行成本', description: '在相同 Case 上对照轨迹长度、工具调用、时延和 Token 开销。', selected: true },
-    { id: 'preset-safety-harmfulness', name: '安全合规', description: '分别检查两个版本的危险建议与安全风险。', selected: false },
+    { id: 'preset-agent-task-completion', selected: true },
+    { id: 'preset-result-accuracy', selected: true },
+    { id: 'preset-agent-trace-quality', selected: true },
+    { id: 'preset-safety-harmfulness', selected: false },
   ],
 };
 
@@ -467,9 +467,8 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   );
   const eligibleWizardDatasets = useMemo(() => wizardDatasets.filter((dataset) => {
     if (!skillContext) return true;
-    if (dataset.targetSkill && dataset.targetSkill !== skillContext.skillName) return false;
-    if (skillPreset !== 'trigger') return true;
-    return dataset.tags?.includes('trigger') || dataset.datasetKind === 'trigger';
+    if (!skillPreset) return true;
+    return isSkillExperimentDatasetEligible(skillPreset, dataset, skillContext.skillName);
   }), [skillContext, skillPreset, wizardDatasets]);
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const selectedAgent = useMemo(
@@ -531,10 +530,11 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   useEffect(() => {
     if (!skillContext || agentName || agents.length === 0) return;
     const preferred = agents.find((agent) => agent.executable) || agents[0];
-    setAgentName(preferred?.name || '');
+    const timer = window.setTimeout(() => setAgentName(preferred?.name || ''), 0);
+    return () => window.clearTimeout(timer);
   }, [agentName, agents, skillContext]);
 
-  const selectWizardDataset = async (nextId: string) => {
+  const selectWizardDataset = useCallback(async (nextId: string) => {
     const requestId = ++datasetRequestIdRef.current;
     setSelectedDatasetId(nextId);
     setSelectedDatasetDetail(null);
@@ -565,13 +565,13 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     } finally {
       if (datasetRequestIdRef.current === requestId) setSelectedDatasetLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
-    if (!skillContext || selectedDatasetId || eligibleWizardDatasets.length === 0) return;
-    const timer = window.setTimeout(() => void selectWizardDataset(eligibleWizardDatasets[0].id), 0);
+    if (!skillContext || (selectedDatasetId && eligibleWizardDatasets.some((dataset) => dataset.id === selectedDatasetId))) return;
+    const timer = window.setTimeout(() => void selectWizardDataset(eligibleWizardDatasets[0]?.id || ''), 0);
     return () => window.clearTimeout(timer);
-  }, [eligibleWizardDatasets, selectedDatasetId, skillContext]);
+  }, [eligibleWizardDatasets, selectWizardDataset, selectedDatasetId, skillContext]);
 
   const generateTriggerDataset = async () => {
     if (!user || !skillContext || skillPreset !== 'trigger' || generatingTriggerDataset) return;
@@ -996,10 +996,8 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   const allEvaluators = useMemo(() => {
     if (!skillPreset) return [...presetEvaluators, ...customEvaluators];
     const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));
-    return SKILL_PRESET_EVALUATORS[skillPreset].flatMap((entry) => {
-      const card = catalog.get(entry.id);
-      return card ? [{ ...card, name: entry.name, description: entry.description }] : [];
-    });
+    return Array.from(catalog.values())
+      .filter((card) => card.status === 'ready' && isSkillExperimentEvaluatorEligible(skillPreset, card.id));
   }, [customEvaluators, skillPreset]);
 
   useEffect(() => {
@@ -1008,8 +1006,10 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
       ? SKILL_PRESET_EVALUATORS[skillPreset].filter((item) => item.selected).map((item) => item.id)
       : ['preset-agent-task-completion', 'preset-agent-trace-quality'])
       .filter((id) => allEvaluators.some((item) => item.id === id));
-    if (defaults.length) setSelectedEvaluators(new Set(defaults));
-  }, [allEvaluators, selectedEvaluators.size, skillContext]);
+    if (!defaults.length) return;
+    const timer = window.setTimeout(() => setSelectedEvaluators(new Set(defaults)), 0);
+    return () => window.clearTimeout(timer);
+  }, [allEvaluators, selectedEvaluators.size, skillContext, skillPreset]);
 
   const toggleEvaluator = (id: string) => {
     setSelectedEvaluators((prev) => {
@@ -1338,6 +1338,9 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                     {eligibleWizardDatasets.map((dataset) => (
                       <option key={dataset.id} value={dataset.id}>
                         {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
+                        {skillPreset !== 'trigger' && dataset.targetSkill && dataset.targetSkill !== skillContext?.skillName
+                          ? ` · 来源 Skill：${dataset.targetSkill}`
+                          : ''}
                       </option>
                     ))}
                   </select>
@@ -1350,7 +1353,9 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                 <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
                   {selectedDatasetLoading
                     ? '正在加载数据集 Case…'
-                    : '可选择任意评测数据集；生成 Trace 时，每条 Case 的输入会作为 Agent 的用户输入'}
+                    : skillPreset === 'trigger'
+                      ? '仅展示当前 Skill 的触发分析数据集；该数据集可用于同一 Skill 的不同版本回归'
+                      : '可选择全部非触发分析数据集；绑定其他 Skill 的数据集会标注来源，但不阻止复用'}
                 </div>
               </div>
 
@@ -2242,13 +2247,11 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                 为本次实验挑选评估器（可多选）。依赖参考数据或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
-                {allEvaluators
-                  .filter((card) => !isReliabilityDataset || RELIABILITY_EVALUATOR_IDS.has(card.id))
-                  .map((card) => {
+                {allEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
                   // 监听模式的新 trace 没有逐条参考答案或 Tool/Skill 目录，带前置条件的评估器不可用。
-                  const gate = isReliabilityDataset
-                    ? { usable: true, reason: '' }
+                  const gate = RELIABILITY_EVALUATOR_IDS.has(card.id) && !isReliabilityDataset
+                    ? { usable: false, reason: '该评估器仅适用于可靠性数据集' }
                     : watchMode && meta.requires.length > 0
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
                     : gateEvaluator(meta, gateCases);

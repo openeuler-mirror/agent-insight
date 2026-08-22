@@ -11,6 +11,8 @@ interface SkillDetailWorkspaceProps {
   version: number;
   files: Record<string, string>;
   candidate: boolean;
+  source: string | null;
+  generationRunning: boolean;
   publishing: boolean;
   optimizing: boolean;
   qualityGate: StaticQualityGate | null;
@@ -24,6 +26,8 @@ export function SkillDetailWorkspace({
   version,
   files,
   candidate,
+  source,
+  generationRunning,
   publishing,
   optimizing,
   qualityGate,
@@ -37,7 +41,10 @@ export function SkillDetailWorkspace({
     return left.localeCompare(right);
   }), [files]);
   const [selectedPath, setSelectedPath] = useState(paths[0] || '');
-  const publishReady = qualityGate?.state === 'passed';
+  const usesLegacyGenerationGate = source === 'generated';
+  const publishReady = usesLegacyGenerationGate
+    ? paths.length > 0 && !generationRunning
+    : qualityGate?.state === 'passed';
   const gateLabel = qualityGate?.state === 'passed' ? '质量门禁通过'
     : qualityGate?.state === 'blocked' ? `${qualityGate.highIssueCount} 个高风险问题`
       : qualityGate?.state === 'running' ? '静态评估中'
@@ -93,38 +100,44 @@ export function SkillDetailWorkspace({
           <span className="flex-1" />
           {candidate && (
             <>
-              <button
-                type="button"
-                title={qualityGate?.message || '正在读取当前工作快照的静态质量状态'}
-                onClick={onOpenEvaluation}
-                className={cn(
-                  'mr-2 inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium',
-                  publishReady
-                    ? 'border-success-border bg-success-subtle text-success'
-                    : qualityGate?.state === 'blocked' || qualityGate?.state === 'failed'
-                      ? 'border-error-border bg-error-subtle text-error'
-                      : 'border-warning-border bg-warning-subtle text-warning',
-                )}
-              >
-                {qualityGate?.state === 'running' || !qualityGate
-                  ? <Loader2 className="size-3.5 animate-spin" />
-                  : publishReady ? <CheckCircle2 className="size-3.5" /> : <AlertTriangle className="size-3.5" />}
-                {gateLabel}
-              </button>
-              {qualityGate?.state === 'blocked' && qualityGate.highIssueCount > 0 && (
-                <button
-                  type="button"
-                  disabled={optimizing}
-                  onClick={onOptimize}
-                  className="mr-2 inline-flex h-7 items-center gap-1.5 rounded-md border border-primary px-2.5 text-[11px] font-medium text-primary disabled:opacity-50"
-                >
-                  {optimizing ? <Loader2 className="size-3.5 animate-spin" /> : <WandSparkles className="size-3.5" />}
-                  {optimizing ? '启动修复中' : 'AI 修复问题'}
-                </button>
+              {!usesLegacyGenerationGate && (
+                <>
+                  <button
+                    type="button"
+                    title={qualityGate?.message || '正在读取当前工作快照的静态质量状态'}
+                    onClick={onOpenEvaluation}
+                    className={cn(
+                      'mr-2 inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium',
+                      publishReady
+                        ? 'border-success-border bg-success-subtle text-success'
+                        : qualityGate?.state === 'blocked' || qualityGate?.state === 'failed'
+                          ? 'border-error-border bg-error-subtle text-error'
+                          : 'border-warning-border bg-warning-subtle text-warning',
+                    )}
+                  >
+                    {qualityGate?.state === 'running' || !qualityGate
+                      ? <Loader2 className="size-3.5 animate-spin" />
+                      : publishReady ? <CheckCircle2 className="size-3.5" /> : <AlertTriangle className="size-3.5" />}
+                    {gateLabel}
+                  </button>
+                  {qualityGate?.state === 'blocked' && qualityGate.highIssueCount > 0 && (
+                    <button
+                      type="button"
+                      disabled={optimizing}
+                      onClick={onOptimize}
+                      className="mr-2 inline-flex h-7 items-center gap-1.5 rounded-md border border-primary px-2.5 text-[11px] font-medium text-primary disabled:opacity-50"
+                    >
+                      {optimizing ? <Loader2 className="size-3.5 animate-spin" /> : <WandSparkles className="size-3.5" />}
+                      {optimizing ? '启动修复中' : 'AI 修复问题'}
+                    </button>
+                  )}
+                </>
               )}
               <button
                 type="button"
-                title={publishReady ? `发布为 v${version}` : qualityGate?.message}
+                title={publishReady
+                  ? `发布为 v${version}`
+                  : usesLegacyGenerationGate ? 'Skill 仍在生成中' : qualityGate?.message}
                 disabled={publishing || !publishReady}
                 onClick={onPublish}
                 className="mr-2 inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"

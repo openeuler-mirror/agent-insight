@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
@@ -31,11 +31,61 @@ function parseBlocks(value: string | GenerationBlock[] | undefined) {
   }
 }
 
+export function GenerationHistory({
+  user,
+  workbenchSessionId,
+  generatorSessionId,
+  onError,
+}: {
+  user: string;
+  workbenchSessionId: string;
+  generatorSessionId: string;
+  onError: (message: string) => void;
+}) {
+  const [messages, setMessages] = useState<GenerationMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    void apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    }).then(async (response) => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '加载生成记录失败');
+      setMessages((data.generation.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
+        ...message,
+        blocks: parseBlocks(message.blocks),
+      })));
+    }).catch((error) => {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      onError(error instanceof Error ? error.message : '加载生成记录失败');
+    }).finally(() => setLoading(false));
+    return () => controller.abort();
+  }, [generatorSessionId, onError, user, workbenchSessionId]);
+
+  if (loading) {
+    return <div className="flex items-center py-2 text-[11px] text-foreground-muted"><Loader2 className="mr-2 size-3.5 animate-spin" />加载 Skill 生成记录</div>;
+  }
+  if (messages.length === 0) return null;
+
+  return (
+    <>
+      <ConversationPhaseLabel label="Skill 生成记录" />
+      <GenerationMessageList messages={messages} user={user} />
+      <ConversationPhaseLabel label="Skill 优化记录" />
+    </>
+  );
+}
+
 export function GenerationConversation({
   user,
   workbenchSessionId,
   generatorSessionId,
   backgroundRunning,
+  quickActions,
+  onRunningChange,
   onSynced,
   onError,
 }: {
@@ -43,6 +93,8 @@ export function GenerationConversation({
   workbenchSessionId: string;
   generatorSessionId: string;
   backgroundRunning: boolean;
+  quickActions?: ReactNode;
+  onRunningChange: (running: boolean) => void;
   onSynced: (session: unknown) => void;
   onError: (message: string) => void;
 }) {
@@ -60,6 +112,11 @@ export function GenerationConversation({
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    onRunningChange(running);
+    return () => onRunningChange(false);
+  }, [onRunningChange, running]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -292,23 +349,16 @@ export function GenerationConversation({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-3">
+      <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pb-3" style={{ scrollbarGutter: 'stable' }}>
         {messages.length === 0 && (
           <div className="rounded-lg bg-background-secondary px-3 py-3 text-xs leading-5 text-foreground-secondary">
             <b className="text-foreground">描述你希望创建的 Skill。</b><br />我会先澄清目标、输入输出、适用边界和安全约束，再生成工作快照。
           </div>
         )}
-        {messages.map((message, index) => (
-          <div key={message.id || index} className={message.role === 'user' ? 'ml-8 rounded-lg bg-primary px-3 py-2 text-xs leading-5 text-primary-foreground' : 'rounded-lg border border-border bg-card px-3 py-3'}>
-            {message.role !== 'user' && <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-foreground-muted"><Bot className="size-3.5" />Skill Agent</div>}
-            {message.blocks.length ? message.blocks.map((block) => (
-              <GenerationBlockView key={block.id} block={block} user={user} />
-            )) : <p className="whitespace-pre-wrap text-xs leading-5">{message.content}</p>}
-            {message.streaming && <Loader2 className="mt-2 size-3.5 animate-spin text-primary" />}
-          </div>
-        ))}
+        <GenerationMessageList messages={messages} user={user} />
         <div ref={endRef} />
       </div>
+      {quickActions}
       <form onSubmit={send} className="shrink-0 rounded-lg border border-border bg-card p-2">
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-1.5">
@@ -363,12 +413,34 @@ export function GenerationConversation({
   );
 }
 
+function ConversationPhaseLabel({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 py-1 text-[10px] font-medium text-foreground-muted">
+      <span className="h-px flex-1 bg-border" />
+      <span>{label}</span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+function GenerationMessageList({ messages, user }: { messages: GenerationMessage[]; user: string }) {
+  return messages.map((message, index) => (
+    <div key={`generation-${message.id || index}`} className={message.role === 'user' ? 'ml-8 min-w-0 max-w-full overflow-hidden rounded-lg bg-primary px-3 py-2 text-xs leading-5 text-primary-foreground' : 'min-w-0 max-w-full overflow-hidden rounded-lg border border-border bg-card px-3 py-3'}>
+      {message.role !== 'user' && <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-foreground-muted"><Bot className="size-3.5" />Skill Agent</div>}
+      {message.blocks.length ? message.blocks.map((block) => (
+        <GenerationBlockView key={block.id} block={block} user={user} />
+      )) : <p className="whitespace-pre-wrap break-words text-xs leading-5 [overflow-wrap:anywhere]">{message.content}</p>}
+      {message.streaming && <Loader2 className="mt-2 size-3.5 animate-spin text-primary" />}
+    </div>
+  ));
+}
+
 function GenerationBlockView({ block, user }: { block: GenerationBlock; user: string }) {
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  if (block.kind === 'text') return <p className="whitespace-pre-wrap text-xs leading-5 text-foreground-secondary">{block.text}</p>;
-  if (block.kind === 'thinking') return <details className="my-2 rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-muted"><summary>思考过程</summary><p className="mt-1 whitespace-pre-wrap">{block.text}</p></details>;
-  if (block.kind === 'tool') return <div className="my-1 flex items-center gap-2 rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-secondary"><Wrench className="size-3.5" /><span>{block.name}</span><span className="ml-auto text-foreground-muted">{block.summary || block.status}</span></div>;
+  if (block.kind === 'text') return <p className="max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-foreground-secondary [overflow-wrap:anywhere]">{block.text}</p>;
+  if (block.kind === 'thinking') return <details className="my-2 min-w-0 max-w-full overflow-hidden rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-muted"><summary>思考过程</summary><p className="mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{block.text}</p></details>;
+  if (block.kind === 'tool') return <div className="my-1 grid min-w-0 max-w-full grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 overflow-hidden rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-secondary"><Wrench className="mt-0.5 size-3.5" /><span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">{block.name}</span><span className="col-span-2 min-w-0 whitespace-pre-wrap break-words text-foreground-muted [overflow-wrap:anywhere]">{block.summary || block.status}</span></div>;
   if (block.kind === 'download') return <div className="my-2 flex items-center gap-2 rounded-md border border-success-border bg-success-subtle px-2 py-2 text-[11px] text-success"><CheckCircle2 className="size-3.5" />已生成 {block.skillName} · {block.fileCount} 个文件</div>;
   if (block.kind === 'question') {
     if (block.status !== 'pending') return <div className="my-2 rounded-md bg-background-secondary px-2 py-2 text-[11px] text-foreground-secondary">已回答：{String(block.answer || '已跳过')}</div>;
@@ -383,7 +455,7 @@ function GenerationBlockView({ block, user }: { block: GenerationBlock; user: st
         if (!response.ok) throw new Error('提交回答失败');
       } finally { setSubmitting(false); }
     };
-    return <div className="my-2 rounded-md border border-border bg-background-secondary p-2 text-[11px]"><p className="text-foreground">{block.question}</p><div className="mt-2 flex gap-1"><input value={answer} onChange={(event) => setAnswer(event.target.value)} className="h-7 min-w-0 flex-1 rounded border border-border bg-card px-2 text-foreground outline-none" /><button type="button" onClick={() => void submitAnswer()} disabled={submitting} className="rounded bg-primary px-2 text-primary-foreground disabled:opacity-50">回答</button></div></div>;
+    return <div className="my-2 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-background-secondary p-2 text-[11px]"><p className="break-words text-foreground [overflow-wrap:anywhere]">{block.question}</p><div className="mt-2 flex gap-1"><input value={answer} onChange={(event) => setAnswer(event.target.value)} className="h-7 min-w-0 flex-1 rounded border border-border bg-card px-2 text-foreground outline-none" /><button type="button" onClick={() => void submitAnswer()} disabled={submitting} className="rounded bg-primary px-2 text-primary-foreground disabled:opacity-50">回答</button></div></div>;
   }
   return null;
 }

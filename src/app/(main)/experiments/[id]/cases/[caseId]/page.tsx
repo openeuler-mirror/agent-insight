@@ -147,6 +147,7 @@ const SPECIALIZED_PRESET_IDS = new Set([
   'preset-ras-reliability',
   'preset-ras-reliability-fault-injection',
   'preset-ras-reliability-detection-recovery',
+  'preset-agent-trace-quality',
 ]);
 
 /** 评分点的「状态 / 可归因 skill」标签组（评分点与子项复用）。 */
@@ -176,12 +177,12 @@ function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId
     <>
       {point.evidence ? <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} /> : null}
       {point.suggestion && (
-        <div style={{ marginTop: point.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
+        <div style={{ marginTop: point.evidence ? 6 : 0, minWidth: 0, fontSize: 11, color: 'var(--primary)', overflowWrap: 'anywhere' }}>
           ↗ Skill 建议：{point.suggestion}
         </div>
       )}
       {point.anchors && point.anchors.length > 0 && (
-        <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+        <div style={{ marginTop: 5, minWidth: 0, fontSize: 10.5, color: 'var(--foreground-muted)', overflowWrap: 'anywhere' }}>
           相关步骤：{point.anchors.map((a) => (
             <a
               key={a}
@@ -192,6 +193,7 @@ function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId
                 borderRadius: 4, padding: '0 5px', marginRight: 5,
                 color: 'var(--foreground-secondary)', textDecoration: 'none',
                 cursor: taskId ? 'pointer' : 'default',
+                whiteSpace: 'normal', wordBreak: 'break-all', overflowWrap: 'anywhere',
               }}
             >{a}</a>
           ))}
@@ -485,7 +487,7 @@ export function ExperimentCaseDetail({
   return (
     <>
       {!embedded && <AppTopBar title="Trace 评测详情" />}
-      <PageContainer className={embedded ? "[&>*]:shrink-0" : undefined}>
+      <PageContainer className="min-w-0 max-w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full [&>*]:shrink-0">
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : !detail || !caseRow ? (
@@ -542,7 +544,7 @@ export function ExperimentCaseDetail({
             </div>
 
             {/* 任务输入 / 参考答案 / 实际输出 三框（等高：grid 行拉伸 + 内框 flex 填满） */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
+            <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
               {([
                 { label: '任务输入', value: caseRow.input, missing: '' },
                 { label: '参考答案', value: caseRow.referenceOutput || '', missing: '未标注参考答案' },
@@ -569,7 +571,7 @@ export function ExperimentCaseDetail({
               if (!rows.length) return null;
               const summary = categorySummary(rows);
               return (
-                <div key={cat} style={{ ...CARD, marginBottom: 14 }}>
+                <div key={cat} style={{ ...CARD, minWidth: 0, maxWidth: '100%', overflow: 'hidden', marginBottom: 14 }}>
                   <div style={{
                     display: 'flex', alignItems: 'center', gap: 10,
                     padding: '11px 16px', borderBottom: '1px solid var(--border)',
@@ -584,7 +586,7 @@ export function ExperimentCaseDetail({
                       {summary.adjusted > 0 && ` · 含 ${summary.adjusted} 项人工修正`}
                     </span>
                   </div>
-                  <div style={{ padding: 12, display: 'grid', gap: 10 }}>
+                  <div style={{ padding: 12, minWidth: 0, maxWidth: '100%', display: 'grid', gap: 10 }}>
                     {rows.map((r) => {
                       const tags = lookup.tagsOf(r.evaluatorId);
                       const failed = r.status === 'failed';
@@ -600,6 +602,7 @@ export function ExperimentCaseDetail({
                       return (
                         <div key={r.id} style={{
                           border: '1px solid var(--border)', borderRadius: 9,
+                          minWidth: 0, maxWidth: '100%', overflow: 'hidden',
                           padding: '11px 13px', opacity: failed ? 0.85 : 1,
                         }}>
                           {/* 卡头第一行：折叠箭头 + 评估器名 + 标签 + 结论 chip + 得分（次要） */}
@@ -652,7 +655,8 @@ export function ExperimentCaseDetail({
                           {!failed && !pendingLike && summary && (
                             <div style={{
                               marginTop: 6, fontSize: 12.5, lineHeight: 1.7,
-                              color: 'var(--foreground)', wordBreak: 'break-word',
+                              minWidth: 0, maxWidth: '100%', color: 'var(--foreground)',
+                              wordBreak: 'break-word', overflowWrap: 'anywhere',
                             }}>
                               {summary}
                             </div>
@@ -716,7 +720,8 @@ export function ExperimentCaseDetail({
                                     )}
                                   </button>
                                   {expandedPoints.has(r.id) && (
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', marginTop: 4 }}>
+                                    <div style={{ minWidth: 0, maxWidth: '100%', overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', tableLayout: 'fixed', marginTop: 4 }}>
                                       <thead>
                                         <tr>
                                           <th style={{ ...TH, width: 180 }}>评分点</th>
@@ -739,6 +744,7 @@ export function ExperimentCaseDetail({
                                         ))}
                                       </tbody>
                                     </table>
+                                    </div>
                                   )}
                                 </div>
                               )}

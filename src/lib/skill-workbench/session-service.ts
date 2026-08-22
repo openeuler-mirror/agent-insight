@@ -5,6 +5,7 @@ import { getSkillVersionStorageDir } from '@/lib/env';
 import { prismaRaw } from '@/lib/storage/prisma';
 import type { SkillWorkbenchActiveView } from './domain';
 import { resolveRetestableExperimentBaseline } from './experiment-baseline';
+import { parseOptimizationBlockingIssues } from './optimization-service';
 
 function parseJson<T>(value: string, fallback: T): T {
   try {
@@ -70,11 +71,28 @@ export async function getSkillWorkbenchSession(user: string, id: string) {
   });
   if (!session) return null;
 
+  const evaluationIds = session.optimizations
+    .map((record) => record.staticEvaluationId)
+    .filter((id): id is string => Boolean(id));
+  const evaluations = evaluationIds.length
+    ? await prismaRaw.skillSnapshotEvaluation.findMany({
+      where: { id: { in: evaluationIds }, user },
+      select: { id: true, issuesJson: true },
+    })
+    : [];
+  const blockingIssuesByEvaluation = new Map(evaluations.map((evaluation) => [
+    evaluation.id,
+    parseOptimizationBlockingIssues(evaluation.id, evaluation.issuesJson),
+  ]));
   const optimizations = await Promise.all(session.optimizations.map(async (record) => ({
     ...record,
+    sourceSession: { id: session.id, title: session.title },
     candidateFiles: parseJson<Record<string, string>>(record.candidateFilesJson, {}),
     diff: parseJson<unknown[]>(record.diffJson, []),
     sourceRefs: parseJson<unknown[]>(record.sourceRefsJson, []),
+    blockingIssues: record.staticEvaluationId
+      ? blockingIssuesByEvaluation.get(record.staticEvaluationId) || []
+      : [],
     hasRetestableSource: Boolean(await resolveRetestableExperimentBaseline({
       user,
       skillName: record.skillName,
@@ -111,7 +129,7 @@ export async function updateSkillWorkbenchSessionView(input: {
   return getSkillWorkbenchSession(input.user, input.id);
 }
 
-function snapshotFiles(skillId: string, version: number, files: string | null, content: string): Record<string, string> {
+export function resolveSkillVersionFiles(skillId: string, version: number, files: string | null, content: string): Record<string, string> {
   if (files) {
     try {
       const parsed = JSON.parse(files) as unknown;
@@ -179,7 +197,7 @@ export async function bindSkillWorkbenchContext(input: {
       source: 'management',
       stage: 'ready',
       activeView: 'detail',
-      filesJson: JSON.stringify(snapshotFiles(skill.id, selectedVersion.version, selectedVersion.files, selectedVersion.content)),
+      filesJson: JSON.stringify(resolveSkillVersionFiles(skill.id, selectedVersion.version, selectedVersion.files, selectedVersion.content)),
     },
   });
   if (updated.count === 0) return null;
