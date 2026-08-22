@@ -9,9 +9,9 @@ import { GET as getCentralSetup } from "@/app/api/ingest/setup/route"
 import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode"]
+const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness"]
+const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode", "deepseek-harness"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]

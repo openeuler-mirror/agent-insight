@@ -143,7 +143,7 @@ OpenClaw、LlamaIndex 及其他 OTLP 客户端通过 `POST /api/ingest/otel/v1/t
 4. `appendOtelTraceEvents` 将规范化 events 写入按 session/trace 分片的正式 JSONL spool
 5. 返回 `{ status: 'accepted', received, sessions }`；该响应只表示数据已进入正式 spool，不表示后台 Consumer 已完成持久化
 
-Logs 经由 `POST /api/ingest/otel/v1/logs`（仅 JSON），流程同上（`normalizeClaudeOtlpLogs` + `appendClaudeOtelEvents`）。
+Logs 经由 `POST /api/ingest/otel/v1/logs`。普通 Claude/CodeAgent 路径继续使用既有 normalizer；DeepSeek Harness Resource 会先于 Claude normalizer 分离，支持 JSON 与 gzip，并要求有效 API Key。Harness 记录经过 `normalizeDeepSeekHarnessOtlpLogs` 写入 `~/.agent-insight/otel_data/deepseek-harness/YYYY-MM-DD/sessions/<safe-session>/events.jsonl`，再由专用 source 从完整 Session Event 快照聚合 `ExecutionRecord`。子 Session 事件同时镜像一份带 `sourceSessionId` 的分组记录到直接父 Session shard，使父 Trace 能恢复 Task/Skill/子 Agent 树，而子 Session shard 仍生成独立 Execution。
 
 后台 `OtelSpoolConsumer`（`startOtelSpoolConsumer` / `runOtelSpoolConsumerTick`）按 checkpoint 增量消费 spool：
 - **短 debounce**（`OTEL_CONSUMER_SHORT_MS`，默认 3s）：有数据时快速落库

@@ -2,6 +2,7 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import { aggregateClaudeOtelSession } from '@/lib/ingest/claude-otel/aggregator';
 import { aggregateCodeAgentOtelSession } from '@/lib/ingest/codeagent-otel/aggregator';
 import { aggregateOtelTraceSession } from '@/lib/ingest/otel/aggregate';
+import { aggregateDeepSeekHarnessOtelSession } from '@/lib/ingest/deepseek-harness-otel/aggregator';
 import {
   getClaudeOtelSpoolDir,
   listClaudeOtelSpoolFiles,
@@ -14,6 +15,11 @@ import {
   listCodeAgentOtelSpoolFiles,
 } from '@/lib/ingest/codeagent-otel/spool';
 import { getOtelTraceSpoolDir, listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
+import {
+  getDeepSeekHarnessOtelSpoolDir,
+  listDeepSeekHarnessOtelSpoolFiles,
+  listDeepSeekHarnessOtelSpoolFilesForDay,
+} from '@/lib/ingest/deepseek-harness-otel/spool';
 
 export type SpoolAggregationResult =
   | {
@@ -51,6 +57,15 @@ function codeAgentDefaultSkipEvaluation(): boolean {
 
 export function listSources(): SpoolSource[] {
   return [
+    {
+      id: 'deepseek-harness-otel-logs',
+      spoolDir: getDeepSeekHarnessOtelSpoolDir,
+      listFiles: () => listDeepSeekHarnessOtelSpoolFiles(getDeepSeekHarnessOtelSpoolDir()),
+      listFilesForDay: (day) => listDeepSeekHarnessOtelSpoolFilesForDay(day, getDeepSeekHarnessOtelSpoolDir()),
+      aggregate: aggregateDeepSeekHarnessOtelSession,
+      statSession: (sessionId) => statSessionSpool(getDeepSeekHarnessOtelSpoolDir(), 'events.jsonl', sessionId),
+      defaultSkipEvaluation: () => true,
+    },
     {
       id: 'codeagent-otel-logs',
       spoolDir: getCodeAgentOtelSpoolDir,
