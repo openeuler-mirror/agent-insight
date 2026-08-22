@@ -301,6 +301,38 @@ Token 是模型消耗的计量单位。详情页通常会拆分为输入、输�
 
 Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent 或多阶段流程中，这个指标有助于识别流程是否出现过度拆分。
 
+## DeepSeek Harness 接入
+
+Agent Insight 通过 DeepSeek Harness 官方 Session Telemetry OTLP Logs 观测执行过程，不接管 Harness 的模型选择、Tool、Skill、审批或沙箱。当前支持 macOS 与 Linux，并要求本机已有 Node.js、npm、pnpm；安装器会在找不到 `dsh` 时安装已验证的 `@deepseek-ai/dsh@0.1.0-rc.8`。
+
+推荐在 Agent Insight 的 **接入配置 → 客户端安装** 中勾选 **DeepSeek Harness**，复制页面生成的一键安装命令并在运行 Harness 的机器上执行。统一安装脚本会把当前服务地址与 API Key 通过子进程环境变量交给专用 Harness 安装器，不会把 API Key 拼进下载 URL；也可以使用下面的独立安装命令：
+
+```bash
+export AGENT_INSIGHT_API_KEY='wi_xxxx'
+curl -sSf 'http://<Agent-Insight-Host>:3000/api/ingest/setup/deepseek-harness' | sh
+```
+
+安装器会把 `package.json`、`index.js`、`cordis.patch.yml` 三个白名单文件下载到临时目录并逐一校验 SHA-256；全部通过后才安装到 Harness 的 `headless` 与 `web` profile，不需要客户端安装 `unzip`。Agent Insight 地址和 API Key 会写入权限为 `0600` 的 `~/.dsh/.env`。重复执行是幂等的。Windows 原生环境暂不安装该插件，客户端安装脚本会提示改在 WSL 中运行。随后照常运行 Harness，例如：
+
+```bash
+dsh --profile headless '使用项目中的 Skill 分析问题，并调用必要的 Tool 验证结论。'
+```
+
+新的 Trace 会以框架 **DeepSeek Harness** 出现在链路追踪列表。详情可查看根/子 Agent 的 System Prompt、用户输入、模型回答、Token、Tool 调用及结果、Skill 调用和子 Session；子 Session 同时保留为独立 Execution，并通过父子关系进入 Agent Tree。
+
+Harness `FULL` telemetry 会携带完整 Session Event，因此可能包含 prompt、Tool 参数和 Tool 结果。Agent Insight 插件在发送前递归遮盖 API Key、Token、Authorization、Cookie、密码等敏感值，并对超长字符串做截断；普通 prompt、Tool schema 与 Token 统计不会被默认删除。可通过 `AGENT_INSIGHT_DSH_MAX_STRING_CHARS` 调整单个字符串的最大长度。服务端必须校验有效的 `x-witty-api-key` 才会接受 Harness Resource。
+
+此链路沿用 Harness 官方 OTel backend 的 best-effort 交付语义：摄入接口 HTTP 200 只表示事件已写入服务端 spool，后台 consumer 通常在数秒后生成或更新 Trace；客户端在进程崩溃前尚未导出的内存队列无法补传。
+
+卸载时分别执行：
+
+```bash
+dsh plugin --profile headless remove agent-insight-deepseek-harness-observability
+dsh plugin --profile web remove agent-insight-deepseek-harness-observability
+```
+
+确认两个 profile 均已移除后，可再手工清理 `~/.agent-insight/deepseek-harness/` 中的历史版本目录，并按需从 `~/.dsh/.env` 删除 `AGENT_INSIGHT_BASE_URL`、`AGENT_INSIGHT_API_KEY`。
+
 ## 推荐使用路径
 
 ### 场景一：确认接入是否成功

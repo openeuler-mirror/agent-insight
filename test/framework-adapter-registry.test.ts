@@ -45,6 +45,7 @@ test("registry exposes the framework descriptor list", () => {
       "openclaw",
       "hermes",
       "codex",
+      "deepseek-harness",
       "jiuwenswarm",
       "langfuse-langgraph",
       "llamaindex",
@@ -77,6 +78,10 @@ assert.equal(getAdapter("codeagent").capabilities?.skillScope, "agent-tree")
   assert.equal(getAdapter("openclaw").capabilities?.skillScope, "session")
   assert.equal(getAdapter("codex").capabilities?.skills, true)
   assert.equal(getAdapter("codex").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("deepseek-harness").capabilities?.skills, true)
+  assert.equal(getAdapter("deepseek-harness").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("deepseek-harness").capabilities?.skillScope, "agent-tree")
+  assert.equal(getAdapter("deepseek-harness").sessionMergeStrategy, "snapshot-replace")
   assert.equal(getAdapter("claude").capabilities?.skillScope, "session")
   assert.equal(getAdapter("llamaindex").capabilities?.skillScope, "agent-tree")
   assert.equal(getAdapter("pi-agent").capabilities?.subagentTree, true)

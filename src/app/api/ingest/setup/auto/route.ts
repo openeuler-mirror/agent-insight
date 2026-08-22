@@ -28,6 +28,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'pi-agent', label: 'Pi Agent' },
     { value: 'codex', label: 'Codex' },
     { value: 'qwencode', label: 'Qwen Code' },
+    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -190,7 +191,9 @@ const frameworks = [
     { name: 'AcTrail', value: 'actrail' },
     { name: 'Pi Agent', value: 'pi-agent' },
     { name: 'Codex', value: 'codex' },
-    { name: 'Qwen Code', value: 'qwencode' }
+    { name: 'Qwen Code', value: 'qwencode' },
+    { name: 'DeepSeek Harness', value: 'deepseek-harness' }
+];
 
 async function select() {
     console.log('');
@@ -271,6 +274,8 @@ INSTALL_ACTRAIL=false
 INSTALL_ACTRAIL=false
 INSTALL_CODEX=false
 INSTALL_QWENCODE=false
+INSTALL_DEEPSEEK_HARNESS=false
+DEEPSEEK_HARNESS_SETUP_OK=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -311,9 +316,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"qwencode"* ]]; then
     INSTALL_QWENCODE=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
+    INSTALL_DEEPSEEK_HARNESS=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -690,6 +698,21 @@ echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
 
+if [ "$INSTALL_DEEPSEEK_HARNESS" = "true" ]; then
+    if [ -z "$AGENT_INSIGHT_API_KEY" ]; then
+        echo "Warning: DeepSeek Harness observability requires an API key; configure one and rerun setup."
+    else
+        echo "⏬ Installing DeepSeek Harness observability..."
+        DEEPSEEK_HARNESS_INSTALLER="$(mktemp)"
+        if curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/deepseek-harness" -o "$DEEPSEEK_HARNESS_INSTALLER" && AGENT_INSIGHT_BASE_URL="$AGENT_INSIGHT_BASE_URL" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" sh "$DEEPSEEK_HARNESS_INSTALLER"; then
+            DEEPSEEK_HARNESS_SETUP_OK=true
+        else
+            echo "Warning: DeepSeek Harness observability installation did not complete; review the errors above."
+        fi
+        rm -f "$DEEPSEEK_HARNESS_INSTALLER"
+    fi
+fi
+
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "⏬ Installing Codex collector..."
     export AGENT_INSIGHT_API_KEY
@@ -1020,6 +1043,9 @@ fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
 fi
+if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
+    echo "  ✅ DeepSeek Harness observability: headless + web profiles"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -1064,6 +1090,9 @@ if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
 fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
+fi
+if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
+    echo "  9. Start a new dsh session"
 fi
 echo "------------------------------------------------"
 `;
@@ -1170,7 +1199,8 @@ function generatePowerShellScript(
         '    "    { name: \'AcTrail\', value: \'actrail\' },"',
         '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
         '    "    { name: \'Codex\', value: \'codex\' },"',
-        '    "    { name: \'Qwen Code\', value: \'qwencode\' }"',
+        '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
+        '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1253,6 +1283,7 @@ function generatePowerShellScript(
         '$INSTALL_ACTRAIL = $false',
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
+        '$INSTALL_DEEPSEEK_HARNESS = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1293,9 +1324,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "qwencode") {',
         '    $INSTALL_QWENCODE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
+        '    $INSTALL_DEEPSEEK_HARNESS = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1705,6 +1739,10 @@ function generatePowerShellScript(
         'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW -or $INSTALL_XIAOO) {',
         '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
         '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
+        '}',
+        '',
+        'if ($INSTALL_DEEPSEEK_HARNESS) {',
+        '    Write-Warning "DeepSeek Harness observability is currently supported on macOS/Linux. Use WSL on Windows."',
         '}',
         '',
         '# 6.35 Install Qoder CN product-family collectors',
