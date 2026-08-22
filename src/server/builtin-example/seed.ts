@@ -181,6 +181,18 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
       updatedAt: nowIso,
     });
 
+    try {
+      const { ensureBuiltinReliabilityDataset } = await import(
+        '@/server/builtin-example/ensure-reliability-dataset'
+      );
+      await ensureBuiltinReliabilityDataset(u);
+    } catch (relErr) {
+      console.warn(
+        `[builtin-example] reliability dataset seed failed for ${u}:`,
+        (relErr as Error)?.message || relErr,
+      );
+    }
+
     // 3. 内置 Trace（2 条成功 + 1 条带报错，用于演示智能诊断）：Session + Execution，挂在 demo agent 名下。
     for (const t of fixtures.traces) {
       if (!t.session || !t.execution) continue;

@@ -10,6 +10,7 @@ import {
 } from './checkpoint';
 import { compactProcessedSpoolFiles } from './retention';
 import { listSources, type SpoolAggregationResult, type SpoolSource } from './sources';
+import { acquireConsumerProcessLocks, type ConsumerProcessLocks } from './process-lock';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type IntervalHandle = ReturnType<typeof setInterval>;
@@ -64,6 +65,7 @@ export type OtelSpoolConsumerState = {
   pendingFiles: Map<string, PendingFile>;
   sessions: Map<string, SessionState>;
   fileLists: Map<string, FileListCache>;
+  processLocks: ConsumerProcessLocks;
   saveExecution: SaveExecution;
   shortMs: number;
   longMs: number;
@@ -137,8 +139,11 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerState {
-  const sources = options.sources || listSources();
+function createState(
+  options: OtelSpoolConsumerOptions,
+  sources: SpoolSource[],
+  processLocks: ConsumerProcessLocks,
+): OtelSpoolConsumerState {
   return {
     stopped: false,
     ticking: false,
@@ -147,6 +152,7 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     pendingFiles: new Map(),
     sessions: new Map(),
     fileLists: new Map(),
+    processLocks,
     saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.log || console.log),
     shortMs: options.shortMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_SHORT_MS', 3000),
     longMs: options.longMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LONG_MS', 30000),
@@ -516,16 +522,30 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
     if (!source) continue;
     try {
       const result = aggregateForSession(state, session, source);
-      if (!result.record) {
+      if (result.disposition === 'retry-later') {
+        session.failures = 0;
+        continue;
+      }
+
+      if (result.disposition === 'discard') {
+        session.failures = 0;
         markSourceDone(state, session.sessionId, sourceId);
+        session.sourceIds.delete(sourceId);
+        if (session.pendingFileKeys.size === 0) {
+          session.fastDueAt = undefined;
+          session.evaluatedDueAt = undefined;
+          session.maxDueAt = undefined;
+        }
+        session.lastAggregate = undefined;
         continue;
       }
 
       if (mode === 'fast') {
-        await state.saveExecution({
+        const saved = await state.saveExecution({
           ...result.record,
           skip_evaluation: source.defaultSkipEvaluation(),
         });
+        if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
         markSourceDone(state, session.sessionId, sourceId);
       } else {
@@ -535,6 +555,7 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
           skip_internal_judgment: true,
           force_judgment: true,
         });
+        if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
         // 存量积压场景下 fast 和 evaluated 会同时到点，dispatcher 直接跑 evaluated 跳过 fast，
         // 所以这里必须也推进文件归属簿记 —— 否则 pendingFiles 永远不减、checkpoint 游标永不推进，
@@ -707,7 +728,15 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
 
 export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): void {
   stopOtelSpoolConsumer();
-  const state = createState(options);
+  const sources = options.sources || listSources();
+  const processLocks = acquireConsumerProcessLocks(sources.map(source => source.spoolDir()));
+  if (!processLocks) {
+    (options.warn || console.warn)('[OTelConsumer] spool is owned by another process', {
+      sources: sources.map(source => source.id),
+    });
+    return;
+  }
+  const state = createState(options, sources, processLocks);
 
   if (state.seedOnStart) {
     for (const source of state.sources) {
@@ -736,6 +765,7 @@ export function stopOtelSpoolConsumer(): void {
   state.stopped = true;
   if (state.interval) clearInterval(state.interval);
   if (state.dispatchTimer) clearTimeout(state.dispatchTimer);
+  state.processLocks.release();
   globalThis.__otelSpoolConsumer = undefined;
 }
 

@@ -99,6 +99,11 @@ export function normalizeActrailOtlpTraces(
         const agentSessionId = actionKind === 'llm.request'
           ? headerValue(spanAttributes['http.request.headers_text'], 'x-session-id')
           : undefined;
+        const links = (Array.isArray(span?.links) ? span.links : []).map((link: any) => ({
+          traceId: asString(link?.traceId),
+          spanId: asString(link?.spanId),
+          attributes: otelAttrsToObject(link?.attributes || []),
+        }));
 
         events.push({
           receivedAt,
@@ -106,6 +111,7 @@ export function normalizeActrailOtlpTraces(
           traceId,
           spanId: asString(span?.spanId),
           parentSpanId: asString(span?.parentSpanId),
+          links,
           name: asString(span?.name),
           kind: eventKind(actionKind),
           serviceName: 'actrail',

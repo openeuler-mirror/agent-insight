@@ -5,6 +5,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { waitForExperimentTasksTerminal } from '@/lib/client/experiment-eval-polling';
@@ -1567,6 +1568,7 @@ function SkillAnalysisPage() {
                 title={title}
                 showDefaultActions={false}
             />
+            <SkillWorkspaceTabs />
 
             <main className="sa-main">
                 {/* view === 'batch' DetailHeader 分支已删——'batch' 视图整体下线，

@@ -11,6 +11,7 @@
  */
 import { Suspense, useEffect, useState, type ComponentType } from 'react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { SkillCatalog, SkillUpload, SkillGenerate, EnterpriseSync } from '@/components/skills/SkillRegistry';
 import {
     Dialog,
@@ -46,6 +47,7 @@ function SkillsPageInner() {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--background)', overflow: 'hidden' }}>
             <AppTopBar title="Skills Hub" showDefaultActions={false} />
+            <SkillWorkspaceTabs />
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 20px 24px', width: '100%', boxSizing: 'border-box' }}>
                 <SkillCatalog refresh={refreshKey} onUploadClick={() => setUploadOpen(true)} />
             </div>

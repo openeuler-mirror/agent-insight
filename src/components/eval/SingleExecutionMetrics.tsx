@@ -6,7 +6,7 @@ import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { parseEvaluationItemsFromReason } from '@/lib/engine/evaluation/evaluation-parser';
-import { formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -163,7 +163,7 @@ export function SingleExecutionMetrics({ taskId }: Props) {
             {/* Performance KPIs */}
             <SectionTitle text={locale === 'zh' ? '性能指标' : 'Performance metrics'} />
             <div style={kpiGrid}>
-                <Kpi label={locale === 'zh' ? '延迟' : 'Latency'} value={formatLatencySeconds(record.latency)} />
+                <Kpi label={locale === 'zh' ? '延迟' : 'Latency'} value={formatDurationMs(record.latency)} />
                 <Kpi label={locale === 'zh' ? '总 Token' : 'Total tokens'} value={fmtNum(record.tokens)} />
                 <Kpi label={locale === 'zh' ? '成本' : 'Cost'} value={typeof record.cost === 'number' && record.cost > 0 ? `$${record.cost.toFixed(4)}` : '--'} />
                 <Kpi label={locale === 'zh' ? 'LLM 调用' : 'LLM calls'} value={fmtNum(record.llm_call_count)} />

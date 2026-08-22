@@ -39,11 +39,16 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'codeagent', label: 'CodeAgent' },
     { value: 'openclaw', label: 'OpenClaw' },
     { value: 'hermes', label: 'Hermes' },
+    { value: 'xiaoo', label: 'xiaoO' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'llamaindex', label: 'LlamaIndex' },
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },
     { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'qwencode', label: 'Qwen Code' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
 ];
 
 export default function AccessInstallPage() {
@@ -214,7 +219,9 @@ export default function AccessInstallPage() {
                                 <span style={countPill}>{frameworks.length}</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '先勾选框架,再按系统二选一' : 'Pick your frameworks, then your OS'}
+                                    {isZh
+                                        ? '先勾选框架,再按系统二选一 —— 同时完成本机纳管'
+                                        : 'Pick frameworks, then your OS — also registers this host'}
                                 </span>
                             </div>
 
@@ -549,11 +556,11 @@ function LangfuseEnvCard({
 function DocsPanel({ locale }: { locale: string }) {
     const isZh = locale === 'zh';
     const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: '客户端高级配置', href: '#' },
         { label: '常见接入问题排查', href: '#' },
     ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: 'User manual', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: 'Advanced client configuration', href: '#' },
         { label: 'Troubleshooting installation', href: '#' },
     ];
@@ -576,6 +583,14 @@ function DocsPanel({ locale }: { locale: string }) {
         </section>
     );
 }
+
+
+/**
+ * 常驻客户端安装（IF-N01/N02）。
+ *
+ * 与上方的 Trace 采集器安装是两件事：这里装的是独立常驻服务，由 systemd / launchd 守护，
+ * 不随 Agent 平台启停，负责配置下发与双向控制通道。
+ */
 
 function KvRow({
     label, value, mono, bold, ellipsis, icon,

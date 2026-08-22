@@ -77,12 +77,12 @@ function defaultModelForProvider(providerID: string): string {
   switch (providerID) {
     case 'deepseek':
     case 'deepseek-official':
-      return 'deepseek-chat';
+      return 'deepseek-v4-flash';
     case 'openai':
       return 'gpt-4o-mini';
     case 'anthropic':
       return 'claude-haiku-4-5-20251001';
     default:
-      return 'deepseek-chat';
+      return 'deepseek-v4-flash';
   }
 }

@@ -220,4 +220,4 @@ Skills 评测总览用于对指定 Skill 版本执行结构化评测，并汇总
 - 返回 Skill 资产入口： [Skills 管理](../manage)
 - 从需求生成新版本： [Skills 生成](../generate)
 - 基于分析结果继续迭代： [Skills 优化](../optimize)
-- 返回 Skills 模块总览： [Skills 能力](../index)
+- 返回 Skill 工作区总览： [持续优化 · Skill](../index)

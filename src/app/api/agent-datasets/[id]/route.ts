@@ -4,6 +4,7 @@ import {
   deleteAgentDataset,
   findAgentDataset,
 } from '@/server/agent_datasets_storage';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
@@ -45,6 +46,17 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const idTrim = id?.trim() || '';
     if (!user || !idTrim) {
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
+    }
+
+    const existing = await findAgentDataset(user, idTrim);
+    if (!existing) {
+      return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+    }
+    if (isBuiltinReliabilityDataset(existing)) {
+      return NextResponse.json(
+        { error: '内置可靠性评测集不可删除' },
+        { status: 403 },
+      );
     }
 
     const removed = await deleteAgentDataset(user, idTrim);

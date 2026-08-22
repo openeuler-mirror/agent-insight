@@ -1,10 +1,12 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { pathToFileURL } from "node:url"
 
-import { loadCheckpoint, toCheckpointRelPath } from "@/lib/ingest/otel-consumer/checkpoint"
+import { getFileCursor, loadCheckpoint, toCheckpointRelPath } from "@/lib/ingest/otel-consumer/checkpoint"
 import {
   getOtelSpoolConsumerForTest,
   startOtelSpoolConsumer,
@@ -33,10 +35,220 @@ function makeSource(dir: string, file: string, record: ExecutionRecord): SpoolSo
       sessionId,
       eventCount: 1,
       record: { ...record, task_id: sessionId },
+      disposition: "persisted",
     }),
     defaultSkipEvaluation: () => true,
   }
 }
+
+test("OTel consumer: null aggregation keeps the cursor replayable until the source becomes persistable", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-null-replay-"))
+  stopOtelSpoolConsumer()
+  try {
+    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
+    fs.mkdirSync(dayDir, { recursive: true })
+    const file = path.join(dayDir, "traces.jsonl")
+    fs.writeFileSync(file, "{\"sessionId\":\"session-pending\"}\n", "utf8")
+    const relPath = toCheckpointRelPath(dir, file)
+    let persistable = false
+    const saved: ExecutionRecord[] = []
+    const source: SpoolSource = {
+      id: "pending-source",
+      spoolDir: () => dir,
+      listFiles: () => [file],
+      aggregate: (sessionId) => persistable
+        ? {
+          sessionId,
+          eventCount: 1,
+          record: { task_id: sessionId, user: "test-user", query: "ready", framework: "test", final_result: "done" },
+          disposition: "persisted",
+        }
+        : {
+          sessionId,
+          eventCount: 1,
+          record: null,
+          disposition: "retry-later",
+        },
+      defaultSkipEvaluation: () => true,
+    }
+
+    startOtelSpoolConsumer({
+      sources: [source],
+      saveExecution: async (data) => {
+        saved.push(data)
+        return { success: true, record: data }
+      },
+      shortMs: 5,
+      longMs: 10000,
+      maxWaitMs: 10000,
+      tickMs: 5,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await waitFor(() => getOtelSpoolConsumerForTest()?.pendingFiles.size === 1)
+    await wait(30)
+    assert.equal(saved.length, 0)
+    assert.equal(getFileCursor(dir, relPath).bytes, 0, "null 聚合不得确认未持久化的字节")
+
+    persistable = true
+    fs.appendFileSync(file, "{\"sessionId\":\"session-pending\",\"ready\":true}\n", "utf8")
+    await waitFor(() => saved.length === 1 && getOtelSpoolConsumerForTest()?.pendingFiles.size === 0)
+    assert.equal(getFileCursor(dir, relPath).bytes, fs.statSync(file).size)
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("OTel consumer: discard aggregation acknowledges known non-execution bytes", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-discard-"))
+  stopOtelSpoolConsumer()
+  try {
+    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
+    fs.mkdirSync(dayDir, { recursive: true })
+    const file = path.join(dayDir, "logs.jsonl")
+    fs.writeFileSync(file, "{\"sessionId\":\"session-discard\"}\n", "utf8")
+    const relPath = toCheckpointRelPath(dir, file)
+    const source: SpoolSource = {
+      id: "discard-source",
+      spoolDir: () => dir,
+      listFiles: () => [file],
+      aggregate: (sessionId) => ({
+        sessionId,
+        eventCount: 1,
+        record: null,
+        disposition: "discard",
+      }),
+      defaultSkipEvaluation: () => true,
+    }
+
+    startOtelSpoolConsumer({
+      sources: [source],
+      shortMs: 5,
+      longMs: 10_000,
+      maxWaitMs: 10_000,
+      tickMs: 5,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await waitFor(() => getOtelSpoolConsumerForTest()?.pendingFiles.size === 0)
+    assert.equal(
+      getFileCursor(dir, relPath).bytes,
+      fs.statSync(file).size,
+      "已确认可丢弃的事件必须推进 checkpoint，避免无限重放",
+    )
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("OTel consumer: failed persistence keeps a persisted result replayable", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-save-failure-"))
+  stopOtelSpoolConsumer()
+  try {
+    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
+    fs.mkdirSync(dayDir, { recursive: true })
+    const file = path.join(dayDir, "traces.jsonl")
+    fs.writeFileSync(file, "{\"sessionId\":\"session-save-failure\"}\n", "utf8")
+    const relPath = toCheckpointRelPath(dir, file)
+    const source: SpoolSource = {
+      id: "save-failure-source",
+      spoolDir: () => dir,
+      listFiles: () => [file],
+      aggregate: (sessionId) => ({
+        sessionId,
+        eventCount: 1,
+        record: { task_id: sessionId, user: "test-user", query: "persist", framework: "test", final_result: "done" },
+        disposition: "persisted",
+      }),
+      defaultSkipEvaluation: () => true,
+    }
+
+    startOtelSpoolConsumer({
+      sources: [source],
+      saveExecution: async (data) => ({ success: false, record: data }),
+      shortMs: 5,
+      longMs: 10_000,
+      maxWaitMs: 10_000,
+      tickMs: 5,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await wait(50)
+    assert.equal(
+      getFileCursor(dir, relPath).bytes,
+      0,
+      "写库返回失败时不能确认 cursor，否则重放数据会丢失",
+    )
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("OTel consumer: only one process can own every registered spool directory", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-owner-"))
+  try {
+    const ownersFile = path.join(dir, "owners.log")
+    const releaseFile = path.join(dir, "release")
+    const firstSpool = path.join(dir, "first")
+    const secondSpool = path.join(dir, "second")
+    const consumerModule = pathToFileURL(
+      path.join(process.cwd(), "src", "lib", "ingest", "otel-consumer", "consumer.ts"),
+    ).href
+    const childScript = `
+      import fs from "node:fs";
+      import { startOtelSpoolConsumer, stopOtelSpoolConsumer, getOtelSpoolConsumerForTest } from ${JSON.stringify(consumerModule)};
+      const firstSpool = ${JSON.stringify(firstSpool)};
+      const secondSpool = ${JSON.stringify(secondSpool)};
+      const ownersFile = ${JSON.stringify(ownersFile)};
+      const releaseFile = ${JSON.stringify(releaseFile)};
+      const source = (id, spoolDir) => ({ id, spoolDir: () => spoolDir, listFiles: () => [], aggregate: (sessionId) => ({ sessionId, eventCount: 0, record: null, disposition: "retry-later" }), defaultSkipEvaluation: () => true });
+      startOtelSpoolConsumer({ sources: [source("first", firstSpool), source("second", secondSpool)], seedOnStart: false, tickMs: 50, log: () => {}, warn: () => {} });
+      if (getOtelSpoolConsumerForTest()) fs.appendFileSync(ownersFile, String(process.pid) + "\\n", "utf8");
+      await new Promise(resolve => {
+        const timer = setInterval(() => {
+          if (!fs.existsSync(releaseFile)) return;
+          clearInterval(timer);
+          resolve();
+        }, 10);
+      });
+      stopOtelSpoolConsumer();
+    `
+    const runChild = () => {
+      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", childScript], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      return new Promise<void>((resolve, reject) => {
+        let stderr = ""
+        child.stderr.on("data", chunk => { stderr += String(chunk) })
+        child.on("error", reject)
+        child.on("exit", code => code === 0 ? resolve() : reject(new Error(`consumer child exited ${code}: ${stderr}`)))
+      })
+    }
+
+    const first = runChild()
+    await waitFor(() => fs.existsSync(ownersFile) && fs.readFileSync(ownersFile, "utf8").trim().length > 0, 10_000)
+    assert.equal(fs.readFileSync(ownersFile, "utf8").trim().split(/\r?\n/).filter(Boolean).length, 1)
+    const second = runChild()
+    await wait(100)
+
+    const owners = fs.readFileSync(ownersFile, "utf8").trim().split(/\r?\n/).filter(Boolean)
+    assert.equal(owners.length, 1, `同一组 spool 不得被多个 consumer 同时持有，实际 owner: ${owners.join(", ")}`)
+    fs.writeFileSync(releaseFile, "", "utf8")
+    await Promise.all([first, second])
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoint", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-"))
@@ -344,6 +556,7 @@ test("OTel consumer: global cooldown serializes and throttles aggregates across 
         eventCount: 1,
         // user 必填，理由同上（attribution guard 会丢掉无归属记录）
         record: { task_id: sessionId, user: "test-user", query: "q", framework: "test", final_result: "done" },
+        disposition: "persisted",
       }),
       defaultSkipEvaluation: () => true,
     }

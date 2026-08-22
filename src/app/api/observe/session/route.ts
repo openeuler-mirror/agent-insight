@@ -11,6 +11,12 @@ type ParsedSession = {
     session: any;
     interactions: any[];
     langfuseTraceNodes: LangfuseTraceNode[];
+    executionSummary: {
+        latency: number | null;
+        tokens: number | null;
+        cost: number | null;
+        timestamp: Date | null;
+    } | null;
 };
 
 const SESSION_CACHE_TTL_MS = 45_000;
@@ -21,11 +27,20 @@ const parsedSessionCache = new Map<string, {
     value: ParsedSession;
 }>();
 
-function sessionSignature(session: any, framework: unknown): string {
+function sessionSignature(session: any, execution: any): string {
     const raw = [session?.interactions, session?.langfuseTraceNodes]
         .map(value => typeof value === 'string' ? value : '')
         .join('\n');
-    return `${String(framework || '')}:${createHash('sha1').update(raw).digest('base64url')}`;
+    const executionVersion = [
+        execution?.framework,
+        execution?.latency,
+        execution?.tokens,
+        execution?.cost,
+        execution?.timestamp instanceof Date
+            ? execution.timestamp.getTime()
+            : execution?.timestamp,
+    ].map(value => String(value ?? '')).join(':');
+    return `${executionVersion}:${createHash('sha1').update(raw).digest('base64url')}`;
 }
 
 function rememberParsedSession(taskId: string, signature: string, value: ParsedSession): void {
@@ -46,9 +61,14 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
     const session = await db.findSessionByTaskId(taskId);
     if (!session) return null;
 
-    const executions = await db.findExecutions({ taskId }, { timestamp: 'desc' }, { framework: true });
-    const framework = executions?.[0]?.framework;
-    const signature = sessionSignature(session, framework);
+    const executions = await db.findExecutions(
+        { taskId },
+        { timestamp: 'desc' },
+        { framework: true, latency: true, tokens: true, cost: true, timestamp: true },
+    );
+    const latestExecution = executions?.[0] ?? null;
+    const framework = latestExecution?.framework;
+    const signature = sessionSignature(session, latestExecution);
     const cached = parsedSessionCache.get(taskId);
     if (cached && cached.signature === signature && cached.expiresAt > Date.now()) {
         return cached.value;
@@ -64,7 +84,13 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
         ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
-    const value = { session, interactions, langfuseTraceNodes };
+    const executionSummary = latestExecution ? {
+        latency: latestExecution.latency ?? null,
+        tokens: latestExecution.tokens ?? null,
+        cost: latestExecution.cost ?? null,
+        timestamp: latestExecution.timestamp ?? null,
+    } : null;
+    const value = { session, interactions, langfuseTraceNodes, executionSummary };
     rememberParsedSession(taskId, signature, value);
     return value;
 }
@@ -209,7 +235,7 @@ export async function GET(request: Request) {
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
-        const { session, interactions, langfuseTraceNodes } = parsed;
+        const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);
@@ -232,6 +258,7 @@ export async function GET(request: Request) {
                 startTime: session.startTime.getTime(),
                 interactionCount: interactions.length,
                 interactions: toTraceStructureInteractions(interactions),
+                execution: executionSummary,
                 ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
             });
         }

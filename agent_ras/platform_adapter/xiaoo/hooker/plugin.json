@@ -1,0 +1,17 @@
+[
+  {
+    "id": "agent_ras_chat_received",
+    "hook_point": "*.Chat.message.received",
+    "command": "python3 hooker_main.py chat_received"
+  },
+  {
+    "id": "agent_ras_tool_post",
+    "hook_point": "*.Tool.*.post",
+    "command": "python3 hooker_main.py tool_post"
+  },
+  {
+    "id": "agent_ras_session_state",
+    "hook_point": "*.Session.lifecycle.state",
+    "command": "python3 hooker_main.py session_state"
+  }
+]

@@ -5,10 +5,14 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { POST } from '@/app/api/ingest/otel/v1/traces/route';
-import { aggregateOtelTraceSession } from '@/lib/ingest/otel/aggregate';
+import { listSources } from '@/lib/ingest/otel-consumer/sources';
+import { listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
 
-const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'actrail-otel-ingest-'));
-process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = spoolDirectory;
+const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'actrail-otel-ingest-'));
+const actrailSpoolDirectory = path.join(spoolRoot, 'actrail');
+const genericSpoolDirectory = path.join(spoolRoot, 'traces');
+process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR = actrailSpoolDirectory;
+process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = genericSpoolDirectory;
 
 
 function attr(key: string, value: string | number) {
@@ -21,7 +25,7 @@ function attr(key: string, value: string | number) {
 }
 
 test('AcTrail OTLP endpoint appends events that aggregate into an execution record', async (context) => {
-  context.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
+  context.after(() => fs.rmSync(spoolRoot, { recursive: true, force: true }));
   const traceId = '00000000000000000000000000000009';
   const requestActionId = 'trace:9:request';
   const responseActionId = 'trace:9:response';
@@ -104,7 +108,13 @@ test('AcTrail OTLP endpoint appends events that aggregate into an execution reco
   assert.deepEqual(result.sessions, [traceId]);
   assert.equal('rawCaptured' in result, false);
 
-  const aggregation = aggregateOtelTraceSession(traceId, spoolDirectory);
+  assert.equal(listOtelTraceSpoolFiles(actrailSpoolDirectory).length, 1);
+  assert.equal(listOtelTraceSpoolFiles(genericSpoolDirectory).length, 0);
+
+  const actrailSource = listSources().find((source) => source.id === 'actrail-otel-traces');
+  assert.ok(actrailSource);
+  assert.equal(actrailSource.spoolDir(), actrailSpoolDirectory);
+  const aggregation = actrailSource.aggregate(traceId);
   assert.equal(aggregation.eventCount, 3);
   assert.ok(aggregation.record);
   assert.equal(aggregation.record.framework, 'actrail');

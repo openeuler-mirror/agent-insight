@@ -54,7 +54,7 @@ interface ProviderPreset {
 }
 
 const PROVIDER_PRESETS: Record<EvalConfigItem['provider'], ProviderPreset> = {
-    'deepseek-official': { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+    'deepseek-official': { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
     siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3' },
     openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
     anthropic: { baseUrl: 'https://api.anthropic.com/v1', model: 'claude-3-5-sonnet-20240620' },
@@ -101,7 +101,7 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
     const [activeConfigId, setActiveConfigId] = useState<string>('default');
     const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
     const [tempConfig, setTempConfig] = useState<EvalConfigItem>({
-        id: 'new', name: locale === 'zh' ? '新配置' : 'New Config', provider: 'deepseek-official', model: 'deepseek-chat',
+        id: 'new', name: locale === 'zh' ? '新配置' : 'New Config', provider: 'deepseek-official', model: 'deepseek-v4-flash',
     });
     const [isSaving, setIsSaving] = useState(false);
     const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info', msg: string } | null>(null);
@@ -1198,7 +1198,7 @@ function EditForm({
                 <Field label={locale === 'zh' ? '模型名' : 'Model Name'}>
                     <input
                         style={inputStyle}
-                        placeholder="deepseek-chat / gpt-4o / ..."
+                        placeholder="deepseek-v4-flash / gpt-4o / ..."
                         value={config.model || ''}
                         disabled={isDefault}
                         onChange={e => setConfig({ ...config, model: e.target.value })}

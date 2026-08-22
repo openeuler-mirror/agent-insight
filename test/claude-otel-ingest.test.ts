@@ -7,7 +7,7 @@ import test from "node:test"
 import { aggregateClaudeOtelEvents } from "@/lib/ingest/claude-otel/aggregator"
 import { buildAgentCallTree } from "@/lib/engine/observability/agent-trace"
 import { ClaudeParser } from "@/lib/engine/observability/claude-parser"
-import { normalizeClaudeOtlpLogs } from "@/lib/ingest/claude-otel/otlp-json"
+import { normalizeClaudeOtlpLogs, normalizeClaudeOtlpTraces } from "@/lib/ingest/claude-otel/otlp-json"
 import { normalizeClaudeCodeInteractionsForStorage } from "@/lib/shared/interaction-content"
 
 const attr = (key: string, value: any) => ({
@@ -663,5 +663,48 @@ test("Claude parser: maps tool_result blocks back onto tool_calls output", async
     assert.equal(assistant?.tool_calls?.[0]?.timing?.duration_ms, 25)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("Claude OTel: classifies Pi and OpenInference semantic span kinds", () => {
+  const cases = [
+    { name: "agent.pi", insightKind: "agent", openinferenceKind: "AGENT", expected: "agent" },
+    { name: "agent.worker", insightKind: "subagent", expected: "agent" },
+    { name: "skill.memory", insightKind: "skill", expected: "agent" },
+    { name: "tool.shell", insightKind: "tool", expected: "tool" },
+    { name: "tool.mcp", insightKind: "mcp", expected: "tool" },
+    { name: "llm.pi", insightKind: "llm", expected: "llm" },
+    { name: "agent.chain", openinferenceKind: "CHAIN", expected: "agent" },
+    { name: "tool.openinference", openinferenceKind: "TOOL", expected: "tool" },
+    { name: "llm.openinference", openinferenceKind: "LLM", expected: "llm" },
+  ] as const
+
+  const record = normalizeClaudeOtlpTraces({
+    resourceSpans: [{
+      resource: { attributes: [{ key: "service.name", value: { stringValue: "pi-agent" } }] },
+      scopeSpans: [{
+        scope: { name: "agent-insight-pi-agent" },
+        spans: cases.map((item, index) => ({
+          traceId: String(index).padStart(32, "a"),
+          spanId: String(index).padStart(16, "1"),
+          name: item.name,
+          kind: 1,
+          startTimeUnixNano: "1700000000000000000",
+          endTimeUnixNano: "1700000001000000000",
+          attributes: [
+            { key: "session.id", value: { stringValue: "session-pi" } },
+            { key: "agent.insight.framework", value: { stringValue: "pi-agent" } },
+            ...(item.insightKind ? [{ key: "agent.insight.kind", value: { stringValue: item.insightKind } }] : []),
+            ...(item.openinferenceKind ? [{ key: "openinference.span.kind", value: { stringValue: item.openinferenceKind } }] : []),
+          ],
+        })),
+      }],
+    }],
+  }, { receivedAt: new Date().toISOString() })
+
+  for (const item of cases) {
+    const event = record.find(candidate => candidate.name === item.name)
+    assert.ok(event, `${item.name} event present`)
+    assert.equal(event.kind, item.expected, item.name)
   }
 })

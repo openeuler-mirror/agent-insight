@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="json" ContentType="application/json" />
+  <Default Extension="cjs" ContentType="application/javascript" />
+  <Default Extension="xml" ContentType="application/xml" />
+  <Override PartName="/extension.vsixmanifest" ContentType="text/xml" />
+</Types>

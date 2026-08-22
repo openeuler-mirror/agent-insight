@@ -46,6 +46,7 @@ function makeSource(dir: string, files: string[], onAggregate?: (sessionId: stri
         sessionId,
         eventCount: 1,
         record: { task_id: sessionId, user: "test-user", query: "q", framework: "test", final_result: "done" },
+        disposition: "persisted",
       }
     },
     defaultSkipEvaluation: () => true,

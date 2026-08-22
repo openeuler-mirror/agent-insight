@@ -112,7 +112,11 @@ test('AC-009 统计故障不改变业务结果：collector 在 storage 故障时
 
 test('统计表不与业务表建外键（不得影响现有查询计划）', () => {
     const schema = fs.readFileSync(path.join(process.cwd(), 'prisma', 'schema.prisma'), 'utf8');
-    const usageModels = schema.slice(schema.indexOf('model PlatformUsageEvent'));
+    const usageStart = schema.indexOf('model PlatformUsageEvent');
+    const usageEnd = schema.indexOf('model ReliabilityInstallToken');
+    const usageModels = usageEnd > usageStart
+        ? schema.slice(usageStart, usageEnd)
+        : schema.slice(usageStart);
     assert.ok(!/@relation/.test(usageModels), '用量统计表不得建立关系');
 });
 

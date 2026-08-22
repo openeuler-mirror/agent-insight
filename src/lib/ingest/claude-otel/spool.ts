@@ -30,6 +30,20 @@ export function getOtelTraceSpoolDir(): string {
 
 const READ_CHUNK_BYTES = 1024 * 1024;
 
+/**
+ * Runtime filesystem join. Prefer over ``path.join(dynamic…)`` so Turbopack
+ * (Next 16) does not treat the call as a project-root file glob and emit
+ * "Overly broad patterns … matches N files" during ``next build``.
+ */
+function joinFs(base: string, ...rest: string[]): string {
+  let out = String(base || '').replace(/[/\\]+$/, '');
+  for (const part of rest) {
+    const clean = String(part ?? '').replace(/^[/\\]+|[/\\]+$/g, '');
+    if (clean) out = `${out}${path.sep}${clean}`;
+  }
+  return out;
+}
+
 function dayString(date = new Date()): string {
   const yyyy = String(date.getFullYear());
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -51,7 +65,7 @@ function safeSessionPathSegment(sessionId: string): string {
 }
 
 function sessionSpoolFile(spoolDir: string, fileName: string, sessionId: string): string {
-  return path.join(spoolDir, dayString(), 'sessions', safeSessionPathSegment(sessionId), fileName);
+  return joinFs(spoolDir, dayString(), 'sessions', safeSessionPathSegment(sessionId), fileName);
 }
 
 function appendJsonl(file: string, rows: any[]): void {
@@ -61,7 +75,7 @@ function appendJsonl(file: string, rows: any[]): void {
   fs.appendFileSync(file, text, 'utf8');
 }
 
-function appendJsonlBySession<T extends { sessionId?: string }>(spoolDir: string, fileName: string, events: T[]): void {
+export function appendJsonlBySession<T extends { sessionId?: string }>(spoolDir: string, fileName: string, events: T[]): void {
   const groups = new Map<string, T[]>();
   for (const event of events) {
     const sessionId = typeof event.sessionId === 'string' && event.sessionId.trim() ? event.sessionId : 'unknown';
@@ -101,7 +115,7 @@ function collectJsonlSpoolFiles(dir: string, fileName: string | undefined, out: 
   }
 }
 
-function listJsonlSpoolFiles(spoolDir: string, fileName?: string): string[] {
+export function listJsonlSpoolFiles(spoolDir: string, fileName?: string): string[] {
   const out: string[] = [];
   try {
     const days = fs.readdirSync(spoolDir, { withFileTypes: true }).filter((d) => d.isDirectory());
@@ -151,7 +165,7 @@ export type SessionSpoolFiles = {
   legacy: string[];
 };
 
-type SessionSpoolFileName = 'logs.jsonl' | 'traces.jsonl';
+export type SessionSpoolFileName = 'logs.jsonl' | 'traces.jsonl' | 'events.jsonl';
 
 function sessionTargetedReadEnabled(): boolean {
   return process.env.AGENT_INSIGHT_OTEL_SESSION_TARGETED_READ !== '0';
@@ -184,12 +198,9 @@ export function listSessionSpoolFiles(
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === 'sessions') {
-          const sessionDir = path.join(/* turbopackIgnore: true */ fullPath, segment);
-          const target = fileName === 'logs.jsonl'
-            ? path.join(sessionDir, 'logs.jsonl')
-            : path.join(sessionDir, 'traces.jsonl');
+          const target = joinFs(fullPath, segment, fileName);
           try {
-            if (fs.statSync(/* turbopackIgnore: true */ target).isFile()) shards.push(target);
+            if (fs.statSync(target).isFile()) shards.push(target);
           } catch {}
         } else {
           walk(fullPath);
@@ -226,7 +237,7 @@ export function statSessionSpool(spoolDir: string, fileName: SessionSpoolFileNam
   return parts.join('|');
 }
 
-function readEventsForSession<T extends { sessionId?: string }>(
+export function readEventsForSession<T extends { sessionId?: string }>(
   spoolDir: string,
   fileName: SessionSpoolFileName,
   sessionId: string,

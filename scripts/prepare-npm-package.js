@@ -17,7 +17,32 @@ function copyDirIfMissing(sourceDir, targetDir, label) {
 // Local/temp & non-runtime project dirs that `next build` sweeps into standalone.
 // `files` whitelist makes .npmignore unable to drop them, so we delete physically.
 // Runs on every `npm pack`/`npm publish` via the prepack hook.
-const STANDALONE_JUNK_DIRS = ['exclude', 'tests', 'test', 'skillbench', 'features', 'tools', 'docs', 'data', 'src', 'skills']
+const STANDALONE_JUNK_DIRS = [
+  '.git',
+  '.agents',
+  '.codex',
+  'agent_ras',
+  'exclude',
+  'tests',
+  'test',
+  'skillbench',
+  'features',
+  'tools',
+  'docs',
+  'data',
+  'logs',
+  'src',
+  'skills',
+]
+const STANDALONE_JUNK_FILES = [
+  '.env',
+  '.env.local',
+  'server.log',
+  path.join('prisma', 'dev.db'),
+  path.join('prisma', 'dev.db-journal'),
+  path.join('prisma', 'dev.db-shm'),
+  path.join('prisma', 'dev.db-wal'),
+]
 const RUNTIME_SYSTEM_SKILLS = {
   'agent-debug-diagnosis': [
     'SKILL.md',
@@ -46,6 +71,13 @@ function pruneStandaloneJunk(standaloneDir) {
     if (fs.existsSync(target)) {
       fs.rmSync(target, { recursive: true, force: true })
       console.log(`✓ Pruned ${dir}/ from standalone`)
+    }
+  }
+  for (const file of STANDALONE_JUNK_FILES) {
+    const target = path.join(standaloneDir, file)
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { force: true })
+      console.log(`✓ Pruned ${file} from standalone`)
     }
   }
 }

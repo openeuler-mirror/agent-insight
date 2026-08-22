@@ -190,7 +190,7 @@ function ensureEnvFile(packageRoot) {
       `# >>> 本文件由 scripts/utils.js 于 ${new Date().toLocaleString('sv-SE')} 从 .env.example 自动生成 <<<`,
       '# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。',
       '# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。',
-      '# 注意：AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY 每次启动会被 sync_admin_api_key.js 自动同步覆盖。',
+      '# 注意：启动会同步 AGENT_INSIGHT_HOST；AGENT_INSIGHT_API_KEY 仅在缺失时初始化，安装指导注册的用户 Key 会保留。',
       '#',
       '',
     ].join('\n')

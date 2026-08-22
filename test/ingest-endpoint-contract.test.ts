@@ -25,6 +25,29 @@ function routeExists(urlPath: string): boolean {
   return fs.existsSync(path.join(dir, "route.ts")) || fs.existsSync(path.join(dir, "route.tsx"))
 }
 
+function resolveFileSystemRoute(urlPath: string): string | null {
+  const segments = urlPath.replace(/^\//, "").split("/").filter(Boolean)
+  const resolved: string[] = []
+  let current = APP_DIR
+  for (const segment of segments) {
+    const exact = path.join(current, segment)
+    if (fs.existsSync(exact) && fs.statSync(exact).isDirectory()) {
+      current = exact
+      resolved.push(segment)
+      continue
+    }
+    const dynamic = fs.readdirSync(current, { withFileTypes: true })
+      .find(entry => entry.isDirectory() && /^\[[^.[\]]+\]$/.test(entry.name))
+    if (!dynamic) return null
+    current = path.join(current, dynamic.name)
+    resolved.push(dynamic.name)
+  }
+  if (!fs.existsSync(path.join(current, "route.ts")) && !fs.existsSync(path.join(current, "route.tsx"))) {
+    return null
+  }
+  return resolved.join("/")
+}
+
 /** 目录下（含子目录）所有 route.ts 的 URL 路径 */
 function collectRoutes(urlPath: string): string[] {
   const abs = path.join(APP_DIR, urlPath)
@@ -79,10 +102,14 @@ function applyRewrite(urlPath: string, rule: Rewrite): string | null {
  * 先文件系统真实路由，miss 了才轮到 afterFiles rewrite。
  */
 async function resolveRoute(urlPath: string): Promise<string | null> {
-  if (routeExists(urlPath)) return urlPath.replace(/^\//, "")
+  const direct = resolveFileSystemRoute(urlPath)
+  if (direct) return direct
   for (const rule of await rewrites()) {
     const dest = applyRewrite(urlPath, rule)
-    if (dest && routeExists(dest)) return dest.replace(/^\//, "")
+    if (dest) {
+      const rewritten = resolveFileSystemRoute(dest)
+      if (rewritten) return rewritten
+    }
   }
   return null
 }
@@ -111,6 +138,12 @@ const ENDPOINTS: { label: string; url: string; handler: string; sources: string[
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
+    label: "deepseek harness OTel logs",
+    url: "/api/ingest/otel/v1/logs",
+    handler: "api/ingest/otel/v1/logs",
+    sources: ["scripts/agent-trace-collectors/deepseek-harness/cordis.patch.yml"],
+  },
+  {
     label: "claude code / jiuwen OTel traces",
     url: "/api/ingest/otel/v1/traces",
     handler: "api/ingest/otel/v1/traces",
@@ -130,34 +163,64 @@ const ENDPOINTS: { label: string; url: string; handler: string; sources: string[
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
+    label: "qwen code native OTel logs",
+    url: "/api/ingest/otel/v1/logs",
+    handler: "api/ingest/otel/v1/logs",
+    sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
+  },
+  {
+    label: "qwen code native OTel traces",
+    url: "/api/ingest/otel/v1/traces",
+    handler: "api/ingest/otel/v1/traces",
+    sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
+  },
+  {
     label: "opencode 插件下发",
-    url: "/api/setup/opencode",
+    url: "/api/ingest/setup/opencode",
     handler: "api/ingest/setup/opencode",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "opencode uploader 下发",
-    url: "/api/setup/opencode-uploader",
+    url: "/api/ingest/setup/opencode-uploader",
     handler: "api/ingest/setup/opencode-uploader",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "openclaw watcher 下发",
-    url: "/api/setup/openclaw-watcher",
+    url: "/api/ingest/setup/openclaw-watcher",
     handler: "api/ingest/setup/openclaw-watcher",
     sources: ["src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "hermes 插件下发",
-    url: "/api/setup/hermes-plugin",
+    url: "/api/ingest/setup/hermes-plugin",
     handler: "api/ingest/setup/hermes-plugin",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
     label: "jiuwen extension 下发",
-    url: "/api/setup/jiuwen-extension",
+    url: "/api/ingest/setup/jiuwen-extension",
     handler: "api/ingest/setup/jiuwen-extension",
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
+  },
+  {
+    label: "deepseek harness package manifest 下发",
+    url: "/api/ingest/setup/deepseek-harness/assets/package.json",
+    handler: "api/ingest/setup/deepseek-harness/assets/[asset]",
+    sources: ["scripts/agent-trace-collectors/deepseek-harness/install.sh"],
+  },
+  {
+    label: "deepseek harness observability code 下发",
+    url: "/api/ingest/setup/deepseek-harness/assets/index.js",
+    handler: "api/ingest/setup/deepseek-harness/assets/[asset]",
+    sources: ["scripts/agent-trace-collectors/deepseek-harness/install.sh"],
+  },
+  {
+    label: "deepseek harness cordis patch 下发",
+    url: "/api/ingest/setup/deepseek-harness/assets/cordis.patch.yml",
+    handler: "api/ingest/setup/deepseek-harness/assets/[asset]",
+    sources: ["scripts/agent-trace-collectors/deepseek-harness/install.sh"],
   },
 ]
 

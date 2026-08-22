@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
@@ -135,6 +136,7 @@ export default function SkillOptListPage() {
     return (
         <>
             <AppTopBar title={<Term id="skill-optimization" label={t('nav.skillOpt')} />} />
+            <SkillWorkspaceTabs />
             <div className="skopt-list-root">
                 <div className="skopt-list-toolbar">
                     <input

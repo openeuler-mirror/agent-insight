@@ -40,6 +40,10 @@ test('Unix curl setup configures AcTrail otel-http without installing AcTrail', 
     assert.match(script, /--persist/);
     assert.match(script, /otel-http\.plugin\.toml/);
     assert.match(script, /ACTRAIL_OPERATOR_CONFIG/);
+    assert.match(script, /request_body_export: '"canonical_json"'/);
+    assert.match(script, /tool_result_content_export: '"canonical_json"'/);
+    assert.match(script, /'"llm\.tool_call" = true'/);
+    assert.match(script, /'"llm\.tool_result" = true'/);
     assert.doesNotMatch(script, /install-release\.sh/);
     assert.doesNotMatch(script, /cargo install[^\n]*actrail/i);
 
@@ -61,7 +65,22 @@ test('AcTrail Unix setup writes a full authenticated config and persistently loa
   t.after(() => rmSync(homeDir, { recursive: true, force: true }));
   mkdirSync(binDir, { recursive: true });
   mkdirSync(manifestDir, { recursive: true });
-  writeFileSync(operatorConfig, '[general]\n');
+  const originalOperatorConfig = [
+    '[general]',
+    'socket_path = "/run/custom-actrail.sock"',
+    '',
+    '[agent_invocation]',
+    'enabled = false',
+    'tool_names = ["Agent", "custom_agent"]',
+    '',
+    '[semantic_retention.l0_llm_call]',
+    'enabled = false',
+    'request_content = "none"',
+    'tool_calls = "metadata_only"',
+    'custom_value = "preserved"',
+    '',
+  ].join('\n');
+  writeFileSync(operatorConfig, originalOperatorConfig);
   writeFileSync(join(manifestDir, 'otel-http.plugin.toml'), '[general]\nid = "otel-http"\n');
   writeFileSync(actraild, [
     '#!/usr/bin/env bash',
@@ -101,8 +120,29 @@ test('AcTrail Unix setup writes a full authenticated config and persistently loa
     'value = ' + JSON.stringify('test-"key'),
   );
   assert.equal(statSync(configPath).mode & 0o777, 0o600);
+  assert.match(config, /^"llm\.tool_call" = true$/m);
+  assert.match(config, /^"llm\.tool_result" = true$/m);
+  assert.match(config, /^"command\.invocation" = false$/m);
+
+  const mergedOperatorConfig = readFileSync(operatorConfig, 'utf8');
+  assert.match(mergedOperatorConfig, /^socket_path = "\/run\/custom-actrail\.sock"$/m);
+  assert.ok(mergedOperatorConfig.includes('[agent_invocation]\n'));
+  assert.match(mergedOperatorConfig, /^enabled = true$/m);
+  assert.ok(mergedOperatorConfig.includes('tool_names = ["Agent", "custom_agent"]\n'));
+  assert.match(mergedOperatorConfig, /^request_content = "canonical_blocks"$/m);
+  assert.match(mergedOperatorConfig, /^request_body_export = "canonical_json"$/m);
+  assert.match(mergedOperatorConfig, /^tool_calls = "assembled_json"$/m);
+  assert.match(mergedOperatorConfig, /^tool_result_content_export = "canonical_json"$/m);
+  assert.match(mergedOperatorConfig, /^custom_value = "preserved"$/m);
+  assert.equal(mergedOperatorConfig.split('[agent_invocation]').length - 1, 1);
+  assert.equal(mergedOperatorConfig.split('[semantic_retention.l0_llm_call]').length - 1, 1);
+  const backupPath = join(homeDir, '.agent-insight', 'actrail', 'actraild.conf.before-agent-insight');
+  assert.equal(readFileSync(backupPath, 'utf8'), originalOperatorConfig);
 
   const commands = readFileSync(commandLog, 'utf8');
+  assert.match(commands, /--config .*actraild\.conf\.agent-insight init/);
+  assert.match(commands, /--config .*actraild\.conf status/);
+  assert.match(commands, /--config .*actraild\.conf restart/);
   assert.match(commands, /plugin load/);
   assert.match(commands, /--manifest .*otel-http\.plugin\.toml/);
   assert.match(commands, /--plugin-config .*otel-http\.config\.toml/);

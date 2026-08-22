@@ -183,6 +183,70 @@ export function langfusePromptHistoryCount(
     return currentStart;
 }
 
+function requestMessageContentBlocks(message: RequestMessage): Record<string, unknown>[] {
+    let content = message.content;
+    if (typeof content === 'string') {
+        try {
+            content = JSON.parse(content);
+        } catch {
+            return [];
+        }
+    }
+    return Array.isArray(content)
+        ? content.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item))
+        : [];
+}
+
+function requestMessageToolResultIds(message: RequestMessage): Set<string> {
+    const ids = new Set<string>();
+    if (message.tool_call_id) ids.add(message.tool_call_id);
+    for (const block of requestMessageContentBlocks(message)) {
+        const type = String(block.type || '').toLowerCase();
+        if (type !== 'tool_result' && type !== 'function_call_output') continue;
+        const id = String(block.tool_use_id ?? block.tool_call_id ?? block.call_id ?? '').trim();
+        if (id) ids.add(id);
+    }
+    return ids;
+}
+
+function requestMessageToolUseIds(message: RequestMessage): Set<string> {
+    const ids = new Set<string>();
+    for (const call of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
+        if (!call || typeof call !== 'object' || Array.isArray(call)) continue;
+        const id = String((call as Record<string, unknown>).id || '').trim();
+        if (id) ids.add(id);
+    }
+    for (const block of requestMessageContentBlocks(message)) {
+        const type = String(block.type || '').toLowerCase();
+        if (type !== 'tool_use' && type !== 'function_call') continue;
+        const id = String(block.id ?? block.call_id ?? block.tool_call_id ?? '').trim();
+        if (id) ids.add(id);
+    }
+    return ids;
+}
+
+export function actrailPromptHistoryCount(current: RequestMessage[]): number {
+    if (current.length === 0) return 0;
+    let currentStart = current.length - 1;
+    while (currentStart >= 0 && String(current[currentStart].role || '').toLowerCase() === 'system') {
+        currentStart--;
+    }
+    if (currentStart < 0) return current.length;
+
+    const resultIds = requestMessageToolResultIds(current[currentStart]);
+    if (resultIds.size === 0) return currentStart;
+
+    let assistantIndex = currentStart - 1;
+    while (assistantIndex >= 0 && String(current[assistantIndex].role || '').toLowerCase() === 'system') {
+        assistantIndex--;
+    }
+    if (assistantIndex < 0 || String(current[assistantIndex].role || '').toLowerCase() !== 'assistant') {
+        return currentStart;
+    }
+    const toolUseIds = requestMessageToolUseIds(current[assistantIndex]);
+    return [...resultIds].some((id) => toolUseIds.has(id)) ? assistantIndex : currentStart;
+}
+
 function userMessageText(value: unknown): string | undefined {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
     const message = value as Record<string, unknown>;

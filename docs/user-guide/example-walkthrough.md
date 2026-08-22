@@ -22,7 +22,7 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 
 | 资产 | 在哪看 | 说明 |
 | --- | --- | --- |
-| **messages 日志分析（内置示例）** 数据集 | 评测中心 → **数据集** | `ideal_output` 类型，10 条用例，覆盖认证攻击 / SSH 爆破 / 登录异常等场景。 |
+| **messages 日志分析（内置示例）** 数据集 | 评估与实验 → **评测数据集** | `ideal_output` 类型，10 条用例，覆盖认证攻击 / SSH 爆破 / 登录异常等场景。 |
 | **linux-messages-auth-triage-demo** Skill | **Skills** 列表 | 内置示例 Skill：离线分析用户提供的 messages 日志，识别认证失败、暴力破解、用户枚举和登录异常（含 references / scripts）。名字带 `-demo`，避免和你之后自己生成的 Skill 撞名。 |
 | 三条示例 **Trace** | **链路追踪** | 内置 `messages-log-analyzer` Agent 调用 `linux-messages-auth-triage-demo` Skill 对示例日志做的安全分析（两条成功样例，以及一条因日志路径错误而失败的诊断样例）。进入链路追踪页**默认就能看到**（它们被归到「用户 Agent」视图）。 |
 | `~/.agent-insight/example/messages` | 你机器的本地目录 | 一份真实的 Linux `messages` 日志（SSH 爆破、认证失败等）。**注意：它不是注册时就有的**，而是你执行**客户端安装命令**后才落到本地——见下方说明。 |
@@ -171,8 +171,8 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 
 - 用 **链路追踪 + 智能诊断** 发现问题；
 - 用 **Skills 生成** 把经验固化成可复用的 Skill；
-- 用 **评测中心** 量化 Skill 的真实效果；
+- 用 **评估与实验** 量化 Skill 的真实效果；
 - 用 **Skills 优化** 基于证据持续迭代。
 
 接下来，把这套闭环换成你自己的 Agent 与数据即可：先在 [5 分钟上手](/user-guide/quickstart)
-里接入真实 Agent，再用 [评测中心](/user-guide/evaluation/index) 建立你自己的数据集与评测任务。
+里接入真实 Agent，再用 [评估与实验](/user-guide/evaluation/index) 建立你自己的数据集与评测任务。

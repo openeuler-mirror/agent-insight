@@ -1,0 +1,8 @@
+tests/
+docs/
+scripts/
+logs/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+agent_ras.egg-info/

@@ -9,6 +9,33 @@ import {
   ACTRAIL_UNIX_SETUP_BLOCK,
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
+import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+
+// `frameworks` is inserted into generated shell scripts. Keep this an explicit
+// allowlist instead of interpolating arbitrary query values.
+const FRAMEWORKS: { value: string; label: string }[] = [
+    { value: 'opencode', label: 'OpenCode' },
+    { value: 'claude', label: 'Claude Code' },
+    { value: 'codeagent', label: 'CodeAgent' },
+    { value: 'hermes', label: 'Hermes' },
+    { value: 'openclaw', label: 'OpenClaw' },
+    { value: 'xiaoo', label: 'xiaoO' },
+    { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'llamaindex', label: 'LlamaIndex' },
+    { value: 'qoder', label: 'Qoder CN product family' },
+    { value: 'trae', label: 'Trae IDE' },
+    { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'qwencode', label: 'Qwen Code' },
+    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
+];
+
+function parseFrameworks(raw: string | null): { value: string; label: string }[] {
+    if (!raw) return [];
+    const wanted = new Set(raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean));
+    return FRAMEWORKS.filter(framework => wanted.has(framework.value));
+}
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -36,6 +63,8 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const apiKey = searchParams.get('apiKey');
     const hostParam = searchParams.get('host');
+    const rawFrameworks = searchParams.get('frameworks');
+    const preselected = parseFrameworks(rawFrameworks);
     const llamaIndexVenv = (searchParams.get('llamaindexVenv') || '')
         .replace(/[\0\r\n]/g, '')
         .trim()
@@ -65,23 +94,36 @@ export async function GET(request: Request) {
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        return generatePowerShellScript(baseUrl, hostParam, apiKey, llamaIndexVenv, llamaIndexPythonMode);
+        return generatePowerShellScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
     }
     
-    return generateBashScript(baseUrl, hostParam, apiKey, llamaIndexVenv, llamaIndexPythonMode);
+    return generateBashScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
 }
 
-function generateBashScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
+function generateBashScript(
+    baseUrl: string,
+    hostParam: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    llamaIndexVenv: string,
+    llamaIndexPythonMode: string,
+): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const packageSpec = getAgentInsightClientPackageSpec();
+    const selectedFrameworks = preselected.map(framework => framework.value).join(',');
+    const frameworksPreselected = preselected.length > 0;
     const script = `#!/bin/bash
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
 # =============================================================================
 
-AGENT_INSIGHT_HOST="${hostParam}"
-AGENT_INSIGHT_BASE_URL="${baseUrl}"
-AGENT_INSIGHT_API_KEY="${apiKey}"
+AGENT_INSIGHT_HOST="${bashDoubleQuoted(hostParam)}"
+AGENT_INSIGHT_BASE_URL="${bashDoubleQuoted(baseUrl)}"
+AGENT_INSIGHT_API_KEY="${bashDoubleQuoted(apiKey)}"
+AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
+
+${getAgentInsightRasBashInstaller()}
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -112,7 +154,13 @@ mkdir -p "$HOME/.openclaw/agents"
 mkdir -p ".opencode/skills"
 echo "📂 Created necessary directories"
 
-# 2. Interactive Framework Selection with inquirer
+# 2. Framework selection
+FRAMEWORKS_PRESELECTED="${frameworksPreselected ? 'true' : 'false'}"
+SELECTED_FRAMEWORKS="${bashDoubleQuoted(selectedFrameworks)}"
+if [ "$FRAMEWORKS_PRESELECTED" = "true" ]; then
+    echo "✅ 将安装预选组件: $SELECTED_FRAMEWORKS"
+else
+# 2b. Interactive Framework Selection with inquirer
 echo ""
 
 SELECTOR_SCRIPT="$HOME/.agent-insight/framework_selector.mjs"
@@ -135,11 +183,16 @@ const frameworks = [
     { name: 'CodeAgent', value: 'codeagent' },
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
+    { name: 'xiaoO', value: 'xiaoo' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
     { name: 'LlamaIndex', value: 'llamaindex' },
     { name: 'Qoder CN product family', value: 'qoder' },
     { name: 'Trae IDE', value: 'trae' },
-    { name: 'AcTrail', value: 'actrail' }
+    { name: 'AcTrail', value: 'actrail' },
+    { name: 'Pi Agent', value: 'pi-agent' },
+    { name: 'Codex', value: 'codex' },
+    { name: 'Qwen Code', value: 'qwencode' },
+    { name: 'DeepSeek Harness', value: 'deepseek-harness' }
 ];
 
 async function select() {
@@ -203,6 +256,7 @@ if [ -f "$SELECTOR_RESULT" ]; then
 else
     SELECTED_FRAMEWORKS=""
 fi
+fi
 
 # Set installation flags based on selection
 INSTALL_OPENCODE=false
@@ -210,12 +264,18 @@ INSTALL_CLAUDE=false
 INSTALL_CODEAGENT=false
 INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
+INSTALL_XIAOO=false
 INSTALL_JIUWEN=false
 INSTALL_LLAMAINDEX=false
 LLAMAINDEX_READY=false
 INSTALL_QODER=false
 INSTALL_TRAE=false
 INSTALL_ACTRAIL=false
+INSTALL_ACTRAIL=false
+INSTALL_CODEX=false
+INSTALL_QWENCODE=false
+INSTALL_DEEPSEEK_HARNESS=false
+DEEPSEEK_HARNESS_SETUP_OK=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -232,6 +292,9 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"openclaw"* ]]; then
     INSTALL_OPENCLAW=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"xiaoo"* ]]; then
+    INSTALL_XIAOO=true
+fi
 if [[ "$SELECTED_FRAMEWORKS" == *"jiuwen"* ]]; then
     INSTALL_JIUWEN=true
 fi
@@ -247,9 +310,18 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"actrail"* ]]; then
     INSTALL_ACTRAIL=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"codex"* ]]; then
+    INSTALL_CODEX=true
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"qwencode"* ]]; then
+    INSTALL_QWENCODE=true
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
+    INSTALL_DEEPSEEK_HARNESS=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -567,6 +639,12 @@ TRAE_PYEOF
     echo "  [NOTE] Restart TRAE IDE to activate"
 fi
 
+if [ "$INSTALL_QWENCODE" = "true" ]; then
+    echo "⏬ Installing Qwen Code Trace Collector from local npm package..."
+    QWENCODE_PACKAGE_ROOT=$(node -p "require('path').dirname(require.resolve('agent-insight/package.json'))")
+    node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
+fi
+
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
 AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
@@ -620,11 +698,53 @@ echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
 
+if [ "$INSTALL_DEEPSEEK_HARNESS" = "true" ]; then
+    if [ -z "$AGENT_INSIGHT_API_KEY" ]; then
+        echo "Warning: DeepSeek Harness observability requires an API key; configure one and rerun setup."
+    else
+        echo "⏬ Installing DeepSeek Harness observability..."
+        DEEPSEEK_HARNESS_INSTALLER="$(mktemp)"
+        if curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/deepseek-harness" -o "$DEEPSEEK_HARNESS_INSTALLER" && AGENT_INSIGHT_BASE_URL="$AGENT_INSIGHT_BASE_URL" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" sh "$DEEPSEEK_HARNESS_INSTALLER"; then
+            DEEPSEEK_HARNESS_SETUP_OK=true
+        else
+            echo "Warning: DeepSeek Harness observability installation did not complete; review the errors above."
+        fi
+        rm -f "$DEEPSEEK_HARNESS_INSTALLER"
+    fi
+fi
+
+if [ "$INSTALL_CODEX" = "true" ]; then
+    echo "⏬ Installing Codex collector..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    CODEX_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" -o "$CODEX_INSTALLER"
+    if ! sh "$CODEX_INSTALLER"; then rm -f "$CODEX_INSTALLER"; exit 1; fi
+    rm -f "$CODEX_INSTALLER"
+fi
+
 if [ "$LLAMAINDEX_READY" = "true" ]; then
     if ! PYTHONPATH="$LLAMAINDEX_SOURCE_DIR\${PYTHONPATH:+:$PYTHONPATH}" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" "$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli configure --endpoint "$AGENT_INSIGHT_HOST"; then
         echo "❌ Unable to configure the LlamaIndex collector."
         LLAMAINDEX_READY=false
     fi
+fi
+
+# 6.3 Install Pi Agent collector
+if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
+    echo "⏬ Installing Pi Agent collector..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    PI_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER"
+    if ! sh "$PI_INSTALLER"; then rm -f "$PI_INSTALLER"; exit 1; fi
+    rm -f "$PI_INSTALLER"
+fi
+
+# 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
+if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
+    echo "🛡️  Installing Agent RAS runtime..."
+    install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
 fi
 
 # 6.35 Install Qoder CN product-family collectors
@@ -669,6 +789,12 @@ if [ "$INSTALL_QODER" = "true" ]; then
     else
         echo "Warning: Qoder CN collector installation did not complete; review the errors above."
     fi
+fi
+
+# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist
+if [ "$INSTALL_QWENCODE" = "true" ]; then
+    node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
+    echo "✅ Qwen Code native OTLP telemetry configured"
 fi
 
 # 6.4 Configure Agent Insight Hermes plugin
@@ -911,6 +1037,15 @@ fi
 if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
     echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
+    echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"
+fi
+if [ "$INSTALL_CODEX" = "true" ]; then
+    echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
+fi
+if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
+    echo "  ✅ DeepSeek Harness observability: headless + web profiles"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -953,6 +1088,12 @@ fi
 if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
     echo "  7. Use actrailctl launch as usual; AcTrail will upload automatically"
 fi
+if [ "$INSTALL_CODEX" = "true" ]; then
+    echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
+fi
+if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
+    echo "  9. Start a new dsh session"
+fi
 echo "------------------------------------------------"
 `;
 
@@ -963,16 +1104,25 @@ echo "------------------------------------------------"
     });
 }
 
-function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
+function generatePowerShellScript(
+    baseUrl: string,
+    hostParam: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    llamaIndexVenv: string,
+    llamaIndexPythonMode: string,
+): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
+    const selectedFrameworks = preselected.map(framework => framework.value).join(',');
+    const frameworksPreselected = preselected.length > 0;
     const script = [
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
         '# =============================================================================',
         '',
-        '$AGENT_INSIGHT_HOST = "' + hostParam + '"',
-        '$AGENT_INSIGHT_BASE_URL = "' + baseUrl + '"',
-        '$AGENT_INSIGHT_API_KEY = "' + apiKey + '"',
+        '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(hostParam) + '"',
+        '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
+        '$AGENT_INSIGHT_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
         '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -1012,7 +1162,13 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'New-Item -ItemType Directory -Force -Path ".opencode\\skills" | Out-Null',
         'Write-Host "📂 Created necessary directories"',
         '',
-        '# 2. Interactive Framework Selection with inquirer',
+        '# 2. Framework selection',
+        '$FRAMEWORKS_PRESELECTED = ' + (frameworksPreselected ? '$true' : '$false'),
+        '$SELECTED_FRAMEWORKS = "' + powerShellDoubleQuoted(selectedFrameworks) + '"',
+        'if ($FRAMEWORKS_PRESELECTED) {',
+        '    Write-Host "✅ 将安装预选组件: $SELECTED_FRAMEWORKS"',
+        '} else {',
+        '# 2b. Interactive Framework Selection with inquirer',
         'Write-Host ""',
         '',
         '$SELECTOR_SCRIPT = Join-Path $skillInsightDir "framework_selector.mjs"',
@@ -1035,11 +1191,16 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'CodeAgent\', value: \'codeagent\' },"',
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
+        '    "    { name: \'xiaoO\', value: \'xiaoo\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
         '    "    { name: \'LlamaIndex\', value: \'llamaindex\' },"',
         '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
         '    "    { name: \'Trae IDE\', value: \'trae\' },"',
-        '    "    { name: \'AcTrail\', value: \'actrail\' }"',
+        '    "    { name: \'AcTrail\', value: \'actrail\' },"',
+        '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
+        '    "    { name: \'Codex\', value: \'codex\' },"',
+        '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
+        '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1105,6 +1266,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '} else {',
         '    $SELECTED_FRAMEWORKS = ""',
         '}',
+        '}',
         '',
         '# Set installation flags based on selection',
         '$INSTALL_OPENCODE = $false',
@@ -1112,12 +1274,16 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$INSTALL_CODEAGENT = $false',
         '$INSTALL_HERMES = $false',
         '$INSTALL_OPENCLAW = $false',
+        '$INSTALL_XIAOO = $false',
         '$INSTALL_JIUWEN = $false',
         '$INSTALL_LLAMAINDEX = $false',
         '$LLAMAINDEX_READY = $false',
         '$INSTALL_QODER = $false',
         '$INSTALL_TRAE = $false',
         '$INSTALL_ACTRAIL = $false',
+        '$INSTALL_CODEX = $false',
+        '$INSTALL_QWENCODE = $false',
+        '$INSTALL_DEEPSEEK_HARNESS = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1134,6 +1300,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "openclaw") {',
         '    $INSTALL_OPENCLAW = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "xiaoo") {',
+        '    $INSTALL_XIAOO = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "jiuwen") {',
         '    $INSTALL_JIUWEN = $true',
         '}',
@@ -1149,9 +1318,18 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "actrail") {',
         '    $INSTALL_ACTRAIL = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "codex") {',
+        '    $INSTALL_CODEX = $true',
+        '}',
+        'if ($SELECTED_FRAMEWORKS -match "qwencode") {',
+        '    $INSTALL_QWENCODE = $true',
+        '}',
+        'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
+        '    $INSTALL_DEEPSEEK_HARNESS = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1464,6 +1642,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
         '}',
         '',
+        'if ($INSTALL_QWENCODE) {',
+        '    Write-Host "⏬ Installing Qwen Code Trace Collector from local npm package..."',
+        '    $qwenPackageRoot = node -p "require(\'path\').dirname(require.resolve(\'agent-insight/package.json\'))"',
+        '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
+        '}',
+        '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
         '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
@@ -1513,6 +1697,20 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
         '',
+        'if ($INSTALL_CODEX) {',
+        '    Write-Host "⏬ Installing Codex collector..."',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $codexInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-codex-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '    try {',
+        '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" -OutFile $codexInstaller',
+        '        & $codexInstaller',
+        '        if ($LASTEXITCODE -ne 0) { throw "Codex collector installer failed with exit code $LASTEXITCODE." }',
+        '    } finally {',
+        '        Remove-Item -LiteralPath $codexInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        '',
         'if ($LLAMAINDEX_READY) {',
         '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
         '    & $llamaIndexPython -m agent_insight_llamaindex.cli configure --endpoint $AGENT_INSIGHT_HOST',
@@ -1520,6 +1718,31 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '        Write-Host "❌ Unable to configure the LlamaIndex collector." -ForegroundColor Red',
         '        $LLAMAINDEX_READY = $false',
         '    }',
+        '}',
+        '',
+        '# 6.3 Install Pi Agent collector',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") {',
+        '    Write-Host "⏬ Installing Pi Agent collector..."',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $piInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-pi-agent-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '    try {',
+        '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -OutFile $piInstaller',
+        '        & $piInstaller',
+        '        if ($LASTEXITCODE -ne 0) { throw "Pi Agent collector installer failed with exit code $LASTEXITCODE." }',
+        '    } finally {',
+        '        Remove-Item -LiteralPath $piInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        '',
+        '# 6.34 Agent RAS (Windows host): inproc requires Linux/macOS; use WSL on Windows',
+        'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW -or $INSTALL_XIAOO) {',
+        '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
+        '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
+        '}',
+        '',
+        'if ($INSTALL_DEEPSEEK_HARNESS) {',
+        '    Write-Warning "DeepSeek Harness observability is currently supported on macOS/Linux. Use WSL on Windows."',
         '}',
         '',
         '# 6.35 Install Qoder CN product-family collectors',
@@ -1572,6 +1795,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    } else {',
         '        Write-Host "Warning: Qoder CN collector installation did not complete; review the errors above."',
         '    }',
+        '}',
+        '',
+        '# 6.35 Configure Qwen Code native OTLP telemetry after Agent Insight credentials exist',
+        'if ($INSTALL_QWENCODE) {',
+        '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
+        '    Write-Host "✅ Qwen Code native OTLP telemetry configured"',
         '}',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
@@ -1785,6 +2014,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
+        'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -1824,6 +2055,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_ACTRAIL) {',
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
+        'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 

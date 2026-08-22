@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Editor } from '@monaco-editor/react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import ReactMarkdown from 'react-markdown';
@@ -1448,6 +1449,7 @@ export default function PlaygroundPage() {
                 </div>
             )}
             <AppTopBar title={<Term id="skill-generation" label={t('nav.skillGenerator')} />} actions={topBarActions} showDefaultActions={false} />
+            <SkillWorkspaceTabs />
             <div
                 ref={containerRef}
                 className={`skill-generator-container ${showIDE ? 'ide-open' : 'ide-closed'}`}
@@ -3145,4 +3147,3 @@ function FileIcon({ name }: { name: string }) {
         </svg>
     );
 }
-

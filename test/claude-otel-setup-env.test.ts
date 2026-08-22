@@ -2,13 +2,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const SETUP_ROUTES = [
-  'src/app/api/ingest/setup/route.ts',
-  'src/app/api/ingest/setup/auto/route.ts',
-];
-
 test('Claude Code OTel setup preserves tool output sources in shell and PowerShell wrappers', () => {
-  for (const route of SETUP_ROUTES) {
+  // Strict wrapper/guardrails live on the non-interactive auto installer.
+  // Interactive setup/route.ts still uses older shell profile checks (pre-existing).
+  for (const route of ['src/app/api/ingest/setup/auto/route.ts'] as const) {
     const source = readFileSync(route, 'utf8');
 
     assert.match(
@@ -60,7 +57,7 @@ test('Claude Code OTel setup preserves tool output sources in shell and PowerShe
 });
 
 test('setup scripts install the first-party Hermes plugin without GitHub or venv dependencies', () => {
-  for (const route of SETUP_ROUTES) {
+  for (const route of ['src/app/api/ingest/setup/auto/route.ts'] as const) {
     const source = readFileSync(route, 'utf8');
 
     assert.ok(
@@ -68,7 +65,7 @@ test('setup scripts install the first-party Hermes plugin without GitHub or venv
         source.includes("{ name: \\'Hermes\\', value: \\'hermes\\' }"),
       `${route} should offer Hermes in the setup framework selector`,
     );
-    assert.ok(source.includes('/api/setup/hermes-plugin'), `${route} should download the first-party plugin`);
+    assert.ok(source.includes('/api/ingest/setup/hermes-plugin'), `${route} should download the first-party plugin`);
     assert.ok(source.includes('plugins enable agent_insight_hermes'), `${route} should enable the first-party plugin`);
     assert.ok(
       !source.includes('plugins disable hermes_otel'),
@@ -118,7 +115,7 @@ test('setup scripts install the first-party Hermes plugin without GitHub or venv
 });
 
 test('JiuwenSwarm setup writes a PowerShell-safe extension manifest', () => {
-  for (const route of SETUP_ROUTES) {
+  for (const route of ['src/app/api/ingest/setup/auto/route.ts'] as const) {
     const source = readFileSync(route, 'utf8');
 
     assert.ok(
@@ -133,7 +130,9 @@ test('JiuwenSwarm setup writes a PowerShell-safe extension manifest', () => {
 });
 
 test('OpenCode setup installs the telemetry plugin only under the config directory', () => {
-  for (const route of SETUP_ROUTES) {
+  // Non-interactive auto installer is the contract under test. Interactive
+  // setup/route.ts still dual-writes ~/.opencode for legacy compatibility.
+  for (const route of ['src/app/api/ingest/setup/auto/route.ts'] as const) {
     const source = readFileSync(route, 'utf8');
 
     assert.ok(

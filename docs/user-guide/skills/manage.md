@@ -194,4 +194,4 @@ Skills 管理适用于 Skill 资产的检索、创建、详情查看与版本管
 - 想从需求直接起草新 Skill： [Skills 生成](./generate)
 - 想验证当前 Skill 的效果： [Skills 评测总览](./evaluation/overview)
 - 想继续迭代现有版本： [Skills 优化](./optimize)
-- 想回到 Skills 模块总览： [Skills 能力](./index)
+- 想回到 Skill 工作区总览： [持续优化 · Skill](./index)

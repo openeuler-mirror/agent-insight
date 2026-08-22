@@ -84,7 +84,13 @@ test('experiment candidates, traces, and watch mode exclude system-owned agents'
     new Request(`http://localhost/api/experiments/agents?user=${encodeURIComponent(TEST_USER)}`),
   );
   assert.equal(agentsResponse.status, 200);
-  assert.deepEqual((await agentsResponse.json()).agents, [{ name: USER_AGENT, traces: 1 }]);
+  assert.deepEqual((await agentsResponse.json()).agents, [{
+    name: USER_AGENT,
+    traces: 1,
+    frameworks: [FRAMEWORK],
+    executable: false,
+    targets: [],
+  }]);
 
   const userTracesResponse = await listExperimentTraces(
     new Request(

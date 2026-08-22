@@ -27,6 +27,14 @@ function row(partial: Partial<ResultRowLike> & { evaluatorId: string }): ResultR
   return { caseId: 'case-1', status: 'done', score: null, ...partial };
 }
 
+test('两个拆分 RAS 评估器与通用评估器一样按各自总分求综合平均', () => {
+  const rows = [
+    row({ evaluatorId: 'preset-ras-reliability-fault-injection', score: 100 }),
+    row({ evaluatorId: 'preset-ras-reliability-detection-recovery', score: 33.3 }),
+  ];
+  assert.equal(overallAverage(rows), 66.7);
+});
+
 test('scoredRows / overallAverage：仅 done 且有分入均分', () => {
   const rows: ResultRowLike[] = [
     row({ evaluatorId: 'ev-res-a', score: 90 }),

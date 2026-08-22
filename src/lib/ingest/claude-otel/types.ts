@@ -20,11 +20,19 @@ export type ClaudeOtelAppendResult = {
   dirtySessionIds: string[];
 };
 
-export type ClaudeOtelAggregationResult = {
-  sessionId: string;
-  record: ExecutionRecord | null;
-  eventCount: number;
-};
+export type ClaudeOtelAggregationResult =
+  | {
+    sessionId: string;
+    record: ExecutionRecord;
+    eventCount: number;
+    disposition: 'persisted';
+  }
+  | {
+    sessionId: string;
+    record: null;
+    eventCount: number;
+    disposition: 'retry-later' | 'discard';
+  };
 
 
 export type { OtelTraceAggregationResult, OtelTraceAppendResult, OtelTraceEvent } from '../otel/types';

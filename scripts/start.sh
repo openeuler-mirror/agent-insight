@@ -34,7 +34,7 @@ if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
     echo "# >>> 本文件由 scripts/start.sh 于 $(date '+%Y-%m-%d %H:%M:%S') 从 .env.example 自动生成 <<<"
     echo "# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。"
     echo "# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。"
-    echo "# 注意：AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY 每次启动会被 sync_admin_api_key.js 自动同步覆盖。"
+    echo "# 注意：启动会同步 AGENT_INSIGHT_HOST；AGENT_INSIGHT_API_KEY 仅在缺失时初始化，安装指导注册的用户 Key 会保留。"
     echo "#"
     cat .env.example
   } > "$AGENT_INSIGHT_ENV_FILE"
@@ -155,6 +155,12 @@ echo "Clearing Next.js build cache (.next)..."
 rm -rf .next
 
 echo "Syncing database schema..."
+if [[ "${DATABASE_URL:-}" == file:* ]]; then
+  if ! node scripts/prepare-ras-sqlite-schema.js; then
+    echo "  ⛔ Agent RAS SQLite schema 预检失败，已停止启动以避免重复事件被错误合并。"
+    exit 1
+  fi
+fi
 # 走 db_push.sh 而不是直接 npx：它对「整型列加宽 Int→BigInt」这一类无损变更放行，
 # 其余破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
 if ! sh scripts/db_push.sh; then
@@ -182,9 +188,23 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+echo "Preparing standalone runtime (static + public)..."
+STANDALONE_SERVER=$(find .next/standalone -maxdepth 2 -name server.js | head -n 1)
+if [ -z "$STANDALONE_SERVER" ]; then
+  echo "  ⛔ 找不到 .next/standalone/**/server.js —— next build 未产出 standalone。"
+  echo "     output:standalone 下不能再用 next start，必须 node .next/standalone/server.js。"
+  exit 1
+fi
+STANDALONE_DIR=$(dirname "$STANDALONE_SERVER")
+mkdir -p "$STANDALONE_DIR/.next/static" "$STANDALONE_DIR/public"
+# 与 docker-entrypoint 一致：静态资源不在 tracing 产物里，启动前必须拷入。
+# 不要跑 prepare-npm-package.js：它会 prune 掉 agent_ras/ 等运行时目录。
+cp -a .next/static/. "$STANDALONE_DIR/.next/static/"
+cp -a public/. "$STANDALONE_DIR/public/"
+
 # 5. Start
 echo "-----------------------------------"
-echo "Starting server..."
+echo "Starting server (standalone)..."
 
 # One last check before start
 if [ -n "$(find_pid_on_port $PORT)" ]; then
@@ -194,10 +214,51 @@ fi
 
 # 运行时堆上限。注意机器 ~15G、opencode 满 5 slot ~4.5G,所以不能调太高(否则系统级 OOM-kill
 # 比堆崩更难查)。6G = 在"真正的修复(评测重试不放大 + 评测行并发硬上限)"之外留点余量。
-NODE_OPTIONS="--max-old-space-size=6144" nohup npm run start > server.log 2>&1 &
-NEW_PID=$!
+# HOSTNAME=0.0.0.0：standalone server 默认可能绑到非 loopback，WSL/代理下 curl 127.0.0.1 会 502。
+# 必须在 standalone 目录下启动：server.js 相对解析 .next/static、public、node_modules。
+LOG_FILE="$(pwd)/server.log"
+: > "$LOG_FILE"
+# 脱离当前 shell 会话，避免 start.sh 退出后把 server 一起带走（仅 nohup 在部分环境下不够）。
+# PID 用命令替换捕获，不写仓库根目录的 *.pid（避免 untracked 脏文件）。
+if command -v setsid >/dev/null 2>&1; then
+  NEW_PID=$(
+    cd "$STANDALONE_DIR" || exit 1
+    setsid env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
+      node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
+    echo $!
+  )
+else
+  NEW_PID=$(
+    cd "$STANDALONE_DIR" || exit 1
+    nohup env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
+      node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
+    echo $!
+  )
+fi
+# 清掉历史版本留下的旁路文件（若存在）
+rm -f "${LOG_FILE}.pid"
+
+echo "Waiting for port $PORT to accept connections..."
+READY=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  sleep 1
+  if curl --noproxy '*' -sS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/" >/dev/null 2>&1 \
+    || curl --noproxy '*' -sS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/trace" >/dev/null 2>&1; then
+    READY=1
+    break
+  fi
+done
+
+if [ "$READY" -ne 1 ]; then
+  echo "CRITICAL ERROR: Server process spawned (PID ${NEW_PID:-unknown}) but http://127.0.0.1:$PORT 无响应。"
+  echo "Check server.log for details."
+  tail -n 40 "$LOG_FILE" 2>/dev/null || true
+  exit 1
+fi
 
 echo "Server started successfully."
-echo "PID: $NEW_PID"
+echo "PID: ${NEW_PID:-$(find_pid_on_port $PORT | tr '\n' ' ')}"
+echo "Standalone: $STANDALONE_DIR/server.js"
 echo "Log file: server.log"
+echo "URL: http://localhost:$PORT"
 echo "-----------------------------------"

@@ -7,7 +7,7 @@ import TraceDrawer, { TraceDrawerExecutionMeta } from '@/components/observe/Trac
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
-import { formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs } from '@/lib/latency-format';
 
 interface Execution {
     timestamp: string;
@@ -157,7 +157,7 @@ function SkillHistoryInner() {
                                             </Td>
                                             <Td align="right">
                                                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                                                    {formatLatencySeconds(e.latency)}
+                                                    {formatDurationMs(e.latency)}
                                                 </span>
                                             </Td>
                                             <Td align="right">

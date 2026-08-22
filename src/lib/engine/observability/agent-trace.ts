@@ -93,6 +93,8 @@ export interface RawInteraction {
     finish?: string;
     variant?: string | null;
     parts?: InteractionPart[];
+    /** Platform message id (OpenCode / RAS delivery anchor alignment). */
+    messageID?: string;
     trace_kind?: 'chain' | string;
     trace_name?: string;
     trace_args?: unknown;
@@ -104,7 +106,7 @@ export interface RawInteraction {
     error_summary?: string;
 }
 
-export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
+export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user' | 'ras';
 
 export interface AgentEvent {
     kind: CallKind;
@@ -303,8 +305,11 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         // 首字母大写的 subagent_type 永远认领不上,子节点直接塌回 root。
         const sameType = (claimType: string) => claimType.trim().toLowerCase() === (sType || '').trim().toLowerCase();
         const exactIdx = pendingTasks.findIndex(claim =>
-            claim.expectedSessionId === sid &&
-            (!sType || sameType(claim.subagentType)),
+            // A runtime-provided session id is the direct parent-child proof.
+            // Role labels may intentionally be human-readable ("Memory Agent")
+            // while the child interaction normalizes them ("memory"). Do not
+            // discard an exact session match because those presentation labels differ.
+            claim.expectedSessionId === sid,
         );
         if (exactIdx >= 0) return pendingTasks.splice(exactIdx, 1)[0];
 
@@ -397,7 +402,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             continue;
         }
 
-        const isSub = (it.role === 'subagent' || it.role === 'trace') && !!it.subagent_session_id;
+        const isSub = (it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 
@@ -703,9 +708,15 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             : isSkillLoaderToolName(normalizedName)
                 ? 'skill'
                 : 'tool';
+        const skillDisplayName = kind === 'skill' && args && typeof args === 'object'
+            ? args.skill ?? args.name ?? args.skill_name ?? args.skillName
+            : undefined;
+        const displayName = typeof skillDisplayName === 'string' && skillDisplayName.trim()
+            ? skillDisplayName.trim()
+            : name;
         const ev: AgentEvent = {
             kind,
-            name,
+            name: displayName,
             args,
             output: tc.output ?? tc.result,
             toolCallId: tc.id,
@@ -714,7 +725,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             interactionIndex: idx,
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,
             completedAt: toMsTimestamp(tc.timing?.completed_at),
-            summary: summarizeToolCall(name, args),
+            summary: summarizeToolCall(displayName, args),
         };
         (ev as any)._toolCallId = tc.id;
         (ev as any).splitParallelTask = !!tc.trace_split_parallel_task;

@@ -62,6 +62,7 @@ export interface FleetRow {
     reasoningTokens?: number | null;
     maxSingleCallTokens?: number | null;
     model?: string | null;
+    framework?: string | null;
     agentName?: string | null;
     observedAgents?: string | null;
     rootExecutionId?: string | null;

@@ -130,6 +130,10 @@ async function run(options) {
 
   try {
     console.log('Syncing database schema...')
+    await runCommand('node scripts/prepare-ras-sqlite-schema.js', {
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
     await runCommand('npx prisma db push', {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, DATABASE_URL: dbUrl }
@@ -162,24 +166,58 @@ async function run(options) {
   const nextDir = path.join(PACKAGE_ROOT, '.next')
   const isProduction = fs.existsSync(nextDir) && fs.existsSync(path.join(nextDir, 'BUILD_ID'))
 
+  // Next standalone 不会自动带上 browser 静态资源；缺了就会 404 → 前端 Application error。
+  if (isStandalone) {
+    const standaloneRoot = path.join(PACKAGE_ROOT, '.next', 'standalone')
+    const staticSrc = path.join(PACKAGE_ROOT, '.next', 'static')
+    const staticDest = path.join(standaloneRoot, '.next', 'static')
+    const publicSrc = path.join(PACKAGE_ROOT, 'public')
+    const publicDest = path.join(standaloneRoot, 'public')
+    fs.mkdirSync(path.join(standaloneRoot, '.next'), { recursive: true })
+    if (fs.existsSync(staticSrc)) {
+      fs.rmSync(staticDest, { recursive: true, force: true })
+      fs.cpSync(staticSrc, staticDest, { recursive: true })
+      console.log('✓ Synced .next/static → standalone')
+    } else {
+      console.warn('⚠️  Missing .next/static; UI chunks will 404 until you run npm run build')
+    }
+    if (fs.existsSync(publicSrc)) {
+      fs.rmSync(publicDest, { recursive: true, force: true })
+      fs.cpSync(publicSrc, publicDest, { recursive: true })
+      console.log('✓ Synced public → standalone')
+    }
+  }
+
   console.log(`Starting server on port ${port}...`)
 
   const logPath = path.join(dataRoot, 'server.log')
+
+  // WSS 控制通道要接管 upgrade 事件，Next 的 Route Handler 做不到，
+  // 因此 standalone 下由 control-server.js 承载 Next + WSS。
+  const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || port + 1)
 
   const env = {
     ...process.env,
     ...fileEnv,
     DATABASE_URL: dbUrl,
     PORT: port.toString(),
-    HOSTNAME: '0.0.0.0'
+    HOSTNAME: '0.0.0.0',
+    AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
   let command, args
 
   if (isStandalone) {
-    console.log('Mode: production (standalone)')
-    command = 'node'
-    args = [standaloneServer]
+    const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
+    if (fs.existsSync(controlServer)) {
+      console.log('Mode: production (standalone + control channel)')
+      command = 'node'
+      args = [controlServer]
+    } else {
+      console.log('Mode: production (standalone)')
+      command = 'node'
+      args = [standaloneServer]
+    }
   } else if (isProduction) {
     console.log('Mode: production')
     command = 'npm'
@@ -234,8 +272,12 @@ async function run(options) {
       console.log(`  Log: ${logPath}`)
       console.log(`  URL: http://localhost:${port}`)
       try {
-        await syncAdminApiKey({ port, dataRoot, host: `http://localhost:${port}` })
-        console.log('✓ Admin API key synced to client env')
+        const syncResult = await syncAdminApiKey({ port, dataRoot, host: `http://localhost:${port}` })
+        console.log(
+          syncResult.preservedClientApiKey
+            ? '✓ Admin API key saved; existing client identity preserved'
+            : '✓ Admin API key synced to client env',
+        )
       } catch (error) {
         console.log('⚠️  Failed to sync admin API key:', error.message)
       }

@@ -1,10 +1,11 @@
 /**
  * 实验引擎的 LLM Judge 薄封装：发一段 system+user prompt，拿回完整文本。
  *
- * - 默认实现仿照 runCustomLlmEvaluator（custom-llm-evaluator.ts）的 opencode 调用方式：
- *   AgentInsight client + createSession + insight.chat 流式 + 超时；重依赖全部 lazy import，
- *   避免单测（node --test）拉起 server-only 模块。
- * - 可注入：测试通过 setJudgeLlmCallerForTest 注入 fake judge（不真调 LLM）。
+ * 对齐任务完成度 / 轨迹评估器（opencode-*-evaluator）的现行传输层：
+ * - 默认直连 ChatOpenAI（无 ephemeral opencode 进程）
+ * - EVAL_FORCE_OPENCODE_TRANSPORT=1 强制走旧 ephemeral opencode
+ * - 直连失败时回退 opencode（与 task-completion 一致）
+ * - 测试可 setJudgeLlmCallerForTest 注入
  */
 
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
@@ -13,29 +14,96 @@ export interface JudgeLlmRequest {
   system: string;
   user: string;
   timeoutMs?: number;
-  /** opencode session 标题（可观测性用），缺省自动生成 */
+  /** session 标题（opencode 回退路径可观测性），缺省自动生成 */
   sessionTitle?: string;
 }
 
 export type JudgeLlmCaller = (username: string, req: JudgeLlmRequest) => Promise<string>;
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.EXPERIMENT_JUDGE_TIMEOUT_MS || 120_000);
+const DEFAULT_TIMEOUT_MS = Number(process.env.EXPERIMENT_JUDGE_TIMEOUT_MS || 180_000);
 
 let injectedCaller: JudgeLlmCaller | null = null;
 
-/** 测试注入点：传 null 恢复默认 opencode 实现。 */
+/** 测试注入点：传 null 恢复默认实现。 */
 export function setJudgeLlmCallerForTest(fn: JudgeLlmCaller | null): void {
   injectedCaller = fn;
 }
 
-/** 统一入口：引擎只认这一个函数，实现可被测试替换。 */
-export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Promise<string> {
-  return (injectedCaller ?? opencodeJudgeCaller)(username, req);
+/** 测试用：是否已注入 fake judge（跳过真实模型门禁）。 */
+export function hasJudgeLlmTestInjection(): boolean {
+  return injectedCaller != null;
 }
 
-/** 默认实现：per-call 临时 opencode server，跑完即杀（与自建评估器运行时同型）。 */
+/** 统一入口：引擎只认这一个函数，实现可被测试替换。 */
+export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Promise<string> {
+  if (injectedCaller) return injectedCaller(username, req);
+
+  const { shouldForceOpencodeEvalTransport } = await import(
+    '@/lib/engine/evaluation/evaluator-execution-recorder'
+  );
+
+  if (shouldForceOpencodeEvalTransport()) {
+    return opencodeJudgeCaller(username, req);
+  }
+
+  try {
+    return await directJudgeCaller(username, req);
+  } catch (directErr) {
+    console.warn(
+      '[experiment-judge] direct LLM path failed, falling back to opencode transport:',
+      (directErr as Error)?.message || directErr,
+    );
+    return opencodeJudgeCaller(username, req);
+  }
+}
+
+/** 现行主路径：ChatOpenAI 单轮 invoke；只返回文本，不合成观测 Trace。 */
+const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
+  const [
+    { ChatOpenAI },
+    { HumanMessage, SystemMessage },
+    { getActiveConfig },
+  ] = await Promise.all([
+    import('@langchain/openai'),
+    import('@langchain/core/messages'),
+    import('@/lib/storage/server-config'),
+  ]);
+
+  const config = await getActiveConfig(username);
+  if (!config || !isModelConnectionReady(config)) {
+    throw new Error('未配置可用的评测模型，请到「模型注册」页完善连接信息');
+  }
+
+  const modelId = (config.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash';
+  const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const model = new ChatOpenAI({
+    apiKey: config.apiKey || 'no-api-key',
+    model: modelId,
+    configuration: {
+      baseURL: config.baseUrl || 'https://api.deepseek.com',
+      defaultHeaders: config.headers,
+    },
+    temperature: 0,
+    topP: 1,
+    timeout: timeoutMs,
+    maxRetries: 2,
+    modelKwargs: { seed: 42 },
+  });
+
+  const response = await model.invoke([
+    new SystemMessage(req.system),
+    new HumanMessage(req.user),
+  ]);
+  const raw = typeof response.content === 'string'
+    ? response.content
+    : JSON.stringify(response.content);
+
+  if (!String(raw).trim()) throw new Error('judge 未返回任何文本输出');
+  return String(raw);
+};
+
+/** 旧路径 / 强制回退：per-call 临时 opencode server。 */
 const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
-  // lazy import：这些模块是 server-only 重依赖，只有真调 LLM 时才加载
   const [
     { AgentInsight },
     { runWithEphemeralOpencodeServer },
@@ -62,7 +130,7 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
       const providerID =
         activeModel?.providerID
         || normalizeProviderID(config.provider || inferProviderFromBaseUrl(config.baseUrl));
-      const modelID = activeModel?.modelID || config.model || 'deepseek-chat';
+      const modelID = activeModel?.modelID || config.model || 'deepseek-v4-flash';
       const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
       let raw = '';
@@ -71,7 +139,6 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
       const insight = new AgentInsight({ baseURL: serverUrl, logLevel: 'warn' });
       const sessionResp = await insight.createSession({
         title: req.sessionTitle ?? `experiment-judge-${Date.now()}`,
-        // 锁定 cwd 到 /tmp，避免误解析相对路径触发 read tool hang（同自建评估器）
         directory: '/tmp',
       });
       const sessionId = String((sessionResp as any)?.id || (sessionResp as any)?.ID || '');

@@ -297,14 +297,22 @@ test("install guide appends Qoder to the existing framework choices", () => {
   assert.notEqual(end, -1, "install guide framework choices must terminate")
   const options = [...source.slice(start, end).matchAll(/value: '([^']+)'/g)].map((match) => match[1])
 
-  assert.deepEqual(options, ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail"])
+  assert.deepEqual(options, [
+    "opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen",
+    "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex",
+    "deepseek-harness",
+  ])
 })
 
 test("curl setup appends Qoder without changing existing framework entries", async () => {
   for (const platform of ["unix", "windows"] as const) {
     const script = await setupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
-    assert.deepEqual(frameworkValues(script), ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "llamaindex", "qoder", "trae", "actrail"])
+    assert.deepEqual(frameworkValues(script), [
+      "opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen",
+      "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
+      "deepseek-harness",
+    ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)
@@ -330,7 +338,11 @@ test("local npm auto setup appends Qoder without changing existing framework ent
   for (const platform of ["unix", "windows"] as const) {
     const script = await autoSetupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
-    assert.deepEqual(frameworkValues(script), ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "llamaindex", "qoder", "trae", "actrail"])
+    assert.deepEqual(frameworkValues(script), [
+      "opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen",
+      "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
+      "deepseek-harness",
+    ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)

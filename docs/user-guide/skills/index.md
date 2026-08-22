@@ -1,9 +1,9 @@
 ---
-title: "Skills 能力"
-description: "Skills 全生命周期管理"
+title: "持续优化 · Skill"
+description: "SkillHub、生成、评测与优化工作区"
 ---
 
-# Skills 能力
+# 持续优化 · Skill
 
 Skills 是 Agent Insight 中最有代表性的能力之一。你可以把它理解为一类可被 Agent 调用、可版本化、可分析、可优化的能力资产。
 
@@ -42,12 +42,14 @@ Skills 是 Agent Insight 中最有代表性的能力之一。你可以把它理�
    基于问题和结果反馈，迭代出新的 Skill 版本。
 
 > **Tip**
-> 如果你想把平台里的 Skills 能力快速用起来，最推荐的顺序是：
+> 如果你想把持续优化中的 Skill 能力快速用起来，最推荐的顺序是：
 > 先看总览页，再按“管理 → 生成 → 分析 → 优化”逐步使用。
 
-## Skills 模块有哪些页面
+## Skill 工作区有哪些页签
 
-### Skills Hub
+从侧边栏进入 **持续优化 → Skill** 后，顶部通过四个页签切换既有能力。切换页签不会改变各页面原有功能和数据，只是把原来分散的入口收敛到同一个工作区。
+
+### SkillHub
 
 这是 Skill 资产总入口，主要用于：
 
@@ -58,7 +60,7 @@ Skills 是 Agent Insight 中最有代表性的能力之一。你可以把它理�
 
 对应文档： [Skills 管理](./manage)
 
-### Skills 生成
+### 生成
 
 当你只有一个需求描述，还没有整理出 Skill 文件结构时，可以从这里开始：
 
@@ -68,7 +70,7 @@ Skills 是 Agent Insight 中最有代表性的能力之一。你可以把它理�
 
 对应文档： [Skills 生成](./generate)
 
-### Skills 评测
+### 评测
 
 分析页负责回答“这个 Skill 到底好不好、问题在哪”。它关注的不是单一分数，而是多个维度：
 
@@ -81,7 +83,7 @@ Skills 是 Agent Insight 中最有代表性的能力之一。你可以把它理�
 
 对应文档： [Skills 评测总览](./evaluation/overview)
 
-### Skills 优化
+### 优化
 
 优化页面向已经存在的 Skill 版本，帮助你：
 

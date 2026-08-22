@@ -35,6 +35,8 @@ export interface FaithfulPresetContext {
   evaluatorContext?: EvaluatorCaseContext | null;
   /** 历史脏数据解析错误；工具类评估器据此输出不计分原因。 */
   evaluatorContextError?: string | null;
+  /** 可靠性评测：期望故障模式 id（来自 case.evaluatorContextJson / values）。 */
+  faultInjectionType?: string | null;
   taskId: string | null;
   executionId: string | null;
   /** trace 归属用户（skill 记录按 user 查找） */
