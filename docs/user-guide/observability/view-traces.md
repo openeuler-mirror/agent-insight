@@ -57,6 +57,10 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 - **仅子 Agent**：适合排查派生任务、分工任务和协作路径
 - **主 Agent + 子 Agent**：适合完整回看整条协作链路
 
+Agent 下拉同时列出已观测的主 Agent 和子 Agent。选择子 Agent（例如 Pi 的 `planner`
+或 `worker`）后，配合“仅子 Agent”范围查看该 profile 的独立执行；根 Pi CLI 没有可用
+profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和实际执行主体，不能互相替代。
+
 #### 3. 执行记录表格
 
 表格是列表页的核心区域，通常包含以下字段：
@@ -161,6 +165,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。`langfuse-langgraph` Trace 详情中所有识别为 JSON 的内容默认展开全部对象和数组层级，仍可手动收起；其他框架沿用默认折叠深度。点击 LLM 节点时，Input 直接使用该 generation 上报的 request messages：`system`、`user`、`assistant` 和真实工具结果会按原始角色与顺序分开显示，旧轮次放入 History，本轮新增用户消息或工具结果放入 Current input；被上报为 `role=tool` 的可用工具 schema 不会冒充工具结果，LLM Output 中的真实工具调用则会以 Assistant 工具调用及参数展示。相邻 CHAIN 节点的 input/output 不会被当成模型对话历史。子 Agent 行和右侧“子 Agent”卡片上的 **Trace** 按钮可直接进入该子 Agent 的独立执行详情；目标执行不存在时，页面会提示未找到，而不会继续停留在父 Trace 造成无响应的错觉。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
 
+AcTrail Trace 的 LLM Input 同样直接使用每次模型请求上报的完整消息，而不是从相邻事件猜测。内容块会先整理成可读文本，系统提示和旧轮次放入 History；本轮工具交互按调用标识显示为一组 Assistant 工具调用与 User 工具结果，不会因为旧消息的正文发生轻微变化而把多轮历史混入 Current input。单条消息及历史条数仍有上限保护。AcTrail 没有单独上报某个工具结果时，平台会从后续模型请求中按相同工具调用标识回填结果，并将其后连续的文本块一起作为输出。失败的模型调用会显示 AcTrail 实际上报的 HTTP 状态码和原因，例如 `LLM 调用失败：HTTP 404 Not Found`。Agent 名称优先使用 AcTrail 明确上报的名称；如果只上报了 `agent identity process-*` 这类进程占位名，平台会在请求信息足够明确时识别实际 Agent，例如 `claude-cli` 显示为 `Claude Code`。
+
 Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 span 到达。平台会等待可确认的顶层 span 后再生成主 Trace，避免把 `intent-agent` 等子 Agent 临时显示为主 Agent。
 
 ### 详情页主要区域
@@ -198,7 +204,8 @@ RAS 思考循环严重度保持三级检测口径：L1 `suffix_cycle` 为低危�
 
 - **AGENTS**：参与当前执行的 Agent 数量
 - **TASK SPAWNS**：执行过程中派生的新任务数量
-- **CHAIN SPANS**：Langfuse Trace 中保留的业务链路节点数量
+- **CHAIN SPANS**：Langfuse、LlamaIndex 等框架归一后保留的业务链路节点数量；已知的低价值
+  SDK/运行时包装节点不会计入
 - **TOOL CALLS**：工具调用次数
 - **SKILL CALLS**：Skill 触发次数
 - **LLM TURNS**：模型交互轮次
@@ -263,6 +270,9 @@ Span 是 Trace 中最小的可观测执行单元，代表一段具体动作，�
 ### Agent
 
 Agent 是执行任务的主体。列表和详情中既可能出现主 Agent，也可能出现派生出来的子 Agent。
+对于以 profile 启动独立子进程的运行时，子 Agent 显示其实际 profile 名，而不是父运行时
+或框架名。例如 Pi 子进程可显示 `planner`、`reviewer`、`scout` 或 `worker`；这些名称取决于
+当前用户或项目配置，并非平台的固定列表。
 
 ### 主 Agent / 子 Agent
 
@@ -273,7 +283,7 @@ Agent 是执行任务的主体。列表和详情中既可能出现主 Agent，�
 
 ### Skill Call
 
-Skill Call 表示某个 Skill 在执行过程中被触发的记录。它反映的是 Skill 是否被调用，以及在整条链路中的位置和作用。
+Skill Call 表示某个 Skill 在执行过程中被触发的记录。它反映的是 Skill 是否被调用，以及在整条链路中的位置和作用。Skill 是独立的执行节点，不计为 LLM Turn；选中该节点可查看触发参数和实际加载的 Skill 内容或运行结果。
 
 ### Tool Call
 
@@ -290,6 +300,38 @@ Token 是模型消耗的计量单位。详情页通常会拆分为输入、输�
 ### Task Spawn
 
 Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent 或多阶段流程中，这个指标有助于识别流程是否出现过度拆分。
+
+## DeepSeek Harness 接入
+
+Agent Insight 通过 DeepSeek Harness 官方 Session Telemetry OTLP Logs 观测执行过程，不接管 Harness 的模型选择、Tool、Skill、审批或沙箱。当前支持 macOS 与 Linux，并要求本机已有 Node.js、npm、pnpm；安装器会在找不到 `dsh` 时安装已验证的 `@deepseek-ai/dsh@0.1.0-rc.8`。
+
+推荐在 Agent Insight 的 **接入配置 → 客户端安装** 中勾选 **DeepSeek Harness**，复制页面生成的一键安装命令并在运行 Harness 的机器上执行。统一安装脚本会把当前服务地址与 API Key 通过子进程环境变量交给专用 Harness 安装器，不会把 API Key 拼进下载 URL；也可以使用下面的独立安装命令：
+
+```bash
+export AGENT_INSIGHT_API_KEY='wi_xxxx'
+curl -sSf 'http://<Agent-Insight-Host>:3000/api/ingest/setup/deepseek-harness' | sh
+```
+
+安装器会把 `package.json`、`index.js`、`cordis.patch.yml` 三个白名单文件下载到临时目录并逐一校验 SHA-256；全部通过后才安装到 Harness 的 `headless` 与 `web` profile，不需要客户端安装 `unzip`。Agent Insight 地址和 API Key 会写入权限为 `0600` 的 `~/.dsh/.env`。重复执行是幂等的。Windows 原生环境暂不安装该插件，客户端安装脚本会提示改在 WSL 中运行。随后照常运行 Harness，例如：
+
+```bash
+dsh --profile headless '使用项目中的 Skill 分析问题，并调用必要的 Tool 验证结论。'
+```
+
+新的 Trace 会以框架 **DeepSeek Harness** 出现在链路追踪列表。详情可查看根/子 Agent 的 System Prompt、用户输入、模型回答、Token、Tool 调用及结果、Skill 调用和子 Session；子 Session 同时保留为独立 Execution，并通过父子关系进入 Agent Tree。
+
+Harness `FULL` telemetry 会携带完整 Session Event，因此可能包含 prompt、Tool 参数和 Tool 结果。Agent Insight 插件在发送前递归遮盖 API Key、Token、Authorization、Cookie、密码等敏感值，并对超长字符串做截断；普通 prompt、Tool schema 与 Token 统计不会被默认删除。可通过 `AGENT_INSIGHT_DSH_MAX_STRING_CHARS` 调整单个字符串的最大长度。服务端必须校验有效的 `x-witty-api-key` 才会接受 Harness Resource。
+
+此链路沿用 Harness 官方 OTel backend 的 best-effort 交付语义：摄入接口 HTTP 200 只表示事件已写入服务端 spool，后台 consumer 通常在数秒后生成或更新 Trace；客户端在进程崩溃前尚未导出的内存队列无法补传。
+
+卸载时分别执行：
+
+```bash
+dsh plugin --profile headless remove agent-insight-deepseek-harness-observability
+dsh plugin --profile web remove agent-insight-deepseek-harness-observability
+```
+
+确认两个 profile 均已移除后，可再手工清理 `~/.agent-insight/deepseek-harness/` 中的历史版本目录，并按需从 `~/.dsh/.env` 删除 `AGENT_INSIGHT_BASE_URL`、`AGENT_INSIGHT_API_KEY`。
 
 ## 推荐使用路径
 

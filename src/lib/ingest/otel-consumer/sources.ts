@@ -2,6 +2,7 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import { aggregateClaudeOtelSession } from '@/lib/ingest/claude-otel/aggregator';
 import { aggregateCodeAgentOtelSession } from '@/lib/ingest/codeagent-otel/aggregator';
 import { aggregateOtelTraceSession } from '@/lib/ingest/otel/aggregate';
+import { aggregateDeepSeekHarnessOtelSession } from '@/lib/ingest/deepseek-harness-otel/aggregator';
 import {
   getClaudeOtelSpoolDir,
   listClaudeOtelSpoolFiles,
@@ -13,13 +14,30 @@ import {
   getCodeAgentOtelSpoolDir,
   listCodeAgentOtelSpoolFiles,
 } from '@/lib/ingest/codeagent-otel/spool';
-import { getOtelTraceSpoolDir, listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
+import {
+  getActrailOtelTraceSpoolDir,
+  getOtelTraceSpoolDir,
+  listOtelTraceSpoolFiles,
+} from '@/lib/ingest/otel/spool';
+import {
+  getDeepSeekHarnessOtelSpoolDir,
+  listDeepSeekHarnessOtelSpoolFiles,
+  listDeepSeekHarnessOtelSpoolFilesForDay,
+} from '@/lib/ingest/deepseek-harness-otel/spool';
 
-export type SpoolAggregationResult = {
-  sessionId: string;
-  record: ExecutionRecord | null;
-  eventCount: number;
-};
+export type SpoolAggregationResult =
+  | {
+    sessionId: string;
+    record: ExecutionRecord;
+    eventCount: number;
+    disposition: 'persisted';
+  }
+  | {
+    sessionId: string;
+    record: null;
+    eventCount: number;
+    disposition: 'retry-later' | 'discard';
+  };
 
 export type SpoolSource = {
   id: string;
@@ -44,6 +62,15 @@ function codeAgentDefaultSkipEvaluation(): boolean {
 export function listSources(): SpoolSource[] {
   return [
     {
+      id: 'deepseek-harness-otel-logs',
+      spoolDir: getDeepSeekHarnessOtelSpoolDir,
+      listFiles: () => listDeepSeekHarnessOtelSpoolFiles(getDeepSeekHarnessOtelSpoolDir()),
+      listFilesForDay: (day) => listDeepSeekHarnessOtelSpoolFilesForDay(day, getDeepSeekHarnessOtelSpoolDir()),
+      aggregate: aggregateDeepSeekHarnessOtelSession,
+      statSession: (sessionId) => statSessionSpool(getDeepSeekHarnessOtelSpoolDir(), 'events.jsonl', sessionId),
+      defaultSkipEvaluation: () => true,
+    },
+    {
       id: 'codeagent-otel-logs',
       spoolDir: getCodeAgentOtelSpoolDir,
       listFiles: () => listCodeAgentOtelSpoolFiles(getCodeAgentOtelSpoolDir()),
@@ -60,6 +87,15 @@ export function listSources(): SpoolSource[] {
       aggregate: aggregateClaudeOtelSession,
       statSession: (sessionId) => statSessionSpool(getClaudeOtelSpoolDir(), 'logs.jsonl', sessionId),
       defaultSkipEvaluation,
+    },
+    {
+      id: 'actrail-otel-traces',
+      spoolDir: getActrailOtelTraceSpoolDir,
+      listFiles: () => listOtelTraceSpoolFiles(getActrailOtelTraceSpoolDir()),
+      listFilesForDay: (day) => listOtelTraceSpoolFilesForDay(day, getActrailOtelTraceSpoolDir()),
+      aggregate: (sessionId) => aggregateOtelTraceSession(sessionId, getActrailOtelTraceSpoolDir()),
+      statSession: (sessionId) => statSessionSpool(getActrailOtelTraceSpoolDir(), 'traces.jsonl', sessionId),
+      defaultSkipEvaluation: () => true,
     },
     {
       id: 'otel-traces',

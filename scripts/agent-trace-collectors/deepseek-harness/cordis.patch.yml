@@ -1,0 +1,21 @@
+- id: session-telemetry-otel
+  name: '@deepseek-ai/dsh-session-telemetry-otel'
+  config:
+    mode: FULL
+    shutdownTimeoutMillis: 3000
+    exporter:
+      url: !!js "`${String(process.env.AGENT_INSIGHT_BASE_URL || '').replace(/[/]+$/, '')}/api/ingest/otel/v1/logs`"
+      headers:
+        x-witty-api-key: !!js process.env.AGENT_INSIGHT_API_KEY
+      compression: gzip
+      timeoutMillis: 3000
+    processor:
+      scheduledDelayMillis: 1000
+      maxQueueSize: 2048
+      maxExportBatchSize: 512
+      exportTimeoutMillis: 2500
+- insert:
+    - id: agent-insight-deepseek-harness-observability
+      name: agent-insight-deepseek-harness-observability
+      config:
+        maxStringChars: !!js Number(process.env.AGENT_INSIGHT_DSH_MAX_STRING_CHARS || 32768)

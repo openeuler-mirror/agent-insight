@@ -39,7 +39,7 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
-import { formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
@@ -763,7 +763,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                     <SessionStat label="LLM" value={String(execution.llm_call_count ?? '—')} />
                     <SessionStat label={locale === 'zh' ? '故障节点' : 'Faults'} value={String(faultSummary.faultNodeCount)} valueColor={faultSummary.faultNodeCount > 0 ? 'var(--warning,#d97706)' : undefined} />
                     <SessionStat label="Token" value={execution.tokens ? fmtTokens(execution.tokens) : '—'} />
-                    <SessionStat label={locale === 'zh' ? '耗时' : 'Duration'} value={formatLatencySeconds(execution.latency)} />
+                    <SessionStat label={locale === 'zh' ? '耗时' : 'Duration'} value={formatDurationMs(execution.latency)} />
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <Link href={`${basePath}/trace?taskId=${taskId}`} className="ai-btn-s" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>

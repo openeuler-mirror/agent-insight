@@ -57,10 +57,12 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 |:----------- |:------- |
 | OpenCode    | 原生插件    |
 | Claude Code | OTLP 上报 |
+| Qwen Code   | Hook 采集器 |
 | Hermes      | 原生插件    |
 | Trae IDE | VS Code 插件 |
 | JiuwenSwarm | OTLP 上报 |
 | Langgraph | OTLP 上报 |
+| LlamaIndex | OTLP 上报 |
 
 ## 🚀 快速开始
 

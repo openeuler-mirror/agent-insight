@@ -1,4 +1,5 @@
-// 触发实验执行：可选外挂 FI 编排，再交给 startExperimentRun（内核不写 Worker I/O）。
+// 触发实验执行：置 running + 逐行异步执行（fire-and-forget），立即返回当前状态。
+// type='llm' 走对比执行；type='single' 可选生成 Trace/FI 后再走单组执行。
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { startExperimentRun } from '@/lib/engine/experiment/run-experiment';
@@ -15,6 +16,7 @@ import {
   TraceGenerationError,
 } from '@/lib/engine/experiment/trace-generation';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { startComparisonRun } from '@/lib/engine/experiment/comparison-runner';
 import { prisma } from '@/lib/storage/prisma';
 
 export const dynamic = 'force-dynamic';
@@ -31,6 +33,34 @@ export async function POST(
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
+    const currentExperiment = await prisma.experiment.findFirst({
+      where: { id, user: username },
+      select: { status: true, type: true },
+    });
+    if (!currentExperiment) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (currentExperiment.status === 'running') {
+      return NextResponse.json({ status: 'running', alreadyRunning: true });
+    }
+
+    if (currentExperiment.type === 'llm') {
+      const comparisonResult = await startComparisonRun(id, username);
+      if (!comparisonResult) {
+        return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+      }
+      comparisonResult.completion?.catch((error) => {
+        console.error('[Experiment Run Error]', error);
+      });
+      if (!comparisonResult.alreadyRunning) {
+        recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
+      }
+      return NextResponse.json({
+        status: comparisonResult.status,
+        ...(comparisonResult.alreadyRunning ? { alreadyRunning: true } : {}),
+      });
+    }
+
     let body: Record<string, unknown> = {};
     try {
       body = await req.json();
@@ -44,17 +74,6 @@ export async function POST(
       : null;
     const wantGenerate = body.traceSource === 'generate' || Boolean(generateTrace);
     const wantFi = body.fiOrchestrate === true;
-
-    const currentExperiment = await prisma.experiment.findFirst({
-      where: { id, user: username },
-      select: { status: true },
-    });
-    if (!currentExperiment) {
-      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
-    }
-    if (currentExperiment.status === 'running') {
-      return NextResponse.json({ status: 'running', alreadyRunning: true });
-    }
 
     if (wantGenerate && !wantFi) {
       const cases = await collectTraceGenerationCases(id);

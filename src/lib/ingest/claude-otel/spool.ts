@@ -75,7 +75,7 @@ function appendJsonl(file: string, rows: any[]): void {
   fs.appendFileSync(file, text, 'utf8');
 }
 
-function appendJsonlBySession<T extends { sessionId?: string }>(spoolDir: string, fileName: string, events: T[]): void {
+export function appendJsonlBySession<T extends { sessionId?: string }>(spoolDir: string, fileName: string, events: T[]): void {
   const groups = new Map<string, T[]>();
   for (const event of events) {
     const sessionId = typeof event.sessionId === 'string' && event.sessionId.trim() ? event.sessionId : 'unknown';
@@ -115,7 +115,7 @@ function collectJsonlSpoolFiles(dir: string, fileName: string | undefined, out: 
   }
 }
 
-function listJsonlSpoolFiles(spoolDir: string, fileName?: string): string[] {
+export function listJsonlSpoolFiles(spoolDir: string, fileName?: string): string[] {
   const out: string[] = [];
   try {
     const days = fs.readdirSync(spoolDir, { withFileTypes: true }).filter((d) => d.isDirectory());
@@ -165,7 +165,7 @@ export type SessionSpoolFiles = {
   legacy: string[];
 };
 
-type SessionSpoolFileName = 'logs.jsonl' | 'traces.jsonl';
+export type SessionSpoolFileName = 'logs.jsonl' | 'traces.jsonl' | 'events.jsonl';
 
 function sessionTargetedReadEnabled(): boolean {
   return process.env.AGENT_INSIGHT_OTEL_SESSION_TARGETED_READ !== '0';
@@ -237,7 +237,7 @@ export function statSessionSpool(spoolDir: string, fileName: SessionSpoolFileNam
   return parts.join('|');
 }
 
-function readEventsForSession<T extends { sessionId?: string }>(
+export function readEventsForSession<T extends { sessionId?: string }>(
   spoolDir: string,
   fileName: SessionSpoolFileName,
   sessionId: string,
@@ -313,6 +313,7 @@ export function readOtelTraceEventsForSession(sessionId: string, spoolDir = getO
 export function readNewLinesSince<T = any>(
   file: string,
   cursor: SpoolCursor = { bytes: 0 },
+  maxLines = Number.POSITIVE_INFINITY,
 ): SpoolReadResult<T> {
   let stat: Stats;
   try {
@@ -343,9 +344,10 @@ export function readNewLinesSince<T = any>(
   let nextBytes = start;
   let pending = '';
   let offset = start;
+  let reachedLimit = false;
 
   try {
-    while (offset < stat.size) {
+    while (offset < stat.size && !reachedLimit) {
       const bytesRead = fs.readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
       if (bytesRead <= 0) break;
       offset += bytesRead;
@@ -354,6 +356,10 @@ export function readNewLinesSince<T = any>(
       pending = lines.pop() ?? '';
 
       for (const line of lines) {
+        if (lineCount >= maxLines) {
+          reachedLimit = true;
+          break;
+        }
         nextBytes += Buffer.byteLength(line, 'utf8') + 1;
         if (!line.trim()) continue;
         lineCount += 1;

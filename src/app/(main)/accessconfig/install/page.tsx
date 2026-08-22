@@ -41,9 +41,14 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'hermes', label: 'Hermes' },
     { value: 'xiaoo', label: 'xiaoO' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'llamaindex', label: 'LlamaIndex' },
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },
     { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'qwencode', label: 'Qwen Code' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
 ];
 
 export default function AccessInstallPage() {
@@ -99,6 +104,7 @@ export default function AccessInstallPage() {
             apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
             frameworks.length ? `yes=1` : '',
             frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
+            frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
         ].filter(Boolean).join('&');
         const suffix = query ? `?${query}` : '';
         setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
@@ -157,6 +163,7 @@ export default function AccessInstallPage() {
         `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
         `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
     ].join('\n');
+    const llamaIndexSetupCode = 'import agent_insight_llamaindex; agent_insight_llamaindex.setup()';
 
     return (
         <>
@@ -178,6 +185,14 @@ export default function AccessInstallPage() {
                                         {isZh
                                             ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / OpenCode / OpenClaw 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
                                             : <><b style={descStrong}>Command-line agents</b> (Claude Code, OpenCode, OpenClaw, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
+                                    </span>
+                                </li>
+                                <li style={introItem}>
+                                    <span style={introDot} />
+                                    <span>
+                                        {isZh
+                                            ? <><b style={descStrong}>LlamaIndex</b> Python 项目:在上方框架列表勾选 Trace Collector,使用同一条一键安装命令。</>
+                                            : <><b style={descStrong}>LlamaIndex</b> Python projects: select Trace Collector above and use the same one-line installer.</>}
                                     </span>
                                 </li>
                                 <li style={introItem}>
@@ -253,6 +268,30 @@ export default function AccessInstallPage() {
                                 envText={langfuseEnv}
                                 copied={copied === 'langfuse-env'}
                                 onCopy={() => handleCopy(langfuseEnv, 'langfuse-env')}
+                                locale={locale}
+                            />
+
+                            <div style={{ ...sectionHeading, marginTop: 8 }}>
+                                <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
+                                    LlamaIndex Trace Collector
+                                </span>
+                                <span style={countPill}>{isZh ? '应用注册' : 'app setup'}</span>
+                                <span style={{ flex: 1 }} />
+                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                    {isZh ? '安装已并入上方一键脚本' : 'Installed by the one-line setup above'}
+                                </span>
+                            </div>
+
+                            <CommandCard
+                                icon={<Terminal size={14} strokeWidth={2.2} />}
+                                label={isZh ? '应用代码 · 一行注册' : 'Application code · one-line setup'}
+                                hint={isZh
+                                    ? '已执行 configure 时，将这一行放在 LlamaIndex 应用入口顶部'
+                                    : 'After configure, place this line near the top of the LlamaIndex entry point'}
+                                cmd={llamaIndexSetupCode}
+                                copied={copied === 'llamaindex-setup'}
+                                onCopy={() => handleCopy(llamaIndexSetupCode, 'llamaindex-setup')}
                                 locale={locale}
                             />
 
@@ -517,11 +556,11 @@ function LangfuseEnvCard({
 function DocsPanel({ locale }: { locale: string }) {
     const isZh = locale === 'zh';
     const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: '客户端高级配置', href: '#' },
         { label: '常见接入问题排查', href: '#' },
     ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: 'User manual', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: 'Advanced client configuration', href: '#' },
         { label: 'Troubleshooting installation', href: '#' },
     ];
@@ -802,13 +841,17 @@ const commandBox: CSSProperties = {
     border: '1px solid var(--border)',
     borderRadius: 8,
     padding: '10px 12px',
+    maxHeight: 320,
+    overflow: 'auto',
 };
 
 const commandCode: CSSProperties = {
     color: 'var(--foreground)',
     fontSize: 12,
     fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    wordBreak: 'break-all',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
     display: 'block',
     lineHeight: 1.6,
 };

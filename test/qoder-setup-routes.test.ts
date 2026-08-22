@@ -266,7 +266,13 @@ test("Qoder plugin builders expose platform-neutral Node and shell entry points"
       integrationRoot,
       builder.root === "qoder-desktop" ? "build-vsix.sh" : "build-plugin.sh",
     )
-    const shellResult = spawnSync("bash", ["-n", shellScript], { encoding: "utf8" })
+    // Passing a Windows path directly to WSL bash drops drive separators. Feed
+    // the script over stdin so this syntax check is portable across Git Bash,
+    // WSL, Linux and macOS.
+    const shellResult = spawnSync("bash", ["-n"], {
+      input: fs.readFileSync(shellScript, "utf8"),
+      encoding: "utf8",
+    })
     assert.equal(shellResult.status, 0, shellResult.stderr || shellResult.stdout)
   }
 
@@ -291,14 +297,22 @@ test("install guide appends Qoder to the existing framework choices", () => {
   assert.notEqual(end, -1, "install guide framework choices must terminate")
   const options = [...source.slice(start, end).matchAll(/value: '([^']+)'/g)].map((match) => match[1])
 
-  assert.deepEqual(options, ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "qoder", "trae", "actrail"])
+  assert.deepEqual(options, [
+    "opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen",
+    "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex",
+    "deepseek-harness",
+  ])
 })
 
 test("curl setup appends Qoder without changing existing framework entries", async () => {
   for (const platform of ["unix", "windows"] as const) {
     const script = await setupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
-    assert.deepEqual(frameworkValues(script), ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "qoder", "trae", "actrail"])
+    assert.deepEqual(frameworkValues(script), [
+      "opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen",
+      "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
+      "deepseek-harness",
+    ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)
@@ -324,7 +338,11 @@ test("local npm auto setup appends Qoder without changing existing framework ent
   for (const platform of ["unix", "windows"] as const) {
     const script = await autoSetupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
-    assert.deepEqual(frameworkValues(script), ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "qoder", "trae", "actrail"])
+    assert.deepEqual(frameworkValues(script), [
+      "opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen",
+      "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
+      "deepseek-harness",
+    ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)

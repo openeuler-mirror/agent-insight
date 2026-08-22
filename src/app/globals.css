@@ -55,6 +55,16 @@
   --color-error-subtle: var(--error-subtle);
   --color-error-border: var(--error-subtle-border);
 
+  --color-group-a: var(--group-a);
+  --color-group-a-foreground: var(--group-a-foreground);
+  --color-group-a-subtle: var(--group-a-subtle);
+  --color-group-a-border: var(--group-a-subtle-border);
+
+  --color-group-b: var(--group-b);
+  --color-group-b-foreground: var(--group-b-foreground);
+  --color-group-b-subtle: var(--group-b-subtle);
+  --color-group-b-border: var(--group-b-subtle-border);
+
   /* Badge (key-metric dark-fill) */
   --color-badge: var(--foreground);
   --color-badge-text: var(--background);
@@ -128,6 +138,15 @@
   --error-foreground: #ffffff;
   --error-subtle: #FEF2F2;
   --error-subtle-border: #FECACA;
+  /* 组识别色（A/B 对比用；sky/violet 色系对齐既有 debug.css A/B 漂移色） */
+  --group-a: #0EA5E9;
+  --group-a-foreground: #ffffff;
+  --group-a-subtle: #F0F9FF;
+  --group-a-subtle-border: #BAE6FD;
+  --group-b: #8B5CF6;
+  --group-b-foreground: #ffffff;
+  --group-b-subtle: #F5F3FF;
+  --group-b-subtle-border: #DDD6FE;
 
   /* 边框 */
   --border: #E4E4E7;
@@ -225,6 +244,15 @@
   --error-foreground: #ffffff;
   --error-subtle: rgba(248, 113, 113, 0.12);
   --error-subtle-border: rgba(248, 113, 113, 0.25);
+  /* 组识别色（dark；rgba subtle 对齐既有 dark 语义令牌格式） */
+  --group-a: #38BDF8;
+  --group-a-foreground: #0B1120;
+  --group-a-subtle: rgba(56, 189, 248, 0.12);
+  --group-a-subtle-border: rgba(56, 189, 248, 0.25);
+  --group-b: #A78BFA;
+  --group-b-foreground: #0B1120;
+  --group-b-subtle: rgba(167, 139, 250, 0.12);
+  --group-b-subtle-border: rgba(167, 139, 250, 0.25);
 
   /* 边框 */
   --border: #27272A;

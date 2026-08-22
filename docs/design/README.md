@@ -1,9 +1,13 @@
 # 需求清单（agent-insight 设计文档索引）
 
-本目录收录 agent-insight 的所有需求设计。**每个需求一个子目录**,内部按三阶段组织:
+本目录收录 agent-insight 的所有需求设计。默认每个需求一个子目录，内部按三阶段组织：
 `phase1 需求分析` → `phase2 需求设计` → `phase3 开发计划`。
 
-> 说明:子目录里的设计文档**只描述设计意图,不记录实现进度**。「是否实现」这类执行状态统一在本清单跟踪。
+当 issue 或维护者明确要求“一 issue 一份文档”时，使用
+`issue-<number>-<slug>.md`，在同一文件内组织需求、设计与验收；该明确格式要求优先于默认
+三阶段目录模板。
+
+> 说明：设计文档**只描述设计意图，不记录实现进度**。「是否实现」这类执行状态统一在本清单跟踪。
 >
 > **Agent RAS** 相关设计见 [`docs/agent-ras/`](../agent-ras/README.md)（本表 RAS 行链接指向该处 designs/features 或 guides）；使用指南见 [`docs/agent-ras/guides/`](../agent-ras/guides/)。
 > 少数早期以 spike 形式记录的需求(如 jiuwenswarm-tracing、langfuse-style-trace-search)不按三阶段拆分,
@@ -12,8 +16,11 @@
 
 ## 清单
 
-| 需求名称 | 目录 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
+| 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| DeepSeek Harness 观测接入 | [deepseek-harness-observability](deepseek-harness-observability/) | 复用 Harness 官方 Session Telemetry，以 Agent Insight 插件完成认证、脱敏和截断，并通过专用 OTLP Logs spool/adapter 生成 Trace、Tool、Skill 与子 Session 观测数据 | Feature | 2026-08-21 | 🟡 实现中 | —（待补） |
+| Pi Agent Trace 采集器 | [issue-158-pi-agent-trace-collector.md](issue-158-pi-agent-trace-collector.md) | 通过 Pi Extension API、结构化 SubAgent 结果和 durable JSONL spool 采集 Agent/SubAgent/Skill/Tool/LLM/MCP Trace，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#158](https://atomgit.com/openeuler/opensource-intern/issues/158) |
+| Codex CLI 与 IDE Trace 采集器 | [issue-159-codex-trace-collectors.md](issue-159-codex-trace-collectors.md) | 通过 Codex lifecycle Hooks 与原生 OTel 双通道采集 CLI/IDE Agent Trace，以本地 relay 合并 Token、Tool、SubAgent 和编辑器事件，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#159](https://atomgit.com/openeuler/opensource-intern/issues/159) |
 | Hermes 平台适配（OTel/OTLP 接入） | [hermes-otel-adapter](hermes-otel-adapter/) | 让运行在 hermes 平台的 Agent 通过标准 OpenTelemetry(OTLP)协议把链路数据上报到 agent-insight,被解析、按会话归并、标记 `framework=hermes` 并在观测看板呈现;子 Agent 与 skill 对齐 opencode 成为一等公民(可评测/注册/A-B) | Feature | 2026-06-02 | 🟨 MVP 实现中（仓库内置轻量插件、OTLP JSON 高保真采集与 subagent 关联开发中；原生事件上报作为备用方案） | —（待补） |
 | Framework 适配器注册表 | [framework-adapter-registry](framework-adapter-registry/) | 把散落在数十处的「按框架走分支」收进统一的 `FrameworkAdapter` 注册表;第一刀治理三块:skill 抽取重复(4~5 份拷贝)、claude 入库归一化(5 个调用点)、框架名值域不统一(`claude`/`claudecode`) | Refactor | 2026-06-04 | 🟡 实现中（注册表骨架已落地,旧调用点切换与验证待开发） | —（待补） |
 | AgentDebug 与 Skills 分析并行化 | [agentdebug-parallel-skills-analysis](agentdebug-parallel-skills-analysis/) | 将 AgentDebug 主诊断与 Skills 步骤核验拆成独立存储和独立轮询链路,支持点击诊断后并行运行、先完成先展示;不兼容旧 `reportJson.skillsAnalysis` 数据 | Feature | 2026-06-05 | ✅ 已实现 | —（待补） |
@@ -38,6 +45,7 @@
 | Stream Abort 停流 | [`../agent-ras/designs/features/stream-abort.md`](../agent-ras/designs/features/stream-abort.md) | 环内打断 `llm.stream`；依赖宿主 abort 契约 | Feature | 2026-07-15 | ✅ 已实现 | — |
 | Provider 断连停推理调研 | [`../agent-ras/designs/features/provider-disconnect.md`](../agent-ras/designs/features/provider-disconnect.md) | Provider 断连能力调研 | Spike | 2026-07-20 | ✅ 调研完成 | — |
 | Agent RAS 可靠性检测恢复评估器门控 | [`../agent-ras/designs/features/ras-reliability-evaluator-split.md`](../agent-ras/designs/features/ras-reliability-evaluator-split.md) | 新实验移除故障注入评估器；检测恢复评估器仅在确认故障发生后评分，未确认时输出无分理由 | Refactor / Feature | 2026-08-15 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
+| 仪表盘可靠性与性能拆分 | [`../agent-ras/designs/features/dashboard-reliability-performance.md`](../agent-ras/designs/features/dashboard-reliability-performance.md) | 将原可靠性与性能页签拆开，基于根 Trace 与 RAS 事件展示故障恢复、级别和 Agent 可靠性，并保留执行失败补充 | Feature | 2026-08-20 | 🟢 开发完成，待 UI 验收 | —（待补） |
 | LLM 过度思考（Analysis Paralysis）二阶段检测 | [`../agent-ras/designs/features/analysis-paralysis.md`](../agent-ras/designs/features/analysis-paralysis.md) | 触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道 | Feature | 2026-07-29 | ⬜ 未实现（规划中） | —（待补） |
 | LLM Agent 规划错误（Planning Error）检测 | [`../agent-ras/designs/features/planning-error.md`](../agent-ras/designs/features/planning-error.md) | 策略层规划错误；按信息完备度分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
 | LLM Agent 领域认知偏差（Domain Cognitive Bias） | [`../agent-fault-injection/designs/features/domain-cognitive-bias.md`](../agent-fault-injection/designs/features/domain-cognitive-bias.md) | 六类信念层故障；认知层三角覆盖；FI 剧本 + RAS 检测规划 | Research / Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
@@ -59,10 +67,11 @@
 | Agent RAS 故障域插件化（detectors/review/recovery） | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | P0–P3 ✅：三平级 PLUGIN；共同文件只留 yaml | Refactor / Feature | 2026-08-06 | ✅ 已实现 | — |
 | FI 证据边界与 inconclusive 语义 | [`../agent-fault-injection/designs/features/server-client-split.md`](../agent-fault-injection/designs/features/server-client-split.md) | 注入工具不写自证快照；Judge 以轨迹为主；`no_trace`→`inconclusive` | Refactor | 2026-08-05 | ✅ 已实现 | — |
 | FI 故障模式自包含插件化 | [`../agent-fault-injection/designs/features/fault-mode-plugins.md`](../agent-fault-injection/designs/features/fault-mode-plugins.md) | 五类 injection_method；plan/副作用分层；metadata + capability；配方契约 | Refactor | 2026-08-10 | ✅ 已实现 | — |
+| LlamaIndex Trace 采集器 | [llamaindex-trace-collector](llamaindex-trace-collector/) | 从 LlamaIndex Dispatcher 获取原始调用信息，由 Agent Insight 自定义 Handler 继承官方 `llama-index-observability-otel` Handler 基类并补充 Agent、子 Agent、Tool、LLM、RAG 与 Workflow 语义，以可靠本地 spool 异步上传至现有 OTLP 接口，并提供服务端直接部署、配置和隔离清理能力 | Feature | 2026-08-03 | 🟢 已实现，待扩展 CI/长期 soak | —（待补） |
 
 ## 字段口径
 
-- **创建时间**:取该需求 phase1 起草日期。
+- **创建时间**:取该需求首次起草日期。
 - **是否实现**取值:
   - ⬜ **未实现** —— 仅有设计,代码未动
   - 🟡 **实现中** —— 部分落地
@@ -71,6 +80,7 @@
 
 ## 新增需求时的约定
 
-1. 在本目录下新建一个**短横线命名**的子目录(如 `xxx-yyy`)。
-2. 子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
-3. **回到本清单追加一行**,填齐上表各列。
+1. 默认在本目录下新建一个**短横线命名**的子目录(如 `xxx-yyy`)。
+2. 默认在子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
+3. issue 或维护者明确要求单文档时，改用 `issue-<number>-<slug>.md`，不再创建三阶段目录。
+4. **回到本清单追加一行**,填齐上表各列。

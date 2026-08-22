@@ -220,6 +220,10 @@ const PANEL_H: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
 };
 const PANEL_B: React.CSSProperties = { padding: '13px 15px' };
+const CARD_NOTE: React.CSSProperties = {
+  background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
+  borderRadius: 10, padding: 14,
+};
 const FIELDLBL: React.CSSProperties = {
   display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--foreground-muted)',
   textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 7,
@@ -415,6 +419,11 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   const [traceMode, setTraceMode] = useState<'existing' | 'generate'>(() => (
     skillPreset === 'trigger' || skillPreset === 'skill-ab' ? 'generate' : 'existing'
   ));
+  // 对比模式：type='llm' 时用户选变量维度 + 定义 A/B 两组取值；缺省 'single' 走单组流程
+  const [expType, setExpType] = useState<'single' | 'llm'>('single');
+  const [groupAValue, setGroupAValue] = useState('');
+  const [groupBValue, setGroupBValue] = useState('');
+  const [agentModels, setAgentModels] = useState<string[]>([]);
   const [traces, setTraces] = useState<TraceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -688,6 +697,24 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     const timer = window.setTimeout(() => setTraceSearch(traceSearchDraft.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [traceSearchDraft]);
+
+  // 对比模式：选定 Agent 后查该 Agent 已有模型取值供 A/B 输入框自动补全
+  useEffect(() => {
+    if (!user || !agentName || expType !== 'llm') return;
+    let cancelled = false;
+    apiFetch(`/api/experiments/traces?agent=${encodeURIComponent(agentName)}&user=${encodeURIComponent(user)}&pageSize=100`)
+      .then((r) => r.ok ? r.json() : { items: [] })
+      .then((d: { items?: Array<{ model?: string | null }> }) => {
+        const models = Array.from(new Set((d?.items ?? [])
+          .map((t) => t.model)
+          .filter((m): m is string => typeof m === 'string' && m !== '')));
+        if (!cancelled) setAgentModels(models);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentModels([]);
+      });
+    return () => { cancelled = true; };
+  }, [user, agentName, expType]);
 
   const appendTraceFilters = useCallback((params: URLSearchParams) => {
     if (traceSearch) params.set('search', traceSearch);
@@ -1138,8 +1165,14 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
           user,
           name,
           agentName,
-          watchMode: traceMode === 'existing' ? watchMode : false,
-          cases: casesPayload,
+          watchMode: expType === 'single' && traceMode === 'existing' ? watchMode : false,
+          ...(expType === 'llm' ? {
+            type: 'llm',
+            variableDimension: 'llm',
+            groups: [{ key: 'A', value: groupAValue.trim() }, { key: 'B', value: groupBValue.trim() }],
+          } : {
+            cases: casesPayload,
+          }),
           evaluatorIds: Array.from(selectedEvaluators),
           ...(skillContext ? {
             scope: 'skill-workbench',
@@ -1171,7 +1204,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
       const experimentId = String(data.id || '');
       if (!experimentId) throw new Error('创建实验后未返回实验 ID');
       // 「开始实验」= 创建后立即真跑评估器；详情页落地即 running 状态并自动轮询进度。
-      const runBody = traceMode === 'generate' && selectedTarget
+      const runBody = expType === 'single' && traceMode === 'generate' && selectedTarget
         ? {
             fiOrchestrate: isReliabilityDataset,
             traceSource: 'generate',
@@ -1220,18 +1253,28 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     && (selectedDatasetDetail.cases || []).some((item) => Boolean(item.values?.should_trigger))
     && (selectedDatasetDetail.cases || []).some((item) => !Boolean(item.values?.should_trigger)),
   );
-  const step1Ok = name.trim() !== '' && agentName !== '' && triggerDatasetReady
-    && (skillPreset !== 'skill-ab' || compareVersion !== null);
+  const step1Valid = name.trim() !== '' && agentName !== '' && triggerDatasetReady
+    && (skillPreset !== 'skill-ab' || compareVersion !== null)
+    && (expType === 'single' || (groupAValue.trim() !== '' && groupBValue.trim() !== '' && groupAValue.trim() !== groupBValue.trim()));
+  // 对比模式：case 由 autoPairGroups 自动产生（POST /api/experiments 内部调），无需手选 trace
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
-  const step2Valid = traceMode === 'generate'
+  const step2Valid = expType === 'llm' || (traceMode === 'generate'
     ? generateAvailable && selectedGenerated.size >= 1
-    : (watchMode || selected.size >= 1);
+    : (watchMode || selected.size >= 1));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const stepSummaries = [
-    `${name.trim() || '未命名'} · ${selectedDataset?.name || '未选数据集'}`,
-    traceMode === 'generate' ? `生成 Trace · ${selectedGenerated.size} case` : `选择 Trace · ${selected.size} 条`,
-    traceMode === 'generate' ? `数据集预期 ${annotated}/${selectedList.length}` : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
+    `${name.trim() || '未命名'} · ${expType === 'llm' ? 'LLM 对比' : selectedDataset?.name || '未选数据集'}`,
+    expType === 'llm'
+      ? `A=${groupAValue || '—'} B=${groupBValue || '—'}`
+      : traceMode === 'generate'
+        ? `生成 Trace · ${selectedGenerated.size} case`
+        : `选择 Trace · ${selected.size} 条`,
+    expType === 'llm'
+      ? '自动配对 Trace'
+      : traceMode === 'generate'
+        ? `数据集预期 ${annotated}/${selectedList.length}`
+        : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
     `已选 ${selectedEvaluators.size} 个`,
   ];
 
@@ -1441,33 +1484,47 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
 
               <label style={FIELDLBL}>实验类型</label>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                {skillPreset !== 'skill-ab' && <span style={{
-                  ...FCHIP,
-                  background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
-                  color: 'var(--primary)', cursor: 'default',
-                }}>
-                  🎯 无变量 · 单组
-                </span>}
-                {skillPreset === 'skill-ab' && <span style={{
-                  ...FCHIP,
-                  background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
-                  color: 'var(--primary)', cursor: 'default',
-                }}>
-                  Skill 版本对比
-                </span>}
-                {!skillContext && ['LLM 对比', 'Agent 框架对比', 'Skill 版本对比'].map((t) => (
-                  <span
-                    key={t}
-                    title="即将支持"
-                    style={{
-                      ...FCHIP,
-                      background: 'var(--background-secondary)', color: 'var(--foreground-muted)',
-                      cursor: 'not-allowed', border: '1px dashed var(--border)',
-                    }}
-                  >
-                    {t}
+                {skillContext ? (
+                  <span style={{
+                    ...FCHIP,
+                    background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
+                    color: 'var(--primary)', cursor: 'default',
+                  }}>
+                    {skillPreset === 'skill-ab' ? 'Skill 版本对比' : '🎯 无变量 · 单组'}
                   </span>
-                ))}
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setExpType('single')}
+                      style={{
+                        ...FCHIP,
+                        background: expType === 'single' ? 'var(--primary-subtle)' : 'var(--background-secondary)',
+                        border: `1px solid ${expType === 'single' ? 'var(--primary-subtle-border)' : 'var(--border)'}`,
+                        color: expType === 'single' ? 'var(--primary)' : 'var(--foreground-muted)',
+                        cursor: 'pointer',
+                      }}
+                    >🎯 无变量 · 单组</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpType('llm');
+                        setTraceMode('existing');
+                        setWatchMode(false);
+                      }}
+                      style={{
+                        ...FCHIP,
+                        background: expType === 'llm' ? 'var(--group-a-subtle)' : 'var(--background-secondary)',
+                        border: `1px solid ${expType === 'llm' ? 'var(--group-a-subtle-border)' : 'var(--border)'}`,
+                        color: expType === 'llm' ? 'var(--group-a)' : 'var(--foreground-muted)',
+                        cursor: 'pointer',
+                      }}
+                    >🔄 LLM 对比</button>
+                    {['Agent 框架对比', 'Skill 版本对比'].map((t) => (
+                      <span key={t} title="即将支持" style={{ ...FCHIP, background: 'var(--background-secondary)', color: 'var(--foreground-muted)', cursor: 'not-allowed', border: '1px dashed var(--border)' }}>{t}</span>
+                    ))}
+                  </>
+                )}
               </div>
               {skillContext && skillPreset === 'skill-ab' && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14, marginTop: 14 }}>
@@ -1489,13 +1546,57 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                   </div>
                 </div>
               )}
+              {!skillContext && expType === 'llm' && (
+                <div style={{ marginTop: 12, display: 'flex', gap: 12 }}>
+                  {(['A', 'B'] as const).map((key) => {
+                    const val = key === 'A' ? groupAValue : groupBValue;
+                    const setVal = key === 'A' ? setGroupAValue : setGroupBValue;
+                    const color = key === 'A' ? 'var(--group-a)' : 'var(--group-b)';
+                    const subtle = key === 'A' ? 'var(--group-a-subtle)' : 'var(--group-b-subtle)';
+                    return (
+                      <div key={key} style={{ flex: 1, padding: 12, borderRadius: 10, border: `1px solid ${subtle}`, background: subtle }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color, marginBottom: 6 }}>{key} 组 · 模型取值</div>
+                        <input
+                          list={`agent-models-${key}`}
+                          value={val}
+                          onChange={(e) => setVal(e.target.value)}
+                          placeholder="如 glm-4.7"
+                          style={{ width: '100%', padding: '6px 8px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--background)', color: 'var(--foreground)', fontFamily: 'var(--font-mono, monospace)' }}
+                        />
+                        <datalist id={`agent-models-${key}`}>
+                          {agentModels.map((m) => <option key={m} value={m} />)}
+                        </datalist>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {!skillContext && expType === 'llm' && groupAValue.trim() !== '' && groupBValue.trim() !== '' && groupAValue.trim() === groupBValue.trim() && (
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--warning)' }}>⚠ A/B 两组取值不可相同</div>
+              )}
               {submitError && <p style={{ margin: '10px 0 0', color: 'var(--error)', fontSize: 12 }}>{submitError}</p>}
-              {footer({ nextDisabled: !step1Ok })}
+              {footer({ nextDisabled: !step1Valid })}
             </div>
           </div>
         )}
 
-        {step === 2 && traceMode === 'generate' && (
+        {step === 2 && expType === 'llm' && (
+          <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{ ...CARD_NOTE, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)', marginBottom: 6 }}>LLM 对比 · 自动配对</div>
+                <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
+                  系统将按 Agent「{agentName || '—'}」的 Trace 自动配对 A 组（{groupAValue || '—'}）与 B 组（{groupBValue || '—'}）：
+                  按任务输入精确匹配，三条件判定可比性（输入相同 + 各组模型取值匹配 + Agent/Skill 版本一致）。
+                  <span style={{ color: 'var(--foreground-muted)' }}>可比配对自动纳入实验；不可比/未配对单列展示，不进入统计分母。</span>
+                </div>
+              </div>
+              {footer({ nextDisabled: !step2Valid })}
+            </div>
+          </div>
+        )}
+
+        {step === 2 && expType === 'single' && traceMode === 'generate' && (
           <div style={PANEL}>
             <div style={PANEL_B}>
               <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>选择 Trace 来源</div>
@@ -1628,7 +1729,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
           </div>
         )}
 
-        {step === 2 && traceMode === 'existing' && (
+        {step === 2 && expType === 'single' && traceMode === 'existing' && (
           <div style={PANEL}>
             <div style={{ ...PANEL_B, paddingBottom: 0 }}>
               <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>选择 Trace 来源</div>
@@ -2032,7 +2133,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
           </div>
         )}
 
-        {step === 3 && traceMode === 'generate' && (
+        {step === 3 && expType === 'single' && traceMode === 'generate' && (
           <div style={PANEL}>
             <div style={PANEL_B}>
               <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>检查数据集预期答案</div>
@@ -2081,7 +2182,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
           </div>
         )}
 
-        {step === 3 && traceMode === 'existing' && (
+        {step === 3 && (expType === 'llm' || traceMode === 'existing') && (
           <div style={PANEL}>
             <div style={PANEL_H}>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', flex: 1, minWidth: 260, lineHeight: 1.6 }}>
@@ -2230,9 +2331,13 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                   ['实验', name || '未命名'],
                   ['Agent', agentName || '—'],
                   ['数据集', selectedDataset?.name || '未选择'],
-                  ['Trace 来源', traceMode === 'generate' ? `生成 Trace · ${selectedGenerated.size} 个 Case` : `选择 Trace · ${selected.size} 条${watchMode ? ' · 自动监听' : ''}`],
+                  ['Trace 来源', expType === 'llm'
+                    ? `自动配对 · A=${groupAValue || '—'} / B=${groupBValue || '—'}`
+                    : traceMode === 'generate'
+                      ? `生成 Trace · ${selectedGenerated.size} 个 Case`
+                      : `选择 Trace · ${selected.size} 条${watchMode ? ' · 自动监听' : ''}`],
                   ['预期答案', `${annotated} / ${selectedList.length}`],
-                  ...(traceMode === 'generate' ? [[
+                  ...(expType === 'single' && traceMode === 'generate' ? [[
                     '主机 / 模型',
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
@@ -2259,7 +2364,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                   return (
                     <div
                       key={card.id}
-                      title={gate.usable ? undefined : gate.reason}
+                      title={gate.usable ? undefined : (expType === 'llm' ? undefined : gate.reason)}
                       onClick={() => gate.usable && toggleEvaluator(card.id)}
                       style={{
                         border: `1px solid ${checked ? 'var(--primary)' : 'var(--border)'}`,
@@ -2271,6 +2376,12 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                         transition: 'all 0.12s',
                       }}
                     >
+                      {/* 对比模式：门控失败显示内联警告块（G12 仅对比模式；单组保持 tooltip） */}
+                      {expType === 'llm' && !gate.usable && gate.reason && (
+                        <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 6, background: 'var(--warning-subtle)', border: '1px solid var(--warning-subtle-border)', color: 'var(--warning)', fontSize: 11 }}>
+                          ⚠ {gate.reason}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{
                           fontSize: 13, fontWeight: 800, flex: 1, minWidth: 0,

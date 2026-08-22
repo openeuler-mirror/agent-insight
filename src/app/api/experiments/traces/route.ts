@@ -1,5 +1,6 @@
 // 实验向导 ② 步：按 Agent 分页列 root trace，供圈选 case。
 // ok = 简单判定（toolCallErrorCount===0 且 failures 为空/null），仅作列表状态展示。
+// 对比向导：加 model 过滤参数；返回 model/skillName/skillVersion 供矩阵分组用。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
@@ -22,6 +23,9 @@ interface ExperimentTraceRow {
   timestamp: Date;
   toolCallErrorCount: number | null;
   failures: string | null;
+  model: string | null;
+  skill: string | null;
+  skillVersion: number | null;
 }
 
 function isOk(row: { toolCallErrorCount: number | null; failures: string | null }): boolean {
@@ -41,6 +45,7 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));
     const agent = (url.searchParams.get('agent') || '').trim();
+    const model = (url.searchParams.get('model') || '').trim();
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('pageSize') || '20', 10) || 20));
     const filters = parseExperimentTraceFilters(url.searchParams);
@@ -52,11 +57,13 @@ export async function GET(req: Request) {
         userOwnershipWhere,
       ],
     };
+    // 对比向导：加 model 过滤（LLM 维度按模型查候选 trace）
+    const finalWhere = model ? { ...where, model } : where;
 
     const [total, rows] = await Promise.all([
-      prisma.execution.count({ where }),
+      prisma.execution.count({ where: finalWhere }),
       prisma.execution.findMany({
-        where,
+        where: finalWhere,
         orderBy: { timestamp: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -64,6 +71,7 @@ export async function GET(req: Request) {
           id: true, taskId: true, query: true, finalResult: true,
           latency: true, tokens: true, timestamp: true,
           toolCallErrorCount: true, failures: true,
+          model: true, skill: true, skillVersion: true,
         },
       }),
     ]);
@@ -82,6 +90,10 @@ export async function GET(req: Request) {
         tokens: r.tokens,
         timestamp: r.timestamp,
         ok: isOk(r),
+        // 对比向导：返回 model/skillName/skillVersion 供矩阵分组
+        model: r.model,
+        skillName: r.skill,
+        skillVersion: r.skillVersion,
       })),
     });
   } catch (error) {

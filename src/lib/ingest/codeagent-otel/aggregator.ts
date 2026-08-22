@@ -2,11 +2,19 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import type { InvokedSkill } from '@/lib/shared/interaction-utils';
 import { readCodeAgentOtelEventsForSession, type CodeAgentOtelEvent } from './spool';
 
-export type CodeAgentOtelAggregationResult = {
-  sessionId: string;
-  record: ExecutionRecord | null;
-  eventCount: number;
-};
+export type CodeAgentOtelAggregationResult =
+  | {
+    sessionId: string;
+    record: ExecutionRecord;
+    eventCount: number;
+    disposition: 'persisted';
+  }
+  | {
+    sessionId: string;
+    record: null;
+    eventCount: number;
+    disposition: 'retry-later' | 'discard';
+  };
 
 type CanonicalToolCall = {
   id: string;
@@ -469,9 +477,17 @@ export function aggregateCodeAgentOtelEvents(
 
 export function aggregateCodeAgentOtelSession(sessionId: string): CodeAgentOtelAggregationResult {
   const events = readCodeAgentOtelEventsForSession(sessionId);
+  const record = aggregateCodeAgentOtelEvents(sessionId, events);
+  if (record) return { sessionId, eventCount: events.length, record, disposition: 'persisted' };
+
+  const sessionEvents = dedupeAndSort(events.filter((event) => event.sessionId === sessionId));
+  const hiddenRunIds = hiddenBackgroundRunIds(sessionEvents, sessionId);
+  const onlyHiddenBackgroundEvents = sessionEvents.length > 0 &&
+    sessionEvents.every((event) => hiddenRunIds.has(eventRunId(event, sessionId)));
   return {
     sessionId,
     eventCount: events.length,
-    record: aggregateCodeAgentOtelEvents(sessionId, events),
+    record: null,
+    disposition: onlyHiddenBackgroundEvents ? 'discard' : 'retry-later',
   };
 }

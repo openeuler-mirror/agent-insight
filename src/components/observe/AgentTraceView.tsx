@@ -15,6 +15,8 @@ import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
+import { resolveTraceTimelineDurationMs } from '@/lib/latency-format';
+import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
 import {
     AgentEvent,
     AgentNode,
@@ -37,6 +39,7 @@ import {
     findEventAnomaliesForMarkers,
 } from '@/components/observe/RasReliabilityDetails';
 import {
+    actrailPromptHistoryCount,
     buildLangfuseAgentTrace,
     langfusePromptHistoryCount,
 } from '@/lib/engine/observability/langfuse-agent-trace';
@@ -46,6 +49,7 @@ import {
     extractSkillsWithVersionsFromJiuwenSession,
     extractSkillsWithVersionsFromOpenClawSession,
     extractSkillsWithVersionsFromOpencodeSession,
+    extractSkillsWithVersionsFromToolInteractions,
     normalizeInteractions,
 } from '@/lib/shared/interaction-utils';
 
@@ -272,6 +276,7 @@ function collectTraceSkillCalls(interactions: RawInteraction[], node?: AgentNode
         ...extractSkillsWithVersionsFromOpenClawSession(normalized),
         ...extractSkillsWithVersionsFromHermesSession(normalized),
         ...extractSkillsWithVersionsFromJiuwenSession(normalized),
+        ...extractSkillsWithVersionsFromToolInteractions(normalized),
     ];
 
     const byKey = new Map<string, TraceSkillCall>();
@@ -387,6 +392,11 @@ export interface AgentTraceViewProps {
     interactions: RawInteraction[];
     framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
+    /**
+     * Persisted execution elapsed time. It can exceed the root Agent span when
+     * a delegated child continues after the parent's last direct event.
+     */
+    executionDurationMs?: number;
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
     /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
@@ -410,6 +420,7 @@ export default function AgentTraceView({
     interactions: sourceInteractions,
     framework,
     langfuseTraceNodes,
+    executionDurationMs,
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
@@ -589,7 +600,7 @@ export default function AgentTraceView({
     );
 
     const totalStart = tree?.startedAt;
-    const totalDuration = tree?.stats.durationMs;
+    const totalDuration = resolveTraceTimelineDurationMs(tree?.stats.durationMs, executionDurationMs);
 
     // Resolve selected node/event for right panel
     const { selectedAgentNode, selectedEvent } = useMemo(() => {
@@ -694,7 +705,7 @@ export default function AgentTraceView({
         const visit = (node: AgentNode, parentKeys: string[]) => {
             const aKey = agentKey(node.id);
             spans.push({
-                key: aKey, label: node.agentName, kind: 'agent',
+                key: aKey, label: getAgentNodeDisplayLabel(node.agentName, node.subagentType), kind: 'agent',
                 durationMs: node.stats.durationMs ?? undefined,
                 tokens: node.stats.totalTokens || undefined,
                 isSlow: (node.stats.durationMs ?? 0) > SLOW_MS,
@@ -1368,10 +1379,7 @@ function UnifiedSpanTree({
                     'flex-1 ml-1.5 text-sm text-foreground truncate min-w-0',
                     depth === 0 ? 'font-semibold' : 'font-medium',
                 )}>
-                    {node.agentName}
-                    {node.subagentType && (
-                        <span className="ml-1.5 text-xs text-foreground-muted font-normal">{node.subagentType}</span>
-                    )}
+                    {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}
                     {node.parallelCallCount && node.parallelCallCount > 1 && (
                         <span className="ml-1.5 text-xs px-1 bg-background-tertiary border border-border rounded-full text-foreground-muted">
                             ×{node.parallelCallCount}
@@ -1938,7 +1946,7 @@ function buildLlmPromptSnapshot(
     event: AgentEvent,
     node: AgentNode,
     interactions: RawInteraction[],
-    useLangfuseRequestMessages: boolean,
+    reportedRequestMessagesSource: 'langfuse' | 'actrail' | null,
 ): LlmPromptSnapshot {
     const eventIdx = event.interactionIndex;
     const previousLlmEvents = node.events
@@ -1946,18 +1954,20 @@ function buildLlmPromptSnapshot(
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
     const requestMessages = event.interaction.requestMessages;
-    if (useLangfuseRequestMessages && Array.isArray(requestMessages) && requestMessages.length > 0) {
+    if (reportedRequestMessagesSource && Array.isArray(requestMessages) && requestMessages.length > 0) {
         const previousRequest = Array.isArray(prevEvent?.interaction.requestMessages)
             ? prevEvent.interaction.requestMessages
             : [];
         return {
             inputMessages: promptMessagesFromRequest(requestMessages),
-            repeatedPrefixCount: langfusePromptHistoryCount(
-                requestMessages,
-                previousRequest,
-                typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
-                prevEvent?.interaction.tool_calls || [],
-            ),
+            repeatedPrefixCount: reportedRequestMessagesSource === 'actrail'
+                ? actrailPromptHistoryCount(requestMessages)
+                : langfusePromptHistoryCount(
+                    requestMessages,
+                    previousRequest,
+                    typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
+                    prevEvent?.interaction.tool_calls || [],
+                ),
             activeCompaction: null,
             foldedOriginalRaw: null,
             foldedOriginalCount: 0,
@@ -2430,10 +2440,7 @@ function HierarchicalSpanSnapshot({
                     <KindBadge kind="llm" />
                     <span className="text-sm font-semibold text-foreground">第 {snapshot.llmOrdinal} 次模型调用</span>
                     <span className="text-xs text-foreground-muted">来自 Agent</span>
-                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{node.agentName}</span>
-                    {node.subagentType && (
-                        <span className="text-xs text-foreground-muted">{node.subagentType}</span>
-                    )}
+                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     <span className="ml-auto text-xs text-foreground-muted">event #{event.interactionIndex}</span>
                 </div>
             </div>
@@ -2578,7 +2585,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
         <div className="rounded-md border border-border p-2.5 flex flex-col gap-2">
             <div className="flex items-center gap-2">
                 <KindBadge kind="agent" size="sm" />
-                <span className="flex-1 text-sm font-semibold truncate">{child.agentName}</span>
+                <span className="flex-1 text-sm font-semibold truncate">{getAgentNodeDisplayLabel(child.agentName, child.subagentType)}</span>
                 {child.sessionId && ctx.onSubagentNavigate && (
                     <button
                         type="button"
@@ -2666,7 +2673,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                     {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
                     {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
                     {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
-                    <span style={{ opacity: 0.6 }}>from: {node.agentName}</span>
+                    <span style={{ opacity: 0.6 }}>from: {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     {event.toolStatus && !hasError && (
                         <span className="inline-flex items-center gap-1 text-success font-semibold">
                             <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
@@ -2772,7 +2779,14 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
 
     const snapshot = useMemo(
-        () => buildLlmPromptSnapshot(event, node, interactions, framework === 'langfuse-langgraph'),
+        () => buildLlmPromptSnapshot(
+            event,
+            node,
+            interactions,
+            framework === 'actrail'
+                ? 'actrail'
+                : framework === 'langfuse-langgraph' ? 'langfuse' : null,
+        ),
         [event, node, interactions, framework],
     );
 
@@ -2901,7 +2915,7 @@ function AgentDetail({
             <div style={{ padding: '0.75rem 1rem 0', flexShrink: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem' }}>
                     <span className={cn('size-2 rounded-full shrink-0', STATUS_DOT[status])} />
-                    <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>{node.agentName}</h3>
+                    <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</h3>
                     {node.parallelCallCount && node.parallelCallCount > 1 && (
                         <span style={{ fontSize: '0.625rem', padding: '0.125rem 0.4375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 999, fontWeight: 500 }}>
                             ×{node.parallelCallCount} parallel
@@ -2909,7 +2923,7 @@ function AgentDetail({
                     )}
                     <div style={{ flex: 1 }} />
                     <span style={{ fontSize: '0.6875rem', color: 'var(--foreground-muted)' }}>depth: {node.depth}</span>
-                    {node.subagentType && (
+                    {node.subagentType && node.agentName.toLowerCase() !== node.subagentType.toLowerCase() && (
                         <span style={{ fontSize: '0.5625rem', padding: '0.125rem 0.4375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 4 }}>
                             {node.subagentType}
                         </span>
@@ -3450,7 +3464,7 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                                 >
                                     <div className={cn('flex items-center gap-2', pct > 0 && 'mb-1.5')}>
                                         {childStatus !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[childStatus])} />}
-                                        <span className="flex-1 text-sm font-medium truncate">{child.agentName}</span>
+                                        <span className="flex-1 text-sm font-medium truncate">{getAgentNodeDisplayLabel(child.agentName, child.subagentType)}</span>
                                         <span className={cn('text-xs tabular-nums shrink-0 font-mono', childStatus === 'slow' ? 'text-warning' : 'text-foreground-muted')}>{formatDuration(child.stats.durationMs)}</span>
                                         <span className="text-xs text-foreground-muted tabular-nums shrink-0 font-mono">{exactTokens(child.stats.totalTokens)}</span>
                                         {child.sessionId && overviewCtx.onSubagentNavigate && (

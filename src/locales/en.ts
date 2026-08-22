@@ -248,6 +248,8 @@ export const en = {
     filterFramework: 'Framework',
     filterMainAgent: 'Main agent',
     filterMainAgentAll: 'All main agents',
+    filterAgent: 'Agent',
+    filterAgentAll: 'All agents',
     resetFilters: 'Reset',
     activeFiltersLabel: 'Active',
     pageSize: '{{n}} / page',

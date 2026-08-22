@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `d390dbd0846816c2c13af3d196737de13800064c` (`d390dbd0`) |
-| Branch | `feat/ras-fault-domain-plugins` |
-| Date | 2026-08-17 15:22:34 +0800 |
-| Author | iceory |
-| Subject | `fix(ras): 上传 messageID 并对齐恢复树，避免 RAS 挂到末条回复` |
-| Working tree overlay | Skill 工作台重构已在本地工作树完成代码、入口与文档切换；会话固定 Skill、发布推进工作版本，顶部选择器控制右栏详情、评估、实验和版本优化记录，正式评估/实验不创建会话。用例分析采用 4 路 Trace 执行与标准 4 路批量评估，A/B 采用 2 个配对并发后统一批量评估，触发分析复用 5 路 live runner；三者保留固定工作量、评估器子集重试、单调轮询和完成后原子发布聚合结论。尚无可填写的新 commit，提交后必须把本区块整体刷新到该 commit。 |
+| Commit | `789bfd06df4f4f6950cc042e1aab08196df9d15c` (`789bfd06`) |
+| Branch | `codex/reliability-development` |
+| Date | 2026-08-19 17:26:04 +0800 |
+| Author | gyctl |
+| Subject | `fix: resolve PR 312 conflicts with latest master` |
+| Working tree overlay | 当前分支在该快照之上保留 Skill 工作台重构：会话固定 Skill、发布推进工作版本，顶部选择器控制右栏详情、评估、实验和版本优化记录，正式评估/实验不创建会话。用例分析采用 4 路 Trace 执行与标准 4 路批量评估，A/B 采用 2 个配对并发后统一批量评估，触发分析复用 5 路 live runner；三者保留固定工作量、评估器子集重试、单调轮询和完成后原子发布聚合结论。 |
 
-**如何更新：** `git diff d390dbd0 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 789bfd06 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
