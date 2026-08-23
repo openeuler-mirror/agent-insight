@@ -8,6 +8,7 @@ import { piAgentOtelTraceAdapter } from './adapters/pi-agent';
 import { qoderOtelTraceAdapter } from './adapters/qoder';
 import { codexOtelTraceAdapter } from './adapters/codex';
 import { qwenCodeOtelTraceAdapter } from './adapters/qwencode';
+import { qwenpawOtelTraceAdapter } from './adapters/qwenpaw';
 import type { OtelTraceAdapter } from './adapters/types';
 import type { OtelTraceEvent } from './types';
 
@@ -17,6 +18,7 @@ const frameworkAdapters: readonly OtelTraceAdapter[] = [
   hermesOtelTraceAdapter,
   qwenCodeOtelTraceAdapter,
   openclawOtelTraceAdapter,
+  qwenpawOtelTraceAdapter,
   codexOtelTraceAdapter,
   llamaIndexOtelTraceAdapter,
   qoderOtelTraceAdapter,

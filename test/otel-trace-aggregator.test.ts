@@ -1296,6 +1296,7 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
         "hermes",
         "qwencode",
         "openclaw",
+        "qwenpaw",
         "codex",
         "llamaindex",
         "qoder",

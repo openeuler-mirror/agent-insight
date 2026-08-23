@@ -29,6 +29,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'codex', label: 'Codex' },
     { value: 'qwencode', label: 'Qwen Code' },
     { value: 'deepseek-harness', label: 'DeepSeek Harness' },
+    { value: 'copaw', label: 'CoPaw (QwenPaw)' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -192,7 +193,8 @@ const frameworks = [
     { name: 'Pi Agent', value: 'pi-agent' },
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
-    { name: 'DeepSeek Harness', value: 'deepseek-harness' }
+    { name: 'DeepSeek Harness', value: 'deepseek-harness' },
+    { name: 'CoPaw (QwenPaw)', value: 'copaw' }
 ];
 
 async function select() {
@@ -276,6 +278,7 @@ INSTALL_CODEX=false
 INSTALL_QWENCODE=false
 INSTALL_DEEPSEEK_HARNESS=false
 DEEPSEEK_HARNESS_SETUP_OK=false
+INSTALL_COPAW=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -319,9 +322,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
     INSTALL_DEEPSEEK_HARNESS=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"copaw"* ]]; then
+    INSTALL_COPAW=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_COPAW" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -643,6 +649,18 @@ if [ "$INSTALL_QWENCODE" = "true" ]; then
     echo "⏬ Installing Qwen Code Trace Collector from local npm package..."
     QWENCODE_PACKAGE_ROOT=$(node -p "require('path').dirname(require.resolve('agent-insight/package.json'))")
     node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
+fi
+
+if [ "$INSTALL_COPAW" = "true" ]; then
+    echo "Installing CoPaw (QwenPaw) AgentInsight collector..."
+    if command -v pip &> /dev/null; then
+        pip install agent-insight-copaw
+    else
+        python3 -m pip install agent-insight-copaw
+    fi
+    agent-insight-copaw install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY" || true
+    echo "CoPaw collector installed (spool: ~/.agent-insight/otel_data/copaw)"
+    echo "   Register in your app entry: import agent_insight_copaw; agent_insight_copaw.setup()"
 fi
 
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
@@ -1046,6 +1064,9 @@ fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  ✅ DeepSeek Harness observability: headless + web profiles"
 fi
+if [ "$INSTALL_COPAW" = "true" ]; then
+    echo "  ✅ CoPaw (QwenPaw) Collector: pip package agent-insight-copaw"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -1093,6 +1114,9 @@ if [ "$INSTALL_CODEX" = "true" ]; then
 fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  9. Start a new dsh session"
+fi
+if [ "$INSTALL_COPAW" = "true" ]; then
+    echo "  10. Restart CoPaw (QwenPaw), then run a conversation"
 fi
 echo "------------------------------------------------"
 `;
@@ -1200,7 +1224,8 @@ function generatePowerShellScript(
         '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
-        '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }"',
+        '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
+        '    "    { name: \'CoPaw (QwenPaw)\', value: \'copaw\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1284,6 +1309,7 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
+        '$INSTALL_COPAW = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1327,9 +1353,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "copaw") {',
+        '    $INSTALL_COPAW = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_COPAW) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1646,6 +1675,14 @@ function generatePowerShellScript(
         '    Write-Host "⏬ Installing Qwen Code Trace Collector from local npm package..."',
         '    $qwenPackageRoot = node -p "require(\'path\').dirname(require.resolve(\'agent-insight/package.json\'))"',
         '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
+        '}',
+        '',
+        'if ($INSTALL_COPAW) {',
+        '    Write-Host "Installing CoPaw (QwenPaw) AgentInsight collector..."',
+        '    python -m pip install agent-insight-copaw',
+        '    agent-insight-copaw install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
+        '    Write-Host "CoPaw collector installed (spool: ~/.agent-insight/otel_data/copaw)"',
+        '    Write-Host "   Register in your app entry: import agent_insight_copaw; agent_insight_copaw.setup()"',
         '}',
         '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
@@ -2016,6 +2053,7 @@ function generatePowerShellScript(
         '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
+        'if ($INSTALL_COPAW) { Write-Host "  ✅ CoPaw (QwenPaw) Collector: pip package agent-insight-copaw" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2056,6 +2094,7 @@ function generatePowerShellScript(
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
+        'if ($INSTALL_COPAW) { Write-Host "  10. Restart CoPaw (QwenPaw), then run a conversation" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 
