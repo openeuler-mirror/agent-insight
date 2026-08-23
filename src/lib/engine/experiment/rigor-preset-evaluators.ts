@@ -789,6 +789,7 @@ export function buildRigorEvaluatorOutput(input: {
   actualOutput: string;
   judgment: RigorJudgeResult;
 }): EvaluatorOutput {
+  
   const grounded = groundFindings(input.actualOutput, input.judgment.findings ?? []);
   // 三类审计的裁定一次性落地：同一处只会被落成一条 finding（先到先得，后到者只做升档）
   const audits = applyAuditVerdicts(
