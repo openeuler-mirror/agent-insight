@@ -960,7 +960,7 @@ export function aggregateCodexTraceEvents(
     Boolean(eventInput(event) || eventOutput(event)));
   const internalOnlyRoot = rootEvents.some((event) => {
     const input = eventInput(event);
-    return Boolean(input) && INTERNAL_ROOT_INPUT.test(input);
+    return typeof input === 'string' && INTERNAL_ROOT_INPUT.test(input);
   });
   if (!hasWork && !hasLifecycleExecution && (!hasMeaningfulRootSignal || internalOnlyRoot)) {
     if (!traceThread?.events?.length) return null;
