@@ -274,3 +274,38 @@ test("Bug 55：无生命周期信号时最终答复与 executionStatus 兜底", 
   // executionStatus：无生命周期信号但有 LLM 工作 → completed
   assert.equal(record?.executionStatus, "completed", "llm work without lifecycle infers completed")
 })
+
+test("回填窗口：早于 cutoff 的历史文件跳过、新文件正常消费", async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-rollout-backfill-"))
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const sessions = path.join(root, "sessions", "2026", "08", "20")
+  await fsp.mkdir(sessions, { recursive: true })
+  const oldFile = path.join(sessions, "rollout-2026-08-01T00-00-00-old.jsonl")
+  const newFile = path.join(sessions, "rollout-2026-08-20T12-00-00-new.jsonl")
+  const records = [
+    rolloutLine("session_meta", { id: "thread-bf", originator: "Codex Desktop" }),
+    eventMsg("task_started", { turn_id: "turn-bf" }),
+    eventMsg("user_message", { turn_id: "turn-bf", message: "backfill check" }),
+  ]
+  await fsp.writeFile(oldFile, records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8")
+  await fsp.writeFile(newFile, records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8")
+
+  const collected: any[] = []
+  const reader = createDesktopRolloutReader({
+    enabled: true,
+    sessionsDir: path.join(root, "sessions"),
+    stateDir: path.join(root, "state"),
+    backfillAfterMs: Date.parse("2026-08-15T00:00:00Z"),
+    onEvents: async (items: any[]) => collected.push(...items),
+  })
+  const result = await reader.scan()
+  // 旧文件（08-01 < cutoff）零事件；新文件正常产出 lifecycle
+  const oldThreadEvents = collected.filter((i) => i.sourceThreadId === "thread-bf" && i.eventType === "execution_started")
+  assert.ok(result.events > 0, "new file must be consumed")
+  // 只消费了新文件的 3 条 lifecycle（thread_started/execution_started/user_input_accepted）
+  assert.equal(oldThreadEvents.length, 1, "only the new file emits execution_started")
+  const checkpoint = JSON.parse(await fsp.readFile(reader.checkpointPath, "utf8"))
+  const oldKey = Object.keys(checkpoint.files).find((k: string) => k.includes("old"))
+  assert.ok(oldKey, "old file is marked consumed (skipped backfill)")
+  assert.equal(checkpoint.files[oldKey].skippedBackfill, true)
+})

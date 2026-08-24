@@ -279,7 +279,17 @@ function createDesktopRolloutReader(options = {}) {
   const sessionsDir = options.sessionsDir || defaultSessionsDir(options.homeDir || require("node:os").homedir());
   const checkpointPath = options.checkpointPath || path.join(options.stateDir || path.dirname(sessionsDir), "desktop-rollout-checkpoint.json");
   const onEvents = options.onEvents || (async () => undefined);
+  // 回填窗口：文件名里的 rollout 起始时间早于该时刻的历史文件直接跳过（标记
+  // 已消费到 EOF），避免首次启用 ingress 时一次性回灌全部历史会话。
+  const backfillCutoffMs = Number(options.backfillAfterMs) > 0 ? Number(options.backfillAfterMs) : undefined;
   const state = { version: 1, files: {}, unknownRecords: 0 };
+
+  function rolloutStartMs(filePath) {
+    const match = /rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(path.basename(filePath));
+    if (!match) return undefined;
+    const parsed = Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
 
   async function load() {
     if (!enabled) return;
@@ -290,6 +300,14 @@ function createDesktopRolloutReader(options = {}) {
   async function scanFile(filePath) {
     if (!enabled) return { events: 0, skipped: true };
     const relative = path.relative(sessionsDir, filePath).replaceAll(path.sep, "/");
+    if (backfillCutoffMs !== undefined && !state.files[relative]) {
+      const startedAt = rolloutStartMs(filePath);
+      if (startedAt !== undefined && startedAt < backfillCutoffMs) {
+        const stat = await fsp.stat(filePath).catch(() => undefined);
+        state.files[relative] = { bytes: stat?.size || 0, skippedBackfill: true };
+        return { events: 0, skipped: true, backfilled: false };
+      }
+    }
     const cursor = Number(state.files[relative]?.bytes) || 0;
     const saved = state.files[relative] || {};
     const context = {
