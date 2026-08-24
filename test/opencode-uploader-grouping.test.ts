@@ -525,3 +525,29 @@ test("opencode uploader: authenticates registered clients with their device cred
   assert.equal(legacy.headers.Authorization, undefined)
   assert.equal(legacy.headers["x-agent-insight-client-id"], undefined)
 })
+
+test("opencode uploader: only sends a device credential back to its issuing service base URL", async () => {
+  const uploader = await uploaderPromise
+  const identity = {
+    clientId: "cli_registered-12345678",
+    deviceCredential: "dc_registered-secret",
+    insightBaseUrl: "http://localhost:3000/insight",
+  }
+
+  assert.equal(
+    uploader.clientIdentityForHost(identity, "http://localhost:3000/insight/").deviceCredential,
+    "dc_registered-secret",
+  )
+  assert.equal(
+    uploader.clientIdentityForHost(identity, "http://localhost:3000/another-prefix").deviceCredential,
+    null,
+  )
+  assert.equal(
+    uploader.clientIdentityForHost(identity, "http://119.3.152.42:3000").deviceCredential,
+    null,
+  )
+  assert.equal(
+    uploader.clientIdentityForHost({ ...identity, insightBaseUrl: undefined }, "http://localhost:3000").deviceCredential,
+    null,
+  )
+})

@@ -45,7 +45,7 @@ function assertGeneratedScriptSyntax(script: string, platform: "windows" | "unix
 }
 
 async function setupScript(platform: "windows" | "unix"): Promise<string> {
-  const response = await getSetup(new Request("http://localhost/api/ingest/setup?yes=1&frameworks=qoder&key=test-key", {
+  const response = await getSetup(new Request("http://localhost/api/ingest/setup?yes=1&nokey=1&frameworks=qoder&key=test-key", {
     headers: { "x-platform": platform, host: "localhost:3000" },
   }))
   assert.equal(response.status, 200)
