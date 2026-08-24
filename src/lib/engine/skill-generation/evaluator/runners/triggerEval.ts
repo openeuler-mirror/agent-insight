@@ -141,6 +141,8 @@ export interface RunTriggerEvalLiveArgs {
   triggerThreshold?: number;
   /** 单条 query 超时。 */
   timeoutMs?: number;
+  /** 单条 query 超时后的重试次数。 */
+  maxTimeoutRetries?: number;
   /** 并发跑几条 query。 */
   concurrency?: number;
   /**
@@ -255,6 +257,7 @@ async function evalOne(
     const session = await client.createSession({
       title: args.sessionTitle,
       permission: READ_ONLY_TRIGGER_EVAL_PERMISSIONS,
+      directory: args.workspaceRoot,
     });
     const sid = (session as { id?: unknown })?.id;
     if (typeof sid !== 'string' || !sid) {
@@ -397,15 +400,16 @@ async function evalOne(
 async function evalOneWithRetry(
   client: AgentInsight,
   args: Parameters<typeof evalOne>[1],
+  maxTimeoutRetries = MAX_TIMEOUT_RETRIES,
 ): Promise<SingleRunOutcome> {
   return retryOnTimeout(() => evalOne(client, args), {
-    maxRetries: MAX_TIMEOUT_RETRIES,
+    maxRetries: maxTimeoutRetries,
     isAborted: () => !!args.externalSignal?.aborted,
     onRetry: attempt =>
       logger.log('evalOne timed out, retrying', {
         query: args.query.slice(0, 60),
         attempt,
-        maxRetries: MAX_TIMEOUT_RETRIES,
+        maxRetries: maxTimeoutRetries,
       }),
   });
 }
@@ -741,6 +745,7 @@ export async function runTriggerEvalLive(
     runsPerQuery = 1,
     triggerThreshold = 0.5,
     timeoutMs = 30_000,
+    maxTimeoutRetries = MAX_TIMEOUT_RETRIES,
     concurrency = 5,
     signal,
   } = args;
@@ -766,6 +771,7 @@ export async function runTriggerEvalLive(
     itemCount: triggerSet.items.length,
     runsPerQuery,
     concurrency,
+    maxTimeoutRetries,
     workspaceRoot,
     modelConfigId: modelConfigId ?? null,
   });
@@ -786,6 +792,7 @@ export async function runTriggerEvalLive(
   //    per-task 新进程,跑完自动杀,保证每次都拿最新 skill
   const client = new AgentInsight({
     baseURL,
+    directory: workspaceRoot,
     timeout: Math.max(timeoutMs + 5000, 60_000),
     maxRetries: 1,
     logLevel: (process.env.OPENCODE_LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error' | 'off' | undefined) || 'warn',
@@ -826,7 +833,7 @@ export async function runTriggerEvalLive(
       user,
       agentId: triggerAgentId,
       externalSignal: signal,
-    });
+    }, maxTimeoutRetries);
     outcomes[task.itemIdx].push(outcome);
     if (outcome.competingSkill) {
       const m = competingMap.get(task.itemIdx) ?? new Map<string, number>();

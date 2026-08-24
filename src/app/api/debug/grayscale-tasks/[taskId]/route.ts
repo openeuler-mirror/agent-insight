@@ -64,6 +64,7 @@ interface GrayscaleConfig {
     interactionPolicy?: 'auto-allow' | 'auto-deny';
     timeoutMs?: number;
     idleTimeoutMs?: number;
+    retryLimit?: number;
     autoEval?: boolean;
     recordTriggerDetails?: boolean;
     triggerRouting?: boolean;
@@ -2276,7 +2277,8 @@ async function runWorkbenchTriggerTask(args: {
         modelConfigId: config.modelConfigId || undefined,
         runsPerQuery: 1,
         triggerThreshold: 0.5,
-        timeoutMs: Math.max(5_000, Number(config.timeoutMs) || 60_000),
+        timeoutMs: Math.max(5_000, Math.min(30_000, Number(config.timeoutMs) || 30_000)),
+        maxTimeoutRetries: Math.max(0, Math.min(1, Number(config.retryLimit ?? 1))),
         concurrency: Math.max(1, Number(config.triggerConcurrency || config.agentMaxConcurrency) || 5),
         signal: args.signal,
     });

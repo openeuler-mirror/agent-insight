@@ -30,7 +30,8 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /linkedDatasetIds:\s*\[dataset\.id\]/);
   assert.match(experimentService, /modelConfigId:\s*activeModel\?\.id/);
   assert.match(experimentService, /interactionPolicy:\s*'auto-deny'/);
-  assert.match(experimentService, /timeoutMs:\s*3 \* 60 \* 1000/);
+  assert.match(experimentService, /timeoutMs:\s*isTriggerExperiment \? 30 \* 1000 : 3 \* 60 \* 1000/);
+  assert.match(experimentService, /retryLimit:\s*isTriggerExperiment \? 1 : 2/);
   assert.match(experimentService, /getSkillExperimentConcurrencyPolicy\(input\.preset\)/);
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);
   assert.match(experimentService, /triggerConcurrency:\s*runtime\.triggerConcurrency/);
@@ -46,6 +47,8 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(grayscaleRoute, /abPairConcurrency/);
   assert.match(grayscaleRoute, /Promise\.all\(pair\.map\(executeItem\)\)/);
   assert.match(grayscaleRoute, /config\.triggerConcurrency \|\| config\.agentMaxConcurrency/);
+  assert.match(grayscaleRoute, /timeoutMs:\s*Math\.max\(5_000, Math\.min\(30_000, Number\(config\.timeoutMs\) \|\| 30_000\)\)/);
+  assert.match(grayscaleRoute, /maxTimeoutRetries:\s*Math\.max\(0, Math\.min\(1, Number\(config\.retryLimit \?\? 1\)\)\)/);
   assert.match(grayscaleRoute, /evaluators:\s*\[SKILL_TRIGGER_ANALYZER_EVALUATOR_ID\]/);
   assert.match(grayscaleRoute, /const exactIds = new Set\(\[SKILL_TRIGGER_ANALYZER_EVALUATOR_ID\]\)/);
   assert.match(grayscaleRoute, /pointsJson:\s*JSON\.stringify\(exactEvaluation\.points \|\| \[\]\)/);
@@ -58,6 +61,44 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentBaseline, /states\[caseId\]\?\.\[baselineSide\]\?\.runs/);
   assert.match(retestService, /resolveRetestableExperimentBaseline/);
   assert.match(retestService, /round < repeatRounds/);
+});
+
+test('触发分析在创建 Session 时绑定独立 Skill 工作目录，并让后续请求沿用该目录', () => {
+  const triggerRunner = readFileSync(
+    'src/lib/engine/skill-generation/evaluator/runners/triggerEval.ts',
+    'utf8',
+  );
+  const opencodeClient = readFileSync(
+    'src/lib/engine/skill-generation/opencode-agent-cli/opencode-client.ts',
+    'utf8',
+  );
+  const generalAgent = readFileSync(
+    'src/lib/engine/general-agent/runner.ts',
+    'utf8',
+  );
+  assert.match(
+    triggerRunner,
+    /new AgentInsight\(\{[\s\S]*?directory:\s*workspaceRoot/,
+  );
+  assert.match(
+    triggerRunner,
+    /createSession\(\{[\s\S]*?directory:\s*args\.workspaceRoot/,
+  );
+  assert.match(opencodeClient, /sessionDirectories\s*=\s*new Map<string, string>\(\)/);
+  assert.match(opencodeClient, /sessionDirectories\.set\(sessionId, sessionDirectory\)/);
+  assert.match(
+    opencodeClient,
+    /const subscribeDirectory\s*=[\s\S]*?this\.directoryForSession\(sessionId\)/,
+  );
+  assert.match(
+    opencodeClient,
+    /tryGetChildSessionIDs\([\s\S]*?this\.directoryForSession\(sessionId\)/,
+  );
+  assert.match(
+    generalAgent,
+    /createSession\(\{[\s\S]*?directory:\s*workspaceDir/,
+  );
+  assert.match(generalAgent, /const payload: SendPromptPayload = \{[\s\S]*?directory:\s*workspaceDir/);
 });
 
 test('工作台使用独立 BFF，不复用旧 Skill 写接口', () => {

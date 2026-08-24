@@ -155,6 +155,7 @@ export async function createWorkbenchExperiment(input: {
     ? await getActiveConfig(input.user).then((config) => config?.id === input.modelConfigId ? config : null)
     : await getActiveConfig(input.user);
   const concurrencyPolicy = getSkillExperimentConcurrencyPolicy(input.preset);
+  const isTriggerExperiment = input.preset === 'trigger';
   const runtime = {
     agentName: 'grayscale-skill-agent',
     modelConfigId: activeModel?.id || null,
@@ -166,14 +167,14 @@ export async function createWorkbenchExperiment(input: {
     } : null,
     modelOptions: { temperature: 0.7, maxTokens: 2048 },
     interactionPolicy: 'auto-deny' as const,
-    timeoutMs: 3 * 60 * 1000,
+    timeoutMs: isTriggerExperiment ? 30 * 1000 : 3 * 60 * 1000,
     idleTimeoutMs: 45 * 1000,
     executionConcurrency: concurrencyPolicy.executionConcurrency,
     abPairConcurrency: concurrencyPolicy.abPairConcurrency,
     evaluationConcurrency: concurrencyPolicy.evaluationConcurrency,
     triggerConcurrency: concurrencyPolicy.triggerConcurrency,
     agentMaxConcurrency: concurrencyPolicy.executionConcurrency,
-    retryLimit: 2,
+    retryLimit: isTriggerExperiment ? 1 : 2,
   };
   const created = await prismaRaw.$transaction(async (tx) => {
     const experiment = await tx.experiment.create({

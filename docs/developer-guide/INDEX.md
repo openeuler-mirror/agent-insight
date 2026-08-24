@@ -14,7 +14,7 @@
 | Date | 2026-08-19 17:26:04 +0800 |
 | Author | gyctl |
 | Subject | `fix: resolve PR 312 conflicts with latest master` |
-| Working tree overlay | 当前分支在该快照之上保留 Skill 工作台重构：会话固定 Skill、发布推进工作版本，顶部选择器控制右栏详情、评估、实验和版本优化记录，正式评估/实验不创建会话。用例分析采用 4 路 Trace 执行与标准 4 路批量评估，A/B 采用 2 个配对并发后统一批量评估，触发分析复用 5 路 live runner；三者保留固定工作量、评估器子集重试、单调轮询和完成后原子发布聚合结论。 |
+| Working tree overlay | 当前分支在该快照之上保留 Skill 工作台重构：会话固定 Skill、发布推进工作版本，顶部选择器控制右栏详情、评估、实验和版本优化记录，正式评估/实验不创建会话。用例分析采用 4 路 Trace 执行与标准 4 路批量评估，A/B 采用 2 个配对并发后统一批量评估，触发分析复用 5 路 live runner，并冻结单条 30 秒上限与最多 1 次超时重试；三者保留固定工作量、评估器子集重试、单调轮询和完成后原子发布聚合结论。OpenCode Session 在创建时绑定任务工作目录，后续 prompt、事件和交互请求沿用同一目录，确保临时安装的目标 Skill 可发现。 |
 
 **如何更新：** `git diff 789bfd06 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
