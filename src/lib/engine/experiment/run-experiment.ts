@@ -65,6 +65,7 @@ import {
   isRasReliabilityPresetId,
   runRasReliabilityPreset,
 } from './ras-reliability-evaluator';
+import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -283,6 +284,9 @@ async function evaluateOnce(
   }
   if (isRasReliabilityPresetId(evaluatorId)) {
     return runRasReliabilityPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isTextPresetId(evaluatorId)) {
+    return runTextPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
