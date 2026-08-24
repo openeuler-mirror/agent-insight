@@ -970,7 +970,10 @@ class CodexTraceCore {
           (promptLength === undefined ? undefined : `[REDACTED prompt length=${promptLength}]`);
         // The literal placeholder accompanies native lifecycle telemetry when
         // Hook already owns the real prompt. It is not a second user turn.
-        if (prompt?.trim() !== "[REDACTED]") {
+        // Bug 63：带长度的占位符（[REDACTED prompt length=N]，含 N=0 的内部
+        // 建议生成会话）同样不是用户输入——真实用户 turn 的正文走 hook/rollout
+        // 路径，OTLP 无正文 prompt 一律不建根任务。
+        if (prompt?.trim() !== "[REDACTED]" && !/^\[REDACTED prompt length=\d+\]$/.test(prompt?.trim() || "")) {
           const promptTurn = this.promptTurn(session, turnId, prompt, record.timestampMs, "otel");
           session.input ||= prompt;
           this.bindImplicitPrompt(session, promptTurn, prompt, record.timestampMs);

@@ -342,3 +342,50 @@ test("Bug 59/60：textless LLM 带 usage 不丢弃、skill 输出从 runner 工�
     (i.tool_calls || []).some((c: any) => c?.function?.name === "skill"))
   assert.ok(skillInteraction, "skill runner tool produces a skill-named call")
 })
+
+test("Bug 63：[REDACTED prompt length=0] 占位符不构成用户输入", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_020_000 })
+  // 内部建议生成会话形态：OTLP user_prompt 无正文、prompt_length=0
+  await core.processOtel(otlpLogs("codex.user_prompt", {
+    "conversation.id": "thread-b63",
+    "turn.id": "turn-b63",
+    prompt_length: 0,
+  }, 1_700_000_019_000))
+  await core.processOtel(otlpLogs("codex.sse_event", {
+    "conversation.id": "thread-b63",
+    "turn.id": "turn-b63",
+    "event.kind": "response.completed",
+    "response.id": "resp-b63",
+    input_token_count: 500,
+    output_token_count: 100,
+  }, 1_700_000_019_500))
+  // 不产生带占位符输入的 root 事件（该 turn 无用户输入）
+  const rootWithPlaceholder = writer.events.find((e) =>
+    e.kind === "agent" && /REDACTED prompt length/.test(String(e.input || "")))
+  assert.equal(rootWithPlaceholder, undefined,
+    "redacted length placeholder must not become a root user input")
+})
+
+test("Bug 64：混合事件源时 sourceKind 优先取非 unknown 值", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_030_000 })
+  await core.processOtel(otlpLogs("codex.user_prompt", {
+    "conversation.id": "thread-b64",
+    "turn.id": "turn-b64",
+    prompt: "混合来源分类验证",
+  }, 1_700_000_029_000))
+  // 手工构造混合事件：同 session 一条 unknown、一条 desktop
+  const events: any[] = [
+    { receivedAt: new Date(100).toISOString(), framework: "codex", sessionId: "thread-b64:turn:turn-b64",
+      spanId: "s-old", kind: "agent", name: "agent.codex", startTimeMs: 1_700_000_029_000, endTimeMs: 1_700_000_029_100,
+      input: "混合来源分类验证", attributes: { "codex.source.kind": "unknown" } },
+    { receivedAt: new Date(100).toISOString(), framework: "codex", sessionId: "thread-b64:turn:turn-b64",
+      spanId: "s-new", parentSpanId: "s-old", kind: "llm", name: "llm.gpt", startTimeMs: 1_700_000_029_200, endTimeMs: 1_700_000_029_300,
+      usage: { input: 10, output: 5, total: 15 }, attributes: { "codex.source.kind": "desktop" } },
+  ]
+  const record = aggregateCodexTraceEvents("thread-b64:turn:turn-b64", events)
+  assert.ok(record, "record must exist")
+  assert.equal(record?.sourceKind, "desktop",
+    "mixed sessions must prefer the non-unknown sourceKind")
+})

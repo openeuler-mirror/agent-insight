@@ -31,7 +31,12 @@ function eventInput(event: OtelTraceEvent): string | undefined {
   const value = content(attrs(event)['input.value'] ?? (event as AnyObj).input);
   // Codex emits this placeholder for lifecycle events when a prompt is not
   // exported. It is not a user task boundary and must not create a root.
-  return value?.trim() === '[REDACTED]' ? undefined : value;
+  // Bug 63：带长度的占位符（[REDACTED prompt length=N]，含内部建议生成会话
+  // 的 length=0）同样不构成用户输入。
+  if (value?.trim() === '[REDACTED]' || /^\[REDACTED prompt length=\d+\]$/.test(value?.trim() || '')) {
+    return undefined;
+  }
+  return value;
 }
 
 function inputHistory(event: OtelTraceEvent): AnyObj[] {
@@ -579,7 +584,12 @@ function buildTraceThread(events: OtelTraceEvent[]): TraceThreadRecord | undefin
     .map((event) => content(attrs(event)['codex.source.thread_id'] || attrs(event)['codex.conversation.id']))
     .find(Boolean);
   if (!sourceThreadId) return undefined;
-  const sourceKind = events.map((event) => content(attrs(event)['codex.source.kind'])).find(Boolean);
+  // Bug 64：同一会话混合两路事件（旧 OTLP 事件带 unknown、rollout 事件带
+  // desktop/app_server）时，优先取第一个非 unknown 的值，否则列表永远显示
+  // 陈旧的 unknown。
+  const sourceKind = events.map((event) => content(attrs(event)['codex.source.kind']))
+    .find((value) => value && value !== 'unknown') ||
+    events.map((event) => content(attrs(event)['codex.source.kind'])).find(Boolean);
   const records = new Map<string, TraceThreadEventRecord>();
 
   for (const event of events) {
@@ -895,6 +905,8 @@ export function aggregateCodexTraceEvents(
   const first = ordered[0];
   const traceThread = buildTraceThread(ordered);
   const sourceKind = traceThread?.sourceKind || ordered
+    .map((event) => content(attrs(event)['codex.source.kind']))
+    .find((value) => value && value !== 'unknown') || ordered
     .map((event) => content(attrs(event)['codex.source.kind']))
     .find(Boolean);
   const sourceThreadId = traceThread?.sourceThreadId;
