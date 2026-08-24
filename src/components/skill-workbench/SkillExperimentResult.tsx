@@ -468,7 +468,7 @@ export function SkillExperimentResult({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background p-6">
-      <div className="mx-auto max-w-6xl space-y-4">
+      <div className="w-full space-y-4">
         <div className="flex items-start gap-3">
           <button type="button" onClick={onBack} className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs text-foreground-secondary">‹ 返回</button>
           <div>

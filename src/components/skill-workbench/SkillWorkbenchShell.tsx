@@ -28,6 +28,13 @@ import { StaticEvaluationPanel, type StaticEvaluationOverview } from './StaticEv
 import { GenerationConversation } from './GenerationConversation';
 import { OptimizationConversation } from './OptimizationConversation';
 import { ExperimentPanel } from './ExperimentPanel';
+import {
+  clampCopilotWidth,
+  COPILOT_DEFAULT_WIDTH,
+  COPILOT_MIN_WIDTH,
+  WORKBENCH_DIVIDER_WIDTH,
+  WORKSPACE_MIN_WIDTH,
+} from './workbench-layout';
 
 interface SessionListItem {
   id: string;
@@ -130,22 +137,27 @@ export function SkillWorkbenchShell() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const selectedAssetRef = useRef<SelectedSkillAsset | null>(null);
   const [error, setError] = useState('');
-  const [copilotWidth, setCopilotWidth] = useState(410);
+  const [copilotWidth, setCopilotWidth] = useState(COPILOT_DEFAULT_WIDTH);
+  const [workbenchWidth, setWorkbenchWidth] = useState(
+    COPILOT_DEFAULT_WIDTH + WORKSPACE_MIN_WIDTH + WORKBENCH_DIVIDER_WIDTH,
+  );
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
   const reportError = useCallback((message: string) => setError(message), []);
 
   useEffect(() => {
     const stored = Number(window.localStorage.getItem('skill-workbench-copilot-width'));
-    if (Number.isFinite(stored) && stored >= 340) setCopilotWidth(stored);
+    if (Number.isFinite(stored) && stored >= COPILOT_MIN_WIDTH) {
+      const availableWidth = workbenchRef.current?.clientWidth || window.innerWidth;
+      setCopilotWidth(clampCopilotWidth(stored, availableWidth));
+    }
   }, []);
 
   const resizeCopilot = useCallback((clientX: number) => {
     const start = resizeStartRef.current;
     if (!start) return;
     const availableWidth = workbenchRef.current?.clientWidth || window.innerWidth;
-    const max = Math.min(720, Math.max(420, availableWidth - 520));
-    setCopilotWidth(Math.min(max, Math.max(340, start.width + clientX - start.x)));
+    setCopilotWidth(clampCopilotWidth(start.width + clientX - start.x, availableWidth));
   }, []);
 
   const finishCopilotResize = useCallback(() => {
@@ -168,6 +180,19 @@ export function SkillWorkbenchShell() {
       window.removeEventListener('pointerup', finish);
     };
   }, [finishCopilotResize, resizeCopilot]);
+
+  useEffect(() => {
+    const workbench = workbenchRef.current;
+    if (!workbench || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      setWorkbenchWidth(entry.contentRect.width);
+      setCopilotWidth((current) => clampCopilotWidth(current, entry.contentRect.width));
+    });
+    observer.observe(workbench);
+    return () => observer.disconnect();
+  }, []);
 
   const loadSession = useCallback(async (id: string, username: string) => {
     const response = await apiFetch(
@@ -834,7 +859,7 @@ export function SkillWorkbenchShell() {
   return (
     <div ref={workbenchRef} className="flex h-full min-h-0 overflow-hidden bg-background">
       <aside
-        className="flex min-w-[340px] shrink-0 flex-col bg-card"
+        className="flex min-w-[320px] shrink-0 flex-col bg-card"
         style={{ width: copilotWidth, flexBasis: copilotWidth }}
       >
         <div className="border-b border-border px-4 py-3">
@@ -1001,11 +1026,15 @@ export function SkillWorkbenchShell() {
         role="separator"
         aria-label="调整 Skill Copilot 宽度"
         aria-orientation="vertical"
-        aria-valuemin={340}
-        aria-valuemax={720}
+        aria-valuemin={COPILOT_MIN_WIDTH}
+        aria-valuemax={Math.max(
+          COPILOT_MIN_WIDTH,
+          workbenchWidth - WORKSPACE_MIN_WIDTH - WORKBENCH_DIVIDER_WIDTH,
+        )}
         aria-valuenow={Math.round(copilotWidth)}
         tabIndex={0}
-        className="group relative z-10 w-1.5 shrink-0 cursor-col-resize border-x border-border bg-background-secondary outline-none hover:bg-primary-subtle focus:bg-primary-subtle"
+        title="左右拖动调整 Skill Copilot 与工作区宽度"
+        className="group relative z-10 w-2 shrink-0 touch-none cursor-col-resize bg-background outline-none"
         onPointerDown={(event) => {
           resizeStartRef.current = { x: event.clientX, width: copilotWidth };
           document.body.style.cursor = 'col-resize';
@@ -1018,14 +1047,16 @@ export function SkillWorkbenchShell() {
           const delta = event.key === 'ArrowLeft' ? -24 : 24;
           setCopilotWidth((current) => {
             const availableWidth = workbenchRef.current?.clientWidth || window.innerWidth;
-            const max = Math.min(720, Math.max(420, availableWidth - 520));
-            const next = Math.min(max, Math.max(340, current + delta));
+            const next = clampCopilotWidth(current + delta, availableWidth);
             window.localStorage.setItem('skill-workbench-copilot-width', String(Math.round(next)));
             return next;
           });
         }}
       >
-        <GripVertical className="absolute left-1/2 top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 text-foreground-muted opacity-0 group-hover:opacity-100 group-focus:opacity-100" />
+        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors group-hover:bg-primary group-focus:bg-primary" />
+        <span className="absolute left-1/2 top-1/2 flex h-9 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-foreground-muted shadow-sm transition-colors group-hover:border-primary group-hover:text-primary group-focus:border-primary group-focus:text-primary">
+          <GripVertical className="size-3" />
+        </span>
       </div>
 
       <section className="flex min-w-0 flex-1 flex-col">

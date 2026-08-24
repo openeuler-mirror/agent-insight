@@ -88,7 +88,7 @@ export function OptimizationRecordsPanel({
   const executionFailed = selected.status === 'optimization_failed' && !selected.staticEvaluationId;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background p-6">
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <div className="mb-4 flex items-center gap-2">
           <GitCompareArrows className="size-4 text-primary" />
           <h2 className="text-sm font-semibold text-foreground">优化记录</h2>

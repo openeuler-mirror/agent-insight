@@ -75,7 +75,7 @@ export function StaticEvaluationPanel({
   const gateRunning = running || gate?.state === 'running';
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background p-6">
-      <div className="mx-auto max-w-4xl space-y-4">
+      <div className="w-full space-y-4">
         <section className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4">
           <span className="flex size-9 items-center justify-center rounded-lg bg-primary-subtle text-primary"><ShieldCheck className="size-4.5" /></span>
           <div>

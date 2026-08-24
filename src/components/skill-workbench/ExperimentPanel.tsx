@@ -106,7 +106,7 @@ export function ExperimentPanel({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-background p-6">
-      <div className="mx-auto max-w-6xl space-y-4">
+      <div className="w-full space-y-4">
         <div className="flex items-start gap-3">
           <div>
             <h2 className="text-base font-semibold text-foreground">Skill 实验</h2>
