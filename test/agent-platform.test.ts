@@ -30,13 +30,17 @@ test('Agent management preserves existing platforms and labels unregistered plat
   assert.equal(normalizeAgentPlatform(null), 'unknown');
 });
 
-test('Agent management exposes Codex platform filters', () => {
+test('Agent management exposes Codex platform filters via the shared platform source', () => {
   const page = fs.readFileSync(
     path.join(process.cwd(), 'src', 'app', '(main)', 'agents', 'page.tsx'),
     'utf8',
   );
 
-  assert.match(page, /type PlatformFilter = 'all' \| 'opencode' \| 'openclaw' \| 'hermes' \| 'codex';/);
-  assert.match(page, /value === 'openclaw' \|\| value === 'hermes' \|\| value === 'codex'/);
-  assert.match(page, /\{ value: 'codex', label: 'codex' \}/);
+  // 页面收敛到共享真源：PlatformFilter 从 AgentPlatform 派生，筛选选项由
+  // AGENT_PLATFORMS.map 生成，归一化用共享 normalizeAgentPlatform（unknown
+  // 保持 unknown，不再冒充 opencode）。
+  assert.match(page, /type PlatformFilter = 'all' \| AgentPlatform;/);
+  assert.match(page, /platform: normalizeAgentPlatform\(a\.platform\),/);
+  assert.match(page, /\.{3}AGENT_PLATFORMS\.map\(\(value\) => \(\{ value, label: value \}\)\)/);
+  assert.doesNotMatch(page, /function normalizePlatform/);
 });

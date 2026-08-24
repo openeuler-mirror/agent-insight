@@ -45,6 +45,7 @@ function loadCollectorConfig(configPath = process.env.AGENT_INSIGHT_CODEX_CONFIG
     desktopRolloutIngress: parsed.desktopRolloutIngress === true,
     desktopRolloutScanIntervalMs: Number(parsed.desktopRolloutScanIntervalMs) || 10_000,
     desktopSessionsDir: parsed.desktopSessionsDir,
+    desktopRolloutBackfillAfterMs: Number(parsed.desktopRolloutBackfillAfterMs) || 0,
     configPath: resolved,
   };
 }
@@ -196,6 +197,7 @@ async function createRelay(options = {}) {
     homeDir: config.homeDir,
     sessionsDir: options.desktopSessionsDir || config.desktopSessionsDir,
     stateDir,
+    backfillAfterMs: options.desktopRolloutBackfillAfterMs ?? config.desktopRolloutBackfillAfterMs,
     onEvents: async (events) => {
       for (const event of events) await core.processLifecycleEvent(event);
       await writer.flush();

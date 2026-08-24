@@ -325,6 +325,7 @@ class CodexTraceCore {
         model: metadata.model,
         originator: metadata.originator,
         terminalType: metadata.terminalType,
+        serviceName: metadata.serviceName,
         sourceKind: classifyCodexSource(metadata).sourceKind,
         input: undefined,
         output: undefined,
@@ -346,10 +347,12 @@ class CodexTraceCore {
     session.model = metadata.model || session.model;
     session.originator = metadata.originator || session.originator;
     session.terminalType = metadata.terminalType || session.terminalType;
+    session.serviceName = metadata.serviceName || session.serviceName;
     const classified = classifyCodexSource({
       ...metadata,
       originator: metadata.originator || session.originator,
       terminalType: metadata.terminalType || session.terminalType,
+      serviceName: metadata.serviceName || session.serviceName,
     });
     if (classified.sourceKind !== "unknown" || !session.sourceKind) {
       session.sourceKind = classified.sourceKind;
@@ -947,6 +950,7 @@ class CodexTraceCore {
         model: asString(firstDefined(attrs, ["model", "gen_ai.request.model"])),
         originator: asString(firstDefined(attrs, ["originator", "codex.originator"])),
         terminalType: asString(firstDefined(attrs, ["terminal.type", "terminal_type"])),
+        serviceName: asString(firstDefined(attrs, ["service.name", "service_name"])),
       });
       const turnId = asString(firstDefined(attrs, ["turn.id", "turn_id", "codex.turn.id"]));
       let turn = this.resolveOtelTurn(session, turnId, record.timestampMs);
@@ -1214,7 +1218,88 @@ class CodexTraceCore {
     return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
   }
 
+  /** rollout 正文/工具结果写入 OTLP 同源 session（Bug 56）。
+   *
+   * rollout_content 事件来自 desktop rollout reader 的正文提取（llm_text /
+   * tool_output / agent_message）。sessionId 必须与 OTLP 路径一致
+   * （`{threadId}:turn:{turnId}`，由 executionId() 派生），否则 spool 按
+   * sessionId 分目录后两路事件无法聚合：
+   * - llm_text / agent_message：以 `stableSpanId(session,turn,'llm','msg-N')`
+   *   独立 llm 事件写入（不与 OTLP usage llm span 抢 spanId；usage span 保持
+   *   元数据快照，正文 span 提供内容，adapter 聚合时都成为 assistant 交互）。
+   * - tool_output：以 `stableSpanId(sessionId,'tool',callId)` 与 OTLP
+   *   tool_result 事件同 spanId 追加完成快照（同 Bug 52 skill 快照模式），
+   *   服务端 keepLatestCodexSpanSnapshots 按 spanId 保留 endTime 最新一份，
+   *   两路合一后 UI 工具节点显示 output。
+   * - 事件去重：eventId 含内容摘要与时间戳，relay 重启重放 checkpoint 未推进
+   *   的批次时由 stableEventId 幂等。 */
+  async processRolloutContent(event) {
+    const threadId = asString(event.sourceThreadId);
+    const turnId = asString(event.sourceExecutionId);
+    if (!threadId) return { attributed: false };
+    const timestampMs = asNumber(event.timestampMs) || this.now();
+    const session = this.ensureSession(threadId, {
+      timestampMs,
+      originator: "Codex Desktop",
+    });
+    // rollout 的 turn id 与 OTLP 同源（实测逐位一致）；有直接 id 即直接归属，
+    // 不走 resolveOtelTurn 的 pending 降级。命中的 pending 伪任务同时被认领。
+    const turn = this.turnFor(session, turnId, true, { timestampMs });
+    if (!turn) return { attributed: false };
+    if (turn.unresolvedImplicit && !turn.parentScope) turn.unresolvedImplicit = false;
+    turn.updatedAt = timestampMs;
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    const contentKind = asString(event.contentKind) || "llm_text";
+
+    if (contentKind === "tool_output") {
+      const callId = asString(payload.callId);
+      if (!callId) return { attributed: false };
+      let tool = session.tools.get(callId);
+      if (!tool) {
+        tool = {
+          callId,
+          name: asString(payload.toolName) || "unknown",
+          spanId: stableSpanId(session.sessionId, "tool", callId),
+          parentSpanId: this.toolParent(session, turn),
+          startedAt: timestampMs,
+          source: "rollout",
+        };
+        session.tools.set(callId, tool);
+      }
+      if (payload.toolName) tool.name = asString(payload.toolName) || tool.name;
+      tool.output = asString(payload.output) ?? tool.output;
+      tool.success = tool.success ?? true;
+      tool.source = tool.source?.includes("rollout") ? tool.source : `${tool.source || "rollout"}+rollout`;
+      await this.emitTool(session, turn, tool, timestampMs);
+      return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
+    }
+
+    // llm_text / agent_message → 独立 llm 正文事件
+    const textValue = asString(payload.text);
+    if (!textValue) return { attributed: false };
+    turn.llmSequence += 1;
+    const messageId = asString(payload.itemId) || `msg-${turn.llmSequence}`;
+    await this.append(session, turn, {
+      eventId: stableEventId("codex", session.sessionId, turn.turnId, "llm-content", messageId),
+      spanId: stableSpanId(session.sessionId, turn.turnId, "llm", messageId),
+      parentSpanId: this.toolParent(session, turn),
+      kind: "llm",
+      name: `llm.${session.model || "codex"}`,
+      startTimeMs: timestampMs,
+      endTimeMs: timestampMs,
+      model: session.model,
+      output: textValue,
+      attributes: {
+        "codex.turn.id": turn.turnId,
+        "codex.source.kind": session.sourceKind || "desktop",
+        "codex.content.source": "rollout",
+      },
+    });
+    return { attributed: true, sessionId: session.sessionId, turnId: turn.turnId };
+  }
+
   async processLifecycleEvent(event) {
+    if (event?.eventType === "rollout_content") return this.processRolloutContent(event);
     const result = this.lifecycleReducer.apply(event);
     if (result.duplicate || result.pending) return result;
     const threadId = event.sourceThreadId;
