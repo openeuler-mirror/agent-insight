@@ -14,7 +14,9 @@ export interface JudgeLlmRequest {
   system: string;
   user: string;
   timeoutMs?: number;
-  /** session 标题（opencode 回退路径可观测性），缺省自动生成 */
+  /** 可选模型采样参数；不传时保持现有评估器行为。 */
+  modelOptions?: Record<string, unknown>;
+  /** opencode session 标题（可观测性用），缺省自动生成 */
   sessionTitle?: string;
 }
 
@@ -141,7 +143,8 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
         title: req.sessionTitle ?? `experiment-judge-${Date.now()}`,
         directory: '/tmp',
       });
-      const sessionId = String((sessionResp as any)?.id || (sessionResp as any)?.ID || '');
+      const session = sessionResp as { id?: unknown; ID?: unknown } | null | undefined;
+      const sessionId = String(session?.id || session?.ID || '');
       if (!sessionId) throw new Error('Failed to create opencode session for experiment judge');
 
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -159,6 +162,7 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
                 baseURL: config.baseUrl,
                 headers: config.headers,
               },
+              ...(req.modelOptions ? { modelOptions: req.modelOptions } : {}),
               system: req.system,
               permission: buildEvaluatorPermissions(),
             },
