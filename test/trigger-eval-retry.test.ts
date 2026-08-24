@@ -37,11 +37,11 @@ test("classifyEndReason: 跑到自然 idle 没命中 → completed（真实'没�
 })
 
 // =========================================================================
-// resolveMaxTimeoutRetries —— 默认 2，env 可覆盖，clamp 到 [0,5]
+// resolveMaxTimeoutRetries —— 默认 1，env 可覆盖，clamp 到 [0,5]
 // =========================================================================
 
-test("resolveMaxTimeoutRetries: 未设置 → 默认 2", () => {
-  assert.equal(resolveMaxTimeoutRetries(undefined), 2)
+test("resolveMaxTimeoutRetries: 未设置 → 默认 1", () => {
+  assert.equal(resolveMaxTimeoutRetries(undefined), 1)
 })
 
 test("resolveMaxTimeoutRetries: 显式 0 → 0（关闭重试）", () => {
@@ -56,8 +56,8 @@ test("resolveMaxTimeoutRetries: 负数 clamp 到 0", () => {
   assert.equal(resolveMaxTimeoutRetries("-3"), 0)
 })
 
-test("resolveMaxTimeoutRetries: 非数字 → 回退默认 2", () => {
-  assert.equal(resolveMaxTimeoutRetries("abc"), 2)
+test("resolveMaxTimeoutRetries: 非数字 → 回退默认 1", () => {
+  assert.equal(resolveMaxTimeoutRetries("abc"), 1)
 })
 
 // =========================================================================

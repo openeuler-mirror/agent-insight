@@ -72,6 +72,11 @@ import {
   isRasReliabilityPresetId,
   runRasReliabilityPreset,
 } from './ras-reliability-evaluator';
+import {
+  evaluateSkillTriggerAnalysis,
+  isSkillTriggerAnalyzerId,
+} from '@/lib/skill-workbench/trigger-evaluator';
+import { syncExperimentSkillIssues } from './sync-skill-issues';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -102,6 +107,11 @@ interface CaseRuntime {
   /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文；
    *  安全与创意评估器也共用此类型（见 §4.3 实现签名）。 */
   faithfulCtx: FaithfulPresetContext;
+  trigger?: {
+    shouldTrigger: boolean;
+    skillTriggered: boolean;
+    reason?: string;
+  };
 }
 
 function parseFailureSummaries(failures: string | null | undefined): string[] {
@@ -160,7 +170,8 @@ async function loadCaseRuntime(caseRow: {
   referenceOutput: string | null;
   evaluatorContextJson: string | null;
   faultInjectionType?: string | null;
-}, user: string): Promise<CaseRuntime> {
+  caseValuesJson?: string | null;
+}, user: string, targetSkillName?: string | null): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
   const execution = caseRow.executionId
@@ -236,7 +247,34 @@ async function loadCaseRuntime(caseRow: {
     } : null,
   };
 
-  return { judgeCtx, faithfulCtx };
+  let shouldTrigger: boolean | undefined;
+  let triggerReason: string | undefined;
+  if (caseRow.caseValuesJson) {
+    try {
+      const values = JSON.parse(caseRow.caseValuesJson) as Record<string, unknown>;
+      if (typeof values.should_trigger === 'boolean') shouldTrigger = values.should_trigger;
+      if (typeof values.trigger_rationale === 'string' && values.trigger_rationale.trim()) {
+        triggerReason = values.trigger_rationale.trim();
+      }
+    } catch { /* 由触发评估器给出缺少标注的明确错误 */ }
+  }
+  const targetSkillInvoked = execution && targetSkillName
+    ? Boolean(
+        execution.skill === targetSkillName
+        || await prisma.executionSkill.findFirst({
+          where: { executionId: execution.id, skillName: targetSkillName },
+          select: { id: true },
+        }),
+      )
+    : false;
+
+  return {
+    judgeCtx,
+    faithfulCtx,
+    ...(typeof shouldTrigger === 'boolean'
+      ? { trigger: { shouldTrigger, skillTriggered: targetSkillInvoked, ...(triggerReason ? { reason: triggerReason } : {}) } }
+      : {}),
+  };
 }
 
 // ── 单行执行（含重试/超时）────────────────────────────────────────────────
@@ -265,6 +303,10 @@ async function evaluateOnce(
   runtime: CaseRuntime,
   evaluatorConfig?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
+  if (isSkillTriggerAnalyzerId(evaluatorId)) {
+    if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
+    return evaluateSkillTriggerAnalysis(runtime.trigger);
+  }
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
     return runFaithfulPreset(evaluatorId, user, runtime.faithfulCtx);
@@ -274,7 +316,7 @@ async function evaluateOnce(
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isTextPresetId(evaluatorId)) {
-    return runTextPreset(evaluatorId, runtime.faithfulCtx, evaluatorConfig);
+    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorConfig);
   }
   // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
@@ -321,7 +363,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
       case: {
         include: {
           experiment: {
-            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true },
+            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true, skillName: true },
           },
         },
       },
@@ -339,7 +381,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   let localAttempts = 0;
   let lastError: unknown = null;
 
-  const runtime = await loadCaseRuntime(row.case, user);
+  const runtime = await loadCaseRuntime(row.case, user, row.case.experiment.skillName);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     localAttempts = attempt;
@@ -452,7 +494,7 @@ async function withKeyedLock<T>(key: string, operation: () => Promise<T>): Promi
   }
 }
 
-async function settleExperimentStatus(experimentId: string): Promise<void> {
+export async function settleExperimentStatus(experimentId: string): Promise<void> {
   const rows = await prisma.experimentEvalResult.findMany({
     where: { experimentId },
     select: { status: true },
@@ -461,9 +503,17 @@ async function settleExperimentStatus(experimentId: string): Promise<void> {
   if (anyPending) return; // 尚未全部终态（单项 retry 场景下可能仍有 running）
   const anyDone = rows.some((r: { status: string }) => r.status === 'done');
   await prisma.experiment.updateMany({
-    where: { id: experimentId },
+    where: { id: experimentId, status: { not: 'cancelled' } },
     data: { status: anyDone ? 'done' : 'failed' },
   });
+  try {
+    await syncExperimentSkillIssues(experimentId);
+  } catch (error) {
+    console.warn(
+      `[experiment-engine] sync skill issues failed experiment=${experimentId}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 
 export interface StartExperimentRunResult {
@@ -514,14 +564,13 @@ export async function startExperimentRun(
       data: { status: 'running' },
     });
 
-    const scheduledRows: ScheduledResultRun[] = [];
+    const rowsToSchedule: Array<{ experimentId: string; caseId: string; evaluatorId: string; user: string }> = [];
     for (const c of casesToRun) {
       for (const evaluatorId of evaluatorIds) {
-        scheduledRows.push(await resetAndScheduleResultRun({
-          experimentId, caseId: c.id, evaluatorId, user,
-        }));
+        rowsToSchedule.push({ experimentId, caseId: c.id, evaluatorId, user });
       }
     }
+    const scheduledRows = await prepareAndScheduleResultRuns(rowsToSchedule);
 
     const completion = Promise.all(scheduledRows.map((row) => row.completion))
       .then(() => settleExperimentStatus(experimentId))
@@ -577,6 +626,19 @@ async function resetAndScheduleResultRun(params: {
   evaluatorId: string;
   user: string;
 }): Promise<ScheduledResultRun> {
+  const prepared = await resetResultRun(params);
+  return {
+    resultId: prepared.resultId,
+    completion: prepared.completion ?? getOrStartResultRun(params.user, prepared.resultId),
+  };
+}
+
+async function resetResultRun(params: {
+  experimentId: string;
+  caseId: string;
+  evaluatorId: string;
+  user: string;
+}): Promise<{ resultId: string; completion?: Promise<void> }> {
   return withKeyedLock(`eval-result:${params.caseId}:${params.evaluatorId}`, async () => {
     const existingRow = await prisma.experimentEvalResult.findUnique({
       where: { caseId_evaluatorId: { caseId: params.caseId, evaluatorId: params.evaluatorId } },
@@ -603,8 +665,21 @@ async function resetAndScheduleResultRun(params: {
       },
       select: { id: true },
     });
-    return { resultId: row.id, completion: getOrStartResultRun(params.user, row.id) };
+    return { resultId: row.id };
   });
+}
+
+async function prepareAndScheduleResultRuns(
+  rows: Array<{ experimentId: string; caseId: string; evaluatorId: string; user: string }>,
+): Promise<ScheduledResultRun[]> {
+  const prepared: Array<{ resultId: string; completion?: Promise<void>; user: string }> = [];
+  for (const row of rows) {
+    prepared.push({ ...(await resetResultRun(row)), user: row.user });
+  }
+  return prepared.map((row) => ({
+    resultId: row.resultId,
+    completion: row.completion ?? getOrStartResultRun(row.user, row.resultId),
+  }));
 }
 
 /**
@@ -685,8 +760,8 @@ export async function ensureEvalExperiment(params: {
       agentName: params.agentName ?? '',
       evaluatorIdsJson: JSON.stringify(params.evaluatorIds),
       // 建出来时还没有任何 case/结果，不是「运行中」——空评测任务(createOnly 0 trace)
-      // 若建成 running 会永久卡住(settleExperimentStatus 只在评完某 case 后才落终态)。
-      // 真正评估时每个 case 评完经 settleExperimentStatus 落到 done/failed。
+      // 若建成 running 会永久卡住（尚无结果行可供 settleExperimentStatus 结算）。
+      // 真正评估时由同步 case 调用或批次收尾统一落到 done/failed。
       status: 'draft',
       scope: params.scope ?? '',
       skillName: params.skillName ?? '',
@@ -803,14 +878,13 @@ export async function startEvalExperimentCases(
       where: { id: experimentId },
       data: { status: 'running' },
     });
-    const scheduledRows: ScheduledResultRun[] = [];
+    const rowsToSchedule: Array<{ experimentId: string; caseId: string; evaluatorId: string; user: string }> = [];
     for (const c of ownedCases) {
       for (const evaluatorId of evaluatorIds) {
-        scheduledRows.push(await resetAndScheduleResultRun({
-          experimentId, caseId: c.id, evaluatorId, user,
-        }));
+        rowsToSchedule.push({ experimentId, caseId: c.id, evaluatorId, user });
       }
     }
+    const scheduledRows = await prepareAndScheduleResultRuns(rowsToSchedule);
 
     const completion = Promise.all(scheduledRows.map((row) => row.completion))
       .then(() => settleExperimentStatus(experimentId));
@@ -823,30 +897,33 @@ export async function evaluateEvalExperimentCase(
   experimentId: string,
   caseId: string,
   user: string,
+  options: { evaluatorIds?: string[]; settleExperiment?: boolean } = {},
 ): Promise<EvalCaseResultRow[]> {
   const experiment = await prisma.experiment.findFirst({
     where: { id: experimentId, user },
     select: { evaluatorIdsJson: true },
   });
   if (!experiment) throw new Error(`实验 ${experimentId} 不存在`);
-  let evaluatorIds: string[] = [];
+  let configuredEvaluatorIds: string[] = [];
   try {
     const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
-    if (Array.isArray(parsed)) evaluatorIds = parsed.map(String).filter(Boolean);
+    if (Array.isArray(parsed)) configuredEvaluatorIds = parsed.map(String).filter(Boolean);
   } catch { /* 忽略脏数据 */ }
+  const requestedEvaluatorIds = options.evaluatorIds
+    ? new Set(options.evaluatorIds.map(String).filter(Boolean))
+    : null;
+  const evaluatorIds = requestedEvaluatorIds
+    ? configuredEvaluatorIds.filter((evaluatorId) => requestedEvaluatorIds.has(evaluatorId))
+    : configuredEvaluatorIds;
 
-  const out: EvalCaseResultRow[] = [];
-  for (const evaluatorId of evaluatorIds) {
-    const scheduled = await resetAndScheduleResultRun({
-      experimentId, caseId, evaluatorId, user,
-    });
-    await scheduled.completion;
-    const done = await prisma.experimentEvalResult.findUnique({
-      where: { id: scheduled.resultId },
-      select: { evaluatorId: true, status: true, score: true, pointsJson: true, evidenceJson: true, errorMessage: true },
-    });
-    if (done) out.push(done);
-  }
-  await settleExperimentStatus(experimentId);
+  const scheduledRows = await prepareAndScheduleResultRuns(evaluatorIds.map((evaluatorId) => ({
+    experimentId, caseId, evaluatorId, user,
+  })));
+  await Promise.all(scheduledRows.map((row) => row.completion));
+  const out = await prisma.experimentEvalResult.findMany({
+    where: { id: { in: scheduledRows.map((row) => row.resultId) } },
+    select: { evaluatorId: true, status: true, score: true, pointsJson: true, evidenceJson: true, errorMessage: true },
+  });
+  if (options.settleExperiment !== false) await settleExperimentStatus(experimentId);
   return out;
 }

@@ -162,14 +162,30 @@ function pickReportedIp() {
 function readExistingBinding() {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
-    return { clientId: raw.clientId || null, user: raw.user || null }
+    return {
+      clientId: raw.clientId || null,
+      user: raw.user || null,
+      insightBaseUrl: raw.insightBaseUrl || null,
+    }
   } catch {
-    return { clientId: null, user: null }
+    return { clientId: null, user: null, insightBaseUrl: null }
+  }
+}
+
+function normalizeInsightBaseUrl(value) {
+  try {
+    const raw = String(value || '').trim()
+    if (!raw) return null
+    const url = new URL(raw.match(/^https?:\/\//i) ? raw : `http://${raw}`)
+    const pathname = url.pathname.replace(/\/+$/, '')
+    return `${url.origin.toLowerCase()}${pathname}`
+  } catch {
+    return null
   }
 }
 
 async function register({ host, token, name, previousClientId }) {
-  const base = String(host || '').replace(/\/$/, '')
+  const base = String(host || '').replace(/\/+$/, '')
   const res = await fetch(`${base}/api/reliability/client/v1/register`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -532,26 +548,38 @@ async function main() {
   if (args.token) {
     if (!args.host) fail('缺少 --host')
     const existing = readExistingBinding()
-    // 归属一致才跳过。只看「配置文件在不在」会导致换账号后静默沿用旧绑定：
-    // Trace 上报跟着新账号走，纳管却留在旧账号，一台机器裂成两半。
-    const sameOwner =
-      existing.clientId && args.user && existing.user && existing.user === args.user
-    if (sameOwner) {
-      log(`已绑定到 ${existing.user}，跳过注册`)
+    const existingBaseUrl = normalizeInsightBaseUrl(existing.insightBaseUrl)
+    const targetBaseUrl = normalizeInsightBaseUrl(args.host)
+    const hostChanged = Boolean(
+      existing.clientId &&
+      existingBaseUrl &&
+      targetBaseUrl &&
+      existingBaseUrl !== targetBaseUrl,
+    )
+    const sameService = Boolean(
+      existing.clientId &&
+      existingBaseUrl &&
+      targetBaseUrl &&
+      existingBaseUrl === targetBaseUrl,
+    )
+    if (existing.clientId && existing.user && args.user && existing.user !== args.user) {
+      log(`检测到账号变更：${existing.user} → ${args.user}，正在改绑…`)
+    } else if (hostChanged) {
+      log(`检测到平台地址变更：${existing.insightBaseUrl} → ${args.host}，正在重新绑定…`)
+    } else if (existing.clientId && !existing.user) {
+      log('本机绑定信息缺少归属（旧版本安装），正在重新绑定…')
     } else {
-      if (existing.clientId && existing.user && args.user && existing.user !== args.user) {
-        log(`检测到账号变更：${existing.user} → ${args.user}，正在改绑…`)
-      } else if (existing.clientId && !existing.user) {
-        // 旧版本客户端没记录归属，无法判断是否同账号，一律改绑以消除歧义。
-        log('本机绑定信息缺少归属（旧版本安装），正在重新绑定…')
-      }
-      await register({
-        host: args.host,
-        token: args.token,
-        name: args.name,
-        previousClientId: existing.clientId,
-      })
+      log('正在刷新本机绑定与设备凭证…')
     }
+    // 每份安装令牌都重新注册。即使账号和 Host 没变，服务重建后旧设备凭证也可能
+    // 已失效；服务端会按 machineId 复用记录，同时换发并撤销旧凭证。
+    await register({
+      host: args.host,
+      token: args.token,
+      name: args.name,
+      // clientId 只在签发它的完整服务基址内有意义；来源缺失或跨路径时都不能带旧 ID。
+      previousClientId: sameService ? existing.clientId : null,
+    })
   } else if (!fs.existsSync(CONFIG_PATH)) {
     fail('缺少 --token 且本机尚未注册', '请在「客户端安装」页生成安装命令。')
   } else {

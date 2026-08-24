@@ -13,7 +13,7 @@ const routes = [
   {
     name: 'setup',
     get: getSetup,
-    url: 'http://localhost/api/ingest/setup?yes=1&frameworks=actrail&key=test-key',
+    url: 'http://localhost/api/ingest/setup?yes=1&nokey=1&frameworks=actrail&key=test-key',
   },
   {
     name: 'auto setup',

@@ -6,17 +6,48 @@ import {
   type EntityF1RunConfig,
   type ExactMatchRunConfig,
 } from '@/lib/evaluators/evaluator-run-config';
+import { runTextAiFlavorPreset, TEXT_AI_FLAVOR_PRESET_ID } from './text-ai-flavor-preset-evaluator';
+import { runTextConcisenessPreset, TEXT_CONCISENESS_PRESET_ID } from './text-conciseness-preset-evaluator';
+import { runTextFormatPreset, TEXT_FORMAT_PRESET_ID } from './text-format-preset-evaluator';
+import {
+  runTextLanguageConsistencyPreset,
+  TEXT_LANGUAGE_CONSISTENCY_PRESET_ID,
+} from './text-language-consistency-preset-evaluator';
 
 export const TEXT_PRESET_IDS = [
   'preset-text-rouge',
   'preset-text-exact-match',
   'preset-text-entity-f1',
+  TEXT_AI_FLAVOR_PRESET_ID,
+  TEXT_FORMAT_PRESET_ID,
+  TEXT_LANGUAGE_CONSISTENCY_PRESET_ID,
+  TEXT_CONCISENESS_PRESET_ID,
 ] as const;
 
 export type TextPresetId = (typeof TEXT_PRESET_IDS)[number];
 
+type ReferenceTextPresetId = Extract<
+  TextPresetId,
+  'preset-text-rouge' | 'preset-text-exact-match' | 'preset-text-entity-f1'
+>;
+
 export function isTextPresetId(id: string): id is TextPresetId {
   return (TEXT_PRESET_IDS as readonly string[]).includes(id);
+}
+
+export function runTextPreset(
+  id: TextPresetId,
+  user: string,
+  ctx: FaithfulPresetContext,
+  config?: ExactMatchRunConfig | EntityF1RunConfig,
+): Promise<EvaluatorOutput> {
+  switch (id) {
+    case TEXT_AI_FLAVOR_PRESET_ID: return runTextAiFlavorPreset(user, ctx);
+    case TEXT_FORMAT_PRESET_ID: return runTextFormatPreset(user, ctx);
+    case TEXT_LANGUAGE_CONSISTENCY_PRESET_ID: return runTextLanguageConsistencyPreset(user, ctx);
+    case TEXT_CONCISENESS_PRESET_ID: return runTextConcisenessPreset(user, ctx);
+  }
+  return runReferenceTextPreset(id, ctx, config);
 }
 
 export class EntityListParseError extends Error {
@@ -54,18 +85,19 @@ function missingReference(name: string): EvaluatorOutput {
   return { summary, evidence: { json: { unscoredReason: summary } } };
 }
 
-export async function runTextPreset(
-  id: TextPresetId,
+const REFERENCE_TEXT_PRESET_NAMES: Record<ReferenceTextPresetId, string> = {
+  'preset-text-rouge': 'ROUGE 指标评估',
+  'preset-text-exact-match': '完全精确匹配评估',
+  'preset-text-entity-f1': '实体 F1 匹配评估',
+};
+
+async function runReferenceTextPreset(
+  id: ReferenceTextPresetId,
   ctx: FaithfulPresetContext,
   config?: ExactMatchRunConfig | EntityF1RunConfig,
 ): Promise<EvaluatorOutput> {
   if (ctx.referenceOutput === null || !ctx.referenceOutput.trim()) {
-    const names: Record<TextPresetId, string> = {
-      'preset-text-rouge': 'ROUGE 指标评估',
-      'preset-text-exact-match': '完全精确匹配评估',
-      'preset-text-entity-f1': '实体 F1 匹配评估',
-    };
-    return missingReference(names[id]);
+    return missingReference(REFERENCE_TEXT_PRESET_NAMES[id]);
   }
 
   if (id === 'preset-text-rouge') return runRouge(ctx.actualOutput, ctx.referenceOutput);

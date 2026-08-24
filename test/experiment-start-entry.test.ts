@@ -5,14 +5,15 @@ import test from 'node:test';
 
 const root = process.cwd();
 
-test('实验详情是纯进度视图，不提供二次启动和重复返回入口', () => {
+test('全局实验详情是纯进度视图，不提供二次启动和重复返回入口', () => {
   const detailPage = fs.readFileSync(
     path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
     'utf8',
   );
 
   assert.doesNotMatch(detailPage, /开始执行/);
-  assert.doesNotMatch(detailPage, /返回实验列表/);
+  assert.doesNotMatch(detailPage, /返回上一页/);
+  assert.doesNotMatch(detailPage, /router\.back\(\)/);
   assert.doesNotMatch(detailPage, /\/experiments\/[^`]*\/run/);
 });
 

@@ -39,7 +39,7 @@ function parsePowerShell(source: string): void {
 }
 
 async function centralScript(platform: "unix" | "windows", frameworks?: string): Promise<string> {
-  const params = new URLSearchParams({ key: "test-key" })
+  const params = new URLSearchParams({ key: "test-key", nokey: "1" })
   if (frameworks !== undefined) params.set("frameworks", frameworks)
   const response = await getCentralSetup(new Request(
     `https://insight.example/api/ingest/setup?${params}`,

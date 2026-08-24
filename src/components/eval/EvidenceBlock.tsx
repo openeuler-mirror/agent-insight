@@ -197,7 +197,8 @@ function renderInline(text: string): ReactNode[] {
           style={{
             fontFamily: 'var(--font-mono, monospace)', fontSize: '0.92em',
             background: 'var(--background-secondary)', border: '1px solid var(--border)',
-            borderRadius: 4, padding: '0 4px',
+            borderRadius: 4, padding: '0 4px', whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all', overflowWrap: 'anywhere',
           }}
         >
           {p.slice(1, -1)}
@@ -216,7 +217,7 @@ function renderMd(md: string): ReactNode {
   const flushList = () => {
     if (!listBuf.length) return;
     blocks.push(
-      <ul key={`ul-${blocks.length}`} style={{ margin: '4px 0', paddingLeft: 17 }}>
+      <ul key={`ul-${blocks.length}`} style={{ margin: '4px 0', minWidth: 0, paddingLeft: 17, overflowWrap: 'anywhere' }}>
         {listBuf.map((item, i) => <li key={i}>{renderInline(item)}</li>)}
       </ul>,
     );
@@ -229,12 +230,12 @@ function renderMd(md: string): ReactNode {
     }
     flushList();
     if (line.trim()) {
-      blocks.push(<p key={`p-${blocks.length}`} style={{ margin: '3px 0' }}>{renderInline(line)}</p>);
+      blocks.push(<p key={`p-${blocks.length}`} style={{ margin: '3px 0', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{renderInline(line)}</p>);
     }
   }
   flushList();
   return (
-    <div style={{ fontSize: 11.5, lineHeight: 1.65, color: 'var(--foreground-secondary)' }}>
+    <div style={{ minWidth: 0, maxWidth: '100%', fontSize: 11.5, lineHeight: 1.65, color: 'var(--foreground-secondary)', overflowWrap: 'anywhere' }}>
       {blocks}
     </div>
   );
@@ -264,7 +265,7 @@ export function EvidenceBlock({ evidence, evaluatorId }: { evidence: unknown; ev
     <div
       style={{
         border: '1px solid var(--border)', borderRadius: 7,
-        background: 'var(--background-secondary)', overflow: 'hidden',
+        minWidth: 0, maxWidth: '100%', background: 'var(--background-secondary)', overflow: 'hidden',
       }}
     >
       <div
@@ -293,7 +294,7 @@ export function EvidenceBlock({ evidence, evaluatorId }: { evidence: unknown; ev
         </span>
       </div>
       {open && (
-        <div style={{ padding: '7px 10px 9px', borderTop: '1px solid var(--border)', background: 'var(--card-bg)' }}>
+        <div style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden', padding: '7px 10px 9px', borderTop: '1px solid var(--border)', background: 'var(--card-bg)' }}>
           {ev.md ? renderMd(ev.md) : evaluatorId && SPECIALIZED_EVALUATOR_IDS.has(evaluatorId) ? (
             renderMd(specializedEvidenceMarkdown(ev.json))
           ) : (
@@ -301,7 +302,7 @@ export function EvidenceBlock({ evidence, evaluatorId }: { evidence: unknown; ev
               style={{
                 margin: 0, fontFamily: 'var(--font-mono, monospace)', fontSize: 11,
                 lineHeight: 1.55, color: 'var(--foreground-secondary)',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
               }}
             >
               {JSON.stringify(ev.json, null, 2)}

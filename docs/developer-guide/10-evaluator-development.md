@@ -24,6 +24,7 @@
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
+| `preset-text-*` | `experiment/text-preset-evaluators.ts` |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -536,11 +537,17 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
 | 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
 | 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采与修辞（5 维 1-3 档锚定，独立成族） |
+| 文本 AI 味 `preset-text-ai-flavor` | Agent 输出 | 模板化开篇 · 模板化结尾 · 机械连接词 · 泛化人物名称 · 空洞总结 · 过度礼貌（6 维扣分制） |
+| 文本格式 `preset-text-format` | Agent 输出 | 序号连续性 · 引用标记 · 列表层级 · 标点 · 排版 · 表格 · 特殊格式（7 维扣分制） |
+| 文本语种一致性 `preset-text-language-consistency` | 用户问题与 Agent 输出 | 主语言匹配（关键维度）· 非必要混杂 · 代码切换理由 · 双语场景处理（3 个普通维度，4 维扣分制） |
+| 文本简洁性 `preset-text-conciseness` | 用户问题与 Agent 输出 | 表达效率 · 套话精简 · 主需求聚焦 · 信息完整（0.3/0.2/0.3/0.2 加权） |
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
 
 回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+
+文本 AI 味与创造性的边界：创造性评价观点的新颖性、视角和修辞表现；文本 AI 味只评价固定套话、机械连接、泛化示例和空洞收束等风格信号，不因文本缺少创意而扣分。文本简洁性与答案质量的边界：简洁性只扣冗余、偏题扩写和必要信息缺失，不重新评价答案事实是否正确。语种一致性只评价语言匹配和无理由切换；格式评估器只评价可读的结构与标记规范，均不承担内容安全判断。
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 

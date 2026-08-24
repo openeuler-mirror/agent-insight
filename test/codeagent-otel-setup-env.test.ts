@@ -18,7 +18,7 @@ const routes: SetupRoute[] = [
   {
     name: 'setup',
     get: getSetup,
-    url: 'http://localhost/api/ingest/setup?key=test-key',
+    url: 'http://localhost/api/ingest/setup?key=test-key&nokey=1',
   },
   {
     name: 'auto setup',

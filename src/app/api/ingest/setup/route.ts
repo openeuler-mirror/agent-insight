@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
+import { db } from '@/lib/storage/prisma';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -786,7 +787,7 @@ function generateBashScript(
         '',
         '    # 这里不能因为「配置文件已存在」就跳过：换账号后本机仍绑在原账号上，',
         '    # 而 .env 已被改写成新账号 —— Trace 归新账号、纳管归旧账号，机器裂成两半。',
-        '    # 是否跳过由安装器按归属判定（同账号幂等跳过，跨账号自动改绑）。',
+        '    # 安装器每次都会刷新注册；同机同账号由服务端复用记录并轮换设备凭证。',
         '',
         '    local token_json token token_user',
         '    token_json=$(curl -sSf -X POST "$host/api/reliability/install-tokens" -H "content-type: application/json" -H "x-witty-api-key: $api_key" -d "{\\"expiresInSeconds\\":600}" 2>/dev/null) || {',
@@ -800,9 +801,14 @@ function generateBashScript(
         '        return 1',
         '    fi',
         '',
-        '    # 与 RAS 相同的三级回退：本地 checkout → 服务端下发 → npm 兜底。',
-        '    # 只有服务端下发这一级能保证「在任意目录执行都装得上」。',
-        '    if [ -f "./scripts/install-ras-client.js" ]; then',
+        '    # 常驻客户端默认使用当前服务端下发的 bundle，避免执行目录里的旧 checkout',
+        '    # 覆盖服务端修复。开发调试时可显式设置 AGENT_INSIGHT_CLIENT_SOURCE=local。',
+        '    if [ "${AGENT_INSIGHT_CLIENT_SOURCE:-server}" = "local" ]; then',
+        '        if [ ! -f "./scripts/install-ras-client.js" ]; then',
+        '            echo "⚠️  常驻客户端注册失败：已指定本地源码，但当前目录没有 ./scripts/install-ras-client.js"',
+        '            return 1',
+        '        fi',
+        '        echo "    使用显式指定的本地常驻客户端安装器"',
         '        AGENT_INSIGHT_HOST="$host" node "./scripts/install-ras-client.js" --host "$host" --token "$token" --user "$token_user"',
         '        return $?',
         '    fi',
@@ -2343,6 +2349,21 @@ export async function GET(request: Request) {
     const forceNoKey = queryFlagEnabled(
         requestUrl.searchParams.get('nokey') ?? requestUrl.searchParams.get('no-key'),
     );
+    if (apiKey && !forceNoKey) {
+        const user = await db.findUserByApiKey(apiKey);
+        if (!user) {
+            return NextResponse.json(
+                {
+                    error: 'Invalid API key',
+                    detail: '安装命令中的 API Key 不属于当前服务，请刷新安装指导页后重新复制。',
+                },
+                {
+                    status: 401,
+                    headers: { 'Cache-Control': 'no-store' },
+                },
+            );
+        }
+    }
     // ?frameworks=opencode,claude —— 安装页勾选后带上，脚本据此跳过终端内的交互选择。
     // 不传（老命令）时行为不变，仍在终端里问一遍。
     const requestedFrameworks = parseFrameworks(
@@ -2384,6 +2405,7 @@ export async function GET(request: Request) {
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
+                'Cache-Control': 'no-store',
             },
         });
     } else {
@@ -2402,6 +2424,7 @@ export async function GET(request: Request) {
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/x-shellscript',
+                'Cache-Control': 'no-store',
             },
         });
     }

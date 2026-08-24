@@ -32,7 +32,7 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     );
     assert.deepEqual(
         navigation.find(item => item.key === 'config')?.children?.map(item => item.key),
-        ['model-registry', 'web-search', 'access-install', 'access-client'],
+        ['skill-management', 'model-registry', 'web-search', 'access-install', 'access-client'],
     );
 
     const skillItem = navigation
@@ -52,7 +52,7 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     const navigationForAdmin = getSidebarNavigation(true);
     assert.deepEqual(
         navigationForAdmin.find(item => item.key === 'config')?.children?.map(item => item.key),
-        ['model-registry', 'web-search', 'access-install', 'access-client', 'usage'],
+        ['skill-management', 'model-registry', 'web-search', 'access-install', 'access-client', 'usage'],
     );
 });
 
@@ -89,16 +89,18 @@ test('Skill 工作区保留四个路由，并能识别详情页所属页签', as
     assert.equal(getActiveSkillWorkspaceTab('/skill-opt/demo/v1'), 'optimize');
 });
 
-test('四个 Skill 首页都挂载统一工作区页签', () => {
+test('Skill 主入口挂载统一工作台，旧入口保留工作区页签', () => {
     const appDir = path.join(process.cwd(), 'src/app/(main)');
-    const pages = [
-        'skills/page.tsx',
+    const skillsPage = fs.readFileSync(path.join(appDir, 'skills/page.tsx'), 'utf8');
+    assert.match(skillsPage, /<SkillWorkbenchShell\s*\/>/, 'skills/page.tsx 应挂载 SkillWorkbenchShell');
+
+    const legacyPages = [
         'skill-generator/page.tsx',
         'skill-eval/page.tsx',
         'skill-opt/page.tsx',
     ];
 
-    for (const page of pages) {
+    for (const page of legacyPages) {
         const source = fs.readFileSync(path.join(appDir, page), 'utf8');
         assert.match(source, /<SkillWorkspaceTabs\s*\/>/, `${page} 应挂载 SkillWorkspaceTabs`);
     }

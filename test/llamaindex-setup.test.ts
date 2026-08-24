@@ -24,7 +24,7 @@ const routes = [
   {
     name: 'setup',
     get: getSetup,
-    url: 'http://localhost/api/ingest/setup?key=test-key',
+    url: 'http://localhost/api/ingest/setup?key=test-key&nokey=1',
   },
   {
     name: 'auto setup',
@@ -129,7 +129,7 @@ test('install guide exposes LlamaIndex through the shared one-line installer', (
 
 test('interactive setup chooses the LlamaIndex Python environment after the script starts', async () => {
   const unixResponse = await getSetup(new Request(
-    'http://localhost/api/ingest/setup?key=test-key&frameworks=llamaindex',
+    'http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=llamaindex',
     { headers: { 'x-platform': 'unix', host: 'localhost:3000' } },
   ));
   const unixScript = await unixResponse.text();
@@ -140,7 +140,7 @@ test('interactive setup chooses the LlamaIndex Python environment after the scri
   assert.equal(spawnSync('bash', ['-n'], { input: unixScript, encoding: 'utf8' }).status, 0);
 
   const windowsResponse = await getSetup(new Request(
-    'http://localhost/api/ingest/setup?key=test-key&frameworks=llamaindex',
+    'http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=llamaindex',
     { headers: { 'x-platform': 'windows', host: 'localhost:3000' } },
   ));
   const windowsScript = await windowsResponse.text();
@@ -157,7 +157,7 @@ test('interactive setup chooses the LlamaIndex Python environment after the scri
 });
 
 test('install-guide command stays non-interactive except for LlamaIndex Python selection', async () => {
-  const query = 'key=test-key&yes=1&frameworks=llamaindex&llamaindexPromptPython=1';
+  const query = 'key=test-key&nokey=1&yes=1&frameworks=llamaindex&llamaindexPromptPython=1';
 
   const unixResponse = await getSetup(new Request(
     `http://localhost/api/ingest/setup?${query}`,
@@ -184,7 +184,7 @@ test('install-guide command stays non-interactive except for LlamaIndex Python s
 test('setup embeds an optional LlamaIndex virtual environment and otherwise keeps global Python', async () => {
   const unixVenv = '/opt/demo env/.venv';
   const unixResponse = await getSetup(new Request(
-    `http://localhost/api/ingest/setup?key=test-key&frameworks=llamaindex&llamaindexPython=venv&llamaindexVenv=${encodeURIComponent(unixVenv)}`,
+    `http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=llamaindex&llamaindexPython=venv&llamaindexVenv=${encodeURIComponent(unixVenv)}`,
     { headers: { 'x-platform': 'unix', host: 'localhost:3000' } },
   ));
   const unixScript = await unixResponse.text();
@@ -197,7 +197,7 @@ test('setup embeds an optional LlamaIndex virtual environment and otherwise keep
 
   const windowsVenv = String.raw`C:\work tree\.venv`;
   const windowsResponse = await getSetup(new Request(
-    `http://localhost/api/ingest/setup?key=test-key&frameworks=llamaindex&llamaindexPython=venv&llamaindexVenv=${encodeURIComponent(windowsVenv)}`,
+    `http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=llamaindex&llamaindexPython=venv&llamaindexVenv=${encodeURIComponent(windowsVenv)}`,
     { headers: { 'x-platform': 'windows', host: 'localhost:3000' } },
   ));
   const windowsScript = await windowsResponse.text();
@@ -216,7 +216,7 @@ test('setup embeds an optional LlamaIndex virtual environment and otherwise keep
   assert.equal(spawnSync('bash', ['-n'], { input: autoScript, encoding: 'utf8' }).status, 0);
 
   const globalResponse = await getSetup(new Request(
-    'http://localhost/api/ingest/setup?key=test-key&frameworks=llamaindex&llamaindexPython=global',
+    'http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=llamaindex&llamaindexPython=global',
     { headers: { 'x-platform': 'windows', host: 'localhost:3000' } },
   ));
   const globalScript = await globalResponse.text();
@@ -227,7 +227,7 @@ test('setup embeds an optional LlamaIndex virtual environment and otherwise keep
 test('one-line setup preselects LlamaIndex without falling back to the interactive picker', async () => {
   for (const platform of ['unix', 'windows']) {
     const response = await getSetup(new Request(
-      'http://localhost/api/ingest/setup?key=test-key&frameworks=llamaindex',
+      'http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=llamaindex',
       { headers: { 'x-platform': platform, host: 'localhost:3000' } },
     ));
     const script = await response.text();
@@ -250,7 +250,7 @@ test('one-line setup preselects LlamaIndex without falling back to the interacti
 
 test('mixed one-line setup retains the Node.js requirement for command-line agents', async () => {
   const response = await getSetup(new Request(
-    'http://localhost/api/ingest/setup?key=test-key&frameworks=opencode,llamaindex',
+    'http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=opencode,llamaindex',
     { headers: { 'x-platform': 'unix', host: 'localhost:3000' } },
   ));
   const script = await response.text();
@@ -263,7 +263,7 @@ test('mixed one-line setup retains the Node.js requirement for command-line agen
 test('OpenCode watcher management is scoped to the installing account', async () => {
   for (const platform of ['unix', 'windows']) {
     const response = await getSetup(new Request(
-      'http://localhost/api/ingest/setup?key=test-key&frameworks=opencode,openclaw,llamaindex',
+      'http://localhost/api/ingest/setup?key=test-key&nokey=1&frameworks=opencode,openclaw,llamaindex',
       { headers: { 'x-platform': platform, host: 'localhost:3000' } },
     ));
     const script = await response.text();

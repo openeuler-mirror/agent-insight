@@ -21,7 +21,7 @@ flowchart TB
   end
   subgraph userHost ["用户本机 · Agent 宿主机"]
     Curl["curl …/api/setup | bash<br/>或 npx install-ras"]
-    Fallback["三级回退：本地 checkout<br/>→ 服务端 bundle → npm"]
+    Fallback["RAS：本地 → bundle → npm<br/>常驻客户端：bundle → npm"]
     Installer["node scripts/install-ras.js"]
     Runtime["~/.agent-insight/ras/runtime/"]
     HostCfg["OpenCode / xiaoO 配置挂载"]
@@ -53,6 +53,14 @@ flowchart TB
 
 > **重要**：Insight 服务端 `start` **不会**在 Agent 机上装 RAS。服务与 Agent 不在同一机器时，必须在 **Agent 宿主** 上跑上表命令。
 
+看板恢复历史登录态时会先从当前服务刷新 API Key，验证完成前不生成安装命令。普通
+`/api/ingest/setup?key=...` 也会在下发脚本前校验 Key，无效时返回 401；服务重建、数据库
+切换或 Host 变化后应重新打开安装指导并复制命令。每次执行新命令都会重新注册常驻客户端，
+按 `machineId` 复用原记录并轮换设备凭证，不会仅因账号相同而跳过。
+常驻客户端安装器默认取当前 Insight 服务端的 bundle，调用命令所在目录即使存在旧
+checkout 也不会覆盖服务端版本；只有开发调试显式设置 `AGENT_INSIGHT_CLIENT_SOURCE=local`
+时才使用 `./scripts/install-ras-client.js`。
+
 ---
 
 ## 3. 本机前置条件清单
@@ -77,6 +85,7 @@ flowchart TB
 | `AGENT_INSIGHT_RAS_HOME` | 覆盖默认 `~/.agent-insight/ras` |
 | `AGENT_INSIGHT_DATA_DIR` | 覆盖整个数据根 |
 | `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` | 覆盖 pin 包（源码/私有 .tgz URL） |
+| `AGENT_INSIGHT_CLIENT_SOURCE=local` | 仅开发调试：显式使用当前目录的常驻客户端安装器；默认不用本地 checkout |
 | `AGENT_INSIGHT_RAS_EVENTS_URL` | 直接指定 events URL |
 | `RAS_PYTHON` | 优先使用的 Python 可执行文件 |
 | `XDG_CONFIG_HOME` | OpenCode / xiaoO 配置根（默认 `~/.config`） |
@@ -290,11 +299,11 @@ ${TMPDIR:-/tmp}/agent-insight-ras.XXXXXX/
 | 数据 / 产物 | 来源 |
 |-------------|------|
 | 安装脚本正文 | Insight `GET /api/ingest/setup`（或 `/auto`）动态生成 |
-| RAS / 常驻客户端源码 | **优先** `GET /api/ingest/setup/bundle?name=ras\|client`（服务端白名单 tar）；仓库内执行则用本地 checkout；仅旧服务端回退 `npm pack` |
+| RAS / 常驻客户端源码 | RAS 在仓库内先用本地 checkout，再取 `bundle?name=ras`；常驻客户端默认取 `bundle?name=client`，只有 `AGENT_INSIGHT_CLIENT_SOURCE=local` 才用本地 checkout；两者仅在旧服务端回退 `npm pack` |
 | `AGENT_INSIGHT_PACKAGE_SPEC` | 服务端当前包名@version，或 env 覆盖（只作用于 npm 兜底） |
 | OpenCode / Hermes 等**观测**插件 | 同次 setup 从 **Insight HTTP** `/api/ingest/setup/<component>` 下载（与 RAS bundle 路径不同） |
 | Python 依赖 | 本机 `pip` 装进 runtime 的 `.python-packages` |
-| API Key / Host | setup 查询参数 → 环境变量 → 写入 `ras/config.json` / `.env` |
+| API Key / Host | 看板刷新当前登录身份 → setup 校验 Key → 查询参数写入环境变量 → `ras/config.json` / `.env` |
 | 预检 | 本机 `curl` 打 Insight RAS ingest（只读） |
 | 常驻客户端运行时 | `~/.agent-insight/client/runtime/`（`reliability-client.cjs` / `ws-client.cjs` / `config_sync.js`） |
 
@@ -360,6 +369,7 @@ test -f ~/.config/opencode/plugins/agent-insight-ras.js && echo opencode_plugin_
 | `unsupported` | 原生 Windows | 改 WSL |
 | `未找到共享 libpython` | 无共享库 Python | 装 `python3-dev` 或换带 `.so/.dylib` 的发行版 |
 | `npm pack` 失败 | 走到了 npm 兜底且 registry 不可达 / PACKAGE_SPEC 错 | 优先确认服务端 `GET /api/ingest/setup/bundle?name=ras` 可用；源码场景也可设 `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` |
+| setup 直接返回 401 | 命令中的 Key 不属于当前 Host / 当前数据库 | 回到当前 Host 的安装指导页，等待身份刷新完成后重新复制命令 |
 | 预检失败 | Host 不可达 / Key 错 | 检查 `AGENT_INSIGHT_HOST`、API Key；安装本身可能已成功 |
 | OpenCode 无 RAS | 未重启 opencode / 插件路径错 | 重启宿主；`--check` 看 platforms.opencode |
 | 有 RAS 无完整 Trace | 只装了 RAS，未装观测采集器 | 再跑安装指导勾选对应框架；xiaoO 确认 collector |
@@ -383,7 +393,7 @@ test -f ~/.config/opencode/plugins/agent-insight-ras.js && echo opencode_plugin_
 |------|------|
 | [`src/lib/ingest/setup-package.ts`](../../../src/lib/ingest/setup-package.ts) | bash 内嵌 `install_agent_insight_ras`（三级回退） |
 | [`src/app/api/ingest/setup/bundle/route.ts`](../../../src/app/api/ingest/setup/bundle/route.ts) | `GET /api/ingest/setup/bundle?name=ras\|client` 白名单 tar |
-| [`src/app/api/ingest/setup/route.ts`](../../../src/app/api/ingest/setup/route.ts) | 安装指导脚本（含框架勾选、RAS 触发、常驻客户端三级回退） |
+| [`src/app/api/ingest/setup/route.ts`](../../../src/app/api/ingest/setup/route.ts) | 安装指导脚本（含框架勾选、RAS 触发、常驻客户端服务端 bundle 优先与 npm 兜底） |
 | [`src/app/api/ingest/setup/auto/route.ts`](../../../src/app/api/ingest/setup/auto/route.ts) | 一键部署 auto_setup |
 | [`scripts/install-ras.js`](../../../scripts/install-ras.js) | 本机 RAS 安装器 |
 | [`agent_ras/platform_adapter/opencode/INSTALL.md`](../../../agent_ras/platform_adapter/opencode/INSTALL.md) | OpenCode 适配安装摘要 |

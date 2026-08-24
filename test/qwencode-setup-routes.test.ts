@@ -70,7 +70,7 @@ test('the curl setup script accepts Qwen Code as a preselected framework and ins
 });
 
 test('the Unix setup script configures Qwen native telemetry after credentials exist', async () => {
-  const response = await setupGet(new Request('https://collector.example/api/ingest/setup?frameworks=qwencode&key=test-key', {
+  const response = await setupGet(new Request('https://collector.example/api/ingest/setup?frameworks=qwencode&key=test-key&nokey=1', {
     headers: {
       host: 'collector.example:4318',
       'x-forwarded-proto': 'https',

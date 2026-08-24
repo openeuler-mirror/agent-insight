@@ -57,16 +57,17 @@ export async function POST(request: Request) {
       headers.get('x-agent-insight-client-id') || /^Bearer\s+dc_/i.test(authorization.trim()),
     );
     let deviceIdentity: { clientId: string; user: string } | null = null;
+    let deviceAuthError: unknown = null;
     if (deviceAuthRequested) {
       try {
         deviceIdentity = await authenticateDevice(request);
       } catch (error) {
-        return reliabilityErrorResponse(error, 'trace-upload-device-auth');
+        deviceAuthError = error;
       }
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // User 解析：硬拒绝原则
+    // User 解析：至少一份服务端可验证凭证有效
     // 之前这里有第 3 级"fallback 到 DB 第一个 active user"的兜底，导致一个隐性
     // 大坑——如果 client 的 .env 里 API key 配错（DB 里没这把 key），server 不
     // 报错 + 不拒收，反而把数据**静默归到一个公共账号**（例如
@@ -74,45 +75,25 @@ export async function POST(request: Request) {
     // 出了什么事，UI 上看自己账号永远是空的，数据却在另一个账号下越堆越多。
     //
     // 现在的规则：
-    //   1. apiKey 提供了但 DB 找不到 → 401 reject + 详细 server.log 报错
-    //   2. apiKey 没提供 + payload.user 有 → 接受（向后兼容），但 warn 标记
+    //   1. API Key / 设备凭证任一有效即可；两者都有效时必须属于同一账号
+    //   2. 一份凭证失效、另一份有效 → 接受，但不使用失效凭证做客户端绑定
+    //   3. 两份均失效 → reject；避免服务重建后的旧设备凭证拦掉仍有效的 API Key
+    //   4. apiKey 没提供 + payload.user 有 → 接受（向后兼容），但 warn 标记
     //      "未经鉴权" —— payload.user 不需要任何验证，谁都能伪造
-    //   3. apiKey 没提供 + payload.user 也没有 → 400 reject + 报错
+    //   5. apiKey 没提供 + payload.user 也没有 → 400 reject + 报错
     // ─────────────────────────────────────────────────────────────────────
     let username: string | undefined;
+    let apiKeyUser: string | null = null;
     let userResolutionPath: 'api-key' | 'device-credential' | 'payload-user-unauth' | 'default-ingest-user' | 'none' = 'none';
 
     if (apiKey) {
       const user = await db.findUserByApiKey(apiKey);
       if (user) {
+        apiKeyUser = user.username;
         username = user.username;
         data.user = username;
         userResolutionPath = 'api-key';
         console.log(`[Upload-API] ✓ User resolved via API Key: ${username}`);
-      } else {
-        // 关键改动：之前是 console.warn 然后继续走 fallback。现在直接 401。
-        // 这样 client 侧可以马上从 HTTP 401 + body 中的 detail 看到错配，而不是
-        // 看到 200 OK 还以为成功了，结果数据全跑到别人账号下。
-        const keyPrefix = apiKey.slice(0, 12);
-        console.error(
-          `[Upload-API] ❌ Rejecting upload (HTTP 401): API key not found in User table.\n` +
-          `  Key prefix: ${keyPrefix}...\n` +
-          `  task_id: ${data.task_id}\n` +
-          `  framework: ${data.framework || 'unknown'}\n` +
-          `  payload.user (untrusted): ${data.user || '(none)'}\n` +
-          `  → 检查 .env 里 AGENT_INSIGHT_API_KEY 是否与 DB 中某个 User.apiKey 完全一致。\n` +
-          `  → 修复方法 1：把 .env 改成 DB 里目标账号的 key\n` +
-          `  → 修复方法 2：SQL UPDATE User SET apiKey='<.env 的 key>' WHERE username='<目标账号>';`
-        );
-        return NextResponse.json(
-          {
-            error: 'Invalid API key',
-            detail: 'API Key 在 User 表里没匹配。Server 拒绝接收以避免数据跑到错误账号。',
-            keyPrefix: keyPrefix + '...',
-            hint: '检查 AGENT_INSIGHT_API_KEY env 与 server DB 里目标 User.apiKey 是否一致',
-          },
-          { status: 401 },
-        );
       }
     }
 
@@ -128,7 +109,42 @@ export async function POST(request: Request) {
       }
       username = deviceIdentity.user;
       data.user = username;
-      userResolutionPath = apiKey ? 'api-key' : 'device-credential';
+      userResolutionPath = apiKeyUser ? 'api-key' : 'device-credential';
+    }
+
+    if (deviceAuthError && !apiKeyUser) {
+      return reliabilityErrorResponse(deviceAuthError, 'trace-upload-device-auth');
+    }
+    if (deviceAuthError && apiKeyUser) {
+      console.warn(
+        `[Upload-API] ⚠ Device credential rejected; accepting the trace via the valid API key without client binding. task_id=${data.task_id}`,
+      );
+    }
+
+    if (apiKey && !apiKeyUser && !deviceIdentity) {
+      const keyPrefix = apiKey.slice(0, 12);
+      console.error(
+        `[Upload-API] ❌ Rejecting upload (HTTP 401): API key not found in User table.\n` +
+        `  Key prefix: ${keyPrefix}...\n` +
+        `  task_id: ${data.task_id}\n` +
+        `  framework: ${data.framework || 'unknown'}\n` +
+        `  payload.user (untrusted): ${data.user || '(none)'}\n` +
+        `  → 检查 .env 里 AGENT_INSIGHT_API_KEY 是否与 DB 中某个 User.apiKey 完全一致。`
+      );
+      return NextResponse.json(
+        {
+          error: 'Invalid API key',
+          detail: 'API Key 在 User 表里没匹配。Server 拒绝接收以避免数据跑到错误账号。',
+          keyPrefix: keyPrefix + '...',
+          hint: '检查 AGENT_INSIGHT_API_KEY env 与 server DB 里目标 User.apiKey 是否一致',
+        },
+        { status: 401 },
+      );
+    }
+    if (apiKey && !apiKeyUser && deviceIdentity) {
+      console.warn(
+        `[Upload-API] ⚠ API key rejected; accepting the trace via the valid device credential. task_id=${data.task_id}`,
+      );
     }
 
     if (!username && data.user) {

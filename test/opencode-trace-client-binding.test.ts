@@ -11,12 +11,17 @@ import { prismaRaw } from '@/lib/storage/prisma'
 
 const TEST_USER = `trace-client-binding-${process.pid}`
 const TEST_API_KEY = 'sk_trace_client_binding_' + process.pid
+const OTHER_USER = `trace-client-other-${process.pid}`
+const OTHER_API_KEY = 'sk_trace_client_other_' + process.pid
 
 test('OpenCode Trace only binds a verified client and preserves its first IP snapshot', async () => {
   const firstTaskId = `trace-client-first-${process.pid}-${Date.now()}`
   const serverTaskId = `trace-client-server-${process.pid}-${Date.now()}`
   const legacyTaskId = `trace-client-legacy-${process.pid}-${Date.now()}`
   const mismatchTaskId = `trace-client-mismatch-${process.pid}-${Date.now()}`
+  const staleDeviceTaskId = `trace-client-stale-device-${process.pid}-${Date.now()}`
+  const deviceFallbackTaskId = `trace-client-device-fallback-${process.pid}-${Date.now()}`
+  const accountMismatchTaskId = `trace-client-account-mismatch-${process.pid}-${Date.now()}`
   const previousTrustedHeader = process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER
   let clientId: string | null = null
 
@@ -24,6 +29,9 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
   try {
     await prismaRaw.user.create({
       data: { username: TEST_USER, apiKey: TEST_API_KEY },
+    })
+    await prismaRaw.user.create({
+      data: { username: OTHER_USER, apiKey: OTHER_API_KEY },
     })
     const { installToken } = await createInstallToken({
       user: TEST_USER,
@@ -144,6 +152,71 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       await prismaRaw.execution.count({ where: { id: mismatchTaskId } }),
       0,
     )
+
+    const staleDevice = await POST(new Request('https://insight.test/api/ingest/upload', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer dc_stale-device-credential',
+        'content-type': 'application/json',
+        'x-agent-insight-client-id': registered.clientId,
+        'x-witty-api-key': TEST_API_KEY,
+      },
+      body: JSON.stringify({
+        task_id: staleDeviceTaskId,
+        framework: 'opencode',
+        client_id: registered.clientId,
+        interactions: [],
+      }),
+    }))
+    assert.equal(staleDevice.status, 200, '有效 API Key 不应被过期设备凭证拦截')
+    assert.deepEqual(
+      await prismaRaw.execution.findUnique({
+        where: { id: staleDeviceTaskId },
+        select: { user: true, clientId: true },
+      }),
+      { user: TEST_USER, clientId: null },
+    )
+
+    const deviceFallback = await POST(new Request('https://insight.test/api/ingest/upload', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${registered.deviceCredential}`,
+        'content-type': 'application/json',
+        'x-agent-insight-client-id': registered.clientId,
+        'x-witty-api-key': 'wi_stale_api_key',
+      },
+      body: JSON.stringify({
+        task_id: deviceFallbackTaskId,
+        framework: 'opencode',
+        client_id: registered.clientId,
+        interactions: [],
+      }),
+    }))
+    assert.equal(deviceFallback.status, 200, '有效设备凭证不应被过期 API Key 拦截')
+    assert.deepEqual(
+      await prismaRaw.execution.findUnique({
+        where: { id: deviceFallbackTaskId },
+        select: { user: true, clientId: true },
+      }),
+      { user: TEST_USER, clientId: registered.clientId },
+    )
+
+    const accountMismatch = await POST(new Request('https://insight.test/api/ingest/upload', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${registered.deviceCredential}`,
+        'content-type': 'application/json',
+        'x-agent-insight-client-id': registered.clientId,
+        'x-witty-api-key': OTHER_API_KEY,
+      },
+      body: JSON.stringify({
+        task_id: accountMismatchTaskId,
+        framework: 'opencode',
+        client_id: registered.clientId,
+        interactions: [],
+      }),
+    }))
+    assert.equal(accountMismatch.status, 403, '两份有效凭证属于不同账号时必须拒绝')
   } finally {
     if (previousTrustedHeader === undefined) {
       delete process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER
@@ -151,13 +224,21 @@ test('OpenCode Trace only binds a verified client and preserves its first IP sna
       process.env.AGENT_INSIGHT_TRUSTED_PROXY_HEADER = previousTrustedHeader
     }
     await prismaRaw.execution.deleteMany({
-      where: { id: { in: [firstTaskId, serverTaskId, legacyTaskId, mismatchTaskId] } },
+      where: { id: { in: [
+        firstTaskId,
+        serverTaskId,
+        legacyTaskId,
+        mismatchTaskId,
+        staleDeviceTaskId,
+        deviceFallbackTaskId,
+        accountMismatchTaskId,
+      ] } },
     })
     if (clientId) {
       await prismaRaw.reliabilityClientCredential.deleteMany({ where: { clientId } })
       await prismaRaw.reliabilityClient.deleteMany({ where: { clientId } })
     }
     await prismaRaw.reliabilityInstallToken.deleteMany({ where: { user: TEST_USER } })
-    await prismaRaw.user.deleteMany({ where: { username: TEST_USER } })
+    await prismaRaw.user.deleteMany({ where: { username: { in: [TEST_USER, OTHER_USER] } } })
   }
 })

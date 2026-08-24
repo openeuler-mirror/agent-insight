@@ -88,6 +88,8 @@ export interface TriggerRunResultItem {
   runsErrored?: number;
   /** errored 时的代表性错误文本（取出现最多的一条）；用于前端展示报错原因。 */
   errorMessage?: string;
+  /** 本条 query 各轮真实路由会话 ID，供统一 Experiment 绑定 Trace。 */
+  sessionIds?: string[];
 }
 
 export type TriggerRunStatus = 'running' | 'done' | 'failed' | 'cancelled';

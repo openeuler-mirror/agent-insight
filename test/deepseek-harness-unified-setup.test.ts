@@ -15,7 +15,7 @@ function read(relativePath: string): string {
 
 async function setupScript(platform: 'unix' | 'windows'): Promise<string> {
   const response = await getSetup(new Request(
-    `https://insight.example/api/ingest/setup?yes=1&frameworks=${FRAMEWORK}&key=test-key`,
+    `https://insight.example/api/ingest/setup?yes=1&nokey=1&frameworks=${FRAMEWORK}&key=test-key`,
     {
       headers: {
         host: 'insight.example',

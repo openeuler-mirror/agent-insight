@@ -339,6 +339,7 @@ async function streamSkillGeneratorOpencodeImpl(
   const chatAbortController = new AbortController();
 
   let agentText = '';
+  const textFullByMessageId = new Map<string, string>();
   let openThinkingId: string | null = null;
   // thinking 块的累计 fullText（按 thinking block id 索引）——
   // 用于在 reasoning event 重复 emit 时去重，详见 onReasoning。
@@ -364,8 +365,18 @@ async function streamSkillGeneratorOpencodeImpl(
   const handlers: ChatHandlers = {
     onText: (e) => {
       closeThinkingIfOpen();
-      agentText += e.delta;
-      send('text', e.delta);
+      const key = e.messageID || e.partID || 'default';
+      const lastFull = textFullByMessageId.get(key) ?? '';
+      const incomingFull = e.fullText && typeof e.fullText === 'string'
+        ? e.fullText
+        : lastFull + e.delta;
+      if (incomingFull.length <= lastFull.length) return;
+      const realDelta = incomingFull.startsWith(lastFull)
+        ? incomingFull.slice(lastFull.length)
+        : e.delta;
+      textFullByMessageId.set(key, incomingFull);
+      agentText += realDelta;
+      send('text', realDelta);
     },
     onReasoning: (e) => {
       if (!e.delta) return;
@@ -641,6 +652,7 @@ async function streamSkillGeneratorOpencodeImpl(
     await clearOpencodeSessionId(threadId);
     // 把 handlers 里累积的状态重置——不然第二轮会跟第一轮的"空"叠在一起。
     agentText = '';
+    textFullByMessageId.clear();
     openThinkingId = null;
     reasoningFullByThinkId.clear();
     announcedTools.clear();
@@ -889,7 +901,7 @@ export function scanWorkspaceFiles(workspaceDir: string): Record<string, FileDat
         continue;
       }
       // utf-8 读到 NUL 字节多半是二进制，跳过
-      if (content.includes(' ')) continue;
+      if (content.includes('\0')) continue;
       const rel = path.relative(workspaceDir, fullPath).replace(/\\/g, '/');
       const vfsPath = `${VFS_PREFIX}${rel}`;
       result[vfsPath] = {

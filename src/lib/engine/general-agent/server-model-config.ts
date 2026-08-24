@@ -1,4 +1,4 @@
-import { getActiveConfig } from '@/lib/storage/server-config';
+import { getActiveConfig, getUserSettings } from '@/lib/storage/server-config';
 import type { ModelConfig as OpencodeModelConfig } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 
@@ -17,6 +17,26 @@ export async function loadServerModelForUser(
   user: string,
 ): Promise<OpencodeModelConfig | null> {
   const cfg = await getActiveConfig(user);
+  return mapServerModelConfig(cfg);
+}
+
+/**
+ * Resolve one explicitly frozen server-side model configuration. This is used by
+ * reproducible background evaluations so changing the active model later does not
+ * silently change an already-created experiment.
+ */
+export async function loadServerModelForUserById(
+  user: string,
+  configId: string,
+): Promise<OpencodeModelConfig | null> {
+  const settings = await getUserSettings(user);
+  const cfg = settings.configs.find((item) => item.id === configId) || null;
+  return mapServerModelConfig(cfg);
+}
+
+function mapServerModelConfig(
+  cfg: Awaited<ReturnType<typeof getActiveConfig>>,
+): OpencodeModelConfig | null {
   if (!cfg || !isModelConnectionReady(cfg)) return null;
 
   // provider 字段只在 default 配置上存在；强转读一下

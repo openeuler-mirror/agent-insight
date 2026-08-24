@@ -146,6 +146,26 @@ function ensureClientIdentity(options = {}) {
   }
 }
 
+function normalizeServiceBaseUrl(value) {
+  try {
+    const raw = String(value || "").trim()
+    if (!raw) return null
+    const url = new URL(raw.match(/^https?:\/\//i) ? raw : `http://${raw}`)
+    const pathname = url.pathname.replace(/\/+$/, "")
+    return `${url.origin.toLowerCase()}${pathname}`
+  } catch {
+    return null
+  }
+}
+
+function clientIdentityForHost(clientIdentity, host) {
+  if (!clientIdentity?.deviceCredential) return clientIdentity
+  const registeredBaseUrl = normalizeServiceBaseUrl(clientIdentity.insightBaseUrl)
+  const targetBaseUrl = normalizeServiceBaseUrl(host)
+  if (registeredBaseUrl && targetBaseUrl && registeredBaseUrl === targetBaseUrl) return clientIdentity
+  return { ...clientIdentity, deviceCredential: null }
+}
+
 function pickReportedIp(networkInterfaces = os.networkInterfaces()) {
   for (const entries of Object.values(networkInterfaces || {})) {
     for (const entry of entries || []) {
@@ -451,8 +471,8 @@ function getRequestOptions(targetUrl, apiKey, bodyLength, clientIdentity = null)
     port: targetUrl.port || (protocol === "https:" ? 443 : 80),
     path: (() => {
       const base = targetUrl.pathname === "/" ? "" : targetUrl.pathname.replace(/\/$/, "")
-      if (base.endsWith("/api")) return base + "/upload"
-      return base + "/api/upload"
+      if (base.endsWith("/api")) return base + "/ingest/upload"
+      return base + "/api/ingest/upload"
     })(),
     method: "POST",
     headers,
@@ -1113,7 +1133,13 @@ async function main() {
     appendUploaderLog(`main.keyless no api key — uploading anyway (server attributes via AGENT_INSIGHT_DEFAULT_INGEST_USER)`)
   }
 
-  const clientIdentity = ensureClientIdentity()
+  const registeredClientIdentity = ensureClientIdentity()
+  const clientIdentity = clientIdentityForHost(registeredClientIdentity, host)
+  if (registeredClientIdentity?.deviceCredential && !clientIdentity?.deviceCredential) {
+    appendUploaderLog(
+      `main.clientCredentialSkipped registeredHost=${registeredClientIdentity.insightBaseUrl || "(missing)"} targetHost=${host}`,
+    )
+  }
   const reportedIp = pickReportedIp()
   appendUploaderLog(
     `main.client clientId=${clientIdentity?.clientId || "(missing)"} ` +
@@ -1343,6 +1369,7 @@ export {
   buildSignature,
   buildState,
   ensureClientIdentity,
+  clientIdentityForHost,
   isValidClientId,
   pickReportedIp,
   getRequestOptions,
