@@ -84,6 +84,92 @@ function classifyRolloutMetadata(meta) {
   });
 }
 
+function contentEvent(base, record, contentKind, payload) {
+  return {
+    eventId: stableEventId("desktop-rollout-content", base.sourceThreadId, base.sourceExecutionId, contentKind, payload.callId || payload.itemId || payload.text, timestampOf(record)),
+    eventType: "rollout_content",
+    contentKind,
+    source: "desktop_rollout",
+    sourceKind: base.sourceKind,
+    sourceThreadId: base.sourceThreadId,
+    sourceExecutionId: base.sourceExecutionId,
+    sourceItemId: payload.callId || payload.itemId,
+    timestampMs: timestampOf(record),
+    payload: redactValue(payload),
+    provenance: { direct: true, confidence: "direct" },
+  };
+}
+
+function messageText(payload) {
+  const content = Array.isArray(payload?.content) ? payload.content : [];
+  const parts = content
+    .map((item) => (item && typeof item === "object" ? text(item.text) : undefined))
+    .filter(Boolean);
+  if (parts.length > 0) return parts.join("\n") || undefined;
+  return text(payload?.text ?? payload?.message);
+}
+
+function outputText(payload) {
+  const raw = payload?.output;
+  if (Array.isArray(raw)) {
+    const parts = raw
+      .map((item) => (item && typeof item === "object" ? text(item.text) : undefined))
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join("\n") || undefined;
+  }
+  if (raw && typeof raw === "object") return text(JSON.stringify(raw));
+  return text(raw);
+}
+
+function extractRolloutContentEvents(record, context) {
+  const type = recordType(record);
+  const payload = payloadOf(record);
+  const base = {
+    sourceKind: context.sourceKind,
+    sourceThreadId: context.sourceThreadId,
+    sourceExecutionId: context.activeExecutionId,
+  };
+  const events = [];
+  if (!context.sourceThreadId) return { events, context };
+  if (type === "response_item" || type === "responseItem") {
+    const itemType = text(payload.type);
+    if (itemType === "message" && text(payload.role) === "assistant") {
+      const body = messageText(payload);
+      if (body) {
+        events.push(contentEvent(base, record, "llm_text", {
+          itemId: text(payload.id),
+          text: body,
+        }));
+      }
+    } else if (itemType === "message" && text(payload.role) === "user") {
+      // user 正文由 user_message lifecycle 事件承担（同内容、带 turn id），不重复提取。
+    } else if (itemType === "function_call" || itemType === "custom_tool_call") {
+      // 记录 call_id → 工具名映射，供 tool_output content 事件回填 toolName。
+      const callId = text(payload.call_id ?? payload.callId);
+      const name = text(payload.name);
+      if (callId && name) context.toolNames.set(callId, name);
+    } else if (itemType === "function_call_output" || itemType === "custom_tool_call_output") {
+      const callId = text(payload.call_id ?? payload.callId);
+      const output = outputText(payload);
+      if (callId && output) {
+        events.push(contentEvent(base, record, "tool_output", {
+          callId,
+          toolName: context.toolNames.get(callId),
+          output,
+        }));
+      }
+    }
+  } else if (type === "agent_message" || type === "agentMessage") {
+    const body = messageText(payload);
+    if (body) {
+      events.push(contentEvent(base, record, "agent_message", {
+        text: body,
+      }));
+    }
+  }
+  return { events, context };
+}
+
 function recordsToLifecycleEvents(record, context) {
   const type = recordType(record);
   const payload = eventMessage(record);
@@ -213,6 +299,7 @@ function createDesktopRolloutReader(options = {}) {
       activeTaskHadUserInput: saved.activeTaskHadUserInput === true,
       taskStartedAt: saved.taskStartedAt,
       unknownRecords: 0,
+      toolNames: new Map(saved.toolNames || []),
     };
     let offset = cursor;
     let emitted = 0;
@@ -222,9 +309,14 @@ function createDesktopRolloutReader(options = {}) {
       let nextContext = context;
       const events = [];
       for (const record of batch.events) {
-        const converted = recordsToLifecycleEvents(record, nextContext);
-        nextContext = converted.context;
-        events.push(...converted.events);
+        const lifecycle = recordsToLifecycleEvents(record, nextContext);
+        nextContext = lifecycle.context;
+        events.push(...lifecycle.events);
+        // Bug 56：response_item/agent_message 正文记录此前落入 unknownRecords；这里
+        // 以 rollout_content 事件提取正文与工具结果，与 lifecycle 事件同批上报。
+        const content = extractRolloutContentEvents(record, nextContext);
+        nextContext = content.context;
+        events.push(...content.events);
       }
       if (events.length > 0) {
         await onEvents(events, { filePath, relativePath: relative });
@@ -238,6 +330,7 @@ function createDesktopRolloutReader(options = {}) {
         activeExecutionId: nextContext.activeExecutionId,
         activeTaskHadUserInput: nextContext.activeTaskHadUserInput === true,
         taskStartedAt: nextContext.taskStartedAt,
+        toolNames: [...nextContext.toolNames.entries()].slice(-500),
       };
       state.unknownRecords += nextContext.unknownRecords - context.unknownRecords;
       Object.assign(context, nextContext);
@@ -263,6 +356,7 @@ module.exports = {
   classifyRolloutMetadata,
   createDesktopRolloutReader,
   defaultSessionsDir,
+  extractRolloutContentEvents,
   listRolloutFiles,
   recordsToLifecycleEvents,
 };
