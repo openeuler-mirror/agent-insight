@@ -655,15 +655,19 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
 
     if (calls.length === 0) {
         // Pure LLM response with no tool calls — emit an llm event if it produced
-        // any output (visible text or just reasoning).
-        if (isAssistantLike && llmSummary.trim()) {
+        // any output (visible text or just reasoning). OTLP-normalized llm spans
+        // often carry usage but empty text — the model turn that decided to call
+        // a tool. Dropping those strands the usage so per-node LLM tokens no
+        // longer sum to the root aggregate (Bug 59, same as WorkBuddy P8).
+        const hasUsageOrModel = !!it.usage?.total || !!it.model || !!it.modelID || !!it.model_id;
+        if (isAssistantLike && (llmSummary.trim() || hasUsageOrModel)) {
             out.push({
                 kind: 'llm',
                 interaction: it,
                 interactionIndex: idx,
                 startedAt: baseTs,
                 completedAt,
-                summary: llmSummary,
+                summary: llmSummary || String(it.model || it.modelID || it.model_id || 'LLM'),
                 usage: it.usage,
             });
         }

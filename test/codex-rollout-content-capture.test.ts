@@ -308,3 +308,37 @@ test("回填窗口：早于 cutoff 的历史文件跳过、新文件正常消费
   assert.ok(oldKey, "old file is marked consumed (skipped backfill)")
   assert.equal(checkpoint.files[oldKey].skippedBackfill, true)
 })
+
+test("Bug 59/60：textless LLM 带 usage 不丢弃、skill 输出从 runner 工具传播", async () => {
+  // Bug 59: OTLP llm span with usage but empty text must survive the call tree
+  const { buildAgentCallTree } = await import("../src/lib/engine/observability/agent-trace.ts")
+  const interactions: any[] = [
+    { role: "assistant", content: "", model: "gpt-5.6-sol", usage: { input: 1000, output: 200, total: 1200 }, timestamp: "2026-08-24T02:00:00.000Z" },
+  ]
+  const tree = buildAgentCallTree(interactions as any)
+  const llmNodes = JSON.stringify(tree)
+  assert.match(llmNodes, /gpt-5\.6-sol/, "textless llm with usage/model must produce an llm node")
+  assert.match(llmNodes, /1200/, "its usage must reach the tree so per-node token sums work")
+
+  // Bug 60: skill interaction without output inherits the skill-runner tool output
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_010_000 })
+  await core.processOtel(otlpLogs("codex.user_prompt", {
+    "conversation.id": "thread-b60",
+    "turn.id": "turn-b60",
+    prompt: "skill 输出传播验证",
+  }, 1_700_000_009_000))
+  // skill span（无输出）+ 同轮 skill runner 工具（带输出）
+  await core.processOtel(otlpLogs("codex.tool_result", {
+    "conversation.id": "thread-b60",
+    "turn.id": "turn-b60",
+    "tool.name": "skill",
+    call_id: "call_skill_1",
+    output: "技能运行产出：审计报告正文",
+  }, 1_700_000_009_500))
+  const record = aggregateCodexTraceEvents("thread-b60:turn:turn-b60", writer.events as any)
+  assert.ok(record, "record must exist")
+  const skillInteraction = (record?.interactions || []).find((i: any) =>
+    (i.tool_calls || []).some((c: any) => c?.function?.name === "skill"))
+  assert.ok(skillInteraction, "skill runner tool produces a skill-named call")
+})

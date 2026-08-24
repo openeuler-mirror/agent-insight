@@ -712,6 +712,7 @@ export function aggregateCodexTraceEvents(
   const rootLlmEvents: OtelTraceEvent[] = [];
   const rootLlmInteractions: AnyObj[] = [];
   const pendingSubagentOutcomes: Array<{ event: OtelTraceEvent; interaction: AnyObj }> = [];
+  const skillInteractions: Array<{ event: OtelTraceEvent; interaction?: AnyObj }> = [];
   let toolErrors = 0;
 
   for (const event of ordered) {
@@ -852,6 +853,7 @@ export function aggregateCodexTraceEvents(
           },
         }],
       });
+      skillInteractions.push({ event, interaction: interactions[interactions.length - 1] });
       continue;
     }
 
@@ -962,6 +964,24 @@ export function aggregateCodexTraceEvents(
     const input = eventInput(event);
     return typeof input === 'string' && INTERNAL_ROOT_INPUT.test(input);
   });
+  // Bug 61：根 input 是 Codex 内部系统提示词（建议生成/标题生成/worker 提示词）
+  // 的会话即使有真实工作（建议生成会消耗大量 token）也不是用户任务，
+  // 一律按 thread-only 持久化，不进入任务列表。
+  if (internalOnlyRoot) {
+    if (!traceThread?.events?.length) return null;
+    return {
+      task_id: `codex:${sourceThreadId}:thread-events`,
+      framework: 'codex',
+      label: 'codex-thread',
+      user: first.user || 'anonymous',
+      timestamp: traceThread.startedAt || new Date(),
+      sourceThreadId,
+      sourceKind,
+      traceThread,
+      threadOnly: true,
+      interactions: [],
+    };
+  }
   if (!hasWork && !hasLifecycleExecution && (!hasMeaningfulRootSignal || internalOnlyRoot)) {
     if (!traceThread?.events?.length) return null;
     return {
@@ -977,6 +997,39 @@ export function aggregateCodexTraceEvents(
       interactions: [],
     };
   }
+  // Bug 60：桌面会话里技能以工具形态运行（OTLP/rollout tool_result 携带结果），
+  // 而 skill span 自身没有完成快照——宿主工具的 PostToolUse hook 在 app-server
+  // 路径不触发。把同轮 skill-runner 工具的输出传播给配对的 SKILL 交互，
+  // SKILL 节点才显示技能产出（对新旧数据同时生效，无需重采）。
+  const SKILL_RUNNER_TOOLS = new Set([
+    'skill', 'skill_view', 'load_skill', 'load-skill',
+    'run_skill', 'run-skill', 'skill.run', 'skill_run',
+  ]);
+  for (const ref of skillInteractions) {
+    const interaction = ref.interaction;
+    if (!interaction) continue;
+    if (content(interaction.content) || content((interaction.tool_calls as AnyObj[] | undefined)?.[0]?.output)) continue;
+    const turnId = content(attrs(ref.event)['codex.turn.id']);
+    const skillStartedAt = ref.event.startTimeMs || 0;
+    const runner = interactions.find((item) => {
+      if (item === interaction) return false;
+      const call = ((item.tool_calls as AnyObj[] | undefined) || [])[0] as AnyObj | undefined;
+      if (!call) return false;
+      if (!SKILL_RUNNER_TOOLS.has(String((call?.function as AnyObj | undefined)?.name || '').toLowerCase())) return false;
+      if (!content(call.output)) return false;
+      if (turnId && content(item.turn_id) && content(item.turn_id) !== turnId) return false;
+      return (item.timestamp ? Date.parse(String(item.timestamp)) : 0) >= skillStartedAt;
+    });
+    if (runner) {
+      const output = content(((runner.tool_calls as AnyObj[] | undefined) || [])[0]?.output) || '';
+      interaction.content = output;
+      if (interaction.tool_calls) {
+        (interaction.tool_calls as AnyObj[])[0].output = output;
+        (interaction.tool_calls as AnyObj[])[0].result = output;
+      }
+    }
+  }
+
   // Execution 已按 turn 边界拆分；从根 agent 的开始到该 execution 内最后一个
   // child event 的结束，才能覆盖真实的 LLM、Tool、Skill 与子 Agent 链路。
   // 不能只取根生命周期 snapshot 的结束时间，否则根节点可能短于实际执行数分钟。
@@ -990,6 +1043,27 @@ export function aggregateCodexTraceEvents(
     llmEvents.map(eventInput).find(Boolean) ||
     subagentEvents.map(eventInput).find(Boolean) ||
     (toolEvents.length > 0 ? `Codex tool: ${toolName(toolEvents[0])}` : 'Codex execution');
+  // Bug 62：没有任何用户输入信号（根/LLM/子 Agent 均无 input）的执行是桌面
+  // 自动延续 turn（task_started 后无 user_message）——不是用户发起的任务。
+  // 按线程事件持久化，不用臆造的 "Codex tool: exec" 查询污染任务列表。
+  const hasUserInputSignal = rootEvents.some((event) => Boolean(eventInput(event))) ||
+    llmEvents.some((event) => Boolean(eventInput(event))) ||
+    subagentEvents.some((event) => Boolean(eventInput(event)));
+  if (!hasUserInputSignal) {
+    if (!traceThread?.events?.length) return null;
+    return {
+      task_id: `codex:${sourceThreadId}:thread-events`,
+      framework: 'codex',
+      label: 'codex-thread',
+      user: first.user || 'anonymous',
+      timestamp: traceThread.startedAt || new Date(),
+      sourceThreadId,
+      sourceKind,
+      traceThread,
+      threadOnly: true,
+      interactions: [],
+    };
+  }
   const finalRootEvent = [...rootEvents].reverse().find((event) => Boolean(eventOutput(event)));
   const finalLlmEvent = [...rootLlmEvents].reverse().find((event) => Boolean(eventOutput(event)));
   const finalResult = finalRootEvent

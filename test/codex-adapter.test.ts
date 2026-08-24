@@ -1281,6 +1281,9 @@ test("Codex adapter skips an empty lifecycle and names real untitled work withou
   ]))
   assert.equal(redactedLifecycle, null)
 
+  // Bug 62（2026-08-24 用户现场反馈）：没有任何用户输入信号的执行（桌面自动
+  // 延续 turn、仅工具工作的会话）不再成为列表任务——臆造的
+  // "Codex tool: shell" 查询污染任务列表。真实工作保留为线程事件。
   const untitled = aggregateOtelTraceEvents("tool-session", normalize([
     canonical({
       sessionId: "tool-session",
@@ -1300,8 +1303,8 @@ test("Codex adapter skips an empty lifecycle and names real untitled work withou
       tool: { name: "shell", type: "shell", arguments: {}, result: "ok" },
     }),
   ]))
-  assert.ok(untitled)
-  assert.equal(untitled.query, "Codex tool: shell")
+  assert.ok(untitled === null || untitled?.threadOnly,
+    "tool-only sessions without user input never become a visible list task")
 })
 
 test("Codex adapter suppresses internal utility sessions whose only signal is a system-prompt root input", () => {
