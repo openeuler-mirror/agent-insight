@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import http from 'node:http'
 import test from 'node:test'
+import os from 'node:os'
+import path from 'node:path'
 
 import {
   authenticateDevice,
@@ -133,11 +138,103 @@ test('installer records the owning account so the next install can compare', () 
   assert.match(src, /previousClientId: previousClientId/, '改绑时必须告知服务端解绑哪一个')
 })
 
-test('installer skips only when the account matches, never on file existence alone', () => {
-  const src = installerSource()
-  // 只看文件是否存在会导致换账号后静默沿用旧绑定（Trace 归新账号、纳管归旧账号）
-  assert.match(src, /existing\.user === args\.user/, '跳过条件必须比对账号')
-  assert.match(src, /检测到账号变更/, '账号变更应有明确日志而非静默')
+test('installer re-registers in a temporary HOME and does not send an old clientId across base paths', async () => {
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-client-rebind-'))
+  const clientDir = path.join(tempHome, '.agent-insight', 'client')
+  const fakeBin = path.join(tempHome, 'bin')
+  fs.mkdirSync(clientDir, { recursive: true })
+  fs.mkdirSync(fakeBin, { recursive: true })
+
+  for (const command of ['launchctl', 'systemctl']) {
+    fs.writeFileSync(path.join(fakeBin, command), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  }
+
+  const requestPaths: string[] = []
+  const registerPayloads: Record<string, unknown>[] = []
+  const server = http.createServer(async (req, res) => {
+    requestPaths.push(req.url || '')
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    registerPayloads.push(JSON.parse(raw) as Record<string, unknown>)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({
+      user: 'same-user',
+      clientId: 'cli_new-base-path',
+      deviceCredential: registerPayloads.length === 1 ? 'dc_new-base-path' : 'dc_rotated-base-path',
+      reused: registerPayloads.length > 1,
+      control: {},
+    }))
+  })
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address()
+    assert.ok(address && typeof address !== 'string')
+    const origin = `http://127.0.0.1:${address.port}`
+    const oldBaseUrl = `${origin}/old-insight`
+    const newBaseUrl = `${origin}/new-insight`
+    fs.writeFileSync(path.join(clientDir, 'config.json'), JSON.stringify({
+      insightBaseUrl: oldBaseUrl,
+      user: 'same-user',
+      clientId: 'cli_old-base-path',
+      deviceCredential: 'dc_old-base-path',
+    }))
+
+    const installer = path.join(__dirname, '..', 'scripts', 'install-ras-client.js')
+    const runInstaller = (token: string) => new Promise<{
+      code: number | null
+      stdout: string
+      stderr: string
+    }>((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        installer,
+        '--host', newBaseUrl,
+        '--token', token,
+        '--user', 'same-user',
+        '--no-start',
+        '--no-fi',
+      ], {
+        env: {
+          ...process.env,
+          HOME: tempHome,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+          AGENT_INSIGHT_MACHINE_ID: 'machine-mock-rebind',
+        },
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (chunk) => { stdout += chunk })
+      child.stderr.on('data', (chunk) => { stderr += chunk })
+      child.once('error', reject)
+      child.once('close', (code) => resolve({ code, stdout, stderr }))
+    })
+
+    const result = await runInstaller('it_mock-token-1')
+
+    assert.equal(result.code, 0, result.stderr || result.stdout)
+    assert.match(result.stdout, /检测到平台地址变更/)
+    assert.equal(requestPaths[0], '/new-insight/api/reliability/client/v1/register')
+    assert.equal(registerPayloads[0]?.previousClientId, null, '同 origin 的不同 basePath 也不能发送旧 clientId')
+
+    const firstConfig = JSON.parse(fs.readFileSync(path.join(clientDir, 'config.json'), 'utf8'))
+    assert.equal(firstConfig.insightBaseUrl, newBaseUrl)
+    assert.equal(firstConfig.clientId, 'cli_new-base-path')
+    assert.equal(firstConfig.deviceCredential, 'dc_new-base-path')
+
+    const repeated = await runInstaller('it_mock-token-2')
+    assert.equal(repeated.code, 0, repeated.stderr || repeated.stdout)
+    assert.match(repeated.stdout, /正在刷新本机绑定与设备凭证/)
+    assert.equal(requestPaths.length, 2, '同账号、同服务基址重装也必须重新注册')
+    assert.equal(registerPayloads[1]?.previousClientId, 'cli_new-base-path')
+    const refreshedConfig = JSON.parse(fs.readFileSync(path.join(clientDir, 'config.json'), 'utf8'))
+    assert.equal(refreshedConfig.deviceCredential, 'dc_rotated-base-path')
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    fs.rmSync(tempHome, { recursive: true, force: true })
+  }
 })
 
 // ---------------------------------------------- 机器指纹去重
