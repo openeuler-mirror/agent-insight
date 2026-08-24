@@ -17,18 +17,14 @@ description: Plan-execution semantic judge for LLM thinking-loop faults (PR#3102
 - 同一段分析逻辑在片段内重复出现（即使措辞不同）
 - 长时间纠结却无法选定下一步或给出阶段性结论
 
+**不要**把「长篇自我复核、方案摇摆但有限轮次后会自行结束」判成本类；那是独立的 **analysis_paralysis** 故障域。
+
 ### text_degradation（文本崩坏）
 
 - 语句明显不连续：前后句断裂、半句话拼接、词组被截断后硬接另一段内容
 - 出现乱码或粘连：字符错位、无意义混排、URL/词语/数字被撕碎后交叉拼接
 - 同一位置反复出现残缺片段，或可读性与语法大面积崩坏
 - 逻辑跳跃严重，推理链条难以跟随
-
-### overthinking（过度思考）
-
-- 推理冗长、反复自我质疑，但仍有微弱推进迹象
-- 大量铺垫与重复论证，迟迟不收敛到下一步或结论
-- 审慎复核本身不算异常；只有「纠结占主导、推进极慢」才判 overthinking
 
 ### none（正常）
 
@@ -41,8 +37,7 @@ description: Plan-execution semantic judge for LLM thinking-loop faults (PR#3102
 
 1. `text_degradation`（可读性/安全优先）
 2. `semantic_deadlock`
-3. `overthinking`
-4. 否则 `none`
+3. 否则 `none`
 
 ## 触发规则
 
@@ -64,7 +59,7 @@ description: Plan-execution semantic judge for LLM thinking-loop faults (PR#3102
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `abnormal` | boolean | 是 | 是否异常 |
-| `primary_fault` | string | 是 | `none` / `semantic_deadlock` / `text_degradation` / `overthinking` |
+| `primary_fault` | string | 是 | `none` / `semantic_deadlock` / `text_degradation` |
 | `confidence` | number | 否 | 0.0–1.0 |
 | `rationale` | string | 否 | 简短判定理由 |
 
