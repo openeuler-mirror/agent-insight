@@ -9,7 +9,6 @@ import { createRequire } from "node:module"
 const require = createRequire(import.meta.url)
 const {
   createDesktopRolloutReader,
-  extractRolloutContentEvents,
 } = require("../scripts/agent-trace-collectors/codex/rollout-reader.cjs")
 const { CodexTraceCore } = require("../scripts/agent-trace-collectors/codex/codex-trace-core.cjs")
 const {
