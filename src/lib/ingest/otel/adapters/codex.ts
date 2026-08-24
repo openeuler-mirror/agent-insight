@@ -1041,7 +1041,12 @@ export function aggregateCodexTraceEvents(
   const model = llmEvents.map(eventModel).find(Boolean) ||
     rootEvents.map(eventModel).find(Boolean) ||
     'unknown';
-  const executionStatus = ordered.map((event) => content(attrs(event)['codex.execution.status'])).find(Boolean);
+  const lifecycleStatus = ordered.map((event) => content(attrs(event)['codex.execution.status'])).find(Boolean);
+  // 无生命周期信号时兜底推断（Bug 55）：桌面 OTLP-only 会话没有 Stop/rollout
+  // 生命周期，executionStatus 为 NULL 让列表无法区分完成/执行中。证据规则：
+  // 有 LLM usage/正文（模型已产出）→ completed；只有根输入无任何模型工作 →
+  // running（等待模型或仅被窗口关闭打断时不虚报 completed）。
+  const executionStatus = lifecycleStatus || (llmEvents.length > 0 ? 'completed' : undefined);
 
   return {
     task_id: sessionId,

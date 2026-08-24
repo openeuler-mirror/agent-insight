@@ -325,6 +325,7 @@ class CodexTraceCore {
         model: metadata.model,
         originator: metadata.originator,
         terminalType: metadata.terminalType,
+        serviceName: metadata.serviceName,
         sourceKind: classifyCodexSource(metadata).sourceKind,
         input: undefined,
         output: undefined,
@@ -346,10 +347,12 @@ class CodexTraceCore {
     session.model = metadata.model || session.model;
     session.originator = metadata.originator || session.originator;
     session.terminalType = metadata.terminalType || session.terminalType;
+    session.serviceName = metadata.serviceName || session.serviceName;
     const classified = classifyCodexSource({
       ...metadata,
       originator: metadata.originator || session.originator,
       terminalType: metadata.terminalType || session.terminalType,
+      serviceName: metadata.serviceName || session.serviceName,
     });
     if (classified.sourceKind !== "unknown" || !session.sourceKind) {
       session.sourceKind = classified.sourceKind;
@@ -947,6 +950,7 @@ class CodexTraceCore {
         model: asString(firstDefined(attrs, ["model", "gen_ai.request.model"])),
         originator: asString(firstDefined(attrs, ["originator", "codex.originator"])),
         terminalType: asString(firstDefined(attrs, ["terminal.type", "terminal_type"])),
+        serviceName: asString(firstDefined(attrs, ["service.name", "service_name"])),
       });
       const turnId = asString(firstDefined(attrs, ["turn.id", "turn_id", "codex.turn.id"]));
       let turn = this.resolveOtelTurn(session, turnId, record.timestampMs);

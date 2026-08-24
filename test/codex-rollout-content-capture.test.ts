@@ -200,3 +200,77 @@ test("Bug 56 红灯：adapter 聚合后 LLM 节点带正文、工具带结果（
   assert.ok(toolWithOutput, "aggregated interactions must include tool output from rollout")
   assert.equal(record?.query, "端到端验证任务")
 })
+
+test("Bug 54：OTel 会话按 service.name=codex-app-server 归类 sourceKind（不再 Unknown）", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_002_000 })
+  // 桌面会话形态：无 originator/clientName，只有 resource service.name
+  await core.processOtel(otlpLogs("codex.user_prompt", {
+    "conversation.id": "thread-svc",
+    "turn.id": "turn-svc",
+    prompt: "service.name 分类验证",
+  }, 1_700_000_001_500))
+  await core.processOtel(otlpLogs("codex.sse_event", {
+    "conversation.id": "thread-svc",
+    "turn.id": "turn-svc",
+    "event.kind": "response.completed",
+    "response.id": "resp-svc",
+    input_token_count: 10,
+    output_token_count: 5,
+  }, 1_700_000_001_600))
+  const llm = writer.events.find((e) => e.kind === "llm")
+  assert.ok(llm, "llm event must exist")
+  assert.equal(llm.attributes?.["codex.source.kind"], "app_server",
+    "desktop app-server OTel sessions must classify sourceKind=app_server via service.name")
+  // CLI service.name 不得误归类
+  const writer2 = new MemoryWriter()
+  const core2 = new CodexTraceCore({ writer: writer2, now: () => 1_700_000_002_000 })
+  await core2.processOtel({
+    resourceLogs: [{
+      resource: { attributes: [{ key: "service.name", value: { stringValue: "codex_cli_rs" } }] },
+      scopeLogs: [{
+        logRecords: [{
+          timeUnixNano: String(1_700_000_001_500 * 1e6),
+          attributes: [
+            { key: "event.name", value: { stringValue: "codex.user_prompt" } },
+            { key: "conversation.id", value: { stringValue: "thread-cli" } },
+            { key: "turn.id", value: { stringValue: "turn-cli" } },
+            { key: "prompt", value: { stringValue: "cli 分类验证" } },
+          ],
+        }],
+      }],
+    }],
+  })
+  const root = writer2.events.find((e) => e.kind === "agent")
+  assert.ok(root, "cli root event must exist")
+  assert.notEqual(root.attributes?.["codex.source.kind"], "app_server",
+    "CLI service.name=codex_cli_rs must not be classified as app_server")
+})
+
+test("Bug 55：无生命周期信号时最终答复与 executionStatus 兜底", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_003_000 })
+  await core.processOtel(otlpLogs("codex.user_prompt", {
+    "conversation.id": "thread-b55",
+    "turn.id": "turn-b55",
+    prompt: "Bug 55 兜底验证",
+  }, 1_700_000_002_500))
+  await core.processOtel(otlpLogs("codex.sse_event", {
+    "conversation.id": "thread-b55",
+    "turn.id": "turn-b55",
+    "event.kind": "response.completed",
+    "response.id": "resp-b55",
+    input_token_count: 30,
+    output_token_count: 8,
+  }, 1_700_000_002_600))
+  // 无 Stop hook、无 rollout task_complete —— Bug 55 场景
+  const base = { sourceThreadId: "thread-b55", sourceKind: "app_server", sourceExecutionId: "turn-b55", provenance: { direct: true, confidence: "direct" } }
+  await core.processRolloutContent({ ...base, eventId: "rc-b55", eventType: "rollout_content", contentKind: "agent_message", timestampMs: 1_700_000_002_700, payload: { text: "最终答复正文（来自 rollout agent_message）。" } })
+
+  const record = aggregateCodexTraceEvents("thread-b55:turn:turn-b55", writer.events as any)
+  assert.ok(record, "record must exist")
+  // 最终答复：最后一条带 output 的 LLM 事件兜底为 finalResult（Bug 56 联动）
+  assert.match(String(record?.final_result || ""), /最终答复正文/, "final result falls back to last rollout LLM content")
+  // executionStatus：无生命周期信号但有 LLM 工作 → completed
+  assert.equal(record?.executionStatus, "completed", "llm work without lifecycle infers completed")
+})

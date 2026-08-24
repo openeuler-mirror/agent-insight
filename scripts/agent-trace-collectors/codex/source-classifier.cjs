@@ -18,10 +18,17 @@ function classifyCodexSource(input = {}) {
   const originator = text(input.originator || input["codex.originator"]);
   const source = text(input.source || input.threadSource || input.thread_source);
   const terminalType = text(input.terminalType || input.terminal_type || input["codex.terminal.type"]);
-  const evidence = { clientName, originator, source, terminalType };
+  const serviceName = text(input.serviceName || input.service_name || input["service.name"]);
+  const evidence = { clientName, originator, source, terminalType, serviceName };
 
   // The proxy's own client is stronger than the application that launched it.
   if (/^(?:agent[-_ ]insight|agent_insight)(?:$|[-_ ])/i.test(clientName)) {
+    return { sourceKind: "app_server", confidence: "direct", evidence };
+  }
+  // Desktop 会话的 OTel 日志不带 originator/clientName，但 resource 的
+  // service.name=codex-app-server 在真实数据中稳定（21878/21879 实证）；CLI 路径
+  // 的 service.name=codex_cli_rs 不得误归类。
+  if (/^codex[-_ ]app[-_ ]server$/i.test(serviceName)) {
     return { sourceKind: "app_server", confidence: "direct", evidence };
   }
   if (/codex\s*desktop/i.test(originator)) {
