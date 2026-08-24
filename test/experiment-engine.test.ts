@@ -20,7 +20,9 @@ import {
   ensureEvalExperiment,
   addEvalExperimentCase,
   evaluateEvalExperimentCase,
+  settleExperimentStatus,
 } from '@/lib/engine/experiment/run-experiment';
+import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
 
 const TEST_USER = `exp-engine-${Date.now()}`;
 
@@ -337,4 +339,106 @@ test('engine: skill 评测接入——ensure/add/evaluate 单 case 走实验后�
   assert.equal(JSON.parse(stored!.pointsJson!)[0].label, '目标达成');
 
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 批量评测延迟结算，子集重试不重置已成功评估器', async () => {
+  const calls = new Map<string, number>();
+  let preparedExperimentId = '';
+  let minimumPreparedRowCount = Number.POSITIVE_INFINITY;
+  setFaithfulPresetRunnerForTest(async (evaluatorId) => {
+    calls.set(evaluatorId, (calls.get(evaluatorId) || 0) + 1);
+    if (preparedExperimentId) {
+      const prepared = await prisma.experimentEvalResult.count({
+        where: { experimentId: preparedExperimentId },
+      });
+      minimumPreparedRowCount = Math.min(minimumPreparedRowCount, prepared);
+    }
+    const score = evaluatorId === 'preset-agent-task-completion' ? 78 : 86;
+    return {
+      score,
+      points: [{ label: evaluatorId, score, evidence: { md: '稳定结果' } }],
+      evidence: { md: '稳定结果' },
+    };
+  });
+  const executionId = await createExecution();
+  const evaluatorIds = ['preset-agent-task-completion', 'preset-agent-trace-quality'];
+  const experimentId = await ensureEvalExperiment({
+    user: TEST_USER,
+    name: '批量结算与子集重试',
+    evaluatorIds,
+  });
+  preparedExperimentId = experimentId;
+  const caseId = await addEvalExperimentCase(experimentId, {
+    executionId,
+    input: '分析日志',
+    actualOutput: '分析结果',
+    referenceOutput: '参考结果',
+  });
+  await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } });
+
+  await evaluateEvalExperimentCase(experimentId, caseId, TEST_USER, { settleExperiment: false });
+  assert.equal(minimumPreparedRowCount, evaluatorIds.length);
+  assert.equal((await prisma.experiment.findUnique({ where: { id: experimentId } }))!.status, 'running');
+  const stableResult = await prisma.experimentEvalResult.findUnique({
+    where: { caseId_evaluatorId: { caseId, evaluatorId: 'preset-agent-task-completion' } },
+  });
+  assert.equal(stableResult!.score, 78);
+
+  await prisma.experimentEvalResult.update({
+    where: { caseId_evaluatorId: { caseId, evaluatorId: 'preset-agent-trace-quality' } },
+    data: { status: 'failed', score: null, errorMessage: '临时失败' },
+  });
+  await evaluateEvalExperimentCase(experimentId, caseId, TEST_USER, {
+    evaluatorIds: ['preset-agent-trace-quality'],
+    settleExperiment: false,
+  });
+
+  const resultAfterRetry = await prisma.experimentEvalResult.findUnique({
+    where: { caseId_evaluatorId: { caseId, evaluatorId: 'preset-agent-task-completion' } },
+  });
+  assert.equal(resultAfterRetry!.score, 78);
+  assert.equal(resultAfterRetry!.attempts, stableResult!.attempts);
+  assert.equal(calls.get('preset-agent-task-completion'), 1);
+  assert.equal(calls.get('preset-agent-trace-quality'), 2);
+
+  await settleExperimentStatus(experimentId);
+  assert.equal((await prisma.experiment.findUnique({ where: { id: experimentId } }))!.status, 'done');
+  setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 已有 Trace 的触发分析使用真实 Skill 命中事实确定性计分', async () => {
+  const skillName = 'engine-trigger-skill';
+  const executionId = await createExecution({ skill: null });
+  await prisma.executionSkill.create({
+    data: { executionId, skillName, skillVersion: 1, user: TEST_USER, isPrimary: true },
+  });
+  const experiment = await prisma.experiment.create({
+    data: {
+      user: TEST_USER,
+      name: '已有 Trace 触发分析',
+      agentName: 'engine-test-agent',
+      evaluatorIdsJson: JSON.stringify([SKILL_TRIGGER_ANALYZER_EVALUATOR_ID]),
+      scope: 'skill-workbench',
+      skillName,
+      skillVersion: 1,
+      preset: 'trigger',
+      cases: {
+        create: [{
+          executionId,
+          input: '应命中当前 Skill',
+          actualOutput: '历史 Trace',
+          caseValuesJson: JSON.stringify({ should_trigger: true }),
+        }],
+      },
+    },
+  });
+
+  const start = await startExperimentRun(experiment.id, TEST_USER);
+  await start!.completion;
+  const result = await prisma.experimentEvalResult.findFirst({ where: { experimentId: experiment.id } });
+  assert.equal(result!.evaluatorId, SKILL_TRIGGER_ANALYZER_EVALUATOR_ID);
+  assert.equal(result!.status, 'done');
+  assert.equal(result!.score, 100);
+  assert.equal(result!.summary, '实际触发结果与预期标注一致。');
+  assert.equal(JSON.parse(result!.pointsJson!)[0].label, '触发准确率');
 });

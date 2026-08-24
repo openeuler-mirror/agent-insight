@@ -756,11 +756,13 @@ export async function evaluateTrajectoryViaOpencode(
         // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
         insight = new AgentInsight({
             baseURL: serverUrl,
+            directory: '/tmp',
             logLevel: 'warn',
         });
 
         const sessionResp = await insight.createSession({
             title: `${EVALUATOR_AGENT_NAME}-${input.caseId}-${Date.now()}`,
+            directory: '/tmp',
         });
         const sessionId = String(sessionResp?.id || sessionResp?.ID || '');
         if (!sessionId) {

@@ -19,7 +19,8 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/skill-eval`, `/(main)/skill-eval/grayscale`, `/(main)/skill-eval/trigger/[skillName]`, `/(main)/skill-eval/_batch` | `SkillAnalysisPage`, `GrayscalePage`, `SkillEvalTriggerPage`, `BatchEvaluation` | Skill 分析：静态、A/B、触发、批量 |
 | `/(main)/skill-generator` | `PlaygroundPage` (`(main)/skill-generator/page.tsx`) | Skill 生成 playground |
 | `/(main)/skill-opt`, `/(main)/skill-opt/[name]/[version]` | `SkillOptListPage`, `SkillOptimizePage` | Skill 优化 + 历史 |
-| `/(main)/skill-history`, `/(main)/skill-release`, `/(main)/skills` | `SkillHistoryPage`, `SkillReleasePage`, `SkillsPage` | Skill 生命周期 |
+| `/(main)/skills`, `/(main)/skill-workbench` | `SkillsPage`, `SkillWorkbenchPreviewPage` | 正式 Skill 对话工作台与兼容别名 |
+| `/(main)/config/skills` | `SkillsPage` management mode | Skill 管理中心；复用旧资产管理主体，隐藏旧顶部页签 |
 | `/(main)/metrics`, `/(main)/metrics/evaluators/[id]` | `MetricsPage`, `CustomEvaluatorDetailPage` | 指标与自定义评测器 |
 | `/(main)/modelconfig`, `/(main)/modelconfig/registry`, `/(main)/modelconfig/web-search` | `ModelConfigPage`, `ModelRegistryPage`, `WebSearchConfigPage` | 模型注册表与搜索配置 |
 | `/(main)/accessconfig`, `/(main)/accessconfig/{install,health,channels,webhooks}` | `AccessConfigPage`, `AccessInstallPage`, … | 客户端安装 / 接入访问 |
@@ -48,18 +49,15 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 └─ 评估器                       → /metrics
 诊断分析                       → /fault
 持续优化 (groupSkills)
-└─ Skill                       → /skills
-   ├─ SkillHub tab             → /skills
-   ├─ 生成 tab                  → /skill-generator
-   ├─ 评测 tab                  → /skill-eval
-   └─ 优化 tab                  → /skill-opt
+└─ Skill 工作台                → /skills
 配置 (configGroup)
+├─ Skill 管理中心              → /config/skills
 ├─ 模型注册                     → /modelconfig/registry
 ├─ 联网搜索                     → /modelconfig/web-search
 └─ 客户端安装                   → /accessconfig/install
 ```
 
-Skill 在侧边栏中只有一个入口。`SkillWorkspaceTabs` 在四个既有首页上提供 SkillHub、生成、评测、优化页签；路由和页面主体保持独立，详情路由仍由各自父页面进入。`/skill-history`、`/skill-detail`、`/skill-eval/**` 与 `/skill-opt/**` 都会保持侧边栏 Skill 激活。
+Skill 在持续优化分组中只有一个正式入口，进入统一对话工作台。旧 `SkillWorkspaceTabs` 和 `/skill-generator`、`/skill-eval`、`/skill-opt` 页面继续保留兼容；带 `openSkillId` 的旧 `/skills` 深链接仍进入管理模式。
 
 **显示名 ↔ 路由的非直觉映射**（改导航或写文档时易踩坑）：
 
@@ -67,16 +65,17 @@ Skill 在侧边栏中只有一个入口。`SkillWorkspaceTabs` 在四个既有�
 |---|---|---|
 | 诊断分析 | `/fault` | 复用既有智能诊断页，非独立 `/diagnosis` |
 | 评估器 | `/metrics` | 评测器中心（`MetricsPage` + `metrics/evaluators/[id]`） |
-| Skill | `/skills` | 统一入口；四个页签继续使用原有路由 |
+| Skill | `/skills` | 对话工作台；会话固定 Skill、推进工作版本，右侧选择器可旁路浏览其他资产 |
+| Skill 管理中心 | `/config/skills` | 原 SkillHub 资产列表与版本管理 |
 | 客户端安装 | `/accessconfig/install` | 客户端接入分发 |
 
 **导航可达性矩阵**——磁盘存在的页面分三类：
 
 | 状态 | 路由 | 说明 |
 |---|---|---|
-| ✅ 侧边栏直达 | `/dashboard` `/quickstart` `/agents` `/trace` `/infra` `/experiments` `/dataset` `/metrics` `/fault` `/skills` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 快速开始串联五阶段推荐路径；Skill 的四个业务页由一个侧边栏入口承载 |
+| ✅ 侧边栏直达 | `/dashboard` `/quickstart` `/agents` `/trace` `/infra` `/experiments` `/dataset` `/metrics` `/fault` `/skills` `/config/skills` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | `/skills` 为工作台，`/config/skills` 为长期资产管理 |
 | 🔁 页签或页面内可达 | `/skill-generator` `/skill-eval` `/skill-opt`、`/skill-history` `/skill-detail`、`/details`、`/skill-opt/[name]/[version]` 等子路由 | 由 Skill 页签或父页面跳转，无独立 nav 项 |
-| 🚫 存在但未挂导航 | `/version-analysis` `/quality` `/eval` `/version-management` `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | 源码保留，但当前信息架构不提供侧边栏入口 |
+| 🚫 存在但未挂导航 | `/skill-workbench` `/version-analysis` `/quality` `/eval` `/version-management` `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | `/skill-workbench` 是 `/skills` 的兼容别名；其余源码保留，但当前信息架构不提供侧边栏入口 |
 
 > 折叠状态：`AppSidebar` 默认展开运行观测、评估与实验、持续优化和配置，并在路由命中时自动展开对应祖先。
 
@@ -86,9 +85,11 @@ Skill 在侧边栏中只有一个入口。`SkillWorkspaceTabs` 在四个既有�
 - **评测** — `eval/*`（`Dashboard`、`SkillEvaluation`、`TrajectoryEvalCenter`、`EvaluationRunDetailView`、`ExecutionRecordsTable`、`EvaluatorFindingsView`）以及 `evaluation/*`（`EvaluationContent`、`EvaluationFindings`）。
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。筛选栏的用户标签下拉支持版本/业务标签混合多选，按类型及名称前缀聚类；前缀作为无框行标题，标签以可换行的胶囊横向排列。多个标签使用 AND 语义并写入 `tagIds` URL 参数。Version Analysis page: `app/(main)/version-analysis/page.tsx`; Version Management page: `app/(main)/version-management/page.tsx`。
 - **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`、`SkillWorkspaceTabs`）、`skill-generator/*`；`skill-workspace-navigation.ts` 定义四个页签的路由归属。
+- **Skill 工作台** — `skill-workbench/*` 通过 `/api/skill-workbench` 与 `/api/skill-management` BFF 编排旧引擎。`SkillWorkbenchShell` 把顶部 `Skill + version` 作为右栏资产上下文，详情、正式评估、实验和优化记录都跟随版本切换；正式评估和实验不要求或创建过程会话，顶部切换也不会改变左侧过程会话。生成/优化会话只保存过程，未发布草稿仍由 `sessionId` 隔离。同一过程会话进入优化后，`OptimizationConversation` 在原单滚动区内先投影 `GenerationHistory`，再展示各轮优化消息与原位结果卡，不创建第二个输入框或嵌套滚动区；发布导致 `source` 变更也不会隐藏生成消息。左侧 Copilot 宽度由可拖拽分隔条控制并写入浏览器本地存储；历史列表和消息区使用一致的内边距与独立滚动容器，消息块对任意长文本强制断行。生成完成会选中草稿并打开详情，发布后再切换为正式资产。生成/优化 SSE 只是实时投影，离开页面后服务端任务继续执行并在返回时从持久化状态恢复。固定“Skill 优化”动作先调用 `/api/skill-opt/plan` 聚合全部未解决问题，再把 `planId` 交给旧优化 bridge；归并计划、编辑范围保护、结构/脚本真值/行为三层自验证和 repair 事件都会投影并持久化到 `OptimizationConversation`。每次优化运行先创建稳定 `runId/taskId/recordId`，并把同一个不可见 `optimization_meta` block 写入触发它的用户消息和对应 Agent 消息；时间线只按这组结构化标识在每轮问题下原位渲染进度、候选摘要和操作按钮，不再按创建时间推测。缺少标识的存量记录独立标为“未关联的历史优化记录”。候选随后执行快照静态质量规则；界面将优化执行失败、候选质量未通过和候选已发布分开显示，避免跨轮状态混淆。`OptimizationRecordsPanel` 使用记录列表 + 报告详情布局，以 `vN → vN+1` 展示顶部所选基线版本的记录、Monaco 行级 diff、来源会话、阻断问题以及修复、放弃和发布动作；质量规则通过后可从左侧卡片或右侧报告直接发布下一版本，Skill 实验不再提供新建候选复测入口。发布确认使用站内模态框；发布后工作台切换到新正式版本，同时创建新基线的优化会话并复制可见消息历史，旧优化会话及旧 plan 保留为审计边界。`StaticEvaluationPanel` 将评估器执行状态与质量门禁状态分开显示；`ExperimentPanel` 内嵌同一 `ExperimentWizard`，Skill 实验按当前用户、Skill 与版本过滤；创建页与 `SkillExperimentResult` 都通过 `useEvaluatorLookup` 使用评估器注册表中的 canonical 名称，冻结快照只保存稳定 ID，存量快照展示时同样按注册表解析。A/B 结果由 `ab-comparison.ts` 按 Case 交集配对聚合，只有两侧均有综合分的 Case 才进入组均分、胜负统计和逐评估器双色分解；单侧结果归入未配对。`SkillExperimentResult` 对 A/B 展示双组综合分和胜负筛选的配对表；运行中只显示固定进度与单条明细，顶部双组均分、评估器聚合条和胜负结论保持占位，全部执行和结果行收敛后再一次发布。表格每侧只聚合综合、结果、轨迹三类得分，长文本默认两行截断并可点击展开，明细容器同时提供横向与纵向滚动，数据集顶层 `expectedOutput` 会映射为参考输出。A/B 每侧的详情入口通过执行 taskId 映射回 backing `ExperimentCase`，复用标准 `ExperimentCaseDetail`，重试则复用灰度任务的单侧重评能力；重评期间保留上一版稳定分。触发分析与用例分析继续使用带纵向滚动的单组详情。所有详情始终留在工作台右侧；全局实验仍保留原路由与导航。样式仅使用共享令牌。
+- **Skill 会话与资产上下文** — 会话固定 `skillName`，并在本会话发布成功后推进 `workVersion`；历史任务仍记录各轮精确基线。顶部 `Skill + version` 控制右栏四个页签，即使与会话版本不一致也可查看和运行正式评估、实验并查看该基线的优化记录。左侧空会话的管理中心入口通过 session context BFF 完成首次绑定；点击历史会话、生成或优化入口会恢复/切换到其精确工作版本。
 - **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。
-- **实验向导与生成重试** — `app/(main)/experiments/new/page.tsx` 使用“实验设计 → Trace 来源 → 预期答案 → 评估器与执行”四步结构。第 ① 步的 Agent 来自 `/api/experiments/agents`：用户归属历史 Trace Agent 与在线客户端可执行 Agent 按名称合并，普通生成 target 还必须声明可返回 Trace ID；数据集下拉展示全部结果、轨迹和可靠性评测数据集。第 ② 步在 `existing` / `generate` 间切换：已有 Trace 路径继续通过 `/api/experiments/traces` 服务端分页；生成路径从 Agent target 选择 `workerId + platform + host`，模型只读取该 target 上报的列表，Case 使用独立 `selectedGenerated` Map，并将每条数据集 Case 的 input 作为 Agent 用户输入。所有数据集都会带入预期答案和 Tool/Skill 上下文，可靠性数据集额外带入 FI 元数据并只展示故障检测恢复评估器；普通数据集展示通用评估器。“开始实验”串行完成 create 与 run，run body 通过 `fiOrchestrate` 显式区分 FI 与通用 Trace 生成，成功后才进入详情。详情页在自动重试期间显示当前 Attempt 次数；最终 Trace 失败与评估失败共用 Case 操作列的“重试”按钮，由 Case 级 API 决定重新生成还是重评。筛选不持久化为监听规则，监听运行时仍会拒绝系统归属 Agent 的新 Trace。
-- **实验结果** — `app/(main)/experiments/page.tsx` 展示 API 返回的 `overallScore`。RAS 与通用评估器统一走 `detail-agg.ts::overallAverage`，按评估成功且有分的评估器生效总分（`humanScore ?? score`）求平均。Trace 评测详情把机器/人工生效分标记为“总分”，并对旧、新 RAS evaluator id 隐藏卡级结构化 evidence 摘要，只保留评分点证据与建议。详情页是纯状态/结果视图；`draft` 只作为 create → run 的内部瞬时状态，列表 API 不返回它，启动失败时创建页通过 draft-only DELETE 补偿回滚。运行中的实验通过轮询自动刷新进度。
+- **实验向导与生成重试** — `app/(main)/experiments/new/page.tsx` 使用“实验设计 → Trace 来源 → 预期答案 → 评估器与执行”四步结构。第 ① 步的 Agent 来自 `/api/experiments/agents`：用户归属历史 Trace Agent 与在线客户端可执行 Agent 按名称合并，普通生成 target 还必须声明可返回 Trace ID；Skill 触发分析只展示当前 Skill 的触发数据集，用例分析与 A/B 展示全部非触发数据集并标注跨 Skill 来源。第 ② 步在 `existing` / `generate` 间切换：已有 Trace 路径继续通过 `/api/experiments/traces` 服务端分页；生成路径从 Agent target 选择 `workerId + platform + host`，模型只读取该 target 上报的列表，Case 使用独立 `selectedGenerated` Map，并将每条数据集 Case 的 input 作为 Agent 用户输入。所有数据集都会带入预期答案和 Tool/Skill 上下文，可靠性数据集额外带入 FI 元数据。第 ④ 步对非触发实验展示全部 ready 的非触发预置与自建评估器；可靠性专用、参考答案和 Tool/Skill 目录要求通过置灰门控说明，不再通过预设白名单隐藏。“开始实验”串行完成 create 与 run，run body 通过 `fiOrchestrate` 显式区分 FI 与通用 Trace 生成，成功后才进入详情。详情页在自动重试期间显示当前 Attempt 次数；最终 Trace 失败与评估失败共用 Case 操作列的“重试”按钮，由 Case 级 API 决定重新生成还是重评。筛选不持久化为监听规则，监听运行时仍会拒绝系统归属 Agent 的新 Trace。
+- **实验结果** — `app/(main)/experiments/page.tsx` 展示 API 返回的 `overallScore`。RAS 与通用评估器统一走 `detail-agg.ts::overallAverage`，按评估成功且有分的评估器生效总分（`humanScore ?? score`）求平均。Trace 评测详情把机器/人工生效分标记为“总分”，并对旧、新 RAS 与轨迹质量 evaluator id 隐藏卡级结构化 evidence 摘要，只保留评分点证据与建议；详情容器、证据文本和评分点表格限制在右栏宽度内，表格不足时只在自身横向滚动。详情页是纯状态/结果视图；`draft` 只作为 create → run 的内部瞬时状态，列表 API 不返回它，启动失败时创建页通过 draft-only DELETE 补偿回滚。运行中的实验通过轮询自动刷新进度。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
 - **基础组件（复用，不要重建）** — `ui/*`（button、card、dialog、select、switch……）、`feedback/{EmptyState,ErrorState,StatusBadge}.tsx`、`text/*`（`MetricValue`、`RelativeTime`、`TruncateText`）、`SmartViewer/*`。
 

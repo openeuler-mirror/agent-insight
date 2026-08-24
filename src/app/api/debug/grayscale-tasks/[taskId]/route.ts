@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { loadServerModelForUserById } from '@/lib/engine/general-agent/server-model-config';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guards';
 import { reconcileStaleGrayscaleRun } from '@/lib/grayscale/stale-run-reconcile';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
+import { runTriggerEvalLive } from '@/lib/engine/skill-generation/evaluator/runners/triggerEval';
+import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
 import {
     ensureEvalExperiment,
     addEvalExperimentCase,
     evaluateEvalExperimentCase,
+    startEvalExperimentCases,
+    settleExperimentStatus,
     type EvalCaseResultRow,
 } from '@/lib/engine/experiment/run-experiment';
 import {
@@ -19,6 +24,18 @@ import {
     TASK_COMPLETION_EVALUATOR_ID,
     TRACE_EVALUATOR_ID,
 } from '@/lib/grayscale/ab-evaluator-selection';
+import {
+    evaluateSkillTriggerAnalysis,
+    SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+} from '@/lib/skill-workbench/trigger-evaluator';
+import {
+    getGrayscaleTaskBoundSide,
+    getGrayscaleTaskBoundVersionId,
+    hydrateGrayscaleTaskBinding,
+    isGrayscaleTaskBindingValid,
+    normalizeGrayscaleTaskBinding,
+    type GrayscaleTaskBoundSide,
+} from '@/lib/grayscale/task-binding';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +47,7 @@ interface GrayscaleConfig {
     skillId?: string;
     versionAId?: string;
     versionBId?: string;
+    boundSide?: GrayscaleTaskBoundSide;
     selectedDatasetId?: string;
     linkedDatasetIds?: string[];
     selectedCaseId?: string;
@@ -37,10 +55,23 @@ interface GrayscaleConfig {
     runCount?: number;
     repeatRounds?: number;
     agentMaxConcurrency?: number;
+    executionConcurrency?: number;
+    abPairConcurrency?: number;
+    evaluationConcurrency?: number;
+    triggerConcurrency?: number;
+    modelConfigId?: string | null;
+    modelOptions?: Record<string, unknown>;
+    interactionPolicy?: 'auto-allow' | 'auto-deny';
+    timeoutMs?: number;
+    idleTimeoutMs?: number;
+    retryLimit?: number;
     autoEval?: boolean;
     recordTriggerDetails?: boolean;
+    triggerRouting?: boolean;
     evaluatorId?: string;
     evaluators?: string[];
+    /** Skill 工作台单组实验只执行当前 Skill（B 侧）；缺省仍保持传统 A/B 双侧。 */
+    executionSides?: Side[];
     latestResultAt?: string;
     // 关联到「评测执行」页的批次 ID (evaluatorRunId)。前端通过「+ 新增评测任务」对话框创建,
     // 后续启动评测时透传给 /api/eval/trajectory/run 作 evaluatorRunId append (下一步迭代)。
@@ -60,6 +91,13 @@ function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
         evaluatorId: evaluatorIds[0] || '',
         evaluators: evaluatorIds,
     };
+}
+
+function configuredExecutionSides(config: GrayscaleConfig): Side[] {
+    const sides = Array.isArray(config.executionSides)
+        ? config.executionSides.filter((side): side is Side => side === 'a' || side === 'b')
+        : [];
+    return sides.length ? Array.from(new Set(sides)) : ['a', 'b'];
 }
 
 interface RunResult {
@@ -225,6 +263,7 @@ interface GrayscalePrisma {
     };
     trajectoryEvalResult: {
         findMany(args: { where: Record<string, unknown> }): Promise<TrajectoryResultRow[]>;
+        findFirst(args: { where: Record<string, unknown>; orderBy: { updatedAt: 'desc' } }): Promise<TrajectoryResultRow | null>;
         updateMany(args: {
             where: { user?: string; evaluatorRunId?: string; id?: { in: string[] }; status?: { in: string[] }; taskId?: { in: string[] } };
             data: { status: string; errorMessage?: string };
@@ -767,11 +806,10 @@ async function loadTask(taskId: string, user: string) {
     const task = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({ where: { id: taskId, user } });
     if (!task) return null;
     const configJson = withDefaultConfig(safeParse<GrayscaleConfig>(task.configJson, {}));
-    if (!configJson.skillId && task.skillId) configJson.skillId = task.skillId;
-    if (!configJson.versionBId && task.skillVersionId) configJson.versionBId = task.skillVersionId;
+    const normalizedConfig = hydrateGrayscaleTaskBinding(configJson, task);
     return {
         ...task,
-        configJson,
+        configJson: normalizedConfig,
         caseStatesJson: safeParse<CaseStates>(task.caseStatesJson, {}),
         // 读到的原始 caseStatesJson 串, 用于整份回写时的乐观锁 compare-and-swap。
         rawCaseStatesJson: task.caseStatesJson,
@@ -966,12 +1004,10 @@ function validateTaskSkillBinding(task: Awaited<ReturnType<typeof loadTask>>) {
     if (configSkillId && configSkillId !== task.skillId) {
         throw new Error('task skill binding cannot be changed');
     }
-    const configVersionBId = String(task.configJson.versionBId || '').trim();
-    if (configVersionBId && configVersionBId !== task.skillVersionId) {
+    if (!isGrayscaleTaskBindingValid(task.configJson, task)) {
         throw new Error('task skill version binding cannot be changed');
     }
-    task.configJson.skillId = task.skillId;
-    task.configJson.versionBId = task.skillVersionId;
+    task.configJson = normalizeGrayscaleTaskBinding(task.configJson, task);
 }
 
 async function resolveVersion(skillId: string | undefined, versionId: string | undefined) {
@@ -1434,7 +1470,15 @@ async function executeSingleAgentRun(args: {
     run.output = undefined;
     run.timeCost = undefined;
     state[target.side] = rebuildSideAggregate(state[target.side], args.totalRunsPerSide);
-    await persistTaskState(args.taskId, args.user, args.config, args.states);
+    await persistRunStatePatch({
+        taskId: args.taskId,
+        user: args.user,
+        config: args.config,
+        states: args.states,
+        caseId: target.caseId,
+        side: target.side,
+        nextRun: run,
+    });
 
     const startedAt = Date.now();
     const toolCalls: string[] = [];
@@ -1454,12 +1498,20 @@ async function executeSingleAgentRun(args: {
     // 持有 agentPromise 引用, 让 finally 在超时路径下也能等 ephemeral opencode 清理跑完 (见 finally 注释)。
     let pendingAgent: Promise<unknown> | undefined;
     try {
+        const timeoutMs = Math.max(5_000, Number(args.config.timeoutMs) || GRAYSCALE_AGENT_TIMEOUT_MS);
+        const idleTimeoutMs = Math.max(5_000, Number(args.config.idleTimeoutMs) || GRAYSCALE_AGENT_IDLE_TIMEOUT_MS);
+        const frozenModel = args.config.modelConfigId
+            ? await loadServerModelForUserById(args.user, args.config.modelConfigId)
+            : null;
+        if (args.config.modelConfigId && !frozenModel) {
+            throw new Error(`frozen model config is unavailable: ${args.config.modelConfigId}`);
+        }
         const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutTimer = setTimeout(() => {
                 didTimeout = true;
                 abortController.abort();
-                reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(GRAYSCALE_AGENT_TIMEOUT_MS / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
-            }, GRAYSCALE_AGENT_TIMEOUT_MS);
+                reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(timeoutMs / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
+            }, timeoutMs);
         });
         const grayAgentName = args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
         const agentPromise = runGeneralAgent({
@@ -1472,7 +1524,9 @@ async function executeSingleAgentRun(args: {
             // 错绑到 B 的 skill, 在用例分析按 skill 筛选时和 B 一起冒出来 (期望只出真正用了该 skill 的 trace)。
             tagSkill: args.version?.skillName ?? undefined,
             system: buildGrayscaleExecutionSystem(args.version),
-            interactionPolicy: 'auto-deny',
+            model: frozenModel || undefined,
+            modelOptions: args.config.modelOptions,
+            interactionPolicy: args.config.interactionPolicy || 'auto-deny',
             systemAgentName: grayAgentName,
             // 后台批量任务: 每次起独立 opencode 进程,跑完杀,保证拿最新 skill 内容
             ephemeralServer: true,
@@ -1482,9 +1536,9 @@ async function executeSingleAgentRun(args: {
             recordTraceAs: grayAgentName,
             sessionTitle: `grayscale ${target.side.toUpperCase()} r${target.roundIndex} · ${args.user} · ${args.taskId}`,
             workspaceTag: `grayscale-${args.taskId}-${target.side}-${target.caseId}-r${target.roundIndex}`,
-            timeoutMs: GRAYSCALE_AGENT_TIMEOUT_MS,
+            timeoutMs,
             chatOptions: {
-                idleTimeoutMs: GRAYSCALE_AGENT_IDLE_TIMEOUT_MS,
+                idleTimeoutMs,
                 signal: abortController.signal,
             },
             handlers: {
@@ -1501,7 +1555,7 @@ async function executeSingleAgentRun(args: {
         void agentPromise.catch(() => {});
         const result = await Promise.race([agentPromise, timeoutPromise]);
         if (didTimeout) {
-            throw new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(GRAYSCALE_AGENT_TIMEOUT_MS / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`);
+            throw new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(timeoutMs / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`);
         }
         const blocked = summarizeBlockedInteraction(result);
         if (blocked) {
@@ -1551,7 +1605,16 @@ async function executeSingleAgentRun(args: {
         if (pendingAgent) { try { await pendingAgent; } catch { /* fn 的错误已在上面 catch 里分类处理过 */ } }
         markLatestGrayResultAt(args.config);
         state[target.side] = rebuildSideAggregate(state[target.side], args.totalRunsPerSide);
-        await persistTaskState(args.taskId, args.user, args.config, args.states);
+        await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            caseId: target.caseId,
+            side: target.side,
+            nextRun: run,
+            touchLatestResultAt: true,
+        });
     }
 }
 
@@ -1571,7 +1634,7 @@ async function rehydrateRunFromExistingEval(args: {
     sessionId: string;
     evaluatorRunId?: string;
 }): Promise<boolean> {
-    const trajectory = (prisma as any).trajectoryEvalResult;
+    const trajectory = (prisma as unknown as GrayscalePrisma).trajectoryEvalResult;
     const base = { user: args.user, taskId: args.sessionId, status: { in: ['done', 'failed'] } };
     let row = args.evaluatorRunId
         ? await trajectory.findFirst({
@@ -1715,15 +1778,15 @@ async function evaluateSingleRunTarget(args: {
     target.run.evaluations = mergeRunEvaluations(
         target.run.evaluations,
         effectiveEvaluatorIds.map(id => ({
+            ...(target.run.evaluations?.find(item => item.evaluatorId === id) || {}),
             evaluatorId: id,
             evaluatorName: abEvaluatorName(id),
             status: 'running',
+            errorMessage: undefined,
         })),
     );
     delete target.run.evaluationResultId;
     delete target.run.evaluationTraceId;
-    delete target.run.score;
-    delete target.run.tier;
     target.run.output = undefined;
     await persistRunStatePatch({
         taskId: args.taskId,
@@ -1750,7 +1813,10 @@ async function evaluateSingleRunTarget(args: {
         const expCaseId = await addEvalExperimentCase(args.config.evalExperimentId, {
             taskId: target.run.sessionId!, input: '', actualOutput: '', referenceOutput,
         });
-        const rows = await evaluateEvalExperimentCase(args.config.evalExperimentId, expCaseId, args.user);
+        const rows = await evaluateEvalExperimentCase(args.config.evalExperimentId, expCaseId, args.user, {
+            evaluatorIds: effectiveEvaluatorIds,
+            settleExperiment: false,
+        });
         evaluatorRunId = args.config.evalExperimentId;
         applyExpRowsToRun(target.run, rows, evaluatorRunId);
         args.states[target.caseId][target.side].evaluatorRunId = evaluatorRunId;
@@ -1833,6 +1899,117 @@ function isTerminalTrajectoryStatus(status: TrajectoryResultStatus | undefined):
     return status === 'done' || status === 'failed';
 }
 
+async function evaluateRunsAsExperimentBatch(args: {
+    taskId: string;
+    user: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    targets: EvaluationTarget[];
+    evaluatorIds: string[];
+    caseConfigMap: Map<string, { datasetId: string; caseEntry: DatasetCase }>;
+}) {
+    if (!args.config.evalExperimentId) throw new Error('评测实验未初始化');
+    const experimentId = args.config.evalExperimentId;
+    for (const target of args.targets) {
+        target.run.status = 'evaluating';
+        target.run.evaluationAttempts = (target.run.evaluationAttempts || 0) + 1;
+        target.run.evaluationClaimId = buildEvaluationClaimId();
+        target.run.evaluationStartedAt = new Date().toISOString();
+        target.run.evaluations = mergeRunEvaluations(
+            target.run.evaluations,
+            args.evaluatorIds.map(evaluatorId => ({
+                ...(target.run.evaluations?.find(item => item.evaluatorId === evaluatorId) || {}),
+                evaluatorId,
+                evaluatorName: abEvaluatorName(evaluatorId),
+                status: 'running',
+                errorMessage: undefined,
+            })),
+        );
+        delete target.run.evalRetryPending;
+        delete target.run.completedAt;
+    }
+    for (const state of Object.values(args.states)) {
+        for (const side of ['a', 'b'] as Side[]) {
+            state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+        }
+    }
+    await persistTaskState(args.taskId, args.user, args.config, args.states);
+
+    try {
+        const experimentCases = await Promise.all(args.targets.map(async target => {
+            const datasetCase = args.caseConfigMap.get(target.caseId)?.caseEntry;
+            const experimentCaseId = await addEvalExperimentCase(experimentId, {
+                taskId: target.run.sessionId!,
+                input: datasetCase?.input || '',
+                actualOutput: target.run.output || '',
+                referenceOutput: datasetCase?.expectedOutput ?? null,
+            });
+            return { target, experimentCaseId };
+        }));
+        const batch = await startEvalExperimentCases(
+            experimentId,
+            experimentCases.map(item => item.experimentCaseId),
+            args.user,
+        );
+        if (!batch) throw new Error(`实验 ${experimentId} 不存在`);
+        await batch.completion;
+
+        const resultRows = await prisma.experimentEvalResult.findMany({
+            where: {
+                experimentId,
+                caseId: { in: experimentCases.map(item => item.experimentCaseId) },
+            },
+            select: {
+                caseId: true,
+                evaluatorId: true,
+                status: true,
+                score: true,
+                pointsJson: true,
+                evidenceJson: true,
+                errorMessage: true,
+            },
+        });
+        const rowsByCase = new Map<string, EvalCaseResultRow[]>();
+        for (const row of resultRows) {
+            const rows = rowsByCase.get(row.caseId) || [];
+            rows.push(row);
+            rowsByCase.set(row.caseId, rows);
+        }
+        for (const item of experimentCases) {
+            applyExpRowsToRun(item.target.run, rowsByCase.get(item.experimentCaseId) || [], experimentId);
+            args.states[item.target.caseId][item.target.side].evaluatorRunId = experimentId;
+        }
+        await hydrateExecutionMetrics(args.states);
+        for (const state of Object.values(args.states)) {
+            for (const side of ['a', 'b'] as Side[]) {
+                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+            }
+        }
+        markLatestGrayResultAt(args.config);
+        await persistTaskState(args.taskId, args.user, args.config, args.states);
+        return experimentId;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        for (const target of args.targets) {
+            applyExpRowsToRun(target.run, args.evaluatorIds.map(evaluatorId => ({
+                evaluatorId,
+                status: 'failed',
+                score: null,
+                pointsJson: null,
+                evidenceJson: null,
+                errorMessage: message,
+            })), experimentId);
+            args.states[target.caseId][target.side] = rebuildSideAggregate(
+                args.states[target.caseId][target.side],
+                args.states[target.caseId][target.side].runCount || args.states[target.caseId][target.side].runs?.length || 0,
+            );
+        }
+        markLatestGrayResultAt(args.config);
+        await persistTaskState(args.taskId, args.user, args.config, args.states).catch(() => false);
+        throw error;
+    }
+}
+
 
 // 把稳定批次 id 落到 task.configJson.evaluationBatchId。只更新 configJson(不碰 caseStatesJson),
 // 避免覆盖并发进行的 case 状态写入。落库后,本任务后续所有评测(全量/补评/重试/重启续跑)都能
@@ -1878,7 +2055,7 @@ async function evaluateRunsWithConcurrency(args: {
                 }
                 // 默认状态白名单: executed / pass。onlyMissingEvaluation 模式下额外接受
                 // 'evaluating' —— 前端行级 retry 会先把 run 标成 evaluating 让 UI 立刻
-                // 显示"评测中"动效, 此时 evaluatorRunId/score 都被清掉了, 落进 backend
+                // 显示"评测中"动效, 并把目标评估器置为 pending；旧分保留到新结果提交。
                 // 这里应当被选中重评; 不开 onlyMissing 时不接受 evaluating, 避免抢已经
                 // 在跑的 eval。
                 const eligibleStatus = run.status === 'executed' || run.status === 'pass'
@@ -1889,10 +2066,37 @@ async function evaluateRunsWithConcurrency(args: {
             }
         }
     }
-    if (targets.length === 0) return null;
+    if (targets.length === 0) {
+        if (args.config.evalExperimentId && !args.onlyMissingEvaluation) {
+            await prisma.experiment.updateMany({
+                where: { id: args.config.evalExperimentId, user: args.user },
+                data: { status: 'failed' },
+            });
+        }
+        return null;
+    }
+
+    if (args.config.evalExperimentId) {
+        await prisma.experiment.updateMany({
+            where: { id: args.config.evalExperimentId, user: args.user },
+            data: { status: 'running' },
+        });
+    }
+
+    if (!args.onlyMissingEvaluation && args.config.evalExperimentId) {
+        return evaluateRunsAsExperimentBatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            targets,
+            evaluatorIds: configuredEvaluatorIds,
+            caseConfigMap,
+        });
+    }
 
     const evaluatorRunIds: string[] = [];
-    const concurrency = Math.max(1, Number(args.config.agentMaxConcurrency || targets.length));
+    const concurrency = Math.max(1, Number(args.config.evaluationConcurrency || 4));
     // 评测器同样进 withBackgroundOpencodeSlot 排队,跟 A/B agent 执行**共享**5 个 slot ——
     // 也就是说全局后台 opencode 总并发上限就是 5, agent + evaluator 一起算。
     const runEvaluationBatch = async (batch: EvaluationTarget[]) => {
@@ -1993,7 +2197,188 @@ async function evaluateRunsWithConcurrency(args: {
             caseId: t.caseId, side: t.side, nextRun: t.run, touchLatestResultAt: true,
         }).catch(() => {});
     }
+    if (args.config.evalExperimentId && !args.parentSignal?.aborted) {
+        await settleExperimentStatus(args.config.evalExperimentId);
+    }
     return evaluatorRunIds[evaluatorRunIds.length - 1] || null;
+}
+
+async function runWorkbenchTriggerTask(args: {
+    taskId: string;
+    user: string;
+    caseIds: string[];
+    evaluatorIds?: string[];
+    signal?: AbortSignal;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        versionBId: task.skillVersionId,
+        evaluators: [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID],
+    };
+    if (!config.evalExperimentId) throw new Error('评测实验未初始化');
+    const caseMap = await loadConfiguredCaseMap(args.user, config);
+    const caseIds = args.caseIds.filter(caseId => caseMap.has(caseId));
+    if (!caseIds.length || caseIds.length !== args.caseIds.length) throw new Error('trigger cases are missing');
+    const now = new Date().toISOString();
+    const states: CaseStates = {};
+    for (const caseId of caseIds) {
+        states[caseId] = {
+            a: { status: 'executed', runs: [], runCount: 0, output: '触发分析不运行基线侧' },
+            b: {
+                status: 'running',
+                runCount: 1,
+                runs: [{ status: 'running', caseId, runIndex: 1, roundIndex: 1 }],
+            },
+        };
+    }
+    await persistTaskState(args.taskId, args.user, config, states);
+    await prisma.experiment.updateMany({
+        where: { id: config.evalExperimentId, user: args.user },
+        data: { status: 'running' },
+    });
+
+    const result = await runTriggerEvalLive({
+        triggerSet: {
+            id: `workbench:${config.evalExperimentId}`,
+            user: args.user,
+            skillName: task.skillName,
+            version: 1,
+            versionSource: 'manual',
+            versionNote: 'Skill 工作台实验冻结快照',
+            description: 'Skill 工作台触发分析',
+            items: caseIds.map(caseId => {
+                const item = caseMap.get(caseId)!.caseEntry;
+                return {
+                    id: caseId,
+                    query: item.input,
+                    shouldTrigger: item.values?.should_trigger === true,
+                    rationale: typeof item.values?.trigger_rationale === 'string'
+                        ? item.values.trigger_rationale
+                        : item.evaluationFocus || undefined,
+                    source: 'user-edited' as const,
+                };
+            }),
+            draftedFromSkillHash: null,
+            status: 'ready',
+            createdAt: now,
+            updatedAt: now,
+        },
+        skillName: task.skillName,
+        skillVersion: task.skillVersion,
+        workspaceRoot: ensureSessionWorkspace(
+            args.user,
+            `workbench-trigger-${task.skillName}-v${task.skillVersion}-${Date.now()}`,
+        ),
+        user: args.user,
+        modelConfigId: config.modelConfigId || undefined,
+        runsPerQuery: 1,
+        triggerThreshold: 0.5,
+        timeoutMs: Math.max(5_000, Math.min(30_000, Number(config.timeoutMs) || 30_000)),
+        maxTimeoutRetries: Math.max(0, Math.min(1, Number(config.retryLimit ?? 1))),
+        concurrency: Math.max(1, Number(config.triggerConcurrency || config.agentMaxConcurrency) || 5),
+        signal: args.signal,
+    });
+
+    const active = activeRuns().get(`${args.user}:${args.taskId}`);
+    if (active) active.status = 'evaluating';
+    for (const item of result.items) {
+        const datasetCase = caseMap.get(item.itemId)!.caseEntry;
+        const taskId = item.sessionIds?.[0] || null;
+        const experimentCaseId = await addEvalExperimentCase(config.evalExperimentId, {
+            taskId,
+            input: item.query,
+            actualOutput: item.runsTriggered > 0 ? 'Skill 已触发' : 'Skill 未触发',
+            referenceOutput: item.shouldTrigger ? 'Skill 应触发' : 'Skill 不应触发',
+        });
+        await prisma.experimentCase.update({
+            where: { id: experimentCaseId },
+            data: {
+                caseValuesJson: JSON.stringify({
+                    ...(datasetCase.values || {}),
+                    should_trigger: item.shouldTrigger,
+                    skill_triggered: item.runsTriggered > 0,
+                    trigger_rate: item.triggerRate,
+                    competing_skill: item.competingSkill || null,
+                }),
+            },
+        });
+        const exactEvaluation = evaluateSkillTriggerAnalysis({
+            shouldTrigger: item.shouldTrigger,
+            skillTriggered: item.runsTriggered > 0,
+            reason: typeof datasetCase.values?.trigger_rationale === 'string'
+                ? datasetCase.values.trigger_rationale
+                : datasetCase.evaluationFocus || undefined,
+            facts: {
+                runsTriggered: item.runsTriggered,
+                runsTotal: item.runsTotal,
+                triggerRate: item.triggerRate,
+                latencyMsAvg: item.latencyMsAvg,
+                competingSkill: item.competingSkill || null,
+                runsTimedOut: item.runsTimedOut || 0,
+                runsErrored: item.runsErrored || 0,
+                errorMessage: item.errorMessage || null,
+            },
+        });
+        const exactScore = exactEvaluation.score!;
+        const exactIds = new Set([SKILL_TRIGGER_ANALYZER_EVALUATOR_ID]);
+        const selectedExactIds = config.evaluators.filter(id => exactIds.has(id));
+        const nonExactIds = config.evaluators.filter(id => !exactIds.has(id));
+        const rows = nonExactIds.length
+            ? await evaluateEvalExperimentCase(config.evalExperimentId, experimentCaseId, args.user)
+            : [];
+        const exactData = {
+            status: 'done',
+            score: exactScore,
+            verdict: exactEvaluation.verdict || null,
+            summary: exactEvaluation.summary || null,
+            pointsJson: JSON.stringify(exactEvaluation.points || []),
+            evidenceJson: exactEvaluation.evidence ? JSON.stringify(exactEvaluation.evidence) : null,
+            errorMessage: null,
+            attempts: 1,
+        };
+        await Promise.all(selectedExactIds.map(evaluatorId => prisma.experimentEvalResult.upsert({
+            where: { caseId_evaluatorId: { caseId: experimentCaseId, evaluatorId } },
+            create: {
+                experimentId: config.evalExperimentId!,
+                caseId: experimentCaseId,
+                evaluatorId,
+                ...exactData,
+            },
+            update: exactData,
+        })));
+        const adjustedRows: EvalCaseResultRow[] = [
+            ...selectedExactIds.map(evaluatorId => ({
+                evaluatorId,
+                status: 'done',
+                score: exactScore,
+                pointsJson: exactData.pointsJson,
+                evidenceJson: exactData.evidenceJson,
+                errorMessage: null,
+            })),
+            ...rows.filter(row => !exactIds.has(row.evaluatorId)),
+        ];
+        const run = states[item.itemId].b.runs![0];
+        run.status = 'executed';
+        run.sessionId = taskId || undefined;
+        run.traceIds = item.sessionIds || [];
+        run.skillTriggered = item.runsTriggered > 0;
+        run.timeCost = `${(item.latencyMsAvg / 1000).toFixed(1)}s`;
+        run.output = item.runsTriggered > 0 ? 'Skill 已触发' : 'Skill 未触发';
+        applyExpRowsToRun(run, adjustedRows, config.evalExperimentId);
+        states[item.itemId].b = rebuildSideAggregate(states[item.itemId].b, 1);
+        await persistTaskState(args.taskId, args.user, config, states);
+    }
+    const failed = await prisma.experimentEvalResult.count({
+        where: { experimentId: config.evalExperimentId, status: 'failed' },
+    });
+    await prisma.experiment.updateMany({
+        where: { id: config.evalExperimentId, user: args.user },
+        data: { status: failed ? 'failed' : 'done' },
+    });
 }
 
 async function runGrayscaleTask(args: {
@@ -2015,6 +2400,9 @@ async function runGrayscaleTask(args: {
         skillId: task.skillId,
         evaluatorId: evaluatorId || task.configJson.evaluatorId,
         evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, evaluatorId || task.configJson.evaluatorId),
+        executionConcurrency: args.agentMaxConcurrency
+            || task.configJson.executionConcurrency
+            || task.configJson.agentMaxConcurrency,
         agentMaxConcurrency: args.agentMaxConcurrency || task.configJson.agentMaxConcurrency,
         // 评测批次标题默认用 A/B 任务名, 让「评测结果」里的批次跟 A/B 任务同名、好对应。
         evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
@@ -2049,20 +2437,21 @@ async function runGrayscaleTask(args: {
 
     const versionA = await resolveVersion(config.skillId, config.versionAId);
     const versionB = await resolveVersion(config.skillId, config.versionBId);
+    const executionSides = configuredExecutionSides(config);
     const states: CaseStates = {};
     const totalRunsPerSide = repeatRounds;
 
     for (const caseId of caseIds) {
         states[caseId] = {
-            a: { status: 'pending', runs: [], runCount: totalRunsPerSide },
-            b: { status: 'pending', runs: [], runCount: totalRunsPerSide },
+            a: { status: executionSides.includes('a') ? 'pending' : 'pass', runs: [], runCount: executionSides.includes('a') ? totalRunsPerSide : 0 },
+            b: { status: executionSides.includes('b') ? 'pending' : 'pass', runs: [], runCount: executionSides.includes('b') ? totalRunsPerSide : 0 },
         };
     }
 
     const work: ExecutionTarget[] = [];
     for (let roundIndex = 1; roundIndex <= repeatRounds; roundIndex++) {
         for (const caseId of caseIds) {
-            for (const side of ['a', 'b'] as Side[]) {
+            for (const side of executionSides) {
                 const run: RunResult = {
                     status: 'pending',
                     caseId,
@@ -2076,12 +2465,20 @@ async function runGrayscaleTask(args: {
     }
     for (const caseId of caseIds) {
         for (const side of ['a', 'b'] as Side[]) {
-            states[caseId][side] = rebuildSideAggregate(states[caseId][side], totalRunsPerSide);
+            states[caseId][side] = rebuildSideAggregate(
+                states[caseId][side],
+                executionSides.includes(side) ? totalRunsPerSide : 0,
+            );
+            if (!executionSides.includes(side)) {
+                states[caseId][side].status = 'executed';
+                states[caseId][side].output = '未参与本次单组实验';
+            }
         }
     }
     await persistTaskState(taskId, user, config, states);
 
-    const concurrency = Math.max(1, Number(config.agentMaxConcurrency || runCount * 2));
+    const executionConcurrency = Math.max(1, Number(config.executionConcurrency || config.agentMaxConcurrency || 4));
+    const pairConcurrency = Math.max(1, Number(config.abPairConcurrency || Math.floor(executionConcurrency / 2) || 1));
     // 内层每个 work item 进 withBackgroundOpencodeSlot 排队,跟全局 5 个 opencode 后台任务
     // 上限对齐——A/B 一把 200 个 work 也只会有 5 个真在跑 opencode,其余在信号量队列等。
     // 这样不管 user 把 agentMaxConcurrency / repeatRounds 调多大,内存也不会失控。
@@ -2097,8 +2494,7 @@ async function runGrayscaleTask(args: {
         markRunCompleted(item.run);
         states[item.caseId][item.side] = rebuildSideAggregate(states[item.caseId][item.side], totalRunsPerSide);
     };
-    const runExecutionBatch = async (batch: ExecutionTarget[]) => {
-        await runWithConcurrency(batch, concurrency, async item => {
+    const executeItem = async (item: ExecutionTarget) => {
             if (taskSignal?.aborted) {
                 markRunAborted(item);
                 return;
@@ -2138,7 +2534,23 @@ async function runGrayscaleTask(args: {
                 }
                 throw err;
             }
-        }, taskSignal);
+    };
+    const runExecutionBatch = async (batch: ExecutionTarget[]) => {
+        if (executionSides.length === 2) {
+            const paired = new Map<string, ExecutionTarget[]>();
+            for (const item of batch) {
+                const key = `${item.caseId}:${item.roundIndex}`;
+                paired.set(key, [...(paired.get(key) || []), item]);
+            }
+            await runWithConcurrency(
+                Array.from(paired.values()),
+                pairConcurrency,
+                async pair => { await Promise.all(pair.map(executeItem)); },
+                taskSignal,
+            );
+            return;
+        }
+        await runWithConcurrency(batch, executionConcurrency, executeItem, taskSignal);
     };
 
     await runExecutionBatch(work);
@@ -2375,6 +2787,12 @@ export async function POST(
                     if (patchedCount > 0) {
                         await persistTaskState(taskId, user, taskRow.configJson, states);
                     }
+                    if (taskRow.configJson.evalExperimentId) {
+                        await prisma.experiment.updateMany({
+                            where: { id: taskRow.configJson.evalExperimentId, user },
+                            data: { status: 'cancelled' },
+                        });
+                    }
                 }
             } catch (e) {
                 console.warn('[GRAYSCALE_TASKS_ABORT] persist fail patch failed:', e);
@@ -2413,6 +2831,12 @@ export async function POST(
         } catch (err) {
             return NextResponse.json({ error: err instanceof Error ? err.message : 'invalid task skill binding' }, { status: 400 });
         }
+        if (action === 'start' && task.configJson.evalExperimentId) {
+            await prisma.experiment.updateMany({
+                where: { id: task.configJson.evalExperimentId, user, status: 'draft' },
+                data: { status: 'running' },
+            });
+        }
         const origin = req.nextUrl.origin;
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const abortController = new AbortController();
@@ -2428,7 +2852,9 @@ export async function POST(
 
         const job = action === 'evaluate'
             ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, onlyMissingEvaluation })
-            : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, agentMaxConcurrency });
+            : task.configJson.triggerRouting
+                ? runWorkbenchTriggerTask({ taskId, user, caseIds, evaluatorIds, signal: abortController.signal })
+                : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, agentMaxConcurrency });
 
         void job
             .catch(async err => {
@@ -2446,6 +2872,12 @@ export async function POST(
                         }
                     }
                     await persistTaskState(taskId, user, task.configJson, states).catch(() => {});
+                    if (task.configJson.evalExperimentId) {
+                        await prisma.experiment.updateMany({
+                            where: { id: task.configJson.evalExperimentId, user },
+                            data: { status: 'failed' },
+                        }).catch(() => undefined);
+                    }
                 }
             })
             .finally(() => {
@@ -2480,6 +2912,8 @@ export async function PATCH(
         if (!existing) return NextResponse.json({ error: 'task not found' }, { status: 404 });
 
         if (configJson !== undefined) {
+            const existingConfig = withDefaultConfig(safeParse<GrayscaleConfig>(existing.configJson, {}));
+            const existingBoundSide = getGrayscaleTaskBoundSide(existingConfig);
             const nextConfig = configJson && typeof configJson === 'object' && !Array.isArray(configJson)
                 ? withDefaultConfig({ ...(configJson as GrayscaleConfig) })
                 : {};
@@ -2487,22 +2921,25 @@ export async function PATCH(
             if (nextSkillId && nextSkillId !== existing.skillId) {
                 return NextResponse.json({ error: 'task skill binding cannot be changed' }, { status: 400 });
             }
-            const nextVersionBId = String(nextConfig.versionBId || '').trim();
-            if (nextVersionBId && nextVersionBId !== existing.skillVersionId) {
+            if (nextConfig.boundSide && nextConfig.boundSide !== existingBoundSide) {
+                return NextResponse.json({ error: 'task skill binding side cannot be changed' }, { status: 400 });
+            }
+            nextConfig.boundSide = existingBoundSide;
+            const nextBoundVersionId = getGrayscaleTaskBoundVersionId(nextConfig);
+            if (nextBoundVersionId && nextBoundVersionId !== existing.skillVersionId) {
                 return NextResponse.json({ error: 'task skill version binding cannot be changed' }, { status: 400 });
             }
-            nextConfig.skillId = existing.skillId;
-            nextConfig.versionBId = existing.skillVersionId;
+            const normalizedNextConfig = normalizeGrayscaleTaskBinding(nextConfig, existing);
             // E: evaluationBatchId 后端独占 —— 前端 PATCH 不带/带空值时,保留库里已有的稳定批次 id,
             // 不让前端用空值覆盖。否则一个 A/B 任务的评测会散裂成多个批次(实测 gyc-v0 散成 20 个)。
-            if (!String(nextConfig.evaluationBatchId || '').trim()) {
+            if (!String(normalizedNextConfig.evaluationBatchId || '').trim()) {
                 let existingBatchId = '';
                 try {
                     existingBatchId = String((JSON.parse(existing.configJson || '{}') as GrayscaleConfig).evaluationBatchId || '').trim();
                 } catch { /* ignore */ }
-                if (existingBatchId) nextConfig.evaluationBatchId = existingBatchId;
+                if (existingBatchId) normalizedNextConfig.evaluationBatchId = existingBatchId;
             }
-            data.configJson = JSON.stringify(nextConfig);
+            data.configJson = JSON.stringify(normalizedNextConfig);
         }
         if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(caseStatesJson);
         if (typeof taskName === 'string' && taskName.trim()) {
@@ -2539,13 +2976,13 @@ export async function PATCH(
         });
         if (!updated) return NextResponse.json({ error: 'task not found' }, { status: 404 });
 
+        const updatedConfig = normalizeGrayscaleTaskBinding(
+            withDefaultConfig(JSON.parse(updated.configJson || '{}')),
+            updated,
+        );
         return NextResponse.json({
             ...updated,
-            configJson: {
-                ...withDefaultConfig(JSON.parse(updated.configJson || '{}')),
-                skillId: updated.skillId,
-                versionBId: updated.skillVersionId,
-            },
+            configJson: updatedConfig,
             caseStatesJson: JSON.parse(updated.caseStatesJson || '{}'),
         });
     } catch (err) {

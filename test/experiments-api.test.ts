@@ -131,6 +131,45 @@ test('experiments API: rollback deletes drafts but never started experiments', a
   assert.equal(await prisma.experiment.count({ where: { id: runningId } }), 1);
 });
 
+test('experiments API: global list excludes Skill workbench experiments', async (t) => {
+  const user = `exp-scope-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+  const [globalExperiment, skillExperiment, legacyCaseAnalysis, legacyGrayscale] = await Promise.all([
+    prisma.experiment.create({
+      data: { user, name: '全局实验', status: 'running', scope: '' },
+    }),
+    prisma.experiment.create({
+      data: {
+        user,
+        name: 'Skill 触发分析',
+        status: 'running',
+        scope: 'skill-workbench',
+        skillName: 'scope-skill',
+        skillVersion: 1,
+        preset: 'trigger',
+      },
+    }),
+    prisma.experiment.create({
+      data: { user, name: '旧用例分析', status: 'running', scope: 'skill-case-analysis', skillName: 'scope-skill' },
+    }),
+    prisma.experiment.create({
+      data: { user, name: '旧 Skill A/B', status: 'running', scope: 'grayscale-ab', skillName: 'scope-skill' },
+    }),
+  ]);
+
+  const response = await listExperiments(
+    new Request(`http://localhost/api/experiments?user=${user}&limit=100`),
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(payload.items.map((item: { id: string }) => item.id), [globalExperiment.id]);
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === skillExperiment.id));
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === legacyCaseAnalysis.id));
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === legacyGrayscale.id));
+});
+
 test('experiments API: reliability FI fields stay off evaluatorContextJson', async (t) => {
   const user = `exp-fi-${Date.now()}`;
   t.after(async () => {

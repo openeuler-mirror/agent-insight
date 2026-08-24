@@ -40,8 +40,14 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const q = url.searchParams;
     const { username } = await resolveUser(req, q.get('user'));
+    const skillName = String(q.get('skillName') || '').trim();
     const userFilter = username ? { user: username } : {};
-    const listFilter = { ...userFilter, status: { not: 'draft' } };
+    const listFilter = {
+      ...userFilter,
+      ...(skillName ? { skillName } : {}),
+      scope: { notIn: ['skill-workbench', 'skill-case-analysis', 'grayscale-ab'] },
+      status: { not: 'draft' },
+    };
 
     const limit = Math.min(Math.max(Number(q.get('limit')) || 20, 1), 100);
     const offset = Math.max(Number(q.get('offset')) || 0, 0);
@@ -91,10 +97,15 @@ export async function GET(req: Request) {
         agentName: r.agentName,
         status: r.status,
         watchMode: r.watchMode,
+        scope: r.scope,
+        skillName: r.skillName,
+        skillVersion: r.skillVersion,
+        preset: r.preset,
         caseCount: r._count.cases,
         evaluatorCount,
         overallScore: overallAverage(scoreRowsByExperiment.get(r.id) || []),
         createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
       };
     });
 
@@ -120,6 +131,20 @@ export async function POST(req: Request) {
     const evaluatorIds: string[] = Array.isArray(body.evaluatorIds)
       ? body.evaluatorIds.map((id: unknown) => String(id)).filter(Boolean)
       : [];
+    const scope = body.scope === 'skill-workbench' ? 'skill-workbench' : '';
+    const skillName = scope ? String(body.skillName || '').trim() : '';
+    const skillVersion = scope && Number.isInteger(Number(body.skillVersion))
+      ? Number(body.skillVersion)
+      : null;
+    const preset = scope && ['trigger', 'use-case'].includes(String(body.preset || ''))
+      ? String(body.preset)
+      : null;
+    const skillContext = body.skillContext && typeof body.skillContext === 'object' && !Array.isArray(body.skillContext)
+      ? body.skillContext
+      : null;
+    const configSnapshot = body.configSnapshot && typeof body.configSnapshot === 'object' && !Array.isArray(body.configSnapshot)
+      ? body.configSnapshot
+      : null;
 
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });
@@ -127,9 +152,15 @@ export async function POST(req: Request) {
     if (evaluatorIds.length < 1) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
+    if (scope && (!skillName || skillVersion == null || !preset)) {
+      return NextResponse.json({ error: 'Skill 实验缺少 Skill、版本或预设上下文' }, { status: 400 });
+    }
 
     // 对比实验：type='llm' → createComparisonExperiment + autoPairGroups
     if (type === 'llm') {
+      if (scope) {
+        return NextResponse.json({ error: 'Skill 实验不支持通用 LLM 对比类型' }, { status: 400 });
+      }
       if (watchMode) {
         return NextResponse.json({ error: 'comparison experiment does not support watchMode' }, { status: 400 });
       }
@@ -212,6 +243,12 @@ export async function POST(req: Request) {
         agentName,
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
         status: 'draft',
+        scope,
+        skillName,
+        skillVersion,
+        preset,
+        skillContextJson: skillContext ? JSON.stringify(skillContext) : null,
+        configSnapshotJson: configSnapshot ? JSON.stringify(configSnapshot) : null,
         watchMode,
         watchEnabledAt: watchMode ? new Date() : null,
         cases: {
