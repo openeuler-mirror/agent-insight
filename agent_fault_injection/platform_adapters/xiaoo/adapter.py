@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,7 @@ class XiaoOAdapter(PlatformAdapter):
             overlay_root=overlay_root,
             model_override=cli_model,
             enable_chat_llm_hooks=enable_chat_llm,
+            python_executable=sys.executable,
         )
         self._write_resolved_llm_artifact(
             artifacts=ctx.artifacts,
@@ -161,12 +163,6 @@ class XiaoOAdapter(PlatformAdapter):
         assert isinstance(isolation, dict)
         config_toml = isolation["config_toml"]
         environment = os.environ.copy()
-        repo_root = Path(__file__).resolve().parents[3]
-        existing_pythonpath = environment.get("PYTHONPATH", "")
-        path_parts = [str(repo_root)]
-        if existing_pythonpath:
-            path_parts.append(existing_pythonpath)
-        environment["PYTHONPATH"] = os.pathsep.join(path_parts)
         environment.update(base_env)
         environment.update(
             {
@@ -798,12 +794,6 @@ class XiaoOAdapter(PlatformAdapter):
         """Backward-compatible helper for tests; prefer merge_platform_env."""
 
         environment = os.environ.copy()
-        repo_root = Path(__file__).resolve().parents[3]
-        existing_pythonpath = environment.get("PYTHONPATH", "")
-        path_parts = [str(repo_root)]
-        if existing_pythonpath:
-            path_parts.append(existing_pythonpath)
-        environment["PYTHONPATH"] = os.pathsep.join(path_parts)
         environment.update(
             build_fi_injection_env(
                 artifacts=artifacts,

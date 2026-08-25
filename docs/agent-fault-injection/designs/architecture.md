@@ -44,7 +44,7 @@ Browser → Next /api/fault-injection（建任务 queued / 展示 / Judge）
 ```
 
 旧同机 spawn 路径已删除。单机调试 = Next + Worker 两进程。
-Worker inventory：启动时一次 `python -m agent_fault_injection.cli platform inventory --json`（`PlatformAdapterRegistry` → `list_agents` / `list_models` / `health_check`；OpenCode 经 catalog 跑 `opencode agent list` + 配置/oh-my 过滤）。**不**合成 CLI 未返回的 `build/plan/general/explore`；**不**在每次 heartbeat 重算，也**不**回落 JS 硬编码 builtin。
+Worker inventory：启动时一次 managed `fiPython -I -m agent_fault_injection.cli platform inventory --json`（`PlatformAdapterRegistry` → `list_agents` / `list_models` / `health_check`；OpenCode 经 catalog 跑 `opencode agent list` + 配置/oh-my 过滤）。**不**合成 CLI 未返回的 `build/plan/general/explore`；**不**在每次 heartbeat 重算，也**不**回落 JS 硬编码 builtin 或系统 Python。
 
 ## 包目录（Python）
 

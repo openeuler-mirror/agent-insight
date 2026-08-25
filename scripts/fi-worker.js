@@ -58,8 +58,8 @@ function ensureClientIdentity(options = {}) {
   }
 }
 
-function resolvePython() {
-  return process.env.AGENT_FI_PYTHON || process.env.PYTHON || 'python3'
+function resolvePython(config = {}) {
+  return process.env.AGENT_FI_PYTHON || config.python || ''
 }
 
 function normalizeInsightBaseUrl(host) {
@@ -110,6 +110,7 @@ function loadConfig() {
     workspaceBase,
     artifactsDir,
     packageRoot,
+    python: raw.python || '',
   }
 }
 
@@ -137,7 +138,7 @@ function resolveCollectorCwd(cfg) {
 function pythonModuleOk(python, env = process.env, cwd = homeFi) {
   const r = spawnSync(
     python,
-    ['-c', 'import agent_fault_injection'],
+    ['-I', '-c', 'import agent_fault_injection'],
     { encoding: 'utf8', env, cwd },
   )
   return r.status === 0
@@ -157,7 +158,12 @@ function formatSpawnError(err, { python, cwd }) {
 }
 
 function assertWorkerReady(cfg) {
-  const python = resolvePython()
+  const python = resolvePython(cfg)
+  if (!python) {
+    console.error('[fi-worker] managed FI Python is not configured')
+    console.error('Re-run install-fault-injection / setup to create the isolated runtime.')
+    process.exit(1)
+  }
   if (cfg.packageRoot && !fs.existsSync(cfg.packageRoot)) {
     console.error(`[fi-worker] packageRoot does not exist: ${cfg.packageRoot}`)
     console.error(
@@ -359,6 +365,7 @@ function probeInventory(cfg, python) {
 /** Build collector argv for FI CLI only — never spawn RAS. */
 function buildCollectorArgs(run, workspace, artifactsDir) {
   const args = [
+    '-I',
     '-m',
     'agent_fault_injection.cli',
     'run',
@@ -383,7 +390,7 @@ function buildCollectorArgs(run, workspace, artifactsDir) {
   return args
 }
 
-function runCollector(cfg, run, python = resolvePython()) {
+function runCollector(cfg, run, python = resolvePython(cfg)) {
   return new Promise((resolve, reject) => {
     const workspace = resolveWorkspace(run.workspaceLogical, cfg.workspaceBase)
     fs.mkdirSync(workspace, { recursive: true })
@@ -499,6 +506,7 @@ async function main() {
     maxParallel: cfg.maxParallel,
     pollIntervalMs: cfg.pollIntervalMs,
     packageRoot: cfg.packageRoot,
+    python,
   })
   console.log(`[fi-worker] workerId=${cfg.workerId} host=${cfg.insightBaseUrl}`)
   console.log(`[fi-worker] python=${python} packageRoot=${cfg.packageRoot}`)

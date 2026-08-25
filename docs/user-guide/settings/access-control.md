@@ -67,12 +67,14 @@ description: "生成客户端接入命令并获取当前账号 API Key"
   无需再单独执行 FI Worker 的安装命令
 
 > **Note**
-> 该命令默认会一并安装故障注入组件。若本机没有可用的 Python 环境，安装会跳过这一步并给出提示，
+> 该命令默认会一并安装故障注入组件。系统 Python 只用于创建 Agent Insight 管理的专用 venv，
+> FI 包、CLI 与 xiaoO Hook 均在 `~/.agent-insight/fault-injection/runtimes/<id>/venv/` 中运行，
+> 不会写入系统 Python 或用户项目自己的虚拟环境。若本机没有 Python 3.11+ 或不支持 `venv`，安装会跳过这一步并给出提示，
 > **客户端仍然正常上线**：实验页能看到本机，只是标记「FI 未就绪」并说明原因（如缺 python3）。
 > 装好 Python 后重跑同一条命令即可补齐。
 >
-> 在 Homebrew / Debian 等「受管控 Python」环境下（PEP 668），全局安装会被系统拒绝，
-> 安装器会自动改用独立虚拟环境重试，无需手工处理。
+> 在 Homebrew / Debian 等 PEP 668「受管控 Python」环境下，安装器不会尝试全局 pip，
+> 因而不需要 `--break-system-packages`，也不会出现 `externally-managed-environment` 安装错误。
 
 客户端只接受固定动作白名单（配置写入、运行实验 Case 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。
 
