@@ -151,6 +151,14 @@ test('会话固定 Skill 并恢复工作版本，顶部资产控制右栏全部�
   assert.match(publishService, /skillWorkbenchSession\.update[\s\S]*workVersion: version/);
 });
 
+test('新建或打开未绑定 Skill 的会话时，右栏保持空状态', () => {
+  const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
+  assert.match(shell, /const clearAssetSelection = useCallback\(\(\) => \{[\s\S]*selectedAssetRef\.current = null;[\s\S]*setSelectedAsset\(null\)/);
+  assert.match(shell, /const createBlankSession = async \(\) => \{[\s\S]*clearAssetSelection\(\);[\s\S]*setCurrentView\('detail'\)/);
+  assert.match(shell, /openHistorySession[\s\S]*session\.skillName && session\.workVersion !== null[\s\S]*else clearAssetSelection\(\)/);
+  assert.doesNotMatch(shell, /loadAssetCatalog\(user\)\.then\(\(items\)[\s\S]*selectFormalAsset\(items\[0\]\.name/);
+});
+
 test('正式 Skill 评估与实验按资产运行，不创建或要求工作台会话', () => {
   const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
   const evaluationRoute = readFileSync('src/app/api/skill-workbench/skills/[name]/versions/[version]/evaluations/route.ts', 'utf8');

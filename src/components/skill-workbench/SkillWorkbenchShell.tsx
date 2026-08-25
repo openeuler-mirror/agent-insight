@@ -144,6 +144,10 @@ export function SkillWorkbenchShell() {
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
   const reportError = useCallback((message: string) => setError(message), []);
+  const clearAssetSelection = useCallback(() => {
+    selectedAssetRef.current = null;
+    setSelectedAsset(null);
+  }, []);
 
   useEffect(() => {
     const stored = Number(window.localStorage.getItem('skill-workbench-copilot-width'));
@@ -295,14 +299,19 @@ export function SkillWorkbenchShell() {
         if (session.skillName && session.workVersion !== null) {
           if (session.source === 'management') await selectFormalAsset(session.skillName, session.workVersion, user);
           else selectDraftAsset(session);
+        } else {
+          clearAssetSelection();
         }
+      } else {
+        setActive(null);
+        clearAssetSelection();
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '加载历史会话失败');
     } finally {
       setLoading(false);
     }
-  }, [loadSession, selectDraftAsset, selectFormalAsset, user]);
+  }, [clearAssetSelection, loadSession, selectDraftAsset, selectFormalAsset, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadSessions(), 0);
@@ -312,16 +321,11 @@ export function SkillWorkbenchShell() {
   useEffect(() => {
     if (!user) return;
     const timer = window.setTimeout(() => {
-      void loadAssetCatalog(user).then((items) => {
-        if (selectedAssetRef.current || !items[0]) return;
-        const version = items[0].versions.some((item) => item.version === items[0].activeVersion)
-          ? items[0].activeVersion as number
-          : items[0].versions[0]?.version;
-        if (version !== undefined) void selectFormalAsset(items[0].name, version, user);
-      }).catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
+      void loadAssetCatalog(user)
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadAssetCatalog, selectFormalAsset, user]);
+  }, [loadAssetCatalog, user]);
 
   const createSession = async () => {
     if (!user || creating) return null;
@@ -344,6 +348,14 @@ export function SkillWorkbenchShell() {
     } finally {
       setCreating(false);
     }
+  };
+
+  const createBlankSession = async () => {
+    const next = await createSession();
+    if (!next || next.skillName) return next;
+    clearAssetSelection();
+    setCurrentView('detail');
+    return next;
   };
 
   const ensureManagementProcessSession = async (asset: SelectedSkillAsset) => {
@@ -819,7 +831,8 @@ export function SkillWorkbenchShell() {
     if (!user) return;
     try {
       const session = await loadSession(sessionId, user);
-      await showSessionAsset(session);
+      if (session.skillName && session.workVersion !== null) await showSessionAsset(session);
+      else clearAssetSelection();
       setCurrentView('detail');
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '加载会话失败');
@@ -873,7 +886,7 @@ export function SkillWorkbenchShell() {
               title="新对话"
               aria-label="新对话"
               disabled={!user || creating}
-              onClick={createSession}
+              onClick={() => void createBlankSession()}
               className="inline-flex size-8 items-center justify-center rounded-md border border-border text-foreground-secondary hover:bg-background-secondary disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="size-4" />
@@ -932,7 +945,7 @@ export function SkillWorkbenchShell() {
               <p className="mt-1 text-xs leading-5 text-foreground-muted">会话会保存工作 Skill、版本、页签和后续任务状态。</p>
               <button
                 type="button"
-                onClick={createSession}
+                onClick={() => void createBlankSession()}
                 disabled={!user || creating}
                 className="mt-4 inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50"
               >
