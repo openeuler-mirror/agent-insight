@@ -77,7 +77,7 @@ function loadConfig() {
       path.join(__dirname, '..', 'agent_fault_injection'),
     // 安装器可显式写入一个已验证可 import 的目录；缺省时 resolveFiCwd 自行探测。
     fiCwd: process.env.AGENT_INSIGHT_FI_CWD || raw.fiCwd || '',
-    // 安装器在 PEP 668 环境下会写入 venv 解释器路径。
+    // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
   }
 }
@@ -156,8 +156,7 @@ function resolvePython(cfg) {
   return (
     process.env.AGENT_FI_PYTHON ||
     (cfg && cfg.fiPython) ||
-    process.env.PYTHON ||
-    'python3'
+    ''
   )
 }
 
@@ -174,6 +173,7 @@ function which(bin) {
  * 或 pip 装好之后的任意目录。逐个实测而不是假设。
  */
 function resolveFiCwd(cfg, python = resolvePython(cfg)) {
+  if (!python) return null
   if (cachedFiCwd !== undefined) return cachedFiCwd
   const candidates = [
     cfg.fiCwd,
@@ -183,7 +183,7 @@ function resolveFiCwd(cfg, python = resolvePython(cfg)) {
   ].filter(Boolean)
   for (const dir of candidates) {
     if (!fs.existsSync(dir)) continue
-    const r = spawnSync(python, ['-c', 'import agent_fault_injection'], {
+    const r = spawnSync(python, ['-I', '-c', 'import agent_fault_injection'], {
       cwd: dir,
       encoding: 'utf8',
     })
@@ -209,13 +209,15 @@ function probeFaultInjection(cfg) {
   if (!cwd) {
     return {
       ready: false,
-      note: `cannot import agent_fault_injection with ${python}`,
+      note: python
+        ? `cannot import agent_fault_injection with ${python}`
+        : 'managed FI Python is not configured',
       platforms: {},
     }
   }
   const result = spawnSync(
     python,
-    ['-m', 'agent_fault_injection.cli', 'platform', 'inventory', '--json'],
+    ['-I', '-m', 'agent_fault_injection.cli', 'platform', 'inventory', '--json'],
     { cwd, encoding: 'utf8', timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
   )
   if (result.status !== 0) {
@@ -483,6 +485,7 @@ function resolveWorkspace(logical, workspaceBase) {
 
 function buildCollectorArgs(run, workspace, artifactsDir) {
   const args = [
+    '-I',
     '-m', 'agent_fault_injection.cli', 'run',
     '--platform', run.platform,
     '--agent', run.agent,

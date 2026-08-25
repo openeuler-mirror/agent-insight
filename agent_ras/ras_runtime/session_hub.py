@@ -74,18 +74,11 @@ def _anchor_for_anomaly(state: "SessionState", kind: str | None) -> dict[str, An
 
 
 def _config_from_payload(raw: dict[str, Any] | None) -> AgentRASConfig:
-    """Nested per-domain dicts; unique top-level field names overlay one domain."""
+    """Merge hello config by domain id only (``detectors.<id>`` or top-level ``<id>`` dict)."""
     raw = dict(raw or {})
     nested = raw.get("detectors") if isinstance(raw.get("detectors"), dict) else {}
     cfg = AgentRASConfig()
     models = detector_config_models()
-    field_owners: dict[str, str] = {}
-    for name, model_cls in models.items():
-        for field_name in model_cls.model_fields:
-            if field_name in field_owners:
-                field_owners[field_name] = ""
-            else:
-                field_owners[field_name] = name
     for name, model_cls in models.items():
         current = getattr(cfg.detectors, name, None)
         if current is not None and hasattr(current, "model_dump"):
@@ -98,11 +91,6 @@ def _config_from_payload(raw: dict[str, Any] | None) -> AgentRASConfig:
             sub = maybe if isinstance(maybe, dict) else None
         if isinstance(sub, dict):
             merged.update({k: v for k, v in sub.items() if k in merged})
-        for field_name, owner in field_owners.items():
-            if owner == name and field_name in raw and (
-                not isinstance(sub, dict) or field_name not in sub
-            ):
-                merged[field_name] = raw[field_name]
         extras = cfg.detectors.__pydantic_extra__
         if extras is None:
             extras = {}

@@ -74,12 +74,14 @@ async def run() -> None:
         "opencode",
         {
             # Allow L3 early; keep L2 from stealing the hit on similar clauses.
-            "detection_start_chars": 200,
-            "window_max_chars": 2000,
-            "loop_repeat_threshold": 99,
-            "similar_clause_sim_threshold": 0.999,
-            "semantic_eval_chars": 200,
-            "semantic_content_enabled": True,
+            "llm_thinking_loop": {
+                "detection_start_chars": 200,
+                "window_max_chars": 2000,
+                "loop_repeat_threshold": 99,
+                "similar_clause_sim_threshold": 0.999,
+                "semantic_eval_chars": 200,
+                "semantic_content_enabled": True,
+            },
         },
     )
 

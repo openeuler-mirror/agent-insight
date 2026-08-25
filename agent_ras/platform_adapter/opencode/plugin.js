@@ -126,27 +126,9 @@ function loadCapabilityConfig() {
     detectors = {}
     recovery = {}
   }
-  const envInt = (key) => {
-    const raw = process.env[key]
-    if (!raw || !String(raw).trim()) return null
-    const n = Number(raw)
-    return Number.isFinite(n) && n > 0 ? n : null
-  }
-  const deprecatedFields = {
-    detection_start_chars: envInt("RAS_DETECTION_START_CHARS"),
-    window_max_chars: envInt("RAS_WINDOW_MAX_CHARS"),
-    loop_repeat_threshold: envInt("RAS_LOOP_REPEAT_THRESHOLD"),
-    semantic_eval_chars: envInt("RAS_SEMANTIC_EVAL_CHARS"),
-  }
   for (const [, cfg] of Object.entries(detectors)) {
-    for (const [field, value] of Object.entries(deprecatedFields)) {
-      if (value != null && field in cfg) cfg[field] = value
-    }
     if (cfg.debug === undefined) cfg.debug = debug
   }
-  const starts = Object.values(detectors)
-    .map((cfg) => Number(cfg?.detection_start_chars))
-    .filter((n) => Number.isFinite(n) && n > 0)
   return {
     helloPayload: {
       detectors: copyDetectorMap(detectors),
@@ -154,23 +136,27 @@ function loadCapabilityConfig() {
       recovery: { ...recovery },
       debug,
     },
-    detectionStart: starts.length ? Math.min(...starts) : undefined,
     debug,
   }
 }
 
-function shouldObserveText(text, prevLen, { detectionStart, aborting }) {
+// Adapter transport cadence — independent of per-domain detection_start_chars.
+const OBSERVE_HOT_CHARS = 100
+const OBSERVE_HOT_GROWTH = 40
+const OBSERVE_EARLY_GROWTH = 80
+
+function shouldObserveText(text, prevLen, { aborting }) {
   if (!text || text.length < 32) return false
   const growth = text.length - prevLen
   if (growth <= 0) return false
   if (aborting) return false
-  const start = Number(detectionStart) || 30000
   // OpenCode 1.18 streams many message.part.delta tokens — cadence ~40 chars
-  // so we still sample before window_max without per-token HTTP flood.
-  if (text.length >= Math.max(100, start * 0.8)) {
-    return growth >= 40
+  // so we still sample without per-token HTTP flood. Detectors apply their
+  // own start-char gates on the RAS side.
+  if (text.length >= OBSERVE_HOT_CHARS) {
+    return growth >= OBSERVE_HOT_GROWTH
   }
-  if (growth < 80 && text.length < 500) return false
+  if (growth < OBSERVE_EARLY_GROWTH && text.length < 500) return false
   return true
 }
 
@@ -230,7 +216,6 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
   await syncCapabilityConfigFromInsight({ log: rasLogEarly })
 
   const capabilityConfig = loadCapabilityConfig()
-  const detectionStart = capabilityConfig.detectionStart
   const hostApi = createOpenCodeHost({
     client,
     directory: directory || process.cwd(),
@@ -421,7 +406,6 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
 
     if (
       !shouldObserveText(text, prev, {
-        detectionStart,
         aborting,
       })
     ) {

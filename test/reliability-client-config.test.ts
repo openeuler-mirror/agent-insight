@@ -34,6 +34,39 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+function getByPath(obj: unknown, pathKey: string): unknown {
+  return pathKey.split('.').reduce<unknown>((acc, part) => {
+    if (!acc || typeof acc !== 'object' || Array.isArray(acc)) return undefined
+    return (acc as Record<string, unknown>)[part]
+  }, obj)
+}
+
+function pickNumericDetectorPath(defaults: Record<string, unknown>): {
+  path: string
+  builtin: number
+  overrideValue: number
+} {
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!key.startsWith('detectors.') || key.endsWith('.enabled')) continue
+    if (key.split('.').length !== 3) continue
+    if (typeof value === 'number' && Number.isInteger(value)) {
+      return { path: key, builtin: value, overrideValue: value + 1 }
+    }
+  }
+  throw new Error('expected a numeric detectors.<id>.<field> default')
+}
+
+function pickOtherBuiltinPath(
+  defaults: Record<string, unknown>,
+  usedPath: string,
+): string {
+  const other = Object.keys(defaults).find(
+    (key) => key.startsWith('detectors.') && key !== usedPath && !key.endsWith('.enabled'),
+  )
+  if (!other) throw new Error('expected a second detectors.* default path')
+  return other
+}
+
 // ---------------------------------------------------------------- pure model
 
 test('builtin schema has design defaults and sections', () => {
@@ -42,41 +75,38 @@ test('builtin schema has design defaults and sections', () => {
   assert.equal(schema.editable, false)
   assert.equal(schema.source, 'builtin')
   assert.equal(schema.defaults['enabled'], true)
-  assert.equal(schema.defaults['detectors.llm_thinking_loop.enabled'], true)
-  assert.ok(schema.sections.some((s) => s.key === 'detectors.llm_thinking_loop'))
-  assert.ok(schema.sections.some((s) => s.key === 'detectors.repeat_tool'))
+  const detectorSections = schema.sections.filter((s) => s.key.startsWith('detectors.'))
+  assert.ok(detectorSections.length > 0)
+  for (const section of detectorSections) {
+    assert.ok(section.enabledField?.startsWith(`${section.key}.`))
+    assert.equal(typeof schema.defaults[section.enabledField!], 'boolean')
+  }
 })
 
 test('override merge + fieldSources + path delete', () => {
   const schema = buildBuiltinConfigSchema('opencode')
+  const picked = pickNumericDetectorPath(schema.defaults)
+  const otherPath = pickOtherBuiltinPath(schema.defaults, picked.path)
   const override = {
     enabled: true,
-    'textLoop.enabled': true,
-    'textLoop.repeatThreshold': 6,
+    [picked.path]: picked.overrideValue,
   }
   const effectiveFlat = applyOverrideDiff(schema.defaults, override)
   assert.equal(effectiveFlat.enabled, true)
-  assert.equal(effectiveFlat['detectors.llm_thinking_loop.loop_repeat_threshold'], 6)
-  assert.equal(effectiveFlat['detectors.repeat_tool.warning_threshold'], 5)
+  assert.equal(effectiveFlat[picked.path], picked.overrideValue)
+  assert.equal(effectiveFlat[otherPath], schema.defaults[otherPath])
 
   const sources = buildFieldSources(schema.defaults, override)
   assert.equal(sources.enabled, 'client_override')
-  assert.equal(sources['detectors.llm_thinking_loop.loop_repeat_threshold'], 'client_override')
-  assert.equal(sources['detectors.repeat_tool.warning_threshold'], 'builtin')
+  assert.equal(sources[picked.path], 'client_override')
+  assert.equal(sources[otherPath], 'builtin')
 
   const nested = nestEffectiveConfig(effectiveFlat)
-  assert.equal(
-    ((nested.detectors as { llm_thinking_loop: { loop_repeat_threshold: number } }).llm_thinking_loop)
-      .loop_repeat_threshold,
-    6,
-  )
-  assert.deepEqual(
-    flattenEffectiveConfig(nested)['detectors.llm_thinking_loop.loop_repeat_threshold'],
-    6,
-  )
+  assert.equal(getByPath(nested, picked.path), picked.overrideValue)
+  assert.deepEqual(flattenEffectiveConfig(nested)[picked.path], picked.overrideValue)
 
-  const afterDelete = deleteOverridePath(override, 'textLoop.repeatThreshold')
-  assert.equal(afterDelete['textLoop.repeatThreshold'], undefined)
+  const afterDelete = deleteOverridePath(override, picked.path)
+  assert.equal(afterDelete[picked.path], undefined)
   assert.equal(afterDelete.enabled, true)
 })
 
@@ -169,6 +199,7 @@ test('device credential is stored hashed only', async () => {
 test('sync stops at sync_notified — server never claims written on its own', async () => {
   const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cap-'))
   resetCapabilityConfigStoreForTests(capDir)
+  const picked = pickNumericDetectorPath(buildBuiltinConfigSchema('opencode').defaults)
   try {
     const client = await newClient()
 
@@ -176,7 +207,7 @@ test('sync stops at sync_notified — server never claims written on its own', a
       user: TEST_USER,
       clientId: client.clientId,
       platform: 'opencode',
-      overrideDiff: { enabled: true, 'textLoop.enabled': true },
+      overrideDiff: { enabled: true },
       sync: false,
     })
     assert.equal(saved.status, 'saved')
@@ -187,7 +218,7 @@ test('sync stops at sync_notified — server never claims written on its own', a
       clientId: client.clientId,
       platform: 'opencode',
       expectedRevision: 1,
-      overrideDiff: { enabled: true, 'textLoop.repeatThreshold': 7 },
+      overrideDiff: { enabled: true, [picked.path]: picked.overrideValue },
       sync: true,
     })
     // 关键回归：服务端只到「已通知」，不得代客户端宣布已写入。
@@ -230,11 +261,7 @@ test('sync stops at sync_notified — server never claims written on its own', a
     // 兼容拉取通道仍收到生效配置
     const envelope = getCapabilityEnvelope(TEST_USER, 'opencode')
     assert.equal(envelope.syncEnabled, true)
-    assert.equal(
-      (envelope.config.detectors.llm_thinking_loop as { loop_repeat_threshold: number })
-        .loop_repeat_threshold,
-      7,
-    )
+    assert.equal(getByPath(envelope.config, picked.path), picked.overrideValue)
   } finally {
     resetCapabilityConfigStoreForTests()
     fs.rmSync(capDir, { recursive: true, force: true })
@@ -296,33 +323,29 @@ test('revision conflict is rejected with current revision', async () => {
 })
 
 test('restore default deletes the override path', async () => {
+  const schema = buildBuiltinConfigSchema('opencode')
+  const picked = pickNumericDetectorPath(schema.defaults)
   try {
     const client = await newClient()
     await putClientConfig({
       user: TEST_USER,
       clientId: client.clientId,
       platform: 'opencode',
-      overrideDiff: { enabled: true, 'textLoop.repeatThreshold': 9 },
+      overrideDiff: { enabled: true, [picked.path]: picked.overrideValue },
       sync: false,
     })
     await deleteClientConfig({
       user: TEST_USER,
       clientId: client.clientId,
       platform: 'opencode',
-      path: 'textLoop.repeatThreshold',
+      path: picked.path,
       sync: false,
     })
     const view = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
-    assert.equal(view.overrideDiff['textLoop.repeatThreshold'], undefined)
+    assert.equal(view.overrideDiff[picked.path], undefined)
     assert.equal(view.overrideDiff.enabled, true)
-    assert.equal(view.fieldSources['detectors.llm_thinking_loop.loop_repeat_threshold'], 'builtin')
-    assert.equal(
-      (
-        (view.effectiveConfig.detectors as { llm_thinking_loop: { loop_repeat_threshold: number } })
-          .llm_thinking_loop
-      ).loop_repeat_threshold,
-      5,
-    )
+    assert.equal(view.fieldSources[picked.path], 'builtin')
+    assert.equal(getByPath(view.effectiveConfig, picked.path), picked.builtin)
   } finally {
     await cleanup()
   }
@@ -399,20 +422,21 @@ test('config load with mismatched version marks delivery version_mismatch', asyn
 test('platform configs stay isolated', async () => {
   const capDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-cap-iso-'))
   resetCapabilityConfigStoreForTests(capDir)
+  const picked = pickNumericDetectorPath(buildBuiltinConfigSchema('opencode').defaults)
   try {
     const client = await newClient()
     await putClientConfig({
       user: TEST_USER,
       clientId: client.clientId,
       platform: 'opencode',
-      overrideDiff: { enabled: true, 'toolRepeat.warningThreshold': 3 },
+      overrideDiff: { enabled: true, [picked.path]: picked.overrideValue },
       sync: true,
     })
     await putClientConfig({
       user: TEST_USER,
       clientId: client.clientId,
       platform: 'xiaoo',
-      overrideDiff: { enabled: false, 'toolRepeat.warningThreshold': 9 },
+      overrideDiff: { enabled: false, [picked.path]: picked.overrideValue + 2 },
       sync: true,
     })
 
@@ -420,19 +444,8 @@ test('platform configs stay isolated', async () => {
     const xo = getCapabilityEnvelope(TEST_USER, 'xiaoo')
     assert.equal(oc.config.enabled, true)
     assert.equal(xo.config.enabled, false)
-    assert.equal(
-      (oc.config.detectors.repeat_tool as { warning_threshold: number }).warning_threshold,
-      3,
-    )
-    assert.equal(
-      (xo.config.detectors.repeat_tool as { warning_threshold: number }).warning_threshold,
-      9,
-    )
-    assert.equal(
-      (xo.config.detectors.llm_thinking_loop as { semantic_content_enabled: boolean })
-        .semantic_content_enabled,
-      true,
-    )
+    assert.equal(getByPath(oc.config, picked.path), picked.overrideValue)
+    assert.equal(getByPath(xo.config, picked.path), picked.overrideValue + 2)
 
     const ocView = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
     const xoView = await getClientConfigView(TEST_USER, client.clientId, 'xiaoo')

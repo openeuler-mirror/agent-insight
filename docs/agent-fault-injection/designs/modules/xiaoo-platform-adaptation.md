@@ -25,7 +25,7 @@
 | 问题 | 答案 |
 |------|------|
 | xiaoO 要改核心 Rust 吗？ | **不需要**。全部走官方 Skill / Hook 插件 / CLI / Daemon API。 |
-| 故障任务怎么发起？ | **外层**由 Insight「故障注入」任务（BFF）+ 本机 **FI Worker** claim 执行；Worker **只** spawn `python3 -m agent_fault_injection.cli`（**不**拉起 RAS）。本地排障同 CLI。**内层被测 harness** 默认用 **`xiaoo --cli run`**，批量/可观测增强可选 **Daemon HTTP+SSE**（FI 自有 adapter，非 RAS SessionHub）。 |
+| 故障任务怎么发起？ | **外层**由 Insight「故障注入」任务（BFF）+ 本机 **FI Worker** claim 执行；Worker **只** spawn managed `fiPython -I -m agent_fault_injection.cli`（**不**拉起 RAS、不回退系统 Python）。本地排障同 CLI。**内层被测 harness** 默认用 **`xiaoo --cli run`**，批量/可观测增强可选 **Daemon HTTP+SSE**（FI 自有 adapter，非 RAS SessionHub）。 |
 | FI 会启动 RAS 吗？ | **不会**。RAS 是否在场只由平台是否已挂载 RAS 决定；未挂载时 FI 实验仍可成功。曾经误把 `fi_daemon_runner`（FI runner + `DaemonRasSession`）接到 Worker，已废除。 |
 | 用不用 TUI / 飞书渠道？ | **评测不用**。交互入口不适合可复现、可超时、可批跑的故障实验。 |
 | Judge 用谁？ | **仅 Insight 服务端 Judge**（主树 join ⓪ `Session.interactions`；本机 Python / OpenCode Judge 已删除，不作为产品路径）。 |
@@ -292,7 +292,7 @@ sequenceDiagram
 产品路径请在 Insight「故障注入 → 新建任务」选择平台 `xiaoo` 与故障模式；Worker inventory 提供本机 agent/model。本地 CLI 排障示例：
 
 ```bash
-python3 -m agent_fault_injection.cli run \
+<fiPython> -I -m agent_fault_injection.cli run \
   --platform xiaoo --agent build \
   --fault tool_repeat_dead_loop --submode 2 \
   --prompt "执行场景2 / case2 / unknown" \
