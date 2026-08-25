@@ -30,6 +30,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageToolbar } from '@/components/shell/PageContainer';
 import { AgentDebugCard, type TraceExplicitError } from '@/components/observe/AgentDebugCard';
+import { AgentDebugCapabilitySheet } from '@/components/observe/AgentDebugCapabilitySheet';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
@@ -902,6 +903,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                             {diagnosticItems.length > 0 && <FaultFilterPill active label={locale === 'zh' ? '明确报错已载入' : 'Trace errors loaded'} count={diagnosticItems.length} />}
                             <FaultFilterPill label={locale === 'zh' ? `${skillCount} Skill` : `${skillCount} skills`} />
                             <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0 }} />
+                            <AgentDebugCapabilitySheet locale={locale} />
                             <button
                                 type="button"
                                 onClick={handleNewConversation}
