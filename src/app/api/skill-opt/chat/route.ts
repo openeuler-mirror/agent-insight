@@ -4,6 +4,11 @@ import type { SkillOptIssueLite, SkillOptPlanItemLite } from '@/lib/engine/gener
 import { prismaRaw } from '@/lib/storage/prisma';
 import { createBlockMirror } from '@/lib/chat/block-mirror';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import {
+  beginWorkbenchOptimizationRun,
+  finishWorkbenchOptimizationRun,
+  updateWorkbenchOptimizationProgress,
+} from '@/lib/skill-workbench/optimization-adapter';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +47,7 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400 });
   }
 
-  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, mock, planId } = body || {};
+  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, mock, planId, runId } = body || {};
 
   const missing: string[] = [];
   if (!user) missing.push('user');
@@ -71,6 +76,19 @@ export async function POST(req: NextRequest) {
   // ── plan 模式：planId 有效时加载归并 plan 的可执行条目（core/reference 且未弃用），
   // 注入 prompt 替代平铺 checkedIssues；conflict 未仲裁的条目不进 prompt。
   let planItems: SkillOptPlanItemLite[] | undefined;
+  let planDisplay: {
+    id: string;
+    sourceCount: number;
+    items: Array<{
+      id: string;
+      route: string;
+      status: string;
+      severity: string;
+      title: string;
+      targetFile?: string;
+      conflictNote?: string;
+    }>;
+  } | undefined;
   if (typeof planId === 'string' && planId.trim()) {
     try {
       const plan = await (prismaRaw as any).skillOptPlan.findUnique({
@@ -80,6 +98,24 @@ export async function POST(req: NextRequest) {
       if (!plan || plan.sessionId !== threadId) {
         return new Response(JSON.stringify({ error: 'plan not found for this session' }), { status: 400 });
       }
+      const sourceIssueIds = new Set<string>();
+      planDisplay = {
+        id: plan.id,
+        sourceCount: 0,
+        items: (plan.items || []).map((it: any) => {
+          for (const issueId of parseStringArray(it.sourceIssueIds)) sourceIssueIds.add(issueId);
+          return {
+            id: it.id,
+            route: it.route,
+            status: it.status,
+            severity: it.severity,
+            title: it.title,
+            ...(it.targetFile ? { targetFile: it.targetFile } : {}),
+            ...(it.conflictNote ? { conflictNote: it.conflictNote } : {}),
+          };
+        }),
+      };
+      planDisplay.sourceCount = sourceIssueIds.size;
       planItems = (plan.items || [])
         .filter((it: any) => (it.route === 'core' || it.route === 'reference') && it.status === 'pending')
         .map((it: any) => ({
@@ -131,24 +167,56 @@ export async function POST(req: NextRequest) {
   const userMessageText = planItems
     ? composePlanUserMessageText(planItems, feedback)
     : composeUserMessageText(issuesNormalized, feedback);
+  const normalizedRunId = typeof runId === 'string' && runId.trim() ? runId.trim() : `${threadId}:${Date.now()}`;
+  const optimizationSourceKind = issuesNormalized.length || planDisplay ? 'evaluation' as const : 'user' as const;
+  const optimizationSourceRefs = [
+    { type: 'optimization-run', id: normalizedRunId },
+    ...issuesNormalized.map((issue) => ({ type: 'issue', id: issue.id })),
+    ...(planDisplay ? [{ type: 'plan', id: planDisplay.id }] : []),
+  ];
 
-  // session 校验 + 落 user message + auto-title（skill-generator 同款逻辑，区别只是表名）
+  // 先创建运行，再让用户消息与 Agent 消息共同持久化同一个 runId/taskId/recordId。
   let sessionExists = false;
+  let session: { id: string; title: string | null; user: string | null } | null = null;
   try {
-    const session = await (prismaRaw as any).skillOptSession.findUnique({
+    session = await (prismaRaw as any).skillOptSession.findUnique({
       where: { id: threadId },
-      select: { id: true, title: true },
+      select: { id: true, title: true, user: true },
     });
-    sessionExists = !!session;
-    if (sessionExists) {
+    sessionExists = !!session && session.user === user;
+  } catch (err: any) {
+    console.warn('[skill-opt route] session validation failed:', err?.message || err);
+  }
+  const workbenchRun = sessionExists
+    ? await beginWorkbenchOptimizationRun({
+        user,
+        optSessionId: threadId,
+        runId: normalizedRunId,
+        sourceKind: optimizationSourceKind,
+        sourceRefs: optimizationSourceRefs,
+      }).catch((error) => {
+        console.error('[skill-opt route] start workbench task failed:', error);
+        return null;
+      })
+    : null;
+
+  try {
+    if (sessionExists && session) {
+      const runMeta = {
+        kind: 'optimization_meta',
+        id: `optimization-${normalizedRunId}`,
+        runId: normalizedRunId,
+        taskId: workbenchRun?.taskId,
+        recordId: workbenchRun?.recordId,
+      };
       await (prismaRaw as any).skillOptMessage.create({
-        data: { sessionId: threadId, role: 'user', content: userMessageText, blocks: '[]' },
+        data: { sessionId: threadId, role: 'user', content: userMessageText, blocks: JSON.stringify([runMeta]) },
       });
 
       // 优化请求已被接受 = 一次有效使用；流式 token 不重复计。
       recordUsageEvent({ user, featureKey: 'skill-opt', eventKey: 'skill.optimize.run' });
       // 默认 title 时用首条 user message 截 30 字（skill-generator 同款）
-      if (session && (session.title === '新对话' || !session.title)) {
+      if (session.title === '新对话' || !session.title) {
         const newTitle = userMessageText.length > 30 ? userMessageText.slice(0, 27) + '…' : userMessageText;
         if (newTitle.trim()) {
           await (prismaRaw as any).skillOptSession.update({
@@ -159,7 +227,6 @@ export async function POST(req: NextRequest) {
       }
     }
   } catch (err: any) {
-    // 落库失败不阻塞 chat（重启/迁移期间应该容错）；记日志即可
     console.warn('[skill-opt route] pre-stream persistence failed:', err?.message || err);
   }
 
@@ -169,18 +236,32 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         const { send, getBlocks } = createBlockMirror(controller, encoder);
         let agentText = '';
+        let finalFiles: Record<string, any> = {};
+        let chatError: string | null = null;
+        let candidateStageStarted = false;
         try {
+          send('optimization_meta', { runId: normalizedRunId, taskId: workbenchRun?.taskId, recordId: workbenchRun?.recordId });
+          if (planDisplay) send('optimization_plan', planDisplay);
           // 包一层把 send 投递的 text 也累计到 agentText（fallback content 列）
           const trackedSend = (mode: string, payload: any) => {
             if (mode === 'text' && typeof payload === 'string') agentText += payload;
+            if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
+            if (!candidateStageStarted && workbenchRun && (mode === 'tool_call' || mode === 'vfs_patch')) {
+              candidateStageStarted = true;
+              void updateWorkbenchOptimizationProgress({
+                taskId: workbenchRun.taskId,
+                stage: '生成候选版本',
+                activeStep: 2,
+                percent: 35,
+              }).catch(() => undefined);
+            }
             send(mode, payload);
           };
           await runMockScript({ skillName, baseVersion, issues: issuesNormalized, feedback, send: trackedSend });
           send('done', { reason: 'completed' });
         } catch (err: any) {
+          chatError = err?.message || String(err);
           try { send('error', err?.message || String(err)); } catch { /* closed */ }
-        } finally {
-          try { controller.close(); } catch { /* already closed */ }
         }
 
         // 落 agent message + blocks（mock 模式也存，方便前端调试历史）
@@ -194,10 +275,27 @@ export async function POST(req: NextRequest) {
                 blocks: JSON.stringify(getBlocks()),
               },
             });
+            await (prismaRaw as any).skillOptSession.update({
+              where: { id: threadId },
+              data: { files: JSON.stringify(finalFiles) },
+            });
           } catch (err: any) {
             console.warn('[skill-opt route] mock post-stream persistence failed:', err?.message || err);
+            chatError ||= err?.message || String(err);
           }
         }
+        if (workbenchRun) {
+          await finishWorkbenchOptimizationRun({
+            user,
+            workbenchSessionId: workbenchRun.workbenchSessionId,
+            taskId: workbenchRun.taskId,
+            sourceKind: optimizationSourceKind,
+            sourceRefs: optimizationSourceRefs,
+            recordId: workbenchRun.recordId,
+            error: chatError,
+          });
+        }
+        try { controller.close(); } catch { /* already closed */ }
       },
     });
     return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
@@ -209,10 +307,23 @@ export async function POST(req: NextRequest) {
       const { send, getBlocks } = createBlockMirror(controller, encoder);
       let agentText = '';
       let finalFiles: Record<string, any> = {};
+      let chatError: string | null = null;
+      let candidateStageStarted = false;
       try {
+        send('optimization_meta', { runId: normalizedRunId, taskId: workbenchRun?.taskId, recordId: workbenchRun?.recordId });
+        if (planDisplay) send('optimization_plan', planDisplay);
         const trackedSend = (mode: string, payload: any) => {
           if (mode === 'text' && typeof payload === 'string') agentText += payload;
           if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
+          if (!candidateStageStarted && workbenchRun && (mode === 'tool_call' || mode === 'vfs_patch')) {
+            candidateStageStarted = true;
+            void updateWorkbenchOptimizationProgress({
+              taskId: workbenchRun.taskId,
+              stage: '生成候选版本',
+              activeStep: 2,
+              percent: 35,
+            }).catch(() => undefined);
+          }
           send(mode, payload);
         };
         await streamSkillOptOpencode({
@@ -228,10 +339,10 @@ export async function POST(req: NextRequest) {
           send: trackedSend,
         });
       } catch (err: any) {
-        console.error('[skill-opt route] streamSkillOptOpencode threw:', err?.message || err);
-        try { send('error', err?.message || String(err)); } catch { /* closed */ }
-      } finally {
-        try { controller.close(); } catch { /* already closed */ }
+        const rawError = err?.message || String(err);
+        chatError = presentSkillOptError(rawError);
+        console.error('[skill-opt route] streamSkillOptOpencode threw:', rawError);
+        try { send('error', chatError); } catch { /* closed */ }
       }
 
       // 落 agent message + blocks + 最终 files（skill-generator 同款，区别是表名 + 新增字段不存）
@@ -251,8 +362,73 @@ export async function POST(req: NextRequest) {
           });
         } catch (err: any) {
           console.warn('[skill-opt route] post-stream persistence failed:', err?.message || err);
+          chatError ||= err?.message || String(err);
         }
       }
+      if (workbenchRun) {
+        await finishWorkbenchOptimizationRun({
+          user,
+          workbenchSessionId: workbenchRun.workbenchSessionId,
+          taskId: workbenchRun.taskId,
+          sourceKind: optimizationSourceKind,
+          sourceRefs: optimizationSourceRefs,
+          recordId: workbenchRun.recordId,
+          error: chatError,
+          repair: chatError ? undefined : async (blockingIssues) => {
+            const repairMirror = createBlockMirror(controller, encoder);
+            repairMirror.send('optimization_meta', { runId: normalizedRunId, taskId: workbenchRun.taskId, recordId: workbenchRun.recordId });
+            repairMirror.send('text', `\n\n静态质量校验发现 ${blockingIssues.length} 个阻断问题，正在自动修复（1/1）…\n`);
+            const repairResult = await streamSkillOptOpencode({
+              user,
+              threadId,
+              skillName,
+              baseVersion,
+              checkedIssues: blockingIssues.map((issue) => ({
+                id: issue.id,
+                severity: issue.severity,
+                category: issue.dimension,
+                summary: issue.summary,
+                evidence: issue.evidence || issue.reasoning,
+                improvementSuggestion: issue.suggestedFix,
+              })),
+              userFeedback: '上一轮候选未通过静态质量门禁。请只修复下面的阻断问题，保留已经正确的修改；修复后会自动重新评估。',
+              modelId,
+              baselineFiles: baselineFilesNormalized,
+              send: repairMirror.send,
+            });
+            await prismaRaw.$transaction([
+              prismaRaw.skillOptMessage.create({
+                data: {
+                  sessionId: threadId,
+                  role: 'user',
+                  content: `自动修复上一轮静态质量门禁的 ${blockingIssues.length} 个阻断问题：\n${blockingIssues.map((issue) => `- ${issue.summary}`).join('\n')}`,
+                  blocks: JSON.stringify([{
+                    kind: 'optimization_meta',
+                    id: `optimization-${normalizedRunId}`,
+                    runId: normalizedRunId,
+                    taskId: workbenchRun.taskId,
+                    recordId: workbenchRun.recordId,
+                    automatic: true,
+                  }]),
+                },
+              }),
+              prismaRaw.skillOptMessage.create({
+                data: {
+                  sessionId: threadId,
+                  role: 'agent',
+                  content: repairResult.agentText,
+                  blocks: JSON.stringify(repairMirror.getBlocks()),
+                },
+              }),
+              prismaRaw.skillOptSession.update({
+                where: { id: threadId },
+                data: { files: JSON.stringify(repairResult.files) },
+              }),
+            ]);
+          },
+        });
+      }
+      try { controller.close(); } catch { /* already closed */ }
     },
   });
 
@@ -274,18 +450,34 @@ function composePlanUserMessageText(items: SkillOptPlanItemLite[], feedback: str
 }
 
 function composeUserMessageText(issues: SkillOptIssueLite[], feedback: string): string {
+  if (feedback.trim()) return feedback.trim();
   const parts: string[] = [];
   if (issues.length > 0) {
     const summary = issues.map(i => `[${i.severity}] ${i.id}: ${i.summary}`).join('\n');
     parts.push(`勾选了 ${issues.length} 个待优化点：\n${summary}`);
   }
-  if (feedback.trim()) {
-    parts.push(`附加诉求：${feedback.trim()}`);
-  }
   if (parts.length === 0) {
     return '（开始优化）';
   }
   return parts.join('\n\n');
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function presentSkillOptError(message: string) {
+  if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network error/i.test(message)) {
+    return '模型服务连接失败，当前候选未生成，请稍后重新优化。';
+  }
+  return message;
 }
 
 // ── mock 脚本：thinking → tool_call(read SKILL.md) → tool_result → text → vfs_patch → done ──

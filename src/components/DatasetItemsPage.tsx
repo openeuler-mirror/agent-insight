@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
@@ -11,6 +11,7 @@ import {
   type DatasetCase,
   type DatasetField,
   type DatasetFieldType,
+  coerceDatasetKind,
   createEvaluatorCatalogField,
   createEmptyCase,
   evaluatorCatalogFieldKeyFromLabel,
@@ -29,6 +30,12 @@ import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import styles from '@/components/DatasetItemsPage.module.css';
+import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
+import {
+  buildFaultModeGuideGroups,
+  type FaultModeGuideOption,
+} from '@/lib/reliability/fault-mode-guide';
 
 function IconRefresh({ size = 15 }: { size?: number }) {
   return (
@@ -176,6 +183,7 @@ export default function DatasetItemsPage() {
   const { user } = useAuth();
 
   const [dataset, setDataset] = useState<AgentDataset | null>(null);
+  const isReadOnly = isBuiltinReliabilityDataset(dataset || {});
   const fullDatasetRef = useRef<AgentDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -199,6 +207,38 @@ export default function DatasetItemsPage() {
   const [batchModalError, setBatchModalError] = useState('');
   const [batchDropActive, setBatchDropActive] = useState(false);
   const batchFileInputRef = useRef<HTMLInputElement>(null);
+  const [activeTab, setActiveTab] = useState<'items' | 'fault-modes'>('items');
+  const [faultModeOptions, setFaultModeOptions] = useState<Array<FaultModeGuideOption & {
+    parameters?: Array<{ key: string; label: string }>;
+  }>>([]);
+
+  const faultModeById = useMemo(() => {
+    const map = new Map<string, {
+      id: string;
+      name: string;
+      description?: string;
+      injectionMethodLabel?: string;
+      parameters?: Array<{ key: string; label: string }>;
+      submodes?: Array<{ id: string; name: string; description?: string }>;
+    }>();
+    for (const option of faultModeOptions) map.set(option.id, option);
+    return map;
+  }, [faultModeOptions]);
+
+  const formatFaultInjectionType = useCallback((row: DatasetCase, raw: string): string => {
+    const id = raw.trim();
+    const fromApi = id ? faultModeById.get(id) : undefined;
+    const submodeId = String(row.values?.submode || '').trim();
+    const apiSubmodeLabel = submodeId
+      ? (fromApi?.parameters || []).find((p) => p.key === submodeId)?.label
+      : undefined;
+    return formatReliabilityFaultTypeFromCaseValues(row.values, {
+      faultId: id,
+      apiFaultName: fromApi?.name,
+      apiInjectionMethodLabel: fromApi?.injectionMethodLabel,
+      apiSubmodeLabel,
+    });
+  }, [faultModeById]);
 
   const load = useCallback(async () => {
     if (!user || !id) return;
@@ -218,7 +258,7 @@ export default function DatasetItemsPage() {
         targetAgent: d.targetAgent || '',
         targetSkill: d.targetSkill || '',
         tags: d.tags || [],
-        datasetKind: d.datasetKind === 'trajectory' ? 'trajectory' : 'ideal_output',
+        datasetKind: coerceDatasetKind(d.datasetKind),
         fields: Array.isArray(d.fields) ? d.fields : [],
         cases: Array.isArray(d.cases) ? d.cases : [],
         createdAt: d.createdAt,
@@ -232,6 +272,68 @@ export default function DatasetItemsPage() {
       setLoading(false);
     }
   }, [user, id]);
+
+  useEffect(() => {
+    if (!dataset || dataset.datasetKind !== 'reliability') {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await apiFetch('/api/reliability/fault-modes');
+        const data = await res.json();
+        if (!res.ok || cancelled) return;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        setFaultModeOptions(
+          items
+            .map((item: {
+              id?: string;
+              name?: string;
+              description?: string;
+              injectionMethodLabel?: string;
+              injection_method_label?: string;
+              parameters?: Array<{ key?: string; label?: string }>;
+              submodes?: Array<{ id?: string; name?: string; description?: string }>;
+            }) => ({
+              id: String(item?.id || '').trim(),
+              name: String(item?.name || item?.id || '').trim(),
+              description: String(item?.description || '').trim() || undefined,
+              injectionMethodLabel: String(
+                item?.injectionMethodLabel || item?.injection_method_label || '',
+              ).trim() || undefined,
+              parameters: Array.isArray(item?.parameters)
+                ? item.parameters
+                  .map((p) => ({
+                    key: String(p?.key || '').trim(),
+                    label: String(p?.label || p?.key || '').trim(),
+                  }))
+                  .filter((p) => p.key)
+                : undefined,
+              submodes: Array.isArray(item?.submodes)
+                ? item.submodes
+                  .map((submode) => ({
+                    id: String(submode?.id || '').trim(),
+                    name: String(submode?.name || submode?.id || '').trim(),
+                    description: String(submode?.description || '').trim() || undefined,
+                  }))
+                  .filter((submode) => submode.id)
+                : undefined,
+            }))
+            .filter((item: { id: string }) => item.id),
+        );
+      } catch {
+        if (!cancelled) setFaultModeOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dataset]);
+
+  const faultModeGuideGroups = useMemo(
+    () => buildFaultModeGuideGroups(dataset?.cases || [], faultModeOptions),
+    [dataset?.cases, faultModeOptions],
+  );
 
   const loadFullDataset = async (): Promise<AgentDataset> => {
     if (!user || !id) throw new Error('缺少数据集信息');
@@ -277,6 +379,10 @@ export default function DatasetItemsPage() {
 
   const persistCases = async (cases: DatasetCase[]): Promise<boolean> => {
     if (!user || !dataset) return false;
+    if (isReadOnly) {
+      setError('内置可靠性评测集由系统维护，不可编辑');
+      return false;
+    }
     setSaving(true);
     setError('');
     try {
@@ -324,10 +430,12 @@ export default function DatasetItemsPage() {
   };
 
   const openAdd = () => {
+    if (isReadOnly) return;
     setRowEditor({ mode: 'add', row: createEmptyCase() });
   };
 
   const openEdit = async (row: DatasetCase) => {
+    if (isReadOnly) return;
     setSaving(true);
     setError('');
     try {
@@ -342,6 +450,10 @@ export default function DatasetItemsPage() {
 
   const persistFields = async (fields: DatasetField[]) => {
     if (!user || !dataset) return false;
+    if (isReadOnly) {
+      setError('内置可靠性评测集由系统维护，不可编辑');
+      return false;
+    }
     setSaving(true);
     setError('');
     try {
@@ -400,6 +512,7 @@ export default function DatasetItemsPage() {
 
   const removeRow = async (rowId: string) => {
     if (!dataset) return;
+    if (isReadOnly) return;
     try {
       const full = await loadFullDataset();
       await persistCases(full.cases.filter(c => c.id !== rowId));
@@ -458,6 +571,10 @@ export default function DatasetItemsPage() {
 
   const runBatchImport = async () => {
     if (!dataset || !user) return;
+    if (isReadOnly) {
+      setBatchModalError('内置可靠性评测集由系统维护，不可导入数据');
+      return;
+    }
     setBatchModalError('');
     try {
       let text = '';
@@ -531,6 +648,8 @@ export default function DatasetItemsPage() {
   if (!dataset) return null;
 
   const isTraj = dataset.datasetKind === 'trajectory';
+  const isReliability = dataset.datasetKind === 'reliability';
+  const selectedTab = isReliability ? activeTab : 'items';
   const catalogDraftKey = evaluatorCatalogFieldKeyFromLabel(fieldDraft.label);
 
   return (
@@ -576,8 +695,13 @@ export default function DatasetItemsPage() {
             </span>
           )}
           <span className="ai-badge ai-badge-gr">
-            {isTraj ? '轨迹评测集' : '理想输出评测集'}
+            {isTraj ? '轨迹评测集' : isReliability ? '可靠性评测集' : '理想输出评测集'}
           </span>
+          {isReadOnly && (
+            <span className={styles.readOnlyBadge} title="内容由系统故障目录统一维护">
+              只读
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>
           更新于 {formatDateFull(dataset.updatedAt)} · 共 {dataset.cases.length} 条数据项
@@ -602,16 +726,36 @@ export default function DatasetItemsPage() {
 
         <div className={styles.tableShell}>
           <div className={styles.tableToolbar}>
-            <div className={styles.toolbarLeft}>
-              <span className={styles.sectionTitle}>数据项</span>
-              <span className={styles.toolbarMeta}>{dataset.cases.length} 条</span>
+            <div className={styles.tabList} role="tablist" aria-label="数据集详情">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={selectedTab === 'items'}
+                className={`${styles.tabButton} ${selectedTab === 'items' ? styles.tabButtonActive : ''}`}
+                onClick={() => setActiveTab('items')}
+              >
+                数据项
+                <span className={styles.toolbarMeta}>{dataset.cases.length} 条</span>
+              </button>
+              {isReliability && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedTab === 'fault-modes'}
+                  className={`${styles.tabButton} ${selectedTab === 'fault-modes' ? styles.tabButtonActive : ''}`}
+                  onClick={() => setActiveTab('fault-modes')}
+                >
+                  故障模式说明
+                </button>
+              )}
             </div>
-            <div className={styles.toolbarRight}>
+            {selectedTab === 'items' && <div className={styles.toolbarRight}>
               <button
                 type="button"
                 className={styles.refreshGhost}
                 onClick={() => setFieldEditorOpen(true)}
-                disabled={saving}
+                disabled={saving || isReadOnly}
+                title={isReadOnly ? '内置可靠性评测集不可新增字段' : '新增字段'}
               >
                 <Plus size={15} aria-hidden />
                 新增字段
@@ -624,7 +768,8 @@ export default function DatasetItemsPage() {
                 <button
                   type="button"
                   className={styles.addSplitSecondary}
-                  disabled={saving}
+                  disabled={saving || isReadOnly}
+                  title={isReadOnly ? '内置可靠性评测集不可导入数据' : '批量导入'}
                   onClick={() => {
                     setBatchModalError('');
                     setBatchModalOpen(true);
@@ -633,15 +778,21 @@ export default function DatasetItemsPage() {
                   <IconUploadTray />
                   批量导入
                 </button>
-                <button type="button" className={styles.addSplitPrimary} onClick={openAdd} disabled={saving}>
+                <button
+                  type="button"
+                  className={styles.addSplitPrimary}
+                  onClick={openAdd}
+                  disabled={saving || isReadOnly}
+                  title={isReadOnly ? '内置可靠性评测集不可添加数据' : '单个添加'}
+                >
                   <IconPlusSm />
                   单个添加
                 </button>
               </div>
-            </div>
+            </div>}
           </div>
 
-          <div className={styles.tableScroll}>
+          {selectedTab === 'items' ? <div className={styles.tableScroll}>
             <table className={styles.dataTable}>
               <thead>
                 <tr>
@@ -675,26 +826,41 @@ export default function DatasetItemsPage() {
                       </td>
                       {dataset.fields.map(field => {
                         const fullText = fieldText(row, field.key);
+                        const displayText = field.key === 'fault_injection_type' && isReliability
+                          ? formatFaultInjectionType(row, fullText)
+                          : fullText;
                         const isTrajectoryField = ['trace', 'trajectory'].includes(field.key.trim().toLocaleLowerCase());
                         return (
                         <TooltipCell
                           key={field.id}
-                          shortText={shorten(fullText, field.type === 'json' ? 40 : 80)}
-                          fullText={fullText}
+                          shortText={shorten(displayText, field.type === 'json' ? 40 : 80)}
+                          fullText={displayText}
                           tdStyle={{
                             maxWidth: field.type === 'json' ? 220 : 260,
                             ...(field.type === 'json' ? { fontFamily: 'ui-monospace, monospace', fontSize: 12 } : {}),
-                            ...(isTrajectoryField ? { cursor: 'pointer', color: 'var(--primary)' } : {}),
+                            ...(isTrajectoryField && !isReadOnly ? { cursor: 'pointer', color: 'var(--primary)' } : {}),
                           }}
-                          onClick={isTrajectoryField ? () => void openEdit(row) : undefined}
+                          onClick={isTrajectoryField && !isReadOnly ? () => void openEdit(row) : undefined}
                         />
                         );
                       })}
                       <td style={{ whiteSpace: 'nowrap' }}>
-                        <button type="button" className={styles.linkBtn} onClick={() => void openEdit(row)} disabled={saving}>
+                        <button
+                          type="button"
+                          className={styles.linkBtn}
+                          onClick={() => void openEdit(row)}
+                          disabled={saving || isReadOnly}
+                          title={isReadOnly ? '内置可靠性评测集不可编辑' : '编辑数据项'}
+                        >
                           编辑
                         </button>
-                        <button type="button" className={styles.linkBtnDanger} onClick={() => void removeRow(row.id)}>
+                        <button
+                          type="button"
+                          className={styles.linkBtnDanger}
+                          onClick={() => void removeRow(row.id)}
+                          disabled={isReadOnly}
+                          title={isReadOnly ? '内置可靠性评测集不可删除数据项' : '删除数据项'}
+                        >
                           删除
                         </button>
                       </td>
@@ -704,7 +870,48 @@ export default function DatasetItemsPage() {
                 )}
               </tbody>
             </table>
-          </div>
+          </div> : (
+            <div className={styles.guidePanel}>
+              <div className={styles.guideIntro}>
+                每条可靠性数据对应一个“故障模式 × 子模式”。运行实验时，系统按照对应注入方式制造故障，并观察 Agent 是否能够检测、处置或恢复。
+              </div>
+              <div className={styles.tableScroll}>
+                <table className={`${styles.dataTable} ${styles.guideTable}`}>
+                  <thead>
+                    <tr>
+                      <th>故障模式</th>
+                      <th>子模式</th>
+                      <th>注入方式</th>
+                      <th>说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {faultModeGuideGroups.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className={styles.emptyCell}>当前数据集暂无可说明的故障模式。</td>
+                      </tr>
+                    ) : faultModeGuideGroups.map(group => group.submodes.map((submode, index) => (
+                      <tr key={`${group.id}:${submode.id || 'default'}`}>
+                        {index === 0 && (
+                          <td rowSpan={group.submodes.length} className={styles.faultGroupCell}>
+                            <div className={styles.faultModeName}>{group.name}</div>
+                            <div className={styles.faultModeSummary}>{group.description || '—'}</div>
+                          </td>
+                        )}
+                        <td className={styles.submodeCell}>{submode.name}</td>
+                        {index === 0 && (
+                          <td rowSpan={group.submodes.length} className={styles.faultGroupCell}>
+                            <span className={styles.methodBadge}>{group.injectionMethodLabel || '—'}</span>
+                          </td>
+                        )}
+                        <td className={styles.descriptionCell}>{submode.description || '—'}</td>
+                      </tr>
+                    )))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -936,6 +1143,21 @@ export default function DatasetItemsPage() {
                       checked={Boolean(fieldValue(rowEditor.row, field.key))}
                       onChange={e => setEditorFieldValue(field, e.target.checked)}
                       style={{ width: 18, height: 18 }}
+                    />
+                  ) : field.key === 'fault_injection_type' && isReliability ? (
+                    <Select
+                      value={fieldText(rowEditor.row, field.key)}
+                      onChange={value => setEditorFieldValue(field, value)}
+                      options={[
+                        { value: '', label: '选择故障模式…' },
+                        ...faultModeOptions.map(option => ({
+                          value: option.id,
+                          label: option.injectionMethodLabel
+                            ? `${option.name} · ${option.injectionMethodLabel}`
+                            : option.name,
+                        })),
+                      ]}
+                      aria-label="故障注入类型"
                     />
                   ) : (
                     <textarea

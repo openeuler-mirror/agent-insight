@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { GET as listExperiments, POST as createExperiment } from '@/app/api/experiments/route';
-import { GET as getExperiment } from '@/app/api/experiments/[id]/route';
+import { DELETE as deleteExperiment, GET as getExperiment } from '@/app/api/experiments/[id]/route';
 import { prisma } from '@/lib/storage/prisma';
 
 const TEST_USER = `exp-smoke-${Date.now()}`;
@@ -49,19 +49,28 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   const { id } = await createRes.json();
   assert.ok(typeof id === 'string' && id.length > 0);
 
-  // 列表
+  // draft 仅用于创建与启动之间的内部衔接，不出现在用户列表。
   const listRes = await listExperiments(
     new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
   );
   assert.equal(listRes.status, 200);
   const { items } = await listRes.json();
-  assert.equal(items.length, 1);
-  assert.equal(items[0].id, id);
-  assert.equal(items[0].name, '冒烟实验');
-  assert.equal(items[0].type, 'single');
-  assert.equal(items[0].status, 'draft');
-  assert.equal(items[0].caseCount, 2);
-  assert.equal(items[0].evaluatorCount, 2);
+  assert.equal(items.length, 0);
+
+  await prisma.experiment.update({ where: { id }, data: { status: 'running' } });
+  const runningListRes = await listExperiments(
+    new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
+  );
+  assert.equal(runningListRes.status, 200);
+  const { items: runningItems } = await runningListRes.json();
+  assert.equal(runningItems.length, 1);
+  assert.equal(runningItems[0].id, id);
+  assert.equal(runningItems[0].name, '冒烟实验');
+  assert.equal(runningItems[0].type, 'single');
+  assert.equal(runningItems[0].status, 'running');
+  assert.equal(runningItems[0].caseCount, 2);
+  assert.equal(runningItems[0].evaluatorCount, 2);
+  assert.equal(runningItems[0].overallScore, null);
 
   // 详情
   const detailRes = await getExperiment(
@@ -83,6 +92,142 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   });
   assert.equal(detail.cases[1].evaluatorContext, null);
   assert.deepEqual(detail.results, []);
+});
+
+test('experiments API: rollback deletes drafts but never started experiments', async (t) => {
+  const user = `exp-rollback-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+
+  const create = async (name: string) => {
+    const response = await createExperiment(postReq({
+      user,
+      name,
+      agentName: 'rollback-agent',
+      cases: [{ input: 'q', actualOutput: 'a' }],
+      evaluatorIds: ['preset-agent-task-completion'],
+    }));
+    assert.equal(response.status, 200);
+    return String((await response.json()).id);
+  };
+
+  const draftId = await create('待回滚');
+  const deleteDraft = await deleteExperiment(
+    new Request(`http://localhost/api/experiments/${draftId}?user=${user}`, { method: 'DELETE' }),
+    { params: Promise.resolve({ id: draftId }) },
+  );
+  assert.equal(deleteDraft.status, 200);
+  assert.equal(await prisma.experiment.count({ where: { id: draftId } }), 0);
+
+  const runningId = await create('已启动');
+  await prisma.experiment.update({ where: { id: runningId }, data: { status: 'running' } });
+  const deleteRunning = await deleteExperiment(
+    new Request(`http://localhost/api/experiments/${runningId}?user=${user}`, { method: 'DELETE' }),
+    { params: Promise.resolve({ id: runningId }) },
+  );
+  assert.equal(deleteRunning.status, 409);
+  assert.equal((await deleteRunning.json()).status, 'running');
+  assert.equal(await prisma.experiment.count({ where: { id: runningId } }), 1);
+});
+
+test('experiments API: global list excludes Skill workbench experiments', async (t) => {
+  const user = `exp-scope-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+  const [globalExperiment, skillExperiment, legacyCaseAnalysis, legacyGrayscale] = await Promise.all([
+    prisma.experiment.create({
+      data: { user, name: '全局实验', status: 'running', scope: '' },
+    }),
+    prisma.experiment.create({
+      data: {
+        user,
+        name: 'Skill 触发分析',
+        status: 'running',
+        scope: 'skill-workbench',
+        skillName: 'scope-skill',
+        skillVersion: 1,
+        preset: 'trigger',
+      },
+    }),
+    prisma.experiment.create({
+      data: { user, name: '旧用例分析', status: 'running', scope: 'skill-case-analysis', skillName: 'scope-skill' },
+    }),
+    prisma.experiment.create({
+      data: { user, name: '旧 Skill A/B', status: 'running', scope: 'grayscale-ab', skillName: 'scope-skill' },
+    }),
+  ]);
+
+  const response = await listExperiments(
+    new Request(`http://localhost/api/experiments?user=${user}&limit=100`),
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(payload.items.map((item: { id: string }) => item.id), [globalExperiment.id]);
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === skillExperiment.id));
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === legacyCaseAnalysis.id));
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === legacyGrayscale.id));
+});
+
+test('experiments API: reliability FI fields stay off evaluatorContextJson', async (t) => {
+  const user = `exp-fi-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+
+  const createRes = await createExperiment(postReq({
+    user,
+    name: '可靠性 FI 分离',
+    agentName: 'fi-agent',
+    cases: [
+      {
+        input: 'inject me',
+        faultInjectionType: 'analysis-paralysis',
+        values: { fault_injection_type: 'analysis-paralysis', scene: 'e2e' },
+      },
+      {
+        input: 'with tools + fi',
+        faultInjectionType: 'tool-failure',
+        evaluatorContext: {
+          schemaVersion: 1,
+          availableTools: [{ name: 'bash' }],
+        },
+      },
+    ],
+    evaluatorIds: ['preset-ras-reliability'],
+  }));
+  assert.equal(createRes.status, 200);
+  const { id } = await createRes.json();
+
+  const rows = await prisma.experimentCase.findMany({
+    where: { experimentId: id },
+    orderBy: { createdAt: 'asc' },
+  });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].faultInjectionType, 'analysis-paralysis');
+  assert.equal(rows[0].evaluatorContextJson, null);
+  assert.match(String(rows[0].caseValuesJson), /analysis-paralysis/);
+  assert.equal(rows[1].faultInjectionType, 'tool-failure');
+  assert.deepEqual(JSON.parse(String(rows[1].evaluatorContextJson)), {
+    schemaVersion: 1,
+    availableTools: [{ name: 'bash' }],
+  });
+
+  const detailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${id}?user=${user}`),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.equal(detail.cases[0].faultInjectionType, 'analysis-paralysis');
+  assert.equal(detail.cases[0].evaluatorContext, null);
+  assert.equal(detail.cases[0].evaluatorContextError, null);
+  assert.equal(detail.cases[1].faultInjectionType, 'tool-failure');
+  assert.deepEqual(detail.cases[1].evaluatorContext, {
+    schemaVersion: 1,
+    availableTools: [{ name: 'bash' }],
+  });
 });
 
 test('experiments API: POST validation rejects empty payloads', async () => {

@@ -10,6 +10,8 @@
  * 这一层只负责挂 AppTopBar + 触发上传 modal。
  */
 import { Suspense, useEffect, useState, type ComponentType } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { SkillWorkbenchShell } from '@/components/skill-workbench/SkillWorkbenchShell';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { SkillCatalog, SkillUpload, SkillGenerate, EnterpriseSync } from '@/components/skills/SkillRegistry';
 import {
@@ -32,20 +34,32 @@ export default function SkillsPage() {
 }
 
 function SkillsPageInner() {
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    const managementMode = pathname.endsWith('/config/skills') || searchParams.has('openSkillId');
     const [refreshKey, setRefreshKey] = useState(0);
     const [uploadOpen, setUploadOpen] = useState(false);
     const [isEnterpriseMode, setIsEnterpriseMode] = useState(false);
 
     useEffect(() => {
+        if (!managementMode) return;
         apiFetch('/api/eval/config/status?check_org=true')
             .then(res => res.json())
             .then(data => setIsEnterpriseMode(!!data.org_mode))
             .catch(() => undefined);
-    }, []);
+    }, [managementMode]);
+
+    if (!managementMode) {
+        return (
+            <div className="flex h-full min-h-0 flex-col bg-background">
+                <AppTopBar title="Skill 工作台" showDefaultActions={false} />
+                <div className="min-h-0 flex-1"><SkillWorkbenchShell /></div>
+            </div>
+        );
+    }
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--background)', overflow: 'hidden' }}>
-            <AppTopBar title="Skills Hub" showDefaultActions={false} />
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 20px 24px', width: '100%', boxSizing: 'border-box' }}>
                 <SkillCatalog refresh={refreshKey} onUploadClick={() => setUploadOpen(true)} />
             </div>

@@ -7,6 +7,8 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 
 本指南带你用最短路径跑通 Agent Insight 的第一条完整闭环：完成基础配置、接入一个 Agent，并在平台里看到真实链路。
 
+登录后可直接点击左侧 **快速开始**。页面按 **快速接入、运行观测、评估与实验、诊断分析、持续优化** 五个阶段汇总当前可用入口；下面的步骤是“快速接入”阶段的完整操作说明。
+
 完成后你会得到：
 
 - 一个已登记的 Agent
@@ -209,6 +211,14 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 
 容器只负责运行 Agent Insight 服务端。OpenCode、Claude Code、OpenClaw、LangChain 等框架的接入命令仍应在对应 Agent 实际运行的机器或容器里执行。当前仓库里的这份 `Dockerfile` 走 **SQLite 优先** 路线，不内置 OpenGauss 运行时依赖。
 
+OpenCode 接入命令还会在 Agent 所在机器使用与服务端匹配的 Agent Insight 包版本执行
+`install-ras`，把 Agent RAS runtime 安装到 `~/.agent-insight/ras/runtime/`。
+安装脚本通过隔离的 npm cache 只下载发布 `.tgz`，不会用 `npx` 临时安装整套看板依赖；
+安装完成后还会只读预检 RAS 事件接收地址，提前完成源码开发服务的路由编译并验证当前
+API Key。预检失败会明确告警，但不会阻断普通链路插件和看板服务。
+容器化部署看板时，不要在看板容器内安装 OpenCode RAS 插件；插件必须和 OpenCode
+位于同一运行环境。
+
 如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
 
 ---
@@ -220,14 +230,20 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 1. 登录看板并进入当前 Workspace
 
 2. 在 **模型注册** 中先配置模型
-3. 在 **Agent 管理** 中创建一个 Agent
-4. 在 **安装指导** 中完成接入
+3. 在 **运行观测 → Agent 概览** 中创建一个 Agent
+4. 在 **配置 → 客户端安装** 中完成接入
 5. 触发一次真实执行
 6. 在 **链路追踪** 中确认第一条 Trace
 
 > **Tip**
 > 如果你是开发者，且希望直接在代码里手工埋点，可以直接查看文末的
 > “可选：通过 SDK 直接接入” 一节。
+
+> **Agent RAS 前置条件**
+>
+> Linux、WSL 或 macOS 上需要 Python 3.10+、pip 和共享 libpython。OpenCode 安装指导
+> 默认安装 RAS，可设置 `AGENT_INSIGHT_RAS=0` 跳过。原生 Windows 暂不启用 inproc，
+> 请在 WSL 中运行 OpenCode 和安装命令。
 
 ---
 
@@ -239,12 +255,18 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
      <img src="../images/home.png" alt="Agent Insight 看板首页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
-2. 完成登录，进入默认 Workspace。
+2. 使用邮箱完成登录，进入默认 Workspace。
+   OpenCode 上报使用的 API Key 必须属于这个邮箱账号，否则普通链路与可靠性链路都会因
+   用户归属不同而不可见。本地 keyless 开发模式如设置
+   `AGENT_INSIGHT_DEFAULT_INGEST_USER`，其值也应使用同一个邮箱，不要填无法在登录页使用的
+   `admin` 别名。
 3. 确认左侧导航中可以看到以下模块：
-   - **Agent 管理**
+   - **快速开始**
    - **运行观测**
-   - **评测中心**
-   - **Skills 能力**
+   - **Agent 概览**
+   - **评估与实验**
+   - **诊断分析**
+   - **持续优化**
    - **配置**
 
 > **Tip**
@@ -275,7 +297,7 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 
 ## 步骤三：注册 Agent
 
-进入侧边栏 **Agent Workspace → Agent 管理**：
+进入侧边栏 **运行观测 → Agent 概览**：
 
 1. 点击注册 Agent
 2. 输入 Agent 名称
@@ -291,9 +313,9 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 ---
 
-## 步骤四：按安装指导完成接入
+## 步骤四：通过客户端安装完成接入
 
-进入 **配置 → 安装指导**，按页面提示完成接入。
+进入 **配置 → 客户端安装**，按页面提示完成接入。
 
 通常你会完成这些动作：
 
@@ -301,7 +323,7 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 2. 复制页面生成的安装命令
 
    <p align="center">
-     <img src="../images/install_guide.png" alt="安装指导页面" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+     <img src="../images/install_guide.png" alt="客户端安装页面" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
 3. 在 Agent 所在机器上执行该命令
@@ -314,10 +336,15 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
    </p>
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
+选择 OpenCode 时，同一个脚本会继续安装普通链路采集插件和 Agent RAS；两者使用同一个
+当前登录账号 API Key。之后重启 Agent Insight 只会同步平台地址，不会把这个客户端
+身份覆盖成内部 `admin` 账号。
 
 你也可以选择 **OpenClaw**。安装脚本会生成一个同名命令包装函数，在调用原始 `openclaw` 命令时注入 OTel 环境变量；OpenClaw 仍直接访问自己的模型供应商，Agent Insight 只接收遥测数据，不代理模型请求。
 
-默认接入使用 OTLP/HTTP JSON：Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/otel/v1/traces`。安装脚本末尾也会输出一份可手动复制的纯配置环境变量块。旧版 watcher 仅作为兼容方式保留；同一 OpenClaw 实例只能选择 OTel 或 watcher 其中一种，避免重复 Trace。
+如果使用 **AcTrail**，先自行完成 AcTrail 安装并启动守护进程，再在安装指导中选择 AcTrail，并于 AcTrail 所在的 Linux/WSL 环境运行 Unix 命令。脚本不会安装或包装 AcTrail，而是完成两项配置：合并更新 AcTrail 守护进程配置，启用完整请求、结构化工具调用、工具结果和子 Agent 关系；生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给官方 `otel-http` 插件。修改守护进程配置前，脚本会备份原文件；若守护进程正在运行则自动重启，然后持久化加载 `agent-insight.otel-http` 实例。之后继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>`，AcTrail 会自动上报。默认守护进程配置为 `/etc/actrail/actraild.conf`；非默认部署可在运行脚本前设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
+
+OTLP Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/otel/v1/traces`；AcTrail 默认使用 OTLP/HTTP Protobuf。安装脚本末尾也会输出一份可手动复制的纯配置环境变量块。旧版 watcher 仅作为兼容方式保留；同一 OpenClaw 实例只能选择 OTel 或 watcher 其中一种，避免重复 Trace。
 
 
 ---
@@ -364,8 +391,8 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 ## 继续阅读
 
 - 想先看产品整体结构 → [Agent Insight](./home)
-- 想补齐基础配置 → [模型注册](./settings/model-registry) / [安装指导](./settings/access-control)
+- 想补齐基础配置 → [模型注册](./settings/model-registry) / [客户端安装](./settings/access-control)
 - 想理解平台核心名词 → [核心概念](./concepts)
 - 想继续排查和分析线上执行 → [运行观测](./observability/index)
-- 想建立第一套离线评测 → [评测中心](./evaluation/index)
-- 想沉淀可复用能力 → [Skills 能力](./skills/index)
+- 想建立第一套离线评测 → [评估与实验](./evaluation/index)
+- 想沉淀可复用能力 → [持续优化 · Skill](./skills/index)

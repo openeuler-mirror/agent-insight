@@ -27,6 +27,7 @@ export interface EvaluatorMeta {
 
 /** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。 */
 const PRESET_META: Record<string, EvaluatorMeta> = {
+  'skill-trigger-analyzer': { category: 'res', requires: [] },
   // 任务完成度：对照参考答案判定目标达成（团队评审确定为依赖参考数据）
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖参考数据
@@ -41,6 +42,13 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-content-controversy': { category: 'res', requires: [] },
   'preset-content-gender-discrimination': { category: 'res', requires: [] },
   'preset-creativity-expression': { category: 'res', requires: [] },
+  'preset-text-ai-flavor': { category: 'res', requires: [] },
+  'preset-text-format': { category: 'res', requires: [] },
+  'preset-text-language-consistency': { category: 'res', requires: [] },
+  'preset-text-conciseness': { category: 'res', requires: [] },
+  // 文本质量评估器（流畅度 / 幻觉检测）：只看最终输出，上下文可选不门控
+  'preset-fluency-text': { category: 'res', requires: [] },
+  'preset-hallucination-text': { category: 'res', requires: [] },
   'preset-safety-maliciousness': { category: 'res', requires: [] },
   'preset-safety-harmfulness': { category: 'res', requires: [] },
   'preset-safety-criminality': { category: 'res', requires: [] },
@@ -48,9 +56,10 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-depth-result': { category: 'res', requires: [] },
   'preset-agent-tool-utilization': { category: 'traj', requires: ['tool_catalog'] },
   'preset-agent-tool-selection': { category: 'traj', requires: ['tool_catalog'] },
-  // 文本质量评估器（流畅度 / 幻觉检测）：只看最终输出，上下文可选不门控
-  'preset-fluency-text': { category: 'res', requires: [] },
-  'preset-hallucination-text': { category: 'res', requires: [] },
+  // 可靠性：挂 traj（本期不扩 EvaluatorCategory）；依赖 Trace/故障事件，不强制参考答案
+  'preset-ras-reliability': { category: 'traj', requires: [] },
+  'preset-ras-reliability-fault-injection': { category: 'traj', requires: [] },
+  'preset-ras-reliability-detection-recovery': { category: 'traj', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };

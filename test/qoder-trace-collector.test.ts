@@ -2540,7 +2540,7 @@ test("Qoder framework and OTLP registries expose plugin onboarding and snapshot 
   assert.equal(framework.capabilities?.skills, true)
   assert.equal(framework.capabilities?.subagentTree, true)
   assert.equal(framework.capabilities?.allowSnapshotShrink, true)
-  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["langfuse-langgraph", "hermes", "openclaw", "qoder", "generic"])
+  assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["actrail", "langfuse-langgraph", "hermes", "qwencode", "openclaw", "qoder", "generic"])
 })
 
 test("Qoder setup merges idempotently and removes only Agent Insight hooks", () => {

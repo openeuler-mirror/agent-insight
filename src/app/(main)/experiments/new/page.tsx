@@ -5,7 +5,7 @@
 // 对照仓库根目录「评测实验-高保真.html」的单组流程。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, Search, X } from 'lucide-react';
+import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
@@ -25,8 +25,36 @@ import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
+import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
+import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
+import {
+  isSkillExperimentDatasetEligible,
+  isSkillExperimentEvaluatorEligible,
+} from '@/lib/skill-workbench/experiment-policy';
 
-interface AgentOption { name: string; traces: number }
+interface AgentTargetOption {
+  workerId: string;
+  host: string;
+  hostname: string | null;
+  platform: string;
+  models: Array<{ id: string; label: string }>;
+  lastSeenAt: string;
+  supportsGenericTrace: boolean;
+  supportsFaultInjection: boolean;
+}
+
+interface AgentOption {
+  name: string;
+  traces: number;
+  frameworks: string[];
+  executable: boolean;
+  targets: AgentTargetOption[];
+}
+
+function defaultExperimentName(now = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `Agent 评测 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
 
 interface TraceItem {
   id: string;
@@ -54,22 +82,117 @@ interface SelectedCase {
   actualOutput: string;
   referenceOutput: string | null;
   evaluatorContext: EvaluatorCaseContext | null;
+  faultInjectionType?: string | null;
+  values?: Record<string, unknown>;
 }
 
 interface DatasetOption {
   id: string;
   name: string;
+  description?: string;
+  datasetKind?: string;
   targetAgent?: string;
+  targetSkill?: string;
+  tags?: string[];
+  fields?: unknown[];
   caseCount?: number;
   cases?: Array<{
+    id?: string;
     input?: string;
     expectedOutput?: string;
+    evaluationFocus?: string;
     values?: Record<string, unknown>;
   }>;
 }
 
-const STEPS = ['实验设计', '关联 Trace', '预期答案', '评估器'];
-const NEXT_LABELS = ['下一步：关联 Trace →', '下一步：预期答案 →', '下一步：评估器 →', '🚀 开始实验'];
+export type SkillExperimentPreset = 'trigger' | 'use-case' | 'skill-ab';
+
+export interface SkillExperimentContext {
+  sessionId?: string;
+  skillName: string;
+  skillVersion: number;
+  preset: SkillExperimentPreset;
+  versions: Array<{ id: string; version: number }>;
+  optimizationRecordId?: string;
+}
+
+interface ExperimentWizardProps {
+  embedded?: boolean;
+  skillContext?: SkillExperimentContext;
+  onBack?: () => void;
+  onCreated?: (experimentId: string) => void;
+}
+
+const SKILL_PRESET_LABELS: Record<SkillExperimentPreset, string> = {
+  trigger: '触发分析',
+  'use-case': '用例分析',
+  'skill-ab': 'A/B 测试',
+};
+
+const SKILL_PRESET_EVALUATORS: Record<SkillExperimentPreset, Array<{
+  id: string;
+  selected: boolean;
+}>> = {
+  trigger: [
+    {
+      id: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+      selected: true,
+    },
+  ],
+  'use-case': [
+    { id: 'preset-agent-task-completion', selected: true },
+    { id: 'preset-agent-trace-quality', selected: true },
+    { id: 'preset-result-faithfulness', selected: true },
+    { id: 'preset-safety-harmfulness', selected: false },
+  ],
+  'skill-ab': [
+    { id: 'preset-agent-task-completion', selected: true },
+    { id: 'preset-result-accuracy', selected: true },
+    { id: 'preset-agent-trace-quality', selected: true },
+    { id: 'preset-safety-harmfulness', selected: false },
+  ],
+};
+
+function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase[] {
+  return (dataset?.cases || []).map((item, index) => {
+    const fault = String(item.values?.fault_injection_type || '').trim();
+    const key = String(item.id || `dataset-case-${index}:${item.input || ''}`);
+    const match = matchDatasetCases(
+      [{ key, input: String(item.input || '') }],
+      [{
+        input: String(item.input || ''),
+        expectedOutput: String(item.expectedOutput || ''),
+        values: item.values,
+      }],
+      true,
+    );
+    return {
+      executionId: key,
+      taskId: null,
+      input: String(item.input || ''),
+      actualOutput: '',
+      referenceOutput: match.updates[key] || null,
+      evaluatorContext: match.contextUpdates[key] || null,
+      faultInjectionType: fault || null,
+      values: {
+        ...(item.values || {}),
+        ...(item.evaluationFocus ? { trigger_rationale: item.evaluationFocus } : {}),
+        ...(fault ? { fault_injection_type: fault } : {}),
+      },
+    };
+  });
+}
+
+const STEPS = ['实验设计', 'Trace 来源', '预期答案', '评估器与执行'];
+const NEXT_LABELS = ['下一步：Trace 来源 →', '下一步：预期答案 →', '下一步：评估器与执行 →', '🚀 开始实验'];
+const RELIABILITY_EVALUATOR_IDS = new Set([
+  'preset-ras-reliability-detection-recovery',
+]);
+const DATASET_KIND_LABELS: Record<string, string> = {
+  ideal_output: '结果评测',
+  trajectory: '轨迹评测',
+  reliability: '可靠性',
+};
 const PAGE_SIZE = 10;
 /** 跨页全选安全上限：避免一次圈选过多 case 拖垮后续评测 */
 const SELECT_ALL_CAP = 500;
@@ -97,6 +220,10 @@ const PANEL_H: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
 };
 const PANEL_B: React.CSSProperties = { padding: '13px 15px' };
+const CARD_NOTE: React.CSSProperties = {
+  background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
+  borderRadius: 10, padding: 14,
+};
 const FIELDLBL: React.CSSProperties = {
   display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--foreground-muted)',
   textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 7,
@@ -263,27 +390,47 @@ function Stepper({ step, maxVisited, summaries, onJump }: {
   );
 }
 
-export default function NewExperimentPage() {
+export function ExperimentWizard({ embedded = false, skillContext, onBack, onCreated }: ExperimentWizardProps = {}) {
   const router = useRouter();
   const { user } = useAuth();
+  const skillPreset = skillContext?.preset;
 
   const [step, setStep] = useState(1);
   const [maxVisited, setMaxVisited] = useState(1);
 
   // ① 实验设计
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => skillContext
+    ? `${skillContext.skillName} · ${SKILL_PRESET_LABELS[skillContext.preset]} · v${skillContext.skillVersion}`
+    : defaultExperimentName());
   const [agentName, setAgentName] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [selectedDatasetDetail, setSelectedDatasetDetail] = useState<DatasetOption | null>(null);
+  const [selectedDatasetLoading, setSelectedDatasetLoading] = useState(false);
+  const datasetRequestIdRef = useRef(0);
+  const [genModel, setGenModel] = useState('');
+  const [selectedTargetKey, setSelectedTargetKey] = useState('');
+  const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
   // 监听模式：开启后本实验绑定该 Agent，其新上报的 trace 自动进来评测（圈选已有 trace 变可选）
   const [watchMode, setWatchMode] = useState(false);
+  const [traceMode, setTraceMode] = useState<'existing' | 'generate'>(() => (
+    skillPreset === 'trigger' || skillPreset === 'skill-ab' ? 'generate' : 'existing'
+  ));
+  // 对比模式：type='llm' 时用户选变量维度 + 定义 A/B 两组取值；缺省 'single' 走单组流程
+  const [expType, setExpType] = useState<'single' | 'llm'>('single');
+  const [groupAValue, setGroupAValue] = useState('');
+  const [groupBValue, setGroupBValue] = useState('');
+  const [agentModels, setAgentModels] = useState<string[]>([]);
   const [traces, setTraces] = useState<TraceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [tracesLoading, setTracesLoading] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
   const [selected, setSelected] = useState<Map<string, SelectedCase>>(new Map());
+  const [selectedGenerated, setSelectedGenerated] = useState<Map<string, SelectedCase>>(new Map());
   const [traceSearchDraft, setTraceSearchDraft] = useState('');
   const [traceSearch, setTraceSearch] = useState('');
   const [timePreset, setTimePreset] = useState<TimePreset>('7d');
@@ -312,6 +459,47 @@ export default function NewExperimentPage() {
   const [selectedEvaluators, setSelectedEvaluators] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [generatingTriggerDataset, setGeneratingTriggerDataset] = useState(false);
+  const [savingTriggerDataset, setSavingTriggerDataset] = useState(false);
+  const [triggerDatasetExpanded, setTriggerDatasetExpanded] = useState(false);
+  const [triggerDatasetDirty, setTriggerDatasetDirty] = useState(false);
+  const [versionAEnabled, setVersionAEnabled] = useState(true);
+  const [compareVersion, setCompareVersion] = useState<number | null>(() => (
+    skillContext?.versions.find((item) => item.version !== skillContext.skillVersion)?.version ?? null
+  ));
+
+  const selectedDataset = useMemo(
+    () => selectedDatasetDetail?.id === selectedDatasetId
+      ? selectedDatasetDetail
+      : wizardDatasets.find((d) => d.id === selectedDatasetId) || null,
+    [selectedDatasetDetail, wizardDatasets, selectedDatasetId],
+  );
+  const eligibleWizardDatasets = useMemo(() => wizardDatasets.filter((dataset) => {
+    if (!skillContext) return true;
+    if (!skillPreset) return true;
+    return isSkillExperimentDatasetEligible(skillPreset, dataset, skillContext.skillName);
+  }), [skillContext, skillPreset, wizardDatasets]);
+  const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
+  const selectedAgent = useMemo(
+    () => agents.find((agent) => agent.name === agentName) || null,
+    [agentName, agents],
+  );
+  const targetOptions = useMemo(
+    () => (selectedAgent?.targets || []).filter((target) =>
+      isReliabilityDataset ? target.supportsFaultInjection : target.supportsGenericTrace),
+    [isReliabilityDataset, selectedAgent],
+  );
+  const selectedTarget = targetOptions.find(
+    (target) => `${target.workerId}::${target.platform}` === selectedTargetKey,
+  ) || targetOptions[0] || null;
+  const effectiveTargetKey = selectedTarget
+    ? `${selectedTarget.workerId}::${selectedTarget.platform}`
+    : '';
+  const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const generationCases = useMemo(
+    () => generationCasesFromDataset(selectedDataset),
+    [selectedDataset],
+  );
 
   useEffect(() => {
     if (!user) return;
@@ -324,15 +512,209 @@ export default function NewExperimentPage() {
       .then((d) => setCustomEvaluators(Array.isArray(d) ? d : []))
       .catch(() => setCustomEvaluators([]));
     apiFetch(`/api/tags?user=${encodeURIComponent(user)}`)
-      .then((r) => r.ok ? r.json() : [])
+      .then((r) => (r.ok ? r.json() : []))
       .then((d) => setTraceTags(Array.isArray(d) ? d : []))
       .catch(() => setTraceTags([]));
+    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setWizardDatasets(Array.isArray(d) ? d : []))
+      .catch(() => setWizardDatasets([]));
+    apiFetch('/api/reliability/fault-modes')
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((d) => {
+        const items = Array.isArray(d?.items) ? d.items : [];
+        const next = new Map<string, string>();
+        for (const item of items) {
+          const id = String(item?.id || '').trim();
+          if (!id) continue;
+          const name = String(item?.name || id).trim() || id;
+          const method = String(item?.injectionMethodLabel || item?.injection_method_label || '').trim();
+          next.set(id, method ? `${name} · ${method}` : name);
+        }
+        setFaultModeLabels(next);
+      })
+      .catch(() => setFaultModeLabels(new Map()));
   }, [user]);
+
+  useEffect(() => {
+    if (!skillContext || agentName || agents.length === 0) return;
+    const preferred = agents.find((agent) => agent.executable) || agents[0];
+    const timer = window.setTimeout(() => setAgentName(preferred?.name || ''), 0);
+    return () => window.clearTimeout(timer);
+  }, [agentName, agents, skillContext]);
+
+  const selectWizardDataset = useCallback(async (nextId: string) => {
+    const requestId = ++datasetRequestIdRef.current;
+    setSelectedDatasetId(nextId);
+    setSelectedDatasetDetail(null);
+    setSelected(new Map());
+    setSelectedGenerated(new Map());
+    setSelectedEvaluators(new Set());
+    setTriggerDatasetExpanded(false);
+    setTriggerDatasetDirty(false);
+    if (!nextId || !user) {
+      setSelectedDatasetLoading(false);
+      return;
+    }
+    setSelectedDatasetLoading(true);
+    try {
+      const response = await apiFetch(
+        `/api/agent-datasets/${encodeURIComponent(nextId)}?user=${encodeURIComponent(user)}&view=items`,
+      );
+      if (!response.ok) throw new Error('数据集加载失败');
+      const detail = await response.json() as DatasetOption;
+      if (datasetRequestIdRef.current !== requestId) return;
+      setSelectedDatasetDetail(detail);
+      const generatedCases = generationCasesFromDataset(detail);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+    } catch {
+      if (datasetRequestIdRef.current !== requestId) return;
+      setSelectedDatasetDetail(null);
+      setSelectedGenerated(new Map());
+    } finally {
+      if (datasetRequestIdRef.current === requestId) setSelectedDatasetLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!skillContext || (selectedDatasetId && eligibleWizardDatasets.some((dataset) => dataset.id === selectedDatasetId))) return;
+    const timer = window.setTimeout(() => void selectWizardDataset(eligibleWizardDatasets[0]?.id || ''), 0);
+    return () => window.clearTimeout(timer);
+  }, [eligibleWizardDatasets, selectWizardDataset, selectedDatasetId, skillContext]);
+
+  const generateTriggerDataset = async () => {
+    if (!user || !skillContext || skillPreset !== 'trigger' || generatingTriggerDataset) return;
+    setGeneratingTriggerDataset(true);
+    setSubmitError('');
+    try {
+      const response = await apiFetch(`/api/skill-workbench/skills/${encodeURIComponent(skillContext.skillName)}/trigger-datasets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '生成触发分析数据集失败');
+      const dataset = result.dataset as DatasetOption;
+      setWizardDatasets((current) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
+      await selectWizardDataset(dataset.id);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '生成触发分析数据集失败');
+    } finally {
+      setGeneratingTriggerDataset(false);
+    }
+  };
+
+  const updateTriggerDatasetCase = (caseId: string, patch: { input?: string; shouldTrigger?: boolean }) => {
+    setSelectedDatasetDetail((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        cases: (current.cases || []).map((item, index) => {
+          const itemId = String(item.id || `dataset-case-${index}:${item.input || ''}`);
+          if (itemId !== caseId) return item;
+          const shouldTrigger = patch.shouldTrigger ?? Boolean(item.values?.should_trigger);
+          return {
+            ...item,
+            input: patch.input ?? item.input,
+            expectedOutput: shouldTrigger ? 'Skill should trigger' : 'Skill should not trigger',
+            values: { ...(item.values || {}), should_trigger: shouldTrigger },
+          };
+        }),
+      };
+      const generatedCases = generationCasesFromDataset(next);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+      setTriggerDatasetDirty(true);
+      return next;
+    });
+  };
+
+  const deleteTriggerDatasetCase = (caseId: string) => {
+    setSelectedDatasetDetail((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        cases: (current.cases || []).filter((item, index) => (
+          String(item.id || `dataset-case-${index}:${item.input || ''}`) !== caseId
+        )),
+      };
+      const generatedCases = generationCasesFromDataset(next);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+      setTriggerDatasetDirty(true);
+      return next;
+    });
+  };
+
+  const addTriggerDatasetCase = () => {
+    const id = `trigger-case-${Date.now()}`;
+    setSelectedDatasetDetail((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        cases: [
+          ...(current.cases || []),
+          { id, input: '', expectedOutput: 'Skill should trigger', values: { should_trigger: true } },
+        ],
+      };
+      const generatedCases = generationCasesFromDataset(next);
+      setSelectedGenerated(new Map(generatedCases.map((item) => [item.executionId, item])));
+      setTriggerDatasetDirty(true);
+      return next;
+    });
+  };
+
+  const saveTriggerDataset = async () => {
+    if (!user || !selectedDatasetDetail || savingTriggerDataset) return;
+    const cases = selectedDatasetDetail.cases || [];
+    if (cases.length === 0 || cases.some((item) => !String(item.input || '').trim())) {
+      setSubmitError('触发分析用例的输入不能为空');
+      return;
+    }
+    const labels = cases.map((item) => Boolean(item.values?.should_trigger));
+    if (!labels.includes(true) || !labels.includes(false)) {
+      setSubmitError('触发分析数据集必须同时包含应触发与不应触发用例');
+      return;
+    }
+    setSavingTriggerDataset(true);
+    setSubmitError('');
+    try {
+      const response = await apiFetch('/api/agent-datasets', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...selectedDatasetDetail, user, id: selectedDatasetDetail.id }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '保存触发分析数据集失败');
+      setSelectedDatasetDetail(result.dataset as DatasetOption);
+      setTriggerDatasetDirty(false);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '保存触发分析数据集失败');
+    } finally {
+      setSavingTriggerDataset(false);
+    }
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => setTraceSearch(traceSearchDraft.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [traceSearchDraft]);
+
+  // 对比模式：选定 Agent 后查该 Agent 已有模型取值供 A/B 输入框自动补全
+  useEffect(() => {
+    if (!user || !agentName || expType !== 'llm') return;
+    let cancelled = false;
+    apiFetch(`/api/experiments/traces?agent=${encodeURIComponent(agentName)}&user=${encodeURIComponent(user)}&pageSize=100`)
+      .then((r) => r.ok ? r.json() : { items: [] })
+      .then((d: { items?: Array<{ model?: string | null }> }) => {
+        const models = Array.from(new Set((d?.items ?? [])
+          .map((t) => t.model)
+          .filter((m): m is string => typeof m === 'string' && m !== '')));
+        if (!cancelled) setAgentModels(models);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentModels([]);
+      });
+    return () => { cancelled = true; };
+  }, [user, agentName, expType]);
 
   const appendTraceFilters = useCallback((params: URLSearchParams) => {
     if (traceSearch) params.set('search', traceSearch);
@@ -378,10 +760,10 @@ export default function NewExperimentPage() {
   }, [agentName, traceQuery, user]);
 
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 2 || traceMode !== 'existing') return;
     const timer = window.setTimeout(() => void loadTraces(1), 0);
     return () => window.clearTimeout(timer);
-  }, [loadTraces, step]);
+  }, [loadTraces, step, traceMode]);
 
   const goTo = (s: number) => {
     setStep(s);
@@ -389,14 +771,40 @@ export default function NewExperimentPage() {
   };
 
   // 全选：表头复选框控当前页；总数超过一页时另给「选择全部 N 条」跨页入口
-  const toSelectedCase = (t: TraceItem): SelectedCase => ({
-    executionId: t.id,
-    taskId: t.taskId,
-    input: t.query || '',
-    actualOutput: t.finalResult || '',
-    referenceOutput: null,
-    evaluatorContext: null,
-  });
+  const toSelectedCase = (t: TraceItem): SelectedCase => {
+    const base: SelectedCase = {
+      executionId: t.id,
+      taskId: t.taskId,
+      input: t.query || '',
+      actualOutput: t.finalResult || '',
+      referenceOutput: null,
+      evaluatorContext: null,
+    };
+    const datasetCase = (selectedDataset?.cases || []).find(
+      (item) => String(item.input || '').trim() === base.input.trim(),
+    );
+    if (!datasetCase) return base;
+    const match = matchDatasetCases(
+      [{ key: base.executionId, input: base.input }],
+      [{
+        input: String(datasetCase.input || ''),
+        expectedOutput: String(datasetCase.expectedOutput || ''),
+        values: datasetCase.values,
+      }],
+      true,
+    );
+    const fault = String(datasetCase.values?.fault_injection_type || '').trim();
+    return {
+      ...base,
+      referenceOutput: match.updates[base.executionId] || null,
+      evaluatorContext: match.contextUpdates[base.executionId] || null,
+      faultInjectionType: fault || null,
+      values: {
+        ...(datasetCase.values || {}),
+        ...(datasetCase.evaluationFocus ? { trigger_rationale: datasetCase.evaluationFocus } : {}),
+      },
+    };
+  };
 
   const pageAllSelected = traces.length > 0 && traces.every((t) => selected.has(t.id));
   const pageSomeSelected = traces.some((t) => selected.has(t.id));
@@ -486,14 +894,7 @@ export default function NewExperimentPage() {
       if (next.has(t.id)) {
         next.delete(t.id);
       } else {
-        next.set(t.id, {
-          executionId: t.id,
-          taskId: t.taskId,
-          input: t.query || '',
-          actualOutput: t.finalResult || '',
-          referenceOutput: null,
-          evaluatorContext: null,
-        });
+        next.set(t.id, toSelectedCase(t));
       }
       return next;
     });
@@ -507,7 +908,10 @@ export default function NewExperimentPage() {
     });
   };
 
-  const selectedList = useMemo(() => Array.from(selected.values()), [selected]);
+  const selectedList = useMemo(
+    () => Array.from((traceMode === 'generate' ? selectedGenerated : selected).values()),
+    [selected, selectedGenerated, traceMode],
+  );
   const annotated = selectedList.filter((c) => !!c.referenceOutput).length;
   const capabilityCatalogAnnotated = selectedList.filter((c) => c.evaluatorContext !== null).length;
   const persistable = selectedList.filter((c) => c.referenceOutput || c.evaluatorContext).length;
@@ -616,10 +1020,23 @@ export default function NewExperimentPage() {
     [selectedList],
   );
 
-  const allEvaluators = useMemo(
-    () => [...presetEvaluators, ...customEvaluators],
-    [customEvaluators],
-  );
+  const allEvaluators = useMemo(() => {
+    if (!skillPreset) return [...presetEvaluators, ...customEvaluators];
+    const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));
+    return Array.from(catalog.values())
+      .filter((card) => card.status === 'ready' && isSkillExperimentEvaluatorEligible(skillPreset, card.id));
+  }, [customEvaluators, skillPreset]);
+
+  useEffect(() => {
+    if (!skillContext || selectedEvaluators.size > 0 || allEvaluators.length === 0) return;
+    const defaults = (skillPreset
+      ? SKILL_PRESET_EVALUATORS[skillPreset].filter((item) => item.selected).map((item) => item.id)
+      : ['preset-agent-task-completion', 'preset-agent-trace-quality'])
+      .filter((id) => allEvaluators.some((item) => item.id === id));
+    if (!defaults.length) return;
+    const timer = window.setTimeout(() => setSelectedEvaluators(new Set(defaults)), 0);
+    return () => window.clearTimeout(timer);
+  }, [allEvaluators, selectedEvaluators.size, skillContext, skillPreset]);
 
   const toggleEvaluator = (id: string) => {
     setSelectedEvaluators((prev) => {
@@ -645,10 +1062,102 @@ export default function NewExperimentPage() {
   }, [watchMode, allEvaluators]);
 
   const submit = async () => {
+
     if (!user || submitting) return;
     setSubmitting(true);
     setSubmitError('');
     try {
+      const casesPayload = selectedList.map((c) => ({
+        executionId: traceMode === 'generate' ? undefined : c.executionId,
+        taskId: c.taskId || undefined,
+        input: c.input,
+        actualOutput: c.actualOutput,
+        referenceOutput: c.referenceOutput,
+        evaluatorContext: c.evaluatorContext,
+        faultInjectionType: c.faultInjectionType || undefined,
+        values: c.values,
+      }));
+      if (skillContext && (skillPreset === 'skill-ab' || traceMode === 'generate')) {
+        if (skillPreset === 'skill-ab' && compareVersion == null) throw new Error('A/B 测试需要另一个 Skill 版本');
+        let abDatasetId = selectedDatasetId;
+        let abCaseIds = Array.from(selectedGenerated.keys());
+        if (skillPreset === 'skill-ab' && traceMode === 'existing') {
+          const snapshotResponse = await apiFetch('/api/agent-datasets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user,
+              name: `${name.trim() || skillContext.skillName} · 已有 Trace 输入快照`,
+              description: `Skill A/B 实验的冻结输入快照，来源于 ${selected.size} 条已选 Trace。`,
+              targetAgent: agentName,
+              targetSkill: skillContext.skillName,
+              datasetKind: 'ideal_output',
+              tags: ['skill-workbench', 'ab-trace-snapshot'],
+              fields: [
+                { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+                { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
+              ],
+              cases: selectedList.map((item) => ({
+                input: item.input,
+                expectedOutput: item.referenceOutput || '',
+                values: item.values || {},
+              })),
+            }),
+          });
+          const snapshotResult = await snapshotResponse.json();
+          if (!snapshotResponse.ok) throw new Error(snapshotResult.error || '冻结已有 Trace 输入失败');
+          abDatasetId = String(snapshotResult.dataset?.id || '');
+          abCaseIds = Array.isArray(snapshotResult.dataset?.cases)
+            ? snapshotResult.dataset.cases.map((item: { id?: string }) => String(item.id || '')).filter(Boolean)
+            : [];
+        }
+        if (!abDatasetId || abCaseIds.length === 0) throw new Error('Skill 实验需要至少一个有效 Case');
+        const createResponse = await apiFetch(`/api/skill-workbench/skills/${encodeURIComponent(skillContext.skillName)}/experiments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user,
+            sessionId: skillContext.sessionId,
+            version: skillContext.skillVersion,
+            preset: skillPreset,
+            datasetId: abDatasetId,
+            ...(skillPreset === 'skill-ab' ? { compareVersion, versionAEnabled } : {}),
+            optimizationRecordId: skillContext.optimizationRecordId,
+            name,
+            agentName,
+            evaluatorIds: Array.from(selectedEvaluators),
+            caseIds: abCaseIds,
+            traceSource: traceMode,
+          }),
+        });
+        const created = await createResponse.json();
+        if (!createResponse.ok) throw new Error(created.error || '创建 Skill 实验失败');
+        const experimentId = String(created.experiment?.id || '');
+        const taskId = String(created.grayscaleTask?.id || '');
+        const caseIds = Array.isArray(created.configSnapshot?.caseIds) ? created.configSnapshot.caseIds : [];
+        if (!experimentId || !taskId || caseIds.length === 0) throw new Error('Skill 实验缺少执行配置');
+        try {
+          const runResponse = await apiFetch(`/api/debug/grayscale-tasks/${encodeURIComponent(taskId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user, action: 'start', caseIds, evaluators: Array.from(selectedEvaluators) }),
+          });
+          const runResult = await runResponse.json().catch(() => ({}));
+          if (!runResponse.ok) throw new Error(runResult.error || '启动 Skill 实验失败');
+        } catch (runError) {
+          const rollbackRes = await apiFetch(
+            `/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`,
+            { method: 'DELETE' },
+          ).catch(() => null);
+          if (rollbackRes?.status === 409) {
+            if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
+            return;
+          }
+          throw runError;
+        }
+        if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
+        return;
+      }
       const res = await apiFetch('/api/experiments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -656,34 +1165,116 @@ export default function NewExperimentPage() {
           user,
           name,
           agentName,
-          watchMode,
-          cases: selectedList,
+          watchMode: expType === 'single' && traceMode === 'existing' ? watchMode : false,
+          ...(expType === 'llm' ? {
+            type: 'llm',
+            variableDimension: 'llm',
+            groups: [{ key: 'A', value: groupAValue.trim() }, { key: 'B', value: groupBValue.trim() }],
+          } : {
+            cases: casesPayload,
+          }),
           evaluatorIds: Array.from(selectedEvaluators),
+          ...(skillContext ? {
+            scope: 'skill-workbench',
+            skillName: skillContext.skillName,
+            skillVersion: skillContext.skillVersion,
+            preset: skillPreset,
+            skillContext: {
+              sessionId: skillContext.sessionId,
+              skillName: skillContext.skillName,
+              versionA: null,
+              versionB: skillContext.skillVersion,
+            },
+            configSnapshot: {
+              schemaVersion: 1,
+              preset: skillPreset,
+              datasetId: selectedDatasetId || null,
+              caseIds: selectedList.map((item) => item.executionId),
+              evaluatorIds: Array.from(selectedEvaluators),
+              traceSource: traceMode,
+              agentName,
+              versionA: null,
+              versionB: skillContext.skillVersion,
+            },
+          } : {}),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '创建实验失败'));
+      const experimentId = String(data.id || '');
+      if (!experimentId) throw new Error('创建实验后未返回实验 ID');
       // 「开始实验」= 创建后立即真跑评估器；详情页落地即 running 状态并自动轮询进度。
-      // run 触发失败不阻塞跳转——详情页仍可手动「开始执行」兜底。
-      await apiFetch(`/api/experiments/${encodeURIComponent(data.id)}/run?user=${encodeURIComponent(user)}`, {
-        method: 'POST',
-      }).catch(() => { /* 忽略：详情页兜底 */ });
-      router.push(`/experiments/${data.id}`);
+      const runBody = expType === 'single' && traceMode === 'generate' && selectedTarget
+        ? {
+            fiOrchestrate: isReliabilityDataset,
+            traceSource: 'generate',
+            generateTrace: {
+              workerId: selectedTarget.workerId,
+              platform: selectedTarget.platform,
+              agent: agentName,
+              model: genModel || null,
+              timeoutSeconds: 180,
+            },
+          }
+        : {};
+      try {
+        const runRes = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(runBody),
+        });
+        if (!runRes.ok) {
+          const err = await runRes.json().catch(() => ({}));
+          throw new Error(String(err?.error || err?.code || '启动实验失败'));
+        }
+      } catch (runError) {
+        const rollbackRes = await apiFetch(
+          `/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`,
+          { method: 'DELETE' },
+        ).catch(() => null);
+        if (rollbackRes?.status === 409) {
+          if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
+          return;
+        }
+        throw runError;
+      }
+      if (onCreated) onCreated(experimentId); else router.push(`/experiments/${experimentId}`);
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : '创建实验失败');
       setSubmitting(false);
     }
   };
 
-  const step1Valid = name.trim() !== '' && agentName !== '';
+  const triggerDatasetReady = skillPreset !== 'trigger' || Boolean(
+    selectedDatasetDetail
+    && !triggerDatasetDirty
+    && (selectedDatasetDetail.cases || []).length > 0
+    && (selectedDatasetDetail.cases || []).every((item) => String(item.input || '').trim())
+    && (selectedDatasetDetail.cases || []).some((item) => Boolean(item.values?.should_trigger))
+    && (selectedDatasetDetail.cases || []).some((item) => !Boolean(item.values?.should_trigger)),
+  );
+  const step1Valid = name.trim() !== '' && agentName !== '' && triggerDatasetReady
+    && (skillPreset !== 'skill-ab' || compareVersion !== null)
+    && (expType === 'single' || (groupAValue.trim() !== '' && groupBValue.trim() !== '' && groupAValue.trim() !== groupBValue.trim()));
+  // 对比模式：case 由 autoPairGroups 自动产生（POST /api/experiments 内部调），无需手选 trace
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
-  const step2Valid = watchMode || selected.size >= 1;
+  const step2Valid = expType === 'llm' || (traceMode === 'generate'
+    ? generateAvailable && selectedGenerated.size >= 1
+    : (watchMode || selected.size >= 1));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const stepSummaries = [
-    `${name.trim() || '未命名'} · 单组`,
-    `已选 ${selected.size} 条 trace`,
-    `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
+    `${name.trim() || '未命名'} · ${expType === 'llm' ? 'LLM 对比' : selectedDataset?.name || '未选数据集'}`,
+    expType === 'llm'
+      ? `A=${groupAValue || '—'} B=${groupBValue || '—'}`
+      : traceMode === 'generate'
+        ? `生成 Trace · ${selectedGenerated.size} case`
+        : `选择 Trace · ${selected.size} 条`,
+    expType === 'llm'
+      ? '自动配对 Trace'
+      : traceMode === 'generate'
+        ? `数据集预期 ${annotated}/${selectedList.length}`
+        : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
     `已选 ${selectedEvaluators.size} 个`,
   ];
 
@@ -712,17 +1303,22 @@ export default function NewExperimentPage() {
 
   return (
     <>
-      <AppTopBar title="新建实验" />
+      {!embedded && <AppTopBar title="新建实验" />}
       <PageContainer className="[&>*]:shrink-0">
         {/* 页头 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0 12px' }}>
           <button
             style={{ ...BTN_GHOST, height: 26, padding: '0 9px', fontSize: 11.5 }}
-            onClick={() => router.push('/experiments')}
+            onClick={() => onBack ? onBack() : router.push('/experiments')}
           >
             ‹ 返回
           </button>
-          <h1 style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>新建实验</h1>
+          <div>
+            <h1 style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>新建实验</h1>
+            {skillContext && <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>复用平台标准四步实验向导，当前 Skill 上下文已自动带入。</p>}
+          </div>
+          <span style={{ flex: 1 }} />
+          {skillPreset && <span style={{ ...CHIP, color: 'var(--primary)', background: 'var(--primary-subtle)' }}>{SKILL_PRESET_LABELS[skillPreset]}</span>}
         </div>
 
         <Stepper step={step} maxVisited={maxVisited} summaries={stepSummaries} onJump={goTo} />
@@ -744,57 +1340,420 @@ export default function NewExperimentPage() {
                   />
                 </div>
                 <div>
-                  <label style={FIELDLBL}>待评测 Agent</label>
+                  <label style={FIELDLBL}>待执行 Agent *</label>
                   <select
                     style={{ ...INPUT, cursor: 'pointer' }}
                     value={agentName}
                     onChange={(e) => {
                       setAgentName(e.target.value);
-                      // 换 Agent 意味换 trace 池，已圈选 case 一并作废
                       setSelected(new Map());
+                      setSelectedTargetKey('');
+                      setGenModel('');
                       setPage(1);
                     }}
                   >
                     <option value="">请选择 Agent…</option>
-                    {agents.map((a) => (
-                      <option key={a.name} value={a.name}>{a.name}（{a.traces} 条 trace）</option>
+                    {agents.map((agent) => (
+                      <option key={agent.name} value={agent.name}>
+                        {agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
+                        {agent.traces ? ` · ${agent.traces} 条 Trace` : ''}
+                        {agent.targets.length ? ` · 可执行 ${agent.targets.length} 台` : ''}
+                      </option>
                     ))}
                   </select>
                   <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
-                    实验所评测的对象——trace 圈选与评估都作用于它
+                    候选项为具有历史 Trace 的 Agent 与所有在线客户端可执行 Agent 的并集
                   </div>
                 </div>
               </div>
-              <label style={FIELDLBL}>实验类型</label>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <span style={{
-                  ...FCHIP,
-                  background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
-                  color: 'var(--primary)', cursor: 'default',
-                }}>
-                  🎯 无变量 · 单组
-                </span>
-                {['LLM 对比', 'Agent 框架对比', 'Skill 版本对比'].map((t) => (
-                  <span
-                    key={t}
-                    title="即将支持"
-                    style={{
-                      ...FCHIP,
-                      background: 'var(--background-secondary)', color: 'var(--foreground-muted)',
-                      cursor: 'not-allowed', border: '1px dashed var(--border)',
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={FIELDLBL}>评测数据集（可选）</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <select
+                    style={{ ...INPUT, cursor: 'pointer', flex: 1 }}
+                    value={selectedDatasetId}
+                    onChange={(e) => {
+                      void selectWizardDataset(e.target.value);
                     }}
                   >
-                    {t}
-                  </span>
-                ))}
+                    <option value="">{skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集'}</option>
+                    {eligibleWizardDatasets.map((dataset) => (
+                      <option key={dataset.id} value={dataset.id}>
+                        {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
+                        {skillPreset !== 'trigger' && dataset.targetSkill && dataset.targetSkill !== skillContext?.skillName
+                          ? ` · 来源 Skill：${dataset.targetSkill}`
+                          : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {skillPreset === 'trigger' && (
+                    <button type="button" style={{ ...BTN_OUTLINE_SM, height: 34 }} disabled={generatingTriggerDataset} onClick={() => void generateTriggerDataset()}>
+                      {generatingTriggerDataset ? '生成中…' : 'AI 新建触发分析数据集'}
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
+                  {selectedDatasetLoading
+                    ? '正在加载数据集 Case…'
+                    : skillPreset === 'trigger'
+                      ? '仅展示当前 Skill 的触发分析数据集；该数据集可用于同一 Skill 的不同版本回归'
+                      : '可选择全部非触发分析数据集；绑定其他 Skill 的数据集会标注来源，但不阻止复用'}
+                </div>
               </div>
+
+              {skillPreset === 'trigger' && selectedDatasetDetail && (
+                <div style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ ...PANEL_H, padding: '9px 12px' }}>
+                    <b style={{ fontSize: 12 }}>{selectedDatasetDetail.name}</b>
+                    <span style={{ ...CHIP, color: 'var(--success)', background: 'var(--tag-green-bg)' }}>
+                      {triggerDatasetDirty ? '已修改' : '已生成'} {selectedDatasetDetail.cases?.length || 0} 条
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    <button type="button" style={{ ...BTN_GHOST, height: 26, padding: '0 8px', fontSize: 11 }} onClick={() => setTriggerDatasetExpanded((value) => !value)}>
+                      {triggerDatasetExpanded ? '收起用例' : `查看 ${selectedDatasetDetail.cases?.length || 0} 条用例`}
+                    </button>
+                  </div>
+                  {[true, false].map((shouldTrigger) => {
+                    const cases = (selectedDatasetDetail.cases || []).filter((item) => Boolean(item.values?.should_trigger) === shouldTrigger);
+                    const sample = cases[0];
+                    return (
+                      <div key={String(shouldTrigger)} style={{ display: 'grid', gridTemplateColumns: '105px minmax(0,1fr) 80px', gap: 10, alignItems: 'center', padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 11.5 }}>
+                        <span style={{ ...CHIP, justifyContent: 'center', color: shouldTrigger ? 'var(--success)' : 'var(--error)', background: shouldTrigger ? 'var(--tag-green-bg)' : 'var(--tag-red-bg)' }}>
+                          {shouldTrigger ? '应触发' : '不应触发'} {cases.length}
+                        </span>
+                        <b style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sample?.input || '暂无用例'}</b>
+                        <span style={{ color: 'var(--foreground-muted)', textAlign: 'right' }}>{shouldTrigger ? '应触发' : '不触发'}</span>
+                      </div>
+                    );
+                  })}
+                  {triggerDatasetExpanded && (
+                    <div style={{ borderTop: '1px solid var(--border)', background: 'var(--background-secondary)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px' }}>
+                        <b style={{ fontSize: 12 }}>用例明细</b>
+                        <span style={{ flex: 1 }} />
+                        <span style={{ ...CHIP, color: triggerDatasetDirty ? 'var(--warning)' : 'var(--success)', background: triggerDatasetDirty ? 'var(--tag-amber-bg)' : 'var(--tag-green-bg)' }}>
+                          {triggerDatasetDirty ? '有未保存修改' : '已保存'}
+                        </span>
+                      </div>
+                      {[true, false].map((shouldTrigger) => {
+                        const cases = (selectedDatasetDetail.cases || []).map((item, index) => ({ item, index })).filter(({ item }) => Boolean(item.values?.should_trigger) === shouldTrigger);
+                        return (
+                          <div key={String(shouldTrigger)} style={{ padding: '0 12px 12px' }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 7, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+                              <span style={{ ...CHIP, color: shouldTrigger ? 'var(--success)' : 'var(--error)', background: shouldTrigger ? 'var(--tag-green-bg)' : 'var(--tag-red-bg)' }}>
+                                {shouldTrigger ? '应触发' : '不应触发'} {cases.length}
+                              </span>
+                              {shouldTrigger ? '这些输入应调用当前 Skill' : '这些输入不应调用当前 Skill'}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {cases.map(({ item, index }) => {
+                                const caseId = String(item.id || `dataset-case-${index}:${item.input || ''}`);
+                                return (
+                                  <div key={caseId} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                                    <input aria-label="用例输入" style={{ ...INPUT, height: 30, flex: 1 }} value={item.input || ''} onChange={(event) => updateTriggerDatasetCase(caseId, { input: event.target.value })} />
+                                    <button type="button" onClick={() => updateTriggerDatasetCase(caseId, { shouldTrigger: !shouldTrigger })} style={{ ...BTN_OUTLINE_SM, minWidth: 88 }}>
+                                      {shouldTrigger ? '转为不触发' : '转为应触发'}
+                                    </button>
+                                    <button type="button" aria-label="删除用例" onClick={() => deleteTriggerDatasetCase(caseId)} style={{ ...BTN_GHOST, width: 28, padding: 0, color: 'var(--foreground-muted)' }}><Trash2 size={13} /></button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderTop: '1px solid var(--border)' }}>
+                        <button type="button" style={BTN_OUTLINE_SM} onClick={addTriggerDatasetCase}><Plus size={13} /> 新增用例</button>
+                        <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>新用例默认为“应触发”，可一键转换。</span>
+                        <span style={{ flex: 1 }} />
+                        <button type="button" style={{ ...BTN_PRIMARY, height: 28 }} disabled={!triggerDatasetDirty || savingTriggerDataset} onClick={() => void saveTriggerDataset()}>
+                          {savingTriggerDataset ? '保存中…' : '保存变更'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  </div>
+              )}
+
+              {skillPreset === 'trigger' && !triggerDatasetReady && (
+                <div style={{ margin: '-6px 0 14px', fontSize: 10.5, color: 'var(--warning)' }}>
+                  请选择触发数据集，确保同时有应触发/不应触发用例，并先保存已编辑的变更。
+                </div>
+              )}
+
+              <label style={FIELDLBL}>实验类型</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                {skillContext ? (
+                  <span style={{
+                    ...FCHIP,
+                    background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
+                    color: 'var(--primary)', cursor: 'default',
+                  }}>
+                    {skillPreset === 'skill-ab' ? 'Skill 版本对比' : '🎯 无变量 · 单组'}
+                  </span>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setExpType('single')}
+                      style={{
+                        ...FCHIP,
+                        background: expType === 'single' ? 'var(--primary-subtle)' : 'var(--background-secondary)',
+                        border: `1px solid ${expType === 'single' ? 'var(--primary-subtle-border)' : 'var(--border)'}`,
+                        color: expType === 'single' ? 'var(--primary)' : 'var(--foreground-muted)',
+                        cursor: 'pointer',
+                      }}
+                    >🎯 无变量 · 单组</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpType('llm');
+                        setTraceMode('existing');
+                        setWatchMode(false);
+                      }}
+                      style={{
+                        ...FCHIP,
+                        background: expType === 'llm' ? 'var(--group-a-subtle)' : 'var(--background-secondary)',
+                        border: `1px solid ${expType === 'llm' ? 'var(--group-a-subtle-border)' : 'var(--border)'}`,
+                        color: expType === 'llm' ? 'var(--group-a)' : 'var(--foreground-muted)',
+                        cursor: 'pointer',
+                      }}
+                    >🔄 LLM 对比</button>
+                    {['Agent 框架对比', 'Skill 版本对比'].map((t) => (
+                      <span key={t} title="即将支持" style={{ ...FCHIP, background: 'var(--background-secondary)', color: 'var(--foreground-muted)', cursor: 'not-allowed', border: '1px dashed var(--border)' }}>{t}</span>
+                    ))}
+                  </>
+                )}
+              </div>
+              {skillContext && skillPreset === 'skill-ab' && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14, marginTop: 14 }}>
+                  <div>
+                    <label style={FIELDLBL}>A 组 · 当前工作版本</label>
+                    <select style={{ ...INPUT, cursor: 'pointer' }} value={versionAEnabled ? 'current' : 'none'} onChange={(event) => setVersionAEnabled(event.target.value === 'current')}>
+                      <option value="current">v{skillContext.skillVersion} · 当前工作版本</option>
+                      <option value="none">无 Skill</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={FIELDLBL}>B 组 · 对比版本</label>
+                    <select style={{ ...INPUT, cursor: 'pointer' }} value={compareVersion ?? ''} onChange={(event) => setCompareVersion(Number(event.target.value))}>
+                      <option value="">请选择另一个版本</option>
+                      {skillContext.versions.filter((item) => item.version !== skillContext.skillVersion).map((item) => (
+                        <option key={item.id} value={item.version}>v{item.version}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              {!skillContext && expType === 'llm' && (
+                <div style={{ marginTop: 12, display: 'flex', gap: 12 }}>
+                  {(['A', 'B'] as const).map((key) => {
+                    const val = key === 'A' ? groupAValue : groupBValue;
+                    const setVal = key === 'A' ? setGroupAValue : setGroupBValue;
+                    const color = key === 'A' ? 'var(--group-a)' : 'var(--group-b)';
+                    const subtle = key === 'A' ? 'var(--group-a-subtle)' : 'var(--group-b-subtle)';
+                    return (
+                      <div key={key} style={{ flex: 1, padding: 12, borderRadius: 10, border: `1px solid ${subtle}`, background: subtle }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color, marginBottom: 6 }}>{key} 组 · 模型取值</div>
+                        <input
+                          list={`agent-models-${key}`}
+                          value={val}
+                          onChange={(e) => setVal(e.target.value)}
+                          placeholder="如 glm-4.7"
+                          style={{ width: '100%', padding: '6px 8px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--background)', color: 'var(--foreground)', fontFamily: 'var(--font-mono, monospace)' }}
+                        />
+                        <datalist id={`agent-models-${key}`}>
+                          {agentModels.map((m) => <option key={m} value={m} />)}
+                        </datalist>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {!skillContext && expType === 'llm' && groupAValue.trim() !== '' && groupBValue.trim() !== '' && groupAValue.trim() === groupBValue.trim() && (
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--warning)' }}>⚠ A/B 两组取值不可相同</div>
+              )}
+              {submitError && <p style={{ margin: '10px 0 0', color: 'var(--error)', fontSize: 12 }}>{submitError}</p>}
               {footer({ nextDisabled: !step1Valid })}
             </div>
           </div>
         )}
 
-        {step === 2 && (
+        {step === 2 && expType === 'llm' && (
           <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{ ...CARD_NOTE, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)', marginBottom: 6 }}>LLM 对比 · 自动配对</div>
+                <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
+                  系统将按 Agent「{agentName || '—'}」的 Trace 自动配对 A 组（{groupAValue || '—'}）与 B 组（{groupBValue || '—'}）：
+                  按任务输入精确匹配，三条件判定可比性（输入相同 + 各组模型取值匹配 + Agent/Skill 版本一致）。
+                  <span style={{ color: 'var(--foreground-muted)' }}>可比配对自动纳入实验；不可比/未配对单列展示，不进入统计分母。</span>
+                </div>
+              </div>
+              {footer({ nextDisabled: !step2Valid })}
+            </div>
+          </div>
+        )}
+
+        {step === 2 && expType === 'single' && traceMode === 'generate' && (
+          <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>选择 Trace 来源</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 12 }}>
+                选择运行主机 IP 与模型，再从数据集 Case 中选择需要运行的条目。
+              </div>
+              <div style={{ display: 'inline-flex', gap: 4, padding: 4, border: '1px solid var(--border)', borderRadius: 10, marginBottom: 14 }}>
+                <button type="button" style={{ ...BTN_GHOST, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
+                <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('generate')}>生成 Trace</button>
+              </div>
+
+              {skillPreset === 'skill-ab' && (
+                <div style={{ padding: '9px 11px', marginBottom: 12, borderRadius: 8, background: 'var(--primary-subtle)', color: 'var(--foreground-secondary)', fontSize: 11.5 }}>
+                  <b style={{ color: 'var(--primary)' }}>Skill 版本对比</b>：相同 Case 将分别使用两个版本生成 Trace，并按任务输入自动配对。
+                </div>
+              )}
+
+              {!generateAvailable ? (
+                <div style={{ padding: 18, border: '1px dashed var(--border-dark)', borderRadius: 10, color: 'var(--foreground-secondary)', fontSize: 12, lineHeight: 1.6 }}>
+                  {!selectedDataset
+                    ? '生成 Trace 需要数据集 Case，请返回第一步选择评测数据集。'
+                    : isReliabilityDataset
+                      ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
+                      : '当前 Agent 没有在线且支持回传 Trace ID 的客户端，请检查客户端状态；旧客户端需要升级后才能用于普通数据集生成 Trace。'}
+                </div>
+              ) : (
+                <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+                <div>
+                  <label style={FIELDLBL}>运行主机 IP *</label>
+                  <select
+                    style={{ ...INPUT, cursor: 'pointer' }}
+                    value={effectiveTargetKey}
+                    onChange={(e) => {
+                      setSelectedTargetKey(e.target.value);
+                      setGenModel('');
+                    }}
+                  >
+                    {targetOptions.map((target) => (
+                      <option key={`${target.workerId}::${target.platform}`} value={`${target.workerId}::${target.platform}`}>
+                        {target.host} · {target.platform}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={FIELDLBL}>运行模型 *</label>
+                  <select style={{ ...INPUT, cursor: 'pointer' }} value={genModel} onChange={(e) => setGenModel(e.target.value)}>
+                    {(selectedTarget?.models || [{ id: '', label: '平台默认' }]).map((model) => (
+                      <option key={model.id || '__default__'} value={model.id}>{model.label || model.id || '平台默认'}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case（{selectedGenerated.size}/{generationCases.length}）</div>
+                <span style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  style={BTN_GHOST}
+                  onClick={() => {
+                    const next = new Map<string, SelectedCase>();
+                    for (const item of generationCases) next.set(item.executionId, item);
+                    setSelectedGenerated(next);
+                  }}
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  style={BTN_GHOST}
+                  onClick={() => setSelectedGenerated(new Map())}
+                >
+                  取消全选
+                </button>
+              </div>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', maxHeight: 360, overflowY: 'auto' }}>
+                {generationCases.length === 0 ? (
+                  <div style={{ padding: 16, fontSize: 12, color: 'var(--foreground-muted)' }}>数据集暂无 case</div>
+                ) : (
+                  generationCases.map((c) => (
+                    <label
+                      key={c.executionId}
+                      style={{
+                        display: 'flex',
+                        gap: 10,
+                        padding: '10px 12px',
+                        borderBottom: '1px solid var(--border)',
+                        cursor: 'pointer',
+                        background: selectedGenerated.has(c.executionId) ? 'var(--primary-subtle)' : 'transparent',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedGenerated.has(c.executionId)}
+                        onChange={() => {
+                          setSelectedGenerated((prev) => {
+                            const next = new Map(prev);
+                            if (next.has(c.executionId)) next.delete(c.executionId);
+                            else next.set(c.executionId, c);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>
+                          {isReliabilityDataset
+                            ? formatReliabilityFaultTypeFromCaseValues(c.values, {
+                                faultId: c.faultInjectionType,
+                              })
+                              || (c.faultInjectionType && faultModeLabels.get(c.faultInjectionType))
+                              || c.faultInjectionType
+                              || '未指定故障'
+                            : truncate(c.input, 120)}
+                        </div>
+                        {isReliabilityDataset && (
+                          <div style={{ fontSize: 11, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.input || '（无输入）'}
+                          </div>
+                        )}
+                      </span>
+                    </label>
+                  ))
+                )}
+              </div>
+                </>
+              )}
+              {footer({ nextDisabled: !step2Valid, nextLabel: '下一步：预期答案 →' })}
+            </div>
+          </div>
+        )}
+
+        {step === 2 && expType === 'single' && traceMode === 'existing' && (
+          <div style={PANEL}>
+            <div style={{ ...PANEL_B, paddingBottom: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>选择 Trace 来源</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 12 }}>
+                从该 Agent 已执行的 Trace 中选择评测样本，自动监听和筛选逻辑保持不变。
+              </div>
+              <div style={{ display: 'inline-flex', gap: 4, padding: 4, border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12 }}>
+                <button type="button" style={{ ...BTN_PRIMARY, height: 30 }} onClick={() => setTraceMode('existing')}>选择 Trace</button>
+                <button
+                  type="button"
+                  disabled={!selectedDataset || targetOptions.length === 0}
+                  title={!selectedDataset ? '请先在第一步选择数据集' : targetOptions.length === 0 ? '该 Agent 没有在线可执行主机' : '按数据集 Case 生成 Trace'}
+                  style={{ ...BTN_GHOST, height: 30, opacity: !selectedDataset || targetOptions.length === 0 ? 0.45 : 1, cursor: !selectedDataset || targetOptions.length === 0 ? 'not-allowed' : 'pointer' }}
+                  onClick={() => {
+                    if (selectedDataset && targetOptions.length > 0) {
+                      setTraceMode('generate');
+                      setWatchMode(false);
+                    }
+                  }}
+                >
+                  生成 Trace
+                </button>
+              </div>
+            </div>
             <label style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', marginBottom: 12,
               borderRadius: 10, border: `1px solid ${watchMode ? 'var(--primary)' : 'var(--border)'}`,
@@ -1174,11 +2133,62 @@ export default function NewExperimentPage() {
           </div>
         )}
 
-        {step === 3 && (
+        {step === 3 && expType === 'single' && traceMode === 'generate' && (
+          <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>检查数据集预期答案</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+                Trace 尚未生成，本步骤只检查所选数据集 Case 的预期答案{isReliabilityDataset ? '与故障元数据' : '和评估上下文'}；开始实验后再生成实际输出。
+              </div>
+              <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--background-secondary)', marginBottom: 12, fontSize: 12 }}>
+                <b>数据集预期答案覆盖 {annotated} / {selectedList.length}</b>
+                <span style={{ marginLeft: 8, color: 'var(--foreground-muted)' }}>
+                  {annotated === selectedList.length ? '覆盖完整' : '缺失预期答案的 Case 仍可执行，但依赖参考数据的评估器可能不可用'}
+                </span>
+              </div>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'auto', maxHeight: 420 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+                  <thead><tr>
+                    <th style={STICKY_TH}>任务输入</th>
+                    {isReliabilityDataset && <th style={STICKY_TH}>故障注入类型</th>}
+                    <th style={STICKY_TH}>预期答案</th>
+                    <th style={STICKY_TH}>状态</th>
+                  </tr></thead>
+                  <tbody>
+                    {selectedList.map((item) => (
+                      <tr key={item.executionId}>
+                        <td style={{ ...TD, color: 'var(--foreground)', maxWidth: 320 }}>{truncate(item.input, 90)}</td>
+                        {isReliabilityDataset && (
+                          <td style={TD}>{formatReliabilityFaultTypeFromCaseValues(item.values, { faultId: item.faultInjectionType }) || item.faultInjectionType || '—'}</td>
+                        )}
+                        <td style={{ ...TD, maxWidth: 360 }}>{truncate(item.referenceOutput, 110)}</td>
+                        <td style={TD}>
+                          <span style={item.referenceOutput
+                            ? { ...CHIP, background: 'var(--success-subtle)', color: 'var(--success)', border: '1px solid var(--success-subtle-border)' }
+                            : CHIP_MUT}>
+                            {item.referenceOutput ? '数据集已提供' : '未标注'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--foreground-muted)', marginTop: 10 }}>
+                这里展示的是本次实验的数据集快照，不回写原数据集。
+              </div>
+              {footer({})}
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (expType === 'llm' || traceMode === 'existing') && (
           <div style={PANEL}>
             <div style={PANEL_H}>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', flex: 1, minWidth: 260, lineHeight: 1.6 }}>
-                参考答案和 Tool/Skill 目录可从数据集按输入精确导入；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。
+                {isReliabilityDataset
+                  ? '已按任务输入从内置可靠性数据集自动导入预期答案与故障元数据；未匹配条目仍可手工标注。'
+                  : '参考答案和 Tool/Skill 目录可从数据集按输入精确导入；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。'}
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 200 }}>
                 <span style={{ flex: 1, height: 7, borderRadius: 4, background: 'var(--background-secondary)', overflow: 'hidden' }}>
@@ -1193,9 +2203,11 @@ export default function NewExperimentPage() {
                 </span>
               </span>
               <span style={{ display: 'flex', gap: 8 }}>
-                <button style={BTN_OUTLINE_SM} onClick={openImport} title="按任务输入精确匹配，回填参考输出；已标注的条目跳过">
-                  📥 从数据集导入匹配
-                </button>
+                {!isReliabilityDataset && (
+                  <button style={BTN_OUTLINE_SM} onClick={openImport} title="按任务输入精确匹配，回填参考输出；已标注的条目跳过">
+                    📥 从数据集导入匹配
+                  </button>
+                )}
                 <button
                   style={{ ...BTN_OUTLINE_SM, opacity: persistable > 0 ? 1 : 0.5, cursor: persistable > 0 ? 'pointer' : 'not-allowed' }}
                   disabled={persistable === 0}
@@ -1306,6 +2318,36 @@ export default function NewExperimentPage() {
         {step === 4 && (
           <div style={PANEL}>
             <div style={PANEL_B}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>评估器与执行</div>
+              <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 12 }}>
+                确认 Trace 来源与运行范围，再选择本次实验使用的评估器。
+              </div>
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 1, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden',
+                background: 'var(--border)', marginBottom: 14,
+              }}>
+                {[
+                  ['实验', name || '未命名'],
+                  ['Agent', agentName || '—'],
+                  ['数据集', selectedDataset?.name || '未选择'],
+                  ['Trace 来源', expType === 'llm'
+                    ? `自动配对 · A=${groupAValue || '—'} / B=${groupBValue || '—'}`
+                    : traceMode === 'generate'
+                      ? `生成 Trace · ${selectedGenerated.size} 个 Case`
+                      : `选择 Trace · ${selected.size} 条${watchMode ? ' · 自动监听' : ''}`],
+                  ['预期答案', `${annotated} / ${selectedList.length}`],
+                  ...(expType === 'single' && traceMode === 'generate' ? [[
+                    '主机 / 模型',
+                    `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
+                  ]] : []),
+                ].map(([label, value]) => (
+                  <div key={label} style={{ padding: '10px 12px', background: 'var(--background-secondary)' }}>
+                    <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{value}</div>
+                  </div>
+                ))}
+              </div>
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
                 为本次实验挑选评估器（可多选）。依赖参考数据或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
@@ -1313,14 +2355,16 @@ export default function NewExperimentPage() {
                 {allEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
                   // 监听模式的新 trace 没有逐条参考答案或 Tool/Skill 目录，带前置条件的评估器不可用。
-                  const gate = watchMode && meta.requires.length > 0
+                  const gate = RELIABILITY_EVALUATOR_IDS.has(card.id) && !isReliabilityDataset
+                    ? { usable: false, reason: '该评估器仅适用于可靠性数据集' }
+                    : watchMode && meta.requires.length > 0
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
                     : gateEvaluator(meta, gateCases);
                   const checked = selectedEvaluators.has(card.id);
                   return (
                     <div
                       key={card.id}
-                      title={gate.usable ? undefined : gate.reason}
+                      title={gate.usable ? undefined : (expType === 'llm' ? undefined : gate.reason)}
                       onClick={() => gate.usable && toggleEvaluator(card.id)}
                       style={{
                         border: `1px solid ${checked ? 'var(--primary)' : 'var(--border)'}`,
@@ -1332,6 +2376,12 @@ export default function NewExperimentPage() {
                         transition: 'all 0.12s',
                       }}
                     >
+                      {/* 对比模式：门控失败显示内联警告块（G12 仅对比模式；单组保持 tooltip） */}
+                      {expType === 'llm' && !gate.usable && gate.reason && (
+                        <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 6, background: 'var(--warning-subtle)', border: '1px solid var(--warning-subtle-border)', color: 'var(--warning)', fontSize: 11 }}>
+                          ⚠ {gate.reason}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{
                           fontSize: 13, fontWeight: 800, flex: 1, minWidth: 0,
@@ -1461,4 +2511,8 @@ export default function NewExperimentPage() {
       </PageContainer>
     </>
   );
+}
+
+export default function NewExperimentPage() {
+  return <ExperimentWizard />;
 }

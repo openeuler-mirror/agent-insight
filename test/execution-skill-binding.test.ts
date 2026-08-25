@@ -3,6 +3,10 @@ import test from 'node:test';
 
 import { buildAgentCallTree, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import {
+    openclawExpectedSkills,
+    openclawSkillMessages,
+} from './fixtures/framework-skill-fixtures';
+import {
     allowsSnapshotShrinkForFramework,
     computeOwnSkills,
     extractExplicitSkillsFromNode,
@@ -77,6 +81,19 @@ test('binding: root 只绑自己显式调用的 skill,不含子 agent 的 skill'
     // root 自己调了 skill-a / skill-c;kuafu 的 skill-b 不应冒泡到 root。
     assert.deepEqual(names, ['skill-a', 'skill-c']);
     assert.ok(!names.includes('skill-b'), 'parent must NOT be bound to the sub-agent skill');
+});
+
+test('binding: LlamaIndex root ownSkills 不包含子 Agent skill', () => {
+    const names = computeOwnSkills('llamaindex', nestedFixture()).map(s => s.name).sort();
+    assert.deepEqual(names, ['skill-a', 'skill-c']);
+    assert.ok(!names.includes('skill-b'), 'LlamaIndex parent must NOT inherit the sub-agent skill');
+});
+
+test('binding: OpenClaw ownSkills keeps its content-block extractor', () => {
+    assert.deepEqual(
+        computeOwnSkills('openclaw', openclawSkillMessages as any[]),
+        openclawExpectedSkills,
+    );
 });
 
 test('binding: Qoder scopes root skills to the root Agent and excludes Subagent skills', () => {

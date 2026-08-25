@@ -7,6 +7,8 @@ description: "查看 Skill 列表、创建 Skill 与管理版本"
 
 Skills 管理页是 Skill 资产的统一入口，用于查看当前 Workspace 下的 Skill、创建新 Skill、进入详情、管理版本，并衔接后续分析与优化流程。
 
+当前入口为 **配置 → Skill 管理中心**。侧边栏的 **持续优化 → Skill** 已进入对话工作台；工作台中的“从 Skill 管理中心选择”也会打开带服务端搜索、筛选、每页 9 条分页和精确版本选择的资产选择器。旧 `/skills` 地址在兼容期继续保留。
+
 > **Note**
 > Skills 管理页承担 Skill 资产展示、入口组织与版本管理职责。
 > 相关操作通常从该页面开始，包括新建 Skill、查看详情、核对激活版本，以及进入分析与优化流程。
@@ -194,4 +196,4 @@ Skills 管理适用于 Skill 资产的检索、创建、详情查看与版本管
 - 想从需求直接起草新 Skill： [Skills 生成](./generate)
 - 想验证当前 Skill 的效果： [Skills 评测总览](./evaluation/overview)
 - 想继续迭代现有版本： [Skills 优化](./optimize)
-- 想回到 Skills 模块总览： [Skills 能力](./index)
+- 想回到 Skill 工作区总览： [持续优化 · Skill](./index)

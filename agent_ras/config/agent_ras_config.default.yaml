@@ -1,0 +1,29 @@
+# Cross-platform Agent RAS capability defaults (no machine-specific service paths).
+# When adding a detector domain: append detectors.<id> here (only shared file to edit).
+# Runtime schema defaults come from each plugin's config_model; keep this file aligned.
+
+agent_ras:
+  enabled: true
+  detectors:
+    repeat_tool:
+      enabled: true
+      warning_threshold: 5
+      critical_threshold: 10
+      global_breaker_threshold: 10
+      unknown_tool_threshold: 10
+    llm_thinking_loop:
+      enabled: true
+      detection_start_chars: 30000
+      window_max_chars: 2000
+      loop_repeat_threshold: 5
+      similar_clause_sim_threshold: 0.95
+      semantic_eval_chars: 10000
+      semantic_content_enabled: true
+    analysis_paralysis:
+      enabled: true
+      detection_start_chars: 500
+      history_steps: 8
+      history_max_chars: 6000
+      trigger_count_threshold: 10
+  recovery:
+    notify_user_on_warning: true

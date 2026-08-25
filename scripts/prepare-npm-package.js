@@ -17,7 +17,32 @@ function copyDirIfMissing(sourceDir, targetDir, label) {
 // Local/temp & non-runtime project dirs that `next build` sweeps into standalone.
 // `files` whitelist makes .npmignore unable to drop them, so we delete physically.
 // Runs on every `npm pack`/`npm publish` via the prepack hook.
-const STANDALONE_JUNK_DIRS = ['exclude', 'tests', 'test', 'skillbench', 'features', 'tools', 'docs', 'data', 'src', 'skills']
+const STANDALONE_JUNK_DIRS = [
+  '.git',
+  '.agents',
+  '.codex',
+  'agent_ras',
+  'exclude',
+  'tests',
+  'test',
+  'skillbench',
+  'features',
+  'tools',
+  'docs',
+  'data',
+  'logs',
+  'src',
+  'skills',
+]
+const STANDALONE_JUNK_FILES = [
+  '.env',
+  '.env.local',
+  'server.log',
+  path.join('prisma', 'dev.db'),
+  path.join('prisma', 'dev.db-journal'),
+  path.join('prisma', 'dev.db-shm'),
+  path.join('prisma', 'dev.db-wal'),
+]
 const RUNTIME_SYSTEM_SKILLS = {
   'agent-debug-diagnosis': [
     'SKILL.md',
@@ -48,6 +73,28 @@ function pruneStandaloneJunk(standaloneDir) {
       console.log(`✓ Pruned ${dir}/ from standalone`)
     }
   }
+  for (const file of STANDALONE_JUNK_FILES) {
+    const target = path.join(standaloneDir, file)
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { force: true })
+      console.log(`✓ Pruned ${file} from standalone`)
+    }
+  }
+}
+
+function prunePythonBytecode(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name)
+    if (entry.isDirectory()) {
+      if (entry.name === '__pycache__') {
+        fs.rmSync(target, { recursive: true, force: true })
+      } else {
+        prunePythonBytecode(target)
+      }
+    } else if (entry.isFile() && (entry.name.endsWith('.pyc') || entry.name.endsWith('.pyo'))) {
+      fs.rmSync(target, { force: true })
+    }
+  }
 }
 
 function copyRuntimeSystemSkills(packageRoot, standaloneDir) {
@@ -70,6 +117,42 @@ function copyRuntimeSystemSkills(packageRoot, standaloneDir) {
     fs.cpSync(sourceDir, targetDir, { recursive: true })
     console.log(`✓ Runtime system skill copied: ${skillName}`)
   }
+}
+
+function copyLlamaIndexCollector(packageRoot, standaloneDir) {
+  const sourceRoot = path.join(packageRoot, 'scripts', 'llamaindex_extension')
+  const targetRoot = path.join(standaloneDir, 'scripts', 'llamaindex_extension')
+  const sourcePackage = path.join(sourceRoot, 'src')
+  const sourceReadme = path.join(
+    packageRoot,
+    'docs',
+    'user-guide',
+    'observability',
+    'llamaindex-trace-collector.md',
+  )
+
+  if (fs.existsSync(targetRoot)) {
+    fs.rmSync(targetRoot, { recursive: true, force: true })
+  }
+  for (const required of [sourcePackage, sourceReadme]) {
+    if (!fs.existsSync(required)) {
+      throw new Error(`Missing LlamaIndex collector runtime entry: ${required}`)
+    }
+  }
+  fs.mkdirSync(targetRoot, { recursive: true })
+  fs.cpSync(sourcePackage, path.join(targetRoot, 'src'), {
+    recursive: true,
+    filter: (candidate) => {
+      const name = path.basename(candidate)
+      return name !== '__pycache__'
+        && name !== '.pytest_cache'
+        && !name.endsWith('.pyc')
+        && !fs.lstatSync(candidate).isSymbolicLink()
+    },
+  })
+  fs.copyFileSync(sourceReadme, path.join(targetRoot, 'README.md'))
+  prunePythonBytecode(targetRoot)
+  console.log('✓ LlamaIndex collector copied to standalone')
 }
 
 function assertRuntimeSystemSkills(standaloneDir) {
@@ -103,6 +186,7 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   const scriptsDir = path.join(packageRoot, 'scripts')
   const standaloneScriptsDir = path.join(standaloneDir, 'scripts')
   copyDirIfMissing(scriptsDir, standaloneScriptsDir, 'Scripts')
+  copyLlamaIndexCollector(packageRoot, standaloneDir)
 
   const prismaDir = path.join(packageRoot, 'prisma')
   const standalonePrismaDir = path.join(standaloneDir, 'prisma')
@@ -118,6 +202,17 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   }
 
   assertRuntimeSystemSkills(standaloneDir)
+  const llamaIndexRuntimeFiles = [
+    path.join('scripts', 'llamaindex_extension', 'src', 'agent_insight_llamaindex', '_bootstrap', 'sitecustomize.py'),
+    path.join('scripts', 'llamaindex_extension', 'src', 'agent_insight_llamaindex', '__init__.py'),
+    path.join('scripts', 'llamaindex_extension', 'README.md'),
+  ]
+  for (const relativeFile of llamaIndexRuntimeFiles) {
+    const target = path.join(standaloneDir, relativeFile)
+    if (!fs.existsSync(target)) {
+      throw new Error(`Missing LlamaIndex collector runtime file in standalone package: ${target}`)
+    }
+  }
 
   return standaloneDir
 }
@@ -133,5 +228,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  copyLlamaIndexCollector,
   ensureStandalonePackage,
 }

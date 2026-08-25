@@ -30,6 +30,20 @@ export function getOtelTraceSpoolDir(): string {
 
 const READ_CHUNK_BYTES = 1024 * 1024;
 
+/**
+ * Runtime filesystem join. Prefer over ``path.join(dynamic…)`` so Turbopack
+ * (Next 16) does not treat the call as a project-root file glob and emit
+ * "Overly broad patterns … matches N files" during ``next build``.
+ */
+function joinFs(base: string, ...rest: string[]): string {
+  let out = String(base || '').replace(/[/\\]+$/, '');
+  for (const part of rest) {
+    const clean = String(part ?? '').replace(/^[/\\]+|[/\\]+$/g, '');
+    if (clean) out = `${out}${path.sep}${clean}`;
+  }
+  return out;
+}
+
 function dayString(date = new Date()): string {
   const yyyy = String(date.getFullYear());
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -51,7 +65,7 @@ function safeSessionPathSegment(sessionId: string): string {
 }
 
 function sessionSpoolFile(spoolDir: string, fileName: string, sessionId: string): string {
-  return path.join(spoolDir, dayString(), 'sessions', safeSessionPathSegment(sessionId), fileName);
+  return joinFs(spoolDir, dayString(), 'sessions', safeSessionPathSegment(sessionId), fileName);
 }
 
 function appendJsonl(file: string, rows: any[]): void {
@@ -61,7 +75,7 @@ function appendJsonl(file: string, rows: any[]): void {
   fs.appendFileSync(file, text, 'utf8');
 }
 
-function appendJsonlBySession<T extends { sessionId?: string }>(spoolDir: string, fileName: string, events: T[]): void {
+export function appendJsonlBySession<T extends { sessionId?: string }>(spoolDir: string, fileName: string, events: T[]): void {
   const groups = new Map<string, T[]>();
   for (const event of events) {
     const sessionId = typeof event.sessionId === 'string' && event.sessionId.trim() ? event.sessionId : 'unknown';
@@ -101,7 +115,7 @@ function collectJsonlSpoolFiles(dir: string, fileName: string | undefined, out: 
   }
 }
 
-function listJsonlSpoolFiles(spoolDir: string, fileName?: string): string[] {
+export function listJsonlSpoolFiles(spoolDir: string, fileName?: string): string[] {
   const out: string[] = [];
   try {
     const days = fs.readdirSync(spoolDir, { withFileTypes: true }).filter((d) => d.isDirectory());
@@ -151,6 +165,8 @@ export type SessionSpoolFiles = {
   legacy: string[];
 };
 
+export type SessionSpoolFileName = 'logs.jsonl' | 'traces.jsonl' | 'events.jsonl';
+
 function sessionTargetedReadEnabled(): boolean {
   return process.env.AGENT_INSIGHT_OTEL_SESSION_TARGETED_READ !== '0';
 }
@@ -162,7 +178,11 @@ function sessionTargetedReadEnabled(): boolean {
  * 再 stat —— 否则一天有几千个会话目录时,光遍历目录就够慢的。
  * 其余层级照常递归,兼容多一层嵌套的部署形态。
  */
-export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessionId: string): SessionSpoolFiles {
+export function listSessionSpoolFiles(
+  spoolDir: string,
+  fileName: SessionSpoolFileName,
+  sessionId: string,
+): SessionSpoolFiles {
   const segment = safeSessionPathSegment(sessionId);
   const shards: string[] = [];
   const legacy: string[] = [];
@@ -178,7 +198,7 @@ export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessio
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === 'sessions') {
-          const target = path.join(fullPath, segment, fileName);
+          const target = joinFs(fullPath, segment, fileName);
           try {
             if (fs.statSync(target).isFile()) shards.push(target);
           } catch {}
@@ -204,7 +224,7 @@ export function listSessionSpoolFiles(spoolDir: string, fileName: string, sessio
  * 该 session 当前落盘状态的指纹(各候选文件的路径+大小)。
  * 用来判断"上次聚合之后有没有新数据",避免 fast/evaluated 两段对同一份数据重复聚合。
  */
-export function statSessionSpool(spoolDir: string, fileName: string, sessionId: string): string {
+export function statSessionSpool(spoolDir: string, fileName: SessionSpoolFileName, sessionId: string): string {
   const { shards, legacy } = listSessionSpoolFiles(spoolDir, fileName, sessionId);
   const parts: string[] = [];
   for (const file of [...shards, ...legacy]) {
@@ -217,9 +237,9 @@ export function statSessionSpool(spoolDir: string, fileName: string, sessionId: 
   return parts.join('|');
 }
 
-function readEventsForSession<T extends { sessionId?: string }>(
+export function readEventsForSession<T extends { sessionId?: string }>(
   spoolDir: string,
-  fileName: string,
+  fileName: SessionSpoolFileName,
   sessionId: string,
 ): T[] {
   if (!sessionTargetedReadEnabled()) {
@@ -293,6 +313,7 @@ export function readOtelTraceEventsForSession(sessionId: string, spoolDir = getO
 export function readNewLinesSince<T = any>(
   file: string,
   cursor: SpoolCursor = { bytes: 0 },
+  maxLines = Number.POSITIVE_INFINITY,
 ): SpoolReadResult<T> {
   let stat: Stats;
   try {
@@ -323,9 +344,10 @@ export function readNewLinesSince<T = any>(
   let nextBytes = start;
   let pending = '';
   let offset = start;
+  let reachedLimit = false;
 
   try {
-    while (offset < stat.size) {
+    while (offset < stat.size && !reachedLimit) {
       const bytesRead = fs.readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
       if (bytesRead <= 0) break;
       offset += bytesRead;
@@ -334,6 +356,10 @@ export function readNewLinesSince<T = any>(
       pending = lines.pop() ?? '';
 
       for (const line of lines) {
+        if (lineCount >= maxLines) {
+          reachedLimit = true;
+          break;
+        }
         nextBytes += Buffer.byteLength(line, 'utf8') + 1;
         if (!line.trim()) continue;
         lineCount += 1;

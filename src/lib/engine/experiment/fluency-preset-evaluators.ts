@@ -22,7 +22,7 @@ import {
 } from '@/lib/evaluators/eval-output';
 import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import { roundScore } from './specialized-evaluator-common';
-import { invokeTextPresetJudge } from './text-judge-common';
+import { invokeTextPresetJudge } from './text-judge-invoker';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 
 export const FLUENCY_PRESET_IDS = ['preset-fluency-text'] as const;

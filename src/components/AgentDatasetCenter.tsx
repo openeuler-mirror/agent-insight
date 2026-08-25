@@ -9,6 +9,7 @@ import {
   type AgentDataset,
   type DatasetCase,
   type DatasetField,
+  coerceDatasetKind,
   defaultDatasetSchemaFields,
   defaultFieldsForKind,
   schemaColumnTags,
@@ -17,6 +18,7 @@ import {
 } from '@/lib/agent-dataset-model';
 import { parseBatchFromFileContent, readFileAsText } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
 interface DatasetDraft {
   id?: string;
@@ -51,7 +53,7 @@ function toDraft(dataset: AgentDataset): DatasetDraft {
     description: dataset.description || '',
     targetAgent: dataset.targetAgent || '',
     tagsText: (dataset.tags || []).join(', '),
-    datasetKind: dataset.datasetKind === 'trajectory' ? 'trajectory' : 'ideal_output',
+    datasetKind: coerceDatasetKind(dataset.datasetKind),
     fields: dataset.fields || [],
     cases: (dataset.cases || []).map(item => ({
       ...item,
@@ -95,6 +97,9 @@ function datasetPrimaryStatLine(item: AgentDatasetListItem): { label: string; va
   const n = item.caseCount;
   if (item.datasetKind === 'trajectory') {
     return { label: '轨迹样例', value: String(n) };
+  }
+  if (item.datasetKind === 'reliability') {
+    return { label: '可靠性样例', value: String(n) };
   }
   return { label: '评测数据', value: String(n) };
 }
@@ -234,6 +239,7 @@ export default function AgentDatasetCenter() {
   const [datasets, setDatasets] = useState<AgentDatasetListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [kindFilter, setKindFilter] = useState<'all' | DatasetKind>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -310,17 +316,23 @@ export default function AgentDatasetCenter() {
 
   const filteredDatasets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return datasets;
-    return datasets.filter(
-      d =>
+    return datasets.filter((d) => {
+      if (kindFilter !== 'all' && d.datasetKind !== kindFilter) return false;
+      if (!q) return true;
+      return (
         d.name.toLowerCase().includes(q) ||
         (d.description || '').toLowerCase().includes(q) ||
-        (d.targetAgent || '').toLowerCase().includes(q),
-    );
-  }, [datasets, searchQuery]);
+        (d.targetAgent || '').toLowerCase().includes(q)
+      );
+    });
+  }, [datasets, searchQuery, kindFilter]);
 
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
     if (!user) return;
+    if (isBuiltinReliabilityDataset(dataset)) {
+      setTableActionError('内置可靠性评测集由系统维护，不可编辑');
+      return;
+    }
     setError('');
     const res = await apiFetch(`/api/agent-datasets/${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`);
     const detail = await res.json();
@@ -395,6 +407,10 @@ export default function AgentDatasetCenter() {
 
   const handleDeleteDataset = async (item: AgentDatasetListItem) => {
     if (!user) return;
+    if (isBuiltinReliabilityDataset(item)) {
+      setTableActionError('内置可靠性评测集不可删除');
+      return;
+    }
     if (!globalThis.confirm(`确定删除评测集「${item.name}」？删除后不可恢复。`)) return;
     setTableActionError('');
     try {
@@ -529,6 +545,27 @@ export default function AgentDatasetCenter() {
             fontSize: 13,
           }}
         />
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {([
+            ['all', '全部'],
+            ['ideal_output', '理想输出'],
+            ['trajectory', '轨迹'],
+            ['reliability', '可靠性'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className="ai-btn-s"
+              onClick={() => setKindFilter(key)}
+              style={{
+                opacity: kindFilter === key ? 1 : 0.7,
+                borderColor: kindFilter === key ? 'var(--primary)' : undefined,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div style={{ flex: '1 1 auto' }} />
         <button
           type="button"
@@ -702,6 +739,10 @@ export default function AgentDatasetCenter() {
                       {truncateText(item.name, 42)}
                     </h2>
                     <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: item.datasetKind === 'reliability' ? 'color-mix(in srgb, var(--primary) 12%, transparent)' : 'var(--background-secondary)', color: 'var(--foreground-muted)', border: '1px solid var(--border)' }}>
+                        {item.datasetKind === 'reliability' ? '可靠性' : item.datasetKind === 'trajectory' ? '轨迹' : '理想输出'}
+                        {item.name.includes('内置') ? ' · 内置' : ''}
+                      </span>
                       {schemaColumnTags(item).map(field => (
                         <span
                           key={field}
@@ -799,11 +840,13 @@ export default function AgentDatasetCenter() {
                       stopActionPropagation(event);
                       openEditorForDataset(item);
                     }}
-                    title="编辑数据集信息"
+                    disabled={isBuiltinReliabilityDataset(item)}
+                    title={isBuiltinReliabilityDataset(item) ? '内置可靠性评测集不可编辑' : '编辑数据集信息'}
                   >
                     <Pencil size={14} aria-hidden />
                     编辑信息
                   </button>
+                  {!isBuiltinReliabilityDataset(item) && (
                   <button
                     type="button"
                     className="ai-dataset-action ai-dataset-action--danger"
@@ -817,6 +860,7 @@ export default function AgentDatasetCenter() {
                     <Trash2 size={14} aria-hidden />
                     删除
                   </button>
+                  )}
                   <div style={{ flex: 1, minWidth: 8 }} />
                   <button
                     type="button"
@@ -824,7 +868,7 @@ export default function AgentDatasetCenter() {
                     style={datasetActionPrimaryStyle}
                     onClick={event => {
                       stopActionPropagation(event);
-                      if (item.datasetKind === 'trajectory') {
+                      if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability') {
                         // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入参考答案）
                         router.push('/experiments/new');
                       } else {
@@ -833,12 +877,12 @@ export default function AgentDatasetCenter() {
                       }
                     }}
                     title={
-                      item.datasetKind === 'trajectory'
-                        ? '使用轨迹评估器（opencode）发起评测'
+                      item.datasetKind === 'trajectory' || item.datasetKind === 'reliability'
+                        ? '使用实验向导发起评测'
                         : '前往评估器目录选择评估器'
                     }
                   >
-                    {item.datasetKind === 'trajectory' ? (
+                    {item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' ? (
                       <PlayCircle size={14} aria-hidden />
                     ) : (
                       <ClipboardList size={14} aria-hidden />
@@ -963,7 +1007,7 @@ export default function AgentDatasetCenter() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
                   gap: 10,
                 }}
               >
@@ -1005,6 +1049,25 @@ export default function AgentDatasetCenter() {
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>轨迹评测集</div>
                   <div style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>Agent 运行轨迹评测</div>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => selectDatasetKind('reliability')}
+                  style={{
+                    textAlign: 'left',
+                    padding: '12px 14px',
+                    borderRadius: 10,
+                    border:
+                      draft.datasetKind === 'reliability'
+                        ? '2px solid var(--primary)'
+                        : '1px solid var(--border)',
+                    background: 'var(--background-secondary)',
+                    cursor: 'pointer',
+                    color: 'var(--foreground)',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>可靠性评测集</div>
+                  <div style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>含故障注入类型字段</div>
+                </button>
               </div>
             </div>
 
@@ -1013,7 +1076,7 @@ export default function AgentDatasetCenter() {
                 默认数据项
               </div>
               <div className="ai-section-hint" style={{ marginBottom: 10 }}>
-                配置列说明：理想输出场景默认 input、reference_output；轨迹场景额外增加 trajectory 文本字段。
+                配置列说明：理想输出默认 input、reference_output；轨迹额外 trajectory；可靠性额外必填 fault_injection_type。
               </div>
               <DefaultFieldsTable fields={defaultFieldsForKind(draft.datasetKind)} />
             </div>

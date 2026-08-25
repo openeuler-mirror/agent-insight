@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="agent-insight-codex-trace" Version="0.1.0" Publisher="openeuler" />
+    <DisplayName>Agent Insight Codex Trace</DisplayName>
+    <Description xml:space="preserve">Correlates Codex IDE file and terminal activity with Agent Insight traces.</Description>
+    <Tags>codex,trace,observability,agent-insight</Tags>
+    <Categories>Other</Categories>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Code" Version="[1.93.0,)" />
+  </Installation>
+  <Dependencies />
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+  </Assets>
+</PackageManifest>

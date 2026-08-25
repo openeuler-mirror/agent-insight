@@ -18,7 +18,7 @@ import {
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
-import { apiFetch, getApiUrl } from '@/lib/client/api';
+import { getApiUrl } from '@/lib/client/api';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
 
@@ -39,45 +39,23 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'codeagent', label: 'CodeAgent' },
     { value: 'openclaw', label: 'OpenClaw' },
     { value: 'hermes', label: 'Hermes' },
+    { value: 'xiaoo', label: 'xiaoO' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'llamaindex', label: 'LlamaIndex' },
     { value: 'qoder', label: 'Qoder CN product family' },
     { value: 'trae', label: 'Trae IDE' },
+    { value: 'actrail', label: 'AcTrail' },
+    { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'qwencode', label: 'Qwen Code' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
 ];
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
-    const { user, apiKey: ctxApiKey } = useAuth();
+    const { user, apiKey, authReady } = useAuth();
     const isZh = locale === 'zh';
-    const [apiKey, setApiKey] = useState<string | null>(ctxApiKey);
     const [copied, setCopied] = useState<string | null>(null);
-
-    useEffect(() => {
-        // 优先级:auth context > 后端按当前登录 user 查 > localStorage fallback
-        //
-        // 为啥不再优先用 localStorage:之前是 localStorage > ctxApiKey > 后端,
-        // 导致切换账号后页面仍显示旧账号的 key(localStorage 不会跟着登录态变)。
-        // 用户混淆"我登录的是 A 但页面显示 B 的 key",而且采集端配的也是错的 key,
-        // 上报到的是 B 的 trace 名下,A 用户看不到。
-        if (ctxApiKey) {
-            setApiKey(ctxApiKey);
-            return;
-        }
-        if (!user) {
-            // 没登录态时只能用 localStorage 兜底(比如直接拷贝链接访问)
-            const stored = typeof window !== 'undefined' ? localStorage.getItem('api_key') : null;
-            if (stored) setApiKey(stored);
-            return;
-        }
-        // 有登录 user 但 ctx 暂时没 key —— 主动按 user 拉,确保跟当前账号匹配
-        apiFetch('/api/auth/apikey', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user }),
-        })
-            .then(r => (r.ok ? r.json() : null))
-            .then(d => d?.apiKey && setApiKey(d.apiKey))
-            .catch(() => {});
-    }, [user, ctxApiKey]);
 
     // 用 useState + useEffect 而不是 useMemo + typeof window 检查:
     // useMemo 同步跑——server 端返回空、client 首次渲染返回实际命令,触发 hydration mismatch。
@@ -88,21 +66,30 @@ export default function AccessInstallPage() {
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
     useEffect(() => {
-        const protocol = window.location.protocol;
-        const h = window.location.host;
-        const baseUrl = `${protocol}//${h}`;
-        const setupUrl = getApiUrl('/api/ingest/setup');
-        // 逗号在 query 里合法，不编码——命令行里可读性更好。
-        const query = [
-            apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
-            frameworks.length ? `yes=1` : '',
-            frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
-        ].filter(Boolean).join('&');
-        const suffix = query ? `?${query}` : '';
-        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
-        setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
-        setHost(baseUrl);
-    }, [apiKey, frameworks]);
+        const timer = window.setTimeout(() => {
+            const protocol = window.location.protocol;
+            const h = window.location.host;
+            const baseUrl = `${protocol}//${h}`;
+            setHost(baseUrl);
+            if (!authReady || !apiKey) {
+                setLinuxCmd('');
+                setWindowsCmd('');
+                return;
+            }
+            const setupUrl = getApiUrl('/api/ingest/setup');
+            // 逗号在 query 里合法，不编码——命令行里可读性更好。
+            const query = [
+                `key=${encodeURIComponent(apiKey)}`,
+                frameworks.length ? `yes=1` : '',
+                frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
+                frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
+            ].filter(Boolean).join('&');
+            const suffix = query ? `?${query}` : '';
+            setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
+            setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [apiKey, authReady, frameworks]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -146,7 +133,7 @@ export default function AccessInstallPage() {
         // 复制失败时静默——不打扰用户;按钮没变绿,他自然会再点一下或者手动复制
     };
 
-    const keyReady = !!apiKey;
+    const keyReady = authReady && !!apiKey;
     const langfuseUser = user || (isZh ? '<你的用户名>' : '<your-username>');
     const langfuseSecret = apiKey || (isZh ? '<你的 Agent Insight API Key>' : '<your Agent Insight API key>');
     const langfuseHost = host ? `${host}${getApiUrl('')}` : 'http://localhost:3000';
@@ -155,6 +142,7 @@ export default function AccessInstallPage() {
         `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
         `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
     ].join('\n');
+    const llamaIndexSetupCode = 'import agent_insight_llamaindex; agent_insight_llamaindex.setup()';
 
     return (
         <>
@@ -182,6 +170,14 @@ export default function AccessInstallPage() {
                                     <span style={introDot} />
                                     <span>
                                         {isZh
+                                            ? <><b style={descStrong}>LlamaIndex</b> Python 项目:在上方框架列表勾选 Trace Collector,使用同一条一键安装命令。</>
+                                            : <><b style={descStrong}>LlamaIndex</b> Python projects: select Trace Collector above and use the same one-line installer.</>}
+                                    </span>
+                                </li>
+                                <li style={introItem}>
+                                    <span style={introDot} />
+                                    <span>
+                                        {isZh
                                             ? <><b style={descStrong}>LangChain / LangGraph</b> 的 Python 项目:无需安装,只改环境变量;Windows / Linux / macOS 写法相同。</>
                                             : <><b style={descStrong}>LangChain / LangGraph</b> Python projects: no install needed — just set environment variables; identical on Windows, Linux and macOS.</>}
                                     </span>
@@ -202,7 +198,9 @@ export default function AccessInstallPage() {
                                 <span style={countPill}>{frameworks.length}</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '先勾选框架,再按系统二选一' : 'Pick your frameworks, then your OS'}
+                                    {isZh
+                                        ? '先勾选框架,再按系统二选一 —— 同时完成本机纳管'
+                                        : 'Pick frameworks, then your OS — also registers this host'}
                                 </span>
                             </div>
 
@@ -252,13 +250,37 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />
 
+                            <div style={{ ...sectionHeading, marginTop: 8 }}>
+                                <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
+                                    LlamaIndex Trace Collector
+                                </span>
+                                <span style={countPill}>{isZh ? '应用注册' : 'app setup'}</span>
+                                <span style={{ flex: 1 }} />
+                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                    {isZh ? '安装已并入上方一键脚本' : 'Installed by the one-line setup above'}
+                                </span>
+                            </div>
+
+                            <CommandCard
+                                icon={<Terminal size={14} strokeWidth={2.2} />}
+                                label={isZh ? '应用代码 · 一行注册' : 'Application code · one-line setup'}
+                                hint={isZh
+                                    ? '已执行 configure 时，将这一行放在 LlamaIndex 应用入口顶部'
+                                    : 'After configure, place this line near the top of the LlamaIndex entry point'}
+                                cmd={llamaIndexSetupCode}
+                                copied={copied === 'llamaindex-setup'}
+                                onCopy={() => handleCopy(llamaIndexSetupCode, 'llamaindex-setup')}
+                                locale={locale}
+                            />
+
                             {/* Footer hint */}
                             <div style={hintBox}>
                                 <div style={hintIcon}><Info size={16} /></div>
                                 <div style={{ flex: 1, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
                                     <b style={{ color: 'var(--foreground)', fontWeight: 600 }}>{isZh ? '提示' : 'Tip'}</b> · {isZh
-                                        ? '若 API Key 切换了账号没刷新,请先退出并重新登录平台再复制 —— 客户端使用错误的 Key 上报时,trace 会落到原账号名下而非当前账号。'
-                                        : 'If you switched accounts but the API key did not refresh, log out and log back in before copying — a stale key sends traces to the old account.'}
+                                        ? '页面会先向服务端刷新并验证当前登录身份；验证完成前不会生成可复制的安装命令。切换平台地址或重建服务后，请重新打开本页并执行新命令。'
+                                        : 'This page refreshes and verifies the current server identity before generating a copyable command. After changing hosts or rebuilding the service, reopen this page and run a fresh command.'}
                                 </div>
                             </div>
                         </div>
@@ -513,11 +535,11 @@ function LangfuseEnvCard({
 function DocsPanel({ locale }: { locale: string }) {
     const isZh = locale === 'zh';
     const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: '客户端高级配置', href: '#' },
         { label: '常见接入问题排查', href: '#' },
     ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
+        { label: 'User manual', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
         { label: 'Advanced client configuration', href: '#' },
         { label: 'Troubleshooting installation', href: '#' },
     ];
@@ -540,6 +562,14 @@ function DocsPanel({ locale }: { locale: string }) {
         </section>
     );
 }
+
+
+/**
+ * 常驻客户端安装（IF-N01/N02）。
+ *
+ * 与上方的 Trace 采集器安装是两件事：这里装的是独立常驻服务，由 systemd / launchd 守护，
+ * 不随 Agent 平台启停，负责配置下发与双向控制通道。
+ */
 
 function KvRow({
     label, value, mono, bold, ellipsis, icon,
@@ -790,13 +820,17 @@ const commandBox: CSSProperties = {
     border: '1px solid var(--border)',
     borderRadius: 8,
     padding: '10px 12px',
+    maxHeight: 320,
+    overflow: 'auto',
 };
 
 const commandCode: CSSProperties = {
     color: 'var(--foreground)',
     fontSize: 12,
     fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    wordBreak: 'break-all',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
     display: 'block',
     lineHeight: 1.6,
 };

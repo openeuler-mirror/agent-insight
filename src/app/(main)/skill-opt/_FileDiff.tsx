@@ -17,10 +17,11 @@
 //   └──────────────┴─────────────────────────────────────┘
 
 import { useState, useMemo, useEffect } from 'react';
-import { DiffEditor, Editor } from '@monaco-editor/react';
+import { Editor } from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { diffLines } from 'diff';
+import { detectDiffLanguage, MonacoDiffEditor } from '@/components/diff/MonacoDiffEditor';
 import type { OptimizationIteration } from './types';
 
 interface Props {
@@ -46,17 +47,6 @@ type Selection =
     | { kind: 'unchanged'; path: string };
 
 type ViewMode = 'side' | 'inline';
-
-function detectLanguage(path: string): string {
-    if (path.endsWith('.py')) return 'python';
-    if (path.endsWith('.sh')) return 'shell';
-    if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript';
-    if (path.endsWith('.js')) return 'javascript';
-    if (path.endsWith('.json')) return 'json';
-    if (path.endsWith('.md')) return 'markdown';
-    if (path.endsWith('.yaml') || path.endsWith('.yml')) return 'yaml';
-    return 'plaintext';
-}
 
 function lineDelta(orig: string, mod: string): { added: number; removed: number } {
     const changes = diffLines(orig, mod);
@@ -242,25 +232,11 @@ export function FileDiff({
         if (sel.kind === 'changed') {
             const file = changedFiles[sel.path];
             return (
-                <DiffEditor
-                    key={`${sel.path}::${mode}`}
-                    height="100%"
-                    language={detectLanguage(sel.path)}
-                    original={file?.original ?? ''}
-                    modified={file?.modified ?? ''}
-                    theme="light"
-                    options={{
-                        fontSize: 12,
-                        readOnly: true,
-                        renderSideBySide: mode === 'side',
-                        useInlineViewWhenSpaceIsLimited: false,
-                        minimap: { enabled: false },
-                        scrollBeyondLastLine: false,
-                        automaticLayout: true,
-                        wordWrap: 'on',
-                        renderOverviewRuler: false,
-                        scrollbar: { useShadows: false },
-                    }}
+                <MonacoDiffEditor
+                    path={sel.path}
+                    before={file?.original ?? ''}
+                    after={file?.modified ?? ''}
+                    mode={mode}
                 />
             );
         }
@@ -268,7 +244,7 @@ export function FileDiff({
             <Editor
                 key={sel.path}
                 height="100%"
-                language={detectLanguage(sel.path)}
+                language={detectDiffLanguage(sel.path)}
                 value={unchangedFiles[sel.path] ?? ''}
                 theme="light"
                 options={{

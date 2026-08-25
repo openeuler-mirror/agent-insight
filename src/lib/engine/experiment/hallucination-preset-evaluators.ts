@@ -37,7 +37,7 @@ import {
   type EvalPoint,
   type EvaluatorOutput,
 } from '@/lib/evaluators/eval-output';
-import { invokeTextPresetJudge } from './text-judge-common';
+import { invokeTextPresetJudge } from './text-judge-invoker';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 
 export const HALLUCINATION_PRESET_IDS = ['preset-hallucination-text'] as const;

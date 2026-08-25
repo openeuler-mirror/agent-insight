@@ -52,6 +52,7 @@ next-env.d.ts
 
 # python
 __pycache__/
+*.egg-info/
 *.py[cod]
 *$py.class
 
@@ -81,6 +82,9 @@ scripts/otel_data/opencode/
 # workspace 目录不纳入版本控制
 workspace/
 
+# graphify 输出目录
+graphify-out/
+
 # 本地诊断/复现脚本，不纳入版本控制
 exclude/
 
@@ -91,6 +95,7 @@ exclude/
 # IDE configurations
 .idea
 .vscode
+.cursor
 .trae
 *.iml
 .agents
@@ -103,6 +108,12 @@ integrations/qoder-jetbrains/.gradle/
 integrations/qoder-jetbrains/build/
 integrations/qoder-jetbrains/.intellijPlatform/
 
+# AET local artifacts
+.aet/
+
+# ad-hoc local test dumps
+.fi-test.out
+
 # local docs backup
 docs_backup/
 docs/series-articles/
@@ -112,3 +123,6 @@ docs/series-articles/
 
 # omo tool local data (sessions/handoffs, never commit)
 .omo/
+# Python build artifacts from pip install (agent_fault_injection)
+agent_fault_injection/build/
+agent_fault_injection/*.egg-info/

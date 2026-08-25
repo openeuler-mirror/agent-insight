@@ -24,7 +24,8 @@
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
-| `preset-fluency-text` / `preset-hallucination-text` | `experiment/text-preset-evaluators.ts` → 族入口转发 fluency / hallucination 实现 |
+| `preset-text-*` | `experiment/text-preset-evaluators.ts` |
+| `preset-fluency-text` / `preset-hallucination-text` | `experiment/fluency-preset-evaluators.ts` / `experiment/hallucination-preset-evaluators.ts`（run-experiment 直接分发） |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -102,7 +103,7 @@ EvalPoint = {
 **归一化 `normalizeEvaluatorOutput()` 的行为**（务必知道，否则会被"吞字段"坑到）：
 
 - `score` 越界 clamp 到 [0,100]；非数值丢弃。
-- **0-1 量纲自动放大**：`score ∈ (0,1]` 且非整数时 ×100。所以要给 100 分必须显式写 `100`，写 `1` 会被当成 1 分。
+- **0-1 量纲自动放大**：`score ∈ (0,1]` 时 ×100，因此历史评估器输出 `0.85` 与 `1` 会分别归一化为 85 分与 100 分。
 - `verdict` 容忍英文别名与中文说法（`passed`/`达成`/`partial`/`未通过`…），**未识别的值直接丢弃**而不报错。
 - `summary` 压平换行并截断到 200 字（超出补 `…`）。
 - 非法评分点逐条丢弃，不会让整次评估失败。
@@ -172,13 +173,12 @@ LLM 不擅长"回归"。自由打分的表现是：分数扎堆（总在 70-90�
 
 代码侧再做一次**吸附**兜底（`opencode-trajectory-evaluator.ts` 的 `snap3()`），把模型漂移的连续值吸到最近一档。
 
-> ⚠️ **档位是给模型看的，别把它当卡片总分直接上报。** `normalizeEvaluatorOutput` 的 0-1 放大只对**非整数**生效（`eval-output.ts` 的 `coerceScore`），所以上报 `1.0` 会被记成 **1 分**而不是 100 分——`0.5`→50、`0.0`→0 都对，唯独满分这一档静默塌掉，还会照常进综合均分。
-> **正确做法：档位在评估器内部用，上报前自己乘 100**（或直接用 0-100 的档位值）。见 §6.1。
+> ⚠️ **档位是给模型看的，新增评估器仍应直接上报 0-100。** `normalizeEvaluatorOutput` 会为历史兼容把 `(0,1]` 自动放大，因此 `0.5`→50、`1`→100；这也意味着 0-100 新量纲无法表达 1 分，确需极低分时应使用 0 或大于 1 的数值。见 §6.1。
 
 ```ts
-// ✗ 三档判断直接当分数上报：满分变 1 分
+// 兼容写法：历史 0-1 档位会由平台自动放大
 return normalizeEvaluatorOutput({ score: snap3(toolChoice) });
-// ✓ 自己折算到 0-100
+// 推荐写法：新增评估器显式折算到 0-100
 return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 ```
 
@@ -401,6 +401,7 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 - 占位符：`{{query}}`、`{{actual_output}}`、`{{reference_output}}`、`{{trace_summary}}`。
 - **`requires` 自动推导**：提示词里用到 `{{reference_output}}` → 自动标记依赖参考数据，向导 ④ 步随之门控。
 - 可选填「评分点清单」：填了就按清单逐条判定（等价于 §3.2 的分解），留空则自由模式。**建议填**。
+- 输出分值统一使用 **0-100**；运行时仍兼容历史 0-1 量纲（如 `0.85` 自动折算为 `85`，`1` 自动折算为 `100`）。
 
 ### 5.1 铁律：提示词里不许写死验收用例的原句
 
@@ -506,7 +507,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 - [ ] 有分必有据：不存在"给了分但证据为空"的评分点
 - [ ] 每个评分点 `status` 与 `score` **同时给**（§6.6）
 - [ ] 评分点分值与总分公式**互相解释得通**：单点罚满时总分应落到对应位置，别出现「唯一命中项 0 分、卡片总分 5 分」这种对不上的情况
-- [ ] 满分没有被 0-1 放大坑掉（§3.3）：上报 `1` 会被记成 1 分
+- [ ] 分值已按 0-100 上报；若兼容输出 0-1，确认 `1` 会归一化为 100 分（§3.3）
 
 **注册与口径**
 
@@ -537,13 +538,19 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
 | 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
 | 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采与修辞（5 维 1-3 档锚定，独立成族） |
+| 文本 AI 味 `preset-text-ai-flavor` | Agent 输出 | 模板化开篇 · 模板化结尾 · 机械连接词 · 泛化人物名称 · 空洞总结 · 过度礼貌（6 维扣分制） |
+| 文本格式 `preset-text-format` | Agent 输出 | 序号连续性 · 引用标记 · 列表层级 · 标点 · 排版 · 表格 · 特殊格式（7 维扣分制） |
+| 文本语种一致性 `preset-text-language-consistency` | 用户问题与 Agent 输出 | 主语言匹配（关键维度）· 非必要混杂 · 代码切换理由 · 双语场景处理（3 个普通维度，4 维扣分制） |
+| 文本简洁性 `preset-text-conciseness` | 用户问题与 Agent 输出 | 表达效率 · 套话精简 · 主需求聚焦 · 信息完整（0.3/0.2/0.3/0.2 加权） |
+| 文本流畅度 `preset-fluency-text` | Agent 输出 | 语句通顺度 · 重复与冗余 · 断句与节奏 · 语义连贯性 · 语言自然度（5 维扣分制；连续出现的中度问题第 4 处起扣分加倍，连续前 3 处不翻倍；严重问题不参与加倍，按原档扣分） |
+| 文本幻觉检测 `preset-hallucination-text` | 用户问题与最终答案（±检索上下文） | 实体幻觉 · 数值幻觉 · 引用与文献幻觉 · 逻辑与事实幻觉 + 幻觉严重程度与占比（5 维独立评分点，占比加权 5/15/30；catastrophic 判 0；无法核验时按 light 处理） |
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
-| 文本流畅度 `preset-fluency-text` | Agent 输出 | 语句通顺度 · 重复与冗余 · 断句与节奏 · 语义连贯性 · 语言自然度（5 维扣分制；连续出现的中度/重度问题第 4 处起扣分加倍，连续前 3 处不翻倍） |
-| 文本幻觉检测 `preset-hallucination-text` | 用户问题与最终答案（±检索上下文） | 实体幻觉 · 数值幻觉 · 引用与文献幻觉 · 逻辑与事实幻觉 + 幻觉严重程度与占比（5 维独立评分点，占比加权 5/15/30；catastrophic 判 0；无法核验时按 light 处理） |
 
 回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+
+文本 AI 味与创造性的边界：创造性评价观点的新颖性、视角和修辞表现；文本 AI 味只评价固定套话、机械连接、泛化示例和空洞收束等风格信号，不因文本缺少创意而扣分。文本简洁性与答案质量的边界：简洁性只扣冗余、偏题扩写和必要信息缺失，不重新评价答案事实是否正确。语种一致性只评价语言匹配和无理由切换；格式评估器只评价可读的结构与标记规范，均不承担内容安全判断。
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 

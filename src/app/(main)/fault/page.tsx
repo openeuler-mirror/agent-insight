@@ -30,6 +30,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageToolbar } from '@/components/shell/PageContainer';
 import { AgentDebugCard, type TraceExplicitError } from '@/components/observe/AgentDebugCard';
+import { AgentDebugCapabilitySheet } from '@/components/observe/AgentDebugCapabilitySheet';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
@@ -39,7 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
-import { formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
@@ -763,7 +764,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                     <SessionStat label="LLM" value={String(execution.llm_call_count ?? '—')} />
                     <SessionStat label={locale === 'zh' ? '故障节点' : 'Faults'} value={String(faultSummary.faultNodeCount)} valueColor={faultSummary.faultNodeCount > 0 ? 'var(--warning,#d97706)' : undefined} />
                     <SessionStat label="Token" value={execution.tokens ? fmtTokens(execution.tokens) : '—'} />
-                    <SessionStat label={locale === 'zh' ? '耗时' : 'Duration'} value={formatLatencySeconds(execution.latency)} />
+                    <SessionStat label={locale === 'zh' ? '耗时' : 'Duration'} value={formatDurationMs(execution.latency)} />
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <Link href={`${basePath}/trace?taskId=${taskId}`} className="ai-btn-s" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -902,6 +903,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                             {diagnosticItems.length > 0 && <FaultFilterPill active label={locale === 'zh' ? '明确报错已载入' : 'Trace errors loaded'} count={diagnosticItems.length} />}
                             <FaultFilterPill label={locale === 'zh' ? `${skillCount} Skill` : `${skillCount} skills`} />
                             <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0 }} />
+                            <AgentDebugCapabilitySheet locale={locale} />
                             <button
                                 type="button"
                                 onClick={handleNewConversation}

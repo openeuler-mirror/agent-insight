@@ -26,16 +26,17 @@ test("Hermes plugin distribution serves the first-party standard-library plugin"
 
 test("Hermes setup paths install the first-party plugin without GitHub or venv dependencies", () => {
   const files = [
-    "src/app/api/ingest/setup/route.ts",
     "src/app/api/ingest/setup/auto/route.ts",
   ]
 
   for (const file of files) {
     const source = fs.readFileSync(path.join(process.cwd(), file), "utf8")
-    assert.match(source, /api\/setup\/hermes-plugin/)
+    assert.match(source, /api\/ingest\/setup\/hermes-plugin/)
     assert.match(source, /plugins[\\/]agent_insight_hermes/)
     assert.doesNotMatch(source, /briancaffey\/hermes-otel/)
     assert.doesNotMatch(source, /opentelemetry-exporter-otlp-proto-http/)
+    assert.match(source, /hermes plugins enable agent_insight_hermes --no-allow-tool-override/)
+    assert.match(source, /\$hermesCmd\.Source plugins enable agent_insight_hermes --no-allow-tool-override/)
   }
 })
 

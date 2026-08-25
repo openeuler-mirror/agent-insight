@@ -42,15 +42,36 @@ import {
   isAgentToolPresetId,
 } from '../src/lib/engine/experiment/agent-tool-preset-evaluators';
 import {
+  RAS_DETECTION_RECOVERY_PRESET_ID,
+  isRasReliabilityPresetId,
+} from '../src/lib/engine/experiment/ras-reliability-evaluator';
+import {
+  SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+  isSkillTriggerAnalyzerId,
+} from '../src/lib/skill-workbench/trigger-evaluator';
+import {
   TEXT_PRESET_IDS,
   isTextPresetId,
 } from '../src/lib/engine/experiment/text-preset-evaluators';
+import {
+  FLUENCY_PRESET_IDS,
+  isFluencyPresetId,
+} from '../src/lib/engine/experiment/fluency-preset-evaluators';
+import {
+  HALLUCINATION_PRESET_IDS,
+  isHallucinationPresetId,
+} from '../src/lib/engine/experiment/hallucination-preset-evaluators';
 
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
  * 新增一族预置评估器时，在 evaluateOnce 里接了分发，就同步在这里登记一行。
  */
 const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids: readonly string[] }> = [
+  {
+    name: 'trigger-evaluator.ts',
+    claims: isSkillTriggerAnalyzerId,
+    ids: [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID],
+  },
   { name: 'faithful-preset-evaluators.ts', claims: isFaithfulPresetId, ids: FAITHFUL_PRESET_IDS },
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
   { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },
@@ -62,7 +83,17 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     claims: isAgentToolPresetId,
     ids: AGENT_TOOL_PRESET_IDS,
   },
+  {
+    name: 'ras-reliability-evaluator.ts',
+    claims: isRasReliabilityPresetId,
+    ids: [RAS_DETECTION_RECOVERY_PRESET_ID],
+  },
   { name: 'text-preset-evaluators.ts', claims: isTextPresetId, ids: TEXT_PRESET_IDS },
+  {
+    name: 'fluency-preset-evaluators.ts / hallucination-preset-evaluators.ts',
+    claims: (id) => isFluencyPresetId(id) || isHallucinationPresetId(id),
+    ids: [...FLUENCY_PRESET_IDS, ...HALLUCINATION_PRESET_IDS],
+  },
 ];
 
 test('预置卡 id 唯一', () => {
@@ -70,6 +101,13 @@ test('预置卡 id 唯一', () => {
   for (const card of presetEvaluators) {
     assert.ok(!seen.has(card.id), `预置卡 id 重复：${card.id}`);
     seen.add(card.id);
+  }
+});
+
+test('Agent 任务完成度与轨迹质量卡片统一展示百分制', () => {
+  for (const id of ['preset-agent-task-completion', 'preset-agent-trace-quality']) {
+    const card = presetEvaluators.find((item) => item.id === id);
+    assert.equal(card?.scoreRange, '0-100', `${id} 的前端评分范围应为 0-100`);
   }
 });
 
