@@ -169,9 +169,41 @@ class Collector:
             self._minted_roots[session_id] = (root, now)
             return root
 
+    def _remember_minted_root(self, session_id: str, root_session_id: str) -> None:
+        with self.lock:
+            self._minted_roots[session_id] = (root_session_id, time.monotonic())
+
+    def _reset_turn_state_locked(self, session_id: str, state: dict[str, Any]) -> None:
+        """Clear per-turn values when a placeholder session starts a new root."""
+        self.session_totals.pop(session_id, None)
+        self.react_steps.pop(session_id, None)
+        for key in ("agent_span_id", "last_output", "end_marker_submitted"):
+            state.pop(key, None)
+
     def _ensure_root_id(self, session_id: str) -> str:
         """Return a real root session id for *session_id*, minting one when
         the session has no root yet (console chats only emit LLM spans)."""
+        current = self._current.get()
+        if self._is_placeholder_session_id(session_id):
+            if (
+                current
+                and current.session_id == session_id
+                and not self._is_placeholder_session_id(current.root_session_id)
+            ):
+                root = current.root_session_id
+                self._remember_minted_root(session_id, root)
+            else:
+                root = self._mint_root_session_id(session_id)
+            with self.lock:
+                state = self.sessions.get(session_id)
+                if state is None:
+                    state = self._session_state(session_id)
+                previous = str(state.get("root_session_id") or "")
+                if previous and previous != root:
+                    self._reset_turn_state_locked(session_id, state)
+                state["root_session_id"] = root
+                return root
+
         with self.lock:
             state = self.sessions.get(session_id)
             root = str((state or {}).get("root_session_id") or "")
@@ -383,6 +415,7 @@ class Collector:
         model: str | None = None,
     ) -> str:
         root_id = root_session_id or session_id
+        placeholder_session = self._is_placeholder_session_id(session_id)
         parent = parent_session_id or (self.parent_session_for(session_id) if is_subagent else None)
         with self.lock:
             if parent:
@@ -393,6 +426,8 @@ class Collector:
                 # QwenPaw 真实对话不传会话 id（统一为 "unknown"）：给每个根请求
                 # 分配唯一根会话，避免所有聊天合并进同一条 trace；请求内子 span 仍共享。
                 root_id = self._new_root_session_id()
+            if placeholder_session:
+                self._remember_minted_root(session_id, root_id)
             state = self._session_state(
                 session_id,
                 {
@@ -405,6 +440,8 @@ class Collector:
                     "agent_name": agent_id or "qwenpaw",
                 },
             )
+            if placeholder_session:
+                self._reset_turn_state_locked(session_id, state)
             state["root_session_id"] = root_id
             state["agent_id"] = agent_id or state.get("agent_id") or ""
             state["root_agent_id"] = root_agent_id or state.get("root_agent_id") or ""
@@ -525,6 +562,7 @@ class Collector:
         current = self._current.get()
         sid = session_id or (current.session_id if current else "unknown")
         parent = parent_span_id or (current.span_id if current and current.session_id == sid else None)
+        self._ensure_root_id(sid)
         step = self._react_step(sid, advance=True)
         text, truncated, original_chars = self._safe_text(input)
         attrs = {
@@ -607,6 +645,7 @@ class Collector:
         current = self._current.get()
         sid = session_id or (current.session_id if current else "unknown")
         parent = parent_span_id or (current.span_id if current and current.session_id == sid else None)
+        self._ensure_root_id(sid)
         step = self._react_step(sid)
         text, truncated, original_chars = self._safe_text(tool_input)
         attrs: dict[str, Any] = {

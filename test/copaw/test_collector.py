@@ -8,13 +8,29 @@ from copaw.config import CollectorConfig
 
 
 def _spool_attributes(collector: Collector) -> list[dict]:
+    return [span["attributes"] for span in _spool_spans(collector)]
+
+
+def _spool_spans(collector: Collector) -> list[dict]:
     spool_dir = Path(collector.config.spool_dir)
-    result: list[dict] = []
+    spans: list[dict] = []
     for path in spool_dir.rglob("*.json"):
         payload = json.loads(path.read_text(encoding="utf-8"))
+        resource_attrs = {
+            item["key"]: item["value"]
+            for item in payload["resourceSpans"][0]["resource"].get("attributes", [])
+        }
         for span in payload["resourceSpans"][0]["scopeSpans"][0]["spans"]:
-            result.append({item["key"]: item["value"] for item in span["attributes"]})
-    return result
+            spans.append(
+                {
+                    "trace_id": span["traceId"],
+                    "name": span["name"],
+                    "start_ns": int(span["startTimeUnixNano"]),
+                    "attributes": {item["key"]: item["value"] for item in span["attributes"]},
+                    "resource_attributes": resource_attrs,
+                }
+            )
+    return sorted(spans, key=lambda span: span["start_ns"])
 
 
 class CollectorTest(unittest.TestCase):
@@ -173,6 +189,59 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual([int(v["qwenpaw.react.step"]) for v in llms], [1, 2])
         self.assertEqual(int(tools[0]["qwenpaw.react.step"]), 1)
 
+    def test_placeholder_agent_turns_do_not_share_state(self):
+        """Each QwenPaw request with placeholder session id gets a fresh root."""
+        self.collector.start_agent(session_id="unknown", root_session_id="unknown", query="q1")
+        llm1 = self.collector.start_llm(model="qwen3", input="q1")
+        self.collector.finish_llm(
+            llm1,
+            output="a1",
+            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+        )
+        self.collector.finish_agent_for_session("unknown")
+        self.collector.on_session_end("unknown")
+
+        self.collector.start_agent(session_id="unknown", root_session_id="unknown", query="q2")
+        llm2 = self.collector.start_llm(model="qwen3", input="q2")
+        self.collector.finish_llm(
+            llm2,
+            output="a2",
+            usage={"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
+        )
+        self.collector.finish_agent_for_session("unknown")
+        self.collector.on_session_end("unknown")
+
+        values = [self._values(attrs) for attrs in _spool_attributes(self.collector)]
+        agents = [v for v in values if v.get("gen_ai.span.kind") == "AGENT"]
+        markers = [v for v in values if v.get("qwenpaw.session.end") is True]
+
+        self.assertEqual(len(agents), 2)
+        self.assertEqual(len(markers), 2)
+        self.assertNotEqual(agents[0]["qwenpaw.root_session_id"], agents[1]["qwenpaw.root_session_id"])
+        self.assertEqual([int(v["llm.token_count.total"]) for v in agents], [3, 4])
+
+    def test_llm_only_placeholder_session_rotates_after_reuse_window(self):
+        """Fallback LLM-only capture must not pin all chats to one trace."""
+        llm1 = self.collector.start_llm(model="qwen3", input="q1")
+        self.collector.finish_llm(llm1, output="a1")
+        first_root = self.collector.sessions["unknown"]["root_session_id"]
+        self.collector._minted_roots["unknown"] = (first_root, self.collector._minted_roots["unknown"][1] - 31.0)
+
+        llm2 = self.collector.start_llm(model="qwen3", input="q2")
+        self.collector.finish_llm(llm2, output="a2")
+
+        spans = _spool_spans(self.collector)
+        llm_roots = [
+            self._values(span["resource_attributes"])["session.id"]
+            for span in spans
+            if span["name"].startswith("llm.")
+        ]
+        trace_ids = [span["trace_id"] for span in spans if span["name"].startswith("llm.")]
+
+        self.assertEqual(len(llm_roots), 2)
+        self.assertNotEqual(llm_roots[0], llm_roots[1])
+        self.assertNotEqual(trace_ids[0], trace_ids[1])
+
     def test_content_truncated_at_2000_chars(self):
         """AC16: prompt/response over 2000 chars is truncated."""
         self.collector.start_agent(
@@ -267,5 +336,3 @@ class CollectorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
