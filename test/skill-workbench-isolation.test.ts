@@ -159,6 +159,19 @@ test('新建或打开未绑定 Skill 的会话时，右栏保持空状态', () =
   assert.doesNotMatch(shell, /loadAssetCatalog\(user\)\.then\(\(items\)[\s\S]*selectFormalAsset\(items\[0\]\.name/);
 });
 
+test('历史会话使用顶部按钮与临时浮层，并保留明确的文字入口', () => {
+  const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
+  assert.match(shell, /aria-expanded=\{historyOpen\}[\s\S]*aria-controls="skill-workbench-history-panel"/);
+  assert.match(shell, /<History className="size-3\.5" \/>[\s\S]*历史会话/);
+  assert.match(shell, /<Plus className="size-3\.5" \/>[\s\S]*新对话/);
+  assert.match(shell, /absolute right-3 top-3 z-30[\s\S]*rounded-lg[\s\S]*shadow-lg/);
+  assert.match(shell, /event\.key === 'Escape'[\s\S]*updateHistoryOpen\(false\)/);
+  assert.doesNotMatch(shell, /skill-workbench-history-open|HISTORY_DOCK_MIN_WIDTH|historyOverlay/);
+  assert.match(shell, /<TruncateText className="min-w-0 flex-1">\{session\.skillName\}<\/TruncateText>/);
+  assert.match(shell, /<span className="shrink-0">· v\{session\.workVersion \?\? 0\}<\/span>/);
+  assert.doesNotMatch(shell, /max-h-32 space-y-1 overflow-y-auto/);
+});
+
 test('正式 Skill 评估与实验按资产运行，不创建或要求工作台会话', () => {
   const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
   const evaluationRoute = readFileSync('src/app/api/skill-workbench/skills/[name]/versions/[version]/evaluations/route.ts', 'utf8');

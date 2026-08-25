@@ -21,6 +21,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import type { SkillWorkbenchActiveView } from '@/lib/skill-workbench/domain';
 import { cn } from '@/lib/utils';
+import { TruncateText } from '@/components/text/TruncateText';
 import { SkillDetailWorkspace } from './SkillDetailWorkspace';
 import { SkillManagementPicker } from './SkillManagementPicker';
 import { OptimizationRecordsPanel, type OptimizationRecordView } from './OptimizationRecordsPanel';
@@ -114,6 +115,7 @@ export function SkillWorkbenchShell() {
   const [optimizationRecordsLoading, setOptimizationRecordsLoading] = useState(false);
   const [selectedOptimizationRecordId, setSelectedOptimizationRecordId] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<SkillWorkbenchActiveView>('detail');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -156,6 +158,19 @@ export function SkillWorkbenchShell() {
       setCopilotWidth(clampCopilotWidth(stored, availableWidth));
     }
   }, []);
+
+  const updateHistoryOpen = useCallback((open: boolean) => {
+    setHistoryOpen(open);
+  }, []);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') updateHistoryOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [historyOpen, updateHistoryOpen]);
 
   const resizeCopilot = useCallback((clientX: number) => {
     const start = resizeStartRef.current;
@@ -355,6 +370,7 @@ export function SkillWorkbenchShell() {
     if (!next || next.skillName) return next;
     clearAssetSelection();
     setCurrentView('detail');
+    updateHistoryOpen(false);
     return next;
   };
 
@@ -834,6 +850,7 @@ export function SkillWorkbenchShell() {
       if (session.skillName && session.workVersion !== null) await showSessionAsset(session);
       else clearAssetSelection();
       setCurrentView('detail');
+      updateHistoryOpen(false);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '加载会话失败');
     }
@@ -872,167 +889,213 @@ export function SkillWorkbenchShell() {
   return (
     <div ref={workbenchRef} className="flex h-full min-h-0 overflow-hidden bg-background">
       <aside
-        className="flex min-w-[320px] shrink-0 flex-col bg-card"
+        className="relative flex min-w-[320px] shrink-0 flex-col bg-card"
         style={{ width: copilotWidth, flexBasis: copilotWidth }}
       >
-        <div className="border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2">
+        <div className="relative z-30 flex h-14 shrink-0 items-center gap-1.5 border-b border-border px-3">
+          <div className="flex min-w-0 items-center gap-2">
             <MessageSquareText className="size-4 text-primary" />
-            <h1 className="text-sm font-semibold text-foreground">Skill Copilot</h1>
+            <h1 className="truncate text-sm font-semibold text-foreground">Skill Copilot</h1>
             <span className="size-1.5 rounded-full bg-success" />
-            <span className="flex-1" />
-            <button
-              type="button"
-              title="新对话"
-              aria-label="新对话"
-              disabled={!user || creating}
-              onClick={() => void createBlankSession()}
-              className="inline-flex size-8 items-center justify-center rounded-md border border-border text-foreground-secondary hover:bg-background-secondary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Plus className="size-4" />
-            </button>
           </div>
-          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-background-secondary px-3 py-2.5">
-            <span className="flex size-8 items-center justify-center rounded-md bg-primary-subtle text-primary">◇</span>
-            <span className="min-w-0">
-              <b className="block truncate text-xs text-foreground">{sessionContextLabel}</b>
-              <small className="text-[11px] text-foreground-muted">{sessionSubtitle}</small>
-            </span>
-          </div>
-        </div>
-
-        <div className="border-b border-border px-4 py-2">
-          <div className="mb-1 flex items-center gap-2 text-[11px] font-medium text-foreground-muted">
+          <span className="flex-1" />
+          <button
+            type="button"
+            aria-expanded={historyOpen}
+            aria-controls="skill-workbench-history-panel"
+            onClick={() => updateHistoryOpen(!historyOpen)}
+            className={cn(
+              'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 text-[11px] font-medium text-foreground-secondary hover:bg-background-secondary',
+              historyOpen && 'border-primary text-primary bg-primary-subtle',
+            )}
+          >
             <History className="size-3.5" />
             历史会话
-          </div>
-          <div className="max-h-32 space-y-1 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
-            {sessions.map((session) => (
-              <button
-                type="button"
-                key={session.id}
-                onClick={() => void openHistorySession(session.id)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs',
-                  active?.id === session.id
-                    ? 'bg-primary-subtle text-primary'
-                    : 'text-foreground-secondary hover:bg-background-secondary',
-                )}
-              >
-                <Clock3 className="size-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                <span className="text-[10px] text-foreground-muted">
-                  {session.skillName ? `v${session.workVersion ?? 0}` : '空闲'}
-                </span>
-              </button>
-            ))}
-            {!loading && sessions.length === 0 && (
-              <div className="px-2 py-2 text-[11px] text-foreground-muted">暂无历史会话</div>
-            )}
-          </div>
+          </button>
+          <button
+            type="button"
+            aria-label="新对话"
+            disabled={!user || creating}
+            onClick={() => {
+              updateHistoryOpen(false);
+              void createBlankSession();
+            }}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 text-[11px] font-medium text-foreground-secondary hover:bg-background-secondary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus className="size-3.5" />
+            新对话
+          </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
-          {error && (
-            <div className="mb-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-xs text-error">
-              {error}
-            </div>
+        <div className="relative flex min-h-0 flex-1">
+          {historyOpen && (
+            <button
+              type="button"
+              aria-label="关闭历史会话"
+              onClick={() => updateHistoryOpen(false)}
+              className="absolute inset-0 z-20 bg-foreground/5"
+            />
           )}
-          {!active ? (
-            <div className="m-auto max-w-[270px] text-center">
-              <Sparkles className="mx-auto mb-3 size-6 text-primary" />
-              <h2 className="text-sm font-semibold text-foreground">创建一个工作台会话</h2>
-              <p className="mt-1 text-xs leading-5 text-foreground-muted">会话会保存工作 Skill、版本、页签和后续任务状态。</p>
-              <button
-                type="button"
-                onClick={() => void createBlankSession()}
-                disabled={!user || creating}
-                className="mt-4 inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50"
-              >
-                <Plus className="size-3.5" />
-                新建会话
-              </button>
-            </div>
-          ) : active.optSessionId && active.skillName && active.workVersion !== null ? (
-            <OptimizationConversation
-              user={user || ''}
-              workbenchSessionId={active.id}
-              generatorSessionId={active.generatorSessionId}
-              optSessionId={active.optSessionId}
-              skillName={active.skillName}
-              baseVersion={active.workVersion}
-              baselineFiles={optimizationBaselineOverride || active.files || {}}
-              issues={optimizationIssueOverride || evaluationOverview?.evaluation?.issues || []}
-              autoStart={autoStartOptimization}
-              useMergePlan={useOptimizationPlan}
-              backgroundRunning={active.tasks.some((task) => task.type === 'optimization' && ['pending', 'running'].includes(task.status))}
-              tasks={active.tasks.filter((task) => task.type === 'optimization')}
-              records={active.optimizations}
-              publishing={publishingCandidateId !== null}
-              quickActions={workflowActions}
-              onViewRecords={(record) => void openOptimizationRecord(record)}
-              onPublish={(record) => void publishOptimization(record)}
-              onRepair={(record) => void startOptimization({ autoRun: true, record })}
-              onAutoStartConsumed={() => {
-                setAutoStartOptimization(false);
-                setUseOptimizationPlan(false);
-                setOptimizationIssueOverride(null);
-                setOptimizationBaselineOverride(null);
-              }}
-              onSynced={acceptOptimizationSession}
-              onError={reportError}
-            />
-          ) : active.generatorSessionId ? (
-            <GenerationConversation
-              user={user || ''}
-              workbenchSessionId={active.id}
-              generatorSessionId={active.generatorSessionId}
-              backgroundRunning={active.tasks.some((task) => task.type === 'generation' && ['pending', 'running'].includes(task.status))}
-              quickActions={workflowActions}
-              onRunningChange={setGenerationRunning}
-              onSynced={acceptGeneratedSession}
-              onError={reportError}
-            />
-          ) : !active.skillName ? (
-            <div>
-              <div className="rounded-lg bg-background-secondary px-3 py-3 text-xs leading-5 text-foreground-secondary">
-                <b className="text-foreground">你好，我可以帮你创建、验证和改进 Skill。</b>
-                <br />请选择一种开始方式，后续评估、实验、优化和发布都在同一会话中完成。
+          {historyOpen && (
+            <nav
+              id="skill-workbench-history-panel"
+              aria-label="历史会话"
+              className="absolute right-3 top-3 z-30 flex max-h-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg"
+              style={{ width: 'min(22rem, calc(100% - 1.5rem))' }}
+            >
+              <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3 text-xs font-semibold text-foreground">
+                <History className="size-3.5 text-foreground-secondary" />
+                历史会话
+                <span className="ml-auto text-[10px] font-normal text-foreground-muted">{sessions.length} 个</span>
               </div>
-              <div className="mt-3 space-y-2">
-                <StarterButton
-                  icon={startingGeneration ? Loader2 : WandSparkles}
-                  label={startingGeneration ? '正在准备生成会话…' : '生成一个 Skill'}
-                  disabled={startingGeneration}
-                  onClick={() => void startGeneration()}
-                />
-                <StarterButton
-                  icon={uploading ? Loader2 : FileUp}
-                  label={uploading ? '正在解析上传内容…' : '上传已有 Skill'}
-                  disabled={uploading}
-                  onClick={() => uploadInputRef.current?.click()}
-                />
-                <StarterButton
-                  icon={FolderSearch}
-                  label="从 Skill 管理中心选择"
-                  onClick={() => {
-                    setPickerPurpose('bind');
-                    setPickerOpen(true);
+              <div className="px-3 pb-1 pt-2 text-[10px] font-medium text-foreground-muted">最近</div>
+              <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2" style={{ scrollbarGutter: 'stable' }}>
+                {sessions.map((session) => (
+                  <button
+                    type="button"
+                    key={session.id}
+                    onClick={() => void openHistorySession(session.id)}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs',
+                      active?.id === session.id
+                        ? 'bg-primary-subtle text-primary'
+                        : 'text-foreground-secondary hover:bg-background-secondary',
+                    )}
+                  >
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-background-secondary text-foreground-muted">
+                      <Clock3 className="size-3.5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{session.title}</span>
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-foreground-muted">
+                        {session.skillName ? (
+                          <>
+                            <TruncateText className="min-w-0 flex-1">{session.skillName}</TruncateText>
+                            <span className="shrink-0">· v{session.workVersion ?? 0}</span>
+                          </>
+                        ) : '未绑定 Skill'}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+                {!loading && sessions.length === 0 && (
+                  <div className="px-2 py-3 text-[11px] text-foreground-muted">暂无历史会话</div>
+                )}
+              </div>
+            </nav>
+          )}
+
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="mx-4 mt-3 flex shrink-0 items-center gap-3 rounded-lg border border-border bg-background-secondary px-3 py-2.5">
+              <span className="flex size-8 items-center justify-center rounded-md bg-primary-subtle text-primary">◇</span>
+              <span className="min-w-0">
+                <b className="block truncate text-xs text-foreground">{sessionContextLabel}</b>
+                <small className="text-[11px] text-foreground-muted">{sessionSubtitle}</small>
+              </span>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
+              {error && (
+                <div className="mb-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-xs text-error">
+                  {error}
+                </div>
+              )}
+              {!active ? (
+                <div className="m-auto max-w-[270px] text-center">
+                  <Sparkles className="mx-auto mb-3 size-6 text-primary" />
+                  <h2 className="text-sm font-semibold text-foreground">创建一个工作台会话</h2>
+                  <p className="mt-1 text-xs leading-5 text-foreground-muted">会话会保存工作 Skill、版本、页签和后续任务状态。</p>
+                  <button
+                    type="button"
+                    onClick={() => void createBlankSession()}
+                    disabled={!user || creating}
+                    className="mt-4 inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                  >
+                    <Plus className="size-3.5" />
+                    新建会话
+                  </button>
+                </div>
+              ) : active.optSessionId && active.skillName && active.workVersion !== null ? (
+                <OptimizationConversation
+                  user={user || ''}
+                  workbenchSessionId={active.id}
+                  generatorSessionId={active.generatorSessionId}
+                  optSessionId={active.optSessionId}
+                  skillName={active.skillName}
+                  baseVersion={active.workVersion}
+                  baselineFiles={optimizationBaselineOverride || active.files || {}}
+                  issues={optimizationIssueOverride || evaluationOverview?.evaluation?.issues || []}
+                  autoStart={autoStartOptimization}
+                  useMergePlan={useOptimizationPlan}
+                  backgroundRunning={active.tasks.some((task) => task.type === 'optimization' && ['pending', 'running'].includes(task.status))}
+                  tasks={active.tasks.filter((task) => task.type === 'optimization')}
+                  records={active.optimizations}
+                  publishing={publishingCandidateId !== null}
+                  quickActions={workflowActions}
+                  onViewRecords={(record) => void openOptimizationRecord(record)}
+                  onPublish={(record) => void publishOptimization(record)}
+                  onRepair={(record) => void startOptimization({ autoRun: true, record })}
+                  onAutoStartConsumed={() => {
+                    setAutoStartOptimization(false);
+                    setUseOptimizationPlan(false);
+                    setOptimizationIssueOverride(null);
+                    setOptimizationBaselineOverride(null);
                   }}
+                  onSynced={acceptOptimizationSession}
+                  onError={reportError}
                 />
-              </div>
+              ) : active.generatorSessionId ? (
+                <GenerationConversation
+                  user={user || ''}
+                  workbenchSessionId={active.id}
+                  generatorSessionId={active.generatorSessionId}
+                  backgroundRunning={active.tasks.some((task) => task.type === 'generation' && ['pending', 'running'].includes(task.status))}
+                  quickActions={workflowActions}
+                  onRunningChange={setGenerationRunning}
+                  onSynced={acceptGeneratedSession}
+                  onError={reportError}
+                />
+              ) : !active.skillName ? (
+                <div>
+                  <div className="rounded-lg bg-background-secondary px-3 py-3 text-xs leading-5 text-foreground-secondary">
+                    <b className="text-foreground">你好，我可以帮你创建、验证和改进 Skill。</b>
+                    <br />请选择一种开始方式，后续评估、实验、优化和发布都在同一会话中完成。
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <StarterButton
+                      icon={startingGeneration ? Loader2 : WandSparkles}
+                      label={startingGeneration ? '正在准备生成会话…' : '生成一个 Skill'}
+                      disabled={startingGeneration}
+                      onClick={() => void startGeneration()}
+                    />
+                    <StarterButton
+                      icon={uploading ? Loader2 : FileUp}
+                      label={uploading ? '正在解析上传内容…' : '上传已有 Skill'}
+                      disabled={uploading}
+                      onClick={() => uploadInputRef.current?.click()}
+                    />
+                    <StarterButton
+                      icon={FolderSearch}
+                      label="从 Skill 管理中心选择"
+                      onClick={() => {
+                        setPickerPurpose('bind');
+                        setPickerOpen(true);
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <ActionButton icon={CheckCircle2} label="Skill 评估" onClick={() => void switchView('evaluation')} />
+                  <ActionButton icon={FlaskConical} label="Skill 实验" onClick={() => void switchView('experiment')} />
+                  <ActionButton
+                    icon={startingOptimization ? Loader2 : WandSparkles}
+                    label={startingOptimization ? '正在准备优化会话…' : 'Skill 优化'}
+                    onClick={() => void startOptimization({ autoRun: true })}
+                  />
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="space-y-2">
-              <ActionButton icon={CheckCircle2} label="Skill 评估" onClick={() => void switchView('evaluation')} />
-              <ActionButton icon={FlaskConical} label="Skill 实验" onClick={() => void switchView('experiment')} />
-              <ActionButton
-                icon={startingOptimization ? Loader2 : WandSparkles}
-                label={startingOptimization ? '正在准备优化会话…' : 'Skill 优化'}
-                onClick={() => void startOptimization({ autoRun: true })}
-              />
-            </div>
-          )}
+          </div>
         </div>
       </aside>
       <div

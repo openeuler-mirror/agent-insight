@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `7bb87d9fddf5f86365905e8fbbeb0a6ffaaaebaf` (`7bb87d9f`) |
-| Branch | `master` |
-| Date | 2026-08-24 17:44:28 +0800 |
-| Author | openeuler-ci-bot |
-| Subject | `!335 重构skill生成、skill优化和skill评测` |
-| Working tree overlay | 当前工作树在该快照之上把 FI Python 安装收敛为版本化 managed venv：系统 Python 只创建 venv，FI pip/CLI/xiaoO Hook 使用固化解释器，并补齐 launchd bootout/bootstrap 竞态重试与真实状态校验。 |
+| Commit | `a2c8c6f15bb69414d8340b7cc78877a0aea80646` (`a2c8c6f`) |
+| Branch | `new-dev-8-25-after` |
+| Date | 2026-08-25 14:33:26 +0800 |
+| Author | mintuyang |
+| Subject | `修复skill新建会话右边不是白屏的问题` |
+| Working tree overlay | 当前工作树在该快照之上把 FI Python 安装收敛为版本化 managed venv：系统 Python 只创建 venv，FI pip/CLI/xiaoO Hook 使用固化解释器，并补齐 launchd bootout/bootstrap 竞态重试与真实状态校验；Skill 工作台将历史会话改为带明确文字入口的顶栏临时浮层。 |
 
-**如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a2c8c6f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
