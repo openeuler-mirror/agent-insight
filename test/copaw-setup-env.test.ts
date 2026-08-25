@@ -8,7 +8,7 @@ const routes: { name: string; get: (request: Request) => Promise<Response>; url:
   {
     name: 'setup',
     get: getSetup,
-    url: 'http://localhost/api/ingest/setup?key=test-key',
+    url: 'http://localhost/api/ingest/setup?nokey=1',
   },
   {
     name: 'auto setup',
