@@ -166,8 +166,50 @@ describe('幻觉检测预置评估器', () => {
       );
       const md = (output.evidence as { md?: string } | undefined)?.md ?? '';
       assert.match(md, /幻觉占比/);
-      assert.match(md, /quote 总字数/);
+      assert.match(md, /幻觉引文覆盖字符数/);
       assert.match(md, /总分/);
+    });
+
+    it('多条幻觉引用同一片段（重叠）→ 覆盖并集计数，占比不超过 100%', () => {
+      const answer = '根据检索到的资料，该产品定价为 100 元，产品于 2024 年发布，公司成立于 2010 年，创始人是张伟。';
+      const items: HallucinationFinding[] = [
+        { type: 'entity', severity: 'light', quote: '创始人是张伟', reason: '无法核实' },
+        { type: 'numerical', severity: 'light', quote: '定价为 100 元，产品于 2024 年发布，公司成立于 2010 年', reason: '无法核实' },
+        { type: 'logic_factual', severity: 'light', quote: '该产品定价为 100 元，产品于 2024 年发布，公司成立于 2010 年，创始人是张伟', reason: '无法核实' },
+      ];
+      const output = buildHallucinationOutput({ hallucinations: items, catastrophic: false, confidence: 0.7 }, answer);
+      const ratioPoint = output.points?.find((p) => p.label === '幻觉严重程度与占比');
+      const md = evidenceMd(ratioPoint);
+      const m = md.match(/幻觉占比 (\d+(?:\.\d+)?)%/);
+      assert.ok(m, `占比缺失：${md}`);
+      assert.ok(Number(m![1]) <= 100, `占比应 ≤100%，实际 ${m![1]}%`);
+      assert.equal(typeof output.score, 'number');
+      assert.ok((output.score ?? 0) >= 0);
+    });
+
+    it('quote 在回答中定位不到（乱引兜底）→ 不 NaN、占比封顶 100%', () => {
+      const output = buildHallucinationOutput(
+        { hallucinations: [{ type: 'entity', severity: 'light', quote: '一段回答中不存在的引用内容', reason: '乱引' }], catastrophic: false, confidence: 0.5 },
+        '短回答。',
+      );
+      const ratioPoint = output.points?.find((p) => p.label === '幻觉严重程度与占比');
+      const md = evidenceMd(ratioPoint);
+      const m = md.match(/幻觉占比 (\d+(?:\.\d+)?)%/);
+      assert.ok(m);
+      assert.ok(Number(m![1]) <= 100);
+      assert.equal(typeof output.score, 'number');
+      assert.ok((output.score ?? 0) >= 0);
+    });
+
+    it('互不重叠的多条 quote → 覆盖并集与求和等价（维持原口径）', () => {
+      const answer = '据虚拟研究院 2022 年报告，约三成团队采用了新框架，其余团队仍沿用旧方案。';
+      const items: HallucinationFinding[] = [
+        { type: 'citation', severity: 'light', quote: '据虚拟研究院 2022 年报告', reason: 'r' },
+        { type: 'numerical', severity: 'light', quote: '约三成', reason: 'r' },
+      ];
+      const output = buildHallucinationOutput({ hallucinations: items, catastrophic: false, confidence: 0.7 }, answer);
+      // citation light 15 + numerical light 10 + 占比约 17/38≈45%（重度）30 = 55 扣 → 45
+      assert.equal(output.score, 45);
     });
   });
 

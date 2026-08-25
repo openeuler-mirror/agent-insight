@@ -124,14 +124,50 @@ function ratioDeduction(ratio: number): number {
   return PROPORTION_DEDUCTIONS[proportionTier(ratio)];
 }
 
-function quotedChars(items: HallucinationFinding[]): number {
-  return items.reduce((sum, item) => sum + item.quote.length, 0);
+/**
+ * 幻觉覆盖字符数：取各条 quote 在回答中位置的【并集】长度（重叠引用不重复计数）。
+ * judge 引用回答中定位不到的内容时按 quote 长度兜底计入一次；结果封顶回答总长。
+ */
+function quotedCoverage(items: HallucinationFinding[], answer: string): number {
+  if (items.length === 0 || answer.length === 0) return 0;
+  const intervals: Array<[number, number]> = [];
+  let offlineLength = 0;
+  for (const item of items) {
+    const q = item.quote;
+    if (!q) continue;
+    let from = 0;
+    let foundAny = false;
+    while (from <= answer.length - q.length) {
+      const pos = answer.indexOf(q, from);
+      if (pos === -1) break;
+      intervals.push([pos, pos + q.length]);
+      foundAny = true;
+      from = pos + 1;
+    }
+    if (!foundAny) offlineLength += q.length;
+  }
+  if (intervals.length === 0) return Math.min(offlineLength, answer.length);
+  intervals.sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let [start, end] = intervals[0];
+  for (const [s, e] of intervals.slice(1)) {
+    if (s <= end) end = Math.max(end, e);
+    else { total += end - start; start = s; end = e; }
+  }
+  total += end - start;
+  return Math.min(answer.length, total + offlineLength);
+}
+
+/** 幻觉占比 = 覆盖字符数 ÷ 回答总字符数（0~100%，多 quote 重叠时按并集，不超 100%）。 */
+function hallucinationRatio(items: HallucinationFinding[], answer: string): number {
+  if (items.length === 0 || answer.length === 0) return 0;
+  return Math.min(1, quotedCoverage(items, answer) / answer.length);
 }
 
 /** 有幻觉才做占比加权——无幻觉时占比恒为 0，直接返回 0，避免凭空扣 5 分 */
-function hallucinationRatioDeduction(items: HallucinationFinding[], answerLength: number): number {
-  if (items.length === 0 || answerLength === 0) return 0;
-  return ratioDeduction(quotedChars(items) / answerLength);
+function hallucinationRatioDeduction(items: HallucinationFinding[], answer: string): number {
+  if (items.length === 0 || answer.length === 0) return 0;
+  return ratioDeduction(hallucinationRatio(items, answer));
 }
 
 // ── 纯函数计分与输出组装 ────────────────────────────────────────────────────
@@ -154,7 +190,7 @@ function buildSummary(items: HallucinationFinding[]): string {
   return clipSummary(text);
 }
 
-function buildPoints(items: HallucinationFinding[], answerLength: number): EvalPoint[] {
+function buildPoints(items: HallucinationFinding[], answer: string): EvalPoint[] {
   const points = HALLUCINATION_DIMENSIONS.map(({ type, label }) => {
     const dimItems = items.filter((item) => item.type === type);
     const deduction = dimItems.reduce(
@@ -178,8 +214,8 @@ function buildPoints(items: HallucinationFinding[], answerLength: number): EvalP
   });
   // 第 5 维「幻觉严重程度与占比」：需求五维之一，占比加权扣分独立成点
   const severeCount = items.filter((item) => item.severity === 'severe').length;
-  const ratio = items.length > 0 && answerLength > 0 ? quotedChars(items) / answerLength : 0;
-  const ratioDeduct = hallucinationRatioDeduction(items, answerLength);
+  const ratio = hallucinationRatio(items, answer);
+  const ratioDeduct = hallucinationRatioDeduction(items, answer);
   const ratioPoint: EvalPoint = {
     label: '幻觉严重程度与占比',
     score: Math.max(0, 100 - ratioDeduct),
@@ -188,7 +224,7 @@ function buildPoints(items: HallucinationFinding[], answerLength: number): EvalP
   ratioPoint.evidence = items.length === 0
     ? { md: '✅ 无幻觉，占比 0%，无加权扣分' }
     : {
-      md: `幻觉占比 ${Math.round(ratio * 1000) / 10}%（${proportionTier(ratio)}）（quote 总字数 ÷ 回答总字数）\n`
+      md: `幻觉占比 ${Math.round(ratio * 1000) / 10}%（${proportionTier(ratio)}）（幻觉引文覆盖字符数 ÷ 回答总字数）\n`
         + `- 轻度 ${items.length - severeCount} 处 · 重度 ${severeCount} 处\n`
         + `- 占比加权扣分：${ratioDeduct} 分`,
     };
@@ -203,7 +239,7 @@ function buildReport(
   catastrophic: boolean,
   confidence: number,
 ): string {
-  const ratio = items.length > 0 && answer.length > 0 ? quotedChars(items) / answer.length : 0;
+  const ratio = hallucinationRatio(items, answer);
   const severeCount = items.filter((item) => item.severity === 'severe').length;
   const tierNote = items.length > 0 ? `（${proportionTier(ratio)}）` : '';
   const lines = [
@@ -211,8 +247,8 @@ function buildReport(
     '',
     `- 回答字数：${answer.length}`,
     `- 幻觉条数：${items.length}（轻度 ${items.length - severeCount} · 重度 ${severeCount}）`,
-    `- 幻觉占比：${Math.round(ratio * 1000) / 10}%${tierNote}（quote 总字数 ÷ 回答总字数）`,
-    `- 占比加权扣分：${catastrophic ? '—（catastrophic 直接判 0 分）' : hallucinationRatioDeduction(items, answer.length)}`,
+    `- 幻觉占比：${Math.round(ratio * 1000) / 10}%${tierNote}（幻觉引文覆盖字符数 ÷ 回答总字数）`,
+    `- 占比加权扣分：${catastrophic ? '—（catastrophic 直接判 0 分）' : hallucinationRatioDeduction(items, answer)}`,
     `- catastrophic：${catastrophic ? '是' : '否'}`,
     `- 判定置信度：${confidence}`,
     `- 总分：${score}`,
@@ -247,7 +283,7 @@ export function buildHallucinationOutput(
     return normalizeEvaluatorOutput({
       score: 0,
       summary: '回答核心内容整体凭空虚构，幻觉问题致命，计 0 分。',
-      points: buildPoints(items, answer.length),
+      points: buildPoints(items, answer),
       evidence: { md: buildReport(items, answer, 0, true, confidence) },
     });
   }
@@ -255,12 +291,12 @@ export function buildHallucinationOutput(
     (sum, item) => sum + HALLUCINATION_DEDUCTIONS[item.type][item.severity],
     0,
   );
-  const ratioDeduct = hallucinationRatioDeduction(items, answer.length);
+  const ratioDeduct = hallucinationRatioDeduction(items, answer);
   const score = Math.max(0, Math.round((100 - deduction - ratioDeduct) * 10) / 10);
   return normalizeEvaluatorOutput({
     score,
     summary: buildSummary(items),
-    points: buildPoints(items, answer.length),
+    points: buildPoints(items, answer),
     evidence: { md: buildReport(items, answer, score, false, confidence) },
   });
 }

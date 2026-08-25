@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `90a534a5ff3108eb2ad3e5a980861d4a0f754d96` (`90a534a5`) |
+| Commit | `c5e3d579ddee8bac9b10f4e9236768b1f99de182` (`c5e3d579`) |
 | Branch | `feat/fluency-hallucination-graders` |
-| Date | 2026-08-26 +0800 |
-| Author | win11 |
-| Subject | `Merge remote-tracking branch 'origin/master' into feat/fluency-hallucination-graders`（文本质量评估器族：新增流畅度/幻觉检测，对齐 master 文本评估器框架） |
-| Working tree overlay | 该快照相对 `7bb87d9f` 同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；并新增文本流畅度/幻觉检测预置评估器（独立 Judge 通道 + 确定性计分）。 |
+| Date | 2026-08-26 02:48:29 +0800 |
+| Author | xiaopeng01-2026 |
+| Subject | `refactor(eval): 复用 master 专项 Judge 通道，移除族内修复链` |
+| Working tree overlay | 该快照相对 `7bb87d9f` 同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；并新增文本流畅度/幻觉检测预置评估器（复用 specialized-evaluator-common 的 `invokeSpecializedJudge` 通道 + 确定性计分）。 |
 
 **如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
