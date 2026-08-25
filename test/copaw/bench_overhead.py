@@ -1,7 +1,7 @@
 """Overhead benchmark for the CoPaw collector (AC24-AC26).
 
 Usage:
-    python benchmarks/bench_overhead.py [--iterations 20000]
+    python test/copaw/bench_overhead.py [--iterations 20000]
 
 Measures:
 * per-span start/finish overhead (should be << 5% of a typical LLM call)
@@ -16,8 +16,8 @@ import time
 import tracemalloc
 from pathlib import Path
 
-# Allow running directly: python benchmarks/bench_overhead.py
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Allow running directly from the repository root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "copaw-collector"))
 
 from copaw.collector import Collector
 from copaw.config import CollectorConfig

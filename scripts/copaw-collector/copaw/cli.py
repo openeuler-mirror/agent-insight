@@ -45,7 +45,6 @@ def _copy_plugin(target: Path) -> None:
         "*.pyc",
         ".pytest_cache",
         "tests",
-        "benchmarks",
         ".git",
     )
     if target.exists():
