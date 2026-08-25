@@ -52,6 +52,26 @@ import {
 
 const SESSION_ID = "qoder-session-1"
 
+test("Qoder adapter does not claim QwenPaw OTLP telemetry", () => {
+  const adapter = getOtelTraceAdapter([{
+    receivedAt: "2026-08-01T00:00:00.000Z",
+    sessionId: "qwenpaw-session",
+    traceId: "qwenpaw-trace",
+    spanId: "qwenpaw-root",
+    name: "qwenpaw.agent",
+    kind: "agent",
+    serviceName: "qwenpaw",
+    startTimeMs: 1_700_000_000_000,
+    latencyMs: 10,
+    attributes: {
+      "agent.insight.framework": "qwenpaw",
+      "qwenpaw.session_id": "qwenpaw-session",
+    },
+  } as OtelTraceEvent])
+
+  assert.equal(adapter?.id, "qwenpaw")
+})
+
 function testProcessIsAlive(pid: number | undefined): boolean {
   if (!Number.isInteger(pid) || Number(pid) <= 0) return false
   try {

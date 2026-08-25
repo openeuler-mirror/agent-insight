@@ -300,8 +300,9 @@ test("install guide appends Qoder to the existing framework choices", () => {
   assert.deepEqual(options, [
     "opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen",
     "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex",
-    "deepseek-harness",
+    "deepseek-harness", "copaw",
   ])
+  assert.match(source, /CoPaw \(QwenPaw\)/)
 })
 
 test("curl setup appends Qoder without changing existing framework entries", async () => {
@@ -311,7 +312,7 @@ test("curl setup appends Qoder without changing existing framework entries", asy
     assert.deepEqual(frameworkValues(script), [
       "opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen",
       "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
-      "deepseek-harness",
+      "deepseek-harness", "copaw",
     ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
@@ -331,6 +332,7 @@ test("curl setup appends Qoder without changing existing framework entries", asy
     assert.match(script, /JetBrains package path/)
     assert.match(script, /Install from VSIX/)
     assert.match(script, /Install Plugin from Disk/)
+    assert.match(script, /CoPaw \(QwenPaw\)/)
   }
 })
 
@@ -341,7 +343,7 @@ test("local npm auto setup appends Qoder without changing existing framework ent
     assert.deepEqual(frameworkValues(script), [
       "opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen",
       "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode",
-      "deepseek-harness",
+      "deepseek-harness", "copaw",
     ])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
@@ -361,6 +363,7 @@ test("local npm auto setup appends Qoder without changing existing framework ent
     assert.match(script, /JetBrains package path/)
     assert.match(script, /Install from VSIX/)
     assert.match(script, /Install Plugin from Disk/)
+    assert.match(script, /CoPaw \(QwenPaw\)/)
   }
 })
 

@@ -175,6 +175,16 @@ const ENDPOINTS: { label: string; url: string; handler: string; sources: string[
     sources: ["src/app/api/ingest/setup/route.ts", "src/app/api/ingest/setup/auto/route.ts"],
   },
   {
+    label: "CoPaw (QwenPaw) OTLP traces",
+    url: "/api/ingest/otel/v1/traces",
+    handler: "api/ingest/otel/v1/traces",
+    sources: [
+      "scripts/copaw-collector/copaw/config.py",
+      "scripts/copaw-collector/copaw/cli.py",
+      "scripts/copaw-collector/copaw/__init__.py",
+    ],
+  },
+  {
     label: "opencode 插件下发",
     url: "/api/ingest/setup/opencode",
     handler: "api/ingest/setup/opencode",

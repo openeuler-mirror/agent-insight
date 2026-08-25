@@ -1995,6 +1995,14 @@ function buildLlmPromptSnapshot(
     };
 }
 
+function reportedRequestMessagesSourceForFramework(framework?: string): 'langfuse' | 'actrail' | null {
+    const normalized = framework?.trim().toLowerCase();
+    if (normalized === 'actrail') return 'actrail';
+    if (normalized === 'langfuse-langgraph') return 'langfuse';
+    if (normalized === 'qwenpaw') return null;
+    return null;
+}
+
 /** A collapsed disclosure bar rendered INSIDE a message: a single clickable
  *  summary line (icon + label + meta + chevron) that expands to the full text.
  *  Used for both the assistant's "Thought for Ns" (reasoning) and "Response"
@@ -2783,9 +2791,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
             event,
             node,
             interactions,
-            framework === 'actrail'
-                ? 'actrail'
-                : framework === 'langfuse-langgraph' ? 'langfuse' : null,
+            reportedRequestMessagesSourceForFramework(framework),
         ),
         [event, node, interactions, framework],
     );

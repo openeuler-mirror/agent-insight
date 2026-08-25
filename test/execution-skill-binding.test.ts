@@ -103,6 +103,35 @@ test('binding: Qoder scopes root skills to the root Agent and excludes Subagent 
     assert.ok(!names.includes('skill-b'));
 });
 
+test('binding: QwenPaw root ownSkills excludes subagent skill spans', () => {
+    const own = computeOwnSkills('qwenpaw', [
+        {
+            role: 'assistant',
+            content: 'root answer',
+            tool_calls: [{
+                id: 'root-skill',
+                type: 'function',
+                state: 'success',
+                function: { name: 'skill.root-skill', arguments: '{}' },
+                skill: { name: 'root-skill', version: 1 },
+            }],
+        },
+        {
+            role: 'subagent',
+            subagent_session_id: 'sub-1',
+            content: 'worker answer',
+            tool_calls: [{
+                id: 'child-skill',
+                type: 'function',
+                state: 'success',
+                function: { name: 'skill.child-skill', arguments: '{}' },
+                skill: { name: 'child-skill', version: 2 },
+            }],
+        },
+    ]);
+    assert.deepEqual(own, [{ name: 'root-skill', version: 1 }]);
+});
+
 test('snapshot shrink: only trusted server-side framework capabilities can enable Qoder replacement', () => {
     const previousJiuwen = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
     delete process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
