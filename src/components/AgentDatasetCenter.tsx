@@ -329,6 +329,10 @@ export default function AgentDatasetCenter() {
 
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
     if (!user) return;
+    if (isBuiltinReliabilityDataset(dataset)) {
+      setTableActionError('内置可靠性评测集由系统维护，不可编辑');
+      return;
+    }
     setError('');
     const res = await apiFetch(`/api/agent-datasets/${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`);
     const detail = await res.json();
@@ -836,7 +840,8 @@ export default function AgentDatasetCenter() {
                       stopActionPropagation(event);
                       openEditorForDataset(item);
                     }}
-                    title="编辑数据集信息"
+                    disabled={isBuiltinReliabilityDataset(item)}
+                    title={isBuiltinReliabilityDataset(item) ? '内置可靠性评测集不可编辑' : '编辑数据集信息'}
                   >
                     <Pencil size={14} aria-hidden />
                     编辑信息
