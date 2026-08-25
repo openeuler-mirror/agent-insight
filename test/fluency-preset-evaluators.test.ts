@@ -436,41 +436,6 @@ describe('buildFluencyOutput 确定性计分纯函数', () => {
   });
 });
 
-describe('judge 输出自动修复（S2：坏 JSON 第二次尝试，仍走严格契约）', () => {
-  it('字符串内未转义引号 → 修复后正常计分', async () => {
-    setJudgeLlmCallerForTest(async () =>
-      '{"issues":[{"dimension":"sentence_smoothness","severity":"moderate",'
-      + '"quote":"他说「这个方案」可行","reason":"他说"这个方案"可行但缺主语","suggestion":"补主语"}],"confidence":0.8}');
-    const output = await runFluencyPreset('preset-fluency-text', 'u', fluencyContext('病句文本。'));
-    assert.equal(output.score, 90); // moderate 扣 10
-    const smoothPoint = output.points?.find((point) => point.label === '语句通顺度');
-    assert.equal(smoothPoint?.status, 'missing');
-  });
-
-  it('截断：末尾缺闭合括号 → 补全后按已有条目计分', async () => {
-    setJudgeLlmCallerForTest(async () =>
-      '{"issues":[{"dimension":"sentence_smoothness","severity":"severe","quote":"病句","reason":"成分残缺","suggestion":"补主语"}]');
-    const output = await runFluencyPreset('preset-fluency-text', 'u', fluencyContext('病句文本。'));
-    assert.equal(output.score, 80); // severe 扣 20
-  });
-
-  it('截断：数组中间切断 → 保留已完整的条目', async () => {
-    setJudgeLlmCallerForTest(async () =>
-      '{"issues":[{"dimension":"sentence_smoothness","severity":"moderate","quote":"a","reason":"r"},'
-      + '{"dimension":"repetition_and_redundancy","severity":"light","quote":"b","reason":"未');
-    const output = await runFluencyPreset('preset-fluency-text', 'u', fluencyContext('示例文本。'));
-    assert.equal(output.score, 90); // 只保留第一条 moderate
-  });
-
-  it('修复产物仍受 schema 约束：issues 非数组 → JudgeOutputParseError', async () => {
-    setJudgeLlmCallerForTest(async () => '{"issues": 完全不是数组内容');
-    await assert.rejects(
-      () => runFluencyPreset('preset-fluency-text', 'u', fluencyContext('文本。')),
-      JudgeOutputParseError,
-    );
-  });
-});
-
 describe('流畅度语义层严格校验（不兜底默认档）', () => {
   it('缺 dimension → JudgeOutputParseError', async () => {
     setJudgeLlmCallerForTest(async () => JSON.stringify({

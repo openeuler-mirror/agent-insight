@@ -22,7 +22,7 @@ import {
 } from '@/lib/evaluators/eval-output';
 import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import { roundScore } from './specialized-evaluator-common';
-import { invokeTextPresetJudge } from './text-judge-invoker';
+import { invokeSpecializedJudge } from './specialized-evaluator-common';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 
 export const FLUENCY_PRESET_IDS = ['preset-fluency-text'] as const;
@@ -344,7 +344,7 @@ export async function runFluencyPreset(
   if (!text) {
     return normalizeEvaluatorOutput({ score: 100, summary: '空文本，跳过流畅度评估' });
   }
-  const judged = await invokeTextPresetJudge(
+  const judged = await invokeSpecializedJudge(
     user,
     {
       system: FLUENCY_SYSTEM_PROMPT,

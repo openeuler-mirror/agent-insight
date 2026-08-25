@@ -37,7 +37,7 @@ import {
   type EvalPoint,
   type EvaluatorOutput,
 } from '@/lib/evaluators/eval-output';
-import { invokeTextPresetJudge } from './text-judge-invoker';
+import { invokeSpecializedJudge } from './specialized-evaluator-common';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 
 export const HALLUCINATION_PRESET_IDS = ['preset-hallucination-text'] as const;
@@ -356,7 +356,7 @@ export async function runHallucinationPreset(
     return normalizeEvaluatorOutput({ score: 100, summary: '空回答，跳过幻觉检测' });
   }
   const contextText = await buildContextText(ctx);
-  const judged = await invokeTextPresetJudge<HallucinationJudgeResult>(user, {
+  const judged = await invokeSpecializedJudge<HallucinationJudgeResult>(user, {
     system: buildSystemPrompt(contextText.length > 0),
     user: buildUserPrompt(question, answer, contextText),
     stage: 'hallucination',
