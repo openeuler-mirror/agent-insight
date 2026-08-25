@@ -3,27 +3,15 @@
 CoPaw（QwenPaw）AgentInsight Trace 采集器：把 Agent 调用链、子 Agent、Skill、Tool、
 LLM、MCP、Channel、Cron 八类 Trace 通过 OTLP 上报到 AgentInsight 看板。
 
-## 安装（AC1）
+## 推荐安装
 
-```bash
-pip install agent-insight-copaw
-```
+在 Agent Insight 看板的 **安装指导** 页面选择 **CoPaw (QwenPaw)**，复制生成的
+一行安装命令到 CoPaw/QwenPaw 所在机器执行。安装脚本会从当前 Agent Insight 服务端
+下载内置 collector zip，解压到 `~/.agent-insight/collectors/copaw/current/`，再用同一
+个 Python 环境安装本包并执行插件注册。
 
-## 一行注册（AC2）
-
-```python
-import copaw
-copaw.setup(host="http://localhost:3000", api_key="wi_xxx")
-```
-
-或作为 QwenPaw 插件安装（重启后自动加载）：
-
-```bash
-agent-insight-copaw install --host http://localhost:3000 --api-key <key>
-```
-
-`install` 会把 `plugin.json + backend.py + copaw/` 复制到 QwenPaw 的
-plugins 目录，并写入 `config.json`。安装后自动创建 spool 目录（AC3）：
+安装后会把 `plugin.json + backend.py + copaw/` 复制到 QwenPaw 的 plugins 目录，
+写入 `config.json`，并自动创建 spool 目录（AC3）：
 
 ```
 ~/.agent-insight/otel_data/copaw/
@@ -33,6 +21,31 @@ plugins 目录，并写入 `config.json`。安装后自动创建 spool 目录（
 
 ```
 ~/.agent-insight/otel_data/copaw/<api-key-hash-8>/
+```
+
+## 手动安装 / 开发调试
+
+如果是在源码树内调试 collector，可手动安装本目录：
+
+```bash
+python -m pip install --upgrade scripts/copaw-collector
+python -m copaw.cli install --host http://localhost:3000 --api-key <key>
+```
+
+## 可选 in-process 调试入口
+
+常规接入不需要修改业务入口；下面的方式只用于源码调试或无法使用 QwenPaw plugins
+目录的场景。
+
+```python
+import copaw
+copaw.setup(host="http://localhost:3000", api_key="wi_xxx")
+```
+
+也可以作为 QwenPaw 插件安装（重启后自动加载）：
+
+```bash
+python -m copaw.cli install --host http://localhost:3000 --api-key <key>
 ```
 
 ## 卸载（AC27-AC30）

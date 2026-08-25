@@ -652,15 +652,20 @@ if [ "$INSTALL_QWENCODE" = "true" ]; then
 fi
 
 if [ "$INSTALL_COPAW" = "true" ]; then
-    echo "Installing CoPaw (QwenPaw) AgentInsight collector..."
-    if command -v pip &> /dev/null; then
-        pip install agent-insight-copaw
-    else
-        python3 -m pip install agent-insight-copaw
-    fi
-    agent-insight-copaw install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY" || true
-    echo "CoPaw collector installed (spool: ~/.agent-insight/otel_data/copaw)"
-    echo "   Register in your app entry: import copaw; copaw.setup()"
+    echo "⏬ Installing CoPaw (QwenPaw) AgentInsight collector..."
+    if command -v python3 >/dev/null 2>&1; then COPAW_PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then COPAW_PYTHON="$(command -v python)"; else echo "❌ Python 3.11+ is required for the CoPaw collector."; exit 1; fi
+    if ! "$COPAW_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"; then echo "❌ $COPAW_PYTHON must be Python 3.11 or newer."; exit 1; fi
+    COPAW_ROOT="$HOME/.agent-insight/collectors/copaw"
+    COPAW_ARCHIVE="$COPAW_ROOT/agent-insight-copaw.zip"
+    COPAW_SOURCE_DIR="$COPAW_ROOT/current"
+    rm -rf "$COPAW_SOURCE_DIR"
+    mkdir -p "$COPAW_ROOT" "$COPAW_SOURCE_DIR"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/copaw-collector" -o "$COPAW_ARCHIVE"
+    "$COPAW_PYTHON" -m zipfile -e "$COPAW_ARCHIVE" "$COPAW_SOURCE_DIR"
+    "$COPAW_PYTHON" -m pip install --disable-pip-version-check --upgrade "$COPAW_SOURCE_DIR"
+    "$COPAW_PYTHON" -m copaw.cli install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY"
+    echo "CoPaw collector installed (source: $COPAW_SOURCE_DIR, spool: ~/.agent-insight/otel_data/copaw)"
+    echo "   Restart CoPaw (QwenPaw); the plugin is loaded by QwenPaw hooks."
 fi
 
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
@@ -1065,7 +1070,7 @@ if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  ✅ DeepSeek Harness observability: headless + web profiles"
 fi
 if [ "$INSTALL_COPAW" = "true" ]; then
-    echo "  ✅ CoPaw (QwenPaw) Collector: pip package agent-insight-copaw"
+    echo "  ✅ CoPaw (QwenPaw) Collector: bundled hook plugin"
 fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
@@ -1678,11 +1683,24 @@ function generatePowerShellScript(
         '}',
         '',
         'if ($INSTALL_COPAW) {',
-        '    Write-Host "Installing CoPaw (QwenPaw) AgentInsight collector..."',
-        '    python -m pip install agent-insight-copaw',
-        '    agent-insight-copaw install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
-        '    Write-Host "CoPaw collector installed (spool: ~/.agent-insight/otel_data/copaw)"',
-        '    Write-Host "   Register in your app entry: import copaw; copaw.setup()"',
+        '    Write-Host "⏬ Installing CoPaw (QwenPaw) AgentInsight collector..."',
+        '    $copawPython = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
+        '    if (-not $copawPython) { throw "Python 3.11+ is required for the CoPaw collector." }',
+        '    & $copawPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"',
+        '    if ($LASTEXITCODE -ne 0) { throw "$copawPython must be Python 3.11 or newer." }',
+        '    $copawRoot = Join-Path $homeDir ".agent-insight\\collectors\\copaw"',
+        '    $copawArchive = Join-Path $copawRoot "agent-insight-copaw.zip"',
+        '    $copawSourceDir = Join-Path $copawRoot "current"',
+        '    Remove-Item $copawSourceDir -Recurse -Force -ErrorAction SilentlyContinue',
+        '    New-Item -ItemType Directory -Path $copawRoot, $copawSourceDir -Force | Out-Null',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/copaw-collector" -OutFile $copawArchive',
+        '    & $copawPython -m zipfile -e $copawArchive $copawSourceDir',
+        '    & $copawPython -m pip install --disable-pip-version-check --upgrade $copawSourceDir',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to install the CoPaw collector package." }',
+        '    & $copawPython -m copaw.cli install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to configure the CoPaw collector plugin." }',
+        '    Write-Host "CoPaw collector installed (source: $copawSourceDir, spool: ~/.agent-insight/otel_data/copaw)"',
+        '    Write-Host "   Restart CoPaw (QwenPaw); the plugin is loaded by QwenPaw hooks."',
         '}',
         '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
@@ -2053,7 +2071,7 @@ function generatePowerShellScript(
         '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
-        'if ($INSTALL_COPAW) { Write-Host "  ✅ CoPaw (QwenPaw) Collector: pip package agent-insight-copaw" }',
+        'if ($INSTALL_COPAW) { Write-Host "  ✅ CoPaw (QwenPaw) Collector: bundled hook plugin" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',

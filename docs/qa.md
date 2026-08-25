@@ -70,7 +70,7 @@ CLI 支持 `start`、`stop`、`restart`、`status`、`logs`、`install` 子命�
 
 ### Q16. Agent Insight 当前已接入哪些 Agent 运行时/框架？各自的采集方式是什么？
 
-已接入 OpenCode（原生插件）、Claude Code（OTLP 上报）、Qwen Code（Hook 采集器）、Hermes（原生插件）、Trae IDE（VS Code 插件）、JiuwenSwarm（OTLP 上报）、Langgraph（OTLP 上报）、LlamaIndex（OTLP 上报）。更多平台持续接入中。
+已接入 OpenCode（原生插件）、Claude Code（OTLP 上报）、Qwen Code（Hook 采集器）、CoPaw/QwenPaw（Hook 插件）、Hermes（原生插件）、Trae IDE（VS Code 插件）、JiuwenSwarm（OTLP 上报）、Langgraph（OTLP 上报）、LlamaIndex（OTLP 上报）。更多平台持续接入中。
 
 ### Q17. 默认接入使用什么协议和端点上报 Logs 和 Traces？旧版 watcher 的兼容性如何？
 

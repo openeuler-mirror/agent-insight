@@ -100,8 +100,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     print(f"Installed CoPaw AgentInsight collector to: {target}")
     print(f"OTLP endpoint: {config.endpoint or '(not configured)'}")
     print(f"Spool directory: {config.spool_dir}")
-    print("Restart QwenPaw, or register in-process with:")
-    print("  import copaw; copaw.setup()")
+    print("Restart QwenPaw to load the AgentInsight hook plugin.")
     return 0
 
 

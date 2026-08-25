@@ -66,6 +66,7 @@ def _uninstall(plugin_id: str | None = None, delete_files: bool = False) -> None
 def get_collector() -> Collector | None:
     return _collector
 
+
 class CopawPlugin:
     """New-style QwenPaw plugin entry (exports a ``plugin`` object)."""
 
