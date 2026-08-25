@@ -68,7 +68,6 @@ async def run() -> None:
             "detectors": {
                 "analysis_paralysis": {
                     "enabled": True,
-                    "semantic_content_enabled": True,
                     "detection_start_chars": 50,
                 },
                 "llm_thinking_loop": {
@@ -149,7 +148,6 @@ async def run() -> None:
             "detectors": {
                 "analysis_paralysis": {
                     "enabled": True,
-                    "semantic_content_enabled": True,
                     "detection_start_chars": 1,
                 },
                 "llm_thinking_loop": {

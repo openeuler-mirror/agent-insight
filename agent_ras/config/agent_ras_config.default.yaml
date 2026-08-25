@@ -21,7 +21,6 @@ agent_ras:
       semantic_content_enabled: true
     analysis_paralysis:
       enabled: true
-      semantic_content_enabled: true
       detection_start_chars: 500
       history_steps: 8
       history_max_chars: 6000

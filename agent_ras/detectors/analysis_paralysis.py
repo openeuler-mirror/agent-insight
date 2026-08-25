@@ -161,7 +161,6 @@ class AnalysisParalysisConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    semantic_content_enabled: bool = True
     detection_start_chars: int = Field(
         default=500,
         ge=1,
@@ -177,7 +176,6 @@ class AnalysisParalysisConfig(BaseModel):
         ge=200,
         description="Cap on Skill payload history+current chars",
     )
-    trigger_vocab: TriggerVocabConfig = Field(default_factory=TriggerVocabConfig)
     trigger_count_threshold: int = Field(
         default=10,
         ge=1,
@@ -504,7 +502,7 @@ class AnalysisParalysisDetector:
         if ch is None:
             ch = _ChannelState(
                 gate=RefrainGate(
-                    vocab=self._config.trigger_vocab,
+                    vocab=TriggerVocabConfig(),
                     window_size=self._config.history_steps,
                     threshold=self._config.trigger_count_threshold,
                 ),
@@ -560,8 +558,6 @@ class AnalysisParalysisDetector:
         ch.total_length += len(text)
 
         if ch.total_length < self._config.detection_start_chars:
-            return None
-        if not self._config.semantic_content_enabled:
             return None
 
         steps, ch.pending = split_complete_steps(ch.pending)
