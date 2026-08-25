@@ -660,7 +660,7 @@ if [ "$INSTALL_COPAW" = "true" ]; then
     fi
     agent-insight-copaw install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY" || true
     echo "CoPaw collector installed (spool: ~/.agent-insight/otel_data/copaw)"
-    echo "   Register in your app entry: import agent_insight_copaw; agent_insight_copaw.setup()"
+    echo "   Register in your app entry: import copaw; copaw.setup()"
 fi
 
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
@@ -1682,7 +1682,7 @@ function generatePowerShellScript(
         '    python -m pip install agent-insight-copaw',
         '    agent-insight-copaw install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
         '    Write-Host "CoPaw collector installed (spool: ~/.agent-insight/otel_data/copaw)"',
-        '    Write-Host "   Register in your app entry: import agent_insight_copaw; agent_insight_copaw.setup()"',
+        '    Write-Host "   Register in your app entry: import copaw; copaw.setup()"',
         '}',
         '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',

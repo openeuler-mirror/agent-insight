@@ -12,8 +12,8 @@ pip install agent-insight-copaw
 ## 一行注册（AC2）
 
 ```python
-import agent_insight_copaw
-agent_insight_copaw.setup(host="http://localhost:3000", api_key="wi_xxx")
+import copaw
+copaw.setup(host="http://localhost:3000", api_key="wi_xxx")
 ```
 
 或作为 QwenPaw 插件安装（重启后自动加载）：
@@ -22,7 +22,7 @@ agent_insight_copaw.setup(host="http://localhost:3000", api_key="wi_xxx")
 agent-insight-copaw install --host http://localhost:3000 --api-key <key>
 ```
 
-`install` 会把 `plugin.json + backend.py + agent_insight_copaw/` 复制到 QwenPaw 的
+`install` 会把 `plugin.json + backend.py + copaw/` 复制到 QwenPaw 的
 plugins 目录，并写入 `config.json`。安装后自动创建 spool 目录（AC3）：
 
 ```
@@ -72,5 +72,5 @@ the user-owned plugin, spool, or configuration directories.
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -v
+PYTHONPATH=scripts/agent_insight_copaw python -m unittest discover -s test/copaw -v
 ```

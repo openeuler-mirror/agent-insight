@@ -54,7 +54,7 @@ class Collector:
         self.react_steps: dict[str, int] = {}
         self._minted_roots: dict[str, tuple[str, float]] = {}
         self._current: ContextVar[Optional[_TraceContext]] = ContextVar(
-            "agent_insight_copaw_trace",
+            "copaw_trace",
             default=None,
         )
 

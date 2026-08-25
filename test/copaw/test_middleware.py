@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from agent_insight_copaw.middleware import AgentInsightToolMiddleware
+from copaw.middleware import AgentInsightToolMiddleware
 
 
 class ToolResponse:

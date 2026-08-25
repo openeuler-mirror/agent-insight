@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_insight_copaw import cli
-from agent_insight_copaw._plugin_assets import backend
-from agent_insight_copaw.config import CollectorConfig
+from copaw import cli
+from copaw._plugin_assets import backend
+from copaw.config import CollectorConfig
 
 
 class _FakeCollector:

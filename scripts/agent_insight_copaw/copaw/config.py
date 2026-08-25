@@ -71,7 +71,7 @@ def _read_dotenv(path: Path) -> dict[str, str]:
 
 
 def _plugin_config_path() -> Path:
-    # Package lives at <plugin_root>/agent_insight_copaw/config.py
+    # Package lives at <plugin_root>/copaw/config.py
     return Path(__file__).resolve().parent.parent / "config.json"
 
 

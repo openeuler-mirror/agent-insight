@@ -13,10 +13,10 @@ authors = [{ name = "AgentInsight Team" }]
 dependencies = []
 
 [project.scripts]
-agent-insight-copaw = "agent_insight_copaw.cli:main"
+agent-insight-copaw = "copaw.cli:main"
 
 [tool.setuptools]
-packages = ["agent_insight_copaw", "agent_insight_copaw._plugin_assets"]
+packages = ["copaw", "copaw._plugin_assets"]
 
 [tool.setuptools.package-data]
-"agent_insight_copaw" = ["_plugin_assets/*"]
+"copaw" = ["_plugin_assets/*"]

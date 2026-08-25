@@ -1,6 +1,6 @@
 import unittest
 
-from agent_insight_copaw import otlp
+from copaw import otlp
 
 
 class OtlpTest(unittest.TestCase):

@@ -7,11 +7,11 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from agent_insight_copaw import patches
-from agent_insight_copaw.collector import Collector
-from agent_insight_copaw.config import ensure_spool_dir, load_config
-from agent_insight_copaw.hooks import AgentInsightCleanupHook, AgentInsightRootHook
-from agent_insight_copaw.middleware import AgentInsightToolMiddleware
+from copaw import patches
+from copaw.collector import Collector
+from copaw.config import ensure_spool_dir, load_config
+from copaw.hooks import AgentInsightCleanupHook, AgentInsightRootHook
+from copaw.middleware import AgentInsightToolMiddleware
 
 _collector: Collector | None = None
 
@@ -27,16 +27,16 @@ def register(api: Any) -> None:
     ensure_spool_dir(config)
     _collector = Collector(config)
 
-    api.register_startup_hook("agent_insight_copaw_start", _collector.start, priority=10)
+    api.register_startup_hook("copaw_start", _collector.start, priority=10)
     api.register_runtime_hook(AgentInsightRootHook(_collector))
     api.register_runtime_hook(AgentInsightCleanupHook(_collector))
     api.register_middleware(
         lambda ctx, agent_config: AgentInsightToolMiddleware(_collector),
         priority=90,
     )
-    api.register_shutdown_hook("agent_insight_copaw_flush", _collector.flush, priority=90)
+    api.register_shutdown_hook("copaw_flush", _collector.flush, priority=90)
     api.register_uninstall_hook(
-        "agent_insight_copaw_uninstall",
+        "copaw_uninstall",
         _uninstall,
         priority=10,
     )
@@ -66,11 +66,11 @@ def _uninstall(plugin_id: str | None = None, delete_files: bool = False) -> None
 def get_collector() -> Collector | None:
     return _collector
 
-class AgentInsightCopawPlugin:
+class CopawPlugin:
     """New-style QwenPaw plugin entry (exports a ``plugin`` object)."""
 
     def register(self, api: Any) -> None:
         register(api)
 
 
-plugin = AgentInsightCopawPlugin()
+plugin = CopawPlugin()

@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_insight_copaw.collector import Collector
-from agent_insight_copaw.config import CollectorConfig
+from copaw.collector import Collector
+from copaw.config import CollectorConfig
 
 
 class FakeExporter:

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_insight_copaw.cli import main
+from copaw.cli import main
 
 
 class CliTest(unittest.TestCase):
@@ -16,7 +16,7 @@ class CliTest(unittest.TestCase):
             target = Path(plugins_dir) / "agent-insight-copaw"
             self.assertTrue((target / "plugin.json").exists())
             self.assertTrue((target / "backend.py").exists())
-            self.assertTrue((target / "agent_insight_copaw" / "sanitize.py").exists())
+            self.assertTrue((target / "copaw" / "sanitize.py").exists())
             config = (target / "config.json").read_text(encoding="utf-8")
             self.assertIn("/api/ingest/otel/v1/traces", config)
             self.assertIn("wi_test", config)

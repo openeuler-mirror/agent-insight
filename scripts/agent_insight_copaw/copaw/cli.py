@@ -17,7 +17,7 @@ PLUGIN_DIR_NAME = "agent-insight-copaw"
 
 
 def _plugin_root() -> Path:
-    # Package lives at <plugin_root>/agent_insight_copaw/cli.py
+    # Package lives at <plugin_root>/copaw/cli.py
     return Path(__file__).resolve().parent.parent
 
 
@@ -52,7 +52,7 @@ def _copy_plugin(target: Path) -> None:
         shutil.rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     pkg_dir = Path(__file__).resolve().parent
-    shutil.copytree(pkg_dir, target / "agent_insight_copaw", ignore=ignore)
+    shutil.copytree(pkg_dir, target / "copaw", ignore=ignore)
     assets_dir = pkg_dir / "_plugin_assets"
     if (assets_dir / "plugin.json").exists() and (assets_dir / "backend.py").exists():
         shutil.copy2(assets_dir / "plugin.json", target / "plugin.json")
@@ -102,7 +102,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     print(f"OTLP endpoint: {config.endpoint or '(not configured)'}")
     print(f"Spool directory: {config.spool_dir}")
     print("Restart QwenPaw, or register in-process with:")
-    print("  import agent_insight_copaw; agent_insight_copaw.setup()")
+    print("  import copaw; copaw.setup()")
     return 0
 
 

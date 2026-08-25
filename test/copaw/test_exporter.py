@@ -5,9 +5,9 @@ import threading
 import unittest
 from pathlib import Path
 
-from agent_insight_copaw.config import CollectorConfig
-from agent_insight_copaw.exporter import DeltaExporter, account_hash
-from agent_insight_copaw.otlp import otlp_payload
+from copaw.config import CollectorConfig
+from copaw.exporter import DeltaExporter, account_hash
+from copaw.otlp import otlp_payload
 
 
 class _CaptureHandler(http.server.BaseHTTPRequestHandler):

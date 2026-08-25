@@ -2,8 +2,8 @@
 
 One-line registration (AC2)::
 
-    import agent_insight_copaw
-    agent_insight_copaw.setup(host="http://localhost:3000", api_key="wi_xxx")
+    import copaw
+    copaw.setup(host="http://localhost:3000", api_key="wi_xxx")
 
 The collector is also loadable as a QwenPaw plugin (plugin.json + backend.py).
 """
@@ -163,13 +163,13 @@ def _register_into_running_qwenpaw(collector: Collector) -> None:
         # AC2: one-line setup must also cover workspaces created after setup().
         registry.register_startup_hook(
             plugin_id=PLUGIN_ID,
-            hook_name="agent_insight_copaw_runtime_hooks",
+            hook_name="copaw_runtime_hooks",
             callback=_on_startup,
             priority=65,
         )
         registry.register_workspace_created_hook(
             plugin_id=PLUGIN_ID,
-            hook_name="agent_insight_copaw_runtime_hooks_ws",
+            hook_name="copaw_runtime_hooks_ws",
             callback=_on_workspace_created,
             priority=65,
         )

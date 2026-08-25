@@ -19,8 +19,8 @@ from pathlib import Path
 # Allow running directly: python benchmarks/bench_overhead.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent_insight_copaw.collector import Collector
-from agent_insight_copaw.config import CollectorConfig
+from copaw.collector import Collector
+from copaw.config import CollectorConfig
 
 
 class NullExporter:

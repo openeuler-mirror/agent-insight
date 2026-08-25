@@ -2,7 +2,7 @@
 
 import unittest
 
-from agent_insight_copaw import sanitize
+from copaw import sanitize
 
 
 class SanitizeTest(unittest.TestCase):

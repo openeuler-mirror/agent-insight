@@ -29,6 +29,7 @@ test('CoPaw is offered and installable from both setup entry points', async () =
       assert.match(script, /CoPaw \(QwenPaw\)/, `${route.name} (${platform}) should offer CoPaw`);
       assert.match(script, /INSTALL_COPAW/, `${route.name} (${platform}) should define the CoPaw install flag`);
       assert.match(script, /agent-insight-copaw install/, `${route.name} (${platform}) should install the CoPaw collector`);
+      assert.match(script, /import copaw; copaw\.setup\(\)/, `${route.name} (${platform}) should use the short CoPaw module name`);
       const componentsMarker = platform === 'unix'
         ? 'echo "Installed Components:"'
         : 'Write-Host "Installed Components:"';

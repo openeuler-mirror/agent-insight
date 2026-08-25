@@ -1,7 +1,7 @@
 """Runtime monkey-patches for QwenPaw modules.
 
 The patches are small, reversible wrappers installed by the plugin backend or
-by ``agent_insight_copaw.setup()``.  They cover LLM calls, MCP driver calls,
+by ``copaw.setup()``.  They cover LLM calls, MCP driver calls,
 subagent session correlation, skill slash invocations and cron executions.
 Every patch is optional: if the referenced QwenPaw module is not importable,
 the patch is skipped without breaking QwenPaw.

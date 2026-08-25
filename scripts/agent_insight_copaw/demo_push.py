@@ -1,7 +1,7 @@
 """????????: ????????? Trace ?????? AgentInsight ???
 
 ??:
-    $env:PYTHONPATH = "D:\\openeuler\\agent-insight\\scripts\\agent_insight_copaw"
+    $env:PYTHONPATH = "D:\\openeuler\\agent-insight\\scripts\\copaw"
     $env:AGENT_INSIGHT_API_KEY = "<?? API Key>"
     python demo_push.py
 
@@ -13,8 +13,8 @@ import os
 import time
 from datetime import datetime
 
-from agent_insight_copaw.collector import Collector
-from agent_insight_copaw.config import CollectorConfig
+from copaw.collector import Collector
+from copaw.config import CollectorConfig
 
 API_KEY = os.environ.get("AGENT_INSIGHT_API_KEY", "")
 ENDPOINT = os.environ.get("AGENT_INSIGHT_HOST", "http://localhost:3000").rstrip("/") + "/api/ingest/otel/v1/traces"
