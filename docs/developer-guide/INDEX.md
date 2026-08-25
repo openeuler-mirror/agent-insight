@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `7bb87d9fddf5f86365905e8fbbeb0a6ffaaaebaf` (`7bb87d9f`) |
-| Branch | `new-dev-8-25` |
-| Date | 2026-08-24 17:44:28 +0800 |
-| Author | openeuler-ci-bot |
-| Subject | `!335 重构skill生成、skill优化和skill评测` |
-| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，评测器分数契约与前端范围统一为 0-100。 |
+| Commit | `90a534a5ff3108eb2ad3e5a980861d4a0f754d96` (`90a534a5`) |
+| Branch | `feat/fluency-hallucination-graders` |
+| Date | 2026-08-26 +0800 |
+| Author | win11 |
+| Subject | `Merge remote-tracking branch 'origin/master' into feat/fluency-hallucination-graders`（文本质量评估器族：新增流畅度/幻觉检测，对齐 master 文本评估器框架） |
+| Working tree overlay | 该快照相对 `7bb87d9f` 同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；并新增文本流畅度/幻觉检测预置评估器（独立 Judge 通道 + 确定性计分）。 |
 
 **如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
