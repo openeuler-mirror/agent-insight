@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { getAdapter } from '@/lib/ingest/adapters/registry'
 import { getOtelTraceAdapter } from '@/lib/ingest/otel/adapter-registry'
 import { aggregateOtelTraceEvents } from '@/lib/ingest/otel/aggregate'
+import { computeOwnSkills } from '@/lib/storage/data-service'
 import type { OtelTraceEvent } from '@/lib/ingest/otel/types'
 
 function qwenpawEvent(overrides: Partial<OtelTraceEvent>): OtelTraceEvent {
@@ -343,6 +345,8 @@ test('qwenpaw adapter: keeps subagent, skill and mcp spans associated', () => {
   assert.equal(record.llm_call_count, 2)
   assert.equal(record.subagentCount, 1)
   assert.deepEqual(record.invokedSkills, [{ name: 'docx', version: 1.2 }])
+  assert.deepEqual(getAdapter('qwenpaw').extractSkills?.(record.interactions || []), [{ name: 'docx', version: 1.2 }])
+  assert.deepEqual(computeOwnSkills('qwenpaw', record.interactions || []), [])
   assert.equal(record.qwenpaw?.channel, 'dingtalk')
   assert.equal(record.qwenpaw?.source, 'chat')
   assert.equal(record.qwenpaw?.mcp_call_count, 1)

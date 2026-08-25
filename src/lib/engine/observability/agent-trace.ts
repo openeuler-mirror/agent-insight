@@ -36,6 +36,7 @@ export interface ToolCall {
     timing?: { started_at?: number; completed_at?: number };
     output?: any;
     result?: any;
+    skill?: { name?: string; version?: number | string | null };
     trace_split_parallel_task?: boolean;
 }
 
@@ -701,23 +702,34 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         }
 
         const normalizedName = name.toLowerCase();
+        const skillMeta = tc.skill;
+        const prefixedSkillName = normalizedName.startsWith('skill.') ? name.slice('skill.'.length) : undefined;
         // `skill_tool` is jiuwen's dedicated skill-invocation tool; count it as a skill call
         // (drives the per-agent Skill stat / timeline). Other frameworks don't emit it.
         const kind: CallKind = normalizedName === 'task'
             ? 'task'
-            : isSkillLoaderToolName(normalizedName)
+            : isSkillLoaderToolName(normalizedName) || skillMeta?.name || prefixedSkillName
                 ? 'skill'
                 : 'tool';
-        const skillDisplayName = kind === 'skill' && args && typeof args === 'object'
-            ? args.skill ?? args.name ?? args.skill_name ?? args.skillName
+        const skillDisplayName = kind === 'skill'
+            ? skillMeta?.name ?? (args && typeof args === 'object'
+                ? args.skill ?? args.name ?? args.skill_name ?? args.skillName
+                : undefined) ?? prefixedSkillName
             : undefined;
         const displayName = typeof skillDisplayName === 'string' && skillDisplayName.trim()
             ? skillDisplayName.trim()
             : name;
+        const eventArgs = kind === 'skill' && skillMeta?.name
+            ? {
+                ...(args && typeof args === 'object' && !Array.isArray(args) ? args : { input: args }),
+                name: skillMeta.name,
+                version: skillMeta.version ?? null,
+            }
+            : args;
         const ev: AgentEvent = {
             kind,
             name: displayName,
-            args,
+            args: eventArgs,
             output: tc.output ?? tc.result,
             toolCallId: tc.id,
             toolStatus: tc.state,
@@ -725,7 +737,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             interactionIndex: idx,
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,
             completedAt: toMsTimestamp(tc.timing?.completed_at),
-            summary: summarizeToolCall(displayName, args),
+            summary: summarizeToolCall(displayName, eventArgs),
         };
         (ev as any)._toolCallId = tc.id;
         (ev as any).splitParallelTask = !!tc.trace_split_parallel_task;

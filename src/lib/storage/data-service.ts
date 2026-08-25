@@ -38,7 +38,7 @@ import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
-import { normalizeInteractions } from '@/lib/shared/interaction-utils';
+import { extractSkillsWithVersionsFromQwenPawSession, normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
 import type { FilterClause } from '@/lib/filters/types';
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
@@ -211,6 +211,11 @@ export function computeOwnSkills(framework: string | null | undefined, interacti
     if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'deepseek-harness') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
+    }
+    if (framework === 'qwenpaw') {
+        return extractSkillsWithVersionsFromQwenPawSession(
+            interactions.filter((interaction) => interaction?.role !== 'subagent' && !interaction?.subagent_session_id),
+        );
     }
     return extractInvokedSkillsFromSessionInteractions(framework, interactions) ?? [];
 }

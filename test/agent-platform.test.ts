@@ -20,6 +20,12 @@ test('Agent management recognizes Qwen Code as a supported platform', () => {
   assert.equal(normalizeAgentPlatform(' QWENCODE '), 'qwencode');
 });
 
+test('Agent management recognizes QwenPaw as a supported platform', () => {
+  assert.ok(AGENT_PLATFORMS.includes('qwenpaw'));
+  assert.equal(normalizeAgentPlatform('qwenpaw'), 'qwenpaw');
+  assert.equal(normalizeAgentPlatform(' QWENPAW '), 'qwenpaw');
+});
+
 test('Agent management preserves existing platforms and labels unregistered platforms as unknown', () => {
   assert.equal(normalizeAgentPlatform('opencode'), 'opencode');
   assert.equal(normalizeAgentPlatform('openclaw'), 'openclaw');
@@ -50,7 +56,9 @@ test('Agent management recognizes Pi Agent as a page platform filter', () => {
     'utf8',
   );
 
-  assert.match(page, /type PlatformFilter = 'all' \| 'opencode' \| 'openclaw' \| 'hermes' \| 'codex' \| 'pi-agent';/);
+  assert.match(page, /type PlatformFilter = 'all' \| 'opencode' \| 'openclaw' \| 'hermes' \| 'codex' \| 'qwenpaw' \| 'pi-agent';/);
+  assert.match(page, /value === 'qwenpaw'/);
+  assert.match(page, /\{ value: 'qwenpaw', label: 'qwenpaw' \}/);
   assert.match(page, /value === 'pi-agent'/);
   assert.match(page, /\{ value: 'pi-agent', label: 'pi-agent' \}/);
 });

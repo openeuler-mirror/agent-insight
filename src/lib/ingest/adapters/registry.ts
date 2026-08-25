@@ -12,6 +12,7 @@ import { openclawAdapter } from "./openclaw"
 import { opencodeAdapter } from "./opencode"
 import { piAgentAdapter } from "./pi-agent"
 import { qoderAdapter } from "./qoder"
+import { qwenpawAdapter } from "./qwenpaw"
 import { qwencodeAdapter } from "./qwencode"
 import type { FrameworkAdapter, FrameworkDescriptor } from "./types"
 
@@ -27,6 +28,7 @@ const adapters = [
   jiuwenAdapter,
   langfuseLangGraphAdapter,
   llamaIndexAdapter,
+  qwenpawAdapter,
   qoderAdapter,
   traeAdapter,
   actrailAdapter,

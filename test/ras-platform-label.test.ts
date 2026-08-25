@@ -10,6 +10,8 @@ test("getPlatformLabel: known platforms", () => {
   assert.equal(getPlatformLabel("xiaoo"), "xiaoO")
   assert.equal(getPlatformLabel("opencode"), "OpenCode")
   assert.equal(getPlatformLabel("openjiuwen"), "openJiuwen")
+  assert.equal(getPlatformLabel("qwenpaw"), "CoPaw (QwenPaw)")
+  assert.equal(getPlatformLabel("copaw"), "CoPaw (QwenPaw)")
   assert.equal(getPlatformLabel(""), "—")
 })
 
