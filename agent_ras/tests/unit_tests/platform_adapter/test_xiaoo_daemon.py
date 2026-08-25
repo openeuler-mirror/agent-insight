@@ -47,10 +47,12 @@ def test_map_sse_text_and_thinking(monkeypatch) -> None:
         sid,
         "xiaoo",
         {
-            "detection_start_chars": 1,
-            "window_max_chars": 200,
-            "loop_repeat_threshold": 3,
-            "semantic_content_enabled": False,
+            "llm_thinking_loop": {
+                "detection_start_chars": 1,
+                "window_max_chars": 200,
+                "loop_repeat_threshold": 3,
+                "semantic_content_enabled": False,
+            },
         },
     )
     mids: dict[str, str] = {}
@@ -81,10 +83,12 @@ def test_map_sse_tool_result_unknown_repeat() -> None:
         sid,
         "xiaoo",
         {
-            "detection_start_chars": 1,
-            "window_max_chars": 200,
-            "loop_repeat_threshold": 3,
-            "semantic_content_enabled": False,
+            "llm_thinking_loop": {
+                "detection_start_chars": 1,
+                "window_max_chars": 200,
+                "loop_repeat_threshold": 3,
+                "semantic_content_enabled": False,
+            },
         },
     )
     mids: dict[str, str] = {}

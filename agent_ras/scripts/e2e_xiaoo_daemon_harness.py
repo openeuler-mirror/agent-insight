@@ -29,10 +29,12 @@ from ras_runtime import reset_runtime_for_tests
 
 def _hello_cfg() -> dict[str, Any]:
     return {
-        "detection_start_chars": 1,
-        "window_max_chars": 200,
-        "loop_repeat_threshold": 3,
-        "semantic_content_enabled": False,
+        "llm_thinking_loop": {
+            "detection_start_chars": 1,
+            "window_max_chars": 200,
+            "loop_repeat_threshold": 3,
+            "semantic_content_enabled": False,
+        },
     }
 
 
