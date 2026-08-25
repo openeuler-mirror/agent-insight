@@ -63,7 +63,7 @@
 - **性能查询**：`GET /api/fleet/breakdowns` 的 `performance` 字段返回 `latHist/latP50/latP95/ctxHist/slowTraces`；慢 Trace 包含 `platform`。原混合 `reliability` 字段不再返回，模型、工具、Agent、编排以及 `callStatsCoverage` 字段保持原契约。
 
 ### `GET /api/experiments/agents` / `GET /api/experiments/traces`
-- **Agent candidates**: `src/app/api/experiments/agents/route.ts` 将两类来源按 Agent 名合并：当前用户 root Trace 中的用户归属 Agent，以及 `listWorkerExecutionTargets` 从全部在线客户端 inventory 展开的可执行 Agent。历史 Trace 仍通过 `buildExecutionOwnershipWhere('user')` 排除 `RegisteredAgent.agentOwnership='system'` 与内置系统 Agent；`ras-judge` 不进入可执行候选。每项返回 `name`、`traces`、`frameworks`、`executable` 和逐客户端 `targets[]`；target 包含 `workerId`、显示 IP、平台、该主机模型列表与最后心跳时间。总数上限 50。
+- **Agent candidates**: `src/app/api/experiments/agents/route.ts` 将两类来源按 Agent 名合并：当前用户 root Trace 中的用户归属 Agent，以及 `listWorkerExecutionTargets` 从全部在线客户端 inventory 展开的可执行 Agent。历史 Trace 仍通过 `buildExecutionOwnershipWhere('user')` 排除 `RegisteredAgent.agentOwnership='system'` 与内置系统 Agent；`ras-judge` 不进入可执行候选。每项返回 `name`、`traces`、`frameworks`、`executable` 和逐客户端 `targets[]`；target 包含 `workerId`、显示 IP、平台、该主机模型列表与最后心跳时间。inventory 模型选项以完整 `provider/model` 为 `id`，并在 `label` 后追加 provider，避免不同 provider 的同名模型在实验向导中无法区分。总数上限 50。
 - **Location**: `src/app/api/experiments/traces/route.ts`
 - **Scope**: 新建实验第 ② 步的 root Trace 服务端筛选与分页；基础条件为 `user + agent + isSubagent=false + agentOwnership=user`，防止同名系统 Agent 的 Trace 混入。
 - **Query contract**: `search` 同时对 `Execution.id`、`taskId`、`query` 做包含匹配；`from` / `to` 接收 ISO 时间并作为闭区间边界；`tagIds` 接收逗号分隔的最多 20 个用户标签 ID，跨版本标签和业务标签使用 AND 语义；`pageSize` 上限 100。响应保持 `{ total, page, pageSize, items }`，其中 `total` 是应用全部筛选后的数量。

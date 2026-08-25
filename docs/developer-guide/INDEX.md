@@ -14,7 +14,7 @@
 | Date | 2026-08-24 17:44:28 +0800 |
 | Author | openeuler-ci-bot |
 | Subject | `!335 重构skill生成、skill优化和skill评测` |
-| Working tree overlay | 当前工作树在该快照之上把 FI Python 安装收敛为版本化 managed venv：系统 Python 只创建 venv，FI pip/CLI/xiaoO Hook 使用固化解释器；补齐 launchd bootout/bootstrap 竞态重试与真实状态校验，并让 systemd/launchd 固化安装终端 PATH 以发现用户目录中的 Agent。 |
+| Working tree overlay | 当前工作树在该快照之上把 FI Python 安装收敛为版本化 managed venv：系统 Python 只创建 venv，FI pip/CLI/xiaoO Hook 使用固化解释器；补齐 launchd bootout/bootstrap 竞态重试与真实状态校验，让 systemd/launchd 固化安装终端 PATH 以发现用户目录中的 Agent，并在实验模型选项中展示 provider 以区分同名模型。 |
 
 **如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
