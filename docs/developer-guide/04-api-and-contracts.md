@@ -62,6 +62,14 @@
 - **可靠性口径**：无 RAS anomaly 的 Trace（观察列表中的 `anomalyStatus=unknown`）算无故障；同一 Trace 的 severity 取 `critical > high > medium > low` 的最高值，故障但缺 severity 归“未标注”；只有 RAS 摘要的 `recoveryOutcome=success` 算已恢复，failed/unknown/none 都算未恢复。`failureSupplement` 来自 Execution 硬错误、callStats 和 Judge failures，不进入 RAS KPI。
 - **性能查询**：`GET /api/fleet/breakdowns` 的 `performance` 字段返回 `latHist/latP50/latP95/ctxHist/slowTraces`；慢 Trace 包含 `platform`。原混合 `reliability` 字段不再返回，模型、工具、Agent、编排以及 `callStatsCoverage` 字段保持原契约。
 
+### `GET /api/reliability/fault-modes`
+
+- **Location**: `src/app/api/reliability/fault-modes/route.ts`；`src/lib/reliability/fault-modes.ts` 将 FI 目录映射为只读契约。
+- **Contract**: 响应版本为 `fault-modes@2`。每个故障模式返回 `id/name/description/supportedPlatforms/injectionMethod/injectionMethodLabel`，并通过 `submodes[]` 返回 `id/name/description`。兼容字段 `parameters[]` 继续以子模式 ID/名称投影，供既有选择器读取。
+- **Presentation source**: `src/lib/reliability/fault-mode-copy.ts` 独立维护可靠性页面使用的故障模式逻辑摘要与子模式说明，`fault-modes.ts` 仅在 API 投影时覆盖展示字段；未配置的模式回退 FI 目录原值。展示文案不写入或修改 `SKILL.md`，因此不参与 Skill 执行、内容哈希、版本与同步。
+- **Dataset view**: `DatasetItemsPage` 只汇总当前可靠性数据集实际使用的 `fault_injection_type + submode`，目录缺失时回退数据项内的名称和注入方式快照。
+- **Builtin immutability**: 名称为 `可靠性故障注入评测集（内置）`，或同时带 `内置 + reliability` 标签的数据集由 `isBuiltinReliabilityDataset` 识别。公开 `PATCH /api/agent-datasets` 与 Trace 回流写入对该数据集返回 `403`；回流目标列表同时排除该数据集。目录同步直接调用内部存储更新，不经过公开写接口。
+
 ### `GET /api/experiments/agents` / `GET /api/experiments/traces`
 - **Agent candidates**: `src/app/api/experiments/agents/route.ts` 将两类来源按 Agent 名合并：当前用户 root Trace 中的用户归属 Agent，以及 `listWorkerExecutionTargets` 从全部在线客户端 inventory 展开的可执行 Agent。历史 Trace 仍通过 `buildExecutionOwnershipWhere('user')` 排除 `RegisteredAgent.agentOwnership='system'` 与内置系统 Agent；`ras-judge` 不进入可执行候选。每项返回 `name`、`traces`、`frameworks`、`executable` 和逐客户端 `targets[]`；target 包含 `workerId`、显示 IP、平台、该主机模型列表与最后心跳时间。inventory 模型选项以完整 `provider/model` 为 `id`，并在 `label` 后追加 provider，避免不同 provider 的同名模型在实验向导中无法区分。总数上限 50。
 - **Location**: `src/app/api/experiments/traces/route.ts`

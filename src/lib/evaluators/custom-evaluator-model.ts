@@ -38,7 +38,8 @@ export function findUnsupportedCustomEvaluatorVariables(prompt: string): string[
 
 export interface CodeEvaluatorConfig {
   language: 'python' | 'javascript';
-  scoreMode: '0-1' | 'pass-fail';
+  /** `0-1` 仅用于读取历史配置，保存时统一迁移为 `0-100`。 */
+  scoreMode: '0-100' | '0-1' | 'pass-fail';
   sourceCode: string;
 }
 

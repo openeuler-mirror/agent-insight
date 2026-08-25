@@ -19,5 +19,11 @@ agent_ras:
       similar_clause_sim_threshold: 0.95
       semantic_eval_chars: 10000
       semantic_content_enabled: true
+    analysis_paralysis:
+      enabled: true
+      detection_start_chars: 500
+      history_steps: 8
+      history_max_chars: 6000
+      trigger_count_threshold: 10
   recovery:
     notify_user_on_warning: true

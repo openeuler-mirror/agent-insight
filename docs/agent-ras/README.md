@@ -43,7 +43,7 @@
 | [thinking-loop.md](designs/features/thinking-loop.md) | LLM 思考/文本死循环检测与恢复 | 已落地 |
 | [stream-abort.md](designs/features/stream-abort.md) | 环内打断 `llm.stream` | 已落地 |
 | [provider-disconnect.md](designs/features/provider-disconnect.md) | Provider 断连停推理能力调研 | 已完成 |
-| [analysis-paralysis.md](designs/features/analysis-paralysis.md) | 分析瘫痪二阶段检测 | 规划中 |
+| [analysis-paralysis.md](designs/features/analysis-paralysis.md) | 分析瘫痪二阶段检测 | 已落地 |
 | [planning-error.md](designs/features/planning-error.md) | 策略层规划错误检测 | 规划中 |
 | [opencode-xiaoo-integration.md](designs/features/opencode-xiaoo-integration.md) | OpenCode / xiaoO 平台接入：共享骨架、采点/Host、⓪ Trace、机制差异与 FI 边界 | 已落地 |
 | [capability-config.md](designs/features/capability-config.md) | 能力配置：目录解耦（PLUGIN presentation + catalog API）+ 多平台可选同步；模板 `agent_ras_config.default.yaml` | 已落地 |
