@@ -14,6 +14,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { spawnSync } = require('child_process')
+const { ensureManagedFiRuntime } = require('./lib/fi-python-runtime')
 
 const CLIENT_HOME = path.join(os.homedir(), '.agent-insight', 'client')
 const CONFIG_PATH = path.join(CLIENT_HOME, 'config.json')
@@ -222,7 +223,14 @@ async function register({ host, token, name, previousClientId }) {
   }
 
   fs.mkdirSync(CLIENT_HOME, { recursive: true, mode: 0o700 })
+  let previous = {}
+  try {
+    previous = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+  } catch {
+    previous = {}
+  }
   const config = {
+    ...previous,
     insightBaseUrl: base,
     // 归属落盘：下次安装靠它判断是否需要改绑，缺了就只能盲目跳过。
     user: json.user || null,
@@ -248,16 +256,6 @@ async function register({ host, token, name, previousClientId }) {
 
 // ------------------------------------------------------------- fault injection
 
-function resolvePythonExecutable(runner = spawnSync) {
-  const probe = runner(
-    'python3',
-    ['-c', 'import sys; print(sys.executable)'],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-  )
-  const executable = probe.status === 0 ? String(probe.stdout || '').trim() : ''
-  return executable && path.isAbsolute(executable) ? executable : null
-}
-
 /**
  * 安装故障注入组件（Python 包 + 数据目录）。
  *
@@ -268,73 +266,28 @@ function resolvePythonExecutable(runner = spawnSync) {
  * 届时客户端心跳会上报 faultInjection.ready=false，页面据此提示。
  */
 function installFaultInjection() {
-  const installer = path.join(PACKAGE_ROOT, 'scripts', 'install-fault-injection.js')
-  if (!fs.existsSync(installer)) {
-    console.warn('[install-ras-client] ⚠ 未找到故障注入安装器，跳过（客户端仍可用于配置下发与观测）')
-    return false
-  }
-  const python = resolvePythonExecutable()
-  if (!python) {
-    console.warn('[install-ras-client] ⚠ 未找到 python3，跳过故障注入组件')
-    console.warn('  客户端仍会上线；实验页会显示「FI 未就绪」。装好 python3 后重跑本命令即可。')
-    return false
-  }
-
   log('正在安装故障注入组件…')
-  // 独立子进程：install-fault-injection.js 内部会 process.exit()，不能直接 require。
-  const r = spawnSync(process.execPath, [installer], {
-    stdio: 'inherit',
-    env: { ...process.env, AGENT_FI_PYTHON: python },
-  })
-  if (r.status === 0) {
-    // 同 venv 分支：探测目录必须是固化副本，不能是临时解压目录。
-    patchClientConfig({
-      fiPython: python,
-      fiPackageRoot: path.join(CLIENT_HOME, 'agent_fault_injection'),
-    })
-    log('✓ 故障注入组件已安装（由常驻客户端统一领取任务，不另起 fi-worker 进程）')
-    return true
-  }
-
-  // 全局 pip 装不上通常是 PEP 668（Homebrew / Debian 管控的 Python）。
-  // 这类环境里 venv 是官方推荐做法，回退一次再判失败。
-  console.warn(`[install-ras-client] ⚠ 全局安装失败（exit ${r.status}），改用独立 venv 重试…`)
-  if (installFaultInjectionViaVenv()) return true
-
-  console.warn('[install-ras-client] ⚠ 故障注入组件安装失败，已跳过')
-  console.warn('  客户端仍会上线；实验页会显示「FI 未就绪」。修复 Python 环境后重跑本命令即可。')
-  return false
-}
-
-/** PEP 668 回退：装进 ~/.agent-insight/fault-injection/venv，并把解释器路径写进客户端配置。 */
-function installFaultInjectionViaVenv() {
-  const fiHome = path.join(os.homedir(), '.agent-insight', 'fault-injection')
-  const venv = path.join(fiHome, 'venv')
-  const venvPython = path.join(venv, 'bin', 'python')
   const sourceRoot = path.join(PACKAGE_ROOT, 'agent_fault_injection')
-  if (!fs.existsSync(sourceRoot)) return false
-
-  fs.mkdirSync(fiHome, { recursive: true })
-  if (!fs.existsSync(venvPython)) {
-    const mk = spawnSync('python3', ['-m', 'venv', venv], { stdio: 'inherit' })
-    if (mk.status !== 0) return false
+  try {
+    const runtime = ensureManagedFiRuntime({
+      sourceRoot,
+      editable: process.env.AGENT_INSIGHT_CLIENT_SOURCE === 'local',
+    })
+    patchClientConfig({
+      fiPython: runtime.python,
+      fiPackageRoot: runtime.packageRoot,
+      fiRuntimeRoot: runtime.runtimeRoot,
+      fiRuntimeMode: runtime.runtimeMode,
+    })
+    log(
+      `✓ 故障注入组件已${runtime.reused ? '复用' : '安装'}到独立 venv: ${runtime.runtimeRoot}`,
+    )
+    return true
+  } catch (err) {
+    console.warn(`[install-ras-client] ⚠ 故障注入组件安装失败，已跳过: ${err.message}`)
+    console.warn('  客户端仍会上线；实验页会显示「FI 未就绪」。修复 Python/venv 环境后重跑本命令即可。')
+    return false
   }
-  const pip = spawnSync(venvPython, ['-m', 'pip', 'install', '-q', '--disable-pip-version-check', sourceRoot], {
-    stdio: 'inherit',
-  })
-  if (pip.status !== 0) return false
-
-  const verify = spawnSync(venvPython, ['-c', 'import agent_fault_injection'], { stdio: 'ignore' })
-  if (verify.status !== 0) return false
-
-  // 客户端后续 spawn 采集器必须用同一个解释器，否则又会 import 不到。
-  // fiPackageRoot 指向固化副本而非安装源：后者可能是稍后被删的临时目录。
-  patchClientConfig({
-    fiPython: venvPython,
-    fiPackageRoot: path.join(CLIENT_HOME, 'agent_fault_injection'),
-  })
-  log(`✓ 故障注入组件已安装到 venv: ${venv}`)
-  return true
 }
 
 function patchClientConfig(patch) {
@@ -454,20 +407,73 @@ function writeLaunchdPlist() {
   return plistPath
 }
 
-function installLaunchd(start) {
-  const plistPath = writeLaunchdPlist()
-  const uid = process.getuid ? process.getuid() : 501
-  spawnSync('launchctl', ['bootout', `gui/${uid}/${LAUNCHD_LABEL}`], { stdio: 'ignore' })
-  const r = spawnSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], {
+function sleepMs(ms) {
+  const state = new Int32Array(new SharedArrayBuffer(4))
+  Atomics.wait(state, 0, 0, ms)
+}
+
+function launchdServiceLoaded(uid, runner = spawnSync) {
+  return runner('launchctl', ['print', `gui/${uid}/${LAUNCHD_LABEL}`], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+  }).status === 0
+}
+
+function bootstrapLaunchdService(
+  plistPath,
+  { uid = process.getuid ? process.getuid() : 501, runner = spawnSync, wait = sleepMs } = {},
+) {
+  runner('launchctl', ['bootout', `gui/${uid}/${LAUNCHD_LABEL}`], { stdio: 'ignore' })
+
+  for (let attempt = 0; attempt < 30 && launchdServiceLoaded(uid, runner); attempt++) {
+    wait(100)
+  }
+
+  let last = null
+  for (let attempt = 0; attempt < 20; attempt++) {
+    last = runner('launchctl', ['bootstrap', `gui/${uid}`, plistPath], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+    if (launchdServiceLoaded(uid, runner)) {
+      return { ok: true, uid }
+    }
+    if (last.status === 0) {
+      wait(100)
+      if (launchdServiceLoaded(uid, runner)) return { ok: true, uid }
+    }
+    const detail = `${last.stderr || ''}\n${last.stdout || ''}`
+    if (!/operation already in progress|already in progress/i.test(detail)) break
+    wait(100)
+  }
+
+  // 兼容没有 bootstrap 子命令的旧版 macOS；同样必须以 print 结果为准。
+  const fallback = runner('launchctl', ['load', '-w', plistPath], {
     encoding: 'utf8',
     stdio: 'pipe',
   })
-  if (r.status !== 0 && !(r.stderr || '').includes('already')) {
-    // 老版本 macOS 没有 bootstrap，退回 load。
-    spawnSync('launchctl', ['load', '-w', plistPath], { stdio: 'ignore' })
+  if (launchdServiceLoaded(uid, runner)) {
+    return { ok: true, uid }
+  }
+  const detail = String(fallback.stderr || last?.stderr || fallback.stdout || last?.stdout || '').trim()
+  return { ok: false, uid, detail }
+}
+
+function installLaunchd(start) {
+  const plistPath = writeLaunchdPlist()
+  const uid = process.getuid ? process.getuid() : 501
+  const loaded = bootstrapLaunchdService(plistPath, { uid })
+  if (!loaded.ok) {
+    fail('launchd 注册失败', loaded.detail || `请检查 plist: ${plistPath}`)
   }
   if (start) {
-    spawnSync('launchctl', ['kickstart', '-k', `gui/${uid}/${LAUNCHD_LABEL}`], { stdio: 'ignore' })
+    const kicked = spawnSync('launchctl', ['kickstart', '-k', `gui/${uid}/${LAUNCHD_LABEL}`], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+    if (kicked.status !== 0 || !launchdServiceLoaded(uid)) {
+      fail('launchd 启动失败', String(kicked.stderr || kicked.stdout || '').trim())
+    }
     log('✓ 服务已启动 (launchd)')
   }
   log(`  状态: launchctl print gui/${uid}/${LAUNCHD_LABEL} | head -20`)
@@ -545,9 +551,15 @@ async function main() {
     fail('未找到 systemctl', `该系统没有 systemd，可手动运行: node ${CLIENT_SCRIPT}`)
   }
 
+  // 先准备所有本地运行时，再刷新设备凭证。否则 pip/venv 耗时期间旧客户端
+  // 已被撤销却还没重启，会持续产生无意义的 401。
+  installRuntime()
+  const fiOk = args.withFi ? installFaultInjection() : false
+  if (!args.withFi) log('已按 --no-fi 跳过故障注入组件')
+
+  const existing = readExistingBinding()
   if (args.token) {
     if (!args.host) fail('缺少 --host')
-    const existing = readExistingBinding()
     const existingBaseUrl = normalizeInsightBaseUrl(existing.insightBaseUrl)
     const targetBaseUrl = normalizeInsightBaseUrl(args.host)
     const hostChanged = Boolean(
@@ -580,17 +592,11 @@ async function main() {
       // clientId 只在签发它的完整服务基址内有意义；来源缺失或跨路径时都不能带旧 ID。
       previousClientId: sameService ? existing.clientId : null,
     })
-  } else if (!fs.existsSync(CONFIG_PATH)) {
+  } else if (!existing.clientId) {
     fail('缺少 --token 且本机尚未注册', '请在「客户端安装」页生成安装命令。')
   } else {
     log('已存在注册信息，跳过注册')
   }
-
-  // 必须先固化运行时：安装器可能跑在稍后被删除的临时解压目录里。
-  installRuntime()
-
-  const fiOk = args.withFi ? installFaultInjection() : false
-  if (!args.withFi) log('已按 --no-fi 跳过故障注入组件')
 
   if (process.platform === 'linux') installSystemd(args.start)
   else installLaunchd(args.start)
@@ -611,9 +617,9 @@ module.exports = {
   RUNTIME_DIR,
   writeSystemdUnit,
   writeLaunchdPlist,
+  bootstrapLaunchdService,
   parseArgs,
   installFaultInjection,
-  resolvePythonExecutable,
   SERVICE_NAME,
   LAUNCHD_LABEL,
 }
