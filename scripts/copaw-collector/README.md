@@ -72,5 +72,5 @@ the user-owned plugin, spool, or configuration directories.
 ## 测试
 
 ```bash
-PYTHONPATH=scripts/agent_insight_copaw python -m unittest discover -s test/copaw -v
+PYTHONPATH=scripts/copaw-collector python -m unittest discover -s test/copaw -v
 ```
