@@ -3,6 +3,7 @@ import { actrailAdapter } from "./actrail"
 import { claudeAdapter } from "./claude"
 import { codeagentAdapter } from "./codeagent"
 import { codexAdapter } from "./codex"
+import { deepSeekHarnessAdapter } from './deepseek-harness'
 import { hermesAdapter } from "./hermes"
 import { jiuwenAdapter } from "./jiuwen"
 import { langfuseLangGraphAdapter } from "./langfuse-langgraph"
@@ -22,6 +23,7 @@ const adapters = [
   openclawAdapter,
   hermesAdapter,
   codexAdapter,
+  deepSeekHarnessAdapter,
   jiuwenAdapter,
   langfuseLangGraphAdapter,
   llamaIndexAdapter,

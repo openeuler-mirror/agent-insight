@@ -33,6 +33,7 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
 import { extractCoreOutput } from "./core-output";
+import { MirroredDeltaGuard } from "./stream-event-dedupe";
 
 // =============================================================================
 // 类型定义
@@ -335,9 +336,13 @@ function extractTextFromPromptResponse(response: unknown): string {
 async function tryGetChildSessionIDs(
   client: OpencodeClient,
   sessionId: string,
+  directory?: string,
 ): Promise<string[]> {
   try {
-    const result = await client.session.children({ path: { id: sessionId } });
+    const result = await client.session.children({
+      path: { id: sessionId },
+      query: directory ? { directory } : undefined,
+    });
     const data = unwrapData<any[]>(result);
     if (!Array.isArray(data)) return [];
     return data.map((s) => String(s?.id ?? "")).filter(Boolean);
@@ -353,6 +358,7 @@ async function tryGetChildSessionIDs(
 export class AgentInsight {
   private readonly client: OpencodeClient;
   private readonly defaultDirectory?: string;
+  private readonly sessionDirectories = new Map<string, string>();
   private readonly logLevel: LogLevel;
   /** 保存 baseURL 是为了 raw fetch /question/{id}/reply——v1 SDK 的 OpencodeClient
    *  没有 question 命名空间（只有 v2 SDK 才有），不能走 client 方法，得自己拼 URL。*/
@@ -412,6 +418,7 @@ export class AgentInsight {
   private async respondQuestion(
     requestID: string,
     answers: any[] | null,
+    sessionID?: string,
   ): Promise<void> {
     if (!requestID) return;
     const isReply = Array.isArray(answers) && answers.length > 0;
@@ -419,8 +426,9 @@ export class AgentInsight {
       ? `/question/${encodeURIComponent(requestID)}/reply`
       : `/question/${encodeURIComponent(requestID)}/reject`;
     // directory 是 query 参数（v2 SDK schema），有就带上，让 server 能定位 workspace。
-    const url = this.defaultDirectory
-      ? `${this.baseURL}${path}?directory=${encodeURIComponent(this.defaultDirectory)}`
+    const directory = sessionID ? this.directoryForSession(sessionID) : this.defaultDirectory;
+    const url = directory
+      ? `${this.baseURL}${path}?directory=${encodeURIComponent(directory)}`
       : `${this.baseURL}${path}`;
 
     // opencode 的 reply schema 是 **array-of-arrays**：
@@ -485,8 +493,9 @@ export class AgentInsight {
   ): Promise<void> {
     if (!sessionID || !permissionID) return;
     const path = `/session/${encodeURIComponent(sessionID)}/permissions/${encodeURIComponent(permissionID)}`;
-    const url = this.defaultDirectory
-      ? `${this.baseURL}${path}?directory=${encodeURIComponent(this.defaultDirectory)}`
+    const directory = this.directoryForSession(sessionID);
+    const url = directory
+      ? `${this.baseURL}${path}?directory=${encodeURIComponent(directory)}`
       : `${this.baseURL}${path}`;
     try {
       const res = await fetch(url, {
@@ -539,6 +548,10 @@ export class AgentInsight {
 
   // --------------------------- Session ---------------------------
 
+  private directoryForSession(sessionId: string): string | undefined {
+    return this.sessionDirectories.get(sessionId) || this.defaultDirectory;
+  }
+
   async listSessions() {
     const result = await this.client.session.list({
       query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
@@ -562,7 +575,10 @@ export class AgentInsight {
         ...(permission ? { permission } : {}),
       }
     });
-    return unwrapData<Record<string, unknown>>(result);
+    const session = unwrapData<Record<string, unknown>>(result);
+    const sessionId = String(session?.id ?? session?.ID ?? "");
+    if (sessionId && sessionDirectory) this.sessionDirectories.set(sessionId, sessionDirectory);
+    return session;
   }
 
   async getSession(sessionId: string) {
@@ -570,32 +586,48 @@ export class AgentInsight {
     return unwrapData<Record<string, unknown>>(
       await this.client.session.get({
         path: { id: sessionId },
-        query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
       }),
     );
   }
 
   async deleteSession(sessionId: string) {
     assertNonEmptyString(sessionId, "sessionId");
-    return unwrapData<boolean>(
+    const result = unwrapData<boolean>(
       await this.client.session.delete({
         path: { id: sessionId },
-        query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
       }),
     );
+    this.sessionDirectories.delete(sessionId);
+    return result;
   }
 
   async abortSession(sessionId: string) {
     assertNonEmptyString(sessionId, "sessionId");
     return unwrapData<boolean>(
-      await this.client.session.abort({ path: { id: sessionId } }),
+      await this.client.session.abort({
+        path: { id: sessionId },
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
+      }),
     );
   }
 
   async listMessages(sessionId: string) {
     assertNonEmptyString(sessionId, "sessionId");
     return unwrapData<any[]>(
-      await this.client.session.messages({ path: { id: sessionId } }),
+      await this.client.session.messages({
+        path: { id: sessionId },
+        query: this.directoryForSession(sessionId)
+          ? { directory: this.directoryForSession(sessionId) }
+          : undefined,
+      }),
     );
   }
 
@@ -623,6 +655,8 @@ export class AgentInsight {
       format,
       ...rest
     } = payload;
+    const sessionDirectory = directory || this.directoryForSession(sessionId);
+    if (sessionDirectory) this.sessionDirectories.set(sessionId, sessionDirectory);
 
     const resolvedAgent =
       typeof agent === "string" && agent.trim() ? agent.trim() : "build";
@@ -647,7 +681,7 @@ export class AgentInsight {
       parts: [{ type: "text" as const, text }],
       ...(system ? { system } : {}),
       ...(permission ? { permission } : {}),
-      ...(directory ? { directory } : {}),
+      ...(sessionDirectory ? { directory: sessionDirectory } : {}),
       ...(noReply ? { noReply: true } : {}),
       ...(format ? { format } : {}),
       ...rest,
@@ -661,17 +695,13 @@ export class AgentInsight {
       textLength: text.length,
       hasSystem: Boolean(system),
       hasPermission: Array.isArray(permission) && permission.length > 0,
-      directory: directory || this.defaultDirectory || null,
+      directory: sessionDirectory || null,
       hasFormat: Boolean(format),
     });
 
     const result = await this.client.session.prompt({
       path: { id: sessionId },
-      query: directory
-        ? { directory }
-        : this.defaultDirectory
-          ? { directory: this.defaultDirectory }
-          : undefined,
+      query: sessionDirectory ? { directory: sessionDirectory } : undefined,
       body: body as any,
       // 透传 AbortSignal 到底层 fetch：opencode 的 session.prompt HTTP 请求会一直挂到
       // 整段对话（含 SessionSummary.summarize 之类的"善后" LLM 调用）结束才返回。
@@ -707,14 +737,21 @@ export class AgentInsight {
     if (sessionId) {
       allowed.add(sessionId);
       if (includeChildren) {
-        for (const id of await tryGetChildSessionIDs(this.client, sessionId)) {
+        for (const id of await tryGetChildSessionIDs(
+          this.client,
+          sessionId,
+          this.directoryForSession(sessionId),
+        )) {
           allowed.add(id);
         }
       }
     }
 
+    const subscribeDirectory = sessionId
+      ? this.directoryForSession(sessionId)
+      : this.defaultDirectory;
     const eventResult = await this.client.event.subscribe({
-      query: this.defaultDirectory ? { directory: this.defaultDirectory } : undefined,
+      query: subscribeDirectory ? { directory: subscribeDirectory } : undefined,
     });
     const stream = eventResult.stream;
     const onAbort = () => {
@@ -825,6 +862,8 @@ export class AgentInsight {
     const reasoningAcc = new Map<string, string>();
     const textPartAcc = new Map<string, string>();
     const reasoningPartAcc = new Map<string, string>();
+    const textDeltaGuard = new MirroredDeltaGuard();
+    const reasoningDeltaGuard = new MirroredDeltaGuard();
     // 工具状态机：partID → 上一次状态，防止重复 start
     const toolStatusSeen = new Map<string, string>();
     const toolInputAcc = new Map<string, string>();
@@ -848,7 +887,11 @@ export class AgentInsight {
       string,
       { agent?: string; description?: string; prompt?: string; parentID: string }
     >();
-    for (const cid of await tryGetChildSessionIDs(this.client, sessionId)) {
+    for (const cid of await tryGetChildSessionIDs(
+      this.client,
+      sessionId,
+      this.directoryForSession(sessionId),
+    )) {
       allowedSessionIDs.add(cid);
     }
 
@@ -889,7 +932,7 @@ export class AgentInsight {
       agent: payload?.agent || "build",
       providerID: payload?.model?.providerID,
       modelID: payload?.model?.modelID,
-      directory: payload?.directory || this.defaultDirectory || null,
+      directory: payload?.directory || this.directoryForSession(sessionId) || null,
       streamTimeoutMs,
       idleTimeoutMs,
     });
@@ -946,7 +989,7 @@ export class AgentInsight {
     // directory（payload.directory），退到客户端默认 directory。
     const subscribeDirectory =
       (payload as { directory?: string } | undefined)?.directory ||
-      this.defaultDirectory ||
+      this.directoryForSession(sessionId) ||
       undefined;
     const subPromise = (async () => {
       let onAbort: (() => void) | null = null;
@@ -1030,6 +1073,9 @@ export class AgentInsight {
                       : part.text;
                 textAcc.set(pMessage, part.text);
                 if (typeof pId === "string" && pId) textPartAcc.set(pId, part.text);
+                if (typeof evt.properties?.delta === "string" && incomingDelta) {
+                  textDeltaGuard.remember(`${pMessage}:${pId || 'text'}`, evt.properties.delta);
+                }
 
                 if (incomingDelta) {
                   textDeltaCount += 1;
@@ -1068,6 +1114,9 @@ export class AgentInsight {
                       : part.text;
                 reasoningAcc.set(pMessage, part.text);
                 if (typeof pId === "string" && pId) reasoningPartAcc.set(pId, part.text);
+                if (typeof evt.properties?.delta === "string" && delta) {
+                  reasoningDeltaGuard.remember(`${pMessage}:${pId || 'reasoning'}`, evt.properties.delta);
+                }
 
                 if (isSubagent) {
                   onSubagent?.({
@@ -1222,6 +1271,7 @@ export class AgentInsight {
                 typeof partID === "string" && partID.length > 0 && reasoningPartAcc.has(partID);
 
               if (field === "text" && !isReasoningPart) {
+                if (textDeltaGuard.consume(`${messageID}:${partID || 'text'}`, delta)) break;
                 const messageFullText = (textAcc.get(messageID) ?? "") + delta;
                 textAcc.set(messageID, messageFullText);
                 textDeltaCount += 1;
@@ -1252,6 +1302,7 @@ export class AgentInsight {
                   });
                 }
               } else if (field === "reasoning" || isReasoningPart) {
+                if (reasoningDeltaGuard.consume(`${messageID}:${partID || 'reasoning'}`, delta)) break;
                 const messageFullText = (reasoningAcc.get(messageID) ?? "") + delta;
                 reasoningAcc.set(messageID, messageFullText);
                 const partFullText =
@@ -1578,7 +1629,7 @@ export class AgentInsight {
                 // string[]（单问题/兼容老前端）或 null（跳过）。respondQuestion 会按 schema
                 // 把 string[] 自动包成 [[...]]，前端 QuestionBlock 多问题模式直接传 string[][]。
                 const answers = Array.isArray(reply) && reply.length > 0 ? reply : null;
-                await this.respondQuestion(ev.id, answers);
+                await this.respondQuestion(ev.id, answers, ev.sessionID || sessionId);
               } catch (e) {
                 this.log("error", "chat.question.reply.failed", {
                   error: (e as Error).message,
@@ -1593,10 +1644,11 @@ export class AgentInsight {
             case "permission.updated":
             case "permission.asked": {
               const p = (evt.properties || {}) as Record<string, any>;
-              if (!p.id || !p.sessionID) break;
+              const permissionSessionID = p.sessionID || p.sessionId || evtSession || sessionId;
+              if (!p.id || !permissionSessionID) break;
               const ev: PermissionAskEvent = {
                 id: p.id,
-                sessionID: p.sessionID || p.sessionId,
+                sessionID: permissionSessionID,
                 messageID: p.messageID || p.messageId,
                 callID: p.callID || p.callId,
                 title: p.title,

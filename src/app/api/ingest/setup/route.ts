@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
+import { db } from '@/lib/storage/prisma';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -62,6 +63,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'pi-agent', label: 'Pi Agent' },
     { value: 'qwencode', label: 'Qwen Code' },
     { value: 'codex', label: 'Codex' },
+    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -238,7 +240,8 @@ function generateBashScript(
         '    { name: \'AcTrail\', value: \'actrail\' },',
         '    { name: \'Pi Agent\', value: \'pi-agent\' },',
         '    { name: \'Codex\', value: \'codex\' },',
-        '    { name: \'Qwen Code\', value: \'qwencode\' }',
+        '    { name: \'Qwen Code\', value: \'qwencode\' },',
+        '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }',
         '];',
         '',
         'async function select() {',
@@ -318,6 +321,8 @@ function generateBashScript(
         'INSTALL_ACTRAIL=false',
         'INSTALL_CODEX=false',
         'INSTALL_QWENCODE=false',
+        'INSTALL_DEEPSEEK_HARNESS=false',
+        'DEEPSEEK_HARNESS_SETUP_OK=false',
         '',
         'if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then',
         '    INSTALL_OPENCODE=true',
@@ -358,9 +363,12 @@ function generateBashScript(
         'if [[ "$SELECTED_FRAMEWORKS" == *"qwencode"* ]]; then',
         '    INSTALL_QWENCODE=true',
         'fi',
+        'if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then',
+        '    INSTALL_DEEPSEEK_HARNESS=true',
+        'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ]; then',
+        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
@@ -779,7 +787,7 @@ function generateBashScript(
         '',
         '    # 这里不能因为「配置文件已存在」就跳过：换账号后本机仍绑在原账号上，',
         '    # 而 .env 已被改写成新账号 —— Trace 归新账号、纳管归旧账号，机器裂成两半。',
-        '    # 是否跳过由安装器按归属判定（同账号幂等跳过，跨账号自动改绑）。',
+        '    # 安装器每次都会刷新注册；同机同账号由服务端复用记录并轮换设备凭证。',
         '',
         '    local token_json token token_user',
         '    token_json=$(curl -sSf -X POST "$host/api/reliability/install-tokens" -H "content-type: application/json" -H "x-witty-api-key: $api_key" -d "{\\"expiresInSeconds\\":600}" 2>/dev/null) || {',
@@ -793,9 +801,14 @@ function generateBashScript(
         '        return 1',
         '    fi',
         '',
-        '    # 与 RAS 相同的三级回退：本地 checkout → 服务端下发 → npm 兜底。',
-        '    # 只有服务端下发这一级能保证「在任意目录执行都装得上」。',
-        '    if [ -f "./scripts/install-ras-client.js" ]; then',
+        '    # 常驻客户端默认使用当前服务端下发的 bundle，避免执行目录里的旧 checkout',
+        '    # 覆盖服务端修复。开发调试时可显式设置 AGENT_INSIGHT_CLIENT_SOURCE=local。',
+        '    if [ "${AGENT_INSIGHT_CLIENT_SOURCE:-server}" = "local" ]; then',
+        '        if [ ! -f "./scripts/install-ras-client.js" ]; then',
+        '            echo "⚠️  常驻客户端注册失败：已指定本地源码，但当前目录没有 ./scripts/install-ras-client.js"',
+        '            return 1',
+        '        fi',
+        '        echo "    使用显式指定的本地常驻客户端安装器"',
         '        AGENT_INSIGHT_HOST="$host" node "./scripts/install-ras-client.js" --host "$host" --token "$token" --user "$token_user"',
         '        return $?',
         '    fi',
@@ -834,6 +847,21 @@ function generateBashScript(
         '    if [ -f "$HOME/.agent-insight/client/config.json" ]; then',
         '        echo "    注意：本机此前已绑定其他账号，该绑定仍然有效 —— 此时 Trace 归新账号、"',
         '        echo "    纳管仍归原账号。请重跑本命令完成改绑，避免两边状态不一致。"',
+        '    fi',
+        'fi',
+        '',
+        'if [ "$INSTALL_DEEPSEEK_HARNESS" = "true" ]; then',
+        '    if [ -z "$FINAL_KEY" ]; then',
+        '        echo "Warning: DeepSeek Harness observability requires an API key; configure one and rerun setup."',
+        '    else',
+        '        echo "⏬ Installing DeepSeek Harness observability..."',
+        '        DEEPSEEK_HARNESS_INSTALLER="$(mktemp)"',
+        '        if curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/deepseek-harness" -o "$DEEPSEEK_HARNESS_INSTALLER" && AGENT_INSIGHT_BASE_URL="$AGENT_INSIGHT_BASE_URL" AGENT_INSIGHT_API_KEY="$FINAL_KEY" sh "$DEEPSEEK_HARNESS_INSTALLER"; then',
+        '            DEEPSEEK_HARNESS_SETUP_OK=true',
+        '        else',
+        '            echo "Warning: DeepSeek Harness observability installation did not complete; review the errors above."',
+        '        fi',
+        '        rm -f "$DEEPSEEK_HARNESS_INSTALLER"',
         '    fi',
         'fi',
         '',
@@ -1208,6 +1236,7 @@ function generateBashScript(
         'if [ "$INSTALL_TRAE" = "true" ]; then echo "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"; fi',
         'if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"; fi',
         'if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"; fi',
+        'if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then echo "  ✅ DeepSeek Harness observability: headless + web profiles"; fi',
         '',
         'if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then',
         '    echo ""',
@@ -1229,6 +1258,7 @@ function generateBashScript(
         'if [ "$INSTALL_TRAE" = "true" ]; then echo "  6. Restart TRAE IDE to activate the collector"; fi',
         'if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then echo "  7. Use actrailctl launch as usual; AcTrail will upload automatically"; fi',
         'if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then echo "  7. Start a new Pi session"; fi',
+        'if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then echo "  8. Start a new dsh session"; fi',
         'echo "------------------------------------------------"',
     ];
     return lines.join('\n');
@@ -1347,7 +1377,8 @@ function generatePowerShellScript(
         '    { name: \'AcTrail\', value: \'actrail\' },',
         '    { name: \'Pi Agent\', value: \'pi-agent\' },',
         '    { name: \'Codex\', value: \'codex\' },',
-        '    { name: \'Qwen Code\', value: \'qwencode\' }',
+        '    { name: \'Qwen Code\', value: \'qwencode\' },',
+        '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }',
         '];',
         '',
         'async function select() {',
@@ -1430,6 +1461,7 @@ function generatePowerShellScript(
         '$INSTALL_ACTRAIL = $false',
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
+        '$INSTALL_DEEPSEEK_HARNESS = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1470,9 +1502,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "qwencode") {',
         '    $INSTALL_QWENCODE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
+        '    $INSTALL_DEEPSEEK_HARNESS = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1898,6 +1933,10 @@ function generatePowerShellScript(
         '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
         '}',
         '',
+        'if ($INSTALL_DEEPSEEK_HARNESS) {',
+        '    Write-Warning "DeepSeek Harness observability is currently supported on macOS/Linux. Use WSL on Windows."',
+        '}',
+        '',
         'if ($INSTALL_CODEX) {',
         '    Write-Host "⏬ Installing Codex collector..."',
         '    $env:AGENT_INSIGHT_API_KEY = $FINAL_KEY',
@@ -2310,6 +2349,21 @@ export async function GET(request: Request) {
     const forceNoKey = queryFlagEnabled(
         requestUrl.searchParams.get('nokey') ?? requestUrl.searchParams.get('no-key'),
     );
+    if (apiKey && !forceNoKey) {
+        const user = await db.findUserByApiKey(apiKey);
+        if (!user) {
+            return NextResponse.json(
+                {
+                    error: 'Invalid API key',
+                    detail: '安装命令中的 API Key 不属于当前服务，请刷新安装指导页后重新复制。',
+                },
+                {
+                    status: 401,
+                    headers: { 'Cache-Control': 'no-store' },
+                },
+            );
+        }
+    }
     // ?frameworks=opencode,claude —— 安装页勾选后带上，脚本据此跳过终端内的交互选择。
     // 不传（老命令）时行为不变，仍在终端里问一遍。
     const requestedFrameworks = parseFrameworks(
@@ -2351,6 +2405,7 @@ export async function GET(request: Request) {
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
+                'Cache-Control': 'no-store',
             },
         });
     } else {
@@ -2369,6 +2424,7 @@ export async function GET(request: Request) {
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/x-shellscript',
+                'Cache-Control': 'no-store',
             },
         });
     }

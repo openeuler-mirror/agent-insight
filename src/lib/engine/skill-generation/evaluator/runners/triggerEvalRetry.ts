@@ -35,13 +35,13 @@ export function classifyEndReason(o: {
 }
 
 /**
- * 超时重试次数上限。默认 2（共 3 次尝试），可用 env 覆盖；clamp 到 [0, 5] 防手滑。
+ * 超时重试次数上限。默认 1（共 2 次尝试），可用 env 覆盖；clamp 到 [0, 5] 防手滑。
  */
 export function resolveMaxTimeoutRetries(
   rawEnv: string | undefined = process.env.TRIGGER_EVAL_TIMEOUT_RETRIES,
 ): number {
-  const raw = Number(rawEnv ?? 2);
-  if (!Number.isFinite(raw)) return 2;
+  const raw = Number(rawEnv ?? 1);
+  if (!Number.isFinite(raw)) return 1;
   return Math.max(0, Math.min(5, Math.floor(raw)));
 }
 

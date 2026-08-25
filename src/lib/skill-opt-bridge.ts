@@ -46,6 +46,10 @@ const threadSessionMap = new Map<string, string>();
 /** threadId 级串行锁，避免同一 session 并发请求互相踩。 */
 const threadInflight = new Map<string, Promise<unknown>>();
 
+function isTransientModelConnectionError(message: string) {
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network error/i.test(message);
+}
+
 async function withThreadLock<T>(threadId: string, fn: () => Promise<T>): Promise<T> {
   const prev = threadInflight.get(threadId) ?? Promise.resolve();
   const next = prev.catch(() => {}).then(fn);
@@ -140,7 +144,7 @@ async function streamSkillOptOpencodeImpl(
   // skill-opt 比 skill-generator 长——agent 要 read 多个文件 → 思考 → edit 多处，
   // LLM 在两次 tool 间可能停顿 10-20s 不冒泡。skill-generator 12s 在这场景下经常误切。
   const IDLE_BAILOUT_MS = 30_000;
-  const chatAbortController = new AbortController();
+  let chatAbortController = new AbortController();
   let idleWatchdog: NodeJS.Timeout | null = null;
   const armIdleWatchdog = () => {
     if (idleWatchdog) clearTimeout(idleWatchdog);
@@ -148,6 +152,7 @@ async function streamSkillOptOpencodeImpl(
   };
 
   let agentText = '';
+  const textFullByMessageId = new Map<string, string>();
   let openThinkingId: string | null = null;
   const reasoningFullByThinkId = new Map<string, string>();
   const announcedTools = new Set<string>();
@@ -155,6 +160,8 @@ async function streamSkillOptOpencodeImpl(
   // 同一个错误 onSession(phase='error') 与 onError 都会触发——dedup 避免给前端推两条
   const errorsSent = new Set<string>();
   const sendErrorOnce = (msg: string) => {
+    // 连接前的瞬时错误会在 runGeneralAgent 外层自动重试；不要先把原始错误写进对话。
+    if (isTransientModelConnectionError(msg)) return;
     if (errorsSent.has(msg)) return;
     errorsSent.add(msg);
     try { send('error', msg); } catch { /* stream closed */ }
@@ -171,8 +178,18 @@ async function streamSkillOptOpencodeImpl(
     onText: (e) => {
       armIdleWatchdog();
       closeThinkingIfOpen();
-      agentText += e.delta;
-      send('text', e.delta);
+      const key = e.messageID || e.partID || 'default';
+      const lastFull = textFullByMessageId.get(key) ?? '';
+      const incomingFull = e.fullText && typeof e.fullText === 'string'
+        ? e.fullText
+        : lastFull + e.delta;
+      if (incomingFull.length <= lastFull.length) return;
+      const realDelta = incomingFull.startsWith(lastFull)
+        ? incomingFull.slice(lastFull.length)
+        : e.delta;
+      textFullByMessageId.set(key, incomingFull);
+      agentText += realDelta;
+      send('text', realDelta);
     },
     onReasoning: (e) => {
       armIdleWatchdog();
@@ -258,7 +275,8 @@ async function streamSkillOptOpencodeImpl(
     // 时才 abort，"tool-calls"（本轮要继续）放行。
     onAssistantMessage: (e) => {
       if (e.status === 'error') {
-        setTimeout(() => chatAbortController.abort(), 500);
+        const controller = chatAbortController;
+        setTimeout(() => controller.abort(), 500);
         return;
       }
       if (e.status !== 'completed') return;
@@ -273,7 +291,8 @@ async function streamSkillOptOpencodeImpl(
       // session.idle 才是真正的"任务彻底空闲"信号——所有助手消息都完成、没有更多 LLM 调用了。
       // 这条对 skill-opt 也是安全的终止依据。延迟 500ms 让最后一批 file_edited / tool_result 落地。
       if (e.phase === 'idle') {
-        setTimeout(() => chatAbortController.abort(), 500);
+        const controller = chatAbortController;
+        setTimeout(() => controller.abort(), 500);
       }
       if (e.phase === 'error') {
         const errMsg = formatSessionError((e as any).error);
@@ -308,48 +327,47 @@ async function streamSkillOptOpencodeImpl(
     skillVersion: baseVersion,
     displayOnly: true,
   };
+  const executeAgent = (sessionId?: string) => withBackgroundOpencodeSlot(
+    () => runGeneralAgent({
+      user,
+      query: composeUserQuery(checkedIssues, userFeedback, planItems),
+      ...(sessionId ? { sessionId } : {}),
+      workspaceTag: threadId,
+      sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
+      system: systemPrompt,
+      chatOptions: {
+        idleTimeoutMs: 30_000,
+        streamTimeoutMs: 15 * 60 * 1000,
+        signal: chatAbortController.signal,
+      },
+      systemAgentName: SKILL_OPT_AGENT_NAME,
+      interactionPolicy: 'auto-allow',
+      ...(modelOverride ? { model: modelOverride } : {}),
+      handlers,
+    }),
+    slotMeta,
+  );
   let result;
   try {
-    result = await withBackgroundOpencodeSlot(
-      () => runGeneralAgent({
-        user,
-        query: composeUserQuery(checkedIssues, userFeedback, planItems),
-        sessionId: cachedSessionId,
-        workspaceTag: threadId,
-        sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
-        system: systemPrompt,
-        chatOptions: {
-          idleTimeoutMs: 30_000,
-          streamTimeoutMs: 15 * 60 * 1000,
-          signal: chatAbortController.signal,
-        },
-        systemAgentName: SKILL_OPT_AGENT_NAME,
-        interactionPolicy: 'auto-allow',
-        ...(modelOverride ? { model: modelOverride } : {}),
-        handlers,
-      }),
-      slotMeta,
-    );
+    result = await executeAgent(cachedSessionId);
   } catch (err) {
-    // 复用 session 失效时换新 session 重试一次（与 skill-generator 一致的兜底）
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[skill-opt-bridge] runGeneralAgent threw:', msg);
-    if (cachedSessionId && /session/i.test(msg)) {
+    const staleSession = Boolean(cachedSessionId && /session/i.test(msg));
+    const connectionFailedBeforeWork = isTransientModelConnectionError(msg)
+      && agentText.length === 0
+      && announcedTools.size === 0;
+    if (staleSession || connectionFailedBeforeWork) {
       threadSessionMap.delete(threadId);
+      if (connectionFailedBeforeWork) {
+        send('warning', { kind: 'model_connection_retry', message: '模型服务连接中断，正在自动重试（1/1）…' });
+        if (idleWatchdog) clearTimeout(idleWatchdog);
+        idleWatchdog = null;
+        chatAbortController = new AbortController();
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      }
       console.log('[skill-opt-bridge] retrying without cachedSessionId...');
-      result = await withBackgroundOpencodeSlot(
-        () => runGeneralAgent({
-          user,
-          query: composeUserQuery(checkedIssues, userFeedback, planItems),
-          workspaceTag: threadId,
-          sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
-          system: systemPrompt,
-          interactionPolicy: 'auto-allow',
-          ...(modelOverride ? { model: modelOverride } : {}),
-          handlers,
-        }),
-        slotMeta,
-      );
+      result = await executeAgent();
     } else {
       throw err;
     }

@@ -9,13 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `789bfd06df4f4f6950cc042e1aab08196df9d15c` (`789bfd06`) |
-| Branch | `codex/reliability-development` |
-| Date | 2026-08-19 17:26:04 +0800 |
-| Author | gyctl |
-| Subject | `fix: resolve PR 312 conflicts with latest master` |
+| Commit | `7bb87d9fddf5f86365905e8fbbeb0a6ffaaaebaf` (`7bb87d9f`) |
+| Branch | `master` |
+| Date | 2026-08-24 17:44:28 +0800 |
+| Author | openeuler-ci-bot |
+| Subject | `!335 重构skill生成、skill优化和skill评测` |
+| Working tree overlay | 当前工作树在该快照之上把 FI Python 安装收敛为版本化 managed venv：系统 Python 只创建 venv，FI pip/CLI/xiaoO Hook 使用固化解释器，并补齐 launchd bootout/bootstrap 竞态重试与真实状态校验。 |
 
-**如何更新：** `git diff 789bfd06 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

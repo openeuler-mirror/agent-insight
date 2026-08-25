@@ -87,6 +87,7 @@ export const en = {
     security: 'Security',
     fault: 'Diagnosis Analysis',
     skillWorkspace: 'Skill',
+    skillManagement: 'Skill Management',
     skillWorkspaceHub: 'SkillHub',
     skillWorkspaceGenerate: 'Generation',
     skillWorkspaceEvaluate: 'Evaluation',

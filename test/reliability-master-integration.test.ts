@@ -24,7 +24,8 @@ test('experiment UI and run route keep comparison and generated trace flows sepa
   const runRoute = read('src/app/api/experiments/[id]/run/route.ts')
 
   assert.match(page, /useState<'single' \| 'llm'>\('single'\)/)
-  assert.match(page, /useState<'existing' \| 'generate'>\('existing'\)/)
+  assert.match(page, /useState<'existing' \| 'generate'>/)
+  assert.match(page, /skillPreset === 'trigger' \|\| skillPreset === 'skill-ab' \? 'generate' : 'existing'/)
   assert.match(page, /expType === 'single' && traceMode === 'generate'/)
   assert.match(runRoute, /startComparisonRun/)
   assert.match(runRoute, /generateExperimentTraces/)

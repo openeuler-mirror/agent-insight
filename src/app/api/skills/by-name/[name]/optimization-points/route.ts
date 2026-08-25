@@ -114,6 +114,7 @@ function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
   let kind: 'trace' | 'fault' | 'log' | 'static';
   let label: string;
   let url: string | undefined;
+  const experimentId = it.evaluationRunId?.match(/^experiment:([^:]+):/)?.[1];
 
   if (it.source === 'static' || it.evaluationType === 'static') {
     kind = 'static';
@@ -121,10 +122,13 @@ function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
     url = `/evaluation/${it.evaluationId}`;
   } else if (it.source === 'trigger' || it.evaluationType === 'trigger') {
     kind = 'log';
-    label = it.evaluationRunId ? `触发评测 ${it.evaluationRunId.slice(0, 8)}` : '触发评测';
+    label = experimentId ? `触发实验 ${experimentId.slice(0, 8)}`
+      : it.evaluationRunId ? `触发评测 ${it.evaluationRunId.slice(0, 8)}` : '触发评测';
     // evaluationRunId 这里存的是 SkillTriggerEvalRun.id（见 derive-trigger-opt-points.ts），
     // 前端 trigger 页可按 runId query 跳到对应历史记录。
-    if (it.evaluationRunId) {
+    if (experimentId) {
+      url = `/experiments/${encodeURIComponent(experimentId)}`;
+    } else if (it.evaluationRunId) {
       url = `/skill-eval/trigger/${encodeURIComponent(skillName)}?runId=${encodeURIComponent(it.evaluationRunId)}`;
     }
   } else if (it.source === 'dynamic' || it.evaluationType === 'dynamic') {
@@ -135,7 +139,10 @@ function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
       kind = 'trace';
       label = it.ruleId === 'metric' ? '执行指标' : '动态评估';
     }
-    if (it.executionTaskId) {
+    if (experimentId) {
+      label = `用例实验 ${experimentId.slice(0, 8)}`;
+      url = `/experiments/${encodeURIComponent(experimentId)}`;
+    } else if (it.executionTaskId) {
       label = it.ruleId === 'skillIssue' ? shortTaskId(it.executionTaskId) : label;
       url = `/trace?taskId=${encodeURIComponent(it.executionTaskId)}`;
     } else {

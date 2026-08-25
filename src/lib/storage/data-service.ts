@@ -59,6 +59,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'codex',
     'llamaindex',
     'pi-agent',
+    'deepseek-harness',
 ]);
 
 export interface InvokedSkill {
@@ -207,7 +208,7 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'langfuse-langgraph' || framework === 'codeagent') {
+    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'deepseek-harness') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
