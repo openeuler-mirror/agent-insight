@@ -25,8 +25,6 @@ description: Recovery-side second opinion for LLM thinking-loop L3 first verdict
 - 「等一下」「再看看」「不对」后重新回到旧论点或旧分析路径
 - 同一段分析逻辑在片段内重复出现（即使措辞不同）
 
-**不要**把长篇分析瘫痪（过度思考）判成本类；那由独立检测域 `analysis_paralysis` 负责。
-
 ### text_degradation（文本崩坏）
 
 - 语句明显不连续：前后句断裂、半句话拼接、词组被截断后硬接另一段内容
