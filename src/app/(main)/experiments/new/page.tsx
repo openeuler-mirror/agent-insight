@@ -20,7 +20,12 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/engine/experiment/dataset-match';
+import {
+  describeMatchResult,
+  findBestDatasetInputMatch,
+  matchDatasetCases,
+  toDatasetCases,
+} from '@/lib/engine/experiment/dataset-match';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
@@ -446,7 +451,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   // ③ 预期答案
   const [expandedCase, setExpandedCase] = useState<string | null>(null);
   const [draftRef, setDraftRef] = useState('');
-  // ③ 与数据集互通：导入（按输入精确匹配回填）/ 存为数据集（标注成果沉淀）
+  // ③ 与数据集互通：导入（Trace 输入包含数据集输入时回填）/ 存为数据集（标注成果沉淀）
   const [datasets, setDatasets] = useState<DatasetOption[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -780,9 +785,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
       referenceOutput: null,
       evaluatorContext: null,
     };
-    const datasetCase = (selectedDataset?.cases || []).find(
-      (item) => String(item.input || '').trim() === base.input.trim(),
-    );
+    const datasetCase = findBestDatasetInputMatch(base.input, selectedDataset?.cases || []);
     if (!datasetCase) return base;
     const match = matchDatasetCases(
       [{ key: base.executionId, input: base.input }],
@@ -925,7 +928,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     });
   };
 
-  // ③ 从数据集导入：按输入精确匹配回填参考输出，已标注的默认跳过（保护人工标注）
+  // ③ 从数据集导入：Trace 输入包含数据集输入时回填，已标注的默认跳过（保护人工标注）
   const openImport = () => {
     setDatasetHint('');
     setImportOpen(true);
@@ -2188,7 +2191,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', flex: 1, minWidth: 260, lineHeight: 1.6 }}>
                 {isReliabilityDataset
                   ? '已按任务输入从内置可靠性数据集自动导入预期答案与故障元数据；未匹配条目仍可手工标注。'
-                  : '参考答案和 Tool/Skill 目录可从数据集按输入精确导入；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。'}
+                  : 'Trace 任务输入包含数据集输入时，可导入参考答案和 Tool/Skill 目录；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。'}
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 200 }}>
                 <span style={{ flex: 1, height: 7, borderRadius: 4, background: 'var(--background-secondary)', overflow: 'hidden' }}>
@@ -2204,7 +2207,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
               </span>
               <span style={{ display: 'flex', gap: 8 }}>
                 {!isReliabilityDataset && (
-                  <button style={BTN_OUTLINE_SM} onClick={openImport} title="按任务输入精确匹配，回填参考输出；已标注的条目跳过">
+                  <button style={BTN_OUTLINE_SM} onClick={openImport} title="Trace 任务输入包含数据集输入时回填；已标注的条目跳过">
                     📥 从数据集导入匹配
                   </button>
                 )}
@@ -2430,7 +2433,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
           </div>
         )}
 
-        {/* ③ 从数据集导入：选一个数据集，按输入精确匹配回填 */}
+        {/* ③ 从数据集导入：选一个数据集，Trace 输入包含数据集输入时回填 */}
         {importOpen && (
           <div style={MODAL_OV} onClick={(e) => { if (e.target === e.currentTarget) setImportOpen(false); }}>
             <div style={MODAL}>
@@ -2440,7 +2443,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                 <button style={BTN_GHOST} onClick={() => setImportOpen(false)}>✕ 关闭</button>
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginBottom: 12, lineHeight: 1.6 }}>
-                按<b style={{ color: 'var(--foreground-secondary)' }}>任务输入精确匹配</b>回填参考输出；已标注的 case 会跳过，不覆盖人工标注。
+                当<b style={{ color: 'var(--foreground-secondary)' }}>Trace 任务输入包含数据集输入</b>时回填参考输出；已标注的 case 会跳过，不覆盖人工标注。
               </div>
               {datasets.length === 0 ? (
                 <div style={{ padding: 22, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)', border: '1px dashed var(--border-dark)', borderRadius: 10 }}>

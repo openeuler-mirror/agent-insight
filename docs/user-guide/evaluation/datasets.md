@@ -229,7 +229,7 @@ input,expected_output
 ]
 ```
 
-`available_tools` 是必需的入口字段，`available_skills` 可省略。缺少 `available_tools` 表示系统无法确认能力目录；填写空数组表示已确认没有可用 Tool。目录不包含 Agent、子 Agent 或任务委派。对于 OpenCode/Jiuwen，`skill`、`load_skill` 等只是 Skill 加载入口，不要作为独立 Tool 写入 `available_tools`，应把实际 Skill 名称写入 `available_skills`。JSON 导入识别到这两个字段后，会自动创建对应的 JSON 数据列。导入后，在新建实验第 ③ 步点击“从数据集导入匹配”，系统按 input 精确匹配并回填目录。
+`available_tools` 是必需的入口字段，`available_skills` 可省略。缺少 `available_tools` 表示系统无法确认能力目录；填写空数组表示已确认没有可用 Tool。目录不包含 Agent、子 Agent 或任务委派。对于 OpenCode/Jiuwen，`skill`、`load_skill` 等只是 Skill 加载入口，不要作为独立 Tool 写入 `available_tools`，应把实际 Skill 名称写入 `available_skills`。JSON 导入识别到这两个字段后，会自动创建对应的 JSON 数据列。导入后，在新建实验第 ③ 步点击“从数据集导入匹配”；Trace 任务输入包含数据集 input 时，系统会回填对应目录，多条命中时优先使用更长、更具体的一条。
 
 trace 只能说明 Agent 实际调用了哪些能力，不能说明当时还有哪些能力可用。不要把 trace 中的已调用集合直接当作完整目录，否则无法判断遗漏的必要工具。需要批量填写时，请使用数据集 JSON 维护上述目录字段；当前 CSV 导入仅识别输入、预期输出（含兼容别名）和轨迹列，不会自动写入 `available_tools` / `available_skills`。CSV 导入后可在界面手动补充这两个 JSON 字段；需要程序化创建实验时，通过实验 API 的 `evaluatorContext` 提供。
 
