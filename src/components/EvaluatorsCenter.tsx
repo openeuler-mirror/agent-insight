@@ -690,7 +690,7 @@ function EvaluatorCardView({
             {tag}
           </span>
         ))}
-        {[...card.objectives, ...card.scenarios.slice(0, 2)].map(tag => (
+        {card.scenarios.map(tag => (
           <span key={tag} style={{ background: 'var(--background-tertiary)', color: 'var(--foreground-secondary)', borderRadius: 4, padding: '3px 7px', fontSize: 11 }}>
             {tag}
           </span>
