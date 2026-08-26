@@ -9,7 +9,7 @@ import { findBestSemanticCaseMatch } from './semantic-dataset-match';
 export interface DatasetCaseMatch {
   dataset: AgentDatasetRecord;
   caseEntry: DatasetCase;
-  matchedBy: 'exact' | 'semantic';
+  matchedBy: 'exact' | 'contains' | 'semantic';
   matchConfidence: number;
   matchReason: string;
 }
@@ -82,18 +82,35 @@ export async function matchAgentDatasetCase(input: MatchDatasetCaseInput): Promi
     return { reason: 'no-datasets', matchReason: 'No eligible datasets available' };
   }
 
+  let containedMatch: { dataset: AgentDatasetRecord; caseEntry: DatasetCase; inputLength: number } | null = null;
   for (const dataset of datasets) {
-    const caseEntry = dataset.cases.find(item =>
-      normalizeDatasetCaseMatchText(item.input) === normalizedTraceInput
-      && (!requireExpectedOutput || Boolean(normalizeDatasetCaseMatchText(item.expectedOutput))),
-    );
-    if (caseEntry) {
-      return {
-        reason: 'matched',
-        matchReason: 'Normalized case input exactly matched trace input',
-        match: { dataset, caseEntry, matchedBy: 'exact', matchConfidence: 1, matchReason: 'exact-input' },
-      };
+    for (const caseEntry of dataset.cases) {
+      const normalizedDatasetInput = normalizeDatasetCaseMatchText(caseEntry.input);
+      if (
+        !normalizedDatasetInput
+        || !normalizedTraceInput.includes(normalizedDatasetInput)
+        || (requireExpectedOutput && !normalizeDatasetCaseMatchText(caseEntry.expectedOutput))
+      ) continue;
+      if (!containedMatch || normalizedDatasetInput.length > containedMatch.inputLength) {
+        containedMatch = { dataset, caseEntry, inputLength: normalizedDatasetInput.length };
+      }
     }
+  }
+  if (containedMatch) {
+    const exact = containedMatch.inputLength === normalizedTraceInput.length;
+    return {
+      reason: 'matched',
+      matchReason: exact
+        ? 'Normalized case input exactly matched trace input'
+        : 'Normalized trace input contains case input',
+      match: {
+        dataset: containedMatch.dataset,
+        caseEntry: containedMatch.caseEntry,
+        matchedBy: exact ? 'exact' : 'contains',
+        matchConfidence: 1,
+        matchReason: exact ? 'exact-input' : 'trace-contains-case-input',
+      },
+    };
   }
 
   const candidates: { id: string; input: string }[] = [];
