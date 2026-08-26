@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `7bb87d9fddf5f86365905e8fbbeb0a6ffaaaebaf` (`7bb87d9f`) |
-| Branch | `new-dev-8-25` |
-| Date | 2026-08-24 17:44:28 +0800 |
+| Commit | `ebd3cbae2538dbbb6577f79f33ee8d1a3c19c6fe` (`ebd3cbae`) |
+| Branch | `master` |
+| Date | 2026-08-25 17:49:56 +0800 |
 | Author | openeuler-ci-bot |
-| Subject | `!335 重构skill生成、skill优化和skill评测` |
-| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，评测器分数契约与前端范围统一为 0-100。 |
+| Subject | `!336 feat(ras): 新增 analysis_paralysis 滑动窗口触发词计数门控检测器` |
+| Working tree overlay | 当前工作树在该快照之上修复未绑定 Skill 会话的右栏空状态，并将历史会话改为带明确文字入口的顶栏临时浮层。 |
 
-**如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff ebd3cbae HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
