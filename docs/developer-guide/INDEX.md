@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `c5e3d579ddee8bac9b10f4e9236768b1f99de182` (`c5e3d579`) |
-| Branch | `feat/fluency-hallucination-graders` |
-| Date | 2026-08-26 02:48:29 +0800 |
-| Author | xiaopeng01-2026 |
-| Subject | `refactor(eval): 复用 master 专项 Judge 通道，移除族内修复链` |
-| Working tree overlay | 该快照相对 `7bb87d9f` 同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；并新增文本流畅度/幻觉检测预置评估器（复用 specialized-evaluator-common 的 `invokeSpecializedJudge` 通道 + 确定性计分）。 |
+| Commit | `ebd3cbae2538dbbb6577f79f33ee8d1a3c19c6fe` (`ebd3cbae`) |
+| Branch | `master` |
+| Date | 2026-08-25 17:49:56 +0800 |
+| Author | openeuler-ci-bot |
+| Subject | `!336 feat(ras): 新增 analysis_paralysis 滑动窗口触发词计数门控检测器` |
+| Working tree overlay | 当前工作树在该快照之上修复未绑定 Skill 会话的右栏空状态，并将历史会话改为带明确文字入口的顶栏临时浮层。 |
 
-**如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff ebd3cbae HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

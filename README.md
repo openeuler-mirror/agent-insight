@@ -299,7 +299,19 @@ bash scripts/stop.sh
 
 ## 📚 文档
 
-详细使用指南见 [`docs/user-guide`](docs/user-guide/) 目录。新用户推荐从 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通完整闭环。
+完整文档位于 [`docs/`](docs/) 目录，主要包含以下内容：
+
+| 路径 | 说明 |
+|:---|:---|
+| [`docs/user-guide/`](docs/user-guide/) | 用户使用指南：快速上手、示例走查、核心概念、FAQ |
+| [`docs/developer-guide/`](docs/developer-guide/) | 开发者指南：架构、模块、API、约定等 |
+| [`docs/agent-ras/`](docs/agent-ras/) | Agent RAS 环内可靠性：异常检测 + 自动恢复的设计与使用 |
+| [`docs/agent-fault-injection/`](docs/agent-fault-injection/) | Agent 故障注入：注入 + 采集引擎的设计与使用 |
+| [`docs/snippets/`](docs/snippets/) | 可复用文档片段：SDK 安装、环境配置 |
+| [`docs/qa.md`](docs/qa.md) | 平台常见问答：覆盖概念、安装、接入、Skill、评测、观测、架构与排障 |
+| [`docs/skill-generation-principle-and-pipeline.md`](docs/skill-generation-principle-and-pipeline.md) | Skill 生成原理、流水线与能力边界 |
+
+> 新用户推荐从 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
 
 ## 🤝 如何贡献
 
