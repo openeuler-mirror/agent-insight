@@ -193,7 +193,8 @@ describe('流畅度预置评估器', () => {
 
     assert.ok(output.score! >= 50 && output.score! <= 60, `期望 50~60，实际 ${output.score}`);
     assert.equal(output.score, 50);
-    assert.equal(output.points?.filter((point) => point.status === 'missing').length, 4);
+    assert.equal(output.points?.filter((point) => point.status === 'missing').length, 2);
+    assert.equal(output.points?.filter((point) => point.status === 'partial').length, 2);
     assert.equal(output.points?.find((point) => point.label === '语言自然度')?.status, 'covered');
   });
 

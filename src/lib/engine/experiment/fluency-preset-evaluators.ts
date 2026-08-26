@@ -214,6 +214,15 @@ interface FluencyDimensionAggregate {
   items: FluencyIssueItem[];
 }
 
+/**
+ * 维度状态（与 safety/text 族一致的三态）：有 severe → missing；
+ * 仅有 light/moderate → partial；无问题 → covered。
+ */
+function dimensionStatus(items: FluencyIssueItem[]): EvalPoint['status'] {
+  if (items.length === 0) return 'covered';
+  return items.some(({ issue }) => issue.severity === 'severe') ? 'missing' : 'partial';
+}
+
 function buildDimensionIssueMd(agg: FluencyDimensionAggregate): string {
   const lines = agg.items.map(({ deduction, doubled, issue }) => {
     const suggestion = issue.suggestion.trim()
@@ -321,7 +330,7 @@ export function buildFluencyOutput(judged: FluencyJudgeResult, text: string): Ev
   const points: EvalPoint[] = aggregates.map((agg) => ({
     label: agg.label,
     score: Math.max(0, 100 - agg.deduction),
-    status: agg.deduction > 0 ? 'missing' : 'covered',
+    status: dimensionStatus(agg.items),
     evidence: {
       md: agg.deduction > 0 ? buildDimensionIssueMd(agg) : '该维度未发现明显问题。',
     },
