@@ -5,6 +5,7 @@ import { Edit2, Loader2, Plus, Tag, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { VersionWorkspaceTabs } from '@/components/observe/VersionWorkspaceTabs';
 import { PageContainer, PageHeader } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -271,6 +272,7 @@ export default function VersionManagementPage() {
   return (
     <>
       <AppTopBar title={copy.title} showDefaultActions={false} />
+      <VersionWorkspaceTabs />
       <PageContainer variant="wide" className="bg-background">
         <PageHeader
           title={copy.title}

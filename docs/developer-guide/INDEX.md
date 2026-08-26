@@ -10,11 +10,11 @@
 | Field | Value |
 |---|---|
 | Commit | `7bb87d9fddf5f86365905e8fbbeb0a6ffaaaebaf` (`7bb87d9f`) |
-| Branch | `new-dev-8-25` |
+| Branch | `codex/restore-version-analysis-navigation` |
 | Date | 2026-08-24 17:44:28 +0800 |
 | Author | openeuler-ci-bot |
 | Subject | `!335 重构skill生成、skill优化和skill评测` |
-| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，评测器分数契约与前端范围统一为 0-100。 |
+| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，评测器分数契约与前端范围统一为 0-100；并恢复“运行观测 → 版本分析”导航入口，通过页面顶部“版本分析 / 版本管理”页签将标签管理收为版本分析的子能力，两个既有页面、API 与数据口径保持不变。 |
 
 **如何更新：** `git diff 7bb87d9f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
