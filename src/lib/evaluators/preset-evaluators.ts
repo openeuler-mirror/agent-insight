@@ -146,7 +146,7 @@ export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-text-rouge',
     name: 'ROUGE 指标评估',
-    description: '以确定性分词计算生成文本与参考答案的 ROUGE-1、ROUGE-2 和 ROUGE-L，并以三项 F1 均值计分。',
+    description: '以确定性分词计算生成文本与参考答案的 ROUGE-1（unigram，单词重叠）、ROUGE-2（bigram，连续两词重叠）和 ROUGE-L（LCS，最长公共子序列），并以三项 F1（精确率与召回率的调和平均）均值计分。',
     evaluatorType: 'Code',
     source: 'preset',
     targetTypes: ['结果'],
@@ -178,7 +178,7 @@ export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-text-entity-f1',
     name: '实体 F1 匹配',
-    description: '比较 Agent 与参考答案中的 JSON 实体数组，按一对一匹配统计 TP、FP、FN，并以实体 F1 计分。',
+    description: '比较 Agent 与参考答案中的 JSON 实体数组，按一对一匹配统计正确识别数（TP）、误报数（FP）和遗漏数（FN），并以实体 F1（精确率与召回率的调和平均）计分。',
     evaluatorType: 'Code',
     source: 'preset',
     targetTypes: ['结果'],

@@ -119,9 +119,9 @@ async function runRouge(generatedText: string, referenceText: string): Promise<E
   const { gradeRouge } = await import('../evaluation/rouge-grader');
   const result = gradeRouge(generatedText, referenceText);
   const metrics = [
-    { label: 'ROUGE-1', value: result.reason.rouge1 },
-    { label: 'ROUGE-2', value: result.reason.rouge2 },
-    { label: 'ROUGE-L', value: result.reason.rougeL },
+    { label: 'ROUGE-1（unigram，单词重叠）', value: result.reason.rouge1 },
+    { label: 'ROUGE-2（bigram，连续两词重叠）', value: result.reason.rouge2 },
+    { label: 'ROUGE-L（LCS，最长公共子序列）', value: result.reason.rougeL },
   ];
   const points: EvalPoint[] = metrics.map(({ label, value }) => {
     const score = to100(value.f1);
@@ -150,13 +150,13 @@ async function runRouge(generatedText: string, referenceText: string): Promise<E
   const score = to100(result.score);
   const [rouge1, rouge2, rougeL] = points.map((point) => point.score ?? 0);
   return normalizeEvaluatorOutput({
-    summary: `ROUGE 综合得分 ${score}；ROUGE-1/2/L F1 分别为 ${rouge1}/${rouge2}/${rougeL}。`,
+    summary: `ROUGE 综合得分 ${score}；单词重叠 ROUGE-1（unigram）${rouge1}、双词连贯 ROUGE-2（bigram）${rouge2}、最长公共子序列 ROUGE-L（LCS）${rougeL}。`,
     score,
     points,
     evidence: {
       json: {
         metric: 'ROUGE',
-        formula: '(ROUGE-1 F1 + ROUGE-2 F1 + ROUGE-L F1) / 3',
+        formula: '总分 = [单词重叠 ROUGE-1（unigram） + 双词连贯 ROUGE-2（bigram） + 最长公共子序列 ROUGE-L（LCS）] 三项 F1（精确率与召回率的调和平均）的算术平均值',
         score,
         tokenizer: result.reason.tokenizer,
         generatedTokenCount: result.reason.generatedTokenCount,
@@ -195,7 +195,7 @@ async function runExactMatch(
     summary,
     score,
     points: [{
-      label: '完全匹配',
+      label: '完全匹配（逐字一致）',
       score,
       status: statusOf(score),
       evidence: { json: result.reason },
@@ -246,7 +246,7 @@ async function runEntityF1(
   const f1 = to100(result.reason.f1);
   const points: EvalPoint[] = [
     {
-      label: '精确率',
+      label: '精确率（识别出的实体中正确的比例）',
       score: precision,
       status: statusOf(precision),
       evidence: {
@@ -257,7 +257,7 @@ async function runEntityF1(
       },
     },
     {
-      label: '召回率',
+      label: '召回率（标准实体被成功找出的比例）',
       score: recall,
       status: statusOf(recall),
       evidence: {
@@ -268,14 +268,14 @@ async function runEntityF1(
       },
     },
     {
-      label: '实体 F1',
+      label: '实体 F1（精确率与召回率的调和平均）',
       score: f1,
       status: statusOf(f1),
       evidence: { json: result.reason },
     },
   ];
   return normalizeEvaluatorOutput({
-    summary: `实体 F1 ${f1}；TP=${result.reason.truePositiveCount}，FP=${result.reason.falsePositiveCount}，FN=${result.reason.falseNegativeCount}。`,
+    summary: `实体 F1（精确率与召回率的调和平均）${f1}；正确识别 ${result.reason.truePositiveCount} 个，误报 ${result.reason.falsePositiveCount} 个，遗漏 ${result.reason.falseNegativeCount} 个。`,
     score: f1,
     points,
     evidence: {

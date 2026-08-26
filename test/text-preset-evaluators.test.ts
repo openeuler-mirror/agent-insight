@@ -86,14 +86,14 @@ describe('文本预置评估器接入', () => {
     );
   });
 
-  it('实体 F1 接受严格 JSON 字符串数组并展示 TP/FP/FN', async () => {
+  it('实体 F1 接受严格 JSON 字符串数组并以中文展示正确识别/误报/遗漏（TP/FP/FN）', async () => {
     const output = await runTextPreset(
       'preset-text-entity-f1',
       USER,
       context('["北京", "深圳"]', '["北京", "上海", "广州"]'),
     );
     assert.equal(output.score, 40);
-    assert.match(output.summary ?? '', /TP=1，FP=1，FN=2/);
+    assert.match(output.summary ?? '', /正确识别 1 个，误报 1 个，遗漏 2 个/);
     assert.deepEqual(output.points?.map((point) => point.score), [50, 33.3, 40]);
   });
 
