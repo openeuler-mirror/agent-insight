@@ -31,7 +31,11 @@ import {
   type JudgeCaseContext,
 } from '@/lib/evaluators/judge-assembly';
 import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
-import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import {
+  customEvaluatorUsesVariable,
+  type EvaluatorCard,
+} from '@/lib/evaluators/custom-evaluator-model';
+import { normalizeDatasetCaseMatchText } from '@/lib/engine/evaluation/dataset-case-match';
 import {
   normalizeEvaluatorCaseContext,
   type EvaluatorCaseContext,
@@ -160,6 +164,7 @@ async function loadCaseRuntime(caseRow: {
   executionId: string | null;
   taskId: string | null;
   input: string;
+  datasetInput: string | null;
   actualOutput: string;
   referenceOutput: string | null;
   evaluatorContextJson: string | null;
@@ -217,6 +222,7 @@ async function loadCaseRuntime(caseRow: {
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
+    datasetInput: caseRow.datasetInput,
     output: actualOutput,
     referenceOutput: caseRow.referenceOutput,
     trajectory,
@@ -334,6 +340,16 @@ async function evaluateOnce(
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
   if (card.evaluatorType !== 'LLM' || !card.llmConfig?.systemPrompt) {
     throw new Error(`评估器 ${evaluatorId} 缺少可执行的 LLM 配置`);
+  }
+  if (customEvaluatorUsesVariable(card, 'dataset_input')) {
+    const actualInput = normalizeDatasetCaseMatchText(runtime.judgeCtx.input);
+    const datasetInput = normalizeDatasetCaseMatchText(runtime.judgeCtx.datasetInput);
+    if (!actualInput || !datasetInput || !actualInput.includes(datasetInput)) {
+      return {
+        summary: '不适用：实际任务输入未匹配到可用的数据集输入。',
+        evidence: { md: '该评估器引用了 `{{dataset_input}}`，只有确定性匹配到数据集 case 时才运行，本条结果不计分。' },
+      };
+    }
   }
   const prompt = buildJudgePrompt(card, runtime.judgeCtx);
   const text = await callJudgeLlm(user, {
@@ -749,6 +765,7 @@ export async function addEvalExperimentCase(
     executionId?: string | null;
     taskId?: string | null;
     input: string;
+    datasetInput?: string | null;
     actualOutput: string;
     referenceOutput?: string | null;
     evaluatorContext?: EvaluatorCaseContext | null;
@@ -763,12 +780,16 @@ export async function addEvalExperimentCase(
       if (existing) {
         // 复用已有 case；若这次拿到了参考答案或评估器上下文则回填。
         if (
-          (c.referenceOutput != null && String(c.referenceOutput).trim())
+          (c.datasetInput != null && String(c.datasetInput).trim())
+          || (c.referenceOutput != null && String(c.referenceOutput).trim())
           || c.evaluatorContext !== undefined
         ) {
           await prisma.experimentCase.update({
             where: { id: existing.id },
             data: {
+              ...(c.datasetInput != null && String(c.datasetInput).trim()
+                ? { datasetInput: c.datasetInput }
+                : {}),
               ...(c.referenceOutput != null && String(c.referenceOutput).trim()
                 ? { referenceOutput: c.referenceOutput }
                 : {}),
@@ -791,6 +812,7 @@ export async function addEvalExperimentCase(
         executionId: c.executionId ?? null,
         taskId: c.taskId ?? null,
         input: c.input,
+        datasetInput: c.datasetInput ?? null,
         actualOutput: c.actualOutput,
         referenceOutput: c.referenceOutput ?? null,
         evaluatorContextJson: c.evaluatorContext

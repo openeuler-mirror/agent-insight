@@ -11,7 +11,7 @@
 
 ```
 实验(Experiment)
-  └─ case(ExperimentCase：一条 trace + 输入/实际输出/参考答案)
+  └─ case(ExperimentCase：一条 trace + 实际任务输入/数据集输入/实际输出/预期输出)
        └─ × 每个评估器 → ExperimentEvalResult(status/verdict/summary/score/points/evidence)
 ```
 
@@ -134,9 +134,9 @@ EvalPoint = {
 | 字段 | 取值 | 决定什么 | 改了会怎样 |
 |---|---|---|---|
 | `category` | `res` / `traj` | 结果落在 Trace 评测详情的哪个板块、进哪个类目均分 | 历史行按旧类目算的均分与新的不可比 |
-| `requires` | `['reference']` / `['tool_catalog']` / `[]` | 实验向导 ④ 步的**硬门控**：检查参考答案或显式 Tool/Skill 目录 | 放宽会让历史上被挡住的组合突然可选，口径变化无记录 |
+| `requires` | `['reference']` / `['dataset_input']` / `['tool_catalog']` / `[]` | 实验向导 ④ 步的**硬门控**：检查预期输出、数据集输入匹配或显式 Tool/Skill 目录 | 放宽会让历史上被挡住的组合突然可选，口径变化无记录 |
 
-`requires` 填了 `['reference']` 或 `['tool_catalog']`，实现仍要处理 `ctx.referenceOutput` 或 `ctx.evaluatorContext` 缺失。历史数据和直接 API 调用可能绕过向导。
+`requires` 填了 `['reference']`、`['dataset_input']` 或 `['tool_catalog']`，实现仍要处理 `ctx.referenceOutput`、`ctx.datasetInput` 或 `ctx.evaluatorContext` 缺失。历史数据和直接 API 调用可能绕过向导。
 
 ---
 
@@ -270,12 +270,12 @@ return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 ```ts
 'preset-your-evaluator': {
   category: 'res' | 'traj',
-  requires: ['reference'] | ['tool_catalog'] | [],
+  requires: ['reference'] | ['dataset_input'] | ['tool_catalog'] | [],
 },
 ```
 
-- **category**：只读最终输出（±参考答案）→ `res`；需要读执行过程（步骤/工具/耗时/成本/token）→ `traj`。决定它在 Trace 评测详情里归到「结果评测」还是「轨迹评测」板块，以及进哪个类目均分。
-- **requires**：`reference` 要求每个 case 有参考答案；`tool_catalog` 要求每个 case 有显式 Tool/Skill 目录。`availableTools=[]` 表示调用方确认没有可用 Tool，仍满足目录前置条件；上下文字段缺失才触发门控。
+- **category**：只读最终输出（±预期输出）→ `res`；需要读执行过程（步骤/工具/耗时/成本/token）→ `traj`。决定它在 Trace 评测详情里归到「结果评测」还是「轨迹评测」板块，以及进哪个类目均分。
+- **requires**：`reference` 要求每个 case 有预期输出；`dataset_input` 要求实际任务输入确定性包含数据集输入并保存快照；`tool_catalog` 要求每个 case 有显式 Tool/Skill 目录。`availableTools=[]` 表示调用方确认没有可用 Tool，仍满足目录前置条件；上下文字段缺失才触发门控。
 - **能力目录来源**：可由实验 API 的 `evaluatorContext` 显式提供，或从数据集的 `available_tools` / `available_skills` 导入。trace 只记录实际发生的调用，不能还原执行时完整的可用能力集合，因此不得用已调用集合反推目录。
 - **tags 不用填**，由元数据派生（`deriveEvaluatorTags`）。
 
@@ -397,8 +397,9 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 
 评估器中心 → 新建，只填**评估提示词**（三段式由系统组装，不要自己拼 system/user）。
 
-- 占位符：`{{query}}`、`{{actual_output}}`、`{{reference_output}}`、`{{trace_summary}}`。
-- **`requires` 自动推导**：提示词里用到 `{{reference_output}}` → 自动标记依赖参考数据，向导 ④ 步随之门控。
+- 占位符：`{{input}}`（完整实际任务输入）、`{{dataset_input}}`（确定性匹配的数据集 case 输入）、`{{output}}`、`{{reference_output}}`（预期输出）、`{{trajectory}}`。
+- **`requires` 自动推导**：使用 `{{reference_output}}` 自动标记 `reference`；使用 `{{dataset_input}}` 自动标记 `dataset_input`。向导 ④ 步要求全部已选 case 满足依赖。
+- **数据集输入匹配**：规范化后只接受 `actualInput.includes(datasetInput)`，多项命中取最长项，不以 LLM 语义匹配决定可用性。实验把命中的数据集输入保存到 `ExperimentCase.datasetInput`；运行时再次校验，未命中返回无分的“不适用”结果。
 - 可选填「评分点清单」：填了就按清单逐条判定（等价于 §3.2 的分解），留空则自由模式。**建议填**。
 - 输出分值统一使用 **0-100**；运行时仍兼容历史 0-1 量纲（如 `0.85` 自动折算为 `85`，`1` 自动折算为 `100`）。
 
@@ -511,7 +512,8 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 **注册与口径**
 
 - [ ] 若改了 canonical `result-*`：升了版本号，并确认「可靠性与性能」页不回归
-- [ ] 若依赖参考答案：`requires` 填了 `['reference']`，且实现里对空参考有兜底
+- [ ] 若依赖预期输出：`requires` 填了 `['reference']`，且实现里对空预期输出有兜底
+- [ ] 若依赖数据集输入：`requires` 填了 `['dataset_input']`，且运行时对缺少匹配快照返回不适用
 - [ ] 若依赖能力目录：`requires` 填了 `['tool_catalog']`，并区分缺失目录与显式空目录
 - [ ] 维度与 §8 台账比对过，无覆盖面重叠（§3.6）
 - [ ] 提示词里没有写死验收用例的原句（§5.1）
@@ -527,7 +529,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 
 | 评估器 | 评分点来自 | 覆盖的维度 |
 |---|---|---|
-| 任务完成度 `preset-agent-task-completion` | 参考答案 | 关键观点覆盖率（召回） |
+| 任务完成度 `preset-agent-task-completion` | 预期输出 | 关键观点覆盖率（召回） |
 | 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 | 完整性（关键动作覆盖）· 工具选择 · 冗余度 |
 | 结果准确性 `preset-result-accuracy` | 实际输出主张 | 对参考判对错（精确） |
 | 答案质量 `preset-result-answer` | 最终答案 | 相关性 · 完整性 · 连贯性 |

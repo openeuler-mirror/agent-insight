@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 自定义评估器数据集输入变量 | [custom-evaluator-dataset-input](custom-evaluator-dataset-input/) | 新增 `dataset_input` Judge 变量与确定性数据集匹配门控，保存实验数据集输入快照，并统一“预期输出”展示术语 | Feature | 2026-08-27 | 🟡 代码与自动化验证完成，待浏览器验收 | —（待补） |
 | DeepSeek Harness 观测接入 | [deepseek-harness-observability](deepseek-harness-observability/) | 复用 Harness 官方 Session Telemetry，以 Agent Insight 插件完成认证、脱敏和截断，并通过专用 OTLP Logs spool/adapter 生成 Trace、Tool、Skill 与子 Session 观测数据 | Feature | 2026-08-21 | 🟡 实现中 | —（待补） |
 | Pi Agent Trace 采集器 | [issue-158-pi-agent-trace-collector.md](issue-158-pi-agent-trace-collector.md) | 通过 Pi Extension API、结构化 SubAgent 结果和 durable JSONL spool 采集 Agent/SubAgent/Skill/Tool/LLM/MCP Trace，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#158](https://atomgit.com/openeuler/opensource-intern/issues/158) |
 | Codex CLI 与 IDE Trace 采集器 | [issue-159-codex-trace-collectors.md](issue-159-codex-trace-collectors.md) | 通过 Codex lifecycle Hooks 与原生 OTel 双通道采集 CLI/IDE Agent Trace，以本地 relay 合并 Token、Tool、SubAgent 和编辑器事件，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#159](https://atomgit.com/openeuler/opensource-intern/issues/159) |

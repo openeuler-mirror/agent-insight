@@ -1,6 +1,6 @@
 'use client';
 
-// Trace 评测详情：任务输入/参考答案/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
+// Trace 评测详情：任务输入/预期输出/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
 // （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡。
 //
 // 卡片以**结论**为主：卡头 = 结论 chip（达成/部分达成/未达成）+ 一句话结论 + 得分（次要）；
@@ -543,11 +543,11 @@ export function ExperimentCaseDetail({
               )}
             </div>
 
-            {/* 任务输入 / 参考答案 / 实际输出 三框（等高：grid 行拉伸 + 内框 flex 填满） */}
+            {/* 任务输入 / 预期输出 / 实际输出 三框（等高：grid 行拉伸 + 内框 flex 填满） */}
             <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
               {([
                 { label: '任务输入', value: caseRow.input, missing: '' },
-                { label: '参考答案', value: caseRow.referenceOutput || '', missing: '未标注参考答案' },
+                { label: '预期输出', value: caseRow.referenceOutput || '', missing: '未标注预期输出' },
                 { label: '实际输出', value: caseRow.actualOutput, missing: '' },
               ] as const).map((box) => (
                 <div key={box.label} style={{ display: 'flex', flexDirection: 'column' }}>

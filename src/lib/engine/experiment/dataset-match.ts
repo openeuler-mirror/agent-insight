@@ -43,6 +43,9 @@ export interface DatasetMatchResult {
   unmatched: number;
   contextMatched: number;
   contextSkipped: number;
+  /** case key → 确定性命中的数据集输入；即使该数据项没有预期输出也会记录。 */
+  datasetInputUpdates?: Record<string, string>;
+  datasetInputMatched?: number;
 }
 
 const norm = (s: string | null | undefined) => (s ?? '').trim().replace(/\s+/g, ' ');
@@ -105,20 +108,28 @@ export function matchDatasetCases(
   const result: DatasetMatchResult = {
     updates: {}, contextUpdates: {}, matched: 0, skipped: 0, unmatched: 0,
     contextMatched: 0, contextSkipped: 0,
+    datasetInputUpdates: {}, datasetInputMatched: 0,
   };
+  const allInputs = datasetCases.map((item) => ({ input: norm(item.input) })).filter((item) => item.input);
   const referenceInputs = Array.from(referenceByInput.keys()).map(input => ({ input }));
   const contextInputs = Array.from(contextByInput.keys()).map(input => ({ input }));
   for (const c of cases) {
     const inputKey = norm(c.input);
     const matchedReference = findBestDatasetInputMatch(inputKey, referenceInputs);
     const matchedContext = findBestDatasetInputMatch(inputKey, contextInputs);
+    const matchedDatasetInput = matchedReference || findBestDatasetInputMatch(inputKey, allInputs);
     const expected = matchedReference ? referenceByInput.get(matchedReference.input) : undefined;
     const catalogFields = matchedContext ? contextByInput.get(matchedContext.input) : undefined;
-    if (expected === undefined && catalogFields === undefined) {
+    if (expected === undefined && catalogFields === undefined && !matchedDatasetInput) {
       result.unmatched++;
       continue;
     }
     let supplied = false;
+    if (matchedDatasetInput) {
+      supplied = true;
+      result.datasetInputUpdates![c.key] = matchedDatasetInput.input;
+      result.datasetInputMatched = (result.datasetInputMatched ?? 0) + 1;
+    }
     if (expected) {
       supplied = true;
       if (norm(c.referenceOutput) && !overwrite) {
@@ -151,6 +162,7 @@ export function matchDatasetCases(
 /** 导入结果的人话摘要（UI toast 用）。 */
 export function describeMatchResult(r: DatasetMatchResult): string {
   const parts = [`已回填 ${r.matched} 条`];
+  if (r.datasetInputMatched) parts.push(`匹配 ${r.datasetInputMatched} 条数据集输入`);
   if (r.contextMatched) parts.push(`导入 ${r.contextMatched} 条 Tool/Skill 目录`);
   if (r.skipped) parts.push(`跳过 ${r.skipped} 条已标注`);
   if (r.contextSkipped) parts.push(`跳过 ${r.contextSkipped} 条已有工具目录`);
