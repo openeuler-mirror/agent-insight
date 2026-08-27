@@ -87,7 +87,7 @@
 
 **数据接入（由“客户端安装”分发的客户端回传）** `[确证]`：`api/ingest/**`（otel `/v1/{traces,logs,metrics}`、upload、proxy、setup、sync）+ `scripts/*watcher*` / `opencode_plugin*` / `public/sync_skills.ts`。
 
-**已存在但未挂载到导航的页面** `[确证]`：`/version-analysis`、`/quality`、`/eval`、`/version-management`、`/memory`、`/optapi`、`/security`、`/skill-release`、`/modelconfig`（index）、`/accessconfig/{channels,webhooks,health}`。源码保留，导航 IA 与可达性标注详见 [06-frontend.md](06-frontend.md#导航信息架构功能模块)。
+**已存在但未挂载到导航的页面** `[确证]`：`/quality`、`/eval`、`/memory`、`/optapi`、`/security`、`/skill-release`、`/modelconfig`（index）、`/accessconfig/{channels,webhooks,health}`。`/version-analysis` 是运行观测下的版本能力入口，`/version-management` 由该页面顶部页签进入；完整导航 IA 与可达性标注详见 [06-frontend.md](06-frontend.md#导航信息架构功能模块)。
 
 ### 3.2 关键质量属性（NFR）—— 推断节
 
