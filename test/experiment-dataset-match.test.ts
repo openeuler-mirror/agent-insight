@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import {
   matchDatasetCases,
   describeMatchResult,
+  findBestDatasetInputMatch,
   toDatasetCases,
 } from '../src/lib/engine/experiment/dataset-match';
+import { matchAgentDatasetCase } from '../src/lib/engine/evaluation/dataset-case-match';
+import type { AgentDatasetRecord } from '../src/server/agent_datasets_storage';
 
 describe('实验 ③ 步与数据集互通', () => {
   const cases = [
@@ -38,13 +41,59 @@ describe('实验 ③ 步与数据集互通', () => {
     assert.equal(r.updates.c3, '数据集里的答案');
   });
 
-  it('只做精确匹配：相似但不相等的输入不回填', () => {
+  it('Trace 输入包含数据集输入时回填', () => {
     const r = matchDatasetCases(
       [{ key: 'x', input: '查询订单物流状态', referenceOutput: null }],
       dataset,
     );
+    assert.equal(r.matched, 1);
+    assert.equal(r.updates.x, '应给出物流节点与延迟原因');
+    assert.equal(r.unmatched, 0);
+  });
+
+  it('包含关系方向固定：数据集输入包含 Trace 输入时不回填', () => {
+    const r = matchDatasetCases(
+      [{ key: 'x', input: '查询订单', referenceOutput: null }],
+      dataset,
+    );
     assert.equal(r.matched, 0);
     assert.equal(r.unmatched, 1);
+  });
+
+  it('多个数据集输入被包含时优先最长、最具体的一条', () => {
+    const candidates = [
+      { input: '查询订单', expectedOutput: '宽泛答案' },
+      { input: '查询订单物流', expectedOutput: '具体答案' },
+    ];
+    const r = matchDatasetCases(
+      [{ key: 'x', input: '请帮我查询订单物流状态', referenceOutput: null }],
+      candidates,
+    );
+    assert.equal(r.updates.x, '具体答案');
+    assert.equal(findBestDatasetInputMatch('请帮我查询订单物流状态', candidates), candidates[1]);
+  });
+
+  it('服务端自动匹配同样使用 Trace 包含数据集输入的方向', async () => {
+    const serverDataset: AgentDatasetRecord = {
+      id: 'dataset-1', user: 'tester', name: 'test', description: '', targetAgent: '', targetSkill: '',
+      tags: [], fields: [], datasetKind: 'ideal_output', createdAt: '', updatedAt: '',
+      cases: [
+        {
+          id: 'short', input: '查询订单', expectedOutput: '宽泛答案', evaluationFocus: '', tags: [], trajectory: '',
+        },
+        {
+          id: 'specific', input: '查询订单物流', expectedOutput: '具体答案', evaluationFocus: '', tags: [], trajectory: '',
+        },
+      ],
+    };
+    const result = await matchAgentDatasetCase({
+      user: 'tester',
+      traceQuery: '请帮我查询订单物流状态',
+      requireExpectedOutput: true,
+      datasets: [serverDataset],
+    });
+    assert.equal(result.match?.caseEntry.id, 'specific');
+    assert.equal(result.match?.matchedBy, 'contains');
   });
 
   it('数据集侧忽略空答案与重复输入（取首条）', () => {
@@ -76,6 +125,18 @@ describe('实验 ③ 步与数据集互通', () => {
     assert.equal(r.unmatched, 0);
   });
 
+  it('参考答案和能力目录分别选择各自最长的包含项', () => {
+    const r = matchDatasetCases(
+      [{ key: 'c1', input: '请查询订单物流状态', referenceOutput: null, evaluatorContext: null }],
+      [
+        { input: '查询订单', expectedOutput: '订单答案' },
+        { input: '查询订单物流', values: { available_tools: [{ name: 'tracking' }] } },
+      ],
+    );
+    assert.equal(r.updates.c1, '订单答案');
+    assert.deepEqual(r.contextUpdates.c1.availableTools, [{ name: 'tracking' }]);
+  });
+
   it('摘要文案随结果变化', () => {
     assert.equal(describeMatchResult({
       updates: {}, contextUpdates: {}, matched: 2, skipped: 1, unmatched: 1,
@@ -88,7 +149,7 @@ describe('实验 ③ 步与数据集互通', () => {
     }), '已回填 3 条');
   });
 
-  it('按输入精确导入 available_tools / available_skills，并保留显式空目录', () => {
+  it('按包含关系导入 available_tools / available_skills，并保留显式空目录', () => {
     const r = matchDatasetCases(
       [
         { key: 'a', input: '需要搜索', referenceOutput: null, evaluatorContext: null },

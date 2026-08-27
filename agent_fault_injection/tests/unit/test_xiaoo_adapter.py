@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,6 +66,7 @@ class XiaoOConfigOverlayTests(unittest.TestCase):
                 overlay_root=root / "overlay",
                 user_config_path=user_cfg,
                 model_override="override-model",
+                python_executable=root / "managed venv" / "bin" / "python",
             )
             self.assertTrue(config_toml.is_file())
             text = config_toml.read_text(encoding="utf-8")
@@ -74,8 +76,12 @@ class XiaoOConfigOverlayTests(unittest.TestCase):
             entries = json.loads(plugin_json.read_text(encoding="utf-8"))
             self.assertEqual(len(entries), 2)
             for item in entries:
-                self.assertIn("fi_eval_hook.py", item["command"])
-                self.assertTrue(item["command"].startswith("python3 "))
+                command = shlex.split(item["command"])
+                self.assertEqual(
+                    command[0],
+                    str((root / "managed venv" / "bin" / "python").resolve()),
+                )
+                self.assertTrue(command[1].endswith("fi_eval_hook.py"))
 
     def test_prepare_overlay_keeps_user_ras_plugin(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

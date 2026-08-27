@@ -30,6 +30,7 @@ description: "安装 FI Worker、创建注入任务、查看 Run 与 Judge，并
 2. 在 **模型注册** 中配置激活模型（Judge 依赖；无模型时仍可 collect，评判可能为 `judge_skipped`）
 3. 本机已安装 **OpenCode** 和/或 **xiaoO**（须与 Worker 同机）
 4. 当前账号的 **API Key**（设置 / 安装指导中创建；Worker 心跳按用户隔离）
+5. 本机有支持 `venv` 的 Python 3.11+；安装器只用它创建 FI 专用虚拟环境，不向系统 Python 安装包
 
 ## 最短路径
 
@@ -43,6 +44,7 @@ curl -fsSL "$HOST/api/fault-injection/setup?key=$API_KEY" | bash
 
 - `$API_KEY` 必须是**当前登录账号**的 API Key。
 - setup 会把 Worker **后台常驻**；日志默认 `~/.agent-insight/fault-injection/worker.log`。前台排障可加 `--foreground`。
+- FI 引擎安装在 `~/.agent-insight/fault-injection/runtimes/<id>/venv/`；Homebrew/PEP 668 Python 不需要开放全局 pip。
 - 无在线 Worker 时，新建任务向导中平台不可选、无法下一步。
 
 最短启用：[FI getting-started](../../agent-fault-injection/guides/getting-started.md)。  
@@ -90,7 +92,8 @@ RAS 侧对应说明：[RAS local-install-process](../../agent-ras/guides/local-i
 超时建议 60–180s。本地 CLI 排障也可用（不经 Worker）：
 
 ```bash
-python3 -m agent_fault_injection.cli run \
+~/.agent-insight/fault-injection/runtimes/<runtime-id>/venv/bin/python -I \
+  -m agent_fault_injection.cli run \
   --platform opencode --agent build \
   --fault thinking-dead-loop --submode 2 \
   --prompt "执行场景2 / case2 / 逻辑死循环" \

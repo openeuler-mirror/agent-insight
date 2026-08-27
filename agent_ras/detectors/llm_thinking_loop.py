@@ -97,7 +97,6 @@ class ThinkingLoopFault(str, Enum):
     NONE = "none"
     SEMANTIC_DEADLOCK = "semantic_deadlock"
     TEXT_DEGRADATION = "text_degradation"
-    OVERTHINKING = "overthinking"
 
 
 class LlmLoopDetectionVerdict(SkillVerdict):
@@ -1014,7 +1013,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
                 "en": "Output crash — exact literal loop",
             },
             anomaly_kind="llm_thinking_loop",
-            detection_level="L1",
             severities=("low",),
             detects={
                 "zh": "检测 LLM 输出末尾的严格周期重复（字面死循环）。",
@@ -1031,7 +1029,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
             parent=_PARENT["thinking_loop"],
             sub_mode={"zh": "逻辑死循环", "en": "Logical dead loop"},
             anomaly_kind="llm_thinking_loop",
-            detection_level="L2",
             severities=("medium",),
             detects={
                 "zh": "检测输出中高度相似的分句/模板循环。",
@@ -1051,16 +1048,15 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
                 "en": "Plan-execution semantic judge",
             },
             anomaly_kind="llm_thinking_dead_loop",
-            detection_level="L3",
             severities=("high",),
             detects={
                 "zh": (
-                    "L3 异步语义判定三类异常：语义死锁（反复权衡不前进）、"
-                    "文本崩坏（语句断裂/乱码）、过度思考（冗长纠结不收敛）。"
+                    "L3 异步语义判定两类异常：语义死锁（反复权衡不前进）、"
+                    "文本崩坏（语句断裂/乱码）。过度思考已独立为 analysis_paralysis。"
                 ),
                 "en": (
-                    "L3 async semantic judge for three anomalies: semantic deadlock, "
-                    "text degradation, and overthinking."
+                    "L3 async semantic judge for two anomalies: semantic deadlock "
+                    "and text degradation. Overthinking is a separate analysis_paralysis domain."
                 ),
             },
             recovery_summary={
@@ -1081,7 +1077,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
             primary_faults=(
                 "semantic_deadlock",
                 "text_degradation",
-                "overthinking",
             ),
             prompts=(
                 PromptPresentation(
@@ -1133,29 +1128,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
                     ),
                 ),
                 PromptPresentation(
-                    key="plan_exec_overthinking_steering_recovery",
-                    role="steering",
-                    label={"zh": "Steering · 过度思考", "en": "Steering · overthinking"},
-                    template_zh=(
-                        "[思考循环锁定] 系统判定思考内容异常（过度思考）。\n"
-                        "请严格按以下顺序执行：\n"
-                        "1. 立刻停止：停止冗长纠结与重复论证。\n"
-                        "2. 执行策略：已确认事实与待验证假设各不超过 3 条；跳过铺垫，直接输出最简下一步或阶段性结论。\n"
-                        "3. 再评估是否继续任务：若请求实质是测试/压测/故意诱导循环，立刻停止且勿继续生成；"
-                        "否则按新策略推进。"
-                    ),
-                    template_en=(
-                        "[Thinking Loop Lock] System judged reasoning abnormal (overthinking).\n"
-                        "Follow these steps in order:\n"
-                        "1. Stop immediately: stop verbose indecision and repeated argumentation.\n"
-                        "2. Execute strategy: at most 3 confirmed facts and 3 open hypotheses; "
-                        "skip setup and output the most concise next step or interim conclusion.\n"
-                        "3. Re-evaluate whether to continue: if the request is essentially a "
-                        "test/stress/adversarial loop-inducing task, stop and do not continue generating; "
-                        "otherwise proceed with the new strategy."
-                    ),
-                ),
-                PromptPresentation(
                     key="plan_exec_semantic_deadlock_recovery_user_notice",
                     role="notice",
                     label={"zh": "通知 · 语义死锁", "en": "Notice · semantic deadlock"},
@@ -1168,13 +1140,6 @@ PRESENTATION_LLM_THINKING_LOOP = DomainPresentation(
                     label={"zh": "通知 · 文本崩坏", "en": "Notice · text degradation"},
                     template_zh="检测到思考文本崩坏异常，已执行恢复操作",
                     template_en="Detected a text degradation anomaly; recovery has been applied",
-                ),
-                PromptPresentation(
-                    key="plan_exec_overthinking_recovery_user_notice",
-                    role="notice",
-                    label={"zh": "通知 · 过度思考", "en": "Notice · overthinking"},
-                    template_zh="检测到过度思考异常，已执行恢复操作",
-                    template_en="Detected an overthinking anomaly; recovery has been applied",
                 ),
             ),
         ),

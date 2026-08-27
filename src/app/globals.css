@@ -584,6 +584,22 @@ button, input, select, textarea, div, span, a, p {
   outline-offset: 2px;
 }
 
+.ai-dataset-action:disabled {
+  color: var(--foreground-muted);
+  background: var(--background-tertiary);
+  border-color: var(--border);
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ai-dataset-action:disabled:hover {
+  color: var(--foreground-muted);
+  background: var(--background-tertiary);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
 .ai-dataset-action--ghost {
   background: var(--card-bg);
   border-color: var(--border);

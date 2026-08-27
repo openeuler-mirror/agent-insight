@@ -144,11 +144,13 @@ async def run() -> None:
         sid,
         "opencode",
         {
-            "detection_start_chars": 1,
-            "window_max_chars": 100,
-            "loop_repeat_threshold": 3,
-            "similar_clause_sim_threshold": 0.9,
-            "semantic_content_enabled": False,
+            "llm_thinking_loop": {
+                "detection_start_chars": 1,
+                "window_max_chars": 100,
+                "loop_repeat_threshold": 3,
+                "similar_clause_sim_threshold": 0.9,
+                "semantic_content_enabled": False,
+            },
         },
     )
 

@@ -11,11 +11,13 @@ from unittest.mock import patch
 import pytest
 
 from detectors.llm_thinking_loop import (
+    FAULT_DOMAIN_LLM_THINKING_LOOP,
     KIND_LLM_THINKING_DEAD_LOOP,
     KIND_LLM_THINKING_LOOP,
     LlmThinkingLoopConfig,
     LlmThinkingLoopDetector,
     LoopDetector,
+    PRESENTATION_LLM_THINKING_LOOP,
     _clause_similarity,
     _extract_lexical_key,
 )
@@ -786,3 +788,38 @@ class TestWindowTruncation:
         for _ in range(10):
             await det.observe(_stream_chunk("x" * 100))
         assert len(det._buffers["llm_output"][0]) <= config.window_max_chars
+
+
+def test_l3_verdict_rejects_overthinking() -> None:
+    from detectors.llm_thinking_loop import parse_llm_loop_verdict
+
+    verdict = parse_llm_loop_verdict(
+        {"abnormal": True, "primary_fault": "overthinking"},
+    )
+    assert verdict.abnormal is False
+    assert verdict.fail_open_reason
+
+
+def test_l3_presentation_primary_faults_exclude_overthinking() -> None:
+    plan = next(
+        sm
+        for sm in PRESENTATION_LLM_THINKING_LOOP.submodes
+        if (sm.runtime_keys or {}).get("channel") == "plan_execution"
+    )
+    assert tuple(plan.primary_faults) == ("semantic_deadlock", "text_degradation")
+    assert "overthinking" not in plan.primary_faults
+
+
+def test_thinking_loop_kind_and_skills() -> None:
+    from agents.base import fault_domain_for_kind, skill_for
+    from detectors.loader import is_stream_kind
+
+    assert fault_domain_for_kind(KIND_LLM_THINKING_LOOP) == FAULT_DOMAIN_LLM_THINKING_LOOP
+    assert (
+        fault_domain_for_kind(KIND_LLM_THINKING_DEAD_LOOP)
+        == FAULT_DOMAIN_LLM_THINKING_LOOP
+    )
+    assert is_stream_kind(KIND_LLM_THINKING_LOOP)
+    assert is_stream_kind(KIND_LLM_THINKING_DEAD_LOOP)
+    assert skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "detection") == "llm-loop-detection"
+    assert skill_for(FAULT_DOMAIN_LLM_THINKING_LOOP, "review") == "llm-loop-review"

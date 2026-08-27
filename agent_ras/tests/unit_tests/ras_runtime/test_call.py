@@ -33,10 +33,12 @@ def test_hello_and_observe_roundtrip():
                 {
                     "platform": "opencode",
                     "config": {
-                        "detection_start_chars": 10,
-                        "window_max_chars": 200,
-                        "loop_repeat_threshold": 99,
-                        "semantic_content_enabled": False,
+                        "llm_thinking_loop": {
+                            "detection_start_chars": 10,
+                            "window_max_chars": 200,
+                            "loop_repeat_threshold": 99,
+                            "semantic_content_enabled": False,
+                        },
                     },
                 }
             ),

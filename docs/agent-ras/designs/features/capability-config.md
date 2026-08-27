@@ -56,7 +56,7 @@ Insight「可靠性能力」目录与平台配置表单改为消费 `agent_ras` 
 - `GET /api/agent-ras/catalog`：返回 `domains` + `configSchema` + `configDefaults` + 展平 `submodes`。
 - 配置表单按 `configSchema` 动态渲染；PUT 按 catalog schema 校验（无 schema 则浅合并透传）。
 - Insight 默认值解析 `agent_ras_config.default.yaml`；`presentation` 写在各 `detectors/<id>.py`，由 [`detectors/catalog.py`](../../../agent_ras/detectors/catalog.py) `build_capability_catalog` 组装（不再有独立 `agent_ras/catalog/` 包）。
-- 旧 IF-N10 扁平键（`textLoop.*` / `toolRepeat.*`）只作 overrideDiff 别名，映射冻在 [`insight-legacy-flat-aliases.ts`](../../../src/lib/ingest/ras/insight-legacy-flat-aliases.ts)；新域不走这套别名。
+- overrideDiff / 表单路径键为 catalog 嵌套 path（`detectors.<id>.*`、`recovery.*`、顶层 `enabled`）。旧 IF-N10 扁平键（`textLoop.*` / `toolRepeat.*`）已移除，不再做别名映射。
 - L3 skill 路径按 `skill_name` 解析：`detectors/skills/<name>/SKILL.md` 与 `review/skills/<name>/SKILL.md`。未知 skill 走通用 `{abnormal,confidence,rationale}` 解析；专用 parser 挂在对应 `DETECTOR_PLUGIN` / `REVIEW_PLUGIN.verdict_parser`。
 - Kind 展示文案只来自 catalog `kindLabels`（`rasKindLabel` 无覆盖则显示 kind id）。
 

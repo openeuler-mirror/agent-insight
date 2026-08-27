@@ -5,9 +5,9 @@
  *   利用率与选择合理性评估器取得“本次任务可用的能力目录”。available_tools 是上下文
  *   的入口字段且允许显式空数组，available_skills 可选；Agent/子 Agent 不在该目录中。
  *
- * 两类数据独立匹配、独立判断是否覆盖已有值，也可以只有其中一类。匹配口径刻意保守：
- * 输入文本 trim 后全等才算命中，不做模糊或相似度匹配，避免把其他任务的参考答案或能力
- * 目录写入当前 case。默认保护已有标注；调用方只有显式传 overwrite 才会覆盖。
+ * 两类数据独立匹配、独立判断是否覆盖已有值，也可以只有其中一类。Trace 输入包含数据集
+ * 输入即命中；多条数据集输入同时命中时优先取更长、更具体的一条。默认保护已有标注；
+ * 调用方只有显式传 overwrite 才会覆盖。
  */
 import {
   contextFromAvailableCatalogFields,
@@ -45,10 +45,31 @@ export interface DatasetMatchResult {
   contextSkipped: number;
 }
 
-const norm = (s: string | null | undefined) => (s ?? '').trim();
+const norm = (s: string | null | undefined) => (s ?? '').trim().replace(/\s+/g, ' ');
+
+/** Trace 输入包含数据集输入即命中；多条命中时取最长输入，同长度保持数据集原顺序。 */
+export function findBestDatasetInputMatch<T extends { input?: string | null }>(
+  traceInput: string | null | undefined,
+  datasetCases: readonly T[],
+): T | undefined {
+  const normalizedTraceInput = norm(traceInput);
+  if (!normalizedTraceInput) return undefined;
+
+  let best: T | undefined;
+  let bestLength = -1;
+  for (const datasetCase of datasetCases) {
+    const datasetInput = norm(datasetCase.input);
+    if (!datasetInput || !normalizedTraceInput.includes(datasetInput)) continue;
+    if (datasetInput.length > bestLength) {
+      best = datasetCase;
+      bestLength = datasetInput.length;
+    }
+  }
+  return best;
+}
 
 /**
- * 按输入精确匹配回填参考输出。
+ * Trace 输入包含数据集输入时回填参考输出。
  * @param overwrite 为 true 时覆盖已标注的 case（默认 false=跳过）
  */
 export function matchDatasetCases(
@@ -85,10 +106,14 @@ export function matchDatasetCases(
     updates: {}, contextUpdates: {}, matched: 0, skipped: 0, unmatched: 0,
     contextMatched: 0, contextSkipped: 0,
   };
+  const referenceInputs = Array.from(referenceByInput.keys()).map(input => ({ input }));
+  const contextInputs = Array.from(contextByInput.keys()).map(input => ({ input }));
   for (const c of cases) {
     const inputKey = norm(c.input);
-    const expected = referenceByInput.get(inputKey);
-    const catalogFields = contextByInput.get(inputKey);
+    const matchedReference = findBestDatasetInputMatch(inputKey, referenceInputs);
+    const matchedContext = findBestDatasetInputMatch(inputKey, contextInputs);
+    const expected = matchedReference ? referenceByInput.get(matchedReference.input) : undefined;
+    const catalogFields = matchedContext ? contextByInput.get(matchedContext.input) : undefined;
     if (expected === undefined && catalogFields === undefined) {
       result.unmatched++;
       continue;

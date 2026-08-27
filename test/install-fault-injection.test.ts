@@ -12,8 +12,10 @@ const {
   shouldRestartWorker,
   packageRootChanged,
   resolvePython,
-  pipInstall,
 } = require('../scripts/install-fault-injection.js')
+const {
+  ensureManagedFiRuntime,
+} = require('../scripts/lib/fi-python-runtime.js')
 
 test("FI worker reuses the persisted machine client identity", () => {
   const { ensureClientIdentity } = require("../scripts/fi-worker.js")
@@ -151,15 +153,14 @@ test('packageRootChanged compares resolved paths', () => {
   assert.equal(packageRootChanged(null, '/a'), false)
 })
 
-test('resolvePython respects AGENT_FI_PYTHON then PYTHON', () => {
+test('resolvePython uses only the configured managed runtime', () => {
   const prevFi = process.env.AGENT_FI_PYTHON
   const prevPy = process.env.PYTHON
   try {
     delete process.env.AGENT_FI_PYTHON
-    delete process.env.PYTHON
-    assert.equal(resolvePython(), 'python3')
     process.env.PYTHON = '/usr/bin/python3'
-    assert.equal(resolvePython(), '/usr/bin/python3')
+    assert.equal(resolvePython(), '', 'generic PYTHON must not select the system environment')
+    assert.equal(resolvePython({ python: '/managed/venv/bin/python' }), '/managed/venv/bin/python')
     process.env.AGENT_FI_PYTHON = '/opt/custom/python'
     assert.equal(resolvePython(), '/opt/custom/python')
   } finally {
@@ -170,24 +171,81 @@ test('resolvePython respects AGENT_FI_PYTHON then PYTHON', () => {
   }
 })
 
-test('pip install uses the exact Python selected for the client runtime', () => {
-  assert.equal(typeof pipInstall, 'function')
+test('standalone setup delegates Python selection to the managed runtime installer', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'src/app/api/fault-injection/setup/route.ts'),
+    'utf8',
+  )
+  assert.doesNotMatch(source, /command -v python3/)
+  assert.doesNotMatch(source, /python3 is required/)
+})
+
+test('managed runtime never invokes pip with the bootstrap Python', () => {
+  const fiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'fi-managed-runtime-'))
+  const sourceRoot = path.join(process.cwd(), 'agent_fault_injection')
+  const bootstrap = '/opt/homebrew/bin/python3'
   const calls: Array<{ command: string; args: string[] }> = []
-  const ok = pipInstall('/tmp/agent_fault_injection', {
-    editable: true,
-    python: '/opt/homebrew/bin/python3',
-    runner: (command: string, args: string[]) => {
-      calls.push({ command, args })
+  try {
+    const runner = (command: string, args: string[]) => {
+      calls.push({ command, args: [...args] })
+      if (args[0] === '-c') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({ executable: bootstrap, version: [3, 13, 7] }),
+        }
+      }
+      if (command === bootstrap && args[0] === '-m' && args[1] === 'venv') {
+        const python = path.join(args[2], 'bin', 'python')
+        fs.mkdirSync(path.dirname(python), { recursive: true })
+        fs.writeFileSync(python, '')
+        return { status: 0 }
+      }
+      if (args[0] === '-I') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            prefix: path.join(fiHome, 'venv'),
+            base_prefix: '/opt/homebrew',
+            module: path.join(fiHome, 'site-packages', 'agent_fault_injection', '__init__.py'),
+          }),
+        }
+      }
       return { status: 0 }
-    },
-  })
-  assert.equal(ok, true)
-  assert.deepEqual(calls, [
-    {
-      command: '/opt/homebrew/bin/python3',
-      args: ['-m', 'pip', 'install', '-e', '/tmp/agent_fault_injection'],
-    },
-  ])
+    }
+
+    const runtime = ensureManagedFiRuntime({
+      sourceRoot,
+      fiHome,
+      editable: false,
+      env: { PYTHON: bootstrap },
+      runner,
+    })
+    assert.match(runtime.python, /fault-injection|fi-managed-runtime/)
+    assert.equal(runtime.runtimeMode, 'managed-venv')
+
+    const pipCalls = calls.filter((call) => call.args[0] === '-m' && call.args[1] === 'pip')
+    assert.equal(pipCalls.length, 1)
+    assert.equal(pipCalls[0].command, runtime.python)
+    assert.notEqual(pipCalls[0].command, bootstrap)
+    assert.ok(pipCalls[0].args.includes('--no-input'))
+
+    const reused = ensureManagedFiRuntime({
+      sourceRoot,
+      fiHome,
+      editable: false,
+      env: { PYTHON: bootstrap },
+      runner,
+    })
+    assert.equal(reused.reused, true)
+    assert.equal(reused.runtimeId, runtime.runtimeId)
+    assert.equal(
+      calls.filter((call) => call.args[0] === '-m' && call.args[1] === 'pip').length,
+      1,
+      'reusing a verified runtime must not invoke pip again',
+    )
+  } finally {
+    fs.rmSync(fiHome, { recursive: true, force: true })
+  }
 })
 
 test('resolveCollectorCwd never returns a missing packageRoot', () => {

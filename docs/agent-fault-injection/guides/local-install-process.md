@@ -25,10 +25,10 @@ flowchart TB
   subgraph userHost ["用户本机 · 与被测 Agent 同机"]
     Curl["curl …/setup \| bash"]
     Installer["install-fault-injection.js --start"]
-    Pip["pip install -e agent_fault_injection"]
+    Pip["managed venv<br/>venv/bin/python -m pip install"]
     Cfg["~/.agent-insight/fault-injection/"]
     Worker["fi-worker.js<br/>· 后台 daemon"]
-    CLI["python3 -m agent_fault_injection.cli"]
+    CLI["managed venv python<br/>-I -m agent_fault_injection.cli"]
     Agents["opencode / xiaoo"]
   end
   UI -->|"无 Worker 时展示安装命令"| Curl
@@ -72,8 +72,8 @@ flowchart TB
 | 项 | 要求 | 不满足时 |
 |----|------|----------|
 | Node.js | 可执行 `node`（Worker 与安装器） | setup 脚本直接 exit |
-| Python 3 | `python3` 在 PATH；可 `import agent_fault_injection`（或允许 pip 安装） | pip 安装失败则整体失败 |
-| pip / pip3 | 首次安装 FI 包（日常路径为**非 editable** 稳定副本；仓内开发可为 `-e`） | 安装中断 |
+| Python 3 | Python 3.11+ 在 PATH，且标准库支持 `venv` | FI 安装跳过/失败；常驻客户端仍可上线 |
+| pip | 只要求新建 venv 内自带 pip；不读取或写入系统 `site-packages` | FI managed runtime 安装中断 |
 | 网络 | 本机能访问 Insight `$HOST`（HTTP）；若走 `npx` 还需访问 npm | npx / 心跳失败 |
 | API Key | **当前登录账号**的 Key（Worker 按用户隔离） | 心跳无人认领 / 页面仍显示无 Worker |
 | 被测平台 | 本机已装 **OpenCode** 和/或 **xiaoO**（与 Worker **同机**） | inventory 空，向导无法选平台/模型 |
@@ -83,8 +83,8 @@ flowchart TB
 
 | 场景 | 怎么装 | `packageRoot` |
 |------|--------|----------------|
-| **日常使用** | `curl …/api/fault-injection/setup?key=… \| bash`，或空目录 `npx agent-insight install-fault-injection --start` | 同步到 `~/.agent-insight/fault-injection/python-pkg` 后 pip 安装，与某次 git checkout **解耦** |
-| **只开发 FI 引擎** | 在仓根跑 `node scripts/install-fault-injection.js --start` | `pip install -e` 绑当前 checkout（搬迁/清空工作树后需重装） |
+| **日常使用** | `curl …/api/fault-injection/setup?key=… \| bash`，或空目录 `npx agent-insight install-fault-injection --start` | 复制到 `~/.agent-insight/fault-injection/runtimes/<id>/package`，安装到同目录 `venv`，与 checkout 解耦 |
+| **只开发 FI 引擎** | 在仓根跑 `node scripts/install-fault-injection.js --start` | 仍使用 managed venv，但以 `-e` 绑定当前 checkout（搬迁/清空工作树后需重装） |
 
 常用环境变量：
 
@@ -95,7 +95,8 @@ flowchart TB
 | `AGENT_INSIGHT_FI_WORKER_ID` | 可选覆盖 workerId |
 | `AGENT_INSIGHT_FI_PACKAGE_ROOT` | 可选覆盖 packageRoot（install 启动 Worker 时会写入） |
 | `AGENT_INSIGHT_FI_WORKER_FOREGROUND=1` | 前台跑 Worker |
-| `AGENT_FI_PYTHON` / `PYTHON` | 覆盖默认 `python3` |
+| `AGENT_FI_BOOTSTRAP_PYTHON` / `PYTHON` | 选择创建 managed venv 的 Python 3.11+；不会作为 pip 安装目标 |
+| `AGENT_FI_PYTHON` | 高级运行时覆盖；正常安装由 `config.json.python` 固化 managed venv 绝对路径 |
 
 ---
 
@@ -112,16 +113,17 @@ sequenceDiagram
 
   U->>S: GET /api/fault-injection/setup?key=…
   S-->>U: text/x-shellscript（内嵌 HOST、KEY）
-  U->>U: 检查 node、python3
+  U->>U: 检查 node
   U->>U: export AGENT_INSIGHT_HOST / API_KEY
   alt cwd 是含 scripts/ 与 agent_fault_injection/ 的仓
     U->>I: node ./scripts/install-fault-injection.js --start
   else 普通机器
     U->>N: mktemp + cd tmp && npx --yes agent-insight install-fault-injection --start
   end
-  I->>I: ensureDirs + resolveInstallTarget
-  I->>I: 日常：同步到 python-pkg 后 pip install；仓内开发：pip install -e
-  I->>I: writeConfig（packageRoot）
+  I->>I: resolveBootstrapPython（仅校验 3.11+ / venv）
+  I->>I: 计算 package + Python 指纹，创建 runtimes/id/venv
+  I->>I: 仅用 venv/bin/python -m pip install
+  I->>I: python -I 验证后 writeConfig（python/runtimeRoot/packageRoot）
   I->>W: spawn detached fi-worker.js
   W->>A: heartbeat（inventory）
   Note over U: 打印 pid / 日志路径后可关终端
@@ -138,7 +140,7 @@ sequenceDiagram
 |----|----------|------|
 | 1 | `set -euo pipefail` | 任一步失败即退出 |
 | 2 | 打印 `host=$HOST` | HOST 来自请求的 `protocol://host` |
-| 3 | 检查 `node`、`python3` | 缺则 stderr 报错退出 |
+| 3 | 检查 `node` | 缺则 stderr 报错退出；Python 由 managed runtime 安装器按版本与 `venv` 能力探测 |
 | 4 | `export AGENT_INSIGHT_HOST` / `AGENT_INSIGHT_API_KEY` | KEY 来自 query `key` |
 | 5a | 若 `./scripts/install-fault-injection.js` 且 `./agent_fault_injection` 存在 | **本地仓路径**（开发常见） |
 | 5b | 否则 | `mktemp` 空目录 + `npx --yes agent-insight install-fault-injection --start`（避免在包内 cwd 触发错误的 `file:` 解析，尤其 WSL `/mnt/*`） |
@@ -155,20 +157,22 @@ sequenceDiagram
 ```mermaid
 flowchart TD
   A[run] --> B[ensureDirs]
-  B --> C[resolveInstallTarget]
-  C -->|仓内开发| D[pip install -e checkout]
-  C -->|日常/npx| E[同步 python-pkg + pip install]
-  D --> F[writeConfig]
-  E --> F
-  F --> G{--start?}
-  G -->|否| H[打印手动启动提示]
-  G -->|是| I[startWorkerDaemon]
-  I --> J{已有存活 pid?}
-  J -->|凭证与 packageRoot 相同| K[复用进程]
-  J -->|变更或不可读| L[停旧进程]
-  L --> M[detached spawn fi-worker.js]
-  M --> N[写 worker.pid · 追加 worker.log]
-  N --> O[2.5s 后确认仍存活]
+  B --> C[resolve bootstrap Python]
+  C --> D[创建版本化 managed venv]
+  D -->|仓内开发| E[venv pip install -e checkout]
+  D -->|日常/npx| F[复制 package + venv pip install]
+  E --> G[python -I 验证]
+  F --> G
+  G --> H[writeConfig]
+  H --> I{--start?}
+  I -->|否| J[打印手动启动提示]
+  I -->|是| K[startWorkerDaemon]
+  K --> L{已有存活 pid?}
+  L -->|凭证与 runtime 相同| M[复用进程]
+  L -->|变更或不可读| N[停旧进程]
+  N --> O[detached spawn fi-worker.js]
+  O --> P[写 worker.pid · 追加 worker.log]
+  P --> Q[2.5s 后确认仍存活]
 ```
 
 > `--check` 只读检查 config/`packageRoot`/import/apiKey，不改安装态。
@@ -180,6 +184,11 @@ flowchart TD
 ```text
 ~/.agent-insight/fault-injection/
 ├── config.json
+├── current.json        # 当前 managed runtime 清单
+├── runtimes/<id>/
+│   ├── install.json
+│   ├── package/        # 日常安装的固化源码
+│   └── venv/           # FI 唯一 Python 运行环境
 ├── worker.pid          # --start 后
 ├── worker.log
 ├── artifacts/          # Run 本机产物
@@ -197,7 +206,9 @@ flowchart TD
 | `pollIntervalMs` | 轮询间隔 | 默认 2000 |
 | `artifactsDir` | 产物目录 | 默认 `…/artifacts` |
 | `workspaceBase` | workspace 基路径 | 默认 `…/workspaces` |
-| `packageRoot` | `agent_fault_injection` 路径 | 解析 cwd 仓或安装器旁路径 |
+| `packageRoot` | `agent_fault_injection` 安装源 | 日常为 `runtimes/<id>/package`；开发模式为 checkout |
+| `python` | FI CLI 解释器 | `runtimes/<id>/venv/bin/python` 的绝对路径 |
+| `runtimeRoot` / `runtimeMode` | managed runtime 元数据 | 版本化目录；当前模式固定为 `managed-venv` |
 
 ### 6.3 Python 包解析顺序
 
@@ -206,7 +217,8 @@ flowchart TD
 1. `cwd/agent_fault_injection`（含 `pyproject.toml` 或 `setup.py`）  
 2. 否则 `scripts/../agent_fault_injection`（npm 包或仓内布局）  
 
-若 `python3 -c "import agent_fault_injection"` 失败：先 `pip install -e`，再试 `pip3`。
+安装器不会要求系统 Python 能 import FI 包。它创建版本化 managed venv，并以
+`<venv>/bin/python -I` 验证包只能从该隔离环境导入；失败时应重跑 setup，不要手工执行全局 pip。
 
 ### 6.4 Worker 进程生命周期
 
@@ -225,12 +237,12 @@ flowchart TD
 ```mermaid
 flowchart LR
   HB[heartbeat + inventory] --> Claim[claim queued runs]
-  Claim --> Run["spawn CLI<br/>python -m agent_fault_injection.cli"]
+  Claim --> Run["spawn CLI<br/>fiPython -I -m agent_fault_injection.cli"]
   Run --> Collect[collect-result 上传]
   Collect --> HB
 ```
 
-- **inventory**：Worker 启动时跑 `python3 -m agent_fault_injection.cli platform inventory --json`，把本机真实 agents/models 经 heartbeat 上报。无 Worker 时 Insight health/platforms 只返回安装引导，**不**静默填假目录。
+- **inventory**：Worker 启动时用配置中的 managed `fiPython` 跑 `-I -m agent_fault_injection.cli platform inventory --json`，把本机真实 agents/models 经 heartbeat 上报。无 Worker 时 Insight health/platforms 只返回安装引导，**不**静默填假目录。
 - **claim**：领取 `queued` 任务，在隔离 workspace 注入并采集。
 - **collect-result**：回传 markers / `faultActivated` / Trace ID，由 **Insight 服务端 Judge** 评判（本机不再跑产品 Judge）。**不**写 `Session.interactions`，**不**合成 `RasAnomalyEvent`。
 - **不**启动 RAS；若宿主已挂 RAS，那是安装指导 / `install-ras` 的结果，与 FI 任务解耦。
@@ -251,7 +263,7 @@ flowchart LR
 |-------------|------|
 | setup 脚本 | Insight 动态生成（内嵌当前请求的 Host + Key） |
 | `install-fault-injection.js` / `fi-worker.js` | **本地仓** 或 **`npx agent-insight`** 包内 `scripts/` |
-| `agent_fault_injection` Python 树 | 同上包内目录；本机 `pip install -e` |
+| `agent_fault_injection` Python 树 | 同上包内目录；日常复制到版本化 runtime，开发模式 editable 安装到 managed venv |
 | 故障 Skill / catalog | Python 包内 `fault_inject/skills/` 等（随包） |
 | API Key / Host | setup query → env → `config.json` |
 | Agent / Model 列表 | Worker 启动后对本机平台做 inventory，经 heartbeat 上报 Insight |
@@ -262,7 +274,7 @@ flowchart LR
   subgraph sources ["数据来源"]
     InsightSetup["Insight setup HTTP"]
     NpmOrRepo["npx agent-insight 或本地 clone"]
-    LocalPip["本机 pip"]
+    ManagedPip["FI managed venv pip"]
     LocalAgents["本机 opencode/xiaoo"]
   end
   subgraph sinks ["本机落盘 / 进程"]
@@ -271,7 +283,7 @@ flowchart LR
   end
   InsightSetup --> FiDir
   NpmOrRepo --> FiDir
-  LocalPip --> FiDir
+  ManagedPip --> FiDir
   FiDir --> Worker
   LocalAgents -->|"inventory"| Worker
 ```
@@ -302,7 +314,8 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 | `Node.js is required` / `python3 is required` | PATH 缺工具 | 安装 Node 20+、Python3 |
 | `npx install failed` | 网络或 registry；或在错误 cwd | 检查 npm；或在仓根用本地 installer 分支 |
 | Worker 启动后立即退出 | Key/Host 错、依赖缺；或 `packageRoot` 失效 | 看 `worker.log` 尾部；`--foreground` 复现；重跑 setup |
-| `spawn python3 ENOENT` / `packageRoot missing` | **多半不是缺 python3**：config 里 `packageRoot` 指向已删/已迁的 checkout；Node 在 cwd 不存在时也会报 spawn ENOENT | 查 `~/.agent-insight/fault-injection/config.json`；用 **curl setup / 空目录 npx** 重装（不要只 kill 重启）；确认 `python-pkg` 或有效路径存在 |
+| `managed FI Python is not configured` / `packageRoot missing` | 旧配置未迁移、managed runtime 被移动，或开发 checkout 已迁移 | 查 `config.json` 与 `current.json`；用 **curl setup / 空目录 npx** 重装，不要手工向系统 Python 安装 |
+| `externally-managed-environment` | 运行了旧安装器或手工对系统 Python 执行 pip；新安装器不会走该路径 | 确认服务端下发最新 client bundle 后重跑 setup；不要使用 `--break-system-packages` |
 | 页面仍无 Worker | Key 属于别的用户；防火墙挡心跳；Worker 未起 | 确认 Key；本机 curl Insight；查 pid |
 | 有 Worker 但平台空 | 本机未装 OpenCode/xiaoO 或不在 PATH | 同机安装并保证 inventory 能枚举 |
 | OpenCode `plugin-ready` 超时 | 评测 workspace 缺插件 / `lib/` / `.opencode/package.json` | Adapter 会拷齐；布局见 [OpenCode 适配 §4.2](../designs/modules/opencode-platform-adaptation.md)（`rewrite-*.ts` 在 **`lib/`**，不要放进 `plugins/`） |
@@ -336,7 +349,7 @@ tail -n 50 ~/.agent-insight/fault-injection/worker.log
 | 文件 | 说明 |
 |------|------|
 | [`src/app/api/fault-injection/setup/route.ts`](../../../src/app/api/fault-injection/setup/route.ts) | curl 安装脚本 |
-| [`scripts/install-fault-injection.js`](../../../scripts/install-fault-injection.js) | 目录、config、pip、启停 Worker |
+| [`scripts/install-fault-injection.js`](../../../scripts/install-fault-injection.js) | 目录、config、managed venv 安装、启停 Worker |
 | [`scripts/fi-worker.js`](../../../scripts/fi-worker.js) | 心跳 / claim / CLI / collect |
 | [`bin/cli.js`](../../../bin/cli.js) | `install-fault-injection` / `fi-worker` 子命令 |
 | [getting-started.md](getting-started.md) | 最短启用 |

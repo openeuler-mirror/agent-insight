@@ -85,7 +85,7 @@ opencode    # 可直接启动；桥接层会 RTLD_GLOBAL 加载 libpython，无�
 
 `service.*` 路径由 `agent-insight install-ras` 按本机探测写入；上表仅为形状说明，不要把真实 home/conda 路径提交进 Git。
 
-改完后**新开一轮对话**（或重启 OpenCode）才会 `hello` 带上新阈值。联调 L1/L2 可把该域的 `detection_start_chars` 临时改成 `200`～`500`（只改运行时 `~/.agent-insight/ras/config.json` 的 `detectors.<id>`，不要改仓库默认值）。
+改完后**新开一轮对话**（或重启 OpenCode）才会 `hello` 带上新阈值。联调 L1/L2 可把**该域**的 `detectors.<id>.detection_start_chars` 临时改成 `200`～`500`（只改运行时 `~/.agent-insight/ras/config.json` 的对应域块，不要改仓库 yaml 默认值）。插件何时 `observe` 由适配器自己的节流决定，与该字段无关；过早的 chunk 仍由 detector 门槛丢掉。
 
 ### L3 语义判定（仅 inproc）
 
@@ -106,7 +106,7 @@ npx agent-insight install-ras --check
 
 1. 确认 `~/.agent-insight/ras/config.json` 中 `agent_ras.service.transport` 为 `"inproc"`，且 `agent_ras.insight.events_url` 指向 Insight（默认 `http://127.0.0.1:3000/api/ingest/ras-events`）；设置 `AGENT_INSIGHT_API_KEY` 或写入 `insight.api_key`
 2. 重启 OpenCode 加载插件；人机查看入口是 Agent Insight 的「可靠性观测」以及对应链路详情。
-3. 诱导该域的异常（例如降低对应 detector 的 `detection_start_chars`）后断言：
+3. 诱导该域的异常（例如降低对应 detector 的 `detectors.<id>.detection_start_chars`）后断言：
    - TUI 出现 toast（标题 `Agent RAS`，正文如「检测到思考循环异常…」）；**不应**再出现红色 `[insight-ras] USER_NOTICE`（那是 TUI 全失败时的兜底日志）
    - Insight Trace 对应 session 出现环内标识；ingest 失败不影响环内 abort/notice（fail-open）
    - 流停止或出现「请手动停止」升级文案；idle 后注入 steering（正文来自 core，无 `[Agent RAS]` 前缀）

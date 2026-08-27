@@ -145,12 +145,13 @@ RAS 与客户端安装统一为三级回退：
 `config_sync.js` 少拷会让 RAS 运行时配置**静默跳过写入** —— 页面显示「已写入」，
 RAS 却永远读到旧值。
 
-安装 FI 时，安装器必须用同一个绝对 Python 路径执行 `python -m pip`，并把该路径写入
-客户端配置；macOS launchd 还要继承安装时的 `PATH`，否则常驻进程会找不到用户目录中的
-`opencode`。这两项都是守护环境与交互式终端环境之间的显式契约。
-
-pydantic 等第三方依赖仍走 pip（PEP 668 环境自动回退 venv）。完全离线需要预置 wheel，
-属独立议题，需先定 OS/arch/Python 版本矩阵。
+安装 FI 时，系统 Python 只负责执行 `-m venv`；FI 包与第三方依赖只允许由
+`~/.agent-insight/fault-injection/runtimes/<id>/venv/bin/python -m pip` 安装。
+安装器以包摘要、Python 版本和运行时 schema 生成版本化目录，经 `python -I` 验证后才把
+`fiPython`/`fiRuntimeRoot` 原子写入客户端配置。不得先试全局 pip，也不得使用
+`--break-system-packages`。macOS launchd 仍继承安装时的 `PATH` 以发现用户级 Agent 可执行文件，
+但 xiaoO Hook 使用 `fiPython` 对应的绝对解释器，不再解析 PATH 中的 `python3`。
+完全离线所需 wheel 仍属独立议题，需先定 OS/arch/Python 版本矩阵。
 
 ### Trace 采集器安装顺带纳管本机
 
@@ -288,11 +289,15 @@ OS 不会通知客户端，只等 `close` 事件会永远挂住 —— 表现为
 `worker/heartbeat`、`worker/claim`、`worker/commands`、`runs/:runId/collect-result`。
 漏掉任何一个都会造成「能领任务但传不回结果」，run 永远卡在 `collecting`。
 
-**Python 解释器与工作目录**：`fiPackageRoot` 是 pip 的安装**源目录**，在它内部反而 import 不到同名包；
-`resolveFiCwd()` 逐个实测候选目录（配置指定 → 源目录父级 → 源目录 → 客户端家目录）取第一个可 import 的。
-探测与 spawn 采集器必须用同一个 cwd 和同一个解释器，否则会出现「探测说 ready、实跑 ImportError」。
-PEP 668 环境（Homebrew / Debian 管控 Python）下全局 pip 会被拒绝，安装器回退到
-`~/.agent-insight/fault-injection/venv` 并把解释器路径写入客户端配置 `fiPython`。
+**Python 解释器与工作目录**：`fiPackageRoot` 是版本化安装源（开发模式可为 checkout），
+`fiPython` 是唯一权威执行解释器。探测与 spawn 采集器均使用该绝对路径和 `-I`，不读取通用
+`PYTHON`，缺少配置时只上报 `faultInjection.ready=false`，不得回退到 PATH 中的 `python3`。
+Homebrew / Debian 的 PEP 668 只影响系统环境；managed venv 从一开始就是唯一安装目标，
+所以正常安装不会产生 `externally-managed-environment` 错误。
+
+**launchd 切换**：`bootout` 后必须等旧 label 消失；`bootstrap` 遇到 macOS 37
+`Operation already in progress` 时有限重试，并以 `launchctl print` 为最终成功判据。
+`kickstart` 失败或 label 不存在都必须让安装失败，禁止无条件打印“服务已启动”。
 
 客户端 `capabilities` 的 `revision` 带进程启动时间前缀。该字段只用于幂等去重，
 重启后必须换一批，否则服务端会把首次上报当成重放丢弃（表现为 platforms 恒为空）。

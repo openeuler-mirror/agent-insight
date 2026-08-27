@@ -51,15 +51,22 @@ const installer = require_('../scripts/install-ras-client.js') as {
   CLIENT_SCRIPT: string
   RUNTIME_DIR: string
   installRuntime?: () => void
-  writeSystemdUnit?: () => string
+  buildSystemdUnit?: () => string
+  writeSystemdUnit: () => string
   writeLaunchdPlist?: () => string
-  parseArgs: (argv: string[]) => Record<string, unknown>
-  resolvePythonExecutable?: (
-    runner: (command: string, args: string[], options: Record<string, unknown>) => {
-      status: number | null
-      stdout?: string
+  bootstrapLaunchdService?: (
+    plistPath: string,
+    options: {
+      uid: number
+      runner: (command: string, args: string[], options: Record<string, unknown>) => {
+        status: number | null
+        stdout?: string
+        stderr?: string
+      }
+      wait: (ms: number) => void
     },
-  ) => string | null
+  ) => { ok: boolean; uid: number; detail?: string }
+  parseArgs: (argv: string[]) => Record<string, unknown>
   SERVICE_NAME: string
   LAUNCHD_LABEL: string
 }
@@ -130,9 +137,10 @@ test('collector args carry no shell string', () => {
     '/tmp/ws',
     '/tmp/artifacts',
   )
-  assert.equal(args[0], '-m')
-  assert.equal(args[1], 'agent_fault_injection.cli')
-  assert.equal(args[2], 'run')
+  assert.equal(args[0], '-I')
+  assert.equal(args[1], '-m')
+  assert.equal(args[2], 'agent_fault_injection.cli')
+  assert.equal(args[3], 'run')
   // prompt 作为独立 argv 元素传递，不拼进 shell 字符串。
   const promptIdx = args.indexOf('--prompt')
   assert.ok(promptIdx > 0)
@@ -246,15 +254,6 @@ test('installer defaults to installing FI, and --no-fi opts out', () => {
   assert.equal(installer.parseArgs(['--with-fi']).withFi, true)
 })
 
-test('installer resolves an absolute Python path for the launchd runtime', () => {
-  assert.equal(typeof installer.resolvePythonExecutable, 'function')
-  const resolved = installer.resolvePythonExecutable?.(() => ({
-    status: 0,
-    stdout: '/opt/homebrew/opt/python@3.13/bin/python3.13\n',
-  }))
-  assert.equal(resolved, '/opt/homebrew/opt/python@3.13/bin/python3.13')
-})
-
 // ------------------------------------------------- start.sh（无 WSS）部署路径
 
 test('control urls follow the current base, not the stale registered value', () => {
@@ -310,18 +309,34 @@ test('client writes the config.json that RAS actually reads', async () => {
   }
 })
 
-test('systemd unit uses Type=notify with StartLimit in Unit section', () => {
-  assert.equal(typeof installer.writeSystemdUnit, 'function')
-  const unitPath = installer.writeSystemdUnit()
-  const unit = fs.readFileSync(unitPath, 'utf8')
-  assert.match(unit, /^\[Unit\][\s\S]*StartLimitIntervalSec=300[\s\S]*StartLimitBurst=5[\s\S]*\[Service\]/m)
-  assert.match(unit, /Type=notify/)
-  assert.match(unit, /WatchdogSec=30s/)
-  assert.doesNotMatch(
-    unit,
-    /\[Service\][\s\S]*StartLimitIntervalSec/,
-    'StartLimit* 不得写在 [Service]',
-  )
+test('systemd unit preserves the installer PATH and keeps service directives valid', () => {
+  assert.equal(typeof installer.buildSystemdUnit, 'function')
+  assert.match(String(installer.writeSystemdUnit), /buildSystemdUnit\(\)/)
+  const previousPath = process.env.PATH
+  process.env.PATH = '/home/alice/.opencode/bin:/opt/Agent Tools/bin:/tmp/%h/"quoted"/\\'
+  try {
+    const unit = installer.buildSystemdUnit?.() || ''
+    assert.match(
+      unit,
+      /^\[Unit\][\s\S]*StartLimitIntervalSec=300[\s\S]*StartLimitBurst=5[\s\S]*\[Service\]/m,
+    )
+    assert.match(unit, /Type=notify/)
+    assert.match(unit, /WatchdogSec=30s/)
+    assert.ok(
+      unit.includes(
+        'Environment="PATH=/home/alice/.opencode/bin:/opt/Agent Tools/bin:/tmp/%%h/\\"quoted\\"/\\\\"',
+      ),
+      'systemd PATH 必须保留用户级 Agent 目录并安全转义',
+    )
+    assert.doesNotMatch(
+      unit,
+      /\[Service\][\s\S]*StartLimitIntervalSec/,
+      'StartLimit* 不得写在 [Service]',
+    )
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+  }
 })
 
 test('sd_notify READY precedes capabilities and watchdog is faster than WatchdogSec/2', () => {
@@ -377,9 +392,48 @@ test('service points at a stable runtime path, never a temp extraction dir', () 
 
 test('launchd service preserves the installer PATH for Agent executables', () => {
   assert.equal(typeof installer.writeLaunchdPlist, 'function')
-  const source = String(installer.writeLaunchdPlist)
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'install-ras-client.js'),
+    'utf8',
+  )
   assert.match(source, /<key>PATH<\/key>/)
-  assert.match(source, /process\.env\.PATH/)
+  assert.match(source, /function servicePath\(\)[\s\S]*?process\.env\.PATH/)
+})
+
+test('launchd bootstrap retries Operation already in progress and verifies the service', () => {
+  assert.equal(typeof installer.bootstrapLaunchdService, 'function')
+  let removalChecks = 0
+  let bootstrapCalls = 0
+  let loaded = false
+  const waits: number[] = []
+  const runner = (_command: string, args: string[]) => {
+    const action = args[0]
+    if (action === 'bootout') return { status: 0 }
+    if (action === 'print') {
+      if (loaded) return { status: 0 }
+      removalChecks += 1
+      return { status: removalChecks <= 2 ? 0 : 1 }
+    }
+    if (action === 'bootstrap') {
+      bootstrapCalls += 1
+      if (bootstrapCalls === 1) {
+        return { status: 37, stderr: 'Bootstrap failed: 37: Operation already in progress' }
+      }
+      loaded = true
+      return { status: 0 }
+    }
+    if (action === 'load') return { status: 1, stderr: 'fallback must not run' }
+    return { status: 0 }
+  }
+
+  const result = installer.bootstrapLaunchdService?.('/tmp/client.plist', {
+    uid: 501,
+    runner,
+    wait: (ms: number) => waits.push(ms),
+  })
+  assert.equal(result?.ok, true)
+  assert.equal(bootstrapCalls, 2)
+  assert.ok(waits.length >= 3)
 })
 
 test('runtime bundle carries config_sync.js next to the client script', () => {
@@ -390,6 +444,14 @@ test('runtime bundle carries config_sync.js next to the client script', () => {
   assert.match(runtimeDir, /\.agent-insight[/\\]client[/\\]runtime$/)
   const src = installer.installRuntime ? String(installer.installRuntime.toString()) : ''
   assert.match(src, /config_sync\.js/, 'installRuntime 必须固化 config_sync.js')
+})
+
+test('server client bundle includes the managed FI runtime helper', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'src/app/api/ingest/setup/bundle/route.ts'),
+    'utf8',
+  )
+  assert.match(source, /scripts\/lib\/fi-python-runtime\.js/)
 })
 
 test('long-poll cadence stays under the server command TTL', () => {

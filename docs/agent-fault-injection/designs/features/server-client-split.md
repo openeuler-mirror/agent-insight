@@ -99,7 +99,7 @@ Prisma   FaultInjectionTask / Run / Worker
 本机安装面
   GET /setup → bash → install-fault-injection.js
        写 ~/.agent-insight/fault-injection/config.json
-       pip 装 agent_fault_injection
+       创建版本化 managed venv，并仅在其中安装 agent_fault_injection
        拉起 fi-worker.js（默认后台）
 
 本机 FI Client（fi-worker.js，唯一进程管家）
@@ -107,7 +107,7 @@ Prisma   FaultInjectionTask / Run / Worker
   stop: 杀 CLI 进程组（Unix `kill -pid`）
   禁止 spawn RAS / DaemonRasSession
 
-注入引擎（用户机 python -m agent_fault_injection.cli）
+注入引擎（用户机 managed `fiPython -I -m agent_fault_injection.cli`）
   run：装 Skill / 应用 fault.json / 跑 Adapter / 写产物
   platform inventory --json：本机探测 opencode/xiaoo
 ```
@@ -127,7 +127,7 @@ Prisma   FaultInjectionTask / Run / Worker
 
 **① 启用 Client。** 页面无 Worker 时给出带当前用户 Key 的 curl。`GET /setup` 返回 bash：有仓则 `node scripts/install-fault-injection.js --start`，否则空目录 `npx agent-insight install-fault-injection --start`。安装器写 `config.json`（`insightBaseUrl` / `apiKey` / `workerId` / `maxParallel` / `pollIntervalMs` / `workspaceBase` / `artifactsDir`），装 Python 包，后台拉起 Worker。Key 必须对应当前登录账号；换 Key 重跑 setup 会重启已有 Worker。
 
-**② 上报能力。** Worker 启动时 `python -m agent_fault_injection.cli platform inventory --json`，结果放进 heartbeat 的 `inventoryJson`。UI 的 platforms/agents/models/health **只读** `lastSeenAt` 未过期的 Worker 缓存（在线窗口 `min(claimTimeout, 60s)`）。服务端禁止用自己的 PATH 冒充。
+**② 上报能力。** Worker 启动时用 managed `fiPython -I -m agent_fault_injection.cli platform inventory --json`，结果放进 heartbeat 的 `inventoryJson`。UI 的 platforms/agents/models/health **只读** `lastSeenAt` 未过期的 Worker 缓存（在线窗口 `min(claimTimeout, 60s)`）。服务端禁止用自己的 PATH 或系统 Python 冒充。
 
 **③ 建任务（只写库）。** UI `POST /tasks`：校验在线 Worker 且该平台 `ready` → `normalizeFiWorkspaceInput` 把空/`~`写成 `__default__` → `createTaskWithRuns`：一条 Task + N 条 `status=queued` 的 Run。每条 Run 的 `requestJson` 已含合成后的 prompt、逻辑 workspace、model、timeout。**此处不 spawn、不 claim。**
 
@@ -136,7 +136,7 @@ Prisma   FaultInjectionTask / Run / Worker
 1. `POST /worker/heartbeat`（workerId、inventory、busySlots）→ 服务端先 `sweepStaleClaims` 再 upsert Worker。
 2. `POST /worker/claim`（`limit = max(0, maxParallel - busy)`，服务端再 cap 8）→ 再 sweep，再原子认领，响应 `{ runs, commands }`。
 3. `commands[].type=stop` → `killRun`（进程组）。
-4. 对每条 run：本机解析 workspace → `mkdir` → `python -m agent_fault_injection.cli run --run-id … --platform … --agent … --fault … --prompt … --workspace <已解析> --output-dir <artifactsDir> …`（**全参数**，runId 不是唯一入参）。
+4. 对每条 run：本机解析 workspace → `mkdir` → managed `fiPython -I -m agent_fault_injection.cli run --run-id … --platform … --agent … --fault … --prompt … --workspace <已解析> --output-dir <artifactsDir> …`（**全参数**，runId 不是唯一入参）。
 5. CLI 退出后读 `artifactsDir/<runId>/collect-result.json`（允许子目录）；非 0 仍优先用已写出的产物。
 6. `POST /runs/:runId/collect-result`。失败则带 `error` 再传一次。`busy` 在 in-flight Promise 里加减，限制本机并行。
 

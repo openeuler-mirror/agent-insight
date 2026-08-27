@@ -47,7 +47,6 @@ test("buildRasTaskSummaries: abort + action_result ok → recovery success", () 
   assert.equal(s.recoveryStarted, true)
   assert.equal(s.recoveryOutcome, "success")
   assert.equal(s.abortedStream, true)
-  assert.equal(s.detectionLevel, "L1")
 })
 
 test("buildRasTaskSummaries: abort without action_result → recovery unknown", () => {

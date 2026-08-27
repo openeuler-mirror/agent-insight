@@ -614,7 +614,6 @@ PRESENTATION_REPEAT_TOOL = DomainPresentation(
             parent=_PARENT["tool_repeat_dead_loop"],
             sub_mode={"zh": "同参重复调用", "en": "Generic repeat"},
             anomaly_kind="repeat_tool_call",
-            detection_level=None,
             severities=("low",),
             detects={
                 "zh": "同一工具 + 相同参数重复调用达到阈值（默认 ≥5）。",
@@ -661,7 +660,6 @@ PRESENTATION_REPEAT_TOOL = DomainPresentation(
             parent=_PARENT["tool_repeat_dead_loop"],
             sub_mode={"zh": "失败工具连打", "en": "Unknown/failing tool repeat"},
             anomaly_kind="repeat_tool_call",
-            detection_level=None,
             severities=("medium", "critical"),
             detects={
                 "zh": "失败或未知工具连续重试；警告约阈值/2，严重度达阈值。",
@@ -723,7 +721,6 @@ PRESENTATION_REPEAT_TOOL = DomainPresentation(
             parent=_PARENT["tool_repeat_dead_loop"],
             sub_mode={"zh": "ping_pong", "en": "ping_pong"},
             anomaly_kind="tool_call_loop",
-            detection_level=None,
             severities=("medium", "critical"),
             detects={
                 "zh": "工具 A↔B 交替调用；警告 ≥5 轮，严重 ≥10 轮且无进展。",
@@ -776,7 +773,6 @@ PRESENTATION_REPEAT_TOOL = DomainPresentation(
             parent=_PARENT["tool_repeat_dead_loop"],
             sub_mode={"zh": "全局断路", "en": "Global circuit breaker"},
             anomaly_kind="tool_call_loop",
-            detection_level=None,
             severities=("critical",),
             detects={
                 "zh": "同工具+参数连续无进展达到全局断路阈值（默认 ≥10）。",

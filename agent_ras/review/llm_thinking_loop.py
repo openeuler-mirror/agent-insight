@@ -17,7 +17,6 @@ _REVIEW_PRIMARY_FAULTS = frozenset(
         "none",
         "semantic_deadlock",
         "text_degradation",
-        "overthinking",
     }
 )
 

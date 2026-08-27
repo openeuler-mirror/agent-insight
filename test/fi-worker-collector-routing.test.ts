@@ -5,13 +5,14 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { buildCollectorArgs, resolvePython } = require('../scripts/fi-worker.js')
 
-test('resolvePython matches install-fault-injection precedence', () => {
+test('resolvePython does not fall back to a system Python', () => {
   const prevFi = process.env.AGENT_FI_PYTHON
   const prevPy = process.env.PYTHON
   try {
     delete process.env.AGENT_FI_PYTHON
-    delete process.env.PYTHON
-    assert.equal(resolvePython(), 'python3')
+    process.env.PYTHON = '/usr/bin/python3'
+    assert.equal(resolvePython(), '')
+    assert.equal(resolvePython({ python: '/managed/venv/bin/python' }), '/managed/venv/bin/python')
   } finally {
     if (prevFi === undefined) delete process.env.AGENT_FI_PYTHON
     else process.env.AGENT_FI_PYTHON = prevFi
@@ -35,12 +36,13 @@ test('buildCollectorArgs always uses FI CLI (never RAS runner)', () => {
     '/tmp/ws',
     '/tmp/out',
   )
-  assert.equal(args[0], '-m')
-  assert.equal(args[1], 'agent_fault_injection.cli')
-  assert.ok(!args.some((a) => String(a).includes('fi_daemon_runner')))
-  assert.ok(!args.some((a) => String(a).includes('platform_adapter.xiaoo')))
+  assert.equal(args[0], '-I')
+  assert.equal(args[1], '-m')
+  assert.equal(args[2], 'agent_fault_injection.cli')
+  assert.ok(!args.some((a: unknown) => String(a).includes('fi_daemon_runner')))
+  assert.ok(!args.some((a: unknown) => String(a).includes('platform_adapter.xiaoo')))
   assert.deepEqual(
-    args.slice(2, 16),
+    args.slice(3, 17),
     [
       'run',
       '--platform',
@@ -58,7 +60,7 @@ test('buildCollectorArgs always uses FI CLI (never RAS runner)', () => {
       '--run-id',
     ],
   )
-  assert.equal(args[16], 'run-1')
+  assert.equal(args[17], 'run-1')
   assert.ok(args.includes('--model') && args.includes('m'))
   assert.ok(args.includes('--submode') && args.includes('2'))
   assert.ok(args.includes('--timeout-seconds') && args.includes('120'))
@@ -76,6 +78,6 @@ test('buildCollectorArgs works for opencode the same way', () => {
     '/ws',
     '/out',
   )
-  assert.equal(args[1], 'agent_fault_injection.cli')
+  assert.equal(args[2], 'agent_fault_injection.cli')
   assert.equal(args[args.indexOf('--platform') + 1], 'opencode')
 })

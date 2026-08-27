@@ -82,7 +82,9 @@ def test_ipc_worker_shares_session(tmp_path: Path, monkeypatch) -> None:
     hello = call_ipc(
         "hello",
         "xiaoo:ipc1",
-        {"platform": "xiaoo", "config": {"semantic_content_enabled": False}},
+        {"platform": "xiaoo", "config": {
+            "llm_thinking_loop": {"semantic_content_enabled": False},
+        }},
         sock_path=path,
     )
     assert hello.get("type") == "welcome" or hello.get("session_id") == "xiaoo:ipc1"

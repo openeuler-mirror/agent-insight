@@ -15,6 +15,7 @@ import {
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { VersionWorkspaceTabs } from '@/components/observe/VersionWorkspaceTabs';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageHeader, PageToolbar } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
@@ -489,6 +490,7 @@ export default function VersionAnalysisPage() {
   return (
     <>
       <AppTopBar title={copy.title} showDefaultActions={false} />
+      <VersionWorkspaceTabs />
       <PageContainer variant="wide" className="bg-background">
         <PageHeader
           title={copy.title}
@@ -497,9 +499,6 @@ export default function VersionAnalysisPage() {
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={handleExport} disabled={!data || loading}>
                 <Download className="size-4" />{copy.exportData}
-              </Button>
-              <Button variant="outline" size="sm" asChild>
-                <Link href={basePath + '/version-management'}><Tag className="size-4" />{copy.manageTags}</Link>
               </Button>
             </div>
           )}

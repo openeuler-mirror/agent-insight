@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `789bfd06df4f4f6950cc042e1aab08196df9d15c` (`789bfd06`) |
-| Branch | `codex/reliability-development` |
-| Date | 2026-08-19 17:26:04 +0800 |
-| Author | gyctl |
-| Subject | `fix: resolve PR 312 conflicts with latest master` |
-| Working tree overlay | 当前分支在该快照之上保留 Skill 工作台重构：会话固定 Skill、发布推进工作版本，顶部选择器控制右栏详情、评估、实验和版本优化记录，正式评估/实验不创建会话。用例分析采用 4 路 Trace 执行与标准 4 路批量评估，A/B 采用 2 个配对并发后统一批量评估，触发分析复用 5 路 live runner，并冻结单条 30 秒上限与最多 1 次超时重试；三者保留固定工作量、评估器子集重试、单调轮询和完成后原子发布聚合结论。OpenCode Session 在创建时绑定任务工作目录，后续 prompt、事件和交互请求沿用同一目录，确保临时安装的目标 Skill 可发现。 |
+| Commit | `ebd3cbae2538dbbb6577f79f33ee8d1a3c19c6fe` (`ebd3cbae`) |
+| Branch | `new-dev-8-25-night` |
+| Date | 2026-08-25 17:49:56 +0800 |
+| Author | openeuler-ci-bot |
+| Subject | `!336 feat(ras): 新增 analysis_paralysis 滑动窗口触发词计数门控检测器` |
+| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；补齐 launchd bootout/bootstrap 竞态重试与真实状态校验，让 systemd/launchd 固化安装终端 PATH 以发现用户目录中的 Agent；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，将评测器分数契约与前端范围统一为 0-100，并在实验模型选项中展示 provider 以区分同名模型。当前工作树还修复了未绑定 Skill 会话的右栏空状态，并将历史会话改为带明确文字入口的顶栏临时浮层；同时恢复“运行观测 → 版本分析”导航入口，通过页面顶部“版本分析 / 版本管理”页签将标签管理收为版本分析的子能力，两个既有页面、API 与数据口径保持不变。 |
 
-**如何更新：** `git diff 789bfd06 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff ebd3cbae HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

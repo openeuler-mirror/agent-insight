@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -215,6 +217,7 @@ def write_plugin_json(
     destination: Path,
     *,
     enable_chat_llm_hooks: bool = False,
+    python_executable: str | Path | None = None,
 ) -> Path:
     """Copy plugin template with absolute hook script path."""
 
@@ -229,7 +232,8 @@ def write_plugin_json(
     entries = json.loads(template.read_text(encoding="utf-8"))
     if not isinstance(entries, list):
         raise ValueError("plugin.json must be a JSON array")
-    hook_cmd = f"python3 {HOOK_SCRIPT.resolve()}"
+    python = Path(python_executable or sys.executable).expanduser().resolve()
+    hook_cmd = shlex.join([str(python), str(HOOK_SCRIPT.resolve())])
     rewritten: list[dict[str, Any]] = []
     for item in entries:
         if not isinstance(item, dict):
@@ -300,6 +304,7 @@ def prepare_overlay(
     model_override: str | None = None,
     user_config_path: Path | None = None,
     enable_chat_llm_hooks: bool = False,
+    python_executable: str | Path | None = None,
 ) -> tuple[Path, Path]:
     """Create FI plugin.json + merged config.toml under overlay_root.
 
@@ -310,6 +315,7 @@ def prepare_overlay(
     plugin_json = write_plugin_json(
         overlay_root / "plugin.json",
         enable_chat_llm_hooks=enable_chat_llm_hooks,
+        python_executable=python_executable,
     )
     source = user_config_path or default_user_config_path()
     config_toml = write_run_config(

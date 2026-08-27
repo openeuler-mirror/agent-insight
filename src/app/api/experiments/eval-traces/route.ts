@@ -11,8 +11,11 @@ import {
   addEvalExperimentCase,
   startEvalExperimentCases,
 } from '@/lib/engine/experiment/run-experiment';
-import { findAgentDataset } from '@/server/agent_datasets_storage';
-import { matchAgentDatasetCase } from '@/lib/engine/evaluation/dataset-case-match';
+import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
+import {
+  matchAgentDatasetCase,
+  normalizeDatasetCaseMatchText,
+} from '@/lib/engine/evaluation/dataset-case-match';
 import {
   contextFromAvailableCatalogFields,
   EvaluatorContextValidationError,
@@ -84,26 +87,40 @@ async function resolveTraceToolCatalog(
     orderBy: { timestamp: 'desc' },
     select: { query: true },
   });
-  const query = String(exec?.query || '').trim();
+  const query = normalizeDatasetCaseMatchText(exec?.query);
   if (!query) return null;
+  let matched: DatasetCase | null = null;
+  let matchedDatasetId = '';
+  let matchedInputLength = -1;
   for (const datasetId of datasetIds) {
     const dataset = await findAgentDataset(user, datasetId).catch(() => null);
     if (!dataset) continue;
-    const matched = dataset.cases.find((item) => String(item.input || '').trim() === query);
-    if (!matched?.values || !Object.prototype.hasOwnProperty.call(matched.values, 'available_tools')) continue;
-    try {
-      return contextFromAvailableCatalogFields(
-        matched.values.available_tools,
-        Object.prototype.hasOwnProperty.call(matched.values, 'available_skills')
-          ? matched.values.available_skills
-          : undefined,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'available_tools / available_skills 无法解析';
-      throw new EvaluatorContextValidationError(`数据集 ${datasetId} case ${matched.id}: ${message}`);
+    for (const item of dataset.cases) {
+      const datasetInput = normalizeDatasetCaseMatchText(item.input);
+      if (
+        !datasetInput
+        || !query.includes(datasetInput)
+        || !item.values
+        || !Object.prototype.hasOwnProperty.call(item.values, 'available_tools')
+        || datasetInput.length <= matchedInputLength
+      ) continue;
+      matched = item;
+      matchedDatasetId = datasetId;
+      matchedInputLength = datasetInput.length;
     }
   }
-  return null;
+  if (!matched?.values) return null;
+  try {
+    return contextFromAvailableCatalogFields(
+      matched.values.available_tools,
+      Object.prototype.hasOwnProperty.call(matched.values, 'available_skills')
+        ? matched.values.available_skills
+        : undefined,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'available_tools / available_skills 无法解析';
+    throw new EvaluatorContextValidationError(`数据集 ${matchedDatasetId} case ${matched.id}: ${message}`);
+  }
 }
 
 /**

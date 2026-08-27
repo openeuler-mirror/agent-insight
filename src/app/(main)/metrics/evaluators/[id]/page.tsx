@@ -38,7 +38,7 @@ const SYSTEM_PROMPT_PLACEHOLDER = `请编写评估器的 system prompt。可引�
 {{reference_output}}：预期输出
 {{trajectory}}：trace 轨迹
 
-这些字段都不是必填；目前仅支持以上四个变量。评估器最终需要输出 score 和 reason。`;
+这些字段都不是必填；目前仅支持以上四个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
 
 async function fetchEvaluators(user: string): Promise<EvaluatorCard[]> {
   const res = await apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`);
@@ -97,6 +97,7 @@ export default function CustomEvaluatorDetailPage() {
       return {
         ...c,
         name: c.name.trim(),
+        scoreRange: '0-100',
         llmConfig: { ...c.llmConfig, userPrompt: prompt },
         mappedMetrics: model ? ['LLM 评测', model] : ['LLM 评测'],
       };
@@ -105,7 +106,12 @@ export default function CustomEvaluatorDetailPage() {
       return {
         ...c,
         name: c.name.trim(),
-        codeConfig: { ...c.codeConfig, sourceCode: c.codeConfig.sourceCode.trim() },
+        scoreRange: c.codeConfig.scoreMode === 'pass-fail' ? 'pass/fail' : '0-100',
+        codeConfig: {
+          ...c.codeConfig,
+          scoreMode: c.codeConfig.scoreMode === 'pass-fail' ? 'pass-fail' : '0-100',
+          sourceCode: c.codeConfig.sourceCode.trim(),
+        },
       };
     }
     return { ...c, name: c.name.trim() };
@@ -360,7 +366,7 @@ function LlmEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eval
       <section style={{ marginTop: 18, padding: 14, borderRadius: 8, background: 'var(--background-secondary)', border: '1px solid var(--border)' }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>输出</div>
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.65 }}>
-          <strong>得分：</strong>最终分数应为 0.0～1.0 的数字，表示满足提示词评判标准的程度。
+          <strong>得分：</strong>最终分数应为 0～100 的数字，100 表示完全符合标准，0 表示完全不符合。
         </p>
         <p style={{ margin: '10px 0 0', fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.65 }}>
           <strong>原因：</strong>说明判分依据；结尾建议使用「因此，应该给出的分数是[分数]」一类可解析句式（具体以执行引擎为准）。
@@ -373,7 +379,7 @@ function LlmEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eval
 function CodeEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: EvaluatorCard) => void }) {
   const cfg: CodeEvaluatorConfig = card.codeConfig ?? {
     language: 'python',
-    scoreMode: '0-1',
+    scoreMode: '0-100',
     sourceCode: '',
   };
 
@@ -384,7 +390,7 @@ function CodeEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eva
     onChange({
       ...card,
       codeConfig: merged,
-      scoreRange: merged.scoreMode === 'pass-fail' ? 'pass/fail' : '0-1',
+      scoreRange: merged.scoreMode === 'pass-fail' ? 'pass/fail' : '0-100',
       mappedMetrics: ['Code 评测', merged.language],
     });
   };
@@ -482,10 +488,10 @@ function CodeEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eva
               <div className={styles.scoreSeg} role="group" aria-label="分值形式">
                 <button
                   type="button"
-                  className={`${styles.scoreBtn} ${cfg.scoreMode === '0-1' ? styles.scoreBtnActive : ''}`}
-                  onClick={() => patchCfg({ scoreMode: '0-1' })}
+                  className={`${styles.scoreBtn} ${cfg.scoreMode !== 'pass-fail' ? styles.scoreBtnActive : ''}`}
+                  onClick={() => patchCfg({ scoreMode: '0-100' })}
                 >
-                  连续分 0.0～1.0
+                  连续分 0～100
                 </button>
                 <button
                   type="button"
@@ -541,7 +547,7 @@ function CodeEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eva
 
           <div className={styles.docHint}>
             <strong style={{ color: 'var(--foreground)' }}>约定：</strong>
-            Python 返回 <code>dict</code>，JavaScript 返回普通对象；字段 <code>score</code> 建议为 0～1 浮点数，
+            Python 返回 <code>dict</code>，JavaScript 返回普通对象；字段 <code>score</code> 应为 0～100 的数值，
             <code>pass</code> 用于门禁形态，
             <code>detail</code> 为人类可读说明。右侧 JSON 可用于对照字段结构（后续可接在线试运行）。
           </div>

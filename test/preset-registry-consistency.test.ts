@@ -91,6 +91,13 @@ test('预置卡 id 唯一', () => {
   }
 });
 
+test('Agent 任务完成度与轨迹质量卡片统一展示百分制', () => {
+  for (const id of ['preset-agent-task-completion', 'preset-agent-trace-quality']) {
+    const card = presetEvaluators.find((item) => item.id === id);
+    assert.equal(card?.scoreRange, '0-100', `${id} 的前端评分范围应为 0-100`);
+  }
+});
+
 test('每张预置卡都在 registry 登记了元数据（否则静默回退 res/无门控）', () => {
   for (const card of presetEvaluators) {
     assert.ok(

@@ -90,7 +90,7 @@ export type EvaluatorOutput = z.infer<typeof EvaluatorOutputSchema>;
 /**
  * 宽容归一化：接收评估器（尤其 LLM 文本解析后）的松散产物，收敛为合法契约。
  * - score 越界 → clamp 到 [0,100]；非数值 → 丢弃（等价"无分"）
- * - 0-1 量纲自动放大：score ∈ (0,1] 且非整数概率形态时按 ×100 处理（兼容旧评估器 0.0~1.0 约定）
+ * - 0-1 量纲自动放大：score ∈ (0,1] 时按 ×100 处理（兼容旧评估器 0.0~1.0 约定）
  * - verdict 容忍中英文同义词；识别不了 → 丢弃（呈现层按 score 派生）
  * - summary 压平换行并截断到 200 字
  * - 非法评分点逐条丢弃而非整体失败
@@ -171,8 +171,8 @@ function coerceScore(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) n = v;
   else if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) n = Number(v);
   if (n === undefined) return undefined;
-  // 兼容旧评估器 0.0~1.0 输出约定：小数量纲放大到 0-100
-  if (n > 0 && n <= 1 && !Number.isInteger(n)) n = n * 100;
+  // 兼容旧评估器 0.0~1.0 输出约定：完整量纲（含满分 1）放大到 0-100
+  if (n > 0 && n <= 1) n = n * 100;
   return Math.min(100, Math.max(0, Math.round(n * 10) / 10));
 }
 

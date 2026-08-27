@@ -31,10 +31,6 @@ if ! command -v node >/dev/null 2>&1; then
   echo "Node.js is required" >&2
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required" >&2
-  exit 1
-fi
 export AGENT_INSIGHT_HOST="\$HOST"
 export AGENT_INSIGHT_API_KEY="\$KEY"
 

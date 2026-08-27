@@ -163,7 +163,11 @@ Insight 能力目录与配置面板由 `presentation` + `config_model` schema **
 
 ### 5.4 `hello` 不是新接口
 
-协议 inproc 已有 `health | hello | observe | reset | action_result | skill_result | bye`。`hello` = 按 session 建档（platform + **整份** `detectors` 能力配置），返回 `welcome`。命名取协议握手惯例，不是业务打招呼；不删除、不改名。
+协议 inproc 已有 `health | hello | observe | reset | action_result | skill_result | bye`。`hello` = 按 session 建档（platform + **整份** `detectors.<id>` 能力配置），返回 `welcome`。命名取协议握手惯例，不是业务打招呼；不删除、不改名。
+
+域门槛只写在该域块里：`config.detectors.<id>`，或简写顶层 `<id>: { ... }`（id 必须是 plugin id）。**禁止**用顶层同名字段（如 `detection_start_chars`）覆盖多个域；SessionHub 会忽略这些键。关某一域只走 `detectors.<id>.enabled`。
+
+宿主侧文本采样（例如 OpenCode 何时 `observe`）是适配器传输节流，**不是**故障域配置，不得读取 `detection_start_chars` 之类的域字段。
 
 ## 六、Detector `evidence` 键约定
 
@@ -181,4 +185,4 @@ Insight 能力目录与配置面板由 `presentation` + `config_model` schema **
 
 ## 七、配置同步与 hello
 
-切片为 `enabled` + **整份** `detectors`（value 必须是 object）+ `recovery`。Insight 默认值解析 yaml；表单/校验走 catalog `configSchema`。
+切片为 `enabled` + **整份** `detectors`（value 必须是 object，按域 id 分块）+ `recovery`。Insight 默认值解析 yaml；表单/校验走 catalog `configSchema`。客户端 hello 只转发该 `detectors` map，不再用环境变量按字段名盖到所有域。

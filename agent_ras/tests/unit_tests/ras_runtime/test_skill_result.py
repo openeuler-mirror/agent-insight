@@ -18,11 +18,13 @@ def _clean():
 
 def test_skill_result_roundtrip_via_embed_call():
     cfg = {
-        "detection_start_chars": 20,
-        "window_max_chars": 5000,
-        "loop_repeat_threshold": 99,
-        "semantic_eval_chars": 30,
-        "semantic_content_enabled": True,
+        "llm_thinking_loop": {
+            "detection_start_chars": 20,
+            "window_max_chars": 5000,
+            "loop_repeat_threshold": 99,
+            "semantic_eval_chars": 30,
+            "semantic_content_enabled": True,
+        },
     }
     sid = "opencode:embed_l3"
     call("hello", sid, json.dumps({"platform": "opencode", "config": cfg}))

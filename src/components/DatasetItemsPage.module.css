@@ -14,9 +14,55 @@
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 12px 16px;
+  min-height: 58px;
+  padding: 0 16px;
   background: linear-gradient(180deg, var(--background-secondary) 0%, var(--card-bg) 100%);
   border-bottom: 1px solid var(--border);
+}
+
+.tabList {
+  align-self: stretch;
+  display: flex;
+  align-items: stretch;
+  gap: 22px;
+}
+
+.tabButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  color: var(--foreground-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.tabButton::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 999px 999px 0 0;
+  background: transparent;
+}
+
+.tabButton:hover {
+  color: var(--foreground);
+}
+
+.tabButtonActive {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.tabButtonActive::after {
+  background: var(--primary);
 }
 
 .toolbarLeft {
@@ -46,6 +92,7 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  padding: 10px 0;
 }
 
 .refreshGhost {
@@ -180,6 +227,82 @@
   vertical-align: top;
 }
 
+.guidePanel {
+  background: var(--card-bg);
+}
+
+.guideIntro {
+  padding: 13px 16px;
+  color: var(--foreground-secondary);
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.guideTable {
+  min-width: 920px;
+}
+
+.guideTable th:nth-child(1) {
+  width: 24%;
+}
+
+.guideTable th:nth-child(2) {
+  width: 20%;
+}
+
+.guideTable th:nth-child(3) {
+  width: 15%;
+}
+
+.faultGroupCell {
+  vertical-align: top;
+  background: var(--card-bg);
+}
+
+.faultModeName {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.faultModeSummary {
+  margin-top: 5px;
+  color: var(--foreground-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.submodeCell {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.descriptionCell {
+  color: var(--foreground-secondary);
+  line-height: 1.6;
+}
+
+.methodBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 9px;
+  color: var(--foreground-secondary);
+  background: var(--background-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.emptyCell {
+  padding: 36px !important;
+  color: var(--foreground-muted);
+  text-align: center;
+}
+
 .idTag {
   display: inline-block;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -218,6 +341,27 @@
 
 .linkBtnDanger:hover {
   text-decoration: underline;
+}
+
+.linkBtn:disabled,
+.linkBtnDanger:disabled {
+  color: var(--foreground-muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+  text-decoration: none;
+}
+
+.readOnlyBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  color: var(--foreground-muted);
+  background: var(--background-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* Modal */

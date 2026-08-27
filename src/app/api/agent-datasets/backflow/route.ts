@@ -15,6 +15,7 @@ import {
   type DatasetField,
   type DatasetFieldType,
 } from '@/server/agent_datasets_storage';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
 export const dynamic = 'force-dynamic';
 
@@ -182,6 +183,12 @@ export async function POST(request: Request) {
       if (mode === 'existing') {
         current = await findAgentDataset(user, datasetId);
         if (!current) return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+        if (isBuiltinReliabilityDataset(current)) {
+          return NextResponse.json(
+            { error: '内置可靠性评测集由系统维护，不可写入回流数据' },
+            { status: 403 },
+          );
+        }
         const newFields = parseBackflowFields(body.newFields || [], {
           existingKeys: current.fields.map(field => field.key),
           existingLabels: current.fields.map(field => field.label),

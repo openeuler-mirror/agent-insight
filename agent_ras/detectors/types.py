@@ -33,7 +33,6 @@ class SubmodePresentation:
     parent: Mapping[str, str]
     sub_mode: Mapping[str, str]
     anomaly_kind: str
-    detection_level: Literal["L1", "L2", "L3"] | None
     severities: Sequence[str]
     detects: Mapping[str, str]
     recovery_summary: Mapping[str, str]

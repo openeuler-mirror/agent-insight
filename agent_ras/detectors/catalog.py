@@ -81,7 +81,6 @@ def _submode_dict(
         "parent": dict(submode.parent),
         "subMode": dict(submode.sub_mode),
         "anomalyKind": submode.anomaly_kind,
-        "detectionLevel": submode.detection_level,
         "severities": list(submode.severities),
         "detects": dict(submode.detects),
         "recoverySummary": dict(submode.recovery_summary),

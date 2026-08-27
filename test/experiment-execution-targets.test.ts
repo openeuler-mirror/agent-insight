@@ -17,7 +17,10 @@ test('client inventory expands into per-host executable Agent targets', () => {
         opencode: {
           ready: true,
           agents: [{ id: 'build', label: 'Build' }, { name: 'reviewer' }],
-          models: [{ id: 'openai/gpt-5', label: 'GPT-5' }],
+          models: [
+            { id: 'csi-provider/deepseek-v4-flash', label: 'DeepSeek-V4-Flash', providerID: 'csi-provider' },
+            { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek-V4-Flash', providerID: 'deepseek' },
+          ],
         },
         xiaoo: {
           ready: false,
@@ -38,7 +41,8 @@ test('client inventory expands into per-host executable Agent targets', () => {
       agentLabel: 'Build',
       models: [
         { id: '', label: '平台默认' },
-        { id: 'openai/gpt-5', label: 'GPT-5' },
+        { id: 'csi-provider/deepseek-v4-flash', label: 'DeepSeek-V4-Flash · csi-provider' },
+        { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek-V4-Flash · deepseek' },
       ],
       lastSeenAt: '2026-08-13T01:00:00.000Z',
     },
@@ -51,7 +55,8 @@ test('client inventory expands into per-host executable Agent targets', () => {
       agentLabel: 'reviewer',
       models: [
         { id: '', label: '平台默认' },
-        { id: 'openai/gpt-5', label: 'GPT-5' },
+        { id: 'csi-provider/deepseek-v4-flash', label: 'DeepSeek-V4-Flash · csi-provider' },
+        { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek-V4-Flash · deepseek' },
       ],
       lastSeenAt: '2026-08-13T01:00:00.000Z',
     },

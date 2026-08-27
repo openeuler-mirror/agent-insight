@@ -1,13 +1,10 @@
 /**
  * IF-N10/N11 config model: flat JSON-path defaults + overrideDiff merge.
  * Sections / defaults come from catalog configSchema + yaml.
- * `textLoop.*` / `toolRepeat.*` remain read-only aliases for old overrideDiff.
+ * overrideDiff keys are catalog paths (`detectors.<id>.*`, `recovery.*`, top-level `enabled`).
  */
 
-import {
-  defaultCapabilityConfigBody,
-  legacyFlatAliases,
-} from '@/lib/ingest/ras/capability-config'
+import { defaultCapabilityConfigBody } from '@/lib/ingest/ras/capability-config'
 import {
   getRasCapabilityCatalogSync,
   type RasCatalogDomain,
@@ -201,27 +198,12 @@ export function buildBuiltinConfigSchema(platform: ReliabilityPlatformId): Built
   }
 }
 
-export function applyLegacyFlatAliases(
-  flat: Record<string, unknown> | null | undefined,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...(flat || {}) }
-  const aliases = legacyFlatAliases()
-  for (const [from, to] of Object.entries(aliases)) {
-    if (!Object.prototype.hasOwnProperty.call(out, from)) continue
-    if (!Object.prototype.hasOwnProperty.call(out, to)) {
-      out[to] = out[from]
-    }
-  }
-  return out
-}
-
 export function applyOverrideDiff(
   defaults: Record<string, unknown>,
   overrideDiff: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {
-  const rewritten = applyLegacyFlatAliases(overrideDiff)
   const out: Record<string, unknown> = { ...defaults }
-  for (const [key, value] of Object.entries(rewritten)) {
+  for (const [key, value] of Object.entries(overrideDiff || {})) {
     if (value === undefined) continue
     out[key] = value
   }
@@ -232,16 +214,15 @@ export function buildFieldSources(
   defaults: Record<string, unknown>,
   overrideDiff: Record<string, unknown> | null | undefined,
 ): Record<string, ConfigFieldSource> {
-  const rewritten = applyLegacyFlatAliases(overrideDiff)
   const sources: Record<string, ConfigFieldSource> = {}
   for (const key of Object.keys(defaults)) {
     sources[key] =
-      rewritten && Object.prototype.hasOwnProperty.call(rewritten, key)
+      overrideDiff && Object.prototype.hasOwnProperty.call(overrideDiff, key)
         ? 'client_override'
         : 'builtin'
   }
-  if (rewritten) {
-    for (const key of Object.keys(rewritten)) {
+  if (overrideDiff) {
+    for (const key of Object.keys(overrideDiff)) {
       if (!(key in sources)) sources[key] = 'client_override'
     }
   }
@@ -297,15 +278,14 @@ export function flattenEffectiveConfig(
   return out
 }
 
-/** Flat path map → capability body. Nested `detectors` keys pass through; legacy aliases applied. */
+/** Flat path map → capability body. Nested `detectors` keys pass through. */
 export function flatConfigToCapabilityBody(flat: Record<string, unknown>): {
   enabled: boolean
   detectors: Record<string, Record<string, unknown>>
   recovery: { notify_user_on_warning: boolean }
 } {
   const defaults = defaultCapabilityConfigBody()
-  const rewritten = applyLegacyFlatAliases(flat)
-  const nested = nestEffectiveConfig(rewritten)
+  const nested = nestEffectiveConfig(flat)
   const detectorsIn = (nested.detectors && typeof nested.detectors === 'object' && !Array.isArray(nested.detectors)
     ? (nested.detectors as Record<string, unknown>)
     : {}) as Record<string, unknown>
@@ -329,7 +309,7 @@ export function flatConfigToCapabilityBody(flat: Record<string, unknown>): {
       ? Boolean(recoveryNested.notify_user_on_warning)
       : defaults.recovery.notify_user_on_warning
   return {
-    enabled: rewritten.enabled !== undefined ? Boolean(rewritten.enabled) : defaults.enabled,
+    enabled: flat.enabled !== undefined ? Boolean(flat.enabled) : defaults.enabled,
     detectors,
     recovery: { notify_user_on_warning: notify },
   }

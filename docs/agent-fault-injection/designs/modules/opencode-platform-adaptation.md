@@ -25,7 +25,7 @@
 | 问题 | 答案 |
 |------|------|
 | 要改 OpenCode 源码吗？ | **不需要**。全部走官方 Skill / workspace 插件 / `opencode run`。 |
-| 故障任务怎么发起？ | **外层** Insight「故障注入」任务 + 本机 **FI Worker** claim；Worker **只** spawn `python3 -m agent_fault_injection.cli`（**不**拉起 RAS）。本地排障同 CLI。**内层被测 harness** 只有 **`opencode run`**。 |
+| 故障任务怎么发起？ | **外层** Insight「故障注入」任务 + 本机 **FI Worker** claim；Worker **只** spawn managed `fiPython -I -m agent_fault_injection.cli`（**不**拉起 RAS、不回退系统 Python）。本地排障同 CLI。**内层被测 harness** 只有 **`opencode run`**。 |
 | FI 会启动 RAS 吗？ | **不会**。RAS 是否在场只由用户系统 OpenCode 是否已挂 RAS 插件决定；未挂载时 FI 实验仍可成功。 |
 | 用不用 TUI / 桌面会话？ | **评测不用**。交互入口不适合可复现、可超时、可批跑。 |
 | 有没有 Daemon harness？ | **没有**。不像 xiaoO 的 HTTP+SSE；OpenCode 评测路径就是子进程 `run`。 |
@@ -89,7 +89,7 @@ flowchart TB
 与 xiaoO 默认 `xiaoo --cli run` 对称：外层都是 FI CLI / Worker，内层都是宿主非交互子进程。
 
 ```text
-python3 -m agent_fault_injection.cli run \
+<fiPython> -I -m agent_fault_injection.cli run \
   --platform opencode \
   --agent build \
   --fault step-omission \
@@ -302,7 +302,7 @@ Worker 启动时一次 `python -m agent_fault_injection.cli platform inventory -
 产品路径：Insight「故障注入 → 新建任务」选平台 `opencode`；Worker inventory 提供本机 agent/model。CLI 排障：
 
 ```bash
-python3 -m agent_fault_injection.cli run \
+<fiPython> -I -m agent_fault_injection.cli run \
   --platform opencode --agent build \
   --fault step-omission \
   --prompt "使用 ras-step-omission 技能，执行场景1。" \

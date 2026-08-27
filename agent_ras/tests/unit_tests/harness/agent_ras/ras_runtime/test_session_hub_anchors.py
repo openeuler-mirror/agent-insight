@@ -9,7 +9,9 @@ from ras_runtime.session_hub import SessionHub, _anchor_for_anomaly
 
 def test_observe_keeps_llm_and_tool_anchors_separate() -> None:
     hub = SessionHub()
-    hub.hello("s1", "xiaoo", {"semantic_content_enabled": False})
+    hub.hello("s1", "xiaoo", {
+        "llm_thinking_loop": {"semantic_content_enabled": False},
+    })
 
     asyncio.run(
         hub.observe(
@@ -50,7 +52,9 @@ def test_observe_keeps_llm_and_tool_anchors_separate() -> None:
 
 def test_llm_kind_never_falls_back_to_tool_call_id() -> None:
     hub = SessionHub()
-    hub.hello("s1", "xiaoo", {"semantic_content_enabled": False})
+    hub.hello("s1", "xiaoo", {
+        "llm_thinking_loop": {"semantic_content_enabled": False},
+    })
     state = hub.get("s1")
     assert state is not None
     state.last_tool_anchor = {"call_id": "call_skill_1", "channel": "tool_call"}
