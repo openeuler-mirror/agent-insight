@@ -91,16 +91,13 @@ export function PointBadges({ point }: { point: PointRow }) {
   );
 }
 
-/** 评分点「证据」列内容：证据块 + 建议 + 相关步骤锚点（评分点与子项复用）。 */
+/** 评分点「证据与建议」列内容：同一折叠块内用 Markdown 小节区分，建议为空时不渲染。 */
 export function PointEvidence({ point, taskId }: { point: PointRow; taskId: string | null }) {
   return (
     <>
-      {point.evidence ? <EvidenceBlock evidence={point.evidence} /> : null}
-      {point.suggestion && (
-        <div style={{ marginTop: point.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
-          ↗ 建议：{point.suggestion}
-        </div>
-      )}
+      {point.evidence ? (
+        <EvidenceBlock evidence={point.evidence} supplementalMarkdown={point.suggestion} />
+      ) : point.suggestion ? <EvidenceBlock evidence={{ md: `**Skill 改进建议**\n${point.suggestion}` }} /> : null}
       {point.anchors && point.anchors.length > 0 && (
         <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
           相关步骤：{point.anchors.map((a) => (

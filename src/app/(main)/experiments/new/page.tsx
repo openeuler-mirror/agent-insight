@@ -149,9 +149,9 @@ const SKILL_PRESET_EVALUATORS: Record<SkillExperimentPreset, Array<{
     },
   ],
   'use-case': [
-    { id: 'preset-agent-task-completion', selected: true },
-    { id: 'preset-agent-trace-quality', selected: true },
-    { id: 'preset-result-faithfulness', selected: true },
+    { id: 'preset-agent-task-completion', selected: false },
+    { id: 'preset-agent-trace-quality', selected: false },
+    { id: 'preset-result-faithfulness', selected: false },
     { id: 'preset-safety-harmfulness', selected: false },
   ],
   'skill-ab': [
@@ -204,6 +204,7 @@ const DATASET_KIND_LABELS: Record<string, string> = {
   reliability: '可靠性',
 };
 const PAGE_SIZE = 10;
+const GENERATED_TRACE_AGENT_TIMEOUT_SECONDS = 300;
 /** 跨页全选安全上限：避免一次圈选过多 case 拖垮后续评测 */
 const SELECT_ALL_CAP = 500;
 const MAX_TRACE_TAG_FILTERS = 20;
@@ -587,10 +588,14 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   }, [user]);
 
   useEffect(() => {
-    if (!skillContext || (selectedDatasetId && eligibleWizardDatasets.some((dataset) => dataset.id === selectedDatasetId))) return;
+    if (
+      !skillContext
+      || skillPreset === 'use-case'
+      || (selectedDatasetId && eligibleWizardDatasets.some((dataset) => dataset.id === selectedDatasetId))
+    ) return;
     const timer = window.setTimeout(() => void selectWizardDataset(eligibleWizardDatasets[0]?.id || ''), 0);
     return () => window.clearTimeout(timer);
-  }, [eligibleWizardDatasets, selectWizardDataset, selectedDatasetId, skillContext]);
+  }, [eligibleWizardDatasets, selectWizardDataset, selectedDatasetId, skillContext, skillPreset]);
 
   const generateTriggerDataset = async () => {
     if (!user || !skillContext || skillPreset !== 'trigger' || generatingTriggerDataset) return;
@@ -1232,7 +1237,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
               platform: selectedTarget.platform,
               agent: agentName,
               model: genModel || null,
-              timeoutSeconds: 180,
+              timeoutSeconds: GENERATED_TRACE_AGENT_TIMEOUT_SECONDS,
             },
           }
         : {};
