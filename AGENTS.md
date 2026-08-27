@@ -109,7 +109,7 @@ push 前先 `git remote -v` 确认 `origin` 仍指向 `gyctl/agent-insight`，�
 未经用户授权不要：
 
 - 推送到任何远端、创建/合并 PR、关闭 issue。
-- 修改 CI、`package.json` 的 scripts、`.env*`。
+- 修改 CI、`package.json` 的 scripts、除 `.env.example` 外的 `.env*`；`.env.example` 可随功能配置契约同步修改，但只允许提交通用变量名、说明以及空值或虚构示例，禁止写入真实密钥、内部域名、账号或其他部署敏感信息。
 - 升级/降级依赖、删除依赖。
 - 删除文件、目录、分支。
 - 改 git config。

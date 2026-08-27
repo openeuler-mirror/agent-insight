@@ -14,6 +14,40 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 刷新完成前不生成可复制的一键安装命令；因此服务重建、数据库切换或平台地址变化后，无需先
 手工退出登录，但必须重新打开本页并复制一条新命令。
 
+## 平台登录模式
+
+平台支持三种互不混用的部署级登录路径：
+
+| 名称 | 配置 | 用户行为 |
+| --- | --- | --- |
+| 本地登录 | `LOGIN_MODE=standalone`（默认） | 用户输入邮箱，登录即注册，可以主动退出 |
+| 历史组织集成 | `ORGANIZATION_MODE=true`、`ORG_*` | 依赖上游网关 Cookie，并可联动组织 Skill 接口 |
+| IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，按返回 UUID 注册或登录，可退出当前网页账号 |
+
+历史组织集成是以前为特定应用保留的组织接口能力；IDaaS OAuth 登录是独立的 OAuth 2.0 授权码登录。两者不共享配置、接口或 Cookie，也不支持同时开启。冲突配置会显示登录配置错误，不会降级为本地登录。
+
+IDaaS OAuth 登录需要由部署方在服务端配置：
+
+```env
+LOGIN_MODE=idaas_oauth
+ORGANIZATION_MODE=false
+IDAAS_OAUTH_AUTHORIZATION_URL=
+IDAAS_OAUTH_TOKEN_URL=
+IDAAS_OAUTH_USERINFO_URL=
+IDAAS_OAUTH_CLIENT_ID=
+IDAAS_OAUTH_CLIENT_SECRET=
+IDAAS_OAUTH_REDIRECT_URI=
+IDAAS_OAUTH_SCOPE=
+```
+
+真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。
+
+网页登录没有固定的空闲或绝对过期时间。浏览器会在当前 origin 的 `localStorage` 中保存 UUID 和 API Key，重新打开页面时使用两者恢复登录；API Key 有效且数据库用户仍存在时无需重新走 IDaaS。清理站点数据、改用其他协议/域名/IP/端口、API Key 或用户被删除、数据库被重置，或者部署切换登录模式时，需要重新登录。OAuth state 的 5 分钟有效期和 callback 登录票据的 60 秒有效期只约束单次授权跳转，不是网页会话时长；重新走 OAuth 时是否再次输入账号密码，由公司 IDaaS 的 SSO 会话策略决定。
+
+登录入口返回 `IDaaS OAuth login is not configured` 时，查看 `server.log` 中的 `[Auth/IDaaS]` 行。日志会指出缺少或无效的环境变量名，例如 `Missing IDAAS_OAUTH_SCOPE` 或 `Invalid IDAAS_OAUTH_TOKEN_URL`，但不会打印环境变量值和 client secret。
+
+本机部署使用 localhost callback 前，需确认 IDaaS 允许登记该地址。首版使用 client secret 而不使用 PKCE，因此每台本机部署实例都必须安全保存 client secret；大规模使用时优先集中部署。
+
 ## 功能定位
 
 客户端安装承担四项核心职责：

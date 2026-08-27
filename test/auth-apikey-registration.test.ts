@@ -17,6 +17,7 @@ const usernames = {
   casing: `registration-case-${suffix}`,
   race: `registration-race-${suffix}@example.com`,
 };
+const idaasUsername = `Employee-UUID-${suffix}-ABCDEF`;
 
 function register(username: string): Promise<Response> {
   return POST(new Request('http://localhost/api/auth/apikey', {
@@ -41,6 +42,7 @@ test.after(async () => {
     usernames.casing,
     usernames.casing.toUpperCase(),
     usernames.race,
+    idaasUsername,
   ];
 
   await prisma.session.deleteMany({ where: { user: { in: candidates } } });
@@ -99,4 +101,38 @@ test('看起来像邮箱但格式非法的用户名返回 400', async () => {
   const response = await register(`invalid-${suffix}@domain`);
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: 'Username must be a valid email address' });
+});
+
+test('IDaaS 恢复登录时保持 UUID 大小写并校验已有 API key', async () => {
+  const apiKey = `wi_idaas_restore_${suffix}`;
+  await prisma.user.create({
+    data: { username: idaasUsername, apiKey },
+  });
+
+  const previousLoginMode = process.env.LOGIN_MODE;
+  const previousOrganizationMode = process.env.ORGANIZATION_MODE;
+  process.env.LOGIN_MODE = 'idaas_oauth';
+  delete process.env.ORGANIZATION_MODE;
+
+  try {
+    const response = await POST(new Request('http://localhost/api/auth/apikey', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-witty-api-key': apiKey,
+      },
+      body: JSON.stringify({ username: `  ${idaasUsername}  ` }),
+    }));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      username: idaasUsername,
+      apiKey,
+    });
+  } finally {
+    if (previousLoginMode === undefined) delete process.env.LOGIN_MODE;
+    else process.env.LOGIN_MODE = previousLoginMode;
+    if (previousOrganizationMode === undefined) delete process.env.ORGANIZATION_MODE;
+    else process.env.ORGANIZATION_MODE = previousOrganizationMode;
+  }
 });

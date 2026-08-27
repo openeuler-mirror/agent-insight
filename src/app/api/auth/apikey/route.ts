@@ -1,41 +1,36 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
-import { seedBuiltinExampleForUser } from '@/server/builtin-example/seed';
-import crypto from 'node:crypto';
+import { resolveLoginMode } from '@/lib/auth/login-mode';
+import { findOrCreateLocalUser } from '@/lib/auth/local-user';
 
 export async function POST(request: Request) {
   try {
     const body: any = await request.json().catch(() => ({}));
-    const username = String(body?.username || '').trim().toLowerCase();
+    const submittedUsername = String(body?.username || '').trim();
 
-    if (!username) {
+    if (!submittedUsername) {
       return NextResponse.json({ error: 'Username is required' }, { status: 400 });
     }
+
+    const loginMode = resolveLoginMode();
+    const username = loginMode === 'idaas_oauth'
+      ? submittedUsername
+      : submittedUsername.toLowerCase();
 
     if (username.includes('@') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) {
       return NextResponse.json({ error: 'Username must be a valid email address' }, { status: 400 });
     }
 
-    let user = await db.findUserByUsername(username);
-    let isNewUser = false;
-
-    if (!user) {
-      const apiKey = 'wi_' + crypto.randomBytes(24).toString('hex');
-      try {
-        user = await db.createUser({ username, apiKey });
-        isNewUser = true;
-      } catch (error: any) {
-        const isDuplicate = error?.code === 'P2002'
-          || (error?.code === '23505'
-            && (error?.constraint?.includes('User_username_key') || error?.detail?.includes('username')));
-        if (!isDuplicate) throw error;
-        user = await db.findUserByUsername(username);
+    if (loginMode === 'idaas_oauth') {
+      const apiKey = request.headers.get('x-witty-api-key') || '';
+      const user = apiKey ? await db.findUserByApiKey(apiKey) : null;
+      if (!user || user.username !== username) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
       }
+      return NextResponse.json({ username: user.username, apiKey: user.apiKey });
     }
 
-    if (!user) throw new Error('Failed to retrieve or create user');
-
-    if (isNewUser) await seedBuiltinExampleForUser(user.username);
+    const user = await findOrCreateLocalUser(username);
 
     return NextResponse.json({
       username: user.username,
