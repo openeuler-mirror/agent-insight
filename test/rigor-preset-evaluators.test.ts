@@ -5,13 +5,16 @@ import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
 import {
   buildRigorEvaluatorOutput,
+  rigorDetailOf,
   runRigorPreset,
   type RigorFinding,
 } from '@/lib/engine/experiment/rigor-preset-evaluators';
+import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
 import type { ContentRigorDimension, ContentRigorSeverity } from '@/prompts/rigor-content-prompt';
 
 interface RigorEvidenceJson {
   rubricVersion?: string;
+  judgeSummary?: string | null;
   baseScore?: number;
   totalDeduction?: number;
   appliedCap?: { value: number; reason: string; effective?: boolean };
@@ -25,9 +28,17 @@ interface RigorEvidenceJson {
   backfilledFindings?: Array<{ backfillReason: string }>;
 }
 
-function evidenceJson(output: { evidence?: unknown }): RigorEvidenceJson {
-  return ((output.evidence as { json?: RigorEvidenceJson } | undefined)?.json ?? {});
+/**
+ * 代码侧裁决明细。评估器级 evidence 已改为自然语言 md，明细改走 rigorDetailOf 旁路，
+ * 所以这个 helper 换了取数口径——下面 73 处断言一个字都不用动。
+ */
+function evidenceJson(output: EvaluatorOutput): RigorEvidenceJson {
+  return rigorDetailOf(output) as RigorEvidenceJson;
 }
+
+/** 评估器级 md 证据（原来这里是一坨 JSON）。 */
+const evidenceMd = (output: EvaluatorOutput): string =>
+  (output.evidence as { md?: string } | undefined)?.md ?? '';
 
 function finding(
   dimension: ContentRigorDimension,
@@ -236,17 +247,30 @@ describe('内容严谨性评估器 · 计分与证据', () => {
     }
   });
 
-  it('summary 由存活 findings 生成；Judge 原话只进 evidence.judgeSummary', () => {
+  it('summary 由存活 findings 生成；Judge 原话只作留档', () => {
     const output = buildRigorEvaluatorOutput({
       actualOutput: '带宽是 100 MB',
       judgment: { summary: '模型自由发挥的一句话', findings: [] },
     });
     assert.equal(output.score, 100);
     assert.notEqual(output.summary, '模型自由发挥的一句话');
-    assert.equal(
-      (output.evidence as { json?: { judgeSummary?: string } })?.json?.judgeSummary,
-      '模型自由发挥的一句话',
-    );
+    assert.equal(evidenceJson(output).judgeSummary, '模型自由发挥的一句话');
+    // 留档原话进 md 证据的末段，且明确标注不作结论
+    assert.match(evidenceMd(output), /模型原始判断[\s\S]*模型自由发挥的一句话/);
+  });
+
+  it('评估器级证据是自然语言 md，不再上报原始 JSON', () => {
+    const text = '这条命令是 list files。';
+    const output = build(text, [
+      finding('operational_correctness', 'high', 'list files', { correction: '应为 ls。' }),
+    ]);
+    assert.ok(!('json' in ((output.evidence ?? {}) as Record<string, unknown>)));
+    const md = evidenceMd(output);
+    assert.match(md, /\*\*计分说明\*\*/);
+    assert.match(md, /封顶为 30 分/);
+    assert.match(md, /\*\*核查范围\*\*/);
+    // 明细不再进上报契约，但旁路仍读得到
+    assert.equal(evidenceJson(output).baseScore, 40);
   });
 
   it('全部 finding 被丢弃时，summary 说明丢弃而不是说"没问题"', () => {
@@ -1105,10 +1129,7 @@ describe('内容严谨性评估器 · Judge 边界', () => {
     assert.equal(output.score, 40);
     // summary 由存活 findings 派生（不透传 Judge 原话），必须指出数值维度的问题
     assert.match(output.summary ?? '', /数值精确性/);
-    assert.equal(
-      (output.evidence as { json?: { judgeSummary?: string } })?.json?.judgeSummary,
-      '折扣后再满减算错了，最终价格应为 140 元。',
-    );
+    assert.equal(evidenceJson(output).judgeSummary, '折扣后再满减算错了，最终价格应为 140 元。');
   });
 
   it('事实类 finding 的 quote 跨句（把多处错误并成一条）→ 抛可重试契约错误', async () => {

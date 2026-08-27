@@ -1,7 +1,7 @@
 /**
  * “内容严谨性”预置评估器（rigor 族，当前唯一成员）。
  *
- * Judge Prompt：src/prompts/content-rigor-prompt.ts
+ * Judge Prompt：src/prompts/rigor-content-prompt.ts
  *
  * 总原则：**Judge 只做离散判断，代码负责一切计分与裁决。** 无参考答案场景下判断依据只能
  * 来自模型自身知识，因此凡是文本内部就能确定的事，一律不交给模型自觉。
@@ -33,8 +33,11 @@
  *   均抛 JudgeOutputParseError 走既有重试链路——“没判出来”与“判为正常”是两种结果。
  *
  * 五、呈现同源
- *   summary / verdict 一律由存活 findings 推导，Judge 原话只进 evidence.json.judgeSummary；
+ *   summary / verdict 一律由存活 findings 推导，Judge 原话只作留档写进证据末尾；
  *   「总分封顶说明」只在封顶实际压低了分数时输出。
+ *   评估器级 evidence 上报**自然语言 md**（buildEvidenceMd），把「模型说了什么 → 代码改了
+ *   什么 → 为什么是这个分」讲成一条链路；原来那坨原始 JSON 明细改走 rigorDetailOf 旁路，
+ *   只供测试与排障读取，不进上报契约、不落库。
  *
  * 不变量：所有代码侧裁决只会降低或保持分数，不存在“换个维度分数反而变高”的路径
  * （由 1024 组合单调性穷举测试守住）。
@@ -99,6 +102,13 @@ const SEVERITY_LABEL: Record<ContentRigorSeverity, string> = {
   high: '🔴 高严重度',
   medium: '🟡 中严重度',
   low: '🟢 低严重度',
+};
+
+/** 纯文字严重度名：emoji 版在成段的叙述里读着别扭，md 证据统一用这套。 */
+const SEVERITY_NAME: Record<ContentRigorSeverity, string> = {
+  high: '严重',
+  medium: '中等',
+  low: '轻微',
 };
 
 // ── Judge 契约 ──────────────────────────────────────────────────────────────
@@ -784,12 +794,121 @@ function findingMd(finding: RigorFinding): string {
   return lines.join('\n');
 }
 
+// ── 明细旁路（测试 / 排障用，不进上报契约）──────────────────────────────────
+
+/**
+ * 代码侧裁决明细。以前整块塞在 evidence.json 里，结果被前端当作卡片证据渲染成一坨
+ * 原始 JSON；现在改挂 WeakMap，卡片只看自然语言 md，明细也不再随结果落库。
+ */
+const detailByOutput = new WeakMap<EvaluatorOutput, Record<string, unknown>>();
+
+/** 仅供测试与排障读取代码侧裁决明细；不进入上报契约，也不落库。 */
+export function rigorDetailOf(output: EvaluatorOutput): Record<string, unknown> {
+  return detailByOutput.get(output) ?? {};
+}
+
+/**
+ * 把计分过程与代码侧裁决渲染成自然语言证据，替代原来的原始 JSON 转储。
+ *
+ * 三段固定顺序：计分说明（扣了多少、按维度拆、封顶是否生效）→ 核查范围（四张审计表
+ * 各查了多少条）→ 代码侧裁决（模型原判被回填/升档/改判/降档/去重/丢弃/修复了什么）。
+ * 首段刻意不与 summary 重复，否则会被 isEvidenceRedundant 整块判重藏掉。
+ */
+function buildEvidenceMd(d: {
+  findings: RigorFinding[];
+  deductionByDimension: Map<ContentRigorDimension, number>;
+  totalDeduction: number;
+  baseScore: number;
+  score: number;
+  appliedCap: { value: number; reason: string } | null;
+  capEffective: boolean;
+  judgment: RigorJudgeResult;
+  discarded: DiscardedFinding[];
+  downgraded: DowngradedFinding[];
+  repaired: RepairedFinding[];
+  upgraded: UpgradedFinding[];
+  backfilled: BackfilledFinding[];
+  reclassified: ReclassifiedFinding[];
+  deduped: DedupedFinding[];
+}): string {
+  const sections: string[] = [];
+
+  // 计分说明：标题 + 总述 / 扣分明细 / 封顶说明 / 最终分各自成段，避免 md 列表与正文粘连
+  const scoring: string[] = ['**计分说明**'];
+  if (!d.findings.length) {
+    scoring.push('未记录任何严谨性问题，不扣分。');
+  } else {
+    const spread = (['high', 'medium', 'low'] as const)
+      .map((severity) => ({ severity, count: d.findings.filter((f) => f.severity === severity).length }))
+      .filter((item) => item.count > 0)
+      .map((item) => `${SEVERITY_NAME[item.severity]} ${item.count} 处`)
+      .join('、');
+    scoring.push(
+      `共记录 ${d.findings.length} 处问题（${spread}），累计扣 ${d.totalDeduction} 分，扣分后为 ${d.baseScore} 分。`,
+    );
+    const perDimension = CONTENT_RIGOR_DIMENSIONS
+      .map((dimension) => ({ label: dimension.label, value: d.deductionByDimension.get(dimension.key) ?? 0 }))
+      .filter((item) => item.value > 0)
+      .map((item) => `- ${item.label}：扣 ${item.value} 分`);
+    if (perDimension.length) scoring.push(perDimension.join('\n'));
+    if (d.appliedCap) {
+      scoring.push(d.capEffective
+        ? `${d.appliedCap.reason}总分由 ${d.baseScore} 分封顶为 ${d.appliedCap.value} 分。`
+        : `触发了 ${d.appliedCap.value} 分封顶，但累计扣分后的 ${d.baseScore} 分已低于封顶值，封顶未生效。`);
+    }
+  }
+  scoring.push(`最终总分 ${d.score} 分。`);
+  sections.push(scoring.join('\n\n'));
+
+  const scope = ([
+    ['命令与操作', d.judgment.commandAudit?.length ?? 0, '条'],
+    ['算术步骤', d.judgment.calculationAudit?.length ?? 0, '步'],
+    ['带单位数值', d.judgment.unitAudit?.length ?? 0, '处'],
+    ['高风险断言', d.judgment.claimAudit?.length ?? 0, '条'],
+  ] as const).filter(([, count]) => count > 0).map(([name, count, unit]) => `${name} ${count} ${unit}`);
+  sections.push(scope.length
+    ? `**核查范围**\n本次逐项核查：${scope.join('、')}。`
+    : '**核查范围**\n实际输出中未出现需要专项核查的命令、计算、单位或高风险断言。');
+
+  const acts: string[] = [];
+  for (const f of d.backfilled) {
+    acts.push(`- **回填**：${f.backfillReason}补记「${f.quote}」，判为${labelOf(f.dimension)}${SEVERITY_NAME[f.severity]}问题。`);
+  }
+  for (const f of d.upgraded) {
+    acts.push(`- **升档**：「${f.quote}」由${SEVERITY_NAME[f.originalSeverity]}升为${SEVERITY_NAME[f.severity]}——${f.upgradeReason}`);
+  }
+  for (const f of d.reclassified) {
+    acts.push(`- **改判维度**：「${f.quote}」由${labelOf(f.originalDimension)}改判为${labelOf(f.dimension)}——${f.reclassifyReason}`);
+  }
+  for (const f of d.downgraded) {
+    acts.push(`- **降档**：「${f.quote}」由${SEVERITY_NAME[f.originalSeverity]}降为${SEVERITY_NAME[f.severity]}——${f.downgradeReason}`);
+  }
+  for (const f of d.deduped) {
+    acts.push(`- **去重**：「${f.quote}」——${f.dedupReason}`);
+  }
+  for (const f of d.discarded) {
+    acts.push(`- **丢弃**：「${f.quote}」——${f.discardReason}`);
+  }
+  for (const f of d.repaired) {
+    acts.push(`- **引用修复**：原引用「${f.originalQuote}」——${f.repairReason}`);
+  }
+  if (acts.length) {
+    sections.push(`**代码侧裁决（共 ${acts.length} 项）**\n模型的原始判断经以下修正后才计入分数：\n${acts.join('\n')}`);
+  }
+
+  const judgeSummary = d.judgment.summary?.trim();
+  if (judgeSummary) {
+    sections.push(`**模型原始判断**\n${judgeSummary}（留档参考，最终结论以上述计分为准）`);
+  }
+
+  return sections.join('\n\n');
+}
+
 /** 纯函数计分入口：测试直接构造 judgment 断言分数，无需注入模型。 */
 export function buildRigorEvaluatorOutput(input: {
   actualOutput: string;
   judgment: RigorJudgeResult;
 }): EvaluatorOutput {
-  
   const grounded = groundFindings(input.actualOutput, input.judgment.findings ?? []);
   // 三类审计的裁定一次性落地：同一处只会被落成一条 finding（先到先得，后到者只做升档）
   const audits = applyAuditVerdicts(
@@ -928,36 +1047,59 @@ export function buildRigorEvaluatorOutput(input: {
   const summary = buildSummary(findings, grounded.discarded.length);
   const verdict = findings.length === 0 ? 'pass' : appliedCap ? 'fail' : 'warn';
 
-  return normalizeEvaluatorOutput({
+  const deduped = [...claimAudit.deduped, ...driftDeduped];
+
+  const output = normalizeEvaluatorOutput({
     verdict,
     summary,
     score,
     points,
+    // 卡片上的评估器级证据：自然语言，不再是原始 JSON 转储
     evidence: {
-      json: {
-        rubricVersion: RIGOR_RUBRIC_VERSION,
+      md: buildEvidenceMd({
+        findings,
+        deductionByDimension,
         totalDeduction,
         baseScore,
-        deductionByDimension: Object.fromEntries(deductionByDimension),
-        ...(appliedCap ? { appliedCap: { ...appliedCap, effective: capEffective } } : {}),
-        // Judge 的原话只留档，不上卡片
-        judgeSummary: input.judgment.summary?.trim() || null,
-        commandAudit: input.judgment.commandAudit ?? [],
-        calculationAudit: input.judgment.calculationAudit ?? [],
-        unitAudit: input.judgment.unitAudit ?? [],
-        claimAudit: input.judgment.claimAudit ?? [],
-        reclassifiedFindings: claimAudit.reclassified,
-        dedupedFindings: [...claimAudit.deduped, ...driftDeduped],
-        upgradedFindings: upgraded,
-        backfilledFindings: backfilled,
-        findings,
-        discardedFindings: grounded.discarded,
-        downgradedFindings: grounded.downgraded,
-        repairedFindings: grounded.repaired,
-        suggestions: uniqueStrings(findings.map((finding) => finding.suggestion)),
-      },
+        score,
+        appliedCap,
+        capEffective,
+        judgment: input.judgment,
+        discarded: grounded.discarded,
+        downgraded: grounded.downgraded,
+        repaired: grounded.repaired,
+        upgraded,
+        backfilled,
+        reclassified: claimAudit.reclassified,
+        deduped,
+      }),
     },
   });
+
+  // 明细走旁路：仅供测试与排障（rigorDetailOf），不进上报契约、不落库
+  detailByOutput.set(output, {
+    rubricVersion: RIGOR_RUBRIC_VERSION,
+    totalDeduction,
+    baseScore,
+    deductionByDimension: Object.fromEntries(deductionByDimension),
+    ...(appliedCap ? { appliedCap: { ...appliedCap, effective: capEffective } } : {}),
+    // Judge 的原话只留档，不作结论
+    judgeSummary: input.judgment.summary?.trim() || null,
+    commandAudit: input.judgment.commandAudit ?? [],
+    calculationAudit: input.judgment.calculationAudit ?? [],
+    unitAudit: input.judgment.unitAudit ?? [],
+    claimAudit: input.judgment.claimAudit ?? [],
+    reclassifiedFindings: claimAudit.reclassified,
+    dedupedFindings: deduped,
+    upgradedFindings: upgraded,
+    backfilledFindings: backfilled,
+    findings,
+    discardedFindings: grounded.discarded,
+    downgradedFindings: grounded.downgraded,
+    repairedFindings: grounded.repaired,
+    suggestions: uniqueStrings(findings.map((finding) => finding.suggestion)),
+  });
+  return output;
 }
 
 function labelOf(dimension: ContentRigorDimension): string {
@@ -991,16 +1133,19 @@ function buildSummary(findings: RigorFinding[], discardedCount: number): string 
 
 /** 空输出无从判定：不给分，只说明原因（用户未提供内容不是系统故障，不能抛错）。 */
 function emptyOutputResult(): EvaluatorOutput {
-  return normalizeEvaluatorOutput({
+  const output = normalizeEvaluatorOutput({
     summary: '实际输出为空，无法评估内容严谨性——不记分。',
     evidence: {
-      json: {
-        rubricVersion: RIGOR_RUBRIC_VERSION,
-        unscoredReason: '实际输出为空，没有可判定的陈述。',
-        findings: [],
-      },
+      md: '**计分说明**\n实际输出为空，没有可判定的陈述，本次不记分（不计入综合分与类目均分）。'
+        + '\n\n**核查范围**\n无可核查内容，未执行命令、计算、单位与高风险断言的逐项核查。',
     },
   });
+  detailByOutput.set(output, {
+    rubricVersion: RIGOR_RUBRIC_VERSION,
+    unscoredReason: '实际输出为空，没有可判定的陈述。',
+    findings: [],
+  });
+  return output;
 }
 
 /**

@@ -385,15 +385,15 @@ export const presetEvaluators: EvaluatorCard[] = [
     status: 'ready',
     runtimeNote: 'depth-preset-evaluators.ts',
   },
-  {
+ {
     id: 'preset-rigor-content',
     name: '内容严谨性',
     description: '从事实、数值、逻辑、操作建议与误导性表述五个维度检查输出内容的严谨性，逐条给出原文引用、正确信息与修改建议；不评价语言风格与内容安全。有参考答案时以参考答案为准，没有也可评。',
     evaluatorType: 'LLM',
     source: 'preset',
     targetTypes: ['结果'],
-    objectives: ['内容质量', '可信度'],
-    scenarios: ['事实核查', '开放式回答质量评估', 'Agent通用评测'],
+    objectives: ['内容严谨性筛查'],
+    scenarios: ['代码输出校验', '数据分析评估'],
     runMode: 'LLM Judge (离散 rubric · 扣分封顶)',
     scoreRange: '0-100',
     popularity: 75,
