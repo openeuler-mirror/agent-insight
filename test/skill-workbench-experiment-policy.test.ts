@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
@@ -56,4 +58,14 @@ test('触发分析锁定专用评估器，其他实验排除专用评估器', ()
   assert.equal(isSkillExperimentEvaluatorEligible('use-case', 'skill-trigger-analyzer'), false);
   assert.equal(isSkillExperimentEvaluatorEligible('use-case', 'preset-result-answer'), true);
   assert.equal(isSkillExperimentEvaluatorEligible('skill-ab', 'custom-evaluator'), true);
+});
+
+test('用例分析默认不勾选评估器', () => {
+  const wizard = fs.readFileSync(
+    path.join(process.cwd(), 'src/app/(main)/experiments/new/page.tsx'),
+    'utf8',
+  );
+  const useCaseDefaults = wizard.match(/'use-case': \[(.*?)\],\n  'skill-ab':/s)?.[1];
+  assert.ok(useCaseDefaults, '应保留用例分析评估器配置');
+  assert.doesNotMatch(useCaseDefaults, /selected:\s*true/);
 });
