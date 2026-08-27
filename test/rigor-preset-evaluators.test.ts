@@ -8,7 +8,7 @@ import {
   runRigorPreset,
   type RigorFinding,
 } from '@/lib/engine/experiment/rigor-preset-evaluators';
-import type { ContentRigorDimension, ContentRigorSeverity } from '@/prompts/content-rigor-prompt';
+import type { ContentRigorDimension, ContentRigorSeverity } from '@/prompts/rigor-content-prompt';
 
 interface RigorEvidenceJson {
   rubricVersion?: string;

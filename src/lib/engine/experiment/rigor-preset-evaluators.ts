@@ -53,7 +53,7 @@ import {
   generateContentRigorPrompt,
   type ContentRigorDimension,
   type ContentRigorSeverity,
-} from '@/prompts/content-rigor-prompt';
+} from '@/prompts/rigor-content-prompt';
 import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 import { invokeSpecializedJudge, uniqueStrings } from './specialized-evaluator-common';
