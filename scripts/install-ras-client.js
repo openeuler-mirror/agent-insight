@@ -307,13 +307,26 @@ function systemdUnitPath() {
   return path.join(os.homedir(), '.config', 'systemd', 'user', `${SERVICE_NAME}.service`)
 }
 
-function writeSystemdUnit() {
-  const unitPath = systemdUnitPath()
-  fs.mkdirSync(path.dirname(unitPath), { recursive: true })
+function servicePath() {
+  return String(process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin')
+}
+
+function quoteSystemdValue(value) {
+  return `"${String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+    .replace(/%/g, '%%')}"`
+}
+
+function buildSystemdUnit() {
   const nodeBin = process.execPath
+  const environmentPath = quoteSystemdValue(`PATH=${servicePath()}`)
   // Type=notify 要求客户端先 sd_notify(READY=1)；WatchdogSec 再收 WATCHDOG=1。
   // StartLimit* 必须在 [Unit]：写在 [Service] 会被较新 systemd 忽略。
-  const unit = `[Unit]
+  return `[Unit]
 Description=Agent Insight Reliability Client
 After=network-online.target
 StartLimitIntervalSec=300
@@ -324,6 +337,7 @@ Type=notify
 NotifyAccess=all
 ExecStart=${nodeBin} ${CLIENT_SCRIPT}
 Environment=AGENT_INSIGHT_SUPERVISOR=systemd
+Environment=${environmentPath}
 Restart=on-failure
 RestartSec=5s
 WatchdogSec=30s
@@ -333,6 +347,12 @@ StandardError=append:${path.join(CLIENT_HOME, 'client.log')}
 [Install]
 WantedBy=default.target
 `
+}
+
+function writeSystemdUnit() {
+  const unitPath = systemdUnitPath()
+  fs.mkdirSync(path.dirname(unitPath), { recursive: true })
+  const unit = buildSystemdUnit()
   fs.writeFileSync(unitPath, unit)
   log(`✓ 已写入 systemd unit: ${unitPath}`)
   return unitPath
@@ -368,7 +388,7 @@ function writeLaunchdPlist() {
   const plistPath = launchdPlistPath()
   fs.mkdirSync(path.dirname(plistPath), { recursive: true })
   const logPath = path.join(CLIENT_HOME, 'client.log')
-  const servicePath = String(process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin')
+  const environmentPath = servicePath()
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -389,7 +409,7 @@ function writeLaunchdPlist() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>AGENT_INSIGHT_SUPERVISOR</key><string>launchd</string>
-    <key>PATH</key><string>${servicePath}</string>
+    <key>PATH</key><string>${environmentPath}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key>
@@ -615,6 +635,7 @@ module.exports = {
   CLIENT_SCRIPT,
   installRuntime,
   RUNTIME_DIR,
+  buildSystemdUnit,
   writeSystemdUnit,
   writeLaunchdPlist,
   bootstrapLaunchdService,

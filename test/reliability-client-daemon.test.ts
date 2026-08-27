@@ -51,6 +51,7 @@ const installer = require_('../scripts/install-ras-client.js') as {
   CLIENT_SCRIPT: string
   RUNTIME_DIR: string
   installRuntime?: () => void
+  buildSystemdUnit?: () => string
   writeSystemdUnit: () => string
   writeLaunchdPlist?: () => string
   bootstrapLaunchdService?: (
@@ -308,18 +309,34 @@ test('client writes the config.json that RAS actually reads', async () => {
   }
 })
 
-test('systemd unit uses Type=notify with StartLimit in Unit section', () => {
-  assert.equal(typeof installer.writeSystemdUnit, 'function')
-  const unitPath = installer.writeSystemdUnit()
-  const unit = fs.readFileSync(unitPath, 'utf8')
-  assert.match(unit, /^\[Unit\][\s\S]*StartLimitIntervalSec=300[\s\S]*StartLimitBurst=5[\s\S]*\[Service\]/m)
-  assert.match(unit, /Type=notify/)
-  assert.match(unit, /WatchdogSec=30s/)
-  assert.doesNotMatch(
-    unit,
-    /\[Service\][\s\S]*StartLimitIntervalSec/,
-    'StartLimit* 不得写在 [Service]',
-  )
+test('systemd unit preserves the installer PATH and keeps service directives valid', () => {
+  assert.equal(typeof installer.buildSystemdUnit, 'function')
+  assert.match(String(installer.writeSystemdUnit), /buildSystemdUnit\(\)/)
+  const previousPath = process.env.PATH
+  process.env.PATH = '/home/alice/.opencode/bin:/opt/Agent Tools/bin:/tmp/%h/"quoted"/\\'
+  try {
+    const unit = installer.buildSystemdUnit?.() || ''
+    assert.match(
+      unit,
+      /^\[Unit\][\s\S]*StartLimitIntervalSec=300[\s\S]*StartLimitBurst=5[\s\S]*\[Service\]/m,
+    )
+    assert.match(unit, /Type=notify/)
+    assert.match(unit, /WatchdogSec=30s/)
+    assert.ok(
+      unit.includes(
+        'Environment="PATH=/home/alice/.opencode/bin:/opt/Agent Tools/bin:/tmp/%%h/\\"quoted\\"/\\\\"',
+      ),
+      'systemd PATH 必须保留用户级 Agent 目录并安全转义',
+    )
+    assert.doesNotMatch(
+      unit,
+      /\[Service\][\s\S]*StartLimitIntervalSec/,
+      'StartLimit* 不得写在 [Service]',
+    )
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+  }
 })
 
 test('sd_notify READY precedes capabilities and watchdog is faster than WatchdogSec/2', () => {
@@ -375,9 +392,12 @@ test('service points at a stable runtime path, never a temp extraction dir', () 
 
 test('launchd service preserves the installer PATH for Agent executables', () => {
   assert.equal(typeof installer.writeLaunchdPlist, 'function')
-  const source = String(installer.writeLaunchdPlist)
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'install-ras-client.js'),
+    'utf8',
+  )
   assert.match(source, /<key>PATH<\/key>/)
-  assert.match(source, /process\.env\.PATH/)
+  assert.match(source, /function servicePath\(\)[\s\S]*?process\.env\.PATH/)
 })
 
 test('launchd bootstrap retries Operation already in progress and verifies the service', () => {
