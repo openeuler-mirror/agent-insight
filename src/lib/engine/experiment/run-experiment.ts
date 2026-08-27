@@ -48,6 +48,7 @@ import {
 } from '@/lib/engine/evaluation/eval-run-guards';
 import { callJudgeLlm } from './judge-llm';
 import {
+  EXPERIMENT_TRAJECTORY_TIMEOUTS,
   isFaithfulPresetId,
   runFaithfulPreset,
   type FaithfulPresetContext,
@@ -405,7 +406,9 @@ export async function executeResultRow(user: string, resultId: string): Promise<
       }
       const out = await withTimeout(
         evaluateOnce(user, row.evaluatorId, runtime, evaluatorConfig),
-        experimentEngineConfig.rowTimeoutMs,
+        row.evaluatorId === 'preset-agent-trace-quality'
+          ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs
+          : experimentEngineConfig.rowTimeoutMs,
       );
       await prisma.experimentEvalResult.update({
         where: { id: resultId },

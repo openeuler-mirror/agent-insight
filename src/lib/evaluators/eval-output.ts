@@ -11,7 +11,7 @@
  *   这是平台唯一的聚合字段——布尔/枚举/比值等内部形态由评估器自行折算，平台不感知。
  * - points：评分点列表。来源评估器自定（固定维度，或按 case 动态提取的判断点），
  *   平台不区分来源，统一按 label + score? + evidence? 渲染。
- * - evidence：证据，{md} 或 {json} 二选一，由字段自识别渲染格式（界面不展示格式标记）。
+ * - evidence：证据，{md} 或 {json} 二选一，由字段自识别渲染格式；评分点详情会显示内容角色与格式标签。
  *
  * 评估器名/标签/类目是注册时元数据（见 registry.ts），不随结果上报。
  * 「评估失败」由平台调用层记录（ExperimentEvalResult.status='failed'），不属于本契约。
@@ -63,7 +63,7 @@ export type EvalPointStatus = z.infer<typeof EvalPointStatusSchema>;
  * - evidence：证据 {md}|{json}
  * - status：覆盖/严重状态 → 状态 chip
  * - skillAttributable：能否归因到某 skill → 「可归因 skill」标签（skill 优化闭环据此挑 finding）
- * - suggestion：改进建议文本 → 证据展开后的建议行
+ * - suggestion：Markdown 改进建议 → 与证据同列、独立标签化展示
  * - anchors：相关步骤锚点（step-N）→ 展开后可点跳链路观测
  * 归因四字段是 skill 侧（derive-skill-opt-points）读取用，代码评估器不填则一切不变。
  */
