@@ -1,9 +1,26 @@
-export type WorkbenchSyncKind = 'run-started' | 'run-settled';
+export type WorkbenchSyncKind = 'run-started' | 'run-settled' | 'optimization-record-changed';
 
 export interface WorkbenchSyncEvent {
   sessionId: string;
   taskType: 'generation' | 'optimization';
   kind: WorkbenchSyncKind;
+  skillName?: string;
+  recordId?: string;
+  change?: 'published' | 'abandoned';
+  baseVersion?: number;
+  publishedVersion?: number;
+}
+
+export function optimizationRecordsSyncKey(records: ReadonlyArray<{
+  id: string;
+  status: string;
+  publishedVersion?: number | null;
+  updatedAt?: string | Date;
+}>) {
+  return records
+    .map((record) => [record.id, record.status, record.publishedVersion ?? '', String(record.updatedAt ?? '')].join(':'))
+    .sort()
+    .join('|');
 }
 
 const CHANNEL_NAME = 'agent-insight-skill-workbench';

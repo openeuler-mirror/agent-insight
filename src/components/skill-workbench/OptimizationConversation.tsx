@@ -6,7 +6,11 @@ import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wr
 import { apiFetch } from '@/lib/client/api';
 import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
-import { publishWorkbenchSync, subscribeWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
+import {
+  optimizationRecordsSyncKey,
+  publishWorkbenchSync,
+  subscribeWorkbenchSync,
+} from '@/lib/skill-workbench/sync-channel';
 import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 import { GenerationHistory } from './GenerationConversation';
 import type { OptimizationRecordView } from './OptimizationRecordsPanel';
@@ -207,10 +211,12 @@ export function OptimizationConversation({
   const snapshotRequestRef = useRef(0);
   const backgroundRunningRef = useRef(backgroundRunning);
   const observedTaskRef = useRef<{ id?: string; status: string } | null>(null);
+  const observedRecordsRef = useRef(optimizationRecordsSyncKey(records));
   const activeTask = [...liveTasks].reverse().find((item) => ['pending', 'running'].includes(item.status));
 
   useEffect(() => setLiveTasks(tasks), [tasks]);
   useEffect(() => { backgroundRunningRef.current = backgroundRunning; }, [backgroundRunning]);
+  useEffect(() => { observedRecordsRef.current = optimizationRecordsSyncKey(records); }, [records]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: busy ? 'auto' : 'smooth' });
@@ -270,7 +276,10 @@ export function OptimizationConversation({
         const taskChanged = Boolean(task && task.id !== previous?.id);
         const justStarted = Boolean(active && (taskChanged || !previous || !['pending', 'running'].includes(previous.status)));
         const justSettled = Boolean(task && !active && (taskChanged || (previous && ['pending', 'running'].includes(previous.status))));
+        const nextRecordsKey = optimizationRecordsSyncKey(data.session.optimizations || []);
+        const recordsChanged = nextRecordsKey !== observedRecordsRef.current;
         observedTaskRef.current = task ? { id: task.id, status: task.status } : null;
+        if (recordsChanged) observedRecordsRef.current = nextRecordsKey;
         setLiveTasks(nextTasks);
 
         if (!ownsStreamRef.current && (active || justSettled || forceConversation)) {
@@ -286,7 +295,7 @@ export function OptimizationConversation({
           }
         }
         if (!ownsStreamRef.current) setRunning(active);
-        if (justStarted || justSettled) {
+        if (justStarted || justSettled || recordsChanged) {
           if (!ownsStreamRef.current && task?.status === 'failed' && task.errorMessage) onError(task.errorMessage);
           onSynced(data.session);
         }

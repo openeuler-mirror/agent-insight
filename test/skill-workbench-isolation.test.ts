@@ -404,6 +404,21 @@ test('行为重评开始即持久化为质量校验阶段，新页面不会停�
   assert.doesNotMatch(conversation, /data\.mode === 'verify_ok'[\s\S]{0,120}Math\.max\(current, 4\)/);
 });
 
+test('优化候选发布或放弃后通知其他页面，并由空闲轮询兜底刷新记录', () => {
+  const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
+  const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  const syncChannel = readFileSync('src/lib/skill-workbench/sync-channel.ts', 'utf8');
+
+  assert.match(syncChannel, /optimization-record-changed/);
+  assert.equal(shell.match(/kind: 'optimization-record-changed'/g)?.length, 2);
+  assert.match(shell, /change: 'published'/);
+  assert.match(shell, /change: 'abandoned'/);
+  assert.match(conversation, /optimizationRecordsSyncKey\(data\.session\.optimizations \|\| \[\]\)/);
+  assert.match(conversation, /justStarted \|\| justSettled \|\| recordsChanged/);
+  assert.match(shell, /versionAdvanced[\s\S]*loadAssetCatalog/);
+  assert.match(shell, /shouldFollowPublishedVersion[\s\S]*selectFormalAsset/);
+});
+
 test('Skill 优化固定入口执行归并、自验证和静态质量门禁，通过后可直接发布', () => {
   const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
   const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');

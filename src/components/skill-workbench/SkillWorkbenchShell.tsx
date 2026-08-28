@@ -21,6 +21,7 @@ import {
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import type { SkillWorkbenchActiveView } from '@/lib/skill-workbench/domain';
+import { publishWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
 import { cn } from '@/lib/utils';
 import { TruncateText } from '@/components/text/TruncateText';
 import { SkillDetailWorkspace } from './SkillDetailWorkspace';
@@ -551,6 +552,15 @@ export function SkillWorkbenchShell() {
       );
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '放弃候选失败');
+      publishWorkbenchSync({
+        sessionId: record.sessionId,
+        taskType: 'optimization',
+        kind: 'optimization-record-changed',
+        skillName: record.skillName,
+        recordId: record.id,
+        change: 'abandoned',
+        baseVersion: record.baseVersion,
+      });
       if (selectedAsset?.skillName === record.skillName) await loadOptimizationRecords(selectedAsset, user);
     } catch (abandonError) {
       setError(abandonError instanceof Error ? abandonError.message : '放弃候选失败');
@@ -580,6 +590,16 @@ export function SkillWorkbenchShell() {
       );
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '发布优化候选失败');
+      publishWorkbenchSync({
+        sessionId: record.sessionId,
+        taskType: 'optimization',
+        kind: 'optimization-record-changed',
+        skillName: record.skillName,
+        recordId: record.id,
+        change: 'published',
+        baseVersion: record.baseVersion,
+        publishedVersion: data.version.version,
+      });
       if (data.session) {
         const next = data.session as SessionDetail;
         setActive((current) => current?.id === next.id ? next : current);
@@ -745,13 +765,41 @@ export function SkillWorkbenchShell() {
 
   const acceptOptimizationSession = useCallback((value: unknown) => {
     const next = value as SessionDetail;
+    const previous = activeSessionRef.current;
+    const asset = selectedAssetRef.current;
+    const versionAdvanced = Boolean(
+      previous
+      && next.skillName
+      && previous.skillName === next.skillName
+      && previous.workVersion !== null
+      && next.workVersion !== null
+      && next.workVersion > previous.workVersion,
+    );
+    const shouldFollowPublishedVersion = Boolean(
+      versionAdvanced
+      && asset
+      && asset.skillName === next.skillName
+      && asset.version === previous?.workVersion,
+    );
+    activeSessionRef.current = next;
     setActive(next);
     setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
     setError((current) => isStaticQualityError(current) ? '' : current);
-    const asset = selectedAssetRef.current;
     if (asset?.kind === 'draft') selectDraftAsset(next);
-    if (asset && user) void loadOptimizationRecords(asset, user);
-  }, [loadOptimizationRecords, selectDraftAsset, user]);
+    if (versionAdvanced && user) {
+      void loadAssetCatalog(user)
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
+    }
+    if (asset && user) {
+      if (shouldFollowPublishedVersion && next.skillName && next.workVersion !== null) {
+        void selectFormalAsset(next.skillName, next.workVersion, user)
+          .then((publishedAsset) => loadOptimizationRecords(publishedAsset, user))
+          .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '同步发布版本失败'));
+      } else {
+        void loadOptimizationRecords(asset, user);
+      }
+    }
+  }, [loadAssetCatalog, loadOptimizationRecords, selectDraftAsset, selectFormalAsset, user]);
 
   const publishSnapshot = async () => {
     if (!user || !selectedAsset || selectedAsset.kind !== 'draft' || !selectedAsset.sessionId || publishing) return;

@@ -19,6 +19,7 @@ import {
   SKILL_TRIGGER_ANALYZER_EVIDENCE,
 } from '../src/lib/skill-workbench/trigger-evaluator';
 import { resolveStaticQualityGate } from '../src/lib/skill-workbench/evaluation-service';
+import { optimizationRecordsSyncKey } from '../src/lib/skill-workbench/sync-channel';
 
 test('候选版质量规则通过后可直接发布，并兼容历史复测状态', () => {
   assert.equal(canTransitionOptimization('optimizing', 'pending_retest'), true);
@@ -36,6 +37,21 @@ test('候选版质量规则通过后可直接发布，并兼容历史复测状�
 test('发布和放弃是终态', () => {
   assert.equal(canTransitionOptimization('published', 'optimizing'), false);
   assert.equal(canTransitionOptimization('abandoned', 'retesting'), false);
+});
+
+test('优化记录同步键只在服务端发布状态发生变化时改变', () => {
+  const pending = optimizationRecordsSyncKey([
+    { id: 'record-b', status: 'abandoned', publishedVersion: null, updatedAt: '2026-08-28T10:00:00.000Z' },
+    { id: 'record-a', status: 'pending_retest', publishedVersion: null, updatedAt: '2026-08-28T09:00:00.000Z' },
+  ]);
+  assert.equal(pending, optimizationRecordsSyncKey([
+    { id: 'record-a', status: 'pending_retest', publishedVersion: null, updatedAt: '2026-08-28T09:00:00.000Z' },
+    { id: 'record-b', status: 'abandoned', publishedVersion: null, updatedAt: '2026-08-28T10:00:00.000Z' },
+  ]));
+  assert.notEqual(pending, optimizationRecordsSyncKey([
+    { id: 'record-a', status: 'published', publishedVersion: 3, updatedAt: '2026-08-28T10:01:00.000Z' },
+    { id: 'record-b', status: 'abandoned', publishedVersion: null, updatedAt: '2026-08-28T10:00:00.000Z' },
+  ]));
 });
 
 test('工作台视图和来源只接受显式值域', () => {
