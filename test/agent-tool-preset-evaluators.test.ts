@@ -74,7 +74,13 @@ function facts(inputs: Array<string | { kind: 'tool' | 'skill'; name: string }>)
   const calledCatalogCapabilities = [...new Map(calls.map((call) => [call.canonicalKey, {
     kind: call.kind, name: call.name, canonicalKey: call.canonicalKey,
   }])).values()];
-  return { calls, countsByCapability, calledCatalogCapabilities, unknownCalledCapabilities: [] };
+  return {
+    calls,
+    countsByCapability,
+    calledCatalogCapabilities,
+    unknownCalledCapabilities: [],
+    usage: { totalTokens: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, llmCallCount: 0, toolCallCount: 0 },
+  };
 }
 
 const selectionDimensions = (): SelectionJudgeResult['dimensions'] => [

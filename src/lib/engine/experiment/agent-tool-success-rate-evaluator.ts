@@ -20,7 +20,7 @@ import {
 import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 import { listEvaluatorCapabilities } from '@/lib/evaluators/evaluator-case-context';
-import { extractToolTraceFacts, type ToolTraceFacts } from './agent-tool-trace-facts';
+import { extractToolTraceFacts, type ToolTraceFacts, type TraceUsageFacts } from './agent-tool-trace-facts';
 import { isFailedCallStatus, SPECIALIZED_RUBRIC_VERSION } from './specialized-evaluator-common';
 
 export const TOOL_SUCCESS_RATE_PRESET_ID = 'preset-agent-tool-success-rate';
@@ -104,6 +104,7 @@ function buildPrompt(
   ctx: FaithfulPresetContext,
   facts: ToolTraceFacts,
   stats: TraceStats,
+  usage: TraceUsageFacts,
 ): { system: string; user: string } {
   const capabilities = ctx.evaluatorContext
     ? listEvaluatorCapabilities(ctx.evaluatorContext)
@@ -157,6 +158,10 @@ ${callLines || '(无工具调用)'}
 - 按工具聚合:
 ${perToolLines || '(无)'}
 
+**失败消耗（代码从轨迹计量，禁止自行估算）**
+- 失败工具调用浪费的 Token: ${usage.failedTokens}
+- 失败工具调用浪费的时间: ${usage.failedDurationMs}ms
+
 请分析并返回 JSON（只做离散判断，不要给连续分）：
 
 \`\`\`json
@@ -173,7 +178,7 @@ ${perToolLines || '(无)'}
     "critical_path_failures": true/false,
     "critical_path_details": "关键路径失败详情（可选）",
     "retry_recovery_count": 重试恢复次数,
-    "wasted_token_estimate": "浪费的 Token 估算（可选）",
+    "wasted_token_estimate": "失败造成的资源浪费描述（可选，失败 Token/耗时已由代码计算，这里只需定性描述影响）",
     "impact_verdict": "severe/moderate/minor/none"
   }
 }
@@ -189,6 +194,7 @@ const IMPACT_WEIGHT: Record<string, number> = { severe: 30, moderate: 20, minor:
 function computeScore(
   judge: SuccessRateJudgeResult,
   stats: TraceStats,
+  usage: TraceUsageFacts,
 ): {
   score: number;
   points: EvalPoint[];
@@ -263,8 +269,12 @@ function computeScore(
     reasonParts.push(`- 关键路径失败: ${impactSummary.critical_path_details || '是'}`);
   }
   reasonParts.push(`- 重试恢复: ${impactSummary.retry_recovery_count} 次`);
-  if (impactSummary.wasted_token_estimate) {
-    reasonParts.push(`- Token 浪费: ${impactSummary.wasted_token_estimate}`);
+  // 失败消耗（代码从轨迹计量，非 LLM 估算）
+  if (usage.failedTokens > 0) {
+    reasonParts.push(`- 失败消耗 Token: ${usage.failedTokens}`);
+  }
+  if (usage.failedDurationMs > 0) {
+    reasonParts.push(`- 失败消耗时间: ${usage.failedDurationMs}ms`);
   }
   const reason = reasonParts.join('\n');
 
@@ -339,8 +349,11 @@ function computeScore(
     impLines.push(`- ⚠️ 关键路径失败: ${impactForPoint.critical_path_details || '是'}`);
   }
   impLines.push(`- 重试恢复: ${impactForPoint.retry_recovery_count} 次`);
-  if (impactForPoint.wasted_token_estimate) {
-    impLines.push(`- Token 浪费: ${impactForPoint.wasted_token_estimate}`);
+  if (usage.failedTokens > 0) {
+    impLines.push(`- 失败消耗 Token: ${usage.failedTokens}`);
+  }
+  if (usage.failedDurationMs > 0) {
+    impLines.push(`- 失败消耗时间: ${usage.failedDurationMs}ms`);
   }
   impLines.push(`- 影响判定: ${impactForPoint.impact_verdict}`);
   let impactScore: number;
@@ -394,7 +407,7 @@ export async function runToolSuccessRatePreset(
   const stats = computeTraceStats(facts);
 
   // 2. LLM 离散判断：错误模式 + 失败影响
-  const prompt = buildPrompt(ctx, facts, stats);
+  const prompt = buildPrompt(ctx, facts, stats, facts.usage);
   const { callJudgeLlm } = await import('./judge-llm');
   const rawText = await callJudgeLlm(user, {
     system: prompt.system,
@@ -427,7 +440,7 @@ export async function runToolSuccessRatePreset(
     throw new JudgeOutputParseError(`工具成功率 judge 输出不符合契约: ${details}`, rawText);
   }
 
-  const { score, points, summary, reason, verdict } = computeScore(result.data, stats);
+  const { score, points, summary, reason, verdict } = computeScore(result.data, stats, facts.usage);
 
   return normalizeEvaluatorOutput({
     verdict,
