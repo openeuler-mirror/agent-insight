@@ -3,13 +3,8 @@
 import type { ReactNode } from 'react';
 import { Check, ChevronRight, CircleAlert, Loader2, Sparkles, SquareTerminal } from 'lucide-react';
 
-type ProcessState = 'running' | 'complete' | 'error';
-
-export function processState(status: string | undefined): ProcessState {
-  if (/(error|failed|cancel|incomplete|timeout)/i.test(status || '')) return 'error';
-  if (/(running|pending|started)/i.test(status || '')) return 'running';
-  return 'complete';
-}
+import type { ProcessState } from '@/lib/chat/process-block-state';
+export { resolveProcessState as processState } from '@/lib/chat/process-block-state';
 
 export function ConversationProcessDisclosure({
   kind,

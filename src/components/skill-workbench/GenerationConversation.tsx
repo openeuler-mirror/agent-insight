@@ -4,12 +4,13 @@ import { FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { ALLOWED_EXT_ACCEPT } from '@/lib/skill-generator/file-types';
 import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 
 type GenerationBlock =
   | { kind: 'text'; id: string; text: string }
-  | { kind: 'thinking'; id: string; text: string; done?: boolean }
+  | { kind: 'thinking'; id: string; text: string; done?: boolean; status?: string }
   | { kind: 'tool'; id: string; name: string; status: string; summary?: string; error?: string }
   | { kind: 'question'; id: string; question: string; status: string; answer?: unknown }
   | { kind: 'download'; id: string; skillName: string; fileCount: number };
@@ -256,6 +257,7 @@ export function GenerationConversation({
     ]);
     setRunning(true);
     const controller = new AbortController();
+    let processOutcome: ProcessOutcome = 'error';
     try {
       const response = await apiFetch('/api/skill-generator/chat', {
         method: 'POST',
@@ -300,16 +302,25 @@ export function GenerationConversation({
               if (existing?.kind === 'thinking') {
                 existing.text += payload.delta || '';
                 existing.done = payload.done || existing.done;
-              } else agent.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', done: payload.done });
+              } else agent.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', done: Boolean(payload.done) });
             });
           } else if (eventData.mode === 'tool_call') {
             const payload = eventData.payload || {};
-            patchAgent((agent) => agent.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' }));
+            patchAgent((agent) => {
+              const tool = agent.blocks.find((block) => block.kind === 'tool' && block.id === payload.id);
+              if (!tool || tool.kind !== 'tool') {
+                agent.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' });
+                return;
+              }
+              tool.name ||= payload.name;
+              if (!['ok', 'error', 'complete'].includes(tool.status)) tool.status = payload.status || 'running';
+            });
           } else if (eventData.mode === 'tool_result') {
             const payload = eventData.payload || {};
             patchAgent((agent) => {
               const tool = agent.blocks.find((block) => block.kind === 'tool' && block.id === payload.id);
               if (tool?.kind === 'tool') Object.assign(tool, { status: payload.status || 'ok', summary: payload.summary, error: payload.error });
+              else agent.blocks.push({ kind: 'tool', id: payload.id, name: payload.name || 'tool', status: payload.status || 'ok', summary: payload.summary, error: payload.error });
             });
           } else if (eventData.mode === 'question') {
             const payload = eventData.payload || {};
@@ -325,24 +336,49 @@ export function GenerationConversation({
           } else if (eventData.mode === 'download') {
             const payload = eventData.payload || {};
             patchAgent((agent) => agent.blocks.push({ kind: 'download', id: payload.id, skillName: payload.skillName, fileCount: payload.fileCount || 0 }));
+          } else if (eventData.mode === 'done') {
+            processOutcome = 'complete';
+            patchAgent((agent) => {
+              agent.blocks = settleProcessBlocks(agent.blocks, 'complete');
+              agent.streaming = false;
+            });
           } else if (eventData.mode === 'error') {
+            patchAgent((agent) => { agent.blocks = settleProcessBlocks(agent.blocks, 'error'); });
             throw new Error(String(eventData.payload || '生成失败'));
           }
         }
       }
-      const sessionResponse = await apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      );
+      processOutcome = 'complete';
+      const [sessionResponse, generationResponse] = await Promise.all([
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+      ]);
       const sessionData = await sessionResponse.json();
-      if (sessionResponse.ok && sessionData.session) onSynced(sessionData.session);
+      const generationData = await generationResponse.json();
+      if (!sessionResponse.ok) throw new Error(sessionData.error || '加载生成结果失败');
+      if (!generationResponse.ok) throw new Error(generationData.error || '校准生成会话失败');
+      setFiles(generationData.generation.files || {});
+      setMessages((generationData.generation.messages || []).map((savedMessage: { id: string; role: string; content: string; blocks?: string }) => ({
+        ...savedMessage,
+        blocks: settleProcessBlocks(parseBlocks(savedMessage.blocks), 'complete'),
+      })));
+      if (sessionData.session) onSynced(sessionData.session);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
         onError(error instanceof Error ? error.message : '生成失败');
       }
     } finally {
       setRunning(false);
-      patchAgent((agent) => { agent.streaming = false; });
+      patchAgent((agent) => {
+        agent.blocks = settleProcessBlocks(agent.blocks, processOutcome);
+        agent.streaming = false;
+      });
     }
   };
 
@@ -429,24 +465,24 @@ function GenerationMessageList({ messages, user }: { messages: GenerationMessage
     <div key={`generation-${message.id || index}`} className={message.role === 'user' ? 'ml-8 min-w-0 max-w-full overflow-hidden rounded-lg bg-primary px-3 py-2 text-xs leading-5 text-primary-foreground' : 'min-w-0 max-w-full overflow-hidden rounded-lg border border-border bg-card px-3 py-3'}>
       {message.role !== 'user' && <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-foreground-muted"><Bot className="size-3.5" />Skill Agent</div>}
       {message.blocks.length ? message.blocks.map((block) => (
-        <GenerationBlockView key={block.id} block={block} user={user} />
+        <GenerationBlockView key={block.id} block={block} user={user} streaming={message.streaming === true} />
       )) : <p className="whitespace-pre-wrap break-words text-xs leading-5 [overflow-wrap:anywhere]">{message.content}</p>}
       {message.streaming && <Loader2 className="mt-2 size-3.5 animate-spin text-primary" />}
     </div>
   ));
 }
 
-function GenerationBlockView({ block, user }: { block: GenerationBlock; user: string }) {
+function GenerationBlockView({ block, user, streaming }: { block: GenerationBlock; user: string; streaming: boolean }) {
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
   if (block.kind === 'text') return <p className="max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-foreground-secondary [overflow-wrap:anywhere]">{block.text}</p>;
   if (block.kind === 'thinking') return (
-    <ConversationProcessDisclosure kind="thinking" state={block.done === false ? 'running' : 'complete'}>
+    <ConversationProcessDisclosure kind="thinking" state={processState(block.status || (block.done === false ? 'running' : 'done'), streaming ? undefined : 'done')}>
       <p className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]">{block.text}</p>
     </ConversationProcessDisclosure>
   );
   if (block.kind === 'tool') return (
-    <ConversationProcessDisclosure kind="tool" state={processState(block.status)} name={block.name}>
+    <ConversationProcessDisclosure kind="tool" state={processState(block.status, streaming ? undefined : 'done')} name={block.name}>
       <pre className="m-0 max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 [overflow-wrap:anywhere]">{block.summary || block.error || block.status}</pre>
     </ConversationProcessDisclosure>
   );

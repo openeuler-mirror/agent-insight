@@ -4,6 +4,7 @@ import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, use
 import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
 import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 import { GenerationHistory } from './GenerationConversation';
@@ -33,7 +34,9 @@ interface ChatBlock {
   text?: string;
   name?: string;
   status?: string;
+  done?: boolean;
   summary?: string;
+  error?: string;
   sourceCount?: number;
   items?: OptimizationPlanItemView[];
   recordId?: string;
@@ -281,6 +284,7 @@ export function OptimizationConversation({
     const normalizedRequest = requestText.trim() || `根据 ${issues.length} 个静态评估问题优化`;
     const runId = crypto.randomUUID();
     const runMeta: ChatBlock = { kind: 'optimization_meta', id: `optimization-${runId}`, runId };
+    let processOutcome: ProcessOutcome = 'error';
     setLocalStep(1);
     setFeedback('');
     setMessages((current) => [
@@ -333,9 +337,12 @@ export function OptimizationConversation({
             const block = message.blocks.find((item) => item.kind === 'thinking' && item.id === payload.id);
             if (block) {
               block.text = `${block.text || ''}${payload.delta || ''}`;
-              if (payload.done) block.status = 'done';
+              if (payload.done) {
+                block.done = true;
+                block.status = 'done';
+              }
             }
-            else message.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', status: payload.done ? 'done' : 'running' });
+            else message.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', done: Boolean(payload.done), status: payload.done ? 'done' : 'running' });
           });
           else if (data.mode === 'tool_call') {
             setLocalStep((current) => Math.max(current, 2));
@@ -351,8 +358,8 @@ export function OptimizationConversation({
           }
           else if (data.mode === 'tool_result') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'tool' && item.id === payload.id);
-            if (block) Object.assign(block, { status: payload.status || 'ok', summary: payload.summary });
-            else message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name || 'tool', status: payload.status || 'ok', summary: payload.summary });
+            if (block) Object.assign(block, { status: payload.status || 'ok', summary: payload.summary, error: payload.error });
+            else message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name || 'tool', status: payload.status || 'ok', summary: payload.summary, error: payload.error });
           });
           else if (data.mode === 'optimization_plan') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'optimization_plan' && item.id === payload.id);
@@ -391,9 +398,20 @@ export function OptimizationConversation({
           else if (data.mode === 'warning') patchAgent((message) => message.blocks.push({
             kind: 'warning', id: `warning-${message.blocks.length}`, text: String(payload.message || data.payload || ''),
           }));
-          else if (data.mode === 'error') throw new Error(String(data.payload || '优化失败'));
+          else if (data.mode === 'done') {
+            processOutcome = 'complete';
+            patchAgent((message) => {
+              message.blocks = settleProcessBlocks(message.blocks, 'complete');
+              message.streaming = false;
+            });
+          }
+          else if (data.mode === 'error') {
+            patchAgent((message) => { message.blocks = settleProcessBlocks(message.blocks, 'error'); });
+            throw new Error(String(data.payload || '优化失败'));
+          }
         }
       }
+      processOutcome = 'complete';
       const [sessionResponse, optimizationResponse] = await Promise.all([
         apiFetch(
           `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
@@ -425,7 +443,10 @@ export function OptimizationConversation({
       }
     } finally {
       setRunning(false);
-      patchAgent((message) => { message.streaming = false; });
+      patchAgent((message) => {
+        message.blocks = settleProcessBlocks(message.blocks, processOutcome);
+        message.streaming = false;
+      });
     }
   }, [baseVersion, baselineFiles, busy, issues, onError, onSynced, optSessionId, patchAgent, prepareMergePlan, skillName, user, workbenchSessionId]);
 
@@ -492,10 +513,10 @@ export function OptimizationConversation({
             {message.role === 'agent' && <div className="mb-2 flex items-center gap-1.5 text-[11px] text-foreground-muted"><Bot className="size-3.5" />Skill Copilot{roundNumber && <span>· 第 {roundNumber} 轮 · {transition}</span>}</div>}
             {message.role === 'user' && roundNumber && <div className="mb-1 text-[10px] text-primary-foreground/75">{meta?.automatic ? `第 ${roundNumber} 轮 · 自动修复` : `第 ${roundNumber} 轮`}</div>}
             {visibleBlocks.length ? visibleBlocks.map((block, blockIndex) => block.kind === 'tool'
-              ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="tool" state={processState(block.status)} name={block.name}>
-                <pre className="m-0 max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 [overflow-wrap:anywhere]">{block.summary || block.status}</pre>
+              ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="tool" state={processState(block.status, messageTask?.status || (message.streaming ? undefined : 'done'))} name={block.name}>
+                <pre className="m-0 max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 [overflow-wrap:anywhere]">{block.summary || block.error || block.status}</pre>
               </ConversationProcessDisclosure>
-              : block.kind === 'thinking' ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="thinking" state={processState(block.status)}>
+              : block.kind === 'thinking' ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="thinking" state={processState(block.status || (block.done === false ? 'running' : 'done'), messageTask?.status || (message.streaming ? undefined : 'done'))}>
                 <p className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]">{block.text}</p>
               </ConversationProcessDisclosure>
                 : block.kind === 'optimization_plan' ? <OptimizationPlanCard key={`${block.id}-${blockIndex}`} block={block} />

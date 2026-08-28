@@ -342,7 +342,7 @@ test('Skill 优化实时工具状态按调用 ID 收敛，并在流结束后用�
   const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
   assert.match(conversation, /item\.kind === 'tool' && item\.id === payload\.id/);
   assert.match(conversation, /if \(!\['ok', 'error'\]\.includes\(block\.status \|\| ''\)\)/);
-  assert.match(conversation, /if \(payload\.done\) block\.status = 'done'/);
+  assert.match(conversation, /if \(payload\.done\) \{[\s\S]*block\.done = true;[\s\S]*block\.status = 'done'/);
   assert.match(conversation, /Promise\.all\(\[[\s\S]*\/optimization\?user=/);
   assert.match(conversation, /setMessages\(\(optimizationData\.optimization\.messages \|\| \[\]\)/);
 });
