@@ -320,6 +320,60 @@ test('engine: 步骤效率预置评估器走 canonical trajectory runner', async
   setJudgeLlmCallerForTest(null);
 });
 
+test('engine: 执行过程质量使用独立 ID 和六维 rubric', async () => {
+  const executionId = await createExecution();
+  const execution = await prisma.execution.findUniqueOrThrow({ where: { id: executionId } });
+  await prisma.session.create({
+    data: {
+      taskId: execution.taskId,
+      user: TEST_USER,
+      endTime: new Date(),
+      interactions: JSON.stringify([
+        { role: 'user', content: '执行关键动作。' },
+        { role: 'assistant', content: '动作已执行。' },
+      ]),
+    },
+  });
+  setJudgeLlmCallerForTest(async (_user, request) => {
+    const prompt = JSON.parse(request.user) as { rubric: { kind: string } };
+    assert.equal(prompt.rubric.kind, 'process-quality');
+    return JSON.stringify({
+      summary: '执行过程完整且证据一致。',
+      dimensions: [
+        'goal_alignment',
+        'planning_completeness',
+        'reasoning_coherence',
+        'exception_handling',
+        'path_robustness',
+        'information_utilization',
+      ].map(dimension => ({
+        dimension,
+        verdict: 'met',
+        reason: '满足要求。',
+        suggestion: '',
+      })),
+      issues: [],
+    });
+  });
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-agent-process-quality'],
+  );
+
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+  assert.equal(row.status, 'done');
+  assert.equal(row.score, 100);
+  assert.equal(JSON.parse(row.pointsJson!).length, 6);
+  assert.equal(
+    JSON.parse(row.evidenceJson!).json.rubricVersion,
+    'agent-process-quality/1.0.0',
+  );
+  setJudgeLlmCallerForTest(null);
+});
+
 test('engine: 专项预置通道读取 evaluatorContextJson 并落库 0 分', async () => {
   let seenContext: unknown = null;
   setJudgeLlmCallerForTest(async (_user, request) => {

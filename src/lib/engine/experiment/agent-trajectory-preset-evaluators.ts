@@ -4,11 +4,13 @@ import {
   trajectoryIssueAffectsDimension,
 } from '../evaluation/agent-trajectory-assessment';
 import { runAgentTrajectoryJudge } from '../evaluation/agent-trajectory-judge';
+import { buildAgentProcessQualityPrompt } from '@/prompts/agent-process-quality-prompt';
 import { buildAgentStepEfficiencyPrompt } from '@/prompts/agent-step-efficiency-prompt';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 
 export const AGENT_TRAJECTORY_PRESET_IDS = [
   'preset-agent-step-efficiency',
+  'preset-agent-process-quality',
 ] as const;
 
 export type AgentTrajectoryPresetId = (typeof AGENT_TRAJECTORY_PRESET_IDS)[number];
@@ -23,6 +25,12 @@ const DIMENSION_LABELS: Record<string, string> = {
   cost_efficiency: '成本效率',
   step_density: '步骤密度',
   retry_efficiency: '重试效率',
+  goal_alignment: '目标对齐',
+  planning_completeness: '规划完整性',
+  reasoning_coherence: '推理连贯性',
+  exception_handling: '异常处理',
+  path_robustness: '路径稳健性',
+  information_utilization: '信息利用',
 };
 
 function unique(values: string[]): string[] {
@@ -80,11 +88,15 @@ export async function runAgentTrajectoryPreset(
   user: string,
   ctx: FaithfulPresetContext,
 ): Promise<EvaluatorOutput> {
+  const kind = id === 'preset-agent-step-efficiency' ? 'step-efficiency' : 'process-quality';
+  const buildPrompt = id === 'preset-agent-step-efficiency'
+    ? buildAgentStepEfficiencyPrompt
+    : buildAgentProcessQualityPrompt;
   const { callJudgeLlm } = await import('./judge-llm');
   const assessment = await runAgentTrajectoryJudge({
-    kind: 'step-efficiency',
+    kind,
     task: ctx.caseInput,
     interactions: ctx.interactions,
-  }, (_ignored, request) => callJudgeLlm(user, request), buildAgentStepEfficiencyPrompt);
+  }, (_ignored, request) => callJudgeLlm(user, request), buildPrompt);
   return assessmentToEvaluatorOutput(assessment);
 }

@@ -1634,7 +1634,9 @@ function SkillAnalysisPage() {
                         selectedDatasetIds={caseDatasetIds}
                         onSelectedDatasetIdsChange={handleCaseDatasetIdsChange}
                         evaluatorOptions={[
-                            ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name })),
+                            ...presetEvaluators
+                                .filter(e => e.status === 'ready' && e.id !== 'preset-agent-process-quality')
+                                .map(e => ({ id: e.id, name: e.name })),
                             ...caseUserEvaluators,
                         ]}
                         selectedEvaluatorIds={caseEvaluatorIds}

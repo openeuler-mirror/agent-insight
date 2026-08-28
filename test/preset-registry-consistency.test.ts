@@ -105,11 +105,15 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
   },
 ];
 
-test('旧质量卡保留 faithful runner，步骤效率卡由 trajectory runner 唯一认领', () => {
+test('旧质量卡保留 faithful runner，新过程质量卡与效率卡由 trajectory runner 唯一认领', () => {
   const efficiency = presetEvaluators.find(card => card.id === 'preset-agent-step-efficiency');
+  const processQuality = presetEvaluators.find(card => card.id === 'preset-agent-process-quality');
   assert.ok(efficiency, '缺少 Agent 步骤效率预置卡');
+  assert.ok(processQuality, '缺少 Agent 执行过程质量预置卡');
   assert.equal(hasPresetMeta('preset-agent-step-efficiency'), true);
+  assert.equal(hasPresetMeta('preset-agent-process-quality'), true);
   assert.equal(isAgentTrajectoryPresetId('preset-agent-step-efficiency'), true);
+  assert.equal(isAgentTrajectoryPresetId('preset-agent-process-quality'), true);
   assert.equal(isAgentTrajectoryPresetId('preset-agent-trace-quality'), false);
   assert.equal(isFaithfulPresetId('preset-agent-trace-quality'), true);
 });

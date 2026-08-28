@@ -11,7 +11,7 @@ test.afterEach(() => setJudgeLlmCallerForTest(null));
 
 test('步骤效率预置评估器独立认领新 ID，并输出五个维度', async () => {
   assert.equal(isAgentTrajectoryPresetId('preset-agent-step-efficiency'), true);
-  assert.equal(isAgentTrajectoryPresetId('preset-agent-process-quality'), false);
+  assert.equal(isAgentTrajectoryPresetId('preset-agent-process-quality'), true);
   assert.equal(isAgentTrajectoryPresetId('preset-agent-trace-quality'), false);
 
   setJudgeLlmCallerForTest(async (_user, request) => {
