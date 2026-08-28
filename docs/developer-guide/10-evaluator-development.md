@@ -21,7 +21,9 @@
 
 | evaluatorId | 走哪个实现 |
 |---|---|
-| `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
+| `preset-agent-task-completion` | `experiment/faithful-preset-evaluators.ts` |
+| `preset-agent-step-efficiency` / `preset-agent-process-quality` | `experiment/agent-trajectory-preset-evaluators.ts` → 复用 canonical `facts → judge → assessment` |
+| `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` → 保留既有 opencode 轨迹评分 |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
 | `preset-text-*` | `experiment/text-preset-evaluators.ts` |
@@ -303,7 +305,7 @@ async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promi
 
 | 组 | 表面上共用一个文件 | 实际共享了什么 |
 |---|---|---|
-| `faithful-preset-evaluators.ts` | 2 个评估器 | 几乎没有。`runFaithfulPreset` 只是 `if/else` 转发到两个**完全独立**的实现，各自跑各自的 opencode agent；只共用 `coverageToStatus` / `stepsToAnchors` 两个 20 行小工具。它们在一起的真正原因是「都是遗留 opencode 评估器的适配层」——实现历史，不是逻辑复用 |
+| `faithful-preset-evaluators.ts` | 2 个评估器 | 保留 `preset-agent-task-completion` 与 `preset-agent-trace-quality` 的既有 opencode 适配；它们不与新的 canonical 轨迹评估器共享运行时 |
 | `result-preset-evaluators.ts` | 4 个评估器 | 共享 `result-metric-evaluator.ts` 的指标分发与结构化模型传输；这个文件本身只负责 ID→metric 映射、实验输入适配和统一输出映射 |
 
 #### 唯一硬约束：接分发时「一批只加一行」
@@ -392,6 +394,53 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 
 **归属判断必须写成显式 id 清单，不要从卡片派生**（`FAITHFUL_PRESET_IDS` / `RESULT_PRESET_IDS` 就是范例）。写成 `match: id => MY_CARDS.some(c => c.id === id)` 看着更 DRY，但会让「卡登记了、实现没接」这个错误静默消失——那正是 §4.1 第 ⑤ 步守卫要抓的东西。
 
+### 4.5 Issue #168 轨迹评估器的 canonical 边界
+
+`preset-agent-process-quality` 与 `preset-agent-step-efficiency` 共用一套 canonical 轨迹能力，只服务实验评测。原 `preset-agent-trace-quality` 仍由 faithful/opencode runner 实现，并继续服务既有 Skill 与旧 `/eval/trajectory` 入口；不要为复用而把两个语义不同的质量评估器合并。
+
+需求背景、冻结契约与逐项实施计划分别见 [Phase 1 需求分析](../design/agent-trajectory-evaluation/phase1-requirements-analysis.md)、[Phase 2 需求设计](../design/agent-trajectory-evaluation/phase2-requirements-design.md)、[Phase 3 开发计划](../design/agent-trajectory-evaluation/phase3-development-plan.md)。
+
+#### canonical 模块分工
+
+- `src/lib/engine/evaluation/agent-trajectory-facts.ts`
+  - 从 `buildAgentCallTree()` / `walkTree()` 提取可见步骤，跳过 `ras` 事件，生成稳定 `step-N` 索引。
+  - 只在这里做摘要、指纹和确定性候选；参数/输出/文本摘要单字段上限 500 字，完整 Prompt payload 超过 120,000 字符直接抛 `TrajectoryPromptTooLargeError`。
+- `src/lib/engine/evaluation/agent-trajectory-judge.ts`
+  - 只负责编排：`facts -> prompt -> 注入的 JudgeLlmCaller -> JSON parse`，首次契约错误时在同一次 canonical invocation 内追加至多一次安全 repair。
+  - Judge 是离散裁决器，只返回 `met | partial | missing`、问题代码、步骤索引和建议；Judge 不得返回分数、权重、封顶或持久化字段。
+  - 每次 canonical invocation 最多执行 2 次逻辑 `callJudge`（首次调用 + 至多一次 repair）；这不是底层网络请求的硬上限，SDK retry 和 direct→opencode fallback 仍属于传输层。
+- `src/lib/engine/evaluation/agent-trajectory-assessment.ts`
+  - 固化两个 rubric：效率 `agent-step-efficiency/1.0.0`，执行过程质量 `agent-process-quality/1.0.0`。
+  - 在代码侧完成严格 schema 校验、事实锚定、问题去重、维度封顶和总分封顶。
+  - grounding 是硬契约：不存在的步骤、对不上 `toolName` 的问题、没命中确定性候选的 code 都会被丢弃；若某个非 `met` 维度因此失去全部证据，则抛 `JudgeOutputParseError`，不生成兜底分。
+
+#### 新实验评估器与旧轨迹评估器的边界
+
+- `src/lib/engine/experiment/agent-trajectory-preset-evaluators.ts`
+  - 只做实验适配：把 canonical assessment 投影成 `EvaluatorOutput`。
+  - 只认领 `preset-agent-step-efficiency` 与 `preset-agent-process-quality`，两者均不进入 `legacy-trajectory`。
+- `src/lib/engine/experiment/faithful-preset-evaluators.ts`
+  - 继续认领 `preset-agent-task-completion` 与 `preset-agent-trace-quality`；旧质量卡仍调用 `runTrajectoryQuality()` 与 opencode evaluator。
+- `src/lib/engine/evaluation/trajectory-evaluator.ts` 与旧 API
+  - 保持既有 `TrajectoryEvalResult` 契约和旧质量评分行为，不调用新六维 canonical 能力。
+- canonical repair 边界
+  - attempt 1 只有在已经收到输出但契约解析/校验失败时才进入 repair；首次纯 transport 失败不伪装成契约错误，继续走既有 SDK retry、direct→opencode fallback 和实验行级超时分类。
+  - attempt 2 的任何失败统一转为 `AgentTrajectoryContractExhaustedError`。该错误不是 `JudgeOutputParseError`，因此不会触发行级自动重试，防止一次坏输出被放大成多轮 Judge 调用。
+- `src/lib/engine/agent-debug/skills-analysis.ts`
+  - 继续走 `evaluateTrajectoryViaOpencode()` 的旧关键动作诊断链路，不复用新的六维质量总分。
+
+#### 入口隔离与测试清单
+
+- `src/lib/evaluators/registry.ts` 只为 `preset-agent-process-quality` 增加现有格式的运行元数据，不扩展公共卡片或 registry 类型。
+- 实验执行引擎由 canonical runner 唯一认领新 ID；旧 `/skill-eval`、批量和灰度页面在原 `ready` 过滤上显式排除该 ID，旧 `/api/eval/trajectory/run` 白名单保持不变。
+- `preset-agent-trace-quality` 的卡片、faithful runner、旧 API 和消费者不得随新评估器修改。
+- 这组评估器至少维护以下定向测试：
+  - `test/agent-trajectory-facts.test.ts`
+  - `test/agent-trajectory-assessment.test.ts`
+  - `test/agent-trajectory-preset-evaluators.test.ts`
+  - `test/evaluator-surface.test.ts`
+  - `test/preset-registry-consistency.test.ts`
+
 ---
 
 ## 5. 新增自建 LLM 评估器（无需改代码）
@@ -448,6 +497,8 @@ const issueSchema = z.preprocess(
 | 缺维度 / 重复维度 | 分母不完整，分数不可比 |
 | `severity` / `rating` 是未知枚举值（含中文「高」「严重」） | 落到默认档 = 高危静默降级成轻微，且无任何提示 |
 | 非安全档却没给 quote / reason / suggestion | 违反「有分必有据」（§7） |
+
+上表是通用自建/专项评估器的默认约定。Issue #168 的 canonical 轨迹评估器采用 §4.5 的更窄边界：首次 `JudgeOutputParseError` 只触发 canonical 内部一次安全 repair；repair 再失败会转成不可行级重试的 `AgentTrajectoryContractExhaustedError`。
 
 **判据一句话：「模型没判」和「模型判为无风险」是两件事。** 前者必须 failed，不许兜底成中间分。
 
@@ -530,7 +581,9 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 评估器 | 评分点来自 | 覆盖的维度 |
 |---|---|---|
 | 任务完成度 `preset-agent-task-completion` | 参考答案 | 关键观点覆盖率（召回） |
-| 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 | 完整性（关键动作覆盖）· 工具选择 · 冗余度 |
+| 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 / Skill | 完整性 · 工具选择 · 冗余度（既有 opencode 口径） |
+| 执行过程质量 `preset-agent-process-quality` | 执行轨迹 | 目标对齐 · 规划完整性 · 推理连贯性 · 异常处理 · 路径稳健性 · 信息利用 |
+| 步骤效率 `preset-agent-step-efficiency` | 执行轨迹 | 步骤必要性 · 路径绕行 · 成本效率 · 步骤密度 · 重试效率 |
 | 结果准确性 `preset-result-accuracy` | 实际输出主张 | 对参考判对错（精确） |
 | 答案质量 `preset-result-answer` | 最终答案 | 相关性 · 完整性 · 连贯性 |
 | 忠实度 `preset-result-faithfulness` | 实际输出主张 | 对 trace 证据判有据（防脑补） |
