@@ -6,6 +6,7 @@ import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wr
 import { apiFetch } from '@/lib/client/api';
 import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
+import { publishWorkbenchSync, subscribeWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
 import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 import { GenerationHistory } from './GenerationConversation';
 import type { OptimizationRecordView } from './OptimizationRecordsPanel';
@@ -63,8 +64,26 @@ function displayOptimizationError(message: string | null | undefined) {
   return message;
 }
 
-function parseBlocks(value: string | undefined): ChatBlock[] {
+function parseBlocks(value: string | ChatBlock[] | undefined): ChatBlock[] {
+  if (Array.isArray(value)) return value;
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+
+function hydrateOptimizationMessages(
+  values: Array<{ id?: string; role: string; content: string; blocks?: string | ChatBlock[]; createdAt?: string }>,
+  outcome?: ProcessOutcome,
+) {
+  const messages: ChatMessage[] = values.map((message) => ({
+    ...message,
+    blocks: outcome
+      ? settleProcessBlocks(parseBlocks(message.blocks), outcome)
+      : parseBlocks(message.blocks),
+  }));
+  if (!outcome) {
+    const activeIndex = messages.findLastIndex((message) => message.role === 'agent');
+    if (activeIndex >= 0) messages[activeIndex] = { ...messages[activeIndex], streaming: true };
+  }
+  return messages;
 }
 
 const PROGRESS_STEPS = [
@@ -178,12 +197,20 @@ export function OptimizationConversation({
   const [feedback, setFeedback] = useState('');
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(backgroundRunning);
+  const [liveTasks, setLiveTasks] = useState(tasks);
   const [planning, setPlanning] = useState(false);
   const [localStep, setLocalStep] = useState(backgroundRunning ? 1 : 0);
   const busy = planning || running || backgroundRunning;
   const autoStartedRef = useRef(false);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const activeTask = [...tasks].reverse().find((item) => ['pending', 'running'].includes(item.status));
+  const ownsStreamRef = useRef(false);
+  const snapshotRequestRef = useRef(0);
+  const backgroundRunningRef = useRef(backgroundRunning);
+  const observedTaskRef = useRef<{ id?: string; status: string } | null>(null);
+  const activeTask = [...liveTasks].reverse().find((item) => ['pending', 'running'].includes(item.status));
+
+  useEffect(() => setLiveTasks(tasks), [tasks]);
+  useEffect(() => { backgroundRunningRef.current = backgroundRunning; }, [backgroundRunning]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: busy ? 'auto' : 'smooth' });
@@ -191,51 +218,99 @@ export function OptimizationConversation({
 
   useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++snapshotRequestRef.current;
+    setLoading(true);
     void apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`, {
       cache: 'no-store', signal: controller.signal,
     }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '加载优化会话失败');
-      setMessages((data.optimization.messages || []).map((message: { id?: string; role: string; content: string; blocks?: string }) => ({ ...message, blocks: parseBlocks(message.blocks) })));
+      if (requestId !== snapshotRequestRef.current || ownsStreamRef.current) return;
+      setMessages(hydrateOptimizationMessages(
+        data.optimization.messages || [],
+        backgroundRunningRef.current ? undefined : 'complete',
+      ));
     }).catch((error) => {
       if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestId !== snapshotRequestRef.current) return;
       onError(error instanceof Error ? error.message : '加载优化会话失败');
-    }).finally(() => setLoading(false));
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
     return () => controller.abort();
   }, [onError, user, workbenchSessionId]);
 
   useEffect(() => {
-    if (!backgroundRunning) return;
-    const poll = window.setInterval(() => {
-      void apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      ).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) return;
-        const task = [...(data.session?.tasks || [])]
-          .reverse()
-          .find((item: { type: string; status: string; errorMessage?: string }) => item.type === 'optimization');
-        if (!task || task.status === 'running' || task.status === 'pending') return;
-        window.clearInterval(poll);
-        const optimizationResponse = await apiFetch(
-          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`,
+    let stopped = false;
+    let timer: number | null = null;
+    let syncing = false;
+
+    const schedule = (delay: number) => {
+      if (stopped) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void sync(), delay);
+    };
+    const sync = async (forceConversation = false) => {
+      if (stopped || syncing) return;
+      syncing = true;
+      let active = false;
+      try {
+        const response = await apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
           { cache: 'no-store' },
         );
-        const optimizationData = await optimizationResponse.json();
-        if (optimizationResponse.ok) {
-          setMessages((optimizationData.optimization.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
-            ...message,
-            blocks: parseBlocks(message.blocks),
-          })));
+        const data = await response.json();
+        if (stopped || !response.ok || !data.session) return;
+        const nextTasks = (data.session.tasks || []).filter((item: { type: string }) => item.type === 'optimization');
+        const task = [...nextTasks]
+          .reverse()
+          .find((item: { id?: string; status: string; errorMessage?: string }) => item.status !== 'cancelled') as OptimizationTaskView | undefined;
+        active = Boolean(task && ['pending', 'running'].includes(task.status));
+        const previous = observedTaskRef.current;
+        const taskChanged = Boolean(task && task.id !== previous?.id);
+        const justStarted = Boolean(active && (taskChanged || !previous || !['pending', 'running'].includes(previous.status)));
+        const justSettled = Boolean(task && !active && (taskChanged || (previous && ['pending', 'running'].includes(previous.status))));
+        observedTaskRef.current = task ? { id: task.id, status: task.status } : null;
+        setLiveTasks(nextTasks);
+
+        if (!ownsStreamRef.current && (active || justSettled || forceConversation)) {
+          const requestId = ++snapshotRequestRef.current;
+          const optimizationResponse = await apiFetch(
+            `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`,
+            { cache: 'no-store' },
+          );
+          const optimizationData = await optimizationResponse.json();
+          if (!stopped && !ownsStreamRef.current && requestId === snapshotRequestRef.current && optimizationResponse.ok) {
+            const outcome = active ? undefined : task?.status === 'failed' ? 'error' : 'complete';
+            setMessages(hydrateOptimizationMessages(optimizationData.optimization.messages || [], outcome));
+          }
         }
-        setRunning(false);
-        if (task.status === 'failed' && task.errorMessage) onError(task.errorMessage);
-        onSynced(data.session);
-      }).catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(poll);
-  }, [backgroundRunning, onError, onSynced, user, workbenchSessionId]);
+        if (!ownsStreamRef.current) setRunning(active);
+        if (justStarted || justSettled) {
+          if (!ownsStreamRef.current && task?.status === 'failed' && task.errorMessage) onError(task.errorMessage);
+          onSynced(data.session);
+        }
+      } catch {
+        // 下一轮轮询或重新聚焦时继续追赶服务端状态。
+      } finally {
+        syncing = false;
+        schedule(active ? 1_000 : 4_000);
+      }
+    };
+
+    const unsubscribe = subscribeWorkbenchSync((event) => {
+      if (event.sessionId === workbenchSessionId && event.taskType === 'optimization') void sync(true);
+    });
+    const syncOnFocus = () => void sync(true);
+    window.addEventListener('focus', syncOnFocus);
+    void sync(backgroundRunningRef.current);
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+      unsubscribe();
+      window.removeEventListener('focus', syncOnFocus);
+    };
+  }, [onError, onSynced, user, workbenchSessionId]);
 
   const patchAgent = useCallback((mutator: (message: ChatMessage) => void) => setMessages((current) => {
     const next = [...current];
@@ -285,6 +360,9 @@ export function OptimizationConversation({
     const runId = crypto.randomUUID();
     const runMeta: ChatBlock = { kind: 'optimization_meta', id: `optimization-${runId}`, runId };
     let processOutcome: ProcessOutcome = 'error';
+    onError('');
+    ownsStreamRef.current = true;
+    snapshotRequestRef.current += 1;
     setLocalStep(1);
     setFeedback('');
     setMessages((current) => [
@@ -312,7 +390,11 @@ export function OptimizationConversation({
           runId,
         }),
       });
-      if (!response.ok || !response.body) throw new Error('优化 Agent 启动失败');
+      if (!response.ok || !response.body) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure.error || '优化 Agent 启动失败');
+      }
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-started' });
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -387,7 +469,7 @@ export function OptimizationConversation({
             });
           }
           else if (data.mode === 'verify_ok') {
-            setLocalStep((current) => Math.max(current, 4));
+            setLocalStep((current) => Math.max(current, 3));
             patchAgent((message) => {
               const block = message.blocks.find((item) => item.kind === 'verification' && item.id === 'self-verify');
               const next = { kind: 'verification', id: 'self-verify', status: 'ok', text: '结构门、脚本真值门与行为门已完成' };
@@ -412,6 +494,7 @@ export function OptimizationConversation({
         }
       }
       processOutcome = 'complete';
+      const requestId = ++snapshotRequestRef.current;
       const [sessionResponse, optimizationResponse] = await Promise.all([
         apiFetch(
           `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
@@ -426,10 +509,9 @@ export function OptimizationConversation({
       const optimizationData = await optimizationResponse.json();
       if (!sessionResponse.ok) throw new Error(sessionData.error || '加载优化结果失败');
       if (!optimizationResponse.ok) throw new Error(optimizationData.error || '校准优化会话失败');
-      setMessages((optimizationData.optimization.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
-        ...message,
-        blocks: parseBlocks(message.blocks),
-      })));
+      if (requestId === snapshotRequestRef.current) {
+        setMessages(hydrateOptimizationMessages(optimizationData.optimization.messages || [], 'complete'));
+      }
       setLocalStep(4);
       onSynced(sessionData.session);
     } catch (error) {
@@ -442,11 +524,13 @@ export function OptimizationConversation({
         onError(message);
       }
     } finally {
+      ownsStreamRef.current = false;
       setRunning(false);
       patchAgent((message) => {
         message.blocks = settleProcessBlocks(message.blocks, processOutcome);
         message.streaming = false;
       });
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-settled' });
     }
   }, [baseVersion, baselineFiles, busy, issues, onError, onSynced, optSessionId, patchAgent, prepareMergePlan, skillName, user, workbenchSessionId]);
 
@@ -495,9 +579,9 @@ export function OptimizationConversation({
           const meta = optimizationMeta(message);
           const messageRecords = recordsAtMessage.get(index) || [];
           const messageTask = meta?.taskId
-            ? tasks.find((item) => item.id === meta.taskId)
+            ? liveTasks.find((item) => item.id === meta.taskId)
             : messageRecords.length
-              ? tasks.find((item) => messageRecords.some((record) => item.resultId === record.id))
+              ? liveTasks.find((item) => messageRecords.some((record) => item.resultId === record.id))
               : index === liveMessageIndex ? activeTask : undefined;
           const showLiveProgress = index === liveMessageIndex && busy;
           const showStoredProgress = message.role === 'agent'
@@ -621,7 +705,7 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
         : record.status === 'optimization_failed'
         ? <span className="rounded bg-error-subtle px-1.5 py-1 text-error">{executionFailed ? '优化执行失败' : '质量校验未通过'}</span>
         : record.status === 'optimizing'
-          ? <span className="rounded bg-primary-subtle px-1.5 py-1 text-primary">质量校验中</span>
+          ? null
           : <span className="rounded bg-success-subtle px-1.5 py-1 text-success">质量规则已通过</span>}
     </div>
     <div className="mt-3 flex flex-wrap gap-2">

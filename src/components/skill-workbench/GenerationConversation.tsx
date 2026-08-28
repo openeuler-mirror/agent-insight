@@ -6,6 +6,7 @@ import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, X } from 'lucide-r
 import { apiFetch } from '@/lib/client/api';
 import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { ALLOWED_EXT_ACCEPT } from '@/lib/skill-generator/file-types';
+import { publishWorkbenchSync, subscribeWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
 import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 
 type GenerationBlock =
@@ -31,6 +32,23 @@ function parseBlocks(value: string | GenerationBlock[] | undefined) {
   } catch {
     return [];
   }
+}
+
+function hydrateGenerationMessages(
+  values: Array<{ id?: string; role: string; content: string; blocks?: string | GenerationBlock[] }>,
+  outcome?: ProcessOutcome,
+) {
+  const messages: GenerationMessage[] = values.map((message) => ({
+    ...message,
+    blocks: outcome
+      ? settleProcessBlocks(parseBlocks(message.blocks), outcome)
+      : parseBlocks(message.blocks),
+  }));
+  if (!outcome) {
+    const activeIndex = messages.findLastIndex((message) => message.role === 'agent');
+    if (activeIndex >= 0) messages[activeIndex] = { ...messages[activeIndex], streaming: true };
+  }
+  return messages;
 }
 
 export function GenerationHistory({
@@ -114,6 +132,12 @@ export function GenerationConversation({
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const ownsStreamRef = useRef(false);
+  const snapshotRequestRef = useRef(0);
+  const backgroundRunningRef = useRef(backgroundRunning);
+  const observedTaskRef = useRef<{ id?: string; status: string } | null>(null);
+
+  useEffect(() => { backgroundRunningRef.current = backgroundRunning; }, [backgroundRunning]);
 
   useEffect(() => {
     onRunningChange(running);
@@ -122,6 +146,7 @@ export function GenerationConversation({
 
   useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++snapshotRequestRef.current;
     setLoading(true);
     void apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`, {
       cache: 'no-store',
@@ -129,15 +154,19 @@ export function GenerationConversation({
     }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '加载生成会话失败');
+      if (requestId !== snapshotRequestRef.current || ownsStreamRef.current) return;
       setFiles(data.generation.files || {});
-      setMessages((data.generation.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
-        ...message,
-        blocks: parseBlocks(message.blocks),
-      })));
+      setMessages(hydrateGenerationMessages(
+        data.generation.messages || [],
+        backgroundRunningRef.current ? undefined : 'complete',
+      ));
     }).catch((error) => {
       if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestId !== snapshotRequestRef.current) return;
       onError(error instanceof Error ? error.message : '加载生成会话失败');
-    }).finally(() => setLoading(false));
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
     return () => controller.abort();
   }, [onError, user, workbenchSessionId]);
 
@@ -165,39 +194,75 @@ export function GenerationConversation({
   }, [generatorSessionId, onError, user]);
 
   useEffect(() => {
-    if (!backgroundRunning) return;
-    setRunning(true);
-    const poll = window.setInterval(() => {
-      void apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      ).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) return;
-        const task = [...(data.session?.tasks || [])]
-          .reverse()
-          .find((item: { type: string; status: string; errorMessage?: string }) => item.type === 'generation');
-        if (!task || task.status === 'running' || task.status === 'pending') return;
-        window.clearInterval(poll);
-        const generationResponse = await apiFetch(
-          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`,
+    let stopped = false;
+    let timer: number | null = null;
+    let syncing = false;
+
+    const schedule = (delay: number) => {
+      if (stopped) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void sync(), delay);
+    };
+    const sync = async (forceConversation = false) => {
+      if (stopped || syncing) return;
+      syncing = true;
+      let active = false;
+      try {
+        const response = await apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
           { cache: 'no-store' },
         );
-        const generationData = await generationResponse.json();
-        if (generationResponse.ok) {
-          setFiles(generationData.generation.files || {});
-          setMessages((generationData.generation.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
-            ...message,
-            blocks: parseBlocks(message.blocks),
-          })));
+        const data = await response.json();
+        if (stopped || !response.ok || !data.session) return;
+        const task = [...(data.session.tasks || [])]
+          .reverse()
+          .find((item: { id?: string; type: string; status: string; errorMessage?: string }) => item.type === 'generation');
+        active = Boolean(task && ['pending', 'running'].includes(task.status));
+        const previous = observedTaskRef.current;
+        const taskChanged = Boolean(task && task.id !== previous?.id);
+        const justStarted = Boolean(active && (taskChanged || !previous || !['pending', 'running'].includes(previous.status)));
+        const justSettled = Boolean(task && !active && (taskChanged || (previous && ['pending', 'running'].includes(previous.status))));
+        observedTaskRef.current = task ? { id: task.id, status: task.status } : null;
+
+        if (!ownsStreamRef.current && (active || justSettled || forceConversation)) {
+          const requestId = ++snapshotRequestRef.current;
+          const generationResponse = await apiFetch(
+            `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`,
+            { cache: 'no-store' },
+          );
+          const generationData = await generationResponse.json();
+          if (!stopped && !ownsStreamRef.current && requestId === snapshotRequestRef.current && generationResponse.ok) {
+            const outcome = active ? undefined : task?.status === 'failed' ? 'error' : 'complete';
+            setFiles(generationData.generation.files || {});
+            setMessages(hydrateGenerationMessages(generationData.generation.messages || [], outcome));
+          }
         }
-        setRunning(false);
-        if (task.status === 'failed' && task.errorMessage) onError(task.errorMessage);
-        onSynced(data.session);
-      }).catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(poll);
-  }, [backgroundRunning, onError, onSynced, user, workbenchSessionId]);
+        if (!ownsStreamRef.current) setRunning(active);
+        if (justStarted || justSettled) {
+          if (!ownsStreamRef.current && task?.status === 'failed' && task.errorMessage) onError(task.errorMessage);
+          onSynced(data.session);
+        }
+      } catch {
+        // 下一轮轮询或重新聚焦时继续追赶服务端状态。
+      } finally {
+        syncing = false;
+        schedule(active ? 1_000 : 4_000);
+      }
+    };
+
+    const unsubscribe = subscribeWorkbenchSync((event) => {
+      if (event.sessionId === workbenchSessionId && event.taskType === 'generation') void sync(true);
+    });
+    const syncOnFocus = () => void sync(true);
+    window.addEventListener('focus', syncOnFocus);
+    void sync(backgroundRunningRef.current);
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+      unsubscribe();
+      window.removeEventListener('focus', syncOnFocus);
+    };
+  }, [onError, onSynced, user, workbenchSessionId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: running ? 'auto' : 'smooth' });
@@ -249,6 +314,9 @@ export function GenerationConversation({
     event.preventDefault();
     const message = input.trim();
     if (!message || running) return;
+    onError('');
+    ownsStreamRef.current = true;
+    snapshotRequestRef.current += 1;
     setInput('');
     setMessages((current) => [
       ...current,
@@ -275,7 +343,11 @@ export function GenerationConversation({
         }),
         signal: controller.signal,
       });
-      if (!response.ok || !response.body) throw new Error('生成 Agent 启动失败');
+      if (!response.ok || !response.body) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure.error || '生成 Agent 启动失败');
+      }
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'generation', kind: 'run-started' });
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -349,6 +421,7 @@ export function GenerationConversation({
         }
       }
       processOutcome = 'complete';
+      const requestId = ++snapshotRequestRef.current;
       const [sessionResponse, generationResponse] = await Promise.all([
         apiFetch(
           `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
@@ -363,22 +436,23 @@ export function GenerationConversation({
       const generationData = await generationResponse.json();
       if (!sessionResponse.ok) throw new Error(sessionData.error || '加载生成结果失败');
       if (!generationResponse.ok) throw new Error(generationData.error || '校准生成会话失败');
-      setFiles(generationData.generation.files || {});
-      setMessages((generationData.generation.messages || []).map((savedMessage: { id: string; role: string; content: string; blocks?: string }) => ({
-        ...savedMessage,
-        blocks: settleProcessBlocks(parseBlocks(savedMessage.blocks), 'complete'),
-      })));
+      if (requestId === snapshotRequestRef.current) {
+        setFiles(generationData.generation.files || {});
+        setMessages(hydrateGenerationMessages(generationData.generation.messages || [], 'complete'));
+      }
       if (sessionData.session) onSynced(sessionData.session);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
         onError(error instanceof Error ? error.message : '生成失败');
       }
     } finally {
+      ownsStreamRef.current = false;
       setRunning(false);
       patchAgent((agent) => {
         agent.blocks = settleProcessBlocks(agent.blocks, processOutcome);
         agent.streaming = false;
       });
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'generation', kind: 'run-settled' });
     }
   };
 

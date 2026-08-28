@@ -79,6 +79,10 @@ test('Skill 快照 hash 与对象插入顺序和路径分隔符无关', () => {
   });
   assert.equal(left, right);
   assert.notEqual(left, computeSkillSnapshotHash({ 'SKILL.md': 'changed' }));
+  assert.notEqual(
+    computeSkillSnapshotHash({ 'SKILL.md': 'same', 'scripts/check.sh': 'old' }),
+    computeSkillSnapshotHash({ 'SKILL.md': 'same', 'scripts/check.sh': 'new' }),
+  );
 });
 
 test('触发分析使用独立确定性评估器，数据集名称时间精确到秒', () => {
