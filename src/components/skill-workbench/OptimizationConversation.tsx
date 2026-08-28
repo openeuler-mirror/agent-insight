@@ -5,6 +5,7 @@ import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wr
 
 import { apiFetch } from '@/lib/client/api';
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
+import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 import { GenerationHistory } from './GenerationConversation';
 import type { OptimizationRecordView } from './OptimizationRecordsPanel';
 
@@ -330,16 +331,28 @@ export function OptimizationConversation({
           });
           else if (data.mode === 'thinking') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'thinking' && item.id === payload.id);
-            if (block) block.text = `${block.text || ''}${payload.delta || ''}`;
+            if (block) {
+              block.text = `${block.text || ''}${payload.delta || ''}`;
+              if (payload.done) block.status = 'done';
+            }
             else message.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', status: payload.done ? 'done' : 'running' });
           });
           else if (data.mode === 'tool_call') {
             setLocalStep((current) => Math.max(current, 2));
-            patchAgent((message) => message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' }));
+            patchAgent((message) => {
+              const block = message.blocks.find((item) => item.kind === 'tool' && item.id === payload.id);
+              if (!block) {
+                message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' });
+                return;
+              }
+              block.name ||= payload.name;
+              if (!['ok', 'error'].includes(block.status || '')) block.status = payload.status || 'running';
+            });
           }
           else if (data.mode === 'tool_result') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'tool' && item.id === payload.id);
             if (block) Object.assign(block, { status: payload.status || 'ok', summary: payload.summary });
+            else message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name || 'tool', status: payload.status || 'ok', summary: payload.summary });
           });
           else if (data.mode === 'optimization_plan') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'optimization_plan' && item.id === payload.id);
@@ -381,12 +394,24 @@ export function OptimizationConversation({
           else if (data.mode === 'error') throw new Error(String(data.payload || '优化失败'));
         }
       }
-      const sessionResponse = await apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      );
+      const [sessionResponse, optimizationResponse] = await Promise.all([
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+      ]);
       const sessionData = await sessionResponse.json();
+      const optimizationData = await optimizationResponse.json();
       if (!sessionResponse.ok) throw new Error(sessionData.error || '加载优化结果失败');
+      if (!optimizationResponse.ok) throw new Error(optimizationData.error || '校准优化会话失败');
+      setMessages((optimizationData.optimization.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
+        ...message,
+        blocks: parseBlocks(message.blocks),
+      })));
       setLocalStep(4);
       onSynced(sessionData.session);
     } catch (error) {
@@ -467,8 +492,12 @@ export function OptimizationConversation({
             {message.role === 'agent' && <div className="mb-2 flex items-center gap-1.5 text-[11px] text-foreground-muted"><Bot className="size-3.5" />Skill Copilot{roundNumber && <span>· 第 {roundNumber} 轮 · {transition}</span>}</div>}
             {message.role === 'user' && roundNumber && <div className="mb-1 text-[10px] text-primary-foreground/75">{meta?.automatic ? `第 ${roundNumber} 轮 · 自动修复` : `第 ${roundNumber} 轮`}</div>}
             {visibleBlocks.length ? visibleBlocks.map((block, blockIndex) => block.kind === 'tool'
-              ? <div key={`${block.id}-${blockIndex}`} className="my-1 grid min-w-0 max-w-full grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 overflow-hidden rounded bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-secondary"><Wrench className="mt-0.5 size-3.5" /><span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">{block.name}</span><span className="col-span-2 min-w-0 whitespace-pre-wrap break-words text-foreground-muted [overflow-wrap:anywhere]">{block.summary || block.status}</span></div>
-              : block.kind === 'thinking' ? <details key={`${block.id}-${blockIndex}`} className="my-1 min-w-0 max-w-full overflow-hidden text-[11px] text-foreground-muted"><summary>思考过程</summary><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{block.text}</p></details>
+              ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="tool" state={processState(block.status)} name={block.name}>
+                <pre className="m-0 max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 [overflow-wrap:anywhere]">{block.summary || block.status}</pre>
+              </ConversationProcessDisclosure>
+              : block.kind === 'thinking' ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="thinking" state={processState(block.status)}>
+                <p className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]">{block.text}</p>
+              </ConversationProcessDisclosure>
                 : block.kind === 'optimization_plan' ? <OptimizationPlanCard key={`${block.id}-${blockIndex}`} block={block} />
                   : block.kind === 'verification' ? <div key={`${block.id}-${blockIndex}`} className="my-1 flex min-w-0 items-start gap-2 overflow-hidden rounded border border-success-border bg-success-subtle px-2 py-1.5 text-[11px] text-success">{block.status === 'running' ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />}<span className="min-w-0 break-words [overflow-wrap:anywhere]">{block.text}</span></div>
                     : block.kind === 'warning' ? <div key={`${block.id}-${blockIndex}`} className="my-1 min-w-0 overflow-hidden whitespace-pre-wrap break-words rounded border border-warning-border bg-warning-subtle px-2 py-1.5 text-[11px] text-warning [overflow-wrap:anywhere]">{block.text}</div>

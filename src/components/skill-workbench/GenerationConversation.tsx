@@ -1,10 +1,11 @@
 'use client';
 
 import { FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, Wrench, X } from 'lucide-react';
+import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
 import { ALLOWED_EXT_ACCEPT } from '@/lib/skill-generator/file-types';
+import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 
 type GenerationBlock =
   | { kind: 'text'; id: string; text: string }
@@ -439,8 +440,16 @@ function GenerationBlockView({ block, user }: { block: GenerationBlock; user: st
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
   if (block.kind === 'text') return <p className="max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-foreground-secondary [overflow-wrap:anywhere]">{block.text}</p>;
-  if (block.kind === 'thinking') return <details className="my-2 min-w-0 max-w-full overflow-hidden rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-muted"><summary>思考过程</summary><p className="mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{block.text}</p></details>;
-  if (block.kind === 'tool') return <div className="my-1 grid min-w-0 max-w-full grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 overflow-hidden rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-secondary"><Wrench className="mt-0.5 size-3.5" /><span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">{block.name}</span><span className="col-span-2 min-w-0 whitespace-pre-wrap break-words text-foreground-muted [overflow-wrap:anywhere]">{block.summary || block.status}</span></div>;
+  if (block.kind === 'thinking') return (
+    <ConversationProcessDisclosure kind="thinking" state={block.done === false ? 'running' : 'complete'}>
+      <p className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]">{block.text}</p>
+    </ConversationProcessDisclosure>
+  );
+  if (block.kind === 'tool') return (
+    <ConversationProcessDisclosure kind="tool" state={processState(block.status)} name={block.name}>
+      <pre className="m-0 max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 [overflow-wrap:anywhere]">{block.summary || block.error || block.status}</pre>
+    </ConversationProcessDisclosure>
+  );
   if (block.kind === 'download') return <div className="my-2 flex items-center gap-2 rounded-md border border-success-border bg-success-subtle px-2 py-2 text-[11px] text-success"><CheckCircle2 className="size-3.5" />已生成 {block.skillName} · {block.fileCount} 个文件</div>;
   if (block.kind === 'question') {
     if (block.status !== 'pending') return <div className="my-2 rounded-md bg-background-secondary px-2 py-2 text-[11px] text-foreground-secondary">已回答：{String(block.answer || '已跳过')}</div>;

@@ -325,6 +325,28 @@ test('生成和优化由服务端完成工作台同步，客户端断开 SSE 不
   assert.match(optimizationConversation, /后台执行中/);
 });
 
+test('Skill 会话的思考与命令执行默认折叠，并在生成和优化记录中复用同一状态行', () => {
+  const disclosure = readFileSync('src/components/skill-workbench/ConversationProcessDisclosure.tsx', 'utf8');
+  const generation = readFileSync('src/components/skill-workbench/GenerationConversation.tsx', 'utf8');
+  const optimization = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  assert.match(disclosure, /<details className=/);
+  assert.doesNotMatch(disclosure, /<details[^>]*\sopen(?:=|\s|>)/);
+  assert.match(disclosure, /已完成思考/);
+  assert.match(disclosure, /已执行命令/);
+  assert.match(disclosure, /group-open:rotate-90/);
+  assert.match(generation, /ConversationProcessDisclosure/);
+  assert.match(optimization, /ConversationProcessDisclosure/);
+});
+
+test('Skill 优化实时工具状态按调用 ID 收敛，并在流结束后用持久化消息校准', () => {
+  const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  assert.match(conversation, /item\.kind === 'tool' && item\.id === payload\.id/);
+  assert.match(conversation, /if \(!\['ok', 'error'\]\.includes\(block\.status \|\| ''\)\)/);
+  assert.match(conversation, /if \(payload\.done\) block\.status = 'done'/);
+  assert.match(conversation, /Promise\.all\(\[[\s\S]*\/optimization\?user=/);
+  assert.match(conversation, /setMessages\(\(optimizationData\.optimization\.messages \|\| \[\]\)/);
+});
+
 test('Skill 优化固定入口执行归并、自验证和静态质量门禁，通过后可直接发布', () => {
   const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
   const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
