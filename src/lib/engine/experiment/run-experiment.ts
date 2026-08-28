@@ -53,6 +53,10 @@ import {
   runFaithfulPreset,
   type FaithfulPresetContext,
 } from './faithful-preset-evaluators';
+import {
+  isAgentTrajectoryPresetId,
+  runAgentTrajectoryPreset,
+} from './agent-trajectory-preset-evaluators';
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
@@ -302,6 +306,9 @@ async function evaluateOnce(
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
     return evaluateSkillTriggerAnalysis(runtime.trigger);
+  }
+  if (isAgentTrajectoryPresetId(evaluatorId)) {
+    return runAgentTrajectoryPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {

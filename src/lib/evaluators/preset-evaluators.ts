@@ -75,6 +75,22 @@ export const presetEvaluators: EvaluatorCard[] = [
     runtimeHref: '/eval/trajectory',
     runtimeNote: 'opencode-trajectory-evaluator.ts (single opencode agent)',
   },
+  {
+    id: 'preset-agent-step-efficiency',
+    name: 'Agent 步骤效率',
+    description: '从步骤精简、重复控制、回退恢复、工具调用节制和路径收敛五个维度评估 Agent 达成目标的过程效率。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['轨迹'],
+    objectives: ['执行效率', '轨迹质量'],
+    scenarios: ['Agent通用评测', '轨迹评测'],
+    runMode: 'Canonical Trajectory Judge',
+    scoreRange: '0-100',
+    popularity: 85,
+    mappedMetrics: ['步骤精简', '重复控制', '回退恢复', '工具调用节制', '路径收敛'],
+    status: 'ready',
+    runtimeNote: 'agent-trajectory-preset-evaluators.ts · step-efficiency',
+  },
   // ── 结果评测评估器（评测中心独立能力，共用同一 canonical 实现）──
   // 实现：result-preset-evaluators.ts（复用 result-metric-evaluator 的 runSingleResultMetric）
   {

@@ -90,6 +90,7 @@ async function createExperiment(
 
 async function cleanup() {
   await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  await prisma.session.deleteMany({ where: { user: TEST_USER } });
   await prisma.execution.deleteMany({ where: { user: TEST_USER } });
   await prisma.customEvaluatorList.deleteMany({ where: { user: TEST_USER } });
 }
@@ -264,6 +265,59 @@ test('engine: 预置 task-completion/trace-quality 走忠实版通道，归因�
   assert.equal(p.suggestion, '在 SKILL.md 补校验清单');
   assert.deepEqual(p.anchors, ['step-3']);
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 步骤效率预置评估器走 canonical trajectory runner', async () => {
+  const executionId = await createExecution();
+  const execution = await prisma.execution.findUniqueOrThrow({ where: { id: executionId } });
+  await prisma.session.create({
+    data: {
+      taskId: execution.taskId,
+      user: TEST_USER,
+      endTime: new Date(),
+      interactions: JSON.stringify([
+        { role: 'user', content: '请直接回答。' },
+        { role: 'assistant', content: '直接答案。' },
+      ]),
+    },
+  });
+  setJudgeLlmCallerForTest(async (_user, request) => {
+    const prompt = JSON.parse(request.user) as { rubric: { kind: string } };
+    assert.equal(prompt.rubric.kind, 'step-efficiency');
+    return JSON.stringify({
+      summary: '执行路径直接且有效。',
+      dimensions: [
+        'step_necessity',
+        'path_detour',
+        'cost_efficiency',
+        'step_density',
+        'retry_efficiency',
+      ].map(dimension => ({
+        dimension,
+        verdict: 'met',
+        reason: '满足要求。',
+        suggestion: '',
+      })),
+      issues: [],
+    });
+  });
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-agent-step-efficiency'],
+  );
+
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirstOrThrow({ where: { experimentId } });
+  assert.equal(row.status, 'done');
+  assert.equal(row.score, 100);
+  assert.equal(JSON.parse(row.pointsJson!).length, 5);
+  assert.equal(
+    JSON.parse(row.evidenceJson!).json.rubricVersion,
+    'agent-step-efficiency/1.0.0',
+  );
+  setJudgeLlmCallerForTest(null);
 });
 
 test('engine: 专项预置通道读取 evaluatorContextJson 并落库 0 分', async () => {

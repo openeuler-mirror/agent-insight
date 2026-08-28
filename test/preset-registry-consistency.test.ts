@@ -18,6 +18,10 @@ import {
   isFaithfulPresetId,
 } from '../src/lib/engine/experiment/faithful-preset-evaluators';
 import {
+  AGENT_TRAJECTORY_PRESET_IDS,
+  isAgentTrajectoryPresetId,
+} from '../src/lib/engine/experiment/agent-trajectory-preset-evaluators';
+import {
   RESULT_PRESET_IDS,
   isResultPresetId,
 } from '../src/lib/engine/experiment/result-preset-evaluators';
@@ -73,6 +77,11 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID],
   },
   { name: 'faithful-preset-evaluators.ts', claims: isFaithfulPresetId, ids: FAITHFUL_PRESET_IDS },
+  {
+    name: 'agent-trajectory-preset-evaluators.ts',
+    claims: isAgentTrajectoryPresetId,
+    ids: AGENT_TRAJECTORY_PRESET_IDS,
+  },
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
   { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },
   { name: 'creativity-preset-evaluators.ts', claims: isCreativityPresetId, ids: CREATIVITY_PRESET_IDS },
@@ -95,6 +104,15 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: [...FLUENCY_PRESET_IDS, ...HALLUCINATION_PRESET_IDS],
   },
 ];
+
+test('旧质量卡保留 faithful runner，步骤效率卡由 trajectory runner 唯一认领', () => {
+  const efficiency = presetEvaluators.find(card => card.id === 'preset-agent-step-efficiency');
+  assert.ok(efficiency, '缺少 Agent 步骤效率预置卡');
+  assert.equal(hasPresetMeta('preset-agent-step-efficiency'), true);
+  assert.equal(isAgentTrajectoryPresetId('preset-agent-step-efficiency'), true);
+  assert.equal(isAgentTrajectoryPresetId('preset-agent-trace-quality'), false);
+  assert.equal(isFaithfulPresetId('preset-agent-trace-quality'), true);
+});
 
 test('预置卡 id 唯一', () => {
   const seen = new Set<string>();
