@@ -30,7 +30,8 @@ bash scripts/build-rpm.sh
 - 通过 `git archive` 打包当前 HEAD，不自动拉取、切换或修改分支
 - 从 `package.json` 读取 RPM Version
 - 使用 UTC 构建时间和短 commit 生成唯一 Release
-- 将工作目录、缓存和交付产物写入项目下的 `rpm-out/`
+- 将 npm 缓存和交付产物写入项目下的 `rpm-out/`
+- 将 RPM 临时工作区写入源码树外的 `/var/tmp/agent-insight-rpm-work-<uid>/`，避免 Next.js 向上扫描到源码仓库的 lockfile 后误判 standalone 根目录
 - 仅安装当前系统缺失的 RPM 构建依赖，版本由已启用的 `dnf` 软件源决定
 - 根据构建环境自动探测 Prisma binary target，只打包这一套 Prisma 引擎
 - 执行项目测试和 Next.js 生产构建
@@ -44,7 +45,8 @@ bash scripts/build-rpm.sh
 ```bash
 bash scripts/build-rpm.sh \
   --source-dir /root/agent-insight \
-  --output-dir /root/agent-insight-rpm
+  --output-dir /root/agent-insight/rpm-out \
+  --work-dir /root/agent-insight-rpm-work
 ```
 
 常用参数：
@@ -52,7 +54,8 @@ bash scripts/build-rpm.sh \
 | 参数 | 作用 |
 | --- | --- |
 | `--source-dir DIR` | 指定待打包 Git 仓库 |
-| `--output-dir DIR` | 指定构建工作区和交付目录 |
+| `--output-dir DIR` | 指定 npm 缓存和 RPM 交付目录 |
+| `--work-dir DIR` | 指定临时 RPM 工作区；必须位于源码树外 |
 | `--release VALUE` | 显式指定 RPM Release |
 | `--skip-tests` | 构建时跳过项目测试 |
 | `--no-install-deps` | 不通过 `dnf` 安装缺失的构建依赖 |
