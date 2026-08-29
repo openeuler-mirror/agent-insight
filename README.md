@@ -24,9 +24,7 @@
 
 随着 Agent 在各行业的落地，开发者面临三大痛点：Agent 运行过程如同黑盒，难以定位问题根因；Skill 质量参差不齐，缺少体系化的评测与迭代手段；Agent 经验无法沉淀复用，每次优化都从零开始。
 
-**Agent Insight** 正是为解决这些问题而生 —— 它是一个**框架无关**的统一AgentOps平台，让运行在 OpenCode、Claude Code、Hermes、Openclaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
-
-> 与同类产品不同的是，Agent Insight 把 **Skills（Agent 能力）** 作为一等公民，提供从生成、A/B 测试到优化的完整闭环。
+**Agent Insight** 是openEuler社区孵化的开源AgentOps平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等12个主流Agent运行时。
 
 ---
 

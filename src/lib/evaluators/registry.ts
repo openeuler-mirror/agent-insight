@@ -47,6 +47,9 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-text-format': { category: 'res', requires: [] },
   'preset-text-language-consistency': { category: 'res', requires: [] },
   'preset-text-conciseness': { category: 'res', requires: [] },
+  // 文本质量评估器（流畅度 / 幻觉检测）：只看最终输出，上下文可选不门控
+  'preset-fluency-text': { category: 'res', requires: [] },
+  'preset-hallucination-text': { category: 'res', requires: [] },
   'preset-safety-maliciousness': { category: 'res', requires: [] },
   'preset-safety-harmfulness': { category: 'res', requires: [] },
   'preset-safety-criminality': { category: 'res', requires: [] },

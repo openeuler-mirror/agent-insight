@@ -118,7 +118,14 @@ export async function beginWorkbenchGenerationRun(input: {
     version: workbench.workVersion,
     targetRef: input.runId,
   });
-  if (!created) return null;
+  if (!created) throw new Error('无法为生成会话取得任务锁');
+  if (created.blocked || created.reused) {
+    return {
+      kind: 'busy' as const,
+      taskId: created.task.id,
+      workbenchSessionId: workbench.id,
+    };
+  }
   await Promise.all([
     updateSkillWorkbenchTask({
       taskId: created.task.id,
@@ -131,7 +138,7 @@ export async function beginWorkbenchGenerationRun(input: {
       data: { stage: 'preparing' },
     }),
   ]);
-  return { taskId: created.task.id, workbenchSessionId: workbench.id };
+  return { kind: 'started' as const, taskId: created.task.id, workbenchSessionId: workbench.id };
 }
 
 export async function finishWorkbenchGenerationRun(input: {

@@ -151,6 +151,14 @@ test('会话固定 Skill 并恢复工作版本，顶部资产控制右栏全部�
   assert.match(publishService, /skillWorkbenchSession\.update[\s\S]*workVersion: version/);
 });
 
+test('发布去重比较完整 Skill 文件快照，不会忽略 scripts 和 references 差异', () => {
+  const publishService = readFileSync('src/lib/skill-workbench/publish-service.ts', 'utf8');
+  assert.match(publishService, /resolveSkillVersionFiles/);
+  assert.equal(publishService.match(/resolveSkillVersionFiles\(skill\.id, latest\.version, latest\.files, latest\.content\)/g)?.length, 2);
+  assert.doesNotMatch(publishService, /latest\??\.content === skillContent/);
+  assert.match(publishService, /select: \{ version: true, content: true, files: true \}/);
+});
+
 test('新建或打开未绑定 Skill 的会话时，右栏保持空状态', () => {
   const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
   assert.match(shell, /const clearAssetSelection = useCallback\(\(\) => \{[\s\S]*selectedAssetRef\.current = null;[\s\S]*setSelectedAsset\(null\)/);
@@ -300,7 +308,7 @@ test('Skill 实验复用四步向导并仅由预设改变默认配置', () => {
   assert.match(result, /当前版本[\s\S]*对比版本/);
   assert.match(result, /评估器分解/);
   assert.match(result, /A 胜[\s\S]*B 胜[\s\S]*未配对/);
-  assert.match(result, /参考输出[\s\S]*A · \{versionALabel\} 实际输出[\s\S]*B · \{versionBLabel\} 实际输出/);
+  assert.match(result, /预期输出[\s\S]*A · \{versionALabel\} 实际输出[\s\S]*B · \{versionBLabel\} 实际输出/);
   assert.doesNotMatch(result, /const EVALUATOR_LABELS/);
   assert.doesNotMatch(result, /任务结果正确性|Skill 版本回归|证据忠实度|'执行成本'/);
 });
@@ -323,6 +331,92 @@ test('生成和优化由服务端完成工作台同步，客户端断开 SSE 不
   assert.doesNotMatch(optimizationConversation, /action:\s*'sync'/);
   assert.match(generationConversation, /后台执行中/);
   assert.match(optimizationConversation, /后台执行中/);
+});
+
+test('Skill 工作台用 URL 固定会话，并从服务端 checkpoint 同步其他页面', () => {
+  const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
+  const generatorRoute = readFileSync('src/app/api/skill-generator/chat/route.ts', 'utf8');
+  const optimizerRoute = readFileSync('src/app/api/skill-opt/chat/route.ts', 'utf8');
+  const generation = readFileSync('src/components/skill-workbench/GenerationConversation.tsx', 'utf8');
+  const optimization = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  const taskService = readFileSync('src/lib/skill-workbench/task-service.ts', 'utf8');
+
+  assert.match(shell, /searchParams\.get\('sessionId'\)/);
+  assert.match(shell, /targetSessionId = requestedSessionId \|\| next\[0\]\?\.id/);
+  assert.match(shell, /updateSessionUrl\(session\.id, 'replace'\)/);
+  assert.match(generatorRoute, /createStreamCheckpointWriter/);
+  assert.match(optimizerRoute, /createStreamCheckpointWriter/);
+  assert.match(generatorRoute, /skillGeneratorMessage\.update/);
+  assert.match(optimizerRoute, /skillOptMessage\.update/);
+  assert.match(generation, /subscribeWorkbenchSync/);
+  assert.match(optimization, /subscribeWorkbenchSync/);
+  assert.match(generation, /active \? 1_000 : 4_000/);
+  assert.match(optimization, /active \? 1_000 : 4_000/);
+  assert.match(taskService, /status: \{ in: \['pending', 'running'\] \}/);
+  assert.match(generatorRoute, /当前会话已有生成任务正在执行/);
+  assert.match(optimizerRoute, /当前会话已有优化任务正在执行/);
+});
+
+test('Skill 生成和优化保留本页实时消息，迟到快照不能让内容短暂回退', () => {
+  const generation = readFileSync('src/components/skill-workbench/GenerationConversation.tsx', 'utf8');
+  const optimization = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+
+  for (const conversation of [generation, optimization]) {
+    assert.match(conversation, /snapshotRequestRef = useRef\(0\)/);
+    assert.match(conversation, /requestId !== snapshotRequestRef\.current \|\| ownsStreamRef\.current/);
+    assert.match(conversation, /!ownsStreamRef\.current && requestId === snapshotRequestRef\.current/);
+    assert.match(conversation, /ownsStreamRef\.current = true;[\s\S]*snapshotRequestRef\.current \+= 1/);
+    assert.match(conversation, /onError\(''\)/);
+  }
+  assert.doesNotMatch(optimization, /质量校验中/);
+});
+
+test('Skill 会话的思考与命令执行默认折叠，并在生成和优化记录中复用同一状态行', () => {
+  const disclosure = readFileSync('src/components/skill-workbench/ConversationProcessDisclosure.tsx', 'utf8');
+  const generation = readFileSync('src/components/skill-workbench/GenerationConversation.tsx', 'utf8');
+  const optimization = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  assert.match(disclosure, /<details className=/);
+  assert.doesNotMatch(disclosure, /<details[^>]*\sopen(?:=|\s|>)/);
+  assert.match(disclosure, /已完成思考/);
+  assert.match(disclosure, /已执行命令/);
+  assert.match(disclosure, /group-open:rotate-90/);
+  assert.match(generation, /ConversationProcessDisclosure/);
+  assert.match(optimization, /ConversationProcessDisclosure/);
+});
+
+test('Skill 优化实时工具状态按调用 ID 收敛，并在流结束后用持久化消息校准', () => {
+  const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  assert.match(conversation, /item\.kind === 'tool' && item\.id === payload\.id/);
+  assert.match(conversation, /if \(!\['ok', 'error'\]\.includes\(block\.status \|\| ''\)\)/);
+  assert.match(conversation, /if \(payload\.done\) \{[\s\S]*block\.done = true;[\s\S]*block\.status = 'done'/);
+  assert.match(conversation, /Promise\.all\(\[[\s\S]*\/optimization\?user=/);
+  assert.match(conversation, /hydrateOptimizationMessages\(optimizationData\.optimization\.messages \|\| \[\], 'complete'\)/);
+});
+
+test('行为重评开始即持久化为质量校验阶段，新页面不会停留在生成候选版本', () => {
+  const route = readFileSync('src/app/api/skill-opt/chat/route.ts', 'utf8');
+  const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  assert.match(route, /createOptimizationTaskProgress/);
+  assert.match(route, /pending = pending\.then/);
+  assert.equal(route.match(/mode === 'verify_progress' \|\| mode === 'verify_ok'/g)?.length, 2);
+  assert.equal(route.match(/taskProgress\.advance\(3, '执行质量校验', 60\)/g)?.length, 2);
+  assert.match(conversation, /data\.mode === 'verify_ok'[\s\S]*Math\.max\(current, 3\)/);
+  assert.doesNotMatch(conversation, /data\.mode === 'verify_ok'[\s\S]{0,120}Math\.max\(current, 4\)/);
+});
+
+test('优化候选发布或放弃后通知其他页面，并由空闲轮询兜底刷新记录', () => {
+  const shell = readFileSync('src/components/skill-workbench/SkillWorkbenchShell.tsx', 'utf8');
+  const conversation = readFileSync('src/components/skill-workbench/OptimizationConversation.tsx', 'utf8');
+  const syncChannel = readFileSync('src/lib/skill-workbench/sync-channel.ts', 'utf8');
+
+  assert.match(syncChannel, /optimization-record-changed/);
+  assert.equal(shell.match(/kind: 'optimization-record-changed'/g)?.length, 2);
+  assert.match(shell, /change: 'published'/);
+  assert.match(shell, /change: 'abandoned'/);
+  assert.match(conversation, /optimizationRecordsSyncKey\(data\.session\.optimizations \|\| \[\]\)/);
+  assert.match(conversation, /justStarted \|\| justSettled \|\| recordsChanged/);
+  assert.match(shell, /versionAdvanced[\s\S]*loadAssetCatalog/);
+  assert.match(shell, /shouldFollowPublishedVersion[\s\S]*selectFormalAsset/);
 });
 
 test('Skill 优化固定入口执行归并、自验证和静态质量门禁，通过后可直接发布', () => {

@@ -4,7 +4,14 @@ import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, use
 import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
+import {
+  optimizationRecordsSyncKey,
+  publishWorkbenchSync,
+  subscribeWorkbenchSync,
+} from '@/lib/skill-workbench/sync-channel';
+import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 import { GenerationHistory } from './GenerationConversation';
 import type { OptimizationRecordView } from './OptimizationRecordsPanel';
 
@@ -32,7 +39,9 @@ interface ChatBlock {
   text?: string;
   name?: string;
   status?: string;
+  done?: boolean;
   summary?: string;
+  error?: string;
   sourceCount?: number;
   items?: OptimizationPlanItemView[];
   recordId?: string;
@@ -59,8 +68,26 @@ function displayOptimizationError(message: string | null | undefined) {
   return message;
 }
 
-function parseBlocks(value: string | undefined): ChatBlock[] {
+function parseBlocks(value: string | ChatBlock[] | undefined): ChatBlock[] {
+  if (Array.isArray(value)) return value;
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+
+function hydrateOptimizationMessages(
+  values: Array<{ id?: string; role: string; content: string; blocks?: string | ChatBlock[]; createdAt?: string }>,
+  outcome?: ProcessOutcome,
+) {
+  const messages: ChatMessage[] = values.map((message) => ({
+    ...message,
+    blocks: outcome
+      ? settleProcessBlocks(parseBlocks(message.blocks), outcome)
+      : parseBlocks(message.blocks),
+  }));
+  if (!outcome) {
+    const activeIndex = messages.findLastIndex((message) => message.role === 'agent');
+    if (activeIndex >= 0) messages[activeIndex] = { ...messages[activeIndex], streaming: true };
+  }
+  return messages;
 }
 
 const PROGRESS_STEPS = [
@@ -174,12 +201,22 @@ export function OptimizationConversation({
   const [feedback, setFeedback] = useState('');
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(backgroundRunning);
+  const [liveTasks, setLiveTasks] = useState(tasks);
   const [planning, setPlanning] = useState(false);
   const [localStep, setLocalStep] = useState(backgroundRunning ? 1 : 0);
   const busy = planning || running || backgroundRunning;
   const autoStartedRef = useRef(false);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const activeTask = [...tasks].reverse().find((item) => ['pending', 'running'].includes(item.status));
+  const ownsStreamRef = useRef(false);
+  const snapshotRequestRef = useRef(0);
+  const backgroundRunningRef = useRef(backgroundRunning);
+  const observedTaskRef = useRef<{ id?: string; status: string } | null>(null);
+  const observedRecordsRef = useRef(optimizationRecordsSyncKey(records));
+  const activeTask = [...liveTasks].reverse().find((item) => ['pending', 'running'].includes(item.status));
+
+  useEffect(() => setLiveTasks(tasks), [tasks]);
+  useEffect(() => { backgroundRunningRef.current = backgroundRunning; }, [backgroundRunning]);
+  useEffect(() => { observedRecordsRef.current = optimizationRecordsSyncKey(records); }, [records]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: busy ? 'auto' : 'smooth' });
@@ -187,51 +224,102 @@ export function OptimizationConversation({
 
   useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++snapshotRequestRef.current;
+    setLoading(true);
     void apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`, {
       cache: 'no-store', signal: controller.signal,
     }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '加载优化会话失败');
-      setMessages((data.optimization.messages || []).map((message: { id?: string; role: string; content: string; blocks?: string }) => ({ ...message, blocks: parseBlocks(message.blocks) })));
+      if (requestId !== snapshotRequestRef.current || ownsStreamRef.current) return;
+      setMessages(hydrateOptimizationMessages(
+        data.optimization.messages || [],
+        backgroundRunningRef.current ? undefined : 'complete',
+      ));
     }).catch((error) => {
       if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestId !== snapshotRequestRef.current) return;
       onError(error instanceof Error ? error.message : '加载优化会话失败');
-    }).finally(() => setLoading(false));
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
     return () => controller.abort();
   }, [onError, user, workbenchSessionId]);
 
   useEffect(() => {
-    if (!backgroundRunning) return;
-    const poll = window.setInterval(() => {
-      void apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      ).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) return;
-        const task = [...(data.session?.tasks || [])]
-          .reverse()
-          .find((item: { type: string; status: string; errorMessage?: string }) => item.type === 'optimization');
-        if (!task || task.status === 'running' || task.status === 'pending') return;
-        window.clearInterval(poll);
-        const optimizationResponse = await apiFetch(
-          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`,
+    let stopped = false;
+    let timer: number | null = null;
+    let syncing = false;
+
+    const schedule = (delay: number) => {
+      if (stopped) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void sync(), delay);
+    };
+    const sync = async (forceConversation = false) => {
+      if (stopped || syncing) return;
+      syncing = true;
+      let active = false;
+      try {
+        const response = await apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
           { cache: 'no-store' },
         );
-        const optimizationData = await optimizationResponse.json();
-        if (optimizationResponse.ok) {
-          setMessages((optimizationData.optimization.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
-            ...message,
-            blocks: parseBlocks(message.blocks),
-          })));
+        const data = await response.json();
+        if (stopped || !response.ok || !data.session) return;
+        const nextTasks = (data.session.tasks || []).filter((item: { type: string }) => item.type === 'optimization');
+        const task = [...nextTasks]
+          .reverse()
+          .find((item: { id?: string; status: string; errorMessage?: string }) => item.status !== 'cancelled') as OptimizationTaskView | undefined;
+        active = Boolean(task && ['pending', 'running'].includes(task.status));
+        const previous = observedTaskRef.current;
+        const taskChanged = Boolean(task && task.id !== previous?.id);
+        const justStarted = Boolean(active && (taskChanged || !previous || !['pending', 'running'].includes(previous.status)));
+        const justSettled = Boolean(task && !active && (taskChanged || (previous && ['pending', 'running'].includes(previous.status))));
+        const nextRecordsKey = optimizationRecordsSyncKey(data.session.optimizations || []);
+        const recordsChanged = nextRecordsKey !== observedRecordsRef.current;
+        observedTaskRef.current = task ? { id: task.id, status: task.status } : null;
+        if (recordsChanged) observedRecordsRef.current = nextRecordsKey;
+        setLiveTasks(nextTasks);
+
+        if (!ownsStreamRef.current && (active || justSettled || forceConversation)) {
+          const requestId = ++snapshotRequestRef.current;
+          const optimizationResponse = await apiFetch(
+            `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`,
+            { cache: 'no-store' },
+          );
+          const optimizationData = await optimizationResponse.json();
+          if (!stopped && !ownsStreamRef.current && requestId === snapshotRequestRef.current && optimizationResponse.ok) {
+            const outcome = active ? undefined : task?.status === 'failed' ? 'error' : 'complete';
+            setMessages(hydrateOptimizationMessages(optimizationData.optimization.messages || [], outcome));
+          }
         }
-        setRunning(false);
-        if (task.status === 'failed' && task.errorMessage) onError(task.errorMessage);
-        onSynced(data.session);
-      }).catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(poll);
-  }, [backgroundRunning, onError, onSynced, user, workbenchSessionId]);
+        if (!ownsStreamRef.current) setRunning(active);
+        if (justStarted || justSettled || recordsChanged) {
+          if (!ownsStreamRef.current && task?.status === 'failed' && task.errorMessage) onError(task.errorMessage);
+          onSynced(data.session);
+        }
+      } catch {
+        // 下一轮轮询或重新聚焦时继续追赶服务端状态。
+      } finally {
+        syncing = false;
+        schedule(active ? 1_000 : 4_000);
+      }
+    };
+
+    const unsubscribe = subscribeWorkbenchSync((event) => {
+      if (event.sessionId === workbenchSessionId && event.taskType === 'optimization') void sync(true);
+    });
+    const syncOnFocus = () => void sync(true);
+    window.addEventListener('focus', syncOnFocus);
+    void sync(backgroundRunningRef.current);
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+      unsubscribe();
+      window.removeEventListener('focus', syncOnFocus);
+    };
+  }, [onError, onSynced, user, workbenchSessionId]);
 
   const patchAgent = useCallback((mutator: (message: ChatMessage) => void) => setMessages((current) => {
     const next = [...current];
@@ -280,6 +368,10 @@ export function OptimizationConversation({
     const normalizedRequest = requestText.trim() || `根据 ${issues.length} 个静态评估问题优化`;
     const runId = crypto.randomUUID();
     const runMeta: ChatBlock = { kind: 'optimization_meta', id: `optimization-${runId}`, runId };
+    let processOutcome: ProcessOutcome = 'error';
+    onError('');
+    ownsStreamRef.current = true;
+    snapshotRequestRef.current += 1;
     setLocalStep(1);
     setFeedback('');
     setMessages((current) => [
@@ -307,7 +399,11 @@ export function OptimizationConversation({
           runId,
         }),
       });
-      if (!response.ok || !response.body) throw new Error('优化 Agent 启动失败');
+      if (!response.ok || !response.body) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure.error || '优化 Agent 启动失败');
+      }
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-started' });
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -330,16 +426,31 @@ export function OptimizationConversation({
           });
           else if (data.mode === 'thinking') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'thinking' && item.id === payload.id);
-            if (block) block.text = `${block.text || ''}${payload.delta || ''}`;
-            else message.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', status: payload.done ? 'done' : 'running' });
+            if (block) {
+              block.text = `${block.text || ''}${payload.delta || ''}`;
+              if (payload.done) {
+                block.done = true;
+                block.status = 'done';
+              }
+            }
+            else message.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', done: Boolean(payload.done), status: payload.done ? 'done' : 'running' });
           });
           else if (data.mode === 'tool_call') {
             setLocalStep((current) => Math.max(current, 2));
-            patchAgent((message) => message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' }));
+            patchAgent((message) => {
+              const block = message.blocks.find((item) => item.kind === 'tool' && item.id === payload.id);
+              if (!block) {
+                message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' });
+                return;
+              }
+              block.name ||= payload.name;
+              if (!['ok', 'error'].includes(block.status || '')) block.status = payload.status || 'running';
+            });
           }
           else if (data.mode === 'tool_result') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'tool' && item.id === payload.id);
-            if (block) Object.assign(block, { status: payload.status || 'ok', summary: payload.summary });
+            if (block) Object.assign(block, { status: payload.status || 'ok', summary: payload.summary, error: payload.error });
+            else message.blocks.push({ kind: 'tool', id: payload.id, name: payload.name || 'tool', status: payload.status || 'ok', summary: payload.summary, error: payload.error });
           });
           else if (data.mode === 'optimization_plan') patchAgent((message) => {
             const block = message.blocks.find((item) => item.kind === 'optimization_plan' && item.id === payload.id);
@@ -367,7 +478,7 @@ export function OptimizationConversation({
             });
           }
           else if (data.mode === 'verify_ok') {
-            setLocalStep((current) => Math.max(current, 4));
+            setLocalStep((current) => Math.max(current, 3));
             patchAgent((message) => {
               const block = message.blocks.find((item) => item.kind === 'verification' && item.id === 'self-verify');
               const next = { kind: 'verification', id: 'self-verify', status: 'ok', text: '结构门、脚本真值门与行为门已完成' };
@@ -378,15 +489,38 @@ export function OptimizationConversation({
           else if (data.mode === 'warning') patchAgent((message) => message.blocks.push({
             kind: 'warning', id: `warning-${message.blocks.length}`, text: String(payload.message || data.payload || ''),
           }));
-          else if (data.mode === 'error') throw new Error(String(data.payload || '优化失败'));
+          else if (data.mode === 'done') {
+            processOutcome = 'complete';
+            patchAgent((message) => {
+              message.blocks = settleProcessBlocks(message.blocks, 'complete');
+              message.streaming = false;
+            });
+          }
+          else if (data.mode === 'error') {
+            patchAgent((message) => { message.blocks = settleProcessBlocks(message.blocks, 'error'); });
+            throw new Error(String(data.payload || '优化失败'));
+          }
         }
       }
-      const sessionResponse = await apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      );
+      processOutcome = 'complete';
+      const requestId = ++snapshotRequestRef.current;
+      const [sessionResponse, optimizationResponse] = await Promise.all([
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/optimization?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+      ]);
       const sessionData = await sessionResponse.json();
+      const optimizationData = await optimizationResponse.json();
       if (!sessionResponse.ok) throw new Error(sessionData.error || '加载优化结果失败');
+      if (!optimizationResponse.ok) throw new Error(optimizationData.error || '校准优化会话失败');
+      if (requestId === snapshotRequestRef.current) {
+        setMessages(hydrateOptimizationMessages(optimizationData.optimization.messages || [], 'complete'));
+      }
       setLocalStep(4);
       onSynced(sessionData.session);
     } catch (error) {
@@ -399,8 +533,13 @@ export function OptimizationConversation({
         onError(message);
       }
     } finally {
+      ownsStreamRef.current = false;
       setRunning(false);
-      patchAgent((message) => { message.streaming = false; });
+      patchAgent((message) => {
+        message.blocks = settleProcessBlocks(message.blocks, processOutcome);
+        message.streaming = false;
+      });
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'optimization', kind: 'run-settled' });
     }
   }, [baseVersion, baselineFiles, busy, issues, onError, onSynced, optSessionId, patchAgent, prepareMergePlan, skillName, user, workbenchSessionId]);
 
@@ -449,9 +588,9 @@ export function OptimizationConversation({
           const meta = optimizationMeta(message);
           const messageRecords = recordsAtMessage.get(index) || [];
           const messageTask = meta?.taskId
-            ? tasks.find((item) => item.id === meta.taskId)
+            ? liveTasks.find((item) => item.id === meta.taskId)
             : messageRecords.length
-              ? tasks.find((item) => messageRecords.some((record) => item.resultId === record.id))
+              ? liveTasks.find((item) => messageRecords.some((record) => item.resultId === record.id))
               : index === liveMessageIndex ? activeTask : undefined;
           const showLiveProgress = index === liveMessageIndex && busy;
           const showStoredProgress = message.role === 'agent'
@@ -467,8 +606,12 @@ export function OptimizationConversation({
             {message.role === 'agent' && <div className="mb-2 flex items-center gap-1.5 text-[11px] text-foreground-muted"><Bot className="size-3.5" />Skill Copilot{roundNumber && <span>· 第 {roundNumber} 轮 · {transition}</span>}</div>}
             {message.role === 'user' && roundNumber && <div className="mb-1 text-[10px] text-primary-foreground/75">{meta?.automatic ? `第 ${roundNumber} 轮 · 自动修复` : `第 ${roundNumber} 轮`}</div>}
             {visibleBlocks.length ? visibleBlocks.map((block, blockIndex) => block.kind === 'tool'
-              ? <div key={`${block.id}-${blockIndex}`} className="my-1 grid min-w-0 max-w-full grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 overflow-hidden rounded bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-secondary"><Wrench className="mt-0.5 size-3.5" /><span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">{block.name}</span><span className="col-span-2 min-w-0 whitespace-pre-wrap break-words text-foreground-muted [overflow-wrap:anywhere]">{block.summary || block.status}</span></div>
-              : block.kind === 'thinking' ? <details key={`${block.id}-${blockIndex}`} className="my-1 min-w-0 max-w-full overflow-hidden text-[11px] text-foreground-muted"><summary>思考过程</summary><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{block.text}</p></details>
+              ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="tool" state={processState(block.status, messageTask?.status || (message.streaming ? undefined : 'done'))} name={block.name}>
+                <pre className="m-0 max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 [overflow-wrap:anywhere]">{block.summary || block.error || block.status}</pre>
+              </ConversationProcessDisclosure>
+              : block.kind === 'thinking' ? <ConversationProcessDisclosure key={`${block.id}-${blockIndex}`} kind="thinking" state={processState(block.status || (block.done === false ? 'running' : 'done'), messageTask?.status || (message.streaming ? undefined : 'done'))}>
+                <p className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]">{block.text}</p>
+              </ConversationProcessDisclosure>
                 : block.kind === 'optimization_plan' ? <OptimizationPlanCard key={`${block.id}-${blockIndex}`} block={block} />
                   : block.kind === 'verification' ? <div key={`${block.id}-${blockIndex}`} className="my-1 flex min-w-0 items-start gap-2 overflow-hidden rounded border border-success-border bg-success-subtle px-2 py-1.5 text-[11px] text-success">{block.status === 'running' ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />}<span className="min-w-0 break-words [overflow-wrap:anywhere]">{block.text}</span></div>
                     : block.kind === 'warning' ? <div key={`${block.id}-${blockIndex}`} className="my-1 min-w-0 overflow-hidden whitespace-pre-wrap break-words rounded border border-warning-border bg-warning-subtle px-2 py-1.5 text-[11px] text-warning [overflow-wrap:anywhere]">{block.text}</div>
@@ -571,7 +714,7 @@ function OptimizationResultCard({ record, busy, publishing, onViewRecords, onPub
         : record.status === 'optimization_failed'
         ? <span className="rounded bg-error-subtle px-1.5 py-1 text-error">{executionFailed ? '优化执行失败' : '质量校验未通过'}</span>
         : record.status === 'optimizing'
-          ? <span className="rounded bg-primary-subtle px-1.5 py-1 text-primary">质量校验中</span>
+          ? null
           : <span className="rounded bg-success-subtle px-1.5 py-1 text-success">质量规则已通过</span>}
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
