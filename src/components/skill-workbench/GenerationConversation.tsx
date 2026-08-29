@@ -1,14 +1,17 @@
 'use client';
 
 import { FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, Wrench, X } from 'lucide-react';
+import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { ALLOWED_EXT_ACCEPT } from '@/lib/skill-generator/file-types';
+import { publishWorkbenchSync, subscribeWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
+import { ConversationProcessDisclosure, processState } from './ConversationProcessDisclosure';
 
 type GenerationBlock =
   | { kind: 'text'; id: string; text: string }
-  | { kind: 'thinking'; id: string; text: string; done?: boolean }
+  | { kind: 'thinking'; id: string; text: string; done?: boolean; status?: string }
   | { kind: 'tool'; id: string; name: string; status: string; summary?: string; error?: string }
   | { kind: 'question'; id: string; question: string; status: string; answer?: unknown }
   | { kind: 'download'; id: string; skillName: string; fileCount: number };
@@ -29,6 +32,23 @@ function parseBlocks(value: string | GenerationBlock[] | undefined) {
   } catch {
     return [];
   }
+}
+
+function hydrateGenerationMessages(
+  values: Array<{ id?: string; role: string; content: string; blocks?: string | GenerationBlock[] }>,
+  outcome?: ProcessOutcome,
+) {
+  const messages: GenerationMessage[] = values.map((message) => ({
+    ...message,
+    blocks: outcome
+      ? settleProcessBlocks(parseBlocks(message.blocks), outcome)
+      : parseBlocks(message.blocks),
+  }));
+  if (!outcome) {
+    const activeIndex = messages.findLastIndex((message) => message.role === 'agent');
+    if (activeIndex >= 0) messages[activeIndex] = { ...messages[activeIndex], streaming: true };
+  }
+  return messages;
 }
 
 export function GenerationHistory({
@@ -112,6 +132,12 @@ export function GenerationConversation({
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const ownsStreamRef = useRef(false);
+  const snapshotRequestRef = useRef(0);
+  const backgroundRunningRef = useRef(backgroundRunning);
+  const observedTaskRef = useRef<{ id?: string; status: string } | null>(null);
+
+  useEffect(() => { backgroundRunningRef.current = backgroundRunning; }, [backgroundRunning]);
 
   useEffect(() => {
     onRunningChange(running);
@@ -120,6 +146,7 @@ export function GenerationConversation({
 
   useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++snapshotRequestRef.current;
     setLoading(true);
     void apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`, {
       cache: 'no-store',
@@ -127,15 +154,19 @@ export function GenerationConversation({
     }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '加载生成会话失败');
+      if (requestId !== snapshotRequestRef.current || ownsStreamRef.current) return;
       setFiles(data.generation.files || {});
-      setMessages((data.generation.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
-        ...message,
-        blocks: parseBlocks(message.blocks),
-      })));
+      setMessages(hydrateGenerationMessages(
+        data.generation.messages || [],
+        backgroundRunningRef.current ? undefined : 'complete',
+      ));
     }).catch((error) => {
       if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestId !== snapshotRequestRef.current) return;
       onError(error instanceof Error ? error.message : '加载生成会话失败');
-    }).finally(() => setLoading(false));
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
     return () => controller.abort();
   }, [onError, user, workbenchSessionId]);
 
@@ -163,39 +194,75 @@ export function GenerationConversation({
   }, [generatorSessionId, onError, user]);
 
   useEffect(() => {
-    if (!backgroundRunning) return;
-    setRunning(true);
-    const poll = window.setInterval(() => {
-      void apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      ).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) return;
-        const task = [...(data.session?.tasks || [])]
-          .reverse()
-          .find((item: { type: string; status: string; errorMessage?: string }) => item.type === 'generation');
-        if (!task || task.status === 'running' || task.status === 'pending') return;
-        window.clearInterval(poll);
-        const generationResponse = await apiFetch(
-          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`,
+    let stopped = false;
+    let timer: number | null = null;
+    let syncing = false;
+
+    const schedule = (delay: number) => {
+      if (stopped) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void sync(), delay);
+    };
+    const sync = async (forceConversation = false) => {
+      if (stopped || syncing) return;
+      syncing = true;
+      let active = false;
+      try {
+        const response = await apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
           { cache: 'no-store' },
         );
-        const generationData = await generationResponse.json();
-        if (generationResponse.ok) {
-          setFiles(generationData.generation.files || {});
-          setMessages((generationData.generation.messages || []).map((message: { id: string; role: string; content: string; blocks?: string }) => ({
-            ...message,
-            blocks: parseBlocks(message.blocks),
-          })));
+        const data = await response.json();
+        if (stopped || !response.ok || !data.session) return;
+        const task = [...(data.session.tasks || [])]
+          .reverse()
+          .find((item: { id?: string; type: string; status: string; errorMessage?: string }) => item.type === 'generation');
+        active = Boolean(task && ['pending', 'running'].includes(task.status));
+        const previous = observedTaskRef.current;
+        const taskChanged = Boolean(task && task.id !== previous?.id);
+        const justStarted = Boolean(active && (taskChanged || !previous || !['pending', 'running'].includes(previous.status)));
+        const justSettled = Boolean(task && !active && (taskChanged || (previous && ['pending', 'running'].includes(previous.status))));
+        observedTaskRef.current = task ? { id: task.id, status: task.status } : null;
+
+        if (!ownsStreamRef.current && (active || justSettled || forceConversation)) {
+          const requestId = ++snapshotRequestRef.current;
+          const generationResponse = await apiFetch(
+            `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`,
+            { cache: 'no-store' },
+          );
+          const generationData = await generationResponse.json();
+          if (!stopped && !ownsStreamRef.current && requestId === snapshotRequestRef.current && generationResponse.ok) {
+            const outcome = active ? undefined : task?.status === 'failed' ? 'error' : 'complete';
+            setFiles(generationData.generation.files || {});
+            setMessages(hydrateGenerationMessages(generationData.generation.messages || [], outcome));
+          }
         }
-        setRunning(false);
-        if (task.status === 'failed' && task.errorMessage) onError(task.errorMessage);
-        onSynced(data.session);
-      }).catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(poll);
-  }, [backgroundRunning, onError, onSynced, user, workbenchSessionId]);
+        if (!ownsStreamRef.current) setRunning(active);
+        if (justStarted || justSettled) {
+          if (!ownsStreamRef.current && task?.status === 'failed' && task.errorMessage) onError(task.errorMessage);
+          onSynced(data.session);
+        }
+      } catch {
+        // 下一轮轮询或重新聚焦时继续追赶服务端状态。
+      } finally {
+        syncing = false;
+        schedule(active ? 1_000 : 4_000);
+      }
+    };
+
+    const unsubscribe = subscribeWorkbenchSync((event) => {
+      if (event.sessionId === workbenchSessionId && event.taskType === 'generation') void sync(true);
+    });
+    const syncOnFocus = () => void sync(true);
+    window.addEventListener('focus', syncOnFocus);
+    void sync(backgroundRunningRef.current);
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+      unsubscribe();
+      window.removeEventListener('focus', syncOnFocus);
+    };
+  }, [onError, onSynced, user, workbenchSessionId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: running ? 'auto' : 'smooth' });
@@ -247,6 +314,9 @@ export function GenerationConversation({
     event.preventDefault();
     const message = input.trim();
     if (!message || running) return;
+    onError('');
+    ownsStreamRef.current = true;
+    snapshotRequestRef.current += 1;
     setInput('');
     setMessages((current) => [
       ...current,
@@ -255,6 +325,7 @@ export function GenerationConversation({
     ]);
     setRunning(true);
     const controller = new AbortController();
+    let processOutcome: ProcessOutcome = 'error';
     try {
       const response = await apiFetch('/api/skill-generator/chat', {
         method: 'POST',
@@ -272,7 +343,11 @@ export function GenerationConversation({
         }),
         signal: controller.signal,
       });
-      if (!response.ok || !response.body) throw new Error('生成 Agent 启动失败');
+      if (!response.ok || !response.body) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure.error || '生成 Agent 启动失败');
+      }
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'generation', kind: 'run-started' });
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -299,16 +374,25 @@ export function GenerationConversation({
               if (existing?.kind === 'thinking') {
                 existing.text += payload.delta || '';
                 existing.done = payload.done || existing.done;
-              } else agent.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', done: payload.done });
+              } else agent.blocks.push({ kind: 'thinking', id: payload.id, text: payload.delta || '', done: Boolean(payload.done) });
             });
           } else if (eventData.mode === 'tool_call') {
             const payload = eventData.payload || {};
-            patchAgent((agent) => agent.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' }));
+            patchAgent((agent) => {
+              const tool = agent.blocks.find((block) => block.kind === 'tool' && block.id === payload.id);
+              if (!tool || tool.kind !== 'tool') {
+                agent.blocks.push({ kind: 'tool', id: payload.id, name: payload.name, status: payload.status || 'running' });
+                return;
+              }
+              tool.name ||= payload.name;
+              if (!['ok', 'error', 'complete'].includes(tool.status)) tool.status = payload.status || 'running';
+            });
           } else if (eventData.mode === 'tool_result') {
             const payload = eventData.payload || {};
             patchAgent((agent) => {
               const tool = agent.blocks.find((block) => block.kind === 'tool' && block.id === payload.id);
               if (tool?.kind === 'tool') Object.assign(tool, { status: payload.status || 'ok', summary: payload.summary, error: payload.error });
+              else agent.blocks.push({ kind: 'tool', id: payload.id, name: payload.name || 'tool', status: payload.status || 'ok', summary: payload.summary, error: payload.error });
             });
           } else if (eventData.mode === 'question') {
             const payload = eventData.payload || {};
@@ -324,24 +408,51 @@ export function GenerationConversation({
           } else if (eventData.mode === 'download') {
             const payload = eventData.payload || {};
             patchAgent((agent) => agent.blocks.push({ kind: 'download', id: payload.id, skillName: payload.skillName, fileCount: payload.fileCount || 0 }));
+          } else if (eventData.mode === 'done') {
+            processOutcome = 'complete';
+            patchAgent((agent) => {
+              agent.blocks = settleProcessBlocks(agent.blocks, 'complete');
+              agent.streaming = false;
+            });
           } else if (eventData.mode === 'error') {
+            patchAgent((agent) => { agent.blocks = settleProcessBlocks(agent.blocks, 'error'); });
             throw new Error(String(eventData.payload || '生成失败'));
           }
         }
       }
-      const sessionResponse = await apiFetch(
-        `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
-        { cache: 'no-store' },
-      );
+      processOutcome = 'complete';
+      const requestId = ++snapshotRequestRef.current;
+      const [sessionResponse, generationResponse] = await Promise.all([
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+        apiFetch(
+          `/api/skill-workbench/sessions/${encodeURIComponent(workbenchSessionId)}/generation?user=${encodeURIComponent(user)}`,
+          { cache: 'no-store' },
+        ),
+      ]);
       const sessionData = await sessionResponse.json();
-      if (sessionResponse.ok && sessionData.session) onSynced(sessionData.session);
+      const generationData = await generationResponse.json();
+      if (!sessionResponse.ok) throw new Error(sessionData.error || '加载生成结果失败');
+      if (!generationResponse.ok) throw new Error(generationData.error || '校准生成会话失败');
+      if (requestId === snapshotRequestRef.current) {
+        setFiles(generationData.generation.files || {});
+        setMessages(hydrateGenerationMessages(generationData.generation.messages || [], 'complete'));
+      }
+      if (sessionData.session) onSynced(sessionData.session);
     } catch (error) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
         onError(error instanceof Error ? error.message : '生成失败');
       }
     } finally {
+      ownsStreamRef.current = false;
       setRunning(false);
-      patchAgent((agent) => { agent.streaming = false; });
+      patchAgent((agent) => {
+        agent.blocks = settleProcessBlocks(agent.blocks, processOutcome);
+        agent.streaming = false;
+      });
+      publishWorkbenchSync({ sessionId: workbenchSessionId, taskType: 'generation', kind: 'run-settled' });
     }
   };
 
@@ -428,19 +539,27 @@ function GenerationMessageList({ messages, user }: { messages: GenerationMessage
     <div key={`generation-${message.id || index}`} className={message.role === 'user' ? 'ml-8 min-w-0 max-w-full overflow-hidden rounded-lg bg-primary px-3 py-2 text-xs leading-5 text-primary-foreground' : 'min-w-0 max-w-full overflow-hidden rounded-lg border border-border bg-card px-3 py-3'}>
       {message.role !== 'user' && <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-foreground-muted"><Bot className="size-3.5" />Skill Agent</div>}
       {message.blocks.length ? message.blocks.map((block) => (
-        <GenerationBlockView key={block.id} block={block} user={user} />
+        <GenerationBlockView key={block.id} block={block} user={user} streaming={message.streaming === true} />
       )) : <p className="whitespace-pre-wrap break-words text-xs leading-5 [overflow-wrap:anywhere]">{message.content}</p>}
       {message.streaming && <Loader2 className="mt-2 size-3.5 animate-spin text-primary" />}
     </div>
   ));
 }
 
-function GenerationBlockView({ block, user }: { block: GenerationBlock; user: string }) {
+function GenerationBlockView({ block, user, streaming }: { block: GenerationBlock; user: string; streaming: boolean }) {
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
   if (block.kind === 'text') return <p className="max-w-full whitespace-pre-wrap break-words text-xs leading-5 text-foreground-secondary [overflow-wrap:anywhere]">{block.text}</p>;
-  if (block.kind === 'thinking') return <details className="my-2 min-w-0 max-w-full overflow-hidden rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-muted"><summary>思考过程</summary><p className="mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{block.text}</p></details>;
-  if (block.kind === 'tool') return <div className="my-1 grid min-w-0 max-w-full grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 overflow-hidden rounded-md bg-background-secondary px-2 py-1.5 text-[11px] text-foreground-secondary"><Wrench className="mt-0.5 size-3.5" /><span className="min-w-0 break-words font-medium [overflow-wrap:anywhere]">{block.name}</span><span className="col-span-2 min-w-0 whitespace-pre-wrap break-words text-foreground-muted [overflow-wrap:anywhere]">{block.summary || block.status}</span></div>;
+  if (block.kind === 'thinking') return (
+    <ConversationProcessDisclosure kind="thinking" state={processState(block.status || (block.done === false ? 'running' : 'done'), streaming ? undefined : 'done')}>
+      <p className="whitespace-pre-wrap break-words leading-5 [overflow-wrap:anywhere]">{block.text}</p>
+    </ConversationProcessDisclosure>
+  );
+  if (block.kind === 'tool') return (
+    <ConversationProcessDisclosure kind="tool" state={processState(block.status, streaming ? undefined : 'done')} name={block.name}>
+      <pre className="m-0 max-h-72 max-w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 [overflow-wrap:anywhere]">{block.summary || block.error || block.status}</pre>
+    </ConversationProcessDisclosure>
+  );
   if (block.kind === 'download') return <div className="my-2 flex items-center gap-2 rounded-md border border-success-border bg-success-subtle px-2 py-2 text-[11px] text-success"><CheckCircle2 className="size-3.5" />已生成 {block.skillName} · {block.fileCount} 个文件</div>;
   if (block.kind === 'question') {
     if (block.status !== 'pending') return <div className="my-2 rounded-md bg-background-secondary px-2 py-2 text-[11px] text-foreground-secondary">已回答：{String(block.answer || '已跳过')}</div>;

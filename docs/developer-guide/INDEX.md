@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `fe64b5df9a0fd8a16e5fcc634cd934791b8ff837` (`fe64b5df`) |
-| Branch | `new-dev-8-27-night` |
-| Date | 2026-08-27 14:23:49 +0800 |
+| Commit | `373ec92f1e606328a64ea6b09476959796c5d819` (`373ec92f`) |
+| Branch | `new-dev-8-28` |
+| Date | 2026-08-27 20:55:40 +0800 |
 | Author | openeuler-ci-bot |
-| Subject | `!356 agent轨迹评测加入skill改进建议，详情中证据与建议合并，可展示多条skill改进建议` |
-| Working tree overlay | 当前工作树在该快照之上补充 OpenCode 插件动态 Agent 发现：客户端通过 loopback `/agent` 读取 resolved Agent，每 30 秒在隔离子进程中绕过缓存并同步能力；macOS 后台服务使用独立 launchd helper 对齐交互式 OpenCode 环境。实验向导第一步定时及聚焦刷新候选。 |
+| Subject | `!358 docs: 新增仓库速查手册 overview.html，更新项目简介文案` |
+| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；补齐 launchd bootout/bootstrap 竞态重试与真实状态校验，让 systemd/launchd 固化安装终端 PATH 以发现用户目录中的 Agent；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，将评测器分数契约与前端范围统一为 0-100，并在实验模型选项中展示 provider 以区分同名模型。当前工作树还修复了未绑定 Skill 会话的右栏空状态，并将历史会话改为带明确文字入口的顶栏临时浮层；同时恢复“运行观测 → 版本分析”导航入口，通过页面顶部“版本分析 / 版本管理”页签将标签管理收为版本分析的子能力，两个既有页面、API 与数据口径保持不变；轨迹质量实验恢复独立 Skill 改进建议，并采用评分 5 分钟、建议每次 7 分钟且最多尝试 2 次的专属超时策略；Skill Copilot 的思考与命令过程现统一为默认折叠、可展开的状态行，并通过 `sessionId` 深链接与服务端增量 checkpoint 在多个页面间恢复同一运行状态；OpenCode 插件动态 Agent 发现通过 loopback `/agent` 读取 resolved Agent，每 30 秒在隔离子进程中绕过缓存并同步能力，macOS 后台服务使用独立 launchd helper 对齐交互式 OpenCode 环境，实验向导第一步定时及聚焦刷新候选。 |
 
-**如何更新：** `git diff fe64b5df HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 373ec92f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
