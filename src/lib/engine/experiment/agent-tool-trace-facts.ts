@@ -25,6 +25,13 @@ export interface ToolTraceFact {
   args: unknown;
   result: unknown;
   status: string | null;
+  /** 从 result/output 提取的错误消息（无则为 null）。 */
+  errorMessage: string | null;
+  /** 从 result/output 提取的错误码（无则为 null）。 */
+  errorCode: string | null;
+  /** 工具调用自身 timing（ms since epoch），用于精确计量失败耗时。 */
+  startedAt?: number;
+  completedAt?: number;
   interactionIndex: number | null;
 }
 
@@ -56,10 +63,46 @@ export interface TraceUsageFacts {
   llmCallCount: number;
   /** 工具调用次数。 */
   toolCallCount: number;
-  /** 失败工具调用所浪费的 token（失败调用所在回合的 usage 累加）。 */
-  failedTokens: number;
-  /** 失败工具调用所浪费的时间（失败调用所在回合的耗时累加，ms）。 */
-  failedDurationMs: number;
+  /** 失败调用所在回合的 token（回合级近似，含生成工具调用前的 LLM 思考，非失败工具本身消耗）。 */
+  failedTurnTokens: number;
+  /** 失败工具调用自身耗时（用工具 timing.started_at/completed_at 精确计量，ms）。 */
+  failedToolDurationMs: number;
+}
+
+/** 从工具返回值里提取错误消息与错误码（常见的 error/message/code 结构）。 */
+function extractErrorFacts(result: unknown): { errorMessage: string | null; errorCode: string | null } {
+  if (result == null) return { errorMessage: null, errorCode: null };
+  if (typeof result === 'string') {
+    const s = result.trim();
+    return s ? { errorMessage: s.slice(0, 500), errorCode: null } : { errorMessage: null, errorCode: null };
+  }
+  if (typeof result !== 'object' || Array.isArray(result)) {
+    return { errorMessage: null, errorCode: null };
+  }
+  const r = result as Record<string, unknown>;
+  const message = firstString(r, ['error', 'message', 'error_message', 'errMsg', 'detail', 'reason', 'statusText']);
+  const code = firstString(r, ['code', 'error_code', 'errorCode', 'status_code', 'statusCode', 'errno', 'type']);
+  return {
+    errorMessage: message ? message.slice(0, 500) : null,
+    errorCode: code ? code.slice(0, 100) : null,
+  };
+}
+
+function firstString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const v = obj[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  // 嵌套 error 对象（如 { error: { message, code } }）
+  for (const key of ['error', 'err']) {
+    const v = obj[key];
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const nested = firstString(v as Record<string, unknown>, keys);
+      if (nested) return nested;
+    }
+  }
+  return null;
 }
 
 function skillNameFromArgs(args: unknown, fallback: string): string {
@@ -72,26 +115,6 @@ function skillNameFromArgs(args: unknown, fallback: string): string {
   return fallback;
 }
 
-/** 时间戳 → ms（兼容 Unix 秒 / 毫秒 / ISO 字符串）。 */
-function toMs(v: unknown): number | undefined {
-  if (v == null) return undefined;
-  if (typeof v === 'number' && Number.isFinite(v)) {
-    return v > 0 && v < 10_000_000_000 ? v * 1000 : v;
-  }
-  if (typeof v === 'string') {
-    const s = v.trim();
-    if (!s) return undefined;
-    if (/^\d+(\.\d+)?$/.test(s)) {
-      const n = Number(s);
-      if (!Number.isFinite(n)) return undefined;
-      return n > 0 && n < 10_000_000_000 ? n * 1000 : n;
-    }
-    const parsed = Date.parse(s);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
 export function extractToolTraceFacts(
   interactions: unknown[],
   availableCapabilities: EvaluatorCapabilityDescriptor[] = [],
@@ -100,7 +123,7 @@ export function extractToolTraceFacts(
   if (!tree) {
     return {
       calls: [], countsByCapability: {}, calledCatalogCapabilities: [], unknownCalledCapabilities: [],
-      usage: { totalTokens: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, llmCallCount: 0, toolCallCount: 0, failedTokens: 0, failedDurationMs: 0 },
+      usage: { totalTokens: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, llmCallCount: 0, toolCallCount: 0, failedTurnTokens: 0, failedToolDurationMs: 0 },
     };
   }
 
@@ -112,8 +135,8 @@ export function extractToolTraceFacts(
     durationMs: tree.stats.durationMs,
     llmCallCount: tree.stats.llmCalls,
     toolCallCount: tree.stats.toolCalls,
-    failedTokens: 0,
-    failedDurationMs: 0,
+    failedTurnTokens: 0,
+    failedToolDurationMs: 0,
   };
 
   const calls: ToolTraceFact[] = [];
@@ -125,6 +148,7 @@ export function extractToolTraceFacts(
       if (event.kind !== 'tool' && event.kind !== 'skill') continue;
       const fallbackName = String(event.name || 'unknown').trim() || 'unknown';
       const name = event.kind === 'skill' ? skillNameFromArgs(event.args, fallbackName) : fallbackName;
+      const errorFacts = extractErrorFacts(event.output);
       calls.push({
         stepIndex: currentStep,
         anchor: `step-${currentStep}`,
@@ -135,29 +159,33 @@ export function extractToolTraceFacts(
         args: event.args,
         result: event.output,
         status: typeof event.toolStatus === 'string' ? event.toolStatus : null,
+        errorMessage: errorFacts.errorMessage,
+        errorCode: errorFacts.errorCode,
+        ...(Number.isFinite(event.startedAt) ? { startedAt: event.startedAt } : {}),
+        ...(Number.isFinite(event.completedAt) ? { completedAt: event.completedAt } : {}),
         interactionIndex: Number.isInteger(event.interactionIndex) ? event.interactionIndex : null,
       });
     }
   });
 
-  // 失败消耗：失败工具调用所在回合的 token 与耗时（非 LLM 估算，从原始 interaction 计量）。
-  // 用 interactionIndex 反查原始 interactions，累加该回合的 usage.total 与 timeInfo 跨度。
+  // 失败消耗计量（口径分离）：
+  // - failedTurnTokens：回合级近似——失败调用所在 interaction 的 usage.total 累加。
+  //   usage 属于生成该回合（含工具调用前的 LLM 思考），无法精确归因到单个失败工具，故明示为「回合」而非「工具」。
+  // - failedToolDurationMs：工具级精确——用工具调用自身 timing.started_at/completed_at 累加。
   const rawInteractions = interactions as RawInteraction[];
   const failedInteractionIdx = new Set<number>();
   for (const call of calls) {
     if (!isFailedCallStatus(call.status)) continue;
     if (Number.isInteger(call.interactionIndex)) failedInteractionIdx.add(call.interactionIndex as number);
+    if (Number.isFinite(call.startedAt) && Number.isFinite(call.completedAt) && call.completedAt! > call.startedAt!) {
+      usage.failedToolDurationMs += call.completedAt! - call.startedAt!;
+    }
   }
   for (const idx of failedInteractionIdx) {
     const it = rawInteractions[idx];
     if (!it) continue;
     const u = it.usage;
-    if (u && Number.isFinite(u.total)) usage.failedTokens += u.total;
-    const created = toMs(it.timeInfo?.created) ?? toMs(it.timestamp);
-    const completed = toMs(it.timeInfo?.completed);
-    if (created != null && completed != null && completed > created) {
-      usage.failedDurationMs += completed - created;
-    }
+    if (u && Number.isFinite(u.total)) usage.failedTurnTokens += u.total ?? 0;
   }
 
   const counts = new Map<string, number>();

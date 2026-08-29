@@ -6,6 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { setJudgeLlmCallerForTest } from '../src/lib/engine/experiment/judge-llm';
+import { JudgeOutputParseError } from '../src/lib/evaluators/judge-assembly';
 import { runToolSuccessRatePreset } from '../src/lib/engine/experiment/agent-tool-success-rate-evaluator';
 import {
   normalizeEvaluatorCaseContext,
@@ -192,7 +193,6 @@ describe('tool success rate evaluator', () => {
       failure_impact: {
         critical_path_failures: false,
         retry_recovery_count: 1,
-        wasted_token_estimate: 'minor extra tokens',
         impact_verdict: 'minor',
       },
     }));
@@ -207,13 +207,105 @@ describe('tool success rate evaluator', () => {
     assert.ok(r.score! >= 50, `expected >=50, got ${r.score}`);
   });
 
-  it('case7: no tool calls -> 100', async () => {
+  it('case7: no tool calls -> 无分（不适用，不返回 100）', async () => {
     const r = await runToolSuccessRatePreset(USER, ctx({
       interactions: [],
       evaluatorContext: normalizeEvaluatorCaseContext({ schemaVersion: 1, availableTools: [] }),
     }));
-    assert.equal(r.score, 100);
-    assert.equal(r.verdict, 'pass');
+    assert.equal(r.score, undefined);
+    assert.match(r.summary ?? '', /无工具调用/);
+    assert.match(
+      ((r.evidence as { json?: { unscoredReason?: string } } | undefined)?.json?.unscoredReason) ?? '',
+      /无工具调用/,
+    );
+  });
+
+  it('全部调用无明确终态（未结束 + 未知）-> 无分（不判成功率）', async () => {
+    inject(JSON.stringify({
+      overall_reason: 'unknown states',
+      overall_success_rate: 100,
+      total_calls: 2,
+      successful_calls: 0,
+      failed_calls: 0,
+      per_tool_breakdown: [],
+      error_patterns: [],
+      failure_impact: { critical_path_failures: false, retry_recovery_count: 0, impact_verdict: 'none' },
+    }));
+    const r = await runToolSuccessRatePreset(USER, ctx({
+      interactions: [{
+        role: 'assistant',
+        tool_calls: [
+          { id: 'u1', name: 'search', arguments: '{}' },
+          { id: 'u2', name: 'read', arguments: '{}', state: 'pending' },
+        ],
+      }],
+      evaluatorContext: normalizeEvaluatorCaseContext({ schemaVersion: 1, availableTools: [{ name: 'search' }, { name: 'read' }] }),
+    }));
+    assert.equal(r.score, undefined);
+    assert.match(r.summary ?? '', /无明确终态/);
+  });
+
+  it('未知状态排除出成功率分母，不当作成功', async () => {
+    // 1 次 completed + 1 次未知 + 1 次 error → 明确状态 2 次（1 成功 1 失败）= 50%
+    inject(JSON.stringify({
+      overall_reason: 'one unknown excluded',
+      overall_success_rate: 50,
+      total_calls: 3,
+      successful_calls: 1,
+      failed_calls: 1,
+      per_tool_breakdown: [{ tool_name: 'search', total: 3, success: 1, fail: 1, failure_rate_pct: 50 }],
+      error_patterns: [],
+      failure_impact: { critical_path_failures: false, retry_recovery_count: 0, impact_verdict: 'none' },
+    }));
+    const r = await runToolSuccessRatePreset(USER, ctx({
+      interactions: [{
+        role: 'assistant',
+        tool_calls: [
+          { id: 'a', name: 'search', arguments: '{}', state: 'completed' },
+          { id: 'b', name: 'search', arguments: '{}' },
+          { id: 'c', name: 'search', arguments: '{}', state: 'error' },
+        ],
+      }],
+      evaluatorContext: normalizeEvaluatorCaseContext({ schemaVersion: 1, availableTools: [{ name: 'search' }] }),
+    }));
+    // 评分点「整体成功率」应反映 50%（1 成功 / 2 明确状态），未知状态排除
+    const ratePoint = r.points?.find((p) => p.label === '整体成功率');
+    assert.equal(ratePoint?.score, 50);
+    assert.match((ratePoint?.evidence as { md?: string } | undefined)?.md ?? '', /1\/2 成功/);
+    // reason 里应标注有 1 次状态未知
+    const md = (r.evidence as { md?: string } | undefined)?.md ?? '';
+    assert.match(md, /1 次状态未知/);
+  });
+
+  it('四分类：成功/失败/未结束/未知 分别统计，未结束与未知都不进分母', async () => {
+    // 1 completed + 1 error + 1 pending + 1 缺失 → 明确 2 次（1 成功 1 失败），未结束 1，未知 1
+    inject(JSON.stringify({
+      overall_reason: 'four-way classification',
+      overall_success_rate: 50,
+      total_calls: 4,
+      successful_calls: 1,
+      failed_calls: 1,
+      per_tool_breakdown: [{ tool_name: 'search', total: 4, success: 1, fail: 1, failure_rate_pct: 50 }],
+      error_patterns: [],
+      failure_impact: { critical_path_failures: false, retry_recovery_count: 0, impact_verdict: 'none' },
+    }));
+    const r = await runToolSuccessRatePreset(USER, ctx({
+      interactions: [{
+        role: 'assistant',
+        tool_calls: [
+          { id: 'a', name: 'search', arguments: '{}', state: 'completed' },
+          { id: 'b', name: 'search', arguments: '{}', state: 'error' },
+          { id: 'c', name: 'search', arguments: '{}', state: 'pending' },
+          { id: 'd', name: 'search', arguments: '{}' },
+        ],
+      }],
+      evaluatorContext: normalizeEvaluatorCaseContext({ schemaVersion: 1, availableTools: [{ name: 'search' }] }),
+    }));
+    const ratePoint = r.points?.find((p) => p.label === '整体成功率');
+    assert.equal(ratePoint?.score, 50);
+    const md = (ratePoint?.evidence as { md?: string } | undefined)?.md ?? '';
+    assert.match(md, /1 次未结束/);
+    assert.match(md, /1 次状态未知/);
   });
 
   it('case8: failures on non-critical path -> >=80', async () => {
@@ -297,7 +389,6 @@ describe('tool success rate evaluator', () => {
       failure_impact: {
         critical_path_failures: false,
         retry_recovery_count: 1,
-        wasted_token_estimate: 'one extra call',
         impact_verdict: 'minor',
       },
     }));
@@ -346,8 +437,66 @@ describe('tool success rate evaluator', () => {
   });
 
   it('missing evaluatorContext -> still works (no tool catalog required)', async () => {
+    // 无工具调用时返回无分（不适用），但不因缺失目录报错
     const r = await runToolSuccessRatePreset(USER, ctx({ evaluatorContext: null }));
-    assert.equal(r.score, 100);
-    assert.equal(r.verdict, 'pass');
+    assert.equal(r.score, undefined);
+  });
+
+  it('judge 幻觉工具名（不在真实轨迹）→ fail-fast', async () => {
+    inject(JSON.stringify({
+      overall_reason: 'hallucinated tool name',
+      overall_success_rate: 50,
+      total_calls: 2,
+      successful_calls: 1,
+      failed_calls: 1,
+      per_tool_breakdown: [{ tool_name: 'search', total: 2, success: 1, fail: 1, failure_rate_pct: 50 }],
+      error_patterns: [
+        { error_code: 'timeout', tool_name: 'not_called_tool', count: 1, pattern: 'invented' },
+      ],
+      failure_impact: {
+        critical_path_failures: false,
+        retry_recovery_count: 0,
+        impact_verdict: 'minor',
+      },
+    }));
+    await assert.rejects(
+      runToolSuccessRatePreset(USER, ctx({
+        interactions: [interactionWithToolCalls([
+          { name: 'search', state: 'error' },
+          { name: 'search', state: 'completed' },
+        ])],
+        evaluatorContext: normalizeEvaluatorCaseContext({ schemaVersion: 1, availableTools: [{ name: 'search' }] }),
+      })),
+      JudgeOutputParseError,
+    );
+  });
+
+  it('judge 错误计数超过真实失败次数 → fail-fast', async () => {
+    inject(JSON.stringify({
+      overall_reason: 'inflated error count',
+      overall_success_rate: 50,
+      total_calls: 2,
+      successful_calls: 1,
+      failed_calls: 1,
+      per_tool_breakdown: [{ tool_name: 'search', total: 2, success: 1, fail: 1, failure_rate_pct: 50 }],
+      error_patterns: [
+        { error_code: 'timeout', tool_name: 'search', count: 5, pattern: 'inflated' },
+      ],
+      failure_impact: {
+        critical_path_failures: false,
+        retry_recovery_count: 0,
+        impact_verdict: 'minor',
+      },
+    }));
+    await assert.rejects(
+      runToolSuccessRatePreset(USER, ctx({
+        interactions: [interactionWithToolCalls([
+          { name: 'search', state: 'error' },
+          { name: 'search', state: 'completed' },
+        ])],
+        evaluatorContext: normalizeEvaluatorCaseContext({ schemaVersion: 1, availableTools: [{ name: 'search' }] }),
+      })),
+      JudgeOutputParseError,
+    );
   });
 });
