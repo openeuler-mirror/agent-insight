@@ -1,3 +1,5 @@
+import { settleProcessBlocks } from './process-block-state';
+
 /**
  * 流式 SSE 事件 → 持久化 Block[] 镜像。
  *
@@ -115,8 +117,11 @@ export function createBlockMirror(
       else blocks[idx] = { ...blocks[idx], ...next };
     } else if (mode === 'warning') {
       blocks.push({ kind: 'warning', id: `warning_${blocks.length}`, text: String(payload?.message || payload || '') });
+    } else if (mode === 'done' || mode === 'error') {
+      const settled = settleProcessBlocks(blocks, mode === 'done' ? 'complete' : 'error');
+      blocks.splice(0, blocks.length, ...settled);
     }
-    // 'vfs_patch' / 'done' / 'error' 是运行时事件，不入持久化数组。
+    // 'vfs_patch' 是运行时事件，不入持久化数组。
   };
   return { send, getBlocks: () => blocks };
 }
