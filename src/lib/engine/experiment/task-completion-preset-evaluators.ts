@@ -43,13 +43,19 @@ const taskCompletionJudgeSchema = z.object({
   overall_reason: z.string().min(1),
   inferred_requirements: z.array(requirementSchema),
   requirement_results: z.array(requirementResultSchema),
-  explicit_completion_score: z.number().min(0).max(100),
-  implicit_constraint_score: z.number().min(0).max(100),
-  information_sufficiency_score: z.number().min(0).max(100),
+  information_sufficiency: z.enum(['sufficient', 'mostly_sufficient', 'insufficient', 'severely_insufficient']),
   overall_analysis: z.string(),
 });
 
 type TaskCompletionJudgeResult = z.infer<typeof taskCompletionJudgeSchema>;
+
+/** 信息充分性离散档位 → 固定分数（LLM 不给连续分，代码统一映射）。 */
+const INFORMATION_SUFFICIENCY_SCORE = {
+  sufficient: 100,
+  mostly_sufficient: 80,
+  insufficient: 50,
+  severely_insufficient: 20,
+} as const;
 
 // ── Prompt ────────────────────────────────────────────────────────────────────
 
@@ -62,16 +68,25 @@ function buildPrompt(ctx: FaithfulPresetContext): { system: string; user: string
 - business_must_have（业务必答点）：在该业务场景下必须覆盖的要素
 每条需求标注 confidence：high（高置信度）/ medium（中置信度）/ low（低置信度）
 
+**需求粒度规范**（重要，评分按覆盖比例计算，拆分粒度会直接影响结果）：
+- 每条需求应是「单一、可独立判定」的原子要点，不要把多个独立要求合并成一条，也不要拆成碎片。
+- 粒度参照：一条显式需求 ≈ 用户输入里的一个独立指令/问题/约束；业务必答点 ≈ 一个不可再分的业务要素。
+- 只用 high 置信度标记你确信必须覆盖的业务必答点；medium/low 置信度的必答点会被降级按隐含约束计分。
+
 **第二阶段——逐条对齐**：将 Agent 输出与推断出的需求清单逐条对比，判定：
 - covered：Agent 输出明确满足了该需求
 - partially_covered：部分满足但不够完整
 - not_covered：未满足该需求
 - not_applicable：推断的需求在当前上下文中不适用
 
-**第三阶段——综合评分**，从以下三个维度计算：
-1. **显式需求完成度**：所有显式需求的完成比例
-2. **隐含约束满足度**：隐含的约束条件是否被满足（低置信度约束未满足扣分减半）
-3. **信息充分性与中立性**：回答在信息量和立场上是否适当
+**第三阶段——综合评分**，从以下三个维度计算（前两项由代码按逐条判定算分，你不需要给分）：
+1. **显式需求完成度**：所有显式需求（含 high 置信度业务必答点）的加权覆盖比例，not_applicable 不计入分母
+2. **隐含约束满足度**：隐含约束（含被降级的业务必答点）的加权覆盖比例，低置信度约束未满足扣分减半
+3. **信息充分性与中立性**：回答在信息量和立场上是否适当——**只给离散档位，不要给连续分**：
+   - sufficient：信息充分、立场中立，无明显缺失或偏向
+   - mostly_sufficient：基本充分，有少量缺失或轻微偏向
+   - insufficient：信息明显不足或存在明显偏向
+   - severely_insufficient：严重缺失关键信息或严重偏向
 
 关键判定规则：
 - 开放式创作任务（如"写首诗"）只要生成了合理且符合体裁的内容即可高分
@@ -107,9 +122,7 @@ ${ctx.actualOutput || '(未提供)'}
       "reason": "判定理由"
     }
   ],
-  "explicit_completion_score": 0-100,
-  "implicit_constraint_score": 0-100,
-  "information_sufficiency_score": 0-100,
+  "information_sufficiency": "sufficient/mostly_sufficient/insufficient/severely_insufficient",
   "overall_analysis": "综合分析说明"
 }
 \`\`\``;
@@ -120,11 +133,71 @@ ${ctx.actualOutput || '(未提供)'}
 // ── 计分逻辑 ──────────────────────────────────────────────────────────────────
 
 /**
+ * 校验推断需求清单与逐条判定结果一一对应。
+ * inferred_requirements 与 requirement_results 必须数量相同，且每条在
+ * content / type / confidence 上完全一致；否则是 judge 输出语义不完整，
+ * 直接判为契约错误，不能默认为满分。
+ */
+function crossCheckRequirements(judge: TaskCompletionJudgeResult): void {
+  const inferred = judge.inferred_requirements;
+  const results = judge.requirement_results;
+
+  if (inferred.length !== results.length) {
+    throw new JudgeOutputParseError(
+      `judge 推断需求 ${inferred.length} 条，但只判定 ${results.length} 条，两者必须一一对应`,
+      JSON.stringify(judge),
+    );
+  }
+
+  for (let i = 0; i < inferred.length; i++) {
+    const a = inferred[i];
+    const b = results[i];
+    if (a.content !== b.content || a.type !== b.type || a.confidence !== b.confidence) {
+      throw new JudgeOutputParseError(
+        `judge 第 ${i + 1} 条需求的判定与推断不匹配` +
+          `（推断: ${a.type}/${a.confidence}/${a.content}；判定: ${b.type}/${b.confidence}/${b.content}）`,
+        JSON.stringify(judge),
+      );
+    }
+  }
+}
+
+/**
+ * 按适用需求的加权覆盖比例计分（0-100）。
+ * - not_applicable 排除分母；
+ * - covered=1.0 / partially_covered=0.5 / not_covered=0；
+ * - honorLowConfidenceHalf 时，低置信度的 not_covered 权重 0.5（扣分减半）。
+ * - 无适用需求 → 100（不因「没有需求可评」而扣分）。
+ */
+function coverageScore(
+  reqs: Array<{ verdict: string; confidence: 'high' | 'medium' | 'low' }>,
+  honorLowConfidenceHalf = false,
+): number {
+  const applicable = reqs.filter((r) => r.verdict !== 'not_applicable');
+  if (applicable.length === 0) return 100;
+  let earned = 0;
+  for (const r of applicable) {
+    if (r.verdict === 'covered') {
+      earned += 1;
+    } else if (r.verdict === 'partially_covered') {
+      earned += 0.5;
+    } else if (r.verdict === 'not_covered') {
+      if (honorLowConfidenceHalf && r.confidence === 'low') earned += 0.5;
+    }
+  }
+  return Math.round((earned / applicable.length) * 100);
+}
+
+/**
  * 按规格计算得分（代码控制，不让 LLM 自由打 0-100）。
  *
  * 规则：
- * - 显式需求每遗漏一条扣 20（规格 15~25 取中值），最低 0
- * - 隐含约束：低置信度未满足扣分减半
+ * - 显式需求（含业务必答点）：按适用需求的加权覆盖比例计分，not_applicable 排除分母。
+ *   covered=1.0 / partially_covered=0.5 / not_covered=0。比例制对需求拆分粒度稳定——
+ *   1/2 未完成（50%）与 4/20 未完成（80%）得分不同，不会因拆分条数不同而漂移。
+ * - business_must_have 是模型自行推断的必答点，仅 high 置信度计入显式分；
+ *   medium/low 置信度的必答点降级为隐含约束（其权重与扣分按隐含口径）。
+ * - 隐含约束：低置信度未满足扣分减半（低置信度 not_covered 权重 0.5 而非 0）。
  * - 信息充分性：LLM 离散判断（充分/基本充分/不足/明显不足）→ 固定分数
  * - 最终加权：显式 0.5 + 隐含 0.3 + 信息充分性 0.2
  */
@@ -137,31 +210,20 @@ function computeScore(judge: TaskCompletionJudgeResult): {
 } {
   const allReqs = judge.requirement_results;
 
-  // 显式需求：每遗漏一条扣 20，partial 扣 10；全部未覆盖直接 0
-  const explicitReqs = allReqs.filter((r) => r.type === 'explicit' || r.type === 'business_must_have');
-  const notCoveredExplicit = explicitReqs.filter((r) => r.verdict === 'not_covered').length;
-  const partialExplicit = explicitReqs.filter((r) => r.verdict === 'partially_covered').length;
-  const allExplicitNotCovered = explicitReqs.length > 0 && notCoveredExplicit === explicitReqs.length;
-  const explicitScore = allExplicitNotCovered
-    ? 0
-    : explicitReqs.length === 0
-      ? 100
-      : Math.max(0, 100 - notCoveredExplicit * 20 - partialExplicit * 10);
+  // 显式需求：explicit + 仅 high 置信度的 business_must_have
+  const explicitReqs = allReqs.filter(
+    (r) => r.type === 'explicit' || (r.type === 'business_must_have' && r.confidence === 'high'),
+  );
+  const explicitScore = coverageScore(explicitReqs);
 
-  // 隐含约束：低置信度未满足扣 10，高/中置信度未满足扣 20，partial 扣 10
-  const implicitReqs = allReqs.filter((r) => r.type === 'implicit');
-  let implicitDeduction = 0;
-  for (const r of implicitReqs) {
-    if (r.verdict === 'not_covered') {
-      implicitDeduction += r.confidence === 'low' ? 10 : 20;
-    } else if (r.verdict === 'partially_covered') {
-      implicitDeduction += 10;
-    }
-  }
-  const implicitScore = implicitReqs.length === 0 ? 100 : Math.max(0, 100 - implicitDeduction);
+  // 隐含约束：implicit + 非 high 置信度的 business_must_have（降级）
+  const implicitReqs = allReqs.filter(
+    (r) => r.type === 'implicit' || (r.type === 'business_must_have' && r.confidence !== 'high'),
+  );
+  const implicitScore = coverageScore(implicitReqs, /* honorLowConfidenceHalf */ true);
 
-  // 信息充分性：LLM 已给 score，直接用
-  const infoScore = judge.information_sufficiency_score;
+  // 信息充分性：LLM 给离散档位，代码映射到固定分数
+  const infoScore = INFORMATION_SUFFICIENCY_SCORE[judge.information_sufficiency];
 
   // 加权总分
   const score = Math.round(explicitScore * 0.5 + implicitScore * 0.3 + infoScore * 0.2);
@@ -179,7 +241,11 @@ function computeScore(judge: TaskCompletionJudgeResult): {
   reasonParts.push('');
   const typeLabel: Record<string, string> = { explicit: '显式需求', implicit: '隐含约束', business_must_have: '业务必答点' };
   for (const r of allResults) {
-    const typeName = typeLabel[r.type] || r.type;
+    let typeName = typeLabel[r.type] || r.type;
+    // 非 high 置信度的业务必答点降级按隐含口径计分，明细里标注清楚
+    if (r.type === 'business_must_have' && r.confidence !== 'high') {
+      typeName = '业务必答点（降级为隐含约束）';
+    }
     const conf = r.confidence !== 'high' ? ` (置信度: ${r.confidence})` : '';
     const mark = verdictMark(r.verdict);
     reasonParts.push(`- ${mark} [${typeName}]${conf} ${r.content} —— ${r.reason}`);
@@ -210,9 +276,9 @@ function computeScore(judge: TaskCompletionJudgeResult): {
 
   const points: EvalPoint[] = [];
 
-  // 评分点1：显式需求完成度（包含 explicit + business_must_have）
+  // 评分点1：显式需求完成度（explicit + 仅 high 置信度的 business_must_have）
   const allExplicitReqs = judge.requirement_results.filter(
-    (r) => r.type === 'explicit' || r.type === 'business_must_have',
+    (r) => r.type === 'explicit' || (r.type === 'business_must_have' && r.confidence === 'high'),
   );
   if (allExplicitReqs.length > 0) {
     const lines = allExplicitReqs.map((r) => {
@@ -312,6 +378,8 @@ export async function runTaskCompletionNoRefPreset(
     throw new JudgeOutputParseError(`judge 输出不符合契约: ${details}`, rawText);
   }
 
+  crossCheckRequirements(result.data);
+
   const { score, points, summary, reason, verdict } = computeScore(result.data);
 
   return normalizeEvaluatorOutput({
@@ -323,9 +391,7 @@ export async function runTaskCompletionNoRefPreset(
       md: reason,
       json: {
         rubricVersion: '1.0.0',
-        explicitCompletionScore: result.data.explicit_completion_score,
-        implicitConstraintScore: result.data.implicit_constraint_score,
-        informationSufficiencyScore: result.data.information_sufficiency_score,
+        informationSufficiency: result.data.information_sufficiency,
         requirements: result.data.requirement_results,
       },
     },

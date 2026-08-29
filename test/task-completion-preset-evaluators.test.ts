@@ -6,6 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { setJudgeLlmCallerForTest } from '../src/lib/engine/experiment/judge-llm';
+import { JudgeOutputParseError } from '../src/lib/evaluators/judge-assembly';
 import {
   runTaskCompletionNoRef,
 } from '../src/lib/engine/experiment/task-completion-preset-evaluators';
@@ -32,9 +33,7 @@ function inject(json: string) {
 
 function buildJudgeResult(overrides: {
   overall_reason?: string;
-  explicit_completion_score?: number;
-  implicit_constraint_score?: number;
-  information_sufficiency_score?: number;
+  information_sufficiency?: 'sufficient' | 'mostly_sufficient' | 'insufficient' | 'severely_insufficient';
   requirement_results?: Array<{
     content: string;
     type: 'explicit' | 'implicit' | 'business_must_have';
@@ -48,9 +47,7 @@ function buildJudgeResult(overrides: {
     overall_reason: overrides.overall_reason ?? '任务完成度评估结果。',
     inferred_requirements: overrides.requirement_results ?? [],
     requirement_results: overrides.requirement_results ?? [],
-    explicit_completion_score: overrides.explicit_completion_score ?? 100,
-    implicit_constraint_score: overrides.implicit_constraint_score ?? 100,
-    information_sufficiency_score: overrides.information_sufficiency_score ?? 100,
+    information_sufficiency: overrides.information_sufficiency ?? 'sufficient',
     overall_analysis: overrides.overall_analysis ?? '综合分析。',
   });
 }
@@ -61,9 +58,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例1: 显式需求和隐含约束均满足 → ≥90', async () => {
     inject(buildJudgeResult({
       overall_reason: '邮件通知完整，时间、语气、格式均符合要求。',
-      explicit_completion_score: 100,
-      implicit_constraint_score: 95,
-      information_sufficiency_score: 95,
+      information_sufficiency: 'sufficient',
       requirement_results: [
         { content: '通知会议改期', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '明确说明了时间变更' },
         { content: '写明新时间（周三下午两点）', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '时间明确' },
@@ -84,9 +79,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例2: 显式需求遗漏 → ≤50', async () => {
     inject(buildJudgeResult({
       overall_reason: '未完成对比推荐，显式需求遗漏。',
-      explicit_completion_score: 30,
-      implicit_constraint_score: 60,
-      information_sufficiency_score: 60,
+      information_sufficiency: 'insufficient',
       requirement_results: [
         { content: '查询北京天气', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '已提供' },
         { content: '查询上海天气', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '仅提供了气温，不完整' },
@@ -99,17 +92,15 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
     ));
     // explicit: 2 not_covered → 100-40=60 → 60*0.5=30
     // implicit: 0 → 100*0.3=30
-    // info: 60 → 60*0.2=12
-    // total: 30+30+12=72
+    // info: insufficient → 50*0.2=10
+    // total: 30+30+10=70
     assert.ok(r.score! <= 80, `expected <=80, got ${r.score}`);
   });
 
   it('用例3: 开放式任务但明显不合理 → ≤40', async () => {
     inject(buildJudgeResult({
       overall_reason: '推荐内容质量低下，推荐理由浮夸。',
-      explicit_completion_score: 50,
-      implicit_constraint_score: 20,
-      information_sufficiency_score: 20,
+      information_sufficiency: 'severely_insufficient',
       requirement_results: [
         { content: '推荐一本书', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '推荐了低质书籍，实际未满足' },
         { content: '推荐有质量的书', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '推荐内容低质' },
@@ -122,7 +113,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
     ));
     // explicit: 1 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
     // implicit: 2 not_covered (high) → 100-40=60 → 60*0.3=18
-    // info: 20 → 20*0.2=4
+    // info: severely_insufficient → 20*0.2=4
     // total: 0+18+4=22
     assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
   });
@@ -130,9 +121,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例4: 高度开放任务 → ≥90', async () => {
     inject(buildJudgeResult({
       overall_reason: '生成的五言绝句符合体裁要求，有意境，押韵合理。',
-      explicit_completion_score: 100,
-      implicit_constraint_score: 95,
-      information_sufficiency_score: 95,
+      information_sufficiency: 'sufficient',
       requirement_results: [
         { content: '写一首诗', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '已生成诗歌' },
         { content: '符合诗歌体裁', type: 'implicit', confidence: 'high', verdict: 'covered', reason: '五言绝句格式正确' },
@@ -149,9 +138,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例5: 隐含约束违反——价格范围 → ≤40', async () => {
     inject(buildJudgeResult({
       overall_reason: '推荐价格远超大学生预算范围。',
-      explicit_completion_score: 50,
-      implicit_constraint_score: 10,
-      information_sufficiency_score: 30,
+      information_sufficiency: 'severely_insufficient',
       requirement_results: [
         { content: '推荐笔记本电脑', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '推荐了不合适的商务本' },
         { content: '适合大学生', type: 'implicit', confidence: 'high', verdict: 'not_covered', reason: '推荐了高端商务本' },
@@ -164,17 +151,15 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
     ));
     // explicit: 1 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
     // implicit: 2 not_covered (high) → 100-40=60 → 60*0.3=18
-    // info: 30 → 30*0.2=6
-    // total: 0+18+6=24
+    // info: severely_insufficient → 20*0.2=4
+    // total: 0+18+4=22
     assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
   });
 
   it('用例6: 低置信度约束未满足不严重扣分 → ≥70', async () => {
     inject(buildJudgeResult({
       overall_reason: '推荐了热映大片，虽未区分类型但整体质量可接受。',
-      explicit_completion_score: 95,
-      implicit_constraint_score: 80,
-      information_sufficiency_score: 85,
+      information_sufficiency: 'mostly_sufficient',
       requirement_results: [
         { content: '推荐好看的电影', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '推荐了热映大片' },
         { content: '按类型区分', type: 'implicit', confidence: 'low', verdict: 'not_covered', reason: '未区分类型' },
@@ -190,9 +175,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例7: 多轮对话上下文依赖 → 100', async () => {
     inject(buildJudgeResult({
       overall_reason: '正确利用对话历史中的科幻偏好信息，推荐精准。',
-      explicit_completion_score: 100,
-      implicit_constraint_score: 100,
-      information_sufficiency_score: 100,
+      information_sufficiency: 'sufficient',
       requirement_results: [
         { content: '推荐其他书籍', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '推荐了科幻经典' },
         { content: '推荐科幻类（利用前文上下文）', type: 'implicit', confidence: 'high', verdict: 'covered', reason: '正确识别了用户偏好' },
@@ -208,9 +191,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例8: 信息充分性不足——过于片面 → ≤50', async () => {
     inject(buildJudgeResult({
       overall_reason: '回答存在明显偏向性，未客观对比两种语言。',
-      explicit_completion_score: 50,
-      implicit_constraint_score: 60,
-      information_sufficiency_score: 10,
+      information_sufficiency: 'severely_insufficient',
       requirement_results: [
         { content: '列出Java优缺点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '只提了缺点，未提优点' },
         { content: '列出Python优缺点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '只提了优点，未提缺点' },
@@ -224,17 +205,15 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
     ));
     // explicit: 3 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
     // implicit: 1 not_covered (high) → 100-20=80 → 80*0.3=24
-    // info: 10 → 10*0.2=2
-    // total: 0+24+2=26
+    // info: severely_insufficient → 20*0.2=4
+    // total: 0+24+4=28
     assert.ok(r.score! <= 50, `expected <=50, got ${r.score}`);
   });
 
   it('用例9: 用户输入模糊 → ≥80', async () => {
     inject(buildJudgeResult({
       overall_reason: '输入模糊时合理请求澄清是最佳回应。',
-      explicit_completion_score: 90,
-      implicit_constraint_score: 90,
-      information_sufficiency_score: 90,
+      information_sufficiency: 'sufficient',
       requirement_results: [
         { content: '处理用户请求', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '请求了澄清' },
         { content: '识别模糊输入', type: 'implicit', confidence: 'high', verdict: 'covered', reason: '正确识别输入模糊' },
@@ -257,9 +236,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
     }));
     inject(buildJudgeResult({
       overall_reason: '逐一回答了全部8个问题，结构清晰。',
-      explicit_completion_score: 100,
-      implicit_constraint_score: 100,
-      information_sufficiency_score: 100,
+      information_sufficiency: 'sufficient',
       requirement_results: reqs,
     }));
     const r = await runTaskCompletionNoRef(USER, ctx(
@@ -272,9 +249,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例11: 隐含了情绪需求 → ≥85', async () => {
     inject(buildJudgeResult({
       overall_reason: '先回应情绪再解决问题，处理得当。',
-      explicit_completion_score: 90,
-      implicit_constraint_score: 90,
-      information_sufficiency_score: 90,
+      information_sufficiency: 'sufficient',
       requirement_results: [
         { content: '解决系统问题', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '询问了具体问题' },
         { content: '回应情绪', type: 'implicit', confidence: 'high', verdict: 'covered', reason: '表达了理解和歉意' },
@@ -290,9 +265,7 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
   it('用例12: 多重遗漏叠加 → ≤40', async () => {
     inject(buildJudgeResult({
       overall_reason: '遗漏关键点、多列行动项、格式约束被违反。',
-      explicit_completion_score: 20,
-      implicit_constraint_score: 50,
-      information_sufficiency_score: 30,
+      information_sufficiency: 'severely_insufficient',
       requirement_results: [
         { content: '总结文档', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '使用了段落而非要求的格式' },
         { content: '列出三个关键点', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '仅列了2个' },
@@ -307,24 +280,159 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
     ));
     // explicit: 4 not_covered → allExplicitNotCovered → 0 → 0*0.5=0
     // implicit: 1 not_covered (high) → 100-20=80 → 80*0.3=24
-    // info: 30 → 30*0.2=6
-    // total: 0+24+6=30
+    // info: severely_insufficient → 20*0.2=4
+    // total: 0+24+4=28
     assert.ok(r.score! <= 40, `expected <=40, got ${r.score}`);
+  });
+
+  it('推断需求与判定结果不一致时 fail-fast（不默认满分）', async () => {
+    // 复现：模型推断出 1 条未完成的显式需求，但漏掉判定项 → 必须抛契约错误而非 100 分
+    inject(JSON.stringify({
+      overall_reason: '漏掉判定项',
+      inferred_requirements: [
+        { content: '查询天气', type: 'explicit', confidence: 'high' },
+      ],
+      requirement_results: [],
+      information_sufficiency: 'sufficient',
+      overall_analysis: '综合分析。',
+    }));
+    await assert.rejects(
+      runTaskCompletionNoRef(USER, ctx('查天气', '晴天')),
+      JudgeOutputParseError,
+    );
+  });
+
+  it('推断需求与判定结果条数/内容不匹配时 fail-fast', async () => {
+    inject(JSON.stringify({
+      overall_reason: '内容不匹配',
+      inferred_requirements: [
+        { content: '查询天气', type: 'explicit', confidence: 'high' },
+      ],
+      requirement_results: [
+        { content: '查询天气', type: 'explicit', confidence: 'low', verdict: 'covered', reason: 'x' },
+      ],
+      information_sufficiency: 'sufficient',
+      overall_analysis: '综合分析。',
+    }));
+    await assert.rejects(
+      runTaskCompletionNoRef(USER, ctx('查天气', '晴天')),
+      JudgeOutputParseError,
+    );
   });
 
   it('破坏验证：分数不为常量', async () => {
     inject(buildJudgeResult({
       overall_reason: '部分完成',
-      explicit_completion_score: 60,
-      implicit_constraint_score: 70,
-      information_sufficiency_score: 65,
+      information_sufficiency: 'insufficient',
       requirement_results: [
         { content: '需求1', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '已完成' },
         { content: '需求2', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '未完成' },
       ],
     }));
     const r = await runTaskCompletionNoRef(USER, ctx('测试', '输出'));
-    // 60*0.5 + 70*0.3 + 65*0.2 = 30 + 21 + 13 = 64
+    // explicit: 1 not_covered → 80 → 80*0.5=40
+    // implicit: 0 → 100*0.3=30
+    // info: insufficient → 50*0.2=10
+    // total: 40+30+10=80
     assert.ok(r.score! > 0 && r.score! < 100, `expected non-trivial score, got ${r.score}`);
+  });
+
+  it('信息充分性档位映射到固定分数，LLM 不参与连续打分', async () => {
+    // 4 档映射：sufficient=100 / mostly_sufficient=80 / insufficient=50 / severely_insufficient=20
+    const assertInfoScore = async (level: string, expectedInfoScore: number) => {
+      inject(buildJudgeResult({
+        overall_reason: '档位映射验证',
+        information_sufficiency: level as 'sufficient',
+        requirement_results: [
+          { content: '需求1', type: 'explicit', confidence: 'high', verdict: 'covered', reason: '完成' },
+        ],
+      }));
+      const r = await runTaskCompletionNoRef(USER, ctx('测试', '输出'));
+      const infoPoint = r.points?.find((p) => p.label === '信息充分性与中立性');
+      assert.equal(infoPoint?.score, expectedInfoScore, `${level} 应映射为 ${expectedInfoScore}`);
+    };
+    await assertInfoScore('sufficient', 100);
+    await assertInfoScore('mostly_sufficient', 80);
+    await assertInfoScore('insufficient', 50);
+    await assertInfoScore('severely_insufficient', 20);
+  });
+
+  it('连续分字段或非法档位被拒（不再接受 information_sufficiency_score）', async () => {
+    // 旧契约的连续分字段 + 非法档位 → schema 校验失败
+    inject(JSON.stringify({
+      overall_reason: '旧契约',
+      inferred_requirements: [],
+      requirement_results: [],
+      information_sufficiency_score: 100,
+      information_sufficiency: 'not_a_real_level',
+      overall_analysis: 'x',
+    }));
+    await assert.rejects(
+      runTaskCompletionNoRef(USER, ctx('测试', '输出')),
+      JudgeOutputParseError,
+    );
+  });
+
+  it('显式需求按覆盖比例计分，对拆分粒度稳定', async () => {
+    // 同一覆盖比例（50%）无论拆成 2 条还是 4 条，显式分相同
+    const explicitScoreOf = async (results: Array<{
+      content: string; verdict: 'covered' | 'not_covered';
+    }>) => {
+      inject(buildJudgeResult({
+        overall_reason: '粒度稳定性',
+        information_sufficiency: 'sufficient',
+        requirement_results: results.map((r) => ({
+          content: r.content, type: 'explicit', confidence: 'high', verdict: r.verdict, reason: 'x',
+        })),
+      }));
+      const r = await runTaskCompletionNoRef(USER, ctx('测试', '输出'));
+      return r.points?.find((p) => p.label === '显式需求完成度')?.score;
+    };
+    // 2 条：1 covered + 1 not_covered = 50%
+    const twoReqs = await explicitScoreOf([
+      { content: 'a', verdict: 'covered' },
+      { content: 'b', verdict: 'not_covered' },
+    ]);
+    // 4 条：2 covered + 2 not_covered = 50%
+    const fourReqs = await explicitScoreOf([
+      { content: 'a', verdict: 'covered' },
+      { content: 'b', verdict: 'covered' },
+      { content: 'c', verdict: 'not_covered' },
+      { content: 'd', verdict: 'not_covered' },
+    ]);
+    assert.equal(twoReqs, 50);
+    assert.equal(fourReqs, 50);
+  });
+
+  it('not_applicable 排除出分母', async () => {
+    // 2 条适用（1 covered + 1 not_covered = 50%），另有 1 条 not_applicable 不应拉低覆盖比例
+    inject(buildJudgeResult({
+      overall_reason: '不适用排除分母',
+      information_sufficiency: 'sufficient',
+      requirement_results: [
+        { content: 'a', type: 'explicit', confidence: 'high', verdict: 'covered', reason: 'x' },
+        { content: 'b', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: 'x' },
+        { content: 'c', type: 'explicit', confidence: 'high', verdict: 'not_applicable', reason: 'x' },
+      ],
+    }));
+    const r = await runTaskCompletionNoRef(USER, ctx('测试', '输出'));
+    const explicitPoint = r.points?.find((p) => p.label === '显式需求完成度');
+    assert.equal(explicitPoint?.score, 50);
+  });
+
+  it('非 high 置信度的业务必答点降级为隐含约束，不进入显式分', async () => {
+    // business_must_have(medium) 被 not_covered → 不应影响显式分（显式分只含 high 必答点）
+    inject(buildJudgeResult({
+      overall_reason: '必答点置信度门控',
+      information_sufficiency: 'sufficient',
+      requirement_results: [
+        { content: 'e1', type: 'explicit', confidence: 'high', verdict: 'covered', reason: 'x' },
+        { content: 'bm', type: 'business_must_have', confidence: 'medium', verdict: 'not_covered', reason: 'x' },
+      ],
+    }));
+    const r = await runTaskCompletionNoRef(USER, ctx('测试', '输出'));
+    const explicitPoint = r.points?.find((p) => p.label === '显式需求完成度');
+    // 显式分只含 e1（covered）→ 100
+    assert.equal(explicitPoint?.score, 100);
   });
 });
