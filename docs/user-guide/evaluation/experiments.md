@@ -151,6 +151,7 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 ## 查看实验详情
 
 实验详情用于查看整个实验的运行状态和聚合结果。
+点击实验详情内容区域左上方的 **返回实验列表**，可以回到实验记录列表。
 
 <p align="center">
   <img src="../../images/agent/evaluation/eval_experiment_detail.png" alt="已完成实验详情，包含状态、综合均分、评估器分解、Case 明细和实验级评论" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
