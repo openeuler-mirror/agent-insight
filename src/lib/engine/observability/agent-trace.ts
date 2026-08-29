@@ -84,6 +84,9 @@ export interface RawInteraction {
     finish_reason?: string;
     stop_reason?: string;
     latency?: number;
+    status?: string;
+    error_summary?: string;
+    error?: string | { message?: string; [k: string]: unknown };
     // OpenCode-specific message metadata (added by uploader on top of the wire payload):
     //   mode === 'compaction' + summary === true  →  compaction-summary message
     //   parts: [{ type: 'compaction' }]            →  compaction-trigger user message
