@@ -7,6 +7,7 @@ DEFAULT_SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 SOURCE_DIR="${DEFAULT_SOURCE_DIR}"
 OUTPUT_DIR=""
+WORK_DIR=""
 PACKAGE_RELEASE=""
 RUN_TESTS=1
 INSTALL_DEPS=1
@@ -14,7 +15,7 @@ NPM_REGISTRY=""
 PRISMA_ENGINES_MIRROR_OVERRIDE=""
 
 usage() {
-  sed -n '3,40p' "$0" | sed -n 's/^# \{0,1\}//p'
+  sed -n '3,42p' "$0" | sed -n 's/^# \{0,1\}//p'
 }
 
 # Build the current Git HEAD as an installable Agent Insight RPM.
@@ -24,7 +25,8 @@ usage() {
 #
 # Options:
 #   --source-dir DIR   Source repository (default: repository containing this script)
-#   --output-dir DIR   Build workspace and deliverables (default: SOURCE_DIR/rpm-out)
+#   --output-dir DIR   Build cache and deliverables (default: SOURCE_DIR/rpm-out)
+#   --work-dir DIR     Temporary RPM workspace (default: /var/tmp/agent-insight-rpm-work-UID)
 #   --release VALUE   RPM release (default: timestamp plus short commit)
 #   --skip-tests      Do not run the test suite during rpmbuild
 #   --no-install-deps Do not install missing RPM build tools with dnf
@@ -66,6 +68,11 @@ while [ "$#" -gt 0 ]; do
       OUTPUT_DIR="$2"
       shift 2
       ;;
+    --work-dir)
+      need_value "$@"
+      WORK_DIR="$2"
+      shift 2
+      ;;
     --release)
       need_value "$@"
       PACKAGE_RELEASE="$2"
@@ -105,6 +112,13 @@ SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-${SOURCE_DIR}/rpm-out}"
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+WORK_DIR="${WORK_DIR:-/var/tmp/agent-insight-rpm-work-$(id -u)}"
+mkdir -p "$WORK_DIR"
+WORK_DIR="$(cd "$WORK_DIR" && pwd)"
+
+if [[ "$WORK_DIR" == "$SOURCE_DIR" || "$WORK_DIR" == "$SOURCE_DIR"/* ]]; then
+  fail "RPM work directory must be outside the source tree to keep Next.js workspace detection stable: $WORK_DIR"
+fi
 
 git -C "$SOURCE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
   fail "not a Git repository: $SOURCE_DIR"
@@ -210,7 +224,7 @@ fi
 
 PACKAGE_NAME=agent-insight
 BUILD_ID="${RPM_VERSION}-${PACKAGE_RELEASE}.${RPM_ARCH}"
-BUILD_ROOT="${OUTPUT_DIR}/work/${BUILD_ID}"
+BUILD_ROOT="${WORK_DIR}/${BUILD_ID}"
 RPM_TOPDIR="${BUILD_ROOT}/rpmbuild"
 RPM_TMPDIR="${BUILD_ROOT}/tmp"
 NPM_CACHE="${OUTPUT_DIR}/cache/npm"
@@ -231,6 +245,8 @@ mkdir -p \
   "$RELEASE_DIR"
 
 info "Source: $SOURCE_DIR"
+info "Work directory: $WORK_DIR"
+info "Output directory: $OUTPUT_DIR"
 info "Git: $SOURCE_BRANCH $SOURCE_COMMIT"
 info "RPM: $PACKAGE_NAME-$RPM_VERSION-$PACKAGE_RELEASE.$RPM_ARCH"
 info "Build Node.js: $(node --version) at $BUILD_NODE_BIN"
@@ -665,21 +681,28 @@ SRPM_FILE="$(find "$RPM_TOPDIR/SRPMS" -maxdepth 1 -type f -name "${PACKAGE_NAME}
 [ -f "$SRPM_FILE" ] || fail "source RPM was not produced"
 
 info "Validating RPM contents"
-rpm -qip "$RPM_FILE" >/dev/null
-rpm -qpR "$RPM_FILE" >/dev/null
+rpm -qip "$RPM_FILE" >/dev/null || fail "unable to read binary RPM metadata: $RPM_FILE"
+rpm -qpR "$RPM_FILE" >/dev/null || fail "unable to read binary RPM dependencies: $RPM_FILE"
 PRISMA_BINARY_TARGET="$(grep -E '^Prisma RPM target: ' "$BUILD_LOG" | tail -n 1 | sed 's/^Prisma RPM target: //')"
 [ -n "$PRISMA_BINARY_TARGET" ] || fail "Prisma platform target was not recorded"
 BUNDLED_OPENCODE_VERSION="$(grep -E '^Bundled OpenCode: ' "$BUILD_LOG" | tail -n 1 | sed 's/^Bundled OpenCode: //')"
 [ -n "$BUNDLED_OPENCODE_VERSION" ] || fail "bundled OpenCode version was not recorded"
 RPM_FILE_LIST="$BUILD_ROOT/rpm-files.txt"
-rpm -qlp "$RPM_FILE" > "$RPM_FILE_LIST"
-grep -q "schema-engine-${PRISMA_BINARY_TARGET}$" "$RPM_FILE_LIST"
-grep -q "libquery_engine-${PRISMA_BINARY_TARGET}.so.node$" "$RPM_FILE_LIST"
-grep -q '^/usr/lib/agent-insight/node_modules/.bin/opencode$' "$RPM_FILE_LIST"
-grep -q '^/usr/lib/agent-insight/node_modules/opencode-ai/bin/opencode$' "$RPM_FILE_LIST"
-grep -q '^/usr/lib/agent-insight/node_modules/${OPENCODE_PLATFORM_PACKAGE}/bin/opencode$' "$RPM_FILE_LIST"
-grep -q '^/usr/libexec/agent-insight-node-setup$' "$RPM_FILE_LIST"
-grep -q '^/usr/libexec/agent-insight-service$' "$RPM_FILE_LIST"
+rpm -qlp "$RPM_FILE" > "$RPM_FILE_LIST" || fail "unable to list binary RPM contents: $RPM_FILE"
+grep -Fq "schema-engine-${PRISMA_BINARY_TARGET}" "$RPM_FILE_LIST" || \
+  fail "RPM is missing the Prisma schema engine for $PRISMA_BINARY_TARGET"
+grep -Fq "libquery_engine-${PRISMA_BINARY_TARGET}.so.node" "$RPM_FILE_LIST" || \
+  fail "RPM is missing the Prisma query engine for $PRISMA_BINARY_TARGET"
+grep -Fqx '/usr/lib/agent-insight/node_modules/.bin/opencode' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the OpenCode command entry"
+grep -Fqx '/usr/lib/agent-insight/node_modules/opencode-ai/bin/opencode' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the OpenCode launcher"
+grep -Fqx "/usr/lib/agent-insight/node_modules/${OPENCODE_PLATFORM_PACKAGE}/bin/opencode" "$RPM_FILE_LIST" || \
+  fail "RPM is missing the OpenCode native binary from $OPENCODE_PLATFORM_PACKAGE"
+grep -Fqx '/usr/libexec/agent-insight-node-setup' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the Node.js setup helper"
+grep -Fqx '/usr/libexec/agent-insight-service' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the service launcher"
 if grep -Eq '^/(root|home|mnt)/' "$RPM_FILE_LIST"; then
   fail "RPM contains a build-host path"
 fi
@@ -694,6 +717,7 @@ cat > "$RELEASE_DIR/BUILD-INFO.txt" <<BUILD_INFO
 source_dir=$SOURCE_DIR
 source_branch=$SOURCE_BRANCH
 source_commit=$SOURCE_COMMIT
+build_work_dir=$WORK_DIR
 package_name=$PACKAGE_NAME
 package_version=$RPM_VERSION
 package_release=$PACKAGE_RELEASE
