@@ -56,12 +56,28 @@ bash scripts/build-rpm.sh \
 | `--release VALUE` | 显式指定 RPM Release |
 | `--skip-tests` | 构建时跳过项目测试 |
 | `--no-install-deps` | 不通过 `dnf` 安装缺失的构建依赖 |
+| `--npm-registry URL` | 使用内部 npm 仓库，并替换 lockfile 中的 registry 主机 |
+| `--prisma-engines-mirror URL` | 使用内部 Prisma Engines 镜像 |
 
 查看完整帮助：
 
 ```bash
 bash scripts/build-rpm.sh --help
 ```
+
+脚本支持 `x86_64` 和 `aarch64`。在 openEuler ARM64 构建机上会自动生成 `aarch64` RPM，并校验包内存在 `opencode-linux-arm64`；不需要在脚本中写死 openEuler 软件源地址，缺少的 RPM 构建依赖通过机器当前已启用的 `dnf` 仓库安装。
+
+如果内部服务器不能访问公网 npm 或 Prisma 下载地址，可显式指定内部镜像：
+
+```bash
+bash scripts/build-rpm.sh \
+  --source-dir /path/to/agent-insight \
+  --output-dir /path/to/rpm-out \
+  --npm-registry http://<internal-npm-registry>/ \
+  --prisma-engines-mirror http://<internal-prisma-mirror>/
+```
+
+只配置了内部 openEuler RPM 软件源、但 npm 和 Prisma 下载仍可访问公网时，不需要传这两个镜像参数。
 
 ## 查看构建产物
 
@@ -80,7 +96,7 @@ bash scripts/build-rpm.sh --help
 └── SHA256SUMS
 ```
 
-`BUILD-INFO.txt` 记录源码目录、分支、commit、构建 Node.js/npm/OpenSSL 版本、架构和 Prisma binary target。后续代码 commit 更新后可以直接再次运行脚本，新 Release 不会覆盖旧产物。
+`BUILD-INFO.txt` 记录源码目录、分支、commit、构建 Node.js/npm/OpenSSL 版本、内置 OpenCode 版本、架构和 Prisma binary target。后续代码 commit 更新后可以直接再次运行脚本，新 Release 不会覆盖旧产物。
 
 项目测试失败时，失败结果会写入 `rpmbuild.log`，RPM 构建会继续。交付前应检查日志中的测试汇总，分别判断项目测试结果和 RPM 构建结果。
 
@@ -178,7 +194,7 @@ sudo dnf install -y --nogpgcheck ./agent-insight-<version>-<release>.<arch>.rpm
 3. 查找 root 和普通用户 NVM 目录中的 Node.js
 4. 执行真实版本检查，只接受 Node.js 20+
 
-如果系统路径中的 Node.js 可以由 `agent-insight` 用户直接运行，服务记录并使用它。如果 Node.js 位于 `/root/.nvm/` 等服务用户不能访问或不稳定的私有目录，安装脚本会把 Node 可执行文件复制到 `/var/lib/agent-insight/runtime/node`，不会创建指向私有目录的软链接，也不会修改用户全局的 `/usr/local/bin/node`。
+如果系统路径中的 Node.js 可以由 `agent-insight` 用户直接运行，服务记录并使用它。如果 Node.js 位于 `/root/.nvm/` 等服务用户不能访问或不稳定的私有目录，安装脚本会把 Node 可执行文件复制到 `/var/lib/agent-insight/runtime/node`，不会创建指向私有目录的软链接，也不会修改用户全局的 `/usr/local/bin/node`。systemd 服务会把该私有运行目录加入 `PATH`，确保 RPM 内置 OpenCode 的 `#!/usr/bin/env node` 启动入口也能找到同一套 Node.js。
 
 查看自动选择的路径和原始来源：
 
@@ -192,6 +208,16 @@ cat /var/lib/agent-insight/runtime/node-origin
 ```bash
 sudo -u agent-insight /usr/libexec/agent-insight-service check
 ```
+
+RPM 已包含与构建架构匹配的 OpenCode。继续以服务用户验证内置 OpenCode，不需要在目标机额外全局安装：
+
+```bash
+sudo -u agent-insight env \
+  PATH=/var/lib/agent-insight/runtime:/usr/lib/agent-insight/node_modules/.bin:/usr/local/bin:/usr/bin:/bin \
+  /usr/lib/agent-insight/node_modules/.bin/opencode --version
+```
+
+该命令应输出 OpenCode 版本号。构建脚本也会检查 npm 启动入口和 Linux 原生二进制是否进入 RPM，并把版本写入 `BUILD-INFO.txt` 的 `bundled_opencode` 字段。
 
 该命令成功输出版本后再启动服务。如果安装 RPM 时机器上完全没有 Node.js 20+，可以在之后安装 Node.js，再重新执行发现工具：
 
@@ -284,5 +310,6 @@ Prisma 引擎按构建机环境选择，RPM 适合部署到以下条件相近的
 - Linux 发行版及主要系统库版本相近
 - OpenSSL ABI 与构建环境兼容
 - 目标机已有符合项目要求的 Node.js；RPM 会自动兼容系统路径或 NVM 安装
+- RPM 内置 OpenCode 的原生二进制与目标机 CPU 架构、libc 环境兼容
 
 如果目标环境与测试构建机差异较大，应在与目标环境相同或相近的构建机上重新运行脚本，而不是复用原 RPM。

@@ -10,9 +10,11 @@ OUTPUT_DIR=""
 PACKAGE_RELEASE=""
 RUN_TESTS=1
 INSTALL_DEPS=1
+NPM_REGISTRY=""
+PRISMA_ENGINES_MIRROR_OVERRIDE=""
 
 usage() {
-  sed -n '3,34p' "$0" | sed -n 's/^# \{0,1\}//p'
+  sed -n '3,40p' "$0" | sed -n 's/^# \{0,1\}//p'
 }
 
 # Build the current Git HEAD as an installable Agent Insight RPM.
@@ -26,6 +28,10 @@ usage() {
 #   --release VALUE   RPM release (default: timestamp plus short commit)
 #   --skip-tests      Do not run the test suite during rpmbuild
 #   --no-install-deps Do not install missing RPM build tools with dnf
+#   --npm-registry URL
+#                      Use an internal npm registry and rewrite lockfile hosts
+#   --prisma-engines-mirror URL
+#                      Use an internal Prisma engines mirror
 #   -h, --help        Show this help
 #
 # The source archive always comes from the current HEAD. Uncommitted application
@@ -72,6 +78,16 @@ while [ "$#" -gt 0 ]; do
     --no-install-deps)
       INSTALL_DEPS=0
       shift
+      ;;
+    --npm-registry)
+      need_value "$@"
+      NPM_REGISTRY="$2"
+      shift 2
+      ;;
+    --prisma-engines-mirror)
+      need_value "$@"
+      PRISMA_ENGINES_MIRROR_OVERRIDE="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -129,7 +145,7 @@ BUILD_NODE_DIR="$(dirname "$BUILD_NODE_BIN")"
 [[ "$BUILD_NODE_BIN" == /* && "$BUILD_NPM_BIN" == /* ]] || \
   fail "node and npm must resolve to absolute executable paths"
 
-BUILD_PACKAGES=(rpm-build rpmdevtools gcc gcc-c++ make python3 curl openssl openssl-devel tar gzip cpio xz git)
+BUILD_PACKAGES=(rpm-build gcc gcc-c++ make python3 curl openssl openssl-devel tar gzip cpio xz git)
 MISSING_PACKAGES=()
 for package_name in "${BUILD_PACKAGES[@]}"; do
   rpm -q "$package_name" >/dev/null 2>&1 || MISSING_PACKAGES+=("$package_name")
@@ -169,14 +185,28 @@ fi
 case "$(uname -m)" in
   x86_64)
     RPM_ARCH=x86_64
+    OPENCODE_PLATFORM_PACKAGE=opencode-linux-x64
     ;;
   aarch64|arm64)
     RPM_ARCH=aarch64
+    OPENCODE_PLATFORM_PACKAGE=opencode-linux-arm64
     ;;
   *)
     fail "unsupported build architecture: $(uname -m)"
     ;;
 esac
+
+if [ -n "$NPM_REGISTRY" ]; then
+  [[ "$NPM_REGISTRY" =~ ^https?://[^[:space:]]+$ ]] || fail "invalid npm registry URL: $NPM_REGISTRY"
+  export npm_config_registry="$NPM_REGISTRY"
+  export npm_config_replace_registry_host=always
+fi
+
+if [ -n "$PRISMA_ENGINES_MIRROR_OVERRIDE" ]; then
+  [[ "$PRISMA_ENGINES_MIRROR_OVERRIDE" =~ ^https?://[^[:space:]]+$ ]] || \
+    fail "invalid Prisma engines mirror URL: $PRISMA_ENGINES_MIRROR_OVERRIDE"
+  export PRISMA_ENGINES_MIRROR="$PRISMA_ENGINES_MIRROR_OVERRIDE"
+fi
 
 PACKAGE_NAME=agent-insight
 BUILD_ID="${RPM_VERSION}-${PACKAGE_RELEASE}.${RPM_ARCH}"
@@ -204,6 +234,9 @@ info "Source: $SOURCE_DIR"
 info "Git: $SOURCE_BRANCH $SOURCE_COMMIT"
 info "RPM: $PACKAGE_NAME-$RPM_VERSION-$PACKAGE_RELEASE.$RPM_ARCH"
 info "Build Node.js: $(node --version) at $BUILD_NODE_BIN"
+info "Bundled OpenCode platform package: $OPENCODE_PLATFORM_PACKAGE"
+[ -z "$NPM_REGISTRY" ] || info "npm registry override enabled"
+[ -z "$PRISMA_ENGINES_MIRROR_OVERRIDE" ] || info "Prisma engines mirror override enabled"
 
 SOURCE_TARBALL="$RPM_TOPDIR/SOURCES/${PACKAGE_NAME}-${RPM_VERSION}.tar.gz"
 git -C "$SOURCE_DIR" archive \
@@ -234,7 +267,7 @@ Type=simple
 User=agent-insight
 Group=agent-insight
 WorkingDirectory=/usr/lib/agent-insight
-Environment=PATH=/usr/lib/agent-insight/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/var/lib/agent-insight/runtime:/usr/lib/agent-insight/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=-/etc/agent-insight/agent-insight.env
 ExecStartPre=/usr/libexec/agent-insight-service check
 ExecStartPre=/usr/libexec/agent-insight-service migrate
@@ -558,6 +591,11 @@ ${BUILD_NPM_BIN} prune --omit=dev
 PRISMA_TARGET=\$(cat prisma.rpm.target)
 test -x "node_modules/@prisma/engines/schema-engine-\$PRISMA_TARGET"
 test -r "node_modules/.prisma/client/libquery_engine-\$PRISMA_TARGET.so.node"
+test -x "node_modules/.bin/opencode"
+test -x "node_modules/${OPENCODE_PLATFORM_PACKAGE}/bin/opencode"
+BUNDLED_OPENCODE_VERSION=\$(node_modules/.bin/opencode --version)
+test -n "\$BUNDLED_OPENCODE_VERSION"
+echo "Bundled OpenCode: \$BUNDLED_OPENCODE_VERSION"
 
 %install
 install -d %{buildroot}%{appdir}
@@ -631,10 +669,15 @@ rpm -qip "$RPM_FILE" >/dev/null
 rpm -qpR "$RPM_FILE" >/dev/null
 PRISMA_BINARY_TARGET="$(grep -E '^Prisma RPM target: ' "$BUILD_LOG" | tail -n 1 | sed 's/^Prisma RPM target: //')"
 [ -n "$PRISMA_BINARY_TARGET" ] || fail "Prisma platform target was not recorded"
+BUNDLED_OPENCODE_VERSION="$(grep -E '^Bundled OpenCode: ' "$BUILD_LOG" | tail -n 1 | sed 's/^Bundled OpenCode: //')"
+[ -n "$BUNDLED_OPENCODE_VERSION" ] || fail "bundled OpenCode version was not recorded"
 RPM_FILE_LIST="$BUILD_ROOT/rpm-files.txt"
 rpm -qlp "$RPM_FILE" > "$RPM_FILE_LIST"
 grep -q "schema-engine-${PRISMA_BINARY_TARGET}$" "$RPM_FILE_LIST"
 grep -q "libquery_engine-${PRISMA_BINARY_TARGET}.so.node$" "$RPM_FILE_LIST"
+grep -q '^/usr/lib/agent-insight/node_modules/.bin/opencode$' "$RPM_FILE_LIST"
+grep -q '^/usr/lib/agent-insight/node_modules/opencode-ai/bin/opencode$' "$RPM_FILE_LIST"
+grep -q '^/usr/lib/agent-insight/node_modules/${OPENCODE_PLATFORM_PACKAGE}/bin/opencode$' "$RPM_FILE_LIST"
 grep -q '^/usr/libexec/agent-insight-node-setup$' "$RPM_FILE_LIST"
 grep -q '^/usr/libexec/agent-insight-service$' "$RPM_FILE_LIST"
 if grep -Eq '^/(root|home|mnt)/' "$RPM_FILE_LIST"; then
@@ -655,11 +698,15 @@ package_name=$PACKAGE_NAME
 package_version=$RPM_VERSION
 package_release=$PACKAGE_RELEASE
 package_arch=$RPM_ARCH
+opencode_platform_package=$OPENCODE_PLATFORM_PACKAGE
 build_node=$(node --version)
 build_npm=$(npm --version)
 build_openssl=$(openssl version)
 prisma_binary_target=$PRISMA_BINARY_TARGET
+bundled_opencode=$BUNDLED_OPENCODE_VERSION
 node_runtime_strategy=auto-detect-or-private-copy
+npm_registry_mode=$([ -n "$NPM_REGISTRY" ] && printf override || printf environment-default)
+prisma_engines_mirror_mode=$([ -n "$PRISMA_ENGINES_MIRROR_OVERRIDE" ] && printf override || printf environment-default)
 tests_enabled=$RUN_TESTS
 build_timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 BUILD_INFO
