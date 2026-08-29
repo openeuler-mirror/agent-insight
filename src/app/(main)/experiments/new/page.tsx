@@ -2367,7 +2367,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                     ? { usable: false, reason: '该评估器仅适用于可靠性数据集' }
                     : watchMode && meta.requires.length > 0
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
-                    : gateEvaluator(meta, gateCases);
+                    : gateEvaluator(card.id, meta, gateCases, Array.from(selectedEvaluators));
                   const checked = selectedEvaluators.has(card.id);
                   return (
                     <div

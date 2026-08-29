@@ -1,7 +1,7 @@
 # 任务完成度（无标准答案）预置评估器
 
 > 归档目标：`docs/design/build-in-evaluators/task-completion-no-ref-evaluator.md`
-> 更新时间：2026-08-11
+> 更新时间：2026-08-29
 
 ## 1. 定位与前置条件
 
@@ -32,31 +32,59 @@
 
 三个维度加权，**代码按规则算分，不让 LLM 自由打分**：
 
+### 输出契约校验（fail-fast）
+
+Judge 需同时返回 `inferred_requirements`（推断需求）与 `requirement_results`（逐条判定）两个数组，
+代码会校验两者**数量相同且逐条在 content / type / confidence 上完全一致**。
+
+- 有推断需求但没有对应判定项（或反之），判为输出契约错误、抛异常，**不默认满分**；
+- 逐条字段不匹配同样抛异常。
+
+这条约束保证「少返回判定项反而得高分」的误判不可复现。
+
 ## 3. 评分公式
 
 ### 显式需求完成度（权重 0.5）
 
+按**适用需求的加权覆盖比例**计分（而非固定每条扣分），对需求拆分粒度稳定：
+
 ```
-如果所有显式需求均 not_covered → 0
-否则：100 - not_covered × 20 - partial × 10（最低 0）
+适用集合 = explicit + 仅 high 置信度的 business_must_have（排除 not_applicable）
+每条权重：covered = 1.0 / partially_covered = 0.5 / not_covered = 0
+显式分 = Σ权重 / 适用数 × 100（无适用需求 → 100）
 ```
 
-即每遗漏一条扣 20，部分覆盖扣 10。全部未覆盖直接归零。
+- `not_applicable` 排除分母，不因「推断出不适用需求」拉低覆盖比例；
+- `business_must_have` 是模型自行推断的必答点，**仅 high 置信度计入显式分**；
+  medium/low 置信度的必答点降级为隐含约束（见下）。
+
+比例制保证「1/2 未完成（50%）」与「4/20 未完成（80%）」得分不同，同一覆盖比例无论拆成几条得分相同。
 
 ### 隐含约束满足度（权重 0.3）
 
-逐条扣分，低置信度减半：
+同样按覆盖比例，低置信度未满足扣分减半：
 
 ```
-not_covered + high/medium confidence → 扣 20
-not_covered + low confidence → 扣 10（减半）
-partially_covered → 扣 10
-最低 0
+适用集合 = implicit + 非 high 置信度的 business_must_have（排除 not_applicable）
+每条权重：covered = 1.0 / partially_covered = 0.5
+          not_covered（high/medium）= 0
+          not_covered（low）= 0.5（扣分减半）
+隐含分 = Σ权重 / 适用数 × 100（无适用需求 → 100）
 ```
 
 ### 信息充分性与中立性（权重 0.2）
 
-LLM 给出 0-100 分数，直接使用。
+LLM 只给**离散档位**（`sufficient` / `mostly_sufficient` / `insufficient` / `severely_insufficient`），
+代码映射到固定分数：
+
+| 档位 | 分数 |
+|---|---|
+| sufficient | 100 |
+| mostly_sufficient | 80 |
+| insufficient | 50 |
+| severely_insufficient | 20 |
+
+三个维度全部由代码算分，LLM 不参与任何连续打分，保证同一条 trace 重评结果稳定。
 
 ### 加权总分
 
@@ -68,8 +96,8 @@ LLM 给出 0-100 分数，直接使用。
 
 三个固定维度对应三个评分点：
 
-- **显式需求完成度**（含 `business_must_have`，标签内区分）：evidence 展示需求清单及逐条判定
-- **隐含约束满足度**（始终展示，无隐含约束时显示提示）：evidence 同上
+- **显式需求完成度**（含 high 置信度的 `business_must_have`，标签内区分）：evidence 展示需求清单及逐条判定
+- **隐含约束满足度**（始终展示，无隐含约束时显示提示；含被降级的非 high 置信度必答点）：evidence 同上
 - **信息充分性与中立性**：evidence 展示 LLM 的总体分析
 
 每个评分点都有 `score` + `status`（≥80 covered / ≥60 partial / <60 missing）。

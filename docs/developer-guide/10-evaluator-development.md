@@ -276,6 +276,7 @@ return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 
 - **category**：只读最终输出（±参考答案）→ `res`；需要读执行过程（步骤/工具/耗时/成本/token）→ `traj`。决定它在 Trace 评测详情里归到「结果评测」还是「轨迹评测」板块，以及进哪个类目均分。
 - **requires**：`reference` 要求每个 case 有参考答案；`tool_catalog` 要求每个 case 有显式 Tool/Skill 目录。`availableTools=[]` 表示调用方确认没有可用 Tool，仍满足目录前置条件；上下文字段缺失才触发门控。
+- **互斥组**（`MUTUAL_EXCLUSION_GROUPS`）：若两个评估器评估**同一目标的两种口径**，同选会让该维度在实验综合分里重复加权，就应归入同一互斥组。组内第一项是「优先项」——当它被选中（意味着其前置条件已满足）时，组内其余项在向导 ④ 步被禁用并提示原因。例如任务完成度：`preset-agent-task-completion`（依赖参考答案）为优先项，`preset-task-completion-no-ref`（无参考）为其次——有参考答案时选前者，后者不再可选。
 - **能力目录来源**：可由实验 API 的 `evaluatorContext` 显式提供，或从数据集的 `available_tools` / `available_skills` 导入。trace 只记录实际发生的调用，不能还原执行时完整的可用能力集合，因此不得用已调用集合反推目录。
 - **tags 不用填**，由元数据派生（`deriveEvaluatorTags`）。
 
