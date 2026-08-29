@@ -53,6 +53,14 @@ import {
   TEXT_PRESET_IDS,
   isTextPresetId,
 } from '../src/lib/engine/experiment/text-preset-evaluators';
+import {
+  FLUENCY_PRESET_IDS,
+  isFluencyPresetId,
+} from '../src/lib/engine/experiment/fluency-preset-evaluators';
+import {
+  HALLUCINATION_PRESET_IDS,
+  isHallucinationPresetId,
+} from '../src/lib/engine/experiment/hallucination-preset-evaluators';
 
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
@@ -81,6 +89,11 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: [RAS_DETECTION_RECOVERY_PRESET_ID],
   },
   { name: 'text-preset-evaluators.ts', claims: isTextPresetId, ids: TEXT_PRESET_IDS },
+  {
+    name: 'fluency-preset-evaluators.ts / hallucination-preset-evaluators.ts',
+    claims: (id) => isFluencyPresetId(id) || isHallucinationPresetId(id),
+    ids: [...FLUENCY_PRESET_IDS, ...HALLUCINATION_PRESET_IDS],
+  },
 ];
 
 test('预置卡 id 唯一', () => {
