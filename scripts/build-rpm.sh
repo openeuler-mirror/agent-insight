@@ -681,21 +681,28 @@ SRPM_FILE="$(find "$RPM_TOPDIR/SRPMS" -maxdepth 1 -type f -name "${PACKAGE_NAME}
 [ -f "$SRPM_FILE" ] || fail "source RPM was not produced"
 
 info "Validating RPM contents"
-rpm -qip "$RPM_FILE" >/dev/null
-rpm -qpR "$RPM_FILE" >/dev/null
+rpm -qip "$RPM_FILE" >/dev/null || fail "unable to read binary RPM metadata: $RPM_FILE"
+rpm -qpR "$RPM_FILE" >/dev/null || fail "unable to read binary RPM dependencies: $RPM_FILE"
 PRISMA_BINARY_TARGET="$(grep -E '^Prisma RPM target: ' "$BUILD_LOG" | tail -n 1 | sed 's/^Prisma RPM target: //')"
 [ -n "$PRISMA_BINARY_TARGET" ] || fail "Prisma platform target was not recorded"
 BUNDLED_OPENCODE_VERSION="$(grep -E '^Bundled OpenCode: ' "$BUILD_LOG" | tail -n 1 | sed 's/^Bundled OpenCode: //')"
 [ -n "$BUNDLED_OPENCODE_VERSION" ] || fail "bundled OpenCode version was not recorded"
 RPM_FILE_LIST="$BUILD_ROOT/rpm-files.txt"
-rpm -qlp "$RPM_FILE" > "$RPM_FILE_LIST"
-grep -q "schema-engine-${PRISMA_BINARY_TARGET}$" "$RPM_FILE_LIST"
-grep -q "libquery_engine-${PRISMA_BINARY_TARGET}.so.node$" "$RPM_FILE_LIST"
-grep -q '^/usr/lib/agent-insight/node_modules/.bin/opencode$' "$RPM_FILE_LIST"
-grep -q '^/usr/lib/agent-insight/node_modules/opencode-ai/bin/opencode$' "$RPM_FILE_LIST"
-grep -q '^/usr/lib/agent-insight/node_modules/${OPENCODE_PLATFORM_PACKAGE}/bin/opencode$' "$RPM_FILE_LIST"
-grep -q '^/usr/libexec/agent-insight-node-setup$' "$RPM_FILE_LIST"
-grep -q '^/usr/libexec/agent-insight-service$' "$RPM_FILE_LIST"
+rpm -qlp "$RPM_FILE" > "$RPM_FILE_LIST" || fail "unable to list binary RPM contents: $RPM_FILE"
+grep -Fq "schema-engine-${PRISMA_BINARY_TARGET}" "$RPM_FILE_LIST" || \
+  fail "RPM is missing the Prisma schema engine for $PRISMA_BINARY_TARGET"
+grep -Fq "libquery_engine-${PRISMA_BINARY_TARGET}.so.node" "$RPM_FILE_LIST" || \
+  fail "RPM is missing the Prisma query engine for $PRISMA_BINARY_TARGET"
+grep -Fqx '/usr/lib/agent-insight/node_modules/.bin/opencode' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the OpenCode command entry"
+grep -Fqx '/usr/lib/agent-insight/node_modules/opencode-ai/bin/opencode' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the OpenCode launcher"
+grep -Fqx "/usr/lib/agent-insight/node_modules/${OPENCODE_PLATFORM_PACKAGE}/bin/opencode" "$RPM_FILE_LIST" || \
+  fail "RPM is missing the OpenCode native binary from $OPENCODE_PLATFORM_PACKAGE"
+grep -Fqx '/usr/libexec/agent-insight-node-setup' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the Node.js setup helper"
+grep -Fqx '/usr/libexec/agent-insight-service' "$RPM_FILE_LIST" || \
+  fail "RPM is missing the service launcher"
 if grep -Eq '^/(root|home|mnt)/' "$RPM_FILE_LIST"; then
   fail "RPM contains a build-host path"
 fi
