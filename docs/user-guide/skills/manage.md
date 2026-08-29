@@ -61,7 +61,7 @@ Skills 管理的常见使用流程如下：
 
 #### AI 生成
 
-该入口会跳转至 [Skills 生成](./generate) 页面，用于通过自然语言需求生成结构化 Skill 包。
+该入口会进入 [Skill 工作台](./index) 的生成会话，通过自然语言需求形成未发布工作快照。
 
 - 配置模型、场景与联网搜索等生成条件
 - 提交需求并生成包含 `SKILL.md`、`scripts/`、`references/` 的 Skill 初稿
@@ -149,9 +149,9 @@ Skills 管理适用于 Skill 资产的检索、创建、详情查看与版本管
 ## 页面分工
 
 - **Skills 管理**：查看资产清单、进入详情、管理版本
-- **Skills 生成**：从需求起草新的 Skill
-- **Skills 评测**：评估当前 Skill 的效果
-- **Skills 优化**：基于结果继续迭代版本
+- **Skill 工作台 · 生成会话**：从需求起草新的 Skill 工作快照
+- **Skill 评估 / Skill 实验**：分别检查静态质量与真实运行效果
+- **Skill 工作台 · 优化记录**：基于证据生成、评审和发布候选版本
 
 常见路径如下：
 
@@ -167,10 +167,10 @@ Skills 管理适用于 Skill 资产的检索、创建、详情查看与版本管
 
 ## 常见问题
 
-### Skills 管理页和 Skills 生成有什么区别？
+### Skills 管理中心和 Skill 工作台有什么区别？
 
 - **Skills 管理**：负责查看、创建、筛选、进入详情和管理版本
-- **Skills 生成**：负责把自然语言需求转换成新的 Skill 包
+- **Skill 工作台**：围绕一个会话完成生成、评估、实验、优化和发布
 
 ### 上传 Skill 时应该选什么？
 
@@ -193,7 +193,7 @@ Skills 管理适用于 Skill 资产的检索、创建、详情查看与版本管
 
 ## 下一步
 
-- 想从需求直接起草新 Skill： [Skills 生成](./generate)
-- 想验证当前 Skill 的效果： [Skills 评测总览](./evaluation/overview)
-- 想继续迭代现有版本： [Skills 优化](./optimize)
-- 想回到 Skill 工作区总览： [持续优化 · Skill](./index)
+- 想从需求直接起草新 Skill： [Skill 生成](./generate)
+- 想验证当前 Skill 的效果： [Skill 评估与实验](./evaluation/overview)
+- 想继续迭代现有版本： [Skill 优化](./optimize)
+- 想回到一站式入口： [Skill 工作台](./index)

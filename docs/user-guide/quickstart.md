@@ -395,4 +395,4 @@ OTLP Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/o
 - 想理解平台核心名词 → [核心概念](./concepts)
 - 想继续排查和分析线上执行 → [运行观测](./observability/index)
 - 想建立第一套离线评测 → [评估与实验](./evaluation/index)
-- 想沉淀可复用能力 → [持续优化 · Skill](./skills/index)
+- 想沉淀可复用能力 → [Skill 工作台](./skills/index)

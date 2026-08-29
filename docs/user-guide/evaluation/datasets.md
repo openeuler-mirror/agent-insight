@@ -303,7 +303,7 @@ trace 只能说明 Agent 实际调用了哪些能力，不能说明当时还有�
 
 ## 下一步
 
-- 从真实执行沉淀样本：[从 Trace 构建数据集](./dataset-from-trace)
+- 从真实执行沉淀样本：参见本页 [从 Trace 回流数据项](#从-trace-回流数据项)
 - 继续配置评分逻辑：[评估器](./evaluators)
-- 直接运行评测任务：[评测执行](./run-evaluation)
+- 直接运行评测任务：[实验](./experiments)
 - 返回评测总览：[评估与实验](./index)
