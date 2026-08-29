@@ -4,6 +4,7 @@ import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, use
 import { Bot, Check, CheckCircle2, Circle, FileSearch, Loader2, Send, Upload, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { safeUUID } from '@/lib/safe-uuid';
 import { getOptimizationTargetVersion, getOptimizationTransitionLabel } from '@/lib/skill-workbench/optimization-display';
 import { GenerationHistory } from './GenerationConversation';
 import type { OptimizationRecordView } from './OptimizationRecordsPanel';
@@ -278,7 +279,7 @@ export function OptimizationConversation({
   const runRequest = useCallback(async (requestText: string, options?: { mergeIssues?: boolean }) => {
     if (busy || (!requestText.trim() && issues.length === 0)) return;
     const normalizedRequest = requestText.trim() || `根据 ${issues.length} 个静态评估问题优化`;
-    const runId = crypto.randomUUID();
+    const runId = safeUUID();
     const runMeta: ChatBlock = { kind: 'optimization_meta', id: `optimization-${runId}`, runId };
     setLocalStep(1);
     setFeedback('');

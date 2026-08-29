@@ -4,6 +4,7 @@ import { FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, Wrench, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { safeUUID } from '@/lib/safe-uuid';
 import { ALLOWED_EXT_ACCEPT } from '@/lib/skill-generator/file-types';
 
 type GenerationBlock =
@@ -268,7 +269,7 @@ export function GenerationConversation({
           scenario,
           webSearchEnabled: webSearchConfigured && webSearchEnabled,
           mock: false,
-          runId: crypto.randomUUID(),
+          runId: safeUUID(),
         }),
         signal: controller.signal,
       });

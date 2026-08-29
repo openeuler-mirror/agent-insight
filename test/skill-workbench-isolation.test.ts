@@ -321,6 +321,9 @@ test('生成和优化由服务端完成工作台同步，客户端断开 SSE 不
   assert.match(optimizationAdapter, /自动修复后重新质量校验/);
   assert.doesNotMatch(generationConversation, /action:\s*'sync'/);
   assert.doesNotMatch(optimizationConversation, /action:\s*'sync'/);
+  assert.match(generationConversation, /import \{ safeUUID \} from '@\/lib\/safe-uuid'/);
+  assert.match(generationConversation, /runId: safeUUID\(\)/);
+  assert.doesNotMatch(generationConversation, /crypto\.randomUUID\(\)/);
   assert.match(generationConversation, /后台执行中/);
   assert.match(optimizationConversation, /后台执行中/);
 });
@@ -350,7 +353,9 @@ test('Skill 优化固定入口执行归并、自验证和静态质量门禁，�
   assert.match(optimizerRoute, /optimization-run/);
   assert.match(optimizerRoute, /blocks: JSON\.stringify\(\[runMeta\]\)/);
   assert.match(conversation, /optimizationRoundAssignments/);
-  assert.match(conversation, /runId = crypto\.randomUUID\(\)/);
+  assert.match(conversation, /import \{ safeUUID \} from '@\/lib\/safe-uuid'/);
+  assert.match(conversation, /runId = safeUUID\(\)/);
+  assert.doesNotMatch(conversation, /crypto\.randomUUID\(\)/);
   assert.match(conversation, /setLocalStep\(1\)/);
   assert.match(conversation, /index === liveMessageIndex \? activeTask : undefined/);
   assert.doesNotMatch(conversation, /find\(\(item\) => \['pending', 'running'\]\.includes\(item\.status\)\) \|\| tasks\.at\(-1\)/);
