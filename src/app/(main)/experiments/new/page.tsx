@@ -69,7 +69,6 @@ interface TraceItem {
   latency: number | null;
   tokens: number | null;
   timestamp: string;
-  ok: boolean;
 }
 
 interface TraceTagOption {
@@ -2044,7 +2043,6 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                     </th>
                     <th style={STICKY_TH}>Trace ID</th>
                     <th style={STICKY_TH}>任务输入</th>
-                    <th style={STICKY_TH}>状态</th>
                     <th style={{ ...STICKY_TH, textAlign: 'right' }}>耗时</th>
                     <th style={{ ...STICKY_TH, textAlign: 'right' }}>Token</th>
                     <th style={STICKY_TH}>时间</th>
@@ -2052,9 +2050,9 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                 </thead>
                 <tbody>
                   {tracesLoading ? (
-                    <tr><td colSpan={7} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>加载中…</td></tr>
+                    <tr><td colSpan={6} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>加载中…</td></tr>
                   ) : traces.length === 0 ? (
-                    <tr><td colSpan={7} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>
+                    <tr><td colSpan={6} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>
                       {hasActiveTraceFilters ? '没有符合当前筛选条件的 Trace' : '该 Agent 暂无 Trace'}
                     </td></tr>
                   ) : traces.map((t, i) => {
@@ -2073,15 +2071,6 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                           {truncate(t.taskId || t.id, 18)}
                         </td>
                         <td style={{ ...td, maxWidth: 320, color: 'var(--foreground)' }}>{truncate(t.query, 60)}</td>
-                        <td style={td}>
-                          <span style={{
-                            ...CHIP,
-                            background: t.ok ? 'var(--tag-green-bg)' : 'var(--tag-red-bg)',
-                            color: t.ok ? 'var(--tag-green-fg)' : 'var(--tag-red-fg)',
-                          }}>
-                            {t.ok ? '成功' : '异常'}
-                          </span>
-                        </td>
                         <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                           {t.latency != null ? `${t.latency.toFixed(1)}s` : '—'}
                         </td>
