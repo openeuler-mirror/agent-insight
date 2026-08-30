@@ -122,6 +122,7 @@ function healthcheck(url: string): Promise<{ status: number }> {
         res.on('end', () => resolve({ status: res.statusCode || 0 }))
       },
     )
+    req.setTimeout(2000, () => req.destroy(new Error('healthcheck timeout')))
     req.on('error', reject)
     req.end()
   })
