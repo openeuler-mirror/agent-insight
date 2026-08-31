@@ -372,6 +372,27 @@ function listJsonlFiles(spoolDir) {
   return out
 }
 
+function selectJsonlFiles(spoolDir, spoolFile) {
+  const candidate = String(spoolFile || "").trim()
+  if (!candidate) return listJsonlFiles(spoolDir)
+  const resolvedDir = path.resolve(spoolDir)
+  const resolvedFile = path.resolve(candidate)
+  if (
+    !resolvedFile.startsWith(`${resolvedDir}${path.sep}`)
+    || !resolvedFile.endsWith(".jsonl")
+    || !fs.existsSync(resolvedFile)
+  ) return listJsonlFiles(spoolDir)
+  return [resolvedFile]
+}
+
+function selectedSpoolMtime(spoolDir, spoolFile) {
+  const files = selectJsonlFiles(spoolDir, spoolFile)
+  if (files.length === 1 && String(spoolFile || "").trim()) {
+    try { return fs.statSync(files[0]).mtimeMs } catch { return 0 }
+  }
+  return newestSpoolMtime(spoolDir)
+}
+
 // Returns the newest mtime (ms) across all .jsonl files in the spool dir, or 0 if none.
 // Used as a fast-skip gate: if no file has been touched since the last scan, the
 // uploader can exit immediately without parsing any data.
@@ -1147,6 +1168,7 @@ async function main() {
   )
 
   const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
+  const spoolFile = process.env.AGENT_INSIGHT_UPLOADER_SPOOL_FILE || ""
   // 账号级隔离: spool / checkpoint 都按 API key 分目录(setup 写入 per-account 路径),
   // 否则同一台机器切账号会复用机器级 spool/checkpoint, 把历史 trace 错误归到当前 key。
   // 旧 .env 没有这两个变量时回退到机器级路径, 保持向后兼容。
@@ -1176,7 +1198,7 @@ async function main() {
   // Fast-skip gate: if no spool file has been touched since the last scan, exit
   // immediately without reading/parsing any data. This keeps the polling daemon
   // cheap (~5ms) when opencode is idle. Force=1 bypasses for manual debugging.
-  const newestMtime = newestSpoolMtime(spoolDir)
+  const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
   const lastScanMtime = ckpt.__lastScanMtime || 0
   if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
     appendUploaderLog(
@@ -1212,7 +1234,7 @@ async function main() {
     } catch {}
   })
 
-  const files = listJsonlFiles(spoolDir)
+  const files = selectJsonlFiles(spoolDir, spoolFile)
   appendUploaderLog(`main.scan files=${files.length} newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`)
 
   // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
@@ -1384,6 +1406,7 @@ export {
   extractTaskChildSessionId,
   getSessionInfoFromEvent,
   mergeGraph,
+  selectJsonlFiles,
 }
 
 if (process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN !== "1") {

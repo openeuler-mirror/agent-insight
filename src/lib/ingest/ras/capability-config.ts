@@ -10,6 +10,7 @@ import {
   getRasCapabilityCatalogSync,
   type RasCatalogDomain,
 } from '@/lib/ingest/ras/catalog-engine'
+import { runtimePackageRoot } from '@/lib/runtime/package-root'
 
 export const RAS_CAPABILITY_PLATFORMS = [
   'opencode',
@@ -37,7 +38,7 @@ export type RasCapabilityConfigEnvelope = {
 }
 
 function defaultYamlPath(): string {
-  return path.join(process.cwd(), 'agent_ras', 'config', 'agent_ras_config.default.yaml')
+  return path.join(runtimePackageRoot(), 'agent_ras', 'config', 'agent_ras_config.default.yaml')
 }
 
 /** Minimal indented YAML object parser for agent_ras_config.default.yaml shape. */

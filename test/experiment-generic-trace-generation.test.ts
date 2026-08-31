@@ -353,6 +353,7 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(route, /caseIds: generated\.readyCaseIds/);
   assert.match(client, /buildExperimentCaseArgs/);
   assert.match(client, /\['run', '--format', 'json', '--agent', input\.agent\]/);
+  assert.match(client, /args\.push\('--auto'\)/);
   assert.match(client, /traceId/);
   assert.match(client, /args\.push\('-p', input\.input, '--agent', input\.agent\)/);
   assert.match(generation, /taskId: input\.traceId/);
