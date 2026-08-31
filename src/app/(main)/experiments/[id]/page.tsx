@@ -250,9 +250,13 @@ export function ExperimentDetail({
     }));
   }, [detail, lookup]);
 
-  // 本实验是否含依赖参考数据的评估器——新增 case 时据此提示"不标注参考答案会不记分"
+  // 本实验是否含依赖预期输出的评估器——新增 case 时据此提示"不标注会不记分"
   const needsReference = useMemo(
     () => (detail?.evaluatorIds ?? []).some((eid) => lookup.requiresReference(eid)),
+    [detail, lookup],
+  );
+  const needsDatasetInput = useMemo(
+    () => (detail?.evaluatorIds ?? []).some((eid) => lookup.requiresDatasetInput(eid)),
     [detail, lookup],
   );
 
@@ -458,7 +462,7 @@ export function ExperimentDetail({
                   <thead>
                     <tr>
                       <th style={STICKY_TH}>输入</th>
-                      <th style={STICKY_TH}>参考输出</th>
+                      <th style={STICKY_TH}>预期输出</th>
                       <th style={STICKY_TH}>实际输出</th>
                       <th style={{ ...STICKY_TH, width: 72 }}>综合得分</th>
                       <th style={{ ...STICKY_TH, width: 72 }}>结果得分</th>
@@ -618,6 +622,7 @@ export function ExperimentDetail({
                 agentName={detail.agentName}
                 user={user}
                 needsReference={needsReference}
+                needsDatasetInput={needsDatasetInput}
               />
             )}
           </>

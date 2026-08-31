@@ -45,6 +45,7 @@ export function isCustomEvaluatorId(id: string): boolean {
 
 export interface CustomEvaluatorInput {
     caseInput: string;
+    datasetInput?: string;
     expectedOutput?: string;
     actualOutput: string;
     /** 简要 trace 文本（已被截断/汇总，适合直接放进 prompt） */
@@ -108,6 +109,7 @@ export async function listCustomEvaluatorIds(user: string): Promise<Set<string>>
 
 const PLACEHOLDER_PATTERNS: Record<string, (input: CustomEvaluatorInput) => string> = {
     '{{input}}': i => i.caseInput || '',
+    '{{dataset_input}}': i => i.datasetInput || '',
     '{{output}}': i => i.actualOutput || '',
     '{{reference_output}}': i => i.expectedOutput || '',
     '{{trajectory}}': i => i.traceText || '',

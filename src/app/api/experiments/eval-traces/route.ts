@@ -22,6 +22,10 @@ import {
   normalizeEvaluatorCaseContext,
   type EvaluatorCaseContext,
 } from '@/lib/evaluators/evaluator-case-context';
+import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { getEvaluatorMeta } from '@/lib/evaluators/registry';
+import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +40,7 @@ function asStrArr(v: unknown): string[] {
 }
 
 interface DatasetEvaluationContext {
+  datasetInput: string | null;
   referenceOutput: string | null;
   evaluatorContext?: EvaluatorCaseContext;
 }
@@ -66,6 +71,7 @@ async function buildDatasetContextMap(
         }
       }
       map.set(c.id, {
+        datasetInput: typeof c.input === 'string' && c.input.trim() ? c.input : null,
         referenceOutput: typeof c.expectedOutput === 'string' && c.expectedOutput.trim()
           ? c.expectedOutput
           : null,
@@ -128,23 +134,37 @@ async function resolveTraceToolCatalog(
  * 作参考答案——否则 accuracy/任务完成度等依赖参考的评估器拿不到标准答案会失败/判"未标注"。
  * 与前端「系统会将 trace 输入与数据集 case 自动匹配」的承诺对齐。取不到返回 null。
  */
-async function resolveTraceReference(user: string, taskId: string, datasetIds: string[]): Promise<string | null> {
-  if (!datasetIds.length || !taskId) return null;
+async function resolveTraceDatasetBinding(
+  user: string,
+  taskId: string,
+  datasetIds: string[],
+  options: { requireExpectedOutput: boolean; allowSemanticMatch: boolean },
+): Promise<Pick<DatasetEvaluationContext, 'datasetInput' | 'referenceOutput'>> {
+  if (!datasetIds.length || !taskId) return { datasetInput: null, referenceOutput: null };
   const exec = await prisma.execution.findFirst({
     where: { taskId, OR: [{ user }, { user: null }] },
     orderBy: { timestamp: 'desc' },
     select: { query: true },
   });
   const query = String(exec?.query || '').trim();
-  if (!query) return null;
+  if (!query) return { datasetInput: null, referenceOutput: null };
   try {
     const m = await matchAgentDatasetCase({
-      user, traceQuery: query, allowedDatasetIds: datasetIds, requireExpectedOutput: true,
+      user,
+      traceQuery: query,
+      allowedDatasetIds: datasetIds,
+      requireExpectedOutput: options.requireExpectedOutput,
+      allowSemanticMatch: options.allowSemanticMatch,
     });
-    const ref = m.match?.caseEntry.expectedOutput;
-    return ref && String(ref).trim() ? String(ref) : null;
+    const caseEntry = m.match?.caseEntry;
+    return {
+      datasetInput: caseEntry?.input && String(caseEntry.input).trim() ? String(caseEntry.input) : null,
+      referenceOutput: caseEntry?.expectedOutput && String(caseEntry.expectedOutput).trim()
+        ? String(caseEntry.expectedOutput)
+        : null,
+    };
   } catch {
-    return null;
+    return { datasetInput: null, referenceOutput: null };
   }
 }
 
@@ -158,6 +178,18 @@ export async function POST(req: Request) {
     if (evaluators.length === 0) return NextResponse.json({ error: 'evaluators is required' }, { status: 400 });
 
     const datasetIds = asStrArr(body.datasetIds);
+    const customEvaluators = (await readUserCustomEvaluators(username)) as EvaluatorCard[];
+    const evaluatorCatalog = new Map(
+      [...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]),
+    );
+    const requirements = new Set(
+      evaluators.flatMap((id) => {
+        const card = evaluatorCatalog.get(id);
+        return card ? getEvaluatorMeta(card).requires : [];
+      }),
+    );
+    const needsDatasetInput = requirements.has('dataset_input');
+    const needsExpectedOutput = requirements.has('reference');
     const pairs: Pair[] = Array.isArray(body.pairs)
       ? body.pairs
           .map((p: unknown) => (p && typeof p === 'object' ? p as Record<string, unknown> : {}))
@@ -220,23 +252,34 @@ export async function POST(req: Request) {
           return {
             taskId: p.taskId,
             caseId: p.caseId,
+            datasetInput: datasetContext?.datasetInput ?? null,
             referenceOutput: datasetContext?.referenceOutput ?? null,
             evaluatorContext,
           };
         })
-      : await Promise.all(taskIds.map(async (t) => ({
-          taskId: t,
-          caseId: undefined as string | undefined,
-          referenceOutput: await resolveTraceReference(username, t, datasetIds),
-          evaluatorContext: hasDefaultContext
-            ? defaultContext
-            : (await resolveTraceToolCatalog(username, t, datasetIds)) ?? undefined,
-        })));
+      : await Promise.all(taskIds.map(async (t) => {
+          const binding = await resolveTraceDatasetBinding(username, t, datasetIds, {
+            requireExpectedOutput: needsExpectedOutput && !needsDatasetInput,
+            allowSemanticMatch: !needsDatasetInput,
+          });
+          return {
+            taskId: t,
+            caseId: undefined as string | undefined,
+            ...binding,
+            evaluatorContext: hasDefaultContext
+              ? defaultContext
+              : (await resolveTraceToolCatalog(username, t, datasetIds)) ?? undefined,
+          };
+        }));
 
     const prepared = [];
     for (const t of targets) {
       const expCaseId = await addEvalExperimentCase(experimentId, {
-        taskId: t.taskId, input: '', actualOutput: '', referenceOutput: t.referenceOutput,
+        taskId: t.taskId,
+        input: '',
+        datasetInput: t.datasetInput,
+        actualOutput: '',
+        referenceOutput: t.referenceOutput,
         evaluatorContext: t.evaluatorContext,
       });
       prepared.push({ target: t, experimentCaseId: expCaseId });
