@@ -24,38 +24,59 @@ export async function createOrReuseSkillWorkbenchTask(input: {
   version?: number | null;
   targetRef?: string | null;
 }) {
-  const session = await prismaRaw.skillWorkbenchSession.findFirst({
-    where: { id: input.sessionId, user: input.user },
-    select: { id: true },
-  });
-  if (!session) return null;
-
   const idempotencyKey = makeWorkbenchTaskIdempotencyKey(input);
-  const existing = await prismaRaw.skillWorkbenchTask.findUnique({
-    where: {
-      sessionId_idempotencyKey: {
-        sessionId: input.sessionId,
-        idempotencyKey,
-      },
-    },
-  });
-  if (existing) return { task: existing, reused: true };
+  return prismaRaw.$transaction(async (tx) => {
+    const session = await tx.skillWorkbenchSession.findFirst({
+      where: { id: input.sessionId, user: input.user },
+      select: { id: true, stage: true },
+    });
+    if (!session) return null;
 
-  const task = await prismaRaw.skillWorkbenchTask.upsert({
-    where: {
-      sessionId_idempotencyKey: {
+    const existing = await tx.skillWorkbenchTask.findUnique({
+      where: {
+        sessionId_idempotencyKey: {
+          sessionId: input.sessionId,
+          idempotencyKey,
+        },
+      },
+    });
+    if (existing) return { task: existing, reused: true, blocked: false };
+
+    const claimed = await tx.skillWorkbenchSession.updateMany({
+      where: {
+        id: input.sessionId,
+        user: input.user,
+        tasks: {
+          none: {
+            type: input.type,
+            status: { in: ['pending', 'running'] },
+          },
+        },
+      },
+      data: { stage: session.stage },
+    });
+    if (claimed.count === 0) {
+      const active = await tx.skillWorkbenchTask.findFirst({
+        where: {
+          sessionId: input.sessionId,
+          type: input.type,
+          status: { in: ['pending', 'running'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (active) return { task: active, reused: true, blocked: true };
+      return null;
+    }
+
+    const task = await tx.skillWorkbenchTask.create({
+      data: {
         sessionId: input.sessionId,
+        type: input.type,
         idempotencyKey,
       },
-    },
-    update: {},
-    create: {
-      sessionId: input.sessionId,
-      type: input.type,
-      idempotencyKey,
-    },
+    });
+    return { task, reused: false, blocked: false };
   });
-  return { task, reused: false };
 }
 
 export async function updateSkillWorkbenchTask(input: {

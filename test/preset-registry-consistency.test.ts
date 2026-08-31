@@ -57,6 +57,14 @@ import {
   TASK_COMPLETION_NO_REF_PRESET_IDS,
   isTaskCompletionNoRefPresetId,
 } from '../src/lib/engine/experiment/task-completion-preset-evaluators';
+import {
+  FLUENCY_PRESET_IDS,
+  isFluencyPresetId,
+} from '../src/lib/engine/experiment/fluency-preset-evaluators';
+import {
+  HALLUCINATION_PRESET_IDS,
+  isHallucinationPresetId,
+} from '../src/lib/engine/experiment/hallucination-preset-evaluators';
 
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
@@ -89,6 +97,11 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     name: 'task-completion-preset-evaluators.ts',
     claims: isTaskCompletionNoRefPresetId,
     ids: TASK_COMPLETION_NO_REF_PRESET_IDS,
+  },
+  {
+    name: 'fluency-preset-evaluators.ts / hallucination-preset-evaluators.ts',
+    claims: (id) => isFluencyPresetId(id) || isHallucinationPresetId(id),
+    ids: [...FLUENCY_PRESET_IDS, ...HALLUCINATION_PRESET_IDS],
   },
 ];
 
