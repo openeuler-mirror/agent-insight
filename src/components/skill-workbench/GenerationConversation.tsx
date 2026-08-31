@@ -4,6 +4,7 @@ import { FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Bot, CheckCircle2, Globe2, Loader2, Paperclip, Send, X } from 'lucide-react';
 
 import { apiFetch } from '@/lib/client/api';
+import { safeUUID } from '@/lib/safe-uuid';
 import { settleProcessBlocks, type ProcessOutcome } from '@/lib/chat/process-block-state';
 import { ALLOWED_EXT_ACCEPT } from '@/lib/skill-generator/file-types';
 import { publishWorkbenchSync, subscribeWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
@@ -339,7 +340,7 @@ export function GenerationConversation({
           scenario,
           webSearchEnabled: webSearchConfigured && webSearchEnabled,
           mock: false,
-          runId: crypto.randomUUID(),
+          runId: safeUUID(),
         }),
         signal: controller.signal,
       });

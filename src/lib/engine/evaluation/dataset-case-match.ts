@@ -26,6 +26,8 @@ export interface MatchDatasetCaseInput {
   traceQuery: string;
   requireExpectedOutput?: boolean;
   includeAllDatasetKinds?: boolean;
+  /** 默认 true；依赖 dataset_input 的可用性门控设为 false，避免语义相似误绑定。 */
+  allowSemanticMatch?: boolean;
   allowedDatasetIds?: string[];
   datasets?: AgentDatasetRecord[];
 }
@@ -127,6 +129,13 @@ export async function matchAgentDatasetCase(input: MatchDatasetCaseInput): Promi
 
   if (candidates.length === 0) {
     return { reason: 'no-candidates', matchReason: 'No dataset cases satisfy the evaluation requirements' };
+  }
+
+  if (input.allowSemanticMatch === false) {
+    return {
+      reason: 'no-match',
+      matchReason: 'No deterministic dataset input match found',
+    };
   }
 
   const semantic = await findBestSemanticCaseMatch(candidates, input.traceQuery, {

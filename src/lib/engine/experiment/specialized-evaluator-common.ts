@@ -154,6 +154,18 @@ export function isFailedCallStatus(status: string | null): boolean {
   return Boolean(status && /(fail|error|cancel|timeout)/i.test(status));
 }
 
+/** 明确成功状态；null/缺失/pending/running 及未识别值一律不算成功（也不一定算失败）。 */
+export function isSuccessfulCallStatus(status: string | null): boolean {
+  if (!status) return false;
+  return /^(success|succeeded|ok|okay|done|completed|complete)$/i.test(status.trim());
+}
+
+/** 进行中/未结束状态（pending/running 等）：有状态值但尚未到达终态。 */
+export function isInProgressCallStatus(status: string | null): boolean {
+  if (!status) return false;
+  return /^(pending|running|in_progress|in-progress|started|queued|executing)$/i.test(status.trim());
+}
+
 export function buildTraceCallStatistics(facts: ToolTraceFacts): Record<string, unknown> {
   const counts = Object.values(facts.countsByCapability);
   const total = facts.calls.length;

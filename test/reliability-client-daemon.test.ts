@@ -37,6 +37,22 @@ const client = require_('../scripts/reliability-client.cjs') as {
     }>
     faultInjection: { ready: boolean; note?: string }
   }
+  buildExperimentCaseInvocation: (
+    executable: string,
+    input: {
+      platform: string
+      agent: string
+      model: string | null
+      input: string
+      correlation?: Record<string, unknown>
+    },
+  ) => { args: string[]; stdin: string | null }
+  parseOpencodeSlashCommand: (input: string) => { command: string; arguments: string } | null
+  capabilityDiscoveryFingerprint: () => string
+  refreshCapabilityReports: (
+    cfg: Record<string, unknown>,
+    opts?: { force?: boolean },
+  ) => Promise<boolean>
   normalizeModelIds: (models: unknown) => string[]
   extractTraceIdFromJsonLine: (line: string) => string | null
   controlUrls: (cfg: Record<string, unknown>) => { websocketUrl: string; pollUrl: string }
@@ -46,6 +62,7 @@ const client = require_('../scripts/reliability-client.cjs') as {
   notifyReady: () => boolean
   notifyWatchdog: () => boolean
   WATCHDOG_MS: number
+  CAPABILITY_DISCOVERY_SCAN_MS: number
 }
 const installer = require_('../scripts/install-ras-client.js') as {
   CLIENT_SCRIPT: string
@@ -149,6 +166,70 @@ test('collector args carry no shell string', () => {
   assert.ok(args.includes('--timeout-seconds'))
 })
 
+test('OpenCode slash-command input uses the native command path without adding wrapper quotes', () => {
+  const input = '/aet-design https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"'
+  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/opencode', {
+    platform: 'opencode',
+    agent: 'aet-design',
+    model: 'provider/model',
+    input,
+    correlation: { caseRunId: 'case-1' },
+  })
+
+  assert.equal(invocation.stdin, null)
+  assert.deepEqual(invocation.args, [
+    'run',
+    '--format',
+    'json',
+    '--agent',
+    'aet-design',
+    '--title',
+    'case-1',
+    '--model',
+    'provider/model',
+    '--command',
+    'aet-design',
+    'https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"',
+  ])
+  assert.ok(!invocation.args.includes(input))
+})
+
+test('ordinary OpenCode input is still piped verbatim through stdin', () => {
+  const input = '普通输入\n第二行  保留连续空格和 "原生引号"'
+  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/opencode', {
+    platform: 'opencode',
+    agent: 'build',
+    model: null,
+    input,
+  })
+
+  assert.equal(invocation.stdin, input)
+  assert.ok(!invocation.args.includes('--command'))
+  assert.ok(!invocation.args.includes(input))
+})
+
+test('OpenCode slash-command parser only accepts a command at the start of the input', () => {
+  assert.deepEqual(client.parseOpencodeSlashCommand('/aet-design  keep spacing'), {
+    command: 'aet-design',
+    arguments: ' keep spacing',
+  })
+  assert.equal(client.parseOpencodeSlashCommand('请执行 /aet-design task'), null)
+  assert.equal(client.parseOpencodeSlashCommand('/'), null)
+})
+
+test('non-OpenCode experiment input keeps the existing positional argument path', () => {
+  const input = 'ordinary agent input'
+  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/other-agent', {
+    platform: 'other-agent',
+    agent: 'build',
+    model: null,
+    input,
+  })
+
+  assert.equal(invocation.stdin, null)
+  assert.equal(invocation.args.at(-1), input)
+})
+
 test('readCollectResult finds the nested artifact', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ras-artifacts-'))
   try {
@@ -211,6 +292,63 @@ test('model ids normalize from strings and objects alike', () => {
     ['qwen3-32b', 'deepseek-v3', 'glm-4'],
   )
   assert.deepEqual(client.normalizeModelIds(undefined), [])
+})
+
+test('OpenCode capability fingerprint follows plugin target changes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-capabilities-'))
+  const previous = process.env.XDG_CONFIG_HOME
+  process.env.XDG_CONFIG_HOME = root
+  try {
+    const configRoot = path.join(root, 'opencode')
+    const plugins = path.join(configRoot, 'plugins')
+    const pluginTarget = path.join(root, 'dynamic-plugin.js')
+    fs.mkdirSync(plugins, { recursive: true })
+    fs.writeFileSync(path.join(configRoot, 'opencode.json'), JSON.stringify({ plugin: ['./plugins/aet.js'] }))
+    fs.writeFileSync(pluginTarget, 'export default 1')
+    fs.symlinkSync(pluginTarget, path.join(plugins, 'aet.js'))
+
+    const before = client.capabilityDiscoveryFingerprint()
+    fs.writeFileSync(pluginTarget, 'export default 22')
+    const after = client.capabilityDiscoveryFingerprint()
+    assert.notEqual(after, before)
+    assert.equal(client.CAPABILITY_DISCOVERY_SCAN_MS, 30_000)
+  } finally {
+    if (previous === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('manual and automatic capability refresh bypass the cached probe', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(source, /REFRESH_CAPABILITIES[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
+  assert.match(source, /cachedProbe = await probeFaultInjectionIsolated\(cfg\)[\s\S]*?reportCapabilities\(cfg\)/)
+  assert.match(source, /const refreshCapabilities[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
+  assert.match(source, /setTimeout\([\s\S]*?setInterval\(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS\)[\s\S]*?CAPABILITY_DISCOVERY_SCAN_MS \/ 2/)
+})
+
+test('capability probe runs outside the daemon event loop', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(source, /function probeFaultInjectionIsolated[\s\S]*?spawn\(process\.execPath, \[__filename, FI_PROBE_CHILD_ARG\]/)
+  assert.match(source, /initialCapabilityRefresh\.then\(\(\) => fiLoop\(cfg\)\)/)
+  assert.match(source, /process\.argv\.includes\(FI_PROBE_CHILD_ARG\)[\s\S]*?probeFaultInjection\(cfg\)/)
+})
+
+test('FI inventory uses an isolated launchd helper with aligned PWD on macOS', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(
+    source,
+    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'submit'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?'remove', label/,
+  )
 })
 
 test('OpenCode JSON events expose the platform Trace ID', () => {
@@ -362,9 +500,9 @@ test('sd_notify READY precedes capabilities and watchdog is faster than Watchdog
   assert.match(mainBody, /notifyReady\(\)/)
   assert.match(mainBody, /setInterval\(notifyWatchdog,\s*WATCHDOG_MS\)/)
   const readyAt = mainBody.indexOf('notifyReady()')
-  const capsAt = mainBody.indexOf('reportCapabilities(')
+  const capsAt = mainBody.indexOf('refreshCapabilityReports(')
   assert.ok(readyAt >= 0 && capsAt > readyAt, 'READY 必须早于 reportCapabilities')
-  assert.doesNotMatch(mainBody, /await reportCapabilities/)
+  assert.doesNotMatch(mainBody, /await refreshCapabilityReports/)
   // Node dgram 无 unix_dgram；必须经 systemd-notify 且带本进程 pid。
   assert.match(src, /systemd-notify/)
   assert.match(src, /--pid=\$\{process\.pid\}/)
