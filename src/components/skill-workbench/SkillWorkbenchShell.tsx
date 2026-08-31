@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   CheckCircle2,
   ChevronRight,
@@ -20,6 +21,7 @@ import {
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import type { SkillWorkbenchActiveView } from '@/lib/skill-workbench/domain';
+import { publishWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
 import { cn } from '@/lib/utils';
 import { TruncateText } from '@/components/text/TruncateText';
 import { SkillDetailWorkspace } from './SkillDetailWorkspace';
@@ -106,6 +108,10 @@ function isStaticQualityError(message: string) {
 
 export function SkillWorkbenchShell() {
   const { user } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const requestedSessionId = searchParams.get('sessionId')?.trim() || null;
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [active, setActive] = useState<SessionDetail | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<SelectedSkillAsset | null>(null);
@@ -138,6 +144,7 @@ export function SkillWorkbenchShell() {
   const [optimizationBaselineOverride, setOptimizationBaselineOverride] = useState<Record<string, string> | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const selectedAssetRef = useRef<SelectedSkillAsset | null>(null);
+  const activeSessionRef = useRef<SessionDetail | null>(null);
   const [error, setError] = useState('');
   const [copilotWidth, setCopilotWidth] = useState(COPILOT_DEFAULT_WIDTH);
   const [workbenchWidth, setWorkbenchWidth] = useState(
@@ -146,6 +153,14 @@ export function SkillWorkbenchShell() {
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
   const reportError = useCallback((message: string) => setError(message), []);
+  const updateSessionUrl = useCallback((sessionId: string | null, mode: 'push' | 'replace' = 'push') => {
+    const params = new URLSearchParams(window.location.search);
+    if ((params.get('sessionId') || null) === sessionId) return;
+    if (sessionId) params.set('sessionId', sessionId);
+    else params.delete('sessionId');
+    const query = params.toString();
+    router[mode](`${pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  }, [pathname, router]);
   const clearAssetSelection = useCallback(() => {
     selectedAssetRef.current = null;
     setSelectedAsset(null);
@@ -221,6 +236,7 @@ export function SkillWorkbenchShell() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '加载会话失败');
     const session = data.session as SessionDetail;
+    activeSessionRef.current = session;
     setActive(session);
     return session;
   }, []);
@@ -296,6 +312,10 @@ export function SkillWorkbenchShell() {
     selectedAssetRef.current = selectedAsset;
   }, [selectedAsset]);
 
+  useEffect(() => {
+    activeSessionRef.current = active;
+  }, [active]);
+
   const loadSessions = useCallback(async () => {
     if (!user) return;
     setLoading(true);
@@ -309,24 +329,36 @@ export function SkillWorkbenchShell() {
       if (!response.ok) throw new Error(data.error || '加载历史会话失败');
       const next = (data.sessions || []) as SessionListItem[];
       setSessions(next);
-      if (next[0]) {
-        const session = await loadSession(next[0].id, user);
+      const targetSessionId = requestedSessionId || next[0]?.id || null;
+      if (targetSessionId) {
+        const session = activeSessionRef.current?.id === targetSessionId
+          ? activeSessionRef.current
+          : await loadSession(targetSessionId, user);
         if (session.skillName && session.workVersion !== null) {
           if (session.source === 'management') await selectFormalAsset(session.skillName, session.workVersion, user);
           else selectDraftAsset(session);
         } else {
           clearAssetSelection();
         }
+        setCurrentView(session.activeView || 'detail');
+        if (!requestedSessionId) updateSessionUrl(session.id, 'replace');
       } else {
+        activeSessionRef.current = null;
+        setActive(null);
+        clearAssetSelection();
+        if (requestedSessionId) updateSessionUrl(null, 'replace');
+      }
+    } catch (loadError) {
+      if (requestedSessionId) {
+        activeSessionRef.current = null;
         setActive(null);
         clearAssetSelection();
       }
-    } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '加载历史会话失败');
     } finally {
       setLoading(false);
     }
-  }, [clearAssetSelection, loadSession, selectDraftAsset, selectFormalAsset, user]);
+  }, [clearAssetSelection, loadSession, requestedSessionId, selectDraftAsset, selectFormalAsset, updateSessionUrl, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadSessions(), 0);
@@ -368,6 +400,7 @@ export function SkillWorkbenchShell() {
   const createBlankSession = async () => {
     const next = await createSession();
     if (!next || next.skillName) return next;
+    updateSessionUrl(next.id);
     clearAssetSelection();
     setCurrentView('detail');
     updateHistoryOpen(false);
@@ -377,12 +410,17 @@ export function SkillWorkbenchShell() {
   const ensureManagementProcessSession = async (asset: SelectedSkillAsset) => {
     if (!user || asset.kind !== 'formal') return null;
     if (active?.source === 'management' && active.skillName === asset.skillName && active.workVersion === asset.version) {
+      updateSessionUrl(active.id);
       return active;
     }
     const existing = sessions.find((session) => (
       session.source === 'management' && session.skillName === asset.skillName && session.workVersion === asset.version
     ));
-    if (existing) return loadSession(existing.id, user);
+    if (existing) {
+      const next = await loadSession(existing.id, user);
+      updateSessionUrl(next.id);
+      return next;
+    }
     const created = await createSession();
     if (!created) return null;
     const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(created.id)}/context`, {
@@ -393,7 +431,9 @@ export function SkillWorkbenchShell() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '准备 Skill 优化会话失败');
     const next = data.session as SessionDetail;
+    activeSessionRef.current = next;
     setActive(next);
+    updateSessionUrl(next.id);
     setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
     return next;
   };
@@ -434,7 +474,9 @@ export function SkillWorkbenchShell() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '绑定会话 Skill 失败');
         const next = data.session as SessionDetail;
+        activeSessionRef.current = next;
         setActive(next);
+        updateSessionUrl(next.id);
         setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
       }
       await selectFormalAsset(skillName, version, user);
@@ -510,6 +552,15 @@ export function SkillWorkbenchShell() {
       );
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '放弃候选失败');
+      publishWorkbenchSync({
+        sessionId: record.sessionId,
+        taskType: 'optimization',
+        kind: 'optimization-record-changed',
+        skillName: record.skillName,
+        recordId: record.id,
+        change: 'abandoned',
+        baseVersion: record.baseVersion,
+      });
       if (selectedAsset?.skillName === record.skillName) await loadOptimizationRecords(selectedAsset, user);
     } catch (abandonError) {
       setError(abandonError instanceof Error ? abandonError.message : '放弃候选失败');
@@ -539,6 +590,16 @@ export function SkillWorkbenchShell() {
       );
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '发布优化候选失败');
+      publishWorkbenchSync({
+        sessionId: record.sessionId,
+        taskType: 'optimization',
+        kind: 'optimization-record-changed',
+        skillName: record.skillName,
+        recordId: record.id,
+        change: 'published',
+        baseVersion: record.baseVersion,
+        publishedVersion: data.version.version,
+      });
       if (data.session) {
         const next = data.session as SessionDetail;
         setActive((current) => current?.id === next.id ? next : current);
@@ -704,13 +765,41 @@ export function SkillWorkbenchShell() {
 
   const acceptOptimizationSession = useCallback((value: unknown) => {
     const next = value as SessionDetail;
+    const previous = activeSessionRef.current;
+    const asset = selectedAssetRef.current;
+    const versionAdvanced = Boolean(
+      previous
+      && next.skillName
+      && previous.skillName === next.skillName
+      && previous.workVersion !== null
+      && next.workVersion !== null
+      && next.workVersion > previous.workVersion,
+    );
+    const shouldFollowPublishedVersion = Boolean(
+      versionAdvanced
+      && asset
+      && asset.skillName === next.skillName
+      && asset.version === previous?.workVersion,
+    );
+    activeSessionRef.current = next;
     setActive(next);
     setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
     setError((current) => isStaticQualityError(current) ? '' : current);
-    const asset = selectedAssetRef.current;
     if (asset?.kind === 'draft') selectDraftAsset(next);
-    if (asset && user) void loadOptimizationRecords(asset, user);
-  }, [loadOptimizationRecords, selectDraftAsset, user]);
+    if (versionAdvanced && user) {
+      void loadAssetCatalog(user)
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
+    }
+    if (asset && user) {
+      if (shouldFollowPublishedVersion && next.skillName && next.workVersion !== null) {
+        void selectFormalAsset(next.skillName, next.workVersion, user)
+          .then((publishedAsset) => loadOptimizationRecords(publishedAsset, user))
+          .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '同步发布版本失败'));
+      } else {
+        void loadOptimizationRecords(asset, user);
+      }
+    }
+  }, [loadAssetCatalog, loadOptimizationRecords, selectDraftAsset, selectFormalAsset, user]);
 
   const publishSnapshot = async () => {
     if (!user || !selectedAsset || selectedAsset.kind !== 'draft' || !selectedAsset.sessionId || publishing) return;
@@ -763,6 +852,7 @@ export function SkillWorkbenchShell() {
         ? await ensureManagementProcessSession(optimizationAsset)
         : optimizationAsset.sessionId ? await loadSession(optimizationAsset.sessionId, user) : null);
       if (!processSession) throw new Error('无法准备当前 Skill 的优化会话');
+      updateSessionUrl(processSession.id);
       const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(processSession.id)}/optimization`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user }),
       });
@@ -847,6 +937,7 @@ export function SkillWorkbenchShell() {
     if (!user) return;
     try {
       const session = await loadSession(sessionId, user);
+      updateSessionUrl(session.id);
       if (session.skillName && session.workVersion !== null) await showSessionAsset(session);
       else clearAssetSelection();
       setCurrentView('detail');

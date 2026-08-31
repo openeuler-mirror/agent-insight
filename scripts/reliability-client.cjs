@@ -16,7 +16,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { spawn, spawnSync } = require('child_process')
-const { randomBytes } = require('crypto')
+const { createHash, randomBytes } = require('crypto')
 
 const { connectWebSocket } = require('./ws-client.cjs')
 
@@ -37,10 +37,12 @@ const RUN_FORBIDDEN = ['command', 'shell', 'args', 'cwd', 'executable', 'script'
 
 const AGENT_VERSION = '1.0.0'
 const HEARTBEAT_MS = 30_000
+const CAPABILITY_DISCOVERY_SCAN_MS = 30_000
 // Type=notify + WatchdogSec=30s：systemd 要求约每半周期喂狗，不能绑在 30s HTTP 心跳上。
 const WATCHDOG_MS = 10_000
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 60_000
+const FI_PROBE_CHILD_ARG = '--probe-fi-inventory-once'
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
 const LIVENESS_TIMEOUT_MS = 75_000
 const LIVENESS_CHECK_MS = 15_000
@@ -165,6 +167,52 @@ function which(bin) {
   return r.status === 0 ? (r.stdout || '').trim() : null
 }
 
+function capabilityDiscoveryFingerprint() {
+  const configRoot = path.join(
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+    'opencode',
+  )
+  const parts = []
+  const visit = (target, depth = 0) => {
+    let info
+    try {
+      info = fs.lstatSync(target)
+    } catch {
+      parts.push(`${target}:missing`)
+      return
+    }
+    parts.push(`${target}:${info.mode}:${info.size}:${info.mtimeMs}`)
+    if (info.isSymbolicLink()) {
+      try {
+        const resolved = fs.realpathSync(target)
+        const targetInfo = fs.statSync(resolved)
+        parts.push(`${target}->${resolved}:${targetInfo.size}:${targetInfo.mtimeMs}`)
+      } catch {
+        parts.push(`${target}:broken-link`)
+      }
+      return
+    }
+    if (!info.isDirectory() || depth >= 2) return
+    let entries = []
+    try {
+      entries = fs.readdirSync(target).sort()
+    } catch {
+      return
+    }
+    for (const entry of entries) visit(path.join(target, entry), depth + 1)
+  }
+  for (const target of [
+    path.join(configRoot, 'opencode.json'),
+    path.join(configRoot, 'opencode.jsonc'),
+    path.join(configRoot, 'package.json'),
+    path.join(configRoot, 'plugins'),
+    path.join(configRoot, 'agents'),
+    path.join(configRoot, 'oh-my-openagent.json'),
+    path.join(configRoot, 'oh-my-opencode.json'),
+  ]) visit(target)
+  return createHash('sha256').update(parts.join('\n')).digest('hex')
+}
+
 /**
  * 找一个能 `import agent_fault_injection` 的工作目录。
  *
@@ -198,6 +246,90 @@ function resolveFiCwd(cfg, python = resolvePython(cfg)) {
 
 let cachedFiCwd
 
+function waitSync(ms) {
+  const state = new Int32Array(new SharedArrayBuffer(4))
+  Atomics.wait(state, 0, 0, ms)
+}
+
+function runFiInventory(python, cwd, pythonArgs, probeEnv) {
+  const options = {
+    cwd,
+    env: probeEnv,
+    detached: process.platform !== 'win32',
+    encoding: 'utf8',
+    timeout: 60_000,
+    maxBuffer: 8 * 1024 * 1024,
+  }
+  if (process.platform !== 'darwin') {
+    const command = process.platform === 'win32' ? python : '/bin/sh'
+    const args = process.platform === 'win32'
+      ? pythonArgs
+      : ['-c', 'exec "$@"', 'agent-insight-fi-inventory', python, ...pythonArgs]
+    return spawnSync(command, args, options)
+  }
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-fi-probe-'))
+  const stdoutPath = path.join(tempRoot, 'stdout.json')
+  const stderrPath = path.join(tempRoot, 'stderr.log')
+  const label = `ai.agent-insight.fi-probe.${process.pid}.${randomBytes(4).toString('hex')}`
+  const uid = process.getuid ? process.getuid() : 501
+  try {
+    const submitted = spawnSync(
+      'launchctl',
+      [
+        'submit',
+        '-l',
+        label,
+        '-o',
+        stdoutPath,
+        '-e',
+        stderrPath,
+        '--',
+        '/usr/bin/env',
+        `PATH=${probeEnv.PATH || ''}`,
+        `HOME=${os.homedir()}`,
+        `PWD=${cwd}`,
+        '/bin/sh',
+        '-c',
+        'cd "$1" && shift && exec "$@"',
+        'agent-insight-fi-inventory',
+        cwd,
+        python,
+        ...pythonArgs,
+      ],
+      { encoding: 'utf8', env: probeEnv },
+    )
+    if (submitted.status !== 0) return submitted
+
+    const deadline = Date.now() + options.timeout
+    while (Date.now() < deadline) {
+      let stdout = ''
+      let stderr = ''
+      try { stdout = fs.readFileSync(stdoutPath, 'utf8') } catch {}
+      try { stderr = fs.readFileSync(stderrPath, 'utf8') } catch {}
+      if (stdout.trim()) {
+        try {
+          JSON.parse(stdout)
+          return { status: 0, stdout, stderr }
+        } catch {}
+      }
+      const state = spawnSync(
+        'launchctl',
+        ['print', `gui/${uid}/${label}`],
+        { encoding: 'utf8', stdio: 'pipe' },
+      )
+      if (state.status !== 0 || /state = exited/.test(state.stdout || '')) {
+        return { status: 1, stdout, stderr: stderr || 'inventory helper exited without JSON' }
+      }
+      waitSync(100)
+    }
+    return { status: null, stdout: '', stderr: 'inventory helper timed out' }
+  } finally {
+    spawnSync('launchctl', ['remove', label], { stdio: 'ignore' })
+    fs.rmSync(tempRoot, { recursive: true, force: true })
+  }
+}
+
 /**
  * Python / agent_fault_injection 是**可选**能力。
  * 缺失时客户端照常上线，只是 faultInjection.ready=false —— 服务端据此不派发 FI run。
@@ -215,11 +347,18 @@ function probeFaultInjection(cfg) {
       platforms: {},
     }
   }
-  const result = spawnSync(
-    python,
-    ['-I', '-m', 'agent_fault_injection.cli', 'platform', 'inventory', '--json'],
-    { cwd, encoding: 'utf8', timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
-  )
+  const pythonArgs = [
+    '-I',
+    '-m',
+    'agent_fault_injection.cli',
+    'platform',
+    'inventory',
+    '--json',
+  ]
+  const probeEnv = { ...process.env, PWD: cwd }
+  delete probeEnv.XPC_SERVICE_NAME
+  delete probeEnv.XPC_FLAGS
+  const result = runFiInventory(python, cwd, pythonArgs, probeEnv)
   if (result.status !== 0) {
     const note = (result.stderr || result.stdout || '').trim() || `exit ${result.status}`
     return { ready: false, note, platforms: {} }
@@ -230,6 +369,54 @@ function probeFaultInjection(cfg) {
   } catch (err) {
     return { ready: false, note: `inventory parse failed: ${err.message}`, platforms: {} }
   }
+}
+
+/**
+ * inventory 最慢会运行几十秒。放到独立 Node 进程后，即使 macOS 上需要
+ * launchctl helper，主进程的心跳、长轮询和 HTTP 连接也不会被同步等待拖死。
+ */
+function probeFaultInjectionIsolated(cfg) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [__filename, FI_PROBE_CHILD_ARG], {
+      cwd: __dirname,
+      env: process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = (err, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (err) reject(err)
+      else resolve(value)
+    }
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch {}
+      finish(new Error('inventory probe child timed out'))
+    }, 70_000)
+    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
+    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    child.on('error', (err) => finish(err))
+    child.on('close', (code) => {
+      if (code !== 0) {
+        finish(new Error(stderr.trim() || `inventory probe child exited ${code}`))
+        return
+      }
+      try {
+        finish(null, JSON.parse(stdout.trim() || '{}'))
+      } catch (err) {
+        finish(new Error(`inventory probe child returned invalid JSON: ${err.message}`))
+      }
+    })
+    child.stdin.end(JSON.stringify({
+      fiPackageRoot: cfg.fiPackageRoot,
+      fiCwd: cfg.fiCwd,
+      fiPython: cfg.fiPython,
+      maxParallelFi: cfg.maxParallelFi,
+    }))
+  })
 }
 
 /** 探测代价高（要 spawn Python），一次探测供两份上报共用。 */
@@ -586,7 +773,7 @@ async function executeAction(cfg, frame, sendStatus) {
 
   if (action === 'REFRESH_CAPABILITIES') {
     await sendStatus('RUNNING', {})
-    await reportCapabilities(cfg)
+    await refreshCapabilityReports(cfg, { force: true })
     await sendStatus('SUCCEEDED', { result: { state: 'REFRESHED' } })
     return
   }
@@ -826,8 +1013,8 @@ let capabilitiesRevision = 0
 // 否则服务端会把首次上报当成重放而丢弃（表现为 platforms 一直是空）。
 const REVISION_EPOCH = Date.now().toString(36)
 
-async function reportCapabilities(cfg) {
-  const capabilities = buildCapabilities(cfg)
+async function reportCapabilities(cfg, opts) {
+  const capabilities = buildCapabilities(cfg, opts)
   capabilitiesRevision += 1
   await api(cfg, 'PUT', '/api/reliability/client/v1/capabilities', {
     revision: `cap_${REVISION_EPOCH}_${capabilitiesRevision}`,
@@ -841,9 +1028,32 @@ async function reportCapabilities(cfg) {
     faultInjection: capabilities.faultInjection,
   })
   log(
-    `capabilities reported: platforms=${capabilities.platforms.map((p) => p.id).join(',') || 'none'} fi=${capabilities.faultInjection.ready}`,
+    `capabilities reported: platforms=${capabilities.platforms.map((p) => p.id).join(',') || 'none'}` +
+      ` agents=${capabilities.platforms.map((p) => `${p.id}:${p.agents?.length || 0}`).join(',') || 'none'}` +
+      ` fi=${capabilities.faultInjection.ready}`,
   )
   return capabilities
+}
+
+let lastCapabilityFingerprint = null
+let capabilityRefreshInFlight = null
+
+async function refreshCapabilityReports(cfg, { force = false } = {}) {
+  const fingerprint = capabilityDiscoveryFingerprint()
+  if (!force && fingerprint === lastCapabilityFingerprint) return false
+  if (capabilityRefreshInFlight) return capabilityRefreshInFlight
+  capabilityRefreshInFlight = (async () => {
+    cachedProbe = await probeFaultInjectionIsolated(cfg)
+    await reportCapabilities(cfg)
+    await sendFiHeartbeat(cfg)
+    lastCapabilityFingerprint = fingerprint
+    return true
+  })()
+  try {
+    return await capabilityRefreshInFlight
+  } finally {
+    capabilityRefreshInFlight = null
+  }
 }
 
 const processStartedAt = new Date().toISOString()
@@ -972,6 +1182,7 @@ async function main() {
   }
   fs.mkdirSync(CLIENT_HOME, { recursive: true })
   log(`clientId=${cfg.clientId} host=${cfg.insightBaseUrl}`)
+  log(`fi probe cwd=${resolveFiCwd(cfg) || 'unavailable'}`)
 
   // Type=notify：必须在 capabilities / 网络探测之前 READY，否则 TimeoutStartSec≈90s 杀进程。
   notifyReady()
@@ -984,16 +1195,29 @@ async function main() {
     sendFiHeartbeat(cfg)
   }
   setInterval(heartbeatAll, HEARTBEAT_MS)
-  heartbeatAll()
+  // 启动阶段只先发控制面心跳。首次权威能力探测会同时发送 FI inventory，
+  // 避免 launchd 下连续启动两个 OpenCode catalog 进程时缓存不完整结果。
+  sendHeartbeat(cfg).catch((err) => logErr('heartbeat failed', err.message))
 
   setInterval(() => {
     flushSpool(cfg).catch(() => {})
   }, 15_000)
 
   // 能力探测可能 spawn opencode / FI inventory，耗时长；不得阻塞 systemd 就绪与喂狗。
-  reportCapabilities(cfg).catch((err) => logErr('capabilities failed', err.message))
+  const initialCapabilityRefresh = refreshCapabilityReports(cfg, { force: true })
+    .catch((err) => logErr('capabilities failed', err.message))
+  const refreshCapabilities = () => {
+    // 插件可以在配置文件不再变化后动态注册 Agent；定时轮询必须重新读取
+    // OpenCode resolved catalog，不能只依赖配置文件指纹。
+    refreshCapabilityReports(cfg, { force: true })
+      .catch((err) => logErr('capability refresh failed', err.message))
+  }
+  setTimeout(() => {
+    refreshCapabilities()
+    setInterval(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS)
+  }, CAPABILITY_DISCOVERY_SCAN_MS / 2)
 
-  fiLoop(cfg)
+  initialCapabilityRefresh.then(() => fiLoop(cfg))
   controlLoop(cfg)
   pollLoop(cfg)
 }
@@ -1227,6 +1451,8 @@ module.exports = {
   resolveFiCwd,
   buildFiInventory,
   buildCapabilities,
+  capabilityDiscoveryFingerprint,
+  refreshCapabilityReports,
   normalizeModelIds,
   extractTraceIdFromJsonLine,
   buildCollectorArgs,
@@ -1241,9 +1467,18 @@ module.exports = {
   CONFIG_FORBIDDEN,
   RUN_FORBIDDEN,
   WATCHDOG_MS,
+  CAPABILITY_DISCOVERY_SCAN_MS,
 }
 
-if (require.main === module) {
+if (require.main === module && process.argv.includes(FI_PROBE_CHILD_ARG)) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(0, 'utf8') || '{}')
+    process.stdout.write(JSON.stringify(probeFaultInjection(cfg)))
+  } catch (err) {
+    process.stderr.write(String(err?.stack || err))
+    process.exitCode = 1
+  }
+} else if (require.main === module) {
   main().catch((err) => {
     logErr('fatal', err)
     process.exit(1)

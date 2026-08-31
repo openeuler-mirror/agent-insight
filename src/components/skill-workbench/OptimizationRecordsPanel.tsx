@@ -33,6 +33,7 @@ export interface OptimizationRecordView {
   }>;
   hasRetestableSource: boolean;
   createdAt: string;
+  updatedAt?: string;
   publishedVersion: number | null;
   errorMessage: string | null;
   sourceSession?: { id: string; title: string } | null;

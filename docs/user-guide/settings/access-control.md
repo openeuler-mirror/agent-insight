@@ -96,8 +96,18 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 凭证与接入信息区通常包含：
 
 - **当前 API Key 面板**：展示当前账号的接入凭证，并提供复制能力
-- **接入信息面板**：展示邮箱、平台地址、API Key 状态与上报路径
+- **接入信息面板**：展示邮箱、平台地址、API Key 状态，并根据已选框架展示实际使用的主上报通道
 - **相关文档面板**：提供 API Key、客户端配置和常见问题说明入口
+
+主上报通道会随框架选择实时变化；多选框架共用同一通道时，页面只展示一次，并在通道下列出对应框架。未选择任何框架时，页面提示将在终端中继续选择。当前三类主通道为：
+
+| 主上报通道 | 接口路径 | 主要数据形态 |
+| --- | --- | --- |
+| **OTLP Logs** | `/api/ingest/otel/v1/logs` | 框架产生的日志事件流 |
+| **OTLP Traces** | `/api/ingest/otel/v1/traces` | 标准 OTLP Span 批次 |
+| **JSON 会话快照** | `/api/ingest/upload` | 客户端聚合后的完整或增量会话 |
+
+Langfuse/LangGraph 不在上方框架选择器中，其环境变量配置区单独展示兼容入口 `/api/public/otel/v1/traces`。上下文补传、会话完成通知和历史兼容路径由安装脚本自动配置，不作为额外主通道重复展示。
 
 <p align="center">
   <img src="../../images/config/client_config.png" alt="客户端安装页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
@@ -112,7 +122,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 | **安装命令** | 按目标操作系统生成的接入脚本入口，用于初始化客户端配置。 |
 | **API Key** | 当前账号的接入凭证，用于绑定上报身份与数据归属。 |
 | **平台地址** | Agent Insight 服务端地址，客户端通过该地址上报执行数据。 |
-| **上报路径** | 平台接收链路数据的接口路径，用于确认客户端上报目标。 |
+| **当前上报通道** | 根据已选框架显示 OTLP Logs、OTLP Traces 或 JSON 会话快照入口；同一入口会自动去重。 |
 | **当前账号** | 当前登录态对应的用户身份，用于确认数据归属是否正确。 |
 | **API Key 状态** | 当前凭证的展示状态，用于辅助判断是否需要重新复制或更新。 |
 | **Langfuse 环境变量** | 将已有 Langfuse 上报目标重定向到 Agent Insight；`LANGFUSE_PUBLIC_KEY` 填当前 Agent Insight 用户名，`LANGFUSE_SECRET_KEY` 填该用户的 Agent Insight API Key，二者不对应时平台会拒绝上报；`session_id` 继续按 Langfuse 原语义作为跨 trace 会话归组字段。 |

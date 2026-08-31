@@ -277,7 +277,15 @@ export async function beginWorkbenchOptimizationRun(input: {
     version: workbench.workVersion,
     targetRef: input.runId,
   });
-  if (!created) return null;
+  if (!created) throw new Error('无法为优化会话取得任务锁');
+  if (created.blocked || created.reused) {
+    return {
+      kind: 'busy' as const,
+      taskId: created.task.id,
+      workbenchSessionId: workbench.id,
+      recordId: created.task.resultId || undefined,
+    };
+  }
   const record = created.reused || workbench.source !== 'management' || !workbench.skillName || workbench.workVersion == null
     ? null
     : await beginSkillOptimizationRecord({
@@ -303,6 +311,7 @@ export async function beginWorkbenchOptimizationRun(input: {
     }),
   ]);
   return {
+    kind: 'started' as const,
     taskId: created.task.id,
     workbenchSessionId: workbench.id,
     recordId: record?.id || created.task.resultId || undefined,

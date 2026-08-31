@@ -19,6 +19,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { getApiUrl } from '@/lib/client/api';
+import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-channels';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
 
@@ -50,6 +51,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'codex', label: 'Codex' },
     { value: 'deepseek-harness', label: 'DeepSeek Harness' },
 ];
+const FRAMEWORK_LABELS = new Map(FRAMEWORK_OPTIONS.map(option => [option.value, option.label]));
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
@@ -297,6 +299,7 @@ export default function AccessInstallPage() {
                                 host={host}
                                 user={user}
                                 keyReady={keyReady}
+                                frameworks={frameworks}
                                 locale={locale}
                             />
                             <DocsPanel locale={locale} />
@@ -443,14 +446,16 @@ function ApiKeyPanel({
 }
 
 function ConnectionPanel({
-    host, user, keyReady, locale,
+    host, user, keyReady, frameworks, locale,
 }: {
     host: string;
     user: string | null;
     keyReady: boolean;
+    frameworks: string[];
     locale: string;
 }) {
     const isZh = locale === 'zh';
+    const reportingChannels = getSelectedReportingChannels(frameworks);
     return (
         <section style={panelCard}>
             <header style={panelHeader}>
@@ -475,18 +480,35 @@ function ConnectionPanel({
                         ? (isZh ? '已绑定' : 'Ready')
                         : (isZh ? '加载中' : 'Loading')}
                 />
-                <KvRow
-                    label={isZh ? '上报路径' : 'Ingest'}
-                    value="/api/ingest/v1/*"
-                    mono
-                />
-                <KvRow
-                    label={isZh ? 'OTEL 上报' : 'OTEL trace'}
-                    value="/api/public/otel/v1/traces"
-                    mono
-                    ellipsis
-                />
             </ul>
+            <div style={channelSectionHeader}>
+                <span>{isZh ? '当前上报通道' : 'Active reporting channels'}</span>
+                <span style={countPill}>{reportingChannels.length}</span>
+            </div>
+            {reportingChannels.length === 0 ? (
+                <div style={emptyChannelText}>
+                    {isZh ? '将在终端中选择框架。' : 'Choose frameworks in the terminal.'}
+                </div>
+            ) : (
+                <div style={channelList}>
+                    {reportingChannels.map(channel => (
+                        <div key={channel.id} style={channelItem}>
+                            <div style={channelLabel}>{isZh ? channel.labelZh : channel.labelEn}</div>
+                            <code style={channelEndpoint}>{channel.endpoint}</code>
+                            <div style={channelFrameworks}>
+                                {channel.frameworks.map(framework => FRAMEWORK_LABELS.get(framework) || framework).join(' · ')}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+            {reportingChannels.length > 0 && (
+                <div style={channelStatusNote}>
+                    {isZh
+                        ? '已受理不等于已可见，平台仍需异步聚合。'
+                        : 'Accepted data still requires asynchronous aggregation before it becomes visible.'}
+                </div>
+            )}
         </section>
     );
 }
@@ -522,6 +544,10 @@ function LangfuseEnvCard({
                 <code style={{ ...commandCode, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                     {envText}
                 </code>
+            </div>
+            <div style={langfuseEndpointRow}>
+                <span>{isZh ? 'Langfuse 兼容入口' : 'Langfuse-compatible endpoint'}</span>
+                <code style={langfuseEndpointCode}>/api/public/otel/v1/traces</code>
             </div>
             <div style={langfuseNote}>
                 {isZh
@@ -741,6 +767,93 @@ const panelKv: CSSProperties = {
     padding: 0,
     margin: 0,
     listStyle: 'none',
+};
+
+const channelSectionHeader: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingTop: 2,
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--foreground)',
+};
+
+const channelList: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+};
+
+const channelItem: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: '9px 10px',
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    minWidth: 0,
+};
+
+const channelLabel: CSSProperties = {
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: 'var(--foreground-secondary)',
+};
+
+const channelEndpoint: CSSProperties = {
+    fontSize: 11,
+    lineHeight: 1.45,
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    color: 'var(--foreground)',
+    overflowWrap: 'anywhere',
+};
+
+const channelFrameworks: CSSProperties = {
+    fontSize: 10.5,
+    lineHeight: 1.45,
+    color: 'var(--foreground-muted)',
+    overflowWrap: 'anywhere',
+};
+
+const emptyChannelText: CSSProperties = {
+    padding: '10px',
+    border: '1px dashed var(--border)',
+    borderRadius: 8,
+    background: 'var(--background-secondary)',
+    fontSize: 11.5,
+    lineHeight: 1.5,
+    color: 'var(--foreground-muted)',
+};
+
+const channelStatusNote: CSSProperties = {
+    fontSize: 10.5,
+    lineHeight: 1.5,
+    color: 'var(--foreground-muted)',
+};
+
+const langfuseEndpointRow: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '8px 10px',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: 'var(--background-secondary)',
+    fontSize: 11.5,
+    color: 'var(--foreground-secondary)',
+};
+
+const langfuseEndpointCode: CSSProperties = {
+    minWidth: 0,
+    fontSize: 11,
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    color: 'var(--foreground)',
+    overflowWrap: 'anywhere',
+    textAlign: 'right',
 };
 
 const docLink: CSSProperties = {
