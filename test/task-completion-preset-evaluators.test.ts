@@ -337,6 +337,26 @@ describe('任务完成度（无标准答案）评估器 全链路', () => {
     assert.ok(r.score! > 0 && r.score! < 100, `expected non-trivial score, got ${r.score}`);
   });
 
+  it('summary/reason 不列举具体需求名，避免长需求被硬截断', async () => {
+    // 故意用带文件路径/长串描述的需求（用户实际遇到的 case）
+    inject(buildJudgeResult({
+      overall_reason: '三次操作全部失败',
+      information_sufficiency: 'severely_insufficient',
+      requirement_results: [
+        { content: '尝试往 /root/protected.txt 写数据（这个位通常会失败）', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '权限不足' },
+        { content: '报告在 /root/protected.txt 写数据的操作结果', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '未执行' },
+        { content: '如果往 /root/protected.txt 写数据失败，写数据失败后改写到当前目录的 fallback.txt', type: 'explicit', confidence: 'high', verdict: 'not_covered', reason: '未执行' },
+      ],
+    }));
+    const r = await runTaskCompletionNoRef(USER, ctx('测试', '输出'));
+    // summary 必须是整体定性短句，不列举具体需求名、不被截断
+    assert.match(r.summary ?? '', /^3 项需求未满足[。.]$/);
+    assert.ok((r.summary?.length ?? 0) <= 80, `summary 太长会被截断：${r.summary}`);
+    // reason = summary 同文案
+    const reason = (r.evidence as { md?: string } | undefined)?.md ?? '';
+    assert.equal(reason, r.summary);
+  });
+
   it('信息充分性档位映射到固定分数，LLM 不参与连续打分', async () => {
     // 4 档映射：sufficient=100 / mostly_sufficient=80 / insufficient=50 / severely_insufficient=20
     const assertInfoScore = async (level: string, expectedInfoScore: number) => {

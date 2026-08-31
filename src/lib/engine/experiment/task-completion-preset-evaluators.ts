@@ -233,18 +233,20 @@ function computeScore(judge: TaskCompletionJudgeResult): {
   else if (score >= 60) verdict = 'warn';
   else verdict = 'fail';
 
-  // summary：说人话，≤80 字，讲最要命的具体问题（开发指南 §2.1）
+  // summary：说人话，整体定性，不列举具体需求名（明细在下方评分点）。
+  // 长需求名（如带文件路径）会让列举式总结被 coerceSummary 硬切到看不懂，
+  // 所以这里只给定性结论——N 项未满足 / N 项部分满足 / 全部满足。
   const notCovered = judge.requirement_results.filter((r) => r.verdict === 'not_covered');
   const partial = judge.requirement_results.filter((r) => r.verdict === 'partially_covered');
   let summary: string;
   if (notCovered.length === 0 && partial.length === 0) {
-    summary = `全部 ${judge.requirement_results.length} 项需求均已满足。`.slice(0, 80);
-  } else if (notCovered.length > 0) {
-    const names = notCovered.slice(0, 3).map((r) => r.content).join('、');
-    summary = `未满足：${names}${notCovered.length > 3 ? `等 ${notCovered.length} 项` : ''}。`.slice(0, 80);
+    summary = `全部 ${judge.requirement_results.length} 项需求均已满足。`;
+  } else if (notCovered.length === 0) {
+    summary = `${partial.length} 项需求部分满足。`;
+  } else if (partial.length === 0) {
+    summary = `${notCovered.length} 项需求未满足。`;
   } else {
-    const names = partial.slice(0, 3).map((r) => r.content).join('、');
-    summary = `部分满足：${names}${partial.length > 3 ? `等 ${partial.length} 项` : ''}。`.slice(0, 80);
+    summary = `${notCovered.length} 项未满足、${partial.length} 项部分满足。`;
   }
 
   // reason：只放一句话结论（与 summary 一致，由 isEvidenceRedundant 自动隐藏重复）。

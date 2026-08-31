@@ -320,7 +320,7 @@ function computeScore(
   } else if (rate < 50) {
     summary = `${stats.totalCalls} 次调用中 ${failed} 次失败（成功率 ${rate}%），工具链路严重不稳定。`;
   } else if (impact.impact_verdict === 'severe') {
-    summary = `关键路径工具调用失败导致任务中断：${impact.critical_path_details || '成功率 ' + rate + '%'}。`;
+    summary = `关键路径工具调用失败导致任务中断（成功率 ${rate}%）。`;
   } else if (repeatedErrors.length > 0) {
     const first = repeatedErrors[0];
     summary = `${first.tool_name} 反复因 ${first.error_code} 失败 ${first.count} 次，Agent 未做修复。`;
