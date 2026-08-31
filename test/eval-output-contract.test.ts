@@ -9,6 +9,7 @@ import {
   EvaluatorOutputSchema,
 } from '../src/lib/evaluators/eval-output';
 import { getEvaluatorMeta, deriveEvaluatorTags, gateEvaluator } from '../src/lib/evaluators/registry';
+import type { EvaluatorMeta } from '../src/lib/evaluators/registry';
 import type { EvaluatorCard } from '../src/lib/evaluators/custom-evaluator-model';
 
 describe('评估器输出统一契约 normalizeEvaluatorOutput', () => {
@@ -191,27 +192,44 @@ describe('评估器注册表 registry', () => {
 
   it('硬门控要求所有 case 满足参考答案或 Tool/Skill 目录依赖', () => {
     const meta = { category: 'res' as const, requires: ['reference' as const] };
-    const g1 = gateEvaluator(meta, [
+    const g1 = gateEvaluator('x', meta, [
       { hasReference: true, hasToolCatalog: false },
       { hasReference: false, hasToolCatalog: false },
     ]);
     assert.equal(g1.usable, false);
     assert.match(g1.reason ?? '', /1 个未标注/);
-    assert.equal(gateEvaluator(meta, [{ hasReference: true, hasToolCatalog: false }]).usable, true);
-    assert.equal(gateEvaluator(meta, []).usable, false);
-    assert.equal(gateEvaluator({ category: 'traj', requires: [] }, []).usable, true);
+    assert.equal(gateEvaluator('x', meta, [{ hasReference: true, hasToolCatalog: false }]).usable, true);
+    assert.equal(gateEvaluator('x', meta, []).usable, false);
+    assert.equal(gateEvaluator('y', { category: 'traj', requires: [] }, []).usable, true);
 
     const toolMeta = { category: 'traj' as const, requires: ['tool_catalog' as const] };
-    assert.equal(gateEvaluator(toolMeta, [{ hasReference: false, hasToolCatalog: true }]).usable, true);
-    assert.equal(gateEvaluator(toolMeta, [{ hasReference: false, hasToolCatalog: false }]).usable, false);
+    assert.equal(gateEvaluator('z', toolMeta, [{ hasReference: false, hasToolCatalog: true }]).usable, true);
+    assert.equal(gateEvaluator('z', toolMeta, [{ hasReference: false, hasToolCatalog: false }]).usable, false);
 
     const datasetMeta = { category: 'res' as const, requires: ['dataset_input' as const] };
-    assert.equal(gateEvaluator(datasetMeta, [{ hasReference: false, hasDatasetInput: true, hasToolCatalog: false }]).usable, true);
-    const datasetGate = gateEvaluator(datasetMeta, [
+    assert.equal(gateEvaluator('dataset-test', datasetMeta, [{ hasReference: false, hasDatasetInput: true, hasToolCatalog: false }]).usable, true);
+    const datasetGate = gateEvaluator('dataset-test', datasetMeta, [
       { hasReference: false, hasDatasetInput: true, hasToolCatalog: false },
       { hasReference: false, hasDatasetInput: false, hasToolCatalog: false },
     ]);
     assert.equal(datasetGate.usable, false);
     assert.match(datasetGate.reason ?? '', /1 个未匹配数据集输入/);
+  });
+
+  it('互斥组：已选有参考答案版任务完成度时，禁用无参考版', () => {
+    const noRefId = 'preset-task-completion-no-ref';
+    const refId = 'preset-agent-task-completion';
+    const noRefMeta: EvaluatorMeta = { category: 'res', requires: [] };
+    const cases = [{ hasReference: true, hasToolCatalog: false }];
+
+    // 未选任何评估器：无参考版可选
+    assert.equal(gateEvaluator(noRefId, noRefMeta, cases).usable, true);
+    // 已选有参考答案版：无参考版被互斥禁用
+    const gated = gateEvaluator(noRefId, noRefMeta, cases, [refId]);
+    assert.equal(gated.usable, false);
+    assert.match(gated.reason ?? '', /重复加权/);
+    // 有参考答案版自身不受互斥影响（它是优先项）
+    const refMeta = { category: 'res' as const, requires: ['reference' as const] };
+    assert.equal(gateEvaluator(refId, refMeta, cases, [refId]).usable, true);
   });
 });

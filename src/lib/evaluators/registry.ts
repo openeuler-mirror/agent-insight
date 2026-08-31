@@ -61,9 +61,23 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-ras-reliability': { category: 'traj', requires: [] },
   'preset-ras-reliability-fault-injection': { category: 'traj', requires: [] },
   'preset-ras-reliability-detection-recovery': { category: 'traj', requires: [] },
+  'preset-agent-tool-success-rate': { category: 'traj', requires: [] },
+  'preset-task-completion-no-ref': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
+
+/**
+ * 互斥组：同一组内的评估器评估同一目标的不同口径，同选会导致综合分重复加权。
+ * 每个组的第一项是「优先项」——当它被选中（意味着其前置条件已满足）时，组内其余项应被禁用。
+ *
+ * 例如任务完成度：preset-agent-task-completion 依赖参考答案，preset-task-completion-no-ref
+ * 不依赖。能选中前者说明 case 已有参考答案，此时后者是同一目标的另一口径，同选会让
+ * 「任务完成度」在实验综合分里占两份权重。
+ */
+const MUTUAL_EXCLUSION_GROUPS: string[][] = [
+  ['preset-agent-task-completion', 'preset-task-completion-no-ref'],
+];
 
 /**
  * 已登记元数据的预置 id。
@@ -121,7 +135,12 @@ export interface EvaluatorGateResult {
 }
 
 /** 硬门控：所选 case 有任一不满足 requires → 整体不可选。 */
-export function gateEvaluator(meta: EvaluatorMeta, cases: CaseGateInfo[]): EvaluatorGateResult {
+export function gateEvaluator(
+  id: string,
+  meta: EvaluatorMeta,
+  cases: CaseGateInfo[],
+  selectedIds: string[] = [],
+): EvaluatorGateResult {
   if (meta.requires.length > 0 && cases.length === 0) {
     return { usable: false, reason: '尚未圈选 case——先在第 ② 步关联 Trace' };
   }
@@ -152,5 +171,29 @@ export function gateEvaluator(meta: EvaluatorMeta, cases: CaseGateInfo[]): Evalu
       };
     }
   }
+  const mutual = mutualExclusionReason(id, selectedIds);
+  if (mutual) return mutual;
   return { usable: true };
+}
+
+/**
+ * 互斥门控：若 targetId 与已选中的某个评估器属于同一互斥组、且该评估器是「优先项」，
+ * 返回不可用原因。只读，不改 selectedIds。
+ */
+function mutualExclusionReason(
+  targetId: string,
+  selectedIds: string[],
+): EvaluatorGateResult | null {
+  for (const group of MUTUAL_EXCLUSION_GROUPS) {
+    const index = group.indexOf(targetId);
+    if (index <= 0) continue; // targetId 不在组内，或是优先项本身
+    const preferred = group[0];
+    if (selectedIds.includes(preferred)) {
+      return {
+        usable: false,
+        reason: `与「${preferred}」评估同一目标，同选会使该维度在综合分中重复加权——已选有参考答案版，无需再选无参考版`,
+      };
+    }
+  }
+  return null;
 }

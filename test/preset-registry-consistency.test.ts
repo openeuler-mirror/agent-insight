@@ -54,6 +54,10 @@ import {
   isTextPresetId,
 } from '../src/lib/engine/experiment/text-preset-evaluators';
 import {
+  TASK_COMPLETION_NO_REF_PRESET_IDS,
+  isTaskCompletionNoRefPresetId,
+} from '../src/lib/engine/experiment/task-completion-preset-evaluators';
+import {
   FLUENCY_PRESET_IDS,
   isFluencyPresetId,
 } from '../src/lib/engine/experiment/fluency-preset-evaluators';
@@ -89,6 +93,11 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: [RAS_DETECTION_RECOVERY_PRESET_ID],
   },
   { name: 'text-preset-evaluators.ts', claims: isTextPresetId, ids: TEXT_PRESET_IDS },
+  {
+    name: 'task-completion-preset-evaluators.ts',
+    claims: isTaskCompletionNoRefPresetId,
+    ids: TASK_COMPLETION_NO_REF_PRESET_IDS,
+  },
   {
     name: 'fluency-preset-evaluators.ts / hallucination-preset-evaluators.ts',
     claims: (id) => isFluencyPresetId(id) || isHallucinationPresetId(id),

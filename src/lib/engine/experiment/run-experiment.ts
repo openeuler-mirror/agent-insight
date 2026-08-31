@@ -76,6 +76,10 @@ import {
 } from '@/lib/skill-workbench/trigger-evaluator';
 import { syncExperimentSkillIssues } from './sync-skill-issues';
 import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
+import {
+  isTaskCompletionNoRefPresetId,
+  runTaskCompletionNoRef,
+} from './task-completion-preset-evaluators';
 import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators';
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
 
@@ -338,6 +342,10 @@ async function evaluateOnce(
   }
   if (isTextPresetId(evaluatorId)) {
     return runTextPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  // 任务完成度（无标准答案）预置评估器
+  if (isTaskCompletionNoRefPresetId(evaluatorId)) {
+    return runTaskCompletionNoRef(user, runtime.faithfulCtx);
   }
   // 文本质量预置评估器（流畅度 / 幻觉检测）：LLM Judge 直连（共用 faithfulCtx）
   if (isFluencyPresetId(evaluatorId)) {
