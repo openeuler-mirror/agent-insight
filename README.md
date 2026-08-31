@@ -228,7 +228,7 @@ bash scripts/stop.sh
 
 ### 2. Agent 平台接入
 
-当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent-Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent-Insight 插件的具体安装与配置方式：
+当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent Insight 插件的具体安装与配置方式：
 
 1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的插件安装命令。
    
@@ -244,7 +244,7 @@ bash scripts/stop.sh
    opencode run 'hello'
    ```
 
-4. 登录 Agent-Insight 看板，进入 **链路追踪** 页面。若能观测到刚才执行的测试任务链路数据上报，即表明 Agent 平台已成功接入并正常工作。
+4. 登录 Agent Insight 看板，进入 **链路追踪** 页面。若能观测到刚才执行的测试任务链路数据上报，即表明 Agent 平台已成功接入并正常工作。
    
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
@@ -252,7 +252,7 @@ bash scripts/stop.sh
 
 ## 🧭 上手演练 — Skill 生成 → 评测 → 优化
 
-完整体验在 Agent-Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
+完整体验在 Agent Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
 
 > 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
 
