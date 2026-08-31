@@ -372,6 +372,64 @@ function listJsonlFiles(spoolDir) {
   return out
 }
 
+const SESSION_RECORD_MARKERS = [
+  '"sessionID":"ses_',
+  '"sessionId":"ses_',
+  '"session_id":"ses_',
+  '"trace_id":"ses_',
+]
+
+function fileContainsAnyText(file, needles) {
+  const terms = needles
+    .filter((needle) => typeof needle === "string" && needle.length > 0)
+    .map((needle) => Buffer.from(needle))
+  if (!terms.length) return false
+
+  const maxNeedleBytes = Math.max(...terms.map((needle) => needle.length))
+  const chunk = Buffer.allocUnsafe(64 * 1024)
+  let carry = Buffer.alloc(0)
+  let fd
+  try {
+    fd = fs.openSync(file, "r")
+    while (true) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null)
+      if (bytesRead <= 0) break
+      const haystack = carry.length
+        ? Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+        : chunk.subarray(0, bytesRead)
+      if (terms.some((needle) => haystack.indexOf(needle) >= 0)) return true
+      const carryBytes = Math.min(Math.max(maxNeedleBytes - 1, 0), haystack.length)
+      carry = carryBytes > 0 ? Buffer.from(haystack.subarray(haystack.length - carryBytes)) : Buffer.alloc(0)
+    }
+  } catch {
+    return false
+  } finally {
+    if (typeof fd === "number") {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+  return false
+}
+
+function selectJsonlFilesForUpload(files, options = {}) {
+  const forceSessions = Array.from(options.forceSessions || []).filter(Boolean)
+  const lastScanMtime = Number(options.lastScanMtime) || 0
+  const needles = forceSessions.length
+    ? forceSessions.map((sessionId) => JSON.stringify(sessionId))
+    : SESSION_RECORD_MARKERS
+
+  return files.filter((file) => {
+    if (!forceSessions.length && lastScanMtime > 0) {
+      try {
+        if (fs.statSync(file).mtimeMs <= lastScanMtime) return false
+      } catch {
+        return false
+      }
+    }
+    return fileContainsAnyText(file, needles)
+  })
+}
+
 // Returns the newest mtime (ms) across all .jsonl files in the spool dir, or 0 if none.
 // Used as a fast-skip gate: if no file has been touched since the last scan, the
 // uploader can exit immediately without parsing any data.
@@ -1212,8 +1270,12 @@ async function main() {
     } catch {}
   })
 
-  const files = listJsonlFiles(spoolDir)
-  appendUploaderLog(`main.scan files=${files.length} newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`)
+  const allFiles = listJsonlFiles(spoolDir)
+  const files = selectJsonlFilesForUpload(allFiles, { forceSessions, lastScanMtime })
+  appendUploaderLog(
+    `main.scan files=${files.length}/${allFiles.length} mode=${forceSessions.size ? "force-session" : "changed-session-files"} ` +
+    `newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`,
+  )
 
   // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
   // "Maximum call stack size exceeded"——args 数量受调用栈限制。
@@ -1384,6 +1446,7 @@ export {
   extractTaskChildSessionId,
   getSessionInfoFromEvent,
   mergeGraph,
+  selectJsonlFilesForUpload,
 }
 
 if (process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN !== "1") {

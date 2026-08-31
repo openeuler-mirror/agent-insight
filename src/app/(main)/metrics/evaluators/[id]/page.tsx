@@ -28,17 +28,18 @@ const CodeMonacoEditor = dynamic(
 
 const DEFAULT_CODE_SAMPLE_PAYLOAD = `{
   "prediction": "被测模型输出",
-  "reference": "参考答案",
+  "reference": "预期输出",
   "metadata": {}
 }`;
 
 const SYSTEM_PROMPT_PLACEHOLDER = `请编写评估器的 system prompt。可引用以下字段：
-{{input}}：任务输入
+{{input}}：实际任务输入
+{{dataset_input}}：匹配到的数据集输入
 {{output}}：任务输出
 {{reference_output}}：预期输出
 {{trajectory}}：trace 轨迹
 
-这些字段都不是必填；目前仅支持以上四个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
+这些字段都不是必填；目前仅支持以上五个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
 
 async function fetchEvaluators(user: string): Promise<EvaluatorCard[]> {
   const res = await apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`);
@@ -138,7 +139,7 @@ export default function CustomEvaluatorDetailPage() {
         }
         const unsupportedVars = findUnsupportedCustomEvaluatorVariables(lc.systemPrompt);
         if (unsupportedVars.length > 0) {
-          setError(`System Prompt 仅支持 {{input}}、{{output}}、{{reference_output}}、{{trajectory}}，不支持：${unsupportedVars.map(v => `{{${v}}}`).join('、')}`);
+          setError(`System Prompt 仅支持 {{input}}、{{dataset_input}}、{{output}}、{{reference_output}}、{{trajectory}}，不支持：${unsupportedVars.map(v => `{{${v}}}`).join('、')}`);
           return;
         }
       }

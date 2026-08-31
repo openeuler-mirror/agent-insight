@@ -1152,8 +1152,8 @@ model ExperimentGroup {
   @@index([experimentId])
 }
 
-/// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的参考输出，
-/// null=未标注——依赖参考数据的评估器在 ④ 步按此硬门控。
+/// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的预期输出，
+/// null=未标注——依赖预期输出的评估器在 ④ 步按此硬门控。
 /// groupId 关联 ExperimentGroup（对比实验用）；单组实验的 case groupId=null 完全向后兼容。
 model ExperimentCase {
   id                       String           @id @default(cuid())
@@ -1163,6 +1163,8 @@ model ExperimentCase {
   taskId                   String?
   /// 冗余展示字段（Case 明细/详情页免跨表拼装）
   input                    String           @default("")
+  /// 创建实验时确定性匹配到的数据集 case input 快照；与 input（实际任务输入）分离。
+  datasetInput             String?
   actualOutput             String           @default("")
   referenceOutput          String?
   /// 评估器专用 case 上下文（EvaluatorCaseContextV1 JSON）；null=未提供。

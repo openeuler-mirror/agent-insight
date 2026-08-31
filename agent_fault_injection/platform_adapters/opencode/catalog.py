@@ -5,8 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
+import socket
 import shutil
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +40,8 @@ _ENV_PROVIDER_HINTS: tuple[tuple[str, str], ...] = (
     ("GEMINI_API_KEY", "google"),
 )
 _CLI_TIMEOUT_SECONDS = 30.0
+_AGENT_SERVER_TIMEOUT_SECONDS = 15.0
+_AGENT_SERVER_SETTLE_SECONDS = 2.0
 _OH_MY_CONFIG_NAMES = ("oh-my-openagent.json", "oh-my-opencode.json")
 
 
@@ -71,6 +78,59 @@ def parse_opencode_agent_list_output(text: str) -> list[dict[str, Any]]:
             entry["mode"] = mode.strip()
         agents.append(entry)
     return agents
+
+
+def parse_opencode_agent_api_payload(payload: Any) -> list[dict[str, Any]]:
+    """Parse the resolved ``GET /agent`` response, including plugin agents."""
+    raw_agents = payload
+    if isinstance(payload, dict):
+        raw_agents = payload.get("agents", payload.get("data"))
+    if not isinstance(raw_agents, list):
+        return []
+
+    agents: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_agents:
+        if not isinstance(raw, dict) or raw.get("hidden") is True:
+            continue
+        name = strip_zero_width(str(raw.get("name") or raw.get("id") or ""))
+        if not name or name in seen or name in _EXCLUDED_AGENTS:
+            continue
+        seen.add(name)
+        entry: dict[str, Any] = {
+            "id": name,
+            "name": name,
+        }
+        mode = raw.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            entry["mode"] = mode.strip()
+        label = raw.get("label") or raw.get("description")
+        if isinstance(label, str) and label.strip():
+            entry["label"] = label.strip()
+        agents.append(entry)
+    return agents
+
+
+def merge_agent_snapshots(
+    *snapshots: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Union successive ``/agent`` snapshots while plugins finish loading."""
+    merged: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
+    for snapshot in snapshots:
+        for raw in snapshot:
+            name = strip_zero_width(str(raw.get("name") or raw.get("id") or ""))
+            if not name or name in _EXCLUDED_AGENTS:
+                continue
+            item = dict(raw)
+            item["id"] = name
+            item["name"] = name
+            if name in positions:
+                merged[positions[name]].update(item)
+            else:
+                positions[name] = len(merged)
+                merged.append(item)
+    return merged
 
 
 def parse_opencode_models_output(text: str) -> list[dict[str, Any]]:
@@ -374,6 +434,116 @@ def _resolve_executable(executable: str | None = None) -> str | None:
     return shutil.which(configured)
 
 
+def _reserve_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _stop_process_tree(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        process.wait(timeout=2.0)
+        return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+        process.wait(timeout=2.0)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _list_agents_via_server(
+    *,
+    executable: str | None = None,
+    timeout: float = _AGENT_SERVER_TIMEOUT_SECONDS,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Load fully resolved agents through OpenCode's loopback ``/agent`` API."""
+    resolved = _resolve_executable(executable)
+    if resolved is None:
+        return None, f"OpenCode executable {(executable or 'opencode')!r} not found"
+
+    port = _reserve_loopback_port()
+    env = dict(os.environ)
+    env.pop("OPENCODE_SERVER_PASSWORD", None)
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "env": env,
+    }
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
+    elif os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    try:
+        process = subprocess.Popen(
+            [
+                resolved,
+                "serve",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            **popen_kwargs,
+        )
+    except OSError as exc:
+        return None, str(exc)
+
+    deadline = time.monotonic() + max(1.0, timeout)
+    last_error = "OpenCode agent endpoint did not become ready"
+    agents: list[dict[str, Any]] = []
+    settle_deadline: float | None = None
+    try:
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                if agents:
+                    return agents, None
+                return None, f"OpenCode agent server exited with code {process.returncode}"
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/agent",
+                    timeout=1.0,
+                ) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                agents = merge_agent_snapshots(
+                    agents,
+                    parse_opencode_agent_api_payload(payload),
+                )
+                now = time.monotonic()
+                if settle_deadline is None:
+                    settle_deadline = min(
+                        deadline,
+                        now + _AGENT_SERVER_SETTLE_SECONDS,
+                    )
+                if now >= settle_deadline:
+                    return agents, None
+                time.sleep(0.1)
+            except (
+                OSError,
+                UnicodeError,
+                json.JSONDecodeError,
+                urllib.error.URLError,
+            ) as exc:
+                last_error = str(exc)
+                time.sleep(0.1)
+        if agents:
+            return agents, None
+        return None, last_error
+    finally:
+        _stop_process_tree(process)
+
+
 def _run_opencode_cli(
     args: list[str],
     *,
@@ -483,6 +653,7 @@ def list_opencode_agents(
     *,
     executable: str | None = None,
     cli_output: str | None = None,
+    agent_api_payload: Any | None = None,
     config: dict[str, Any] | None = None,
     oh_my_keys: set[str] | None = None,
     oh_my_config: dict[str, Any] | None = None,
@@ -493,7 +664,24 @@ def list_opencode_agents(
         if oh_my_keys is not None
         else load_oh_my_agent_keys(oh_my_config=oh_my_config)
     )
+    if agent_api_payload is not None:
+        agents = parse_opencode_agent_api_payload(agent_api_payload)
+        return {
+            "platform": "opencode",
+            "default": choose_default_agent(agents),
+            "agents": agents,
+            "note": "Showing resolved non-hidden agents from OpenCode /agent.",
+        }
+
     if cli_output is None:
+        agents, server_error = _list_agents_via_server(executable=executable)
+        if agents is not None:
+            return {
+                "platform": "opencode",
+                "default": choose_default_agent(agents),
+                "agents": agents,
+                "note": "Showing resolved non-hidden agents from OpenCode /agent.",
+            }
         stdout, error = _run_opencode_cli(
             ["agent", "list"],
             executable=executable,
@@ -508,7 +696,7 @@ def list_opencode_agents(
                 "platform": "opencode",
                 "default": choose_default_agent(agents),
                 "agents": agents,
-                "note": error,
+                "note": "; ".join(filter(None, [server_error, error])),
             }
         text = stdout or ""
     else:
@@ -525,8 +713,8 @@ def list_opencode_agents(
         note = "No usable agents after filtering."
     else:
         note = (
-            "Showing built-in agents, non-hidden user agents, "
-            "and oh-my-openagent agents."
+            "OpenCode /agent unavailable; showing built-in agents, non-hidden "
+            "user agents, and oh-my-openagent agents from CLI fallback."
         )
     return {
         "platform": "opencode",
