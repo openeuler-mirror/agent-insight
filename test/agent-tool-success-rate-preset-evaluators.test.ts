@@ -214,10 +214,8 @@ describe('tool success rate evaluator', () => {
     }));
     assert.equal(r.score, undefined);
     assert.match(r.summary ?? '', /无工具调用/);
-    assert.match(
-      ((r.evidence as { json?: { unscoredReason?: string } } | undefined)?.json?.unscoredReason) ?? '',
-      /无工具调用/,
-    );
+    // 无分分支不展示评分点，evidence.md 与 summary 一致；判重后展开区为空
+    assert.match((r.evidence as { md?: string } | undefined)?.md ?? '', /无工具调用/);
   });
 
   it('全部调用无明确终态（未结束 + 未知）-> 无分（不判成功率）', async () => {
@@ -271,10 +269,9 @@ describe('tool success rate evaluator', () => {
     // 评分点「整体成功率」应反映 50%（1 成功 / 2 明确状态），未知状态排除
     const ratePoint = r.points?.find((p) => p.label === '整体成功率');
     assert.equal(ratePoint?.score, 50);
-    assert.match((ratePoint?.evidence as { md?: string } | undefined)?.md ?? '', /1\/2 成功/);
-    // reason 里应标注有 1 次状态未知
-    const md = (r.evidence as { md?: string } | undefined)?.md ?? '';
-    assert.match(md, /1 次状态未知/);
+    const rateMd = (ratePoint?.evidence as { md?: string } | undefined)?.md ?? '';
+    assert.match(rateMd, /1\/2 成功/);
+    assert.match(rateMd, /1 次状态未知/);
   });
 
   it('四分类：成功/失败/未结束/未知 分别统计，未结束与未知都不进分母', async () => {

@@ -21,7 +21,7 @@ import { JudgeOutputParseError } from '@/lib/evaluators/judge-assembly';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
 import { listEvaluatorCapabilities } from '@/lib/evaluators/evaluator-case-context';
 import { extractToolTraceFacts, type ToolTraceFacts, type TraceUsageFacts } from './agent-tool-trace-facts';
-import { isFailedCallStatus, isSuccessfulCallStatus, isInProgressCallStatus, SPECIALIZED_RUBRIC_VERSION } from './specialized-evaluator-common';
+import { isFailedCallStatus, isSuccessfulCallStatus, isInProgressCallStatus } from './specialized-evaluator-common';
 
 export const TOOL_SUCCESS_RATE_PRESET_ID = 'preset-agent-tool-success-rate';
 
@@ -330,40 +330,10 @@ function computeScore(
     summary = `${stats.totalCalls} 次调用中 ${failed} 次失败（成功率 ${rate}%），整体可用。`;
   }
 
-  // reason：整体成功率统计 + 各工具成功率表格 + 错误模式聚合 + 失败影响（规格要求）
-  const reasonParts: string[] = [];
-  const excludedParts: string[] = [];
-  if (stats.inProgressCalls > 0) excludedParts.push(`${stats.inProgressCalls} 次未结束`);
-  if (stats.unknownCalls > 0) excludedParts.push(`${stats.unknownCalls} 次状态未知`);
-  const excludedNote = excludedParts.length > 0 ? `（另有 ${excludedParts.join('、')}，未计入成功率）` : '';
-  reasonParts.push(`## 整体成功率\n${stats.overallSuccessRate}% (${stats.successfulCalls}/${stats.decisiveCalls})${excludedNote}`);
-
-  if (stats.perTool.length > 0) {
-    reasonParts.push(`\n## 各工具成功率\n${stats.perTool.map((t) => {
-      const inProgressPart = t.inProgress > 0 ? `，未结束 ${t.inProgress}` : '';
-      const unknownPart = t.unknown > 0 ? `，未知 ${t.unknown}` : '';
-      return `- ${t.toolName}: ${t.success}/${t.success + t.fail} (失败率 ${t.failureRatePct}%${inProgressPart}${unknownPart})`;
-    }).join('\n')}`);
-  }
-
-  if (judge.error_patterns.length > 0) {
-    reasonParts.push(`\n## 错误模式聚合\n${judge.error_patterns.map((e) => `- ${e.error_code} (${e.tool_name}): ${e.count}次 — ${e.pattern}`).join('\n')}`);
-  }
-
-  const impactSummary = judge.failure_impact;
-  reasonParts.push(`\n## 失败影响分析\n- 影响判定: ${impactSummary.impact_verdict}`);
-  if (impactSummary.critical_path_failures) {
-    reasonParts.push(`- 关键路径失败: ${impactSummary.critical_path_details || '是'}`);
-  }
-  reasonParts.push(`- 重试恢复: ${impactSummary.retry_recovery_count} 次`);
-  // 失败消耗（代码从轨迹计量，非 LLM 估算）
-  if (usage.failedTurnTokens > 0) {
-    reasonParts.push(`- 失败所在回合 Token: ${usage.failedTurnTokens}`);
-  }
-  if (usage.failedToolDurationMs > 0) {
-    reasonParts.push(`- 失败工具耗时: ${usage.failedToolDurationMs}ms`);
-  }
-  const reason = reasonParts.join('\n');
+  // reason：只放一句话结论。详细统计与失败影响已在各评分点 evidence.md 里展示
+  // （整体成功率 / 按工具聚合 / 错误模式 / 失败影响评估四张卡）。
+  // 这里故意不展开明细，避免与评分点证据重复展示。
+  const reason = summary;
 
   // points
   const points: EvalPoint[] = [];
@@ -523,10 +493,7 @@ export async function runToolSuccessRatePreset(
     return normalizeEvaluatorOutput({
       summary: '本次执行无工具调用，工具成功率不适用。',
       evidence: {
-        json: {
-          rubricVersion: SPECIALIZED_RUBRIC_VERSION,
-          unscoredReason: '无工具调用，工具成功率不适用。',
-        },
+        md: '本次执行无工具调用，工具成功率不适用。',
       },
     });
   }
@@ -542,13 +509,7 @@ export async function runToolSuccessRatePreset(
     return normalizeEvaluatorOutput({
       summary: `本次 ${stats.totalCalls} 次工具调用均无明确终态，无法判定成功率。`,
       evidence: {
-        json: {
-          rubricVersion: SPECIALIZED_RUBRIC_VERSION,
-          unscoredReason: `全部 ${stats.totalCalls} 次工具调用无明确终态（${reasonParts.join('、') || '无成功或失败'}），无法判定成功率。`,
-          totalCalls: stats.totalCalls,
-          inProgressCalls: stats.inProgressCalls,
-          unknownCalls: stats.unknownCalls,
-        },
+        md: `全部 ${stats.totalCalls} 次工具调用无明确终态（${reasonParts.join('、') || '无成功或失败'}），无法判定成功率。`,
       },
     });
   }
@@ -598,19 +559,6 @@ export async function runToolSuccessRatePreset(
     points: points.length ? points : undefined,
     evidence: {
       md: reason,
-      json: {
-        rubricVersion: SPECIALIZED_RUBRIC_VERSION,
-        overallSuccessRate: stats.overallSuccessRate,
-        totalCalls: stats.totalCalls,
-        successfulCalls: stats.successfulCalls,
-        failedCalls: stats.failedCalls,
-        inProgressCalls: stats.inProgressCalls,
-        unknownCalls: stats.unknownCalls,
-        decisiveCalls: stats.decisiveCalls,
-        perToolBreakdown: stats.perTool,
-        errorPatterns: result.data.error_patterns,
-        failureImpact: result.data.failure_impact,
-      },
     },
   });
 }

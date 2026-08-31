@@ -233,39 +233,12 @@ function computeScore(judge: TaskCompletionJudgeResult): {
   else if (score >= 60) verdict = 'warn';
   else verdict = 'fail';
 
-  // reason：需求推断清单 + 逐条判定（含置信度标记） + 综合评分说明（规格要求）
-  const allResults = judge.requirement_results;
-  const reasonParts: string[] = [];
-
-  reasonParts.push('## 需求推断与逐条判定');
-  reasonParts.push('');
-  const typeLabel: Record<string, string> = { explicit: '显式需求', implicit: '隐含约束', business_must_have: '业务必答点' };
-  for (const r of allResults) {
-    let typeName = typeLabel[r.type] || r.type;
-    // 非 high 置信度的业务必答点降级按隐含口径计分，明细里标注清楚
-    if (r.type === 'business_must_have' && r.confidence !== 'high') {
-      typeName = '业务必答点（降级为隐含约束）';
-    }
-    const conf = r.confidence !== 'high' ? ` (置信度: ${r.confidence})` : '';
-    const mark = verdictMark(r.verdict);
-    reasonParts.push(`- ${mark} [${typeName}]${conf} ${r.content} —— ${r.reason}`);
-  }
-
-  reasonParts.push('');
-  reasonParts.push('## 综合评分');
-  reasonParts.push(`- 显式需求完成度: ${explicitScore} (权重 0.5)`);
-  reasonParts.push(`- 隐含约束满足度: ${implicitScore} (权重 0.3)`);
-  reasonParts.push(`- 信息充分性: ${infoScore} (权重 0.2)`);
-  reasonParts.push(`- 加权总分: ${score}`);
-
-  const reason = reasonParts.join('\n');
-
   // summary：说人话，≤80 字，讲最要命的具体问题（开发指南 §2.1）
   const notCovered = judge.requirement_results.filter((r) => r.verdict === 'not_covered');
   const partial = judge.requirement_results.filter((r) => r.verdict === 'partially_covered');
   let summary: string;
   if (notCovered.length === 0 && partial.length === 0) {
-    summary = `全部 ${allResults.length} 项需求均已满足。`.slice(0, 80);
+    summary = `全部 ${judge.requirement_results.length} 项需求均已满足。`.slice(0, 80);
   } else if (notCovered.length > 0) {
     const names = notCovered.slice(0, 3).map((r) => r.content).join('、');
     summary = `未满足：${names}${notCovered.length > 3 ? `等 ${notCovered.length} 项` : ''}。`.slice(0, 80);
@@ -273,6 +246,11 @@ function computeScore(judge: TaskCompletionJudgeResult): {
     const names = partial.slice(0, 3).map((r) => r.content).join('、');
     summary = `部分满足：${names}${partial.length > 3 ? `等 ${partial.length} 项` : ''}。`.slice(0, 80);
   }
+
+  // reason：只放一句话结论（与 summary 一致，由 isEvidenceRedundant 自动隐藏重复）。
+  // 需求推断明细、逐条判定与三维度分值已在各评分点 evidence.md 里展示
+  // （显式需求 / 隐含约束 / 信息充分性三张卡）。
+  const reason = summary;
 
   const points: EvalPoint[] = [];
 
@@ -389,11 +367,6 @@ export async function runTaskCompletionNoRefPreset(
     points: points.length ? points : undefined,
     evidence: {
       md: reason,
-      json: {
-        rubricVersion: '1.0.0',
-        informationSufficiency: result.data.information_sufficiency,
-        requirements: result.data.requirement_results,
-      },
     },
   });
 }

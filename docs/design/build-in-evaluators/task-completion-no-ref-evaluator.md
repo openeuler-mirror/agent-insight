@@ -113,7 +113,16 @@ score < 60 → fail
 ## 6. summary 与 reason
 
 - **summary**：简洁结论（≤80 字），讲最要命的具体问题
-- **reason**：Markdown 格式详细文本，包含需求推断清单、逐条判定结果（含置信度标记）和综合评分说明
+- **reason**：与 `summary` 同文案（一句结论），避免与评分点证据重复展示。
+  `isEvidenceRedundant` 会判重隐藏卡级证据，展开区只显示三张评分点的明细。
+
+详细数据放在对应评分点的 `evidence.md`：
+
+- 显式需求完成度：每条需求的判定（✅/⚠️/❌）+ 置信度 + 理由
+- 隐含约束满足度：同上；无隐含约束时显示「本次任务未推断出隐含约束」
+- 信息充分性与中立性：LLM 给的 `overall_analysis`
+
+> 旧实现曾把需求推断明细、综合评分（每个维度的分数和权重）再写一遍到 `reason`，又同时塞 `evidence.json`，但 `EvidenceSchema` 是 `{md}` 或 `{json}` 二选一，`coerceEvidence` md 优先导致 json 字段实际被丢弃。改为单行 reason + 评分点证据后，证据完整且不重复。
 
 ## 7. 注册信息
 
