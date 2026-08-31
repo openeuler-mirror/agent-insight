@@ -871,15 +871,21 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     AGENT_INSIGHT_CONFIG_VERSION: String(payload.configVersion || ''),
     AGENT_INSIGHT_PLATFORM: platform,
   }
-  const args = buildExperimentCaseArgs(executable, { platform, agent, model, input, correlation })
+  const invocation = buildExperimentCaseInvocation(executable, {
+    platform,
+    agent,
+    model,
+    input,
+    correlation,
+  })
   const timeoutMs = Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
   const startedAt = new Date().toISOString()
 
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const child = spawn(executable, invocation.args, {
       cwd: cfg.workspaceBase,
       env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     })
     reliabilityChild = child
@@ -887,7 +893,15 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     let stderr = ''
     let stdoutBuffer = ''
     let traceId = null
+    let stdinError = null
     let traceReport = Promise.resolve()
+    if (invocation.stdin !== null && child.stdin) {
+      child.stdin.on('error', (err) => {
+        stdinError = err
+        signalProcessTree(child, 'SIGTERM')
+      })
+      child.stdin.end(invocation.stdin, 'utf8')
+    }
     const captureTraceId = (candidate) => {
       if (traceId || !candidate) return
       traceId = candidate
@@ -922,6 +936,12 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       if (forceKillTimer) clearTimeout(forceKillTimer)
       if (reliabilityChild === child) reliabilityChild = null
       captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
+      if (stdinError) {
+        const err = new Error(`向平台 ${platform} 传递实验输入失败: ${stdinError.message}`)
+        err.code = 'INPUT_DELIVERY_FAILED'
+        reject(err)
+        return
+      }
       if (!traceId) {
         const err = new Error(`平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`)
         err.code = platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED'
@@ -951,7 +971,6 @@ function buildExperimentCaseArgs(executable, input) {
     } catch {}
     if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
     if (input.model) args.push('--model', input.model)
-    args.push(input.input)
     return args
   }
   if (input.platform === 'xiaoo') {
@@ -973,6 +992,32 @@ function buildExperimentCaseArgs(executable, input) {
   if (input.model) args.push('--model', input.model)
   args.push(input.input)
   return args
+}
+
+function parseOpencodeSlashCommand(value) {
+  const match = String(value || '').match(/^\/([A-Za-z0-9][A-Za-z0-9_.:/-]*)(?:[ \t\r\n]([\s\S]*))?$/)
+  if (!match) return null
+  return {
+    command: match[1],
+    arguments: match[2] || '',
+  }
+}
+
+function buildExperimentCaseInvocation(executable, input) {
+  const args = buildExperimentCaseArgs(executable, input)
+  if (input.platform === 'opencode') {
+    const slashCommand = parseOpencodeSlashCommand(input.input)
+    if (slashCommand) {
+      args.push('--command', slashCommand.command)
+      if (slashCommand.arguments) args.push(slashCommand.arguments)
+      return { args, stdin: null }
+    }
+    return { args, stdin: input.input }
+  }
+  return {
+    args,
+    stdin: null,
+  }
 }
 
 function traceIdFromJson(value, depth = 0) {
@@ -1455,6 +1500,8 @@ module.exports = {
   resolveFiCwd,
   buildFiInventory,
   buildCapabilities,
+  buildExperimentCaseInvocation,
+  parseOpencodeSlashCommand,
   capabilityDiscoveryFingerprint,
   refreshCapabilityReports,
   normalizeModelIds,

@@ -37,6 +37,17 @@ const client = require_('../scripts/reliability-client.cjs') as {
     }>
     faultInjection: { ready: boolean; note?: string }
   }
+  buildExperimentCaseInvocation: (
+    executable: string,
+    input: {
+      platform: string
+      agent: string
+      model: string | null
+      input: string
+      correlation?: Record<string, unknown>
+    },
+  ) => { args: string[]; stdin: string | null }
+  parseOpencodeSlashCommand: (input: string) => { command: string; arguments: string } | null
   capabilityDiscoveryFingerprint: () => string
   refreshCapabilityReports: (
     cfg: Record<string, unknown>,
@@ -153,6 +164,70 @@ test('collector args carry no shell string', () => {
   assert.equal(args[promptIdx + 1], 'do it; rm -rf /')
   assert.ok(args.includes('--model'))
   assert.ok(args.includes('--timeout-seconds'))
+})
+
+test('OpenCode slash-command input uses the native command path without adding wrapper quotes', () => {
+  const input = '/aet-design https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"'
+  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/opencode', {
+    platform: 'opencode',
+    agent: 'aet-design',
+    model: 'provider/model',
+    input,
+    correlation: { caseRunId: 'case-1' },
+  })
+
+  assert.equal(invocation.stdin, null)
+  assert.deepEqual(invocation.args.filter((arg) => arg !== '--auto'), [
+    'run',
+    '--format',
+    'json',
+    '--agent',
+    'aet-design',
+    '--title',
+    'case-1',
+    '--model',
+    'provider/model',
+    '--command',
+    'aet-design',
+    'https://example.com/PRD.md\n第二行  保留连续空格和 "原生引号"',
+  ])
+  assert.ok(!invocation.args.includes(input))
+})
+
+test('ordinary OpenCode input is still piped verbatim through stdin', () => {
+  const input = '普通输入\n第二行  保留连续空格和 "原生引号"'
+  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/opencode', {
+    platform: 'opencode',
+    agent: 'build',
+    model: null,
+    input,
+  })
+
+  assert.equal(invocation.stdin, input)
+  assert.ok(!invocation.args.includes('--command'))
+  assert.ok(!invocation.args.includes(input))
+})
+
+test('OpenCode slash-command parser only accepts a command at the start of the input', () => {
+  assert.deepEqual(client.parseOpencodeSlashCommand('/aet-design  keep spacing'), {
+    command: 'aet-design',
+    arguments: ' keep spacing',
+  })
+  assert.equal(client.parseOpencodeSlashCommand('请执行 /aet-design task'), null)
+  assert.equal(client.parseOpencodeSlashCommand('/'), null)
+})
+
+test('non-OpenCode experiment input keeps the existing positional argument path', () => {
+  const input = 'ordinary agent input'
+  const invocation = client.buildExperimentCaseInvocation('/usr/local/bin/other-agent', {
+    platform: 'other-agent',
+    agent: 'build',
+    model: null,
+    input,
+  })
+
+  assert.equal(invocation.stdin, null)
+  assert.equal(invocation.args.at(-1), input)
 })
 
 test('readCollectResult finds the nested artifact', () => {
