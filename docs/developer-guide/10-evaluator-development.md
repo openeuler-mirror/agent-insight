@@ -25,6 +25,7 @@
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
 | `preset-text-*` | `experiment/text-preset-evaluators.ts` |
+| `preset-fluency-text` / `preset-hallucination-text` | `experiment/fluency-preset-evaluators.ts` / `experiment/hallucination-preset-evaluators.ts`（run-experiment 直接分发） |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -276,6 +277,7 @@ return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 
 - **category**：只读最终输出（±参考答案）→ `res`；需要读执行过程（步骤/工具/耗时/成本/token）→ `traj`。决定它在 Trace 评测详情里归到「结果评测」还是「轨迹评测」板块，以及进哪个类目均分。
 - **requires**：`reference` 要求每个 case 有参考答案；`tool_catalog` 要求每个 case 有显式 Tool/Skill 目录。`availableTools=[]` 表示调用方确认没有可用 Tool，仍满足目录前置条件；上下文字段缺失才触发门控。
+- **互斥组**（`MUTUAL_EXCLUSION_GROUPS`）：若两个评估器评估**同一目标的两种口径**，同选会让该维度在实验综合分里重复加权，就应归入同一互斥组。组内第一项是「优先项」——当它被选中（意味着其前置条件已满足）时，组内其余项在向导 ④ 步被禁用并提示原因。例如任务完成度：`preset-agent-task-completion`（依赖参考答案）为优先项，`preset-task-completion-no-ref`（无参考）为其次——有参考答案时选前者，后者不再可选。
 - **能力目录来源**：可由实验 API 的 `evaluatorContext` 显式提供，或从数据集的 `available_tools` / `available_skills` 导入。trace 只记录实际发生的调用，不能还原执行时完整的可用能力集合，因此不得用已调用集合反推目录。
 - **tags 不用填**，由元数据派生（`deriveEvaluatorTags`）。
 
@@ -542,11 +544,17 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 文本格式 `preset-text-format` | Agent 输出 | 序号连续性 · 引用标记 · 列表层级 · 标点 · 排版 · 表格 · 特殊格式（7 维扣分制） |
 | 文本语种一致性 `preset-text-language-consistency` | 用户问题与 Agent 输出 | 主语言匹配（关键维度）· 非必要混杂 · 代码切换理由 · 双语场景处理（3 个普通维度，4 维扣分制） |
 | 文本简洁性 `preset-text-conciseness` | 用户问题与 Agent 输出 | 表达效率 · 套话精简 · 主需求聚焦 · 信息完整（0.3/0.2/0.3/0.2 加权） |
+| 文本流畅度 `preset-fluency-text` | Agent 输出 | 语句通顺度 · 重复与冗余 · 断句与节奏 · 语义连贯性 · 语言自然度（5 维扣分制；连续出现的中度问题第 4 处起扣分加倍，连续前 3 处不翻倍；严重问题不参与加倍，按原档扣分） |
+| 文本幻觉检测 `preset-hallucination-text` | 用户问题与最终答案（±检索上下文） | 实体幻觉 · 数值幻觉 · 引用与文献幻觉 · 逻辑与事实幻觉 + 幻觉严重程度与占比（5 维独立评分点，占比加权 5/15/30；catastrophic 判 0；无法核验时按 light 处理） |
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
+| 工具调用成功率 `preset-agent-tool-success-rate` | 执行轨迹（工具调用步骤与错误码） | 整体成功率 · 按工具聚合失败率 · 错误模式分析 · 失败影响评估（4 维，代码统计 + LLM 离散判断） |
+| 任务完成度（无标准答案） `preset-task-completion-no-ref` | 用户输入（推断需求） | 显式需求完成度 · 隐含约束满足度 · 信息充分性与中立性（3 维，三阶段方法，LLM 做离散判断，代码按规则算分） |
 
-回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+回答深度性与答案质量的边界：答案质量判断"有没有答到、答全、表达是否连贯"，回答深度性判断"对当前问题需要展开的分析层次是否展开"。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+
+`preset-task-completion-no-ref` 与 `preset-agent-task-completion` 的边界：两者都是"任务完成度"，但评分点来源不同——前者从用户输入推断需求（无参考答案），后者从参考答案提取关键观点（有参考答案）。前者不需要参考答案即可运行，后者必须有参考答案。按 §3.5 的评分点来源维度区分，两者不重叠。
 
 文本 AI 味与创造性的边界：创造性评价观点的新颖性、视角和修辞表现；文本 AI 味只评价固定套话、机械连接、泛化示例和空洞收束等风格信号，不因文本缺少创意而扣分。文本简洁性与答案质量的边界：简洁性只扣冗余、偏题扩写和必要信息缺失，不重新评价答案事实是否正确。语种一致性只评价语言匹配和无理由切换；格式评估器只评价可读的结构与标记规范，均不承担内容安全判断。
 
@@ -557,3 +565,5 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 歧视 / 冒犯 / 刻板印象 | 种族·性别·年龄·地域·宗教·残疾·职业阶层 这一整片经常被反复切分。切法不同不代表不重叠——它们评的是同一件事。 |
 | 人身攻击 / 骚扰 / 霸凌 | 与「冒犯性」天然交叠，边界要在台账里写明谁负责。 |
 | 政治社会敏感 / 争议性 | 与「歧视」和「有害性」三方交叠。 |
+| 幻觉 / 无依据内容 | 忠实度（`preset-result-faithfulness`）评「主张对 trace 执行证据的有据性」，无证据不评；幻觉检测（`preset-hallucination-text`）评「内容真实性」（实体/数值/引用/逻辑四类），无证据照评、输出类型分类与占比。有 trace 时可能对同一段内容分别判「证据未覆盖」与「内容不真实」——口径不同（有据性审计 vs 真实性审计），允许并存；默认不勾选，避免类目均分被双重拉低。 |
+| 语言表达质量 | 答案质量（`preset-result-answer`）的连贯性是「相关性·完整性·连贯性」三子分之一（完整性视角）；流畅度（`preset-fluency-text`）全面评语言表达质量（5 维，含翻译腔/书面化/断句节奏等答案质量不覆盖的维度）。边界：答案质量管「答没答到、答全、连贯」，流畅度管「读起来顺不顺」。 |
