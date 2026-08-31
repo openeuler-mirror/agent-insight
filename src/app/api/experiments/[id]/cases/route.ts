@@ -22,6 +22,7 @@ interface CaseInput {
   executionId?: string;
   taskId?: string;
   input?: string;
+  datasetInput?: string | null;
   actualOutput?: string;
   referenceOutput?: string | null;
 }
@@ -85,6 +86,10 @@ export async function POST(
         executionId: c.executionId ? String(c.executionId) : null,
         taskId: c.taskId ? String(c.taskId) : null,
         input: String(c.input ?? ''),
+        datasetInput:
+          c.datasetInput != null && String(c.datasetInput).trim() !== ''
+            ? String(c.datasetInput)
+            : null,
         actualOutput: String(c.actualOutput ?? ''),
         referenceOutput:
           c.referenceOutput != null && String(c.referenceOutput).trim() !== ''

@@ -632,7 +632,7 @@ export function SkillExperimentResult({
                   <thead className="sticky top-0 z-10 bg-background-secondary text-foreground-muted">
                     <tr>
                       <th className="w-40 px-3 py-2 font-medium">输入</th>
-                      <th className="w-40 px-3 py-2 font-medium">参考输出</th>
+                      <th className="w-40 px-3 py-2 font-medium">预期输出</th>
                       <th className="w-48 px-3 py-2 font-medium">A · {versionALabel} 实际输出</th>
                       <th className="w-[72px] px-2 py-2 font-medium">综合得分</th>
                       <th className="w-[72px] px-2 py-2 font-medium">结果得分</th>

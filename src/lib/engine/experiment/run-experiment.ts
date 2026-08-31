@@ -31,7 +31,11 @@ import {
   type JudgeCaseContext,
 } from '@/lib/evaluators/judge-assembly';
 import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
-import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import {
+  customEvaluatorUsesVariable,
+  type EvaluatorCard,
+} from '@/lib/evaluators/custom-evaluator-model';
+import { normalizeDatasetCaseMatchText } from '@/lib/engine/evaluation/dataset-case-match';
 import {
   normalizeEvaluatorCaseContext,
   type EvaluatorCaseContext,
@@ -53,6 +57,10 @@ import {
   runFaithfulPreset,
   type FaithfulPresetContext,
 } from './faithful-preset-evaluators';
+import {
+  isAgentTrajectoryPresetId,
+  runAgentTrajectoryPreset,
+} from './agent-trajectory-preset-evaluators';
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
@@ -72,6 +80,10 @@ import {
 } from '@/lib/skill-workbench/trigger-evaluator';
 import { syncExperimentSkillIssues } from './sync-skill-issues';
 import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
+import {
+  isTaskCompletionNoRefPresetId,
+  runTaskCompletionNoRef,
+} from './task-completion-preset-evaluators';
 import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators';
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
 
@@ -163,6 +175,7 @@ async function loadCaseRuntime(caseRow: {
   executionId: string | null;
   taskId: string | null;
   input: string;
+  datasetInput: string | null;
   actualOutput: string;
   referenceOutput: string | null;
   evaluatorContextJson: string | null;
@@ -220,6 +233,7 @@ async function loadCaseRuntime(caseRow: {
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
+    datasetInput: caseRow.datasetInput,
     output: actualOutput,
     referenceOutput: caseRow.referenceOutput,
     trajectory,
@@ -303,6 +317,9 @@ async function evaluateOnce(
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
     return evaluateSkillTriggerAnalysis(runtime.trigger);
   }
+  if (isAgentTrajectoryPresetId(evaluatorId)) {
+    return runAgentTrajectoryPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
     return runFaithfulPreset(evaluatorId, user, runtime.faithfulCtx);
@@ -333,6 +350,10 @@ async function evaluateOnce(
   if (isTextPresetId(evaluatorId)) {
     return runTextPreset(evaluatorId, user, runtime.faithfulCtx);
   }
+  // 任务完成度（无标准答案）预置评估器
+  if (isTaskCompletionNoRefPresetId(evaluatorId)) {
+    return runTaskCompletionNoRef(user, runtime.faithfulCtx);
+  }
   // 文本质量预置评估器（流畅度 / 幻觉检测）：LLM Judge 直连（共用 faithfulCtx）
   if (isFluencyPresetId(evaluatorId)) {
     return runFluencyPreset(evaluatorId, user, runtime.faithfulCtx);
@@ -344,6 +365,16 @@ async function evaluateOnce(
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
   if (card.evaluatorType !== 'LLM' || !card.llmConfig?.systemPrompt) {
     throw new Error(`评估器 ${evaluatorId} 缺少可执行的 LLM 配置`);
+  }
+  if (customEvaluatorUsesVariable(card, 'dataset_input')) {
+    const actualInput = normalizeDatasetCaseMatchText(runtime.judgeCtx.input);
+    const datasetInput = normalizeDatasetCaseMatchText(runtime.judgeCtx.datasetInput);
+    if (!actualInput || !datasetInput || !actualInput.includes(datasetInput)) {
+      return {
+        summary: '不适用：实际任务输入未匹配到可用的数据集输入。',
+        evidence: { md: '该评估器引用了 `{{dataset_input}}`，只有确定性匹配到数据集 case 时才运行，本条结果不计分。' },
+      };
+    }
   }
   const prompt = buildJudgePrompt(card, runtime.judgeCtx);
   const text = await callJudgeLlm(user, {
@@ -761,6 +792,7 @@ export async function addEvalExperimentCase(
     executionId?: string | null;
     taskId?: string | null;
     input: string;
+    datasetInput?: string | null;
     actualOutput: string;
     referenceOutput?: string | null;
     evaluatorContext?: EvaluatorCaseContext | null;
@@ -775,12 +807,16 @@ export async function addEvalExperimentCase(
       if (existing) {
         // 复用已有 case；若这次拿到了参考答案或评估器上下文则回填。
         if (
-          (c.referenceOutput != null && String(c.referenceOutput).trim())
+          (c.datasetInput != null && String(c.datasetInput).trim())
+          || (c.referenceOutput != null && String(c.referenceOutput).trim())
           || c.evaluatorContext !== undefined
         ) {
           await prisma.experimentCase.update({
             where: { id: existing.id },
             data: {
+              ...(c.datasetInput != null && String(c.datasetInput).trim()
+                ? { datasetInput: c.datasetInput }
+                : {}),
               ...(c.referenceOutput != null && String(c.referenceOutput).trim()
                 ? { referenceOutput: c.referenceOutput }
                 : {}),
@@ -803,6 +839,7 @@ export async function addEvalExperimentCase(
         executionId: c.executionId ?? null,
         taskId: c.taskId ?? null,
         input: c.input,
+        datasetInput: c.datasetInput ?? null,
         actualOutput: c.actualOutput,
         referenceOutput: c.referenceOutput ?? null,
         evaluatorContextJson: c.evaluatorContext

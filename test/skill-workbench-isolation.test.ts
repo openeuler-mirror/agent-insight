@@ -308,7 +308,7 @@ test('Skill 实验复用四步向导并仅由预设改变默认配置', () => {
   assert.match(result, /当前版本[\s\S]*对比版本/);
   assert.match(result, /评估器分解/);
   assert.match(result, /A 胜[\s\S]*B 胜[\s\S]*未配对/);
-  assert.match(result, /参考输出[\s\S]*A · \{versionALabel\} 实际输出[\s\S]*B · \{versionBLabel\} 实际输出/);
+  assert.match(result, /预期输出[\s\S]*A · \{versionALabel\} 实际输出[\s\S]*B · \{versionBLabel\} 实际输出/);
   assert.doesNotMatch(result, /const EVALUATOR_LABELS/);
   assert.doesNotMatch(result, /任务结果正确性|Skill 版本回归|证据忠实度|'执行成本'/);
 });

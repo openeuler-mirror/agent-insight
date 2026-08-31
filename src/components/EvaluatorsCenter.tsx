@@ -47,7 +47,7 @@ interface LlmEvaluatorDraft {
 // 不放进选项避免用户点了发现没结果。
 const evaluatorTypes: EvaluatorType[] = ['LLM'];
 // 标签筛选选项（与 deriveEvaluatorTags 派生值对齐；「预置/自建」由 tab 承担，不进筛选）
-const tagFilterOptions = ['LLM Judge', '看结果', '看轨迹', '依赖参考数据'];
+const tagFilterOptions = ['LLM Judge', '看结果', '看轨迹', '依赖预期输出', '依赖数据集输入'];
 // 场景：评估对象——"结果" 指评估 agent 最终答复的质量，"轨迹" 指评估 agent 内部执行链路。
 // 老词是 'Agent'，含义模糊（agent 既可指评估主体也可指被评估面），统一改成"结果"避免歧义。
 const targetTypes = Array.from(new Set(presetEvaluators.flatMap(card => card.targetTypes)));
@@ -55,19 +55,21 @@ const objectives = Array.from(new Set(presetEvaluators.flatMap(card => card.obje
 
 /** System Prompt 占位符插入按钮（与 CUSTOM_EVALUATOR_ALLOWED_VARIABLES 对齐） */
 const placeholderButtons = [
-  { token: '{{input}}', label: '任务输入' },
+  { token: '{{input}}', label: '实际任务输入' },
+  { token: '{{dataset_input}}', label: '数据集输入' },
   { token: '{{output}}', label: '实际输出' },
-  { token: '{{reference_output}}', label: '参考输出' },
+  { token: '{{reference_output}}', label: '预期输出' },
   { token: '{{trajectory}}', label: '执行轨迹' },
 ];
 
 const systemPromptPlaceholder = `请编写评估器的 system prompt。可引用以下字段：
-{{input}}：任务输入
+{{input}}：实际任务输入
+{{dataset_input}}：匹配到的数据集输入
 {{output}}：任务输出
 {{reference_output}}：预期输出
 {{trajectory}}：trace 轨迹
 
-这些字段都不是必填；目前仅支持以上四个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
+这些字段都不是必填；目前仅支持以上五个变量。评估器最终需要输出 0～100 的 score 和 reason。`;
 
 const blankLlmDraft = (): LlmEvaluatorDraft => ({
   name: '',
@@ -260,7 +262,7 @@ export default function EvaluatorsCenter() {
     }
     const unsupportedVars = findUnsupportedCustomEvaluatorVariables(llmDraft.systemPrompt);
     if (unsupportedVars.length > 0) {
-      setError(`System Prompt 仅支持 {{input}}、{{output}}、{{reference_output}}、{{trajectory}}，不支持：${unsupportedVars.map(v => `{{${v}}}`).join('、')}`);
+      setError(`System Prompt 仅支持 {{input}}、{{dataset_input}}、{{output}}、{{reference_output}}、{{trajectory}}，不支持：${unsupportedVars.map(v => `{{${v}}}`).join('、')}`);
       return;
     }
 
@@ -886,7 +888,8 @@ function LlmEvaluatorCreatePanel({
 
   const promptText = draft.systemPrompt;
   const usedPlaceholders = placeholderButtons.filter(p => promptText.includes(p.token));
-  const usesReference = promptText.includes('{{reference_output}}');
+  const usesReference = /\{\{\s*reference_output\s*\}\}/.test(promptText);
+  const usesDatasetInput = /\{\{\s*dataset_input\s*\}\}/.test(promptText);
 
   return (
     <div style={{ paddingTop: 20, maxWidth: 800 }}>
@@ -1042,7 +1045,21 @@ function LlmEvaluatorCreatePanel({
                   padding: '1px 7px',
                 }}
               >
-                将自动打标 依赖参考数据
+                将自动打标 依赖预期输出
+              </span>
+            ) : null}
+            {usesDatasetInput ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: 'var(--primary)',
+                  background: 'var(--primary-subtle)',
+                  border: '1px solid var(--primary-subtle-border)',
+                  borderRadius: 4,
+                  padding: '1px 7px',
+                }}
+              >
+                将自动打标 依赖数据集输入
               </span>
             ) : null}
           </div>

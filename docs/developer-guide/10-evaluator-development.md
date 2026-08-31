@@ -580,7 +580,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 
 | 评估器 | 评分点来自 | 覆盖的维度 |
 |---|---|---|
-| 任务完成度 `preset-agent-task-completion` | 参考答案 | 关键观点覆盖率（召回） |
+| 任务完成度 `preset-agent-task-completion` | 预期输出 | 关键观点覆盖率（召回） |
 | 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 / Skill | 完整性 · 工具选择 · 冗余度（既有 opencode 口径） |
 | 执行过程质量 `preset-agent-process-quality` | 执行轨迹 | 目标对齐 · 规划完整性 · 推理连贯性 · 异常处理 · 路径稳健性 · 信息利用 |
 | 步骤效率 `preset-agent-step-efficiency` | 执行轨迹 | 步骤必要性 · 路径绕行 · 成本效率 · 步骤密度 · 重试效率 |

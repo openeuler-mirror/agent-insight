@@ -6,7 +6,10 @@ import {
   replacePlaceholders,
   JudgeOutputParseError,
 } from '../src/lib/evaluators/judge-assembly';
-import type { EvaluatorCard } from '../src/lib/evaluators/custom-evaluator-model';
+import {
+  findUnsupportedCustomEvaluatorVariables,
+  type EvaluatorCard,
+} from '../src/lib/evaluators/custom-evaluator-model';
 
 describe('LLM Judge 三段式组装', () => {
   const card: EvaluatorCard = {
@@ -15,16 +18,26 @@ describe('LLM Judge 三段式组装', () => {
     mappedMetrics: [], status: 'ready', category: 'res',
     llmConfig: { model: 'deepseek-chat', systemPrompt: '评估客服回复。输入：{{input}}\n输出：{{output}}\n参考：{{reference_output}}' },
   };
-  const ctx = { input: '查订单', output: '已查到', referenceOutput: '应查到并说明' };
+  const ctx = {
+    input: '客户背景：VIP。查订单',
+    datasetInput: '查订单',
+    output: '已查到',
+    referenceOutput: '应查到并说明',
+  };
 
   it('占位符替换：全量替换、缺省填(未提供)、未知占位符原样保留', () => {
-    const s = replacePlaceholders('a {{input}} b {{ output }} c {{trajectory}} d {{unknown}}', ctx);
-    assert.equal(s, 'a 查订单 b 已查到 c (未提供) d {{unknown}}');
+    const s = replacePlaceholders('a {{input}} b {{dataset_input}} c {{ output }} d {{trajectory}} e {{unknown}}', ctx);
+    assert.equal(s, 'a 客户背景：VIP。查订单 b 查订单 c 已查到 d (未提供) e {{unknown}}');
+  });
+
+  it('dataset_input 是受支持变量，未知变量仍会被拒绝', () => {
+    assert.deepEqual(findUnsupportedCustomEvaluatorVariables('{{dataset_input}} {{output}}'), []);
+    assert.deepEqual(findUnsupportedCustomEvaluatorVariables('{{dataset_input}} {{wrong_input}}'), ['wrong_input']);
   });
 
   it('自由模式：② 段为自行提取指令；用户提示词不被改写', () => {
     const p = buildJudgePrompt(card, ctx);
-    assert.match(p.system, /输入：查订单/);
+    assert.match(p.system, /输入：客户背景：VIP。查订单/);
     assert.doesNotMatch(p.system, /评分点要求/); // 平台段不进用户提示词
     assert.match(p.user, /自行提取 2~6 个评分点/);
     assert.match(p.user, /只输出一个 JSON 对象/);
