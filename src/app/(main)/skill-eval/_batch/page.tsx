@@ -144,7 +144,7 @@ import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/
 // 这里不做能力过滤。默认勾选哪几个见 DEFAULT_SELECTED_PRESET_IDS。
 const BUILT_IN_EVALUATORS = [
     ...presetEvaluators
-        .filter(e => e.status === 'ready' && e.id !== 'preset-agent-process-quality')
+        .filter(e => e.status === 'ready')
         .map(e => ({ id: e.id, name: e.name }))
 ];
 

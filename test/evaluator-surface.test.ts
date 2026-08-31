@@ -23,7 +23,7 @@ test('旧轨迹质量卡保持 opencode 契约，新过程质量卡使用独立 
   assert.equal(DEFAULT_SELECTED_PRESET_IDS.includes(PROCESS_QUALITY_ID), false);
 });
 
-test('执行过程质量卡不出现在三个既有 Skill 入口，也不进入旧轨迹 API 白名单', () => {
+test('执行过程质量卡在三个 Skill 入口遵循 ready 通用规则，仍不进入旧轨迹 API 白名单', () => {
   const skillPages = [
     'src/app/(main)/skill-eval/page.tsx',
     'src/app/(main)/skill-eval/_batch/page.tsx',
@@ -31,7 +31,8 @@ test('执行过程质量卡不出现在三个既有 Skill 入口，也不进入�
   ];
   for (const path of skillPages) {
     const source = readFileSync(path, 'utf8');
-    assert.match(source, /e\.id !== 'preset-agent-process-quality'/, path);
+    assert.match(source, /\.filter\(e => e\.status === 'ready'\)/, path);
+    assert.doesNotMatch(source, /e\.id !== 'preset-agent-process-quality'/, path);
   }
 
   const legacyRoute = readFileSync('src/app/api/eval/trajectory/run/route.ts', 'utf8');
