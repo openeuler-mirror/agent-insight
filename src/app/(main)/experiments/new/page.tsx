@@ -506,12 +506,38 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     [selectedDataset],
   );
 
+  const refreshAgents = useCallback(async () => {
+    if (!user) return;
+    const response = await apiFetch(`/api/experiments/agents?user=${encodeURIComponent(user)}`);
+    if (!response.ok) throw new Error('Agent 列表刷新失败');
+    const data = await response.json();
+    setAgents(Array.isArray(data?.agents) ? data.agents : []);
+  }, [user]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      refreshAgents().catch(() => setAgents([]));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshAgents]);
+
+  useEffect(() => {
+    if (!user || step !== 1) return;
+    const timer = window.setInterval(() => {
+      refreshAgents().catch(() => undefined);
+    }, 10_000);
+    const handleFocus = () => {
+      refreshAgents().catch(() => undefined);
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [refreshAgents, step, user]);
+
   useEffect(() => {
     if (!user) return;
-    apiFetch(`/api/experiments/agents?user=${encodeURIComponent(user)}`)
-      .then((r) => r.json())
-      .then((d) => setAgents(Array.isArray(d?.agents) ? d.agents : []))
-      .catch(() => setAgents([]));
     apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`)
       .then((r) => r.json())
       .then((d) => setCustomEvaluators(Array.isArray(d) ? d : []))
@@ -1371,6 +1397,11 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                   <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
                     候选项为具有历史 Trace 的 Agent 与所有在线客户端可执行 Agent 的并集
                   </div>
+                  {agentName && !selectedAgent && (
+                    <div style={{ fontSize: 10, color: 'var(--error)', marginTop: 5 }}>
+                      当前 Agent 已不在最新候选中，请重新选择
+                    </div>
+                  )}
                 </div>
               </div>
 

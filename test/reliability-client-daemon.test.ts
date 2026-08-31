@@ -37,6 +37,11 @@ const client = require_('../scripts/reliability-client.cjs') as {
     }>
     faultInjection: { ready: boolean; note?: string }
   }
+  capabilityDiscoveryFingerprint: () => string
+  refreshCapabilityReports: (
+    cfg: Record<string, unknown>,
+    opts?: { force?: boolean },
+  ) => Promise<boolean>
   normalizeModelIds: (models: unknown) => string[]
   extractTraceIdFromJsonLine: (line: string) => string | null
   controlUrls: (cfg: Record<string, unknown>) => { websocketUrl: string; pollUrl: string }
@@ -46,6 +51,7 @@ const client = require_('../scripts/reliability-client.cjs') as {
   notifyReady: () => boolean
   notifyWatchdog: () => boolean
   WATCHDOG_MS: number
+  CAPABILITY_DISCOVERY_SCAN_MS: number
 }
 const installer = require_('../scripts/install-ras-client.js') as {
   CLIENT_SCRIPT: string
@@ -213,6 +219,63 @@ test('model ids normalize from strings and objects alike', () => {
   assert.deepEqual(client.normalizeModelIds(undefined), [])
 })
 
+test('OpenCode capability fingerprint follows plugin target changes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-capabilities-'))
+  const previous = process.env.XDG_CONFIG_HOME
+  process.env.XDG_CONFIG_HOME = root
+  try {
+    const configRoot = path.join(root, 'opencode')
+    const plugins = path.join(configRoot, 'plugins')
+    const pluginTarget = path.join(root, 'dynamic-plugin.js')
+    fs.mkdirSync(plugins, { recursive: true })
+    fs.writeFileSync(path.join(configRoot, 'opencode.json'), JSON.stringify({ plugin: ['./plugins/aet.js'] }))
+    fs.writeFileSync(pluginTarget, 'export default 1')
+    fs.symlinkSync(pluginTarget, path.join(plugins, 'aet.js'))
+
+    const before = client.capabilityDiscoveryFingerprint()
+    fs.writeFileSync(pluginTarget, 'export default 22')
+    const after = client.capabilityDiscoveryFingerprint()
+    assert.notEqual(after, before)
+    assert.equal(client.CAPABILITY_DISCOVERY_SCAN_MS, 30_000)
+  } finally {
+    if (previous === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previous
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('manual and automatic capability refresh bypass the cached probe', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(source, /REFRESH_CAPABILITIES[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
+  assert.match(source, /cachedProbe = await probeFaultInjectionIsolated\(cfg\)[\s\S]*?reportCapabilities\(cfg\)/)
+  assert.match(source, /const refreshCapabilities[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
+  assert.match(source, /setTimeout\([\s\S]*?setInterval\(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS\)[\s\S]*?CAPABILITY_DISCOVERY_SCAN_MS \/ 2/)
+})
+
+test('capability probe runs outside the daemon event loop', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(source, /function probeFaultInjectionIsolated[\s\S]*?spawn\(process\.execPath, \[__filename, FI_PROBE_CHILD_ARG\]/)
+  assert.match(source, /initialCapabilityRefresh\.then\(\(\) => fiLoop\(cfg\)\)/)
+  assert.match(source, /process\.argv\.includes\(FI_PROBE_CHILD_ARG\)[\s\S]*?probeFaultInjection\(cfg\)/)
+})
+
+test('FI inventory uses an isolated launchd helper with aligned PWD on macOS', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/reliability-client.cjs'),
+    'utf8',
+  )
+  assert.match(
+    source,
+    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'submit'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?'remove', label/,
+  )
+})
+
 test('OpenCode JSON events expose the platform Trace ID', () => {
   assert.equal(
     client.extractTraceIdFromJsonLine(JSON.stringify({
@@ -362,9 +425,9 @@ test('sd_notify READY precedes capabilities and watchdog is faster than Watchdog
   assert.match(mainBody, /notifyReady\(\)/)
   assert.match(mainBody, /setInterval\(notifyWatchdog,\s*WATCHDOG_MS\)/)
   const readyAt = mainBody.indexOf('notifyReady()')
-  const capsAt = mainBody.indexOf('reportCapabilities(')
+  const capsAt = mainBody.indexOf('refreshCapabilityReports(')
   assert.ok(readyAt >= 0 && capsAt > readyAt, 'READY 必须早于 reportCapabilities')
-  assert.doesNotMatch(mainBody, /await reportCapabilities/)
+  assert.doesNotMatch(mainBody, /await refreshCapabilityReports/)
   // Node dgram 无 unix_dgram；必须经 systemd-notify 且带本进程 pid。
   assert.match(src, /systemd-notify/)
   assert.match(src, /--pid=\$\{process\.pid\}/)
