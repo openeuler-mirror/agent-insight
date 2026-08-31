@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <strong>让每一个 Agent 都可被观测、可被评估、可自我进化。</strong>
+  <strong>让每一个 Agent 可靠运行、行为可观测、故障可定位、质量可度量、能力可进化。</strong>
   <br/>
-  <em>面向 Agent 全生命周期的开源工程平台 — 观测 · 评测 · Skills 优化 一体化</em>
+  <em>面向 Agent 全生命周期的开源AgentOps平台 — 观测 · 评测 · 诊断 · 优化 · 可靠性 一体化</em>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 随着 Agent 在各行业的落地，开发者面临五大痛点：① Agent 运行链路如同黑盒，难以追溯完整执行过程；② 可靠性缺少体系化量化评估，业务可用度难以判定；③ 隐性质量退化无法提前感知，多为事后才发现问题；④ 故障根因定位全靠人工，诊断经验无法沉淀复用；⑤ 缺少评测与自动化优化闭环，Agent 无法实现持续进化。
 
-**Agent Insight** 是openEuler社区孵化的开源AgentOps平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等12个主流Agent运行时。
+**Agent Insight** 是openEuler社区孵化的开源AgentOps平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等10+个主流Agent平台。
 
 ---
 
@@ -50,26 +50,26 @@
 
 ## 🔌 支持平台
 
-Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平台持续接入中：
+Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 
-| Agent 框架    | 采集方式    |
-|:----------- |:------- |
-| OpenCode    | 原生插件    |
-| Claude Code | OTLP 上报 |
-| Qwen Code   | Hook 采集器 |
-| Hermes      | 原生插件    |
-| Trae IDE | VS Code 插件 |
-| JiuwenSwarm | OTLP 上报 |
-| LangChain / Langgraph | OTLP 上报 |
-| LlamaIndex | OTLP 上报 |
-| OpenClaw | OTLP 上报 |
-| Codex | Hook 采集器 |
-| Pi Agent | Hook 采集器 |
-| Qoder CN | 原生插件 |
-| DeepSeek Harness | 原生插件 |
-| xiaoO | Hook 采集器 |
-| CodeAgent | OTLP 上报 |
-| AcTrail | OTLP 上报 |
+| Agent 框架              | 采集方式       |
+|:--------------------- |:---------- |
+| OpenCode              | 原生插件       |
+| Claude Code           | OTLP 上报    |
+| Qwen Code             | Hook 采集器   |
+| Hermes                | 原生插件       |
+| Trae IDE              | VS Code 插件 |
+| JiuwenSwarm           | OTLP 上报    |
+| LangChain / Langgraph | OTLP 上报    |
+| LlamaIndex            | OTLP 上报    |
+| OpenClaw              | OTLP 上报    |
+| Codex                 | Hook 采集器   |
+| Pi Agent              | Hook 采集器   |
+| Qoder CN              | 原生插件       |
+| DeepSeek Harness      | 原生插件       |
+| xiaoO                 | Hook 采集器   |
+| CodeAgent             | OTLP 上报    |
+| AcTrail               | OTLP 上报    |
 
 ## 🚀 快速开始
 
@@ -282,25 +282,47 @@ bash scripts/stop.sh
 
 ### 分析 Skill
 
-1. 进入 **Skills 评测**，单击 **静态合规**。
+1. 进入 **Skill 评估**，单击 **开始评估**。
    
-   <p align="center"><img src="docs/images/skill-analyse.png" alt="分析 Skill" /></p>
+   <p align="center"><img src="docs/images/skill-analyse.png" alt="静态合规评估" /></p>
 
-2. 单击 **重新扫描**，查看分析结果。
+2. 单击 **开始评估**，查看分析结果。
    
    <p align="center"><img src="docs/images/skill-analyse-static.png" alt="静态合规分析" /></p>
 
+3. 进入 **Skill 实验**，单击 **触发分析**。
+   
+   <p align="center"><img src="docs/images/skill_experiment.png" alt="Skill 实验" /></p>
+
+4. 选择**待执行 AGENT**，单击 **AI 新建触发分析数据集**，单击**下一步：Trace来源**。
+   
+   <p align="center"><img src="docs/images/skill_exp_gendataset.png" alt="新建触发分析数据集" /></p>
+
+5. 选择**数据集 Case**，单击 **下一步：预期答案**。
+   
+   <p align="center"><img src="docs/images/skill_exp_select_case.png" alt="数据集 Case" /></p>
+
+6. 单击 **下一步：评估器与执行**。
+   
+   <p align="center"><img src="docs/images/skill_exp_confirm.png" alt="预期答案" /></p>
+
+7. 单击 **开始实验**。
+   
+   <p align="center"><img src="docs/images/skill_exp_select_evaluator.png" alt="评估器与执行" /></p>
+
+8. 浏览实验结果。
+   
+   <p align="center"><img src="docs/images/skill_exp_resultr.png" alt="实验结果" /></p>
+
 ### 优化 Skill
 
-1. 进入 **Skills 优化**，选择 Skill 并单击 **优化**。
+1. 单击 **Skill 优化**，系统将基于评估与实验结果启动优化流程。
    
    <p align="center"><img src="docs/images/skill-optimization.png" alt="优化 Skill" /></p>
 
-2. 选择可优化项并单击 **开始优化**，或直接输入优化需求后单击 **发送**。
+2. 优化完成后，可以查看优化结果，确认无误后，单击 **发布为 v1**，系统将自动保存为新版本。
    
    <p align="center"><img src="docs/images/skill-optimization-result.png" alt="优化结果" /></p>
-
-3. 优化完成后，单击 **发布为 v1**，系统将自动保存为新版本。
 
 ---
 
@@ -308,15 +330,15 @@ bash scripts/stop.sh
 
 完整文档位于 [`docs/`](docs/) 目录，主要包含以下内容：
 
-| 路径 | 说明 |
-|:---|:---|
-| [`docs/user-guide/`](docs/user-guide/) | 用户使用指南：快速上手、示例走查、核心概念、FAQ |
-| [`docs/developer-guide/`](docs/developer-guide/) | 开发者指南：架构、模块、API、约定等 |
-| [`docs/agent-ras/`](docs/agent-ras/) | Agent RAS 环内可靠性：异常检测 + 自动恢复的设计与使用 |
-| [`docs/agent-fault-injection/`](docs/agent-fault-injection/) | Agent 故障注入：注入 + 采集引擎的设计与使用 |
-| [`docs/snippets/`](docs/snippets/) | 可复用文档片段：SDK 安装、环境配置 |
-| [`docs/qa.md`](docs/qa.md) | 平台常见问答：覆盖概念、安装、接入、Skill、评测、观测、架构与排障 |
-| [`docs/skill-generation-principle-and-pipeline.md`](docs/skill-generation-principle-and-pipeline.md) | Skill 生成原理、流水线与能力边界 |
+| 路径                                                                                                   | 说明                                  |
+|:---------------------------------------------------------------------------------------------------- |:----------------------------------- |
+| [`docs/user-guide/`](docs/user-guide/)                                                               | 用户使用指南：快速上手、示例走查、核心概念、FAQ           |
+| [`docs/developer-guide/`](docs/developer-guide/)                                                     | 开发者指南：架构、模块、API、约定等                 |
+| [`docs/agent-ras/`](docs/agent-ras/)                                                                 | Agent RAS 环内可靠性：异常检测 + 自动恢复的设计与使用   |
+| [`docs/agent-fault-injection/`](docs/agent-fault-injection/)                                         | Agent 故障注入：注入 + 采集引擎的设计与使用          |
+| [`docs/snippets/`](docs/snippets/)                                                                   | 可复用文档片段：SDK 安装、环境配置                 |
+| [`docs/qa.md`](docs/qa.md)                                                                           | 平台常见问答：覆盖概念、安装、接入、Skill、评测、观测、架构与排障 |
+| [`docs/skill-generation-principle-and-pipeline.md`](docs/skill-generation-principle-and-pipeline.md) | Skill 生成原理、流水线与能力边界                 |
 
 > 新用户推荐从 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
 
