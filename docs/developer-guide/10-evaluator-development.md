@@ -396,7 +396,7 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 
 ### 4.5 Issue #168 轨迹评估器的 canonical 边界
 
-`preset-agent-process-quality` 与 `preset-agent-step-efficiency` 共用一套 canonical 轨迹能力，只服务实验评测。原 `preset-agent-trace-quality` 仍由 faithful/opencode runner 实现，并继续服务既有 Skill 与旧 `/eval/trajectory` 入口；不要为复用而把两个语义不同的质量评估器合并。
+`preset-agent-process-quality` 与 `preset-agent-step-efficiency` 共用一套 canonical 轨迹能力，由实验评测链路执行；它们的卡片可在通用实验和三个既有 Skill 评测选择器中按统一的 `status === 'ready'` 规则展示。原 `preset-agent-trace-quality` 仍由 faithful/opencode runner 实现，并继续服务旧 `/eval/trajectory` 入口；不要为复用而把两个语义不同的质量评估器合并。
 
 需求背景、冻结契约与逐项实施计划分别见 [Phase 1 需求分析](../design/agent-trajectory-evaluation/phase1-requirements-analysis.md)、[Phase 2 需求设计](../design/agent-trajectory-evaluation/phase2-requirements-design.md)、[Phase 3 开发计划](../design/agent-trajectory-evaluation/phase3-development-plan.md)。
 
@@ -429,10 +429,10 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 - `src/lib/engine/agent-debug/skills-analysis.ts`
   - 继续走 `evaluateTrajectoryViaOpencode()` 的旧关键动作诊断链路，不复用新的六维质量总分。
 
-#### 入口隔离与测试清单
+#### 入口边界与测试清单
 
 - `src/lib/evaluators/registry.ts` 只为 `preset-agent-process-quality` 增加现有格式的运行元数据，不扩展公共卡片或 registry 类型。
-- 实验执行引擎由 canonical runner 唯一认领新 ID；旧 `/skill-eval`、批量和灰度页面在原 `ready` 过滤上显式排除该 ID，旧 `/api/eval/trajectory/run` 白名单保持不变。
+- 实验执行引擎由 canonical runner 唯一认领新 ID；单次、批量和灰度三个 Skill 页面继续统一按 `status === 'ready'` 展示，不增加按 ID 特殊隐藏；旧 `/api/eval/trajectory/run` 白名单保持不变。
 - `preset-agent-trace-quality` 的卡片、faithful runner、旧 API 和消费者不得随新评估器修改。
 - 这组评估器至少维护以下定向测试：
   - `test/agent-trajectory-facts.test.ts`

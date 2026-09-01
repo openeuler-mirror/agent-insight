@@ -40,14 +40,14 @@ Issue #168 要求提供两个独立的预置 LLM Judge：
 preset-agent-process-quality
 ```
 
-该 ID 使用 Issue #168 定义的六维过程质量口径，只进入通用实验评测链路。现有 `preset-agent-trace-quality` 仍保留原名称、三维口径、opencode runner 和 Skill/旧轨迹入口，不因本需求改变行为。
+该 ID 使用 Issue #168 定义的六维过程质量口径，由通用实验评测链路执行；其卡片在三个既有 Skill 评测页面沿用统一的 `status === 'ready'` 可见性规则，不增加按 ID 特殊隐藏。现有 `preset-agent-trace-quality` 仍保留原名称、三维口径、opencode runner 和旧轨迹入口，不因本需求改变行为。
 
 ### 3.2 兼容原则
 
 - 历史评估结果不重算、不覆盖；
 - 旧评估器的 ID、卡片元数据、runner、API 和消费者均保持原样；
 - 新评估器使用独立 ID 和 `rubricVersion`，不复用旧三维结果的语义；
-- 新评估器只进入 `experiment` surface，不进入 Skill、灰度或旧 `/eval/trajectory` 入口；
+- 新评估器统一由 `experiment` surface 执行，并可在单次、批量和灰度三个 Skill 评测选择器中按既有 `ready` 规则展示；不进入旧 `/api/eval/trajectory/run` 入口；
 - 不修改质量监控、Skill 对齐和其它旧消费者。
 
 ### 3.3 新增效率评估器

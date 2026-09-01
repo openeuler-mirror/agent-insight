@@ -29,8 +29,8 @@
 
 Phase 2 冻结以下设计：
 
-1. 新增 `preset-agent-step-efficiency`，只进入实验评测链路，不进入旧 `/api/eval/trajectory/run` 批量评测链路。
-2. 新增 `preset-agent-process-quality`，以独立卡片承载 Issue #168 的六维过程质量口径，并只进入实验评测链路。
+1. 新增 `preset-agent-step-efficiency`，由实验评测链路执行，并在三个既有 Skill 评测选择器中沿用统一的 `ready` 可见性规则；不进入旧 `/api/eval/trajectory/run` 批量评测链路。
+2. 新增 `preset-agent-process-quality`，以独立卡片承载 Issue #168 的六维过程质量口径，由实验评测链路执行，并在三个既有 Skill 评测选择器中沿用统一的 `ready` 可见性规则。
 3. 现有 `preset-agent-trace-quality` 保持原卡片、faithful runner、opencode 三维口径和旧轨迹入口不变。
 4. 六维质量能力只由新 ID 调用；不迁移旧 API、Skill 对齐或质量监控消费者。
 5. 两个评估器均采用“完整事实输入 → LLM 离散判断 → 代码事实锚定 → 代码计分和封顶”。
@@ -93,7 +93,7 @@ Canonical 能力不返回 `EvaluatorOutput`，也不访问 Prisma。它返回稳
 
 ### 3.3 旧轨迹链路隔离
 
-`/api/eval/trajectory/run`、`trajectory-evaluator.ts`、Skill 对齐和质量监控继续使用原 `preset-agent-trace-quality` 行为。本需求不修改这些文件，也不把 `preset-agent-process-quality` 暴露到旧轨迹 API 或 Skill 入口。
+`/api/eval/trajectory/run`、`trajectory-evaluator.ts`、Skill 对齐和质量监控继续使用原 `preset-agent-trace-quality` 行为。本需求不修改这些文件，也不把 `preset-agent-process-quality` 暴露到旧轨迹 API 或迁移给旧消费者；三个 Skill 评测选择器仅按统一的 `ready` 规则展示卡片，执行仍由实验评测链路承载。
 
 `agent-debug/skills-analysis.ts` 和 faithful runner 继续调用原 `evaluateTrajectoryViaOpencode()`。这是旧评估器及 Skill 诊断的既有实现，不与新六维评估器合并。
 
@@ -314,7 +314,7 @@ agent-step-efficiency/1.0.0
 
 registry 只新增 `preset-agent-process-quality` 的既有运行元数据，不扩展公共元数据结构，也不改动任何既有卡。实验执行引擎通过 canonical runner 唯一认领新 ID。
 
-三处旧 Skill 页面在原 `ready` 过滤基础上显式排除 `preset-agent-process-quality`；旧 `/api/eval/trajectory/run` 白名单保持不变，因此不会出现“下拉框可选、后端报 unsupported evaluators”。该隔离不改变旧 `preset-agent-trace-quality`、历史结果名称解析或其它评估器的可见性。
+单次、批量和灰度三个既有 Skill 页面继续使用统一的 `status === 'ready'` 可见性规则，不对 `preset-agent-process-quality` 或 `preset-agent-step-efficiency` 增加按 ID 特殊隐藏。页面选择后的执行仍由实验评测链路承载；旧 `/api/eval/trajectory/run` 白名单保持不变。该入口边界不改变旧 `preset-agent-trace-quality`、历史结果名称解析或其它评估器的可见性。
 
 ## 10. 错误处理
 
@@ -499,8 +499,8 @@ docs/user-guide/evaluation/evaluators.md
 
 Phase 2 在以下设计被确认后结束：
 
-- 接受效率卡仅进入实验链路的 MVP 边界；
-- 接受新增 `preset-agent-process-quality` 且只进入实验链路；
+- 接受效率卡由实验链路执行、在三个 Skill 评测选择器中按 `ready` 规则展示且不进入旧轨迹 API 的 MVP 边界；
+- 接受新增 `preset-agent-process-quality` 由实验链路执行，并在三个 Skill 评测选择器中按 `ready` 规则展示；
 - 接受 `preset-agent-trace-quality` 及其旧消费者保持不变；
 - 接受两个评估器的等权和问题封顶表；
 - 接受 Prompt 超限时失败而不是截断后出分；

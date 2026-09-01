@@ -305,13 +305,13 @@ node --import tsx --test test/preset-registry-consistency.test.ts test/experimen
 
 ---
 
-## Task 8: 隔离旧 Skill 与旧轨迹入口
+## Task 8: 统一 Skill 可见性并隔离旧轨迹入口
 
-**Files:** Create `test/evaluator-surface.test.ts`; minimally modify three existing Skill selection pages.
+**Files:** Create `test/evaluator-surface.test.ts`; verify three existing Skill selection pages keep their shared visibility rule.
 
-- [x] **Step 1: 写入口边界测试。** 新执行过程质量卡可被实验 runner 唯一认领；三处 Skill 页面明确排除新 ID；旧轨迹 API 白名单不包含新 ID；旧轨迹质量卡的卡片和入口保持不变。
+- [x] **Step 1: 写入口边界测试。** 新执行过程质量卡可被实验 runner 唯一认领；三处 Skill 页面继续按 `status === 'ready'` 展示，不增加按 ID 特殊隐藏；旧轨迹 API 白名单不包含新 ID；旧轨迹质量卡的卡片和入口保持不变。
 
-- [x] **Step 2: 最小修改三处 Skill 页面。** 保留原有 `status==='ready'` 逻辑，仅追加 `id !== 'preset-agent-process-quality'`；不修改实验弹窗、`useEvaluatorLookup.ts`、旧 API 或公共 registry 行为。
+- [x] **Step 2: 保持三处 Skill 页面统一规则。** 保留原有 `status === 'ready'` 逻辑，不追加任何评估器 ID 特判；不修改实验弹窗、`useEvaluatorLookup.ts`、旧 API 或公共 registry 行为。
 
 - [ ] **Step 3: 运行测试和组件 lint。**
 
@@ -328,7 +328,7 @@ npx eslint src/components/eval/NewEvaluationBatchDialog.tsx src/components/eval/
 
 **Files:** Modify开发指南、用户指南、设计索引和本计划的实际完成状态。
 
-- [x] **Step 1: 更新开发指南。** 记录 canonical/adapter 边界、rubricVersion、离散 Judge、grounding、Prompt 上限、入口隔离和新增卡测试清单。
+- [x] **Step 1: 更新开发指南。** 记录 canonical/adapter 边界、rubricVersion、离散 Judge、grounding、Prompt 上限、入口边界和新增卡测试清单。
 
 - [x] **Step 2: 更新用户指南。** 说明效率五维、执行过程质量六维、两个质量 ID 的入口范围和旧评估器保持不变。
 
@@ -350,7 +350,7 @@ git diff --name-only --diff-filter=ACMR -- '*.ts' '*.tsx' | xargs npx eslint
 
 预期：全量测试和改动文件 lint 通过；`tsc` 若有基线错误，提供与 `master@0f8006e7` 对比证据。
 
-实际（2026-08-29，openEuler SP4）：最终父链的事实层、Judge 契约、两个评估器、Prompt 安全、注册表和实验引擎定向测试 131/131 通过；`tsconfig.next.json`、任务范围非页面文件 ESLint 和 `git diff --check` 均通过。三份既有大型 Skill 页面只追加一条新 ID 排除条件，仍保留仓库已有 lint 债；全仓测试此前也存在与本任务无关的基线失败，因此本报告不宣称全仓全绿，只声明 Issue #168 的定向门禁和真实 Judge 验收通过。
+实际（2026-08-29，openEuler SP4）：最终父链的事实层、Judge 契约、两个评估器、Prompt 安全、注册表和实验引擎定向测试 131/131 通过；`tsconfig.next.json`、任务范围非页面文件 ESLint 和 `git diff --check` 均通过。三份既有大型 Skill 页面保持统一的 `ready` 可见性规则，未增加按 ID 特殊隐藏，且仍保留仓库已有 lint 债；全仓测试此前也存在与本任务无关的基线失败，因此本报告不宣称全仓全绿，只声明 Issue #168 的定向门禁和真实 Judge 验收通过。
 
 - [x] **Step 5: 做差异自检。**
 
@@ -404,7 +404,7 @@ git diff --stat
 
 ### PR 4：Agent 执行过程质量评估器与产品接入
 
-- 范围：新增 `preset-agent-process-quality` 卡片，提供目标对齐、规划完整性、推理连贯性、异常处理、路径稳健性和信息利用六维评分；在三个 Skill 专用入口排除该通用评估器。
+- 范围：新增 `preset-agent-process-quality` 卡片，提供目标对齐、规划完整性、推理连贯性、异常处理、路径稳健性和信息利用六维评分；三个 Skill 评测选择器继续统一遵循 `status === 'ready'` 可见性规则，不增加按 ID 特殊隐藏。
 - 边界：不修改原 `preset-agent-trace-quality` 的卡片、faithful runner、旧轨迹 API 或质量监控；不回改效率产品 ID。
 - 门禁：12 个质量验收场景、完整 24 场景回归、真实 Judge 24/24 场景与 48/48 调用、TypeScript、变更文件 ESLint、`git diff --check`。
 - 分支：`feature/issue-168-process-quality-v5@29cc17e9`。
