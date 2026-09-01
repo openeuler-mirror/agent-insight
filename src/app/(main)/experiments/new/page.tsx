@@ -83,6 +83,7 @@ interface SelectedCase {
   executionId: string;
   taskId: string | null;
   input: string;
+  datasetInput: string | null;
   actualOutput: string;
   referenceOutput: string | null;
   evaluatorContext: EvaluatorCaseContext | null;
@@ -108,6 +109,9 @@ interface DatasetOption {
     values?: Record<string, unknown>;
   }>;
 }
+
+const normalizeDatasetInput = (value: string | null | undefined) =>
+  String(value || '').trim().replace(/\s+/g, ' ');
 
 export type SkillExperimentPreset = 'trigger' | 'use-case' | 'skill-ab';
 
@@ -174,6 +178,7 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
       executionId: key,
       taskId: null,
       input: String(item.input || ''),
+      datasetInput: String(item.input || '').trim() || null,
       actualOutput: '',
       referenceOutput: match.updates[key] || null,
       evaluatorContext: match.contextUpdates[key] || null,
@@ -811,6 +816,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
       executionId: t.id,
       taskId: t.taskId,
       input: t.query || '',
+      datasetInput: null,
       actualOutput: t.finalResult || '',
       referenceOutput: null,
       evaluatorContext: null,
@@ -829,6 +835,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     const fault = String(datasetCase.values?.fault_injection_type || '').trim();
     return {
       ...base,
+      datasetInput: match.datasetInputUpdates?.[base.executionId] || null,
       referenceOutput: match.updates[base.executionId] || null,
       evaluatorContext: match.contextUpdates[base.executionId] || null,
       faultInjectionType: fault || null,
@@ -947,7 +954,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   );
   const annotated = selectedList.filter((c) => !!c.referenceOutput).length;
   const capabilityCatalogAnnotated = selectedList.filter((c) => c.evaluatorContext !== null).length;
-  const persistable = selectedList.filter((c) => c.referenceOutput || c.evaluatorContext).length;
+  const persistable = selectedList.filter((c) => c.datasetInput || c.referenceOutput || c.evaluatorContext).length;
 
   const setReference = (executionId: string, value: string | null) => {
     setSelected((prev) => {
@@ -994,10 +1001,14 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
           const c = next.get(key);
           if (c) next.set(key, { ...c, evaluatorContext });
         }
+        for (const [key, datasetInput] of Object.entries(result.datasetInputUpdates || {})) {
+          const c = next.get(key);
+          if (c) next.set(key, { ...c, datasetInput });
+        }
         return next;
       });
       setDatasetHint(describeMatchResult(result));
-      if (result.matched > 0 || result.contextMatched > 0) {
+      if ((result.datasetInputMatched ?? 0) > 0 || result.matched > 0 || result.contextMatched > 0) {
         setTimeout(() => setImportOpen(false), 900);
       }
     } catch (error) {
@@ -1048,6 +1059,10 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   const gateCases = useMemo(
     () => selectedList.map((c) => ({
       hasReference: !!c.referenceOutput,
+      hasDatasetInput: Boolean(
+        c.datasetInput
+        && normalizeDatasetInput(c.input).includes(normalizeDatasetInput(c.datasetInput)),
+      ),
       hasToolCatalog: c.evaluatorContext !== null,
     })),
     [selectedList],
@@ -1079,7 +1094,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     });
   };
 
-  // 监听 trace 不携带逐条参考答案或 Tool/Skill 目录，移除带前置条件的评估器。
+  // 监听 trace 不携带逐条预期输出、数据集输入或 Tool/Skill 目录，移除带前置条件的评估器。
   useEffect(() => {
     if (!watchMode) return;
     const timer = window.setTimeout(() => {
@@ -1104,6 +1119,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
         input: c.input,
+        datasetInput: c.datasetInput,
         actualOutput: c.actualOutput,
         referenceOutput: c.referenceOutput,
         evaluatorContext: c.evaluatorContext,
@@ -1801,7 +1817,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
               <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--foreground)' }}>监听模式</span>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.5 }}>
                 开启后本实验绑定「{agentName || '该 Agent'}」——其新上报的 trace 自动进来评测；下方圈选已有 trace 变为可选，可 0 条起步。
-                <span style={{ color: 'var(--foreground-muted)' }}>（监听 trace 无参考答案，第 ④ 步依赖参考数据的评估器不可选）</span>
+                <span style={{ color: 'var(--foreground-muted)' }}>（监听 trace 无逐条预期输出或数据集输入，第 ④ 步带相关依赖的评估器不可选）</span>
               </span>
             </label>
             <div style={PANEL_H}>
@@ -2171,7 +2187,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
               <div style={{ padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--background-secondary)', marginBottom: 12, fontSize: 12 }}>
                 <b>数据集预期答案覆盖 {annotated} / {selectedList.length}</b>
                 <span style={{ marginLeft: 8, color: 'var(--foreground-muted)' }}>
-                  {annotated === selectedList.length ? '覆盖完整' : '缺失预期答案的 Case 仍可执行，但依赖参考数据的评估器可能不可用'}
+                  {annotated === selectedList.length ? '覆盖完整' : '缺失预期答案的 Case 仍可执行，但依赖预期输出的评估器可能不可用'}
                 </span>
               </div>
               <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'auto', maxHeight: 420 }}>
@@ -2216,7 +2232,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', flex: 1, minWidth: 260, lineHeight: 1.6 }}>
                 {isReliabilityDataset
                   ? '已按任务输入从内置可靠性数据集自动导入预期答案与故障元数据；未匹配条目仍可手工标注。'
-                  : 'Trace 任务输入包含数据集输入时，可导入参考答案和 Tool/Skill 目录；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。'}
+                  : 'Trace 任务输入包含数据集输入时，可导入预期输出和 Tool/Skill 目录；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。'}
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 200 }}>
                 <span style={{ flex: 1, height: 7, borderRadius: 4, background: 'var(--background-secondary)', overflow: 'hidden' }}>
@@ -2240,7 +2256,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                   style={{ ...BTN_OUTLINE_SM, opacity: persistable > 0 ? 1 : 0.5, cursor: persistable > 0 ? 'pointer' : 'not-allowed' }}
                   disabled={persistable === 0}
                   onClick={() => { setDatasetHint(''); setDatasetName(''); setSaveOpen(true); }}
-                  title={persistable > 0 ? '把参考答案和 Tool/Skill 目录沉淀为评测数据集' : '尚无可保存的 case 上下文'}
+                  title={persistable > 0 ? '把预期输出和 Tool/Skill 目录沉淀为评测数据集' : '尚无可保存的 case 上下文'}
                 >
                   💾 存为数据集
                 </button>
@@ -2263,7 +2279,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                           </div>
                           {c.referenceOutput && !open && (
                             <div style={{ fontSize: 11, color: 'var(--success)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 2 }}>
-                              参考答案：{truncate(c.referenceOutput, 90)}
+                              预期输出：{truncate(c.referenceOutput, 90)}
                             </div>
                           )}
                         </div>
@@ -2286,7 +2302,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                               setExpandedCase(null);
                             } else {
                               setExpandedCase(c.executionId);
-                              // 预填：已有参考输出 > 实际输出
+                              // 预填：已有预期输出 > 实际输出
                               setDraftRef(c.referenceOutput ?? c.actualOutput);
                             }
                           }}
@@ -2297,7 +2313,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                       {open && (
                         <div style={{ padding: '0 13px 12px', borderTop: '1px solid var(--border)', background: 'var(--background-secondary)' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0 7px' }}>
-                            <label style={{ ...FIELDLBL, marginBottom: 0 }}>参考输出（预期答案）</label>
+                            <label style={{ ...FIELDLBL, marginBottom: 0 }}>预期输出</label>
                             <span style={{ flex: 1 }} />
                             <button
                               style={{ ...BTN_OUTLINE_SM, height: 22, fontSize: 10.5 }}
@@ -2377,17 +2393,17 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                 ))}
               </div>
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
-                为本次实验挑选评估器（可多选）。依赖参考数据或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
+                为本次实验挑选评估器（可多选）。依赖预期输出、数据集输入或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
                 {allEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
-                  // 监听模式的新 trace 没有逐条参考答案或 Tool/Skill 目录，带前置条件的评估器不可用。
+                  // 监听模式的新 trace 没有逐条预期输出或 Tool/Skill 目录，带前置条件的评估器不可用。
                   const gate = RELIABILITY_EVALUATOR_IDS.has(card.id) && !isReliabilityDataset
                     ? { usable: false, reason: '该评估器仅适用于可靠性数据集' }
                     : watchMode && meta.requires.length > 0
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
-                    : gateEvaluator(meta, gateCases);
+                    : gateEvaluator(card.id, meta, gateCases, Array.from(selectedEvaluators));
                   const checked = selectedEvaluators.has(card.id);
                   return (
                     <div
@@ -2468,7 +2484,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                 <button style={BTN_GHOST} onClick={() => setImportOpen(false)}>✕ 关闭</button>
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginBottom: 12, lineHeight: 1.6 }}>
-                当<b style={{ color: 'var(--foreground-secondary)' }}>Trace 任务输入包含数据集输入</b>时回填参考输出；已标注的 case 会跳过，不覆盖人工标注。
+                当<b style={{ color: 'var(--foreground-secondary)' }}>Trace 任务输入包含数据集输入</b>时回填预期输出并保存数据集输入快照；已标注的 case 会跳过，不覆盖人工标注。
               </div>
               {datasets.length === 0 ? (
                 <div style={{ padding: 22, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)', border: '1px dashed var(--border-dark)', borderRadius: 10 }}>
@@ -2510,7 +2526,7 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
                 <button style={BTN_GHOST} onClick={() => setSaveOpen(false)}>✕ 关闭</button>
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginBottom: 12, lineHeight: 1.6 }}>
-                将 <b style={{ color: 'var(--primary)' }}>{persistable}</b> 条参考答案或 Tool/Skill 目录存为评测数据集，后续实验可直接导入复用。
+                将 <b style={{ color: 'var(--primary)' }}>{persistable}</b> 条预期输出或 Tool/Skill 目录存为评测数据集，后续实验可直接导入复用。
               </div>
               <label style={FIELDLBL}>数据集名称</label>
               <input

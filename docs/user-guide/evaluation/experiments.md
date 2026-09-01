@@ -66,7 +66,7 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 - 使用 **选择全部** 批量圈选当前筛选范围。
 - 开启 **监听模式**，让该 Agent 后续新上报的 Trace 自动加入本实验评测。
 
-监听模式允许不选择历史 Trace 直接创建实验。由于未来 Trace 没有逐条参考答案和 Tool/Skill 目录，依赖这些上下文的评估器在第 4 步不可选择。
+监听模式允许不选择历史 Trace 直接创建实验。由于未来 Trace 没有逐条预期输出、数据集输入快照和 Tool/Skill 目录，依赖这些上下文的评估器在第 4 步不可选择。
 
 #### 生成新 Trace
 
@@ -87,7 +87,7 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 ### 第三步：预期答案
 
-第 3 步用于确认每条 Case 的参考答案和评估上下文。
+第 3 步用于确认每条 Case 的预期输出、数据集输入快照和评估上下文。
 
 #### 选择已有 Trace：从数据集导入匹配
 
@@ -97,9 +97,9 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
   <img src="../../images/agent/evaluation/eval_experiment_reference_import_select.png" alt="已有 Trace 实验从数据集导入匹配，选择一个数据集作为参考答案来源" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
-系统使用 Trace 的任务输入与数据集 Case 的 `input` 进行匹配：只要任务输入包含数据集 `input`，就会导入对应的参考答案和 Tool/Skill 目录；多条输入同时命中时，优先选择更长、更具体的一条。已经手工标注的 Case 会被跳过，不会被导入操作覆盖。
+系统使用 Trace 的任务输入与数据集 Case 的 `input` 进行匹配：只要任务输入确定性包含数据集 `input`，就会导入对应的预期输出、数据集输入快照和 Tool/Skill 目录；多条输入同时命中时，优先选择更长、更具体的一条。已经手工标注的 Case 会被跳过，不会被导入操作覆盖。
 
-导入后，页面顶部会统计参考答案和 Tool/Skill 目录的覆盖数量；Case 中会显示导入的参考答案及 **已标注** 状态。
+导入后，页面顶部会统计预期输出、数据集输入快照和 Tool/Skill 目录的覆盖数量；Case 中会显示导入的预期输出及 **已标注** 状态。
 
 <p align="center">
   <img src="../../images/agent/evaluation/eval_experiment_reference_import_result.png" alt="已有 Trace 与数据集匹配完成，Case 已导入参考答案并显示标注状态" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
@@ -107,8 +107,8 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 这一条路径还可以：
 
-- 手工填写参考答案。
-- 将已经整理的参考答案和能力目录存为新数据集。
+- 手工填写预期输出。
+- 将已经整理的预期输出和能力目录存为新数据集。
 
 #### 生成 Trace：检查已有数据集
 
@@ -118,17 +118,17 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
   <img src="../../images/agent/evaluation/eval_experiment_reference_dataset_snapshot.png" alt="生成 Trace 实验检查已选数据集快照和预期答案覆盖情况" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
-这里显示的是本次实验的数据快照，不是可回写的原数据集；在实验中调整参考答案，不会修改评测数据集页面中的原始内容。
+这里显示的是本次实验的数据快照，不是可回写的原数据集；在实验中调整预期输出，不会修改评测数据集页面中的原始内容。
 
 两条路径的区别是：
 
 | Trace 来源 | 数据集的作用 | 第 3 步操作 |
 | --- | --- | --- |
-| 选择已有 Trace | 数据集可选，用于给已选 Trace 补充参考答案和 Tool/Skill 目录 | 选择数据集并按任务输入匹配，也可手工标注或存为数据集 |
+| 选择已有 Trace | 数据集可选，用于给已选 Trace 补充预期输出、数据集输入快照和 Tool/Skill 目录 | 选择数据集并按任务输入匹配，也可手工标注或存为数据集 |
 | 生成 Trace | 数据集必选，用于提供待运行的 Case | 检查已选数据集的冻结快照和预期答案覆盖情况 |
 
 > **Note**
-> 参考答案不是所有评估器的必需项。缺少参考答案的 Case 仍可执行，但依赖参考数据的评估器会被禁用或不记分。
+> 预期输出和数据集输入都不是所有评估器的必需项。缺少相应上下文的 Case 仍可执行，但依赖它们的评估器会被禁用或不记分。
 
 ### 第四步：评估器与执行
 
@@ -142,7 +142,8 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 评估器会按自身要求检查全部已选 Case：
 
-- 依赖参考答案时，全部 Case 都需要参考数据。
+- 引用 `{{reference_output}}` 时，全部 Case 都需要预期输出。
+- 引用 `{{dataset_input}}` 时，全部 Case 都需要匹配到数据集输入快照。
 - 工具类评估器需要完整的 `available_tools` / `available_skills` 目录。
 - 可靠性专用评估器只适用于可靠性数据集。
 - 监听模式下，依赖逐条上下文的评估器不可用。
@@ -187,7 +188,7 @@ Case 行的 **重试** 由 Trace 来源决定：
 - 选择已有 Trace 的实验保留当前 Trace，只重试失败评估。
 - 生成 Trace 的实验会重新执行 Agent、绑定新 Trace，再运行该 Case 的全部评估器。
 
-点击 **新增 Case** 可以从当前实验绑定 Agent 的 Trace 中追加样本，并立即使用实验既定评估器运行。若评估器依赖参考答案，可在追加时补充标注。
+点击 **新增 Case** 可以从当前实验绑定 Agent 的 Trace 中追加样本，并立即使用实验既定评估器运行。若评估器依赖预期输出，可在追加时补充标注；若依赖数据集输入，新增 Case 也需要完成数据集匹配。
 
 ### 实验级评论
 
@@ -242,7 +243,7 @@ Trace 评测详情把输入、输出和评分依据放在同一页，适合核�
 
 ### 复盘线上问题
 
-选择已有 Trace，复用真实输入、输出和执行轨迹。按需导入参考答案后运行评估，适合确认问题究竟来自结果还是过程。
+选择已有 Trace，复用真实输入、输出和执行轨迹。按需导入预期输出与数据集上下文后运行评估，适合确认问题究竟来自结果还是过程。
 
 ### 固定题库回归
 
