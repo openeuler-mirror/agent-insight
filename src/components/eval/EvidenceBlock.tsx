@@ -306,7 +306,7 @@ export function EvidenceBlock({
     : undefined;
   const previewText = [
     `证据：${preview(ev, evaluatorId)}`,
-    suggestion ? `Skill 改进建议：${suggestion.replace(/[*`#]/g, '').replace(/(?:^|\n)\s*-\s*/g, ' ').replace(/\s+/g, ' ').trim()}` : '',
+    suggestion ? `Skill 改进建议：${suggestion.replace(/[*`#]/g, '').replace(/\s+/g, ' ').trim()}` : '',
   ].filter(Boolean).join('；');
   return (
     <div
