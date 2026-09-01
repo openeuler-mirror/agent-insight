@@ -66,6 +66,11 @@ export default function EvaluatorDetailModal({
   const outputText = card.evaluatorType === 'LLM'
     ? `score 0-100 + 评分点（${pointLabels.length > 0 ? `${pointLabels.join(' / ')}，逐条强制给分` : 'Judge 自行提取'}）+ 判断依据（Markdown）`
     : 'score 0-100 + 证据（JSON）——具体证据构成见描述。';
+  const requirementText = [
+    meta.requires.includes('reference') ? '每条 case 均需预期输出' : '',
+    meta.requires.includes('dataset_input') ? '实际任务输入需确定性匹配数据集输入' : '',
+    meta.requires.includes('tool_catalog') ? '每条 case 均需显式 Tool/Skill 目录' : '',
+  ].filter(Boolean).join('；');
 
   return (
     <div
@@ -136,9 +141,9 @@ export default function EvaluatorDetailModal({
         </DetailSection>
 
         <DetailSection title="前置条件">
-          {meta.requires.includes('reference')
-            ? '需已标注参考答案——能否在实验中使用，取决于实验第 ② 步圈选的 trace 是否满足标注覆盖，第 ④ 步自动校验门控。'
-            : '无——任意已圈选的 trace 均可评，不依赖参考数据。'}
+          {requirementText
+            ? `${requirementText}。实验第 ④ 步会对全部已选 case 自动校验门控。`
+            : '无——任意已圈选的 trace 均可评。'}
         </DetailSection>
 
         <DetailSection title="输出">

@@ -80,7 +80,7 @@ export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-result-accuracy',
     name: '结果准确性',
-    description: '对照参考答案，逐关键观点判定 covered/partial/wrong/not_mentioned + 证据；与可靠性页同口径。',
+    description: '对照预期输出，逐关键观点判定 covered/partial/wrong/not_mentioned + 证据；与可靠性页同口径。',
     evaluatorType: 'LLM',
     source: 'preset',
     targetTypes: ['结果'],
@@ -96,7 +96,7 @@ export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-result-answer',
     name: '答案质量',
-    description: '评估最终答案的相关性 / 完整性 / 连贯性三子维度；不依赖参考答案。',
+    description: '评估最终答案的相关性 / 完整性 / 连贯性三子维度；不依赖预期输出。',
     evaluatorType: 'LLM',
     source: 'preset',
     targetTypes: ['结果'],
@@ -128,7 +128,7 @@ export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-result-instruction',
     name: '指令遵循',
-    description: '抽取任务/系统指令约束并逐条判定是否遵守（met/not_met）；不依赖参考答案。',
+    description: '抽取任务/系统指令约束并逐条判定是否遵守（met/not_met）；不依赖预期输出。',
     evaluatorType: 'LLM',
     source: 'preset',
     targetTypes: ['结果'],

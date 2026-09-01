@@ -177,12 +177,17 @@ describe('评估器注册表 registry', () => {
 
   it('自建评估器 requires 由提示词占位符推导', () => {
     assert.deepEqual(getEvaluatorMeta(customWithRef).requires, ['reference']);
+    const withDatasetInput = {
+      ...customWithRef,
+      llmConfig: { model: 'm', systemPrompt: '按 {{dataset_input}} 对照 {{reference_output}} 评估' },
+    };
+    assert.deepEqual(getEvaluatorMeta(withDatasetInput).requires, ['reference', 'dataset_input']);
     const noRef = { ...customWithRef, llmConfig: { model: 'm', systemPrompt: '评估 {{output}}' } };
     assert.deepEqual(getEvaluatorMeta(noRef).requires, []);
   });
 
-  it('标签派生包含 来源/类型/类目/依赖参考数据', () => {
-    assert.deepEqual(deriveEvaluatorTags(customWithRef), ['自建', 'LLM Judge', '看结果', '依赖参考数据']);
+  it('标签派生包含 来源/类型/类目/依赖预期输出', () => {
+    assert.deepEqual(deriveEvaluatorTags(customWithRef), ['自建', 'LLM Judge', '看结果', '依赖预期输出']);
   });
 
   it('硬门控要求所有 case 满足参考答案或 Tool/Skill 目录依赖', () => {
@@ -200,6 +205,15 @@ describe('评估器注册表 registry', () => {
     const toolMeta = { category: 'traj' as const, requires: ['tool_catalog' as const] };
     assert.equal(gateEvaluator('z', toolMeta, [{ hasReference: false, hasToolCatalog: true }]).usable, true);
     assert.equal(gateEvaluator('z', toolMeta, [{ hasReference: false, hasToolCatalog: false }]).usable, false);
+
+    const datasetMeta = { category: 'res' as const, requires: ['dataset_input' as const] };
+    assert.equal(gateEvaluator('dataset-test', datasetMeta, [{ hasReference: false, hasDatasetInput: true, hasToolCatalog: false }]).usable, true);
+    const datasetGate = gateEvaluator('dataset-test', datasetMeta, [
+      { hasReference: false, hasDatasetInput: true, hasToolCatalog: false },
+      { hasReference: false, hasDatasetInput: false, hasToolCatalog: false },
+    ]);
+    assert.equal(datasetGate.usable, false);
+    assert.match(datasetGate.reason ?? '', /1 个未匹配数据集输入/);
   });
 
   it('互斥组：已选有参考答案版任务完成度时，禁用无参考版', () => {

@@ -32,6 +32,7 @@ experimentEngineConfig.retryDelaysMs = [0, 0];
 // 通用 judge 路径（parse/retry/失败）由自建 LLM 评估器承接——预置 task-completion/
 // trace-quality 现走忠实版（原 opencode 逻辑），不经 judge-llm。
 const CUSTOM_LLM_ID = 'custom-engine-test-judge';
+const CUSTOM_DATASET_INPUT_ID = 'custom-engine-dataset-input';
 
 const VALID_JUDGE_JSON = JSON.stringify({
   score: 88,
@@ -64,6 +65,7 @@ async function createExperiment(
   evaluatorIds: string[],
   referenceOutput: string | null = 'ref answer',
   evaluatorContextJson: string | null = null,
+  datasetInput: string | null = null,
 ): Promise<{ experimentId: string; caseId: string }> {
   const exp = await prisma.experiment.create({
     data: {
@@ -77,6 +79,7 @@ async function createExperiment(
         create: [{
           executionId,
           input: '请回答问题 X',
+          datasetInput,
           actualOutput: '答案是 42',
           referenceOutput,
           evaluatorContextJson,
@@ -95,12 +98,20 @@ async function cleanup() {
 }
 
 test.before(async () => {
-  await writeUserCustomEvaluators(TEST_USER, [{
-    id: CUSTOM_LLM_ID, name: 'engine-test-judge', description: '', evaluatorType: 'LLM',
-    source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
-    popularity: 0, mappedMetrics: [], status: 'ready', category: 'res',
-    llmConfig: { model: 'engine-test', systemPrompt: '评估 {{output}} 对照 {{reference_output}}' },
-  }]);
+  await writeUserCustomEvaluators(TEST_USER, [
+    {
+      id: CUSTOM_LLM_ID, name: 'engine-test-judge', description: '', evaluatorType: 'LLM',
+      source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
+      popularity: 0, mappedMetrics: [], status: 'ready', category: 'res',
+      llmConfig: { model: 'engine-test', systemPrompt: '评估 {{output}} 对照 {{reference_output}}' },
+    },
+    {
+      id: CUSTOM_DATASET_INPUT_ID, name: 'engine-dataset-input', description: '', evaluatorType: 'LLM',
+      source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
+      popularity: 0, mappedMetrics: [], status: 'ready', category: 'res',
+      llmConfig: { model: 'engine-test', systemPrompt: '只评估数据集任务：{{dataset_input}}；实际输入：{{input}}' },
+    },
+  ]);
 });
 
 test.after(async () => {
@@ -150,6 +161,40 @@ test('engine: 忠实版预置 + 自建 LLM 两行成功落库，实验终态 don
   assert.equal(llmRow.attempts, 1);
   assert.ok(typeof llmRow.durationMs === 'number');
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: dataset_input 命中时注入快照，缺少匹配时直接不计分且不调用 Judge', async () => {
+  const prompts: string[] = [];
+  setJudgeLlmCallerForTest(async (_user, request) => {
+    prompts.push(request.system);
+    return VALID_JUDGE_JSON;
+  });
+
+  const matchedExecutionId = await createExecution();
+  const matched = await createExperiment(
+    matchedExecutionId,
+    [CUSTOM_DATASET_INPUT_ID],
+    null,
+    null,
+    '回答问题 X',
+  );
+  const matchedRun = await startExperimentRun(matched.experimentId, TEST_USER);
+  await matchedRun!.completion;
+  const matchedRow = await prisma.experimentEvalResult.findFirst({ where: { experimentId: matched.experimentId } });
+  assert.equal(matchedRow!.status, 'done');
+  assert.equal(matchedRow!.score, 88);
+  assert.match(prompts[0], /只评估数据集任务：回答问题 X/);
+  assert.match(prompts[0], /实际输入：请回答问题 X/);
+
+  const unmatchedExecutionId = await createExecution();
+  const unmatched = await createExperiment(unmatchedExecutionId, [CUSTOM_DATASET_INPUT_ID], null);
+  const unmatchedRun = await startExperimentRun(unmatched.experimentId, TEST_USER);
+  await unmatchedRun!.completion;
+  const unmatchedRow = await prisma.experimentEvalResult.findFirst({ where: { experimentId: unmatched.experimentId } });
+  assert.equal(unmatchedRow!.status, 'done');
+  assert.equal(unmatchedRow!.score, null);
+  assert.match(unmatchedRow!.summary || '', /不适用/);
+  assert.equal(prompts.length, 1);
 });
 
 test('engine: judge 输出非法 JSON → 重试用尽 → failed + errorMessage，全失败实验终态 failed', async () => {

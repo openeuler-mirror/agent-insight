@@ -3,9 +3,9 @@
 // 往已建实验追加 case 的弹窗（实验详情页入口）。
 //
 // 与建实验向导第 ②③ 步同源但更紧凑：同一个 /api/experiments/traces 分页列 trace，
-// 勾选后可就地标注参考答案，提交打 POST /api/experiments/[id]/cases。
-// 不重做第 ④ 步评估器门控——追加的 case 走实验既定的评估器，所以这里把"缺参考答案会
-// 让依赖参考数据的评估器不记分"作为前置提示直接摆出来。
+// 勾选后可就地标注预期输出，提交打 POST /api/experiments/[id]/cases。
+// 不重做第 ④ 步评估器门控——追加的 case 走实验既定的评估器，所以这里把"缺预期输出会
+// 让依赖预期输出的评估器不记分"作为前置提示直接摆出来。
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { apiFetch } from '@/lib/client/api';
@@ -73,14 +73,16 @@ export function AddExperimentCasesDialog({
   agentName,
   user,
   needsReference,
+  needsDatasetInput,
 }: {
   onClose: () => void;
   onAdded: (msg: string) => void;
   experimentId: string;
   agentName: string;
   user: string;
-  /** 实验里是否含依赖参考数据的评估器——决定要不要提示补标注 */
+  /** 实验里是否含依赖预期输出的评估器——决定要不要提示补标注 */
   needsReference: boolean;
+  needsDatasetInput: boolean;
 }) {
   const [traces, setTraces] = useState<TraceItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -193,8 +195,14 @@ export function AddExperimentCasesDialog({
           新增的 case 按<b>本实验已配置的评估器</b>评测，提交后立即在后台执行。
           {needsReference && (
             <>
-              {' '}本实验含<b>依赖参考数据</b>的评估器——未标注参考答案的 case，该评估器会判为不记分，
+              {' '}本实验含<b>依赖预期输出</b>的评估器——未标注预期输出的 case，该评估器会判为不记分，
               请在下方勾选后展开补标注。
+            </>
+          )}
+          {needsDatasetInput && (
+            <>
+              {' '}本实验含<b>依赖数据集输入</b>的评估器——通过该弹窗直接追加的 case 没有数据集输入快照，
+              该评估器会显示为不适用且不计分。
             </>
           )}
         </div>
@@ -247,13 +255,13 @@ export function AddExperimentCasesDialog({
                             {open ? (
                               <>
                                 <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--foreground-muted)', marginBottom: 5 }}>
-                                  参考答案（可选）
+                                  预期输出（可选）
                                 </div>
                                 <textarea
                                   autoFocus
                                   value={sel.referenceOutput ?? ''}
                                   onChange={(e) => setReference(t.id, e.target.value)}
-                                  placeholder="这条 case 的预期结果——依赖参考数据的评估器据此打分"
+                                  placeholder="这条 case 的预期输出——相关评估器据此打分"
                                   style={{
                                     width: '100%', minHeight: 64, padding: '7px 9px', fontSize: 12,
                                     lineHeight: 1.6, borderRadius: 7, border: '1px solid var(--input-border)',
@@ -272,7 +280,7 @@ export function AddExperimentCasesDialog({
                             ) : (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <span style={{ fontSize: 11.5, color: sel.referenceOutput ? 'var(--foreground)' : 'var(--foreground-muted)' }}>
-                                  参考答案：{sel.referenceOutput ? truncate(sel.referenceOutput, 70) : '未标注'}
+                                  预期输出：{sel.referenceOutput ? truncate(sel.referenceOutput, 70) : '未标注'}
                                 </span>
                                 <button
                                   onClick={() => setExpanded(t.id)}
@@ -311,7 +319,7 @@ export function AddExperimentCasesDialog({
           {error && <span style={{ fontSize: 11.5, color: 'var(--error)' }}>{error}</span>}
           <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
             已选 {pickedList.length} 条
-            {needsReference && unannotated > 0 && ` · ${unannotated} 条未标注参考答案`}
+            {needsReference && unannotated > 0 && ` · ${unannotated} 条未标注预期输出`}
           </span>
           <button onClick={onClose} style={BTN}>取消</button>
           <button
