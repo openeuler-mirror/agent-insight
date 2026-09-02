@@ -551,3 +551,52 @@ test("opencode uploader: only sends a device credential back to its issuing serv
     null,
   )
 })
+
+test("opencode uploader: only parses changed files that contain session telemetry", async () => {
+  const uploader = await uploaderPromise
+  const spoolDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-uploader-scan-"))
+  try {
+    const oldSession = path.join(spoolDir, "old-session.jsonl")
+    const changedConfig = path.join(spoolDir, "changed-config.jsonl")
+    const changedSession = path.join(spoolDir, "changed-session.jsonl")
+    fs.writeFileSync(oldSession, '{"sessionID":"ses_old","kind":"event"}\n')
+    fs.writeFileSync(changedConfig, '{"kind":"event","payload":{"type":"config.redacted"}}\n')
+    fs.writeFileSync(changedSession, '{"sessionID":"ses_new","kind":"event"}\n')
+    fs.utimesSync(oldSession, 1, 1)
+    fs.utimesSync(changedConfig, 3, 3)
+    fs.utimesSync(changedSession, 3, 3)
+
+    assert.deepEqual(
+      uploader.selectJsonlFilesForUpload(
+        [oldSession, changedConfig, changedSession],
+        { lastScanMtime: 2_000 },
+      ),
+      [changedSession],
+    )
+  } finally {
+    fs.rmSync(spoolDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: force-session scan finds older files for only the requested trace", async () => {
+  const uploader = await uploaderPromise
+  const spoolDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-uploader-force-session-"))
+  try {
+    const requested = path.join(spoolDir, "requested.jsonl")
+    const other = path.join(spoolDir, "other.jsonl")
+    const config = path.join(spoolDir, "config.jsonl")
+    fs.writeFileSync(requested, '{"sessionID":"ses_requested","kind":"event"}\n')
+    fs.writeFileSync(other, '{"sessionID":"ses_other","kind":"event"}\n')
+    fs.writeFileSync(config, '{"kind":"event","payload":{"type":"config.redacted"}}\n')
+
+    assert.deepEqual(
+      uploader.selectJsonlFilesForUpload(
+        [requested, other, config],
+        { forceSessions: new Set(["ses_requested"]), lastScanMtime: Date.now() },
+      ),
+      [requested],
+    )
+  } finally {
+    fs.rmSync(spoolDir, { recursive: true, force: true })
+  }
+})
