@@ -644,6 +644,8 @@ export const en = {
     checkingLogin: 'Checking login status...',
     identitySignIn: 'Unified identity sign-in',
     identityLoginFailed: 'Unified identity login failed. Please try again.',
+    identityRegionRestricted: 'This service is currently unavailable in your region.',
+    identityRegionCheckUnavailable: 'Region verification failed. Please try again later.',
     configurationError: 'Login configuration is unavailable. Contact the administrator.',
     emailRequired: 'Please enter email address',
     loginFailed: 'Login failed, please try again',

@@ -40,9 +40,39 @@ IDAAS_OAUTH_REDIRECT_URI=
 IDAAS_OAUTH_SCOPE=
 ```
 
-真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。
+可选地区访问限制使用以下配置。每个值的完整注释同时见仓根 `.env.example`：
+
+```env
+# 是否启用地区访问限制；仅 IDaaS 模式生效
+IDAAS_REGION_ACCESS_ENABLED=false
+
+# 获取 IAM access token 的完整 HTTP(S) 地址
+IDAAS_REGION_ACCESS_IAM_URL=
+
+# 使用 UUID 或主管编号查询人员信息的完整 HTTP(S) 地址
+IDAAS_REGION_ACCESS_PERSON_URL=
+
+# IAM 项目/租户标识
+IDAAS_REGION_ACCESS_IAM_PROJECT=
+
+# IAM 服务账号，不是登录用户账号
+IDAAS_REGION_ACCESS_IAM_ACCOUNT=
+
+# IAM 服务账号密钥，只能由部署环境注入
+IDAAS_REGION_ACCESS_IAM_SECRET=
+
+# IAM 企业/租户标识
+IDAAS_REGION_ACCESS_IAM_ENTERPRISE=
+
+# 是否校验地区接口 TLS 证书；当前内网默认 false
+IDAAS_REGION_ACCESS_TLS_VERIFY=false
+```
+
+真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。地区限制开启后，平台在创建用户前固定以 `{ uuids: [uuid] }` 查询人员信息，并在已有账号恢复时复查。欧盟地区显示“您的地区暂无法使用”；IAM/人员接口异常、空数据或关键字段缺失时失败关闭，显示“地区信息校验失败，请稍后重试”。
 
 网页登录没有固定的空闲或绝对过期时间。浏览器会在当前 origin 的 `localStorage` 中保存 UUID 和 API Key，重新打开页面时使用两者恢复登录；API Key 有效且数据库用户仍存在时无需重新走 IDaaS。清理站点数据、改用其他协议/域名/IP/端口、API Key 或用户被删除、数据库被重置，或者部署切换登录模式时，需要重新登录。OAuth state 的 5 分钟有效期和 callback 登录票据的 60 秒有效期只约束单次授权跳转，不是网页会话时长；重新走 OAuth 时是否再次输入账号密码，由公司 IDaaS 的 SSO 会话策略决定。
+
+地区 IAM token 在服务进程内缓存 10 小时，人员记录缓存 2 小时；这不是网页登录时长。`IDAAS_REGION_ACCESS_TLS_VERIFY=false` 只关闭地区 IAM/人员请求的证书校验，不影响其他 HTTPS 请求。
 
 登录入口返回 `IDaaS OAuth login is not configured` 时，查看 `server.log` 中的 `[Auth/IDaaS]` 行。日志会指出缺少或无效的环境变量名，例如 `Missing IDAAS_OAUTH_SCOPE` 或 `Invalid IDAAS_OAUTH_TOKEN_URL`，但不会打印环境变量值和 client secret。
 

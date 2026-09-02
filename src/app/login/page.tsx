@@ -59,8 +59,15 @@ export default function LoginPage() {
     if (!loginModeReady || loginMode !== 'idaas_oauth') return;
 
     const params = new URLSearchParams(window.location.search);
-    if (params.get('idaasError')) {
-      setError(t('login.identityLoginFailed'));
+    const idaasError = params.get('idaasError');
+    if (idaasError) {
+      if (idaasError === 'region_restricted') {
+        setError(t('login.identityRegionRestricted'));
+      } else if (idaasError === 'region_check_unavailable') {
+        setError(t('login.identityRegionCheckUnavailable'));
+      } else {
+        setError(t('login.identityLoginFailed'));
+      }
       return;
     }
     if (params.get('idaas') !== 'complete') return;

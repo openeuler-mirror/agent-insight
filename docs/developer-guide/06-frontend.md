@@ -113,7 +113,7 @@ flowchart TD
 ## i18n、主题、状态
 - **语言**：`src/locales/{en,zh}.ts` + `LocaleContext`（`lib/client/locale-context.tsx`，`useLocale().t(key)`）。产品为双语（中文/英文）。
 - **主题**：`lib/client/theme-context.tsx`（`useTheme`、`useThemeColors`）；令牌在 `src/app/globals.css` 中一次性定义（`:root` + `[data-theme='dark']`）。
-- **认证**：`lib/auth/auth-context.tsx`（`useAuth`）统一消费服务端 `login_mode`，区分本地登录、历史组织集成和 IDaaS OAuth 登录；IDaaS callback 由 `/callback`（兼容 `/api/auth/idaas-oauth/callback`）完成，UUID 映射本地用户后仍复用客户端 API Key 上下文。侧边栏在三种登录模式下均渲染通用退出入口；退出仅清除浏览器本地认证状态，不调用 IDaaS 单点登出。
+- **认证**：`lib/auth/auth-context.tsx`（`useAuth`）统一消费服务端 `login_mode`，区分本地登录、历史组织集成和 IDaaS OAuth 登录；IDaaS callback 由 `/callback`（兼容 `/api/auth/idaas-oauth/callback`）完成；可选地区限制先按 UUID 查询人员信息并失败关闭，放行后才映射本地用户。API Key 恢复也会复查地区；登录页分别展示地区不可用与地区校验失败。侧边栏在三种登录模式下均渲染通用退出入口；退出仅清除浏览器本地认证状态，不调用 IDaaS 单点登出。
 
 ## 构建与开发
 - **开发**：`npm run dev`（或 `bash scripts/restart_dev.sh`——项目规范的开发启动方式）。端口 3000。

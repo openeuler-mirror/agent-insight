@@ -14,10 +14,13 @@
 10. 启动同步先读取登录模式；IDaaS 模式跳过 admin Key 创建并保留已有客户端 Key。
 11. IDaaS 路由向浏览器保留通用错误，同时在服务端日志记录不含配置值的具体异常原因。
 12. 新增 `/callback` 回调入口，并保留原 IDaaS callback 路径兼容。
+13. 新增 IDaaS 地区访问模块，以固定 `uuids` 列表查询人员信息，缓存 IAM token 与人员记录，并在 callback 创建用户前及 API Key 恢复后执行 fail-closed 检查。
+14. 登录页区分 `region_restricted` 与 `region_check_unavailable`，`.env.example` 为每个地区配置项提供注释。
 
 ## 预计文件
 
 - `src/lib/auth/login-mode.ts`
+- `src/lib/auth/idaas-region-access.ts`
 - `src/lib/auth/idaas-oauth.ts`
 - `src/lib/auth/local-user.ts`
 - `src/app/api/auth/idaas-oauth/{authorize,callback,complete}/route.ts`
@@ -30,6 +33,7 @@
 - `src/locales/{zh,en}.ts`
 - `scripts/sync_admin_api_key.js`
 - `test/idaas-oauth-login.test.ts`
+- `test/idaas-region-access.test.ts`
 - `test/sync-admin-api-key.test.ts`
 - 认证相关用户/开发者指南
 
@@ -44,6 +48,7 @@
    - IDaaS 模式按钮、授权跳转、callback 和 UUID 首次注册。
    - IDaaS 模式退出后清除本地状态，再次登录仍经过统一身份授权。
    - 错误 state 和冲突配置。
+   - 欧盟地区拒绝、地区接口异常拒绝，以及两种提示文案。
 
 ## 回滚
 

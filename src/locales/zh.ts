@@ -644,6 +644,8 @@ export const zh = {
     checkingLogin: '正在检查登录状态...',
     identitySignIn: '统一身份登录',
     identityLoginFailed: '统一身份登录失败，请重试',
+    identityRegionRestricted: '您的地区暂无法使用',
+    identityRegionCheckUnavailable: '地区信息校验失败，请稍后重试',
     configurationError: '登录配置不可用，请联系管理员',
     emailRequired: '请输入邮箱地址',
     loginFailed: '登录失败，请重试',

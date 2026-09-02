@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
 import { findOrCreateLocalUser } from '@/lib/auth/local-user';
 import {
+  checkIdaasRegionAccess,
+  describeIdaasRegionAccessError,
+} from '@/lib/auth/idaas-region-access';
+import {
   buildIdaasLoginRedirectUrl,
   createIdaasLoginToken,
   describeIdaasOAuthError,
@@ -79,6 +83,20 @@ export async function GET(request: NextRequest) {
   try {
     const accessToken = await exchangeIdaasAuthorizationCode(config, code);
     const userInfo = await fetchIdaasUserInfo(config, accessToken);
+
+    try {
+      const regionAccess = await checkIdaasRegionAccess(userInfo.uuid);
+      if (regionAccess === 'restricted') {
+        console.warn('[Auth/IDaaS] Login blocked: region_restricted');
+        return fail('region_restricted', statePayload.returnTo);
+      }
+    } catch (error) {
+      console.error(
+        '[Auth/IDaaS] Region access check failed: ' + describeIdaasRegionAccessError(error),
+      );
+      return fail('region_check_unavailable', statePayload.returnTo);
+    }
+
     const user = await findOrCreateLocalUser(userInfo.uuid);
     const response = NextResponse.redirect(
       buildIdaasLoginRedirectUrl(config, {

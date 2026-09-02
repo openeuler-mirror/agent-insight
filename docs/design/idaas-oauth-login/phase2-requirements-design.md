@@ -28,6 +28,8 @@ IDaaS OAuth 必填变量：
 
 `IDAAS_OAUTH_REDIRECT_URI` 推荐使用部署地址下的 `/callback`；继续兼容原 `/api/auth/idaas-oauth/callback`。配置值、authorization 请求和 token 请求必须保持完全一致。
 
+IDaaS 地区访问限制默认关闭；启用时还需配置 `IDAAS_REGION_ACCESS_ENABLED=true`、IAM/人员服务 URL、IAM project/account/secret/enterprise 和 `IDAAS_REGION_ACCESS_TLS_VERIFY`。`.env.example` 对每项给出用途说明，真实地址、凭据和租户标识不得提交。TLS 开关默认 `false`，仅作用于地区 IAM/人员请求的专用 `undici.Agent`。
+
 ## 服务端流程
 
 ### authorize
@@ -47,9 +49,11 @@ IDaaS OAuth 必填变量：
 2. token endpoint 按既有接入约定以 POST + query 参数接收授权码、client ID、client secret、redirect URI。
 3. userinfo endpoint 按既有接入约定以 POST + query 参数接收 scope、client ID、access token。
 4. 读取并校验非空 UUID，去除首尾空白后保持原值。
-5. 按 UUID 查找或并发安全地创建本地 User，新用户复用现有示例初始化。
-6. 生成只包含 username、nonce、过期时间的签名登录结果 Cookie，清除 state Cookie。
-7. 跳回 `/login?idaas=complete`，保留已验证的 returnTo。
+5. 地区限制开启时，以 `{ uuids: [uuid] }` 查询人员信息；直接常驻地、组织树或主管常驻地命中欧盟时拒绝。
+6. 地区查询异常、空数据或关键字段缺失时失败关闭，拒绝本次登录。
+7. 仅在地区检查放行后，按 UUID 查找或并发安全地创建本地 User，新用户复用现有示例初始化。
+8. 生成只包含 username、nonce、过期时间的签名登录结果 Cookie，清除 state Cookie。
+9. 跳回 `/login?idaas=complete`，保留已验证的 returnTo。
 
 ### complete
 
@@ -67,7 +71,7 @@ IDaaS OAuth 必填变量：
 - 本地模式继续调用 `POST /api/auth/apikey`。
 - 历史组织模式继续调用 `GET /api/auth/organization`。
 - IDaaS 模式首次登录跳转 authorize；callback 返回后由登录页 POST complete，再复用现有 `login()`。
-- IDaaS 模式恢复本地状态时，`POST /api/auth/apikey` 必须携带已保存 API Key，并以去除首尾空白但保持大小写的 UUID 精确匹配已有用户；standalone 邮箱仍转为小写。服务端只验证现有用户，不允许绕过 IDaaS 创建账号或签发 Key。
+- IDaaS 模式恢复本地状态时，`POST /api/auth/apikey` 必须携带已保存 API Key，并以去除首尾空白但保持大小写的 UUID 精确匹配已有用户；standalone 邮箱仍转为小写。服务端先验证现有用户，再执行同一地区检查；受限返回 403，校验不可用返回 503，均不允许恢复或签发 Key。
 - `AppSidebar` 在所有登录模式下渲染通用退出菜单；退出清除 `localStorage` 中的 username/API Key 并返回登录页，不吊销 API Key，也不调用 IDaaS logout endpoint。
 
 ## 启动同步
@@ -82,12 +86,14 @@ IDaaS OAuth 必填变量：
 - 配置错误：状态接口和 IDaaS API 返回 500，登录页展示通用配置错误；服务端日志记录缺失或无效的变量名等具体原因，但不记录变量值、client secret 或请求 URL；不得回落到本地登录。
 - 模式不匹配：IDaaS API 返回 404。
 - state/code/userinfo 错误：callback 返回登录页的固定错误码，不透传上游正文。
-- 上游超时或非 2xx：固定登录失败，不记录敏感请求 URL。
+- OAuth 上游超时或非 2xx：固定登录失败，不记录敏感请求 URL。
+- 地区明确受限：使用 `region_restricted`，登录页显示“您的地区暂无法使用”。
+- 地区 IAM/人员接口异常、空数据或关键字段缺失：使用 `region_check_unavailable`，登录页显示“地区信息校验失败，请稍后重试”；异常结果不缓存。
 - complete Cookie 无效或过期：401，并清除 Cookie。
 
 ## 数据模型
 
-不新增表。User 仍以 `username` 唯一；IDaaS UUID 去除首尾空白后直接作为 username。登录衔接使用短时签名 Cookie，不保存 OAuth token。
+不新增表。User 仍以 `username` 唯一；IDaaS UUID 去除首尾空白后直接作为 username。登录衔接使用短时签名 Cookie，不保存 OAuth token。地区 IAM token 在进程内缓存 10 小时，UUID 和主管人员记录缓存 2 小时，重启清空且多实例之间不共享。
 
 ## 安全边界
 
