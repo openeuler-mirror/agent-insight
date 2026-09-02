@@ -352,7 +352,11 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(route, /generateExperimentTraces/);
   assert.match(route, /caseIds: generated\.readyCaseIds/);
   assert.match(client, /buildExperimentCaseArgs/);
+  assert.match(client, /buildExperimentCaseInvocation/);
   assert.match(client, /\['run', '--format', 'json', '--agent', input\.agent\]/);
+  assert.match(client, /parseOpencodeSlashCommand\(input\.input\)/);
+  assert.match(client, /args\.push\('--command', slashCommand\.command\)/);
+  assert.match(client, /return \{ args, stdin: input\.input \}/);
   assert.match(client, /traceId/);
   assert.match(client, /args\.push\('-p', input\.input, '--agent', input\.agent\)/);
   assert.match(generation, /taskId: input\.traceId/);

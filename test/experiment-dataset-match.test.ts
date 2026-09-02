@@ -28,6 +28,7 @@ describe('实验 ③ 步与数据集互通', () => {
     assert.equal(r.skipped, 1);
     assert.equal(r.unmatched, 1);
     assert.equal(r.updates.c1, '应给出物流节点与延迟原因');
+    assert.equal(r.datasetInputUpdates?.c1, '查询订单物流');
     // 输入两侧空白被规整后仍能命中
     assert.equal(r.updates.c2, '应发起原路退款并告知时效');
     // 人工标注不被覆盖
@@ -48,6 +49,7 @@ describe('实验 ③ 步与数据集互通', () => {
     );
     assert.equal(r.matched, 1);
     assert.equal(r.updates.x, '应给出物流节点与延迟原因');
+    assert.equal(r.datasetInputUpdates?.x, '查询订单物流');
     assert.equal(r.unmatched, 0);
   });
 
@@ -70,6 +72,7 @@ describe('实验 ③ 步与数据集互通', () => {
       candidates,
     );
     assert.equal(r.updates.x, '具体答案');
+    assert.equal(r.datasetInputUpdates?.x, '查询订单物流');
     assert.equal(findBestDatasetInputMatch('请帮我查询订单物流状态', candidates), candidates[1]);
   });
 
@@ -94,6 +97,16 @@ describe('实验 ③ 步与数据集互通', () => {
     });
     assert.equal(result.match?.caseEntry.id, 'specific');
     assert.equal(result.match?.matchedBy, 'contains');
+
+    const deterministicMiss = await matchAgentDatasetCase({
+      user: 'tester',
+      traceQuery: '语义相近但不包含原文',
+      datasets: [serverDataset],
+      includeAllDatasetKinds: true,
+      allowSemanticMatch: false,
+    });
+    assert.equal(deterministicMiss.reason, 'no-match');
+    assert.equal(deterministicMiss.match, undefined);
   });
 
   it('数据集侧忽略空答案与重复输入（取首条）', () => {
@@ -107,7 +120,8 @@ describe('实验 ③ 步与数据集互通', () => {
     );
     assert.equal(r.updates.a, '首条');
     assert.equal(r.updates.b, undefined);
-    assert.equal(r.unmatched, 1);
+    assert.equal(r.datasetInputUpdates?.b, 'blank');
+    assert.equal(r.unmatched, 0);
   });
 
   it('同一 input 的参考答案和能力目录可来自不同数据项', () => {

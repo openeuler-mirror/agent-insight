@@ -54,6 +54,10 @@ import {
   isSkillTriggerAnalyzerId,
 } from '../src/lib/skill-workbench/trigger-evaluator';
 import {
+  TASK_COMPLETION_NO_REF_PRESET_IDS,
+  isTaskCompletionNoRefPresetId,
+} from '../src/lib/engine/experiment/task-completion-preset-evaluators';
+import {
   FLUENCY_PRESET_IDS,
   isFluencyPresetId,
 } from '../src/lib/engine/experiment/fluency-preset-evaluators';
@@ -88,6 +92,11 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     name: 'ras-reliability-evaluator.ts',
     claims: isRasReliabilityPresetId,
     ids: [RAS_DETECTION_RECOVERY_PRESET_ID],
+  },
+  {
+    name: 'task-completion-preset-evaluators.ts',
+    claims: isTaskCompletionNoRefPresetId,
+    ids: TASK_COMPLETION_NO_REF_PRESET_IDS,
   },
   {
     name: 'fluency-preset-evaluators.ts / hallucination-preset-evaluators.ts',
