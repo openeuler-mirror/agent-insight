@@ -74,6 +74,7 @@ export const en = {
     agents: 'Agent Overview',
     trace: 'Trace Analysis',
     versionAnalysis: 'Version Analysis',
+    goalPlus: 'Goal Plus Observability',
     eval: 'Evaluation',
     evalCenter: 'Evaluation & Experiments',
     experiments: 'Experiments',

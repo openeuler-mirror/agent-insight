@@ -208,7 +208,7 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'deepseek-harness') {
+    if (framework === 'opencode' || framework === 'hermes' || framework === 'codex' || framework === 'pi-agent' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'deepseek-harness') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
@@ -3080,6 +3080,15 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             } catch (e) {
                 console.warn(`[Data-Service] callStats persist failed for ${recordId}:`, e);
             }
+        }
+    }
+
+    if (targetRecord.user) {
+        try {
+            const { relinkGoalPlusForExecution } = await import('@/lib/ingest/goal-plus/correlate');
+            await relinkGoalPlusForExecution(targetRecord.user);
+        } catch (e) {
+            console.warn(`[Data-Service] Goal Plus relink failed for ${recordId}:`, e);
         }
     }
 

@@ -74,6 +74,7 @@ export const zh = {
     agents: 'Agent 概览',
     trace: '链路追踪',
     versionAnalysis: '版本分析',
+    goalPlus: 'Goal Plus 观测',
     eval: '评测任务',
     evalCenter: '评估与实验',
     experiments: '实验',

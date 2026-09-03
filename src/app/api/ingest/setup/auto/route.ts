@@ -26,6 +26,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'trae', label: 'Trae IDE' },
     { value: 'actrail', label: 'AcTrail' },
     { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'goal-plus', label: 'Goal Plus' },
     { value: 'codex', label: 'Codex' },
     { value: 'qwencode', label: 'Qwen Code' },
     { value: 'deepseek-harness', label: 'DeepSeek Harness' },
@@ -190,6 +191,7 @@ const frameworks = [
     { name: 'Trae IDE', value: 'trae' },
     { name: 'AcTrail', value: 'actrail' },
     { name: 'Pi Agent', value: 'pi-agent' },
+    { name: 'Goal Plus', value: 'goal-plus' },
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
     { name: 'DeepSeek Harness', value: 'deepseek-harness' }
@@ -741,6 +743,17 @@ if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     rm -f "$PI_INSTALLER"
 fi
 
+# 6.31 Install Goal Plus collector
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
+    echo "⏬ Installing Goal Plus collector..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    GOAL_PLUS_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -o "$GOAL_PLUS_INSTALLER"
+    if ! sh "$GOAL_PLUS_INSTALLER"; then rm -f "$GOAL_PLUS_INSTALLER"; exit 1; fi
+    rm -f "$GOAL_PLUS_INSTALLER"
+fi
+
 # 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
 if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
     echo "🛡️  Installing Agent RAS runtime..."
@@ -1040,6 +1053,9 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
+    echo "  ✅ Goal Plus Collector: ~/.agent-insight/collectors/goal-plus"
+fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
 fi
@@ -1198,6 +1214,7 @@ function generatePowerShellScript(
         '    "    { name: \'Trae IDE\', value: \'trae\' },"',
         '    "    { name: \'AcTrail\', value: \'actrail\' },"',
         '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
+        '    "    { name: \'Goal Plus\', value: \'goal-plus\' },"',
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }"',
@@ -1735,6 +1752,21 @@ function generatePowerShellScript(
         '    }',
         '}',
         '',
+        '# 6.31 Install Goal Plus collector',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
+        '    Write-Host "⏬ Installing Goal Plus collector..."',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $goalPlusInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-goal-plus-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '    try {',
+        '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -OutFile $goalPlusInstaller',
+        '        & $goalPlusInstaller',
+        '        if ($LASTEXITCODE -ne 0) { throw "Goal Plus collector installer failed with exit code $LASTEXITCODE." }',
+        '    } finally {',
+        '        Remove-Item -LiteralPath $goalPlusInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        '',
         '# 6.34 Agent RAS (Windows host): inproc requires Linux/macOS; use WSL on Windows',
         'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW -or $INSTALL_XIAOO) {',
         '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
@@ -2015,6 +2047,7 @@ function generatePowerShellScript(
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "  ✅ Goal Plus Collector: $env:USERPROFILE\\.agent-insight\\collectors\\goal-plus" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',

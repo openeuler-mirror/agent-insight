@@ -47,6 +47,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'trae', label: 'Trae IDE' },
     { value: 'actrail', label: 'AcTrail' },
     { value: 'pi-agent', label: 'Pi Agent' },
+    { value: 'goal-plus', label: 'Goal Plus' },
     { value: 'qwencode', label: 'Qwen Code' },
     { value: 'codex', label: 'Codex' },
     { value: 'deepseek-harness', label: 'DeepSeek Harness' },
