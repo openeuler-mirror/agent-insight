@@ -255,11 +255,17 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
      <img src="../images/home.png" alt="Agent Insight 看板首页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
-2. 使用邮箱完成登录，进入默认 Workspace。
-   OpenCode 上报使用的 API Key 必须属于这个邮箱账号，否则普通链路与可靠性链路都会因
+2. 根据部署模式完成登录，进入默认 Workspace。
+   - 默认 `LOGIN_MODE=standalone`：在登录页输入邮箱。
+   - `LOGIN_MODE=idaas_oauth`：点击“统一身份登录”，在 IDaaS 完成认证；平台使用 IDaaS 返回的唯一 UUID 作为本地账号；用户可从侧边栏退出当前网页账号，再次登录仍进入统一身份授权。
+   - 历史 `ORGANIZATION_MODE=true`：继续使用原组织网关和 Cookie 登录，不等同于 IDaaS OAuth 登录。
+
+   使用 `scripts/develop_start.sh` 启动时，IDaaS OAuth 模式只检查状态接口确认服务就绪，不会创建 `admin` Key；已有客户端 Key 保持不变，没有 Key 时在首次登录后从安装指导获取。
+
+   OpenCode 上报使用的 API Key 必须属于当前登录账号，否则普通链路与可靠性链路都会因
    用户归属不同而不可见。本地 keyless 开发模式如设置
-   `AGENT_INSIGHT_DEFAULT_INGEST_USER`，其值也应使用同一个邮箱，不要填无法在登录页使用的
-   `admin` 别名。
+   `AGENT_INSIGHT_DEFAULT_INGEST_USER`，其值也应与实际 `User.username` 一致：
+   standalone 模式使用邮箱，IDaaS 模式使用 UUID，不要填写无对应登录账号的 `admin` 别名。
 3. 确认左侧导航中可以看到以下模块：
    - **快速开始**
    - **运行观测**

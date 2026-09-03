@@ -2,33 +2,25 @@
 
 import { getSafeReturnTo, useAuth } from '@/lib/auth/auth-context';
 import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTheme } from '@/lib/client/theme-context';
 import { useLocale } from '@/lib/client/locale-context';
-import { apiFetch } from '@/lib/client/api';
+import { apiFetch, getApiUrl } from '@/lib/client/api';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
-  const [isOrgMode, setIsOrgMode] = useState(false);
-  const [orgRedirectUrl, setOrgRedirectUrl] = useState('');
-  const { login } = useAuth();
+  const [isCompletingIdaas, setIsCompletingIdaas] = useState(false);
+  const idaasCompletionStarted = useRef(false);
+  const {
+    login, loginMode, loginModeReady, organizationLoginRedirectUrl,
+  } = useAuth();
   const router = useRouter();
   const { isDark } = useTheme();
   const { t } = useLocale();
 
   useEffect(() => {
-    apiFetch('/api/eval/config/status?check_org=true')
-      .then(res => res.json())
-      .then(data => {
-        setIsOrgMode(data.org_mode || false);
-        setOrgRedirectUrl(data.org_login_redirect_url || '');
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!isOrgMode || !orgRedirectUrl) return;
+    if (loginMode !== 'organization' || !organizationLoginRedirectUrl) return;
 
     let cancelled = false;
 
@@ -38,7 +30,7 @@ export default function LoginPage() {
 
         if (!res.ok) {
           if (!cancelled && (res.status === 401 || res.status === 403)) {
-            window.location.href = orgRedirectUrl;
+            window.location.href = organizationLoginRedirectUrl;
           }
           return;
         }
@@ -46,12 +38,12 @@ export default function LoginPage() {
         const data = await res.json();
         if (!cancelled && data?.username) {
           login(data.username, data.apiKey);
-          // login() 已按 returnTo 回跳；仅在无 returnTo 时维持企业模式原有的落 / 行为。
+          // login() 已按 returnTo 回跳；仅在无 returnTo 时维持历史组织集成的落 / 行为。
           if (!getSafeReturnTo()) router.replace('/');
         }
       } catch (e) {
         if (!cancelled) {
-          window.location.href = orgRedirectUrl;
+          window.location.href = organizationLoginRedirectUrl;
         }
       }
     };
@@ -61,7 +53,55 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [isOrgMode, orgRedirectUrl, login, router]);
+  }, [loginMode, organizationLoginRedirectUrl, login, router]);
+
+  useEffect(() => {
+    if (!loginModeReady || loginMode !== 'idaas_oauth') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const idaasError = params.get('idaasError');
+    if (idaasError) {
+      if (idaasError === 'region_restricted') {
+        setError(t('login.identityRegionRestricted'));
+      } else if (idaasError === 'region_check_unavailable') {
+        setError(t('login.identityRegionCheckUnavailable'));
+      } else {
+        setError(t('login.identityLoginFailed'));
+      }
+      return;
+    }
+    if (params.get('idaas') !== 'complete') return;
+
+    if (idaasCompletionStarted.current) return;
+    idaasCompletionStarted.current = true;
+    setIsCompletingIdaas(true);
+    apiFetch('/api/auth/idaas-oauth/complete', {
+      method: 'POST',
+      cache: 'no-store',
+    })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || 'IDaaS login failed');
+        login(data.username, data.apiKey);
+      })
+      .catch(() => {
+        setError(t('login.identityLoginFailed'));
+      })
+      .finally(() => {
+        setIsCompletingIdaas(false);
+      });
+  }, [login, loginMode, loginModeReady, t]);
+
+  const handleIdaasLogin = () => {
+    setError('');
+    const url = new URL(
+      getApiUrl('/api/auth/idaas-oauth/authorize'),
+      window.location.origin,
+    );
+    const returnTo = getSafeReturnTo();
+    if (returnTo) url.searchParams.set('returnTo', returnTo);
+    window.location.assign(url.toString());
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,11 +152,23 @@ export default function LoginPage() {
     errorBorder: 'rgba(185, 28, 28, 0.18)',
   };
 
-  if (isOrgMode) {
+  if (!loginModeReady || isCompletingIdaas || loginMode === 'organization') {
     return (
       <div className="login-container">
         <div className="login-box">
-          <p style={{ color: colors.fgMuted, textAlign: 'center' }}>{t('login.redirecting')}</p>
+          <p style={{ color: colors.fgMuted, textAlign: 'center' }}>
+            {loginMode === 'organization' ? t('login.redirecting') : t('login.checkingLogin')}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loginMode === 'invalid') {
+    return (
+      <div className="login-container">
+        <div className="login-box">
+          <p style={{ color: colors.error, textAlign: 'center' }}>{t('login.configurationError')}</p>
         </div>
       </div>
     );
@@ -144,7 +196,32 @@ export default function LoginPage() {
             </div>
         </div>
 
-        <form className="login-form">
+        {loginMode === 'idaas_oauth' ? (
+          <div className="login-form">
+            {error && (
+              <div style={{
+                color: colors.error,
+                fontSize: '0.8125rem',
+                marginBottom: '0.875rem',
+                padding: '0.375rem 0.625rem',
+                background: colors.errorSubtle,
+                borderRadius: '0.375rem',
+                border: `1px solid ${colors.errorBorder}`,
+              }}>
+                ⚠️ {error}
+              </div>
+            )}
+            <button
+              className="login-btn"
+              type="button"
+              onClick={handleIdaasLogin}
+              disabled={isCompletingIdaas}
+            >
+              {t('login.identitySignIn')}
+            </button>
+          </div>
+        ) : (
+          <form className="login-form">
           <div style={{ marginBottom: '0.875rem' }}>
             <label className="login-label" htmlFor="username">
               {t('login.emailLabel')}
@@ -181,7 +258,8 @@ export default function LoginPage() {
               {t('login.signIn')}
             </button>
           </div>
-        </form>
+          </form>
+        )}
       </div>
     </div>
   );
