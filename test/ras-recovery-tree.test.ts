@@ -281,6 +281,19 @@ test("buildRasRecoveryEvent embeds marker id", () => {
   assert.equal((built.args as { rasMarkerId: string }).rasMarkerId, "anomaly-1")
 })
 
+test("buildRasRecoveryEvent localizes protocol summary for display", () => {
+  const built = buildRasRecoveryEvent({
+    ...marker,
+    kind: "llm_thinking_loop",
+    label: "思考循环",
+    summary: "llm_thinking_loop (similar_clauses)",
+    actions: [],
+    actionResults: [],
+  }, "zh")
+  assert.equal(built.summary, "思考循环（逻辑死循环）")
+  assert.equal(built.interaction?.content, "思考循环（逻辑死循环）")
+})
+
 test("applyRasRecoveryTree: strips notice/steer USER by exact text when delivery ids missing", () => {
   const orphan: RasTraceMarker = {
     ...marker,

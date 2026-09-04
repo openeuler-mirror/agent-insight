@@ -33,6 +33,7 @@ import {
     alignInteractionsToRasAnchors,
 } from '@/lib/ingest/ras/recovery-tree';
 import type { RasTraceMarker } from '@/lib/ingest/ras/trace-markers';
+import { rasEventKindBadgeLabel } from '@/lib/ingest/ras/normalize';
 import {
     RasNodeBadge,
     RasReliabilityDetails,
@@ -92,6 +93,7 @@ function exactTokens(n: number): string {
 
 // Single source of truth for span-type chips (replaces the legacy inline-styled span badges).
 function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs' | 'sm'; className?: string }) {
+    const { locale } = useLocale();
     const meta = KIND_META[kind] ?? KIND_META.tool;
     const sizing = size === 'sm' ? 'h-5 px-1.5 text-xs' : 'h-4 px-1 text-[10px]';
     return (
@@ -103,7 +105,7 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
                 className,
             )}
         >
-            {meta.label}
+            {kind === 'ras' ? rasEventKindBadgeLabel(locale) : meta.label}
         </span>
     );
 }
@@ -429,7 +431,7 @@ export default function AgentTraceView({
     rasMarkers = [],
 }: AgentTraceViewProps) {
     const { user } = useAuth();
-    const { t: tt } = useLocale();
+    const { locale, t: tt } = useLocale();
     const [interactions, setInteractions] = useState<RawInteraction[]>(sourceInteractions);
     const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
@@ -514,8 +516,8 @@ export default function AgentTraceView({
             : (displayInteractions || [])
         const base = langfuseProjection?.tree || buildAgentCallTree(aligned)
         if (!base) return base
-        return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers) : base
-    }, [interactions, langfuseProjection, displayInteractions, rasMarkers]);
+        return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers, locale) : base
+    }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
@@ -2626,6 +2628,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
 }
 
 function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
+    const { locale } = useLocale();
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
@@ -2673,7 +2676,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                     {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
                     {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
                     {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
-                    <span style={{ opacity: 0.6 }}>from: {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
+                    <span style={{ opacity: 0.6 }}>{locale === 'zh' ? '来源：' : 'from: '}{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     {event.toolStatus && !hasError && (
                         <span className="inline-flex items-center gap-1 text-success font-semibold">
                             <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
@@ -3505,6 +3508,7 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
 // ─── TopNPanel ────────────────────────────────────────────────────────────────
 function TopNPanel() {
     const { topNDuration, topNTokens, slowNodesList, rasNodeList, onJumpToKey } = React.useContext(TraceCtx);
+    const { locale } = useLocale();
     const [tab, setTab] = useState<'duration' | 'tokens' | 'slow' | 'ras'>('duration');
 
     if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0 && rasNodeList.length === 0) return null;
@@ -3512,8 +3516,8 @@ function TopNPanel() {
     const tabs: { id: 'duration' | 'tokens' | 'slow' | 'ras'; icon: string; label: string; count: number }[] = [
         { id: 'duration', icon: '⏱', label: '耗时 Top 5', count: topNDuration.length },
         { id: 'tokens',   icon: '💬', label: 'Token Top 5', count: topNTokens.length },
-        { id: 'slow',     icon: '⚠', label: '异常节点', count: slowNodesList.length },
-        { id: 'ras',      icon: '🛡', label: 'RAS 节点', count: rasNodeList.length },
+        { id: 'slow',     icon: '⚠', label: '慢节点', count: slowNodesList.length },
+        { id: 'ras',      icon: '🛡', label: '故障节点', count: rasNodeList.length },
     ];
 
     const items = tab === 'duration' ? topNDuration : tab === 'tokens' ? topNTokens : slowNodesList;
@@ -3557,7 +3561,7 @@ function TopNPanel() {
                             >
                                 <span className="text-xs text-foreground-muted tabular-nums w-3 shrink-0 text-right">{i + 1}</span>
                                 {ras.marker && <RasNodeBadge markers={[ras.marker]} compact className="shrink-0" />}
-                                {!ras.marker && <span className="inline-flex items-center rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 text-foreground-muted">RAS</span>}
+                                {!ras.marker && <span className="inline-flex items-center rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 text-foreground-muted">{rasEventKindBadgeLabel(locale)}</span>}
                                 <span className="flex-1 text-xs text-foreground truncate">{ras.label}</span>
                                 <span className="text-xs text-primary shrink-0">→</span>
                             </div>
