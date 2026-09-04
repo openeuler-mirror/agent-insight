@@ -260,7 +260,7 @@ erDiagram
 
 - **可观测性** `[确证]`：OpenTelemetry SDK + Langfuse；`src/instrumentation.ts`（运行时门控，仅 Node.js runtime 加载）→ `src/instrumentation-node.ts`（注册系统 agent `ensureAllSystemAgents`、opencode 子进程退出清理、拉起 uploader 处理待上报 spool）。OTel 接入端点 `src/app/api/ingest/otel/v1/{traces,logs,metrics}`，并在根路径 `/v1/*` rewrite 直收 collector 上报。
 - **数据持久化** `[确证]`：见 §6，`DatabaseAdapter` 抽象 + `data-service.ts` 高层服务。
-- **认证 / 多用户** `[确证]`：`User` 表（`apiKey` 唯一），`src/lib/auth/*`，按 `user` 字段做行级隔离；API Key 用于客户端接入鉴权。`[推断]` 登录为「任意邮箱即可」（README），表明是单机自托管的轻量身份模型，非企业 SSO。
+- **认证 / 多用户** `[确证]`：`User` 表（`apiKey` 唯一），`src/lib/auth/*`，按 `user` 字段做行级隔离；API Key 用于客户端接入鉴权。IDaaS 模式仍以 UUID 写入 `username`，可空唯一的 `externalAccount` 只保存人员账号别名，供界面展示和运维反查；standalone 模式仍为任意邮箱登录。
 - **向后兼容** `[确证]`：`next.config.ts` 维护一大批 `legacyAliases`，把旧扁平 `/api/*` 重写到分层后的 `ingest/observe/eval/*`，保证外部客户端不断。
 - **缓存 / 消息队列**：`[确证]` **未发现**独立缓存层（Redis/CDN）或消息中间件；异步靠 DB 状态机 + 内存（见 §3.2 异步任务）。
 - **国际化** `[确证]`：`src/locales/*`（多语言）。

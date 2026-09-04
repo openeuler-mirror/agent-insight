@@ -122,8 +122,8 @@ if [ -n "${DB_HOST:-}" ]; then
   exit 1
 else
   node scripts/prepare-ras-sqlite-schema.js
-  # 走 db_push.sh 而不是直接 npx：它对「整型列加宽 Int→BigInt」这一类无损变更放行，
-  # 其余破坏性变更仍照旧拦下（本脚本 set -e，push 失败即中断启动）。
+  # 走 db_push.sh 而不是直接 npx：它只对脚本内精确列出的无损变更放行，
+  # 其余潜在破坏性变更仍照旧拦下（本脚本 set -e，push 失败即中断启动）。
   # 详见 scripts/db_push.sh 顶部说明。
   sh scripts/db_push.sh
 fi

@@ -57,7 +57,8 @@ const NAV_ICONS: Record<SidebarIconKey, ReactNode> = {
 
 export function AppSidebar() {
     const pathname = usePathname() || '/';
-    const { user, logout } = useAuth();
+    const { user, displayName, logout } = useAuth();
+    const userLabel = displayName || user;
     const { isDark, toggleTheme } = useTheme();
     const { t, locale, setLocale } = useLocale();
     const { isCollapsed } = useSidebar();
@@ -186,11 +187,11 @@ export function AppSidebar() {
                                     border: '1px solid var(--border)',
                                 }}
                             >
-                                {user.charAt(0).toUpperCase()}
+                                {userLabel?.charAt(0).toUpperCase()}
                             </span>
                             <span style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
                                 <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--foreground)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {user}
+                                    {userLabel}
                                 </span>
                             </span>
                         </button>
