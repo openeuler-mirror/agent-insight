@@ -354,6 +354,7 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(client, /buildExperimentCaseArgs/);
   assert.match(client, /buildExperimentCaseInvocation/);
   assert.match(client, /\['run', '--format', 'json', '--agent', input\.agent\]/);
+  assert.match(client, /args\.push\('--auto'\)/);
   assert.match(client, /parseOpencodeSlashCommand\(input\.input\)/);
   assert.match(client, /args\.push\('--command', slashCommand\.command\)/);
   assert.match(client, /return \{ args, stdin: input\.input \}/);

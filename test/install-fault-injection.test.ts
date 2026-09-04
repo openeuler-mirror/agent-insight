@@ -15,6 +15,7 @@ const {
 } = require('../scripts/install-fault-injection.js')
 const {
   ensureManagedFiRuntime,
+  resolveBootstrapPython,
 } = require('../scripts/lib/fi-python-runtime.js')
 
 test("FI worker reuses the persisted machine client identity", () => {
@@ -246,6 +247,52 @@ test('managed runtime never invokes pip with the bootstrap Python', () => {
   } finally {
     fs.rmSync(fiHome, { recursive: true, force: true })
   }
+})
+
+test('bootstrap Python search skips an old python3 earlier in PATH', () => {
+  const calls: string[] = []
+  const runner = (command: string) => {
+    calls.push(command)
+    if (command === '/new/bin/python3') {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ executable: command, version: [3, 12, 0] }),
+      }
+    }
+    if (command === '/old/bin/python3') {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ executable: command, version: [3, 9, 6] }),
+      }
+    }
+    return { status: 1, stdout: '' }
+  }
+
+  const resolved = resolveBootstrapPython({
+    env: { PATH: '/old/bin:/new/bin' },
+    runner,
+  })
+
+  assert.equal(resolved?.executable, '/new/bin/python3')
+  assert.ok(calls.indexOf('/old/bin/python3') < calls.indexOf('/new/bin/python3'))
+})
+
+test('bootstrap Python probe can require runtime modules', () => {
+  let probedCode = ''
+  const resolved = resolveBootstrapPython({
+    env: { PYTHON: '/runtime/python' },
+    requiredImports: ['yaml'],
+    runner: (command: string, args: string[]) => {
+      probedCode = args[1]
+      return {
+        status: 0,
+        stdout: JSON.stringify({ executable: command, version: [3, 12, 1] }),
+      }
+    },
+  })
+
+  assert.equal(resolved?.executable, '/runtime/python')
+  assert.match(probedCode, /import yaml/)
 })
 
 test('resolveCollectorCwd never returns a missing packageRoot', () => {

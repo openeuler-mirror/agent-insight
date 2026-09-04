@@ -231,21 +231,21 @@ bash scripts/stop.sh
 当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent Insight 插件的具体安装与配置方式：
 
 1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的插件安装命令。
-   
+
    <p align="center"><img src="docs/images/guide.png" alt="安装指导" /></p>
 
 2. 在目标 Agent 平台所在的服务器终端执行该安装命令，根据交互提示完成对应平台的插件安装配置。
-   
+
    <p align="center"><img src="docs/images/guide-framework.png" alt="选择运行时" /></p>
 
 3. 验证接入配置：在 Agent 平台中触发一次测试任务（仍以 OpenCode 为例，执行任意基础命令）。
-   
+
    ```bash
    opencode run 'hello'
    ```
 
 4. 登录 Agent Insight 看板，进入 **链路追踪** 页面。若能观测到刚才执行的测试任务链路数据上报，即表明 Agent 平台已成功接入并正常工作。
-   
+
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
 ---
@@ -259,11 +259,11 @@ bash scripts/stop.sh
 ### 注册模型
 
 1. 进入 **模型注册**，单击 **注册首个模型**。
-   
+
    <p align="center"><img src="docs/images/model-view.png" alt="注册模型" /></p>
 
 2. 选择模型供应商。
-   
+
    <p align="center"><img src="docs/images/model-provider.png" alt="选择模型供应商" /></p>
 
 3. 配置 API 密钥，单击 **测试连接并保存**。
@@ -283,35 +283,35 @@ bash scripts/stop.sh
 ### 分析 Skill
 
 1. 进入 **Skill 评估**，单击 **开始评估**。
-   
+
    <p align="center"><img src="docs/images/skill-analyse.png" alt="静态合规评估" /></p>
 
 2. 单击 **开始评估**，查看分析结果。
-   
+
    <p align="center"><img src="docs/images/skill-analyse-static.png" alt="静态合规分析" /></p>
 
 3. 进入 **Skill 实验**，单击 **触发分析**。
-   
+
    <p align="center"><img src="docs/images/skill_experiment.png" alt="Skill 实验" /></p>
 
 4. 选择**待执行 AGENT**，单击 **AI 新建触发分析数据集**，单击**下一步：Trace来源**。
-   
+
    <p align="center"><img src="docs/images/skill_exp_gendataset.png" alt="新建触发分析数据集" /></p>
 
 5. 选择**数据集 Case**，单击 **下一步：预期答案**。
-   
+
    <p align="center"><img src="docs/images/skill_exp_select_case.png" alt="数据集 Case" /></p>
 
 6. 单击 **下一步：评估器与执行**。
-   
+
    <p align="center"><img src="docs/images/skill_exp_confirm.png" alt="预期答案" /></p>
 
 7. 单击 **开始实验**。
-   
+
    <p align="center"><img src="docs/images/skill_exp_select_evaluator.png" alt="评估器与执行" /></p>
 
 8. 浏览实验结果。
-   
+
    <p align="center"><img src="docs/images/skill_exp_resultr.png" alt="实验结果" /></p>
 
 ### 优化 Skill

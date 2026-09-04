@@ -177,7 +177,7 @@ test('OpenCode slash-command input uses the native command path without adding w
   })
 
   assert.equal(invocation.stdin, null)
-  assert.deepEqual(invocation.args, [
+  assert.deepEqual(invocation.args.filter((arg) => arg !== '--auto'), [
     'run',
     '--format',
     'json',

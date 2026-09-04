@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import path from 'path'
+import { runtimePackageRoot } from '@/lib/runtime/package-root'
 
 export type CollectPayload = {
   runId: string
@@ -21,7 +22,7 @@ function resolvePython(): string {
 }
 
 function packageRoot(): string {
-  return path.join(process.cwd(), 'agent_fault_injection')
+  return path.join(runtimePackageRoot(), 'agent_fault_injection')
 }
 
 export async function listFaultsViaPython(platform?: string): Promise<unknown[]> {

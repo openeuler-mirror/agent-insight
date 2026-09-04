@@ -965,6 +965,10 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
 function buildExperimentCaseArgs(executable, input) {
   if (input.platform === 'opencode') {
     const args = ['run', '--format', 'json', '--agent', input.agent]
+    try {
+      const help = spawnSync(executable, ['run', '--help'], { encoding: 'utf8', timeout: 15_000 })
+      if (`${help.stdout || ''}\n${help.stderr || ''}`.includes('--auto')) args.push('--auto')
+    } catch {}
     if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
     if (input.model) args.push('--model', input.model)
     return args
