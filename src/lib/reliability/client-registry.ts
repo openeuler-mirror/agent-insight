@@ -62,6 +62,9 @@ type PrismaClientRow = {
   lastSeenAt: Date
   agentVersion: string | null
   capabilitiesJson: string
+  executorBaseUrl: string | null
+  executorReachability: string
+  executorCheckedAt: Date | null
   unboundAt: Date | null
 }
 
@@ -80,6 +83,32 @@ function newSecret(prefix: string): string {
 
 function newId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${randomBytes(5).toString('hex')}`
+}
+
+export function normalizeExecutorEndpoint(value: string | null | undefined): string | null {
+  const raw = value?.trim()
+  if (!raw) return null
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new ReliabilityError('EXECUTOR_ENDPOINT_INVALID', 'executorBaseUrl 不合法', 400)
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol)
+    || url.username
+    || url.password
+    || url.search
+    || url.hash
+    || !['', '/'].includes(url.pathname)
+  ) {
+    throw new ReliabilityError(
+      'EXECUTOR_ENDPOINT_INVALID',
+      'executorBaseUrl 必须是无凭证、查询参数和路径的 HTTP(S) origin',
+      400,
+    )
+  }
+  return url.origin
 }
 
 /** Constant-time compare so a stored hash can't be probed byte-by-byte. */
@@ -122,6 +151,7 @@ export async function registerClient(input: {
   agentVersion?: string | null
   supervisor?: string | null
   capabilities?: ClientCapabilities
+  executorBaseUrl?: string | null
   /** 稳定机器标识；同机同账号据此复用原记录，避免重复建条目。 */
   machineId?: string | null
   /**
@@ -165,6 +195,9 @@ export async function registerClient(input: {
   const credential = newSecret('dc')
   const now = new Date()
   const capabilities = normalizeCapabilities(input.capabilities)
+  const executorBaseUrl = input.executorBaseUrl === undefined
+    ? existing?.executorBaseUrl || null
+    : normalizeExecutorEndpoint(input.executorBaseUrl)
   const displayName =
     input.name?.trim() ||
     (input.reportedIp ? `主机-${input.reportedIp}` : null) ||
@@ -193,6 +226,9 @@ export async function registerClient(input: {
     lastSeenAt: now,
     agentVersion: input.agentVersion || null,
     capabilitiesJson: JSON.stringify(capabilities),
+    executorBaseUrl,
+    executorReachability: 'unknown',
+    executorCheckedAt: null,
     machineId,
   }
 
@@ -375,6 +411,7 @@ export async function updateCapabilities(input: {
   observedIp?: string | null
   os?: string | null
   arch?: string | null
+  executorBaseUrl?: string | null
   capabilities: ClientCapabilities
 }): Promise<{ acceptedRevision: string | null }> {
   const existing = await prisma.reliabilityClient.findUnique({
@@ -398,6 +435,11 @@ export async function updateCapabilities(input: {
       arch: input.arch || undefined,
       capabilitiesJson: JSON.stringify(normalizeCapabilities(input.capabilities)),
       capabilitiesRevision: input.revision || null,
+      executorBaseUrl: input.executorBaseUrl === undefined
+        ? undefined
+        : normalizeExecutorEndpoint(input.executorBaseUrl),
+      executorReachability: input.executorBaseUrl === undefined ? undefined : 'unknown',
+      executorCheckedAt: input.executorBaseUrl === undefined ? undefined : null,
       lastSeenAt: new Date(),
     },
   })

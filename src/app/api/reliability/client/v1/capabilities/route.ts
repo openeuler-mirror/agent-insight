@@ -20,6 +20,9 @@ export async function PUT(req: Request) {
       observedIp: clientIpFromRequest(req),
       os: body.os ? String(body.os) : null,
       arch: body.arch ? String(body.arch) : null,
+      executorBaseUrl: Object.prototype.hasOwnProperty.call(body, 'executorBaseUrl')
+        ? String(body.executorBaseUrl || '')
+        : undefined,
       capabilities: {
         platforms: Array.isArray(body.platforms) ? body.platforms : [],
         actions: body.actions,

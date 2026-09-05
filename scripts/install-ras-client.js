@@ -41,6 +41,13 @@ function installRuntime() {
     }
     fs.copyFileSync(src, path.join(RUNTIME_DIR, name))
   }
+  const executorSrc = path.join(PACKAGE_ROOT, 'services', 'executor', 'src')
+  const executorDest = path.join(RUNTIME_DIR, 'executor')
+  if (!fs.existsSync(executorSrc)) {
+    fail(`缺少执行器运行时: ${executorSrc}`, '制品不完整；请重新执行安装命令。')
+  }
+  fs.rmSync(executorDest, { recursive: true, force: true })
+  fs.cpSync(executorSrc, executorDest, { recursive: true })
   // 配置合并要用 OpenCode 插件自己的 config_sync.js（复用它保证两条写入路径
   // 结构一致）。运行时被搬到 RUNTIME_DIR 后相对路径失效，故与主脚本放在一起。
   const syncSrc = path.join(
@@ -79,6 +86,9 @@ function parseArgs(argv) {
     // 令牌对应的账号，由安装脚本从 install-tokens 响应带入，用于判断是否改绑。
     else if (arg === '--user') out.user = argv[++i]
     else if (arg === '--name') out.name = argv[++i]
+    else if (arg === '--executor-base-url') out.executorBaseUrl = argv[++i]
+    else if (arg === '--executor-listen-host') out.executorListenHost = argv[++i]
+    else if (arg === '--executor-listen-port') out.executorListenPort = Number(argv[++i])
     else if (arg === '--no-start') out.start = false
     else if (arg === '--start') out.start = true
     else if (arg === '--no-fi') out.withFi = false
@@ -185,7 +195,7 @@ function normalizeInsightBaseUrl(value) {
   }
 }
 
-async function register({ host, token, name, previousClientId }) {
+async function register({ host, token, name, previousClientId, executorBaseUrl }) {
   const base = String(host || '').replace(/\/+$/, '')
   const res = await fetch(`${base}/api/reliability/client/v1/register`, {
     method: 'POST',
@@ -202,6 +212,7 @@ async function register({ host, token, name, previousClientId }) {
         supervisor: process.platform === 'darwin' ? 'launchd' : 'systemd',
         // 服务端据此认出「同一台机器」，避免每次安装都新建一条记录。
         machineId: resolveMachineId(),
+        ...(executorBaseUrl ? { executorBaseUrl } : {}),
       },
       capabilities: { platforms: [], actions: [] },
       // 改绑时告诉服务端解绑哪一个：旧凭证要立即撤销，
@@ -239,6 +250,7 @@ async function register({ host, token, name, previousClientId }) {
     deviceCredential: json.deviceCredential,
     websocketUrl: json.control?.websocketUrl || '',
     pollUrl: json.control?.pollUrl || '',
+    ...(executorBaseUrl ? { executorBaseUrl } : {}),
   }
   const tmp = `${CONFIG_PATH}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 })
@@ -546,6 +558,7 @@ async function main() {
   if (args.help) {
     console.log(`用法:
   install-ras-client --host <url> --token <installToken> [--user <account>] [--no-start] [--no-fi]
+                     [--executor-base-url <url> --executor-listen-host <host>]
   install-ras-client --status
   install-ras-client --uninstall
 
@@ -578,6 +591,23 @@ async function main() {
   if (!args.withFi) log('已按 --no-fi 跳过故障注入组件')
 
   const existing = readExistingBinding()
+  if (args.executorBaseUrl) {
+    let executorUrl
+    try {
+      executorUrl = new URL(args.executorBaseUrl)
+    } catch {
+      fail('--executor-base-url 不合法')
+    }
+    if (!['http:', 'https:'].includes(executorUrl.protocol) || executorUrl.pathname !== '/') {
+      fail('--executor-base-url 必须是不带路径的 HTTP(S) origin')
+    }
+    patchClientConfig({
+      executorBaseUrl: executorUrl.origin,
+      executorListenHost: args.executorListenHost || '0.0.0.0',
+      executorListenPort: args.executorListenPort || Number(executorUrl.port || (executorUrl.protocol === 'https:' ? 443 : 80)),
+    })
+    args.executorBaseUrl = executorUrl.origin
+  }
   if (args.token) {
     if (!args.host) fail('缺少 --host')
     const existingBaseUrl = normalizeInsightBaseUrl(existing.insightBaseUrl)
@@ -609,6 +639,7 @@ async function main() {
       host: args.host,
       token: args.token,
       name: args.name,
+      executorBaseUrl: args.executorBaseUrl,
       // clientId 只在签发它的完整服务基址内有意义；来源缺失或跨路径时都不能带旧 ID。
       previousClientId: sameService ? existing.clientId : null,
     })

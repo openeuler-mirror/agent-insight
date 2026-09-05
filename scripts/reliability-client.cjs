@@ -70,6 +70,9 @@ function loadConfig() {
     // 重新推导；注册值仅在 base 缺失时兜底。
     websocketUrl: raw.websocketUrl || '',
     pollUrl: raw.pollUrl || '',
+    executorBaseUrl: raw.executorBaseUrl || '',
+    executorListenHost: raw.executorListenHost || '127.0.0.1',
+    executorListenPort: Math.max(0, Number(raw.executorListenPort || 0)),
     maxParallelFi: Math.max(1, Number(raw.maxParallelFi || 5)),
     workspaceBase: raw.workspaceBase || path.join(CLIENT_HOME, 'workspaces'),
     artifactsDir: raw.artifactsDir || path.join(CLIENT_HOME, 'artifacts'),
@@ -463,10 +466,16 @@ function buildCapabilities(cfg, opts) {
       }
     }
   }
+  const components = { clientVersion: AGENT_VERSION }
+  if (cfg.executorBaseUrl) {
+    components['git-workspace/v1'] = { ready: true }
+    components['agent-runtime/opencode/v1'] = { ready: Boolean(which('opencode')) }
+    components['git-patch/v1'] = { ready: true }
+  }
   return {
     platforms,
     actions: [...WHITELIST],
-    components: { clientVersion: AGENT_VERSION },
+    components,
     faultInjection: {
       ready: fi.ready,
       note: fi.note,
@@ -661,6 +670,17 @@ const activeChildren = new Map()
 let reliabilitySlotHeld = false
 let fiBusy = 0
 let reliabilityChild = null
+let benchmarkExecutor = null
+
+function tryAcquireExecutionSlot() {
+  if (fiBusy > 0 || reliabilitySlotHeld) return false
+  reliabilitySlotHeld = true
+  return true
+}
+
+function releaseExecutionSlot() {
+  reliabilitySlotHeld = false
+}
 
 function resolveWorkspace(logical, workspaceBase) {
   const value = String(logical || '__default__').trim()
@@ -801,13 +821,12 @@ async function executeAction(cfg, frame, sendStatus) {
   }
 
   if (action === 'RUN_EXPERIMENT_CASE') {
-    if (fiBusy > 0 || reliabilitySlotHeld) {
+    if (!tryAcquireExecutionSlot()) {
       await sendStatus('FAILED', {
         error: { code: 'CLIENT_BUSY', message: '本机已有 Agent 或故障注入任务运行，拒绝并发执行实验 Case' },
       })
       return
     }
-    reliabilitySlotHeld = true
     await sendStatus('RUNNING', {})
     try {
       const result = await runExperimentCase(cfg, payload, async ({ traceId, startedAt }) => {
@@ -821,7 +840,7 @@ async function executeAction(cfg, frame, sendStatus) {
         error: { code: err.code || 'CASE_RUN_FAILED', message: err.message },
       })
     } finally {
-      reliabilitySlotHeld = false
+      releaseExecutionSlot()
     }
   }
 }
@@ -861,9 +880,11 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     throw err
   }
 
+  const cwd = payload.cwd ? path.resolve(String(payload.cwd)) : cfg.workspaceBase
   const correlation = payload.correlation || {}
   const env = {
     ...process.env,
+    PWD: cwd,
     AGENT_INSIGHT_CLIENT_ID: cfg.clientId,
     AGENT_INSIGHT_EXPERIMENT_ID: String(correlation.experimentId || ''),
     AGENT_INSIGHT_EXPERIMENT_RUN_ID: String(correlation.experimentRunId || ''),
@@ -882,14 +903,14 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   const startedAt = new Date().toISOString()
 
   return new Promise((resolve, reject) => {
+    fs.mkdirSync(cwd, { recursive: true })
     const child = spawn(executable, invocation.args, {
-      cwd: cfg.workspaceBase,
+      cwd,
       env,
       stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     })
     reliabilityChild = child
-    fs.mkdirSync(cfg.workspaceBase, { recursive: true })
     let stderr = ''
     let stdoutBuffer = ''
     let traceId = null
@@ -1071,6 +1092,7 @@ async function reportCapabilities(cfg, opts) {
     actions: capabilities.actions,
     components: capabilities.components,
     faultInjection: capabilities.faultInjection,
+    ...(cfg.executorBaseUrl ? { executorBaseUrl: cfg.executorBaseUrl } : {}),
   })
   log(
     `capabilities reported: platforms=${capabilities.platforms.map((p) => p.id).join(',') || 'none'}` +
@@ -1233,6 +1255,30 @@ async function main() {
   notifyReady()
   setInterval(notifyWatchdog, WATCHDOG_MS)
   notifyWatchdog()
+
+  if (cfg.executorBaseUrl) {
+    const runtimeCandidates = [
+      path.join(__dirname, 'executor', 'index.cjs'),
+      path.join(__dirname, '..', 'services', 'executor', 'src', 'index.cjs'),
+    ]
+    const runtimePath = runtimeCandidates.find((candidate) => fs.existsSync(candidate))
+    if (!runtimePath) throw new Error('Benchmark executor runtime 不存在')
+    const { createBenchmarkExecutor } = require(runtimePath)
+    const advertised = new URL(cfg.executorBaseUrl)
+    const port = cfg.executorListenPort || Number(advertised.port || (advertised.protocol === 'https:' ? 443 : 80))
+    benchmarkExecutor = createBenchmarkExecutor({
+      clientId: cfg.clientId,
+      deviceCredential: cfg.deviceCredential,
+      insightBaseUrl: cfg.insightBaseUrl,
+      baseDir: CLIENT_HOME,
+      tryAcquireSlot: tryAcquireExecutionSlot,
+      releaseSlot: releaseExecutionSlot,
+      runAgent: (payload) => runExperimentCase(cfg, payload),
+      logError: (...args) => logErr(...args),
+    })
+    await benchmarkExecutor.listen(cfg.executorListenHost, port)
+    log(`benchmark executor listening on ${cfg.executorListenHost}:${port}, advertised=${cfg.executorBaseUrl}`)
+  }
 
   const heartbeatAll = () => {
     sendHeartbeat(cfg).catch((err) => logErr('heartbeat failed', err.message))
@@ -1484,6 +1530,7 @@ async function fiLoop(cfg) {
 function shutdown() {
   if (reliabilityChild) signalProcessTree(reliabilityChild, 'SIGKILL')
   for (const runId of activeChildren.keys()) killRun(runId)
+  benchmarkExecutor?.close().catch(() => {})
   process.exit(0)
 }
 process.on('SIGTERM', shutdown)
@@ -1497,6 +1544,9 @@ module.exports = {
   buildFiInventory,
   buildCapabilities,
   buildExperimentCaseInvocation,
+  runExperimentCase,
+  tryAcquireExecutionSlot,
+  releaseExecutionSlot,
   parseOpencodeSlashCommand,
   capabilityDiscoveryFingerprint,
   refreshCapabilityReports,

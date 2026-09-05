@@ -103,6 +103,26 @@ export async function setupNodeRuntime(): Promise<void> {
     console.warn('[instrumentation] stale grayscale reap failed:', (err as Error)?.message);
   }
 
+  try {
+    const { resumeBenchmarkDispatchesAtStartup } = await import('@/lib/benchmark/scheduler');
+    const resumed = await resumeBenchmarkDispatchesAtStartup();
+    if (resumed > 0) {
+      console.warn(`[instrumentation] 恢复 Benchmark 下发: ${resumed} 条`);
+    }
+  } catch (err) {
+    console.warn('[instrumentation] benchmark dispatch resume failed:', (err as Error)?.message);
+  }
+
+  try {
+    const { resumeBenchmarkEvaluationDispatchesAtStartup } = await import('@/lib/benchmark/evaluation-scheduler');
+    const resumed = await resumeBenchmarkEvaluationDispatchesAtStartup();
+    if (resumed > 0) {
+      console.warn(`[instrumentation] 恢复 Benchmark 评测下发: ${resumed} 条`);
+    }
+  } catch (err) {
+    console.warn('[instrumentation] benchmark evaluation dispatch resume failed:', (err as Error)?.message);
+  }
+
   // 启动时跑一次 uploader：把上一轮 dev server 留下的 spool 积压清掉，避免那些 trace
   // 一直没归宿。常态下 plugin 的 kickUploader 在每次 opencode event 都会触发一次
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。

@@ -18,8 +18,20 @@ import {
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { startComparisonRun } from '@/lib/engine/experiment/comparison-runner';
 import { prisma } from '@/lib/storage/prisma';
+import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
+import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
 
 export const dynamic = 'force-dynamic';
+
+function callbackServiceBaseUrl(req: Request): string {
+  const configured = process.env.AGENT_INSIGHT_PUBLIC_BASE_URL?.trim();
+  if (configured) return configured.replace(/\/$/, '');
+  const url = new URL(req.url);
+  const host = req.headers.get('x-forwarded-host') || url.host;
+  const protocol = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
+  const prefix = String(process.env.NEXT_PUBLIC_URL_PREFIX || '').replace(/^\/?/, '/').replace(/\/$/, '');
+  return `${protocol}://${host}${prefix}`;
+}
 
 export async function POST(
   req: Request,
@@ -35,10 +47,35 @@ export async function POST(
 
     const currentExperiment = await prisma.experiment.findFirst({
       where: { id, user: username },
-      select: { status: true, type: true },
+      select: { status: true, type: true, scope: true },
     });
     if (!currentExperiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (currentExperiment.scope === 'benchmark') {
+      try {
+        const result = await startBenchmarkExperiment({
+          experimentId: id,
+          user: username,
+          callbackOrigin: callbackServiceBaseUrl(req),
+        });
+        if (!result) {
+          return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+        }
+        result.completion?.catch((error) => {
+          console.error('[Benchmark Dispatch Error]', error);
+        });
+        if (!result.alreadyRunning) {
+          recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
+        }
+        return NextResponse.json({
+          status: result.status,
+          runId: result.runId,
+          ...(result.alreadyRunning ? { alreadyRunning: true } : {}),
+        }, { status: 202 });
+      } catch (error) {
+        return benchmarkErrorResponse(error, 'benchmark/experiments/run');
+      }
     }
     if (currentExperiment.status === 'running') {
       return NextResponse.json({ status: 'running', alreadyRunning: true });

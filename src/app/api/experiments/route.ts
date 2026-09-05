@@ -11,6 +11,8 @@ import {
 } from '@/lib/evaluators/evaluator-case-context';
 import { overallAverage } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
+import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
+import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -123,6 +125,67 @@ export async function POST(req: Request) {
     const { username } = await resolveUser(req, body.user);
     if (!username) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
+    }
+
+    if (body.scope === 'benchmark') {
+      try {
+        const benchmark = body.benchmark && typeof body.benchmark === 'object'
+          ? body.benchmark as Record<string, unknown>
+          : {};
+        const executionTarget = benchmark.executionTarget
+          && typeof benchmark.executionTarget === 'object'
+          ? benchmark.executionTarget as Record<string, unknown>
+          : {};
+        if ('baseUrl' in executionTarget || 'executorBaseUrl' in executionTarget) {
+          return NextResponse.json(
+            { error: { code: 'EXECUTOR_ENDPOINT_FORBIDDEN', message: '实验请求不能指定执行器地址' } },
+            { status: 400 },
+          );
+        }
+        const runConfig = benchmark.runConfig && typeof benchmark.runConfig === 'object'
+          ? benchmark.runConfig as Record<string, unknown>
+          : {};
+        const rawSelection = benchmark.caseSelection && typeof benchmark.caseSelection === 'object'
+          ? benchmark.caseSelection as Record<string, unknown>
+          : { mode: 'all' };
+        if (!['all', 'explicit'].includes(String(rawSelection.mode || ''))) {
+          return NextResponse.json(
+            { error: { code: 'CASE_SELECTION_INVALID', message: 'caseSelection.mode 只支持 all 或 explicit' } },
+            { status: 400 },
+          );
+        }
+        const caseSelection = rawSelection.mode === 'explicit'
+          ? {
+              mode: 'explicit' as const,
+              caseIds: Array.isArray(rawSelection.caseIds)
+                ? rawSelection.caseIds.map((id) => String(id))
+                : [],
+            }
+          : { mode: 'all' as const };
+        const result = await createBenchmarkExperiment({
+          user: username,
+          name: String(body.name || ''),
+          agentName: body.agentName ? String(body.agentName) : undefined,
+          datasetId: String(benchmark.datasetId || ''),
+          caseSelection,
+          clientId: String(executionTarget.clientId || ''),
+          runConfig: {
+            platform: String(runConfig.platform || ''),
+            agent: String(runConfig.agent || ''),
+            model: runConfig.model ? String(runConfig.model) : undefined,
+            agentTimeoutSeconds: runConfig.agentTimeoutSeconds == null
+              ? undefined
+              : Number(runConfig.agentTimeoutSeconds),
+            maxParallelAgentCases: runConfig.maxParallelAgentCases == null
+              ? undefined
+              : Number(runConfig.maxParallelAgentCases),
+          },
+        });
+        recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
+        return NextResponse.json(result, { status: 201 });
+      } catch (error) {
+        return benchmarkErrorResponse(error, 'benchmark/experiments/create');
+      }
     }
 
     const name = String(body.name || '').trim();

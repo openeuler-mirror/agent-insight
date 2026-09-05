@@ -35,6 +35,7 @@ const client = require_('../scripts/reliability-client.cjs') as {
       agents: string[]
       runExperimentCase?: { version: number; returnsTraceId: boolean }
     }>
+    components: Record<string, { ready?: boolean } | string>
     faultInjection: { ready: boolean; note?: string }
   }
   buildExperimentCaseInvocation: (
@@ -55,6 +56,10 @@ const client = require_('../scripts/reliability-client.cjs') as {
   ) => Promise<boolean>
   normalizeModelIds: (models: unknown) => string[]
   extractTraceIdFromJsonLine: (line: string) => string | null
+  runExperimentCase: (
+    cfg: Record<string, unknown>,
+    payload: Record<string, unknown>,
+  ) => Promise<{ traceId: string; exitCode: number }>
   controlUrls: (cfg: Record<string, unknown>) => { websocketUrl: string; pollUrl: string }
   rasRuntimeConfigPath: () => string
   writeRasRuntimeConfig: (snapshot: Record<string, unknown>) => Promise<void>
@@ -249,9 +254,19 @@ test('readCollectResult finds the nested artifact', () => {
 })
 
 test('installer arg parsing', () => {
-  const args = installer.parseArgs(['--host', 'https://x.test', '--token', 'rit_1', '--no-start'])
+  const args = installer.parseArgs([
+    '--host', 'https://x.test',
+    '--token', 'rit_1',
+    '--executor-base-url', 'http://executor.test:8090',
+    '--executor-listen-host', '0.0.0.0',
+    '--executor-listen-port', '8090',
+    '--no-start',
+  ])
   assert.equal(args.host, 'https://x.test')
   assert.equal(args.token, 'rit_1')
+  assert.equal(args.executorBaseUrl, 'http://executor.test:8090')
+  assert.equal(args.executorListenHost, '0.0.0.0')
+  assert.equal(args.executorListenPort, 8090)
   assert.equal(args.start, false)
 
   assert.equal(installer.parseArgs(['--status']).status, true)
@@ -284,6 +299,22 @@ test('capabilities and FI inventory agree on readiness', () => {
   assert.equal(caps.faultInjection.ready, false)
   assert.equal(inv.platforms.opencode.ready, false)
   assert.equal(caps.faultInjection.note, inv.platforms.opencode.note)
+})
+
+test('client advertises benchmark components only when executor is configured', () => {
+  const withoutExecutor = client.buildCapabilities(
+    { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
+    { refresh: true },
+  )
+  assert.equal(withoutExecutor.components['git-workspace/v1'], undefined)
+
+  const withExecutor = client.buildCapabilities({
+    fiPackageRoot: '/definitely/not/here',
+    maxParallelFi: 5,
+    executorBaseUrl: 'http://executor.test:8090',
+  })
+  assert.deepEqual(withExecutor.components['git-workspace/v1'], { ready: true })
+  assert.deepEqual(withExecutor.components['git-patch/v1'], { ready: true })
 })
 
 test('model ids normalize from strings and objects alike', () => {
@@ -373,6 +404,53 @@ test('generic execution reports Trace ID before exit and force-kills timed-out p
   assert.match(source, /signalProcessTree\(child, 'SIGTERM'\)/)
   assert.match(source, /signalProcessTree\(child, 'SIGKILL'\)/)
   assert.match(source, /if \(reliabilityChild\) signalProcessTree\(reliabilityChild, 'SIGKILL'\)/)
+})
+
+test('generic execution aligns PWD with the prepared workspace cwd', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-agent-cwd-'))
+  const binDir = path.join(root, 'bin')
+  const workspace = path.join(root, 'workspace')
+  const capturePath = path.join(root, 'capture.json')
+  const executable = path.join(binDir, 'fake-agent')
+  const previousPath = process.env.PATH
+  const previousPwd = process.env.PWD
+  const previousCapture = process.env.BENCHMARK_CWD_CAPTURE
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.mkdirSync(workspace, { recursive: true })
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.writeFileSync(process.env.BENCHMARK_CWD_CAPTURE, JSON.stringify({ cwd: process.cwd(), pwd: process.env.PWD }))
+console.log(JSON.stringify({ sessionID: 'ses_cwd_alignment' }))
+`)
+  fs.chmodSync(executable, 0o755)
+  process.env.PATH = `${binDir}:${previousPath || ''}`
+  process.env.PWD = '/wrong/inherited/project'
+  process.env.BENCHMARK_CWD_CAPTURE = capturePath
+  try {
+    const result = await client.runExperimentCase({
+      clientId: 'client_cwd_alignment',
+      workspaceBase: root,
+    }, {
+      platform: 'fake-agent',
+      agent: 'build',
+      input: 'run in the prepared workspace',
+      cwd: workspace,
+      timeoutSeconds: 10,
+    })
+    assert.equal(result.traceId, 'ses_cwd_alignment')
+    assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, 'utf8')), {
+      cwd: fs.realpathSync(workspace),
+      pwd: workspace,
+    })
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousPwd === undefined) delete process.env.PWD
+    else process.env.PWD = previousPwd
+    if (previousCapture === undefined) delete process.env.BENCHMARK_CWD_CAPTURE
+    else process.env.BENCHMARK_CWD_CAPTURE = previousCapture
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('client advertises Trace-ID-safe generic execution only for supported platforms', () => {
@@ -582,6 +660,7 @@ test('runtime bundle carries config_sync.js next to the client script', () => {
   assert.match(runtimeDir, /\.agent-insight[/\\]client[/\\]runtime$/)
   const src = installer.installRuntime ? String(installer.installRuntime.toString()) : ''
   assert.match(src, /config_sync\.js/, 'installRuntime 必须固化 config_sync.js')
+  assert.match(src, /services.*executor.*src/s, 'installRuntime 必须固化 Benchmark executor')
 })
 
 test('server client bundle includes the managed FI runtime helper', () => {
@@ -590,6 +669,7 @@ test('server client bundle includes the managed FI runtime helper', () => {
     'utf8',
   )
   assert.match(source, /scripts\/lib\/fi-python-runtime\.js/)
+  assert.match(source, /services\/executor\/src/)
 })
 
 test('long-poll cadence stays under the server command TTL', () => {
