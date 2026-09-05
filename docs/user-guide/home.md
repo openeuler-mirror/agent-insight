@@ -1,6 +1,6 @@
 ---
 title: "Agent Insight"
-description: "面向智能体应用的可观测、评测与 Skills 优化平台"
+description: "面向智能体应用的可观测、评测与 Skill 优化平台"
 ---
 
 # Agent Insight
@@ -81,12 +81,13 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 
 ### 持续优化
 
-持续优化下统一保留 **Skill** 入口，顶部页签承载四类既有能力：
+持续优化下统一保留 **Skill** 入口，进入一站式工作台：
 
-- **SkillHub**：查看 Skill 列表、版本和状态
-- **生成**：通过需求描述自动生成 SKILL.md 与配套材料
-- **评测**：从 A/B 测试、触发分析、静态合规等角度分析 Skill
-- **优化**：根据评测与运行证据迭代 Skill 版本
+- 左侧 **Skill Copilot**承载生成与优化会话
+- 右侧 **Skill 详情**查看当前快照或正式版本
+- **Skill 评估**执行静态质量检查和发布门禁
+- **Skill 实验**运行触发分析、用例分析和 A/B 测试
+- **优化记录**管理候选版本、质量校验、diff 和发布状态
 
 ### 配置
 
@@ -119,9 +120,9 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 
 如果你要沉淀 Prompt / 工具编排经验并做持续优化，优先阅读：
 
-- [持续优化 · Skill](./skills/index)
-- [Skills 生成](./skills/generate)
-- [Skills 优化](./skills/optimize)
+- [Skill 工作台](./skills/index)
+- [Skill 生成](./skills/generate)
+- [Skill 优化](./skills/optimize)
 
 ## 典型工作流
 
@@ -145,4 +146,4 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 - 想从 Agent 资产开始： [Agent 概览](./agent-management)
 - 想先看运行数据： [运行观测](./observability/index)
 - 想建立离线评测： [评估与实验](./evaluation/index)
-- 想沉淀 Agent 能力： [持续优化 · Skill](./skills/index)
+- 想沉淀 Agent 能力： [Skill 工作台](./skills/index)
