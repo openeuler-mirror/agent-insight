@@ -203,6 +203,32 @@ test("WorkBuddy round-trip: 多条 trace 归并为一个多轮会话", () => {
   assert.equal(record.llm_call_count, 2)
 })
 
+test("WorkBuddy: 跳过内部标题生成器 trace（不产生 <session> 污染的 USER 节点）", () => {
+  // terminalTitleGenerator 是内部标题生成调用，把首条消息包在 <session> 里喂 LLM。
+  const titleGenDoc = {
+    trace: { traceId: "trace-title", name: "Agent workflow", startedAt: "2026-09-06T00:00:00.000Z", endedAt: "2026-09-06T00:00:08.000Z", status: "ok" },
+    spans: [
+      { traceId: "trace-title", spanId: "t-agent", parentId: null, name: "terminalTitleGenerator", type: "agent", startedAt: "2026-09-06T00:00:00.100Z", endedAt: "2026-09-06T00:00:08.000Z", status: "ok", agentName: "terminalTitleGenerator" },
+      {
+        traceId: "trace-title", spanId: "t-gen", parentId: "t-agent", name: "generation", type: "generation",
+        startedAt: "2026-09-06T00:00:00.500Z", endedAt: "2026-09-06T00:00:08.000Z", status: "ok",
+        toolInput: JSON.stringify([
+          { role: "system", content: "Generate a concise title..." },
+          { role: "user", content: [{ type: "text", text: "<session>\n执行父子Agent协同架构_门店看板实例\n</session>" }] },
+        ]),
+        toolOutput: JSON.stringify([{ model: "hy3", choices: [{ message: { role: "assistant", content: "{\"title\":\"门店看板\"}" } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }]),
+      },
+    ],
+  }
+  // mapper 直接跳过整条内部 trace
+  const events = mapWorkBuddyTrace(titleGenDoc, { sessionId: "sess-title" })
+  assert.equal(events.length, 0)
+
+  // 端到端：标题生成器 trace 不产生任何 record（更不会有 <session> 的 USER 节点）
+  const { record } = roundTrip([titleGenDoc], "sess-title")
+  assert.equal(record, null)
+})
+
 test("WorkBuddy round-trip: generation 缺失 usage 时不编造 token", () => {
   const doc = workbuddyTrace({ traceId: "trace-nousage", start: "2026-09-06T00:00:01.000Z", prompt: "hi", usage: {} as any })
   // 把 toolOutput 的 usage 清空

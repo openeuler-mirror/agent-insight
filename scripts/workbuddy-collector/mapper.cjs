@@ -27,6 +27,20 @@ const crypto = require("node:crypto");
 
 const FRAMEWORK = "workbuddy";
 
+// WorkBuddy 的内部工具型 Agent（非用户对话的一部分），其 trace 应整条跳过，
+// 不作为会话节点上报。terminalTitleGenerator 是自动生成侧边栏标题的内部调用，
+// 它把会话首条消息包在 <session>…</session> 里喂给 LLM，若不跳过会污染成一条 USER 节点。
+const INTERNAL_UTILITY_AGENTS = new Set(["terminalTitleGenerator"]);
+
+/** 判断这条 trace 是否为纯内部工具 Agent（如标题生成器）产生的，应整条跳过。 */
+function isInternalUtilityTrace(spans) {
+  const agentNames = spans
+    .filter((s) => s && s.type === "agent")
+    .map((s) => String(s.agentName || s.name || ""));
+  if (!agentNames.length) return false;
+  return agentNames.every((name) => INTERNAL_UTILITY_AGENTS.has(name));
+}
+
 function sha256Hex(value, length) {
   return crypto.createHash("sha256").update(String(value), "utf8").digest("hex").slice(0, length);
 }
@@ -137,6 +151,8 @@ function mapWorkBuddyTrace(traceDoc, enrichment) {
   if (!sessionId) throw new Error("mapWorkBuddyTrace: sessionId is required");
   const trace = (traceDoc && traceDoc.trace) || {};
   const spans = Array.isArray(traceDoc && traceDoc.spans) ? traceDoc.spans : [];
+  // 纯内部工具 trace（如标题生成器）整条跳过，不上报，避免污染会话节点。
+  if (isInternalUtilityTrace(spans)) return [];
   const traceId = trace.traceId || `trace_${sha256Hex(JSON.stringify(traceDoc || {}), 24)}`;
   const traceStart = toMs(trace.startedAt) || Date.now();
   const traceEnd = toMs(trace.endedAt) || traceStart;
@@ -296,4 +312,5 @@ module.exports = {
   firstResponseObject,
   lastUserTextFromMessages,
   completionTextFromResponse,
+  isInternalUtilityTrace,
 };
