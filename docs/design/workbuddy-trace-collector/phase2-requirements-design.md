@@ -179,6 +179,17 @@ if (process.platform === 'win32') {
 
 选定 **Task Scheduler + 登录触发（LogonTrigger）+ 当前用户范围**，效果上正好补齐 `install-ras-client.js` 在 Linux/macOS 已经做到、Windows 一直缺的那一块。
 
+### 3.2.1 运行时：复用 WorkBuddy 自带 Electron，免装 Node
+
+采集器与安装器都是 JS 脚本，需要一个 Node 运行时。若要求用户单独安装 Node.js，接入门槛会高很多。WorkBuddy 本身是 Electron 应用，`WorkBuddy.exe` 在 `ELECTRON_RUN_AS_NODE=1` 下等价于普通 `node`（已实测：能正确执行本方案的 `.cjs`/`.mjs`，含 ESM import 与 top-level await）。因此：
+
+- 安装器 `workbuddy_setup.mjs` 通过 `findWorkBuddyExe()` 定位 `%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe`（回退 `%PROGRAMFILES%`），作为采集器运行时；找不到才回退到 `process.execPath`。
+- 生成的隐藏窗口启动器 `.vbs` 先 `shell.Environment("PROCESS")("ELECTRON_RUN_AS_NODE") = "1"` 再运行 `WorkBuddy.exe collector.mjs`（对真实 node.exe 设该变量无副作用）。
+- 一键 PS 安装块同样优先用 `WorkBuddy.exe`（设 `ELECTRON_RUN_AS_NODE=1`）运行安装器，其次回退 `node`。
+- 一键脚本开头的 Node.js 检查对「仅选 WorkBuddy」放行（`workbuddyOnly`，与既有 `llamaIndexOnly` 同样的旁路），Node-less 机器也能装。
+
+结论：**接入 WorkBuddy 采集不需要在用户机器上单独安装 Node.js**（前提是 WorkBuddy 已安装，这本就是采集的前提）。`node:sqlite` 只读富化需 Node ≥ 22.5，Electron 内置 Node 若不带该模块，采集器按缺失降级（逐轮 token/model 仍来自 trace 文件，不受影响）。
+
 ### 3.3 安装流程
 
 ```mermaid
@@ -214,13 +225,15 @@ flowchart LR
 
    安装脚本：`schtasks /create /tn "AgentInsight-WorkBuddyCollector" /xml "<生成的临时xml路径>" /f`（`/f` 覆盖已存在的同名任务，保证重复安装/升级是幂等的）。
 
-2. **动作不要直接指向 `node.exe`**：Task Scheduler 直接跑控制台程序，登录瞬间偶尔会闪一下黑框，体验很差。用一个隐藏窗口的 `.vbs` 小启动器包一层：
+2. **动作不要直接指向控制台程序**：Task Scheduler 直接跑控制台程序，登录瞬间偶尔会闪一下黑框，体验很差。用一个隐藏窗口的 `.vbs` 小启动器包一层，并在其中设 `ELECTRON_RUN_AS_NODE=1` 让 WorkBuddy.exe 以 Node 模式运行采集器：
 
 ```vbs
-CreateObject("Wscript.Shell").Run "node.exe " & Chr(34) & "collector.mjs" & Chr(34), 0, False
+Set shell = CreateObject("WScript.Shell")
+shell.Environment("PROCESS")("ELECTRON_RUN_AS_NODE") = "1"
+shell.Run Chr(34) & "<WorkBuddy.exe 绝对路径>" & Chr(34) & " " & Chr(34) & "<collector.mjs 绝对路径>" & Chr(34), 0, False
 ```
 
-   任务的 Action 指向 `wscript.exe collector-launcher.vbs`，全程不弹窗。
+   任务的 Action 指向 `wscript.exe collector-launcher.vbs`，全程不弹窗；运行时是 WorkBuddy 自带 Electron，无需系统 Node。
 
 3. **安装后立即启动一次**，不用等用户重新登录：`schtasks /run /tn "AgentInsight-WorkBuddyCollector"`，对齐 `install-ras-client.js` 里 `installSystemd(start)`/`installLaunchd(start)` 的"装完即起"逻辑。
 

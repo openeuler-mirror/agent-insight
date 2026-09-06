@@ -97,21 +97,36 @@ async function writeConfig(endpoint, apiKey) {
   log(`✓ 配置已写入 ${CONFIG_PATH}`);
 }
 
-async function writeLauncher(nodeExe) {
+/**
+ * 定位 WorkBuddy 自带的 Electron 可执行文件，用作采集器的 Node 运行时
+ * （ELECTRON_RUN_AS_NODE=1 时 WorkBuddy.exe 等价于 node）。这样用户无需单独安装
+ * Node.js，大幅降低接入门槛。找不到时回退到 process.execPath。
+ */
+function findWorkBuddyExe() {
+  const candidates = [
+    path.join(process.env.LOCALAPPDATA || "", "Programs", "WorkBuddy", "WorkBuddy.exe"),
+    path.join(process.env.PROGRAMFILES || "", "WorkBuddy", "WorkBuddy.exe"),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function writeLauncher(runtimeExe) {
+  // 用 WScript.Shell 隐藏窗口启动，并在进程环境里设 ELECTRON_RUN_AS_NODE=1，
+  // 让 WorkBuddy.exe 以纯 Node 模式运行 collector.mjs（对真实 node.exe 无副作用）。
+  // 路径用 Chr(34) 拼引号，避免转义歧义。
   const vbs = [
     "' AgentInsight WorkBuddy Collector 隐藏窗口启动器（安装时生成，路径已写死）",
     "Dim shell",
     'Set shell = CreateObject("WScript.Shell")',
-    `shell.Run "${Chr34(nodeExe)} ${Chr34(COLLECTOR_PATH)}", 0, False`,
+    'shell.Environment("PROCESS")("ELECTRON_RUN_AS_NODE") = "1"',
+    `shell.Run Chr(34) & "${runtimeExe}" & Chr(34) & " " & Chr(34) & "${COLLECTOR_PATH}" & Chr(34), 0, False`,
     "",
   ].join("\r\n");
   await fsp.writeFile(LAUNCHER_PATH, vbs, "utf8");
-  log(`✓ 启动器已生成 ${LAUNCHER_PATH}`);
-}
-
-function Chr34(s) {
-  // VBS 里用 Chr(34) 表示双引号，避免字符串转义歧义。
-  return `" & Chr(34) & "${s}" & Chr(34) & "`;
+  log(`✓ 启动器已生成 ${LAUNCHER_PATH}（运行时: ${runtimeExe}）`);
 }
 
 function taskXml(userId) {
@@ -251,14 +266,18 @@ async function main() {
     fail("未检测到 WorkBuddy", "请先安装并至少打开一次 WorkBuddy（需存在 ~/.workbuddy 目录）");
   }
 
+  // 优先用 WorkBuddy 自带的 Electron 当运行时（无需单独装 Node）；找不到才回退到当前解释器。
+  const runtimeExe = findWorkBuddyExe() || process.execPath;
+
   const endpoint = normalizeEndpoint(args.host);
   await stageRuntime();
   await writeConfig(endpoint, args.token);
-  await writeLauncher(process.execPath);
+  await writeLauncher(runtimeExe);
   await installTask(args.start);
 
   log("");
   log("✓ 安装完成。采集器已作为登录自启动的常驻任务运行，无需手动启动。");
+  if (findWorkBuddyExe()) log("  运行时: 复用 WorkBuddy 自带 Electron（ELECTRON_RUN_AS_NODE），无需单独安装 Node.js。");
   log(`  状态: node scripts/workbuddy_setup.mjs --status`);
   log(`  卸载: node scripts/workbuddy_setup.mjs --uninstall`);
 }

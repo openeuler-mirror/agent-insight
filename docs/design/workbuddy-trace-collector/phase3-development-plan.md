@@ -8,7 +8,7 @@
 
 - 客户端映射 `scripts/workbuddy-collector/mapper.cjs`（纯函数，已用 9 条真实 trace 验证：逐轮精确 token 提取、function 工具映射、mcp_tools 噪声剔除、OTLP 往返 `service.name=workbuddy` 与 `llm.token_count.*` 正确）。
 - 客户端 `session-registry.mjs`（pid→sessionId 缓存 + 宽限期）、`collector.mjs`（文件监听 + D4 只读富化 + 单实例锁 + 触发上传）、隐藏窗口启动器 `collector-launcher.vbs`。
-- 独立 Windows 安装器 `scripts/workbuddy_setup.mjs`（Task Scheduler 登录触发 + 失败自动重启 + `--status`/`--uninstall`），已实现"免手动启动"端到端能力。
+- 独立 Windows 安装器 `scripts/workbuddy_setup.mjs`（Task Scheduler 登录触发 + 失败自动重启 + `--status`/`--uninstall`），已实现"免手动启动"端到端能力；采集器运行时复用 WorkBuddy 自带 Electron（`ELECTRON_RUN_AS_NODE=1`），**用户无需单独安装 Node.js**（已实测 WorkBuddy.exe 可执行本方案的 ESM/CJS 脚本）。
 - 服务端 `src/lib/ingest/otel/adapters/workbuddy.ts` + 注册表接入。
 - 测试 `test/workbuddy-collector.test.ts`（mapper 单测 + 全链路往返 + 多轮归并 + 无 usage 不编造）。
 

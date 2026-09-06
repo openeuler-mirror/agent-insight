@@ -120,6 +120,7 @@ function generateBashScript(
     forceNoKey: boolean,
 ): string {
     const llamaIndexOnly = preselected.length === 1 && preselected[0].value === 'llamaindex';
+    const workbuddyOnly = preselected.length === 1 && preselected[0].value === 'workbuddy';
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const packageSpec = getAgentInsightClientPackageSpec();
     const frameworksPreselected = preselected.length > 0;
@@ -155,9 +156,10 @@ function generateBashScript(
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
-        ...(llamaIndexOnly ? [
-            '# 0. LlamaIndex-only setup runs in the project Python environment',
-            'echo "🐍 LlamaIndex-only setup: Node.js check skipped"',
+        ...((llamaIndexOnly || workbuddyOnly) ? [
+            '# 0. Node.js check skipped for this selection',
+            '#    (LlamaIndex-only runs in project Python; WorkBuddy-only reuses WorkBuddy\'s bundled runtime)',
+            'echo "ℹ️  跳过 Node.js 检查（该组合无需系统级 Node.js）"',
         ] : [
             '# 0. Check Node.js version',
             'if ! command -v node &> /dev/null; then',
@@ -1282,6 +1284,7 @@ function generatePowerShellScript(
     forceNoKey: boolean,
 ): string {
     const llamaIndexOnly = preselected.length === 1 && preselected[0].value === 'llamaindex';
+    const workbuddyOnly = preselected.length === 1 && preselected[0].value === 'workbuddy';
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const frameworksPreselected = preselected.length > 0;
     const lines = [
@@ -1304,9 +1307,10 @@ function generatePowerShellScript(
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
-        ...(llamaIndexOnly ? [
-            '# 0. LlamaIndex-only setup runs in the project Python environment',
-            'Write-Host "🐍 LlamaIndex-only setup: Node.js check skipped"',
+        ...((llamaIndexOnly || workbuddyOnly) ? [
+            '# 0. Node.js check skipped for this selection',
+            '#    (LlamaIndex-only runs in project Python; WorkBuddy-only reuses WorkBuddy bundled runtime)',
+            'Write-Host "ℹ️  跳过 Node.js 检查（该组合无需系统级 Node.js）"',
         ] : [
             '# 0. Check Node.js version',
             '$nodeCmd = Get-Command node -ErrorAction SilentlyContinue',
@@ -1977,9 +1981,20 @@ function generatePowerShellScript(
         '                Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/$_" -OutFile (Join-Path (Join-Path $wbSrc "workbuddy-collector") $_)',
         '            }',
         '            Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/trace-transport.cjs" -OutFile (Join-Path (Join-Path $wbSrc "agent-trace-collectors\\shared") "trace-transport.cjs")',
-        '            & node (Join-Path $wbSrc "workbuddy_setup.mjs") "--host=$FINAL_HOST" "--token=$FINAL_KEY"',
+        '            # 优先用 WorkBuddy 自带 Electron 当 Node 运行时（免装 Node）；找不到才回退到 node。',
+        '            $wbExe = Join-Path $env:LOCALAPPDATA "Programs\\WorkBuddy\\WorkBuddy.exe"',
+        '            $wbSetup = Join-Path $wbSrc "workbuddy_setup.mjs"',
+        '            if (Test-Path $wbExe) {',
+        '                $env:ELECTRON_RUN_AS_NODE = "1"',
+        '                & $wbExe $wbSetup "--host=$FINAL_HOST" "--token=$FINAL_KEY"',
+        '                Remove-Item Env:\\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue',
+        '            } elseif (Get-Command node -ErrorAction SilentlyContinue) {',
+        '                & node $wbSetup "--host=$FINAL_HOST" "--token=$FINAL_KEY"',
+        '            } else {',
+        '                Write-Host "⚠️  未找到 WorkBuddy.exe，也没有 Node.js，无法安装 WorkBuddy 采集器。"',
+        '            }',
         '            if ($LASTEXITCODE -ne 0) { Write-Host "⚠️  WorkBuddy collector setup exited with code $LASTEXITCODE (可能未检测到 WorkBuddy；请确认已安装并至少打开过一次)。" }',
-        '            else { Write-Host "✅ WorkBuddy collector installed (登录自启动的常驻任务，无需手动启动)。" }',
+        '            else { Write-Host "✅ WorkBuddy collector installed (复用 WorkBuddy 自带运行时，登录自启动，无需手动启动/无需装 Node)。" }',
         '        } catch {',
         '            Write-Host "⚠️  WorkBuddy collector installation failed: $_"',
         '        }',
