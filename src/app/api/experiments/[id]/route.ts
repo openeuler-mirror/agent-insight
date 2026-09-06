@@ -479,6 +479,7 @@ export async function GET(
           executionId: c.executionId || traceState?.executionId || null,
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
+          datasetInput: c.datasetInput,
           actualOutput: c.actualOutput || ex?.finalResult || '',
           referenceOutput: c.referenceOutput,
           faultInjectionType,

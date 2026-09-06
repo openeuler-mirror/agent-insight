@@ -80,6 +80,11 @@ function pruneStandaloneJunk(standaloneDir) {
       console.log(`✓ Pruned ${file} from standalone`)
     }
   }
+  for (const entry of fs.readdirSync(standaloneDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.tgz')) continue
+    fs.rmSync(path.join(standaloneDir, entry.name), { force: true })
+    console.log(`✓ Pruned ${entry.name} from standalone`)
+  }
 }
 
 function prunePythonBytecode(directory) {

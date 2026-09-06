@@ -19,17 +19,20 @@ import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint } from '
 /** 占位符上下文：运行时由引擎按 case 提供；缺省值以「(未提供)」替换，绝不留裸占位符。 */
 export interface JudgeCaseContext {
   input?: string | null;
+  /** 与实际任务输入确定性匹配的数据集 case 输入快照 */
+  datasetInput?: string | null;
   output?: string | null;
   referenceOutput?: string | null;
   /** 执行轨迹序列化文本（步骤/工具调用摘要），由引擎侧提取 */
   trajectory?: string | null;
 }
 
-const PLACEHOLDER_KEYS = ['input', 'output', 'reference_output', 'trajectory'] as const;
+const PLACEHOLDER_KEYS = ['input', 'dataset_input', 'output', 'reference_output', 'trajectory'] as const;
 
 export function replacePlaceholders(text: string, ctx: JudgeCaseContext): string {
   const values: Record<(typeof PLACEHOLDER_KEYS)[number], string> = {
     input: ctx.input?.trim() || '(未提供)',
+    dataset_input: ctx.datasetInput?.trim() || '(未提供)',
     output: ctx.output?.trim() || '(未提供)',
     reference_output: ctx.referenceOutput?.trim() || '(未提供)',
     trajectory: ctx.trajectory?.trim() || '(未提供)',

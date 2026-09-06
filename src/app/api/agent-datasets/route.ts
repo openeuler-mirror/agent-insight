@@ -20,6 +20,7 @@ import {
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { listFaultModeIds } from '@/lib/reliability/fault-modes';
 import { ensureBuiltinReliabilityDataset } from '@/server/builtin-example/ensure-reliability-dataset';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
 export const dynamic = 'force-dynamic';
 
@@ -147,6 +148,12 @@ export async function PATCH(request: Request) {
     const current = await findAgentDataset(user, id);
     if (!current) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+    }
+    if (isBuiltinReliabilityDataset(current)) {
+      return NextResponse.json(
+        { error: '内置可靠性评测集由系统维护，不可编辑' },
+        { status: 403 },
+      );
     }
 
     const nextName = body.name !== undefined ? String(body.name || '').trim() : current.name;

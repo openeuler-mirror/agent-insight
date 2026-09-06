@@ -5,12 +5,15 @@ import test from 'node:test';
 
 const root = process.cwd();
 
-test('全局实验详情是纯进度视图，不提供二次启动和重复返回入口', () => {
+test('全局实验详情是纯进度视图，并提供返回实验列表入口', () => {
   const detailPage = fs.readFileSync(
     path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
     'utf8',
   );
 
+  assert.match(detailPage, /<AppTopBar title=\{detail \? detail\.name : '实验详情'\} \/>/);
+  assert.match(detailPage, /<PageContainer[\s\S]*!embedded && \([\s\S]*<Link href="\/experiments">[\s\S]*返回实验列表[\s\S]*<\/Link>/);
+  assert.doesNotMatch(detailPage, /<AppTopBar[\s\S]*title=\{\([\s\S]*返回实验列表/);
   assert.doesNotMatch(detailPage, /开始执行/);
   assert.doesNotMatch(detailPage, /返回上一页/);
   assert.doesNotMatch(detailPage, /router\.back\(\)/);

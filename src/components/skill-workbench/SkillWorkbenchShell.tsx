@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   CheckCircle2,
   ChevronRight,
@@ -20,7 +21,9 @@ import {
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import type { SkillWorkbenchActiveView } from '@/lib/skill-workbench/domain';
+import { publishWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
 import { cn } from '@/lib/utils';
+import { TruncateText } from '@/components/text/TruncateText';
 import { SkillDetailWorkspace } from './SkillDetailWorkspace';
 import { SkillManagementPicker } from './SkillManagementPicker';
 import { OptimizationRecordsPanel, type OptimizationRecordView } from './OptimizationRecordsPanel';
@@ -105,6 +108,10 @@ function isStaticQualityError(message: string) {
 
 export function SkillWorkbenchShell() {
   const { user } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const requestedSessionId = searchParams.get('sessionId')?.trim() || null;
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [active, setActive] = useState<SessionDetail | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<SelectedSkillAsset | null>(null);
@@ -114,6 +121,7 @@ export function SkillWorkbenchShell() {
   const [optimizationRecordsLoading, setOptimizationRecordsLoading] = useState(false);
   const [selectedOptimizationRecordId, setSelectedOptimizationRecordId] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<SkillWorkbenchActiveView>('detail');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -136,6 +144,7 @@ export function SkillWorkbenchShell() {
   const [optimizationBaselineOverride, setOptimizationBaselineOverride] = useState<Record<string, string> | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const selectedAssetRef = useRef<SelectedSkillAsset | null>(null);
+  const activeSessionRef = useRef<SessionDetail | null>(null);
   const [error, setError] = useState('');
   const [copilotWidth, setCopilotWidth] = useState(COPILOT_DEFAULT_WIDTH);
   const [workbenchWidth, setWorkbenchWidth] = useState(
@@ -144,6 +153,18 @@ export function SkillWorkbenchShell() {
   const workbenchRef = useRef<HTMLDivElement | null>(null);
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
   const reportError = useCallback((message: string) => setError(message), []);
+  const updateSessionUrl = useCallback((sessionId: string | null, mode: 'push' | 'replace' = 'push') => {
+    const params = new URLSearchParams(window.location.search);
+    if ((params.get('sessionId') || null) === sessionId) return;
+    if (sessionId) params.set('sessionId', sessionId);
+    else params.delete('sessionId');
+    const query = params.toString();
+    router[mode](`${pathname}${query ? `?${query}` : ''}`, { scroll: false });
+  }, [pathname, router]);
+  const clearAssetSelection = useCallback(() => {
+    selectedAssetRef.current = null;
+    setSelectedAsset(null);
+  }, []);
 
   useEffect(() => {
     const stored = Number(window.localStorage.getItem('skill-workbench-copilot-width'));
@@ -152,6 +173,19 @@ export function SkillWorkbenchShell() {
       setCopilotWidth(clampCopilotWidth(stored, availableWidth));
     }
   }, []);
+
+  const updateHistoryOpen = useCallback((open: boolean) => {
+    setHistoryOpen(open);
+  }, []);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') updateHistoryOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [historyOpen, updateHistoryOpen]);
 
   const resizeCopilot = useCallback((clientX: number) => {
     const start = resizeStartRef.current;
@@ -202,6 +236,7 @@ export function SkillWorkbenchShell() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '加载会话失败');
     const session = data.session as SessionDetail;
+    activeSessionRef.current = session;
     setActive(session);
     return session;
   }, []);
@@ -277,6 +312,10 @@ export function SkillWorkbenchShell() {
     selectedAssetRef.current = selectedAsset;
   }, [selectedAsset]);
 
+  useEffect(() => {
+    activeSessionRef.current = active;
+  }, [active]);
+
   const loadSessions = useCallback(async () => {
     if (!user) return;
     setLoading(true);
@@ -290,19 +329,36 @@ export function SkillWorkbenchShell() {
       if (!response.ok) throw new Error(data.error || '加载历史会话失败');
       const next = (data.sessions || []) as SessionListItem[];
       setSessions(next);
-      if (next[0]) {
-        const session = await loadSession(next[0].id, user);
+      const targetSessionId = requestedSessionId || next[0]?.id || null;
+      if (targetSessionId) {
+        const session = activeSessionRef.current?.id === targetSessionId
+          ? activeSessionRef.current
+          : await loadSession(targetSessionId, user);
         if (session.skillName && session.workVersion !== null) {
           if (session.source === 'management') await selectFormalAsset(session.skillName, session.workVersion, user);
           else selectDraftAsset(session);
+        } else {
+          clearAssetSelection();
         }
+        setCurrentView(session.activeView || 'detail');
+        if (!requestedSessionId) updateSessionUrl(session.id, 'replace');
+      } else {
+        activeSessionRef.current = null;
+        setActive(null);
+        clearAssetSelection();
+        if (requestedSessionId) updateSessionUrl(null, 'replace');
       }
     } catch (loadError) {
+      if (requestedSessionId) {
+        activeSessionRef.current = null;
+        setActive(null);
+        clearAssetSelection();
+      }
       setError(loadError instanceof Error ? loadError.message : '加载历史会话失败');
     } finally {
       setLoading(false);
     }
-  }, [loadSession, selectDraftAsset, selectFormalAsset, user]);
+  }, [clearAssetSelection, loadSession, requestedSessionId, selectDraftAsset, selectFormalAsset, updateSessionUrl, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadSessions(), 0);
@@ -312,16 +368,11 @@ export function SkillWorkbenchShell() {
   useEffect(() => {
     if (!user) return;
     const timer = window.setTimeout(() => {
-      void loadAssetCatalog(user).then((items) => {
-        if (selectedAssetRef.current || !items[0]) return;
-        const version = items[0].versions.some((item) => item.version === items[0].activeVersion)
-          ? items[0].activeVersion as number
-          : items[0].versions[0]?.version;
-        if (version !== undefined) void selectFormalAsset(items[0].name, version, user);
-      }).catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
+      void loadAssetCatalog(user)
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadAssetCatalog, selectFormalAsset, user]);
+  }, [loadAssetCatalog, user]);
 
   const createSession = async () => {
     if (!user || creating) return null;
@@ -346,15 +397,30 @@ export function SkillWorkbenchShell() {
     }
   };
 
+  const createBlankSession = async () => {
+    const next = await createSession();
+    if (!next || next.skillName) return next;
+    updateSessionUrl(next.id);
+    clearAssetSelection();
+    setCurrentView('detail');
+    updateHistoryOpen(false);
+    return next;
+  };
+
   const ensureManagementProcessSession = async (asset: SelectedSkillAsset) => {
     if (!user || asset.kind !== 'formal') return null;
     if (active?.source === 'management' && active.skillName === asset.skillName && active.workVersion === asset.version) {
+      updateSessionUrl(active.id);
       return active;
     }
     const existing = sessions.find((session) => (
       session.source === 'management' && session.skillName === asset.skillName && session.workVersion === asset.version
     ));
-    if (existing) return loadSession(existing.id, user);
+    if (existing) {
+      const next = await loadSession(existing.id, user);
+      updateSessionUrl(next.id);
+      return next;
+    }
     const created = await createSession();
     if (!created) return null;
     const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(created.id)}/context`, {
@@ -365,7 +431,9 @@ export function SkillWorkbenchShell() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '准备 Skill 优化会话失败');
     const next = data.session as SessionDetail;
+    activeSessionRef.current = next;
     setActive(next);
+    updateSessionUrl(next.id);
     setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
     return next;
   };
@@ -406,7 +474,9 @@ export function SkillWorkbenchShell() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '绑定会话 Skill 失败');
         const next = data.session as SessionDetail;
+        activeSessionRef.current = next;
         setActive(next);
+        updateSessionUrl(next.id);
         setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
       }
       await selectFormalAsset(skillName, version, user);
@@ -482,6 +552,15 @@ export function SkillWorkbenchShell() {
       );
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '放弃候选失败');
+      publishWorkbenchSync({
+        sessionId: record.sessionId,
+        taskType: 'optimization',
+        kind: 'optimization-record-changed',
+        skillName: record.skillName,
+        recordId: record.id,
+        change: 'abandoned',
+        baseVersion: record.baseVersion,
+      });
       if (selectedAsset?.skillName === record.skillName) await loadOptimizationRecords(selectedAsset, user);
     } catch (abandonError) {
       setError(abandonError instanceof Error ? abandonError.message : '放弃候选失败');
@@ -511,6 +590,16 @@ export function SkillWorkbenchShell() {
       );
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '发布优化候选失败');
+      publishWorkbenchSync({
+        sessionId: record.sessionId,
+        taskType: 'optimization',
+        kind: 'optimization-record-changed',
+        skillName: record.skillName,
+        recordId: record.id,
+        change: 'published',
+        baseVersion: record.baseVersion,
+        publishedVersion: data.version.version,
+      });
       if (data.session) {
         const next = data.session as SessionDetail;
         setActive((current) => current?.id === next.id ? next : current);
@@ -676,13 +765,41 @@ export function SkillWorkbenchShell() {
 
   const acceptOptimizationSession = useCallback((value: unknown) => {
     const next = value as SessionDetail;
+    const previous = activeSessionRef.current;
+    const asset = selectedAssetRef.current;
+    const versionAdvanced = Boolean(
+      previous
+      && next.skillName
+      && previous.skillName === next.skillName
+      && previous.workVersion !== null
+      && next.workVersion !== null
+      && next.workVersion > previous.workVersion,
+    );
+    const shouldFollowPublishedVersion = Boolean(
+      versionAdvanced
+      && asset
+      && asset.skillName === next.skillName
+      && asset.version === previous?.workVersion,
+    );
+    activeSessionRef.current = next;
     setActive(next);
     setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
     setError((current) => isStaticQualityError(current) ? '' : current);
-    const asset = selectedAssetRef.current;
     if (asset?.kind === 'draft') selectDraftAsset(next);
-    if (asset && user) void loadOptimizationRecords(asset, user);
-  }, [loadOptimizationRecords, selectDraftAsset, user]);
+    if (versionAdvanced && user) {
+      void loadAssetCatalog(user)
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
+    }
+    if (asset && user) {
+      if (shouldFollowPublishedVersion && next.skillName && next.workVersion !== null) {
+        void selectFormalAsset(next.skillName, next.workVersion, user)
+          .then((publishedAsset) => loadOptimizationRecords(publishedAsset, user))
+          .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '同步发布版本失败'));
+      } else {
+        void loadOptimizationRecords(asset, user);
+      }
+    }
+  }, [loadAssetCatalog, loadOptimizationRecords, selectDraftAsset, selectFormalAsset, user]);
 
   const publishSnapshot = async () => {
     if (!user || !selectedAsset || selectedAsset.kind !== 'draft' || !selectedAsset.sessionId || publishing) return;
@@ -735,6 +852,7 @@ export function SkillWorkbenchShell() {
         ? await ensureManagementProcessSession(optimizationAsset)
         : optimizationAsset.sessionId ? await loadSession(optimizationAsset.sessionId, user) : null);
       if (!processSession) throw new Error('无法准备当前 Skill 的优化会话');
+      updateSessionUrl(processSession.id);
       const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(processSession.id)}/optimization`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user }),
       });
@@ -819,8 +937,11 @@ export function SkillWorkbenchShell() {
     if (!user) return;
     try {
       const session = await loadSession(sessionId, user);
-      await showSessionAsset(session);
+      updateSessionUrl(session.id);
+      if (session.skillName && session.workVersion !== null) await showSessionAsset(session);
+      else clearAssetSelection();
       setCurrentView('detail');
+      updateHistoryOpen(false);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '加载会话失败');
     }
@@ -859,167 +980,213 @@ export function SkillWorkbenchShell() {
   return (
     <div ref={workbenchRef} className="flex h-full min-h-0 overflow-hidden bg-background">
       <aside
-        className="flex min-w-[320px] shrink-0 flex-col bg-card"
+        className="relative flex min-w-[320px] shrink-0 flex-col bg-card"
         style={{ width: copilotWidth, flexBasis: copilotWidth }}
       >
-        <div className="border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2">
+        <div className="relative z-30 flex h-14 shrink-0 items-center gap-1.5 border-b border-border px-3">
+          <div className="flex min-w-0 items-center gap-2">
             <MessageSquareText className="size-4 text-primary" />
-            <h1 className="text-sm font-semibold text-foreground">Skill Copilot</h1>
+            <h1 className="truncate text-sm font-semibold text-foreground">Skill Copilot</h1>
             <span className="size-1.5 rounded-full bg-success" />
-            <span className="flex-1" />
-            <button
-              type="button"
-              title="新对话"
-              aria-label="新对话"
-              disabled={!user || creating}
-              onClick={createSession}
-              className="inline-flex size-8 items-center justify-center rounded-md border border-border text-foreground-secondary hover:bg-background-secondary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Plus className="size-4" />
-            </button>
           </div>
-          <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-background-secondary px-3 py-2.5">
-            <span className="flex size-8 items-center justify-center rounded-md bg-primary-subtle text-primary">◇</span>
-            <span className="min-w-0">
-              <b className="block truncate text-xs text-foreground">{sessionContextLabel}</b>
-              <small className="text-[11px] text-foreground-muted">{sessionSubtitle}</small>
-            </span>
-          </div>
-        </div>
-
-        <div className="border-b border-border px-4 py-2">
-          <div className="mb-1 flex items-center gap-2 text-[11px] font-medium text-foreground-muted">
+          <span className="flex-1" />
+          <button
+            type="button"
+            aria-expanded={historyOpen}
+            aria-controls="skill-workbench-history-panel"
+            onClick={() => updateHistoryOpen(!historyOpen)}
+            className={cn(
+              'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 text-[11px] font-medium text-foreground-secondary hover:bg-background-secondary',
+              historyOpen && 'border-primary text-primary bg-primary-subtle',
+            )}
+          >
             <History className="size-3.5" />
             历史会话
-          </div>
-          <div className="max-h-32 space-y-1 overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
-            {sessions.map((session) => (
-              <button
-                type="button"
-                key={session.id}
-                onClick={() => void openHistorySession(session.id)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs',
-                  active?.id === session.id
-                    ? 'bg-primary-subtle text-primary'
-                    : 'text-foreground-secondary hover:bg-background-secondary',
-                )}
-              >
-                <Clock3 className="size-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                <span className="text-[10px] text-foreground-muted">
-                  {session.skillName ? `v${session.workVersion ?? 0}` : '空闲'}
-                </span>
-              </button>
-            ))}
-            {!loading && sessions.length === 0 && (
-              <div className="px-2 py-2 text-[11px] text-foreground-muted">暂无历史会话</div>
-            )}
-          </div>
+          </button>
+          <button
+            type="button"
+            aria-label="新对话"
+            disabled={!user || creating}
+            onClick={() => {
+              updateHistoryOpen(false);
+              void createBlankSession();
+            }}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 text-[11px] font-medium text-foreground-secondary hover:bg-background-secondary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus className="size-3.5" />
+            新对话
+          </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
-          {error && (
-            <div className="mb-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-xs text-error">
-              {error}
-            </div>
+        <div className="relative flex min-h-0 flex-1">
+          {historyOpen && (
+            <button
+              type="button"
+              aria-label="关闭历史会话"
+              onClick={() => updateHistoryOpen(false)}
+              className="absolute inset-0 z-20 bg-foreground/5"
+            />
           )}
-          {!active ? (
-            <div className="m-auto max-w-[270px] text-center">
-              <Sparkles className="mx-auto mb-3 size-6 text-primary" />
-              <h2 className="text-sm font-semibold text-foreground">创建一个工作台会话</h2>
-              <p className="mt-1 text-xs leading-5 text-foreground-muted">会话会保存工作 Skill、版本、页签和后续任务状态。</p>
-              <button
-                type="button"
-                onClick={createSession}
-                disabled={!user || creating}
-                className="mt-4 inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50"
-              >
-                <Plus className="size-3.5" />
-                新建会话
-              </button>
-            </div>
-          ) : active.optSessionId && active.skillName && active.workVersion !== null ? (
-            <OptimizationConversation
-              user={user || ''}
-              workbenchSessionId={active.id}
-              generatorSessionId={active.generatorSessionId}
-              optSessionId={active.optSessionId}
-              skillName={active.skillName}
-              baseVersion={active.workVersion}
-              baselineFiles={optimizationBaselineOverride || active.files || {}}
-              issues={optimizationIssueOverride || evaluationOverview?.evaluation?.issues || []}
-              autoStart={autoStartOptimization}
-              useMergePlan={useOptimizationPlan}
-              backgroundRunning={active.tasks.some((task) => task.type === 'optimization' && ['pending', 'running'].includes(task.status))}
-              tasks={active.tasks.filter((task) => task.type === 'optimization')}
-              records={active.optimizations}
-              publishing={publishingCandidateId !== null}
-              quickActions={workflowActions}
-              onViewRecords={(record) => void openOptimizationRecord(record)}
-              onPublish={(record) => void publishOptimization(record)}
-              onRepair={(record) => void startOptimization({ autoRun: true, record })}
-              onAutoStartConsumed={() => {
-                setAutoStartOptimization(false);
-                setUseOptimizationPlan(false);
-                setOptimizationIssueOverride(null);
-                setOptimizationBaselineOverride(null);
-              }}
-              onSynced={acceptOptimizationSession}
-              onError={reportError}
-            />
-          ) : active.generatorSessionId ? (
-            <GenerationConversation
-              user={user || ''}
-              workbenchSessionId={active.id}
-              generatorSessionId={active.generatorSessionId}
-              backgroundRunning={active.tasks.some((task) => task.type === 'generation' && ['pending', 'running'].includes(task.status))}
-              quickActions={workflowActions}
-              onRunningChange={setGenerationRunning}
-              onSynced={acceptGeneratedSession}
-              onError={reportError}
-            />
-          ) : !active.skillName ? (
-            <div>
-              <div className="rounded-lg bg-background-secondary px-3 py-3 text-xs leading-5 text-foreground-secondary">
-                <b className="text-foreground">你好，我可以帮你创建、验证和改进 Skill。</b>
-                <br />请选择一种开始方式，后续评估、实验、优化和发布都在同一会话中完成。
+          {historyOpen && (
+            <nav
+              id="skill-workbench-history-panel"
+              aria-label="历史会话"
+              className="absolute right-3 top-3 z-30 flex max-h-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-lg"
+              style={{ width: 'min(22rem, calc(100% - 1.5rem))' }}
+            >
+              <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3 text-xs font-semibold text-foreground">
+                <History className="size-3.5 text-foreground-secondary" />
+                历史会话
+                <span className="ml-auto text-[10px] font-normal text-foreground-muted">{sessions.length} 个</span>
               </div>
-              <div className="mt-3 space-y-2">
-                <StarterButton
-                  icon={startingGeneration ? Loader2 : WandSparkles}
-                  label={startingGeneration ? '正在准备生成会话…' : '生成一个 Skill'}
-                  disabled={startingGeneration}
-                  onClick={() => void startGeneration()}
-                />
-                <StarterButton
-                  icon={uploading ? Loader2 : FileUp}
-                  label={uploading ? '正在解析上传内容…' : '上传已有 Skill'}
-                  disabled={uploading}
-                  onClick={() => uploadInputRef.current?.click()}
-                />
-                <StarterButton
-                  icon={FolderSearch}
-                  label="从 Skill 管理中心选择"
-                  onClick={() => {
-                    setPickerPurpose('bind');
-                    setPickerOpen(true);
+              <div className="px-3 pb-1 pt-2 text-[10px] font-medium text-foreground-muted">最近</div>
+              <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2" style={{ scrollbarGutter: 'stable' }}>
+                {sessions.map((session) => (
+                  <button
+                    type="button"
+                    key={session.id}
+                    onClick={() => void openHistorySession(session.id)}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs',
+                      active?.id === session.id
+                        ? 'bg-primary-subtle text-primary'
+                        : 'text-foreground-secondary hover:bg-background-secondary',
+                    )}
+                  >
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-background-secondary text-foreground-muted">
+                      <Clock3 className="size-3.5" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{session.title}</span>
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-foreground-muted">
+                        {session.skillName ? (
+                          <>
+                            <TruncateText className="min-w-0 flex-1">{session.skillName}</TruncateText>
+                            <span className="shrink-0">· v{session.workVersion ?? 0}</span>
+                          </>
+                        ) : '未绑定 Skill'}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+                {!loading && sessions.length === 0 && (
+                  <div className="px-2 py-3 text-[11px] text-foreground-muted">暂无历史会话</div>
+                )}
+              </div>
+            </nav>
+          )}
+
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="mx-4 mt-3 flex shrink-0 items-center gap-3 rounded-lg border border-border bg-background-secondary px-3 py-2.5">
+              <span className="flex size-8 items-center justify-center rounded-md bg-primary-subtle text-primary">◇</span>
+              <span className="min-w-0">
+                <b className="block truncate text-xs text-foreground">{sessionContextLabel}</b>
+                <small className="text-[11px] text-foreground-muted">{sessionSubtitle}</small>
+              </span>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
+              {error && (
+                <div className="mb-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-xs text-error">
+                  {error}
+                </div>
+              )}
+              {!active ? (
+                <div className="m-auto max-w-[270px] text-center">
+                  <Sparkles className="mx-auto mb-3 size-6 text-primary" />
+                  <h2 className="text-sm font-semibold text-foreground">创建一个工作台会话</h2>
+                  <p className="mt-1 text-xs leading-5 text-foreground-muted">会话会保存工作 Skill、版本、页签和后续任务状态。</p>
+                  <button
+                    type="button"
+                    onClick={() => void createBlankSession()}
+                    disabled={!user || creating}
+                    className="mt-4 inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                  >
+                    <Plus className="size-3.5" />
+                    新建会话
+                  </button>
+                </div>
+              ) : active.optSessionId && active.skillName && active.workVersion !== null ? (
+                <OptimizationConversation
+                  user={user || ''}
+                  workbenchSessionId={active.id}
+                  generatorSessionId={active.generatorSessionId}
+                  optSessionId={active.optSessionId}
+                  skillName={active.skillName}
+                  baseVersion={active.workVersion}
+                  baselineFiles={optimizationBaselineOverride || active.files || {}}
+                  issues={optimizationIssueOverride || evaluationOverview?.evaluation?.issues || []}
+                  autoStart={autoStartOptimization}
+                  useMergePlan={useOptimizationPlan}
+                  backgroundRunning={active.tasks.some((task) => task.type === 'optimization' && ['pending', 'running'].includes(task.status))}
+                  tasks={active.tasks.filter((task) => task.type === 'optimization')}
+                  records={active.optimizations}
+                  publishing={publishingCandidateId !== null}
+                  quickActions={workflowActions}
+                  onViewRecords={(record) => void openOptimizationRecord(record)}
+                  onPublish={(record) => void publishOptimization(record)}
+                  onRepair={(record) => void startOptimization({ autoRun: true, record })}
+                  onAutoStartConsumed={() => {
+                    setAutoStartOptimization(false);
+                    setUseOptimizationPlan(false);
+                    setOptimizationIssueOverride(null);
+                    setOptimizationBaselineOverride(null);
                   }}
+                  onSynced={acceptOptimizationSession}
+                  onError={reportError}
                 />
-              </div>
+              ) : active.generatorSessionId ? (
+                <GenerationConversation
+                  user={user || ''}
+                  workbenchSessionId={active.id}
+                  generatorSessionId={active.generatorSessionId}
+                  backgroundRunning={active.tasks.some((task) => task.type === 'generation' && ['pending', 'running'].includes(task.status))}
+                  quickActions={workflowActions}
+                  onRunningChange={setGenerationRunning}
+                  onSynced={acceptGeneratedSession}
+                  onError={reportError}
+                />
+              ) : !active.skillName ? (
+                <div>
+                  <div className="rounded-lg bg-background-secondary px-3 py-3 text-xs leading-5 text-foreground-secondary">
+                    <b className="text-foreground">你好，我可以帮你创建、验证和改进 Skill。</b>
+                    <br />请选择一种开始方式，后续评估、实验、优化和发布都在同一会话中完成。
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <StarterButton
+                      icon={startingGeneration ? Loader2 : WandSparkles}
+                      label={startingGeneration ? '正在准备生成会话…' : '生成一个 Skill'}
+                      disabled={startingGeneration}
+                      onClick={() => void startGeneration()}
+                    />
+                    <StarterButton
+                      icon={uploading ? Loader2 : FileUp}
+                      label={uploading ? '正在解析上传内容…' : '上传已有 Skill'}
+                      disabled={uploading}
+                      onClick={() => uploadInputRef.current?.click()}
+                    />
+                    <StarterButton
+                      icon={FolderSearch}
+                      label="从 Skill 管理中心选择"
+                      onClick={() => {
+                        setPickerPurpose('bind');
+                        setPickerOpen(true);
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <ActionButton icon={CheckCircle2} label="Skill 评估" onClick={() => void switchView('evaluation')} />
+                  <ActionButton icon={FlaskConical} label="Skill 实验" onClick={() => void switchView('experiment')} />
+                  <ActionButton
+                    icon={startingOptimization ? Loader2 : WandSparkles}
+                    label={startingOptimization ? '正在准备优化会话…' : 'Skill 优化'}
+                    onClick={() => void startOptimization({ autoRun: true })}
+                  />
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="space-y-2">
-              <ActionButton icon={CheckCircle2} label="Skill 评估" onClick={() => void switchView('evaluation')} />
-              <ActionButton icon={FlaskConical} label="Skill 实验" onClick={() => void switchView('experiment')} />
-              <ActionButton
-                icon={startingOptimization ? Loader2 : WandSparkles}
-                label={startingOptimization ? '正在准备优化会话…' : 'Skill 优化'}
-                onClick={() => void startOptimization({ autoRun: true })}
-              />
-            </div>
-          )}
+          </div>
         </div>
       </aside>
       <div

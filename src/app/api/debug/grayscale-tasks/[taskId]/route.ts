@@ -1805,13 +1805,16 @@ async function evaluateSingleRunTarget(args: {
         // 参考答案：A/B 数据集驱动，任务完成度评估器需要（按 case 归属数据集反查 expectedOutput）
         const datasetId = args.caseDatasetIdByCaseId?.get(target.caseId);
         let referenceOutput: string | null = null;
+        let datasetInput: string | null = null;
         if (datasetId) {
             const ds = await findAgentDataset(args.user, datasetId).catch(() => null);
-            referenceOutput = ds?.cases.find(c => c.id === target.caseId)?.expectedOutput ?? null;
+            const datasetCase = ds?.cases.find(c => c.id === target.caseId);
+            referenceOutput = datasetCase?.expectedOutput ?? null;
+            datasetInput = datasetCase?.input ?? null;
         }
         // trace 已产生：作为 case 加入 backing 实验、同步跑评估器（引擎按 sessionId 解析 input/output/skill 上下文）
         const expCaseId = await addEvalExperimentCase(args.config.evalExperimentId, {
-            taskId: target.run.sessionId!, input: '', actualOutput: '', referenceOutput,
+            taskId: target.run.sessionId!, input: '', datasetInput, actualOutput: '', referenceOutput,
         });
         const rows = await evaluateEvalExperimentCase(args.config.evalExperimentId, expCaseId, args.user, {
             evaluatorIds: effectiveEvaluatorIds,
@@ -1941,6 +1944,7 @@ async function evaluateRunsAsExperimentBatch(args: {
             const experimentCaseId = await addEvalExperimentCase(experimentId, {
                 taskId: target.run.sessionId!,
                 input: datasetCase?.input || '',
+                datasetInput: datasetCase?.input || null,
                 actualOutput: target.run.output || '',
                 referenceOutput: datasetCase?.expectedOutput ?? null,
             });
@@ -2291,6 +2295,7 @@ async function runWorkbenchTriggerTask(args: {
         const experimentCaseId = await addEvalExperimentCase(config.evalExperimentId, {
             taskId,
             input: item.query,
+            datasetInput: datasetCase.input || null,
             actualOutput: item.runsTriggered > 0 ? 'Skill 已触发' : 'Skill 未触发',
             referenceOutput: item.shouldTrigger ? 'Skill 应触发' : 'Skill 不应触发',
         });

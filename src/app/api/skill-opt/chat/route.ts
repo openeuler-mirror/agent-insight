@@ -3,6 +3,7 @@ import { streamSkillOptOpencode } from '@/lib/skill-opt-bridge';
 import type { SkillOptIssueLite, SkillOptPlanItemLite } from '@/lib/engine/general-agent/skill-opt-prompt';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { createBlockMirror } from '@/lib/chat/block-mirror';
+import { createStreamCheckpointWriter } from '@/lib/chat/stream-checkpoint';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
   beginWorkbenchOptimizationRun,
@@ -11,6 +12,34 @@ import {
 } from '@/lib/skill-workbench/optimization-adapter';
 
 export const dynamic = 'force-dynamic';
+
+function blockText(blocks: any[]) {
+  return blocks.filter((block) => block.kind === 'text').map((block) => String(block.text || '')).join('');
+}
+
+function parseFilesSnapshot(value: string | null | undefined): Record<string, any> {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function createOptimizationTaskProgress(taskId?: string) {
+  let activeStep = 1;
+  let pending = Promise.resolve();
+  const advance = (nextStep: number, stage: string, percent: number) => {
+    if (!taskId || nextStep <= activeStep) return;
+    activeStep = nextStep;
+    pending = pending.then(async () => {
+      await updateWorkbenchOptimizationProgress({ taskId, stage, activeStep: nextStep, percent });
+    }).catch((error) => {
+      console.warn('[skill-opt route] progress checkpoint failed:', error);
+    });
+  };
+  return { advance, flush: () => pending };
+}
 
 /**
  * POST /api/skill-opt/chat
@@ -76,6 +105,7 @@ export async function POST(req: NextRequest) {
   // ── plan 模式：planId 有效时加载归并 plan 的可执行条目（core/reference 且未弃用），
   // 注入 prompt 替代平铺 checkedIssues；conflict 未仲裁的条目不进 prompt。
   let planItems: SkillOptPlanItemLite[] | undefined;
+  let planToConfirm: string | null = null;
   let planDisplay: {
     id: string;
     sourceCount: number;
@@ -132,10 +162,7 @@ export async function POST(req: NextRequest) {
       if (planItems!.length === 0) {
         return new Response(JSON.stringify({ error: 'plan has no executable items (all conflict/dismissed/backlog)' }), { status: 400 });
       }
-      // plan 进入执行 → confirmed（应用完成由 iterations 路由置 applied）
-      if (plan.status === 'draft') {
-        await (prismaRaw as any).skillOptPlan.update({ where: { id: plan.id }, data: { status: 'confirmed' } });
-      }
+      if (plan.status === 'draft') planToConfirm = plan.id;
     } catch (err: any) {
       console.warn('[skill-opt route] plan load failed:', err?.message || err);
       return new Response(JSON.stringify({ error: 'failed to load plan' }), { status: 500 });
@@ -177,29 +204,49 @@ export async function POST(req: NextRequest) {
 
   // 先创建运行，再让用户消息与 Agent 消息共同持久化同一个 runId/taskId/recordId。
   let sessionExists = false;
-  let session: { id: string; title: string | null; user: string | null } | null = null;
+  let session: { id: string; title: string | null; user: string | null; files: string } | null = null;
   try {
     session = await (prismaRaw as any).skillOptSession.findUnique({
       where: { id: threadId },
-      select: { id: true, title: true, user: true },
+      select: { id: true, title: true, user: true, files: true },
     });
     sessionExists = !!session && session.user === user;
   } catch (err: any) {
     console.warn('[skill-opt route] session validation failed:', err?.message || err);
   }
-  const workbenchRun = sessionExists
-    ? await beginWorkbenchOptimizationRun({
-        user,
-        optSessionId: threadId,
-        runId: normalizedRunId,
-        sourceKind: optimizationSourceKind,
-        sourceRefs: optimizationSourceRefs,
-      }).catch((error) => {
-        console.error('[skill-opt route] start workbench task failed:', error);
-        return null;
-      })
-    : null;
+  let workbenchRun: Awaited<ReturnType<typeof beginWorkbenchOptimizationRun>> = null;
+  try {
+    workbenchRun = sessionExists
+      ? await beginWorkbenchOptimizationRun({
+          user,
+          optSessionId: threadId,
+          runId: normalizedRunId,
+          sourceKind: optimizationSourceKind,
+          sourceRefs: optimizationSourceRefs,
+        })
+      : null;
+  } catch (error) {
+    console.error('[skill-opt route] start workbench task failed:', error);
+    return new Response(JSON.stringify({ error: '无法启动优化任务' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  if (workbenchRun?.kind === 'busy') {
+    return new Response(JSON.stringify({ error: '当前会话已有优化任务正在执行', taskId: workbenchRun.taskId }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  if (planToConfirm) {
+    await (prismaRaw as any).skillOptPlan.update({
+      where: { id: planToConfirm },
+      data: { status: 'confirmed' },
+    });
+  }
 
+  let agentMessage: { id: string } | null = null;
+  let preStreamError: string | null = null;
   try {
     if (sessionExists && session) {
       const runMeta = {
@@ -211,6 +258,10 @@ export async function POST(req: NextRequest) {
       };
       await (prismaRaw as any).skillOptMessage.create({
         data: { sessionId: threadId, role: 'user', content: userMessageText, blocks: JSON.stringify([runMeta]) },
+      });
+      agentMessage = await (prismaRaw as any).skillOptMessage.create({
+        data: { sessionId: threadId, role: 'agent', content: '', blocks: JSON.stringify([runMeta]) },
+        select: { id: true },
       });
 
       // 优化请求已被接受 = 一次有效使用；流式 token 不重复计。
@@ -228,32 +279,68 @@ export async function POST(req: NextRequest) {
     }
   } catch (err: any) {
     console.warn('[skill-opt route] pre-stream persistence failed:', err?.message || err);
+    preStreamError = err?.message || String(err);
+  }
+  if (sessionExists && !agentMessage) {
+    if (workbenchRun) {
+      await finishWorkbenchOptimizationRun({
+        user,
+        workbenchSessionId: workbenchRun.workbenchSessionId,
+        taskId: workbenchRun.taskId,
+        sourceKind: optimizationSourceKind,
+        sourceRefs: optimizationSourceRefs,
+        recordId: workbenchRun.recordId,
+        error: preStreamError || '无法创建优化消息快照',
+      }).catch(() => undefined);
+    }
+    return new Response(JSON.stringify({ error: preStreamError || '无法创建优化消息快照' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   // ── mock 模式：固定脚本回放，不调 LLM。让前端在没有真实模型配置时也能联调 ──
   if (mock) {
     const readable = new ReadableStream({
       async start(controller) {
-        const { send, getBlocks } = createBlockMirror(controller, encoder);
+        const mirror = createBlockMirror(controller, encoder);
         let agentText = '';
-        let finalFiles: Record<string, any> = {};
+        let finalFiles: Record<string, any> = parseFilesSnapshot(session?.files);
         let chatError: string | null = null;
-        let candidateStageStarted = false;
+        const taskProgress = createOptimizationTaskProgress(workbenchRun?.taskId);
+        const checkpoint = agentMessage ? createStreamCheckpointWriter({
+          capture: () => ({
+            content: blockText(mirror.getBlocks()) || agentText || (chatError ? `[运行中断] ${chatError}` : ''),
+            blocks: JSON.stringify(mirror.getBlocks()),
+            files: JSON.stringify(finalFiles),
+          }),
+          persist: (snapshot) => (prismaRaw as any).$transaction([
+            (prismaRaw as any).skillOptMessage.update({
+              where: { id: agentMessage!.id },
+              data: { content: snapshot.content, blocks: snapshot.blocks },
+            }),
+            (prismaRaw as any).skillOptSession.update({
+              where: { id: threadId },
+              data: { files: snapshot.files },
+            }),
+          ]),
+          onError: (error) => console.warn('[skill-opt route] checkpoint failed:', error),
+        }) : null;
+        const send = (mode: string, payload: any) => {
+          if (mode === 'text' && typeof payload === 'string') agentText += payload;
+          if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
+          mirror.send(mode, payload);
+          checkpoint?.schedule();
+        };
         try {
           send('optimization_meta', { runId: normalizedRunId, taskId: workbenchRun?.taskId, recordId: workbenchRun?.recordId });
           if (planDisplay) send('optimization_plan', planDisplay);
-          // 包一层把 send 投递的 text 也累计到 agentText（fallback content 列）
           const trackedSend = (mode: string, payload: any) => {
-            if (mode === 'text' && typeof payload === 'string') agentText += payload;
-            if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
-            if (!candidateStageStarted && workbenchRun && (mode === 'tool_call' || mode === 'vfs_patch')) {
-              candidateStageStarted = true;
-              void updateWorkbenchOptimizationProgress({
-                taskId: workbenchRun.taskId,
-                stage: '生成候选版本',
-                activeStep: 2,
-                percent: 35,
-              }).catch(() => undefined);
+            if (mode === 'tool_call' || mode === 'vfs_patch') {
+              taskProgress.advance(2, '生成候选版本', 35);
+            }
+            if (mode === 'verify_progress' || mode === 'verify_ok') {
+              taskProgress.advance(3, '执行质量校验', 60);
             }
             send(mode, payload);
           };
@@ -264,25 +351,13 @@ export async function POST(req: NextRequest) {
           try { send('error', err?.message || String(err)); } catch { /* closed */ }
         }
 
-        // 落 agent message + blocks（mock 模式也存，方便前端调试历史）
-        if (sessionExists) {
-          try {
-            await (prismaRaw as any).skillOptMessage.create({
-              data: {
-                sessionId: threadId,
-                role: 'agent',
-                content: agentText,
-                blocks: JSON.stringify(getBlocks()),
-              },
-            });
-            await (prismaRaw as any).skillOptSession.update({
-              where: { id: threadId },
-              data: { files: JSON.stringify(finalFiles) },
-            });
-          } catch (err: any) {
-            console.warn('[skill-opt route] mock post-stream persistence failed:', err?.message || err);
-            chatError ||= err?.message || String(err);
-          }
+        await taskProgress.flush();
+
+        try {
+          await checkpoint?.flush();
+        } catch (err: any) {
+          console.warn('[skill-opt route] mock post-stream persistence failed:', err?.message || err);
+          chatError ||= err?.message || String(err);
         }
         if (workbenchRun) {
           await finishWorkbenchOptimizationRun({
@@ -304,25 +379,44 @@ export async function POST(req: NextRequest) {
   // ── 真实模式：跑 opencode + runGeneralAgent ──
   const readable = new ReadableStream({
     async start(controller) {
-      const { send, getBlocks } = createBlockMirror(controller, encoder);
+      const mirror = createBlockMirror(controller, encoder);
       let agentText = '';
-      let finalFiles: Record<string, any> = {};
+      let finalFiles: Record<string, any> = parseFilesSnapshot(session?.files);
       let chatError: string | null = null;
-      let candidateStageStarted = false;
+      const taskProgress = createOptimizationTaskProgress(workbenchRun?.taskId);
+      const checkpoint = agentMessage ? createStreamCheckpointWriter({
+        capture: () => ({
+          content: blockText(mirror.getBlocks()) || agentText || (chatError ? `[运行中断] ${chatError}` : ''),
+          blocks: JSON.stringify(mirror.getBlocks()),
+          files: JSON.stringify(finalFiles),
+        }),
+        persist: (snapshot) => (prismaRaw as any).$transaction([
+          (prismaRaw as any).skillOptMessage.update({
+            where: { id: agentMessage!.id },
+            data: { content: snapshot.content, blocks: snapshot.blocks },
+          }),
+          (prismaRaw as any).skillOptSession.update({
+            where: { id: threadId },
+            data: { files: snapshot.files },
+          }),
+        ]),
+        onError: (error) => console.warn('[skill-opt route] checkpoint failed:', error),
+      }) : null;
+      const send = (mode: string, payload: any) => {
+        if (mode === 'text' && typeof payload === 'string') agentText += payload;
+        if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
+        mirror.send(mode, payload);
+        checkpoint?.schedule();
+      };
       try {
         send('optimization_meta', { runId: normalizedRunId, taskId: workbenchRun?.taskId, recordId: workbenchRun?.recordId });
         if (planDisplay) send('optimization_plan', planDisplay);
         const trackedSend = (mode: string, payload: any) => {
-          if (mode === 'text' && typeof payload === 'string') agentText += payload;
-          if (mode === 'vfs_patch' && payload?.files) finalFiles = payload.files;
-          if (!candidateStageStarted && workbenchRun && (mode === 'tool_call' || mode === 'vfs_patch')) {
-            candidateStageStarted = true;
-            void updateWorkbenchOptimizationProgress({
-              taskId: workbenchRun.taskId,
-              stage: '生成候选版本',
-              activeStep: 2,
-              percent: 35,
-            }).catch(() => undefined);
+          if (mode === 'tool_call' || mode === 'vfs_patch') {
+            taskProgress.advance(2, '生成候选版本', 35);
+          }
+          if (mode === 'verify_progress' || mode === 'verify_ok') {
+            taskProgress.advance(3, '执行质量校验', 60);
           }
           send(mode, payload);
         };
@@ -345,25 +439,13 @@ export async function POST(req: NextRequest) {
         try { send('error', chatError); } catch { /* closed */ }
       }
 
-      // 落 agent message + blocks + 最终 files（skill-generator 同款，区别是表名 + 新增字段不存）
-      if (sessionExists) {
-        try {
-          await (prismaRaw as any).skillOptMessage.create({
-            data: {
-              sessionId: threadId,
-              role: 'agent',
-              content: agentText,
-              blocks: JSON.stringify(getBlocks()),
-            },
-          });
-          await (prismaRaw as any).skillOptSession.update({
-            where: { id: threadId },
-            data: { files: JSON.stringify(finalFiles) },
-          });
-        } catch (err: any) {
-          console.warn('[skill-opt route] post-stream persistence failed:', err?.message || err);
-          chatError ||= err?.message || String(err);
-        }
+      await taskProgress.flush();
+
+      try {
+        await checkpoint?.flush();
+      } catch (err: any) {
+        console.warn('[skill-opt route] post-stream persistence failed:', err?.message || err);
+        chatError ||= err?.message || String(err);
       }
       if (workbenchRun) {
         await finishWorkbenchOptimizationRun({
@@ -375,56 +457,84 @@ export async function POST(req: NextRequest) {
           recordId: workbenchRun.recordId,
           error: chatError,
           repair: chatError ? undefined : async (blockingIssues) => {
-            const repairMirror = createBlockMirror(controller, encoder);
-            repairMirror.send('optimization_meta', { runId: normalizedRunId, taskId: workbenchRun.taskId, recordId: workbenchRun.recordId });
-            repairMirror.send('text', `\n\n静态质量校验发现 ${blockingIssues.length} 个阻断问题，正在自动修复（1/1）…\n`);
-            const repairResult = await streamSkillOptOpencode({
-              user,
-              threadId,
-              skillName,
-              baseVersion,
-              checkedIssues: blockingIssues.map((issue) => ({
-                id: issue.id,
-                severity: issue.severity,
-                category: issue.dimension,
-                summary: issue.summary,
-                evidence: issue.evidence || issue.reasoning,
-                improvementSuggestion: issue.suggestedFix,
-              })),
-              userFeedback: '上一轮候选未通过静态质量门禁。请只修复下面的阻断问题，保留已经正确的修改；修复后会自动重新评估。',
-              modelId,
-              baselineFiles: baselineFilesNormalized,
-              send: repairMirror.send,
-            });
-            await prismaRaw.$transaction([
+            const repairMeta = {
+              kind: 'optimization_meta',
+              id: `optimization-${normalizedRunId}`,
+              runId: normalizedRunId,
+              taskId: workbenchRun.taskId,
+              recordId: workbenchRun.recordId,
+              automatic: true,
+            };
+            const [, repairAgentMessage] = await prismaRaw.$transaction([
               prismaRaw.skillOptMessage.create({
                 data: {
                   sessionId: threadId,
                   role: 'user',
                   content: `自动修复上一轮静态质量门禁的 ${blockingIssues.length} 个阻断问题：\n${blockingIssues.map((issue) => `- ${issue.summary}`).join('\n')}`,
-                  blocks: JSON.stringify([{
-                    kind: 'optimization_meta',
-                    id: `optimization-${normalizedRunId}`,
-                    runId: normalizedRunId,
-                    taskId: workbenchRun.taskId,
-                    recordId: workbenchRun.recordId,
-                    automatic: true,
-                  }]),
+                  blocks: JSON.stringify([repairMeta]),
                 },
               }),
               prismaRaw.skillOptMessage.create({
-                data: {
-                  sessionId: threadId,
-                  role: 'agent',
-                  content: repairResult.agentText,
-                  blocks: JSON.stringify(repairMirror.getBlocks()),
-                },
-              }),
-              prismaRaw.skillOptSession.update({
-                where: { id: threadId },
-                data: { files: JSON.stringify(repairResult.files) },
+                data: { sessionId: threadId, role: 'agent', content: '', blocks: JSON.stringify([repairMeta]) },
               }),
             ]);
+            const repairMirror = createBlockMirror(controller, encoder);
+            let repairText = '';
+            let repairFiles: Record<string, any> = { ...(baselineFilesNormalized || {}) };
+            let repairError: unknown = null;
+            const repairCheckpoint = createStreamCheckpointWriter({
+              capture: () => ({
+                content: blockText(repairMirror.getBlocks()) || repairText,
+                blocks: JSON.stringify(repairMirror.getBlocks()),
+                files: JSON.stringify(repairFiles),
+              }),
+              persist: (snapshot) => prismaRaw.$transaction([
+                prismaRaw.skillOptMessage.update({
+                  where: { id: repairAgentMessage.id },
+                  data: { content: snapshot.content, blocks: snapshot.blocks },
+                }),
+                prismaRaw.skillOptSession.update({
+                  where: { id: threadId },
+                  data: { files: snapshot.files },
+                }),
+              ]).then(() => undefined),
+              onError: (error) => console.warn('[skill-opt route] repair checkpoint failed:', error),
+            });
+            const repairSend = (mode: string, payload: any) => {
+              if (mode === 'text' && typeof payload === 'string') repairText += payload;
+              if (mode === 'vfs_patch' && payload?.files) repairFiles = payload.files;
+              repairMirror.send(mode, payload);
+              repairCheckpoint.schedule();
+            };
+            repairSend('optimization_meta', repairMeta);
+            repairSend('text', `\n\n静态质量校验发现 ${blockingIssues.length} 个阻断问题，正在自动修复（1/1）…\n`);
+            try {
+              const repairResult = await streamSkillOptOpencode({
+                user,
+                threadId,
+                skillName,
+                baseVersion,
+                checkedIssues: blockingIssues.map((issue) => ({
+                  id: issue.id,
+                  severity: issue.severity,
+                  category: issue.dimension,
+                  summary: issue.summary,
+                  evidence: issue.evidence || issue.reasoning,
+                  improvementSuggestion: issue.suggestedFix,
+                })),
+                userFeedback: '上一轮候选未通过静态质量门禁。请只修复下面的阻断问题，保留已经正确的修改；修复后会自动重新评估。',
+                modelId,
+                baselineFiles: baselineFilesNormalized,
+                send: repairSend,
+              });
+              repairText = repairResult.agentText;
+              repairFiles = repairResult.files;
+            } catch (error) {
+              repairError = error;
+              repairSend('error', error instanceof Error ? error.message : String(error));
+            }
+            await repairCheckpoint.flush();
+            if (repairError) throw repairError;
           },
         });
       }

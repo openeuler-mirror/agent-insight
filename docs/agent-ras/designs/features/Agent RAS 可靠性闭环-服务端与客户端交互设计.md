@@ -1132,6 +1132,13 @@ If-None-Match: "sha256:..."
       "name": "模型调用超时",
       "description": "验证模型超时时 RAS 的检测与降级能力",
       "supportedPlatforms": ["opencode"],
+      "submodes": [
+        {
+          "id": "default",
+          "name": "默认",
+          "description": "模型调用未在限定时间内完成，验证系统能否识别超时并采取处置。"
+        }
+      ],
       "parameters": [
         {
           "key": "delayMs",
@@ -1145,11 +1152,13 @@ If-None-Match: "sha256:..."
       ]
     }
   ],
-  "registryVersion": "fault-modes@1"
+  "registryVersion": "fault-modes@2"
 }
 ```
 
 不传 `platform` 返回全部内置模式；传入平台后只返回该平台可执行的模式。未知平台返回空数组，不把调用错误误报为平台没有故障模式。
+
+`description` 与 `submodes[].description` 使用逻辑性说明，只描述故障行为和评测目的，不展开具体触发短语、测试值或案例正文。该文案独立维护在服务端 Web 层的 `src/lib/reliability/fault-mode-copy.ts`，仅在 API 投影时使用，不修改 `SKILL.md`，也不参与 Skill 执行、内容哈希、版本与同步。未配置展示文案时回退 FI 目录原值。`parameters[]` 暂时保留为子模式 ID/名称的兼容投影；新展示逻辑读取 `submodes[]`。
 
 ### 10.14 IF-M01：可靠性数据集
 
@@ -1159,6 +1168,7 @@ If-None-Match: "sha256:..."
 - 系统字段固定包含 `input` 和 `fault_injection_type`；两者必填。
 - 其余字段仍使用现有动态 `fields/values` 机制。
 - 可靠性 Case 的 `fault_injection_type` 必须来自服务端支持的故障模式注册表。
+- 内置可靠性数据集由故障目录自动同步，对用户只读；公开 PATCH 拒绝修改其定义、字段和 Case，页面禁用对应编辑操作。
 
 创建请求示例：
 
@@ -1641,6 +1651,13 @@ anomaly=all|normal|abnormal|detecting|unknown
   "name": "模型调用超时",
   "description": "验证模型超时时 RAS 的检测与降级能力",
   "supportedPlatforms": ["opencode"],
+  "submodes": [
+    {
+      "id": "default",
+      "name": "默认",
+      "description": "模型调用未在限定时间内完成，验证系统能否识别超时并采取处置。"
+    }
+  ],
   "parameters": [
     { "key": "delayMs", "type": "integer", "required": true, "min": 1, "max": 300000 }
   ],

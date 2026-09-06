@@ -2,7 +2,6 @@
 
 // 证据渲染小组件：默认折叠单行预览，点击展开后按内容格式自动渲染
 // （{md} → 轻量 Markdown：**粗体** / `code` / - 列表；{json} → 缩进代码块）。
-// 界面不展示格式徽章——格式由字段自识别（与 eval-output.ts 的 Evidence 契约一致）。
 import { useState, type ReactNode } from 'react';
 
 interface EvidenceLike {
@@ -257,10 +256,29 @@ function preview(ev: EvidenceLike, evaluatorId?: string): string {
   try { return JSON.stringify(j); } catch { return String(j); }
 }
 
-export function EvidenceBlock({ evidence, evaluatorId }: { evidence: unknown; evaluatorId?: string }) {
+export function EvidenceBlock({
+  evidence,
+  evaluatorId,
+  supplementalMarkdown,
+}: {
+  evidence: unknown;
+  evaluatorId?: string;
+  supplementalMarkdown?: string;
+}) {
   const [open, setOpen] = useState(false);
   const ev = coerce(evidence);
   if (!ev) return null;
+  const suggestion = supplementalMarkdown?.trim() || '';
+  const md = ev.md
+    ? [
+        `**证据**\n${ev.md}`,
+        suggestion ? `**Skill 改进建议**\n${suggestion}` : '',
+      ].filter(Boolean).join('\n\n')
+    : undefined;
+  const previewText = [
+    `证据：${preview(ev, evaluatorId)}`,
+    suggestion ? `Skill 改进建议：${suggestion.replace(/[*`#]/g, '').replace(/\s+/g, ' ').trim()}` : '',
+  ].filter(Boolean).join('；');
   return (
     <div
       style={{
@@ -290,23 +308,33 @@ export function EvidenceBlock({ evidence, evaluatorId }: { evidence: unknown; ev
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}
         >
-          {preview(ev, evaluatorId)}
+          {previewText}
         </span>
       </div>
       {open && (
         <div style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden', padding: '7px 10px 9px', borderTop: '1px solid var(--border)', background: 'var(--card-bg)' }}>
-          {ev.md ? renderMd(ev.md) : evaluatorId && SPECIALIZED_EVALUATOR_IDS.has(evaluatorId) ? (
-            renderMd(specializedEvidenceMarkdown(ev.json))
-          ) : (
-            <pre
-              style={{
-                margin: 0, fontFamily: 'var(--font-mono, monospace)', fontSize: 11,
-                lineHeight: 1.55, color: 'var(--foreground-secondary)',
-                maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-              }}
-            >
-              {JSON.stringify(ev.json, null, 2)}
-            </pre>
+          {md ? renderMd(md) : (
+            <>
+              {renderMd('**证据**')}
+              {evaluatorId && SPECIALIZED_EVALUATOR_IDS.has(evaluatorId) ? (
+                renderMd(specializedEvidenceMarkdown(ev.json))
+              ) : (
+                <pre
+                  style={{
+                    margin: 0, fontFamily: 'var(--font-mono, monospace)', fontSize: 11,
+                    lineHeight: 1.55, color: 'var(--foreground-secondary)',
+                    maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                  }}
+                >
+                  {JSON.stringify(ev.json, null, 2)}
+                </pre>
+              )}
+            </>
+          )}
+          {!ev.md && suggestion && (
+            <div style={{ marginTop: 9, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+              {renderMd(`**Skill 改进建议**\n${suggestion}`)}
+            </div>
           )}
         </div>
       )}

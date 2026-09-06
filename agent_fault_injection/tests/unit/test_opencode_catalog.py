@@ -11,7 +11,9 @@ from agent_fault_injection.platform_adapters.opencode.catalog import (
     list_opencode_agents,
     list_opencode_models,
     load_oh_my_agent_keys,
+    merge_agent_snapshots,
     models_from_config_providers,
+    parse_opencode_agent_api_payload,
     parse_opencode_agent_list_output,
     parse_opencode_models_output,
     select_usable_agents,
@@ -54,6 +56,14 @@ deepseek/deepseek-reasoner
 minimax/MiniMax-M2
 """
 
+_AGENT_API = [
+    {"name": "build", "mode": "primary", "hidden": False},
+    {"name": "aet-design", "mode": "primary", "hidden": False},
+    {"name": "aet-implement", "mode": "primary", "hidden": False},
+    {"name": "compaction", "mode": "primary", "hidden": True},
+    {"name": "ras-judge", "mode": "subagent", "hidden": True},
+]
+
 
 class OpenCodeCatalogParseTests(TestCase):
     def test_parse_agents_excludes_system_agents(self) -> None:
@@ -71,6 +81,42 @@ class OpenCodeCatalogParseTests(TestCase):
         self.assertNotIn("ras-judge", ids)
         build = next(item for item in agents if item["id"] == "build")
         self.assertEqual(build["mode"], "subagent")
+
+    def test_parse_agent_api_includes_dynamic_and_excludes_hidden_agents(self) -> None:
+        agents = parse_opencode_agent_api_payload(_AGENT_API)
+        self.assertEqual(
+            [item["id"] for item in agents],
+            ["build", "aet-design", "aet-implement"],
+        )
+
+    def test_merge_agent_snapshots_keeps_late_plugin_agents(self) -> None:
+        merged = merge_agent_snapshots(
+            [{"id": "build", "name": "build", "mode": "primary"}],
+            [
+                {"id": "build", "name": "build", "mode": "primary"},
+                {
+                    "id": "Fuxi (Diagnostic Planner)",
+                    "name": "Fuxi (Diagnostic Planner)",
+                    "mode": "primary",
+                },
+            ],
+        )
+        self.assertEqual(
+            [item["id"] for item in merged],
+            ["build", "Fuxi (Diagnostic Planner)"],
+        )
+
+    def test_list_agents_prefers_resolved_agent_api(self) -> None:
+        result = list_opencode_agents(
+            agent_api_payload=_AGENT_API,
+            cli_output=_AGENT_CLI,
+        )
+        self.assertEqual(result["default"], "build")
+        self.assertEqual(
+            [item["id"] for item in result["agents"]],
+            ["build", "aet-design", "aet-implement"],
+        )
+        self.assertIn("/agent", result["note"])
 
     def test_choose_default_prefers_build(self) -> None:
         agents = parse_opencode_agent_list_output(_AGENT_CLI)

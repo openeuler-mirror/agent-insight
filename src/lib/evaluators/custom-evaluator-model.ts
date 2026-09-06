@@ -18,10 +18,21 @@ export function isValidCustomEvaluatorName(name: string): boolean {
 
 export const CUSTOM_EVALUATOR_ALLOWED_VARIABLES = [
   'input',
+  'dataset_input',
   'output',
   'reference_output',
   'trajectory',
 ] as const;
+
+export type CustomEvaluatorVariable = (typeof CUSTOM_EVALUATOR_ALLOWED_VARIABLES)[number];
+
+export function customEvaluatorUsesVariable(
+  card: Pick<EvaluatorCard, 'llmConfig'>,
+  variable: CustomEvaluatorVariable,
+): boolean {
+  const text = `${card.llmConfig?.systemPrompt ?? ''}\n${card.llmConfig?.userPrompt ?? ''}`;
+  return new RegExp(`\\{\\{\\s*${variable}\\s*\\}\\}`).test(text);
+}
 
 export function findUnsupportedCustomEvaluatorVariables(prompt: string): string[] {
   const found = new Set<string>();
@@ -29,7 +40,7 @@ export function findUnsupportedCustomEvaluatorVariables(prompt: string): string[
   let match: RegExpExecArray | null;
   while ((match = re.exec(prompt)) !== null) {
     const key = match[1];
-    if (!CUSTOM_EVALUATOR_ALLOWED_VARIABLES.includes(key as typeof CUSTOM_EVALUATOR_ALLOWED_VARIABLES[number])) {
+    if (!CUSTOM_EVALUATOR_ALLOWED_VARIABLES.includes(key as CustomEvaluatorVariable)) {
       found.add(key);
     }
   }
@@ -38,7 +49,8 @@ export function findUnsupportedCustomEvaluatorVariables(prompt: string): string[
 
 export interface CodeEvaluatorConfig {
   language: 'python' | 'javascript';
-  scoreMode: '0-1' | 'pass-fail';
+  /** `0-1` 仅用于读取历史配置，保存时统一迁移为 `0-100`。 */
+  scoreMode: '0-100' | '0-1' | 'pass-fail';
   sourceCode: string;
 }
 

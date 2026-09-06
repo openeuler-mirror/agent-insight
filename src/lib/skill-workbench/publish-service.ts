@@ -5,6 +5,7 @@ import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { computeSkillSnapshotHash, isBlockingStaticQualityIssue } from './domain';
+import { resolveSkillVersionFiles } from './session-service';
 
 export class WorkbenchPublishError extends Error {
   constructor(message: string, readonly status: number) {
@@ -52,13 +53,13 @@ export async function publishWorkbenchSnapshot(input: {
   const files = parseFiles(session.filesJson);
   const skillContent = files['SKILL.md'];
   if (!skillContent) throw new WorkbenchPublishError('工作快照缺少 SKILL.md', 422);
+  const contentHash = computeSkillSnapshotHash(files);
   const declaredName = frontmatterValue(skillContent, 'name');
   if (!usesLegacyGenerationGate && declaredName && declaredName !== session.skillName) {
     throw new WorkbenchPublishError(`SKILL.md name 已变为 ${declaredName}，请重新同步工作上下文`, 409);
   }
 
   if (!usesLegacyGenerationGate) {
-    const contentHash = computeSkillSnapshotHash(files);
     const quality = await prismaRaw.skillSnapshotEvaluation.findFirst({
       where: {
         sessionId: session.id,
@@ -108,13 +109,17 @@ export async function publishWorkbenchSnapshot(input: {
 
   let skill = await prismaRaw.skill.findFirst({ where: { name: session.skillName, user: input.user } });
   const latest = skill ? await prismaRaw.skillVersion.findFirst({
-    where: { skillId: skill.id }, orderBy: { version: 'desc' }, select: { version: true, content: true },
+    where: { skillId: skill.id }, orderBy: { version: 'desc' }, select: { version: true, content: true, files: true },
   }) : null;
   const expectedVersion = (latest?.version ?? -1) + 1;
   if (!usesLegacyGenerationGate && expectedVersion !== session.workVersion) {
     throw new WorkbenchPublishError(`版本已变化：候选为 v${session.workVersion}，当前应发布 v${expectedVersion}`, 409);
   }
-  if (latest?.content === skillContent) throw new WorkbenchPublishError('候选与最新正式版本内容相同', 409);
+  if (skill && latest && computeSkillSnapshotHash(
+    resolveSkillVersionFiles(skill.id, latest.version, latest.files, latest.content),
+  ) === contentHash) {
+    throw new WorkbenchPublishError('候选与最新正式版本内容相同', 409);
+  }
 
   if (!skill) {
     skill = await prismaRaw.skill.create({
@@ -193,7 +198,7 @@ export async function publishOptimizationCandidate(input: {
   });
   if (!skill) throw new WorkbenchPublishError('只读 Skill 不能发布优化版本', 403);
   const latest = await prismaRaw.skillVersion.findFirst({
-    where: { skillId: skill.id }, orderBy: { version: 'desc' }, select: { version: true, content: true },
+    where: { skillId: skill.id }, orderBy: { version: 'desc' }, select: { version: true, content: true, files: true },
   });
   if (!latest || latest.version !== record.baseVersion) {
     throw new WorkbenchPublishError(`正式版本已变化：候选基于 v${record.baseVersion}`, 409);
@@ -206,7 +211,11 @@ export async function publishOptimizationCandidate(input: {
   if (!record.candidateContentHash || contentHash !== record.candidateContentHash) {
     throw new WorkbenchPublishError('优化候选内容与质量评测快照不一致', 409);
   }
-  if (latest.content === skillContent) throw new WorkbenchPublishError('候选与最新正式版本内容相同', 409);
+  if (computeSkillSnapshotHash(
+    resolveSkillVersionFiles(skill.id, latest.version, latest.files, latest.content),
+  ) === contentHash) {
+    throw new WorkbenchPublishError('候选与最新正式版本内容相同', 409);
+  }
   if (!record.staticEvaluationId) throw new WorkbenchPublishError('候选缺少静态质量评估', 409);
   const quality = await prismaRaw.skillSnapshotEvaluation.findFirst({
     where: {

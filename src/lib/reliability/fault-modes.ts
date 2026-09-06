@@ -1,4 +1,5 @@
 import { listFaultsViaPython } from '@/lib/fault-injection/engine'
+import { faultModeSummary, faultSubmodeDescription } from '@/lib/reliability/fault-mode-copy'
 
 export type FaultModeParameter = {
   key: string
@@ -10,19 +11,26 @@ export type FaultModeParameter = {
   unit?: string
 }
 
+export type FaultModeSubmode = {
+  id: string
+  name: string
+  description: string
+}
+
 export type FaultModeItem = {
   id: string
   name: string
   description: string
   supportedPlatforms: string[]
   parameters: FaultModeParameter[]
+  submodes: FaultModeSubmode[]
   /** Catalog injection_method key (skill_inject / tool_result_tamper / …). */
   injectionMethod?: string
   /** Chinese/EN label from capability_api.yaml via listFaultsViaPython. */
   injectionMethodLabel?: string
 }
 
-export const FAULT_MODES_REGISTRY_VERSION = 'fault-modes@1'
+export const FAULT_MODES_REGISTRY_VERSION = 'fault-modes@2'
 
 type CatalogRow = {
   id?: string
@@ -44,18 +52,27 @@ function mapCatalogRow(row: CatalogRow): FaultModeItem {
   const platforms = Array.isArray(row.platforms)
     ? row.platforms.map((p) => String(p || '').trim()).filter(Boolean)
     : []
-  const parameters: FaultModeParameter[] = Array.isArray(row.submodes)
+  const submodes: FaultModeSubmode[] = Array.isArray(row.submodes)
     ? row.submodes.flatMap((sub) => {
         const key = String(sub?.id || '').trim()
         if (!key) return []
         return [{
-          key,
-          label: String(sub?.name || key).trim() || key,
-          type: 'string' as const,
-          required: false,
+          id: key,
+          name: String(sub?.name || key).trim() || key,
+          description: faultSubmodeDescription(
+            id,
+            key,
+            String(sub?.description || '').trim(),
+          ),
         }]
       })
     : []
+  const parameters: FaultModeParameter[] = submodes.map((submode) => ({
+    key: submode.id,
+    label: submode.name,
+    type: 'string' as const,
+    required: false,
+  }))
 
   const injectionMethod = String(row.injectionMethod || row.injection_method || '').trim() || undefined
   const injectionMethodLabel =
@@ -64,9 +81,10 @@ function mapCatalogRow(row: CatalogRow): FaultModeItem {
   return {
     id,
     name,
-    description: String(row.description || '').trim(),
+    description: faultModeSummary(id, String(row.description || '').trim()),
     supportedPlatforms: platforms,
     parameters,
+    submodes,
     injectionMethod,
     injectionMethodLabel,
   }

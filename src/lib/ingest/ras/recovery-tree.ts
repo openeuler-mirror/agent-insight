@@ -4,6 +4,7 @@ import type {
   RawInteraction,
 } from "@/lib/engine/observability/agent-trace"
 import type { RasTraceMarker } from "@/lib/ingest/ras/trace-markers"
+import { rasSummaryLabel } from "@/lib/ingest/ras/normalize"
 
 function asString(value: unknown): string | undefined {
   if (value == null) return undefined
@@ -170,9 +171,10 @@ function markerAnchorIndex(events: AgentEvent[], marker: RasTraceMarker): number
   return -1
 }
 
-function recoverySummary(marker: RasTraceMarker): string {
+function recoverySummary(marker: RasTraceMarker, locale: "zh" | "en"): string {
   const parts: string[] = []
-  if (marker.summary) parts.push(marker.summary)
+  const summary = rasSummaryLabel(marker, locale)
+  if (summary) parts.push(summary)
   for (const result of marker.actionResults || []) {
     if (result.message) parts.push(result.message)
   }
@@ -182,18 +184,22 @@ function recoverySummary(marker: RasTraceMarker): string {
   return parts.join("\n\n") || marker.label
 }
 
-export function buildRasRecoveryEvent(marker: RasTraceMarker): AgentEvent {
+export function buildRasRecoveryEvent(
+  marker: RasTraceMarker,
+  locale: "zh" | "en" = "zh",
+): AgentEvent {
   const startedAt = marker.ts
+  const summary = recoverySummary(marker, locale)
   return {
     kind: "ras",
     name: marker.label,
-    summary: recoverySummary(marker),
+    summary,
     args: { rasMarkerId: marker.id, kind: marker.kind, severity: marker.severity },
     startedAt,
     completedAt: startedAt,
     interaction: {
       role: "ras",
-      content: recoverySummary(marker),
+      content: summary,
       timestamp: new Date(startedAt).toISOString(),
       messageID: `ras:${marker.id}`,
     },
@@ -235,9 +241,10 @@ function injectMarkersOnce(
   markers: RasTraceMarker[],
   remaining: Set<string>,
   isRoot: boolean,
+  locale: "zh" | "en",
 ): AgentNode {
   const children = node.children.map((child) =>
-    injectMarkersOnce(child, markers, remaining, false),
+    injectMarkersOnce(child, markers, remaining, false, locale),
   )
 
   let events = [...node.events]
@@ -245,7 +252,7 @@ function injectMarkersOnce(
     if (!remaining.has(marker.id)) continue
     const anchor = markerAnchorIndex(events, marker)
     if (anchor < 0 && !isRoot) continue
-    const recovery = buildRasRecoveryEvent(marker)
+    const recovery = buildRasRecoveryEvent(marker, locale)
     events = insertAfterAnchor(events, marker, recovery)
     remaining.delete(marker.id)
   }
@@ -260,15 +267,17 @@ function injectMarkersOnce(
 export function injectRasRecoveryEvents(
   node: AgentNode,
   markers: RasTraceMarker[],
+  locale: "zh" | "en" = "zh",
 ): AgentNode {
   if (!markers.length) return node
   const remaining = new Set(markers.map((marker) => marker.id))
-  return injectMarkersOnce(node, markers, remaining, true)
+  return injectMarkersOnce(node, markers, remaining, true, locale)
 }
 
 export function applyRasRecoveryTree(
   tree: AgentNode,
   markers: RasTraceMarker[],
+  locale: "zh" | "en" = "zh",
 ): AgentNode {
   if (!markers.length) return tree
   const deliveryIds = new Set(
@@ -276,5 +285,5 @@ export function applyRasRecoveryTree(
   )
   const deliveryTexts = collectDeliveryStripTexts(markers)
   const stripped = stripDeliveryEventsFromTree(tree, deliveryIds, deliveryTexts)
-  return injectRasRecoveryEvents(stripped, markers)
+  return injectRasRecoveryEvents(stripped, markers, locale)
 }

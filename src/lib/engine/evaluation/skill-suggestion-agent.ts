@@ -270,6 +270,10 @@ export interface RunSkillSuggestionAgentArgs {
   interactions: unknown[];
   /** 计分流算出的关键动作覆盖结果，作线索喂入。 */
   keyActionResults?: KeyActionTraceAnalysisResult[] | null;
+  /** 单次建议生成的流式响应超时；调用方不传时保持原 5 分钟。 */
+  attemptTimeoutMs?: number;
+  /** 最大尝试次数（含首次）；调用方不传时保持原 3 次。 */
+  maxAttempts?: number;
 }
 
 async function runSuggestionViaOpencode(args: {
@@ -277,6 +281,7 @@ async function runSuggestionViaOpencode(args: {
   query: string;
   workspaceDir: string;
   executionId: string;
+  attemptTimeoutMs: number;
 }): Promise<string> {
   const model = await loadServerModelForUser(args.user);
   if (!model) {
@@ -342,15 +347,26 @@ async function runSuggestionViaOpencode(args: {
       };
 
       let agentText = '';
+      let attemptTimedOut = false;
+      const attemptAbort = new AbortController();
+      const attemptTimer = setTimeout(() => {
+        attemptTimedOut = true;
+        attemptAbort.abort();
+      }, args.attemptTimeoutMs);
       try {
         const result = await insight.chat(sessionId, payload, handlers, {
-          streamTimeoutMs: 5 * 60 * 1000,
+          streamTimeoutMs: args.attemptTimeoutMs,
           idleTimeoutMs: 60_000,
+          signal: attemptAbort.signal,
         });
         agentText = result.transcriptText || result.text || fullText;
+        if (attemptTimedOut) {
+          throw new Error(`Skill suggestion attempt timeout（${args.attemptTimeoutMs}ms）`);
+        }
         if (runtimeError) throw runtimeError;
         return agentText;
       } finally {
+        clearTimeout(attemptTimer);
         try {
           await recordEvaluatorExecution(insight, {
             taskId: sessionId,
@@ -410,8 +426,13 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
     '只输出 {"suggestions":[...]} 形式的 JSON，5 字段：category/severity/summary/evidence/improvementSuggestion；evidence 用「trace 中……」自然语言、无节点编号；没有可改进点输出 {"suggestions":[]}。',
   ].join('\n');
 
-  const MAX_ATTEMPTS = 3;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  const attemptTimeoutMs = Number.isFinite(args.attemptTimeoutMs) && Number(args.attemptTimeoutMs) > 0
+    ? Number(args.attemptTimeoutMs)
+    : 5 * 60 * 1000;
+  const maxAttempts = Number.isInteger(args.maxAttempts) && Number(args.maxAttempts) > 0
+    ? Number(args.maxAttempts)
+    : 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const agentText = await withBackgroundOpencodeSlot(
         () => runSuggestionViaOpencode({
@@ -419,6 +440,7 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
           query,
           workspaceDir,
           executionId,
+          attemptTimeoutMs,
         }),
         {
           taskType: 'skill-suggestion',
@@ -439,8 +461,8 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
     } catch (e) {
       const msg = (e as Error).message || String(e);
       const transient = /fetch failed|ECONN|ETIMEDOUT|EAI_AGAIN|network|timeout|socket hang|aborted/i.test(msg);
-      console.warn(`[skill-suggestion-agent] attempt ${attempt}/${MAX_ATTEMPTS} failed for ${executionId}: ${msg}`);
-      if (!transient || attempt === MAX_ATTEMPTS) break;
+      console.warn(`[skill-suggestion-agent] attempt ${attempt}/${maxAttempts} failed for ${executionId}: ${msg}`);
+      if (!transient || attempt === maxAttempts) break;
       await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
     }
   }

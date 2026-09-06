@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
+import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 import {
   defaultTraceBackflowSourceForField,
   nextDatasetFieldKey,
@@ -41,6 +42,7 @@ interface DatasetFieldOption {
 interface DatasetOption {
   id: string;
   name: string;
+  tags?: string[];
   fields: DatasetFieldOption[];
   createdAt?: string;
   updatedAt?: string;
@@ -208,13 +210,18 @@ export function TraceBackflowDialog(props: {
           }),
         ]);
         if (cancelled) return;
-        const options = sortTraceBackflowDatasetsByRecency(datasetList.map((item: DatasetOption) => ({
-          id: item.id,
-          name: item.name,
-          fields: Array.isArray(item.fields) ? item.fields : [],
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-        })));
+        const options = sortTraceBackflowDatasetsByRecency(
+          datasetList
+            .map((item: DatasetOption) => ({
+              id: item.id,
+              name: item.name,
+              tags: Array.isArray(item.tags) ? item.tags : [],
+              fields: Array.isArray(item.fields) ? item.fields : [],
+              createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
+            }))
+            .filter(item => !isBuiltinReliabilityDataset(item)),
+        );
         const successful = prepared
           .filter((result): result is PromiseFulfilledResult<PreparedDraft> => result.status === 'fulfilled')
           .map(result => result.value);

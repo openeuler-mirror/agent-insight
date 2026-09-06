@@ -329,6 +329,10 @@ export default function AgentDatasetCenter() {
 
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
     if (!user) return;
+    if (isBuiltinReliabilityDataset(dataset)) {
+      setTableActionError('内置可靠性评测集由系统维护，不可编辑');
+      return;
+    }
     setError('');
     const res = await apiFetch(`/api/agent-datasets/${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`);
     const detail = await res.json();
@@ -836,7 +840,8 @@ export default function AgentDatasetCenter() {
                       stopActionPropagation(event);
                       openEditorForDataset(item);
                     }}
-                    title="编辑数据集信息"
+                    disabled={isBuiltinReliabilityDataset(item)}
+                    title={isBuiltinReliabilityDataset(item) ? '内置可靠性评测集不可编辑' : '编辑数据集信息'}
                   >
                     <Pencil size={14} aria-hidden />
                     编辑信息
@@ -864,7 +869,7 @@ export default function AgentDatasetCenter() {
                     onClick={event => {
                       stopActionPropagation(event);
                       if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability') {
-                        // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入参考答案）
+                        // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入预期输出）
                         router.push('/experiments/new');
                       } else {
                         // 非轨迹评测集暂时仍引导到评估器目录页选评估器
@@ -1071,7 +1076,7 @@ export default function AgentDatasetCenter() {
                 默认数据项
               </div>
               <div className="ai-section-hint" style={{ marginBottom: 10 }}>
-                配置列说明：理想输出默认 input、reference_output；轨迹额外 trajectory；可靠性额外必填 fault_injection_type。
+                配置列说明：理想输出默认 input、reference_output（预期输出）；轨迹额外 trajectory；可靠性额外必填 fault_injection_type。
               </div>
               <DefaultFieldsTable fields={defaultFieldsForKind(draft.datasetKind)} />
             </div>

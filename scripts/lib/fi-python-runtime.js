@@ -13,20 +13,35 @@ function runtimePythonPath(venvRoot, platform = process.platform) {
     : path.join(venvRoot, 'bin', 'python')
 }
 
-function pythonCandidates(env = process.env) {
+function pythonCandidates(env = process.env, platform = process.platform) {
+  const names = platform === 'win32'
+    ? ['python3.14.exe', 'python3.13.exe', 'python3.12.exe', 'python3.11.exe', 'python3.exe', 'python.exe']
+    : ['python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3', 'python']
+  const pathCandidates = String(env.PATH || '')
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .flatMap((entry) => names.map((name) => path.join(entry, name)))
+
   return [
     env.AGENT_FI_BOOTSTRAP_PYTHON,
     env.AGENT_FI_PYTHON,
     env.PYTHON,
-    'python3',
+    ...pathCandidates,
+    ...names,
   ]
     .map((value) => String(value || '').trim())
     .filter((value, index, values) => value && values.indexOf(value) === index)
 }
 
-function probePython(command, runner = spawnSync) {
+function probePython(command, runner = spawnSync, requiredImports = []) {
+  const imports = requiredImports
+    .map((value) => String(value || '').trim())
+    .filter((value) => /^[A-Za-z_][A-Za-z0-9_.]*$/.test(value))
+    .map((value) => `import ${value}`)
   const code = [
     'import json,sys,venv',
+    ...imports,
     "print(json.dumps({'executable':sys.executable,'version':list(sys.version_info[:3])}))",
   ].join(';')
   const result = runner(command, ['-c', code], {
@@ -49,9 +64,13 @@ function probePython(command, runner = spawnSync) {
   }
 }
 
-function resolveBootstrapPython({ env = process.env, runner = spawnSync } = {}) {
+function resolveBootstrapPython({
+  env = process.env,
+  runner = spawnSync,
+  requiredImports = [],
+} = {}) {
   for (const candidate of pythonCandidates(env)) {
-    const probed = probePython(candidate, runner)
+    const probed = probePython(candidate, runner, requiredImports)
     if (probed) return probed
   }
   return null
@@ -245,6 +264,7 @@ module.exports = {
   ensureManagedFiRuntime,
   hashPackageTree,
   probePython,
+  pythonCandidates,
   readCurrentRuntime,
   resolveBootstrapPython,
   runtimeIdFor,

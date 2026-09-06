@@ -57,6 +57,13 @@ const OBSERVE_ITEM: SidebarNavItem = {
             icon: 'trace',
             matchPrefixes: ['/trace', '/details'],
         },
+        {
+            key: 'version-analysis',
+            href: '/version-analysis',
+            labelKey: 'nav.versionAnalysis',
+            icon: 'metrics',
+            matchPrefixes: ['/version-analysis', '/version-management'],
+        },
         { key: 'infra', href: '/infra', labelKey: 'nav.infra', icon: 'infra' },
     ],
 };

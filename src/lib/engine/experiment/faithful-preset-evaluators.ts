@@ -15,9 +15,17 @@
 // 与 judge-llm.ts 同策略：惰性 import()，运行时才加载——测试注入/纯函数校验时零加载。
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
 import type { EvaluatorCaseContext } from '../../evaluators/evaluator-case-context';
+import type { SkillSuggestion } from '../evaluation/skill-suggestion-agent';
 
 export const FAITHFUL_PRESET_IDS = ['preset-agent-task-completion', 'preset-agent-trace-quality'] as const;
 export type FaithfulPresetId = (typeof FAITHFUL_PRESET_IDS)[number];
+
+export const EXPERIMENT_TRAJECTORY_TIMEOUTS = {
+  scoreMs: 5 * 60_000,
+  suggestionAttemptMs: 7 * 60_000,
+  suggestionMaxAttempts: 2,
+  resultRowMs: 20 * 60_000,
+} as const;
 
 export function isFaithfulPresetId(id: string): id is FaithfulPresetId {
   return (FAITHFUL_PRESET_IDS as readonly string[]).includes(id);
@@ -72,6 +80,16 @@ export async function runFaithfulPreset(
 const to100 = (v: number | null | undefined): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v * 1000) / 10)) : undefined;
 
+function withStageTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label}超时（${timeoutMs}ms）`)), timeoutMs);
+    }),
+  ]).finally(() => { if (timer) clearTimeout(timer); }) as Promise<T>;
+}
+
 /** coverage_status（含 wrong）→ 契约 status；covered/partial/missing/wrong，其它→不设 */
 function coverageToStatus(cov: unknown): EvalPointStatus | undefined {
   if (typeof cov !== 'string') return undefined;
@@ -91,6 +109,29 @@ function stepsToAnchors(steps: unknown): string[] | undefined {
     if (typeof idx === 'number') out.push(`step-${idx}`);
   }
   return out.length ? out : undefined;
+}
+
+export function attachTrajectorySkillSuggestions(
+  points: EvalPoint[],
+  suggestions: readonly SkillSuggestion[],
+): EvalPoint[] {
+  const suggestion = suggestions
+    .map((item) => {
+      const summary = item.summary.trim();
+      const fix = item.improvementSuggestion.trim();
+      return summary && fix ? `- **${summary}**：${fix}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+  if (!suggestion) return points;
+
+  return points.map((point) => point.label === '完整性'
+    ? {
+        ...point,
+        skillAttributable: true,
+        suggestion: [point.suggestion?.trim(), suggestion].filter(Boolean).join('\n'),
+      }
+    : point);
 }
 
 // ── 任务完成度（结果评测）─────────────────────────────────────────────────────
@@ -173,11 +214,12 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
 
   // skill 归因：trace 用了 skill 且能取到关键动作参考 → skill_key_actions 模式（含 skill 改进建议），
   // 否则 trace_only。与评测执行 run route 一致，跟单组/对比无关。
-  const { buildSkillKeyActionReference } = await import('../evaluation/key-action-trace-analysis');
+  const { buildSkillKeyActionReference, getPrimaryExecutionSkillTargets } = await import('../evaluation/key-action-trace-analysis');
   const keyActionRef = await buildSkillKeyActionReference(ctx.execution ?? null, ctx.user ?? user, ctx.interactions);
   const hasKeyActions = keyActionRef.status === 'ok' && extractedSteps.length > 0;
+  const skillTarget = getPrimaryExecutionSkillTargets(ctx.execution ?? null, ctx.interactions)[0];
 
-  const out = await evaluateTrajectoryViaOpencode(
+  const out = await withStageTimeout(evaluateTrajectoryViaOpencode(
     {
       caseId: ctx.executionId ?? ctx.taskId ?? 'exp-case',
       caseInput: ctx.caseInput,
@@ -193,10 +235,37 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
       executionId: ctx.executionId ?? undefined,
     },
     user,
-  );
+  ), EXPERIMENT_TRAJECTORY_TIMEOUTS.scoreMs, '轨迹质量评分');
 
   const dims = out.dimensionScores ?? { completeness: null, toolChoice: 0, redundancy: 0 };
   const deviations = Array.isArray(out.deviationSteps) ? out.deviationSteps : [];
+  let skillSuggestions: SkillSuggestion[] = [];
+  const suggestionExecutionId = ctx.executionId || ctx.execution?.id || ctx.taskId;
+  if (skillTarget && suggestionExecutionId) {
+    try {
+      const { runSkillSuggestionAgent, shouldRunSuggestionAgent } = await import('../evaluation/skill-suggestion-agent');
+      if (shouldRunSuggestionAgent({
+        keyActionResults: out.keyActionResults,
+        completeness: out.dimensionScores?.completeness,
+      })) {
+        skillSuggestions = await runSkillSuggestionAgent({
+          user,
+          skillName: skillTarget.skill,
+          skillVersion: skillTarget.version,
+          executionId: suggestionExecutionId,
+          interactions: ctx.interactions,
+          keyActionResults: out.keyActionResults,
+          attemptTimeoutMs: EXPERIMENT_TRAJECTORY_TIMEOUTS.suggestionAttemptMs,
+          maxAttempts: EXPERIMENT_TRAJECTORY_TIMEOUTS.suggestionMaxAttempts,
+        });
+      }
+    } catch (error) {
+      console.warn(
+        '[experiment-trajectory-eval] skill suggestion agent failed (non-fatal):',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
 
   // 每维度说明文本：评估器 dimension_details[factor].explanation（无 deviation 明细时作为证据兜底，
   // 确保完整性/工具选择/冗余度三张评分点都带判断依据，而非空证据列）
@@ -229,7 +298,7 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
 
   // 固定三维度作为评分点，deviation 按 factor 归到对应维度，填 evidence/suggestion/anchors；
   // 完整性把关键动作覆盖明细拼进证据 md。
-  const points: EvalPoint[] = DIM_LABELS.map(({ key, label, factor }) => {
+  const points = attachTrajectorySkillSuggestions(DIM_LABELS.map(({ key, label, factor }) => {
     const dimDevs = deviations.filter((d) => (d.factor ?? 'other') === factor);
     const devMd = dimDevs.map((d) => `[${d.severity}] ${d.deviation}`).join('\n');
     let md = devMd || explanationOf(factor); // 优先 deviation 明细，否则该维度整体说明
@@ -246,7 +315,7 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
     }
     if (anchors.length) pt.anchors = anchors;
     return pt;
-  }).filter((p) => p.score !== undefined || p.evidence); // 空维度（无分且无任何说明）才略去
+  }).filter((p) => p.score !== undefined || p.evidence), skillSuggestions); // 空维度（无分且无任何说明）才略去
 
   // 轨迹评估器没有 isCorrect 之类的达成判定，verdict 留空由呈现层按分数派生。
   // summary 取 conclusionText（说人话的一句话结论）；模型没给才回落 reasonText——

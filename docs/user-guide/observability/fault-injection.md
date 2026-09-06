@@ -26,7 +26,7 @@ description: "安装 FI Worker、创建注入任务、查看 Run 与 Judge，并
 
 ## 前置条件
 
-1. 可访问 Insight 看板，并已登录（邮箱账号）
+1. 可访问 Insight 看板，并已登录（standalone 使用邮箱账号，IDaaS 使用 UUID 账号）
 2. 在 **模型注册** 中配置激活模型（Judge 依赖；无模型时仍可 collect，评判可能为 `judge_skipped`）
 3. 本机已安装 **OpenCode** 和/或 **xiaoO**（须与 Worker 同机）
 4. 当前账号的 **API Key**（设置 / 安装指导中创建；Worker 心跳按用户隔离）

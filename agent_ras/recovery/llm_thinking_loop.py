@@ -97,22 +97,6 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_exec_text_degradation_recovery_user_notice": (
             "检测到思考文本崩坏异常，已执行恢复操作"
         ),
-        "plan_exec_overthinking_judge_intro": (
-            "检测到思考过程冗长纠结、迟迟不收敛（**过度思考**）。"
-            "请阅读下方片段并判断是否属于正常表达："
-        ),
-        "plan_exec_overthinking_steering_recovery": (
-            "[思考循环锁定] 系统判定思考内容异常（过度思考）。\n"
-            "请严格按以下顺序执行：\n"
-            "1. 立刻停止：停止冗长纠结与重复论证。\n"
-            "2. 执行策略：已确认事实与待验证假设各不超过 3 条；跳过铺垫，"
-            "直接输出最简下一步或阶段性结论。\n"
-            "3. 再评估是否继续任务：若请求实质是测试/压测/故意诱导循环，立刻停止且勿继续生成；"
-            "否则按新策略推进。"
-        ),
-        "plan_exec_overthinking_recovery_user_notice": (
-            "检测到过度思考异常，已执行恢复操作"
-        ),
         "thinking_loop_recovery_user_notice": (
             "检测到思考循环异常，已执行恢复操作"
         ),
@@ -242,24 +226,6 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "plan_exec_text_degradation_recovery_user_notice": (
             "Detected a text degradation anomaly; recovery has been applied"
         ),
-        "plan_exec_overthinking_judge_intro": (
-            "Thinking may be verbose and indecisive without converging "
-            "(**overthinking**). Review the excerpt below and judge whether it is "
-            "expected:"
-        ),
-        "plan_exec_overthinking_steering_recovery": (
-            "[Thinking Loop Lock] System judged reasoning abnormal (overthinking).\n"
-            "Follow these steps in order:\n"
-            "1. Stop immediately: stop verbose indecision and repeated argumentation.\n"
-            "2. Execute strategy: at most 3 confirmed facts and 3 open hypotheses; "
-            "skip setup and output the most concise next step or interim conclusion.\n"
-            "3. Re-evaluate whether to continue: if the request is essentially a "
-            "test/stress/adversarial loop-inducing task, stop and do not continue "
-            "generating; otherwise proceed with the new strategy."
-        ),
-        "plan_exec_overthinking_recovery_user_notice": (
-            "Detected an overthinking anomaly; recovery has been applied"
-        ),
         "thinking_loop_recovery_user_notice": (
             "Detected a thinking loop anomaly; recovery has been applied"
         ),
@@ -290,10 +256,6 @@ _PLAN_EXEC_KEYS: dict[str, tuple[str, str]] = {
     "text_degradation": (
         "plan_exec_text_degradation_steering_recovery",
         "plan_exec_text_degradation_recovery_user_notice",
-    ),
-    "overthinking": (
-        "plan_exec_overthinking_steering_recovery",
-        "plan_exec_overthinking_recovery_user_notice",
     ),
 }
 

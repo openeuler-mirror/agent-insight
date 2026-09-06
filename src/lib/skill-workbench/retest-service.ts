@@ -151,6 +151,7 @@ export async function retestOptimizationCandidate(input: {
         const caseId = await addEvalExperimentCase(retest.id, {
           taskId: run.sessionId,
           input: item.input,
+          datasetInput: item.input,
           actualOutput: run.fullOutput || run.output,
           referenceOutput: item.expectedOutput || null,
         });

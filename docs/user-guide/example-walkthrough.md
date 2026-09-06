@@ -76,7 +76,7 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 
 ## ② Skill 生成：把诊断经验沉淀成 Skill
 
-进入 **Skills 生成**，配置生成条件，然后把下面这段**示例需求**完整复制粘贴到需求框并提交。它把
+进入 **持续优化 → Skill**，新建工作台会话并点击 **生成一个 Skill**。在左侧输入区选择模型和场景，然后把下面这段**示例需求**完整复制粘贴并发送。它把
 Loghub Linux 数据集里「认证失败 / 暴力破解」相关的事件模板与严重度分级直接喂给生成器，让产出的
 Skill 能精确识别并归类这些事件、输出准确结论：
 
@@ -116,17 +116,17 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 | 🟢 低（敏感操作） | E91, E112, E116 | 单独不构成攻击，但需审计关注 |
 ```
 
-提交后：
+生成完成后：
 
-- **核对生成结果**：检查 `SKILL.md`、`scripts/`、`references/` 是否符合预期，命名建议为
+- 在右侧 **Skill 详情**检查 `SKILL.md`、`scripts/`、`references/` 是否符合预期，命名建议为
   `linux-messages-auth-triage`（不带 `-demo`，这样它和内置的 `linux-messages-auth-triage-demo`
   示例 Skill 并存、互不覆盖）。
-- **下载或发布** 该 Skill，使其可被后续评测引用。
+- 打开 **Skill 评估**运行静态质量评估；高风险问题修复并通过门禁后，发布该 Skill，使其可用于后续实验。
 
 > **Tip**：如果你只想先把流程跑通、不想现在生成，也可以**跳过这一步**——内置的
 > `linux-messages-auth-triage-demo` 已经是一个可用的成品 Skill，直接拿它进入 ③ 评测即可。
 
-> 详见 [Skills 生成](/user-guide/skills/generate)（该页含一个 `linux-auth-triage` 的完整示例走查）。
+> 详见 [Skill 生成](/user-guide/skills/generate)。
 
 ---
 
@@ -134,14 +134,10 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 
 这一步直接复用内置的 **messages 日志分析（内置示例）** 数据集。
 
-1. 进入 **Skill 评测 → 用例分析**。
-2. 在 **① 配置** 区：
-   - 选择 Skill：用你上一步生成的 `linux-messages-auth-triage`，或直接用内置的
-     `linux-messages-auth-triage-demo`（数据集已默认关联到它，零配置即可开跑）；
-   - 数据集选择 **messages 日志分析（内置示例）**；
-   - 新建或选择一个评测任务，按需勾选评估器。
-3. 在用例列表里勾选若干 case，点击 **▶ 开始评测**。平台会用所选 Skill 真实执行这些用例并自动评测。
-4. 在 **② 评测执行 / ③ 分析结果** 区查看每条用例的执行 Trace、通过/失败状态与评分，
+1. 在 Skill 工作台顶部选择你上一步发布的 `linux-messages-auth-triage`，或内置的 `linux-messages-auth-triage-demo` 及目标版本。
+2. 打开 **Skill 实验**，点击 **新建用例实验**。
+3. 在统一四步向导中选择 Agent、**messages 日志分析（内置示例）**数据集、运行主机/模型、Case 和评估器，然后开始实验。
+4. 在用例分析结果页查看任务结果分、轨迹质量、冻结配置和每条 Case 的执行结果，
    量化 `linux-messages-auth-triage` 在整个数据集上的表现，定位仍然失败或低分的用例。
    想直接对比"有 Skill vs 无 Skill"的差异，可再跑一次 **A/B 测试**（见下方 Tip）。
 
@@ -154,14 +150,13 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 
 ## ④ Skill 优化：用评测证据迭代
 
-1. 进入 **Skills 优化**，选择目标 Skill `linux-messages-auth-triage` 与基线版本。
-2. 在左侧 **可优化点列表** 审阅来自评测 / 线上的问题（如"漏报某类登录异常""来源 IP 聚合不准"），
-   圈定本轮要修的范围。
-3. 配置执行参数并**启动优化 Agent**，观察它就地修改 Skill 文件的过程。
-4. 在右侧 **diff 面板** 预览多版本改动并评审，满意后产出新版本。
-5. 回到 **③ 评测**，对新版本复评，确认问题确实被修掉、且没有引入回退。
+1. 在 Skill 工作台顶部选择目标 Skill `linux-messages-auth-triage` 与基线版本。
+2. 从 **Skill 评估**的高风险问题点击 **AI 修复问题**，或在左侧点击 **Skill 优化**并补充实验发现。
+3. 观察 Copilot 归并优化依据、生成候选版本并执行静态质量校验。
+4. 打开右侧 **优化记录**，检查优化摘要、质量校验和逐文件 diff。
+5. 发布门禁通过的候选，再回到 **Skill 实验**使用相同数据集和评估器复测。
 
-> 详见 [Skills 优化](/user-guide/skills/optimize)。
+> 详见 [Skill 优化](/user-guide/skills/optimize)。
 
 ---
 
@@ -170,9 +165,9 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 完成这一圈，你已经体验了 Agent Insight 的主干能力：
 
 - 用 **链路追踪 + 智能诊断** 发现问题；
-- 用 **Skills 生成** 把经验固化成可复用的 Skill；
+- 用 **Skill 生成**把经验固化成可复用的 Skill；
 - 用 **评估与实验** 量化 Skill 的真实效果；
-- 用 **Skills 优化** 基于证据持续迭代。
+- 用 **Skill 优化**基于证据持续迭代。
 
 接下来，把这套闭环换成你自己的 Agent 与数据即可：先在 [5 分钟上手](/user-guide/quickstart)
 里接入真实 Agent，再用 [评估与实验](/user-guide/evaluation/index) 建立你自己的数据集与评测任务。

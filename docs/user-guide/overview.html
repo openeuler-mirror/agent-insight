@@ -1,0 +1,618 @@
+<title>Agent Insight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #F3F5F2;
+    --surface: #FFFFFF;
+    --surface-2: #E9EDE8;
+    --surface-3: #DEE4DD;
+    --ink: #16211E;
+    --ink-soft: #4E5A54;
+    --ink-faint: #7C8981;
+    --border: #D7DCD3;
+    --accent: #0E7C7B;
+    --accent-strong: #0A5F5D;
+    --accent-soft: #DCEFEC;
+    --warn: #A9661D;
+    --warn-soft: #F3E6D3;
+    --code-ink: #E8EDE9;
+    --code-bg: #16211E;
+    --code-comment: #6FD9C9;
+    --shadow: 0 1px 2px rgba(22,33,30,0.06), 0 8px 24px -12px rgba(22,33,30,0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101613;
+      --surface: #161E1B;
+      --surface-2: #1D2622;
+      --surface-3: #263029;
+      --ink: #E8EDE9;
+      --ink-soft: #9FB0A8;
+      --ink-faint: #6C7D75;
+      --border: #2A3733;
+      --accent: #35DECF;
+      --accent-strong: #6BEFE3;
+      --accent-soft: rgba(53,222,207,0.14);
+      --warn: #E3A05C;
+      --warn-soft: rgba(227,160,92,0.14);
+      --code-ink: #DCE7E2;
+      --code-bg: #0B100E;
+      --code-comment: #35DECF;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 30px -14px rgba(0,0,0,0.6);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101613;
+    --surface: #161E1B;
+    --surface-2: #1D2622;
+    --surface-3: #263029;
+    --ink: #E8EDE9;
+    --ink-soft: #9FB0A8;
+    --ink-faint: #6C7D75;
+    --border: #2A3733;
+    --accent: #35DECF;
+    --accent-strong: #6BEFE3;
+    --accent-soft: rgba(53,222,207,0.14);
+    --warn: #E3A05C;
+    --warn-soft: rgba(227,160,92,0.14);
+    --code-ink: #DCE7E2;
+    --code-bg: #0B100E;
+    --code-comment: #35DECF;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 30px -14px rgba(0,0,0,0.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3 { font-family: "Archivo", "PingFang SC", sans-serif; text-wrap: balance; letter-spacing: -0.01em; margin: 0; }
+  code, .mono, .num, td.mono, .stat-value { font-family: "IBM Plex Mono", "SFMono-Regular", monospace; }
+  a { color: var(--accent-strong); }
+  a:focus-visible, button:focus-visible, .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  ::selection { background: var(--accent-soft); }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    background: linear-gradient(180deg, var(--surface-2), var(--bg) 140%);
+    border-bottom: 1px solid var(--border);
+    padding: 3rem 1.5rem 2rem;
+  }
+  .masthead-inner { max-width: 1100px; margin: 0 auto; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: .5rem;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    padding: 0.3rem 0.65rem;
+    border-radius: 3px;
+  }
+  h1.title {
+    font-size: clamp(2.2rem, 5vw, 3.1rem);
+    font-weight: 800;
+    margin-top: 0.9rem;
+    color: var(--ink);
+  }
+  .tagline {
+    max-width: 62ch;
+    color: var(--ink-soft);
+    font-size: 1.05rem;
+    margin-top: 0.75rem;
+  }
+  .badges { display: flex; flex-wrap: wrap; gap: 0.5rem 0.7rem; margin-top: 1.4rem; align-items: center; }
+  .badge {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 0.32rem 0.6rem;
+    border-radius: 3px;
+    display: inline-flex; gap: 0.4em;
+  }
+  .badge b { color: var(--ink); font-weight: 600; }
+
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 1.8rem;
+  }
+  .stat {
+    background: var(--surface);
+    padding: 0.9rem 1rem;
+  }
+  .stat-value {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--accent-strong);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-label {
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 0.15rem;
+  }
+
+  /* ---------- layout shell ---------- */
+  .shell {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 5rem;
+    display: grid;
+    grid-template-columns: 190px minmax(0,1fr);
+    gap: 3rem;
+    align-items: start;
+  }
+  nav.toc {
+    position: sticky;
+    top: 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .toc-label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 0.5rem;
+  }
+  .toc a {
+    text-decoration: none;
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+    padding: 0.35rem 0 0.35rem 0.7rem;
+    border-left: 2px solid var(--border);
+    transition: color .15s, border-color .15s;
+  }
+  .toc a:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+  main { min-width: 0; display: flex; flex-direction: column; gap: 3.2rem; }
+  section { scroll-margin-top: 1.5rem; }
+
+  .section-head { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 1.1rem; }
+  .section-num { font-family: "IBM Plex Mono", monospace; color: var(--ink-faint); font-size: 0.95rem; }
+  h2 { font-size: 1.5rem; font-weight: 700; }
+  .lede { color: var(--ink-soft); max-width: 68ch; margin: 0.6rem 0 1.3rem; }
+
+  /* ---------- tables ---------- */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; min-width: 560px; }
+  th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--ink-faint);
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  td.mono, td code { font-size: 0.83rem; color: var(--accent-strong); background: var(--accent-soft); padding: 0.1em 0.4em; border-radius: 3px; }
+  .pill {
+    display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 0.72rem;
+    padding: 0.15rem 0.5rem; border-radius: 999px; white-space: nowrap;
+  }
+  .pill-lang { background: var(--accent-soft); color: var(--accent-strong); }
+  .pill-py { background: var(--warn-soft); color: var(--warn); }
+  .pill-req { background: var(--accent-soft); color: var(--accent-strong); }
+  .pill-opt { background: var(--surface-2); color: var(--ink-faint); border: 1px solid var(--border); }
+
+  /* ---------- chips ---------- */
+  .chip-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.4rem; }
+  .chip {
+    display: inline-flex; align-items: baseline; gap: 0.45em;
+    border: 1px solid var(--border); background: var(--surface);
+    border-radius: 999px; padding: 0.4rem 0.85rem; font-size: 0.85rem; color: var(--ink-soft);
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+  .chip .v { font-family: "IBM Plex Mono", monospace; font-size: 0.76rem; color: var(--ink-faint); }
+
+  /* ---------- diagram ---------- */
+  .diagram-card {
+    border: 1px solid var(--border); background: var(--surface); border-radius: 10px;
+    box-shadow: var(--shadow);
+    padding: 1.2rem 1rem 0.6rem;
+    overflow-x: auto;
+  }
+  .diagram-card pre.mermaid { margin: 0; display: flex; justify-content: center; min-width: 640px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 1.1rem; padding: 0.8rem 0.4rem 1rem; font-size: 0.78rem; color: var(--ink-faint); }
+  .legend span { display: inline-flex; align-items: center; gap: 0.4em; }
+  .swatch { width: 0.7em; height: 0.7em; border-radius: 2px; display: inline-block; }
+
+  .diagram-card pre.diagram-dark { display: none; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .diagram-light { display: none; }
+    :root:not([data-theme="light"]) .diagram-dark { display: flex; }
+  }
+  :root[data-theme="dark"] .diagram-light { display: none; }
+  :root[data-theme="dark"] .diagram-dark { display: flex; }
+
+  /* ---------- code blocks ---------- */
+  .code-block {
+    background: var(--code-bg); color: var(--code-ink);
+    border-radius: 8px; padding: 1rem 1.15rem;
+    font-family: "IBM Plex Mono", monospace; font-size: 0.85rem; line-height: 1.7;
+    overflow-x: auto; box-shadow: var(--shadow);
+  }
+  .code-block .c { color: var(--code-comment); }
+  .code-block .ln { display: block; white-space: pre; }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 0.75rem 1rem;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.88rem;
+    color: var(--ink);
+    margin-top: 1rem;
+  }
+  .callout.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+  .callout b { font-weight: 600; }
+  .callout code { background: rgba(0,0,0,0.06); padding: 0.05em 0.35em; border-radius: 3px; }
+
+  .step { display: flex; gap: 1rem; margin-bottom: 1.6rem; }
+  .step:last-child { margin-bottom: 0; }
+  .step-marker {
+    flex: none; width: 1.8rem; height: 1.8rem; border-radius: 50%;
+    background: var(--surface); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; color: var(--ink-soft);
+  }
+  .step-body { flex: 1; min-width: 0; }
+  .step-title { font-weight: 600; margin-bottom: 0.5rem; }
+
+  .dir-note { font-size: 0.85rem; color: var(--ink-faint); margin-top: 0.9rem; }
+
+  footer {
+    max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem 3rem;
+    color: var(--ink-faint); font-size: 0.82rem; border-top: 1px solid var(--border);
+  }
+  footer .commit { font-family: "IBM Plex Mono", monospace; }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; gap: 1.5rem; }
+    nav.toc {
+      position: static;
+      flex-direction: row;
+      overflow-x: auto;
+      gap: 0.4rem;
+      padding-bottom: 0.3rem;
+    }
+    .toc-label { display: none; }
+    .toc a { border-left: none; border-bottom: 2px solid var(--border); white-space: nowrap; padding: 0.3rem 0.2rem; }
+  }
+</style>
+
+<div class="masthead">
+  <div class="masthead-inner">
+    <span class="eyebrow">📡 REPOSITORY REFERENCE</span>
+    <h1 class="title">Agent Insight</h1>
+    <p class="tagline">Agent Insight是openEuler社区孵化的开源AgentOps平台，致力于构建「观测 → 评测 → 诊断 → 优化」持续运转的能力闭环，以及贯穿全流程的可靠性保障能力，将黑盒化的Agent转化为可观测、可度量、可治理的可信资产，使生产级Agent做到"行为看得清、故障诊得准、服务跑得稳"，并持续进化。目前，Agent Insight已适配OpenCode、Claude Code、Hermes、Trae IDE、JiuwenSwarm等12个主流Agent运行时。</p>
+    <div class="badges">
+      <span class="badge">仓库 <b>openeuler/agent-insight</b></span>
+      <span class="badge">版本 <b>0.8.0</b></span>
+      <span class="badge">License <b>MIT</b></span>
+      <span class="badge">内部代号 <b>witty_insight</b></span>
+    </div>
+    <div class="stat-strip">
+      <div class="stat"><div class="stat-value">~275k</div><div class="stat-label">TypeScript 行</div></div>
+      <div class="stat"><div class="stat-value">~56k</div><div class="stat-label">Python 行</div></div>
+      <div class="stat"><div class="stat-value">65</div><div class="stat-label">Prisma 模型</div></div>
+      <div class="stat"><div class="stat-value">285+</div><div class="stat-label">测试文件</div></div>
+      <div class="stat"><div class="stat-value">~170</div><div class="stat-label">API 路由</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="shell">
+  <nav class="toc" aria-label="目录">
+    <div class="toc-label">On this page</div>
+    <a href="#stack">核心技术栈</a>
+    <a href="#layout">目录结构</a>
+    <a href="#start">快速开始</a>
+    <a href="#env">环境变量</a>
+    <a href="#deploy">部署</a>
+  </nav>
+
+  <main>
+    <section id="stack">
+      <div class="section-head"><span class="section-num">01</span><h2>核心技术栈</h2></div>
+      <p class="lede">主体是 Next.js 16 + React 19 + TypeScript 的全栈应用；Agent RAS（可靠性）与故障注入两个子系统用 Python 独立实现，随 npm 包一起分发。</p>
+
+      <div class="chip-grid">
+        <span class="chip"><b>TypeScript</b><span class="v">5.9.3</span></span>
+        <span class="chip"><b>Next.js</b><span class="v">16.1.4</span></span>
+        <span class="chip"><b>React</b><span class="v">19.2.3</span></span>
+        <span class="chip"><b>Prisma</b><span class="v">5.22.0</span></span>
+        <span class="chip"><b>Tailwind CSS</b><span class="v">4.2.4</span></span>
+        <span class="chip"><b>LangChain / LangGraph</b><span class="v">1.x</span></span>
+        <span class="chip"><b>deepagents</b><span class="v">1.9.0</span></span>
+        <span class="chip"><b>OpenTelemetry SDK</b><span class="v">0.216.0</span></span>
+        <span class="chip"><b>Python</b><span class="v">3.x</span></span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>类别</th><th>名称</th><th>版本</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill pill-lang">语言</span></td><td>TypeScript</td><td class="mono">5.9.3</td><td>主开发语言</td></tr>
+            <tr><td><span class="pill pill-lang">语言</span></td><td>JavaScript (Node)</td><td class="mono">≥ 20</td><td>CLI / 客户端采集脚本 / 服务端运行时</td></tr>
+            <tr><td><span class="pill pill-py">语言</span></td><td>Python</td><td class="mono">3.x</td><td>Agent RAS · 故障注入 · Hermes 插件 · OpenGauss 初始化</td></tr>
+            <tr><td>运行时</td><td>Node.js</td><td class="mono">≥ 20</td><td>服务端与 CLI</td></tr>
+            <tr><td>框架</td><td>Next.js</td><td class="mono">16.1.4</td><td>App Router（前端 + API Route）</td></tr>
+            <tr><td>UI 库</td><td>React</td><td class="mono">19.2.3</td><td>UI 框架</td></tr>
+            <tr><td>UI 库</td><td>Tailwind CSS</td><td class="mono">4.2.4</td><td>原子化 CSS 框架</td></tr>
+            <tr><td>UI 库</td><td>Radix UI Primitives</td><td class="mono">多个</td><td>无障碍 UI 原子组件</td></tr>
+            <tr><td>UI 库</td><td>@assistant-ui/react</td><td class="mono">0.10.29</td><td>Chat UI 集成框架</td></tr>
+            <tr><td>UI 库</td><td>ECharts / Recharts / @xyflow/react</td><td class="mono">6.1 / 3.7 / 12.10</td><td>可视化（图表 / 流程图）</td></tr>
+            <tr><td>UI 库</td><td>@monaco-editor/react / @uiw/react-md-editor</td><td class="mono">4.7 / 4.1</td><td>代码 / Markdown 编辑器</td></tr>
+            <tr><td>ORM / DB</td><td>Prisma</td><td class="mono">5.22.0</td><td>默认 SQLite，可切 openGauss</td></tr>
+            <tr><td>数据库</td><td>SQLite</td><td class="mono">via Prisma</td><td>本地文件 <code>~/.agent-insight/data/witty_insight.db</code></td></tr>
+            <tr><td>数据库</td><td>openGauss</td><td class="mono">via pg.Pool</td><td>可选 PostgreSQL 兼容库（<code>DB_HOST</code> 启用）</td></tr>
+            <tr><td>服务端 SDK</td><td>LangChain / LangGraph</td><td class="mono">1.x</td><td>Agent / LLM 调用编排</td></tr>
+            <tr><td>服务端 SDK</td><td>deepagents</td><td class="mono">1.9.0</td><td>高级 Agent 抽象</td></tr>
+            <tr><td>服务端 SDK</td><td>MCP SDK</td><td class="mono">1.29.0</td><td>Model Context Protocol</td></tr>
+            <tr><td>服务端 SDK</td><td>@opentelemetry/sdk-node</td><td class="mono">0.216.0</td><td>OpenTelemetry 服务端追踪</td></tr>
+            <tr><td>服务端 SDK</td><td>@langfuse/otel / @langfuse/langchain</td><td class="mono">5.2.0</td><td>LLM 调用追踪导出</td></tr>
+            <tr><td>内部 AI Runtime</td><td>opencode-ai</td><td class="mono">1.14.39</td><td>Skill 生成与诊断的内部 Agent 进程</td></tr>
+            <tr><td>工具链</td><td>ESLint</td><td class="mono">via eslint-config-next@16.1.4</td><td>代码检查</td></tr>
+            <tr><td>工具链</td><td>tsx + Node Test Runner</td><td class="mono">—</td><td>测试运行</td></tr>
+            <tr><td>包管理</td><td>npm</td><td class="mono">—</td><td>依赖管理</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="layout">
+      <div class="section-head"><span class="section-num">02</span><h2>目录结构</h2></div>
+      <p class="lede">请求进 <code>app/</code> → 委派给 <code>lib/</code>（真正干活的地方）→ 调 <code>server/</code> 存数据、调 <code>prompts/</code> 拼 prompt → 结果渲染回 <code>components/</code>。两个 Python 子系统（青柚色以外的暖色节点）通过 <code>platform_adapter/</code> 挂到各 Agent 框架的运行时上。</p>
+
+      <div class="diagram-card">
+        <pre class="mermaid diagram-light">
+%%{init: {'theme':'base', 'themeVariables': { 'background':'#FFFFFF', 'primaryColor':'#DCEFEC', 'primaryTextColor':'#16211E', 'primaryBorderColor':'#0E7C7B', 'lineColor':'#7C8981', 'secondaryColor':'#F3E6D3', 'secondaryBorderColor':'#A9661D', 'tertiaryColor':'#F3F5F2', 'tertiaryBorderColor':'#B9C2B6', 'fontFamily':'IBM Plex Mono, monospace', 'fontSize':'13px' }}}%%
+graph TD
+    ROOT["agent-insight/"]:::root
+    ROOT --> SRC["src/"]:::ts
+    ROOT --> SKILLS["skills/ 内置 Skill 定义"]:::root
+    ROOT --> RAS["agent_ras/ 可靠性检测+恢复"]:::py
+    ROOT --> FI["agent_fault_injection/ 故障注入引擎"]:::py
+    ROOT --> INTEG["integrations/ IDE 插件包"]:::root
+    ROOT --> SCRIPTS["scripts/ CLI + 采集脚本"]:::root
+    ROOT --> SKLB["skillbench/ 评测基准"]:::py
+    ROOT --> PRISMA["prisma/ Schema"]:::root
+    ROOT --> DOCS["docs/ 设计 + 用户指南"]:::root
+    ROOT --> TESTD["test(s)/ 单元测试"]:::root
+    ROOT --> OTHER["public/ · bin/ · features/ · tools/"]:::root
+
+    SRC --> APP["app/ Next.js App Router"]:::ts
+    SRC --> COMP["components/ React 组件"]:::ts
+    SRC --> LIB["lib/ 领域逻辑"]:::ts
+    SRC --> PROMPTS["prompts/ Prompt 模板"]:::ts
+    SRC --> SRV["server/ 服务端仓储"]:::ts
+    SRC --> SROTHER["providers/ · hooks/ · mock/ · locales/"]:::ts
+
+    APP --> APPMAIN["(main)/ 特性页 ~30"]:::ts
+    APP --> APPI["api/ API Route ~170"]:::ts
+
+    LIB --> LIBSTO["storage/ 数据层"]:::ts
+    LIB --> LIBING["ingest/ 框架适配器"]:::ts
+    LIB --> LIBENG["engine/ 评测·优化·观测"]:::ts
+    LIB --> LIBOTHR["auth/ · usage-analytics/ · 30+ 其他"]:::ts
+
+    classDef ts fill:#DCEFEC,stroke:#0E7C7B,color:#16211E;
+    classDef py fill:#F3E6D3,stroke:#A9661D,color:#16211E;
+    classDef root fill:#FFFFFF,stroke:#B9C2B6,color:#16211E;
+        </pre>
+        <pre class="mermaid diagram-dark">
+%%{init: {'theme':'base', 'themeVariables': { 'background':'#161E1B', 'primaryColor':'#1B3C39', 'primaryTextColor':'#E8EDE9', 'primaryBorderColor':'#35DECF', 'lineColor':'#6C7D75', 'secondaryColor':'#3A2E1B', 'secondaryBorderColor':'#E3A05C', 'tertiaryColor':'#101613', 'tertiaryBorderColor':'#2A3733', 'fontFamily':'IBM Plex Mono, monospace', 'fontSize':'13px' }}}%%
+graph TD
+    ROOT2["agent-insight/"]:::root
+    ROOT2 --> SRC2["src/"]:::ts
+    ROOT2 --> SKILLS2["skills/ 内置 Skill 定义"]:::root
+    ROOT2 --> RAS2["agent_ras/ 可靠性检测+恢复"]:::py
+    ROOT2 --> FI2["agent_fault_injection/ 故障注入引擎"]:::py
+    ROOT2 --> INTEG2["integrations/ IDE 插件包"]:::root
+    ROOT2 --> SCRIPTS2["scripts/ CLI + 采集脚本"]:::root
+    ROOT2 --> SKLB2["skillbench/ 评测基准"]:::py
+    ROOT2 --> PRISMA2["prisma/ Schema"]:::root
+    ROOT2 --> DOCS2["docs/ 设计 + 用户指南"]:::root
+    ROOT2 --> TESTD2["test(s)/ 单元测试"]:::root
+    ROOT2 --> OTHER2["public/ · bin/ · features/ · tools/"]:::root
+
+    SRC2 --> APP2["app/ Next.js App Router"]:::ts
+    SRC2 --> COMP2["components/ React 组件"]:::ts
+    SRC2 --> LIB2["lib/ 领域逻辑"]:::ts
+    SRC2 --> PROMPTS2["prompts/ Prompt 模板"]:::ts
+    SRC2 --> SRV2["server/ 服务端仓储"]:::ts
+    SRC2 --> SROTHER2["providers/ · hooks/ · mock/ · locales/"]:::ts
+
+    APP2 --> APPMAIN2["(main)/ 特性页 ~30"]:::ts
+    APP2 --> APPI2["api/ API Route ~170"]:::ts
+
+    LIB2 --> LIBSTO2["storage/ 数据层"]:::ts
+    LIB2 --> LIBING2["ingest/ 框架适配器"]:::ts
+    LIB2 --> LIBENG2["engine/ 评测·优化·观测"]:::ts
+    LIB2 --> LIBOTHR2["auth/ · usage-analytics/ · 30+ 其他"]:::ts
+
+    classDef ts fill:#1B3C39,stroke:#35DECF,color:#E8EDE9;
+    classDef py fill:#3A2E1B,stroke:#E3A05C,color:#E8EDE9;
+    classDef root fill:#161E1B,stroke:#2A3733,color:#E8EDE9;
+        </pre>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--accent-soft); border:1px solid var(--accent);"></i>TypeScript / Next.js（src/ 下）</span>
+          <span><i class="swatch" style="background:var(--warn-soft); border:1px solid var(--warn);"></i>Python 子系统</span>
+          <span><i class="swatch" style="background:var(--surface); border:1px solid var(--border);"></i>配置 / 文档 / 脚本</span>
+        </div>
+      </div>
+
+      <div class="table-wrap" style="margin-top:1.4rem;">
+        <table>
+          <thead><tr><th>目录</th><th>用途</th><th>关键文件</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">src/app/</td><td>Next.js App Router 入口与 API Route</td><td><code>app/(main)/&lt;feature&gt;/page.tsx</code>（约 30 个特性页）；<code>app/api/**</code>（约 170 个 API route）</td></tr>
+            <tr><td class="mono">src/components/</td><td>React UI 组件</td><td>按特性分子目录：<code>components/{observe,quality,eval,skills,skill-generator,...}</code></td></tr>
+            <tr><td class="mono">src/lib/storage/</td><td>数据层（Prisma + 双适配器）</td><td><code>prisma.ts</code>、<code>data-service.ts</code>（3469 行）、<code>db-interface.ts</code>（1081 行）</td></tr>
+            <tr><td class="mono">src/lib/ingest/</td><td>外部摄入（OTel 解码 + 框架适配器 + spool）</td><td><code>adapters/registry.ts</code>、<code>otel-consumer/consumer.ts</code>、<code>claude-otel/aggregator.ts</code></td></tr>
+            <tr><td class="mono">src/lib/engine/</td><td>业务引擎（评测 / 优化 / 观测 / 调试）</td><td><code>evaluation/</code>、<code>skill-opt/</code>、<code>skill-generation/</code>、<code>observability/</code>、<code>agent-debug/</code>、<code>quality-monitoring/</code>、<code>general-agent/</code></td></tr>
+            <tr><td class="mono">src/lib/auth/</td><td>认证 / 授权 / 上下文</td><td><code>auth.ts</code>（<code>resolveUser</code>）、<code>auth-context.tsx</code>、<code>admin.ts</code></td></tr>
+            <tr><td class="mono">src/prompts/</td><td>LLM Prompt 模板（纯函数）</td><td><code>judge-prompt.ts</code>、<code>flow-parse-prompt.ts</code></td></tr>
+            <tr><td class="mono">prisma/</td><td>Prisma Schema</td><td><code>schema.prisma</code>（1501 行，65 个模型）</td></tr>
+            <tr><td class="mono">skills/</td><td>内置 Agent Skill 定义（8 个）</td><td><code>agent-debug-diagnosis/</code>、<code>iterative-optimizer/</code>、<code>skill-generator/</code>、<code>skill-optimizer/</code></td></tr>
+            <tr><td class="mono">integrations/</td><td>IDE 插件（Qoder Desktop + JetBrains）</td><td><code>qoder-desktop/extension.js</code>、<code>qoder-jetbrains/src/main/...</code></td></tr>
+            <tr><td class="mono">scripts/</td><td>CLI + 客户端采集脚本</td><td><code>start.js</code>、<code>postinstall.js</code>、<code>control-server.js</code>（standalone 下承载 Next + WSS 控制通道）、<code>prepare-ras-sqlite-schema.js</code></td></tr>
+            <tr><td class="mono">skillbench/</td><td>评测基准测试 harness</td><td><code>scripts/make_dashboard/</code>、<code>skillbench_lib/</code></td></tr>
+            <tr><td class="mono">agent_ras/</td><td>可靠性检测/恢复子系统（Python，独立 <code>pyproject.toml</code>），随 npm 包一起分发</td><td><code>detectors/</code>、<code>recovery/</code>、<code>platform_adapter/{opencode,openjiuwen,xiaoo,common}/</code></td></tr>
+            <tr><td class="mono">agent_fault_injection/</td><td>故障注入引擎（Python），随 npm 包一起分发</td><td><code>cli.py</code>、<code>fault_inject/</code>、<code>pipeline/</code>、<code>platform_adapters/{opencode,xiaoo}/</code></td></tr>
+            <tr><td class="mono">bin/cli.js</td><td>npm CLI 入口（start/stop/install）</td><td><code>bin/cli.js</code></td></tr>
+            <tr><td class="mono">docs/developer-guide/</td><td>面向开发者的架构与契约指南</td><td><code>INDEX.md</code>、<code>01-architecture.md</code>、<code>02-modules.md</code> …</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="dir-note">核心域是 <code>lib</code>（+ <code>server</code>）——跨模块被依赖最多；<code>app</code> 是最外层的路由消费者，不被任何模块依赖。详见 <code>docs/developer-guide/02-modules.md</code>。</p>
+    </section>
+
+    <section id="start">
+      <div class="section-head"><span class="section-num">03</span><h2>快速开始</h2></div>
+      <p class="lede">前置条件：Node.js ≥ 20；Python 3（仅 openGauss 模式需要）；可选 Docker。默认安装路径 <code>~/.agent-insight/</code>，可用 <code>AGENT_INSIGHT_DATA_DIR</code> 覆盖，SQLite 文件位于 <code>&lt;dataRoot&gt;/data/witty_insight.db</code>。</p>
+
+      <div class="step">
+        <div class="step-marker">1</div>
+        <div class="step-body">
+          <div class="step-title">安装</div>
+          <div class="code-block"><span class="ln"><span class="c"># 方式一：一键安装（推荐用于单机部署）</span></span><span class="ln">npm install -g agent-insight</span><span class="ln">agent-insight install</span><span class="ln"> </span><span class="ln"><span class="c"># 方式二：从源码开发模式</span></span><span class="ln">git clone https://gitcode.com/openeuler/agent-insight.git</span><span class="ln">cd agent-insight</span><span class="ln">npm install</span><span class="ln">cp .env.example .env.local</span><span class="ln">npm run dev</span></div>
+          <div class="callout"><b>postinstall.js</b> 会把 <code>.env.example</code> 复制到 <code>&lt;dataRoot&gt;/.env</code>（若不存在），跑 <code>prepare-ras-sqlite-schema.js</code> 补齐 Agent RAS 相关表，再执行 <code>prisma db push</code> + <code>prisma generate</code>。</div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker">2</div>
+        <div class="step-body">
+          <div class="step-title">运行</div>
+          <div class="code-block"><span class="ln"><span class="c"># CLI 启动（生产/单机）</span></span><span class="ln">agent-insight start                 <span class="c"># 默认端口 3000</span></span><span class="ln">agent-insight start --port 3001     <span class="c"># 指定端口</span></span><span class="ln"> </span><span class="ln"><span class="c"># 源码开发模式</span></span><span class="ln">npm run dev                         <span class="c"># next dev -p 3000</span></span><span class="ln"> </span><span class="ln"><span class="c"># Docker（amd64 / arm64）</span></span><span class="ln">docker compose -f docker-compose.amd64.yml up -d</span><span class="ln"> </span><span class="ln"><span class="c"># Docker（源码挂载模式）</span></span><span class="ln">AGENT_INSIGHT_SOURCE_DIR=/src docker compose -f docker-compose.source.yml up -d</span></div>
+          <p class="dir-note"><code>start.js</code> 流程：解析端口 → 检查占用 → 跑 <code>prepare-ras-sqlite-schema.js</code> → 同步 DB schema → <code>prisma db push</code> + <code>prisma generate</code> → standalone 模式下把 <code>.next/static</code>、<code>public</code> 同步进 <code>.next/standalone/</code>（否则前端静态资源 404）→ 拉起 Next.js → 写回 admin API key。</p>
+          <div class="callout"><b>control-server.js</b>（standalone 专用）：Next 的 Route Handler 拿不到 HTTP <code>upgrade</code> 事件，Agent RAS 的远程控制通道因此不能做成普通 API 路由。standalone 模式下它接管 HTTP server：<code>/api/reliability/client/v1/control</code> 走 WebSocket，其余请求原样转发给 Next；端口见环境变量 <code>AGENT_INSIGHT_RAS_DISPATCH_PORT</code>（默认 <code>PORT+1</code>）。dev 模式没有这层，控制面回落到进程内 hub。</div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-marker">3</div>
+        <div class="step-body">
+          <div class="step-title">测试</div>
+          <div class="code-block"><span class="ln">npm run test         <span class="c"># tsc 类型检查 + tsx --test test/**/*.test.ts</span></span><span class="ln">npm run test:skill   <span class="c"># 单跑 Skill 生成器测试</span></span><span class="ln">npm run lint         <span class="c"># ESLint</span></span></div>
+          <p class="dir-note">测试覆盖 285+ 个 test 文件，主要在 <code>test/</code> 下；测试命令会先跑 <code>scripts/trae-collector/tsconfig.json</code> 的类型检查。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="env">
+      <div class="section-head"><span class="section-num">04</span><h2>环境变量</h2></div>
+      <p class="lede">来源：<code>.env.example</code> + 各模块代码；完整列表 60+ 项，下表为常用/关键子集。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>变量名</th><th>用途</th><th>默认值</th><th>必需</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">DATABASE_URL</td><td>Prisma datasource URL（SQLite 默认）</td><td class="mono">file:&lt;home&gt;/data/witty_insight.db</td><td><span class="pill pill-req">是</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_DATA_DIR</td><td>数据根目录覆盖</td><td class="mono">~/.agent-insight</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">PORT</td><td>服务端口（CLI 与 next 共同使用）</td><td class="mono">3000</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">HOSTNAME</td><td>服务绑定地址</td><td class="mono">0.0.0.0</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD</td><td>openGauss 切换（设置即用 PG）</td><td class="mono">—</td><td><span class="pill pill-opt">否*</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_API_KEY</td><td>用户摄取 API key（自动生成并写回 .env）</td><td class="mono">—</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_ADMIN_USERS</td><td>管理员白名单（逗号分隔）</td><td class="mono">['admin']</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_USAGE_ENABLED</td><td>用量分析总开关</td><td class="mono">0</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_OTEL_CONSUMER_*</td><td>OTel 摄取消费器调优（tick / retention / cooldown）</td><td class="mono">—</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_OPENCODE_*</td><td>OpenCode 摄取插件调优</td><td class="mono">—</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_QODER_*</td><td>Qoder 客户端 spool 与安装路径</td><td class="mono">—</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">OPENCODE_BIN</td><td>OpenCode 可执行路径</td><td class="mono">/app/node_modules/.bin/opencode</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">LANGFUSE_PUBLIC_KEY / SECRET_KEY / BASE_URL</td><td>Langfuse OTel 导出目标</td><td class="mono">cloud.langfuse.com</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">ORGANIZATION_MODE + ORG_*</td><td>企业 SSO 模式代理</td><td class="mono">—</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">NEXT_PUBLIC_URL_PREFIX</td><td>URL 前缀（嵌入子路径时使用）</td><td class="mono">—</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_RAS_DISPATCH_PORT</td><td>standalone 下 control-server.js 的 WSS 控制通道端口</td><td class="mono">PORT + 1</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">AGENT_INSIGHT_LOG_DIR / LOG_LEVEL</td><td>应用日志目录 + 级别</td><td class="mono">/var/log/agent-insight · info</td><td><span class="pill pill-opt">否</span></td></tr>
+            <tr><td class="mono">INTERNAL_AGENT_TAG_TTL_MS</td><td>内部 agent tag 内存缓存 TTL</td><td class="mono">—</td><td><span class="pill pill-opt">否</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="dir-note">* <code>DB_HOST</code> 系列在启用 openGauss 时必需。</p>
+    </section>
+
+    <section id="deploy">
+      <div class="section-head"><span class="section-num">05</span><h2>部署</h2></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>部署方式</th><th>配置文件</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>npm 包 + CLI 单机</td>
+              <td class="mono">bin/cli.js → scripts/start.js</td>
+              <td>默认 <code>~/.agent-insight/</code>，Next.js standalone 构建，端口 3000。<code>package.json</code> <code>files</code> 字段现已把 <code>agent_ras/</code>、<code>agent_fault_injection/</code> 一并打进包体</td>
+            </tr>
+            <tr>
+              <td>Docker（amd64 / arm64）</td>
+              <td class="mono">docker-compose.{amd64,arm64}.yml</td>
+              <td>基于 <code>karaggagent/agent-insight:0.5.3-{amd64,arm64}</code>；固定端口 <code>3033:3000</code>
+                <div class="callout warn" style="margin-top:0.6rem;">compose 文件当前仍 pin <b>0.5.3</b>，而 <code>package.json</code> 已是 <b>0.8.0</b>，落后 3 个次版本 —— 建议同步升级 tag 或切到 <code>latest</code>。</div>
+              </td>
+            </tr>
+            <tr>
+              <td>Docker（源码挂载）</td>
+              <td class="mono">docker-compose.source.yml</td>
+              <td><code>AGENT_INSIGHT_SOURCE_DIR=/src</code> 触发 entrypoint 改跑 <code>npm run build</code></td>
+            </tr>
+            <tr>
+              <td>本地开发</td>
+              <td class="mono">scripts/develop_start.sh</td>
+              <td>dev 模式 + Prisma dev DB</td>
+            </tr>
+            <tr>
+              <td>从源码打包 npm</td>
+              <td class="mono">scripts/publish-npm.js</td>
+              <td><code>npm whoami</code> 校验 → <code>npm ci</code> → lint → <code>npm run build</code> → <code>setupStandalone()</code> → <code>npm pack</code> → <code>npm publish --tag</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">关键差异：默认 Docker 镜像 <b>SQLite-first</b>，启用 <code>DB_HOST</code> 会被 entrypoint 拒绝。</div>
+    </section>
+  </main>
+</div>
+
+<footer>
+  基于 commit <span class="commit">fe64b5df</span> 生成 · 完整版见仓库内 <code>docs/design/agent-insight-overview/Overview.md</code>（另有 <code>Architecture.md</code>、<code>Modules.md</code>）
+</footer>
+
+<!--
+  本页最初以 Claude Artifact 形式发布，那边的 mermaid 渲染由平台运行时提供，
+  文件本身不含渲染引擎。拷到仓库里做静态文档后要能独立打开，
+  因此在这里本地引入 mermaid（vendor/mermaid.min.js，来自 node_modules/mermaid/dist），
+  离线也能把 .mermaid 代码块渲成图。
+-->
+<script src="./vendor/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: false });
+  mermaid.run({ querySelector: '.mermaid' });
+</script>

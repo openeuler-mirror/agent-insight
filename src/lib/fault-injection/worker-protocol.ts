@@ -286,7 +286,9 @@ function inventoryOption(row: unknown): { id: string; label: string } | null {
   const rec = row as Record<string, unknown>
   const id = String(rec.id || rec.modelID || rec.name || '').trim()
   if (!id) return null
-  return { id, label: String(rec.label || rec.name || id).trim() || id }
+  const label = String(rec.label || rec.name || id).trim() || id
+  const provider = String(rec.providerID || rec.providerId || rec.provider || '').trim()
+  return { id, label: provider ? `${label} · ${provider}` : label }
 }
 
 export function executionTargetsFromWorker(

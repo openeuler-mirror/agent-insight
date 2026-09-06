@@ -1,6 +1,6 @@
 'use client';
 
-// Trace 评测详情：任务输入/参考答案/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
+// Trace 评测详情：任务输入/预期输出/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
 // （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡。
 //
 // 卡片以**结论**为主：卡头 = 结论 chip（达成/部分达成/未达成）+ 一句话结论 + 得分（次要）；
@@ -171,16 +171,13 @@ function PointBadges({ point }: { point: PointRow }) {
   );
 }
 
-/** 评分点「证据」列内容：证据块 + 建议 + 相关步骤锚点（评分点与子项复用）。 */
+/** 评分点「证据与建议」列内容：同一折叠块内用 Markdown 小节区分，建议为空时不渲染。 */
 function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId: string | null; evaluatorId: string }) {
   return (
     <>
-      {point.evidence ? <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} /> : null}
-      {point.suggestion && (
-        <div style={{ marginTop: point.evidence ? 6 : 0, minWidth: 0, fontSize: 11, color: 'var(--primary)', overflowWrap: 'anywhere' }}>
-          ↗ Skill 建议：{point.suggestion}
-        </div>
-      )}
+      {point.evidence ? (
+        <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} supplementalMarkdown={point.suggestion} />
+      ) : point.suggestion ? <EvidenceBlock evidence={{ md: `**Skill 改进建议**\n${point.suggestion}` }} /> : null}
       {point.anchors && point.anchors.length > 0 && (
         <div style={{ marginTop: 5, minWidth: 0, fontSize: 10.5, color: 'var(--foreground-muted)', overflowWrap: 'anywhere' }}>
           相关步骤：{point.anchors.map((a) => (
@@ -543,11 +540,11 @@ export function ExperimentCaseDetail({
               )}
             </div>
 
-            {/* 任务输入 / 参考答案 / 实际输出 三框（等高：grid 行拉伸 + 内框 flex 填满） */}
+            {/* 任务输入 / 预期输出 / 实际输出 三框（等高：grid 行拉伸 + 内框 flex 填满） */}
             <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
               {([
                 { label: '任务输入', value: caseRow.input, missing: '' },
-                { label: '参考答案', value: caseRow.referenceOutput || '', missing: '未标注参考答案' },
+                { label: '预期输出', value: caseRow.referenceOutput || '', missing: '未标注预期输出' },
                 { label: '实际输出', value: caseRow.actualOutput, missing: '' },
               ] as const).map((box) => (
                 <div key={box.label} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -726,7 +723,7 @@ export function ExperimentCaseDetail({
                                         <tr>
                                           <th style={{ ...TH, width: 180 }}>评分点</th>
                                           <th style={{ ...TH, width: 52 }}>得分</th>
-                                          <th style={TH}>证据</th>
+                                          <th style={TH}>证据与建议</th>
                                         </tr>
                                       </thead>
                                       <tbody>

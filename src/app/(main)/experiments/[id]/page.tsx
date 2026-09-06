@@ -5,6 +5,7 @@
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
@@ -12,6 +13,7 @@ import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
@@ -250,9 +252,13 @@ export function ExperimentDetail({
     }));
   }, [detail, lookup]);
 
-  // 本实验是否含依赖参考数据的评估器——新增 case 时据此提示"不标注参考答案会不记分"
+  // 本实验是否含依赖预期输出的评估器——新增 case 时据此提示"不标注会不记分"
   const needsReference = useMemo(
     () => (detail?.evaluatorIds ?? []).some((eid) => lookup.requiresReference(eid)),
+    [detail, lookup],
+  );
+  const needsDatasetInput = useMemo(
+    () => (detail?.evaluatorIds ?? []).some((eid) => lookup.requiresDatasetInput(eid)),
     [detail, lookup],
   );
 
@@ -271,8 +277,16 @@ export function ExperimentDetail({
       {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
       <PageContainer
         variant={embedded ? 'canvas' : 'default'}
-        className={embedded ? 'overflow-visible [&>*]:shrink-0' : '[&>*]:shrink-0'}
+        className={embedded ? 'overflow-visible [&>*]:shrink-0' : '!pt-2 [&>*]:shrink-0'}
       >
+        {!embedded && (
+          <Button asChild variant="ghost" size="sm" className="mb-3 self-start px-2 text-foreground-secondary">
+            <Link href="/experiments">
+              <ArrowLeft className="size-3.5" aria-hidden />
+              返回实验列表
+            </Link>
+          </Button>
+        )}
         {embedded && onBack && (
           <button type="button" onClick={onBack} style={{ ...ACTION_BTN, marginBottom: 12 }}>‹ 返回实验记录</button>
         )}
@@ -458,7 +472,7 @@ export function ExperimentDetail({
                   <thead>
                     <tr>
                       <th style={STICKY_TH}>输入</th>
-                      <th style={STICKY_TH}>参考输出</th>
+                      <th style={STICKY_TH}>预期输出</th>
                       <th style={STICKY_TH}>实际输出</th>
                       <th style={{ ...STICKY_TH, width: 72 }}>综合得分</th>
                       <th style={{ ...STICKY_TH, width: 72 }}>结果得分</th>
@@ -618,6 +632,7 @@ export function ExperimentDetail({
                 agentName={detail.agentName}
                 user={user}
                 needsReference={needsReference}
+                needsDatasetInput={needsDatasetInput}
               />
             )}
           </>

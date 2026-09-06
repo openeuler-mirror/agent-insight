@@ -1,9 +1,27 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
 process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = "1"
 
 const uploaderPromise = import("../scripts/opencode_uploader_client.js")
+
+test("opencode uploader: plugin 指定当前 spool 文件时不扫描历史文件", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-uploader-target-"))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const day = path.join(root, "2026-08-31")
+  fs.mkdirSync(day)
+  const current = path.join(day, "current.jsonl")
+  const history = path.join(day, "history.jsonl")
+  fs.writeFileSync(current, "{}\n")
+  fs.writeFileSync(history, "{}\n")
+
+  const uploader: any = await uploaderPromise
+  assert.deepEqual(uploader.selectJsonlFiles(root, current), [current])
+  assert.equal(uploader.selectJsonlFiles(root, path.join(root, "..", "outside.jsonl")).length, 2)
+})
 
 // 工具死循环的最小复现：同一条 assistant message 内不断追加 tool part。
 // 消息条数、终稿文本、message 时间戳全程不变——这正是旧 sig 的全部组成。
