@@ -323,7 +323,9 @@ export function aggregateWorkBuddyOtelTraceEvents(
     context_window_limit: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : undefined,
     context_window_source: Number.isFinite(sessionContextTokens) ? 'workbuddy_local_sqlite' : undefined,
     workbuddy_session_context_tokens: Number.isFinite(sessionContextTokens) ? sessionContextTokens : undefined,
-    latency: latencyMs / 1000,
+    // ExecutionRecord.latency 全链路统一为毫秒（详情页用 formatDurationMs(latency) 渲染，
+    // 与链路树根节点时长同源同单位）；此前误 /1000 会让头部"耗时"比根节点小 1000 倍。
+    latency: latencyMs,
     final_result: finalResult,
     timestamp: new Date(rootStarted),
     trace_started_at: new Date(rootStarted),

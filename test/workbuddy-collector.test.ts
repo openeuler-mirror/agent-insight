@@ -280,6 +280,8 @@ test("WorkBuddy round-trip: 工具按时间就近归属到对应的 LLM（不全
   assert.equal(assistants[1].tool_calls?.length, 1)
   assert.equal(assistants[1].tool_calls?.[0]?.function?.name, "ToolB")
   assert.equal(record.tool_call_count, 2)
+  // latency 单位为毫秒（与详情页 formatDurationMs / 链路树根节点同源），trace 跨度 10s = 10000ms
+  assert.equal(record.latency, 10000)
 })
 
 test("WorkBuddy round-trip: 'Agent' 工具（子 Agent 派发）归一化为 task 节点，而非普通 TOOL", () => {
