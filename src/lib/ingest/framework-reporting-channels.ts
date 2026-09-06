@@ -48,6 +48,7 @@ const FRAMEWORK_REPORTING_CHANNELS: Readonly<Record<string, readonly ReportingCh
     qwencode: ['otlp-logs', 'otlp-traces'],
     codex: ['otlp-traces'],
     'deepseek-harness': ['otlp-logs'],
+    workbuddy: ['otlp-traces'],
 };
 
 export function getSelectedReportingChannels(

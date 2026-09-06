@@ -12,10 +12,16 @@
 - 服务端 `src/lib/ingest/otel/adapters/workbuddy.ts` + 注册表接入。
 - 测试 `test/workbuddy-collector.test.ts`（mapper 单测 + 全链路往返 + 多轮归并 + 无 usage 不编造）。
 
-后续（本次未做，需独立一轮）：
+一键安装入口接入（已补做）：
 
-- 一键安装入口接入 `src/app/api/ingest/setup/route.ts` 与 `setup/auto/route.ts`：这两个文件共 4500+ 行、由 `test/setup-noninteractive-compat.test.ts` 等契约测试固定，要求「末尾追加、不改已有顺序」，风险较高，单独处理以免破坏既有契约。当前独立安装器 `workbuddy_setup.mjs` 已满足自动启动需求。
-- CI 环境跑通 TS 测试套件（本地开发机无 Node/依赖，仅用 Electron-as-node 验证了纯 JS 管线）。
+- 前端安装页 `src/app/(main)/accessconfig/install/page.tsx` 的 `FRAMEWORK_OPTIONS` 末尾追加 `workbuddy`，安装界面出现 WorkBuddy 复选项。
+- `src/app/api/ingest/setup/route.ts`（curl/PowerShell 一键脚本）与 `src/app/api/ingest/setup/auto/route.ts`（`npx agent-insight install`）：均按「末尾追加、不改已有顺序」规则加入 `workbuddy` 到 FRAMEWORKS 白名单、交互选择器、INSTALL 标志与「未选择」守卫；PowerShell 侧新增下载采集器文件并调用 `workbuddy_setup.mjs` 的安装块；Unix/bash 侧因 WorkBuddy 是 Windows 桌面应用只打印「请在 Windows 运行」提示。
+- 新增文件分发路由 `src/app/api/ingest/setup/workbuddy-collector/[file]/route.ts`，白名单分发 `workbuddy_setup.mjs` / `collector.mjs` / `session-registry.mjs` / `mapper.cjs` / `trace-transport.cjs`，下载后按 `workbuddy_setup.mjs` 期望的目录布局落地。
+- `src/lib/ingest/framework-reporting-channels.ts` 标注 WorkBuddy 走 OTLP Traces 通道。
+
+后续：
+
+- CI 环境跑通 TS 测试套件与 setup 契约测试（本地开发机无 Node/依赖，纯 JS 管线已用 Electron-as-node 验证，服务端 adapter 全链路往返已在 WSL 真实 Node 环境验证通过）。
 
 ## 开发步骤
 
