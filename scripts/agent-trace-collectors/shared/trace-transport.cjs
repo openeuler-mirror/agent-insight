@@ -90,14 +90,18 @@ function truncateCodePoints(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
   return `${chars.slice(0, maxChars).join("")}...[TRUNCATED original_chars=${chars.length}]`;
 }
 
-function redactString(value) {
+function redactString(value, options = {}) {
   let result = String(value);
   result = result.replace(INLINE_SECRET_ASSIGNMENT, (_match, key, separator) => `${key}${separator}[REDACTED]`);
   for (const pattern of STRING_PATTERNS) {
     result = result.replace(pattern, "[REDACTED]");
   }
-  for (const pattern of LOCAL_PATH_PATTERNS) {
-    result = result.replace(pattern, "[LOCAL_PATH]");
+  // 本地路径脱敏默认开启（保持既有契约）。编码类 Agent（如 WorkBuddy）的文件路径是
+  // 观测核心信号、且属自托管自查场景，可通过 redactLocalPaths:false 关闭（密钥/token 等仍脱敏）。
+  if (options.redactLocalPaths !== false) {
+    for (const pattern of LOCAL_PATH_PATTERNS) {
+      result = result.replace(pattern, "[LOCAL_PATH]");
+    }
   }
   return result;
 }
@@ -107,14 +111,14 @@ function isSensitiveKey(value) {
   return SENSITIVE_KEY_PATTERN.test(normalized) && !TOKEN_USAGE_KEY_PATTERN.test(normalized);
 }
 
-function redactValue(value, seen = new WeakSet()) {
-  if (typeof value === "string") return redactString(value);
+function redactValue(value, seen = new WeakSet(), options = {}) {
+  if (typeof value === "string") return redactString(value, options);
   if (value === null || value === undefined || typeof value !== "object") return value;
   if (seen.has(value)) return "[CIRCULAR]";
   seen.add(value);
 
   if (Array.isArray(value)) {
-    const result = value.map((item) => redactValue(item, seen));
+    const result = value.map((item) => redactValue(item, seen, options));
     seen.delete(value);
     return result;
   }
@@ -132,16 +136,16 @@ function redactValue(value, seen = new WeakSet()) {
         ? { stringValue: "[REDACTED]" }
         : "[REDACTED]";
     } else {
-      result[key] = redactValue(item, seen);
+      result[key] = redactValue(item, seen, options);
     }
   }
   seen.delete(value);
   return result;
 }
 
-function safeContent(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
+function safeContent(value, maxChars = DEFAULT_MAX_CONTENT_CHARS, options = {}) {
   if (value === undefined || value === null) return undefined;
-  const redacted = redactValue(value);
+  const redacted = redactValue(value, new WeakSet(), options);
   const serialized = typeof redacted === "string" ? redacted : JSON.stringify(redacted);
   return truncateCodePoints(serialized, maxChars);
 }
@@ -334,7 +338,7 @@ function toUnixNano(timestampMs) {
   return String(BigInt(Math.max(0, Math.round(Number(timestampMs) || Date.now()))) * 1_000_000n);
 }
 
-function canonicalSpanAttributes(event) {
+function canonicalSpanAttributes(event, options = {}) {
   const kind = String(event.kind || "span");
   const spanKind = kind === "llm"
     ? "LLM"
@@ -349,8 +353,8 @@ function canonicalSpanAttributes(event) {
     "agent.insight.event_id": event.eventId,
     "openinference.span.kind": spanKind,
     "session.id": event.sessionId,
-    "input.value": safeContent(event.input),
-    "output.value": safeContent(event.output),
+    "input.value": safeContent(event.input, DEFAULT_MAX_CONTENT_CHARS, options),
+    "output.value": safeContent(event.output, DEFAULT_MAX_CONTENT_CHARS, options),
     "llm.model_name": event.model,
     "llm.provider": event.provider,
     "llm.token_count.prompt": event.usage?.input,
@@ -359,8 +363,8 @@ function canonicalSpanAttributes(event) {
     "llm.token_count.total": event.usage?.total,
     "tool.name": event.tool?.name,
     "tool.type": event.tool?.type,
-    "tool.arguments": safeContent(event.tool?.arguments),
-    "tool.result": safeContent(event.tool?.result),
+    "tool.arguments": safeContent(event.tool?.arguments, DEFAULT_MAX_CONTENT_CHARS, options),
+    "tool.result": safeContent(event.tool?.result, DEFAULT_MAX_CONTENT_CHARS, options),
     "tool.outcome": event.status,
     "skill.name": event.skill?.name,
     "skill.version": event.skill?.version,
@@ -376,10 +380,11 @@ function canonicalEventsToOtlp(events, options = {}) {
   const framework = options.framework || events[0]?.framework || "unknown";
   const scopeName = options.scopeName || `agent-insight-${framework}`;
   const scopeVersion = options.scopeVersion || "0.1.0";
+  const redactOptions = { redactLocalPaths: options.redactLocalPaths };
   const grouped = new Map();
 
   for (const rawEvent of events) {
-    const event = redactValue(rawEvent);
+    const event = redactValue(rawEvent, new WeakSet(), redactOptions);
     if (!event?.sessionId) throw new Error("Canonical event is missing sessionId");
     const list = grouped.get(event.sessionId) || [];
     list.push(event);
@@ -409,10 +414,10 @@ function canonicalEventsToOtlp(events, options = {}) {
             kind: 1,
             startTimeUnixNano: toUnixNano(startedAt),
             endTimeUnixNano: toUnixNano(endedAt),
-            attributes: otlpAttributes(canonicalSpanAttributes({ ...event, framework })),
+            attributes: otlpAttributes(canonicalSpanAttributes({ ...event, framework }, redactOptions)),
             status: {
               code: statusCode,
-              ...(event.error ? { message: truncateCodePoints(redactString(event.error)) } : {}),
+              ...(event.error ? { message: truncateCodePoints(redactString(event.error, redactOptions)) } : {}),
             },
           };
         }),
@@ -466,11 +471,14 @@ class DurableTraceWriter {
     this.apiKey = options.apiKey;
     this.stateDir = options.stateDir || collectorStateDir(options.framework, options.apiKey, options.homeDir);
     this.maxContentChars = options.maxContentChars || DEFAULT_MAX_CONTENT_CHARS;
+    // 是否脱敏本地文件路径（默认开启，保持既有行为）。
+    this.redactLocalPaths = options.redactLocalPaths;
     this.pending = Promise.resolve();
   }
 
   append(event) {
     const timestamp = Number(event.startTimeMs) || Date.now();
+    const redactOptions = { redactLocalPaths: this.redactLocalPaths };
     const normalized = redactValue({
       ...event,
       framework: this.framework,
@@ -481,14 +489,14 @@ class DurableTraceWriter {
         event.kind,
         event.name,
       ),
-      input: safeContent(event.input, this.maxContentChars),
-      output: safeContent(event.output, this.maxContentChars),
+      input: safeContent(event.input, this.maxContentChars, redactOptions),
+      output: safeContent(event.output, this.maxContentChars, redactOptions),
       tool: event.tool ? {
         ...event.tool,
-        arguments: safeContent(event.tool.arguments, this.maxContentChars),
-        result: safeContent(event.tool.result, this.maxContentChars),
+        arguments: safeContent(event.tool.arguments, this.maxContentChars, redactOptions),
+        result: safeContent(event.tool.result, this.maxContentChars, redactOptions),
       } : undefined,
-    });
+    }, new WeakSet(), redactOptions);
     const filePath = spoolFileFor(this.stateDir, timestamp);
     this.pending = this.pending.then(() => appendJsonl(filePath, normalized));
     return this.pending.then(() => normalized);
@@ -511,13 +519,14 @@ class DurableTraceUploader {
     this.maxRetries = options.maxRetries === undefined ? 4 : options.maxRetries;
     this.retry = options.retry || {};
     this.sleep = options.sleep || delay;
+    this.redactLocalPaths = options.redactLocalPaths;
     this.timer = null;
     if (typeof this.fetch !== "function") throw new Error("A fetch implementation is required");
     if (!this.endpoint) throw new Error("Agent Insight OTLP endpoint is required");
   }
 
   async post(events) {
-    const payload = canonicalEventsToOtlp(events, { framework: this.framework });
+    const payload = canonicalEventsToOtlp(events, { framework: this.framework, redactLocalPaths: this.redactLocalPaths });
     let lastError;
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       try {

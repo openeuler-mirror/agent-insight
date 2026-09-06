@@ -96,7 +96,8 @@ function workbuddyTrace(overrides: {
 /** 采集端到服务端全链路：mapper → canonicalEventsToOtlp → normalize → aggregate。 */
 function roundTrip(docs: any[], sessionId: string, enrichment: Record<string, unknown> = {}) {
   const canonical = docs.flatMap((doc) => mapWorkBuddyTrace(doc, { sessionId, ...enrichment }))
-  const otlp = canonicalEventsToOtlp(canonical, { framework: "workbuddy" })
+  // 采集器对 WorkBuddy 关闭本地路径脱敏（保留文件路径这一核心观测信号），此处对齐真实行为。
+  const otlp = canonicalEventsToOtlp(canonical, { framework: "workbuddy", redactLocalPaths: false })
   const events = normalizeClaudeOtlpTraces(otlp, { receivedAt: "2026-09-06T00:00:00.000Z" })
   return { canonical, events, record: aggregateOtelTraceEvents(sessionId, events) }
 }
@@ -162,6 +163,26 @@ test("WorkBuddy round-trip: 单轮 trace 聚合出精确 token 与工具调用",
   assert.equal(assistant.tool_calls?.[0]?.function?.name, "Read")
   assert.equal(record.llm_call_count, 1)
   assert.equal(record.tool_call_count, 1) // mcp_tools 噪声 span 不计入
+})
+
+test("WorkBuddy round-trip: 保留真实文件路径（不脱敏为 [LOCAL_PATH]），但密钥仍脱敏", () => {
+  const doc = workbuddyTrace({
+    traceId: "trace-path",
+    start: "2026-09-06T00:00:01.000Z",
+    prompt: "读文件",
+    tool: {
+      name: "Read",
+      input: { file_path: "C:\\Users\\Administrator\\.workbuddy\\USER.md", api_key: "sk-abcdef1234567890" },
+      output: { content: "hi" },
+    },
+  })
+  const { record } = roundTrip([doc], "sess-path")
+  const call = record?.interactions?.find((i: any) => i.tool_calls?.length)?.tool_calls?.[0]
+  assert.ok(call)
+  // 文件路径完整保留（编码 Agent 的核心信号）
+  assert.equal(call.function?.arguments?.file_path, "C:\\Users\\Administrator\\.workbuddy\\USER.md")
+  // 但密钥仍被脱敏
+  assert.equal(call.function?.arguments?.api_key, "[REDACTED]")
 })
 
 test("WorkBuddy round-trip: 多条 trace 归并为一个多轮会话", () => {

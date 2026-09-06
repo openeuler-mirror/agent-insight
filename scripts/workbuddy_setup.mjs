@@ -5,10 +5,12 @@
  * 失败自动重启，实现开机/登录自动拉起与崩溃自愈。等价于平台在 Linux(systemd --user)/
  * macOS(launchd) 已有、而 Windows 一直缺失的常驻客户端自启动能力。
  *
- * 用法：
+ * 用法（有 Node 时）：
  *   node scripts/workbuddy_setup.mjs --host <url> --token <apiKey> [--no-start]
  *   node scripts/workbuddy_setup.mjs --status
  *   node scripts/workbuddy_setup.mjs --uninstall
+ * 无 Node 时用 WorkBuddy 自带运行时（ELECTRON_RUN_AS_NODE=1 + WorkBuddy.exe）安装；
+ * 状态/卸载改用 schtasks（见 --help）。
  *
  * 设计要点：
  *   - 用任务定义 XML 注册（命令行 /create 参数不支持「失败后自动重启」）。
@@ -245,10 +247,15 @@ async function uninstall() {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    log(`用法:
+    log(`用法（有 Node 时）:
   node scripts/workbuddy_setup.mjs --host <url> --token <apiKey> [--no-start]
   node scripts/workbuddy_setup.mjs --status
-  node scripts/workbuddy_setup.mjs --uninstall`);
+  node scripts/workbuddy_setup.mjs --uninstall
+
+无 Node 时（复用 WorkBuddy 自带运行时安装；状态/卸载用 schtasks）:
+  $env:ELECTRON_RUN_AS_NODE=1; & "$env:LOCALAPPDATA\\Programs\\WorkBuddy\\WorkBuddy.exe" <本脚本路径> --host <url> --token <apiKey>
+  状态: schtasks /query /tn ${TASK_NAME}
+  卸载: schtasks /delete /tn ${TASK_NAME} /f`);
     return;
   }
   if (args.status) return status();
@@ -278,8 +285,9 @@ async function main() {
   log("");
   log("✓ 安装完成。采集器已作为登录自启动的常驻任务运行，无需手动启动。");
   if (findWorkBuddyExe()) log("  运行时: 复用 WorkBuddy 自带 Electron（ELECTRON_RUN_AS_NODE），无需单独安装 Node.js。");
-  log(`  状态: node scripts/workbuddy_setup.mjs --status`);
-  log(`  卸载: node scripts/workbuddy_setup.mjs --uninstall`);
+  // 给出免 Node 的状态/卸载命令（本机可能没有独立 node）。
+  log(`  状态: schtasks /query /tn ${TASK_NAME}`);
+  log(`  卸载: schtasks /delete /tn ${TASK_NAME} /f`);
 }
 
 main().catch((error) => fail(error?.message || String(error)));

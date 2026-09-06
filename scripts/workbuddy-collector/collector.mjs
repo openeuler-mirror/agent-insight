@@ -129,12 +129,20 @@ export class WorkBuddyCollector {
       cachePath: path.join(this.stateRoot, "session-registry.json"),
       logger,
     });
-    this.writer = new DurableTraceWriter({ framework: FRAMEWORK, apiKey: this.apiKey, homeDir: this.homeDir });
+    // 编码 Agent 的文件路径是观测核心信号（Read/Write/Edit/Bash 的对象），且属自托管自查场景，
+    // 关闭本地路径脱敏（密钥/token/邮箱等敏感信息仍照常脱敏）。
+    this.writer = new DurableTraceWriter({
+      framework: FRAMEWORK,
+      apiKey: this.apiKey,
+      homeDir: this.homeDir,
+      redactLocalPaths: false,
+    });
     this.uploader = new DurableTraceUploader({
       framework: FRAMEWORK,
       apiKey: this.apiKey,
       endpoint: this.endpoint,
       homeDir: this.homeDir,
+      redactLocalPaths: false,
     });
     this.processedPath = path.join(this.stateRoot, apiKeyHash(this.apiKey), "processed-traces.json");
     this.processed = new Set();
