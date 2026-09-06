@@ -193,3 +193,98 @@ test("WorkBuddy round-trip: generation 缺失 usage 时不编造 token", () => {
   assert.equal(record.input_tokens, undefined)
   assert.equal(record.output_tokens, undefined)
 })
+
+// 真实 WorkBuddy 结构：function 与 generation 都平级挂在 agent span 之下，
+// 工具与其对应的那次 LLM 之间没有父子链——必须按时间就近归属，否则所有工具会挤到最后一个 assistant。
+function interleavedTrace() {
+  const traceId = "trace-seq"
+  const agentId = `${traceId}-agent`
+  const gen = (n: number, ms: string) => ({
+    traceId, spanId: `${traceId}-gen${n}`, parentId: agentId, name: "generation", type: "generation",
+    startedAt: ms, endedAt: ms, status: "ok",
+    toolInput: JSON.stringify([{ role: "user", content: [{ type: "text", text: "问题" }] }]),
+    toolOutput: JSON.stringify([{ model: "hy4-preview", choices: [{ message: { role: "assistant", content: `回答${n}` } }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }]),
+  })
+  const fn = (name: string, ms: string) => ({
+    traceId, spanId: `${traceId}-fn-${name}`, parentId: agentId, name, type: "function",
+    startedAt: ms, endedAt: ms, status: "ok", toolName: name,
+    toolInput: JSON.stringify({ x: 1 }), toolOutput: JSON.stringify({ content: "ok" }),
+  })
+  return {
+    trace: { traceId, name: "Agent workflow", startedAt: "2026-09-06T00:00:00.000Z", endedAt: "2026-09-06T00:00:10.000Z", status: "ok" },
+    spans: [
+      { traceId, spanId: agentId, parentId: null, name: "cli", type: "agent", startedAt: "2026-09-06T00:00:00.500Z", endedAt: "2026-09-06T00:00:10.000Z", status: "ok", agentName: "cli" },
+      gen(1, "2026-09-06T00:00:01.000Z"),
+      fn("ToolA", "2026-09-06T00:00:02.000Z"),
+      gen(2, "2026-09-06T00:00:03.000Z"),
+      fn("ToolB", "2026-09-06T00:00:04.000Z"),
+    ],
+  }
+}
+
+test("WorkBuddy round-trip: 工具按时间就近归属到对应的 LLM（不全挤到最后一个）", () => {
+  const { record } = roundTrip([interleavedTrace()], "sess-seq", { sessionTotals: { used: 240, size: 200000 } })
+  assert.ok(record)
+  const assistants = record.interactions?.filter((i: any) => i.role === "assistant") ?? []
+  assert.equal(assistants.length, 2)
+  // ToolA 挂到第一次 LLM，ToolB 挂到第二次 LLM —— 而不是两个都挂在最后一个
+  assert.equal(assistants[0].tool_calls?.length, 1)
+  assert.equal(assistants[0].tool_calls?.[0]?.function?.name, "ToolA")
+  assert.equal(assistants[1].tool_calls?.length, 1)
+  assert.equal(assistants[1].tool_calls?.[0]?.function?.name, "ToolB")
+  assert.equal(record.tool_call_count, 2)
+})
+
+test("WorkBuddy round-trip: 'Agent' 工具（子 Agent 派发）归一化为 task 节点，而非普通 TOOL", () => {
+  const traceId = "trace-spawn"
+  const agentId = `${traceId}-agent`
+  const doc = {
+    trace: { traceId, name: "Agent workflow", startedAt: "2026-09-06T00:00:00.000Z", endedAt: "2026-09-06T00:00:10.000Z", status: "ok" },
+    spans: [
+      { traceId, spanId: agentId, parentId: null, name: "cli", type: "agent", startedAt: "2026-09-06T00:00:00.500Z", endedAt: "2026-09-06T00:00:10.000Z", status: "ok", agentName: "cli" },
+      {
+        traceId, spanId: `${traceId}-gen`, parentId: agentId, name: "generation", type: "generation",
+        startedAt: "2026-09-06T00:00:01.000Z", endedAt: "2026-09-06T00:00:01.500Z", status: "ok",
+        toolInput: JSON.stringify([{ role: "user", content: [{ type: "text", text: "协同分析" }] }]),
+        toolOutput: JSON.stringify([{ model: "hy4-preview", choices: [{ message: { role: "assistant", content: "派发子 Agent" } }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }]),
+      },
+      {
+        traceId, spanId: "span_b891b13aacfd48f3a7b02963", parentId: agentId, name: "Agent", type: "function",
+        startedAt: "2026-09-06T00:00:02.000Z", endedAt: "2026-09-06T00:00:08.000Z", status: "ok", toolName: "Agent",
+        toolInput: JSON.stringify({ description: "数据代理", prompt: "严格按契约生成数据", subagent_type: "general-purpose" }),
+        toolOutput: JSON.stringify({ content: "已生成并通过校验" }),
+      },
+    ],
+  }
+  const { record } = roundTrip([doc], "sess-spawn")
+  assert.ok(record)
+  const assistant = record.interactions?.find((i: any) => i.role === "assistant" && i.tool_calls?.length)
+  assert.ok(assistant)
+  const call = assistant.tool_calls[0]
+  // 子 Agent 派发：function.name 归一化为 'task'，保留原始名与 subagent_type，界面据此渲染为 Agent 节点
+  assert.equal(call.function?.name, "task")
+  assert.equal(call.original_tool_name, "Agent")
+  assert.equal(call.tool_type, "task")
+  assert.equal(call.function?.arguments?.subagent_type, "general-purpose")
+  // 父 task 注入了 subagent_session_id，用于和子 Agent 节点关联
+  const subSid = call.function?.arguments?.subagent_session_id
+  assert.ok(subSid)
+  // 合成了一条命名正确的子 Agent 交互：名字取 description（而非通用的 general-purpose）
+  const sub = record.interactions?.find((i: any) => i.role === "subagent")
+  assert.ok(sub)
+  assert.equal(sub.agent, "数据代理")
+  assert.equal(sub.subagent_name, "数据代理")
+  assert.equal(sub.subagent_type, "general-purpose")
+  assert.equal(sub.subagent_session_id, subSid)
+})
+
+test("WorkBuddy round-trip: Agent 名称归一化为 WorkBuddy，状态标记为已完成", () => {
+  const { record } = roundTrip([interleavedTrace()], "sess-name")
+  assert.ok(record)
+  // 内部 root agent 名 'cli' → 展示为 WorkBuddy
+  assert.equal(record.agentName, "WorkBuddy")
+  assert.equal(record.agent, "WorkBuddy")
+  // trace_completed_at / trace_status 已设，界面「执行状态」才会显示已完成
+  assert.ok(record.trace_completed_at)
+  assert.equal(record.trace_status, "success")
+})

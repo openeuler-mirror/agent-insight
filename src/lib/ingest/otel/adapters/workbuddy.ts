@@ -45,6 +45,15 @@ function spanType(event: OtelTraceEvent): string {
   return String(event.attributes?.['workbuddy.span.type'] || '').toLowerCase();
 }
 
+// WorkBuddy 内部根 Agent 名是 "cli"（终端标题生成器等是内部工具 Agent）。
+// 用户界面里对话的是「WorkBuddy」，因此把内部名归一化为产品名。
+function workbuddyAgentName(raw: unknown): string {
+  const name = String(raw || '').trim();
+  if (!name || name.toLowerCase() === 'cli') return 'WorkBuddy';
+  if (name === 'terminalTitleGenerator') return 'WorkBuddy';
+  return name;
+}
+
 function isWorkBuddy(events: OtelTraceEvent[]): boolean {
   return events.some((event) => {
     const service = String(event.serviceName || '').toLowerCase();
@@ -60,22 +69,62 @@ function cacheTokens(event: OtelTraceEvent): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+/** 从可能被截断的 JSON 字符串里正则抠出某个字符串字段（截断安全，用于长 prompt 场景）。 */
+function matchJsonStringField(raw: string, field: string): string | undefined {
+  const m = new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(raw);
+  if (!m) return undefined;
+  try {
+    return JSON.parse(`"${m[1]}"`);
+  } catch {
+    return m[1];
+  }
+}
+
+/** WorkBuddy 派发子 Agent 的 "Agent" 工具：提取子 Agent 的展示名与类型。 */
+function agentSpawnInfo(event: OtelTraceEvent): { name: string; subagentType?: string } {
+  const attrs = event.attributes || {};
+  const raw = String(attrs['tool.arguments'] ?? '');
+  const parsed = parseJson(raw);
+  const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as AnyObj : {};
+  // description 是子 Agent 的人类可读角色名（如「造门店运营数据」），位于参数最前，截断也基本保得住；
+  // subagent_type（如 general-purpose）太通用，只作次要信息 / 兜底。
+  const desc = firstText(obj.description) || matchJsonStringField(raw, 'description');
+  const subType = firstText(obj.subagent_type) || matchJsonStringField(raw, 'subagent_type');
+  return { name: desc || subType || '子 Agent', subagentType: subType };
+}
+
+function isAgentSpawnEvent(event: OtelTraceEvent): boolean {
+  const name = String(firstText(event.attributes?.['tool.name'], event.name) || '');
+  return name.toLowerCase() === 'agent';
+}
+
 function toolCall(event: OtelTraceEvent): AnyObj {
   const attrs = event.attributes || {};
   const started = event.startTimeMs || Date.parse(event.receivedAt) || Date.now();
   const completed = eventEndMs(event) || started;
   const name = firstText(attrs['tool.name'], event.name, 'tool') || 'tool';
   const args = parseJson(firstText(attrs['tool.arguments'], attrs['input.value']) || '{}');
+  const argObj = args && typeof args === 'object' && !Array.isArray(args) ? args as AnyObj : {};
   const output = firstText(attrs['tool.result'], attrs['output.value']);
   const isError = event.attributes?.['tool.outcome'] === 'error' ||
     String(attrs['tool.status'] || '').toLowerCase() === 'error';
+  // WorkBuddy 派发子 Agent 是通过一个名为 "Agent" 的工具调用（参数含 subagent_type/prompt），
+  // 语义上是子 Agent，不是普通工具。归一化成平台约定的 `task`，让链路树渲染为 Agent/子 Agent 节点
+  // （buildAgentCallTree 认 function.name==='task' → kind:'task'，并读 args.subagent_type）。
+  // 用工具名判定（截断安全）：长 prompt 可能把 arguments 截断到无法解析出 subagent_type，
+  // 而 "Agent" 这个工具名本身就是子 Agent 派发的确定标志。
+  const isAgentSpawn = name.toLowerCase() === 'agent' && (
+    Boolean(argObj.subagent_type || argObj.subagentType)
+    || /subagent_?type/i.test(String(attrs['tool.arguments'] ?? ''))
+    || name === 'Agent'
+  );
   return {
     id: event.spanId,
     type: 'function',
     state: isError ? 'error' : 'success',
     original_tool_name: name,
-    tool_type: 'function',
-    function: { name, arguments: args },
+    tool_type: isAgentSpawn ? 'task' : 'function',
+    function: { name: isAgentSpawn ? 'task' : name, arguments: args },
     output,
     result: output,
     timing: { started_at: toIso(started), completed_at: toIso(completed) },
@@ -101,10 +150,9 @@ export function aggregateWorkBuddyOtelTraceEvents(
   const firstRoot = rootEvents[0];
   const firstEvent = firstRoot || ordered[0];
   const rootStarted = firstEvent.startTimeMs || Date.parse(firstEvent.receivedAt) || Date.now();
-  const agentName = firstText(
+  const agentName = workbuddyAgentName(
     ordered.find((event) => spanType(event) === 'agent')?.attributes?.['workbuddy.agent.name'],
-    'WorkBuddy',
-  ) || 'WorkBuddy';
+  );
 
   const query = firstText(
     firstRoot?.attributes?.['workbuddy.user_prompt'],
@@ -114,6 +162,9 @@ export function aggregateWorkBuddyOtelTraceEvents(
 
   const interactions: AnyObj[] = [];
   const assistantBySpanId = new Map<string, AnyObj>();
+  // 记录每个 assistant 的起始时间，供工具按时间就近归属（WorkBuddy 的 function/generation
+  // span 都平级挂在 agent 之下，工具与其对应的那次 LLM 之间没有父子链，只能靠时间还原）。
+  const assistantsByStart: Array<{ interaction: AnyObj; startMs: number }> = [];
 
   // 每个 root（一次 trace = 一轮对话）先落一条 user 交互，再挂该轮的 assistant / 工具。
   const emittedUserPrompts = new Set<string>();
@@ -168,12 +219,56 @@ export function aggregateWorkBuddyOtelTraceEvents(
     if (promptInput) interaction.requestMessages = [{ role: 'user', content: promptInput }];
     interactions.push(interaction);
     if (event.spanId) assistantBySpanId.set(event.spanId, interaction);
+    assistantsByStart.push({ interaction, startMs: started });
   }
 
+  // assistant 按起始时间升序，便于「就近上一次 LLM」归属。
+  assistantsByStart.sort((a, b) => a.startMs - b.startMs);
+  const hostForToolByTime = (toolStartMs: number): AnyObj | undefined => {
+    let chosen: AnyObj | undefined;
+    for (const entry of assistantsByStart) {
+      if (entry.startMs <= toolStartMs) chosen = entry.interaction;
+      else break;
+    }
+    return chosen || assistantsByStart[assistantsByStart.length - 1]?.interaction;
+  };
+
+  const subagentInteractions: AnyObj[] = [];
   for (const event of toolEvents) {
     const call = toolCall(event);
+    const toolStartMs = event.startTimeMs || Date.parse(event.receivedAt) || 0;
+    const toolEndMs = eventEndMs(event) || toolStartMs;
     const host = (event.parentSpanId ? assistantBySpanId.get(event.parentSpanId) : undefined) ||
-      [...interactions].reverse().find((interaction) => interaction.role === 'assistant');
+      hostForToolByTime(toolStartMs);
+
+    // 子 Agent 派发（"Agent" 工具）：既在父 assistant 上留一条 task 调用，
+    // 又合成一条 role='subagent' 的子 Agent 交互，用 description 作为节点名，
+    // 并用同一个 subagent_session_id 把父 task 与子 Agent 关联起来，让链路树渲染成
+    // 一个正确命名的子 Agent 节点（而非无名的 general-purpose）。
+    if (isAgentSpawnEvent(event)) {
+      const info = agentSpawnInfo(event);
+      const subSid = `wb-sub-${event.spanId || `${event.traceId || 'wb'}-${event.startTimeMs || 0}`}`;
+      // 把 session id 注入 task 调用参数，供 buildAgentCallTree 关联父子。
+      const fn = call.function as AnyObj | undefined;
+      if (fn) {
+        if (fn.arguments && typeof fn.arguments === 'object' && !Array.isArray(fn.arguments)) {
+          (fn.arguments as AnyObj).subagent_session_id = subSid;
+        } else {
+          fn.arguments = { subagent_type: info.subagentType, description: info.name, subagent_session_id: subSid };
+        }
+      }
+      subagentInteractions.push({
+        role: 'subagent',
+        agent: info.name,
+        subagent_name: info.name,
+        subagent_type: info.subagentType,
+        subagent_session_id: subSid,
+        content: firstText(event.attributes?.['tool.result'], event.attributes?.['output.value']) || '',
+        timestamp: toIso(toolStartMs),
+        timeInfo: { created: toIso(toolStartMs), completed: toIso(toolEndMs) },
+      });
+    }
+
     if (host) {
       host.tool_calls = Array.isArray(host.tool_calls) ? [...host.tool_calls, call] : [call];
     } else {
@@ -186,6 +281,8 @@ export function aggregateWorkBuddyOtelTraceEvents(
       });
     }
   }
+  // 子 Agent 交互追加到序列末尾（随后统一按时间戳排序，会落到对应父 task 之后）。
+  for (const sub of subagentInteractions) interactions.push(sub);
 
   // 工具已挂到各自的 assistant（嵌套），顶层交互按时间戳排序，让多轮 user/assistant 正确交错。
   interactions.sort((a, b) => Date.parse(String(a.timestamp || '')) - Date.parse(String(b.timestamp || '')));
@@ -209,6 +306,10 @@ export function aggregateWorkBuddyOtelTraceEvents(
   const contextWindow = Number(firstRoot?.attributes?.['workbuddy.context_window']);
   const hasPerCallUsage = usageTotals.total > 0;
 
+  // WorkBuddy 的 trace 文件是「一次 workflow 完整写完才落盘」，采集到即代表该轮已结束。
+  // 设 trace_completed_at / trace_status，界面「执行状态」才会从「执行中」变为「已完成」。
+  const lastEnd = Math.max(rootStarted, ...ordered.map((event) => eventEndMs(event)));
+
   return {
     task_id: sessionId,
     query,
@@ -225,6 +326,9 @@ export function aggregateWorkBuddyOtelTraceEvents(
     latency: latencyMs / 1000,
     final_result: finalResult,
     timestamp: new Date(rootStarted),
+    trace_started_at: new Date(rootStarted),
+    trace_completed_at: new Date(lastEnd),
+    trace_status: 'success',
     label: agentName,
     // normalizeOtlpTraces 已用认证 API-key 归属覆盖客户端属性；此处保留其结果。
     user: firstEvent.user || 'anonymous',
