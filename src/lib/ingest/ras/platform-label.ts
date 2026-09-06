@@ -20,8 +20,8 @@ export function getPlatformLabel(platform?: string | null): string {
     case "xiaoo":
       return "xiaoO";
     case "qwenpaw":
-    case "copaw":
-      return "CoPaw (QwenPaw)";
+    case "qwenpaw":
+      return "QwenPaw";
     default:
       return value;
   }

@@ -591,11 +591,68 @@ function makeNode(init: {
 }
 
 function finalizeStats(node: AgentNode): void {
-    if (Number.isFinite(node.startedAt) && Number.isFinite(node.endedAt)) {
-        const duration = (node.endedAt as number) - (node.startedAt as number);
+    for (const c of node.children) finalizeStats(c);
+    let start = Number.isFinite(node.startedAt) ? (node.startedAt as number) : undefined;
+    let end = Number.isFinite(node.endedAt) ? (node.endedAt as number) : undefined;
+    for (const c of node.children) {
+        if (Number.isFinite(c.startedAt) && (start == null || (c.startedAt as number) < start)) {
+            start = c.startedAt as number;
+        }
+        if (Number.isFinite(c.endedAt) && (end == null || (c.endedAt as number) > end)) {
+            end = c.endedAt as number;
+        }
+    }
+    node.startedAt = start;
+    node.endedAt = end;
+    if (start != null && end != null) {
+        const duration = end - start;
         node.stats.durationMs = duration >= 0 ? duration : undefined;
     }
-    for (const c of node.children) finalizeStats(c);
+}
+
+export interface TraceTimelineBounds {
+    start?: number;
+    end?: number;
+    durationMs?: number;
+}
+
+export function resolveTraceTimelineBounds(
+    root: AgentNode | null | undefined,
+    executionDurationMs?: number,
+): TraceTimelineBounds | null {
+    if (!root) return null;
+    let start: number | undefined;
+    let end: number | undefined;
+
+    walkTree(root, node => {
+        if (Number.isFinite(node.startedAt) && (start == null || (node.startedAt as number) < start)) {
+            start = node.startedAt as number;
+        }
+        if (Number.isFinite(node.endedAt) && (end == null || (node.endedAt as number) > end)) {
+            end = node.endedAt as number;
+        }
+        for (const event of node.events) {
+            if (Number.isFinite(event.startedAt) && (start == null || (event.startedAt as number) < start)) {
+                start = event.startedAt as number;
+            }
+            if (Number.isFinite(event.completedAt) && (end == null || (event.completedAt as number) > end)) {
+                end = event.completedAt as number;
+            }
+        }
+    });
+
+    if (start == null) return null;
+    if (end == null && executionDurationMs != null && Number.isFinite(executionDurationMs) && executionDurationMs > 0) {
+        end = start + executionDurationMs;
+    }
+    if (end == null || end < start) {
+        end = start;
+    }
+    return {
+        start,
+        end,
+        durationMs: end - start,
+    };
 }
 
 function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {

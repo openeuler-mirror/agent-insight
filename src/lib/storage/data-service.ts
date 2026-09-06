@@ -58,6 +58,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'claudecode',
     'codex',
     'llamaindex',
+    'qwenpaw',
     'pi-agent',
     'deepseek-harness',
 ]);

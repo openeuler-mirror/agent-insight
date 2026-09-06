@@ -33,18 +33,20 @@ export function formatDurationMs(ms?: number | null): string {
 }
 
 /**
- * A persisted execution can include delegated work after the root Agent's
- * direct span ends. Use the broader valid duration when drawing one trace.
+ * Prefer the duration already implied by the trace tree. Only fall back to a
+ * persisted execution latency when the tree itself has no valid duration.
  */
 export function resolveTraceTimelineDurationMs(
     treeDurationMs?: number,
     executionDurationMs?: number,
 ): number | undefined {
-    const candidates = [treeDurationMs, executionDurationMs]
-        .filter((value): value is number =>
-            typeof value === 'number' && Number.isFinite(value) && value > 0
-        );
-    return candidates.length ? Math.max(...candidates) : undefined;
+    if (typeof treeDurationMs === 'number' && Number.isFinite(treeDurationMs) && treeDurationMs > 0) {
+        return treeDurationMs;
+    }
+    if (typeof executionDurationMs === 'number' && Number.isFinite(executionDurationMs) && executionDurationMs > 0) {
+        return executionDurationMs;
+    }
+    return undefined;
 }
 
 export function formatLatencySeconds(latencySeconds?: number | null): string {

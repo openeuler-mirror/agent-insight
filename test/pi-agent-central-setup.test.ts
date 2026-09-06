@@ -9,9 +9,9 @@ import { GET as getCentralSetup } from "@/app/api/ingest/setup/route"
 import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "copaw"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "copaw"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode", "deepseek-harness", "copaw"]
+const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "qwenpaw"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "qwenpaw"]
+const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode", "deepseek-harness", "qwenpaw"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
@@ -84,8 +84,8 @@ test("Pi is appended without reordering any existing central framework list", ()
   assert.deepEqual(frameworkValues(central, "FRAMEWORKS"), EXPECTED_CENTRAL)
   assert.deepEqual(frameworkValues(auto, "FRAMEWORKS"), EXPECTED_AUTO)
   assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/)
-  assert.match(central, /CoPaw \(QwenPaw\)/)
-  assert.match(auto, /CoPaw \(QwenPaw\)/)
+  assert.match(central, /QwenPaw/)
+  assert.match(auto, /QwenPaw/)
 })
 
 test("central setup preselects only Pi and keeps no-parameter installs interactive", async () => {

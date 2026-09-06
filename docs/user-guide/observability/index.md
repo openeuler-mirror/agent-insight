@@ -75,11 +75,22 @@ Hermes 插件会把 hook 数据编码为标准 OTLP/HTTP JSON，并直接上报�
 
 采集器会先将 Qwen Code 的会话、工具、LLM、Skill、子 Agent 和 Hook 数据写入 `~/.agent-insight/otel_data/qwencode/` 下按账号隔离的 spool，再异步上传。安装后发送一次真实 Qwen Code 请求；如果页面仍没有新 Trace，先确认 `.qwen/.env` 中的 endpoint 与当前平台地址一致，再检查该 spool 目录是否持续堆积。上传连续失败时，最新的会话编号和失败原因会写入同一账号目录下的 `logs/last-upload-failures.json`；该文件不会写入 API Key 或服务端响应正文。
 
-## CoPaw (QwenPaw) 接入
+## QwenPaw 接入
 
-安装指导页的普通 setup 和 auto setup 都支持选择 CoPaw (QwenPaw)。CoPaw 当前通过 QwenPaw hook 插件采集 Trace：安装脚本从当前 Agent Insight 服务端下载内置 collector zip，解压到 `~/.agent-insight/collectors/copaw/current/`，用本机 Python 3.11+ 安装后执行 `python -m copaw.cli install`，把 `plugin.json`、`backend.py` 和 `copaw/` 注册到 QwenPaw plugins 目录。
+完整的安装、验证、Trace 展示、故障排查和卸载说明见
+[QwenPaw Trace Collector 接入指南](./qwenpaw-trace-collector)。
 
-插件在 QwenPaw 启动后通过 startup/runtime/middleware/shutdown hook 采集根 Agent、子 Agent、Skill、Tool、LLM、MCP、Channel 和 Cron span，并以 `service.name=qwenpaw` 发送到 `/api/ingest/otel/v1/traces`。本地待上传数据写入 `~/.agent-insight/otel_data/copaw/` 下按 API Key 隔离的 spool；接入后重启 CoPaw/QwenPaw，运行一次真实对话，再到链路追踪页确认是否出现新 Trace。
+安装指导页的普通 setup 和 auto setup 都支持选择 QwenPaw。QwenPaw 当前通过 hook 插件采集
+Trace：安装脚本从当前 Agent Insight 服务端下载内置 collector zip，解压到
+`~/.agent-insight/collectors/qwenpaw/current/`，用本机 Python 3.11+ 安装后执行
+`python -m qwenpaw_insight.cli install`，把 `plugin.json`、`backend.py` 和
+`qwenpaw_insight/` 注册到 QwenPaw plugins 目录。
+
+插件在 QwenPaw 启动后通过 startup/runtime/middleware/shutdown hook 采集根 Agent、用户问题、
+子 Agent、Skill、Tool、LLM、MCP、Channel 和 Cron span，并以 `service.name=qwenpaw` 发送到
+`/api/ingest/otel/v1/traces`。本地待上传数据写入
+`~/.agent-insight/otel_data/qwenpaw/` 下按 API Key 隔离的 spool；接入后重启 QwenPaw，运行一次
+真实对话，再到链路追踪页确认 `AGENT` 列显示真实 Agent 名称，详情中出现根 `USER` 行。
 
 ## CodeAgent 接入
 

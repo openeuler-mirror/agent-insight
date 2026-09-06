@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-insight-qwenpaw"
+version = "1.0.0"
+description = "QwenPaw trace collector plugin for AgentInsight"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "AgentInsight Team" }]
+dependencies = []
+
+[project.scripts]
+agent-insight-qwenpaw = "qwenpaw_insight.cli:main"
+
+[tool.setuptools]
+packages = ["qwenpaw_insight", "qwenpaw_insight._plugin_assets"]
+
+[tool.setuptools.package-data]
+"qwenpaw_insight" = ["_plugin_assets/*"]

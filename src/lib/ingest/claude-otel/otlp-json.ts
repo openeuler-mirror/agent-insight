@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { ClaudeOtelEvent, OtelTraceEvent } from './types';
 
 export function getOtelAnyValue(anyValue: any): any {
@@ -85,6 +86,41 @@ function firstDefined(...values: any[]): any {
     if (value !== undefined && value !== null && value !== '') return value;
   }
   return undefined;
+}
+
+function stableTraceKey(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 32);
+}
+
+function qwenpawTraceKey(
+  attributes: Record<string, any>,
+  resourceSessionId: string | undefined,
+  traceId: string | undefined,
+  serviceInstanceId: string | undefined,
+): string | undefined {
+  const explicit = asOptionalString(firstDefined(
+    attributes['qwenpaw.trace_key'],
+    attributes['trace_key'],
+  ));
+  if (explicit) return explicit;
+
+  const turnId = asOptionalString(attributes['qwenpaw.turn_id']);
+  const rootSessionId = firstOptionalString(
+    attributes['qwenpaw.root_session_id'],
+    resourceSessionId,
+    serviceInstanceId,
+    attributes['qwenpaw.session_id'],
+  );
+  if (turnId && rootSessionId) {
+    return stableTraceKey(`agent-insight:qwenpaw:trace:${rootSessionId}:${turnId}`);
+  }
+
+  if (traceId) return traceId;
+  return firstOptionalString(
+    attributes['qwenpaw.session_id'],
+    resourceSessionId,
+    serviceInstanceId,
+  );
 }
 
 function nanoToBigInt(value: any): bigint {
@@ -265,11 +301,20 @@ export function normalizeClaudeOtlpTraces(
         try {
           const attributes = otelAttrsToObject(span?.attributes || []);
           const classification = classifyOtelSpan(span, attributes);
+          const isQwenPawSpan =
+            serviceName === 'qwenpaw' ||
+            attributes['agent.insight.framework'] === 'qwenpaw' ||
+            attributes['qwenpaw.session_id'] !== undefined ||
+            attributes['qwenpaw.root_session_id'] !== undefined ||
+            attributes['qwenpaw.turn_id'] !== undefined;
 
           // 跳过生命周期 / 基础设施 span
           if (classification.skip) continue;
 
           const traceId = asOptionalString(span?.traceId);
+          const qwenpawKey = isQwenPawSpan
+            ? qwenpawTraceKey(attributes, resourceSessionId, traceId, serviceInstanceId)
+            : undefined;
           const explicitSessionId = firstOptionalString(
             attributes['witty.session.id'],
             resourceSessionId,
@@ -278,7 +323,7 @@ export function normalizeClaudeOtlpTraces(
             attributes['hermes.session_id'],
             attributes['correlation.id'],
           );
-          let sessionId = explicitSessionId || serviceInstanceId || traceId;
+          let sessionId = qwenpawKey || explicitSessionId || serviceInstanceId || traceId;
           if (sessionId === 'unknown' && traceId) sessionId = traceId;
           if (!sessionId) continue;
 
@@ -315,6 +360,9 @@ export function normalizeClaudeOtlpTraces(
 
           // 降级标记
           const eventAttributes = { ...attributes };
+          if (qwenpawKey && eventAttributes['qwenpaw.trace_key'] === undefined) {
+            eventAttributes['qwenpaw.trace_key'] = qwenpawKey;
+          }
           if (classification.degraded) {
             eventAttributes['_degraded'] = true;
           }

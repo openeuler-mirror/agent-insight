@@ -29,7 +29,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'codex', label: 'Codex' },
     { value: 'qwencode', label: 'Qwen Code' },
     { value: 'deepseek-harness', label: 'DeepSeek Harness' },
-    { value: 'copaw', label: 'CoPaw (QwenPaw)' },
+    { value: 'qwenpaw', label: 'QwenPaw' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -194,7 +194,7 @@ const frameworks = [
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
     { name: 'DeepSeek Harness', value: 'deepseek-harness' },
-    { name: 'CoPaw (QwenPaw)', value: 'copaw' }
+    { name: 'QwenPaw', value: 'qwenpaw' }
 ];
 
 async function select() {
@@ -278,7 +278,7 @@ INSTALL_CODEX=false
 INSTALL_QWENCODE=false
 INSTALL_DEEPSEEK_HARNESS=false
 DEEPSEEK_HARNESS_SETUP_OK=false
-INSTALL_COPAW=false
+INSTALL_QWENPAW=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -322,12 +322,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
     INSTALL_DEEPSEEK_HARNESS=true
 fi
-if [[ "$SELECTED_FRAMEWORKS" == *"copaw"* ]]; then
-    INSTALL_COPAW=true
+if [[ "$SELECTED_FRAMEWORKS" == *"qwenpaw"* ]]; then
+    INSTALL_QWENPAW=true
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_COPAW" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -651,21 +651,21 @@ if [ "$INSTALL_QWENCODE" = "true" ]; then
     node "$QWENCODE_PACKAGE_ROOT/scripts/qwencode-collector/install.mjs"
 fi
 
-if [ "$INSTALL_COPAW" = "true" ]; then
-    echo "⏬ Installing CoPaw (QwenPaw) AgentInsight collector..."
-    if command -v python3 >/dev/null 2>&1; then COPAW_PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then COPAW_PYTHON="$(command -v python)"; else echo "❌ Python 3.11+ is required for the CoPaw collector."; exit 1; fi
-    if ! "$COPAW_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"; then echo "❌ $COPAW_PYTHON must be Python 3.11 or newer."; exit 1; fi
-    COPAW_ROOT="$HOME/.agent-insight/collectors/copaw"
-    COPAW_ARCHIVE="$COPAW_ROOT/agent-insight-copaw.zip"
-    COPAW_SOURCE_DIR="$COPAW_ROOT/current"
-    rm -rf "$COPAW_SOURCE_DIR"
-    mkdir -p "$COPAW_ROOT" "$COPAW_SOURCE_DIR"
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/copaw-collector" -o "$COPAW_ARCHIVE"
-    "$COPAW_PYTHON" -m zipfile -e "$COPAW_ARCHIVE" "$COPAW_SOURCE_DIR"
-    "$COPAW_PYTHON" -m pip install --disable-pip-version-check --upgrade "$COPAW_SOURCE_DIR"
-    "$COPAW_PYTHON" -m copaw.cli install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY"
-    echo "CoPaw collector installed (source: $COPAW_SOURCE_DIR, spool: ~/.agent-insight/otel_data/copaw)"
-    echo "   Restart CoPaw (QwenPaw); the plugin is loaded by QwenPaw hooks."
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "⏬ Installing QwenPaw AgentInsight collector..."
+    if command -v python3 >/dev/null 2>&1; then QWENPAW_PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then QWENPAW_PYTHON="$(command -v python)"; else echo "❌ Python 3.11+ is required for the QwenPaw collector."; exit 1; fi
+    if ! "$QWENPAW_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"; then echo "❌ $QWENPAW_PYTHON must be Python 3.11 or newer."; exit 1; fi
+    QWENPAW_ROOT="$HOME/.agent-insight/collectors/qwenpaw"
+    QWENPAW_ARCHIVE="$QWENPAW_ROOT/agent-insight-qwenpaw.zip"
+    QWENPAW_SOURCE_DIR="$QWENPAW_ROOT/current"
+    rm -rf "$QWENPAW_SOURCE_DIR"
+    mkdir -p "$QWENPAW_ROOT" "$QWENPAW_SOURCE_DIR"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qwenpaw-collector" -o "$QWENPAW_ARCHIVE"
+    "$QWENPAW_PYTHON" -m zipfile -e "$QWENPAW_ARCHIVE" "$QWENPAW_SOURCE_DIR"
+    "$QWENPAW_PYTHON" -m pip install --disable-pip-version-check --upgrade "$QWENPAW_SOURCE_DIR"
+    "$QWENPAW_PYTHON" -m qwenpaw_insight.cli install --host "$AGENT_INSIGHT_HOST" --api-key "$AGENT_INSIGHT_API_KEY"
+    echo "QwenPaw collector installed (source: $QWENPAW_SOURCE_DIR, spool: ~/.agent-insight/otel_data/qwenpaw)"
+    echo "   Restart QwenPaw; the plugin is loaded by QwenPaw hooks."
 fi
 
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
@@ -1069,8 +1069,8 @@ fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  ✅ DeepSeek Harness observability: headless + web profiles"
 fi
-if [ "$INSTALL_COPAW" = "true" ]; then
-    echo "  ✅ CoPaw (QwenPaw) Collector: bundled hook plugin"
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "  ✅ QwenPaw Collector: bundled hook plugin"
 fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
@@ -1120,8 +1120,8 @@ fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  9. Start a new dsh session"
 fi
-if [ "$INSTALL_COPAW" = "true" ]; then
-    echo "  10. Restart CoPaw (QwenPaw), then run a conversation"
+if [ "$INSTALL_QWENPAW" = "true" ]; then
+    echo "  10. Restart QwenPaw, then run a conversation"
 fi
 echo "------------------------------------------------"
 `;
@@ -1230,7 +1230,7 @@ function generatePowerShellScript(
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
-        '    "    { name: \'CoPaw (QwenPaw)\', value: \'copaw\' }"',
+        '    "    { name: \'QwenPaw\', value: \'qwenpaw\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1314,7 +1314,7 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
-        '$INSTALL_COPAW = $false',
+        '$INSTALL_QWENPAW = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1358,12 +1358,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
-        'if ($SELECTED_FRAMEWORKS -match "copaw") {',
-        '    $INSTALL_COPAW = $true',
+        'if ($SELECTED_FRAMEWORKS -match "qwenpaw") {',
+        '    $INSTALL_QWENPAW = $true',
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_COPAW) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_QWENPAW) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1682,25 +1682,25 @@ function generatePowerShellScript(
         '    node (Join-Path $qwenPackageRoot "scripts\\qwencode-collector\\install.mjs")',
         '}',
         '',
-        'if ($INSTALL_COPAW) {',
-        '    Write-Host "⏬ Installing CoPaw (QwenPaw) AgentInsight collector..."',
-        '    $copawPython = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
-        '    if (-not $copawPython) { throw "Python 3.11+ is required for the CoPaw collector." }',
-        '    & $copawPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"',
-        '    if ($LASTEXITCODE -ne 0) { throw "$copawPython must be Python 3.11 or newer." }',
-        '    $copawRoot = Join-Path $homeDir ".agent-insight\\collectors\\copaw"',
-        '    $copawArchive = Join-Path $copawRoot "agent-insight-copaw.zip"',
-        '    $copawSourceDir = Join-Path $copawRoot "current"',
-        '    Remove-Item $copawSourceDir -Recurse -Force -ErrorAction SilentlyContinue',
-        '    New-Item -ItemType Directory -Path $copawRoot, $copawSourceDir -Force | Out-Null',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/copaw-collector" -OutFile $copawArchive',
-        '    & $copawPython -m zipfile -e $copawArchive $copawSourceDir',
-        '    & $copawPython -m pip install --disable-pip-version-check --upgrade $copawSourceDir',
-        '    if ($LASTEXITCODE -ne 0) { throw "Unable to install the CoPaw collector package." }',
-        '    & $copawPython -m copaw.cli install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
-        '    if ($LASTEXITCODE -ne 0) { throw "Unable to configure the CoPaw collector plugin." }',
-        '    Write-Host "CoPaw collector installed (source: $copawSourceDir, spool: ~/.agent-insight/otel_data/copaw)"',
-        '    Write-Host "   Restart CoPaw (QwenPaw); the plugin is loaded by QwenPaw hooks."',
+        'if ($INSTALL_QWENPAW) {',
+        '    Write-Host "⏬ Installing QwenPaw AgentInsight collector..."',
+        '    $qwenpawPython = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
+        '    if (-not $qwenpawPython) { throw "Python 3.11+ is required for the QwenPaw collector." }',
+        '    & $qwenpawPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"',
+        '    if ($LASTEXITCODE -ne 0) { throw "$qwenpawPython must be Python 3.11 or newer." }',
+        '    $qwenpawRoot = Join-Path $homeDir ".agent-insight\\collectors\\qwenpaw"',
+        '    $qwenpawArchive = Join-Path $qwenpawRoot "agent-insight-qwenpaw.zip"',
+        '    $qwenpawSourceDir = Join-Path $qwenpawRoot "current"',
+        '    Remove-Item $qwenpawSourceDir -Recurse -Force -ErrorAction SilentlyContinue',
+        '    New-Item -ItemType Directory -Path $qwenpawRoot, $qwenpawSourceDir -Force | Out-Null',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qwenpaw-collector" -OutFile $qwenpawArchive',
+        '    & $qwenpawPython -m zipfile -e $qwenpawArchive $qwenpawSourceDir',
+        '    & $qwenpawPython -m pip install --disable-pip-version-check --upgrade $qwenpawSourceDir',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to install the QwenPaw collector package." }',
+        '    & $qwenpawPython -m qwenpaw_insight.cli install --host $AGENT_INSIGHT_HOST --api-key $AGENT_INSIGHT_API_KEY',
+        '    if ($LASTEXITCODE -ne 0) { throw "Unable to configure the QwenPaw collector plugin." }',
+        '    Write-Host "QwenPaw collector installed (source: $qwenpawSourceDir, spool: ~/.agent-insight/otel_data/qwenpaw)"',
+        '    Write-Host "   Restart QwenPaw; the plugin is loaded by QwenPaw hooks."',
         '}',
         '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
@@ -2071,7 +2071,7 @@ function generatePowerShellScript(
         '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
-        'if ($INSTALL_COPAW) { Write-Host "  ✅ CoPaw (QwenPaw) Collector: bundled hook plugin" }',
+        'if ($INSTALL_QWENPAW) { Write-Host "  ✅ QwenPaw Collector: bundled hook plugin" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2112,7 +2112,7 @@ function generatePowerShellScript(
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
-        'if ($INSTALL_COPAW) { Write-Host "  10. Restart CoPaw (QwenPaw), then run a conversation" }',
+        'if ($INSTALL_QWENPAW) { Write-Host "  10. Restart QwenPaw, then run a conversation" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 

@@ -49,7 +49,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'qwencode', label: 'Qwen Code' },
     { value: 'codex', label: 'Codex' },
     { value: 'deepseek-harness', label: 'DeepSeek Harness' },
-    { value: 'copaw', label: 'CoPaw (QwenPaw)' },
+    { value: 'qwenpaw', label: 'QwenPaw' },
 ];
 
 export default function AccessInstallPage() {

@@ -11,9 +11,9 @@ import { aggregateOtelTraceEvents } from "@/lib/ingest/otel/aggregate"
 import type { OtelTraceEvent } from "@/lib/ingest/otel/types"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "copaw"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "copaw"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode", "deepseek-harness", "copaw"]
+const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "qwenpaw"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "qwenpaw"]
+const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode", "deepseek-harness", "qwenpaw"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
@@ -111,8 +111,8 @@ test("Codex is appended without reordering any existing central framework list",
   assert.deepEqual(frameworkValues(central, "FRAMEWORKS"), EXPECTED_CENTRAL)
   assert.deepEqual(frameworkValues(auto, "FRAMEWORKS"), EXPECTED_AUTO)
   assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/)
-  assert.match(central, /CoPaw \(QwenPaw\)/)
-  assert.match(auto, /CoPaw \(QwenPaw\)/)
+  assert.match(central, /QwenPaw/)
+  assert.match(auto, /QwenPaw/)
 })
 
 test("central setup preselects only Codex and keeps no-parameter installs interactive", async () => {

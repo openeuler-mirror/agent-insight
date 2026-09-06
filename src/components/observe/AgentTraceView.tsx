@@ -15,7 +15,6 @@ import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
-import { resolveTraceTimelineDurationMs } from '@/lib/latency-format';
 import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
 import {
     AgentEvent,
@@ -25,6 +24,7 @@ import {
     firstMeaningfulLine,
     formatDuration,
     formatTokens,
+    resolveTraceTimelineBounds,
     RawInteraction,
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
@@ -49,6 +49,7 @@ import {
     extractSkillsWithVersionsFromJiuwenSession,
     extractSkillsWithVersionsFromOpenClawSession,
     extractSkillsWithVersionsFromOpencodeSession,
+    extractSkillsWithVersionsFromQwenPawSession,
     extractSkillsWithVersionsFromToolInteractions,
     normalizeInteractions,
 } from '@/lib/shared/interaction-utils';
@@ -276,6 +277,7 @@ function collectTraceSkillCalls(interactions: RawInteraction[], node?: AgentNode
         ...extractSkillsWithVersionsFromOpenClawSession(normalized),
         ...extractSkillsWithVersionsFromHermesSession(normalized),
         ...extractSkillsWithVersionsFromJiuwenSession(normalized),
+        ...extractSkillsWithVersionsFromQwenPawSession(normalized),
         ...extractSkillsWithVersionsFromToolInteractions(normalized),
     ];
 
@@ -599,8 +601,12 @@ export default function AgentTraceView({
         [interactions],
     );
 
-    const totalStart = tree?.startedAt;
-    const totalDuration = resolveTraceTimelineDurationMs(tree?.stats.durationMs, executionDurationMs);
+    const traceTimeline = useMemo(
+        () => resolveTraceTimelineBounds(tree, executionDurationMs),
+        [tree, executionDurationMs],
+    );
+    const totalStart = traceTimeline?.start;
+    const totalDuration = traceTimeline?.durationMs;
 
     // Resolve selected node/event for right panel
     const { selectedAgentNode, selectedEvent } = useMemo(() => {
