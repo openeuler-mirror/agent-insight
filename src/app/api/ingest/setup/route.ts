@@ -158,8 +158,10 @@ function generateBashScript(
         '',
         ...((llamaIndexOnly || workbuddyOnly) ? [
             '# 0. Node.js check skipped for this selection',
-            '#    (LlamaIndex-only runs in project Python; WorkBuddy-only reuses WorkBuddy\'s bundled runtime)',
-            'echo "ℹ️  跳过 Node.js 检查（该组合无需系统级 Node.js）"',
+            '#    (LlamaIndex-only runs in project Python; WorkBuddy-only reuses WorkBuddy bundled runtime)',
+            'echo "ℹ️  ' + (llamaIndexOnly
+                ? 'LlamaIndex-only setup: Node.js check skipped (runs in project Python)'
+                : 'WorkBuddy-only setup: Node.js check skipped (reuses WorkBuddy bundled runtime)') + '"',
         ] : [
             '# 0. Check Node.js version',
             'if ! command -v node &> /dev/null; then',
@@ -1310,7 +1312,9 @@ function generatePowerShellScript(
         ...((llamaIndexOnly || workbuddyOnly) ? [
             '# 0. Node.js check skipped for this selection',
             '#    (LlamaIndex-only runs in project Python; WorkBuddy-only reuses WorkBuddy bundled runtime)',
-            'Write-Host "ℹ️  跳过 Node.js 检查（该组合无需系统级 Node.js）"',
+            'Write-Host "ℹ️  ' + (llamaIndexOnly
+                ? 'LlamaIndex-only setup: Node.js check skipped (runs in project Python)'
+                : 'WorkBuddy-only setup: Node.js check skipped (reuses WorkBuddy bundled runtime)') + '"',
         ] : [
             '# 0. Check Node.js version',
             '$nodeCmd = Get-Command node -ErrorAction SilentlyContinue',
