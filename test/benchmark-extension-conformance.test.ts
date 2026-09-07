@@ -16,12 +16,12 @@ const executorModule = require('../services/executor/src/index.cjs') as any
 const evaluatorModule = require('../services/evaluator/src/evaluator-registry.cjs') as any
 
 test('benchmark package catalog is reproducible and registers SWE-bench without core imports', () => {
-  const generatedDir = path.join(repositoryRoot, '.generated', 'benchmark-catalog')
+  const generatedDir = path.join(repositoryRoot, 'generated', 'benchmark-catalog')
   generator.generate(repositoryRoot)
-  const first = ['manifests.ts', 'platform.ts', 'evaluators.cjs', 'package-lock.json']
+  const first = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json']
     .map((name) => fs.readFileSync(path.join(generatedDir, name), 'utf8'))
   assert.deepEqual(generator.generate(repositoryRoot), ['swe-bench'])
-  const second = ['manifests.ts', 'platform.ts', 'evaluators.cjs', 'package-lock.json']
+  const second = ['manifests.ts', 'adapters.ts', 'evaluators.cjs', 'catalog-lock.json']
     .map((name) => fs.readFileSync(path.join(generatedDir, name), 'utf8'))
   assert.deepEqual(second, first)
   assert.equal(getBenchmarkAdapter('swe-bench').manifest.adapterKey, 'swe-bench')
@@ -83,7 +83,7 @@ result:
 `)
   assert.deepEqual(generator.generate(root), ['fixture'])
   assert.match(
-    await fsp.readFile(path.join(root, '.generated', 'benchmark-catalog', 'platform.ts'), 'utf8'),
+    await fsp.readFile(path.join(root, 'generated', 'benchmark-catalog', 'adapters.ts'), 'utf8'),
     /fixtureAdapter/,
   )
   await fsp.rm(root, { recursive: true, force: true })

@@ -6,7 +6,7 @@ const http = require('node:http')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 
-const { generatedEvaluatorDescriptors } = require('../../../.generated/benchmark-catalog/evaluators.cjs')
+const { generatedEvaluatorDescriptors } = require('../../../generated/benchmark-catalog/evaluators.cjs')
 const {
   EvaluatorProtocolError,
   EvaluatorRegistry,
@@ -195,6 +195,48 @@ function removeLabeledContainers(evaluationId) {
   })
 }
 
+function normalizeArchitecture(value) {
+  const architecture = String(value || '').trim().toLowerCase()
+  if (['amd64', 'x86_64'].includes(architecture)) return 'x86_64'
+  if (['arm64', 'aarch64'].includes(architecture)) return 'arm64'
+  return architecture || 'unknown'
+}
+
+function dockerInfo() {
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', ['info', '--format', '{{json .}}'], {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
+    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error((stderr || `docker info exited with ${code}`).trim()))
+      try {
+        const info = JSON.parse(stdout.trim() || '{}')
+        resolve({
+          dockerArch: normalizeArchitecture(info.Architecture),
+          dockerOSType: String(info.OSType || ''),
+          dockerServerVersion: String(info.ServerVersion || ''),
+        })
+      } catch {
+        reject(new Error('docker info 返回内容不合法'))
+      }
+    })
+  })
+}
+
+async function defaultControllerProbe(dataDir) {
+  await fs.mkdir(dataDir, { recursive: true, mode: 0o700 })
+  const probePath = path.join(dataDir, `.controller-probe-${process.pid}-${Date.now()}`)
+  await fs.writeFile(probePath, 'ok\n', { mode: 0o600 })
+  await fs.rm(probePath, { force: true })
+  return dockerInfo()
+}
+
 class BenchmarkEvaluatorService {
   constructor(options = {}) {
     this.dataDir = options.dataDir || process.env.EVALUATOR_DATA_DIR || '/data'
@@ -210,6 +252,7 @@ class BenchmarkEvaluatorService {
       generatedEvaluatorDescriptors.map((descriptor) => new FileEvaluatorEntrypoint(descriptor)),
     )
     this.cleanupContainers = options.cleanupContainers || removeLabeledContainers
+    this.controllerProbe = options.controllerProbe || defaultControllerProbe
     this.active = new Map()
     this.retryAttempts = new Map()
     this.readiness = null
@@ -219,10 +262,49 @@ class BenchmarkEvaluatorService {
     if (this.readiness && this.readiness.expiresAt > Date.now()) return this.readiness.value
     const value = await Promise.all(this.registry.values().map(async (evaluator) => ({
       key: evaluator.key,
-      ...await evaluator.checkReady({ dataDir: this.dataDir, hostArch: process.arch }),
+      ...await evaluator.checkReady({
+        dataDir: this.dataDir,
+        hostOS: process.env.EVALUATOR_HOST_OS || process.platform,
+        hostArch: process.env.EVALUATOR_HOST_ARCH || normalizeArchitecture(process.arch),
+      }),
     })))
     this.readiness = { value, expiresAt: Date.now() + 10_000 }
     return value
+  }
+
+  runtimeFacts(extra = {}) {
+    return {
+      ...extra,
+      hostOS: process.env.EVALUATOR_HOST_OS || process.platform,
+      hostArch: process.env.EVALUATOR_HOST_ARCH || normalizeArchitecture(process.arch),
+      sourceRevision: process.env.EVALUATOR_SOURCE_REVISION || 'unknown',
+      sourceDirty: String(process.env.EVALUATOR_SOURCE_DIRTY || 'false').toLowerCase() === 'true',
+      controllerImageId: process.env.EVALUATOR_CONTROLLER_IMAGE_ID || 'unknown',
+    }
+  }
+
+  async healthReport() {
+    let controller
+    try {
+      const runtime = await this.controllerProbe(this.dataDir)
+      controller = { ready: true, runtimeFacts: runtime || {} }
+    } catch (error) {
+      controller = {
+        ready: false,
+        reason: error instanceof Error ? error.message : String(error),
+        runtimeFacts: {},
+      }
+    }
+    return {
+      status: controller.ready ? 'healthy' : 'degraded',
+      busy: await this.hasBusyJob(),
+      runtime: this.runtimeFacts(controller.runtimeFacts),
+      controller: {
+        ready: controller.ready,
+        ...(controller.reason ? { reason: controller.reason } : {}),
+      },
+      evaluators: await this.evaluatorHealth(),
+    }
   }
 
   async hasBusyJob(exceptRunId) {
@@ -277,7 +359,7 @@ class BenchmarkEvaluatorService {
       completion: {
         status: 'failed',
         rawResult: {},
-        runtimeFacts: { controllerArch: process.arch },
+        runtimeFacts: this.runtimeFacts({ controllerArch: process.arch }),
         cleanup: { status: 'attempted' },
         error: {
           code: error.code || 'EVALUATOR_INTERNAL_ERROR',
@@ -429,6 +511,7 @@ class BenchmarkEvaluatorService {
       evaluator: result.completion.cleanup,
       controller: controllerCleanup,
     }
+    result.completion.runtimeFacts = this.runtimeFacts(result.completion.runtimeFacts)
     await this.journal.writeResult(runId, { evaluatorOutput: result })
     try {
       await this.deliverResult(request, result)
@@ -461,13 +544,7 @@ class BenchmarkEvaluatorService {
       }
       const url = new URL(req.url, 'http://evaluator.local')
       if (req.method === 'GET' && url.pathname === '/health') {
-        const evaluators = await this.evaluatorHealth()
-        const busy = await this.hasBusyJob()
-        return json(res, 200, {
-          status: evaluators.every((item) => item.ready) ? 'healthy' : 'degraded',
-          busy,
-          evaluators,
-        })
+        return json(res, 200, await this.healthReport())
       }
       if (req.method !== 'POST' || url.pathname !== '/api/v1/evaluations') {
         return json(res, 404, { error: { code: 'NOT_FOUND', message: '接口不存在', retryable: false } })
@@ -516,7 +593,9 @@ module.exports = {
   ACTIVE_STAGES,
   BenchmarkEvaluatorService,
   canonicalJson,
+  defaultControllerProbe,
   evaluationDispatchDigest,
+  normalizeArchitecture,
   validateRequest,
   removeLabeledContainers,
 }

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { getGeneratedBenchmarkManifest } from '../../../.generated/benchmark-catalog/manifests'
+import { getGeneratedBenchmarkManifest } from '../../../generated/benchmark-catalog/manifests'
 import type {
   AgentTaskEnvelope,
   BuildAgentTaskInput,

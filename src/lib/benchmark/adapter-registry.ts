@@ -3,7 +3,7 @@ import type {
 } from '../../../packages/benchmark-protocol/src/contracts'
 import type { BenchmarkAdapter } from '../../../packages/benchmark-protocol/src/evaluation-contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
-import { generatedBenchmarkAdapters } from '../../../.generated/benchmark-catalog/platform'
+import { generatedBenchmarkAdapters } from '../../../generated/benchmark-catalog/adapters'
 
 const registry = new Map<string, BenchmarkAdapter>()
 

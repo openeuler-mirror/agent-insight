@@ -27,7 +27,7 @@
     "services/evaluator/",
     "benchmarks/",
     "packages/benchmark-protocol/",
-    ".generated/benchmark-catalog/",
+    "generated/benchmark-catalog/",
     "!scripts/**/__pycache__/",
     "!scripts/**/*.pyc",
     "!scripts/otel_data/",

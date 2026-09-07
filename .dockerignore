@@ -8,6 +8,6 @@
 !services/evaluator/src/**
 !benchmarks/
 !benchmarks/**
-!.generated/
-!.generated/benchmark-catalog/
-!.generated/benchmark-catalog/evaluators.cjs
+!generated/
+!generated/benchmark-catalog/
+!generated/benchmark-catalog/evaluators.cjs

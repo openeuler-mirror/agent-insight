@@ -222,6 +222,7 @@ flowchart LR
     cleanup --> complete["POST /runs/:runId/complete\nRun=submitted"]
     complete --> validate["Adapter 校验 Artifact\n重算 size + SHA-256"]
     validate --> evaluation["事务冻结 EvaluationJob + Outbox"]
+    config["运行时配置快照\n文件热加载 + env 兜底"] --> health
     evaluation --> health["GET Evaluator /health"]
     health --> evalDispatch["POST Evaluator /api/v1/evaluations"]
     evalDispatch --> evalAccepted["202 + evaluationId/digest 匹配\nrunning_evaluator"]
@@ -237,6 +238,8 @@ flowchart LR
 ```
 
 导入阶段要求真实 Verified 数据恰好包含 500 个唯一 Case。同一实验固定单 Case 串行。`benchmarks/*/benchmark.yaml` 是接入唯一 Manifest，构建期 Catalog 把 Adapter 和 Evaluator 描述装配进三端；核心链路不直接 import 具体 Benchmark。执行器只接收 Public；Private 留在服务端，完整 Prompt 由 Adapter 生成。执行下发和评测下发都先持久化再联网，连接结果未知时使用同一 `runId + requestDigest` 重发；`SERVICE_BUSY` 延迟重试，`RUN_ID_CONFLICT` 永久失败。执行器按统一信封中的能力 ID 选择工作区、Agent Runtime 和每个 Artifact Collector；准备独立 Git 工作区后同时设置子进程 `cwd` 与 `PWD`，收集 diff 时排除协议保留路径 `model.patch`。执行器先逐个上传 Artifact，再清理工作区，最后回传终态。Agent Insight 随后校验 Patch 并下发包含隐藏测试配置但不含 gold patch 的 EvaluationJob；评测服务只能通过鉴权 Artifact API 获取 Patch。常驻 Controller 容器把 Docker Socket 映射到宿主 Docker，并通过统一文件 Entrypoint 运行 Catalog 选中的 Evaluator；SWE-bench Entrypoint 在每 Case 容器中运行官方 Harness。Harness 自身清理后，Controller 再按 evaluation 标签兜底删除遗留容器，然后回传三类证据和 Raw Result。平台先冻结 Raw Result，再归一化和投影；`resolved=false` 是有效业务失败，镜像、Docker 或 Harness 失败才是无分的系统失败，清理异常作为独立事实保留而不覆盖已生成的官方判分。相同 completion 以 digest 幂等重放，不同内容冲突；Raw Schema/映射失败返回非重试 422 并把 Case 收敛为 `evaluation_failed`，数据库持久化失败才保留可重试状态。实验仅在终态 Case 数严格等于 `expectedCaseCount` 时完成；查询服务使用该固定分母计算 `resolvedRate`，只返回安全 `nativeMetrics` 和 Artifact 描述，完整官方报告通过归属校验后的证据下载访问。
+
+评测通信配置由 `EvaluatorRuntimeConfigProvider` 统一提供：每次相关操作从 `data/config/benchmark-evaluator.env` 读取一份 URL、当前 Token、宽限期 Token 与 HTTP 策略的完整快照，文件缺失时回退进程环境变量。合法原子替换在下一次操作生效，非法或半写入更新继续使用上一份有效快照。新 Evaluation 冻结目标 URL 与发送凭证修订，避免切换期间拼接新旧值；已冻结旧目标的重试不会自动拿新 Token 请求旧地址。Linux/macOS 上由 `start-evaluator.sh` 构建和常驻运行 Controller，默认 Doctor 不拉取 Case 镜像，显式 Gold Smoke 和真实任务才按需拉取。
 
 ## 后端流水线：Skill 生成与优化
 ```mermaid

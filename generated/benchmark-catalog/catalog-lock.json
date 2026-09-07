@@ -1,0 +1,10 @@
+{
+  "notice": "AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog",
+  "packages": [
+    {
+      "key": "swe-bench",
+      "digest": "sha256:1b53eb105641d3483e42187f5cf498f4e79056e4c4b18021be02d245bc9ebed3",
+      "evaluatorDigest": "sha256:b7a720d5e02cc41cbdf698ca526af136d8e21526fb52099f528aa35e7e021d70"
+    }
+  ]
+}

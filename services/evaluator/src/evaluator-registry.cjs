@@ -209,12 +209,17 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
   async checkReady(runtime) {
     try {
       const result = await this.processRunner(this.descriptor, ['doctor'], {
-        env: { EVALUATOR_DATA_DIR: runtime.dataDir },
+        env: {
+          EVALUATOR_DATA_DIR: runtime.dataDir,
+          EVALUATOR_HOST_OS: runtime.hostOS,
+          EVALUATOR_HOST_ARCH: runtime.hostArch,
+        },
         errorCode: 'EVALUATOR_DOCTOR_FAILED',
       })
       const output = JSON.parse(result.stdout.trim() || '{}')
       return {
         ready: output.ready === true,
+        formalEligible: output.formalEligible === true,
         ...(output.reason ? { reason: output.reason } : {}),
         runtimeFacts: {
           runtime: this.descriptor.runtime,
@@ -223,8 +228,29 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
         },
       }
     } catch (error) {
-      return { ready: false, reason: error.message }
+      return { ready: false, formalEligible: false, reason: error.message }
     }
+  }
+
+  async smoke(runtime) {
+    if (!this.descriptor.smokeEntrypoint) {
+      return { supported: false, evaluatorKey: this.key, reason: '该 Evaluator 未提供部署 Smoke' }
+    }
+    const descriptor = { ...this.descriptor, entrypoint: this.descriptor.smokeEntrypoint }
+    const result = await this.processRunner(descriptor, [], {
+      env: {
+        EVALUATOR_DATA_DIR: runtime.dataDir,
+        EVALUATOR_HOST_OS: runtime.hostOS,
+        EVALUATOR_HOST_ARCH: runtime.hostArch,
+      },
+      errorCode: 'EVALUATOR_SMOKE_FAILED',
+      retryable: false,
+    })
+    const output = JSON.parse(result.stdout.trim() || '{}')
+    if (output.purpose !== 'deployment_smoke' || output.evaluatorKey !== this.key) {
+      throw new EvaluatorProtocolError('EVALUATOR_SMOKE_OUTPUT_INVALID', 'Evaluator Smoke 输出不合法', 500)
+    }
+    return { supported: true, ...output }
   }
 
   async evaluate(input) {

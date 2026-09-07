@@ -16,6 +16,7 @@ async function main() {
     server.listen(port, host, resolve)
   })
   console.log(`[benchmark/evaluator] listening on http://${host}:${port}`)
+  console.log('[benchmark/evaluator] runtime facts', JSON.stringify(service.runtimeFacts()))
   const recovered = await service.recover()
   if (recovered) console.log(`[benchmark/evaluator] recovered ${recovered} job(s)`)
 }

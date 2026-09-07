@@ -16,6 +16,7 @@ import { resolveAgentInsightDataPath } from '@/lib/env'
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
+import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
 
 function parseJson<T>(value: string | null, code: string): T {
   if (!value) throw new BenchmarkProtocolError(code, '评测所需的冻结数据不存在', 409)
@@ -121,7 +122,7 @@ export async function prepareBenchmarkEvaluation(executionRunId: string): Promis
     },
   })
   const configuredPlatformBaseUrl = String(
-    binding.callbackOrigin || process.env.AGENT_INSIGHT_PUBLIC_BASE_URL || '',
+    binding.callbackOrigin || defaultEvaluatorRuntimeConfigProvider.snapshot().publicBaseUrl || '',
   ).trim()
   if (!configuredPlatformBaseUrl) {
     throw new BenchmarkProtocolError('BENCHMARK_PUBLIC_BASE_URL_MISSING', '缺少 Agent Insight 对外地址', 500)

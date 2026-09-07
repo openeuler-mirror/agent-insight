@@ -61,8 +61,8 @@ scripts/benchmark/
   load_official_swebench_dataset.py  # standalone 会携带的 Python 进程桥
   generate-catalog.cjs               # 扫描接入包并生成三端静态 Catalog
 
-.generated/benchmark-catalog/
-  platform.ts                        # Adapter 静态 import；禁止手改
+generated/benchmark-catalog/
+  adapters.ts                        # Adapter 静态 import；禁止手改
 
 src/app/api/experiments/route.ts
 src/app/api/experiments/[id]/run/route.ts

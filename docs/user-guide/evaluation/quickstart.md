@@ -23,6 +23,35 @@ description: "数据集 → 评估器 → 评测的最短闭环"
 - Workspace 已配置必要模型
 - 已整理出若干真实问题样本，或已具备待补充的业务案例
 
+### SWE-bench 等容器 Benchmark 的评测服务
+
+需要官方 Harness 的 Benchmark 还要求独立 Evaluator Controller。评测机只需安装 Git、Docker 和 Bash，支持 Linux 与 macOS；macOS 需先启动 Docker Desktop。部署者 checkout 平台指定的固定 release 后，在仓库中运行：
+
+```bash
+bash scripts/start-evaluator.sh \
+  --token '<与 Agent Insight 一致的共享密钥>' \
+  --bind-address 0.0.0.0 \
+  --port 8080
+```
+
+Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本构建并常驻运行 Controller、保留 `/data` journal、等待健康检查并执行 Doctor。工作树有未提交内容时允许启动，但镜像会标记为 `dirty` 且不能视为可复现的正式发布构建。默认启动不会拉取 SWE-bench Case 镜像，只有收到真实任务或显式执行 Smoke 时才按需拉取一个目标镜像：
+
+```bash
+bash scripts/evaluator-doctor.sh
+bash scripts/evaluator-doctor.sh --smoke swe-bench
+```
+
+在 Agent Insight 主服务所在机器上，用权限为 `0600` 的 Token 文件更新通信目标：
+
+```bash
+node scripts/configure-evaluator-target.js \
+  --public-base-url https://agent-insight.example.com \
+  --evaluator-base-url https://evaluator-01.example.com \
+  --token-file /secure/evaluator-token
+```
+
+配置写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，下一次 Benchmark 操作自动热加载，不需要重启 `scripts/start.sh` 启动的 Agent Insight。评测服务通过 REST 回传结果，由 Agent Insight API 写入平台数据库和 Artifact Store；评测机不需要平台数据库凭证或独立业务数据库。
+
 ## 推荐流程
 
 首次建立评测闭环时，建议按以下顺序推进：

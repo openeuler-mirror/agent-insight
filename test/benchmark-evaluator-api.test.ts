@@ -174,6 +174,7 @@ test('step 09 evaluator HTTP API authenticates, journals, executes and replays i
     token,
     platformClient: platform,
     registry: new EvaluatorRegistry([evaluator]),
+    controllerProbe: async () => ({ dockerArch: 'x86_64', dockerOSType: 'linux' }),
     cleanupContainers: async () => {
       cleanupCalls += 1
       return { status: 'succeeded', removedContainerIds: [] }

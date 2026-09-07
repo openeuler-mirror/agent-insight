@@ -1,6 +1,7 @@
 key: swe-bench
 runtime: controller-container
 entrypoint: ./entrypoint.cjs
+smokeEntrypoint: ../smoke/index.cjs
 command: node
 network: deny
 resources:

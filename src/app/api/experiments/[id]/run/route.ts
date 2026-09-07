@@ -20,11 +20,12 @@ import { startComparisonRun } from '@/lib/engine/experiment/comparison-runner';
 import { prisma } from '@/lib/storage/prisma';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
+import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator-runtime-config';
 
 export const dynamic = 'force-dynamic';
 
 function callbackServiceBaseUrl(req: Request): string {
-  const configured = process.env.AGENT_INSIGHT_PUBLIC_BASE_URL?.trim();
+  const configured = defaultEvaluatorRuntimeConfigProvider.snapshot().publicBaseUrl;
   if (configured) return configured.replace(/\/$/, '');
   const url = new URL(req.url);
   const host = req.headers.get('x-forwarded-host') || url.host;

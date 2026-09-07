@@ -28,13 +28,17 @@ const databasePath = path.resolve(
   process.env.BENCHMARK_TEST_DATABASE_PATH
     || path.join(agentInsightHome, 'data', 'witty_insight.db'),
 )
+const externalEvaluatorOrigin = process.env.SWE_BENCH_E2E_EVALUATOR_BASE_URL?.replace(/\/$/, '') || ''
+const externalEvaluatorToken = process.env.SWE_BENCH_E2E_EVALUATOR_TOKEN || ''
 const controllerImage = process.env.SWE_BENCH_CONTROLLER_IMAGE || 'agent-insight-benchmark-evaluator:dev'
 const caseExternalId = process.env.SWE_BENCH_E2E_CASE || 'pallets__flask-5014'
 const model = process.env.SWE_BENCH_E2E_MODEL || 'deepseek/deepseek-v4-flash'
 const agentTimeoutSeconds = Number(process.env.SWE_BENCH_E2E_AGENT_TIMEOUT_SECONDS || 900)
 const dockerAvailable = spawnSync('docker', ['info'], { stdio: 'ignore' }).status === 0
 const opencodeAvailable = spawnSync('/usr/local/bin/opencode', ['--version'], { stdio: 'ignore' }).status === 0
-const controllerAvailable = spawnSync('docker', ['image', 'inspect', controllerImage], { stdio: 'ignore' }).status === 0
+const controllerAvailable = Boolean(externalEvaluatorOrigin) || spawnSync(
+  'docker', ['image', 'inspect', controllerImage], { stdio: 'ignore' },
+).status === 0
 const skipReason = !enabled
   ? 'set RUN_BENCHMARK_REAL_E2E=true for the all-real 01-13 test'
   : !fs.existsSync(databasePath)
@@ -43,6 +47,8 @@ const skipReason = !enabled
       ? 'Docker daemon unavailable'
       : !controllerAvailable
         ? `Controller image missing: ${controllerImage}`
+        : Boolean(externalEvaluatorOrigin) !== Boolean(externalEvaluatorToken)
+          ? 'external Evaluator URL and Token must be configured together'
         : !opencodeAvailable
           ? 'OpenCode CLI unavailable'
           : false
@@ -56,8 +62,19 @@ type RealCaseRun = {
   failureCode: string | null
   failureMessage: string | null
   runFactsJson: string | null
+  cleanupJson: string | null
   artifacts: Array<{ storagePath: string }>
   evaluations: Array<{ id: string; status: string }>
+}
+
+type RealEvaluation = {
+  status: string
+  rawResultJson: string | null
+  runtimeFactsJson: string | null
+  cleanupJson: string | null
+  normalizedResultJson: string | null
+  artifacts: Array<{ name: string; storagePath: string }>
+  dispatch: { status: string } | null
 }
 
 type RealExperimentResult = {
@@ -122,7 +139,7 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
   process.env.AGENT_INSIGHT_DATA_DIR = agentInsightHome
   process.env.DATABASE_URL = `file:${databasePath}`
   process.env.PATH = `/usr/local/bin:${process.env.PATH || ''}`
-  const token = `real-e2e-${randomBytes(24).toString('base64url')}`
+  const token = externalEvaluatorToken || `real-e2e-${randomBytes(24).toString('base64url')}`
   process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN = token
 
   const [
@@ -227,38 +244,49 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
     const resolvedCaseImage = ['arm64', 'aarch64'].includes(dockerArch)
       ? caseImage.replace('.x86_64.', '.arm64.')
       : caseImage.replace('.arm64.', '.x86_64.')
-    if (spawnSync('docker', ['image', 'inspect', resolvedCaseImage], { stdio: 'ignore' }).status !== 0) {
+    if (!externalEvaluatorOrigin && spawnSync(
+      'docker', ['image', 'inspect', resolvedCaseImage], { stdio: 'ignore' },
+    ).status !== 0) {
       t.skip(`Case image is not local; this test never pulls it automatically: ${resolvedCaseImage}`)
       return
     }
 
-    const controller = spawnSync('docker', [
-      'run', '--rm', '-d', '--pull', 'never',
-      '--name', controllerName,
-      '--add-host', 'host.docker.internal:host-gateway',
-      '-v', '/var/run/docker.sock:/var/run/docker.sock',
-      '--tmpfs', '/data:rw,nosuid,nodev',
-      '-e', `EVALUATOR_PLATFORM_TOKEN=${token}`,
-      '-e', 'SWE_BENCH_IMAGE_SOURCE=official',
-      '-e', 'SWE_BENCH_IMAGE_ARCH=auto',
-      '-e', 'SWE_BENCH_ALLOW_NON_OFFICIAL=false',
-      '-p', '127.0.0.1::8080',
-      controllerImage,
-    ], { encoding: 'utf8' })
-    assert.equal(controller.status, 0, String(controller.stderr || controller.stdout))
-    controllerStarted = true
-    const portResult = spawnSync('docker', ['port', controllerName, '8080/tcp'], { encoding: 'utf8' })
-    assert.equal(portResult.status, 0, String(portResult.stderr || portResult.stdout))
-    const published = String(portResult.stdout || '').trim()
-    const controllerPort = Number(published.slice(published.lastIndexOf(':') + 1))
-    assert.ok(Number.isInteger(controllerPort) && controllerPort > 0)
-    const evaluatorOrigin = `http://127.0.0.1:${controllerPort}`
+    let evaluatorOrigin = externalEvaluatorOrigin
+    if (!evaluatorOrigin) {
+      const controller = spawnSync('docker', [
+        'run', '--rm', '-d', '--pull', 'never',
+        '--name', controllerName,
+        '--add-host', 'host.docker.internal:host-gateway',
+        '-v', '/var/run/docker.sock:/var/run/docker.sock',
+        '--tmpfs', '/data:rw,nosuid,nodev',
+        '-e', `EVALUATOR_PLATFORM_TOKEN=${token}`,
+        '-e', 'SWE_BENCH_IMAGE_SOURCE=official',
+        '-e', 'SWE_BENCH_IMAGE_ARCH=auto',
+        '-e', 'SWE_BENCH_ALLOW_NON_OFFICIAL=false',
+        '-p', '127.0.0.1::8080',
+        controllerImage,
+      ], { encoding: 'utf8' })
+      assert.equal(controller.status, 0, String(controller.stderr || controller.stdout))
+      controllerStarted = true
+      const portResult = spawnSync('docker', ['port', controllerName, '8080/tcp'], { encoding: 'utf8' })
+      assert.equal(portResult.status, 0, String(portResult.stderr || portResult.stdout))
+      const published = String(portResult.stdout || '').trim()
+      const controllerPort = Number(published.slice(published.lastIndexOf(':') + 1))
+      assert.ok(Number.isInteger(controllerPort) && controllerPort > 0)
+      evaluatorOrigin = `http://127.0.0.1:${controllerPort}`
+    }
     process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL = evaluatorOrigin
-    await waitFor(
+    const healthResponse = await waitFor(
       async () => fetch(`${evaluatorOrigin}/health`, { headers: { authorization: `Bearer ${token}` } }).catch(() => null),
       (response) => response?.ok === true,
       30_000,
     )
+    assert.ok(healthResponse)
+    const health = await healthResponse.json() as Record<string, unknown>
+    assert.equal(health.status, 'healthy')
+    if (externalEvaluatorOrigin) {
+      t.diagnostic(`one-command evaluator health=${JSON.stringify(health)}`)
+    }
 
     executor = createBenchmarkExecutor({
       clientId,
@@ -360,6 +388,32 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
     assert.match(patch, /^diff --git /m)
     const facts = JSON.parse(run.runFactsJson || '{}') as Record<string, unknown>
     assert.match(String(facts.traceId || ''), /^ses_/)
+    assert.ok(run.cleanupJson)
+    const executorCleanup = JSON.parse(run.cleanupJson) as Record<string, unknown>
+    assert.equal(executorCleanup.status, 'succeeded')
+
+    const evaluation = await prisma.benchmarkEvaluation.findUnique({
+      where: { id: evaluationId },
+      include: { artifacts: true, dispatch: true },
+    }) as unknown as RealEvaluation | null
+    assert.ok(evaluation)
+    assert.equal(evaluation.status, 'completed')
+    assert.equal(evaluation.dispatch?.status, 'accepted')
+    assert.equal(evaluation.artifacts.length, 3)
+    assert.deepEqual(
+      evaluation.artifacts.map((item) => item.name).sort(),
+      ['report.json', 'run_instance.log', 'test_output.txt'],
+    )
+    assert.ok(evaluation.rawResultJson)
+    assert.ok(evaluation.runtimeFactsJson)
+    assert.ok(evaluation.cleanupJson)
+    assert.ok(evaluation.normalizedResultJson)
+    const runtimeFacts = JSON.parse(evaluation.runtimeFactsJson) as Record<string, unknown>
+    assert.match(String(runtimeFacts.caseImage || ''), /@sha256:/)
+    const normalizedResult = JSON.parse(evaluation.normalizedResultJson) as Record<string, unknown>
+    assert.equal(normalizedResult.status, 'done')
+    assert.equal(normalizedResult.verdict, 'pass')
+    assert.equal(normalizedResult.score, 100)
 
     const resultResponse = await fetch(
       `${platform.origin}/api/benchmark/v1/experiments/${experimentId}?user=${encodeURIComponent(dataset.user)}`,
@@ -373,6 +427,7 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
     assert.equal(result.cases[0].execution.traceId, facts.traceId)
     assert.equal(result.cases[0].evaluation?.evaluationId, evaluationId)
     t.diagnostic(`experiment=${experimentId} run=${runId} evaluation=${evaluationId} opencodeSession=${String(facts.traceId)} outcome=${result.cases[0].outcome}`)
+    t.diagnostic(`executor cleanup=${run.cleanupJson} evaluation evidence=${evaluation.artifacts.map((item) => item.name).sort().join(',')} image=${String(runtimeFacts.caseImage)} evaluator cleanup=${evaluation.cleanupJson} normalized=${evaluation.normalizedResultJson}`)
     t.diagnostic(`model.patch=${patch.slice(0, 2_000)}`)
   } finally {
     if (executor) await executor.close().catch(() => undefined)

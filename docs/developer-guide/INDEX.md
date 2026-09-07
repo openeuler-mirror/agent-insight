@@ -20,6 +20,8 @@
 
 > 2026-09-05 working-tree overlay：Benchmark 扩展契约对齐高保真开发者模型。`benchmark.yaml` 成为 Manifest 唯一真源，构建期 Generator 生成平台 Adapter、Manifest 与 Evaluator Catalog；`AbstractBenchmarkAdapter` 收敛为五个业务 hook 并统一执行 Case/Result Schema 与 public/private 边界校验。执行器删除 SWE-bench Profile，改用 Workspace、Agent Runtime 和 Artifact Collector 三类通用能力注册表并支持多 Artifact；评测 Worker 删除 SWE-bench 直接依赖，改用 `doctor`、`evaluate --request ... --output ...` 文件 Entrypoint。SWE-bench 仅作为 `benchmarks/swe-bench/` 接入实例；新增 Benchmark 通常不改公共 API、调度器、执行器 Runner、评测 Worker 或 Prisma Schema。
 
+> 2026-09-07 working-tree overlay：独立 Evaluator Controller 增加 Linux/macOS 源码一键部署、Docker restart policy、当前 context Socket 解析、持久化数据卷、容器内外 Doctor 和显式 SWE-bench Gold Smoke；普通启动不预拉 Case 镜像。Agent Insight 增加 `data/config/benchmark-evaluator.env` 原子热加载与进程环境变量兜底，目标 URL 和发送 Token 从同一快照冻结，回调鉴权支持当前/宽限期 Token，切换评测机或通信凭证不再要求重启主进程。Controller 基础健康与各 Evaluator 的 `ready/formalEligible` 分离，并输出宿主、Docker、源码 revision、`sourceDirty` 和镜像事实。版本化的构建期 Catalog 迁移到可见目录 `generated/benchmark-catalog/`，并用 `adapters.ts` 与 `catalog-lock.json` 明确 Adapter 注册表和内容指纹语义。
+
 **如何更新：** `git diff 4e7d2214 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

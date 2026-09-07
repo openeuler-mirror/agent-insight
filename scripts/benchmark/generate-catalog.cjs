@@ -25,6 +25,15 @@ function resolveInside(packageDir, relativePath, label) {
   return resolved
 }
 
+function resolvePackageFile(packageDir, baseDir, relativePath, label) {
+  if (typeof relativePath !== 'string' || !relativePath.startsWith('.')) fail(`${label} 必须是接入包内相对路径`)
+  const resolved = path.resolve(baseDir, relativePath)
+  if (!resolved.startsWith(`${packageDir}${path.sep}`) || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    fail(`${label} 不存在或越出接入包：${relativePath}`)
+  }
+  return resolved
+}
+
 function readJson(filePath, label) {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')) }
   catch (error) { fail(`${label} 不是合法 JSON：${error.message}`) }
@@ -79,6 +88,9 @@ function loadPackage(packageDir) {
   }
   const evaluatorDir = path.dirname(evaluatorYamlPath)
   const entrypoint = resolveInside(evaluatorDir, evaluator.entrypoint, 'evaluator.entrypoint')
+  const smokeEntrypoint = evaluator.smokeEntrypoint
+    ? resolvePackageFile(packageDir, evaluatorDir, evaluator.smokeEntrypoint, 'evaluator.smokeEntrypoint')
+    : null
   const artifacts = source.submission?.artifacts
   if (!Array.isArray(artifacts) || !artifacts.length) fail(`${key} 至少声明一个 Artifact`)
   const names = new Set()
@@ -123,7 +135,10 @@ function loadPackage(packageDir) {
   if (!['boolean-rate', 'mean'].includes(primaryMetricAggregation)) {
     fail(`${key} 的 result.primaryMetric.aggregation 不受支持`)
   }
-  const evaluatorFiles = listFiles(evaluatorDir)
+  const evaluatorFiles = [...new Set([
+    ...listFiles(evaluatorDir),
+    ...(smokeEntrypoint ? listFiles(path.dirname(smokeEntrypoint)) : []),
+  ])]
   const files = [yamlPath, adapterPath, caseSchemaPath, resultSchemaPath, ...evaluatorFiles]
   return {
     key,
@@ -162,6 +177,7 @@ function loadPackage(packageDir) {
       runtime: evaluator.runtime,
       command: string(evaluator.command, 'evaluator.command'),
       entrypoint,
+      ...(smokeEntrypoint ? { smokeEntrypoint } : {}),
       artifactDigest: digestFiles(evaluatorFiles, evaluatorDir),
       network: evaluator.network === 'allow' ? 'allow' : 'deny',
       requiredArtifacts: normalizedArtifacts,
@@ -178,7 +194,7 @@ function toImportPath(fromDir, targetPath) {
 
 function generate(rootDir = path.resolve(__dirname, '../..')) {
   const benchmarksDir = path.join(rootDir, 'benchmarks')
-  const outputDir = path.join(rootDir, '.generated', 'benchmark-catalog')
+  const outputDir = path.join(rootDir, 'generated', 'benchmark-catalog')
   const packages = fs.readdirSync(benchmarksDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(benchmarksDir, entry.name, 'benchmark.yaml')))
     .map((entry) => loadPackage(path.join(benchmarksDir, entry.name)))
@@ -191,6 +207,8 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   }
   fs.mkdirSync(outputDir, { recursive: true })
   const manifestSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '',
     "import type { BenchmarkManifest } from '../../packages/benchmark-protocol/src/contracts'",
     '',
     `export const generatedBenchmarkManifests = ${JSON.stringify(Object.fromEntries(packages.map((item) => [item.key, item.manifest])), null, 2)} as const satisfies Record<string, BenchmarkManifest>`,
@@ -203,7 +221,9 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   const imports = packages.map((item, index) => (
     `import { ${item.adapterExport} as adapter${index} } from '${toImportPath(outputDir, item.adapterPath).replace(/\.ts$/, '')}'`
   ))
-  const platformSource = [
+  const adaptersSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '',
     "import type { BenchmarkAdapter } from '../../packages/benchmark-protocol/src/evaluation-contracts'",
     ...imports,
     '',
@@ -213,11 +233,19 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
     entrypoint: path.relative(outputDir, item.evaluator.entrypoint).replaceAll(path.sep, '/'),
+    ...(item.evaluator.smokeEntrypoint
+      ? { smokeEntrypoint: path.relative(outputDir, item.evaluator.smokeEntrypoint).replaceAll(path.sep, '/') }
+      : {}),
   }))
   let descriptorJson = JSON.stringify(descriptors, null, 2)
-  descriptorJson = descriptorJson.replace(/"entrypoint": "([^"]+)"/g, '"entrypoint": path.resolve(__dirname, "$1")')
+  descriptorJson = descriptorJson.replace(
+    /"(entrypoint|smokeEntrypoint)": "([^"]+)"/g,
+    '"$1": path.resolve(__dirname, "$2")',
+  )
   const evaluatorSource = [
     "'use strict'",
+    '',
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
     '',
     "const path = require('node:path')",
     '',
@@ -227,9 +255,10 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     '',
   ].join('\n')
   fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)
-  fs.writeFileSync(path.join(outputDir, 'platform.ts'), platformSource)
+  fs.writeFileSync(path.join(outputDir, 'adapters.ts'), adaptersSource)
   fs.writeFileSync(path.join(outputDir, 'evaluators.cjs'), evaluatorSource)
-  fs.writeFileSync(path.join(outputDir, 'package-lock.json'), `${JSON.stringify({
+  fs.writeFileSync(path.join(outputDir, 'catalog-lock.json'), `${JSON.stringify({
+    notice: 'AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
     packages: packages.map((item) => ({ key: item.key, digest: item.packageDigest, evaluatorDigest: item.evaluator.artifactDigest })),
   }, null, 2)}\n`)
   return packages.map((item) => item.key)

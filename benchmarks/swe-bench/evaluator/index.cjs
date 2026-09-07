@@ -208,14 +208,21 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
         }),
         this.imageResolver.dockerArchitecture(),
       ])
+      const hostOS = process.env.EVALUATOR_HOST_OS || runtime.hostOS || os.platform()
+      const hostArch = process.env.EVALUATOR_HOST_ARCH || runtime.hostArch || os.arch()
+      const imageSource = String(process.env.SWE_BENCH_IMAGE_SOURCE || 'official').trim()
+      const formalEligible = hostOS === 'linux' && arch === 'x86_64' && imageSource === 'official'
       return {
         ready: true,
+        formalEligible,
         runtimeFacts: {
-          hostArch: os.arch(),
+          hostOS,
+          hostArch,
           dockerArch: arch,
           harnessSourceCommit: OFFICIAL_COMMIT,
           python: python.stdout.trim() || this.python,
           dataDir: runtime.dataDir,
+          imageSource,
         },
       }
     } catch (error) {
@@ -255,7 +262,7 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
         harnessSourceCommit: OFFICIAL_COMMIT,
         caseImage: image.pinnedImage,
         imageSource: image.source,
-        hostArch: image.daemonArch,
+        dockerArch: image.daemonArch,
         formalEligible: image.formalEligible,
       },
     }, null, 2), { mode: 0o600 })

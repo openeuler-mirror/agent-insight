@@ -112,10 +112,26 @@ async function freezeTarget(evaluationId: string) {
   const evaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
   if (!evaluation) throw new BenchmarkProtocolError('EVALUATION_NOT_FOUND', '评测 Run 不存在', 404)
   if (evaluation.evaluatorBaseUrl && evaluation.evaluatorTargetKey) {
+    const current = targetResolver.resolve(evaluation.evaluatorKey)
+    if (
+      evaluation.evaluatorTargetKey.startsWith('runtime:')
+      && (
+        current.targetKey !== evaluation.evaluatorTargetKey
+        || current.baseUrl !== evaluation.evaluatorBaseUrl
+      )
+    ) {
+      throw new BenchmarkProtocolError(
+        'EVALUATOR_TARGET_CREDENTIAL_STALE',
+        '评测目标或发送凭证已切换；旧目标任务不能自动改用新凭证',
+        409,
+      )
+    }
     return {
       targetKey: evaluation.evaluatorTargetKey,
       baseUrl: evaluation.evaluatorBaseUrl,
       evaluatorKey: evaluation.evaluatorKey,
+      token: current.token,
+      configRevision: current.configRevision,
     }
   }
   const target = targetResolver.resolve(evaluation.evaluatorKey)
@@ -135,8 +151,13 @@ async function freezeTarget(evaluationId: string) {
   return target
 }
 
-async function ensureHealthy(baseUrl: string, evaluatorKey: string, token: string): Promise<void> {
-  const cacheKey = `${baseUrl}\n${evaluatorKey}`
+async function ensureHealthy(
+  baseUrl: string,
+  evaluatorKey: string,
+  token: string,
+  targetKey: string,
+): Promise<void> {
+  const cacheKey = `${targetKey}\n${baseUrl}\n${evaluatorKey}`
   if ((healthCache.get(cacheKey) || 0) > Date.now() - 30_000) return
   const response = await dispatchFetch(`${baseUrl}/health`, {
     method: 'GET',
@@ -167,7 +188,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
   let token
   try {
     target = await freezeTarget(evaluationId)
-    token = benchmarkEvaluatorToken()
+    token = target.token || benchmarkEvaluatorToken()
   } catch (error) {
     const protocolError = error instanceof BenchmarkProtocolError
       ? error
@@ -197,7 +218,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
   if (!outbox) return
   let postStarted = false
   try {
-    await ensureHealthy(target.baseUrl, target.evaluatorKey, token)
+    await ensureHealthy(target.baseUrl, target.evaluatorKey, token, target.targetKey)
     postStarted = true
     const response = await dispatchFetch(`${target.baseUrl}/api/v1/evaluations`, {
       method: 'POST',
