@@ -2355,6 +2355,7 @@ function generatePowerShellScript(
         'if (\$INSTALL_TRAE) { Write-Host "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0" }',
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) { Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $homeDir\\.agent-insight\\collectors\\pi-agent" }',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  [OK] WorkBuddy Collector: $homeDir\\.agent-insight\\packages\\workbuddy (scheduled task: AgentInsight-WorkBuddyCollector)" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2376,6 +2377,7 @@ function generatePowerShellScript(
         'if ($INSTALL_TRAE) { Write-Host "  6. Restart TRAE IDE to activate the collector" }',
         'if ($INSTALL_ACTRAIL) { Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  7. Start a new Pi session" }',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  8. Open WorkBuddy and start a conversation; traces auto-collect (task: schtasks /query /tn AgentInsight-WorkBuddyCollector)" }',
         'Write-Host "------------------------------------------------"',
     ];
     return lines.join('\n');

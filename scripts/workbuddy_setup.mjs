@@ -90,13 +90,13 @@ async function stageRuntime() {
   }
   // 保持相对 require（collector.mjs 里 ../agent-trace-collectors/shared/trace-transport.cjs）成立。
   await copyFile(SHARED_SRC, path.join(SHARED_DST_DIR, "trace-transport.cjs"));
-  log(`✓ 采集器已部署到 ${INSTALL_DIR}`);
+  log(`[OK] Collector deployed to ${INSTALL_DIR}`);
 }
 
 async function writeConfig(endpoint, apiKey) {
   await fsp.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
   await fsp.writeFile(CONFIG_PATH, JSON.stringify({ endpoint, apiKey }, null, 2), { encoding: "utf8", mode: 0o600 });
-  log(`✓ 配置已写入 ${CONFIG_PATH}`);
+  log(`[OK] Config written to ${CONFIG_PATH}`);
 }
 
 /**
@@ -120,15 +120,19 @@ async function writeLauncher(runtimeExe) {
   // 让 WorkBuddy.exe 以纯 Node 模式运行 collector.mjs（对真实 node.exe 无副作用）。
   // 路径用 Chr(34) 拼引号，避免转义歧义。
   const vbs = [
-    "' AgentInsight WorkBuddy Collector 隐藏窗口启动器（安装时生成，路径已写死）",
-    "Dim shell",
+    "' AgentInsight WorkBuddy Collector hidden-window launcher (generated at install, paths baked in)",
+    "' Runs hidden (window style 0) and WAITS for the collector (bWaitOnReturn=True) so Task",
+    "' Scheduler sees the task as Running while the collector lives, and RestartOnFailure can",
+    "' revive it on crash. WScript.Quit propagates the collector's exit code to the scheduler.",
+    "Dim shell, code",
     'Set shell = CreateObject("WScript.Shell")',
     'shell.Environment("PROCESS")("ELECTRON_RUN_AS_NODE") = "1"',
-    `shell.Run Chr(34) & "${runtimeExe}" & Chr(34) & " " & Chr(34) & "${COLLECTOR_PATH}" & Chr(34), 0, False`,
+    `code = shell.Run(Chr(34) & "${runtimeExe}" & Chr(34) & " " & Chr(34) & "${COLLECTOR_PATH}" & Chr(34), 0, True)`,
+    "WScript.Quit(code)",
     "",
   ].join("\r\n");
   await fsp.writeFile(LAUNCHER_PATH, vbs, "utf8");
-  log(`✓ 启动器已生成 ${LAUNCHER_PATH}（运行时: ${runtimeExe}）`);
+  log(`[OK] Launcher generated at ${LAUNCHER_PATH} (runtime: ${runtimeExe})`);
 }
 
 function taskXml(userId) {
@@ -196,7 +200,7 @@ function schtasks(args) {
 
 async function installTask(start) {
   const userId = currentUserId();
-  if (!userId) fail("无法确定当前用户（USERNAME 为空）");
+  if (!userId) fail("Cannot determine current user (USERNAME is empty)");
   // Task XML 要求 UTF-16。
   const xml = taskXml(userId);
   const xmlPath = path.join(os.tmpdir(), `agent-insight-workbuddy-${process.pid}.xml`);
@@ -204,15 +208,15 @@ async function installTask(start) {
   try {
     const create = schtasks(["/create", "/tn", TASK_NAME, "/xml", xmlPath, "/f"]);
     if (create.status !== 0) {
-      fail("注册计划任务失败", (create.stderr || create.stdout || "").trim());
+      fail("Failed to register scheduled task", (create.stderr || create.stdout || "").trim());
     }
-    log(`✓ 计划任务已注册: ${TASK_NAME}（登录触发 + 失败自动重启）`);
+    log(`[OK] Scheduled task registered: ${TASK_NAME} (logon trigger + restart on failure)`);
     if (start) {
       const run = schtasks(["/run", "/tn", TASK_NAME]);
       if (run.status !== 0) {
-        console.error(`  ⚠ 立即启动失败（下次登录会自动拉起）: ${(run.stderr || run.stdout || "").trim()}`);
+        console.error(`  [WARN] Immediate start failed (will auto-start on next logon): ${(run.stderr || run.stdout || "").trim()}`);
       } else {
-        log("✓ 采集器已立即启动");
+        log("[OK] Collector started");
       }
     }
   } finally {
@@ -223,39 +227,42 @@ async function installTask(start) {
 function status() {
   const q = schtasks(["/query", "/tn", TASK_NAME, "/v", "/fo", "LIST"]);
   if (q.status !== 0) {
-    log(`未注册（无计划任务 ${TASK_NAME}）`);
+    log(`Not installed (no scheduled task ${TASK_NAME})`);
     return;
   }
   log(q.stdout.trim());
-  log(`配置: ${fs.existsSync(CONFIG_PATH) ? CONFIG_PATH : "（缺失）"}`);
+  log(`Config: ${fs.existsSync(CONFIG_PATH) ? CONFIG_PATH : "(missing)"}`);
 }
 
 async function uninstall() {
+  // End the running task instance first (launcher now waits on the collector),
+  // then remove the task definition.
+  schtasks(["/end", "/tn", TASK_NAME]);
   const del = schtasks(["/delete", "/tn", TASK_NAME, "/f"]);
-  if (del.status === 0) log(`✓ 已删除计划任务 ${TASK_NAME}`);
-  else log(`（计划任务 ${TASK_NAME} 不存在或已删除）`);
-  // 结束可能仍在运行的采集器（通过 lock 文件的 PID）。
+  if (del.status === 0) log(`[OK] Scheduled task deleted: ${TASK_NAME}`);
+  else log(`(Scheduled task ${TASK_NAME} not present or already deleted)`);
+  // Kill any still-running collector via the lock file's PID.
   try {
     const lockPath = path.join(HOME, ".agent-insight", "otel_data", "workbuddy", "collector.lock");
     const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
     if (lock?.pid) spawnSync("taskkill", ["/PID", String(lock.pid), "/F"], { stdio: "ignore" });
     fs.unlinkSync(lockPath);
   } catch { /* ignore */ }
-  log("  采集器脚本与配置保留；如需彻底清理请手动删除 ~/.agent-insight/packages/workbuddy 与 ~/.agent-insight/otel_data/workbuddy");
+  log("  Collector scripts and config are kept; to fully remove, delete ~/.agent-insight/packages/workbuddy and ~/.agent-insight/otel_data/workbuddy");
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    log(`用法（有 Node 时）:
+    log(`Usage (with Node):
   node scripts/workbuddy_setup.mjs --host <url> --token <apiKey> [--no-start]
   node scripts/workbuddy_setup.mjs --status
   node scripts/workbuddy_setup.mjs --uninstall
 
-无 Node 时（复用 WorkBuddy 自带运行时安装；状态/卸载用 schtasks）:
-  $env:ELECTRON_RUN_AS_NODE=1; & "$env:LOCALAPPDATA\\Programs\\WorkBuddy\\WorkBuddy.exe" <本脚本路径> --host <url> --token <apiKey>
-  状态: schtasks /query /tn ${TASK_NAME}
-  卸载: schtasks /delete /tn ${TASK_NAME} /f`);
+Without Node (reuse WorkBuddy's bundled runtime to install; use schtasks for status/uninstall):
+  $env:ELECTRON_RUN_AS_NODE=1; & "$env:LOCALAPPDATA\\Programs\\WorkBuddy\\WorkBuddy.exe" <this script path> --host <url> --token <apiKey>
+  Status:    schtasks /query /tn ${TASK_NAME}
+  Uninstall: schtasks /delete /tn ${TASK_NAME} /f`);
     return;
   }
   if (args.status) return status();
@@ -263,17 +270,17 @@ async function main() {
 
   if (process.platform !== "win32") {
     fail(
-      "本安装器仅覆盖 Windows（Task Scheduler）",
-      "macOS/Linux 版 WorkBuddy 出现后，可复用 scripts/install-ras-client.js 的 systemd/launchd 实现。",
+      "This installer only covers Windows (Task Scheduler)",
+      "When a macOS/Linux WorkBuddy exists, reuse the systemd/launchd path in scripts/install-ras-client.js.",
     );
   }
-  if (!args.host) fail("缺少 --host", "示例: --host http://localhost:3000");
-  if (!args.token) fail("缺少 --token（Agent Insight API Key）");
+  if (!args.host) fail("Missing --host", "Example: --host http://localhost:3000");
+  if (!args.token) fail("Missing --token (Agent Insight API Key)");
   if (!detectWorkBuddy()) {
-    fail("未检测到 WorkBuddy", "请先安装并至少打开一次 WorkBuddy（需存在 ~/.workbuddy 目录）");
+    fail("WorkBuddy not detected", "Install and open WorkBuddy at least once first (~/.workbuddy must exist)");
   }
 
-  // 优先用 WorkBuddy 自带的 Electron 当运行时（无需单独装 Node）；找不到才回退到当前解释器。
+  // Prefer WorkBuddy's bundled Electron as the runtime (no separate Node needed); else fall back to the current interpreter.
   const runtimeExe = findWorkBuddyExe() || process.execPath;
 
   const endpoint = normalizeEndpoint(args.host);
@@ -283,11 +290,17 @@ async function main() {
   await installTask(args.start);
 
   log("");
-  log("✓ 安装完成。采集器已作为登录自启动的常驻任务运行，无需手动启动。");
-  if (findWorkBuddyExe()) log("  运行时: 复用 WorkBuddy 自带 Electron（ELECTRON_RUN_AS_NODE），无需单独安装 Node.js。");
-  // 给出免 Node 的状态/卸载命令（本机可能没有独立 node）。
-  log(`  状态: schtasks /query /tn ${TASK_NAME}`);
-  log(`  卸载: schtasks /delete /tn ${TASK_NAME} /f`);
+  log("[OK] Installation complete. The collector runs as a logon auto-start scheduled task; no manual start needed.");
+  if (findWorkBuddyExe()) log("  Runtime: reuses WorkBuddy's bundled Electron (ELECTRON_RUN_AS_NODE); no separate Node.js required.");
+  // Print copy-paste management commands (PowerShell, Node-free — this machine may have no standalone node).
+  const collectorMatch = "Get-CimInstance Win32_Process -Filter \"Name='WorkBuddy.exe'\" | Where-Object { $_.CommandLine -like '*collector.mjs*' }";
+  log("");
+  log("Manage the collector (copy into PowerShell; no Node needed):");
+  log(`  Start:     schtasks /run /tn "${TASK_NAME}"`);
+  log(`  Stop:      schtasks /end /tn "${TASK_NAME}"`);
+  log(`  Status:    schtasks /query /tn "${TASK_NAME}" /v /fo LIST`);
+  log(`  Running?:  ${collectorMatch} | Select-Object ProcessId,CreationDate`);
+  log(`  Uninstall: schtasks /end /tn "${TASK_NAME}"; schtasks /delete /tn "${TASK_NAME}" /f`);
 }
 
 main().catch((error) => fail(error?.message || String(error)));

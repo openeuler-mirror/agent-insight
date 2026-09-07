@@ -2050,6 +2050,7 @@ function generatePowerShellScript(
         '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  [OK] WorkBuddy Collector: $env:USERPROFILE\\.agent-insight\\packages\\workbuddy (scheduled task: AgentInsight-WorkBuddyCollector)" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2090,6 +2091,7 @@ function generatePowerShellScript(
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  9. Open WorkBuddy and start a conversation; traces auto-collect (task: schtasks /query /tn AgentInsight-WorkBuddyCollector)" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 

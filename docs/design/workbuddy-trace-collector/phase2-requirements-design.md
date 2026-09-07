@@ -225,15 +225,19 @@ flowchart LR
 
    安装脚本：`schtasks /create /tn "AgentInsight-WorkBuddyCollector" /xml "<生成的临时xml路径>" /f`（`/f` 覆盖已存在的同名任务，保证重复安装/升级是幂等的）。
 
-2. **动作不要直接指向控制台程序**：Task Scheduler 直接跑控制台程序，登录瞬间偶尔会闪一下黑框，体验很差。用一个隐藏窗口的 `.vbs` 小启动器包一层，并在其中设 `ELECTRON_RUN_AS_NODE=1` 让 WorkBuddy.exe 以 Node 模式运行采集器：
+2. **动作不要直接指向控制台程序**：Task Scheduler 直接跑控制台程序，登录瞬间偶尔会闪一下黑框，体验很差。用一个隐藏窗口的 `.vbs` 小启动器包一层，设 `ELECTRON_RUN_AS_NODE=1` 让 WorkBuddy.exe 以 Node 模式运行采集器；并且 `.vbs` 必须 **阻塞等待**采集器（`Run(..., 0, True)`）再 `WScript.Quit(code)`：
 
 ```vbs
+Dim shell, code
 Set shell = CreateObject("WScript.Shell")
 shell.Environment("PROCESS")("ELECTRON_RUN_AS_NODE") = "1"
-shell.Run Chr(34) & "<WorkBuddy.exe 绝对路径>" & Chr(34) & " " & Chr(34) & "<collector.mjs 绝对路径>" & Chr(34), 0, False
+code = shell.Run(Chr(34) & "<WorkBuddy.exe 绝对路径>" & Chr(34) & " " & Chr(34) & "<collector.mjs 绝对路径>" & Chr(34), 0, True)
+WScript.Quit(code)
 ```
 
-   任务的 Action 指向 `wscript.exe collector-launcher.vbs`，全程不弹窗；运行时是 WorkBuddy 自带 Electron，无需系统 Node。
+   为什么必须 `True`（阻塞等待）而不是 `False`：若不等待，wscript 发射后立即退出、采集器脱离成孤儿进程，Task Scheduler 认为任务瞬间成功结束 → 状态永远显示 `Ready` 而非 `Running`，且 `RestartOnFailure` **盯不到采集器崩溃**（崩溃自愈失效）。阻塞等待后，wscript 与采集器同生命周期：状态正确显示 `Running`，采集器崩溃以非零码退出 → wscript `Quit` 非零 → `RestartOnFailure` 真正拉活。代价：多驻留一个 wscript 进程（开销可忽略）。任务 Action 指向 `wscript.exe collector-launcher.vbs`，全程不弹窗；运行时是 WorkBuddy 自带 Electron，无需系统 Node。
+
+   **停止的正确姿势**随之改变：因为采集器是 wscript 的子进程且崩溃会被 `RestartOnFailure` 拉活，手动停止**不能只杀采集器进程**（会被立刻拉回），要用 `schtasks /end /tn ...` 结束整个任务实例。
 
 3. **安装后立即启动一次**，不用等用户重新登录：`schtasks /run /tn "AgentInsight-WorkBuddyCollector"`，对齐 `install-ras-client.js` 里 `installSystemd(start)`/`installLaunchd(start)` 的"装完即起"逻辑。
 
