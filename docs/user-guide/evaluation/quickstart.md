@@ -34,7 +34,7 @@ bash scripts/start-evaluator.sh \
   --port 8080
 ```
 
-Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本构建并常驻运行 Controller、保留 `/data` journal、等待健康检查并执行 Doctor。工作树有未提交内容时允许启动，但镜像会标记为 `dirty` 且不能视为可复现的正式发布构建。默认启动不会拉取 SWE-bench Case 镜像，只有收到真实任务或显式执行 Smoke 时才按需拉取一个目标镜像：
+Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本构建并常驻运行 Controller、保留 `/data` journal、等待健康检查并执行 Doctor。工作树有未提交内容时允许启动，但镜像会标记为 `dirty` 且不能视为可复现的正式发布构建。默认启动不会拉取 SWE-bench Case 镜像；收到真实任务或显式执行 Smoke 后先复用本地目标镜像，只有本地不存在时才按需拉取：
 
 ```bash
 bash scripts/evaluator-doctor.sh

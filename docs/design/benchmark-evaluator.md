@@ -130,7 +130,7 @@ accepted
   → 校验 size + sha256
   → FileEvaluatorEntrypoint 校验 Manifest/Job/Artifact
   → evaluator evaluate
-  → 解析、拉取并固定 Case 镜像 digest
+  → 解析 Case 镜像；本地不存在时才拉取，并固定本地镜像 digest
   → make_test_spec()
   → run_instance() 创建 Case 容器、应用 Patch、运行 eval_script、生成 report.json
   → 收集官方报告和日志

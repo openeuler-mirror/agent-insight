@@ -124,15 +124,24 @@ class SweBenchImageResolver {
     }
     const daemonArch = await this.dockerArchitecture(signal)
     const selected = this.imageFor(jobImage, instanceId, daemonArch)
-    await this.processRunner('docker', ['pull', selected.image], {
-      signal,
-      errorCode: 'SWE_IMAGE_UNAVAILABLE',
-    })
-    const inspected = await this.processRunner(
-      'docker',
-      ['image', 'inspect', selected.image, '--format', '{{json .RepoDigests}}'],
-      { signal, errorCode: 'SWE_IMAGE_INSPECT_FAILED' },
-    )
+    const inspectArgs = ['image', 'inspect', selected.image, '--format', '{{json .RepoDigests}}']
+    let inspected
+    try {
+      inspected = await this.processRunner('docker', inspectArgs, {
+        signal,
+        errorCode: 'SWE_IMAGE_NOT_LOCAL',
+        retryable: false,
+      })
+    } catch {
+      await this.processRunner('docker', ['pull', selected.image], {
+        signal,
+        errorCode: 'SWE_IMAGE_UNAVAILABLE',
+      })
+      inspected = await this.processRunner('docker', inspectArgs, {
+        signal,
+        errorCode: 'SWE_IMAGE_INSPECT_FAILED',
+      })
+    }
     let digests
     try { digests = JSON.parse(inspected.stdout.trim()) } catch {}
     const repository = imageRepository(selected.image)

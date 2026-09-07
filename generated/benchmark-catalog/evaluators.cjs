@@ -12,7 +12,7 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/entrypoint.cjs"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
-    "artifactDigest": "sha256:b7a720d5e02cc41cbdf698ca526af136d8e21526fb52099f528aa35e7e021d70",
+    "artifactDigest": "sha256:856f4587f4d11793319ade7c51d479b04ae68fe02e1d791d6f215768bebc35c6",
     "network": "deny",
     "requiredArtifacts": [
       {
