@@ -70,6 +70,7 @@ Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 | xiaoO                 | Hook 采集器   |
 | CodeAgent             | OTLP 上报    |
 | AcTrail               | OTLP 上报    |
+| WorkBuddy             | 文件采集器     |
 
 ## 🚀 快速开始
 

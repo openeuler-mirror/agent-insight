@@ -10,7 +10,19 @@
 - 客户端 `session-registry.mjs`（pid→sessionId 缓存 + 宽限期）、`collector.mjs`（文件监听 + D4 只读富化 + 单实例锁 + 触发上传）、隐藏窗口启动器 `collector-launcher.vbs`。
 - 独立 Windows 安装器 `scripts/workbuddy_setup.mjs`（Task Scheduler 登录触发 + 失败自动重启 + `--status`/`--uninstall`），已实现"免手动启动"端到端能力；采集器运行时复用 WorkBuddy 自带 Electron（`ELECTRON_RUN_AS_NODE=1`），**用户无需单独安装 Node.js**（已实测 WorkBuddy.exe 可执行本方案的 ESM/CJS 脚本）。
 - 服务端 `src/lib/ingest/otel/adapters/workbuddy.ts` + 注册表接入。
-- 测试 `test/workbuddy-collector.test.ts`（mapper 单测 + 全链路往返 + 多轮归并 + 无 usage 不编造）。
+- 测试 `test/workbuddy-collector.test.ts`（mapper 单测 + 全链路往返 + 多轮归并 + 无 usage 不编造 + 工具就近归属 + Agent 命名 + 完成状态 + 子 Agent 命名 + 路径保留/密钥脱敏 + latency 毫秒）。
+
+真机反馈迭代修复（均已落地）：
+
+- **Agent 命名**：内部根 Agent 名 `cli`/`terminalTitleGenerator` 归一化为产品名 `WorkBuddy`。
+- **工具顺序**：WorkBuddy 的 function/generation span 平级挂在 agent 下、工具与 LLM 无父子链；改为**按时间就近归属**（工具挂到开始时间在它之前的最近一次 LLM），修复"LLM 全堆一起、Tool 全堆一起"。
+- **执行状态**：设 `trace_completed_at` + `trace_status='success'`，详情页从"执行中"变为"已完成"。
+- **子 Agent**：WorkBuddy 用名为 `Agent` 的工具（参数带 `subagent_type`/`description`）派发子 Agent；归一化为平台 `task` 约定，并合成命名正确的子 Agent 交互（名取 `description`，如「造门店运营数据」），父 task 与子 Agent 用真实/合成 `subagent_session_id` 关联；名称提取对 2000 字符截断安全。
+- **文件路径保留**：共享 transport 增 `redactLocalPaths` 开关（默认不变），WorkBuddy 关闭本地路径脱敏 → 保留 Read/Write/Edit/Bash 的真实文件路径；密钥/token/邮箱仍脱敏。
+- **标题生成器 trace 跳过**：纯 `terminalTitleGenerator` 的内部 trace 不上报（消除 `<session>…</session>` 污染的 USER 节点，并少传约 1/3 噪声）。
+- **latency 单位**：改回毫秒（去掉误加的 `/1000`），详情页"耗时"与链路树根节点一致。
+- **免装 Node + 自愈**：安装器/启动器复用 WorkBuddy 自带 Electron（`ELECTRON_RUN_AS_NODE=1`）；启动器 `.vbs` 阻塞等待采集器 + `WScript.Quit(code)`，使 Task Scheduler 状态正确显示 Running 且 `RestartOnFailure` 崩溃自愈真正生效。
+- **安装输出**：安装器输出全 ASCII（消除 node 在 GBK 控制台的乱码）；安装完成后打印可直接复制的免 Node 管理命令（启动/停止/状态/是否在跑/卸载，停止用 `schtasks /end`）；一键脚本汇总块补上 WorkBuddy 组件/用法行。
 
 一键安装入口接入（已补做）：
 
@@ -29,8 +41,8 @@
 2. 实现 `scripts/workbuddy-collector/session-registry.mjs`：订阅 `sessions/*.json`，维护 pid→sessionId 缓存 + 宽限期淘汰，覆盖"心跳先于 trace 消失"的乱序场景。
 3. 实现 `scripts/workbuddy-collector/collector.mjs`：Trace Watcher（监听 `traces/**/*.json`）+ Enricher（D3 增量读取、D4 只读查询）+ Canonical Mapper，接入第 1 步的转换函数；加上单实例 lock 文件保护。
 4. 接入共享 spool/uploader（`trace-transport.cjs` 里的 `DurableTraceWriter`/`DurableTraceUploader`），落盘到 `~/.agent-insight/otel_data/workbuddy/<apiKeyHash>/`。
-5. 实现 `src/lib/ingest/otel/adapters/workbuddy.ts`（`matches`/`aggregate`）并注册进 `src/lib/ingest/otel/adapter-registry.ts`，补 `test/otel-trace-aggregator.test.ts` 用例。
-6. 实现 Windows 安装器 `scripts/workbuddy_setup.mjs`：探测 WorkBuddy 安装 → 落地采集器脚本与配置 → 生成任务定义 XML 并 `schtasks /create` 注册（`LogonTrigger` + `RestartOnFailure`）→ 立即 `schtasks /run` 启动一次 → `--status`/`--uninstall` 子命令；配套隐藏窗口启动器 `collector-launcher.vbs`。
+5. 实现 `src/lib/ingest/otel/adapters/workbuddy.ts`（`matches`/`aggregate`）并注册进 `src/lib/ingest/otel/adapter-registry.ts`，测试在 `test/workbuddy-collector.test.ts`。
+6. 实现 Windows 安装器 `scripts/workbuddy_setup.mjs`：探测 WorkBuddy 安装 → 落地采集器脚本与配置 → 生成任务定义 XML 并 `schtasks /create` 注册（`LogonTrigger` + `RestartOnFailure`）→ 立即 `schtasks /run` 启动一次 → `--status`/`--uninstall` 子命令；配套隐藏窗口启动器 `collector-launcher.vbs`（阻塞等待采集器 + `WScript.Quit(code)`，让 RestartOnFailure 能盯到崩溃）。
 7. 按 `docs/developer-guide/09-trace-collector.md` 的追加式规则，在 `setup/route.ts` 和 `setup/auto/route.ts` 的框架列表末尾接入 WorkBuddy 选项。
 8. 真实环境验收：连续开关 WorkBuddy 会话做时序压测（验证心跳/trace 乱序处理）、模拟 WorkBuddy 版本升级改变 D1～D5 字段（验证降级不抛错）、杀死采集器进程验证 Task Scheduler 自动重启、重启电脑验证登录自动拉起。
 9. 补充用户接入指南到 `docs/user-guide/`，说明装完自动开机启动、无需手动运行。
@@ -45,7 +57,7 @@
 | 版本升级导致 schema/日志格式变化 | D1～D4 全部是闭源内部实现，不是公开 API，作者可能随时改格式 | 所有解析点做防御式处理：字段缺失时降级而不是抛异常；D5 迁移文件可用于探测 schema 版本 |
 | Token 语义混淆 | 逐轮精确拆分（generation.toolOutput.usage）与会话级占用快照（SQLite）是两个维度，易被展示层混为一谈 | 两维度分开字段、分开标注；无数据留空不估算，不用会话总量反推逐轮值（见 phase2 §4.3） |
 | 隐私/合规 | trace 文件的 `toolInput` 含完整 system prompt 和用户对话原文 | 上传前做内容长度截断 + 敏感信息脱敏（沿用平台已有的脱敏规范），并确认这批数据的采集范围获得了必要授权 |
-| 采集器自身可靠性 | 无 Hook 触发，采集器是独立常驻进程，进程本身若崩溃需要能自愈 | 已在 phase2 §3 解决：Task Scheduler 登录触发 + `RestartOnFailure`，等价于 Linux/macOS 侧 `systemd --user`/`launchd` 已有的崩溃自愈能力 |
+| 采集器自身可靠性 | 无 Hook 触发，采集器是独立常驻进程，进程本身若崩溃需要能自愈 | Task Scheduler 登录触发 + `RestartOnFailure`；**关键前提**：启动器 `.vbs` 必须阻塞等待采集器（`Run(...,0,True)` + `WScript.Quit(code)`），否则 wscript 秒退、采集器脱离，RestartOnFailure 盯不到崩溃、状态永远 Ready（详见 phase2 §3） |
 | Task Scheduler 触发时机与 WorkBuddy 启动顺序无关 | 登录触发的任务不保证 WorkBuddy 已经启动，采集器需要能在 WorkBuddy 还没打开时安静空跑，不报错 | 用 `fs.watch` 监听目录本身即可，目录/文件不存在时降级为等待重试，不依赖 WorkBuddy 进程存在 |
 
 ## 落地文件清单
@@ -59,7 +71,10 @@
 | 安装 | Windows 安装器：落地脚本+配置+注册 Task Scheduler+立即启动+`--status`/`--uninstall` | `scripts/workbuddy_setup.mjs` |
 | 安装 | 隐藏窗口启动器 | `scripts/workbuddy-collector/collector-launcher.vbs` |
 | 安装 | 接入一键安装入口（末尾追加，不改动已有顺序） | `src/app/api/ingest/setup/route.ts`、`src/app/api/ingest/setup/auto/route.ts` |
+| 客户端 | 文件分发路由（一键安装下载采集器文件） | `src/app/api/ingest/setup/workbuddy-collector/[file]/route.ts` |
 | 服务端 | 新增 Adapter | `src/lib/ingest/otel/adapters/workbuddy.ts` |
 | 服务端 | 注册 Adapter | `src/lib/ingest/otel/adapter-registry.ts` |
-| 服务端 | 单元测试 | `test/otel-trace-aggregator.test.ts`（新增 workbuddy 用例） |
-| 文档 | 用户接入指南 | `docs/user-guide/`（说明装完自动开机启动，无需手动运行） |
+| 服务端 | 路径脱敏开关（保留文件路径） | `scripts/agent-trace-collectors/shared/trace-transport.cjs`（`redactLocalPaths`） |
+| 服务端 | 上报通道标注 | `src/lib/ingest/framework-reporting-channels.ts` |
+| 服务端 | 单元测试 | `test/workbuddy-collector.test.ts` |
+| 文档 | 用户接入指南 | `docs/user-guide/observability/workbuddy-trace-collector.md` |

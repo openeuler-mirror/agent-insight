@@ -112,7 +112,9 @@ sequenceDiagram
 | `spans[].type === "agent"` | `agent` | `agentName` 映射为 agent 名称 |
 | `spans[].type === "generation"` | `llm` | `input` = `toolInput` 里最后一条 user 文本；`output` = 响应的 `choices[].message.content`；`model` 与 `usage` 从 `toolOutput` 内嵌的模型响应直接解析 |
 | `spans[].type === "function"` | `tool` | 真实工具调用：`tool.name`=`toolName`，`tool.arguments`=`toolInput`，`tool.result`=`toolOutput.content` |
+| `spans[].type === "function"` 且 `toolName === "Agent"` | `tool`(name=`task`) + 合成 `subagent` | 子 Agent 派发：归一化为平台 `task` 约定，另合成一条 `role='subagent'` 交互（名取 `description`），父子用 `subagent_session_id` 关联，界面渲染为命名正确的子 Agent 节点 |
 | `spans[].type === "custom"`（`mcp_tools`） | —（跳过） | 无 I/O 的发现类噪声 span（单条 trace 常有几十个），不逐条上报；仅在根节点记 `workbuddy.mcp_tools_span_count` 计数 |
+| 整条 trace 的 agent 全是内部工具（如 `terminalTitleGenerator`） | —（整条跳过） | WorkBuddy 生成侧边栏标题等内部会话，不是用户对话，映射为空、不上报 |
 
 用户原文优先取自 D3 `method:sendPrompt`（若采集），否则回退 `generation.toolInput` 最后一条 user 消息——后者是逐 trace 精确的，MVP 直接用它，`mode`/`model` 从 D4 补全。
 
@@ -296,11 +298,13 @@ const adapters: readonly OtelTraceAdapter[] = [
 | `model` | 最近一次 generation 的 `toolOutput.model`（如 `hy4-preview`、`custom-local:deepseek-v4-flash`） |
 | `tokens` / `input_tokens` / `output_tokens` / `reasoning_tokens` / `cache_read_input_tokens` | 各 generation 的精确 usage 汇总（逐轮真实值）；无任何 usage 时全部留空 |
 | `context_window_limit` / `workbuddy_session_context_tokens` / `context_window_source` | 会话级上下文窗口上限 / 当前占用快照 / 来源标记（`workbuddy_local_sqlite`），来自 D4，独立于逐轮 token |
-| `latency` | 根节点 span 时长 |
-| `agent` / `agentName` | span `type==="agent"` 的 `agentName` |
+| `latency` | 端到端墙钟时长，**毫秒**（与链路树根节点同源同单位，不做 /1000） |
+| `trace_completed_at` / `trace_status` | 设为最后一个 span 结束时间 / `success`，使详情页"执行状态"显示"已完成"（trace 文件写完即代表该轮结束） |
+| `agent` / `agentName` | span `type==="agent"` 的 `agentName`；内部名 `cli`/`terminalTitleGenerator` 归一化为 `WorkBuddy` |
 | `llm_call_count` | `type==="generation"` 的 span 数 |
 | `tool_call_count` | `type==="function"` 的 span 数（`mcp_tools` 噪声 span 不计入） |
-| `interactions[]` | 按时间序拼接：每个 root → user（该轮原文）→ assistant/generation（含精确 usage）→ tool（来自 function span，挂到最近的 assistant） |
+| 子 Agent | 名为 `Agent` 的 function 工具（带 `subagent_type`）→ 归一化为平台 `task` + 合成 `role='subagent'` 交互，节点名取 `description`，父子用 `subagent_session_id`（优先 `toolOutput.subAgent.sessionId`，否则合成）关联 |
+| `interactions[]` | 按时间戳排序：user（该轮原文）→ assistant/generation（含精确 usage）→ tool（来自 function span，**按时间就近**挂到对应 assistant，而非全部堆到最后一个）→ subagent（命名正确的子 Agent） |
 
 ### 4.3 Token 精度的诚实表达
 

@@ -196,3 +196,13 @@ node scripts/qoder_work_setup.mjs uninstall --purge
 Codex 通过公开 Hook 与原生 OTel Logs 双通道采集，使用 loopback relay 合并为同一条 Trace；安装器接受 `>=0.145.0` 的可解析 Codex CLI 版本。可在安装指导中勾选 **Codex**，完成后启动 Codex、运行 `/hooks` 并信任 Agent Insight handlers。采集器不会读取 `transcript_path`，写入 spool 与上报前会递归脱敏 API Key、token、secret、password 等密钥赋值以及本地 Windows、UNC、`/Users/...`、`/home/...` 路径；Token 用量字段保留数值。VS Code、Cursor 与 Windsurf 可安装同一 VSIX，以公开 API 采集 FileEdit 和 Terminal 事件。
 
 仅在前两种精确来源都不可用时，才可在 `~/.agent-insight/config` 中显式设置 `AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS=1`，实验性地估算当前轮 transcript 中可见的用户消息、助手输出、工具参数和工具结果。Trace 详情以 `≈` 标识，并记录 `local_visible_transcript`、`visible_transcript` 和 `missing_context=true`。估算不包含客户端隐藏的 system prompt、Rules、Skill/MCP schema、内部推理与被压缩上下文，在真实 Agent 会话中可能严重低估，因此不能用于账单核对，也不会填充执行记录的精确 input/output Token 字段。CLI/Work 未提供 usage 时仍显示不可用，不启用该兜底。
+
+## WorkBuddy（Windows 桌面版）接入
+
+WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，不提供 Hook/插件扩展点、也无原生 OTel 上报。采集器是一个独立常驻进程，监听 WorkBuddy 落盘到 `~/.workbuddy/` 的本地数据（trace 文件 + SQLite 会话库），转换为标准 OTLP 后上传，与 WorkBuddy 完全解耦。
+
+在“安装指导”页勾选 **WorkBuddy** 并选择 **Windows**，把生成的 `irm ... | iex` 一行命令拷贝到 **Windows PowerShell** 执行。前提：已安装并至少打开过一次 WorkBuddy（需存在 `~/.workbuddy`）。**无需单独安装 Node.js**——采集器复用 WorkBuddy 自带的 Electron 运行时（`ELECTRON_RUN_AS_NODE=1`）。安装器把采集器落地到 `~/.agent-insight/packages/workbuddy`，注册登录自启动的计划任务 `AgentInsight-WorkBuddyCollector`（隐藏窗口启动器阻塞等待采集器，使任务状态正确显示 Running 且崩溃可被 `RestartOnFailure` 自动拉活），并立即启动一次；安装完成后打印可直接复制的免 Node 管理命令（启动/停止/状态/卸载，停止用 `schtasks /end`）。
+
+采集覆盖 Agent（内部名 `cli` 归一化为 `WorkBuddy`）、LLM（逐轮 input/output/reasoning/cache 精确 Token 取自 trace 文件的 `generation.toolOutput`）、真实工具调用（Read/Write/Edit/Bash 等，**保留真实文件路径**，仅脱敏密钥/token/邮箱），以及通过名为 `Agent` 的工具派发的子 Agent（还原为命名正确的子 Agent 节点，名取 `description`）。会话级“当前上下文占用/窗口上限”来自 SQLite，与逐轮 Token 分开呈现。WorkBuddy 内部的 `terminalTitleGenerator` 等工具类 trace 会被跳过。已知边界：子 Agent 的内部执行步骤由 WorkBuddy 在独立 worker 进程运行、未落盘到可关联的本地文件，因此子 Agent 节点只展示最终报告。
+
+详见 [WorkBuddy Trace Collector 接入指南](./workbuddy-trace-collector)。
