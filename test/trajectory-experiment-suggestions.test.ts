@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
+import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import {
   attachTrajectorySkillSuggestions,
   EXPERIMENT_TRAJECTORY_TIMEOUTS,
@@ -63,4 +66,35 @@ test('空轨迹建议不产生标签或占位内容', () => {
   assert.match(evidenceBlock, /\*\*Skill 改进建议\*\*/);
   assert.match(evidenceBlock, /`证据：\$\{preview\(ev, evaluatorId\)\}`/);
   assert.doesNotMatch(evidenceBlock, /roleLabel|format === 'JSON'/);
+});
+
+test('新增轨迹评估器将结构化证据展示为中文文本', () => {
+  const html = renderToStaticMarkup(createElement(EvidenceBlock, {
+    evaluatorId: 'preset-agent-step-efficiency',
+    evidence: {
+      json: {
+        dimension: 'step_necessity',
+        verdict: 'met',
+        reason: '各步骤均服务于日志审计任务。',
+        issues: [],
+      },
+    },
+    supplementalMarkdown: '- 合并可批量执行的检查步骤。',
+  }));
+
+  assert.match(html, /判断：/);
+  assert.match(html, /达成/);
+  assert.match(html, /依据：各步骤均服务于日志审计任务。/);
+  assert.match(html, /Skill 改进建议：- 合并可批量执行的检查步骤。/);
+  assert.doesNotMatch(html, /step_necessity|dimension|verdict|issues/);
+});
+
+test('建议预览保留负数开头的连字符', () => {
+  const html = renderToStaticMarkup(createElement(EvidenceBlock, {
+    evaluatorId: 'preset-agent-step-efficiency',
+    evidence: { md: '误差分析依据' },
+    supplementalMarkdown: '-10% 的误差',
+  }));
+
+  assert.match(html, /Skill 改进建议：-10% 的误差/);
 });

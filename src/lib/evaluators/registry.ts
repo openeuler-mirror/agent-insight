@@ -33,6 +33,8 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖预期输出
   'preset-agent-trace-quality': { category: 'traj', requires: [] },
+  'preset-agent-process-quality': { category: 'traj', requires: [] },
+  'preset-agent-step-efficiency': { category: 'traj', requires: [] },
   // 结果评测评估器（抽取自可靠性页；看结果 → res）。仅准确性依赖预期输出。
   'preset-result-accuracy': { category: 'res', requires: ['reference'] },
   'preset-result-answer': { category: 'res', requires: [] },
