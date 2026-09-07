@@ -1,0 +1,34 @@
+key: swe-bench
+displayName: SWE-bench
+protocols:
+  agentTask: agent-task/v1
+  evaluation: benchmark-evaluation/v1
+implementation:
+  adapter: ./adapter/index.ts
+  adapterExport: sweBenchAdapter
+  evaluator: ./evaluator/evaluator.yaml
+schemas:
+  case: ./schemas/case.schema.json
+  rawResult: ./schemas/result.schema.json
+executor:
+  requiredCapabilities:
+    - git-workspace/v1
+    - agent-runtime/opencode/v1
+    - git-patch/v1
+  defaultTimeoutSeconds: 1800
+submission:
+  artifacts:
+    - name: model.patch
+      mediaType: text/x-diff
+      collector: git-patch/v1
+      maxBytes: 10485760
+evaluation:
+  evaluatorKey: swe-bench
+  defaultTimeoutSeconds: 1800
+  resources:
+    cpu: 4
+    memoryMiB: 16384
+result:
+  primaryMetric:
+    key: resolved
+    aggregation: boolean-rate

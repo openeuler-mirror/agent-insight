@@ -1,0 +1,9 @@
+key: swe-bench
+runtime: controller-container
+entrypoint: ./entrypoint.cjs
+command: node
+network: deny
+resources:
+  cpu: 4
+  memoryMiB: 16384
+  timeoutSeconds: 1800

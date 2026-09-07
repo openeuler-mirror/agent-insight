@@ -1,0 +1,401 @@
+# Benchmark Agent 执行前服务端设计
+
+> 只设计高保真步骤 01～04：创建实验 → 拆分 Case → 构造任务 → 下发执行器。  
+> 不包含前端、Agent 本地执行、Artifact 上传和评测服务。  
+> 溯源：[高保真源码](../../评测服务文档/Benchmark统一接口设计-SWE-bench示例.html)。
+
+状态：服务端前置链路与执行器步骤 04～07 已接通；真实 SWE-bench Verified Case 已贯穿步骤 01～07 的 HTTP API 测试。
+
+## 1. 主流程
+
+```text
+POST /api/experiments (scope=benchmark)
+  └─ BenchmarkExperimentService.create()
+       ├─ datasetId → dataset + adapterKey
+       ├─ clientId → executorBaseUrl + capabilities
+       └─ 事务创建 Experiment、Binding、Cases、CaseRuns(pending)
+
+POST /api/experiments/{id}/run
+  └─ BenchmarkOrchestrator.start()
+       └─ prepareNextCaseRun()
+            ├─ adapter.validateAndSplitCase(rawCase)
+            ├─ adapter.buildAgentTask(publicPayload, runContext)
+            ├─ 事务保存 TaskEnvelope + digest + DispatchOutbox
+            └─ OutboxWorker POST /api/v1/benchmark-executions
+                 └─ 202 accepted → CaseRun(running_agent)
+```
+
+创建实验只冻结任务，不调用 Adapter、不发 HTTP。启动实验后按 Case 顺序推进；同一实验 Agent 并发固定为 1，当前 Run 未结束前不下发下一条。
+
+高保真步骤 01 展示了 `/api/benchmark/v1/experiments`，但当前项目已有统一实验资源。实现采用 `POST /api/experiments`，避免维护两套实验生命周期。
+
+## 2. 模块落点
+
+沿用 phase3 的一期过渡目录，不提前迁移完整 Monorepo：
+
+```text
+packages/benchmark-protocol/
+  src/contracts.ts            # 三端稳定信封与 Adapter 接口
+  src/errors.ts
+  schemas/
+  tests/contracts.test.ts
+
+src/lib/benchmark/
+  adapter-base.ts             # Agent Insight 服务端抽象基类
+  adapter-registry.ts         # 只消费构建生成的 Adapter Catalog
+  dataset-service.ts
+  experiment-service.ts
+  orchestrator.ts
+  scheduler.ts                # Dispatch Outbox、REST 下发与恢复
+
+benchmarks/swe-bench/
+  benchmark.yaml
+  adapter/index.ts
+  dataset/
+    index.ts                 # 调用官方 loader，导入真实 Verified 数据
+  schemas/
+  fixtures/smoke-case.json
+  tests/adapter.test.ts
+
+scripts/benchmark/
+  load_official_swebench_dataset.py  # standalone 会携带的 Python 进程桥
+  generate-catalog.cjs               # 扫描接入包并生成三端静态 Catalog
+
+.generated/benchmark-catalog/
+  platform.ts                        # Adapter 静态 import；禁止手改
+
+src/app/api/experiments/route.ts
+src/app/api/experiments/[id]/run/route.ts
+
+test/
+  benchmark-api.test.ts
+  benchmark-dataset.test.ts
+  benchmark-orchestrator.test.ts
+  benchmark-scheduler.test.ts
+  benchmark-execution-dispatch.test.ts
+  swe-bench-official-dataset.test.ts
+```
+
+`services/executor/` 是下发目标，已由现有 `agent-insight-client` 加载，不是第二个守护进程。API Route 只做鉴权、参数解析和响应映射；SWE-bench Adapter 保持纯函数，数据集模块负责文件与官方 Python loader，二者不混用。执行器实现以 [Benchmark 执行器后端设计](benchmark-executor.md) 为准。
+
+## 3. Adapter 协议
+
+```ts
+type JsonValue =
+  | null | boolean | number | string
+  | JsonValue[]
+  | { [key: string]: JsonValue }
+
+type BenchmarkManifest = {
+  adapterKey: string
+  requiredCapabilities: readonly string[]
+  defaultTimeoutSeconds: number
+  requiredArtifacts: readonly {
+    name: string
+    mediaType: string
+    maxBytes: number
+  }[]
+}
+
+type BenchmarkRunConfig = {
+  agentRef: string
+  model?: string
+  timeoutSeconds: number
+}
+
+type RunContext = {
+  runId: string
+  experimentId: string
+  caseId: string
+}
+
+type SplitCaseResult<TPublic extends JsonValue, TPrivate extends JsonValue> = {
+  externalCaseId: string
+  publicPayload: TPublic
+  privatePayload: TPrivate
+  publicFingerprint: string
+  privateFingerprint: string
+}
+
+type BuildAgentTaskInput<TPublic extends JsonValue> = {
+  publicPayload: TPublic
+  runConfig: BenchmarkRunConfig
+  context: RunContext
+}
+
+interface BenchmarkAdapter<
+  TRaw = unknown,
+  TPublic extends JsonValue = JsonValue,
+  TPrivate extends JsonValue = JsonValue,
+  TEvaluationPayload extends JsonValue = JsonValue,
+> {
+  readonly manifest: BenchmarkManifest
+  validateAndSplitCase(raw: TRaw): SplitCaseResult<TPublic, TPrivate>
+  buildAgentTask(input: BuildAgentTaskInput<TPublic>): AgentTaskEnvelope
+  validateSubmission(input: ValidateSubmissionInput): Promise<void>
+  buildEvaluationRequest(
+    input: BuildEvaluationRequestInput<TPublic, TPrivate>,
+  ): EvaluationJob<TEvaluationPayload>
+  normalizeResult(input: NormalizeBenchmarkResultInput): NormalizedBenchmarkResult
+}
+
+abstract class AbstractBenchmarkAdapter<
+  TRaw,
+  TPublic extends JsonValue,
+  TPrivate extends JsonValue,
+  TEvaluationPayload extends JsonValue,
+> implements BenchmarkAdapter<TRaw, TPublic, TPrivate, TEvaluationPayload> {
+  abstract readonly manifest: BenchmarkManifest
+  protected abstract splitCase(raw: TRaw): Omit<
+    SplitCaseResult<TPublic, TPrivate>,
+    'publicFingerprint' | 'privateFingerprint'
+  >
+  protected abstract createAgentTask(input: BuildAgentTaskInput<TPublic>): AgentTaskEnvelope
+  protected abstract validateBenchmarkSubmission(input: ValidateSubmissionInput): Promise<void>
+  protected abstract createEvaluationRequest(
+    input: BuildEvaluationRequestInput<TPublic, TPrivate>,
+  ): EvaluationJob<TEvaluationPayload>
+  protected abstract createNormalizedResult(
+    input: NormalizeBenchmarkResultInput,
+  ): NormalizedBenchmarkResult
+}
+```
+
+抽象基类统一执行 Case/Raw Result Schema、公开/私有边界、指纹、上下文、Artifact 和归一化结果校验；开发者只实现上面一一对应的五个 `protected` hook。当前文档的步骤 01～03 只调用前两个，后三个由步骤 08～12 调用。`BenchmarkRunConfig` 使用结构化 `platform + agent + model + timeoutSeconds`，执行器不解析展示字符串。
+
+注册表从构建生成的 Catalog 注册，不直接 import SWE-bench：
+
+```ts
+for (const adapter of generatedBenchmarkAdapters) registerBenchmarkAdapter(adapter)
+getBenchmarkAdapter('swe-bench')
+```
+
+不建立 Benchmark、数据集或评估器业务版本。`schemaVersion` 和能力名中的 `/v1` 仅是跨进程协议兼容标识。
+
+## 4. 通用任务信封
+
+```ts
+type AgentTaskEnvelope = {
+  schemaVersion: 'agent-task/v1'
+  benchmark: { key: string }
+  context: RunContext
+  task: { instruction: string; benchmarkPayload: JsonValue }
+  workspace: {
+    provider: 'git'
+    repository: string
+    revision: string
+  }
+  policy: {
+    workspaceWrite: 'allow'
+    hiddenDataAccess: 'deny'
+    network: 'deny' | 'client-default'
+  }
+  submission: {
+    requiredArtifacts: Array<{
+      name: string
+      mediaType: string
+      maxBytes: number
+    }>
+  }
+  agentConfig: BenchmarkRunConfig
+}
+```
+
+通用校验负责：上下文 ID 一致、JSON 大小、仓库 URL、commit、Artifact 契约和执行器能力；递归拒绝 `command/shell/args/executable/token/credential/privatePayload`。
+
+## 5. SWE-bench 实现
+
+数据集入口不自行解析 Parquet，而是调用官方 `swebench.harness.utils.load_swebench_dataset()`；官方 Python 输出回到服务端后再由 Zod 做平台边界校验。默认位置：
+
+```text
+数据：~/.agent-insight/data/imports/swe-bench-verified/test.parquet
+源码：~/.agent-insight/vendor/SWE-bench
+Python：~/.agent-insight/vendor/SWE-bench/.venv/bin/python
+```
+
+loader 强制离线、只接受本地 Parquet，并要求恰好得到 500 个唯一 `instance_id`。原始行拆成：
+
+```ts
+type SweBenchPublicCase = {
+  instanceId: string
+  repo: string
+  baseCommit: string
+  problemStatement: string
+  hintsText: string
+  repositoryVersion?: string
+}
+
+type SweBenchPrivateCase = {
+  goldPatch: string
+  testPatch: string
+  failToPass: string[]
+  passToPass: string[]
+  environmentSetupCommit?: string
+  evaluation: {
+    image: string
+    script: string
+    type: string
+    logParser: string
+  }
+  metadata: { createdAt: string; difficulty: string }
+}
+```
+
+| 原始字段 | 去向 |
+|-|-|
+| `instance_id/repo/base_commit/problem_statement/hints_text` | Public |
+| `patch/test_patch/FAIL_TO_PASS/PASS_TO_PASS/environment_setup_commit` | Private |
+| `image/eval_script/eval_type/log_parser` | Private，供后续官方 Harness 使用 |
+| `created_at/difficulty` | Private 元数据，不下发 Agent |
+| `version` | `repositoryVersion`，表示项目事实，不是数据集版本 |
+
+Public 必须严格按字段白名单构造。不能用字符串是否重复判断泄漏：真实数据里公开 issue 可能直接提到测试名，`environment_setup_commit` 也可能等于公开的 `base_commit`；安全边界由结构白名单保证。
+
+```ts
+class SweBenchAdapter extends AbstractBenchmarkAdapter<
+  RawSweBenchCase,
+  SweBenchPublicCase,
+  SweBenchPrivateCase
+> {
+  readonly manifest = {
+    adapterKey: 'swe-bench',
+    requiredCapabilities: [
+      'git-workspace/v1',
+      'agent-runtime/opencode/v1',
+      'git-patch/v1',
+    ],
+    defaultTimeoutSeconds: 1800,
+    requiredArtifacts: [{
+      name: 'model.patch',
+      mediaType: 'text/x-diff',
+      maxBytes: 10 * 1024 * 1024,
+    }],
+  } as const
+}
+```
+
+任务映射：`repo → https://github.com/{repo}.git`，`baseCommit → workspace.revision`，公开题面进入 `benchmarkPayload`，提交物固定为 `model.patch`。Private 字段不参与任务构造。当前固定产生并只接受 `network=client-default`；未来只有在 sandbox capability 落地后才接受 `deny`。
+
+## 6. 创建实验 API
+
+```http
+POST /api/experiments
+```
+
+```json
+{
+  "name": "SWE-bench Verified · OpenCode",
+  "type": "single",
+  "scope": "benchmark",
+  "agentName": "opencode",
+  "evaluatorIds": ["benchmark:swe-bench"],
+  "benchmark": {
+    "datasetId": "bds_swe_verified",
+    "caseSelection": {
+      "mode": "explicit",
+      "caseIds": ["bdc_sympy_16886"]
+    },
+    "executionTarget": { "clientId": "client_mac_01" },
+    "runConfig": {
+      "agentRef": "opencode@1.2.0",
+      "model": "configured-default",
+      "agentTimeoutSeconds": 1800,
+      "maxParallelAgentCases": 1
+    }
+  }
+}
+```
+
+处理顺序：
+
+1. 数据集必须 ready，由数据集记录决定 `adapterKey`；
+2. 冻结选中 Case 的 ID、公开快照、fingerprint 和顺序；
+3. 按当前用户和 `clientId` 查询 `ReliabilityClient`；
+4. 校验在线、健康、`executorBaseUrl` 和 Adapter 所需能力；
+5. 单事务创建 Experiment、Binding、ExperimentCase 和带唯一 `runId` 的 CaseRun；
+6. 返回 `201`，不调用 Adapter、不发送任务。
+
+请求不接受 `baseUrl`；目标地址只能来自服务端客户端注册表，防止 SSRF 和任务错投。
+
+当前 `experiments/route.ts` 会清空非 `skill-workbench` scope，并强制至少一个 evaluator。实现时在现有 POST 开头增加 `scope=benchmark` 分支，其余路径不改。
+
+## 7. 启动与下发
+
+`POST /api/experiments/{id}/run` 对 `scope=benchmark` 调用 `BenchmarkOrchestrator.start()`，持久化调度后立即返回 `202`。
+
+单个 Case 的处理顺序固定为：
+
+1. CAS：`pending → preparing`；
+2. 读取冻结的 raw Case、RunConfig 和预创建的 `runId`；
+3. `validateAndSplitCase(rawCase)`，保存 Public/Private 快照；
+4. `buildAgentTask(publicPayload, runContext)`；
+5. 对 `{runId, task, callbackBaseUrl, timeoutSeconds}` 做 canonical JSON 和 SHA-256；
+6. 单事务保存 TaskEnvelope、摘要、`CaseRun(dispatching)` 和 Outbox；
+7. 事务外由 Outbox Worker 调用执行器；
+8. 收到匹配的 `202 accepted` 后置 `running_agent`。
+
+```http
+POST {executorBaseUrl}/api/v1/benchmark-executions
+Authorization: Bearer <short-lived-run-token>
+Idempotency-Key: <runId>
+X-Agent-Insight-Request-Digest: sha256:...
+Content-Type: application/json
+```
+
+```json
+{
+  "runId": "erun_swe_001",
+  "requestDigest": "sha256:...",
+  "task": {},
+  "callbackBaseUrl": "https://agent-insight.example.com/api/benchmark/v1/runs/erun_swe_001",
+  "timeoutSeconds": 1800
+}
+```
+
+只有 `202` 且响应的 `runId/status=accepted/requestDigest` 全部匹配才算接收成功。HTTP 客户端禁止重定向、限制响应体，日志不记录任务全文。
+
+Scheduler 已使用目标 client 当前设备凭据 hash 签名，并按响应错误码区分永久的 `RUN_ID_CONFLICT` 与延迟重试的 `SERVICE_BUSY`；不再需要全局 dispatch secret。
+
+## 8. 数据模型与状态
+
+| 模型 | 关键字段 |
+|-|-|
+| `BenchmarkDataset` | `id,user,name,adapterKey,contentHash,status,caseCount,sourceJson` |
+| `BenchmarkDatasetCase` | `id,datasetId,externalCaseId,rawCaseJson,publicPayloadJson,privatePayloadJson,sourceFingerprint,ordinal` |
+| `BenchmarkExperimentBinding` | `experimentId,datasetId,datasetContentHash,adapterKey,selectionJson,runConfigJson,schedulerStatus,expectedCaseCount` |
+| `BenchmarkCaseRun` | `id(runId),experimentId,experimentCaseId,datasetCaseId,status,adapterKey,clientId,executorBaseUrl,publicPayloadJson,privatePayloadJson,taskEnvelopeJson,taskDigest,failureCode,failureMessage,timestamps` |
+| `BenchmarkDispatchOutbox` | `id,runId(unique),destinationBaseUrl,requestJson,requestDigest,status,attemptCount,nextAttemptAt,leasedUntil,httpStatus,responseJson,errorCode,errorMessage,timestamps` |
+
+`dataset-service.ts` 导入时先调用同一 Adapter，保存可查询的 Public 和隔离的 Private；创建实验复制 Public 快照；运行前再按高保真步骤 02 校验冻结的 raw Case，并核对两次 fingerprint 一致。
+
+`ReliabilityClient` 增加 `executorBaseUrl`、`executorReachability`、`executorCheckedAt`。地址只能由设备凭证更新，实验请求不能修改。
+
+```text
+pending → preparing → dispatching → running_agent
+                    ↘ blocked
+                               ↘ dispatch_failed
+                               ↘ dispatch_unknown → 同 runId 重发一次
+```
+
+- Outbox 必须先落库，Worker 用 `leasedUntil + updateMany` 做 CAS；
+- 明确非 `202` 为 `dispatch_failed`；
+- 发送后超时/断连为 `dispatch_unknown`，只允许相同 `runId + requestDigest` 重发一次；
+- `409 RUN_ID_CONFLICT` 永久失败；
+- Worker 重启只重放 Outbox，不重新调用 Adapter；
+- 用户后续重试 Agent 时创建新 `runId`。
+
+## 9. 开发顺序与验证
+
+1. `packages/benchmark-protocol` 的 contracts、errors、schemas 和契约测试；
+2. Prisma 模型、`dataset-service.ts` 和脱敏单测 Fixture；
+3. `adapter-base.ts`、`adapter-registry.ts` 和 `benchmarks/swe-bench/adapter/index.ts`；
+4. `experiment-service.ts` 与创建实验分支；
+5. `orchestrator.ts`、`scheduler.ts` 与启动实验分支；
+6. Scheduler 内的 Outbox、短时令牌和 REST 下发；
+7. `test/benchmark-execution-dispatch.test.ts` 桩执行器测试；
+8. 官方 loader 导入真实 Verified 500 Case，逐条验证隔离并构造任务；
+9. 用真实 500 Case 调用 `POST /api/experiments` 和 `POST /api/experiments/{id}/run`，捕获并验证出站 `POST /api/v1/benchmark-executions`。
+
+必须覆盖：普通实验回归、公开/私有隔离、Adapter 确定性、事务原子性、`202/409/422/超时/断连/重启`、重复 `runId`、伪造 URL 和跨用户 clientId。
+
+合成 Fixture 只用于确定性单测、非法输入、断连和幂等故障测试，不能作为 SWE-bench 接入验收。真实数据与官方源码均放在 `~/.agent-insight/`，不提交 Git；当前已用真实 500 Case 完成数据导入、Private 隔离、任务构造和 HTTP 接口调用链验收。真实 Agent 执行不属于本文件范围。

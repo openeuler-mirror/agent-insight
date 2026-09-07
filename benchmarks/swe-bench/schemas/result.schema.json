@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "swe-bench/raw-result",
+  "type": "object",
+  "required": ["instanceId", "resolved"],
+  "properties": {
+    "instanceId": { "type": "string" },
+    "resolved": { "type": "boolean" },
+    "patchSuccessfullyApplied": { "type": "boolean" },
+    "failToPass": {
+      "type": "object",
+      "required": ["passed", "total"],
+      "properties": { "passed": { "type": "integer", "minimum": 0 }, "total": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "passToPass": {
+      "type": "object",
+      "required": ["passed", "total"],
+      "properties": { "passed": { "type": "integer", "minimum": 0 }, "total": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "officialReport": { "type": "object" }
+  },
+  "additionalProperties": false
+}

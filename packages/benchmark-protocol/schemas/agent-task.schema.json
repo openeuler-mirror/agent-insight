@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-task/v1",
+  "type": "object",
+  "required": ["schemaVersion", "benchmark", "context", "task", "workspace", "policy", "submission", "agentConfig"],
+  "properties": {
+    "schemaVersion": { "const": "agent-task/v1" },
+    "benchmark": { "type": "object", "required": ["key"] },
+    "context": { "type": "object", "required": ["runId", "experimentId", "caseId"] },
+    "task": { "type": "object", "required": ["instruction", "benchmarkPayload"] },
+    "workspace": { "type": "object", "required": ["provider", "repository", "revision"] },
+    "policy": { "type": "object", "required": ["workspaceWrite", "hiddenDataAccess", "network"] },
+    "submission": {
+      "type": "object",
+      "required": ["requiredArtifacts"],
+      "properties": {
+        "requiredArtifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "mediaType", "collector", "maxBytes"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "mediaType": { "type": "string", "minLength": 1 },
+              "collector": { "type": "string", "minLength": 1 },
+              "maxBytes": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentConfig": {
+      "type": "object",
+      "required": ["platform", "agent", "timeoutSeconds"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1 },
+        "agent": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
