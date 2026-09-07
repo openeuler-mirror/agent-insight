@@ -63,6 +63,8 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-ras-reliability-detection-recovery': { category: 'traj', requires: [] },
   'preset-agent-tool-success-rate': { category: 'traj', requires: [] },
   'preset-task-completion-no-ref': { category: 'res', requires: [] },
+  // 内容严谨性：只读最终输出；参考答案是可选依据，不做门控
+  'preset-rigor-content': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };

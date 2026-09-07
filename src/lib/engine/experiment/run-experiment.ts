@@ -23,6 +23,7 @@
  * 超时类可重试（退避见 experimentEngineConfig.retryDelaysMs，默认 2s/8s）；
  * 单行超时 5 分钟。
  */
+
 import { prisma } from '@/lib/storage/prisma';
 import {
   buildJudgePrompt,
@@ -82,6 +83,7 @@ import {
 } from './task-completion-preset-evaluators';
 import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators';
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
+import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -333,6 +335,9 @@ async function evaluateOnce(
   }
   if (isDepthPresetId(evaluatorId)) {
     return runDepthPreset(user, runtime.faithfulCtx);
+  }
+  if (isRigorPresetId(evaluatorId)) {
+    return runRigorPreset(user, runtime.faithfulCtx);
   }
   if (isAgentToolPresetId(evaluatorId)) {
     return runAgentToolPreset(evaluatorId, user, runtime.faithfulCtx);

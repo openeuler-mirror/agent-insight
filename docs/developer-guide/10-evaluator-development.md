@@ -24,8 +24,9 @@
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
-| `preset-text-*` | `experiment/text-preset-evaluators.ts` |
 | `preset-fluency-text` / `preset-hallucination-text` | `experiment/fluency-preset-evaluators.ts` / `experiment/hallucination-preset-evaluators.ts`（run-experiment 直接分发） |
+| `preset-rigor-content` | `experiment/rigor-preset-evaluators.ts` |
+| `preset-text-*` | `experiment/text-preset-evaluators.ts` |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -559,6 +560,11 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 `preset-task-completion-no-ref` 与 `preset-agent-task-completion` 的边界：两者都是"任务完成度"，但评分点来源不同——前者从用户输入推断需求（无参考答案），后者从参考答案提取关键观点（有参考答案）。前者不需要参考答案即可运行，后者必须有参考答案。按 §3.5 的评分点来源维度区分，两者不重叠。
 
 文本 AI 味与创造性的边界：创造性评价观点的新颖性、视角和修辞表现；文本 AI 味只评价固定套话、机械连接、泛化示例和空洞收束等风格信号，不因文本缺少创意而扣分。文本简洁性与答案质量的边界：简洁性只扣冗余、偏题扩写和必要信息缺失，不重新评价答案事实是否正确。语种一致性只评价语言匹配和无理由切换；格式评估器只评价可读的结构与标记规范，均不承担内容安全判断。
+| 内容严谨性 `preset-rigor-content` | Agent 输出（参考答案可选） | 事实准确性 · 数值精确性 · 逻辑正确性 · 操作建议正确性 · 误导性表述（5 维扣分制 + 严重问题封顶） |
+回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+
+内容严谨性与结果准确性的边界：结果准确性对照参考答案判对错，内容严谨性面向无参考答案场景，依据评审模型知识与代码审计判定确凿错误，参考答案存在时仅作可选依据。与答案质量的边界：答案质量评相关性、完整性与连贯性，不判内容真伪；内容严谨性只判真伪，不评表达。危险命令只按是否给出风险提示计入操作建议正确性，内容主题的安全性交安全专项评估器；误导性表述只扣与事实共识冲突的过度绝对断言，纯语言形式的绝对化交争议性评估器。
+
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 
