@@ -198,6 +198,31 @@ function schtasks(args) {
   return spawnSync("schtasks.exe", args, { encoding: "utf8", stdio: "pipe" });
 }
 
+const LOCK_PATH = path.join(HOME, ".agent-insight", "otel_data", "workbuddy", "collector.lock");
+
+/**
+ * 停掉当前在跑的采集器，让重装能真正换上新代码（否则 require 缓存 + 单实例锁会让旧进程继续跑旧 mapper）。
+ * 三管齐下：结束计划任务实例 → 按 lock 里的 PID 杀进程 → 兜底按命令行杀残留 WorkBuddy.exe 采集器，最后清锁。
+ */
+function stopRunningCollector() {
+  // 1) 结束计划任务的运行实例（阻塞式启动器下会连带结束采集器）。
+  schtasks(["/end", "/tn", TASK_NAME]);
+  // 2) 按 lock 记录的 PID 杀（旧的“发射即退出”启动器下采集器已脱离，/end 抓不到）。
+  try {
+    const lock = JSON.parse(fs.readFileSync(LOCK_PATH, "utf8"));
+    if (lock?.pid) spawnSync("taskkill", ["/PID", String(lock.pid), "/F", "/T"], { stdio: "ignore" });
+  } catch { /* 无锁 / 已退出 */ }
+  // 3) 兜底：按命令行匹配杀掉任何仍在跑 collector.mjs 的 WorkBuddy.exe（不会误杀安装器自身或 WorkBuddy 界面）。
+  spawnSync("powershell", [
+    "-NoProfile", "-Command",
+    "Get-CimInstance Win32_Process -Filter \"Name='WorkBuddy.exe'\" | " +
+    "Where-Object { $_.CommandLine -like '*collector.mjs*' } | " +
+    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+  ], { stdio: "ignore" });
+  // 4) 清掉可能残留的锁（新采集器即使遇到死 PID 的锁也会自动回收，这里只是更干净）。
+  try { fs.unlinkSync(LOCK_PATH); } catch { /* ignore */ }
+}
+
 async function installTask(start) {
   const userId = currentUserId();
   if (!userId) fail("Cannot determine current user (USERNAME is empty)");
@@ -235,19 +260,11 @@ function status() {
 }
 
 async function uninstall() {
-  // End the running task instance first (launcher now waits on the collector),
-  // then remove the task definition.
-  schtasks(["/end", "/tn", TASK_NAME]);
+  // Stop the running collector (end task + kill process + clear lock), then remove the task.
+  stopRunningCollector();
   const del = schtasks(["/delete", "/tn", TASK_NAME, "/f"]);
   if (del.status === 0) log(`[OK] Scheduled task deleted: ${TASK_NAME}`);
   else log(`(Scheduled task ${TASK_NAME} not present or already deleted)`);
-  // Kill any still-running collector via the lock file's PID.
-  try {
-    const lockPath = path.join(HOME, ".agent-insight", "otel_data", "workbuddy", "collector.lock");
-    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-    if (lock?.pid) spawnSync("taskkill", ["/PID", String(lock.pid), "/F"], { stdio: "ignore" });
-    fs.unlinkSync(lockPath);
-  } catch { /* ignore */ }
   log("  Collector scripts and config are kept; to fully remove, delete ~/.agent-insight/packages/workbuddy and ~/.agent-insight/otel_data/workbuddy");
 }
 
@@ -287,6 +304,8 @@ Without Node (reuse WorkBuddy's bundled runtime to install; use schtasks for sta
   await stageRuntime();
   await writeConfig(endpoint, args.token);
   await writeLauncher(runtimeExe);
+  // 重装即热更新：先停掉可能仍在跑旧代码的采集器（require 缓存 + 单实例锁），再拉起新进程。
+  stopRunningCollector();
   await installTask(args.start);
 
   log("");
