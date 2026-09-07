@@ -111,8 +111,7 @@ sequenceDiagram
 | `trace`（整条 trace） | `chain`（合成根节点） | `name` 取 `trace.name`；承载该轮用户原文、`mode`、会话级 token 快照；作为所有 `parentId=null` 顶层 span 的父节点 |
 | `spans[].type === "agent"` | `agent` | `agentName` 映射为 agent 名称 |
 | `spans[].type === "generation"` | `llm` | `input` = `toolInput` 里最后一条 user 文本；`output` = 响应的 `choices[].message.content`；`model` 与 `usage` 从 `toolOutput` 内嵌的模型响应直接解析 |
-| `spans[].type === "function"` | `tool` | 真实工具调用：`tool.name`=`toolName`，`tool.arguments`=`toolInput`，`tool.result`=`toolOutput.content` |
-| `spans[].type === "function"` 且 `toolName === "Agent"` | `tool`(name=`task`) + 合成 `subagent` | 子 Agent 派发：归一化为平台 `task` 约定，另合成一条 `role='subagent'` 交互（名取 `description`），父子用 `subagent_session_id` 关联，界面渲染为命名正确的子 Agent 节点 |
+| `spans[].type === "function"` | `tool` | 真实工具调用：`tool.name`=`toolName`，`tool.arguments`=`toolInput`，`tool.result`=`toolOutput.content`。子 Agent 派发（`toolName === "Agent"`）也是普通工具调用，**按普通 TOOL 节点显示**（保留 `subagent_type`/`prompt` 参数与子 Agent 报告），不转成 task、不合成子 Agent 节点——因为子 Agent 内部链路 WorkBuddy 未落盘，无可展开内容 |
 | `spans[].type === "custom"`（`mcp_tools`） | —（跳过） | 无 I/O 的发现类噪声 span（单条 trace 常有几十个），不逐条上报；仅在根节点记 `workbuddy.mcp_tools_span_count` 计数 |
 | 整条 trace 的 agent 全是内部工具（如 `terminalTitleGenerator`） | —（整条跳过） | WorkBuddy 生成侧边栏标题等内部会话，不是用户对话，映射为空、不上报 |
 
@@ -303,8 +302,8 @@ const adapters: readonly OtelTraceAdapter[] = [
 | `agent` / `agentName` | span `type==="agent"` 的 `agentName`；内部名 `cli`/`terminalTitleGenerator` 归一化为 `WorkBuddy` |
 | `llm_call_count` | `type==="generation"` 的 span 数 |
 | `tool_call_count` | `type==="function"` 的 span 数（`mcp_tools` 噪声 span 不计入） |
-| 子 Agent | 名为 `Agent` 的 function 工具（带 `subagent_type`）→ 归一化为平台 `task` + 合成 `role='subagent'` 交互，节点名取 `description`，父子用 `subagent_session_id`（优先 `toolOutput.subAgent.sessionId`，否则合成）关联 |
-| `interactions[]` | 按时间戳排序：user（该轮原文）→ assistant/generation（含精确 usage）→ tool（来自 function span，**按时间就近**挂到对应 assistant，而非全部堆到最后一个）→ subagent（命名正确的子 Agent） |
+| 子 Agent | 名为 `Agent` 的 function 工具（带 `subagent_type`/`prompt`）**按普通 TOOL 呈现**，不转 task、不合成子 Agent 节点；子 Agent 的返回报告即该 TOOL 的 `result` |
+| `interactions[]` | 按时间戳排序：user（该轮原文）→ assistant/generation（含精确 usage）→ tool（来自 function span，**按时间就近**挂到对应 assistant，而非全部堆到最后一个） |
 
 ### 4.3 Token 精度的诚实表达
 

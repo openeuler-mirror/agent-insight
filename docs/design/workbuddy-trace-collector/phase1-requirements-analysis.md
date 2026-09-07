@@ -55,7 +55,7 @@ const incomingSize = finiteInteger(usage.contextWindow);
 ## 目标
 
 - 在不依赖 WorkBuddy 任何官方 Hook/插件 API 的前提下，采集其本地产生的 Agent 会话数据（D1～D5），转换为 Agent Insight 平台标准 OTLP trace 并入库。
-- 覆盖核心 span：`type:"agent"`（Agent 边界，内部名 `cli` 归一化为 `WorkBuddy`）、`type:"generation"`（LLM 调用）、`type:"function"`（真实工具调用，含 Read/Write/Edit/Bash 等）；并识别其中的子 Agent 派发工具（名为 `Agent`、参数带 `subagent_type`）还原为**命名正确的子 Agent 节点**（名取 `description`）。`type:"custom"`（`mcp_tools`）为无 I/O 的发现类噪声，逐条剔除、仅在根节点记数。以及用户原始提问、会话模式、模型名称。
+- 覆盖核心 span：`type:"agent"`（Agent 边界，内部名 `cli` 归一化为 `WorkBuddy`）、`type:"generation"`（LLM 调用）、`type:"function"`（真实工具调用，含 Read/Write/Edit/Bash 等）。子 Agent 派发在 WorkBuddy 里也是一次普通工具调用（工具名 `Agent`，参数带 `subagent_type`/`prompt`），由于子 Agent 跑在独立 worker、内部链路拿不到，**按普通 TOOL 节点显示即可，不做特殊处理**（参数与报告输出照常保留）。`type:"custom"`（`mcp_tools`）为无 I/O 的发现类噪声，逐条剔除、仅在根节点记数。以及用户原始提问、会话模式、模型名称。
 - 跳过 WorkBuddy 内部工具类 trace（如 `terminalTitleGenerator` 生成侧边栏标题的会话），避免污染真实用户会话。
 - token 用量以真实落盘值填充：逐轮 input/output/cache/reasoning 精确拆分取自 trace 文件的 generation.toolOutput.usage；会话级上下文占用/窗口上限取自 SQLite。无可用数据时留空，绝不估算或伪造。latency 统一为毫秒，与链路树根节点同源。
 - 保留真实文件路径（编码 Agent 的核心观测信号），仅对密钥/token/邮箱等敏感信息脱敏。
@@ -77,7 +77,7 @@ const incomingSize = finiteInteger(usage.contextWindow);
 4. 用户完成一次安装操作后（无需单独安装 Node.js），无需任何手动命令即可让采集器在下次开机/登录后自动运行；采集器进程崩溃后由 Task Scheduler 自动拉活。
 5. token 展示分两个维度且不混淆：逐轮 input/output/cache/reasoning（来自 generation.toolOutput.usage 的精确值）与会话级"当前上下文占用/窗口上限"（来自 SQLite 快照）。无数据时字段不出现，不得估算或用会话总量反推逐轮值。
 6. WorkBuddy 版本升级导致 D1～D5 任一格式发生变化时，采集器按字段缺失降级处理，不抛异常、不中断其余数据的采集。
-7. 多个子 Agent 并行派发时，每个子 Agent 节点命名正确（取 `description`，非通用 `subagent_type`）且正确挂在发起它的那次 LLM 之下；工具节点按时间就近归属到对应 LLM（不全部堆到最后一个）。
+7. 工具节点按时间就近归属到对应 LLM（不全部堆到最后一个）；子 Agent 派发按普通 TOOL 节点呈现（名为 `Agent`，可展开查看参数与子 Agent 返回的报告），不合成额外的子 Agent 节点。
 8. 链路详情头部"耗时"与链路树根节点时长一致（同为毫秒口径的端到端墙钟时长）。
 
 > 后续设计见 [`phase2-requirements-design.md`](phase2-requirements-design.md)；开发步骤与风险清单见 [`phase3-development-plan.md`](phase3-development-plan.md)。

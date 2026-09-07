@@ -69,62 +69,24 @@ function cacheTokens(event: OtelTraceEvent): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-/** 从可能被截断的 JSON 字符串里正则抠出某个字符串字段（截断安全，用于长 prompt 场景）。 */
-function matchJsonStringField(raw: string, field: string): string | undefined {
-  const m = new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(raw);
-  if (!m) return undefined;
-  try {
-    return JSON.parse(`"${m[1]}"`);
-  } catch {
-    return m[1];
-  }
-}
-
-/** WorkBuddy 派发子 Agent 的 "Agent" 工具：提取子 Agent 的展示名与类型。 */
-function agentSpawnInfo(event: OtelTraceEvent): { name: string; subagentType?: string } {
-  const attrs = event.attributes || {};
-  const raw = String(attrs['tool.arguments'] ?? '');
-  const parsed = parseJson(raw);
-  const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as AnyObj : {};
-  // description 是子 Agent 的人类可读角色名（如「造门店运营数据」），位于参数最前，截断也基本保得住；
-  // subagent_type（如 general-purpose）太通用，只作次要信息 / 兜底。
-  const desc = firstText(obj.description) || matchJsonStringField(raw, 'description');
-  const subType = firstText(obj.subagent_type) || matchJsonStringField(raw, 'subagent_type');
-  return { name: desc || subType || '子 Agent', subagentType: subType };
-}
-
-function isAgentSpawnEvent(event: OtelTraceEvent): boolean {
-  const name = String(firstText(event.attributes?.['tool.name'], event.name) || '');
-  return name.toLowerCase() === 'agent';
-}
-
 function toolCall(event: OtelTraceEvent): AnyObj {
   const attrs = event.attributes || {};
   const started = event.startTimeMs || Date.parse(event.receivedAt) || Date.now();
   const completed = eventEndMs(event) || started;
   const name = firstText(attrs['tool.name'], event.name, 'tool') || 'tool';
   const args = parseJson(firstText(attrs['tool.arguments'], attrs['input.value']) || '{}');
-  const argObj = args && typeof args === 'object' && !Array.isArray(args) ? args as AnyObj : {};
   const output = firstText(attrs['tool.result'], attrs['output.value']);
   const isError = event.attributes?.['tool.outcome'] === 'error' ||
     String(attrs['tool.status'] || '').toLowerCase() === 'error';
-  // WorkBuddy 派发子 Agent 是通过一个名为 "Agent" 的工具调用（参数含 subagent_type/prompt），
-  // 语义上是子 Agent，不是普通工具。归一化成平台约定的 `task`，让链路树渲染为 Agent/子 Agent 节点
-  // （buildAgentCallTree 认 function.name==='task' → kind:'task'，并读 args.subagent_type）。
-  // 用工具名判定（截断安全）：长 prompt 可能把 arguments 截断到无法解析出 subagent_type，
-  // 而 "Agent" 这个工具名本身就是子 Agent 派发的确定标志。
-  const isAgentSpawn = name.toLowerCase() === 'agent' && (
-    Boolean(argObj.subagent_type || argObj.subagentType)
-    || /subagent_?type/i.test(String(attrs['tool.arguments'] ?? ''))
-    || name === 'Agent'
-  );
+  // WorkBuddy 派发子 Agent 也是一次普通工具调用（工具名 "Agent"，参数含 subagent_type/prompt），
+  // 但子 Agent 跑在独立 worker、内部链路拿不到，所以不做特殊处理，按普通 TOOL 节点显示即可。
   return {
     id: event.spanId,
     type: 'function',
     state: isError ? 'error' : 'success',
     original_tool_name: name,
-    tool_type: isAgentSpawn ? 'task' : 'function',
-    function: { name: isAgentSpawn ? 'task' : name, arguments: args },
+    tool_type: 'function',
+    function: { name, arguments: args },
     output,
     result: output,
     timing: { started_at: toIso(started), completed_at: toIso(completed) },
@@ -233,42 +195,11 @@ export function aggregateWorkBuddyOtelTraceEvents(
     return chosen || assistantsByStart[assistantsByStart.length - 1]?.interaction;
   };
 
-  const subagentInteractions: AnyObj[] = [];
   for (const event of toolEvents) {
     const call = toolCall(event);
     const toolStartMs = event.startTimeMs || Date.parse(event.receivedAt) || 0;
-    const toolEndMs = eventEndMs(event) || toolStartMs;
     const host = (event.parentSpanId ? assistantBySpanId.get(event.parentSpanId) : undefined) ||
       hostForToolByTime(toolStartMs);
-
-    // 子 Agent 派发（"Agent" 工具）：既在父 assistant 上留一条 task 调用，
-    // 又合成一条 role='subagent' 的子 Agent 交互，用 description 作为节点名，
-    // 并用同一个 subagent_session_id 把父 task 与子 Agent 关联起来，让链路树渲染成
-    // 一个正确命名的子 Agent 节点（而非无名的 general-purpose）。
-    if (isAgentSpawnEvent(event)) {
-      const info = agentSpawnInfo(event);
-      const subSid = `wb-sub-${event.spanId || `${event.traceId || 'wb'}-${event.startTimeMs || 0}`}`;
-      // 把 session id 注入 task 调用参数，供 buildAgentCallTree 关联父子。
-      const fn = call.function as AnyObj | undefined;
-      if (fn) {
-        if (fn.arguments && typeof fn.arguments === 'object' && !Array.isArray(fn.arguments)) {
-          (fn.arguments as AnyObj).subagent_session_id = subSid;
-        } else {
-          fn.arguments = { subagent_type: info.subagentType, description: info.name, subagent_session_id: subSid };
-        }
-      }
-      subagentInteractions.push({
-        role: 'subagent',
-        agent: info.name,
-        subagent_name: info.name,
-        subagent_type: info.subagentType,
-        subagent_session_id: subSid,
-        content: firstText(event.attributes?.['tool.result'], event.attributes?.['output.value']) || '',
-        timestamp: toIso(toolStartMs),
-        timeInfo: { created: toIso(toolStartMs), completed: toIso(toolEndMs) },
-      });
-    }
-
     if (host) {
       host.tool_calls = Array.isArray(host.tool_calls) ? [...host.tool_calls, call] : [call];
     } else {
@@ -281,8 +212,6 @@ export function aggregateWorkBuddyOtelTraceEvents(
       });
     }
   }
-  // 子 Agent 交互追加到序列末尾（随后统一按时间戳排序，会落到对应父 task 之后）。
-  for (const sub of subagentInteractions) interactions.push(sub);
 
   // 工具已挂到各自的 assistant（嵌套），顶层交互按时间戳排序，让多轮 user/assistant 正确交错。
   interactions.sort((a, b) => Date.parse(String(a.timestamp || '')) - Date.parse(String(b.timestamp || '')));

@@ -25,12 +25,12 @@ WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，**不提供 Hook/插件扩�
 | Agent | sessionId、用户原始提问、Agent 名称（内部 `cli` 归一化为 `WorkBuddy`）、会话模式（ask/craft/work）、模型、耗时、状态、最终结果 |
 | LLM | 模型名、逐轮 input/output/reasoning/cache 精确 token、prompt/completion 内容、耗时 |
 | Tool | Read/Write/Edit/Bash/Glob 等真实工具调用的名称、参数（**保留真实文件路径**）、返回值、状态、耗时 |
-| 子 Agent | WorkBuddy 通过名为 `Agent` 的工具派发的子 Agent，还原为命名正确的子 Agent 节点（名取 `description`，如「造门店运营数据」），并与发起它的 LLM 关联 |
+| 子 Agent | WorkBuddy 通过名为 `Agent` 的工具派发子 Agent，本质是一次工具调用，**按普通 TOOL 节点显示**（可展开查看 `subagent_type`/`prompt` 参数与子 Agent 返回的报告）；由于子 Agent 内部链路未落盘，不再单独渲染成可展开的子 Agent 节点 |
 | Token | 逐轮精确拆分（来自 trace 文件）+ 会话级"当前上下文占用/窗口上限"（来自 SQLite），两个维度分开呈现 |
 
 已验证的 WorkBuddy 版本：`appVersion 5.5.3`（内嵌 CLI 内核 `2.137.1`）。WorkBuddy 属闭源内部实现，其本地数据格式可能随版本变化；采集器对字段缺失做降级处理，不会因此崩溃或中断其余数据采集。
 
-**已知边界**：子 Agent 的**内部执行步骤**（它自己的 LLM/工具调用）由 WorkBuddy 在独立 worker 进程中运行、未落盘到可关联的本地文件，因此子 Agent 节点只展示其最终报告，不含内部时间线。WorkBuddy 内部的 `terminalTitleGenerator`（生成侧边栏标题）等工具类 trace 会被主动跳过，不计入用户会话。
+**已知边界**：子 Agent 的**内部执行步骤**（它自己的 LLM/工具调用）由 WorkBuddy 在独立 worker 进程中运行、未落盘到可关联的本地文件。因此子 Agent 派发按普通 TOOL 节点显示，该节点里能看到派发参数与子 Agent 返回的最终报告，但没有可展开的内部时间线。WorkBuddy 内部的 `terminalTitleGenerator`（生成侧边栏标题）等工具类 trace 会被主动跳过，不计入用户会话。
 
 ## 安装（推荐：一键安装）
 
@@ -105,7 +105,7 @@ Get-ChildItem -Recurse "$env:USERPROFILE\.agent-insight\otel_data\workbuddy" | S
 | 安装报 "WorkBuddy not detected" | 先安装并打开一次 WorkBuddy（需存在 `~/.workbuddy`），再重跑安装 |
 | 计划任务状态一直 `Ready` 而非 `Running` | 需为"阻塞等待"版启动器；旧版（发射即退出）会一直显示 Ready，重装一次即可更新启动器 |
 | 链路页看不到新会话 | 确认采集器进程在跑；检查 `~/.agent-insight/otel_data/workbuddy` 下 spool 是否产出；确认 API Key/host 配置正确（`~/.agent-insight/otel_data/workbuddy/config.json`） |
-| 子 Agent 只有报告、没有内部步骤 | 已知边界：WorkBuddy 未落盘子 Agent 内部执行，无法关联 |
+| 子 Agent 只是一个 TOOL 节点（名 `Agent`）、没有内部步骤 | 符合预期：子 Agent 派发本质是工具调用，且 WorkBuddy 未落盘子 Agent 内部执行，无法关联 |
 
 ## 卸载
 

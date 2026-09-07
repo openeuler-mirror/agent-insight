@@ -17,7 +17,7 @@
 - **Agent 命名**：内部根 Agent 名 `cli`/`terminalTitleGenerator` 归一化为产品名 `WorkBuddy`。
 - **工具顺序**：WorkBuddy 的 function/generation span 平级挂在 agent 下、工具与 LLM 无父子链；改为**按时间就近归属**（工具挂到开始时间在它之前的最近一次 LLM），修复"LLM 全堆一起、Tool 全堆一起"。
 - **执行状态**：设 `trace_completed_at` + `trace_status='success'`，详情页从"执行中"变为"已完成"。
-- **子 Agent**：WorkBuddy 用名为 `Agent` 的工具（参数带 `subagent_type`/`description`）派发子 Agent；归一化为平台 `task` 约定，并合成命名正确的子 Agent 交互（名取 `description`，如「造门店运营数据」），父 task 与子 Agent 用真实/合成 `subagent_session_id` 关联；名称提取对 2000 字符截断安全。
+- **子 Agent**：WorkBuddy 用名为 `Agent` 的工具（参数带 `subagent_type`/`prompt`）派发子 Agent。曾尝试归一化为平台 `task` + 合成子 Agent 节点，但子 Agent 跑在独立 worker、内部链路 WorkBuddy 未落盘，合成的节点只是无内容的叶子、反而与父 TOOL 重名易混淆；最终**回退为按普通 TOOL 节点显示**（名为 `Agent`，参数与子 Agent 报告照常保留），符合 WorkBuddy 的实际模型。
 - **文件路径保留**：共享 transport 增 `redactLocalPaths` 开关（默认不变），WorkBuddy 关闭本地路径脱敏 → 保留 Read/Write/Edit/Bash 的真实文件路径；密钥/token/邮箱仍脱敏。
 - **标题生成器 trace 跳过**：纯 `terminalTitleGenerator` 的内部 trace 不上报（消除 `<session>…</session>` 污染的 USER 节点，并少传约 1/3 噪声）。
 - **latency 单位**：改回毫秒（去掉误加的 `/1000`），详情页"耗时"与链路树根节点一致。

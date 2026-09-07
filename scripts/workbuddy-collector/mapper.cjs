@@ -28,17 +28,26 @@ const crypto = require("node:crypto");
 const FRAMEWORK = "workbuddy";
 
 // WorkBuddy 的内部工具型 Agent（非用户对话的一部分），其 trace 应整条跳过，
-// 不作为会话节点上报。terminalTitleGenerator 是自动生成侧边栏标题的内部调用，
-// 它把会话首条消息包在 <session>…</session> 里喂给 LLM，若不跳过会污染成一条 USER 节点。
-const INTERNAL_UTILITY_AGENTS = new Set(["terminalTitleGenerator"]);
+// 不作为会话节点上报：
+// - terminalTitleGenerator：自动生成侧边栏标题，把会话首条消息包在 <session>…</session> 里；
+// - contentAnalyzer：内部的网页/内容分析子调用，不含真实用户提问。
+// 这类内部 Agent 的共同特征是其 generation 不含真实用户输入标记 <user_query>。
+const INTERNAL_UTILITY_AGENTS = new Set(["terminalTitleGenerator", "contentAnalyzer"]);
 
-/** 判断这条 trace 是否为纯内部工具 Agent（如标题生成器）产生的，应整条跳过。 */
+/** 判断这条 trace 是否为纯内部工具 Agent 产生的，应整条跳过（真实对话的根 Agent 是 cli/WorkBuddy）。 */
 function isInternalUtilityTrace(spans) {
   const agentNames = spans
     .filter((s) => s && s.type === "agent")
     .map((s) => String(s.agentName || s.name || ""));
   if (!agentNames.length) return false;
+  // 只有当全部 agent 都是已知内部工具时才整条跳过；混合了真实 cli 的 trace 不跳过，
+  // 由 userPrompt 选取逻辑挑出真正的用户轮。
   return agentNames.every((name) => INTERNAL_UTILITY_AGENTS.has(name));
+}
+
+/** 该 generation 的 toolInput 是否包含真实用户输入标记 <user_query>（WorkBuddy 约定）。 */
+function generationHasUserQuery(span) {
+  return span && span.type === "generation" && /<user_query>/.test(String(span.toolInput || ""));
 }
 
 function sha256Hex(value, length) {
@@ -110,7 +119,24 @@ function normalizeUsage(rawUsage) {
   return { input, output, reasoning: reasoning || undefined, total, cache: cache || undefined };
 }
 
-/** 从 generation.toolInput 的 messages[] 里取最后一条 user 文本，作为兜底用户提问。 */
+/**
+ * 提取用户真正输入的文本。WorkBuddy 会把注入的上下文包在
+ * `<system-reminder ...>…</system-reminder>` 里，真实用户输入包在
+ * `<user_query>…</user_query>` 里（系统提示词明确："denoted by the <user_query> tag"）。
+ * 优先取最后一个 <user_query> 的内容；没有该标签时剥掉所有 <system-reminder> 块。
+ */
+function extractUserQuery(text) {
+  if (typeof text !== "string") return text;
+  const queries = text.match(/<user_query>([\s\S]*?)<\/user_query>/g);
+  if (queries && queries.length) {
+    const last = queries[queries.length - 1];
+    return last.replace(/^<user_query>/, "").replace(/<\/user_query>$/, "").trim();
+  }
+  const stripped = text.replace(/<system-reminder\b[\s\S]*?<\/system-reminder>/g, "").trim();
+  return stripped || text;
+}
+
+/** 从 generation.toolInput 的 messages[] 里取最后一条 user 的真实提问（已去除注入上下文）。 */
 function lastUserTextFromMessages(toolInput) {
   const parsed = parseMaybeJson(toolInput);
   if (!Array.isArray(parsed)) return undefined;
@@ -118,10 +144,10 @@ function lastUserTextFromMessages(toolInput) {
     const message = parsed[i];
     if (!message || message.role !== "user") continue;
     const content = message.content;
-    if (typeof content === "string") return content;
+    if (typeof content === "string") return extractUserQuery(content);
     if (Array.isArray(content)) {
       const textPart = content.find((part) => part && part.type === "text" && part.text);
-      if (textPart) return textPart.text;
+      if (textPart) return extractUserQuery(textPart.text);
     }
   }
   return undefined;
@@ -162,8 +188,12 @@ function mapWorkBuddyTrace(traceDoc, enrichment) {
   // 合成根 chain 事件：承载该轮的用户原文、模式、会话级 token 快照，
   // 并作为所有 parentId=null 顶层 span 的父节点，保持调用树完整。
   const rootSpanId = `wb_root_${sha256Hex(traceId, 20)}`;
+  // 根用户提问：优先选第一条含真实 <user_query> 的 generation（真实用户轮），
+  // 避免在 cli+内部子 Agent 混合 trace 里取到内部子调用的提示；取不到再回退第一条 generation。
+  const userTurnSpan = spans.find(generationHasUserQuery) ||
+    spans.find((s) => s && s.type === "generation");
   const userPrompt = asText(enrichment.userPrompt) ||
-    lastUserTextFromMessages(spans.find((s) => s && s.type === "generation")?.toolInput);
+    lastUserTextFromMessages(userTurnSpan?.toolInput);
   const sessionTotals = enrichment.sessionTotals || {};
   // mcp_tools 等 custom span 是无 I/O 的发现类基础设施 span（单条 trace 常有几十个），
   // 属于噪声，不作为工具调用逐条上报；仅在根节点记一个计数，保持 trace 清爽。
@@ -311,6 +341,7 @@ module.exports = {
   normalizeUsage,
   firstResponseObject,
   lastUserTextFromMessages,
+  extractUserQuery,
   completionTextFromResponse,
   isInternalUtilityTrace,
 };

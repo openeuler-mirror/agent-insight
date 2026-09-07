@@ -203,6 +203,6 @@ WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，不提供 Hook/插件扩展
 
 在“安装指导”页勾选 **WorkBuddy** 并选择 **Windows**，把生成的 `irm ... | iex` 一行命令拷贝到 **Windows PowerShell** 执行。前提：已安装并至少打开过一次 WorkBuddy（需存在 `~/.workbuddy`）。**无需单独安装 Node.js**——采集器复用 WorkBuddy 自带的 Electron 运行时（`ELECTRON_RUN_AS_NODE=1`）。安装器把采集器落地到 `~/.agent-insight/packages/workbuddy`，注册登录自启动的计划任务 `AgentInsight-WorkBuddyCollector`（隐藏窗口启动器阻塞等待采集器，使任务状态正确显示 Running 且崩溃可被 `RestartOnFailure` 自动拉活），并立即启动一次；安装完成后打印可直接复制的免 Node 管理命令（启动/停止/状态/卸载，停止用 `schtasks /end`）。
 
-采集覆盖 Agent（内部名 `cli` 归一化为 `WorkBuddy`）、LLM（逐轮 input/output/reasoning/cache 精确 Token 取自 trace 文件的 `generation.toolOutput`）、真实工具调用（Read/Write/Edit/Bash 等，**保留真实文件路径**，仅脱敏密钥/token/邮箱），以及通过名为 `Agent` 的工具派发的子 Agent（还原为命名正确的子 Agent 节点，名取 `description`）。会话级“当前上下文占用/窗口上限”来自 SQLite，与逐轮 Token 分开呈现。WorkBuddy 内部的 `terminalTitleGenerator` 等工具类 trace 会被跳过。已知边界：子 Agent 的内部执行步骤由 WorkBuddy 在独立 worker 进程运行、未落盘到可关联的本地文件，因此子 Agent 节点只展示最终报告。
+采集覆盖 Agent（内部名 `cli` 归一化为 `WorkBuddy`）、LLM（逐轮 input/output/reasoning/cache 精确 Token 取自 trace 文件的 `generation.toolOutput`）、真实工具调用（Read/Write/Edit/Bash 等，**保留真实文件路径**，仅脱敏密钥/token/邮箱）。通过名为 `Agent` 的工具派发的子 Agent 本质也是一次工具调用，**按普通 TOOL 节点显示**（可查看派发参数与子 Agent 返回的报告），不单独渲染成子 Agent 节点。会话级“当前上下文占用/窗口上限”来自 SQLite，与逐轮 Token 分开呈现。WorkBuddy 内部的 `terminalTitleGenerator` 等工具类 trace 会被跳过。已知边界：子 Agent 的内部执行步骤由 WorkBuddy 在独立 worker 进程运行、未落盘到可关联的本地文件，因此无法展开其内部链路。
 
 详见 [WorkBuddy Trace Collector 接入指南](./workbuddy-trace-collector)。

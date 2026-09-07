@@ -7,7 +7,7 @@ import { aggregateOtelTraceEvents } from "@/lib/ingest/otel/aggregate"
 import { getOtelTraceAdapter } from "@/lib/ingest/otel/adapter-registry"
 
 const require = createRequire(import.meta.url)
-const { mapWorkBuddyTrace, normalizeUsage } = require("../scripts/workbuddy-collector/mapper.cjs")
+const { mapWorkBuddyTrace, normalizeUsage, extractUserQuery } = require("../scripts/workbuddy-collector/mapper.cjs")
 const { canonicalEventsToOtlp } = require("../scripts/agent-trace-collectors/shared/trace-transport.cjs")
 
 /** 构造一条贴近真实结构的 WorkBuddy trace（trace + agent/generation/function/custom spans）。 */
@@ -122,6 +122,30 @@ test("normalizeUsage: 无 usage 返回 undefined（不编造 0）", () => {
   assert.equal(normalizeUsage({}), undefined)
 })
 
+test("extractUserQuery: 剥离注入的 system-reminder，取 <user_query> 真实输入", () => {
+  const injected = '<system-reminder data-role="user-context">\n<user_info>OS: win32</user_info>\n(6000 chars of context...)\n</system-reminder>\n<user_query>执行父子Agent协同架构_门店看板实例</user_query>'
+  assert.equal(extractUserQuery(injected), "执行父子Agent协同架构_门店看板实例")
+  // 无 user_query 标签时，剥掉 system-reminder 块
+  assert.equal(extractUserQuery("<system-reminder>ctx</system-reminder>\n真实问题"), "真实问题")
+  // 无任何标签时原样返回
+  assert.equal(extractUserQuery("你好"), "你好")
+})
+
+test("WorkBuddy round-trip: USER 节点取 <user_query> 内容，不含 system-reminder", () => {
+  const doc = workbuddyTrace({
+    traceId: "trace-uq",
+    start: "2026-09-07T00:00:01.000Z",
+    prompt: '<system-reminder data-role="user-context"><user_info>OS: win32</user_info></system-reminder>\n<user_query>门店看板实例</user_query>',
+    completion: "好的",
+  })
+  const { record } = roundTrip([doc], "sess-uq")
+  assert.ok(record)
+  assert.equal(record.query, "门店看板实例")
+  const user = record.interactions?.find((i: any) => i.role === "user")
+  assert.equal(user?.content, "门店看板实例")
+  assert.ok(!String(user?.content).includes("system-reminder"))
+})
+
 test("WorkBuddy round-trip: 单轮 trace 聚合出精确 token 与工具调用", () => {
   const doc = workbuddyTrace({
     traceId: "trace-1",
@@ -229,6 +253,51 @@ test("WorkBuddy: 跳过内部标题生成器 trace（不产生 <session> 污染�
   assert.equal(record, null)
 })
 
+test("WorkBuddy: 跳过内部 contentAnalyzer trace（无 <user_query> 的内部子调用）", () => {
+  const doc = {
+    trace: { traceId: "trace-ca", name: "Agent workflow", startedAt: "2026-09-07T00:00:00.000Z", endedAt: "2026-09-07T00:00:05.000Z", status: "ok" },
+    spans: [
+      { traceId: "trace-ca", spanId: "ca-agent", parentId: null, name: "contentAnalyzer", type: "agent", startedAt: "2026-09-07T00:00:00.100Z", endedAt: "2026-09-07T00:00:05.000Z", status: "ok", agentName: "contentAnalyzer" },
+      {
+        traceId: "trace-ca", spanId: "ca-gen", parentId: "ca-agent", name: "generation", type: "generation",
+        startedAt: "2026-09-07T00:00:01.000Z", endedAt: "2026-09-07T00:00:04.000Z", status: "ok",
+        toolInput: JSON.stringify([{ role: "user", content: [{ type: "text", text: "## Web Content to Analyze\n..." }] }]),
+        toolOutput: JSON.stringify([{ model: "hy3", choices: [{ message: { role: "assistant", content: "analysis" } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }]),
+      },
+    ],
+  }
+  assert.equal(mapWorkBuddyTrace(doc, { sessionId: "sess-ca" }).length, 0)
+})
+
+test("WorkBuddy round-trip: cli + 内部子 Agent 混合 trace，根提问取真实 <user_query>", () => {
+  const traceId = "trace-mixed"
+  const doc = {
+    trace: { traceId, name: "Agent workflow", startedAt: "2026-09-07T00:00:00.000Z", endedAt: "2026-09-07T00:00:10.000Z", status: "ok" },
+    spans: [
+      { traceId, spanId: "m-agent", parentId: null, name: "cli", type: "agent", startedAt: "2026-09-07T00:00:00.100Z", endedAt: "2026-09-07T00:00:10.000Z", status: "ok", agentName: "cli" },
+      // 内部 contentAnalyzer 子调用先出现（无 <user_query>），不应被当成用户提问
+      {
+        traceId, spanId: "m-ca", parentId: "m-agent", name: "generation", type: "generation",
+        startedAt: "2026-09-07T00:00:01.000Z", endedAt: "2026-09-07T00:00:02.000Z", status: "ok",
+        toolInput: JSON.stringify([{ role: "user", content: [{ type: "text", text: "## Web Content to Analyze\n..." }] }]),
+        toolOutput: JSON.stringify([{ model: "hy4-preview", choices: [{ message: { role: "assistant", content: "内部分析" } }], usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 } }]),
+      },
+      // 真实用户轮
+      {
+        traceId, spanId: "m-cli", parentId: "m-agent", name: "generation", type: "generation",
+        startedAt: "2026-09-07T00:00:03.000Z", endedAt: "2026-09-07T00:00:04.000Z", status: "ok",
+        toolInput: JSON.stringify([{ role: "user", content: [{ type: "text", text: '<system-reminder>ctx</system-reminder>\n<user_query>真实问题</user_query>' }] }]),
+        toolOutput: JSON.stringify([{ model: "hy4-preview", choices: [{ message: { role: "assistant", content: "回答" } }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }]),
+      },
+    ],
+  }
+  const { record } = roundTrip([doc], "sess-mixed")
+  assert.ok(record)
+  assert.equal(record.query, "真实问题")
+  const users = record.interactions?.filter((i: any) => i.role === "user") ?? []
+  assert.equal(users[0]?.content, "真实问题")
+})
+
 test("WorkBuddy round-trip: generation 缺失 usage 时不编造 token", () => {
   const doc = workbuddyTrace({ traceId: "trace-nousage", start: "2026-09-06T00:00:01.000Z", prompt: "hi", usage: {} as any })
   // 把 toolOutput 的 usage 清空
@@ -284,7 +353,7 @@ test("WorkBuddy round-trip: 工具按时间就近归属到对应的 LLM（不全
   assert.equal(record.latency, 10000)
 })
 
-test("WorkBuddy round-trip: 'Agent' 工具（子 Agent 派发）归一化为 task 节点，而非普通 TOOL", () => {
+test("WorkBuddy round-trip: 'Agent' 工具（子 Agent 派发）按普通 TOOL 显示，不特殊处理成子 Agent", () => {
   const traceId = "trace-spawn"
   const agentId = `${traceId}-agent`
   const doc = {
@@ -294,7 +363,7 @@ test("WorkBuddy round-trip: 'Agent' 工具（子 Agent 派发）归一化为 tas
       {
         traceId, spanId: `${traceId}-gen`, parentId: agentId, name: "generation", type: "generation",
         startedAt: "2026-09-06T00:00:01.000Z", endedAt: "2026-09-06T00:00:01.500Z", status: "ok",
-        toolInput: JSON.stringify([{ role: "user", content: [{ type: "text", text: "协同分析" }] }]),
+        toolInput: JSON.stringify([{ role: "user", content: [{ type: "text", text: "<user_query>协同分析</user_query>" }] }]),
         toolOutput: JSON.stringify([{ model: "hy4-preview", choices: [{ message: { role: "assistant", content: "派发子 Agent" } }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }]),
       },
       {
@@ -310,21 +379,16 @@ test("WorkBuddy round-trip: 'Agent' 工具（子 Agent 派发）归一化为 tas
   const assistant = record.interactions?.find((i: any) => i.role === "assistant" && i.tool_calls?.length)
   assert.ok(assistant)
   const call = assistant.tool_calls[0]
-  // 子 Agent 派发：function.name 归一化为 'task'，保留原始名与 subagent_type，界面据此渲染为 Agent 节点
-  assert.equal(call.function?.name, "task")
+  // 子 Agent 调用本质是普通工具调用：保留原始工具名 "Agent"，不转成 task，也不合成子 Agent 节点
+  assert.equal(call.function?.name, "Agent")
   assert.equal(call.original_tool_name, "Agent")
-  assert.equal(call.tool_type, "task")
+  assert.equal(call.tool_type, "function")
+  // 参数与报告输出照常保留，可在 TOOL 节点里查看
   assert.equal(call.function?.arguments?.subagent_type, "general-purpose")
-  // 父 task 注入了 subagent_session_id，用于和子 Agent 节点关联
-  const subSid = call.function?.arguments?.subagent_session_id
-  assert.ok(subSid)
-  // 合成了一条命名正确的子 Agent 交互：名字取 description（而非通用的 general-purpose）
-  const sub = record.interactions?.find((i: any) => i.role === "subagent")
-  assert.ok(sub)
-  assert.equal(sub.agent, "数据代理")
-  assert.equal(sub.subagent_name, "数据代理")
-  assert.equal(sub.subagent_type, "general-purpose")
-  assert.equal(sub.subagent_session_id, subSid)
+  assert.ok(String(call.result).includes("已生成并通过校验"))
+  // 不再产生任何 role='subagent' 的交互
+  assert.equal(record.interactions?.some((i: any) => i.role === "subagent"), false)
+  assert.equal(record.tool_call_count, 1)
 })
 
 test("WorkBuddy round-trip: Agent 名称归一化为 WorkBuddy，状态标记为已完成", () => {
