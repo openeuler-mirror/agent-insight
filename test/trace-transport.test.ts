@@ -47,7 +47,7 @@ test("transport derives stable API-key-isolated paths and identifiers", () => {
   assert.throws(() => transport.collectorStateDir("codex", "key", "relative-home"))
 })
 
-test("transport redacts recursively before Unicode code-point truncation", () => {
+test("transport redacts recursively and only truncates content with an explicit limit", () => {
   const redacted = transport.redactValue({
     api_key: "secret-value",
     nested: {
@@ -100,9 +100,40 @@ test("transport redacts recursively before Unicode code-point truncation", () =>
   assert.match(privateText, /\[LOCAL_PATH\]/)
   assert.doesNotMatch(privateText, /alice|private-value|plain-secret|C:\\Users|\/home\/alice|wsl\.localhost/)
   const unicode = "🙂".repeat(2001)
+  assert.equal(transport.safeContent(unicode), unicode)
   const truncated = transport.truncateCodePoints(unicode, 2000)
   assert.equal(Array.from(truncated.slice(0, 4000)).length, 2000)
   assert.match(truncated, /\[TRUNCATED original_chars=2001\]$/)
+})
+
+test("writer preserves full content by default and OTLP conversion does not truncate twice", async (t) => {
+  const dir = await tempDir(t)
+  const output = "完整结果🙂".repeat(700)
+  assert.ok(Array.from(output).length > 2000)
+
+  const writer = new transport.DurableTraceWriter({
+    framework: "pi-agent",
+    apiKey: "test-key",
+    stateDir: path.join(dir, "full"),
+  })
+  const preserved = await writer.append(event({ output }))
+  assert.equal(preserved.output, output)
+
+  const limitedWriter = new transport.DurableTraceWriter({
+    framework: "pi-agent",
+    apiKey: "test-key",
+    stateDir: path.join(dir, "limited"),
+    maxContentChars: 2000,
+  })
+  const limited = await limitedWriter.append(event({ output }))
+  assert.match(limited.output, /\[TRUNCATED original_chars=3500\]$/)
+
+  const payload = transport.canonicalEventsToOtlp([limited], { framework: "pi-agent" })
+  const attrs = Object.fromEntries(payload.resourceSpans[0].scopeSpans[0].spans[0].attributes.map((item: {
+    key: string
+    value: Record<string, unknown>
+  }) => [item.key, Object.values(item.value)[0]]))
+  assert.equal(attrs["output.value"], limited.output)
 })
 
 test("JSONL cursor consumes only complete lines and leaves a torn tail", async (t) => {

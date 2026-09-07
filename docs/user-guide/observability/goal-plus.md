@@ -52,6 +52,8 @@ goal-plus-collector status
 
 Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；Goal Plus 可使用 host metadata 中的 Codex conversation + turn 构造既有 execution ID，且只匹配 `framework=codex`。关联仍只使用 native/session/execution ID 或唯一的确定性任务名，不按时间接近度猜测。
 
+Pi/Codex 原生 Trace 的输入、输出、工具参数和工具结果会先递归脱敏，再默认完整写入本地 spool 并转换为 OTLP，不再使用固定的 2000 字符正文上限；调用方显式配置的字段上限和诊断错误摘要上限仍然生效。该行为只影响升级采集器后新产生的 Trace，历史记录中已经写入的 `[TRUNCATED ...]` 内容不会自动恢复。
+
 ## 隐私、失败恢复与卸载
 
 collector 不上传绝对路径、workspace 内容、diff、完整日志、密钥、隐藏标准答案或私有推理。普通字段有长度和数组上限；超过单快照限制时降级为 `metadata-only`。上传先写按 API Key 隔离的本地 spool，HTTP 2xx 后才推进 checkpoint；429、5xx 或断网会重试并保留 pending，确定性拒绝会进入 rejected 目录。

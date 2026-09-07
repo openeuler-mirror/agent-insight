@@ -54,6 +54,11 @@ import {
 } from '@/lib/shared/interaction-utils';
 
 const SLOW_MS = 60_000;
+const EMPTY_RAS_MARKERS: RasTraceMarker[] = [];
+
+function sameStringSet(left: Set<string>, right: Set<string>): boolean {
+    return left.size === right.size && [...left].every(key => right.has(key));
+}
 
 type NodeStatus = 'error' | 'slow' | 'ok';
 
@@ -426,7 +431,7 @@ export default function AgentTraceView({
     onSubagentNavigate,
     rootSessionId,
     rootExecutionId,
-    rasMarkers = [],
+    rasMarkers = EMPTY_RAS_MARKERS,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
@@ -576,8 +581,9 @@ export default function AgentTraceView({
             sameTraceReloadRef.current = false;
             return;
         }
-        setSelectedKey(agentKey(tree.id));
-        setExpandedKeys(defaultExpandedKeys);
+        const rootKey = agentKey(tree.id);
+        setSelectedKey(current => current === rootKey ? current : rootKey);
+        setExpandedKeys(current => sameStringSet(current, defaultExpandedKeys) ? current : defaultExpandedKeys);
     }, [tree, defaultExpandedKeys]);
 
     const totalStats = useMemo(() => {

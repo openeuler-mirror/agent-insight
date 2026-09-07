@@ -6,7 +6,8 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
-const DEFAULT_MAX_CONTENT_CHARS = 2000;
+const DEFAULT_MAX_CONTENT_CHARS = null;
+const DEFAULT_MAX_DIAGNOSTIC_CHARS = 2000;
 const DEFAULT_BATCH_EVENTS = 100;
 const DEFAULT_BATCH_BYTES = 512 * 1024;
 const DEFAULT_RETENTION_DAYS = 7;
@@ -83,8 +84,9 @@ function collectorStateDir(framework, apiKey, homeDir = os.homedir()) {
   return stateDir;
 }
 
-function truncateCodePoints(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
+function truncateCodePoints(value, maxChars = DEFAULT_MAX_DIAGNOSTIC_CHARS) {
   const text = String(value ?? "");
+  if (!Number.isSafeInteger(maxChars) || maxChars <= 0) return text;
   const chars = Array.from(text);
   if (chars.length <= maxChars) return text;
   return `${chars.slice(0, maxChars).join("")}...[TRUNCATED original_chars=${chars.length}]`;
@@ -143,7 +145,9 @@ function safeContent(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
   if (value === undefined || value === null) return undefined;
   const redacted = redactValue(value);
   const serialized = typeof redacted === "string" ? redacted : JSON.stringify(redacted);
-  return truncateCodePoints(serialized, maxChars);
+  return Number.isSafeInteger(maxChars) && maxChars > 0
+    ? truncateCodePoints(serialized, maxChars)
+    : serialized;
 }
 
 function utcDateName(timestamp = Date.now()) {
@@ -465,7 +469,9 @@ class DurableTraceWriter {
     this.framework = options.framework;
     this.apiKey = options.apiKey;
     this.stateDir = options.stateDir || collectorStateDir(options.framework, options.apiKey, options.homeDir);
-    this.maxContentChars = options.maxContentChars || DEFAULT_MAX_CONTENT_CHARS;
+    this.maxContentChars = Number.isSafeInteger(options.maxContentChars) && options.maxContentChars > 0
+      ? options.maxContentChars
+      : DEFAULT_MAX_CONTENT_CHARS;
     this.pending = Promise.resolve();
   }
 
