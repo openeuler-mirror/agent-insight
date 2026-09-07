@@ -101,11 +101,14 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
 
 - [ ] T201 Pi session locator
   - 从 agent session metadata、launch session dir、受限 fallback 目录定位 native file；
+  - 从 attached workspace 精确推导 Pi project-session 目录，以 native entry/goal ID 定位
+    Goal Plus 主对话，并按 invocation marker 分段；
   - 多匹配、root 外路径和 symlink 进入 unresolved；
   - 使用 file fingerprint，不上传绝对路径。
 
 - [ ] T202 Pi native parser
-  - 解析 user/assistant/toolCall/toolResult/error/usage/model/provider/timestamp；
+  - 解析所有 user/custom/assistant thinking+text/toolCall/toolResult/error/usage/model/provider/timestamp；
+  - native 正文仅脱敏、不做固定字符截断；单条大 JSONL 超过 batch byte target 时独立上传；
   - unknown entry 只做 bounded diagnostic；
   - tool/MCP/Skill 分类复用现有 Pi helper，不能复制并漂移另一套分类逻辑；
   - 输出 canonical events，并标记 timing/content fidelity；
@@ -128,6 +131,12 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
   - session 缺失、unknown schema、summary-only、derived timing 分别产生明确诊断；
   - 不根据 compact RPC log 伪造正文/tool 参数；
   - 验收：每种降级都返回预期 completeness/missing category。
+
+- [ ] T206 主对话、全 worker 与终止状态
+  - Goal active session 记录所有已发现 Pi main invocation 的 canonical session ID；
+  - `pi-rpc`、`pi`、`pi-agent` 的每个可定位 agent session 都进入 importer；
+  - aborted/cancelled/blocked/non-zero exit 生成失败证据，不得显示为正常成功；
+  - 验收：主对话可见，worker 数与 `.gp/runs/*/agent_sessions` 一致，长正文长度一致。
 
 ### Wave 3：服务端模型、API 与关联
 
@@ -242,7 +251,9 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
 - [ ] T505 真实 Pi 验收
   - 保持 Goal Plus 原有 `--no-extensions`；
   - 运行同等 Search 和至少一次 same-session continuation；
-  - 验证 message/LLM/tool/usage、snapshot-replace 和 derived timing 标记；
+  - 验证主对话、全部 worker、message/thinking/LLM/tool/usage、snapshot-replace 和
+    derived timing 标记；
+  - 对照 native JSONL 验证超过 2000 字符及超过默认 batch byte target 的正文无截断；
   - 删除一个复制 fixture 中的 session file，验证 partial/missing category。
 
 - [ ] T506 故障与安全验收

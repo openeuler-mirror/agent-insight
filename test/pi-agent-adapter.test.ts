@@ -143,6 +143,34 @@ test("Pi adapter registry uses complete snapshot replacement", () => {
   assert.equal(adapter.sessionMergeStrategy, "snapshot-replace")
 })
 
+test("Pi adapter retains Goal Plus passive-session terminal failure evidence", () => {
+  const events = normalize([
+    canonical({
+      eventId: "agent-failed",
+      spanId: "f".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      status: "error",
+      input: "/goal-plus improve solver",
+      output: "partial result",
+      attributes: {
+        "goal_plus.role": "candidate-worker",
+        "goal_plus.terminal_state": "aborted",
+        "goal_plus.exit_code": 143,
+      },
+    }),
+  ])
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.deepEqual(record.failures, [{
+    failure_type: "goal_plus_pi_session_failed",
+    description: "Goal Plus Pi session ended with aborted",
+    context: JSON.stringify({ sessionId: "pi-session", role: "candidate-worker", exitCode: 143 }),
+    recovery: "Inspect the final model/tool events and the Goal Plus run state.",
+    attribution: "ENVIRONMENT",
+  }])
+})
+
 test("Pi Skill completion snapshot is retained as one first-class Skill node", () => {
   const agent = "1".repeat(16)
   const skill = "2".repeat(16)

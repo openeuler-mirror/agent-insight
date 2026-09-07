@@ -152,6 +152,19 @@ test("JSONL cursor consumes only complete lines and leaves a torn tail", async (
   assert.deepEqual(finalBatch.events, [{ id: 3 }])
 })
 
+test("JSONL cursor uploads one complete record larger than the batch byte target", async (t) => {
+  const dir = await tempDir(t)
+  const file = path.join(dir, "events.jsonl")
+  const content = "完整内容".repeat(80_000)
+  await transport.appendJsonl(file, { id: "oversized", content })
+
+  const batch = await transport.readJsonlBatch(file, 0, { maxBytes: 64 * 1024 })
+  assert.equal(batch.events.length, 1)
+  assert.equal(batch.events[0].content, content)
+  assert.equal(batch.nextOffset, (await fsp.stat(file)).size)
+  assert.equal(batch.tornTailBytes, 0)
+})
+
 test("atomic checkpoint replacement preserves the latest valid document", async (t) => {
   const dir = await tempDir(t)
   const file = path.join(dir, "uploader-checkpoint.json")

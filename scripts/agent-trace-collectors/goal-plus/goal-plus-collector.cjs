@@ -19,7 +19,7 @@ const {
   validateGoalPlusRoot,
 } = require("./lib/source-registry.cjs");
 
-const COLLECTOR_VERSION = "1.1.0";
+const COLLECTOR_VERSION = "1.2.0";
 const MAX_BATCH_SNAPSHOTS = 100;
 const MAX_BATCH_BYTES = 3.5 * 1024 * 1024;
 
@@ -233,7 +233,7 @@ async function resolveSources(selector, options) {
 async function scanSource(source, config, options = {}) {
   if (!config.apiKey) throw new Error("AGENT_INSIGHT_API_KEY or collector config apiKey is required for scanning");
   const scanStartedAt = new Date().toISOString();
-  const parsed = await parseGoalPlusRoot(source);
+  const parsed = await parseGoalPlusRoot(source, { homeDir: config.homeDir });
   const scanCompletedAt = new Date().toISOString();
   const batches = buildSemanticBatches(source, parsed, scanStartedAt, scanCompletedAt);
   for (const batch of batches) await enqueueSemanticBatch(batch, { apiKey: config.apiKey, homeDir: config.homeDir });
@@ -262,7 +262,7 @@ async function selfCheck(config) {
   for (const source of registry.sources) {
     try {
       await validateGoalPlusRoot(source.root);
-      const parsed = await parseGoalPlusRoot(source);
+      const parsed = await parseGoalPlusRoot(source, { homeDir: config.homeDir });
       const objectCounts = {};
       for (const snapshot of parsed.snapshots) objectCounts[snapshot.kind] = (objectCounts[snapshot.kind] || 0) + 1;
       sources.push({

@@ -64,10 +64,13 @@ Explicitly attached .gp root
 | D-007 | 完整性与 fidelity 分开计算 | Pi passive import 可以语义完整但时间为 derived |
 | D-008 | source ID 由 Agent Insight 管理 | 不向 `.gp` 写 source file，满足完全只读 |
 | D-009 | Goal Plus semantic snapshots 走专用 API | OTLP span 不适合表达 revision、selection、promotion 等领域状态 |
-| D-010 | 默认 bounded-content，支持 metadata-only | 与现有 trace 价值和隐私策略对齐，同时保护 hidden-answer 数据 |
+| D-010 | `.gp` semantic snapshot 默认 bounded-content，支持 metadata-only | 编排语义保持有界并保护 hidden-answer；此限制不用于 Pi native Trace 正文 |
 | D-011 | Goal Plus 安装使用独立宿主 profile 展开依赖 | `goal-plus` 仍是 overlay；Pi/Codex collector 继续作为独立组件安装和上报 |
 | D-012 | 未声明宿主的旧 `frameworks=goal-plus` 保持原行为 | 已发布命令继续只安装 Goal Plus collector，避免升级后意外改写 Pi/Codex 配置 |
 | D-013 | Goal Plus semantic collector 安装、scan 或 watcher 失败不得回滚或降级 native collector | semantic enrichment 是可选状态，不能中断或把已经工作的 Pi/Codex Trace 标成 partial |
+| D-014 | Pi 主对话与 worker 均以 native session 为完整性权威源 | Goal Plus 的 Pi command turn 和 `--no-extensions` worker 都可能绕过实时 hook |
+| D-015 | 主对话只扫描 attached `.gp` 对应工作区的精确 Pi session 目录 | 允许恢复主会话，同时不递归扫描整个 home；用 native entry/goal ID 关联而非时间猜测 |
+| D-016 | native Trace 无固定正文截断，上传批次大小是调度目标而非单事件上限 | 长 tool result/thinking 必须完整；单条大 JSONL 可独立成批，仍执行 secret/path 脱敏 |
 
 ### 2.1 Goal Plus 宿主安装 profile
 
@@ -186,7 +189,7 @@ goal-plus-collector watch
 | `agent_session` | `runs/*/agent_sessions/*.json` | host/native identity、workspace fingerprint、usage metadata |
 | `best` | `runs/*/best.json` | best artifact 交叉校验 |
 | `report_meta` | `runs/*/report.md`, `report.html`, `promotion/*` | 是否存在、hash、大小、相对路径；默认不上传正文 |
-| `pi_session` | agent session metadata 指向的 session file，或 `host-sessions/pi/<id>*` | Pi native trace |
+| `pi_session` | agent session metadata 指向的 session file、`host-sessions/pi/<id>*`，或 attached workspace 对应的精确 Pi project-session 目录 | Pi 主对话与 worker native trace |
 
 collector 不读取 candidate workspace，不跟随符号链接，不读取 verifier command 指向
 的外部文件，也不读取任意 `log_paths` 内容。
@@ -204,7 +207,9 @@ Goal Plus JSON snapshot 可能采用原子替换，也可能被观察到半写�
 7. 删除文件只记录 source diagnostic，不远端级联删除历史审计数据；
 8. snapshot 新版本以 `observedAt` 和 payload 中的权威时间更新 current projection。
 
-JSONL 使用完整换行作为提交边界；尾部不完整行留到下一轮。`goal_event` 的稳定 ID
+JSONL 使用完整换行作为提交边界；尾部不完整行留到下一轮。native session 不设置
+固定文件/正文字数截断，单条记录超过上传批次字节目标时独立成批，checkpoint 在整条
+记录收到 2xx 后才推进。`goal_event` 的稳定 ID
 优先使用源事件 ID；无 ID 时使用 source、relative path、line byte offset 和行 hash
 生成确定性 ID。
 
@@ -284,11 +289,18 @@ invalidation 和 successor。禁止上传完整 diff、log 内容和 workspace �
 
 ### 5.1 Session 定位
 
-对 `host=pi-rpc` 的 `AgentSessionRecord`，按以下顺序定位：
+Pi 主对话从 attached `.gp` 的父目录推导唯一 Pi project-session 目录，只枚举该目录
+直属的普通 `.jsonl` 文件。每个 Goal 用 `goal.json.host_command_invocations` 中的
+`native_entry_id` 和 session 内 `customType=goal-plus-*` 的 `goal_plus_id` 双重匹配；
+同一 Pi session 中多次 invocation 按相邻 marker 分段，分别生成 Execution。不得扫描
+其他 project-session 目录，也不得仅按 cwd/mtime 关联。
+
+对 `host=pi-rpc|pi|pi-agent` 的每个 `AgentSessionRecord`，按以下顺序定位：
 
 1. `host_handle.metadata.pi_metrics.session_file`；
 2. `launch.session_dir + host_handle.external_id`；
-3. `<source-root>/host-sessions/pi/` 下与 `external_id` 精确匹配的普通文件。
+3. `<source-root>/host-sessions/pi/` 下文件名等于 `<external_id>.jsonl`，或唯一满足
+   `_<external_id>.jsonl` 后缀的时间戳前缀普通文件。
 
 任何 fallback 都必须限制在已登记 root 或显式允许的 session root。出现多个匹配时
 标记 unresolved，不按 mtime 选择。
@@ -300,6 +312,11 @@ passive import 的 canonical session ID：
 ```text
 goal-plus:<sourceId>:<agentSessionId>
 ```
+
+主会话的 `<agentSessionId>` 使用 `main:<goalId>:<nativeSessionId>:<markerId>`，因此重复
+扫描幂等，同一 Pi session 中的不同 Goal invocation 也不会互相覆盖。发现结果写入
+Goal 的 `activeSession.mainSessions` 关联证据，服务端可同时链接现存 native execution
+和被动导入 execution。
 
 native Pi session ID 保存为 attribute：
 
@@ -322,8 +339,10 @@ goal_plus.collector_mode = pi-native-passive
 |-|-|
 | user message | agent/input 或 message interaction |
 | assistant message | LLM span；提取 model/provider/stop reason/usage/content |
-| assistant `toolCall` content | Tool/MCP/Skill start；参数 bounded |
-| `toolResult` message | 对应 Tool/MCP/Skill end；结果 bounded |
+| assistant `thinking`/`text` content | 同一 LLM span 的完整、带类型标记输出；只做敏感信息脱敏 |
+| assistant `toolCall` content | Tool/MCP/Skill start；参数完整并脱敏 |
+| `toolResult` message | 对应 Tool/MCP/Skill end；结果完整并脱敏 |
+| Goal Plus custom message/后续 user message | 作为下一 LLM 请求上下文保留 |
 | error/abort | span/Execution error |
 | compaction/session metadata | diagnostic attribute，不伪造成用户 interaction |
 
@@ -364,7 +383,8 @@ Execution；低优先级记录保留 ingest audit，但不在 composite trace �
 
 Codex 不新增 transcript parser，默认复用现有 collector：
 
-- Goal 主会话：`GoalPlusRecord.active_session.session_id` 对应 Codex hook session ID；
+- Goal 主会话：Codex 继续使用 `active_session.session_id`；Pi 同时使用定向发现后写入的
+  `activeSession.mainSessions[].sessionId`；
 - ordinary work item：优先 `agent_id`/native session，其次精确 `task_name`；
 - Search candidate：`AgentSessionRecord.host_handle.external_id`、task name 或 Goal Plus
   已保存的 native transcript identity；
@@ -648,7 +668,7 @@ interface GoalPlusTraceCompleteness {
 一个终态 Goal/run 成为 `complete` 至少满足：
 
 - Goal current snapshot 和相关 goal events 已扫描；
-- Goal active session 或明确的无主会话原因已处理；
+- Goal active session、Pi main-session invocation 或明确的无主会话原因已处理；
 - 每个 work item/final checker 的已绑定 native identity 已关联；
 - 每个 Search `AgentSessionRecord` 有 authoritative Execution；
 - 每个 retained iteration 有唯一 settlement；
@@ -672,8 +692,9 @@ Pi passive timing 为 `derived` 不会使 status 自动变成 `partial`；它会
 
 ### 13.2 内容安全
 
-- 复用 `trace-transport.cjs` 的 secret/path redaction 和长度限制；
-- tool 参数/结果、prompt、assistant text 使用 bounded content；
+- 复用 `trace-transport.cjs` 的 secret/path redaction；
+- Pi native tool 参数/结果、prompt、assistant text/thinking 不设置固定正文长度限制；
+- batch byte target 只控制多事件组包，单条大事件必须完整读取并独立上传；
 - report、diff、verifier log 和 workspace 默认只上传 hash/大小/相对引用；
 - server 对 client 已清洗 payload 再执行第二层校验；
 - 日志不记录 API key 和正文。
@@ -771,5 +792,6 @@ test/fixtures/goal-plus/
 3. native Execution 树不因 Goal Plus overlay 被重写。
 4. 关联必须使用确定性 identity；歧义宁可 unresolved。
 5. telemetry 故障不能影响 Goal Plus 执行结果。
-6. 不采集私有 chain-of-thought、credential、workspace 或 hidden gold。
+6. 采集 Pi native session 已持久化的 thinking，但必须移除 credential、绝对 workspace
+   path 和 hidden gold；宿主未持久化的内部状态不得推断或伪造。
 7. `complete` 必须可计算，并与 timing/content fidelity 分开。

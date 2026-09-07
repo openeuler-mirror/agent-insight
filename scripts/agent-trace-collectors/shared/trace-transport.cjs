@@ -175,35 +175,44 @@ async function readJsonlBatch(filePath, offset = 0, options = {}) {
       return { events: [], nextOffset: offset, fileSize: stat.size, tornTailBytes: 0 };
     }
 
-    const bytesToRead = Math.min(stat.size - offset, Math.max(maxBytes + 64 * 1024, maxBytes * 2));
-    const buffer = Buffer.alloc(bytesToRead);
-    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, offset);
-    const view = buffer.subarray(0, bytesRead);
     const events = [];
-    let cursor = 0;
     let nextOffset = offset;
+    let readOffset = offset;
+    let pending = Buffer.alloc(0);
+    const chunkBytes = Math.max(64 * 1024, Math.min(maxBytes, 1024 * 1024));
 
-    while (cursor < view.length && events.length < maxEvents) {
-      const newline = view.indexOf(0x0a, cursor);
+    while (events.length < maxEvents) {
+      let newline = pending.indexOf(0x0a);
+      while (newline < 0 && readOffset < stat.size) {
+        const chunk = Buffer.alloc(Math.min(chunkBytes, stat.size - readOffset));
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, readOffset);
+        if (bytesRead === 0) break;
+        readOffset += bytesRead;
+        pending = pending.length
+          ? Buffer.concat([pending, chunk.subarray(0, bytesRead)])
+          : chunk.subarray(0, bytesRead);
+        newline = pending.indexOf(0x0a);
+      }
       if (newline < 0) break;
-      const lineBuffer = view.subarray(cursor, newline);
-      const consumed = newline + 1 - cursor;
+
+      const lineBuffer = pending.subarray(0, newline);
+      const consumed = newline + 1;
       if (events.length > 0 && nextOffset - offset + consumed > maxBytes) break;
       const text = lineBuffer.toString("utf8").trim();
       if (text) {
         try {
           events.push(JSON.parse(text));
         } catch (error) {
-          throw new Error(`Invalid JSONL record at byte ${offset + cursor}: ${error.message}`);
+          throw new Error(`Invalid JSONL record at byte ${nextOffset}: ${error.message}`);
         }
       }
-      cursor = newline + 1;
-      nextOffset = offset + cursor;
+      pending = pending.subarray(consumed);
+      nextOffset += consumed;
     }
 
-    const reachedPhysicalEnd = offset + bytesRead >= stat.size;
-    const tornTailBytes = reachedPhysicalEnd && view.length > cursor && view.indexOf(0x0a, cursor) < 0
-      ? view.length - cursor
+    const reachedPhysicalEnd = readOffset >= stat.size;
+    const tornTailBytes = reachedPhysicalEnd && pending.length > 0 && pending.indexOf(0x0a) < 0
+      ? pending.length
       : 0;
     return { events, nextOffset, fileSize: stat.size, tornTailBytes };
   } finally {

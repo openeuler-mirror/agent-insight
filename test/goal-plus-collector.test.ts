@@ -7,19 +7,31 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { parseGoalPlusRoot } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
-const { parsePiSession } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
+const { parseGoalPlusRoot, piProjectSessionDir } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
+const { messageText, parsePiSession } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
 const { attachSource, loadRegistry } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
 const { buildSemanticBatches, loadConfig, startWatcher, stopWatcher, watcherStatus } = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
 const { enqueueSemanticBatch, uploadSemanticBatches } = require('../scripts/agent-trace-collectors/goal-plus/lib/semantic-spool.cjs');
 const fixture = path.join(process.cwd(), 'test', 'fixtures', 'goal-plus', '.gp');
 
 type ParsedSnapshot = { snapshotId: string; kind: string; payload?: Record<string, unknown> };
-type ParsedRoot = { diagnostics: unknown[]; snapshots: ParsedSnapshot[]; piSessions: unknown[] };
+type PiSessionDescriptor = {
+  sessionFile: string;
+  sessionKind?: string;
+  nativeSessionId?: string;
+  canonicalSessionId?: string;
+  terminalState?: string;
+  errorMessage?: string;
+};
+type ParsedRoot = { diagnostics: unknown[]; snapshots: ParsedSnapshot[]; piSessions: PiSessionDescriptor[] };
 type NativeEvent = {
   eventId: string;
   sessionId: string;
   kind: string;
+  input?: string;
+  output?: string;
+  status?: string;
+  attributes?: Record<string, unknown>;
   usage?: { total?: number };
   tool?: { name?: string };
   skill?: { name?: string };
@@ -126,6 +138,28 @@ test('semantic parser preserves only bounded Codex correlation identities', asyn
   assert.doesNotMatch(JSON.stringify(agentSession), /private\/transcript/);
 });
 
+test('Pi worker locator recovers uniquely timestamp-prefixed host sessions', async t => {
+  const { root } = await copiedFixture(t);
+  const metadataPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
+  const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
+  delete metadata.host_handle.metadata.session_file;
+  metadata.host_handle.metadata.runner_failed = true;
+  metadata.host_handle.metadata.error = 'synthetic worker failure';
+  await fsp.writeFile(metadataPath, JSON.stringify(metadata));
+  const original = path.join(root, 'runs', 'run_demo', 'pi_sessions', 'agent_001.jsonl');
+  const hostDir = path.join(root, 'host-sessions', 'pi');
+  await fsp.mkdir(hostDir, { recursive: true });
+  const recovered = path.join(hostDir, '2026-09-01T01-05-00-000Z_pi-native-demo.jsonl');
+  await fsp.rename(original, recovered);
+
+  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
+  assert.equal(parsed.piSessions.length, 1);
+  const descriptor = parsed.piSessions[0];
+  assert.equal(descriptor.sessionFile, recovered);
+  assert.equal(descriptor.terminalState, 'failed');
+  assert.equal(descriptor.errorMessage, 'synthetic worker failure');
+});
+
 test('semantic parser ignores an incomplete JSONL tail', async t => {
   const { root } = await copiedFixture(t);
   await fsp.appendFile(path.join(root, 'goal-plus', 'gp_demo', 'events.jsonl'), '{"event_id":"half');
@@ -186,6 +220,96 @@ test('Pi passive parser uses one stable canonical session with LLM and tool even
   assert.ok(first.events.some(item => item.kind === 'skill' && item.skill?.name === 'demo-skill'));
   assert.ok(first.events.every(item => item.sessionId === 'goal-plus:gpsrc_fixture:agent_001'));
   assert.deepEqual(first.events.map(item => item.eventId), second.events.map(item => item.eventId));
+});
+
+test('Pi passive parser preserves thinking and reports aborted Goal Plus workers', async t => {
+  const { root } = await copiedFixture(t);
+  const sessionFile = path.join(root, 'runs', 'run_demo', 'pi_sessions', 'agent_001.jsonl');
+  await fsp.appendFile(sessionFile, `${JSON.stringify({
+    type: 'message',
+    timestamp: '2026-09-01T01:05:40Z',
+    message: {
+      role: 'assistant',
+      stopReason: 'aborted',
+      content: [
+        { type: 'thinking', thinking: 'full internal reasoning' },
+        { type: 'text', text: 'partial visible answer' },
+      ],
+    },
+  })}\n`);
+  const parsed = await parsePiSession(root, {
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    sessionFile: path.relative(root, sessionFile),
+    terminalState: 'aborted',
+    exitCode: 143,
+  }) as ParsedPi;
+  const finalLlm = parsed.events.filter(item => item.kind === 'llm').at(-1);
+  const agent = parsed.events.find(item => item.kind === 'agent');
+  assert.match(finalLlm?.output || '', /<thinking>\nfull internal reasoning\n<\/thinking>/);
+  assert.match(finalLlm?.output || '', /partial visible answer/);
+  assert.equal(finalLlm?.status, 'error');
+  assert.equal(agent?.status, 'error');
+  assert.equal(agent?.attributes?.['goal_plus.exit_code'], 143);
+});
+
+test('Goal Plus parser discovers and imports the Pi main conversation deterministically', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const goalPath = path.join(root, 'goal-plus', 'gp_demo', 'goal.json');
+  const goal = JSON.parse(await fsp.readFile(goalPath, 'utf8'));
+  goal.active_session = null;
+  goal.host_command_invocations = [{
+    action: 'start',
+    host: 'pi',
+    invocation_id: 'pi:invocation-demo',
+    native_entry_id: 'pi-entry-demo',
+  }];
+  await fsp.writeFile(goalPath, JSON.stringify(goal));
+
+  const homeDir = path.join(temporary, 'home');
+  const sessionDir = piProjectSessionDir(homeDir, path.dirname(root));
+  await fsp.mkdir(sessionDir, { recursive: true });
+  const mainFile = path.join(sessionDir, 'main.jsonl');
+  await fsp.writeFile(mainFile, [
+    { type: 'session', id: '01-main-session' },
+    { type: 'custom_message', id: 'pi-entry-demo', customType: 'goal-plus-created', details: { goal_plus_id: 'gp_demo' }, content: 'Goal Plus started' },
+    { type: 'custom_message', id: 'context-demo', customType: 'goal-plus-command-context', details: { goal_plus_id: 'gp_demo' }, content: 'Keep the baseline intact' },
+    { type: 'message', timestamp: '2026-09-01T01:00:01Z', message: { role: 'assistant', model: 'demo', content: [{ type: 'thinking', thinking: 'plan all steps' }, { type: 'text', text: 'Starting work.' }] } },
+    { type: 'message', timestamp: '2026-09-01T01:00:02Z', message: { role: 'user', content: 'Continue with verification.' } },
+    { type: 'message', timestamp: '2026-09-01T01:00:03Z', message: { role: 'assistant', model: 'demo', content: [{ type: 'text', text: 'Everything is complete.' }] } },
+    { type: 'custom_message', id: 'stop-demo', customType: 'goal-plus-stop-continuation', details: { goal_plus_id: 'gp_demo' }, content: 'Stop continuation' },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n');
+
+  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }, { homeDir }) as ParsedRoot;
+  assert.equal(parsed.piSessions.length, 2);
+  const main = parsed.piSessions.find(item => item.sessionKind === 'main');
+  assert.ok(main);
+  assert.equal(main.nativeSessionId, '01-main-session');
+  assert.ok(main.canonicalSessionId);
+  assert.match(main.canonicalSessionId, /^goal-plus:gpsrc_fixture:main:gp_demo:/);
+
+  const goalSnapshot = parsed.snapshots.find(item => item.kind === 'goal');
+  const activeSession = goalSnapshot?.payload?.activeSession as {
+    sessionId: string;
+    mainSessions: Array<{ sessionId: string }>;
+  };
+  assert.equal(activeSession.sessionId, main.canonicalSessionId);
+  assert.equal(activeSession.mainSessions[0].sessionId, main.canonicalSessionId);
+
+  const trace = await parsePiSession(root, main) as ParsedPi;
+  const llms = trace.events.filter(item => item.kind === 'llm');
+  assert.equal(llms.length, 2);
+  assert.match(llms[0].input || '', /^\/goal-plus Improve the synthetic solver/);
+  assert.match(llms[0].input || '', /Goal Plus started/);
+  assert.match(llms[0].input || '', /Keep the baseline intact/);
+  assert.match(llms[0].output || '', /plan all steps/);
+  assert.match(llms[1].input || '', /Continue with verification/);
+  assert.equal(trace.events.find(item => item.kind === 'agent')?.output, 'Everything is complete.');
+});
+
+test('Pi message text does not truncate large native content', () => {
+  const text = '完整正文'.repeat(20_000);
+  assert.equal(messageText({ content: [{ type: 'text', text }] }), text);
 });
 
 test('Pi passive parser skips incomplete tails and diagnoses malformed complete records', async t => {

@@ -69,15 +69,30 @@ async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<
   const intents: LinkIntent[] = [];
   for (const goal of goals) {
     const active = parseObject(goal.activeSessionJson);
-    const sessionId = typeof active.sessionId === 'string' ? active.sessionId : undefined;
-    const activeExecutionId = goalPlusCodexExecutionId(active);
-    if (sessionId || activeExecutionId) {
+    const discoveredMain = Array.isArray(active.mainSessions)
+      ? active.mainSessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
+      : [];
+    const mainSessions = [active, ...discoveredMain]
+      .map((session, index) => ({
+        session,
+        index,
+        exactIds: nonempty(
+          goalPlusCodexExecutionId(session),
+          session.sessionId,
+          session.nativeSessionId,
+        ),
+      }))
+      .filter(item => item.exactIds.length > 0)
+      .filter((item, index, items) => items.findIndex(candidate => (
+        candidate.exactIds.some(id => item.exactIds.includes(id))
+      )) === index);
+    for (const { session, index, exactIds } of mainSessions) {
       intents.push({
-        key: `goal:${goal.id}:main`,
+        key: `goal:${goal.id}:main:${index}`,
         role: 'main',
         goalDbId: goal.id,
-        exactIds: nonempty(activeExecutionId, sessionId),
-        expectedFramework: goalPlusFrameworkForHost(active.host),
+        exactIds,
+        expectedFramework: goalPlusFrameworkForHost(session.host || active.host),
       });
     }
     for (const item of parseArray(goal.workItemsJson)) {

@@ -19,9 +19,11 @@ Agent Insight 可以在不要求 Goal Plus 改代码的前提下接入 Goal Plus
 - 通过 Goal Plus 已保存的 native session ID、task name、transcript/session file 和
   `agent_session_id` 进行确定性关联。
 
-这里的“完整”指可审计完整：能从 Goal 追溯到每个公开 worker 的消息、LLM、工具、
-usage 以及 Goal Plus 的验证和选择结果。它不包含模型私有 chain-of-thought、宿主未
-公开的内部状态、未截断的任意大输出或秘密信息。
+这里的“完整”指可审计完整：能看到触发 Goal Plus 的 Pi 主对话，并从 Goal 追溯到
+每个公开 worker 的全部已持久化消息、LLM、工具、usage 以及 Goal Plus 的验证和选择
+结果。Pi native session 已写入的正文和 thinking 均保留，不施加固定字符截断；仍会
+移除 credential、绝对路径、hidden answer 等敏感信息。宿主从未持久化的内部状态无法
+恢复，必须显示为缺失而不是伪造。
 
 Goal Plus 不是新的 Agent framework。接入后原生 Execution 仍分别标记为
 `codex` 或 `pi-agent`；Goal Plus 是覆盖在这些 Execution 上的编排语义层。
@@ -101,6 +103,12 @@ pi --mode rpc --approve --session-dir <dir> --session-id <id>
 Agent Insight 可以只读解析 native session，生成与现有 `pi-agent` adapter 兼容的
 canonical events。这样无需改 Goal Plus 的扩展隔离策略。
 
+Pi 主对话也存在一个不同的绕过路径：Goal Plus 扩展命令通过 `sendMessage(...,
+{ triggerTurn: true })` 直接启动 Agent turn，不触发 Agent Insight extension 的
+`before_agent_start`，因此实时采集器不会建立当前 task。collector 必须依据
+`host_command_invocations.native_entry_id` 与 Pi session 中的 `goal-plus-*` custom
+message 确定性定位主会话，并按相邻 Goal Plus invocation 分段被动导入。
+
 ### 3.3 现有 Trace 与 Goal Plus 状态没有关联模型
 
 现有 `Execution.parentExecutionId/rootExecutionId` 表示宿主原生调用树，不能安全地
@@ -174,6 +182,9 @@ session、语义 snapshot、关联信息、内容还是精确 timing。
 | FR-014 | collector 支持历史 one-shot scan 与持续 watch 两种模式 |
 | FR-015 | collector 与服务端故障不得阻塞或修改 Goal Plus 执行 |
 | FR-016 | 卸载或 detach 只停止 Agent Insight 采集，不删除 `.gp` 和 Goal Plus native sessions |
+| FR-017 | Pi Goal Plus 主对话按 native entry ID/goal ID 从当前工作区的 Pi session 目录确定性发现、分段并导入 |
+| FR-018 | 每个 `.gp/runs/*/agent_sessions/*` 中可定位的 Pi worker，不论 candidate/work-item/final-checker 角色，均生成独立完整 Execution |
+| FR-019 | Pi native message、thinking、tool 参数与结果不使用固定字符截断，超出上传批次目标的单条 JSONL 仍可完整发送 |
 
 ## 6. 非功能需求
 
@@ -183,7 +194,7 @@ session、语义 snapshot、关联信息、内容还是精确 timing。
 | NFR-002 | 不递归扫描 home 或磁盘；只访问用户显式登记的 root |
 | NFR-003 | API key、spool、checkpoint 和 source 按 Agent Insight 账号隔离 |
 | NFR-004 | 语义 snapshot 以 source + object key + content hash 幂等 |
-| NFR-005 | native events 复用 durable spool、指数退避和安全截断能力 |
+| NFR-005 | native events 复用 durable spool、指数退避和递归脱敏；批次字节目标不得截断或阻塞单条大事件 |
 | NFR-006 | 处理半写 JSON、原子替换、文件删除、session append 和进程重启 |
 | NFR-007 | 不因 Goal Plus 接入改变非 Goal Plus Codex/Pi Trace 结果 |
 | NFR-008 | 默认不上传绝对路径、credential、完整 diff/log/workspace 或 hidden answer |
@@ -220,13 +231,13 @@ allowlist，Agent Insight 可以增加更高精度的 live timing，但本期设
 
 | 能力 | Codex | Pi 主会话 | Goal Plus Pi worker |
 |-|-|-|-|
-| 用户/助手消息 | hooks/OTel，bounded | extension，bounded | native session，bounded |
+| 用户/助手消息 | hooks/OTel | native session 定向补采，完整 | native session，完整 |
 | LLM model/usage | 原生 OTel 优先 | extension | native session assistant usage |
 | Tool call/result | hooks/OTel | extension | native session toolCall/toolResult |
 | 精确 Tool 起止时间 | 原生事件可用时精确 | extension 精确 | 可能只有结束时间，标记 derived |
 | Skill/SubAgent | 现有 adapter | 现有 adapter | 按 native tool 语义解析，无法确认时降级 generic tool |
 | Goal/run/candidate/verifier | `.gp` overlay | `.gp` overlay | `.gp` overlay |
-| 私有 chain-of-thought | 不采集 | 不采集 | 不采集 |
+| Pi 已持久化 thinking | 不适用 | 采集并脱敏 | 采集并脱敏 |
 
 “complete”不等于所有 fidelity 都是 exact。完整性与 timing/content fidelity 必须分开
 展示。
@@ -247,6 +258,9 @@ allowlist，Agent Insight 可以增加更高精度的 live timing，但本期设
 | AC-010 | payload 不含 API key、绝对路径、完整 verifier log、workspace 内容或 hidden gold |
 | AC-011 | 未 attach Goal Plus 时，现有 Codex/Pi collector、adapter、Trace 页面行为不变 |
 | AC-012 | detach/uninstall 不修改或删除任何 `.gp` 文件 |
+| AC-013 | `/goal-plus` 触发的 Pi 主对话在 Goal Plus 与链路追踪页面可见，并与对应 Goal 确定性关联 |
+| AC-014 | `.gp` 中所有带 native Pi session 的 agent session 均有对应 Execution；中止/非零退出不得显示为正常成功 |
+| AC-015 | 超过 2000 字符及超过默认上传批次字节目标的 native 正文往返后内容长度与源 session 一致（脱敏替换除外） |
 
 ## 10. 已知前置问题
 

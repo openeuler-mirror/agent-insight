@@ -10,14 +10,16 @@ explicitly attached .gp
   │    └─ semantic parser → durable semantic spool
   │         └─ POST /api/ingest/goal-plus/v1/snapshots
   │              └─ Goal Plus domain projection + completeness
-  └─ Pi native session referenced by agent-session metadata
-       └─ passive Pi parser → existing canonical OTLP spool
+  └─ Pi native session
+       ├─ worker: referenced by agent-session metadata
+       └─ main: exact workspace session dir + native-entry/goal marker
+            └─ passive Pi parser → existing canonical OTLP spool
             └─ POST /api/ingest/otel/v1/traces → Execution/Session
 
 existing Codex/Pi Execution ── deterministic correlation ── Goal/Run/Candidate
 ```
 
-collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。目录遍历跳过符号链接，读取执行 lstat/realpath/root containment 和前后 stat 校验；JSONL 只消费以换行结束的完整记录。语义与 native spool 均按 API Key 摘要隔离，服务端确认后才推进 checkpoint。
+collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。目录遍历跳过符号链接，读取执行 lstat/realpath/root containment 和前后 stat 校验；JSONL 只消费以换行结束的完整记录。Pi 主会话只访问该 attached workspace 精确对应的 Pi project-session 目录，并以 `host_command_invocations.native_entry_id`/`goal_plus_id` 定位，不递归扫描 home。语义与 native spool 均按 API Key 摘要隔离，服务端确认后才推进 checkpoint。
 
 ## 代码地图
 
@@ -78,12 +80,14 @@ completeness 是独立状态机：
 - `partial`：已终态但存在明确缺项或歧义；
 - `unsupported`：关键 source schema 超出支持范围。
 
-`timingFidelity` 使用 `exact/mixed/derived/summary-only`，`contentFidelity` 使用 `bounded/metadata-only/mixed`。它们不能被成功/失败状态替代，也不能把缺失数据显示为零。Pi passive importer 的 canonical session 固定为 `goal-plus:<sourceId>:<agentSessionId>`，continuation 重建同一 Execution；低 authority 的重复 link 不进入默认原生 Trace 列表。
+`timingFidelity` 使用 `exact/mixed/derived/summary-only`，semantic snapshot 的 `contentFidelity` 使用 `bounded/metadata-only/mixed`。它们不能被成功/失败状态替代，也不能把缺失数据显示为零。Pi passive importer 的 canonical session 固定为 `goal-plus:<sourceId>:<agentSessionId>`；主会话的 agent session ID 为 `main:<goalId>:<nativeSessionId>:<markerId>`。continuation 重建同一 Execution；低 authority 的重复 link 不进入默认原生 Trace 列表。
+
+Pi passive importer 将 native session 作为正文权威源：保留所有 assistant `thinking`/`text`、后续 user/custom message、tool 参数和 tool result，只执行共享 secret/path 脱敏，不设置固定 2000 字符或二次字符截断。上传器的 batch byte 值只是多事件组包目标；第一条事件超过该值时仍读取完整换行记录并单独上传，成功后才移动 checkpoint。aborted/cancelled/blocked 或非零 exit code 会在 Agent event 和 Execution failures 中保留失败证据。
 
 ## 扩展约束
 
 - 新 schema 先扩展 versioned parser 和合成 fixture；不要直接上传未知原始 JSON。
 - Goal Plus 仍是语义权威，Agent Insight 不写 `.gp`、不改 Goal 状态、不触发 Search 或 promotion。
-- 不上传 absolute path、workspace、diff、raw log、credential、hidden gold 或 private chain-of-thought。
+- 不上传 absolute path、workspace、diff、raw log、credential 或 hidden gold；Pi 已写入 native session 的 thinking 视为 trace 正文，脱敏后完整采集，未持久化的内部状态不推断。
 - Pi 分类必须复用 `scripts/agent-trace-collectors/shared/pi-trace-helpers.cjs`；不能复制第三套 Tool/MCP 规则。
 - 新关联方法必须可审计且确定；不得引入仅依靠时间接近度的 fallback。

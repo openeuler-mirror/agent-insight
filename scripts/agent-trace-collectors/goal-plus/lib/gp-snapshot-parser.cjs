@@ -52,16 +52,25 @@ function statIdentity(stat) {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
-async function safeStableRead(root, filePath) {
-  const canonicalRoot = await fsp.realpath(root);
+async function safeStableRead(root, filePath, options = {}) {
+  const allowedRoots = [...new Set([root, ...(options.allowedRoots || [])])];
+  const canonicalRoots = await Promise.all(allowedRoots.map(item => fsp.realpath(item)));
   const requested = path.resolve(filePath);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const initial = await fsp.lstat(requested);
     if (!initial.isFile() || initial.isSymbolicLink()) throw new Error("not a regular non-symlink file");
-    if (initial.size > MAX_FILE_BYTES) throw new Error("file exceeds collector size limit");
+    const maxBytes = Object.prototype.hasOwnProperty.call(options, "maxBytes")
+      ? options.maxBytes
+      : MAX_FILE_BYTES;
+    if (Number.isSafeInteger(maxBytes) && maxBytes > 0 && initial.size > maxBytes) {
+      throw new Error("file exceeds collector size limit");
+    }
     const canonical = await fsp.realpath(requested);
-    if (canonical !== canonicalRoot && !canonical.startsWith(`${canonicalRoot}${path.sep}`)) {
-      throw new Error("file resolves outside attached .gp root");
+    const contained = canonicalRoots.some(canonicalRoot => (
+      canonical === canonicalRoot || canonical.startsWith(`${canonicalRoot}${path.sep}`)
+    ));
+    if (!contained) {
+      throw new Error("file resolves outside allowed collector roots");
     }
     const bytes = await fsp.readFile(canonical);
     const final = await fsp.stat(canonical);
@@ -134,7 +143,14 @@ function parentKeys(kind, payload, relative, context) {
   return result;
 }
 
-function goalPayload(source) {
+function goalPayload(source, mainSessions = []) {
+  const latestMain = mainSessions.at(-1);
+  const activeSession = source.active_session || (latestMain ? {
+    host: "pi",
+    session_id: latestMain.canonicalSessionId,
+    native_session_id: latestMain.nativeSessionId,
+    state: source.status,
+  } : undefined);
   return normalize({
     goal_plus_id: source.goal_plus_id,
     current_revision: source.goal_revision,
@@ -148,7 +164,16 @@ function goalPayload(source) {
     work_items: source.work_items,
     search_tasks: source.search_tasks,
     final_checks: source.final_checks,
-    active_session: source.active_session,
+    active_session: activeSession ? {
+      ...activeSession,
+      main_sessions: mainSessions.map(session => ({
+        host: "pi",
+        session_id: session.canonicalSessionId,
+        native_session_id: session.nativeSessionId,
+        invocation_id: session.invocationId,
+        marker_id: session.markerId,
+      })),
+    } : undefined,
     next_action: source.next_action,
     created_at: source.created_at,
     updated_at: source.updated_at,
@@ -201,6 +226,44 @@ function sessionPayload(source) {
   });
 }
 
+async function piWorkerSessionFile(root, source) {
+  const metadata = source.host_handle?.metadata || {};
+  const declared = metadata.session_file || metadata.pi_metrics?.session_file;
+  const externalId = source.host_handle?.external_id;
+  const hostSessionDir = path.join(root, "host-sessions", "pi");
+  const candidates = [
+    declared,
+    externalId
+      ? path.join(hostSessionDir, `${externalId}.jsonl`)
+      : undefined,
+    source.run_id && source.agent_session_id
+      ? path.join(root, "runs", source.run_id, "pi_sessions", `${source.agent_session_id}.jsonl`)
+      : undefined,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(root, candidate);
+    try {
+      const stat = await fsp.lstat(resolved);
+      if (stat.isFile() && !stat.isSymbolicLink()) return candidate;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  if (externalId) {
+    const matches = (await fsp.readdir(hostSessionDir, { withFileTypes: true }).catch(error => {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    }))
+      .filter(entry => entry.isFile() && (
+        entry.name === `${externalId}.jsonl` || entry.name.endsWith(`_${externalId}.jsonl`)
+      ))
+      .map(entry => path.join(hostSessionDir, entry.name));
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) throw new Error(`multiple Pi session files match ${externalId}`);
+  }
+  return declared;
+}
+
 function frozenSpecPayload(source) {
   const spec = source.spec || {};
   return normalize({
@@ -244,7 +307,129 @@ async function walk(root, relative = "") {
   return files;
 }
 
-async function parseGoalEvents(source, relative, bytes, stat, context) {
+function piProjectSessionDir(homeDir, workspaceRoot) {
+  const normalized = path.resolve(workspaceRoot)
+    .replaceAll("\\", "/")
+    .replace(/^\/+/, "")
+    .replace(/[/:]/g, "-");
+  return path.join(homeDir, ".pi", "agent", "sessions", `--${normalized}--`);
+}
+
+function completeJsonlRecords(text) {
+  const lines = text.split(/\r?\n/);
+  if (!text.endsWith("\n")) lines.pop();
+  const records = [];
+  for (let line = 0; line < lines.length; line += 1) {
+    if (!lines[line]) continue;
+    try { records.push({ line, record: JSON.parse(lines[line]) }); }
+    catch { /* Native parser reports malformed records when importing the selected segment. */ }
+  }
+  return records;
+}
+
+function piNativeSessionId(records, filePath) {
+  for (const { record } of records) {
+    if (record?.type !== "session") continue;
+    const value = record.id || record.sessionId || record.session_id;
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return path.basename(filePath, ".jsonl");
+}
+
+function invocationEntries(goal) {
+  return Array.isArray(goal.host_command_invocations)
+    ? goal.host_command_invocations.filter(item => item && typeof item === "object")
+    : [];
+}
+
+function markerGoalId(record) {
+  const value = record?.details?.goal_plus_id
+    || record?.details?.goalPlusId
+    || record?.data?.goal_plus_id
+    || record?.data?.goalPlusId
+    || record?.message?.details?.goal_plus_id
+    || record?.message?.details?.goalPlusId;
+  return typeof value === "string" ? value : undefined;
+}
+
+function isGoalPlusMarker(record) {
+  const type = record?.customType || record?.custom_type || record?.message?.customType || record?.message?.custom_type;
+  return record?.type === "custom_message"
+    && typeof type === "string"
+    && ["goal-plus-created", "goal-plus-started", "goal-plus-resumed"].includes(type);
+}
+
+function matchingGoalForMarker(record, goals) {
+  const directGoalId = markerGoalId(record);
+  if (directGoalId && goals.has(directGoalId)) return { goal: goals.get(directGoalId) };
+  const recordId = record?.id || record?.entryId || record?.entry_id;
+  for (const goal of goals.values()) {
+    const invocation = invocationEntries(goal).find(item => (
+      recordId && (item.native_entry_id === recordId || item.nativeEntryId === recordId)
+    ));
+    if (invocation) return { goal, invocation };
+  }
+  return undefined;
+}
+
+async function discoverPiMainSessions(source, goalRecords, homeDir) {
+  if (!homeDir || goalRecords.size === 0) return { sessions: [], diagnostics: [] };
+  const workspaceRoot = path.dirname(source.root);
+  const sessionDir = piProjectSessionDir(homeDir, workspaceRoot);
+  const entries = await fsp.readdir(sessionDir, { withFileTypes: true }).catch(error => {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  });
+  const sessions = [];
+  const diagnostics = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    const sessionFile = path.join(sessionDir, entry.name);
+    try {
+      const read = await safeStableRead(source.root, sessionFile, {
+        allowedRoots: [sessionDir],
+        maxBytes: null,
+      });
+      const records = completeJsonlRecords(read.bytes.toString("utf8"));
+      const markers = records
+        .map(({ line, record }) => ({ line, record, match: matchingGoalForMarker(record, goalRecords) }))
+        .filter(item => item.match && isGoalPlusMarker(item.record));
+      const nativeSessionId = piNativeSessionId(records, sessionFile);
+      for (let index = 0; index < markers.length; index += 1) {
+        const marker = markers[index];
+        const goal = marker.match.goal;
+        const invocation = marker.match.invocation || invocationEntries(goal).find(item => (
+          item.native_entry_id === marker.record.id || item.nativeEntryId === marker.record.id
+        ));
+        const markerId = String(marker.record.id || invocation?.native_entry_id || marker.line);
+        const agentSessionId = `main:${goal.goal_plus_id}:${nativeSessionId}:${markerId}`;
+        sessions.push({
+          sourceId: source.sourceId,
+          agentSessionId,
+          canonicalSessionId: `goal-plus:${source.sourceId}:${agentSessionId}`,
+          nativeSessionId,
+          goalId: goal.goal_plus_id,
+          role: "main",
+          sessionKind: "main",
+          sessionFile,
+          allowedRoots: [sessionDir],
+          startLine: marker.line,
+          endLine: markers[index + 1]?.line,
+          input: `/goal-plus ${String(goal.raw_goal || "")}`.trim(),
+          invocationId: invocation?.invocation_id || invocation?.invocationId,
+          markerId,
+          terminalState: goal.status,
+        });
+      }
+    } catch (error) {
+      diagnostics.push({ relativePath: entry.name, code: "unreadable_pi_main_session", message: error.message });
+    }
+  }
+  sessions.sort((left, right) => left.sessionFile.localeCompare(right.sessionFile) || left.startLine - right.startLine);
+  return { sessions, diagnostics };
+}
+
+async function parseGoalEvents(source, relative, bytes, stat) {
   const snapshots = [];
   const text = bytes.toString("utf8");
   const rawLines = text.split(/\r?\n/);
@@ -278,11 +463,11 @@ async function parseGoalEvents(source, relative, bytes, stat, context) {
   return snapshots;
 }
 
-async function parseGoalPlusRoot(source) {
+async function parseGoalPlusRoot(source, options = {}) {
   const root = source.root;
   const files = (await walk(root)).sort();
   const diagnostics = [];
-  const context = { runGoals: new Map(), specs: new Map() };
+  const context = { runGoals: new Map(), specs: new Map(), goals: new Map() };
   const rawRecords = new Map();
   for (const relative of files) {
     const kind = kindFor(relative);
@@ -294,6 +479,7 @@ async function parseGoalPlusRoot(source) {
         : JSON.parse(read.bytes.toString("utf8"));
       rawRecords.set(relative, { kind, raw, ...read });
       if (kind === "goal") {
+        context.goals.set(raw.goal_plus_id, raw);
         for (const task of raw.search_tasks || []) if (task.run_id) context.runGoals.set(task.run_id, raw.goal_plus_id);
       }
       if (kind === "frozen_spec") context.specs.set(raw.frozen_spec_id, raw);
@@ -301,22 +487,30 @@ async function parseGoalPlusRoot(source) {
       diagnostics.push({ relativePath: relative, code: "unreadable_state", message: error.message });
     }
   }
+  const mainDiscovery = await discoverPiMainSessions(source, context.goals, options.homeDir);
+  diagnostics.push(...mainDiscovery.diagnostics);
+  const mainSessionsByGoal = new Map();
+  for (const session of mainDiscovery.sessions) {
+    const existing = mainSessionsByGoal.get(session.goalId) || [];
+    existing.push(session);
+    mainSessionsByGoal.set(session.goalId, existing);
+  }
   const snapshots = [];
-  const piSessions = [];
+  const piSessions = [...mainDiscovery.sessions];
   for (const relative of files) {
     const kind = kindFor(relative);
     if (!kind) continue;
     try {
       if (kind === "goal_event") {
         const read = await safeStableRead(root, path.join(root, relative));
-        snapshots.push(...await parseGoalEvents(source, relative, read.bytes, read.stat, context));
+        snapshots.push(...await parseGoalEvents(source, relative, read.bytes, read.stat));
         continue;
       }
       const record = rawRecords.get(relative);
       if (!record) continue;
       const { raw, bytes, stat } = record;
       let payload;
-      if (kind === "goal") payload = goalPayload(raw);
+      if (kind === "goal") payload = goalPayload(raw, mainSessionsByGoal.get(raw.goal_plus_id) || []);
       else if (kind === "run") payload = runPayload(raw, context.specs.get(raw.frozen_spec_id));
       else if (kind === "candidate") payload = candidatePayload(raw);
       else if (kind === "agent_session") payload = sessionPayload(raw);
@@ -339,15 +533,29 @@ async function parseGoalPlusRoot(source) {
         payload,
         redaction: { contentMode: "bounded", truncatedFields: [], removedFields: ["absolute-paths", "logs", "secrets", "hidden-evaluation-content"] },
       }));
-      if (kind === "agent_session" && raw.host === "pi-rpc") {
-        const sessionFile = raw.host_handle?.metadata?.session_file || raw.host_handle?.metadata?.pi_metrics?.session_file;
+      const sessionHost = raw.host || raw.host_handle?.host;
+      if (kind === "agent_session" && ["pi-rpc", "pi", "pi-agent"].includes(sessionHost)) {
+        const sessionFile = await piWorkerSessionFile(root, raw);
         if (sessionFile) piSessions.push({
           sourceId: source.sourceId,
           agentSessionId: raw.agent_session_id,
+          goalId: context.runGoals.get(raw.run_id),
           runId: raw.run_id,
           candidateId: raw.candidate_id,
           role: payload.role,
           sessionFile,
+          terminalState: raw.status
+            || raw.state
+            || raw.host_handle?.metadata?.pi_metrics?.stop_reason
+            || (raw.host_handle?.metadata?.runner_failed ? "failed" : undefined)
+            || (raw.host_handle?.metadata?.timed_out ? "aborted" : undefined),
+          exitCode: raw.host_handle?.metadata?.pi_metrics?.exit_code ?? raw.host_handle?.metadata?.exit_code,
+          errorMessage: raw.host_handle?.metadata?.error,
+        });
+        else diagnostics.push({
+          relativePath: relative,
+          code: "missing_pi_session_file",
+          message: `No Pi native session file was recorded for ${raw.agent_session_id}`,
         });
       }
     } catch (error) {
@@ -360,7 +568,9 @@ async function parseGoalPlusRoot(source) {
 module.exports = {
   contentHash,
   boundSnapshot,
+  discoverPiMainSessions,
   parseGoalPlusRoot,
+  piProjectSessionDir,
   safeStableRead,
   snapshotId,
 };

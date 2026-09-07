@@ -426,6 +426,23 @@ export function aggregatePiAgentTraceEvents(
     )),
   );
   const model = llmEvents.map(eventModel).find(Boolean) || agentEvents.map(eventModel).find(Boolean) || 'unknown';
+  const failedAgent = [...agentEvents].reverse().find((event) => {
+    const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();
+    return outcome === 'error' || outcome === 'failed';
+  });
+  const failures = failedAgent ? [{
+    failure_type: 'goal_plus_pi_session_failed',
+    description: content(attrs(failedAgent)['goal_plus.terminal_state'])
+      ? `Goal Plus Pi session ended with ${content(attrs(failedAgent)['goal_plus.terminal_state'])}`
+      : 'Goal Plus Pi session did not complete successfully',
+    context: JSON.stringify({
+      sessionId,
+      role: attrs(failedAgent)['goal_plus.role'],
+      exitCode: attrs(failedAgent)['goal_plus.exit_code'],
+    }),
+    recovery: 'Inspect the final model/tool events and the Goal Plus run state.',
+    attribution: 'ENVIRONMENT' as const,
+  }] : undefined;
 
   return {
     task_id: sessionId,
@@ -435,6 +452,7 @@ export function aggregatePiAgentTraceEvents(
     tokens,
     latency: Math.max(0, endedAt - startedAt),
     final_result: finalResult,
+    failures,
     timestamp: new Date(startedAt),
     trace_completed_at: new Date(endedAt),
     // Pi 事件是从 task 全量 spool 重聚合的规范快照。显式标记允许历史 Generic 污染

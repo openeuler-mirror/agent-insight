@@ -50,13 +50,13 @@ goal-plus-collector status
 
 `collecting` 表示 Goal/run 尚未终态或本轮扫描 checkpoint 尚未追上；`complete` 表示预期语义、结算证据和 native Execution 已齐；`partial` 表示终态但仍有明确缺项；`unsupported` 表示观察到不支持的关键 schema。完整度不等同于执行成功，失败或 selection blocked 也可以完整。
 
-Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；Goal Plus 可使用 host metadata 中的 Codex conversation + turn 构造既有 execution ID，且只匹配 `framework=codex`。关联仍只使用 native/session/execution ID 或唯一的确定性任务名，不按时间接近度猜测。
+Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的每个 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage，不因 worker 是 candidate、work item 或 final checker 而漏采。Pi 中输入 `/goal-plus` 的主对话也会从当前 attached 工作区对应的 Pi session 目录定向补采，并按 Goal Plus invocation 分段；它不会扫描其他工作区或仅按时间猜测。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；Goal Plus 可使用 host metadata 中的 Codex conversation + turn 构造既有 execution ID，且只匹配 `framework=codex`。关联仍只使用 native/session/execution ID 或唯一的确定性任务名。
 
-Pi/Codex 原生 Trace 的输入、输出、工具参数和工具结果会先递归脱敏，再默认完整写入本地 spool 并转换为 OTLP，不再使用固定的 2000 字符正文上限；调用方显式配置的字段上限和诊断错误摘要上限仍然生效。该行为只影响升级采集器后新产生的 Trace，历史记录中已经写入的 `[TRUNCATED ...]` 内容不会自动恢复。
+Pi/Codex 原生 Trace 的输入、输出、工具参数和工具结果会先递归脱敏，再默认完整写入本地 spool 并转换为 OTLP，不再使用固定的 2000 字符正文上限。Goal Plus Pi 被动导入还会保留 native session 中已写入的 thinking、后续 user/custom message 和完整 tool result。即使单条事件超过默认上传批次大小，也会整条单独上传，不会因此卡住或二次截断；诊断错误摘要上限仍然生效。该行为只影响升级采集器后重新扫描或新产生的 Trace，历史记录中已经写入且源 session 已删除的 `[TRUNCATED ...]` 内容无法恢复。
 
 ## 隐私、失败恢复与卸载
 
-collector 不上传绝对路径、workspace 内容、diff、完整日志、密钥、隐藏标准答案或私有推理。普通字段有长度和数组上限；超过单快照限制时降级为 `metadata-only`。上传先写按 API Key 隔离的本地 spool，HTTP 2xx 后才推进 checkpoint；429、5xx 或断网会重试并保留 pending，确定性拒绝会进入 rejected 目录。
+collector 不上传绝对路径、workspace 内容、diff、完整日志、密钥或隐藏标准答案。Pi native session 已持久化的 thinking 会作为 Trace 正文脱敏后采集；这不代表能够恢复宿主未保存的内部状态。Goal/Run 等语义快照仍有长度和数组上限，超过单快照限制时降级为 `metadata-only`，该限制不截断 Pi native Trace 正文。上传先写按 API Key 隔离的本地 spool，HTTP 2xx 后才推进 checkpoint；429、5xx 或断网会重试并保留 pending，确定性拒绝会进入 rejected 目录。
 
 诊断命令：
 

@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-const fsp = require("node:fs/promises");
 const path = require("node:path");
 const {
   DurableTraceUploader,
@@ -24,10 +23,27 @@ function messageText(message) {
   if (typeof message?.content === "string") return message.content;
   if (!Array.isArray(message?.content)) return "";
   return message.content
-    .filter(part => part?.type === "text")
-    .map(part => String(part.text || ""))
+    .filter(part => part?.type === "text" || part?.type === "thinking")
+    .map(part => part.type === "thinking"
+      ? `<thinking>\n${String(part.thinking || part.text || "")}\n</thinking>`
+      : String(part.text || ""))
     .filter(Boolean)
     .join("\n");
+}
+
+function recordContextText(record) {
+  if (record?.type === "custom_message") {
+    const customType = record.customType || record.custom_type || "custom";
+    const value = record.content ?? record.message?.content ?? record.details;
+    const content = typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
+    return content ? `[custom:${customType}]\n${content}` : `[custom:${customType}]`;
+  }
+  if (record?.type === "compaction" || record?.type === "branch_summary") {
+    const value = record.summary ?? record.content ?? record.message;
+    const content = typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
+    return content ? `[${record.type}]\n${content}` : "";
+  }
+  return "";
 }
 
 function toolCalls(message) {
@@ -57,7 +73,10 @@ async function parsePiSession(root, descriptor) {
   const sessionPath = path.isAbsolute(descriptor.sessionFile)
     ? descriptor.sessionFile
     : path.resolve(root, descriptor.sessionFile);
-  const read = await safeStableRead(root, sessionPath);
+  const read = await safeStableRead(root, sessionPath, {
+    allowedRoots: descriptor.allowedRoots || [],
+    maxBytes: null,
+  });
   const text = read.bytes.toString("utf8");
   const lines = text.split(/\r?\n/);
   if (!text.endsWith("\n")) lines.pop();
@@ -65,10 +84,12 @@ async function parsePiSession(root, descriptor) {
   const diagnostics = [];
   for (let index = 0; index < lines.length; index += 1) {
     if (!lines[index]) continue;
-    try { records.push(JSON.parse(lines[index])); }
+    if (Number.isInteger(descriptor.startLine) && index < descriptor.startLine) continue;
+    if (Number.isInteger(descriptor.endLine) && index >= descriptor.endLine) continue;
+    try { records.push({ line: index, record: JSON.parse(lines[index]) }); }
     catch { diagnostics.push({ code: "invalid_pi_jsonl_record", line: index + 1 }); }
   }
-  const messages = records.map(unwrapMessage).filter(Boolean);
+  const messages = records.map(item => unwrapMessage(item.record)).filter(Boolean);
   if (!messages.length) return { events: [], fidelity: "summary-only", diagnostics };
   const fallback = read.stat.mtimeMs;
   const times = messages.map(message => timestamp(message.timestamp, fallback));
@@ -78,19 +99,49 @@ async function parsePiSession(root, descriptor) {
   const traceId = stableTraceId("pi-agent", sessionId);
   const agentSpanId = stableSpanId(sessionId, "agent");
   const firstUser = messages.find(message => message.role === "user");
-  const input = firstUser ? messageText(firstUser) : "";
+  const input = descriptor.input || (firstUser ? messageText(firstUser) : "");
   const lastAssistant = messages.filter(message => message.role === "assistant").at(-1);
   const events = [];
   const pendingTools = new Map();
   let llmIndex = 0;
   let previousTime = startedAt;
+  let hasFailedLlm = false;
+  const pendingContext = descriptor.input ? [descriptor.input] : [];
 
-  for (const message of messages) {
+  const commonAttributes = {
+    "goal_plus.source_id": descriptor.sourceId,
+    "goal_plus.goal_id": descriptor.goalId,
+    "goal_plus.run_id": descriptor.runId,
+    "goal_plus.candidate_id": descriptor.candidateId,
+    "goal_plus.agent_session_id": descriptor.agentSessionId,
+    "goal_plus.native_session_id": descriptor.nativeSessionId,
+    "goal_plus.role": descriptor.role,
+    "goal_plus.session_kind": descriptor.sessionKind || "worker",
+    "goal_plus.import_mode": "passive_pi_session",
+    "goal_plus.timing_fidelity": "derived",
+  };
+
+  for (const item of records) {
+    const message = unwrapMessage(item.record);
+    if (!message) {
+      const context = recordContextText(item.record);
+      if (context) pendingContext.push(context);
+      continue;
+    }
     const completedAt = timestamp(message.timestamp, previousTime);
+    if (message.role === "user") {
+      const userText = messageText(message);
+      if (userText && userText !== descriptor.input) pendingContext.push(`[user]\n${userText}`);
+      previousTime = completedAt;
+      continue;
+    }
     if (message.role === "assistant") {
       const spanId = stableSpanId(sessionId, "llm", llmIndex);
       const output = messageText(message);
       const usage = usageFrom(message);
+      const stopReason = String(message.stopReason || message.stop_reason || "").toLowerCase();
+      const failed = ["error", "aborted", "cancelled", "canceled", "blocked"].includes(stopReason);
+      hasFailedLlm ||= failed;
       events.push({
         eventId: stableEventId(sessionId, spanId),
         sessionId,
@@ -101,23 +152,16 @@ async function parsePiSession(root, descriptor) {
         name: `llm.${message.responseModel || message.model || "unknown"}`,
         startTimeMs: previousTime,
         endTimeMs: completedAt,
-        status: message.stopReason === "error" ? "error" : "success",
-        error: message.errorMessage,
-        input: llmIndex === 0 ? input : undefined,
+        status: failed ? "error" : "success",
+        error: message.errorMessage || (failed ? `Pi turn ended with ${stopReason}` : undefined),
+        input: pendingContext.length ? pendingContext.join("\n\n") : undefined,
         output,
         model: message.responseModel || message.model,
         provider: message.provider,
         usage,
-        attributes: {
-          "goal_plus.source_id": descriptor.sourceId,
-          "goal_plus.run_id": descriptor.runId,
-          "goal_plus.candidate_id": descriptor.candidateId,
-          "goal_plus.agent_session_id": descriptor.agentSessionId,
-          "goal_plus.role": descriptor.role,
-          "goal_plus.import_mode": "passive_pi_session",
-          "goal_plus.timing_fidelity": "derived",
-        },
+        attributes: { ...commonAttributes, "pi.stop_reason": stopReason || undefined },
       });
+      pendingContext.length = 0;
       for (const call of toolCalls(message)) {
         const callId = String(call.id || call.toolCallId || `tool-${llmIndex}-${pendingTools.size}`);
         pendingTools.set(callId, {
@@ -163,11 +207,7 @@ async function parsePiSession(root, descriptor) {
         result: message.content,
       },
       mcp,
-      attributes: {
-        "goal_plus.source_id": descriptor.sourceId,
-        "goal_plus.agent_session_id": descriptor.agentSessionId,
-        "goal_plus.import_mode": "passive_pi_session",
-      },
+      attributes: commonAttributes,
     });
     const skillName = pending.toolName.toLowerCase() === "read" ? detectedSkill(pending.args) : null;
     if (skillName) {
@@ -184,11 +224,7 @@ async function parsePiSession(root, descriptor) {
         endTimeMs: completedAt,
         status: message.isError ? "error" : "success",
         skill: { name: skillName, version: "unknown", triggerMode: "automatic" },
-        attributes: {
-          "goal_plus.source_id": descriptor.sourceId,
-          "goal_plus.agent_session_id": descriptor.agentSessionId,
-          "goal_plus.import_mode": "passive_pi_session",
-        },
+        attributes: commonAttributes,
       });
     }
     previousTime = completedAt;
@@ -209,6 +245,11 @@ async function parsePiSession(root, descriptor) {
       tool: { name: pending.toolName, type: classifyTool(pending.toolName), arguments: pending.args },
     });
   }
+  const terminalState = String(descriptor.terminalState || "").toLowerCase();
+  const exitCode = descriptor.exitCode == null ? undefined : Number(descriptor.exitCode);
+  const terminalFailure = hasFailedLlm
+    || ["error", "failed", "aborted", "cancelled", "canceled", "blocked", "invalidated"].includes(terminalState)
+    || (Number.isFinite(exitCode) && exitCode !== 0);
   events.push({
     eventId: stableEventId(sessionId, agentSpanId),
     sessionId,
@@ -218,18 +259,17 @@ async function parsePiSession(root, descriptor) {
     name: "agent.pi",
     startTimeMs: startedAt,
     endTimeMs: endedAt,
-    status: pendingTools.size ? "running" : "success",
+    status: terminalFailure ? "error" : pendingTools.size ? "running" : "success",
+    error: terminalFailure
+      ? descriptor.errorMessage || `Goal Plus Pi session ended with ${terminalState || `exit code ${exitCode}`}`
+      : undefined,
     input,
     output: messageText(lastAssistant),
     model: lastAssistant?.responseModel || lastAssistant?.model,
     attributes: {
-      "goal_plus.source_id": descriptor.sourceId,
-      "goal_plus.run_id": descriptor.runId,
-      "goal_plus.candidate_id": descriptor.candidateId,
-      "goal_plus.agent_session_id": descriptor.agentSessionId,
-      "goal_plus.role": descriptor.role,
-      "goal_plus.import_mode": "passive_pi_session",
-      "goal_plus.timing_fidelity": "derived",
+      ...commonAttributes,
+      "goal_plus.terminal_state": terminalState || undefined,
+      "goal_plus.exit_code": Number.isFinite(exitCode) ? exitCode : undefined,
     },
   });
   return { events, fidelity: "derived", diagnostics };
