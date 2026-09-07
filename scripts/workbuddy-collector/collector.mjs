@@ -26,8 +26,30 @@ const {
   apiKeyHash,
 } = require("../agent-trace-collectors/shared/trace-transport.cjs");
 const { FRAMEWORK, mapWorkBuddyTrace } = require("./mapper.cjs");
+const { extractSendPrompts, pickPromptForTrace } = require("./sdk-log.cjs");
 
 const logger = console;
+
+/**
+ * 从 SDK 会话日志（D3）读取该轮真实用户输入（干净、未截断）。
+ * trace 的 toolInput 会被 WorkBuddy 截断在 ~100KB，长对话时当前轮提问会丢失，
+ * 因此优先用 D3 的 userContent，按 trace 起始时间关联到对应轮次。
+ */
+async function readUserPromptFromSdkLog(wbHome, sessionId, traceStartMs) {
+  try {
+    const logsRoot = path.join(wbHome, "logs");
+    const dates = await fsp.readdir(logsRoot).catch(() => []);
+    let combined = "";
+    for (const date of dates) {
+      const p = path.join(logsRoot, date, "sdk", "conversations", `${sessionId}.log`);
+      try { combined += await fsp.readFile(p, "utf8"); } catch { /* 该日期下无此会话日志 */ }
+    }
+    if (!combined) return undefined;
+    return pickPromptForTrace(extractSendPrompts(combined), traceStartMs);
+  } catch {
+    return undefined;
+  }
+}
 
 function workbuddyHome(homeDir = os.homedir()) {
   return path.join(homeDir, ".workbuddy");
@@ -250,12 +272,18 @@ export class WorkBuddyCollector {
     }
 
     const enrichment = await readSessionEnrichment(this.dbPath, sessionId).catch(() => ({}));
+    // 优先用 D3（SDK 会话日志）里干净、未截断的用户输入；D3 拿不到时 mapper 回退 toolInput。
+    const traceStartMs = Date.parse(doc?.trace?.startedAt) || undefined;
+    const userPrompt = sessionResolution === "exact"
+      ? await readUserPromptFromSdkLog(this.wbHome, sessionId, traceStartMs)
+      : undefined;
     const events = mapWorkBuddyTrace(doc, {
       sessionId,
       mode: enrichment.mode || resolved?.mode,
       workbuddyVersion: resolved?.version,
       sessionTotals: enrichment.sessionTotals,
       sessionResolution,
+      userPrompt,
     });
 
     for (const event of events) await this.writer.append(event);

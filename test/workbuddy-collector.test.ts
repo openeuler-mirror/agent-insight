@@ -8,6 +8,7 @@ import { getOtelTraceAdapter } from "@/lib/ingest/otel/adapter-registry"
 
 const require = createRequire(import.meta.url)
 const { mapWorkBuddyTrace, normalizeUsage, extractUserQuery } = require("../scripts/workbuddy-collector/mapper.cjs")
+const { extractSendPrompts, pickPromptForTrace, parseReqTimeMs } = require("../scripts/workbuddy-collector/sdk-log.cjs")
 const { canonicalEventsToOtlp } = require("../scripts/agent-trace-collectors/shared/trace-transport.cjs")
 
 /** 构造一条贴近真实结构的 WorkBuddy trace（trace + agent/generation/function/custom spans）。 */
@@ -129,6 +130,43 @@ test("extractUserQuery: 剥离注入的 system-reminder，取 <user_query> 真�
   assert.equal(extractUserQuery("<system-reminder>ctx</system-reminder>\n真实问题"), "真实问题")
   // 无任何标签时原样返回
   assert.equal(extractUserQuery("你好"), "你好")
+})
+
+test("SDK log (D3): 逐轮抽取干净用户输入并按 trace 起始时间关联", () => {
+  // 模拟 requests:result 行：req id 前 13 位是该轮起始毫秒时间戳，userContent 是干净文本。
+  const log = [
+    '2026-09-07T03:46:14Z method:requests:result {"instanceId":"ci-8","state":[{"id":"req-1788752774543004","userMessageState":"completed","userContent":[{"type":"text","text":"跑一遍 parent-child-demo 的父子协同示例"}]}]}',
+    '2026-09-07T03:46:17Z method:requests:result {"instanceId":"ci-8","state":[{"id":"req-1788752774543004","userContent":[{"type":"text","text":"跑一遍 parent-child-demo 的父子协同示例"}]}]}',
+    '2026-09-07T03:50:09Z method:requests:result {"instanceId":"ci-8","state":[{"id":"req-1788753009104125","userMessageState":"completed","userContent":[{"type":"text","text":"我是谁"}]}]}',
+  ].join("\n")
+  const prompts = extractSendPrompts(log)
+  assert.equal(prompts.length, 2) // 同一 req 的重复行去重
+  assert.equal(prompts[0].text, "跑一遍 parent-child-demo 的父子协同示例")
+  assert.equal(prompts[1].text, "我是谁")
+  assert.equal(parseReqTimeMs("req-1788753009104125"), 1788753009104)
+  // 第二轮 trace（03:50:10 起始）应关联到「我是谁」，而不是第一轮
+  assert.equal(pickPromptForTrace(prompts, Date.parse("2026-09-07T03:50:10Z")), "我是谁")
+  // 第一轮 trace（03:46:20 起始）应关联到第一轮提问
+  assert.equal(pickPromptForTrace(prompts, Date.parse("2026-09-07T03:46:20Z")), "跑一遍 parent-child-demo 的父子协同示例")
+})
+
+test("WorkBuddy: enrichment.userPrompt（来自 D3）优先于被截断的 toolInput", () => {
+  // 模拟 toolInput 被截断到无法解析（长对话丢失当前轮提问）
+  const doc = {
+    trace: { traceId: "trace-trunc", name: "Agent workflow", startedAt: "2026-09-07T03:50:10.000Z", endedAt: "2026-09-07T03:50:20.000Z", status: "ok" },
+    spans: [
+      { traceId: "trace-trunc", spanId: "a", parentId: null, name: "cli", type: "agent", startedAt: "2026-09-07T03:50:10.100Z", endedAt: "2026-09-07T03:50:20.000Z", status: "ok", agentName: "cli" },
+      {
+        traceId: "trace-trunc", spanId: "g", parentId: "a", name: "generation", type: "generation",
+        startedAt: "2026-09-07T03:50:11.000Z", endedAt: "2026-09-07T03:50:19.000Z", status: "ok",
+        toolInput: '[{"role":"system","content":"...huge..."},{"role":"user","content":[{"type":"text","text":"<user_query>历史轮问题', // 截断的非法 JSON
+        toolOutput: JSON.stringify([{ model: "hy4-preview", choices: [{ message: { role: "assistant", content: "你是大大" } }], usage: { prompt_tokens: 90000, completion_tokens: 30, total_tokens: 90030 } }]),
+      },
+    ],
+  }
+  const events = mapWorkBuddyTrace(doc, { sessionId: "sess-trunc", userPrompt: "我是谁" })
+  const root = events.find((e: any) => e.kind === "chain")
+  assert.equal(root.attributes["workbuddy.user_prompt"], "我是谁")
 })
 
 test("WorkBuddy round-trip: USER 节点取 <user_query> 内容，不含 system-reminder", () => {

@@ -1977,7 +1977,7 @@ function generatePowerShellScript(
         '        $wbBase = "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/workbuddy-collector"',
         '        try {',
         '            Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/workbuddy_setup.mjs" -OutFile (Join-Path $wbSrc "workbuddy_setup.mjs")',
-        '            @("collector.mjs", "session-registry.mjs", "mapper.cjs") | ForEach-Object {',
+        '            @("collector.mjs", "session-registry.mjs", "mapper.cjs", "sdk-log.cjs") | ForEach-Object {',
         '                Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/$_" -OutFile (Join-Path (Join-Path $wbSrc "workbuddy-collector") $_)',
         '            }',
         '            Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/trace-transport.cjs" -OutFile (Join-Path (Join-Path $wbSrc "agent-trace-collectors\\shared") "trace-transport.cjs")',

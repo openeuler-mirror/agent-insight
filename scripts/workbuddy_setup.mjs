@@ -85,7 +85,7 @@ async function copyFile(src, dst) {
 
 async function stageRuntime() {
   await fsp.mkdir(INSTALL_DIR, { recursive: true });
-  for (const name of ["collector.mjs", "session-registry.mjs", "mapper.cjs"]) {
+  for (const name of ["collector.mjs", "session-registry.mjs", "mapper.cjs", "sdk-log.cjs"]) {
     await copyFile(path.join(COLLECTOR_SRC_DIR, name), path.join(INSTALL_DIR, name));
   }
   // 保持相对 require（collector.mjs 里 ../agent-trace-collectors/shared/trace-transport.cjs）成立。

@@ -9,6 +9,7 @@ const collectorFiles = new Map<string, string>([
   ['collector.mjs', path.join('scripts', 'workbuddy-collector', 'collector.mjs')],
   ['session-registry.mjs', path.join('scripts', 'workbuddy-collector', 'session-registry.mjs')],
   ['mapper.cjs', path.join('scripts', 'workbuddy-collector', 'mapper.cjs')],
+  ['sdk-log.cjs', path.join('scripts', 'workbuddy-collector', 'sdk-log.cjs')],
   ['trace-transport.cjs', path.join('scripts', 'agent-trace-collectors', 'shared', 'trace-transport.cjs')],
 ]);
 
