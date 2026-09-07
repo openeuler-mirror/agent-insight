@@ -643,6 +643,306 @@ test("Codex adapter merges one physical shell call reported with different Hook 
   assert.equal(tools[0].tool_calls[0].function.arguments.includes("Get-Content"), true)
 })
 
+test("Codex adapter merges shell calls whose Hook and OTel wrappers differ", () => {
+  const agent = "4".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "wrapped-shell-agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "count matching lines",
+      output: "25 lines",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_005_000,
+    }),
+    canonical({
+      eventId: "wrapped-shell-hook",
+      spanId: "5".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec_command",
+      startTimeMs: 1_700_000_001_000,
+      endTimeMs: 1_700_000_001_688,
+      tool: {
+        name: "exec_command",
+        type: "shell",
+        arguments: { command: "count sshd" },
+        result: "Chunk ID: feb533\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 21\nOutput:\ncount=25\nlines=1,2,3,19,20",
+      },
+      attributes: {
+        "codex.call.id": "exec-hook-id",
+        "codex.tool.source": "hook",
+      },
+    }),
+    canonical({
+      eventId: "wrapped-shell-otel",
+      spanId: "6".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec",
+      startTimeMs: 1_700_000_001_379,
+      endTimeMs: 1_700_000_001_688,
+      tool: {
+        name: "exec",
+        type: "custom",
+        result: "Script completed\nWall time 0.3 seconds\nOutput:\n\ncount=25\nlines=1,2,3,19,20",
+      },
+      attributes: {
+        "codex.call.id": "call-otel-id",
+        "codex.tool.source": "otel",
+      },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  assert.equal(record.tool_call_count, 1)
+  assert.equal(record.interactions.filter((item: { tool_calls?: unknown[] }) =>
+    item.tool_calls?.length).length, 1)
+})
+
+test("Codex adapter drops an OTel shell batch already represented by Hook calls", () => {
+  const agent = "7".repeat(16)
+  const hookEvents = [0, 1, 2].map((offset) => canonical({
+    eventId: `batched-shell-hook-${offset}`,
+    spanId: String(offset + 1).repeat(16),
+    parentSpanId: agent,
+    kind: "tool",
+    name: "tool.exec_command",
+    startTimeMs: 1_700_000_001_000 + offset * 150,
+    endTimeMs: 1_700_000_001_700,
+    tool: {
+      name: "exec_command",
+      type: "shell",
+      arguments: { command: "grep -c 'Failed password' auth.log" },
+      result: "Chunk ID: demo\nWall time: 0.0000 seconds\nProcess exited with code 0\nOutput:\n19\n",
+    },
+    attributes: {
+      "codex.call.id": `exec-hook-${offset}`,
+      "codex.tool.source": "hook",
+    },
+  }))
+  const events = normalize([
+    canonical({
+      eventId: "batched-shell-agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "audit auth log",
+      output: "19 failures",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_005_000,
+    }),
+    ...hookEvents,
+    canonical({
+      eventId: "batched-shell-otel",
+      spanId: "8".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec",
+      startTimeMs: 1_700_000_001_450,
+      endTimeMs: 1_700_000_001_700,
+      tool: {
+        name: "exec",
+        type: "custom",
+        arguments: {},
+        result: [
+          "Script completed",
+          "Wall time 0.7 seconds",
+          "Output:",
+          "",
+          JSON.stringify({ cmd: "grep -c 'Failed password' auth.log", output: "19\n", exit_code: 0 }),
+          JSON.stringify({ cmd: "grep -c 'Failed password' auth.log", output: "19\n", exit_code: 0 }),
+          JSON.stringify({ cmd: "grep -c 'Failed password' auth.log", output: "19\n", exit_code: 0 }),
+        ].join("\n"),
+      },
+      attributes: {
+        "codex.call.id": "call-otel-batch",
+        "codex.tool.source": "otel",
+      },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  assert.equal(record.tool_call_count, 3)
+  assert.equal(record.interactions.filter((item: { tool_calls?: unknown[] }) =>
+    item.tool_calls?.length).length, 3)
+})
+
+test("Codex adapter drops a labeled OTel shell batch covered by multiple Hook outputs", () => {
+  const agent = "d".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "labeled-batch-agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "inspect log evidence",
+      output: "done",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_005_000,
+    }),
+    canonical({
+      eventId: "labeled-batch-hook-lines",
+      spanId: "e".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec_command",
+      startTimeMs: 1_700_000_001_000,
+      endTimeMs: 1_700_000_001_600,
+      tool: {
+        name: "exec_command",
+        type: "shell",
+        arguments: { command: "sed -n '1,2p' auth.log" },
+        result: "Chunk ID: lines\nOutput:\nline one\nline two\n",
+      },
+      attributes: { "codex.tool.source": "hook" },
+    }),
+    canonical({
+      eventId: "labeled-batch-hook-ips",
+      spanId: "f".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec_command",
+      startTimeMs: 1_700_000_001_150,
+      endTimeMs: 1_700_000_001_600,
+      tool: {
+        name: "exec_command",
+        type: "shell",
+        arguments: { command: "list source ips" },
+        result: "Chunk ID: ips\nOutput:\n198.51.100.23\n203.0.113.10\n",
+      },
+      attributes: { "codex.tool.source": "hook" },
+    }),
+    canonical({
+      eventId: "labeled-batch-otel",
+      spanId: "0".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec",
+      startTimeMs: 1_700_000_001_300,
+      endTimeMs: 1_700_000_001_600,
+      tool: {
+        name: "exec",
+        type: "custom",
+        arguments: {},
+        result: "Script completed\nOutput:\n\nFIRST20\nline one\nline two\n\nCANDIDATES\n198.51.100.23\n203.0.113.10\n",
+      },
+      attributes: { "codex.tool.source": "otel" },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  assert.equal(record.tool_call_count, 2)
+})
+
+test("Codex adapter merges a truncated Hook shell output with its complete OTel output", () => {
+  const agent = "1".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "truncated-output-agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "read log",
+      output: "done",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_005_000,
+    }),
+    canonical({
+      eventId: "truncated-output-hook",
+      spanId: "2".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec_command",
+      startTimeMs: 1_700_000_001_000,
+      endTimeMs: 1_700_000_001_900,
+      tool: {
+        name: "exec_command",
+        type: "shell",
+        arguments: { command: "head -n 20 auth.log" },
+        result: "Chunk ID: demo\nOutput:\nline one\nline two p...[TRUNCATED original_chars=2034]",
+      },
+      attributes: { "codex.tool.source": "hook" },
+    }),
+    canonical({
+      eventId: "truncated-output-otel",
+      spanId: "3".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec",
+      startTimeMs: 1_700_000_001_700,
+      endTimeMs: 1_700_000_001_900,
+      tool: {
+        name: "exec",
+        type: "custom",
+        arguments: {},
+        result: "Script completed\nOutput:\n\nline one\nline two port 42006",
+      },
+      attributes: { "codex.tool.source": "otel" },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  assert.equal(record.tool_call_count, 1)
+})
+
+test("Codex adapter merges a delayed raw Hook shell output with its OTel wrapper", () => {
+  const agent = "4".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "delayed-output-agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "inspect environment",
+      output: "done",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_005_000,
+    }),
+    canonical({
+      eventId: "delayed-output-hook",
+      spanId: "5".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.Bash",
+      startTimeMs: 1_700_000_001_000,
+      endTimeMs: 1_700_000_001_100,
+      tool: {
+        name: "Bash",
+        type: "shell",
+        arguments: { command: "env | sort | head" },
+        result: "CODEX_CI=1\nCODEX_MANAGED_BY_NPM=1",
+      },
+      attributes: { "codex.tool.source": "hook" },
+    }),
+    canonical({
+      eventId: "delayed-output-otel",
+      spanId: "6".repeat(16),
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec",
+      startTimeMs: 1_700_000_001_900,
+      endTimeMs: 1_700_000_002_000,
+      tool: {
+        name: "exec",
+        type: "custom",
+        arguments: {},
+        result: "Script completed\nOutput:\n\nCODEX_CI=1\nCODEX_MANAGED_BY_NPM=1",
+      },
+      attributes: { "codex.tool.source": "otel" },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  assert.equal(record.tool_call_count, 1)
+})
+
 test("Codex adapter merges a child shell's direct-id alias before its native exec wrapper", () => {
   const agent = "8".repeat(16)
   const subagent = "9".repeat(16)
