@@ -21,6 +21,8 @@ from swebench.harness.constants import (
 from swebench.harness.run_evaluation import run_instance
 from swebench.harness.utils import make_test_spec
 
+from result_policy import classify_harness_result
+
 
 class ControlledContainers:
     def __init__(self, containers, evaluation_id: str, cpu: float, memory_mib: int):
@@ -138,22 +140,10 @@ def main(input_path: str, output_path: str) -> int:
             if instance_log_path.exists()
             else ""
         )
-        if report and not report.get("infra_failure") and "tests_status" in report:
-            status = "completed"
-        elif APPLY_PATCH_FAIL in log_text:
-            status = "submission_invalid"
-            error = {
-                "code": "SWE_PATCH_APPLY_FAILED",
-                "message": "Agent Patch 无法应用到官方 Case 镜像",
-                "retryable": False,
-            }
-        else:
-            reason = (report or {}).get("infra_failure_reason")
-            error = {
-                "code": "SWE_HARNESS_FAILED",
-                "message": reason or "SWE-bench Harness 未生成完整官方报告",
-                "retryable": True,
-            }
+        status, error = classify_harness_result(
+            report,
+            APPLY_PATCH_FAIL in log_text,
+        )
     except Exception as exc:
         ensure_file(instance_log_path, traceback.format_exc())
         error = {
