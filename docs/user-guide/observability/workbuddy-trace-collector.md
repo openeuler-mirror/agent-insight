@@ -22,7 +22,7 @@ WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，**不提供 Hook/插件扩�
 
 | 类型 | 已采集信息 |
 | --- | --- |
-| Agent | sessionId、用户原始提问、Agent 名称（内部 `cli` 归一化为 `WorkBuddy`）、会话模式（ask/craft/work）、模型、耗时、状态、最终结果 |
+| Agent | sessionId、用户原始提问（取自 SDK 会话日志，干净且不受 ~100KB 截断影响）、Agent 名称（内部 `cli` 归一化为 `WorkBuddy`）、会话模式（ask/craft/work）、模型、耗时、状态、最终结果 |
 | LLM | 模型名、逐轮 input/output/reasoning/cache 精确 token、prompt/completion 内容、耗时 |
 | Tool | Read/Write/Edit/Bash/Glob 等真实工具调用的名称、参数（**保留真实文件路径**）、返回值、状态、耗时 |
 | 子 Agent | WorkBuddy 通过名为 `Agent` 的工具派发子 Agent，本质是一次工具调用，**按普通 TOOL 节点显示**（可展开查看 `subagent_type`/`prompt` 参数与子 Agent 返回的报告）；由于子 Agent 内部链路未落盘，不再单独渲染成可展开的子 Agent 节点 |
@@ -88,8 +88,8 @@ Get-ChildItem -Recurse "$env:USERPROFILE\.agent-insight\otel_data\workbuddy" | S
 
 1. **监听**：`fs.watch` 盯 `~/.workbuddy/traces/<pid>/trace_*.json`；WorkBuddy 一次对话写完一条完整 trace 即触发处理（读取前等 mtime 静止防半写）。
 2. **关联会话**：持续订阅 `~/.workbuddy/sessions/<pid>.json` 心跳，维护 `pid → sessionId` 缓存并留宽限期，避免心跳被清理后追溯不到会话。
-3. **富化**：只读查询 `~/.workbuddy/workbuddy.db`（`PRAGMA query_only`）补全模式/模型/会话级上下文占用。
-4. **映射**：把 span 树转成平台 canonical 事件 → OTLP，`service.name=workbuddy`。逐轮 token/model 直接来自 `generation.toolOutput`；工具按时间就近归属到对应 LLM。
+3. **富化**：只读查询 `~/.workbuddy/workbuddy.db`（`PRAGMA query_only`）补全模式/模型/会话级上下文占用；并从 SDK 会话日志 `~/.workbuddy/logs/<date>/sdk/conversations/<sessionId>.log` 读取该轮**干净、未截断**的用户输入（`userContent`，按 trace 起始时间关联到对应轮次）。
+4. **映射**：把 span 树转成平台 canonical 事件 → OTLP，`service.name=workbuddy`。用户提问优先用第 3 步 D3 的 `userContent`（因为 `generation.toolInput` 会被 WorkBuddy 截断在 ~100KB，长对话时当前轮提问在数组末尾会被切掉；D3 不受此影响），拿不到才回退 toolInput；逐轮 token/model 直接来自 `generation.toolOutput`；工具按时间就近归属到对应 LLM。
 5. **上传**：复用平台共享 spool/uploader，每条 trace 处理后即上传，失败落盘重试。
 
 ## 数据与隐私

@@ -98,7 +98,7 @@ sequenceDiagram
 
 ### 2.3 数据关联与增量读取
 
-- **D3（会话日志）增量读取**：这个文件持续追加、单文件可以长到几 MB，不能每次全量重读。采集器按 `(文件路径 → 已读字节偏移量)` 维护游标，每次只 `read from offset`，按行解析新增内容，提取 `method:sendPrompt` 里的 `mode`/`modelId` 和 `userContent` 原文。
+- **D3（会话日志）读取用户输入**：`~/.workbuddy/logs/<date>/sdk/conversations/<sessionId>.log` 的 `method:requests:result` 事件带 `userContent`，是**干净、未截断、逐轮**的用户原文（req id 前 13 位内嵌该轮起始毫秒时间戳）。采集器解析出各轮 `{requestId, timeMs, text}`，按「时间上最接近且不晚于 trace 起始」关联到当前 trace，作为该会话该轮的用户提问。**这是必需的**：`generation.toolInput` 会被 WorkBuddy 截断在 ~100KB，长对话时当前轮用户输入在 messages 数组末尾会被整段切掉、且截断的 JSON 无法解析，只有 D3 能可靠拿到。实现见 `scripts/workbuddy-collector/sdk-log.cjs`（纯函数 `extractSendPrompts`/`pickPromptForTrace`）。
 - **D4（SQLite）只读关联**：连接时设置 `PRAGMA query_only = ON`（只读事务，不与主进程的写事务抢锁），查询按 `session_id` 精确查一行，短超时（如 200ms）拿不到就跳过本次关联，不阻塞整体流程；下一条 trace 触发时再查一次即可，不需要专门重试机制。
 - **D5（迁移 SQL）**：采集器启动时读一次，做字段存在性探测；如果发现 `session_usage` 表缺少 `credit_json` 或 `sessions` 表缺少 `mode`/`model` 列（版本升级导致的 schema 变化），对应字段直接置空，不抛错、不阻塞采集，这是应对"闭源内部实现随时可能变"的基本姿势。
 
@@ -115,7 +115,7 @@ sequenceDiagram
 | `spans[].type === "custom"`（`mcp_tools`） | —（跳过） | 无 I/O 的发现类噪声 span（单条 trace 常有几十个），不逐条上报；仅在根节点记 `workbuddy.mcp_tools_span_count` 计数 |
 | 整条 trace 的 agent 全是内部工具（如 `terminalTitleGenerator`） | —（整条跳过） | WorkBuddy 生成侧边栏标题等内部会话，不是用户对话，映射为空、不上报 |
 
-用户原文优先取自 D3 `method:sendPrompt`（若采集），否则回退 `generation.toolInput` 最后一条 user 消息——后者是逐 trace 精确的，MVP 直接用它，`mode`/`model` 从 D4 补全。
+用户原文**优先取自 D3 的 `userContent`**（干净、未截断，按 trace 起始时间关联到对应轮次；见 §2.3），只有 D3 拿不到时才回退 `generation.toolInput` 最后一条 user 消息经 `extractUserQuery` 提取。之所以以 D3 为主：`toolInput` 会被 WorkBuddy 截断在 ~100KB，长对话当前轮提问会丢失。`mode`/`model` 从 D4 补全。
 
 Token 字段填法（逐轮精确值来自 trace 文件本身，无需估算）：
 
@@ -292,7 +292,7 @@ const adapters: readonly OtelTraceAdapter[] = [
 | `ExecutionRecord` 字段 | 取值来源 |
 |---|---|
 | `task_id` | WorkBuddy `sessionId`（D2/D4 关联得到，不是 pid） |
-| `query` | D3 里第一条 `method:sendPrompt` 对应的用户输入原文 |
+| `query` | 首轮用户输入原文（来自 D3 `userContent`；D3 不可用时回退 toolInput 的 `<user_query>`） |
 | `framework` | 固定 `"WorkBuddy"` |
 | `model` | 最近一次 generation 的 `toolOutput.model`（如 `hy4-preview`、`custom-local:deepseek-v4-flash`） |
 | `tokens` / `input_tokens` / `output_tokens` / `reasoning_tokens` / `cache_read_input_tokens` | 各 generation 的精确 usage 汇总（逐轮真实值）；无任何 usage 时全部留空 |

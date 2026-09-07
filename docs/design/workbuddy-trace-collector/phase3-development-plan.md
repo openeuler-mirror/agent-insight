@@ -19,7 +19,10 @@
 - **执行状态**：设 `trace_completed_at` + `trace_status='success'`，详情页从"执行中"变为"已完成"。
 - **子 Agent**：WorkBuddy 用名为 `Agent` 的工具（参数带 `subagent_type`/`prompt`）派发子 Agent。曾尝试归一化为平台 `task` + 合成子 Agent 节点，但子 Agent 跑在独立 worker、内部链路 WorkBuddy 未落盘，合成的节点只是无内容的叶子、反而与父 TOOL 重名易混淆；最终**回退为按普通 TOOL 节点显示**（名为 `Agent`，参数与子 Agent 报告照常保留），符合 WorkBuddy 的实际模型。
 - **文件路径保留**：共享 transport 增 `redactLocalPaths` 开关（默认不变），WorkBuddy 关闭本地路径脱敏 → 保留 Read/Write/Edit/Bash 的真实文件路径；密钥/token/邮箱仍脱敏。
-- **标题生成器 trace 跳过**：纯 `terminalTitleGenerator` 的内部 trace 不上报（消除 `<session>…</session>` 污染的 USER 节点，并少传约 1/3 噪声）。
+- **标题生成器 trace 跳过**：纯 `terminalTitleGenerator` 的内部 trace 不上报（消除 `<session>…</session>` 污染的 USER 节点，并少传约 1/3 噪声）。另跳过 `contentAnalyzer` 等内部工具 Agent。
+- **用户输入取自 D3（未截断）**：`generation.toolInput` 被 WorkBuddy 截断在 ~100KB，长对话当前轮提问在数组末尾被切掉、且截断 JSON 无法解析，导致该轮无 USER 节点。改为从 SDK 会话日志（D3）的 `userContent` 读取干净、未截断的逐轮用户输入，按 trace 起始时间关联（`scripts/workbuddy-collector/sdk-log.cjs`）；D3 拿不到才回退 toolInput。
+- **USER 节点去注入上下文**：真实输入在 `<user_query>` 内、前面是注入的 `<system-reminder>`（回退路径用 `extractUserQuery` 提取）。
+- **重装即热更新**：安装器在(重)注册任务前先 `stopRunningCollector()`（`schtasks /end` + 按 lock PID/命令行杀旧进程 + 清锁），解决 require 缓存 + 单实例锁导致"重装了文件但旧进程仍跑旧代码"。
 - **latency 单位**：改回毫秒（去掉误加的 `/1000`），详情页"耗时"与链路树根节点一致。
 - **免装 Node + 自愈**：安装器/启动器复用 WorkBuddy 自带 Electron（`ELECTRON_RUN_AS_NODE=1`）；启动器 `.vbs` 阻塞等待采集器 + `WScript.Quit(code)`，使 Task Scheduler 状态正确显示 Running 且 `RestartOnFailure` 崩溃自愈真正生效。
 - **安装输出**：安装器输出全 ASCII（消除 node 在 GBK 控制台的乱码）；安装完成后打印可直接复制的免 Node 管理命令（启动/停止/状态/是否在跑/卸载，停止用 `schtasks /end`）；一键脚本汇总块补上 WorkBuddy 组件/用法行。
@@ -65,7 +68,8 @@
 | 阶段 | 工作项 | 位置 |
 |---|---|---|
 | 客户端 | Session Registry（pid→sessionId 缓存+宽限期） | `scripts/workbuddy-collector/session-registry.mjs` |
-| 客户端 | Trace Watcher + Enricher + Canonical Mapper | `scripts/workbuddy-collector/collector.mjs` |
+| 客户端 | Trace Watcher + Enricher（D3/D4）+ Canonical Mapper | `scripts/workbuddy-collector/collector.mjs` |
+| 客户端 | SDK 会话日志解析（未截断用户输入 + 时间关联） | `scripts/workbuddy-collector/sdk-log.cjs` |
 | 客户端 | 复用共享 spool/uploader | 直接引用 `scripts/agent-trace-collectors/shared/trace-transport.cjs` |
 | 客户端 | 单实例 lock 文件保护 | `scripts/workbuddy-collector/collector.mjs` 启动时检查 |
 | 安装 | Windows 安装器：落地脚本+配置+注册 Task Scheduler+立即启动+`--status`/`--uninstall` | `scripts/workbuddy_setup.mjs` |
