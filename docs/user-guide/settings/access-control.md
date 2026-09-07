@@ -310,17 +310,21 @@ Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台�
 
 ### 流程六：接入 Goal Plus
 
-Goal Plus 是 Pi/Codex 原生 Trace 上的语义叠加层，不会替代或改写原生采集器。在客户端安装
-页勾选 **Goal Plus** 后，选择实际运行宿主：
+Goal Plus 应已经安装在 Pi/Codex 中。Agent Insight 不安装或修改 Goal Plus 本体；在客户端
+安装页勾选 **Goal Plus** 后，只需选择它实际产生 Trace 的 Agent：
 
-| 运行宿主 | Agent Insight 自动安装 | Goal Plus 本体安装 |
-| --- | --- | --- |
-| Pi | Goal Plus + Pi Agent 采集器 | 在 Goal Plus 仓库运行 `./install.sh --pi` |
-| Codex | Goal Plus + Codex 采集器 | 在 Goal Plus 仓库运行 `./install.sh --codex` |
-| Pi + Codex | Goal Plus + 两个原生采集器 | 分别完成以上两种本体安装 |
+| Trace 来源 | Agent Insight 自动配置 |
+| --- | --- |
+| Pi | Pi Agent 采集器 + 可选 Goal Plus 语义 collector |
+| Codex | Codex 采集器 + 可选 Goal Plus 语义 collector |
+| Pi + Codex | 两个原生采集器 + 可选 Goal Plus 语义 collector |
 
-在包含 `.gp` 的 Goal Plus 工作区根目录执行一键接入命令时，安装脚本会自动完成
-`attach`、首次 `scan` 和独立 watcher 启动。若安装命令不是从该目录执行，按输出提示手工运行：
+配置完成后，继续在 Pi/Codex 中按原方式运行已有 Goal Plus。原生采集器负责 Agent、LLM、
+Tool 等 Trace；不会因选择 Goal Plus 而改变已有的普通 Pi/Codex Trace 采集逻辑。
+
+如需同时展示 Goal、Run、Candidate 等编排语义，可在包含 `.gp` 的 Goal Plus 工作区根目录
+执行一键接入命令，脚本会自动完成 `attach`、首次 `scan` 和独立 watcher 启动。若安装命令
+不是从该目录执行，可按输出提示手工运行：
 
 ```bash
 goal-plus-collector attach /绝对路径/到/工作区/.gp
@@ -329,8 +333,9 @@ goal-plus-collector start
 goal-plus-collector status
 ```
 
-`status` 的 `ready=true` 表示凭证、工作区和 watcher 均已就绪。Goal Plus 安装或工作区注册失败
-时，一键脚本显示 `PARTIAL`，但已经安装的 Pi/Codex 原生采集器会保留并继续独立上报。
+`status` 的 `ready=true` 只表示可选语义增强的凭证、工作区和 watcher 均已就绪。未注册
+`.gp` 或语义 collector 失败不会降低 native Trace 状态；只要所选 Pi/Codex 采集器配置成功，
+Goal Plus native Trace 就是 `READY`。所需原生采集器失败时才显示 `NOT READY`。
 
 ### 流程七：排查“无数据上报”
 

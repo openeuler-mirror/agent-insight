@@ -6,24 +6,25 @@ Agent Insight 把 Goal Plus 作为编排观测覆盖层：Goal Plus 仍负责 Go
 
 - Agent Insight 服务可由 collector 访问，并已取得当前用户的 API Key。
 - Node.js 版本不低于 22.19.0。
-- 需要观测的 Goal Plus 工作区已经生成 `.gp` 目录。
-- collector 只接受显式 `.gp` 根目录；符号链接、越出根目录的路径和非普通文件会被拒绝。
+- Goal Plus 已经安装在实际运行它的 Pi、Codex 或两者中；Agent Insight 不负责安装或修改 Goal Plus。
+- 如果还需要 Goal、Run、Candidate 等编排语义，Goal Plus 工作区需已生成 `.gp` 目录。原生 Trace 采集不依赖 `.gp`。
+- 可选语义 collector 只接受显式 `.gp` 根目录；符号链接、越出根目录的路径和非普通文件会被拒绝。
 
 ## 安装和首次采集
 
-在“安装指导”中勾选 **Goal Plus** 后，继续选择实际宿主：Pi、Codex 或 Pi + Codex。安装页会展示 Goal Plus 本体的对应前置命令，并自动把需要的原生采集器加入安装计划：
+在“安装指导”中勾选 **Goal Plus** 后，继续选择实际的 Trace 来源：Pi、Codex 或 Pi + Codex。选择的是已经运行 Goal Plus 的 Agent，不是 Goal Plus 的安装方式。Agent Insight 只把需要的原生采集器加入安装计划：
 
-| Goal Plus 宿主 | Goal Plus 本体 | Agent Insight 自动依赖 |
-|-|-|-|
-| Pi | `./install.sh --pi` | Pi Agent Collector |
-| Codex | `./install.sh --codex` | Codex Collector |
-| Pi + Codex | 两条命令都执行 | Pi Agent Collector + Codex Collector |
+| Goal Plus Trace 来源 | Agent Insight 配置的采集器 |
+|-|-|
+| Pi | Pi Agent Collector |
+| Codex | Codex Collector |
+| Pi + Codex | Pi Agent Collector + Codex Collector |
 
-Agent Insight 只展示 Goal Plus 本体的安装指引，不会自动执行外部仓库脚本，也不会改变 Pi/Codex collector 的 hook、OTLP、Execution ID 或 adapter 行为。旧的、不带 `goalPlusHosts` 的 Goal Plus 安装命令仍只安装 Goal Plus collector。
+安装命令不会执行 Goal Plus 仓库的安装脚本，也不会改变 Goal Plus 本体。Pi/Codex collector 继续使用原有 hook、OTLP、Execution ID 和 adapter 行为，因此已有的普通 Pi/Codex Trace 采集逻辑不受影响。配置完成后，用户继续在 Pi/Codex 中按原方式执行已经安装的 Goal Plus 即可。旧的、不带 `goalPlusHosts` 的 Goal Plus 安装命令仍只安装语义 collector，以保持兼容。
 
-安装器把 Goal Plus collector 放在 `~/.agent-insight/collectors/goal-plus/`；macOS/Linux 同时安装 `~/.local/bin/goal-plus-collector`，Windows 使用 `node %USERPROFILE%\.agent-insight\collectors\goal-plus\goal-plus-collector.cjs`。
+除原生 Trace collector 外，安装器还会尝试安装可选的 Goal Plus 语义 collector，用于补充 Goal、Run、Candidate 等编排信息。它位于 `~/.agent-insight/collectors/goal-plus/`；macOS/Linux 同时安装 `~/.local/bin/goal-plus-collector`，Windows 使用 `node %USERPROFILE%\.agent-insight\collectors\goal-plus\goal-plus-collector.cjs`。
 
-如果在包含 `.gp` 的工作区根目录执行一键接入命令，脚本会自动 attach 该目录、执行首次 scan 并启动 watcher；从其他目录安装时使用下面的命令显式登记工作区。
+如果在包含 `.gp` 的工作区根目录执行一键接入命令，脚本会自动 attach 该目录、执行首次 scan 并启动 watcher；从其他目录安装时可使用下面的命令显式登记工作区。这一步只启用语义增强，不是采集 Pi/Codex 原生 Trace 的前置条件。
 
 macOS/Linux 示例：
 
@@ -36,7 +37,7 @@ goal-plus-collector status
 
 `attach` 对同一个 canonical root 幂等；`list` 查看已登记 source，`detach <sourceId>` 只移除 Agent Insight 的登记，不删除 `.gp`。先执行一次 `scan` 可检查语义对象、Pi session 和上传诊断，再使用 `start` 启动独立后台 watcher。`start` 重复执行不会创建第二个进程，`stop` 停止它；日志和 PID 只保存在 Goal Plus collector 的 managed directory。需要前台观察时仍可使用 `watch --interval-ms 5000`，按 Ctrl+C 正常停止。
 
-没有 attach 任何 `.gp` 时，`start` 和 `self-check` 不会报告 ready。Goal Plus 安装或 watcher 失败会显示 `PARTIAL`，已经安装并运行的 Pi/Codex 原生采集器不会被回滚或停止。
+没有 attach 任何 `.gp` 时，`start` 和 `self-check` 不会报告语义增强 ready，但只要所选 Pi/Codex 原生采集器安装成功，Goal Plus native Trace 仍显示 `READY`。语义 collector 安装、scan 或 watcher 失败会单独显示为可选增强不可用，不会把 native Trace 降为 `PARTIAL`，也不会回滚或停止 Pi/Codex 原生采集器。只有所选宿主的原生采集器未安装成功时，Goal Plus native Trace 才显示 `NOT READY`。
 
 ## 页面与数据口径
 

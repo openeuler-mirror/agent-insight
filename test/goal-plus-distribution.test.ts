@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import fsp from 'node:fs/promises';
@@ -54,7 +55,7 @@ test('Goal Plus setup emits a PowerShell bootstrap and rejects unknown assets', 
   assert.equal(denied.status, 404);
 });
 
-test('unified setup preselects Goal Plus and delegates to its authenticated installer', async () => {
+test('unified setup preselects Goal Plus and delegates to its optional semantic collector installer', async () => {
   const responses = [
     await getSetup(new Request('https://insight.example/api/ingest/setup?frameworks=goal-plus&key=synthetic&nokey=1', {
       headers: { host: 'insight.example', 'x-forwarded-proto': 'https', 'x-platform': 'unix' },
@@ -68,7 +69,7 @@ test('unified setup preselects Goal Plus and delegates to its authenticated inst
     assert.equal(response.status, 200);
     assert.match(source, /SELECTED_FRAMEWORKS="goal-plus"/);
     assert.match(source, /api\/ingest\/setup\/goal-plus/);
-    assert.match(source, /Installing Goal Plus collector/);
+    assert.match(source, /Installing optional Agent Insight Goal Plus semantic collector/);
   }
 });
 
@@ -97,13 +98,26 @@ test('Goal Plus host profiles compose existing native installers without changin
     assert.match(autoSource, /goal-plus,pi-agent,codex/);
     assert.match(autoSource, /GOAL_PLUS_HOSTS(?:=| = )"pi,codex"/);
 
+    if (platform === 'unix') {
+      for (const [name, generated] of [['main', source], ['auto', autoSource]] as const) {
+        const syntax = spawnSync('bash', ['-n'], { input: generated, encoding: 'utf8' });
+        assert.equal(syntax.status, 0, `${name} Bash setup script must parse: ${syntax.stderr}`);
+      }
+    }
+
     for (const generated of [source, autoSource]) {
       assert.match(generated, /SETUP_WORKING_DIR/);
-      assert.match(generated, /Goal Plus workspace setup failed; installed Pi\/Codex collectors were left unchanged/);
+      assert.match(generated, /optional Goal Plus semantic enrichment setup failed; native Pi\/Codex Trace collection is unchanged/);
       assert.match(generated, /goal-plus-collector\.cjs/);
       assert.match(generated, /\battach\b/);
       assert.match(generated, /\bscan\b/);
       assert.match(generated, /\bstart\b/);
+      assert.match(generated, /GOAL_PLUS_TRACE_READY/);
+      assert.match(generated, /Goal Plus native Trace/);
+      assert.match(generated, /semantic enrichment.*optional/i);
+      assert.match(generated, /Agent Insight does not install or modify Goal Plus/);
+      assert.doesNotMatch(generated, /\.\/install\.sh --(?:pi|codex)/);
+      assert.doesNotMatch(generated, /GOAL_PLUS_READY/);
     }
   }
 

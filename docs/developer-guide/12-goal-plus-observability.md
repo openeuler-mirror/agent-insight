@@ -63,9 +63,9 @@ gpsnap_ + sha256(sourceId \u001f kind \u001f objectKey \u001f contentHash)
 
 ## 安装组合与故障隔离
 
-`frameworks` 继续表示用户选择的组件，`goalPlusHosts=pi,codex` 只声明 Goal Plus 的运行宿主。共享 install profile 在服务端展开 effective frameworks：Pi 加入 `pi-agent`，Codex 加入 `codex`，已存在的依赖不重复加入。不带 host 的旧 `frameworks=goal-plus` 保持 semantic-only 行为。
+`frameworks` 继续表示用户选择的组件，`goalPlusHosts=pi,codex` 声明已经运行 Goal Plus 的 Trace 来源，而不是 Goal Plus 本体的安装目标。共享 install profile 在服务端展开 effective frameworks：Pi 加入 `pi-agent`，Codex 加入 `codex`，已存在的依赖不重复加入。不带 host 的旧 `frameworks=goal-plus` 保持 semantic-only 行为。安装页和生成脚本不得展示或执行 Goal Plus 仓库的安装命令；Agent Insight 只配置观测组件。
 
-组合安装继续调用既有 Pi/Codex 子安装器；不得复制或修改 native collector core、adapter、OTLP endpoint、Execution ID 和父子树。Goal Plus 子安装器在 native collector 之后运行，失败只产生 `PARTIAL` 结果，不回滚已安装的 native collector。
+组合安装继续调用既有 Pi/Codex 子安装器；不得复制或修改 native collector core、adapter、OTLP endpoint、Execution ID 和父子树。宿主 profile 的主就绪状态由所选 Pi/Codex native collector 决定：任一所需 native collector 未完成时为 `NOT READY`；全部完成时为 `READY`。Goal Plus semantic collector 在 native collector 之后作为可选增强安装，缺少 `.gp` 或其安装、scan、watcher 失败只单独报告 semantic enrichment 状态，不降低 native Trace 的 `READY`，也不回滚已安装的 native collector。无宿主的 legacy semantic-only 命令继续沿用原 `PARTIAL` 口径。
 
 Goal Plus 后台 watcher 使用 collector managed directory 中独立的 PID、锁和日志。`start` 要求至少一个已 attach source，重复调用幂等；`stop` 和卸载只处理 Goal Plus watcher，不接管 Pi/Codex 进程。
 

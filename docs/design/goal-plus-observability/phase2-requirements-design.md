@@ -67,7 +67,7 @@ Explicitly attached .gp root
 | D-010 | 默认 bounded-content，支持 metadata-only | 与现有 trace 价值和隐私策略对齐，同时保护 hidden-answer 数据 |
 | D-011 | Goal Plus 安装使用独立宿主 profile 展开依赖 | `goal-plus` 仍是 overlay；Pi/Codex collector 继续作为独立组件安装和上报 |
 | D-012 | 未声明宿主的旧 `frameworks=goal-plus` 保持原行为 | 已发布命令继续只安装 Goal Plus collector，避免升级后意外改写 Pi/Codex 配置 |
-| D-013 | Goal Plus 安装、scan 或 watcher 失败不得回滚 native collector | telemetry add-on 的失败只能产生 partial 状态，不能中断已经工作的 Pi/Codex Trace |
+| D-013 | Goal Plus semantic collector 安装、scan 或 watcher 失败不得回滚或降级 native collector | semantic enrichment 是可选状态，不能中断或把已经工作的 Pi/Codex Trace 标成 partial |
 
 ### 2.1 Goal Plus 宿主安装 profile
 
@@ -86,9 +86,14 @@ Explicitly attached .gp root
 `requestedFrameworks` 和去重后的 `effectiveFrameworks`，并调用既有 Pi/Codex 子安装器；
 不得复制或改变 native collector 的安装、hook、OTLP、Execution ID 和 adapter 逻辑。
 
-安装页在选择 Goal Plus 后显示 Pi/Codex 宿主选择及自动依赖，并只展示 Goal Plus
-本体的 `./install.sh --pi` / `./install.sh --codex` 前置指引。Agent Insight 不自动执行
-外部 Goal Plus 仓库脚本。
+安装页在选择 Goal Plus 后显示 Pi/Codex Trace 来源及自动依赖，并明确这些选项只配置
+Agent Insight 观测组件。用户应已在对应 Agent 中安装 Goal Plus；Agent Insight 不展示、
+不执行外部 Goal Plus 仓库脚本，也不修改 Goal Plus 本体。
+
+宿主 profile 的就绪状态以 native Trace 为主：所需 Pi/Codex collector 全部配置成功即
+`READY`，任一失败即 `NOT READY`。`.gp` attach、scan 和 watcher 只提供 Goal、Run、
+Candidate 等可选语义增强；缺少 `.gp` 或语义增强失败不得把已就绪的 native Trace 标成
+`PARTIAL`。无宿主的 legacy semantic-only 请求仍保留原有状态语义。
 
 ## 3. 组件设计
 

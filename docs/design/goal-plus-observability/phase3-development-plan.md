@@ -209,14 +209,15 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
 - [ ] T502 安装指导
   - 在安装指导中提供 Goal Plus 的 Pi、Codex、Pi + Codex 宿主 profile；
   - 服务端展开并去重 native collector 依赖，旧 `frameworks=goal-plus` 保持兼容；
-  - 说明 Goal Plus 本体的 `./install.sh --pi` / `./install.sh --codex` 前置步骤；
-  - 说明先安装 Codex/Pi collector，再 attach `.gp`；
+  - 明确 profile 只选择已有 Goal Plus 的 Trace 来源，不安装或修改 Goal Plus 本体；
+  - 说明先安装 Codex/Pi collector，`.gp` attach 只用于可选语义增强；
   - 说明 remote server 场景必须在 Goal Plus 所在机器运行 local collector；
   - 说明 bounded/metadata-only、历史 scan、detach 和 self-check。
 
 - [ ] T502A native collector 零回归保护
   - 组合安装只复用既有 Pi/Codex 子安装器，不修改 collector core、adapter 或 Execution ID；
-  - Goal Plus 安装、scan、watch 独立报告状态，失败不回滚 native collector；
+  - Goal Plus semantic collector 安装、scan、watch 独立报告状态，失败不回滚或降级 native Trace；
+  - 所需 native collector 失败时报告 `NOT READY`，全部成功时 native Trace 报告 `READY`；
   - direct Pi、direct Codex、legacy Goal Plus 的生成脚本行为由 golden tests 固定；
   - profile 依赖重复选择时每个组件只安装一次。
 

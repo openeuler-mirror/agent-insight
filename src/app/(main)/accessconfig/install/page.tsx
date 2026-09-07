@@ -385,10 +385,12 @@ function GoalPlusInstallProfile({
                 <span style={commandIconBox}><Boxes size={14} strokeWidth={2.2} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                        {isZh ? 'Goal Plus 运行宿主' : 'Goal Plus runtime host'}
+                        {isZh ? 'Goal Plus Trace 来源' : 'Goal Plus trace source'}
                     </div>
                     <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
-                        {isZh ? '选择实际运行 Goal Plus 的 Agent；对应原生采集器会作为依赖安装。' : 'Choose where Goal Plus runs; the matching native collector is installed as a dependency.'}
+                        {isZh
+                            ? '选择已经安装并运行 Goal Plus 的 Agent；Agent Insight 只配置对应的 Trace 采集器。'
+                            : 'Choose the Agent where Goal Plus is already installed and running; Agent Insight only configures the matching trace collector.'}
                     </div>
                 </div>
             </header>
@@ -409,33 +411,24 @@ function GoalPlusInstallProfile({
                     );
                 })}
             </div>
-            <div style={goalPlusProfileGrid}>
-                {hosts.includes('pi') && (
-                    <div style={goalPlusProfileItem}>
-                        <span>{isZh ? 'Goal Plus 本体（Pi）' : 'Goal Plus runtime (Pi)'}</span>
-                        <code style={inlineCode}>./install.sh --pi</code>
-                    </div>
-                )}
-                {hosts.includes('codex') && (
-                    <div style={goalPlusProfileItem}>
-                        <span>{isZh ? 'Goal Plus 本体（Codex）' : 'Goal Plus runtime (Codex)'}</span>
-                        <code style={inlineCode}>./install.sh --codex</code>
-                    </div>
-                )}
-            </div>
             <div style={langfuseNote}>
                 {autoAddedFrameworks.length > 0
                     ? (isZh
-                        ? `安装命令将自动加入：${autoAddedFrameworks.join('、')}。不会改变其原有 Trace 采集逻辑。`
-                        : `The setup adds: ${autoAddedFrameworks.join(', ')}. Their existing trace collection behavior is unchanged.`)
+                        ? `安装命令将自动配置：${autoAddedFrameworks.join('、')}，用于采集 Goal Plus 在所选 Agent 中产生的原生 Trace。不会改变其原有 Trace 采集逻辑。`
+                        : `The setup configures: ${autoAddedFrameworks.join(', ')} to collect native traces produced by Goal Plus in the selected Agent. Existing trace collection behavior is unchanged.`)
                     : (isZh
                         ? '需要的原生采集器已经在上方手动选中，安装时不会重复执行。'
                         : 'The required native collectors are already selected above and will not be installed twice.')}
             </div>
             <div style={langfuseNote}>
                 {isZh
-                    ? '采集器安装后，还需在远程 Goal Plus 工作区执行：goal-plus-collector attach /绝对路径/.gp && goal-plus-collector scan && goal-plus-collector start'
-                    : 'After installation, attach the remote workspace and start collection: goal-plus-collector attach /absolute/path/.gp && goal-plus-collector scan && goal-plus-collector start'}
+                    ? 'Agent Insight 不会安装或修改 Goal Plus。配置完成后，继续在 Pi/Codex 中按原方式运行已安装的 Goal Plus 即可。'
+                    : 'Agent Insight does not install or modify Goal Plus. After setup, keep running the existing Goal Plus installation through Pi/Codex as usual.'}
+            </div>
+            <div style={langfuseNote}>
+                {isZh
+                    ? '可选语义增强：如需展示 Goal、Run、Candidate 等编排信息，可在 Goal Plus 工作区执行 goal-plus-collector attach /绝对路径/.gp && goal-plus-collector scan && goal-plus-collector start；未配置不影响原生 Trace 采集。'
+                    : 'Optional semantic enrichment: to display Goal, Run, and Candidate orchestration data, run goal-plus-collector attach /absolute/path/.gp && goal-plus-collector scan && goal-plus-collector start in the Goal Plus workspace. Native trace collection does not depend on it.'}
             </div>
         </article>
     );
@@ -977,25 +970,6 @@ const chipRow: CSSProperties = {
     display: 'flex',
     flexWrap: 'wrap',
     gap: 8,
-};
-
-const goalPlusProfileGrid: CSSProperties = {
-    display: 'grid',
-    gap: 8,
-    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-};
-
-const goalPlusProfileItem: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    padding: '9px 10px',
-    background: 'var(--background-secondary)',
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-    color: 'var(--foreground-secondary)',
-    fontSize: 12,
 };
 
 const frameworkChip: CSSProperties = {

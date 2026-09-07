@@ -80,6 +80,10 @@ test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python �
   const page = fs.readFileSync(path.resolve(__dirname, '../src/app/(main)/accessconfig/install/page.tsx'), 'utf8');
   assert.match(page, /frameworks\.length \? `yes=1` : ''/);
   assert.match(page, /goalPlusHosts=\$\{goalPlusHosts\.join\(','\)\}/);
+  assert.match(page, /Goal Plus Trace 来源/);
+  assert.match(page, /Agent Insight 不会安装或修改 Goal Plus/);
+  assert.match(page, /未配置不影响原生 Trace 采集/);
+  assert.doesNotMatch(page, /\.\/install\.sh --(?:pi|codex)/);
   assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
   assert.match(page, /apiKey, authReady/);
   assert.match(page, /if \(!authReady \|\| !apiKey\)/);
