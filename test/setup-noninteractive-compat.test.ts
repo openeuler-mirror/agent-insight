@@ -79,6 +79,7 @@ test('常驻客户端默认使用服务端 bundle，本地 checkout 只能显式
 test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python 选择', () => {
   const page = fs.readFileSync(path.resolve(__dirname, '../src/app/(main)/accessconfig/install/page.tsx'), 'utf8');
   assert.match(page, /frameworks\.length \? `yes=1` : ''/);
+  assert.match(page, /goalPlusHosts=\$\{goalPlusHosts\.join\(','\)\}/);
   assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
   assert.match(page, /apiKey, authReady/);
   assert.match(page, /if \(!authReady \|\| !apiKey\)/);

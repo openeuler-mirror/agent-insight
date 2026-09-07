@@ -23,10 +23,11 @@ collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。
 
 | 区域 | 入口 | 职责 |
 |---|---|---|
-| collector | `scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs` | attach/list/detach/scan/watch/self-check，协调双通道 |
+| collector | `scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs` | attach/list/detach/scan/watch/start/stop/status/self-check，协调双通道 |
 | semantic parser | `goal-plus/lib/gp-snapshot-parser.cjs` | allowlist 解析、版本信封、边界化和路径安全 |
 | Pi importer | `goal-plus/lib/pi-native-parser.cjs` | native JSONL → Pi canonical Agent/LLM/Tool/MCP/Skill event |
 | distribution | `src/app/api/ingest/setup/goal-plus/` | 确定性 ZIP、SHA-256 校验安装器和只读 asset route |
+| install profile | `src/lib/ingest/setup/install-profile.ts` | Goal Plus Pi/Codex 宿主校验、native collector 依赖展开和去重 |
 | ingest | `src/lib/ingest/goal-plus/contracts.ts`、`persist.ts` | envelope 校验、服务端二次脱敏、幂等审计与投影 |
 | correlation | `src/lib/ingest/goal-plus/correlate.ts` | Execution 确定性关联、重关联和 authority 选择 |
 | completeness/query | `completeness.ts`、`query.ts` | 批量完整度计算与 composite read model |
@@ -58,7 +59,15 @@ gpsnap_ + sha256(sourceId \u001f kind \u001f objectKey \u001f contentHash)
 
 `GoalPlusSource` 是隔离和 checkpoint 根。`GoalPlusGoal`、`GoalPlusRun`、`GoalPlusCandidate`、`GoalPlusIteration`、`GoalPlusAgentSession` 保存可查询投影；`GoalPlusSemanticSnapshot` 保存幂等审计和脱敏后的信封；`GoalPlusExecutionLink` 把上述对象关联到既有 `Execution`。外部 key 始终包含 source scope，绝不把不同 `.gp` 中同名 run/candidate 合并。
 
-新增 Execution 入库后，`saveExecutionRecord` 以非阻断方式触发 Goal Plus relink；语义 ingest 后也会重关联该 source。关联优先级为明确 native/session ID，其次是被动 Pi canonical session ID，再其次是 source 内唯一 deterministic task name。相同优先级多个候选标记 `ambiguous`，低优先级候选标记 `superseded`；禁止 time-window-only 关联。
+新增 Execution 入库后，`saveExecutionRecord` 以非阻断方式触发 Goal Plus relink；语义 ingest 后也会重关联该 source。关联优先级为明确 native/session/execution ID，其次是被动 Pi canonical session ID，再其次是 source 内唯一 deterministic task name。Codex host metadata 可携带 `codexConversationId`、`codexTurnId` 或完整 `codexExecutionId`，关联器按既有 `<conversation>:turn:<turn>` 规则匹配，并按宿主限制 `framework`。相同优先级多个候选标记 `ambiguous`，低优先级候选标记 `superseded`；禁止 time-window-only 关联。
+
+## 安装组合与故障隔离
+
+`frameworks` 继续表示用户选择的组件，`goalPlusHosts=pi,codex` 只声明 Goal Plus 的运行宿主。共享 install profile 在服务端展开 effective frameworks：Pi 加入 `pi-agent`，Codex 加入 `codex`，已存在的依赖不重复加入。不带 host 的旧 `frameworks=goal-plus` 保持 semantic-only 行为。
+
+组合安装继续调用既有 Pi/Codex 子安装器；不得复制或修改 native collector core、adapter、OTLP endpoint、Execution ID 和父子树。Goal Plus 子安装器在 native collector 之后运行，失败只产生 `PARTIAL` 结果，不回滚已安装的 native collector。
+
+Goal Plus 后台 watcher 使用 collector managed directory 中独立的 PID、锁和日志。`start` 要求至少一个已 attach source，重复调用幂等；`stop` 和卸载只处理 Goal Plus watcher，不接管 Pi/Codex 进程。
 
 ## 完整度与保真度
 

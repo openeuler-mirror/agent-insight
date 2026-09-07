@@ -11,9 +11,7 @@ import { aggregateOtelTraceEvents } from "@/lib/ingest/otel/aggregate"
 import type { OtelTraceEvent } from "@/lib/ingest/otel/types"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "goal-plus", "qwencode", "codex", "deepseek-harness"]
 const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "goal-plus", "qwencode", "codex", "deepseek-harness"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "goal-plus", "codex", "qwencode", "deepseek-harness"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
@@ -102,14 +100,16 @@ function genericEvent(completion: string, latencyMs: number): OtelTraceEvent {
   }
 }
 
-test("Codex is appended without reordering any existing central framework list", () => {
+test("Codex remains in the shared framework allowlist used by every setup entry", () => {
   const page = read("src/app/(main)/accessconfig/install/page.tsx")
   const central = read("src/app/api/ingest/setup/route.ts")
   const auto = read("src/app/api/ingest/setup/auto/route.ts")
+  const catalog = read("src/lib/ingest/setup/install-profile.ts")
 
-  assert.deepEqual(frameworkValues(page, "FRAMEWORK_OPTIONS"), EXPECTED_PAGE)
-  assert.deepEqual(frameworkValues(central, "FRAMEWORKS"), EXPECTED_CENTRAL)
-  assert.deepEqual(frameworkValues(auto, "FRAMEWORKS"), EXPECTED_AUTO)
+  assert.deepEqual(frameworkValues(catalog, "FRAMEWORK_OPTIONS"), EXPECTED_CENTRAL)
+  for (const consumer of [page, central, auto]) {
+    assert.match(consumer, /ingest\/setup\/install-profile/)
+  }
   assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/)
 })
 

@@ -63,7 +63,7 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 
 ## Goal Plus 接入
 
-Goal Plus 使用独立的只读 collector 同时上报 `.gp` 中的编排语义和 Pi worker 的原生 Trace。安装、attach、scan/watch、完整度口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
+Goal Plus 使用独立的只读 collector 上报 `.gp` 编排语义，并按 Pi、Codex 或 Pi + Codex 宿主 profile 复用对应的原生 Trace collector。安装、attach、scan/start/watch、完整度口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
 
 ## Hermes 接入
 

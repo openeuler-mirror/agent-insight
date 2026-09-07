@@ -191,6 +191,9 @@ function sessionPayload(source) {
     host_metadata: {
       continuation: metadata.continuation || source.launch?.continuation,
       pi_metrics: metadata.pi_metrics ? normalize(metadata.pi_metrics) : undefined,
+      codex_conversation_id: metadata.codex_conversation_id || metadata.conversation_id,
+      codex_turn_id: metadata.codex_turn_id || metadata.turn_id,
+      codex_execution_id: metadata.codex_execution_id || metadata.execution_id,
     },
     counters: source.counters,
     created_at: source.created_at,

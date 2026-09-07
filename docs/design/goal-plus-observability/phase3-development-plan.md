@@ -207,10 +207,24 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
   - uninstall 只删除 managed collector 和可选 spool，不删除 `.gp`。
 
 - [ ] T502 安装指导
-  - 在安装指导中提供 Goal Plus 选项；
+  - 在安装指导中提供 Goal Plus 的 Pi、Codex、Pi + Codex 宿主 profile；
+  - 服务端展开并去重 native collector 依赖，旧 `frameworks=goal-plus` 保持兼容；
+  - 说明 Goal Plus 本体的 `./install.sh --pi` / `./install.sh --codex` 前置步骤；
   - 说明先安装 Codex/Pi collector，再 attach `.gp`；
   - 说明 remote server 场景必须在 Goal Plus 所在机器运行 local collector；
   - 说明 bounded/metadata-only、历史 scan、detach 和 self-check。
+
+- [ ] T502A native collector 零回归保护
+  - 组合安装只复用既有 Pi/Codex 子安装器，不修改 collector core、adapter 或 Execution ID；
+  - Goal Plus 安装、scan、watch 独立报告状态，失败不回滚 native collector；
+  - direct Pi、direct Codex、legacy Goal Plus 的生成脚本行为由 golden tests 固定；
+  - profile 依赖重复选择时每个组件只安装一次。
+
+- [ ] T502B Goal Plus watcher 生命周期
+  - Goal Plus collector 独立提供 `start`、`stop`、`status`；
+  - PID、日志和锁只落在 Goal Plus managed directory，不接管 native watcher；
+  - 无 source 时不得显示 ready，重复 start 必须幂等；
+  - 安装命令执行目录存在 `.gp` 时允许显式 attach/scan，禁止猜测其他工作区路径。
 
 - [ ] T503 用户与开发者文档
   - 更新 `docs/user-guide/observability/`；
@@ -247,6 +261,7 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
 | Correlation | 所有 link method、优先级、ambiguous、superseded |
 | Completeness | collecting/complete/partial/unsupported 和 missing categories |
 | Adapter 回归 | Codex、Pi、generic、Skill/SubAgent、非 Goal Plus Trace |
+| 安装 profile | direct Pi/Codex 行为不变、legacy Goal Plus、Pi/Codex/both 依赖展开和去重 |
 | UI | Goal/work DAG/candidate lanes/native drawer/data quality |
 | E2E | 真实 Codex、真实 Pi continuation、断网重放、历史 scan |
 | Security | symlink/path traversal/secret/absolute path/hidden-answer |

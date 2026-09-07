@@ -18,6 +18,11 @@ const PACKAGE_FILES = [
 ];
 const WRAPPER_MARKER = "# managed-by-agent-insight-goal-plus";
 
+function configuredHosts(raw = "") {
+  const allowed = new Set(["pi", "codex"]);
+  return [...new Set(String(raw).split(",").map(value => value.trim().toLowerCase()).filter(value => allowed.has(value)))];
+}
+
 function parseArgs(argv) {
   const result = { homeDir: os.homedir(), sourceDir: __dirname, skipVersionCheck: false };
   for (let index = 0; index < argv.length; index += 1) {
@@ -67,10 +72,20 @@ async function install(options) {
     await copyFile(piHelpersSource, piHelpersTarget);
   }
   const configPath = path.join(packageDir, "config.json");
+  let existingConfig = {};
+  try {
+    existingConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const requestedHosts = String(process.env.AGENT_INSIGHT_GOAL_PLUS_HOSTS || "").trim();
   const config = {
     version: 1,
     apiKey,
     baseUrl,
+    hosts: requestedHosts
+      ? configuredHosts(requestedHosts)
+      : configuredHosts(Array.isArray(existingConfig.hosts) ? existingConfig.hosts.join(",") : ""),
     semanticEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_ENDPOINT || `${baseUrl}/api/ingest/goal-plus/v1/snapshots`,
     otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || `${baseUrl}/api/ingest/otel/v1/traces`,
   };
@@ -102,4 +117,4 @@ if (require.main === module) main().catch(error => {
   process.exitCode = 1;
 });
 
-module.exports = { PACKAGE_FILES, WRAPPER_MARKER, install, parseArgs };
+module.exports = { PACKAGE_FILES, WRAPPER_MARKER, configuredHosts, install, parseArgs };

@@ -7,6 +7,7 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { WRAPPER_MARKER } = require("./install.cjs");
+const { loadConfig, stopWatcher } = require("./goal-plus-collector.cjs");
 
 async function uninstall(options = {}) {
   const homeDir = options.homeDir || os.homedir();
@@ -14,6 +15,8 @@ async function uninstall(options = {}) {
     ? path.resolve(process.env.AGENT_INSIGHT_HOME)
     : path.join(homeDir, ".agent-insight");
   const packageDir = path.join(agentInsightHome, "collectors", "goal-plus");
+  const config = await loadConfig({ homeDir, configPath: path.join(packageDir, "config.json") });
+  await stopWatcher(config);
   const wrapper = path.join(homeDir, ".local", "bin", "goal-plus-collector");
   if (fs.existsSync(wrapper) && (await fsp.readFile(wrapper, "utf8")).includes(WRAPPER_MARKER)) await fsp.unlink(wrapper);
   await fsp.rm(packageDir, { recursive: true, force: true });

@@ -286,14 +286,6 @@ spool 必须显式追加 `--purge-all --yes`：
 node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
 ```
 
-### 流程五：排查“无数据上报”
-
-1. 回到客户端安装页确认当前账号、API Key 与平台地址。
-2. 确认执行命令的机器就是目标 Agent 实际运行环境。
-3. 确认客户端已完成至少一次真实执行。
-4. 确认服务端地址与上报路径可达。
-5. 进入链路追踪确认是否已有新 Trace 写入。
-
 ### 流程五：接入 Codex CLI 与 VS Code-family 编辑器
 
 1. 确认目标机器安装了兼容的 Codex CLI、Node.js 20 或更高版本。
@@ -315,6 +307,38 @@ SHA-256。摘要不匹配时安装立即停止，不会运行包内的 `install.
 编辑器 Settings 中的 `cloudAgentId` 是用户手工关联值，事件会标记 `source=user`。只有
 Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台才把它计为自动 Cloud
 关联证据。
+
+### 流程六：接入 Goal Plus
+
+Goal Plus 是 Pi/Codex 原生 Trace 上的语义叠加层，不会替代或改写原生采集器。在客户端安装
+页勾选 **Goal Plus** 后，选择实际运行宿主：
+
+| 运行宿主 | Agent Insight 自动安装 | Goal Plus 本体安装 |
+| --- | --- | --- |
+| Pi | Goal Plus + Pi Agent 采集器 | 在 Goal Plus 仓库运行 `./install.sh --pi` |
+| Codex | Goal Plus + Codex 采集器 | 在 Goal Plus 仓库运行 `./install.sh --codex` |
+| Pi + Codex | Goal Plus + 两个原生采集器 | 分别完成以上两种本体安装 |
+
+在包含 `.gp` 的 Goal Plus 工作区根目录执行一键接入命令时，安装脚本会自动完成
+`attach`、首次 `scan` 和独立 watcher 启动。若安装命令不是从该目录执行，按输出提示手工运行：
+
+```bash
+goal-plus-collector attach /绝对路径/到/工作区/.gp
+goal-plus-collector scan
+goal-plus-collector start
+goal-plus-collector status
+```
+
+`status` 的 `ready=true` 表示凭证、工作区和 watcher 均已就绪。Goal Plus 安装或工作区注册失败
+时，一键脚本显示 `PARTIAL`，但已经安装的 Pi/Codex 原生采集器会保留并继续独立上报。
+
+### 流程七：排查“无数据上报”
+
+1. 回到客户端安装页确认当前账号、API Key 与平台地址。
+2. 确认执行命令的机器就是目标 Agent 实际运行环境。
+3. 确认客户端已完成至少一次真实执行。
+4. 确认服务端地址与上报路径可达。
+5. 进入链路追踪确认是否已有新 Trace 写入。
 
 ## 维护建议
 

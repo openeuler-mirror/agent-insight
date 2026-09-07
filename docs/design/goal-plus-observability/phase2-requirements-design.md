@@ -65,6 +65,30 @@ Explicitly attached .gp root
 | D-008 | source ID 由 Agent Insight 管理 | 不向 `.gp` 写 source file，满足完全只读 |
 | D-009 | Goal Plus semantic snapshots 走专用 API | OTLP span 不适合表达 revision、selection、promotion 等领域状态 |
 | D-010 | 默认 bounded-content，支持 metadata-only | 与现有 trace 价值和隐私策略对齐，同时保护 hidden-answer 数据 |
+| D-011 | Goal Plus 安装使用独立宿主 profile 展开依赖 | `goal-plus` 仍是 overlay；Pi/Codex collector 继续作为独立组件安装和上报 |
+| D-012 | 未声明宿主的旧 `frameworks=goal-plus` 保持原行为 | 已发布命令继续只安装 Goal Plus collector，避免升级后意外改写 Pi/Codex 配置 |
+| D-013 | Goal Plus 安装、scan 或 watcher 失败不得回滚 native collector | telemetry add-on 的失败只能产生 partial 状态，不能中断已经工作的 Pi/Codex Trace |
+
+### 2.1 Goal Plus 宿主安装 profile
+
+安装请求保留已有 `frameworks` 参数，并增加独立的 `goalPlusHosts=pi,codex`：
+
+| 请求 | effective frameworks |
+|-|-|
+| `frameworks=pi-agent` | `pi-agent` |
+| `frameworks=codex` | `codex` |
+| `frameworks=goal-plus`，无 host | `goal-plus`（legacy semantic-only） |
+| Goal Plus + `goalPlusHosts=pi` | `goal-plus,pi-agent` |
+| Goal Plus + `goalPlusHosts=codex` | `goal-plus,codex` |
+| Goal Plus + `goalPlusHosts=pi,codex` | `goal-plus,pi-agent,codex` |
+
+不得新增 `goal-plus-pi`、`goal-plus-codex` 伪 framework。安装计划必须同时保留
+`requestedFrameworks` 和去重后的 `effectiveFrameworks`，并调用既有 Pi/Codex 子安装器；
+不得复制或改变 native collector 的安装、hook、OTLP、Execution ID 和 adapter 逻辑。
+
+安装页在选择 Goal Plus 后显示 Pi/Codex 宿主选择及自动依赖，并只展示 Goal Plus
+本体的 `./install.sh --pi` / `./install.sh --codex` 前置指引。Agent Insight 不自动执行
+外部 Goal Plus 仓库脚本。
 
 ## 3. 组件设计
 

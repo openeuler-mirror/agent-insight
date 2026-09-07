@@ -11,17 +11,32 @@ Agent Insight 把 Goal Plus 作为编排观测覆盖层：Goal Plus 仍负责 Go
 
 ## 安装和首次采集
 
-在“安装指导”中勾选 **Goal Plus**，复制页面生成的命令执行。安装器把采集器放在 `~/.agent-insight/collectors/goal-plus/`；macOS/Linux 同时安装 `~/.local/bin/goal-plus-collector`，Windows 使用 `node %USERPROFILE%\.agent-insight\collectors\goal-plus\goal-plus-collector.cjs`。
+在“安装指导”中勾选 **Goal Plus** 后，继续选择实际宿主：Pi、Codex 或 Pi + Codex。安装页会展示 Goal Plus 本体的对应前置命令，并自动把需要的原生采集器加入安装计划：
+
+| Goal Plus 宿主 | Goal Plus 本体 | Agent Insight 自动依赖 |
+|-|-|-|
+| Pi | `./install.sh --pi` | Pi Agent Collector |
+| Codex | `./install.sh --codex` | Codex Collector |
+| Pi + Codex | 两条命令都执行 | Pi Agent Collector + Codex Collector |
+
+Agent Insight 只展示 Goal Plus 本体的安装指引，不会自动执行外部仓库脚本，也不会改变 Pi/Codex collector 的 hook、OTLP、Execution ID 或 adapter 行为。旧的、不带 `goalPlusHosts` 的 Goal Plus 安装命令仍只安装 Goal Plus collector。
+
+安装器把 Goal Plus collector 放在 `~/.agent-insight/collectors/goal-plus/`；macOS/Linux 同时安装 `~/.local/bin/goal-plus-collector`，Windows 使用 `node %USERPROFILE%\.agent-insight\collectors\goal-plus\goal-plus-collector.cjs`。
+
+如果在包含 `.gp` 的工作区根目录执行一键接入命令，脚本会自动 attach 该目录、执行首次 scan 并启动 watcher；从其他目录安装时使用下面的命令显式登记工作区。
 
 macOS/Linux 示例：
 
 ```bash
 goal-plus-collector attach /absolute/path/to/workspace/.gp --label my-goal-workspace
 goal-plus-collector scan
-goal-plus-collector watch --interval-ms 5000
+goal-plus-collector start --interval-ms 5000
+goal-plus-collector status
 ```
 
-`attach` 对同一个 canonical root 幂等；`list` 查看已登记 source，`detach <sourceId>` 只移除 Agent Insight 的登记，不删除 `.gp`。先执行一次 `scan` 可检查语义对象、Pi session 和上传诊断，再使用前台 `watch` 持续采集；按 Ctrl+C 正常停止。
+`attach` 对同一个 canonical root 幂等；`list` 查看已登记 source，`detach <sourceId>` 只移除 Agent Insight 的登记，不删除 `.gp`。先执行一次 `scan` 可检查语义对象、Pi session 和上传诊断，再使用 `start` 启动独立后台 watcher。`start` 重复执行不会创建第二个进程，`stop` 停止它；日志和 PID 只保存在 Goal Plus collector 的 managed directory。需要前台观察时仍可使用 `watch --interval-ms 5000`，按 Ctrl+C 正常停止。
+
+没有 attach 任何 `.gp` 时，`start` 和 `self-check` 不会报告 ready。Goal Plus 安装或 watcher 失败会显示 `PARTIAL`，已经安装并运行的 Pi/Codex 原生采集器不会被回滚或停止。
 
 ## 页面与数据口径
 
@@ -34,7 +49,7 @@ goal-plus-collector watch --interval-ms 5000
 
 `collecting` 表示 Goal/run 尚未终态或本轮扫描 checkpoint 尚未追上；`complete` 表示预期语义、结算证据和 native Execution 已齐；`partial` 表示终态但仍有明确缺项；`unsupported` 表示观察到不支持的关键 schema。完整度不等同于执行成功，失败或 selection blocked 也可以完整。
 
-Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；关联只使用 native/session ID 或唯一的确定性任务名，不按时间接近度猜测。
+Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；Goal Plus 可使用 host metadata 中的 Codex conversation + turn 构造既有 execution ID，且只匹配 `framework=codex`。关联仍只使用 native/session/execution ID 或唯一的确定性任务名，不按时间接近度猜测。
 
 ## 隐私、失败恢复与卸载
 

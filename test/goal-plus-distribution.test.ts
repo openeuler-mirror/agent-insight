@@ -72,21 +72,80 @@ test('unified setup preselects Goal Plus and delegates to its authenticated inst
   }
 });
 
+test('Goal Plus host profiles compose existing native installers without changing legacy selection', async () => {
+  for (const platform of ['unix', 'windows'] as const) {
+    const legacy = await getSetup(new Request('https://insight.example/api/ingest/setup?frameworks=goal-plus&key=synthetic&nokey=1', {
+      headers: { host: 'insight.example', 'x-forwarded-proto': 'https', 'x-platform': platform },
+    }));
+    assert.match(await legacy.text(), /SELECTED_FRAMEWORKS(?:=| = )"goal-plus"/);
+
+    const combined = await getSetup(new Request('https://insight.example/api/ingest/setup?frameworks=goal-plus&goalPlusHosts=pi,codex&key=synthetic&nokey=1', {
+      headers: { host: 'insight.example', 'x-forwarded-proto': 'https', 'x-platform': platform },
+    }));
+    const source = await combined.text();
+    assert.match(source, /goal-plus,pi-agent,codex/);
+    assert.match(source, /GOAL_PLUS_HOSTS(?:=| = )"pi,codex"/);
+    assert.equal((source.match(/api\/ingest\/setup\/pi-agent/g) || []).length, 1);
+    assert.equal((source.match(/api\/ingest\/setup\/goal-plus/g) || []).length, 1);
+    assert.equal((source.match(/api\/ingest\/setup\/codex/g) || []).length, 1);
+
+    const auto = await getAutoSetup(new Request(
+      'https://insight.example/api/setup/auto?frameworks=goal-plus&goalPlusHosts=pi,codex&apiKey=synthetic&host=insight.example',
+      { headers: { host: 'insight.example', 'x-forwarded-proto': 'https', 'x-platform': platform } },
+    ));
+    const autoSource = await auto.text();
+    assert.match(autoSource, /goal-plus,pi-agent,codex/);
+    assert.match(autoSource, /GOAL_PLUS_HOSTS(?:=| = )"pi,codex"/);
+
+    for (const generated of [source, autoSource]) {
+      assert.match(generated, /SETUP_WORKING_DIR/);
+      assert.match(generated, /Goal Plus workspace setup failed; installed Pi\/Codex collectors were left unchanged/);
+      assert.match(generated, /goal-plus-collector\.cjs/);
+      assert.match(generated, /\battach\b/);
+      assert.match(generated, /\bscan\b/);
+      assert.match(generated, /\bstart\b/);
+    }
+  }
+
+  for (const route of [getSetup, getAutoSetup]) {
+    const path = route === getSetup
+      ? 'api/ingest/setup?frameworks=codex&goalPlusHosts=pi&key=synthetic&nokey=1'
+      : 'api/setup/auto?frameworks=codex&goalPlusHosts=pi&apiKey=synthetic&host=insight.example';
+    const response = await route(new Request(`https://insight.example/${path}`, {
+      headers: { host: 'insight.example', 'x-forwarded-proto': 'https', 'x-platform': 'unix' },
+    }));
+    const source = await response.text();
+    assert.match(source, /SELECTED_FRAMEWORKS="codex"/);
+    assert.match(source, /GOAL_PLUS_HOSTS=""/);
+  }
+});
+
 test('Goal Plus installer writes only managed collector state', async t => {
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-install-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
   const previousKey = process.env.AGENT_INSIGHT_API_KEY;
   const previousHome = process.env.AGENT_INSIGHT_HOME;
+  const previousGoalPlusHosts = process.env.AGENT_INSIGHT_GOAL_PLUS_HOSTS;
   process.env.AGENT_INSIGHT_API_KEY = 'synthetic-install-key';
+  process.env.AGENT_INSIGHT_GOAL_PLUS_HOSTS = 'pi,codex';
   delete process.env.AGENT_INSIGHT_HOME;
   t.after(() => {
     if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
     else process.env.AGENT_INSIGHT_API_KEY = previousKey;
     if (previousHome === undefined) delete process.env.AGENT_INSIGHT_HOME;
     else process.env.AGENT_INSIGHT_HOME = previousHome;
+    if (previousGoalPlusHosts === undefined) delete process.env.AGENT_INSIGHT_GOAL_PLUS_HOSTS;
+    else process.env.AGENT_INSIGHT_GOAL_PLUS_HOSTS = previousGoalPlusHosts;
   });
   const result = await install({ homeDir, sourceDir: path.join(process.cwd(), 'scripts', 'agent-trace-collectors', 'goal-plus'), skipVersionCheck: true });
   assert.equal(result.packageDir, path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus'));
-  assert.equal(JSON.parse(await fsp.readFile(result.configPath, 'utf8')).apiKey, 'synthetic-install-key');
+  const config = JSON.parse(await fsp.readFile(result.configPath, 'utf8'));
+  assert.equal(config.apiKey, 'synthetic-install-key');
+  assert.deepEqual(config.hosts, ['pi', 'codex']);
   assert.match(await fsp.readFile(result.commandPath, 'utf8'), /managed-by-agent-insight-goal-plus/);
+
+  delete process.env.AGENT_INSIGHT_GOAL_PLUS_HOSTS;
+  await install({ homeDir, sourceDir: path.join(process.cwd(), 'scripts', 'agent-trace-collectors', 'goal-plus'), skipVersionCheck: true });
+  const reinstalled = JSON.parse(await fsp.readFile(result.configPath, 'utf8'));
+  assert.deepEqual(reinstalled.hosts, ['pi', 'codex']);
 });

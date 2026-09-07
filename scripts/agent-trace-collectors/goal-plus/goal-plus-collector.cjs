@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { atomicWriteJson, collectorStateDir, listSpoolFiles, readCheckpoint, safeContent } = require("../shared/trace-transport.cjs");
 const { parseGoalPlusRoot } = require("./lib/gp-snapshot-parser.cjs");
 const { importPiSessions } = require("./lib/pi-native-parser.cjs");
@@ -18,9 +19,130 @@ const {
   validateGoalPlusRoot,
 } = require("./lib/source-registry.cjs");
 
-const COLLECTOR_VERSION = "1.0.0";
+const COLLECTOR_VERSION = "1.1.0";
 const MAX_BATCH_SNAPSHOTS = 100;
 const MAX_BATCH_BYTES = 3.5 * 1024 * 1024;
+
+function watcherPaths(config) {
+  const runtimeDir = path.join(path.dirname(config.configPath), "runtime");
+  return {
+    runtimeDir,
+    pidPath: path.join(runtimeDir, "watcher.json"),
+    lockPath: path.join(runtimeDir, "watcher.lock"),
+    logPath: path.join(runtimeDir, "watcher.log"),
+  };
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function readWatcherPid(pidPath) {
+  try {
+    const value = JSON.parse(await fsp.readFile(pidPath, "utf8"));
+    return Number.isInteger(value?.pid) ? value : undefined;
+  } catch (error) {
+    if (error?.code === "ENOENT" || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
+async function watcherStatus(config) {
+  const paths = watcherPaths(config);
+  const registry = await loadRegistry(defaultRegistryPath(config.homeDir));
+  const record = await readWatcherPid(paths.pidPath);
+  const running = Boolean(record && processIsAlive(record.pid));
+  if (record && !running) await fsp.unlink(paths.pidPath).catch(() => undefined);
+  return {
+    configured: Boolean(config.apiKey),
+    hosts: config.hosts || [],
+    sourceCount: registry.sources.length,
+    running,
+    ready: Boolean(config.apiKey) && registry.sources.length > 0 && running,
+    pid: running ? record.pid : undefined,
+    startedAt: running ? record.startedAt : undefined,
+    logPath: paths.logPath,
+  };
+}
+
+async function acquireWatcherLock(lockPath) {
+  try {
+    await fsp.writeFile(lockPath, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+    return;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  const ownerPid = Number.parseInt(await fsp.readFile(lockPath, "utf8").catch(() => ""), 10);
+  if (processIsAlive(ownerPid)) throw new Error("Goal Plus watcher start is already in progress");
+  await fsp.unlink(lockPath).catch(error => {
+    if (error?.code !== "ENOENT") throw error;
+  });
+  try {
+    await fsp.writeFile(lockPath, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (error?.code === "EEXIST") throw new Error("Goal Plus watcher start is already in progress");
+    throw error;
+  }
+}
+
+async function startWatcher(config, options = {}) {
+  const paths = watcherPaths(config);
+  await fsp.mkdir(paths.runtimeDir, { recursive: true, mode: 0o700 });
+  await acquireWatcherLock(paths.lockPath);
+  try {
+    const current = await watcherStatus(config);
+    if (current.running) return { ...current, alreadyRunning: true };
+    if (!config.apiKey) throw new Error("AGENT_INSIGHT_API_KEY or collector config apiKey is required for watcher startup");
+    if (current.sourceCount === 0) throw new Error("No Goal Plus sources are attached; run attach before start");
+    const logFd = fs.openSync(paths.logPath, "a", 0o600);
+    let child;
+    try {
+      child = spawn(process.execPath, [
+        __filename,
+        "watch",
+        "--config",
+        config.configPath,
+        "--interval-ms",
+        String(options.intervalMs || 5000),
+      ], {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        windowsHide: true,
+      });
+    } finally {
+      fs.closeSync(logFd);
+    }
+    if (!child.pid) throw new Error("Unable to start Goal Plus watcher process");
+    child.unref();
+    const record = { pid: child.pid, startedAt: new Date().toISOString(), intervalMs: options.intervalMs || 5000 };
+    await atomicWriteJson(paths.pidPath, record);
+    return { ...current, ...record, running: true, ready: true, alreadyRunning: false };
+  } finally {
+    await fsp.unlink(paths.lockPath).catch(() => undefined);
+  }
+}
+
+async function stopWatcher(config) {
+  const paths = watcherPaths(config);
+  const record = await readWatcherPid(paths.pidPath);
+  if (!record || !processIsAlive(record.pid)) {
+    await fsp.unlink(paths.pidPath).catch(() => undefined);
+    return { stopped: false, running: false, ready: false };
+  }
+  try {
+    process.kill(record.pid, "SIGTERM");
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+  await fsp.unlink(paths.pidPath).catch(() => undefined);
+  return { stopped: true, running: false, ready: false, pid: record.pid };
+}
 
 function buildSemanticBatches(source, parsed, scanStartedAt, scanCompletedAt) {
   const groups = [];
@@ -93,6 +215,7 @@ async function loadConfig(options = {}) {
     homeDir,
     configPath,
     apiKey,
+    hosts: Array.isArray(file.hosts) ? file.hosts.filter(host => host === "pi" || host === "codex") : [],
     semanticEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_ENDPOINT || file.semanticEndpoint || `${baseUrl}/api/ingest/goal-plus/v1/snapshots`,
     otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || file.otlpEndpoint || `${baseUrl}/api/ingest/otel/v1/traces`,
   };
@@ -185,7 +308,7 @@ async function selfCheck(config) {
     };
   }
   return {
-    ok: Boolean(config.apiKey) && spoolWritable && sources.every(source => source.ok),
+    ok: Boolean(config.apiKey) && spoolWritable && sources.length > 0 && sources.every(source => source.ok),
     configured: Boolean(config.apiKey),
     endpoints: {
       semantic: /^https?:\/\//.test(config.semanticEndpoint),
@@ -193,6 +316,7 @@ async function selfCheck(config) {
     },
     spoolWritable,
     spoolBacklog,
+    watcher: await watcherStatus(config),
     sources,
   };
 }
@@ -221,6 +345,18 @@ async function main(argv = process.argv.slice(2)) {
     if (!result.ok) process.exitCode = 1;
     return;
   }
+  if (options.command === "start") {
+    process.stdout.write(`${JSON.stringify(await startWatcher(config, options), null, 2)}\n`);
+    return;
+  }
+  if (options.command === "stop") {
+    process.stdout.write(`${JSON.stringify(await stopWatcher(config), null, 2)}\n`);
+    return;
+  }
+  if (options.command === "status") {
+    process.stdout.write(`${JSON.stringify(await watcherStatus(config), null, 2)}\n`);
+    return;
+  }
   if (options.command === "scan" || options.command === "watch") {
     const run = async () => {
       const sources = await resolveSources(options.values[0], registryOptions);
@@ -228,8 +364,9 @@ async function main(argv = process.argv.slice(2)) {
       for (const source of sources) results.push(await scanSource(source, config, options));
       process.stdout.write(`${JSON.stringify({ scannedAt: new Date().toISOString(), results }, null, 2)}\n`);
     };
-    await run();
-    if (options.command === "watch") {
+    if (options.command === "scan") await run();
+    else {
+      try { await run(); } catch (error) { process.stderr.write(`Goal Plus watch scan failed: ${error.message}\n`); }
       let active = false;
       const timer = setInterval(async () => {
         if (active) return;
@@ -242,10 +379,13 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   process.stdout.write([
-    "Usage: goal-plus-collector <attach|detach|list|scan|watch|self-check> [path|sourceId]",
+    "Usage: goal-plus-collector <attach|detach|list|scan|watch|start|stop|status|self-check> [path|sourceId]",
     "  attach <.gp> [--label name]",
     "  scan [sourceId|.gp] [--no-upload]",
     "  watch [sourceId|.gp] [--interval-ms 5000]",
+    "  start [--interval-ms 5000]",
+    "  stop",
+    "  status",
   ].join("\n") + "\n");
 }
 
@@ -256,4 +396,15 @@ if (require.main === module) {
   });
 }
 
-module.exports = { COLLECTOR_VERSION, buildSemanticBatches, loadConfig, main, parseArgs, scanSource, selfCheck };
+module.exports = {
+  COLLECTOR_VERSION,
+  buildSemanticBatches,
+  loadConfig,
+  main,
+  parseArgs,
+  scanSource,
+  selfCheck,
+  startWatcher,
+  stopWatcher,
+  watcherStatus,
+};

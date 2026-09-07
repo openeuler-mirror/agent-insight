@@ -9,6 +9,7 @@ type LinkIntent = {
   agentSessionDbId?: string;
   exactIds: string[];
   taskName?: string;
+  expectedFramework?: 'pi-agent' | 'codex';
 };
 
 function parseObject(raw: string | null): Record<string, unknown> {
@@ -37,6 +38,26 @@ function nonempty(...values: unknown[]): string[] {
   return [...new Set(values.filter(value => typeof value === 'string' && value.trim()).map(value => String(value).trim()))];
 }
 
+export function goalPlusFrameworkForHost(host: unknown): LinkIntent['expectedFramework'] {
+  if (host === 'pi' || host === 'pi-rpc' || host === 'pi-agent') return 'pi-agent';
+  if (host === 'codex') return 'codex';
+  return undefined;
+}
+
+export function goalPlusCodexExecutionId(metadata: Record<string, unknown>): string | undefined {
+  const direct = typeof metadata.codexExecutionId === 'string'
+    ? metadata.codexExecutionId.trim()
+    : typeof metadata.executionId === 'string' ? metadata.executionId.trim() : '';
+  if (direct) return direct;
+  const conversationId = typeof metadata.codexConversationId === 'string'
+    ? metadata.codexConversationId.trim()
+    : typeof metadata.conversationId === 'string' ? metadata.conversationId.trim() : '';
+  const turnId = typeof metadata.codexTurnId === 'string'
+    ? metadata.codexTurnId.trim()
+    : typeof metadata.turnId === 'string' ? metadata.turnId.trim() : '';
+  return conversationId && turnId ? `${conversationId}:turn:${turnId}` : undefined;
+}
+
 async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<LinkIntent[]> {
   const [goals, sessions] = await Promise.all([
     prismaRaw.goalPlusGoal.findMany({ where: { sourceDbId } }),
@@ -49,12 +70,14 @@ async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<
   for (const goal of goals) {
     const active = parseObject(goal.activeSessionJson);
     const sessionId = typeof active.sessionId === 'string' ? active.sessionId : undefined;
-    if (sessionId) {
+    const activeExecutionId = goalPlusCodexExecutionId(active);
+    if (sessionId || activeExecutionId) {
       intents.push({
         key: `goal:${goal.id}:main`,
         role: 'main',
         goalDbId: goal.id,
-        exactIds: [sessionId],
+        exactIds: nonempty(activeExecutionId, sessionId),
+        expectedFramework: goalPlusFrameworkForHost(active.host),
       });
     }
     for (const item of parseArray(goal.workItemsJson)) {
@@ -66,6 +89,7 @@ async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<
         goalDbId: goal.id,
         exactIds: nonempty(item.agentId),
         taskName: typeof item.taskName === 'string' ? item.taskName : undefined,
+        expectedFramework: goalPlusFrameworkForHost(item.host),
       });
     }
     for (const check of parseArray(goal.finalChecksJson)) {
@@ -77,12 +101,14 @@ async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<
         key: `goal:${goal.id}:check:${checkId}`,
         role: `final-check:${checkId}`,
         goalDbId: goal.id,
-        exactIds: nonempty(metadata.sessionId, metadata.agentId, metadata.externalId),
+        exactIds: nonempty(goalPlusCodexExecutionId(metadata), metadata.sessionId, metadata.agentId, metadata.externalId),
         taskName: typeof metadata.taskName === 'string' ? metadata.taskName : undefined,
+        expectedFramework: goalPlusFrameworkForHost(check.checkerHost || metadata.host),
       });
     }
   }
   for (const session of sessions) {
+    const hostMetadata = parseObject(session.hostMetadataJson);
     intents.push({
       key: `session:${session.id}`,
       role: session.role || 'candidate-worker',
@@ -91,11 +117,13 @@ async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<
       candidateDbId: session.candidateDbId || undefined,
       agentSessionDbId: session.id,
       exactIds: nonempty(
+        goalPlusCodexExecutionId(hostMetadata),
         `goal-plus:${sourceId}:${session.agentSessionId}`,
         session.nativeSessionId,
         session.agentSessionId,
       ),
       taskName: session.taskName || undefined,
+      expectedFramework: goalPlusFrameworkForHost(session.host),
     });
   }
   return intents.filter(intent => intent.exactIds.length > 0 || intent.taskName);
@@ -126,6 +154,7 @@ export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked
       ? await prismaRaw.execution.findMany({
         where: {
           user: source.user,
+          ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),
           OR: [
             { taskId: { in: intent.exactIds } },
             { agentSessionId: { in: intent.exactIds } },
@@ -147,6 +176,7 @@ export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked
       const matches = await prismaRaw.execution.findMany({
         where: {
           user: source.user,
+          ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),
           OR: [
             { taskId: intent.taskName },
             { agentSessionId: intent.taskName },

@@ -10,11 +10,11 @@ const require = createRequire(import.meta.url);
 const { parseGoalPlusRoot } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
 const { parsePiSession } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
 const { attachSource, loadRegistry } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
-const { buildSemanticBatches } = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
+const { buildSemanticBatches, loadConfig, startWatcher, stopWatcher, watcherStatus } = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
 const { enqueueSemanticBatch, uploadSemanticBatches } = require('../scripts/agent-trace-collectors/goal-plus/lib/semantic-spool.cjs');
 const fixture = path.join(process.cwd(), 'test', 'fixtures', 'goal-plus', '.gp');
 
-type ParsedSnapshot = { snapshotId: string; kind: string };
+type ParsedSnapshot = { snapshotId: string; kind: string; payload?: Record<string, unknown> };
 type ParsedRoot = { diagnostics: unknown[]; snapshots: ParsedSnapshot[]; piSessions: unknown[] };
 type NativeEvent = {
   eventId: string;
@@ -44,6 +44,52 @@ test('Goal Plus source attach is canonical and idempotent', async t => {
   assert.match(first.workspaceFingerprint, /^sha256:[a-f0-9]{64}$/);
 });
 
+test('Goal Plus managed watcher stays stopped and rejects startup without attached sources', async t => {
+  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-watcher-'));
+  t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  const configPath = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus', 'config.json');
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify({ apiKey: 'synthetic', hosts: ['pi'], baseUrl: 'http://example.invalid' }));
+  const config = await loadConfig({ homeDir, configPath });
+  const status = await watcherStatus(config);
+  assert.equal(status.running, false);
+  assert.equal(status.ready, false);
+  assert.equal(status.sourceCount, 0);
+  assert.deepEqual(status.hosts, ['pi']);
+  const lockPath = path.join(path.dirname(configPath), 'runtime', 'watcher.lock');
+  await fsp.mkdir(path.dirname(lockPath), { recursive: true });
+  await fsp.writeFile(lockPath, '2147483647\n');
+  await assert.rejects(() => startWatcher(config), /No Goal Plus sources are attached/);
+  await assert.rejects(() => fsp.access(lockPath));
+});
+
+test('Goal Plus managed watcher starts idempotently and stops without touching native collectors', async t => {
+  if (process.platform === 'win32') return t.skip('detached process signaling differs on Windows');
+  const { temporary, root } = await copiedFixture(t);
+  const homeDir = path.join(temporary, 'home');
+  const configPath = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus', 'config.json');
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify({
+    apiKey: 'synthetic',
+    hosts: ['codex'],
+    semanticEndpoint: 'http://127.0.0.1:9/semantic',
+    otlpEndpoint: 'http://127.0.0.1:9/traces',
+  }));
+  await attachSource(root, { homeDir });
+  const config = await loadConfig({ homeDir, configPath });
+  t.after(() => stopWatcher(config));
+
+  const started = await startWatcher(config, { intervalMs: 60_000 });
+  assert.equal(started.running, true);
+  assert.equal(started.ready, true);
+  const repeated = await startWatcher(config, { intervalMs: 60_000 });
+  assert.equal(repeated.alreadyRunning, true);
+  assert.equal(repeated.pid, started.pid);
+  const stopped = await stopWatcher(config);
+  assert.equal(stopped.stopped, true);
+  assert.equal((await watcherStatus(config)).running, false);
+});
+
 test('semantic parser emits stable bounded snapshots without local paths', async t => {
   const { root } = await copiedFixture(t);
   const source = { sourceId: 'gpsrc_fixture', root, label: 'fixture', workspaceFingerprint: `sha256:${'a'.repeat(64)}` };
@@ -56,6 +102,28 @@ test('semantic parser emits stable bounded snapshots without local paths', async
   assert.doesNotMatch(serialized, /\/home\/example/);
   assert.doesNotMatch(serialized, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(first.piSessions.length, 1);
+});
+
+test('semantic parser preserves only bounded Codex correlation identities', async t => {
+  const { root } = await copiedFixture(t);
+  const sessionPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
+  const session = JSON.parse(await fsp.readFile(sessionPath, 'utf8'));
+  session.host = 'codex';
+  session.host_handle.host = 'codex';
+  session.host_handle.metadata = {
+    codex_conversation_id: 'conversation-demo',
+    codex_turn_id: 'turn-demo',
+    codex_execution_id: 'conversation-demo:turn:turn-demo',
+    transcript_path: '/home/example/private/transcript.jsonl',
+  };
+  await fsp.writeFile(sessionPath, JSON.stringify(session));
+  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
+  const agentSession = parsed.snapshots.find(item => item.kind === 'agent_session');
+  const hostMetadata = agentSession?.payload?.hostMetadata as Record<string, unknown>;
+  assert.equal(hostMetadata.codexConversationId, 'conversation-demo');
+  assert.equal(hostMetadata.codexTurnId, 'turn-demo');
+  assert.equal(hostMetadata.codexExecutionId, 'conversation-demo:turn:turn-demo');
+  assert.doesNotMatch(JSON.stringify(agentSession), /private\/transcript/);
 });
 
 test('semantic parser ignores an incomplete JSONL tail', async t => {

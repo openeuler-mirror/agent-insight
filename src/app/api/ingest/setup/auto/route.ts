@@ -10,33 +10,13 @@ import {
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
 import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+import {
+    parseFrameworks,
+    parseGoalPlusHosts,
+    resolveInstallProfile,
+    type GoalPlusHost,
+} from '@/lib/ingest/setup/install-profile';
 
-// `frameworks` is inserted into generated shell scripts. Keep this an explicit
-// allowlist instead of interpolating arbitrary query values.
-const FRAMEWORKS: { value: string; label: string }[] = [
-    { value: 'opencode', label: 'OpenCode' },
-    { value: 'claude', label: 'Claude Code' },
-    { value: 'codeagent', label: 'CodeAgent' },
-    { value: 'hermes', label: 'Hermes' },
-    { value: 'openclaw', label: 'OpenClaw' },
-    { value: 'xiaoo', label: 'xiaoO' },
-    { value: 'jiuwen', label: 'JiuwenSwarm' },
-    { value: 'llamaindex', label: 'LlamaIndex' },
-    { value: 'qoder', label: 'Qoder CN product family' },
-    { value: 'trae', label: 'Trae IDE' },
-    { value: 'actrail', label: 'AcTrail' },
-    { value: 'pi-agent', label: 'Pi Agent' },
-    { value: 'goal-plus', label: 'Goal Plus' },
-    { value: 'codex', label: 'Codex' },
-    { value: 'qwencode', label: 'Qwen Code' },
-    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
-];
-
-function parseFrameworks(raw: string | null): { value: string; label: string }[] {
-    if (!raw) return [];
-    const wanted = new Set(raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean));
-    return FRAMEWORKS.filter(framework => wanted.has(framework.value));
-}
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -65,7 +45,11 @@ export async function GET(request: Request) {
     const apiKey = searchParams.get('apiKey');
     const hostParam = searchParams.get('host');
     const rawFrameworks = searchParams.get('frameworks');
-    const preselected = parseFrameworks(rawFrameworks);
+    const installProfile = resolveInstallProfile(
+        parseFrameworks(rawFrameworks),
+        parseGoalPlusHosts(searchParams.get('goalPlusHosts')),
+    );
+    const preselected = installProfile.effectiveFrameworks;
     const llamaIndexVenv = (searchParams.get('llamaindexVenv') || '')
         .replace(/[\0\r\n]/g, '')
         .trim()
@@ -95,10 +79,28 @@ export async function GET(request: Request) {
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        return generatePowerShellScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
+        return generatePowerShellScript(
+            baseUrl,
+            hostParam,
+            apiKey,
+            preselected,
+            llamaIndexVenv,
+            llamaIndexPythonMode,
+            installProfile.goalPlusHosts,
+            installProfile.autoAddedFrameworks.map(framework => framework.value),
+        );
     }
     
-    return generateBashScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
+    return generateBashScript(
+        baseUrl,
+        hostParam,
+        apiKey,
+        preselected,
+        llamaIndexVenv,
+        llamaIndexPythonMode,
+        installProfile.goalPlusHosts,
+        installProfile.autoAddedFrameworks.map(framework => framework.value),
+    );
 }
 
 function generateBashScript(
@@ -108,6 +110,8 @@ function generateBashScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    goalPlusHosts: GoalPlusHost[],
+    autoAddedFrameworks: string[],
 ): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const packageSpec = getAgentInsightClientPackageSpec();
@@ -121,6 +125,9 @@ function generateBashScript(
 AGENT_INSIGHT_HOST="${bashDoubleQuoted(hostParam)}"
 AGENT_INSIGHT_BASE_URL="${bashDoubleQuoted(baseUrl)}"
 AGENT_INSIGHT_API_KEY="${bashDoubleQuoted(apiKey)}"
+SETUP_WORKING_DIR="$PWD"
+GOAL_PLUS_HOSTS="${bashDoubleQuoted(goalPlusHosts.join(','))}"
+AUTO_ADDED_FRAMEWORKS="${bashDoubleQuoted(autoAddedFrameworks.join(','))}"
 AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
@@ -278,6 +285,9 @@ INSTALL_CODEX=false
 INSTALL_QWENCODE=false
 INSTALL_DEEPSEEK_HARNESS=false
 DEEPSEEK_HARNESS_SETUP_OK=false
+GOAL_PLUS_SETUP_OK=false
+GOAL_PLUS_SOURCE_OK=false
+GOAL_PLUS_READY=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -748,10 +758,31 @@ if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
     echo "⏬ Installing Goal Plus collector..."
     export AGENT_INSIGHT_API_KEY
     export AGENT_INSIGHT_BASE_URL
+    export AGENT_INSIGHT_GOAL_PLUS_HOSTS="$GOAL_PLUS_HOSTS"
     GOAL_PLUS_INSTALLER="$(mktemp)"
-    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -o "$GOAL_PLUS_INSTALLER"
-    if ! sh "$GOAL_PLUS_INSTALLER"; then rm -f "$GOAL_PLUS_INSTALLER"; exit 1; fi
+    if curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -o "$GOAL_PLUS_INSTALLER" && sh "$GOAL_PLUS_INSTALLER"; then
+        GOAL_PLUS_SETUP_OK=true
+    else
+        echo "Warning: Goal Plus collector installation failed; installed Pi/Codex collectors were left unchanged."
+    fi
     rm -f "$GOAL_PLUS_INSTALLER"
+fi
+
+if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then
+    GOAL_PLUS_SOURCE_PATH=""
+    if [ -d "$SETUP_WORKING_DIR/.gp" ]; then GOAL_PLUS_SOURCE_PATH="$SETUP_WORKING_DIR/.gp"; fi
+    if [ "$(basename "$SETUP_WORKING_DIR")" = ".gp" ]; then GOAL_PLUS_SOURCE_PATH="$SETUP_WORKING_DIR"; fi
+    if [ -n "$GOAL_PLUS_SOURCE_PATH" ]; then
+        echo "🔗 Attaching Goal Plus workspace: $GOAL_PLUS_SOURCE_PATH"
+        GOAL_PLUS_COMMAND="$HOME/.agent-insight/collectors/goal-plus/goal-plus-collector.cjs"
+        if node "$GOAL_PLUS_COMMAND" attach "$GOAL_PLUS_SOURCE_PATH" && node "$GOAL_PLUS_COMMAND" scan && node "$GOAL_PLUS_COMMAND" start; then
+            GOAL_PLUS_SOURCE_OK=true
+        else
+            echo "Warning: Goal Plus workspace setup failed; installed Pi/Codex collectors were left unchanged."
+        fi
+    else
+        echo "ℹ️  No .gp found under the setup working directory; attach the Goal Plus workspace explicitly."
+    fi
 fi
 
 # 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
@@ -1019,7 +1050,13 @@ fi
 
 # 10. Final Summary
 echo ""
-echo "🌟 Agent-Insight Telemetry: READY"
+GOAL_PLUS_READY="$GOAL_PLUS_SETUP_OK"
+if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_SOURCE_OK" != "true" ]; then GOAL_PLUS_READY=false; fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ "$GOAL_PLUS_READY" != "true" ]; then
+    echo "⚠️  Agent-Insight Telemetry: PARTIAL"
+else
+    echo "🌟 Agent-Insight Telemetry: READY"
+fi
 echo "------------------------------------------------"
 echo "Installed Components:"
 if [ "$INSTALL_OPENCODE" = "true" ]; then
@@ -1053,8 +1090,16 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"
 fi
-if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
+if [ "$GOAL_PLUS_SETUP_OK" = "true" ]; then
     echo "  ✅ Goal Plus Collector: ~/.agent-insight/collectors/goal-plus"
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ "$GOAL_PLUS_SETUP_OK" != "true" ]; then
+    echo "  ⚠️  Goal Plus Collector: not installed (native collectors unchanged)"
+fi
+if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_SOURCE_OK" != "true" ]; then echo "  ⚠️  Goal Plus workspace: not attached or watcher not started"; fi
+if [ "$GOAL_PLUS_SOURCE_OK" = "true" ]; then echo "  ✅ Goal Plus workspace attached; watcher started"; fi
+if [ -n "$AUTO_ADDED_FRAMEWORKS" ]; then
+    echo "  ℹ️  Goal Plus dependencies: $AUTO_ADDED_FRAMEWORKS"
 fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
@@ -1107,6 +1152,11 @@ fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
+    echo "  10. Run: goal-plus-collector attach /absolute/path/to/workspace/.gp && goal-plus-collector scan && goal-plus-collector start"
+fi
+if [[ ",$GOAL_PLUS_HOSTS," == *",pi,"* ]]; then echo "      Goal Plus Pi prerequisite: run ./install.sh --pi in the Goal Plus repository"; fi
+if [[ ",$GOAL_PLUS_HOSTS," == *",codex,"* ]]; then echo "      Goal Plus Codex prerequisite: run ./install.sh --codex in the Goal Plus repository"; fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  9. Start a new dsh session"
 fi
@@ -1127,6 +1177,8 @@ function generatePowerShellScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    goalPlusHosts: GoalPlusHost[],
+    autoAddedFrameworks: string[],
 ): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
@@ -1139,6 +1191,9 @@ function generatePowerShellScript(
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(hostParam) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
         '$AGENT_INSIGHT_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
+        '$SETUP_WORKING_DIR = (Get-Location).Path',
+        '$GOAL_PLUS_HOSTS = "' + powerShellDoubleQuoted(goalPlusHosts.join(',')) + '"',
+        '$AUTO_ADDED_FRAMEWORKS = "' + powerShellDoubleQuoted(autoAddedFrameworks.join(',')) + '"',
         '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -1301,6 +1356,9 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
+        '$GOAL_PLUS_SETUP_OK = $false',
+        '$GOAL_PLUS_SOURCE_OK = $false',
+        '$GOAL_PLUS_READY = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1757,13 +1815,40 @@ function generatePowerShellScript(
         '    Write-Host "⏬ Installing Goal Plus collector..."',
         '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
         '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $env:AGENT_INSIGHT_GOAL_PLUS_HOSTS = $GOAL_PLUS_HOSTS',
         '    $goalPlusInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-goal-plus-" + [guid]::NewGuid().ToString("N") + ".ps1")',
         '    try {',
         '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -OutFile $goalPlusInstaller',
         '        & $goalPlusInstaller',
-        '        if ($LASTEXITCODE -ne 0) { throw "Goal Plus collector installer failed with exit code $LASTEXITCODE." }',
+        '        if ($LASTEXITCODE -eq 0) {',
+        '            $GOAL_PLUS_SETUP_OK = $true',
+        '        } else {',
+        '            Write-Host "Warning: Goal Plus collector installation failed; installed Pi/Codex collectors were left unchanged."',
+        '        }',
+        '    } catch {',
+        '        Write-Host "Warning: Goal Plus collector installation failed; installed Pi/Codex collectors were left unchanged."',
         '    } finally {',
         '        Remove-Item -LiteralPath $goalPlusInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        'if ($GOAL_PLUS_SETUP_OK -and $GOAL_PLUS_HOSTS) {',
+        '    $goalPlusSourcePath = $null',
+        '    $childSource = Join-Path $SETUP_WORKING_DIR ".gp"',
+        '    if (Test-Path -LiteralPath $childSource -PathType Container) { $goalPlusSourcePath = $childSource }',
+        '    if ((Split-Path -Leaf $SETUP_WORKING_DIR) -eq ".gp") { $goalPlusSourcePath = $SETUP_WORKING_DIR }',
+        '    if ($goalPlusSourcePath) {',
+        '        Write-Host "🔗 Attaching Goal Plus workspace: $goalPlusSourcePath"',
+        '        $goalPlusCommand = Join-Path $env:USERPROFILE ".agent-insight\\collectors\\goal-plus\\goal-plus-collector.cjs"',
+        '        & node $goalPlusCommand attach $goalPlusSourcePath',
+        '        if ($LASTEXITCODE -eq 0) { & node $goalPlusCommand scan }',
+        '        if ($LASTEXITCODE -eq 0) { & node $goalPlusCommand start }',
+        '        if ($LASTEXITCODE -eq 0) {',
+        '            $GOAL_PLUS_SOURCE_OK = $true',
+        '        } else {',
+        '            Write-Host "Warning: Goal Plus workspace setup failed; installed Pi/Codex collectors were left unchanged."',
+        '        }',
+        '    } else {',
+        '        Write-Host "ℹ️  No .gp found under the setup working directory; attach the Goal Plus workspace explicitly."',
         '    }',
         '}',
         '',
@@ -2019,7 +2104,13 @@ function generatePowerShellScript(
         '',
         '# 10. Final Summary',
         'Write-Host ""',
-        'Write-Host "🌟 Skill-Insight Telemetry: READY"',
+        '$GOAL_PLUS_READY = $GOAL_PLUS_SETUP_OK',
+        'if ($GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_SOURCE_OK) { $GOAL_PLUS_READY = $false }',
+        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_READY) {',
+        '    Write-Host "⚠️  Skill-Insight Telemetry: PARTIAL"',
+        '} else {',
+        '    Write-Host "🌟 Skill-Insight Telemetry: READY"',
+        '}',
         'Write-Host "------------------------------------------------"',
         'Write-Host "Installed Components:"',
         'if ($INSTALL_OPENCODE) {',
@@ -2047,7 +2138,11 @@ function generatePowerShellScript(
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
-        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "  ✅ Goal Plus Collector: $env:USERPROFILE\\.agent-insight\\collectors\\goal-plus" }',
+        'if ($GOAL_PLUS_SETUP_OK) { Write-Host "  ✅ Goal Plus Collector: $env:USERPROFILE\\.agent-insight\\collectors\\goal-plus" }',
+        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK) { Write-Host "  ⚠️  Goal Plus Collector: not installed (native collectors unchanged)" }',
+        'if ($GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_SOURCE_OK) { Write-Host "  ⚠️  Goal Plus workspace: not attached or watcher not started" }',
+        'if ($GOAL_PLUS_SOURCE_OK) { Write-Host "  ✅ Goal Plus workspace attached; watcher started" }',
+        'if ($AUTO_ADDED_FRAMEWORKS) { Write-Host "  ℹ️  Goal Plus dependencies: $AUTO_ADDED_FRAMEWORKS" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
@@ -2089,6 +2184,9 @@ function generatePowerShellScript(
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "  10. Run: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
+        'if (",$GOAL_PLUS_HOSTS," -match ",pi,") { Write-Host "      Goal Plus Pi prerequisite: run ./install.sh --pi in the Goal Plus repository" }',
+        'if (",$GOAL_PLUS_HOSTS," -match ",codex,") { Write-Host "      Goal Plus Codex prerequisite: run ./install.sh --codex in the Goal Plus repository" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 

@@ -14,7 +14,7 @@
 | Date | 2026-09-03 12:16:33 +0800 |
 | Author | openeuler-ci-bot |
 | Subject | `!377 刷新架构图中Agent可靠性描述，区分事前、事中、事后三阶段` |
-| Working tree overlay | 当前工作树新增 Goal Plus 只读观测覆盖层：collector 从显式 attach 的 `.gp` 上报版本化语义快照，并被动导入 `--no-extensions` Pi worker 的 native session；服务端持久化 Goal/Run/Candidate/Iteration/AgentSession，按明确 ID 或唯一任务名关联既有 Execution，计算独立 completeness/fidelity，并通过 `/goal-plus` 总览与详情页呈现。 |
+| Working tree overlay | 当前工作树新增 Goal Plus 只读观测覆盖层，并补充 Pi/Codex 宿主安装 profile：服务端只展开并去重既有 native collector 依赖，Goal Plus 使用独立 watcher 和确定性 Codex identity 关联，不修改 Pi/Codex collector、adapter、Execution ID 或原生执行树。 |
 
 **如何更新：** `git diff 4e7d221 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
