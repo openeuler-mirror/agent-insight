@@ -14,6 +14,7 @@ import {
 
 function writeConfig(filePath: string, input: {
   publicBaseUrl?: string
+  executorCallbackBaseUrl?: string
   evaluatorBaseUrl?: string
   token?: string
   previousTokens?: string
@@ -22,6 +23,9 @@ function writeConfig(filePath: string, input: {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, [
     `AGENT_INSIGHT_PUBLIC_BASE_URL=${input.publicBaseUrl || 'https://agent-insight.example.test'}`,
+    ...(input.executorCallbackBaseUrl
+      ? [`AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=${input.executorCallbackBaseUrl}`]
+      : []),
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=${input.evaluatorBaseUrl || 'https://evaluator.example.test'}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=${input.token || 'active-token'}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=${input.previousTokens || ''}`,
@@ -38,6 +42,7 @@ test('runtime config hot-loads an atomic file and keeps the previous valid snaps
   const environment: NodeJS.ProcessEnv = {
     NODE_ENV: 'test',
     AGENT_INSIGHT_PUBLIC_BASE_URL: 'http://127.0.0.1:3000',
+    AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL: 'http://127.0.0.1:3000/local-prefix/',
     AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL: 'http://127.0.0.1:8080',
     AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN: 'environment-token',
   }
@@ -50,16 +55,23 @@ test('runtime config hot-loads an atomic file and keeps the previous valid snaps
     const fallback = provider.snapshot()
     assert.equal(fallback.source, 'environment')
     assert.equal(fallback.activeToken, 'environment-token')
+    assert.equal(fallback.executorCallbackBaseUrl, 'http://127.0.0.1:3000/local-prefix')
 
-    writeConfig(configPath, { token: 'file-token', previousTokens: 'old-a,old-b' })
+    writeConfig(configPath, {
+      token: 'file-token',
+      previousTokens: 'old-a,old-b',
+      executorCallbackBaseUrl: 'http://127.0.0.1:3000',
+    })
     const first = provider.snapshot()
     assert.equal(first.source, 'file')
     assert.equal(first.activeToken, 'file-token')
     assert.deepEqual(first.previousTokens, ['old-a', 'old-b'])
+    assert.equal(first.executorCallbackBaseUrl, 'http://127.0.0.1:3000')
 
     writeConfig(configPath, { token: 'rotated-token' })
     const rotated = provider.snapshot()
     assert.equal(rotated.activeToken, 'rotated-token')
+    assert.equal(rotated.executorCallbackBaseUrl, undefined)
     assert.notEqual(rotated.revision, first.revision)
 
     fs.writeFileSync(configPath, 'AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=partial\n', { mode: 0o600 })

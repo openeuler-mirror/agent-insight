@@ -34,7 +34,7 @@ bash scripts/start-evaluator.sh \
   --port 8080
 ```
 
-Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本构建并常驻运行 Controller、保留 `/data` journal、等待健康检查并执行 Doctor。工作树有未提交内容时允许启动，但镜像会标记为 `dirty` 且不能视为可复现的正式发布构建。默认启动不会拉取 SWE-bench Case 镜像；收到真实任务或显式执行 Smoke 后先复用本地目标镜像，只有本地不存在时才按需拉取：
+Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本构建并常驻运行 Controller、保留 `/data` journal、等待健康检查并执行 Doctor。Controller 构建默认使用华为云 Debian 与 PyPI 镜像，任一快源失败时自动回退官方源；SWE-bench Harness 从官方 GitHub codeload 下载固定 commit 压缩包并校验固定 SHA-256。Node 基础镜像保留官方名称并复用宿主 Docker daemon 的 registry mirror。SWE-bench Case 镜像也保留官方名称，本地不存在时默认先通过 `docker.1ms.run` 代理拉取并恢复官方 tag，代理失败再回退 Docker Hub；可在启动命令前用 `SWE_BENCH_IMAGE_PROXY_PREFIX=<registry-prefix>` 更换代理，显式设置为空可禁用。在线拉取的 Case 镜像按 registry digest 冻结；通过 `docker save/load` 离线导入、没有 `RepoDigests` 的镜像按不可变 Image ID 冻结。脚本不会修改宿主全局 Docker 配置。工作树有未提交内容时允许启动，但镜像会标记为 `dirty` 且不能视为可复现的正式发布构建。默认启动不会拉取 SWE-bench Case 镜像；收到真实任务或显式执行 Smoke 后先复用本地目标镜像，只有本地不存在时才按需拉取：
 
 ```bash
 bash scripts/evaluator-doctor.sh
@@ -51,6 +51,19 @@ node scripts/configure-evaluator-target.js \
 ```
 
 配置写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，下一次 Benchmark 操作自动热加载，不需要重启 `scripts/start.sh` 启动的 Agent Insight。评测服务通过 REST 回传结果，由 Agent Insight API 写入平台数据库和 Artifact Store；评测机不需要平台数据库凭证或独立业务数据库。
+
+开发阶段如果 Agent Insight 和执行器在同一台机器、Evaluator 在远端，并且远端只能通过隧道或公开地址回调，可使用：
+
+```bash
+node scripts/configure-evaluator-target.js \
+  --public-base-url http://host.docker.internal:39001 \
+  --executor-callback-base-url http://127.0.0.1:3000 \
+  --evaluator-base-url http://evaluator-dev.example.test:3001 \
+  --allow-insecure-http true \
+  --token-file /secure/evaluator-token
+```
+
+此可选项只覆盖下发给执行器的回调地址；Evaluator 仍使用 `--public-base-url` 回调。未提供时两者统一使用公开地址，适合正式部署。执行器仍会校验回调 URL 的 origin 和路径，该选项不会放宽安全检查。前端发起的 Benchmark 与真实 Smoke 共用这套平台配置。
 
 ## 推荐流程
 

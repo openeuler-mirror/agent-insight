@@ -24,14 +24,23 @@ import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator
 
 export const dynamic = 'force-dynamic';
 
-function callbackServiceBaseUrl(req: Request): string {
-  const configured = defaultEvaluatorRuntimeConfigProvider.snapshot().publicBaseUrl;
-  if (configured) return configured.replace(/\/$/, '');
-  const url = new URL(req.url);
-  const host = req.headers.get('x-forwarded-host') || url.host;
-  const protocol = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
-  const prefix = String(process.env.NEXT_PUBLIC_URL_PREFIX || '').replace(/^\/?/, '/').replace(/\/$/, '');
-  return `${protocol}://${host}${prefix}`;
+function callbackServiceBaseUrls(req: Request): {
+  publicCallbackOrigin: string;
+  executorCallbackOrigin: string;
+} {
+  const runtimeConfig = defaultEvaluatorRuntimeConfigProvider.snapshot();
+  let publicCallbackOrigin = runtimeConfig.publicBaseUrl?.replace(/\/$/, '');
+  if (!publicCallbackOrigin) {
+    const url = new URL(req.url);
+    const host = req.headers.get('x-forwarded-host') || url.host;
+    const protocol = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
+    const prefix = String(process.env.NEXT_PUBLIC_URL_PREFIX || '').replace(/^\/?/, '/').replace(/\/$/, '');
+    publicCallbackOrigin = `${protocol}://${host}${prefix}`;
+  }
+  return {
+    publicCallbackOrigin,
+    executorCallbackOrigin: runtimeConfig.executorCallbackBaseUrl || publicCallbackOrigin,
+  };
 }
 
 export async function POST(
@@ -55,10 +64,11 @@ export async function POST(
     }
     if (currentExperiment.scope === 'benchmark') {
       try {
+        const callbackUrls = callbackServiceBaseUrls(req);
         const result = await startBenchmarkExperiment({
           experimentId: id,
           user: username,
-          callbackOrigin: callbackServiceBaseUrl(req),
+          ...callbackUrls,
         });
         if (!result) {
           return NextResponse.json({ error: 'experiment not found' }, { status: 404 });

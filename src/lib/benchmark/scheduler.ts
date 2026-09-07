@@ -2,6 +2,7 @@ import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src
 import { createBenchmarkDispatchToken } from '../../../packages/benchmark-protocol/src/executor-contracts'
 import { prisma } from '@/lib/storage/prisma'
 
+import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
 import { prepareNextBenchmarkCaseRun } from './orchestrator'
 
 type DispatchFetch = typeof fetch
@@ -228,7 +229,8 @@ export async function dispatchBenchmarkRun(runId: string): Promise<void> {
 export async function startBenchmarkExperiment(input: {
   experimentId: string
   user: string
-  callbackOrigin: string
+  publicCallbackOrigin: string
+  executorCallbackOrigin: string
 }): Promise<{
   status: 'running'
   alreadyRunning: boolean
@@ -250,7 +252,7 @@ export async function startBenchmarkExperiment(input: {
       }),
       prisma.benchmarkExperimentBinding.update({
         where: { experimentId: experiment.id },
-        data: { schedulerStatus: 'running', callbackOrigin: input.callbackOrigin },
+        data: { schedulerStatus: 'running', callbackOrigin: input.publicCallbackOrigin },
       }),
     ])
   }
@@ -299,7 +301,7 @@ export async function startBenchmarkExperiment(input: {
   try {
     prepared = await prepareNextBenchmarkCaseRun({
       experimentId: experiment.id,
-      callbackOrigin: input.callbackOrigin,
+      callbackOrigin: input.executorCallbackOrigin,
     })
   } catch (error) {
     await prisma.$transaction([
@@ -343,6 +345,7 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
     take: Math.min(100, Math.max(1, limit)),
   })
   let resumed = 0
+  const executorCallbackBaseUrl = defaultEvaluatorRuntimeConfigProvider.snapshot().executorCallbackBaseUrl
   for (const binding of bindings) {
     const accepted = await prisma.benchmarkCaseRun.findFirst({
       where: {
@@ -367,7 +370,7 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
     if (!runId && binding.callbackOrigin) {
       const prepared = await prepareNextBenchmarkCaseRun({
         experimentId: binding.experimentId,
-        callbackOrigin: binding.callbackOrigin,
+        callbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
       }).catch(() => null)
       runId = prepared?.runId || null
     }

@@ -163,19 +163,27 @@ async function main() {
     const patch = artifactPath && fs.existsSync(artifactPath) ? await fsp.readFile(artifactPath, 'utf8') : null
 
     let sessionExportPath: string | null = null
+    let sessionExportError: string | null = null
     if (traceId) {
       const exported = spawnSync('/usr/local/bin/opencode', ['export', traceId, '--pure'], {
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
       })
       if (exported.status === 0 && exported.stdout.trim()) {
-        const jsonStart = exported.stdout.indexOf('{')
-        if (jsonStart < 0) throw new Error('OpenCode Session 导出未返回 JSON')
-        const sessionJson = JSON.stringify(JSON.parse(exported.stdout.slice(jsonStart)), null, 2)
-        const outputDir = path.join(agentInsightHome, 'data', 'benchmark-smoke', runId)
-        await fsp.mkdir(outputDir, { recursive: true, mode: 0o700 })
-        sessionExportPath = path.join(outputDir, 'opencode-session.json')
-        await fsp.writeFile(sessionExportPath, sessionJson, { mode: 0o600 })
+        try {
+          const jsonStart = exported.stdout.indexOf('{')
+          if (jsonStart < 0) throw new Error('OpenCode Session 导出未返回 JSON')
+          const sessionJson = JSON.stringify(JSON.parse(exported.stdout.slice(jsonStart)), null, 2)
+          const outputDir = path.join(agentInsightHome, 'data', 'benchmark-smoke', runId)
+          await fsp.mkdir(outputDir, { recursive: true, mode: 0o700 })
+          sessionExportPath = path.join(outputDir, 'opencode-session.json')
+          await fsp.writeFile(sessionExportPath, sessionJson, { mode: 0o600 })
+        } catch (error) {
+          sessionExportError = error instanceof Error ? error.message : String(error)
+          console.error(`[benchmark-smoke] session export skipped: ${sessionExportError}`)
+        }
+      } else if (exported.status !== 0) {
+        sessionExportError = String(exported.stderr || `opencode export exited with ${exported.status}`).trim()
       }
     }
 
@@ -202,6 +210,7 @@ async function main() {
       artifactPath,
       patch,
       sessionExportPath,
+      sessionExportError,
       ingestedSession: session ? { id: session.id, taskId: session.taskId, endTime: session.endTime } : null,
       ingestedExecution: execution ? { id: execution.id, taskId: execution.taskId } : null,
       executorStateDir: path.join(executorBaseDir, 'benchmark-runs', runId),

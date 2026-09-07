@@ -58,6 +58,17 @@ function imageRepository(image) {
   return lastColon > lastSlash ? withoutDigest.slice(0, lastColon) : withoutDigest
 }
 
+function imageProxyPrefix() {
+  const configured = process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
+  const prefix = String(configured === undefined ? 'docker.1ms.run' : configured)
+    .trim()
+    .replace(/\/+$/, '')
+  if (prefix && !/^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i.test(prefix)) {
+    throw new EvaluatorProtocolError('SWE_IMAGE_CONFIGURATION_INVALID', 'SWE-bench 镜像代理前缀不合法', 500)
+  }
+  return prefix
+}
+
 class SweBenchImageResolver {
   constructor(processRunner = runProcess) {
     this.processRunner = processRunner
@@ -124,7 +135,12 @@ class SweBenchImageResolver {
     }
     const daemonArch = await this.dockerArchitecture(signal)
     const selected = this.imageFor(jobImage, instanceId, daemonArch)
-    const inspectArgs = ['image', 'inspect', selected.image, '--format', '{{json .RepoDigests}}']
+    const proxyPrefix = imageProxyPrefix()
+    const proxyImage = proxyPrefix ? `${proxyPrefix}/${selected.image}` : null
+    const inspectArgs = [
+      'image', 'inspect', selected.image,
+      '--format', '{{json .RepoDigests}}|{{.Id}}',
+    ]
     let inspected
     try {
       inspected = await this.processRunner('docker', inspectArgs, {
@@ -133,25 +149,51 @@ class SweBenchImageResolver {
         retryable: false,
       })
     } catch {
-      await this.processRunner('docker', ['pull', selected.image], {
-        signal,
-        errorCode: 'SWE_IMAGE_UNAVAILABLE',
-      })
+      if (proxyImage) {
+        try {
+          await this.processRunner('docker', ['pull', proxyImage], {
+            signal,
+            errorCode: 'SWE_IMAGE_PROXY_UNAVAILABLE',
+          })
+          await this.processRunner('docker', ['tag', proxyImage, selected.image], {
+            signal,
+            errorCode: 'SWE_IMAGE_TAG_FAILED',
+          })
+        } catch {
+          await this.processRunner('docker', ['pull', selected.image], {
+            signal,
+            errorCode: 'SWE_IMAGE_UNAVAILABLE',
+          })
+        }
+      } else {
+        await this.processRunner('docker', ['pull', selected.image], {
+          signal,
+          errorCode: 'SWE_IMAGE_UNAVAILABLE',
+        })
+      }
       inspected = await this.processRunner('docker', inspectArgs, {
         signal,
         errorCode: 'SWE_IMAGE_INSPECT_FAILED',
       })
     }
+    const separator = inspected.stdout.lastIndexOf('|')
+    const digestsJson = separator >= 0 ? inspected.stdout.slice(0, separator) : inspected.stdout
+    const localImageId = separator >= 0 ? inspected.stdout.slice(separator + 1).trim() : ''
     let digests
-    try { digests = JSON.parse(inspected.stdout.trim()) } catch {}
-    const repository = imageRepository(selected.image)
-    const pinnedImage = Array.isArray(digests)
-      ? digests.find((value) => String(value).startsWith(`${repository}@sha256:`))
+    try { digests = JSON.parse(digestsJson.trim()) } catch {}
+    const repositories = [imageRepository(selected.image)]
+    if (proxyImage) repositories.push(imageRepository(proxyImage))
+    const repositoryDigest = Array.isArray(digests)
+      ? digests.find((value) => repositories.some((repository) => (
+          String(value).startsWith(`${repository}@sha256:`)
+        )))
       : null
+    const pinnedImage = repositoryDigest
+      || (/^sha256:[0-9a-f]{64}$/i.test(localImageId) ? localImageId : null)
     if (!pinnedImage) {
       throw new EvaluatorProtocolError('SWE_IMAGE_DIGEST_MISSING', '无法固定 Case 镜像 digest', 500)
     }
-    const frozen = { ...selected, daemonArch, pinnedImage }
+    const frozen = { ...selected, daemonArch, pinnedImage, imageProxyPrefix: proxyPrefix || null }
     const temporary = `${frozenPath}.${process.pid}.tmp`
     await fs.writeFile(temporary, JSON.stringify(frozen, null, 2), { mode: 0o600 })
     await fs.rename(temporary, frozenPath)
@@ -220,6 +262,7 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
       const hostOS = process.env.EVALUATOR_HOST_OS || runtime.hostOS || os.platform()
       const hostArch = process.env.EVALUATOR_HOST_ARCH || runtime.hostArch || os.arch()
       const imageSource = String(process.env.SWE_BENCH_IMAGE_SOURCE || 'official').trim()
+      const proxyPrefix = imageProxyPrefix()
       const formalEligible = hostOS === 'linux' && arch === 'x86_64' && imageSource === 'official'
       return {
         ready: true,
@@ -232,6 +275,7 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
           python: python.stdout.trim() || this.python,
           dataDir: runtime.dataDir,
           imageSource,
+          imageProxyPrefix: proxyPrefix || null,
         },
       }
     } catch (error) {

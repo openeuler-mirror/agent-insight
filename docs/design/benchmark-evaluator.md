@@ -238,9 +238,11 @@ AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=http://127.0.0.1:8080
 AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<shared-secret>
 AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=
 AGENT_INSIGHT_PUBLIC_BASE_URL=http://host.docker.internal:3000
+# 可选；仅在平台与执行器同机、Evaluator 远端的开发拓扑中设置
+AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=http://127.0.0.1:3000
 ```
 
-`scripts/configure-evaluator-target.js` 从权限为 `0600` 的 Token 文件读取密钥，并以临时文件、`fsync`、`rename` 原子替换配置。每次 Benchmark 操作读取一份不可变快照；非法或半写入更新保留上一份有效快照。当前 Token 用于新任务下发，当前与旧 Token 都可通过回调鉴权，因此切换评测机和 Token 不需要重启 Agent Insight。已冻结旧目标的任务不会自动拿新 Token 请求旧地址。
+`scripts/configure-evaluator-target.js` 从权限为 `0600` 的 Token 文件读取密钥，并以临时文件、`fsync`、`rename` 原子替换配置。每次 Benchmark 操作读取一份不可变快照；非法或半写入更新保留上一份有效快照。当前 Token 用于新任务下发，当前与旧 Token 都可通过回调鉴权，因此切换评测机和 Token 不需要重启 Agent Insight。公开地址冻结到实验绑定并供 Evaluator 使用；可选执行器回调地址只冻结到新建执行 Outbox，未配置时回退公开地址。已冻结旧目标的任务不会自动拿新 Token 或新回调地址请求旧地址。
 
 评测服务侧：
 

@@ -21,6 +21,7 @@ test('configure command writes a 0600 runtime file atomically without echoing to
     const result = spawnSync(process.execPath, [
       configureScript,
       '--public-base-url', 'https://agent-insight.example.test',
+      '--executor-callback-base-url', 'http://127.0.0.1:3000',
       '--evaluator-base-url', 'https://evaluator.example.test',
       '--token-file', tokenFile,
       '--previous-token-file', previousTokenFile,
@@ -30,9 +31,23 @@ test('configure command writes a 0600 runtime file atomically without echoing to
     assert.doesNotMatch(`${result.stdout}${result.stderr}`, /new-shared-secret|old-shared-secret/)
     assert.equal(fs.statSync(configFile).mode & 0o777, 0o600)
     const content = fs.readFileSync(configFile, 'utf8')
+    assert.match(content, /AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL="http:\/\/127\.0\.0\.1:3000"/)
     assert.match(content, /AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN="new-shared-secret"/)
     assert.match(content, /AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS="old-shared-secret"/)
     assert.equal(fs.readdirSync(path.dirname(configFile)).filter((name) => name.includes('.tmp')).length, 0)
+
+    const reset = spawnSync(process.execPath, [
+      configureScript,
+      '--public-base-url', 'https://agent-insight.example.test',
+      '--evaluator-base-url', 'https://evaluator.example.test',
+      '--token-file', tokenFile,
+      '--config-file', configFile,
+    ], { encoding: 'utf8' })
+    assert.equal(reset.status, 0, reset.stderr)
+    assert.doesNotMatch(
+      fs.readFileSync(configFile, 'utf8'),
+      /AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL/,
+    )
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

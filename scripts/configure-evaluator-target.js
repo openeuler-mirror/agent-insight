@@ -10,6 +10,7 @@ function usage() {
     'Usage:',
     '  node scripts/configure-evaluator-target.js \\',
     '    --public-base-url URL --evaluator-base-url URL \\',
+    '    [--executor-callback-base-url URL] \\',
     '    [--token-file FILE] [--previous-token-file FILE] \\',
     '    [--allow-insecure-http true|false]',
     '',
@@ -25,6 +26,7 @@ function parseArgs(args) {
     const value = args[index + 1]
     if (!value || value.startsWith('--')) throw new Error(`${name} 缺少参数值`)
     if (name === '--public-base-url') options.publicBaseUrl = value
+    else if (name === '--executor-callback-base-url') options.executorCallbackBaseUrl = value
     else if (name === '--evaluator-base-url') options.evaluatorBaseUrl = value
     else if (name === '--token-file') options.tokenFile = value
     else if (name === '--previous-token-file') options.previousTokenFiles.push(value)
@@ -144,6 +146,9 @@ async function configure(args = process.argv.slice(2)) {
     return { help: true }
   }
   const publicBaseUrl = normalizeUrl(options.publicBaseUrl, 'Public Base URL')
+  const executorCallbackBaseUrl = options.executorCallbackBaseUrl
+    ? normalizeUrl(options.executorCallbackBaseUrl, 'Executor Callback Base URL')
+    : undefined
   const evaluatorBaseUrl = normalizeUrl(options.evaluatorBaseUrl, 'Evaluator Base URL')
   if (
     new URL(evaluatorBaseUrl).protocol === 'http:'
@@ -162,6 +167,9 @@ async function configure(args = process.argv.slice(2)) {
   const content = [
     '# Agent Insight Benchmark Evaluator runtime configuration.',
     `AGENT_INSIGHT_PUBLIC_BASE_URL=${JSON.stringify(publicBaseUrl)}`,
+    ...(executorCallbackBaseUrl
+      ? [`AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=${JSON.stringify(executorCallbackBaseUrl)}`]
+      : []),
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=${JSON.stringify(evaluatorBaseUrl)}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=${JSON.stringify(token)}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=${JSON.stringify(previousTokens.join(','))}`,

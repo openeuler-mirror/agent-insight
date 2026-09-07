@@ -7,6 +7,7 @@ import test from 'node:test'
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-benchmark-'))
 process.env.DATABASE_URL = `file:${path.join(testDir, 'benchmark.db')}`
+process.env.AGENT_INSIGHT_DATA_DIR = testDir
 
 const user = `benchmark-test-${Date.now()}-${process.pid}`
 const clientId = `benchmark-client-${Date.now()}-${process.pid}`
@@ -153,6 +154,8 @@ test.before(async () => {
 
 test.after(async () => {
   setDispatchFetch?.()
+  delete process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL
+  delete process.env.AGENT_INSIGHT_DATA_DIR
   await prisma?.$disconnect()
   fs.rmSync(testDir, { recursive: true, force: true })
 })
@@ -309,12 +312,14 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     }), { status: 202, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch)
 
+  process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL = 'http://127.0.0.1:3000'
   const runResponse = await runExperiment(
     new Request(`http://insight.test/api/experiments/${created.id}/run?user=${encodeURIComponent(user)}`, {
       method: 'POST',
     }),
     { params: Promise.resolve({ id: created.id }) },
   )
+  delete process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL
   assert.equal(runResponse.status, 202)
   const runResponseBody = await runResponse.json() as { runId: string }
   const acceptedRun = await waitForAcceptedRun(created.id)
@@ -329,13 +334,22 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
   assert.equal(calls[2].body.includes('hidden test'), false)
 
   const dispatched = JSON.parse(calls[2].body) as {
+    callbackBaseUrl: string
     task: { context: { runId: string }; task: { benchmarkPayload: Record<string, unknown> } }
   }
+  assert.equal(
+    dispatched.callbackBaseUrl,
+    `http://127.0.0.1:3000/api/benchmark/v1/runs/${encodeURIComponent(acceptedRun.id)}`,
+  )
   assert.equal(dispatched.task.context.runId, acceptedRun.id)
   assert.equal(dispatched.task.task.benchmarkPayload.instanceId, 'example__project-1')
   const outbox = await prisma.benchmarkDispatchOutbox.findUnique({ where: { runId: acceptedRun.id } })
   assert.equal(outbox?.status, 'accepted')
   assert.equal(outbox?.attemptCount, 3)
+  const binding = await prisma.benchmarkExperimentBinding.findUnique({
+    where: { experimentId: created.id },
+  })
+  assert.equal(binding?.callbackOrigin, 'http://insight.test')
 
   await prisma.$transaction([
     prisma.benchmarkDispatchOutbox.update({

@@ -16,9 +16,13 @@ const { SweBenchImageResolver } = require('../benchmarks/swe-bench/evaluator/ind
 }
 
 const image = 'swebench/sweb.eval.x86_64.pallets_1776_flask-5014:latest'
+const proxyImage = `docker.1ms.run/${image}`
 const pinnedImage = `swebench/sweb.eval.x86_64.pallets_1776_flask-5014@sha256:${'a'.repeat(64)}`
+const localImageId = `sha256:${'b'.repeat(64)}`
 
-function runnerWithImage(local: boolean) {
+process.env.SWE_BENCH_IMAGE_PROXY_PREFIX = 'docker.1ms.run'
+
+function runnerWithImage(local: boolean, proxyUnavailable = false) {
   const calls: Array<{ command: string; args: string[] }> = []
   let inspectCount = 0
   return {
@@ -26,11 +30,15 @@ function runnerWithImage(local: boolean) {
     runner: async (command: string, args: string[]) => {
       calls.push({ command, args })
       if (args[0] === 'info') return { stdout: 'x86_64\n', stderr: '' }
-      if (args[0] === 'pull') return { stdout: '', stderr: '' }
+      if (args[0] === 'pull') {
+        if (proxyUnavailable && args[1] === proxyImage) throw new Error('proxy unavailable')
+        return { stdout: '', stderr: '' }
+      }
+      if (args[0] === 'tag') return { stdout: '', stderr: '' }
       if (args[0] === 'image' && args[1] === 'inspect') {
         inspectCount += 1
         if (!local && inspectCount === 1) throw new Error('No such image')
-        return { stdout: JSON.stringify([pinnedImage]), stderr: '' }
+        return { stdout: `${JSON.stringify([pinnedImage])}|${localImageId}`, stderr: '' }
       }
       throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
     },
@@ -54,7 +62,31 @@ test('SWE-bench reuses a locally cached Case image without docker pull', async (
   }
 })
 
-test('SWE-bench pulls a Case image only when the local tag is missing', async () => {
+test('SWE-bench pins an offline-loaded Case image by immutable image ID when RepoDigests are absent', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-image-offline-'))
+  const process = runnerWithImage(true)
+  process.runner = async (command: string, args: string[]) => {
+    process.calls.push({ command, args })
+    if (args[0] === 'info') return { stdout: 'x86_64\n', stderr: '' }
+    if (args[0] === 'image' && args[1] === 'inspect') {
+      return { stdout: `[]|${localImageId}`, stderr: '' }
+    }
+    throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
+  }
+  try {
+    const result = await new SweBenchImageResolver(process.runner).resolve(
+      image,
+      'pallets__flask-5014',
+      workDir,
+    )
+    assert.equal(result.pinnedImage, localImageId)
+    assert.equal(process.calls.some((call) => call.args[0] === 'pull'), false)
+  } finally {
+    await fsp.rm(workDir, { recursive: true, force: true })
+  }
+})
+
+test('SWE-bench pulls a missing Case image through the configured proxy and restores the official tag', async () => {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-image-missing-'))
   const process = runnerWithImage(false)
   try {
@@ -64,8 +96,28 @@ test('SWE-bench pulls a Case image only when the local tag is missing', async ()
       workDir,
     )
     assert.equal(result.pinnedImage, pinnedImage)
-    assert.equal(process.calls.filter((call) => call.args[0] === 'pull').length, 1)
+    assert.deepEqual(process.calls.find((call) => call.args[0] === 'pull')?.args, ['pull', proxyImage])
+    assert.deepEqual(process.calls.find((call) => call.args[0] === 'tag')?.args, ['tag', proxyImage, image])
     assert.equal(process.calls.filter((call) => call.args[0] === 'image').length, 2)
+  } finally {
+    await fsp.rm(workDir, { recursive: true, force: true })
+  }
+})
+
+test('SWE-bench falls back to the official image when the configured proxy is unavailable', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-image-fallback-'))
+  const process = runnerWithImage(false, true)
+  try {
+    await new SweBenchImageResolver(process.runner).resolve(
+      image,
+      'pallets__flask-5014',
+      workDir,
+    )
+    assert.deepEqual(
+      process.calls.filter((call) => call.args[0] === 'pull').map((call) => call.args),
+      [['pull', proxyImage], ['pull', image]],
+    )
+    assert.equal(process.calls.some((call) => call.args[0] === 'tag'), false)
   } finally {
     await fsp.rm(workDir, { recursive: true, force: true })
   }

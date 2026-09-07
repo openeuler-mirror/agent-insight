@@ -218,6 +218,9 @@ AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<random-secret>
 # 已有变量；评测服务跨机器时必须是对方可访问的 Agent Insight 地址
 AGENT_INSIGHT_PUBLIC_BASE_URL=http://127.0.0.1:3000
 
+# 可选；仅在执行器需要使用不同本地入口时设置
+AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=http://127.0.0.1:3000
+
 # 仅限内网开发联调；默认 false
 AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=false
 ```
@@ -228,6 +231,7 @@ AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=false
 - URL 必须是绝对 `http/https`，拒绝用户名、密码、query 和 fragment；禁止重定向；
 - HTTP 只默认允许 loopback；跨机器部署应使用 HTTPS。内网临时联调若要 HTTP，必须显式设置 `AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=true`；
 - 首次实际下发时把解析出的 `targetKey + baseUrl` 冻结到 Evaluation，之后重发继续使用原地址；配置变化只影响尚未绑定目标的新评测；
+- 执行器任务默认使用 Public Base URL 回调；设置可选 Executor Callback Base URL 后只覆盖新建执行 Outbox，Evaluator 仍使用实验绑定中的公开地址；
 - 将来需要多个评测服务时增加 `RegisteredEvaluatorTargetResolver`，步骤 08、09 和 Adapter 不变。
 
 这比直接在业务代码读取一个 IP 更稳：当前仍然只有一个环境变量目标，但地址来源被隔离在 resolver 中，也避免用户输入 URL 带来的 SSRF。

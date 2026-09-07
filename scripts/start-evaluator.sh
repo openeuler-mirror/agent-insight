@@ -8,6 +8,7 @@ DATA_VOLUME=agent-insight-benchmark-evaluator-data
 BIND_ADDRESS=0.0.0.0
 PORT=8080
 TOKEN=
+CASE_IMAGE_PROXY_PREFIX=${SWE_BENCH_IMAGE_PROXY_PREFIX-docker.1ms.run}
 
 usage() {
   cat <<'EOF'
@@ -60,6 +61,10 @@ esac
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || fail '--port 必须是 1～65535 的整数'
 if ! printf '%s' "$BIND_ADDRESS" | LC_ALL=C grep -Eq '^[A-Za-z0-9.:-]+$'; then
   fail '--bind-address 包含不支持的字符'
+fi
+if [ -n "$CASE_IMAGE_PROXY_PREFIX" ] \
+  && ! printf '%s' "$CASE_IMAGE_PROXY_PREFIX" | LC_ALL=C grep -Eq '^[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)*$'; then
+  fail 'SWE_BENCH_IMAGE_PROXY_PREFIX 必须是无协议的镜像仓库前缀，设置为空可禁用'
 fi
 
 for command_name in git docker df; do
@@ -143,6 +148,7 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
   printf 'EVALUATOR_MAX_CONCURRENCY=1\n'
   printf 'EVALUATOR_PLATFORM_TOKEN=%s\n' "$TOKEN"
   printf 'SWE_BENCH_IMAGE_SOURCE=official\n'
+  printf 'SWE_BENCH_IMAGE_PROXY_PREFIX=%s\n' "$CASE_IMAGE_PROXY_PREFIX"
   printf 'SWE_BENCH_IMAGE_ARCH=auto\n'
   printf 'SWE_BENCH_ALLOW_NON_OFFICIAL=false\n'
   printf 'EVALUATOR_HOST_OS=%s\n' "$HOST_OS"

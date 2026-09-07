@@ -7,6 +7,7 @@ import { resolveAgentInsightDataPath } from '@/lib/env'
 
 const CONFIG_KEYS = new Set([
   'AGENT_INSIGHT_PUBLIC_BASE_URL',
+  'AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS',
@@ -17,6 +18,7 @@ export type EvaluatorRuntimeConfigSnapshot = Readonly<{
   source: 'file' | 'environment'
   revision: string
   publicBaseUrl?: string
+  executorCallbackBaseUrl?: string
   evaluatorBaseUrl?: string
   activeToken?: string
   previousTokens: readonly string[]
@@ -78,6 +80,10 @@ function buildSnapshot(
 ): EvaluatorRuntimeConfigSnapshot {
   const allowInsecureHttp = parseBoolean(values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP)
   const publicBaseUrl = normalizeUrl(values.AGENT_INSIGHT_PUBLIC_BASE_URL, 'AGENT_INSIGHT_PUBLIC_BASE_URL')
+  const executorCallbackBaseUrl = normalizeUrl(
+    values.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL,
+    'AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL',
+  )
   const evaluatorBaseUrl = normalizeUrl(
     values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL,
     'AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL',
@@ -103,6 +109,7 @@ function buildSnapshot(
   }
   const revisionInput = JSON.stringify({
     publicBaseUrl,
+    executorCallbackBaseUrl,
     evaluatorBaseUrl,
     activeToken,
     previousTokens,
@@ -113,6 +120,7 @@ function buildSnapshot(
     source,
     revision,
     ...(publicBaseUrl ? { publicBaseUrl } : {}),
+    ...(executorCallbackBaseUrl ? { executorCallbackBaseUrl } : {}),
     ...(evaluatorBaseUrl ? { evaluatorBaseUrl } : {}),
     ...(activeToken ? { activeToken } : {}),
     previousTokens,
