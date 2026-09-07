@@ -249,6 +249,8 @@ flowchart LR
 一键诊断只启动一次 `fault-diagnosis-agent`。同一个 Agent 先根据 Trace、静态检测和五模块规程生成 `.agent-insight/agent-debug-core.json`，再调用 Skill-local runner 生成 `.agent-insight/agent-debug-detectors.json`，随后由该 Agent 基于真实证据完成通用富化、语义查重和关联，并直接写出 `.agent-insight/agent-debug-final.json`。重复结果进入目标 core finding 的 `supplementalEvidence`，独立结果进入 `detectorFindings`；冻结 core 字段和专项 `facts`、`anchors`、`details` 由 `agentdebug_validate.py --core --detectors` 确定性校验。服务端只准备输入与 trace bundle、启动 Agent、标准化并持久化最终报告、转发流式事件。
 
 
+`.agent-insight/agent-debug-final.json` 是一键诊断的唯一报告真源。每次运行前 runner 会删除同一 workspace 中的旧 final 文件，Agent 校验新文件后只返回 `AGENT_DEBUG_REPORT_READY`，服务端不再解析或要求模型回显完整报告。AgentDebug 将事件流最长时间设为 45 分钟，并给通用 Agent 配置默认 10 分钟“无有效进展” watchdog；只有心跳而没有真实 session 事件时，watchdog 通过 AbortSignal 中止底层 `session.prompt`。重跑同一 Execution 时会重新生成 `AgentDebugReport.id`，并同时刷新 `ranAt` 与 `updatedAt`；`id` 用于区分当前 attempt，`ranAt` 表示该 attempt 的开始边界。
+
 AgentDebug 主诊断后端只向诊断 Agent 提供执行元数据、turn/node/artifact 数量和输入、静态、trace bundle 文件路径，不再把长 turn 摘要嵌入提示词。Skill 依次运行 `agentdebug_static.py` 全量拆分与静态检测、`agentdebug_inspect.py` 生成五模块候选信号并执行有界的 `tail/range/search/repeated-calls` 查询，再由 Agent 补充语义问题和 Phase 2；`agentdebug_validate.py --static` 校验最终报告未删除静态 step、issue 或 Phase 1 证据。超过 4000 字符的节点输入/输出由 trace bundle 外置为 artifact，查询脚本只返回完整 artifact 中的命中片段。
 
 ## 跨模块流程说明

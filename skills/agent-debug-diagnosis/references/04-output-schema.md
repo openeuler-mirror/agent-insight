@@ -1,6 +1,6 @@
 # 04 输出结构
 
-最终只能返回一个 JSON 对象，不能带 Markdown 代码块或额外说明。
+完整 JSON 只能写入 `.agent-insight/agent-debug-final.json`。该文件校验通过后，最终回答只能是 `AGENT_DEBUG_REPORT_READY`，不能回显 JSON、Markdown 代码块或额外说明。
 
 所有自然语言字段必须用中文；枚举值保持英文。原始命令、路径、英文报错可以作为证据片段保留。
 

@@ -191,11 +191,47 @@ test('fault diagnosis trace persistence uses one mode-specific skill label', () 
   assert.match(diagnosisRoute, /tagSkill: 'agent-debug-diagnosis'/);
 });
 
-test('agent-debug runner falls back to final report file', () => {
-  const runner = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'engine', 'agent-debug', 'runner.ts'), 'utf-8');
-  assert.match(runner, /readAgentDebugFinalReport\(workspaceDir\)/);
-  assert.match(runner, /AGENT_DEBUG_FINAL_REPORT_REL_PATH/);
-  assert.match(runner, /不要只回复摘要或诊断完成说明/);
+test('agent-debug runner uses the validated final report file as the only report source', () => {
+  const root = process.cwd();
+  const runner = fs.readFileSync(path.join(root, 'src', 'lib', 'engine', 'agent-debug', 'runner.ts'), 'utf-8');
+  const skill = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf-8');
+  const schema = fs.readFileSync(path.join(skillDir, 'references', '04-output-schema.md'), 'utf-8');
+
+  assert.match(runner, /fs\.rmSync\(path\.join\(workspaceDir, AGENT_DEBUG_FINAL_REPORT_REL_PATH\)/);
+  assert.match(runner, /const parsed = readAgentDebugFinalReport\(workspaceDir\)/);
+  assert.doesNotMatch(runner, /parseAgentDebugSkillOutput/);
+  assert.doesNotMatch(runner, /result\.output/);
+  assert.match(runner, /AGENT_DEBUG_REPORT_READY/);
+  assert.match(skill, /最终回答只能是 `AGENT_DEBUG_REPORT_READY`/);
+  assert.match(schema, /最终回答只能是 `AGENT_DEBUG_REPORT_READY`/);
+});
+
+test('agent-debug aborts provider prompts after prolonged heartbeat-only execution', () => {
+  const root = process.cwd();
+  const generalRunner = fs.readFileSync(path.join(root, 'src', 'lib', 'engine', 'general-agent', 'runner.ts'), 'utf-8');
+  const agentDebugRunner = fs.readFileSync(path.join(root, 'src', 'lib', 'engine', 'agent-debug', 'runner.ts'), 'utf-8');
+  const client = fs.readFileSync(
+    path.join(root, 'src', 'lib', 'engine', 'skill-generation', 'opencode-agent-cli', 'opencode-client.ts'),
+    'utf-8',
+  );
+
+  assert.match(generalRunner, /progressTimeoutMs\?: number/);
+  assert.match(generalRunner, /event\.type !== 'server\.connected' && event\.type !== 'server\.heartbeat'/);
+  assert.match(generalRunner, /progressController\.abort/);
+  assert.match(generalRunner, /signal: progressController\.signal/);
+  assert.match(client, /sendPrompt\(sessionId, payload, \{ signal \}\)/);
+  assert.match(agentDebugRunner, /AGENT_DEBUG_AGENT_PROGRESS_TIMEOUT_MS \|\| 10 \* 60_000/);
+  assert.match(agentDebugRunner, /AGENT_DEBUG_AGENT_TIMEOUT_MS \|\| 45 \* 60_000/);
+});
+
+test('agent-debug reruns reset the report attempt start time', () => {
+  const reportStore = fs.readFileSync(
+    path.join(process.cwd(), 'src', 'lib', 'engine', 'agent-debug', 'report-store.ts'),
+    'utf-8',
+  );
+
+  assert.match(reportStore, /"ranAt" = \?,\s*\n\s*"updatedAt" = \?/);
+  assert.match(reportStore, /SET "id" = \?,/);
 });
 
 test('agent-debug GET exposes completed reports from older generators', () => {

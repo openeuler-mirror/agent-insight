@@ -178,6 +178,8 @@ export interface RunGeneralAgentInput {
   handlers?: ChatHandlers;
   chatOptions?: ChatOptions;
   timeoutMs?: number;
+  /** 连续多久没有非心跳事件就中止底层 prompt；0 或未传表示不启用。 */
+  progressTimeoutMs?: number;
   /**
    * true: 这次调用起一个**独立** opencode 进程,跑完立刻杀 (per-task ephemeral)。
    *   避免跨任务 server 内存级软污染 (plugin 全局缓存 / provider runtime cache /
@@ -465,20 +467,69 @@ async function runGeneralAgentWithClient(
       }
     : defaultOnQuestion;
 
+  const progressTimeoutMs = Math.max(0, Number(input.progressTimeoutMs) || 0);
+  const progressController = progressTimeoutMs > 0 ? new AbortController() : null;
+  const externalSignal = input.chatOptions?.signal;
+  let progressTimer: NodeJS.Timeout | null = null;
+  let progressTimedOut = false;
+  const clearProgressWatchdog = () => {
+    if (!progressTimer) return;
+    clearTimeout(progressTimer);
+    progressTimer = null;
+  };
+  const resetProgressWatchdog = () => {
+    if (!progressController || progressController.signal.aborted) return;
+    clearProgressWatchdog();
+    progressTimer = setTimeout(() => {
+      progressTimedOut = true;
+      progressController.abort(new Error(`general agent made no progress for ${progressTimeoutMs}ms`));
+    }, progressTimeoutMs);
+  };
+  const abortFromExternalSignal = () => {
+    if (!progressController?.signal.aborted) progressController?.abort(externalSignal?.reason);
+  };
+  if (progressController && externalSignal) {
+    if (externalSignal.aborted) abortFromExternalSignal();
+    else externalSignal.addEventListener('abort', abortFromExternalSignal, { once: true });
+  }
+
   const mergedHandlers: ChatHandlers = {
     ...callerHandlers,
     onPermission: wrapPermission,
     onQuestion: wrapQuestion,
+    onRawEvent: event => {
+      if (event.type !== 'server.connected' && event.type !== 'server.heartbeat') {
+        resetProgressWatchdog();
+      }
+      callerHandlers.onRawEvent?.(event);
+    },
   };
 
   const chatOptions: ChatOptions = {
     streamTimeoutMs: input.timeoutMs ?? 5 * 60 * 1000,
     idleTimeoutMs: 60_000,
     ...(input.chatOptions || {}),
+    ...(progressController ? { signal: progressController.signal } : {}),
   };
 
   console.log('[general-agent] calling client.chat, sessionId:', sessionId);
-  const result = await client.chat(sessionId, payload, mergedHandlers, chatOptions);
+  resetProgressWatchdog();
+  const result = await (async () => {
+    try {
+      return await client.chat(sessionId, payload, mergedHandlers, chatOptions);
+    } finally {
+      clearProgressWatchdog();
+      externalSignal?.removeEventListener('abort', abortFromExternalSignal);
+    }
+  })();
+  if (progressTimedOut) {
+    throw new Error(`general agent made no progress for ${progressTimeoutMs}ms`);
+  }
+  if (externalSignal?.aborted) {
+    throw externalSignal.reason instanceof Error
+      ? externalSignal.reason
+      : new Error('general agent aborted');
+  }
   console.log('[general-agent] client.chat done:', {
     textLen: result.text.length,
     stats: result.stats,
