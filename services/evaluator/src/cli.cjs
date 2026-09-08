@@ -20,14 +20,16 @@ function registry() {
 
 async function fetchHealth(options = {}) {
   const port = Number(options.port || process.env.EVALUATOR_PORT || 8080)
+  const authMode = options.authMode || process.env.EVALUATOR_AUTH_MODE || 'token'
+  if (!['token', 'none'].includes(authMode)) throw new Error('EVALUATOR_AUTH_MODE must be token or none')
   const token = options.token || process.env.EVALUATOR_PLATFORM_TOKEN || ''
-  if (!token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
+  if (authMode === 'token' && !token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
   const deadline = Date.now() + Number(options.timeoutMs || 30_000)
   let lastError
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`, {
-        headers: { authorization: `Bearer ${token}` },
+        ...(authMode === 'token' ? { headers: { authorization: `Bearer ${token}` } } : {}),
         redirect: 'error',
         signal: AbortSignal.timeout(2_000),
       })

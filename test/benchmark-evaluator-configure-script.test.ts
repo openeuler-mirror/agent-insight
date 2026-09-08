@@ -74,3 +74,26 @@ test('configure command rejects broadly readable token files', () => {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('configure command supports explicit none auth mode without token input', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-configure-no-auth-'))
+  const configFile = path.join(root, 'benchmark-evaluator.env')
+  try {
+    const result = spawnSync(process.execPath, [
+      configureScript,
+      '--auth-mode', 'none',
+      '--public-base-url', 'http://host.docker.internal:39001',
+      '--executor-callback-base-url', 'http://localhost:3000',
+      '--evaluator-base-url', 'http://119.3.152.42:3001',
+      '--allow-insecure-http', 'true',
+      '--config-file', configFile,
+    ], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    const content = fs.readFileSync(configFile, 'utf8')
+    assert.match(content, /AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=none/)
+    assert.match(content, /AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=""/)
+    assert.match(result.stdout, /鉴权已关闭/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

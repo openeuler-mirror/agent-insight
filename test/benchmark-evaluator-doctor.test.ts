@@ -69,3 +69,29 @@ test('Controller health stays healthy when one platform-specific Evaluator is no
     fs.rmSync(dataDir, { recursive: true, force: true })
   }
 })
+
+test('Controller and Doctor allow health checks without a token in explicit none mode', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-doctor-none-'))
+  const evaluator = {
+    key: 'no-auth-evaluator',
+    async checkReady() { return { ready: true, formalEligible: true } },
+  }
+  const service = new BenchmarkEvaluatorService({
+    authMode: 'none',
+    dataDir,
+    registry: new EvaluatorRegistry([evaluator]),
+    controllerProbe: async () => ({ dockerArch: 'x86_64', dockerOSType: 'linux' }),
+  })
+  const listener = await listen(service.createServer())
+  try {
+    const response = await fetch(`http://127.0.0.1:${listener.port}/health`)
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).runtime.authMode, 'none')
+
+    const report = await doctor({ port: listener.port, authMode: 'none', timeoutMs: 1_000 })
+    assert.equal(report.ok, true)
+  } finally {
+    await listener.close()
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})

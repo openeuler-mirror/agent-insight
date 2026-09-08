@@ -13,6 +13,7 @@ import {
 } from '@/lib/benchmark/evaluator-target'
 
 function writeConfig(filePath: string, input: {
+  authMode?: string
   publicBaseUrl?: string
   executorCallbackBaseUrl?: string
   evaluatorBaseUrl?: string
@@ -27,6 +28,7 @@ function writeConfig(filePath: string, input: {
       ? [`AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=${input.executorCallbackBaseUrl}`]
       : []),
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=${input.evaluatorBaseUrl || 'https://evaluator.example.test'}`,
+    `AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=${input.authMode || 'token'}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=${input.token || 'active-token'}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=${input.previousTokens || ''}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=${input.allowInsecure || 'false'}`,
@@ -54,6 +56,7 @@ test('runtime config hot-loads an atomic file and keeps the previous valid snaps
   try {
     const fallback = provider.snapshot()
     assert.equal(fallback.source, 'environment')
+    assert.equal(fallback.authMode, 'token')
     assert.equal(fallback.activeToken, 'environment-token')
     assert.equal(fallback.executorCallbackBaseUrl, 'http://127.0.0.1:3000/local-prefix')
 
@@ -148,6 +151,31 @@ test('runtime authentication accepts the active and previous rotation tokens', (
     assert.throws(() => authenticateBenchmarkEvaluator(new Request('http://localhost', {
       headers: { authorization: 'Bearer rejected-token' },
     }), provider), /评测服务凭证无效/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('none auth mode requires only addresses and bypasses callback bearer authentication', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-no-auth-'))
+  const configPath = path.join(root, 'benchmark-evaluator.env')
+  try {
+    writeConfig(configPath, { authMode: 'none', token: '' })
+    const provider = new EvaluatorRuntimeConfigProvider({
+      configPath,
+      environment: { NODE_ENV: 'test' },
+    })
+    const snapshot = provider.snapshot()
+    assert.equal(snapshot.authMode, 'none')
+    assert.equal(snapshot.activeToken, undefined)
+    assert.deepEqual(snapshot.previousTokens, [])
+
+    const target = new EnvEvaluatorTargetResolver(provider).resolve('swe-bench')
+    assert.equal(target.token, undefined)
+    assert.doesNotThrow(() => authenticateBenchmarkEvaluator(
+      new Request('http://localhost'),
+      provider,
+    ))
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

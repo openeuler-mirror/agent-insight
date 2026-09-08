@@ -9,14 +9,18 @@ const CONFIG_KEYS = new Set([
   'AGENT_INSIGHT_PUBLIC_BASE_URL',
   'AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL',
+  'AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP',
 ])
 
+export type EvaluatorAuthMode = 'token' | 'none'
+
 export type EvaluatorRuntimeConfigSnapshot = Readonly<{
   source: 'file' | 'environment'
   revision: string
+  authMode: EvaluatorAuthMode
   publicBaseUrl?: string
   executorCallbackBaseUrl?: string
   evaluatorBaseUrl?: string
@@ -60,6 +64,14 @@ function parseBoolean(value: string | undefined): boolean {
   return normalized === 'true'
 }
 
+function parseAuthMode(value: string | undefined): EvaluatorAuthMode {
+  const normalized = value?.trim() || 'token'
+  if (normalized !== 'token' && normalized !== 'none') {
+    throw new Error('AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE 必须是 token 或 none')
+  }
+  return normalized
+}
+
 function normalizeToken(value: string | undefined, label: string): string | undefined {
   const token = value?.trim()
   if (!token) return undefined
@@ -78,6 +90,7 @@ function buildSnapshot(
   values: NodeJS.ProcessEnv | Record<string, string>,
   requireComplete: boolean,
 ): EvaluatorRuntimeConfigSnapshot {
+  const authMode = parseAuthMode(values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE)
   const allowInsecureHttp = parseBoolean(values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP)
   const publicBaseUrl = normalizeUrl(values.AGENT_INSIGHT_PUBLIC_BASE_URL, 'AGENT_INSIGHT_PUBLIC_BASE_URL')
   const executorCallbackBaseUrl = normalizeUrl(
@@ -88,18 +101,27 @@ function buildSnapshot(
     values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL,
     'AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL',
   )
-  const activeToken = normalizeToken(
+  const configuredToken = normalizeToken(
     values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN,
     'AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN',
   )
-  const previousTokens = Object.freeze([
+  const configuredPreviousTokens = [
     ...new Set(String(values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS || '')
       .split(',')
       .map((token) => normalizeToken(token, 'AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS'))
-      .filter((token): token is string => Boolean(token) && token !== activeToken)),
-  ])
-  if (requireComplete && (!publicBaseUrl || !evaluatorBaseUrl || !activeToken)) {
-    throw new Error('运行时配置文件必须同时提供 Public Base URL、Evaluator Base URL 和当前 Token')
+      .filter((token): token is string => Boolean(token) && token !== configuredToken)),
+  ]
+  const activeToken = authMode === 'token' ? configuredToken : undefined
+  const previousTokens = Object.freeze(authMode === 'token' ? configuredPreviousTokens : [])
+  if (
+    requireComplete
+    && (!publicBaseUrl || !evaluatorBaseUrl || (authMode === 'token' && !activeToken))
+  ) {
+    throw new Error(
+      authMode === 'token'
+        ? '运行时配置文件必须同时提供 Public Base URL、Evaluator Base URL 和当前 Token'
+        : '运行时配置文件必须同时提供 Public Base URL 和 Evaluator Base URL',
+    )
   }
   if (evaluatorBaseUrl) {
     const evaluatorUrl = new URL(evaluatorBaseUrl)
@@ -108,6 +130,7 @@ function buildSnapshot(
     }
   }
   const revisionInput = JSON.stringify({
+    authMode,
     publicBaseUrl,
     executorCallbackBaseUrl,
     evaluatorBaseUrl,
@@ -119,6 +142,7 @@ function buildSnapshot(
   return Object.freeze({
     source,
     revision,
+    authMode,
     ...(publicBaseUrl ? { publicBaseUrl } : {}),
     ...(executorCallbackBaseUrl ? { executorCallbackBaseUrl } : {}),
     ...(evaluatorBaseUrl ? { evaluatorBaseUrl } : {}),

@@ -52,6 +52,25 @@ node scripts/configure-evaluator-target.js \
 
 配置写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，下一次 Benchmark 操作自动热加载，不需要重启 `scripts/start.sh` 启动的 Agent Insight。评测服务通过 REST 回传结果，由 Agent Insight API 写入平台数据库和 Artifact Store；评测机不需要平台数据库凭证或独立业务数据库。
 
+默认 `token` 模式适合生产环境。若评测服务端口和 Agent Insight 回调入口已经由安全组或防火墙严格限制为两台机器互访，可显式关闭双向 Bearer 鉴权，双方必须同时使用 `none`：
+
+```bash
+# 评测机
+bash scripts/start-evaluator.sh \
+  --auth-mode none \
+  --bind-address 0.0.0.0 \
+  --port 3001
+
+# Agent Insight 主服务机器
+node scripts/configure-evaluator-target.js \
+  --auth-mode none \
+  --public-base-url https://agent-insight.example.com \
+  --evaluator-base-url http://evaluator-01.example.com:3001 \
+  --allow-insecure-http true
+```
+
+`none` 不再要求 Token 文件，也不会在任务下发、Artifact 下载、进度、证据或完成回调中发送或校验 Authorization。它不会自动配置网络边界；若 3001 或回调入口能被非目标机器访问，不应使用该模式。Doctor 的 `runtime.authMode` 会显示实际生效模式。
+
 开发阶段如果 Agent Insight 和执行器在同一台机器、Evaluator 在远端，并且远端只能通过隧道或公开地址回调，可使用：
 
 ```bash

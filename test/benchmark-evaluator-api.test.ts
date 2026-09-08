@@ -25,7 +25,14 @@ const {
 const { EvaluatorRegistry } = require('../services/evaluator/src/evaluator-registry.cjs') as {
   EvaluatorRegistry: new (evaluators: unknown[]) => unknown
 }
-const { PlatformClientError } = require('../services/evaluator/src/platform-client.cjs') as {
+const { AgentInsightPlatformClient, PlatformClientError } = require('../services/evaluator/src/platform-client.cjs') as {
+  AgentInsightPlatformClient: new (
+    token: string,
+    fetchImpl: typeof fetch,
+    authMode: string,
+  ) => {
+    progress(request: Record<string, unknown>, event: Record<string, unknown>): Promise<unknown>
+  }
   PlatformClientError: new (code: string, message: string, status: number, retryable: boolean) => Error
 }
 
@@ -100,6 +107,23 @@ function headers(token: string, request: ReturnType<typeof requestFor>) {
     'x-agent-insight-request-digest': request.requestDigest,
   }
 }
+
+test('none auth platform client omits bearer credentials from callbacks', async () => {
+  let authorization: string | null = 'not-called'
+  const client = new AgentInsightPlatformClient('', async (_input, init) => {
+    authorization = new Headers(init?.headers).get('authorization')
+    return new Response('{"accepted":true}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }, 'none')
+
+  await client.progress(
+    { callbackBaseUrl: 'http://agent-insight.test/api/benchmark/v1/evaluations/veval_no_auth' },
+    { stage: 'running_harness' },
+  )
+  assert.equal(authorization, null)
+})
 
 async function waitFor(predicate: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 5_000

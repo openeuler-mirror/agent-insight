@@ -2,7 +2,6 @@ import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src
 import { prisma } from '@/lib/storage/prisma'
 
 import {
-  benchmarkEvaluatorToken,
   defaultEvaluatorTargetResolver,
   type EvaluatorTargetResolver,
 } from './evaluator-target'
@@ -187,7 +186,7 @@ async function freezeTarget(evaluationId: string) {
 async function ensureHealthy(
   baseUrl: string,
   evaluatorKey: string,
-  token: string,
+  token: string | undefined,
   targetKey: string,
 ): Promise<void> {
   const cacheKey = `${targetKey}\n${baseUrl}\n${evaluatorKey}`
@@ -195,7 +194,7 @@ async function ensureHealthy(
   const response = await dispatchFetch(`${baseUrl}/health`, {
     method: 'GET',
     redirect: 'error',
-    headers: { authorization: `Bearer ${token}` },
+    ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}),
     signal: AbortSignal.timeout(5_000),
   })
   const body = await responseBody(response)
@@ -218,10 +217,8 @@ async function ensureHealthy(
 
 export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise<void> {
   let target
-  let token
   try {
     target = await freezeTarget(evaluationId)
-    token = target.token || benchmarkEvaluatorToken()
   } catch (error) {
     const protocolError = error instanceof BenchmarkProtocolError
       ? error
@@ -244,13 +241,13 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
   if (!outbox) return
   let postStarted = false
   try {
-    await ensureHealthy(target.baseUrl, target.evaluatorKey, token, target.targetKey)
+    await ensureHealthy(target.baseUrl, target.evaluatorKey, target.token, target.targetKey)
     postStarted = true
     const response = await dispatchFetch(`${target.baseUrl}/api/v1/evaluations`, {
       method: 'POST',
       redirect: 'error',
       headers: {
-        authorization: `Bearer ${token}`,
+        ...(target.token ? { authorization: `Bearer ${target.token}` } : {}),
         'content-type': 'application/json',
         'idempotency-key': evaluationId,
         'x-agent-insight-request-digest': outbox.requestDigest,

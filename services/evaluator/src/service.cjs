@@ -151,7 +151,8 @@ function errorResponse(res, error) {
   })
 }
 
-function authorized(headers, token) {
+function authorized(headers, token, authMode = 'token') {
+  if (authMode === 'none') return true
   const match = /^Bearer\s+(.+)$/i.exec(String(headers.authorization || '').trim())
   const actual = match?.[1] || ''
   const expectedHash = createHash('sha256').update(token).digest()
@@ -240,14 +241,18 @@ async function defaultControllerProbe(dataDir) {
 class BenchmarkEvaluatorService {
   constructor(options = {}) {
     this.dataDir = options.dataDir || process.env.EVALUATOR_DATA_DIR || '/data'
+    this.authMode = options.authMode || process.env.EVALUATOR_AUTH_MODE || 'token'
+    if (!['token', 'none'].includes(this.authMode)) {
+      throw new Error('EVALUATOR_AUTH_MODE must be token or none')
+    }
     this.token = options.token || process.env.EVALUATOR_PLATFORM_TOKEN || ''
-    if (!this.token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
+    if (this.authMode === 'token' && !this.token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
     this.maxConcurrency = Number(options.maxConcurrency || process.env.EVALUATOR_MAX_CONCURRENCY || 1)
     if (!Number.isInteger(this.maxConcurrency) || this.maxConcurrency !== 1) {
       throw new Error('EVALUATOR_MAX_CONCURRENCY currently must be 1')
     }
     this.journal = options.journal || new EvaluationJobJournal(this.dataDir)
-    this.platform = options.platformClient || new AgentInsightPlatformClient(this.token)
+    this.platform = options.platformClient || new AgentInsightPlatformClient(this.token, fetch, this.authMode)
     this.registry = options.registry || new EvaluatorRegistry(
       generatedEvaluatorDescriptors.map((descriptor) => new FileEvaluatorEntrypoint(descriptor)),
     )
@@ -280,6 +285,7 @@ class BenchmarkEvaluatorService {
       sourceRevision: process.env.EVALUATOR_SOURCE_REVISION || 'unknown',
       sourceDirty: String(process.env.EVALUATOR_SOURCE_DIRTY || 'false').toLowerCase() === 'true',
       controllerImageId: process.env.EVALUATOR_CONTROLLER_IMAGE_ID || 'unknown',
+      authMode: this.authMode,
     }
   }
 
@@ -539,7 +545,7 @@ class BenchmarkEvaluatorService {
 
   async handle(req, res) {
     try {
-      if (!authorized(req.headers, this.token)) {
+      if (!authorized(req.headers, this.token, this.authMode)) {
         throw evaluatorError('EVALUATOR_UNAUTHORIZED', '评测服务凭证无效', 401)
       }
       const url = new URL(req.url, 'http://evaluator.local')

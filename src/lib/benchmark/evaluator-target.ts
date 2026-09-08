@@ -62,11 +62,12 @@ export class EnvEvaluatorTargetResolver implements EvaluatorTargetResolver {
     if (url.protocol === 'http:' && !isLoopback(url.hostname) && !snapshot.allowInsecureHttp) {
       throw new BenchmarkProtocolError('EVALUATOR_INSECURE_HTTP_FORBIDDEN', '非本机评测服务必须使用 HTTPS', 500)
     }
-    if (!snapshot.activeToken) {
+    if (snapshot.authMode === 'token' && !snapshot.activeToken) {
       throw new BenchmarkProtocolError('EVALUATOR_TOKEN_NOT_CONFIGURED', '未配置 Benchmark 评测服务凭证', 503, true)
     }
     const targetRevision = createHash('sha256').update(JSON.stringify({
       baseUrl: url.toString().replace(/\/$/, ''),
+      authMode: snapshot.authMode,
       token: snapshot.activeToken,
       allowInsecureHttp: snapshot.allowInsecureHttp,
     })).digest('hex').slice(0, 24)
@@ -74,7 +75,7 @@ export class EnvEvaluatorTargetResolver implements EvaluatorTargetResolver {
       targetKey: `runtime:${targetRevision}:${evaluatorKey}`,
       baseUrl: url.toString().replace(/\/$/, ''),
       evaluatorKey,
-      token: snapshot.activeToken,
+      ...(snapshot.activeToken ? { token: snapshot.activeToken } : {}),
       configRevision: snapshot.revision,
     }
   }
@@ -100,6 +101,7 @@ export function authenticateBenchmarkEvaluator(
   } catch {
     throw new BenchmarkProtocolError('EVALUATOR_CONFIGURATION_INVALID', 'Benchmark 评测服务配置不合法', 500)
   }
+  if (snapshot.authMode === 'none') return
   const expectedTokens = [benchmarkEvaluatorToken(snapshot), ...snapshot.previousTokens]
   const authorization = req.headers.get('authorization') || ''
   const actual = authorization.startsWith('Bearer ') ? authorization.slice(7) : ''

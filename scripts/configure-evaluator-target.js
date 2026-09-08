@@ -11,15 +11,16 @@ function usage() {
     '  node scripts/configure-evaluator-target.js \\',
     '    --public-base-url URL --evaluator-base-url URL \\',
     '    [--executor-callback-base-url URL] \\',
+    '    [--auth-mode token|none] \\',
     '    [--token-file FILE] [--previous-token-file FILE] \\',
     '    [--allow-insecure-http true|false]',
     '',
-    '省略 --token-file 时，仅在交互式终端中无回显读取当前共享 Token。',
+    'token 模式省略 --token-file 时，仅在交互式终端中无回显读取当前共享 Token。',
   ].join('\n')
 }
 
 function parseArgs(args) {
-  const options = { previousTokenFiles: [], allowInsecureHttp: 'false' }
+  const options = { authMode: 'token', previousTokenFiles: [], allowInsecureHttp: 'false' }
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index]
     if (name === '--help' || name === '-h') return { help: true }
@@ -28,6 +29,7 @@ function parseArgs(args) {
     if (name === '--public-base-url') options.publicBaseUrl = value
     else if (name === '--executor-callback-base-url') options.executorCallbackBaseUrl = value
     else if (name === '--evaluator-base-url') options.evaluatorBaseUrl = value
+    else if (name === '--auth-mode') options.authMode = value
     else if (name === '--token-file') options.tokenFile = value
     else if (name === '--previous-token-file') options.previousTokenFiles.push(value)
     else if (name === '--allow-insecure-http') options.allowInsecureHttp = value
@@ -40,6 +42,12 @@ function parseArgs(args) {
   }
   if (!['true', 'false'].includes(options.allowInsecureHttp)) {
     throw new Error('--allow-insecure-http 必须是 true 或 false')
+  }
+  if (!['token', 'none'].includes(options.authMode)) {
+    throw new Error('--auth-mode 必须是 token 或 none')
+  }
+  if (options.authMode === 'none' && (options.tokenFile || options.previousTokenFiles.length)) {
+    throw new Error('none 模式不接受 --token-file 或 --previous-token-file')
   }
   return options
 }
@@ -157,12 +165,16 @@ async function configure(args = process.argv.slice(2)) {
   ) {
     throw new Error('非本机 Evaluator Base URL 必须使用 HTTPS，或显式允许受控内网 HTTP')
   }
-  const token = options.tokenFile
-    ? readTokenFile(options.tokenFile, '当前 Token 文件')
-    : await promptSecret('当前共享 Token（输入不回显）：')
-  const previousTokens = [...new Set(options.previousTokenFiles.map((filePath) => (
-    readTokenFile(filePath, '旧 Token 文件')
-  )).filter((previous) => previous !== token))]
+  const token = options.authMode === 'token'
+    ? options.tokenFile
+      ? readTokenFile(options.tokenFile, '当前 Token 文件')
+      : await promptSecret('当前共享 Token（输入不回显）：')
+    : ''
+  const previousTokens = options.authMode === 'token'
+    ? [...new Set(options.previousTokenFiles.map((filePath) => (
+        readTokenFile(filePath, '旧 Token 文件')
+      )).filter((previous) => previous !== token))]
+    : []
   const configPath = path.resolve(options.configFile || defaultConfigPath())
   const content = [
     '# Agent Insight Benchmark Evaluator runtime configuration.',
@@ -171,6 +183,7 @@ async function configure(args = process.argv.slice(2)) {
       ? [`AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=${JSON.stringify(executorCallbackBaseUrl)}`]
       : []),
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=${JSON.stringify(evaluatorBaseUrl)}`,
+    `AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=${options.authMode}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=${JSON.stringify(token)}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=${JSON.stringify(previousTokens.join(','))}`,
     `AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=${options.allowInsecureHttp}`,
@@ -178,6 +191,9 @@ async function configure(args = process.argv.slice(2)) {
   ].join('\n')
   atomicWrite(configPath, content)
   process.stdout.write(`Evaluator 运行时配置已原子更新：${configPath}\n`)
+  if (options.authMode === 'none') {
+    process.stdout.write('警告：Evaluator 双向鉴权已关闭，必须由安全组或防火墙限制服务互访。\n')
+  }
   process.stdout.write('Agent Insight 将在下一次相关请求中热加载，无需重启。\n')
   return { configPath, previousTokenCount: previousTokens.length }
 }

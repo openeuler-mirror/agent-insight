@@ -17,9 +17,16 @@ function sha256(bytes) {
 }
 
 class AgentInsightPlatformClient {
-  constructor(token, fetchImpl = fetch) {
+  constructor(token, fetchImpl = fetch, authMode = 'token') {
+    if (!['token', 'none'].includes(authMode)) throw new Error('EVALUATOR_AUTH_MODE must be token or none')
+    if (authMode === 'token' && !token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
     this.token = token
     this.fetch = fetchImpl
+    this.authMode = authMode
+  }
+
+  authorizationHeaders() {
+    return this.authMode === 'token' ? { authorization: `Bearer ${this.token}` } : {}
   }
 
   async responseJson(response, code) {
@@ -44,7 +51,7 @@ class AgentInsightPlatformClient {
         method: 'GET',
         redirect: 'error',
         headers: {
-          authorization: `Bearer ${this.token}`,
+          ...this.authorizationHeaders(),
           'x-agent-insight-evaluation-id': request.runId,
         },
         signal: AbortSignal.timeout(30_000),
@@ -67,7 +74,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${request.callbackBaseUrl}/progress`, {
       method: 'POST',
       redirect: 'error',
-      headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
+      headers: { ...this.authorizationHeaders(), 'content-type': 'application/json' },
       body: JSON.stringify(event),
       signal: AbortSignal.timeout(10_000),
     })
@@ -89,7 +96,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${request.callbackBaseUrl}/artifacts`, {
       method: 'POST',
       redirect: 'error',
-      headers: { authorization: `Bearer ${this.token}` },
+      headers: this.authorizationHeaders(),
       body: form,
       signal: AbortSignal.timeout(60_000),
     })
@@ -104,7 +111,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${request.callbackBaseUrl}/complete`, {
       method: 'POST',
       redirect: 'error',
-      headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
+      headers: { ...this.authorizationHeaders(), 'content-type': 'application/json' },
       body: JSON.stringify(completion),
       signal: AbortSignal.timeout(30_000),
     })

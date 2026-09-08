@@ -7,13 +7,14 @@ CONTAINER_NAME=agent-insight-benchmark-evaluator
 DATA_VOLUME=agent-insight-benchmark-evaluator-data
 BIND_ADDRESS=0.0.0.0
 PORT=8080
+AUTH_MODE=token
 TOKEN=
 CASE_IMAGE_PROXY_PREFIX=${SWE_BENCH_IMAGE_PROXY_PREFIX-docker.1ms.run}
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-evaluator.sh --token TOKEN [--bind-address ADDRESS] [--port PORT]
+  bash scripts/start-evaluator.sh [--auth-mode token --token TOKEN | --auth-mode none] [--bind-address ADDRESS] [--port PORT]
 
 Starts the Evaluator Controller from the current Git checkout on Linux or macOS.
 The command does not pull source code, register with Agent Insight, or preload Case images.
@@ -31,10 +32,11 @@ git_checkout() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --token|--bind-address|--port)
+    --token|--auth-mode|--bind-address|--port)
       [ "$#" -ge 2 ] || fail "$1 缺少参数值"
       case "$1" in
         --token) TOKEN=$2 ;;
+        --auth-mode) AUTH_MODE=$2 ;;
         --bind-address) BIND_ADDRESS=$2 ;;
         --port) PORT=$2 ;;
       esac
@@ -48,13 +50,21 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$TOKEN" ] || fail '必须提供 --token'
-case "$TOKEN" in
-  eval_once_*) fail '一期不接受一次性 eval_once_* Token，请使用双方一致的共享密钥' ;;
+case "$AUTH_MODE" in
+  token)
+    [ -n "$TOKEN" ] || fail 'token 模式必须提供 --token'
+    case "$TOKEN" in
+      eval_once_*) fail '一期不接受一次性 eval_once_* Token，请使用双方一致的共享密钥' ;;
+    esac
+    if printf '%s' "$TOKEN" | LC_ALL=C grep -q '[[:space:],]'; then
+      fail 'Token 必须是不含空白或逗号的单行值'
+    fi
+    ;;
+  none)
+    [ -z "$TOKEN" ] || fail 'none 模式不接受 --token'
+    ;;
+  *) fail '--auth-mode 必须是 token 或 none' ;;
 esac
-if printf '%s' "$TOKEN" | LC_ALL=C grep -q '[[:space:],]'; then
-  fail 'Token 必须是不含空白或逗号的单行值'
-fi
 case "$PORT" in
   ''|*[!0-9]*) fail '--port 必须是 1～65535 的整数' ;;
 esac
@@ -146,6 +156,7 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
   printf 'EVALUATOR_PORT=8080\n'
   printf 'EVALUATOR_DATA_DIR=/data\n'
   printf 'EVALUATOR_MAX_CONCURRENCY=1\n'
+  printf 'EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
   printf 'EVALUATOR_PLATFORM_TOKEN=%s\n' "$TOKEN"
   printf 'SWE_BENCH_IMAGE_SOURCE=official\n'
   printf 'SWE_BENCH_IMAGE_PROXY_PREFIX=%s\n' "$CASE_IMAGE_PROXY_PREFIX"
@@ -203,11 +214,15 @@ printf '\nEvaluator Controller 已就绪。\n'
 printf 'Source revision: %s\n' "$SOURCE_REVISION"
 printf 'Source dirty: %s\n' "$SOURCE_DIRTY"
 printf 'Controller image ID: %s\n' "$IMAGE_ID"
+printf 'Auth mode: %s\n' "$AUTH_MODE"
 printf 'Listen: %s:%s\n' "$BIND_ADDRESS" "$PORT"
 printf 'Data volume: %s\n' "$DATA_VOLUME"
-printf 'Agent Insight 侧配置示例（Token 请使用同一共享密钥，不在此回显）：\n'
+printf 'Agent Insight 侧配置示例：\n'
 printf '  AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=https://<evaluator-host>:%s\n' "$PORT"
-printf '  AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<same-shared-secret>\n'
+printf '  AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
+if [ "$AUTH_MODE" = token ]; then
+  printf '  AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<same-shared-secret>\n'
+fi
 printf '日志：docker logs -f %s\n' "$CONTAINER_NAME"
 printf '重启：docker restart %s\n' "$CONTAINER_NAME"
 printf 'Smoke：bash scripts/evaluator-doctor.sh --smoke swe-bench\n'
