@@ -20,7 +20,7 @@ export interface EvaluatorLookup {
   requiresDatasetInput: (evaluatorId: string) => boolean;
 }
 
-export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLookup {
+export function useEvaluatorLookup(user: string | null | undefined, frozen?: Array<{id:string;name:string;version:number;content:{type:string}}>): EvaluatorLookup {
   const [customCards, setCustomCards] = useState<EvaluatorCard[]>([]);
 
   useEffect(() => {
@@ -40,15 +40,18 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
     const byId = new Map<string, EvaluatorCard>();
     for (const card of [...presetEvaluators, ...legacyPresetEvaluators]) byId.set(card.id, card);
     for (const card of customCards) byId.set(card.id, card);
+    const versions = new Map((frozen || []).map(e => [e.id, e]));
     return {
-      nameOf: (id: string) => byId.get(id)?.name || id,
+      nameOf: (id: string) => versions.has(id) ? `${versions.get(id)!.name} · v${versions.get(id)!.version}` : byId.get(id)?.name || id,
       tagsOf: (id: string) => {
+        const version = versions.get(id);
+        if (version) return [version.content.type === 'rules' ? '业务规则' : 'LLM', `v${version.version}`];
         const card = byId.get(id);
         return card ? deriveEvaluatorTags(card) : [];
       },
       categoryOf: (id: string) => {
         const card = byId.get(id);
-        return card ? getEvaluatorMeta(card).category : 'res';
+        return versions.has(id) ? versions.get(id)!.content.type === 'rules' ? 'traj' : 'res' : card ? getEvaluatorMeta(card).category : 'res';
       },
       requiresReference: (id: string) => {
         const card = byId.get(id);
@@ -59,5 +62,5 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
         return card ? getEvaluatorMeta(card).requires.includes('dataset_input') : false;
       },
     };
-  }, [customCards]);
+  }, [customCards, frozen]);
 }

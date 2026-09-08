@@ -1,0 +1,124 @@
+{
+  "verifiedAt": "2026-09-08T03:28:10.103Z",
+  "method": "Actual HTTP requests to the running Next standalone service",
+  "baseUrl": "http://127.0.0.1:3019/api/evaluation-harness",
+  "experimentId": "cmts3hfik0001bbo017mv2jg1",
+  "account": "harness-ui@example.test",
+  "readStatus": 200,
+  "experimentStatus": "done",
+  "dimension": "dataset",
+  "groups": [
+    {
+      "key": "A",
+      "label": "评测集对比演示 v1",
+      "datasetId": "cmts3b3dy000210gp5wv45mkx",
+      "datasetVersion": 1,
+      "caseCount": 3,
+      "score": 100,
+      "targetId": "cmtpat103000m1fpoe5xndoc6",
+      "evaluatorIds": [
+        "cmtpat10q000u1fpou0xfk3kq"
+      ]
+    },
+    {
+      "key": "B",
+      "label": "评测集对比演示 v2",
+      "datasetId": "cmts3b3el000410gpbqtiphdl",
+      "datasetVersion": 2,
+      "caseCount": 4,
+      "score": 50,
+      "targetId": "cmtpat103000m1fpoe5xndoc6",
+      "evaluatorIds": [
+        "cmtpat10q000u1fpou0xfk3kq"
+      ]
+    }
+  ],
+  "sharedConditions": {
+    "identicalTarget": true,
+    "identicalEvaluatorIds": true,
+    "runtime": {
+      "threshold": 90,
+      "concurrency": 2,
+      "timeoutSeconds": 60,
+      "retries": 1,
+      "traceSource": "generate"
+    },
+    "groupRuntimeOverrides": false
+  },
+  "comparison": {
+    "comparableCount": 1,
+    "changedDefinitionCount": 1,
+    "unmatchedCount": 3,
+    "delta": 0,
+    "pairs": [
+      {
+        "caseId": "same",
+        "matchStatus": "matched",
+        "label": "判定一致",
+        "comparable": true,
+        "delta": 0,
+        "aVerdict": "pass",
+        "bVerdict": "pass"
+      },
+      {
+        "caseId": "changed",
+        "matchStatus": "changed",
+        "label": "输入或规则已变化",
+        "comparable": false,
+        "delta": null,
+        "aVerdict": "pass",
+        "bVerdict": "fail"
+      },
+      {
+        "caseId": "removed",
+        "matchStatus": "a-only",
+        "label": "仅 A 组",
+        "comparable": false,
+        "delta": null,
+        "aVerdict": "pass",
+        "bVerdict": null
+      },
+      {
+        "caseId": "added",
+        "matchStatus": "b-only",
+        "label": "仅 B 组",
+        "comparable": false,
+        "delta": null,
+        "aVerdict": null,
+        "bVerdict": "fail"
+      },
+      {
+        "caseId": "added-low",
+        "matchStatus": "b-only",
+        "label": "仅 B 组",
+        "comparable": false,
+        "delta": null,
+        "aVerdict": null,
+        "bVerdict": "pass"
+      }
+    ]
+  },
+  "apiChecks": [
+    {
+      "name": "Reject non-dataset variable fields",
+      "status": 400,
+      "error": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"comparison\",\n      \"modelB\"\n    ],\n    \"message\": \"只允许改变本次选择的对比模块，其他配置必须共享\"\n  }\n]"
+    },
+    {
+      "name": "Reject identical dataset version",
+      "status": 400,
+      "error": "A/B 组请选择不同的评测集或版本"
+    },
+    {
+      "name": "Reject empty B cohort",
+      "status": 400,
+      "error": "[\n  {\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"type\": \"array\",\n    \"inclusive\": true,\n    \"exact\": false,\n    \"message\": \"Array must contain at least 1 element(s)\",\n    \"path\": [\n      \"comparison\",\n      \"caseBIds\"\n    ]\n  }\n]"
+    },
+    {
+      "name": "Reject anonymous read",
+      "status": 401,
+      "error": "请登录并提供有效 API Key"
+    }
+  ],
+  "allAssertionsPassed": true
+}

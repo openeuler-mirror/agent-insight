@@ -48,9 +48,11 @@ export async function PATCH(
     // 权限 + 归属：结果行必须属于本人的这个实验
     const row = await prisma.experimentEvalResult.findFirst({
       where: { id: resultId, experimentId: id, case: { experiment: { user: username } } },
-      select: { id: true, status: true, score: true },
+      select: { id: true, status: true, score: true, case: {select:{experiment:{select:{scope:true}}}} },
     });
     if (!row) return NextResponse.json({ error: 'result not found' }, { status: 404 });
+
+    if(row.case.experiment.scope==='evaluation-harness') return NextResponse.json({error:'版本化实验请修订 Case 或评估器后重新运行，机器验收记录保留'}, {status:409});
 
     // 只允许修正已完成的评估行。失败/待执行行没有可对照的机器判断，
     // 放开会让 failed 行凭人工分进了均分分母，口径变糊——先重评拿到结果再修正。

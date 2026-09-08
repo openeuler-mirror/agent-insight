@@ -86,3 +86,5 @@
 2. 默认在子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
 3. issue 或维护者明确要求单文档时，改用 `issue-<number>-<slug>.md`，不再创建三阶段目录。
 4. **回到本清单追加一行**,填齐上表各列。
+
+- [Agent 测评闭环第一版](evaluation-harness-v1/phase1-需求分析.md)：版本化多轮 Case、规则/LLM 评估、真实执行与 Trace、静态分析及回归闭环（开发中）。

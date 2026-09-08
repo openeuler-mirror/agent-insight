@@ -1,0 +1,96 @@
+.root {
+  container-type: inline-size;
+  min-width: 0;
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.root button, .root input, .root select, .root textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.root summary { cursor: pointer; }
+.root pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 8px);
+  background: var(--card-bg);
+  padding: 16px;
+  min-width: 0;
+}
+
+.toolbar, .actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.toolbar { justify-content: space-between; }
+.actions > button, .actions > a { flex-shrink: 0; }
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 16px;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 180px);
+  gap: 8px;
+}
+
+.caseSummary { padding: 14px 16px; list-style: none; }
+.caseSummary::-webkit-details-marker { display: none; }
+.caseSummary::after { content: '展开逐轮证据 ↓'; display: block; margin-top: 6px; color: var(--foreground-muted); font-size: 12px; }
+details[open] > .caseSummary::after { content: '收起逐轮证据 ↑'; }
+.caseBody { border-top: 1px solid var(--border); padding: 16px; }
+.caseStatus { border-radius: 4px; padding: 2px 8px; font-size: 12px; white-space: nowrap; }
+.pass { color: var(--success); background: var(--success-subtle); }
+.fail { color: var(--error); background: var(--error-subtle); }
+.unknown { color: var(--foreground-muted); background: var(--background-secondary); }
+
+@container (max-width: 500px) {
+  .filters { grid-template-columns: minmax(0, 1fr); }
+  .root :global(.md\:grid-cols-2), .root :global(.md\:grid-cols-3), .root :global(.md\:grid-cols-4) { grid-template-columns: minmax(0, 1fr); }
+  .root label > :global(.flex) { flex-wrap: wrap; }
+}
+
+@container (max-width: 260px) {
+  .panel { padding: 10px; }
+  .metrics { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .actions { width: 100%; }
+  .actions > button, .actions > a { width: 100%; }
+  .caseSummary, .caseBody { padding: 10px; }
+}
+
+.root .primary:hover {
+  background: var(--primary-hover, var(--primary));
+  color: var(--primary-foreground);
+}
+
+.assetPicker { display: grid; grid-template-columns: minmax(0, 1fr) minmax(96px, 160px); gap: 12px; min-width: 0; }
+.targetPicker { display: flex; align-items: flex-end; gap: 8px; }
+.targetPicker > .assetPicker { flex: 1; }
+.targetPicker > button { flex-shrink: 0; white-space: nowrap; }
+@container (max-width: 500px) {
+  .targetPicker { flex-wrap: wrap; }
+  .targetPicker > .assetPicker { flex-basis: 100%; }
+}
+
+@container (max-width: 260px) {
+  .assetPicker { grid-template-columns: minmax(0, 1fr); }
+}
+
+.createFlow { font-size: 12.5px; }
+.createFlow .panel { border-color: var(--card-border); border-radius: 12px; padding: 13px 15px; }
+.createFlow .panel label { display: block; font-size: 10.5px; font-weight: 700; color: var(--foreground-muted); letter-spacing: .04em; }
+.createFlow .panel input:not([type=checkbox]), .createFlow .panel select { height: 34px; margin-top: 7px; padding: 0 10px; font-size: 13px; font-weight: 400; letter-spacing: normal; border-radius: 8px; border-color: var(--input-border); background: var(--input-bg); color: var(--foreground); }
+.createFlow button { font-size: 12px; }
+.createFlow h2 { font-size: 16px; }
+.createFlow .steps { overflow-x: auto; }
+.createFlow .steps > div { min-width: 590px; }
+.fieldLabel { margin-bottom: 7px; }

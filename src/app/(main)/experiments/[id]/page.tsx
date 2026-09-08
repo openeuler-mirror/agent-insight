@@ -4,6 +4,7 @@
 // → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
+import EvaluationWorkspace from '@/components/evaluation-harness/Workspace';
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
@@ -17,6 +18,7 @@ import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
 
 interface ExperimentDetail {
+  configSnapshot?: { comparison?: {dimension:string}; kind?: string; evaluators?: Array<{id:string;name:string;version:number;content:{type:string}}> };
   id: string;
   name: string;
   type: string;
@@ -29,6 +31,7 @@ interface ExperimentDetail {
   createdAt: string;
   cases: Array<{
     id: string;
+    groupKey?: string | null;
     executionId: string | null;
     taskId: string | null;
     input: string;
@@ -65,6 +68,7 @@ const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
   draft: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
+  cancelled: { label: '已终止', bg: 'var(--background-secondary)', fg: 'var(--foreground-muted)' },
   failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
 };
 
@@ -117,9 +121,10 @@ export function ExperimentDetail({
   onBack?: () => void;
   onOpenCase?: (caseId: string) => void;
 }) {
-  const { user } = useAuth();
-  const lookup = useEvaluatorLookup(user);
+  const { user, apiKey } = useAuth();
+
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
+  const lookup = useEvaluatorLookup(user, detail?.configSnapshot?.evaluators);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryingCaseId, setRetryingCaseId] = useState('');
@@ -155,6 +160,7 @@ export function ExperimentDetail({
     try {
       const res = await apiFetch(
         `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&casePage=${casePage}&casePageSize=${casePageSize}`,
+        { headers: { 'x-witty-api-key': apiKey || '' } },
       );
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
@@ -169,7 +175,7 @@ export function ExperimentDetail({
     } finally {
       if (!silent && sequence === loadSequence.current) setLoading(false);
     }
-  }, [user, id, casePage, casePageSize]);
+  }, [user, apiKey, id, casePage, casePageSize]);
 
   useEffect(() => () => { loadSequence.current += 1; }, []);
 
@@ -243,7 +249,7 @@ export function ExperimentDetail({
   // caseRows = 当前页 case（服务端已分页）+ 逐 case 得分（用本页结果算）
   // 对比模式（type='llm'）不走 caseRows——ComparisonDetail 自带 pairing 数据；guard 避免 undefined.map()
   const caseRows = useMemo(() => {
-    if (!detail || detail.type === 'llm' || !detail.cases || !detail.results) return [];
+    if (!detail || (detail.configSnapshot?.kind !== 'evaluation-harness-v1' && ['llm','agent','skill','evaluator'].includes(detail.type)) || !detail.cases || !detail.results) return [];
     return detail.cases.map((c) => ({
       ...c,
       scores: caseScore(detail.results.filter((r) => r.caseId === c.id), lookup.categoryOf),
@@ -270,6 +276,7 @@ export function ExperimentDetail({
     return () => window.clearTimeout(timer);
   }, [casePage, totalPages]);
 
+
   return (
     <>
       {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
@@ -286,7 +293,7 @@ export function ExperimentDetail({
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>{error}</div>
         ) : !detail ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>实验不存在</div>
-        ) : detail.type === 'llm' ? (
+        ) : (detail.configSnapshot?.kind !== 'evaluation-harness-v1' && ['llm','agent','skill','evaluator'].includes(detail.type)) ? (
           <>
             {error && (
               <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
@@ -330,6 +337,7 @@ export function ExperimentDetail({
               </div>
             )}
 
+            {detail.configSnapshot?.kind === 'evaluation-harness-v1' && <EvaluationWorkspace key={id} experimentId={id} detailSupplement />}
             {/* 顶部状态条 */}
             <div style={{
               ...CARD, padding: 16, marginBottom: 14,
@@ -372,7 +380,7 @@ export function ExperimentDetail({
             )}
 
             {/* 整体表现卡（整行） */}
-            <div style={{ ...CARD, padding: '18px 20px', marginBottom: 14 }}>
+            {!detail.configSnapshot?.comparison && <div style={{ ...CARD, padding: '18px 20px', marginBottom: 14 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground-secondary)', marginBottom: 8 }}>
                 整体表现 · {detail.caseTotal} 个 case
               </div>
@@ -382,10 +390,10 @@ export function ExperimentDetail({
                 </span>
                 <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>综合均分（仅计入评估成功且有分的结果）</span>
               </div>
-            </div>
+            </div>}
 
             {/* 评估器分解 */}
-            {breakdown.length > 0 && (
+            {!detail.configSnapshot?.comparison && breakdown.length > 0 && (
               <div style={{ ...CARD, marginBottom: 14 }}>
                 <div style={{
                   padding: '11px 16px', borderBottom: '1px solid var(--border)',
@@ -448,19 +456,21 @@ export function ExperimentDetail({
                   <span style={{ fontSize: 11.5, color: 'var(--success, var(--accent))' }}>{notice}</span>
                 )}
                 <span style={{ flex: 1 }} />
-                <button
+                {detail.configSnapshot?.kind !== 'evaluation-harness-v1' && (<button
+
                   onClick={() => { setNotice(''); setAddCasesOpen(true); }}
                   style={{
                     ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)', fontWeight: 600,
                   }}
                 >
                   + 新增 Case
-                </button>
+                </button>)}
               </div>
               <div style={{ maxHeight: 'min(42vh, 420px)', overflow: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                   <thead>
                     <tr>
+                      {detail.configSnapshot?.comparison && <th style={STICKY_TH}>分组</th>}
                       <th style={STICKY_TH}>输入</th>
                       <th style={STICKY_TH}>预期输出</th>
                       <th style={STICKY_TH}>实际输出</th>
@@ -473,6 +483,7 @@ export function ExperimentDetail({
                   <tbody>
                     {pagedRows.map((c) => (
                       <tr key={c.id}>
+                        {detail.configSnapshot?.comparison && <td style={TD}>{c.groupKey?c.groupKey+' 组':'A/B 共用'}</td>}
                         <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>
                         <td style={{ ...TD, maxWidth: 220 }}>
                           {c.referenceOutput
@@ -526,7 +537,7 @@ export function ExperimentDetail({
                                 详情
                               </Link>
                             )}
-                            {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
+                            {detail.configSnapshot?.kind !== 'evaluation-harness-v1' && (c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
                                 disabled={!!retryingCaseId}

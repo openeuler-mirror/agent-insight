@@ -1,0 +1,22 @@
+{
+  "date": "2026-09-08",
+  "account": "harness-ui@example.test",
+  "service": "http://127.0.0.1:3019",
+  "protected": "可靠性故障注入评测集（内置）",
+  "ordinaryAndVersionedDeleteVisible": true,
+  "httpDelete": 200,
+  "allVersionsRemovedFromCatalogue": true,
+  "historicalManifestUnchanged": true,
+  "newRunUsingDeletedDatasetRejected": true,
+  "focusedBackendTests": "52/52",
+  "focusedWizardTests": "12/12",
+  "build": "exit 0",
+  "fullSuite": {
+    "tests": 2307,
+    "pass": 2251,
+    "fail": 47,
+    "skip": 9,
+    "failureNamesUnchangedFromPreviousRun": true
+  },
+  "browserLimitation": "原生confirm导致浏览器自动化CDP超时；删除通过实际HTTP接口验证，并在新页面确认目录变化，未声称完成浏览器确认与恢复闭环。"
+}

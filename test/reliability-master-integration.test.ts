@@ -20,16 +20,16 @@ test('experiment schema keeps comparison groups and generated trace attempts', (
 })
 
 test('experiment UI and run route keep comparison and generated trace flows separate', () => {
-  const page = read('src/app/(main)/experiments/new/page.tsx')
+  const page = read('src/components/experiments/ExperimentWizard.tsx')
   const runRoute = read('src/app/api/experiments/[id]/run/route.ts')
 
-  assert.match(page, /useState<'single' \| 'llm'>\('single'\)/)
+  assert.match(page, /useState<ExperimentChoice>\('single'\)/)
   assert.match(page, /useState<'existing' \| 'generate'>/)
   assert.match(page, /skillPreset === 'trigger' \|\| skillPreset === 'skill-ab' \? 'generate' : 'existing'/)
   assert.match(page, /expType === 'single' && traceMode === 'generate'/)
   assert.match(runRoute, /startComparisonRun/)
   assert.match(runRoute, /generateExperimentTraces/)
-  const comparisonDispatch = runRoute.indexOf("currentExperiment.type === 'llm'")
+  const comparisonDispatch = runRoute.indexOf("['llm','agent','skill','evaluator'].includes(currentExperiment.type)")
   const generatedTraceDispatch = runRoute.indexOf('const wantGenerate')
   assert.notEqual(comparisonDispatch, -1, 'comparison dispatch guard must exist')
   assert.notEqual(generatedTraceDispatch, -1, 'generated-trace dispatch must exist')

@@ -1,0 +1,124 @@
+{
+  "verifiedAt": "2026-09-08T06:29:20.988Z",
+  "method": "Actual HTTP GET from the running Next standalone service; API key read in memory and excluded from artifacts",
+  "endpoint": "http://127.0.0.1:3019/api/evaluation-harness",
+  "experimentId": "cmtsafe2m0001yu2es2kl3r2t",
+  "account": "harness-ui@example.test",
+  "httpStatus": 200,
+  "experimentStatus": "done",
+  "dimension": "evaluator",
+  "agentVersion": 1,
+  "datasetVersion": 5,
+  "caseCount": 3,
+  "sharedTraceCount": 3,
+  "storedScoringCount": 6,
+  "groupDefinitions": [
+    {
+      "key": "A",
+      "evaluatorIds": [
+        "cmtpat10q000u1fpou0xfk3kq"
+      ],
+      "evaluatorNames": [
+        "逐轮业务规则"
+      ],
+      "score": 66.66666666666667
+    },
+    {
+      "key": "B",
+      "evaluatorIds": [
+        "cmtr8ti840003i1wccidz6ydn"
+      ],
+      "evaluatorNames": [
+        "Skill 路由正确性"
+      ],
+      "score": 100
+    }
+  ],
+  "sharedConditions": {
+    "sameTarget": true,
+    "sameDataset": true,
+    "sameCaseIds": true,
+    "sameCaseRowAndTracePerPair": true
+  },
+  "pairs": [
+    {
+      "caseId": "loan-low",
+      "caseName": "低风险正常审批",
+      "sharedCaseRowId": "cmtsafe2q0003yu2ebec5ly8s",
+      "sharedExecutionId": "00ee2bac-18a3-4c49-a387-17901a009041",
+      "aVerdict": "pass",
+      "bVerdict": "pass",
+      "results": [
+        {
+          "resultId": "cmtsafe7f000dyu2ef6a5qu6a",
+          "evaluatorId": "cmtpat10q000u1fpou0xfk3kq",
+          "groupKey": "A",
+          "status": "done",
+          "score": 100,
+          "verdict": "pass"
+        },
+        {
+          "resultId": "cmtsafe7y000fyu2e741qvjq0",
+          "evaluatorId": "cmtr8ti840003i1wccidz6ydn",
+          "groupKey": "B",
+          "status": "done",
+          "score": 100,
+          "verdict": "pass"
+        }
+      ]
+    },
+    {
+      "caseId": "loan-high",
+      "caseName": "高风险多轮转人工",
+      "sharedCaseRowId": "cmtsafe2r0005yu2edpy26j7d",
+      "sharedExecutionId": "036fccbf-5727-472f-8f0c-29fd36ee12eb",
+      "aVerdict": "fail",
+      "bVerdict": "pass",
+      "results": [
+        {
+          "resultId": "cmtsafe8x000jyu2e2vm5lcpg",
+          "evaluatorId": "cmtpat10q000u1fpou0xfk3kq",
+          "groupKey": "A",
+          "status": "done",
+          "score": 0,
+          "verdict": "fail"
+        },
+        {
+          "resultId": "cmtsafe93000lyu2em7qw8f8p",
+          "evaluatorId": "cmtr8ti840003i1wccidz6ydn",
+          "groupKey": "B",
+          "status": "done",
+          "score": 100,
+          "verdict": "pass"
+        }
+      ]
+    },
+    {
+      "caseId": "balance",
+      "caseName": "查询额度",
+      "sharedCaseRowId": "cmtsafe2s0007yu2em3pu5vzz",
+      "sharedExecutionId": "ae98cea9-593e-44e5-8cb9-3fe502aa2c0a",
+      "aVerdict": "pass",
+      "bVerdict": "pass",
+      "results": [
+        {
+          "resultId": "cmtsafeap000nyu2ekwyie595",
+          "evaluatorId": "cmtpat10q000u1fpou0xfk3kq",
+          "groupKey": "A",
+          "status": "done",
+          "score": 100,
+          "verdict": "pass"
+        },
+        {
+          "resultId": "cmtsafeat000pyu2ehydizzhp",
+          "evaluatorId": "cmtr8ti840003i1wccidz6ydn",
+          "groupKey": "B",
+          "status": "done",
+          "score": 100,
+          "verdict": "pass"
+        }
+      ]
+    }
+  ],
+  "allAssertionsPassed": true
+}

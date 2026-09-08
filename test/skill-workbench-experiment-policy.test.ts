@@ -62,7 +62,7 @@ test('触发分析锁定专用评估器，其他实验排除专用评估器', ()
 
 test('用例分析默认不勾选评估器', () => {
   const wizard = fs.readFileSync(
-    path.join(process.cwd(), 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(process.cwd(), 'src/components/experiments/ExperimentWizard.tsx'),
     'utf8',
   );
   const useCaseDefaults = wizard.match(/'use-case': \[(.*?)\],\n  'skill-ab':/s)?.[1];

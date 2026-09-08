@@ -1,9 +1,9 @@
 // 变量维度策略：抽象「对比实验切换什么变量」，使配对/聚合/UI 与具体维度解耦。
-// LLM 为首实现；framework/skill 为接口级 stub（无 UI，证明可扩展）。
+// Agent、Skill 与评估器对比复用 Trace 配对；framework 保留兼容占位。
 // 新增维度仅实现 VariableDimension 接口；配对/UI 调接口不调具体类型（NFR-003/AC-020）。
 import { prisma } from '@/lib/storage/prisma';
 
-export type ExperimentType = 'single' | 'llm' | 'framework' | 'skill';
+export type ExperimentType = 'single' | 'llm' | 'framework' | 'skill' | 'agent' | 'evaluator';
 
 /**
  * 维度可读的 trace 字段子集。字段名对齐 prisma/schema.prisma 的 Execution 模型：
@@ -31,6 +31,7 @@ export interface TraceCandidate {
   skill: string | null;
   skillVersion: number | null;
   timestamp: Date;
+  framework?: string | null;
 }
 
 /** 受控字段：除变量外，跨组必须一致的字段（用于判定可比性三条件之一）。 */
@@ -48,14 +49,14 @@ export interface VariableDimension {
   readonly dimension: ExperimentType;
   extractValue(trace: DimensionTrace): string;
   controlledFields(): ControlledField[];
-  queryCandidateTraces(agent: string, value: string): Promise<TraceCandidate[]>;
+  queryCandidateTraces(agent: string, value: string, user?: string): Promise<TraceCandidate[]>;
 }
 
 function normalizeEmpty(v: string | null | undefined): string {
   return v ?? '';
 }
 
-/** LLM 维度：变量 = Execution.model；受控 = agentName + skill + skillVersion。 */
+/** LLM 维度：变量 = Execution.model；受控 = agentName + skill + skillVersion + framework。 */
 export const LLM_DIMENSION: VariableDimension = {
   dimension: 'llm',
   extractValue: (trace) => normalizeEmpty(trace.model),
@@ -63,10 +64,11 @@ export const LLM_DIMENSION: VariableDimension = {
     { field: 'agentName' },
     { field: 'skill' },
     { field: 'skillVersion' },
+    { field: 'framework' },
   ],
-  async queryCandidateTraces(agent, model): Promise<TraceCandidate[]> {
+  async queryCandidateTraces(agent, model, user): Promise<TraceCandidate[]> {
     const rows = await prisma.execution.findMany({
-      where: { agentName: agent, model },
+      where: { agentName: agent, model, isSubagent:false, ...(user ? {user} : {}) },
       select: {
         id: true,
         taskId: true,
@@ -75,13 +77,14 @@ export const LLM_DIMENSION: VariableDimension = {
         agentName: true,
         skill: true,
         skillVersion: true,
+        framework: true,
         timestamp: true,
       },
       orderBy: { timestamp: 'desc' },
     });
     return rows.map((r: {
       id: string; taskId: string | null; query: string | null; model: string | null;
-      agentName: string | null; skill: string | null; skillVersion: number | null; timestamp: Date;
+      agentName: string | null; skill: string | null; skillVersion: number | null; framework: string | null; timestamp: Date;
     }) => ({
       id: r.id,
       taskId: r.taskId,
@@ -90,6 +93,7 @@ export const LLM_DIMENSION: VariableDimension = {
       agentName: r.agentName,
       skill: r.skill,
       skillVersion: r.skillVersion,
+      framework: r.framework,
       timestamp: r.timestamp,
     }));
   },
@@ -115,24 +119,38 @@ export const FRAMEWORK_DIMENSION: VariableDimension = {
 };
 
 /**
- * Skill 维度 stub（NFR-003 接口级 stub，无 UI）。
- * 变量 = Execution.skill（+ skillVersion）；受控 = agentName + model（skill 变了，model 须一致）。
- * queryCandidateTraces 抛 NotImplemented——本期不接入 DB 查询。
+ * Skill 维度按已采集的 Skill 名称与版本分组。
+ * 变量 = Execution.skill（+ skillVersion）；受控 = agentName + model + framework。
  */
 export const SKILL_DIMENSION: VariableDimension = {
   dimension: 'skill',
-  extractValue: (trace) => normalizeEmpty(trace.skill),
+  extractValue: (trace) => trace.skill ? trace.skill + (trace.skillVersion == null ? '' : '@v' + trace.skillVersion) : '__NONE__',
   controlledFields: () => [
     { field: 'agentName' },
     { field: 'model' },
+    { field: 'framework' },
   ],
-  async queryCandidateTraces(): Promise<TraceCandidate[]> {
-    throw new Error('NotImplemented: skill dimension queryCandidateTraces is a stub');
+  async queryCandidateTraces(agent, value, user): Promise<TraceCandidate[]> {
+    const rows = await queryTraces(agent, user);
+    return rows.filter(t=>SKILL_DIMENSION.extractValue(t)===value);
   },
 };
 
+async function queryTraces(agentName: string, user?: string): Promise<TraceCandidate[]> {
+  return prisma.execution.findMany({where:{agentName,isSubagent:false,...(user ? {user} : {})},select:{id:true,taskId:true,query:true,model:true,agentName:true,skill:true,skillVersion:true,framework:true,timestamp:true},orderBy:{timestamp:'desc'}});
+}
+export const AGENT_DIMENSION: VariableDimension = {
+  dimension:'agent', extractValue:trace=>trace.agentName || '', controlledFields:()=>[{field:'model'},{field:'skill'},{field:'skillVersion'}],
+  queryCandidateTraces:(_agent,value,user)=>queryTraces(value,user),
+};
+export const EVALUATOR_DIMENSION: VariableDimension = {
+  dimension:'evaluator', extractValue:()=>'', controlledFields:()=>[],
+  queryCandidateTraces:(agent,_value,user)=>queryTraces(agent,user),
+};
 const DIMENSION_REGISTRY: Partial<Record<ExperimentType, VariableDimension>> = {
   llm: LLM_DIMENSION,
+  agent: AGENT_DIMENSION,
+  evaluator: EVALUATOR_DIMENSION,
   framework: FRAMEWORK_DIMENSION,
   skill: SKILL_DIMENSION,
 };

@@ -65,13 +65,13 @@ function WatchChip() {
   );
 }
 
-function TypeChip() {
+function TypeChip({type}:{type:string}) {
   return (
     <span style={{
       fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
       background: 'var(--primary-subtle)', color: 'var(--primary)', whiteSpace: 'nowrap',
     }}>
-      单组实验
+      {({agent:'Agent 对比',skill:'Skill 对比',llm:'LLM 对比',evaluator:'评估器对比',dataset:'评测集对比'} as Record<string,string>)[type] || '单组实验'}
     </span>
   );
 }
@@ -184,14 +184,14 @@ export default function ExperimentsPage() {
                   >
                     <td style={{ ...TD, fontWeight: 500 }}>{r.name}</td>
                     <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentName || '—'}</td>
-                    <td style={TD}><TypeChip /></td>
+                    <td style={TD}><TypeChip type={r.type} /></td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>
                     <td style={{
                       ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
                       fontWeight: 700, color: typeof r.overallScore === 'number' ? 'var(--primary)' : 'var(--foreground-muted)',
                     }}>
-                      {typeof r.overallScore === 'number' ? r.overallScore.toFixed(1).replace(/\.0$/, '') : '—'}
+                      {['agent','skill','llm','evaluator','dataset'].includes(r.type) ? '查看 A/B' : typeof r.overallScore === 'number' ? r.overallScore.toFixed(1).replace(/\.0$/, '') : '—'}
                     </td>
                     <td style={TD}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>

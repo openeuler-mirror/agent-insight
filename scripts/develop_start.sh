@@ -69,7 +69,7 @@ find_pid_on_port() {
   echo "$pid"
 }
 
-PORT=3000
+PORT="${AGENT_INSIGHT_DEV_PORT:-3000}"
 echo "Checking port $PORT..."
 
 # Check for OpenGauss configuration in ~/.agent-insight/.env
@@ -263,7 +263,7 @@ set -a
 load_agent_insight_env
 set +a
 
-NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev > server.log 2>&1 &
+NODE_OPTIONS="--max-old-space-size=4096" nohup node node_modules/next/dist/bin/next dev -p "$PORT" > server.log 2>&1 &
 NEW_PID=$!
 
 echo "Server process started."

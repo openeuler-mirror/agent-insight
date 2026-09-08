@@ -14,6 +14,19 @@ export async function GET(req: Request) {
     const { username } = await resolveUser(req, url.searchParams.get('user'));
     const userFilter = username ? { user: username } : {};
     const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
+    const targetDefinitions = username && !process.env.DB_HOST
+      ? await prisma.evaluationAssetVersion.findMany({ where: { user: username, kind: 'target' }, select: { name: true, contentJson: true } })
+      : [];
+    const declaredAgents = new Set<string>();
+    const declaredSkills = new Set<string>();
+    for (const target of targetDefinitions) {
+      try {
+        const type = JSON.parse(target.contentJson).type;
+        if (type === 'agent') declaredAgents.add(target.name.trim());
+        if (type === 'skill') declaredSkills.add(target.name.trim());
+      } catch { /* Ignore malformed legacy definitions. */ }
+    }
+    const skillOnlyNames = [...declaredSkills].filter(name => !declaredAgents.has(name));
 
     const [grouped, faultInjectionTargets, genericTraceTargets] = await Promise.all([
       prisma.execution.groupBy({
@@ -22,7 +35,11 @@ export async function GET(req: Request) {
         ...userFilter,
         isSubagent: false,
         agentName: { not: null },
-        AND: [userOwnershipWhere],
+        AND: [userOwnershipWhere, ...(skillOnlyNames.length ? [{ OR: [
+          { framework: null },
+          { framework: { not: 'evaluation-harness' } },
+          { agentName: { notIn: skillOnlyNames } },
+        ] }] : [])],
       },
       _count: { agentName: true },
       orderBy: { _count: { agentName: 'desc' } },

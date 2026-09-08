@@ -1,0 +1,184 @@
+[
+  {
+    "assetKey": "loan-agent",
+    "name": "Demo 贷款助手",
+    "version": 1,
+    "content": {
+      "type": "agent",
+      "adapter": "demo",
+      "externalId": "loan-agent",
+      "externalVersion": "baseline",
+      "behavior": "baseline",
+      "prompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+      "skills": [
+        {
+          "name": "loan_approval",
+          "description": "贷款审批，高风险或超过 50 万转人工",
+          "prompt": "先收集金额风险，再执行审批或人工复核。"
+        },
+        {
+          "name": "balance_query",
+          "description": "仅查询剩余额度，不执行贷款审批",
+          "prompt": "只查询不审批"
+        }
+      ],
+      "tools": [
+        {
+          "name": "approve_loan",
+          "description": "自动审批低风险且不超过50万的贷款",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "request_human_review",
+          "description": "转人工复核",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "query_balance",
+          "description": "只读查询额度",
+          "parameters": {}
+        }
+      ]
+    }
+  },
+  {
+    "assetKey": "loan-agent",
+    "name": "Demo 贷款助手",
+    "version": 2,
+    "content": {
+      "type": "agent",
+      "adapter": "demo",
+      "externalId": "loan-agent",
+      "externalVersion": "fixed",
+      "behavior": "fixed",
+      "prompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+      "skills": [
+        {
+          "name": "loan_approval",
+          "description": "贷款审批，高风险或超过 50 万转人工",
+          "prompt": "先收集金额风险，再执行审批或人工复核。"
+        },
+        {
+          "name": "balance_query",
+          "description": "仅查询剩余额度，不执行贷款审批",
+          "prompt": "只查询不审批"
+        }
+      ],
+      "tools": [
+        {
+          "name": "approve_loan",
+          "description": "自动审批低风险且不超过50万的贷款",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "request_human_review",
+          "description": "转人工复核",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "query_balance",
+          "description": "只读查询额度",
+          "parameters": {}
+        }
+      ]
+    }
+  },
+  {
+    "assetKey": "loan-skill",
+    "name": "Demo 贷款 Skill",
+    "version": 1,
+    "content": {
+      "type": "skill",
+      "adapter": "demo",
+      "externalId": "loan_approval",
+      "externalVersion": "fixed",
+      "behavior": "fixed",
+      "prompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+      "skills": [
+        {
+          "name": "loan_approval",
+          "description": "贷款审批，高风险或超过 50 万转人工",
+          "prompt": "先收集金额风险，再执行审批或人工复核。"
+        }
+      ],
+      "tools": [
+        {
+          "name": "approve_loan",
+          "description": "自动审批低风险且不超过50万的贷款",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "request_human_review",
+          "description": "转人工复核",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "query_balance",
+          "description": "只读查询额度",
+          "parameters": {}
+        }
+      ]
+    }
+  },
+  {
+    "assetKey": "loan-skill",
+    "name": "Demo 贷款 Skill",
+    "version": 2,
+    "content": {
+      "type": "skill",
+      "adapter": "demo",
+      "externalId": "loan_approval",
+      "externalVersion": "baseline",
+      "behavior": "baseline",
+      "prompt": "演示回归缺陷：收集金额与风险后直接审批，缺少高风险和超额拦截。",
+      "skills": [
+        {
+          "name": "loan_approval",
+          "description": "贷款审批，高风险或超过 50 万转人工",
+          "prompt": "先收集金额风险，再执行审批或人工复核。"
+        }
+      ],
+      "tools": [
+        {
+          "name": "approve_loan",
+          "description": "自动审批低风险且不超过50万的贷款",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "request_human_review",
+          "description": "转人工复核",
+          "parameters": {
+            "amount": "number",
+            "risk": "low|high"
+          }
+        },
+        {
+          "name": "query_balance",
+          "description": "只读查询额度",
+          "parameters": {}
+        }
+      ]
+    }
+  }
+]

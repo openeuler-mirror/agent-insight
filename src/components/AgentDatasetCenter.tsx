@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useState, useEffect, useRef, startTransition, type CSSProperties, type MouseEvent } from 'react';
+import { datasetCards } from '@/components/evaluation-harness/dataset-catalog';
 import { useRouter } from 'next/navigation';
 import { ClipboardList, Pencil, PlayCircle, Trash2 } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
@@ -32,6 +33,8 @@ interface DatasetDraft {
 }
 
 type AgentDatasetListItem = Omit<AgentDataset, 'cases'> & {
+  versionAssetId?: string;
+  versionArchived?: boolean;
   caseCount: number;
   cases?: DatasetCase[];
 };
@@ -235,7 +238,8 @@ function DefaultFieldsTable({ fields }: { fields: DatasetDefaultFieldDef[] }) {
 
 export default function AgentDatasetCenter() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, apiKey } = useAuth();
+  const [showArchivedVersions, setShowArchivedVersions] = useState(false);
   const [datasets, setDatasets] = useState<AgentDatasetListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -262,6 +266,11 @@ export default function AgentDatasetCenter() {
         const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`);
         const data = await res.json();
         list = Array.isArray(data) ? data : [];
+        const versionRes = await apiFetch('/api/evaluation-harness', {headers:{'x-witty-api-key':apiKey || ''}});
+        if (versionRes.ok) {
+          const catalog = await versionRes.json();
+          list = [...list, ...datasetCards(catalog.assets || [], showArchivedVersions)];
+        }
         setDatasets(list);
         if (!opts?.isRefresh) {
           if (list.length > 0) {
@@ -278,7 +287,7 @@ export default function AgentDatasetCenter() {
       }
       return list;
     },
-    [user],
+    [user, apiKey, showArchivedVersions],
   );
 
   useEffect(() => {
@@ -329,6 +338,7 @@ export default function AgentDatasetCenter() {
 
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
     if (!user) return;
+    if (dataset.versionAssetId) { router.push(`/dataset/${dataset.id}`); return; }
     if (isBuiltinReliabilityDataset(dataset)) {
       setTableActionError('内置可靠性评测集由系统维护，不可编辑');
       return;
@@ -411,7 +421,10 @@ export default function AgentDatasetCenter() {
       setTableActionError('内置可靠性评测集不可删除');
       return;
     }
-    if (!globalThis.confirm(`确定删除评测集「${item.name}」？删除后不可恢复。`)) return;
+    const consequence = item.versionAssetId
+      ? '该评测集的所有版本将从列表和新建实验中移除，历史实验记录保留。'
+      : '删除后不可恢复。';
+    if (!globalThis.confirm(`确定删除评测集「${item.name}」？${consequence}`)) return;
     setTableActionError('');
     try {
       const res = await apiFetch(
@@ -566,6 +579,7 @@ export default function AgentDatasetCenter() {
             </button>
           ))}
         </div>
+        <label className="text-xs text-foreground-muted"><input type="checkbox" checked={showArchivedVersions} onChange={e=>setShowArchivedVersions(e.target.checked)}/> 显示已删除评测集</label>
         <div style={{ flex: '1 1 auto' }} />
         <button
           type="button"
@@ -613,6 +627,7 @@ export default function AgentDatasetCenter() {
                 </span>
                 新建评测集
               </button>
+              <button type="button" role="menuitem" className="ai-dataset-menu-item" onClick={() => router.push('/dataset/versioned-new')}>配置逐轮输入与规则</button>
               <button
                 type="button"
                 role="menuitem"
@@ -846,7 +861,7 @@ export default function AgentDatasetCenter() {
                     <Pencil size={14} aria-hidden />
                     编辑信息
                   </button>
-                  {!isBuiltinReliabilityDataset(item) && (
+                  {!isBuiltinReliabilityDataset(item) && !item.versionArchived && (
                   <button
                     type="button"
                     className="ai-dataset-action ai-dataset-action--danger"
@@ -866,9 +881,10 @@ export default function AgentDatasetCenter() {
                     type="button"
                     className="ai-dataset-action ai-dataset-action--primary"
                     style={datasetActionPrimaryStyle}
+                    disabled={item.versionArchived}
                     onClick={event => {
                       stopActionPropagation(event);
-                      if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability') {
+                      if (item.versionAssetId) { router.push('/experiments/new?datasetId=' + encodeURIComponent(item.versionAssetId)); } else if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability') {
                         // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入预期输出）
                         router.push('/experiments/new');
                       } else {
@@ -877,7 +893,7 @@ export default function AgentDatasetCenter() {
                       }
                     }}
                     title={
-                      item.datasetKind === 'trajectory' || item.datasetKind === 'reliability'
+                      item.versionArchived ? '评测集已删除，请在详情中恢复后再发起评测' : item.datasetKind === 'trajectory' || item.datasetKind === 'reliability'
                         ? '使用实验向导发起评测'
                         : '前往评估器目录选择评估器'
                     }

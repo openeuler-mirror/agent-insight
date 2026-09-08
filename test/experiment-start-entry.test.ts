@@ -19,7 +19,7 @@ test('全局实验详情是纯进度视图，不提供二次启动和重复返�
 
 test('向导仅在 run 请求成功后进入详情，启动失败回滚临时实验', () => {
   const wizardPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(root, 'src/components/experiments/ExperimentWizard.tsx'),
     'utf8',
   );
   const runRequest = wizardPage.indexOf('const runRes = await apiFetch');

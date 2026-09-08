@@ -258,3 +258,89 @@
 - v1 Bundle 顶层字段为 `format`、`version`、`exportedAt`、`rootExecutionId`、`executions`；每个节点包含 portable Execution 与可空 Session。Session `interactions` 保留规范化原始值，不做面向展示的时间格式化；Langfuse Session 还可携带完整 `langfuseTraceNodes`，旧版未包含该可选字段的 v1 Bundle 仍可导入。
 - `Execution.id` 与 Execution/Session `taskId` 共享冲突检测空间。无冲突 ID 原样保留；有冲突 ID 才生成 `import_<uuid>`，并同步更新父子 ID、root ID、`agentSessionId`、interactions 中已知的 session/execution 引用及 Langfuse 节点的 `subagentSessionId`。OTel `traceId` / `spanId` / `parentSpanId` 不参与重映射。
 - 导入只创建 Execution、Session 和可重算的 ExecutionSkill；不迁移 Evaluation、TraceEvaluation、AgentDebugReport、ExecutionTag 或基础设施关联，也不调度 LLM 评测。
+
+## 版本化多轮实验（evaluation-harness-v1）
+
+实现位于 `src/lib/evaluation-harness/`，入口为 `/api/evaluation-harness`。第一版使用 SQLite；新增 `EvaluationAssetVersion`、`EvaluationCredential`、`EvaluationAnalysis`，通过项目现有 `prisma db push` 流程升级并重新生成 Prisma Client。OpenGauss 的既有兼容层尚不支持这些表，此入口会明确拒绝，不回退到本地隐式存储。
+
+API 必须携带本人的 `x-witty-api-key`，不接受请求体 `user` 冒充身份。GET 返回本人版本目录、凭证名称和最近 100 次实验；`?experimentId=ID` 返回快照、逐轮证据与汇总。POST 的 `action` 包含：
+
+| action | 输入 | 行为 |
+|---|---|---|
+| bootstrap | 无 | 补齐独立 Demo 目标、Case 和预置评估器 |
+| asset | kind、assetKey、name、content | 创建不可变新版本，kind 为 target/dataset/evaluator |
+| archive | id、archived | 归档或恢复同一逻辑资产的全部版本，历史实验可读 |
+| credential | name、config | 加密保存私有连接，返回引用而非 Key |
+| import-dataset | id | 从本人的已有评测集提取草稿 |
+| generate / static | targetId；generate 可带 credentialId | LLM 生成待审阅 Case，或独立静态风险分析 |
+| create | config | 固定目标、数据集、评估器与执行参数；返回新 experiment ID |
+| run / cancel | id | 启动一次执行或终止；已执行记录不能覆盖重跑 |
+| revise | experimentId、caseId、case | 修改 Case 后另存完整评测集版本 |
+
+数据集卡片统一通过 `DELETE /api/agent-datasets/:id` 删除。`versioned-<assetId>` 表示版本化数据集：验证 API Key、用户及 dataset 归属后，复用归档机制标记同一用户、同一 assetKey 的全部版本，返回 `{success:true, archived:true}`；目录和新建实验排除这些版本，历史实验与快照继续可读。仅内置可靠性评测集禁止删除；普通 ID 沿用原删除行为。未新增路由或 Prisma 字段。
+
+`create.config` 必填 name、targetId、datasetId、evaluatorIds。选填 threshold（0–100，默认 90）、concurrency（1–8，默认 2）、timeoutSeconds（1–600，每个 Case 尝试总时限，默认 60）、retries（0–3，默认 1）、caseIds（单 Case/子集重跑）、sourceExperimentId（回归来源）。
+
+HTTP 目标描述至少包含 `type: agent|skill`、`adapter: http`、endpoint、externalId；可附 externalVersion、prompt、skills、tools、credentialId。这里登记的是外部定义快照，平台不会创建或更新外部部署。POST endpoint 的请求为：
+
+```json
+{"targetId":"loan-agent","targetVersion":"fixed","runId":"...","caseId":"...","attemptId":"...","turn":2,"sessionId":"remote-session","input":"风险高","history":[{"input":"申请 8 万元","output":"请提供风险等级"}]}
+```
+
+请求不含预期答案或规则。适配器应以 attemptId 隔离不同尝试，按 sessionId 或实际 history 继续同一 Case 的多轮。响应示例：
+
+```json
+{"output":"已提交人工复核","sessionId":"remote-session","skill":"loan_approval","state":"pending_review","tools":[{"name":"request_human_review","arguments":{"amount":80000,"risk":"high"},"result":{"state":"pending_review"}}],"systemPrompt":"实际使用且允许导出的系统提示词"}
+```
+
+`tools: []` 表示确实没有工具调用；省略 tools 表示未采集，相关检查为 unknown。skill、state、systemPrompt 同理，不能从期望反推事实。history 中只放已返回的实际轮次；一次重试用新的 attemptId，从第一轮重新执行。适配器需自行保证测试环境和业务操作可重复执行。
+
+Case 结构以 `domain.ts` 为准：每轮 input、expectedOutput、expectation；后者可指定 contains/pattern/expectedSkill/state、requiredTools 的参数子集、forbiddenTools、toolOrder、fields 的必填/类型/equals/enum/min/max，以及 blocking。最多 500 个 Case，每个最多 20 轮。规则优先执行，正则独立 Worker 限时；LLM 返回每轮一项 pass/fail/unknown 与原因，分数由程序汇总，禁止自由总分替代逐轮判定。
+
+私有连接使用 AES-256-GCM；部署变量 `EVALUATION_CREDENTIAL_KEY` 必须是 32 字节密钥的 Base64，缺少时不保存私有连接。密钥需由部署方稳定保管；更换会导致旧密文不可解。现有模型注册连接仍遵循原存储机制，本次未迁移旧 Key。实验快照只保留凭证引用和模型连接指纹；执行时若模型或连接地址已变化，评估失败并要求创建新实验。数据出库、发给 Judge 前清理常见凭证字段，完整外部数据治理仍属于适配器责任。
+
+### 2026-09-07 统一实验与 Trace 回放
+
+`/experiments/new` 由 EvaluationWorkspace 提供统一四步外壳，原生向导移至 `src/components/experiments/ExperimentWizard.tsx`，通过初始选择和受控步骤复用原有客户端、持续采集、模型对比和 Skill 能力。版本化 Case 不转换为仅最终答案的普通 Case。
+
+现有 `/api/evaluation-harness` 的 create config 增加 `traceSource: generate | existing`（默认 generate）以及 `traceBindings: Record<caseId, executionId>`。existing 创建时校验用户、Agent、已知版本和输入，将脱敏的真实逐轮证据及哈希冻结进 manifest.replaySources；运行时复核访问权限，执行相同规则/LLM 链，引用原 executionId，不产生执行尝试、新 Execution 或 Session。缺少明确版本证据时添加阻断性 unknown，不能声称该版本验收通过。比较哈希区分回放与新执行。Prisma 无本轮新增变更。
+
+2026-09-07：移除从 Trace 提取目标定义的入口及 `import-trace` 操作；已有 Trace 回放评估和正常 Trace 导入接口不受影响。
+
+版本化实验 create 配置在 traceSource=existing 时支持 traceAssignments: [{traceId, caseId}]。每个 Trace 只能出现一次，Case 可重复，允许多条执行记录套用同一 Case 规则；关联 Case 必须属于冻结数据集版本，Trace 所有权、Agent 版本和逐轮输入仍逐条校验。旧 traceBindings 继续兼容。每条关联生成一个 ExperimentCase，executionId 定位对应冻结 replaySource，避免重复 Case 错用第一条 Trace 的证据。
+
+### A/B 对比扩展（2026-09-08）
+
+沿用 `POST /api/evaluation-harness` 的 `create` 动作；`config.comparison` 只允许下面所选维度的字段，其他维度字段和未知字段会被拒绝。A 组仍使用顶层 `targetId`、`datasetId`、`caseIds`、`evaluatorIds`；并发、超时、重试、通过率门槛只配置一份，两组共用。
+
+| `comparison.dimension` | 允许的组间差异字段 | 其余约束 |
+|---|---|---|
+| `agent` | `targetBId` | 两个不同 Agent 目标版本；目标声明的模型、Skill 配置必须相同 |
+| `skill` | `skillAId`、`skillBId` | 新建：顶层 `targetId` 是共同 Agent；两项为同一 Skill 的不同版本。旧 `targetId=Skill/targetBId` 仅兼容历史调用，不能与新字段混用 |
+| `llm` | `modelA`、`modelB` | 模型名不同；同一目标、评测集与评估器；执行端响应必须确认请求指定的实际模型 |
+| `evaluator` | `evaluatorBIds` | A/B 的评估器版本组合不同；同一目标、Case 和 Trace 证据 |
+| `dataset` | `datasetBId`、可选 `caseBIds` | 两个不同的评测集资产版本 ID，可来自同一评测集的不同版本或两个评测集；同一目标和评估器 |
+
+`caseBIds` 与顶层 `caseIds` 一样，最多 500 个、不允许空数组或重复值、必须属于对应冻结版本；未提供时运行该组数据集的全部 Case。`datasetBId` 必须是当前用户可用且未归档的版本化数据集资产。已有普通评测集可通过 `import-dataset` 提取草稿，审阅后调用 `asset` 建立版本；可靠性故障注入数据集继续走原可靠性实验。数据集对比不接入原生 Trace 对比引擎。除评估器对比外，版本化对比必须生成各自 Trace；不能给两组绑定同一既有执行来代替独立运行。
+
+`manifest.groups[]` 保存各组的目标、数据集完整快照、`caseIds` 和 `evaluatorIds`，顶层 `manifest.evaluators` 保存两组评估器版本的并集。`ExperimentGroup` 记录 A/B 分组，独立执行的 `ExperimentCase.groupId` 标明来源；评估器对比共用 Case/Trace，结果再按各组 `evaluatorIds` 投影。详情 `comparison` 返回 `groups`、`pairs`、`comparableCount`、`changed`、`delta`；数据集对比另有 `unmatchedCount`、`changedDefinitionCount`，配对行提供 `matchStatus: matched|changed|a-only|b-only`。只有定义一致且两侧评完的 Case 进入差值，规则已修改和单组独有 Case 不标为改善/退化。目标字段校验基于登记快照，不代表平台能够识别外部部署中未上报的隐藏配置变化。
+
+原生 `POST /api/experiments` 的 `preview-comparison` 动作和创建路径支持 `agent/skill/llm/evaluator`。Trace 查询固定当前用户、根执行；同输入下优先选择非对比条件一致的最新组合。Agent 对比固定 `model/skill/skillVersion`，LLM 对比固定 `agentName/skill/skillVersion/framework`，Skill 对比固定 `agentName/model/framework`。评估器对比仅查询一次候选，两组必须引用同一个 Trace ID。向导提交的 `cases[].input` 转换为内部 `caseInputs`，创建前逐项验证可比性，再保存候选引用和条件；不满足时返回 400，避免预览后的变化生成空实验。旧调用方未提交 Case 范围的非评估器对比保留原增量扫描行为。
+
+原生实验创建时，参考答案、数据集输入和评估器上下文按输入同时写入两组 Case。`POST /api/experiments/:id/cases` 禁止向对比实验单侧追加或回填参考答案；`POST /api/experiments/:id/rescan` 先校验用户归属，仅允许无 scope 的原生对比，有 scope 的历史实验返回 409；版本化实验的通用 `run` 也返回 409，需创建独立运行。原生 `run` 使用实验中保存的组和评估器 ID，不接受请求中的替代条件。Case 详情不会进入组间汇总分支，`evaluation-harness` scope 不会进入原生对比运行器。
+
+原生路径冻结的是候选引用和已采集的条件，没有新增完整不可变 Trace 内容快照，也没有冻结原生评估器定义内容；评分和重试仍经原有引擎读取当前评估器定义。版本化 harness 的目标、Case 和评估器内容快照与此边界不同。本轮未新增 Prisma 字段或 API 路由。
+
+补充：新建版本化 Skill 对比仅使用共同 Agent 的执行接入及 `credentialId`，Skill 资产中的 endpoint、凭证和模型不参与执行；旧目标式 Skill 对比仍校验接入一致。数据集配对在跨数据集时先保留完整定义匹配，再处理剩余同输入项；完整定义包含发送给评估器的 `name/note/category/difficulty/tags/turns`，ID 仅用于对齐。显式归档目标的回归选择保留，默认选项才排除归档，执行仍由服务端禁止使用归档资产。
+
+### 2026-09-08 Agent 执行与 Skill 配置分离
+
+统一实验第一步不再混选 Agent/Skill。`targetId` 表示执行 Agent，Skill 对比使用 `comparison: { dimension: 'skill', skillAId, skillBId }`，两组 `group.target` 冻结同一个 Agent，`group.skill` 分别冻结 Skill 版本。HTTP 使用 Agent 的地址、鉴权、模型、`targetId/targetVersion`，附加 `agentId` 和 `skillOverrides: [{skillId, skillVersion, definitionHash, definition: {prompt, skills, tools}}]`。Skill 版本优先外部版本号，否则为资产 `vN`；哈希只覆盖实际发送的定义。执行端加载后必须通过 `loadedSkills: [{skillId, skillVersion, definitionHash}]` 确认，并确认 Agent 版本；没有确认或不符时产生未评完整，不能当作有效对比。Trace 归属执行 Agent，已确认 Skill 名称/资产版本写入标量字段，加载证据保存在 Trace 元数据。
+
+单 Case 重跑在 Agent、Skill、LLM、评估器对比中保留两组配置，重新执行同一个 Case 的 A/B；评测集对比或单组模式使用所属组的目标、数据集与评估器。旧直接 Skill 实验读取/执行兼容，复制为新实验时需补选 Agent，不能把 Skill 当成 Agent。Agent 候选 API 排除当前用户明确登记为 Skill 且仅来自 harness 的历史执行，保留真实非 harness Agent 与在线执行目标。原生 Skill 候选没有可信配置记录时不推断为无 Skill。
+
+### 2026-09-08 评估器对比第四步契约
+
+版本化 Workspace 与原生 ExperimentWizard 共用 `EvaluatorComparisonGroups` 展示组件，按组接收 `key`、`selectedCount`、`content`，仅负责 A/B 区域与计数；评估器选择状态仍由各自向导持有。两组内部复用相同 `EvaluatorChoiceCard`，描述与标签来自同一构造逻辑。版本化组允许分别多选；每组至少一项，排序、去重后两组 ID 集合不能相同。现有顶层 `evaluatorIds` / `comparison.evaluatorBIds` 契约保持不变。
+
+原生 Trace 对比保持第一步每组一个评估器，第四步只读确认，并提供逐组返回第一步的入口，不在第四步修改组值。提交前校验按 A/B 分别检查评估器存在、状态 `ready` 和公共 Case 所需上下文；调用门控时传入本组 ID，不将两组并集合用于互斥检查。任一组无效同时禁用开始按钮，并在 submit 入口再次阻断。组值、共同 Case 与提交使用的评估器集合必须一致，不能仅依赖卡片禁用状态。此调整不新增 API 或数据库字段，验证状态见本轮开发计划和测试报告。

@@ -35,16 +35,17 @@ export async function POST(
 
     const currentExperiment = await prisma.experiment.findFirst({
       where: { id, user: username },
-      select: { status: true, type: true },
+      select: { status: true, type: true, scope: true },
     });
     if (!currentExperiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
     }
+    if (currentExperiment.scope === 'evaluation-harness') return NextResponse.json({ error: '请从版本化实验详情创建新的运行，历史记录不能覆盖' }, { status: 409 });
     if (currentExperiment.status === 'running') {
       return NextResponse.json({ status: 'running', alreadyRunning: true });
     }
 
-    if (currentExperiment.type === 'llm') {
+    if (!currentExperiment.scope && ['llm','agent','skill','evaluator'].includes(currentExperiment.type)) {
       const comparisonResult = await startComparisonRun(id, username);
       if (!comparisonResult) {
         return NextResponse.json({ error: 'experiment not found' }, { status: 404 });

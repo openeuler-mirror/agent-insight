@@ -256,28 +256,39 @@ function preview(ev: EvidenceLike, evaluatorId?: string): string {
   try { return JSON.stringify(j); } catch { return String(j); }
 }
 
+function TurnEvidence({ data }: { data: Record<string, unknown> }) {
+  const checks = (data.checks as unknown[]).map(asRecord).filter((v): v is Record<string, unknown> => !!v);
+  const turns = (data.turns as unknown[]).map(asRecord).filter((v): v is Record<string, unknown> => !!v);
+  const verdict = (v: unknown) => ({pass:'通过',fail:'未通过',unknown:'无法判断'}[String(v)] || String(v));
+  return <div className="space-y-3 text-xs"><strong>逐轮评估依据 · {turns.length} 轮 · {checks.length} 项检查</strong>{turns.map((turn,i) => <details key={i} open><summary>第 {i+1} 轮</summary><p className="whitespace-pre-wrap">输入：{valueText(turn.input)}</p><p className="whitespace-pre-wrap">实际输出：{valueText(turn.output) || '无输出证据'}</p><p>Skill：{valueText(turn.skill) || '未观测'} · 结束状态：{valueText(turn.state) || '未观测'}</p><details><summary>工具调用与参数</summary><pre className="whitespace-pre-wrap">{JSON.stringify(turn.tools || [],null,2)}</pre></details>{checks.filter(c=>c.turn===i+1).map((c,k)=><p key={k}>{c.skipped ? '已跳过' : verdict(c.verdict)} · {valueText(c.name)}：{valueText(c.reason)}{c.blocking ? '（阻断项）' : ''}</p>)}</details>)}{checks.filter(c=>c.turn===0 || !turns.length).map((c,i)=><p key={i}>{verdict(c.verdict)} · {valueText(c.name)}：{valueText(c.reason)}</p>)}</div>;
+}
+
 export function EvidenceBlock({
   evidence,
   evaluatorId,
   supplementalMarkdown,
+  suggestionLabel = 'Skill 改进建议',
 }: {
   evidence: unknown;
   evaluatorId?: string;
   supplementalMarkdown?: string;
+  suggestionLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ev = coerce(evidence);
   if (!ev) return null;
+  const turnData = asRecord(ev.json);
+  if (turnData && Array.isArray(turnData.checks) && Array.isArray(turnData.turns)) return <TurnEvidence data={turnData}/>;
   const suggestion = supplementalMarkdown?.trim() || '';
   const md = ev.md
     ? [
         `**证据**\n${ev.md}`,
-        suggestion ? `**Skill 改进建议**\n${suggestion}` : '',
+        suggestion ? `**${suggestionLabel}**\n${suggestion}` : '',
       ].filter(Boolean).join('\n\n')
     : undefined;
   const previewText = [
     `证据：${preview(ev, evaluatorId)}`,
-    suggestion ? `Skill 改进建议：${suggestion.replace(/[*`#]/g, '').replace(/\s+/g, ' ').trim()}` : '',
+    suggestion ? `${suggestionLabel}：${suggestion.replace(/[*`#]/g, '').replace(/\s+/g, ' ').trim()}` : '',
   ].filter(Boolean).join('；');
   return (
     <div

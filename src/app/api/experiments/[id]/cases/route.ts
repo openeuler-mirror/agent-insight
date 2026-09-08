@@ -54,11 +54,13 @@ export async function POST(
 
     const experiment = await prisma.experiment.findFirst({
       where: { id, user: username },
-      select: { id: true, evaluatorIdsJson: true },
+      select: { id: true, evaluatorIdsJson: true, scope: true, type: true },
     });
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
     }
+    if (experiment.scope === 'evaluation-harness') return NextResponse.json({ error: '请另存评测集版本并新建实验，历史 Case 不可追加' }, { status: 409 });
+    if (experiment.type !== 'single') return NextResponse.json({ error: '对比实验的 Case 和参考答案由两组共享，请新建实验调整，不能单侧追加或修改' }, { status: 409 });
     let evaluatorIds: string[] = [];
     try {
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');

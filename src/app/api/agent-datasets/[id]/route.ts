@@ -5,6 +5,8 @@ import {
   findAgentDataset,
 } from '@/server/agent_datasets_storage';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
+import { resolveUser } from '@/lib/auth/auth';
+import { archiveAsset, getAsset } from '@/lib/evaluation-harness/store';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
@@ -44,9 +46,26 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const { searchParams } = new URL(request.url);
     const user = (searchParams.get('user') || '').trim();
     const idTrim = id?.trim() || '';
-    if (!user || !idTrim) {
+    if (!idTrim) {
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
     }
+    if (idTrim.startsWith('versioned-')) {
+      const { username } = await resolveUser(request);
+      if (!username) return NextResponse.json({ error: '请登录并提供有效 API Key' }, { status: 401 });
+      if (user && user !== username) return NextResponse.json({ error: '用户身份不匹配' }, { status: 403 });
+      let version: Awaited<ReturnType<typeof getAsset>>;
+      try {
+        version = await getAsset(username, idTrim.slice('versioned-'.length), 'dataset');
+      } catch (error) {
+        if (error instanceof Error && error.message === '指定版本不存在或无权访问') return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+        throw error;
+      }
+      if (isBuiltinReliabilityDataset({name:version.name,tags:version.content.tags})) return NextResponse.json({ error: '内置可靠性评测集不可删除' }, { status: 403 });
+      await archiveAsset(username, version.id, true);
+      recordUsageEvent({ user: username, featureKey: 'dataset', eventKey: 'dataset.delete' });
+      return NextResponse.json({ success: true, archived: true });
+    }
+    if (!user) return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
 
     const existing = await findAgentDataset(user, idTrim);
     if (!existing) {

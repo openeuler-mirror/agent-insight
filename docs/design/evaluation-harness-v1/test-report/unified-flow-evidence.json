@@ -1,0 +1,69 @@
+{
+  "runs": [
+    {
+      "id": "cmtqokgnt000012tp3dry8049",
+      "name": "统一流程验收 · 真实执行",
+      "status": "done",
+      "traceSource": "generate",
+      "targetVersion": 2,
+      "datasetVersion": 1,
+      "cases": [
+        {
+          "id": "cmtqokgnt000112tpvimfkcdb",
+          "executionId": "51ced430-466c-4ecf-a7ef-df7ebbf559fc"
+        },
+        {
+          "id": "cmtqokgnt000212tpfj1vyr4y",
+          "executionId": "4701640a-5d37-484e-93ad-d9655fde79f9"
+        },
+        {
+          "id": "cmtqokgnt000312tpvx2zxnh9",
+          "executionId": "e3905d03-966f-4494-aa9d-bf3766ddd629"
+        },
+        {
+          "id": "cmtqokgnt000412tpybr1n5u0",
+          "executionId": "6f360232-4db5-442d-8aeb-e5b7b629bb01"
+        }
+      ],
+      "comparisonHash": "ad446f24237e3004f00a6d6a06f3d36a54a45bc04e258345147c08055eecce90"
+    },
+    {
+      "id": "cmtqomlv1003112tp2jxps0ww",
+      "name": "统一流程验收 · 已有 Trace",
+      "status": "done",
+      "traceSource": "existing",
+      "targetVersion": 2,
+      "datasetVersion": 1,
+      "cases": [
+        {
+          "id": "cmtqomlv1003212tp3edti3qe",
+          "executionId": "51ced430-466c-4ecf-a7ef-df7ebbf559fc"
+        },
+        {
+          "id": "cmtqomlv1003312tp9bye27n6",
+          "executionId": "4701640a-5d37-484e-93ad-d9655fde79f9"
+        },
+        {
+          "id": "cmtqomlv1003412tpyk942ctl",
+          "executionId": "e3905d03-966f-4494-aa9d-bf3766ddd629"
+        },
+        {
+          "id": "cmtqomlv1003512tp44zcuhgl",
+          "executionId": "6f360232-4db5-442d-8aeb-e5b7b629bb01"
+        }
+      ],
+      "comparisonHash": "1c4a92cbbfa40c5b26e64510acdfe952e8de6432dc2a017af58f788a85525021"
+    }
+  ],
+  "checks": [
+    "one four-step wizard, zero mode tabs",
+    "Agent and dataset independent version selects",
+    "missing replay bindings block start",
+    "real HTTP generated four cases passed",
+    "replay four cases passed and reused original IDs",
+    "native Trace selection, annotation, evaluator gates retained",
+    "saved original dataset appears in unified catalog",
+    "native generation unavailable without online client is explicitly explained",
+    "no browser console errors observed"
+  ]
+}

@@ -1,0 +1,379 @@
+[
+  {
+    "step": "initial",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v2"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v3"
+      }
+    ]
+  },
+  {
+    "step": "switch-target",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款 Skill"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v1"
+        ],
+        "selected": "v1"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v3"
+      }
+    ]
+  },
+  {
+    "step": "latest-target",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v2"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v3"
+      }
+    ]
+  },
+  {
+    "step": "refresh-preserves-v1",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v1"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v1"
+      }
+    ]
+  },
+  {
+    "step": "switch-dataset-isolation",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v2"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集",
+          "版本联动检查副本"
+        ],
+        "selected": "版本联动检查副本"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v1"
+        ],
+        "selected": "v1"
+      }
+    ]
+  },
+  {
+    "step": "latest-dataset",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v2"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集",
+          "版本联动检查副本"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v3"
+      }
+    ]
+  },
+  {
+    "step": "dataset-card-preserves-v1",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v2"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v1"
+      }
+    ]
+  },
+  {
+    "step": "main-entry-selected",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v2"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v1"
+      }
+    ]
+  },
+  {
+    "step": "actual-run",
+    "result": {
+      "caseCount": 4,
+      "summary": "对象版本分离验收 · Agent v2 × 评测集 v1已完成Demo 贷款助手 v2 × 贷款业务验收集 v1分析问题并优化按原条件创建回归查看 Case（4）导出报告通过率100.0%失败 Case0未评完整 Case0验收通过更多指标与测试条件路由正确率：100.0%工具规则正确率：100.0%单轮平均 / P95：26 / 48 ms路由、工具正确率仅统计已观测的检查项；未观测数：0 / 0。目标执行异常：0 个 Case。按评估器、类别、难度查看结果评估器逐轮业务规则：通过 4 / 4类别positive：通过 2 / 2negative：通过 1 / 1boundary：通过 1 / 1难度medium：通过 3 / 3hard：通过 1 / 1本次测试条件与版本依据{\n  \"kind\": \"evaluation-harness-v1\",\n  \"name\": \"对象版本分离验收 · Agent v2 × 评测集 v1\",\n  \"targetId\": \"cmtpat109000o1fponigse7jz\",\n  \"datasetId\": \"cmtpat10p000s1fpo5nfsywny\",\n  \"evaluatorIds\": [\n    \"cmtpat10q000u1fpou0xfk3kq\"\n  ],\n  \"threshold\": 90,\n  \"concurrency\": 2,\n  \"timeoutSeconds\": 60,\n  \"retries\": 1,\n  \"target\": {\n    \"archived\": false,\n    \"id\": \"cmtpat109000o1fponigse7jz\",\n    \"user\": \"harness-ui@example.test\",\n    \"kind\": \"target\",\n    \"assetKey\": \"loan-agent\",\n    \"name\": \"Demo 贷款助手\",\n    \"version\": 2,\n    \"contentJson\": \"{\\\"adapter\\\":\\\"demo\\\",\\\"behavior\\\":\\\"fixed\\\",\\\"externalId\\\":\\\"loan-agent\\\",\\\"externalVersion\\\":\\\"fixed\\\",\\\"prompt\\\":\\\"你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。\\\",\\\"skills\\\":[{\\\"description\\\":\\\"贷款审批，高风险或超过 50 万转人工\\\",\\\"name\\\":\\\"loan_approval\\\",\\\"prompt\\\":\\\"先收集金额风险，再执行审批或人工复核。\\\"},{\\\"description\\\":\\\"查询剩余额度\\\",\\\"name\\\":\\\"balance_query\\\",\\\"prompt\\\":\\\"只查询不审批\\\"}],\\\"type\\\":\\\"agent\\\"}\",\n    \"contentHash\": \"fa1662577b59dfc0f19ca27412bcf6fa2952d9c9d032066e900aef03755fc9a2\",\n    \"createdAt\": \"2026-09-06T04:15:02.745Z\",\n    \"content\": {\n      \"adapter\": \"demo\",\n      \"behavior\": \"fixed\",\n      \"externalId\": \"loan-agent\",\n      \"externalVersion\": \"fixed\",\n      \"prompt\": \"你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。\",\n      \"skills\": [\n        {\n          \"description\": \"贷款审批，高风险或超过 50 万转人工\",\n          \"name\": \"loan_approval\",\n          \"prompt\": \"先收集金额风险，再执行审批或人工复核。\"\n        },\n        {\n          \"description\": \"查询剩余额度\",\n          \"name\": \"balance_query\",\n          \"prompt\": \"只查询不审批\"\n        }\n      ],\n      \"type\": \"agent\"\n    }\n  },\n  \"dataset\": {\n    \"archived\": false,\n    \"id\": \"cmtpat10p000s1fpo5nfsywny\",\n    \"user\": \"harness-ui@example.test\",\n    \"kind\": \"dataset\",\n    \"assetKey\": \"loan-cases\",\n    \"name\": \"贷款业务验收集\",\n    \"version\": 1,\n    \"contentJson\": \"{\\\"cases\\\":[{\\\"category\\\":\\\"positive\\\",\\\"difficulty\\\":\\\"medium\\\",\\\"id\\\":\\\"loan-low\\\",\\\"name\\\":\\\"低风险正常审批\\\",\\\"note\\\":\\\"\\\",\\\"tags\\\":[],\\\"turns\\\":[{\\\"expectation\\\":{\\\"blocking\\\":true,\\\"expectedSkill\\\":\\\"loan_approval\\\",\\\"fields\\\":[],\\\"forbiddenTools\\\":[],\\\"requiredTools\\\":[{\\\"arguments\\\":{\\\"amount\\\":50000},\\\"name\\\":\\\"approve_loan\\\"}],\\\"state\\\":\\\"approved\\\",\\\"toolOrder\\\":[]},\\\"expectedOutput\\\":\\\"\\\",\\\"input\\\":\\\"申请 5 万元，风险低\\\"}]},{\\\"category\\\":\\\"negative\\\",\\\"difficulty\\\":\\\"hard\\\",\\\"id\\\":\\\"loan-high\\\",\\\"name\\\":\\\"高风险多轮转人工\\\",\\\"note\\\":\\\"\\\",\\\"tags\\\":[],\\\"turns\\\":[{\\\"expectation\\\":{\\\"blocking\\\":true,\\\"fields\\\":[],\\\"forbiddenTools\\\":[\\\"approve_loan\\\"],\\\"requiredTools\\\":[],\\\"state\\\":\\\"waiting_risk\\\",\\\"toolOrder\\\":[]},\\\"expectedOutput\\\":\\\"询问风险\\\",\\\"input\\\":\\\"申请 8 万元\\\"},{\\\"expectation\\\":{\\\"blocking\\\":true,\\\"expectedSkill\\\":\\\"loan_approval\\\",\\\"fields\\\":[],\\\"forbiddenTools\\\":[\\\"approve_loan\\\"],\\\"requiredTools\\\":[{\\\"arguments\\\":{\\\"amount\\\":80000,\\\"risk\\\":\\\"high\\\"},\\\"name\\\":\\\"request_human_review\\\"}],\\\"state\\\":\\\"pending_review\\\",\\\"toolOrder\\\":[]},\\\"expectedOutput\\\":\\\"转人工复核\\\",\\\"input\\\":\\\"风险高\\\"}]},{\\\"category\\\":\\\"boundary\\\",\\\"difficulty\\\":\\\"medium\\\",\\\"id\\\":\\\"loan-limit\\\",\\\"name\\\":\\\"金额超过自动审批上限\\\",\\\"note\\\":\\\"\\\",\\\"tags\\\":[],\\\"turns\\\":[{\\\"expectation\\\":{\\\"blocking\\\":true,\\\"fields\\\":[],\\\"forbiddenTools\\\":[\\\"approve_loan\\\"],\\\"requiredTools\\\":[{\\\"name\\\":\\\"request_human_review\\\"}],\\\"state\\\":\\\"pending_review\\\",\\\"toolOrder\\\":[]},\\\"expectedOutput\\\":\\\"\\\",\\\"input\\\":\\\"申请 100 万元，风险低\\\"}]},{\\\"category\\\":\\\"positive\\\",\\\"difficulty\\\":\\\"medium\\\",\\\"id\\\":\\\"balance\\\",\\\"name\\\":\\\"查询额度\\\",\\\"note\\\":\\\"\\\",\\\"tags\\\":[],\\\"turns\\\":[{\\\"expectation\\\":{\\\"blocking\\\":true,\\\"expectedSkill\\\":\\\"balance_query\\\",\\\"fields\\\":[{\\\"min\\\":0,\\\"path\\\":\\\"balance\\\",\\\"required\\\":true,\\\"type\\\":\\\"number\\\"}],\\\"forbiddenTools\\\":[],\\\"requiredTools\\\":[{\\\"name\\\":\\\"query_balance\\\"}],\\\"state\\\":\\\"balance_returned\\\",\\\"toolOrder\\\":[]},\\\"expectedOutput\\\":\\\"\\\",\\\"input\\\":\\\"查询剩余额度\\\"}]}]}\",\n    \"contentHash\": \"0d4e8ea1d5cab35707c442a419e5cc837c59565aaf22ffabd9ded082addcacbd\",\n    \"createdAt\": \"2026-09-06T04:15:02.761Z\",\n    \"content\": {\n      \"cases\": [\n        {\n          \"category\": \"positive\",\n          \"difficulty\": \"medium\",\n          \"id\": \"loan-low\",\n          \"name\": \"低风险正常审批\",\n          \"note\": \"\",\n          \"tags\": [],\n          \"turns\": [\n            {\n              \"expectation\": {\n                \"blocking\": true,\n                \"expectedSkill\": \"loan_approval\",\n                \"fields\": [],\n                \"forbiddenTools\": [],\n                \"requiredTools\": [\n                  {\n                    \"arguments\": {\n                      \"amount\": 50000\n                    },\n                    \"name\": \"approve_loan\"\n                  }\n                ],\n                \"state\": \"approved\",\n                \"toolOrder\": []\n              },\n              \"expectedOutput\": \"\",\n              \"input\": \"申请 5 万元，风险低\"\n            }\n          ]\n        },\n        {\n          \"category\": \"negative\",\n          \"difficulty\": \"hard\",\n          \"id\": \"loan-high\",\n          \"name\": \"高风险多轮转人工\",\n          \"note\": \"\",\n          \"tags\": [],\n          \"turns\": [\n            {\n              \"expectation\": {\n                \"blocking\": true,\n                \"fields\": [],\n                \"forbiddenTools\": [\n                  \"approve_loan\"\n                ],\n                \"requiredTools\": [],\n                \"state\": \"waiting_risk\",\n                \"toolOrder\": []\n              },\n              \"expectedOutput\": \"询问风险\",\n              \"input\": \"申请 8 万元\"\n            },\n            {\n              \"expectation\": {\n                \"blocking\": true,\n                \"expectedSkill\": \"loan_approval\",\n                \"fields\": [],\n                \"forbiddenTools\": [\n                  \"approve_loan\"\n                ],\n                \"requiredTools\": [\n                  {\n                    \"arguments\": {\n                      \"amount\": 80000,\n                      \"risk\": \"high\"\n                    },\n                    \"name\": \"request_human_review\"\n                  }\n                ],\n                \"state\": \"pending_review\",\n                \"toolOrder\": []\n              },\n              \"expectedOutput\": \"转人工复核\",\n              \"input\": \"风险高\"\n            }\n          ]\n        },\n        {\n          \"category\": \"boundary\",\n          \"difficulty\": \"medium\",\n          \"id\": \"loan-limit\",\n          \"name\": \"金额超过自动审批上限\",\n          \"note\": \"\",\n          \"tags\": [],\n          \"turns\": [\n            {\n              \"expectation\": {\n                \"blocking\": true,\n                \"fields\": [],\n                \"forbiddenTools\": [\n                  \"approve_loan\"\n                ],\n                \"requiredTools\": [\n                  {\n                    \"name\": \"request_human_review\"\n                  }\n                ],\n                \"state\": \"pending_review\",\n                \"toolOrder\": []\n              },\n              \"expectedOutput\": \"\",\n              \"input\": \"申请 100 万元，风险低\"\n            }\n          ]\n        },\n        {\n          \"category\": \"positive\",\n          \"difficulty\": \"medium\",\n          \"id\": \"balance\",\n          \"name\": \"查询额度\",\n          \"note\": \"\",\n          \"tags\": [],\n          \"turns\": [\n            {\n              \"expectation\": {\n                \"blocking\": true,\n                \"expectedSkill\": \"balance_query\",\n                \"fields\": [\n                  {\n                    \"min\": 0,\n                    \"path\": \"balance\",\n                    \"required\": true,\n                    \"type\": \"number\"\n                  }\n                ],\n                \"forbiddenTools\": [],\n                \"requiredTools\": [\n                  {\n                    \"name\": \"query_balance\"\n                  }\n                ],\n                \"state\": \"balance_returned\",\n                \"toolOrder\": []\n              },\n              \"expectedOutput\": \"\",\n              \"input\": \"查询剩余额度\"\n            }\n          ]\n        }\n      ]\n    }\n  },\n  \"evaluators\": [\n    {\n      \"archived\": false,\n      \"id\": \"cmtpat10q000u1fpou0xfk3kq\",\n      \"user\": \"harness-ui@example.test\",\n      \"kind\": \"evaluator\",\n      \"assetKey\": \"business-rules\",\n      \"name\": \"逐轮业务规则\",\n      \"version\": 1,\n      \"contentJson\": \"{\\\"criticalStop\\\":true,\\\"prompt\\\":\\\"\\\",\\\"type\\\":\\\"rules\\\"}\",\n      \"contentHash\": \"d3bf605cfe21078b4a3a7be4fb666f90e4d4fd4b28beea9efe3f5c09309aa9d8\",\n      \"createdAt\": \"2026-09-06T04:15:02.763Z\",\n      \"content\": {\n        \"criticalStop\": true,\n        \"prompt\": \"\",\n        \"type\": \"rules\"\n      }\n    }\n  ],\n  \"modelRefs\": [],\n  \"comparisonHash\": \"ad446f24237e3004f00a6d6a06f3d36a54a45bc04e258345147c08055eecce90\",\n  \"createdAt\": \"2026-09-07T01:26:20.715Z\",\n  \"hash\": \"4dbedae93b2901ee3c4511e27866bf39b5d9050bb1a2ef79be4d8cb8b93e023a\"\n}",
+      "url": "http://127.0.0.1:3019/experiments/cmtqk7xgs0002ycunema2tprn"
+    }
+  },
+  {
+    "step": "regression-preserves-versions",
+    "selectors": [
+      {
+        "label": "待执行目标",
+        "options": [
+          "Demo 贷款助手",
+          "Demo 贷款 Skill"
+        ],
+        "selected": "Demo 贷款助手"
+      },
+      {
+        "label": "待执行目标版本",
+        "options": [
+          "v2",
+          "v1"
+        ],
+        "selected": "v2"
+      },
+      {
+        "label": "评测集",
+        "options": [
+          "贷款业务验收集"
+        ],
+        "selected": "贷款业务验收集"
+      },
+      {
+        "label": "评测集版本",
+        "options": [
+          "v3",
+          "v2",
+          "v1"
+        ],
+        "selected": "v1"
+      }
+    ]
+  },
+  {
+    "step": "narrow-layout",
+    "result": {
+      "overflow": false,
+      "selectors": [
+        {
+          "label": "待执行目标",
+          "left": 243,
+          "right": 383,
+          "width": 140
+        },
+        {
+          "label": "待执行目标版本",
+          "left": 243,
+          "right": 383,
+          "width": 140
+        },
+        {
+          "label": "评测集",
+          "left": 243,
+          "right": 383,
+          "width": 140
+        },
+        {
+          "label": "评测集版本",
+          "left": 243,
+          "right": 383,
+          "width": 140
+        }
+      ],
+      "width": 406
+    }
+  },
+  {
+    "step": "console",
+    "logs": []
+  }
+]

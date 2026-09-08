@@ -1,7 +1,7 @@
 /**
  * 对比 runner：在冻结的单组引擎之上加「对比」层。
  *
- * - createComparisonExperiment: 1 个 Experiment(type='llm') + N 个 ExperimentGroup
+ * - createComparisonExperiment: 1 个 Experiment + A/B 两个 ExperimentGroup
  * - autoPairGroups: 按维度查候选 trace → O(N) hash-join by query → 三条件判定 → 为可比配对创建两侧 case
  * - judgeComparability: 纯函数，三条件可比性判定（AC-004）
  * - getComparisonDetail: 按组切片调 detail-agg 纯函数 + 算配对表 + 可比率 + 组汇总
@@ -148,10 +148,12 @@ export function judgeComparability(
   if (!a || !b) {
     return { status: '未配对', reason: '一侧缺 trace' };
   }
-  if (dimension.extractValue(a) !== groupAValue) {
+  if (normalizeNull(a.query) !== normalizeNull(b.query)) return { status: '不可比', reason: '任务输入不一致' };
+  if (dimension.dimension === 'evaluator' && (!a.id || a.id !== b.id)) return { status: '不可比', reason: '评估器对比必须使用同一份 Trace' };
+  if (dimension.dimension !== 'evaluator' && dimension.extractValue(a) !== groupAValue) {
     return { status: '不可比', reason: 'A 组取值不匹配' };
   }
-  if (dimension.extractValue(b) !== groupBValue) {
+  if (dimension.dimension !== 'evaluator' && dimension.extractValue(b) !== groupBValue) {
     return { status: '不可比', reason: 'B 组取值不匹配' };
   }
   for (const { field } of dimension.controlledFields()) {
@@ -162,6 +164,43 @@ export function judgeComparability(
     }
   }
   return { status: '可比', reason: null };
+}
+
+function selectPairCandidates(aList: TraceCandidate[], bList: TraceCandidate[], dimension: VariableDimension, aValue: string, bValue: string) {
+  const sharedKey = (trace: TraceCandidate) => JSON.stringify([
+    ...dimension.controlledFields().map(({ field }) => normalizeNull(trace[field as keyof TraceCandidate])),
+    ...(dimension.dimension === 'evaluator' ? [trace.id] : []),
+  ]);
+  const bByConditions = new Map<string, TraceCandidate>();
+  for (const b of bList) {
+    const key = sharedKey(b);
+    if (!bByConditions.has(key)) bByConditions.set(key, b);
+  }
+  for (const a of aList) {
+    const b = bByConditions.get(sharedKey(a));
+    if (b && judgeComparability(a, b, dimension, aValue, bValue).status === '可比') return { a, b, status: '可比' as const, reason: null };
+  }
+  const a = aList[0] ?? null;
+  const b = bList[0] ?? null;
+  return { a, b, ...judgeComparability(a, b, dimension, aValue, bValue) };
+}
+
+function indexCandidatesByInput(traces: TraceCandidate[]) {
+  const indexed = new Map<string, TraceCandidate[]>();
+  for (const trace of traces) {
+    const input = trace.query ?? '';
+    if (!indexed.has(input)) indexed.set(input, []);
+    indexed.get(input)!.push(trace);
+  }
+  return indexed;
+}
+
+async function queryComparisonCandidates(dimension: VariableDimension, agent: string, groups: ComparisonGroupInput[], user: string) {
+  if (dimension.dimension === 'evaluator') {
+    const shared = await dimension.queryCandidateTraces(agent, groups[0].value, user);
+    return [shared, shared];
+  }
+  return Promise.all(groups.map(group => dimension.queryCandidateTraces(agent, group.value, user)));
 }
 
 // ─── computePairs（共享内部：查候选 + 配对 + 判定）──────────────────────────
@@ -190,7 +229,8 @@ export async function computePairs(
   const candidatesByKey = new Map<string, TraceCandidate[]>();
   for (const g of experiment.groups) {
     groupByKey.set(g.key, { group: g, dimension });
-    const traces = await dimension.queryCandidateTraces(experiment.agentName, g.variableValue);
+    const snapshot = JSON.parse(experiment.configSnapshotJson || '{}');
+    const traces: TraceCandidate[] = (snapshot.comparisonCandidates?.[g.key] || await dimension.queryCandidateTraces(experiment.agentName, g.variableValue, experiment.user)).filter((t:TraceCandidate)=>!snapshot.caseInputs || snapshot.caseInputs.includes(t.query || ''));
     if (traces.length === 0) {
       throw new Error(`${g.key} 组无任何匹配 trace`);
     }
@@ -209,7 +249,7 @@ export async function computePairs(
     }
   }
 
-  // 取每组首个候选（queryCandidateTraces 已按 timestamp desc 排序 → 首个=最新）
+  // 候选按时间倒序；优先选择非对比条件一致的最新组合。
   const groupKeys = Array.from(groupByKey.keys());
   const groupAKey = groupKeys[0];
   const groupBKey = groupKeys[1] ?? groupKeys[0];
@@ -220,13 +260,24 @@ export async function computePairs(
   for (const [query, byGroup] of indexByQuery) {
     const aList = byGroup.get(groupAKey) ?? [];
     const bList = byGroup.get(groupBKey) ?? [];
-    const a = aList[0] ?? null;
-    const b = bList[0] ?? null;
-    const result = judgeComparability(a, b, dimension, groupA.variableValue, groupB.variableValue);
-    pairs.push({ taskInput: query, a, b, status: result.status, reason: result.reason });
+    pairs.push({ taskInput: query, ...selectPairCandidates(aList, bList, dimension, groupA.variableValue, groupB.variableValue) });
   }
 
   return { pairs, groupByKey };
+}
+
+export async function previewComparison(user:string, agent:string, type:string, groups:ComparisonGroupInput[]) {
+  const dimension=getDimension(type);
+  if (!dimension || groups.length!==2 || groups.some(g=>!g.value)) throw new Error('请先配置两组对比条件');
+  const [a,b] = await queryComparisonCandidates(dimension, agent, groups, user);
+  const left = indexCandidatesByInput(a);
+  const right = indexCandidatesByInput(b);
+  const items: TraceCandidate[] = [];
+  for (const [input, candidates] of left) {
+    const pair = selectPairCandidates(candidates, right.get(input) ?? [], dimension, groups[0].value, groups[1].value);
+    if (input && pair.status === '可比' && pair.a) items.push(pair.a);
+  }
+  return items.map(t=>({...t,query:t.query,finalResult:'',skillName:t.skill}));
 }
 
 // ─── createComparisonExperiment ─────────────────────────────────────────────
@@ -238,20 +289,20 @@ export interface CreateComparisonParams {
   variableDimension: string;
   groups: ComparisonGroupInput[];
   evaluatorIds: string[];
+  caseInputs?: string[];
   watchMode?: boolean;
 }
 
 /**
- * 创建对比实验：1 个 Experiment(type='llm') + 嵌套 ExperimentGroup rows。
- * variableDimension 参数与 type 1:1 映射（本期 type='llm' ↔ LLM 维度）；存 type，维度由 getDimension 派生。
+ * 创建对比实验并固定对比维度、共享条件与用户选中的 Case。
  */
 export async function createComparisonExperiment(params: CreateComparisonParams): Promise<{ id: string }> {
   const { user, name, agentName, groups, evaluatorIds, watchMode } = params;
-  // variableDimension 与 type 1:1 映射（本期 type='llm' ↔ LLM 维度）；维度由 getDimension(type) 派生，不单独存。
 
   if (groups.length < 2) {
     throw new Error('对比实验至少需要 2 个分组');
   }
+  if (groups.some(group => !group.value.trim())) throw new Error('请配置两组对比条件');
   const values = groups.map((g) => g.value);
   if (new Set(values).size !== values.length) {
     throw new Error('分组取值不可相同');
@@ -260,14 +311,38 @@ export async function createComparisonExperiment(params: CreateComparisonParams)
     throw new Error('对比实验不支持 watchMode');
   }
 
+  const dimension = getDimension(params.variableDimension);
+  if (!dimension || params.variableDimension === 'framework') throw new Error('不支持的对比维度');
+  if (groups.length !== 2 || groups[0].key !== 'A' || groups[1].key !== 'B') throw new Error('第一版请配置 A/B 两组');
+  const selectedEvaluators = dimension.dimension === 'evaluator' ? groups.map(g=>g.value) : evaluatorIds;
+  const availableEvaluators = [...presetEvaluators, ...await readUserCustomEvaluators(user)] as EvaluatorCard[];
+  if (selectedEvaluators.some(id=>!availableEvaluators.some(e=>e.id===id))) throw new Error('评估器不存在或无权访问');
+  const comparisonCandidates: Record<string,TraceCandidate[]> = {};
+  if (dimension.dimension === 'evaluator' || params.caseInputs) {
+    const candidates = await queryComparisonCandidates(dimension, agentName, groups, user);
+    for (let index = 0; index < groups.length; index++) {
+      const group = groups[index];
+      comparisonCandidates[group.key] = candidates[index].filter(t => !params.caseInputs || params.caseInputs.includes(t.query || ''));
+      if (!comparisonCandidates[group.key].length) throw new Error(group.key + ' 组无任何匹配 trace');
+    }
+    if (params.caseInputs) {
+      const aByInput = indexCandidatesByInput(comparisonCandidates.A);
+      const bByInput = indexCandidatesByInput(comparisonCandidates.B);
+      for (const input of new Set(params.caseInputs)) {
+        const pair = selectPairCandidates(aByInput.get(input) ?? [], bByInput.get(input) ?? [], dimension, groups[0].value, groups[1].value);
+        if (pair.status !== '可比') throw new Error('Case 的共享条件不满足：' + input + '（' + pair.reason + '）');
+      }
+    }
+  }
   const experiment = await prisma.experiment.create({
     data: {
       user,
       name,
       agentName,
-      type: 'llm',
+      type: dimension.dimension,
+      configSnapshotJson: JSON.stringify({...(Object.keys(comparisonCandidates).length?{comparisonCandidates}:{}),...(params.caseInputs?{caseInputs:params.caseInputs}:{})}),
       scope: '',
-      evaluatorIdsJson: JSON.stringify(evaluatorIds),
+      evaluatorIdsJson: JSON.stringify(selectedEvaluators),
       status: 'draft',
       groups: {
         create: groups.map((g) => ({ key: g.key, variableValue: g.value })),
@@ -637,11 +712,13 @@ export async function startComparisonRun(
 
   const cases = await prisma.experimentCase.findMany({
     where: { experimentId },
-    select: { id: true },
+    select: { id: true, groupId: true },
   });
   const resultIds: string[] = [];
   for (const c of cases) {
-    for (const evaluatorId of evaluatorIds) {
+    const groupEvaluator = experiment.groups.find((g:{id:string;variableValue:string})=>g.id===c.groupId)?.variableValue;
+    const rowEvaluators = experiment.type==='evaluator' ? evaluatorIds.filter(e=>e===groupEvaluator) : evaluatorIds;
+    for (const evaluatorId of rowEvaluators) {
       const row = await prisma.experimentEvalResult.upsert({
         where: { caseId_evaluatorId: { caseId: c.id, evaluatorId } },
         create: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
@@ -667,11 +744,12 @@ export async function rescanComparison(
   experimentId: string,
   user: string,
 ): Promise<{ newPairsCount: number; downgradedPairs: number }> {
-  const experiment = await prisma.experiment.findUnique({
-    where: { id: experimentId },
+  const experiment = await prisma.experiment.findFirst({
+    where: { id: experimentId, user },
     include: { groups: { orderBy: { key: 'asc' } } },
   });
   if (!experiment) throw new Error(`experiment ${experimentId} not found`);
+  if (experiment.scope || !['llm', 'agent', 'skill', 'evaluator'].includes(experiment.type)) throw new Error('该实验不支持对比重扫');
   if (experiment.status === 'running') {
     throw new Error('experiment is running (409)');
   }
@@ -724,7 +802,7 @@ export async function rescanComparison(
           },
           select: { id: true },
         });
-        for (const evaluatorId of evaluatorIds) {
+        for (const evaluatorId of (experiment.type === 'evaluator' ? [groupA.variableValue] : evaluatorIds)) {
           const r = await prisma.experimentEvalResult.create({
             data: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
             select: { id: true },
@@ -740,7 +818,7 @@ export async function rescanComparison(
           },
           select: { id: true },
         });
-        for (const evaluatorId of evaluatorIds) {
+        for (const evaluatorId of (experiment.type === 'evaluator' ? [groupB.variableValue] : evaluatorIds)) {
           const r = await prisma.experimentEvalResult.create({
             data: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
             select: { id: true },

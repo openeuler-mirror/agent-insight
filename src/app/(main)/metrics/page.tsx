@@ -2,6 +2,7 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
+import EvaluationWorkspace from '@/components/evaluation-harness/Workspace';
 import EvaluatorsCenter from '@/components/EvaluatorsCenter';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { SingleExecutionMetrics } from '@/components/eval/SingleExecutionMetrics';
@@ -44,6 +45,7 @@ function MetricsPageInner() {
       <AppTopBar title={<Term id="evaluator" label={t('nav.evalMetrics')} />} />
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <EvaluatorsCenter />
+        <details className="m-5 rounded-lg border border-border p-4"><summary>版本化业务评估器</summary><EvaluationWorkspace mode="evaluators" /></details>
       </div>
     </>
   );

@@ -1,5 +1,5 @@
 import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+process.env.DATABASE_URL ||= `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -113,4 +113,50 @@ test('experiment candidates, traces, and watch mode exclude system-owned agents'
     await prisma.experimentCase.count({ where: { experimentId: watchExperiment.id } }),
     0,
   );
+});
+
+
+test('Agent 目录按本人目标定义排除 Skill-only 的 harness Trace，保留同名真实 Agent', async (t) => {
+  const user = TEST_USER + '-target-kinds';
+  const names = { skill: '仅声明为 Skill', native: '同名原生 Agent', dual: '同时登记 Agent 和 Skill', foreign: '其他用户的 Skill', untyped: '名字里有 Skill 的普通 Agent', unknownFramework: '未记录框架的 Agent' };
+  const define = (owner: string, name: string, type: string, key: string) => prisma.evaluationAssetVersion.create({ data: { user: owner, kind: 'target', assetKey: key, name, version: 1, contentJson: JSON.stringify({ type }), contentHash: key } });
+  t.after(async () => {
+    await prisma.execution.deleteMany({ where: { user } });
+    await prisma.evaluationAssetVersion.deleteMany({ where: { user: { in: [user, user + '-other'] } } });
+  });
+  for (const key of ['skill', 'native', 'dual', 'unknownFramework'] as const) await define(user, names[key], 'skill', key);
+  await define(user, names.dual, 'agent', 'dual-agent');
+  await define(user + '-other', names.foreign, 'skill', 'foreign-skill');
+  for (const name of Object.values(names)) await prisma.execution.create({ data: { user, agentName: name, framework: 'evaluation-harness', query: 'q' } });
+  await prisma.execution.create({ data: { user, agentName: names.native, framework: 'opencode', query: 'q' } });
+  await prisma.execution.create({ data: { user, agentName: names.unknownFramework, framework: null, query: 'q' } });
+  const response = await listExperimentAgents(new Request('http://localhost/api/experiments/agents?user=' + encodeURIComponent(user)));
+  assert.equal(response.status, 200);
+  const { agents } = await response.json();
+  assert.equal(agents.some((agent: any) => agent.name === names.skill), false);
+  assert.deepEqual(agents.find((agent: any) => agent.name === names.native), { name: names.native, traces: 1, frameworks: ['opencode'], executable: false, targets: [] });
+  assert.equal(agents.find((agent: any) => agent.name === names.unknownFramework)?.traces, 1);
+  for (const key of ['dual', 'foreign', 'untyped'] as const) assert.ok(agents.some((agent: any) => agent.name === names[key]), key);
+});
+
+test('与 Skill 目标同名的在线客户端 Agent 仍保留为可执行候选', async (t) => {
+  const user = TEST_USER + '-online-kind';
+  const name = '同名在线 Agent';
+  const clientId = user + '-client';
+  t.after(async () => {
+    await prisma.execution.deleteMany({ where: { user } });
+    await prisma.evaluationAssetVersion.deleteMany({ where: { user } });
+    await prisma.reliabilityClient.deleteMany({ where: { user } });
+  });
+  await prisma.evaluationAssetVersion.create({ data: { user, kind: 'target', assetKey: 'skill-only', name, version: 1, contentJson: JSON.stringify({ type: 'skill' }), contentHash: 'skill-only' } });
+  await prisma.execution.create({ data: { user, agentName: name, framework: 'evaluation-harness', query: 'q' } });
+  await prisma.reliabilityClient.create({ data: { user, clientId, name: '测试客户端', status: 'online', lastSeenAt: new Date(), capabilitiesJson: JSON.stringify({ platforms: [{ id: 'opencode', agents: [name], actions: ['RUN_EXPERIMENT_CASE'], runExperimentCase: { version: 1, returnsTraceId: true } }] }) } });
+  const response = await listExperimentAgents(new Request('http://localhost/api/experiments/agents?user=' + encodeURIComponent(user)));
+  assert.equal(response.status, 200);
+  const { agents } = await response.json();
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].name, name);
+  assert.equal(agents[0].traces, 0);
+  assert.equal(agents[0].executable, true);
+  assert.equal(agents[0].targets[0].workerId, clientId);
 });

@@ -1,3 +1,4 @@
+import { previewComparison } from '@/lib/engine/experiment/comparison-runner';
 // 评测「实验」API —— 列表 + 创建（单组 type='single' + LLM 对比 type='llm'）。
 // 对比类型：createComparisonExperiment + autoPairGroups（跳过 case 校验，case 由配对产生）。
 import { NextResponse } from 'next/server';
@@ -85,6 +86,8 @@ export async function GET(req: Request) {
       scoreRowsByExperiment.set(row.experimentId, list);
     }
 
+    const harnessIds = rows.filter(r=>r.scope==='evaluation-harness').map(r=>r.id);
+    const harnessReports = harnessIds.length ? await prisma.evaluationAnalysis.findMany({where:{targetId:{in:harnessIds}},orderBy:{createdAt:'desc'}}) : [];
     const items = rows.map((r) => {
       let evaluatorCount = 0;
       try {
@@ -104,7 +107,7 @@ export async function GET(req: Request) {
         preset: r.preset,
         caseCount: r._count.cases,
         evaluatorCount,
-        overallScore: overallAverage(scoreRowsByExperiment.get(r.id) || []),
+        overallScore: r.scope==='evaluation-harness' ? JSON.parse(harnessReports.find((a:any)=>a.targetId===r.id)?.reportJson || '{}').summary?.score ?? null : overallAverage(scoreRowsByExperiment.get(r.id) || []),
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
       };
@@ -125,6 +128,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
+    if (body.action === 'preview-comparison') {
+      return NextResponse.json({items:await previewComparison(username,String(body.agentName||''),String(body.type),Array.isArray(body.groups)?body.groups:[])});
+    }
     const name = String(body.name || '').trim();
     const agentName = String(body.agentName || '').trim();
     const watchMode = body.watchMode === true;
@@ -158,7 +164,7 @@ export async function POST(req: Request) {
     }
 
     // 对比实验：type='llm' → createComparisonExperiment + autoPairGroups
-    if (type === 'llm') {
+    if (['llm','agent','skill','evaluator'].includes(type)) {
       if (scope) {
         return NextResponse.json({ error: 'Skill 实验不支持通用 LLM 对比类型' }, { status: 400 });
       }
@@ -172,15 +178,17 @@ export async function POST(req: Request) {
       try {
         const { id } = await createComparisonExperiment({
           user: username, name, agentName,
-          variableDimension: String(body.variableDimension || 'llm'),
+          variableDimension: type,
           groups: groups.map((g: { key?: unknown; value?: unknown }) => ({
             key: String(g.key ?? ''),
             value: String(g.value ?? ''),
           })),
           evaluatorIds,
+          ...(Array.isArray(body.cases) ? {caseInputs:body.cases.map((c:any)=>String(c.input||''))} : {}),
         });
         // autoPairGroups 查候选 trace + 为可比配对创建 case
         await autoPairGroups(id);
+        for (const c of Array.isArray(body.cases) ? body.cases : []) await prisma.experimentCase.updateMany({where:{experimentId:id,input:String(c.input||'')},data:{referenceOutput:typeof c.referenceOutput==='string'?c.referenceOutput:null,datasetInput:typeof c.datasetInput==='string'?c.datasetInput:null,evaluatorContextJson:serializeEvaluatorCaseContext(c.evaluatorContext)}});
         return NextResponse.json({ id });
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'comparison creation failed';

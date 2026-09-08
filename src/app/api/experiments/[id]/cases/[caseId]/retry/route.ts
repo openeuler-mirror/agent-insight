@@ -104,6 +104,7 @@ export async function POST(
       select: {
         id: true,
         input: true,
+        experiment: { select: { scope: true } },
         executionId: true,
         faultInjectionType: true,
         fiTaskId: true,
@@ -116,6 +117,7 @@ export async function POST(
       },
     });
     if (!row) return NextResponse.json({ error: 'case not found' }, { status: 404 });
+    if (row.experiment.scope === 'evaluation-harness') return NextResponse.json({ error: '请从版本化详情重新执行 Case，生成独立实验记录' }, { status: 409 });
     if (row.results.some((result: { status: string }) => (
       result.status === 'pending' || result.status === 'running'
     ))) {

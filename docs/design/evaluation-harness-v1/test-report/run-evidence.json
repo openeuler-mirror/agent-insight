@@ -1,0 +1,1685 @@
+[
+  {
+    "key": "baseRunUrl",
+    "id": "cmtpkrmv70001k3zwmo8m93a6",
+    "name": "界面复测 · 审批基线",
+    "status": "done",
+    "targetVersion": 1,
+    "datasetVersion": 1,
+    "comparisonHash": "ad446f24237e3004f00a6d6a06f3d36a54a45bc04e258345147c08055eecce90",
+    "summary": {
+      "routing": {
+        "total": 3,
+        "observed": 3,
+        "unknown": 0,
+        "accuracy": 100
+      },
+      "tools": {
+        "total": 9,
+        "observed": 9,
+        "unknown": 0,
+        "accuracy": 44.44444444444444
+      },
+      "latency": {
+        "turns": 5,
+        "meanMs": 41.8,
+        "p95Ms": 91
+      },
+      "byEvaluator": {
+        "cmtpat10q000u1fpou0xfk3kq": {
+          "total": 4,
+          "pass": 2,
+          "fail": 2,
+          "unknown": 0
+        }
+      },
+      "total": 4,
+      "pass": 2,
+      "fail": 2,
+      "unknown": 0,
+      "incomplete": 0,
+      "score": 50,
+      "gate": "blocked",
+      "byCategory": {
+        "positive": {
+          "total": 2,
+          "pass": 2
+        },
+        "negative": {
+          "total": 1,
+          "pass": 0
+        },
+        "boundary": {
+          "total": 1,
+          "pass": 0
+        }
+      },
+      "byDifficulty": {
+        "medium": {
+          "total": 3,
+          "pass": 2
+        },
+        "hard": {
+          "total": 1,
+          "pass": 0
+        }
+      },
+      "clusters": {
+        "结束状态": {
+          "caseIds": [
+            "loan-high",
+            "loan-limit"
+          ],
+          "reason": "预期 pending_review；实际 approved"
+        },
+        "必须工具": {
+          "caseIds": [
+            "loan-high",
+            "loan-limit"
+          ],
+          "reason": "request_human_review"
+        },
+        "工具参数": {
+          "caseIds": [
+            "loan-high"
+          ],
+          "reason": "request_human_review"
+        },
+        "禁止工具": {
+          "caseIds": [
+            "loan-high",
+            "loan-limit"
+          ],
+          "reason": "approve_loan"
+        }
+      },
+      "matrix": {
+        "loan_approval": {
+          "loan_approval": 2
+        },
+        "balance_query": {
+          "balance_query": 1
+        }
+      },
+      "executionErrors": 0
+    },
+    "cases": [
+      {
+        "id": "loan-low",
+        "name": "低风险正常审批",
+        "turns": [
+          {
+            "input": "申请 5 万元，风险低",
+            "expectedOutput": "",
+            "expectation": {
+              "expectedSkill": "loan_approval",
+              "state": "approved",
+              "requiredTools": [
+                {
+                  "name": "approve_loan",
+                  "arguments": {
+                    "amount": 50000
+                  }
+                }
+              ],
+              "forbiddenTools": [],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 loan_approval；实际 loan_approval",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 approved；实际 approved",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "工具参数",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 5 万元，风险低",
+            "targetVersion": "baseline",
+            "output": "申请已审批通过",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "approved",
+            "tools": [
+              {
+                "name": "approve_loan",
+                "arguments": {
+                  "amount": 50000,
+                  "risk": "low"
+                },
+                "result": {
+                  "state": "approved"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:53:53.982Z",
+            "finishedAt": "2026-09-06T08:53:54.066Z",
+            "durationMs": 84
+          }
+        ],
+        "traceId": "2c548982-66dd-4904-91aa-318843ac62ff"
+      },
+      {
+        "id": "loan-high",
+        "name": "高风险多轮转人工",
+        "turns": [
+          {
+            "input": "申请 8 万元",
+            "expectedOutput": "询问风险",
+            "expectation": {
+              "state": "waiting_risk",
+              "requiredTools": [],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          },
+          {
+            "input": "风险高",
+            "expectedOutput": "转人工复核",
+            "expectation": {
+              "expectedSkill": "loan_approval",
+              "state": "pending_review",
+              "requiredTools": [
+                {
+                  "name": "request_human_review",
+                  "arguments": {
+                    "amount": 80000,
+                    "risk": "high"
+                  }
+                }
+              ],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "fail",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 waiting_risk；实际 waiting_risk",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 loan_approval；实际 loan_approval",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "结束状态",
+            "verdict": "fail",
+            "reason": "预期 pending_review；实际 approved",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "必须工具",
+            "verdict": "fail",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "工具参数",
+            "verdict": "fail",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "禁止工具",
+            "verdict": "fail",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 8 万元",
+            "targetVersion": "baseline",
+            "output": "请提供风险等级",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "waiting_risk",
+            "tools": [],
+            "startedAt": "2026-09-06T08:53:53.969Z",
+            "finishedAt": "2026-09-06T08:53:54.060Z",
+            "durationMs": 91
+          },
+          {
+            "input": "风险高",
+            "targetVersion": "baseline",
+            "output": "申请已审批通过",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "approved",
+            "tools": [
+              {
+                "name": "approve_loan",
+                "arguments": {
+                  "amount": 80000,
+                  "risk": "high"
+                },
+                "result": {
+                  "state": "approved"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:53:54.060Z",
+            "finishedAt": "2026-09-06T08:53:54.085Z",
+            "durationMs": 25
+          }
+        ],
+        "traceId": "f4e9e5ae-ab2b-467c-9521-468492846d08"
+      },
+      {
+        "id": "loan-limit",
+        "name": "金额超过自动审批上限",
+        "turns": [
+          {
+            "input": "申请 100 万元，风险低",
+            "expectedOutput": "",
+            "expectation": {
+              "state": "pending_review",
+              "requiredTools": [
+                {
+                  "name": "request_human_review"
+                }
+              ],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "fail",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "fail",
+            "reason": "预期 pending_review；实际 approved",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "fail",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "禁止工具",
+            "verdict": "fail",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 100 万元，风险低",
+            "targetVersion": "baseline",
+            "output": "申请已审批通过",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "approved",
+            "tools": [
+              {
+                "name": "approve_loan",
+                "arguments": {
+                  "amount": 1000000,
+                  "risk": "low"
+                },
+                "result": {
+                  "state": "approved"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:53:54.171Z",
+            "finishedAt": "2026-09-06T08:53:54.176Z",
+            "durationMs": 5
+          }
+        ],
+        "traceId": "e5966de9-61b4-4a11-b90f-4d97e446f922"
+      },
+      {
+        "id": "balance",
+        "name": "查询额度",
+        "turns": [
+          {
+            "input": "查询剩余额度",
+            "expectedOutput": "",
+            "expectation": {
+              "expectedSkill": "balance_query",
+              "state": "balance_returned",
+              "requiredTools": [
+                {
+                  "name": "query_balance"
+                }
+              ],
+              "forbiddenTools": [],
+              "toolOrder": [],
+              "fields": [
+                {
+                  "path": "balance",
+                  "type": "number",
+                  "required": true,
+                  "min": 0
+                }
+              ],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 balance_query；实际 balance_query",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 balance_returned；实际 balance_returned",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "query_balance",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "字段 balance",
+            "verdict": "pass",
+            "reason": "检查必填、类型、范围和取值",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "查询剩余额度",
+            "targetVersion": "baseline",
+            "output": "{\"balance\":100000}",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "balance_query",
+            "state": "balance_returned",
+            "tools": [
+              {
+                "name": "query_balance",
+                "arguments": {},
+                "result": {
+                  "balance": 100000
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:53:54.177Z",
+            "finishedAt": "2026-09-06T08:53:54.181Z",
+            "durationMs": 4
+          }
+        ],
+        "traceId": "82599a2b-ab2c-44e7-b987-15f07efc9703"
+      }
+    ]
+  },
+  {
+    "key": "fixedRunUrl",
+    "id": "cmtpkst3i000nk3zwo7ki2vdf",
+    "name": "界面复测 · 修复回归",
+    "status": "done",
+    "targetVersion": 2,
+    "datasetVersion": 1,
+    "comparisonHash": "ad446f24237e3004f00a6d6a06f3d36a54a45bc04e258345147c08055eecce90",
+    "summary": {
+      "routing": {
+        "total": 3,
+        "observed": 3,
+        "unknown": 0,
+        "accuracy": 100
+      },
+      "tools": {
+        "total": 9,
+        "observed": 9,
+        "unknown": 0,
+        "accuracy": 100
+      },
+      "latency": {
+        "turns": 5,
+        "meanMs": 7,
+        "p95Ms": 11
+      },
+      "byEvaluator": {
+        "cmtpat10q000u1fpou0xfk3kq": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "unknown": 0
+        }
+      },
+      "total": 4,
+      "pass": 4,
+      "fail": 0,
+      "unknown": 0,
+      "incomplete": 0,
+      "score": 100,
+      "gate": "pass",
+      "byCategory": {
+        "positive": {
+          "total": 2,
+          "pass": 2
+        },
+        "negative": {
+          "total": 1,
+          "pass": 1
+        },
+        "boundary": {
+          "total": 1,
+          "pass": 1
+        }
+      },
+      "byDifficulty": {
+        "medium": {
+          "total": 3,
+          "pass": 3
+        },
+        "hard": {
+          "total": 1,
+          "pass": 1
+        }
+      },
+      "clusters": {},
+      "matrix": {
+        "loan_approval": {
+          "loan_approval": 2
+        },
+        "balance_query": {
+          "balance_query": 1
+        }
+      },
+      "executionErrors": 0
+    },
+    "cases": [
+      {
+        "id": "loan-low",
+        "name": "低风险正常审批",
+        "turns": [
+          {
+            "input": "申请 5 万元，风险低",
+            "expectedOutput": "",
+            "expectation": {
+              "expectedSkill": "loan_approval",
+              "state": "approved",
+              "requiredTools": [
+                {
+                  "name": "approve_loan",
+                  "arguments": {
+                    "amount": 50000
+                  }
+                }
+              ],
+              "forbiddenTools": [],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 loan_approval；实际 loan_approval",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 approved；实际 approved",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "工具参数",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 5 万元，风险低",
+            "targetVersion": "fixed",
+            "output": "申请已审批通过",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "approved",
+            "tools": [
+              {
+                "name": "approve_loan",
+                "arguments": {
+                  "amount": 50000,
+                  "risk": "low"
+                },
+                "result": {
+                  "state": "approved"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:54:48.705Z",
+            "finishedAt": "2026-09-06T08:54:48.711Z",
+            "durationMs": 6
+          }
+        ],
+        "traceId": "e67b428b-a01a-4f88-a742-dd5d71360e19"
+      },
+      {
+        "id": "loan-high",
+        "name": "高风险多轮转人工",
+        "turns": [
+          {
+            "input": "申请 8 万元",
+            "expectedOutput": "询问风险",
+            "expectation": {
+              "state": "waiting_risk",
+              "requiredTools": [],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          },
+          {
+            "input": "风险高",
+            "expectedOutput": "转人工复核",
+            "expectation": {
+              "expectedSkill": "loan_approval",
+              "state": "pending_review",
+              "requiredTools": [
+                {
+                  "name": "request_human_review",
+                  "arguments": {
+                    "amount": 80000,
+                    "risk": "high"
+                  }
+                }
+              ],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 waiting_risk；实际 waiting_risk",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 loan_approval；实际 loan_approval",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 pending_review；实际 pending_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "工具参数",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 8 万元",
+            "targetVersion": "fixed",
+            "output": "请提供风险等级",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "waiting_risk",
+            "tools": [],
+            "startedAt": "2026-09-06T08:54:48.706Z",
+            "finishedAt": "2026-09-06T08:54:48.717Z",
+            "durationMs": 11
+          },
+          {
+            "input": "风险高",
+            "targetVersion": "fixed",
+            "output": "已提交人工复核",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "pending_review",
+            "tools": [
+              {
+                "name": "request_human_review",
+                "arguments": {
+                  "amount": 80000,
+                  "risk": "high"
+                },
+                "result": {
+                  "state": "pending_review"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:54:48.717Z",
+            "finishedAt": "2026-09-06T08:54:48.723Z",
+            "durationMs": 6
+          }
+        ],
+        "traceId": "73ac58f8-f276-4417-be3c-b71529c97282"
+      },
+      {
+        "id": "loan-limit",
+        "name": "金额超过自动审批上限",
+        "turns": [
+          {
+            "input": "申请 100 万元，风险低",
+            "expectedOutput": "",
+            "expectation": {
+              "state": "pending_review",
+              "requiredTools": [
+                {
+                  "name": "request_human_review"
+                }
+              ],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 pending_review；实际 pending_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 100 万元，风险低",
+            "targetVersion": "fixed",
+            "output": "已提交人工复核",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "pending_review",
+            "tools": [
+              {
+                "name": "request_human_review",
+                "arguments": {
+                  "amount": 1000000,
+                  "risk": "low"
+                },
+                "result": {
+                  "state": "pending_review"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:54:48.753Z",
+            "finishedAt": "2026-09-06T08:54:48.761Z",
+            "durationMs": 8
+          }
+        ],
+        "traceId": "7f5347b4-c058-4906-b11b-27aadc9de7d7"
+      },
+      {
+        "id": "balance",
+        "name": "查询额度",
+        "turns": [
+          {
+            "input": "查询剩余额度",
+            "expectedOutput": "",
+            "expectation": {
+              "expectedSkill": "balance_query",
+              "state": "balance_returned",
+              "requiredTools": [
+                {
+                  "name": "query_balance"
+                }
+              ],
+              "forbiddenTools": [],
+              "toolOrder": [],
+              "fields": [
+                {
+                  "path": "balance",
+                  "type": "number",
+                  "required": true,
+                  "min": 0
+                }
+              ],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 balance_query；实际 balance_query",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 balance_returned；实际 balance_returned",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "query_balance",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "字段 balance",
+            "verdict": "pass",
+            "reason": "检查必填、类型、范围和取值",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "查询剩余额度",
+            "targetVersion": "fixed",
+            "output": "{\"balance\":100000}",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "balance_query",
+            "state": "balance_returned",
+            "tools": [
+              {
+                "name": "query_balance",
+                "arguments": {},
+                "result": {
+                  "balance": 100000
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:54:48.765Z",
+            "finishedAt": "2026-09-06T08:54:48.769Z",
+            "durationMs": 4
+          }
+        ],
+        "traceId": "b2599fb0-cd13-43c2-9534-bcef424a2577"
+      }
+    ]
+  },
+  {
+    "key": "revisedRunUrl",
+    "id": "cmtpku51f003qk3zwcivmw12k",
+    "name": "界面复测 · 评测集 v3 回归",
+    "status": "done",
+    "targetVersion": 2,
+    "datasetVersion": 3,
+    "comparisonHash": "ad446f24237e3004f00a6d6a06f3d36a54a45bc04e258345147c08055eecce90",
+    "summary": {
+      "routing": {
+        "total": 3,
+        "observed": 3,
+        "unknown": 0,
+        "accuracy": 100
+      },
+      "tools": {
+        "total": 10,
+        "observed": 10,
+        "unknown": 0,
+        "accuracy": 100
+      },
+      "latency": {
+        "turns": 5,
+        "meanMs": 9,
+        "p95Ms": 21
+      },
+      "byEvaluator": {
+        "cmtpat10q000u1fpou0xfk3kq": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "unknown": 0
+        }
+      },
+      "total": 4,
+      "pass": 4,
+      "fail": 0,
+      "unknown": 0,
+      "incomplete": 0,
+      "score": 100,
+      "gate": "pass",
+      "byCategory": {
+        "positive": {
+          "total": 2,
+          "pass": 2
+        },
+        "negative": {
+          "total": 1,
+          "pass": 1
+        },
+        "boundary": {
+          "total": 1,
+          "pass": 1
+        }
+      },
+      "byDifficulty": {
+        "medium": {
+          "total": 3,
+          "pass": 3
+        },
+        "hard": {
+          "total": 1,
+          "pass": 1
+        }
+      },
+      "clusters": {},
+      "matrix": {
+        "loan_approval": {
+          "loan_approval": 2
+        },
+        "balance_query": {
+          "balance_query": 1
+        }
+      },
+      "executionErrors": 0
+    },
+    "cases": [
+      {
+        "id": "loan-low",
+        "name": "低风险正常审批",
+        "turns": [
+          {
+            "input": "申请 5 万元，风险低",
+            "expectedOutput": "",
+            "expectation": {
+              "expectedSkill": "loan_approval",
+              "state": "approved",
+              "requiredTools": [
+                {
+                  "name": "approve_loan",
+                  "arguments": {
+                    "amount": 50000
+                  }
+                }
+              ],
+              "forbiddenTools": [],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 loan_approval；实际 loan_approval",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 approved；实际 approved",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "工具参数",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 5 万元，风险低",
+            "targetVersion": "fixed",
+            "output": "申请已审批通过",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "approved",
+            "tools": [
+              {
+                "name": "approve_loan",
+                "arguments": {
+                  "amount": 50000,
+                  "risk": "low"
+                },
+                "result": {
+                  "state": "approved"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:55:50.857Z",
+            "finishedAt": "2026-09-06T08:55:50.871Z",
+            "durationMs": 14
+          }
+        ],
+        "traceId": "f5af5758-323a-4b50-9437-ded7928c7e66"
+      },
+      {
+        "id": "loan-high",
+        "name": "高风险多轮转人工",
+        "turns": [
+          {
+            "input": "申请 8 万元",
+            "expectedOutput": "询问风险",
+            "expectation": {
+              "state": "waiting_risk",
+              "requiredTools": [],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          },
+          {
+            "input": "风险高",
+            "expectedOutput": "转人工复核",
+            "expectation": {
+              "contains": "人工复核",
+              "expectedSkill": "loan_approval",
+              "state": "pending_review",
+              "requiredTools": [
+                {
+                  "name": "request_human_review",
+                  "arguments": {
+                    "amount": 80000,
+                    "risk": "high"
+                  }
+                }
+              ],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [
+                "request_human_review"
+              ],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 waiting_risk；实际 waiting_risk",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "文本包含",
+            "verdict": "pass",
+            "reason": "要求包含：人工复核",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 loan_approval；实际 loan_approval",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 pending_review；实际 pending_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "工具参数",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "工具顺序",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 8 万元",
+            "targetVersion": "fixed",
+            "output": "请提供风险等级",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "waiting_risk",
+            "tools": [],
+            "startedAt": "2026-09-06T08:55:50.837Z",
+            "finishedAt": "2026-09-06T08:55:50.842Z",
+            "durationMs": 5
+          },
+          {
+            "input": "风险高",
+            "targetVersion": "fixed",
+            "output": "已提交人工复核",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "pending_review",
+            "tools": [
+              {
+                "name": "request_human_review",
+                "arguments": {
+                  "amount": 80000,
+                  "risk": "high"
+                },
+                "result": {
+                  "state": "pending_review"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:55:50.842Z",
+            "finishedAt": "2026-09-06T08:55:50.863Z",
+            "durationMs": 21
+          }
+        ],
+        "traceId": "3ea09b2e-ea6a-4425-ac7b-7e94022525d1"
+      },
+      {
+        "id": "loan-limit",
+        "name": "金额超过自动审批上限",
+        "turns": [
+          {
+            "input": "申请 100 万元，风险低",
+            "expectedOutput": "",
+            "expectation": {
+              "state": "pending_review",
+              "requiredTools": [
+                {
+                  "name": "request_human_review"
+                }
+              ],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 pending_review；实际 pending_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 100 万元，风险低",
+            "targetVersion": "fixed",
+            "output": "已提交人工复核",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "pending_review",
+            "tools": [
+              {
+                "name": "request_human_review",
+                "arguments": {
+                  "amount": 1000000,
+                  "risk": "low"
+                },
+                "result": {
+                  "state": "pending_review"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:55:50.892Z",
+            "finishedAt": "2026-09-06T08:55:50.894Z",
+            "durationMs": 2
+          }
+        ],
+        "traceId": "84f1c859-9c2e-46fb-b270-b23dcff28209"
+      },
+      {
+        "id": "balance",
+        "name": "查询额度",
+        "turns": [
+          {
+            "input": "查询剩余额度",
+            "expectedOutput": "",
+            "expectation": {
+              "expectedSkill": "balance_query",
+              "state": "balance_returned",
+              "requiredTools": [
+                {
+                  "name": "query_balance"
+                }
+              ],
+              "forbiddenTools": [],
+              "toolOrder": [],
+              "fields": [
+                {
+                  "path": "balance",
+                  "type": "number",
+                  "required": true,
+                  "min": 0
+                }
+              ],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 balance_query；实际 balance_query",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 balance_returned；实际 balance_returned",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "query_balance",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "字段 balance",
+            "verdict": "pass",
+            "reason": "检查必填、类型、范围和取值",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "查询剩余额度",
+            "targetVersion": "fixed",
+            "output": "{\"balance\":100000}",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "balance_query",
+            "state": "balance_returned",
+            "tools": [
+              {
+                "name": "query_balance",
+                "arguments": {},
+                "result": {
+                  "balance": 100000
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:55:50.929Z",
+            "finishedAt": "2026-09-06T08:55:50.932Z",
+            "durationMs": 3
+          }
+        ],
+        "traceId": "26edf8a3-c503-4db3-9b46-b1a98e0f9aff"
+      }
+    ]
+  },
+  {
+    "key": "singleRunUrl",
+    "id": "cmtpku81p004ck3zwlm72ayyf",
+    "name": "界面复测 · 评测集 v3 回归 · 高风险多轮转人工",
+    "status": "done",
+    "targetVersion": 2,
+    "datasetVersion": 3,
+    "comparisonHash": "81236e19ca9caa6b3bb4b960ea1470dc2e2efee716d21113e80c58c1597e5bd6",
+    "summary": {
+      "routing": {
+        "total": 1,
+        "observed": 1,
+        "unknown": 0,
+        "accuracy": 100
+      },
+      "tools": {
+        "total": 5,
+        "observed": 5,
+        "unknown": 0,
+        "accuracy": 100
+      },
+      "latency": {
+        "turns": 2,
+        "meanMs": 16,
+        "p95Ms": 28
+      },
+      "byEvaluator": {
+        "cmtpat10q000u1fpou0xfk3kq": {
+          "total": 1,
+          "pass": 1,
+          "fail": 0,
+          "unknown": 0
+        }
+      },
+      "total": 1,
+      "pass": 1,
+      "fail": 0,
+      "unknown": 0,
+      "incomplete": 0,
+      "score": 100,
+      "gate": "pass",
+      "byCategory": {
+        "negative": {
+          "total": 1,
+          "pass": 1
+        }
+      },
+      "byDifficulty": {
+        "hard": {
+          "total": 1,
+          "pass": 1
+        }
+      },
+      "clusters": {},
+      "matrix": {
+        "loan_approval": {
+          "loan_approval": 1
+        }
+      },
+      "executionErrors": 0
+    },
+    "cases": [
+      {
+        "id": "loan-high",
+        "name": "高风险多轮转人工",
+        "turns": [
+          {
+            "input": "申请 8 万元",
+            "expectedOutput": "询问风险",
+            "expectation": {
+              "state": "waiting_risk",
+              "requiredTools": [],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [],
+              "fields": [],
+              "blocking": true
+            }
+          },
+          {
+            "input": "风险高",
+            "expectedOutput": "转人工复核",
+            "expectation": {
+              "contains": "人工复核",
+              "expectedSkill": "loan_approval",
+              "state": "pending_review",
+              "requiredTools": [
+                {
+                  "name": "request_human_review",
+                  "arguments": {
+                    "amount": 80000,
+                    "risk": "high"
+                  }
+                }
+              ],
+              "forbiddenTools": [
+                "approve_loan"
+              ],
+              "toolOrder": [
+                "request_human_review"
+              ],
+              "fields": [],
+              "blocking": true
+            }
+          }
+        ],
+        "verdict": "pass",
+        "checks": [
+          {
+            "turn": 1,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 waiting_risk；实际 waiting_risk",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 1,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "文本包含",
+            "verdict": "pass",
+            "reason": "要求包含：人工复核",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "路由",
+            "verdict": "pass",
+            "reason": "预期 loan_approval；实际 loan_approval",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "结束状态",
+            "verdict": "pass",
+            "reason": "预期 pending_review；实际 pending_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "必须工具",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "工具参数",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "禁止工具",
+            "verdict": "pass",
+            "reason": "approve_loan",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          },
+          {
+            "turn": 2,
+            "name": "工具顺序",
+            "verdict": "pass",
+            "reason": "request_human_review",
+            "blocking": true,
+            "evaluatorId": "cmtpat10q000u1fpou0xfk3kq"
+          }
+        ],
+        "evidence": [
+          {
+            "input": "申请 8 万元",
+            "targetVersion": "fixed",
+            "output": "请提供风险等级",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "waiting_risk",
+            "tools": [],
+            "startedAt": "2026-09-06T08:55:54.722Z",
+            "finishedAt": "2026-09-06T08:55:54.726Z",
+            "durationMs": 4
+          },
+          {
+            "input": "风险高",
+            "targetVersion": "fixed",
+            "output": "已提交人工复核",
+            "systemPrompt": "你是贷款助手，贷款选择 loan_approval，额度选择 balance_query。高风险或超额须转人工。范围外问题应拒绝。",
+            "skill": "loan_approval",
+            "state": "pending_review",
+            "tools": [
+              {
+                "name": "request_human_review",
+                "arguments": {
+                  "amount": 80000,
+                  "risk": "high"
+                },
+                "result": {
+                  "state": "pending_review"
+                }
+              }
+            ],
+            "startedAt": "2026-09-06T08:55:54.726Z",
+            "finishedAt": "2026-09-06T08:55:54.754Z",
+            "durationMs": 28
+          }
+        ],
+        "traceId": "9e9e5f7e-03ab-4ee2-908f-73eb0741d8f6"
+      }
+    ]
+  }
+]

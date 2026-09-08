@@ -10,9 +10,12 @@
 //
 // 得分支持人工修正：分层写 humanScore，机器分只读留存，全部均分按生效分重算。
 import Link from 'next/link';
+import CaseVersionActions from '@/components/evaluation-harness/CaseVersionActions';
+import type { EvalCase } from '@/lib/evaluation-harness/domain';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
+import {buildCheckPoints} from '@/lib/evaluation-harness/result-points';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -41,6 +44,7 @@ interface ResultRow {
 }
 
 interface ExperimentDetail {
+  configSnapshot?: {kind?:string; evaluators?: Array<{id:string;name:string;version:number;content:{type:string}}> };
   id: string;
   name: string;
   status: string;
@@ -50,6 +54,10 @@ interface ExperimentDetail {
     input: string;
     actualOutput: string;
     referenceOutput: string | null;
+    caseValues?: EvalCase;
+    executionId?: string | null;
+    traceStatus?: 'pending' | 'ready' | 'failed' | null;
+    traceError?: string | null;
   }>;
   results: ResultRow[];
 }
@@ -172,11 +180,11 @@ function PointBadges({ point }: { point: PointRow }) {
 }
 
 /** 评分点「证据与建议」列内容：同一折叠块内用 Markdown 小节区分，建议为空时不渲染。 */
-function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId: string | null; evaluatorId: string }) {
+function PointEvidence({ point, taskId, evaluatorId, harness }: { point: PointRow; taskId: string | null; evaluatorId: string; harness?:boolean }) {
   return (
     <>
       {point.evidence ? (
-        <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} supplementalMarkdown={point.suggestion} />
+        <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} supplementalMarkdown={point.suggestion} suggestionLabel={harness ? "排查建议（规则生成）" : undefined} />
       ) : point.suggestion ? <EvidenceBlock evidence={{ md: `**Skill 改进建议**\n${point.suggestion}` }} /> : null}
       {point.anchors && point.anchors.length > 0 && (
         <div style={{ marginTop: 5, minWidth: 0, fontSize: 10.5, color: 'var(--foreground-muted)', overflowWrap: 'anywhere' }}>
@@ -385,9 +393,10 @@ export function ExperimentCaseDetail({
   embedded?: boolean;
   onBack?: () => void;
 }) {
-  const { user } = useAuth();
-  const lookup = useEvaluatorLookup(user);
+  const { user, apiKey } = useAuth();
+
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
+  const lookup = useEvaluatorLookup(user, detail?.configSnapshot?.evaluators);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryingId, setRetryingId] = useState('');
@@ -427,10 +436,16 @@ export function ExperimentCaseDetail({
       // 否则该 case 不在第 1 页时这里 find 不到 → 详情空白）。
       const res = await apiFetch(
         `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&caseId=${encodeURIComponent(caseId)}`,
+        {headers:{'x-witty-api-key':apiKey || ''}},
       );
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
       setDetail(data);
+      if (!silent && data.configSnapshot?.kind === 'evaluation-harness-v1') {
+        const ids = data.results.filter((r: ResultRow) => r.caseId === caseId).map((r: ResultRow) => r.id);
+        setExpandedCards(new Set(ids));
+        setExpandedPoints(new Set(ids));
+      }
       setError('');
     } catch (e: unknown) {
       if (!silent) {
@@ -440,7 +455,7 @@ export function ExperimentCaseDetail({
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [user, id, caseId]);
+  }, [user, apiKey, id, caseId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -540,6 +555,7 @@ export function ExperimentCaseDetail({
               )}
             </div>
 
+            {detail.configSnapshot?.kind === 'evaluation-harness-v1' && <CaseVersionActions experimentId={id} caseId={caseId}/>}
             {/* 任务输入 / 预期输出 / 实际输出 三框（等高：grid 行拉伸 + 内框 flex 填满） */}
             <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
               {([
@@ -562,10 +578,11 @@ export function ExperimentCaseDetail({
               ))}
             </div>
 
+            {detail.configSnapshot?.kind === 'evaluation-harness-v1' && caseRow.caseValues?.turns && <details style={{...CARD,padding:12,marginBottom:14}} open><summary>Case 逐轮输入与预期 · {caseRow.caseValues.turns.length} 轮</summary>{caseRow.caseValues.turns.map((turn,i)=><div key={i} style={{padding:'8px 0',borderTop:'1px solid var(--border)',fontSize:12}}><b>第 {i+1} 轮</b><p>输入：{turn.input}</p><p>预期：{turn.expectedOutput||'按规则判断'}</p></div>)}</details>}
             {/* 结果评测 / 轨迹评测 两类目 panel */}
             {(['res', 'traj'] as EvaluatorCategory[]).map((cat) => {
               const rows = byCategory[cat];
-              if (!rows.length) return null;
+              if (!rows.length) return <section key={cat} style={{...CARD,padding:16,marginBottom:14}}><strong>{CATEGORY_LABEL[cat]}</strong><p style={{fontSize:12,color:'var(--foreground-muted)',marginTop:8}}>该 Case 暂无此类评估器的评测结果。</p></section>;
               const summary = categorySummary(rows);
               return (
                 <div key={cat} style={{ ...CARD, minWidth: 0, maxWidth: '100%', overflow: 'hidden', marginBottom: 14 }}>
@@ -588,7 +605,14 @@ export function ExperimentCaseDetail({
                       const tags = lookup.tagsOf(r.evaluatorId);
                       const failed = r.status === 'failed';
                       const pendingLike = r.status === 'pending' || r.status === 'running';
-                      const points = parsePoints(r.points);
+                      const rawEvidence = r.evidence && typeof r.evidence === 'object' ? r.evidence as {json?:{checks?:any[];turns?:any[]}} : null;
+                      const harnessPoints = detail.configSnapshot?.kind === 'evaluation-harness-v1' && Array.isArray(rawEvidence?.json?.checks) && Array.isArray(rawEvidence?.json?.turns)
+                        ? buildCheckPoints(rawEvidence.json.checks, rawEvidence.json.turns, caseRow.caseValues) : r.points;
+                      const points = parsePoints(harnessPoints).map(p => {
+                        if (detail.configSnapshot?.kind !== 'evaluation-harness-v1') return p;
+                        const turn = p.anchors?.find(a => /^turn-\d+$/.test(a))?.slice(5);
+                        return turn ? {...p, label: `${turn === '0' ? '整个 Case' : `第 ${turn} 轮`} · ${p.label}`} : p;
+                      });
                       const isSpecializedPreset = SPECIALIZED_PRESET_IDS.has(r.evaluatorId);
                       const open = expandedCards.has(r.id);
                       const adjusted = typeof r.humanScore === 'number';
@@ -669,8 +693,8 @@ export function ExperimentCaseDetail({
                             <>
                               {failed && (
                                 <div style={{ marginTop: 9 }}>
-                                  <button
-                                    onClick={() => retryResult(r.id)}
+                                  {detail.configSnapshot?.kind !== 'evaluation-harness-v1' && (<button
+                                     onClick={() => retryResult(r.id)}
                                     disabled={!!retryingId}
                                     style={{
                                       fontSize: 11, padding: '3px 11px', borderRadius: 6,
@@ -680,14 +704,14 @@ export function ExperimentCaseDetail({
                                     }}
                                   >
                                     {retryingId === r.id ? '重评中…' : '↻ 重评'}
-                                  </button>
+                                  </button>)}
                                 </div>
                               )}
 
                               {/* 完整判断依据：与卡头那句结论逐字相同就不重复渲染。
                                   （此前这段在有评分点时被 else 分支吃掉，永远显示不出来。） */}
                               {r.evidence && !isEvidenceRedundant(r.summary, r.evidence)
-                                && !(isSpecializedPreset && points.length > 0) ? (
+                                && !(isSpecializedPreset && points.length > 0) && !(detail.configSnapshot?.kind === 'evaluation-harness-v1' && points.length > 0) ? (
                                 <div style={{ marginTop: 9 }}>
                                   <EvidenceBlock evidence={r.evidence} evaluatorId={r.evaluatorId} />
                                 </div>
@@ -735,7 +759,7 @@ export function ExperimentCaseDetail({
                                             </td>
                                             <td style={{ ...TD, verticalAlign: 'top', fontWeight: 700 }}>{typeof p.score === 'number' ? p.score : '—'}</td>
                                             <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
-                                              <PointEvidence point={p} taskId={caseRow.taskId} evaluatorId={r.evaluatorId} />
+                                              <PointEvidence point={p} taskId={caseRow.taskId} evaluatorId={r.evaluatorId} harness={detail.configSnapshot?.kind === "evaluation-harness-v1"} />
                                             </td>
                                           </tr>
                                         ))}
@@ -747,7 +771,7 @@ export function ExperimentCaseDetail({
                               )}
 
                               {/* 人工修正得分（仅已完成的行——失败/待执行没有可对照的机器判断） */}
-                              {r.status === 'done' && user && (
+                              {r.status === 'done' && user && detail.configSnapshot?.kind !== 'evaluation-harness-v1' && (
                                 <ScoreAdjuster
                                   row={r}
                                   experimentId={id}
@@ -782,8 +806,18 @@ export function ExperimentCaseDetail({
             })}
 
             {caseResults.length === 0 && (
-              <div style={{ ...CARD, padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
-                该 case 暂无评测结果——实验尚未执行
+              <div style={{ ...CARD, padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)', overflowWrap: 'anywhere' }}>
+                {caseRow.traceStatus === 'failed' || caseRow.traceError
+                  ? `该 Case 执行失败：${caseRow.traceError || '未能获取可用 Trace，暂无评测结果。'}`
+                  : detail.status === 'running'
+                    ? (caseRow.traceStatus === 'pending' ? '该 Case 正在执行，请等待 Trace 与评测结果。' : '该 Case 正在评测，请等待结果。')
+                    : detail.status === 'draft'
+                      ? '该 Case 暂无评测结果，实验尚未执行。'
+                      : detail.status === 'failed'
+                        ? '实验执行失败，该 Case 暂无可用评测结果。'
+                        : detail.status === 'cancelled'
+                          ? '实验已取消，该 Case 暂无可用评测结果。'
+                          : '该 Case 暂无可用评测结果。'}
               </div>
             )}
 

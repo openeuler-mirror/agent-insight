@@ -1,0 +1,146 @@
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { randomUUID, randomBytes } from 'node:crypto';
+import { POST as harnessPost, GET as harnessGet } from '../src/app/api/evaluation-harness/route';
+import { once } from 'node:events';
+import { createAsset, saveCredential } from '../src/lib/evaluation-harness/store';
+import { createRun, executeRun, runDetail, reviseDataset } from '../src/lib/evaluation-harness/service';
+import { prisma } from '../src/lib/storage/prisma';
+
+async function main() {
+ assert.match(process.env.DATABASE_URL || '',/harness-e2e/);
+ process.env.EVALUATION_CREDENTIAL_KEY ||= randomBytes(32).toString('base64');
+ const user='comparison-test-'+Date.now();
+ const apiKey=randomUUID();
+ await prisma.user.create({data:{username:user,apiKey}});
+ const api=(body:unknown)=>harnessPost(new Request('http://localhost/api/evaluation-harness',{method:'POST',headers:{'content-type':'application/json','x-witty-api-key':apiKey},body:JSON.stringify(body)}));
+ let calls=0,acknowledgeSkills=true;
+ const requests:Array<{body:any;authorization:string|undefined}>=[];
+ const server=http.createServer(async(req,res)=>{
+  let raw='';for await(const chunk of req)raw+=chunk;
+  const b=JSON.parse(raw);calls++;requests.push({body:b,authorization:req.headers.authorization});
+  const good=b.skillOverrides?.[0]?.skillVersion==='v2'||b.targetVersion==='v2'||b.model==='model-b';
+  res.setHeader('content-type','application/json');
+  res.end(JSON.stringify({output:good?'批准前先人工复核':'直接批准',targetVersion:b.targetVersion,model:b.model,...(acknowledgeSkills&&b.skillOverrides?{loadedSkills:b.skillOverrides.map(({definition,...identity}:any)=>identity)}:{}),skill:'review',tools:[],state:good?'review':'approved'}));
+ });
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ const endpoint=`http://127.0.0.1:${(server.address() as any).port}`;
+ try {
+  const target=(version:string,type='agent')=>({type,adapter:'http',endpoint,externalId:type==='skill'?'review':'agent',externalVersion:version});
+  const a=await createAsset(user,'target','agent','Agent',target('v1'));
+  const b=await createAsset(user,'target','agent','Agent',target('v2'));
+  const sa=await createAsset(user,'target','skill','Skill',target('v1','skill'));
+  const sb=await createAsset(user,'target','skill','Skill',target('v2','skill'));
+  const dataset=await createAsset(user,'dataset','data','Cases',{cases:[{id:'case',name:'审批',turns:[{input:'申请贷款',expectation:{expectedSkill:'review',state:'review'}}]}]});
+  const e1=await createAsset(user,'evaluator','rules','全部规则',{type:'rules',criticalStop:true});
+  const e2=await createAsset(user,'evaluator','routing','只检查路由',{type:'rules',checkNames:['路由']});
+  const config={name:'对比集成测试',targetId:a.id,datasetId:dataset.id,evaluatorIds:[e1.id],retries:0};
+  const ids:string[]=[];
+  for(const comparison of [{dimension:'agent',targetBId:b.id},{dimension:'skill',targetBId:sb.id},{dimension:'llm',modelA:'model-a',modelB:'model-b'},{dimension:'evaluator',evaluatorBIds:[e2.id]}]) {
+   const before=calls;
+   const id=await createRun(user,{...config,targetId:comparison.dimension==='skill'?sa.id:a.id,comparison});ids.push(id);
+   const result=await executeRun(user,id);
+   assert.equal(result.experiment.status,'done');
+   assert.equal(result.comparison.groups[0].summary.score,0);
+   assert.equal(result.comparison.groups[1].summary.score,100);
+   assert.equal(result.comparison.comparableCount,1);
+   assert.equal(result.comparison.delta,100);
+   assert.equal(calls-before,comparison.dimension==='evaluator'?1:2);
+   if(comparison.dimension==='evaluator')assert.equal(result.comparison.pairs[0].a.executionId,result.comparison.pairs[0].b.executionId);
+   assert.equal((await runDetail(user,id)).comparison.delta,100);
+   await assert.rejects(()=>runDetail(user+'-other',id),/无权/);
+   console.log(comparison.dimension+': actual HTTP execution and A/B results passed');
+  }
+  const sharedKey='isolated-key-'+randomUUID();
+  const credential=await saveCredential(user,'共享Agent凭证',{apiKey:sharedKey,baseUrl:endpoint,model:'shared-model'});
+  const sharedAgent=await createAsset(user,'target','shared-agent','共享执行Agent',{...target('v1'),externalId:'same-executor',model:'shared-model',credentialId:credential.id});
+  const boundSkillA=await createAsset(user,'target','bound-skill','待加载Skill',{...target('v1','skill'),endpoint:'http://127.0.0.1:1/never-call-skill',credentialId:'never-use-skill-credential',model:'ignored-model-a',prompt:'直接审批'});
+  const boundSkillB=await createAsset(user,'target','bound-skill','待加载Skill',{...target('v2','skill'),endpoint:'http://127.0.0.1:2/never-call-skill',credentialId:'another-unused-credential',model:'ignored-model-b',prompt:'批准前人工复核'});
+  const boundConfig={...config,targetId:sharedAgent.id,comparison:{dimension:'skill',skillAId:boundSkillA.id,skillBId:boundSkillB.id}};
+  const beforeBound=requests.length;
+  const boundId=await createRun(user,boundConfig);
+  const bound=await executeRun(user,boundId);
+  assert.equal(bound.experiment.status,'done');assert.equal(bound.experiment.agentName,'共享执行Agent');
+  assert.deepEqual(bound.comparison.groups.map((g:any)=>g.summary.score),[0,100]);
+  assert.deepEqual(bound.comparison.groups[0].target,bound.comparison.groups[1].target);
+  assert.equal(bound.comparison.groups[0].skill.id,boundSkillA.id);assert.equal(bound.comparison.groups[1].skill.id,boundSkillB.id);
+  const actualRequests=requests.slice(beforeBound);assert.equal(actualRequests.length,2);
+  assert(actualRequests.every(r=>r.body.targetId==='same-executor'&&r.body.agentId==='same-executor'&&r.body.targetVersion==='v1'&&r.body.model==='shared-model'&&r.authorization==='Bearer '+sharedKey));
+  assert.deepEqual(actualRequests.map(r=>r.body.skillOverrides[0].skillVersion).sort(),['v1','v2']);
+  assert.equal(new Set(actualRequests.map(r=>r.body.skillOverrides[0].definitionHash)).size,2);
+  for(const group of bound.comparison.groups){
+   const execution=await prisma.execution.findUnique({where:{id:group.rows[0].executionId}});
+   assert.equal(execution?.agentName,'共享执行Agent');assert.equal(execution?.skill,'review');assert.equal(execution?.skillVersion,group.skill.version);
+  }
+  acknowledgeSkills=false;
+  const missingId=await createRun(user,boundConfig);const missing=await executeRun(user,missingId);
+  assert.equal(missing.experiment.status,'failed');assert.equal(missing.comparison.delta,null);
+  assert(missing.comparison.groups.every((g:any)=>g.rows[0].verdict==='unknown'&&!g.rows[0].executionId));
+  assert(missing.experiment.cases.every((row:any)=>/Skill/.test(row.traceGenerationError)));
+  acknowledgeSkills=true;
+  console.log('Skill binding: same real Agent endpoint, authorization and model; distinct acknowledged Skill snapshots; unconfirmed loading remains unknown passed');
+  const c=(id:string,input:string,state='review')=>({id,name:id,turns:[{input,expectation:{expectedSkill:'review',state}}]});
+  const cohortA=await createAsset(user,'dataset','cohort','对比评测集',{cases:[c('same','相同'),c('changed','修改规则'),c('removed','删除')]});
+  const cohortB=await createAsset(user,'dataset','cohort','对比评测集',{cases:[c('same','相同'),c('changed','修改规则','approved'),c('added','新增','approved'),c('added-two','新增第二条','approved')]});
+  const datasetConfig={...config,datasetId:cohortA.id,comparison:{dimension:'dataset',datasetBId:cohortB.id}};
+  const beforeDataset=calls;
+  const datasetId=await createRun(user,datasetConfig);
+  const datasetResult=await executeRun(user,datasetId);
+  assert.equal(datasetResult.experiment.status,'done');
+  assert.equal(calls-beforeDataset,7);
+  assert.equal(datasetResult.comparison.groups[0].rows.length,3);
+  assert.equal(datasetResult.comparison.groups[1].rows.length,4);
+  assert.equal(datasetResult.comparison.groups[0].summary.score,0);
+  assert.equal(datasetResult.comparison.groups[1].summary.score,75);
+  assert.equal(datasetResult.comparison.pairs.length,5);
+  assert.equal(datasetResult.comparison.comparableCount,1);
+  assert.equal(datasetResult.comparison.delta,0);
+  assert.equal(datasetResult.comparison.unmatchedCount,3);
+  assert.equal(datasetResult.comparison.changedDefinitionCount,1);
+  assert.equal(datasetResult.comparison.groups[0].dataset.id,cohortA.id);
+  assert.equal(datasetResult.comparison.groups[1].dataset.id,cohortB.id);
+  assert.deepEqual(datasetResult.comparison.groups[0].target,datasetResult.comparison.groups[1].target);
+  assert.deepEqual(datasetResult.comparison.groups[0].evaluatorIds,datasetResult.comparison.groups[1].evaluatorIds);
+  assert.equal((await runDetail(user,datasetId)).comparison.groups[1].summary.score,75);
+  await assert.rejects(()=>createRun(user,{...datasetConfig,comparison:{...datasetConfig.comparison,caseBIds:['missing']}}),/B.*Case/);
+  await assert.rejects(()=>createRun(user,{...datasetConfig,comparison:{...datasetConfig.comparison,evaluatorBIds:[e2.id]}}),/共享/);
+  const selectedId=await createRun(user,{...datasetConfig,caseIds:['same'],comparison:{...datasetConfig.comparison,caseBIds:['added','same']}});
+  const selected=await executeRun(user,selectedId);
+  assert.equal(selected.comparison.groups[0].rows.length,1);assert.equal(selected.comparison.groups[1].rows.length,2);
+  assert.equal(selected.comparison.groups[1].rows.some((row:any)=>row.case.id==='changed'),false);
+  await assert.rejects(()=>runDetail(user+'-other',datasetId),/无权/);
+  const revisedB=await reviseDataset(user,datasetId,'added',c('added','新增后修改','approved'));
+  assert.equal(JSON.parse(revisedB.contentJson).cases.length,4);
+  assert.equal(JSON.parse(revisedB.contentJson).cases.some((row:any)=>row.id==='removed'),false);
+  assert.equal(JSON.parse(revisedB.contentJson).cases.find((row:any)=>row.id==='added').turns[0].input,'新增后修改');
+  await assert.rejects(()=>reviseDataset(user,datasetId,'same',c('same','歧义修改')),/行 ID/);
+  const bChangedRow=datasetResult.comparison.groups[1].rows.find((row:any)=>row.case.id==='changed');
+  const revisedByRow=await reviseDataset(user,datasetId,bChangedRow.rowId,c('changed','按 B 组行修改','approved'));
+  assert.equal(JSON.parse(revisedByRow.contentJson).cases.length,4);
+  assert.equal(JSON.parse(revisedByRow.contentJson).cases.find((row:any)=>row.id==='changed').turns[0].input,'按 B 组行修改');
+  assert.equal((await runDetail(user,datasetId)).manifest.dataset.content.cases.find((row:any)=>row.id==='changed').turns[0].input,'修改规则');
+  console.log('dataset: separate frozen cohorts, shared execution, unequal sets and non-causal changes passed');
+  const createResponse=await api({action:'create',config:{...datasetConfig,caseIds:['same'],comparison:{...datasetConfig.comparison,caseBIds:['same','added']}}});
+  assert.equal(createResponse.status,200);
+  const apiRunId=(await createResponse.json()).id;
+  const runResponse=await api({action:'run',id:apiRunId});assert.equal(runResponse.status,202);
+  let apiResult:any;
+  for(let attempt=0;attempt<100;attempt++){
+   const response=await harnessGet(new Request(`http://localhost/api/evaluation-harness?experimentId=${apiRunId}`,{headers:{'x-witty-api-key':apiKey}}));
+   assert.equal(response.status,200);apiResult=await response.json();
+   if(apiResult.experiment.status==='done'||apiResult.experiment.status==='failed')break;
+   await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  assert.equal(apiResult.experiment.status,'done');assert.equal(apiResult.comparison.groups[0].rows.length,1);assert.equal(apiResult.comparison.groups[1].rows.length,2);
+  assert.equal((await api({action:'create',config:{...datasetConfig,comparison:{...datasetConfig.comparison,modelB:'illegal'}}})).status,400);
+  const anonymous=await harnessGet(new Request(`http://localhost/api/evaluation-harness?experimentId=${apiRunId}`));assert.equal(anonymous.status,401);
+  console.log('dataset API handlers: authenticated create/start/read, invalid shared fields rejected, anonymous blocked passed');
+
+  const grouped=await runDetail(user,ids[0]);
+  const replayId=await createRun(user,{...config,targetId:b.id,traceSource:'existing',traceAssignments:[{caseId:'case',traceId:grouped.comparison.pairs[0].b.executionId}],comparison:{dimension:'evaluator',evaluatorBIds:[e2.id]}});
+  const before=calls;const replay=await executeRun(user,replayId);
+  assert.equal(calls,before);assert.equal(replay.comparison.groups[0].summary.score,100);
+  console.log('B-group target version replay and zero Agent invocations passed');
+ } finally {server.close();await prisma.$disconnect();}
+}
+main().catch(e=>{console.error(e);process.exitCode=1;});

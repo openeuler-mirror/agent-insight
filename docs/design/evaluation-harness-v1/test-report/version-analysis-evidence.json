@@ -1,0 +1,39 @@
+[
+  {
+    "name": "default",
+    "headings": [
+      "版本通过率趋势",
+      "版本组合实验记录"
+    ],
+    "rows": 3,
+    "trend": "通过率趋势：v1 50%，v2 100%",
+    "width": 406
+  },
+  {
+    "historyLinks": 7,
+    "name": "dataset-axis-and-history",
+    "rows": 3,
+    "trend": "通过率趋势：v1 100%，v3 100%"
+  },
+  {
+    "name": "empty-agent",
+    "visible": true
+  },
+  {
+    "name": "trend-detail-link",
+    "url": "http://127.0.0.1:3019/experiments/cmtpkrmv70001k3zwmo8m93a6"
+  },
+  {
+    "name": "trace-label-view-retained",
+    "visible": true
+  },
+  {
+    "name": "old-url-compatible",
+    "rows": 3
+  },
+  {
+    "name": "desktop-layout",
+    "width": 1280,
+    "rootOverflow": false
+  }
+]

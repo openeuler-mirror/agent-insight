@@ -1,0 +1,863 @@
+[
+  {
+    "dimension": "agent",
+    "id": "cmtr8u25c004ei1wcxg24fgls",
+    "url": "http://127.0.0.1:3019/experiments/cmtr8u25c004ei1wcxg24fgls",
+    "paired": 4,
+    "changed": 2,
+    "delta": 50,
+    "groups": [
+      {
+        "key": "A",
+        "label": "Demo 贷款助手 v1",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "tools": {
+            "total": 9,
+            "observed": 9,
+            "unknown": 0,
+            "accuracy": 44.44444444444444
+          },
+          "latency": {
+            "turns": 5,
+            "meanMs": 2.8,
+            "p95Ms": 7
+          },
+          "byEvaluator": {
+            "cmtpat10q000u1fpou0xfk3kq": {
+              "total": 4,
+              "pass": 2,
+              "fail": 2,
+              "unknown": 0
+            }
+          },
+          "total": 4,
+          "pass": 2,
+          "fail": 2,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 50,
+          "gate": "blocked",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 2
+            },
+            "negative": {
+              "total": 1,
+              "pass": 0
+            },
+            "boundary": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 3,
+              "pass": 2
+            },
+            "hard": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "clusters": {
+            "结束状态": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit"
+              ],
+              "reason": "预期 pending_review；实际 approved"
+            },
+            "必须工具": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit"
+              ],
+              "reason": "request_human_review"
+            },
+            "工具参数": {
+              "caseIds": [
+                "loan-high"
+              ],
+              "reason": "request_human_review"
+            },
+            "禁止工具": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit"
+              ],
+              "reason": "approve_loan"
+            }
+          },
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "balance_query": 1
+            }
+          }
+        }
+      },
+      {
+        "key": "B",
+        "label": "Demo 贷款助手 v2",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "tools": {
+            "total": 9,
+            "observed": 9,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "latency": {
+            "turns": 5,
+            "meanMs": 1,
+            "p95Ms": 1
+          },
+          "byEvaluator": {
+            "cmtpat10q000u1fpou0xfk3kq": {
+              "total": 4,
+              "pass": 4,
+              "fail": 0,
+              "unknown": 0
+            }
+          },
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 100,
+          "gate": "pass",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 2
+            },
+            "negative": {
+              "total": 1,
+              "pass": 1
+            },
+            "boundary": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 3,
+              "pass": 3
+            },
+            "hard": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "clusters": {},
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "balance_query": 1
+            }
+          }
+        }
+      }
+    ],
+    "pairs": [
+      {
+        "name": "低风险正常审批",
+        "aTrace": "d8bccd58-f91a-4172-a73d-bd356b56a6ba",
+        "bTrace": "cd8f7e90-8729-44e1-8703-c42493de4b14",
+        "a": "pass",
+        "b": "pass"
+      },
+      {
+        "name": "高风险多轮转人工",
+        "aTrace": "76a839d0-0642-47ba-b6c9-9124766654a7",
+        "bTrace": "675c6624-1d77-4381-bca4-2a3aced51a20",
+        "a": "fail",
+        "b": "pass"
+      },
+      {
+        "name": "金额超过自动审批上限",
+        "aTrace": "2b95e41f-64c8-4755-a9cf-15345f17b110",
+        "bTrace": "72c58927-6d73-4a8f-822a-721621e08dd1",
+        "a": "fail",
+        "b": "pass"
+      },
+      {
+        "name": "查询额度",
+        "aTrace": "2a76b8e5-9f2a-4caa-9c86-360d0d1af23d",
+        "bTrace": "2c9de7d9-68c2-419e-9117-487a27869e75",
+        "a": "pass",
+        "b": "pass"
+      }
+    ]
+  },
+  {
+    "dimension": "skill",
+    "id": "cmtr8u29j005ti1wc5yne2a16",
+    "url": "http://127.0.0.1:3019/experiments/cmtr8u29j005ti1wc5yne2a16",
+    "paired": 4,
+    "changed": 2,
+    "delta": -50,
+    "groups": [
+      {
+        "key": "A",
+        "label": "Demo 贷款 Skill v1",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 66.66666666666667
+          },
+          "tools": {
+            "total": 9,
+            "observed": 9,
+            "unknown": 0,
+            "accuracy": 88.88888888888889
+          },
+          "latency": {
+            "turns": 5,
+            "meanMs": 1.2,
+            "p95Ms": 2
+          },
+          "byEvaluator": {
+            "cmtpat10q000u1fpou0xfk3kq": {
+              "total": 4,
+              "pass": 3,
+              "fail": 1,
+              "unknown": 0
+            }
+          },
+          "total": 4,
+          "pass": 3,
+          "fail": 1,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 75,
+          "gate": "blocked",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 1
+            },
+            "negative": {
+              "total": 1,
+              "pass": 1
+            },
+            "boundary": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 3,
+              "pass": 2
+            },
+            "hard": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "clusters": {
+            "路由": {
+              "caseIds": [
+                "balance"
+              ],
+              "reason": "预期 balance_query；实际 none"
+            },
+            "结束状态": {
+              "caseIds": [
+                "balance"
+              ],
+              "reason": "预期 balance_returned；实际 out_of_scope"
+            },
+            "必须工具": {
+              "caseIds": [
+                "balance"
+              ],
+              "reason": "query_balance"
+            },
+            "JSON 结构": {
+              "caseIds": [
+                "balance"
+              ],
+              "reason": "输出不是有效 JSON"
+            }
+          },
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "none": 1
+            }
+          }
+        }
+      },
+      {
+        "key": "B",
+        "label": "Demo 贷款 Skill v2",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 66.66666666666667
+          },
+          "tools": {
+            "total": 9,
+            "observed": 9,
+            "unknown": 0,
+            "accuracy": 33.333333333333336
+          },
+          "latency": {
+            "turns": 5,
+            "meanMs": 1.4,
+            "p95Ms": 2
+          },
+          "byEvaluator": {
+            "cmtpat10q000u1fpou0xfk3kq": {
+              "total": 4,
+              "pass": 1,
+              "fail": 3,
+              "unknown": 0
+            }
+          },
+          "total": 4,
+          "pass": 1,
+          "fail": 3,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 25,
+          "gate": "blocked",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 1
+            },
+            "negative": {
+              "total": 1,
+              "pass": 0
+            },
+            "boundary": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 3,
+              "pass": 1
+            },
+            "hard": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "clusters": {
+            "结束状态": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit",
+                "balance"
+              ],
+              "reason": "预期 pending_review；实际 approved"
+            },
+            "必须工具": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit",
+                "balance"
+              ],
+              "reason": "request_human_review"
+            },
+            "工具参数": {
+              "caseIds": [
+                "loan-high"
+              ],
+              "reason": "request_human_review"
+            },
+            "禁止工具": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit"
+              ],
+              "reason": "approve_loan"
+            },
+            "路由": {
+              "caseIds": [
+                "balance"
+              ],
+              "reason": "预期 balance_query；实际 none"
+            },
+            "JSON 结构": {
+              "caseIds": [
+                "balance"
+              ],
+              "reason": "输出不是有效 JSON"
+            }
+          },
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "none": 1
+            }
+          }
+        }
+      }
+    ],
+    "pairs": [
+      {
+        "name": "低风险正常审批",
+        "aTrace": "78d4ad03-9ac9-4a09-92cb-9c99c85f6671",
+        "bTrace": "a03526cf-bcdb-4698-8d38-915c0b397e26",
+        "a": "pass",
+        "b": "pass"
+      },
+      {
+        "name": "高风险多轮转人工",
+        "aTrace": "ea912a5d-bb83-44d5-a025-221dc27c4c03",
+        "bTrace": "17cb3b72-72b4-4cca-a192-2dd8ef2bfafd",
+        "a": "pass",
+        "b": "fail"
+      },
+      {
+        "name": "金额超过自动审批上限",
+        "aTrace": "18d83c71-34f7-451f-85ec-ca70a086e376",
+        "bTrace": "6466d1a2-a435-483c-90b1-5b3fd398f225",
+        "a": "pass",
+        "b": "fail"
+      },
+      {
+        "name": "查询额度",
+        "aTrace": "56c188a8-5a9f-4788-8295-12e5200ea311",
+        "bTrace": "8ad777f0-500b-4b18-9cc4-c2a8c9b3560a",
+        "a": "fail",
+        "b": "fail"
+      }
+    ]
+  },
+  {
+    "dimension": "llm",
+    "id": "cmtr8u2dn0078i1wcb2axx7dn",
+    "url": "http://127.0.0.1:3019/experiments/cmtr8u2dn0078i1wcb2axx7dn",
+    "paired": 4,
+    "changed": 2,
+    "delta": 50,
+    "groups": [
+      {
+        "key": "A",
+        "label": "demo-basic",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "tools": {
+            "total": 9,
+            "observed": 9,
+            "unknown": 0,
+            "accuracy": 44.44444444444444
+          },
+          "latency": {
+            "turns": 5,
+            "meanMs": 1.2,
+            "p95Ms": 2
+          },
+          "byEvaluator": {
+            "cmtpat10q000u1fpou0xfk3kq": {
+              "total": 4,
+              "pass": 2,
+              "fail": 2,
+              "unknown": 0
+            }
+          },
+          "total": 4,
+          "pass": 2,
+          "fail": 2,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 50,
+          "gate": "blocked",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 2
+            },
+            "negative": {
+              "total": 1,
+              "pass": 0
+            },
+            "boundary": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 3,
+              "pass": 2
+            },
+            "hard": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "clusters": {
+            "结束状态": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit"
+              ],
+              "reason": "预期 pending_review；实际 approved"
+            },
+            "必须工具": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit"
+              ],
+              "reason": "request_human_review"
+            },
+            "工具参数": {
+              "caseIds": [
+                "loan-high"
+              ],
+              "reason": "request_human_review"
+            },
+            "禁止工具": {
+              "caseIds": [
+                "loan-high",
+                "loan-limit"
+              ],
+              "reason": "approve_loan"
+            }
+          },
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "balance_query": 1
+            }
+          }
+        }
+      },
+      {
+        "key": "B",
+        "label": "demo-reasoning",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "tools": {
+            "total": 9,
+            "observed": 9,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "latency": {
+            "turns": 5,
+            "meanMs": 1.2,
+            "p95Ms": 2
+          },
+          "byEvaluator": {
+            "cmtpat10q000u1fpou0xfk3kq": {
+              "total": 4,
+              "pass": 4,
+              "fail": 0,
+              "unknown": 0
+            }
+          },
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 100,
+          "gate": "pass",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 2
+            },
+            "negative": {
+              "total": 1,
+              "pass": 1
+            },
+            "boundary": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 3,
+              "pass": 3
+            },
+            "hard": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "clusters": {},
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "balance_query": 1
+            }
+          }
+        }
+      }
+    ],
+    "pairs": [
+      {
+        "name": "低风险正常审批",
+        "aTrace": "b6b63727-f72d-4f20-a93f-fc32bd1aa650",
+        "bTrace": "eca98ea6-637a-401d-a96e-26c36e09e062",
+        "a": "pass",
+        "b": "pass"
+      },
+      {
+        "name": "高风险多轮转人工",
+        "aTrace": "c8b5a469-606b-4078-9d91-36aac4e4f16a",
+        "bTrace": "47ad267d-fb9c-4cc8-a4bc-75a5f96205bb",
+        "a": "fail",
+        "b": "pass"
+      },
+      {
+        "name": "金额超过自动审批上限",
+        "aTrace": "53808ed7-2ac6-4f6e-9fff-43a5ea42833a",
+        "bTrace": "fac1e43a-d2de-42e1-853e-38eced76c6f1",
+        "a": "fail",
+        "b": "pass"
+      },
+      {
+        "name": "查询额度",
+        "aTrace": "3f68b7a3-9050-42aa-8872-67c8bf542a09",
+        "bTrace": "65ae4548-4d5e-4dec-9471-2d0b5b02a7c5",
+        "a": "pass",
+        "b": "pass"
+      }
+    ]
+  },
+  {
+    "dimension": "evaluator",
+    "id": "cmtr8vbi4009mi1wcr94nvssb",
+    "url": "http://127.0.0.1:3019/experiments/cmtr8vbi4009mi1wcr94nvssb",
+    "paired": 3,
+    "changed": 1,
+    "delta": 33.333333333333336,
+    "groups": [
+      {
+        "key": "A",
+        "label": "逐轮业务规则 v1",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "tools": {
+            "total": 7,
+            "observed": 7,
+            "unknown": 0,
+            "accuracy": 57.142857142857146
+          },
+          "latency": {
+            "turns": 4,
+            "meanMs": 2.25,
+            "p95Ms": 4
+          },
+          "byEvaluator": {
+            "cmtpat10q000u1fpou0xfk3kq": {
+              "total": 3,
+              "pass": 2,
+              "fail": 1,
+              "unknown": 0
+            }
+          },
+          "total": 3,
+          "pass": 2,
+          "fail": 1,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 66.66666666666667,
+          "gate": "blocked",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 2
+            },
+            "negative": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 2,
+              "pass": 2
+            },
+            "hard": {
+              "total": 1,
+              "pass": 0
+            }
+          },
+          "clusters": {
+            "结束状态": {
+              "caseIds": [
+                "loan-high"
+              ],
+              "reason": "预期 pending_review；实际 approved"
+            },
+            "必须工具": {
+              "caseIds": [
+                "loan-high"
+              ],
+              "reason": "request_human_review"
+            },
+            "工具参数": {
+              "caseIds": [
+                "loan-high"
+              ],
+              "reason": "request_human_review"
+            },
+            "禁止工具": {
+              "caseIds": [
+                "loan-high"
+              ],
+              "reason": "approve_loan"
+            }
+          },
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "balance_query": 1
+            }
+          }
+        }
+      },
+      {
+        "key": "B",
+        "label": "Skill 路由正确性 v1",
+        "summary": {
+          "routing": {
+            "total": 3,
+            "observed": 3,
+            "unknown": 0,
+            "accuracy": 100
+          },
+          "tools": {
+            "total": 0,
+            "observed": 0,
+            "unknown": 0,
+            "accuracy": null
+          },
+          "latency": {
+            "turns": 4,
+            "meanMs": 2.25,
+            "p95Ms": 4
+          },
+          "byEvaluator": {
+            "cmtr8ti840003i1wccidz6ydn": {
+              "total": 3,
+              "pass": 3,
+              "fail": 0,
+              "unknown": 0
+            }
+          },
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "unknown": 0,
+          "incomplete": 0,
+          "score": 100,
+          "gate": "pass",
+          "byCategory": {
+            "positive": {
+              "total": 2,
+              "pass": 2
+            },
+            "negative": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "byDifficulty": {
+            "medium": {
+              "total": 2,
+              "pass": 2
+            },
+            "hard": {
+              "total": 1,
+              "pass": 1
+            }
+          },
+          "clusters": {},
+          "matrix": {
+            "loan_approval": {
+              "loan_approval": 2
+            },
+            "balance_query": {
+              "balance_query": 1
+            }
+          }
+        }
+      }
+    ],
+    "pairs": [
+      {
+        "name": "低风险正常审批",
+        "aTrace": "d9854f03-42a0-4a92-beab-7b5159e2b261",
+        "bTrace": "d9854f03-42a0-4a92-beab-7b5159e2b261",
+        "a": "pass",
+        "b": "pass"
+      },
+      {
+        "name": "高风险多轮转人工",
+        "aTrace": "cf5f6e09-8929-4f36-8f8c-e9693a34830b",
+        "bTrace": "cf5f6e09-8929-4f36-8f8c-e9693a34830b",
+        "a": "fail",
+        "b": "pass"
+      },
+      {
+        "name": "查询额度",
+        "aTrace": "398fd57e-ed49-4e2f-885d-fe2a66143292",
+        "bTrace": "398fd57e-ed49-4e2f-885d-fe2a66143292",
+        "a": "pass",
+        "b": "pass"
+      }
+    ]
+  }
+]

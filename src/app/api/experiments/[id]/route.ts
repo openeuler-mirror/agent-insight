@@ -60,14 +60,16 @@ export async function GET(
 
     const experimentMeta = await prisma.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
-      select: { id: true, type: true },
+      select: { id: true, type: true, scope: true, user: true },
     });
     if (!experimentMeta) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
     }
 
+    if (experimentMeta.scope === 'evaluation-harness' && (await resolveUser(req)).username !== experimentMeta.user) return NextResponse.json({error:'请使用本人的 API Key 查看实验'}, {status:401});
+
     // 对比实验：分流到 getComparisonDetail（含 groups + pairing）
-    if (experimentMeta.type === 'llm') {
+    if (!wantCaseId && !experimentMeta.scope && ['llm','agent','skill','evaluator'].includes(experimentMeta.type)) {
       const detail = await getComparisonDetail(id, {
         casePage: casePageRaw,
         casePageSize,
@@ -95,6 +97,10 @@ export async function GET(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
+    if (wantCaseId && !experiment.scope && experiment.type==='evaluator') {
+      const row=await prisma.experimentCase.findFirst({where:{id:wantCaseId,experimentId:id},include:{group:true}});
+      evaluatorIds=row?.group?[row.group.variableValue]:[];
+    }
     const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
 
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
@@ -476,6 +482,7 @@ export async function GET(
         }
         return {
           id: c.id,
+          groupKey: (configSnapshot?.groups as Array<{id:string;key:string}> | undefined)?.find(g=>g.id===c.groupId)?.key || null,
           executionId: c.executionId || traceState?.executionId || null,
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',

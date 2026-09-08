@@ -321,7 +321,7 @@ test('late long-poll command success is reconciled into the failed Attempt and C
 
 test('experiment wizard and run route split generic generation from reliability FI', () => {
   const wizard = fs.readFileSync(
-    path.join(process.cwd(), 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(process.cwd(), 'src/components/experiments/ExperimentWizard.tsx'),
     'utf8',
   );
   const route = fs.readFileSync(

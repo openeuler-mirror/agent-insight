@@ -257,7 +257,7 @@ test('生成快照沿用旧生成与发布门禁，不把工作台静态评估�
 });
 
 test('Skill 实验复用四步向导并仅由预设改变默认配置', () => {
-  const wizard = readFileSync('src/app/(main)/experiments/new/page.tsx', 'utf8');
+  const wizard = readFileSync('src/components/experiments/ExperimentWizard.tsx', 'utf8');
   const panel = readFileSync('src/components/skill-workbench/ExperimentPanel.tsx', 'utf8');
   const result = readFileSync('src/components/skill-workbench/SkillExperimentResult.tsx', 'utf8');
   const experimentDetail = readFileSync('src/app/(main)/experiments/[id]/page.tsx', 'utf8');

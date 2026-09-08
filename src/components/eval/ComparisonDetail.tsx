@@ -6,6 +6,7 @@
 // 不新建 --cmp-* 局部色板（AGENTS.md §6）。抽屉用自定义 aside（仿 TraceDrawer，G5 不覆写 Sheet）。
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import {useAuth} from '@/lib/auth/auth-context';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import type { ComparisonDetailData, PairingEntry, GroupSummary } from '@/lib/engine/experiment/comparison-runner';
 
@@ -48,7 +49,9 @@ function Banner({ detail }: { detail: ComparisonDetailData }) {
 
   let text: string;
   let level: 'info' | 'warning';
-  if (pairing.degraded) {
+  if (detail.type==='evaluator') {
+    level='info';text='同一 Trace 的两组评分对比；评分更高不代表评估器更好，请查看分歧 Case 的评分点与证据。';
+  } else if (pairing.degraded) {
     level = 'warning';
     const pct = (pairing.comparableRate * 100).toFixed(0);
     text = `对比可信度有限（可比率 ${pct}%，低于阈值）`;
@@ -189,8 +192,8 @@ function EvaluatorBreakdown({ detail }: { detail: ComparisonDetailData }) {
 
 // ─── 逐 case 配对表 ──────────────────────────────────────────────────────────
 
-function PairingTable({ items, page, pageSize, onPageChange, onRowClick }: {
-  items: PairingEntry[]; page: number; pageSize: number; onPageChange: (p: number) => void; onRowClick: (p: PairingEntry) => void;
+function PairingTable({ items, page, pageSize, onPageChange, onRowClick, evaluatorComparison = false }: {
+  evaluatorComparison?: boolean; items: PairingEntry[]; page: number; pageSize: number; onPageChange: (p: number) => void; onRowClick: (p: PairingEntry) => void;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const comparable = items.filter((p) => p.status === '可比');
@@ -203,8 +206,8 @@ function PairingTable({ items, page, pageSize, onPageChange, onRowClick }: {
 
   const filters: { key: Filter; label: string }[] = [
     { key: 'all', label: '全部' },
-    { key: 'A胜', label: 'A 胜' },
-    { key: 'B胜', label: 'B 胜' },
+    { key: 'A胜', label: evaluatorComparison?'A 评分更高':'A 胜' },
+    { key: 'B胜', label: evaluatorComparison?'B 评分更高':'B 胜' },
     { key: '平', label: '平' },
   ];
   const countFor = (f: Filter) => f === 'all' ? comparable.length : comparable.filter((p) => p.verdict === f).length;
@@ -242,6 +245,7 @@ function PairingTable({ items, page, pageSize, onPageChange, onRowClick }: {
           <tbody>
             {pageItems.map((p, i) => {
               const vb = verdictBadge(p.verdict);
+              if(evaluatorComparison) vb.label=({'A胜':'A 评分更高','B胜':'B 评分更高','平':'评分一致','N/A':'未评完整'})[p.verdict];
               return (
                 <tr key={i} onClick={() => onRowClick(p)} style={{ cursor: 'pointer' }}>
                   <td style={{ ...TD, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.taskInput}</td>
@@ -365,7 +369,10 @@ function ScoreLine({ label, value, color }: { label: string; value: number | nul
 
 // ─── 主组件 ──────────────────────────────────────────────────────────────────
 
-export function ComparisonDetail({ detail }: { detail: ComparisonDetailData }) {
+export function ComparisonDetail({ detail: rawDetail }: { detail: ComparisonDetailData }) {
+  const {user}=useAuth();
+  const lookup=useEvaluatorLookup(user);
+  const detail={...rawDetail,groups:rawDetail.groups.map(g=>({...g,variableValue:rawDetail.type==='evaluator'?lookup.nameOf(g.variableValue):g.variableValue==='__NONE__'?'无 Skill':g.variableValue}))};
   const [drawerPair, setDrawerPair] = useState<PairingEntry | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 8;
@@ -375,12 +382,13 @@ export function ComparisonDetail({ detail }: { detail: ComparisonDetailData }) {
   return (
     <div>
       <Banner detail={detail} />
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+      <div style={{ display: 'flex', flexWrap:'wrap', gap: 12, marginBottom: 12 }}>
         <GroupSummaryCard group={detail.groups[0]} otherGroup={detail.groups[1]} position="A" />
         <GroupSummaryCard group={detail.groups[1]} otherGroup={detail.groups[0]} position="B" />
       </div>
       <EvaluatorBreakdown detail={detail} />
       <PairingTable
+        evaluatorComparison={detail.type==='evaluator'}
         items={detail.pairing.items}
         page={page}
         pageSize={pageSize}

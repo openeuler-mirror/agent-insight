@@ -1,0 +1,42 @@
+{
+  "published": true,
+  "asset": {
+    "id": "cmts5enda0018b9k4djxkvjkx",
+    "version": 3,
+    "externalVersion": "fixed",
+    "contentHash": "d496bf1c10581a75b2a6260bf1b2cd3e00b46046d6d7c8a8b60f109ca461ba12",
+    "definitionHash": "2b7e79ce19e18895c8e3d73abe295a2144815b3fc461080d2d638a3f54d2d1d2"
+  },
+  "experimentId": "cmts5endi001ab9k4kjeebwom",
+  "status": "done",
+  "agentId": "cmtpat103000m1fpoe5xndoc6",
+  "agentVersion": 1,
+  "datasetId": "cmtr0kpy4002o4bpf0j8nwq3o",
+  "datasetVersion": 5,
+  "comparisonDelta": 50,
+  "confirmations": [
+    {
+      "group": "A",
+      "skillAssetId": "cmtr8ti810001i1wc3hyaeix6",
+      "skillAssetVersion": 2,
+      "externalVersion": "baseline",
+      "definitionHash": "7d26a1bde723655adec1418ffa5a12e31db7a5f6840c0abcbde50364b725ea6b",
+      "score": 50,
+      "caseCount": 4,
+      "confirmedTurns": 5
+    },
+    {
+      "group": "B",
+      "skillAssetId": "cmts5enda0018b9k4djxkvjkx",
+      "skillAssetVersion": 3,
+      "externalVersion": "fixed",
+      "definitionHash": "2b7e79ce19e18895c8e3d73abe295a2144815b3fc461080d2d638a3f54d2d1d2",
+      "score": 100,
+      "caseCount": 4,
+      "confirmedTurns": 5
+    }
+  ],
+  "oldAssetsPreserved": true,
+  "oldFailedExperimentPreserved": true,
+  "verifiedAt": "2026-09-08T04:07:12.602Z"
+}

@@ -274,3 +274,61 @@ flowchart LR
 
 实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。Session 的 `interactions` 随树迁移；Langfuse Session 同时迁移完整 `langfuseTraceNodes`，冲突重映射只改其中的 `subagentSessionId`，保留 OTel trace/span 父子标识。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。
 <!-- Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics. -->
+
+## 版本化多轮实验闭环
+
+`/experiments/new` 的版本化入口 → `/experiments/harness` → 固定目标/数据集/评估器版本 → `createRun` 创建原生 Experiment/Case → 原子抢占 draft → `executeTurn` 逐轮调用真实 HTTP 目标 → Session/Execution 原生 Trace → 规则优先、可选 LLM → ExperimentEvalResult → Case 判定及验收门槛 → 实验级问题分组 → Case 新版本或外部目标修复 → 独立回归实验。
+
+普通实验列表可打开版本化详情；原覆盖重跑、追加 Case、单行改分入口拒绝修改版本化历史。单 Case 重跑也建立新实验。实验列表中的版本化得分来自 Case 通过率，和详情口径一致。规则失败表示业务未满足条件；网络、超时或无证据表示无法判定，两者不会混为通过。
+
+每个 Case 尝试写入 ExperimentTraceAttempt；连接错误、429/5xx、超时才重试，错误答案不重试。并发限制作用于 Case。取消用 AbortController 中断请求，终态不会被覆盖回 done。运行中每 15 秒更新时间，查询时将超过 2 分钟无心跳且本进程不持有的任务标为失败；第一版采用单服务进程，不提供分布式队列和自动续跑。
+
+Trace 中系统提示词只取目标实际返回值；工具结果保存原生交互格式，执行时长取实际请求时间。Demo 是独立确定性 HTTP 程序，原生页面把 assistant 交互列为 LLM 轮次，但 Demo 本身不调用语言模型。
+
+版本分析位于 `/version-analysis/experiments`：按 Agent、数据集过滤，版本组合一行并保留历史；固定一方版本和 comparisonHash 后比较另一方。指纹包括评估器版本、模型连接、门槛、执行参数和 Case 子集；每个组合取最新运行展示趋势。静态报告为描述启发式风险；动态问题按失败检查类型分组，混淆矩阵只来自已观测路由。优化建议是人工排查方向，不自动发布外部 Agent。
+
+命令行同用 HTTP 接口：设置 `AGENT_INSIGHT_URL`、`AGENT_INSIGHT_API_KEY` 后运行 `node scripts/evaluation-harness-cli.mjs`，支持 catalog、create config.json、run ID、report ID、cancel ID。Key 从环境读取，不放命令参数。独立 Demo 启动：`node examples/evaluation-harness/server.mjs`，默认监听 127.0.0.1:4319；设置服务端 `EVALUATION_DEMO_URL` 指向该地址。真实业务平台需按 HTTP 契约提供适配接口。
+
+Execution.latency 与逐轮 durationMs 均使用毫秒。未评完整 Case 指存在尚无有效结论的应执行检查，可能与失败 Case 重叠；按关键失败策略跳过的 LLM 标记 skipped，不计入未评完整。已知关键失败优先判为验收未通过，否则只要未评完整就不能通过门槛，整体分数为空。
+
+### 2026-09-07 统一实验与 Trace 回放
+
+`/experiments/new` 由 EvaluationWorkspace 提供统一四步外壳，原生向导移至 `src/components/experiments/ExperimentWizard.tsx`，通过初始选择和受控步骤复用原有客户端、持续采集、模型对比和 Skill 能力。版本化 Case 不转换为仅最终答案的普通 Case。
+
+现有 `/api/evaluation-harness` 的 create config 增加 `traceSource: generate | existing`（默认 generate）以及 `traceBindings: Record<caseId, executionId>`。existing 创建时校验用户、Agent、已知版本和输入，将脱敏的真实逐轮证据及哈希冻结进 manifest.replaySources；运行时复核访问权限，执行相同规则/LLM 链，引用原 executionId，不产生执行尝试、新 Execution 或 Session。缺少明确版本证据时添加阻断性 unknown，不能声称该版本验收通过。比较哈希区分回放与新执行。Prisma 无本轮新增变更。
+
+### 版本分析主页面的数据口径
+
+`/version-analysis` 默认挂载版本化实验 Workspace；`VersionExperiments` 使用 `buildVersionView` 对最近 100 次实验构建对象组合、历史和可比较趋势。表格最近运行与趋势最近有效完成运行分别计算，避免新失败覆盖历史评分或混淆二者。候选条件按可比较版本数优先、最近运行时间其次自动选择。旧标签视图抽取到 `TraceVersionAnalysis`，原 API 和标签统计口径不变，辅助页签按需挂载。
+
+实验 UI 复用 `ExperimentWizard` 导出的 `Stepper` 与 `ExperimentTypeSelector`，统一入口与原生 Skill 实验共享交互和样式；Case 第三步是否显示“可选”由数据来源决定。移除实验设计的静态检查按钮，不改工作台的静态质量评估调用与发布门禁。
+
+实验向导共享 TraceSourceSelector、ExpectedAnswersTable、ExperimentSummary 与 EvaluatorChoiceCard。版本化 Workspace 与原生 ExperimentWizard 使用同一展示组件；Trace 绑定、Case 规则与 evaluator gate 仍由各自数据契约驱动，不改变执行或权限语义。
+
+2026-09-07 页面整合：AgentDatasetCenter 通过 datasetCards 将版本资产按 assetKey 归并到原卡片列表；详情继续通过既有 evaluation-harness API 读取和保存版本。ExperimentWizard 的 tracePicker 扩展复用原 Trace 筛选、分页和选中逻辑，并向调用方回传多选 Trace；Case 关联由第三步完成。原实验 / Case 详情读取现有 /api/experiments 契约，冻结 evaluator 元数据交给 useEvaluatorLookup；EvidenceBlock 为 checks + turns 证据提供逐轮展示。验收摘要和优化仍复用 Workspace 的补充区域，避免重复 Case 列表。
+
+版本化数据集的 Case 草稿由 `VersionedDatasetDetail` 管理，按用户标识和基准 asset id 写入 localStorage；`dataset-draft.ts` 合并逐条覆盖与删除标记，撤销只移除对应覆盖。发布复用 asset action，发送合并后的完整 cases 创建不可变新版本；发布失败保留草稿，成功才清除基准草稿。浏览器草稿不会进入实验 manifest，也不影响导出与复制。`caseSummary` 统一取首轮输入和末轮预期输出；实验预期答案的 `CaseRulesDialog` 只读显示完整逐轮规则。
+
+Case 结果页通过 `useEvaluatorLookup` 将冻结 rules 评估器归入 traj、llm 归入 res；`result-points.ts` 把 Check、TurnEvidence 和 Case 快照转换为原有评分点契约，包含分数、轮次锚点、证据及确定性排查建议。新结果在执行时写入 pointsJson，历史结果在详情展示时从 evidence.json.checks/turns 派生，不回写历史数据。unknown/skipped 不赋予零分；总体评分逻辑保持不变。
+
+### A/B 执行与结果归属（2026-09-08）
+
+统一向导先选择实验类型，再只为所选模块配置 A/B；其他对象和版本只选择一份。后续步骤展示只读的共享对象，公共运行设置、Case 范围和评估器在对应步骤统一配置。数据集对比例外地分别配置 A/B 评测集及 Case 子集，公共 Agent、模型、Skill、评估器与运行设置仍保持一份。评估器对比只在评估器模块提供两组选择。创建时服务端再次校验维度字段与目标声明，界面禁用不能替代此校验。
+
+`createRun` 读取目标、A/B 数据集和评估器版本 → 校验用户归属、归档状态、Case 归属及非对比条件 → 写入包含 `groups[].target/skill/dataset/caseIds/evaluatorIds` 的 manifest → 在同一事务内创建 Experiment、ExperimentGroup 和对应 Case。普通 Agent/Skill/LLM 对比将同一批 Case 实例化两次；数据集对比按各组冻结数据集和选择范围分别创建 Case。worker 以 `groupId` 取目标，以 `caseValuesJson` 取本组完整逐轮定义，LLM 对比还核验执行端回传模型。之后数据集发布新版本不会替换已有实验的任何一组快照。
+
+评估器对比只生成或回放一份 Case 证据，再分别运行两组评估器；此模式禁用 `criticalStop` 对其他评估器的短路，防止 A 组失败阻止 B 组拿到评分。结果按组内 `evaluatorIds` 投影后汇总；同一 Trace 上的判定差异不能解释为 Agent 效果提升。
+
+数据集对比的 Case 配对由 `buildDatasetPairs` 完成：同一逻辑评测集的不同版本先按 Case ID 对应；两个不同评测集按完整逐轮输入寻找对应项，并优先匹配定义一致的项。逐轮输入、预期输出和规则完全一致的对应项标为 `matched`；定义已改标为 `changed`；未找到对应项标为 `a-only` 或 `b-only`。详情同时展示各组全部 Case 和覆盖差异，只有定义一致且两侧已评完的项进入配对差值。不能把 B 组更容易的数据或规则放宽解释为 Agent 改善。其他版本化对比按 Case 定义 ID 配对，未评完整排除差值；所有对比实验继续排除在单组 Agent/数据集版本趋势之外。
+
+原生 Trace 比较沿用配对和评分引擎。预览、冻结创建、详情配对共用非对比字段校验，在同输入的候选中选取共享条件一致的最新组合；评估器模式只查询一次，再给两组共用同一个 Trace ID。向导创建时固定候选引用与 Case 输入范围，创建后通用 Case 追加接口不能单侧更改参考答案或增加样本；原生增量重扫仅服务无 scope 的对比实验，并校验用户归属。已有评估结果的评论、人工复核和原生失败重试不修改共享输入配置。
+
+原生路径没有新增完整不可变 Trace 内容或评估器定义快照；执行和重试依然通过原评分引擎读取当前评估器定义。版本化 harness 的内容快照与原生候选引用冻结是两种不同的数据契约，不能将两者混称为完整历史冻结。
+
+新建 Skill 对比将执行主体与变量分开：Agent 只选择一次，Skill A/B 独立选择；worker 把相应 Skill 的冻结定义发给同一个 Agent，并核对加载确认。Trace 与实验的 agentName 保持该 Agent 名称，Skill 配置另写入相应字段，避免在 Agent 目录中出现 Skill 执行主体。
+
+### 2026-09-08 评估器分组选择与提交门控
+
+第四步通过共享 `EvaluatorComparisonGroups` 输出 A/B 两组，分别显示已选数量和相同样式的 `EvaluatorChoiceCard`。版本化路径在此分别修改 `evaluatorIds`、`evaluatorBIds`；原生路径读取第一步已定的组值，每组只读确认一个评估器，修改入口返回第一步，再沿原流程确认 Trace 配对与共同预期答案。
+
+公共 Case 上下文或评估器目录变化 → 按组校验存在、`ready`、必要上下文及组内互斥 → 任一组失败显示原因并禁用开始 → submit 再检查同一组配置后提交。互斥检查只使用当前组所选 ID，不能把 A/B 合为一个选择集合，否则会错误阻止需要比较的两种评分方式。版本化路径还检查两组各至少一项、组合不同；原生第四步不改变配对条件，后端继续按保存的组执行同一份 Trace。

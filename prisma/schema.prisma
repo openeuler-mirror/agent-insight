@@ -1501,3 +1501,37 @@ model ReliabilityConfigLoad {
 
   @@index([clientId, platform, loadedAt])
 }
+
+model EvaluationAssetVersion {
+  archived    Boolean  @default(false)
+  id          String   @id @default(cuid())
+  user        String
+  kind        String
+  assetKey    String
+  name        String
+  version     Int
+  contentJson String
+  contentHash String
+  createdAt   DateTime @default(now())
+
+  @@unique([user, kind, assetKey, version])
+  @@index([user, kind, createdAt])
+}
+
+model EvaluationCredential {
+  id         String   @id @default(cuid())
+  user       String
+  name       String
+  ciphertext String
+  createdAt  DateTime @default(now())
+  @@index([user])
+}
+
+model EvaluationAnalysis {
+  id         String   @id @default(cuid())
+  user       String
+  targetId   String
+  reportJson String
+  createdAt  DateTime @default(now())
+  @@index([user, targetId])
+}

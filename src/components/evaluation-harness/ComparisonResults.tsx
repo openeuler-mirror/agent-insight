@@ -1,0 +1,21 @@
+'use client';
+import Link from 'next/link';
+import {useState} from 'react';
+import {comparisonLabels} from '@/lib/evaluation-harness/comparison';
+const labels:Record<string,string>={pass:'通过',fail:'未通过',unknown:'未评完整'};
+export default function ComparisonResults({comparison,experimentId}:{comparison:any;experimentId:string}) {
+  const [onlyChanged,setOnlyChanged]=useState(false);
+  const [page,setPage]=useState(1);
+  const datasetComparison=comparison.dimension==='dataset';
+  const pairs=comparison.pairs.filter((p:any)=>!onlyChanged || (datasetComparison && p.matchStatus!=='matched') || (p.comparable && p.delta!==0));
+  return <section aria-label="A/B 对比结果" className="space-y-4 rounded-lg border border-border bg-card p-4">
+    <div className="flex flex-wrap justify-between gap-2"><h3 className="font-semibold">{comparisonLabels[comparison.dimension as keyof typeof comparisonLabels]} · A/B 对比结果</h3><span className="text-sm text-foreground-muted">有效配对 {comparison.comparableCount}/{comparison.pairs.length} · 判定变化 {comparison.changed} 个 Case</span></div>
+    <p className="text-sm">{comparison.dimension==='evaluator'?'两组评估相同 Trace。打分更高不代表评估器更好；请结合判定分歧与证据判断。':datasetComparison?'两组使用相同 Agent、模型和评估器。评测集范围或验收要求可能不同，各组通过率分别计算，不直接解释为 Agent 能力改善。':comparison.delta===null?'尚无已完成的有效配对。':`相同 Case 的通过率差异（B − A）：${comparison.delta>0?'+':''}${comparison.delta.toFixed(1)} 个百分点。`}</p>
+    {datasetComparison && <p className="text-sm text-foreground-muted">输入或规则变化 {comparison.changedDefinitionCount || 0} 项 · 单组独有 {comparison.unmatchedCount || 0} 项。{comparison.delta===null?'暂无同输入、同规则且评完的 Case 可计算差值。':`仅同输入、同规则 Case 的判定差值（B − A）：${comparison.delta>0?'+':''}${comparison.delta.toFixed(1)} 个百分点。`}</p>}
+    <div className="grid gap-3 md:grid-cols-2">{comparison.groups.map((g:any)=><div key={g.key} className="min-w-0 space-y-2 rounded-lg border border-border p-3"><strong>{g.key} 组 · {g.label}</strong><p className="text-sm">共 {g.summary.total} 个 Case · 通过率 {g.summary.score==null?'—':g.summary.score.toFixed(1)+'%'} · 通过 {g.summary.pass} · 未通过 {g.summary.fail} · 未评完整 {g.summary.incomplete ?? g.summary.unknown}</p></div>)}</div>
+    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={onlyChanged} onChange={e=>{setOnlyChanged(e.target.checked);setPage(1);}}/>{datasetComparison?'只看差异 Case':'只看判定变化的 Case'}</label>
+    <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{['Case','A 组','B 组','对比结果','评估器详情'].map(t=><th key={t} className="border-b border-border p-2 font-medium text-foreground-muted">{t}</th>)}</tr></thead><tbody>{pairs.slice((page-1)*10,page*10).map((p:any,i:number)=><tr key={p.pairId || (p.a?.rowId || p.b?.rowId)+'-'+i} className="border-b border-border"><td className="max-w-sm p-2"><strong>{p.name}</strong><p className="text-xs text-foreground-muted">{p.input}</p></td>{['a','b'].map(side=><td key={side} className="max-w-xs p-2">{p[side]?<><span>{labels[p[side].verdict]||'未评完整'}</span>{datasetComparison && <p className="text-xs text-foreground-muted">{p[side].case.turns[0]?.input}</p>}<details className="mt-1 text-xs"><summary>实际输出</summary><p className="whitespace-pre-wrap">{p[side].evidence?.at(-1)?.output||'未取得输出'}</p></details></>:<span className="text-foreground-muted">该组没有此 Case</span>}</td>)}<td className="p-2">{p.label}{p.reason && <p className="text-xs text-foreground-muted">{p.reason}</p>}</td><td className="p-2"><div className="flex flex-wrap gap-2">{['a','b'].filter(side=>p[side]).slice(0,comparison.dimension==='evaluator'?1:2).map(side=><Link key={side} className="rounded border border-border px-2 py-1 hover:bg-background-secondary" href={`/experiments/${experimentId}/cases/${p[side].rowId}`}>{comparison.dimension==='evaluator'?'共同 Trace · 两组评分':side.toUpperCase()+' 组详情'}</Link>)}</div></td></tr>)}</tbody></table></div>
+    {!pairs.length && <p className="text-sm text-foreground-muted">暂无符合条件的 Case。</p>}
+    <div className="flex items-center justify-end gap-3 text-sm"><button disabled={page<=1} onClick={()=>setPage(page-1)} className="rounded border border-border px-2 py-1 disabled:opacity-50">上一页</button>{page}/{Math.max(1,Math.ceil(pairs.length/10))}<button disabled={page*10>=pairs.length} onClick={()=>setPage(page+1)} className="rounded border border-border px-2 py-1 disabled:opacity-50">下一页</button></div>
+  </section>;
+}
