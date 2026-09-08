@@ -1,7 +1,7 @@
 'use client';
 import {useCallback, useEffect, useState} from 'react';
 import Link from 'next/link';
-import {useRouter} from 'next/navigation';
+import {useRouter,useSearchParams} from 'next/navigation';
 import {apiFetch} from '@/lib/client/api';
 import {useAuth} from '@/lib/auth/auth-context';
 import {isBuiltinReliabilityDataset} from '@/lib/agent-dataset-builtin';
@@ -13,9 +13,9 @@ import type {EvalCase} from '@/lib/evaluation-harness/domain';
 import styles from '@/components/DatasetItemsPage.module.css';
 const primary = `${styles.addSplit} ${styles.addSplitPrimary}`;
 export default function VersionedDatasetDetail({assetId}: {assetId:string}) {
-  const {apiKey,user}=useAuth(), router=useRouter();
+  const {apiKey,user}=useAuth(), router=useRouter(), search=useSearchParams();
   const [assets,setAssets]=useState<VersionedDatasetAsset[]>([]), [selected,setSelected]=useState(assetId);
-  const [error,setError]=useState(''), [loaded,setLoaded]=useState(false), [busy,setBusy]=useState(false);
+  const [error,setError]=useState(''), [loaded,setLoaded]=useState(false), [busy,setBusy]=useState(false), [confirmDelete,setConfirmDelete]=useState(false);
   const [drafts,setDrafts]=useState<CaseDrafts>({}), [readyKey,setReadyKey]=useState('');
   const [editing,setEditing]=useState<EvalCase|null>(null), [valid,setValid]=useState(true);
   const [name,setName]=useState('新评测集'), [query,setQuery]=useState(''), [page,setPage]=useState(1);
@@ -56,6 +56,14 @@ export default function VersionedDatasetDetail({assetId}: {assetId:string}) {
       setDrafts({});setSelected(d.id);await load();router.push('/dataset/versioned-'+d.id);
     }catch(e){setError((e as Error).message);}finally{setBusy(false);}
   }
+  async function archiveDataset(){
+    if(!dataset||!user)return;setBusy(true);setError('');
+    try{
+      if(dataset.archived){await request({action:'archive',id:dataset.id,archived:false});await load();}
+      else{const response=await apiFetch(`/api/agent-datasets/versioned-${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`,{method:'DELETE'});const result=await response.json();if(!response.ok)throw Error(result.error||'删除失败');router.push('/dataset');}
+      setConfirmDelete(false);
+    }catch(e){setError((e as Error).message);}finally{setBusy(false);}
+  }
   function download(){if(!dataset)return;const url=URL.createObjectURL(new Blob([JSON.stringify(dataset.content,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`${dataset.name}-v${dataset.version}.json`;a.click();URL.revokeObjectURL(url);}
   function add(){setValid(true);setEditing({id:'case-'+crypto.randomUUID(),name:'新增 Case',category:'positive',difficulty:'medium',tags:[],note:'',turns:[{input:'',expectedOutput:'',expectation:{requiredTools:[],forbiddenTools:[],toolOrder:[],fields:[],blocking:true}}]});}
   return <div style={{flex:1,minHeight:0,overflow:'auto'}}>
@@ -76,19 +84,7 @@ export default function VersionedDatasetDetail({assetId}: {assetId:string}) {
             {dataset&&<><button className={styles.refreshGhost} onClick={download}>导出 JSON</button><button className={styles.refreshGhost} onClick={async()=>{try{const XLSX=await import('xlsx'),book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet(base.map(c=>({...c,tags:JSON.stringify(c.tags),turns:JSON.stringify(c.turns)}))),'Cases');XLSX.writeFile(book,`${dataset.name}-v${dataset.version}.xlsx`);}catch(e){setError((e as Error).message);}}}>导出 Excel</button>
             <button className="ai-btn-s" disabled={busy} onClick={async()=>{setBusy(true);try{const copy=await request({action:'asset',kind:'dataset',assetKey:'dataset-'+crypto.randomUUID(),name:dataset.name+' · 副本',content:dataset.content});setSelected(copy.id);await load();router.push('/dataset/versioned-'+copy.id);}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>复制评测集</button>
             {!dataset.archived&&<Link className={primary} href={'/experiments/new?datasetId='+dataset.id}>新建实验</Link>}
-            {!isBuiltinReliabilityDataset(dataset)&&<button className="ai-btn-s" disabled={busy} onClick={async()=>{
-              if(!user)return;
-              if(!dataset.archived&&!globalThis.confirm(`确定删除评测集「${dataset.name}」？该评测集的所有版本将从列表和新建实验中移除，历史实验记录保留。`))return;
-              setBusy(true);setError('');
-              try{
-                if(dataset.archived){await request({action:'archive',id:dataset.id,archived:false});await load();}
-                else{
-                  const response=await apiFetch(`/api/agent-datasets/versioned-${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`,{method:'DELETE'});
-                  const result=await response.json();if(!response.ok)throw Error(result.error||'删除失败');
-                  router.push('/dataset');
-                }
-              }catch(e){setError((e as Error).message);}finally{setBusy(false);}
-            }}>{dataset.archived?'恢复评测集':'删除评测集'}</button>}</>}
+            {!isBuiltinReliabilityDataset(dataset)&&<button className="ai-btn-s" disabled={busy} onClick={()=>dataset.archived?void archiveDataset():setConfirmDelete(true)}>{dataset.archived?'恢复评测集':'删除评测集'}</button>}</>}
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 p-3"><input className="ai-input" aria-label="搜索 Case" placeholder="搜索 Case、输入或预期输出" value={query} onChange={e=>{setQuery(e.target.value);setPage(1);}}/><span role="status" className="text-xs text-foreground-muted">{changed?`${changed} 条待发布改动 · 草稿已保存至当前浏览器`:'当前无待发布改动'}</span></div>
@@ -103,8 +99,9 @@ export default function VersionedDatasetDetail({assetId}: {assetId:string}) {
       </div>
       <p className="mt-3 text-xs text-foreground-muted">逐条保存草稿后，统一发布为新版本。撤销修改恢复到所选版本；历史版本始终保留。草稿仅保存在当前浏览器，导出、复制和实验使用已发布版本。</p>
     </>}
+    {confirmDelete&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><section role="dialog" aria-modal="true" aria-label="删除评测集" className="max-w-md rounded-xl border border-border bg-background p-5 space-y-4"><h2>删除评测集「{dataset?.name}」？</h2><p>所有版本将从可选列表中移除，历史实验保留。删除后可以恢复。</p><div className="flex justify-end gap-2"><button className="ai-btn-s" disabled={busy} onClick={()=>setConfirmDelete(false)}>取消</button><button className="ai-btn-s" disabled={busy} onClick={()=>void archiveDataset()}>确认删除</button></div></section></div>}
     {editing&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><section role="dialog" aria-modal="true" aria-label="编辑 Case" className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-xl border border-border bg-background p-5 shadow-xl space-y-3"><h2>编辑 Case · {editing.name}</h2><p className="text-xs text-foreground-muted">保存只更新这一条 Case 的浏览器草稿，发布新版本后才可用于实验。</p><CaseEditor key={editing.id} singleCase cases={[editing]} onChange={next=>setEditing(next[0])} onValid={setValid}/><div className="flex gap-2"><button className="ai-btn-s" onClick={()=>setEditing(null)}>取消</button><button className={primary} disabled={dataset?.archived||!valid||!editing.name.trim()||editing.turns.some(t=>!t.input.trim())} onClick={()=>{if(persist(updateCaseDraft(base,activeDrafts,editing.id,editing)))setEditing(null);}}>保存草稿</button></div>{error&&<p role="alert" className="text-error">{error}</p>}</section></div>}
-    <details className="mt-4"><summary>生成或导入数据项</summary><EvaluationWorkspace mode="datasets" datasetToolsOnly/></details>
+    <details className="mt-4" open={search?.get('tools')==='1'?true:undefined}><summary>生成或导入数据项</summary><EvaluationWorkspace mode="datasets" datasetToolsOnly/></details>
     </div>
   </div>;
 }

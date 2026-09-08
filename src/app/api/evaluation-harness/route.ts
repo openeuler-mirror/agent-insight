@@ -5,6 +5,7 @@ import { archiveAsset, createAsset, listAssets, listCredentials, saveCredential,
 import { bootstrap } from '@/lib/evaluation-harness/catalog';
 import { cancelRun, createRun, startRun, recoverInterruptedRuns, generateDataset, reviseDataset, runDetail, staticAnalysis } from '@/lib/evaluation-harness/service';
 import { existingDatasets, importDataset } from '@/lib/evaluation-harness/imports';
+import { getActiveConfig } from '@/lib/storage/server-config';
 class AuthenticationError extends Error {}
 export const dynamic = 'force-dynamic';
 async function identity(req: Request) {
@@ -21,6 +22,12 @@ export async function GET(req: Request) {
       q = new URL(req.url).searchParams;
     await recoverInterruptedRuns(user);
     if (q.get('experimentId')) return NextResponse.json(await runDetail(user, q.get('experimentId')!));
+    if(q.get('traceId')){
+      const row=await prisma.experimentCase.findFirst({where:{executionId:q.get('traceId')!,experiment:{user,scope:'evaluation-harness'}},select:{id:true,experimentId:true}});
+      if(!row)return NextResponse.json({error:'Trace 不存在或无权访问'},{status:404});
+      const detail=await runDetail(user,row.experimentId),index=detail.experiment.cases.findIndex((c:any)=>c.id===row.id),result=detail.results[index];
+      return NextResponse.json({experimentId:row.experimentId,caseId:row.id,experimentName:detail.experiment.name,traceId:q.get('traceId'),case:result.case,turns:result.evidence,execution:detail.manifest.execution||{endpoint:detail.manifest.target.content.endpoint,model:detail.manifest.target.content.model}});
+    }
     const [assets, credentials, runs] = await Promise.all([listAssets(user), listCredentials(user), prisma.experiment.findMany({
       where: {
         user,
@@ -49,7 +56,16 @@ export async function GET(req: Request) {
         createdAt: 'desc'
       }
     });
+    const dayStart=new Date();dayStart.setHours(0,0,0,0);
+    const [publicModel,todayCount,runningCount,failedCount]=await Promise.all([getActiveConfig(user),prisma.experiment.count({where:{user,scope:'evaluation-harness',createdAt:{gte:dayStart}}}),prisma.experiment.count({where:{user,scope:'evaluation-harness',status:'running'}}),prisma.experiment.count({where:{user,scope:'evaluation-harness',status:'failed'}})]);
     return NextResponse.json({
+      statistics:{todayCount,runningCount,failedCount},
+      executionOptions: {
+        demoEndpoint: process.env.EVALUATION_DEMO_URL || '',
+        demoModels: ['demo-basic', 'demo-reasoning'],
+        publicModel: publicModel?.model || '',
+        publicModelConfigured: Boolean(publicModel?.model && publicModel?.baseUrl && publicModel?.apiKey)
+      },
       legacyDatasets: await existingDatasets(user),
       assets: assets.map((a: any) => ({
         ...a,
@@ -59,7 +75,8 @@ export async function GET(req: Request) {
       runs: runs.map((r: any) => ({
         ...r,
         manifest: JSON.parse(r.configSnapshotJson || '{}'),
-        summary: JSON.parse(reports.find((x: any) => x.targetId === r.id)?.reportJson || '{}').summary
+        summary: JSON.parse(reports.find((x: any) => x.targetId === r.id)?.reportJson || '{}').summary,
+        groupSummaries: JSON.parse(reports.find((x: any) => x.targetId === r.id)?.reportJson || '{}').groups || []
       }))
     });
   } catch (e) {

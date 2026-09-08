@@ -1,4 +1,5 @@
 'use client';
+import DemoTargets from '@/components/evaluation-harness/DemoTargets';
 
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -1119,7 +1120,7 @@ function AgentsPageInner() {
     );
 }
 
-export default function AgentsPage() {
+function AgentsPage() {
     return (
         <Suspense fallback={<div style={{ padding: 24, color: 'var(--foreground-muted)' }}>Loading…</div>}>
             <AgentsPageInner />
@@ -1408,3 +1409,5 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void })
         </div>
     );
 }
+
+export default function NHDemoPage(){return <DemoTargets/>;}

@@ -1,4 +1,5 @@
 'use client';
+import DemoOverview from '@/components/evaluation-harness/DemoOverview';
 
 // 仪表盘 · 舰队监控大盘。
 // 结构（对齐《监控大盘需求文档》REQ-FW）：健康总览 KPI 常驻 + 7 维度页签 + 懒加载 + 告警角标。
@@ -116,7 +117,7 @@ const fmtSec = (n: number) => `${n}s`;
 const fmtCost = (n: number) => (n < 1 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
 const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
-export default function DashboardPage() {
+function DashboardPage() {
     const { user } = useAuth();
     const [win, setWin] = useState<'1d' | '1w' | '1m'>('1w');
     const [tab, setTab] = useState<TabKey>('trends');
@@ -1485,3 +1486,5 @@ const mgn = { top: 8, right: 16, bottom: 4, left: 0 } as const;
 const ax = { fontSize: 10 } as const;
 const lg = { fontSize: 11 } as const;
 const tipStyle: React.CSSProperties = { background: 'var(--card-bg)', border: '1px solid var(--border-dark)', borderRadius: 9, fontSize: 11, boxShadow: '0 6px 24px rgba(20,22,30,.12)' };
+
+export default function NHDemoPage(){return <DemoOverview/>;}

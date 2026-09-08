@@ -47,7 +47,7 @@ export async function GET(req: Request) {
     const listFilter = {
       ...userFilter,
       ...(skillName ? { skillName } : {}),
-      scope: { notIn: ['skill-workbench', 'skill-case-analysis', 'grayscale-ab'] },
+      scope: q.get('scope')==='evaluation-harness' ? 'evaluation-harness' : { notIn: ['skill-workbench', 'skill-case-analysis', 'grayscale-ab'] },
       status: { not: 'draft' },
     };
 

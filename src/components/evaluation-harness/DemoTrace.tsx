@@ -1,0 +1,15 @@
+'use client';
+import {Suspense,useEffect,useState} from 'react';
+import {useSearchParams} from 'next/navigation';
+import Link from 'next/link';
+import {AppTopBar} from '@/components/shell/AppTopBar';
+import {PageContainer} from '@/components/shell/PageContainer';
+import {useEvaluationCatalog} from './useEvaluationCatalog';
+import type {TurnEvidence} from '@/lib/evaluation-harness/domain';
+function TraceContent(){
+ const search=useSearchParams(),id=search?.get('taskId')||'',{request,user}=useEvaluationCatalog();
+ const [data,setData]=useState<any>(null),[error,setError]=useState('');
+ useEffect(()=>{let active=true;setData(null);if(user&&id)void request(undefined,'?traceId='+encodeURIComponent(id)).then(d=>{if(active)setData(d);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[id,user,request]);
+ return <><AppTopBar title="执行 Trace"/><PageContainer className="space-y-4 px-6 py-5">{error&&<p role="alert" className="text-error">{error}</p>}{!id?<p>请从实验的 Case 详情打开对应 Trace。<Link href="/experiments" className="ml-2 text-primary">返回实验</Link></p>:!data?<p>正在读取实际执行记录…</p>:<><div className="flex items-center justify-between gap-3"><div><h1 className="font-semibold">{data.case.name}</h1><p className="text-xs text-foreground-muted">{data.experimentName} · {data.traceId}</p></div><Link className="ai-btn-s" href={'/experiments/'+data.experimentId+'/cases/'+data.caseId}>返回评测结果</Link></div><p className="text-sm">执行地址：{data.execution?.endpoint||'未记录'} · 模型：{data.execution?.model||'Agent 默认'}</p>{data.turns.map((turn:TurnEvidence,i:number)=><section key={i} className="rounded-lg border border-border bg-card p-4 space-y-3" aria-label={'第 '+(i+1)+' 轮 Trace'}><h2 className="font-semibold">第 {i+1} 轮</h2><p className="whitespace-pre-wrap text-sm"><b>用户输入</b>：{turn.input}</p>{turn.systemPrompt&&<details><summary className="cursor-pointer text-sm">Agent 实际提示词</summary><pre className="mt-2 whitespace-pre-wrap text-xs">{turn.systemPrompt}</pre></details>}<p className="text-sm">实际 Skill：{turn.skill??'未采集'} · 状态：{turn.state??'未采集'} · 耗时：{turn.durationMs==null?'未采集':Math.round(turn.durationMs)+' ms'}</p><div className="space-y-2">{turn.tools?.map((tool,j)=><details key={j} className="rounded border border-border p-3" open><summary className="cursor-pointer text-sm">工具 {j+1} · {tool.name}</summary><div className="grid gap-3 py-2 md:grid-cols-2"><div><p className="text-xs text-foreground-muted">调用参数</p><pre className="overflow-auto text-xs">{JSON.stringify(tool.arguments,null,2)}</pre></div><div><p className="text-xs text-foreground-muted">工具返回</p><pre className="overflow-auto text-xs">{tool.result===undefined?'未采集':JSON.stringify(tool.result,null,2)}</pre></div></div></details>)}{turn.tools===undefined?<p className="text-sm text-foreground-muted">未采集工具证据，不能推断为“未调用”。</p>:turn.tools.length===0&&<p className="text-sm text-foreground-muted">本轮没有工具调用。</p>}</div><p className="whitespace-pre-wrap text-sm"><b>Agent 输出</b>：{turn.output}</p></section>)}</>}</PageContainer></>;
+}
+export default function DemoTrace(){return <Suspense fallback={<p>正在加载 Trace…</p>}><TraceContent/></Suspense>;}

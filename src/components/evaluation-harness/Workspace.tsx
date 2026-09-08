@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import CaseEditor from './CaseEditor';
+import {NH_DEMO} from '@/lib/evaluation-harness/demo-profile';
 import ComparisonResults from './ComparisonResults';
 import EvaluatorComparisonGroups from '@/components/experiments/EvaluatorComparisonGroups';
 import { type ExperimentChoice } from '@/components/experiments/ExperimentWizard';
@@ -384,13 +385,14 @@ export default function EvaluationWorkspace({
         content: data
       });
       setNotice('已保存 ' + created.name + ' v' + created.version);
-      if (editor.kind === 'dataset') setDataset(created.id);
+      if (editor.kind === 'dataset') {setDataset(created.id);if(NH_DEMO&&datasetToolsOnly)router.push('/dataset/versioned-'+created.id);}
       if (editor.kind === 'target') setTarget(created.id);
     }
     setEditor(null);
     await refresh();
   }
   function regression() {
+    if(NH_DEMO){router.push('/experiments/new?sourceExperimentId='+encodeURIComponent(id)+(revisedDatasetId?(revisedDatasetSide==='B'?'&datasetBId=':'&datasetId=')+encodeURIComponent(revisedDatasetId):''));return;}
     setCreating(true);
     const m = detail.manifest;
     const idsA=m.caseIds || m.dataset.content.cases.map((c:EvalCase)=>c.id);
@@ -422,7 +424,7 @@ export default function EvaluationWorkspace({
     setStep(1);
   }
   const unique = (kind: string) => list(kind).filter((a, i, all) => all.findIndex(x => x.assetKey === a.assetKey) === i);
-  return <div className={styles.root + (!id && displayMode === 'create' ? ' ' + styles.createFlow : '') + " space-y-4 text-foreground"}>{(!detailSupplement || !id) && <><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">{id ? '版本化实验详情' : displayMode === 'versions' ? '实验版本分析' : displayMode === 'datasets' ? '评测集版本' : displayMode === 'evaluators' ? '预置与版本化评估器' : '新建实验'}</h2><div className="flex flex-wrap gap-2">{creating && !id && <button className={btn} onClick={() => { setCreating(false); if (experimentId) { setId(experimentId); } }}>返回{experimentId ? '实验详情' : mode === 'datasets' ? '评测集' : '版本记录'}</button>}{id && <button className={btn} onClick={() => {
+  return <div className={styles.root + (!id && displayMode === 'create' ? ' ' + styles.createFlow : '') + " space-y-4 text-foreground"}>{(!detailSupplement || !id) && !datasetToolsOnly && <><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">{id ? '版本化实验详情' : displayMode === 'versions' ? '实验版本分析' : displayMode === 'datasets' ? '评测集版本' : displayMode === 'evaluators' ? '预置与版本化评估器' : '新建实验'}</h2><div className="flex flex-wrap gap-2">{creating && !id && <button className={btn} onClick={() => { setCreating(false); if (experimentId) { setId(experimentId); } }}>返回{experimentId ? '实验详情' : mode === 'datasets' ? '评测集' : '版本记录'}</button>}{id && <button className={btn} onClick={() => {
           if (experimentId) { router.push('/experiments'); return; }
           setId('');
           setDetail(null);
@@ -523,11 +525,12 @@ export default function EvaluationWorkspace({
      {['draft', 'running'].includes(detail.experiment.status) && <button className={btn} disabled={busy} onClick={() => action(async () => { await request({ action: 'cancel', id }); })}>终止实验</button>}
    </div></div>
    <p className="text-sm text-foreground-secondary">{detail.manifest.target.name} v{detail.manifest.target.version} × {detail.manifest.dataset.name} v{detail.manifest.dataset.version}{detail.comparison?.dimension==='dataset' && <> / {detail.manifest.groups[1].dataset.name} v{detail.manifest.groups[1].dataset.version}</>}</p>
-   <p className="text-sm">Trace 来源：{detail.manifest.traceSource === 'existing' ? '已有 Trace；评估引用原始记录' : '执行 Agent 生成'}</p>
+   {NH_DEMO&&<div className="space-y-1 text-sm text-foreground-secondary"><p>Skill：{detail.manifest.skill?`${detail.manifest.skill.name} v${detail.manifest.skill.version}`:'沿用 Agent 内置'} · 评估器：{detail.manifest.evaluators.map((e:any)=>`${e.name} v${e.version}`).join('、')}</p><p>执行地址：{detail.manifest.execution?.endpoint||detail.manifest.target.content.endpoint||'未记录'} · Agent 模型：{detail.manifest.execution?.model||detail.manifest.target.content.model||'Agent 默认模型'}</p></div>}
+   {!NH_DEMO&&<p className="text-sm">Trace 来源：{detail.manifest.traceSource === 'existing' ? '已有 Trace；评估引用原始记录' : '执行 Agent 生成'}</p>}
    {!detail.comparison && <div className={styles.metrics}>{[['通过率', detail.summary.score == null ? '—' : detail.summary.score.toFixed(1) + '%'], ['失败 Case', detail.summary.fail], ['未评完整 Case', detail.summary.incomplete ?? detail.summary.unknown], ['验收', ({ pass: '通过', blocked: '未通过', unknown: '无法判断' } as Record<string, string>)[detail.summary.gate]]].map(([k,v]:any)=><div key={k}><p className="text-xs text-foreground-muted">{k}</p><strong className="text-xl">{v}</strong></div>)}</div>}
    <details><summary className="text-sm text-foreground-secondary">更多指标与测试条件</summary><div className="space-y-3 pt-3 text-sm">
-     <div className={styles.metrics}>{[['路由正确率',detail.summary.routing?.accuracy],['工具规则正确率',detail.summary.tools?.accuracy]].map(([label,value]:any)=><div key={label}>{label}：{value == null ? '未取得有效证据' : value.toFixed(1) + '%'}</div>)}<div>单轮平均 / P95：{detail.summary.latency?.meanMs?.toFixed(0) ?? '—'} / {detail.summary.latency?.p95Ms?.toFixed(0) ?? '—'} ms</div></div>
-     <p className="text-xs">路由、工具正确率仅统计已观测的检查项；未观测数：{detail.summary.routing?.unknown ?? 0} / {detail.summary.tools?.unknown ?? 0}。目标执行异常：{detail.summary.executionErrors ?? 0} 个 Case。</p>
+     <div className={styles.metrics}>{[['路由正确率',detail.summary.routing?.accuracy],['所选 Skill 触发准确率',detail.summary.skillTrigger?.accuracy],['工具规则正确率',detail.summary.tools?.accuracy]].map(([label,value]:any)=><div key={label}>{label}：{value == null ? '未取得有效证据' : value.toFixed(1) + '%'}</div>)}<div>单轮平均 / P95：{detail.summary.latency?.meanMs?.toFixed(0) ?? '—'} / {detail.summary.latency?.p95Ms?.toFixed(0) ?? '—'} ms</div></div>
+     <p className="text-xs">路由、工具正确率仅统计已观测的检查项；未观测数：{detail.summary.routing?.unknown ?? 0} / {detail.summary.tools?.unknown ?? 0}。所选 Skill 触发检查：{detail.summary.skillTrigger?`应触发/不应触发与实际相符 ${detail.summary.skillTrigger.pass} 项，未标注或未观测 ${detail.summary.skillTrigger.unknown} 项`:'未单独选择 Skill'}。目标执行异常：{detail.summary.executionErrors ?? 0} 个 Case。</p>
      <details><summary>按评估器、类别、难度查看结果</summary>{[['评估器',detail.summary.byEvaluator],['类别',detail.summary.byCategory],['难度',detail.summary.byDifficulty]].map(([title,group]:any)=><div key={title} className="py-3"><h4>{title}</h4>{Object.entries(group||{}).map(([key,v]:any)=><p key={key}>{detail.manifest.evaluators.find((e:any)=>e.id===key)?.name || key}：通过 {v.pass} / {v.total}{v.unknown ? '，无法判断 '+v.unknown : ''}</p>)}</div>)}</details>
      <details><summary>本次测试条件与版本依据</summary><pre className="max-h-96 overflow-auto text-xs">{JSON.stringify(detail.manifest,null,2)}</pre></details>
    </div></details>
@@ -590,7 +593,7 @@ export default function EvaluationWorkspace({
             XLSX.writeFile(book, d.name + '-v' + d.version + '.xlsx');
           })}>导出 Excel</button></div></details></div>)}{!loaded && <p role="status">正在加载评测集…</p>}{loaded && !list('dataset').length && <p className={card}>暂无多轮评测集。可以创建、导入，或初始化 Demo 目录。</p>}</section>
 </>}
- <details className={card}><summary>生成或导入评测集</summary><div className="space-y-3 pt-3"><p className="text-sm text-foreground-muted">生成 Case 需要可用的真实模型配置，生成后先审阅再保存。</p><label className="block">用于生成的 Agent<select aria-label="用于生成的 Agent" className={field} value={targetId} onChange={e=>setTarget(e.target.value)}>{assetOptions('target')}</select></label><label className="block">生成模型<select className={field} aria-label="生成模型凭证" value={credentialId} onChange={e=>setCredential(e.target.value)}><option value="">当前模型配置</option>{credentials.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><button className={btn} disabled={busy || !target} onClick={()=>action(async()=>{ const generated=await request({action:'generate',targetId,credentialId:credentialId||undefined}); setEditor({kind:'dataset',title:'生成结果 · 审阅后保存',data:JSON.stringify(generated,null,2)}); })}>根据 Agent 定义生成 Case</button><label className="block">从现有评测集建立版本<select className={field} defaultValue="" onChange={e => {
+ <details className={card} open={datasetToolsOnly||undefined}><summary>生成或导入评测集</summary><div className="space-y-3 pt-3"><p className="text-sm text-foreground-muted">生成 Case 需要可用的真实模型配置，生成后先审阅再保存。</p><label className="block">用于生成的 Agent<select aria-label="用于生成的 Agent" className={field} value={targetId} onChange={e=>setTarget(e.target.value)}>{assetOptions('target')}</select></label><label className="block">生成模型<select className={field} aria-label="生成模型凭证" value={credentialId} onChange={e=>setCredential(e.target.value)}><option value="">当前模型配置</option>{credentials.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><button className={btn} disabled={busy || !target} onClick={()=>action(async()=>{ const generated=await request({action:'generate',targetId,credentialId:credentialId||undefined}); setEditor({kind:'dataset',title:'生成结果 · 审阅后保存',data:JSON.stringify(generated,null,2)}); })}>根据 Agent 定义生成 Case</button>{!NH_DEMO&&<label className="block">从现有评测集建立版本<select className={field} defaultValue="" onChange={e => {
           const d = legacyDatasets.find(x => x.id === e.target.value);
           if (d) void action(async () => {
             const content = await request({
@@ -603,7 +606,7 @@ export default function EvaluationWorkspace({
               data: JSON.stringify(content, null, 2)
             });
           });
-        }}><option value="">选择已有评测集</option>{legacyDatasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label><input type="file" aria-label="导入评测集 JSON 或 Excel" accept=".json,.xlsx" onChange={e => {
+        }}><option value="">选择已有评测集</option>{legacyDatasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}<input type="file" aria-label="导入评测集 JSON 或 Excel" accept=".json,.xlsx" onChange={e => {
         const file = e.target.files?.[0];
         if (!file) return;
         void action(async () => {
@@ -649,7 +652,7 @@ export default function EvaluationWorkspace({
           });
         }}><input className={field} name="name" placeholder="凭证名称" required /><input className={field} name="url" type="url" placeholder="OpenAI 兼容 Base URL" required /><input className={field} name="model" placeholder="模型 ID" required /><input className={field} name="key" type="password" placeholder="API Key" autoComplete="off" required /><button className={btn} disabled={busy}>加密保存</button></form></details>{credentials.map(c => <p key={c.id}>{c.name} · 引用：{c.id}（在评估器 credentialId 中选择）</p>)}</section>}
  {!id && displayMode === 'versions' && <VersionExperiments runs={runs} assets={assets} loaded={loaded} />}
- {analysis && <section ref={analysisRef} className={card} aria-label="分析与优化"><div className="flex justify-between"><h3>{analysis.kind === 'static' ? 'Skill 静态风险' : '实验问题与优化依据'}</h3><button className={btn} onClick={() => setAnalysis(null)}>关闭</button></div>{analysis.kind === 'static' ? <><p>{analysis.note}</p>{analysis.findings.map((f: any, i: number) => <p key={i}>{f.type} · {f.skills.join('、')}：{f.reason}</p>)}</> : <><h4>按失败检查类型分组</h4>{!Object.keys(analysis.clusters || {}).length && <p>本次没有发现失败检查项。可以查看路由证据或继续增加边界 Case。</p>}{Object.entries(analysis.clusters || {}).map(([k, v]: any) => <div key={k} className="rounded border border-border p-3 my-2"><strong>{k} · {v.caseIds.length} 个 Case</strong><p>证据：{v.reason}</p><p>建议：{advice(k)}</p><p className="text-xs">Case：{v.caseIds.join("、")}</p></div>)}<h4>观测路由混淆矩阵（预期 → 实际）</h4><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>预期 Skill / 实际 Skill</th>{[...new Set(Object.values(analysis.matrix).flatMap((row:any)=>Object.keys(row)))].map((key:any)=><th key={key}>{key}</th>)}</tr></thead><tbody>{Object.entries(analysis.matrix).map(([expected,row]:any)=><tr key={expected} className="border-t border-border"><th className="py-2">{expected}</th>{[...new Set(Object.values(analysis.matrix).flatMap((r:any)=>Object.keys(r)))].map((actual:any)=><td key={actual}>{row[actual]||0}</td>)}</tr>)}</tbody></table></div><p>优先检查失败轮次对应的工具、参数与路由配置；这里提供基于证据的排查方向，不自动修改外部 Agent。</p><button className={primary} onClick={() => {
+ {analysis && <section ref={analysisRef} className={card} aria-label="分析与优化"><div className="flex justify-between"><h3>{analysis.kind === 'static' ? 'Skill 静态风险' : '实验问题与优化依据'}</h3><button className={btn} onClick={() => setAnalysis(null)}>关闭</button></div>{analysis.kind === 'static' ? <><p>{analysis.note}</p>{analysis.findings.map((f: any, i: number) => <p key={i}>{f.type} · {f.skills.join('、')}：{f.reason}</p>)}</> : <><h4>按失败检查类型分组</h4>{!Object.keys(analysis.clusters || {}).length && <p>本次没有发现失败检查项。可以查看路由证据或继续增加边界 Case。</p>}{Object.entries(analysis.clusters || {}).map(([k, v]: any) => <div key={k} className="rounded border border-border p-3 my-2"><strong>{k} · {v.caseIds.length} 个 Case</strong><p>证据：{v.reason}</p><p>建议：{advice(k)}</p><div className="mt-2 flex flex-wrap gap-2">{detail.experiment.cases.filter((row:any)=>v.caseIds.includes(JSON.parse(row.caseValuesJson).id)).slice(0,3).map((row:any)=><Link key={row.id} className={btn} href={'/experiments/'+id+'/cases/'+row.id}>查看代表 Case：{JSON.parse(row.caseValuesJson).name}</Link>)}</div></div>)}<h4>观测路由混淆矩阵（预期 → 实际）</h4><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>预期 Skill / 实际 Skill</th>{[...new Set(Object.values(analysis.matrix).flatMap((row:any)=>Object.keys(row)))].map((key:any)=><th key={key}>{key}</th>)}</tr></thead><tbody>{Object.entries(analysis.matrix).map(([expected,row]:any)=><tr key={expected} className="border-t border-border"><th className="py-2">{expected}</th>{[...new Set(Object.values(analysis.matrix).flatMap((r:any)=>Object.keys(r)))].map((actual:any)=><td key={actual}>{row[actual]||0}</td>)}</tr>)}</tbody></table></div><p>优先检查失败轮次对应的工具、参数与路由配置；这里提供基于证据的排查方向，不自动修改外部 Agent。</p><button className={primary} onClick={() => {
           setAnalysis(null);
           regression();
         }}>修改外部 Agent 后创建回归</button></>}</section>}

@@ -135,3 +135,40 @@
 4. 运行专项测试与构建，浏览器复验版本化 A/B 多选和原生只读确认、返回修改、无效条件阻断及有效提交；补齐前后截图与实际结果，再更新本次完成状态。同步用户指南与开发指南，不新增 API 或数据模型。
 
 2026-09-08 验证完成：专项 122/122 与最终生产构建通过，3019 浏览器完成版本化空组/同组阻断、不同组真实提交及回归配置恢复；实际保存 3 条共同 Trace、6 项评分，A 66.7% / B 100%。原生按组门控、返回第一步修改和重新配对 7 个 Case 后可提交已核对，未执行真实 LLM。使用已迁移隔离数据库重跑全量为 2301 项、2245 通过、47 失败、9 跳过，47 个失败名称与前次一致，仍不宣称全仓通过。
+
+
+## 2026-09-08 refactor-for-nh 演示收敛实施计划
+
+目标：按用户九项要求收敛演示范围，四类对象与版本贯通配置、执行和趋势，真实跑通后提交 upstream/refactor-for-nh。基于外部对象快照、现有 Experiment/Case/Trace/结果及 EvaluationAssetVersion；不新增 Prisma 表。
+
+### 1. 分支与范围
+- [x] 备份此前未提交改动并形成基础提交；确认 upstream 指向 openeuler/agent-insight，合入 refactor-for-nh 现有提交，保留历史。
+- [x] 在现有 phase1 文档登记需求覆盖矩阵，以产品需求第一阶段和本次用户要求为必须验收项。第二阶段与 architecture 明确延后项目逐项列出，避免将接口或静态检查宣称为完整能力。
+- [x] 演示入口仅保留总览、实验、数据集、评估器、版本分析、目标目录和 Skill 静态分析。Trace 作为结果详情的证据入口。隐藏可靠性注入、通用运行观测、基础设施、Skill 生成/开发等无关页面；保留必要登录与模型连接配置。
+
+### 2. 四资产执行契约（先测试再实现）
+文件：src/lib/evaluation-harness/service.ts、comparison.ts、adapters.ts、case-rerun.ts，src/app/api/evaluation-harness/route.ts；测试 test/evaluation-harness/demo-execution.test.ts。
+- [x] 新建配置增加共享 Skill 快照引用、共享执行地址和模型，固定在manifest中。单组、Agent/数据集/评估器对比实际加载所选共享Skill；Skill对比仅Skill改变。
+- [x] 执行端确认 Agent 版本、Skill 版本/hash和模型；A/B仅对比维度可变，参数与其它资产冻结。回归/单Case重跑恢复同条件。
+- [x] GET返回脱敏执行位置与模型名称，不返回Key；评估器保留公共/加密私有模型连接。
+
+### 3. 新建实验简化
+文件：src/components/evaluation-harness/DemoExperimentWizard.tsx、AssetVersionPicker.tsx，src/app/(main)/experiments/new/page.tsx。
+- [x] 第一步实验名称、单组或四类对比、Agent/Skill/评估器/评测集本体与版本下拉；对比项A/B，其余三项只配一次。执行地址/IP与模型独立可见。
+- [x] 第二步仅“选择 Case”，支持全选/筛选、数据集对比两组Case。全部真实调用选中执行端，不出现生成/选择Trace分支。
+- [x] 第三步只读预期答案与逐轮规则弹窗，编辑跳评测集。第四步仅确认条件、门槛及执行设置；不重复修改第一步对象。
+
+### 4. 演示页面与四维趋势
+文件：src/lib/evaluation-harness/demo-profile.ts、demo-versions.ts；src/components/evaluation-harness/DemoOverview.tsx、DemoTargets.tsx、DemoEvaluators.tsx、VersionExperiments.tsx；现有sidebar/main layout与相关page。
+- [x] 简洁总览计数、近期实验、失败与趋势；目标目录读取外部Demo/HTTP元信息，静态风险独立于动态混淆矩阵。
+- [x] 数据集只显示可版本化的业务评测集，复用Case编辑、导入导出、真实模型生成与版本发布；无关可靠性/原Trace数据集在演示中隐藏。
+- [x] 评估器卡片按逻辑对象组织版本；规则与LLM Prompt/私有连接以表单配置。组合评测采用选定评估器共同判定，明确复合权重属于PRD允许延后的范围。
+- [x] 版本分析只有Agent、Skill、评估器、评测集四行；可勾选比较维度，其余锁定所选版本。包含单组和A/B运行结果，自动按模型/Case/执行条件分组呈现趋势，避免跨条件错误归因，不要求用户配置哈希或额外条件。
+
+### 5. 审计与真实验收
+- [x] npm run test；专项覆盖执行请求实际携带四资产引用、版本不可变、共享条件、删除/越权、趋势无分数不伪造。构建通过后更新3019演示服务。
+- [ ] 真实HTTP Agent完成单组及Agent/Skill/评估器/数据集四类对比；公开记录模型/地址、加载确认、Trace、Case评估与差异。实际LLM生成与LLM评估至少一次，配置不可用时保留明确阻塞证据。
+- [ ] 浏览器从创建数据集/版本与评估器到实验、Case证据、优化回写、回归、四维趋势走通，保存截图与执行报告。
+- [ ] 更新用户/开发指南、需求矩阵与daily_work；正常提交并push upstream HEAD:refactor-for-nh，重新查询远端SHA核验，不强推。
+
+进度：规则 HTTP 实跑、四维趋势、构建及相关 63 项测试已通过；实际 LLM 需用户配置模型，浏览器需 Mac 解锁；详细边界与运行 ID 已更新测试报告。推送前完成最终检查。

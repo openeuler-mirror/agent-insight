@@ -1,4 +1,5 @@
 'use client';
+import DemoTrace from '@/components/evaluation-harness/DemoTrace';
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -482,7 +483,7 @@ function ResizeHandle({
     );
 }
 
-export default function TracePage() {
+function LegacyTracePage() {
     return (
         <Suspense
             fallback={
@@ -2638,3 +2639,5 @@ function Td({ children, align, className }: { children: React.ReactNode; align?:
         </td>
     );
 }
+
+export default function TracePage(){return <DemoTrace/>;}

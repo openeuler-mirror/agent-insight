@@ -1,0 +1,393 @@
+{
+  "date": "2026-09-08T13:53:06.094Z",
+  "user": "harness-ui@example.test",
+  "base": "http://127.0.0.1:3019",
+  "execution": {
+    "endpoint": "http://127.0.0.1:4319",
+    "model": "demo-basic"
+  },
+  "records": [
+    {
+      "id": "cmtsqc2l00001n805f8h7tpt7",
+      "name": "演示 · 基线验收（Skill v2）",
+      "status": "done",
+      "score": 50,
+      "cases": 4,
+      "traceIds": [
+        "766b65e7-16ca-42b3-8cad-bb022954d4f5",
+        "462d3013-8997-4ece-9c0d-314075dc191a",
+        "27f7524f-5697-470a-8be7-ef75885da453",
+        "6a562e6a-6293-4d8b-b4e7-6e5df52f4467"
+      ]
+    },
+    {
+      "id": "cmtsqc2sy000sn8057phleldp",
+      "name": "演示 · 修复后回归（Skill v3）",
+      "status": "done",
+      "score": 100,
+      "cases": 4,
+      "traceIds": [
+        "88d4648f-8be9-40de-9d33-fd717fb68bf7",
+        "a2793838-4b98-4dbe-bf47-093253aeae3d",
+        "6fdbd413-fed8-4174-986e-4ff9375e311e",
+        "c594634e-57c9-4be9-a4cd-d8479276d794"
+      ]
+    },
+    {
+      "id": "cmtsqc31b001jn8052m9s00fi",
+      "name": "演示 · Agent 版本对比",
+      "status": "done",
+      "score": 50,
+      "cases": 8,
+      "traceIds": [
+        "24d40498-0ac9-4116-bdd5-250f0c0e1c14",
+        "417d2818-9bfb-4212-b882-e345cab4c0fb",
+        "7b013a0e-76af-421d-9911-9889b99f524c",
+        "de613021-043f-4311-af60-427f3fc2598a",
+        "18325ff0-55c6-4192-85d0-e70878918a4c",
+        "c1f43c76-512d-470b-8b53-809f813b08e3",
+        "63c8fc64-fa4b-44f9-8699-909b9bca1809",
+        "a258c2c3-e9ed-4d2c-9859-2699c1a61974"
+      ],
+      "groups": [
+        {
+          "key": "A",
+          "score": 50,
+          "agentVersion": 3,
+          "skillVersion": 2,
+          "datasetVersion": 1,
+          "evaluatorIds": [
+            "cmtsp0ka40005619sj3mpk4a5"
+          ]
+        },
+        {
+          "key": "B",
+          "score": 50,
+          "agentVersion": 4,
+          "skillVersion": 2,
+          "datasetVersion": 1,
+          "evaluatorIds": [
+            "cmtsp0ka40005619sj3mpk4a5"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cmtsqc39c002yn805lsnp2krj",
+      "name": "演示 · Skill 版本对比",
+      "status": "done",
+      "score": 75,
+      "cases": 8,
+      "traceIds": [
+        "4abeb857-2d89-484a-a583-540c4cf60621",
+        "2d897a44-c8b4-4ef5-b9f1-66a962a46d3b",
+        "92daf5fd-63a3-44db-b018-3756e93f1aaf",
+        "279d1dbe-59fa-4334-8504-8403adf91ab4",
+        "45ad0105-8418-4e24-bf1c-81c5d669e6b3",
+        "7b845e25-905c-438a-a39a-01a1d6c8e6e8",
+        "34c92680-7999-4e86-bcbf-49f6fa432e2c",
+        "fcbc5c1a-afb5-4622-a890-cf21bb3175ca"
+      ],
+      "groups": [
+        {
+          "key": "A",
+          "score": 50,
+          "agentVersion": 3,
+          "skillVersion": 2,
+          "datasetVersion": 1,
+          "evaluatorIds": [
+            "cmtsp0ka40005619sj3mpk4a5"
+          ]
+        },
+        {
+          "key": "B",
+          "score": 100,
+          "agentVersion": 3,
+          "skillVersion": 3,
+          "datasetVersion": 1,
+          "evaluatorIds": [
+            "cmtsp0ka40005619sj3mpk4a5"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cmtsqc3hb004dn805435dz351",
+      "name": "演示 · 评估器 版本对比",
+      "status": "done",
+      "score": 50,
+      "cases": 4,
+      "traceIds": [
+        "ca2750e1-51ec-4958-99e0-ca239dce9e4f",
+        "5dc98fc2-e221-4e3b-9103-e024f78827c3",
+        "555c3c80-2525-4bd4-b200-2d55e4bce7c9",
+        "8aec19d5-27f2-4a53-817e-f04bad5462a8"
+      ],
+      "groups": [
+        {
+          "key": "A",
+          "score": 50,
+          "agentVersion": 3,
+          "skillVersion": 2,
+          "datasetVersion": 1,
+          "evaluatorIds": [
+            "cmtsp0ka40005619sj3mpk4a5"
+          ]
+        },
+        {
+          "key": "B",
+          "score": null,
+          "agentVersion": 3,
+          "skillVersion": 2,
+          "datasetVersion": 1,
+          "evaluatorIds": [
+            "cmtsp0kb80007619sram10l05"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cmtsqc3pg005cn805km4tbfv1",
+      "name": "演示 · 评测集 版本对比",
+      "status": "done",
+      "score": 55.55555555555556,
+      "cases": 9,
+      "traceIds": [
+        "2b4be9f5-518f-4068-b591-b8bd7fcff8b9",
+        "bbfd04e5-c17f-4820-a5c3-1216408fdbd5",
+        "4611c02c-7089-43e0-970c-c82fa4cebfea",
+        "4cf02841-5dd9-4e60-92ad-bf6094e447f7",
+        "a2046880-ae2c-410e-ad95-cdfed169e8e6",
+        "aa480a4f-ece9-4680-827c-f6c9cf5c4ae5",
+        "877555c0-beb7-4a5a-8bc4-af53a8de6ec3",
+        "0cbc4d5e-5556-49be-9e74-b753835d1beb",
+        "0b8bec18-d97a-436f-8775-07b4b9a8f9e3"
+      ],
+      "groups": [
+        {
+          "key": "A",
+          "score": 50,
+          "agentVersion": 3,
+          "skillVersion": 2,
+          "datasetVersion": 1,
+          "evaluatorIds": [
+            "cmtsp0ka40005619sj3mpk4a5"
+          ]
+        },
+        {
+          "key": "B",
+          "score": 60,
+          "agentVersion": 3,
+          "skillVersion": 2,
+          "datasetVersion": 2,
+          "evaluatorIds": [
+            "cmtsp0ka40005619sj3mpk4a5"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cmtsqc3xl006xn805nu5dpwx8",
+      "name": "演示 · 单 Case 复验",
+      "status": "done",
+      "score": 100,
+      "cases": 1,
+      "traceIds": [
+        "487fe214-34e6-4cd8-9468-0488c77b6438"
+      ]
+    }
+  ],
+  "staticFindings": 0,
+  "trace": {
+    "traceId": "487fe214-34e6-4cd8-9468-0488c77b6438",
+    "turns": 2,
+    "tool": "request_human_review"
+  },
+  "trends": {
+    "agent": {
+      "records": 24,
+      "points": [
+        {
+          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc31b001jn8052m9s00fi",
+          "versions": {
+            "agent": 4,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        }
+      ]
+    },
+    "skill": {
+      "records": 37,
+      "points": [
+        {
+          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc2sy000sn8057phleldp",
+          "versions": {
+            "agent": 3,
+            "skill": 3,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 100
+        },
+        {
+          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc39c002yn805lsnp2krj",
+          "versions": {
+            "agent": 3,
+            "skill": 3,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 100
+        },
+        {
+          "id": "cmtsqc31b001jn8052m9s00fi",
+          "versions": {
+            "agent": 4,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc3xl006xn805nu5dpwx8",
+          "versions": {
+            "agent": 3,
+            "skill": 3,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 100
+        }
+      ]
+    },
+    "evaluator": {
+      "records": 28,
+      "points": [
+        {
+          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc31b001jn8052m9s00fi",
+          "versions": {
+            "agent": 4,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        }
+      ]
+    },
+    "dataset": {
+      "records": 28,
+      "points": [
+        {
+          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 2
+          },
+          "score": 60
+        },
+        {
+          "id": "cmtsqc31b001jn8052m9s00fi",
+          "versions": {
+            "agent": 4,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        }
+      ]
+    }
+  },
+  "llm": {
+    "configured": false,
+    "verified": false
+  },
+  "browser": "pending-mac-unlock"
+}

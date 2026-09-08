@@ -344,3 +344,15 @@ Case 结构以 `domain.ts` 为准：每轮 input、expectedOutput、expectation�
 版本化 Workspace 与原生 ExperimentWizard 共用 `EvaluatorComparisonGroups` 展示组件，按组接收 `key`、`selectedCount`、`content`，仅负责 A/B 区域与计数；评估器选择状态仍由各自向导持有。两组内部复用相同 `EvaluatorChoiceCard`，描述与标签来自同一构造逻辑。版本化组允许分别多选；每组至少一项，排序、去重后两组 ID 集合不能相同。现有顶层 `evaluatorIds` / `comparison.evaluatorBIds` 契约保持不变。
 
 原生 Trace 对比保持第一步每组一个评估器，第四步只读确认，并提供逐组返回第一步的入口，不在第四步修改组值。提交前校验按 A/B 分别检查评估器存在、状态 `ready` 和公共 Case 所需上下文；调用门控时传入本组 ID，不将两组并集合用于互斥检查。任一组无效同时禁用开始按钮，并在 submit 入口再次阻断。组值、共同 Case 与提交使用的评估器集合必须一致，不能仅依赖卡片禁用状态。此调整不新增 API 或数据库字段，验证状态见本轮开发计划和测试报告。
+
+## 2026-09-08 NH 演示执行契约
+
+`createRun` 的 `skillId` 指定独立共享 Skill 快照，`execution={endpoint,model}` 指定共同 HTTP 执行地址与模型；地址限 HTTP/HTTPS 且不允许 URL 内嵌凭证。两项冻结到 manifest。执行只在内存目标副本上覆盖接入参数，不改外部目标快照。A/B 分组保留各自 target/skill/dataset/evaluatorIds，只有指定对比维度可变；Skill 对比要求执行端确认版本和定义散列。回归及单 Case 重跑继承共享 Skill、执行配置和版本引用。
+
+现有 GET `/api/evaluation-harness` 返回非敏感 executionOptions、按账号全量任务统计 statistics 和各组 groupSummaries。`?traceId=` 仅查询该用户实验关联的真实证据，无归属返回 404，匿名返回 401。`/api/experiments?scope=evaluation-harness` 限定演示列表范围。
+
+外部目录同步按 `hash(redact(targetSchema.parse(content)))` 匹配快照；内容变更只追加版本，不改历史 contentJson。对于本次目录返回的同一对象，不再提供的内容归档为不可选，重新提供则恢复；不处理其他对象。目标定义新增可选 inputSchema/outputSchema 以支持真实输入输出定义的生成上下文。
+
+`skillTriggerAccuracy` 在有独立 Skill 时比较“预期该 Skill 是否触发”和“实际是否触发”，与路由名称完全正确率区分；未标注或未观测不进分数分母。目录汇总保存分组自身通过率，禁止用整场平均分填充 A/B 版本记录。
+
+执行地址与 Agent 凭证绑定：存在 target.credentialId 时，覆盖地址必须与原接入规范化 URL 完全相同；创建阶段同时检查 A/B，并在实际执行前再次检查，避免跨地址转发凭证。

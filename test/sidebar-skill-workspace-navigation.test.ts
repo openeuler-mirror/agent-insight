@@ -64,7 +64,7 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     );
 });
 
-test('版本分析工作区通过页签承载分析与管理两个子能力', async () => {
+test('保留旧版标签工作区配置，演示版直接呈现四资产趋势', async () => {
     const componentPath = path.join(process.cwd(), 'src/components/observe/VersionWorkspaceTabs.tsx');
     const navigationPath = path.join(process.cwd(), 'src/components/observe/version-workspace-navigation.ts');
     assert.equal(fs.existsSync(componentPath), true, '应提供版本分析工作区页签组件');
@@ -84,7 +84,10 @@ test('版本分析工作区通过页签承载分析与管理两个子能力', as
     assert.equal(getActiveVersionWorkspaceTab('/version-management'), 'management');
 
     const appDir = path.join(process.cwd(), 'src/app/(main)');
-    for (const page of ['version-analysis/page.tsx', 'version-management/page.tsx']) {
+    const demoPage=fs.readFileSync(path.join(appDir,'version-analysis/page.tsx'),'utf8');
+    assert.match(demoPage,/VersionExperiments/);
+    assert.doesNotMatch(demoPage,/VersionWorkspaceTabs/);
+    for (const page of ['version-management/page.tsx']) {
         const source = fs.readFileSync(path.join(appDir, page), 'utf8');
         assert.match(source, /VersionWorkspaceTabs/, `${page} 应挂载版本分析工作区页签`);
     }
@@ -125,6 +128,9 @@ test('Skill 工作区保留四个路由，并能识别详情页所属页签', as
 
 test('Skill 主入口挂载统一工作台，旧入口保留工作区页签', () => {
     const appDir = path.join(process.cwd(), 'src/app/(main)');
+    const demoPage=fs.readFileSync(path.join(appDir,'version-analysis/page.tsx'),'utf8');
+    assert.match(demoPage,/VersionExperiments/);
+    assert.doesNotMatch(demoPage,/VersionWorkspaceTabs/);
     const skillsPage = fs.readFileSync(path.join(appDir, 'skills/page.tsx'), 'utf8');
     assert.match(skillsPage, /<SkillWorkbenchShell\s*\/>/, 'skills/page.tsx 应挂载 SkillWorkbenchShell');
 

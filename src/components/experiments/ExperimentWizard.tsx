@@ -406,7 +406,8 @@ export function EvaluatorChoiceCard({ name, description, tags, checked, usable =
                     </div>);
 }
 
-export function Stepper({ step, maxVisited, summaries, onJump, optionalThird = true }: {
+export function Stepper({ step, maxVisited, summaries, onJump, optionalThird = true, labels = STEPS }: {
+  labels?: string[];
   optionalThird?: boolean;
   step: number;
   maxVisited: number;
@@ -419,7 +420,7 @@ export function Stepper({ step, maxVisited, summaries, onJump, optionalThird = t
       background: 'var(--card-bg)', border: '1px solid var(--card-border)',
       borderRadius: 12, padding: '9px 14px', marginBottom: 16,
     }}>
-      {STEPS.map((label, i) => {
+      {labels.map((label, i) => {
         const idx = i + 1;
         const active = idx === step;
         const done = idx < step;
@@ -469,7 +470,7 @@ export function Stepper({ step, maxVisited, summaries, onJump, optionalThird = t
                 </span>
               </span>
             </button>
-            {idx < STEPS.length && (
+            {idx < labels.length && (
               <span style={{ width: 20, height: 1, flexShrink: 0, background: 'var(--border-dark)' }} />
             )}
           </div>

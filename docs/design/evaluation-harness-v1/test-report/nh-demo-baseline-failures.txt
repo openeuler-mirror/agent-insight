@@ -1,0 +1,50 @@
+✖ AC1: dist/extension.js 构建产物存在且非空（可被打包安装）
+✖ AC30 uninstall stops CLI, Desktop, JetBrains, and Work uploader processes
+✖ AC36/AC33: subagent interactions 派生子 Execution 且父子关联正确
+✖ AC5/AC14/AC15/AC16: 上传载荷包含 model/tokens/latency 与模型切换记录
+✖ AC8: Skill trace generated from post-tool-use contains all required fields
+✖ Bash bundle installer supports install, uninstall, and reinstall
+✖ CodeAgent spool source is registered ahead of generic OTel sources
+✖ Hermes setup paths install the first-party plugin without GitHub or venv dependencies
+✖ OTLP traces route preserves legacy invalid-key behavior for non-Qwen collectors
+✖ OTLP traces route rejects an invalid API key for Qwen without writing shared spool
+✖ OTLP traces route rejects only Qwen events from a mixed invalid-key batch
+✖ OTel consumer: only one process can own every registered spool directory
+✖ OTel spool consumer advances only sources whose disposition is acknowledged
+✖ Pi Node installer self-checks, reinstalls, and purges only the current-key spool
+✖ Pi adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage
+✖ Pi adapter preserves three-level SubAgent ancestry and five parallel siblings
+✖ PowerShell bootstrap installs a valid Pi bundle end to end
+✖ PowerShell bootstrap rejects a tampered Pi bundle before installation
+✖ Qoder framework and OTLP registries expose plugin onboarding and snapshot replacement
+✖ Windows hook handlers wrap node invocation in cmd /c
+✖ accepts valid custom fields and removes duplicate keys
+✖ agents page preserves LlamaIndex platform and does not mislabel unknown frameworks
+✖ binding: LlamaIndex root ownSkills 不包含子 Agent skill
+✖ binding: Qoder scopes root skills to the root Agent and excludes Subagent skills
+✖ builtin schema has design defaults and sections
+✖ capability catalog engine returns labeled sub-modes
+✖ client advertises Trace-ID-safe generic execution only for supported platforms
+✖ failing tests:
+✖ fault-injection catalog submodes
+✖ fault-injection e2e ingest
+✖ generated Codex Bash and PowerShell setup scripts pass native syntax parsers
+✖ generated Pi Bash and PowerShell setup scripts pass native syntax parsers
+✖ getRasCapabilityCatalog returns domain schemas for every submode
+✖ leading zeros parse to the intended number
+✖ reinstall preserves the original OTel block for later uninstall
+✖ rejects non-numeric and non-integer input
+✖ rejects values outside the schema range
+✖ resolves thinking-dead-loop submode ids 1/2/3
+✖ resolves tool_repeat_dead_loop submodes 1..4
+✖ runs collect ingest + judge_skipped/completed without writing Session
+✖ setup scripts install the first-party Hermes plugin without GitHub or venv dependencies
+✖ setup serves one deterministic Codex bundle whose digest covers all 14 assets
+✖ snapshot shrink: only trusted server-side framework capabilities can enable Qoder replacement
+✖ source installer roundtrip preserves unrelated hooks and restores config
+✖ source uninstaller removes a config.toml created by installation
+✖ summarizes LlamaIndex Skill versions and custom Tool arguments
+✖ trace scope: root-only remains strict when combined with a skill filter
+✖ validateCapabilityConfigBody accepts defaults and rejects bad thresholds
+✖ 采集端硬编码的端点仍写在它声明的来源文件里
+✖ 首次注册会注入 Agent、Skill、数据集和 3 条 Trace 示例

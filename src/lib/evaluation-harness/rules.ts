@@ -203,3 +203,14 @@ export function summarize(results: CaseResult[], threshold: number) {
     matrix
   };
 }
+
+export function skillTriggerAccuracy(results:CaseResult[],skill?:string){
+  if(!skill)return null;
+  let pass=0,fail=0,unknown=0;
+  for(const result of results)result.case.turns.forEach((turn,i)=>{
+    const expected=turn.expectation.expectedSkill,actual=result.evidence[i]?.skill;
+    if(expected===undefined||actual===undefined){unknown++;return;}
+    if((expected===skill)===(actual===skill))pass++;else fail++;
+  });
+  return {accuracy:pass+fail?pass/(pass+fail)*100:null,total:pass+fail+unknown,pass,fail,unknown};
+}

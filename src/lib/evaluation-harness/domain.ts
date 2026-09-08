@@ -67,6 +67,8 @@ export const targetSchema = z.object({
   externalId: z.string().min(1).max(200),
   externalVersion: z.string().max(200).optional(),
   prompt: text.default(''),
+  inputSchema: z.record(z.string(),z.unknown()).optional(),
+  outputSchema: z.record(z.string(),z.unknown()).optional(),
   skills: z.array(z.object({
     name: z.string().min(1).max(200),
     description: text,

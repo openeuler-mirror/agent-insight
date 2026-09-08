@@ -11,6 +11,7 @@ import { useSidebar } from '@/lib/client/sidebar-context';
 import { useUsageAccess } from '@/lib/usage-analytics/use-usage-access';
 import {
     getSidebarNavigation,
+    demoNavigation,
     isSidebarItemActive,
     type SidebarIconKey,
     type SidebarNavItem,
@@ -64,7 +65,7 @@ export function AppSidebar() {
     const [showUserMenu, setShowUserMenu] = useState(false);
     const usageAccess = useUsageAccess();
     const showUsage = usageAccess.enabled && usageAccess.isAdmin;
-    const navigation = useMemo(() => getSidebarNavigation(showUsage), [showUsage]);
+    const navigation = demoNavigation;
     const [expandedTrees, setExpandedTrees] = useState<Set<string>>(
         new Set(['observe', 'evaluation', 'continuous-optimization', 'config']),
     );
@@ -280,7 +281,7 @@ function NavTree({
                         {NAV_ICONS[item.icon]}
                     </svg>
                 </span>
-                <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
+                <span style={{ flex: 1 }}>{item.label || t(item.labelKey)}</span>
                 <svg
                     width="10" height="10" viewBox="0 0 10 10"
                     fill="none" stroke="currentColor" strokeWidth="1.5"
@@ -357,7 +358,7 @@ function LeafLink({
                     {NAV_ICONS[item.icon]}
                 </svg>
             </span>
-            <span style={{ flex: 1 }}>{t(item.labelKey)}</span>
+            <span style={{ flex: 1 }}>{item.label || t(item.labelKey)}</span>
             {item.badge && (
                 <span
                     style={{

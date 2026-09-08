@@ -621,7 +621,7 @@ export function ExperimentDetail({
             </div>
 
             {/* 实验级评论（针对单个 case / 单个评估器的意见留在各自详情页） */}
-            {user && (
+            {user && detail.configSnapshot?.kind !== 'evaluation-harness-v1' && (
               <div style={{ ...CARD, padding: '14px 16px', marginTop: 14 }}>
                 <EvalComments
                   experimentId={id}

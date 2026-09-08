@@ -12,6 +12,8 @@ export function caseRerunConfig(detail:any,rowId:string,experimentId:string) {
     targetId:pairedComparison?m.target.id:group?.target?.id || m.target.id,
     datasetId:pairedComparison?m.dataset.id:group?.dataset?.id || m.dataset.id,
     evaluatorIds:pairedComparison?m.evaluatorIds:group?.evaluatorIds || m.evaluatorIds || m.evaluators.map((e:{id:string})=>e.id),
+    ...(m.skill ? {skillId:m.skill.id} : {}),
+    ...(m.execution ? {execution:m.execution} : {}),
     ...(pairedComparison?{comparison:m.comparison}:{}),
     threshold:m.threshold,concurrency:1,timeoutSeconds:m.timeoutSeconds,retries:m.retries,
     caseIds:[original.id],sourceExperimentId:experimentId,

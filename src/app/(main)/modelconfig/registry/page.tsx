@@ -12,7 +12,7 @@ export default function ModelRegistryPage() {
         <div style={{ height: '100%', overflowY: 'auto' }}>
             <AppTopBar title={<Term id="model-registry" label={t('nav.modelRegistry')} />} />
             <ModelConfigManager />
-            <ModelPricingManager />
+
         </div>
     );
 }

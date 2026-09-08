@@ -332,3 +332,13 @@ Case 结果页通过 `useEvaluatorLookup` 将冻结 rules 评估器归入 traj�
 第四步通过共享 `EvaluatorComparisonGroups` 输出 A/B 两组，分别显示已选数量和相同样式的 `EvaluatorChoiceCard`。版本化路径在此分别修改 `evaluatorIds`、`evaluatorBIds`；原生路径读取第一步已定的组值，每组只读确认一个评估器，修改入口返回第一步，再沿原流程确认 Trace 配对与共同预期答案。
 
 公共 Case 上下文或评估器目录变化 → 按组校验存在、`ready`、必要上下文及组内互斥 → 任一组失败显示原因并禁用开始 → submit 再检查同一组配置后提交。互斥检查只使用当前组所选 ID，不能把 A/B 合为一个选择集合，否则会错误阻止需要比较的两种评分方式。版本化路径还检查两组各至少一项、组合不同；原生第四步不改变配对条件，后端继续按保存的组执行同一份 Trace。
+
+## 2026-09-08 NH 演示闭环
+
+`DemoExperimentWizard` 是演示默认入口：四资产及版本/单变量配置 → 选择 Case → 只读预期 → 确认执行。第一步通过 AssetVersionPicker 分开选择对象和版本；执行地址、Agent 模型是共享配置。既有 Experiment/Case/结果组件继续承载持久化结果。
+
+Agent 与 Skill 从外部目录读取；选择 Skill 时通过 skillOverrides 请求执行端加载，并校验 loadedSkills。第二步不暴露已有 Trace 分支，保留其后端契约。规则评估器优先执行，语义 Judge 使用公共或加密私有连接。版本分析按四对象的选择/勾选过滤，组内真实汇总生成趋势；完整数据集版本可变，其他执行参数和手选 Case 集不一致则分线。
+
+演示配置位于 `evaluation-harness/demo-profile.ts`。AppSidebar 仅渲染 demoNavigation，主布局限制页面路径；源码中的旧页面组件保留但不挂载。此限制是产品展示范围，不是 API 权限机制。DemoTrace 仅显示实验关联的逐轮真实证据，不加载通用运行监控、标签、RAS 等交互。
+
+数据集继续使用 VersionedDatasetDetail 的逐条浏览器草稿与不可变发布。删除使用页面内对话框，避免内嵌浏览器原生 confirm 阻塞。实验优化入口提供失败规则归类、代表 Case 链接和混淆矩阵；回归跳转统一新向导并恢复四资产及执行条件。

@@ -101,7 +101,7 @@ export default function ExperimentsPage() {
     try {
       const offset = (page - 1) * pageSize;
       const res = await apiFetch(
-        `/api/experiments?user=${encodeURIComponent(user)}&limit=${pageSize}&offset=${offset}`,
+        `/api/experiments?user=${encodeURIComponent(user)}&scope=evaluation-harness&limit=${pageSize}&offset=${offset}`,
       );
       const data = await res.json();
       setRows(Array.isArray(data?.items) ? data.items : []);
@@ -151,7 +151,7 @@ export default function ExperimentsPage() {
             <EmptyState
               icon={FlaskConical}
               title="还没有实验"
-              description="实验 = 一批 case × 一组评估器。从「新建实验」开始：选 Agent → 圈选 Trace →（可选）标注预期答案 → 挑评估器。"
+              description="实验 = 一批 case × 一组评估器。从「新建实验」开始：选择四类对象与版本 → 选择 Case → 确认预期答案 → 执行实验。"
               action={
                 <Button size="sm" onClick={() => router.push('/experiments/new')}>
                   <Plus className="size-3.5" />

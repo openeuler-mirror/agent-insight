@@ -2,6 +2,7 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
+import DemoEvaluators from '@/components/evaluation-harness/DemoEvaluators';
 import EvaluationWorkspace from '@/components/evaluation-harness/Workspace';
 import EvaluatorsCenter from '@/components/EvaluatorsCenter';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -9,7 +10,7 @@ import { SingleExecutionMetrics } from '@/components/eval/SingleExecutionMetrics
 import { useLocale } from '@/lib/client/locale-context';
 import { Term } from '@/components/text/Term';
 
-export default function MetricsPage() {
+function LegacyMetricsPage() {
   return (
     <Suspense fallback={null}>
       <MetricsPageInner />
@@ -50,3 +51,5 @@ function MetricsPageInner() {
     </>
   );
 }
+
+export default function MetricsPage(){return <DemoEvaluators/>;}

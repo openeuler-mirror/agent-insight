@@ -1,5 +1,6 @@
 import { readDemoTargets } from './adapters';
 import { createAsset } from './store';
+import {hash,redact} from './domain';
 import { prisma } from '@/lib/storage/prisma';
 export const demoCases = [{
   id: 'loan-low',
@@ -91,7 +92,16 @@ export async function bootstrap(user: string) {
       }
     }))) await createAsset(user, kind, assetKey, name, content);
   };
-  for (const target of await readDemoTargets()) await ensure('target', target.assetKey, target.name, target.content, target.version);
+  const targets=await readDemoTargets();
+  for(const target of targets){
+    const contentHash=hash(redact(target.content));
+    if(!await prisma.evaluationAssetVersion.findFirst({where:{user,kind:'target',assetKey:target.assetKey,contentHash}}))await createAsset(user,'target',target.assetKey,target.name,target.content);
+  }
+  for(const assetKey of new Set(targets.map(t=>t.assetKey))){
+    const available=targets.filter(t=>t.assetKey===assetKey).map(t=>hash(redact(t.content)));
+    await prisma.evaluationAssetVersion.updateMany({where:{user,kind:'target',assetKey,contentHash:{notIn:available}},data:{archived:true}});
+    await prisma.evaluationAssetVersion.updateMany({where:{user,kind:'target',assetKey,contentHash:{in:available}},data:{archived:false}});
+  }
   await ensure('dataset', 'loan-cases', '贷款业务验收集', {
     cases: demoCases
   });

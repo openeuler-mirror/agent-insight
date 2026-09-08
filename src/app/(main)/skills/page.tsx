@@ -1,4 +1,5 @@
 'use client';
+import DemoTargets from '@/components/evaluation-harness/DemoTargets';
 
 /**
  * Skills Hub —— 头部对齐 /skill-eval（Skill 分析）：
@@ -25,7 +26,7 @@ import { Check, FolderUp, RefreshCw, Sparkles, type LucideIcon } from 'lucide-re
 import { cn } from '@/lib/utils';
 import { apiFetch } from '@/lib/client/api';
 
-export default function SkillsPage() {
+function SkillsPage() {
     return (
         <Suspense fallback={null}>
             <SkillsPageInner />
@@ -205,3 +206,5 @@ function MethodPickerTile({
         </button>
     );
 }
+
+export default function NHDemoPage(){return <DemoTargets staticOnly/>;}

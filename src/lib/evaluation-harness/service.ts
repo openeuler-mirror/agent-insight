@@ -8,7 +8,7 @@ import { caseSchema, datasetSchema, skillOverrideFor, hash, redact, verdict, typ
 import { createAsset, getAsset } from './store';
 import { executeTurn, InfrastructureError, SkillConfirmationError } from './adapters';
 import { loadReplay } from './replay';
-import { evaluateRules, summarize, type CaseResult } from './rules';
+import { evaluateRules, summarize, skillTriggerAccuracy, type CaseResult } from './rules';
 import { askJson, modelFor, modelIdentity } from './llm';
 const runtime = globalThis as typeof globalThis & {
   evaluationHarnessActive?: Map<string, AbortController>;
@@ -18,6 +18,11 @@ const manifestSchema = z.object({
   comparison: comparisonSchema.optional(),
   name: z.string().min(1).max(200),
   targetId: z.string(),
+  skillId: z.string().min(1).optional(),
+  execution: z.object({
+    endpoint: z.string().url().refine(value => { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; }, '执行地址必须是无内嵌凭证的 HTTP/HTTPS 地址'),
+    model: z.string().trim().max(200).default('')
+  }).optional(),
   datasetId: z.string(),
   evaluatorIds: z.array(z.string()).min(1).max(10).refine(ids => new Set(ids).size === ids.length, '评估器不能重复'),
   threshold: z.number().min(0).max(100).default(90),
@@ -30,18 +35,31 @@ const manifestSchema = z.object({
   traceBindings: z.record(z.string(), z.string().min(1)).optional(),
   sourceExperimentId: z.string().optional()
 });
+function executionTargetFor(target:Target,execution?:{endpoint:string;model:string}):Target {
+  if(!execution)return target;
+  const boundAddress=target.adapter==='demo'?process.env.EVALUATION_DEMO_URL:target.endpoint;
+  if(target.credentialId&&(!boundAddress||new URL(boundAddress).href!==new URL(execution.endpoint).href))throw new Error('Agent 凭证绑定原执行地址，不能随地址切换转发；请选择原地址或在外部目录登记新的接入');
+  return {...target,adapter:'http',endpoint:execution.endpoint,...(execution.model?{model:execution.model}:{})};
+}
 export async function createRun(user: string, input: unknown) {
   if (process.env.DB_HOST) throw new Error('版本化多轮实验第一版需要 SQLite 存储');
   const config = manifestSchema.parse(input);
   const [target, dataset, evaluators] = await Promise.all([getAsset(user, config.targetId, 'target'), getAsset(user, config.datasetId, 'dataset'), Promise.all(config.evaluatorIds.map(id => getAsset(user, id, 'evaluator')))]);
   const comparison = config.comparison;
-  const skillA = comparison?.skillAId ? await getAsset(user, comparison.skillAId, 'target') : null;
+  const sharedSkill = config.skillId ? await getAsset(user, config.skillId, 'target') : null;
+  if (sharedSkill && (sharedSkill.content.type !== 'skill' || target.content.type !== 'agent')) throw new Error('请选择 Skill 版本以及执行它的 Agent');
+  if (sharedSkill && comparison?.dimension === 'skill' && comparison.skillAId !== sharedSkill.id) throw new Error('Skill 对比的 A 组版本与已选 Skill 不一致');
+  const skillA = comparison?.skillAId ? await getAsset(user, comparison.skillAId, 'target') : sharedSkill;
   const skillB = comparison?.skillBId ? await getAsset(user, comparison.skillBId, 'target') : null;
   const datasetB = comparison?.dimension === 'dataset' ? await getAsset(user, comparison.datasetBId!, 'dataset') : null;
   const targetB = comparison?.targetBId ? await getAsset(user, comparison.targetBId, 'target') : null;
+  executionTargetFor(target.content,config.execution);if(targetB)executionTargetFor(targetB.content,config.execution);
   const evaluatorsB = comparison?.dimension === 'evaluator' ? await Promise.all((comparison.evaluatorBIds || []).map(id => getAsset(user, id, 'evaluator'))) : evaluators;
   if (comparison) {
-    validateComparison(comparison, target, targetB, config.evaluatorIds, dataset, datasetB, skillA, skillB);
+    const sharedConditions = (asset: typeof target | null) => asset && ({...asset, content:{...asset.content,
+      ...(sharedSkill ? {skills:sharedSkill.content.skills} : {}),
+      ...(config.execution?.model ? {model:config.execution.model} : {})}});
+    validateComparison(comparison, sharedConditions(target), sharedConditions(targetB), config.evaluatorIds, dataset, datasetB, skillA, skillB);
     if (config.traceSource === 'existing' && comparison.dimension !== 'evaluator') throw new Error('版本化目标对比请分别生成 Trace；已有 Trace 对比请使用原有 Trace 评测集');
   }
   const allEvaluators = [...new Map([...evaluators, ...evaluatorsB].map(e => [e.id,e])).values()];
@@ -76,19 +94,20 @@ export async function createRun(user: string, input: unknown) {
   }));
   const groupConfigs = comparison ? ['A', 'B'].map((key, index) => {
     const base = index && targetB ? targetB : target;
-    const skill = index ? skillB : skillA;
+    const skill = index && comparison.dimension === 'skill' ? skillB : skillA;
     const model = comparison.dimension === 'llm' ? (index ? comparison.modelB : comparison.modelA) : undefined;
     const groupEvaluators = index ? evaluatorsB : evaluators;
     const groupDataset = index && datasetB ? datasetB : dataset;
     const cases = index && datasetB ? selectedCasesB : selectedCases;
     return { id: randomUUID(), key, ...(skill ? {skill} : {}), target: {...base,content:{...base.content,...(model ? {model} : {})}}, evaluatorIds: groupEvaluators.map(e=>e.id), dataset:groupDataset, caseIds:cases.map(c=>c.id),
-      label: skill ? `${skill.name} v${skill.version}` : comparison.dimension === 'dataset' ? `${groupDataset.name} v${groupDataset.version}` : comparison.dimension === 'evaluator' ? groupEvaluators.map(e=>`${e.name} v${e.version}`).join(' + ') : model || `${base.name} v${base.version}` };
+      label: comparison.dimension === 'skill' && skill ? `${skill.name} v${skill.version}` : comparison.dimension === 'dataset' ? `${groupDataset.name} v${groupDataset.version}` : comparison.dimension === 'evaluator' ? groupEvaluators.map(e=>`${e.name} v${e.version}`).join(' + ') : model || `${base.name} v${base.version}` };
   }) : [];
   const manifest = {
     kind: 'evaluation-harness-v1',
     ...config,
     ...(replaySources.length ? { replaySources } : {}),
     target,
+    ...(sharedSkill ? {skill:sharedSkill} : {}),
     dataset,
     evaluators: allEvaluators,
     groups: groupConfigs,
@@ -98,6 +117,8 @@ export async function createRun(user: string, input: unknown) {
       ...(config.traceSource === 'existing' ? { traceSource: 'existing' } : {}),
       evaluatorIds: config.evaluatorIds.slice().sort(),
       modelRefs,
+      ...(sharedSkill ? {skillId:sharedSkill.id} : {}),
+      ...(config.execution ? {execution:config.execution} : {}),
       threshold: config.threshold,
       concurrency: config.concurrency,
       timeoutSeconds: config.timeoutSeconds,
@@ -182,7 +203,7 @@ export async function runDetail(user: string, id: string) {
         if (row.traceGenerationError || scored.length < g.evaluatorIds.length || scored.some((v:any)=>v.status!=='done')) checks.push({turn:0,name:'运行状态',verdict:'unknown',reason:row.traceGenerationError || '本组尚未完成评估',blocking:true});
         return {...result,checks,verdict:checks.some((c:Check)=>c.verdict==='unknown')?'unknown':verdict(checks),rowId:row.id,executionId:row.executionId};
       });
-      return {...g, summary:summarize(rows,manifest.threshold),rows};
+      return {...g, summary:{...summarize(rows,manifest.threshold),skillTrigger:skillTriggerAccuracy(rows,g.skill?.content.externalId)},rows};
     });
     const [a,b] = groupResults;
     const pairs = manifest.comparison.dimension === 'dataset' ? buildDatasetPairs(a.rows,b.rows,(a.dataset || manifest.dataset).assetKey === (b.dataset || manifest.dataset).assetKey) : a.rows.map((left:any,index:number)=>{
@@ -202,6 +223,7 @@ export async function runDetail(user: string, id: string) {
     manifest,
     summary: {
       ...summarize(results, manifest.threshold),
+      skillTrigger:skillTriggerAccuracy(results,manifest.skill?.content.externalId),
       executionErrors: r.cases.filter((c: any) => c.traceGenerationError).length
     },
     results
@@ -291,7 +313,7 @@ async function executeClaimedRun(user: string, id: string) {
     while (cursor < detail.experiment.cases.length && !controller.signal.aborted) {
       const c = detail.experiment.cases[cursor++];
       const group = rootManifest.groups?.find((g:any)=>g.id===c.groupId);
-      const manifest = group ? {...rootManifest,target:group.target,dataset:group.dataset || rootManifest.dataset,skill:group.skill} : rootManifest;
+      const manifest = group ? {...rootManifest,target:group.target,dataset:group.dataset || rootManifest.dataset,skill:group.skill || rootManifest.skill} : rootManifest;
       const definition = caseSchema.parse(JSON.parse(c.caseValuesJson!));
       let evidence: TurnEvidence[] = [];
       try {
@@ -318,7 +340,8 @@ async function executeClaimedRun(user: string, id: string) {
           const timeout = AbortSignal.timeout(manifest.timeoutSeconds * 1000),
             signal = AbortSignal.any([controller.signal, timeout]);
           try {
-            for (const t of definition.turns) evidence.push(await executeTurn(user, manifest.target.content as Target, t.input, evidence, signal, {
+            const executionTarget=executionTargetFor(manifest.target.content,manifest.execution);
+            for (const t of definition.turns) evidence.push(await executeTurn(user, executionTarget, t.input, evidence, signal, {
               runId: id,
               caseId: c.id,
               attemptId: row.id,
@@ -511,7 +534,8 @@ async function executeClaimedRun(user: string, id: string) {
       targetId: id,
       reportJson: JSON.stringify({
         kind: 'run',
-        summary: finished.summary
+        summary: finished.summary,
+        groups: finished.comparison?.groups.map((group:any)=>({id:group.id,key:group.key,summary:group.summary})) || []
       })
     }
   });
