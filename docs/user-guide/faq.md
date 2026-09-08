@@ -73,7 +73,7 @@ description: "高频问题集中解答"
 
 最常见路径是先 Trace，后诊断。
 
-## 评测中心
+## 评估与实验
 
 ### 为什么我的评测结果很奇怪？
 
@@ -87,7 +87,7 @@ description: "高频问题集中解答"
 
 - [评测数据集](./evaluation/datasets)
 - [评估器](./evaluation/evaluators)
-- [结果分析](./evaluation/analyze-results)
+- [实验详情与 Case 结果](./evaluation/experiments#查看实验详情)
 
 ### 第一次评测应该准备多少样本？
 
@@ -123,10 +123,10 @@ description: "高频问题集中解答"
 
 ### 为什么我的 Skill 总是误触发或不触发？
 
-优先去 [Skills 评测总览](./skills/evaluation/overview) 看：
+优先在 [Skill 评估与实验](./skills/evaluation/overview) 中检查：
 
 - 触发分析结果
-- 静态合规是否存在结构性问题
+- 静态质量评估是否存在结构性问题
 - 是否有边界样本覆盖不足
 
 ### 生成出来的 Skill 可以直接长期使用吗？
@@ -137,8 +137,8 @@ description: "高频问题集中解答"
 
 1. 先生成初稿
 2. 确认结构与边界
-3. 进入分析页看效果
-4. 再进入优化，形成更稳定版本
+3. 发布后在 Skill 实验中验证效果
+4. 根据证据进入优化会话生成候选版本
 
 ## 使用建议
 
@@ -148,8 +148,8 @@ description: "高频问题集中解答"
 
 - 想先接入平台： [5 分钟上手](./quickstart)
 - 想看真实执行： [运行观测](./observability/index)
-- 想做离线验证： [评测中心](./evaluation/index)
-- 想沉淀和优化能力： [Skills 能力](./skills/index)
+- 想做离线验证： [评估与实验](./evaluation/index)
+- 想沉淀和优化能力： [Skill 工作台](./skills/index)
 
 ### 为什么文档里经常强调“先看真实样本，再做评测”？
 
@@ -272,5 +272,5 @@ bash scripts/db_archive.sh import \
 - 想先跑通接入： [5 分钟上手](./quickstart)
 - 想正式纳管 Agent： [Agent 管理](./agent-management)
 - 想排查真实问题： [运行观测](./observability/index)
-- 想建立回归验证： [评测中心](./evaluation/index)
-- 想管理和优化 Skill： [Skills 能力](./skills/index)
+- 想建立回归验证： [评估与实验](./evaluation/index)
+- 想管理和优化 Skill： [Skill 工作台](./skills/index)

@@ -6,6 +6,7 @@
 import Link from 'next/link';
 import EvaluationWorkspace from '@/components/evaluation-harness/Workspace';
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
@@ -13,6 +14,7 @@ import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
@@ -282,8 +284,16 @@ export function ExperimentDetail({
       {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
       <PageContainer
         variant={embedded ? 'canvas' : 'default'}
-        className={embedded ? 'overflow-visible [&>*]:shrink-0' : '[&>*]:shrink-0'}
+        className={embedded ? 'overflow-visible [&>*]:shrink-0' : '!pt-2 [&>*]:shrink-0'}
       >
+        {!embedded && (
+          <Button asChild variant="ghost" size="sm" className="mb-3 self-start px-2 text-foreground-secondary">
+            <Link href="/experiments">
+              <ArrowLeft className="size-3.5" aria-hidden />
+              返回实验列表
+            </Link>
+          </Button>
+        )}
         {embedded && onBack && (
           <button type="button" onClick={onBack} style={{ ...ACTION_BTN, marginBottom: 12 }}>‹ 返回实验记录</button>
         )}

@@ -1,8 +1,8 @@
 # 版本化多轮评测：端到端测试过程报告
 
-日期：2026-09-06；补充验证：2026-09-07  
-分支：`codex/evaluation-harness-v1`  
-测试账号：`harness-ui@example.test`（本地邮箱登录，无需密码）  
+日期：2026-09-06；补充验证：2026-09-07
+分支：`codex/evaluation-harness-v1`
+测试账号：`harness-ui@example.test`（本地邮箱登录，无需密码）
 环境：`http://127.0.0.1:3019`；独立 Demo HTTP 服务 `http://127.0.0.1:4319`。
 
 ## 验证范围与环境

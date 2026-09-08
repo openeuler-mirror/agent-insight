@@ -414,7 +414,7 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 
 - 想对异常执行做自动归因： [智能诊断](./diagnosis)
 - 想看整体健康趋势： [质量监控](./quality-monitoring)
-- 想把典型 Trace 转成数据集： [从 Trace 构建数据集](../evaluation/dataset-from-trace)
+- 想把典型 Trace 转成数据集： [从 Trace 回流数据项](../evaluation/datasets#从-trace-回流数据项)
 - 想回到运行观测总览： [运行观测](./index)
 
 
