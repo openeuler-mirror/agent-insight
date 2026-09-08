@@ -33,7 +33,7 @@ let importOfficialSweBenchVerifiedDataset:
 let createExperiment: typeof import('@/app/api/experiments/route').POST
 let runExperiment: typeof import('@/app/api/experiments/[id]/run/route').POST
 let listExecutionTargets: typeof import('@/app/api/benchmark/v1/execution-targets/route').GET
-let setDispatchFetch: typeof import('@/lib/benchmark/scheduler').setBenchmarkDispatchFetchForTest
+let setCommandDispatcher: typeof import('@/lib/benchmark/scheduler').setBenchmarkCommandDispatcherForTest
 let resumeDispatches: typeof import('@/lib/benchmark/scheduler').resumeBenchmarkDispatchesAtStartup
 
 test.before(async () => {
@@ -72,8 +72,7 @@ test.before(async () => {
       reportedIp TEXT, observedIp TEXT, os TEXT, arch TEXT, status TEXT NOT NULL DEFAULT 'offline',
       serviceHealth TEXT NOT NULL DEFAULT 'unknown', supervisor TEXT, processStartedAt DATETIME,
       restartCount INTEGER NOT NULL DEFAULT 0, lastSeenAt DATETIME NOT NULL, agentVersion TEXT,
-      capabilitiesJson TEXT NOT NULL DEFAULT '{}', capabilitiesRevision TEXT, executorBaseUrl TEXT,
-      executorReachability TEXT NOT NULL DEFAULT 'unknown', executorCheckedAt DATETIME, unboundAt DATETIME,
+      capabilitiesJson TEXT NOT NULL DEFAULT '{}', capabilitiesRevision TEXT, unboundAt DATETIME,
       unboundToClientId TEXT, machineId TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -109,7 +108,7 @@ test.before(async () => {
     CREATE TABLE BenchmarkCaseRun (
       id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, experimentCaseId TEXT NOT NULL, datasetCaseId TEXT,
       ordinal INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', adapterKey TEXT NOT NULL, clientId TEXT NOT NULL,
-      executorBaseUrl TEXT NOT NULL, publicPayloadJson TEXT, privatePayloadJson TEXT, taskEnvelopeJson TEXT,
+      publicPayloadJson TEXT, privatePayloadJson TEXT, taskEnvelopeJson TEXT,
       taskDigest TEXT, progressJson TEXT, runFactsJson TEXT, cleanupJson TEXT, completionDigest TEXT,
       failureCode TEXT, failureMessage TEXT, retryOfRunId TEXT, lastProgressAt DATETIME,
       startedAt DATETIME, finishedAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -127,9 +126,9 @@ test.before(async () => {
     );
     CREATE TABLE BenchmarkDispatchOutbox (
       id TEXT PRIMARY KEY, runId TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'agent_execution',
-      destinationBaseUrl TEXT NOT NULL, requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL,
+      commandId TEXT UNIQUE, requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', attemptCount INTEGER NOT NULL DEFAULT 0,
-      nextAttemptAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, leasedUntil DATETIME, httpStatus INTEGER,
+      nextAttemptAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, leasedUntil DATETIME,
       responseJson TEXT, errorCode TEXT, errorMessage TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (runId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE
@@ -159,12 +158,12 @@ test.before(async () => {
   createExperiment = experimentRoute.POST
   runExperiment = runRoute.POST
   listExecutionTargets = executionTargetsRoute.GET
-  setDispatchFetch = scheduler.setBenchmarkDispatchFetchForTest
+  setCommandDispatcher = scheduler.setBenchmarkCommandDispatcherForTest
   resumeDispatches = scheduler.resumeBenchmarkDispatchesAtStartup
 })
 
 test.after(async () => {
-  setDispatchFetch?.()
+  setCommandDispatcher?.()
   delete process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL
   delete process.env.AGENT_INSIGHT_DATA_DIR
   await prisma?.$disconnect()
@@ -254,14 +253,13 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
       status: 'online',
       serviceHealth: 'healthy',
       lastSeenAt: new Date(),
-      executorBaseUrl: 'http://127.0.0.1:43123',
       capabilitiesJson: JSON.stringify({
         platforms: [{
           id: 'codex',
           agents: ['review'],
           models: ['gpt-5.3-codex'],
           runExperimentCase: { version: 2, returnsTraceId: true },
-          actions: ['RUN_EXPERIMENT_CASE'],
+          actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],
         }],
         components: {
           'git-workspace/v1': { ready: true },
@@ -350,26 +348,24 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
   assert.equal(frozen?.status, 'pending')
   assert.equal(frozen?.taskEnvelopeJson, null)
 
-  const calls: Array<{ url: string; headers: Headers; body: string }> = []
-  setDispatchFetch((async (request, init) => {
-    calls.push({
-      url: String(request),
-      headers: new Headers(init?.headers),
-      body: String(init?.body || ''),
-    })
+  const calls: Array<{ user: string; clientId: string; request: Record<string, unknown> }> = []
+  setCommandDispatcher(async (input) => {
+    calls.push(input)
     if (calls.length === 1) throw new Error('synthetic connection reset')
     if (calls.length === 2) {
-      return new Response(JSON.stringify({
-        error: { code: 'SERVICE_BUSY', message: 'executor busy', retryable: true },
-      }), { status: 409, headers: { 'content-type': 'application/json' } })
+      return {
+        commandId: 'cmd_busy',
+        status: 'busy',
+        code: 'CLIENT_BUSY',
+        message: 'client busy',
+      }
     }
-    const requestBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
-    return new Response(JSON.stringify({
-      runId: requestBody.runId,
+    return {
+      commandId: `cmd_accepted_${calls.length}`,
       status: 'accepted',
-      requestDigest: requestBody.requestDigest,
-    }), { status: 202, headers: { 'content-type': 'application/json' } })
-  }) as typeof fetch)
+      receipt: { runId: input.request.runId },
+    }
+  })
 
   process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL = 'http://127.0.0.1:3000'
   const runResponse = await runExperiment(
@@ -384,15 +380,14 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
   const acceptedRun = await waitForAcceptedRun(created.id)
   assert.equal(acceptedRun.id, runResponseBody.runId)
   assert.equal(calls.length, 3)
-  assert.equal(calls[0].url, 'http://127.0.0.1:43123/api/v1/benchmark-executions')
-  assert.equal(calls[0].headers.get('idempotency-key'), acceptedRun.id)
-  assert.equal(calls[1].headers.get('idempotency-key'), acceptedRun.id)
-  assert.equal(calls[0].body, calls[1].body)
-  assert.equal(calls[2].body, calls[1].body)
-  assert.equal(calls[2].body.includes('hidden answer'), false)
-  assert.equal(calls[2].body.includes('hidden test'), false)
+  assert.equal(calls[0].clientId, clientId)
+  assert.equal(calls[0].user, user)
+  assert.deepEqual(calls[0].request, calls[1].request)
+  assert.deepEqual(calls[2].request, calls[1].request)
+  assert.equal(JSON.stringify(calls[2].request).includes('hidden answer'), false)
+  assert.equal(JSON.stringify(calls[2].request).includes('hidden test'), false)
 
-  const dispatched = JSON.parse(calls[2].body) as {
+  const dispatched = calls[2].request as {
     callbackBaseUrl: string
     task: {
       context: { runId: string }
@@ -415,6 +410,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
   const outbox = await prisma.benchmarkDispatchOutbox.findUnique({ where: { runId: acceptedRun.id } })
   assert.equal(outbox?.status, 'accepted')
   assert.equal(outbox?.attemptCount, 3)
+  assert.equal(outbox?.commandId, 'cmd_accepted_3')
   const binding = await prisma.benchmarkExperimentBinding.findUnique({
     where: { experimentId: created.id },
   })
@@ -438,7 +434,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
   assert.equal(resumedOutbox?.status, 'accepted')
   assert.equal(resumedOutbox?.attemptCount, 2)
   assert.equal(calls.length, 4)
-  assert.equal(calls[3].body, calls[2].body)
+  assert.deepEqual(calls[3].request, calls[2].request)
 
   await assert.rejects(
     () => importBenchmarkDataset({
@@ -458,7 +454,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
           id: 'codex',
           agents: ['review'],
           runExperimentCase: { version: 2, returnsTraceId: true },
-          actions: ['RUN_EXPERIMENT_CASE'],
+          actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],
         }],
         components: { 'git-workspace/v1': { ready: true } },
       }),
@@ -485,24 +481,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
   assert.equal(missingCapabilityBody.error.code, 'EXECUTOR_CAPABILITY_MISSING')
 })
 
-test('benchmark create rejects an executor URL supplied by the experiment request', async () => {
-  const response = await createExperiment(new Request('http://insight.test/api/experiments', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      user,
-      scope: 'benchmark',
-      benchmark: {
-        executionTarget: { clientId, baseUrl: 'http://attacker.test' },
-      },
-    }),
-  }))
-  assert.equal(response.status, 400)
-  const body = await response.json() as { error: { code: string } }
-  assert.equal(body.error.code, 'EXECUTOR_ENDPOINT_FORBIDDEN')
-})
-
-test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP boundary', {
+test('real SWE-bench Verified data crosses create/run APIs and the client command boundary', {
   skip: missingOfficialPrerequisite
     ? `missing external prerequisite: ${missingOfficialPrerequisite}`
     : false,
@@ -535,14 +514,13 @@ test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP
       status: 'online',
       serviceHealth: 'healthy',
       lastSeenAt: new Date(),
-      executorBaseUrl: 'http://127.0.0.1:43124',
       capabilitiesJson: JSON.stringify({
         platforms: [{
           id: 'opencode',
           agents: ['build'],
           models: ['configured-default'],
           runExperimentCase: { version: 2, returnsTraceId: true },
-          actions: ['RUN_EXPERIMENT_CASE'],
+          actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],
         }],
         components: {
           'git-workspace/v1': { ready: true },
@@ -589,20 +567,15 @@ test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP
     where: { experimentId: created.id, status: 'pending' },
   }), 500)
 
-  const calls: Array<{ url: string; headers: Headers; body: string }> = []
-  setDispatchFetch((async (request, init) => {
-    calls.push({
-      url: String(request),
-      headers: new Headers(init?.headers),
-      body: String(init?.body || ''),
-    })
-    const requestBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
-    return new Response(JSON.stringify({
-      runId: requestBody.runId,
+  const calls: Array<{ user: string; clientId: string; request: Record<string, unknown> }> = []
+  setCommandDispatcher(async (input) => {
+    calls.push(input)
+    return {
+      commandId: `cmd_official_${calls.length}`,
       status: 'accepted',
-      requestDigest: requestBody.requestDigest,
-    }), { status: 202, headers: { 'content-type': 'application/json' } })
-  }) as typeof fetch)
+      receipt: { runId: input.request.runId },
+    }
+  })
 
   const runResponse = await runExperiment(
     new Request(
@@ -616,11 +589,8 @@ test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP
   const acceptedRun = await waitForAcceptedRun(created.id)
   assert.equal(acceptedRun.id, runResponseBody.runId)
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].url, 'http://127.0.0.1:43124/api/v1/benchmark-executions')
-  assert.equal(calls[0].headers.get('content-type'), 'application/json')
-  assert.equal(calls[0].headers.get('idempotency-key'), acceptedRun.id)
 
-  const outbound = JSON.parse(calls[0].body) as {
+  const outbound = calls[0].request as {
     runId: string
     requestDigest: string
     task: {
@@ -631,7 +601,6 @@ test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP
   assert.equal(outbound.runId, acceptedRun.id)
   assert.equal(outbound.task.context.runId, acceptedRun.id)
   assert.equal(outbound.task.task.benchmarkPayload.instanceId, firstCase.externalCaseId)
-  assert.equal(calls[0].headers.get('x-agent-insight-request-digest'), outbound.requestDigest)
   assert.equal(hasForbiddenEvaluatorKey(outbound), false)
   assert.equal(await prisma.benchmarkCaseRun.count({
     where: { experimentId: created.id, status: 'running_agent' },
@@ -657,10 +626,12 @@ test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP
   }))
   assert.equal(rejectedCreateResponse.status, 201)
   const rejectedExperiment = await rejectedCreateResponse.json() as { id: string }
-  setDispatchFetch((async () => new Response(
-    JSON.stringify({ error: { code: 'TASK_REJECTED' } }),
-    { status: 422, headers: { 'content-type': 'application/json' } },
-  )) as typeof fetch)
+  setCommandDispatcher(async () => ({
+    commandId: 'cmd_rejected',
+    status: 'rejected',
+    code: 'TASK_REJECTED',
+    message: 'task rejected',
+  }))
   const rejectedRunResponse = await runExperiment(
     new Request(
       `http://insight.test/api/experiments/${rejectedExperiment.id}/run?user=${encodeURIComponent(officialUser)}`,
@@ -670,11 +641,11 @@ test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP
   )
   assert.equal(rejectedRunResponse.status, 202)
   const rejectedRun = await waitForRunStatus(rejectedExperiment.id, 'dispatch_failed')
-  assert.equal(rejectedRun.failureCode, 'DISPATCH_REJECTED')
+  assert.equal(rejectedRun.failureCode, 'TASK_REJECTED')
   const rejectedOutbox = await prisma.benchmarkDispatchOutbox.findUnique({
     where: { runId: rejectedRun.id },
   })
-  assert.equal(rejectedOutbox?.httpStatus, 422)
+  assert.equal(rejectedOutbox?.commandId, 'cmd_rejected')
   assert.equal(rejectedOutbox?.status, 'failed')
-  setDispatchFetch()
+  setCommandDispatcher()
 })

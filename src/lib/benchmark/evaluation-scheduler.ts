@@ -84,6 +84,10 @@ async function markFailed(evaluationId: string, input: {
   code: string
   message: string
 }): Promise<void> {
+  const evaluation = await prisma.benchmarkEvaluation.findUnique({
+    where: { id: evaluationId },
+    include: { caseRun: { select: { id: true, experimentId: true, experimentCaseId: true } } },
+  })
   await prisma.$transaction([
     prisma.benchmarkEvaluationDispatchOutbox.update({
       where: { evaluationId },
@@ -105,7 +109,36 @@ async function markFailed(evaluationId: string, input: {
         finishedAt: new Date(),
       },
     }),
+    ...(evaluation ? [
+      prisma.benchmarkCaseRun.update({
+        where: { id: evaluation.caseRun.id },
+        data: {
+          status: 'evaluation_failed',
+          failureCode: input.code,
+          failureMessage: input.message,
+          finishedAt: new Date(),
+        },
+      }),
+      prisma.experimentEvalResult.updateMany({
+        where: {
+          experimentId: evaluation.caseRun.experimentId,
+          caseId: evaluation.caseRun.experimentCaseId,
+          evaluatorId: `benchmark:${evaluation.evaluatorKey}`,
+        },
+        data: { status: 'failed', errorMessage: input.message },
+      }),
+    ] : []),
   ])
+  if (evaluation) {
+    const { finalizeBenchmarkCase } = await import('./experiment-lifecycle')
+    await finalizeBenchmarkCase({
+      caseRunId: evaluation.caseRun.id,
+      runSupplementalEvaluators: evaluation.attemptNo === 1,
+      continueCases: evaluation.attemptNo === 1,
+    }).catch((error) => {
+      console.error('[benchmark/evaluation-scheduler] failed to settle rejected evaluation', error)
+    })
+  }
 }
 
 async function freezeTarget(evaluationId: string) {
@@ -193,14 +226,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
     const protocolError = error instanceof BenchmarkProtocolError
       ? error
       : new BenchmarkProtocolError('EVALUATOR_CONFIGURATION_INVALID', '评测服务配置不合法', 500)
-    await prisma.benchmarkEvaluationDispatchOutbox.updateMany({
-      where: { evaluationId, status: { in: ['pending', 'unknown'] } },
-      data: { errorCode: protocolError.code, errorMessage: protocolError.message },
-    })
-    await prisma.benchmarkEvaluation.updateMany({
-      where: { id: evaluationId, status: 'queued' },
-      data: { failureCode: protocolError.code, failureMessage: protocolError.message },
-    })
+    await markFailed(evaluationId, { code: protocolError.code, message: protocolError.message })
     return
   }
 

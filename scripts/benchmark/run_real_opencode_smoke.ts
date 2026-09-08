@@ -47,6 +47,8 @@ async function main() {
   const executorBaseDir = path.join(agentInsightHome, 'client', 'benchmark-smoke', suffix)
   let terminal = false
   let executor: ReturnType<typeof createBenchmarkExecutor> | null = null
+  const commandLoopAbort = new AbortController()
+  let commandLoop: Promise<void> | null = null
 
   try {
     const imported = await importOfficialSweBenchVerifiedDataset({
@@ -70,9 +72,6 @@ async function main() {
       }, payload),
       logError: (...args: unknown[]) => console.error('[benchmark-smoke executor]', ...args),
     })
-    const address = await executor.listen('127.0.0.1', 0)
-    const executorOrigin = `http://127.0.0.1:${address.port}`
-
     await prisma.reliabilityClient.create({
       data: {
         id: `rclient_${randomUUID().replaceAll('-', '')}`,
@@ -82,11 +81,14 @@ async function main() {
         status: 'online',
         serviceHealth: 'healthy',
         lastSeenAt: new Date(),
-        executorBaseUrl: executorOrigin,
-        executorReachability: 'reachable',
-        executorCheckedAt: new Date(),
         capabilitiesJson: JSON.stringify({
-          platforms: [{ id: 'opencode', models: [model], agents: [agent] }],
+          platforms: [{
+            id: 'opencode',
+            models: [model],
+            agents: [agent],
+            runExperimentCase: { version: 2, returnsTraceId: true },
+            actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],
+          }],
           components: {
             'git-workspace/v1': { ready: true },
             'agent-runtime/opencode/v1': { ready: true },
@@ -101,6 +103,64 @@ async function main() {
         clientId,
         credentialHash: deviceCredentialHash(deviceCredential),
       },
+    })
+    const clientHeaders = {
+      authorization: `Bearer ${deviceCredential}`,
+      'x-agent-insight-client-id': clientId,
+      'content-type': 'application/json',
+    }
+    const sendCommandStatus = async (
+      commandId: string,
+      status: string,
+      extra: Record<string, unknown> = {},
+    ) => {
+      const response = await fetch(
+        `${platformOrigin}/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`,
+        {
+          method: 'POST',
+          headers: clientHeaders,
+          body: JSON.stringify({ status, occurredAt: new Date().toISOString(), ...extra }),
+          signal: commandLoopAbort.signal,
+        },
+      )
+      const body = await response.json().catch(() => ({}))
+      assertOk(response, body, `command status ${status}`)
+    }
+    commandLoop = (async () => {
+      while (!commandLoopAbort.signal.aborted) {
+        const response = await fetch(
+          `${platformOrigin}/api/reliability/client/v1/commands/next?waitSeconds=5`,
+          { headers: clientHeaders, signal: commandLoopAbort.signal },
+        )
+        if (response.status === 204) continue
+        const frame = await response.json() as {
+          commandId: string
+          action: string
+          payload: { request?: Record<string, unknown> }
+        }
+        assertOk(response, frame, 'claim command')
+        await sendCommandStatus(frame.commandId, 'RECEIVED')
+        if (frame.action !== 'RUN_BENCHMARK_CASE' || !frame.payload.request) {
+          await sendCommandStatus(frame.commandId, 'FAILED', {
+            error: { code: 'ACTION_NOT_ALLOWED', message: frame.action },
+          })
+          continue
+        }
+        try {
+          const result = await executor!.accept(frame.payload.request)
+          await sendCommandStatus(frame.commandId, 'RUNNING', { result: { state: 'ACCEPTED' } })
+          await sendCommandStatus(frame.commandId, 'SUCCEEDED', { result })
+        } catch (error) {
+          await sendCommandStatus(frame.commandId, 'FAILED', {
+            error: {
+              code: (error as { code?: string }).code || 'BENCHMARK_ACCEPT_FAILED',
+              message: error instanceof Error ? error.message : String(error),
+            },
+          })
+        }
+      }
+    })().catch((error) => {
+      if (!commandLoopAbort.signal.aborted) throw error
     })
 
     const createResponse = await fetch(`${platformOrigin}/api/experiments`, {
@@ -216,14 +276,14 @@ async function main() {
       executorStateDir: path.join(executorBaseDir, 'benchmark-runs', runId),
     }, null, 2))
   } finally {
+    commandLoopAbort.abort()
+    await commandLoop?.catch(() => undefined)
     if (executor) await executor.close().catch(() => undefined)
     await prisma.reliabilityClient.updateMany({
       where: { clientId },
       data: {
         status: 'offline',
         serviceHealth: terminal ? 'stopped' : 'unhealthy',
-        executorReachability: 'unreachable',
-        executorCheckedAt: new Date(),
       },
     }).catch(() => undefined)
     await prisma.reliabilityClientCredential.updateMany({

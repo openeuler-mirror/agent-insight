@@ -24,10 +24,12 @@ export type EvaluatorRequirement = 'reference' | 'dataset_input' | 'tool_catalog
 export interface EvaluatorMeta {
   category: EvaluatorCategory;
   requires: EvaluatorRequirement[];
+  executionBackend?: 'experiment' | 'benchmark-service';
 }
 
 /** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。 */
 const PRESET_META: Record<string, EvaluatorMeta> = {
+  'benchmark:swe-bench': { category: 'res', requires: [], executionBackend: 'benchmark-service' },
   'skill-trigger-analyzer': { category: 'res', requires: [] },
   // 任务完成度：对照预期输出判定目标达成（团队评审确定为依赖预期输出）
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
@@ -88,6 +90,10 @@ const MUTUAL_EXCLUSION_GROUPS: string[][] = [
  */
 export function hasPresetMeta(id: string): boolean {
   return Object.prototype.hasOwnProperty.call(PRESET_META, id);
+}
+
+export function getPresetExecutionBackend(id: string): 'experiment' | 'benchmark-service' {
+  return PRESET_META[id]?.executionBackend ?? 'experiment';
 }
 
 /** 自建 LLM 评估器：requires 由提示词占位符推导。 */

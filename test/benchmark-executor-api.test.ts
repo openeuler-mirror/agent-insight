@@ -34,6 +34,7 @@ const externalTestExperimentIds = new Set<string>()
 const executorModule = require('../services/executor/src/index.cjs') as {
   createBenchmarkExecutor: (options: Record<string, unknown>) => {
     listen(host?: string, port?: number): Promise<{ port: number }>
+    accept(request: Record<string, unknown>): Promise<Record<string, unknown>>
     close(): Promise<void>
     readonly activeRunId: string | null
     recover(): Promise<void>
@@ -56,6 +57,7 @@ let createExperimentRoute: typeof import('@/app/api/experiments/route').POST
 let runExperimentRoute: typeof import('@/app/api/experiments/[id]/run/route').POST
 let importOfficialDataset:
   typeof import('../benchmarks/swe-bench/dataset').importOfficialSweBenchVerifiedDataset
+let setCommandDispatcher: typeof import('@/lib/benchmark/scheduler').setBenchmarkCommandDispatcherForTest
 
 test.before(async () => {
   if (!externalDatabasePath) {
@@ -94,8 +96,7 @@ test.before(async () => {
       reportedIp TEXT, observedIp TEXT, os TEXT, arch TEXT, status TEXT NOT NULL DEFAULT 'offline',
       serviceHealth TEXT NOT NULL DEFAULT 'unknown', supervisor TEXT, processStartedAt DATETIME,
       restartCount INTEGER NOT NULL DEFAULT 0, lastSeenAt DATETIME NOT NULL, agentVersion TEXT,
-      capabilitiesJson TEXT NOT NULL DEFAULT '{}', capabilitiesRevision TEXT, executorBaseUrl TEXT,
-      executorReachability TEXT NOT NULL DEFAULT 'unknown', executorCheckedAt DATETIME, unboundAt DATETIME,
+      capabilitiesJson TEXT NOT NULL DEFAULT '{}', capabilitiesRevision TEXT, unboundAt DATETIME,
       unboundToClientId TEXT, machineId TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -131,7 +132,7 @@ test.before(async () => {
     CREATE TABLE BenchmarkCaseRun (
       id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, experimentCaseId TEXT NOT NULL, datasetCaseId TEXT,
       ordinal INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', adapterKey TEXT NOT NULL, clientId TEXT NOT NULL,
-      executorBaseUrl TEXT NOT NULL, publicPayloadJson TEXT, privatePayloadJson TEXT, taskEnvelopeJson TEXT,
+      publicPayloadJson TEXT, privatePayloadJson TEXT, taskEnvelopeJson TEXT,
       taskDigest TEXT, progressJson TEXT, runFactsJson TEXT, cleanupJson TEXT, completionDigest TEXT,
       failureCode TEXT, failureMessage TEXT, retryOfRunId TEXT, lastProgressAt DATETIME,
       startedAt DATETIME, finishedAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -149,9 +150,9 @@ test.before(async () => {
     );
     CREATE TABLE BenchmarkDispatchOutbox (
       id TEXT PRIMARY KEY, runId TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'agent_execution',
-      destinationBaseUrl TEXT NOT NULL, requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL,
+      commandId TEXT UNIQUE, requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', attemptCount INTEGER NOT NULL DEFAULT 0,
-      nextAttemptAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, leasedUntil DATETIME, httpStatus INTEGER,
+      nextAttemptAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, leasedUntil DATETIME,
       responseJson TEXT, errorCode TEXT, errorMessage TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (runId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE
@@ -200,7 +201,7 @@ test.before(async () => {
     storage, artifact, artifactContent, progress, complete,
     evaluationProgress, evaluationArtifact, evaluationComplete,
     evaluationArtifactContent, benchmarkExperimentResult,
-    createExperiment, runExperiment, dataset,
+    createExperiment, runExperiment, dataset, scheduler,
   ] = await Promise.all([
     import('@/lib/storage/prisma'),
     import('@/app/api/benchmark/v1/artifacts/route'),
@@ -215,6 +216,7 @@ test.before(async () => {
     import('@/app/api/experiments/route'),
     import('@/app/api/experiments/[id]/run/route'),
     import('../benchmarks/swe-bench/dataset'),
+    import('@/lib/benchmark/scheduler'),
   ])
   prisma = storage.prisma
   artifactRoute = artifact.POST
@@ -229,6 +231,7 @@ test.before(async () => {
   createExperimentRoute = createExperiment.POST
   runExperimentRoute = runExperiment.POST
   importOfficialDataset = dataset.importOfficialSweBenchVerifiedDataset
+  setCommandDispatcher = scheduler.setBenchmarkCommandDispatcherForTest
 })
 
 test.after(async () => {
@@ -500,7 +503,6 @@ async function seedRun(input: {
   clientId: string
   user: string
   task: AgentTaskEnvelope
-  executorBaseUrl: string
   deviceCredential: string
   callbackOrigin: string
 }) {
@@ -586,7 +588,6 @@ async function seedRun(input: {
       status: 'online',
       serviceHealth: 'healthy',
       lastSeenAt: new Date(),
-      executorBaseUrl: input.executorBaseUrl,
     },
   })
   await prisma.reliabilityClientCredential.create({
@@ -606,7 +607,6 @@ async function seedRun(input: {
       status: 'running_agent',
       adapterKey: 'swe-bench',
       clientId: input.clientId,
-      executorBaseUrl: input.executorBaseUrl,
       taskEnvelopeJson: canonicalJson(input.task as never),
       publicPayloadJson: canonicalJson(publicPayload),
       privatePayloadJson: canonicalJson(privatePayload),
@@ -732,7 +732,6 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
     clientId,
     user,
     task,
-    executorBaseUrl: executorOrigin,
     deviceCredential,
     callbackOrigin: platformListener.origin,
   })
@@ -1101,7 +1100,7 @@ const pythonPath = process.env.SWE_BENCH_PYTHON
   || path.join(os.homedir(), '.agent-insight', 'vendor', 'SWE-bench', '.venv', 'bin', 'python')
 const officialMissing = [datasetPath, pythonPath].find((item) => !fs.existsSync(item))
 
-test('steps 01-13 cross all HTTP boundaries with a real SWE-bench Case', {
+test('steps 01-13 cross the client-command and evaluator boundaries with a real SWE-bench Case', {
   skip: officialMissing ? `missing external prerequisite: ${officialMissing}` : false,
   timeout: 180_000,
 }, async () => {
@@ -1159,8 +1158,6 @@ test('steps 01-13 cross all HTTP boundaries with a real SWE-bench Case', {
       }
     },
   })
-  const executorAddress = await executor.listen('127.0.0.1', 0)
-  const executorOrigin = `http://127.0.0.1:${executorAddress.port}`
   try {
     const imported = externalDatabasePath
       ? await prisma.benchmarkDataset.findFirst({
@@ -1190,13 +1187,12 @@ test('steps 01-13 cross all HTTP boundaries with a real SWE-bench Case', {
         status: 'online',
         serviceHealth: 'healthy',
         lastSeenAt: new Date(),
-        executorBaseUrl: executorOrigin,
         capabilitiesJson: JSON.stringify({
           platforms: [{
             id: 'opencode',
             agents: ['build'],
             runExperimentCase: { version: 2, returnsTraceId: true },
-            actions: ['RUN_EXPERIMENT_CASE'],
+            actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],
           }],
           components: {
             'git-workspace/v1': { ready: true },
@@ -1213,6 +1209,11 @@ test('steps 01-13 cross all HTTP boundaries with a real SWE-bench Case', {
         credentialHash: deviceCredentialHash(deviceCredential),
       },
     })
+    setCommandDispatcher(async (input) => ({
+      commandId: `cmd_full_${suffix}`,
+      status: 'accepted',
+      receipt: await executor.accept(input.request),
+    }))
     const createResponse = await fetch(`${platformListener.origin}/api/experiments`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1335,6 +1336,7 @@ test('steps 01-13 cross all HTTP boundaries with a real SWE-bench Case', {
     )
     assert.equal(forbiddenEvidence.status, 404)
   } finally {
+    setCommandDispatcher()
     await executor.close()
     await evaluatorListener.close()
     await platformListener.close()

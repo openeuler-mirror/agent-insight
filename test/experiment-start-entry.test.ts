@@ -7,7 +7,7 @@ const root = process.cwd();
 
 test('全局实验详情是纯进度视图，不提供二次启动和重复返回入口', () => {
   const detailPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
 
@@ -19,7 +19,7 @@ test('全局实验详情是纯进度视图，不提供二次启动和重复返�
 
 test('向导仅在 run 请求成功后进入详情，启动失败回滚临时实验', () => {
   const wizardPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentWizard.tsx'),
     'utf8',
   );
   const runRequest = wizardPage.indexOf('const runRes = await apiFetch');
@@ -53,7 +53,7 @@ test('生成 Trace 先进入 running，绑定完成后显式继续调度评估',
 
 test('实验详情展示 Trace 生成进度和失败 Case，失败 Trace 不显示为实际输出', () => {
   const detailPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
   assert.match(detailPage, /Trace 生成失败/);

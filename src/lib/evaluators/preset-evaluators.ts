@@ -25,6 +25,23 @@ export const DEFAULT_SELECTED_PRESET_IDS: readonly string[] = [
 
 export const presetEvaluators: EvaluatorCard[] = [
   {
+    id: 'benchmark:swe-bench',
+    name: 'SWE-bench Official Harness',
+    description: '使用 SWE-bench 官方测试契约验证 model.patch，输出 Resolved/Unresolved 及 FAIL_TO_PASS、PASS_TO_PASS 通过数量。',
+    evaluatorType: 'Code',
+    source: 'preset',
+    category: 'res',
+    targetTypes: ['代码补丁'],
+    objectives: ['官方测试通过'],
+    scenarios: ['SWE-bench Benchmark'],
+    runMode: 'Official Harness（独立评测服务）',
+    scoreRange: 'Pass / Fail',
+    popularity: 100,
+    mappedMetrics: ['Resolved', 'FAIL_TO_PASS', 'PASS_TO_PASS'],
+    status: 'ready',
+    runtimeNote: 'Benchmark 数据集自动绑定；官方测试与 Gold Patch 不向 Agent 暴露',
+  },
+  {
     id: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
     name: 'skill-trigger-analyzer',
     description: '逐条比较数据集应触发标注与当前 Skill 的真实路由结果，每条 Case 只输出一个「触发准确率」评分点。',

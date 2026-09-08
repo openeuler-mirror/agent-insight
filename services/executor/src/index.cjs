@@ -1,7 +1,6 @@
 'use strict'
 
 const { createHash, createHmac, timingSafeEqual } = require('node:crypto')
-const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const http = require('node:http')
 const os = require('node:os')
@@ -86,7 +85,7 @@ function bearerToken(headers) {
   return match[1]
 }
 
-function assertCallbackUrl(callbackBaseUrl, insightBaseUrl, runId) {
+function assertCallbackUrl(callbackBaseUrl, insightBaseUrl, runId, allowAlternateOrigin = false) {
   let actual
   let expected
   try {
@@ -98,7 +97,10 @@ function assertCallbackUrl(callbackBaseUrl, insightBaseUrl, runId) {
     throw new BenchmarkExecutorError('CALLBACK_URL_INVALID', '回调地址不合法', 403)
   }
   if (
-    actual.origin !== expected.origin
+    !['http:', 'https:'].includes(actual.protocol)
+    || actual.username
+    || actual.password
+    || (!allowAlternateOrigin && actual.origin !== expected.origin)
     || actual.pathname.replace(/\/$/, '') !== expected.pathname.replace(/\/$/, '')
     || actual.search
     || actual.hash
@@ -828,7 +830,7 @@ function createBenchmarkExecutor(options) {
     })
   }
 
-  async function accept(req, request) {
+  function validateRequest(request, allowAlternateCallbackOrigin = false) {
     if (!request || typeof request !== 'object') {
       throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '请求体不合法', 400)
     }
@@ -847,6 +849,22 @@ function createBenchmarkExecutor(options) {
     ) {
       throw new BenchmarkExecutorError('EXECUTION_TIMEOUT_INVALID', '执行超时必须在 1～86400 秒之间', 400)
     }
+    if (dispatchDigest(request) !== digest) {
+      throw new BenchmarkExecutorError('REQUEST_DIGEST_MISMATCH', '任务摘要不匹配', 403)
+    }
+    validateTaskEnvelope(request.task, runId)
+    assertCallbackUrl(
+      request.callbackBaseUrl,
+      options.insightBaseUrl,
+      runId,
+      allowAlternateCallbackOrigin,
+    )
+    buildExecutionPlan(request.task, { workspaceProviders, agentRuntimes, collectors })
+    return { runId, digest }
+  }
+
+  function authenticateHttpRequest(req, request, validated) {
+    const { runId, digest } = validated
     if (req.headers['idempotency-key'] !== runId || req.headers['x-agent-insight-request-digest'] !== digest) {
       throw new BenchmarkExecutorError('DISPATCH_HEADER_MISMATCH', '幂等键或摘要 Header 不匹配', 400)
     }
@@ -859,13 +877,9 @@ function createBenchmarkExecutor(options) {
     ) {
       throw new BenchmarkExecutorError('DISPATCH_FORBIDDEN', '下发 token 与任务不匹配', 403)
     }
-    if (dispatchDigest(request) !== digest) {
-      throw new BenchmarkExecutorError('REQUEST_DIGEST_MISMATCH', '任务摘要不匹配', 403)
-    }
-    validateTaskEnvelope(request.task, runId)
-    assertCallbackUrl(request.callbackBaseUrl, options.insightBaseUrl, runId)
-    buildExecutionPlan(request.task, { workspaceProviders, agentRuntimes, collectors })
+  }
 
+  async function acceptValidatedRequest(request, { runId }) {
     const existing = await store.request(runId)
     if (existing) {
       const accepted = await store.accept(request)
@@ -884,6 +898,12 @@ function createBenchmarkExecutor(options) {
       throw error
     }
     runInBackground(request, { stage: 'accepted' })
+  }
+
+  async function acceptHttpRequest(req, request) {
+    const validated = validateRequest(request)
+    authenticateHttpRequest(req, request, validated)
+    await acceptValidatedRequest(request, validated)
   }
 
   const server = http.createServer(async (req, res) => {
@@ -914,7 +934,7 @@ function createBenchmarkExecutor(options) {
           if (error instanceof BenchmarkExecutorError) throw error
           throw new BenchmarkExecutorError('REQUEST_JSON_INVALID', '请求体不是合法 JSON', 400)
         }
-        await accept(req, request)
+        await acceptHttpRequest(req, request)
         sendJson(res, 202, {
           runId: request.runId,
           status: 'accepted',
@@ -951,6 +971,15 @@ function createBenchmarkExecutor(options) {
     store,
     runner,
     get activeRunId() { return activeRunId },
+    async accept(request) {
+      const validated = validateRequest(request, true)
+      await acceptValidatedRequest(request, validated)
+      return {
+        runId: request.runId,
+        status: 'accepted',
+        requestDigest: request.requestDigest,
+      }
+    },
     async listen(host = '127.0.0.1', port = 0) {
       await new Promise((resolve, reject) => {
         server.once('error', reject)

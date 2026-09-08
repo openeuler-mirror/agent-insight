@@ -169,7 +169,6 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
             status: 'submitted',
             adapterKey: 'swe-bench',
             clientId: `result-api-client-${suffix}`,
-            executorBaseUrl: 'http://127.0.0.1:1',
             publicPayloadJson: datasetCase.publicPayloadJson,
             privatePayloadJson: datasetCase.privatePayloadJson,
             runFactsJson: JSON.stringify({ traceId: `trace_result_${index}_${suffix}` }),

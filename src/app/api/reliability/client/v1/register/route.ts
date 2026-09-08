@@ -45,9 +45,6 @@ export async function POST(req: Request) {
       agentVersion: client.agentVersion ? String(client.agentVersion) : null,
       supervisor: client.supervisor ? String(client.supervisor) : null,
       machineId: client.machineId ? String(client.machineId) : null,
-      executorBaseUrl: Object.prototype.hasOwnProperty.call(client, 'executorBaseUrl')
-        ? String(client.executorBaseUrl || '')
-        : undefined,
       capabilities: body.capabilities,
       previousClientId: body.previousClientId ? String(body.previousClientId) : null,
     })

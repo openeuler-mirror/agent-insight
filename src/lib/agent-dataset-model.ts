@@ -4,10 +4,10 @@ import type {
   RootCauseItem,
 } from './dataset-case-root-causes';
 
-export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability';
+export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
 
 export function coerceDatasetKind(value: unknown): DatasetKind {
-  if (value === 'trajectory' || value === 'reliability') return value;
+  if (value === 'trajectory' || value === 'reliability' || value === 'benchmark') return value;
   return 'ideal_output';
 }
 
@@ -108,6 +108,8 @@ export interface AgentDataset {
   cases: DatasetCase[];
   createdAt: string;
   updatedAt: string;
+  readOnly?: boolean;
+  benchmark?: { adapterKey: string; status: string };
 }
 
 export const EVALUATOR_CATALOG_FIELD_KEYS = ['available_tools', 'available_skills'] as const;
@@ -150,6 +152,15 @@ export function createEvaluatorCatalogField(
 }
 
 export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
+  if (kind === 'benchmark') {
+    return [
+      { id: 'input', key: 'input', label: '问题描述', type: 'text', system: true },
+      { id: 'instance_id', key: 'instance_id', label: 'Instance ID', type: 'text', system: true },
+      { id: 'repo', key: 'repo', label: '代码仓库', type: 'text', system: true },
+      { id: 'base_commit', key: 'base_commit', label: '基线提交', type: 'text', system: true },
+      { id: 'version', key: 'version', label: '版本', type: 'text', system: true },
+    ];
+  }
   const fields: DatasetField[] = [
     { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
   ];
@@ -196,6 +207,9 @@ export const TRAJECTORY_PLACEHOLDER = `{
 }`;
 
 export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'>): string[] {
+  if (dataset.datasetKind === 'benchmark') {
+    return ['input', 'instance_id', 'repo', 'base_commit', 'version'];
+  }
   if (dataset.datasetKind === 'trajectory') {
     return ['input', 'reference_output', 'trajectory'];
   }
@@ -241,6 +255,15 @@ export interface DatasetDefaultFieldDef {
 
 /** 两种场景下的默认列配置 */
 export function defaultFieldsForKind(kind: DatasetKind): DatasetDefaultFieldDef[] {
+  if (kind === 'benchmark') {
+    return [
+      { key: 'input', dataType: 'String', required: '是', description: '公开的问题描述，作为 Agent 任务输入' },
+      { key: 'instance_id', dataType: 'String', required: '是', description: 'SWE-bench Case 标识' },
+      { key: 'repo', dataType: 'String', required: '是', description: '目标代码仓库' },
+      { key: 'base_commit', dataType: 'String', required: '是', description: '任务基线提交' },
+      { key: 'version', dataType: 'String', required: '否', description: '仓库版本' },
+    ];
+  }
   const base: DatasetDefaultFieldDef[] = [
     {
       key: 'input',

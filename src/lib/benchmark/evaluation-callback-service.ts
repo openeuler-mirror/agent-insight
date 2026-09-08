@@ -14,6 +14,7 @@ import { resolveAgentInsightDataPath } from '@/lib/env'
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
+import { finalizeBenchmarkCase } from './experiment-lifecycle'
 
 const ACTIVE_STATUSES = new Set(['queued', 'dispatch_unknown', 'running_evaluator'])
 const TERMINAL_CASE_STATUSES = [
@@ -258,13 +259,22 @@ async function settleExperimentIfComplete(
   if (!binding) {
     throw new BenchmarkProtocolError('BENCHMARK_BINDING_NOT_FOUND', 'Benchmark 实验绑定不存在', 500, true)
   }
-  const terminalCount = await tx.benchmarkCaseRun.count({
-    where: {
-      experimentId,
-      status: { in: [...TERMINAL_CASE_STATUSES] },
-    },
+  const runs = await tx.benchmarkCaseRun.findMany({
+    where: { experimentId },
+    orderBy: { createdAt: 'desc' },
+    select: { experimentCaseId: true, status: true },
   })
+  const latestRunStatus = new Map<string, string>()
+  for (const run of runs) {
+    if (!latestRunStatus.has(run.experimentCaseId)) latestRunStatus.set(run.experimentCaseId, run.status)
+  }
+  const terminalCount = Array.from(latestRunStatus.values())
+    .filter((status) => (TERMINAL_CASE_STATUSES as readonly string[]).includes(status)).length
   if (terminalCount !== binding.expectedCaseCount) return
+  const pendingResultCount = await tx.experimentEvalResult.count({
+    where: { experimentId, status: { in: ['pending', 'running'] } },
+  })
+  if (pendingResultCount > 0) return
   await tx.experiment.update({
     where: { id: experimentId },
     data: { status: 'done' },
@@ -431,6 +441,13 @@ export async function completeBenchmarkEvaluation(input: {
     } catch (persistenceError) {
       return recordPersistenceFailure(input.evaluationId, persistenceError)
     }
+    void finalizeBenchmarkCase({
+      caseRunId: evaluation.caseRunId,
+      runSupplementalEvaluators: evaluation.attemptNo === 1,
+      continueCases: evaluation.attemptNo === 1,
+    }).catch((continuationError) => {
+      console.error('[benchmark/evaluation-callback] failure continuation failed', continuationError)
+    })
     throw nonRetryableNormalizationError(failureCode, message)
   }
 
@@ -469,6 +486,13 @@ export async function completeBenchmarkEvaluation(input: {
       })
       await writeExperimentResult({ tx, evaluation, normalized })
       await settleExperimentIfComplete(tx, evaluation.caseRun.experimentId)
+    })
+    void finalizeBenchmarkCase({
+      caseRunId: evaluation.caseRunId,
+      runSupplementalEvaluators: evaluation.attemptNo === 1,
+      continueCases: evaluation.attemptNo === 1,
+    }).catch((continuationError) => {
+      console.error('[benchmark/evaluation-callback] continuation failed', continuationError)
     })
     return {
       accepted: true,

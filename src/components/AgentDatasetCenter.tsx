@@ -101,6 +101,9 @@ function datasetPrimaryStatLine(item: AgentDatasetListItem): { label: string; va
   if (item.datasetKind === 'reliability') {
     return { label: '可靠性样例', value: String(n) };
   }
+  if (item.datasetKind === 'benchmark') {
+    return { label: 'Benchmark Case', value: String(n) };
+  }
   return { label: '评测数据', value: String(n) };
 }
 
@@ -329,6 +332,10 @@ export default function AgentDatasetCenter() {
 
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
     if (!user) return;
+    if (dataset.readOnly || dataset.datasetKind === 'benchmark') {
+      setTableActionError('Benchmark 数据集由系统导入并维护，只能查看和发起评测');
+      return;
+    }
     if (isBuiltinReliabilityDataset(dataset)) {
       setTableActionError('内置可靠性评测集由系统维护，不可编辑');
       return;
@@ -407,6 +414,10 @@ export default function AgentDatasetCenter() {
 
   const handleDeleteDataset = async (item: AgentDatasetListItem) => {
     if (!user) return;
+    if (item.readOnly || item.datasetKind === 'benchmark') {
+      setTableActionError('Benchmark 数据集由系统导入并维护，不可删除');
+      return;
+    }
     if (isBuiltinReliabilityDataset(item)) {
       setTableActionError('内置可靠性评测集不可删除');
       return;
@@ -551,6 +562,7 @@ export default function AgentDatasetCenter() {
             ['ideal_output', '理想输出'],
             ['trajectory', '轨迹'],
             ['reliability', '可靠性'],
+            ['benchmark', 'Benchmark'],
           ] as const).map(([key, label]) => (
             <button
               key={key}
@@ -739,8 +751,8 @@ export default function AgentDatasetCenter() {
                       {truncateText(item.name, 42)}
                     </h2>
                     <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: item.datasetKind === 'reliability' ? 'color-mix(in srgb, var(--primary) 12%, transparent)' : 'var(--background-secondary)', color: 'var(--foreground-muted)', border: '1px solid var(--border)' }}>
-                        {item.datasetKind === 'reliability' ? '可靠性' : item.datasetKind === 'trajectory' ? '轨迹' : '理想输出'}
+                      <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: item.datasetKind === 'reliability' || item.datasetKind === 'benchmark' ? 'color-mix(in srgb, var(--primary) 12%, transparent)' : 'var(--background-secondary)', color: 'var(--foreground-muted)', border: '1px solid var(--border)' }}>
+                        {item.datasetKind === 'benchmark' ? 'Benchmark · 系统导入' : item.datasetKind === 'reliability' ? '可靠性' : item.datasetKind === 'trajectory' ? '轨迹' : '理想输出'}
                         {item.name.includes('内置') ? ' · 内置' : ''}
                       </span>
                       {schemaColumnTags(item).map(field => (
@@ -840,13 +852,13 @@ export default function AgentDatasetCenter() {
                       stopActionPropagation(event);
                       openEditorForDataset(item);
                     }}
-                    disabled={isBuiltinReliabilityDataset(item)}
-                    title={isBuiltinReliabilityDataset(item) ? '内置可靠性评测集不可编辑' : '编辑数据集信息'}
+                    disabled={isBuiltinReliabilityDataset(item) || item.readOnly || item.datasetKind === 'benchmark'}
+                    title={item.datasetKind === 'benchmark' ? '系统导入的 Benchmark 数据集不可编辑' : isBuiltinReliabilityDataset(item) ? '内置可靠性评测集不可编辑' : '编辑数据集信息'}
                   >
                     <Pencil size={14} aria-hidden />
                     编辑信息
                   </button>
-                  {!isBuiltinReliabilityDataset(item) && (
+                  {!isBuiltinReliabilityDataset(item) && !item.readOnly && item.datasetKind !== 'benchmark' && (
                   <button
                     type="button"
                     className="ai-dataset-action ai-dataset-action--danger"
@@ -868,21 +880,21 @@ export default function AgentDatasetCenter() {
                     style={datasetActionPrimaryStyle}
                     onClick={event => {
                       stopActionPropagation(event);
-                      if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability') {
+                      if (item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark') {
                         // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入预期输出）
-                        router.push('/experiments/new');
+                        router.push(`/experiments/new?datasetId=${encodeURIComponent(item.id)}`);
                       } else {
                         // 非轨迹评测集暂时仍引导到评估器目录页选评估器
                         router.push('/metrics');
                       }
                     }}
                     title={
-                      item.datasetKind === 'trajectory' || item.datasetKind === 'reliability'
+                      item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark'
                         ? '使用实验向导发起评测'
                         : '前往评估器目录选择评估器'
                     }
                   >
-                    {item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' ? (
+                    {item.datasetKind === 'trajectory' || item.datasetKind === 'reliability' || item.datasetKind === 'benchmark' ? (
                       <PlayCircle size={14} aria-hidden />
                     ) : (
                       <ClipboardList size={14} aria-hidden />

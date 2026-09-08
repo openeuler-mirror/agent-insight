@@ -14,7 +14,7 @@ import { deviceCredentialHash } from '../packages/benchmark-protocol/src/executo
 const require = createRequire(import.meta.url)
 const { createBenchmarkExecutor } = require('../services/executor/src/index.cjs') as {
   createBenchmarkExecutor(options: Record<string, unknown>): {
-    listen(host?: string, port?: number): Promise<{ port: number }>
+    accept(request: Record<string, unknown>): Promise<Record<string, unknown>>
     close(): Promise<void>
   }
 }
@@ -154,6 +154,8 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
     evaluationArtifact,
     evaluationComplete,
     experimentResult,
+    nextCommand,
+    commandStatus,
   ] = await Promise.all([
     import('@/lib/storage/prisma'),
     import('@/app/api/experiments/route'),
@@ -166,6 +168,8 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
     import('@/app/api/benchmark/v1/evaluations/[evaluationId]/artifacts/route'),
     import('@/app/api/benchmark/v1/evaluations/[evaluationId]/complete/route'),
     import('@/app/api/benchmark/v1/experiments/[experimentId]/route'),
+    import('@/app/api/reliability/client/v1/commands/next/route'),
+    import('@/app/api/reliability/client/v1/commands/[commandId]/status/route'),
   ])
   const prisma = storage.prisma
   let publicOrigin = ''
@@ -202,6 +206,11 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
       } else if (req.method === 'GET' && /^\/api\/benchmark\/v1\/experiments\/[^/]+$/.test(url.pathname)) {
         const experimentId = decodeURIComponent(url.pathname.split('/').at(-1) || '')
         response = await experimentResult.GET(request, { params: Promise.resolve({ experimentId }) })
+      } else if (req.method === 'GET' && url.pathname === '/api/reliability/client/v1/commands/next') {
+        response = await nextCommand.GET(request)
+      } else if (req.method === 'POST' && /^\/api\/reliability\/client\/v1\/commands\/[^/]+\/status$/.test(url.pathname)) {
+        const commandId = decodeURIComponent(url.pathname.split('/').at(-2) || '')
+        response = await commandStatus.POST(request, { params: Promise.resolve({ commandId }) })
       } else {
         response = new Response('{}', { status: 404 })
       }
@@ -225,6 +234,8 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
   let runId = ''
   let evaluationId = ''
   let controllerStarted = false
+  const commandLoopAbort = new AbortController()
+  let commandLoop: Promise<void> | null = null
   try {
     const dataset = await prisma.benchmarkDataset.findFirst({
       where: { adapterKey: 'swe-bench', status: 'ready' },
@@ -304,8 +315,6 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
       }, payload),
       logError: (...values: unknown[]) => t.diagnostic(values.map(String).join(' ')),
     })
-    const executorAddress = await executor.listen('127.0.0.1', 0)
-    const executorOrigin = `http://127.0.0.1:${executorAddress.port}`
     await prisma.reliabilityClient.create({
       data: {
         id: `rclient_${randomUUID().replaceAll('-', '')}`,
@@ -315,16 +324,13 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
         status: 'online',
         serviceHealth: 'healthy',
         lastSeenAt: new Date(),
-        executorBaseUrl: executorOrigin,
-        executorReachability: 'reachable',
-        executorCheckedAt: new Date(),
         capabilitiesJson: JSON.stringify({
           platforms: [{
             id: 'opencode',
             models: [model],
             agents: ['build'],
             runExperimentCase: { version: 2, returnsTraceId: true },
-            actions: ['RUN_EXPERIMENT_CASE'],
+            actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'],
           }],
           components: {
             'git-workspace/v1': { ready: true },
@@ -340,6 +346,65 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
         clientId,
         credentialHash: deviceCredentialHash(deviceCredential),
       },
+    })
+    const clientHeaders = {
+      authorization: `Bearer ${deviceCredential}`,
+      'x-agent-insight-client-id': clientId,
+      'content-type': 'application/json',
+    }
+    const sendCommandStatus = async (
+      commandId: string,
+      status: string,
+      extra: Record<string, unknown> = {},
+    ) => {
+      const response = await fetch(
+        `${platform.origin}/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`,
+        {
+          method: 'POST',
+          headers: clientHeaders,
+          body: JSON.stringify({ status, occurredAt: new Date().toISOString(), ...extra }),
+          signal: commandLoopAbort.signal,
+        },
+      )
+      const responseText = await response.text()
+      assert.equal(response.status, 200, responseText)
+    }
+    commandLoop = (async () => {
+      while (!commandLoopAbort.signal.aborted) {
+        const response = await fetch(
+          `${platform.origin}/api/reliability/client/v1/commands/next?waitSeconds=5`,
+          { headers: clientHeaders, signal: commandLoopAbort.signal },
+        )
+        if (response.status === 204) continue
+        const responseText = await response.text()
+        assert.equal(response.status, 200, responseText)
+        const frame = JSON.parse(responseText) as {
+          commandId: string
+          action: string
+          payload: { request?: Record<string, unknown> }
+        }
+        await sendCommandStatus(frame.commandId, 'RECEIVED')
+        if (frame.action !== 'RUN_BENCHMARK_CASE' || !frame.payload.request) {
+          await sendCommandStatus(frame.commandId, 'FAILED', {
+            error: { code: 'ACTION_NOT_ALLOWED', message: frame.action },
+          })
+          continue
+        }
+        try {
+          const result = await executor!.accept(frame.payload.request)
+          await sendCommandStatus(frame.commandId, 'RUNNING', { result: { state: 'ACCEPTED' } })
+          await sendCommandStatus(frame.commandId, 'SUCCEEDED', { result })
+        } catch (error) {
+          await sendCommandStatus(frame.commandId, 'FAILED', {
+            error: {
+              code: (error as { code?: string }).code || 'BENCHMARK_ACCEPT_FAILED',
+              message: error instanceof Error ? error.message : String(error),
+            },
+          })
+        }
+      }
+    })().catch((error) => {
+      if (!commandLoopAbort.signal.aborted) throw error
     })
 
     const createdResponse = await fetch(`${platform.origin}/api/experiments`, {
@@ -436,6 +501,8 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
     t.diagnostic(`executor cleanup=${run.cleanupJson} evaluation evidence=${evaluation.artifacts.map((item) => item.name).sort().join(',')} image=${String(runtimeFacts.caseImage)} evaluator cleanup=${evaluation.cleanupJson} normalized=${evaluation.normalizedResultJson}`)
     t.diagnostic(`model.patch=${patch.slice(0, 2_000)}`)
   } finally {
+    commandLoopAbort.abort()
+    await commandLoop?.catch(() => undefined)
     if (executor) await executor.close().catch(() => undefined)
     if (controllerStarted) {
       const logs = spawnSync('docker', ['logs', controllerName], { encoding: 'utf8' })

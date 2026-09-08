@@ -50,6 +50,7 @@ export function inspectBenchmarkExecutionTargets(
   return listTraceGenerationPlatforms(capabilities).flatMap((platform) => {
     const agents = [...new Set(platform.agents || [])]
     if (!agents.length) return []
+    const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
     const requiredCapabilities = [
       ...manifest.requiredCapabilities,
       benchmarkAgentRuntimeCapability(platform.id),
@@ -60,7 +61,7 @@ export function inspectBenchmarkExecutionTargets(
     const unavailableReasons = [
       status !== 'online' ? `客户端状态不可用：${status}` : '',
       serviceHealth !== 'healthy' ? '客户端服务未就绪' : '',
-      !client.executorBaseUrl ? '未上报 Benchmark 执行器地址' : '',
+      !actions.has('RUN_BENCHMARK_CASE') ? '客户端版本不支持 Benchmark 控制指令' : '',
       ...missingCapabilities.map(capability => `缺少 ${capability}`),
     ].filter(Boolean)
 

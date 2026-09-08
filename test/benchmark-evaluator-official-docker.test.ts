@@ -244,7 +244,6 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
           status: 'submitted',
           adapterKey: 'swe-bench',
           clientId: source.clientId,
-          executorBaseUrl: source.executorBaseUrl,
           publicPayloadJson: source.publicPayloadJson,
           privatePayloadJson: source.privatePayloadJson,
           taskEnvelopeJson: source.taskEnvelopeJson,

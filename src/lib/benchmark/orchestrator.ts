@@ -21,6 +21,7 @@ const ACTIVE_RUN_STATUSES = [
   'collecting',
   'uploading',
   'cleaning',
+  'submitted',
 ]
 
 function parseJson<T>(json: string, errorCode: string): T {
@@ -134,7 +135,6 @@ export async function prepareNextBenchmarkCaseRun(input: {
       await tx.benchmarkDispatchOutbox.create({
         data: {
           runId: run.id,
-          destinationBaseUrl: run.executorBaseUrl,
           requestJson: canonicalJson(request as unknown as JsonValue),
           requestDigest: digest,
         },

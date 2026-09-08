@@ -13,6 +13,11 @@ import { overallAverage } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service';
+import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { getEvaluatorMeta } from '@/lib/evaluators/registry';
+import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
+import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +41,31 @@ interface ExperimentScoreRow {
   status: string
   score: number | null
   humanScore: number | null
+}
+
+async function benchmarkEvaluatorIds(user: string, rawIds: unknown): Promise<string[]> {
+  const requested = Array.isArray(rawIds)
+    ? rawIds.map(String).map((id) => id.trim()).filter(Boolean)
+    : [];
+  const catalog = new Map<string, EvaluatorCard>();
+  for (const card of presetEvaluators) catalog.set(card.id, card);
+  for (const card of await readUserCustomEvaluators(user) as EvaluatorCard[]) {
+    if (card && typeof card === 'object' && card.id) catalog.set(card.id, card);
+  }
+  const selected = new Set<string>(['benchmark:swe-bench']);
+  for (const id of requested) {
+    if (id === 'benchmark:swe-bench') continue;
+    if (id.startsWith('benchmark:')) {
+      throw new Error(`Benchmark 实验不支持评估器 ${id}`);
+    }
+    const card = catalog.get(id);
+    if (!card || card.status !== 'ready') throw new Error(`评估器 ${id} 不存在或未就绪`);
+    if (getEvaluatorMeta(card).requires.includes('reference')) {
+      throw new Error(`评估器「${card.name}」依赖预期输出，不能用于 Benchmark 数据集`);
+    }
+    selected.add(id);
+  }
+  return Array.from(selected);
 }
 
 export async function GET(req: Request) {
@@ -127,6 +157,78 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
+    if (body.createMode === 'same-config') {
+      const sourceExperimentId = String(body.sourceExperimentId || '').trim();
+      if (!sourceExperimentId) {
+        return NextResponse.json({ error: 'sourceExperimentId is required' }, { status: 400 });
+      }
+      try {
+        const cloned = await cloneExperimentFromFrozenConfig({ sourceExperimentId, user: username });
+        recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
+        return NextResponse.json(cloned, { status: 201 });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '复制实验配置失败';
+        return NextResponse.json({ error: message }, { status: message === 'source experiment not found' ? 404 : 409 });
+      }
+    }
+
+    const agentEvalDatasetId = String(body.datasetId || '').trim();
+    const publicBenchmarkDataset = agentEvalDatasetId
+      ? await prisma.agentEvalDataset.findFirst({
+          where: { id: agentEvalDatasetId, user: username, datasetKind: 'benchmark' },
+          include: { benchmarkDataset: true },
+        })
+      : null;
+    if (publicBenchmarkDataset) {
+      try {
+        if (!publicBenchmarkDataset.benchmarkDataset || publicBenchmarkDataset.benchmarkDataset.status !== 'ready') {
+          return NextResponse.json({ error: 'Benchmark 数据集尚未就绪' }, { status: 409 });
+        }
+        if (body.traceSource !== 'generate' || body.watchMode === true || body.type === 'llm') {
+          return NextResponse.json(
+            { error: 'Benchmark 数据集只支持单组实验并生成新 Trace' },
+            { status: 400 },
+          );
+        }
+        const executionTarget = body.executionTarget && typeof body.executionTarget === 'object'
+          ? body.executionTarget as Record<string, unknown>
+          : {};
+        const agentName = String(body.agentName || '').trim();
+        const evaluatorIds = await benchmarkEvaluatorIds(username, body.evaluatorIds);
+        const caseIds = Array.isArray(body.datasetCaseIds)
+          ? body.datasetCaseIds.map(String).filter(Boolean)
+          : [];
+        const result = await createBenchmarkExperiment({
+          user: username,
+          name: String(body.name || ''),
+          agentName,
+          datasetId: publicBenchmarkDataset.benchmarkDataset.id,
+          agentEvalDatasetId,
+          caseSelection: caseIds.length
+            ? { mode: 'explicit', caseIds }
+            : { mode: 'all' },
+          clientId: String(executionTarget.workerId || ''),
+          evaluatorIds,
+          runConfig: {
+            platform: String(executionTarget.platform || ''),
+            agent: agentName,
+            model: executionTarget.model ? String(executionTarget.model) : undefined,
+            agentTimeoutSeconds: body.agentTimeoutSeconds == null
+              ? undefined
+              : Number(body.agentTimeoutSeconds),
+            maxParallelAgentCases: 1,
+          },
+        });
+        recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
+        return NextResponse.json(result, { status: 201 });
+      } catch (error) {
+        if (error instanceof Error && !('code' in error)) {
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+        return benchmarkErrorResponse(error, 'benchmark/experiments/create-shared');
+      }
+    }
+
     if (body.scope === 'benchmark') {
       try {
         const benchmark = body.benchmark && typeof body.benchmark === 'object'
@@ -136,12 +238,6 @@ export async function POST(req: Request) {
           && typeof benchmark.executionTarget === 'object'
           ? benchmark.executionTarget as Record<string, unknown>
           : {};
-        if ('baseUrl' in executionTarget || 'executorBaseUrl' in executionTarget) {
-          return NextResponse.json(
-            { error: { code: 'EXECUTOR_ENDPOINT_FORBIDDEN', message: '实验请求不能指定执行器地址' } },
-            { status: 400 },
-          );
-        }
         const runConfig = benchmark.runConfig && typeof benchmark.runConfig === 'object'
           ? benchmark.runConfig as Record<string, unknown>
           : {};
@@ -180,6 +276,7 @@ export async function POST(req: Request) {
               ? undefined
               : Number(runConfig.maxParallelAgentCases),
           },
+          evaluatorIds: Array.isArray(body.evaluatorIds) ? body.evaluatorIds.map(String) : undefined,
         });
         recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
         return NextResponse.json(result, { status: 201 });
@@ -216,6 +313,12 @@ export async function POST(req: Request) {
     if (evaluatorIds.length < 1) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
+    if (evaluatorIds.includes('benchmark:swe-bench')) {
+      return NextResponse.json(
+        { error: 'SWE-bench Official Harness 只能用于 Benchmark 数据集' },
+        { status: 400 },
+      );
+    }
     if (scope && (!skillName || skillVersion == null || !preset)) {
       return NextResponse.json({ error: 'Skill 实验缺少 Skill、版本或预设上下文' }, { status: 400 });
     }
@@ -242,6 +345,12 @@ export async function POST(req: Request) {
           })),
           evaluatorIds,
         });
+        if (configSnapshot) {
+          await prisma.experiment.update({
+            where: { id },
+            data: { configSnapshotJson: JSON.stringify(configSnapshot) },
+          });
+        }
         // autoPairGroups 查候选 trace + 为可比配对创建 case
         await autoPairGroups(id);
         return NextResponse.json({ id });

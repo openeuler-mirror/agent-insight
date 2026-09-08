@@ -14,6 +14,7 @@ import { prisma } from '@/lib/storage/prisma'
 
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
 import { prepareBenchmarkEvaluation } from './evaluation-preparation-service'
+import { failBenchmarkCaseResults } from './experiment-lifecycle'
 
 const ACTIVE_STATUSES = new Set([
   'dispatching',
@@ -249,7 +250,15 @@ export async function completeBenchmarkRun(input: {
   if (updated.count !== 1) {
     return completeBenchmarkRun(input)
   }
-  if (status !== 'submitted') return { accepted: true, status }
+  if (status !== 'submitted') {
+    void failBenchmarkCaseResults(
+      input.runId,
+      input.completion.error?.message || 'Agent 执行失败，未生成可评测的 Patch',
+    ).catch((error) => {
+      console.error('[benchmark/run-callback] failed case continuation failed', error)
+    })
+    return { accepted: true, status }
+  }
   try {
     const prepared = await prepareBenchmarkEvaluation(input.runId)
     void dispatchBenchmarkEvaluation(prepared.evaluationRunId).catch((error) => {
@@ -272,6 +281,9 @@ export async function completeBenchmarkRun(input: {
         failureCode: error.code,
         failureMessage: error.message,
       },
+    })
+    void failBenchmarkCaseResults(input.runId, error.message).catch((continuationError) => {
+      console.error('[benchmark/run-callback] invalid submission continuation failed', continuationError)
     })
     return { accepted: true, status: 'submission_invalid' }
   }

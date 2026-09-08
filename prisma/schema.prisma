@@ -1276,7 +1276,6 @@ model BenchmarkCaseRun {
   status             String                @default("pending")
   adapterKey         String
   clientId           String
-  executorBaseUrl    String
   publicPayloadJson  String?
   privatePayloadJson String?
   taskEnvelopeJson   String?
@@ -1325,14 +1324,13 @@ model BenchmarkDispatchOutbox {
   runId              String           @unique
   run                BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   kind               String           @default("agent_execution")
-  destinationBaseUrl String
+  commandId          String?          @unique
   requestJson        String
   requestDigest      String
   status             String           @default("pending")
   attemptCount       Int              @default(0)
   nextAttemptAt      DateTime         @default(now())
   leasedUntil        DateTime?
-  httpStatus         Int?
   responseJson       String?
   errorCode          String?
   errorMessage       String?
@@ -1582,9 +1580,6 @@ model ReliabilityClient {
   agentVersion         String?
   capabilitiesJson     String    @default("{}")
   capabilitiesRevision String?
-  executorBaseUrl      String?
-  executorReachability String    @default("unknown")
-  executorCheckedAt    DateTime?
   // 同一台机器改绑到别的账号时，旧记录保留但标记解绑：配置下发历史仍可追溯，
   // 页面据此显示「已解绑」而非「离线」——后者会让人以为机器只是掉线了。
   unboundAt            DateTime?
@@ -1626,7 +1621,7 @@ model ReliabilityCommand {
   clientId     String
   client       ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
   user         String
-  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|REFRESH_CAPABILITIES
+  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|RUN_BENCHMARK_CASE|REFRESH_CAPABILITIES
   payloadJson  String            @default("{}")
   status       String            @default("CREATED") // CREATED|SENT|RECEIVED|RUNNING|SUCCEEDED|FAILED|EXPIRED|DELIVERY_FAILED
   channel      String? // wss|poll

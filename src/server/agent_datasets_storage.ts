@@ -30,7 +30,7 @@ function warnFileBackendOnce() {
   }
 }
 
-export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability';
+export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
 
 /**
  * Case 来源标记。'user' = 用户手填 / 手编辑（默认）；'skill-gen-draft' = skill 生成
@@ -168,6 +168,7 @@ function ensureLegacyDir() {
 export function normalizeDatasetKind(value: unknown): DatasetKind {
   if (value === 'trajectory') return 'trajectory';
   if (value === 'reliability') return 'reliability';
+  if (value === 'benchmark') return 'benchmark';
   return 'ideal_output';
 }
 
@@ -194,6 +195,15 @@ function normalizeValues(value: unknown): Record<string, unknown> {
 }
 
 export function defaultDatasetFields(kind: DatasetKind): DatasetField[] {
+  if (kind === 'benchmark') {
+    return [
+      { id: 'input', key: 'input', label: '问题描述', type: 'text', system: true },
+      { id: 'instance_id', key: 'instance_id', label: 'Instance ID', type: 'text', system: true },
+      { id: 'repo', key: 'repo', label: '代码仓库', type: 'text', system: true },
+      { id: 'base_commit', key: 'base_commit', label: '基线提交', type: 'text', system: true },
+      { id: 'version', key: 'version', label: '版本', type: 'text', system: true },
+    ];
+  }
   const fields: DatasetField[] = [
     { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
   ];

@@ -28,6 +28,7 @@ const WHITELIST = new Set([
   'APPLY_CLIENT_CONFIG',
   'PREPARE_EXPERIMENT_CASE',
   'RUN_EXPERIMENT_CASE',
+  'RUN_BENCHMARK_CASE',
   'REFRESH_CAPABILITIES',
 ])
 
@@ -70,9 +71,6 @@ function loadConfig() {
     // 重新推导；注册值仅在 base 缺失时兜底。
     websocketUrl: raw.websocketUrl || '',
     pollUrl: raw.pollUrl || '',
-    executorBaseUrl: raw.executorBaseUrl || '',
-    executorListenHost: raw.executorListenHost || '127.0.0.1',
-    executorListenPort: Math.max(0, Number(raw.executorListenPort || 0)),
     maxParallelFi: Math.max(1, Number(raw.maxParallelFi || 5)),
     workspaceBase: raw.workspaceBase || path.join(CLIENT_HOME, 'workspaces'),
     artifactsDir: raw.artifactsDir || path.join(CLIENT_HOME, 'artifacts'),
@@ -85,15 +83,6 @@ function loadConfig() {
     // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
   }
-}
-
-function saveConfigPatch(patch) {
-  const prev = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {}
-  fs.mkdirSync(CLIENT_HOME, { recursive: true })
-  const next = { ...prev, ...patch }
-  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600 })
-  fs.renameSync(tmp, CONFIG_PATH)
 }
 
 /**
@@ -425,8 +414,13 @@ function probeFaultInjectionIsolated(cfg) {
 /** 探测代价高（要 spawn Python），一次探测供两份上报共用。 */
 let cachedProbe = null
 
+function cacheSuccessfulProbe(probe) {
+  if (probe?.ready || !cachedProbe) cachedProbe = probe
+  return cachedProbe
+}
+
 function getProbe(cfg, { refresh = false } = {}) {
-  if (!cachedProbe || refresh) cachedProbe = probeFaultInjection(cfg)
+  if (!cachedProbe || refresh) cacheSuccessfulProbe(probeFaultInjection(cfg))
   return cachedProbe
 }
 
@@ -466,15 +460,15 @@ function buildCapabilities(cfg, opts) {
       }
     }
   }
-  const components = { clientVersion: AGENT_VERSION }
-  if (cfg.executorBaseUrl) {
-    components['git-workspace/v1'] = { ready: true }
-    for (const platform of platforms) {
-      components[`agent-runtime/${platform.id}/v1`] = {
-        ready: platform.runExperimentCase?.returnsTraceId === true && Boolean(which(platform.id)),
-      }
+  const components = {
+    clientVersion: AGENT_VERSION,
+    'git-workspace/v1': { ready: true },
+    'git-patch/v1': { ready: true },
+  }
+  for (const platform of platforms) {
+    components[`agent-runtime/${platform.id}/v1`] = {
+      ready: platform.runExperimentCase?.returnsTraceId === true && Boolean(which(platform.id)),
     }
-    components['git-patch/v1'] = { ready: true }
   }
   return {
     platforms,
@@ -798,7 +792,9 @@ async function executeAction(cfg, frame, sendStatus) {
     await sendStatus('FAILED', { error: { code: 'ACTION_NOT_ALLOWED', message: `未知 action: ${action}` } })
     return
   }
-  const forbidden = action === 'RUN_EXPERIMENT_CASE' ? RUN_FORBIDDEN : CONFIG_FORBIDDEN
+  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'].includes(action)
+    ? RUN_FORBIDDEN
+    : CONFIG_FORBIDDEN
   for (const key of Object.keys(payload)) {
     if (forbidden.includes(key)) {
       await sendStatus('FAILED', {
@@ -858,6 +854,25 @@ async function executeAction(cfg, frame, sendStatus) {
       })
     } finally {
       releaseExecutionSlot()
+    }
+    return
+  }
+
+  if (action === 'RUN_BENCHMARK_CASE') {
+    if (!benchmarkExecutor) {
+      await sendStatus('FAILED', {
+        error: { code: 'BENCHMARK_RUNTIME_UNAVAILABLE', message: 'Benchmark 执行运行时未就绪' },
+      })
+      return
+    }
+    try {
+      const result = await benchmarkExecutor.accept(payload.request)
+      await sendStatus('RUNNING', { result: { state: 'ACCEPTED', runId: result.runId } })
+      await sendStatus('SUCCEEDED', { result })
+    } catch (err) {
+      await sendStatus('FAILED', {
+        error: { code: err.code || 'BENCHMARK_ACCEPT_FAILED', message: err.message },
+      })
     }
   }
 }
@@ -1109,7 +1124,6 @@ async function reportCapabilities(cfg, opts) {
     actions: capabilities.actions,
     components: capabilities.components,
     faultInjection: capabilities.faultInjection,
-    ...(cfg.executorBaseUrl ? { executorBaseUrl: cfg.executorBaseUrl } : {}),
   })
   log(
     `capabilities reported: platforms=${capabilities.platforms.map((p) => p.id).join(',') || 'none'}` +
@@ -1127,7 +1141,7 @@ async function refreshCapabilityReports(cfg, { force = false } = {}) {
   if (!force && fingerprint === lastCapabilityFingerprint) return false
   if (capabilityRefreshInFlight) return capabilityRefreshInFlight
   capabilityRefreshInFlight = (async () => {
-    cachedProbe = await probeFaultInjectionIsolated(cfg)
+    cacheSuccessfulProbe(await probeFaultInjectionIsolated(cfg))
     await reportCapabilities(cfg)
     await sendFiHeartbeat(cfg)
     lastCapabilityFingerprint = fingerprint
@@ -1273,31 +1287,27 @@ async function main() {
   setInterval(notifyWatchdog, WATCHDOG_MS)
   notifyWatchdog()
 
-  if (cfg.executorBaseUrl) {
-    const runtimeCandidates = [
-      path.join(__dirname, 'executor', 'index.cjs'),
-      path.join(__dirname, '..', 'services', 'executor', 'src', 'index.cjs'),
-    ]
-    const runtimePath = runtimeCandidates.find((candidate) => fs.existsSync(candidate))
-    if (!runtimePath) throw new Error('Benchmark executor runtime 不存在')
-    const { createBenchmarkExecutor } = require(runtimePath)
-    const advertised = new URL(cfg.executorBaseUrl)
-    const port = cfg.executorListenPort || Number(advertised.port || (advertised.protocol === 'https:' ? 443 : 80))
-    const executorCapabilities = buildCapabilities(cfg)
-    benchmarkExecutor = createBenchmarkExecutor({
-      clientId: cfg.clientId,
-      deviceCredential: cfg.deviceCredential,
-      insightBaseUrl: cfg.insightBaseUrl,
-      baseDir: CLIENT_HOME,
-      tryAcquireSlot: tryAcquireExecutionSlot,
-      releaseSlot: releaseExecutionSlot,
-      agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
-      runAgent: (payload) => runExperimentCase(cfg, payload),
-      logError: (...args) => logErr(...args),
-    })
-    await benchmarkExecutor.listen(cfg.executorListenHost, port)
-    log(`benchmark executor listening on ${cfg.executorListenHost}:${port}, advertised=${cfg.executorBaseUrl}`)
-  }
+  const runtimeCandidates = [
+    path.join(__dirname, 'executor', 'index.cjs'),
+    path.join(__dirname, '..', 'services', 'executor', 'src', 'index.cjs'),
+  ]
+  const runtimePath = runtimeCandidates.find((candidate) => fs.existsSync(candidate))
+  if (!runtimePath) throw new Error('Benchmark executor runtime 不存在')
+  const { createBenchmarkExecutor } = require(runtimePath)
+  const executorCapabilities = buildCapabilities(cfg)
+  benchmarkExecutor = createBenchmarkExecutor({
+    clientId: cfg.clientId,
+    deviceCredential: cfg.deviceCredential,
+    insightBaseUrl: cfg.insightBaseUrl,
+    baseDir: CLIENT_HOME,
+    tryAcquireSlot: tryAcquireExecutionSlot,
+    releaseSlot: releaseExecutionSlot,
+    agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
+    runAgent: (payload) => runExperimentCase(cfg, payload),
+    logError: (...args) => logErr(...args),
+  })
+  await benchmarkExecutor.recover()
+  log('benchmark executor ready on client control channel')
 
   const heartbeatAll = () => {
     sendHeartbeat(cfg).catch((err) => logErr('heartbeat failed', err.message))

@@ -115,6 +115,45 @@ export async function GET(
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
+    const benchmarkRunByCase = new Map<string, {
+      status: string;
+      failureMessage: string | null;
+      publicPayloadJson: string | null;
+      datasetCase: { externalCaseId: string } | null;
+      artifacts: Array<{ name: string; sha256: string; sizeBytes: number; mediaType: string }>;
+      evaluations: Array<{
+        status: string;
+        artifacts: Array<{ name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
+      }>;
+    }>();
+    if (experiment.scope === 'benchmark' && pagedCases.length) {
+      const runs = await prisma.benchmarkCaseRun.findMany({
+        where: { experimentId: id, experimentCaseId: { in: pagedCases.map((item) => item.id) } },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          datasetCase: { select: { externalCaseId: true } },
+          artifacts: {
+            where: { name: 'model.patch' },
+            select: { name: true, sha256: true, sizeBytes: true, mediaType: true },
+          },
+          evaluations: {
+            orderBy: { attemptNo: 'desc' },
+            take: 1,
+            select: {
+              status: true,
+              artifacts: {
+                orderBy: { createdAt: 'asc' },
+                select: { name: true, kind: true, sha256: true, sizeBytes: true, mediaType: true },
+              },
+            },
+          },
+        },
+      });
+      for (const run of runs) {
+        if (!benchmarkRunByCase.has(run.experimentCaseId)) benchmarkRunByCase.set(run.experimentCaseId, run);
+      }
+    }
+
     const generatedCases = await prisma.experimentCase.findMany({
       where: {
         experimentId: id,
@@ -446,10 +485,34 @@ export async function GET(
       skillVersion: experiment.skillVersion,
       preset: experiment.preset,
       skillContext: parseJsonValue(experiment.skillContextJson),
-      configSnapshot,
+      configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
+      reusableConfig: {
+        schemaVersion: 1,
+        sourceExperimentId: experiment.id,
+        datasetId: typeof configSnapshot?.agentEvalDatasetId === 'string'
+          ? configSnapshot.agentEvalDatasetId
+          : typeof configSnapshot?.datasetId === 'string' && experiment.scope !== 'benchmark'
+            ? configSnapshot.datasetId
+            : null,
+        datasetCaseIds: Array.isArray(configSnapshot?.caseIds)
+          ? configSnapshot.caseIds.map(String)
+          : [],
+        traceSource: typeof configSnapshot?.traceSource === 'string'
+          ? configSnapshot.traceSource
+          : experiment.watchMode ? 'existing' : null,
+        agentName: experiment.agentName,
+        evaluatorIds,
+        executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
+          ? {
+              workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
+              platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
+              model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
+            }
+          : configSnapshot?.executionTarget || null,
+      },
       cases: pagedCases.map((c) => {
         const traceState = traceStateByCase.get(c.id);
         const effectiveTaskId = c.taskId || traceState?.taskId || null;
@@ -461,6 +524,18 @@ export async function GET(
           (typeof c.faultInjectionType === 'string' && c.faultInjectionType.trim()) ||
           legacyFi.faultInjectionType ||
           null;
+        const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkPayload = benchmarkRun
+          ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
+          : null;
+        const submission = benchmarkRun?.artifacts[0];
+        const benchmarkTraceStatus: GeneratedTraceStatus | null = benchmarkRun
+          ? ['pending', 'preparing', 'dispatching', 'dispatch_unknown', 'running_agent', 'collecting', 'uploading', 'cleaning', 'submitted'].includes(benchmarkRun.status)
+            ? 'pending'
+            : submission || c.executionId || effectiveTaskId
+              ? 'ready'
+              : 'failed'
+          : null;
         let caseValues: Record<string, unknown> | null = null;
         if (c.caseValuesJson) {
           try {
@@ -494,10 +569,36 @@ export async function GET(
                 || ex.executionSkills.some((item) => item.skillName === experiment.skillName)
               ))
             : null,
-          traceStatus: traceState?.status || null,
-          traceError: traceState?.error || null,
+          traceStatus: traceState?.status || benchmarkTraceStatus,
+          traceError: traceState?.error || benchmarkRun?.failureMessage || null,
           traceAttemptNo: traceState?.attemptNo || null,
           traceAttemptStatus: traceState?.attemptStatus || null,
+          ...(benchmarkRun ? {
+            benchmark: {
+              externalCaseId: benchmarkRun.datasetCase?.externalCaseId || String(benchmarkPayload?.instanceId || ''),
+              repo: String(benchmarkPayload?.repo || ''),
+              reference: {
+                kind: 'official-test-contract',
+                description: '测试内容和 Gold Patch 对 Agent 隐藏，仅供评测服务判定',
+              },
+              submission: submission ? {
+                name: submission.name,
+                sha256: submission.sha256,
+                sizeBytes: submission.sizeBytes,
+                mediaType: submission.mediaType,
+                summary: `${submission.sizeBytes} bytes · ${submission.sha256}`,
+              } : null,
+              evidenceArtifacts: (benchmarkRun.evaluations[0]?.artifacts || []).map((artifact) => ({
+                name: artifact.name,
+                kind: artifact.kind,
+                sha256: artifact.sha256,
+                sizeBytes: artifact.sizeBytes,
+                mediaType: artifact.mediaType,
+              })),
+              runStatus: benchmarkRun.status,
+              evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
+            },
+          } : {}),
         };
       }),
       results,

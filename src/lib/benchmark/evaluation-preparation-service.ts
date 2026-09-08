@@ -17,6 +17,7 @@ import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
 import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
+import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
 
 function parseJson<T>(value: string | null, code: string): T {
   if (!value) throw new BenchmarkProtocolError(code, '评测所需的冻结数据不存在', 409)
@@ -43,16 +44,21 @@ export function benchmarkArtifactAbsolutePath(storagePath: string): string {
   return storedArtifactPath(storagePath)
 }
 
-export async function prepareBenchmarkEvaluation(executionRunId: string): Promise<{
+export async function prepareBenchmarkEvaluation(
+  executionRunId: string,
+  options: { forceNewAttempt?: boolean; retryOfEvaluationId?: string } = {},
+): Promise<{
   evaluationRunId: string
   status: string
   created: boolean
 }> {
-  const existing = await prisma.benchmarkEvaluation.findFirst({
-    where: { caseRunId: executionRunId, attemptNo: 1 },
+  const latest = await prisma.benchmarkEvaluation.findFirst({
+    where: { caseRunId: executionRunId },
+    orderBy: { attemptNo: 'desc' },
   })
-  if (existing) {
-    return { evaluationRunId: existing.id, status: existing.status, created: false }
+  const attemptNo = options.forceNewAttempt ? (latest?.attemptNo || 0) + 1 : 1
+  if (!options.forceNewAttempt && latest?.attemptNo === 1) {
+    return { evaluationRunId: latest.id, status: latest.status, created: false }
   }
   const run = await prisma.benchmarkCaseRun.findUnique({
     where: { id: executionRunId },
@@ -159,7 +165,8 @@ export async function prepareBenchmarkEvaluation(executionRunId: string): Promis
         data: {
           id: evaluationRunId,
           caseRunId: run.id,
-          attemptNo: 1,
+          attemptNo,
+          retryOfEvaluationId: options.retryOfEvaluationId || null,
           status: 'queued',
           adapterKey: run.adapterKey,
           evaluatorKey: defaults.evaluatorKey,
@@ -179,7 +186,7 @@ export async function prepareBenchmarkEvaluation(executionRunId: string): Promis
     })
   } catch (error) {
     const concurrent = await prisma.benchmarkEvaluation.findFirst({
-      where: { caseRunId: executionRunId, attemptNo: 1 },
+      where: { caseRunId: executionRunId, attemptNo },
     })
     if (concurrent) {
       return { evaluationRunId: concurrent.id, status: concurrent.status, created: false }
@@ -187,4 +194,101 @@ export async function prepareBenchmarkEvaluation(executionRunId: string): Promis
     throw error
   }
   return { evaluationRunId, status: 'queued', created: true }
+}
+
+const BENCHMARK_REEVALUATION_MAX_CONCURRENCY = 1
+const REEVALUATION_LOCK = Symbol.for('agent-insight.benchmark.reevaluation-lock')
+
+function reevaluationLocks(): Set<string> {
+  const state = globalThis as typeof globalThis & { [REEVALUATION_LOCK]?: Set<string> }
+  if (!state[REEVALUATION_LOCK]) state[REEVALUATION_LOCK] = new Set<string>()
+  return state[REEVALUATION_LOCK]
+}
+
+export async function retryBenchmarkEvaluation(input: {
+  experimentId: string
+  resultId: string
+  user: string
+}): Promise<{ status: 'running'; evaluationRunId: string }> {
+  const lock = reevaluationLocks()
+  if (lock.size >= BENCHMARK_REEVALUATION_MAX_CONCURRENCY) {
+    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '已有 Benchmark 重评正在执行，请稍后再试', 409)
+  }
+  const result = await prisma.experimentEvalResult.findFirst({
+    where: {
+      id: input.resultId,
+      experimentId: input.experimentId,
+      evaluatorId: 'benchmark:swe-bench',
+      case: { experiment: { user: input.user, scope: 'benchmark' } },
+    },
+    select: { caseId: true },
+  })
+  if (!result) throw new BenchmarkProtocolError('BENCHMARK_RESULT_NOT_FOUND', 'Benchmark 评测结果不存在', 404)
+
+  const activeCount = await prisma.benchmarkEvaluation.count({
+    where: {
+      attemptNo: { gt: 1 },
+      status: { in: ['queued', 'dispatch_unknown', 'running_evaluator', 'normalizing'] },
+    },
+  })
+  if (activeCount >= BENCHMARK_REEVALUATION_MAX_CONCURRENCY) {
+    throw new BenchmarkProtocolError('BENCHMARK_REEVALUATION_BUSY', '已有 Benchmark 重评正在执行，请稍后再试', 409)
+  }
+  const run = await prisma.benchmarkCaseRun.findFirst({
+    where: { experimentId: input.experimentId, experimentCaseId: result.caseId },
+    orderBy: { createdAt: 'desc' },
+    include: {
+      evaluations: { orderBy: { attemptNo: 'desc' }, take: 1 },
+      artifacts: { where: { name: 'model.patch' }, take: 1 },
+    },
+  })
+  if (!run?.artifacts.length || !['evaluated', 'evaluation_failed'].includes(run.status)) {
+    throw new BenchmarkProtocolError('BENCHMARK_PATCH_NOT_READY', '当前 Case 没有可复用的有效 model.patch', 409)
+  }
+
+  const lockKey = `${input.experimentId}:${result.caseId}`
+  lock.add(lockKey)
+  try {
+    await prisma.$transaction([
+      prisma.experimentEvalResult.update({
+        where: { id: input.resultId },
+        data: {
+          status: 'pending',
+          verdict: null,
+          summary: null,
+          score: null,
+          pointsJson: null,
+          evidenceJson: null,
+          errorMessage: null,
+          durationMs: null,
+          humanScore: null,
+          humanReason: null,
+          humanBy: null,
+          humanAt: null,
+        },
+      }),
+      prisma.benchmarkCaseRun.update({
+        where: { id: run.id },
+        data: { status: 'submitted', failureCode: null, failureMessage: null },
+      }),
+      prisma.experiment.update({
+        where: { id: input.experimentId },
+        data: { status: 'running' },
+      }),
+      prisma.benchmarkExperimentBinding.update({
+        where: { experimentId: input.experimentId },
+        data: { schedulerStatus: 'running' },
+      }),
+    ])
+    const prepared = await prepareBenchmarkEvaluation(run.id, {
+      forceNewAttempt: true,
+      retryOfEvaluationId: run.evaluations[0]?.id,
+    })
+    void dispatchBenchmarkEvaluation(prepared.evaluationRunId).catch((error) => {
+      console.error('[benchmark/reevaluation] dispatch failed', error)
+    })
+    return { status: 'running', evaluationRunId: prepared.evaluationRunId }
+  } finally {
+    lock.delete(lockKey)
+  }
 }

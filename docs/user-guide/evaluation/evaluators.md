@@ -15,6 +15,8 @@ description: "评估器管理、创建流程与功能说明"
 > **Note**
 > 评测实验可以同时选择预置评估器和自建评估器。自建评估器引用预期输出、数据集输入等字段时，实验向导会先检查已选 case 是否满足对应前置条件。
 
+`SWE-bench Official Harness` 是 Benchmark 数据集自动绑定的预置评估器，由独立评测服务验证 `model.patch`，展示 `Resolved/Unresolved`、`FAIL_TO_PASS` 与 `PASS_TO_PASS`。它不能在 Benchmark 实验中取消；普通评估器仍可追加，但依赖 `reference_output` 的评估器不可选。
+
 ## 评估器承担的职责
 
 - 对 **最终输出** 打分，判断结果是否达成目标。

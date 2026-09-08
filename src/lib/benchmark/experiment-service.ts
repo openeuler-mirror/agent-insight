@@ -17,8 +17,10 @@ export type CreateBenchmarkExperimentInput = {
   name: string
   agentName?: string
   datasetId: string
+  agentEvalDatasetId?: string
   caseSelection: BenchmarkCaseSelection
   clientId: string
+  evaluatorIds?: string[]
   runConfig: {
     platform: string
     agent: string
@@ -34,37 +36,6 @@ function newRunId(): string {
 
 function newExperimentCaseId(): string {
   return `ecase_${randomUUID().replaceAll('-', '')}`
-}
-
-function normalizeExecutorBaseUrl(value: string | null): string {
-  if (!value) {
-    throw new BenchmarkProtocolError(
-      'EXECUTOR_ENDPOINT_MISSING',
-      '所选客户端未上报 executorBaseUrl',
-      409,
-    )
-  }
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch {
-    throw new BenchmarkProtocolError('EXECUTOR_ENDPOINT_INVALID', '执行器地址不合法', 409)
-  }
-  if (
-    !['http:', 'https:'].includes(url.protocol)
-    || url.username
-    || url.password
-    || url.search
-    || url.hash
-    || !['', '/'].includes(url.pathname)
-  ) {
-    throw new BenchmarkProtocolError(
-      'EXECUTOR_ENDPOINT_INVALID',
-      '执行器地址必须是无凭证、查询参数和路径的 HTTP(S) origin',
-      409,
-    )
-  }
-  return url.origin
 }
 
 function parsePublicPayload(json: string): Record<string, JsonValue> {
@@ -128,7 +99,6 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
       400,
     )
   }
-
   const dataset = await prisma.benchmarkDataset.findFirst({
     where: { id: datasetId, user },
     include: { cases: { orderBy: { ordinal: 'asc' } } },
@@ -151,7 +121,6 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
   assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent })
-  const executorBaseUrl = normalizeExecutorBaseUrl(client.executorBaseUrl)
 
   const runConfig = {
     platform,
@@ -159,6 +128,10 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     ...(input.runConfig.model?.trim() ? { model: input.runConfig.model.trim() } : {}),
     timeoutSeconds,
   }
+  const evaluatorIds = Array.from(new Set([
+    `benchmark:${dataset.adapterKey}`,
+    ...(input.evaluatorIds || []).map(String).filter(Boolean),
+  ]))
   const preparedCases = cases.map((datasetCase, ordinal) => {
     const publicPayload = parsePublicPayload(datasetCase.publicPayloadJson)
     return {
@@ -177,14 +150,17 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
         name,
         type: 'single',
         agentName: input.agentName?.trim() || agent,
-        evaluatorIdsJson: JSON.stringify([`benchmark:${dataset.adapterKey}`]),
+        evaluatorIdsJson: JSON.stringify(evaluatorIds),
         status: 'draft',
         scope: 'benchmark',
         configSnapshotJson: JSON.stringify({
           datasetId: dataset.id,
+          agentEvalDatasetId: input.agentEvalDatasetId || dataset.agentEvalDatasetId,
           datasetContentHash: dataset.contentHash,
           adapterKey: dataset.adapterKey,
           clientId,
+          evaluatorIds,
+          traceSource: 'generate',
           caseIds: preparedCases.map((row) => row.datasetCase.id),
           runConfig,
         }),
@@ -223,10 +199,21 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
           status: 'pending',
           adapterKey: dataset.adapterKey,
           clientId,
-          executorBaseUrl,
           publicPayloadJson: row.datasetCase.publicPayloadJson,
         },
       })
+      if (input.agentEvalDatasetId) {
+        for (const evaluatorId of evaluatorIds) {
+          await tx.experimentEvalResult.create({
+            data: {
+              experimentId: created.id,
+              caseId: row.experimentCaseId,
+              evaluatorId,
+              status: 'pending',
+            },
+          })
+        }
+      }
     }
     return created
   })

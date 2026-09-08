@@ -4,7 +4,7 @@
 > 不包含前端、Agent 本地执行、Artifact 上传和评测服务。  
 > 溯源：[高保真源码](../../评测服务文档/Benchmark统一接口设计-SWE-bench示例.html)。
 
-状态：服务端前置链路与执行器步骤 04～07 已接通；真实 SWE-bench Verified Case 已贯穿步骤 01～07 的 HTTP API 测试。
+状态：服务端前置链路与执行器步骤 04～07 已接通；真实 SWE-bench Verified Case 已贯穿步骤 01～07 的客户端控制通道测试。
 
 ## 1. 主流程
 
@@ -12,7 +12,7 @@
 POST /api/experiments (scope=benchmark)
   └─ BenchmarkExperimentService.create()
        ├─ datasetId → dataset + adapterKey
-       ├─ clientId → executorBaseUrl + capabilities
+       ├─ clientId → capabilities
        └─ 事务创建 Experiment、Binding、Cases、CaseRuns(pending)
 
 POST /api/experiments/{id}/run
@@ -21,8 +21,8 @@ POST /api/experiments/{id}/run
             ├─ adapter.validateAndSplitCase(rawCase)
             ├─ adapter.buildAgentTask(publicPayload, runContext)
             ├─ 事务保存 TaskEnvelope + digest + DispatchOutbox
-            └─ OutboxWorker POST /api/v1/benchmark-executions
-                 └─ 202 accepted → CaseRun(running_agent)
+            └─ OutboxWorker → RUN_BENCHMARK_CASE(clientId)
+                 └─ COMMAND_STATUS accepted → CaseRun(running_agent)
 ```
 
 创建实验只冻结任务，不调用 Adapter、不发 HTTP。启动实验后按 Case 顺序推进；同一实验 Agent 并发固定为 1，当前 Run 未结束前不下发下一条。
@@ -46,7 +46,7 @@ src/lib/benchmark/
   dataset-service.ts
   experiment-service.ts
   orchestrator.ts
-  scheduler.ts                # Dispatch Outbox、REST 下发与恢复
+  scheduler.ts                # Dispatch Outbox、客户端控制指令下发与恢复
 
 benchmarks/swe-bench/
   benchmark.yaml
@@ -261,7 +261,6 @@ class SweBenchAdapter extends AbstractBenchmarkAdapter<
     adapterKey: 'swe-bench',
     requiredCapabilities: [
       'git-workspace/v1',
-      'agent-runtime/opencode/v1',
       'git-patch/v1',
     ],
     defaultTimeoutSeconds: 1800,
@@ -273,6 +272,10 @@ class SweBenchAdapter extends AbstractBenchmarkAdapter<
   } as const
 }
 ```
+
+Agent Runtime 不属于 SWE-bench 固定能力。服务端复用普通实验的客户端平台清单，
+要求所选平台支持 `RUN_EXPERIMENT_CASE`、安全回传 Trace ID，并在创建时动态校验
+`agent-runtime/{platform}/v1` 与精确的 `clientId + platform + agent` 组合。
 
 任务映射：`repo → https://github.com/{repo}.git`，`baseCommit → workspace.revision`，公开题面进入 `benchmarkPayload`，提交物固定为 `model.patch`。Private 字段不参与任务构造。当前固定产生并只接受 `network=client-default`；未来只有在 sandbox capability 落地后才接受 `deny`。
 
@@ -311,11 +314,11 @@ POST /api/experiments
 1. 数据集必须 ready，由数据集记录决定 `adapterKey`；
 2. 冻结选中 Case 的 ID、公开快照、fingerprint 和顺序；
 3. 按当前用户和 `clientId` 查询 `ReliabilityClient`；
-4. 校验在线、健康、`executorBaseUrl` 和 Adapter 所需能力；
+4. 校验在线、健康、`RUN_BENCHMARK_CASE`、Adapter 所需能力和动态 Agent Runtime；
 5. 单事务创建 Experiment、Binding、ExperimentCase 和带唯一 `runId` 的 CaseRun；
 6. 返回 `201`，不调用 Adapter、不发送任务。
 
-请求不接受 `baseUrl`；目标地址只能来自服务端客户端注册表，防止 SSRF 和任务错投。
+请求只接受 `clientId + platform + agent` 目标，不存在客户端执行地址字段；实际投递复用已鉴权的客户端控制通道。
 
 当前 `experiments/route.ts` 会清空非 `skill-workbench` scope，并强制至少一个 evaluator。实现时在现有 POST 开头增加 `scope=benchmark` 分支，其余路径不改。
 
@@ -331,16 +334,10 @@ POST /api/experiments
 4. `buildAgentTask(publicPayload, runContext)`；
 5. 对 `{runId, task, callbackBaseUrl, timeoutSeconds}` 做 canonical JSON 和 SHA-256；
 6. 单事务保存 TaskEnvelope、摘要、`CaseRun(dispatching)` 和 Outbox；
-7. 事务外由 Outbox Worker 调用执行器；
-8. 收到匹配的 `202 accepted` 后置 `running_agent`。
+7. 事务外由 Outbox Worker 创建白名单 `RUN_BENCHMARK_CASE` 指令并按 `clientId` 投递；
+8. 客户端持久化同一 `runId + requestDigest` 后回执 accepted，CaseRun 进入 `running_agent`。
 
-```http
-POST {executorBaseUrl}/api/v1/benchmark-executions
-Authorization: Bearer <short-lived-run-token>
-Idempotency-Key: <runId>
-X-Agent-Insight-Request-Digest: sha256:...
-Content-Type: application/json
-```
+指令 payload 只包含一个冻结的 `request` 字段，沿用普通实验的 WSS 投递与 HTTPS 长轮询兜底；客户端不开放入站端口。
 
 ```json
 {
@@ -352,9 +349,7 @@ Content-Type: application/json
 }
 ```
 
-只有 `202` 且响应的 `runId/status=accepted/requestDigest` 全部匹配才算接收成功。HTTP 客户端禁止重定向、限制响应体，日志不记录任务全文。
-
-Scheduler 已使用目标 client 当前设备凭据 hash 签名，并按响应错误码区分永久的 `RUN_ID_CONFLICT` 与延迟重试的 `SERVICE_BUSY`；不再需要全局 dispatch secret。
+只有目标客户端回 `RUNNING/SUCCEEDED` 且本地 Runner 已接受请求才算接收成功。Scheduler 按回执区分永久的 `RUN_ID_CONFLICT` 与延迟重试的 `CLIENT_BUSY`，未在确认窗口送达时只用相同 `runId + requestDigest` 重试。
 
 ## 8. 数据模型与状态
 
@@ -363,12 +358,12 @@ Scheduler 已使用目标 client 当前设备凭据 hash 签名，并按响应�
 | `BenchmarkDataset` | `id,user,name,adapterKey,contentHash,status,caseCount,sourceJson` |
 | `BenchmarkDatasetCase` | `id,datasetId,externalCaseId,rawCaseJson,publicPayloadJson,privatePayloadJson,sourceFingerprint,ordinal` |
 | `BenchmarkExperimentBinding` | `experimentId,datasetId,datasetContentHash,adapterKey,selectionJson,runConfigJson,schedulerStatus,expectedCaseCount` |
-| `BenchmarkCaseRun` | `id(runId),experimentId,experimentCaseId,datasetCaseId,status,adapterKey,clientId,executorBaseUrl,publicPayloadJson,privatePayloadJson,taskEnvelopeJson,taskDigest,failureCode,failureMessage,timestamps` |
-| `BenchmarkDispatchOutbox` | `id,runId(unique),destinationBaseUrl,requestJson,requestDigest,status,attemptCount,nextAttemptAt,leasedUntil,httpStatus,responseJson,errorCode,errorMessage,timestamps` |
+| `BenchmarkCaseRun` | `id(runId),experimentId,experimentCaseId,datasetCaseId,status,adapterKey,clientId,publicPayloadJson,privatePayloadJson,taskEnvelopeJson,taskDigest,failureCode,failureMessage,timestamps` |
+| `BenchmarkDispatchOutbox` | `id,runId(unique),commandId,requestJson,requestDigest,status,attemptCount,nextAttemptAt,leasedUntil,responseJson,errorCode,errorMessage,timestamps` |
 
 `dataset-service.ts` 导入时先调用同一 Adapter，保存可查询的 Public 和隔离的 Private；创建实验复制 Public 快照；运行前再按高保真步骤 02 校验冻结的 raw Case，并核对两次 fingerprint 一致。
 
-`ReliabilityClient` 增加 `executorBaseUrl`、`executorReachability`、`executorCheckedAt`。地址只能由设备凭证更新，实验请求不能修改。
+`ReliabilityClient` 不保存 Benchmark 执行地址；在线度、服务健康和能力清单仍由现有客户端心跳与能力上报维护。
 
 ```text
 pending → preparing → dispatching → running_agent
@@ -378,7 +373,7 @@ pending → preparing → dispatching → running_agent
 ```
 
 - Outbox 必须先落库，Worker 用 `leasedUntil + updateMany` 做 CAS；
-- 明确非 `202` 为 `dispatch_failed`；
+- 客户端明确拒绝为 `dispatch_failed`；
 - 发送后超时/断连为 `dispatch_unknown`，只允许相同 `runId + requestDigest` 重发一次；
 - `409 RUN_ID_CONFLICT` 永久失败；
 - Worker 重启只重放 Outbox，不重新调用 Adapter；

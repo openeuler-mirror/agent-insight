@@ -115,6 +115,32 @@ export async function POST(
     } catch {
       body = {};
     }
+    const frozen = await prisma.experiment.findUnique({
+      where: { id },
+      select: { configSnapshotJson: true },
+    });
+    if (!body.generateTrace && frozen?.configSnapshotJson) {
+      try {
+        const snapshot = JSON.parse(frozen.configSnapshotJson) as Record<string, unknown>;
+        const target = snapshot.executionTarget && typeof snapshot.executionTarget === 'object'
+          ? snapshot.executionTarget as Record<string, unknown>
+          : null;
+        if (snapshot.traceSource === 'generate' && target) {
+          body = {
+            ...body,
+            traceSource: 'generate',
+            fiOrchestrate: snapshot.fiOrchestrate === true,
+            generateTrace: {
+              workerId: target.workerId,
+              platform: target.platform,
+              agent: snapshot.agentName,
+              model: target.model || null,
+              timeoutSeconds: Number(target.timeoutSeconds) || 300,
+            },
+          };
+        }
+      } catch { /* 存量快照不完整时继续走普通运行 */ }
+    }
 
     // generate Trace 的运行参数；普通数据走通用客户端指令，可靠性数据才走 FI。
     const generateTrace = (body.generateTrace && typeof body.generateTrace === 'object')

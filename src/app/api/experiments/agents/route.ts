@@ -5,6 +5,8 @@ import { resolveUser } from '@/lib/auth/auth';
 import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { listWorkerExecutionTargets } from '@/lib/fault-injection/worker-protocol';
 import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
+import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
+import { listBenchmarkExecutionTargets } from '@/lib/benchmark/execution-targets';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +17,7 @@ export async function GET(req: Request) {
     const userFilter = username ? { user: username } : {};
     const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
 
-    const [grouped, faultInjectionTargets, genericTraceTargets] = await Promise.all([
+    const [grouped, faultInjectionTargets, genericTraceTargets, benchmarkTargets] = await Promise.all([
       prisma.execution.groupBy({
       by: ['agentName', 'framework'],
       where: {
@@ -30,11 +32,16 @@ export async function GET(req: Request) {
       }),
       listWorkerExecutionTargets(username),
       listClientTraceGenerationTargets(username),
+      username
+        ? listBenchmarkExecutionTargets(username, getBenchmarkAdapter('swe-bench').manifest)
+        : Promise.resolve([]),
     ]);
 
     type CandidateTarget = (typeof faultInjectionTargets)[number] & {
       supportsGenericTrace: boolean;
       supportsFaultInjection: boolean;
+      supportsBenchmark: boolean;
+      benchmarkUnavailableReason: string | null;
     };
     type Candidate = {
       name: string;
@@ -83,6 +90,8 @@ export async function GET(req: Request) {
           ...target,
           supportsGenericTrace: capability === 'generic',
           supportsFaultInjection: capability === 'fault-injection',
+          supportsBenchmark: false,
+          benchmarkUnavailableReason: '该执行目标未上报 Benchmark 所需能力',
         });
       }
       byName.set(name, current);
@@ -92,6 +101,20 @@ export async function GET(req: Request) {
     }
     for (const target of faultInjectionTargets) {
       attachTarget(target, 'fault-injection');
+    }
+    for (const candidate of byName.values()) {
+      for (const target of candidate.targets) {
+        const benchmark = benchmarkTargets.find((item) => (
+          item.clientId === target.workerId
+          && item.platform === target.platform
+          && item.agents.includes(candidate.name)
+        ));
+        if (!benchmark) continue;
+        target.supportsBenchmark = benchmark.ready;
+        target.benchmarkUnavailableReason = benchmark.ready
+          ? null
+          : benchmark.unavailableReasons.join('；') || 'Benchmark 执行目标未就绪';
+      }
     }
 
     const agents = Array.from(byName.values())
@@ -111,6 +134,8 @@ export async function GET(req: Request) {
           lastSeenAt: target.lastSeenAt,
           supportsGenericTrace: target.supportsGenericTrace,
           supportsFaultInjection: target.supportsFaultInjection,
+          supportsBenchmark: target.supportsBenchmark,
+          benchmarkUnavailableReason: target.benchmarkUnavailableReason,
         })),
       }));
 

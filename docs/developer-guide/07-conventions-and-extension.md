@@ -79,8 +79,8 @@
 - **Client identity**：平台启动仍生成内部 admin key 并保存到 `.admin_api_key`，但只在
   `~/.agent-insight/.env` 缺少客户端 Key 时初始化它。安装指导已经注册的邮箱用户 Key
   必须保留，普通 OpenCode telemetry 与 RAS config 使用同一个身份。
-- **RAS SQLite schema preflight**：源码、npm 与 Docker 启动入口在 `prisma db push`
-  前统一执行 `scripts/prepare-ras-sqlite-schema.js`。旧数据库缺少
+- **SQLite schema preflight**：源码、npm 与 Docker 启动入口在 `prisma db push`
+  前统一执行 `scripts/prepare-ras-sqlite-schema.js`。它补齐 Agent RAS 幂等性字段和 Benchmark 指令关联列，并幂等删除 Benchmark 执行器直连方案废弃的端点和探测列。旧数据库缺少
   `RasAnomalyEvent.deliveryId` 时，仅补充 nullable 列，并在确认
   `(taskId, deliveryId)` 无重复数据后创建唯一索引；发现冲突会明确失败，不使用
   `--accept-data-loss` 绕过迁移警告。

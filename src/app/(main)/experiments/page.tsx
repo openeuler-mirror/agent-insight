@@ -18,6 +18,7 @@ interface ExperimentRow {
   type: string;
   agentName: string;
   status: string;
+  scope?: string;
   watchMode?: boolean;
   caseCount: number;
   evaluatorCount: number;
@@ -26,6 +27,17 @@ interface ExperimentRow {
 }
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+function responseError(value: unknown, fallback: string): string {
+  if (!value || typeof value !== 'object') return fallback;
+  const error = (value as { error?: unknown; code?: unknown }).error;
+  if (typeof error === 'string' && error) return error;
+  if (error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string') {
+    return String((error as { message: string }).message);
+  }
+  const code = (value as { code?: unknown }).code;
+  return typeof code === 'string' && code ? code : fallback;
+}
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
   draft: { label: '启动中', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
@@ -65,13 +77,13 @@ function WatchChip() {
   );
 }
 
-function TypeChip() {
+function TypeChip({ scope }: { scope?: string }) {
   return (
     <span style={{
       fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
       background: 'var(--primary-subtle)', color: 'var(--primary)', whiteSpace: 'nowrap',
     }}>
-      单组实验
+      {scope === 'benchmark' ? 'Benchmark' : '单组实验'}
     </span>
   );
 }
@@ -94,6 +106,8 @@ export default function ExperimentsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
+  const [actionId, setActionId] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -126,6 +140,39 @@ export default function ExperimentsPage() {
     const timer = window.setTimeout(() => setPage(totalPages), 0);
     return () => window.clearTimeout(timer);
   }, [page, totalPages]);
+
+  const createSameConfigExperiment = async (sourceExperimentId: string) => {
+    if (!user || actionId) return;
+    setActionId(sourceExperimentId);
+    setActionError('');
+    try {
+      const createResponse = await apiFetch('/api/experiments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, createMode: 'same-config', sourceExperimentId }),
+      });
+      const created = await createResponse.json().catch(() => ({}));
+      if (!createResponse.ok) throw new Error(responseError(created, '复制实验配置失败'));
+      const experimentId = String(created?.id || '');
+      if (!experimentId) throw new Error('复制实验后未返回实验 ID');
+      const runResponse = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const started = await runResponse.json().catch(() => ({}));
+      if (!runResponse.ok) {
+        await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`, {
+          method: 'DELETE',
+        }).catch(() => undefined);
+        throw new Error(responseError(started, '启动实验失败'));
+      }
+      router.push(`/experiments/${experimentId}`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '同配置实验创建失败');
+      setActionId('');
+    }
+  };
 
   return (
     <>
@@ -171,6 +218,7 @@ export default function ExperimentsPage() {
                   <th style={{ ...TH, textAlign: 'right' }}>综合分</th>
                   <th style={TH}>状态</th>
                   <th style={TH}>创建</th>
+                  <th style={TH}>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -184,7 +232,7 @@ export default function ExperimentsPage() {
                   >
                     <td style={{ ...TD, fontWeight: 500 }}>{r.name}</td>
                     <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentName || '—'}</td>
-                    <td style={TD}><TypeChip /></td>
+                    <td style={TD}><TypeChip scope={r.scope} /></td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>
                     <td style={{
@@ -202,12 +250,32 @@ export default function ExperimentsPage() {
                     <td style={{ ...TD, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
                       {new Date(r.createdAt).toLocaleString('zh-CN', { hour12: false })}
                     </td>
+                    <td style={{ ...TD, whiteSpace: 'nowrap' }} onClick={(event) => event.stopPropagation()}>
+                      <span style={{ display: 'inline-flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          disabled={Boolean(actionId)}
+                          onClick={() => void createSameConfigExperiment(r.id)}
+                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
+                        >
+                          {actionId === r.id ? '创建中…' : '同配置实验'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(actionId)}
+                          onClick={() => router.push(`/experiments/new?reuseFrom=${encodeURIComponent(r.id)}`)}
+                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
+                        >复用评测配置</button>
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
         </div>
+
+        {actionError && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--error)' }}>{actionError}</div>}
 
         {!loading && total > 0 && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>

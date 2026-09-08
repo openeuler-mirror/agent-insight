@@ -103,7 +103,13 @@ const installer = require_('../scripts/install-ras-client.js') as {
 test('client whitelist matches the server-side action set', () => {
   assert.deepEqual(
     [...client.WHITELIST].sort(),
-    ['APPLY_CLIENT_CONFIG', 'PREPARE_EXPERIMENT_CASE', 'REFRESH_CAPABILITIES', 'RUN_EXPERIMENT_CASE'],
+    [
+      'APPLY_CLIENT_CONFIG',
+      'PREPARE_EXPERIMENT_CASE',
+      'REFRESH_CAPABILITIES',
+      'RUN_BENCHMARK_CASE',
+      'RUN_EXPERIMENT_CASE',
+    ],
   )
   // 客户端自带一份禁字段表，不能只依赖服务端校验。
   for (const key of ['url', 'config', 'path']) {
@@ -264,16 +270,10 @@ test('installer arg parsing', () => {
   const args = installer.parseArgs([
     '--host', 'https://x.test',
     '--token', 'rit_1',
-    '--executor-base-url', 'http://executor.test:8090',
-    '--executor-listen-host', '0.0.0.0',
-    '--executor-listen-port', '8090',
     '--no-start',
   ])
   assert.equal(args.host, 'https://x.test')
   assert.equal(args.token, 'rit_1')
-  assert.equal(args.executorBaseUrl, 'http://executor.test:8090')
-  assert.equal(args.executorListenHost, '0.0.0.0')
-  assert.equal(args.executorListenPort, 8090)
   assert.equal(args.start, false)
 
   assert.equal(installer.parseArgs(['--status']).status, true)
@@ -308,20 +308,13 @@ test('capabilities and FI inventory agree on readiness', () => {
   assert.equal(caps.faultInjection.note, inv.platforms.opencode.note)
 })
 
-test('client advertises benchmark components only when executor is configured', () => {
-  const withoutExecutor = client.buildCapabilities(
+test('client advertises benchmark components without an inbound executor endpoint', () => {
+  const capabilities = client.buildCapabilities(
     { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
     { refresh: true },
   )
-  assert.equal(withoutExecutor.components['git-workspace/v1'], undefined)
-
-  const withExecutor = client.buildCapabilities({
-    fiPackageRoot: '/definitely/not/here',
-    maxParallelFi: 5,
-    executorBaseUrl: 'http://executor.test:8090',
-  })
-  assert.deepEqual(withExecutor.components['git-workspace/v1'], { ready: true })
-  assert.deepEqual(withExecutor.components['git-patch/v1'], { ready: true })
+  assert.deepEqual(capabilities.components['git-workspace/v1'], { ready: true })
+  assert.deepEqual(capabilities.components['git-patch/v1'], { ready: true })
 })
 
 test('benchmark executor runtime registration follows trace-safe client platforms', () => {
@@ -380,7 +373,7 @@ test('manual and automatic capability refresh bypass the cached probe', () => {
     'utf8',
   )
   assert.match(source, /REFRESH_CAPABILITIES[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
-  assert.match(source, /cachedProbe = await probeFaultInjectionIsolated\(cfg\)[\s\S]*?reportCapabilities\(cfg\)/)
+  assert.match(source, /cacheSuccessfulProbe\(await probeFaultInjectionIsolated\(cfg\)\)[\s\S]*?reportCapabilities\(cfg\)/)
   assert.match(source, /const refreshCapabilities[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
   assert.match(source, /setTimeout\([\s\S]*?setInterval\(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS\)[\s\S]*?CAPABILITY_DISCOVERY_SCAN_MS \/ 2/)
 })

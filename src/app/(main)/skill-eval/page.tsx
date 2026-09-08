@@ -21,7 +21,7 @@ import { calculateAbScoring, type AbScoringResult } from '@/lib/skill-analysis/a
 import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
 import { formatPValueLabel, welchTTestPValue } from '@/lib/skill-analysis/ab-significance';
 import { BatchEvaluation } from './_batch/page';
-import { GrayscaleEvaluation } from './grayscale/page';
+import { GrayscaleEvaluation } from '@/components/eval/GrayscaleEvaluation';
 import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
 import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';

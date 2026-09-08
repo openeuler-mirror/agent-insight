@@ -73,11 +73,43 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
   )
   const sourceJson = canonicalJson((input.source || {}) as JsonValue)
   const publicCasesJson = canonicalJson(
-    rows.map((row) => ({
-      id: row.id,
-      externalCaseId: row.externalCaseId,
-      values: JSON.parse(row.publicPayloadJson) as JsonValue,
-    })),
+    rows.map((row) => {
+      const payload = JSON.parse(row.publicPayloadJson) as Record<string, JsonValue>
+      return {
+        id: row.id,
+        input: typeof payload.problemStatement === 'string' ? payload.problemStatement : '',
+        expectedOutput: '',
+        evaluationFocus: '',
+        tags: ['SWE-bench Verified'],
+        trajectory: '',
+        values: {
+          instance_id: payload.instanceId,
+          repo: payload.repo,
+          base_commit: payload.baseCommit,
+          version: payload.repositoryVersion || '',
+          hints_text: payload.hintsText || '',
+        },
+      }
+    }),
+  )
+  const fieldsJson = canonicalJson([
+    { id: 'input', key: 'input', label: '问题描述', type: 'text', system: true },
+    { id: 'instance_id', key: 'instance_id', label: 'Instance ID', type: 'text', system: true },
+    { id: 'repo', key: 'repo', label: '代码仓库', type: 'text', system: true },
+    { id: 'base_commit', key: 'base_commit', label: '基线提交', type: 'text', system: true },
+    { id: 'version', key: 'version', label: '版本', type: 'text', system: true },
+  ] as JsonValue)
+  const referenceCasesJson = canonicalJson(
+    rows.map((row) => {
+      const payload = JSON.parse(row.publicPayloadJson) as Record<string, JsonValue>
+      return {
+        id: row.id,
+        input: typeof payload.problemStatement === 'string' ? payload.problemStatement : '',
+        expectedOutput: '',
+        evaluationFocus: '',
+        tags: ['SWE-bench Verified'],
+      }
+    }) as JsonValue,
   )
 
   const existing = await prisma.benchmarkDataset.findUnique({
@@ -103,7 +135,10 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
         data: {
           description: input.description || '',
           casesJson: publicCasesJson,
+          fieldsJson,
+          tagsJson: JSON.stringify(['SWE-bench', 'Verified']),
           caseCount: rows.length,
+          referenceCasesJson,
           datasetKind: 'benchmark',
           projectionReady: true,
         },
@@ -130,7 +165,10 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
         name,
         description: input.description || '',
         casesJson: publicCasesJson,
+        fieldsJson,
+        tagsJson: JSON.stringify(['SWE-bench', 'Verified']),
         caseCount: rows.length,
+        referenceCasesJson,
         datasetKind: 'benchmark',
         projectionReady: true,
       },
