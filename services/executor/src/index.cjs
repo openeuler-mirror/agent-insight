@@ -767,8 +767,14 @@ function createBenchmarkExecutor(options) {
     || new GitWorkspaceProvider(path.join(baseDir, 'workspaces', 'benchmark'))
   const workspaceProviders = options.workspaceProviders
     || new WorkspaceProviderRegistry([['git', workspaceProvider]])
+  const configuredAgentPlatforms = options.agentPlatforms === undefined
+    ? ['opencode']
+    : Array.isArray(options.agentPlatforms) ? options.agentPlatforms : []
+  const agentPlatforms = [
+    ...new Set(configuredAgentPlatforms.map((platform) => String(platform || '').trim()).filter(Boolean)),
+  ]
   const agentRuntimes = options.agentRuntimes
-    || new AgentRuntimeRegistry([['opencode', { run: options.runAgent }]])
+    || new AgentRuntimeRegistry(agentPlatforms.map((platform) => [platform, { run: options.runAgent }]))
   const collectors = options.collectors instanceof ArtifactCollectorRegistry
     ? options.collectors
     : new ArtifactCollectorRegistry(options.collectors || [['git-patch/v1', new GitPatchCollector()]])

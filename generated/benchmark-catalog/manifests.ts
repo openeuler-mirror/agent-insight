@@ -12,7 +12,6 @@ export const generatedBenchmarkManifests = {
     },
     "requiredCapabilities": [
       "git-workspace/v1",
-      "agent-runtime/opencode/v1",
       "git-patch/v1"
     ],
     "defaultTimeoutSeconds": 1800,

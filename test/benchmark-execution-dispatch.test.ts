@@ -32,6 +32,7 @@ let importOfficialSweBenchVerifiedDataset:
   typeof import('../benchmarks/swe-bench/dataset').importOfficialSweBenchVerifiedDataset
 let createExperiment: typeof import('@/app/api/experiments/route').POST
 let runExperiment: typeof import('@/app/api/experiments/[id]/run/route').POST
+let listExecutionTargets: typeof import('@/app/api/benchmark/v1/execution-targets/route').GET
 let setDispatchFetch: typeof import('@/lib/benchmark/scheduler').setBenchmarkDispatchFetchForTest
 let resumeDispatches: typeof import('@/lib/benchmark/scheduler').resumeBenchmarkDispatchesAtStartup
 
@@ -135,12 +136,21 @@ test.before(async () => {
     );
   `)
   database.close()
-  const [storage, datasetService, officialDataset, experimentRoute, runRoute, scheduler] = await Promise.all([
+  const [
+    storage,
+    datasetService,
+    officialDataset,
+    experimentRoute,
+    runRoute,
+    executionTargetsRoute,
+    scheduler,
+  ] = await Promise.all([
     import('@/lib/storage/prisma'),
     import('@/lib/benchmark/dataset-service'),
     import('../benchmarks/swe-bench/dataset'),
     import('@/app/api/experiments/route'),
     import('@/app/api/experiments/[id]/run/route'),
+    import('@/app/api/benchmark/v1/execution-targets/route'),
     import('@/lib/benchmark/scheduler'),
   ])
   prisma = storage.prisma
@@ -148,6 +158,7 @@ test.before(async () => {
   importOfficialSweBenchVerifiedDataset = officialDataset.importOfficialSweBenchVerifiedDataset
   createExperiment = experimentRoute.POST
   runExperiment = runRoute.POST
+  listExecutionTargets = executionTargetsRoute.GET
   setDispatchFetch = scheduler.setBenchmarkDispatchFetchForTest
   resumeDispatches = scheduler.resumeBenchmarkDispatchesAtStartup
 })
@@ -245,10 +256,16 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
       lastSeenAt: new Date(),
       executorBaseUrl: 'http://127.0.0.1:43123',
       capabilitiesJson: JSON.stringify({
-        platforms: [],
+        platforms: [{
+          id: 'codex',
+          agents: ['review'],
+          models: ['gpt-5.3-codex'],
+          runExperimentCase: { version: 2, returnsTraceId: true },
+          actions: ['RUN_EXPERIMENT_CASE'],
+        }],
         components: {
           'git-workspace/v1': { ready: true },
-          'agent-runtime/opencode/v1': { ready: true },
+          'agent-runtime/codex/v1': { ready: true },
           'git-patch/v1': { ready: true },
         },
       }),
@@ -261,6 +278,48 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     },
   })
 
+  const targetsResponse = await listExecutionTargets(new Request(
+    `http://insight.test/api/benchmark/v1/execution-targets?user=${encodeURIComponent(user)}&datasetId=${encodeURIComponent(imported.id)}`,
+  ))
+  assert.equal(targetsResponse.status, 200)
+  const targetsBody = await targetsResponse.json() as {
+    items: Array<{ clientId: string; platform: string; agents: string[]; models: string[]; ready: boolean }>
+  }
+  assert.deepEqual(targetsBody.items.map(item => ({
+    clientId: item.clientId,
+    platform: item.platform,
+    agents: item.agents,
+    models: item.models,
+    ready: item.ready,
+  })), [{
+    clientId,
+    platform: 'codex',
+    agents: ['review'],
+    models: ['gpt-5.3-codex'],
+    ready: true,
+  }])
+
+  const unavailableTargetResponse = await createExperiment(new Request('http://insight.test/api/experiments', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      user,
+      scope: 'benchmark',
+      name: 'unreported agent',
+      benchmark: {
+        datasetId: imported.id,
+        caseSelection: { mode: 'explicit', caseIds: [dataset.cases[0].id] },
+        executionTarget: { clientId },
+        runConfig: { platform: 'codex', agent: 'build' },
+      },
+    }),
+  }))
+  assert.equal(unavailableTargetResponse.status, 409)
+  assert.equal(
+    ((await unavailableTargetResponse.json()) as { error: { code: string } }).error.code,
+    'EXECUTION_TARGET_UNAVAILABLE',
+  )
+
   const createResponse = await createExperiment(new Request('http://insight.test/api/experiments', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -268,14 +327,14 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
       user,
       scope: 'benchmark',
       name: 'SWE-bench smoke',
-      agentName: 'opencode',
+      agentName: 'codex / review',
       benchmark: {
         datasetId: imported.id,
         caseSelection: { mode: 'explicit', caseIds: [dataset.cases[0].id] },
         executionTarget: { clientId },
         runConfig: {
-          platform: 'opencode',
-          agent: 'build',
+          platform: 'codex',
+          agent: 'review',
           model: 'configured-default',
           agentTimeoutSeconds: 60,
           maxParallelAgentCases: 1,
@@ -335,13 +394,23 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
 
   const dispatched = JSON.parse(calls[2].body) as {
     callbackBaseUrl: string
-    task: { context: { runId: string }; task: { benchmarkPayload: Record<string, unknown> } }
+    task: {
+      context: { runId: string }
+      agentConfig: { platform: string; agent: string }
+      task: { benchmarkPayload: Record<string, unknown> }
+    }
   }
   assert.equal(
     dispatched.callbackBaseUrl,
     `http://127.0.0.1:3000/api/benchmark/v1/runs/${encodeURIComponent(acceptedRun.id)}`,
   )
   assert.equal(dispatched.task.context.runId, acceptedRun.id)
+  assert.deepEqual(dispatched.task.agentConfig, {
+    platform: 'codex',
+    agent: 'review',
+    model: 'configured-default',
+    timeoutSeconds: 60,
+  })
   assert.equal(dispatched.task.task.benchmarkPayload.instanceId, 'example__project-1')
   const outbox = await prisma.benchmarkDispatchOutbox.findUnique({ where: { runId: acceptedRun.id } })
   assert.equal(outbox?.status, 'accepted')
@@ -385,7 +454,12 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     where: { clientId },
     data: {
       capabilitiesJson: JSON.stringify({
-        platforms: [],
+        platforms: [{
+          id: 'codex',
+          agents: ['review'],
+          runExperimentCase: { version: 2, returnsTraceId: true },
+          actions: ['RUN_EXPERIMENT_CASE'],
+        }],
         components: { 'git-workspace/v1': { ready: true } },
       }),
     },
@@ -400,7 +474,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
       benchmark: {
         datasetId: imported.id,
         executionTarget: { clientId },
-        runConfig: { platform: 'opencode', agent: 'build' },
+        runConfig: { platform: 'codex', agent: 'review' },
       },
     }),
   }))
@@ -463,7 +537,13 @@ test('real SWE-bench Verified data crosses create/run APIs and the executor HTTP
       lastSeenAt: new Date(),
       executorBaseUrl: 'http://127.0.0.1:43124',
       capabilitiesJson: JSON.stringify({
-        platforms: [],
+        platforms: [{
+          id: 'opencode',
+          agents: ['build'],
+          models: ['configured-default'],
+          runExperimentCase: { version: 2, returnsTraceId: true },
+          actions: ['RUN_EXPERIMENT_CASE'],
+        }],
         components: {
           'git-workspace/v1': { ready: true },
           'agent-runtime/opencode/v1': { ready: true },

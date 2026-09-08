@@ -38,6 +38,13 @@ const client = require_('../scripts/reliability-client.cjs') as {
     components: Record<string, { ready?: boolean } | string>
     faultInjection: { ready: boolean; note?: string }
   }
+  benchmarkAgentPlatformsFromCapabilities: (capabilities: {
+    platforms: Array<{
+      id: string
+      runExperimentCase?: { version: number; returnsTraceId: boolean }
+    }>
+    components: Record<string, unknown>
+  }) => string[]
   buildExperimentCaseInvocation: (
     executable: string,
     input: {
@@ -315,6 +322,23 @@ test('client advertises benchmark components only when executor is configured', 
   })
   assert.deepEqual(withExecutor.components['git-workspace/v1'], { ready: true })
   assert.deepEqual(withExecutor.components['git-patch/v1'], { ready: true })
+})
+
+test('benchmark executor runtime registration follows trace-safe client platforms', () => {
+  assert.deepEqual(client.benchmarkAgentPlatformsFromCapabilities({
+    platforms: [
+      { id: 'opencode', runExperimentCase: { version: 2, returnsTraceId: true } },
+      { id: 'codex', runExperimentCase: { version: 2, returnsTraceId: true } },
+      { id: 'xiaoo', runExperimentCase: { version: 2, returnsTraceId: false } },
+      { id: 'offline-runtime', runExperimentCase: { version: 2, returnsTraceId: true } },
+    ],
+    components: {
+      'agent-runtime/opencode/v1': { ready: true },
+      'agent-runtime/codex/v1': { ready: true },
+      'agent-runtime/xiaoo/v1': { ready: true },
+      'agent-runtime/offline-runtime/v1': { ready: false },
+    },
+  }), ['opencode', 'codex'])
 })
 
 test('model ids normalize from strings and objects alike', () => {

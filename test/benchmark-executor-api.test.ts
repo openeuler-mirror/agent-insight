@@ -964,6 +964,40 @@ test('step 04 exposes authenticated health and returns retryable SERVICE_BUSY', 
   }
 })
 
+test('executor advertises every configured trace-safe Agent Runtime', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const clientId = `runtime_client_${suffix}`
+  const deviceCredential = `dc_runtime_${suffix}`
+  const executor = executorModule.createBenchmarkExecutor({
+    clientId,
+    deviceCredential,
+    insightBaseUrl: 'http://127.0.0.1:43199',
+    baseDir: path.join(testDir, `runtime-executor-${suffix}`),
+    agentPlatforms: ['opencode', 'codex', 'codex'],
+    async runAgent() {
+      return { traceId: 'trace_runtime', exitCode: 0 }
+    },
+  })
+  const address = await executor.listen('127.0.0.1', 0)
+  try {
+    const healthToken = createBenchmarkHealthToken({
+      clientId,
+      credentialHash: deviceCredentialHash(deviceCredential),
+    })
+    const response = await fetch(`http://127.0.0.1:${address.port}/health`, {
+      headers: { authorization: `Bearer ${healthToken}` },
+    })
+    assert.equal(response.status, 200)
+    const health = await response.json() as { capabilities: string[] }
+    assert.deepEqual(
+      health.capabilities.filter(capability => capability.startsWith('agent-runtime/')),
+      ['agent-runtime/opencode/v1', 'agent-runtime/codex/v1'],
+    )
+  } finally {
+    await executor.close()
+  }
+})
+
 test('step 07 retries the same successful completion without rerunning Agent', async () => {
   const suffix = `${Date.now()}_${process.pid}`
   const runId = `erun_complete_retry_${suffix}`
@@ -1158,7 +1192,12 @@ test('steps 01-13 cross all HTTP boundaries with a real SWE-bench Case', {
         lastSeenAt: new Date(),
         executorBaseUrl: executorOrigin,
         capabilitiesJson: JSON.stringify({
-          platforms: [],
+          platforms: [{
+            id: 'opencode',
+            agents: ['build'],
+            runExperimentCase: { version: 2, returnsTraceId: true },
+            actions: ['RUN_EXPERIMENT_CASE'],
+          }],
           components: {
             'git-workspace/v1': { ready: true },
             'agent-runtime/opencode/v1': { ready: true },

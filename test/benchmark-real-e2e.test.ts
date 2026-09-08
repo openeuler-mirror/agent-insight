@@ -319,7 +319,13 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
         executorReachability: 'reachable',
         executorCheckedAt: new Date(),
         capabilitiesJson: JSON.stringify({
-          platforms: [{ id: 'opencode', models: [model], agents: ['build'] }],
+          platforms: [{
+            id: 'opencode',
+            models: [model],
+            agents: ['build'],
+            runExperimentCase: { version: 2, returnsTraceId: true },
+            actions: ['RUN_EXPERIMENT_CASE'],
+          }],
           components: {
             'git-workspace/v1': { ready: true },
             'agent-runtime/opencode/v1': { ready: true },

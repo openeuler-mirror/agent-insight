@@ -469,7 +469,11 @@ function buildCapabilities(cfg, opts) {
   const components = { clientVersion: AGENT_VERSION }
   if (cfg.executorBaseUrl) {
     components['git-workspace/v1'] = { ready: true }
-    components['agent-runtime/opencode/v1'] = { ready: Boolean(which('opencode')) }
+    for (const platform of platforms) {
+      components[`agent-runtime/${platform.id}/v1`] = {
+        ready: platform.runExperimentCase?.returnsTraceId === true && Boolean(which(platform.id)),
+      }
+    }
     components['git-patch/v1'] = { ready: true }
   }
   return {
@@ -482,6 +486,19 @@ function buildCapabilities(cfg, opts) {
       maxParallel: cfg.maxParallelFi,
     },
   }
+}
+
+function benchmarkAgentPlatformsFromCapabilities(capabilities) {
+  const components = capabilities?.components || {}
+  return [...new Set((capabilities?.platforms || [])
+    .filter((platform) => {
+      const component = components[`agent-runtime/${platform.id}/v1`]
+      const ready = component === true
+        || (component && typeof component === 'object' && component.ready !== false)
+      return platform.runExperimentCase?.returnsTraceId === true && ready
+    })
+    .map((platform) => String(platform.id || '').trim())
+    .filter(Boolean))]
 }
 
 /**
@@ -1266,6 +1283,7 @@ async function main() {
     const { createBenchmarkExecutor } = require(runtimePath)
     const advertised = new URL(cfg.executorBaseUrl)
     const port = cfg.executorListenPort || Number(advertised.port || (advertised.protocol === 'https:' ? 443 : 80))
+    const executorCapabilities = buildCapabilities(cfg)
     benchmarkExecutor = createBenchmarkExecutor({
       clientId: cfg.clientId,
       deviceCredential: cfg.deviceCredential,
@@ -1273,6 +1291,7 @@ async function main() {
       baseDir: CLIENT_HOME,
       tryAcquireSlot: tryAcquireExecutionSlot,
       releaseSlot: releaseExecutionSlot,
+      agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
       runAgent: (payload) => runExperimentCase(cfg, payload),
       logError: (...args) => logErr(...args),
     })
@@ -1543,6 +1562,7 @@ module.exports = {
   resolveFiCwd,
   buildFiInventory,
   buildCapabilities,
+  benchmarkAgentPlatformsFromCapabilities,
   buildExperimentCaseInvocation,
   runExperimentCase,
   tryAcquireExecutionSlot,

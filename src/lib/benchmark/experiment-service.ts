@@ -3,14 +3,10 @@ import type { Prisma } from '@prisma/client'
 
 import type { JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
-import {
-  deriveServiceHealth,
-  deriveStatus,
-  parseCapabilities,
-} from '@/lib/reliability/client-registry'
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
+import { assertBenchmarkExecutionTarget } from './execution-targets'
 
 type BenchmarkCaseSelection =
   | { mode: 'all' }
@@ -69,27 +65,6 @@ function normalizeExecutorBaseUrl(value: string | null): string {
     )
   }
   return url.origin
-}
-
-function componentReady(value: unknown): boolean {
-  if (value === true) return true
-  if (!value || typeof value !== 'object') return false
-  const record = value as Record<string, unknown>
-  return record.ready !== false
-}
-
-function assertCapabilities(clientCapabilitiesJson: string, required: readonly string[]): void {
-  const capabilities = parseCapabilities(clientCapabilitiesJson)
-  const missing = required.filter((name) => !componentReady(capabilities.components?.[name]))
-  if (missing.length) {
-    throw new BenchmarkProtocolError(
-      'EXECUTOR_CAPABILITY_MISSING',
-      `所选执行器缺少能力：${missing.join(', ')}`,
-      409,
-      false,
-      { missing: missing.join(', ') },
-    )
-  }
 }
 
 function parsePublicPayload(json: string): Record<string, JsonValue> {
@@ -175,11 +150,8 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   if (!client || client.unboundAt) {
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
-  if (deriveStatus(client) !== 'online' || deriveServiceHealth(client) !== 'healthy') {
-    throw new BenchmarkProtocolError('EXECUTOR_NOT_READY', '执行客户端当前不在线或不健康', 409)
-  }
+  assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent })
   const executorBaseUrl = normalizeExecutorBaseUrl(client.executorBaseUrl)
-  assertCapabilities(client.capabilitiesJson, adapter.manifest.requiredCapabilities)
 
   const runConfig = {
     platform,
