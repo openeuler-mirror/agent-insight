@@ -87,4 +87,4 @@
 3. issue 或维护者明确要求单文档时，改用 `issue-<number>-<slug>.md`，不再创建三阶段目录。
 4. **回到本清单追加一行**,填齐上表各列。
 
-- [Agent 测评闭环第一版](evaluation-harness-v1/phase1-需求分析.md)：版本化多轮 Case、规则/LLM 评估、真实执行与 Trace、静态分析及回归闭环；refactor-for-nh 演示收敛已完成四资产版本/对比和真实 HTTP 验证，浏览器及真实 LLM 验收待环境配合（开发中）。
+- [Agent 测评闭环第一版](evaluation-harness-v1/phase1-需求分析.md)：版本化多轮 Case、规则/LLM 评估、真实执行与 Trace、静态分析及回归闭环；refactor-for-nh 演示收敛已完成四资产版本/对比和真实 HTTP 验证，浏览器核心闭环已于 2026-09-09 跑通，真实 LLM 验收待模型配置（开发中）。

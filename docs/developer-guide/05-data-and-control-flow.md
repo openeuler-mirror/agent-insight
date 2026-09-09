@@ -342,3 +342,9 @@ Agent 与 Skill 从外部目录读取；选择 Skill 时通过 skillOverrides �
 演示配置位于 `evaluation-harness/demo-profile.ts`。AppSidebar 仅渲染 demoNavigation，主布局限制页面路径；源码中的旧页面组件保留但不挂载。此限制是产品展示范围，不是 API 权限机制。DemoTrace 仅显示实验关联的逐轮真实证据，不加载通用运行监控、标签、RAS 等交互。
 
 数据集继续使用 VersionedDatasetDetail 的逐条浏览器草稿与不可变发布。删除使用页面内对话框，避免内嵌浏览器原生 confirm 阻塞。实验优化入口提供失败规则归类、代表 Case 链接和混淆矩阵；回归跳转统一新向导并恢复四资产及执行条件。
+
+### 2026-09-09 NH 浏览器回归补充
+
+`runDetail` 的 `results` 与 `experiment.cases` 按同一数组生成；问题分析用 `failedCheckRows` 按该顺序和检查名筛出实际失败执行行，不能仅匹配逻辑 Case ID，否则会混入 A/B 另一组。该辅助函数放在客户端可导入的 `demo-selection.ts`，避免从包含 worker_threads 的服务端规则模块导入运行时代码。NH_DEMO 隐藏 Case 评论并停止评论请求。`expandVersionRuns` 排除历史 Skill-as-target 实验，Agent 版本目录只呈现 Agent。
+
+版本化数据集的列表与详情删除请求均显式携带 `x-witty-api-key`；`apiFetch` 只补 URL 前缀，不自动附加认证。软删除保留历史版本和实验，恢复仍使用已认证的版本资产接口。

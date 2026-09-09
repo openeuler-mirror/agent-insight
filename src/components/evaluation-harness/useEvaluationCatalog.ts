@@ -10,5 +10,5 @@ export function useEvaluationCatalog(){
  const request=useCallback(async(body?:unknown,query='')=>{const response=await apiFetch('/api/evaluation-harness'+query,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','x-witty-api-key':apiKey||''},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Error(data.error||'操作失败');return data;},[apiKey]);
  const refresh=useCallback(async()=>{const data=await request();setCatalog({...empty,...data});setLoaded(true);},[request]);
  useEffect(()=>{if(apiKey)void refresh().catch(e=>setError(e.message));},[apiKey,refresh]);
- return {catalog,loaded,error,setError,request,refresh,user};
+ return {catalog,loaded,error,setError,request,refresh,user,apiKey};
 }

@@ -14,6 +14,7 @@ import CaseVersionActions from '@/components/evaluation-harness/CaseVersionActio
 import type { EvalCase } from '@/lib/evaluation-harness/domain';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { NH_DEMO } from '@/lib/evaluation-harness/demo-profile';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import {buildCheckPoints} from '@/lib/evaluation-harness/result-points';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
@@ -415,7 +416,7 @@ export function ExperimentCaseDetail({
   const [comments, setComments] = useState<EvalCommentRow[]>([]);
 
   const loadComments = useCallback(async () => {
-    if (!user) return;
+    if (!user || NH_DEMO) return;
     try {
       // 一次取回本实验全部评论，前端按 case/结果行分组——否则每个结果行各发一次请求
       const res = await apiFetch(
@@ -781,7 +782,7 @@ export function ExperimentCaseDetail({
                               )}
 
                               {/* 该评估器结果的评论 */}
-                              {user && (
+                              {user && !NH_DEMO && (
                                 <div style={{ marginTop: 11, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
                                   <EvalComments
                                     experimentId={id}
@@ -822,7 +823,7 @@ export function ExperimentCaseDetail({
             )}
 
             {/* 本条 case 的整体评论（对单个评估器的意见留在各自卡片里） */}
-            {user && (
+            {user && !NH_DEMO && (
               <div style={{ ...CARD, padding: '14px 16px', marginTop: 14 }}>
                 <EvalComments
                   experimentId={id}

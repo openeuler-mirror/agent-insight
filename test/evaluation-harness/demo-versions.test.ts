@@ -25,3 +25,8 @@ test('default-model execution compares the effective Agent model rather than the
  const a=run('01',50),b=run('02',100,2);a.manifest.execution.model='';b.manifest.execution.model='';a.manifest.target.content.model='model-a';b.manifest.target.content.model='model-b';
  const view=buildDemoVersionView([a,b],choices);assert.equal(view.series.length,2);assert.deepEqual(view.series.map(s=>s.label),['model-a','model-b']);
 });
+
+test('legacy Skill-as-target experiments do not populate Agent version analysis',()=>{
+ const legacy=run('legacy',100);legacy.manifest.target=asset('skill',1);
+ assert.equal(expandVersionRuns([legacy]).length,0);
+});

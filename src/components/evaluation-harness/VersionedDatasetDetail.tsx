@@ -60,7 +60,7 @@ export default function VersionedDatasetDetail({assetId}: {assetId:string}) {
     if(!dataset||!user)return;setBusy(true);setError('');
     try{
       if(dataset.archived){await request({action:'archive',id:dataset.id,archived:false});await load();}
-      else{const response=await apiFetch(`/api/agent-datasets/versioned-${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`,{method:'DELETE'});const result=await response.json();if(!response.ok)throw Error(result.error||'删除失败');router.push('/dataset');}
+      else{const response=await apiFetch(`/api/agent-datasets/versioned-${encodeURIComponent(dataset.id)}?user=${encodeURIComponent(user)}`,{method:'DELETE',headers:{'x-witty-api-key':apiKey||''}});const result=await response.json();if(!response.ok)throw Error(result.error||'删除失败');router.push('/dataset');}
       setConfirmDelete(false);
     }catch(e){setError((e as Error).message);}finally{setBusy(false);}
   }

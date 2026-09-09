@@ -5,7 +5,7 @@ export interface VersionRecord {key:string;runId:string;name:string;status:strin
 function stable(value:any):string{return Array.isArray(value)?'['+value.map(stable).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stable(value[key])).join(',')+'}':JSON.stringify(value)??'null';}
 export function expandVersionRuns(runs:any[]):VersionRecord[]{
  return runs.flatMap(run=>{
-  const m=run.manifest;if(!m?.target||!m?.dataset)return [];
+  const m=run.manifest;if(!m?.target||!m?.dataset||m.target.content.type==='skill')return [];
   return (m.comparison&&m.groups?.length?m.groups:[null]).map((group:any)=>{
    const evaluatorIds=group?.evaluatorIds||m.evaluatorIds||m.evaluators.map((e:any)=>e.id),evaluators=(m.evaluators||[]).filter((e:any)=>evaluatorIds.includes(e.id));
    const model=m.execution?.model||group?.target?.content.model||m.target.content.model||'Agent 默认';

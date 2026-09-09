@@ -244,3 +244,14 @@ test('a noncritical failure does not hide an unavailable mandatory evaluator',()
  assert.equal(summarize([result],0).gate,'unknown');
  assert.equal(summarize([result],0).score,null);
 });
+
+test('failure representatives exclude the passing cohort with the same Case ID', async () => {
+  const { failedCheckRows } = await import('../../src/lib/evaluation-harness/demo-selection');
+  const rows = [{id:'a-failed'},{id:'b-passed'},{id:'other-failure'}];
+  const results = [
+    {checks:[{name:'禁止工具',verdict:'fail'}]},
+    {checks:[{name:'禁止工具',verdict:'pass'}]},
+    {checks:[{name:'结束状态',verdict:'fail'}]},
+  ];
+  assert.deepEqual(failedCheckRows(rows, results, '禁止工具'), [{id:'a-failed'}]);
+});
