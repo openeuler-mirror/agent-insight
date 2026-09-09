@@ -11,7 +11,7 @@ async function main(){
  const account=await prisma.user.findUnique({where:{username:user}});assert(account?.apiKey,'Demo account must already exist');
  const headers={'content-type':'application/json','x-witty-api-key':account.apiKey};
  async function call(body?:unknown,query=''){
-  const response=await fetch(base+'/api/evaluation-harness'+query,{method:body?'POST':'GET',headers,...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(120000)});
+  const response=await fetch(base+'/api/evaluation-harness'+query,{method:body?'POST':'GET',headers,...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(240000)});
   const data=await response.json();assert(response.ok,data.error||`HTTP ${response.status}`);return data;
  }
  const records:any[]=[];
@@ -65,11 +65,11 @@ async function main(){
  const trends:any={};for(const kind of ['agent','skill','evaluator','dataset'] as const){const view=buildDemoVersionView(catalog.runs,{...choices,[kind]:{...choices[kind],vary:true}});assert(view.rows.length>=2);assert(view.series.some(s=>s.points.length>=2),kind+' trend must contain at least two versions');trends[kind]={records:view.rows.length,points:view.series.flatMap(s=>s.points.map(p=>({id:p.runId,versions:Object.fromEntries(Object.entries(p.assets).map(([k,v]:any)=>[k,v?.version])),score:p.score})))};}
  const llm:any={configured:catalog.executionOptions.publicModelConfigured,verified:false};
  if(llm.configured){
-  const generated=await call({action:'generate',targetId:agentB.id});assert(generated.cases.length>=1);llm.generatedCases=generated.cases.length;
+  const generated=await call({action:'generate',targetId:agentB.id});assert(generated.cases.length>=4&&generated.cases.length<=8);assert(generated.cases.some((c:any)=>c.turns.length>1));assert.equal(new Set(generated.cases.map((c:any)=>c.category)).size,3);llm.generatedCases=generated.cases.length;llm.model=catalog.executionOptions.publicModel;
   const judge=asset('semantic-judge',1);const d=await run({...shared,name:'演示 · 真实 LLM 评分',skillId:skillB.id,caseIds:['loan-high'],evaluatorIds:[evalA.id,judge.id]});
-  const judged=d.experiment.cases.flatMap((c:any)=>c.results).filter((r:any)=>r.evaluatorId===judge.id);assert(judged.length&&judged.every((r:any)=>r.status==='done'));llm.verified=true;llm.experimentId=d.experiment.id;
+  const judged=d.experiment.cases.flatMap((c:any)=>c.results).filter((r:any)=>r.evaluatorId===judge.id);assert(judged.length&&judged.every((r:any)=>r.status==='done'&&typeof r.score==='number'));llm.verified=true;llm.experimentId=d.experiment.id;
  }
- const output={date:new Date().toISOString(),user,base,execution,records,staticFindings:staticReport.findings.length,trace:{traceId,turns:trace.turns.length,tool:trace.turns[1].tools[0].name},trends,llm,browser:'pending-mac-unlock'};
+ const output={date:new Date().toISOString(),user,base,execution,records,staticFindings:staticReport.findings.length,trace:{traceId,turns:trace.turns.length,tool:trace.turns[1].tools[0].name},trends,llm,browser:'HTTP script does not verify browser; see report.md for separate UI evidence'};
  await writeFile('docs/design/evaluation-harness-v1/test-report/nh-demo-http-evidence.json',JSON.stringify(output,null,2)+'\n');
  console.log('HTTP flow, Trace, revision, regression and all four version trends verified; LLM:',llm.verified?'verified':'pending model connection');
 }

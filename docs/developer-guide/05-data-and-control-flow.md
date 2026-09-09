@@ -348,3 +348,7 @@ Agent 与 Skill 从外部目录读取；选择 Skill 时通过 skillOverrides �
 `runDetail` 的 `results` 与 `experiment.cases` 按同一数组生成；问题分析用 `failedCheckRows` 按该顺序和检查名筛出实际失败执行行，不能仅匹配逻辑 Case ID，否则会混入 A/B 另一组。该辅助函数放在客户端可导入的 `demo-selection.ts`，避免从包含 worker_threads 的服务端规则模块导入运行时代码。NH_DEMO 隐藏 Case 评论并停止评论请求。`expandVersionRuns` 排除历史 Skill-as-target 实验，Agent 版本目录只呈现 Agent。
 
 版本化数据集的列表与详情删除请求均显式携带 `x-witty-api-key`；`apiFetch` 只补 URL 前缀，不自动附加认证。软删除保留历史版本和实验，恢复仍使用已认证的版本资产接口。
+
+### 2026-09-09 真实 LLM 格式约束
+
+生成服务向模型提供字段类型、枚举和工具/输出字段约束。结果仍由 datasetSchema 严格校验，失败时只允许一次携带校验路径的格式纠正；传输错误不会触发格式重试，不把无效值强制转换成合格样本。JSON 调用对 DeepSeek 官方域名的 v4 模型显式使用非思考模式、JSON 输出及 8192 输出 token 上限，其他端点保持原参数；90 秒超时返回中文提示。依据：[DeepSeek 思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)与[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)。

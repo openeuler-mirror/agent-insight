@@ -1,5 +1,5 @@
 {
-  "date": "2026-09-08T13:53:06.094Z",
+  "date": "2026-09-09T02:37:02.935Z",
   "user": "harness-ui@example.test",
   "base": "http://127.0.0.1:3019",
   "execution": {
@@ -8,46 +8,46 @@
   },
   "records": [
     {
-      "id": "cmtsqc2l00001n805f8h7tpt7",
+      "id": "cmtthmbe30001118odfvzykia",
       "name": "演示 · 基线验收（Skill v2）",
       "status": "done",
       "score": 50,
       "cases": 4,
       "traceIds": [
-        "766b65e7-16ca-42b3-8cad-bb022954d4f5",
-        "462d3013-8997-4ece-9c0d-314075dc191a",
-        "27f7524f-5697-470a-8be7-ef75885da453",
-        "6a562e6a-6293-4d8b-b4e7-6e5df52f4467"
+        "9ce823fa-e293-483f-b890-51e457b3a4e0",
+        "17be7e1b-3a46-4847-bb80-c96ee71418d8",
+        "985ac8b0-911b-4ec4-b385-9d302c50907b",
+        "497fcb21-88f2-4df9-951e-e6147c8732fe"
       ]
     },
     {
-      "id": "cmtsqc2sy000sn8057phleldp",
+      "id": "cmtthmbm2000s118oj70j1ljr",
       "name": "演示 · 修复后回归（Skill v3）",
       "status": "done",
       "score": 100,
       "cases": 4,
       "traceIds": [
-        "88d4648f-8be9-40de-9d33-fd717fb68bf7",
-        "a2793838-4b98-4dbe-bf47-093253aeae3d",
-        "6fdbd413-fed8-4174-986e-4ff9375e311e",
-        "c594634e-57c9-4be9-a4cd-d8479276d794"
+        "97be8cb3-cac9-42d1-aa40-d5c7d6c07c5f",
+        "b6f298d4-a97b-44bc-aa7a-56589124c304",
+        "78ce7dd9-69eb-494c-999d-973d5709e818",
+        "a5b3d2d7-28f3-466d-a6c4-e92ba6666085"
       ]
     },
     {
-      "id": "cmtsqc31b001jn8052m9s00fi",
+      "id": "cmtthmbu2001j118ohe371lnm",
       "name": "演示 · Agent 版本对比",
       "status": "done",
       "score": 50,
       "cases": 8,
       "traceIds": [
-        "24d40498-0ac9-4116-bdd5-250f0c0e1c14",
-        "417d2818-9bfb-4212-b882-e345cab4c0fb",
-        "7b013a0e-76af-421d-9911-9889b99f524c",
-        "de613021-043f-4311-af60-427f3fc2598a",
-        "18325ff0-55c6-4192-85d0-e70878918a4c",
-        "c1f43c76-512d-470b-8b53-809f813b08e3",
-        "63c8fc64-fa4b-44f9-8699-909b9bca1809",
-        "a258c2c3-e9ed-4d2c-9859-2699c1a61974"
+        "56cafbea-fa6d-43da-9931-f87787d0b4e5",
+        "c5ca7501-6d86-45b9-bc30-ff6922b8f083",
+        "dcaca294-1b37-4fd0-9651-a032e596acfb",
+        "ed4a1b14-c1fa-46e4-85dd-41a6c0508e69",
+        "305c9eb2-6f6c-46fe-a1d3-4fcd265ef084",
+        "33a78422-b06f-459f-b47c-b96cfea9f3d9",
+        "f814ae96-150f-4d6a-a54e-000f5e830d88",
+        "6a3cb501-4545-43f1-96dd-bfc864de0d9b"
       ],
       "groups": [
         {
@@ -73,20 +73,20 @@
       ]
     },
     {
-      "id": "cmtsqc39c002yn805lsnp2krj",
+      "id": "cmtthmc2a002y118ocw52rns0",
       "name": "演示 · Skill 版本对比",
       "status": "done",
       "score": 75,
       "cases": 8,
       "traceIds": [
-        "4abeb857-2d89-484a-a583-540c4cf60621",
-        "2d897a44-c8b4-4ef5-b9f1-66a962a46d3b",
-        "92daf5fd-63a3-44db-b018-3756e93f1aaf",
-        "279d1dbe-59fa-4334-8504-8403adf91ab4",
-        "45ad0105-8418-4e24-bf1c-81c5d669e6b3",
-        "7b845e25-905c-438a-a39a-01a1d6c8e6e8",
-        "34c92680-7999-4e86-bcbf-49f6fa432e2c",
-        "fcbc5c1a-afb5-4622-a890-cf21bb3175ca"
+        "d023dc3e-efe4-48d2-939a-b742bf6fe80e",
+        "e54b0711-8a97-4c5a-8664-4b48414d43ec",
+        "ae418d59-2a7d-4287-b5bd-1ae18b91cd07",
+        "1d44e08e-df89-4bf5-aa76-a4f9da909e11",
+        "052b1f8c-ac43-45bc-a368-c2d2d7b89702",
+        "78156d95-6b9d-4036-ac5e-746151711e74",
+        "e8037893-f1d8-4a5b-acb8-8a01756e1101",
+        "f60e09ae-81ce-4d00-b693-74e0ca10fe64"
       ],
       "groups": [
         {
@@ -112,16 +112,16 @@
       ]
     },
     {
-      "id": "cmtsqc3hb004dn805435dz351",
+      "id": "cmtthmca8004d118ol47tmokh",
       "name": "演示 · 评估器 版本对比",
       "status": "done",
       "score": 50,
       "cases": 4,
       "traceIds": [
-        "ca2750e1-51ec-4958-99e0-ca239dce9e4f",
-        "5dc98fc2-e221-4e3b-9103-e024f78827c3",
-        "555c3c80-2525-4bd4-b200-2d55e4bce7c9",
-        "8aec19d5-27f2-4a53-817e-f04bad5462a8"
+        "4c7de611-f62c-46a7-bee3-b045821c9caa",
+        "a4d7fa1a-a2ae-4d99-b81f-5cd163b65f94",
+        "2d5badaf-6e31-41f0-8531-eebb04dae632",
+        "a1505036-82ff-4ce1-911f-942a932eaa23"
       ],
       "groups": [
         {
@@ -147,21 +147,21 @@
       ]
     },
     {
-      "id": "cmtsqc3pg005cn805km4tbfv1",
+      "id": "cmtthmci8005c118oxh9x5qi9",
       "name": "演示 · 评测集 版本对比",
       "status": "done",
       "score": 55.55555555555556,
       "cases": 9,
       "traceIds": [
-        "2b4be9f5-518f-4068-b591-b8bd7fcff8b9",
-        "bbfd04e5-c17f-4820-a5c3-1216408fdbd5",
-        "4611c02c-7089-43e0-970c-c82fa4cebfea",
-        "4cf02841-5dd9-4e60-92ad-bf6094e447f7",
-        "a2046880-ae2c-410e-ad95-cdfed169e8e6",
-        "aa480a4f-ece9-4680-827c-f6c9cf5c4ae5",
-        "877555c0-beb7-4a5a-8bc4-af53a8de6ec3",
-        "0cbc4d5e-5556-49be-9e74-b753835d1beb",
-        "0b8bec18-d97a-436f-8775-07b4b9a8f9e3"
+        "6133e5d3-131c-442d-8de5-26ff0bc7862e",
+        "48986156-ae44-4a6f-baa9-025e4ee51749",
+        "b29702c0-5b56-4bbc-9450-0012da5df262",
+        "ab3ae497-ab57-487c-8006-b067b312c247",
+        "8ebe8454-6375-4a69-8b79-0289b3e627d9",
+        "c287c375-7348-4b97-b056-76d384ad0bdc",
+        "caee99a5-0c71-445e-9215-4fb91c30a15a",
+        "f60f1fc1-790e-4819-bcff-d028e77fc681",
+        "be3eedc2-c64f-4886-a3f8-3abd51992761"
       ],
       "groups": [
         {
@@ -187,28 +187,38 @@
       ]
     },
     {
-      "id": "cmtsqc3xl006xn805nu5dpwx8",
+      "id": "cmtthmcqk006x118o9vmjne9x",
       "name": "演示 · 单 Case 复验",
       "status": "done",
       "score": 100,
       "cases": 1,
       "traceIds": [
-        "487fe214-34e6-4cd8-9468-0488c77b6438"
+        "7abcfb33-7d5c-43ee-a5ac-c5f0fff6e1bd"
+      ]
+    },
+    {
+      "id": "cmtthmipd0079118o8may2a9a",
+      "name": "演示 · 真实 LLM 评分",
+      "status": "done",
+      "score": 100,
+      "cases": 1,
+      "traceIds": [
+        "a3c3b2c5-d88d-439b-823a-5d3770e5b420"
       ]
     }
   ],
   "staticFindings": 0,
   "trace": {
-    "traceId": "487fe214-34e6-4cd8-9468-0488c77b6438",
+    "traceId": "7abcfb33-7d5c-43ee-a5ac-c5f0fff6e1bd",
     "turns": 2,
     "tool": "request_human_review"
   },
   "trends": {
     "agent": {
-      "records": 24,
+      "records": 38,
       "points": [
         {
-          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "id": "cmtthmbe30001118odfvzykia",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -218,7 +228,7 @@
           "score": 50
         },
         {
-          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "id": "cmtthmci8005c118oxh9x5qi9",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -228,9 +238,19 @@
           "score": 50
         },
         {
-          "id": "cmtsqc31b001jn8052m9s00fi",
+          "id": "cmtthmbu2001j118ohe371lnm",
           "versions": {
             "agent": 4,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtte7klg008on805qqtd71ke",
+          "versions": {
+            "agent": 3,
             "skill": 2,
             "evaluator": 1,
             "dataset": 1
@@ -240,10 +260,10 @@
       ]
     },
     "skill": {
-      "records": 37,
+      "records": 59,
       "points": [
         {
-          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "id": "cmtthmbe30001118odfvzykia",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -253,7 +273,7 @@
           "score": 50
         },
         {
-          "id": "cmtsqc2sy000sn8057phleldp",
+          "id": "cmtthmbm2000s118oj70j1ljr",
           "versions": {
             "agent": 3,
             "skill": 3,
@@ -263,7 +283,7 @@
           "score": 100
         },
         {
-          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "id": "cmtthmci8005c118oxh9x5qi9",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -273,7 +293,7 @@
           "score": 50
         },
         {
-          "id": "cmtsqc39c002yn805lsnp2krj",
+          "id": "cmtthmc2a002y118ocw52rns0",
           "versions": {
             "agent": 3,
             "skill": 3,
@@ -283,7 +303,7 @@
           "score": 100
         },
         {
-          "id": "cmtsqc31b001jn8052m9s00fi",
+          "id": "cmtthmbu2001j118ohe371lnm",
           "versions": {
             "agent": 4,
             "skill": 2,
@@ -293,7 +313,27 @@
           "score": 50
         },
         {
-          "id": "cmtsqc3xl006xn805nu5dpwx8",
+          "id": "cmtthmcqk006x118o9vmjne9x",
+          "versions": {
+            "agent": 3,
+            "skill": 3,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 100
+        },
+        {
+          "id": "cmtte7klg008on805qqtd71ke",
+          "versions": {
+            "agent": 3,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtte7klg008on805qqtd71ke",
           "versions": {
             "agent": 3,
             "skill": 3,
@@ -305,10 +345,10 @@
       ]
     },
     "evaluator": {
-      "records": 28,
+      "records": 44,
       "points": [
         {
-          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "id": "cmtthmbe30001118odfvzykia",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -318,7 +358,7 @@
           "score": 50
         },
         {
-          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "id": "cmtthmci8005c118oxh9x5qi9",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -328,9 +368,19 @@
           "score": 50
         },
         {
-          "id": "cmtsqc31b001jn8052m9s00fi",
+          "id": "cmtthmbu2001j118ohe371lnm",
           "versions": {
             "agent": 4,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtte7klg008on805qqtd71ke",
+          "versions": {
+            "agent": 3,
             "skill": 2,
             "evaluator": 1,
             "dataset": 1
@@ -340,10 +390,10 @@
       ]
     },
     "dataset": {
-      "records": 28,
+      "records": 44,
       "points": [
         {
-          "id": "cmtsqc2l00001n805f8h7tpt7",
+          "id": "cmtthmbe30001118odfvzykia",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -353,7 +403,7 @@
           "score": 50
         },
         {
-          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "id": "cmtthmci8005c118oxh9x5qi9",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -363,7 +413,7 @@
           "score": 50
         },
         {
-          "id": "cmtsqc3pg005cn805km4tbfv1",
+          "id": "cmtthmci8005c118oxh9x5qi9",
           "versions": {
             "agent": 3,
             "skill": 2,
@@ -373,9 +423,19 @@
           "score": 60
         },
         {
-          "id": "cmtsqc31b001jn8052m9s00fi",
+          "id": "cmtthmbu2001j118ohe371lnm",
           "versions": {
             "agent": 4,
+            "skill": 2,
+            "evaluator": 1,
+            "dataset": 1
+          },
+          "score": 50
+        },
+        {
+          "id": "cmtte7klg008on805qqtd71ke",
+          "versions": {
+            "agent": 3,
             "skill": 2,
             "evaluator": 1,
             "dataset": 1
@@ -386,8 +446,11 @@
     }
   },
   "llm": {
-    "configured": false,
-    "verified": false
+    "configured": true,
+    "verified": true,
+    "generatedCases": 8,
+    "model": "deepseek-v4-flash",
+    "experimentId": "cmtthmipd0079118o8may2a9a"
   },
-  "browser": "pending-mac-unlock"
+  "browser": "HTTP script does not verify browser; see report.md for separate UI evidence"
 }

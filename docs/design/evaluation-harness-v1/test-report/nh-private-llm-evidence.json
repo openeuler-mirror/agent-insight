@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-09T02:42:14.757Z",
+  "experimentId": "cmttht6cy0004ip2mhb2uszis",
+  "model": "deepseek-v4-flash",
+  "privateCredentialId": "cmttht6a40000ip2mce9u6wel",
+  "keyEncrypted": true,
+  "keyNotReturned": true,
+  "sharedExecutionId": "d5028b38-d032-4e9b-80d5-d764fdb9532b",
+  "groups": [
+    {
+      "key": "A",
+      "score": 100
+    },
+    {
+      "key": "B",
+      "score": 100
+    }
+  ],
+  "results": [
+    {
+      "id": "cmttht7kr000aip2mtutcjjk9",
+      "evaluatorId": "cmtpat10s000w1fpox0cpuuda",
+      "score": 100,
+      "status": "done"
+    },
+    {
+      "id": "cmttht8c2000cip2mc1fjtj4o",
+      "evaluatorId": "cmttht6cn0002ip2m2wgek0di",
+      "score": 100,
+      "status": "done"
+    }
+  ]
+}

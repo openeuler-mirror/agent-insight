@@ -1,0 +1,31 @@
+{
+  "date": "2026-09-09",
+  "account": "harness-ui@example.test",
+  "model": "deepseek-v4-flash",
+  "datasetId": "cmtthth95000fip2m5jq4pijy",
+  "datasetName": "真实模型生成 · 贷款验收集 0909",
+  "version": 1,
+  "generatedCases": 8,
+  "experimentId": "cmtthv5tv000hip2mnitbnaq9",
+  "executedCases": 2,
+  "passRate": 50,
+  "meanScore": 75,
+  "cases": [
+    {
+      "id": "cmtthv5tx000jip2mkqijhouf",
+      "score": 50,
+      "turnScores": [
+        0,
+        100
+      ],
+      "traceId": "5b031f4d-57e1-4b4b-ae06-e76c4699e012",
+      "finding": "生成预期要求首轮collecting，实际Demo首轮直接approved；不能仅凭此判定真实业务缺陷。"
+    },
+    {
+      "id": "cmtthv5tx000lip2m9o2o2pa5",
+      "score": 100
+    }
+  ],
+  "privateComparisonId": "cmttht6cy0004ip2mhb2uszis",
+  "agentExecution": "独立HTTP规则模拟；生成和Judge使用真实模型"
+}

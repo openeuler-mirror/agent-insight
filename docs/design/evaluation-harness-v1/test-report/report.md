@@ -1,5 +1,37 @@
 # 版本化多轮评测：端到端测试过程报告
 
+## 2026-09-09 最终补验：真实模型生成、公共与私有评分
+
+本节是当前验收结果，更新下文历史记录中的“缺少模型、LLM 未验收”。使用账号 `harness-ui@example.test` 的真实 `deepseek-v4-flash`；服务 3019，独立 Demo Agent 4319。Agent 的业务行为仍为规则模拟，真实模型用于生成 Case 和语义评分，不据此宣称生产 Agent 质量达标。
+
+### 实际过程与结果
+
+1. 模型连接页确认默认模型可用。首次实测发现模型把 `contains` 输出成数组、把字段约束输出成字符串，另一次浏览器生成超过 90 秒。补齐明确格式提示、一次格式补正和官方 DeepSeek v4 非思考 JSON 参数后重建服务；没有用固定样例替换模型响应。
+2. 评测数据集 → 生成 / 导入 → 选择 Demo 贷款助手 → 根据 Agent 定义生成 Case，实际生成 **8 条**，包括正例、反例、边界和多轮。打开审阅表单，人工修改备注，命名“真实模型生成 · 贷款验收集 0909”，保存 v1。数据集详情确认 8 条记录与首轮输入/最终预期输出。
+3. 从该评测集点击新建实验，选择 Agent v4、Skill v3、任务语义评估 v1、数据集 v1；执行地址 4319、Agent 模式 demo-basic。第二步取消全选，仅选低风险多轮和高风险单轮两条；第三步核对预期答案，第四步确认后提交。
+4. [浏览器创建的实际实验](http://127.0.0.1:3019/experiments/cmtthv5tv000hip2mnitbnaq9) 完成 2 条 Trace、2 项真实 LLM 评分，Case 为 **50 / 100 分**，通过率 50%，综合均分 75。多轮 Case 首轮预期收集确认，但 Demo 直接审批；首轮 0、第二轮 100。详情展示逐轮评分点、模型判定原因、预期/实际、工具参数及规则生成的排查建议。
+5. 此差异说明生成的预期必须人工审核：模型引入了定义中未明确要求的确认步骤，不能把格式校验通过或本次评分当成业务真理。保留该失败样本和原始分数，没有修改 Case 凑全通过。
+6. [公共/私有连接对比实验](http://127.0.0.1:3019/experiments/cmttht6cy0004ip2mhb2uszis) 通过实际 API 创建并运行，随后浏览器核对详情。公共“任务语义评估”和“任务语义评估 · 私有连接”评同一条高风险多轮 Trace，两组均100分。持久化校验确认仅一次 Agent 执行、两项评分完成；私有密钥密文保存，列表和保存响应均不含明文。
+7. 重新运行 `scripts/evaluation-nh-demo-e2e.ts`：单组、四类对比、回归、单 Case、Trace、版本不可变和四维趋势均通过；真实生成8条和公共模型100分也通过。评估器对比中缺少某些路由预期的结果仍显示未评完整，不补造0分。
+
+### 验证范围、复现与限制
+
+- 新增生成契约测试 **4/4** 通过：非法字段补正、再次非法停止、传输错误不重复、DeepSeek 参数只作用于官方 v4。独立复审未发现新增 P1/P2。最终生产构建通过并更新 3019。
+- 全量 `npm run test`：**2323 项，2267 通过、47 失败、9 跳过**。47 个失败名称和前次全量完全一致，仍不宣称全仓通过。日志为 `/tmp/nh-llm-suite.log`；构建为 `/tmp/nh-llm-build.log`。
+- HTTP 复现沿用本文隔离数据库，先在演示账号配置真实模型，再执行 `AGENT_INSIGHT_DATA_DIR=/tmp/agent-insight-harness-e2e DATABASE_URL=file:/tmp/agent-insight-harness-e2e/data/witty_insight.db npx tsx scripts/evaluation-nh-demo-e2e.ts`。该脚本会产生新演示记录；浏览器验证按上面2—4步操作。
+- 私有连接复现：管理员为服务设置固定的 `EVALUATION_CREDENTIAL_KEY`，在评估器页面保存私有模型连接，建立引用它的 LLM 评估器，选择评估器对比，A公共/B私有，其他三资产和执行位置共用。当前演示主密钥保存在数据目录的 `evaluation-credential.key`（权限0600），通过服务进程环境加载；未修改 `.env`，重启必须沿用同一密钥文件。
+- 第一阶段按 POC 基本覆盖；静态风险和问题分组仍为启发式。真实客户平台、预约持久队列、多模态、独立复合权重、自动优化发布及 CI/CD 门禁不在本次完成结论内，详见[逐项需求矩阵](../phase1-需求分析.md)。
+- 结构化证据：[HTTP/四维趋势](nh-demo-http-evidence.json)、[私有连接与同Trace评分](nh-private-llm-evidence.json)、[浏览器生成与评分](nh-real-llm-browser-evidence.json)。
+
+### 本次截图
+
+![真实模型生成后的逐轮审阅表单](nh-real-llm-generated-review-0909.png)
+![保存后的8条生成Case](nh-real-llm-dataset-0909.png)
+![真实生成Case实验：50%通过率](nh-real-llm-experiment-0909.png)
+![真实LLM逐轮评分点与证据](nh-real-llm-case-evidence-0909.png)
+![公共与私有连接复用同一Trace](nh-real-llm-private-comparison-0909.png)
+
+
 
 ## 2026-09-09 NH 浏览器完整操作补验
 

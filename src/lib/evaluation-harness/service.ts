@@ -1,3 +1,4 @@
+import { generateCaseDefinitions } from './generation';
 import { comparisonSchema, validateComparison, compareCaseVerdicts, buildDatasetPairs } from './comparison';
 import { buildCheckPoints } from './result-points';
 import { randomUUID } from 'node:crypto';
@@ -616,8 +617,7 @@ async function saveTrace(user: string, agentName: string, c: EvalCase, turns: Tu
 }
 export async function generateDataset(user: string, targetId: string, credentialId?: string) {
   const target = await getAsset(user, targetId, 'target');
-  const output = await askJson(user, '根据目标的实际定义生成 4 至 8 个 Case，包含 positive/negative/boundary、难度和至少一个多轮。输出 {cases:[{id,name,category,difficulty,tags,note,turns:[{input,expectedOutput,expectation:{contains?,expectedSkill?,state?,requiredTools:[{name,arguments?}],forbiddenTools:[],toolOrder:[],fields:[],blocking:true}}]}]}。不要把预期当成实际结果。', target.content, credentialId);
-  return datasetSchema.parse(output);
+  return generateCaseDefinitions(target.content, (system,data)=>askJson(user,system,data,credentialId));
 }
 export async function staticAnalysis(user: string, targetId: string) {
   const target = await getAsset(user, targetId, 'target'),
