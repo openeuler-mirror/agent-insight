@@ -168,13 +168,12 @@ test('Agent Insight launch paths re-ensure Goal Plus watcher without blocking th
   for (const relative of ['scripts/develop_start.sh', 'scripts/start.sh']) {
     const source = await fsp.readFile(path.join(process.cwd(), relative), 'utf8');
     assert.match(source, /agent-trace-collectors\/goal-plus\/goal-plus-collector\.cjs/);
-    assert.match(source, /ensure --home "\$AGENT_INSIGHT_HOME" --config/);
+    assert.match(source, /ensure --config/);
     assert.match(source, /Agent Insight remains available/);
   }
 
   const cliStart = await fsp.readFile(path.join(process.cwd(), 'scripts', 'start.js'), 'utf8');
   assert.match(cliStart, /function ensureGoalPlusWatcher/);
   assert.match(cliStart, /'ensure'/);
-  assert.match(cliStart, /'--home',\s*dataRoot/);
   assert.match(cliStart, /Agent Insight remains available/);
 });

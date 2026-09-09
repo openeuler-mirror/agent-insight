@@ -55,7 +55,7 @@ async function readWatcherPid(pidPath) {
 
 async function watcherStatus(config) {
   const paths = watcherPaths(config);
-  const registry = await loadRegistry(defaultRegistryPath(config.homeDir));
+  const registry = await loadRegistry(config.registryPath || defaultRegistryPath(config.homeDir));
   const record = await readWatcherPid(paths.pidPath);
   const running = Boolean(record && processIsAlive(record.pid));
   if (record && !running) await fsp.unlink(paths.pidPath).catch(() => undefined);
@@ -233,6 +233,7 @@ async function loadConfig(options = {}) {
   return {
     homeDir,
     configPath,
+    registryPath: path.join(path.dirname(configPath), "sources.json"),
     apiKey,
     hosts: Array.isArray(file.hosts) ? file.hosts.filter(host => host === "pi" || host === "codex") : [],
     semanticEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_ENDPOINT || file.semanticEndpoint || `${baseUrl}/api/ingest/goal-plus/v1/snapshots`,
@@ -278,7 +279,7 @@ async function scanSource(source, config, options = {}) {
 }
 
 async function selfCheck(config) {
-  const registry = await loadRegistry(defaultRegistryPath(config.homeDir));
+  const registry = await loadRegistry(config.registryPath || defaultRegistryPath(config.homeDir));
   const sources = [];
   for (const source of registry.sources) {
     try {
@@ -345,7 +346,7 @@ async function selfCheck(config) {
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const config = await loadConfig(options);
-  const registryOptions = { homeDir: config.homeDir, label: options.label };
+  const registryOptions = { homeDir: config.homeDir, registryPath: config.registryPath, label: options.label };
   if (options.command === "attach") {
     if (!options.values[0]) throw new Error("attach requires a .gp path");
     process.stdout.write(`${JSON.stringify(await attachSource(options.values[0], registryOptions), null, 2)}\n`);
@@ -357,7 +358,7 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (options.command === "list") {
-    process.stdout.write(`${JSON.stringify((await loadRegistry(defaultRegistryPath(config.homeDir))).sources, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify((await loadRegistry(config.registryPath || defaultRegistryPath(config.homeDir))).sources, null, 2)}\n`);
     return;
   }
   if (options.command === "self-check") {

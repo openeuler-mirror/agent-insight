@@ -56,8 +56,6 @@ function ensureGoalPlusWatcher({ dataRoot, packageRoot = PACKAGE_ROOT }) {
   const child = spawnSync(process.execPath, [
     collectorPath,
     'ensure',
-    '--home',
-    dataRoot,
     '--config',
     configPath,
     '--interval-ms',

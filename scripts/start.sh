@@ -40,7 +40,7 @@ ensure_goal_plus_watcher() {
   fi
 
   echo "Ensuring Goal Plus watcher is running..."
-  if result=$(node "$collector_source" ensure --home "$AGENT_INSIGHT_HOME" --config "$collector_config" --interval-ms "$interval_ms" 2>&1); then
+  if result=$(node "$collector_source" ensure --config "$collector_config" --interval-ms "$interval_ms" 2>&1); then
     echo "$result"
   else
     echo "⚠️  Goal Plus watcher could not be started; Agent Insight remains available."

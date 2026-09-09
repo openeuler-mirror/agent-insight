@@ -86,6 +86,17 @@ test('Goal Plus managed watcher stays stopped and rejects startup without attach
   await assert.rejects(() => fsp.access(lockPath));
 });
 
+test('Goal Plus config keeps its source registry adjacent to a custom managed directory', async t => {
+  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-custom-home-'));
+  t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  const configPath = path.join(homeDir, 'custom-agent-insight', 'collectors', 'goal-plus', 'config.json');
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify({ apiKey: 'synthetic', hosts: ['pi'] }));
+
+  const config = await loadConfig({ homeDir, configPath });
+  assert.equal(config.registryPath, path.join(path.dirname(configPath), 'sources.json'));
+});
+
 test('Goal Plus watcher ensure recovers a stale PID after service restart', async t => {
   if (process.platform === 'win32') return t.skip('detached process signaling differs on Windows');
   const { temporary, root } = await copiedFixture(t);
