@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, execSync } = require('child_process')
+const { spawn, spawnSync, execSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
@@ -44,6 +44,32 @@ function loadEnvFile(envPath) {
   })
 
   return env
+}
+
+function ensureGoalPlusWatcher({ dataRoot, packageRoot = PACKAGE_ROOT }) {
+  const collectorPath = path.join(packageRoot, 'scripts', 'agent-trace-collectors', 'goal-plus', 'goal-plus-collector.cjs')
+  const configPath = path.join(dataRoot, 'collectors', 'goal-plus', 'config.json')
+  if (!fs.existsSync(configPath) || !fs.existsSync(collectorPath)) return null
+
+  const rawInterval = Number(process.env.AGENT_INSIGHT_GOAL_PLUS_INTERVAL_MS || 5000)
+  const intervalMs = Number.isFinite(rawInterval) && rawInterval >= 1000 ? Math.floor(rawInterval) : 5000
+  const child = spawnSync(process.execPath, [
+    collectorPath,
+    'ensure',
+    '--home',
+    dataRoot,
+    '--config',
+    configPath,
+    '--interval-ms',
+    String(intervalMs),
+  ], { encoding: 'utf8', env: process.env })
+  if (child.error) throw child.error
+  if (child.status !== 0) throw new Error((child.stderr || child.stdout || `exit ${child.status}`).trim())
+  try {
+    return JSON.parse(child.stdout)
+  } catch {
+    throw new Error(`Goal Plus watcher returned an invalid status: ${child.stdout.trim()}`)
+  }
 }
 
 let spawnedProc = null
@@ -281,6 +307,20 @@ async function run(options) {
       } catch (error) {
         console.log('⚠️  Failed to sync admin API key:', error.message)
       }
+      try {
+        const watcher = ensureGoalPlusWatcher({ dataRoot })
+        if (watcher?.ensured) {
+          console.log(watcher.alreadyRunning
+            ? `✓ Goal Plus watcher already running (PID ${watcher.pid})`
+            : `✓ Goal Plus watcher started (PID ${watcher.pid})`)
+        } else if (watcher?.reason === 'no_sources') {
+          console.log('ℹ️  Goal Plus watcher not started: no .gp source is attached')
+        } else if (watcher?.reason === 'not_configured') {
+          console.log('ℹ️  Goal Plus watcher not started: collector API key is not configured')
+        }
+      } catch (error) {
+        console.log('⚠️  Goal Plus watcher could not be started; Agent Insight remains available:', error.message)
+      }
       return
     }
   }
@@ -289,4 +329,4 @@ async function run(options) {
   process.exit(1)
 }
 
-module.exports = { run }
+module.exports = { ensureGoalPlusWatcher, run }

@@ -71,6 +71,43 @@ function eventUsage(event: OtelTraceEvent) {
   };
 }
 
+const GOAL_PLUS_TERMINAL_STATES = new Set([
+  'complete',
+  'completed',
+  'success',
+  'succeeded',
+  'done',
+  'passed',
+  'promoted',
+  'stop',
+  'stopped',
+  'exhausted',
+  'error',
+  'failed',
+  'aborted',
+  'cancelled',
+  'canceled',
+  'blocked',
+  'invalidated',
+  'timeout',
+  'timed_out',
+]);
+
+function isTerminalAgentEvent(event: OtelTraceEvent): boolean {
+  const eventAttrs = attrs(event);
+  const outcome = String(eventAttrs['tool.outcome'] || '').toLowerCase();
+  if (eventAttrs['goal_plus.import_mode'] !== 'passive_pi_session') {
+    return outcome === 'success' || outcome === 'error' || outcome === 'failed';
+  }
+
+  const terminalState = String(eventAttrs['goal_plus.terminal_state'] || '').toLowerCase();
+  const exitCode = eventAttrs['goal_plus.exit_code'];
+  return GOAL_PLUS_TERMINAL_STATES.has(terminalState)
+    || (exitCode !== undefined && exitCode !== null && exitCode !== '' && Number.isFinite(Number(exitCode)))
+    || outcome === 'error'
+    || outcome === 'failed';
+}
+
 function agentName(event: OtelTraceEvent): string {
   return content(attrs(event)['pi.subagent.name']) ||
     String(event.name || '').replace(/^agent\./, '') ||
@@ -387,6 +424,7 @@ export function aggregatePiAgentTraceEvents(
     (a, b) => (a.startTimeMs || Date.parse(a.receivedAt) || 0) - (b.startTimeMs || Date.parse(b.receivedAt) || 0),
   );
   const rootAgentEvents = sortedAgents.slice(0, 1);
+  const terminalAgent = rootAgentEvents.find(isTerminalAgentEvent);
   const startCandidates = rootAgentEvents.length
     ? rootAgentEvents.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now())
     : ordered.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now());
@@ -454,7 +492,7 @@ export function aggregatePiAgentTraceEvents(
     final_result: finalResult,
     failures,
     timestamp: new Date(startedAt),
-    trace_completed_at: new Date(endedAt),
+    trace_completed_at: terminalAgent ? new Date(eventEndMs(terminalAgent)) : undefined,
     // Pi 事件是从 task 全量 spool 重聚合的规范快照。显式标记允许历史 Generic 污染
     // 被更小但更正确的树替换，而不是被单调合并永久保留。
     session_merge_strategy: 'snapshot-replace',

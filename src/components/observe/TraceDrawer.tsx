@@ -16,6 +16,8 @@ interface SessionPayload {
     error?: string;
 }
 
+const TRACE_DRAWER_REFRESH_MS = 5_000;
+
 export interface TraceDrawerExecutionMeta {
     taskId: string;
     query?: string;
@@ -50,13 +52,39 @@ export default function TraceDrawer({ open, execution, onClose }: TraceDrawerPro
             setLoading(false);
             return;
         }
+        let cancelled = false;
+        let inFlight = false;
         const taskId = execution.taskId;
-        setLoading(true);
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
-            .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
-            .then((j: SessionPayload) => setSession(j))
-            .catch(() => setSession({ error: 'Network error' }))
-            .finally(() => setLoading(false));
+        const load = async (silent = false) => {
+            if (inFlight) return;
+            inFlight = true;
+            if (!silent) setLoading(true);
+            try {
+                const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`, { cache: 'no-store' });
+                if (!response.ok) {
+                    if (!cancelled && !silent) setSession({ error: 'Fetch failed' });
+                    return;
+                }
+                const payload = await response.json();
+                if (!cancelled) setSession(payload);
+            } catch {
+                if (!cancelled && !silent) setSession({ error: 'Network error' });
+            } finally {
+                inFlight = false;
+                if (!cancelled && !silent) setLoading(false);
+            }
+        };
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible') void load(true);
+        };
+        void load(false);
+        const timer = window.setInterval(refreshWhenVisible, TRACE_DRAWER_REFRESH_MS);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
     }, [open, execution?.taskId]);
 
     // ESC to close
@@ -301,7 +329,13 @@ function Body({
                 </div>
             )}
             {!loading && session && !session.error && ((session.interactions?.length || 0) > 0 || (session.langfuseTraceNodes?.length || 0) > 0) && (
-                <AgentTraceView interactions={session.interactions || []} framework={framework} langfuseTraceNodes={session.langfuseTraceNodes} />
+                <AgentTraceView
+                    key={taskId}
+                    interactions={session.interactions || []}
+                    framework={framework}
+                    langfuseTraceNodes={session.langfuseTraceNodes}
+                    traceIdentity={taskId}
+                />
             )}
             {!loading && session && !session.error && (!session.interactions || session.interactions.length === 0) && (!session.langfuseTraceNodes || session.langfuseTraceNodes.length === 0) && (
                 <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 12 }}>

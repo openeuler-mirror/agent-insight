@@ -41,6 +41,8 @@ function badge(status: string) {
   return 'ai-badge-gr';
 }
 
+const GOAL_PLUS_REFRESH_MS = 5_000;
+
 export default function GoalPlusPage() {
   const { user } = useAuth();
   const { locale } = useLocale();
@@ -53,18 +55,40 @@ export default function GoalPlusPage() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
+    let inFlight = false;
     const suffix = `user=${encodeURIComponent(user)}`;
-    Promise.all([
-      apiFetch(`/api/observe/goal-plus/sources?${suffix}`).then(response => response.json().then(body => ({ response, body }))),
-      apiFetch(`/api/observe/goal-plus/goals?${suffix}${sourceId ? `&sourceId=${encodeURIComponent(sourceId)}` : ''}`).then(response => response.json().then(body => ({ response, body }))),
-    ]).then(([sourceResult, goalResult]) => {
-      if (!sourceResult.response.ok || !goalResult.response.ok) throw new Error(sourceResult.body.error || goalResult.body.error || 'Request failed');
-      if (cancelled) return;
-      setSources(Array.isArray(sourceResult.body.sources) ? sourceResult.body.sources : []);
-      setGoals(Array.isArray(goalResult.body.goals) ? goalResult.body.goals : []);
-    }).catch(reason => !cancelled && setError(reason.message || String(reason)))
-      .finally(() => !cancelled && setLoading(false));
-    return () => { cancelled = true; };
+    const load = async (silent = false) => {
+      if (inFlight) return;
+      inFlight = true;
+      if (!silent) setLoading(true);
+      try {
+        const [sourceResult, goalResult] = await Promise.all([
+          apiFetch(`/api/observe/goal-plus/sources?${suffix}`, { cache: 'no-store' }).then(response => response.json().then(body => ({ response, body }))),
+          apiFetch(`/api/observe/goal-plus/goals?${suffix}${sourceId ? `&sourceId=${encodeURIComponent(sourceId)}` : ''}`, { cache: 'no-store' }).then(response => response.json().then(body => ({ response, body }))),
+        ]);
+        if (!sourceResult.response.ok || !goalResult.response.ok) throw new Error(sourceResult.body.error || goalResult.body.error || 'Request failed');
+        if (cancelled) return;
+        setSources(Array.isArray(sourceResult.body.sources) ? sourceResult.body.sources : []);
+        setGoals(Array.isArray(goalResult.body.goals) ? goalResult.body.goals : []);
+        setError('');
+      } catch (reason) {
+        if (!cancelled && !silent) setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        inFlight = false;
+        if (!cancelled && !silent) setLoading(false);
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void load(true);
+    };
+    void load(false);
+    const timer = window.setInterval(refreshWhenVisible, GOAL_PLUS_REFRESH_MS);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [sourceId, user]);
 
   const totals = useMemo(() => ({

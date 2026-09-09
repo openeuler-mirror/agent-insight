@@ -14,7 +14,7 @@
 | Date | 2026-09-03 12:16:33 +0800 |
 | Author | openeuler-ci-bot |
 | Subject | `!377 刷新架构图中Agent可靠性描述，区分事前、事中、事后三阶段` |
-| Working tree overlay | 当前工作树新增 Goal Plus 只读观测覆盖层，并补充 Pi/Codex Trace 来源 profile：服务端只配置并去重既有 native collector 依赖，不安装或修改 Goal Plus 本体；`.gp` watcher 是不影响 native Trace 就绪状态的可选语义增强。Pi 主对话通过 attached workspace 的精确 project-session 目录和 native-entry/goal marker 定向补采，所有 Pi worker 继续从 `.gp` agent-session metadata 导入；native message/thinking/tool 正文只脱敏、不固定截断，单条大事件可超过 batch byte target 独立上传。上述 overlay 不修改 Pi/Codex 原有实时 collector、Execution ID 或原生执行树。 |
+| Working tree overlay | 当前工作树新增 Goal Plus 只读观测覆盖层，并补充 Pi/Codex Trace 来源 profile：服务端只配置并去重既有 native collector 依赖，不安装或修改 Goal Plus 本体；`.gp` watcher 是不影响 native Trace 就绪状态的可选语义增强。Pi 主对话通过 attached workspace 的精确 project-session 目录和 native-entry/goal marker 定向补采，所有 Pi worker 继续从 `.gp` agent-session metadata 导入；native message/thinking/tool 正文只脱敏、不固定截断，单条大事件可超过 batch byte target 独立上传。Agent Insight 启动路径在服务就绪后幂等 ensure 已登记 source 的 watcher、清理失效 PID，并优先完成 native import 后再上传语义批次；Pi adapter 仅按根 Agent 终态完成 Execution，相关列表与详情在可见页每 5 秒静默刷新并保留树交互状态。上述 overlay 不修改 Pi/Codex 原有实时 collector、Execution ID 或原生执行树。 |
 
 **如何更新：** `git diff 4e7d221 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 

@@ -25,6 +25,29 @@ load_agent_insight_env() {
   fi
 }
 
+ensure_goal_plus_watcher() {
+  local collector_source="$(pwd)/scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs"
+  local collector_config="$AGENT_INSIGHT_HOME/collectors/goal-plus/config.json"
+  local interval_ms="${AGENT_INSIGHT_GOAL_PLUS_INTERVAL_MS:-5000}"
+  local result=""
+
+  if [ ! -f "$collector_config" ]; then
+    return 0
+  fi
+  if [ ! -f "$collector_source" ]; then
+    echo "⚠️  Goal Plus watcher was not checked: collector source is missing at $collector_source"
+    return 0
+  fi
+
+  echo "Ensuring Goal Plus watcher is running..."
+  if result=$(node "$collector_source" ensure --home "$AGENT_INSIGHT_HOME" --config "$collector_config" --interval-ms "$interval_ms" 2>&1); then
+    echo "$result"
+  else
+    echo "⚠️  Goal Plus watcher could not be started; Agent Insight remains available."
+    echo "$result"
+  fi
+}
+
 # Auto-initialize unified environment and data directory
 if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
   echo "No ~/.agent-insight/.env found. Initializing from .env.example..."
@@ -261,4 +284,5 @@ echo "PID: ${NEW_PID:-$(find_pid_on_port $PORT | tr '\n' ' ')}"
 echo "Standalone: $STANDALONE_DIR/server.js"
 echo "Log file: server.log"
 echo "URL: http://localhost:$PORT"
+ensure_goal_plus_watcher
 echo "-----------------------------------"

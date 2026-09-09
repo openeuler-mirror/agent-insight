@@ -69,7 +69,7 @@ gpsnap_ + sha256(sourceId \u001f kind \u001f objectKey \u001f contentHash)
 
 组合安装继续调用既有 Pi/Codex 子安装器；不得复制或修改 native collector core、adapter、OTLP endpoint、Execution ID 和父子树。宿主 profile 的主就绪状态由所选 Pi/Codex native collector 决定：任一所需 native collector 未完成时为 `NOT READY`；全部完成时为 `READY`。Goal Plus semantic collector 在 native collector 之后作为可选增强安装，缺少 `.gp` 或其安装、scan、watcher 失败只单独报告 semantic enrichment 状态，不降低 native Trace 的 `READY`，也不回滚已安装的 native collector。无宿主的 legacy semantic-only 命令继续沿用原 `PARTIAL` 口径。
 
-Goal Plus 后台 watcher 使用 collector managed directory 中独立的 PID、锁和日志。`start` 要求至少一个已 attach source，重复调用幂等；`stop` 和卸载只处理 Goal Plus watcher，不接管 Pi/Codex 进程。
+Goal Plus 后台 watcher 使用 collector managed directory 中独立的 PID、锁和日志。`start` 要求至少一个已 attach source，重复调用幂等；`ensure` 对未配置或无 source 返回可诊断的跳过结果，对失效 PID 则清理并重启。`develop_start.sh`、`start.sh` 和 npm CLI 在 Agent Insight 服务就绪后使用当前发布版本的 collector 执行 `ensure`，因此机器或主服务重启后无需手工恢复 watcher；失败仅输出告警，不阻断主服务，也不接管 Pi/Codex 进程。单次 scan 先完成 native Pi session 的 durable import/upload，再尝试可重试的 semantic upload，避免语义端点超时阻塞主/worker Trace 入队。
 
 ## 完整度与保真度
 
@@ -81,6 +81,8 @@ completeness 是独立状态机：
 - `unsupported`：关键 source schema 超出支持范围。
 
 `timingFidelity` 使用 `exact/mixed/derived/summary-only`，semantic snapshot 的 `contentFidelity` 使用 `bounded/metadata-only/mixed`。它们不能被成功/失败状态替代，也不能把缺失数据显示为零。Pi passive importer 的 canonical session 固定为 `goal-plus:<sourceId>:<agentSessionId>`；主会话的 agent session ID 为 `main:<goalId>:<nativeSessionId>:<markerId>`。continuation 重建同一 Execution；低 authority 的重复 link 不进入默认原生 Trace 列表。
+
+Pi adapter 只在根 Agent 带有可靠终态信号时设置 `trace_completed_at`；Goal Plus passive snapshot 还要求明确 terminal state 或 exit code，增量 LLM/Tool snapshot 保持 running。通用 Trace 列表、Goal Plus 列表/详情和 Trace drawer 在页面可见时以 5 秒周期静默重取；同一 Execution 的 tree 更新必须保留用户的选择和展开状态。
 
 Pi passive importer 将 native session 作为正文权威源：保留所有 assistant `thinking`/`text`、后续 user/custom message、tool 参数和 tool result，只执行共享 secret/path 脱敏，不设置固定 2000 字符或二次字符截断。上传器的 batch byte 值只是多事件组包目标；第一条事件超过该值时仍读取完整换行记录并单独上传，成功后才移动 checkpoint。aborted/cancelled/blocked 或非零 exit code 会在 Agent event 和 Execution failures 中保留失败证据。
 

@@ -19,7 +19,7 @@ const {
   validateGoalPlusRoot,
 } = require("./lib/source-registry.cjs");
 
-const COLLECTOR_VERSION = "1.2.0";
+const COLLECTOR_VERSION = "1.2.1";
 const MAX_BATCH_SNAPSHOTS = 100;
 const MAX_BATCH_BYTES = 3.5 * 1024 * 1024;
 
@@ -66,6 +66,7 @@ async function watcherStatus(config) {
     running,
     ready: Boolean(config.apiKey) && registry.sources.length > 0 && running,
     pid: running ? record.pid : undefined,
+    stalePid: record && !running ? record.pid : undefined,
     startedAt: running ? record.startedAt : undefined,
     logPath: paths.logPath,
   };
@@ -108,6 +109,8 @@ async function startWatcher(config, options = {}) {
         "watch",
         "--config",
         config.configPath,
+        "--home",
+        config.homeDir,
         "--interval-ms",
         String(options.intervalMs || 5000),
       ], {
@@ -126,6 +129,22 @@ async function startWatcher(config, options = {}) {
   } finally {
     await fsp.unlink(paths.lockPath).catch(() => undefined);
   }
+}
+
+async function ensureWatcher(config, options = {}) {
+  const previous = await watcherStatus(config);
+  if (!previous.configured) {
+    return { ...previous, ensured: false, reason: "not_configured" };
+  }
+  if (previous.sourceCount === 0) {
+    return { ...previous, ensured: false, reason: "no_sources" };
+  }
+  const current = await startWatcher(config, options);
+  return {
+    ...current,
+    ensured: true,
+    recoveredStalePid: previous.stalePid,
+  };
 }
 
 async function stopWatcher(config) {
@@ -237,15 +256,17 @@ async function scanSource(source, config, options = {}) {
   const scanCompletedAt = new Date().toISOString();
   const batches = buildSemanticBatches(source, parsed, scanStartedAt, scanCompletedAt);
   for (const batch of batches) await enqueueSemanticBatch(batch, { apiKey: config.apiKey, homeDir: config.homeDir });
-  const semanticUpload = options.upload === false
-    ? { uploadedBatches: 0, uploadedSnapshots: 0 }
-    : await uploadSemanticBatches({ apiKey: config.apiKey, homeDir: config.homeDir, endpoint: config.semanticEndpoint });
-  const native = await importPiSessions(source.root, parsed.piSessions, {
+  const nativeImporter = options.nativeImporter || importPiSessions;
+  const semanticUploader = options.semanticUploader || uploadSemanticBatches;
+  const native = await nativeImporter(source.root, parsed.piSessions, {
     apiKey: config.apiKey,
     homeDir: config.homeDir,
     endpoint: config.otlpEndpoint,
     upload: options.upload,
   });
+  const semanticUpload = options.upload === false
+    ? { uploadedBatches: 0, uploadedSnapshots: 0 }
+    : await semanticUploader({ apiKey: config.apiKey, homeDir: config.homeDir, endpoint: config.semanticEndpoint });
   return {
     sourceId: source.sourceId,
     snapshots: parsed.snapshots.length,
@@ -349,6 +370,10 @@ async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`${JSON.stringify(await startWatcher(config, options), null, 2)}\n`);
     return;
   }
+  if (options.command === "ensure") {
+    process.stdout.write(`${JSON.stringify(await ensureWatcher(config, options), null, 2)}\n`);
+    return;
+  }
   if (options.command === "stop") {
     process.stdout.write(`${JSON.stringify(await stopWatcher(config), null, 2)}\n`);
     return;
@@ -379,11 +404,12 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   process.stdout.write([
-    "Usage: goal-plus-collector <attach|detach|list|scan|watch|start|stop|status|self-check> [path|sourceId]",
+    "Usage: goal-plus-collector <attach|detach|list|scan|watch|start|ensure|stop|status|self-check> [path|sourceId]",
     "  attach <.gp> [--label name]",
     "  scan [sourceId|.gp] [--no-upload]",
     "  watch [sourceId|.gp] [--interval-ms 5000]",
     "  start [--interval-ms 5000]",
+    "  ensure [--interval-ms 5000]",
     "  stop",
     "  status",
   ].join("\n") + "\n");
@@ -399,6 +425,7 @@ if (require.main === module) {
 module.exports = {
   COLLECTOR_VERSION,
   buildSemanticBatches,
+  ensureWatcher,
   loadConfig,
   main,
   parseArgs,

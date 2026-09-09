@@ -35,7 +35,7 @@ goal-plus-collector start --interval-ms 5000
 goal-plus-collector status
 ```
 
-`attach` 对同一个 canonical root 幂等；`list` 查看已登记 source，`detach <sourceId>` 只移除 Agent Insight 的登记，不删除 `.gp`。先执行一次 `scan` 可检查语义对象、Pi session 和上传诊断，再使用 `start` 启动独立后台 watcher。`start` 重复执行不会创建第二个进程，`stop` 停止它；日志和 PID 只保存在 Goal Plus collector 的 managed directory。需要前台观察时仍可使用 `watch --interval-ms 5000`，按 Ctrl+C 正常停止。
+`attach` 对同一个 canonical root 幂等；`list` 查看已登记 source，`detach <sourceId>` 只移除 Agent Insight 的登记，不删除 `.gp`。先执行一次 `scan` 可检查语义对象、Pi session 和上传诊断，再使用 `start` 启动独立后台 watcher。`start` 重复执行不会创建第二个进程，`stop` 停止它；日志和 PID 只保存在 Goal Plus collector 的 managed directory。Agent Insight 的 `develop_start.sh`、`start.sh` 和 npm CLI 启动路径会在服务就绪后执行幂等的 `ensure`：已登记 source 时自动恢复因机器或服务重启留下的失效 watcher，未配置或尚未 attach 时安静跳过，恢复失败只告警而不会阻止主服务启动。需要前台观察时仍可使用 `watch --interval-ms 5000`，按 Ctrl+C 正常停止。
 
 没有 attach 任何 `.gp` 时，`start` 和 `self-check` 不会报告语义增强 ready，但只要所选 Pi/Codex 原生采集器安装成功，Goal Plus native Trace 仍显示 `READY`。语义 collector 安装、scan 或 watcher 失败会单独显示为可选增强不可用，不会把 native Trace 降为 `PARTIAL`，也不会回滚或停止 Pi/Codex 原生采集器。只有所选宿主的原生采集器未安装成功时，Goal Plus native Trace 才显示 `NOT READY`。
 
@@ -49,6 +49,8 @@ goal-plus-collector status
 - 数据质量：分别显示 completeness、timing fidelity 和 content fidelity。
 
 `collecting` 表示 Goal/run 尚未终态或本轮扫描 checkpoint 尚未追上；`complete` 表示预期语义、结算证据和 native Execution 已齐；`partial` 表示终态但仍有明确缺项；`unsupported` 表示观察到不支持的关键 schema。完整度不等同于执行成功，失败或 selection blocked 也可以完整。
+
+Goal Plus 列表、详情和已打开的 Trace 会在浏览器页面可见时每 5 秒静默刷新；通用链路追踪列表采用相同刷新周期。运行中的 Pi/Goal Plus Trace 只有收到根 Agent 的明确终态后才显示完成，刷新期间会保留当前选中的节点和展开状态。collector 扫描、OTLP 入队和服务端消费仍会带来数秒级延迟，因此这里的“实时”是持续增量可见，而不是逐 token 推送。
 
 Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的每个 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage，不因 worker 是 candidate、work item 或 final checker 而漏采。Pi 中输入 `/goal-plus` 的主对话也会从当前 attached 工作区对应的 Pi session 目录定向补采，并按 Goal Plus invocation 分段；它不会扫描其他工作区或仅按时间猜测。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；Goal Plus 可使用 host metadata 中的 Codex conversation + turn 构造既有 execution ID，且只匹配 `framework=codex`。关联仍只使用 native/session/execution ID 或唯一的确定性任务名。
 

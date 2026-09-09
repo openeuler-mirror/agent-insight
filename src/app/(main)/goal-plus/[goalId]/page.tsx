@@ -18,6 +18,8 @@ type GoalDetail = { goalPlusId: string; boundedGoal?: string | null; status: str
 
 type Tab = 'overview' | 'candidates' | 'trace' | 'quality';
 
+const GOAL_PLUS_REFRESH_MS = 5_000;
+
 function GoalPlusDetailInner() {
   const { user } = useAuth();
   const { locale } = useLocale();
@@ -31,14 +33,36 @@ function GoalPlusDetailInner() {
 
   useEffect(() => {
     if (!user || !sourceId || !params.goalId) return;
+    let cancelled = false;
+    let inFlight = false;
     const query = `sourceId=${encodeURIComponent(sourceId)}&user=${encodeURIComponent(user)}`;
-    apiFetch(`/api/observe/goal-plus/goals/${encodeURIComponent(params.goalId)}?${query}`)
-      .then(async response => {
+    const load = async (silent = false) => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const response = await apiFetch(`/api/observe/goal-plus/goals/${encodeURIComponent(params.goalId)}?${query}`, { cache: 'no-store' });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Request failed');
+        if (cancelled) return;
         setGoal(body.goal);
-      })
-      .catch(reason => setError(reason.message || String(reason)));
+        setError('');
+      } catch (reason) {
+        if (!cancelled && !silent) setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        inFlight = false;
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void load(true);
+    };
+    void load(false);
+    const timer = window.setInterval(refreshWhenVisible, GOAL_PLUS_REFRESH_MS);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [params.goalId, sourceId, user]);
 
   const traceLinks = useMemo(() => {

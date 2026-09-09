@@ -10,7 +10,15 @@ const require = createRequire(import.meta.url);
 const { parseGoalPlusRoot, piProjectSessionDir } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
 const { messageText, parsePiSession } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
 const { attachSource, loadRegistry } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
-const { buildSemanticBatches, loadConfig, startWatcher, stopWatcher, watcherStatus } = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
+const {
+  buildSemanticBatches,
+  ensureWatcher,
+  loadConfig,
+  scanSource,
+  startWatcher,
+  stopWatcher,
+  watcherStatus,
+} = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
 const { enqueueSemanticBatch, uploadSemanticBatches } = require('../scripts/agent-trace-collectors/goal-plus/lib/semantic-spool.cjs');
 const fixture = path.join(process.cwd(), 'test', 'fixtures', 'goal-plus', '.gp');
 
@@ -68,11 +76,44 @@ test('Goal Plus managed watcher stays stopped and rejects startup without attach
   assert.equal(status.ready, false);
   assert.equal(status.sourceCount, 0);
   assert.deepEqual(status.hosts, ['pi']);
+  const ensured = await ensureWatcher(config);
+  assert.equal(ensured.ensured, false);
+  assert.equal(ensured.reason, 'no_sources');
   const lockPath = path.join(path.dirname(configPath), 'runtime', 'watcher.lock');
   await fsp.mkdir(path.dirname(lockPath), { recursive: true });
   await fsp.writeFile(lockPath, '2147483647\n');
   await assert.rejects(() => startWatcher(config), /No Goal Plus sources are attached/);
   await assert.rejects(() => fsp.access(lockPath));
+});
+
+test('Goal Plus watcher ensure recovers a stale PID after service restart', async t => {
+  if (process.platform === 'win32') return t.skip('detached process signaling differs on Windows');
+  const { temporary, root } = await copiedFixture(t);
+  const homeDir = path.join(temporary, 'home');
+  const configPath = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus', 'config.json');
+  const runtimeDir = path.join(path.dirname(configPath), 'runtime');
+  await fsp.mkdir(runtimeDir, { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify({
+    apiKey: 'synthetic',
+    hosts: ['pi'],
+    semanticEndpoint: 'http://127.0.0.1:9/semantic',
+    otlpEndpoint: 'http://127.0.0.1:9/traces',
+  }));
+  await attachSource(root, { homeDir });
+  await fsp.writeFile(path.join(runtimeDir, 'watcher.json'), JSON.stringify({
+    pid: 2_147_483_647,
+    startedAt: '2026-09-07T00:00:00.000Z',
+    intervalMs: 60_000,
+  }));
+  const config = await loadConfig({ homeDir, configPath });
+  t.after(() => stopWatcher(config));
+
+  const ensured = await ensureWatcher(config, { intervalMs: 60_000 });
+  assert.equal(ensured.ensured, true);
+  assert.equal(ensured.running, true);
+  assert.equal(ensured.recoveredStalePid, 2_147_483_647);
+  assert.notEqual(ensured.pid, 2_147_483_647);
+  assert.equal((await watcherStatus(config)).running, true);
 });
 
 test('Goal Plus managed watcher starts idempotently and stops without touching native collectors', async t => {
@@ -180,6 +221,35 @@ test('semantic batches keep limits and publish scan checkpoint on the final batc
   assert.equal(batches[0].snapshots.length, 100);
   assert.equal(batches[0].source.scanCompletedAt, undefined);
   assert.equal(batches[1].source.scanCompletedAt, '2026-09-03T00:00:01.000Z');
+});
+
+test('Goal Plus scan imports native Pi sessions before attempting semantic upload', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const order: string[] = [];
+  const config = {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    semanticEndpoint: 'http://example.invalid/semantic',
+    otlpEndpoint: 'http://example.invalid/traces',
+  };
+  const source = {
+    sourceId: 'gpsrc_fixture',
+    root,
+    workspaceFingerprint: `sha256:${'a'.repeat(64)}`,
+  };
+
+  await scanSource(source, config, {
+    nativeImporter: async () => {
+      order.push('native');
+      return { imported: 1, uploadedEvents: 3, diagnostics: [] };
+    },
+    semanticUploader: async () => {
+      order.push('semantic');
+      return { uploadedBatches: 1, uploadedSnapshots: 1 };
+    },
+  });
+
+  assert.deepEqual(order, ['native', 'semantic']);
 });
 
 test('semantic uploader retries transient responses before acknowledging', async t => {
