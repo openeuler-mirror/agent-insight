@@ -7,11 +7,11 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useTheme } from '@/lib/client/theme-context';
 import { useLocale } from '@/lib/client/locale-context';
+import { NH_DEMO } from '@/lib/evaluation-harness/demo-profile';
 import { useSidebar } from '@/lib/client/sidebar-context';
 import { useUsageAccess } from '@/lib/usage-analytics/use-usage-access';
 import {
     getSidebarNavigation,
-    demoNavigation,
     isSidebarItemActive,
     type SidebarIconKey,
     type SidebarNavItem,
@@ -65,7 +65,7 @@ export function AppSidebar() {
     const [showUserMenu, setShowUserMenu] = useState(false);
     const usageAccess = useUsageAccess();
     const showUsage = usageAccess.enabled && usageAccess.isAdmin;
-    const navigation = demoNavigation;
+    const navigation = useMemo(() => getSidebarNavigation(showUsage, NH_DEMO), [showUsage]);
     const [expandedTrees, setExpandedTrees] = useState<Set<string>>(
         new Set(['observe', 'evaluation', 'continuous-optimization', 'config']),
     );
@@ -242,19 +242,6 @@ function NavTree({
     const hasChildren = !!(item.children && item.children.length > 0);
     const active = isSidebarItemActive(item, pathname, basePath);
     const open = expanded.has(item.key) || active;
-
-    if (item.presentation === 'section') {
-        return (
-            <section aria-labelledby={`nav-${item.key}`} style={{ marginTop: 18 }}>
-                <h2 id={`nav-${item.key}`} style={{ padding: '0 10px', marginBottom: 6, fontSize: 10.5, fontWeight: 500, color: 'var(--foreground-muted)' }}>
-                    {item.label || t(item.labelKey)}
-                </h2>
-                {item.children?.map(child => (
-                    <NavTree key={child.key} item={child} pathname={pathname} expanded={expanded} onToggle={onToggle} t={t} depth={0} />
-                ))}
-            </section>
-        );
-    }
 
     if (item.href && !hasChildren) {
         return <LeafLink item={item} active={active} t={t} depth={depth} />;

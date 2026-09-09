@@ -1,5 +1,7 @@
 'use client';
-import DemoOverview from '@/components/evaluation-harness/DemoOverview';
+import DemoOverview, { type EvaluationOverviewSource } from '@/components/evaluation-harness/DemoOverview';
+import { NH_DEMO } from '@/lib/evaluation-harness/demo-profile';
+import Link from 'next/link';
 
 // 仪表盘 · 舰队监控大盘。
 // 结构（对齐《监控大盘需求文档》REQ-FW）：健康总览 KPI 常驻 + 7 维度页签 + 懒加载 + 告警角标。
@@ -117,7 +119,8 @@ const fmtSec = (n: number) => `${n}s`;
 const fmtCost = (n: number) => (n < 1 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
 const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
-function DashboardPage() {
+function DashboardPage({ evaluation }: { evaluation?: EvaluationOverviewSource }) {
+    const evaluationMode = Boolean(evaluation);
     const { user } = useAuth();
     const [win, setWin] = useState<'1d' | '1w' | '1m'>('1w');
     const [tab, setTab] = useState<TabKey>('trends');
@@ -134,7 +137,7 @@ function DashboardPage() {
     const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
 
     useEffect(() => {
-        if (!user) return;
+        if (!user || evaluationMode) return;
         let live = true;
         setTrends(null); setTErr(null); setBd(null); setReliability(null);
         setPlatformFilter("all"); setAgentFilter("all");
@@ -143,10 +146,10 @@ function DashboardPage() {
             .then((d) => { if (live) setTrends(d); })
             .catch((e) => { if (live) setTErr(e.message || "取数失败"); });
         return () => { live = false; };
-    }, [win, user]);
+    }, [win, user, evaluationMode]);
 
     useEffect(() => {
-        if (tab === "trends" || tab === "reliability" || bd || !user) return;
+        if (evaluationMode || tab === "trends" || tab === "reliability" || bd || !user) return;
         let live = true;
         setBLoading(true); setBErr(null);
         apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
@@ -155,10 +158,10 @@ function DashboardPage() {
             .catch((e) => { if (live) setBErr(e.message || "取数失败"); })
             .finally(() => { if (live) setBLoading(false); });
         return () => { live = false; };
-    }, [tab, win, bd, user]);
+    }, [tab, win, bd, user, evaluationMode]);
 
     useEffect(() => {
-        if (tab !== "reliability" || !user) return;
+        if (evaluationMode || tab !== "reliability" || !user) return;
         let live = true;
         const params = new URLSearchParams({ window: win, user });
         if (platformFilter !== "all") params.set("platform", platformFilter);
@@ -170,11 +173,15 @@ function DashboardPage() {
             .catch((e) => { if (live) setRErr(e.message || "取数失败"); })
             .finally(() => { if (live) setRLoading(false); });
         return () => { live = false; };
-    }, [tab, win, user, platformFilter, agentFilter]);
+    }, [tab, win, user, platformFilter, agentFilter, evaluationMode]);
 
     const refreshRef = React.useRef<() => void>(() => { });
     refreshRef.current = () => {
         if (!user) return;
+        if (evaluation) {
+            void evaluation.refresh().catch((error) => evaluation.setError(error.message || '取数失败'));
+            return;
+        }
         apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((d) => { if (d) setTrends(d); })
@@ -212,8 +219,8 @@ function DashboardPage() {
                 position: 'sticky', top: 0, zIndex: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
                 padding: '14px 22px', borderBottom: '1px solid var(--border)', background: 'var(--background)',
             }}>
-                <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--foreground)' }}>仪表盘</span>
-                <Info text="成本按模型单价加权（单位 USD）；成功/错误为硬错误口径（工具 state / failures），软错误（judge）未叠加；端到端时延为 wall-time。数据源：真实 Execution 聚合。" />
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--foreground)' }}>{evaluationMode ? '评测总览' : '仪表盘'}</span>
+                <Info text={evaluationMode ? '今日实验、运行中和执行失败为当前账号全部实验统计；近期趋势和失败类型来自最近 100 次实验，具体评分与证据在实验详情中查看。' : '成本按模型单价加权（单位 USD）；成功/错误为硬错误口径（工具 state / failures），软错误（judge）未叠加；端到端时延为 wall-time。数据源：真实 Execution 聚合。'} />
                 <span style={{ flex: 1 }} />
                 <span style={{
                     fontSize: 11, color: 'var(--foreground-muted)', display: 'inline-flex', gap: 6, alignItems: 'center',
@@ -221,7 +228,7 @@ function DashboardPage() {
                 }}>
                     <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--success)' }} />实时 · 30s 刷新
                 </span>
-                <div style={{ display: 'flex', gap: 4, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 2 }}>
+                {evaluationMode ? <Link href="/experiments/new" className="ai-btn-s bg-primary text-primary-foreground">新建实验</Link> : <div style={{ display: 'flex', gap: 4, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 2 }}>
                     {WINDOWS.map((o) => (
                         <button key={o.key} onClick={() => setWin(o.key)} style={{
                             fontSize: 11.5, fontWeight: 600, padding: '5px 11px', borderRadius: 6, cursor: 'pointer', border: 'none',
@@ -229,10 +236,11 @@ function DashboardPage() {
                             color: win === o.key ? 'var(--primary-foreground, #fff)' : 'var(--foreground-secondary)',
                         }}>{o.label}</button>
                     ))}
-                </div>
+                </div>}
             </div>
 
             <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {evaluation ? <EvaluationOverview data={evaluation} /> : <>
                 {tErr && <ErrBox msg={tErr} />}
 
                 {/* 健康总览常驻 */}
@@ -284,12 +292,80 @@ function DashboardPage() {
                         )}
                     </>
                 )}
+                </>}
             </div>
             {selectedAgent && user && (
                 <AgentDetailDrawer name={selectedAgent} win={win} user={user} onClose={() => setSelectedAgent(null)} />
             )}
         </div>
     );
+}
+
+function EvaluationOverview({ data }: { data: EvaluationOverviewSource }) {
+    const colors = useThemeColors();
+    const { catalog, loaded, error, request, refresh, setError } = data;
+    const assets = catalog.assets.filter((asset) => !asset.archived);
+    const latest = assets.filter((asset, index, all) => all.findIndex((candidate) => candidate.kind === asset.kind && candidate.assetKey === asset.assetKey) === index);
+    const datasets = latest.filter((asset) => asset.kind === 'dataset');
+    const runs = catalog.runs.slice(0, 100);
+    const today = new Date().toLocaleDateString('zh-CN');
+    const metrics: KpiDisplay[] = [
+        { label: 'Agent', value: new Set(assets.filter((asset) => asset.kind === 'target' && asset.content.type === 'agent').map((asset) => asset.assetKey)).size, hint: '已接入的 Agent', group: '对象' },
+        { label: 'Skill', value: new Set(assets.filter((asset) => asset.kind === 'target' && asset.content.type === 'skill').map((asset) => asset.assetKey)).size, hint: '已接入的 Skill', group: '对象' },
+        { label: '评测数据集', value: datasets.length, hint: `${datasets.reduce((count, asset) => count + asset.content.cases.length, 0)} 个 Case · 最新可用版本`, group: '资源' },
+        { label: '今日实验', value: catalog.statistics?.todayCount ?? runs.filter((run) => new Date(run.createdAt).toLocaleDateString('zh-CN') === today).length, hint: '今日创建的实验', group: '实验' },
+        { label: '运行中', value: catalog.statistics?.runningCount ?? runs.filter((run) => run.status === 'running').length, hint: '当前正在执行', group: '实验' },
+        { label: '执行失败', value: catalog.statistics?.failedCount ?? runs.filter((run) => run.status === 'failed').length, hint: '执行异常的实验', group: '实验', tone: 'error' },
+    ];
+    const trend = runs.filter((run) => run.status === 'done' && typeof run.summary?.score === 'number').reverse().map((run, index) => ({ label: String(index + 1), name: run.name, score: run.summary.score }));
+    const failures = new Map<string, number>();
+    for (const run of runs) {
+        for (const [name, cluster] of Object.entries(run.summary?.clusters || {}) as Array<[string, { caseIds: string[] }]>) {
+            failures.set(name, (failures.get(name) || 0) + cluster.caseIds.length);
+        }
+    }
+    const failureRows = [...failures].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([name, value]) => ({ name, value }));
+    const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', color: 'var(--foreground-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+    const td: React.CSSProperties = { padding: '9px 10px', borderBottom: '1px solid var(--border)', color: 'var(--foreground-secondary)' };
+    const statusLabel = (status: string) => ({ done: '已完成', running: '运行中', failed: '执行异常', cancelled: '已终止' }[status] || '待执行');
+    return <>
+        {error && <ErrBox msg={error} />}
+        {!loaded ? (!error && <Placeholder text="加载中…" />) : !assets.length ? <Panel title="开始评测">
+            <p style={{ padding: '4px 4px 12px', fontSize: 13, color: 'var(--foreground-secondary)' }}>当前账号还没有评测对象。先读取独立 Demo Agent 的对象与版本。</p>
+            <button className="ai-btn-s mb-3" onClick={() => request({ action: 'bootstrap' }).then(refresh).catch((failure) => setError(failure.message))}>读取演示目录</button>
+        </Panel> : <>
+            <KpiGrid metrics={metrics} />
+            <Grid>
+                <Panel title="近期实验通过率" hint="最近 100 次实验中已完成评分的实验">
+                    {trend.length ? <ResponsiveContainer width="100%" height={CHART_H}>
+                        <LineChart data={trend} margin={mgn}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={colors.border} vertical={false} />
+                            <XAxis dataKey="label" stroke={colors.fgMuted} tick={ax} interval="preserveStartEnd" />
+                            <YAxis width={52} stroke={colors.fgMuted} tick={ax} domain={[0, 100]} unit="%" />
+                            <Tooltip contentStyle={tipStyle} labelFormatter={(_, payload) => payload?.[0]?.payload?.name || ''} formatter={(value) => `${Number(value).toFixed(1)}%`} />
+                            <Line type="linear" dataKey="score" name="通过率" stroke={colors.primary} strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
+                        </LineChart>
+                    </ResponsiveContainer> : <Placeholder text="运行实验后显示实际评分" />}
+                </Panel>
+                <Panel title="常见失败类型" hint="最近 100 次实验的失败检查分布">
+                    {failureRows.length ? <HBar data={failureRows} color="var(--error)" /> : <Placeholder text="暂无失败检查项" />}
+                </Panel>
+                <Panel title="最近实验" hint="点击名称查看 Case 评分与执行轨迹" wide>
+                    {!runs.length ? <Placeholder text="暂无实验" /> : <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                            <thead><tr><th style={th}>实验名称</th><th style={th}>状态</th><th style={{ ...th, textAlign: 'right' }}>通过率</th><th style={th}>创建时间</th></tr></thead>
+                            <tbody>{runs.slice(0, 8).map((run) => <tr key={run.id}>
+                                <td style={td}><Link href={`/experiments/${run.id}`} style={{ color: 'var(--primary)', textDecoration: 'none' }}>{run.name}</Link></td>
+                                <td style={{ ...td, color: run.status === 'failed' ? 'var(--error)' : 'var(--foreground-secondary)' }}>{statusLabel(run.status)}</td>
+                                <td style={{ ...td, textAlign: 'right', fontFamily: 'var(--font-mono, monospace)' }}>{run.status === 'done' ? typeof run.summary?.score === 'number' ? `${run.summary.score.toFixed(1)}%` : '未评完整' : '—'}</td>
+                                <td style={{ ...td, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>{new Date(run.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                            </tr>)}</tbody>
+                        </table>
+                    </div>}
+                </Panel>
+            </Grid>
+        </>}
+    </>;
 }
 
 // ═══ 页签：② 系统趋势 ═════════════════════════════════════════════════════════
@@ -1146,26 +1222,27 @@ const CARDS: CardDef[] = [
     { label: '缓存命中率', key: 'cacheHitRate', fmt: fmtPct, goodWhenUp: true, tone: 'good', group: '模型' },
     { label: '总成本', key: 'totalCost', fmt: fmtCost, goodWhenUp: false, tone: 'latency', group: '模型' },
 ];
-function KpiGrid({ kpi }: { kpi: { current: Kpi; previous: Kpi } }) {
+interface KpiDisplay { label: string; value: number; hint: string; group: string; tone?: Tone }
+function KpiGrid({ kpi, metrics }: { kpi?: { current: Kpi; previous: Kpi }; metrics?: KpiDisplay[] }) {
     return (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-            {CARDS.map((cd) => <KpiCard key={cd.key} def={cd} cur={kpi.current[cd.key]} prev={kpi.previous[cd.key]} />)}
+            {metrics ? metrics.map((metric) => <KpiCard key={metric.label} def={{ label: metric.label, fmt: fmtInt, goodWhenUp: null, tone: metric.tone || 'count', group: metric.group }} cur={metric.value} hint={metric.hint} />) : kpi && CARDS.map((cd) => <KpiCard key={cd.key} def={cd} cur={kpi.current[cd.key]} prev={kpi.previous[cd.key]} />)}
         </div>
     );
 }
 const TONE_COLOR: Record<Tone, string> = { count: 'var(--foreground)', good: 'var(--success)', latency: 'var(--warning)', error: 'var(--error)' };
-function KpiCard({ def, cur, prev }: { def: CardDef; cur: number; prev: number }) {
+function KpiCard({ def, cur, prev, hint }: { def: Omit<CardDef, 'key'>; cur: number; prev?: number; hint?: string }) {
     return (
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--foreground-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ fontSize: 9, opacity: 0.7 }}>{def.group}</span>{def.label}
             </span>
             <span style={{ fontSize: 22, fontWeight: 800, color: TONE_COLOR[def.tone], fontFamily: 'var(--font-mono, monospace)', lineHeight: 1.1 }}>{def.fmt(cur ?? 0)}</span>
-            <Delta cur={cur} prev={prev} goodWhenUp={def.goodWhenUp} />
+            {hint ? <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{hint}</span> : <Delta cur={cur} prev={prev} goodWhenUp={def.goodWhenUp} />}
         </div>
     );
 }
-function Delta({ cur, prev, goodWhenUp }: { cur: number; prev: number; goodWhenUp: boolean | null }) {
+function Delta({ cur, prev, goodWhenUp }: { cur: number; prev?: number; goodWhenUp: boolean | null }) {
     if (prev == null || prev === 0) return <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>环比 —</span>;
     const d = ((cur - prev) / prev) * 100;
     const rounded = Math.round(d * 10) / 10;
@@ -1487,4 +1564,6 @@ const ax = { fontSize: 10 } as const;
 const lg = { fontSize: 11 } as const;
 const tipStyle: React.CSSProperties = { background: 'var(--card-bg)', border: '1px solid var(--border-dark)', borderRadius: 9, fontSize: 11, boxShadow: '0 6px 24px rgba(20,22,30,.12)' };
 
-export default function NHDemoPage(){return <DemoOverview/>;}
+export default function DashboardRoute() {
+    return NH_DEMO ? <DemoOverview>{(source) => <DashboardPage evaluation={source} />}</DemoOverview> : <DashboardPage />;
+}

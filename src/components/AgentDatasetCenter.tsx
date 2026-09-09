@@ -236,7 +236,7 @@ function DefaultFieldsTable({ fields }: { fields: DatasetDefaultFieldDef[] }) {
   );
 }
 
-export default function AgentDatasetCenter() {
+export default function AgentDatasetCenter({evaluationOnly = false}: {evaluationOnly?: boolean} = {}) {
   const router = useRouter();
   const { user, apiKey } = useAuth();
   const [showArchivedVersions, setShowArchivedVersions] = useState(false);
@@ -257,18 +257,24 @@ export default function AgentDatasetCenter() {
 
   const loadDatasets = useCallback(
     async (opts?: { isRefresh?: boolean }): Promise<AgentDatasetListItem[]> => {
-      if (!user) return [];
+      if (!user || (evaluationOnly && !apiKey)) return [];
       if (opts?.isRefresh) setRefreshing(true);
       else setLoading(true);
       setError('');
       let list: AgentDatasetListItem[] = [];
       try {
-        const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`);
-        const data = await res.json();
-        list = Array.isArray(data) ? data : [];
+        if (!evaluationOnly) {
+          const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`);
+          const data = await res.json();
+          list = Array.isArray(data) ? data : [];
+        }
         const versionRes = await apiFetch('/api/evaluation-harness', {headers:{'x-witty-api-key':apiKey || ''}});
-        if (versionRes.ok) {
-          const catalog = await versionRes.json();
+        const catalog = await versionRes.json();
+        if (!versionRes.ok) {
+          const message = catalog.error || '版本评测集加载失败，请重试';
+          if (evaluationOnly) throw new Error(message);
+          setError(message);
+        } else {
           list = [...list, ...datasetCards(catalog.assets || [], showArchivedVersions)];
         }
         setDatasets(list);
@@ -287,7 +293,7 @@ export default function AgentDatasetCenter() {
       }
       return list;
     },
-    [user, apiKey, showArchivedVersions],
+    [user, apiKey, showArchivedVersions, evaluationOnly],
   );
 
   useEffect(() => {
@@ -358,6 +364,7 @@ export default function AgentDatasetCenter() {
   };
 
   const openCreate = () => {
+    if (evaluationOnly) {router.push('/dataset/versioned-new');return;}
     startTransition(() => {
       setCreating(true);
       setDraft({ ...emptyDraft, datasetKind: 'ideal_output', cases: [] });
@@ -367,6 +374,7 @@ export default function AgentDatasetCenter() {
   };
 
   const openImport = () => {
+    if (evaluationOnly) {router.push('/dataset/versioned-new?tools=1');return;}
     setCreateMenuOpen(false);
     setTableActionError('');
     fileInputRef.current?.click();
@@ -429,7 +437,7 @@ export default function AgentDatasetCenter() {
     try {
       const res = await apiFetch(
         `/api/agent-datasets/${encodeURIComponent(item.id)}?user=${encodeURIComponent(user)}`,
-        { method: 'DELETE' },
+        { method: 'DELETE', headers: {'x-witty-api-key': apiKey || ''} },
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || '删除失败');
@@ -510,7 +518,7 @@ export default function AgentDatasetCenter() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ margin: '0 0 4px', color: 'var(--foreground)', fontSize: 20, fontWeight: 600 }}>数据集</h1>
         <p style={{ margin: 0, color: 'var(--foreground-muted)', fontSize: 12 }}>
-          卡片视图管理评测集；查看样例请点「查看」，修改定义请点「编辑」，评测流水线请在指标页发起。
+          {evaluationOnly ? '管理 Case 与评测集版本。点击卡片查看用例，修改后可发布新版本并发起实验。' : '卡片视图管理评测集；查看样例请点「查看」，修改定义请点「编辑」，评测流水线请在指标页发起。'}
         </p>
       </div>
 
@@ -558,7 +566,7 @@ export default function AgentDatasetCenter() {
             fontSize: 13,
           }}
         />
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+{!evaluationOnly && (        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {([
             ['all', '全部'],
             ['ideal_output', '理想输出'],
@@ -578,7 +586,7 @@ export default function AgentDatasetCenter() {
               {label}
             </button>
           ))}
-        </div>
+        </div>)}
         <label className="text-xs text-foreground-muted"><input type="checkbox" checked={showArchivedVersions} onChange={e=>setShowArchivedVersions(e.target.checked)}/> 显示已删除评测集</label>
         <div style={{ flex: '1 1 auto' }} />
         <button
@@ -627,7 +635,7 @@ export default function AgentDatasetCenter() {
                 </span>
                 新建评测集
               </button>
-              <button type="button" role="menuitem" className="ai-dataset-menu-item" onClick={() => router.push('/dataset/versioned-new')}>配置逐轮输入与规则</button>
+{!evaluationOnly && (              <button type="button" role="menuitem" className="ai-dataset-menu-item" onClick={() => router.push('/dataset/versioned-new')}>配置逐轮输入与规则</button>)}
               <button
                 type="button"
                 role="menuitem"
@@ -638,7 +646,7 @@ export default function AgentDatasetCenter() {
                 <span className="ai-dataset-menu-item__icon">
                   <IconUpload size={14} />
                 </span>
-                导入本地文件
+                {evaluationOnly ? '生成 / 导入' : '导入本地文件'}
               </button>
               <input
                 ref={fileInputRef}
@@ -811,13 +819,13 @@ export default function AgentDatasetCenter() {
                     <span style={{ color: 'var(--foreground-muted)' }}>
                       {stat.label}：<strong style={{ color: 'var(--foreground)' }}>{stat.value}</strong>
                     </span>
-                    <span style={{ color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>{evalHint}</span>
+                    {!evaluationOnly && <span style={{ color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>{evalHint}</span>}
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                    <span style={{ color: 'var(--foreground-muted)' }}>
+                    {!evaluationOnly && <span style={{ color: 'var(--foreground-muted)' }}>
                       最新通过率：<strong style={{ color: 'var(--foreground)' }}>—</strong>
                       <span style={{ fontSize: 11, marginLeft: 6, opacity: 0.85 }}>（与执行记录对齐后展示）</span>
-                    </span>
+                    </span>}
                     <span style={{ color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
                       更新 {formatRelativeZh(item.updatedAt)}
                     </span>

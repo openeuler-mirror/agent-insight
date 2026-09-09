@@ -1,16 +1,11 @@
 'use client';
-import Link from 'next/link';
-import {CartesianGrid,Line,LineChart,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
-import {AppTopBar} from '@/components/shell/AppTopBar';
-import {PageContainer} from '@/components/shell/PageContainer';
-import {useEvaluationCatalog} from './useEvaluationCatalog';
-import styles from './Workspace.module.css';
-export default function DemoOverview(){
- const {catalog,loaded,error,request,refresh,setError}=useEvaluationCatalog(),assets=catalog.assets.filter(a=>!a.archived),runs=catalog.runs;
- const latest=assets.filter((a,i,all)=>all.findIndex(b=>b.kind===a.kind&&b.assetKey===a.assetKey)===i);
- const today=new Date().toLocaleDateString('zh-CN');
- const metrics=[['Agent',new Set(assets.filter(a=>a.kind==='target'&&a.content.type==='agent').map(a=>a.assetKey)).size],['Skill',new Set(assets.filter(a=>a.kind==='target'&&a.content.type==='skill').map(a=>a.assetKey)).size],['评测集 / Case',latest.filter(a=>a.kind==='dataset').length+' / '+latest.filter(a=>a.kind==='dataset').reduce((n,a)=>n+a.content.cases.length,0)],['今日实验',catalog.statistics?.todayCount??runs.filter(r=>new Date(r.createdAt).toLocaleDateString('zh-CN')===today).length],['运行中',catalog.statistics?.runningCount??runs.filter(r=>r.status==='running').length],['执行失败',catalog.statistics?.failedCount??runs.filter(r=>r.status==='failed').length]];
- const trend=runs.filter(r=>r.status==='done'&&typeof r.summary?.score==='number').slice(0,8).reverse().map((r,i)=>({label:String(i+1),name:r.name,score:r.summary.score}));
- const failures=new Map<string,number>();for(const r of runs)for(const [type,cluster] of Object.entries(r.summary?.clusters||{}) as any)failures.set(type,(failures.get(type)||0)+cluster.caseIds.length);
- return <><AppTopBar title="评测总览"/><PageContainer className="space-y-5 px-6 py-5"><div className="flex items-center justify-between"><p className="text-sm text-foreground-muted">选择版本 → 执行 Case → 查看结果 → 修订回归</p><Link href="/experiments/new" className="ai-btn-s bg-primary text-primary-foreground">新建实验</Link></div>{error&&<p role="alert" className="text-error">{error}</p>}{!loaded?<p>加载中…</p>:!assets.length?<section className={styles.panel}><p>当前账号还没有评测对象。先读取独立 Demo Agent 的对象与版本。</p><button className="ai-btn-s mt-3" onClick={()=>request({action:'bootstrap'}).then(refresh).catch(e=>setError(e.message))}>读取演示目录</button></section>:<><div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">{metrics.map(([label,value])=><div key={label} className={styles.panel}><p className="text-sm text-foreground-muted">{label}</p><strong className="text-2xl">{value}</strong></div>)}</div><div className="grid gap-4 lg:grid-cols-2"><section className={styles.panel}><h2 className="mb-4 font-semibold">近期实验通过率</h2><div className="h-56">{trend.length?<ResponsiveContainer width="100%" height="100%"><LineChart data={trend}><CartesianGrid stroke="var(--border)" strokeDasharray="3 3"/><XAxis dataKey="label"/><YAxis domain={[0,100]} unit="%"/><Tooltip labelFormatter={(_,p:any)=>p?.[0]?.payload?.name||''}/><Line dataKey="score" name="通过率" stroke="var(--primary)" type="linear" isAnimationActive={false}/></LineChart></ResponsiveContainer>:<p>运行实验后显示实际评分。</p>}</div></section><section className={styles.panel}><h2 className="mb-4 font-semibold">常见失败类型</h2><p className="text-xs text-foreground-muted">最近 100 次实验的失败检查分布</p>{!failures.size?<p className="text-sm text-foreground-muted">暂无失败检查项。</p>:[...failures].sort((a,b)=>b[1]-a[1]).slice(0,6).map(([type,count])=><div key={type} className="flex justify-between border-b border-border py-3"><span>{type}</span><strong>{count} 条</strong></div>)}</section></div><section className={styles.panel}><h2 className="mb-3 font-semibold">最近实验</h2>{runs.slice(0,8).map(r=><Link key={r.id} href={'/experiments/'+r.id} className="flex justify-between gap-3 border-b border-border py-3 text-sm"><span>{r.name}</span><span>{r.status==='done'?(r.summary?.score==null?'未评完整':r.summary.score.toFixed(1)+'%'):r.status==='running'?'运行中':r.status==='failed'?'执行异常':r.status==='cancelled'?'已终止':'待执行'}</span></Link>)}</section></>}</PageContainer></>;
+
+import type { ReactNode } from 'react';
+import { useEvaluationCatalog } from './useEvaluationCatalog';
+
+export type EvaluationOverviewSource = ReturnType<typeof useEvaluationCatalog>;
+
+export default function DemoOverview({ children }: { children: (source: EvaluationOverviewSource) => ReactNode }) {
+    const source = useEvaluationCatalog();
+    return children(source);
 }

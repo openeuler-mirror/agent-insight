@@ -16,6 +16,7 @@ import { useLocale } from '@/lib/client/locale-context';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
 import { resolveTraceTimelineDurationMs } from '@/lib/latency-format';
+import { attachToolResults, linkedToolResultIndices, loadedSkillDefinitions, type LoadedSkillDefinition } from '@/lib/evaluation-harness/trace-evidence';
 import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
 import {
     AgentEvent,
@@ -131,7 +132,8 @@ interface TraceSkillUsage {
     displayVersion: number | null;
     versionSource: 'reported' | 'active' | 'unknown';
     asset: ManagedSkillAsset | null;
-    status: 'managed' | 'unregistered';
+    status: 'managed' | 'unregistered' | 'loaded';
+    loadedDefinition?: LoadedSkillDefinition;
 }
 
 interface PromptSnapshotMessage {
@@ -416,6 +418,7 @@ export interface AgentTraceViewProps {
     rootExecutionId?: string;
     /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
     rasMarkers?: RasTraceMarker[];
+    showInfra?: boolean;
 }
 
 export default function AgentTraceView({
@@ -429,6 +432,7 @@ export default function AgentTraceView({
     rootSessionId,
     rootExecutionId,
     rasMarkers = [],
+    showInfra = true,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { locale, t: tt } = useLocale();
@@ -461,20 +465,21 @@ export default function AgentTraceView({
 
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
         if (langfuseProjection) return;
-        const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
-        if (!current?._payloadDeferred || !loadInteraction) return;
+        const indices = [index, ...(framework === 'evaluation-harness' ? linkedToolResultIndices(interactions, index) : [])]
+            .filter(itemIndex => (interactions[itemIndex] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined)?._payloadDeferred);
+        if (!indices.length || !loadInteraction) return;
         const requestedTraceId = previousRootExecutionIdRef.current;
         setInteractionLoadError(null);
         try {
-            const loaded = await loadInteraction(index);
+            const loaded = new Map(await Promise.all(indices.map(async itemIndex => [itemIndex, await loadInteraction(itemIndex)] as const)));
             if (previousRootExecutionIdRef.current !== requestedTraceId) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
-            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
+            setInteractions(previous => previous.map((item, itemIndex) => loaded.get(itemIndex) || item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
         }
-    }, [interactions, langfuseProjection, loadInteraction]);
+    }, [interactions, langfuseProjection, loadInteraction, framework]);
 
     const ensureAllInteractionsLoaded = React.useCallback(async () => {
         if (langfuseProjection) return langfuseProjection.interactions;
@@ -509,7 +514,8 @@ export default function AgentTraceView({
         return fullLoadPromiseRef.current;
     }, [interactions, langfuseProjection, loadAllInteractions]);
 
-    const displayInteractions = langfuseProjection?.interactions || interactions;
+    const displayInteractions = useMemo(() => langfuseProjection?.interactions
+        || (framework === 'evaluation-harness' ? attachToolResults(interactions) : interactions), [langfuseProjection, framework, interactions]);
     const tree = useMemo(() => {
         const aligned = rasMarkers.length
             ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
@@ -629,10 +635,15 @@ export default function AgentTraceView({
         [displayInteractions, selectedAgentNode],
     );
 
-    const selectedTraceSkillUsages = useMemo(
-        () => resolveTraceSkillUsages(selectedTraceSkillCalls, managedSkillAssets),
-        [selectedTraceSkillCalls, managedSkillAssets],
-    );
+    const selectedTraceSkillUsages = useMemo(() => {
+        const indices = collectSubtreeInteractionIndices(selectedAgentNode);
+        const source = indices ? displayInteractions.filter((_, index) => indices.has(index)) : displayInteractions;
+        const loaded: TraceSkillUsage[] = loadedSkillDefinitions(source).map(definition => ({
+            name: definition.name, reportedVersion: null, displayVersion: null, versionSource: 'reported',
+            asset: null, status: 'loaded', loadedDefinition: definition,
+        }));
+        return [...resolveTraceSkillUsages(selectedTraceSkillCalls, managedSkillAssets), ...loaded];
+    }, [selectedTraceSkillCalls, managedSkillAssets, selectedAgentNode, displayInteractions]);
     const selectedEventPayloadDeferred = Boolean(
         (selectedEvent?.interaction as (RawInteraction & { _payloadDeferred?: boolean }) | undefined)?._payloadDeferred,
     );
@@ -1092,6 +1103,7 @@ export default function AgentTraceView({
                             traceSkills={selectedTraceSkillUsages}
                             currentUser={user}
                             rootExecutionId={rootExecutionId}
+                            showInfra={showInfra}
                         />
                     ) : null}
                 </div>
@@ -2883,7 +2895,7 @@ function EmptyDetail() {
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
     node, highlightEvent, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
-    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId
+    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId, showInfra = true
 }: {
     node: AgentNode;
     highlightEvent: AgentEvent | null;
@@ -2897,6 +2909,7 @@ function AgentDetail({
     traceSkills: TraceSkillUsage[];
     currentUser?: string | null;
     rootExecutionId?: string;
+    showInfra?: boolean;
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
@@ -2906,10 +2919,10 @@ function AgentDetail({
     const tabs: { id: DetailTab; label: string; count?: number }[] = [
         { id: 'overview', label: '概览' },
         { id: 'timeline', label: '时间线', count: visibleEvents.length },
-        { id: 'skills', label: 'Skills', count: traceSkills.length },
+        { id: 'skills', label: 'Skills', count: new Set(traceSkills.map(skill => skill.name)).size },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
         ...(hasHookContexts ? [{ id: 'hooks' as DetailTab, label: 'Hook 上下文', count: node.hookContexts!.length }] : []),
-        { id: 'infra' as DetailTab, label: 'Infra' },
+        ...(showInfra ? [{ id: 'infra' as DetailTab, label: 'Infra' }] : []),
     ];
 
     return (
@@ -2986,7 +2999,7 @@ function AgentDetail({
                 {activeTab === 'skills' && <SkillsTab skills={traceSkills} currentUser={currentUser} />}
                 {activeTab === 'prompt' && hasPrompt && <SystemPromptsBlock prompts={node.systemPrompts!} />}
                 {activeTab === 'hooks' && hasHookContexts && <HookContextsBlock entries={node.hookContexts!} />}
-                {activeTab === 'infra' && <InfraTab executionId={rootExecutionId} />}
+                {showInfra && activeTab === 'infra' && <InfraTab executionId={rootExecutionId} />}
             </div>
         </div>
     );
@@ -3255,6 +3268,7 @@ function InfraTab({ executionId }: { executionId?: string }) {
 function SkillsTab({ skills, currentUser }: { skills: TraceSkillUsage[]; currentUser?: string | null }) {
     const managed = skills.filter(s => s.status === 'managed');
     const unregistered = skills.filter(s => s.status === 'unregistered');
+    const loaded = skills.filter(s => s.status === 'loaded');
 
     if (skills.length === 0) {
         return (
@@ -3274,7 +3288,11 @@ function SkillsTab({ skills, currentUser }: { skills: TraceSkillUsage[]; current
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-            <SkillGroup
+            {loaded.length > 0 && <>
+                <p className="text-xs text-foreground-muted">执行端确认加载的定义与版本；加载本身不计为 Skill 工具调用。</p>
+                <SkillGroup title="已加载定义" count={loaded.length} empty="" skills={loaded} currentUser={currentUser} />
+            </>}
+            {(managed.length > 0 || unregistered.length > 0 || !loaded.length) && <><SkillGroup
                 title="已管理资产"
                 count={managed.length}
                 empty="本 Trace 没有命中已管理 Skill 资产"
@@ -3287,7 +3305,7 @@ function SkillsTab({ skills, currentUser }: { skills: TraceSkillUsage[]; current
                 empty="没有未注册 Skill"
                 skills={unregistered}
                 currentUser={currentUser}
-            />
+            /></>}
         </div>
     );
 }
@@ -3323,7 +3341,7 @@ function SkillGroup({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     {skills.map(skill => (
                         <SkillUsageCard
-                            key={`${skill.status}-${skill.name}-${skill.displayVersion ?? 'unknown'}-${skill.reportedVersion ?? 'none'}`}
+                            key={`${skill.status}-${skill.name}-${skill.displayVersion ?? 'unknown'}-${skill.reportedVersion ?? 'none'}-${skill.loadedDefinition?.externalVersion || ''}-${skill.loadedDefinition?.definitionHash || ''}`}
                             skill={skill}
                             currentUser={currentUser}
                         />
@@ -3336,10 +3354,11 @@ function SkillGroup({
 
 function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; currentUser?: string | null }) {
     const managed = skill.status === 'managed';
+    const loaded = skill.loadedDefinition;
     const activeVersion = normalizeSkillVersion(skill.asset?.activeVersion ?? skill.asset?.version);
-    const versionLabel = skill.displayVersion !== null ? `v${skill.displayVersion}` : '版本未知';
+    const versionLabel = loaded ? `外部版本：${loaded.externalVersion}` : skill.displayVersion !== null ? `v${skill.displayVersion}` : '版本未知';
     const versionHint =
-        skill.versionSource === 'reported'
+        loaded ? '执行端确认加载' : skill.versionSource === 'reported'
             ? 'Trace 上报版本'
             : skill.versionSource === 'active'
                 ? '平台当前激活版本'
@@ -3369,13 +3388,13 @@ function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; curren
                         {/* managed: SkillLink 内部跳 /skills?openSkillId=<id>&openVersion=<displayVersion>,
                            skill 管理 (SkillCatalogV2) 读这俩 query 自动打开对应 skill 的抽屉并落到 trace 上报版本。
                            unregistered: disabled SkillLink,灰字不可点 + tooltip。 */}
-                        <SkillLink
+                        {loaded ? skill.name : <SkillLink
                             skillId={skill.asset?.id}
                             skillName={skill.name}
                             version={skill.displayVersion}
                             user={currentUser}
                             disabled={!managed}
-                        />
+                        />}
                     </span>
                     <span style={{
                         fontSize: '0.5625rem',
@@ -3386,9 +3405,10 @@ function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; curren
                         color: managed ? 'var(--success, #16a34a)' : 'var(--warning, #d97706)',
                         background: managed ? 'var(--success-subtle, rgba(22, 163, 74, 0.10))' : 'var(--warning-subtle, rgba(217, 119, 6, 0.10))',
                     }}>
-                        {managed ? '已管理' : '未注册'}
+                        {loaded ? '已加载' : managed ? '已管理' : '未注册'}
                     </span>
                 </div>
+                {loaded && <p className="mt-1 break-all font-mono text-xs text-foreground-muted">定义指纹：{loaded.definitionHash}</p>}
                 <div style={{ marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: '0.6875rem', color: 'var(--foreground-muted)' }}>
                     <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--foreground-secondary)' }}>{versionLabel}</span>
                     <span>{versionHint}</span>

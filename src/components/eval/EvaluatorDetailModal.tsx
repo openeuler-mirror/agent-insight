@@ -46,9 +46,15 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
 export default function EvaluatorDetailModal({
   card,
   onClose,
+  detailContent,
+  footerNote,
+  actions,
 }: {
   card: EvaluatorCard;
   onClose: () => void;
+  detailContent?: ReactNode;
+  footerNote?: string;
+  actions?: ReactNode;
 }) {
   const router = useRouter();
   const meta = getEvaluatorMeta(card);
@@ -136,7 +142,7 @@ export default function EvaluatorDetailModal({
 
         <DetailSection title="描述">{card.description}</DetailSection>
 
-        <DetailSection title="应用场景">
+        {detailContent || <><DetailSection title="应用场景">
           {card.scenarios.length > 0 ? card.scenarios.join(' · ') : '—'}
         </DetailSection>
 
@@ -154,14 +160,14 @@ export default function EvaluatorDetailModal({
 
         <DetailSection title="结果呈现位置">
           {`Trace 评测详情 · 「${meta.category === 'res' ? '结果评测' : '轨迹评测'}」板块（类目为注册时元数据，运行时不可变更）`}
-        </DetailSection>
+        </DetailSection></>}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 4 }}>
           <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
-            能否勾选以实验 ④ 步的校验为准（按已圈选 trace 检查前置条件）
+            {footerNote || '能否勾选以实验 ④ 步的校验为准（按已圈选 trace 检查前置条件）'}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
-            {card.source === 'custom' ? (
+            {actions || (card.source === 'custom' ? (
               <button
                 type="button"
                 className="ai-btn-p"
@@ -169,7 +175,7 @@ export default function EvaluatorDetailModal({
               >
                 编辑
               </button>
-            ) : null}
+            ) : null)}
             <button type="button" className="ai-btn-s" onClick={onClose}>关闭</button>
           </div>
         </div>

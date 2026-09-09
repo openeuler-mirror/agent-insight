@@ -1,5 +1,6 @@
 'use client';
-import DemoTrace from '@/components/evaluation-harness/DemoTrace';
+import { NH_DEMO } from '@/lib/evaluation-harness/demo-profile';
+import { loadEvaluationTraceAccess, type EvaluationTraceAccess } from '@/lib/evaluation-harness/trace-access';
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -494,12 +495,42 @@ function LegacyTracePage() {
                 </div>
             }
         >
-            <TracePageContent />
+            {NH_DEMO ? <EvaluationTracePage /> : <TracePageContent />}
         </Suspense>
     );
 }
 
-function TracePageContent() {
+function EvaluationTracePage() {
+    const { user, apiKey, authReady } = useAuth();
+    const searchParams = useSearchParams();
+    const traceId = searchParams?.get('taskId') || '';
+    const [attempt, setAttempt] = useState(0);
+    const [access, setAccess] = useState<{
+        user: string; apiKey: string; traceId: string; context?: EvaluationTraceAccess; error?: string;
+    } | null>(null);
+    useEffect(() => {
+        if (!authReady || !user || !apiKey || !traceId) return;
+        let active = true;
+        const controller = new AbortController();
+        setAccess(null);
+        loadEvaluationTraceAccess(traceId, apiKey, controller.signal)
+            .then(context => { if (active) setAccess({ user, apiKey, traceId, context }); })
+            .catch(error => { if (active) setAccess({ user, apiKey, traceId, error: error instanceof Error ? error.message : 'Trace 访问校验失败' }); });
+        return () => { active = false; controller.abort(); };
+    }, [authReady, user, apiKey, traceId, attempt]);
+    const current = access?.user === user && access?.apiKey === apiKey && access?.traceId === traceId ? access : null;
+    if (current?.context && authReady && user && apiKey) return <TracePageContent key={traceId} evaluationContext={current.context} />;
+    return <><AppTopBar title="链路追踪" showDefaultActions={false} /><PageContainer>
+        {!authReady ? <p role="status">正在等待登录身份…</p>
+            : !user || !apiKey ? <p role="alert">登录身份不可用，请重新登录后查看 Trace。</p>
+                : !traceId ? <EmptyState title="从实验 Case 查看执行 Trace" description="在实验详情打开 Case，再点击链路追踪查看实际输入、输出与工具调用。" />
+                    : current?.error ? <div className="space-y-3"><p role="alert">无法查看此 Trace：{current.error}</p><Button variant="outline" size="sm" onClick={() => setAttempt(value => value + 1)}>重试</Button></div>
+                        : <p role="status">正在校验 Trace 访问权限…</p>}
+        <div className="mt-4"><Button variant="ghost" size="sm" asChild><Link href="/experiments">返回实验</Link></Button></div>
+    </PageContainer></>;
+}
+
+function TracePageContent({ evaluationContext }: { evaluationContext?: EvaluationTraceAccess } = {}) {
     const { user } = useAuth();
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
@@ -706,6 +737,10 @@ function TracePageContent() {
     ]);
     const previousListFilterKeyRef = useRef(listFilterKey);
     useEffect(() => {
+        if (NH_DEMO && taskIdParam !== evaluationContext?.traceId) {
+            setSelectedExecution(null);
+            return;
+        }
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
             fetchGuardRef.current = null;
@@ -738,7 +773,7 @@ function TracePageContent() {
                 toast.error(locale === 'zh' ? '子 Agent Trace 加载失败' : 'Failed to load sub-agent trace');
             });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [taskIdParam, data]);
+    }, [taskIdParam, data, evaluationContext?.traceId]);
 
     useEffect(() => {
         const requestId = ++listRequestIdRef.current;
@@ -956,7 +991,7 @@ function TracePageContent() {
         <>
             <AppTopBar
                 title={<Term id="trace" label={t('nav.trace')} />}
-                actions={!selectedExecution ? (
+                actions={!NH_DEMO && !selectedExecution ? (
                     <>
                         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
                         <Button variant="outline" size="sm" disabled={!user || importing} onClick={() => importInputRef.current?.click()}>
@@ -971,12 +1006,13 @@ function TracePageContent() {
                 {selectedExecution ? (
                     <TraceDetailView
                         execution={selectedExecution}
+                        evaluationContext={evaluationContext}
                         onBack={() => handleSelectExecution(null)}
                         availableTags={availableTags}
                         onTagsChanged={handleTraceTagsChanged}
                         onTagCreated={handleTraceTagCreated}
                     />
-                ) : (
+                ) : NH_DEMO ? <EmptyState title="从实验 Case 查看执行 Trace" description="在实验详情打开 Case，再点击链路追踪查看实际输入、输出与工具调用。" /> : (
                     <>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                             <StatCard
@@ -1362,12 +1398,14 @@ function TracePageContent() {
 
 function TraceDetailView({
     execution,
+    evaluationContext,
     onBack,
     availableTags,
     onTagsChanged,
     onTagCreated,
 }: {
     execution: Execution;
+    evaluationContext?: EvaluationTraceAccess;
     onBack: () => void;
     availableTags: TraceUserTag[];
     onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
@@ -1418,7 +1456,7 @@ function TraceDetailView({
 
     useEffect(() => {
         const executionId = String(execution.upload_id || '').trim();
-        if (!executionId) {
+        if (NH_DEMO || !executionId) {
             setRasMarkers([]);
             return;
         }
@@ -1528,9 +1566,9 @@ function TraceDetailView({
     return (
         <div className="flex flex-col h-full min-h-0">
             <div className="rounded-md border border-border bg-card p-3 mb-3 flex flex-wrap items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={onBack} className="text-foreground-muted h-7 px-2">
+                <Button variant="ghost" size="sm" onClick={() => NH_DEMO ? router.push(evaluationContext ? '/experiments/'+evaluationContext.experimentId+'/cases/'+evaluationContext.caseId : '/experiments') : onBack()} className="text-foreground-muted h-7 px-2">
                     <ArrowLeft className="size-3.5" aria-hidden />
-                    {t('tracePage.backToList')}
+                    {NH_DEMO ? '返回 Case' : t('tracePage.backToList')}
                 </Button>
                 {isSubagentTrace && parentExecutionId && (
                     <Button
@@ -1562,20 +1600,20 @@ function TraceDetailView({
                         : t('tracePage.statusNormal')
                     }
                 />
-                <ReliabilityAnomalyChip
+{!NH_DEMO && (                <ReliabilityAnomalyChip
                     executionId={String(execution.upload_id || '')}
                     locale={locale === 'zh' ? 'zh' : 'en'}
-                />
+                />)}
                 {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
 
                 {/* 用户标签：在详情页原地打标，不必退回列表 */}
-                <TraceTagCell
+{!NH_DEMO && (                <TraceTagCell
                     execution={execution}
                     availableTags={availableTags}
                     onTagsChanged={onTagsChanged}
                     onTagCreated={onTagCreated}
                     mode="button"
-                />
+                />)}
 
                 {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
                     <Separator orientation="vertical" className="h-5" />
@@ -1628,7 +1666,7 @@ function TraceDetailView({
                     </Button>
 
                     <Separator orientation="vertical" className="h-5" />
-                    <Button
+{!NH_DEMO && <>                    <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setBackflowOpen(true)}
@@ -1641,7 +1679,7 @@ function TraceDetailView({
                     <Button variant="default" size="sm" asChild className="h-7 text-xs">
                         <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
                     </Button>
-                    <Button
+</>}                    <Button
                         variant="outline"
                         size="sm"
                         onClick={downloadSessionJson}
@@ -1659,7 +1697,7 @@ function TraceDetailView({
                 </div>
             </div>
 
-            {user && (
+            {user && !NH_DEMO && (
                 <TraceBackflowDialog
                     open={backflowOpen}
                     onOpenChange={setBackflowOpen}
@@ -1700,6 +1738,7 @@ function TraceDetailView({
                         onSubagentNavigate={navigateToTaskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
                         rasMarkers={rasMarkers}
+                        showInfra={!NH_DEMO}
                     />
                 ) : (
                     <div className="rounded-md border border-card-border bg-card">
@@ -2640,4 +2679,4 @@ function Td({ children, align, className }: { children: React.ReactNode; align?:
     );
 }
 
-export default function TracePage(){return <DemoTrace/>;}
+export default function TracePage(){return <LegacyTracePage/>;}

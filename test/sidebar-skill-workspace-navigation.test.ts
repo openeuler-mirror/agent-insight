@@ -3,6 +3,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
+test('演示范围过滤原导航，关闭后完整菜单和路由归属仍然保留', async () => {
+    const { getSidebarNavigation, isSidebarItemActive } = await import('../src/components/shell/sidebar-navigation');
+    const full = getSidebarNavigation(true);
+    const snapshot = structuredClone(full);
+    const demo = getSidebarNavigation(true, true);
+    const leaves = demo.flatMap(item => item.children ?? [item]);
+    assert.deepEqual(leaves.map(item => item.key), [
+        'dashboard', 'agents', 'version-analysis', 'experiments', 'dataset', 'metrics', 'model-registry',
+    ]);
+    for (const group of demo.filter(item => item.children)) {
+        const original = full.find(item => item.key === group.key)!;
+        assert.equal(group.labelKey, original.labelKey);
+        assert.equal(group.icon, original.icon);
+        assert.ok(group.children!.every(child => original.children!.includes(child)));
+    }
+    assert.deepEqual(full, snapshot);
+    assert.deepEqual(getSidebarNavigation(true), snapshot);
+    assert.equal(isSidebarItemActive(leaves.find(item => item.key === 'experiments')!, '/experiments/example/cases/example'), true);
+    assert.equal(isSidebarItemActive(leaves.find(item => item.key === 'dataset')!, '/dataset/versioned-example'), true);
+});
+
 test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     const { getSidebarNavigation, isSidebarItemActive } = await import(
         '../src/components/shell/sidebar-navigation'
@@ -86,7 +107,9 @@ test('保留旧版标签工作区配置，演示版直接呈现四资产趋势',
     const appDir = path.join(process.cwd(), 'src/app/(main)');
     const demoPage=fs.readFileSync(path.join(appDir,'version-analysis/page.tsx'),'utf8');
     assert.match(demoPage,/VersionExperiments/);
-    assert.doesNotMatch(demoPage,/VersionWorkspaceTabs/);
+    assert.match(demoPage,/VersionWorkspaceTabs/);
+    assert.match(demoPage,/TraceVersionAnalysis/);
+    assert.match(demoPage,/NH_DEMO\?/);
     for (const page of ['version-management/page.tsx']) {
         const source = fs.readFileSync(path.join(appDir, page), 'utf8');
         assert.match(source, /VersionWorkspaceTabs/, `${page} 应挂载版本分析工作区页签`);
@@ -130,7 +153,7 @@ test('Skill 主入口挂载统一工作台，旧入口保留工作区页签', ()
     const appDir = path.join(process.cwd(), 'src/app/(main)');
     const demoPage=fs.readFileSync(path.join(appDir,'version-analysis/page.tsx'),'utf8');
     assert.match(demoPage,/VersionExperiments/);
-    assert.doesNotMatch(demoPage,/VersionWorkspaceTabs/);
+    assert.match(demoPage,/VersionWorkspaceTabs/);
     const skillsPage = fs.readFileSync(path.join(appDir, 'skills/page.tsx'), 'utf8');
     assert.match(skillsPage, /<SkillWorkbenchShell\s*\/>/, 'skills/page.tsx 应挂载 SkillWorkbenchShell');
 

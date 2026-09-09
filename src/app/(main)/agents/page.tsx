@@ -1,5 +1,7 @@
 'use client';
 import DemoTargets from '@/components/evaluation-harness/DemoTargets';
+import { NH_DEMO } from '@/lib/evaluation-harness/demo-profile';
+import { AgentCardFrame, AgentDirectoryLayout, AgentDirectoryPanel, agentDirectoryGridStyle, Btn, Tag, FilterSelect } from '@/components/agents/AgentDirectory';
 
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -12,11 +14,8 @@ import {
     ArrowRight,
     X,
     Loader2,
-    HelpCircle,
     Trash2
 } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 
@@ -178,165 +177,6 @@ function dedupeAgentsByPlatformAndName(agents: Agent[]): Agent[] {
 // ============================================================
 // 原子组件（纯 inline style，不依赖 Tailwind）
 // ============================================================
-
-interface BtnProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-    variant?: 'default' | 'outline' | 'secondary';
-    size?: 'sm' | 'md';
-    fullWidth?: boolean;
-}
-
-function Btn({ variant = 'default', size = 'md', fullWidth, style, children, ...props }: BtnProps) {
-    const [hover, setHover] = useState(false);
-
-    const base: React.CSSProperties = {
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 4,
-        borderRadius: 6,
-        fontWeight: 500,
-        fontFamily: 'inherit',
-        cursor: 'pointer',
-        transition: 'background 0.15s, border-color 0.15s, color 0.15s',
-        whiteSpace: 'nowrap',
-        outline: 'none',
-        boxSizing: 'border-box',
-        width: fullWidth ? '100%' : undefined,
-        height: size === 'sm' ? 28 : 32,
-        padding: size === 'sm' ? '0 8px' : '0 12px',
-        fontSize: size === 'sm' ? 11 : 12,
-    };
-
-    const variants: Record<string, React.CSSProperties> = {
-        default: {
-            background: hover ? 'var(--primary-hover, var(--primary))' : 'var(--primary)',
-            color: 'var(--primary-foreground, #fff)',
-            border: '1px solid var(--primary)',
-        },
-        outline: {
-            background: hover ? 'var(--background-secondary)' : 'transparent',
-            color: 'var(--foreground)',
-            border: '1px solid var(--border)',
-        },
-        secondary: {
-            background: hover ? 'var(--secondary-hover, var(--secondary))' : 'var(--secondary)',
-            color: 'var(--foreground)',
-            border: '1px solid transparent',
-        },
-    };
-
-    return (
-        <button
-            {...props}
-            style={{ ...base, ...variants[variant], ...style }}
-            onMouseEnter={() => setHover(true)}
-            onMouseLeave={() => setHover(false)}
-        >
-            {children}
-        </button>
-    );
-}
-
-interface TagProps {
-    variant?: 'default' | 'secondary' | 'outline';
-    children: React.ReactNode;
-    style?: React.CSSProperties;
-}
-
-function Tag({ variant = 'default', children, style }: TagProps) {
-    const base: React.CSSProperties = {
-        display: 'inline-flex',
-        alignItems: 'center',
-        height: 16,
-        padding: '0 6px',
-        borderRadius: 4,
-        fontSize: 9,
-        fontWeight: 600,
-        fontFamily: 'inherit',
-        textTransform: 'uppercase',
-        letterSpacing: '0.02em',
-        flexShrink: 0,
-        lineHeight: 1,
-    };
-
-    const variants: Record<string, React.CSSProperties> = {
-        default: {
-            background: 'var(--primary)',
-            color: 'var(--primary-foreground, #fff)',
-        },
-        secondary: {
-            background: 'var(--secondary, #f1f5f9)',
-            color: 'var(--foreground)',
-        },
-        outline: {
-            background: 'transparent',
-            color: 'var(--foreground-secondary, var(--foreground))',
-            border: '1px solid var(--border)',
-        },
-    };
-
-    return <span style={{ ...base, ...variants[variant], ...style }}>{children}</span>;
-}
-
-interface FilterSelectProps {
-    label: string;
-    value: string;
-    onChange: (value: string) => void;
-    options: Array<{ value: string; label: string }>;
-    minWidth?: number;
-    tooltip?: React.ReactNode;
-}
-
-function FilterSelect({ label, value, onChange, options, minWidth = 220, tooltip }: FilterSelectProps) {
-    return (
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth }}>
-            <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                {label}
-                {tooltip && (
-                    <TooltipProvider>
-                        <Tooltip delayDuration={300}>
-                            <TooltipTrigger asChild>
-                                <HelpCircle size={12} style={{ cursor: 'help', color: 'var(--foreground-muted)' }} />
-                            </TooltipTrigger>
-                            <TooltipContent
-                                side="bottom"
-                                sideOffset={6}
-                                className="bg-[var(--card-bg,#fff)] text-[var(--foreground)] border border-[var(--border)] shadow-md max-w-[280px] p-3 [&>svg]:hidden"
-                            >
-                                {tooltip}
-                            </TooltipContent>
-                        </Tooltip>
-                    </TooltipProvider>
-                )}
-            </span>
-            <select
-                value={value}
-                onChange={(event) => onChange(event.target.value)}
-                style={{
-                    width: '100%',
-                    height: 36,
-                    padding: '0 12px',
-                    borderRadius: 10,
-                    border: '1px solid var(--border)',
-                    background: 'var(--background)',
-                    color: 'var(--foreground)',
-                    fontSize: 12,
-                    fontWeight: 500,
-                    outline: 'none',
-                    cursor: 'pointer',
-                    boxSizing: 'border-box',
-                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
-                }}
-            >
-                {options.map(option => (
-                    <option key={option.value} value={option.value}>
-                        {option.label}
-                    </option>
-                ))}
-            </select>
-        </label>
-    );
-}
 
 interface FilterDateTimeInputProps {
     label: string;
@@ -736,11 +576,7 @@ function AgentsPageInner() {
             : null,
     ].filter(Boolean) as Array<{ key: string; label: string; clear: () => void }>;
 
-    const gridStyle: React.CSSProperties = {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-        gap: 16,
-    };
+    const gridStyle = agentDirectoryGridStyle;
 
     const openExactTimeDialog = () => {
         setExactTimeDraftStartAt(exactStartAt || defaultExactRange.start);
@@ -749,19 +585,8 @@ function AgentsPageInner() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-            <AppTopBar
-                title={t('nav.agents')}
-                showDefaultActions={false}
-            />
-            <div style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 28px', width: '100%', boxSizing: 'border-box' }}>
-                <div style={{
-                    background: 'linear-gradient(180deg, rgba(127,127,127,0.03), transparent 88%), var(--card-bg, var(--background))',
-                    border: '1px solid var(--border)',
-                    borderRadius: 14,
-                    padding: 18,
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.03)',
-                }}>
+        <AgentDirectoryLayout title={t('nav.agents')}>
+                <AgentDirectoryPanel>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                             <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>
@@ -968,8 +793,7 @@ function AgentsPageInner() {
                             {t('nav.noAgentsFiltered')}
                         </div>
                     )}
-                </div>
-            </div>
+                </AgentDirectoryPanel>
             {isExactTimeDialogOpen && (
                 <div
                     style={{
@@ -1116,7 +940,7 @@ function AgentsPageInner() {
                     </div>
                 )}
             </AnimatePresence>
-        </div>
+        </AgentDirectoryLayout>
     );
 }
 
@@ -1168,20 +992,6 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void })
 
     const tagVariant: 'default' | 'secondary' =
         agent.ownership === 'system' ? 'default' : 'secondary';
-
-    const cardStyle: React.CSSProperties = {
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        borderRadius: 8,
-        border: '1px solid var(--border)',
-        background: 'var(--card-bg, var(--background))',
-        padding: 16,
-        boxShadow: hover ? '0 4px 12px rgba(0,0,0,0.06)' : 'none',
-        borderColor: hover ? 'var(--primary)' : 'var(--border)',
-        transition: 'box-shadow 0.2s, border-color 0.2s',
-        boxSizing: 'border-box',
-    };
 
     const renderStatusBadge = () => {
         if (agent.status === 'running') {
@@ -1243,11 +1053,7 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void })
     };
 
     return (
-        <div
-            style={cardStyle}
-            onMouseEnter={() => setHover(true)}
-            onMouseLeave={() => setHover(false)}
-        >
+        <AgentCardFrame onHoverChange={setHover}>
             {/* Header row */}
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                 <div style={{
@@ -1406,8 +1212,8 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void })
                     {agent.layer === 'subagent' ? t('nav.details') : t('nav.diagnosis')}
                 </Btn>
             </div>
-        </div>
+        </AgentCardFrame>
     );
 }
 
-export default function NHDemoPage(){return <DemoTargets/>;}
+export default function AgentsRoute() { return NH_DEMO ? <DemoTargets /> : <AgentsPage />; }

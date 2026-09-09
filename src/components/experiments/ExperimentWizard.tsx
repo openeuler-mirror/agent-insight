@@ -9,6 +9,7 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
+import { ExperimentWizardHeading, ExperimentWizardFooter, experimentPanelStyle as PANEL, experimentPanelBodyStyle as PANEL_B, experimentFieldLabelStyle as FIELDLBL, experimentInputStyle as INPUT, experimentButtonStyle as BTN, experimentPrimaryButtonStyle as BTN_PRIMARY, experimentGhostButtonStyle as BTN_GHOST } from './ExperimentWizardLayout';
 import EvaluatorComparisonGroups from '@/components/experiments/EvaluatorComparisonGroups';
 import {
   DropdownMenu,
@@ -227,27 +228,13 @@ const TIME_PRESETS = [
 type TimePreset = typeof TIME_PRESETS[number]['value'] | 'all' | 'custom';
 
 // ── 高保真样式常量（对照 评测实验-高保真.html） ──
-const PANEL: React.CSSProperties = {
-  background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-  borderRadius: 12, marginBottom: 14, overflow: 'hidden',
-};
 const PANEL_H: React.CSSProperties = {
   padding: '11px 16px', borderBottom: '1px solid var(--border)',
   display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
 };
-const PANEL_B: React.CSSProperties = { padding: '13px 15px' };
 const CARD_NOTE: React.CSSProperties = {
   background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
   borderRadius: 10, padding: 14,
-};
-const FIELDLBL: React.CSSProperties = {
-  display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--foreground-muted)',
-  textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 7,
-};
-const INPUT: React.CSSProperties = {
-  width: '100%', height: 34, padding: '0 10px', fontSize: 13, borderRadius: 8,
-  border: '1px solid var(--input-border)', background: 'var(--input-bg)',
-  color: 'var(--foreground)', outline: 'none',
 };
 const TH: React.CSSProperties = {
   textAlign: 'left', fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase',
@@ -261,12 +248,6 @@ const TD: React.CSSProperties = {
   padding: '9px 12px', fontSize: 12.5, color: 'var(--foreground-secondary)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'middle',
 };
-const BTN: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-  height: 30, padding: '0 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-  cursor: 'pointer', border: '1px solid transparent', whiteSpace: 'nowrap',
-};
-const BTN_PRIMARY: React.CSSProperties = { ...BTN, background: 'var(--primary)', color: '#fff' };
 const MODAL_OV: React.CSSProperties = {
   position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 220,
   display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
@@ -275,9 +256,6 @@ const MODAL: React.CSSProperties = {
   width: 560, maxWidth: '92vw', maxHeight: '86vh', overflowY: 'auto',
   background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 14,
   padding: '18px 20px', boxShadow: '0 24px 80px rgba(0,0,0,.35)',
-};
-const BTN_GHOST: React.CSSProperties = {
-  ...BTN, background: 'none', color: 'var(--foreground-secondary)', border: 'none',
 };
 const BTN_OUTLINE_SM: React.CSSProperties = {
   ...BTN, height: 26, padding: '0 9px', fontSize: 11.5,
@@ -338,8 +316,11 @@ export function TraceSourceSelector({ value, onChange, generateDisabled = false,
   return <div style={{ display: 'inline-flex', gap: 4, padding: 4, border: '1px solid var(--border)', borderRadius: 10, marginBottom: 14 }}>{(['existing', 'generate'] as const).map(mode => <button key={mode} type="button" aria-pressed={value === mode} disabled={mode === 'generate' && generateDisabled} title={mode === 'generate' ? disabledReason : undefined} style={{ ...(value === mode ? BTN_PRIMARY : BTN_GHOST), height: 30, opacity: mode === 'generate' && generateDisabled ? .45 : 1 }} onClick={() => onChange(mode)}>{mode === 'existing' ? '选择 Trace' : '生成 Trace'}</button>)}</div>;
 }
 
-export function GenerationCaseRow({ checked, onChange, children }: { checked: boolean; onChange: () => void; children: React.ReactNode }) {
-  return <label style={{ display: 'flex', gap: 10, padding: '10px 12px', borderBottom: '1px solid var(--border)', cursor: 'pointer', background: checked ? 'var(--primary-subtle)' : 'transparent' }}><input type="checkbox" checked={checked} onChange={onChange}/><span style={{flex: 1, minWidth: 0}}>{children}</span></label>;
+export function GenerationCaseRow({ checked, onChange, children, action, label }: { checked: boolean; onChange: () => void; children: React.ReactNode; action?: React.ReactNode; label?: string }) {
+  return <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border)', background: checked ? 'var(--primary-subtle)' : 'transparent' }}>
+    <label style={{ display: 'flex', flex: 1, minWidth: 0, gap: 10, padding: '10px 12px', cursor: 'pointer' }}><input type="checkbox" aria-label={label} checked={checked} onChange={onChange}/><span style={{flex: 1, minWidth: 0}}>{children}</span></label>
+    {action && <div style={{ paddingRight: 12, flexShrink: 0 }}>{action}</div>}
+  </div>;
 }
 
 export function ExpectedAnswersTable({ children }: { children: React.ReactNode }) {
@@ -481,14 +462,14 @@ export function Stepper({ step, maxVisited, summaries, onJump, optionalThird = t
 }
 
 export type ExperimentChoice = 'single' | 'agent' | 'skill' | 'llm' | 'evaluator' | 'dataset';
-export function ExperimentTypeSelector({ value, onChange, groupA, groupB, onGroupA, onGroupB, models = [], options, hideGroups = false, groupsOnly = false, allowDataset = false }: {
+export function ExperimentTypeSelector({ value, onChange, groupA, groupB, onGroupA, onGroupB, models = [], options, hideGroups = false, groupsOnly = false, allowDataset = false, availableTypes }: {
   value: ExperimentChoice; onChange: (value: ExperimentChoice) => void;
   groupA: string; groupB: string; onGroupA: (value: string) => void; onGroupB: (value: string) => void;
-  models?: string[]; options?: Array<{value:string;label:string}>; hideGroups?: boolean; groupsOnly?: boolean; allowDataset?: boolean;
+  models?: string[]; options?: Array<{value:string;label:string}>; hideGroups?: boolean; groupsOnly?: boolean; allowDataset?: boolean; availableTypes?: ExperimentChoice[];
 }) {
   const fieldName = ({agent:'Agent',skill:'Skill / 版本',llm:'模型',evaluator:'评估器'} as Record<string,string>)[value];
   return <div className="w-full space-y-3">
-    {!groupsOnly && <div className="flex flex-wrap gap-2">{(Object.keys(comparisonLabels) as ExperimentChoice[]).filter(type=>allowDataset || type!=='dataset').map(type=><button key={type} type="button" aria-pressed={value===type} onClick={()=>onChange(type)} style={{...FCHIP,background:value===type?'var(--primary-subtle)':'var(--background-secondary)',borderColor:value===type?'var(--primary-subtle-border)':'var(--border)',color:value===type?'var(--primary)':'var(--foreground-muted)',cursor:'pointer'}}>{comparisonLabels[type]}</button>)}</div>}
+    {!groupsOnly && <div className="flex flex-wrap gap-2">{(Object.keys(comparisonLabels) as ExperimentChoice[]).filter(type=>(allowDataset || type!=='dataset') && (!availableTypes || availableTypes.includes(type))).map(type=><button key={type} type="button" aria-pressed={value===type} onClick={()=>onChange(type)} style={{...FCHIP,background:value===type?'var(--primary-subtle)':'var(--background-secondary)',borderColor:value===type?'var(--primary-subtle-border)':'var(--border)',color:value===type?'var(--primary)':'var(--foreground-muted)',cursor:'pointer'}}>{comparisonLabels[type]}</button>)}</div>}
     {value!=='single' && !hideGroups && <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{(['A','B'] as const).map(key=><div key={key} className="min-w-0 rounded-lg border border-border p-3 space-y-3">
       <h4 className="font-semibold">{key} 组</h4>
       <label className="block space-y-1 text-sm"><span>{fieldName}</span>
@@ -510,7 +491,13 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
   // ① 实验设计
   const [name, setName] = useState(() => skillContext
     ? `${skillContext.skillName} · ${SKILL_PRESET_LABELS[skillContext.preset]} · v${skillContext.skillVersion}`
-    : defaultExperimentName());
+    : initialSelection?.name ?? '');
+  const needsDefaultName = useRef(!skillContext && !initialSelection);
+  useEffect(() => {
+    if (!needsDefaultName.current) return;
+    needsDefaultName.current = false;
+    setName(current => current || defaultExperimentName());
+  }, []);
   const [agentName, setAgentName] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
@@ -1473,27 +1460,8 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     `已选 ${selectedEvaluators.size} 个`,
   ];
 
-  // 各步 panel 内底部 footer：分隔线 + 右对齐 上一步/下一步
   const footer = (opts: { nextDisabled?: boolean; nextLabel?: string; onNext?: () => void }) => tracePicker ? null : (
-    <div style={{
-      display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8,
-      marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)',
-    }}>
-      {step > 1 && (
-        <button style={BTN_GHOST} onClick={() => goTo(step - 1)}>← 上一步</button>
-      )}
-      <button
-        disabled={opts.nextDisabled}
-        onClick={opts.onNext ?? (() => goTo(step + 1))}
-        style={{
-          ...BTN_PRIMARY,
-          opacity: opts.nextDisabled ? 0.5 : 1,
-          cursor: opts.nextDisabled ? 'not-allowed' : 'pointer',
-        }}
-      >
-        {opts.nextLabel ?? NEXT_LABELS[step - 1]}
-      </button>
-    </div>
+    <ExperimentWizardFooter step={step} onBack={() => goTo(step - 1)} onNext={opts.onNext ?? (() => goTo(step + 1))} nextDisabled={opts.nextDisabled} nextLabel={opts.nextLabel ?? NEXT_LABELS[step - 1]} />
   );
 
   const Container = unified ? 'div' : PageContainer;
@@ -1501,21 +1469,11 @@ export function ExperimentWizard({ embedded = false, skillContext, onBack, onCre
     <>
       {!embedded && <AppTopBar title="新建实验" />}
       <Container className="[&>*]:shrink-0">
-        {/* 页头 */}
-        {!unified && <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0 12px' }}>
-          <button
-            style={{ ...BTN_GHOST, height: 26, padding: '0 9px', fontSize: 11.5 }}
-            onClick={() => onBack ? onBack() : router.push('/experiments')}
-          >
-            ‹ 返回
-          </button>
-          <div>
-            <h1 style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>新建实验</h1>
-            {skillContext && <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>复用平台标准四步实验向导，当前 Skill 上下文已自动带入。</p>}
-          </div>
-          <span style={{ flex: 1 }} />
-          {skillPreset && <span style={{ ...CHIP, color: 'var(--primary)', background: 'var(--primary-subtle)' }}>{SKILL_PRESET_LABELS[skillPreset]}</span>}
-        </div>}
+        {!unified && <ExperimentWizardHeading
+          onBack={() => onBack ? onBack() : router.push('/experiments')}
+          description={skillContext ? '复用平台标准四步实验向导，当前 Skill 上下文已自动带入。' : undefined}
+          actions={skillPreset && <span style={{ ...CHIP, color: 'var(--primary)', background: 'var(--primary-subtle)' }}>{SKILL_PRESET_LABELS[skillPreset]}</span>}
+        />}
 
         {!unified && <Stepper step={step} maxVisited={maxVisited} summaries={stepSummaries} onJump={goTo} />}
 

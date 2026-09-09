@@ -907,10 +907,13 @@ function StatusChip({ status, copy }: { status: VersionAnalysisTrace['traceStatu
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
+const Th = VersionTableHeaderCell;
+const Td = VersionTableCell;
+
+export function VersionTableHeaderCell({ children }: { children: React.ReactNode }) {
   return <th className="px-3 py-2 text-left font-medium whitespace-nowrap">{children}</th>;
 }
 
-function Td({ children }: { children: React.ReactNode }) {
+export function VersionTableCell({ children }: { children: React.ReactNode }) {
   return <td className="px-3 py-2 align-top text-foreground-secondary">{children}</td>;
 }

@@ -32,6 +32,7 @@ interface SelectProps<T extends string = string> {
     className?: string;
     contentClassName?: string;
     'aria-label'?: string;
+    disabled?: boolean;
 }
 
 export function Select<T extends string = string>({
@@ -44,6 +45,7 @@ export function Select<T extends string = string>({
     className,
     contentClassName,
     'aria-label': ariaLabel,
+    disabled = false,
 }: SelectProps<T>) {
     const current = options.find(o => o.value === value);
     const heightClass = size === 'sm' ? 'h-7 text-xs' : 'h-8 text-sm';
@@ -52,9 +54,11 @@ export function Select<T extends string = string>({
         <DropdownMenu>
             <DropdownMenuTrigger
                 aria-label={ariaLabel || (typeof label === 'string' ? label : undefined)}
+                disabled={disabled}
                 className={cn(
                     'inline-flex items-center gap-1.5 px-2.5 rounded-md border transition-colors',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    'disabled:pointer-events-none disabled:opacity-50',
                     heightClass,
                     active
                         ? 'bg-primary-subtle border-primary-border text-primary'

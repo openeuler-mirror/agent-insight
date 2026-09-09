@@ -1,5 +1,6 @@
 'use client';
 import DemoTargets from '@/components/evaluation-harness/DemoTargets';
+import { NH_DEMO } from '@/lib/evaluation-harness/demo-profile';
 
 /**
  * Skills Hub —— 头部对齐 /skill-eval（Skill 分析）：
@@ -207,4 +208,4 @@ function MethodPickerTile({
     );
 }
 
-export default function NHDemoPage(){return <DemoTargets staticOnly/>;}
+export default function SkillsRoute() { return NH_DEMO ? <DemoTargets defaultKind="skill" /> : <SkillsPage />; }

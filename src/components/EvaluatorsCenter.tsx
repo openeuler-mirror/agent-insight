@@ -19,6 +19,21 @@ import {
 
 type TabKey = 'custom' | 'preset';
 
+export interface EvaluatorsDataSource {
+  cards: EvaluatorCard[];
+  loading: boolean;
+  error?: string;
+  description: string;
+  initialTab?: TabKey;
+  onCreate: () => void;
+  onRefresh: () => void;
+  renderCardContent?: (card: EvaluatorCard) => ReactNode;
+  renderCardActions?: (card: EvaluatorCard) => ReactNode;
+  renderDetail?: (card: EvaluatorCard, onClose: () => void) => ReactNode;
+  toolbarActions?: ReactNode;
+  footer?: ReactNode;
+}
+
 interface FilterState {
   query: string;
   evaluatorTypes: EvaluatorType[];
@@ -119,12 +134,12 @@ function toggleFilter<T extends string>(values: T[], value: T) {
   return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 }
 
-export default function EvaluatorsCenter() {
+export default function EvaluatorsCenter({ dataSource }: { dataSource?: EvaluatorsDataSource } = {}) {
   const { user } = useAuth();
   const router = useRouter();
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
   const [evaluatorsHydrated, setEvaluatorsHydrated] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabKey>('custom');
+  const [activeTab, setActiveTab] = useState<TabKey>(dataSource?.initialTab || 'custom');
   const [filters, setFilters] = useState<FilterState>(emptyFilters);
   const [customToolbar, setCustomToolbar] = useState<CustomToolbarState>(emptyCustomToolbar);
   const [llmDraft, setLlmDraft] = useState<LlmEvaluatorDraft>(blankLlmDraft);
@@ -145,7 +160,7 @@ export default function EvaluatorsCenter() {
   }, [user]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || dataSource) return;
 
     let cancelled = false;
 
@@ -219,10 +234,10 @@ export default function EvaluatorsCenter() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, dataSource]);
 
   useEffect(() => {
-    if (!user || !evaluatorsHydrated) return;
+    if (!user || !evaluatorsHydrated || dataSource) return;
     const timer = window.setTimeout(() => {
       apiFetch('/api/user-evaluators', {
         method: 'PUT',
@@ -233,14 +248,19 @@ export default function EvaluatorsCenter() {
       });
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [user, evaluatorsHydrated, customEvaluators]);
+  }, [user, evaluatorsHydrated, customEvaluators, dataSource]);
 
   const visibleCards = useMemo(() => {
+    if (dataSource) {
+      return dataSource.cards.filter(card => card.source === activeTab
+        && (activeTab === 'preset' ? matchesFilter(card, filters) : matchesCustomToolbar(card, customToolbar, user)));
+    }
     if (activeTab === 'preset') return presetEvaluators.filter(card => matchesFilter(card, filters));
     return customEvaluators.filter(card => matchesCustomToolbar(card, customToolbar, user));
-  }, [activeTab, customEvaluators, filters, customToolbar, user]);
+  }, [activeTab, customEvaluators, filters, customToolbar, user, dataSource]);
 
   const openLlmCreateFlow = () => {
+    if (dataSource) { setActiveTab('custom'); dataSource.onCreate(); return; }
     setLlmDraft(blankLlmDraft());
     setCustomCreate('llm');
     setError('');
@@ -336,16 +356,16 @@ export default function EvaluatorsCenter() {
     }
   };
 
-  if (loading) {
+  if (dataSource ? dataSource.loading : loading) {
     return <div className="loading">正在整理评估器视图...</div>;
   }
 
   return (
     <div style={{ padding: '18px 22px 28px', maxWidth: 1500, margin: '0 auto' }}>
 
-      {error && (
-        <div className="ai-card" style={{ padding: 12, color: 'var(--error)', marginBottom: 14 }}>
-          {error}
+      {(dataSource?.error || error) && (
+        <div role="alert" className="ai-card" style={{ padding: 12, color: 'var(--error)', marginBottom: 14 }}>
+          {dataSource?.error || error}
         </div>
       )}
 
@@ -363,17 +383,19 @@ export default function EvaluatorsCenter() {
           <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.2, fontWeight: 600, color: 'var(--foreground)' }}>评估器</h1>
           {customCreate === null && (
             <p style={{ margin: '6px 0 0', color: 'var(--foreground-secondary)', fontSize: 12.5, maxWidth: 820 }}>
-              {activeTab === 'custom'
+              {dataSource?.description || (activeTab === 'custom'
                 ? '管理自建 LLM 评估器，配置会保存到服务端。点击卡片查看详情，详情内可进入编辑。'
-                : '预置评估器模板库：按类型与场景筛选，点击可查看详情与执行入口。'}
+                : '预置评估器模板库：按类型与场景筛选，点击可查看详情与执行入口。')}
             </p>
           )}
         </div>
         {activeTab === 'preset' && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button type="button" className="ai-btn-s" onClick={() => window.location.reload()}>
+            {dataSource?.toolbarActions}
+            <button type="button" className="ai-btn-s" onClick={() => dataSource ? dataSource.onRefresh() : window.location.reload()}>
               刷新
             </button>
+            {dataSource && <button type="button" className="ai-btn-p" onClick={openLlmCreateFlow}>+ 新建自定义评估器</button>}
           </div>
         )}
       </div>
@@ -428,7 +450,8 @@ export default function EvaluatorsCenter() {
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button type="button" className="ai-btn-s" title="刷新" onClick={() => window.location.reload()}>
+              {dataSource?.toolbarActions}
+              <button type="button" className="ai-btn-s" title="刷新" onClick={() => dataSource ? dataSource.onRefresh() : window.location.reload()}>
                 ↻
               </button>
               <button
@@ -461,7 +484,9 @@ export default function EvaluatorsCenter() {
                   onInspect={setInspectCard}
                   activeModel={activeModel}
                   onModelConfigClick={() => router.push('/modelconfig/defaults')}
-                  onDeleteCustom={deleteCustomEvaluator}
+                  onDeleteCustom={dataSource ? undefined : deleteCustomEvaluator}
+                  extraContent={dataSource?.renderCardContent?.(card)}
+                  actions={dataSource?.renderCardActions?.(card)}
                 />
               ))}
             </div>
@@ -472,15 +497,17 @@ export default function EvaluatorsCenter() {
                   key={card.id}
                   card={card}
                   onOpen={() => setInspectCard(card)}
-                  onDeleteCustom={deleteCustomEvaluator}
+                  onDeleteCustom={dataSource ? undefined : deleteCustomEvaluator}
+                  extraContent={dataSource?.renderCardContent?.(card)}
+                  actions={dataSource?.renderCardActions?.(card)}
                 />
               ))}
             </div>
           )}
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)', minHeight: 620 }}>
-          <aside style={{ borderRight: '1px solid var(--border)', padding: '16px 18px 16px 0' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: dataSource ? 'minmax(0, 1fr)' : '300px minmax(0, 1fr)', minHeight: dataSource ? undefined : 620 }}>
+          {!dataSource && <aside style={{ borderRight: '1px solid var(--border)', padding: '16px 18px 16px 0' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div className="ai-section-title">评估器筛选</div>
               <button type="button" className="ai-btn-s" onClick={() => setFilters(emptyFilters())}>
@@ -511,7 +538,7 @@ export default function EvaluatorsCenter() {
               values={filters.tags}
               onToggle={value => setFilters(prev => ({ ...prev, tags: toggleFilter(prev.tags, value) }))}
             />
-          </aside>
+          </aside>}
 
           <main style={{ padding: 16 }}>
             <div style={{ marginBottom: 14 }}>
@@ -544,7 +571,9 @@ export default function EvaluatorsCenter() {
                     onInspect={setInspectCard}
                     activeModel={activeModel}
                     onModelConfigClick={() => router.push('/modelconfig/defaults')}
-                    onDeleteCustom={deleteCustomEvaluator}
+                    onDeleteCustom={dataSource ? undefined : deleteCustomEvaluator}
+                    extraContent={dataSource?.renderCardContent?.(card)}
+                    actions={dataSource?.renderCardActions?.(card)}
                   />
                 ))}
               </div>
@@ -553,8 +582,12 @@ export default function EvaluatorsCenter() {
         </div>
       )}
 
+      {dataSource?.footer}
+
       {inspectCard ? (
-        <EvaluatorDetailModal card={inspectCard} onClose={() => setInspectCard(null)} />
+        dataSource?.renderDetail
+          ? dataSource.renderDetail(inspectCard, () => setInspectCard(null))
+          : <EvaluatorDetailModal card={inspectCard} onClose={() => setInspectCard(null)} />
       ) : null}
     </div>
   );
@@ -632,6 +665,8 @@ function EvaluatorCardView({
   activeModel,
   onModelConfigClick,
   onDeleteCustom,
+  extraContent,
+  actions,
 }: {
   card: EvaluatorCard;
   activeTab: TabKey;
@@ -639,6 +674,8 @@ function EvaluatorCardView({
   activeModel?: { id: string; name: string; model: string } | null;
   onModelConfigClick?: () => void;
   onDeleteCustom?: (card: EvaluatorCard) => void;
+  extraContent?: ReactNode;
+  actions?: ReactNode;
 }) {
   const openInspect = () => onInspect?.(card);
 
@@ -648,10 +685,11 @@ function EvaluatorCardView({
       role="button"
       tabIndex={0}
       onClick={e => {
-        if ((e.target as HTMLElement).closest('button')) return;
+        if ((e.target as HTMLElement).closest('button,input,select,textarea,a')) return;
         openInspect();
       }}
       onKeyDown={e => {
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           openInspect();
@@ -704,6 +742,8 @@ function EvaluatorCardView({
         <MiniMeta label="评分" value={card.source === 'custom' ? '0-100' : card.scoreRange} />
       </div>
 
+      {extraContent && <div onClick={e => e.stopPropagation()}>{extraContent}</div>}
+
       {/* 可执行评估器：单独一行显示当前会用什么模型，带「修改」链接 */}
       {card.runtimeHref ? (
         <div
@@ -753,6 +793,7 @@ function EvaluatorCardView({
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {actions}
           {activeTab === 'custom' && onDeleteCustom ? (
             <button
               type="button"
@@ -776,18 +817,23 @@ function EvaluatorListRow({
   card,
   onOpen,
   onDeleteCustom,
+  extraContent,
+  actions,
 }: {
   card: EvaluatorCard;
   onOpen: () => void;
   onDeleteCustom?: (card: EvaluatorCard) => void;
+  extraContent?: ReactNode;
+  actions?: ReactNode;
 }) {
   return (
     <div
       className="ai-card"
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={e => { if (!(e.target as HTMLElement).closest('button,input,select,textarea,a')) onOpen(); }}
       onKeyDown={e => {
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onOpen();
@@ -827,7 +873,9 @@ function EvaluatorListRow({
       <span className={`ai-badge ${card.evaluatorType === 'Code' ? 'ai-badge-b' : card.evaluatorType === 'Custom RPC' ? 'ai-badge-g' : 'ai-badge-gr'}`}>
         {card.evaluatorType}
       </span>
+      {extraContent && <div onClick={e => e.stopPropagation()}>{extraContent}</div>}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {actions}
         <span className={`ai-badge ${card.status === 'ready' ? 'ai-badge-g' : card.status === 'draft' ? 'ai-badge-gr' : 'ai-badge-b'}`}>
           {card.status === 'ready' ? '已就绪' : card.status === 'draft' ? '草稿' : '预置'}
         </span>

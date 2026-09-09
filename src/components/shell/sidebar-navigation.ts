@@ -22,7 +22,6 @@ export type SidebarBadgeKind = 'r' | 'y' | 'g';
 
 export interface SidebarNavItem {
     label?: string;
-    presentation?: 'section';
     key: string;
     labelKey: string;
     icon: SidebarIconKey;
@@ -31,22 +30,6 @@ export interface SidebarNavItem {
     badge?: { text: string; kind: SidebarBadgeKind };
     children?: SidebarNavItem[];
 }
-
-export const demoNavigation: SidebarNavItem[] = [
-    {key:'dashboard',href:'/dashboard',labelKey:'nav.dashboard',label:'评测总览',icon:'dashboard'},
-    {key:'demo-work',labelKey:'nav.evalCenter',label:'评测工作',icon:'evaluation',presentation:'section',children:[
-        {key:'experiments',href:'/experiments',labelKey:'nav.experiments',label:'评测实验',icon:'experiment'},
-        {key:'versions',href:'/version-analysis',labelKey:'nav.versionAnalysis',label:'版本对比',icon:'metrics'},
-    ]},
-    {key:'demo-resources',labelKey:'nav.agents',label:'评测资源',icon:'agent',presentation:'section',children:[
-        {key:'targets',href:'/agents',matchPrefixes:['/agents','/skills'],labelKey:'nav.agents',label:'评测对象',icon:'agent'},
-        {key:'dataset',href:'/dataset',labelKey:'nav.evalDataset',label:'评测数据集',icon:'dataset'},
-        {key:'metrics',href:'/metrics',labelKey:'nav.evalMetrics',label:'评估器',icon:'metrics'},
-    ]},
-    {key:'demo-settings',labelKey:'nav.modelRegistry',label:'系统设置',icon:'config',presentation:'section',children:[
-        {key:'model',href:'/modelconfig/registry',labelKey:'nav.modelRegistry',label:'模型配置',icon:'model'},
-    ]},
-];
 
 const DASHBOARD_ITEM: SidebarNavItem = {
     key: 'dashboard',
@@ -143,8 +126,8 @@ const USAGE_ITEM: SidebarNavItem = {
     badge: { text: 'ADMIN', kind: 'g' },
 };
 
-export function getSidebarNavigation(showUsage: boolean): SidebarNavItem[] {
-    return [
+export function getSidebarNavigation(showUsage: boolean, evaluationDemo = false): SidebarNavItem[] {
+    const navigation: SidebarNavItem[] = [
         DASHBOARD_ITEM,
         QUICKSTART_ITEM,
         OBSERVE_ITEM,
@@ -158,6 +141,13 @@ export function getSidebarNavigation(showUsage: boolean): SidebarNavItem[] {
             children: showUsage ? [...CONFIG_CHILDREN, USAGE_ITEM] : CONFIG_CHILDREN,
         },
     ];
+    if (!evaluationDemo) return navigation;
+    const visible = new Set(['dashboard', 'agents', 'version-analysis', 'experiments', 'dataset', 'metrics', 'model-registry']);
+    return navigation.flatMap(item => {
+        if (!item.children) return visible.has(item.key) ? [item] : [];
+        const children = item.children.filter(child => visible.has(child.key));
+        return children.length ? [{...item, children}] : [];
+    });
 }
 
 function normalizePath(pathname: string, basePath = ''): string {

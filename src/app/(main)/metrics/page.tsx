@@ -2,7 +2,8 @@
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
-import DemoEvaluators from '@/components/evaluation-harness/DemoEvaluators';
+import VersionedEvaluatorsCenter from '@/components/evaluation-harness/VersionedEvaluatorsCenter';
+import { NH_DEMO } from '@/lib/evaluation-harness/demo-profile';
 import EvaluationWorkspace from '@/components/evaluation-harness/Workspace';
 import EvaluatorsCenter from '@/components/EvaluatorsCenter';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -10,7 +11,7 @@ import { SingleExecutionMetrics } from '@/components/eval/SingleExecutionMetrics
 import { useLocale } from '@/lib/client/locale-context';
 import { Term } from '@/components/text/Term';
 
-function LegacyMetricsPage() {
+export default function MetricsPage() {
   return (
     <Suspense fallback={null}>
       <MetricsPageInner />
@@ -23,7 +24,7 @@ function MetricsPageInner() {
   const search = useSearchParams();
   const taskId = search?.get('taskId') || '';
 
-  if (taskId) {
+  if (taskId && !NH_DEMO) {
     return (
       <>
         <AppTopBar
@@ -45,11 +46,11 @@ function MetricsPageInner() {
     <>
       <AppTopBar title={<Term id="evaluator" label={t('nav.evalMetrics')} />} />
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        <EvaluatorsCenter />
-        <details className="m-5 rounded-lg border border-border p-4"><summary>版本化业务评估器</summary><EvaluationWorkspace mode="evaluators" /></details>
+        {NH_DEMO ? <VersionedEvaluatorsCenter /> : <>
+          <EvaluatorsCenter />
+          <details className="m-5 rounded-lg border border-border p-4"><summary>版本化业务评估器</summary><EvaluationWorkspace mode="evaluators" /></details>
+        </>}
       </div>
     </>
   );
 }
-
-export default function MetricsPage(){return <DemoEvaluators/>;}
