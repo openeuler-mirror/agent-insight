@@ -394,7 +394,7 @@ export async function generateExperimentTraces(
   req: TraceGenerationRequest,
   options: TraceGenerationOptions = {},
 ): Promise<TraceGenerationResult> {
-  const timeoutSeconds = Math.max(30, Math.min(req.timeoutSeconds ?? 180, 3_600));
+  const timeoutSeconds = Math.max(30, Math.min(req.timeoutSeconds ?? 600, 3_600));
   const latestAttempts = await prisma.experimentTraceAttempt.findMany({
     where: { caseId: { in: req.cases.map((item) => item.caseId) } },
     orderBy: { attemptNo: 'desc' },
@@ -510,7 +510,7 @@ export async function loadTraceGenerationRetryRequest(input: {
     platform,
     agent,
     model: typeof payload.model === 'string' ? payload.model : null,
-    timeoutSeconds: Number(payload.timeoutSeconds) || 180,
+    timeoutSeconds: Number(payload.timeoutSeconds) || 600,
     cases: [{ caseId: row.id, input: row.input.trim() }],
   };
 }

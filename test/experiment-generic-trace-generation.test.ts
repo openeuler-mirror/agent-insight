@@ -346,8 +346,11 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(wizard, /agent-datasets\/\$\{encodeURIComponent\(nextId\)\}.*view=items/);
   assert.match(wizard, /fiOrchestrate: isReliabilityDataset/);
   assert.match(wizard, /generationCasesFromDataset\(selectedDataset\)/);
-  assert.match(wizard, /GENERATED_TRACE_AGENT_TIMEOUT_SECONDS = 300/);
+  assert.match(wizard, /GENERATED_TRACE_AGENT_TIMEOUT_SECONDS = 600/);
   assert.match(wizard, /timeoutSeconds: GENERATED_TRACE_AGENT_TIMEOUT_SECONDS/);
+  assert.equal(route.match(/: 600;/g)?.length, 2);
+  assert.match(generation, /req\.timeoutSeconds \?\? 600/);
+  assert.match(generation, /Number\(payload\.timeoutSeconds\) \|\| 600/);
   assert.match(route, /if \(wantGenerate && !wantFi\)/);
   assert.match(route, /generateExperimentTraces/);
   assert.match(route, /caseIds: generated\.readyCaseIds/);

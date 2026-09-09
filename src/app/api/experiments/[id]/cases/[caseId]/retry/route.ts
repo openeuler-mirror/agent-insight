@@ -177,7 +177,7 @@ export async function POST(
       }
       const taskRequest = parseObject(task.requestJson);
       const runRequest = parseObject(previousRun.requestJson);
-      const timeoutSeconds = Number(runRequest.timeoutSeconds ?? taskRequest.timeoutSeconds) || 180;
+      const timeoutSeconds = Number(runRequest.timeoutSeconds ?? taskRequest.timeoutSeconds) || 600;
       const targetWorkerId = typeof runRequest.targetWorkerId === 'string'
         ? runRequest.targetWorkerId
         : null;

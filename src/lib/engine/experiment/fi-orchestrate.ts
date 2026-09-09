@@ -150,7 +150,7 @@ export async function orchestrateFaultInjection(
       prompt: item.input,
       workspace,
       model: req.model || null,
-      timeoutSeconds: req.timeoutSeconds ?? 180,
+      timeoutSeconds: req.timeoutSeconds ?? 600,
       targetWorkerId: req.targetWorkerId || null,
       items: [{ fault: item.fault, submode: item.submode || null }],
     })
