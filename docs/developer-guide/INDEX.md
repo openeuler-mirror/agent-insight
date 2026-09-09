@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `ad261e789dde428e91d8cf9b0518e91000bbe12b` (`ad261e78`) |
+| Commit | `4750a382e4411143c75eb8580526b83ce5f78631` (`4750a382`) |
 | Branch | `codex/refactor-for-nh-demo` |
-| Date | 2026-09-09 19:05:13 +0800 |
+| Date | 2026-09-09 19:52:27 +0800 |
 | Author | gyctl |
-| Subject | `refactor: 按评测工作与资源分组导航并内嵌定义检查` |
-| Working tree overlay | 无未提交的功能变更。NH 演示四资产版本闭环和浏览器修复已进入上述提交；导航分组与对象内定义检查见 06；架构与契约见 04/05，最新截图见 evaluation-harness-v1 测试报告。真实 LLM 生成、人工保存与公共/私有评分已验收；历史平台功能的隐藏不等于删除。 |
+| Subject | `refactor: 用构建开关隔离 NH 演示范围` |
+| Working tree overlay | 无未提交的功能变更。原有侧栏和页面复用、完整/演示构建期开关、Trace 加载定义和工具结果适配均已提交；当前 UI 边界见 06，既有评测契约见 04/05。真实 HTTP/LLM 与两种模式验证及截图见 evaluation-harness-v1 测试报告。历史功能仅通过界面开关隐藏，源码保留。 |
 
-**如何更新：** `git diff ad261e78 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 4750a382 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

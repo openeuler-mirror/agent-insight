@@ -34,7 +34,7 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
 ## 导航信息架构（功能模块）
-侧边栏是产品的**功能模块入口**。语义配置的权威定义在 `src/components/shell/sidebar-navigation.ts`，`AppSidebar.tsx` 只负责渲染，显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。当前结构为统一模块树：
+侧边栏是产品的**功能模块入口**。语义配置的权威定义在 `src/components/shell/sidebar-navigation.ts`，`AppSidebar.tsx` 通过原有 `NavTree` 渲染，显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。以下是默认完整模式的统一模块树；评测演示模式在同一棵树中过滤入口，见文末“NH 演示模式与原 UI 复用”。
 
 ```
 仪表盘                         → /dashboard
@@ -120,6 +120,23 @@ flowchart TD
 - **构建**：`npm run build`（`next build`）。**启动**：`npm run start`。
 - **根布局 / 启动**：`src/app/layout.tsx`（`RootLayout`）；OpenTelemetry 在 `src/instrumentation.ts` / `instrumentation-node.ts` 中注册。
 
-### 2026-09-09 NH 演示导航
+### 2026-09-09 NH 演示模式与原 UI 复用
 
-`sidebar-navigation.ts` 的演示导航采用评测工作、评测资源、系统设置三个常显分组；`presentation: section` 由 AppSidebar 渲染为浅色标题和直接可用的叶子链接，不改变通用折叠菜单。评测对象包含 Agent/Skill 的定义与版本，DemoTargets 直接调用现有 static 动作并在同页展示结果，报告绑定 targetId，切换对象或版本不混用报告。旧 /skills 深链接仍可执行检查，并归属于评测对象激活态；API、版本快照及执行规则均沿用既有契约。
+`src/lib/evaluation-harness/demo-profile.ts` 以 `process.env.NEXT_PUBLIC_EVALUATION_DEMO === 'true'` 判断演示模式，未设置或设为其他值时使用完整模式。该公开环境变量由 Next.js 在构建时写入前端产物；演示构建需显式设置为 `true`，改变已构建服务的运行环境不会重新生成另一种界面。`MainLayout` 只在演示模式限制未纳入演示的页面显示，原路由、组件、API 和历史数据保留。此开关是界面呈现配置，不代替服务端权限校验。
+
+`getSidebarNavigation(showUsage, evaluationDemo)` 先生成原完整导航，再按演示入口集合过滤叶子节点、去掉空分组。保留节点沿用原 `labelKey`、图标、匹配路径、顺序和父子关系，由同一个 `NavTree` 渲染和管理折叠；不再使用“评测工作 / 评测资源 / 系统设置”三个常显分组。演示保留仪表盘、运行观测下的 Agent 概览与版本分析、评估与实验下的实验/评测数据集/评估器，以及配置下的模型注册。Trace 从实验 Case 内进入，侧栏不单列。
+
+页面复用边界如下：
+
+| 页面 | 复用方式与演示扩展 |
+|---|---|
+| 评测数据集 | `/dataset` 继续渲染 `AgentDatasetCenter`。可选 `evaluationOnly` 只影响数据来源和相关操作的显示；版本资产通过 `datasetCards` 适配为原卡片数据，沿用搜索、列表/卡片及操作布局。默认模式继续加载原数据集，不删除原创建、导入或管理逻辑。 |
+| 评估器 | `/metrics` 保留原页面外壳。`VersionedEvaluatorsCenter` 将版本资产适配为 `EvaluatorCard`，通过 `EvaluatorsCenter` 的可选 `dataSource` 注入预置/自建卡片、版本选择和发布动作；复用原页签、搜索、卡片/列表及 `EvaluatorDetailModal`。编辑与公共/私有连接使用 `ui/Dialog`、`Input`、`Select`、`Textarea`。不传数据源时继续使用原获取、创建、持久化、删除和详情路径；演示不传旧删除回调，也不展示无效执行入口。 |
+| 新建实验 | 原 `ExperimentWizard` 与演示编排组件共用步骤条以及 `ExperimentWizardLayout` 中的标题、面板、字段和前进/后退操作布局。演示保留四类版本与单变量 A/B 契约，第二步为“选择 Case”；原 Trace 来源流程保留在完整模式。共享 UI 不包含演示白名单。 |
+| Agent 概览 | 原目录页和 `DemoTargets` 共用 `agents/AgentDirectory` 的目录布局、卡片、筛选及按钮。演示卡片适配外部 Agent/Skill 版本目录，详情增加定义查看与静态检查；检查报告绑定 `targetId`，不同对象或版本不会混用结果。 |
+| 仪表盘 | `DemoOverview` 只提供评测目录数据，交给原 `DashboardPage` 的可选 `evaluation` 数据入口；沿用原标题、布局和统计组件，只显示演示有关的评测概况。 |
+| Trace | `/trace` 继续使用原页面、详情与 `AgentTraceView` 执行树；演示从实验 Case 定位执行记录，补充实验关联，条件隐藏无关导入、标签、诊断和评论操作。原 Trace 列表和完整操作代码保留。 |
+
+版本资产适配、版本选择、对比评测和共享组件属于可迁移的能力扩展；入口白名单、演示默认值及不相关元素的隐藏属于演示配置。后续向 `master` 迁移时按这两类拆分，优先保留能力与原组件的可选扩展点，不携带演示筛选或把原页面替换成专用演示页。隐藏功能不以删除源码、路由或数据代替。
+
+NH Trace 在挂载原详情前通过 `trace-access.ts` 校验当前账号归属；切换账号或 Trace 时旧授权即时失效。`AgentTraceView` 对 evaluation-harness 记录用 `trace-evidence.ts` 按 `tool_call_id` 关联独立工具返回，单条懒加载同时补齐关联消息并保留原索引。原 Skills 卡片追加执行端确认的加载定义、外部版本和指纹；它们不计为 Skill 工具调用。`showInfra` 默认为 true，演示调用传 false，仅隐藏基础设施页签。
