@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `86b94020fde5b10bb88d9fbf47169d9eb2b4d601` (`86b94020`) |
+| Commit | `ad261e789dde428e91d8cf9b0518e91000bbe12b` (`ad261e78`) |
 | Branch | `codex/refactor-for-nh-demo` |
-| Date | 2026-09-09 10:48:00 +0800 |
+| Date | 2026-09-09 19:05:13 +0800 |
 | Author | gyctl |
-| Subject | `fix: 完成真实模型生成与公共私有评分闭环验收` |
-| Working tree overlay | 无未提交的功能变更。NH 演示四资产版本闭环和浏览器修复已进入上述提交；架构与契约见 04/05，最新截图见 evaluation-harness-v1 测试报告。真实 LLM 生成、人工保存与公共/私有评分已验收；历史平台功能的隐藏不等于删除。 |
+| Subject | `refactor: 按评测工作与资源分组导航并内嵌定义检查` |
+| Working tree overlay | 无未提交的功能变更。NH 演示四资产版本闭环和浏览器修复已进入上述提交；导航分组与对象内定义检查见 06；架构与契约见 04/05，最新截图见 evaluation-harness-v1 测试报告。真实 LLM 生成、人工保存与公共/私有评分已验收；历史平台功能的隐藏不等于删除。 |
 
-**如何更新：** `git diff 86b94020 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff ad261e78 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
