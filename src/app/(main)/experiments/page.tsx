@@ -130,7 +130,7 @@ export default function ExperimentsPage() {
   return (
     <>
       <AppTopBar
-        title="实验"
+        title="评测实验"
         actions={
           <Button size="sm" onClick={() => router.push('/experiments/new')}>
             <Plus className="size-3.5" />

@@ -243,6 +243,19 @@ function NavTree({
     const active = isSidebarItemActive(item, pathname, basePath);
     const open = expanded.has(item.key) || active;
 
+    if (item.presentation === 'section') {
+        return (
+            <section aria-labelledby={`nav-${item.key}`} style={{ marginTop: 18 }}>
+                <h2 id={`nav-${item.key}`} style={{ padding: '0 10px', marginBottom: 6, fontSize: 10.5, fontWeight: 500, color: 'var(--foreground-muted)' }}>
+                    {item.label || t(item.labelKey)}
+                </h2>
+                {item.children?.map(child => (
+                    <NavTree key={child.key} item={child} pathname={pathname} expanded={expanded} onToggle={onToggle} t={t} depth={0} />
+                ))}
+            </section>
+        );
+    }
+
     if (item.href && !hasChildren) {
         return <LeafLink item={item} active={active} t={t} depth={depth} />;
     }

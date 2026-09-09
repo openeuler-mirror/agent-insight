@@ -119,3 +119,7 @@ flowchart TD
 - **开发**：`npm run dev`（或 `bash scripts/restart_dev.sh`——项目规范的开发启动方式）。端口 3000。
 - **构建**：`npm run build`（`next build`）。**启动**：`npm run start`。
 - **根布局 / 启动**：`src/app/layout.tsx`（`RootLayout`）；OpenTelemetry 在 `src/instrumentation.ts` / `instrumentation-node.ts` 中注册。
+
+### 2026-09-09 NH 演示导航
+
+`sidebar-navigation.ts` 的演示导航采用评测工作、评测资源、系统设置三个常显分组；`presentation: section` 由 AppSidebar 渲染为浅色标题和直接可用的叶子链接，不改变通用折叠菜单。评测对象包含 Agent/Skill 的定义与版本，DemoTargets 直接调用现有 static 动作并在同页展示结果，报告绑定 targetId，切换对象或版本不混用报告。旧 /skills 深链接仍可执行检查，并归属于评测对象激活态；API、版本快照及执行规则均沿用既有契约。

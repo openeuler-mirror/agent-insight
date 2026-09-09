@@ -22,6 +22,7 @@ export type SidebarBadgeKind = 'r' | 'y' | 'g';
 
 export interface SidebarNavItem {
     label?: string;
+    presentation?: 'section';
     key: string;
     labelKey: string;
     icon: SidebarIconKey;
@@ -32,14 +33,19 @@ export interface SidebarNavItem {
 }
 
 export const demoNavigation: SidebarNavItem[] = [
-    {key:'dashboard',href:'/dashboard',labelKey:'nav.dashboard',label:'测评总览',icon:'dashboard'},
-    {key:'experiments',href:'/experiments',labelKey:'nav.experiments',label:'实验',icon:'experiment'},
-    {key:'dataset',href:'/dataset',labelKey:'nav.evalDataset',label:'评测数据集',icon:'dataset'},
-    {key:'metrics',href:'/metrics',labelKey:'nav.evalMetrics',label:'评估器',icon:'metrics'},
-    {key:'versions',href:'/version-analysis',labelKey:'nav.versionAnalysis',label:'版本分析',icon:'metrics'},
-    {key:'targets',href:'/agents',labelKey:'nav.agents',label:'Agent 与 Skill',icon:'agent'},
-    {key:'static',href:'/skills',labelKey:'nav.skillWorkspace',label:'Skill 静态分析',icon:'skill'},
-    {key:'model',href:'/modelconfig/registry',labelKey:'nav.modelRegistry',label:'模型连接',icon:'model'},
+    {key:'dashboard',href:'/dashboard',labelKey:'nav.dashboard',label:'评测总览',icon:'dashboard'},
+    {key:'demo-work',labelKey:'nav.evalCenter',label:'评测工作',icon:'evaluation',presentation:'section',children:[
+        {key:'experiments',href:'/experiments',labelKey:'nav.experiments',label:'评测实验',icon:'experiment'},
+        {key:'versions',href:'/version-analysis',labelKey:'nav.versionAnalysis',label:'版本对比',icon:'metrics'},
+    ]},
+    {key:'demo-resources',labelKey:'nav.agents',label:'评测资源',icon:'agent',presentation:'section',children:[
+        {key:'targets',href:'/agents',matchPrefixes:['/agents','/skills'],labelKey:'nav.agents',label:'评测对象',icon:'agent'},
+        {key:'dataset',href:'/dataset',labelKey:'nav.evalDataset',label:'评测数据集',icon:'dataset'},
+        {key:'metrics',href:'/metrics',labelKey:'nav.evalMetrics',label:'评估器',icon:'metrics'},
+    ]},
+    {key:'demo-settings',labelKey:'nav.modelRegistry',label:'系统设置',icon:'config',presentation:'section',children:[
+        {key:'model',href:'/modelconfig/registry',labelKey:'nav.modelRegistry',label:'模型配置',icon:'model'},
+    ]},
 ];
 
 const DASHBOARD_ITEM: SidebarNavItem = {
