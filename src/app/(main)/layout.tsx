@@ -4,7 +4,7 @@ import { AppSidebar } from '@/components/shell/AppSidebar';
 import { useSidebar } from '@/lib/client/sidebar-context';
 import {usePathname} from 'next/navigation';
 import Link from 'next/link';
-import {isDemoPath} from '@/lib/evaluation-harness/demo-profile';
+import {NH_DEMO,isDemoPath} from '@/lib/evaluation-harness/demo-profile';
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
     const { isCollapsed } = useSidebar();
@@ -23,7 +23,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                 background: 'var(--background)',
                 overflow: 'hidden'
             }}>
-                {isDemoPath(path)?children:<div className="p-8 space-y-3"><h1 className="text-lg font-semibold">此功能未纳入本次演示</h1><Link href="/experiments" className="ai-btn-s">返回实验</Link></div>}
+                {!NH_DEMO||isDemoPath(path)?children:<div className="p-8 space-y-3"><h1 className="text-lg font-semibold">此功能未纳入本次演示</h1><Link href="/experiments" className="ai-btn-s">返回实验</Link></div>}
             </main>
         </div>
     );
