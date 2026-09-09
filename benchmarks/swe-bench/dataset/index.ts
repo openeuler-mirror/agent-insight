@@ -6,7 +6,10 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 
-import type { JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
+import type {
+  BenchmarkDatasetLoader,
+  JsonValue,
+} from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { resolveAgentInsightDataPath, resolveAgentInsightHomePath } from '../../../src/lib/env'
 
@@ -158,6 +161,13 @@ export async function loadOfficialSweBenchVerifiedDataset(
     caseCount: output.cases.length,
     sourceSha256: await sha256File(paths.datasetPath),
   }
+}
+
+export const sweBenchDatasetLoader: BenchmarkDatasetLoader = {
+  async *loadCases(sourcePath: string) {
+    const loaded = await loadOfficialSweBenchVerifiedDataset({ datasetPath: sourcePath })
+    for (const rawCase of loaded.cases) yield rawCase as JsonValue
+  },
 }
 
 export async function importOfficialSweBenchVerifiedDataset(input: {

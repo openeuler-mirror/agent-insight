@@ -208,6 +208,72 @@ export const generatedBenchmarkManifests = {
         "key": "resolved",
         "aggregation": "boolean-rate"
       }
+    },
+    "dataset": {
+      "profiles": [
+        {
+          "key": "verified",
+          "displayName": "SWE-bench Verified",
+          "acceptedExtensions": [
+            ".parquet"
+          ],
+          "expectedCaseCount": 500
+        }
+      ]
+    },
+    "presentation": {
+      "caseTable": {
+        "searchPaths": [
+          "externalCaseId",
+          "values.repo"
+        ],
+        "searchPlaceholder": "搜索 Instance ID 或仓库",
+        "columns": [
+          {
+            "path": "input",
+            "label": "任务输入",
+            "type": "text"
+          },
+          {
+            "path": "externalCaseId",
+            "label": "Instance ID",
+            "type": "code"
+          },
+          {
+            "path": "values.repo",
+            "label": "仓库",
+            "type": "text"
+          }
+        ]
+      },
+      "referencePanel": {
+        "title": "SWE-bench 官方测试契约",
+        "description": "测试内容和 Gold Patch 只交给评测服务，不会发送给 Agent。",
+        "columns": [
+          {
+            "path": "externalCaseId",
+            "label": "Case",
+            "type": "code"
+          },
+          {
+            "path": "values.repo",
+            "label": "仓库",
+            "type": "text"
+          },
+          {
+            "path": "values.base_commit",
+            "label": "基线版本",
+            "type": "code"
+          }
+        ]
+      },
+      "result": {
+        "primaryMetric": {
+          "path": "primaryMetric.value",
+          "label": "Resolved",
+          "type": "boolean"
+        }
+      }
     }
   }
 } as const satisfies Record<string, BenchmarkManifest>

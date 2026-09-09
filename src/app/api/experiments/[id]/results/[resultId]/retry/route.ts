@@ -25,7 +25,7 @@ export async function POST(
       where: { id: resultId, experimentId: id, case: { experiment: { user: username } } },
       select: { evaluatorId: true },
     });
-    if (result?.evaluatorId === 'benchmark:swe-bench') {
+    if (result?.evaluatorId.startsWith('benchmark:')) {
       const retry = await retryBenchmarkEvaluation({ experimentId: id, resultId, user: username });
       recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.retry' });
       return NextResponse.json(retry, { status: 202 });

@@ -18,6 +18,7 @@ import { getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
+import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +44,7 @@ interface ExperimentScoreRow {
   humanScore: number | null
 }
 
-async function benchmarkEvaluatorIds(user: string, rawIds: unknown): Promise<string[]> {
+async function benchmarkEvaluatorIds(user: string, rawIds: unknown, adapterKey: string): Promise<string[]> {
   const requested = Array.isArray(rawIds)
     ? rawIds.map(String).map((id) => id.trim()).filter(Boolean)
     : [];
@@ -52,9 +53,10 @@ async function benchmarkEvaluatorIds(user: string, rawIds: unknown): Promise<str
   for (const card of await readUserCustomEvaluators(user) as EvaluatorCard[]) {
     if (card && typeof card === 'object' && card.id) catalog.set(card.id, card);
   }
-  const selected = new Set<string>(['benchmark:swe-bench']);
+  const benchmarkEvaluatorId = `benchmark:${adapterKey}`;
+  const selected = new Set<string>([benchmarkEvaluatorId]);
   for (const id of requested) {
-    if (id === 'benchmark:swe-bench') continue;
+    if (id === benchmarkEvaluatorId) continue;
     if (id.startsWith('benchmark:')) {
       throw new Error(`Benchmark 实验不支持评估器 ${id}`);
     }
@@ -175,7 +177,11 @@ export async function POST(req: Request) {
     const agentEvalDatasetId = String(body.datasetId || '').trim();
     const publicBenchmarkDataset = agentEvalDatasetId
       ? await prisma.agentEvalDataset.findFirst({
-          where: { id: agentEvalDatasetId, user: username, datasetKind: 'benchmark' },
+          where: {
+            id: agentEvalDatasetId,
+            user: { in: benchmarkDatasetOwners(username) },
+            datasetKind: 'benchmark',
+          },
           include: { benchmarkDataset: true },
         })
       : null;
@@ -194,7 +200,11 @@ export async function POST(req: Request) {
           ? body.executionTarget as Record<string, unknown>
           : {};
         const agentName = String(body.agentName || '').trim();
-        const evaluatorIds = await benchmarkEvaluatorIds(username, body.evaluatorIds);
+        const evaluatorIds = await benchmarkEvaluatorIds(
+          username,
+          body.evaluatorIds,
+          publicBenchmarkDataset.benchmarkDataset.adapterKey,
+        );
         const caseIds = Array.isArray(body.datasetCaseIds)
           ? body.datasetCaseIds.map(String).filter(Boolean)
           : [];
@@ -313,9 +323,9 @@ export async function POST(req: Request) {
     if (evaluatorIds.length < 1) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
-    if (evaluatorIds.includes('benchmark:swe-bench')) {
+    if (evaluatorIds.some((id) => id.startsWith('benchmark:'))) {
       return NextResponse.json(
-        { error: 'SWE-bench Official Harness 只能用于 Benchmark 数据集' },
+        { error: 'Benchmark Evaluator 只能用于 Benchmark 数据集' },
         { status: 400 },
       );
     }

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry'
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error'
+import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership'
 import { listBenchmarkExecutionTargets } from '@/lib/benchmark/execution-targets'
 import { prisma } from '@/lib/storage/prisma'
 
@@ -23,7 +24,7 @@ export async function GET(req: Request) {
     let adapterKey = 'swe-bench'
     if (datasetId) {
       const dataset = await prisma.benchmarkDataset.findFirst({
-        where: { id: datasetId, user: username, status: 'ready' },
+        where: { id: datasetId, user: { in: benchmarkDatasetOwners(username) }, status: 'ready' },
         select: { adapterKey: true },
       })
       if (!dataset) {

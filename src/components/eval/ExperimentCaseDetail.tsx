@@ -52,6 +52,13 @@ interface ExperimentDetail {
     actualOutput: string;
     referenceOutput: string | null;
     benchmark?: {
+      adapterKey: string;
+      displayName: string;
+      presentation: {
+        referencePanel?: { title?: string };
+        result?: { primaryMetric?: { label?: string; type?: string } };
+      } | null;
+      primaryMetric: { key: string; value: boolean | number | null } | null;
       externalCaseId: string;
       repo: string;
       reference: { kind: string; description: string };
@@ -598,10 +605,14 @@ export function ExperimentCaseDetail({
               {([
                 { label: '任务输入', value: caseRow.input, missing: '' },
                 isBenchmark
-                  ? { label: '参考答案', value: caseRow.benchmark?.reference.description || '', missing: '官方测试契约不可用' }
+                  ? {
+                      label: caseRow.benchmark?.presentation?.referencePanel?.title || '参考契约',
+                      value: caseRow.benchmark?.reference.description || '',
+                      missing: 'Benchmark 测试契约不可用',
+                    }
                   : { label: '预期输出', value: caseRow.referenceOutput || '', missing: '未标注预期输出' },
                 isBenchmark
-                  ? { label: '实际输出', value: caseRow.benchmark?.submission ? `${caseRow.benchmark.submission.name}\n${caseRow.benchmark.submission.summary}` : '', missing: '尚未生成 model.patch' }
+                  ? { label: '实际输出', value: caseRow.benchmark?.submission ? `${caseRow.benchmark.submission.name}\n${caseRow.benchmark.submission.summary}` : '', missing: '尚未生成提交产物' }
                   : { label: '实际输出', value: caseRow.actualOutput, missing: '' },
               ] as const).map((box) => (
                 <div key={box.label} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -662,22 +673,20 @@ export function ExperimentCaseDetail({
                       const shownScore = effectiveScore(r);
                       const summary = displaySummary(r.summary, r.evidence);
                       const rowComments = filterComments(comments, { resultId: r.id });
-                      const isOfficialHarness = isBenchmark && r.evaluatorId === 'benchmark:swe-bench';
-                      if (isOfficialHarness) {
-                        const testCounts = new Map(points.map((point) => {
-                          const evidence = point.evidence && typeof point.evidence === 'object' && !Array.isArray(point.evidence)
-                            ? point.evidence as Record<string, unknown>
-                            : {};
-                          return [point.label, {
-                            passed: Number(evidence.passed) || 0,
-                            total: Number(evidence.total) || 0,
-                          }];
-                        }));
-                        const resolved = r.verdict === 'pass';
+                      const isBenchmarkEvaluator = isBenchmark && r.evaluatorId.startsWith('benchmark:');
+                      if (isBenchmarkEvaluator) {
+                        const passed = r.verdict === 'pass';
+                        const metric = caseRow.benchmark?.primaryMetric;
+                        const metricLabel = caseRow.benchmark?.presentation?.result?.primaryMetric?.label
+                          || metric?.key
+                          || '结果';
+                        const metricValue = typeof metric?.value === 'boolean'
+                          ? metric.value ? '通过' : '未通过'
+                          : metric?.value ?? '—';
                         return (
                           <div key={r.id} style={{ border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden', opacity: failed ? 0.85 : 1 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '11px 13px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                              <b style={{ fontSize: 12.5 }}>SWE-bench Official Harness</b>
+                              <b style={{ fontSize: 12.5 }}>{caseRow.benchmark?.displayName || 'Benchmark'} Evaluator</b>
                               <TagChip text="预置" />
                               <TagChip text="官方评测" />
                               <span style={{ flex: 1 }} />
@@ -686,26 +695,37 @@ export function ExperimentCaseDetail({
                               ) : failed ? (
                                 <span style={{ background: VERDICT_CHIP.fail.bg, color: VERDICT_CHIP.fail.fg, fontSize: 11, padding: '2px 9px', borderRadius: 8 }}>评测失败</span>
                               ) : (
-                                <span style={{ background: VERDICT_CHIP[resolved ? 'pass' : 'fail'].bg, color: VERDICT_CHIP[resolved ? 'pass' : 'fail'].fg, fontSize: 11, padding: '2px 9px', borderRadius: 8, fontWeight: 600 }}>
-                                  {resolved ? 'Resolved' : 'Unresolved'}
+                                <span style={{ background: VERDICT_CHIP[passed ? 'pass' : r.verdict === 'warn' ? 'warn' : 'fail'].bg, color: VERDICT_CHIP[passed ? 'pass' : r.verdict === 'warn' ? 'warn' : 'fail'].fg, fontSize: 11, padding: '2px 9px', borderRadius: 8, fontWeight: 600 }}>
+                                  {metricLabel}：{metricValue}
                                 </span>
                               )}
                             </div>
                             <div style={{ padding: '11px 13px' }}>
                               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 10 }}>
-                                {failed ? r.errorMessage || 'Official Harness 未产出结果' : r.summary || '等待官方评测结果'}
+                                {failed ? r.errorMessage || 'Benchmark Evaluator 未产出结果' : r.summary || '等待 Benchmark 评测结果'}
                               </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
-                                {['FAIL_TO_PASS', 'PASS_TO_PASS'].map((label) => {
-                                  const count = testCounts.get(label) || { passed: 0, total: 0 };
+                              {points.length > 0 && (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                                  {points.map((point) => {
+                                    const evidence = point.evidence && typeof point.evidence === 'object' && !Array.isArray(point.evidence)
+                                      ? point.evidence as Record<string, unknown>
+                                      : {};
+                                    const hasRatio = Number.isFinite(Number(evidence.passed))
+                                      && Number.isFinite(Number(evidence.total));
+                                    const value = hasRatio
+                                      ? `${Number(evidence.passed)} / ${Number(evidence.total)}`
+                                      : typeof point.score === 'number'
+                                        ? String(point.score)
+                                        : point.status || '—';
                                   return (
-                                    <div key={label} style={{ padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--background-secondary)' }}>
-                                      <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{label}</div>
-                                      <b style={{ fontSize: 13 }}>{count.passed} / {count.total} 通过</b>
+                                    <div key={point.label} style={{ padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--background-secondary)' }}>
+                                      <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{point.label}</div>
+                                      <b style={{ fontSize: 13 }}>{value}</b>
                                     </div>
                                   );
-                                })}
-                              </div>
+                                  })}
+                                </div>
+                              )}
                               {(caseRow.benchmark?.evidenceArtifacts.length || 0) > 0 && (
                                 <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'var(--background-secondary)', fontSize: 11, color: 'var(--foreground-secondary)', lineHeight: 1.7 }}>
                                   {caseRow.benchmark?.evidenceArtifacts.map((artifact) => (
@@ -720,7 +740,7 @@ export function ExperimentCaseDetail({
                                   disabled={Boolean(retryingId)}
                                   style={{ marginTop: 10, fontSize: 11, padding: '3px 11px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--background-secondary)', color: 'var(--foreground)', cursor: retryingId ? 'not-allowed' : 'pointer' }}
                                 >
-                                  {retryingId === r.id ? '重评中…' : '↻ Official Harness 重评'}
+                                  {retryingId === r.id ? '重评中…' : '↻ Benchmark 重评'}
                                 </button>
                               )}
                             </div>

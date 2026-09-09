@@ -13,6 +13,7 @@ import {
 } from '@/lib/dataset-case-root-causes';
 import { extractRootCausesFromExpected } from '@/lib/engine/evaluation/root-cause-extractor';
 import { resolveAgentInsightDataPath } from '@/lib/env';
+import { SYSTEM_BENCHMARK_DATASET_OWNER } from '@/lib/benchmark/dataset-ownership';
 
 const DATA_DIR = resolveAgentInsightDataPath();
 const LEGACY_FILE = path.join(DATA_DIR, 'agent_datasets.json');
@@ -247,10 +248,12 @@ export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField
     }];
   });
   // 可靠性集强制保留系统字段，避免客户端漏传导致门控失效。
-  for (const required of defaults.filter((field) => field.system)) {
-    if (!seen.has(required.key)) {
-      fields.unshift(required);
-      seen.add(required.key);
+  if (kind === 'reliability') {
+    for (const required of defaults.filter((field) => field.system)) {
+      if (!seen.has(required.key)) {
+        fields.unshift(required);
+        seen.add(required.key);
+      }
     }
   }
   return fields.length > 0 ? fields : defaults;
@@ -617,23 +620,41 @@ export async function readAllAgentDatasets(): Promise<AgentDatasetRecord[]> {
   return readLegacyFileSync();
 }
 
+function agentDatasetVisibilityWhere(user: string) {
+  const normalized = user.trim();
+  return normalized === SYSTEM_BENCHMARK_DATASET_OWNER
+    ? { user: SYSTEM_BENCHMARK_DATASET_OWNER }
+    : {
+        OR: [
+          { user: normalized },
+          { user: SYSTEM_BENCHMARK_DATASET_OWNER, datasetKind: 'benchmark' },
+        ],
+      };
+}
+
+function canReadAgentDataset(user: string, item: Pick<AgentDatasetRecord, 'user' | 'datasetKind'>): boolean {
+  const normalized = user.trim();
+  return item.user === normalized
+    || (item.user === SYSTEM_BENCHMARK_DATASET_OWNER && item.datasetKind === 'benchmark');
+}
+
 export async function readUserAgentDatasets(user: string): Promise<AgentDatasetRecord[]> {
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user },
+      where: agentDatasetVisibilityWhere(user),
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(recordFromDbRow);
   }
   warnFileBackendOnce();
-  return readLegacyFileSync().filter(item => item.user === user);
+  return readLegacyFileSync().filter(item => canReadAgentDataset(user, item));
 }
 
 async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: string): Promise<void> {
   const pending = await prisma.agentEvalDataset.findMany({
-    where: { user, projectionReady: false },
+    where: { ...agentDatasetVisibilityWhere(user), projectionReady: false },
     select: { id: true, casesJson: true, updatedAt: true },
   });
   for (const row of pending) {
@@ -656,7 +677,7 @@ export async function readAgentDatasetSummaries(
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user, ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
@@ -668,7 +689,7 @@ export async function readAgentDatasetSummaries(
   }
   warnFileBackendOnce();
   return readLegacyFileSync()
-    .filter(item => item.user === user && (targetSkill === undefined || item.targetSkill === targetSkill))
+    .filter(item => canReadAgentDataset(user, item) && (targetSkill === undefined || item.targetSkill === targetSkill))
     .map(({ cases, ...item }) => ({ ...item, caseCount: cases.length }));
 }
 
@@ -681,7 +702,7 @@ export async function readAgentDatasetReferences(
     await migrateLegacyJsonIfNeeded(prisma);
     await ensureAgentDatasetProjectionsForUser(prisma, user);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user, ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      where: { ...agentDatasetVisibilityWhere(user), ...(targetSkill !== undefined ? { targetSkill } : {}) },
       select: {
         id: true, user: true, name: true, description: true, targetAgent: true,
         targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
@@ -706,7 +727,7 @@ export async function readAgentDatasetReferences(
   }
   warnFileBackendOnce();
   return readLegacyFileSync()
-    .filter(item => item.user === user && (targetSkill === undefined || item.targetSkill === targetSkill))
+    .filter(item => canReadAgentDataset(user, item) && (targetSkill === undefined || item.targetSkill === targetSkill))
     .map(item => ({
       ...item,
       caseCount: item.cases.length,
@@ -721,12 +742,12 @@ export async function findAgentDataset(user: string, id: string): Promise<AgentD
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const row = await prisma.agentEvalDataset.findFirst({
-      where: { id, user },
+      where: { id, ...agentDatasetVisibilityWhere(user) },
     });
     return row ? recordFromDbRow(row) : null;
   }
   warnFileBackendOnce();
-  return readLegacyFileSync().find(d => d.id === id && d.user === user) ?? null;
+  return readLegacyFileSync().find(d => d.id === id && canReadAgentDataset(user, d)) ?? null;
 }
 
 export async function createAgentDatasetRecord(record: AgentDatasetRecord): Promise<void> {
@@ -933,13 +954,13 @@ export async function findAgentDatasetsByTargetSkill(
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
     const rows = await prisma.agentEvalDataset.findMany({
-      where: { user, targetSkill },
+      where: { ...agentDatasetVisibilityWhere(user), targetSkill },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(recordFromDbRow);
   }
   warnFileBackendOnce();
-  return readLegacyFileSync().filter(d => d.user === user && (d.targetSkill ?? '') === targetSkill);
+  return readLegacyFileSync().filter(d => canReadAgentDataset(user, d) && (d.targetSkill ?? '') === targetSkill);
 }
 
 export async function deleteAgentDataset(user: string, id: string): Promise<boolean> {

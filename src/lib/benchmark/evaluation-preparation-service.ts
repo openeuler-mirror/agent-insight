@@ -218,12 +218,13 @@ export async function retryBenchmarkEvaluation(input: {
     where: {
       id: input.resultId,
       experimentId: input.experimentId,
-      evaluatorId: 'benchmark:swe-bench',
       case: { experiment: { user: input.user, scope: 'benchmark' } },
     },
-    select: { caseId: true },
+    select: { caseId: true, evaluatorId: true },
   })
-  if (!result) throw new BenchmarkProtocolError('BENCHMARK_RESULT_NOT_FOUND', 'Benchmark 评测结果不存在', 404)
+  if (!result?.evaluatorId.startsWith('benchmark:')) {
+    throw new BenchmarkProtocolError('BENCHMARK_RESULT_NOT_FOUND', 'Benchmark 评测结果不存在', 404)
+  }
 
   const activeCount = await prisma.benchmarkEvaluation.count({
     where: {

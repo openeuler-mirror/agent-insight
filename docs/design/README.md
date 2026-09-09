@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| Benchmark 数据集接入与展示 | [benchmark-dataset-onboarding-and-presentation](benchmark-dataset-onboarding-and-presentation/) | 为 Benchmark 接入包增加 Dataset Loader 和声明式展示配置，由管理员一次导入、所有用户共享读取 | Feature / Refactor | 2026-09-09 | ✅ 代码与自动化测试已完成，待浏览器验收 | —（待补） |
 | Benchmark 结果接收与实验结果处理 | [benchmark-result-processing.md](benchmark-result-processing.md) | 按高保真剩余步骤接收评测终态、保留 Raw Result、通过 Adapter 归一化并生成固定分母的实验聚合与只读查询结果 | Feature | 2026-09-04 | ✅ 后端、11～13/01～13 API 与单 Case 全真实 E2E 已完成 | —（待补） |
 | Benchmark 零侵入扩展 | [benchmark-extension-refactor-plan.md](../../评测服务文档/benchmark-extension-refactor-plan.md) | 对齐高保真开发者契约，将 Benchmark 接入收敛为 Manifest、五方法 Adapter、Schema 和统一文件 Evaluator 接入包；三端由构建 Catalog 发现，核心服务不再硬编码具体 Benchmark | Refactor | 2026-09-05 | ✅ Catalog、SWE-bench 迁移、扩展一致性测试和 01～13 API 回归已完成 | —（待补） |
 | Benchmark 提交校验与评测下发 | [benchmark-evaluation-dispatch.md](benchmark-evaluation-dispatch.md) | 按高保真步骤 08～09，在 Agent Insight 服务端校验提交、构造不可变 EvaluationJob，并通过可替换的评测目标解析器持久化直推独立评测服务 | Feature | 2026-09-04 | ✅ Agent Insight 侧已完成，并已纳入 01～13 API 验收 | —（待补） |

@@ -28,6 +28,8 @@
 
 > 2026-09-08 working-tree overlay：Benchmark Evaluator 双向认证新增显式 `token|none` 模式，默认继续使用共享 Bearer Token；仅在安全组或防火墙已限制两台服务互访时可选择 `none`，此时健康检查、任务下发、接单、Artifact 下载和全部评测回调都省略 Authorization。认证模式进入热加载配置与目标修订，启动脚本、Doctor 和配置脚本同步支持无 Token 部署。
 
+> 2026-09-09 working-tree overlay：Benchmark Catalog 新增 Dataset Loader、Dataset Profile 与声明式 Presentation；管理员可从任意服务端可读路径一次导入系统共享数据集，并选择在成功后删除源文件。共享数据集对所有用户只读，实验仍按用户隔离；管理员删除未引用数据，已引用数据改为归档。实验向导、执行目标和 Benchmark 结果卡按当前 Adapter/Manifest 动态渲染，不再依赖 SWE-bench 字段或固定 Evaluator ID。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

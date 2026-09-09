@@ -149,7 +149,22 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
         ? { environmentSetupCommit: raw.environment_setup_commit }
         : {}),
     }
-    return { externalCaseId: raw.instance_id, publicPayload, privatePayload }
+    return {
+      externalCaseId: raw.instance_id,
+      publicPayload,
+      privatePayload,
+      catalogProjection: {
+        input: raw.problem_statement,
+        values: {
+          instance_id: raw.instance_id,
+          repo: raw.repo,
+          base_commit: raw.base_commit,
+          version: raw.version || '',
+          hints_text: raw.hints_text,
+        },
+        tags: ['SWE-bench', 'Verified'],
+      },
+    }
   }
 
   protected createAgentTask(input: BuildAgentTaskInput<SweBenchPublicCase>): AgentTaskEnvelope {

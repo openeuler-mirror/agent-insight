@@ -99,7 +99,7 @@ function TooltipCell({
       onMouseLeave={() => setShow(false)}
       onClick={onClick}
     >
-      {shortText}
+      <span className={styles.cellText}>{shortText}</span>
       {show && rect && fullText && (
         <div
           style={{
@@ -796,7 +796,7 @@ export default function DatasetItemsPage() {
           </div>
 
           {selectedTab === 'items' ? <div className={styles.tableScroll}>
-            <table className={styles.dataTable}>
+            <table className={`${styles.dataTable} ${styles.itemsTable}`}>
               <thead>
                 <tr>
                   <th>ID</th>

@@ -93,6 +93,7 @@ export function hasPresetMeta(id: string): boolean {
 }
 
 export function getPresetExecutionBackend(id: string): 'experiment' | 'benchmark-service' {
+  if (id.startsWith('benchmark:')) return 'benchmark-service';
   return PRESET_META[id]?.executionBackend ?? 'experiment';
 }
 
@@ -106,6 +107,9 @@ function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
 
 export function getEvaluatorMeta(card: EvaluatorCard): EvaluatorMeta {
   if (card.source === 'preset') {
+    if (card.id.startsWith('benchmark:')) {
+      return { category: 'res', requires: [], executionBackend: 'benchmark-service' };
+    }
     return PRESET_META[card.id] ?? { ...DEFAULT_META, category: card.category ?? 'res' };
   }
   return { category: card.category ?? 'res', requires: deriveCustomRequires(card) };

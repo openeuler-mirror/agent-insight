@@ -6,6 +6,7 @@ import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
+import { benchmarkDatasetOwners } from './dataset-ownership'
 import { assertBenchmarkExecutionTarget } from './execution-targets'
 
 type BenchmarkCaseSelection =
@@ -100,13 +101,31 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     )
   }
   const dataset = await prisma.benchmarkDataset.findFirst({
-    where: { id: datasetId, user },
-    include: { cases: { orderBy: { ordinal: 'asc' } } },
+    where: { id: datasetId, user: { in: benchmarkDatasetOwners(user) } },
+    include: {
+      cases: { orderBy: { ordinal: 'asc' } },
+      agentEvalDataset: { select: { casesJson: true } },
+    },
   })
   if (!dataset || dataset.status !== 'ready') {
     throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', 'Benchmark 数据集不存在或未就绪', 404)
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
+  const catalogInputs = new Map<string, string>()
+  try {
+    const catalogCases = JSON.parse(dataset.agentEvalDataset.casesJson) as Array<{
+      id?: unknown
+      input?: unknown
+    }>
+    if (Array.isArray(catalogCases)) {
+      for (const item of catalogCases) {
+        const caseId = String(item?.id || '')
+        if (caseId) catalogInputs.set(caseId, String(item?.input || ''))
+      }
+    }
+  } catch {
+    // 旧数据缺少公共投影时，下面回退到 publicPayload。
+  }
   const cases = selectedCaseRows(
     dataset.cases as BenchmarkDatasetCaseSnapshot[],
     input.caseSelection,
@@ -177,14 +196,13 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
       },
     })
     for (const row of preparedCases) {
-      const problemStatement = row.publicPayload.problemStatement
+      const fallbackInput = row.publicPayload.problemStatement ?? row.publicPayload.input
       await tx.experimentCase.create({
         data: {
           id: row.experimentCaseId,
           experimentId: created.id,
-          input: typeof problemStatement === 'string'
-            ? problemStatement
-            : JSON.stringify(row.publicPayload),
+          input: catalogInputs.get(row.datasetCase.id)
+            || (typeof fallbackInput === 'string' ? fallbackInput : JSON.stringify(row.publicPayload)),
           datasetInput: JSON.stringify(row.publicPayload),
           caseValuesJson: JSON.stringify(row.publicPayload),
         },

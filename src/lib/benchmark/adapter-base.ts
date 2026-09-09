@@ -53,6 +53,14 @@ export abstract class AbstractBenchmarkAdapter<
     if (!split.externalCaseId.trim()) {
       throw new BenchmarkProtocolError('CASE_ID_INVALID', 'Case 外部标识不能为空')
     }
+    if (
+      !split.catalogProjection.input.trim()
+      || split.catalogProjection.input.length > 64 * 1024
+      || canonicalJson(split.catalogProjection.values).length > 64 * 1024
+      || (split.catalogProjection.tags?.length || 0) > 32
+    ) {
+      throw new BenchmarkProtocolError('CASE_CATALOG_PROJECTION_INVALID', 'Case 公共展示投影为空或超限')
+    }
     assertAgentVisibilityBoundary(raw, split.publicPayload, this.manifest.schemas.case)
     return {
       ...split,

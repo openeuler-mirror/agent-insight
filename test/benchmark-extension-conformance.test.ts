@@ -28,6 +28,20 @@ test('benchmark package catalog is reproducible and registers SWE-bench without 
   assert.deepEqual(getBenchmarkAdapter('swe-bench').manifest.result.primaryMetric, {
     key: 'resolved', aggregation: 'boolean-rate',
   })
+  assert.deepEqual(getBenchmarkAdapter('swe-bench').manifest.dataset?.profiles, [{
+    key: 'verified',
+    displayName: 'SWE-bench Verified',
+    acceptedExtensions: ['.parquet'],
+    expectedCaseCount: 500,
+  }])
+  assert.equal(
+    getBenchmarkAdapter('swe-bench').manifest.presentation?.caseTable.columns[1]?.label,
+    'Instance ID',
+  )
+  assert.match(
+    fs.readFileSync(path.join(generatedDir, 'dataset-loaders.ts'), 'utf8'),
+    /sweBenchDatasetLoader/,
+  )
   assert.deepEqual(listBenchmarkAdapters().map((item) => item.adapterKey), ['swe-bench'])
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'src/lib/benchmark/adapter-registry.ts'), 'utf8'), /sweBenchAdapter/)
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'services/executor/src/index.cjs'), 'utf8'), /SweBench/)

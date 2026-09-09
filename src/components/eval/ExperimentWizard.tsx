@@ -47,6 +47,7 @@ interface AgentTargetOption {
   supportsGenericTrace: boolean;
   supportsFaultInjection: boolean;
   supportsBenchmark: boolean;
+  benchmarkKeys: string[];
   benchmarkUnavailableReason: string | null;
 }
 
@@ -94,6 +95,28 @@ interface SelectedCase {
   values?: Record<string, unknown>;
 }
 
+interface BenchmarkPresentationColumn {
+  path: string;
+  label: string;
+  type: 'text' | 'code' | 'number' | 'boolean';
+}
+
+interface BenchmarkPresentation {
+  caseTable: {
+    searchPaths: string[];
+    searchPlaceholder?: string;
+    columns: BenchmarkPresentationColumn[];
+  };
+  referencePanel?: {
+    title: string;
+    description: string;
+    columns: BenchmarkPresentationColumn[];
+  };
+  result?: {
+    primaryMetric: BenchmarkPresentationColumn;
+  };
+}
+
 interface DatasetOption {
   id: string;
   name: string;
@@ -105,7 +128,14 @@ interface DatasetOption {
   fields?: unknown[];
   caseCount?: number;
   readOnly?: boolean;
-  benchmark?: { adapterKey: string; status: string };
+  shared?: boolean;
+  benchmark?: {
+    adapterKey: string;
+    displayName: string;
+    status: string;
+    profileKey?: string;
+    presentation?: BenchmarkPresentation;
+  };
   cases?: Array<{
     id?: string;
     input?: string;
@@ -199,12 +229,32 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
   });
 }
 
+function benchmarkPresentationValue(item: SelectedCase, path: string): unknown {
+  if (path === 'input') return item.input;
+  if (path === 'externalCaseId') {
+    return item.values?.externalCaseId || item.values?.instance_id || item.executionId;
+  }
+  if (!path.startsWith('values.')) return undefined;
+  let value: unknown = item.values;
+  for (const segment of path.slice('values.'.length).split('.')) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return value;
+}
+
+function benchmarkPresentationText(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
 const STEPS = ['实验设计', 'Trace 来源', '预期答案', '评估器与执行'];
 const NEXT_LABELS = ['下一步：Trace 来源 →', '下一步：预期答案 →', '下一步：评估器与执行 →', '🚀 开始实验'];
 const RELIABILITY_EVALUATOR_IDS = new Set([
   'preset-ras-reliability-detection-recovery',
 ]);
-const BENCHMARK_EVALUATOR_ID = 'benchmark:swe-bench';
 const DATASET_KIND_LABELS: Record<string, string> = {
   ideal_output: '结果评测',
   trajectory: '轨迹评测',
@@ -503,12 +553,26 @@ export function ExperimentWizard({
     [selectedDatasetDetail, wizardDatasets, selectedDatasetId],
   );
   const eligibleWizardDatasets = useMemo(() => wizardDatasets.filter((dataset) => {
+    if (dataset.datasetKind === 'benchmark' && dataset.benchmark?.status !== 'ready') return false;
     if (!skillContext) return true;
     if (!skillPreset) return true;
     return isSkillExperimentDatasetEligible(skillPreset, dataset, skillContext.skillName);
   }), [skillContext, skillPreset, wizardDatasets]);
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const isBenchmarkDataset = selectedDataset?.datasetKind === 'benchmark';
+  const benchmarkPresentation = selectedDataset?.benchmark?.presentation;
+  const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || [
+    { path: 'input', label: '任务输入', type: 'text' as const },
+    { path: 'externalCaseId', label: 'Case', type: 'code' as const },
+  ];
+  const benchmarkReferencePanel = benchmarkPresentation?.referencePanel || {
+    title: `${selectedDataset?.benchmark?.displayName || 'Benchmark'} 评测契约`,
+    description: '隐藏评测数据只交给评测服务，不会发送给 Agent。',
+    columns: [{ path: 'externalCaseId', label: 'Case', type: 'code' as const }],
+  };
+  const benchmarkEvaluatorId = selectedDataset?.benchmark?.adapterKey
+    ? `benchmark:${selectedDataset.benchmark.adapterKey}`
+    : '';
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.name === agentName) || null,
     [agentName, agents],
@@ -516,11 +580,11 @@ export function ExperimentWizard({
   const targetOptions = useMemo(
     () => (selectedAgent?.targets || []).filter((target) =>
       isBenchmarkDataset
-        ? target.supportsBenchmark
+        ? target.supportsBenchmark && target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
           ? target.supportsFaultInjection
           : target.supportsGenericTrace),
-    [isBenchmarkDataset, isReliabilityDataset, selectedAgent],
+    [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey],
   );
   const selectedTarget = targetOptions.find(
     (target) => `${target.workerId}::${target.platform}` === selectedTargetKey,
@@ -537,12 +601,13 @@ export function ExperimentWizard({
     const query = benchmarkInstanceSearch.trim().toLocaleLowerCase();
     if (!isBenchmarkDataset || !query) return generationCases;
     const compactQuery = query.replace(/[^a-z0-9]+/g, '');
-    return generationCases.filter((item) => {
-      const instanceId = String(item.values?.instance_id || item.executionId).toLocaleLowerCase();
-      return instanceId.includes(query)
-        || (compactQuery.length > 0 && instanceId.replace(/[^a-z0-9]+/g, '').includes(compactQuery));
-    });
-  }, [benchmarkInstanceSearch, generationCases, isBenchmarkDataset]);
+    const searchPaths = benchmarkPresentation?.caseTable.searchPaths || ['externalCaseId'];
+    return generationCases.filter((item) => searchPaths.some((path) => {
+      const value = benchmarkPresentationText(benchmarkPresentationValue(item, path)).toLocaleLowerCase();
+      return value.includes(query)
+        || (compactQuery.length > 0 && value.replace(/[^a-z0-9]+/g, '').includes(compactQuery));
+    }));
+  }, [benchmarkInstanceSearch, benchmarkPresentation, generationCases, isBenchmarkDataset]);
 
   const refreshAgents = useCallback(async () => {
     if (!user) return;
@@ -719,15 +784,16 @@ export function ExperimentWizard({
   }, [initialDatasetId, reuseFromExperimentId, selectWizardDataset, skillContext, user, wizardDatasets]);
 
   useEffect(() => {
-    if (!isBenchmarkDataset) return;
+    if (!isBenchmarkDataset || !benchmarkEvaluatorId) return;
     const timer = window.setTimeout(() => {
       setExpType('single');
       setTraceMode('generate');
       setWatchMode(false);
       setSelected(new Map());
       setSelectedEvaluators((current) => {
-        const next = new Set<string>([BENCHMARK_EVALUATOR_ID]);
+        const next = new Set<string>([benchmarkEvaluatorId]);
         for (const id of current) {
+          if (id.startsWith('benchmark:')) continue;
           const card = [...presetEvaluators, ...customEvaluators].find((item) => item.id === id);
           if (card && !getEvaluatorMeta(card).requires.includes('reference')) next.add(id);
         }
@@ -735,7 +801,7 @@ export function ExperimentWizard({
       });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [customEvaluators, isBenchmarkDataset]);
+  }, [benchmarkEvaluatorId, customEvaluators, isBenchmarkDataset]);
 
   const generateTriggerDataset = async () => {
     if (!user || !skillContext || skillPreset !== 'trigger' || generatingTriggerDataset) return;
@@ -1185,13 +1251,32 @@ export function ExperimentWizard({
 
   const allEvaluators = useMemo(() => {
     if (!skillPreset) {
-      return [...presetEvaluators, ...customEvaluators]
-        .filter((card) => isBenchmarkDataset || card.id !== BENCHMARK_EVALUATOR_ID);
+      const cards = [...presetEvaluators, ...customEvaluators];
+      if (!isBenchmarkDataset || !benchmarkEvaluatorId) {
+        return cards.filter((card) => !card.id.startsWith('benchmark:'));
+      }
+      const official = cards.find((card) => card.id === benchmarkEvaluatorId) || {
+        id: benchmarkEvaluatorId,
+        name: `${selectedDataset?.benchmark?.displayName || 'Benchmark'} Evaluator`,
+        description: '使用 Benchmark 接入包声明的官方评测服务判定结果。',
+        evaluatorType: 'Code' as const,
+        source: 'preset' as const,
+        category: 'res' as const,
+        targetTypes: ['Benchmark'],
+        objectives: ['官方评测'],
+        scenarios: [selectedDataset?.benchmark?.displayName || 'Benchmark'],
+        runMode: '独立评测服务',
+        scoreRange: 'Pass / Fail',
+        popularity: 100,
+        mappedMetrics: [selectedDataset?.benchmark?.presentation?.result?.primaryMetric.label || '结果'],
+        status: 'ready' as const,
+      };
+      return [official, ...cards.filter((card) => !card.id.startsWith('benchmark:'))];
     }
     const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));
     return Array.from(catalog.values())
       .filter((card) => card.status === 'ready' && isSkillExperimentEvaluatorEligible(skillPreset, card.id));
-  }, [customEvaluators, isBenchmarkDataset, skillPreset]);
+  }, [benchmarkEvaluatorId, customEvaluators, isBenchmarkDataset, selectedDataset, skillPreset]);
 
   useEffect(() => {
     if (!skillContext || selectedEvaluators.size > 0 || allEvaluators.length === 0) return;
@@ -1205,7 +1290,7 @@ export function ExperimentWizard({
   }, [allEvaluators, selectedEvaluators.size, skillContext, skillPreset]);
 
   const toggleEvaluator = (id: string) => {
-    if (isBenchmarkDataset && id === BENCHMARK_EVALUATOR_ID) return;
+    if (isBenchmarkDataset && id === benchmarkEvaluatorId) return;
     setSelectedEvaluators((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -1482,7 +1567,7 @@ export function ExperimentWizard({
       ? '自动配对 Trace'
       : traceMode === 'generate'
         ? isBenchmarkDataset
-          ? 'SWE-bench 官方测试契约（内容隐藏）'
+          ? `${selectedDataset?.benchmark?.displayName || 'Benchmark'} 测试契约（内容隐藏）`
           : `数据集预期 ${annotated}/${selectedList.length}`
         : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
     `已选 ${selectedEvaluators.size} 个`,
@@ -1913,16 +1998,16 @@ export function ExperimentWizard({
                       style={{ position: 'absolute', left: 10, top: 9, color: 'var(--foreground-muted)', pointerEvents: 'none' }}
                     />
                     <input
-                      aria-label="搜索 Instance ID"
+                      aria-label={benchmarkPresentation?.caseTable.searchPlaceholder || '搜索 Benchmark Case'}
                       value={benchmarkInstanceSearch}
                       onChange={(event) => setBenchmarkInstanceSearch(event.target.value)}
-                      placeholder="模糊搜索 Instance ID"
+                      placeholder={benchmarkPresentation?.caseTable.searchPlaceholder || '搜索 Benchmark Case'}
                       style={{ ...INPUT, height: 32, paddingLeft: 32, paddingRight: benchmarkInstanceSearch ? 32 : 10 }}
                     />
                     {benchmarkInstanceSearch && (
                       <button
                         type="button"
-                        aria-label="清空 Instance ID 搜索"
+                        aria-label="清空 Benchmark Case 搜索"
                         onClick={() => setBenchmarkInstanceSearch('')}
                         style={{ position: 'absolute', right: 8, top: 7, padding: 2, border: 0, background: 'transparent', color: 'var(--foreground-muted)', cursor: 'pointer' }}
                       >
@@ -1943,22 +2028,23 @@ export function ExperimentWizard({
                 ) : isBenchmarkDataset ? (
                   filteredGenerationCases.length === 0 ? (
                     <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
-                      未找到匹配的 Instance ID
+                      未找到匹配的 Case
                     </div>
                   ) : (
                     <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                       <thead>
                         <tr>
                           <th style={{ ...STICKY_TH, width: 44 }} aria-label="选择" />
-                          <th style={{ ...STICKY_TH, width: '48%' }}>任务输入</th>
-                          <th style={{ ...STICKY_TH, width: '27%' }}>Instance ID</th>
-                          <th style={{ ...STICKY_TH, width: '25%' }}>仓库</th>
+                          {benchmarkCaseColumns.map((column) => (
+                            <th key={column.path} style={STICKY_TH}>{column.label}</th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
                         {filteredGenerationCases.map((item) => {
-                          const instanceId = String(item.values?.instance_id || item.executionId);
-                          const repository = String(item.values?.repo || '—');
+                          const caseLabel = benchmarkPresentationText(
+                            benchmarkPresentationValue(item, 'externalCaseId'),
+                          );
                           const checked = selectedGenerated.has(item.executionId);
                           return (
                             <tr
@@ -1976,7 +2062,7 @@ export function ExperimentWizard({
                               <td style={{ ...TD, width: 44 }}>
                                 <input
                                   type="checkbox"
-                                  aria-label={`选择 ${instanceId}`}
+                                  aria-label={`选择 ${caseLabel}`}
                                   checked={checked}
                                   onClick={(event) => event.stopPropagation()}
                                   onChange={() => {
@@ -1989,15 +2075,28 @@ export function ExperimentWizard({
                                   }}
                                 />
                               </td>
-                              <td style={{ ...TD, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.input || '（无输入）'}>
-                                {item.input || '（无输入）'}
-                              </td>
-                              <td style={{ ...TD, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono, monospace)', color: 'var(--foreground)' }} title={instanceId}>
-                                {instanceId}
-                              </td>
-                              <td style={{ ...TD, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={repository}>
-                                {repository}
-                              </td>
+                              {benchmarkCaseColumns.map((column) => {
+                                const value = benchmarkPresentationText(
+                                  benchmarkPresentationValue(item, column.path),
+                                );
+                                return (
+                                  <td
+                                    key={column.path}
+                                    style={{
+                                      ...TD,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      ...(column.type === 'code'
+                                        ? { fontFamily: 'var(--font-mono, monospace)' }
+                                        : {}),
+                                    }}
+                                    title={value}
+                                  >
+                                    {value}
+                                  </td>
+                                );
+                              })}
                             </tr>
                           );
                         })}
@@ -2466,32 +2565,47 @@ export function ExperimentWizard({
             <div style={PANEL_B}>
               <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>确认官方测试契约</div>
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
-                SWE-bench 的测试内容和 Gold Patch 只交给评测服务，不会作为自然语言参考答案发送给 Agent。
+                {benchmarkReferencePanel.description}
               </div>
               <div style={{ padding: '12px 14px', border: '1px solid var(--primary-subtle-border)', borderRadius: 10, background: 'var(--primary-subtle)', marginBottom: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <b style={{ fontSize: 12.5, color: 'var(--primary)' }}>SWE-bench 官方测试契约</b>
+                  <b style={{ fontSize: 12.5, color: 'var(--primary)' }}>{benchmarkReferencePanel.title}</b>
                   <span style={CHIP_MUT}>数据集绑定</span>
                   <span style={CHIP_MUT}>只读</span>
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--foreground-secondary)', lineHeight: 1.65 }}>
-                  Agent 只接收公开任务描述、仓库和基线版本；完成后提交 <code>model.patch</code>，由 Official Harness 判定 Resolved / Unresolved。
+                  Agent 只接收公开 Case；隐藏字段由对应 Benchmark Evaluator 使用。
                 </div>
               </div>
               <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'auto', maxHeight: 420 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                   <thead><tr>
-                    <th style={STICKY_TH}>Case</th>
-                    <th style={STICKY_TH}>仓库</th>
-                    <th style={STICKY_TH}>基线版本</th>
+                    {benchmarkReferencePanel.columns.map((column) => (
+                      <th key={column.path} style={STICKY_TH}>{column.label}</th>
+                    ))}
                     <th style={STICKY_TH}>参考契约</th>
                   </tr></thead>
                   <tbody>
                     {selectedList.map((item) => (
                       <tr key={item.executionId}>
-                        <td style={TD}>{String(item.values?.instance_id || item.executionId)}</td>
-                        <td style={TD}>{String(item.values?.repo || '—')}</td>
-                        <td style={{ ...TD, fontFamily: 'var(--font-mono, monospace)' }}>{truncate(String(item.values?.base_commit || '—'), 14)}</td>
+                        {benchmarkReferencePanel.columns.map((column) => {
+                          const value = benchmarkPresentationText(
+                            benchmarkPresentationValue(item, column.path),
+                          );
+                          return (
+                            <td
+                              key={column.path}
+                              style={{
+                                ...TD,
+                                ...(column.type === 'code'
+                                  ? { fontFamily: 'var(--font-mono, monospace)' }
+                                  : {}),
+                              }}
+                            >
+                              {column.type === 'code' ? truncate(value, 24) : value}
+                            </td>
+                          );
+                        })}
                         <td style={TD}><span style={{ ...CHIP, color: 'var(--success)', background: 'var(--success-subtle)' }}>已内置 · 内容隐藏</span></td>
                       </tr>
                     ))}
@@ -2724,12 +2838,12 @@ export function ExperimentWizard({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
                 {allEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
-                  const isOfficialHarness = isBenchmarkDataset && card.id === BENCHMARK_EVALUATOR_ID;
+                  const isOfficialHarness = isBenchmarkDataset && card.id === benchmarkEvaluatorId;
                   // 监听模式的新 trace 没有逐条预期输出或 Tool/Skill 目录，带前置条件的评估器不可用。
                   const gate = RELIABILITY_EVALUATOR_IDS.has(card.id) && !isReliabilityDataset
                     ? { usable: false, reason: '该评估器仅适用于可靠性数据集' }
                     : isBenchmarkDataset && meta.requires.includes('reference')
-                    ? { usable: false, reason: 'SWE-bench 官方测试契约不会作为普通预期输出提供' }
+                    ? { usable: false, reason: 'Benchmark 官方测试契约不会作为普通预期输出提供' }
                     : watchMode && meta.requires.length > 0
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
                     : gateEvaluator(card.id, meta, gateCases, Array.from(selectedEvaluators));

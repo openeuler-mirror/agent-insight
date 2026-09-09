@@ -752,7 +752,9 @@ export default function AgentDatasetCenter() {
                     </h2>
                     <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                       <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: item.datasetKind === 'reliability' || item.datasetKind === 'benchmark' ? 'color-mix(in srgb, var(--primary) 12%, transparent)' : 'var(--background-secondary)', color: 'var(--foreground-muted)', border: '1px solid var(--border)' }}>
-                        {item.datasetKind === 'benchmark' ? 'Benchmark · 系统导入' : item.datasetKind === 'reliability' ? '可靠性' : item.datasetKind === 'trajectory' ? '轨迹' : '理想输出'}
+                        {item.datasetKind === 'benchmark'
+                          ? `Benchmark · ${item.shared ? '平台共享' : '系统导入'}${item.benchmark?.status === 'archived' ? ' · 已归档' : ''}`
+                          : item.datasetKind === 'reliability' ? '可靠性' : item.datasetKind === 'trajectory' ? '轨迹' : '理想输出'}
                         {item.name.includes('内置') ? ' · 内置' : ''}
                       </span>
                       {schemaColumnTags(item).map(field => (

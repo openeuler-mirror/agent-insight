@@ -40,6 +40,7 @@ interface ExperimentDetail {
     traceAttemptNo: number | null;
     traceAttemptStatus: string | null;
     benchmark?: {
+      displayName: string;
       externalCaseId: string;
       repo: string;
       reference: { description: string };
@@ -494,7 +495,9 @@ export function ExperimentDetail({
                         <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>
                         <td style={{ ...TD, maxWidth: 220 }}>
                           {detail.scope === 'benchmark'
-                            ? <span style={{ color: 'var(--foreground-secondary)', fontSize: 11 }}>SWE-bench 官方测试契约 · 内容隐藏</span>
+                            ? <span style={{ color: 'var(--foreground-secondary)', fontSize: 11 }}>
+                                {c.benchmark?.displayName || 'Benchmark'} 测试契约 · 内容隐藏
+                              </span>
                             : c.referenceOutput
                             ? truncate(c.referenceOutput, 60)
                             : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}

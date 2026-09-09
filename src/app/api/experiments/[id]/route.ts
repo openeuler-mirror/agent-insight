@@ -15,6 +15,8 @@ import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/deta
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
+import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
+import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
 export const dynamic = 'force-dynamic';
 
@@ -95,6 +97,13 @@ export async function GET(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
+    const benchmarkAdapterKey = evaluatorIds
+      .find((evaluatorId) => evaluatorId.startsWith('benchmark:'))
+      ?.slice('benchmark:'.length) || '';
+    let benchmarkManifest: BenchmarkManifest | null = null;
+    if (benchmarkAdapterKey) {
+      try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
+    }
     const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
 
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
@@ -123,6 +132,7 @@ export async function GET(
       artifacts: Array<{ name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
         status: string;
+        normalizedResultJson: string | null;
         artifacts: Array<{ name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
     }>();
@@ -133,7 +143,8 @@ export async function GET(
         include: {
           datasetCase: { select: { externalCaseId: true } },
           artifacts: {
-            where: { name: 'model.patch' },
+            orderBy: { createdAt: 'asc' },
+            take: 1,
             select: { name: true, sha256: true, sizeBytes: true, mediaType: true },
           },
           evaluations: {
@@ -141,6 +152,7 @@ export async function GET(
             take: 1,
             select: {
               status: true,
+              normalizedResultJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
                 select: { name: true, kind: true, sha256: true, sizeBytes: true, mediaType: true },
@@ -528,6 +540,12 @@ export async function GET(
         const benchmarkPayload = benchmarkRun
           ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
           : null;
+        const benchmarkNormalized = benchmarkRun?.evaluations[0]?.normalizedResultJson
+          ? parseJsonValue(benchmarkRun.evaluations[0].normalizedResultJson) as {
+              primaryMetric?: { key?: unknown; value?: unknown };
+            } | null
+          : null;
+        const benchmarkPrimaryMetric = benchmarkNormalized?.primaryMetric;
         const submission = benchmarkRun?.artifacts[0];
         const benchmarkTraceStatus: GeneratedTraceStatus | null = benchmarkRun
           ? ['pending', 'preparing', 'dispatching', 'dispatch_unknown', 'running_agent', 'collecting', 'uploading', 'cleaning', 'submitted'].includes(benchmarkRun.status)
@@ -575,11 +593,21 @@ export async function GET(
           traceAttemptStatus: traceState?.attemptStatus || null,
           ...(benchmarkRun ? {
             benchmark: {
-              externalCaseId: benchmarkRun.datasetCase?.externalCaseId || String(benchmarkPayload?.instanceId || ''),
+              adapterKey: benchmarkAdapterKey,
+              displayName: benchmarkManifest?.displayName || benchmarkAdapterKey,
+              presentation: benchmarkManifest?.presentation || null,
+              primaryMetric: benchmarkPrimaryMetric && typeof benchmarkPrimaryMetric.key === 'string'
+                && (typeof benchmarkPrimaryMetric.value === 'boolean'
+                  || typeof benchmarkPrimaryMetric.value === 'number'
+                  || benchmarkPrimaryMetric.value === null)
+                ? { key: benchmarkPrimaryMetric.key, value: benchmarkPrimaryMetric.value }
+                : null,
+              externalCaseId: benchmarkRun.datasetCase?.externalCaseId || '',
               repo: String(benchmarkPayload?.repo || ''),
               reference: {
                 kind: 'official-test-contract',
-                description: '测试内容和 Gold Patch 对 Agent 隐藏，仅供评测服务判定',
+                description: benchmarkManifest?.presentation?.referencePanel?.description
+                  || '隐藏评测数据仅供评测服务判定，不会发送给 Agent',
               },
               submission: submission ? {
                 name: submission.name,

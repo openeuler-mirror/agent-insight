@@ -17,6 +17,43 @@ export type BenchmarkArtifactContract = {
   maxBytes: number
 }
 
+export type BenchmarkDatasetProfile = {
+  key: string
+  displayName: string
+  acceptedExtensions: readonly string[]
+  expectedCaseCount?: number
+}
+
+export type BenchmarkPresentationColumn = {
+  path: string
+  label: string
+  type: 'text' | 'code' | 'number' | 'boolean'
+}
+
+export type BenchmarkPresentation = {
+  caseTable: {
+    searchPaths: readonly string[]
+    searchPlaceholder?: string
+    columns: readonly BenchmarkPresentationColumn[]
+  }
+  referencePanel?: {
+    title: string
+    description: string
+    columns: readonly BenchmarkPresentationColumn[]
+  }
+  result?: {
+    primaryMetric: {
+      path: string
+      label: string
+      type: 'text' | 'code' | 'number' | 'boolean'
+    }
+  }
+}
+
+export interface BenchmarkDatasetLoader {
+  loadCases(sourcePath: string): AsyncIterable<JsonValue>
+}
+
 export type BenchmarkManifest = {
   adapterKey: string
   displayName: string
@@ -42,6 +79,10 @@ export type BenchmarkManifest = {
       aggregation: 'boolean-rate' | 'mean'
     }
   }
+  dataset?: {
+    profiles: readonly BenchmarkDatasetProfile[]
+  }
+  presentation?: BenchmarkPresentation
 }
 
 export type BenchmarkRunConfig = {
@@ -85,6 +126,11 @@ export type SplitCaseResult<TPublic extends JsonValue, TPrivate extends JsonValu
   externalCaseId: string
   publicPayload: TPublic
   privatePayload: TPrivate
+  catalogProjection: {
+    input: string
+    values: { [key: string]: JsonValue }
+    tags?: readonly string[]
+  }
   publicFingerprint: string
   privateFingerprint: string
 }

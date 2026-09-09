@@ -65,6 +65,89 @@ function positiveInteger(value, label) {
   return value
 }
 
+const PRESENTATION_TYPES = new Set(['text', 'code', 'number', 'boolean'])
+const CASE_PRESENTATION_PATH = /^(input|externalCaseId|values(?:\.[A-Za-z0-9_-]+)+)$/
+
+function presentationColumns(value, label) {
+  if (!Array.isArray(value) || !value.length || value.length > 8) fail(`${label} 必须包含 1～8 列`)
+  return value.map((column, index) => {
+    const pathValue = string(column?.path, `${label}[${index}].path`, CASE_PRESENTATION_PATH)
+    const type = string(column?.type, `${label}[${index}].type`)
+    if (!PRESENTATION_TYPES.has(type)) fail(`${label}[${index}].type 不受支持`)
+    return {
+      path: pathValue,
+      label: string(column?.label, `${label}[${index}].label`),
+      type,
+    }
+  })
+}
+
+function normalizeDataset(source, key) {
+  if (source == null) return undefined
+  if (!Array.isArray(source.profiles) || !source.profiles.length) fail(`${key} 缺少 dataset.profiles`)
+  const keys = new Set()
+  const profiles = source.profiles.map((profile, index) => {
+    const profileKey = string(profile?.key, `dataset.profiles[${index}].key`, /^[a-z0-9][a-z0-9._-]{0,63}$/)
+    if (keys.has(profileKey)) fail(`${key} 的 Dataset Profile 重复：${profileKey}`)
+    keys.add(profileKey)
+    if (!Array.isArray(profile?.acceptedExtensions) || !profile.acceptedExtensions.length) {
+      fail(`${profileKey} 缺少 acceptedExtensions`)
+    }
+    const acceptedExtensions = profile.acceptedExtensions.map((extension, extensionIndex) => (
+      string(extension, `${profileKey}.acceptedExtensions[${extensionIndex}]`, /^\.[a-z0-9]+$/)
+    ))
+    return {
+      key: profileKey,
+      displayName: string(profile?.displayName || profileKey, `${profileKey}.displayName`),
+      acceptedExtensions,
+      ...(profile?.expectedCaseCount == null
+        ? {}
+        : { expectedCaseCount: positiveInteger(profile.expectedCaseCount, `${profileKey}.expectedCaseCount`) }),
+    }
+  })
+  return { profiles }
+}
+
+function normalizePresentation(source, key) {
+  if (source == null) return undefined
+  const caseTable = source.caseTable
+  if (!caseTable || typeof caseTable !== 'object' || Array.isArray(caseTable)) {
+    fail(`${key} 缺少 presentation.caseTable`)
+  }
+  const searchPaths = Array.isArray(caseTable.searchPaths) && caseTable.searchPaths.length
+    ? caseTable.searchPaths.map((item, index) => string(item, `caseTable.searchPaths[${index}]`, CASE_PRESENTATION_PATH))
+    : ['externalCaseId']
+  const result = {
+    caseTable: {
+      searchPaths,
+      ...(caseTable.searchPlaceholder
+        ? { searchPlaceholder: string(caseTable.searchPlaceholder, 'caseTable.searchPlaceholder') }
+        : {}),
+      columns: presentationColumns(caseTable.columns, 'caseTable.columns'),
+    },
+  }
+  if (source.referencePanel != null) {
+    result.referencePanel = {
+      title: string(source.referencePanel.title, 'referencePanel.title'),
+      description: string(source.referencePanel.description, 'referencePanel.description'),
+      columns: presentationColumns(source.referencePanel.columns, 'referencePanel.columns'),
+    }
+  }
+  if (source.result != null) {
+    const primaryMetric = source.result.primaryMetric
+    const type = string(primaryMetric?.type, 'result.primaryMetric.type')
+    if (!PRESENTATION_TYPES.has(type)) fail('result.primaryMetric.type 不受支持')
+    result.result = {
+      primaryMetric: {
+        path: string(primaryMetric?.path, 'result.primaryMetric.path', /^primaryMetric\.value$/),
+        label: string(primaryMetric?.label, 'result.primaryMetric.label'),
+        type,
+      },
+    }
+  }
+  return result
+}
+
 function loadPackage(packageDir) {
   const yamlPath = path.join(packageDir, 'benchmark.yaml')
   const source = readYaml(yamlPath)
@@ -73,6 +156,12 @@ function loadPackage(packageDir) {
     fail(`${key} 的协议与当前 Runtime 不兼容`)
   }
   const adapterPath = resolveInside(packageDir, source.implementation?.adapter, 'implementation.adapter')
+  const datasetLoaderPath = source.implementation?.datasetLoader
+    ? resolveInside(packageDir, source.implementation.datasetLoader, 'implementation.datasetLoader')
+    : null
+  const datasetLoaderExport = datasetLoaderPath
+    ? string(source.implementation?.datasetLoaderExport, 'implementation.datasetLoaderExport', /^[A-Za-z_$][\w$]*$/)
+    : null
   const evaluatorYamlPath = resolveInside(packageDir, source.implementation?.evaluator, 'implementation.evaluator')
   const caseSchemaPath = resolveInside(packageDir, source.schemas?.case, 'schemas.case')
   const resultSchemaPath = resolveInside(packageDir, source.schemas?.rawResult, 'schemas.rawResult')
@@ -130,6 +219,9 @@ function loadPackage(packageDir) {
   const caseSchema = readJson(caseSchemaPath, `${key} Case Schema`)
   const rawResultSchema = readJson(resultSchemaPath, `${key} Result Schema`)
   const adapterExport = string(source.implementation?.adapterExport, 'implementation.adapterExport', /^[A-Za-z_$][\w$]*$/)
+  const dataset = normalizeDataset(source.dataset, key)
+  const presentation = normalizePresentation(source.presentation, key)
+  if (datasetLoaderPath && !dataset) fail(`${key} 声明了 Dataset Loader，但没有 dataset.profiles`)
   const primaryMetricKey = string(source.result?.primaryMetric?.key, 'result.primaryMetric.key')
   const primaryMetricAggregation = source.result?.primaryMetric?.aggregation
   if (!['boolean-rate', 'mean'].includes(primaryMetricAggregation)) {
@@ -139,12 +231,21 @@ function loadPackage(packageDir) {
     ...listFiles(evaluatorDir),
     ...(smokeEntrypoint ? listFiles(path.dirname(smokeEntrypoint)) : []),
   ])]
-  const files = [yamlPath, adapterPath, caseSchemaPath, resultSchemaPath, ...evaluatorFiles]
+  const files = [
+    yamlPath,
+    adapterPath,
+    ...(datasetLoaderPath ? [datasetLoaderPath] : []),
+    caseSchemaPath,
+    resultSchemaPath,
+    ...evaluatorFiles,
+  ]
   return {
     key,
     packageDir,
     adapterPath,
     adapterExport,
+    datasetLoaderPath,
+    datasetLoaderExport,
     manifest: {
       adapterKey: key,
       displayName: string(source.displayName, 'displayName'),
@@ -170,6 +271,8 @@ function loadPackage(packageDir) {
           aggregation: primaryMetricAggregation,
         },
       },
+      ...(dataset ? { dataset } : {}),
+      ...(presentation ? { presentation } : {}),
     },
     evaluator: {
       key: evaluator.key,
@@ -230,6 +333,20 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
     `export const generatedBenchmarkAdapters: readonly BenchmarkAdapter[] = [${packages.map((_, index) => `adapter${index}`).join(', ')}]`,
     '',
   ].join('\n')
+  const packagesWithLoaders = packages.filter((item) => item.datasetLoaderPath)
+  const loaderImports = packagesWithLoaders.map((item, index) => (
+    `import { ${item.datasetLoaderExport} as loader${index} } from '${toImportPath(outputDir, item.datasetLoaderPath).replace(/\.ts$/, '')}'`
+  ))
+  const loadersSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '',
+    "import type { BenchmarkDatasetLoader } from '../../packages/benchmark-protocol/src/contracts'",
+    ...loaderImports,
+    '',
+    'export type GeneratedBenchmarkDatasetLoader = { adapterKey: string; loader: BenchmarkDatasetLoader }',
+    `export const generatedBenchmarkDatasetLoaders: readonly GeneratedBenchmarkDatasetLoader[] = [${packagesWithLoaders.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, loader: loader${index} }`).join(', ')}]`,
+    '',
+  ].join('\n')
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
     entrypoint: path.relative(outputDir, item.evaluator.entrypoint).replaceAll(path.sep, '/'),
@@ -256,6 +373,7 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   ].join('\n')
   fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)
   fs.writeFileSync(path.join(outputDir, 'adapters.ts'), adaptersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-loaders.ts'), loadersSource)
   fs.writeFileSync(path.join(outputDir, 'evaluators.cjs'), evaluatorSource)
   fs.writeFileSync(path.join(outputDir, 'catalog-lock.json'), `${JSON.stringify({
     notice: 'AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',

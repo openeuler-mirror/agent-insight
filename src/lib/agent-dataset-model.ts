@@ -3,6 +3,7 @@ import type {
   DatasetCaseRootCauseMeta,
   RootCauseItem,
 } from './dataset-case-root-causes';
+import type { BenchmarkPresentation } from '../../packages/benchmark-protocol/src/contracts';
 
 export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
 
@@ -109,7 +110,14 @@ export interface AgentDataset {
   createdAt: string;
   updatedAt: string;
   readOnly?: boolean;
-  benchmark?: { adapterKey: string; status: string };
+  shared?: boolean;
+  benchmark?: {
+    adapterKey: string;
+    displayName: string;
+    status: string;
+    profileKey?: string;
+    presentation?: BenchmarkPresentation;
+  };
 }
 
 export const EVALUATOR_CATALOG_FIELD_KEYS = ['available_tools', 'available_skills'] as const;
@@ -257,11 +265,8 @@ export interface DatasetDefaultFieldDef {
 export function defaultFieldsForKind(kind: DatasetKind): DatasetDefaultFieldDef[] {
   if (kind === 'benchmark') {
     return [
-      { key: 'input', dataType: 'String', required: '是', description: '公开的问题描述，作为 Agent 任务输入' },
-      { key: 'instance_id', dataType: 'String', required: '是', description: 'SWE-bench Case 标识' },
-      { key: 'repo', dataType: 'String', required: '是', description: '目标代码仓库' },
-      { key: 'base_commit', dataType: 'String', required: '是', description: '任务基线提交' },
-      { key: 'version', dataType: 'String', required: '否', description: '仓库版本' },
+      { key: 'input', dataType: 'String', required: '是', description: '公开任务输入' },
+      { key: 'externalCaseId', dataType: 'String', required: '是', description: 'Benchmark Case 标识' },
     ];
   }
   const base: DatasetDefaultFieldDef[] = [
