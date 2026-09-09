@@ -8,6 +8,7 @@ export interface AbEvaluationState {
 
 export interface AbRunState {
   status?: string;
+  experimentCaseId?: string;
   score?: number;
   output?: string;
   timeCost?: string;

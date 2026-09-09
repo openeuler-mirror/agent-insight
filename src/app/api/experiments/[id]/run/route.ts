@@ -93,7 +93,7 @@ export async function POST(
       await assertTraceGenerationTarget({ user: username, workerId, platform, agent });
       const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
         ? generateTrace.timeoutSeconds
-        : 180;
+        : 600;
 
       await prisma.experiment.updateMany({
         where: { id, user: username },
@@ -151,7 +151,7 @@ export async function POST(
         });
         const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
           ? generateTrace.timeoutSeconds
-          : 180;
+          : 600;
         fi = await orchestrateFaultInjection({
           user: username,
           experimentId: id,
