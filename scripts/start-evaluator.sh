@@ -9,7 +9,7 @@ BIND_ADDRESS=0.0.0.0
 PORT=8080
 AUTH_MODE=token
 TOKEN=
-CASE_IMAGE_PROXY_PREFIX=${SWE_BENCH_IMAGE_PROXY_PREFIX-docker.1ms.run}
+CASE_IMAGE_PROXY_PREFIX=${SWE_BENCH_IMAGE_PROXY_PREFIX:-}
 
 usage() {
   cat <<'EOF'
@@ -18,6 +18,7 @@ Usage:
 
 Starts the Evaluator Controller from the current Git checkout on Linux or macOS.
 The command does not pull source code, register with Agent Insight, or preload Case images.
+By default, Case images keep their official names and use the host Docker daemon's registry mirrors.
 EOF
 }
 
@@ -130,6 +131,7 @@ SHORT_REVISION=$(printf '%s' "$SOURCE_REVISION" | cut -c1-12)
 DIRTY_SUFFIX=
 if [ "$SOURCE_DIRTY" = true ]; then DIRTY_SUFFIX=-dirty; fi
 IMAGE_TAG="agent-insight-benchmark-evaluator:src-$SHORT_REVISION$DIRTY_SUFFIX"
+PREVIOUS_CONTROLLER_IMAGE_IDS=$(docker image ls --quiet --no-trunc "$CONTAINER_NAME")
 if [ "$SOURCE_DIRTY" = true ] || ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
   printf '构建 Evaluator Controller：%s\n' "$IMAGE_TAG"
   docker build \
@@ -170,45 +172,55 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
 } > "$TEMP_CONFIG"
 chmod 600 "$TEMP_CONFIG"
 
-CONFIG_CHANGED=1
-if [ -f "$CONFIG_FILE" ] && cmp -s "$TEMP_CONFIG" "$CONFIG_FILE"; then CONFIG_CHANGED=0; fi
 mv -f "$TEMP_CONFIG" "$CONFIG_FILE"
 chmod 600 "$CONFIG_FILE"
 trap - EXIT
 CONFIG_DIGEST=$(git_checkout hash-object --no-filters "$CONFIG_FILE")
 
 docker volume create "$DATA_VOLUME" >/dev/null
-EXISTING_IMAGE=
-EXISTING_CONFIG=
-EXISTING_RUNNING=false
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-  EXISTING_IMAGE=$(docker container inspect "$CONTAINER_NAME" --format '{{.Image}}')
-  EXISTING_CONFIG=$(docker container inspect "$CONTAINER_NAME" --format '{{ index .Config.Labels "agent-insight.evaluator.config-digest" }}')
-  EXISTING_RUNNING=$(docker container inspect "$CONTAINER_NAME" --format '{{.State.Running}}')
+  printf '删除旧 Evaluator Controller 容器：%s\n' "$CONTAINER_NAME"
+  docker rm -f "$CONTAINER_NAME" >/dev/null
 fi
-
-if [ "$EXISTING_IMAGE" = "$IMAGE_ID" ] && [ "$EXISTING_CONFIG" = "$CONFIG_DIGEST" ]; then
-  if [ "$EXISTING_RUNNING" != true ]; then docker start "$CONTAINER_NAME" >/dev/null; fi
-  if [ "$CONFIG_CHANGED" -eq 0 ]; then printf '现有 Controller 配置未变化，执行恢复检查。\n'; fi
-else
-  if [ -n "$EXISTING_IMAGE" ]; then docker rm -f "$CONTAINER_NAME" >/dev/null; fi
-  printf '启动 Evaluator Controller 容器：%s\n' "$CONTAINER_NAME"
-  docker run --detach --pull never \
-    --name "$CONTAINER_NAME" \
-    --restart unless-stopped \
-    --label "agent-insight.evaluator.config-digest=$CONFIG_DIGEST" \
-    --add-host host.docker.internal:host-gateway \
-    --env-file "$CONFIG_FILE" \
-    --mount "type=bind,src=$DOCKER_SOCKET,dst=/var/run/docker.sock" \
-    --mount "type=volume,src=$DATA_VOLUME,dst=/data" \
-    --publish "$BIND_ADDRESS:$PORT:8080" \
-    "$IMAGE_TAG" >/dev/null
-fi
+printf '启动 Evaluator Controller 容器：%s\n' "$CONTAINER_NAME"
+docker run --detach --pull never \
+  --name "$CONTAINER_NAME" \
+  --restart unless-stopped \
+  --label "agent-insight.evaluator.config-digest=$CONFIG_DIGEST" \
+  --add-host host.docker.internal:host-gateway \
+  --env-file "$CONFIG_FILE" \
+  --mount "type=bind,src=$DOCKER_SOCKET,dst=/var/run/docker.sock" \
+  --mount "type=volume,src=$DATA_VOLUME,dst=/data" \
+  --publish "$BIND_ADDRESS:$PORT:8080" \
+  "$IMAGE_TAG" >/dev/null
 
 bash "$SCRIPT_DIR/evaluator-doctor.sh" \
   --container "$CONTAINER_NAME" \
   --config "$CONFIG_FILE" \
   --expected-image-id "$IMAGE_ID"
+
+while IFS='|' read -r CONTROLLER_REPOSITORY CONTROLLER_TAG; do
+  [ "$CONTROLLER_REPOSITORY" = "$CONTAINER_NAME" ] || continue
+  [ "$CONTROLLER_TAG" != '<none>' ] || continue
+  OLD_CONTROLLER_REF="$CONTROLLER_REPOSITORY:$CONTROLLER_TAG"
+  [ "$OLD_CONTROLLER_REF" = "$IMAGE_TAG" ] && continue
+  if docker image rm "$OLD_CONTROLLER_REF" >/dev/null 2>&1; then
+    printf '已删除旧 Controller 镜像：%s\n' "$OLD_CONTROLLER_REF"
+  else
+    printf '警告：旧 Controller 镜像仍被其他容器引用，未删除：%s\n' "$OLD_CONTROLLER_REF" >&2
+  fi
+done < <(docker image ls --format '{{.Repository}}|{{.Tag}}' "$CONTAINER_NAME")
+
+while IFS= read -r PREVIOUS_CONTROLLER_IMAGE_ID; do
+  [ -n "$PREVIOUS_CONTROLLER_IMAGE_ID" ] || continue
+  [ "$PREVIOUS_CONTROLLER_IMAGE_ID" = "$IMAGE_ID" ] && continue
+  docker image inspect "$PREVIOUS_CONTROLLER_IMAGE_ID" >/dev/null 2>&1 || continue
+  if docker image rm "$PREVIOUS_CONTROLLER_IMAGE_ID" >/dev/null 2>&1; then
+    printf '已删除旧 Controller image ID：%s\n' "$PREVIOUS_CONTROLLER_IMAGE_ID"
+  else
+    printf '警告：旧 Controller image ID 仍被其他容器或标签引用，未删除：%s\n' "$PREVIOUS_CONTROLLER_IMAGE_ID" >&2
+  fi
+done <<< "$PREVIOUS_CONTROLLER_IMAGE_IDS"
 
 printf '\nEvaluator Controller 已就绪。\n'
 printf 'Source revision: %s\n' "$SOURCE_REVISION"

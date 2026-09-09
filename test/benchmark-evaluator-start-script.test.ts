@@ -40,12 +40,30 @@ test('one-command evaluator script preserves the Docker lifecycle and on-demand 
   assert.match(source, /EVALUATOR_SOURCE_DIRTY/)
   assert.doesNotMatch(source, /含未提交内容，无法/)
   assert.doesNotMatch(source, /docker pull/)
-  assert.match(source, /SWE_BENCH_IMAGE_PROXY_PREFIX-docker\.1ms\.run/)
+  assert.match(source, /CASE_IMAGE_PROXY_PREFIX=\$\{SWE_BENCH_IMAGE_PROXY_PREFIX:-\}/)
+  assert.doesNotMatch(source, /SWE_BENCH_IMAGE_PROXY_PREFIX-docker\.1ms\.run/)
   assert.match(source, /printf 'SWE_BENCH_IMAGE_PROXY_PREFIX=%s\\n'/)
   assert.match(source, /printf 'EVALUATOR_AUTH_MODE=%s\\n'/)
   assert.doesNotMatch(source, /systemctl|launchctl/)
   assert.match(source, /Linux\) HOST_OS=linux/)
   assert.match(source, /Darwin\) HOST_OS=darwin/)
+})
+
+test('one-command evaluator script recreates the Controller and removes only old Controller images after Doctor', () => {
+  const source = fs.readFileSync(startScript, 'utf8')
+  const removeContainerIndex = source.indexOf('docker rm -f "$CONTAINER_NAME"')
+  const runContainerIndex = source.indexOf('docker run --detach --pull never')
+  const doctorIndex = source.indexOf('bash "$SCRIPT_DIR/evaluator-doctor.sh"')
+  const removeOldImageIndex = source.indexOf('docker image rm "$OLD_CONTROLLER_REF"')
+
+  assert.ok(removeContainerIndex >= 0)
+  assert.ok(runContainerIndex > removeContainerIndex)
+  assert.ok(doctorIndex > runContainerIndex)
+  assert.ok(removeOldImageIndex > doctorIndex)
+  assert.match(source, /docker image ls --format .*"\$CONTAINER_NAME"/)
+  assert.match(source, /PREVIOUS_CONTROLLER_IMAGE_IDS=/)
+  assert.doesNotMatch(source, /docker image prune|docker system prune/)
+  assert.doesNotMatch(source, /docker start "\$CONTAINER_NAME"/)
 })
 
 test('evaluator image build uses fast package sources with official fallbacks and a verified Harness archive', () => {
