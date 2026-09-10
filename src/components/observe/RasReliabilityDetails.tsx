@@ -7,6 +7,13 @@ import { interleaveRasActions } from '@/lib/ingest/ras/delivery-link'
 import type { RasTraceMarker } from '@/lib/ingest/ras/trace-markers'
 import { findRasMarkersForEvent } from '@/lib/ingest/ras/trace-markers'
 import type { AgentEvent } from '@/lib/engine/observability/agent-trace'
+import {
+  rasActionChannelLabel,
+  rasActionLabel,
+  rasMarkerBadgeLabel,
+  rasSeverityLabel,
+  rasSummaryLabel,
+} from '@/lib/ingest/ras/normalize'
 
 function rasSeverityClass(severity: string): string {
   if (severity === 'critical' || severity === 'high') {
@@ -39,6 +46,7 @@ export function RasNodeBadge({
   compact?: boolean
   className?: string
 }) {
+  const { locale } = useLocale()
   if (!markers.length) return null
   const fi = fiOnlyMarkers(markers)
   const ras = rasOnlyMarkers(markers)
@@ -52,9 +60,11 @@ export function RasNodeBadge({
   }
   const first = markers[0]
   const isFi = fi.length > 0
-  const prefix = isFi ? 'FI' : 'RAS'
   const title = markers
-    .map((marker) => `${marker.label} (${marker.severity})${marker.summary ? `: ${marker.summary}` : ''}`)
+    .map((marker) => {
+      const summary = rasSummaryLabel(marker, locale)
+      return `${marker.label} (${rasSeverityLabel(marker.severity, locale)})${summary ? `: ${summary}` : ''}`
+    })
     .join('\n')
   return (
     <span
@@ -68,7 +78,7 @@ export function RasNodeBadge({
     >
       <AlertIcon className="size-3 shrink-0" aria-hidden />
       <span className="truncate">
-        {compact ? prefix : `${prefix} · ${first.label}`}
+        {rasMarkerBadgeLabel({ label: first.label, source: isFi ? 'fi' : 'ras' }, locale, compact)}
       </span>
       {markers.length > 1 && <span className="shrink-0 tabular-nums">+{markers.length - 1}</span>}
     </span>
@@ -82,7 +92,7 @@ function MarkerSourceSection({
   markers: RasTraceMarker[]
   heading: string
 }) {
-  const { t: tt } = useLocale()
+  const { locale, t: tt } = useLocale()
   if (!markers.length) return null
   return (
     <section
@@ -99,6 +109,7 @@ function MarkerSourceSection({
       <div className="space-y-2.5">
         {markers.map((marker) => {
           const steps = interleaveRasActions(marker.actions, marker.actionResults)
+          const summary = rasSummaryLabel(marker, locale)
           return (
             <article key={marker.id} className="rounded-md border border-error-border bg-card p-2.5">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -107,9 +118,9 @@ function MarkerSourceSection({
                   {new Date(marker.ts).toLocaleString()}
                 </span>
               </div>
-              {marker.summary && (
+              {summary && (
                 <p className="mt-2 text-xs leading-relaxed text-foreground-secondary">
-                  {marker.summary}
+                  {summary}
                 </p>
               )}
               {steps.length > 0 && (
@@ -123,9 +134,9 @@ function MarkerSourceSection({
                         key={`action-${step.action.type}-${index}`}
                         className="rounded-md border border-border bg-background-secondary p-2"
                       >
-                        <code className="text-[11px] font-semibold text-foreground">
-                          {step.action.type}
-                        </code>
+                        <span title={step.action.type} className="text-[11px] font-semibold text-foreground">
+                          {rasActionLabel(step.action.type, locale)}
+                        </span>
                         {step.action.message && (
                           <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground-secondary">
                             {step.action.message}
@@ -140,14 +151,14 @@ function MarkerSourceSection({
                         {step.result.ok
                           ? <Check className="size-3.5 text-success" aria-hidden />
                           : <XIcon className="size-3.5 text-error" aria-hidden />}
-                        <code>{step.result.action}</code>
+                        <span title={step.result.action}>{rasActionLabel(step.result.action, locale)}</span>
                         <span>
                           {step.result.ok
                             ? tt('traceTree.rasActionSucceeded')
                             : tt('traceTree.rasActionFailed')}
                         </span>
                         {step.result.channel && (
-                          <span className="text-foreground-muted">· {step.result.channel}</span>
+                          <span title={step.result.channel} className="text-foreground-muted">· {rasActionChannelLabel(step.result.channel, locale)}</span>
                         )}
                         {step.result.error && (
                           <span className="basis-full pl-5 text-error">{step.result.error}</span>

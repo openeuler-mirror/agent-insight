@@ -42,25 +42,23 @@
             ]
           },
           {
-            "group": "评测中心",
+            "group": "评估与实验",
             "pages": [
               "user-guide/evaluation/index",
               "user-guide/evaluation/quickstart",
               "user-guide/evaluation/datasets",
-              "user-guide/evaluation/dataset-from-trace",
               "user-guide/evaluation/evaluators",
-              "user-guide/evaluation/run-evaluation",
-              "user-guide/evaluation/analyze-results"
+              "user-guide/evaluation/experiments"
             ]
           },
           {
-            "group": "Skills 能力",
+            "group": "Skill 工作台",
             "pages": [
               "user-guide/skills/index",
               "user-guide/skills/manage",
               "user-guide/skills/generate",
               {
-                "group": "Skills 评测",
+                "group": "Skill 评估与实验",
                 "pages": [
                   "user-guide/skills/evaluation/overview",
                   "user-guide/skills/evaluation/static-compliance",

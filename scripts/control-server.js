@@ -15,6 +15,9 @@ const path = require('path')
 
 const { upgradeToWebSocket } = require('./ws-endpoint')
 
+process.env.AGENT_INSIGHT_PACKAGE_ROOT =
+  process.env.AGENT_INSIGHT_PACKAGE_ROOT || path.resolve(__dirname, '..')
+
 const CONTROL_PATH = '/api/reliability/client/v1/control'
 const PORT = Number(process.env.PORT || 3000)
 const HOSTNAME = process.env.HOSTNAME || '0.0.0.0'
@@ -60,8 +63,16 @@ async function main() {
   // Next standalone 的 server.js 会自建 server 并监听。为了接管 upgrade，
   // 这里改用 next() 编程式接口（standalone 内已内联 next 及其依赖）。
   process.chdir(STANDALONE_ROOT)
+  const requiredServerFiles = require(path.join(nextDir, 'required-server-files.json'))
+  process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(requiredServerFiles.config)
   const next = require(path.join(STANDALONE_ROOT, 'node_modules', 'next'))
-  const app = next({ dev: false, dir: STANDALONE_ROOT, hostname: HOSTNAME, port: PORT })
+  const app = next({
+    dev: false,
+    dir: STANDALONE_ROOT,
+    hostname: HOSTNAME,
+    port: PORT,
+    conf: requiredServerFiles.config
+  })
   const handle = app.getRequestHandler()
   await app.prepare()
 

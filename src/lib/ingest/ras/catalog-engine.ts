@@ -1,12 +1,13 @@
 import { spawn, spawnSync } from 'child_process'
 import path from 'path'
+import { runtimePackageRoot } from '@/lib/runtime/package-root'
 
 function resolvePython(): string {
   return process.env.AGENT_INSIGHT_RAS_PYTHON || process.env.RAS_PYTHON || process.env.PYTHON || 'python3'
 }
 
 function agentRasRoot(): string {
-  return path.join(process.cwd(), 'agent_ras')
+  return path.join(runtimePackageRoot(), 'agent_ras')
 }
 
 export type RasCatalogPrompt = {

@@ -78,8 +78,8 @@ Workspace 当前状态用于呈现当前工作区在接入完成度、运行可�
 快捷入口把最高频的动作前置到首屏，让你从“看板”一步跳到“操作页”。常见入口包括：
 
 - **新建 Agent** → [Agent 管理](./agent-management)
-- **Skills 生成** → [Skills 生成](./skills/generate)
-- **运行评测** → [评测执行](./evaluation/run-evaluation)
+- **Skill 工作台** → [Skill 生成](./skills/generate)
+- **运行评测** → [实验](./evaluation/experiments)
 - **链路分析** → [链路追踪](./observability/view-traces)
 
 对高频用户而言，这一区块的价值最高，可以把概览面板当作 Workspace 的统一启动台。
@@ -150,7 +150,7 @@ P95 时延用于观察慢请求与长尾体验：
 
 1. 查看 Agent 状态是否存在异常
 2. 观察成功率与 P95 是否出现明显波动
-3. 如发现异常，进入链路追踪或评测中心继续深挖
+3. 如发现异常，进入链路追踪或评估与实验继续深挖
 
 ### 排障时
 
@@ -158,7 +158,7 @@ P95 时延用于观察慢请求与长尾体验：
 
 1. 先识别出哪个 Agent 异常
 2. 通过快捷入口进入 [链路追踪](./observability/view-traces) 看具体执行
-3. 如需结构化回归，再进入 [评测中心](./evaluation/index)
+3. 如需结构化回归，再进入 [评估与实验](./evaluation/index)
 
 ## 概览面板不负责什么
 
@@ -167,8 +167,8 @@ P95 时延用于观察慢请求与长尾体验：
 | 你想做的事 | 应该去 |
 | --- | --- |
 | 逐条排查失败执行 | [运行观测](./observability/index) |
-| 建立评测集与评测任务 | [评测中心](./evaluation/index) |
-| 创建或优化 Skill | [Skills 能力](./skills/index) |
+| 建立评测集与评测任务 | [评估与实验](./evaluation/index) |
+| 创建或优化 Skill | [Skill 工作台](./skills/index) |
 | 登记或整理 Agent 资产 | [Agent 管理](./agent-management) |
 
 概览面板的定位是“发现与分流”，真正的“分析与处置”交给对应专业模块。

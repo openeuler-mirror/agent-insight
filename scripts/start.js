@@ -14,6 +14,12 @@ const {
   getDataRoot
 } = require('./utils.js')
 const { syncAdminApiKey } = require('./sync_admin_api_key.js')
+const { syncGeneratedPrismaClient } = require('./sync-prisma-client.js')
+const {
+  readCurrentRuntime,
+  resolveBootstrapPython,
+  verifyManagedPython,
+} = require('./lib/fi-python-runtime.js')
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
@@ -89,6 +95,8 @@ async function run(options) {
   const dbPath = path.join(dataRoot, 'data', 'witty_insight.db')
   const dbUrl = `file:${dbPath}`
   process.env.DATABASE_URL = dbUrl
+  const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
+  const standaloneDir = path.dirname(standaloneServer)
 
   const envPath = path.join(dataRoot, '.env')
   const fileEnv = loadEnvFile(envPath)
@@ -129,6 +137,18 @@ async function run(options) {
   }
 
   try {
+    console.log('Generating Prisma client...')
+    await runCommand('npx prisma generate', {
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
+    syncGeneratedPrismaClient(
+      PACKAGE_ROOT,
+      fs.existsSync(standaloneServer) ? standaloneDir : undefined
+    )
+    console.log('✓ Prisma client generated')
+    console.log()
+
     console.log('Syncing database schema...')
     await runCommand('node scripts/prepare-ras-sqlite-schema.js', {
       cwd: PACKAGE_ROOT,
@@ -139,14 +159,6 @@ async function run(options) {
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
     console.log('✓ Database schema synced')
-    console.log()
-
-    console.log('Generating Prisma client...')
-    await runCommand('npx prisma generate', {
-      cwd: PACKAGE_ROOT,
-      env: { ...process.env, DATABASE_URL: dbUrl }
-    })
-    console.log('✓ Prisma client generated')
     console.log()
   } catch (error) {
     console.error('❌ Database initialization failed:', error.message)
@@ -161,7 +173,6 @@ async function run(options) {
     process.exit(1)
   }
 
-  const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
   const isStandalone = fs.existsSync(standaloneServer)
   const nextDir = path.join(PACKAGE_ROOT, '.next')
   const isProduction = fs.existsSync(nextDir) && fs.existsSync(path.join(nextDir, 'BUILD_ID'))
@@ -196,12 +207,41 @@ async function run(options) {
   // 因此 standalone 下由 control-server.js 承载 Next + WSS。
   const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || port + 1)
 
+  const runtimeEnv = { ...process.env, ...fileEnv }
+  const currentFiRuntime = readCurrentRuntime()
+  const managedFiPython = currentFiRuntime?.python
+    && verifyManagedPython(currentFiRuntime.python)
+    ? currentFiRuntime
+    : null
+  const fiPython = managedFiPython || resolveBootstrapPython({
+    env: runtimeEnv,
+    requiredImports: ['yaml'],
+  })
+  const rasPython = resolveBootstrapPython({
+    env: runtimeEnv,
+    requiredImports: ['pydantic'],
+  })
+  if (fiPython) {
+    runtimeEnv.AGENT_INSIGHT_FI_PYTHON =
+      runtimeEnv.AGENT_INSIGHT_FI_PYTHON || fiPython.python || fiPython.executable
+    console.log(`FI Python runtime: ${runtimeEnv.AGENT_INSIGHT_FI_PYTHON}`)
+  } else {
+    console.warn('⚠️  Python 3.11+ with PyYAML not found; fault injection is unavailable')
+  }
+  if (rasPython) {
+    runtimeEnv.AGENT_INSIGHT_RAS_PYTHON =
+      runtimeEnv.AGENT_INSIGHT_RAS_PYTHON || rasPython.executable
+    console.log(`RAS Python runtime: ${rasPython.executable} (${rasPython.versionText})`)
+  } else {
+    console.warn('⚠️  Python 3.11+ with pydantic not found; RAS config catalog is unavailable')
+  }
+
   const env = {
-    ...process.env,
-    ...fileEnv,
+    ...runtimeEnv,
     DATABASE_URL: dbUrl,
     PORT: port.toString(),
     HOSTNAME: '0.0.0.0',
+    AGENT_INSIGHT_PACKAGE_ROOT: PACKAGE_ROOT,
     AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
