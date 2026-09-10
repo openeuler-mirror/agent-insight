@@ -14,6 +14,7 @@ export default function VersionExperiments({runs,assets,loaded}:{runs:any[];asse
  const catalog=(kind:VersionDimension)=>[...assetsFor(assets,kind),...rows.map(r=>r.assets[kind]).filter(Boolean)].filter((a,i,all)=>all.findIndex(b=>b.id===a.id)===i).sort((a,b)=>b.version-a.version);
  const choices=Object.fromEntries(versionDimensions.map(kind=>{const candidate=first?.assets[kind]||catalog(kind)[0];return [kind,selected[kind]||{assetKey:candidate?.assetKey||(kind==='skill'?'__embedded__':''),id:candidate?.id||(kind==='skill'?'__embedded__':''),vary:kind==='agent'}];})) as VersionChoices;
  const view=buildDemoVersionView(runs,choices),varying=versionDimensions.filter(kind=>choices[kind].vary);
+ const chartForRecord=new Map(view.series.flatMap((series,index)=>series.records.map(row=>[row.key,index+1] as const)));
  const update=(kind:VersionDimension,patch:Partial<VersionChoices[VersionDimension]>)=>setSelected(old=>({...old,[kind]:{...choices[kind],...patch}}));
  const label=(row:any)=>varying.length?varying.map(kind=>dimensionLabels[kind]+' v'+(row.assets[kind]?.version||'内置')).join(' / '):versionDimensions.map(kind=>'v'+(row.assets[kind]?.version||'—')).join(' / ');
  if(!loaded)return <p role="status">正在加载版本记录…</p>;
@@ -35,8 +36,11 @@ export default function VersionExperiments({runs,assets,loaded}:{runs:any[];asse
    <div className="mb-3 flex flex-wrap items-start justify-between gap-3"><h2 className="text-sm font-semibold text-foreground">实验通过率趋势</h2></div>
    {!view.series.length?<p className="text-sm text-foreground-muted">这个组合还没有已完成的有效评分。<Link href="/experiments/new" className="ml-2 text-primary">新建实验</Link></p>:view.series.map((series,i)=>{
     const data=series.points.map(row=>({label:label(row),score:row.score,name:row.name,key:row.key}));
-    return <div key={series.key}>
-     <p className="mb-2 text-xs text-foreground-muted">{series.label}{view.series.length>1?' · 执行条件 '+(i+1):''}</p>
+    return <div key={series.key} id={'version-chart-'+(i+1)} className="scroll-mt-20 border-t border-border pt-4 first:border-t-0 first:pt-0">
+     <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-medium text-foreground">图 {i+1} · {series.points.length} 个版本组合</h3><span className="text-xs text-foreground-muted">对应下方标为“图 {i+1}”的实验记录</span></div>
+     <dl className="mb-3 grid grid-cols-1 gap-x-6 gap-y-2 rounded-md bg-background-secondary px-3 py-3 text-xs sm:grid-cols-2 xl:grid-cols-3" aria-label={'图 '+(i+1)+' 的实验配置'}>
+      {series.configuration.map(field=><div key={field.label} className="min-w-0"><dt className="mb-1 text-foreground-muted">{field.label}</dt><dd className="break-words text-foreground">{field.value}{field.details&&<details className="mt-1"><summary className="cursor-pointer text-primary">查看选中的 Case</summary><p className="mt-2 whitespace-pre-wrap break-words">{field.details}</p></details>}</dd></div>)}
+     </dl>
      <div className="h-72 min-w-0" role="img" aria-label={'通过率趋势：'+data.map(p=>p.label+' '+p.score+'%').join('，')}>
       <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{top:14,right:18,bottom:4,left:-4}}>
        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false}/>
@@ -53,12 +57,13 @@ export default function VersionExperiments({runs,assets,loaded}:{runs:any[];asse
   <section className="overflow-hidden rounded-md border border-border bg-card" aria-label="版本组合实验记录">
    <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3"><h2 className="text-sm font-semibold text-foreground">实验记录（{view.rows.length}）</h2></div>
    <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm">
-    <thead className="bg-background-secondary text-xs text-foreground-muted"><tr>{['实验',...versionDimensions.map(k=>dimensionLabels[k]),'状态','通过率'].map(t=><Th key={t}>{t}</Th>)}</tr></thead>
+    <thead className="bg-background-secondary text-xs text-foreground-muted"><tr>{['实验',...versionDimensions.map(k=>dimensionLabels[k]),'对应趋势图','状态','通过率'].map(t=><Th key={t}>{t}</Th>)}</tr></thead>
     <tbody>{view.rows.map(row=><tr key={row.key} className="border-t border-border hover:bg-background-secondary">
      <Td><Link href={'/experiments/'+row.runId} className="font-medium text-primary">{row.name}{row.group?' · '+row.group+' 组':''}</Link><p className="mt-1 text-xs text-foreground-muted">{new Date(row.createdAt).toLocaleString('zh-CN',{hour12:false})}</p></Td>
      {versionDimensions.map(kind=><Td key={kind}>{kind==='evaluator'?row.evaluators.map(e=>e.name+' v'+e.version).join('、'):row.assets[kind]?'v'+row.assets[kind].version:'Agent 内置'}</Td>)}
+     <Td>{chartForRecord.has(row.key)?<a href={'#version-chart-'+chartForRecord.get(row.key)} className="text-primary">图 {chartForRecord.get(row.key)}</a>:<span className="text-foreground-muted">暂无有效评分</span>}</Td>
      <Td>{status[row.status]||row.status}</Td><Td>{row.score===null?'未评完整':row.score.toFixed(1)+'%'}</Td>
-    </tr>)}{view.rows.length===0&&<tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-foreground-muted">当前组合暂无实验记录</td></tr>}</tbody>
+    </tr>)}{view.rows.length===0&&<tr><td colSpan={8} className="px-4 py-8 text-center text-sm text-foreground-muted">当前组合暂无实验记录</td></tr>}</tbody>
    </table></div>
   </section>
  </div>;
