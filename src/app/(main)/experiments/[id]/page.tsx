@@ -5,6 +5,8 @@
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import EvaluationWorkspace from '@/components/evaluation-harness/Workspace';
+import { ExperimentCaseComparisonTable } from '@/components/evaluation-harness/ExperimentCaseComparisonTable';
+import { buildComparisonCaseRows } from '@/lib/evaluation-harness/case-comparison-view';
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
@@ -20,7 +22,7 @@ import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
 
 interface ExperimentDetail {
-  configSnapshot?: { comparison?: {dimension:string}; kind?: string; evaluators?: Array<{id:string;name:string;version:number;content:{type:string}}> };
+  configSnapshot?: { comparison?: {dimension:string}; groups?: Array<{key:string;evaluatorIds:string[]}>; kind?: string; evaluators?: Array<{id:string;name:string;version:number;content:{type:string}}> };
   id: string;
   name: string;
   type: string;
@@ -34,6 +36,10 @@ interface ExperimentDetail {
   cases: Array<{
     id: string;
     groupKey?: string | null;
+    comparisonKey?: string;
+    comparisonStatus?: string;
+    comparisonReason?: string;
+    caseValues?: { name?: string } | null;
     executionId: string | null;
     taskId: string | null;
     input: string;
@@ -62,6 +68,7 @@ interface ExperimentDetail {
   overall: number | null;
   breakdown: EvaluatorBreakdownRow[];
   caseTotal: number;
+  casePairTotal?: number;
   casePage: number;
   casePageSize: number;
 }
@@ -268,7 +275,10 @@ export function ExperimentDetail({
     [detail, lookup],
   );
 
-  const caseTotal = detail?.caseTotal ?? 0;
+  const comparisonRows = useMemo(() => detail?.configSnapshot?.comparison
+    ? buildComparisonCaseRows(detail.cases || [], detail.results || [], detail.configSnapshot.groups || [], lookup.categoryOf)
+    : [], [detail, lookup]);
+  const caseTotal = detail?.casePairTotal ?? detail?.caseTotal ?? 0;
   const totalPages = Math.max(1, Math.ceil(caseTotal / casePageSize));
   const pagedRows = caseRows;
   // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
@@ -360,7 +370,7 @@ export function ExperimentDetail({
                 {status.label}
               </span>
               <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.caseTotal}</span>
+              <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{caseTotal}{detail.casePairTotal != null && detail.caseTotal !== caseTotal && <span className="text-foreground-muted"> · {detail.caseTotal} 条执行记录</span>}</span>
               <span><span style={{ color: 'var(--foreground-muted)' }}>评估器：</span>{detail.evaluatorIds.length}</span>
               <span style={{ color: 'var(--foreground-muted)' }}>
                 创建于 {new Date(detail.createdAt).toLocaleString('zh-CN', { hour12: false })}
@@ -462,6 +472,7 @@ export function ExperimentDetail({
                 display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
               }}>
                 <span style={{ fontSize: 12.5, fontWeight: 600 }}>Case 明细</span>
+                {detail.configSnapshot?.comparison && <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>共 {caseTotal} 个 Case · A/B 组并排对比</span>}
                 {notice && (
                   <span style={{ fontSize: 11.5, color: 'var(--success, var(--accent))' }}>{notice}</span>
                 )}
@@ -477,10 +488,9 @@ export function ExperimentDetail({
                 </button>)}
               </div>
               <div style={{ maxHeight: 'min(42vh, 420px)', overflow: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
+                {detail.configSnapshot?.comparison ? <ExperimentCaseComparisonTable rows={comparisonRows} experimentId={id} onOpenCase={embedded ? onOpenCase : undefined} /> : <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                   <thead>
                     <tr>
-                      {detail.configSnapshot?.comparison && <th style={STICKY_TH}>分组</th>}
                       <th style={STICKY_TH}>输入</th>
                       <th style={STICKY_TH}>预期输出</th>
                       <th style={STICKY_TH}>实际输出</th>
@@ -493,7 +503,6 @@ export function ExperimentDetail({
                   <tbody>
                     {pagedRows.map((c) => (
                       <tr key={c.id}>
-                        {detail.configSnapshot?.comparison && <td style={TD}>{c.groupKey?c.groupKey+' 组':'A/B 共用'}</td>}
                         <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>
                         <td style={{ ...TD, maxWidth: 220 }}>
                           {c.referenceOutput
@@ -570,7 +579,7 @@ export function ExperimentDetail({
                       </tr>
                     )}
                   </tbody>
-                </table>
+                </table>}
               </div>
               {caseTotal > casePageSize && (
                 <div style={{

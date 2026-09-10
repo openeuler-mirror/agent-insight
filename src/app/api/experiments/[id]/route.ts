@@ -15,6 +15,7 @@ import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/deta
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
+import { buildCaseComparisonPairs } from '@/lib/evaluation-harness/case-comparison';
 
 export const dynamic = 'force-dynamic';
 
@@ -112,12 +113,24 @@ export async function GET(
     // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
     // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
     const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
-    const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
+    const comparisonPairs = !wantCaseId && experiment.scope === 'evaluation-harness' && configSnapshot?.comparison
+      ? buildCaseComparisonPairs(await prisma.experimentCase.findMany({
+        where: { experimentId: id },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, groupId: true, caseValuesJson: true },
+      }), configSnapshot)
+      : null;
+    const casePairTotal = comparisonPairs?.length;
+    const casePages = Math.max(1, Math.ceil((casePairTotal ?? caseTotal) / casePageSize));
     const casePage = Math.min(casePageRaw, casePages);
+    const pagePairs = comparisonPairs?.slice((casePage - 1) * casePageSize, casePage * casePageSize);
+    const comparisonByCase = new Map(pagePairs?.flatMap(pair => pair.caseIds.map(caseId => [caseId, pair] as const)));
     const pagedCases = await prisma.experimentCase.findMany({
-      where: wantCaseId ? { id: wantCaseId, experimentId: id } : { experimentId: id },
-      orderBy: { createdAt: 'asc' },
-      ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
+      where: wantCaseId ? { id: wantCaseId, experimentId: id }
+        : pagePairs ? { experimentId: id, id: { in: pagePairs.flatMap(pair => pair.caseIds) } }
+        : { experimentId: id },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      ...(wantCaseId || pagePairs ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
@@ -457,6 +470,7 @@ export async function GET(
       overall,
       breakdown,
       cases: pagedCases.map((c) => {
+        const comparison = comparisonByCase.get(c.id);
         const traceState = traceStateByCase.get(c.id);
         const effectiveTaskId = c.taskId || traceState?.taskId || null;
         const ex = (c.executionId ? execFallbackById.get(c.executionId) : undefined)
@@ -482,6 +496,7 @@ export async function GET(
         }
         return {
           id: c.id,
+          ...(comparison ? { comparisonKey: comparison.key, comparisonStatus: comparison.status, comparisonReason: comparison.reason } : {}),
           groupKey: (configSnapshot?.groups as Array<{id:string;key:string}> | undefined)?.find(g=>g.id===c.groupId)?.key || null,
           executionId: c.executionId || traceState?.executionId || null,
           taskId: effectiveTaskId,
@@ -511,6 +526,7 @@ export async function GET(
       progress,
       traceProgress,
       caseTotal,
+      ...(casePairTotal !== undefined ? { casePairTotal } : {}),
       casePage,
       casePageSize,
     });
