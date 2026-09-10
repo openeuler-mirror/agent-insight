@@ -352,3 +352,5 @@ Agent 与 Skill 从外部目录读取；选择 Skill 时通过 skillOverrides �
 ### 2026-09-09 真实 LLM 格式约束
 
 生成服务向模型提供字段类型、枚举和工具/输出字段约束。结果仍由 datasetSchema 严格校验，失败时只允许一次携带校验路径的格式纠正；传输错误不会触发格式重试，不把无效值强制转换成合格样本。JSON 调用对 DeepSeek 官方域名的 v4 模型显式使用非思考模式、JSON 输出及 8192 输出 token 上限，其他端点保持原参数；90 秒超时返回中文提示。依据：[DeepSeek 思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)与[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)。
+
+版本化对比的 `GET /api/experiments/[id]` 列表通过 `case-comparison.ts` 先配对再分页，返回 `casePairTotal` 和每条记录的 `comparisonKey/comparisonStatus/comparisonReason`，`caseTotal` 保留执行记录数。当前页同时返回配对两侧的 Case 与结果，指定 `caseId` 的下钻查询仍只取该条记录。同一评测集使用稳定 Case ID，跨评测集复用 `buildDatasetPairs`；重复、缺失身份或分组不能强行配对。评估器对比的无 groupId 记录标为 `shared`，多个 Trace 对应同一个逻辑 Case 时保留为不同记录。原生对比接口路径与单组分页不变，无新增路由或数据模型。

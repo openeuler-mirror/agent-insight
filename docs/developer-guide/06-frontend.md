@@ -142,3 +142,5 @@ flowchart TD
 NH Trace 在挂载原详情前通过 `trace-access.ts` 校验当前账号归属；切换账号或 Trace 时旧授权即时失效。`AgentTraceView` 对 evaluation-harness 记录用 `trace-evidence.ts` 按 `tool_call_id` 关联独立工具返回，单条懒加载同时补齐关联消息并保留原索引。原 Skills 卡片追加执行端确认的加载定义、外部版本和指纹；它们不计为 Skill 工具调用。`showInfra` 默认为 true，演示调用传 false，仅隐藏基础设施页签。
 
 2026-09-10：版本趋势在原 `VersionExperiments` 内为每张图显示保存的实验配置（模型、脱敏地址、Case 范围、并发、超时、重试、门槛、Trace 来源，以及需要时的附加评估器和评分连接）。`buildDemoVersionView` 同时保留组内全部记录和去重后的有效评分点，用统一编号关联下方实验表；未完成记录可关联已有同配置图，但不成为评分点。Case 范围按分组选择、Trace 关联、显式选择、完整评测集的顺序解析；省略 Case 选择和显式全选统一归为完整集。缺失参数显示未记录；评分连接仅显示当前视图编号，地址查询参数不展示，同名地址的不同参数配置用编号区分。无 API 或数据模型变更。
+
+实验详情继续复用原 `ExperimentDetail`。版本化对比的 Case 区域使用可选 `ExperimentCaseComparisonTable`，以服务端 `comparisonKey` 归为一行，各结果指标下并列 A/B；单组与原生 `ComparisonDetail` 路径不变。`case-comparison-view.ts` 复用 `caseScore` 按组评估器计算生效分，只有 `shared` 记录复用执行到两列，未知分组独立提示。Case 页数用 `casePairTotal`，执行数量仍来自 `caseTotal`；详情链接保留实际 Case ID，共用 Trace 的评估器对比进入同一评估详情。
