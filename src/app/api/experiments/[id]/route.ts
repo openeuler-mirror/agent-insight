@@ -130,11 +130,12 @@ export async function GET(
       failureMessage: string | null;
       publicPayloadJson: string | null;
       datasetCase: { externalCaseId: string } | null;
-      artifacts: Array<{ name: string; sha256: string; sizeBytes: number; mediaType: string }>;
+      artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
+        id: string;
         status: string;
         normalizedResultJson: string | null;
-        artifacts: Array<{ name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
+        artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
     }>();
     if (experiment.scope === 'benchmark' && pagedCases.length) {
@@ -146,17 +147,18 @@ export async function GET(
           artifacts: {
             orderBy: { createdAt: 'asc' },
             take: 1,
-            select: { name: true, sha256: true, sizeBytes: true, mediaType: true },
+            select: { id: true, name: true, sha256: true, sizeBytes: true, mediaType: true },
           },
           evaluations: {
             orderBy: { attemptNo: 'desc' },
             take: 1,
             select: {
+              id: true,
               status: true,
               normalizedResultJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
-                select: { name: true, kind: true, sha256: true, sizeBytes: true, mediaType: true },
+                select: { id: true, name: true, kind: true, sha256: true, sizeBytes: true, mediaType: true },
               },
             },
           },
@@ -619,13 +621,17 @@ export async function GET(
                 sizeBytes: submission.sizeBytes,
                 mediaType: submission.mediaType,
                 summary: `${submission.sizeBytes} bytes · ${submission.sha256}`,
+                kind: 'submission',
+                contentUrl: `/api/benchmark/v1/artifacts/${encodeURIComponent(submission.id)}/content`,
               } : null,
               evidenceArtifacts: (benchmarkRun.evaluations[0]?.artifacts || []).map((artifact) => ({
+                artifactId: artifact.id,
                 name: artifact.name,
                 kind: artifact.kind,
                 sha256: artifact.sha256,
                 sizeBytes: artifact.sizeBytes,
                 mediaType: artifact.mediaType,
+                contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,

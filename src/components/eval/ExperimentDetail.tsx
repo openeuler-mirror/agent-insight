@@ -1,7 +1,7 @@
 'use client';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
-// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
+// → Case 明细表（Benchmark 含 Instance ID；综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -479,9 +479,12 @@ export function ExperimentDetail({
                 )}
               </div>
               <div style={{ maxHeight: 'min(42vh, 420px)', overflow: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: detail.scope === 'benchmark' ? 1280 : 1100 }}>
                   <thead>
                     <tr>
+                      {detail.scope === 'benchmark' && (
+                        <th style={{ ...STICKY_TH, width: 220 }}>Instance ID</th>
+                      )}
                       <th style={STICKY_TH}>输入</th>
                       <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '参考契约' : '预期输出'}</th>
                       <th style={STICKY_TH}>实际输出</th>
@@ -494,6 +497,13 @@ export function ExperimentDetail({
                   <tbody>
                     {pagedRows.map((c) => (
                       <tr key={c.id}>
+                        {detail.scope === 'benchmark' && (
+                          <td style={{ ...TD, width: 220, whiteSpace: 'nowrap' }}>
+                            <code title={c.benchmark?.externalCaseId || undefined} style={{ fontSize: 11.5 }}>
+                              {c.benchmark?.externalCaseId || '—'}
+                            </code>
+                          </td>
+                        )}
                         <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>
                         <td style={{ ...TD, maxWidth: 220 }}>
                           {detail.scope === 'benchmark'

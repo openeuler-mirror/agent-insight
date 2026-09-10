@@ -60,3 +60,13 @@ test('实验详情展示 Trace 生成进度和失败 Case，失败 Trace 不显�
   assert.match(detailPage, /已跳过评估且不计入综合得分/);
   assert.match(detailPage, /正在生成 Trace/);
 });
+
+test('Benchmark Case 明细表展示 Instance ID', () => {
+  const detailPage = fs.readFileSync(
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
+    'utf8',
+  );
+
+  assert.match(detailPage, />Instance ID</);
+  assert.match(detailPage, /c\.benchmark\?\.externalCaseId/);
+});

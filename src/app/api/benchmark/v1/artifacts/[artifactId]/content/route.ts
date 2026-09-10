@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 
+import { resolveUser } from '@/lib/auth/auth'
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error'
 import { benchmarkArtifactAbsolutePath } from '@/lib/benchmark/evaluation-preparation-service'
+import { readBenchmarkRunArtifact } from '@/lib/benchmark/experiment-result-service'
 import { authenticateBenchmarkEvaluator } from '@/lib/benchmark/evaluator-target'
 import { prisma } from '@/lib/storage/prisma'
 import { BenchmarkProtocolError } from '../../../../../../../../packages/benchmark-protocol/src/errors'
@@ -11,8 +13,23 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request, { params }: { params: Promise<{ artifactId: string }> }) {
   try {
-    authenticateBenchmarkEvaluator(req)
     const { artifactId } = await params
+    const url = new URL(req.url)
+    const { username } = await resolveUser(req, url.searchParams.get('user'))
+    if (username) {
+      const artifact = await readBenchmarkRunArtifact({ artifactId, user: username })
+      return new Response(new Blob([new Uint8Array(artifact.bytes)]), {
+        status: 200,
+        headers: {
+          'content-type': artifact.mediaType,
+          'content-length': String(artifact.bytes.byteLength),
+          'content-disposition': `attachment; filename="${artifact.name}"`,
+          etag: `"${artifact.sha256}"`,
+          'cache-control': 'private, no-store',
+        },
+      })
+    }
+    authenticateBenchmarkEvaluator(req)
     const evaluationId = req.headers.get('x-agent-insight-evaluation-id')?.trim()
     if (!evaluationId) {
       throw new BenchmarkProtocolError('EVALUATION_ID_MISSING', '缺少评测 Run 标识', 400)

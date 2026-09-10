@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
+import { BenchmarkArtifactActions, type BenchmarkArtifactRef } from '@/components/eval/BenchmarkArtifactActions';
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
@@ -65,8 +66,8 @@ interface ExperimentDetail {
       externalCaseId: string;
       repo: string;
       reference: { kind: string; description: string };
-      submission: { name: string; sha256: string; sizeBytes: number; summary: string } | null;
-      evidenceArtifacts: Array<{ name: string; kind: string; sha256: string; sizeBytes: number }>;
+      submission: (BenchmarkArtifactRef & { sha256: string; summary: string }) | null;
+      evidenceArtifacts: Array<BenchmarkArtifactRef & { sha256: string }>;
       runStatus: string;
       evaluationStatus: string | null;
       failure?: { code: string; message: string | null } | null;
@@ -737,12 +738,12 @@ export function ExperimentCaseDetail({
                                   })}
                                 </div>
                               )}
-                              {(caseRow.benchmark?.evidenceArtifacts.length || 0) > 0 && (
-                                <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'var(--background-secondary)', fontSize: 11, color: 'var(--foreground-secondary)', lineHeight: 1.7 }}>
-                                  {caseRow.benchmark?.evidenceArtifacts.map((artifact) => (
-                                    <div key={`${artifact.kind}:${artifact.name}`}>{artifact.name} · {artifact.kind} · {artifact.sha256}</div>
-                                  ))}
-                                </div>
+                              {user && (
+                                <BenchmarkArtifactActions
+                                  user={user}
+                                  submission={caseRow.benchmark?.submission || null}
+                                  evidence={caseRow.benchmark?.evidenceArtifacts || []}
+                                />
                               )}
                               {!pendingLike && (
                                 <button

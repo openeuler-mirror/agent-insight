@@ -731,7 +731,7 @@ async function waitForBenchmarkExperimentResult(
   metrics: { primary: Record<string, unknown> }
   cases: Array<{
     externalCaseId: string
-    execution: { traceId: string }
+    execution: { traceId: string; patchArtifactId: string }
     nativeMetrics: Record<string, unknown>
     evidence: Array<{ downloadUrl: string }>
   }>
@@ -2265,6 +2265,16 @@ test('steps 01-13 cross the client-command and evaluator boundaries with a real 
       `${platformListener.origin}${evidence.downloadUrl}?user=${encodeURIComponent(`${user}_other`)}`,
     )
     assert.equal(forbiddenEvidence.status, 404)
+    const patchArtifactId = resultBody.cases[0].execution.patchArtifactId
+    const patchResponse = await fetch(
+      `${platformListener.origin}/api/benchmark/v1/artifacts/${encodeURIComponent(patchArtifactId)}/content?user=${encodeURIComponent(user)}`,
+    )
+    assert.equal(patchResponse.status, 200)
+    assert.match(await patchResponse.text(), /^diff --git /)
+    const forbiddenPatch = await fetch(
+      `${platformListener.origin}/api/benchmark/v1/artifacts/${encodeURIComponent(patchArtifactId)}/content?user=${encodeURIComponent(`${user}_other`)}`,
+    )
+    assert.equal(forbiddenPatch.status, 404)
   } finally {
     setCommandDispatcher()
     await executor.close()

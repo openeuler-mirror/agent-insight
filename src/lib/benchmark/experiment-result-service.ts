@@ -355,3 +355,41 @@ export async function readBenchmarkEvaluationArtifact(input: {
   }
   return { ...artifact, bytes }
 }
+
+export async function readBenchmarkRunArtifact(input: {
+  artifactId: string
+  user: string
+}) {
+  const artifact = await benchmarkPrisma.benchmarkArtifact.findFirst({
+    where: {
+      id: input.artifactId,
+      run: {
+        experiment: { user: input.user, scope: 'benchmark' },
+      },
+    },
+    select: {
+      name: true,
+      mediaType: true,
+      sha256: true,
+      sizeBytes: true,
+      storagePath: true,
+    },
+  })
+  if (!artifact) {
+    throw new BenchmarkProtocolError('ARTIFACT_NOT_FOUND', 'Artifact 不存在', 404)
+  }
+  const root = path.resolve(resolveAgentInsightDataPath())
+  const absolutePath = path.resolve(root, artifact.storagePath)
+  if (!absolutePath.startsWith(`${root}${path.sep}`)) {
+    throw new BenchmarkProtocolError('ARTIFACT_PATH_INVALID', 'Artifact 存储路径不合法', 500)
+  }
+  const bytes = await fs.readFile(absolutePath).catch(() => null)
+  if (!bytes) {
+    throw new BenchmarkProtocolError('ARTIFACT_CONTENT_MISSING', 'Artifact 文件不存在', 404)
+  }
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+  if (bytes.byteLength !== artifact.sizeBytes || digest !== artifact.sha256) {
+    throw new BenchmarkProtocolError('ARTIFACT_CONTENT_MISMATCH', 'Artifact 内容完整性校验失败', 409)
+  }
+  return { ...artifact, bytes }
+}

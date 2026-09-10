@@ -34,6 +34,8 @@
 
 > 2026-09-10 working-tree overlay：Benchmark 官方评测可靠性进一步收敛。SWE-bench Raw Result 使用严格 boolean 和官方报告结构；归一化同时绑定冻结实例/测试名单、正式资格以及重读并校验摘要的三类证据，字符串 `"false"`、错误实例、空/重复/未知测试或证据漂移均不能产生成绩。Evaluator 的 abort 成为不可逆 `EVALUATION_TIMEOUT`，callback 只接受结构与状态匹配的 ACK。平台增加 Evaluation 分阶段 watchdog、下发 attempt owner CAS、normalizing 恢复和带 owner lease 的持久化 continuation，终态 ACK 前先落续跑意图，服务重启可恢复且补充评估器不重复执行；旧 Run 无法覆盖 Case 重跑后的投影。聚合只取重试图叶子并稳定排序，防止历史尝试重复计分。官方 Harness 判定代码保持不变。
 
+> 2026-09-10 working-tree overlay：Benchmark Case 详情新增 Artifact 查看与下载入口。`model.patch`、`report.json`、`test_output.txt` 和 `run_instance.log` 均按需通过受控内容接口读取，在右侧抽屉展示；下载菜单复用原始 Artifact，不额外生成 ZIP。通用实验详情只投影 Artifact ID 派生的 `contentUrl`，不返回存储路径或文件正文；Patch 的浏览器下载在既有内容路由中新增用户/实验归属校验，同时保留 Evaluator Bearer 下载契约。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
