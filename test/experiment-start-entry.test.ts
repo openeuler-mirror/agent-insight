@@ -70,3 +70,13 @@ test('Benchmark Case 明细表展示 Instance ID', () => {
   assert.match(detailPage, />Instance ID</);
   assert.match(detailPage, /c\.benchmark\?\.externalCaseId/);
 });
+
+test('Benchmark 原始文件菜单向上展开，避免被结果卡底部裁剪', () => {
+  const artifactActions = fs.readFileSync(
+    path.join(root, 'src/components/eval/BenchmarkArtifactActions.tsx'),
+    'utf8',
+  );
+
+  assert.match(artifactActions, /bottom: 'calc\(100% \+ 5px\)'/);
+  assert.doesNotMatch(artifactActions, /top: 'calc\(100% \+ 5px\)'/);
+});

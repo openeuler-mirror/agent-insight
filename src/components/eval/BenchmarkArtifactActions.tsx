@@ -177,7 +177,7 @@ export function BenchmarkArtifactActions({
                 role="menu"
                 aria-label="下载原始文件"
                 style={{
-                  position: 'absolute', right: 0, top: 'calc(100% + 5px)', zIndex: 20,
+                  position: 'absolute', right: 0, bottom: 'calc(100% + 5px)', zIndex: 30,
                   minWidth: 190, padding: 5, border: '1px solid var(--border)',
                   borderRadius: 'var(--radius-sm)', background: 'var(--card-bg)', boxShadow: 'var(--shadow)',
                 }}
