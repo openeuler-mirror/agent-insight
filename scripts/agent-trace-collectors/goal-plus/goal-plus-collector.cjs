@@ -11,6 +11,7 @@ const {
   apiKeyHash,
   atomicWriteJson,
   collectorStateDir,
+  inspectProcessLock,
   listSpoolFiles,
   readCheckpoint,
   safeContent,
@@ -27,7 +28,7 @@ const {
   validateGoalPlusRoot,
 } = require("./lib/source-registry.cjs");
 
-const COLLECTOR_VERSION = "1.2.2";
+const COLLECTOR_VERSION = "1.2.3";
 const MAX_BATCH_SNAPSHOTS = 100;
 const MAX_BATCH_BYTES = 3.5 * 1024 * 1024;
 
@@ -92,13 +93,27 @@ async function watcherStatus(config) {
   const running = Boolean(record && processIsAlive(record.pid));
   const expectedConfigFingerprint = configFingerprint(config);
   const configMatches = !running || record?.configFingerprint === expectedConfigFingerprint;
+  const uploaderInspection = config.apiKey
+    ? await inspectProcessLock(path.join(
+      collectorStateDir("pi-agent", config.apiKey, config.homeDir),
+      "uploader.lock",
+    ))
+    : { state: "unconfigured", recoverable: false };
+  const uploader = {
+    state: uploaderInspection.state,
+    recoverable: uploaderInspection.recoverable,
+    ...(uploaderInspection.reason ? { reason: uploaderInspection.reason } : {}),
+    ...(Number.isFinite(uploaderInspection.ageMs) ? { ageMs: uploaderInspection.ageMs } : {}),
+    ...(uploaderInspection.owner ? { owner: uploaderInspection.owner } : {}),
+  };
+  const uploaderBlocked = ["invalid", "orphaned", "recovery-blocked"].includes(uploader.state);
   if (record && !running) await fsp.unlink(paths.pidPath).catch(() => undefined);
   return {
     configured: Boolean(config.apiKey),
     hosts: config.hosts || [],
     sourceCount: registry.sources.length,
     running,
-    ready: Boolean(config.apiKey) && registry.sources.length > 0 && running && configMatches,
+    ready: Boolean(config.apiKey) && registry.sources.length > 0 && running && configMatches && !uploaderBlocked,
     pid: running ? record.pid : undefined,
     stalePid: record && !running ? record.pid : undefined,
     startedAt: running ? record.startedAt : undefined,
@@ -107,6 +122,7 @@ async function watcherStatus(config) {
     configFingerprint: expectedConfigFingerprint,
     activeConfigFingerprint: running ? record.configFingerprint : undefined,
     configMatches,
+    uploader,
     logPath: paths.logPath,
   };
 }
@@ -379,6 +395,7 @@ async function scanSource(source, config, options = {}) {
     nativeUnchangedEvents: native.unchangedEvents || 0,
     semanticUpload,
     nativeUploadEvents: native.uploadedEvents,
+    nativeUploadStatus: native.uploadStatus,
     diagnostics: [...parsed.diagnostics, ...native.diagnostics],
   };
 }
@@ -434,8 +451,11 @@ async function selfCheck(config) {
       nativePendingFiles,
     };
   }
+  const watcher = await watcherStatus(config);
+  const uploaderBlocked = ["invalid", "orphaned", "recovery-blocked"].includes(watcher.uploader?.state);
   return {
-    ok: Boolean(config.apiKey) && spoolWritable && sources.length > 0 && sources.every(source => source.ok),
+    ok: Boolean(config.apiKey) && spoolWritable && sources.length > 0
+      && sources.every(source => source.ok) && !uploaderBlocked,
     configured: Boolean(config.apiKey),
     configDiagnostics: config.configDiagnostics || [],
     endpoints: {
@@ -444,7 +464,7 @@ async function selfCheck(config) {
     },
     spoolWritable,
     spoolBacklog,
-    watcher: await watcherStatus(config),
+    watcher,
     sources,
   };
 }

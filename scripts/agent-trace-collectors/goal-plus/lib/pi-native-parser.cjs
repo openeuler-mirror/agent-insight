@@ -21,6 +21,7 @@ const { classifyTool, parseMcpIdentity, usageFrom } = require("../../shared/pi-t
 const { safeStableRead } = require("./gp-snapshot-parser.cjs");
 
 const IMPORT_CHECKPOINT_VERSION = 1;
+const GOAL_PLUS_UPLOAD_MAX_BATCHES_PER_FLUSH = 10;
 
 function stableJson(value) {
   if (value === undefined) return "null";
@@ -417,6 +418,8 @@ async function importPiSessions(root, sessions, options) {
     endpoint: options.endpoint,
     homeDir: options.homeDir,
     stateDir,
+    fileOrder: "newest-first",
+    maxBatchesPerFlush: GOAL_PLUS_UPLOAD_MAX_BATCHES_PER_FLUSH,
   });
   const checkpointPath = options.checkpointPath || path.join(stateDir, "goal-plus-import-checkpoint.json");
   const lockPath = options.lockPath || path.join(stateDir, "goal-plus-import.lock");
@@ -498,6 +501,16 @@ async function importPiSessions(root, sessions, options) {
   }
 
   const upload = options.upload === false ? { uploadedEvents: 0 } : await uploader.flushOnce();
+  if (upload.acquired === false) {
+    const state = upload.lockStatus?.state || "contended";
+    const reason = upload.lockStatus?.reason ? ` (${upload.lockStatus.reason})` : "";
+    diagnostics.push({
+      code: ["invalid", "orphaned", "recovery-blocked"].includes(state)
+        ? "pi_upload_blocked"
+        : "pi_upload_deferred",
+      message: `Goal Plus Pi uploader did not acquire its lock: ${state}${reason}`,
+    });
+  }
   return {
     examined: sessions.length,
     imported,
@@ -505,6 +518,7 @@ async function importPiSessions(root, sessions, options) {
     appendedEvents,
     unchangedEvents,
     uploadedEvents: upload.uploadedEvents || 0,
+    uploadStatus: upload,
     diagnostics,
   };
 }

@@ -11,6 +11,7 @@ const DEFAULT_MAX_DIAGNOSTIC_CHARS = 2000;
 const DEFAULT_BATCH_EVENTS = 100;
 const DEFAULT_BATCH_BYTES = 512 * 1024;
 const DEFAULT_RETENTION_DAYS = 7;
+const DEFAULT_PROCESS_LOCK_INVALID_GRACE_MS = 1000;
 const RETRYABLE_STATUS = new Set([409, 429, 500, 501, 502, 503, 504]);
 
 const SENSITIVE_KEY_PATTERN =
@@ -258,51 +259,205 @@ function isPidAlive(pid) {
   }
 }
 
-async function acquireProcessLock(lockPath) {
+async function publishProcessLock(filePath, owner) {
+  const candidate = `${filePath}.${process.pid}.${owner.token}.candidate`;
+  let handle;
+  try {
+    handle = await fsp.open(candidate, "wx", 0o600);
+    await handle.writeFile(`${JSON.stringify(owner)}\n`, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    try {
+      await fsp.link(candidate, filePath);
+      return true;
+    } catch (error) {
+      if (error?.code === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fsp.unlink(candidate).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
+}
+
+function validProcessLockOwner(value) {
+  return Number.isInteger(value?.pid) && value.pid > 0
+    && typeof value.host === "string" && Boolean(value.host)
+    && typeof value.token === "string" && Boolean(value.token);
+}
+
+async function inspectProcessLock(lockPath) {
+  const recoveryPath = `${lockPath}.recovery`;
+  let recoveryPresent = false;
+  try {
+    await fsp.lstat(recoveryPath);
+    recoveryPresent = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  let stat;
+  try {
+    stat = await fsp.lstat(lockPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return recoveryPresent
+        ? { state: "recovery-blocked", recoverable: false, reason: "recovery-claim-present" }
+        : { state: "free", recoverable: false };
+    }
+    throw error;
+  }
+
+  const identity = {
+    dev: Number(stat.dev),
+    ino: Number(stat.ino),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
+  if (!stat.isFile()) {
+    return { state: "invalid", recoverable: false, reason: "not-a-regular-file", identity, recoveryPresent };
+  }
+
+  let owner;
+  try {
+    owner = JSON.parse(await fsp.readFile(lockPath, "utf8"));
+  } catch {
+    return {
+      state: recoveryPresent ? "recovery-blocked" : "invalid",
+      recoverable: !recoveryPresent,
+      reason: stat.size === 0 ? "empty-lock" : "malformed-lock",
+      ageMs: Math.max(0, Date.now() - stat.mtimeMs),
+      identity,
+      recoveryPresent,
+    };
+  }
+  if (!validProcessLockOwner(owner)) {
+    return {
+      state: recoveryPresent ? "recovery-blocked" : "invalid",
+      recoverable: !recoveryPresent,
+      reason: "invalid-owner",
+      ageMs: Math.max(0, Date.now() - stat.mtimeMs),
+      identity,
+      recoveryPresent,
+    };
+  }
+
+  const local = owner.host === os.hostname();
+  const alive = local && isPidAlive(owner.pid);
+  return {
+    state: recoveryPresent
+      ? "recovery-blocked"
+      : local
+        ? alive ? "held-local" : "orphaned"
+        : "held-foreign",
+    recoverable: !recoveryPresent && local && !alive,
+    reason: recoveryPresent ? "recovery-claim-present" : undefined,
+    ageMs: Math.max(0, Date.now() - stat.mtimeMs),
+    owner: { pid: owner.pid, host: owner.host, startedAt: owner.startedAt },
+    ownerToken: owner.token,
+    identity,
+    recoveryPresent,
+  };
+}
+
+function sameProcessLockIdentity(left, right) {
+  return Boolean(left && right)
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs;
+}
+
+function processLockStatusSummary(status) {
+  return {
+    state: status.state,
+    recoverable: status.recoverable,
+    ...(status.reason ? { reason: status.reason } : {}),
+    ...(Number.isFinite(status.ageMs) ? { ageMs: status.ageMs } : {}),
+    ...(status.owner ? { owner: status.owner } : {}),
+  };
+}
+
+async function releaseOwnedProcessLock(filePath, token) {
+  let owner;
+  try {
+    owner = JSON.parse(await fsp.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT" || error instanceof SyntaxError) return false;
+    throw error;
+  }
+  if (owner?.token !== token) return false;
+  try {
+    await fsp.unlink(filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function recoverProcessLock(lockPath, observed, owner) {
+  const recoveryPath = `${lockPath}.recovery`;
+  const claim = {
+    ...owner,
+    expected: observed.identity,
+    expectedOwnerToken: observed.ownerToken,
+  };
+  if (!await publishProcessLock(recoveryPath, claim)) return false;
+  try {
+    const confirmed = await inspectProcessLock(lockPath);
+    if (!sameProcessLockIdentity(observed.identity, confirmed.identity)) return false;
+    if (confirmed.owner?.host !== undefined && confirmed.owner.host !== os.hostname()) return false;
+    if (confirmed.owner?.host === os.hostname() && isPidAlive(confirmed.owner.pid)) return false;
+    const retired = `${lockPath}.retired-${owner.token}`;
+    try {
+      await fsp.rename(lockPath, retired);
+    } catch (error) {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    }
+    await fsp.unlink(retired).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+    return true;
+  } finally {
+    await releaseOwnedProcessLock(recoveryPath, owner.token);
+  }
+}
+
+async function acquireProcessLock(lockPath, options = {}) {
   await fsp.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
-  const token = crypto.randomUUID();
-  const record = {
+  const owner = {
     version: 1,
     pid: process.pid,
     host: os.hostname(),
     startedAt: new Date().toISOString(),
-    token,
+    token: crypto.randomBytes(16).toString("hex"),
   };
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await fsp.open(lockPath, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
-      await handle.close();
-      return { lockPath, token };
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      let existing;
-      try {
-        existing = JSON.parse(await fsp.readFile(lockPath, "utf8"));
-      } catch {
-        return null;
-      }
-      if (existing?.host !== os.hostname() || isPidAlive(Number(existing?.pid))) return null;
-      await fsp.unlink(lockPath).catch((unlinkError) => {
-        if (unlinkError?.code !== "ENOENT") throw unlinkError;
-      });
-    }
+    const before = await inspectProcessLock(lockPath);
+    if (before.state === "recovery-blocked") return null;
+    if (await publishProcessLock(lockPath, owner)) return { lockPath, token: owner.token };
+    const observed = await inspectProcessLock(lockPath);
+    const graceMs = Number.isFinite(Number(options.invalidLockGraceMs))
+      ? Math.max(0, Number(options.invalidLockGraceMs))
+      : DEFAULT_PROCESS_LOCK_INVALID_GRACE_MS;
+    const recoverableInvalid = observed.state === "invalid"
+      && observed.recoverable
+      && Number(observed.ageMs) >= graceMs;
+    if (!(observed.state === "orphaned" && observed.recoverable) && !recoverableInvalid) return null;
+    if (!await recoverProcessLock(lockPath, observed, owner)) return null;
   }
   return null;
 }
 
 async function releaseProcessLock(lock) {
   if (!lock) return false;
-  try {
-    const existing = JSON.parse(await fsp.readFile(lock.lockPath, "utf8"));
-    if (existing?.token !== lock.token) return false;
-    await fsp.unlink(lock.lockPath);
-    return true;
-  } catch (error) {
-    if (error?.code === "ENOENT") return false;
-    throw error;
-  }
+  return releaseOwnedProcessLock(lock.lockPath, lock.token);
 }
 
 function computeBackoffMs(attempt, options = {}) {
@@ -526,6 +681,10 @@ class DurableTraceUploader {
     this.maxRetries = options.maxRetries === undefined ? 4 : options.maxRetries;
     this.retry = options.retry || {};
     this.sleep = options.sleep || delay;
+    this.fileOrder = options.fileOrder === "newest-first" ? "newest-first" : "oldest-first";
+    this.maxBatchesPerFlush = Number.isSafeInteger(options.maxBatchesPerFlush) && options.maxBatchesPerFlush > 0
+      ? options.maxBatchesPerFlush
+      : Number.POSITIVE_INFINITY;
     this.timer = null;
     if (typeof this.fetch !== "function") throw new Error("A fetch implementation is required");
     if (!this.endpoint) throw new Error("Agent Insight OTLP endpoint is required");
@@ -567,15 +726,31 @@ class DurableTraceUploader {
     const lockPath = path.join(this.stateDir, "uploader.lock");
     const checkpointPath = path.join(this.stateDir, "uploader-checkpoint.json");
     const lock = await acquireProcessLock(lockPath);
-    if (!lock) return { acquired: false, uploadedEvents: 0 };
+    if (!lock) {
+      const lockStatus = await inspectProcessLock(lockPath);
+      return {
+        acquired: false,
+        uploadedEvents: 0,
+        uploadedBatches: 0,
+        lockStatus: processLockStatusSummary(lockStatus),
+      };
+    }
 
     let uploadedEvents = 0;
+    let uploadedBatches = 0;
+    let deferred = false;
     try {
       const checkpoint = await readCheckpoint(checkpointPath);
-      for (const filePath of await listSpoolFiles(this.stateDir)) {
+      const files = await listSpoolFiles(this.stateDir);
+      if (this.fileOrder === "newest-first") files.reverse();
+      outer: for (const filePath of files) {
         const relativePath = path.relative(this.stateDir, filePath).replaceAll(path.sep, "/");
         let cursor = Number(checkpoint.files[relativePath]?.bytes) || 0;
         while (true) {
+          if (uploadedBatches >= this.maxBatchesPerFlush) {
+            deferred = true;
+            break outer;
+          }
           const batch = await readJsonlBatch(filePath, cursor, {
             maxEvents: this.maxEvents,
             maxBytes: this.maxBytes,
@@ -590,10 +765,11 @@ class DurableTraceUploader {
           };
           await atomicWriteJson(checkpointPath, checkpoint);
           uploadedEvents += batch.events.length;
+          uploadedBatches += 1;
         }
       }
       await cleanupRetention(this.stateDir);
-      return { acquired: true, uploadedEvents };
+      return { acquired: true, uploadedEvents, uploadedBatches, deferred };
     } finally {
       await releaseProcessLock(lock);
     }
@@ -631,6 +807,7 @@ module.exports = {
   computeBackoffMs,
   isPidAlive,
   listSpoolFiles,
+  inspectProcessLock,
   readCheckpoint,
   readJsonlBatch,
   redactString,

@@ -20,6 +20,7 @@ const {
   watcherStatus,
 } = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
 const { enqueueSemanticBatch, uploadSemanticBatches } = require('../scripts/agent-trace-collectors/goal-plus/lib/semantic-spool.cjs');
+const { collectorStateDir } = require('../scripts/agent-trace-collectors/shared/trace-transport.cjs');
 const fixture = path.join(process.cwd(), 'test', 'fixtures', 'goal-plus', '.gp');
 
 type ParsedSnapshot = { snapshotId: string; kind: string; payload?: Record<string, unknown> };
@@ -98,6 +99,26 @@ test('Goal Plus managed watcher stays stopped and rejects startup without attach
   await fsp.writeFile(lockPath, '2147483647\n');
   await assert.rejects(() => startWatcher(config), /No Goal Plus sources are attached/);
   await assert.rejects(() => fsp.access(lockPath));
+});
+
+test('Goal Plus watcher status exposes a malformed native uploader lock', async t => {
+  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-uploader-status-'));
+  t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  const configPath = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus', 'config.json');
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify({
+    apiKey: 'synthetic',
+    hosts: ['pi'],
+    baseUrl: 'http://example.invalid',
+  }));
+  const nativeStateDir = collectorStateDir('pi-agent', 'synthetic', homeDir);
+  await fsp.mkdir(nativeStateDir, { recursive: true });
+  await fsp.writeFile(path.join(nativeStateDir, 'uploader.lock'), '');
+
+  const status = await watcherStatus(await loadConfig({ homeDir, configPath }));
+  assert.equal(status.ready, false);
+  assert.equal(status.uploader.state, 'invalid');
+  assert.equal(status.uploader.reason, 'empty-lock');
 });
 
 test('Goal Plus config keeps its source registry adjacent to a custom managed directory', async t => {
@@ -482,6 +503,41 @@ test('Goal Plus Pi importer checkpoints durable events before upload and skips 1
     assert.equal(result.appendedEvents, 0);
     assert.equal(duplicateWrites.length, 0);
   }
+});
+
+test('Goal Plus Pi importer reports a blocked uploader instead of silently returning zero', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const events: NativeEvent[] = [];
+  const result = await importPiSessions(root, [{
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    sessionFile: 'runs/run_demo/pi_sessions/agent_001.jsonl',
+  }], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir: path.join(temporary, 'pi-upload-blocked'),
+    endpoint: 'https://example.invalid/traces',
+    writer: memoryWriter(events),
+    uploader: {
+      async flushOnce() {
+        return {
+          acquired: false,
+          uploadedEvents: 0,
+          lockStatus: { state: 'invalid', reason: 'empty-lock', recoverable: true },
+        };
+      },
+    },
+  });
+
+  assert.ok(events.length > 0);
+  assert.equal(result.uploadStatus.acquired, false);
+  assert.deepEqual(
+    result.diagnostics.filter((item: { code?: string }) => item.code === 'pi_upload_blocked'),
+    [{
+      code: 'pi_upload_blocked',
+      message: 'Goal Plus Pi uploader did not acquire its lock: invalid (empty-lock)',
+    }],
+  );
 });
 
 test('Goal Plus Pi importer appends only new or changed events and refreshes terminal metadata', async t => {
