@@ -19,6 +19,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { randomUUID } from 'node:crypto';
 import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
 import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator-runtime-config';
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 
 export const dynamic = 'force-dynamic';
 
@@ -267,7 +268,8 @@ export async function POST(
       }
       const taskRequest = parseObject(task.requestJson);
       const runRequest = parseObject(previousRun.requestJson);
-      const timeoutSeconds = Number(runRequest.timeoutSeconds ?? taskRequest.timeoutSeconds) || 180;
+      const timeoutSeconds = Number(runRequest.timeoutSeconds ?? taskRequest.timeoutSeconds)
+        || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
       const targetWorkerId = typeof runRequest.targetWorkerId === 'string'
         ? runRequest.targetWorkerId
         : null;

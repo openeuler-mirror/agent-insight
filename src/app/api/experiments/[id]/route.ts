@@ -523,6 +523,7 @@ export async function GET(
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
               platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
               model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
+              timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
             }
           : configSnapshot?.executionTarget || null,
       },

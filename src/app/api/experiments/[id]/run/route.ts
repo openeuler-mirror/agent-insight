@@ -21,6 +21,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
 import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator-runtime-config';
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 
 export const dynamic = 'force-dynamic';
 
@@ -135,7 +136,7 @@ export async function POST(
               platform: target.platform,
               agent: snapshot.agentName,
               model: target.model || null,
-              timeoutSeconds: Number(target.timeoutSeconds) || 300,
+              timeoutSeconds: Number(target.timeoutSeconds) || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
             },
           };
         }
@@ -167,7 +168,7 @@ export async function POST(
       await assertTraceGenerationTarget({ user: username, workerId, platform, agent });
       const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
         ? generateTrace.timeoutSeconds
-        : 180;
+        : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
 
       await prisma.experiment.updateMany({
         where: { id, user: username },
@@ -225,7 +226,7 @@ export async function POST(
         });
         const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
           ? generateTrace.timeoutSeconds
-          : 180;
+          : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
         fi = await orchestrateFaultInjection({
           user: username,
           experimentId: id,

@@ -16,7 +16,7 @@ executor:
   requiredCapabilities:
     - git-workspace/v1
     - git-patch/v1
-  defaultTimeoutSeconds: 1800
+  defaultTimeoutSeconds: 600
 submission:
   artifacts:
     - name: model.patch

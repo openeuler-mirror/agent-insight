@@ -14,7 +14,7 @@ export const generatedBenchmarkManifests = {
       "git-workspace/v1",
       "git-patch/v1"
     ],
-    "defaultTimeoutSeconds": 1800,
+    "defaultTimeoutSeconds": 600,
     "requiredArtifacts": [
       {
         "name": "model.patch",

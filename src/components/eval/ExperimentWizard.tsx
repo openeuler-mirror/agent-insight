@@ -26,6 +26,7 @@ import {
   matchDatasetCases,
   toDatasetCases,
 } from '@/lib/engine/experiment/dataset-match';
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
@@ -262,7 +263,6 @@ const DATASET_KIND_LABELS: Record<string, string> = {
   benchmark: 'Benchmark',
 };
 const PAGE_SIZE = 10;
-const GENERATED_TRACE_AGENT_TIMEOUT_SECONDS = 300;
 /** 跨页全选安全上限：避免一次圈选过多 case 拖垮后续评测 */
 const SELECT_ALL_CAP = 500;
 const MAX_TRACE_TAG_FILTERS = 20;
@@ -487,6 +487,9 @@ export function ExperimentWizard({
   const datasetRequestIdRef = useRef(0);
   const initialConfigLoadedRef = useRef(false);
   const [genModel, setGenModel] = useState('');
+  const [agentTimeoutInput, setAgentTimeoutInput] = useState(
+    String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
+  );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
@@ -560,6 +563,10 @@ export function ExperimentWizard({
   }), [skillContext, skillPreset, wizardDatasets]);
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const isBenchmarkDataset = selectedDataset?.datasetKind === 'benchmark';
+  const agentTimeoutSeconds = Number(agentTimeoutInput);
+  const agentTimeoutValid = Number.isInteger(agentTimeoutSeconds)
+    && agentTimeoutSeconds >= 30
+    && agentTimeoutSeconds <= 3_600;
   const benchmarkPresentation = selectedDataset?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || [
     { path: 'input', label: '任务输入', type: 'text' as const },
@@ -766,6 +773,12 @@ export function ExperimentWizard({
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
+      const restoredTimeoutSeconds = Number(restoredTarget.timeoutSeconds);
+      if (Number.isInteger(restoredTimeoutSeconds)
+        && restoredTimeoutSeconds >= 30
+        && restoredTimeoutSeconds <= 3_600) {
+        setAgentTimeoutInput(String(restoredTimeoutSeconds));
+      }
       if (restoredDatasetId && wizardDatasets.some((dataset) => dataset.id === restoredDatasetId)) {
         const restoredDataset = await selectWizardDataset(restoredDatasetId);
         if (restoredDataset && restoredCaseIds.size > 0) {
@@ -1319,6 +1332,9 @@ export function ExperimentWizard({
     setSubmitting(true);
     setSubmitError('');
     try {
+      if (!skillContext && traceMode === 'generate' && !agentTimeoutValid) {
+        throw new Error('Agent 执行上限必须是 30～3600 之间的整数秒数');
+      }
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
@@ -1427,7 +1443,7 @@ export function ExperimentWizard({
             platform: selectedTarget.platform,
             model: genModel || null,
           } : undefined,
-          agentTimeoutSeconds: GENERATED_TRACE_AGENT_TIMEOUT_SECONDS,
+          agentTimeoutSeconds,
           ...(expType === 'llm' ? {
             type: 'llm',
             variableDimension: 'llm',
@@ -1453,7 +1469,7 @@ export function ExperimentWizard({
                 workerId: selectedTarget.workerId,
                 platform: selectedTarget.platform,
                 model: genModel || null,
-                timeoutSeconds: GENERATED_TRACE_AGENT_TIMEOUT_SECONDS,
+                timeoutSeconds: agentTimeoutSeconds,
               } : null,
               fiOrchestrate: isReliabilityDataset,
             },
@@ -1506,7 +1522,7 @@ export function ExperimentWizard({
               platform: selectedTarget.platform,
               agent: agentName,
               model: genModel || null,
-              timeoutSeconds: GENERATED_TRACE_AGENT_TIMEOUT_SECONDS,
+              timeoutSeconds: agentTimeoutSeconds,
             },
           }
         : {};
@@ -1552,7 +1568,7 @@ export function ExperimentWizard({
   // 对比模式：case 由 autoPairGroups 自动产生（POST /api/experiments 内部调），无需手选 trace
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
   const step2Valid = expType === 'llm' || (traceMode === 'generate'
-    ? generateAvailable && selectedGenerated.size >= 1
+    ? generateAvailable && selectedGenerated.size >= 1 && (Boolean(skillContext) || agentTimeoutValid)
     : (watchMode || selected.size >= 1));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -1938,7 +1954,7 @@ export function ExperimentWizard({
                 </div>
               ) : (
                 <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14 }}>
                 <div>
                   <label style={FIELDLBL}>运行主机 IP *</label>
                   <select
@@ -1964,6 +1980,31 @@ export function ExperimentWizard({
                     ))}
                   </select>
                 </div>
+                {!skillContext && (
+                  <div>
+                    <label style={FIELDLBL}>Agent 执行上限（秒）*</label>
+                    <input
+                      type="number"
+                      min={30}
+                      max={3600}
+                      step={30}
+                      style={{
+                        ...INPUT,
+                        borderColor: agentTimeoutValid ? 'var(--input-border)' : 'var(--error)',
+                      }}
+                      value={agentTimeoutInput}
+                      aria-invalid={!agentTimeoutValid}
+                      onChange={(event) => setAgentTimeoutInput(event.target.value)}
+                    />
+                    <div style={{
+                      marginTop: 5,
+                      fontSize: 10.5,
+                      color: agentTimeoutValid ? 'var(--foreground-muted)' : 'var(--error)',
+                    }}>
+                      {agentTimeoutValid ? '允许范围：30～3600 秒' : '请输入 30～3600 之间的整数'}
+                    </div>
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
@@ -2824,7 +2865,10 @@ export function ExperimentWizard({
                   ...(expType === 'single' && traceMode === 'generate' ? [[
                     '主机 / 模型',
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
-                  ]] : []),
+                  ], ...(!skillContext ? [[
+                    'Agent 执行上限',
+                    `${agentTimeoutSeconds} 秒`,
+                  ]] : [])] : []),
                 ].map(([label, value]) => (
                   <div key={label} style={{ padding: '10px 12px', background: 'var(--background-secondary)' }}>
                     <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{label}</div>

@@ -60,7 +60,10 @@ test('SWE-bench adapter rejects missing required fields', () => {
 })
 
 test('registry exposes the SWE-bench adapter by stable key', () => {
-  assert.equal(getBenchmarkAdapter('swe-bench'), sweBenchAdapter)
+  const adapter = getBenchmarkAdapter('swe-bench')
+  assert.equal(adapter, sweBenchAdapter)
+  assert.equal(adapter.manifest.defaultTimeoutSeconds, 600)
+  assert.equal(adapter.manifest.evaluation.defaultTimeoutSeconds, 1800)
   assert.throws(() => getBenchmarkAdapter('missing'), /未注册/)
 })
 

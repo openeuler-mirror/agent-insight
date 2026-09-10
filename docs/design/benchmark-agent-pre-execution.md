@@ -302,7 +302,7 @@ POST /api/experiments
     "runConfig": {
       "agentRef": "opencode@1.2.0",
       "model": "configured-default",
-      "agentTimeoutSeconds": 1800,
+      "agentTimeoutSeconds": 600,
       "maxParallelAgentCases": 1
     }
   }
