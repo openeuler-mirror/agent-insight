@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `4750a382e4411143c75eb8580526b83ce5f78631` (`4750a382`) |
+| Commit | `c03b820173c0f8a905bb8131f9b49aaac1b45a24` (`c03b8201`) |
 | Branch | `codex/refactor-for-nh-demo` |
-| Date | 2026-09-09 19:52:27 +0800 |
+| Date | 2026-09-10 16:28:16 +0800 |
 | Author | gyctl |
-| Subject | `refactor: 用构建开关隔离 NH 演示范围` |
-| Working tree overlay | 无未提交的功能变更。原有侧栏和页面复用、完整/演示构建期开关、Trace 加载定义和工具结果适配均已提交；当前 UI 边界见 06，既有评测契约见 04/05。真实 HTTP/LLM 与两种模式验证及截图见 evaluation-harness-v1 测试报告。历史功能仅通过界面开关隐藏，源码保留。 |
+| Subject | `fix: 展示版本趋势对应的实验配置` |
+| Working tree overlay | 无未提交的功能变更。沿用原有页面与演示开关；版本趋势增加实验配置说明、Case 范围明细及实验记录到图的对应关系，详见 06。 |
 
-**如何更新：** `git diff 4750a382 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff c03b8201 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
