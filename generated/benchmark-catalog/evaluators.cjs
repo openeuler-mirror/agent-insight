@@ -12,7 +12,7 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/entrypoint.cjs"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
-    "artifactDigest": "sha256:4cea9a970d7ca4bf9b0ffa23a921b93c3fa2866d04a83bb71ce26a8b476f2889",
+    "artifactDigest": "sha256:9207c312e21ff1cb9e247bbf96ad28945032587d1ecfb487921a2de0deefa446",
     "network": "deny",
     "requiredArtifacts": [
       {
@@ -28,11 +28,16 @@ const generatedEvaluatorDescriptors = [
       "type": "object",
       "required": [
         "instanceId",
-        "resolved"
+        "resolved",
+        "patchSuccessfullyApplied",
+        "failToPass",
+        "passToPass",
+        "officialReport"
       ],
       "properties": {
         "instanceId": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "resolved": {
           "type": "boolean"

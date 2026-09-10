@@ -118,8 +118,15 @@ export async function POST(
         },
         experiment: { select: { scope: true } },
         benchmarkRuns: {
-          orderBy: { createdAt: 'desc' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take: 1,
+          include: {
+            evaluations: {
+              orderBy: { attemptNo: 'desc' },
+              take: 1,
+              select: { continuationStatus: true },
+            },
+          },
         },
       },
     });
@@ -136,6 +143,12 @@ export async function POST(
         'evaluated', 'evaluation_failed', 'submission_invalid', 'execution_failed', 'dispatch_failed', 'blocked',
       ].includes(previous.status)) {
         return NextResponse.json({ error: '该 Benchmark Case 当前不能重跑' }, { status: 409 });
+      }
+      if (
+        previous.evaluations[0]
+        && previous.evaluations[0].continuationStatus !== 'completed'
+      ) {
+        return NextResponse.json({ error: '该 Benchmark Case 正在收敛结果，请稍后重跑' }, { status: 409 });
       }
       const runId = `erun_${randomUUID().replaceAll('-', '')}`;
       await prisma.$transaction([

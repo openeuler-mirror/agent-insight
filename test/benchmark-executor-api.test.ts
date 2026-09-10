@@ -11,6 +11,7 @@ import test from 'node:test'
 import {
   benchmarkDispatchDigest,
   canonicalJson,
+  fingerprintJson,
   type AgentTaskEnvelope,
 } from '../packages/benchmark-protocol/src/contracts'
 import {
@@ -201,7 +202,9 @@ test.before(async () => {
       requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL, callbackBaseUrl TEXT NOT NULL,
       timeoutSeconds INTEGER NOT NULL, progressJson TEXT, rawResultJson TEXT, rawResultDigest TEXT,
       runtimeFactsJson TEXT, cleanupJson TEXT, normalizedResultJson TEXT, completionDigest TEXT,
-      failureCode TEXT, failureMessage TEXT, lastProgressAt DATETIME, startedAt DATETIME,
+      failureCode TEXT, failureMessage TEXT, continuationStatus TEXT NOT NULL DEFAULT 'completed',
+      continuationAttempts INTEGER NOT NULL DEFAULT 0, continuationTriedAt DATETIME, continuationError TEXT,
+      lastProgressAt DATETIME, startedAt DATETIME,
       finishedAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (caseRunId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE,
@@ -419,7 +422,7 @@ function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}
         await writeNodeResponse(new Response(JSON.stringify({
           status: 'healthy',
           busy: false,
-          evaluators: [{ key: 'swe-bench', ready: true }],
+          evaluators: [{ key: 'swe-bench', ready: true, formalEligible: true }],
         }), { status: 200, headers: { 'content-type': 'application/json' } }), res)
         return
       }
@@ -447,6 +450,17 @@ function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}
           setImmediate(() => void (async () => {
             try {
               const callbackHeaders = { authorization: `Bearer ${token}` }
+              const instance = body.evaluationJob.payload.instance
+              const officialReport = {
+                [instance.instance_id]: {
+                  resolved: false,
+                  patch_successfully_applied: true,
+                  tests_status: {
+                    FAIL_TO_PASS: { success: [], failure: [...instance.FAIL_TO_PASS] },
+                    PASS_TO_PASS: { success: [...instance.PASS_TO_PASS], failure: [] },
+                  },
+                },
+              }
               const progressResponse = await fetch(`${body.callbackBaseUrl}/progress`, {
                 method: 'POST',
                 headers: { ...callbackHeaders, 'content-type': 'application/json' },
@@ -459,7 +473,7 @@ function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}
               assert.equal(progressResponse.status, 200)
               const evidenceIds: string[] = []
               for (const evidence of [
-                { name: 'report.json', kind: 'official-report', mediaType: 'application/json', bytes: Buffer.from('{"resolved":false}\n') },
+                { name: 'report.json', kind: 'official-report', mediaType: 'application/json', bytes: Buffer.from(`${JSON.stringify(officialReport)}\n`) },
                 { name: 'test_output.txt', kind: 'test-output', mediaType: 'text/plain', bytes: Buffer.from('official harness output\n') },
                 { name: 'run_instance.log', kind: 'harness-log', mediaType: 'text/plain', bytes: Buffer.from('official harness log\n') },
               ]) {
@@ -490,9 +504,10 @@ function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}
                     passed: body.evaluationJob.payload.instance.PASS_TO_PASS.length,
                     total: body.evaluationJob.payload.instance.PASS_TO_PASS.length,
                   },
+                  officialReport,
                 },
                 evidenceArtifactIds: evidenceIds,
-                runtimeFacts: { caseImage: 'test@sha256:digest', formalEligible: false },
+                runtimeFacts: { caseImage: 'test@sha256:digest', formalEligible: true },
                 cleanup: { status: 'succeeded' },
               }
               const sendCompletion = () => fetch(`${body.callbackBaseUrl}/complete`, {
@@ -704,6 +719,36 @@ async function waitForEvaluation(runId: string, status: string) {
   throw new Error(`${runId} evaluation did not reach ${status}`)
 }
 
+async function waitForBenchmarkExperimentResult(
+  origin: string,
+  experimentId: string,
+  user: string,
+  status: string,
+): Promise<{
+  status: string
+  progress: Record<string, unknown>
+  outcomes: Record<string, unknown>
+  metrics: { primary: Record<string, unknown> }
+  cases: Array<{
+    externalCaseId: string
+    execution: { traceId: string }
+    nativeMetrics: Record<string, unknown>
+    evidence: Array<{ downloadUrl: string }>
+  }>
+}> {
+  const deadline = Date.now() + 45_000
+  while (Date.now() < deadline) {
+    const response = await fetch(
+      `${origin}/api/benchmark/v1/experiments/${experimentId}?user=${encodeURIComponent(user)}`,
+    )
+    assert.equal(response.status, 200)
+    const body = await response.json() as Awaited<ReturnType<typeof waitForBenchmarkExperimentResult>>
+    if (body.status === status) return body
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  throw new Error(`${experimentId} did not reach ${status}`)
+}
+
 test('Git workspace retries transient fetch failures and falls back to HTTP/1.1', async () => {
   const revision = 'a'.repeat(40)
   const fetchCalls: Array<{ args: string[]; options: Record<string, unknown> }> = []
@@ -872,7 +917,16 @@ test('Benchmark failure completion preserves Agent run facts', async () => {
   const runId = `erun_agent_failure_${suffix}`
   const baseDir = path.join(testDir, `agent-failure-${suffix}`)
   const insightBaseUrl = 'http://127.0.0.1:43202'
-  let completion: Record<string, any> | null = null
+  let completion: {
+    status?: string
+    error?: { code?: string }
+    runFacts?: {
+      traceId?: string
+      timedOut?: boolean
+      platform?: string
+      agent?: string
+    }
+  } | null = null
   let resolveCompletion!: () => void
   const completionGate = new Promise<void>((resolve) => { resolveCompletion = resolve })
   const executor = executorModule.createBenchmarkExecutor({
@@ -885,7 +939,7 @@ test('Benchmark failure completion preserves Agent run facts', async () => {
       async uploadArtifact() {
         throw new Error('artifact upload must not run after Agent failure')
       },
-      async complete(_request: unknown, body: Record<string, any>) {
+      async complete(_request: unknown, body: NonNullable<typeof completion>) {
         completion = body
         resolveCompletion()
       },
@@ -936,6 +990,443 @@ test('Benchmark failure completion preserves Agent run facts', async () => {
     assert.equal(completion?.runFacts?.agent, 'build')
   } finally {
     await executor.close()
+  }
+})
+
+test('evaluation watchdog fails a stale Harness run and durably finalizes its Case', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const fixtureUser = `eval_watchdog_user_${suffix}`
+  const experimentId = `exp_eval_watchdog_${suffix}`
+  const caseId = `case_eval_watchdog_${suffix}`
+  const runId = `run_eval_watchdog_${suffix}`
+  const evaluationId = `eval_watchdog_${suffix}`
+  const now = new Date('2026-09-10T08:00:00.000Z')
+  const staleAt = new Date(now.getTime() - 61_000)
+  externalTestUsers.add(fixtureUser)
+  externalTestExperimentIds.add(experimentId)
+  try {
+    await prisma.experiment.create({
+      data: {
+        id: experimentId,
+        user: fixtureUser,
+        name: 'evaluation watchdog fixture',
+        scope: 'benchmark',
+        status: 'running',
+        evaluatorIdsJson: '["benchmark:swe-bench"]',
+      },
+    })
+    await prisma.experimentCase.create({
+      data: { id: caseId, experimentId, input: 'stale evaluation' },
+    })
+    await prisma.benchmarkCaseRun.create({
+      data: {
+        id: runId,
+        experimentId,
+        experimentCaseId: caseId,
+        ordinal: 0,
+        status: 'submitted',
+        adapterKey: 'swe-bench',
+        clientId: `watchdog-client-${suffix}`,
+      },
+    })
+    await prisma.experimentEvalResult.create({
+      data: {
+        id: `result_eval_watchdog_${suffix}`,
+        experimentId,
+        caseId,
+        evaluatorId: 'benchmark:swe-bench',
+        status: 'pending',
+      },
+    })
+    await prisma.benchmarkEvaluation.create({
+      data: {
+        id: evaluationId,
+        caseRunId: runId,
+        status: 'running_evaluator',
+        adapterKey: 'swe-bench',
+        evaluatorKey: 'swe-bench',
+        requestJson: '{}',
+        requestDigest: `sha256:${'a'.repeat(64)}`,
+        callbackBaseUrl: 'http://platform.test/callback',
+        timeoutSeconds: 60,
+        progressJson: JSON.stringify({
+          kind: 'evaluation',
+          stage: 'running_harness',
+          occurredAt: staleAt.toISOString(),
+        }),
+        startedAt: staleAt,
+        lastProgressAt: staleAt,
+        createdAt: staleAt,
+        updatedAt: staleAt,
+      },
+    })
+    await prisma.benchmarkEvaluationDispatchOutbox.create({
+      data: {
+        id: `outbox_eval_watchdog_${suffix}`,
+        evaluationId,
+        requestJson: '{}',
+        requestDigest: `sha256:${'a'.repeat(64)}`,
+        status: 'accepted',
+      },
+    })
+
+    const { reapStaleBenchmarkEvaluations } = await import('@/lib/benchmark/evaluation-scheduler')
+    assert.equal(await reapStaleBenchmarkEvaluations({ now, graceMs: 0, experimentId }), 1)
+    const deadline = Date.now() + 2_000
+    let evaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
+    while (evaluation?.continuationStatus !== 'completed' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      evaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
+    }
+    const [run, result, outbox] = await Promise.all([
+      prisma.benchmarkCaseRun.findUnique({ where: { id: runId } }),
+      prisma.experimentEvalResult.findUnique({ where: { id: `result_eval_watchdog_${suffix}` } }),
+      prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId } }),
+    ])
+    assert.equal(evaluation?.status, 'failed')
+    assert.equal(evaluation?.failureCode, 'EVALUATION_TIMEOUT')
+    assert.equal(evaluation?.continuationStatus, 'completed')
+    assert.equal(run?.status, 'evaluation_failed')
+    assert.equal(result?.status, 'failed')
+    assert.equal(outbox?.status, 'failed')
+    assert.equal(await reapStaleBenchmarkEvaluations({ now, graceMs: 0, experimentId }), 0)
+  } finally {
+    await prisma.experiment.deleteMany({ where: { id: experimentId } })
+  }
+})
+
+test('a late evaluation dispatch response cannot revive a watchdog failure', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const fixtureUser = `eval_dispatch_race_user_${suffix}`
+  const experimentId = `exp_eval_dispatch_race_${suffix}`
+  const caseId = `case_eval_dispatch_race_${suffix}`
+  const runId = `run_eval_dispatch_race_${suffix}`
+  const evaluationId = `eval_dispatch_race_${suffix}`
+  const digest = `sha256:${'9'.repeat(64)}`
+  const now = new Date('2026-09-10T09:00:00.000Z')
+  const staleAt = new Date(now.getTime() - 6 * 60_000)
+  let releasePost!: () => void
+  const postGate = new Promise<void>((resolve) => { releasePost = resolve })
+  const scheduler = await import('@/lib/benchmark/evaluation-scheduler')
+  externalTestUsers.add(fixtureUser)
+  externalTestExperimentIds.add(experimentId)
+  scheduler.setEvaluatorTargetResolverForTest({
+    resolve: (evaluatorKey) => ({
+      targetKey: `test:${evaluatorKey}`,
+      baseUrl: 'http://evaluator.test',
+      evaluatorKey,
+    }),
+  })
+  scheduler.setBenchmarkEvaluationDispatchFetchForTest(async (input) => {
+    if (String(input).endsWith('/health')) {
+      return new Response(JSON.stringify({
+        status: 'healthy',
+        busy: false,
+        evaluators: [{ key: 'swe-bench', ready: true, formalEligible: true }],
+      }), { status: 200 })
+    }
+    await postGate
+    return new Response(JSON.stringify({
+      runId: evaluationId,
+      requestDigest: digest,
+      status: 'accepted',
+    }), { status: 202 })
+  })
+  try {
+    await prisma.experiment.create({
+      data: {
+        id: experimentId,
+        user: fixtureUser,
+        name: 'evaluation dispatch race fixture',
+        scope: 'benchmark',
+        status: 'running',
+        evaluatorIdsJson: '["benchmark:swe-bench"]',
+      },
+    })
+    await prisma.experimentCase.create({
+      data: { id: caseId, experimentId, input: 'late dispatch response' },
+    })
+    await prisma.benchmarkCaseRun.create({
+      data: {
+        id: runId,
+        experimentId,
+        experimentCaseId: caseId,
+        ordinal: 0,
+        status: 'submitted',
+        adapterKey: 'swe-bench',
+        clientId: `dispatch-race-client-${suffix}`,
+      },
+    })
+    await prisma.experimentEvalResult.create({
+      data: {
+        id: `result_eval_dispatch_race_${suffix}`,
+        experimentId,
+        caseId,
+        evaluatorId: 'benchmark:swe-bench',
+        status: 'pending',
+      },
+    })
+    await prisma.benchmarkEvaluation.create({
+      data: {
+        id: evaluationId,
+        caseRunId: runId,
+        status: 'queued',
+        adapterKey: 'swe-bench',
+        evaluatorKey: 'swe-bench',
+        requestJson: '{}',
+        requestDigest: digest,
+        callbackBaseUrl: 'http://platform.test/callback',
+        timeoutSeconds: 60,
+        createdAt: staleAt,
+        updatedAt: staleAt,
+      },
+    })
+    await prisma.benchmarkEvaluationDispatchOutbox.create({
+      data: {
+        id: `outbox_eval_dispatch_race_${suffix}`,
+        evaluationId,
+        requestJson: '{}',
+        requestDigest: digest,
+        status: 'pending',
+        createdAt: staleAt,
+        updatedAt: staleAt,
+      },
+    })
+
+    const dispatch = scheduler.dispatchBenchmarkEvaluation(evaluationId)
+    const sendingDeadline = Date.now() + 1_000
+    let outbox = await prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId } })
+    while (outbox?.status !== 'sending' && Date.now() < sendingDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      outbox = await prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId } })
+    }
+    assert.equal(outbox?.status, 'sending')
+    assert.equal(await scheduler.reapStaleBenchmarkEvaluations({ now, experimentId }), 1)
+    releasePost()
+    await dispatch
+
+    const [evaluation, settledOutbox] = await Promise.all([
+      prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } }),
+      prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId } }),
+    ])
+    assert.equal(evaluation?.status, 'failed')
+    assert.equal(evaluation?.failureCode, 'EVALUATION_DISPATCH_TIMEOUT')
+    assert.equal(settledOutbox?.status, 'failed')
+  } finally {
+    releasePost()
+    scheduler.setBenchmarkEvaluationDispatchFetchForTest()
+    scheduler.setEvaluatorTargetResolverForTest()
+    await prisma.experiment.deleteMany({ where: { id: experimentId } })
+  }
+})
+
+test('persisted evaluation continuation is claimed once and survives callback completion', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const fixtureUser = `eval_continuation_user_${suffix}`
+  const experimentId = `exp_eval_continuation_${suffix}`
+  const caseId = `case_eval_continuation_${suffix}`
+  const runId = `run_eval_continuation_${suffix}`
+  const evaluationId = `eval_continuation_${suffix}`
+  externalTestUsers.add(fixtureUser)
+  externalTestExperimentIds.add(experimentId)
+  try {
+    await prisma.experiment.create({
+      data: {
+        id: experimentId,
+        user: fixtureUser,
+        name: 'evaluation continuation fixture',
+        scope: 'benchmark',
+        status: 'running',
+        evaluatorIdsJson: '["benchmark:swe-bench"]',
+      },
+    })
+    await prisma.experimentCase.create({
+      data: { id: caseId, experimentId, input: 'completed evaluation' },
+    })
+    await prisma.benchmarkCaseRun.create({
+      data: {
+        id: runId,
+        experimentId,
+        experimentCaseId: caseId,
+        ordinal: 0,
+        status: 'evaluated',
+        adapterKey: 'swe-bench',
+        clientId: `continuation-client-${suffix}`,
+      },
+    })
+    await prisma.benchmarkEvaluation.create({
+      data: {
+        id: evaluationId,
+        caseRunId: runId,
+        status: 'completed',
+        adapterKey: 'swe-bench',
+        evaluatorKey: 'swe-bench',
+        requestJson: '{}',
+        requestDigest: `sha256:${'b'.repeat(64)}`,
+        callbackBaseUrl: 'http://platform.test/callback',
+        timeoutSeconds: 60,
+        completionDigest: `sha256:${'c'.repeat(64)}`,
+        normalizedResultJson: '{"status":"done","summary":"ok","score":100,"points":[],"evidence":{},"nativeMetrics":{}}',
+        continuationStatus: 'pending',
+      },
+    })
+
+    const { runBenchmarkEvaluationContinuation } = await import(
+      '@/lib/benchmark/evaluation-continuation-service'
+    )
+    assert.equal(await runBenchmarkEvaluationContinuation(evaluationId), true)
+    assert.equal(await runBenchmarkEvaluationContinuation(evaluationId), false)
+    const evaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
+    assert.equal(evaluation?.continuationStatus, 'completed')
+    assert.equal(evaluation?.continuationAttempts, 1)
+  } finally {
+    await prisma.experiment.deleteMany({ where: { id: experimentId } })
+  }
+})
+
+test('a repeated completion resumes an interrupted normalizing evaluation', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const fixtureUser = `eval_normalizing_user_${suffix}`
+  const experimentId = `exp_eval_normalizing_${suffix}`
+  const caseId = `case_eval_normalizing_${suffix}`
+  const runId = `run_eval_normalizing_${suffix}`
+  const evaluationId = `eval_normalizing_${suffix}`
+  const evidenceIds = [
+    `evidence_report_eval_normalizing_${suffix}`,
+    `evidence_output_eval_normalizing_${suffix}`,
+    `evidence_log_eval_normalizing_${suffix}`,
+  ]
+  const instanceId = `owner__repo-${suffix}`
+  const rawResult = {
+    instanceId,
+    resolved: false,
+    patchSuccessfullyApplied: true,
+    failToPass: { passed: 0, total: 1 },
+    passToPass: { passed: 1, total: 1 },
+    officialReport: {
+      [instanceId]: {
+        resolved: false,
+        patch_successfully_applied: true,
+        tests_status: {
+          FAIL_TO_PASS: { success: [], failure: ['test_regression'] },
+          PASS_TO_PASS: { success: ['test_existing'], failure: [] },
+        },
+      },
+    },
+  }
+  const completion = {
+    status: 'completed' as const,
+    rawResult,
+    evidenceArtifactIds: evidenceIds,
+    runtimeFacts: {
+      formalEligible: true,
+      caseImage: 'swebench/test@sha256:fixture',
+    },
+    cleanup: { status: 'succeeded' },
+  }
+  const evaluationJob = {
+    protocolVersion: 'benchmark-evaluation/v1',
+    evaluationId,
+    executionRunId: runId,
+    context: {
+      experimentId,
+      caseId,
+      datasetContentHash: `sha256:${'d'.repeat(64)}`,
+    },
+    benchmark: { key: 'swe-bench' },
+    evaluator: { key: 'swe-bench' },
+    artifacts: [],
+    payload: {
+      instance: {
+        instance_id: instanceId,
+        repo: 'owner/repo',
+        base_commit: 'e'.repeat(40),
+        version: '',
+        image: 'swebench/test:latest',
+        eval_script: 'pytest',
+        eval_type: 'pytest',
+        log_parser: 'pytest',
+        FAIL_TO_PASS: ['test_regression'],
+        PASS_TO_PASS: ['test_existing'],
+      },
+      prediction: {
+        instance_id: instanceId,
+        model_name_or_path: 'test/model',
+        model_patch_artifact_id: 'patch_fixture',
+      },
+    },
+    limits: { timeoutSeconds: 60, cpu: 1, memoryMiB: 1024 },
+  }
+  externalTestUsers.add(fixtureUser)
+  externalTestExperimentIds.add(experimentId)
+  try {
+    const reportStoragePath = `test/${evidenceIds[0]}.json`
+    const reportAbsolutePath = path.join(process.env.AGENT_INSIGHT_DATA_DIR!, 'data', reportStoragePath)
+    const reportBytes = Buffer.from(JSON.stringify(rawResult.officialReport))
+    await fsp.mkdir(path.dirname(reportAbsolutePath), { recursive: true })
+    await fsp.writeFile(reportAbsolutePath, reportBytes)
+    await prisma.experiment.create({
+      data: {
+        id: experimentId,
+        user: fixtureUser,
+        name: 'normalizing recovery fixture',
+        scope: 'benchmark',
+        status: 'running',
+        evaluatorIdsJson: '["benchmark:swe-bench"]',
+      },
+    })
+    await prisma.experimentCase.create({
+      data: { id: caseId, experimentId, input: 'normalizing evaluation' },
+    })
+    await prisma.benchmarkCaseRun.create({
+      data: {
+        id: runId,
+        experimentId,
+        experimentCaseId: caseId,
+        ordinal: 0,
+        status: 'submitted',
+        adapterKey: 'swe-bench',
+        clientId: `normalizing-client-${suffix}`,
+      },
+    })
+    await prisma.benchmarkEvaluation.create({
+      data: {
+        id: evaluationId,
+        caseRunId: runId,
+        status: 'normalizing',
+        adapterKey: 'swe-bench',
+        evaluatorKey: 'swe-bench',
+        requestJson: canonicalJson(evaluationJob),
+        requestDigest: `sha256:${'f'.repeat(64)}`,
+        callbackBaseUrl: 'http://platform.test/callback',
+        timeoutSeconds: 60,
+        rawResultJson: canonicalJson(rawResult),
+        rawResultDigest: fingerprintJson(rawResult),
+        runtimeFactsJson: canonicalJson(completion.runtimeFacts),
+        cleanupJson: canonicalJson(completion.cleanup),
+        completionDigest: fingerprintJson(completion),
+        lastProgressAt: new Date(),
+      },
+    })
+    await prisma.benchmarkEvaluationArtifact.createMany({
+      data: [
+        { id: evidenceIds[0], evaluationId, name: 'report.json', kind: 'official-report', mediaType: 'application/json', sha256: `sha256:${createHash('sha256').update(reportBytes).digest('hex')}`, sizeBytes: reportBytes.byteLength, storagePath: reportStoragePath },
+        { id: evidenceIds[1], evaluationId, name: 'test_output.txt', kind: 'test-output', mediaType: 'text/plain', sha256: `sha256:${'2'.repeat(64)}`, sizeBytes: 2, storagePath: `test/${evidenceIds[1]}.txt` },
+        { id: evidenceIds[2], evaluationId, name: 'run_instance.log', kind: 'harness-log', mediaType: 'text/plain', sha256: `sha256:${'3'.repeat(64)}`, sizeBytes: 2, storagePath: `test/${evidenceIds[2]}.log` },
+      ],
+    })
+
+    const { completeBenchmarkEvaluation } = await import('@/lib/benchmark/evaluation-callback-service')
+    const response = await completeBenchmarkEvaluation({ evaluationId, completion })
+    assert.equal(response.evaluationStatus, 'completed')
+    assert.equal(response.normalizationStatus, 'completed')
+    const evaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
+    const run = await prisma.benchmarkCaseRun.findUnique({ where: { id: runId } })
+    assert.equal(evaluation?.status, 'completed')
+    assert.ok(evaluation?.normalizedResultJson)
+    assert.equal(run?.status, 'evaluated')
+  } finally {
+    await prisma.experiment.deleteMany({ where: { id: experimentId } })
   }
 })
 
@@ -1740,11 +2231,12 @@ test('steps 01-13 cross the client-command and evaluator boundaries with a real 
     assert.equal(experimentResult?.status, 'done')
     assert.equal(experimentResult?.verdict, 'fail')
     assert.equal(experimentResult?.score, 0)
-    const resultResponse = await fetch(
-      `${platformListener.origin}/api/benchmark/v1/experiments/${created.id}?user=${encodeURIComponent(user)}`,
+    const resultBody = await waitForBenchmarkExperimentResult(
+      platformListener.origin,
+      created.id,
+      user,
+      'completed',
     )
-    assert.equal(resultResponse.status, 200)
-    const resultBody = await resultResponse.json() as Record<string, any>
     assert.equal(resultBody.status, 'completed')
     assert.deepEqual(resultBody.progress, {
       total: 1,

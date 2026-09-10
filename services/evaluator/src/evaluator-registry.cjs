@@ -135,6 +135,27 @@ function schemaIssue(value, schema, currentPath = '$') {
   return null
 }
 
+function evaluationTimeoutError() {
+  return new EvaluatorProtocolError(
+    'EVALUATION_TIMEOUT',
+    '评测执行超过 EvaluationJob 规定的时限',
+    504,
+    true,
+  )
+}
+
+function signalProcessTree(child, signal) {
+  if (process.platform !== 'win32' && child.pid) {
+    try {
+      process.kill(-child.pid, signal)
+      return
+    } catch (error) {
+      if (error?.code === 'ESRCH') return
+    }
+  }
+  try { child.kill(signal) } catch {}
+}
+
 function runEntrypoint(descriptor, args, options = {}) {
   const direct = descriptor.command === 'direct'
   const command = direct
@@ -147,38 +168,54 @@ function runEntrypoint(descriptor, args, options = {}) {
     const child = spawn(command, commandArgs, {
       cwd: options.cwd,
       env: { ...process.env, ...(options.env || {}) },
+      detached: process.platform !== 'win32',
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let stdout = ''
     let stderr = ''
     let killTimer
+    let aborted = false
+    let settled = false
+    const killGraceMs = Number.isFinite(options.killGraceMs)
+      ? Math.max(0, options.killGraceMs)
+      : 5_000
     child.stdout.on('data', (chunk) => { stdout += String(chunk) })
     child.stderr.on('data', (chunk) => { stderr += String(chunk) })
     const abort = () => {
-      child.kill('SIGTERM')
-      killTimer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+      if (aborted || settled) return
+      aborted = true
+      signalProcessTree(child, 'SIGTERM')
+      killTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), killGraceMs)
       killTimer.unref?.()
+    }
+    const finish = (callback) => {
+      if (settled) return
+      settled = true
+      clearTimeout(killTimer)
+      options.signal?.removeEventListener('abort', abort)
+      callback()
     }
     if (options.signal?.aborted) abort()
     else options.signal?.addEventListener('abort', abort, { once: true })
     child.on('error', (error) => {
-      clearTimeout(killTimer)
-      options.signal?.removeEventListener('abort', abort)
-      reject(error)
+      if (aborted) signalProcessTree(child, 'SIGKILL')
+      finish(() => reject(aborted ? evaluationTimeoutError() : error))
     })
     child.on('close', (code, signal) => {
-      clearTimeout(killTimer)
-      options.signal?.removeEventListener('abort', abort)
-      if (code === 0) return resolve({ stdout, stderr })
+      if (aborted) {
+        signalProcessTree(child, 'SIGKILL')
+        return finish(() => reject(evaluationTimeoutError()))
+      }
+      if (code === 0) return finish(() => resolve({ stdout, stderr }))
       let detail = (stderr || stdout).trim().slice(-4000)
       try { detail = JSON.parse(detail).message || detail } catch {}
-      reject(new EvaluatorProtocolError(
+      finish(() => reject(new EvaluatorProtocolError(
         options.errorCode || 'EVALUATOR_ENTRYPOINT_FAILED',
         `Evaluator Entrypoint 执行失败 (${signal || code})：${detail}`,
         500,
-        true,
-      ))
+        options.retryable !== false,
+      )))
     })
   })
 }
@@ -330,6 +367,8 @@ module.exports = {
   EvaluatorProtocolError,
   EvaluatorRegistry,
   FileEvaluatorEntrypoint,
+  evaluationTimeoutError,
   runEntrypoint,
   schemaIssue,
+  signalProcessTree,
 }

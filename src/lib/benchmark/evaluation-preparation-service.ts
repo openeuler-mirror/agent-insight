@@ -246,6 +246,13 @@ export async function retryBenchmarkEvaluation(input: {
   if (!run?.artifacts.length || !['evaluated', 'evaluation_failed'].includes(run.status)) {
     throw new BenchmarkProtocolError('BENCHMARK_PATCH_NOT_READY', '当前 Case 没有可复用的有效 model.patch', 409)
   }
+  if (run.evaluations[0]?.continuationStatus !== 'completed') {
+    throw new BenchmarkProtocolError(
+      'BENCHMARK_REEVALUATION_BUSY',
+      '当前 Benchmark 结果仍在收敛，请稍后重评',
+      409,
+    )
+  }
 
   const lockKey = `${input.experimentId}:${result.caseId}`
   lock.add(lockKey)

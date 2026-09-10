@@ -1365,6 +1365,10 @@ model BenchmarkEvaluation {
   completionDigest     String?
   failureCode          String?
   failureMessage       String?
+  continuationStatus   String           @default("completed")
+  continuationAttempts Int              @default(0)
+  continuationTriedAt  DateTime?
+  continuationError    String?
   lastProgressAt       DateTime?
   startedAt            DateTime?
   finishedAt           DateTime?
@@ -1376,6 +1380,8 @@ model BenchmarkEvaluation {
 
   @@unique([caseRunId, attemptNo])
   @@index([status, createdAt])
+  @@index([status, updatedAt])
+  @@index([continuationStatus, continuationTriedAt])
   @@index([retryOfEvaluationId])
 }
 

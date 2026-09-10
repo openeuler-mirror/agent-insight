@@ -48,6 +48,87 @@ async function writeResponse(response: Response, res: http.ServerResponse): Prom
   res.end(Buffer.from(await response.arrayBuffer()))
 }
 
+test('benchmark result counts only the latest run after a Case retry', async () => {
+  const storage = await import('@/lib/storage/prisma')
+  const { getBenchmarkExperimentResult } = await import('@/lib/benchmark/experiment-result-service')
+  const experimentDelegate = storage.prisma.experiment as object
+  const runDelegate = storage.prisma.benchmarkCaseRun as object
+  const originalFindExperiment = Reflect.get(experimentDelegate, 'findFirst')
+  const originalFindRuns = Reflect.get(runDelegate, 'findMany')
+  const sharedResult = {
+    status: 'done',
+    verdict: 'pass',
+    summary: 'retry passed',
+    score: 100,
+    errorMessage: null,
+  }
+  const normalizedResultJson = JSON.stringify({
+    status: 'done',
+    verdict: 'pass',
+    summary: 'retry passed',
+    score: 100,
+    primaryMetric: { key: 'resolved', value: true, aggregation: 'boolean-rate' },
+    points: [],
+    evidence: { artifactIds: [], cleanup: {} },
+    nativeMetrics: { resolved: true },
+  })
+  const run = (id: string, evaluationId: string, retryOfRunId: string | null) => ({
+    id,
+    retryOfRunId,
+    ordinal: 0,
+    status: 'evaluated',
+    runFactsJson: JSON.stringify({ traceId: `trace_${id}` }),
+    failureCode: null,
+    failureMessage: null,
+    datasetCase: { externalCaseId: 'fixture__case-1' },
+    artifacts: [],
+    experimentCase: { id: 'case-1', results: [sharedResult] },
+    evaluations: [{
+      id: evaluationId,
+      status: 'completed',
+      normalizedResultJson,
+      artifacts: [],
+    }],
+  })
+  let observedOrderBy: unknown
+
+  Reflect.set(experimentDelegate, 'findFirst', async () => ({
+    id: 'experiment-1',
+    status: 'done',
+    benchmarkBinding: { adapterKey: 'swe-bench', expectedCaseCount: 1 },
+  }))
+  Reflect.set(runDelegate, 'findMany', async (args: { orderBy?: unknown }) => {
+    observedOrderBy = args.orderBy
+    return [
+      run('historical-run', 'historical-evaluation', null),
+      run('retry-run', 'retry-evaluation', 'historical-run'),
+    ]
+  })
+
+  try {
+    const result = await getBenchmarkExperimentResult({
+      experimentId: 'experiment-1',
+      user: 'test-user',
+      page: 1,
+      pageSize: 20,
+    })
+    assert.deepEqual(observedOrderBy, [{ createdAt: 'desc' }, { id: 'desc' }])
+    assert.deepEqual(result.progress, { total: 1, completed: 1, pending: 0, coverageRate: 100 })
+    assert.deepEqual(result.outcomes, { pass: 1, warn: 0, fail: 0, unknown: 0 })
+    assert.deepEqual(result.metrics.primary, {
+      key: 'resolvedRate', value: 100, numerator: 1, denominator: 1,
+    })
+    assert.deepEqual(result.metrics.averageScore, { value: 100, count: 1 })
+    assert.deepEqual(result.pagination, { page: 1, pageSize: 20, total: 1 })
+    assert.equal(result.cases.length, 1)
+    assert.equal(result.cases[0].execution.runId, 'retry-run')
+    assert.equal(result.cases[0].evaluation?.evaluationId, 'retry-evaluation')
+  } finally {
+    Reflect.set(experimentDelegate, 'findFirst', originalFindExperiment)
+    Reflect.set(runDelegate, 'findMany', originalFindRuns)
+  }
+})
+
 test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP APIs', {
   skip: skipReason,
   timeout: 60_000,

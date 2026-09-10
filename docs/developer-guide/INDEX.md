@@ -32,6 +32,8 @@
 
 > 2026-09-10 working-tree overlay：Benchmark 平台新增运行失活 watchdog，按 Git 准备、冻结 Agent 上限加宽限期及后处理阶段分别设置阈值，以 CAS 将无进度 Case 收敛为失败并防止迟到回调复活。客户端执行器将 Artifact/完成回调重试拆为不占 Agent 槽的持久化投递 lane，增加指数退避与单次请求超时；Git shallow fetch 增加进程组级超时、瞬时错误白名单三次重试、工作区重建与命令级 HTTP/1.1 兜底，避免一次模型、回调或 GitHub 链路故障阻塞后续实验。Agent 执行第一阶段新增 `AGENT_TIMEOUT`、高置信 `MODEL_UNAVAILABLE`、`AGENT_EXIT_NONZERO` 与 `AGENT_NO_OUTPUT` 失败码，确定性失败立即终止且不自动重试，并在 Case 详情中明确展示；`0 LLM Turn` 因依赖异步 Trace 入库留待后续追踪阶段。
 
+> 2026-09-10 working-tree overlay：Benchmark 官方评测可靠性进一步收敛。SWE-bench Raw Result 使用严格 boolean 和官方报告结构；归一化同时绑定冻结实例/测试名单、正式资格以及重读并校验摘要的三类证据，字符串 `"false"`、错误实例、空/重复/未知测试或证据漂移均不能产生成绩。Evaluator 的 abort 成为不可逆 `EVALUATION_TIMEOUT`，callback 只接受结构与状态匹配的 ACK。平台增加 Evaluation 分阶段 watchdog、下发 attempt owner CAS、normalizing 恢复和带 owner lease 的持久化 continuation，终态 ACK 前先落续跑意图，服务重启可恢复且补充评估器不重复执行；旧 Run 无法覆盖 Case 重跑后的投影。聚合只取重试图叶子并稳定排序，防止历史尝试重复计分。官方 Harness 判定代码保持不变。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

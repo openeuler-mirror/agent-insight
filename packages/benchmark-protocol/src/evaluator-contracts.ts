@@ -22,6 +22,7 @@ export type BenchmarkEvaluationArtifactDescriptor = {
   mediaType: string
   sha256: `sha256:${string}`
   sizeBytes: number
+  jsonContent?: JsonValue
 }
 
 export type BenchmarkEvaluationCompletion = {
@@ -64,6 +65,7 @@ export type NormalizedBenchmarkResult = {
 export type NormalizeBenchmarkResultInput = {
   evaluationId: string
   evaluatorKey: string
+  evaluationJob: EvaluationJob
   completion: BenchmarkEvaluationCompletion
   evidenceArtifacts: readonly BenchmarkEvaluationArtifactDescriptor[]
 }
@@ -80,6 +82,7 @@ export type EvaluatorRuntime = {
 
 export type EvaluatorReadyResult = {
   ready: boolean
+  formalEligible?: boolean
   reason?: string
   runtimeFacts?: JsonValue
 }

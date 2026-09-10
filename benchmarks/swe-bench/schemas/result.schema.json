@@ -2,9 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "swe-bench/raw-result",
   "type": "object",
-  "required": ["instanceId", "resolved"],
+  "required": [
+    "instanceId",
+    "resolved",
+    "patchSuccessfullyApplied",
+    "failToPass",
+    "passToPass",
+    "officialReport"
+  ],
   "properties": {
-    "instanceId": { "type": "string" },
+    "instanceId": { "type": "string", "minLength": 1 },
     "resolved": { "type": "boolean" },
     "patchSuccessfullyApplied": { "type": "boolean" },
     "failToPass": {

@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process')
 
 const { generatedEvaluatorDescriptors } = require('../../../generated/benchmark-catalog/evaluators.cjs')
 const {
+  evaluationTimeoutError,
   EvaluatorProtocolError,
   EvaluatorRegistry,
   FileEvaluatorEntrypoint,
@@ -403,6 +404,8 @@ class BenchmarkEvaluatorService {
       stage: completion.status === 'failed' ? 'failed' : 'completed',
       completedAt: new Date().toISOString(),
       callbackError: null,
+      callbackErrorCode: null,
+      callbackRetryable: null,
     })
     this.retryAttempts.delete(request.runId)
   }
@@ -433,6 +436,7 @@ class BenchmarkEvaluatorService {
     await this.journal.writeState(runId, {
       stage: 'callback_pending',
       callbackError: error instanceof Error ? error.message : String(error),
+      callbackErrorCode: error?.code || 'CALLBACK_DELIVERY_FAILED',
       callbackRetryable: true,
     })
     this.scheduleCallbackRetry(runId)
@@ -454,6 +458,8 @@ class BenchmarkEvaluatorService {
           stage: completion.status === 'failed' ? 'failed' : 'completed',
           completedAt: new Date().toISOString(),
           callbackError: null,
+          callbackErrorCode: null,
+          callbackRetryable: null,
         })
         this.retryAttempts.delete(runId)
       } catch (error) {
@@ -464,7 +470,14 @@ class BenchmarkEvaluatorService {
 
     const evaluator = this.registry.get(request.evaluationJob.evaluator.key)
     const abortController = new AbortController()
-    const timeout = setTimeout(() => abortController.abort(), request.timeoutSeconds * 1000)
+    let timedOut = false
+    const timeout = setTimeout(() => {
+      timedOut = true
+      abortController.abort()
+    }, request.timeoutSeconds * 1000)
+    const assertWithinDeadline = () => {
+      if (timedOut) throw evaluationTimeoutError()
+    }
     let result
     try {
       const staleCleanup = await this.cleanupContainers(runId)
@@ -482,6 +495,7 @@ class BenchmarkEvaluatorService {
         occurredAt: new Date().toISOString(),
       })
       const artifacts = await this.downloadArtifacts(request)
+      assertWithinDeadline()
       result = await evaluator.evaluate({
         job: request.evaluationJob,
         artifacts,
@@ -489,13 +503,15 @@ class BenchmarkEvaluatorService {
         signal: abortController.signal,
         reportProgress: (event) => this.reportProgress(request, event),
       })
+      assertWithinDeadline()
       await this.reportProgress(request, {
         kind: 'evaluation',
         stage: 'collecting_evidence',
         occurredAt: new Date().toISOString(),
       })
+      assertWithinDeadline()
     } catch (error) {
-      result = await this.fallbackResult(request, error)
+      result = await this.fallbackResult(request, timedOut ? evaluationTimeoutError() : error)
     } finally {
       clearTimeout(timeout)
     }

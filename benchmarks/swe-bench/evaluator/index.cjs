@@ -8,6 +8,8 @@ const { spawn } = require('node:child_process')
 const {
   AbstractBenchmarkEvaluator,
   EvaluatorProtocolError,
+  evaluationTimeoutError,
+  signalProcessTree,
 } = require('../../../services/evaluator/src/evaluator-registry.cjs')
 
 const OFFICIAL_COMMIT = '02e7a74ffd0b707aab73d203fe87bdc7c76afc8e'
@@ -17,36 +19,52 @@ function runProcess(command, args, options = {}) {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env || process.env,
+      detached: process.platform !== 'win32',
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let stdout = ''
     let stderr = ''
     let killTimer
+    let aborted = false
+    let settled = false
+    const killGraceMs = Number.isFinite(options.killGraceMs)
+      ? Math.max(0, options.killGraceMs)
+      : 5_000
     child.stdout.on('data', (chunk) => { stdout += String(chunk) })
     child.stderr.on('data', (chunk) => { stderr += String(chunk) })
     const abort = () => {
-      child.kill('SIGTERM')
-      killTimer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+      if (aborted || settled) return
+      aborted = true
+      signalProcessTree(child, 'SIGTERM')
+      killTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), killGraceMs)
       killTimer.unref?.()
+    }
+    const finish = (callback) => {
+      if (settled) return
+      settled = true
+      clearTimeout(killTimer)
+      options.signal?.removeEventListener('abort', abort)
+      callback()
     }
     if (options.signal?.aborted) abort()
     else options.signal?.addEventListener('abort', abort, { once: true })
     child.on('error', (error) => {
-      clearTimeout(killTimer)
-      options.signal?.removeEventListener('abort', abort)
-      reject(error)
+      if (aborted) signalProcessTree(child, 'SIGKILL')
+      finish(() => reject(aborted ? evaluationTimeoutError() : error))
     })
     child.on('close', (code, signal) => {
-      clearTimeout(killTimer)
-      options.signal?.removeEventListener('abort', abort)
-      if (code === 0) return resolve({ stdout, stderr })
-      reject(new EvaluatorProtocolError(
+      if (aborted) {
+        signalProcessTree(child, 'SIGKILL')
+        return finish(() => reject(evaluationTimeoutError()))
+      }
+      if (code === 0) return finish(() => resolve({ stdout, stderr }))
+      finish(() => reject(new EvaluatorProtocolError(
         options.errorCode || 'PROCESS_FAILED',
         `${command} 执行失败 (${signal || code}): ${(stderr || stdout).slice(-4000)}`,
         500,
         options.retryable !== false,
-      ))
+      )))
     })
   })
 }

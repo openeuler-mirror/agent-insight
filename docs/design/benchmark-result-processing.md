@@ -17,11 +17,15 @@
        ├─ CAS 冻结 completionDigest
        ├─ 先保存 rawResult/runtimeFacts/cleanup
        ├─ AdapterRegistry.get(adapterKey).normalizeResult()
-       └─ 同一事务写入：
+       ├─ 同一事务写入：
             BenchmarkEvaluation.normalizedResultJson
             BenchmarkCaseRun 终态
             ExperimentEvalResult 统一投影
+            continuationStatus=pending
+       └─ 持久化续跑任务异步执行：
+            补充评估器（仅未完成项）
             Experiment / BenchmarkExperimentBinding 收敛状态
+            下一 Case 调度
 
 实验用户
   └─ GET /api/benchmark/v1/experiments/{experimentId}
@@ -46,6 +50,8 @@ interface BenchmarkAdapter {
 ```
 
 `AbstractBenchmarkAdapter.normalizeResult()` 负责通用不变量校验，具体 Adapter 只负责原生语义映射。统一输出补充主指标，供通用查询服务聚合，不增加第六个 Adapter 方法：
+
+`NormalizeBenchmarkResultInput` 同时带入本次冻结的 `EvaluationJob` 和已核验的证据描述；JSON 证据可携带解析后的 `jsonContent`。Adapter 必须把回传事实与冻结任务、证据内容交叉校验，不能只检查 Raw Result 自身是否自洽。
 
 ```ts
 type NormalizedBenchmarkResult = {
@@ -94,28 +100,39 @@ SWE-bench 的 `nativeMetrics` 只返回：
 
 完整 `officialReport` 仍保存在 Raw Result 和证据文件中，不复制到统一投影。
 
+SWE-bench 的 `completed` 结果还必须满足以下正式计分门槛，否则闭合失败而不是产生分数：
+
+- `runtimeFacts.formalEligible` 必须严格等于 `true`，实例 ID 必须与冻结任务一致；
+- `resolved` 与每个测试结果必须是 JSON boolean，不接受 `"false"` 等 truthy 字符串；
+- 官方报告中的 `FAIL_TO_PASS` / `PASS_TO_PASS` 必须与冻结测试名单精确分区，禁止缺项、未知项、重复项和跨组项；
+- Raw Result 的计数、布尔值和 `officialReport` 必须一致，`resolved=true` 还要求 Patch 应用成功且全部冻结测试通过；
+- 必须且只能引用当前评测的 `report.json`、`test_output.txt`、`run_instance.log` 三类证据；平台重读 `report.json`，复核 size、SHA-256 和 JSON 内容后再交给 Adapter。
+
 ## 3. complete 接口处理规则
 
 `POST /api/benchmark/v1/evaluations/{evaluationId}/complete` 保持同步完成单 Case 归一化，处理顺序固定：
 
 1. 使用评测服务 Bearer Token 鉴权，确认 evaluation 存在且尚可接收终态；
 2. 校验 `status/rawResult/runtimeFacts/cleanup/evidenceArtifactIds` 基本结构；
-3. 确认证据全部属于当前 evaluation，拒绝跨任务引用；
+3. 确认证据全部属于当前 evaluation，重读证据并复核 size、SHA-256，拒绝跨任务引用或落盘内容漂移；
 4. 计算 `completionDigest`，用 `completionDigest IS NULL` 做 CAS；
 5. 先写 Raw Result、运行事实、清理结果和 digest，状态进入 `normalizing`；
-6. 按 evaluation 冻结的 `adapterKey` 调用 `normalizeResult()`；
-7. 事务写统一结果、Case 终态和实验聚合投影；
-8. 返回最终 normalization 状态，评测 Controller 收到确认后结束任务。
+6. 从冻结的 `requestJson` 恢复 `EvaluationJob`，按 evaluation 冻结的 `adapterKey` 调用 `normalizeResult()`；
+7. 事务写统一结果、Case 终态和 `continuationStatus=pending`；
+8. 调度持久化 continuation；它用递增 attempt 作为租约 owner，跳过已完成的补充评估器并结算实验/下一 Case；
+9. 返回严格终态 ACK，评测 Controller 校验 ACK 后结束任务。
 
-幂等规则：相同 evaluationId 和相同 digest 返回已保存结果；同一 evaluationId 的不同 digest 返回 `409 EVALUATION_COMPLETION_CONFLICT`，绝不覆盖第一次终态。
+幂等规则：相同 evaluationId 和相同 digest 返回已保存结果；若停在 `normalizing`，相同 completion 会继续归一化而不重跑 Harness；同一 evaluationId 的不同 digest 返回 `409 EVALUATION_COMPLETION_CONFLICT`，绝不覆盖第一次终态。
 
 错误分三类：
 
 - completion 基本结构或证据引用不合法：在 CAS 前返回 `4xx`，不接受终态；
-- Raw Result 已冻结，但 Adapter Schema/映射失败：保留 Raw Result，evaluation 进入 `normalization_failed`，写 `ExperimentEvalResult(status=failed, score=null)` 并将 Case 收敛为 `evaluation_failed`；返回非重试 `422 RAW_RESULT_SCHEMA_INVALID/RESULT_MAPPING_FAILED`，同时返回 `acceptedRawResult=true`；
+- Raw Result 已冻结，但 Schema、正式资格、证据契约或 Adapter 映射失败：保留 Raw Result，evaluation 进入 `normalization_failed`，写 `ExperimentEvalResult(status=failed, score=null)` 并将 Case 收敛为 `evaluation_failed`；分别返回非重试 `422 RAW_RESULT_SCHEMA_INVALID`、`SWE_FORMAL_RESULT_INELIGIBLE`、`SWE_EVIDENCE_CONTRACT_INVALID` 或 `RESULT_MAPPING_FAILED`，同时返回 `acceptedRawResult=true`；
 - 数据库暂时不可写等持久化错误：返回可重试的 `5xx`。相同 completion 可从已保存 Raw Result 继续归一化，不重跑 Harness。
 
 评测 Controller 必须按响应的 `retryable` 处理：只有网络错误和 `5xx` 重传；确定性 `4xx` 记录终态后停止重传。
+
+Controller 不再把任意 HTTP 2xx 当作成功。进度回调必须收到 `accepted=true + desiredState=continue`；终态回调必须收到 `accepted=true + normalizationStatus=completed`、匹配的 evaluation 状态和合法 `normalizedResult`。空响应、非 JSON 或字段不匹配的 2xx 都保留为可重试 `callback_pending`。
 
 返回结构：
 
@@ -123,7 +140,8 @@ SWE-bench 的 `nativeMetrics` 只返回：
 {
   "accepted": true,
   "evaluationStatus": "completed",
-  "normalizationStatus": "completed"
+  "normalizationStatus": "completed",
+  "normalizedResult": { "status": "done", "verdict": "pass", "score": 100 }
 }
 ```
 
@@ -138,6 +156,7 @@ Case 终态只有以下几类参与完成判断：
 | `execution_failed` | Agent/执行器失败 | `unknown` |
 | `evaluation_failed` | Harness、回调或归一化失败 | `unknown` |
 | `dispatch_failed` | 下发最终失败 | `unknown` |
+| `blocked` | 平台明确阻断该 Case | `unknown` |
 
 实验只有在 `terminalCaseCount === BenchmarkExperimentBinding.expectedCaseCount` 时才进入 `done`；不能只因为当前数据库里暂时没有 running Case 就提前结束。
 
@@ -150,6 +169,10 @@ Case 终态只有以下几类参与完成判断：
 - boolean primaryMetric 使用 `trueCount / expectedCaseCount`，失败和未知不能缩小分母。
 
 SWE-bench 将 boolean `resolved` 聚合为 `resolvedRate`。Verified 500 的分母始终是冻结的 `expectedCaseCount`，不能因为提交无效或基础设施失败变成更小的数据集。
+
+同一 Case 重跑后，查询和收敛只使用重试图中的叶子 Run；`createdAt` 与 `id` 共同提供稳定排序。旧 Run 的迟到 continuation 会检测到后继 Run 并停止，不能覆盖新 Run 的 Case 投影，也不能让历史分数被重复计入。
+
+平台另有 30 秒周期的 Evaluation watchdog：queued/dispatch 不确定、收集/上传/清理、以及 normalizing 连续 5 分钟无进度时回收；Harness 按冻结 `timeoutSeconds + 90 秒` 回收。watchdog、迟到 completion 和迟到 dispatch 都用状态、活性时间与 outbox attempt 的 CAS 竞争，只有胜者能写终态；失败终态同样落 `continuationStatus=pending`，不会停在页面上。
 
 ## 5. 实验结果查询 API
 
@@ -210,6 +233,8 @@ src/lib/benchmark/adapter-base.ts
 benchmarks/swe-bench/adapter/index.ts
 src/lib/benchmark/evaluation-callback-service.ts
 services/evaluator/src/service.cjs                                     # 只重传可重试回调
+src/lib/benchmark/evaluation-continuation-service.ts                   # 持久化终态续跑与租约
+src/lib/benchmark/evaluation-scheduler.ts                              # 下发 owner CAS 与 Evaluation watchdog
 src/lib/benchmark/experiment-result-service.ts                         # 新增
 src/app/api/benchmark/v1/experiments/[experimentId]/route.ts           # 新增
 src/app/api/benchmark/v1/evaluations/[evaluationId]/artifacts/
@@ -218,14 +243,14 @@ test/benchmark-result-processing-api.test.ts                            # 新增
 test/benchmark-real-e2e.test.ts                                         # 单 Case 显式真实测试
 ```
 
-不新增 Prisma 表；复用 `BenchmarkEvaluation`、`BenchmarkEvaluationArtifact`、`BenchmarkCaseRun`、`BenchmarkExperimentBinding` 和 `ExperimentEvalResult`。
+不新增 Prisma 表；复用 `BenchmarkEvaluation`、`BenchmarkEvaluationArtifact`、`BenchmarkCaseRun`、`BenchmarkExperimentBinding` 和 `ExperimentEvalResult`。`BenchmarkEvaluation` 新增 `continuationStatus/continuationAttempts/continuationTriedAt/continuationError`，并为状态扫描和 continuation 扫描建立组合索引；旧记录默认 `continuationStatus=completed`，不会在升级时重放历史副作用。
 
 ## 7. 开发与验收顺序
 
 1. 补 `primaryMetric` 契约及 SWE-bench 映射，限制 `nativeMetrics` 为安全摘要；
 2. 调整 complete 的幂等、异常收敛和返回结构；
 3. 实现通用 `BenchmarkExperimentResultQueryService`、实验 GET 和证据下载；
-4. API 测试覆盖 complete 相同重放/冲突、证据越权、归一化失败保留 Raw Result、固定分母、分页和隐藏字段隔离；
+4. API 测试覆盖 complete 相同重放/冲突、证据越权、归一化失败保留 Raw Result、冻结测试名单与报告绑定、严格 ACK、超时胜出、watchdog/迟到响应竞态、持久化续跑、最新重试叶子、固定分母、分页和隐藏字段隔离；
 5. 把现有 01～12 受控 API 测试延伸到步骤 13，断言查询结果；
 6. 显式运行一个真实 Case：创建实验 → OpenCode → 执行器 → Docker Controller → 官方 Case 容器 → complete → normalize → GET 实验结果。只拉取该 Case 镜像，不预拉完整 SWE-bench。
 

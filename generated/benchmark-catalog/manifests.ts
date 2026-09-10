@@ -140,11 +140,16 @@ export const generatedBenchmarkManifests = {
         "type": "object",
         "required": [
           "instanceId",
-          "resolved"
+          "resolved",
+          "patchSuccessfullyApplied",
+          "failToPass",
+          "passToPass",
+          "officialReport"
         ],
         "properties": {
           "instanceId": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "resolved": {
             "type": "boolean"

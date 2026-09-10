@@ -19,6 +19,7 @@ const TERMINAL_CASE_STATUSES = new Set([
   'submission_invalid',
   'execution_failed',
   'dispatch_failed',
+  'blocked',
 ])
 const CASE_STATUS_FILTERS = new Set([
   'pending',
@@ -96,19 +97,28 @@ export async function getBenchmarkExperimentResult(input: {
       id: true,
       status: true,
       benchmarkBinding: {
-        select: { adapterKey: true, expectedCaseCount: true },
+        select: { adapterKey: true, expectedCaseCount: true, runConfigJson: true },
       },
     },
   })
   if (!experiment?.benchmarkBinding) {
     throw new BenchmarkProtocolError('BENCHMARK_EXPERIMENT_NOT_FOUND', 'Benchmark 实验不存在', 404)
   }
-  const evaluatorId = `benchmark:${experiment.benchmarkBinding.adapterKey}`
+  const runConfig = parseJson<Record<string, unknown>>(
+    experiment.benchmarkBinding.runConfigJson,
+    {},
+  )
+  const evaluatorKey = typeof runConfig.evaluatorKey === 'string' && runConfig.evaluatorKey.trim()
+    ? runConfig.evaluatorKey
+    : experiment.benchmarkBinding.adapterKey
+  const evaluatorId = `benchmark:${evaluatorKey}`
   const runs = await benchmarkPrisma.benchmarkCaseRun.findMany({
     where: { experimentId: input.experimentId },
-    orderBy: { ordinal: 'asc' },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: {
       id: true,
+      retryOfRunId: true,
+      ordinal: true,
       status: true,
       runFactsJson: true,
       failureCode: true,
@@ -158,7 +168,25 @@ export async function getBenchmarkExperimentResult(input: {
     },
   })
 
-  const rows = runs.map((run) => {
+  const supersededRunIds = new Set(
+    runs.map((run) => run.retryOfRunId).filter((id): id is string => Boolean(id)),
+  )
+  const latestRunByCase = new Map<string, (typeof runs)[number]>()
+  for (const run of runs) {
+    if (supersededRunIds.has(run.id)) continue
+    if (!latestRunByCase.has(run.experimentCase.id)) {
+      latestRunByCase.set(run.experimentCase.id, run)
+    }
+  }
+  for (const run of runs) {
+    if (!latestRunByCase.has(run.experimentCase.id)) {
+      latestRunByCase.set(run.experimentCase.id, run)
+    }
+  }
+  const latestRuns = Array.from(latestRunByCase.values())
+    .sort((left, right) => left.ordinal - right.ordinal)
+
+  const rows = latestRuns.map((run) => {
     const result = run.experimentCase.results[0]
     const evaluation = run.evaluations[0]
     const normalized = parseJson<Partial<NormalizedBenchmarkResult> | null>(

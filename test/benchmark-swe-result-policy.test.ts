@@ -14,6 +14,10 @@ status, error = classify_harness_result({
     "infra_failure": False,
     "patch_successfully_applied": False,
     "resolved": False,
+    "tests_status": {
+        "FAIL_TO_PASS": {"success": [], "failure": ["test_regression"]},
+        "PASS_TO_PASS": {"success": ["test_existing"], "failure": []},
+    },
 }, False)
 assert status == "completed"
 assert error is None
@@ -34,7 +38,24 @@ assert error["retryable"] is True
 
 status, error = classify_harness_result(None, False)
 assert status == "failed"
-assert error["code"] == "SWE_HARNESS_FAILED"
+assert error["code"] == "SWE_HARNESS_RESULT_INVALID"
+
+for malformed in (
+    {"resolved": "false", "patch_successfully_applied": True, "tests_status": {}},
+    {"resolved": False, "patch_successfully_applied": True},
+    {
+        "resolved": False,
+        "patch_successfully_applied": True,
+        "tests_status": {
+            "FAIL_TO_PASS": {"success": [], "failure": "test_regression"},
+            "PASS_TO_PASS": {"success": [], "failure": []},
+        },
+    },
+):
+    status, error = classify_harness_result(malformed, False)
+    assert status == "failed"
+    assert error["code"] == "SWE_HARNESS_RESULT_INVALID"
+    assert error["retryable"] is True
 `
   const result = spawnSync('python3', ['-c', script], {
     encoding: 'utf8',

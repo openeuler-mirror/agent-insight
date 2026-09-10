@@ -113,6 +113,8 @@ POST {evaluatorBaseUrl}/api/v1/evaluations
 
 接收逻辑：鉴权 → 校验 Schema 和回调地址 → 重算 `requestDigest` → 处理幂等/忙状态 → 原子持久化 `runId + digest + request.json` → 返回 `202` → 后台执行。必须先落盘再返回 202。
 
+Agent Insight 只有在 `/health` 的目标 Evaluator 同时满足 `ready=true` 和 `formalEligible=true` 时才下发正式评测。每次 outbox claim 递增 `attemptCount`；接单、未知和失败响应都只能由仍持有该 `sending + attemptCount` 的发送者 CAS 写回，watchdog 已回收后到达的旧响应不得复活任务。
+
 - 相同 `runId + digest`：返回当前状态，不重复启动 Harness。
 - 相同 `runId`、不同 digest：`409 RUN_ID_CONFLICT`。
 - 一期 `maxConcurrency=1`；已有活动任务时，新 `runId` 返回 `409 SERVICE_BUSY`，由 Agent Insight 保留队列并延迟重发；相同 `runId` 的幂等重放仍可查询已接收状态。
@@ -146,6 +148,10 @@ EvaluationJob 已带单 Case 所需的 `eval_script`、`FAIL_TO_PASS`、`PASS_TO
 - Patch 无法应用：`submission_invalid`；
 - 镜像、Docker、Harness、超时或报告缺失：`failed`，并给出是否可重试。
 
+Controller 和 SWE-bench 子进程 Runner 都把 abort 视为不可逆超时：超时后先向独立进程组发送 `SIGTERM`，宽限期后再 `SIGKILL`；即使进程在 `SIGTERM` 后以退出码 0 结束，也必须回传 `EVALUATION_TIMEOUT`，不能读取迟到输出并判为成功。
+
+官方报告解析严格保留 JSON 类型，不再对任意值调用宽松 truthy 转换。报告结构、实例键或 `resolved` 类型不合法时生成 `SWE_HARNESS_RESULT_INVALID` 基础设施失败；官方 `resolved=false` 仍是正常完成的业务失败。官方 Harness 的 `get_eval_report()` 判定本身保持不变。
+
 ### 步骤 11：上传证据并回传原生结果
 
 Agent Insight 新增三个只供评测服务调用的 API：
@@ -169,7 +175,15 @@ Authorization: Bearer <evaluator-token>
     "resolved": true,
     "patchSuccessfullyApplied": true,
     "failToPass": { "passed": 1, "total": 1 },
-    "passToPass": { "passed": 59, "total": 59 }
+    "passToPass": { "passed": 59, "total": 59 },
+    "officialReport": {
+      "pallets__flask-5014": {
+        "resolved": true,
+        "patch_successfully_applied": true,
+        "FAIL_TO_PASS": { "success": ["test_a"], "failure": [] },
+        "PASS_TO_PASS": { "success": ["test_b"], "failure": [] }
+      }
+    }
   },
   "evidenceArtifactIds": ["beart_report", "beart_test", "beart_log"],
   "runtimeFacts": {
@@ -188,6 +202,8 @@ Authorization: Bearer <evaluator-token>
 
 Controller 在官方 Harness 清理后再次按 evaluation 标签兜底清理，再把终态和 digest 写入 journal 并调用平台；断网时进入 `callback_pending`，只重传相同内容。平台对相同 digest 返回同一结果，对冲突终态返回 409。清理失败保存在 `cleanup` 和统一结果证据中，但不覆盖已经生成的官方判分。
 
+2xx 不是充分 ACK。进度接口必须返回 `accepted=true` 与 `desiredState=continue`；终态接口必须返回 `accepted=true`、`normalizationStatus=completed`、与提交终态匹配的平台 evaluation 状态，以及合法的 `normalizedResult`。空响应、非 JSON 或字段不一致的 2xx 按可重试协议错误处理，journal 保持 `callback_pending`。
+
 ### 步骤 12：Agent Insight 归一化
 
 `BenchmarkAdapter` 补齐第五个方法：
@@ -196,7 +212,7 @@ Controller 在官方 Harness 清理后再次按 evaluation 标签兜底清理，
 normalizeResult(input: NormalizeBenchmarkResultInput): NormalizedBenchmarkResult
 ```
 
-平台先持久化 Raw Result，再调用 Adapter；归一化失败保留原始证据并标记 `normalization_failed`，可单独重试，不要求重新运行 Harness。
+平台先持久化 Raw Result，再调用 Adapter；归一化失败保留原始证据并标记 `normalization_failed`，可单独重试，不要求重新运行 Harness。相同 completion 在 `normalizing` 崩溃窗口内可恢复；最终写入使用 `status + completionDigest` CAS，不能覆盖 watchdog 已写入的失败终态。
 
 `SweBenchAdapter.normalizeResult()` 映射：
 
@@ -209,6 +225,10 @@ normalizeResult(input: NormalizeBenchmarkResultInput): NormalizedBenchmarkResult
 
 完整官方测试明细保留在 `nativeMetrics`，证据引用保留在 `evidenceJson`；归一化后 upsert 当前 Case 的 `ExperimentEvalResult`。每次评测的原始历史继续保存在 `BenchmarkEvaluation`，不会被只重评覆盖。
 
+正式 `completed` 结果按冻结任务做闭合校验：实例 ID、`formalEligible=true`、`FAIL_TO_PASS/PASS_TO_PASS` 完整名单、严格 boolean、Raw Result 计数与官方报告必须一致；`report.json` 会从 Artifact Store 重读并复核 size/SHA-256/JSON，且证据集合必须精确包含 official report、test output 和 run log。未满足时分别以 `RAW_RESULT_SCHEMA_INVALID`、`SWE_FORMAL_RESULT_INELIGIBLE`、`SWE_EVIDENCE_CONTRACT_INVALID` 或 `RESULT_MAPPING_FAILED` 非重试失败，不能产生成绩。
+
+Raw Result、统一投影、Case 终态与 `continuationStatus=pending` 在同一事务提交后才返回 ACK。后续 continuation 使用递增 attempt 作为 owner lease，服务重启和 30 秒 watchdog 都可恢复；它跳过已经 `done/failed` 的补充评估器，阻止旧 Run 覆盖重跑后的新投影，再结算实验和调度下一 Case。
+
 ## 5. 平台持久化改动
 
 `BenchmarkEvaluation` 增加：
@@ -218,6 +238,7 @@ rawResultJson / rawResultDigest
 runtimeFactsJson / cleanupJson
 normalizedResultJson / completionDigest
 lastProgressAt / finishedAt
+continuationStatus / continuationAttempts / continuationTriedAt / continuationError
 ```
 
 新增 `BenchmarkEvaluationArtifact`：
@@ -263,6 +284,8 @@ Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluat
 
 本机 Docker 内访问宿主用 `host.docker.internal`；独立评测机使用 Agent Insight 的实际 HTTPS 地址。生产环境应由反向代理终止 TLS，并通过防火墙只允许两台服务互访。
 
+Agent Insight 还每 30 秒扫描一次评测阶段：queued/dispatch 不确定、收集/上传/清理、normalizing 连续 5 分钟无进度即失败；运行 Harness 超过冻结 `timeoutSeconds + 90 秒` 即失败。回收使用 CAS 同时收敛 Evaluation、Outbox、Case 和统一投影，再落持久化 continuation，避免实验永久运行。
+
 ## 7. 开发落点
 
 ```text
@@ -288,6 +311,8 @@ benchmarks/swe-bench/smoke/*
 benchmarks/swe-bench/schemas/result.schema.json
 generated/benchmark-catalog/evaluators.cjs
 src/lib/benchmark/evaluation-callback-service.ts
+src/lib/benchmark/evaluation-continuation-service.ts
+src/lib/benchmark/evaluation-scheduler.ts
 src/lib/benchmark/evaluator-runtime-config.ts
 src/app/api/benchmark/v1/evaluations/[evaluationId]/{progress,artifacts,complete}/route.ts
 prisma/schema.prisma
@@ -305,7 +330,8 @@ test/benchmark-evaluator-api.test.ts
 3. 本机 smoke 首选已有真实 Case `pallets__flask-5014` 和已生成 Patch；ARM64 镜像必须实际存在且 digest 匹配。该结果标记非正式。
 4. 正式验收在 x86_64 Linux 上先跑独立 Gold Control，再跑真实 Agent Patch。Gold Control 仅验证 Harness 环境，Gold Patch 作为该控制任务的 prediction，绝不进入真实 Agent 任务或其 EvaluationJob。
 5. `resolved=false` 也算链路成功；只有官方报告缺失、基础设施失败或伪造结果才算链路失败。
-6. 最后运行 `npm run test`；Docker daemon 未启动时，容器集成测试必须明确 skip，不能伪造通过。当前 ARM64 冒烟已执行 1 个 Case，镜像为 `swebench/sweb.eval.arm64.pallets_1776_flask-5014@sha256:c6b6e75970bae4403dccdf152a838c7ff4125ec9a08b6febb0894701887d6483`；Docker 化 Controller 的 09～13 和全真实 01～13 测试均为 1/1 通过，测试数据库记录、Controller/Case 容器和证据已清理。
+6. 负向专项必须覆盖字符串 `"false"`、错误 instance、空/重复/未知测试名单、报告证据漂移、超时后退出 0、畸形 2xx ACK、迟到 dispatch/completion、normalizing 恢复、continuation 租约和 Case 重跑聚合。
+7. 最后运行 `npm run test`；Docker daemon 未启动时，容器集成测试必须明确 skip，不能伪造通过。当前 ARM64 冒烟已执行 1 个 Case，镜像为 `swebench/sweb.eval.arm64.pallets_1776_flask-5014@sha256:c6b6e75970bae4403dccdf152a838c7ff4125ec9a08b6febb0894701887d6483`；Docker 化 Controller 的 09～13 和全真实 01～13 测试均为 1/1 通过，测试数据库记录、Controller/Case 容器和证据已清理。
 
 双层容器测试通过 `RUN_SWE_BENCH_CONTROLLER_DOCKER_TEST=true` 显式启用，并可用 `SWE_BENCH_CONTROLLER_IMAGE` 指定已构建的 Controller 镜像；默认测试不启动容器，也不拉取 Case 镜像。
 

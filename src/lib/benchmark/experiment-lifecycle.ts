@@ -67,16 +67,20 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
   const [runs, resultRows] = await Promise.all([
     prisma.benchmarkCaseRun.findMany({
       where: { experimentId },
-      orderBy: { createdAt: 'desc' },
-      select: { experimentCaseId: true, status: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, retryOfRunId: true, experimentCaseId: true, status: true },
     }),
     prisma.experimentEvalResult.findMany({
       where: { experimentId },
       select: { status: true },
     }),
   ])
+  const retriedRunIds = new Set(
+    runs.map((run) => run.retryOfRunId).filter((id): id is string => Boolean(id)),
+  )
   const latestRunStatus = new Map<string, string>()
   for (const run of runs) {
+    if (retriedRunIds.has(run.id)) continue
     if (!latestRunStatus.has(run.experimentCaseId)) latestRunStatus.set(run.experimentCaseId, run.status)
   }
   const terminalRuns = Array.from(latestRunStatus.values())
@@ -119,7 +123,10 @@ export async function finalizeBenchmarkCase(input: {
   caseRunId: string
   runSupplementalEvaluators: boolean
   continueCases: boolean
-}): Promise<void> {
+  shouldContinue?: () => Promise<boolean>
+}): Promise<boolean> {
+  const shouldContinue = input.shouldContinue || (async () => true)
+  if (!(await shouldContinue())) return false
   const run = await prisma.benchmarkCaseRun.findUnique({
     where: { id: input.caseRunId },
     include: {
@@ -127,7 +134,7 @@ export async function finalizeBenchmarkCase(input: {
       artifacts: { where: { name: 'model.patch' }, take: 1 },
     },
   })
-  if (!run) return
+  if (!run) return true
 
   const facts = parsedObject(run.runFactsJson)
   const traceId = typeof facts.traceId === 'string' ? facts.traceId.trim() : ''
@@ -139,6 +146,7 @@ export async function finalizeBenchmarkCase(input: {
   }
 
   if (execution) {
+    if (!(await shouldContinue())) return false
     const patch = run.artifacts[0]
     await prisma.experimentCase.update({
       where: { id: run.experimentCaseId },
@@ -150,6 +158,7 @@ export async function finalizeBenchmarkCase(input: {
       },
     })
   } else if (traceId && run.status === 'execution_failed') {
+    if (!(await shouldContinue())) return false
     await prisma.experimentCase.update({
       where: { id: run.experimentCaseId },
       data: { taskId: traceId },
@@ -165,14 +174,31 @@ export async function finalizeBenchmarkCase(input: {
   }
 
   if (input.runSupplementalEvaluators && evaluatorIds.length) {
+    const existing = await prisma.experimentEvalResult.findMany({
+      where: {
+        experimentId: run.experimentId,
+        caseId: run.experimentCaseId,
+        evaluatorId: { in: evaluatorIds },
+      },
+      select: { evaluatorId: true, status: true },
+    })
+    const settled = new Set(
+      existing
+        .filter((result) => ['done', 'failed'].includes(result.status))
+        .map((result) => result.evaluatorId),
+    )
+    evaluatorIds = evaluatorIds.filter((evaluatorId) => !settled.has(evaluatorId))
+    if (!(await shouldContinue())) return false
     if (execution) {
-      await evaluateEvalExperimentCase(
-        run.experimentId,
-        run.experimentCaseId,
-        run.experiment.user,
-        { evaluatorIds, settleExperiment: false },
-      )
-    } else {
+      if (evaluatorIds.length) {
+        await evaluateEvalExperimentCase(
+          run.experimentId,
+          run.experimentCaseId,
+          run.experiment.user,
+          { evaluatorIds, settleExperiment: false },
+        )
+      }
+    } else if (evaluatorIds.length) {
       await prisma.experimentEvalResult.updateMany({
         where: {
           experimentId: run.experimentId,
@@ -190,8 +216,13 @@ export async function finalizeBenchmarkCase(input: {
     }
   }
 
+  if (!(await shouldContinue())) return false
   await settleBenchmarkExperimentStatus(run.experimentId)
-  if (input.continueCases) await continueExperiment(run.experimentId)
+  if (input.continueCases) {
+    if (!(await shouldContinue())) return false
+    await continueExperiment(run.experimentId)
+  }
+  return true
 }
 
 export async function failBenchmarkCaseResults(caseRunId: string, message: string): Promise<void> {

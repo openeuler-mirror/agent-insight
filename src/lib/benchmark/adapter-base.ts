@@ -151,7 +151,12 @@ export abstract class AbstractBenchmarkAdapter<
   }
 
   normalizeResult(input: NormalizeBenchmarkResultInput): NormalizedBenchmarkResult {
-    if (input.evaluatorKey !== this.manifest.evaluation.evaluatorKey) {
+    if (
+      input.evaluatorKey !== this.manifest.evaluation.evaluatorKey
+      || input.evaluationJob.evaluationId !== input.evaluationId
+      || input.evaluationJob.evaluator.key !== input.evaluatorKey
+      || input.evaluationJob.benchmark.key !== this.manifest.adapterKey
+    ) {
       throw new BenchmarkProtocolError('EVALUATOR_RESULT_MISMATCH', '评测结果 Evaluator key 不一致')
     }
     if (input.completion.status !== 'failed') {

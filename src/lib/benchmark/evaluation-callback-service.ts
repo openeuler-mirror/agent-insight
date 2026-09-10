@@ -9,21 +9,16 @@ import type {
   BenchmarkEvaluationProgress,
   NormalizedBenchmarkResult,
 } from '../../../packages/benchmark-protocol/src/evaluator-contracts'
+import type { EvaluationJob } from '../../../packages/benchmark-protocol/src/evaluation-contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { resolveAgentInsightDataPath } from '@/lib/env'
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
-import { finalizeBenchmarkCase } from './experiment-lifecycle'
+import { scheduleBenchmarkEvaluationContinuation } from './evaluation-continuation-service'
 
 const ACTIVE_STATUSES = new Set(['queued', 'dispatch_unknown', 'running_evaluator'])
-const TERMINAL_CASE_STATUSES = [
-  'evaluated',
-  'evaluation_failed',
-  'submission_invalid',
-  'execution_failed',
-  'dispatch_failed',
-] as const
+const COMPLETED_EVALUATION_STATUSES = new Set(['completed', 'failed', 'submission_invalid'])
 const MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
 
 type StoredEvaluationArtifact = {
@@ -34,6 +29,7 @@ type StoredEvaluationArtifact = {
   mediaType: string
   sha256: string
   sizeBytes: number
+  storagePath: string
 }
 
 function sha256(bytes: Uint8Array): `sha256:${string}` {
@@ -58,6 +54,71 @@ function assertPlainObject(value: unknown, code: string, message: string): asser
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new BenchmarkProtocolError(code, message, 400)
   }
+}
+
+function frozenEvaluationJob(requestJson: string): EvaluationJob {
+  try {
+    const job = JSON.parse(requestJson) as EvaluationJob
+    if (job && typeof job === 'object' && job.protocolVersion === 'benchmark-evaluation/v1') {
+      return job
+    }
+  } catch {}
+  throw new BenchmarkProtocolError(
+    'EVALUATION_REQUEST_INVALID',
+    '冻结的评测任务不合法',
+    500,
+  )
+}
+
+async function normalizedEvidenceArtifacts(
+  artifacts: readonly StoredEvaluationArtifact[],
+): Promise<Array<{
+  artifactId: string
+  evaluationId: string
+  name: string
+  kind: string
+  mediaType: string
+  sha256: `sha256:${string}`
+  sizeBytes: number
+  jsonContent?: JsonValue
+}>> {
+  const root = path.resolve(resolveAgentInsightDataPath())
+  return Promise.all(artifacts.map(async (artifact) => {
+    let jsonContent: JsonValue | undefined
+    if (artifact.kind === 'official-report' && artifact.mediaType === 'application/json') {
+      const absolutePath = path.resolve(root, artifact.storagePath)
+      if (!absolutePath.startsWith(`${root}${path.sep}`)) {
+        throw new BenchmarkProtocolError(
+          'EVALUATION_ARTIFACT_PATH_INVALID',
+          '评测证据存储路径不合法',
+          500,
+        )
+      }
+      try {
+        const bytes = await fs.readFile(absolutePath)
+        if (bytes.byteLength !== artifact.sizeBytes || sha256(bytes) !== artifact.sha256) {
+          throw new Error('digest mismatch')
+        }
+        jsonContent = JSON.parse(bytes.toString('utf8')) as JsonValue
+      } catch {
+        throw new BenchmarkProtocolError(
+          'SWE_EVIDENCE_CONTRACT_INVALID',
+          'SWE-bench 官方报告证据内容或摘要不合法',
+          422,
+        )
+      }
+    }
+    return {
+      artifactId: artifact.id,
+      evaluationId: artifact.evaluationId,
+      name: artifact.name,
+      kind: artifact.kind,
+      mediaType: artifact.mediaType,
+      sha256: artifact.sha256 as `sha256:${string}`,
+      sizeBytes: artifact.sizeBytes,
+      ...(jsonContent === undefined ? {} : { jsonContent }),
+    }
+  }))
 }
 
 export async function recordBenchmarkEvaluationProgress(input: {
@@ -91,15 +152,22 @@ export async function recordBenchmarkEvaluationProgress(input: {
   if (previous?.stage && allowedStages.indexOf(stage) < allowedStages.indexOf(previous.stage)) {
     return { accepted: true, desiredState: 'continue' }
   }
-  await prisma.benchmarkEvaluation.update({
-    where: { id: input.evaluationId },
+  const updated = await prisma.benchmarkEvaluation.updateMany({
+    where: {
+      id: input.evaluationId,
+      status: { in: [...ACTIVE_STATUSES] },
+      completionDigest: null,
+    },
     data: {
       status: 'running_evaluator',
       progressJson: canonicalJson(input.progress as unknown as JsonValue),
-      lastProgressAt: new Date(input.progress.occurredAt),
+      lastProgressAt: new Date(),
       startedAt: evaluation.startedAt || new Date(),
     },
   })
+  if (updated.count !== 1) {
+    throw new BenchmarkProtocolError('EVALUATION_NOT_ACTIVE', '评测 Run 已不接受进度回调', 409)
+  }
   return { accepted: true, desiredState: 'continue' }
 }
 
@@ -248,48 +316,15 @@ async function writeExperimentResult(input: {
   })
 }
 
-async function settleExperimentIfComplete(
-  tx: Prisma.TransactionClient,
-  experimentId: string,
-): Promise<void> {
-  const binding = await tx.benchmarkExperimentBinding.findUnique({
-    where: { experimentId },
-    select: { expectedCaseCount: true },
-  })
-  if (!binding) {
-    throw new BenchmarkProtocolError('BENCHMARK_BINDING_NOT_FOUND', 'Benchmark 实验绑定不存在', 500, true)
+function normalizationFailureCode(error: unknown): string {
+  if (!(error instanceof BenchmarkProtocolError)) return 'RESULT_MAPPING_FAILED'
+  if (['RAW_RESULT_SCHEMA_INVALID', 'SWE_RAW_RESULT_INVALID'].includes(error.code)) {
+    return 'RAW_RESULT_SCHEMA_INVALID'
   }
-  const runs = await tx.benchmarkCaseRun.findMany({
-    where: { experimentId },
-    orderBy: { createdAt: 'desc' },
-    select: { experimentCaseId: true, status: true },
-  })
-  const latestRunStatus = new Map<string, string>()
-  for (const run of runs) {
-    if (!latestRunStatus.has(run.experimentCaseId)) latestRunStatus.set(run.experimentCaseId, run.status)
+  if (['SWE_FORMAL_RESULT_INELIGIBLE', 'SWE_EVIDENCE_CONTRACT_INVALID'].includes(error.code)) {
+    return error.code
   }
-  const terminalCount = Array.from(latestRunStatus.values())
-    .filter((status) => (TERMINAL_CASE_STATUSES as readonly string[]).includes(status)).length
-  if (terminalCount !== binding.expectedCaseCount) return
-  const pendingResultCount = await tx.experimentEvalResult.count({
-    where: { experimentId, status: { in: ['pending', 'running'] } },
-  })
-  if (pendingResultCount > 0) return
-  await tx.experiment.update({
-    where: { id: experimentId },
-    data: { status: 'done' },
-  })
-  await tx.benchmarkExperimentBinding.update({
-    where: { experimentId },
-    data: { schedulerStatus: 'done' },
-  })
-}
-
-function normalizationFailureCode(error: unknown): 'RAW_RESULT_SCHEMA_INVALID' | 'RESULT_MAPPING_FAILED' {
-  return error instanceof BenchmarkProtocolError
-    && ['RAW_RESULT_SCHEMA_INVALID', 'SWE_RAW_RESULT_INVALID'].includes(error.code)
-    ? 'RAW_RESULT_SCHEMA_INVALID'
-    : 'RESULT_MAPPING_FAILED'
+  return 'RESULT_MAPPING_FAILED'
 }
 
 function nonRetryableNormalizationError(code: string, message: string): BenchmarkProtocolError {
@@ -297,6 +332,19 @@ function nonRetryableNormalizationError(code: string, message: string): Benchmar
     acceptedRawResult: true,
     evaluationStatus: 'normalization_failed',
   })
+}
+
+function finalizationLostError(): BenchmarkProtocolError {
+  return new BenchmarkProtocolError(
+    'EVALUATION_NOT_ACTIVE',
+    '评测 Run 已被平台终止，不能再覆盖终态',
+    409,
+    false,
+  )
+}
+
+function isFinalizationLost(error: unknown): boolean {
+  return error instanceof BenchmarkProtocolError && error.code === 'EVALUATION_NOT_ACTIVE'
 }
 
 async function recordPersistenceFailure(evaluationId: string, error: unknown): Promise<never> {
@@ -332,17 +380,31 @@ export async function completeBenchmarkEvaluation(input: {
     if (evaluation.completionDigest !== completionDigest) {
       throw new BenchmarkProtocolError('EVALUATION_COMPLETION_CONFLICT', '评测终态内容冲突', 409)
     }
-    if (evaluation.status !== 'normalization_failed') {
-      return {
-        accepted: true,
-        evaluationStatus: evaluation.status,
-        normalizationStatus: 'completed',
-        ...(evaluation.normalizedResultJson
-          ? { normalizedResult: JSON.parse(evaluation.normalizedResultJson) as NormalizedBenchmarkResult }
-          : {}),
+    if (COMPLETED_EVALUATION_STATUSES.has(evaluation.status)) {
+      if (evaluation.normalizedResultJson) {
+        if (evaluation.continuationStatus !== 'completed') {
+          scheduleBenchmarkEvaluationContinuation(evaluation.id)
+        }
+        return {
+          accepted: true,
+          evaluationStatus: evaluation.status,
+          normalizationStatus: 'completed',
+          normalizedResult: JSON.parse(evaluation.normalizedResultJson) as NormalizedBenchmarkResult,
+        }
       }
+      throw new BenchmarkProtocolError(
+        'EVALUATION_NOT_ACTIVE',
+        '评测 Run 已终止，不能恢复未完成的归一化',
+        409,
+      )
     }
-    if (evaluation.failureCode !== 'RESULT_PERSISTENCE_FAILED') {
+    if (
+      evaluation.status === 'normalization_failed'
+      && evaluation.failureCode !== 'RESULT_PERSISTENCE_FAILED'
+    ) {
+      if (evaluation.continuationStatus !== 'completed') {
+        scheduleBenchmarkEvaluationContinuation(evaluation.id)
+      }
       throw nonRetryableNormalizationError(
         evaluation.failureCode || 'RESULT_MAPPING_FAILED',
         evaluation.failureMessage || 'Adapter 归一化失败',
@@ -361,7 +423,11 @@ export async function completeBenchmarkEvaluation(input: {
   const rawResultJson = canonicalJson(input.completion.rawResult)
   if (!evaluation.completionDigest) {
     const claimed = await prisma.benchmarkEvaluation.updateMany({
-      where: { id: input.evaluationId, completionDigest: null },
+      where: {
+        id: input.evaluationId,
+        completionDigest: null,
+        status: { in: [...ACTIVE_STATUSES] },
+      },
       data: {
         status: 'normalizing',
         rawResultJson,
@@ -376,29 +442,28 @@ export async function completeBenchmarkEvaluation(input: {
     })
     if (claimed.count !== 1) return completeBenchmarkEvaluation(input)
   } else {
-    await prisma.benchmarkEvaluation.update({
-      where: { id: input.evaluationId },
-      data: { status: 'normalizing' },
+    const resumed = await prisma.benchmarkEvaluation.updateMany({
+      where: {
+        id: input.evaluationId,
+        completionDigest,
+        status: { in: ['normalizing', 'normalization_failed'] },
+      },
+      data: { status: 'normalizing', lastProgressAt: new Date() },
     })
+    if (resumed.count !== 1) return completeBenchmarkEvaluation(input)
   }
 
   evaluation = await evaluationOrThrow(input.evaluationId)
   let normalized: NormalizedBenchmarkResult
   try {
     const adapter = getBenchmarkAdapter(evaluation.adapterKey)
+    const evaluationJob = frozenEvaluationJob(evaluation.requestJson)
     normalized = adapter.normalizeResult({
       evaluationId: evaluation.id,
       evaluatorKey: evaluation.evaluatorKey,
+      evaluationJob,
       completion: input.completion,
-      evidenceArtifacts: referencedArtifacts.map((artifact: StoredEvaluationArtifact) => ({
-        artifactId: artifact.id,
-        evaluationId: artifact.evaluationId,
-        name: artifact.name,
-        kind: artifact.kind,
-        mediaType: artifact.mediaType,
-        sha256: artifact.sha256 as `sha256:${string}`,
-        sizeBytes: artifact.sizeBytes,
-      })),
+      evidenceArtifacts: await normalizedEvidenceArtifacts(referencedArtifacts),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Adapter 归一化失败'
@@ -417,15 +482,23 @@ export async function completeBenchmarkEvaluation(input: {
     }
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        await tx.benchmarkEvaluation.update({
-          where: { id: input.evaluationId },
+        const finalized = await tx.benchmarkEvaluation.updateMany({
+          where: {
+            id: input.evaluationId,
+            status: 'normalizing',
+            completionDigest,
+          },
           data: {
             status: 'normalization_failed',
             failureCode,
             failureMessage: message,
             finishedAt: new Date(),
+            continuationStatus: 'pending',
+            continuationTriedAt: null,
+            continuationError: null,
           },
         })
+        if (finalized.count !== 1) throw finalizationLostError()
         await tx.benchmarkCaseRun.update({
           where: { id: evaluation.caseRunId },
           data: {
@@ -436,18 +509,12 @@ export async function completeBenchmarkEvaluation(input: {
           },
         })
         await writeExperimentResult({ tx, evaluation, normalized: failedResult })
-        await settleExperimentIfComplete(tx, evaluation.caseRun.experimentId)
       })
     } catch (persistenceError) {
+      if (isFinalizationLost(persistenceError)) throw persistenceError
       return recordPersistenceFailure(input.evaluationId, persistenceError)
     }
-    void finalizeBenchmarkCase({
-      caseRunId: evaluation.caseRunId,
-      runSupplementalEvaluators: evaluation.attemptNo === 1,
-      continueCases: evaluation.attemptNo === 1,
-    }).catch((continuationError) => {
-      console.error('[benchmark/evaluation-callback] failure continuation failed', continuationError)
-    })
+    scheduleBenchmarkEvaluationContinuation(evaluation.id)
     throw nonRetryableNormalizationError(failureCode, message)
   }
 
@@ -463,14 +530,24 @@ export async function completeBenchmarkEvaluation(input: {
       : 'evaluated'
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await tx.benchmarkEvaluation.update({
-        where: { id: evaluation.id },
+      const finalized = await tx.benchmarkEvaluation.updateMany({
+        where: {
+          id: evaluation.id,
+          status: 'normalizing',
+          completionDigest,
+        },
         data: {
           status: evaluationStatus,
           normalizedResultJson: canonicalJson(normalized as unknown as JsonValue),
+          failureCode: input.completion.error?.code || null,
+          failureMessage: input.completion.error?.message || null,
           finishedAt: new Date(),
+          continuationStatus: 'pending',
+          continuationTriedAt: null,
+          continuationError: null,
         },
       })
+      if (finalized.count !== 1) throw finalizationLostError()
       await tx.benchmarkCaseRun.update({
         where: { id: evaluation.caseRunId },
         data: {
@@ -485,22 +562,16 @@ export async function completeBenchmarkEvaluation(input: {
         },
       })
       await writeExperimentResult({ tx, evaluation, normalized })
-      await settleExperimentIfComplete(tx, evaluation.caseRun.experimentId)
     })
-    void finalizeBenchmarkCase({
-      caseRunId: evaluation.caseRunId,
-      runSupplementalEvaluators: evaluation.attemptNo === 1,
-      continueCases: evaluation.attemptNo === 1,
-    }).catch((continuationError) => {
-      console.error('[benchmark/evaluation-callback] continuation failed', continuationError)
-    })
-    return {
-      accepted: true,
-      evaluationStatus,
-      normalizationStatus: 'completed',
-      normalizedResult: normalized,
-    }
   } catch (error) {
+    if (isFinalizationLost(error)) throw error
     return recordPersistenceFailure(input.evaluationId, error)
+  }
+  scheduleBenchmarkEvaluationContinuation(evaluation.id)
+  return {
+    accepted: true,
+    evaluationStatus,
+    normalizationStatus: 'completed',
+    normalizedResult: normalized,
   }
 }

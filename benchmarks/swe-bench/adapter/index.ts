@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { getGeneratedBenchmarkManifest } from '../../../generated/benchmark-catalog/manifests'
+import { canonicalJson, type JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
 import type {
   AgentTaskEnvelope,
   BuildAgentTaskInput,
@@ -18,6 +19,11 @@ import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src
 import { AbstractBenchmarkAdapter } from '../../../src/lib/benchmark/adapter-base'
 
 const TestListSchema = z.union([z.string(), z.array(z.string())])
+const REQUIRED_COMPLETION_EVIDENCE = [
+  { name: 'report.json', kind: 'official-report', mediaType: 'application/json' },
+  { name: 'test_output.txt', kind: 'test-output', mediaType: 'text/plain' },
+  { name: 'run_instance.log', kind: 'harness-log', mediaType: 'text/plain' },
+] as const
 
 const RawSweBenchCaseSchema = z.object({
   instance_id: z.string().trim().min(1),
@@ -102,6 +108,102 @@ function parseTestList(value: string | string[], field: string): string[] {
     'SWE_CASE_FIELD_INVALID',
     `${field} 必须是字符串数组或其 JSON 字符串`,
   )
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function rawResultError(message: string): never {
+  throw new BenchmarkProtocolError('SWE_RAW_RESULT_INVALID', message, 500)
+}
+
+function strictMetric(value: unknown, field: string): { passed: number; total: number } {
+  const metric = asRecord(value)
+  const passed = metric?.passed
+  const total = metric?.total
+  if (
+    typeof passed !== 'number'
+    || typeof total !== 'number'
+    || !Number.isInteger(passed)
+    || !Number.isInteger(total)
+    || passed < 0
+    || total < 0
+    || passed > total
+  ) {
+    return rawResultError(`SWE-bench 原生结果 ${field} 计数不合法`)
+  }
+  return { passed, total }
+}
+
+function officialMetric(
+  report: Record<string, unknown>,
+  field: 'FAIL_TO_PASS' | 'PASS_TO_PASS',
+  expectedTests: readonly string[],
+): { passed: number; total: number } {
+  const status = asRecord(asRecord(report.tests_status)?.[field])
+  const success = status?.success
+  const failure = status?.failure
+  if (
+    !Array.isArray(success)
+    || !Array.isArray(failure)
+    || success.some((item) => typeof item !== 'string')
+    || failure.some((item) => typeof item !== 'string')
+  ) {
+    return rawResultError(`SWE-bench 官方报告 tests_status.${field} 不完整`)
+  }
+  const reportedTests = [...success, ...failure]
+  if (
+    new Set(expectedTests).size !== expectedTests.length
+    || new Set(reportedTests).size !== reportedTests.length
+    || reportedTests.length !== expectedTests.length
+    || reportedTests.some((test) => !expectedTests.includes(test))
+  ) {
+    return rawResultError(`SWE-bench 官方报告 tests_status.${field} 与冻结测试名单不一致`)
+  }
+  return { passed: success.length, total: success.length + failure.length }
+}
+
+function frozenExpectation(input: NormalizeBenchmarkResultInput): {
+  instanceId: string
+  failToPass: string[]
+  passToPass: string[]
+} {
+  const payload = asRecord(input.evaluationJob.payload)
+  const instance = asRecord(payload?.instance)
+  const instanceId = instance?.instance_id
+  const failToPass = instance?.FAIL_TO_PASS
+  const passToPass = instance?.PASS_TO_PASS
+  if (
+    typeof instanceId !== 'string'
+    || !instanceId.trim()
+    || !Array.isArray(failToPass)
+    || failToPass.length < 1
+    || failToPass.some((test) => typeof test !== 'string')
+    || !Array.isArray(passToPass)
+    || passToPass.some((test) => typeof test !== 'string')
+    || new Set([...failToPass, ...passToPass]).size !== failToPass.length + passToPass.length
+  ) {
+    throw new BenchmarkProtocolError(
+      'EVALUATION_REQUEST_INVALID',
+      '冻结的 SWE-bench 评测任务缺少实例或测试名单',
+      500,
+    )
+  }
+  return {
+    instanceId,
+    failToPass: failToPass as string[],
+    passToPass: passToPass as string[],
+  }
+}
+
+function sameMetric(
+  first: { passed: number; total: number },
+  second: { passed: number; total: number },
+): boolean {
+  return first.passed === second.passed && first.total === second.total
 }
 
 export class SweBenchAdapter extends AbstractBenchmarkAdapter<
@@ -287,32 +389,24 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
     input: NormalizeBenchmarkResultInput,
   ): NormalizedBenchmarkResult {
     const completion = input.completion
-    const raw = completion.rawResult && typeof completion.rawResult === 'object' && !Array.isArray(completion.rawResult)
-      ? completion.rawResult as Record<string, unknown>
-      : {}
+    const raw = asRecord(completion.rawResult) || {}
     const evidence = {
       artifactIds: input.evidenceArtifacts.map((artifact) => artifact.artifactId),
       cleanup: completion.cleanup,
     }
-    const testMetric = (value: unknown) => {
-      const metric = value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : {}
-      const passed = Number(metric.passed)
-      const total = Number(metric.total)
-      return {
-        passed: Number.isInteger(passed) && passed >= 0 ? passed : 0,
-        total: Number.isInteger(total) && total >= 0 ? total : 0,
-      }
-    }
+    const testMetric = (value: unknown, field: string) => strictMetric(value, field)
     const nativeMetrics = {
       ...(typeof raw.instanceId === 'string' ? { instanceId: raw.instanceId } : {}),
       ...(typeof raw.resolved === 'boolean' ? { resolved: raw.resolved } : {}),
       ...(typeof raw.patchSuccessfullyApplied === 'boolean'
         ? { patchSuccessfullyApplied: raw.patchSuccessfullyApplied }
         : {}),
-      failToPass: testMetric(raw.failToPass),
-      passToPass: testMetric(raw.passToPass),
+      ...(completion.status === 'failed'
+        ? {}
+        : {
+            failToPass: testMetric(raw.failToPass, 'failToPass'),
+            passToPass: testMetric(raw.passToPass, 'passToPass'),
+          }),
     }
 
     if (completion.status === 'failed') {
@@ -326,7 +420,11 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
         errorMessage: completion.error?.message || 'SWE-bench 评测失败',
       }
     }
+    const expected = frozenExpectation(input)
     if (completion.status === 'submission_invalid') {
+      if (raw.instanceId !== expected.instanceId) {
+        return rawResultError('SWE-bench 原生结果 instanceId 与冻结评测任务不一致')
+      }
       return {
         status: 'done',
         verdict: 'fail',
@@ -338,15 +436,88 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
       }
     }
     if (typeof raw.resolved !== 'boolean') {
-      throw new BenchmarkProtocolError('SWE_RAW_RESULT_INVALID', 'SWE-bench 原生结果缺少 resolved', 500)
+      return rawResultError('SWE-bench 原生结果缺少 resolved')
+    }
+    if (raw.instanceId !== expected.instanceId) {
+      return rawResultError('SWE-bench 原生结果 instanceId 与冻结评测任务不一致')
+    }
+    const runtimeFacts = asRecord(completion.runtimeFacts)
+    if (runtimeFacts?.formalEligible !== true) {
+      throw new BenchmarkProtocolError(
+        'SWE_FORMAL_RESULT_INELIGIBLE',
+        '当前评测运行不满足正式 SWE-bench 评分环境要求',
+        422,
+      )
+    }
+    if (input.evidenceArtifacts.length !== REQUIRED_COMPLETION_EVIDENCE.length) {
+      throw new BenchmarkProtocolError(
+        'SWE_EVIDENCE_CONTRACT_INVALID',
+        'SWE-bench 正式结果的证据集合不完整或包含未声明项',
+        422,
+      )
+    }
+    let officialEvidence: NormalizeBenchmarkResultInput['evidenceArtifacts'][number] | undefined
+    for (const required of REQUIRED_COMPLETION_EVIDENCE) {
+      const matches = input.evidenceArtifacts.filter((artifact) => (
+        artifact.name === required.name
+        && artifact.kind === required.kind
+        && artifact.mediaType === required.mediaType
+      ))
+      if (matches.length !== 1) {
+        throw new BenchmarkProtocolError(
+          'SWE_EVIDENCE_CONTRACT_INVALID',
+          `SWE-bench 正式结果缺少有效证据：${required.name}`,
+          422,
+        )
+      }
+      if (required.kind === 'official-report') officialEvidence = matches[0]
+    }
+    const officialReport = asRecord(raw.officialReport)
+    const officialKeys = officialReport ? Object.keys(officialReport) : []
+    const caseReport = officialReport ? asRecord(officialReport[expected.instanceId]) : null
+    if (officialKeys.length !== 1 || !caseReport) {
+      return rawResultError('SWE-bench 官方报告与冻结评测任务不一致')
+    }
+    if (
+      officialEvidence?.jsonContent === undefined
+      || canonicalJson(officialEvidence.jsonContent) !== canonicalJson(officialReport as JsonValue)
+    ) {
+      throw new BenchmarkProtocolError(
+        'SWE_EVIDENCE_CONTRACT_INVALID',
+        'SWE-bench report.json 与回调中的官方报告不一致',
+        422,
+      )
+    }
+    if (
+      caseReport.infra_failure === true
+      || typeof caseReport.resolved !== 'boolean'
+      || typeof caseReport.patch_successfully_applied !== 'boolean'
+      || caseReport.resolved !== raw.resolved
+      || caseReport.patch_successfully_applied !== raw.patchSuccessfullyApplied
+    ) {
+      return rawResultError('SWE-bench 原生结果与官方报告判定不一致')
+    }
+    const failToPass = strictMetric(raw.failToPass, 'failToPass')
+    const passToPass = strictMetric(raw.passToPass, 'passToPass')
+    if (
+      !sameMetric(failToPass, officialMetric(caseReport, 'FAIL_TO_PASS', expected.failToPass))
+      || !sameMetric(passToPass, officialMetric(caseReport, 'PASS_TO_PASS', expected.passToPass))
+    ) {
+      return rawResultError('SWE-bench 原生测试计数与官方报告不一致')
+    }
+    if (
+      raw.resolved
+      && (
+        raw.patchSuccessfullyApplied !== true
+        || failToPass.passed !== failToPass.total
+        || passToPass.passed !== passToPass.total
+      )
+    ) {
+      return rawResultError('SWE-bench resolved=true 与官方测试结果不一致')
     }
     const metricPoint = (label: string, value: unknown) => {
-      const metric = value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : {}
-      const passed = Number(metric.passed)
-      const total = Number(metric.total)
-      const score = Number.isInteger(passed) && Number.isInteger(total) && total > 0
+      const { passed, total } = strictMetric(value, label)
+      const score = total > 0
         ? Math.round((passed / total) * 10_000) / 100
         : null
       return { label, score, evidence: { passed, total } }

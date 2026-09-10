@@ -41,6 +41,8 @@ bash scripts/evaluator-doctor.sh
 bash scripts/evaluator-doctor.sh --smoke swe-bench
 ```
 
+正式成绩要求评测机为 Linux x86_64、使用官方 Case 镜像，并且 `/health` 中目标 Evaluator 同时显示 `ready=true` 和 `formalEligible=true`。`ready=true` 只说明服务可运行，不代表当前环境可产出正式分数；ARM64 或非官方镜像仅用于链路 Smoke。
+
 在 Agent Insight 主服务所在机器上，用权限为 `0600` 的 Token 文件更新通信目标：
 
 ```bash
@@ -88,7 +90,9 @@ Agent Insight、执行客户端和 Evaluator 都部署在同一台机器时，`-
 
 执行客户端会把 Artifact 上传和完成回调作为独立的持久化投递队列处理：网络失败时按指数退避重试，单次回调最多等待 30 秒，并且重试期间不占用 Agent 执行槽，后续 Case 仍可执行。Git 工作区的 shallow fetch 单次最多等待 120 秒，只对白名单内的 DNS、连接中断、超时、curl 传输和部分 5xx 等瞬时网络错误进行最多 3 次尝试；每次重试都重建临时仓库，第三次仅对该命令使用 HTTP/1.1，不修改宿主 Git 配置。仓库不存在、revision 不存在、鉴权、证书或磁盘错误不会重试。
 
-平台每 30 秒检查一次运行中的 Benchmark：Git 工作区准备阶段最多允许连续 7 分钟无进度；Agent 阶段超过任务上限再加 90 秒宽限期；收集、上传、清理阶段连续 5 分钟没有新进度时，会将该 Case 收敛为失败并继续结算实验，避免页面永久停在“正在生成 Trace”。
+平台每 30 秒检查一次运行中的 Benchmark。Agent 执行侧：Git 工作区准备阶段最多允许连续 7 分钟无进度；Agent 阶段超过任务上限再加 90 秒宽限期；收集、上传、清理阶段连续 5 分钟没有新进度时回收。评测侧：等待下发、下发结果不确定、证据收集/上传/清理和结果归一化连续 5 分钟无进度时回收；官方 Harness 超过评测任务上限再加 90 秒时回收。回收会把 Case 明确置为失败并通过持久化续跑继续结算实验，服务重启后也会恢复，不会让页面永久停在“正在生成 Trace”或“运行中”。
+
+评测服务只有收到结构完整、字段匹配的终态 ACK 才清除本地待回调任务；空响应、非 JSON 或字段不一致的 HTTP 2xx 仍会保留并重试。SWE-bench 正式结果还会对照冻结的实例、测试名单和 `report.json` 内容复核；常见明确错误码包括 `EVALUATION_TIMEOUT`、`SWE_HARNESS_RESULT_INVALID`、`RAW_RESULT_SCHEMA_INVALID`、`SWE_FORMAL_RESULT_INELIGIBLE`、`SWE_EVIDENCE_CONTRACT_INVALID` 和 `RESULT_MAPPING_FAILED`。
 
 ## 推荐流程
 
@@ -145,6 +149,8 @@ Agent Insight、执行客户端和 Evaluator 都部署在同一台机器时，`-
 - 样本是否开始进入 `running`
 - 是否出现明显的 `failed`
 - 已完成数量是否持续增加
+
+若失败发生在 Benchmark 官方评测阶段，应优先展开 Case 详情查看错误码：`SWE_FORMAL_RESULT_INELIGIBLE` 表示环境仅适合 Smoke；`SWE_EVIDENCE_CONTRACT_INVALID` 表示报告/证据与冻结任务不一致；`EVALUATION_TIMEOUT` 表示 Harness 已超时并被终止。这些错误不会被误计为业务不通过或 0 分。
 
 这一阶段的核心目标是确认流程已正常运行，而非立即得出深度结论。
 

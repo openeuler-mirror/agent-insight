@@ -6,7 +6,10 @@ import test from 'node:test'
 
 import { getBenchmarkAdapter } from '../../../src/lib/benchmark/adapter-registry'
 import { sweBenchAdapter } from '../adapter'
-import type { ReadonlySubmissionArtifact } from '../../../packages/benchmark-protocol/src/evaluation-contracts'
+import type {
+  EvaluationJob,
+  ReadonlySubmissionArtifact,
+} from '../../../packages/benchmark-protocol/src/evaluation-contracts'
 
 const fixture = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, '../fixtures/smoke-case.json'), 'utf8'),
@@ -76,6 +79,35 @@ function submissionArtifact(runId: string, patch: string): ReadonlySubmissionArt
   }
 }
 
+function normalizationJob(
+  evaluationId: string,
+  instanceId: string,
+  failToPass: string[],
+  passToPass: string[],
+): EvaluationJob {
+  return {
+    protocolVersion: 'benchmark-evaluation/v1',
+    evaluationId,
+    executionRunId: 'erun_normalize',
+    context: {
+      experimentId: 'exp_normalize',
+      caseId: 'case_normalize',
+      datasetContentHash: `sha256:${'a'.repeat(64)}`,
+    },
+    benchmark: { key: 'swe-bench' },
+    evaluator: { key: 'swe-bench' },
+    artifacts: [],
+    payload: {
+      instance: {
+        instance_id: instanceId,
+        FAIL_TO_PASS: failToPass,
+        PASS_TO_PASS: passToPass,
+      },
+    },
+    limits: { timeoutSeconds: 60, cpu: 1, memoryMiB: 1024 },
+  }
+}
+
 test('SWE-bench adapter validates model.patch and rejects repository escapes', async () => {
   const split = sweBenchAdapter.validateAndSplitCase(fixture)
   const task = sweBenchAdapter.buildAgentTask({
@@ -133,34 +165,60 @@ test('SWE-bench evaluation request keeps hidden tests but excludes gold patch', 
 })
 
 test('SWE-bench adapter normalizes resolved, unresolved and infrastructure results', () => {
-  const evidenceArtifacts = [{
-    artifactId: 'beart_report',
+  const instanceId = 'pallets__flask-5014'
+  const failToPassTests = ['test_regression']
+  const passToPassTests = Array.from({ length: 59 }, (_, index) => `test_existing_${index}`)
+  const evaluationJob = normalizationJob(
+    'veval_result', instanceId, failToPassTests, passToPassTests,
+  )
+  const evidenceArtifacts = [
+    { name: 'report.json', kind: 'official-report', mediaType: 'application/json' },
+    { name: 'test_output.txt', kind: 'test-output', mediaType: 'text/plain' },
+    { name: 'run_instance.log', kind: 'harness-log', mediaType: 'text/plain' },
+  ].map((artifact, index) => ({
+    ...artifact,
+    artifactId: `beart_${index}`,
     evaluationId: 'veval_result',
-    name: 'report.json',
-    kind: 'official-report',
-    mediaType: 'application/json',
-    sha256: `sha256:${'a'.repeat(64)}` as const,
+    sha256: `sha256:${String(index + 1).repeat(64)}` as `sha256:${string}`,
     sizeBytes: 100,
-  }]
-  const completed = (resolved: boolean) => sweBenchAdapter.normalizeResult({
-    evaluationId: 'veval_result',
-    evaluatorKey: 'swe-bench',
-    evidenceArtifacts,
-    completion: {
+  }))
+  const completed = (resolved: boolean) => {
+    const officialReport = {
+      [instanceId]: {
+        resolved,
+        patch_successfully_applied: true,
+        tests_status: {
+          FAIL_TO_PASS: {
+            success: resolved ? failToPassTests : [],
+            failure: resolved ? [] : failToPassTests,
+          },
+          PASS_TO_PASS: { success: passToPassTests, failure: [] },
+        },
+      },
+    }
+    return sweBenchAdapter.normalizeResult({
+      evaluationId: 'veval_result',
+      evaluatorKey: 'swe-bench',
+      evaluationJob,
+      evidenceArtifacts: evidenceArtifacts.map((artifact) => artifact.name === 'report.json'
+        ? { ...artifact, jsonContent: officialReport }
+        : artifact),
+      completion: {
       status: 'completed',
       rawResult: {
-        instanceId: 'pallets__flask-5014',
+        instanceId,
         resolved,
         patchSuccessfullyApplied: true,
         failToPass: { passed: resolved ? 1 : 0, total: 1 },
         passToPass: { passed: 59, total: 59 },
-        officialReport: { hiddenHarnessDetail: true },
+        officialReport,
       },
-      evidenceArtifactIds: ['beart_report'],
-      runtimeFacts: {},
+      evidenceArtifactIds: evidenceArtifacts.map((artifact) => artifact.artifactId),
+      runtimeFacts: { formalEligible: true },
       cleanup: { status: 'succeeded' },
     },
-  })
+    })
+  }
   assert.deepEqual(
     { verdict: completed(true).verdict, score: completed(true).score },
     { verdict: 'pass', score: 100 },
@@ -180,6 +238,7 @@ test('SWE-bench adapter normalizes resolved, unresolved and infrastructure resul
   const failed = sweBenchAdapter.normalizeResult({
     evaluationId: 'veval_result',
     evaluatorKey: 'swe-bench',
+    evaluationJob,
     evidenceArtifacts,
     completion: {
       status: 'failed',
@@ -192,4 +251,136 @@ test('SWE-bench adapter normalizes resolved, unresolved and infrastructure resul
   })
   assert.equal(failed.status, 'failed')
   assert.equal(failed.score, null)
+})
+
+test('SWE-bench adapter fails closed for ineligible, mismatched or incomplete completed results', () => {
+  const instanceId = 'pallets__flask-5014'
+  const evidenceArtifacts = [
+    { name: 'report.json', kind: 'official-report', mediaType: 'application/json' },
+    { name: 'test_output.txt', kind: 'test-output', mediaType: 'text/plain' },
+    { name: 'run_instance.log', kind: 'harness-log', mediaType: 'text/plain' },
+  ].map((artifact, index) => ({
+    ...artifact,
+    artifactId: `beart_integrity_${index}`,
+    evaluationId: 'veval_integrity',
+    sha256: `sha256:${String(index + 4).repeat(64)}` as `sha256:${string}`,
+    sizeBytes: 100,
+  }))
+  const rawResult = {
+    instanceId,
+    resolved: true,
+    patchSuccessfullyApplied: true,
+    failToPass: { passed: 1, total: 1 },
+    passToPass: { passed: 1, total: 1 },
+    officialReport: {
+      [instanceId]: {
+        resolved: true,
+        patch_successfully_applied: true,
+        tests_status: {
+          FAIL_TO_PASS: { success: ['test_regression'], failure: [] },
+          PASS_TO_PASS: { success: ['test_existing'], failure: [] },
+        },
+      },
+    },
+  }
+  const normalize = (overrides: {
+    jobInstanceId?: string
+    evidenceArtifacts?: typeof evidenceArtifacts
+    rawResult?: Record<string, unknown>
+    formalEligible?: boolean
+  } = {}) => {
+    const result = overrides.rawResult || rawResult
+    const artifacts = (overrides.evidenceArtifacts || evidenceArtifacts).map((artifact) => (
+      artifact.name === 'report.json'
+        ? { ...artifact, jsonContent: result.officialReport }
+        : artifact
+    ))
+    return sweBenchAdapter.normalizeResult({
+      evaluationId: 'veval_integrity',
+      evaluatorKey: 'swe-bench',
+      evaluationJob: normalizationJob(
+        'veval_integrity',
+        overrides.jobInstanceId || instanceId,
+        ['test_regression'],
+        ['test_existing'],
+      ),
+      evidenceArtifacts: artifacts,
+      completion: {
+      status: 'completed',
+      rawResult: result,
+      evidenceArtifactIds: artifacts
+        .map((artifact) => artifact.artifactId),
+      runtimeFacts: { formalEligible: overrides.formalEligible ?? true },
+      cleanup: { status: 'succeeded' },
+    },
+    })
+  }
+
+  assert.throws(
+    () => normalize({ rawResult: { ...rawResult, resolved: 'false' } }),
+    (error: Error & { code?: string }) => error.code === 'RAW_RESULT_SCHEMA_INVALID',
+  )
+  assert.throws(
+    () => normalize({ formalEligible: false }),
+    (error: Error & { code?: string }) => error.code === 'SWE_FORMAL_RESULT_INELIGIBLE',
+  )
+  assert.throws(
+    () => normalize({ jobInstanceId: 'astropy__astropy-1' }),
+    (error: Error & { code?: string }) => error.code === 'SWE_RAW_RESULT_INVALID',
+  )
+  assert.throws(
+    () => normalize({ evidenceArtifacts: evidenceArtifacts.slice(0, 1) }),
+    (error: Error & { code?: string }) => error.code === 'SWE_EVIDENCE_CONTRACT_INVALID',
+  )
+  assert.throws(
+    () => normalize({
+      evidenceArtifacts: [
+        ...evidenceArtifacts,
+        {
+          name: 'extra.txt',
+          kind: 'debug-log',
+          mediaType: 'text/plain',
+          artifactId: 'beart_integrity_extra',
+          evaluationId: 'veval_integrity',
+          sha256: `sha256:${'9'.repeat(64)}` as `sha256:${string}`,
+          sizeBytes: 100,
+        },
+      ],
+    }),
+    (error: Error & { code?: string }) => error.code === 'SWE_EVIDENCE_CONTRACT_INVALID',
+  )
+  assert.throws(
+    () => normalize({
+      rawResult: {
+        ...rawResult,
+        officialReport: {
+          [instanceId]: {
+            ...(rawResult.officialReport[instanceId]),
+            resolved: false,
+          },
+        },
+      },
+    }),
+    (error: Error & { code?: string }) => error.code === 'SWE_RAW_RESULT_INVALID',
+  )
+  assert.throws(
+    () => normalize({
+      rawResult: {
+        ...rawResult,
+        failToPass: { passed: 0, total: 0 },
+        passToPass: { passed: 0, total: 0 },
+        officialReport: {
+          [instanceId]: {
+            resolved: true,
+            patch_successfully_applied: true,
+            tests_status: {
+              FAIL_TO_PASS: { success: [], failure: [] },
+              PASS_TO_PASS: { success: [], failure: [] },
+            },
+          },
+        },
+      },
+    }),
+    (error: Error & { code?: string }) => error.code === 'SWE_RAW_RESULT_INVALID',
+  )
 })

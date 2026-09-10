@@ -63,10 +63,18 @@ def ensure_file(path: Path, content: str) -> None:
 
 
 def test_counts(report: dict, key: str) -> dict[str, int]:
-    metric = (report.get("tests_status") or {}).get(key) or {}
-    passed = len(metric.get("success") or [])
-    failed = len(metric.get("failure") or [])
+    tests_status = report.get("tests_status")
+    metric = tests_status.get(key) if isinstance(tests_status, dict) else None
+    success = metric.get("success") if isinstance(metric, dict) else None
+    failure = metric.get("failure") if isinstance(metric, dict) else None
+    passed = len(success) if isinstance(success, list) else 0
+    failed = len(failure) if isinstance(failure, list) else 0
     return {"passed": passed, "total": passed + failed}
+
+
+def boolean_field(report: dict, key: str) -> bool:
+    value = report.get(key)
+    return value if isinstance(value, bool) else False
 
 
 def cleanup_labeled(client, evaluation_id: str) -> dict:
@@ -134,7 +142,11 @@ def main(input_path: str, output_path: str) -> int:
             report_map = result[1]
         elif report_path.exists():
             report_map = json.loads(report_path.read_text(encoding="utf-8"))
-        report = (report_map or {}).get(instance["instance_id"])
+        report = (
+            report_map.get(instance["instance_id"])
+            if isinstance(report_map, dict)
+            else None
+        )
         log_text = (
             instance_log_path.read_text(encoding="utf-8", errors="replace")
             if instance_log_path.exists()
@@ -155,22 +167,28 @@ def main(input_path: str, output_path: str) -> int:
         cleanup = cleanup_labeled(client, evaluation_id)
         client.close()
 
-    report = (report_map or {}).get(instance["instance_id"]) or {}
+    report = (
+        report_map.get(instance["instance_id"])
+        if isinstance(report_map, dict)
+        else None
+    )
+    report = report if isinstance(report, dict) else {}
     raw_result = {
         "instanceId": instance["instance_id"],
-        "resolved": bool(report.get("resolved", False)),
-        "patchSuccessfullyApplied": bool(
-            report.get("patch_successfully_applied", False)
+        "resolved": boolean_field(report, "resolved"),
+        "patchSuccessfullyApplied": boolean_field(
+            report, "patch_successfully_applied"
         ),
         "failToPass": test_counts(report, "FAIL_TO_PASS"),
         "passToPass": test_counts(report, "PASS_TO_PASS"),
-        "officialReport": report_map or {},
+        "officialReport": report_map if isinstance(report_map, dict) else {},
     }
     ensure_file(report_path, json.dumps(report_map or {}, indent=2) + "\n")
     ensure_file(test_output_path, "Harness did not produce test_output.txt\n")
     ensure_file(instance_log_path, "Harness did not produce run_instance.log\n")
     runtime_facts = {
         **payload["runtimeFacts"],
+        "instanceId": instance["instance_id"],
         "controllerPlatform": platform.platform(),
         "durationMs": round((time.monotonic() - started) * 1000),
     }

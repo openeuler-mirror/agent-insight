@@ -16,6 +16,42 @@ function sha256(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function invalidCallbackResponse(code, message) {
+  return new PlatformClientError(code, message, 502, true)
+}
+
+function assertProgressAcknowledgement(body) {
+  if (!isPlainObject(body) || body.accepted !== true || body.desiredState !== 'continue') {
+    throw invalidCallbackResponse(
+      'PROGRESS_CALLBACK_RESPONSE_INVALID',
+      'Agent Insight 进度回调响应不符合协议',
+    )
+  }
+  return body
+}
+
+function assertCompletionAcknowledgement(body, completion) {
+  const expectedNormalizedStatus = completion.status === 'failed' ? 'failed' : 'done'
+  if (
+    !isPlainObject(body)
+    || body.accepted !== true
+    || body.evaluationStatus !== completion.status
+    || body.normalizationStatus !== 'completed'
+    || !isPlainObject(body.normalizedResult)
+    || body.normalizedResult.status !== expectedNormalizedStatus
+  ) {
+    throw invalidCallbackResponse(
+      'COMPLETION_CALLBACK_RESPONSE_INVALID',
+      'Agent Insight 评测完成回调响应不符合协议',
+    )
+  }
+  return body
+}
+
 class AgentInsightPlatformClient {
   constructor(token, fetchImpl = fetch, authMode = 'token') {
     if (!['token', 'none'].includes(authMode)) throw new Error('EVALUATOR_AUTH_MODE must be token or none')
@@ -78,7 +114,9 @@ class AgentInsightPlatformClient {
       body: JSON.stringify(event),
       signal: AbortSignal.timeout(10_000),
     })
-    return this.responseJson(response, 'PROGRESS_CALLBACK_FAILED')
+    return assertProgressAcknowledgement(
+      await this.responseJson(response, 'PROGRESS_CALLBACK_FAILED'),
+    )
   }
 
   async uploadEvidence(request, evidence) {
@@ -115,8 +153,17 @@ class AgentInsightPlatformClient {
       body: JSON.stringify(completion),
       signal: AbortSignal.timeout(30_000),
     })
-    return this.responseJson(response, 'COMPLETION_CALLBACK_FAILED')
+    return assertCompletionAcknowledgement(
+      await this.responseJson(response, 'COMPLETION_CALLBACK_FAILED'),
+      completion,
+    )
   }
 }
 
-module.exports = { AgentInsightPlatformClient, PlatformClientError, sha256 }
+module.exports = {
+  AgentInsightPlatformClient,
+  PlatformClientError,
+  assertCompletionAcknowledgement,
+  assertProgressAcknowledgement,
+  sha256,
+}

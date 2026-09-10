@@ -5,11 +5,36 @@ import {
   defaultEvaluatorTargetResolver,
   type EvaluatorTargetResolver,
 } from './evaluator-target'
+import {
+  resumeBenchmarkEvaluationContinuations,
+  scheduleBenchmarkEvaluationContinuation,
+} from './evaluation-continuation-service'
 
 type DispatchFetch = typeof fetch
 let dispatchFetch: DispatchFetch = fetch
 let targetResolver: EvaluatorTargetResolver = defaultEvaluatorTargetResolver
 const healthCache = new Map<string, number>()
+const EVALUATION_WATCHDOG_INTERVAL_MS = 30_000
+const EVALUATION_WATCHDOG_GRACE_MS = 90_000
+const EVALUATION_STALL_TIMEOUT_MS = 5 * 60_000
+const WATCHED_EVALUATION_STATUSES = [
+  'queued',
+  'dispatch_unknown',
+  'running_evaluator',
+  'normalizing',
+] as const
+const DISPATCH_ACTIVE_EVALUATION_STATUSES = [
+  'queued',
+  'dispatch_unknown',
+  'running_evaluator',
+] as const
+const POST_HARNESS_STAGES = new Set([
+  'collecting_evidence',
+  'uploading_evidence',
+  'cleaning',
+])
+let evaluationWatchdogTimer: ReturnType<typeof setInterval> | null = null
+let evaluationWatchdogSweep: Promise<number> | null = null
 
 export function setBenchmarkEvaluationDispatchFetchForTest(replacement?: DispatchFetch): void {
   dispatchFetch = replacement || fetch
@@ -48,17 +73,193 @@ function responseErrorCode(value: Record<string, unknown>): string {
     : ''
 }
 
+function parseJsonRecord(value: string | null): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function evaluationTimeout(input: {
+  status: string
+  timeoutSeconds: number
+  progressJson: string | null
+  lastProgressAt: Date | null
+  startedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}, now: Date, graceMs: number): { code: string; message: string } | null {
+  const progress = parseJsonRecord(input.progressJson)
+  const stage = typeof progress.stage === 'string' ? progress.stage : ''
+  let deadline: Date
+  let code: string
+  let message: string
+
+  if (input.status === 'normalizing') {
+    deadline = new Date((input.lastProgressAt || input.updatedAt).getTime() + EVALUATION_STALL_TIMEOUT_MS)
+    code = 'EVALUATION_NORMALIZATION_TIMEOUT'
+    message = '评测结果归一化超过 300 秒无进度，平台已自动结束任务'
+  } else if (input.status === 'queued' || input.status === 'dispatch_unknown') {
+    deadline = new Date(input.createdAt.getTime() + EVALUATION_STALL_TIMEOUT_MS)
+    code = 'EVALUATION_DISPATCH_TIMEOUT'
+    message = '评测任务下发超过 300 秒仍未被确认，平台已自动结束任务'
+  } else if (POST_HARNESS_STAGES.has(stage)) {
+    deadline = new Date((input.lastProgressAt || input.updatedAt).getTime() + EVALUATION_STALL_TIMEOUT_MS)
+    code = 'EVALUATION_POST_PROCESS_TIMEOUT'
+    message = '评测结果收集、上传或清理超过 300 秒无进度，平台已自动结束任务'
+  } else {
+    const timeoutMs = Math.max(1, input.timeoutSeconds) * 1_000 + graceMs
+    deadline = new Date((input.startedAt || input.createdAt).getTime() + timeoutMs)
+    code = 'EVALUATION_TIMEOUT'
+    message = `评测执行超过 ${input.timeoutSeconds} 秒且宽限期内未完成，平台已自动结束任务`
+  }
+  return deadline <= now ? { code, message } : null
+}
+
+export async function reapStaleBenchmarkEvaluations(options: {
+  now?: Date
+  graceMs?: number
+  limit?: number
+  experimentId?: string
+} = {}): Promise<number> {
+  const now = options.now || new Date()
+  const graceMs = Math.max(0, options.graceMs ?? EVALUATION_WATCHDOG_GRACE_MS)
+  const candidates = await prisma.benchmarkEvaluation.findMany({
+    where: {
+      status: { in: [...WATCHED_EVALUATION_STATUSES] },
+      ...(options.experimentId ? { caseRun: { experimentId: options.experimentId } } : {}),
+    },
+    orderBy: { updatedAt: 'asc' },
+    take: Math.min(500, Math.max(1, options.limit ?? 100)),
+    select: {
+      id: true,
+      caseRunId: true,
+      attemptNo: true,
+      status: true,
+      timeoutSeconds: true,
+      progressJson: true,
+      lastProgressAt: true,
+      startedAt: true,
+      createdAt: true,
+      updatedAt: true,
+      evaluatorKey: true,
+      caseRun: {
+        select: { experimentId: true, experimentCaseId: true },
+      },
+    },
+  })
+
+  let reaped = 0
+  for (const evaluation of candidates) {
+    const timeout = evaluationTimeout(evaluation, now, graceMs)
+    if (!timeout) continue
+    const claimed = await prisma.$transaction(async (tx) => {
+      const claim = await tx.benchmarkEvaluation.updateMany({
+        where: {
+          id: evaluation.id,
+          status: evaluation.status,
+          updatedAt: evaluation.updatedAt,
+        },
+        data: {
+          status: 'failed',
+          failureCode: timeout.code,
+          failureMessage: timeout.message,
+          lastProgressAt: now,
+          finishedAt: now,
+          continuationStatus: 'pending',
+          continuationTriedAt: null,
+          continuationError: null,
+        },
+      })
+      if (claim.count !== 1) return false
+      await tx.benchmarkEvaluationDispatchOutbox.updateMany({
+        where: {
+          evaluationId: evaluation.id,
+          status: { in: ['pending', 'unknown', 'sending', 'accepted'] },
+        },
+        data: {
+          status: 'failed',
+          leasedUntil: null,
+          errorCode: timeout.code,
+          errorMessage: timeout.message,
+        },
+      })
+      await tx.benchmarkCaseRun.updateMany({
+        where: { id: evaluation.caseRunId, status: 'submitted' },
+        data: {
+          status: 'evaluation_failed',
+          failureCode: timeout.code,
+          failureMessage: timeout.message,
+          finishedAt: now,
+        },
+      })
+      await tx.experimentEvalResult.updateMany({
+        where: {
+          experimentId: evaluation.caseRun.experimentId,
+          caseId: evaluation.caseRun.experimentCaseId,
+          evaluatorId: `benchmark:${evaluation.evaluatorKey}`,
+          status: { in: ['pending', 'running'] },
+        },
+        data: { status: 'failed', errorMessage: timeout.message },
+      })
+      return true
+    })
+    if (!claimed) continue
+    scheduleBenchmarkEvaluationContinuation(evaluation.id)
+    reaped += 1
+  }
+  return reaped
+}
+
+export function startBenchmarkEvaluationWatchdog(
+  intervalMs = EVALUATION_WATCHDOG_INTERVAL_MS,
+): void {
+  if (evaluationWatchdogTimer) return
+  const tick = () => {
+    if (evaluationWatchdogSweep) return
+    evaluationWatchdogSweep = reapStaleBenchmarkEvaluations()
+      .then(async (count) => {
+        await resumeBenchmarkEvaluationContinuations()
+        if (count > 0) console.warn(`[benchmark/evaluation-watchdog] 回收超时评测任务: ${count} 条`)
+        return count
+      })
+      .catch((error) => {
+        console.error('[benchmark/evaluation-watchdog] sweep failed', error)
+        return 0
+      })
+      .finally(() => {
+        evaluationWatchdogSweep = null
+      })
+  }
+  evaluationWatchdogTimer = setInterval(tick, Math.max(1_000, intervalMs))
+  evaluationWatchdogTimer.unref?.()
+}
+
 async function markPending(evaluationId: string, input: {
+  attemptNo: number
   status?: number
   responseJson?: string
   code: string
   message: string
   delayMs: number
-}): Promise<void> {
+}): Promise<boolean> {
   const nextAttemptAt = new Date(Date.now() + input.delayMs)
-  await prisma.$transaction([
-    prisma.benchmarkEvaluationDispatchOutbox.update({
-      where: { evaluationId },
+  const transitioned = await prisma.$transaction(async (tx) => {
+    const evaluation = await tx.benchmarkEvaluation.updateMany({
+      where: {
+        id: evaluationId,
+        status: { in: [...DISPATCH_ACTIVE_EVALUATION_STATUSES] },
+        completionDigest: null,
+      },
+      data: { status: 'queued', failureCode: input.code, failureMessage: input.message },
+    })
+    if (evaluation.count !== 1) return false
+    const outbox = await tx.benchmarkEvaluationDispatchOutbox.updateMany({
+      where: { evaluationId, status: 'sending', attemptCount: input.attemptNo },
       data: {
         status: 'pending',
         leasedUntil: null,
@@ -68,28 +269,62 @@ async function markPending(evaluationId: string, input: {
         errorMessage: input.message,
         nextAttemptAt,
       },
-    }),
-    prisma.benchmarkEvaluation.update({
-      where: { id: evaluationId },
-      data: { status: 'queued', failureCode: input.code, failureMessage: input.message },
-    }),
-  ])
+    })
+    if (outbox.count !== 1) {
+      throw new BenchmarkProtocolError('EVALUATION_DISPATCH_OWNERSHIP_LOST', '评测下发租约已失效', 409)
+    }
+    return true
+  }).catch((error) => {
+    if (error instanceof BenchmarkProtocolError && error.code === 'EVALUATION_DISPATCH_OWNERSHIP_LOST') {
+      return false
+    }
+    throw error
+  })
+  if (!transitioned) return false
   scheduleDispatch(evaluationId, input.delayMs)
+  return true
 }
 
 async function markFailed(evaluationId: string, input: {
+  attemptNo: number
   status?: number
   responseJson?: string
   code: string
   message: string
-}): Promise<void> {
-  const evaluation = await prisma.benchmarkEvaluation.findUnique({
-    where: { id: evaluationId },
-    include: { caseRun: { select: { id: true, experimentId: true, experimentCaseId: true } } },
-  })
-  await prisma.$transaction([
-    prisma.benchmarkEvaluationDispatchOutbox.update({
-      where: { evaluationId },
+}): Promise<boolean> {
+  const transitioned = await prisma.$transaction(async (tx) => {
+    const evaluation = await tx.benchmarkEvaluation.findUnique({
+      where: { id: evaluationId },
+      include: { caseRun: { select: { id: true, experimentId: true, experimentCaseId: true } } },
+    })
+    if (
+      !evaluation
+      || !DISPATCH_ACTIVE_EVALUATION_STATUSES.includes(
+        evaluation.status as typeof DISPATCH_ACTIVE_EVALUATION_STATUSES[number],
+      )
+      || evaluation.completionDigest
+    ) {
+      return null
+    }
+    const updatedEvaluation = await tx.benchmarkEvaluation.updateMany({
+      where: {
+        id: evaluationId,
+        status: evaluation.status,
+        completionDigest: null,
+      },
+      data: {
+        status: 'dispatch_failed',
+        failureCode: input.code,
+        failureMessage: input.message,
+        finishedAt: new Date(),
+        continuationStatus: 'pending',
+        continuationTriedAt: null,
+        continuationError: null,
+      },
+    })
+    if (updatedEvaluation.count !== 1) return null
+    const outbox = await tx.benchmarkEvaluationDispatchOutbox.updateMany({
+      where: { evaluationId, status: 'sending', attemptCount: input.attemptNo },
       data: {
         status: 'failed',
         leasedUntil: null,
@@ -98,46 +333,133 @@ async function markFailed(evaluationId: string, input: {
         errorCode: input.code,
         errorMessage: input.message,
       },
-    }),
-    prisma.benchmarkEvaluation.update({
-      where: { id: evaluationId },
+    })
+    if (outbox.count !== 1) {
+      throw new BenchmarkProtocolError('EVALUATION_DISPATCH_OWNERSHIP_LOST', '评测下发租约已失效', 409)
+    }
+    await tx.benchmarkCaseRun.updateMany({
+      where: { id: evaluation.caseRun.id, status: 'submitted' },
       data: {
-        status: 'dispatch_failed',
+        status: 'evaluation_failed',
         failureCode: input.code,
         failureMessage: input.message,
         finishedAt: new Date(),
       },
-    }),
-    ...(evaluation ? [
-      prisma.benchmarkCaseRun.update({
-        where: { id: evaluation.caseRun.id },
-        data: {
-          status: 'evaluation_failed',
-          failureCode: input.code,
-          failureMessage: input.message,
-          finishedAt: new Date(),
-        },
-      }),
-      prisma.experimentEvalResult.updateMany({
-        where: {
-          experimentId: evaluation.caseRun.experimentId,
-          caseId: evaluation.caseRun.experimentCaseId,
-          evaluatorId: `benchmark:${evaluation.evaluatorKey}`,
-        },
-        data: { status: 'failed', errorMessage: input.message },
-      }),
-    ] : []),
-  ])
-  if (evaluation) {
-    const { finalizeBenchmarkCase } = await import('./experiment-lifecycle')
-    await finalizeBenchmarkCase({
-      caseRunId: evaluation.caseRun.id,
-      runSupplementalEvaluators: evaluation.attemptNo === 1,
-      continueCases: evaluation.attemptNo === 1,
-    }).catch((error) => {
-      console.error('[benchmark/evaluation-scheduler] failed to settle rejected evaluation', error)
     })
-  }
+    await tx.experimentEvalResult.updateMany({
+      where: {
+        experimentId: evaluation.caseRun.experimentId,
+        caseId: evaluation.caseRun.experimentCaseId,
+        evaluatorId: `benchmark:${evaluation.evaluatorKey}`,
+        status: { in: ['pending', 'running'] },
+      },
+      data: { status: 'failed', errorMessage: input.message },
+    })
+    return evaluation.id
+  }).catch((error) => {
+    if (error instanceof BenchmarkProtocolError && error.code === 'EVALUATION_DISPATCH_OWNERSHIP_LOST') {
+      return null
+    }
+    throw error
+  })
+  if (!transitioned) return false
+  scheduleBenchmarkEvaluationContinuation(transitioned)
+  return true
+}
+
+async function markAccepted(evaluationId: string, attemptNo: number, input: {
+  status: number
+  responseJson: string
+}): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const evaluation = await tx.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
+    if (!evaluation) return false
+    if (
+      !evaluation.completionDigest
+      && !DISPATCH_ACTIVE_EVALUATION_STATUSES.includes(
+        evaluation.status as typeof DISPATCH_ACTIVE_EVALUATION_STATUSES[number],
+      )
+    ) {
+      return false
+    }
+    const outbox = await tx.benchmarkEvaluationDispatchOutbox.updateMany({
+      where: { evaluationId, status: 'sending', attemptCount: attemptNo },
+      data: {
+        status: 'accepted',
+        leasedUntil: null,
+        httpStatus: input.status,
+        responseJson: input.responseJson,
+        errorCode: null,
+        errorMessage: null,
+      },
+    })
+    if (outbox.count !== 1) return false
+    if (!evaluation.completionDigest) {
+      await tx.benchmarkEvaluation.updateMany({
+        where: {
+          id: evaluationId,
+          status: { in: [...DISPATCH_ACTIVE_EVALUATION_STATUSES] },
+          completionDigest: null,
+        },
+        data: {
+          status: 'running_evaluator',
+          failureCode: null,
+          failureMessage: null,
+          startedAt: evaluation.startedAt || new Date(),
+        },
+      })
+    }
+    return true
+  })
+}
+
+async function markUnknown(
+  evaluationId: string,
+  attemptNo: number,
+  message: string,
+): Promise<'unknown' | 'accepted' | 'lost'> {
+  return prisma.$transaction(async (tx) => {
+    const evaluation = await tx.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
+    if (!evaluation) return 'lost'
+    if (evaluation.completionDigest) {
+      const accepted = await tx.benchmarkEvaluationDispatchOutbox.updateMany({
+        where: { evaluationId, status: 'sending', attemptCount: attemptNo },
+        data: { status: 'accepted', leasedUntil: null },
+      })
+      return accepted.count === 1 ? 'accepted' : 'lost'
+    }
+    if (!DISPATCH_ACTIVE_EVALUATION_STATUSES.includes(
+      evaluation.status as typeof DISPATCH_ACTIVE_EVALUATION_STATUSES[number]
+    )) return 'lost'
+    const updatedEvaluation = await tx.benchmarkEvaluation.updateMany({
+      where: { id: evaluationId, status: evaluation.status, completionDigest: null },
+      data: {
+        status: 'dispatch_unknown',
+        failureCode: 'EVALUATION_DISPATCH_OUTCOME_UNKNOWN',
+        failureMessage: message,
+      },
+    })
+    if (updatedEvaluation.count !== 1) return 'lost'
+    const outbox = await tx.benchmarkEvaluationDispatchOutbox.updateMany({
+      where: { evaluationId, status: 'sending', attemptCount: attemptNo },
+      data: {
+        status: 'unknown',
+        leasedUntil: null,
+        errorCode: 'EVALUATION_DISPATCH_OUTCOME_UNKNOWN',
+        errorMessage: message,
+        nextAttemptAt: new Date(),
+      },
+    })
+    if (outbox.count !== 1) {
+      throw new BenchmarkProtocolError('EVALUATION_DISPATCH_OWNERSHIP_LOST', '评测下发租约已失效', 409)
+    }
+    return 'unknown'
+  }).catch((error) => {
+    if (error instanceof BenchmarkProtocolError && error.code === 'EVALUATION_DISPATCH_OWNERSHIP_LOST') {
+      return 'lost'
+    }
+    throw error
+  })
 }
 
 async function freezeTarget(evaluationId: string) {
@@ -199,11 +521,15 @@ async function ensureHealthy(
   })
   const body = await responseBody(response)
   const evaluators = Array.isArray(body.value.evaluators) ? body.value.evaluators : []
-  const ready = evaluators.some((item) => {
+  const evaluator = evaluators.find((item) => {
     if (!item || typeof item !== 'object') return false
     const value = item as Record<string, unknown>
-    return value.key === evaluatorKey && value.ready === true
+    return value.key === evaluatorKey
   })
+  const evaluatorState = evaluator && typeof evaluator === 'object'
+    ? evaluator as Record<string, unknown>
+    : null
+  const ready = evaluatorState?.ready === true
   if (!response.ok || body.value.status !== 'healthy' || body.value.busy === true || !ready) {
     throw new BenchmarkProtocolError(
       body.value.busy === true ? 'SERVICE_BUSY' : 'EVALUATOR_NOT_READY',
@@ -212,21 +538,20 @@ async function ensureHealthy(
       true,
     )
   }
+  if (evaluatorState.formalEligible !== true) {
+    throw new BenchmarkProtocolError(
+      'EVALUATOR_NOT_FORMAL_ELIGIBLE',
+      typeof evaluatorState.reason === 'string' && evaluatorState.reason.trim()
+        ? `当前评测服务不能用于正式计分：${evaluatorState.reason}`
+        : '当前评测服务不能用于正式计分',
+      422,
+      false,
+    )
+  }
   healthCache.set(cacheKey, Date.now())
 }
 
 export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise<void> {
-  let target
-  try {
-    target = await freezeTarget(evaluationId)
-  } catch (error) {
-    const protocolError = error instanceof BenchmarkProtocolError
-      ? error
-      : new BenchmarkProtocolError('EVALUATOR_CONFIGURATION_INVALID', '评测服务配置不合法', 500)
-    await markFailed(evaluationId, { code: protocolError.code, message: protocolError.message })
-    return
-  }
-
   const claimed = await prisma.benchmarkEvaluationDispatchOutbox.updateMany({
     where: {
       evaluationId,
@@ -239,6 +564,21 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
   if (claimed.count !== 1) return
   const outbox = await prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId } })
   if (!outbox) return
+  const attemptNo = outbox.attemptCount
+  let target
+  try {
+    target = await freezeTarget(evaluationId)
+  } catch (error) {
+    const protocolError = error instanceof BenchmarkProtocolError
+      ? error
+      : new BenchmarkProtocolError('EVALUATOR_CONFIGURATION_INVALID', '评测服务配置不合法', 500)
+    await markFailed(evaluationId, {
+      attemptNo,
+      code: protocolError.code,
+      message: protocolError.message,
+    })
+    return
+  }
   let postStarted = false
   try {
     await ensureHealthy(target.baseUrl, target.evaluatorKey, target.token, target.targetKey)
@@ -262,28 +602,10 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       && body.value.requestDigest === outbox.requestDigest
       && body.value.status === 'accepted'
     ) {
-      await prisma.$transaction([
-        prisma.benchmarkEvaluationDispatchOutbox.update({
-          where: { evaluationId },
-          data: {
-            status: 'accepted',
-            leasedUntil: null,
-            httpStatus: response.status,
-            responseJson: body.text,
-            errorCode: null,
-            errorMessage: null,
-          },
-        }),
-        prisma.benchmarkEvaluation.updateMany({
-          where: { id: evaluationId, status: { in: ['queued', 'dispatch_unknown'] } },
-          data: {
-            status: 'running_evaluator',
-            failureCode: null,
-            failureMessage: null,
-            startedAt: new Date(),
-          },
-        }),
-      ])
+      await markAccepted(evaluationId, attemptNo, {
+        status: response.status,
+        responseJson: body.text,
+      })
       return
     }
     const remoteCode = responseErrorCode(body.value)
@@ -292,6 +614,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       || (response.status === 422 && body.value.retryable === true)
     if (retryable) {
       await markPending(evaluationId, {
+        attemptNo,
         status: response.status,
         responseJson: body.text,
         code: remoteCode || 'EVALUATOR_NOT_READY',
@@ -306,6 +629,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
         ? 'EVALUATION_DISPATCH_RESPONSE_MISMATCH'
         : remoteCode || 'EVALUATION_DISPATCH_REJECTED'
     await markFailed(evaluationId, {
+      attemptNo,
       status: response.status,
       responseJson: body.text,
       code,
@@ -314,39 +638,26 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
   } catch (error) {
     if (error instanceof BenchmarkProtocolError) {
       if (error.retryable) {
-        await markPending(evaluationId, { code: error.code, message: error.message, delayMs: 1_000 })
+        await markPending(evaluationId, {
+          attemptNo,
+          code: error.code,
+          message: error.message,
+          delayMs: 1_000,
+        })
       } else {
-        await markFailed(evaluationId, { code: error.code, message: error.message })
+        await markFailed(evaluationId, { attemptNo, code: error.code, message: error.message })
       }
       return
     }
     const message = error instanceof Error ? error.message : '评测服务连接中断'
-    if (postStarted && outbox.attemptCount < 2) {
-      await prisma.$transaction([
-        prisma.benchmarkEvaluationDispatchOutbox.update({
-          where: { evaluationId },
-          data: {
-            status: 'unknown',
-            leasedUntil: null,
-            errorCode: 'EVALUATION_DISPATCH_OUTCOME_UNKNOWN',
-            errorMessage: message,
-            nextAttemptAt: new Date(),
-          },
-        }),
-        prisma.benchmarkEvaluation.update({
-          where: { id: evaluationId },
-          data: {
-            status: 'dispatch_unknown',
-            failureCode: 'EVALUATION_DISPATCH_OUTCOME_UNKNOWN',
-            failureMessage: message,
-          },
-        }),
-      ])
-      await dispatchBenchmarkEvaluation(evaluationId)
+    if (postStarted && attemptNo < 2) {
+      const state = await markUnknown(evaluationId, attemptNo, message)
+      if (state === 'unknown') await dispatchBenchmarkEvaluation(evaluationId)
       return
     }
     if (!postStarted) {
       await markPending(evaluationId, {
+        attemptNo,
         code: 'EVALUATOR_UNREACHABLE',
         message,
         delayMs: 1_000,
@@ -354,6 +665,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       return
     }
     await markFailed(evaluationId, {
+      attemptNo,
       code: 'EVALUATION_DISPATCH_OUTCOME_UNKNOWN',
       message: `使用相同 evaluationId 重试后结果仍未知：${message}`,
     })

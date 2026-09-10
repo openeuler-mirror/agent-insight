@@ -123,13 +123,41 @@ export async function setupNodeRuntime(): Promise<void> {
   }
 
   try {
-    const { resumeBenchmarkEvaluationDispatchesAtStartup } = await import('@/lib/benchmark/evaluation-scheduler');
-    const resumed = await resumeBenchmarkEvaluationDispatchesAtStartup();
-    if (resumed > 0) {
-      console.warn(`[instrumentation] 恢复 Benchmark 评测下发: ${resumed} 条`);
+    const { resumeBenchmarkEvaluationContinuations } = await import(
+      '@/lib/benchmark/evaluation-continuation-service'
+    );
+    const {
+      reapStaleBenchmarkEvaluations,
+      resumeBenchmarkEvaluationDispatchesAtStartup,
+      startBenchmarkEvaluationWatchdog,
+    } = await import('@/lib/benchmark/evaluation-scheduler');
+    startBenchmarkEvaluationWatchdog();
+    try {
+      const reaped = await reapStaleBenchmarkEvaluations();
+      if (reaped > 0) {
+        console.warn(`[instrumentation] 回收超时 Benchmark 评测: ${reaped} 条`);
+      }
+    } catch (err) {
+      console.warn('[instrumentation] benchmark evaluation reap failed:', (err as Error)?.message);
+    }
+    try {
+      const resumed = await resumeBenchmarkEvaluationDispatchesAtStartup();
+      if (resumed > 0) {
+        console.warn(`[instrumentation] 恢复 Benchmark 评测下发: ${resumed} 条`);
+      }
+    } catch (err) {
+      console.warn('[instrumentation] benchmark evaluation dispatch resume failed:', (err as Error)?.message);
+    }
+    try {
+      const continued = await resumeBenchmarkEvaluationContinuations();
+      if (continued > 0) {
+        console.warn(`[instrumentation] 恢复 Benchmark 评测后续处理: ${continued} 条`);
+      }
+    } catch (err) {
+      console.warn('[instrumentation] benchmark evaluation continuation resume failed:', (err as Error)?.message);
     }
   } catch (err) {
-    console.warn('[instrumentation] benchmark evaluation dispatch resume failed:', (err as Error)?.message);
+    console.warn('[instrumentation] benchmark evaluation watchdog setup failed:', (err as Error)?.message);
   }
 
   // 启动时跑一次 uploader：把上一轮 dev server 留下的 spool 积压清掉，避免那些 trace
