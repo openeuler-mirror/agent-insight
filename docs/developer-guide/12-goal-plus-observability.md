@@ -76,6 +76,8 @@ Goal Plus collector 的配置优先级为专属环境变量、managed config、�
 
 native Pi 导入按 source 文件指纹、session descriptor 和每个稳定 event identity 的语义 hash 保存独立 checkpoint。文件及 descriptor 未变化时整段跳过；session 增长或终态变化时只追加新增/更新事件；文件截断或替换时重建该 session 基线。顺序固定为 `spool flush → import checkpoint 原子写入 → uploader`，所以网络失败只留下待上传数据，不会让下一次 5 秒扫描再次追加全部 session。
 
+Goal Plus Pi uploader 每轮优先读取最新日期分区，并限制单轮处理 10 个 batch；当天 Trace 因此不会被历史 backlog 长时间饿死，旧分区由后续轮次继续推进。共享 process lock 通过“完整候选文件 + 原子 hard-link”发布 owner，避免进程在 create/write 窗口退出后留下新的空锁；已存在且超过保护窗口的空锁、损坏锁，以及 owner 已退出的本机锁，会在独占 recovery claim 下回收。存活的本机 owner、其他主机 owner、非普通文件和已有 recovery claim 均 fail closed。`flushOnce()` 在未取得锁时返回结构化 `lockStatus`；Goal Plus scan 将其写入 `nativeUploadStatus` 和 diagnostics，`status`/`self-check` 也会把损坏或孤立 uploader 标为非 ready，而不是只显示 `uploadedEvents=0`。
+
 ## Spool 幂等、容量保护与历史修复
 
 服务端只为 `goal-plus:` canonical Pi session 维护 `.trace-event-index-v1` sidecar，并在 session 锁内完成“读取索引、追加、更新索引”。身份键由已认证用户、session ID、`event`/`span` 类型和 event ID（缺失时使用 span ID）组成；语义 hash 只忽略传输时间 `receivedAt`，认证来源升级仍作为有效修订保留。因此完全相同的重传会被跳过，同一事件从 running 更新为 success/failure 等有效修订也不会丢失。sidecar 记录所覆盖的 legacy 文件与 shard 签名，文件被替换或截断时会从 spool 流式重建。session 锁不会按时间抢占存活的本机进程或其他主机所有者，只自动回收已确认退出的本机 PID；无法证明 owner 已退出时失败关闭。单 Goal Plus session 默认最多索引 100,000 个身份（`AGENT_INSIGHT_OTEL_DEDUPE_MAX_IDENTITIES`）；达到上限后拒绝新身份并返回 HTTP 413，collector 因此不会推进 uploader checkpoint。
