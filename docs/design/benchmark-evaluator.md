@@ -113,7 +113,7 @@ POST {evaluatorBaseUrl}/api/v1/evaluations
 
 接收逻辑：鉴权 → 校验 Schema 和回调地址 → 重算 `requestDigest` → 处理幂等/忙状态 → 原子持久化 `runId + digest + request.json` → 返回 `202` → 后台执行。必须先落盘再返回 202。
 
-Agent Insight 只有在 `/health` 的目标 Evaluator 同时满足 `ready=true` 和 `formalEligible=true` 时才下发正式评测。每次 outbox claim 递增 `attemptCount`；接单、未知和失败响应都只能由仍持有该 `sending + attemptCount` 的发送者 CAS 写回，watchdog 已回收后到达的旧响应不得复活任务。
+Agent Insight 只要 `/health` 的目标 Evaluator 满足 `ready=true` 就下发评测；`formalEligible` 仅保留为运行事实，不参与调度或结果准入。每次 outbox claim 递增 `attemptCount`；接单、未知和失败响应都只能由仍持有该 `sending + attemptCount` 的发送者 CAS 写回，watchdog 已回收后到达的旧响应不得复活任务。
 
 - 相同 `runId + digest`：返回当前状态，不重复启动 Harness。
 - 相同 `runId`、不同 digest：`409 RUN_ID_CONFLICT`。
@@ -225,7 +225,7 @@ normalizeResult(input: NormalizeBenchmarkResultInput): NormalizedBenchmarkResult
 
 完整官方测试明细保留在 `nativeMetrics`，证据引用保留在 `evidenceJson`；归一化后 upsert 当前 Case 的 `ExperimentEvalResult`。每次评测的原始历史继续保存在 `BenchmarkEvaluation`，不会被只重评覆盖。
 
-正式 `completed` 结果按冻结任务做闭合校验：实例 ID、`formalEligible=true`、`FAIL_TO_PASS/PASS_TO_PASS` 完整名单、严格 boolean、Raw Result 计数与官方报告必须一致；`report.json` 会从 Artifact Store 重读并复核 size/SHA-256/JSON，且证据集合必须精确包含 official report、test output 和 run log。未满足时分别以 `RAW_RESULT_SCHEMA_INVALID`、`SWE_FORMAL_RESULT_INELIGIBLE`、`SWE_EVIDENCE_CONTRACT_INVALID` 或 `RESULT_MAPPING_FAILED` 非重试失败，不能产生成绩。
+`completed` 结果按冻结任务做闭合校验：实例 ID、`FAIL_TO_PASS/PASS_TO_PASS` 完整名单、严格 boolean、Raw Result 计数与官方报告必须一致；`report.json` 会从 Artifact Store 重读并复核 size/SHA-256/JSON，且证据集合必须精确包含 official report、test output 和 run log。运行架构不参与结果准入；其余契约未满足时分别以 `RAW_RESULT_SCHEMA_INVALID`、`SWE_EVIDENCE_CONTRACT_INVALID` 或 `RESULT_MAPPING_FAILED` 非重试失败，不能产生成绩。
 
 Raw Result、统一投影、Case 终态与 `continuationStatus=pending` 在同一事务提交后才返回 ACK。后续 continuation 使用递增 attempt 作为 owner lease，服务重启和 30 秒 watchdog 都可恢复；它跳过已经 `done/failed` 的补充评估器，阻止旧 Run 覆盖重跑后的新投影，再结算实验和调度下一 Case。
 

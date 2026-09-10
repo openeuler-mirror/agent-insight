@@ -75,9 +75,9 @@ export async function runBenchmarkEvaluationContinuation(evaluationId: string): 
         continuationAttempts: ownerAttempt,
       },
       data: { continuationTriedAt: new Date() },
-    }).then((updated) => {
+    }).then((updated: { count: number }) => {
       if (updated.count !== 1) lostLease = true
-    }).catch((error) => {
+    }).catch((error: unknown) => {
       console.error('[benchmark/evaluation-continuation] heartbeat failed', error)
     })
   }, Math.max(1_000, Math.floor(CONTINUATION_LEASE_MS / 3)))

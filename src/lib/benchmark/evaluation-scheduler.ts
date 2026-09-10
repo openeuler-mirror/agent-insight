@@ -1,4 +1,5 @@
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
+import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
 
 import {
@@ -157,7 +158,7 @@ export async function reapStaleBenchmarkEvaluations(options: {
   for (const evaluation of candidates) {
     const timeout = evaluationTimeout(evaluation, now, graceMs)
     if (!timeout) continue
-    const claimed = await prisma.$transaction(async (tx) => {
+    const claimed = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const claim = await tx.benchmarkEvaluation.updateMany({
         where: {
           id: evaluation.id,
@@ -248,7 +249,7 @@ async function markPending(evaluationId: string, input: {
   delayMs: number
 }): Promise<boolean> {
   const nextAttemptAt = new Date(Date.now() + input.delayMs)
-  const transitioned = await prisma.$transaction(async (tx) => {
+  const transitioned = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const evaluation = await tx.benchmarkEvaluation.updateMany({
       where: {
         id: evaluationId,
@@ -274,7 +275,7 @@ async function markPending(evaluationId: string, input: {
       throw new BenchmarkProtocolError('EVALUATION_DISPATCH_OWNERSHIP_LOST', '评测下发租约已失效', 409)
     }
     return true
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (error instanceof BenchmarkProtocolError && error.code === 'EVALUATION_DISPATCH_OWNERSHIP_LOST') {
       return false
     }
@@ -292,7 +293,7 @@ async function markFailed(evaluationId: string, input: {
   code: string
   message: string
 }): Promise<boolean> {
-  const transitioned = await prisma.$transaction(async (tx) => {
+  const transitioned = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const evaluation = await tx.benchmarkEvaluation.findUnique({
       where: { id: evaluationId },
       include: { caseRun: { select: { id: true, experimentId: true, experimentCaseId: true } } },
@@ -356,7 +357,7 @@ async function markFailed(evaluationId: string, input: {
       data: { status: 'failed', errorMessage: input.message },
     })
     return evaluation.id
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (error instanceof BenchmarkProtocolError && error.code === 'EVALUATION_DISPATCH_OWNERSHIP_LOST') {
       return null
     }
@@ -371,7 +372,7 @@ async function markAccepted(evaluationId: string, attemptNo: number, input: {
   status: number
   responseJson: string
 }): Promise<boolean> {
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const evaluation = await tx.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
     if (!evaluation) return false
     if (
@@ -418,7 +419,7 @@ async function markUnknown(
   attemptNo: number,
   message: string,
 ): Promise<'unknown' | 'accepted' | 'lost'> {
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const evaluation = await tx.benchmarkEvaluation.findUnique({ where: { id: evaluationId } })
     if (!evaluation) return 'lost'
     if (evaluation.completionDigest) {
@@ -454,7 +455,7 @@ async function markUnknown(
       throw new BenchmarkProtocolError('EVALUATION_DISPATCH_OWNERSHIP_LOST', '评测下发租约已失效', 409)
     }
     return 'unknown'
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (error instanceof BenchmarkProtocolError && error.code === 'EVALUATION_DISPATCH_OWNERSHIP_LOST') {
       return 'lost'
     }
@@ -536,16 +537,6 @@ async function ensureHealthy(
       body.value.busy === true ? '评测服务当前忙' : '评测服务未就绪',
       503,
       true,
-    )
-  }
-  if (evaluatorState.formalEligible !== true) {
-    throw new BenchmarkProtocolError(
-      'EVALUATOR_NOT_FORMAL_ELIGIBLE',
-      typeof evaluatorState.reason === 'string' && evaluatorState.reason.trim()
-        ? `当前评测服务不能用于正式计分：${evaluatorState.reason}`
-        : '当前评测服务不能用于正式计分',
-      422,
-      false,
     )
   }
   healthCache.set(cacheKey, Date.now())

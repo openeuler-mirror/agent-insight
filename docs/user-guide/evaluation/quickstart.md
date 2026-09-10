@@ -41,7 +41,7 @@ bash scripts/evaluator-doctor.sh
 bash scripts/evaluator-doctor.sh --smoke swe-bench
 ```
 
-正式成绩要求评测机为 Linux x86_64、使用官方 Case 镜像，并且 `/health` 中目标 Evaluator 同时显示 `ready=true` 和 `formalEligible=true`。`ready=true` 只说明服务可运行，不代表当前环境可产出正式分数；ARM64 或非官方镜像仅用于链路 Smoke。
+平台只要求 `/health` 中目标 Evaluator 显示 `ready=true` 即可下发评测。ARM64 环境会自动选择对应架构的 Case 镜像，并按与 x86_64 相同的结果契约完成判定。
 
 在 Agent Insight 主服务所在机器上，用权限为 `0600` 的 Token 文件更新通信目标：
 

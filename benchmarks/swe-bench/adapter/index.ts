@@ -441,14 +441,6 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
     if (raw.instanceId !== expected.instanceId) {
       return rawResultError('SWE-bench 原生结果 instanceId 与冻结评测任务不一致')
     }
-    const runtimeFacts = asRecord(completion.runtimeFacts)
-    if (runtimeFacts?.formalEligible !== true) {
-      throw new BenchmarkProtocolError(
-        'SWE_FORMAL_RESULT_INELIGIBLE',
-        '当前评测运行不满足正式 SWE-bench 评分环境要求',
-        422,
-      )
-    }
     if (input.evidenceArtifacts.length !== REQUIRED_COMPLETION_EVIDENCE.length) {
       throw new BenchmarkProtocolError(
         'SWE_EVIDENCE_CONTRACT_INVALID',

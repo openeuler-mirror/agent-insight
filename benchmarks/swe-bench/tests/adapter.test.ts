@@ -253,7 +253,7 @@ test('SWE-bench adapter normalizes resolved, unresolved and infrastructure resul
   assert.equal(failed.score, null)
 })
 
-test('SWE-bench adapter fails closed for ineligible, mismatched or incomplete completed results', () => {
+test('SWE-bench adapter accepts ARM64 results and rejects mismatched or incomplete completed results', () => {
   const instanceId = 'pallets__flask-5014'
   const evidenceArtifacts = [
     { name: 'report.json', kind: 'official-report', mediaType: 'application/json' },
@@ -320,9 +320,12 @@ test('SWE-bench adapter fails closed for ineligible, mismatched or incomplete co
     () => normalize({ rawResult: { ...rawResult, resolved: 'false' } }),
     (error: Error & { code?: string }) => error.code === 'RAW_RESULT_SCHEMA_INVALID',
   )
-  assert.throws(
-    () => normalize({ formalEligible: false }),
-    (error: Error & { code?: string }) => error.code === 'SWE_FORMAL_RESULT_INELIGIBLE',
+  assert.deepEqual(
+    {
+      verdict: normalize({ formalEligible: false }).verdict,
+      score: normalize({ formalEligible: false }).score,
+    },
+    { verdict: 'pass', score: 100 },
   )
   assert.throws(
     () => normalize({ jobInstanceId: 'astropy__astropy-1' }),

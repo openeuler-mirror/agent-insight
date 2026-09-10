@@ -76,7 +76,9 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
     }),
   ])
   const retriedRunIds = new Set(
-    runs.map((run) => run.retryOfRunId).filter((id): id is string => Boolean(id)),
+    runs
+      .map((run: { retryOfRunId: string | null }) => run.retryOfRunId)
+      .filter((id: string | null): id is string => Boolean(id)),
   )
   const latestRunStatus = new Map<string, string>()
   for (const run of runs) {
@@ -184,8 +186,10 @@ export async function finalizeBenchmarkCase(input: {
     })
     const settled = new Set(
       existing
-        .filter((result) => ['done', 'failed'].includes(result.status))
-        .map((result) => result.evaluatorId),
+        .filter((result: { evaluatorId: string; status: string }) => (
+          ['done', 'failed'].includes(result.status)
+        ))
+        .map((result: { evaluatorId: string; status: string }) => result.evaluatorId),
     )
     evaluatorIds = evaluatorIds.filter((evaluatorId) => !settled.has(evaluatorId))
     if (!(await shouldContinue())) return false

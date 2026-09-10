@@ -100,9 +100,9 @@ SWE-bench 的 `nativeMetrics` 只返回：
 
 完整 `officialReport` 仍保存在 Raw Result 和证据文件中，不复制到统一投影。
 
-SWE-bench 的 `completed` 结果还必须满足以下正式计分门槛，否则闭合失败而不是产生分数：
+SWE-bench 的 `completed` 结果还必须满足以下计分门槛，否则闭合失败而不是产生分数：
 
-- `runtimeFacts.formalEligible` 必须严格等于 `true`，实例 ID 必须与冻结任务一致；
+- 实例 ID 必须与冻结任务一致；运行架构和 `runtimeFacts.formalEligible` 不参与结果准入；
 - `resolved` 与每个测试结果必须是 JSON boolean，不接受 `"false"` 等 truthy 字符串；
 - 官方报告中的 `FAIL_TO_PASS` / `PASS_TO_PASS` 必须与冻结测试名单精确分区，禁止缺项、未知项、重复项和跨组项；
 - Raw Result 的计数、布尔值和 `officialReport` 必须一致，`resolved=true` 还要求 Patch 应用成功且全部冻结测试通过；
