@@ -37,6 +37,8 @@ goal-plus-collector status
 
 `attach` 对同一个 canonical root 幂等；`list` 查看已登记 source，`detach <sourceId>` 只移除 Agent Insight 的登记，不删除 `.gp`。先执行一次 `scan` 可检查语义对象、Pi session 和上传诊断，再使用 `start` 启动独立后台 watcher。`start` 重复执行不会创建第二个进程，`stop` 停止它；日志和 PID 只保存在 Goal Plus collector 的 managed directory。Agent Insight 的 `develop_start.sh`、`start.sh` 和 npm CLI 启动路径会在服务就绪后执行幂等的 `ensure`：已登记 source 时自动恢复因机器或服务重启留下的失效 watcher，未配置或尚未 attach 时安静跳过，恢复失败只告警而不会阻止主服务启动。需要前台观察时仍可使用 `watch --interval-ms 5000`，按 Ctrl+C 正常停止。
 
+watcher 每轮只导入上次成功落盘后新增或发生状态更新的 Pi 事件；源文件没有变化时整段跳过。网络中断只会留下待上传数据，不会让下一轮扫描再次复制完整 session。修改 API Key、服务地址、Trace 来源或扫描间隔后，`ensure` 会重启 watcher；撤销 API Key 时会停止仍持有旧配置的 watcher。配置优先级是 Goal Plus 专属环境变量、安装器 managed config、通用环境变量。需要临时覆盖时使用 `AGENT_INSIGHT_GOAL_PLUS_API_KEY`、`AGENT_INSIGHT_GOAL_PLUS_BASE_URL`、`AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT` 或 `AGENT_INSIGHT_GOAL_PLUS_ENDPOINT`，避免通用的 Pi/Codex 配置意外串入 Goal Plus watcher。
+
 没有 attach 任何 `.gp` 时，`start` 和 `self-check` 不会报告语义增强 ready，但只要所选 Pi/Codex 原生采集器安装成功，Goal Plus native Trace 仍显示 `READY`。语义 collector 安装、scan 或 watcher 失败会单独显示为可选增强不可用，不会把 native Trace 降为 `PARTIAL`，也不会回滚或停止 Pi/Codex 原生采集器。只有所选宿主的原生采集器未安装成功时，Goal Plus native Trace 才显示 `NOT READY`。
 
 ## 页面与数据口径
@@ -66,6 +68,17 @@ collector 不上传绝对路径、workspace 内容、diff、完整日志、密�
 goal-plus-collector self-check
 goal-plus-collector scan --no-upload
 ```
+
+如果升级前已经出现 spool 异常膨胀，应先停止 Goal Plus collector/uploader 和 Agent Insight 服务，再在项目目录中执行只读检查：
+
+```bash
+node scripts/repair-goal-plus-pi-spool.cjs --kind collector --path ~/.agent-insight/otel_data/pi-agent
+node scripts/repair-goal-plus-pi-spool.cjs --kind server --path ~/.agent-insight/otel_data/traces
+```
+
+默认只生成报告，不写文件。确认报告后，分别增加 `--apply --confirm-writers-stopped` 才会压缩；工具只处理 Goal Plus 产生的 Pi 记录，不改普通 Pi/Codex 或其他框架数据。目录模式按文件独立处理，修改前先预检全部文件；每个被修改的 JSONL 都会留下不可覆盖的 `.bak.<timestamp>` 备份。工具不会自动修改 `uploader-checkpoint.json` 或 `consumer-checkpoint.json`，需按报告只校正对应文件的 byte cursor，并保留其他条目，之后再重启服务。首次直接启动新版服务也能以有界内存读取旧数据，但面对数 GB 历史 spool 仍可能长时间阻塞，因此推荐先离线压缩。
+
+上述持久去重、容量限制和历史修复只针对 session ID 以 `goal-plus:` 开头的 Pi 数据。仅安装 Pi、不安装 Goal Plus 时，Pi collector、事件写入和聚合口径保持不变。
 
 卸载默认保留 spool 以便恢复：
 

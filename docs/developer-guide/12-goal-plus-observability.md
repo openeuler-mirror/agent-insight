@@ -19,7 +19,7 @@ explicitly attached .gp
 existing Codex/Pi Execution ── deterministic correlation ── Goal/Run/Candidate
 ```
 
-collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。目录遍历跳过符号链接，读取执行 lstat/realpath/root containment 和前后 stat 校验；JSONL 只消费以换行结束的完整记录。Pi 主会话只访问该 attached workspace 精确对应的 Pi project-session 目录，并以 `host_command_invocations.native_entry_id`/`goal_plus_id` 定位，不递归扫描 home。语义与 native spool 均按 API Key 摘要隔离，服务端确认后才推进 checkpoint。
+collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。目录遍历跳过符号链接，读取执行 lstat/realpath/root containment 和前后 stat 校验；JSONL 只消费以换行结束的完整记录。Pi 主会话只访问该 attached workspace 精确对应的 Pi project-session 目录，并以 `host_command_invocations.native_entry_id`/`goal_plus_id` 定位，不递归扫描 home。语义与 native spool 均按 API Key 摘要隔离。Pi import checkpoint 在 native spool flush 成功后原子推进，用于保证重复扫描幂等；独立的 uploader checkpoint 仍只在服务端返回 HTTP 2xx 后推进，两者不得合并。
 
 ## 代码地图
 
@@ -28,6 +28,7 @@ collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。
 | collector | `scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs` | attach/list/detach/scan/watch/start/stop/status/self-check，协调双通道 |
 | semantic parser | `goal-plus/lib/gp-snapshot-parser.cjs` | allowlist 解析、版本信封、边界化和路径安全 |
 | Pi importer | `goal-plus/lib/pi-native-parser.cjs` | native JSONL → Pi canonical Agent/LLM/Tool/MCP/Skill event |
+| spool repair | `scripts/repair-goal-plus-pi-spool.cjs` | 对历史 Goal Plus Pi collector/server JSONL 做只读分析或停写压缩 |
 | distribution | `src/app/api/ingest/setup/goal-plus/` | 确定性 ZIP、SHA-256 校验安装器和只读 asset route |
 | install profile | `src/lib/ingest/setup/install-profile.ts` | Goal Plus Pi/Codex 宿主校验、native collector 依赖展开和去重 |
 | ingest | `src/lib/ingest/goal-plus/contracts.ts`、`persist.ts` | envelope 校验、服务端二次脱敏、幂等审计与投影 |
@@ -70,6 +71,25 @@ gpsnap_ + sha256(sourceId \u001f kind \u001f objectKey \u001f contentHash)
 组合安装继续调用既有 Pi/Codex 子安装器；不得复制或修改 native collector core、adapter、OTLP endpoint、Execution ID 和父子树。宿主 profile 的主就绪状态由所选 Pi/Codex native collector 决定：任一所需 native collector 未完成时为 `NOT READY`；全部完成时为 `READY`。Goal Plus semantic collector 在 native collector 之后作为可选增强安装，缺少 `.gp` 或其安装、scan、watcher 失败只单独报告 semantic enrichment 状态，不降低 native Trace 的 `READY`，也不回滚已安装的 native collector。无宿主的 legacy semantic-only 命令继续沿用原 `PARTIAL` 口径。
 
 Goal Plus 后台 watcher 使用 collector managed directory 中独立的 PID、锁和日志。`start` 要求至少一个已 attach source，重复调用幂等；`ensure` 对未配置或无 source 返回可诊断的跳过结果，对失效 PID 则清理并重启。`develop_start.sh`、`start.sh` 和 npm CLI 在 Agent Insight 服务就绪后使用当前发布版本的 collector 执行 `ensure`，因此机器或主服务重启后无需手工恢复 watcher；失败仅输出告警，不阻断主服务，也不接管 Pi/Codex 进程。单次 scan 先完成 native Pi session 的 durable import/upload，再尝试可重试的 semantic upload，避免语义端点超时阻塞主/worker Trace 入队。
+
+Goal Plus collector 的配置优先级为专属环境变量、managed config、通用环境变量。专属变量是 `AGENT_INSIGHT_GOAL_PLUS_API_KEY`、`AGENT_INSIGHT_GOAL_PLUS_BASE_URL`、`AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT` 和语义端点 `AGENT_INSIGHT_GOAL_PLUS_ENDPOINT`。managed config 存在时，冲突的 `AGENT_INSIGHT_API_KEY`/`AGENT_INSIGHT_OTLP_ENDPOINT` 不得静默覆盖它；诊断只打印 Key 摘要。watcher 指纹覆盖 collector 版本、凭证摘要、端点、host/source 配置和 interval，任一变化均触发受控重启。
+
+native Pi 导入按 source 文件指纹、session descriptor 和每个稳定 event identity 的语义 hash 保存独立 checkpoint。文件及 descriptor 未变化时整段跳过；session 增长或终态变化时只追加新增/更新事件；文件截断或替换时重建该 session 基线。顺序固定为 `spool flush → import checkpoint 原子写入 → uploader`，所以网络失败只留下待上传数据，不会让下一次 5 秒扫描再次追加全部 session。
+
+## Spool 幂等、容量保护与历史修复
+
+服务端只为 `goal-plus:` canonical Pi session 维护 `.trace-event-index-v1` sidecar，并在 session 锁内完成“读取索引、追加、更新索引”。身份键由已认证用户、session ID、`event`/`span` 类型和 event ID（缺失时使用 span ID）组成；语义 hash 只忽略传输时间 `receivedAt`，认证来源升级仍作为有效修订保留。因此完全相同的重传会被跳过，同一事件从 running 更新为 success/failure 等有效修订也不会丢失。sidecar 记录所覆盖的 legacy 文件与 shard 签名，文件被替换或截断时会从 spool 流式重建。session 锁不会按时间抢占存活的本机进程或其他主机所有者，只自动回收已确认退出的本机 PID；无法证明 owner 已退出时失败关闭。单 Goal Plus session 默认最多索引 100,000 个身份（`AGENT_INSIGHT_OTEL_DEDUPE_MAX_IDENTITIES`）；达到上限后拒绝新身份并返回 HTTP 413，collector 因此不会推进 uploader checkpoint。
+
+聚合通过 `visitEventsForSession` 逐行读取 legacy range 和 session shard，不再把整个 JSONL 展开到数组。对 Goal Plus Pi session 的默认上限为 50,000 个唯一事件、64 MiB 保留事件和 16 MiB 单事件，可分别通过 `AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS`、`AGENT_INSIGHT_OTEL_AGG_MAX_RETAINED_BYTES`、`AGENT_INSIGHT_OTEL_AGG_MAX_EVENT_BYTES` 调整。超过上限的 Goal Plus session 记为确定性 `discard` 并推进 consumer checkpoint，避免同一损坏或异常数据形成无限重试/OOM；日志必须带 limit、actual 和 maximum。普通 standalone Pi 及其他框架仍使用流式读取，但不启用这组 Goal Plus 限额或持久去重，维持原来的写入与聚合语义。首次为已有大 Goal Plus spool 建立 sidecar 仍需完整流式扫描，内存有界但可能长时间占用事件循环，因此已发生膨胀的部署应先离线压缩再启动服务。
+
+历史修复工具默认 dry-run，且只处理 `framework=pi-agent`、`sessionId` 以 `goal-plus:` 开头的记录：
+
+```bash
+node scripts/repair-goal-plus-pi-spool.cjs --kind collector --path ~/.agent-insight/otel_data/pi-agent
+node scripts/repair-goal-plus-pi-spool.cjs --kind server --path ~/.agent-insight/otel_data/traces
+```
+
+目录模式逐文件独立压缩，不跨文件合并 identity。实际写入前必须停止 Goal Plus collector/uploader 和 Agent Insight 服务，再增加 `--apply --confirm-writers-stopped`。工具会先预检目录中的全部目标文件；malformed、未换行、单行超过 64 MiB 或目标 identity 超过 1,000,000 时拒绝修改。每个已修改文件都生成同目录、不可覆盖的 `.bak.<timestamp>` 硬链接备份并立即报告；若后续文件失败，之前的成功项仍可审计和恢复。工具不修改 `uploader-checkpoint.json`/`consumer-checkpoint.json`，只报告受影响的相对路径和能安全映射时的新 byte cursor；操作员必须保留 checkpoint 中其他条目，仅核对报告指出的条目后再重启写入方。
 
 ## 完整度与保真度
 

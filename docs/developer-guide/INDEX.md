@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `52e14fcf08092d8354c51a79f0f2f3736d1a88b2` (`52e14fcf`) |
+| Commit | `f50dd2c6a39b0f7f89f67071a73004fffbf59cc6` (`f50dd2c6`) |
 | Branch | `goal_plus` |
-| Date | 2026-09-09 18:40:20 +0900 |
+| Date | 2026-09-10 18:38:09 +0900 |
 | Author | huang |
-| Subject | `fix: 修正 Goal Plus source 自愈路径` |
-| Working tree overlay | Goal Plus Pi passive importer 将运行终态与业务终态分离：主对话正常返回时，即使 Goal/Run 为 `blocked`/`selection_blocked`，Execution 仍按运行成功记录，业务状态继续留在 overlay；worker timeout、runner failure、非零退出及未恢复的最终中止仍记录为失败。continuation 以最后一次 assistant 结果判定，已恢复的历史 abort 不污染最终状态。改动仅位于 Goal Plus collector，被独立接入的 Pi collector、Execution ID 和原生执行树保持不变。 |
+| Subject | `fix: 阻止 Goal Plus Pi Trace 重复膨胀` |
+| Working tree overlay | Goal Plus Pi passive importer 使用独立持久化导入断点，只追加新增或修订事件；服务端仅对 `goal-plus:` session 启用持久化精确去重、并发锁保护、写入上限与流式聚合边界，并提供默认只读的历史 spool 修复工具。运行终态与 Goal Plus 业务终态继续分离。独立接入的 Pi 不启用这些 Goal Plus 专用限制，原有追加与聚合行为保持不变。 |
 
-**如何更新：** `git diff 4e7d221 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff f50dd2c6 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
