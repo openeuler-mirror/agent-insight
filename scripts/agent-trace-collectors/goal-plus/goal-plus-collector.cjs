@@ -7,7 +7,15 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { atomicWriteJson, collectorStateDir, listSpoolFiles, readCheckpoint, safeContent } = require("../shared/trace-transport.cjs");
+const {
+  apiKeyHash,
+  atomicWriteJson,
+  collectorStateDir,
+  listSpoolFiles,
+  readCheckpoint,
+  safeContent,
+  sha256,
+} = require("../shared/trace-transport.cjs");
 const { parseGoalPlusRoot } = require("./lib/gp-snapshot-parser.cjs");
 const { importPiSessions } = require("./lib/pi-native-parser.cjs");
 const { enqueueSemanticBatch, semanticStateDir, uploadSemanticBatches } = require("./lib/semantic-spool.cjs");
@@ -19,7 +27,7 @@ const {
   validateGoalPlusRoot,
 } = require("./lib/source-registry.cjs");
 
-const COLLECTOR_VERSION = "1.2.1";
+const COLLECTOR_VERSION = "1.2.2";
 const MAX_BATCH_SNAPSHOTS = 100;
 const MAX_BATCH_BYTES = 3.5 * 1024 * 1024;
 
@@ -31,6 +39,30 @@ function watcherPaths(config) {
     lockPath: path.join(runtimeDir, "watcher.lock"),
     logPath: path.join(runtimeDir, "watcher.log"),
   };
+}
+
+function configFingerprint(config) {
+  return `sha256:${sha256(JSON.stringify({
+    collectorVersion: COLLECTOR_VERSION,
+    configPath: config.configPath ? path.resolve(config.configPath) : null,
+    apiKeyHash: config.apiKey ? apiKeyHash(config.apiKey) : null,
+    hosts: [...(config.hosts || [])].sort(),
+    semanticEndpoint: config.semanticEndpoint,
+    otlpEndpoint: config.otlpEndpoint,
+  }))}`;
+}
+
+function endpointIdentity(value) {
+  try {
+    const parsed = new URL(String(value));
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "[invalid-endpoint]";
+  }
 }
 
 function processIsAlive(pid) {
@@ -58,16 +90,23 @@ async function watcherStatus(config) {
   const registry = await loadRegistry(config.registryPath || defaultRegistryPath(config.homeDir));
   const record = await readWatcherPid(paths.pidPath);
   const running = Boolean(record && processIsAlive(record.pid));
+  const expectedConfigFingerprint = configFingerprint(config);
+  const configMatches = !running || record?.configFingerprint === expectedConfigFingerprint;
   if (record && !running) await fsp.unlink(paths.pidPath).catch(() => undefined);
   return {
     configured: Boolean(config.apiKey),
     hosts: config.hosts || [],
     sourceCount: registry.sources.length,
     running,
-    ready: Boolean(config.apiKey) && registry.sources.length > 0 && running,
+    ready: Boolean(config.apiKey) && registry.sources.length > 0 && running && configMatches,
     pid: running ? record.pid : undefined,
     stalePid: record && !running ? record.pid : undefined,
     startedAt: running ? record.startedAt : undefined,
+    intervalMs: running ? record.intervalMs : undefined,
+    apiKeyHash: config.apiKey ? apiKeyHash(config.apiKey) : undefined,
+    configFingerprint: expectedConfigFingerprint,
+    activeConfigFingerprint: running ? record.configFingerprint : undefined,
+    configMatches,
     logPath: paths.logPath,
   };
 }
@@ -94,12 +133,16 @@ async function acquireWatcherLock(lockPath) {
 
 async function startWatcher(config, options = {}) {
   const paths = watcherPaths(config);
+  const intervalMs = options.intervalMs || 5000;
   await fsp.mkdir(paths.runtimeDir, { recursive: true, mode: 0o700 });
   await acquireWatcherLock(paths.lockPath);
   try {
     const current = await watcherStatus(config);
-    if (current.running) return { ...current, alreadyRunning: true };
-    if (!config.apiKey) throw new Error("AGENT_INSIGHT_API_KEY or collector config apiKey is required for watcher startup");
+    if (current.running && current.configMatches && current.intervalMs === intervalMs) {
+      return { ...current, alreadyRunning: true };
+    }
+    if (current.running) await stopWatcher(config);
+    if (!config.apiKey) throw new Error("AGENT_INSIGHT_GOAL_PLUS_API_KEY, managed config apiKey, or AGENT_INSIGHT_API_KEY is required for watcher startup");
     if (current.sourceCount === 0) throw new Error("No Goal Plus sources are attached; run attach before start");
     const logFd = fs.openSync(paths.logPath, "a", 0o600);
     let child;
@@ -112,7 +155,7 @@ async function startWatcher(config, options = {}) {
         "--home",
         config.homeDir,
         "--interval-ms",
-        String(options.intervalMs || 5000),
+        String(intervalMs),
       ], {
         detached: true,
         stdio: ["ignore", logFd, logFd],
@@ -123,9 +166,30 @@ async function startWatcher(config, options = {}) {
     }
     if (!child.pid) throw new Error("Unable to start Goal Plus watcher process");
     child.unref();
-    const record = { pid: child.pid, startedAt: new Date().toISOString(), intervalMs: options.intervalMs || 5000 };
+    const record = {
+      pid: child.pid,
+      startedAt: new Date().toISOString(),
+      intervalMs,
+      collectorVersion: COLLECTOR_VERSION,
+      apiKeyHash: apiKeyHash(config.apiKey),
+      configFingerprint: configFingerprint(config),
+      semanticEndpoint: endpointIdentity(config.semanticEndpoint),
+      otlpEndpoint: endpointIdentity(config.otlpEndpoint),
+    };
     await atomicWriteJson(paths.pidPath, record);
-    return { ...current, ...record, running: true, ready: true, alreadyRunning: false };
+    return {
+      ...current,
+      ...record,
+      running: true,
+      ready: true,
+      configMatches: true,
+      activeConfigFingerprint: record.configFingerprint,
+      alreadyRunning: false,
+      restartedForConfigChange: Boolean(current.running && !current.configMatches),
+      restartedForIntervalChange: Boolean(
+        current.running && current.configMatches && current.intervalMs !== intervalMs,
+      ),
+    };
   } finally {
     await fsp.unlink(paths.lockPath).catch(() => undefined);
   }
@@ -134,7 +198,14 @@ async function startWatcher(config, options = {}) {
 async function ensureWatcher(config, options = {}) {
   const previous = await watcherStatus(config);
   if (!previous.configured) {
-    return { ...previous, ensured: false, reason: "not_configured" };
+    const stopped = previous.running ? await stopWatcher(config) : undefined;
+    return {
+      ...previous,
+      ...(stopped || {}),
+      ensured: false,
+      reason: "not_configured",
+      stoppedForConfigRevocation: Boolean(stopped?.stopped),
+    };
   }
   if (previous.sourceCount === 0) {
     return { ...previous, ensured: false, reason: "no_sources" };
@@ -228,16 +299,46 @@ async function loadConfig(options = {}) {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  const apiKey = process.env.AGENT_INSIGHT_API_KEY || file.apiKey;
-  const baseUrl = String(process.env.AGENT_INSIGHT_BASE_URL || file.baseUrl || "http://127.0.0.1:3000").replace(/\/+$/, "");
+  const diagnostics = [];
+  const managedApiKey = String(file.apiKey || "").trim();
+  const ambientApiKey = String(process.env.AGENT_INSIGHT_API_KEY || "").trim();
+  const explicitApiKey = String(process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY || "").trim();
+  if (!explicitApiKey && managedApiKey && ambientApiKey && managedApiKey !== ambientApiKey) {
+    diagnostics.push({
+      code: "ignored_ambient_api_key",
+      message: `Ignored conflicting AGENT_INSIGHT_API_KEY (env sha256:${apiKeyHash(ambientApiKey)}, config sha256:${apiKeyHash(managedApiKey)}); managed Goal Plus config is authoritative. Use AGENT_INSIGHT_GOAL_PLUS_API_KEY for an explicit override.`,
+    });
+  }
+  const apiKey = explicitApiKey || managedApiKey || ambientApiKey;
+  const ambientBaseUrl = String(process.env.AGENT_INSIGHT_BASE_URL || "").trim();
+  const explicitBaseUrl = String(process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL || "").trim();
+  const managedBaseUrl = String(file.baseUrl || "").trim();
+  const baseUrl = String(explicitBaseUrl || managedBaseUrl || ambientBaseUrl || "http://127.0.0.1:3000").replace(/\/+$/, "");
+  const explicitSemanticEndpoint = String(process.env.AGENT_INSIGHT_GOAL_PLUS_ENDPOINT || "").trim();
+  const explicitOtlpEndpoint = String(process.env.AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT || "").trim();
+  const ambientOtlpEndpoint = String(process.env.AGENT_INSIGHT_OTLP_ENDPOINT || "").trim();
+  if (!explicitOtlpEndpoint && file.otlpEndpoint && ambientOtlpEndpoint && file.otlpEndpoint !== ambientOtlpEndpoint) {
+    diagnostics.push({
+      code: "ignored_ambient_otlp_endpoint",
+      message: "Ignored conflicting AGENT_INSIGHT_OTLP_ENDPOINT; managed Goal Plus config is authoritative. Use AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT for an explicit override.",
+    });
+  }
   return {
     homeDir,
     configPath,
     registryPath: path.join(path.dirname(configPath), "sources.json"),
     apiKey,
+    apiKeySource: explicitApiKey ? "goal-plus-env" : managedApiKey ? "config" : ambientApiKey ? "ambient-env" : "missing",
+    configDiagnostics: diagnostics,
     hosts: Array.isArray(file.hosts) ? file.hosts.filter(host => host === "pi" || host === "codex") : [],
-    semanticEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_ENDPOINT || file.semanticEndpoint || `${baseUrl}/api/ingest/goal-plus/v1/snapshots`,
-    otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || file.otlpEndpoint || `${baseUrl}/api/ingest/otel/v1/traces`,
+    semanticEndpoint: explicitSemanticEndpoint || (explicitBaseUrl
+      ? `${baseUrl}/api/ingest/goal-plus/v1/snapshots`
+      : file.semanticEndpoint || `${baseUrl}/api/ingest/goal-plus/v1/snapshots`),
+    otlpEndpoint: explicitOtlpEndpoint || (explicitBaseUrl
+      ? `${baseUrl}/api/ingest/otel/v1/traces`
+      : file.otlpEndpoint || (managedBaseUrl
+        ? `${baseUrl}/api/ingest/otel/v1/traces`
+        : ambientOtlpEndpoint || `${baseUrl}/api/ingest/otel/v1/traces`)),
   };
 }
 
@@ -251,7 +352,7 @@ async function resolveSources(selector, options) {
 }
 
 async function scanSource(source, config, options = {}) {
-  if (!config.apiKey) throw new Error("AGENT_INSIGHT_API_KEY or collector config apiKey is required for scanning");
+  if (!config.apiKey) throw new Error("AGENT_INSIGHT_GOAL_PLUS_API_KEY, managed config apiKey, or AGENT_INSIGHT_API_KEY is required for scanning");
   const scanStartedAt = new Date().toISOString();
   const parsed = await parseGoalPlusRoot(source, { homeDir: config.homeDir });
   const scanCompletedAt = new Date().toISOString();
@@ -272,6 +373,10 @@ async function scanSource(source, config, options = {}) {
     sourceId: source.sourceId,
     snapshots: parsed.snapshots.length,
     piSessions: native.imported,
+    piSessionsDiscovered: parsed.piSessions.length,
+    piSessionsSkipped: native.skipped || 0,
+    nativeAppendedEvents: native.appendedEvents || 0,
+    nativeUnchangedEvents: native.unchangedEvents || 0,
     semanticUpload,
     nativeUploadEvents: native.uploadedEvents,
     diagnostics: [...parsed.diagnostics, ...native.diagnostics],
@@ -332,6 +437,7 @@ async function selfCheck(config) {
   return {
     ok: Boolean(config.apiKey) && spoolWritable && sources.length > 0 && sources.every(source => source.ok),
     configured: Boolean(config.apiKey),
+    configDiagnostics: config.configDiagnostics || [],
     endpoints: {
       semantic: /^https?:\/\//.test(config.semanticEndpoint),
       otlp: /^https?:\/\//.test(config.otlpEndpoint),
@@ -346,6 +452,9 @@ async function selfCheck(config) {
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const config = await loadConfig(options);
+  for (const diagnostic of config.configDiagnostics || []) {
+    process.stderr.write(`Goal Plus collector config warning [${diagnostic.code}]: ${diagnostic.message}\n`);
+  }
   const registryOptions = { homeDir: config.homeDir, registryPath: config.registryPath, label: options.label };
   if (options.command === "attach") {
     if (!options.values[0]) throw new Error("attach requires a .gp path");

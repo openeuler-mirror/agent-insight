@@ -8,7 +8,7 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const { parseGoalPlusRoot, piProjectSessionDir } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
-const { messageText, parsePiSession } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
+const { importPiSessions, messageText, parsePiSession } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
 const { attachSource, loadRegistry } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
 const {
   buildSemanticBatches,
@@ -46,6 +46,19 @@ type NativeEvent = {
   skill?: { name?: string };
 };
 type ParsedPi = { fidelity: string; events: NativeEvent[]; diagnostics?: Array<{ code: string }> };
+
+function memoryWriter(events: NativeEvent[], order: string[] = []) {
+  return {
+    async append(event: NativeEvent) {
+      order.push('append');
+      events.push(event);
+      return event;
+    },
+    async flush() {
+      order.push('flush');
+    },
+  };
+}
 
 async function copiedFixture(t: test.TestContext) {
   const temporary = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-collector-'));
@@ -96,6 +109,74 @@ test('Goal Plus config keeps its source registry adjacent to a custom managed di
 
   const config = await loadConfig({ homeDir, configPath });
   assert.equal(config.registryPath, path.join(path.dirname(configPath), 'sources.json'));
+});
+
+test('Goal Plus managed config rejects a silent ambient API key override', async t => {
+  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-config-authority-'));
+  t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  const configPath = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus', 'config.json');
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify({
+    apiKey: 'managed-key',
+    baseUrl: 'https://managed-base.invalid/root/',
+    semanticEndpoint: 'https://managed.invalid/semantic',
+    otlpEndpoint: 'https://managed.invalid/traces',
+    hosts: ['pi'],
+  }));
+  const previousApiKey = process.env.AGENT_INSIGHT_API_KEY;
+  const previousOtlpEndpoint = process.env.AGENT_INSIGHT_OTLP_ENDPOINT;
+  const previousGoalPlusApiKey = process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY;
+  const previousGoalPlusBaseUrl = process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL;
+  process.env.AGENT_INSIGHT_API_KEY = 'ambient-key';
+  process.env.AGENT_INSIGHT_OTLP_ENDPOINT = 'https://ambient.invalid/traces';
+  delete process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY;
+  t.after(() => {
+    if (previousApiKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
+    else process.env.AGENT_INSIGHT_API_KEY = previousApiKey;
+    if (previousOtlpEndpoint === undefined) delete process.env.AGENT_INSIGHT_OTLP_ENDPOINT;
+    else process.env.AGENT_INSIGHT_OTLP_ENDPOINT = previousOtlpEndpoint;
+    if (previousGoalPlusApiKey === undefined) delete process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY;
+    else process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY = previousGoalPlusApiKey;
+    if (previousGoalPlusBaseUrl === undefined) delete process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL;
+    else process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL = previousGoalPlusBaseUrl;
+  });
+
+  const managed = await loadConfig({ homeDir, configPath });
+  assert.equal(managed.apiKey, 'managed-key');
+  assert.equal(managed.apiKeySource, 'config');
+  assert.equal(managed.semanticEndpoint, 'https://managed.invalid/semantic');
+  assert.equal(managed.otlpEndpoint, 'https://managed.invalid/traces');
+  assert.deepEqual(managed.configDiagnostics.map((item: { code: string }) => item.code), [
+    'ignored_ambient_api_key',
+    'ignored_ambient_otlp_endpoint',
+  ]);
+  assert.doesNotMatch(JSON.stringify(managed.configDiagnostics), /managed-key|ambient-key/);
+
+  const legacyAmbient = await loadConfig({ homeDir, configPath: path.join(homeDir, 'missing-config.json') });
+  assert.equal(legacyAmbient.apiKey, 'ambient-key');
+  assert.equal(legacyAmbient.apiKeySource, 'ambient-env');
+  assert.equal(legacyAmbient.otlpEndpoint, 'https://ambient.invalid/traces');
+
+  process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY = 'explicit-key';
+  const explicitlyOverridden = await loadConfig({ homeDir, configPath });
+  assert.equal(explicitlyOverridden.apiKey, 'explicit-key');
+  assert.equal(explicitlyOverridden.apiKeySource, 'goal-plus-env');
+  assert.equal(explicitlyOverridden.configDiagnostics.some((item: { code: string }) => item.code === 'ignored_ambient_api_key'), false);
+
+  process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL = 'https://explicit.invalid/base/';
+  const baseOverridden = await loadConfig({ homeDir, configPath });
+  assert.equal(baseOverridden.semanticEndpoint, 'https://explicit.invalid/base/api/ingest/goal-plus/v1/snapshots');
+  assert.equal(baseOverridden.otlpEndpoint, 'https://explicit.invalid/base/api/ingest/otel/v1/traces');
+
+  delete process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL;
+  const baseOnlyConfigPath = path.join(homeDir, 'base-only.json');
+  await fsp.writeFile(baseOnlyConfigPath, JSON.stringify({
+    apiKey: 'managed-key',
+    baseUrl: 'https://managed-base.invalid/root/',
+  }));
+  const baseOnly = await loadConfig({ homeDir, configPath: baseOnlyConfigPath });
+  assert.equal(baseOnly.semanticEndpoint, 'https://managed-base.invalid/root/api/ingest/goal-plus/v1/snapshots');
+  assert.equal(baseOnly.otlpEndpoint, 'https://managed-base.invalid/root/api/ingest/otel/v1/traces');
 });
 
 test('Goal Plus watcher ensure recovers a stale PID after service restart', async t => {
@@ -150,8 +231,43 @@ test('Goal Plus managed watcher starts idempotently and stops without touching n
   const repeated = await startWatcher(config, { intervalMs: 60_000 });
   assert.equal(repeated.alreadyRunning, true);
   assert.equal(repeated.pid, started.pid);
-  const stopped = await stopWatcher(config);
+  const changedConfig = { ...config, otlpEndpoint: 'http://127.0.0.1:9/changed-traces' };
+  const reconfigured = await ensureWatcher(changedConfig, { intervalMs: 60_000 });
+  assert.equal(reconfigured.restartedForConfigChange, true);
+  assert.notEqual(reconfigured.pid, started.pid);
+  const rescheduled = await ensureWatcher(changedConfig, { intervalMs: 59_000 });
+  assert.equal(rescheduled.restartedForConfigChange, false);
+  assert.equal(rescheduled.restartedForIntervalChange, true);
+  assert.equal(rescheduled.intervalMs, 59_000);
+  assert.notEqual(rescheduled.pid, reconfigured.pid);
+  const stopped = await stopWatcher(changedConfig);
   assert.equal(stopped.stopped, true);
+  assert.equal((await watcherStatus(config)).running, false);
+});
+
+test('Goal Plus ensure stops an active watcher after its credential is revoked', async t => {
+  if (process.platform === 'win32') return t.skip('detached process signaling differs on Windows');
+  const { temporary, root } = await copiedFixture(t);
+  const homeDir = path.join(temporary, 'home');
+  const configPath = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus', 'config.json');
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify({
+    apiKey: 'synthetic',
+    hosts: ['pi'],
+    semanticEndpoint: 'http://127.0.0.1:9/semantic',
+    otlpEndpoint: 'http://127.0.0.1:9/traces',
+  }));
+  await attachSource(root, { homeDir });
+  const config = await loadConfig({ homeDir, configPath });
+  t.after(() => stopWatcher(config));
+
+  const started = await startWatcher(config, { intervalMs: 60_000 });
+  assert.equal(started.running, true);
+  const revoked = await ensureWatcher({ ...config, apiKey: '' }, { intervalMs: 60_000 });
+  assert.equal(revoked.ensured, false);
+  assert.equal(revoked.reason, 'not_configured');
+  assert.equal(revoked.stoppedForConfigRevocation, true);
+  assert.equal(revoked.running, false);
   assert.equal((await watcherStatus(config)).running, false);
 });
 
@@ -317,6 +433,157 @@ test('Pi passive parser uses one stable canonical session with LLM and tool even
   assert.ok(first.events.some(item => item.kind === 'skill' && item.skill?.name === 'demo-skill'));
   assert.ok(first.events.every(item => item.sessionId === 'goal-plus:gpsrc_fixture:agent_001'));
   assert.deepEqual(first.events.map(item => item.eventId), second.events.map(item => item.eventId));
+});
+
+test('Goal Plus Pi importer checkpoints durable events before upload and skips 100 unchanged scans', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const stateDir = path.join(temporary, 'pi-import-state');
+  const descriptor = {
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    runId: 'run_demo',
+    candidateId: 'candidate_001',
+    role: 'candidate-worker',
+    sessionFile: 'runs/run_demo/pi_sessions/agent_001.jsonl',
+  };
+  const appended: NativeEvent[] = [];
+  const order: string[] = [];
+  const checkpointPath = path.join(stateDir, 'goal-plus-import-checkpoint.json');
+  await assert.rejects(() => importPiSessions(root, [descriptor], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir,
+    endpoint: 'https://example.invalid/traces',
+    writer: memoryWriter(appended, order),
+    uploader: {
+      async flushOnce() {
+        order.push('upload');
+        const checkpoint = JSON.parse(await fsp.readFile(checkpointPath, 'utf8'));
+        assert.ok(checkpoint.sessions['goal-plus:gpsrc_fixture:agent_001']);
+        throw new Error('synthetic network failure');
+      },
+    },
+  }), /synthetic network failure/);
+  assert.ok(appended.length > 0);
+  assert.ok(order.lastIndexOf('flush') < order.indexOf('upload'));
+
+  for (let index = 0; index < 100; index += 1) {
+    const duplicateWrites: NativeEvent[] = [];
+    const result = await importPiSessions(root, [descriptor], {
+      apiKey: 'synthetic',
+      homeDir: temporary,
+      stateDir,
+      endpoint: 'https://example.invalid/traces',
+      upload: false,
+      writer: memoryWriter(duplicateWrites),
+      uploader: { async flushOnce() { throw new Error('upload must remain disabled'); } },
+    });
+    assert.equal(result.skipped, 1);
+    assert.equal(result.appendedEvents, 0);
+    assert.equal(duplicateWrites.length, 0);
+  }
+});
+
+test('Goal Plus Pi importer appends only new or changed events and refreshes terminal metadata', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const stateDir = path.join(temporary, 'pi-incremental-state');
+  const sessionFile = path.join(root, 'runs', 'run_demo', 'pi_sessions', 'agent_001.jsonl');
+  const descriptor = {
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    runId: 'run_demo',
+    candidateId: 'candidate_001',
+    role: 'candidate-worker',
+    sessionFile: path.relative(root, sessionFile),
+  };
+  const initialEvents: NativeEvent[] = [];
+  const first = await importPiSessions(root, [descriptor], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir,
+    endpoint: 'https://example.invalid/traces',
+    upload: false,
+    writer: memoryWriter(initialEvents),
+    uploader: { async flushOnce() { return { uploadedEvents: 0 }; } },
+  });
+  assert.equal(first.appendedEvents, initialEvents.length);
+
+  await fsp.appendFile(sessionFile, [
+    { type: 'message', timestamp: '2026-09-01T01:06:00Z', message: { role: 'user', content: 'One more check' } },
+    { type: 'message', timestamp: '2026-09-01T01:06:10Z', message: { role: 'assistant', stopReason: 'stop', content: 'Additional result' } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n');
+  const incrementalEvents: NativeEvent[] = [];
+  const incremental = await importPiSessions(root, [descriptor], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir,
+    endpoint: 'https://example.invalid/traces',
+    upload: false,
+    writer: memoryWriter(incrementalEvents),
+    uploader: { async flushOnce() { return { uploadedEvents: 0 }; } },
+  });
+  assert.equal(incremental.appendedEvents, 2);
+  assert.equal(incrementalEvents.filter(event => event.kind === 'llm').length, 1);
+  assert.equal(incrementalEvents.filter(event => event.kind === 'agent').length, 1);
+  assert.ok(incremental.appendedEvents < initialEvents.length);
+
+  const terminalEvents: NativeEvent[] = [];
+  const terminal = await importPiSessions(root, [{
+    ...descriptor,
+    terminalState: 'failed',
+    exitCode: 9,
+    errorMessage: 'worker process failed',
+  }], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir,
+    endpoint: 'https://example.invalid/traces',
+    upload: false,
+    writer: memoryWriter(terminalEvents),
+    uploader: { async flushOnce() { return { uploadedEvents: 0 }; } },
+  });
+  assert.equal(terminal.appendedEvents, 1);
+  assert.equal(terminalEvents[0]?.kind, 'agent');
+  assert.equal(terminalEvents[0]?.status, 'error');
+  assert.equal(terminalEvents[0]?.attributes?.['goal_plus.exit_code'], 9);
+});
+
+test('Goal Plus Pi importer rebuilds a session checkpoint after truncation', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const stateDir = path.join(temporary, 'pi-truncation-state');
+  const sessionFile = path.join(root, 'runs', 'run_demo', 'pi_sessions', 'agent_001.jsonl');
+  const descriptor = {
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    sessionFile: path.relative(root, sessionFile),
+  };
+  const runImport = async (events: NativeEvent[]) => importPiSessions(root, [descriptor], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir,
+    endpoint: 'https://example.invalid/traces',
+    upload: false,
+    writer: memoryWriter(events),
+    uploader: { async flushOnce() { return { uploadedEvents: 0 }; } },
+  });
+  const initialEvents: NativeEvent[] = [];
+  await runImport(initialEvents);
+
+  await fsp.writeFile(sessionFile, [
+    { type: 'message', timestamp: '2026-09-01T01:05:00Z', message: { role: 'user', content: 'Restarted session' } },
+    { type: 'message', timestamp: '2026-09-01T01:05:01Z', message: { role: 'assistant', stopReason: 'stop', content: 'Recovered' } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n');
+  const rebuiltEvents: NativeEvent[] = [];
+  const rebuilt = await runImport(rebuiltEvents);
+  assert.equal(rebuilt.appendedEvents, 2);
+  assert.deepEqual(new Set(rebuiltEvents.map(event => event.kind)), new Set(['llm', 'agent']));
+
+  const unchangedEvents: NativeEvent[] = [];
+  const unchanged = await runImport(unchangedEvents);
+  assert.equal(unchanged.skipped, 1);
+  assert.equal(unchangedEvents.length, 0);
+  const checkpoint = JSON.parse(await fsp.readFile(path.join(stateDir, 'goal-plus-import-checkpoint.json'), 'utf8'));
+  assert.equal(checkpoint.sessions['goal-plus:gpsrc_fixture:agent_001'].generation, 1);
 });
 
 test('Pi passive parser preserves thinking and reports aborted Goal Plus workers', async t => {

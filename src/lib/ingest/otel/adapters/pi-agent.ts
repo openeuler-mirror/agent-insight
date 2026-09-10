@@ -425,14 +425,16 @@ export function aggregatePiAgentTraceEvents(
   );
   const rootAgentEvents = sortedAgents.slice(0, 1);
   const terminalAgent = rootAgentEvents.find(isTerminalAgentEvent);
-  const startCandidates = rootAgentEvents.length
-    ? rootAgentEvents.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now())
-    : ordered.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now());
-  const endCandidates = rootAgentEvents.length
-    ? rootAgentEvents.map(eventEndMs)
-    : ordered.map(eventEndMs);
-  const startedAt = Math.min(...startCandidates);
-  const endedAt = Math.max(...endCandidates);
+  const timingEvents = rootAgentEvents.length ? rootAgentEvents : ordered;
+  let startedAt = Number.POSITIVE_INFINITY;
+  let endedAt = 0;
+  for (const event of timingEvents) {
+    startedAt = Math.min(
+      startedAt,
+      event.startTimeMs || Date.parse(event.receivedAt) || Date.now(),
+    );
+    endedAt = Math.max(endedAt, eventEndMs(event));
+  }
   const query = agentEvents.map(eventInput).find(Boolean) ||
     llmEvents.map(eventInput).find(Boolean) ||
     'Pi Agent Session';
@@ -455,14 +457,13 @@ export function aggregatePiAgentTraceEvents(
     event.usage.input_tokens +
     event.usage.output_tokens
   ), 0);
-  const maxSingleCallTokens = Math.max(
-    0,
-    ...llmEvents.map((event) => (
-      event.usage.total_tokens ||
-      event.usage.input_tokens +
-      event.usage.output_tokens
-    )),
-  );
+  let maxSingleCallTokens = 0;
+  for (const event of llmEvents) {
+    maxSingleCallTokens = Math.max(
+      maxSingleCallTokens,
+      event.usage.total_tokens || event.usage.input_tokens + event.usage.output_tokens,
+    );
+  }
   const model = llmEvents.map(eventModel).find(Boolean) || agentEvents.map(eventModel).find(Boolean) || 'unknown';
   const failedAgent = [...agentEvents].reverse().find((event) => {
     const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();

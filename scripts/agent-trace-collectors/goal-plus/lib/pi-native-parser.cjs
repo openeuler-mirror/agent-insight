@@ -1,17 +1,140 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
+const fsp = require("node:fs/promises");
 const path = require("node:path");
 const {
   DurableTraceUploader,
   DurableTraceWriter,
+  acquireProcessLock,
+  atomicWriteJson,
+  collectorStateDir,
+  redactValue,
+  releaseProcessLock,
   safeContent,
+  sha256,
   stableEventId,
   stableSpanId,
   stableTraceId,
 } = require("../../shared/trace-transport.cjs");
 const { classifyTool, parseMcpIdentity, usageFrom } = require("../../shared/pi-trace-helpers.cjs");
 const { safeStableRead } = require("./gp-snapshot-parser.cjs");
+
+const IMPORT_CHECKPOINT_VERSION = 1;
+
+function stableJson(value) {
+  if (value === undefined) return "null";
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function descriptorFingerprint(descriptor) {
+  return `sha256:${sha256(stableJson({
+    sourceId: descriptor.sourceId,
+    agentSessionId: descriptor.agentSessionId,
+    nativeSessionId: descriptor.nativeSessionId,
+    goalId: descriptor.goalId,
+    runId: descriptor.runId,
+    candidateId: descriptor.candidateId,
+    role: descriptor.role,
+    sessionKind: descriptor.sessionKind,
+    terminalState: descriptor.terminalState,
+    businessState: descriptor.businessState,
+    exitCode: descriptor.exitCode,
+    errorMessage: descriptor.errorMessage,
+    input: descriptor.input,
+    startLine: descriptor.startLine,
+    endLine: descriptor.endLine,
+  }))}`;
+}
+
+function eventFingerprint(event) {
+  return `sha256:${sha256(stableJson(redactValue(event)))}`;
+}
+
+function resolvedSessionPath(root, descriptor) {
+  return path.isAbsolute(descriptor.sessionFile)
+    ? descriptor.sessionFile
+    : path.resolve(root, descriptor.sessionFile);
+}
+
+function sourceFingerprint(sessionPath, stat) {
+  return {
+    pathHash: `sha256:${sha256(path.resolve(sessionPath))}`,
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+async function statPiSession(root, descriptor) {
+  const sessionPath = resolvedSessionPath(root, descriptor);
+  const canonicalRoots = await Promise.all(
+    [...new Set([root, ...(descriptor.allowedRoots || [])])].map(item => fsp.realpath(item)),
+  );
+  const initial = await fsp.lstat(sessionPath);
+  if (!initial.isFile() || initial.isSymbolicLink()) throw new Error("not a regular non-symlink file");
+  const canonical = await fsp.realpath(sessionPath);
+  const contained = canonicalRoots.some(canonicalRoot => (
+    canonical === canonicalRoot || canonical.startsWith(`${canonicalRoot}${path.sep}`)
+  ));
+  if (!contained) throw new Error("file resolves outside allowed collector roots");
+  const final = await fsp.stat(canonical);
+  const initialIdentity = [initial.dev, initial.ino, initial.size, initial.mtimeMs, initial.ctimeMs].join(":");
+  const finalIdentity = [final.dev, final.ino, final.size, final.mtimeMs, final.ctimeMs].join(":");
+  if (initialIdentity !== finalIdentity) throw new Error("file changed while checking import state");
+  return sourceFingerprint(sessionPath, final);
+}
+
+function sameFingerprint(left, right) {
+  return Boolean(left && right && stableJson(left) === stableJson(right));
+}
+
+function fileWasReset(previous, current, previousDescriptor, currentDescriptor) {
+  if (!previous) return false;
+  if (previous.pathHash !== current.pathHash || previous.dev !== current.dev || previous.ino !== current.ino) return true;
+  if (Number(current.size) < Number(previous.size)) return true;
+  if (previousDescriptor?.startLine !== currentDescriptor?.startLine) return true;
+  if (Number.isInteger(previousDescriptor?.endLine)
+    && Number.isInteger(currentDescriptor?.endLine)
+    && currentDescriptor.endLine < previousDescriptor.endLine) return true;
+  return false;
+}
+
+function defaultImportCheckpoint() {
+  return { version: IMPORT_CHECKPOINT_VERSION, sessions: {} };
+}
+
+async function readImportCheckpoint(checkpointPath) {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(checkpointPath, "utf8"));
+    if (parsed?.version === IMPORT_CHECKPOINT_VERSION && parsed.sessions && typeof parsed.sessions === "object") {
+      return { checkpoint: parsed };
+    }
+    return {
+      checkpoint: defaultImportCheckpoint(),
+      diagnostic: { code: "invalid_pi_import_checkpoint", message: "unsupported checkpoint format; rebuilding" },
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { checkpoint: defaultImportCheckpoint() };
+    if (error instanceof SyntaxError) {
+      return {
+        checkpoint: defaultImportCheckpoint(),
+        diagnostic: { code: "invalid_pi_import_checkpoint", message: "malformed checkpoint; rebuilding" },
+      };
+    }
+    throw error;
+  }
+}
 
 function timestamp(value, fallback) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -70,9 +193,7 @@ function unwrapMessage(record) {
 }
 
 async function parsePiSession(root, descriptor) {
-  const sessionPath = path.isAbsolute(descriptor.sessionFile)
-    ? descriptor.sessionFile
-    : path.resolve(root, descriptor.sessionFile);
+  const sessionPath = resolvedSessionPath(root, descriptor);
   const read = await safeStableRead(root, sessionPath, {
     allowedRoots: descriptor.allowedRoots || [],
     maxBytes: null,
@@ -90,12 +211,18 @@ async function parsePiSession(root, descriptor) {
     catch { diagnostics.push({ code: "invalid_pi_jsonl_record", line: index + 1 }); }
   }
   const messages = records.map(item => unwrapMessage(item.record)).filter(Boolean);
-  if (!messages.length) return { events: [], fidelity: "summary-only", diagnostics };
-  const fallback = read.stat.mtimeMs;
+  const source = sourceFingerprint(sessionPath, read.stat);
+  if (!messages.length) return { events: [], fidelity: "summary-only", diagnostics, source };
+  const explicitTimes = messages
+    .map(message => timestamp(message.timestamp, Number.NaN))
+    .filter(Number.isFinite);
+  const fallback = explicitTimes.length
+    ? explicitTimes.reduce((lowest, value) => Math.min(lowest, value))
+    : Number(read.stat.birthtimeMs) || read.stat.mtimeMs;
   const times = messages.map(message => timestamp(message.timestamp, fallback));
   const startedAt = times.reduce((lowest, value) => Math.min(lowest, value), fallback);
   const endedAt = times.reduce((highest, value) => Math.max(highest, value), startedAt);
-  const sessionId = `goal-plus:${descriptor.sourceId}:${descriptor.agentSessionId}`;
+  const sessionId = descriptor.canonicalSessionId || `goal-plus:${descriptor.sourceId}:${descriptor.agentSessionId}`;
   const traceId = stableTraceId("pi-agent", sessionId);
   const agentSpanId = stableSpanId(sessionId, "agent");
   const firstUser = messages.find(message => message.role === "user");
@@ -273,36 +400,124 @@ async function parsePiSession(root, descriptor) {
       "goal_plus.exit_code": Number.isFinite(exitCode) ? exitCode : undefined,
     },
   });
-  return { events, fidelity: "derived", diagnostics };
+  return { events, fidelity: "derived", diagnostics, source };
 }
 
 async function importPiSessions(root, sessions, options) {
+  const stateDir = options.stateDir || collectorStateDir("pi-agent", options.apiKey, options.homeDir);
   const writer = options.writer || new DurableTraceWriter({
     framework: "pi-agent",
     apiKey: options.apiKey,
     homeDir: options.homeDir,
+    stateDir,
   });
   const uploader = options.uploader || new DurableTraceUploader({
     framework: "pi-agent",
     apiKey: options.apiKey,
     endpoint: options.endpoint,
     homeDir: options.homeDir,
+    stateDir,
   });
+  const checkpointPath = options.checkpointPath || path.join(stateDir, "goal-plus-import-checkpoint.json");
+  const lockPath = options.lockPath || path.join(stateDir, "goal-plus-import.lock");
+  const lock = await acquireProcessLock(lockPath);
   const diagnostics = [];
   let imported = 0;
-  for (const session of sessions) {
+  let skipped = 0;
+  let appendedEvents = 0;
+  let unchangedEvents = 0;
+
+  if (lock) {
     try {
-      const parsed = await parsePiSession(root, session);
-      for (const event of parsed.events) await writer.append(event);
-      for (const diagnostic of parsed.diagnostics || []) diagnostics.push({ agentSessionId: session.agentSessionId, ...diagnostic });
-      imported += parsed.events.length ? 1 : 0;
-    } catch (error) {
-      diagnostics.push({ agentSessionId: session.agentSessionId, code: "pi_import_failed", message: error.message });
+      const loaded = await readImportCheckpoint(checkpointPath);
+      const checkpoint = loaded.checkpoint;
+      if (loaded.diagnostic) diagnostics.push(loaded.diagnostic);
+      let checkpointPersisted = false;
+
+      for (const session of sessions) {
+        const sessionId = session.canonicalSessionId || `goal-plus:${session.sourceId}:${session.agentSessionId}`;
+        let descriptorHash;
+        let parsed;
+        let previous;
+        try {
+          descriptorHash = descriptorFingerprint(session);
+          const currentSource = await statPiSession(root, session);
+          previous = checkpoint.sessions[sessionId];
+          if (previous?.descriptorHash === descriptorHash && sameFingerprint(previous.source, currentSource)) {
+            skipped += 1;
+            continue;
+          }
+          parsed = await parsePiSession(root, session);
+          for (const diagnostic of parsed.diagnostics || []) {
+            diagnostics.push({ agentSessionId: session.agentSessionId, ...diagnostic });
+          }
+        } catch (error) {
+          diagnostics.push({ agentSessionId: session.agentSessionId, code: "pi_import_failed", message: error.message });
+          continue;
+        }
+
+        const reset = fileWasReset(previous?.source, parsed.source, previous?.descriptor, session);
+        const previousHashes = reset ? {} : previous?.events || {};
+        const nextHashes = {};
+        let sessionAppended = 0;
+        for (const event of parsed.events) {
+          const hash = eventFingerprint(event);
+          nextHashes[event.eventId] = hash;
+          if (previousHashes[event.eventId] === hash) {
+            unchangedEvents += 1;
+            continue;
+          }
+          await writer.append(event);
+          sessionAppended += 1;
+        }
+        await writer.flush();
+        checkpoint.sessions[sessionId] = {
+          source: parsed.source,
+          descriptorHash,
+          descriptor: {
+            startLine: session.startLine,
+            endLine: session.endLine,
+          },
+          events: nextHashes,
+          generation: Number(previous?.generation || 0) + (reset ? 1 : 0),
+          updatedAt: new Date().toISOString(),
+        };
+        await atomicWriteJson(checkpointPath, checkpoint);
+        checkpointPersisted = true;
+        appendedEvents += sessionAppended;
+        imported += sessionAppended > 0 ? 1 : 0;
+      }
+
+      await writer.flush();
+      if (loaded.diagnostic && !checkpointPersisted) await atomicWriteJson(checkpointPath, checkpoint);
+    } finally {
+      await releaseProcessLock(lock);
     }
+  } else {
+    diagnostics.push({ code: "pi_import_locked", message: "another Goal Plus Pi import is already running" });
   }
-  await writer.flush();
+
   const upload = options.upload === false ? { uploadedEvents: 0 } : await uploader.flushOnce();
-  return { imported, uploadedEvents: upload.uploadedEvents || 0, diagnostics };
+  return {
+    examined: sessions.length,
+    imported,
+    skipped,
+    appendedEvents,
+    unchangedEvents,
+    uploadedEvents: upload.uploadedEvents || 0,
+    diagnostics,
+  };
 }
 
-module.exports = { detectedSkill, importPiSessions, messageText, parsePiSession, toolCalls, unwrapMessage };
+module.exports = {
+  descriptorFingerprint,
+  detectedSkill,
+  eventFingerprint,
+  importPiSessions,
+  messageText,
+  parsePiSession,
+  readImportCheckpoint,
+  statPiSession,
+  toolCalls,
+  unwrapMessage,
+};

@@ -183,42 +183,142 @@ function getIndex(file: string): LegacySessionIndex | null {
  * 按索引定点读取某个 session 在 legacy 整日文件里的事件。
  * 区间合并允许覆盖少量别的 session 的行,所以读回来仍要按 sessionId 过滤一次。
  */
-export function readLegacyEventsForSession<T = any>(file: string, sessionId: string): T[] {
-  const index = getIndex(file);
-  if (!index) return [];
-  const ranges = index.sessions[sessionId];
-  if (!ranges || !ranges.length) return [];
-
+export function readLegacyEventsForSession<T = unknown>(file: string, sessionId: string): T[] {
   const events: T[] = [];
+  visitLegacyEventsForSession<T>(file, sessionId, (event) => {
+    events.push(event);
+  });
+  return events;
+}
+
+export type LegacySessionVisitResult = {
+  lineCount: number;
+  eventCount: number;
+  parseErrors: number;
+  oversizedLines: number;
+};
+
+/**
+ * 流式遍历 legacy byte ranges，避免单个会话在旧整日文件里命中大量数据时
+ * 先构造完整数组，或为合并后的大 range 一次性分配同等大小的 Buffer。
+ */
+export function visitLegacyEventsForSession<T = unknown>(
+  file: string,
+  sessionId: string,
+  visitor: (event: T, lineBytes: number) => void,
+  options: {
+    maxLineBytes?: number;
+    onOversizedLine?: (lineBytes: number) => void;
+  } = {},
+): LegacySessionVisitResult {
+  const index = getIndex(file);
+  const result: LegacySessionVisitResult = {
+    lineCount: 0,
+    eventCount: 0,
+    parseErrors: 0,
+    oversizedLines: 0,
+  };
+  if (!index) return result;
+  const ranges = index.sessions[sessionId];
+  if (!ranges || !ranges.length) return result;
+
   let fd: number;
   try {
     fd = fs.openSync(file, 'r');
   } catch {
-    return events;
+    return result;
   }
+
+  const maxLineBytes = options.maxLineBytes ?? Number.POSITIVE_INFINITY;
+  const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
 
   try {
     for (const [offset, length] of ranges) {
-      const buffer = Buffer.allocUnsafe(length);
-      let bytesRead = 0;
-      try {
-        bytesRead = fs.readSync(fd, buffer, 0, length, offset);
-      } catch {
-        continue;
-      }
-      for (const line of buffer.subarray(0, bytesRead).toString('utf8').split('\n')) {
-        if (!line.trim()) continue;
+      const decoder = new StringDecoder('utf8');
+      let position = offset;
+      const end = offset + length;
+      let pending = '';
+      let skippingOversized = false;
+
+      const consume = (text: string, final: boolean): void => {
+        if (skippingOversized) {
+          const newline = text.indexOf('\n');
+          if (newline < 0) return;
+          skippingOversized = false;
+          text = text.slice(newline + 1);
+        }
+
+        pending += text;
+        let newline = pending.indexOf('\n');
+        while (newline >= 0) {
+          const line = pending.slice(0, newline);
+          pending = pending.slice(newline + 1);
+          if (line.trim()) {
+            result.lineCount += 1;
+            const lineBytes = Buffer.byteLength(line, 'utf8');
+            if (lineBytes > maxLineBytes) {
+              result.oversizedLines += 1;
+              options.onOversizedLine?.(lineBytes);
+            } else {
+              let event: T | undefined;
+              try {
+                event = JSON.parse(line);
+              } catch {
+                result.parseErrors += 1;
+              }
+              if ((event as { sessionId?: unknown } | undefined)?.sessionId === sessionId) {
+                result.eventCount += 1;
+                visitor(event as T, lineBytes);
+              }
+            }
+          }
+          newline = pending.indexOf('\n');
+        }
+
+        if (Buffer.byteLength(pending, 'utf8') > maxLineBytes) {
+          const lineBytes = Buffer.byteLength(pending, 'utf8');
+          result.lineCount += 1;
+          result.oversizedLines += 1;
+          options.onOversizedLine?.(lineBytes);
+          pending = '';
+          skippingOversized = true;
+        } else if (final && pending.trim()) {
+          result.lineCount += 1;
+          const lineBytes = Buffer.byteLength(pending, 'utf8');
+          let event: T;
+          try {
+            event = JSON.parse(pending);
+          } catch {
+            result.parseErrors += 1;
+            pending = '';
+            return;
+          }
+          if ((event as { sessionId?: unknown })?.sessionId === sessionId) {
+            result.eventCount += 1;
+            visitor(event, lineBytes);
+          }
+          pending = '';
+        }
+      };
+
+      while (position < end) {
+        let bytesRead = 0;
         try {
-          const event = JSON.parse(line);
-          if (event?.sessionId === sessionId) events.push(event);
-        } catch {}
+          bytesRead = fs.readSync(fd, buffer, 0, Math.min(buffer.length, end - position), position);
+        } catch {
+          break;
+        }
+        if (bytesRead <= 0) break;
+        position += bytesRead;
+        consume(decoder.write(buffer.subarray(0, bytesRead)), false);
       }
+      consume(decoder.end(), true);
     }
   } finally {
     fs.closeSync(fd);
   }
 
-  return events;
+  return result;
 }
 
 /** 删除某个 legacy 文件的旁路索引(retention 归档原文件时调用)。 */
