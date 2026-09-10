@@ -82,9 +82,9 @@ completeness 是独立状态机：
 
 `timingFidelity` 使用 `exact/mixed/derived/summary-only`，semantic snapshot 的 `contentFidelity` 使用 `bounded/metadata-only/mixed`。它们不能被成功/失败状态替代，也不能把缺失数据显示为零。Pi passive importer 的 canonical session 固定为 `goal-plus:<sourceId>:<agentSessionId>`；主会话的 agent session ID 为 `main:<goalId>:<nativeSessionId>:<markerId>`。continuation 重建同一 Execution；低 authority 的重复 link 不进入默认原生 Trace 列表。
 
-Pi adapter 只在根 Agent 带有可靠终态信号时设置 `trace_completed_at`；Goal Plus passive snapshot 还要求明确 terminal state 或 exit code，增量 LLM/Tool snapshot 保持 running。通用 Trace 列表、Goal Plus 列表/详情和 Trace drawer 在页面可见时以 5 秒周期静默重取；同一 Execution 的 tree 更新必须保留用户的选择和展开状态。
+Pi adapter 只在根 Agent 带有可靠运行时终态信号时设置 `trace_completed_at`；Goal Plus passive snapshot 还要求明确 runtime terminal state 或 exit code，增量 LLM/Tool snapshot 保持 running。Pi 主对话的 Goal `complete/blocked/abandoned` 只用于确认本次 invocation 已结束，并作为独立 business state 保留；它不决定 Execution 成败。通用 Trace 列表、Goal Plus 列表/详情和 Trace drawer 在页面可见时以 5 秒周期静默重取；同一 Execution 的 tree 更新必须保留用户的选择和展开状态。
 
-Pi passive importer 将 native session 作为正文权威源：保留所有 assistant `thinking`/`text`、后续 user/custom message、tool 参数和 tool result，只执行共享 secret/path 脱敏，不设置固定 2000 字符或二次字符截断。上传器的 batch byte 值只是多事件组包目标；第一条事件超过该值时仍读取完整换行记录并单独上传，成功后才移动 checkpoint。aborted/cancelled/blocked 或非零 exit code 会在 Agent event 和 Execution failures 中保留失败证据。
+Pi passive importer 将 native session 作为正文权威源：保留所有 assistant `thinking`/`text`、后续 user/custom message、tool 参数和 tool result，只执行共享 secret/path 脱敏，不设置固定 2000 字符或二次字符截断。上传器的 batch byte 值只是多事件组包目标；第一条事件超过该值时仍读取完整换行记录并单独上传，成功后才移动 checkpoint。未恢复的 runtime aborted/cancelled/blocked、worker timeout、runner failure 或非零 exit code 会在 Agent event 和 Execution failures 中保留失败证据；已被后续 continuation 恢复的历史中止和 Goal/Run 的业务 blocked 不会把 Execution 标成失败。
 
 ## 扩展约束
 

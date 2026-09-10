@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `4e7d221413f79aa7ca22e8372871c4d7cd654865` (`4e7d221`) |
-| Branch | `master` |
-| Date | 2026-09-03 12:16:33 +0800 |
-| Author | openeuler-ci-bot |
-| Subject | `!377 刷新架构图中Agent可靠性描述，区分事前、事中、事后三阶段` |
-| Working tree overlay | 当前工作树新增 Goal Plus 只读观测覆盖层，并补充 Pi/Codex Trace 来源 profile：服务端只配置并去重既有 native collector 依赖，不安装或修改 Goal Plus 本体；`.gp` watcher 是不影响 native Trace 就绪状态的可选语义增强。Pi 主对话通过 attached workspace 的精确 project-session 目录和 native-entry/goal marker 定向补采，所有 Pi worker 继续从 `.gp` agent-session metadata 导入；native message/thinking/tool 正文只脱敏、不固定截断，单条大事件可超过 batch byte target 独立上传。Agent Insight 启动路径在服务就绪后幂等 ensure 已登记 source 的 watcher、清理失效 PID，并优先完成 native import 后再上传语义批次；Pi adapter 仅按根 Agent 终态完成 Execution，相关列表与详情在可见页每 5 秒静默刷新并保留树交互状态。上述 overlay 不修改 Pi/Codex 原有实时 collector、Execution ID 或原生执行树。 |
+| Commit | `52e14fcf08092d8354c51a79f0f2f3736d1a88b2` (`52e14fcf`) |
+| Branch | `goal_plus` |
+| Date | 2026-09-09 18:40:20 +0900 |
+| Author | huang |
+| Subject | `fix: 修正 Goal Plus source 自愈路径` |
+| Working tree overlay | Goal Plus Pi passive importer 将运行终态与业务终态分离：主对话正常返回时，即使 Goal/Run 为 `blocked`/`selection_blocked`，Execution 仍按运行成功记录，业务状态继续留在 overlay；worker timeout、runner failure、非零退出及未恢复的最终中止仍记录为失败。continuation 以最后一次 assistant 结果判定，已恢复的历史 abort 不污染最终状态。改动仅位于 Goal Plus collector，被独立接入的 Pi collector、Execution ID 和原生执行树保持不变。 |
 
 **如何更新：** `git diff 4e7d221 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 

@@ -135,7 +135,7 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
 - [ ] T206 主对话、全 worker 与终止状态
   - Goal active session 记录所有已发现 Pi main invocation 的 canonical session ID；
   - `pi-rpc`、`pi`、`pi-agent` 的每个可定位 agent session 都进入 importer；
-  - aborted/cancelled/blocked/non-zero exit 生成失败证据，不得显示为正常成功；
+  - worker timeout、runner failure、未恢复的 runtime aborted/cancelled/blocked、non-zero exit 生成失败证据；Goal/Run 业务 blocked 不改变主 Execution 的运行结果；
   - 验收：主对话可见，worker 数与 `.gp/runs/*/agent_sessions` 一致，长正文长度一致。
 
 ### Wave 3：服务端模型、API 与关联

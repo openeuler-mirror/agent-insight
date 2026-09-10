@@ -29,6 +29,7 @@ type PiSessionDescriptor = {
   nativeSessionId?: string;
   canonicalSessionId?: string;
   terminalState?: string;
+  businessState?: string;
   errorMessage?: string;
 };
 type ParsedRoot = { diagnostics: unknown[]; snapshots: ParsedSnapshot[]; piSessions: PiSessionDescriptor[] };
@@ -212,6 +213,21 @@ test('Pi worker locator recovers uniquely timestamp-prefixed host sessions', asy
   assert.equal(descriptor.errorMessage, 'synthetic worker failure');
 });
 
+test('Pi worker runtime timeout overrides a stale successful session state', async t => {
+  const { root } = await copiedFixture(t);
+  const metadataPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
+  const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
+  metadata.status = 'completed';
+  metadata.host_handle.metadata.timed_out = true;
+  metadata.host_handle.metadata.exit_code = 143;
+  await fsp.writeFile(metadataPath, JSON.stringify(metadata));
+
+  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
+  const descriptor = parsed.piSessions.find(item => item.sessionKind !== 'main');
+  assert.ok(descriptor);
+  assert.equal(descriptor.terminalState, 'aborted');
+});
+
 test('semantic parser ignores an incomplete JSONL tail', async t => {
   const { root } = await copiedFixture(t);
   await fsp.appendFile(path.join(root, 'goal-plus', 'gp_demo', 'events.jsonl'), '{"event_id":"half');
@@ -338,6 +354,8 @@ test('Goal Plus parser discovers and imports the Pi main conversation determinis
   const { temporary, root } = await copiedFixture(t);
   const goalPath = path.join(root, 'goal-plus', 'gp_demo', 'goal.json');
   const goal = JSON.parse(await fsp.readFile(goalPath, 'utf8'));
+  goal.status = 'blocked';
+  goal.phase = 'search';
   goal.active_session = null;
   goal.host_command_invocations = [{
     action: 'start',
@@ -366,6 +384,8 @@ test('Goal Plus parser discovers and imports the Pi main conversation determinis
   const main = parsed.piSessions.find(item => item.sessionKind === 'main');
   assert.ok(main);
   assert.equal(main.nativeSessionId, '01-main-session');
+  assert.equal(main.terminalState, 'completed');
+  assert.equal(main.businessState, 'blocked');
   assert.ok(main.canonicalSessionId);
   assert.match(main.canonicalSessionId, /^goal-plus:gpsrc_fixture:main:gp_demo:/);
 
@@ -385,7 +405,36 @@ test('Goal Plus parser discovers and imports the Pi main conversation determinis
   assert.match(llms[0].input || '', /Keep the baseline intact/);
   assert.match(llms[0].output || '', /plan all steps/);
   assert.match(llms[1].input || '', /Continue with verification/);
-  assert.equal(trace.events.find(item => item.kind === 'agent')?.output, 'Everything is complete.');
+  const mainAgent = trace.events.find(item => item.kind === 'agent');
+  assert.equal(mainAgent?.output, 'Everything is complete.');
+  assert.equal(mainAgent?.status, 'success');
+  assert.equal(mainAgent?.attributes?.['goal_plus.terminal_state'], 'completed');
+  assert.equal(mainAgent?.attributes?.['goal_plus.business_state'], 'blocked');
+});
+
+test('Pi continuation uses the latest assistant outcome instead of a recovered abort', async t => {
+  const { root } = await copiedFixture(t);
+  const sessionFile = path.join(root, 'runs', 'run_demo', 'pi_sessions', 'agent_001.jsonl');
+  await fsp.writeFile(sessionFile, [
+    { type: 'message', timestamp: '2026-09-01T01:05:00Z', message: { role: 'user', content: 'Start' } },
+    { type: 'message', timestamp: '2026-09-01T01:05:10Z', message: { role: 'assistant', stopReason: 'aborted', content: [{ type: 'text', text: 'Partial' }] } },
+    { type: 'message', timestamp: '2026-09-01T01:05:20Z', message: { role: 'user', content: 'Continue' } },
+    { type: 'message', timestamp: '2026-09-01T01:05:30Z', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Recovered and done' }] } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n');
+
+  const parsed = await parsePiSession(root, {
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    sessionFile: path.relative(root, sessionFile),
+    terminalState: 'completed',
+    businessState: 'blocked',
+  }) as ParsedPi;
+  const llms = parsed.events.filter(item => item.kind === 'llm');
+  const agent = parsed.events.find(item => item.kind === 'agent');
+  assert.equal(llms[0]?.status, 'error');
+  assert.equal(llms[1]?.status, 'success');
+  assert.equal(agent?.status, 'success');
+  assert.equal(agent?.attributes?.['goal_plus.business_state'], 'blocked');
 });
 
 test('Pi message text does not truncate large native content', () => {

@@ -175,6 +175,29 @@ test("Pi adapter completes a native snapshot after the root Agent settles", () =
   const record = aggregateOtelTraceEvents("pi-session", events)
   assert.ok(record)
   assert.equal(new Date(record.trace_completed_at!).toISOString(), new Date(endedAt).toISOString())
+  assert.equal(record.failures, undefined)
+})
+
+test("Pi adapter keeps Goal Plus business outcome separate from runtime success", () => {
+  const events = normalize([
+    canonical({
+      eventId: "goal-plus-business-blocked",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      input: "/goal-plus improve solver",
+      output: "The run ended without an eligible candidate.",
+      attributes: {
+        "goal_plus.import_mode": "passive_pi_session",
+        "goal_plus.terminal_state": "completed",
+        "goal_plus.business_state": "blocked",
+      },
+    }),
+  ])
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.ok(record.trace_completed_at)
+  assert.equal(record.failures, undefined)
 })
 
 test("Pi adapter requires an explicit Goal Plus terminal signal for passive snapshots", () => {

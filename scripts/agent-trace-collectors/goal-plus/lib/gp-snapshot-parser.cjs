@@ -11,6 +11,7 @@ const MAX_FILE_BYTES = 32 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 240 * 1024;
 const PATH_KEYS = /(?:^|_)(path|paths|workspace|session_file|transcript_path|log_paths|report_path|html_report_path|artifact_path)$/i;
 const HIDDEN_KEYS = /(?:hidden|gold|standard_answer|reference_answer|secret|password|api_key|authorization|private_key)/i;
+const TERMINAL_GOAL_STATES = new Set(["complete", "completed", "blocked", "abandoned"]);
 
 function isHiddenKey(key) {
   return HIDDEN_KEYS.test(key) || /^(?:token|auth|cookie)$/i.test(key);
@@ -359,6 +360,11 @@ function isGoalPlusMarker(record) {
     && ["goal-plus-created", "goal-plus-started", "goal-plus-resumed"].includes(type);
 }
 
+function mainRuntimeState(goal) {
+  const businessState = String(goal?.status || "").toLowerCase();
+  return TERMINAL_GOAL_STATES.has(businessState) ? "completed" : undefined;
+}
+
 function matchingGoalForMarker(record, goals) {
   const directGoalId = markerGoalId(record);
   if (directGoalId && goals.has(directGoalId)) return { goal: goals.get(directGoalId) };
@@ -418,7 +424,8 @@ async function discoverPiMainSessions(source, goalRecords, homeDir) {
           input: `/goal-plus ${String(goal.raw_goal || "")}`.trim(),
           invocationId: invocation?.invocation_id || invocation?.invocationId,
           markerId,
-          terminalState: goal.status,
+          terminalState: mainRuntimeState(goal),
+          businessState: goal.status,
         });
       }
     } catch (error) {
@@ -544,12 +551,15 @@ async function parseGoalPlusRoot(source, options = {}) {
           candidateId: raw.candidate_id,
           role: payload.role,
           sessionFile,
-          terminalState: raw.status
-            || raw.state
-            || raw.host_handle?.metadata?.pi_metrics?.stop_reason
-            || (raw.host_handle?.metadata?.runner_failed ? "failed" : undefined)
-            || (raw.host_handle?.metadata?.timed_out ? "aborted" : undefined),
-          exitCode: raw.host_handle?.metadata?.pi_metrics?.exit_code ?? raw.host_handle?.metadata?.exit_code,
+          terminalState: raw.host_handle?.metadata?.runner_failed
+            ? "failed"
+            : raw.host_handle?.metadata?.timed_out
+              ? "aborted"
+              : raw.host_handle?.metadata?.pi_metrics?.stop_reason
+                || raw.status
+                || raw.state,
+          exitCode: raw.host_handle?.metadata?.pi_metrics?.exit_code
+            ?? raw.host_handle?.metadata?.exit_code,
           errorMessage: raw.host_handle?.metadata?.error,
         });
         else diagnostics.push({

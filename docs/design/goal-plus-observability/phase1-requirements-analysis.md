@@ -261,6 +261,7 @@ allowlist，Agent Insight 可以增加更高精度的 live timing，但本期设
 | AC-013 | `/goal-plus` 触发的 Pi 主对话在 Goal Plus 与链路追踪页面可见，并与对应 Goal 确定性关联 |
 | AC-014 | `.gp` 中所有带 native Pi session 的 agent session 均有对应 Execution；中止/非零退出不得显示为正常成功 |
 | AC-015 | 超过 2000 字符及超过默认上传批次字节目标的 native 正文往返后内容长度与源 session 一致（脱敏替换除外） |
+| AC-016 | Pi Execution 状态只反映运行时结果；Goal/Run 业务 blocked 单独展示，普通 Pi 接入行为保持不变 |
 
 ## 10. 已知前置问题
 

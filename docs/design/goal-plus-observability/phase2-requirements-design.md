@@ -71,6 +71,7 @@ Explicitly attached .gp root
 | D-014 | Pi 主对话与 worker 均以 native session 为完整性权威源 | Goal Plus 的 Pi command turn 和 `--no-extensions` worker 都可能绕过实时 hook |
 | D-015 | 主对话只扫描 attached `.gp` 对应工作区的精确 Pi session 目录 | 允许恢复主会话，同时不递归扫描整个 home；用 native entry/goal ID 关联而非时间猜测 |
 | D-016 | native Trace 无固定正文截断，上传批次大小是调度目标而非单事件上限 | 长 tool result/thinking 必须完整；单条大 JSONL 可独立成批，仍执行 secret/path 脱敏 |
+| D-017 | Pi Execution 运行状态与 Goal Plus 业务终态分离 | Trace 成败只反映宿主运行；Goal/Run 的 blocked、selection 与 promotion 继续由 overlay 表达，避免污染运行可靠性统计 |
 
 ### 2.1 Goal Plus 宿主安装 profile
 

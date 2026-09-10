@@ -105,7 +105,7 @@ async function parsePiSession(root, descriptor) {
   const pendingTools = new Map();
   let llmIndex = 0;
   let previousTime = startedAt;
-  let hasFailedLlm = false;
+  let lastAssistantFailed = false;
   const pendingContext = descriptor.input ? [descriptor.input] : [];
 
   const commonAttributes = {
@@ -117,6 +117,7 @@ async function parsePiSession(root, descriptor) {
     "goal_plus.native_session_id": descriptor.nativeSessionId,
     "goal_plus.role": descriptor.role,
     "goal_plus.session_kind": descriptor.sessionKind || "worker",
+    "goal_plus.business_state": descriptor.businessState,
     "goal_plus.import_mode": "passive_pi_session",
     "goal_plus.timing_fidelity": "derived",
   };
@@ -141,7 +142,7 @@ async function parsePiSession(root, descriptor) {
       const usage = usageFrom(message);
       const stopReason = String(message.stopReason || message.stop_reason || "").toLowerCase();
       const failed = ["error", "aborted", "cancelled", "canceled", "blocked"].includes(stopReason);
-      hasFailedLlm ||= failed;
+      lastAssistantFailed = failed;
       events.push({
         eventId: stableEventId(sessionId, spanId),
         sessionId,
@@ -247,7 +248,7 @@ async function parsePiSession(root, descriptor) {
   }
   const terminalState = String(descriptor.terminalState || "").toLowerCase();
   const exitCode = descriptor.exitCode == null ? undefined : Number(descriptor.exitCode);
-  const terminalFailure = hasFailedLlm
+  const terminalFailure = lastAssistantFailed
     || ["error", "failed", "aborted", "cancelled", "canceled", "blocked", "invalidated"].includes(terminalState)
     || (Number.isFinite(exitCode) && exitCode !== 0);
   events.push({
