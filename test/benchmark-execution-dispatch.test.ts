@@ -35,6 +35,7 @@ let runExperiment: typeof import('@/app/api/experiments/[id]/run/route').POST
 let listExecutionTargets: typeof import('@/app/api/benchmark/v1/execution-targets/route').GET
 let setCommandDispatcher: typeof import('@/lib/benchmark/scheduler').setBenchmarkCommandDispatcherForTest
 let resumeDispatches: typeof import('@/lib/benchmark/scheduler').resumeBenchmarkDispatchesAtStartup
+let reapStaleRuns: typeof import('@/lib/benchmark/scheduler').reapStaleBenchmarkRuns
 
 test.before(async () => {
   const sqliteModule = 'node:sqlite'
@@ -160,6 +161,7 @@ test.before(async () => {
   listExecutionTargets = executionTargetsRoute.GET
   setCommandDispatcher = scheduler.setBenchmarkCommandDispatcherForTest
   resumeDispatches = scheduler.resumeBenchmarkDispatchesAtStartup
+  reapStaleRuns = scheduler.reapStaleBenchmarkRuns
 })
 
 test.after(async () => {
@@ -479,6 +481,91 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     error: { code: string }
   }
   assert.equal(missingCapabilityBody.error.code, 'EXECUTOR_CAPABILITY_MISSING')
+})
+
+test('watchdog settles a stale running Agent task once', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const experimentId = `exp_stale_${suffix}`
+  const caseId = `case_stale_${suffix}`
+  const runId = `erun_stale_${suffix}`
+  const fixture = JSON.parse(
+    fs.readFileSync(path.resolve('benchmarks/swe-bench/fixtures/smoke-case.json'), 'utf8'),
+  )
+  const dataset = await importBenchmarkDataset({
+    user,
+    name: `stale watchdog dataset ${suffix}`,
+    adapterKey: 'swe-bench',
+    source: { kind: 'synthetic-test-fixture' },
+    cases: [fixture],
+  })
+  const now = new Date('2026-09-10T03:00:00.000Z')
+  const staleAt = new Date(now.getTime() - 61_000)
+
+  await prisma.experiment.create({
+    data: {
+      id: experimentId,
+      user,
+      name: 'stale watchdog fixture',
+      scope: 'benchmark',
+      status: 'running',
+      evaluatorIdsJson: '[]',
+    },
+  })
+  await prisma.experimentCase.create({
+    data: { id: caseId, experimentId, input: 'stale task' },
+  })
+  await prisma.benchmarkExperimentBinding.create({
+    data: {
+      experimentId,
+      datasetId: dataset.id,
+      datasetContentHash: dataset.contentHash,
+      adapterKey: 'swe-bench',
+      selectionJson: '{}',
+      runConfigJson: '{"timeoutSeconds":60}',
+      schedulerStatus: 'running',
+      expectedCaseCount: 1,
+      callbackOrigin: 'http://insight.test',
+    },
+  })
+  await prisma.benchmarkCaseRun.create({
+    data: {
+      id: runId,
+      experimentId,
+      experimentCaseId: caseId,
+      ordinal: 0,
+      status: 'running_agent',
+      adapterKey: 'swe-bench',
+      clientId,
+      startedAt: staleAt,
+      lastProgressAt: staleAt,
+      progressJson: '{"kind":"execution","stage":"preparing"}',
+    },
+  })
+  await prisma.benchmarkDispatchOutbox.create({
+    data: {
+      runId,
+      requestJson: '{"timeoutSeconds":60}',
+      requestDigest: `sha256:${'e'.repeat(64)}`,
+      status: 'accepted',
+    },
+  })
+
+  assert.equal(await reapStaleRuns({ now, graceMs: 0, experimentId }), 0)
+  await prisma.benchmarkCaseRun.update({
+    where: { id: runId },
+    data: { progressJson: '{"kind":"execution","stage":"agent_running"}' },
+  })
+  assert.equal(await reapStaleRuns({ now, graceMs: 0, experimentId }), 1)
+  assert.equal(await reapStaleRuns({ now, graceMs: 0, experimentId }), 0)
+  const [run, experiment, binding] = await Promise.all([
+    prisma.benchmarkCaseRun.findUnique({ where: { id: runId } }),
+    prisma.experiment.findUnique({ where: { id: experimentId } }),
+    prisma.benchmarkExperimentBinding.findUnique({ where: { experimentId } }),
+  ])
+  assert.equal(run?.status, 'execution_failed')
+  assert.equal(run?.failureCode, 'BENCHMARK_RUN_STALE_TIMEOUT')
+  assert.equal(experiment?.status, 'failed')
+  assert.equal(binding?.schedulerStatus, 'failed')
 })
 
 test('real SWE-bench Verified data crosses create/run APIs and the client command boundary', {

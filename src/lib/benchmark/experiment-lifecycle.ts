@@ -24,28 +24,31 @@ function parsedObject(value: string | null): Record<string, unknown> {
   }
 }
 
+async function findExecution(user: string, traceId: string) {
+  try {
+    return await prisma.execution.findFirst({
+      where: {
+        user,
+        isSubagent: false,
+        OR: [
+          { id: traceId },
+          { taskId: traceId },
+          { agentSessionId: traceId },
+        ],
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, taskId: true, finalResult: true },
+    })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'P2021') return null
+    throw error
+  }
+}
+
 async function waitForExecution(user: string, traceId: string) {
   const deadline = Date.now() + 30_000
   do {
-    let execution
-    try {
-      execution = await prisma.execution.findFirst({
-        where: {
-          user,
-          isSubagent: false,
-          OR: [
-            { id: traceId },
-            { taskId: traceId },
-            { agentSessionId: traceId },
-          ],
-        },
-        orderBy: { timestamp: 'desc' },
-        select: { id: true, taskId: true, finalResult: true },
-      })
-    } catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'P2021') return null
-      throw error
-    }
+    const execution = await findExecution(user, traceId)
     if (execution) return execution
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 500)
@@ -129,7 +132,11 @@ export async function finalizeBenchmarkCase(input: {
   const facts = parsedObject(run.runFactsJson)
   const traceId = typeof facts.traceId === 'string' ? facts.traceId.trim() : ''
   let execution: { id: string; taskId: string | null; finalResult: string | null } | null = null
-  if (traceId) execution = await waitForExecution(run.experiment.user, traceId)
+  if (traceId) {
+    execution = run.status === 'execution_failed'
+      ? await findExecution(run.experiment.user, traceId)
+      : await waitForExecution(run.experiment.user, traceId)
+  }
 
   if (execution) {
     const patch = run.artifacts[0]
@@ -141,6 +148,11 @@ export async function finalizeBenchmarkCase(input: {
         actualOutput: execution.finalResult || (patch ? `model.patch · ${patch.sha256}` : ''),
         traceGenerationError: null,
       },
+    })
+  } else if (traceId && run.status === 'execution_failed') {
+    await prisma.experimentCase.update({
+      where: { id: run.experimentCaseId },
+      data: { taskId: traceId },
     })
   }
 

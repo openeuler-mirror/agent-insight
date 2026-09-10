@@ -850,6 +850,7 @@ async function executeAction(cfg, frame, sendStatus) {
       await sendStatus('SUCCEEDED', { result })
     } catch (err) {
       await sendStatus('FAILED', {
+        result: err.runFacts || undefined,
         error: { code: err.code || 'CASE_RUN_FAILED', message: err.message },
       })
     } finally {
@@ -896,6 +897,79 @@ function signalProcessTree(child, signal) {
   } catch {
     /* already exited */
   }
+}
+
+function collectDiagnosticStrings(value, output = [], depth = 0) {
+  if (depth > 5 || output.length >= 20 || value === null || value === undefined) return output
+  if (typeof value === 'string') {
+    if (value.trim()) output.push(value.trim())
+    return output
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectDiagnosticStrings(item, output, depth + 1)
+    return output
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) collectDiagnosticStrings(item, output, depth + 1)
+  }
+  return output
+}
+
+function extractStructuredAgentError(line) {
+  try {
+    const parsed = JSON.parse(String(line || '').trim())
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const type = String(parsed.type || '').toLowerCase()
+    if (type !== 'error' && !(type === '' && parsed.error)) return null
+    const values = collectDiagnosticStrings(parsed.error || parsed.message || parsed)
+    return values.join(' | ').slice(-4_000) || null
+  } catch {
+    return null
+  }
+}
+
+function sanitizeAgentDiagnostic(value, maxLength = 800) {
+  const compact = String(value || '')
+    .replace(/(authorization["']?\s*[:=]\s*["']?bearer\s+)[^\s,'"}]+/gi, '$1[REDACTED]')
+    .replace(/((?:[a-z0-9_]*(?:api[_-]?key|access[_-]?token)|token|secret|client[_-]?secret)["']?\s*[:=]\s*["']?)[^\s,'"}]+/gi, '$1[REDACTED]')
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|secret)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/\b(?:sk|rk|pk)-[a-z0-9_-]{16,}\b/gi, '[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return compact.length > maxLength ? compact.slice(-maxLength) : compact
+}
+
+function classifyAgentExitFailure({ platform, exitCode, signal, diagnostic, structured = false }) {
+  const normalized = sanitizeAgentDiagnostic(diagnostic)
+  const strictModelSelectionFailure = /(?:modelnotfound|unknownmodel|invalidmodel|(?:unknown|invalid|unsupported)\s+model|requested\s+model\s+[^.]{0,100}(?:not found|does not exist)|model\s+(?:id|name)\s+[^.]{0,100}(?:not found|does not exist|invalid)|provider\s+(?:[^.]{0,100}\s+)?(?:not found|unknown|invalid)|no\s+(?:model|provider)\s+(?:was\s+)?found|模型(?:名称|标识)?[^。]{0,60}(?:不存在|未找到|无效|不支持))/i
+  const structuredModelSelectionFailure = /(?:model\s+(?:[^.]{0,100}\s+)?(?:not found|does not exist|unknown|invalid|unsupported)|(?:unknown|invalid|unsupported)\s+model)/i
+  const modelContext = /(?:model|provider|\bllm\b|openai|anthropic|gemini|deepseek|api[_ -]?key|模型|提供商|密钥|鉴权)/i
+  const authenticationFailure = /(?:providerauth|authentication\s+(?:failed|required)|unauthori[sz]ed|forbidden|permission\s+denied|access\s+denied|not\s+authorized|invalid\s+(?:api[_ -]?key|credential|access[_ -]?token)|(?:api[_ -]?key|credential|access[_ -]?token)\s+(?:is\s+)?(?:invalid|missing|expired|revoked)|\b(?:401|403)\b|鉴权失败|未授权|密钥[^。]{0,40}(?:无效|缺失|过期))/i
+  const exitDescription = exitCode === null || exitCode === undefined
+    ? `signal ${signal || 'unknown'}`
+    : `exit ${exitCode}`
+
+  if (
+    strictModelSelectionFailure.test(normalized)
+    || (structured && structuredModelSelectionFailure.test(normalized))
+    || (modelContext.test(normalized) && authenticationFailure.test(normalized))
+  ) {
+    return {
+      code: 'MODEL_UNAVAILABLE',
+      message: `平台 ${platform} 无法使用所选模型（模型名称、鉴权或配置错误；${exitDescription}）`,
+    }
+  }
+  return {
+    code: 'AGENT_EXIT_NONZERO',
+    message: `平台 ${platform} Agent 异常退出（${exitDescription}）`,
+  }
+}
+
+function createAgentRunError(code, message, runFacts) {
+  const err = new Error(message)
+  err.code = code
+  err.runFacts = runFacts
+  return err
 }
 
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
@@ -947,6 +1021,9 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     let stdoutBuffer = ''
     let traceId = null
     let stdinError = null
+    let timedOut = false
+    let settled = false
+    const structuredErrors = []
     let traceReport = Promise.resolve()
     if (invocation.stdin !== null && child.stdin) {
       child.stdin.on('error', (err) => {
@@ -966,51 +1043,116 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       stdoutBuffer += String(c)
       const lines = stdoutBuffer.split(/\r?\n/)
       stdoutBuffer = lines.pop() || ''
-      for (const line of lines) captureTraceId(extractTraceIdFromJsonLine(line))
+      for (const line of lines) {
+        captureTraceId(extractTraceIdFromJsonLine(line))
+        const structuredError = extractStructuredAgentError(line)
+        if (structuredError) structuredErrors.push(structuredError)
+      }
+      if (structuredErrors.length > 20) structuredErrors.splice(0, structuredErrors.length - 20)
       captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
       if (stdoutBuffer.length > 1024 * 1024) stdoutBuffer = stdoutBuffer.slice(-1024 * 1024)
     })
     child.stderr.on('data', (c) => {
       stderr += String(c)
+      if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024)
     })
+    let timeoutTimer = null
     let forceKillTimer = null
-    const timer = setTimeout(() => {
+    let hardStopTimer = null
+    const clearTimers = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+    }
+    const waitForTraceReport = () => new Promise((done) => {
+      const reportTimer = setTimeout(done, 5_000)
+      traceReport.finally(() => {
+        clearTimeout(reportTimer)
+        done()
+      })
+    })
+    const finishAgentRun = async (code, signal) => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      if (reliabilityChild === child) reliabilityChild = null
+      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
+      const finalStructuredError = extractStructuredAgentError(stdoutBuffer)
+      if (finalStructuredError) structuredErrors.push(finalStructuredError)
+      await waitForTraceReport()
+      const finishedAt = new Date().toISOString()
+      const runFacts = {
+        state: 'AGENT_EXITED',
+        ...(traceId ? { traceId } : {}),
+        exitCode: code,
+        signal: signal || undefined,
+        timedOut,
+        stderr: sanitizeAgentDiagnostic(stderr, 2_000) || undefined,
+        startedAt,
+        finishedAt,
+      }
+      let failure = null
+      if (timedOut) {
+        failure = createAgentRunError(
+          'AGENT_TIMEOUT',
+          `平台 ${platform} Agent 执行超过 ${Math.ceil(timeoutMs / 1000)} 秒，已终止进程组`,
+          runFacts,
+        )
+      } else if (stdinError) {
+        failure = createAgentRunError(
+          'INPUT_DELIVERY_FAILED',
+          `向平台 ${platform} 传递实验输入失败: ${stdinError.message}`,
+          runFacts,
+        )
+      } else {
+        const structuredFailure = classifyAgentExitFailure({
+          platform,
+          exitCode: code,
+          signal,
+          diagnostic: structuredErrors.join('\n'),
+          structured: true,
+        })
+        if (structuredErrors.length && structuredFailure.code === 'MODEL_UNAVAILABLE') {
+          failure = createAgentRunError(structuredFailure.code, structuredFailure.message, runFacts)
+        }
+      }
+      if (!failure && code !== 0) {
+        const classified = classifyAgentExitFailure({
+          platform,
+          exitCode: code,
+          signal,
+          diagnostic: [...structuredErrors, stderr].filter(Boolean).join('\n'),
+        })
+        failure = createAgentRunError(classified.code, classified.message, runFacts)
+      } else if (!failure && !traceId) {
+        failure = createAgentRunError(
+          platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED',
+          `平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`,
+          runFacts,
+        )
+      }
+      if (failure) {
+        reject(failure)
+        return
+      }
+      // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
+      resolve(runFacts)
+    }
+    timeoutTimer = setTimeout(() => {
+      timedOut = true
       signalProcessTree(child, 'SIGTERM')
-      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 5_000)
+      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
+      hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
     }, timeoutMs)
     child.on('error', (err) => {
-      clearTimeout(timer)
-      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (settled) return
+      settled = true
+      clearTimers()
       if (reliabilityChild === child) reliabilityChild = null
       reject(err)
     })
-    child.on('close', async (code) => {
-      clearTimeout(timer)
-      if (forceKillTimer) clearTimeout(forceKillTimer)
-      if (reliabilityChild === child) reliabilityChild = null
-      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
-      if (stdinError) {
-        const err = new Error(`向平台 ${platform} 传递实验输入失败: ${stdinError.message}`)
-        err.code = 'INPUT_DELIVERY_FAILED'
-        reject(err)
-        return
-      }
-      if (!traceId) {
-        const err = new Error(`平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`)
-        err.code = platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED'
-        reject(err)
-        return
-      }
-      await traceReport
-      // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
-      resolve({
-        state: 'AGENT_EXITED',
-        traceId,
-        exitCode: code,
-        stderr: stderr.slice(-2000) || undefined,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-      })
+    child.on('close', (code, signal) => {
+      void finishAgentRun(code, signal)
     })
   })
 }
@@ -1582,6 +1724,9 @@ module.exports = {
   refreshCapabilityReports,
   normalizeModelIds,
   extractTraceIdFromJsonLine,
+  extractStructuredAgentError,
+  sanitizeAgentDiagnostic,
+  classifyAgentExitFailure,
   buildCollectorArgs,
   readCollectResult,
   configTargetPath,

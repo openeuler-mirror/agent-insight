@@ -30,6 +30,8 @@
 
 > 2026-09-09 working-tree overlay：Benchmark Catalog 新增 Dataset Loader、Dataset Profile 与声明式 Presentation；管理员可从任意服务端可读路径一次导入系统共享数据集，并选择在成功后删除源文件。共享数据集对所有用户只读，实验仍按用户隔离；管理员删除未引用数据，已引用数据改为归档。实验向导、执行目标和 Benchmark 结果卡按当前 Adapter/Manifest 动态渲染，不再依赖 SWE-bench 字段或固定 Evaluator ID。
 
+> 2026-09-10 working-tree overlay：Benchmark 平台新增运行失活 watchdog，按 Git 准备、冻结 Agent 上限加宽限期及后处理阶段分别设置阈值，以 CAS 将无进度 Case 收敛为失败并防止迟到回调复活。客户端执行器将 Artifact/完成回调重试拆为不占 Agent 槽的持久化投递 lane，增加指数退避与单次请求超时；Git shallow fetch 增加进程组级超时、瞬时错误白名单三次重试、工作区重建与命令级 HTTP/1.1 兜底，避免一次模型、回调或 GitHub 链路故障阻塞后续实验。Agent 执行第一阶段新增 `AGENT_TIMEOUT`、高置信 `MODEL_UNAVAILABLE`、`AGENT_EXIT_NONZERO` 与 `AGENT_NO_OUTPUT` 失败码，确定性失败立即终止且不自动重试，并在 Case 详情中明确展示；`0 LLM Turn` 因依赖异步 Trace 入库留待后续追踪阶段。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

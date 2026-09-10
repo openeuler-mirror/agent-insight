@@ -63,10 +63,24 @@ const client = require_('../scripts/reliability-client.cjs') as {
   ) => Promise<boolean>
   normalizeModelIds: (models: unknown) => string[]
   extractTraceIdFromJsonLine: (line: string) => string | null
+  sanitizeAgentDiagnostic: (value: unknown, maxLength?: number) => string
+  classifyAgentExitFailure: (input: {
+    platform: string
+    exitCode: number | null
+    signal?: string | null
+    diagnostic?: string
+    structured?: boolean
+  }) => { code: string; message: string }
   runExperimentCase: (
     cfg: Record<string, unknown>,
     payload: Record<string, unknown>,
-  ) => Promise<{ traceId: string; exitCode: number }>
+  ) => Promise<{
+    traceId: string
+    exitCode: number
+    timedOut?: boolean
+    startedAt?: string
+    finishedAt?: string
+  }>
   controlUrls: (cfg: Record<string, unknown>) => { websocketUrl: string; pollUrl: string }
   rasRuntimeConfigPath: () => string
   writeRasRuntimeConfig: (snapshot: Record<string, unknown>) => Promise<void>
@@ -420,6 +434,7 @@ test('generic execution reports Trace ID before exit and force-kills timed-out p
   assert.match(source, /detached: process\.platform !== 'win32'/)
   assert.match(source, /signalProcessTree\(child, 'SIGTERM'\)/)
   assert.match(source, /signalProcessTree\(child, 'SIGKILL'\)/)
+  assert.match(source, /hardStopTimer = setTimeout\(\(\) => void finishAgentRun\(null, 'SIGKILL'\)/)
   assert.match(source, /if \(reliabilityChild\) signalProcessTree\(reliabilityChild, 'SIGKILL'\)/)
 })
 
@@ -468,6 +483,108 @@ console.log(JSON.stringify({ sessionID: 'ses_cwd_alignment' }))
     else process.env.BENCHMARK_CWD_CAPTURE = previousCapture
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('generic execution classifies timeout, nonzero exit, and model authentication failures', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-agent-failures-'))
+  const binDir = path.join(root, 'bin')
+  const workspace = path.join(root, 'workspace')
+  const executable = path.join(binDir, 'fake-agent')
+  const previousPath = process.env.PATH
+  const previousMode = process.env.BENCHMARK_FAKE_FAILURE_MODE
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.mkdirSync(workspace, { recursive: true })
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const mode = process.env.BENCHMARK_FAKE_FAILURE_MODE
+console.log(JSON.stringify({ sessionID: 'ses_' + mode }))
+if (mode === 'timeout') setInterval(() => {}, 1000)
+if (mode === 'nonzero') {
+  console.error('repository checkout failed')
+  process.exit(7)
+}
+if (mode === 'model') {
+  console.log(JSON.stringify({
+    type: 'error',
+    sessionID: 'ses_model',
+    error: { name: 'ProviderAuthError', data: { message: 'Unauthorized: invalid API key for provider/test-model' } },
+  }))
+  process.exit(0)
+}
+`)
+  fs.chmodSync(executable, 0o755)
+  process.env.PATH = `${binDir}:${previousPath || ''}`
+  const run = () => client.runExperimentCase({
+    clientId: 'client_failure_classification',
+    workspaceBase: root,
+  }, {
+    platform: 'fake-agent',
+    agent: 'build',
+    input: 'exercise failure classification',
+    cwd: workspace,
+    timeoutSeconds: 1,
+  })
+  try {
+    process.env.BENCHMARK_FAKE_FAILURE_MODE = 'timeout'
+    await assert.rejects(run(), (error: unknown) => {
+      const failure = error as Error & {
+        code?: string
+        runFacts?: { timedOut?: boolean }
+      }
+      assert.equal(failure.code, 'AGENT_TIMEOUT')
+      assert.equal(failure.runFacts?.timedOut, true)
+      return true
+    })
+
+    process.env.BENCHMARK_FAKE_FAILURE_MODE = 'nonzero'
+    await assert.rejects(run(), (error: unknown) => {
+      const failure = error as Error & {
+        code?: string
+        runFacts?: { traceId?: string; exitCode?: number }
+      }
+      assert.equal(failure.code, 'AGENT_EXIT_NONZERO')
+      assert.equal(failure.runFacts?.traceId, 'ses_nonzero')
+      assert.equal(failure.runFacts?.exitCode, 7)
+      return true
+    })
+
+    process.env.BENCHMARK_FAKE_FAILURE_MODE = 'model'
+    await assert.rejects(run(), (error: unknown) => {
+      const failure = error as Error & { code?: string }
+      assert.equal(failure.code, 'MODEL_UNAVAILABLE')
+      return true
+    })
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousMode === undefined) delete process.env.BENCHMARK_FAKE_FAILURE_MODE
+    else process.env.BENCHMARK_FAKE_FAILURE_MODE = previousMode
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Agent diagnostics redact common JSON, environment, query, bearer, and bare secrets', () => {
+  const redacted = client.sanitizeAgentDiagnostic([
+    '{"apiKey":"sk-json-secret-1234567890"}',
+    'OPENAI_API_KEY=sk-env-secret-1234567890',
+    'token: "token-value-123"',
+    'Authorization: Bearer bearer-value-123',
+    'https://provider.test/v1?access_token=query-value-123',
+    'sk-bare-secret-1234567890',
+  ].join('\n'))
+  for (const secret of [
+    'sk-json-secret-1234567890',
+    'sk-env-secret-1234567890',
+    'token-value-123',
+    'bearer-value-123',
+    'query-value-123',
+    'sk-bare-secret-1234567890',
+  ]) assert.equal(redacted.includes(secret), false)
+  assert.match(redacted, /\[REDACTED\]/)
+  assert.equal(client.classifyAgentExitFailure({
+    platform: 'opencode',
+    exitCode: 1,
+    diagnostic: 'workspace model file not found',
+  }).code, 'AGENT_EXIT_NONZERO')
 })
 
 test('client advertises Trace-ID-safe generic execution only for supported platforms', () => {

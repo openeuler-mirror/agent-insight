@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
+import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -51,6 +52,8 @@ interface ExperimentDetail {
     input: string;
     actualOutput: string;
     referenceOutput: string | null;
+    traceStatus?: 'pending' | 'ready' | 'failed' | null;
+    traceError?: string | null;
     benchmark?: {
       adapterKey: string;
       displayName: string;
@@ -66,6 +69,7 @@ interface ExperimentDetail {
       evidenceArtifacts: Array<{ name: string; kind: string; sha256: string; sizeBytes: number }>;
       runStatus: string;
       evaluationStatus: string | null;
+      failure?: { code: string; message: string | null } | null;
     };
   }>;
   results: ResultRow[];
@@ -599,6 +603,13 @@ export function ExperimentCaseDetail({
                 </Link>
               )}
             </div>
+
+            {isBenchmark && caseRow.traceStatus === 'failed' && (
+              <BenchmarkFailureNotice
+                code={caseRow.benchmark?.failure?.code}
+                message={caseRow.benchmark?.failure?.message || caseRow.traceError}
+              />
+            )}
 
             {/* 任务输入 / 参考契约 / 实际输出 三框 */}
             <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>

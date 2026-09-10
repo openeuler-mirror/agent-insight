@@ -126,6 +126,7 @@ export async function GET(
 
     const benchmarkRunByCase = new Map<string, {
       status: string;
+      failureCode: string | null;
       failureMessage: string | null;
       publicPayloadJson: string | null;
       datasetCase: { externalCaseId: string } | null;
@@ -550,9 +551,11 @@ export async function GET(
         const benchmarkTraceStatus: GeneratedTraceStatus | null = benchmarkRun
           ? ['pending', 'preparing', 'dispatching', 'dispatch_unknown', 'running_agent', 'collecting', 'uploading', 'cleaning', 'submitted'].includes(benchmarkRun.status)
             ? 'pending'
-            : submission || c.executionId || effectiveTaskId
-              ? 'ready'
-              : 'failed'
+            : ['execution_failed', 'dispatch_failed', 'blocked'].includes(benchmarkRun.status)
+              ? 'failed'
+              : submission || c.executionId || effectiveTaskId
+                ? 'ready'
+                : 'failed'
           : null;
         let caseValues: Record<string, unknown> | null = null;
         if (c.caseValuesJson) {
@@ -625,6 +628,12 @@ export async function GET(
               })),
               runStatus: benchmarkRun.status,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
+              failure: benchmarkRun.failureCode || benchmarkRun.failureMessage
+                ? {
+                    code: benchmarkRun.failureCode || 'EXECUTION_FAILED',
+                    message: benchmarkRun.failureMessage,
+                  }
+                : null,
             },
           } : {}),
         };

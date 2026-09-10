@@ -7,6 +7,15 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 
+const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
+const DELIVERY_RETRY_BASE_MS = 5_000
+const DELIVERY_RETRY_MAX_MS = 5 * 60_000
+const GIT_FETCH_ATTEMPTS = 3
+const GIT_FETCH_TIMEOUT_MS = 2 * 60_000
+const GIT_FETCH_RETRY_BASE_MS = 1_000
+const GIT_FETCH_RETRY_JITTER_MS = 250
+const TRANSIENT_GIT_FETCH_ERROR = /(?:could not resolve host|failed to connect|couldn['’]?t connect|connection (?:timed out|reset|closed|refused)|operation timed out|failure when receiving data from the peer|recv failure|send failure|remote end hung up unexpectedly|unexpected disconnect|early eof|partial file|http\/2 (?:stream|protocol_error)|rpc failed;\s*curl\s+(?:6|7|18|28|35|52|55|56|92)\b|the requested url returned error:\s*(?:408|429|500|502|503|504)\b|tls connection was non-properly terminated|network is unreachable|temporary failure)/i
+
 class BenchmarkExecutorError extends Error {
   constructor(code, message, status = 422, retryable = false) {
     super(message)
@@ -351,41 +360,167 @@ class FileRunStore {
 
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const useProcessGroup = Boolean(options.killProcessGroup) && process.platform !== 'win32'
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env || process.env,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: useProcessGroup,
     })
     let stdout = ''
     let stderr = ''
+    let timedOut = false
+    let settled = false
+    let timeoutTimer = null
+    let forceKillTimer = null
+    let hardStopTimer = null
+    const timeoutMs = Number(options.timeoutMs)
+    const clearTimers = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+    }
+    const settle = (callback) => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      callback()
+    }
+    const terminate = (signal) => {
+      try {
+        if (useProcessGroup && child.pid) process.kill(-child.pid, signal)
+        else child.kill(signal)
+      } catch {}
+    }
+    const processError = (code, signal) => {
+      const error = timedOut
+        ? new BenchmarkExecutorError(
+          options.timeoutErrorCode || 'PROCESS_TIMEOUT',
+          `${command} ${args[0] || ''} 超过 ${timeoutMs}ms 未结束`,
+          503,
+          true,
+        )
+        : new BenchmarkExecutorError(
+          options.errorCode || 'PROCESS_FAILED',
+          `${command} ${args[0] || ''} 失败: ${stderr.slice(-2000) || `exit ${code}`}`,
+        )
+      error.timedOut = timedOut
+      error.exitCode = code
+      error.signal = signal
+      error.stderr = stderr.slice(-2000)
+      return error
+    }
     child.stdout.on('data', (chunk) => { stdout += String(chunk) })
     child.stderr.on('data', (chunk) => { stderr += String(chunk) })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr })
-      else reject(new BenchmarkExecutorError(
-        options.errorCode || 'PROCESS_FAILED',
-        `${command} ${args[0] || ''} 失败: ${stderr.slice(-2000) || `exit ${code}`}`,
-      ))
+    child.on('error', (error) => {
+      settle(() => reject(error))
     })
+    child.on('close', (code, signal) => {
+      if (!timedOut && code === 0) settle(() => resolve({ stdout, stderr }))
+      else settle(() => reject(processError(code, signal)))
+    })
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true
+        terminate('SIGTERM')
+        forceKillTimer = setTimeout(() => terminate('SIGKILL'), 2_000)
+        forceKillTimer.unref?.()
+        hardStopTimer = setTimeout(() => {
+          settle(() => reject(processError(null, 'SIGKILL')))
+        }, 5_000)
+        hardStopTimer.unref?.()
+      }, timeoutMs)
+      timeoutTimer.unref?.()
+    }
   })
 }
 
+function isTransientGitFetchError(error) {
+  if (error?.timedOut === true || error?.code === 'PROCESS_TIMEOUT') return true
+  return TRANSIENT_GIT_FETCH_ERROR.test(
+    `${error?.stderr || ''}\n${error?.message || error || ''}`,
+  )
+}
+
+function wait(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs))
+}
+
 class GitWorkspaceProvider {
-  constructor(rootDir, processRunner = runProcess) {
+  constructor(rootDir, processRunner = runProcess, options = {}) {
     this.rootDir = rootDir
     this.processRunner = processRunner
+    const fetchAttempts = Number(options.fetchAttempts ?? GIT_FETCH_ATTEMPTS)
+    const fetchTimeoutMs = Number(options.fetchTimeoutMs ?? GIT_FETCH_TIMEOUT_MS)
+    const retryBaseMs = Number(options.retryBaseMs ?? GIT_FETCH_RETRY_BASE_MS)
+    const retryJitterMs = Number(options.retryJitterMs ?? GIT_FETCH_RETRY_JITTER_MS)
+    this.fetchAttempts = Number.isInteger(fetchAttempts)
+      ? Math.min(10, Math.max(1, fetchAttempts))
+      : GIT_FETCH_ATTEMPTS
+    this.fetchTimeoutMs = Number.isFinite(fetchTimeoutMs)
+      ? Math.max(1_000, fetchTimeoutMs)
+      : GIT_FETCH_TIMEOUT_MS
+    this.retryBaseMs = Number.isFinite(retryBaseMs) ? Math.max(0, retryBaseMs) : GIT_FETCH_RETRY_BASE_MS
+    this.retryJitterMs = Number.isFinite(retryJitterMs)
+      ? Math.max(0, retryJitterMs)
+      : GIT_FETCH_RETRY_JITTER_MS
+    this.random = options.random || Math.random
+    this.sleep = options.sleep || wait
   }
 
-  async prepare(spec, context) {
-    const workspace = path.join(this.rootDir, context.runId)
+  async initializeWorkspace(workspace, repository) {
     await fsp.rm(workspace, { recursive: true, force: true })
     await fsp.mkdir(workspace, { recursive: true, mode: 0o700 })
     await this.processRunner('git', ['init', '--quiet'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
     await this.processRunner('git', ['config', 'core.hooksPath', '/dev/null'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
-    await this.processRunner('git', ['remote', 'add', 'origin', spec.repository], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
-    await this.processRunner('git', ['fetch', '--quiet', '--depth=1', 'origin', spec.revision], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
+    await this.processRunner('git', ['remote', 'add', 'origin', repository], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
+  }
+
+  async fetchRevision(workspace, spec) {
+    const failures = []
+    for (let attempt = 1; attempt <= this.fetchAttempts; attempt += 1) {
+      await this.initializeWorkspace(workspace, spec.repository)
+      const args = attempt === this.fetchAttempts && attempt > 1
+        ? ['-c', 'http.version=HTTP/1.1', 'fetch', '--quiet', '--depth=1', 'origin', spec.revision]
+        : ['fetch', '--quiet', '--depth=1', 'origin', spec.revision]
+      try {
+        await this.processRunner('git', args, {
+          cwd: workspace,
+          env: {
+            ...process.env,
+            GIT_TERMINAL_PROMPT: '0',
+            LANG: 'C',
+            LC_ALL: 'C',
+          },
+          errorCode: 'WORKSPACE_PREPARE_FAILED',
+          timeoutErrorCode: 'PROCESS_TIMEOUT',
+          timeoutMs: this.fetchTimeoutMs,
+          killProcessGroup: true,
+        })
+        return
+      } catch (error) {
+        const transient = isTransientGitFetchError(error)
+        failures.push(`第 ${attempt} 次: ${String(error?.message || error).slice(-600)}`)
+        if (!transient) throw error
+        if (attempt >= this.fetchAttempts) {
+          throw new BenchmarkExecutorError(
+            'WORKSPACE_PREPARE_FAILED',
+            `Git fetch 瞬时网络错误，${attempt} 次尝试均失败：${failures.join('；')}`,
+            503,
+            true,
+          )
+        }
+        const backoff = this.retryBaseMs * (2 ** (attempt - 1))
+        const jitter = Math.floor(this.random() * this.retryJitterMs)
+        await this.sleep(backoff + jitter)
+      }
+    }
+  }
+
+  async prepare(spec, context) {
+    const workspace = path.join(this.rootDir, context.runId)
+    await this.fetchRevision(workspace, spec)
     await this.processRunner('git', ['checkout', '--quiet', '--detach', 'FETCH_HEAD'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
     const head = await this.processRunner('git', ['rev-parse', 'HEAD'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
     if (head.stdout.trim().toLowerCase() !== spec.revision.toLowerCase()) {
@@ -427,8 +562,11 @@ class GitPatchCollector {
       { cwd: context.workspace.path, errorCode: 'ARTIFACT_COLLECT_FAILED' },
     )
     const bytes = Buffer.from(diff.stdout, 'utf8')
-    if (!bytes.length || bytes.length > contract.maxBytes) {
-      throw new BenchmarkExecutorError('ARTIFACT_SIZE_INVALID', `${contract.name} 为空或超过大小上限`)
+    if (!bytes.length) {
+      throw new BenchmarkExecutorError('AGENT_NO_OUTPUT', `Agent 正常结束，但未生成必需的 ${contract.name}`)
+    }
+    if (bytes.length > contract.maxBytes) {
+      throw new BenchmarkExecutorError('ARTIFACT_SIZE_INVALID', `${contract.name} 超过大小上限`)
     }
     for (const line of diff.stdout.split(/\r?\n/)) {
       const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
@@ -460,6 +598,7 @@ class AgentInsightCallbackClient {
     this.clientId = options.clientId
     this.deviceCredential = options.deviceCredential
     this.insightBaseUrl = String(options.insightBaseUrl).replace(/\/$/, '')
+    this.timeoutMs = Math.max(1_000, Number(options.callbackTimeoutMs) || 30_000)
   }
 
   headers(extra = {}) {
@@ -473,7 +612,11 @@ class AgentInsightCallbackClient {
   async checkedFetch(url, init) {
     let response
     try {
-      response = await this.fetch(url, { ...init, redirect: 'error' })
+      response = await this.fetch(url, {
+        ...init,
+        redirect: 'error',
+        signal: init?.signal || AbortSignal.timeout(this.timeoutMs),
+      })
     } catch (error) {
       throw new BenchmarkExecutorError(
         'CALLBACK_UNAVAILABLE',
@@ -570,6 +713,18 @@ class BenchmarkExecutionRunner {
         agent: plan.agent.agent,
         ...(plan.agent.model ? { model: plan.agent.model } : {}),
       }
+      if (agentResult?.timedOut === true) {
+        throw new BenchmarkExecutorError('AGENT_TIMEOUT', 'Agent 执行超过任务上限并已被终止')
+      }
+      if (
+        (agentResult?.exitCode !== undefined && agentResult?.exitCode !== null && agentResult.exitCode !== 0)
+        || (agentResult?.exitCode === null && agentResult?.signal)
+      ) {
+        throw new BenchmarkExecutorError(
+          'AGENT_EXIT_NONZERO',
+          `Agent 异常退出（${agentResult.exitCode === null ? `signal ${agentResult.signal}` : `exit ${agentResult.exitCode}`}）`,
+        )
+      }
       await this.progress(request, 'collecting', '正在收集提交物')
       for (const artifactPlan of plan.artifacts) {
         const artifact = await artifactPlan.collector.collect(artifactPlan.contract, { workspace, runFacts })
@@ -619,6 +774,15 @@ class BenchmarkExecutionRunner {
       await this.callback.complete(request, pendingCompletion)
       await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded' })
     } catch (error) {
+      const errorRunFacts = error?.runFacts
+      if (!runFacts && errorRunFacts && typeof errorRunFacts === 'object' && !Array.isArray(errorRunFacts)) {
+        runFacts = {
+          ...errorRunFacts,
+          platform: plan.agent.platform,
+          agent: plan.agent.agent,
+          ...(plan.agent.model ? { model: plan.agent.model } : {}),
+        }
+      }
       const normalized = error instanceof BenchmarkExecutorError
         ? error
         : new BenchmarkExecutorError(error?.code || 'EXECUTION_FAILED', error?.message || '执行器运行失败')
@@ -795,7 +959,32 @@ function createBenchmarkExecutor(options) {
   }
   const credentialHash = deviceCredentialHash(options.deviceCredential)
   let activeRunId = null
+  let deliveryRetryRunId = null
+  let recoveryTimer = null
+  let recoveryTimerDueAt = 0
   let closed = false
+
+  function deliveryRetryDelay(attempt) {
+    return Math.min(
+      DELIVERY_RETRY_MAX_MS,
+      DELIVERY_RETRY_BASE_MS * (2 ** Math.min(10, Math.max(0, attempt - 1))),
+    )
+  }
+
+  function scheduleRecovery(delayMs = DELIVERY_RETRY_BASE_MS) {
+    if (closed) return
+    const delay = Math.max(0, delayMs)
+    const dueAt = Date.now() + delay
+    if (recoveryTimer && recoveryTimerDueAt <= dueAt) return
+    if (recoveryTimer) clearTimeout(recoveryTimer)
+    recoveryTimerDueAt = dueAt
+    recoveryTimer = setTimeout(() => {
+      recoveryTimer = null
+      recoveryTimerDueAt = 0
+      recover().catch((error) => options.logError?.('executor recovery failed', error))
+    }, delay)
+    recoveryTimer.unref?.()
+  }
 
   function tryAcquire(runId) {
     if (activeRunId) return false
@@ -808,13 +997,7 @@ function createBenchmarkExecutor(options) {
     if (activeRunId !== runId) return
     activeRunId = null
     options.releaseSlot?.('benchmark')
-    if (!closed) {
-      const timer = setTimeout(
-        () => recover().catch((error) => options.logError?.('executor recovery failed', error)),
-        5_000,
-      )
-      timer.unref?.()
-    }
+    scheduleRecovery()
   }
 
   function runInBackground(request, state) {
@@ -828,6 +1011,38 @@ function createBenchmarkExecutor(options) {
         release(request.runId)
       }
     })
+  }
+
+  function retryDeliveryInBackground(request, state) {
+    if (closed || deliveryRetryRunId) return false
+    deliveryRetryRunId = request.runId
+    queueMicrotask(async () => {
+      try {
+        await runner.resume(request, state)
+      } catch (error) {
+        if (error?.retryable === false && Number(error?.status) >= 400 && Number(error?.status) < 500) {
+          await store.writeState(request.runId, {
+            stage: 'terminal',
+            terminalStatus: state.completion?.status || 'failed',
+            callbackError: error?.message || String(error),
+          })
+        } else {
+          const latest = await store.state(request.runId)
+          const retryCount = Math.max(0, Number(latest?.deliveryRetryCount) || 0) + 1
+          const delayMs = deliveryRetryDelay(retryCount)
+          await store.writeState(request.runId, {
+            deliveryRetryCount: retryCount,
+            nextDeliveryRetryAt: new Date(Date.now() + delayMs).toISOString(),
+            callbackError: error?.message || String(error),
+          })
+          options.logError?.(`benchmark delivery retry ${request.runId} failed`, error)
+        }
+      } finally {
+        deliveryRetryRunId = null
+        scheduleRecovery(0)
+      }
+    })
+    return true
   }
 
   function validateRequest(request, allowAlternateCallbackOrigin = false) {
@@ -883,7 +1098,9 @@ function createBenchmarkExecutor(options) {
     const existing = await store.request(runId)
     if (existing) {
       const accepted = await store.accept(request)
-      if (!activeRunId && accepted.state?.stage !== 'terminal' && tryAcquire(runId)) {
+      if (DELIVERY_RETRY_STAGES.has(accepted.state?.stage)) {
+        scheduleRecovery(0)
+      } else if (!activeRunId && accepted.state?.stage !== 'terminal' && tryAcquire(runId)) {
         runInBackground(request, accepted.state)
       }
       return
@@ -958,11 +1175,32 @@ function createBenchmarkExecutor(options) {
 
   async function recover() {
     const runIds = await store.listRunIds()
+    const now = Date.now()
+    let executionCandidate = null
+    let deliveryCandidate = null
+    let nextDeliveryDelay = null
     for (const runId of runIds) {
-      if (closed || activeRunId) break
+      if (closed) break
       const [request, state] = await Promise.all([store.request(runId), store.state(runId)])
       if (!request || !state || state.stage === 'terminal') continue
-      if (tryAcquire(runId)) runInBackground(request, state)
+      if (DELIVERY_RETRY_STAGES.has(state.stage)) {
+        const retryAt = Date.parse(state.nextDeliveryRetryAt || '')
+        const delay = Number.isFinite(retryAt) ? Math.max(0, retryAt - now) : 0
+        if (delay === 0 && !deliveryCandidate) deliveryCandidate = { request, state }
+        else if (delay > 0 && (nextDeliveryDelay === null || delay < nextDeliveryDelay)) {
+          nextDeliveryDelay = delay
+        }
+        continue
+      }
+      if (!executionCandidate) executionCandidate = { runId, request, state }
+    }
+    if (!deliveryRetryRunId && deliveryCandidate) {
+      retryDeliveryInBackground(deliveryCandidate.request, deliveryCandidate.state)
+    } else if (!deliveryCandidate && nextDeliveryDelay !== null) {
+      scheduleRecovery(nextDeliveryDelay)
+    }
+    if (!activeRunId && executionCandidate && tryAcquire(executionCandidate.runId)) {
+      runInBackground(executionCandidate.request, executionCandidate.state)
     }
   }
 
@@ -990,6 +1228,9 @@ function createBenchmarkExecutor(options) {
     },
     async close() {
       closed = true
+      if (recoveryTimer) clearTimeout(recoveryTimer)
+      recoveryTimer = null
+      recoveryTimerDueAt = 0
       if (!server.listening) return
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     },
@@ -1014,4 +1255,5 @@ module.exports = {
   createBenchmarkExecutor,
   deviceCredentialHash,
   dispatchDigest,
+  runProcess,
 }

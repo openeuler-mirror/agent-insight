@@ -104,11 +104,20 @@ export async function setupNodeRuntime(): Promise<void> {
   }
 
   try {
-    const { resumeBenchmarkDispatchesAtStartup } = await import('@/lib/benchmark/scheduler');
+    const {
+      reapStaleBenchmarkRuns,
+      resumeBenchmarkDispatchesAtStartup,
+      startBenchmarkRunWatchdog,
+    } = await import('@/lib/benchmark/scheduler');
+    const reaped = await reapStaleBenchmarkRuns();
+    if (reaped > 0) {
+      console.warn(`[instrumentation] 回收超时 Benchmark 执行: ${reaped} 条`);
+    }
     const resumed = await resumeBenchmarkDispatchesAtStartup();
     if (resumed > 0) {
       console.warn(`[instrumentation] 恢复 Benchmark 下发: ${resumed} 条`);
     }
+    startBenchmarkRunWatchdog();
   } catch (err) {
     console.warn('[instrumentation] benchmark dispatch resume failed:', (err as Error)?.message);
   }

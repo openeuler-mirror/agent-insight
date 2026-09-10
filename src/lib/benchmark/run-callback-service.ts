@@ -84,18 +84,18 @@ export async function recordBenchmarkRunProgress(input: {
     ['uploading', 3],
     ['cleaning', 4],
   ])
-  const occurredAt = new Date(input.progress.occurredAt)
   if ((rank.get(status) || 0) < (rank.get(run.status) || 0)) {
     return { accepted: true, desiredState: 'continue' }
   }
-  await prisma.benchmarkCaseRun.update({
-    where: { id: input.runId },
+  const updated = await prisma.benchmarkCaseRun.updateMany({
+    where: { id: input.runId, status: run.status },
     data: {
       status,
       progressJson: canonicalJson(input.progress as unknown as JsonValue),
-      lastProgressAt: occurredAt,
+      lastProgressAt: new Date(),
     },
   })
+  if (updated.count !== 1) return recordBenchmarkRunProgress(input)
   return { accepted: true, desiredState: 'continue' }
 }
 
@@ -185,6 +185,13 @@ export async function completeBenchmarkRun(input: {
     if (run.completionDigest !== completionDigest) {
       throw new BenchmarkProtocolError('RUN_COMPLETION_CONFLICT', 'Run 终态内容冲突', 409)
     }
+    if (run.status === 'execution_failed') {
+      await failBenchmarkCaseResults(
+        run.id,
+        run.failureMessage || input.completion.error?.message || 'Agent 执行失败，未生成可评测的 Patch',
+      )
+      return { accepted: true, status: run.status }
+    }
     const evaluation = await prisma.benchmarkEvaluation.findFirst({
       where: { caseRunId: input.runId, attemptNo: 1 },
     })
@@ -235,7 +242,11 @@ export async function completeBenchmarkRun(input: {
   }
   const status = input.completion.status === 'succeeded' ? 'submitted' : 'execution_failed'
   const updated = await prisma.benchmarkCaseRun.updateMany({
-    where: { id: input.runId, completionDigest: null },
+    where: {
+      id: input.runId,
+      completionDigest: null,
+      status: { in: [...ACTIVE_STATUSES] },
+    },
     data: {
       status,
       runFactsJson: canonicalJson(input.completion.runFacts as JsonValue),
@@ -251,12 +262,10 @@ export async function completeBenchmarkRun(input: {
     return completeBenchmarkRun(input)
   }
   if (status !== 'submitted') {
-    void failBenchmarkCaseResults(
+    await failBenchmarkCaseResults(
       input.runId,
       input.completion.error?.message || 'Agent 执行失败，未生成可评测的 Patch',
-    ).catch((error) => {
-      console.error('[benchmark/run-callback] failed case continuation failed', error)
-    })
+    )
     return { accepted: true, status }
   }
   try {

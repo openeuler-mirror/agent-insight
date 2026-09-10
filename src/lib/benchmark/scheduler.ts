@@ -28,6 +28,19 @@ type BenchmarkCommandDispatcher = (input: {
   request: Record<string, unknown>
 }) => Promise<BenchmarkCommandOutcome>
 
+const ACTIVE_EXECUTION_STATUSES = [
+  'running_agent',
+  'collecting',
+  'uploading',
+  'cleaning',
+]
+const BENCHMARK_RUN_WATCHDOG_GRACE_MS = 90_000
+const BENCHMARK_PREPARING_STALE_MS = 7 * 60_000
+const BENCHMARK_POST_AGENT_STALE_MS = 5 * 60_000
+const BENCHMARK_RUN_WATCHDOG_INTERVAL_MS = 30_000
+let benchmarkRunWatchdogTimer: ReturnType<typeof setInterval> | null = null
+let benchmarkRunWatchdogSweep: Promise<number> | null = null
+
 function parseJsonRecord(value: string | null): Record<string, unknown> {
   try {
     const parsed = JSON.parse(value || '{}')
@@ -35,6 +48,105 @@ function parseJsonRecord(value: string | null): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function executionTimeoutSeconds(requestJson: string | null | undefined): number {
+  const value = Number(parseJsonRecord(requestJson || null).timeoutSeconds)
+  return Number.isInteger(value) && value >= 1 && value <= 86_400 ? value : 600
+}
+
+export async function reapStaleBenchmarkRuns(options: {
+  now?: Date
+  graceMs?: number
+  limit?: number
+  experimentId?: string
+} = {}): Promise<number> {
+  const now = options.now || new Date()
+  const graceMs = Math.max(0, options.graceMs ?? BENCHMARK_RUN_WATCHDOG_GRACE_MS)
+  const candidates = await prisma.benchmarkCaseRun.findMany({
+    where: {
+      status: { in: ACTIVE_EXECUTION_STATUSES },
+      ...(options.experimentId ? { experimentId: options.experimentId } : {}),
+    },
+    orderBy: { updatedAt: 'asc' },
+    take: Math.min(500, Math.max(1, options.limit ?? 100)),
+    select: {
+      id: true,
+      status: true,
+      progressJson: true,
+      lastProgressAt: true,
+      startedAt: true,
+      updatedAt: true,
+      dispatch: { select: { requestJson: true } },
+    },
+  })
+
+  let reaped = 0
+  for (const run of candidates) {
+    const timeoutSeconds = executionTimeoutSeconds(run.dispatch?.requestJson)
+    const progress = parseJsonRecord(run.progressJson)
+    const isPreparing = run.status === 'running_agent' && progress.stage === 'preparing'
+    const staleMs = isPreparing
+      ? BENCHMARK_PREPARING_STALE_MS
+      : run.status === 'running_agent'
+        ? timeoutSeconds * 1_000 + graceMs
+        : BENCHMARK_POST_AGENT_STALE_MS
+    const staleBefore = new Date(now.getTime() - staleMs)
+    const lastActivityAt = run.lastProgressAt || run.startedAt || run.updatedAt
+    if (lastActivityAt > staleBefore) continue
+
+    const message = isPreparing
+      ? 'Git 工作区准备超过 420 秒未完成，平台已自动结束任务'
+      : run.status === 'running_agent'
+        ? `Agent 执行超过 ${timeoutSeconds} 秒且宽限期内未上报进度，平台已自动结束任务`
+        : 'Agent 执行结束后的处理阶段超过 300 秒未上报进度，平台已自动结束任务'
+    const claimed = await prisma.benchmarkCaseRun.updateMany({
+      where: {
+        id: run.id,
+        status: run.status,
+        OR: [
+          { lastProgressAt: { lte: staleBefore } },
+          { lastProgressAt: null, startedAt: { lte: staleBefore } },
+          { lastProgressAt: null, startedAt: null, updatedAt: { lte: staleBefore } },
+        ],
+      },
+      data: {
+        status: 'execution_failed',
+        failureCode: 'BENCHMARK_RUN_STALE_TIMEOUT',
+        failureMessage: message,
+        finishedAt: now,
+      },
+    })
+    if (claimed.count !== 1) continue
+
+    const { failBenchmarkCaseResults } = await import('./experiment-lifecycle')
+    await failBenchmarkCaseResults(run.id, message)
+    reaped += 1
+  }
+  return reaped
+}
+
+export function startBenchmarkRunWatchdog(
+  intervalMs = BENCHMARK_RUN_WATCHDOG_INTERVAL_MS,
+): void {
+  if (benchmarkRunWatchdogTimer) return
+  const tick = () => {
+    if (benchmarkRunWatchdogSweep) return
+    benchmarkRunWatchdogSweep = reapStaleBenchmarkRuns()
+      .then((count) => {
+        if (count > 0) console.warn(`[benchmark/watchdog] 回收超时执行任务: ${count} 条`)
+        return count
+      })
+      .catch((error) => {
+        console.error('[benchmark/watchdog] sweep failed', error)
+        return 0
+      })
+      .finally(() => {
+        benchmarkRunWatchdogSweep = null
+      })
+  }
+  benchmarkRunWatchdogTimer = setInterval(tick, Math.max(1_000, intervalMs))
+  benchmarkRunWatchdogTimer.unref?.()
 }
 
 async function dispatchThroughClientControl(input: {

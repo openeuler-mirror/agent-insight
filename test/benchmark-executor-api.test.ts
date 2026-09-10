@@ -32,6 +32,38 @@ const externalTestClientIds = new Set<string>()
 const externalTestExperimentIds = new Set<string>()
 
 const executorModule = require('../services/executor/src/index.cjs') as {
+  BenchmarkExecutorError: new (
+    code: string,
+    message: string,
+    status?: number,
+    retryable?: boolean,
+  ) => Error & { code: string; status: number; retryable: boolean }
+  GitWorkspaceProvider: new (
+    rootDir: string,
+    processRunner?: (
+      command: string,
+      args: string[],
+      options: Record<string, unknown>,
+    ) => Promise<{ stdout: string; stderr: string }>,
+    options?: Record<string, unknown>,
+  ) => {
+    prepare(
+      spec: { repository: string; revision: string },
+      context: { runId: string },
+    ): Promise<{ path: string; baseCommit: string }>
+  }
+  GitPatchCollector: new (
+    processRunner?: (
+      command: string,
+      args: string[],
+      options: Record<string, unknown>,
+    ) => Promise<{ stdout: string; stderr: string }>,
+  ) => {
+    collect(
+      contract: { name: string; mediaType: string; maxBytes: number },
+      context: { workspace: { path: string; baseCommit: string } },
+    ): Promise<{ name: string; mediaType: string; bytes: Buffer; sha256: string }>
+  }
   createBenchmarkExecutor: (options: Record<string, unknown>) => {
     listen(host?: string, port?: number): Promise<{ port: number }>
     accept(request: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -40,6 +72,11 @@ const executorModule = require('../services/executor/src/index.cjs') as {
     recover(): Promise<void>
     store: { state(runId: string): Promise<Record<string, unknown> | null> }
   }
+  runProcess: (
+    command: string,
+    args: string[],
+    options?: Record<string, unknown>,
+  ) => Promise<{ stdout: string; stderr: string }>
   sha256?: (value: Uint8Array) => string
 }
 
@@ -667,6 +704,303 @@ async function waitForEvaluation(runId: string, status: string) {
   throw new Error(`${runId} evaluation did not reach ${status}`)
 }
 
+test('Git workspace retries transient fetch failures and falls back to HTTP/1.1', async () => {
+  const revision = 'a'.repeat(40)
+  const fetchCalls: Array<{ args: string[]; options: Record<string, unknown> }> = []
+  const delays: number[] = []
+  let initCalls = 0
+  const processRunner = async (
+    _command: string,
+    args: string[],
+    options: Record<string, unknown>,
+  ) => {
+    if (args[0] === 'init') initCalls += 1
+    if (args.includes('fetch')) {
+      fetchCalls.push({ args, options })
+      if (fetchCalls.length < 3) {
+        throw new executorModule.BenchmarkExecutorError(
+          'WORKSPACE_PREPARE_FAILED',
+          'fatal: RPC failed; curl 56 Failure when receiving data from the peer',
+        )
+      }
+    }
+    if (args[0] === 'rev-parse') return { stdout: `${revision}\n`, stderr: '' }
+    return { stdout: '', stderr: '' }
+  }
+  const provider = new executorModule.GitWorkspaceProvider(
+    path.join(testDir, 'git-retry-workspaces'),
+    processRunner,
+    {
+      fetchTimeoutMs: 45_000,
+      random: () => 0,
+      sleep: async (delayMs: number) => { delays.push(delayMs) },
+    },
+  )
+
+  await provider.prepare(
+    { repository: 'https://github.com/astropy/astropy.git', revision },
+    { runId: `git_retry_${Date.now()}` },
+  )
+
+  assert.equal(fetchCalls.length, 3)
+  assert.equal(initCalls, 3)
+  assert.deepEqual(delays, [1_000, 2_000])
+  assert.deepEqual(fetchCalls[0]?.args, ['fetch', '--quiet', '--depth=1', 'origin', revision])
+  assert.deepEqual(fetchCalls[2]?.args, [
+    '-c', 'http.version=HTTP/1.1', 'fetch', '--quiet', '--depth=1', 'origin', revision,
+  ])
+  assert.equal(fetchCalls[0]?.options.timeoutMs, 45_000)
+  assert.equal(fetchCalls[0]?.options.killProcessGroup, true)
+  assert.equal(
+    (fetchCalls[0]?.options.env as NodeJS.ProcessEnv | undefined)?.GIT_TERMINAL_PROMPT,
+    '0',
+  )
+})
+
+test('Git workspace does not retry permanent fetch errors', async () => {
+  const revision = 'b'.repeat(40)
+  let fetchCalls = 0
+  const processRunner = async (
+    _command: string,
+    args: string[],
+    _options: Record<string, unknown>,
+  ) => {
+    if (args.includes('fetch')) {
+      fetchCalls += 1
+      throw new executorModule.BenchmarkExecutorError(
+        'WORKSPACE_PREPARE_FAILED',
+        "fatal: couldn't find remote ref missing-revision",
+      )
+    }
+    return { stdout: '', stderr: '' }
+  }
+  const provider = new executorModule.GitWorkspaceProvider(
+    path.join(testDir, 'git-permanent-error-workspaces'),
+    processRunner,
+  )
+
+  await assert.rejects(
+    provider.prepare(
+      { repository: 'https://github.com/astropy/astropy.git', revision },
+      { runId: `git_permanent_${Date.now()}` },
+    ),
+    /couldn't find remote ref/,
+  )
+  assert.equal(fetchCalls, 1)
+})
+
+test('Git workspace stops after three transient fetch failures', async () => {
+  const revision = 'c'.repeat(40)
+  let fetchCalls = 0
+  const delays: number[] = []
+  const processRunner = async (
+    _command: string,
+    args: string[],
+    _options: Record<string, unknown>,
+  ) => {
+    if (args.includes('fetch')) {
+      fetchCalls += 1
+      const error = new executorModule.BenchmarkExecutorError(
+        'WORKSPACE_PREPARE_FAILED',
+        'fatal: HTTP/2 stream 1 was not closed cleanly: PROTOCOL_ERROR',
+      ) as Error & { stderr?: string }
+      error.stderr = 'fatal: HTTP/2 stream 1 was not closed cleanly: PROTOCOL_ERROR'
+      throw error
+    }
+    return { stdout: '', stderr: '' }
+  }
+  const provider = new executorModule.GitWorkspaceProvider(
+    path.join(testDir, 'git-exhausted-workspaces'),
+    processRunner,
+    {
+      random: () => 0,
+      sleep: async (delayMs: number) => { delays.push(delayMs) },
+    },
+  )
+
+  await assert.rejects(
+    provider.prepare(
+      { repository: 'https://github.com/astropy/astropy.git', revision },
+      { runId: `git_exhausted_${Date.now()}` },
+    ),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'WORKSPACE_PREPARE_FAILED')
+      assert.equal((error as { retryable?: boolean }).retryable, true)
+      assert.match((error as Error).message, /3 次尝试均失败/)
+      assert.match((error as Error).message, /PROTOCOL_ERROR/)
+      return true
+    },
+  )
+  assert.equal(fetchCalls, 3)
+  assert.deepEqual(delays, [1_000, 2_000])
+})
+
+test('process runner terminates a command after its deadline', async () => {
+  const startedAt = Date.now()
+  await assert.rejects(
+    executorModule.runProcess(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'],
+      { timeoutMs: 50, timeoutErrorCode: 'PROCESS_TIMEOUT' },
+    ),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'PROCESS_TIMEOUT')
+      assert.equal((error as { retryable?: boolean }).retryable, true)
+      return true
+    },
+  )
+  assert.ok(Date.now() - startedAt < 2_000)
+})
+
+test('Git patch collector reports an empty submission as AGENT_NO_OUTPUT', async () => {
+  const collector = new executorModule.GitPatchCollector(async () => ({ stdout: '', stderr: '' }))
+
+  await assert.rejects(
+    collector.collect(
+      { name: 'model.patch', mediaType: 'text/x-diff', maxBytes: 1024 },
+      { workspace: { path: testDir, baseCommit: 'a'.repeat(40) } },
+    ),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'AGENT_NO_OUTPUT')
+      return true
+    },
+  )
+})
+
+test('Benchmark failure completion preserves Agent run facts', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const runId = `erun_agent_failure_${suffix}`
+  const baseDir = path.join(testDir, `agent-failure-${suffix}`)
+  const insightBaseUrl = 'http://127.0.0.1:43202'
+  let completion: Record<string, any> | null = null
+  let resolveCompletion!: () => void
+  const completionGate = new Promise<void>((resolve) => { resolveCompletion = resolve })
+  const executor = executorModule.createBenchmarkExecutor({
+    clientId: `agent_failure_client_${suffix}`,
+    deviceCredential: `dc_agent_failure_${suffix}`,
+    insightBaseUrl,
+    baseDir,
+    callback: {
+      async progress() {},
+      async uploadArtifact() {
+        throw new Error('artifact upload must not run after Agent failure')
+      },
+      async complete(_request: unknown, body: Record<string, any>) {
+        completion = body
+        resolveCompletion()
+      },
+    },
+    workspaceProvider: {
+      rootDir: path.join(baseDir, 'workspaces', 'benchmark'),
+      async prepare(spec: { revision: string }, context: { runId: string }) {
+        const workspace = path.join(baseDir, 'workspaces', 'benchmark', context.runId)
+        await fsp.mkdir(workspace, { recursive: true })
+        return { path: workspace, baseCommit: spec.revision }
+      },
+    },
+    async runAgent() {
+      const error = new executorModule.BenchmarkExecutorError(
+        'AGENT_TIMEOUT',
+        'Agent execution timed out',
+      ) as Error & {
+        runFacts?: { traceId: string; exitCode: number | null; timedOut: boolean }
+      }
+      error.runFacts = {
+        traceId: 'ses_timed_out_agent',
+        exitCode: null,
+        timedOut: true,
+      }
+      throw error
+    },
+  })
+  const task = taskFor(runId, `case_${runId}`, 'e'.repeat(40))
+  const requestBody = {
+    runId,
+    task,
+    callbackBaseUrl: `${insightBaseUrl}/api/benchmark/v1/runs/${runId}`,
+    timeoutSeconds: 60,
+  }
+  const request = { ...requestBody, requestDigest: benchmarkDispatchDigest(requestBody) }
+
+  try {
+    await executor.accept(request)
+    await Promise.race([
+      completionGate,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('failure completion timed out')), 5_000)),
+    ])
+    assert.equal(completion?.status, 'failed')
+    assert.equal(completion?.error?.code, 'AGENT_TIMEOUT')
+    assert.equal(completion?.runFacts?.traceId, 'ses_timed_out_agent')
+    assert.equal(completion?.runFacts?.timedOut, true)
+    assert.equal(completion?.runFacts?.platform, 'opencode')
+    assert.equal(completion?.runFacts?.agent, 'build')
+  } finally {
+    await executor.close()
+  }
+})
+
+test('failed Benchmark completion durably settles the Case before acknowledging and stays idempotent', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const runId = `erun_failed_completion_${suffix}`
+  const clientId = `client_failed_completion_${suffix}`
+  const user = `user_failed_completion_${suffix}`
+  const deviceCredential = `dc_failed_completion_${suffix}`
+  const caseId = `case_${runId}`
+  const task = taskFor(runId, caseId, 'f'.repeat(40))
+  await seedRun({
+    runId,
+    clientId,
+    user,
+    task,
+    deviceCredential,
+    callbackOrigin: 'http://127.0.0.1:3000',
+  })
+  await prisma.experimentEvalResult.create({
+    data: {
+      experimentId: `exp_${runId}`,
+      caseId,
+      evaluatorId: 'benchmark:swe-bench',
+      status: 'pending',
+    },
+  })
+  const completion = {
+    kind: 'execution',
+    status: 'failed',
+    artifacts: [],
+    runFacts: { traceId: `ses_${runId}`, exitCode: 1 },
+    cleanup: { status: 'succeeded' },
+    error: { code: 'MODEL_UNAVAILABLE', message: '模型配置无效' },
+  }
+  const invoke = () => completeRoute(new Request(
+    `http://localhost/api/benchmark/v1/runs/${runId}/complete`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${deviceCredential}`,
+        'content-type': 'application/json',
+        'x-agent-insight-client-id': clientId,
+      },
+      body: JSON.stringify(completion),
+    },
+  ), { params: Promise.resolve({ runId }) })
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await invoke()
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).status, 'execution_failed')
+    const [run, result, experiment] = await Promise.all([
+      prisma.benchmarkCaseRun.findUnique({ where: { id: runId } }),
+      prisma.experimentEvalResult.findUnique({
+        where: { caseId_evaluatorId: { caseId, evaluatorId: 'benchmark:swe-bench' } },
+      }),
+      prisma.experiment.findUnique({ where: { id: `exp_${runId}` } }),
+    ])
+    assert.equal(run?.failureCode, 'MODEL_UNAVAILABLE')
+    assert.equal(result?.status, 'failed')
+    assert.equal(experiment?.status, 'failed')
+  }
+})
+
 test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempotently', async () => {
   const runId = `erun_api_${Date.now()}`
   const clientId = `client_api_${Date.now()}`
@@ -1083,13 +1417,117 @@ test('step 07 retries the same successful completion without rerunning Agent', a
 
     await executor.recover()
     const retryDeadline = Date.now() + 5_000
-    while (executor.activeRunId && Date.now() < retryDeadline) {
+    while ((await executor.store.state(runId))?.stage !== 'terminal' && Date.now() < retryDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
     assert.equal(agentRuns, 1)
     assert.deepEqual(completions.map((item) => item.status), ['succeeded', 'succeeded'])
     assert.equal((await executor.store.state(runId))?.stage, 'terminal')
   } finally {
+    await executor.close()
+  }
+})
+
+test('completion retry does not occupy the Agent execution slot and backs off after failure', async () => {
+  const suffix = `${Date.now()}_${process.pid}`
+  const firstRunId = `erun_delivery_1_${suffix}`
+  const secondRunId = `erun_delivery_2_${suffix}`
+  const baseDir = path.join(testDir, `delivery-lane-${suffix}`)
+  let releaseRetry!: () => void
+  let retryStarted!: () => void
+  const retryGate = new Promise<void>((resolve) => { releaseRetry = resolve })
+  const retryStartedGate = new Promise<void>((resolve) => { retryStarted = resolve })
+  const completionCalls = new Map<string, number>()
+  const agentRuns: string[] = []
+  const executor = executorModule.createBenchmarkExecutor({
+    clientId: `delivery_client_${suffix}`,
+    deviceCredential: `dc_delivery_${suffix}`,
+    insightBaseUrl: 'http://127.0.0.1:43201',
+    baseDir,
+    callback: {
+      async progress() {},
+      async uploadArtifact(_request: unknown, artifact: { name: string; sha256: string }) {
+        return { artifactId: `bart_${Date.now()}`, name: artifact.name, sha256: artifact.sha256 }
+      },
+      async complete(request: { runId: string }) {
+        const count = (completionCalls.get(request.runId) || 0) + 1
+        completionCalls.set(request.runId, count)
+        if (request.runId === firstRunId) {
+          if (count === 1) throw new Error('synthetic initial callback failure')
+          retryStarted()
+          await retryGate
+          throw new Error('synthetic retry callback failure')
+        }
+      },
+    },
+    workspaceProvider: {
+      rootDir: path.join(baseDir, 'workspaces', 'benchmark'),
+      async prepare(spec: { revision: string }, context: { runId: string }) {
+        const workspace = path.join(baseDir, 'workspaces', 'benchmark', context.runId)
+        await fsp.mkdir(workspace, { recursive: true })
+        return { path: workspace, baseCommit: spec.revision }
+      },
+    },
+    collectors: new Map([['git-patch/v1', {
+      async collect(contract: { name: string; mediaType: string }) {
+        const bytes = Buffer.from('diff --git a/a b/a\n--- a/a\n+++ b/a\n')
+        return {
+          name: contract.name,
+          mediaType: contract.mediaType,
+          bytes,
+          sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+        }
+      },
+    }]]),
+    async runAgent(payload: { correlation: { caseRunId: string } }) {
+      agentRuns.push(payload.correlation.caseRunId)
+      return { traceId: `trace_${payload.correlation.caseRunId}`, exitCode: 0 }
+    },
+  })
+  const requestFor = (runId: string) => {
+    const request = {
+      runId,
+      task: taskFor(runId, `case_${runId}`, 'd'.repeat(40)),
+      callbackBaseUrl: `http://127.0.0.1:43201/api/benchmark/v1/runs/${runId}`,
+      timeoutSeconds: 60,
+    }
+    return { ...request, requestDigest: benchmarkDispatchDigest(request) }
+  }
+  try {
+    await executor.accept(requestFor(firstRunId))
+    const pendingDeadline = Date.now() + 5_000
+    while ((await executor.store.state(firstRunId))?.stage !== 'complete_pending' && Date.now() < pendingDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal((await executor.store.state(firstRunId))?.stage, 'complete_pending')
+    while (executor.activeRunId && Date.now() < pendingDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal(executor.activeRunId, null)
+
+    await executor.recover()
+    await retryStartedGate
+    assert.equal(executor.activeRunId, null)
+
+    await executor.accept(requestFor(secondRunId))
+    const secondDeadline = Date.now() + 5_000
+    while ((await executor.store.state(secondRunId))?.stage !== 'terminal' && Date.now() < secondDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal((await executor.store.state(secondRunId))?.stage, 'terminal')
+    assert.deepEqual(agentRuns, [firstRunId, secondRunId])
+
+    releaseRetry()
+    const backoffDeadline = Date.now() + 5_000
+    while (!(await executor.store.state(firstRunId))?.nextDeliveryRetryAt && Date.now() < backoffDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const pending = await executor.store.state(firstRunId)
+    assert.equal(pending?.stage, 'complete_pending')
+    assert.equal(pending?.deliveryRetryCount, 1)
+    assert.ok(Date.parse(String(pending?.nextDeliveryRetryAt)) > Date.now())
+  } finally {
+    releaseRetry()
     await executor.close()
   }
 })

@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
+import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
@@ -45,6 +46,7 @@ interface ExperimentDetail {
       repo: string;
       reference: { description: string };
       submission: { name: string; summary: string } | null;
+      failure?: { code: string; message: string | null } | null;
     };
   }>;
   results: Array<{
@@ -504,9 +506,17 @@ export function ExperimentDetail({
                         </td>
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
                           {c.traceStatus === 'failed' ? (
-                            <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
-                              Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
-                            </span>
+                            detail.scope === 'benchmark' ? (
+                              <BenchmarkFailureNotice
+                                compact
+                                code={c.benchmark?.failure?.code}
+                                message={c.benchmark?.failure?.message || c.traceError}
+                              />
+                            ) : (
+                              <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
+                                Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
+                              </span>
+                            )
                           ) : c.traceStatus === 'pending' ? (
                             <span style={{ color: 'var(--warning)', fontSize: 11 }}>
                               正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…

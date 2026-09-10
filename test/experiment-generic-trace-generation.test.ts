@@ -7,7 +7,9 @@ import test from 'node:test';
 
 import {
   assertTraceGenerationTarget,
+  canReconcileGeneratedTraceAttempt,
   collectTraceGenerationCases,
+  isTraceGenerationCommandTerminal,
   isTraceGenerationFailureRetryable,
   loadTraceGenerationRetryRequest,
   parseTraceIdFromCommandResult,
@@ -117,10 +119,22 @@ test('generic trace binding consumes the client Trace ID and never normalizes us
     'ses_early',
   );
   assert.equal(parseTraceIdFromCommandResult(JSON.stringify({ state: 'AGENT_EXITED' })), null);
+  assert.equal(isTraceGenerationCommandTerminal('RUNNING'), false);
+  assert.equal(isTraceGenerationCommandTerminal('FAILED'), true);
+  assert.equal(canReconcileGeneratedTraceAttempt('DELIVERY_FAILED'), true);
+  assert.equal(canReconcileGeneratedTraceAttempt('MODEL_UNAVAILABLE'), false);
   assert.equal(isTraceGenerationFailureRetryable('TRACE_INGEST_TIMEOUT'), true);
   assert.equal(isTraceGenerationFailureRetryable('CLIENT_BUSY'), true);
   assert.equal(isTraceGenerationFailureRetryable('TRACE_ID_MISSING'), false);
   assert.equal(isTraceGenerationFailureRetryable('PLATFORM_NOT_AVAILABLE'), false);
+  for (const code of [
+    'AGENT_TIMEOUT',
+    'MODEL_UNAVAILABLE',
+    'AGENT_EXIT_NONZERO',
+    'AGENT_NO_OUTPUT',
+  ]) {
+    assert.equal(isTraceGenerationFailureRetryable(code), false, `${code} must not auto-retry`);
+  }
 });
 
 test('experiment detail exposes a failed generic trace generation state', async (t) => {
