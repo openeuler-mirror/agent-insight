@@ -36,6 +36,8 @@
 
 > 2026-09-10 working-tree overlay：Benchmark Case 详情新增 Artifact 查看与下载入口。`model.patch`、`report.json`、`test_output.txt` 和 `run_instance.log` 均按需通过受控内容接口读取，在右侧抽屉展示；下载菜单复用原始 Artifact，不额外生成 ZIP。通用实验详情只投影 Artifact ID 派生的 `contentUrl`，不返回存储路径或文件正文；Patch 的浏览器下载在既有内容路由中新增用户/实验归属校验，同时保留 Evaluator Bearer 下载契约。
 
+> 2026-09-11 working-tree overlay：Linux 常驻客户端安装器按实际 systemd 层级运行：root 新装和历史 `/etc/systemd/system/agent-insight-client.service` 沿用系统级服务，普通用户新装保持用户级服务；systemd manager 预检提前到设备凭证轮换之前，避免旧系统进程继续持有已撤销凭证。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

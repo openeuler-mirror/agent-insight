@@ -314,8 +314,29 @@ function patchClientConfig(patch) {
 
 // ------------------------------------------------------------- systemd
 
-function systemdUnitPath() {
+const SYSTEMD_SYSTEM_UNIT_PATH = path.join('/etc', 'systemd', 'system', `${SERVICE_NAME}.service`)
+
+function systemdUserUnitPath() {
   return path.join(os.homedir(), '.config', 'systemd', 'user', `${SERVICE_NAME}.service`)
+}
+
+function resolveSystemdTarget({
+  uid = process.getuid ? process.getuid() : null,
+  existsSync = fs.existsSync,
+  userServiceActive = () =>
+    systemctl('user', 'is-active', '--quiet', `${SERVICE_NAME}.service`).status === 0,
+} = {}) {
+  const userUnitPath = systemdUserUnitPath()
+  if (existsSync(SYSTEMD_SYSTEM_UNIT_PATH)) {
+    return { scope: 'system', unitPath: SYSTEMD_SYSTEM_UNIT_PATH, legacySystemUnit: true, uid }
+  }
+  if (uid === 0 && existsSync(userUnitPath) && userServiceActive()) {
+    return { scope: 'user', unitPath: userUnitPath, legacySystemUnit: false, uid }
+  }
+  if (uid === 0) {
+    return { scope: 'system', unitPath: SYSTEMD_SYSTEM_UNIT_PATH, legacySystemUnit: false, uid }
+  }
+  return { scope: 'user', unitPath: userUnitPath, legacySystemUnit: false, uid }
 }
 
 function servicePath() {
@@ -332,9 +353,10 @@ function quoteSystemdValue(value) {
     .replace(/%/g, '%%')}"`
 }
 
-function buildSystemdUnit() {
+function buildSystemdUnit(scope = 'user') {
   const nodeBin = process.execPath
   const environmentPath = quoteSystemdValue(`PATH=${servicePath()}`)
+  const wantedBy = scope === 'system' ? 'multi-user.target' : 'default.target'
   // Type=notify 要求客户端先 sd_notify(READY=1)；WatchdogSec 再收 WATCHDOG=1。
   // StartLimit* 必须在 [Unit]：写在 [Service] 会被较新 systemd 忽略。
   return `[Unit]
@@ -356,37 +378,70 @@ StandardOutput=append:${path.join(CLIENT_HOME, 'client.log')}
 StandardError=append:${path.join(CLIENT_HOME, 'client.log')}
 
 [Install]
-WantedBy=default.target
+WantedBy=${wantedBy}
 `
 }
 
-function writeSystemdUnit() {
-  const unitPath = systemdUnitPath()
+function writeSystemdUnit(target = resolveSystemdTarget()) {
+  const unitPath = target.unitPath
   fs.mkdirSync(path.dirname(unitPath), { recursive: true })
-  const unit = buildSystemdUnit()
+  const unit = buildSystemdUnit(target.scope)
   fs.writeFileSync(unitPath, unit)
   log(`✓ 已写入 systemd unit: ${unitPath}`)
   return unitPath
 }
 
-function systemctl(...args) {
-  return spawnSync('systemctl', ['--user', ...args], { encoding: 'utf8', stdio: 'pipe' })
+function systemctlArgs(scope, ...args) {
+  return scope === 'user' ? ['--user', ...args] : args
 }
 
-function installSystemd(start) {
-  writeSystemdUnit()
-  systemctl('daemon-reload')
-  systemctl('enable', `${SERVICE_NAME}.service`)
-  if (start) {
-    const r = systemctl('restart', `${SERVICE_NAME}.service`)
-    if (r.status !== 0) {
-      console.error((r.stderr || '').trim())
-      fail('systemd 启动失败', `查看日志: journalctl --user -u ${SERVICE_NAME} -n 50`)
+function systemctl(scope, ...args) {
+  return spawnSync('systemctl', systemctlArgs(scope, ...args), { encoding: 'utf8', stdio: 'pipe' })
+}
+
+function systemdCommand(scope, command) {
+  return `systemctl${scope === 'user' ? ' --user' : ''} ${command}`
+}
+
+function preflightSystemd(target, runner = systemctl) {
+  if (target.scope === 'system' && target.uid !== 0) {
+    return {
+      ok: false,
+      detail: `检测到系统级服务 ${target.unitPath}，当前用户无权更新；请使用 root 重新执行安装命令。`,
     }
+  }
+  const result = runner(target.scope, 'show-environment')
+  return {
+    ok: result.status === 0,
+    detail: (result.stderr || result.stdout || '').trim(),
+  }
+}
+
+function requireSystemctlSuccess(result, action, scope) {
+  if (result.status === 0) return
+  const detail = (result.stderr || result.stdout || '').trim()
+  if (detail) console.error(detail)
+  fail(`systemd ${action}失败`, `排查: ${systemdCommand(scope, `status ${SERVICE_NAME} --no-pager`)}`)
+}
+
+function installSystemd(start, target = resolveSystemdTarget()) {
+  if (target.legacySystemUnit) {
+    log(`检测到历史系统级服务，将沿用并重启: ${target.unitPath}`)
+  }
+  writeSystemdUnit(target)
+  requireSystemctlSuccess(systemctl(target.scope, 'daemon-reload'), 'daemon-reload', target.scope)
+  requireSystemctlSuccess(
+    systemctl(target.scope, 'enable', `${SERVICE_NAME}.service`),
+    'enable',
+    target.scope,
+  )
+  if (start) {
+    const r = systemctl(target.scope, 'restart', `${SERVICE_NAME}.service`)
+    requireSystemctlSuccess(r, 'restart', target.scope)
     log('✓ 服务已启动 (systemd)')
   }
-  log(`  状态: systemctl --user status ${SERVICE_NAME}`)
-  log(`  日志: journalctl --user -u ${SERVICE_NAME} -f`)
+  log(`  状态: ${systemdCommand(target.scope, `status ${SERVICE_NAME}`)}`)
+  log(`  日志: journalctl${target.scope === 'user' ? ' --user' : ''} -u ${SERVICE_NAME} -f`)
 }
 
 // ------------------------------------------------------------- launchd
@@ -522,8 +577,9 @@ function status() {
   log(`clientId: ${cfg.clientId}`)
   log(`host:     ${cfg.insightBaseUrl}`)
   if (process.platform === 'linux') {
-    const r = systemctl('is-active', `${SERVICE_NAME}.service`)
-    log(`systemd:  ${(r.stdout || r.stderr || '').trim() || 'unknown'}`)
+    const target = resolveSystemdTarget()
+    const r = systemctl(target.scope, 'is-active', `${SERVICE_NAME}.service`)
+    log(`systemd (${target.scope}): ${(r.stdout || r.stderr || '').trim() || 'unknown'}`)
   } else if (process.platform === 'darwin') {
     const uid = process.getuid ? process.getuid() : 501
     const r = spawnSync('launchctl', ['print', `gui/${uid}/${LAUNCHD_LABEL}`], { encoding: 'utf8' })
@@ -533,12 +589,13 @@ function status() {
 
 function uninstall() {
   if (process.platform === 'linux') {
-    systemctl('stop', `${SERVICE_NAME}.service`)
-    systemctl('disable', `${SERVICE_NAME}.service`)
-    const unitPath = systemdUnitPath()
+    const target = resolveSystemdTarget()
+    systemctl(target.scope, 'stop', `${SERVICE_NAME}.service`)
+    systemctl(target.scope, 'disable', `${SERVICE_NAME}.service`)
+    const unitPath = target.unitPath
     if (fs.existsSync(unitPath)) fs.unlinkSync(unitPath)
-    systemctl('daemon-reload')
-    log('✓ 已卸载 systemd 服务')
+    systemctl(target.scope, 'daemon-reload')
+    log(`✓ 已卸载 systemd ${target.scope} 服务`)
   } else if (process.platform === 'darwin') {
     const uid = process.getuid ? process.getuid() : 501
     spawnSync('launchctl', ['bootout', `gui/${uid}/${LAUNCHD_LABEL}`], { stdio: 'ignore' })
@@ -580,6 +637,19 @@ async function main() {
   }
   if (process.platform === 'linux' && spawnSync('systemctl', ['--version']).status !== 0) {
     fail('未找到 systemctl', `该系统没有 systemd，可手动运行: node ${CLIENT_SCRIPT}`)
+  }
+
+  let systemdTarget = null
+  if (process.platform === 'linux') {
+    systemdTarget = resolveSystemdTarget()
+    const preflight = preflightSystemd(systemdTarget)
+    if (!preflight.ok) {
+      fail(
+        'systemd 服务管理器不可用，尚未刷新设备凭证',
+        preflight.detail ||
+          `请确认 ${systemdCommand(systemdTarget.scope, 'show-environment')} 可正常执行后重试。`,
+      )
+    }
   }
 
   // 先准备所有本地运行时，再刷新设备凭证。否则 pip/venv 耗时期间旧客户端
@@ -629,7 +699,7 @@ async function main() {
     log('已存在注册信息，跳过注册')
   }
 
-  if (process.platform === 'linux') installSystemd(args.start)
+  if (process.platform === 'linux') installSystemd(args.start, systemdTarget)
   else installLaunchd(args.start)
 
   log('')
@@ -648,6 +718,9 @@ module.exports = {
   RUNTIME_DIR,
   buildSystemdUnit,
   writeSystemdUnit,
+  resolveSystemdTarget,
+  systemctlArgs,
+  preflightSystemd,
   writeLaunchdPlist,
   bootstrapLaunchdService,
   parseArgs,

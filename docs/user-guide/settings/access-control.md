@@ -122,6 +122,12 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 > 注册步骤默认安装当前 Insight 服务端随附的客户端版本，不会被执行命令目录中的旧项目副本覆盖；
 > 重跑命令会刷新注册与设备凭证，并按机器标识复用原有客户端记录。
 
+Linux 会按实际权限与既有安装选择 systemd 层级：root 安装或检测到历史
+`/etc/systemd/system/agent-insight-client.service` 时使用系统级服务，普通用户新装使用
+`~/.config/systemd/user/agent-insight-client.service`。安装器会在刷新设备凭证前确认对应的
+systemd manager 可用；普通用户若遇到历史系统级服务，会先退出并提示使用 root 重跑，避免旧进程
+继续持有随后被撤销的凭证。macOS 仍使用当前用户的 `~/Library/LaunchAgents`。
+
 安装完成后客户端会：
 
 - 注册为系统服务，崩溃后由操作系统自动拉起，不随 Agent 平台启停

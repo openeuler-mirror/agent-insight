@@ -61,6 +61,13 @@ flowchart TB
 checkout 也不会覆盖服务端版本；只有开发调试显式设置 `AGENT_INSIGHT_CLIENT_SOURCE=local`
 时才使用 `./scripts/install-ras-client.js`。
 
+Linux 常驻客户端会在轮换设备凭证前确定 systemd 层级并预检 manager：root 安装或已经存在
+`/etc/systemd/system/agent-insight-client.service` 时沿用系统级服务，普通用户新装使用
+`~/.config/systemd/user/agent-insight-client.service`。这样历史系统级进程会在新凭证落盘后由同一
+安装流程重启，不会继续携带已撤销的旧凭证；普通用户无权更新历史系统级 unit 时，安装器会在
+注册前退出并提示使用 root。macOS 路径不变，使用当前用户的
+`~/Library/LaunchAgents/ai.agent-insight.client.plist`。
+
 ---
 
 ## 3. 本机前置条件清单
@@ -280,6 +287,13 @@ flowchart TD
 
 ~/.config/xiaoo/
 └── config.toml                   # [hooker].plugins 含 RAS
+
+# Linux 常驻客户端（二选一）
+/etc/systemd/system/agent-insight-client.service              # root / 历史系统级安装
+~/.config/systemd/user/agent-insight-client.service           # 普通用户新装
+
+# macOS 常驻客户端
+~/Library/LaunchAgents/ai.agent-insight.client.plist
 ```
 
 临时目录（安装中，结束后删除；仅 bundle / npm 路径会创建）：

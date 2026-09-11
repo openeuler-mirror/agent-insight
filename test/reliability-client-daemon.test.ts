@@ -94,8 +94,37 @@ const installer = require_('../scripts/install-ras-client.js') as {
   CLIENT_SCRIPT: string
   RUNTIME_DIR: string
   installRuntime?: () => void
-  buildSystemdUnit?: () => string
-  writeSystemdUnit: () => string
+  buildSystemdUnit?: (scope?: 'user' | 'system') => string
+  writeSystemdUnit: (target?: {
+    scope: 'user' | 'system'
+    unitPath: string
+    legacySystemUnit: boolean
+    uid: number | null
+  }) => string
+  resolveSystemdTarget?: (options?: {
+    uid?: number | null
+    existsSync?: (target: string) => boolean
+    userServiceActive?: () => boolean
+  }) => {
+    scope: 'user' | 'system'
+    unitPath: string
+    legacySystemUnit: boolean
+    uid: number | null
+  }
+  systemctlArgs?: (scope: 'user' | 'system', ...args: string[]) => string[]
+  preflightSystemd?: (
+    target: {
+      scope: 'user' | 'system'
+      unitPath: string
+      legacySystemUnit: boolean
+      uid: number | null
+    },
+    runner: (scope: 'user' | 'system', ...args: string[]) => {
+      status: number | null
+      stdout?: string
+      stderr?: string
+    },
+  ) => { ok: boolean; detail: string }
   writeLaunchdPlist?: () => string
   bootstrapLaunchdService?: (
     plistPath: string,
@@ -661,7 +690,7 @@ test('client writes the config.json that RAS actually reads', async () => {
 
 test('systemd unit preserves the installer PATH and keeps service directives valid', () => {
   assert.equal(typeof installer.buildSystemdUnit, 'function')
-  assert.match(String(installer.writeSystemdUnit), /buildSystemdUnit\(\)/)
+  assert.match(String(installer.writeSystemdUnit), /buildSystemdUnit\(target\.scope\)/)
   const previousPath = process.env.PATH
   process.env.PATH = '/home/alice/.opencode/bin:/opt/Agent Tools/bin:/tmp/%h/"quoted"/\\'
   try {
@@ -687,6 +716,81 @@ test('systemd unit preserves the installer PATH and keeps service directives val
     if (previousPath === undefined) delete process.env.PATH
     else process.env.PATH = previousPath
   }
+})
+
+test('systemd target keeps legacy system services at system scope and avoids root user bus', () => {
+  assert.equal(typeof installer.resolveSystemdTarget, 'function')
+  assert.equal(typeof installer.systemctlArgs, 'function')
+  const systemUnit = `/etc/systemd/system/${installer.SERVICE_NAME}.service`
+
+  const legacy = installer.resolveSystemdTarget?.({
+    uid: 1000,
+    existsSync: (target) => target === systemUnit,
+  })
+  assert.equal(legacy?.scope, 'system')
+  assert.equal(legacy?.unitPath, systemUnit)
+  assert.equal(legacy?.legacySystemUnit, true)
+  assert.deepEqual(
+    installer.systemctlArgs?.('system', 'restart', `${installer.SERVICE_NAME}.service`),
+    ['restart', `${installer.SERVICE_NAME}.service`],
+  )
+
+  const rootFreshInstall = installer.resolveSystemdTarget?.({ uid: 0, existsSync: () => false })
+  assert.equal(rootFreshInstall?.scope, 'system')
+  assert.equal(rootFreshInstall?.unitPath, systemUnit)
+
+  const rootActiveUserInstall = installer.resolveSystemdTarget?.({
+    uid: 0,
+    existsSync: (target) => target.includes(path.join('.config', 'systemd', 'user')),
+    userServiceActive: () => true,
+  })
+  assert.equal(rootActiveUserInstall?.scope, 'user', '已正常运行的 root 用户级服务不能重复安装')
+
+  const rootStaleUserInstall = installer.resolveSystemdTarget?.({
+    uid: 0,
+    existsSync: (target) => target.includes(path.join('.config', 'systemd', 'user')),
+    userServiceActive: () => false,
+  })
+  assert.equal(rootStaleUserInstall?.scope, 'system', '不可用的 root 用户级 unit 应迁移到系统级')
+
+  const regularUserInstall = installer.resolveSystemdTarget?.({ uid: 1000, existsSync: () => false })
+  assert.equal(regularUserInstall?.scope, 'user')
+  assert.match(regularUserInstall?.unitPath || '', /\.config[/\\]systemd[/\\]user/)
+  assert.deepEqual(installer.systemctlArgs?.('user', 'daemon-reload'), ['--user', 'daemon-reload'])
+})
+
+test('systemd preflight rejects an unprivileged legacy migration before registration', () => {
+  assert.equal(typeof installer.preflightSystemd, 'function')
+  let runnerCalled = false
+  const result = installer.preflightSystemd?.(
+    {
+      scope: 'system',
+      unitPath: `/etc/systemd/system/${installer.SERVICE_NAME}.service`,
+      legacySystemUnit: true,
+      uid: 1000,
+    },
+    () => {
+      runnerCalled = true
+      return { status: 0 }
+    },
+  )
+  assert.equal(result?.ok, false)
+  assert.equal(runnerCalled, false)
+  assert.match(result?.detail || '', /root/)
+
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'install-ras-client.js'),
+    'utf8',
+  )
+  assert.ok(
+    source.indexOf('preflightSystemd(systemdTarget)') < source.indexOf('await register({'),
+    'systemd 可用性必须在设备凭证轮换前检查',
+  )
+})
+
+test('system-level unit uses multi-user target while user unit keeps default target', () => {
+  assert.match(installer.buildSystemdUnit?.('system') || '', /WantedBy=multi-user\.target/)
+  assert.match(installer.buildSystemdUnit?.('user') || '', /WantedBy=default\.target/)
 })
 
 test('sd_notify READY precedes capabilities and watchdog is faster than WatchdogSec/2', () => {
