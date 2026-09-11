@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `bffb8376de71332568d49d86b8e24f2633035492` (`bffb8376`) |
+| Commit | `76971d7f2a22e0b0a3eafe11a484bfaefa9c9139` (`76971d7f`) |
 | Branch | `goal_plus` |
-| Date | 2026-09-10 20:54:20 +0900 |
+| Date | 2026-09-11 10:22:53 +0900 |
 | Author | huang |
-| Subject | `fix: 恢复被损坏锁阻塞的 Pi Trace 上传` |
-| Working tree overlay | Goal Plus Pi passive importer 使用独立持久化导入断点，只追加新增或修订事件；服务端仅对 `goal-plus:` session 启用持久化精确去重、并发锁保护、写入上限与流式聚合边界，并提供默认只读的历史 spool 修复工具。运行终态与 Goal Plus 业务终态继续分离。共享 uploader lock 改为完整内容原子发布，可恢复旧空锁、损坏锁和本机死进程锁；Goal Plus Pi 上传最新分区优先且单轮有界，避免历史 backlog 饿死新 Trace，并将阻塞原因暴露到 status/self-check。独立接入的 Pi 不启用 Goal Plus 的排序和批次数限制，仍保持 oldest-first、单轮处理完全部 backlog 的默认行为。 |
+| Subject | `fix: 区分 Pi Worker 受控终止与超时` |
+| Working tree overlay | Goal Plus Pi passive importer 使用独立持久化导入断点，只追加新增或修订事件；服务端仅对 `goal-plus:` session 启用持久化精确去重、并发锁保护、写入上限与流式聚合边界，并提供默认只读的历史 spool 修复工具。运行终态与 Goal Plus 业务终态继续分离。共享 uploader lock 改为完整内容原子发布，可恢复旧空锁、损坏锁和本机死进程锁；Goal Plus Pi 上传最新分区优先且单轮有界，避免历史 backlog 饿死新 Trace，并将阻塞原因暴露到 status/self-check。Goal Plus Pi RPC Worker 的运行终态优先采用 `runner_failed`、`timed_out` 与 `progress_handoff`：完成交接后的 `SIGTERM` 143/-15 视为受控成功，真实超时或 runner 错误仍为失败；状态派生版本可增量修正历史误判且不重放未变化事件。独立接入的 Pi 不启用这些 Goal Plus 专属语义，也不启用 Goal Plus 的排序和批次数限制，仍保持 oldest-first、单轮处理完全部 backlog 的默认行为。 |
 
-**如何更新：** `git diff bffb8376 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 76971d7f HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

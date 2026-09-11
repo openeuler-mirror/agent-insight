@@ -41,6 +41,8 @@ watcher 每轮只导入上次成功落盘后新增或发生状态更新的 Pi �
 
 Pi uploader 会优先发送当天分区，并在每轮只处理有限批次，所以升级前留下的大 backlog 不再持续阻塞新 Trace。上传锁采用原子发布，旧版本异常退出留下的空锁、损坏锁或本机死进程锁会自动恢复；存活进程和其他主机持有的锁不会被抢占。`goal-plus-collector status` 的 `uploader.state` 应为 `free` 或暂时性的 `held-local`；`invalid`、`orphaned`、`recovery-blocked` 会使状态不再显示 ready，并在 scan 日志中给出 `pi_upload_blocked` 诊断。
 
+Pi RPC worker 完成一个 dispatch 后，Goal Plus 会主动关闭常驻 RPC 进程；由此产生的退出码 `143`/`-15` 在已有 completed handoff、且没有 timeout/runner failure 时属于正常收尾，不显示为失败。若同一退出码伴随预算超时或 runner 异常，则仍显示运行失败，并给出明确的超时或 runner 错误。升级后的 watcher 会增量修订旧误判，只更新状态发生变化的 Agent 事件，不重复上传整条 Trace。
+
 没有 attach 任何 `.gp` 时，`start` 和 `self-check` 不会报告语义增强 ready，但只要所选 Pi/Codex 原生采集器安装成功，Goal Plus native Trace 仍显示 `READY`。语义 collector 安装、scan 或 watcher 失败会单独显示为可选增强不可用，不会把 native Trace 降为 `PARTIAL`，也不会回滚或停止 Pi/Codex 原生采集器。只有所选宿主的原生采集器未安装成功时，Goal Plus native Trace 才显示 `NOT READY`。
 
 ## 页面与数据口径

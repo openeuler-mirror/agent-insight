@@ -76,6 +76,8 @@ Goal Plus collector 的配置优先级为专属环境变量、managed config、�
 
 native Pi 导入按 source 文件指纹、session descriptor 和每个稳定 event identity 的语义 hash 保存独立 checkpoint。文件及 descriptor 未变化时整段跳过；session 增长或终态变化时只追加新增/更新事件；文件截断或替换时重建该 session 基线。顺序固定为 `spool flush → import checkpoint 原子写入 → uploader`，所以网络失败只留下待上传数据，不会让下一次 5 秒扫描再次追加全部 session。
 
+Pi RPC worker 的运行终态以 `runner_failed`、`timed_out`、`progress_handoff.status` 和原生 turn 结果为主，进程退出码只作兜底。`progress_handoff.status=completed` 且未超时、runner 未失败时，Goal Plus 收尾阶段主动发送 SIGTERM 所产生的 `143`/`-15` 是受控关闭，Agent span 仍为 success；相同退出码若伴随 `timed_out=true` 或 `runner_failed=true` 则保持 failure。原始退出码与派生依据均保留在 `goal_plus.*` attributes。状态派生带独立版本号；升级时仅重新解析旧 checkpoint，并只追加语义 hash 发生变化的 Agent event 修订，不重放消息和工具事件。
+
 Goal Plus Pi uploader 每轮优先读取最新日期分区，并限制单轮处理 10 个 batch；当天 Trace 因此不会被历史 backlog 长时间饿死，旧分区由后续轮次继续推进。共享 process lock 通过“完整候选文件 + 原子 hard-link”发布 owner，避免进程在 create/write 窗口退出后留下新的空锁；已存在且超过保护窗口的空锁、损坏锁，以及 owner 已退出的本机锁，会在独占 recovery claim 下回收。存活的本机 owner、其他主机 owner、非普通文件和已有 recovery claim 均 fail closed。`flushOnce()` 在未取得锁时返回结构化 `lockStatus`；Goal Plus scan 将其写入 `nativeUploadStatus` 和 diagnostics，`status`/`self-check` 也会把损坏或孤立 uploader 标为非 ready，而不是只显示 `uploadedEvents=0`。
 
 ## Spool 幂等、容量保护与历史修复
