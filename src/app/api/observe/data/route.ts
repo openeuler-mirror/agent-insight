@@ -115,17 +115,29 @@ function toIsoTimestamp(value: unknown): string | null {
     return ms != null && ms > 0 ? new Date(ms).toISOString() : null;
 }
 
-function getTraceLifecycle(completedAt: unknown): {
+function hasGoalPlusTerminalFailure(value: unknown): boolean {
+    let failures = value;
+    if (typeof failures === 'string') {
+        try { failures = JSON.parse(failures); } catch { return false; }
+    }
+    return Array.isArray(failures) && failures.some(item => (
+        item && typeof item === 'object'
+        && (item as Record<string, unknown>).failure_type === 'goal_plus_pi_session_failed'
+    ));
+}
+
+function getTraceLifecycle(completedAt: unknown, failures?: unknown): {
     traceStatus: TraceLifecycleStatus;
     traceCompletedAt: string | null;
     traceStatusReason: string;
 } {
     const completedIso = toIsoTimestamp(completedAt);
     if (completedIso) {
+        const failed = hasGoalPlusTerminalFailure(failures);
         return {
-            traceStatus: 'success',
+            traceStatus: failed ? 'failed' : 'success',
             traceCompletedAt: completedIso,
-            traceStatusReason: 'session-ended',
+            traceStatusReason: failed ? 'goal-plus-session-failed' : 'session-ended',
         };
     }
 
@@ -565,7 +577,10 @@ export async function GET(request: Request) {
         const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
         const last_eval_status = lastEval?.status ?? null;
         const last_eval_error = lastEval?.errorMessage ?? null;
-        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null);
+        const baseTraceLifecycle = getTraceLifecycle(
+            recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null,
+            record.failures,
+        );
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
@@ -576,7 +591,7 @@ export async function GET(request: Request) {
         );
         const anomalyStatus = deriveAnomalyStatus({ eventCount: anomalyCount });
         if (skipAutoEvalReady) {
-            const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+            const traceLifecycle = baseTraceLifecycle.traceStatus !== 'running'
                 ? baseTraceLifecycle
                 : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
                     ? getTraceLifecycle((await getAutoEvalReadiness(record)).traceCompletedAt)
@@ -600,7 +615,7 @@ export async function GET(request: Request) {
             };
         }
         const readiness = await getAutoEvalReadiness(record);
-        const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+        const traceLifecycle = baseTraceLifecycle.traceStatus !== 'running'
             ? baseTraceLifecycle
             : getTraceLifecycle(readiness.traceCompletedAt);
         return {

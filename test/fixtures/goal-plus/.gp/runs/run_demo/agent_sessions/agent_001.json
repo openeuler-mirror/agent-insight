@@ -1,0 +1,14 @@
+{
+  "agent_session_id": "agent_001",
+  "run_id": "run_demo",
+  "candidate_id": "candidate_001",
+  "host": "pi-rpc",
+  "host_handle": { "host": "pi-rpc", "external_id": "pi-native-demo", "task_name": "search_agent_001", "metadata": { "session_file": "runs/run_demo/pi_sessions/agent_001.jsonl", "continuation": "native_session" } },
+  "created_at": "2026-09-01T01:05:00Z",
+  "updated_at": "2026-09-01T01:08:00Z",
+  "directive": { "role": "candidate-worker" },
+  "selected_model": { "slot": 1, "model": "synthetic-model" },
+  "workspace": "/home/example/private/worktree",
+  "launch": { "task_name": "search_agent_001", "continuation": "native_session" },
+  "counters": { "verifier_runs": 2 }
+}

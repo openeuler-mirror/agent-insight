@@ -20,6 +20,8 @@ Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评
 
 本轮工作树另将普通实验的平台生成 Trace、Skill 用例分析与 Skill A/B 测试的单次 Agent 执行上限统一为 600 秒；评估器超时与触发分析的独立 30 秒上限保持不变。Skill 用例分析与 A/B 的用户重跑也统一为从目标 Agent 执行开始，成功后重评该 Case/侧的全部评估器。
 
+Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语义 ingest、领域查询与完整度展示；Pi passive importer 使用独立持久化断点，只追加新增或修订事件。服务端对 `goal-plus:` session 启用持久化精确去重、并发锁、写入上限和流式聚合边界，并提供默认只读的历史 spool 修复工具。共享 uploader lock 支持原子发布及旧空锁、损坏锁、本机死进程锁恢复；Goal Plus Pi 上传采用最新分区优先和单轮有界策略，并暴露阻塞原因。Pi RPC Worker 区分受控交接终止与真实超时或 runner 错误；独立接入的 Pi 保持原有 oldest-first 和完整 backlog 处理语义。当前入口暂时隐藏，后端接入与查询能力保留。
+
 **如何更新：** `git diff 3f79d889 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
@@ -35,6 +37,7 @@ Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评
 - [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
+- [12-goal-plus-observability.md](12-goal-plus-observability.md)：Goal Plus 双通道观测覆盖层、collector、语义 ingest、领域模型、确定性关联、完整度与 UI 契约。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。

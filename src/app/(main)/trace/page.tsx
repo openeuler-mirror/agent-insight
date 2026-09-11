@@ -166,6 +166,7 @@ type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
+const TRACE_LIST_REFRESH_MS = 5_000;
 
 type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
@@ -521,6 +522,19 @@ function TracePageContent() {
     const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
 
+    useEffect(() => {
+        if (!user) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible') setReloadKey(value => value + 1);
+        };
+        const timer = window.setInterval(refreshWhenVisible, TRACE_LIST_REFRESH_MS);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
+    }, [user]);
+
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', parseAsString.withDefault('all'));
@@ -703,7 +717,14 @@ function TracePageContent() {
         sortDir,
         pageSize,
     ]);
+    const listRequestKey = useMemo(() => JSON.stringify([
+        user,
+        listFilterKey,
+        reliabilityAnomalyFilter,
+        page,
+    ]), [listFilterKey, page, reliabilityAnomalyFilter, user]);
     const previousListFilterKeyRef = useRef(listFilterKey);
+    const previousListRequestKeyRef = useRef<string | null>(null);
     useEffect(() => {
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
@@ -748,7 +769,9 @@ function TracePageContent() {
             return;
         }
         if (!user) return;
-        setLoading(true);
+        const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
+        previousListRequestKeyRef.current = listRequestKey;
+        if (!silentRefresh) setLoading(true);
         const scopeParam = agentScopeFilter === 'subagent'
             ? '&onlySubagents=1'
             : agentScopeFilter === 'all'
@@ -763,7 +786,7 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store' })
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -779,12 +802,14 @@ function TracePageContent() {
             })
             .catch(() => {
                 if (listRequestIdRef.current !== requestId) return;
-                setData([]);
-                setTotal(0);
-                setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
+                if (!silentRefresh) {
+                    setData([]);
+                    setTotal(0);
+                    setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
+                }
             })
             .finally(() => {
-                if (listRequestIdRef.current === requestId) setLoading(false);
+                if (listRequestIdRef.current === requestId && !silentRefresh) setLoading(false);
             });
     }, [
         user,
@@ -805,6 +830,7 @@ function TracePageContent() {
         pageSize,
         reloadKey,
         listFilterKey,
+        listRequestKey,
         setPage,
     ]);
 
@@ -969,6 +995,7 @@ function TracePageContent() {
             <PageContainer>
                 {selectedExecution ? (
                     <TraceDetailView
+                        key={selectedExecution.task_id || selectedExecution.upload_id}
                         execution={selectedExecution}
                         onBack={() => handleSelectExecution(null)}
                         availableTags={availableTags}
@@ -1438,7 +1465,7 @@ function TraceDetailView({
         if (!taskId) return;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`)
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`, { cache: 'no-store' })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => { setSession(j); setSecondsSinceRefresh(0); })
             .catch(() => { if (!silent && isInitial) setSession({ error: 'Network error' }); })

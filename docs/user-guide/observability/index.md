@@ -61,6 +61,10 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 - 查看异常样本归因： [诊断分析](./diagnosis)
 - 将线上问题沉淀为回归验证： [评估与实验](../evaluation/index)
 
+## Goal Plus 接入
+
+Goal Plus 按 Pi、Codex 或 Pi + Codex Trace 来源 profile 复用对应的原生 Trace collector；独立的只读 `.gp` collector 仅用于可选编排语义增强。安装、attach、scan/start/watch、完整度口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
+
 ## Hermes 接入
 
 客户端安装页下发的普通交互版 setup 和 auto setup 都支持选择 Hermes。选择后脚本会从 Agent Insight 服务下载固定版本的轻量插件到 `$HERMES_HOME/plugins/agent_insight_hermes/`（未设置 `HERMES_HOME` 时默认为 `~/.hermes`），写入 `plugin.yaml` 与 `config.json`，然后启用 `agent_insight_hermes`。该插件只使用 Python 标准库，不需要访问 GitHub、探测 Hermes venv 或额外安装 OpenTelemetry Python 依赖。setup 不会启用、禁用或改写其他 Hermes 插件；上游 `hermes_otel` 可以继续用于 Langfuse 等独立目的。若两个插件都被配置为向同一个 Agent Insight 端点上报，同一轮对话可能产生重复 telemetry，需要由用户自行调整其中一个插件的 endpoint 或启用状态。
