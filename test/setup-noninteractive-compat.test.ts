@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -77,6 +79,35 @@ test('常驻客户端默认使用服务端 bundle，本地 checkout 只能显式
   assert.match(clientBlock, /pkg_tmp_root="\$HOME\/\.agent-insight\/client\/tmp"/);
   assert.match(clientBlock, /mktemp -d "\$pkg_tmp_root\/install\.XXXXXX"/);
   assert.doesNotMatch(clientBlock, /mktemp -d "\$\{TMPDIR:-\/tmp\}\/agent-insight-client/);
+  assert.match(clientBlock, /\{"type":"commonjs"\}.*> "\$pkg_tmp\/x\/scripts\/package\.json"/);
+  assert.match(clientBlock, /\{"type":"commonjs"\}.*> "\$pkg_tmp\/x\/package\/scripts\/package\.json"/);
+  assert.ok(
+    clientBlock.indexOf('> "$pkg_tmp/x/scripts/package.json"') <
+      clientBlock.indexOf('node "$pkg_tmp/x/scripts/install-ras-client.js"'),
+    '服务端 bundle 的安装器必须先建立 CommonJS 包边界',
+  );
+});
+
+test('客户端安装器的 CommonJS 边界覆盖上层 .agent-insight ESM 配置', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-commonjs-boundary-'));
+  try {
+    const scriptsDir = path.join(root, '.agent-insight', 'client', 'tmp', 'install.test', 'x', 'scripts');
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(root, '.agent-insight', 'package.json'), '{"type":"module"}\n');
+    fs.writeFileSync(path.join(scriptsDir, 'package.json'), '{"type":"commonjs"}\n');
+    fs.writeFileSync(
+      path.join(scriptsDir, 'install-ras-client.js'),
+      'const fs = require("node:fs"); process.stdout.write(typeof fs.readFileSync);\n',
+    );
+
+    const result = spawnSync(process.execPath, [path.join(scriptsDir, 'install-ras-client.js')], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'function');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python 选择', () => {
