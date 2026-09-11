@@ -14,6 +14,7 @@ const LEGACY_ASSETS: Record<string, { path: string[]; contentType: string }> = {
   'uninstall.cjs': { path: ['pi-agent', 'scripts', 'uninstall.cjs'], contentType: 'text/javascript; charset=utf-8' },
   'install.cjs': { path: ['pi-agent', 'install.cjs'], contentType: 'text/javascript; charset=utf-8' },
   'trace-transport.cjs': { path: ['shared', 'trace-transport.cjs'], contentType: 'text/javascript; charset=utf-8' },
+  'pi-trace-helpers.cjs': { path: ['shared', 'pi-trace-helpers.cjs'], contentType: 'text/javascript; charset=utf-8' },
 };
 
 export async function GET(

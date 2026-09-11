@@ -1,4 +1,4 @@
-export type ReportingChannelId = 'otlp-logs' | 'otlp-traces' | 'json-snapshot';
+export type ReportingChannelId = 'otlp-logs' | 'otlp-traces' | 'json-snapshot' | 'goal-plus-snapshots';
 
 export type ReportingChannel = {
     id: ReportingChannelId;
@@ -30,6 +30,12 @@ export const REPORTING_CHANNELS: readonly ReportingChannel[] = [
         labelZh: 'JSON 会话快照',
         labelEn: 'JSON session snapshot',
     },
+    {
+        id: 'goal-plus-snapshots',
+        endpoint: '/api/ingest/goal-plus/v1/snapshots',
+        labelZh: 'Goal Plus 语义快照',
+        labelEn: 'Goal Plus semantic snapshots',
+    },
 ];
 
 const FRAMEWORK_REPORTING_CHANNELS: Readonly<Record<string, readonly ReportingChannelId[]>> = {
@@ -45,6 +51,7 @@ const FRAMEWORK_REPORTING_CHANNELS: Readonly<Record<string, readonly ReportingCh
     trae: ['json-snapshot'],
     actrail: ['otlp-traces'],
     'pi-agent': ['otlp-traces'],
+    'goal-plus': ['otlp-traces', 'goal-plus-snapshots'],
     qwencode: ['otlp-logs', 'otlp-traces'],
     codex: ['otlp-traces'],
     'deepseek-harness': ['otlp-logs'],

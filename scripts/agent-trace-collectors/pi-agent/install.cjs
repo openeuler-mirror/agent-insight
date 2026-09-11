@@ -92,18 +92,20 @@ async function installFiles(sourceDir, packageDir, sharedDir) {
     await copyFile(path.join(sourceDir, ...parts), path.join(packageDir, ...parts), mode);
   }
 
-  const incomingPath = path.resolve(sourceDir, "..", "shared", "trace-transport.cjs");
-  const targetPath = path.join(sharedDir, "trace-transport.cjs");
-  if (fs.existsSync(targetPath)) {
-    const [incoming, current] = await Promise.all([
-      fsp.readFile(incomingPath),
-      fsp.readFile(targetPath),
-    ]);
-    if (!incoming.equals(current)) {
-      throw new Error(`Refusing to overwrite a different shared transport at ${targetPath}`);
+  for (const sharedFile of ["trace-transport.cjs", "pi-trace-helpers.cjs"]) {
+    const incomingPath = path.resolve(sourceDir, "..", "shared", sharedFile);
+    const targetPath = path.join(sharedDir, sharedFile);
+    if (fs.existsSync(targetPath)) {
+      const [incoming, current] = await Promise.all([
+        fsp.readFile(incomingPath),
+        fsp.readFile(targetPath),
+      ]);
+      if (!incoming.equals(current)) {
+        throw new Error(`Refusing to overwrite a different shared collector module at ${targetPath}`);
+      }
+    } else {
+      await copyFile(incomingPath, targetPath);
     }
-  } else {
-    await copyFile(incomingPath, targetPath);
   }
 }
 

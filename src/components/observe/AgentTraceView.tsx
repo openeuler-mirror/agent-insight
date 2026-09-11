@@ -55,6 +55,11 @@ import {
 } from '@/lib/shared/interaction-utils';
 
 const SLOW_MS = 60_000;
+const EMPTY_RAS_MARKERS: RasTraceMarker[] = [];
+
+function sameStringSet(left: Set<string>, right: Set<string>): boolean {
+    return left.size === right.size && [...left].every(key => right.has(key));
+}
 
 type NodeStatus = 'error' | 'slow' | 'ok';
 
@@ -414,6 +419,8 @@ export interface AgentTraceViewProps {
     rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
+    /** 跨增量刷新保持树交互状态的稳定 Trace 标识。 */
+    traceIdentity?: string;
     /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
     rasMarkers?: RasTraceMarker[];
 }
@@ -428,7 +435,8 @@ export default function AgentTraceView({
     onSubagentNavigate,
     rootSessionId,
     rootExecutionId,
-    rasMarkers = [],
+    traceIdentity,
+    rasMarkers = EMPTY_RAS_MARKERS,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { locale, t: tt } = useLocale();
@@ -436,7 +444,10 @@ export default function AgentTraceView({
     const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
-    const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    const stableTraceIdentity = traceIdentity ?? rootExecutionId;
+    const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
+    const treeIdentityInitializedRef = React.useRef(false);
+    const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
     const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
@@ -445,8 +456,9 @@ export default function AgentTraceView({
     );
 
     useEffect(() => {
-        const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
-        previousRootExecutionIdRef.current = rootExecutionId;
+        const traceChanged = previousTraceIdentityRef.current !== stableTraceIdentity;
+        previousTraceIdentityRef.current = stableTraceIdentity;
+        if (traceChanged) sameTraceReloadRef.current = false;
         fullLoadPromiseRef.current = null;
         setInteractionLoadError(null);
         setFullInteractionLoadError(null);
@@ -454,20 +466,21 @@ export default function AgentTraceView({
             if (traceChanged) return sourceInteractions;
             return sourceInteractions.map((item, index) => {
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
-                return loaded && !loaded._payloadDeferred ? loaded : item;
+                const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
+                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred ? loaded : item;
             });
         });
-    }, [sourceInteractions, rootExecutionId]);
+    }, [sourceInteractions, stableTraceIdentity]);
 
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
         if (langfuseProjection) return;
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
-        const requestedTraceId = previousRootExecutionIdRef.current;
+        const requestedTraceId = previousTraceIdentityRef.current;
         setInteractionLoadError(null);
         try {
             const loaded = await loadInteraction(index);
-            if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            if (previousTraceIdentityRef.current !== requestedTraceId) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
             setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
@@ -483,12 +496,12 @@ export default function AgentTraceView({
             return interactions;
         }
         if (!fullLoadPromiseRef.current) {
-            const requestedTraceId = previousRootExecutionIdRef.current;
+            const requestedTraceId = previousTraceIdentityRef.current;
             setFullInteractionLoadError(null);
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId) {
                         // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
                         sameTraceReloadRef.current = true;
                         setInteractions(loaded);
@@ -496,7 +509,7 @@ export default function AgentTraceView({
                     return loaded;
                 })
                 .catch(error => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId) {
                         setFullInteractionLoadError(error instanceof Error ? error.message : 'Failed to load full trace');
                     }
                     return interactions;
@@ -569,18 +582,22 @@ export default function AgentTraceView({
     // tree 由 interactions 派生，为同一条 trace 补数据（懒加载单条 / 补全全部）也会产生新的
     // interactions 数组 → 新 tree 对象。若无条件跟着 tree 重置，首次点击 span 触发懒加载后
     // 会被弹回根 Agent，必须点第二次才留得住（手动展开的节点同样会被清掉）。
-    // 这里只跳过「同一条 trace 补数据」这一种已知来源，其余 tree 变化（换 trace、自动刷新、
-    // langfuse 投影变化）一律照旧重置 —— TraceDrawer / TrajectoryTraceView 不传 rootExecutionId，
-    // 不能用它作为 trace 身份来判定。
+    // 同一条 trace 的懒加载或实时增量刷新只补数据，不应清掉用户当前的选择和展开状态。
     useEffect(() => {
         if (!tree) return;
-        if (sameTraceReloadRef.current) {
+        const sameStableTrace = treeIdentityInitializedRef.current
+            && Boolean(stableTraceIdentity)
+            && previousTreeIdentityRef.current === stableTraceIdentity;
+        previousTreeIdentityRef.current = stableTraceIdentity;
+        treeIdentityInitializedRef.current = true;
+        if (sameTraceReloadRef.current || sameStableTrace) {
             sameTraceReloadRef.current = false;
             return;
         }
-        setSelectedKey(agentKey(tree.id));
-        setExpandedKeys(defaultExpandedKeys);
-    }, [tree, defaultExpandedKeys]);
+        const rootKey = agentKey(tree.id);
+        setSelectedKey(current => current === rootKey ? current : rootKey);
+        setExpandedKeys(current => sameStringSet(current, defaultExpandedKeys) ? current : defaultExpandedKeys);
+    }, [tree, defaultExpandedKeys, stableTraceIdentity]);
 
     const totalStats = useMemo(() => {
         if (!tree) return null;

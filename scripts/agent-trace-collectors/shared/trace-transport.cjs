@@ -6,10 +6,12 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
-const DEFAULT_MAX_CONTENT_CHARS = 2000;
+const DEFAULT_MAX_CONTENT_CHARS = null;
+const DEFAULT_MAX_DIAGNOSTIC_CHARS = 2000;
 const DEFAULT_BATCH_EVENTS = 100;
 const DEFAULT_BATCH_BYTES = 512 * 1024;
 const DEFAULT_RETENTION_DAYS = 7;
+const DEFAULT_PROCESS_LOCK_INVALID_GRACE_MS = 1000;
 const RETRYABLE_STATUS = new Set([409, 429, 500, 501, 502, 503, 504]);
 
 const SENSITIVE_KEY_PATTERN =
@@ -83,8 +85,9 @@ function collectorStateDir(framework, apiKey, homeDir = os.homedir()) {
   return stateDir;
 }
 
-function truncateCodePoints(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
+function truncateCodePoints(value, maxChars = DEFAULT_MAX_DIAGNOSTIC_CHARS) {
   const text = String(value ?? "");
+  if (!Number.isSafeInteger(maxChars) || maxChars <= 0) return text;
   const chars = Array.from(text);
   if (chars.length <= maxChars) return text;
   return `${chars.slice(0, maxChars).join("")}...[TRUNCATED original_chars=${chars.length}]`;
@@ -143,7 +146,9 @@ function safeContent(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {
   if (value === undefined || value === null) return undefined;
   const redacted = redactValue(value);
   const serialized = typeof redacted === "string" ? redacted : JSON.stringify(redacted);
-  return truncateCodePoints(serialized, maxChars);
+  return Number.isSafeInteger(maxChars) && maxChars > 0
+    ? truncateCodePoints(serialized, maxChars)
+    : serialized;
 }
 
 function utcDateName(timestamp = Date.now()) {
@@ -171,35 +176,44 @@ async function readJsonlBatch(filePath, offset = 0, options = {}) {
       return { events: [], nextOffset: offset, fileSize: stat.size, tornTailBytes: 0 };
     }
 
-    const bytesToRead = Math.min(stat.size - offset, Math.max(maxBytes + 64 * 1024, maxBytes * 2));
-    const buffer = Buffer.alloc(bytesToRead);
-    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, offset);
-    const view = buffer.subarray(0, bytesRead);
     const events = [];
-    let cursor = 0;
     let nextOffset = offset;
+    let readOffset = offset;
+    let pending = Buffer.alloc(0);
+    const chunkBytes = Math.max(64 * 1024, Math.min(maxBytes, 1024 * 1024));
 
-    while (cursor < view.length && events.length < maxEvents) {
-      const newline = view.indexOf(0x0a, cursor);
+    while (events.length < maxEvents) {
+      let newline = pending.indexOf(0x0a);
+      while (newline < 0 && readOffset < stat.size) {
+        const chunk = Buffer.alloc(Math.min(chunkBytes, stat.size - readOffset));
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, readOffset);
+        if (bytesRead === 0) break;
+        readOffset += bytesRead;
+        pending = pending.length
+          ? Buffer.concat([pending, chunk.subarray(0, bytesRead)])
+          : chunk.subarray(0, bytesRead);
+        newline = pending.indexOf(0x0a);
+      }
       if (newline < 0) break;
-      const lineBuffer = view.subarray(cursor, newline);
-      const consumed = newline + 1 - cursor;
+
+      const lineBuffer = pending.subarray(0, newline);
+      const consumed = newline + 1;
       if (events.length > 0 && nextOffset - offset + consumed > maxBytes) break;
       const text = lineBuffer.toString("utf8").trim();
       if (text) {
         try {
           events.push(JSON.parse(text));
         } catch (error) {
-          throw new Error(`Invalid JSONL record at byte ${offset + cursor}: ${error.message}`);
+          throw new Error(`Invalid JSONL record at byte ${nextOffset}: ${error.message}`);
         }
       }
-      cursor = newline + 1;
-      nextOffset = offset + cursor;
+      pending = pending.subarray(consumed);
+      nextOffset += consumed;
     }
 
-    const reachedPhysicalEnd = offset + bytesRead >= stat.size;
-    const tornTailBytes = reachedPhysicalEnd && view.length > cursor && view.indexOf(0x0a, cursor) < 0
-      ? view.length - cursor
+    const reachedPhysicalEnd = readOffset >= stat.size;
+    const tornTailBytes = reachedPhysicalEnd && pending.length > 0 && pending.indexOf(0x0a) < 0
+      ? pending.length
       : 0;
     return { events, nextOffset, fileSize: stat.size, tornTailBytes };
   } finally {
@@ -245,51 +259,205 @@ function isPidAlive(pid) {
   }
 }
 
-async function acquireProcessLock(lockPath) {
+async function publishProcessLock(filePath, owner) {
+  const candidate = `${filePath}.${process.pid}.${owner.token}.candidate`;
+  let handle;
+  try {
+    handle = await fsp.open(candidate, "wx", 0o600);
+    await handle.writeFile(`${JSON.stringify(owner)}\n`, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    try {
+      await fsp.link(candidate, filePath);
+      return true;
+    } catch (error) {
+      if (error?.code === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fsp.unlink(candidate).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
+}
+
+function validProcessLockOwner(value) {
+  return Number.isInteger(value?.pid) && value.pid > 0
+    && typeof value.host === "string" && Boolean(value.host)
+    && typeof value.token === "string" && Boolean(value.token);
+}
+
+async function inspectProcessLock(lockPath) {
+  const recoveryPath = `${lockPath}.recovery`;
+  let recoveryPresent = false;
+  try {
+    await fsp.lstat(recoveryPath);
+    recoveryPresent = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  let stat;
+  try {
+    stat = await fsp.lstat(lockPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return recoveryPresent
+        ? { state: "recovery-blocked", recoverable: false, reason: "recovery-claim-present" }
+        : { state: "free", recoverable: false };
+    }
+    throw error;
+  }
+
+  const identity = {
+    dev: Number(stat.dev),
+    ino: Number(stat.ino),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
+  if (!stat.isFile()) {
+    return { state: "invalid", recoverable: false, reason: "not-a-regular-file", identity, recoveryPresent };
+  }
+
+  let owner;
+  try {
+    owner = JSON.parse(await fsp.readFile(lockPath, "utf8"));
+  } catch {
+    return {
+      state: recoveryPresent ? "recovery-blocked" : "invalid",
+      recoverable: !recoveryPresent,
+      reason: stat.size === 0 ? "empty-lock" : "malformed-lock",
+      ageMs: Math.max(0, Date.now() - stat.mtimeMs),
+      identity,
+      recoveryPresent,
+    };
+  }
+  if (!validProcessLockOwner(owner)) {
+    return {
+      state: recoveryPresent ? "recovery-blocked" : "invalid",
+      recoverable: !recoveryPresent,
+      reason: "invalid-owner",
+      ageMs: Math.max(0, Date.now() - stat.mtimeMs),
+      identity,
+      recoveryPresent,
+    };
+  }
+
+  const local = owner.host === os.hostname();
+  const alive = local && isPidAlive(owner.pid);
+  return {
+    state: recoveryPresent
+      ? "recovery-blocked"
+      : local
+        ? alive ? "held-local" : "orphaned"
+        : "held-foreign",
+    recoverable: !recoveryPresent && local && !alive,
+    reason: recoveryPresent ? "recovery-claim-present" : undefined,
+    ageMs: Math.max(0, Date.now() - stat.mtimeMs),
+    owner: { pid: owner.pid, host: owner.host, startedAt: owner.startedAt },
+    ownerToken: owner.token,
+    identity,
+    recoveryPresent,
+  };
+}
+
+function sameProcessLockIdentity(left, right) {
+  return Boolean(left && right)
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs;
+}
+
+function processLockStatusSummary(status) {
+  return {
+    state: status.state,
+    recoverable: status.recoverable,
+    ...(status.reason ? { reason: status.reason } : {}),
+    ...(Number.isFinite(status.ageMs) ? { ageMs: status.ageMs } : {}),
+    ...(status.owner ? { owner: status.owner } : {}),
+  };
+}
+
+async function releaseOwnedProcessLock(filePath, token) {
+  let owner;
+  try {
+    owner = JSON.parse(await fsp.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT" || error instanceof SyntaxError) return false;
+    throw error;
+  }
+  if (owner?.token !== token) return false;
+  try {
+    await fsp.unlink(filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function recoverProcessLock(lockPath, observed, owner) {
+  const recoveryPath = `${lockPath}.recovery`;
+  const claim = {
+    ...owner,
+    expected: observed.identity,
+    expectedOwnerToken: observed.ownerToken,
+  };
+  if (!await publishProcessLock(recoveryPath, claim)) return false;
+  try {
+    const confirmed = await inspectProcessLock(lockPath);
+    if (!sameProcessLockIdentity(observed.identity, confirmed.identity)) return false;
+    if (confirmed.owner?.host !== undefined && confirmed.owner.host !== os.hostname()) return false;
+    if (confirmed.owner?.host === os.hostname() && isPidAlive(confirmed.owner.pid)) return false;
+    const retired = `${lockPath}.retired-${owner.token}`;
+    try {
+      await fsp.rename(lockPath, retired);
+    } catch (error) {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    }
+    await fsp.unlink(retired).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+    return true;
+  } finally {
+    await releaseOwnedProcessLock(recoveryPath, owner.token);
+  }
+}
+
+async function acquireProcessLock(lockPath, options = {}) {
   await fsp.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
-  const token = crypto.randomUUID();
-  const record = {
+  const owner = {
     version: 1,
     pid: process.pid,
     host: os.hostname(),
     startedAt: new Date().toISOString(),
-    token,
+    token: crypto.randomBytes(16).toString("hex"),
   };
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await fsp.open(lockPath, "wx", 0o600);
-      await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
-      await handle.close();
-      return { lockPath, token };
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      let existing;
-      try {
-        existing = JSON.parse(await fsp.readFile(lockPath, "utf8"));
-      } catch {
-        return null;
-      }
-      if (existing?.host !== os.hostname() || isPidAlive(Number(existing?.pid))) return null;
-      await fsp.unlink(lockPath).catch((unlinkError) => {
-        if (unlinkError?.code !== "ENOENT") throw unlinkError;
-      });
-    }
+    const before = await inspectProcessLock(lockPath);
+    if (before.state === "recovery-blocked") return null;
+    if (await publishProcessLock(lockPath, owner)) return { lockPath, token: owner.token };
+    const observed = await inspectProcessLock(lockPath);
+    const graceMs = Number.isFinite(Number(options.invalidLockGraceMs))
+      ? Math.max(0, Number(options.invalidLockGraceMs))
+      : DEFAULT_PROCESS_LOCK_INVALID_GRACE_MS;
+    const recoverableInvalid = observed.state === "invalid"
+      && observed.recoverable
+      && Number(observed.ageMs) >= graceMs;
+    if (!(observed.state === "orphaned" && observed.recoverable) && !recoverableInvalid) return null;
+    if (!await recoverProcessLock(lockPath, observed, owner)) return null;
   }
   return null;
 }
 
 async function releaseProcessLock(lock) {
   if (!lock) return false;
-  try {
-    const existing = JSON.parse(await fsp.readFile(lock.lockPath, "utf8"));
-    if (existing?.token !== lock.token) return false;
-    await fsp.unlink(lock.lockPath);
-    return true;
-  } catch (error) {
-    if (error?.code === "ENOENT") return false;
-    throw error;
-  }
+  return releaseOwnedProcessLock(lock.lockPath, lock.token);
 }
 
 function computeBackoffMs(attempt, options = {}) {
@@ -465,7 +633,9 @@ class DurableTraceWriter {
     this.framework = options.framework;
     this.apiKey = options.apiKey;
     this.stateDir = options.stateDir || collectorStateDir(options.framework, options.apiKey, options.homeDir);
-    this.maxContentChars = options.maxContentChars || DEFAULT_MAX_CONTENT_CHARS;
+    this.maxContentChars = Number.isSafeInteger(options.maxContentChars) && options.maxContentChars > 0
+      ? options.maxContentChars
+      : DEFAULT_MAX_CONTENT_CHARS;
     this.pending = Promise.resolve();
   }
 
@@ -511,6 +681,10 @@ class DurableTraceUploader {
     this.maxRetries = options.maxRetries === undefined ? 4 : options.maxRetries;
     this.retry = options.retry || {};
     this.sleep = options.sleep || delay;
+    this.fileOrder = options.fileOrder === "newest-first" ? "newest-first" : "oldest-first";
+    this.maxBatchesPerFlush = Number.isSafeInteger(options.maxBatchesPerFlush) && options.maxBatchesPerFlush > 0
+      ? options.maxBatchesPerFlush
+      : Number.POSITIVE_INFINITY;
     this.timer = null;
     if (typeof this.fetch !== "function") throw new Error("A fetch implementation is required");
     if (!this.endpoint) throw new Error("Agent Insight OTLP endpoint is required");
@@ -552,15 +726,31 @@ class DurableTraceUploader {
     const lockPath = path.join(this.stateDir, "uploader.lock");
     const checkpointPath = path.join(this.stateDir, "uploader-checkpoint.json");
     const lock = await acquireProcessLock(lockPath);
-    if (!lock) return { acquired: false, uploadedEvents: 0 };
+    if (!lock) {
+      const lockStatus = await inspectProcessLock(lockPath);
+      return {
+        acquired: false,
+        uploadedEvents: 0,
+        uploadedBatches: 0,
+        lockStatus: processLockStatusSummary(lockStatus),
+      };
+    }
 
     let uploadedEvents = 0;
+    let uploadedBatches = 0;
+    let deferred = false;
     try {
       const checkpoint = await readCheckpoint(checkpointPath);
-      for (const filePath of await listSpoolFiles(this.stateDir)) {
+      const files = await listSpoolFiles(this.stateDir);
+      if (this.fileOrder === "newest-first") files.reverse();
+      outer: for (const filePath of files) {
         const relativePath = path.relative(this.stateDir, filePath).replaceAll(path.sep, "/");
         let cursor = Number(checkpoint.files[relativePath]?.bytes) || 0;
         while (true) {
+          if (uploadedBatches >= this.maxBatchesPerFlush) {
+            deferred = true;
+            break outer;
+          }
           const batch = await readJsonlBatch(filePath, cursor, {
             maxEvents: this.maxEvents,
             maxBytes: this.maxBytes,
@@ -575,10 +765,11 @@ class DurableTraceUploader {
           };
           await atomicWriteJson(checkpointPath, checkpoint);
           uploadedEvents += batch.events.length;
+          uploadedBatches += 1;
         }
       }
       await cleanupRetention(this.stateDir);
-      return { acquired: true, uploadedEvents };
+      return { acquired: true, uploadedEvents, uploadedBatches, deferred };
     } finally {
       await releaseProcessLock(lock);
     }
@@ -616,6 +807,7 @@ module.exports = {
   computeBackoffMs,
   isPidAlive,
   listSpoolFiles,
+  inspectProcessLock,
   readCheckpoint,
   readJsonlBatch,
   redactString,

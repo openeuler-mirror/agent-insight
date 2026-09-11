@@ -1,0 +1,15 @@
+{
+  "goal_plus_id": "gp_demo",
+  "raw_goal": "Improve the synthetic solver while preserving correctness.",
+  "status": "complete",
+  "phase": "complete",
+  "policy": { "mode": "orchestrated", "completion": "until_terminal" },
+  "goal_revision": 1,
+  "goal_revisions": [{ "revision": 1, "raw_goal": "Improve the synthetic solver while preserving correctness.", "created_at": "2026-09-01T01:00:00Z" }],
+  "final_checks": [{ "check_id": "fc_001", "goal_revision": 1, "checker_host": "codex", "status": "passed", "requested_phase": "verification", "requested_at": "2026-09-01T01:08:00Z", "completed_at": "2026-09-01T01:09:00Z", "summary": "Synthetic final check passed", "checker_metadata": { "task_name": "goal_plus_final_check_r1" } }],
+  "work_items": [{ "work_item_id": "wi_001", "title": "Inspect baseline", "objective": "Review the synthetic baseline", "route": "subagent", "depends_on": [], "scope": ["src/solver.ts"], "acceptance": ["Explain the bottleneck"], "required": true, "goal_revision": 1, "status": "completed", "generation": 0, "host": "codex", "task_name": "goal_plus_work_wi_001", "agent_id": "agent_work_001", "result_summary": "Found a deterministic bottleneck", "created_at": "2026-09-01T01:01:00Z", "updated_at": "2026-09-01T01:03:00Z" }],
+  "search_tasks": [{ "goal_revision": 1, "frozen_spec_id": "spec_demo", "run_id": "run_demo", "linked_at": "2026-09-01T01:04:00Z", "selected_candidate_id": "candidate_001", "summary": "Selected the highest valid score" }],
+  "active_session": { "host": "codex", "session_id": "main_session_001", "state": "attached", "attached_at": "2026-09-01T01:00:00Z", "last_seen_at": "2026-09-01T01:09:00Z" },
+  "created_at": "2026-09-01T01:00:00Z",
+  "updated_at": "2026-09-01T01:09:00Z"
+}
