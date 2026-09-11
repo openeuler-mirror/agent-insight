@@ -454,6 +454,130 @@ test('OpenCode JSON events expose the platform Trace ID', () => {
   assert.equal(client.extractTraceIdFromJsonLine('not-json'), null)
 })
 
+test('OpenCode run events distinguish model activity, idle, and session errors', () => {
+  assert.deepEqual(
+    client.inspectOpencodeRunEvent(JSON.stringify({
+      type: 'step_start',
+      sessionID: 'ses_waiting',
+      part: { type: 'step-start' },
+    })),
+    {
+      traceId: 'ses_waiting',
+      idle: false,
+      error: null,
+      modelActivity: false,
+      type: 'step_start',
+    },
+  )
+  assert.equal(client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'text',
+    sessionID: 'ses_active',
+    part: { type: 'text', text: 'working' },
+  }))?.modelActivity, true)
+  assert.equal(client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'session.idle',
+    sessionID: 'ses_idle',
+  }))?.idle, true)
+  assert.equal(client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'event',
+    sessionID: 'ses_nested_idle',
+    event: { type: 'session.idle', properties: { sessionID: 'ses_nested_idle' } },
+  }))?.idle, true)
+  const failed = client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'session.error',
+    sessionID: 'ses_error',
+    error: { name: 'ProviderAuthError', message: 'Unauthorized provider/model' },
+  }))
+  assert.match(failed?.error || '', /ProviderAuthError/)
+})
+
+test('OpenCode execution terminates early on idle, structured error, and first-response timeout', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-model-signal-'))
+  const binDir = path.join(root, 'bin')
+  const workspace = path.join(root, 'workspace')
+  const executable = path.join(binDir, 'opencode')
+  const previousPath = process.env.PATH
+  const previousMode = process.env.OPENCODE_SIGNAL_TEST_MODE
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.mkdirSync(workspace, { recursive: true })
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+if (process.argv.includes('--help')) {
+  console.log('opencode run --format json')
+  process.exit(0)
+}
+const mode = process.env.OPENCODE_SIGNAL_TEST_MODE
+console.log(JSON.stringify({ type: 'step_start', sessionID: 'ses_' + mode, part: { type: 'step-start' } }))
+if (mode === 'idle') {
+  console.log(JSON.stringify({ type: 'session.idle', sessionID: 'ses_idle' }))
+  setInterval(() => {}, 1000)
+}
+if (mode === 'error') {
+  console.log(JSON.stringify({
+    type: 'session.error',
+    sessionID: 'ses_error',
+    error: { name: 'ProviderAuthError', message: 'Unauthorized provider/test-model' },
+  }))
+  setInterval(() => {}, 1000)
+}
+if (mode === 'error-tail') {
+  process.stdout.write(JSON.stringify({
+    type: 'session.error',
+    sessionID: 'ses_error_tail',
+    error: { name: 'ProviderError', message: 'upstream connection closed' },
+  }))
+}
+if (mode === 'timeout') setInterval(() => {}, 1000)
+if (mode === 'active') {
+  console.log(JSON.stringify({ type: 'text', sessionID: 'ses_active', part: { type: 'text', text: 'done' } }))
+}
+`)
+  fs.chmodSync(executable, 0o755)
+  process.env.PATH = `${binDir}:${previousPath || ''}`
+  const run = (mode: string, firstModelResponseTimeoutSeconds = 5) => {
+    process.env.OPENCODE_SIGNAL_TEST_MODE = mode
+    return client.runExperimentCase({
+      clientId: 'client_model_signal',
+      workspaceBase: root,
+    }, {
+      platform: 'opencode',
+      agent: 'build',
+      input: 'exercise OpenCode lifecycle signals',
+      cwd: workspace,
+      timeoutSeconds: 10,
+      firstModelResponseTimeoutSeconds,
+    })
+  }
+  try {
+    await assert.rejects(run('idle'), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_NO_RESPONSE')
+      return true
+    })
+    await assert.rejects(run('error'), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_UNAVAILABLE')
+      return true
+    })
+    await assert.rejects(run('error-tail'), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_ERROR')
+      return true
+    })
+    const timeoutStartedAt = Date.now()
+    await assert.rejects(run('timeout', 1), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_START_TIMEOUT')
+      return true
+    })
+    assert.ok(Date.now() - timeoutStartedAt < 5_000)
+    const active = await run('active', 1)
+    assert.equal(active.modelActivityObserved, true)
+    assert.equal(active.traceId, 'ses_active')
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousMode === undefined) delete process.env.OPENCODE_SIGNAL_TEST_MODE
+    else process.env.OPENCODE_SIGNAL_TEST_MODE = previousMode
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('generic execution reports Trace ID before exit and force-kills timed-out process groups', () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'scripts/reliability-client.cjs'),

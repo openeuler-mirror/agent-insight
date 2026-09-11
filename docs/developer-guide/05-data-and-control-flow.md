@@ -216,7 +216,9 @@ flowchart LR
     outbox --> dispatch["POST Executor /api/v1/benchmark-executions"]
     dispatch --> accepted["202 + runId/digest 匹配\nRun=running_agent"]
     accepted --> workspace["按能力 ID 选择 Workspace\nAgent Runtime + Artifact Collector"]
-    workspace --> patch["收集 model.patch"]
+    workspace --> agent["OpenCode 结构化事件\n错误 / idle / 首模型活动"]
+    agent --> patch["收集 model.patch"]
+    agent --> earlyFail["无模型响应时提前失败"]
     patch --> artifact["POST /api/benchmark/v1/artifacts"]
     artifact --> cleanup["清理工作区"]
     cleanup --> complete["POST /runs/:runId/complete\nRun=submitted"]
@@ -244,7 +246,7 @@ Benchmark 的执行目标发现与普通实验共享客户端能力真源：从�
 
 前端接入不建立第二套流程：受控导入同时生成只读 `AgentEvalDataset` 公共投影和私有 `BenchmarkDataset`；通用实验创建按公共数据集类型在服务端分流并预建每 Case 的 Official/普通评估结果。Agent 成功后把 Trace ID 绑定回 `ExperimentCase`，Official 完成后再运行不依赖参考答案的补充评估器，全部结果终态后继续下一 Case 并收敛实验。Case 重跑创建新的 `BenchmarkCaseRun`；Official 单项重评复用最新 Patch、新建 attempt，且全局只允许一个重评任务。
 
-第一阶段在 Agent 子进程与 Artifact 收集边界做确定性失败收敛，`BenchmarkCaseRun.status` 统一进入 `execution_failed`，具体原因保存在 `failureCode` 并由详情页映射展示。执行超过冻结上限且进程组已被终止时使用 `AGENT_TIMEOUT`；只有模型名称无效、模型不存在、鉴权或模型配置错误等高置信证据才归类为 `MODEL_UNAVAILABLE`，不以“没有 Patch”或笼统 stderr 推断模型不可用；其他非零退出使用 `AGENT_EXIT_NONZERO`；正常退出但必需 Patch 为空时使用 `AGENT_NO_OUTPUT`。四类失败都立即停止当前 Case，不进入 Artifact 上传或 Official Harness，也不参与自动重试；用户修复外部条件后通过 Case 重跑开启新的 Run。`0 LLM Turn` 依赖异步 Trace 入库后的 `Execution` 统计，不能在子进程退出瞬间可靠判断，因此留给后续异步追踪阶段，不纳入第一阶段分类。
+第一阶段在 Agent 子进程与 Artifact 收集边界做确定性失败收敛，`BenchmarkCaseRun.status` 统一进入 `execution_failed`，具体原因保存在 `failureCode` 并由详情页映射展示。OpenCode 执行直接解析 `opencode run --format json` 事件，不等待 Trace 异步入库：结构化 `session.error`/错误事件按确定证据分为 `MODEL_UNAVAILABLE` 或 `MODEL_ERROR`；`session.idle` 或正常退出时若从未看到非空文本、推理、工具或 step finish 则为 `MODEL_NO_RESPONSE`；进程仍活着但默认 90 秒内没有首个模型活动则为 `MODEL_START_TIMEOUT`。以上失败会立即 TERM/KILL 进程组；已观察到模型活动后才继续使用冻结的 Agent 总超时，超时使用 `AGENT_TIMEOUT`。其他非零退出使用 `AGENT_EXIT_NONZERO`；模型已运行但必需 Patch 为空时使用 `AGENT_NO_OUTPUT`。这些确定性失败立即停止当前 Case，不进入 Artifact 上传或 Official Harness，也不参与自动重试；用户修复外部条件后通过 Case 重跑开启新的 Run。
 
 平台运行两类 Benchmark watchdog。Agent Run 在启动时先扫描一次，此后每 30 秒扫描 `running_agent/collecting/uploading/cleaning`：进度为 `preparing` 时阈值 7 分钟，其余 `running_agent` 取冻结 `timeoutSeconds + 90s`，后三阶段固定 5 分钟。Evaluation 同周期扫描 queued/dispatch 不确定、运行 Harness、证据收集/上传/清理和 `normalizing`：除 Harness 取 `timeoutSeconds + 90s` 外，其余阶段固定 5 分钟。活性一律使用服务端接收时间。watchdog、完成回调和下发响应分别以状态/活性时间及 outbox `attemptCount` 做 CAS；胜者写终态，迟到 completion 或 dispatch 不能复活已回收任务。终态事务先持久化结果行、Case 状态和 `continuationStatus=pending` 再 ACK；持久化 continuation 使用递增 attempt 作为 owner lease，服务重启或下次 watchdog 可恢复，且会跳过已经完成的补充评估器。旧 Run 发现后继重跑时直接停止，不能覆盖新投影。执行器把 `complete_pending/upload_pending` 从 Agent 串行槽中拆成独立投递 lane，持久化失败次数和下次投递时间，采用 5 秒起步、最大 5 分钟的指数退避；单次 HTTP 回调 30 秒超时。投递 lane 与新 Agent 任务可并行，重启后均从磁盘状态恢复。Git Workspace Provider 的 fetch 单次超时为 120 秒，只对白名单瞬时网络故障进行总计 3 次尝试，退避为 1 秒、2 秒并附加小幅随机抖动；每次尝试前重建仓库，避免超时遗留 lock/半包，最后一次以 invocation-local `-c http.version=HTTP/1.1` 兜底。fetch 使用独立进程组，超时先 TERM、2 秒后 KILL，并禁用交互式凭据提示；永久仓库、revision、鉴权、证书和磁盘错误不重试。
 

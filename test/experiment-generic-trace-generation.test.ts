@@ -129,6 +129,9 @@ test('generic trace binding consumes the client Trace ID and never normalizes us
   assert.equal(isTraceGenerationFailureRetryable('PLATFORM_NOT_AVAILABLE'), false);
   for (const code of [
     'AGENT_TIMEOUT',
+    'MODEL_ERROR',
+    'MODEL_NO_RESPONSE',
+    'MODEL_START_TIMEOUT',
     'MODEL_UNAVAILABLE',
     'AGENT_EXIT_NONZERO',
     'AGENT_NO_OUTPUT',

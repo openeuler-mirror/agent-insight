@@ -42,6 +42,8 @@
 
 > 2026-09-11 working-tree overlay：Benchmark 跨机器回调改为按组件各自可达地址发送。执行客户端不新增配置，Artifact、进度和完成回调统一复用安装 `curl` 已写入的 `insightBaseUrl`；Evaluator 新增可选 `--platform-base-url` / `EVALUATOR_AGENT_INSIGHT_BASE_URL`，未配置时兼容任务地址。`token|none` 鉴权模式保持不变。Benchmark 详情以 Run 状态为真源，Patch 已上传时不再被通用 Trace pending 覆盖，并区分等待执行器终态与官方评测中。
 
+> 2026-09-11 working-tree overlay：OpenCode 实验执行不再只等总超时。客户端直接消费 `opencode run --format json` 的结构化事件：`session.error`/错误事件立即失败，`session.idle` 或进程正常退出且没有任何模型活动时收敛为 `MODEL_NO_RESPONSE`，首个模型输出/工具事件默认 90 秒仍未出现时收敛为 `MODEL_START_TIMEOUT`；收到首模型活动后仍沿用实验冻结的 Agent 总超时。这一检测在执行客户端本地完成，不依赖 Trace 先上传，同时适用普通生成 Trace 实验和 Benchmark。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

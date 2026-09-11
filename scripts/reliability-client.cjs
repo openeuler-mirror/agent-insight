@@ -47,6 +47,7 @@ const FI_PROBE_CHILD_ARG = '--probe-fi-inventory-once'
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
 const LIVENESS_TIMEOUT_MS = 75_000
 const LIVENESS_CHECK_MS = 15_000
+const DEFAULT_OPENCODE_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS = 90
 // 长轮询失败后的重试间隔。必须远小于服务端指令 TTL（默认 30s），
 // 否则指令会在两次轮询的空窗里过期。
 const POLL_RETRY_MS = 3_000
@@ -920,9 +921,75 @@ function extractStructuredAgentError(line) {
     const parsed = JSON.parse(String(line || '').trim())
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const type = String(parsed.type || '').toLowerCase()
-    if (type !== 'error' && !(type === '' && parsed.error)) return null
-    const values = collectDiagnosticStrings(parsed.error || parsed.message || parsed)
+    const nestedEvent = parsed.event && typeof parsed.event === 'object' ? parsed.event : null
+    const nestedType = String(nestedEvent?.type || '').toLowerCase()
+    const nestedError = nestedEvent?.properties?.error || nestedEvent?.error
+    if (
+      !['error', 'session.error'].includes(type)
+      && !['error', 'session.error'].includes(nestedType)
+      && !parsed.error
+      && !nestedError
+    ) return null
+    const values = collectDiagnosticStrings(
+      parsed.error || parsed.message || nestedError || nestedEvent || parsed,
+    )
     return values.join(' | ').slice(-4_000) || null
+  } catch {
+    return null
+  }
+}
+
+function inspectOpencodeRunEvent(line) {
+  try {
+    const parsed = JSON.parse(String(line || '').trim())
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const nestedEvent = parsed.event && typeof parsed.event === 'object' ? parsed.event : null
+    const outerType = String(parsed.type || '').toLowerCase()
+    const type = outerType === 'event' && nestedEvent?.type
+      ? String(nestedEvent.type).toLowerCase()
+      : String(outerType || nestedEvent?.type || '').toLowerCase()
+    const properties = nestedEvent?.properties || parsed.properties || {}
+    const rawStatus = properties?.status?.type
+      || properties?.status
+      || properties?.info?.status
+      || parsed.status?.type
+      || parsed.status
+    const status = String(rawStatus || '').toLowerCase()
+    const part = parsed.part || properties?.part || {}
+    const partType = String(part?.type || '').toLowerCase()
+    const messageInfo = parsed.message || parsed.info || properties?.info || {}
+    const messageRole = String(messageInfo?.role || parsed.role || '').toLowerCase()
+    const delta = properties?.delta ?? parsed.delta
+    const directText = ['text', 'reasoning'].includes(type)
+      && String(part?.text ?? parsed.text ?? '').length > 0
+    const directModelEvent = directText || [
+      'tool',
+      'tool_use',
+      'tool_result',
+      'step_finish',
+    ].includes(type)
+    const assistantDelta = type === 'message.part.delta'
+      && typeof delta === 'string'
+      && delta.length > 0
+    const assistantPart = type === 'message.part.updated'
+      && (
+        ['reasoning', 'tool', 'tool_use', 'step-finish', 'step_finish'].includes(partType)
+        || (
+          partType === 'text'
+          && messageRole === 'assistant'
+          && typeof part?.text === 'string'
+          && part.text.length > 0
+        )
+      )
+      && messageRole !== 'user'
+    return {
+      traceId: traceIdFromJson(parsed),
+      idle: type === 'session.idle'
+        || ((type === 'session.status' || type === 'session.updated') && status === 'idle'),
+      error: extractStructuredAgentError(line),
+      modelActivity: directModelEvent || assistantDelta || assistantPart,
+      type,
+    }
   } catch {
     return null
   }
@@ -1006,6 +1073,15 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     correlation,
   })
   const timeoutMs = Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
+  const configuredFirstResponseSeconds = payload.firstModelResponseTimeoutSeconds === null
+    || payload.firstModelResponseTimeoutSeconds === undefined
+    || payload.firstModelResponseTimeoutSeconds === ''
+    ? Number.NaN
+    : Number(payload.firstModelResponseTimeoutSeconds)
+  const firstModelResponseTimeoutSeconds = Number.isFinite(configuredFirstResponseSeconds)
+    ? Math.max(1, Math.min(300, configuredFirstResponseSeconds))
+    : DEFAULT_OPENCODE_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS
+  const firstModelResponseTimeoutMs = firstModelResponseTimeoutSeconds * 1000
   const startedAt = new Date().toISOString()
 
   return new Promise((resolve, reject) => {
@@ -1023,8 +1099,15 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     let stdinError = null
     let timedOut = false
     let settled = false
+    let earlyFailure = null
+    let modelActivityObserved = false
+    let firstModelActivityAt = null
     const structuredErrors = []
     let traceReport = Promise.resolve()
+    let timeoutTimer = null
+    let modelStartTimer = null
+    let forceKillTimer = null
+    let hardStopTimer = null
     if (invocation.stdin !== null && child.stdin) {
       child.stdin.on('error', (err) => {
         stdinError = err
@@ -1039,14 +1122,72 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         logErr(`early trace id report failed (${traceId}):`, err.message)
       })
     }
+    const clearTimers = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (modelStartTimer) clearTimeout(modelStartTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+    }
+    const observeModelActivity = () => {
+      if (modelActivityObserved) return
+      modelActivityObserved = true
+      firstModelActivityAt = new Date().toISOString()
+      if (modelStartTimer) {
+        clearTimeout(modelStartTimer)
+        modelStartTimer = null
+      }
+    }
+    const terminateForEarlyFailure = (code, message) => {
+      if (settled || earlyFailure) return
+      earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+      if (modelStartTimer) {
+        clearTimeout(modelStartTimer)
+        modelStartTimer = null
+      }
+      signalProcessTree(child, 'SIGTERM')
+      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
+      hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
+    }
+    const consumeStdoutLine = (line) => {
+      const event = inspectOpencodeRunEvent(line)
+      captureTraceId(event?.traceId || extractTraceIdFromJsonLine(line))
+      const structuredError = event?.error || extractStructuredAgentError(line)
+      if (structuredError) structuredErrors.push(structuredError)
+      if (platform !== 'opencode' || !event) return
+      if (event.modelActivity) observeModelActivity()
+      if (event.error) {
+        const classified = classifyAgentExitFailure({
+          platform,
+          exitCode: null,
+          signal: null,
+          diagnostic: event.error,
+          structured: true,
+        })
+        const code = classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR'
+        const message = classified.code === 'MODEL_UNAVAILABLE'
+          ? classified.message
+          : `OpenCode 会话报告模型错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
+        if (settled) {
+          if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+        } else {
+          terminateForEarlyFailure(code, message)
+        }
+      } else if (event.idle && !modelActivityObserved) {
+        const code = 'MODEL_NO_RESPONSE'
+        const message = 'OpenCode 会话已进入 idle，但未观察到任何模型输出或工具调用'
+        if (settled) {
+          if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+        } else {
+          terminateForEarlyFailure(code, message)
+        }
+      }
+    }
     child.stdout.on('data', (c) => {
       stdoutBuffer += String(c)
       const lines = stdoutBuffer.split(/\r?\n/)
       stdoutBuffer = lines.pop() || ''
       for (const line of lines) {
-        captureTraceId(extractTraceIdFromJsonLine(line))
-        const structuredError = extractStructuredAgentError(line)
-        if (structuredError) structuredErrors.push(structuredError)
+        consumeStdoutLine(line)
       }
       if (structuredErrors.length > 20) structuredErrors.splice(0, structuredErrors.length - 20)
       captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
@@ -1056,14 +1197,6 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       stderr += String(c)
       if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024)
     })
-    let timeoutTimer = null
-    let forceKillTimer = null
-    let hardStopTimer = null
-    const clearTimers = () => {
-      if (timeoutTimer) clearTimeout(timeoutTimer)
-      if (forceKillTimer) clearTimeout(forceKillTimer)
-      if (hardStopTimer) clearTimeout(hardStopTimer)
-    }
     const waitForTraceReport = () => new Promise((done) => {
       const reportTimer = setTimeout(done, 5_000)
       traceReport.finally(() => {
@@ -1076,9 +1209,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       settled = true
       clearTimers()
       if (reliabilityChild === child) reliabilityChild = null
-      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
-      const finalStructuredError = extractStructuredAgentError(stdoutBuffer)
-      if (finalStructuredError) structuredErrors.push(finalStructuredError)
+      consumeStdoutLine(stdoutBuffer)
       await waitForTraceReport()
       const finishedAt = new Date().toISOString()
       const runFacts = {
@@ -1087,12 +1218,20 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         exitCode: code,
         signal: signal || undefined,
         timedOut,
+        modelActivityObserved,
+        firstModelActivityAt: firstModelActivityAt || undefined,
+        firstModelResponseTimeoutSeconds: platform === 'opencode'
+          ? firstModelResponseTimeoutSeconds
+          : undefined,
+        failureDetectedAt: earlyFailure?.detectedAt || undefined,
         stderr: sanitizeAgentDiagnostic(stderr, 2_000) || undefined,
         startedAt,
         finishedAt,
       }
       let failure = null
-      if (timedOut) {
+      if (earlyFailure) {
+        failure = createAgentRunError(earlyFailure.code, earlyFailure.message, runFacts)
+      } else if (timedOut) {
         failure = createAgentRunError(
           'AGENT_TIMEOUT',
           `平台 ${platform} Agent 执行超过 ${Math.ceil(timeoutMs / 1000)} 秒，已终止进程组`,
@@ -1124,6 +1263,12 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
           diagnostic: [...structuredErrors, stderr].filter(Boolean).join('\n'),
         })
         failure = createAgentRunError(classified.code, classified.message, runFacts)
+      } else if (!failure && platform === 'opencode' && !modelActivityObserved) {
+        failure = createAgentRunError(
+          'MODEL_NO_RESPONSE',
+          'OpenCode Agent 已结束，但未观察到任何模型输出或工具调用',
+          runFacts,
+        )
       } else if (!failure && !traceId) {
         failure = createAgentRunError(
           platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED',
@@ -1144,6 +1289,14 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
       hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
     }, timeoutMs)
+    if (platform === 'opencode' && firstModelResponseTimeoutMs < timeoutMs) {
+      modelStartTimer = setTimeout(() => {
+        terminateForEarlyFailure(
+          'MODEL_START_TIMEOUT',
+          `OpenCode 会话在 ${firstModelResponseTimeoutSeconds} 秒内未产生首个模型输出或工具调用，已提前终止`,
+        )
+      }, firstModelResponseTimeoutMs)
+    }
     child.on('error', (err) => {
       if (settled) return
       settled = true
@@ -1729,6 +1882,7 @@ module.exports = {
   normalizeModelIds,
   extractTraceIdFromJsonLine,
   extractStructuredAgentError,
+  inspectOpencodeRunEvent,
   sanitizeAgentDiagnostic,
   classifyAgentExitFailure,
   buildCollectorArgs,

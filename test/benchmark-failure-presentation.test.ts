@@ -8,6 +8,9 @@ import { benchmarkFailurePresentation } from '@/lib/benchmark/failure-presentati
 
 const EXPECTED_LABELS = {
   AGENT_TIMEOUT: 'Agent 执行超时',
+  MODEL_ERROR: '模型调用失败',
+  MODEL_NO_RESPONSE: '模型未响应',
+  MODEL_START_TIMEOUT: '等待模型响应超时',
   MODEL_UNAVAILABLE: '模型不可用',
   AGENT_EXIT_NONZERO: 'Agent 异常退出',
   AGENT_NO_OUTPUT: 'Agent 无有效输出',
