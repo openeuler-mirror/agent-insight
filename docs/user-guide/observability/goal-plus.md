@@ -45,9 +45,11 @@ Pi RPC worker 完成一个 dispatch 后，Goal Plus 会主动关闭常驻 RPC �
 
 没有 attach 任何 `.gp` 时，`start` 和 `self-check` 不会报告语义增强 ready，但只要所选 Pi/Codex 原生采集器安装成功，Goal Plus native Trace 仍显示 `READY`。语义 collector 安装、scan 或 watcher 失败会单独显示为可选增强不可用，不会把 native Trace 降为 `PARTIAL`，也不会回滚或停止 Pi/Codex 原生采集器。只有所选宿主的原生采集器未安装成功时，Goal Plus native Trace 才显示 `NOT READY`。
 
-## 页面与数据口径
+## 观测界面状态与数据口径
 
-侧边栏“运行观测 → Goal Plus”提供 source 筛选和 Goal 列表。详情页包含：
+当前版本暂不在侧边栏展示 Goal Plus 观测入口，未完成的观测界面不作为当前展示功能对外引导。Goal Plus collector、语义 ingest、原生 Trace 导入、持久化和关联仍正常运行，页面源码也继续保留，供后续完善后重新开放。
+
+预留的详情页设计包含：
 
 - 总览：Goal 状态、work-item 依赖、Search run 和关联摘要；
 - 候选通道：candidate、iteration、模型、分数和结算状态；
@@ -56,7 +58,7 @@ Pi RPC worker 完成一个 dispatch 后，Goal Plus 会主动关闭常驻 RPC �
 
 `collecting` 表示 Goal/run 尚未终态或本轮扫描 checkpoint 尚未追上；`complete` 表示预期语义、结算证据和 native Execution 已齐；`partial` 表示终态但仍有明确缺项；`unsupported` 表示观察到不支持的关键 schema。完整度不等同于执行成功，失败或 selection blocked 也可以完整。
 
-Goal Plus 列表、详情和已打开的 Trace 会在浏览器页面可见时每 5 秒静默刷新；通用链路追踪列表采用相同刷新周期。运行中的 Pi/Goal Plus Trace 只有收到根 Agent 的明确运行时终态后才显示完成，刷新期间会保留当前选中的节点和展开状态。链路追踪的执行状态只反映宿主运行是否正常结束：Goal `blocked` 或 Run `selection_blocked` 仍保留在 Goal Plus 详情中，但主 Pi 会话正常返回时 Trace 显示成功；worker timeout、runner failure、非零退出或未恢复的最终中止才显示失败。collector 扫描、OTLP 入队和服务端消费仍会带来数秒级延迟，因此这里的“实时”是持续增量可见，而不是逐 token 推送。
+预留的 Goal Plus 列表、详情和已打开的 Trace 在浏览器页面可见时每 5 秒静默刷新；通用链路追踪列表采用相同刷新周期。运行中的 Pi/Goal Plus Trace 只有收到根 Agent 的明确运行时终态后才显示完成，刷新期间会保留当前选中的节点和展开状态。链路追踪的执行状态只反映宿主运行是否正常结束：Goal `blocked` 或 Run `selection_blocked` 仍保留在 Goal Plus 详情数据中，但主 Pi 会话正常返回时 Trace 显示成功；worker timeout、runner failure、非零退出或未恢复的最终中止才显示失败。collector 扫描、OTLP 入队和服务端消费仍会带来数秒级延迟，因此这里的“实时”是持续增量可见，而不是逐 token 推送。
 
 Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的每个 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage，不因 worker 是 candidate、work item 或 final checker 而漏采。Pi 中输入 `/goal-plus` 的主对话也会从当前 attached 工作区对应的 Pi session 目录定向补采，并按 Goal Plus invocation 分段；它不会扫描其他工作区或仅按时间猜测。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；Goal Plus 可使用 host metadata 中的 Codex conversation + turn 构造既有 execution ID，且只匹配 `framework=codex`。关联仍只使用 native/session/execution ID 或唯一的确定性任务名。
 

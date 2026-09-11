@@ -34,7 +34,7 @@ collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。
 | ingest | `src/lib/ingest/goal-plus/contracts.ts`、`persist.ts` | envelope 校验、服务端二次脱敏、幂等审计与投影 |
 | correlation | `src/lib/ingest/goal-plus/correlate.ts` | Execution 确定性关联、重关联和 authority 选择 |
 | completeness/query | `completeness.ts`、`query.ts` | 批量完整度计算与 composite read model |
-| UI | `src/app/(main)/goal-plus/` | source/goal 总览及四个详情 tab |
+| UI（暂未开放导航） | `src/app/(main)/goal-plus/` | 保留 source/goal 总览及四个详情 tab 的实现，供后续继续开发；当前不挂载侧边栏入口 |
 
 专项测试位于 `test/goal-plus-{collector,contract,distribution}.test.ts`；合成 fixture 位于 `test/fixtures/goal-plus/.gp`，不得替换为用户真实数据。
 

@@ -64,12 +64,6 @@ const OBSERVE_ITEM: SidebarNavItem = {
             icon: 'metrics',
             matchPrefixes: ['/version-analysis', '/version-management'],
         },
-        {
-            key: 'goal-plus',
-            href: '/goal-plus',
-            labelKey: 'nav.goalPlus',
-            icon: 'observe',
-        },
         { key: 'infra', href: '/infra', labelKey: 'nav.infra', icon: 'infra' },
     ],
 };
