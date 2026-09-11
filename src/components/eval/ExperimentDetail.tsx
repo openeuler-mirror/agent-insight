@@ -20,6 +20,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
 import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
+import { isBenchmarkEvaluationInProgress } from '@/lib/benchmark/detail-status';
 
 interface ExperimentDetail {
   id: string;
@@ -49,7 +50,9 @@ interface ExperimentDetail {
       externalCaseId: string;
       repo: string;
       reference: { description: string };
-      submission: { name: string; summary: string } | null;
+      submission: { name: string; summary: string; sha256: string; sizeBytes: number } | null;
+      runStatus: string;
+      evaluationStatus: string | null;
       failure?: { code: string; message: string | null } | null;
     };
   }>;
@@ -549,7 +552,29 @@ export function ExperimentDetail({
                               正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
                             </span>
                           ) : detail.scope === 'benchmark' && c.benchmark?.submission ? (
-                            <span title={c.benchmark.submission.summary}>{c.benchmark.submission.name} · {truncate(c.benchmark.submission.summary, 60)}</span>
+                            <div title={c.benchmark.submission.summary} style={{ minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span>{c.benchmark.submission.name} · {c.benchmark.submission.sizeBytes} bytes</span>
+                                {isBenchmarkEvaluationInProgress(c.benchmark) && (
+                                  <span style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                                    padding: '2px 7px', borderRadius: 999,
+                                    border: '1px solid var(--primary-subtle-border)',
+                                    background: 'var(--primary-subtle)', color: 'var(--primary)',
+                                    fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
+                                  }}>
+                                    <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
+                                    官方评测中…
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{
+                                marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                color: 'var(--foreground-muted)', fontSize: 10.5,
+                              }}>
+                                sha256:{c.benchmark.submission.sha256}
+                              </div>
+                            </div>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
                             <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
                           ) : truncate(c.actualOutput, 80)}

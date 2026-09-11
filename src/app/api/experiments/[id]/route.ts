@@ -17,6 +17,7 @@ import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
+import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
 export const dynamic = 'force-dynamic';
@@ -560,15 +561,12 @@ export async function GET(
           : null;
         const benchmarkPrimaryMetric = benchmarkNormalized?.primaryMetric;
         const submission = benchmarkRun?.artifacts[0];
-        const benchmarkTraceStatus: GeneratedTraceStatus | null = benchmarkRun
-          ? ['pending', 'preparing', 'dispatching', 'dispatch_unknown', 'running_agent', 'collecting', 'uploading', 'cleaning', 'submitted'].includes(benchmarkRun.status)
-            ? 'pending'
-            : ['execution_failed', 'dispatch_failed', 'blocked'].includes(benchmarkRun.status)
-              ? 'failed'
-              : submission || c.executionId || effectiveTaskId
-                ? 'ready'
-                : 'failed'
-          : null;
+        const benchmarkTraceStatus = deriveBenchmarkTraceStatus({
+          runStatus: benchmarkRun?.status || null,
+          hasSubmission: Boolean(submission),
+          hasExecution: Boolean(c.executionId),
+          hasTask: Boolean(effectiveTaskId),
+        });
         let caseValues: Record<string, unknown> | null = null;
         if (c.caseValuesJson) {
           try {

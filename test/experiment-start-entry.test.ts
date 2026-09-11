@@ -74,6 +74,17 @@ test('Benchmark Case 明细表展示 Instance ID', () => {
   assert.match(detailPage, /c\.benchmark\?\.externalCaseId/);
 });
 
+test('Benchmark Patch 已提交但 Harness 未完成时展示官方评测中', () => {
+  const detailPage = fs.readFileSync(
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
+    'utf8',
+  );
+
+  assert.match(detailPage, /isBenchmarkEvaluationInProgress\(c\.benchmark\)/);
+  assert.match(detailPage, /官方评测中…/);
+  assert.match(detailPage, /sha256:\{c\.benchmark\.submission\.sha256\}/);
+});
+
 test('Benchmark 原始文件菜单向上展开，避免被结果卡底部裁剪', () => {
   const artifactActions = fs.readFileSync(
     path.join(root, 'src/components/eval/BenchmarkArtifactActions.tsx'),
