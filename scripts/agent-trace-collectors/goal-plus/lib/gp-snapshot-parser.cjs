@@ -543,25 +543,45 @@ async function parseGoalPlusRoot(source, options = {}) {
       const sessionHost = raw.host || raw.host_handle?.host;
       if (kind === "agent_session" && ["pi-rpc", "pi", "pi-agent"].includes(sessionHost)) {
         const sessionFile = await piWorkerSessionFile(root, raw);
-        if (sessionFile) piSessions.push({
-          sourceId: source.sourceId,
-          agentSessionId: raw.agent_session_id,
-          goalId: context.runGoals.get(raw.run_id),
-          runId: raw.run_id,
-          candidateId: raw.candidate_id,
-          role: payload.role,
-          sessionFile,
-          terminalState: raw.host_handle?.metadata?.runner_failed
-            ? "failed"
-            : raw.host_handle?.metadata?.timed_out
-              ? "aborted"
-              : raw.host_handle?.metadata?.pi_metrics?.stop_reason
-                || raw.status
-                || raw.state,
-          exitCode: raw.host_handle?.metadata?.pi_metrics?.exit_code
-            ?? raw.host_handle?.metadata?.exit_code,
-          errorMessage: raw.host_handle?.metadata?.error,
-        });
+        if (sessionFile) {
+          const metadata = raw.host_handle?.metadata || {};
+          const runnerFailed = metadata.runner_failed === true;
+          const timedOut = metadata.timed_out === true;
+          const progressStatus = String(metadata.progress_handoff?.status || "").toLowerCase() || undefined;
+          const exitCode = metadata.pi_metrics?.exit_code ?? metadata.exit_code;
+          const controlledTermination = sessionHost === "pi-rpc"
+            && !runnerFailed
+            && !timedOut
+            && progressStatus === "completed"
+            && [-15, 143].includes(Number(exitCode));
+          piSessions.push({
+            sourceId: source.sourceId,
+            agentSessionId: raw.agent_session_id,
+            goalId: context.runGoals.get(raw.run_id),
+            runId: raw.run_id,
+            candidateId: raw.candidate_id,
+            role: payload.role,
+            host: sessionHost,
+            sessionFile,
+            runnerFailed,
+            timedOut,
+            progressStatus,
+            controlledTermination,
+            runtimeBudgetSeconds: metadata.budget_control?.max_runtime_seconds
+              ?? raw.launch?.budget_control?.max_runtime_seconds,
+            terminalState: runnerFailed
+              ? "failed"
+              : timedOut
+                ? "timed_out"
+                : progressStatus === "completed"
+                  ? "completed"
+                  : metadata.pi_metrics?.stop_reason
+                    || raw.status
+                    || raw.state,
+            exitCode,
+            errorMessage: metadata.error,
+          });
+        }
         else diagnostics.push({
           relativePath: relative,
           code: "missing_pi_session_file",

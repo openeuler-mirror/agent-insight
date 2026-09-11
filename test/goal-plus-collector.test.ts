@@ -8,7 +8,12 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const { parseGoalPlusRoot, piProjectSessionDir } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
-const { importPiSessions, messageText, parsePiSession } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
+const {
+  importPiSessions,
+  messageText,
+  parsePiSession,
+  runtimeOutcome,
+} = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
 const { attachSource, loadRegistry } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
 const {
   buildSemanticBatches,
@@ -29,8 +34,15 @@ type PiSessionDescriptor = {
   sessionKind?: string;
   nativeSessionId?: string;
   canonicalSessionId?: string;
+  host?: string;
+  runnerFailed?: boolean;
+  timedOut?: boolean;
+  progressStatus?: string;
+  controlledTermination?: boolean;
+  runtimeBudgetSeconds?: number;
   terminalState?: string;
   businessState?: string;
+  exitCode?: number;
   errorMessage?: string;
 };
 type ParsedRoot = { diagnostics: unknown[]; snapshots: ParsedSnapshot[]; piSessions: PiSessionDescriptor[] };
@@ -362,7 +374,30 @@ test('Pi worker runtime timeout overrides a stale successful session state', asy
   const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
   const descriptor = parsed.piSessions.find(item => item.sessionKind !== 'main');
   assert.ok(descriptor);
-  assert.equal(descriptor.terminalState, 'aborted');
+  assert.equal(descriptor.terminalState, 'timed_out');
+  assert.equal(descriptor.timedOut, true);
+  assert.equal(descriptor.controlledTermination, false);
+});
+
+test('Pi worker descriptor recognizes completed RPC cleanup as a controlled termination', async t => {
+  const { root } = await copiedFixture(t);
+  const metadataPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
+  const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
+  metadata.host_handle.metadata.runner_failed = false;
+  metadata.host_handle.metadata.timed_out = false;
+  metadata.host_handle.metadata.exit_code = 143;
+  metadata.host_handle.metadata.progress_handoff = { status: 'completed' };
+  metadata.launch.budget_control = { max_runtime_seconds: 179 };
+  await fsp.writeFile(metadataPath, JSON.stringify(metadata));
+
+  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
+  const descriptor = parsed.piSessions.find(item => item.sessionKind !== 'main');
+  assert.ok(descriptor);
+  assert.equal(descriptor.host, 'pi-rpc');
+  assert.equal(descriptor.terminalState, 'completed');
+  assert.equal(descriptor.progressStatus, 'completed');
+  assert.equal(descriptor.controlledTermination, true);
+  assert.equal(descriptor.runtimeBudgetSeconds, 179);
 });
 
 test('semantic parser ignores an incomplete JSONL tail', async t => {
@@ -456,6 +491,80 @@ test('Pi passive parser uses one stable canonical session with LLM and tool even
   assert.deepEqual(first.events.map(item => item.eventId), second.events.map(item => item.eventId));
 });
 
+test('Pi worker runtime outcome distinguishes controlled cleanup from timeout and crashes', () => {
+  const controlled = runtimeOutcome({
+    host: 'pi-rpc',
+    terminalState: 'completed',
+    progressStatus: 'completed',
+    runnerFailed: false,
+    timedOut: false,
+    exitCode: 143,
+  }, false, false);
+  assert.equal(controlled.failed, false);
+  assert.equal(controlled.controlledTermination, true);
+  assert.equal(controlled.runtimeState, 'completed');
+  assert.equal(controlled.error, undefined);
+
+  const timedOut = runtimeOutcome({
+    host: 'pi-rpc',
+    terminalState: 'timed_out',
+    progressStatus: 'timed_out',
+    runnerFailed: false,
+    timedOut: true,
+    runtimeBudgetSeconds: 179,
+    exitCode: 143,
+  }, false, false);
+  assert.equal(timedOut.failed, true);
+  assert.equal(timedOut.controlledTermination, false);
+  assert.equal(timedOut.runtimeState, 'timed_out');
+  assert.equal(timedOut.error, 'Goal Plus Pi worker exceeded its 179-second runtime budget');
+
+  const runnerFailed = runtimeOutcome({
+    host: 'pi-rpc',
+    terminalState: 'completed',
+    progressStatus: 'completed',
+    runnerFailed: true,
+    timedOut: false,
+    exitCode: 143,
+  }, false, false);
+  assert.equal(runnerFailed.failed, true);
+  assert.equal(runnerFailed.error, 'Goal Plus Pi worker runner failed');
+
+  const unexpectedExit = runtimeOutcome({
+    host: 'pi-rpc',
+    terminalState: 'completed',
+    progressStatus: 'completed',
+    runnerFailed: false,
+    timedOut: false,
+    controlledTermination: true,
+    exitCode: 1,
+  }, false, false);
+  assert.equal(unexpectedExit.failed, true);
+  assert.equal(unexpectedExit.error, 'Goal Plus Pi worker exited unexpectedly with code 1');
+});
+
+test('Pi passive parser treats a completed RPC SIGTERM as success but preserves its exit code', async t => {
+  const { root } = await copiedFixture(t);
+  const parsed = await parsePiSession(root, {
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    role: 'candidate-worker',
+    host: 'pi-rpc',
+    sessionFile: 'runs/run_demo/pi_sessions/agent_001.jsonl',
+    terminalState: 'completed',
+    progressStatus: 'completed',
+    runnerFailed: false,
+    timedOut: false,
+    controlledTermination: true,
+    exitCode: 143,
+  }) as ParsedPi;
+  const agent = parsed.events.find(item => item.kind === 'agent');
+  assert.equal(agent?.status, 'success');
+  assert.equal(agent?.attributes?.['goal_plus.runtime_state'], 'completed');
+  assert.equal(agent?.attributes?.['goal_plus.controlled_termination'], true);
+  assert.equal(agent?.attributes?.['goal_plus.exit_code'], 143);
+});
+
 test('Goal Plus Pi importer checkpoints durable events before upload and skips 100 unchanged scans', async t => {
   const { temporary, root } = await copiedFixture(t);
   const stateDir = path.join(temporary, 'pi-import-state');
@@ -503,6 +612,56 @@ test('Goal Plus Pi importer checkpoints durable events before upload and skips 1
     assert.equal(result.appendedEvents, 0);
     assert.equal(duplicateWrites.length, 0);
   }
+});
+
+test('Pi importer reparses a legacy outcome checkpoint without replaying unchanged events', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const stateDir = path.join(temporary, 'pi-outcome-migration-state');
+  const checkpointPath = path.join(stateDir, 'goal-plus-import-checkpoint.json');
+  const descriptor = {
+    sourceId: 'gpsrc_fixture',
+    agentSessionId: 'agent_001',
+    role: 'candidate-worker',
+    host: 'pi-rpc',
+    sessionFile: 'runs/run_demo/pi_sessions/agent_001.jsonl',
+    terminalState: 'completed',
+    progressStatus: 'completed',
+    runnerFailed: false,
+    timedOut: false,
+    controlledTermination: true,
+    exitCode: 143,
+  };
+  const firstEvents: NativeEvent[] = [];
+  await importPiSessions(root, [descriptor], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir,
+    endpoint: 'https://example.invalid/traces',
+    upload: false,
+    writer: memoryWriter(firstEvents),
+  });
+  const legacy = JSON.parse(await fsp.readFile(checkpointPath, 'utf8'));
+  delete legacy.sessions['goal-plus:gpsrc_fixture:agent_001'].outcomeDerivationVersion;
+  await fsp.writeFile(checkpointPath, JSON.stringify(legacy));
+
+  const replayedEvents: NativeEvent[] = [];
+  const migrated = await importPiSessions(root, [descriptor], {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    stateDir,
+    endpoint: 'https://example.invalid/traces',
+    upload: false,
+    writer: memoryWriter(replayedEvents),
+  });
+  assert.equal(migrated.skipped, 0);
+  assert.equal(migrated.appendedEvents, 0);
+  assert.equal(migrated.unchangedEvents, firstEvents.length);
+  assert.equal(replayedEvents.length, 0);
+  const checkpoint = JSON.parse(await fsp.readFile(checkpointPath, 'utf8'));
+  assert.equal(
+    checkpoint.sessions['goal-plus:gpsrc_fixture:agent_001'].outcomeDerivationVersion,
+    2,
+  );
 });
 
 test('Goal Plus Pi importer reports a blocked uploader instead of silently returning zero', async t => {

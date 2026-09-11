@@ -21,7 +21,18 @@ const { classifyTool, parseMcpIdentity, usageFrom } = require("../../shared/pi-t
 const { safeStableRead } = require("./gp-snapshot-parser.cjs");
 
 const IMPORT_CHECKPOINT_VERSION = 1;
+const OUTCOME_DERIVATION_VERSION = 2;
 const GOAL_PLUS_UPLOAD_MAX_BATCHES_PER_FLUSH = 10;
+const FAILURE_TERMINAL_STATES = new Set([
+  "error",
+  "failed",
+  "aborted",
+  "cancelled",
+  "canceled",
+  "blocked",
+  "invalidated",
+  "timed_out",
+]);
 
 function stableJson(value) {
   if (value === undefined) return "null";
@@ -46,6 +57,12 @@ function descriptorFingerprint(descriptor) {
     candidateId: descriptor.candidateId,
     role: descriptor.role,
     sessionKind: descriptor.sessionKind,
+    host: descriptor.host,
+    runnerFailed: descriptor.runnerFailed,
+    timedOut: descriptor.timedOut,
+    progressStatus: descriptor.progressStatus,
+    controlledTermination: descriptor.controlledTermination,
+    runtimeBudgetSeconds: descriptor.runtimeBudgetSeconds,
     terminalState: descriptor.terminalState,
     businessState: descriptor.businessState,
     exitCode: descriptor.exitCode,
@@ -58,6 +75,55 @@ function descriptorFingerprint(descriptor) {
 
 function eventFingerprint(event) {
   return `sha256:${sha256(stableJson(redactValue(event)))}`;
+}
+
+function runtimeOutcome(descriptor, lastAssistantFailed, hasPendingTools) {
+  const terminalState = String(descriptor.terminalState || "").toLowerCase();
+  const progressStatus = String(descriptor.progressStatus || "").toLowerCase();
+  const exitCode = descriptor.exitCode == null ? undefined : Number(descriptor.exitCode);
+  const runnerFailed = descriptor.runnerFailed === true;
+  const timedOut = descriptor.timedOut === true;
+  const controlledExit = [-15, 143].includes(exitCode);
+  const controlledEvidence = descriptor.controlledTermination === true
+    || (descriptor.host === "pi-rpc" && progressStatus === "completed");
+  const controlledTermination = controlledExit
+    && !runnerFailed
+    && !timedOut
+    && controlledEvidence;
+  const unexpectedExit = Number.isFinite(exitCode) && exitCode !== 0 && !controlledTermination;
+  const failed = lastAssistantFailed
+    || runnerFailed
+    || timedOut
+    || FAILURE_TERMINAL_STATES.has(terminalState)
+    || unexpectedExit;
+
+  let error;
+  if (failed) {
+    if (descriptor.errorMessage) error = descriptor.errorMessage;
+    else if (timedOut || terminalState === "timed_out") {
+      const budget = Number(descriptor.runtimeBudgetSeconds);
+      error = Number.isFinite(budget) && budget > 0
+        ? `Goal Plus Pi worker exceeded its ${budget}-second runtime budget`
+        : "Goal Plus Pi worker exceeded its runtime budget";
+    } else if (runnerFailed) error = "Goal Plus Pi worker runner failed";
+    else if (lastAssistantFailed) error = "Goal Plus Pi worker's final assistant turn failed";
+    else if (unexpectedExit) error = `Goal Plus Pi worker exited unexpectedly with code ${exitCode}`;
+    else error = `Goal Plus Pi session ended with ${terminalState}`;
+  }
+
+  return {
+    controlledTermination,
+    error,
+    exitCode,
+    failed,
+    progressStatus,
+    runnerFailed,
+    runtimeState: failed
+      ? timedOut || terminalState === "timed_out" ? "timed_out" : "failed"
+      : hasPendingTools ? "running" : "completed",
+    terminalState,
+    timedOut,
+  };
 }
 
 function resolvedSessionPath(root, descriptor) {
@@ -374,11 +440,7 @@ async function parsePiSession(root, descriptor) {
       tool: { name: pending.toolName, type: classifyTool(pending.toolName), arguments: pending.args },
     });
   }
-  const terminalState = String(descriptor.terminalState || "").toLowerCase();
-  const exitCode = descriptor.exitCode == null ? undefined : Number(descriptor.exitCode);
-  const terminalFailure = lastAssistantFailed
-    || ["error", "failed", "aborted", "cancelled", "canceled", "blocked", "invalidated"].includes(terminalState)
-    || (Number.isFinite(exitCode) && exitCode !== 0);
+  const outcome = runtimeOutcome(descriptor, lastAssistantFailed, pendingTools.size > 0);
   events.push({
     eventId: stableEventId(sessionId, agentSpanId),
     sessionId,
@@ -388,17 +450,20 @@ async function parsePiSession(root, descriptor) {
     name: "agent.pi",
     startTimeMs: startedAt,
     endTimeMs: endedAt,
-    status: terminalFailure ? "error" : pendingTools.size ? "running" : "success",
-    error: terminalFailure
-      ? descriptor.errorMessage || `Goal Plus Pi session ended with ${terminalState || `exit code ${exitCode}`}`
-      : undefined,
+    status: outcome.failed ? "error" : pendingTools.size ? "running" : "success",
+    error: outcome.error,
     input,
     output: messageText(lastAssistant),
     model: lastAssistant?.responseModel || lastAssistant?.model,
     attributes: {
       ...commonAttributes,
-      "goal_plus.terminal_state": terminalState || undefined,
-      "goal_plus.exit_code": Number.isFinite(exitCode) ? exitCode : undefined,
+      "goal_plus.terminal_state": outcome.terminalState || undefined,
+      "goal_plus.runtime_state": outcome.runtimeState,
+      "goal_plus.progress_status": outcome.progressStatus || undefined,
+      "goal_plus.runner_failed": descriptor.runnerFailed == null ? undefined : outcome.runnerFailed,
+      "goal_plus.timed_out": descriptor.timedOut == null ? undefined : outcome.timedOut,
+      "goal_plus.controlled_termination": outcome.controlledTermination || undefined,
+      "goal_plus.exit_code": Number.isFinite(outcome.exitCode) ? outcome.exitCode : undefined,
     },
   });
   return { events, fidelity: "derived", diagnostics, source };
@@ -446,7 +511,9 @@ async function importPiSessions(root, sessions, options) {
           descriptorHash = descriptorFingerprint(session);
           const currentSource = await statPiSession(root, session);
           previous = checkpoint.sessions[sessionId];
-          if (previous?.descriptorHash === descriptorHash && sameFingerprint(previous.source, currentSource)) {
+          if (previous?.outcomeDerivationVersion === OUTCOME_DERIVATION_VERSION
+            && previous?.descriptorHash === descriptorHash
+            && sameFingerprint(previous.source, currentSource)) {
             skipped += 1;
             continue;
           }
@@ -482,6 +549,7 @@ async function importPiSessions(root, sessions, options) {
             endLine: session.endLine,
           },
           events: nextHashes,
+          outcomeDerivationVersion: OUTCOME_DERIVATION_VERSION,
           generation: Number(previous?.generation || 0) + (reset ? 1 : 0),
           updatedAt: new Date().toISOString(),
         };
@@ -531,6 +599,7 @@ module.exports = {
   messageText,
   parsePiSession,
   readImportCheckpoint,
+  runtimeOutcome,
   statPiSession,
   toolCalls,
   unwrapMessage,
