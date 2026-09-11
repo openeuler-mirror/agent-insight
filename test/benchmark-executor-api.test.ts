@@ -33,6 +33,10 @@ const externalTestClientIds = new Set<string>()
 const externalTestExperimentIds = new Set<string>()
 
 const executorModule = require('../services/executor/src/index.cjs') as {
+  AgentInsightCallbackClient: new (options: Record<string, unknown>) => {
+    progress(request: Record<string, unknown>, stage: string, progress?: Record<string, unknown>): Promise<unknown>
+    complete(request: Record<string, unknown>, completion: Record<string, unknown>): Promise<unknown>
+  }
   BenchmarkExecutorError: new (
     code: string,
     message: string,
@@ -80,6 +84,34 @@ const executorModule = require('../services/executor/src/index.cjs') as {
   ) => Promise<{ stdout: string; stderr: string }>
   sha256?: (value: Uint8Array) => string
 }
+
+test('Benchmark Executor callbacks reuse the Agent Insight address installed by curl', async () => {
+  const requestedUrls: string[] = []
+  const client = new executorModule.AgentInsightCallbackClient({
+    clientId: 'remote-executor',
+    deviceCredential: 'device-credential',
+    insightBaseUrl: 'http://119.3.152.42:3000/platform',
+    fetchImpl: async (input: string | URL | Request) => {
+      requestedUrls.push(String(input))
+      return new Response('{"accepted":true}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    },
+  })
+  const request = {
+    runId: 'erun_remote_callback',
+    callbackBaseUrl: 'http://127.0.0.1:3000/api/benchmark/v1/runs/erun_remote_callback',
+  }
+
+  await client.progress(request, 'uploading')
+  await client.complete(request, { kind: 'execution', status: 'succeeded' })
+
+  assert.deepEqual(requestedUrls, [
+    'http://119.3.152.42:3000/platform/api/benchmark/v1/runs/erun_remote_callback/progress',
+    'http://119.3.152.42:3000/platform/api/benchmark/v1/runs/erun_remote_callback/complete',
+  ])
+})
 
 let prisma: typeof import('@/lib/storage/prisma').prisma
 let artifactRoute: typeof import('@/app/api/benchmark/v1/artifacts/route').POST

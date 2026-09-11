@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   deriveBenchmarkTraceStatus,
   isBenchmarkEvaluationInProgress,
+  isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status'
 
 test('Benchmark Agent 执行阶段仍显示 Trace 生成中', () => {
@@ -36,6 +37,23 @@ test('Patch 提交后 Trace 已就绪，官方评测进入独立的进行中状�
     }), 'ready')
     assert.equal(isBenchmarkEvaluationInProgress({ runStatus: 'submitted', evaluationStatus }), true)
   }
+})
+
+test('Patch 已上传但执行器终态未确认时不再显示为 Trace 生成中', () => {
+  assert.equal(deriveBenchmarkTraceStatus({
+    runStatus: 'uploading',
+    hasSubmission: true,
+    hasExecution: false,
+    hasTask: false,
+  }), 'ready')
+  assert.equal(isBenchmarkSubmissionAwaitingCompletion({
+    runStatus: 'uploading',
+    hasSubmission: true,
+  }), true)
+  assert.equal(isBenchmarkSubmissionAwaitingCompletion({
+    runStatus: 'submitted',
+    hasSubmission: true,
+  }), false)
 })
 
 test('官方评测完成后不再显示进行中状态', () => {

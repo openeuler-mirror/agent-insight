@@ -609,6 +609,10 @@ class AgentInsightCallbackClient {
     }
   }
 
+  runCallbackBaseUrl(request) {
+    return `${this.insightBaseUrl}/api/benchmark/v1/runs/${encodeURIComponent(request.runId)}`
+  }
+
   async checkedFetch(url, init) {
     let response
     try {
@@ -640,7 +644,7 @@ class AgentInsightCallbackClient {
   }
 
   progress(request, stage, progress = {}) {
-    return this.checkedFetch(`${request.callbackBaseUrl}/progress`, {
+    return this.checkedFetch(`${this.runCallbackBaseUrl(request)}/progress`, {
       method: 'POST',
       headers: this.headers({ 'content-type': 'application/json' }),
       body: JSON.stringify({ kind: 'execution', stage, progress, occurredAt: new Date().toISOString() }),
@@ -664,7 +668,7 @@ class AgentInsightCallbackClient {
   }
 
   complete(request, body) {
-    return this.checkedFetch(`${request.callbackBaseUrl}/complete`, {
+    return this.checkedFetch(`${this.runCallbackBaseUrl(request)}/complete`, {
       method: 'POST',
       headers: this.headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(body),
@@ -681,6 +685,7 @@ class BenchmarkExecutionRunner {
     this.collectors = options.collectors
     this.cleanupManager = options.cleanupManager
     this.callback = options.callback
+    this.logError = options.logError
   }
 
   async progress(request, stage, message) {
@@ -787,6 +792,7 @@ class BenchmarkExecutionRunner {
         ? error
         : new BenchmarkExecutorError(error?.code || 'EXECUTION_FAILED', error?.message || '执行器运行失败')
       if (pendingCompletion) {
+        this.logError?.(`benchmark completion ${request.runId} pending delivery`, normalized)
         await this.store.writeState(request.runId, {
           stage: 'complete_pending',
           completion: pendingCompletion,
@@ -953,6 +959,7 @@ function createBenchmarkExecutor(options) {
     collectors,
     cleanupManager: options.cleanupManager || new WorkspaceCleanupManager(),
     callback,
+    logError: options.logError,
   })
   if (typeof options.runAgent !== 'function' && !options.runner) {
     throw new Error('runAgent is required')

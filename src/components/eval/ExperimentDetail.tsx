@@ -20,7 +20,10 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
 import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
-import { isBenchmarkEvaluationInProgress } from '@/lib/benchmark/detail-status';
+import {
+  isBenchmarkEvaluationInProgress,
+  isBenchmarkSubmissionAwaitingCompletion,
+} from '@/lib/benchmark/detail-status';
 
 interface ExperimentDetail {
   id: string;
@@ -535,23 +538,7 @@ export function ExperimentDetail({
                             : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
                         </td>
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
-                          {c.traceStatus === 'failed' ? (
-                            detail.scope === 'benchmark' ? (
-                              <BenchmarkFailureNotice
-                                compact
-                                code={c.benchmark?.failure?.code}
-                                message={c.benchmark?.failure?.message || c.traceError}
-                              />
-                            ) : (
-                              <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
-                                Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
-                              </span>
-                            )
-                          ) : c.traceStatus === 'pending' ? (
-                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
-                              正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
-                            </span>
-                          ) : detail.scope === 'benchmark' && c.benchmark?.submission ? (
+                          {detail.scope === 'benchmark' && c.benchmark?.submission ? (
                             <div title={c.benchmark.submission.summary} style={{ minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                 <span>{c.benchmark.submission.name} · {c.benchmark.submission.sizeBytes} bytes</span>
@@ -567,6 +554,22 @@ export function ExperimentDetail({
                                     官方评测中…
                                   </span>
                                 )}
+                                {!c.benchmark.failure && isBenchmarkSubmissionAwaitingCompletion({
+                                  runStatus: c.benchmark.runStatus,
+                                  hasSubmission: true,
+                                }) && (
+                                  <span style={{ color: 'var(--warning)', fontSize: 10, fontWeight: 600 }}>
+                                    Patch 已生成，等待执行器确认…
+                                  </span>
+                                )}
+                                {c.benchmark.failure && !isBenchmarkEvaluationInProgress(c.benchmark) && (
+                                  <span
+                                    title={c.benchmark.failure.message || undefined}
+                                    style={{ color: 'var(--error)', fontSize: 10, fontWeight: 600 }}
+                                  >
+                                    处理失败
+                                  </span>
+                                )}
                               </div>
                               <div style={{
                                 marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -575,6 +578,22 @@ export function ExperimentDetail({
                                 sha256:{c.benchmark.submission.sha256}
                               </div>
                             </div>
+                          ) : c.traceStatus === 'failed' ? (
+                            detail.scope === 'benchmark' ? (
+                              <BenchmarkFailureNotice
+                                compact
+                                code={c.benchmark?.failure?.code}
+                                message={c.benchmark?.failure?.message || c.traceError}
+                              />
+                            ) : (
+                              <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
+                                Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
+                              </span>
+                            )
+                          ) : c.traceStatus === 'pending' ? (
+                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
+                              正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
+                            </span>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
                             <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
                           ) : truncate(c.actualOutput, 80)}

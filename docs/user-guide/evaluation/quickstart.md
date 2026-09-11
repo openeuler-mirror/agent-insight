@@ -23,6 +23,7 @@ description: "使用已有 Trace 完成第一次实验"
 ```bash
 bash scripts/start-evaluator.sh \
   --token '<与 Agent Insight 一致的共享密钥>' \
+  --platform-base-url https://agent-insight.example.com \
   --bind-address 0.0.0.0 \
   --port 8080
 ```
@@ -53,6 +54,7 @@ node scripts/configure-evaluator-target.js \
 # 评测机
 bash scripts/start-evaluator.sh \
   --auth-mode none \
+  --platform-base-url http://10.0.0.10:3000 \
   --bind-address 0.0.0.0 \
   --port 3001
 
@@ -64,7 +66,9 @@ node scripts/configure-evaluator-target.js \
   --allow-insecure-http true
 ```
 
-`none` 不再要求 Token 文件，也不会在任务下发、Artifact 下载、进度、证据或完成回调中发送或校验 Authorization。它不会自动配置网络边界；若 3001 或回调入口能被非目标机器访问，不应使用该模式。Doctor 的 `runtime.authMode` 会显示实际生效模式。
+`none` 不再要求 Token 文件，也不会在任务下发、Artifact 下载、进度、证据或完成回调中发送或校验 Authorization。它不会自动配置网络边界；若 3001 或回调入口能被非目标机器访问，不应使用该模式。Doctor 的 `runtime.authMode` 会显示实际生效模式。`--platform-base-url` 是 Evaluator 容器实际访问 Agent Insight 的地址；三台机器分离时填写 Agent Insight 的内网 IP 或可达 HTTP(S) 地址。省略该参数时仍沿用任务中的平台地址，兼容既有隧道部署。
+
+执行客户端不需要增加任何配置。用户仍只运行 Agent Insight 页面提供的安装 `curl`；安装程序会把该命令所属的 Agent Insight 地址写入客户端配置，后续的 `model.patch` 上传、进度和完成回调统一复用这个地址。注册多个执行客户端时，每个客户端都使用各自安装时记录的平台地址，彼此不影响。
 
 开发阶段如果 Agent Insight 和执行器在同一台机器、Evaluator 在远端，并且远端只能通过隧道或公开地址回调，可使用：
 
@@ -77,9 +81,9 @@ node scripts/configure-evaluator-target.js \
   --token-file /secure/evaluator-token
 ```
 
-此可选项只覆盖下发给执行器的回调地址；Evaluator 仍使用 `--public-base-url` 回调。未提供时两者统一使用公开地址，适合正式部署。执行器仍会校验回调 URL 的 origin 和路径，该选项不会放宽安全检查。前端发起的 Benchmark 与真实 Smoke 共用这套平台配置。
+`--executor-callback-base-url` 继续保留给旧版执行客户端和已经冻结的任务。升级后的执行客户端会校验下发回调的协议及精确 Run 路径，但真正发起 Artifact、进度和完成请求时使用安装 `curl` 已记录的平台地址，因此不需要用户再维护第二个客户端地址。Evaluator 则优先使用自身的 `--platform-base-url`；未配置时才沿用 `--public-base-url`。前端发起的 Benchmark 与真实 Smoke 共用这套平台配置。
 
-Agent Insight、执行客户端和 Evaluator 都部署在同一台机器时，`--executor-callback-base-url` 应设置为 `http://127.0.0.1:3000`，不要填写该机器的公网 IP。部分云主机无法通过公网 IP 回环访问自身端口；配置更新只影响尚未冻结执行 Outbox 的新任务，已经开始的旧任务仍保留原回调地址，应结束后重新发起。
+Agent Insight 与执行客户端在同一台机器时，安装 `curl` 使用 `http://127.0.0.1:3000` 即可；跨机器时，安装 `curl` 必须使用执行客户端能够访问的 Agent Insight 地址。配置更新不会改写已经开始的旧任务，旧客户端或旧任务仍可继续使用冻结的执行器回调覆盖地址。
 
 执行客户端会把 Artifact 上传和完成回调作为独立的持久化投递队列处理：网络失败时按指数退避重试，单次回调最多等待 30 秒，并且重试期间不占用 Agent 执行槽，后续 Case 仍可执行。Git 工作区的 shallow fetch 单次最多等待 120 秒，只对白名单内的 DNS、连接中断、超时、curl 传输和部分 5xx 等瞬时网络错误进行最多 3 次尝试；每次重试都重建临时仓库，第三次仅对该命令使用 HTTP/1.1，不修改宿主 Git 配置。仓库不存在、revision 不存在、鉴权、证书或磁盘错误不会重试。
 

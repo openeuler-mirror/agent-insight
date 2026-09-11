@@ -89,7 +89,7 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 选择受控导入的 Benchmark 数据集后仍使用同一套四步向导，但必须生成新 Trace，不能选择已有 Trace 或开启监听。以 `SWE-bench Verified` 为例，系统会自动绑定 `SWE-bench Official Harness`；还可追加不依赖参考答案的普通评估器。
 
-Benchmark Case 详情会展示 Instance ID、Patch 摘要、官方测试计数及失败码，并提供 Patch、官方报告、测试输出和运行日志的查看与原始文件下载。Agent 生成并提交 Patch 后，实际输出会立即显示 Patch 名称、大小和 SHA-256，并在 Official Harness 尚未结束时标记“官方评测中…”，不再继续显示“正在生成 Trace”。已完成的 SWE-bench 实验还会展示固定 Case 分母的 Resolve Rate 同基线趋势。重试 Case 会重新执行完整 Agent 与官方评测链路；单独重评 Official Harness 时复用该 Case 最新 Patch。Agent 执行上限默认 600 秒，官方 Harness 使用独立超时。需要部署独立 Evaluator Controller 时，参见[跑通第一次评测](./quickstart#swe-bench-等容器-benchmark-的评测服务)。
+Benchmark Case 详情会展示 Instance ID、Patch 摘要、官方测试计数及失败码，并提供 Patch、官方报告、测试输出和运行日志的查看与原始文件下载。Agent 生成并上传 Patch 后，实际输出会立即显示 Patch 名称、大小和 SHA-256：执行器终态尚未送达时标记“Patch 已生成，等待执行器确认…”，确认后且 Official Harness 尚未结束时标记“官方评测中…”，不再继续显示“正在生成 Trace”。已完成的 SWE-bench 实验还会展示固定 Case 分母的 Resolve Rate 同基线趋势。重试 Case 会重新执行完整 Agent 与官方评测链路；单独重评 Official Harness 时复用该 Case 最新 Patch。Agent 执行上限默认 600 秒，官方 Harness 使用独立超时。需要部署独立 Evaluator Controller 时，参见[跑通第一次评测](./quickstart#swe-bench-等容器-benchmark-的评测服务)。
 
 ### 第三步：预期答案
 

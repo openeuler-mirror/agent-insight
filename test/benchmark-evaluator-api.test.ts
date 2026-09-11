@@ -44,12 +44,47 @@ const { AgentInsightPlatformClient, PlatformClientError } = require('../services
     token: string,
     fetchImpl: typeof fetch,
     authMode: string,
+    platformBaseUrl?: string,
   ) => {
+    downloadArtifact(request: Record<string, unknown>, descriptor: Record<string, unknown>): Promise<Buffer>
     progress(request: Record<string, unknown>, event: Record<string, unknown>): Promise<unknown>
     complete(request: Record<string, unknown>, completion: Record<string, unknown>): Promise<unknown>
   }
   PlatformClientError: new (code: string, message: string, status: number, retryable: boolean) => Error
 }
+
+test('Evaluator platform requests use its deployment-specific Agent Insight address', async () => {
+  const requestedUrls: string[] = []
+  const client = new AgentInsightPlatformClient('', async (input) => {
+    const url = String(input)
+    requestedUrls.push(url)
+    if (url.endsWith('/content')) return new Response('patch')
+    return new Response('{"accepted":true,"desiredState":"continue"}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }, 'none', 'http://119.3.152.42:3000/platform')
+
+  const request = {
+    runId: 'beval_remote_callback',
+    platformBaseUrl: 'http://127.0.0.1:3000',
+    callbackBaseUrl: 'http://127.0.0.1:3000/api/benchmark/v1/evaluations/beval_remote_callback',
+  }
+  const patch = Buffer.from('patch')
+
+  assert.deepEqual(await client.downloadArtifact(request, {
+    artifactId: 'artifact_remote_callback',
+    name: 'model.patch',
+    sizeBytes: patch.length,
+    sha256: `sha256:${createHash('sha256').update(patch).digest('hex')}`,
+  }), patch)
+  await client.progress(request, { stage: 'running_harness' })
+
+  assert.deepEqual(requestedUrls, [
+    'http://119.3.152.42:3000/platform/api/benchmark/v1/artifacts/artifact_remote_callback/content',
+    'http://119.3.152.42:3000/platform/api/benchmark/v1/evaluations/beval_remote_callback/progress',
+  ])
+})
 
 function listen(server: http.Server): Promise<{ origin: string; close(): Promise<void> }> {
   return new Promise((resolve, reject) => {

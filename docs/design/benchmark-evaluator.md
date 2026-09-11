@@ -275,12 +275,14 @@ EVALUATOR_DATA_DIR=/data
 EVALUATOR_MAX_CONCURRENCY=1
 EVALUATOR_AUTH_MODE=token
 EVALUATOR_PLATFORM_TOKEN=<same-shared-secret>
+# 可选；Evaluator 容器实际访问 Agent Insight 的地址
+EVALUATOR_AGENT_INSIGHT_BASE_URL=https://agent-insight.example.com
 SWE_BENCH_IMAGE_SOURCE=official
 SWE_BENCH_IMAGE_ARCH=auto
 SWE_BENCH_ALLOW_NON_OFFICIAL=false
 ```
 
-Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluator.sh`。脚本构建 revision 镜像、以 `--restart unless-stopped` 运行固定名称 Controller、挂载当前 Docker context 的 Unix Socket 和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不拉取 Case 镜像；显式 `--smoke swe-bench` 才使用内置 Gold Case 按需拉取一个镜像。Controller 的 `status` 只表示 HTTP、journal 和 Docker Socket 状态，每个 `evaluators[]` 独立报告 `ready/reason/formalEligible`，单个不兼容 Evaluator 不再拖累 Controller 整体健康。
+Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluator.sh`。脚本接受可选 `--platform-base-url` 并写入 `EVALUATOR_AGENT_INSIGHT_BASE_URL`；配置后，Evaluator 下载 Artifact、上传证据及进度/完成回调都优先使用这个实际可达地址，省略时回退任务中的 `platformBaseUrl/callbackBaseUrl` 以兼容既有隧道。脚本构建 revision 镜像、以 `--restart unless-stopped` 运行固定名称 Controller、挂载当前 Docker context 的 Unix Socket 和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不拉取 Case 镜像；显式 `--smoke swe-bench` 才使用内置 Gold Case 按需拉取一个镜像。Controller 的 `status` 只表示 HTTP、journal 和 Docker Socket 状态，每个 `evaluators[]` 独立报告 `ready/reason/formalEligible`，单个不兼容 Evaluator 不再拖累 Controller 整体健康。
 
 本机 Docker 内访问宿主用 `host.docker.internal`；独立评测机使用 Agent Insight 的实际 HTTPS 地址。生产环境应由反向代理终止 TLS，并通过防火墙只允许两台服务互访。
 

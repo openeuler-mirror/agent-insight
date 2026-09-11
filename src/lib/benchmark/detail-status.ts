@@ -30,10 +30,23 @@ export function deriveBenchmarkTraceStatus(input: {
   hasExecution: boolean
   hasTask: boolean
 }): BenchmarkTraceStatus {
+  if (input.hasSubmission) return 'ready'
   if (!input.runStatus) return null
   if (AGENT_ACTIVE_RUN_STATUSES.has(input.runStatus)) return 'pending'
   if (AGENT_FAILED_RUN_STATUSES.has(input.runStatus)) return 'failed'
   return input.hasSubmission || input.hasExecution || input.hasTask ? 'ready' : 'failed'
+}
+
+export function isBenchmarkSubmissionAwaitingCompletion(input: {
+  runStatus: string | null | undefined
+  hasSubmission: boolean
+}): boolean {
+  return input.hasSubmission && [
+    'running_agent',
+    'collecting',
+    'uploading',
+    'cleaning',
+  ].includes(input.runStatus || '')
 }
 
 export function isBenchmarkEvaluationInProgress(input: {

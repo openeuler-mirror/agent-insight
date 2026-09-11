@@ -234,7 +234,7 @@ Benchmark 使用控制总线白名单 action `RUN_BENCHMARK_CASE`。WSS 可用�
 
 ### 8.2 平台回调
 
-请求中的 `callbackBaseUrl` 是当前 Run 资源：`{executorCallbackOrigin}/api/benchmark/v1/runs/{runId}`。执行器只能调用 `${callbackBaseUrl}/progress` 和 `${callbackBaseUrl}/complete`；Artifact 固定上传到客户端已配置的平台基址。客户端校验 HTTP(S) 协议、无凭证/query/fragment 且路径中的 `runId` 精确匹配；允许回调 origin 与安装时控制地址不同，以支持专用 `AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL`。所有回调复用现有 `deviceCredential + x-agent-insight-client-id`，平台再校验 Run 确实属于该 `clientId`。
+请求中的 `callbackBaseUrl` 保持为当前 Run 资源：`{executorCallbackOrigin}/api/benchmark/v1/runs/{runId}`，并继续参与请求摘要和兼容旧客户端。新版执行器校验其 HTTP(S) 协议、无凭证/query/fragment 且路径中的 `runId` 精确匹配，但 Artifact、`${runBase}/progress` 和 `${runBase}/complete` 的实际 origin 统一取安装 `curl` 已写入的 `insightBaseUrl`，其中 `runBase={insightBaseUrl}/api/benchmark/v1/runs/{runId}`。因此客户端没有第二个回调配置，跨机器部署也不会误用平台下发的 loopback origin。所有请求复用现有 `deviceCredential + x-agent-insight-client-id`，平台再校验 Run 确实属于该 `clientId`；`AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL` 仅保留给旧客户端和已冻结任务。
 
 成功终态：
 

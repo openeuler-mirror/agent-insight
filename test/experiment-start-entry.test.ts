@@ -82,7 +82,18 @@ test('Benchmark Patch 已提交但 Harness 未完成时展示官方评测中', (
 
   assert.match(detailPage, /isBenchmarkEvaluationInProgress\(c\.benchmark\)/);
   assert.match(detailPage, /官方评测中…/);
+  assert.match(detailPage, /Patch 已生成，等待执行器确认…/);
   assert.match(detailPage, /sha256:\{c\.benchmark\.submission\.sha256\}/);
+});
+
+test('Benchmark Case 使用 Run 状态，不被通用 Trace pending 覆盖', () => {
+  const detailRoute = fs.readFileSync(
+    path.join(root, 'src/app/api/experiments/[id]/route.ts'),
+    'utf8',
+  );
+
+  assert.match(detailRoute, /traceStatus: benchmarkRun \? benchmarkTraceStatus : traceState\?\.status \|\| null/);
+  assert.match(detailRoute, /traceError: benchmarkRun \? benchmarkRun\.failureMessage : traceState\?\.error \|\| null/);
 });
 
 test('Benchmark 原始文件菜单向上展开，避免被结果卡底部裁剪', () => {

@@ -53,12 +53,35 @@ function assertCompletionAcknowledgement(body, completion) {
 }
 
 class AgentInsightPlatformClient {
-  constructor(token, fetchImpl = fetch, authMode = 'token') {
+  constructor(token, fetchImpl = fetch, authMode = 'token', platformBaseUrl = '') {
     if (!['token', 'none'].includes(authMode)) throw new Error('EVALUATOR_AUTH_MODE must be token or none')
     if (authMode === 'token' && !token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
     this.token = token
     this.fetch = fetchImpl
     this.authMode = authMode
+    this.platformBaseUrl = String(platformBaseUrl || '').replace(/\/$/, '')
+    if (this.platformBaseUrl) {
+      let configured
+      try { configured = new URL(this.platformBaseUrl) } catch { throw new Error('EVALUATOR_AGENT_INSIGHT_BASE_URL is invalid') }
+      if (
+        !['http:', 'https:'].includes(configured.protocol)
+        || configured.username
+        || configured.password
+        || configured.search
+        || configured.hash
+      ) {
+        throw new Error('EVALUATOR_AGENT_INSIGHT_BASE_URL must be an HTTP(S) URL without credentials, query or fragment')
+      }
+    }
+  }
+
+  requestPlatformBaseUrl(request) {
+    return this.platformBaseUrl || String(request.platformBaseUrl || '').replace(/\/$/, '')
+  }
+
+  evaluationCallbackBaseUrl(request) {
+    if (!this.platformBaseUrl) return String(request.callbackBaseUrl || '').replace(/\/$/, '')
+    return `${this.requestPlatformBaseUrl(request)}/api/benchmark/v1/evaluations/${encodeURIComponent(request.runId)}`
   }
 
   authorizationHeaders() {
@@ -82,7 +105,7 @@ class AgentInsightPlatformClient {
 
   async downloadArtifact(request, descriptor) {
     const response = await this.fetch(
-      `${request.platformBaseUrl}/api/benchmark/v1/artifacts/${encodeURIComponent(descriptor.artifactId)}/content`,
+      `${this.requestPlatformBaseUrl(request)}/api/benchmark/v1/artifacts/${encodeURIComponent(descriptor.artifactId)}/content`,
       {
         method: 'GET',
         redirect: 'error',
@@ -107,7 +130,7 @@ class AgentInsightPlatformClient {
   }
 
   async progress(request, event) {
-    const response = await this.fetch(`${request.callbackBaseUrl}/progress`, {
+    const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/progress`, {
       method: 'POST',
       redirect: 'error',
       headers: { ...this.authorizationHeaders(), 'content-type': 'application/json' },
@@ -131,7 +154,7 @@ class AgentInsightPlatformClient {
       sha256: digest,
     }))
     form.set('file', new Blob([bytes], { type: evidence.mediaType }), evidence.name)
-    const response = await this.fetch(`${request.callbackBaseUrl}/artifacts`, {
+    const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/artifacts`, {
       method: 'POST',
       redirect: 'error',
       headers: this.authorizationHeaders(),
@@ -146,7 +169,7 @@ class AgentInsightPlatformClient {
   }
 
   async complete(request, completion) {
-    const response = await this.fetch(`${request.callbackBaseUrl}/complete`, {
+    const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/complete`, {
       method: 'POST',
       redirect: 'error',
       headers: { ...this.authorizationHeaders(), 'content-type': 'application/json' },

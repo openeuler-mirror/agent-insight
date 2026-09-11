@@ -248,12 +248,18 @@ class BenchmarkEvaluatorService {
     }
     this.token = options.token || process.env.EVALUATOR_PLATFORM_TOKEN || ''
     if (this.authMode === 'token' && !this.token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
+    this.platformBaseUrl = options.platformBaseUrl || process.env.EVALUATOR_AGENT_INSIGHT_BASE_URL || ''
     this.maxConcurrency = Number(options.maxConcurrency || process.env.EVALUATOR_MAX_CONCURRENCY || 1)
     if (!Number.isInteger(this.maxConcurrency) || this.maxConcurrency !== 1) {
       throw new Error('EVALUATOR_MAX_CONCURRENCY currently must be 1')
     }
     this.journal = options.journal || new EvaluationJobJournal(this.dataDir)
-    this.platform = options.platformClient || new AgentInsightPlatformClient(this.token, fetch, this.authMode)
+    this.platform = options.platformClient || new AgentInsightPlatformClient(
+      this.token,
+      fetch,
+      this.authMode,
+      this.platformBaseUrl,
+    )
     this.registry = options.registry || new EvaluatorRegistry(
       generatedEvaluatorDescriptors.map((descriptor) => new FileEvaluatorEntrypoint(descriptor)),
     )
@@ -287,6 +293,7 @@ class BenchmarkEvaluatorService {
       sourceDirty: String(process.env.EVALUATOR_SOURCE_DIRTY || 'false').toLowerCase() === 'true',
       controllerImageId: process.env.EVALUATOR_CONTROLLER_IMAGE_ID || 'unknown',
       authMode: this.authMode,
+      platformBaseUrlConfigured: Boolean(this.platformBaseUrl),
     }
   }
 

@@ -9,12 +9,13 @@ BIND_ADDRESS=0.0.0.0
 PORT=8080
 AUTH_MODE=token
 TOKEN=
+PLATFORM_BASE_URL=${EVALUATOR_AGENT_INSIGHT_BASE_URL:-}
 CASE_IMAGE_PROXY_PREFIX=${SWE_BENCH_IMAGE_PROXY_PREFIX:-}
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-evaluator.sh [--auth-mode token --token TOKEN | --auth-mode none] [--bind-address ADDRESS] [--port PORT]
+  bash scripts/start-evaluator.sh [--auth-mode token --token TOKEN | --auth-mode none] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
 
 Starts the Evaluator Controller from the current Git checkout on Linux or macOS.
 The command does not pull source code, register with Agent Insight, or preload Case images.
@@ -33,11 +34,12 @@ git_checkout() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --token|--auth-mode|--bind-address|--port)
+    --token|--auth-mode|--platform-base-url|--bind-address|--port)
       [ "$#" -ge 2 ] || fail "$1 缺少参数值"
       case "$1" in
         --token) TOKEN=$2 ;;
         --auth-mode) AUTH_MODE=$2 ;;
+        --platform-base-url) PLATFORM_BASE_URL=$2 ;;
         --bind-address) BIND_ADDRESS=$2 ;;
         --port) PORT=$2 ;;
       esac
@@ -73,6 +75,16 @@ esac
 if ! printf '%s' "$BIND_ADDRESS" | LC_ALL=C grep -Eq '^[A-Za-z0-9.:-]+$'; then
   fail '--bind-address 包含不支持的字符'
 fi
+case "$PLATFORM_BASE_URL" in
+  '') ;;
+  http://*|https://*)
+    if printf '%s' "$PLATFORM_BASE_URL" | LC_ALL=C grep -q '[[:space:]]'; then
+      fail '--platform-base-url 不能包含空白字符'
+    fi
+    PLATFORM_BASE_URL=${PLATFORM_BASE_URL%/}
+    ;;
+  *) fail '--platform-base-url 必须是 HTTP(S) URL' ;;
+esac
 if [ -n "$CASE_IMAGE_PROXY_PREFIX" ] \
   && ! printf '%s' "$CASE_IMAGE_PROXY_PREFIX" | LC_ALL=C grep -Eq '^[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)*$'; then
   fail 'SWE_BENCH_IMAGE_PROXY_PREFIX 必须是无协议的镜像仓库前缀，设置为空可禁用'
@@ -160,6 +172,7 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
   printf 'EVALUATOR_MAX_CONCURRENCY=1\n'
   printf 'EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
   printf 'EVALUATOR_PLATFORM_TOKEN=%s\n' "$TOKEN"
+  printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\n' "$PLATFORM_BASE_URL"
   printf 'SWE_BENCH_IMAGE_SOURCE=official\n'
   printf 'SWE_BENCH_IMAGE_PROXY_PREFIX=%s\n' "$CASE_IMAGE_PROXY_PREFIX"
   printf 'SWE_BENCH_IMAGE_ARCH=auto\n'
@@ -227,6 +240,11 @@ printf 'Source revision: %s\n' "$SOURCE_REVISION"
 printf 'Source dirty: %s\n' "$SOURCE_DIRTY"
 printf 'Controller image ID: %s\n' "$IMAGE_ID"
 printf 'Auth mode: %s\n' "$AUTH_MODE"
+if [ -n "$PLATFORM_BASE_URL" ]; then
+  printf 'Agent Insight: %s\n' "$PLATFORM_BASE_URL"
+else
+  printf 'Agent Insight: 使用任务下发地址（兼容模式）\n'
+fi
 printf 'Listen: %s:%s\n' "$BIND_ADDRESS" "$PORT"
 printf 'Data volume: %s\n' "$DATA_VOLUME"
 printf 'Agent Insight 侧配置示例：\n'

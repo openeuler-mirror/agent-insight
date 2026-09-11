@@ -40,6 +40,8 @@
 
 > 2026-09-11 working-tree overlay：普通单组与 Benchmark 实验详情共用“同评测基线趋势”。服务端以冻结数据集、Case 集/契约和评分契约生成基线指纹，最多返回当前及之前 50 次已完成实验；前端默认显示最近 10 次，并可拖动或缩放时间窗口。普通实验展示生效综合分，SWE-bench 展示固定 Case 分母的 Resolve Rate。Agent、模型和执行客户端可变，监听和 A/B 实验暂不纳入。
 
+> 2026-09-11 working-tree overlay：Benchmark 跨机器回调改为按组件各自可达地址发送。执行客户端不新增配置，Artifact、进度和完成回调统一复用安装 `curl` 已写入的 `insightBaseUrl`；Evaluator 新增可选 `--platform-base-url` / `EVALUATOR_AGENT_INSIGHT_BASE_URL`，未配置时兼容任务地址。`token|none` 鉴权模式保持不变。Benchmark 详情以 Run 状态为真源，Patch 已上传时不再被通用 Trace pending 覆盖，并区分等待执行器终态与官方评测中。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

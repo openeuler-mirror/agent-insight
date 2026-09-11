@@ -13,6 +13,7 @@ test('one-command evaluator script exposes the phase-one CLI and rejects deferre
   assert.equal(help.status, 0)
   assert.match(help.stdout, /--auth-mode token --token TOKEN/)
   assert.match(help.stdout, /--auth-mode none/)
+  assert.match(help.stdout, /--platform-base-url URL/)
   assert.match(help.stdout, /Linux or macOS/)
 
   const deferred = spawnSync('bash', [startScript, '--server', 'https://example.test'], { encoding: 'utf8' })
@@ -44,6 +45,7 @@ test('one-command evaluator script preserves the Docker lifecycle and on-demand 
   assert.doesNotMatch(source, /SWE_BENCH_IMAGE_PROXY_PREFIX-docker\.1ms\.run/)
   assert.match(source, /printf 'SWE_BENCH_IMAGE_PROXY_PREFIX=%s\\n'/)
   assert.match(source, /printf 'EVALUATOR_AUTH_MODE=%s\\n'/)
+  assert.match(source, /printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\\n'/)
   assert.doesNotMatch(source, /systemctl|launchctl/)
   assert.match(source, /Linux\) HOST_OS=linux/)
   assert.match(source, /Darwin\) HOST_OS=darwin/)

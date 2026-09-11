@@ -600,8 +600,8 @@ export async function GET(
                 || ex.executionSkills.some((item) => item.skillName === experiment.skillName)
               ))
             : null,
-          traceStatus: traceState?.status || benchmarkTraceStatus,
-          traceError: traceState?.error || benchmarkRun?.failureMessage || null,
+          traceStatus: benchmarkRun ? benchmarkTraceStatus : traceState?.status || null,
+          traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,
           traceAttemptStatus: traceState?.attemptStatus || null,
           ...(benchmarkRun ? {
