@@ -38,6 +38,8 @@
 
 > 2026-09-11 working-tree overlay：Linux 常驻客户端安装器按实际 systemd 层级运行：root 新装和历史 `/etc/systemd/system/agent-insight-client.service` 沿用系统级服务，普通用户新装保持用户级服务；systemd manager 预检提前到设备凭证轮换之前，避免旧系统进程继续持有已撤销凭证。
 
+> 2026-09-11 working-tree overlay：普通单组与 Benchmark 实验详情共用“同评测基线趋势”。服务端以冻结数据集、Case 集/契约和评分契约生成基线指纹，最多返回当前及之前 50 次已完成实验；前端默认显示最近 10 次，并可拖动或缩放时间窗口。普通实验展示生效综合分，SWE-bench 展示固定 Case 分母的 Resolve Rate。Agent、模型和执行客户端可变，监听和 A/B 实验暂不纳入。
+
 **如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

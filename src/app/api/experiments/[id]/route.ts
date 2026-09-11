@@ -2,7 +2,7 @@
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
 // 对比实验（type='llm'）：按 type 分流调 getComparisonDetail（含 groups+pairing）；
-// 单组实验（type='single'）：走原聚合路径（响应 shape 不变，AC-019）。
+// 单组实验（type='single'）：走原聚合路径，并附加同评测基线趋势。
 import { NextResponse } from 'next/server';
 import type { ExperimentCase, ExperimentEvalResult, Prisma } from '@prisma/client';
 import {
@@ -15,6 +15,7 @@ import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/deta
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
+import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
@@ -82,7 +83,7 @@ export async function GET(
     const experiment = await prisma.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
       select: {
-        id: true, name: true, type: true, agentName: true, status: true,
+        id: true, user: true, name: true, type: true, agentName: true, status: true,
         watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true, createdAt: true,
         scope: true, skillName: true, skillVersion: true, preset: true,
         skillContextJson: true, configSnapshotJson: true, sourceExperimentId: true,
@@ -105,6 +106,12 @@ export async function GET(
       try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
     }
     const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
+    const baselineTrendPromise = ['', 'benchmark'].includes(experiment.scope)
+      ? getExperimentBaselineTrend({ experimentId: experiment.id, user: experiment.user }).catch((error) => {
+          console.error('[Experiment baseline trend]', error);
+          return null;
+        })
+      : Promise.resolve(null);
 
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
@@ -484,6 +491,7 @@ export async function GET(
         durationMs: r.durationMs,
       })),
     );
+    const baselineTrend = await baselineTrendPromise;
 
     return NextResponse.json({
       id: experiment.id,
@@ -504,6 +512,7 @@ export async function GET(
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
+      baselineTrend,
       reusableConfig: {
         schemaVersion: 1,
         sourceExperimentId: experiment.id,

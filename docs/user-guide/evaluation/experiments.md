@@ -89,7 +89,7 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 选择受控导入的 Benchmark 数据集后仍使用同一套四步向导，但必须生成新 Trace，不能选择已有 Trace 或开启监听。以 `SWE-bench Verified` 为例，系统会自动绑定 `SWE-bench Official Harness`；还可追加不依赖参考答案的普通评估器。
 
-Benchmark Case 详情会展示 Instance ID、Patch 摘要、官方测试计数及失败码，并提供 Patch、官方报告、测试输出和运行日志的查看与原始文件下载。重试 Case 会重新执行完整 Agent 与官方评测链路；单独重评 Official Harness 时复用该 Case 最新 Patch。Agent 执行上限默认 600 秒，官方 Harness 使用独立超时。需要部署独立 Evaluator Controller 时，参见[跑通第一次评测](./quickstart#swe-bench-等容器-benchmark-的评测服务)。
+Benchmark Case 详情会展示 Instance ID、Patch 摘要、官方测试计数及失败码，并提供 Patch、官方报告、测试输出和运行日志的查看与原始文件下载。已完成的 SWE-bench 实验还会展示固定 Case 分母的 Resolve Rate 同基线趋势。重试 Case 会重新执行完整 Agent 与官方评测链路；单独重评 Official Harness 时复用该 Case 最新 Patch。Agent 执行上限默认 600 秒，官方 Harness 使用独立超时。需要部署独立 Evaluator Controller 时，参见[跑通第一次评测](./quickstart#swe-bench-等容器-benchmark-的评测服务)。
 
 ### 第三步：预期答案
 
@@ -184,6 +184,12 @@ Benchmark Case 详情会展示 Instance ID、Patch 摘要、官方测试计数�
 ### 评估器分解
 
 每个评估器分别展示均分和计入数量。由此可以判断综合分下降来自哪个评分维度，而不是只查看一个总分。
+
+### 同评测基线趋势
+
+已完成、非监听的普通单组实验和 Benchmark 实验会展示最多 50 次同基线趋势。普通实验使用综合得分，SWE-bench 使用 Resolve Rate。
+
+普通实验只比较数据集、Case 集与 Case 契约、Trace 来源和评估器配置都相同的记录；Benchmark 只比较 Adapter、数据集内容版本、Case 集和官方评测契约相同的记录。Agent、模型和执行客户端可以不同。横轴按实验时间从旧到新排列，默认窗口展示最近 10 次；历史超过 10 次时可从下拉框选择最多显示最近 10、20 或 50 次，再通过底部时间窗口缩放或平移。悬停、聚焦或点击节点时，底部摘要会跟随显示该点的日期、指标、Agent、模型及相较前一次的变化；节点浮层中的“查看实验详情”和底部历史实验入口都会进入该点对应的实验。仅有当前一次时显示空状态。A/B 实验暂不展示该趋势。
 
 ### Case 明细
 

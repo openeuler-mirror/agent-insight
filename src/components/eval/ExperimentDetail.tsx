@@ -10,6 +10,7 @@ import { ArrowLeft } from 'lucide-react';
 import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
+import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -18,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
+import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 
 interface ExperimentDetail {
   id: string;
@@ -68,6 +70,7 @@ interface ExperimentDetail {
   traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
   overall: number | null;
   breakdown: EvaluatorBreakdownRow[];
+  baselineTrend: BaselineTrend | null;
   caseTotal: number;
   casePage: number;
   casePageSize: number;
@@ -464,6 +467,10 @@ export function ExperimentDetail({
                   ))}
                 </div>
               </div>
+            )}
+
+            {detail.baselineTrend && (
+              <ExperimentBaselineTrend key={detail.id} trend={detail.baselineTrend} />
             )}
 
             {/* Case 明细表 */}
