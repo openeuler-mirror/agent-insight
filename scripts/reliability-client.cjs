@@ -244,83 +244,106 @@ function waitSync(ms) {
   Atomics.wait(state, 0, 0, ms)
 }
 
-function runFiInventory(python, cwd, pythonArgs, probeEnv) {
-  const options = {
-    cwd,
-    env: probeEnv,
-    detached: process.platform !== 'win32',
-    encoding: 'utf8',
-    timeout: 60_000,
-    maxBuffer: 8 * 1024 * 1024,
+function withInventoryProbeSandbox(
+  probeEnv,
+  action,
+  baseDir = path.join(CLIENT_HOME, 'tmp'),
+) {
+  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 })
+  const tempRoot = fs.mkdtempSync(path.join(baseDir, 'inventory-'))
+  const env = {
+    ...probeEnv,
+    TMPDIR: tempRoot,
+    TMP: tempRoot,
+    TEMP: tempRoot,
   }
-  if (process.platform !== 'darwin') {
-    const command = process.platform === 'win32' ? python : '/bin/sh'
-    const args = process.platform === 'win32'
-      ? pythonArgs
-      : ['-c', 'exec "$@"', 'agent-insight-fi-inventory', python, ...pythonArgs]
-    return spawnSync(command, args, options)
-  }
-
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-fi-probe-'))
-  const stdoutPath = path.join(tempRoot, 'stdout.json')
-  const stderrPath = path.join(tempRoot, 'stderr.log')
-  const label = `ai.agent-insight.fi-probe.${process.pid}.${randomBytes(4).toString('hex')}`
-  const uid = process.getuid ? process.getuid() : 501
   try {
-    const submitted = spawnSync(
-      'launchctl',
-      [
-        'submit',
-        '-l',
-        label,
-        '-o',
-        stdoutPath,
-        '-e',
-        stderrPath,
-        '--',
-        '/usr/bin/env',
-        `PATH=${probeEnv.PATH || ''}`,
-        `HOME=${os.homedir()}`,
-        `PWD=${cwd}`,
-        '/bin/sh',
-        '-c',
-        'cd "$1" && shift && exec "$@"',
-        'agent-insight-fi-inventory',
-        cwd,
-        python,
-        ...pythonArgs,
-      ],
-      { encoding: 'utf8', env: probeEnv },
-    )
-    if (submitted.status !== 0) return submitted
-
-    const deadline = Date.now() + options.timeout
-    while (Date.now() < deadline) {
-      let stdout = ''
-      let stderr = ''
-      try { stdout = fs.readFileSync(stdoutPath, 'utf8') } catch {}
-      try { stderr = fs.readFileSync(stderrPath, 'utf8') } catch {}
-      if (stdout.trim()) {
-        try {
-          JSON.parse(stdout)
-          return { status: 0, stdout, stderr }
-        } catch {}
-      }
-      const state = spawnSync(
-        'launchctl',
-        ['print', `gui/${uid}/${label}`],
-        { encoding: 'utf8', stdio: 'pipe' },
-      )
-      if (state.status !== 0 || /state = exited/.test(state.stdout || '')) {
-        return { status: 1, stdout, stderr: stderr || 'inventory helper exited without JSON' }
-      }
-      waitSync(100)
-    }
-    return { status: null, stdout: '', stderr: 'inventory helper timed out' }
+    return action({ tempRoot, env })
   } finally {
-    spawnSync('launchctl', ['remove', label], { stdio: 'ignore' })
     fs.rmSync(tempRoot, { recursive: true, force: true })
   }
+}
+
+function runFiInventory(python, cwd, pythonArgs, probeEnv) {
+  return withInventoryProbeSandbox(probeEnv, ({ tempRoot, env }) => {
+    const options = {
+      cwd,
+      env,
+      detached: process.platform !== 'win32',
+      encoding: 'utf8',
+      timeout: 60_000,
+      maxBuffer: 8 * 1024 * 1024,
+    }
+    if (process.platform !== 'darwin') {
+      const command = process.platform === 'win32' ? python : '/bin/sh'
+      const args = process.platform === 'win32'
+        ? pythonArgs
+        : ['-c', 'exec "$@"', 'agent-insight-fi-inventory', python, ...pythonArgs]
+      return spawnSync(command, args, options)
+    }
+
+    const stdoutPath = path.join(tempRoot, 'stdout.json')
+    const stderrPath = path.join(tempRoot, 'stderr.log')
+    const label = `ai.agent-insight.fi-probe.${process.pid}.${randomBytes(4).toString('hex')}`
+    const uid = process.getuid ? process.getuid() : 501
+    try {
+      const submitted = spawnSync(
+        'launchctl',
+        [
+          'submit',
+          '-l',
+          label,
+          '-o',
+          stdoutPath,
+          '-e',
+          stderrPath,
+          '--',
+          '/usr/bin/env',
+          `PATH=${env.PATH || ''}`,
+          `HOME=${env.HOME || os.homedir()}`,
+          `PWD=${cwd}`,
+          `TMPDIR=${tempRoot}`,
+          `TMP=${tempRoot}`,
+          `TEMP=${tempRoot}`,
+          '/bin/sh',
+          '-c',
+          'cd "$1" && shift && exec "$@"',
+          'agent-insight-fi-inventory',
+          cwd,
+          python,
+          ...pythonArgs,
+        ],
+        { encoding: 'utf8', env },
+      )
+      if (submitted.status !== 0) return submitted
+
+      const deadline = Date.now() + options.timeout
+      while (Date.now() < deadline) {
+        let stdout = ''
+        let stderr = ''
+        try { stdout = fs.readFileSync(stdoutPath, 'utf8') } catch {}
+        try { stderr = fs.readFileSync(stderrPath, 'utf8') } catch {}
+        if (stdout.trim()) {
+          try {
+            JSON.parse(stdout)
+            return { status: 0, stdout, stderr }
+          } catch {}
+        }
+        const state = spawnSync(
+          'launchctl',
+          ['print', `gui/${uid}/${label}`],
+          { encoding: 'utf8', stdio: 'pipe' },
+        )
+        if (state.status !== 0 || /state = exited/.test(state.stdout || '')) {
+          return { status: 1, stdout, stderr: stderr || 'inventory helper exited without JSON' }
+        }
+        waitSync(100)
+      }
+      return { status: null, stdout: '', stderr: 'inventory helper timed out' }
+    } finally {
+      spawnSync('launchctl', ['remove', label], { stdio: 'ignore' })
+    }
+  })
 }
 
 /**
@@ -1869,6 +1892,7 @@ module.exports = {
   rasRuntimeConfigPath,
   writeRasRuntimeConfig,
   resolveFiCwd,
+  withInventoryProbeSandbox,
   buildFiInventory,
   buildCapabilities,
   benchmarkAgentPlatformsFromCapabilities,

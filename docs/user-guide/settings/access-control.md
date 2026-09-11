@@ -136,6 +136,10 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 - **同时纳管故障注入能力** —— 本机会一并出现在「实验」与「故障注入」页面，
   无需再单独执行 FI Worker 的安装命令
 
+客户端每 30 秒完整刷新一次 Agent、模型与故障注入能力；配置变化或手动刷新也会立即重新探测。
+每轮探测使用 `~/.agent-insight/client/tmp/inventory-*` 独立临时目录并在成功、失败或超时后清理，
+安装包也暂存在同一客户端目录下，不会持续向系统 `/tmp` 遗留 OpenCode/OpenTUI 的临时 `.so`。
+
 > **Note**
 > 该命令默认会一并安装故障注入组件。系统 Python 只用于创建 Agent Insight 管理的专用 venv，
 > FI 包、CLI 与 xiaoO Hook 均在 `~/.agent-insight/fault-injection/runtimes/<id>/venv/` 中运行，

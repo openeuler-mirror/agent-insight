@@ -57,6 +57,11 @@ const client = require_('../scripts/reliability-client.cjs') as {
   ) => { args: string[]; stdin: string | null }
   parseOpencodeSlashCommand: (input: string) => { command: string; arguments: string } | null
   capabilityDiscoveryFingerprint: () => string
+  withInventoryProbeSandbox: <T>(
+    probeEnv: NodeJS.ProcessEnv,
+    action: (sandbox: { tempRoot: string; env: NodeJS.ProcessEnv }) => T,
+    baseDir?: string,
+  ) => T
   refreshCapabilityReports: (
     cfg: Record<string, unknown>,
     opts?: { force?: boolean },
@@ -421,6 +426,46 @@ test('manual and automatic capability refresh bypass the cached probe', () => {
   assert.match(source, /setTimeout\([\s\S]*?setInterval\(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS\)[\s\S]*?CAPABILITY_DISCOVERY_SCAN_MS \/ 2/)
 })
 
+test('capability inventory keeps the 30-second full refresh cadence', () => {
+  assert.equal(client.CAPABILITY_DISCOVERY_SCAN_MS, 30_000)
+})
+
+test('FI inventory temp sandbox redirects native extraction and always cleans up', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inventory-sandbox-test-'))
+  let successfulSandbox = ''
+  let failedSandbox = ''
+  try {
+    const result = client.withInventoryProbeSandbox(
+      { PATH: process.env.PATH },
+      ({ tempRoot, env }) => {
+        successfulSandbox = tempRoot
+        assert.equal(env.TMPDIR, tempRoot)
+        assert.equal(env.TMP, tempRoot)
+        assert.equal(env.TEMP, tempRoot)
+        fs.writeFileSync(path.join(tempRoot, 'libopentui.so'), 'temporary native library')
+        return 'ok'
+      },
+      root,
+    )
+    assert.equal(result, 'ok')
+    assert.equal(fs.existsSync(successfulSandbox), false)
+
+    assert.throws(() => client.withInventoryProbeSandbox(
+      process.env,
+      ({ tempRoot }) => {
+        failedSandbox = tempRoot
+        fs.writeFileSync(path.join(tempRoot, 'libopentui.so'), 'temporary native library')
+        throw new Error('probe failed')
+      },
+      root,
+    ), /probe failed/)
+    assert.equal(fs.existsSync(failedSandbox), false)
+    assert.deepEqual(fs.readdirSync(root), [])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('capability probe runs outside the daemon event loop', () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'scripts/reliability-client.cjs'),
@@ -438,7 +483,7 @@ test('FI inventory uses an isolated launchd helper with aligned PWD on macOS', (
   )
   assert.match(
     source,
-    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'submit'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?'remove', label/,
+    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'submit'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?`TMPDIR=\$\{tempRoot\}`[\s\S]*?'remove', label/,
   )
 })
 

@@ -74,6 +74,9 @@ test('常驻客户端默认使用服务端 bundle，本地 checkout 只能显式
     clientBlock.indexOf('/api/ingest/setup/bundle?name=client') < clientBlock.indexOf('npm pack'),
     '服务端 bundle 应先于 npm 兜底',
   );
+  assert.match(clientBlock, /pkg_tmp_root="\$HOME\/\.agent-insight\/client\/tmp"/);
+  assert.match(clientBlock, /mktemp -d "\$pkg_tmp_root\/install\.XXXXXX"/);
+  assert.doesNotMatch(clientBlock, /mktemp -d "\$\{TMPDIR:-\/tmp\}\/agent-insight-client/);
 });
 
 test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python 选择', () => {
