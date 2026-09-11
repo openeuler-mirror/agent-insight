@@ -9,14 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `bab81f8363c98f6f09a0ac5e08e9cef6dc361314` (`bab81f83`) |
+| Commit | `8c047a43526f4c129854364bdb3d4c3269678d26` (`8c047a43`) |
 | Branch | `codex/refactor-for-nh-demo` |
-| Date | 2026-09-10 16:45:40 +0800 |
+| Date | 2026-09-11 09:46:41 +0800 |
 | Author | gyctl |
-| Subject | `fix: 按 Case 并排展示实验 A/B 结果` |
-| Working tree overlay | 无未提交的功能变更。沿用原有页面与演示开关；对比实验 Case 明细按逻辑 Case 分页并并列展示 A/B 输出与分数，详见 05、06。 |
+| Subject | `feat: 支持演示生产构建缓存与安全重启` |
+| Working tree overlay | 无未提交的功能变更。NH 演示增加独立生产构建缓存、实例归属校验与重启管理，详见 07。 |
 
-**如何更新：** `git diff bab81f83 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 8c047a43 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

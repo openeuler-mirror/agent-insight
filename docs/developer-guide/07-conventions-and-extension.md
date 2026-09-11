@@ -89,6 +89,7 @@
   `AGENT_INSIGHT_STARTUP_TIMEOUT_SECONDS` 和
   `AGENT_INSIGHT_STARTUP_REQUEST_TIMEOUT_MS` 调整总等待时间与单次探测超时。
 - **Build**：`npm run build` · **Start (prod)**：`bash scripts/restart.sh` 或 `npm run start`。
+- **NH 演示生产启动**：`node scripts/start-evaluation-production.cjs --port 3019 --data-dir /path/to/demo-home` 固定演示构建配置，复用现有 `npm run build`、standalone 输出与 SQLite schema 预检，不经过开发模式。`evaluation-production-build.cjs` 按源码、公开构建配置、Node/平台指纹缓存，复制 `.next/static` 和 `public` 到独立运行目录；构建失败不停止旧服务，旧产物保留。`--rebuild` 强制编译，`--check` 检查实例/端口，`--stop` 停止对应实例。`managed-production-runtime.cjs` 以项目、数据目录、端口及本地 token IPC 证明归属，仅停止自己创建的子进程；状态不保存环境变量或密钥。HTTP 就绪后才成功返回。锁防止同仓库同时启动/构建，数据库使用不接受数据丢失的 `prisma db push`。此入口服务于演示 HTTP 执行，原完整平台启动入口与 WSS 控制通道保持不变。数据快照与导入器由仓库外的交付包提供，不提交仓库。
 - **Test**：`npm run test`（`node --import tsx --test "test/**/*.test.ts"`）。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
 
