@@ -223,6 +223,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     goalPlusCollaborationIdentity,
     projectGoalPlusCollaborations,
   } = await import('@/lib/ingest/collaboration/providers/goal-plus');
+  const { findGoalPlusTraceProjectionMembers } = await import('@/lib/ingest/collaboration/query');
   const { CollaborationStore, sqlDatabase } = await import('@/lib/collaboration/store');
   const { CollaborationService } = await import('@/lib/collaboration/service');
 
@@ -440,6 +441,10 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.equal(collaboration?.sourceType, 'goal-plus-semantic');
   assert.equal(collaboration?.events.length, 1);
   assert.equal(collaboration?.events[0].endpointResolutions.every(row => row.linkState === 'linked'), true);
+  const traceProjection = await findGoalPlusTraceProjectionMembers('alice', 'goal-main-session');
+  assert.equal(traceProjection.members.length, 1);
+  assert.equal(traceProjection.members[0].taskId, 'goal-plus:gpsrc-projection:worker-projection');
+  assert.equal(traceProjection.members[0].anchorState, 'not_provided');
 
   await prismaRaw.$executeRawUnsafe(
     'INSERT INTO "Execution" ("id", "taskId", "user", "framework") VALUES (?, ?, ?, ?)',
@@ -461,6 +466,8 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     where: { eventDbId: collaboration!.events[0].id, side: 'from' },
   });
   assert.equal(fromResolution?.linkState, 'ambiguous');
+  const ambiguousProjection = await findGoalPlusTraceProjectionMembers('alice', 'goal-main-session');
+  assert.equal(ambiguousProjection.members.length, 0);
   const updated = await prismaRaw.collaboration.findUnique({ where: { id: collaboration!.id } });
   assert.match(updated?.diagnosticsJson || '', /ambiguous-main-session/);
 });

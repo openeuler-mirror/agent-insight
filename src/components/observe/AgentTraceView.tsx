@@ -115,6 +115,27 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
     );
 }
 
+function CollaborationRelationBadge({ relation }: { relation: NonNullable<RawInteraction['trace_relation']> }) {
+    const { locale } = useLocale();
+    const isConfirmed = relation.anchorState === 'confirmed';
+    const label = relation.sourceType === 'goal-plus-semantic'
+        ? (locale === 'zh' ? 'Goal Plus 编排' : 'Goal Plus orchestration')
+        : isConfirmed
+            ? (locale === 'zh' ? '已确认关联' : 'Confirmed relation')
+            : (locale === 'zh' ? '跨会话关联' : 'Cross-session relation');
+    const title = isConfirmed
+        ? relation.description
+        : `${relation.description} · ${locale === 'zh' ? '未推断具体启动调用位置' : 'Exact spawn call was not inferred'}`;
+    return (
+        <span
+            title={title}
+            className="ml-1.5 inline-flex h-4 items-center rounded-sm border border-border bg-background-tertiary px-1 text-[10px] font-medium text-foreground-muted align-middle"
+        >
+            {label}
+        </span>
+    );
+}
+
 type DetailTab = 'timeline' | 'prompt' | 'hooks' | 'overview' | 'skills' | 'infra';
 type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
 
@@ -1404,6 +1425,7 @@ function UnifiedSpanTree({
                             ×{node.parallelCallCount}
                         </span>
                     )}
+                    {node.relation && <CollaborationRelationBadge relation={node.relation} />}
                     {depth > 0 && node.sessionId && ctx.onSubagentNavigate && (
                         <button
                             type="button"
@@ -1577,6 +1599,7 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
+                {event.kind === 'task' && event.relation && <CollaborationRelationBadge relation={event.relation} />}
                 {evAnomalyHits.length > 0 && (
                     <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
                 )}
@@ -2706,6 +2729,24 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
             {/* Body — all sections use CompactSection for consistent truncated-preview + modal pattern */}
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.875rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
                 <RasReliabilityDetails markers={eventAnomalies} />
+
+                {event.relation && (
+                    <div className="rounded-md border border-border bg-background-secondary p-3 text-xs text-foreground-secondary">
+                        <div className="mb-1 font-semibold text-foreground">
+                            {event.relation.sourceType === 'goal-plus-semantic'
+                                ? (locale === 'zh' ? 'Goal Plus 编排关系' : 'Goal Plus orchestration relation')
+                                : (locale === 'zh' ? '跨 Session 关系' : 'Cross-session relation')}
+                        </div>
+                        <div>{event.relation.description}</div>
+                        {event.relation.anchorState !== 'confirmed' && (
+                            <div className="mt-1 text-foreground-muted">
+                                {locale === 'zh'
+                                    ? '该节点来自只读关系投影，未改写原生 Trace，也未推断具体启动调用位置。'
+                                    : 'This node is a read-only relation projection; the native trace and exact spawn position were not changed.'}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (

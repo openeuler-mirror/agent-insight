@@ -6,6 +6,11 @@ import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/s
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { NextResponse } from 'next/server';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
+import { findGoalPlusTraceProjectionMembers } from '@/lib/ingest/collaboration/query';
+import {
+    composeCollaborationTrace,
+    type CollaborationTraceMember,
+} from '@/lib/ingest/collaboration/trace-projection';
 
 type ParsedSession = {
     session: any;
@@ -93,6 +98,33 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
     const value = { session, interactions, langfuseTraceNodes, executionSummary };
     rememberParsedSession(taskId, signature, value);
     return value;
+}
+
+async function loadCollaborationProjection(taskId: string, parsed: ParsedSession) {
+    const user = typeof parsed.session?.user === 'string' ? parsed.session.user : '';
+    if (!user) return null;
+    const refs = await findGoalPlusTraceProjectionMembers(user, taskId);
+    if (!refs.members.length) return null;
+
+    const loadedMembers = await Promise.all(refs.members.map(async (ref): Promise<CollaborationTraceMember | null> => {
+        const child = await loadParsedSession(ref.taskId);
+        if (!child || child.session?.user !== user) return null;
+        return {
+            ...ref,
+            interactions: child.interactions,
+            query: child.session?.query,
+        };
+    }));
+    const members = loadedMembers.filter((member): member is CollaborationTraceMember => member !== null);
+    const missingMembers = refs.members.length - members.length;
+    const projection = composeCollaborationTrace(parsed.interactions, members);
+    if (!projection.includedMembers) return null;
+    return {
+        ...projection,
+        truncated: projection.truncated || refs.truncated || missingMembers > 0,
+        availableMembers: refs.members.length,
+        sourceType: 'goal-plus-semantic',
+    };
 }
 
 function previewText(value: unknown, maxChars = 240): unknown {
@@ -236,16 +268,18 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
         const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
+        const collaborationProjection = await loadCollaborationProjection(taskId, parsed);
+        const displayInteractions = collaborationProjection?.interactions || interactions;
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);
-            if (!Number.isInteger(index) || index < 0 || index >= interactions.length) {
+            if (!Number.isInteger(index) || index < 0 || index >= displayInteractions.length) {
                 return NextResponse.json({ error: 'Interaction index out of range' }, { status: 400 });
             }
             return NextResponse.json({
                 taskId: session.taskId,
                 index,
-                interaction: interactions[index],
+                interaction: displayInteractions[index],
             });
         }
 
@@ -256,9 +290,17 @@ export async function GET(request: Request) {
                 query: session.query,
                 user: session.user,
                 startTime: session.startTime.getTime(),
-                interactionCount: interactions.length,
-                interactions: toTraceStructureInteractions(interactions),
+                interactionCount: displayInteractions.length,
+                interactions: toTraceStructureInteractions(displayInteractions),
                 execution: executionSummary,
+                ...(collaborationProjection ? {
+                    collaborationProjection: {
+                        sourceType: collaborationProjection.sourceType,
+                        includedMembers: collaborationProjection.includedMembers,
+                        availableMembers: collaborationProjection.availableMembers,
+                        truncated: collaborationProjection.truncated,
+                    },
+                } : {}),
                 ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
             });
         }
@@ -266,7 +308,15 @@ export async function GET(request: Request) {
         if (view === 'interactions') {
             return NextResponse.json({
                 taskId: session.taskId,
-                interactions,
+                interactions: displayInteractions,
+                ...(collaborationProjection ? {
+                    collaborationProjection: {
+                        sourceType: collaborationProjection.sourceType,
+                        includedMembers: collaborationProjection.includedMembers,
+                        availableMembers: collaborationProjection.availableMembers,
+                        truncated: collaborationProjection.truncated,
+                    },
+                } : {}),
             });
         }
 
@@ -289,7 +339,15 @@ export async function GET(request: Request) {
             query,
             user: session.user,
             startTime: session.startTime.getTime(),
-            interactions,
+            interactions: displayInteractions,
+            ...(collaborationProjection ? {
+                collaborationProjection: {
+                    sourceType: collaborationProjection.sourceType,
+                    includedMembers: collaborationProjection.includedMembers,
+                    availableMembers: collaborationProjection.availableMembers,
+                    truncated: collaborationProjection.truncated,
+                },
+            } : {}),
             ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
         });
     } catch (e) {

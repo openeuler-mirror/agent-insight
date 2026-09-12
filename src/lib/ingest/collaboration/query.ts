@@ -1,5 +1,21 @@
 import { prismaRaw } from '@/lib/storage/prisma';
 
+export interface GoalPlusTraceProjectionMemberRef {
+  eventId: string;
+  taskId: string;
+  executionId: string;
+  agentName: string;
+  framework: string | null;
+  description: string;
+  sourceType: string;
+  relationKind?: string;
+  anchorState: string;
+  role?: string;
+  timestamp: Date;
+}
+
+const GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT = 51;
+
 function parseJson<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
   try { return JSON.parse(value) as T; } catch { return fallback; }
@@ -132,5 +148,80 @@ export async function getCollaboration(user: string, collaborationId: string) {
     updatedAt: collaboration.updatedAt,
     nodes,
     events,
+  };
+}
+
+export async function findGoalPlusTraceProjectionMembers(
+  user: string,
+  rootTaskId: string,
+): Promise<{ members: GoalPlusTraceProjectionMemberRef[]; truncated: boolean }> {
+  const rootExecutions = await prismaRaw.execution.findMany({
+    where: { user, taskId: rootTaskId },
+    select: { id: true },
+  });
+  const rootExecutionIds = rootExecutions.map(execution => execution.id);
+  if (!rootExecutionIds.length) return { members: [], truncated: false };
+
+  const events = await prismaRaw.collaborationEvent.findMany({
+    where: {
+      sourceType: 'goal-plus-semantic',
+      relationKind: 'orchestrated',
+      collaboration: { user },
+      endpointResolutions: {
+        some: {
+          side: 'from',
+          linkState: 'linked',
+          executionId: { in: rootExecutionIds },
+        },
+      },
+    },
+    orderBy: [{ receivedAt: 'asc' }, { eventId: 'asc' }],
+    take: GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT,
+    include: {
+      endpointResolutions: {
+        where: { linkState: 'linked', side: { in: ['from', 'to'] } },
+        include: {
+          execution: {
+            select: {
+              id: true,
+              taskId: true,
+              user: true,
+              framework: true,
+              agentName: true,
+              subagentName: true,
+              timestamp: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const members: GoalPlusTraceProjectionMemberRef[] = [];
+  for (const event of events.slice(0, GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT - 1)) {
+    const from = event.endpointResolutions.find(resolution => (
+      resolution.side === 'from' && resolution.executionId && rootExecutionIds.includes(resolution.executionId)
+    ));
+    const to = event.endpointResolutions.find(resolution => resolution.side === 'to');
+    const execution = to?.execution;
+    if (!from || !execution?.taskId || execution.user !== user || rootExecutionIds.includes(execution.id)) continue;
+    members.push({
+      eventId: event.eventId,
+      taskId: execution.taskId,
+      executionId: execution.id,
+      agentName: execution.agentName || execution.subagentName || event.role || execution.framework || 'Worker Agent',
+      framework: execution.framework,
+      description: event.description || `Goal Plus 编排 ${event.role || 'worker'}`,
+      sourceType: event.sourceType,
+      relationKind: event.relationKind || undefined,
+      anchorState: from.anchorState || 'not_provided',
+      role: event.role || undefined,
+      timestamp: execution.timestamp,
+    });
+  }
+  members.sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime() || left.eventId.localeCompare(right.eventId));
+  return {
+    members,
+    truncated: events.length >= GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT,
   };
 }

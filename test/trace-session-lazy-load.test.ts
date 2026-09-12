@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { toTraceStructureInteractions } from '@/app/api/observe/session/route';
-import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, type RawInteraction } from '@/lib/engine/observability/agent-trace';
+import { composeCollaborationTrace } from '@/lib/ingest/collaboration/trace-projection';
 import {
     extractSkillsWithVersionsFromHermesSession,
     normalizeInteractions,
@@ -98,10 +99,37 @@ test('single interaction lazy load preserves top-level skill calls', () => {
     const afterSingleLoad = structure.map((interaction, index) => (
         index === 1 ? interactions[index] : interaction
     ));
-    const extractSkills = (source: any[]) => extractSkillsWithVersionsFromHermesSession(
+    const extractSkills = (source: RawInteraction[]) => extractSkillsWithVersionsFromHermesSession(
         normalizeInteractions(source),
     );
 
     assert.deepEqual(extractSkills(structure), [{ name: 'hermes-agent', version: null }]);
     assert.deepEqual(extractSkills(afterSingleLoad), [{ name: 'hermes-agent', version: null }]);
+});
+
+test('lazy trace structure preserves a Goal Plus projected worker subtree and provenance', () => {
+    const projection = composeCollaborationTrace(
+        [{ role: 'user', agent: 'Goal Plus 主 Agent', content: '开始优化', timestamp: 1000 }],
+        [{
+            eventId: 'evt-worker',
+            taskId: 'goal-plus:source:worker',
+            executionId: 'worker-execution',
+            agentName: 'Candidate Worker',
+            interactions: [
+                { role: 'user', content: '搜索候选', timestamp: 1100 },
+                { role: 'assistant', agent: 'Candidate Worker', content: '完成', timestamp: 1200 },
+            ],
+            description: 'Goal Plus 编排 candidate-worker',
+            sourceType: 'goal-plus-semantic',
+            relationKind: 'orchestrated',
+            anchorState: 'not_provided',
+            role: 'candidate-worker',
+        }],
+    );
+
+    const tree = buildAgentCallTree(toTraceStructureInteractions(projection.interactions));
+    assert.equal(tree?.children.length, 1);
+    assert.equal(tree?.children[0].sessionId, 'goal-plus:source:worker');
+    assert.equal(tree?.children[0].relation?.sourceType, 'goal-plus-semantic');
+    assert.equal(tree?.events.find(event => event.kind === 'task')?.relation?.anchorState, 'not_provided');
 });

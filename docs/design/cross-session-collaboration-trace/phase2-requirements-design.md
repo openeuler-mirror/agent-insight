@@ -53,7 +53,7 @@ fromLocator 支持工具名完全匹配和已识别 Shell 工具的命令片段�
 - 数量不等、时间缺失或来源不可信时为 `ambiguous`。
 - 无定位条件但既有 Execution 具有直接父子关系时可复用为 `confirmed`。
 
-所有位置结果只服务协作视图，不改写 Execution。
+所有位置结果只服务只读协作展示，不改写 Execution。
 
 ## 5. Goal Plus 投影
 
@@ -86,6 +86,16 @@ eventId         = evt_gp_ + sha256(sourceId, goalPlusId, orchestrated,
 - `POST /api/observe/collaborations/relink`：按协作重算 reported 端点。
 
 Execution 保存后只重算端点 ID 命中该 Execution 的 reported 事件；Goal Plus 先重跑确定性链接再重建对应关系投影。
+
+### Goal Plus 主 Trace 内嵌展示
+
+通用 Trace 详情可复用已经 linked 的 Goal Plus `orchestrated` 关系，在查询响应中把独立 worker Session 合成为虚拟 TASK 与子 Agent 子树。该展示遵守以下边界：
+
+- 只处理主、worker 两端均已唯一关联的 Goal Plus 内部关系；不读取 pending、ambiguous 或 superseded 端点。
+- 合成 interaction 只存在于响应内，带来源与锚点状态，不写回 Session / Execution / Collaboration。
+- Goal Plus 没有原生 spawn 锚点时，虚拟 TASK 仅表示“编排成员关系”，不插入或绑定到某一次原生工具调用。
+- 子节点保留 worker `taskId`，允许继续打开独立 Trace；原生列表、评估与导出数据口径保持不变。
+- 单次投影设成员数和交互数上限，截断状态通过响应元数据显式返回。
 
 ## 7. 安全与故障隔离
 
