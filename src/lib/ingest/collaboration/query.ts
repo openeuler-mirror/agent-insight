@@ -16,6 +16,21 @@ export interface GoalPlusTraceProjectionMemberRef {
   timestamp: Date;
 }
 
+export type GoalPlusTraceRootResolution = 'exact-link' | 'pi-task-alias';
+
+export interface GoalPlusTraceProjectionMembers {
+  members: GoalPlusTraceProjectionMemberRef[];
+  truncated: boolean;
+  rootResolution?: GoalPlusTraceRootResolution;
+}
+
+type GoalPlusProjectionMain = {
+  sourceDbId: string;
+  goalDbId: string;
+  source: { sourceId: string };
+  goal: { goalPlusId: string } | null;
+};
+
 const GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT = 51;
 
 export function goalPlusProjectedWorkerExecutionWhere(user?: string) {
@@ -44,6 +59,90 @@ export function goalPlusProjectedWorkerExecutionWhere(user?: string) {
 function parseJson<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
   try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+export function parsePiTaskSessionId(taskId: string): { baseSessionId: string; taskIndex: number } | null {
+  const match = /^(.+)__task(\d+)$/.exec(taskId.trim());
+  if (!match?.[1]) return null;
+  const taskIndex = Number(match[2]);
+  return Number.isSafeInteger(taskIndex) ? { baseSessionId: match[1], taskIndex } : null;
+}
+
+function goalPlusMainSessionIds(raw: string | null): Set<string> {
+  const active = parseJson<Record<string, unknown>>(raw, {});
+  const sessions = [
+    active,
+    ...(Array.isArray(active.mainSessions)
+      ? active.mainSessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
+      : []),
+    ...(Array.isArray(active.main_sessions)
+      ? active.main_sessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
+      : []),
+  ];
+  const ids = new Set<string>();
+  for (const session of sessions) {
+    for (const key of ['sessionId', 'session_id', 'nativeSessionId', 'native_session_id']) {
+      const value = session[key];
+      if (typeof value === 'string' && value.trim()) ids.add(value.trim());
+    }
+  }
+  return ids;
+}
+
+function isGoalPlusMainQuery(query: string | null | undefined): boolean {
+  return /^\s*\/goal-plus(?:\s|$)/i.test(query || '');
+}
+
+async function resolvePiTaskAliasMain(
+  user: string,
+  rootTaskId: string,
+  rootQuery: string | null | undefined,
+  rootExecutions: Array<{ framework: string | null }>,
+): Promise<GoalPlusProjectionMain | null> {
+  const alias = parsePiTaskSessionId(rootTaskId);
+  if (!alias || !rootExecutions.length || rootExecutions.some(execution => execution.framework !== 'pi-agent')) {
+    return null;
+  }
+  if (!isGoalPlusMainQuery(rootQuery)) return null;
+
+  const possibleGoals = await prismaRaw.goalPlusGoal.findMany({
+    where: {
+      source: { user },
+      activeSessionJson: { contains: alias.baseSessionId },
+    },
+    select: {
+      id: true,
+      sourceDbId: true,
+      goalPlusId: true,
+      activeSessionJson: true,
+      source: { select: { sourceId: true } },
+    },
+  });
+  const matchingGoals = possibleGoals.filter(goal => (
+    goalPlusMainSessionIds(goal.activeSessionJson).has(alias.baseSessionId)
+  ));
+  if (matchingGoals.length !== 1) return null;
+
+  const goal = matchingGoals[0];
+  const activeMainLinks = await prismaRaw.goalPlusExecutionLink.findMany({
+    where: {
+      sourceDbId: goal.sourceDbId,
+      goalDbId: goal.id,
+      role: 'main',
+      linkState: { in: ['linked', 'ambiguous'] },
+      source: { user },
+    },
+    select: { executionId: true, linkState: true },
+  });
+  const candidates = [...new Map(activeMainLinks.map(link => [link.executionId, link])).values()];
+  if (candidates.length !== 1 || candidates[0].linkState !== 'linked') return null;
+
+  return {
+    sourceDbId: goal.sourceDbId,
+    goalDbId: goal.id,
+    source: goal.source,
+    goal: { goalPlusId: goal.goalPlusId },
+  };
 }
 
 export async function listCollaborations(user: string, options: { limit?: number; cursor?: string } = {}) {
@@ -179,10 +278,11 @@ export async function getCollaboration(user: string, collaborationId: string) {
 export async function findGoalPlusTraceProjectionMembers(
   user: string,
   rootTaskId: string,
-): Promise<{ members: GoalPlusTraceProjectionMemberRef[]; truncated: boolean }> {
+  rootQuery?: string | null,
+): Promise<GoalPlusTraceProjectionMembers> {
   const rootExecutions = await prismaRaw.execution.findMany({
     where: { user, taskId: rootTaskId },
-    select: { id: true },
+    select: { id: true, framework: true },
   });
   const rootExecutionIds = rootExecutions.map(execution => execution.id);
   if (!rootExecutionIds.length) return { members: [], truncated: false };
@@ -202,33 +302,42 @@ export async function findGoalPlusTraceProjectionMembers(
       goal: { select: { goalPlusId: true } },
     },
   });
-  if (!rootMainLinks.length) return { members: [], truncated: false };
-
-  const candidateGoalIds = [...new Set(rootMainLinks
-    .map(link => link.goalDbId)
-    .filter((id): id is string => Boolean(id)))];
-  const activeMainLinks = await prismaRaw.goalPlusExecutionLink.findMany({
-    where: {
-      goalDbId: { in: candidateGoalIds },
-      role: 'main',
-      linkState: { in: ['linked', 'ambiguous'] },
-      source: { user },
-    },
-    select: { goalDbId: true, executionId: true, linkState: true },
-  });
-  const validGoalIds = new Set(candidateGoalIds.filter(goalDbId => {
-    const candidates = [...new Map(activeMainLinks
-      .filter(link => link.goalDbId === goalDbId)
-      .map(link => [link.executionId, link])).values()];
-    return candidates.length === 1
-      && candidates[0].linkState === 'linked'
-      && rootExecutionIds.includes(candidates[0].executionId);
-  }));
-  if (!validGoalIds.size) return { members: [], truncated: false };
-
-  const mainByGoal = new Map(rootMainLinks
-    .filter(link => link.goalDbId && validGoalIds.has(link.goalDbId))
-    .map(link => [link.goalDbId as string, link]));
+  let rootResolution: GoalPlusTraceRootResolution;
+  let mainByGoal: Map<string, GoalPlusProjectionMain>;
+  let validGoalIds: Set<string>;
+  if (rootMainLinks.length) {
+    const candidateGoalIds = [...new Set(rootMainLinks
+      .map(link => link.goalDbId)
+      .filter((id): id is string => Boolean(id)))];
+    const activeMainLinks = await prismaRaw.goalPlusExecutionLink.findMany({
+      where: {
+        goalDbId: { in: candidateGoalIds },
+        role: 'main',
+        linkState: { in: ['linked', 'ambiguous'] },
+        source: { user },
+      },
+      select: { goalDbId: true, executionId: true, linkState: true },
+    });
+    validGoalIds = new Set(candidateGoalIds.filter(goalDbId => {
+      const candidates = [...new Map(activeMainLinks
+        .filter(link => link.goalDbId === goalDbId)
+        .map(link => [link.executionId, link])).values()];
+      return candidates.length === 1
+        && candidates[0].linkState === 'linked'
+        && rootExecutionIds.includes(candidates[0].executionId);
+    }));
+    if (!validGoalIds.size) return { members: [], truncated: false };
+    mainByGoal = new Map(rootMainLinks
+      .filter(link => link.goalDbId && validGoalIds.has(link.goalDbId))
+      .map(link => [link.goalDbId as string, { ...link, goalDbId: link.goalDbId as string }]));
+    rootResolution = 'exact-link';
+  } else {
+    const aliasMain = await resolvePiTaskAliasMain(user, rootTaskId, rootQuery, rootExecutions);
+    if (!aliasMain) return { members: [], truncated: false };
+    validGoalIds = new Set([aliasMain.goalDbId]);
+    mainByGoal = new Map([[aliasMain.goalDbId, aliasMain]]);
+    rootResolution = 'pi-task-alias';
+  }
   const sessions = await prismaRaw.goalPlusAgentSession.findMany({
     where: {
       run: {
@@ -299,5 +408,6 @@ export async function findGoalPlusTraceProjectionMembers(
   return {
     members,
     truncated: sessions.length >= GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT,
+    rootResolution,
   };
 }

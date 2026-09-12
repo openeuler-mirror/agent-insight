@@ -30,7 +30,7 @@ Goal Plus 走更严格的内部路径：只消费 `GoalPlusExecutionLink`，逻�
 
 ## Goal Plus Trace 只读投影
 
-通用 Trace 详情读取 `/api/observe/session` 时，会调用 `findGoalPlusTraceProjectionMembers`，直接从 `GoalPlusExecutionLink` 选择唯一 linked 的主 Execution，并读取同一 Goal 下唯一 linked 的 worker Session。详情投影不依赖 `CollaborationEvent` 是否已物化；关系事件仍用于独立协作查询和审计。随后 `composeCollaborationTrace` 在响应内追加一个带 `trace_synthetic`、`trace_relation` 元数据的虚拟 TASK，以及 worker 原生交互的展示副本，现有 Agent Tree 因此可以渲染 `TASK → AGENT → LLM/TOOL` 层级。`full`、`structure`、`interactions` 和按索引读取单条 interaction 使用同一套确定性投影，避免懒加载时结构索引与正文错位。
+通用 Trace 详情读取 `/api/observe/session` 时，会调用 `findGoalPlusTraceProjectionMembers`，直接从 `GoalPlusExecutionLink` 选择唯一 linked 的主 Execution，并读取同一 Goal 下唯一 linked 的 worker Session。详情投影不依赖 `CollaborationEvent` 是否已物化；关系事件仍用于独立协作查询和审计。Pi 原生 collector 会把基础 Session 拆为 `<nativeSessionId>__taskN`；当当前 Trace 是 `pi-agent`、query 明确以 `/goal-plus` 开头、基础 Session ID 只命中一个 Goal 且该 Goal 仍有唯一权威 main link 时，读侧允许以 `pi-task-alias` 复用该 Goal。精确 main link 始终优先，普通 Pi 任务、多个 Goal 命中或 main link 歧义均不使用别名。随后 `composeCollaborationTrace` 在响应内追加一个带 `trace_synthetic`、`trace_relation` 元数据的虚拟 TASK，以及 worker 原生交互的展示副本，现有 Agent Tree 因此可以渲染 `TASK → AGENT → LLM/TOOL` 层级。`full`、`structure`、`interactions` 和按索引读取单条 interaction 使用同一套确定性投影，避免懒加载时结构索引与正文错位；响应以 `collaborationProjection.rootResolution=exact-link|pi-task-alias` 标明根节点解析方式。
 
 该投影只存在于 API 响应，不写回 Session、Execution 或 Collaboration 表，不修改 `parentExecutionId` / `rootExecutionId`，也不影响原生 Trace 的查询、评估和完整度。虚拟 TASK 追加在主 Trace 原生交互之后，因为 Goal Plus 语义只能证明编排成员关系，不能证明它位于某一次原生工具调用；前端必须显示“Goal Plus 编排”来源，并在 `anchorState != confirmed` 时明确未推断具体启动位置。主端歧义、任一端 pending/superseded、worker Session 缺失或跨用户时不合并。
 

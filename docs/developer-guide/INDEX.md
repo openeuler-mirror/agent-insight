@@ -22,7 +22,7 @@ Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评
 
 Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语义 ingest、领域查询与完整度展示；Pi passive importer 使用独立持久化断点，只追加新增或修订事件。服务端对 `goal-plus:` session 启用持久化精确去重、并发锁、写入上限和流式聚合边界，并提供默认只读的历史 spool 修复工具。共享 uploader lock 支持原子发布及旧空锁、损坏锁、本机死进程锁恢复；Goal Plus Pi 上传采用最新分区优先和单轮有界策略，并暴露阻塞原因。Pi RPC Worker 区分受控交接终止与真实超时或 runner 错误；独立接入的 Pi 保持原有 oldest-first 和完整 backlog 处理语义。当前入口暂时隐藏，后端接入与查询能力保留。
 
-当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；支持显式 Session 到 Trace 绑定、原始调用步骤定位、迟到 Trace 自动重算，以及 Goal Plus 逻辑主节点到 worker 成员的服务端投影。Goal Plus 仅在唯一主 Trace 时关联具体 Execution，多主会话保持歧义，且不修改原生树或完整性口径；独立协作入口暂不开放，通用 Trace 的仅主列表隐藏已投影 worker，详情直接从既有 Goal Plus 精确关联只读生成带来源标识的 TASK / 子 Agent 树。
+当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；支持显式 Session 到 Trace 绑定、原始调用步骤定位、迟到 Trace 自动重算，以及 Goal Plus 逻辑主节点到 worker 成员的服务端投影。Goal Plus 仅在唯一主 Trace 时关联具体 Execution，多主会话保持歧义，且不修改原生树或完整性口径；独立协作入口暂不开放，通用 Trace 的仅主列表隐藏已投影 worker，详情直接从既有 Goal Plus 精确关联只读生成带来源标识的 TASK / 子 Agent 树。Pi 的 `<nativeSessionId>__taskN` 主任务仅在明确 `/goal-plus` 且唯一命中时作为只读显示别名，通用 reported collaboration 行为不变。
 
 **如何更新：** `git diff f0140594 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 

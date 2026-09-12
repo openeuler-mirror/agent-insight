@@ -161,7 +161,7 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
 
-当 Goal Plus 语义关系已经把一个唯一主 Trace 与 worker Trace 确定关联后，**仅主 Agent** 列表只显示主 Trace，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。主 Trace 不唯一、worker 尚未到达或端点关联存在歧义时，平台保持原来的独立 Session 展示，不做猜测性合并。
+当 Goal Plus 语义关系已经把一个唯一主 Trace 与 worker Trace 确定关联后，**仅主 Agent** 列表只显示主 Trace，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。Pi 将同一原生 Session 的任务保存为 `<sessionId>__taskN` 时，明确由 `/goal-plus` 启动且只对应一个 Goal 的主任务也会显示同一子树。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。主 Trace 不唯一、worker 尚未到达、普通 Pi 任务或端点关联存在歧义时，平台保持原来的独立 Session 展示，不做猜测性合并。
 
 任务完成度、轨迹质量等预置评估器生成的 `direct-llm` Trace，会以本次评估模型请求发出前和响应返回后的时间作为起止点。根 Agent、LLM Span、Session 和列表耗时使用同一次请求的时间窗口，因此新产生的评估 Trace 不会再因写库时间代替模型调用时间而显示为 `0ms`。修复前已经保存且缺少原始起止时间的历史 Trace 无法可靠反推真实耗时，不会自动补算。
 

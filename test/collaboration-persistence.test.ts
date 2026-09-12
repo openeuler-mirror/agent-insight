@@ -226,6 +226,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   const {
     findGoalPlusTraceProjectionMembers,
     goalPlusProjectedWorkerExecutionWhere,
+    parsePiTaskSessionId,
   } = await import('@/lib/ingest/collaboration/query');
   const { CollaborationStore, sqlDatabase } = await import('@/lib/collaboration/store');
   const { CollaborationService } = await import('@/lib/collaboration/service');
@@ -381,6 +382,14 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       status: 'running',
       phase: 'search',
       goalDigest: 'digest',
+      activeSessionJson: JSON.stringify({
+        sessionId: 'goal-plus:gpsrc-projection:main-projection',
+        nativeSessionId: 'pi-native-main',
+        mainSessions: [{
+          sessionId: 'goal-plus:gpsrc-projection:main-projection',
+          nativeSessionId: 'pi-native-main',
+        }],
+      }),
       observedAt: new Date('2026-09-12T00:00:00Z'),
     },
   });
@@ -448,6 +457,56 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.equal(traceProjection.members.length, 1);
   assert.equal(traceProjection.members[0].taskId, 'goal-plus:gpsrc-projection:worker-projection');
   assert.equal(traceProjection.members[0].anchorState, 'not_provided');
+  assert.equal(traceProjection.rootResolution, 'exact-link');
+  assert.deepEqual(parsePiTaskSessionId('pi-native-main__task12'), {
+    baseSessionId: 'pi-native-main',
+    taskIndex: 12,
+  });
+  assert.equal(parsePiTaskSessionId('pi-native-main'), null);
+
+  await prismaRaw.$executeRawUnsafe(
+    'INSERT INTO "Execution" ("id", "taskId", "user", "framework") VALUES (?, ?, ?, ?)',
+    'goal-main-pi-task', 'pi-native-main__task0', 'alice', 'pi-agent',
+  );
+  await prismaRaw.session.create({
+    data: {
+      taskId: 'pi-native-main__task0',
+      user: 'alice',
+      query: '/goal-plus optimize projection',
+      interactions: '[]',
+    },
+  });
+  const piAliasProjection = await findGoalPlusTraceProjectionMembers(
+    'alice',
+    'pi-native-main__task0',
+    '/goal-plus optimize projection',
+  );
+  assert.equal(piAliasProjection.members.length, 1);
+  assert.equal(piAliasProjection.rootResolution, 'pi-task-alias');
+  const ordinaryPiProjection = await findGoalPlusTraceProjectionMembers(
+    'alice',
+    'pi-native-main__task0',
+    'ordinary Pi task',
+  );
+  assert.equal(ordinaryPiProjection.members.length, 0);
+  await prismaRaw.goalPlusGoal.create({
+    data: {
+      sourceDbId: source.id,
+      goalPlusId: 'goal-projection-alias-conflict',
+      currentRevision: 1,
+      status: 'running',
+      phase: 'search',
+      goalDigest: 'digest-conflict',
+      activeSessionJson: JSON.stringify({ nativeSessionId: 'pi-native-main' }),
+      observedAt: new Date('2026-09-12T00:00:01Z'),
+    },
+  });
+  const ambiguousPiAliasProjection = await findGoalPlusTraceProjectionMembers(
+    'alice',
+    'pi-native-main__task0',
+    '/goal-plus optimize projection',
+  );
+  assert.equal(ambiguousPiAliasProjection.members.length, 0);
   const projectedWorkerWhere = goalPlusProjectedWorkerExecutionWhere('alice');
   const rootList = await prismaRaw.execution.findMany({
     where: { user: 'alice', isSubagent: false, AND: [{ NOT: projectedWorkerWhere }] },

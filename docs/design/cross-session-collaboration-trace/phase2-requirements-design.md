@@ -98,6 +98,7 @@ Execution 保存后只重算端点 ID 命中该 Execution 的 reported 事件；
 - 单次投影设成员数和交互数上限，截断状态通过响应元数据显式返回。
 - Goal Plus 内嵌树直接读取既有 `GoalPlusExecutionLink` 的唯一关联，不以 `CollaborationEvent` 已经物化为前提；两者使用相同的确定性身份和可信度边界。
 - 通用 Trace 列表的仅主范围隐藏已投影 worker，仅子范围仍可检索 worker；该分类是查询覆盖层，不回写 `isSubagent`。
+- Pi 原生 `<nativeSessionId>__taskN` 仅在框架为 `pi-agent`、query 明确为 `/goal-plus`、基础 Session 唯一命中 Goal 且权威 main link 唯一时作为只读根别名；精确 link 优先，歧义时关闭别名。该兼容逻辑不进入 reported collaboration 解析器。
 
 ## 7. 安全与故障隔离
 

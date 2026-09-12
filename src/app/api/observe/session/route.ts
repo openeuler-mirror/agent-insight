@@ -103,9 +103,14 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
 async function loadCollaborationProjection(taskId: string, parsed: ParsedSession) {
     const user = typeof parsed.session?.user === 'string' ? parsed.session.user : '';
     if (!user) return null;
+    const storedQuery = typeof parsed.session?.query === 'string' ? parsed.session.query.trim() : '';
+    const interactionQuery = parsed.interactions.find(interaction => (
+        interaction?.role === 'user' && typeof interaction?.content === 'string' && interaction.content.trim()
+    ))?.content;
+    const rootQuery = storedQuery || interactionQuery || null;
     let refs;
     try {
-        refs = await findGoalPlusTraceProjectionMembers(user, taskId);
+        refs = await findGoalPlusTraceProjectionMembers(user, taskId, rootQuery);
     } catch (error) {
         console.warn(`[Session-API] Goal Plus trace projection unavailable for task=${taskId}:`, error);
         return null;
@@ -130,6 +135,7 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
         truncated: projection.truncated || refs.truncated || missingMembers > 0,
         availableMembers: refs.members.length,
         sourceType: 'goal-plus-semantic',
+        rootResolution: refs.rootResolution,
     };
 }
 
@@ -302,6 +308,7 @@ export async function GET(request: Request) {
                 ...(collaborationProjection ? {
                     collaborationProjection: {
                         sourceType: collaborationProjection.sourceType,
+                        rootResolution: collaborationProjection.rootResolution,
                         includedMembers: collaborationProjection.includedMembers,
                         availableMembers: collaborationProjection.availableMembers,
                         truncated: collaborationProjection.truncated,
@@ -318,6 +325,7 @@ export async function GET(request: Request) {
                 ...(collaborationProjection ? {
                     collaborationProjection: {
                         sourceType: collaborationProjection.sourceType,
+                        rootResolution: collaborationProjection.rootResolution,
                         includedMembers: collaborationProjection.includedMembers,
                         availableMembers: collaborationProjection.availableMembers,
                         truncated: collaborationProjection.truncated,
@@ -349,6 +357,7 @@ export async function GET(request: Request) {
             ...(collaborationProjection ? {
                 collaborationProjection: {
                     sourceType: collaborationProjection.sourceType,
+                    rootResolution: collaborationProjection.rootResolution,
                     includedMembers: collaborationProjection.includedMembers,
                     availableMembers: collaborationProjection.availableMembers,
                     truncated: collaborationProjection.truncated,
