@@ -18,8 +18,9 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
-| 跨 Session 协作 Trace | [cross-session-collaboration-trace](cross-session-collaboration-trace/) | 以不可变关系事件和可重算端点解析连接分散 Session，并由服务端将 Goal Plus 语义成员关系投影为逻辑主节点到 worker 的关系，不改原生 Execution 树 | Feature | 2026-09-12 | ✅ 后端与 Goal Plus 投影已实现，前端暂不开放 | —（待补） |
+| 跨 Session 协作 Trace | [cross-session-collaboration-trace](cross-session-collaboration-trace/) | 以不可变关系事件和可重算端点解析连接分散 Session，并由服务端将 Goal Plus 语义成员关系投影为逻辑主节点到 worker 的关系，不改原生 Execution 树 | Feature | 2026-09-12 | ✅ 已与协作上报、显式绑定及步骤定位实现兼容合并，前端暂不开放 | —（待补） |
 | Goal Plus 观测接入 | [goal-plus-observability](goal-plus-observability/) | 以只读 `.gp` 语义快照和 Codex/Pi 原生 Trace 双通道构建 Goal、Run、Candidate、Iteration 与 Execution 的确定性关联，并独立呈现完整度和保真度 | Feature | 2026-09-02 | 🟡 已补 Pi 主对话、全 worker 与无截断 native 正文，待真实宿主及浏览器验收 | —（待补） |
+| 跨 Session 调用关系 | [cross-session-collaboration](cross-session-collaboration/) | 独立关系上报、会话绑定、后端调用链和步骤定位，无 UI 改动 | Feature | 2026-09-11 | ✅ 后端已与端点重算及 Goal Plus 投影兼容合并，待真实框架与浏览器验证 | — |
 | 自定义评估器数据集输入变量 | [custom-evaluator-dataset-input](custom-evaluator-dataset-input/) | 新增 `dataset_input` Judge 变量与确定性数据集匹配门控，保存实验数据集输入快照，并统一“预期输出”展示术语 | Feature | 2026-08-27 | 🟡 代码与自动化验证完成，待浏览器验收 | —（待补） |
 | IDaaS OAuth 登录 | [idaas-oauth-login](idaas-oauth-login/) | 新增与历史组织集成完全隔离的 OAuth 2.0 授权码登录，以 IDaaS UUID 映射本地用户，保护 callback 凭据、保留通用退出入口，并提供默认关闭的欧盟地区访问限制 | Feature | 2026-08-27 | 🟡 代码与专项测试完成，待浏览器验收 | —（待补） |
 | DeepSeek Harness 观测接入 | [deepseek-harness-observability](deepseek-harness-observability/) | 复用 Harness 官方 Session Telemetry，以 Agent Insight 插件完成认证、脱敏和截断，并通过专用 OTLP Logs spool/adapter 生成 Trace、Tool、Skill 与子 Session 观测数据 | Feature | 2026-08-21 | 🟡 实现中 | —（待补） |

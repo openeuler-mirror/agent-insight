@@ -27,7 +27,7 @@ export interface CollaborationPersistResult {
   eventDbId: string;
   collaborationId: string;
   eventId: string;
-  receivedAt: Date;
+  receivedAt: string;
 }
 
 export class CollaborationConflictError extends Error {
@@ -69,12 +69,15 @@ export async function ensureCollaborationRecord(
     if (bySource) return bySource;
   }
   try {
+    const now = new Date().toISOString();
     return await prismaRaw.collaboration.create({
       data: {
         user,
         collaborationId: metadata.collaborationId,
         sourceType: metadata.sourceType,
         sourceRef: metadata.sourceRef,
+        createdAt: now,
+        updatedAt: now,
       },
       select: { id: true },
     });
@@ -99,7 +102,7 @@ export async function updateCollaborationDiagnostics(
   const collaboration = await ensureCollaborationRecord(user, metadata);
   await prismaRaw.collaboration.update({
     where: { id: collaboration.id },
-    data: { diagnosticsJson: JSON.stringify(diagnostics) },
+    data: { diagnosticsJson: JSON.stringify(diagnostics), updatedAt: new Date().toISOString() },
   });
   return collaboration;
 }
@@ -158,6 +161,8 @@ export async function persistCollaborationEvent(
       event = await prismaRaw.collaborationEvent.create({
         data: {
           collaborationDbId: collaboration.id,
+          user,
+          collaborationId: input.collaborationId,
           eventId: input.eventId,
           fromSessionId: input.fromSessionId,
           toSessionId: input.toSessionId,
@@ -171,6 +176,7 @@ export async function persistCollaborationEvent(
           role: input.role,
           eventBodyJson,
           contentHash,
+          receivedAt: new Date().toISOString(),
           endpointResolutions: {
             create: [
               { side: 'from', linkState: 'pending' },
@@ -182,7 +188,7 @@ export async function persistCollaborationEvent(
       result = 'created';
       await prismaRaw.collaboration.update({
         where: { id: collaboration.id },
-        data: { updatedAt: new Date() },
+        data: { updatedAt: new Date().toISOString() },
         select: { id: true },
       });
     } catch (error) {

@@ -248,12 +248,19 @@ export async function resolveCollaborationEventByDbId(eventDbId: string): Promis
     where: { id: eventDbId },
     include: { collaboration: { select: { user: true } } },
   });
-  if (!event) return;
+  if (!event?.collaboration || !event.collaborationDbId || !event.fromSessionId || !event.toSessionId) return;
+  const storedEvent: StoredEvent = {
+    ...event,
+    collaborationDbId: event.collaborationDbId,
+    fromSessionId: event.fromSessionId,
+    toSessionId: event.toSessionId,
+    collaboration: event.collaboration,
+  };
   await Promise.all([
-    resolveReportedEndpoint(event, 'from'),
-    resolveReportedEndpoint(event, 'to'),
+    resolveReportedEndpoint(storedEvent, 'from'),
+    resolveReportedEndpoint(storedEvent, 'to'),
   ]);
-  await resolveReportedAnchor(event);
+  await resolveReportedAnchor(storedEvent);
 }
 
 export async function resolveCollaboration(

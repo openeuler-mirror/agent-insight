@@ -9,6 +9,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   const temporary = await fsp.mkdtemp(path.join(os.tmpdir(), 'collaboration-persistence-'));
   const databasePath = path.join(temporary, 'test.db');
   process.env.DATABASE_URL = `file:${databasePath}`;
+  process.env.AGENT_INSIGHT_LOG_DIR = temporary;
   t.after(async () => {
     await fsp.rm(temporary, { recursive: true, force: true });
   });
@@ -150,14 +151,16 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       "sourceType" TEXT NOT NULL DEFAULT 'reported',
       "sourceRef" TEXT,
       "diagnosticsJson" TEXT NOT NULL DEFAULT '[]',
-      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "updatedAt" DATETIME NOT NULL
+      "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE UNIQUE INDEX "Collaboration_user_collaborationId_key" ON "Collaboration"("user", "collaborationId");
     CREATE UNIQUE INDEX "Collaboration_user_sourceType_sourceRef_key" ON "Collaboration"("user", "sourceType", "sourceRef");
     CREATE TABLE "CollaborationEvent" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "collaborationDbId" TEXT NOT NULL,
+      "user" TEXT NOT NULL,
+      "collaborationId" TEXT NOT NULL,
       "eventId" TEXT NOT NULL,
       "fromSessionId" TEXT NOT NULL,
       "toSessionId" TEXT NOT NULL,
@@ -169,12 +172,25 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       "sourceRef" TEXT,
       "relationKind" TEXT,
       "role" TEXT,
-      "eventBodyJson" TEXT NOT NULL,
-      "contentHash" TEXT NOT NULL,
-      "receivedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      "bodyJson" TEXT NOT NULL,
+      "bodyHash" TEXT NOT NULL,
+      "receivedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE UNIQUE INDEX "CollaborationEvent_collaborationDbId_eventId_key"
       ON "CollaborationEvent"("collaborationDbId", "eventId");
+    CREATE UNIQUE INDEX "CollaborationEvent_user_collaborationId_eventId_key"
+      ON "CollaborationEvent"("user", "collaborationId", "eventId");
+    CREATE TABLE "CollaborationSessionBinding" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "user" TEXT NOT NULL,
+      "collaborationId" TEXT NOT NULL,
+      "sessionId" TEXT NOT NULL,
+      "traceSessionId" TEXT NOT NULL,
+      "eventClock" TEXT NOT NULL,
+      "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX "CollaborationSessionBinding_user_collaborationId_sessionId_key"
+      ON "CollaborationSessionBinding"("user", "collaborationId", "sessionId");
     CREATE TABLE "CollaborationEndpointResolution" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "eventDbId" TEXT NOT NULL,
@@ -207,6 +223,8 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     goalPlusCollaborationIdentity,
     projectGoalPlusCollaborations,
   } = await import('@/lib/ingest/collaboration/providers/goal-plus');
+  const { CollaborationStore, sqlDatabase } = await import('@/lib/collaboration/store');
+  const { CollaborationService } = await import('@/lib/collaboration/service');
 
   const reported = {
     collaborationId: 'collab_reported',
@@ -224,6 +242,45 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     () => persistCollaborationEvent('alice', { ...reported, description: '修改后的正文' }),
     CollaborationConflictError,
   );
+
+  const reportedStore = new CollaborationStore(sqlDatabase(prismaRaw));
+  const storedByReportedPath = await reportedStore.saveEvent('alice', {
+    collaborationId: 'collab_remote_path',
+    eventId: 'evt_remote_path',
+    fromSessionId: 'remote-session-a',
+    toSessionId: 'remote-session-b',
+    description: '显式 Session 绑定路径',
+  });
+  assert.equal(storedByReportedPath.result, 'created');
+  const compatibleEvent = await prismaRaw.collaborationEvent.findUnique({
+    where: {
+      user_collaborationId_eventId: {
+        user: 'alice', collaborationId: 'collab_remote_path', eventId: 'evt_remote_path',
+      },
+    },
+    include: { endpointResolutions: true },
+  });
+  assert.equal(compatibleEvent?.collaborationDbId !== null, true);
+  assert.equal(compatibleEvent?.endpointResolutions.length, 2);
+
+  const reportedService = new CollaborationService(reportedStore);
+  const serviceResult = await reportedService.report('alice', {
+    collaborationId: 'collab_service_path',
+    eventId: 'evt_service_path',
+    fromSessionId: 'service-session-a',
+    toSessionId: 'service-session-b',
+    description: 'token=service-secret',
+  });
+  assert.equal(serviceResult.result, 'created');
+  assert.equal(serviceResult.endpointResolutions?.from.status, 'unresolved');
+  const serviceEvent = await prismaRaw.collaborationEvent.findUnique({
+    where: {
+      user_collaborationId_eventId: {
+        user: 'alice', collaborationId: 'collab_service_path', eventId: 'evt_service_path',
+      },
+    },
+  });
+  assert.doesNotMatch(serviceEvent?.eventBodyJson || '', /service-secret/);
 
   await resolveCollaborationEventByDbId(created.eventDbId);
   let resolutions = await prismaRaw.collaborationEndpointResolution.findMany({

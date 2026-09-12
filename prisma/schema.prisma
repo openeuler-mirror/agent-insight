@@ -1733,18 +1733,18 @@ model GoalPlusSemanticSnapshot {
 
 // ---------------------------------------------------------------------------
 // Cross-session collaboration trace overlay
-// Design: docs/design/cross-session-collaboration-trace/
+// Designs: docs/design/cross-session-collaboration*/
 // ---------------------------------------------------------------------------
 
 model Collaboration {
-  id              String   @id @default(cuid())
+  id              String  @id @default(cuid())
   user            String
   collaborationId String
-  sourceType      String   @default("reported") // reported | goal-plus-semantic
+  sourceType      String  @default("reported") // reported | goal-plus-semantic
   sourceRef       String?
-  diagnosticsJson String   @default("[]")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  diagnosticsJson String  @default("[]")
+  createdAt       String
+  updatedAt       String  @default(dbgenerated("CURRENT_TIMESTAMP"))
 
   events CollaborationEvent[]
 
@@ -1754,28 +1754,32 @@ model Collaboration {
 }
 
 model CollaborationEvent {
-  id                String        @id @default(cuid())
-  collaborationDbId String
-  collaboration     Collaboration @relation(fields: [collaborationDbId], references: [id], onDelete: Cascade)
+  id                String         @id @default(cuid())
+  collaborationDbId String?
+  collaboration     Collaboration? @relation(fields: [collaborationDbId], references: [id], onDelete: Cascade)
+  user              String
+  collaborationId   String
   eventId           String
-  fromSessionId     String
-  toSessionId       String
-  description       String
+  fromSessionId     String?
+  toSessionId       String?
+  description       String?
   observedAt        DateTime?
   content           String?
   fromLocatorJson   String?
-  sourceType        String        @default("reported") // reported | goal-plus-semantic
+  sourceType        String         @default("reported") // reported | goal-plus-semantic
   sourceRef         String?
   relationKind      String?
   role              String?
-  eventBodyJson     String
-  contentHash       String
-  receivedAt        DateTime      @default(now())
+  eventBodyJson     String         @map("bodyJson")
+  contentHash       String         @map("bodyHash")
+  receivedAt        String
 
   endpointResolutions CollaborationEndpointResolution[]
 
   @@unique([collaborationDbId, eventId])
+  @@unique([user, collaborationId, eventId])
   @@index([collaborationDbId, receivedAt])
+  @@index([user, collaborationId, receivedAt, id])
   @@index([fromSessionId])
   @@index([toSessionId])
   @@index([sourceType, sourceRef])
@@ -1794,9 +1798,21 @@ model CollaborationEndpointResolution {
   anchorState  String?
   anchorJson   String?
   resolvedAt   DateTime?
-  updatedAt    DateTime           @updatedAt
+  updatedAt    DateTime           @default(now()) @updatedAt
 
   @@unique([eventDbId, side])
   @@index([executionId])
   @@index([linkState, updatedAt])
+}
+
+model CollaborationSessionBinding {
+  id              String @id @default(cuid())
+  user            String
+  collaborationId String
+  sessionId       String
+  traceSessionId  String
+  eventClock      String
+  createdAt       String
+
+  @@unique([user, collaborationId, sessionId])
 }

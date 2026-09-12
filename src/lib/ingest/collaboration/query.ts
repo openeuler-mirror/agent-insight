@@ -77,7 +77,7 @@ export async function getCollaboration(user: string, collaborationId: string) {
 
   const events = collaboration.events.map(event => {
     const resolutions = Object.fromEntries(event.endpointResolutions.map(resolution => {
-      const sessionId = resolution.side === 'from' ? event.fromSessionId : event.toSessionId;
+      const sessionId = resolution.side === 'from' ? event.fromSessionId! : event.toSessionId!;
       const current = node(sessionId);
       current.states.add(resolution.linkState);
       if (resolution.execution) {
@@ -97,8 +97,8 @@ export async function getCollaboration(user: string, collaborationId: string) {
         } : {}),
       }];
     }));
-    node(event.fromSessionId);
-    node(event.toSessionId);
+    node(event.fromSessionId!);
+    node(event.toSessionId!);
     return {
       eventId: event.eventId,
       fromSessionId: event.fromSessionId,
