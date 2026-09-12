@@ -464,6 +464,49 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   });
   assert.equal(parsePiTaskSessionId('pi-native-main'), null);
 
+  const activeCanonicalTaskId = 'goal-plus:gpsrc-projection:main-current-projection';
+  await prismaRaw.goalPlusGoal.update({
+    where: { id: goal.id },
+    data: {
+      activeSessionJson: JSON.stringify({
+        sessionId: 'pi-native-main',
+        mainSessions: [
+          { sessionId: 'goal-plus:gpsrc-projection:main-old-projection', nativeSessionId: 'pi-native-old' },
+          { sessionId: activeCanonicalTaskId, nativeSessionId: 'pi-native-main' },
+        ],
+      }),
+    },
+  });
+  await prismaRaw.$executeRawUnsafe(
+    'INSERT INTO "Execution" ("id", "taskId", "user", "framework") VALUES (?, ?, ?, ?)',
+    'goal-main-active-canonical', activeCanonicalTaskId, 'alice', 'pi-agent',
+  );
+  await prismaRaw.session.create({
+    data: {
+      taskId: activeCanonicalTaskId,
+      user: 'alice',
+      query: '/goal-plus optimize projection',
+      interactions: '[]',
+    },
+  });
+  const activeCanonicalProjection = await findGoalPlusTraceProjectionMembers(
+    'alice',
+    activeCanonicalTaskId,
+    '/goal-plus optimize projection',
+  );
+  assert.equal(activeCanonicalProjection.members.length, 1);
+  assert.equal(activeCanonicalProjection.rootResolution, 'active-session-alias');
+  await prismaRaw.$executeRawUnsafe(
+    'INSERT INTO "Execution" ("id", "taskId", "user", "framework") VALUES (?, ?, ?, ?)',
+    'goal-main-stale-canonical', 'goal-plus:gpsrc-projection:main-old-projection', 'alice', 'pi-agent',
+  );
+  const staleCanonicalProjection = await findGoalPlusTraceProjectionMembers(
+    'alice',
+    'goal-plus:gpsrc-projection:main-old-projection',
+    '/goal-plus optimize projection',
+  );
+  assert.equal(staleCanonicalProjection.members.length, 0);
+
   await prismaRaw.$executeRawUnsafe(
     'INSERT INTO "Execution" ("id", "taskId", "user", "framework") VALUES (?, ?, ?, ?)',
     'goal-main-pi-task', 'pi-native-main__task0', 'alice', 'pi-agent',

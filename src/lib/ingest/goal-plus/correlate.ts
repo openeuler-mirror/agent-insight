@@ -58,6 +58,59 @@ export function goalPlusCodexExecutionId(metadata: Record<string, unknown>): str
   return conversationId && turnId ? `${conversationId}:turn:${turnId}` : undefined;
 }
 
+export type GoalPlusMainSessionIdentity = {
+  session: Record<string, unknown>;
+  index: number;
+  exactIds: string[];
+};
+
+function mainSessionExactIds(session: Record<string, unknown>): string[] {
+  return nonempty(
+    goalPlusCodexExecutionId(session),
+    session.sessionId,
+    session.session_id,
+    session.nativeSessionId,
+    session.native_session_id,
+  );
+}
+
+export function goalPlusActiveMainSessionIdentities(
+  active: Record<string, unknown>,
+): GoalPlusMainSessionIdentity[] {
+  const discovered = [
+    ...(Array.isArray(active.mainSessions)
+      ? active.mainSessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
+      : []),
+    ...(Array.isArray(active.main_sessions)
+      ? active.main_sessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
+      : []),
+  ];
+  const activeIds = mainSessionExactIds(active);
+  const discoveredIdentities = discovered
+    .map((session, index) => ({ session, index: index + 1, exactIds: mainSessionExactIds(session) }))
+    .filter(identity => identity.exactIds.length > 0);
+
+  if (activeIds.length > 0) {
+    const activeMatches = discoveredIdentities.filter(identity => (
+      identity.exactIds.some(id => activeIds.includes(id))
+    ));
+    if (activeMatches.length > 0) {
+      return activeMatches.map(identity => ({
+        session: { ...active, ...identity.session },
+        index: identity.index,
+        exactIds: nonempty(...activeIds, ...identity.exactIds),
+      }));
+    }
+    return [{ session: active, index: 0, exactIds: activeIds }];
+  }
+
+  return discoveredIdentities.filter((identity, index, identities) => (
+    identities.findIndex(candidate => (
+      candidate.exactIds.some(id => identity.exactIds.includes(id))
+    )) === index
+  ));
+}
+
 async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<LinkIntent[]> {
   const [goals, sessions] = await Promise.all([
     prismaRaw.goalPlusGoal.findMany({ where: { sourceDbId } }),
@@ -69,23 +122,7 @@ async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<
   const intents: LinkIntent[] = [];
   for (const goal of goals) {
     const active = parseObject(goal.activeSessionJson);
-    const discoveredMain = Array.isArray(active.mainSessions)
-      ? active.mainSessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
-      : [];
-    const mainSessions = [active, ...discoveredMain]
-      .map((session, index) => ({
-        session,
-        index,
-        exactIds: nonempty(
-          goalPlusCodexExecutionId(session),
-          session.sessionId,
-          session.nativeSessionId,
-        ),
-      }))
-      .filter(item => item.exactIds.length > 0)
-      .filter((item, index, items) => items.findIndex(candidate => (
-        candidate.exactIds.some(id => item.exactIds.includes(id))
-      )) === index);
+    const mainSessions = goalPlusActiveMainSessionIdentities(active);
     for (const { session, index, exactIds } of mainSessions) {
       intents.push({
         key: `goal:${goal.id}:main:${index}`,

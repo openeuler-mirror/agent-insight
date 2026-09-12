@@ -1,4 +1,5 @@
 import { prismaRaw } from '@/lib/storage/prisma';
+import { goalPlusActiveMainSessionIdentities } from '@/lib/ingest/goal-plus/correlate';
 
 import { deterministicCollaborationEventId } from './contracts';
 
@@ -16,7 +17,7 @@ export interface GoalPlusTraceProjectionMemberRef {
   timestamp: Date;
 }
 
-export type GoalPlusTraceRootResolution = 'exact-link' | 'pi-task-alias';
+export type GoalPlusTraceRootResolution = 'exact-link' | 'active-session-alias' | 'pi-task-alias';
 
 export interface GoalPlusTraceProjectionMembers {
   members: GoalPlusTraceProjectionMemberRef[];
@@ -68,39 +69,23 @@ export function parsePiTaskSessionId(taskId: string): { baseSessionId: string; t
   return Number.isSafeInteger(taskIndex) ? { baseSessionId: match[1], taskIndex } : null;
 }
 
-function goalPlusMainSessionIds(raw: string | null): Set<string> {
+function goalPlusActiveMainSessionIds(raw: string | null): Set<string> {
   const active = parseJson<Record<string, unknown>>(raw, {});
-  const sessions = [
-    active,
-    ...(Array.isArray(active.mainSessions)
-      ? active.mainSessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
-      : []),
-    ...(Array.isArray(active.main_sessions)
-      ? active.main_sessions.filter(item => item && typeof item === 'object') as Record<string, unknown>[]
-      : []),
-  ];
-  const ids = new Set<string>();
-  for (const session of sessions) {
-    for (const key of ['sessionId', 'session_id', 'nativeSessionId', 'native_session_id']) {
-      const value = session[key];
-      if (typeof value === 'string' && value.trim()) ids.add(value.trim());
-    }
-  }
-  return ids;
+  const identities = goalPlusActiveMainSessionIdentities(active);
+  return identities.length === 1 ? new Set(identities[0].exactIds) : new Set<string>();
 }
 
 function isGoalPlusMainQuery(query: string | null | undefined): boolean {
   return /^\s*\/goal-plus(?:\s|$)/i.test(query || '');
 }
 
-async function resolvePiTaskAliasMain(
+async function resolveGoalPlusSessionAliasMain(
   user: string,
-  rootTaskId: string,
+  sessionId: string,
   rootQuery: string | null | undefined,
   rootExecutions: Array<{ framework: string | null }>,
 ): Promise<GoalPlusProjectionMain | null> {
-  const alias = parsePiTaskSessionId(rootTaskId);
-  if (!alias || !rootExecutions.length || rootExecutions.some(execution => execution.framework !== 'pi-agent')) {
+  if (!sessionId || !rootExecutions.length || rootExecutions.some(execution => execution.framework !== 'pi-agent')) {
     return null;
   }
   if (!isGoalPlusMainQuery(rootQuery)) return null;
@@ -108,7 +93,7 @@ async function resolvePiTaskAliasMain(
   const possibleGoals = await prismaRaw.goalPlusGoal.findMany({
     where: {
       source: { user },
-      activeSessionJson: { contains: alias.baseSessionId },
+      activeSessionJson: { contains: sessionId },
     },
     select: {
       id: true,
@@ -119,7 +104,7 @@ async function resolvePiTaskAliasMain(
     },
   });
   const matchingGoals = possibleGoals.filter(goal => (
-    goalPlusMainSessionIds(goal.activeSessionJson).has(alias.baseSessionId)
+    goalPlusActiveMainSessionIds(goal.activeSessionJson).has(sessionId)
   ));
   if (matchingGoals.length !== 1) return null;
 
@@ -143,6 +128,17 @@ async function resolvePiTaskAliasMain(
     source: goal.source,
     goal: { goalPlusId: goal.goalPlusId },
   };
+}
+
+async function resolvePiTaskAliasMain(
+  user: string,
+  rootTaskId: string,
+  rootQuery: string | null | undefined,
+  rootExecutions: Array<{ framework: string | null }>,
+): Promise<GoalPlusProjectionMain | null> {
+  const alias = parsePiTaskSessionId(rootTaskId);
+  if (!alias) return null;
+  return resolveGoalPlusSessionAliasMain(user, alias.baseSessionId, rootQuery, rootExecutions);
 }
 
 export async function listCollaborations(user: string, options: { limit?: number; cursor?: string } = {}) {
@@ -332,11 +328,15 @@ export async function findGoalPlusTraceProjectionMembers(
       .map(link => [link.goalDbId as string, { ...link, goalDbId: link.goalDbId as string }]));
     rootResolution = 'exact-link';
   } else {
-    const aliasMain = await resolvePiTaskAliasMain(user, rootTaskId, rootQuery, rootExecutions);
+    let aliasMain = await resolveGoalPlusSessionAliasMain(user, rootTaskId, rootQuery, rootExecutions);
+    rootResolution = 'active-session-alias';
+    if (!aliasMain) {
+      aliasMain = await resolvePiTaskAliasMain(user, rootTaskId, rootQuery, rootExecutions);
+      rootResolution = 'pi-task-alias';
+    }
     if (!aliasMain) return { members: [], truncated: false };
     validGoalIds = new Set([aliasMain.goalDbId]);
     mainByGoal = new Map([[aliasMain.goalDbId, aliasMain]]);
-    rootResolution = 'pi-task-alias';
   }
   const sessions = await prismaRaw.goalPlusAgentSession.findMany({
     where: {

@@ -24,6 +24,6 @@
 
 ## 4. 前端展示
 
-通用 Trace 详情复用现有 Agent Tree，直接根据唯一 linked 的 Goal Plus Execution 关系进行只读投影：显示虚拟 TASK、worker 子 Agent 与来源标识，子节点仍可跳转到独立 Trace。仅主 Agent 列表隐藏已投影 worker，仅子 Agent 范围仍可检索 worker；两者都不改写原生 `isSubagent`。Goal Plus provider 额外识别严格的 Pi `<nativeSessionId>__taskN` 主任务别名，不修改通用 reported collaboration provider。没有 confirmed 原生锚点时不得把“编排成员关系”显示成“确定的某次工具调用”。
+通用 Trace 详情复用现有 Agent Tree，直接根据唯一 linked 的 Goal Plus Execution 关系进行只读投影：显示虚拟 TASK、worker 子 Agent 与来源标识，子节点仍可跳转到独立 Trace。仅主 Agent 列表隐藏已投影 worker，仅子 Agent 范围仍可检索 worker；两者都不改写原生 `isSubagent`。Goal Plus provider 额外识别当前 Pi passive canonical main 与严格的 Pi `<nativeSessionId>__taskN` 主任务别名；关联器以 active native/canonical 交集选择当前 main，不修改通用 reported collaboration provider。没有 confirmed 原生锚点时不得把“编排成员关系”显示成“确定的某次工具调用”。
 
 独立协作图页面与导航仍不开放。后续页面应完整区分 `confirmed`、`candidate`、`time_ordered`、`ambiguous` 和 pending。
