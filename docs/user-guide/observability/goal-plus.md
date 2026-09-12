@@ -49,6 +49,8 @@ Pi RPC worker 完成一个 dispatch 后，Goal Plus 会主动关闭常驻 RPC �
 
 当前版本暂不在侧边栏展示 Goal Plus 观测入口，未完成的观测界面不作为当前展示功能对外引导。Goal Plus collector、语义 ingest、原生 Trace 导入、持久化和关联仍正常运行，页面源码也继续保留，供后续完善后重新开放。
 
+服务端还会把每个 Goal 中的逻辑主会话与 worker 投影为跨 Session 协作关系。该能力不要求升级或改造 Goal Plus collector，也不会改变 Pi/Codex 原生 Trace：主 Trace 唯一时关联到具体执行，主 Trace 尚未到达时保留待关联状态，发现多个主会话时明确标记歧义而不会任选一个父级。协作图前端入口本期同样不开放，关系数据和查询接口先保留给后续界面开发。
+
 预留的详情页设计包含：
 
 - 总览：Goal 状态、work-item 依赖、Search run 和关联摘要；

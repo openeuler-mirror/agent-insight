@@ -138,6 +138,10 @@ model Execution {
   // native Execution parent/root tree.
   goalPlusLinks GoalPlusExecutionLink[]
 
+  // Cross-session collaboration only resolves endpoints to an Execution. It
+  // never rewrites the native parent/root tree.
+  collaborationEndpointResolutions CollaborationEndpointResolution[]
+
   @@index([parentExecutionId])
   @@index([rootExecutionId])
   @@index([isSubagent, timestamp])
@@ -1725,4 +1729,74 @@ model GoalPlusSemanticSnapshot {
 
   @@unique([sourceDbId, snapshotId])
   @@index([sourceDbId, kind, objectKey, observedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Cross-session collaboration trace overlay
+// Design: docs/design/cross-session-collaboration-trace/
+// ---------------------------------------------------------------------------
+
+model Collaboration {
+  id              String   @id @default(cuid())
+  user            String
+  collaborationId String
+  sourceType      String   @default("reported") // reported | goal-plus-semantic
+  sourceRef       String?
+  diagnosticsJson String   @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  events CollaborationEvent[]
+
+  @@unique([user, collaborationId])
+  @@unique([user, sourceType, sourceRef])
+  @@index([user, updatedAt])
+}
+
+model CollaborationEvent {
+  id                String        @id @default(cuid())
+  collaborationDbId String
+  collaboration     Collaboration @relation(fields: [collaborationDbId], references: [id], onDelete: Cascade)
+  eventId           String
+  fromSessionId     String
+  toSessionId       String
+  description       String
+  observedAt        DateTime?
+  content           String?
+  fromLocatorJson   String?
+  sourceType        String        @default("reported") // reported | goal-plus-semantic
+  sourceRef         String?
+  relationKind      String?
+  role              String?
+  eventBodyJson     String
+  contentHash       String
+  receivedAt        DateTime      @default(now())
+
+  endpointResolutions CollaborationEndpointResolution[]
+
+  @@unique([collaborationDbId, eventId])
+  @@index([collaborationDbId, receivedAt])
+  @@index([fromSessionId])
+  @@index([toSessionId])
+  @@index([sourceType, sourceRef])
+}
+
+model CollaborationEndpointResolution {
+  id           String             @id @default(cuid())
+  eventDbId    String
+  event        CollaborationEvent @relation(fields: [eventDbId], references: [id], onDelete: Cascade)
+  side         String // from | to
+  executionId  String?
+  execution    Execution?         @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  linkState    String             @default("pending") // pending | linked | ambiguous | superseded
+  linkMethod   String?
+  evidenceJson String             @default("{}")
+  anchorState  String?
+  anchorJson   String?
+  resolvedAt   DateTime?
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([eventDbId, side])
+  @@index([executionId])
+  @@index([linkState, updatedAt])
 }

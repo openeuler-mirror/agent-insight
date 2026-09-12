@@ -22,6 +22,8 @@ Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评
 
 Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语义 ingest、领域查询与完整度展示；Pi passive importer 使用独立持久化断点，只追加新增或修订事件。服务端对 `goal-plus:` session 启用持久化精确去重、并发锁、写入上限和流式聚合边界，并提供默认只读的历史 spool 修复工具。共享 uploader lock 支持原子发布及旧空锁、损坏锁、本机死进程锁恢复；Goal Plus Pi 上传采用最新分区优先和单轮有界策略，并暴露阻塞原因。Pi RPC Worker 区分受控交接终止与真实超时或 runner 错误；独立接入的 Pi 保持原有 oldest-first 和完整 backlog 处理语义。当前入口暂时隐藏，后端接入与查询能力保留。
 
+当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；Goal Plus 在服务端将逻辑主节点与 worker 成员关系投影到该层，唯一主 Trace 才关联具体 Execution，多主会话保持歧义，且不修改原生树或完整性口径。前端入口暂不开放。
+
 **如何更新：** `git diff 3f79d889 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
@@ -38,6 +40,7 @@ Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
 - [12-goal-plus-observability.md](12-goal-plus-observability.md)：Goal Plus 双通道观测覆盖层、collector、语义 ingest、领域模型、确定性关联、完整度与 UI 契约。
+- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 关系事件、端点解析、查询 API 与 Goal Plus 服务端投影。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。
@@ -71,4 +74,5 @@ Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
 - **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
+- **Collaboration trace**：独立于原生 Execution 树的跨 Session 关系覆盖层；事件正文不可变，端点到 Execution 的关联可随 Trace 到达重算。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。

@@ -17,6 +17,9 @@ explicitly attached .gp
             └─ POST /api/ingest/otel/v1/traces → Execution/Session
 
 existing Codex/Pi Execution ── deterministic correlation ── Goal/Run/Candidate
+                                      │
+                                      └─ collaboration projector
+                                           └─ logical main → workers
 ```
 
 collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。目录遍历跳过符号链接，读取执行 lstat/realpath/root containment 和前后 stat 校验；JSONL 只消费以换行结束的完整记录。Pi 主会话只访问该 attached workspace 精确对应的 Pi project-session 目录，并以 `host_command_invocations.native_entry_id`/`goal_plus_id` 定位，不递归扫描 home。语义与 native spool 均按 API Key 摘要隔离。Pi import checkpoint 在 native spool flush 成功后原子推进，用于保证重复扫描幂等；独立的 uploader checkpoint 仍只在服务端返回 HTTP 2xx 后推进，两者不得合并。
@@ -33,6 +36,7 @@ collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。
 | install profile | `src/lib/ingest/setup/install-profile.ts` | Goal Plus Pi/Codex 宿主校验、native collector 依赖展开和去重 |
 | ingest | `src/lib/ingest/goal-plus/contracts.ts`、`persist.ts` | envelope 校验、服务端二次脱敏、幂等审计与投影 |
 | correlation | `src/lib/ingest/goal-plus/correlate.ts` | Execution 确定性关联、重关联和 authority 选择 |
+| collaboration projection | `src/lib/ingest/collaboration/providers/goal-plus.ts` | 将 Goal 成员关系投影到通用跨 Session 关系层，不改原生树 |
 | completeness/query | `completeness.ts`、`query.ts` | 批量完整度计算与 composite read model |
 | UI（暂未开放导航） | `src/app/(main)/goal-plus/` | 保留 source/goal 总览及四个详情 tab 的实现，供后续继续开发；当前不挂载侧边栏入口 |
 
@@ -63,6 +67,8 @@ gpsnap_ + sha256(sourceId \u001f kind \u001f objectKey \u001f contentHash)
 `GoalPlusSource` 是隔离和 checkpoint 根。`GoalPlusGoal`、`GoalPlusRun`、`GoalPlusCandidate`、`GoalPlusIteration`、`GoalPlusAgentSession` 保存可查询投影；`GoalPlusSemanticSnapshot` 保存幂等审计和脱敏后的信封；`GoalPlusExecutionLink` 把上述对象关联到既有 `Execution`。外部 key 始终包含 source scope，绝不把不同 `.gp` 中同名 run/candidate 合并。
 
 新增 Execution 入库后，`saveExecutionRecord` 以非阻断方式触发 Goal Plus relink；语义 ingest 后也会重关联该 source。关联优先级为明确 native/session/execution ID，其次是被动 Pi canonical session ID，再其次是 source 内唯一 deterministic task name。Codex host metadata 可携带 `codexConversationId`、`codexTurnId` 或完整 `codexExecutionId`，关联器按既有 `<conversation>:turn:<turn>` 规则匹配，并按宿主限制 `framework`。相同优先级多个候选标记 `ambiguous`，低优先级候选标记 `superseded`；禁止 time-window-only 关联。
+
+每次 relink 后，服务端用 `sourceId + goalPlusId` 构造稳定 collaboration，以逻辑主节点 `goal-plus:<sourceId>:goal:<goalPlusId>:main` 指向各 `goal-plus:<sourceId>:<agentSessionId>` worker。事件身份还包含 run、agent session 和 role，重复 snapshot 不会新增边。唯一 linked 主会话才解析到具体 Execution；多个主候选保留 `ambiguous-main-session`，不按时间选择。worker 端只复用 `GoalPlusExecutionLink`。该投影默认不保存内容、不使用 fromLocator，失败仅告警，不影响语义 ingest、原生 Trace 或 completeness。
 
 ## 安装组合与故障隔离
 

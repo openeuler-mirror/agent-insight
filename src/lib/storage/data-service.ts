@@ -3090,6 +3090,15 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         } catch (e) {
             console.warn(`[Data-Service] Goal Plus relink failed for ${recordId}:`, e);
         }
+        try {
+            const { resolveCollaborationEndpointsForExecution } = await import('@/lib/ingest/collaboration/resolve');
+            await resolveCollaborationEndpointsForExecution(targetRecord.user, [
+                targetRecord.task_id || '',
+                targetRecord.agent_session_id || '',
+            ]);
+        } catch (e) {
+            console.warn(`[Data-Service] collaboration relink failed for ${recordId}:`, e);
+        }
     }
 
     return { success: true, record: targetRecord };

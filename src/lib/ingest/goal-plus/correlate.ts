@@ -259,5 +259,13 @@ export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked
 
 export async function relinkGoalPlusForExecution(user: string): Promise<void> {
   const sources = await prismaRaw.goalPlusSource.findMany({ where: { user }, select: { id: true } });
-  for (const source of sources) await relinkGoalPlusSource(source.id);
+  for (const source of sources) {
+    await relinkGoalPlusSource(source.id);
+    try {
+      const { projectGoalPlusCollaborations } = await import('@/lib/ingest/collaboration/providers/goal-plus');
+      await projectGoalPlusCollaborations(source.id);
+    } catch (error) {
+      console.warn(`[Goal-Plus] collaboration projection failed for ${source.id}:`, error);
+    }
+  }
 }
