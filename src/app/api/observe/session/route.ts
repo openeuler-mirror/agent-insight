@@ -265,6 +265,13 @@ export function toTraceStructureInteractions(interactions: any[]): any[] {
     });
 }
 
+export function withTracePayloadVersions(interactions: any[]): any[] {
+    return interactions.map(interaction => ({
+        ...interaction,
+        _payloadVersion: createHash('sha256').update(JSON.stringify(interaction)).digest('base64url'),
+    }));
+}
+
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const taskId = searchParams.get('taskId');
@@ -281,7 +288,7 @@ export async function GET(request: Request) {
         }
         const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
         const collaborationProjection = await loadCollaborationProjection(taskId, parsed);
-        const displayInteractions = collaborationProjection?.interactions || interactions;
+        const displayInteractions = withTracePayloadVersions(collaborationProjection?.interactions || interactions);
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);

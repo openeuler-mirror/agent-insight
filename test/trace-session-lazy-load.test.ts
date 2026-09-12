@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { toTraceStructureInteractions } from '@/app/api/observe/session/route';
+import { toTraceStructureInteractions, withTracePayloadVersions } from '@/app/api/observe/session/route';
 import { buildAgentCallTree, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { composeCollaborationTrace } from '@/lib/ingest/collaboration/trace-projection';
 import {
     extractSkillsWithVersionsFromHermesSession,
     normalizeInteractions,
 } from '@/lib/shared/interaction-utils';
+
+test('payload versions survive structure projection and change when same-index content or worker identity changes', () => {
+    const first = withTracePayloadVersions([{ role: 'assistant', content: 'running', subagent_session_id: 'worker-1' }]);
+    assert.equal(toTraceStructureInteractions(first)[0]._payloadVersion, first[0]._payloadVersion);
+    assert.equal(withTracePayloadVersions([{ role: 'assistant', content: 'running', subagent_session_id: 'worker-1' }])[0]._payloadVersion, first[0]._payloadVersion);
+    for (const next of [
+        { role: 'assistant', content: 'finished', subagent_session_id: 'worker-1' },
+        { role: 'assistant', content: 'running', subagent_session_id: 'worker-2' },
+    ]) assert.notEqual(withTracePayloadVersions([next])[0]._payloadVersion, first[0]._payloadVersion);
+});
 
 test('trace structure removes long payloads while preserving the call tree', () => {
     const longMessage = 'message-'.repeat(2_000);

@@ -467,6 +467,8 @@ export default function AgentTraceView({
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
     const stableTraceIdentity = traceIdentity ?? rootExecutionId;
     const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
+    const sourceInteractionsRef = React.useRef(sourceInteractions);
+    sourceInteractionsRef.current = sourceInteractions;
     const treeIdentityInitializedRef = React.useRef(false);
     const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
@@ -488,7 +490,8 @@ export default function AgentTraceView({
             return sourceInteractions.map((item, index) => {
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
                 const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
-                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred ? loaded : item;
+                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred
+                    && incoming._payloadVersion && incoming._payloadVersion === loaded._payloadVersion ? loaded : item;
             });
         });
     }, [sourceInteractions, stableTraceIdentity]);
@@ -498,10 +501,12 @@ export default function AgentTraceView({
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
         const requestedTraceId = previousTraceIdentityRef.current;
+        const requestedSource = sourceInteractionsRef.current;
         setInteractionLoadError(null);
         try {
             const loaded = await loadInteraction(index);
-            if (previousTraceIdentityRef.current !== requestedTraceId) return;
+            if (previousTraceIdentityRef.current !== requestedTraceId || sourceInteractionsRef.current !== requestedSource
+                || !current._payloadVersion || loaded._payloadVersion !== current._payloadVersion) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
             setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
@@ -518,16 +523,20 @@ export default function AgentTraceView({
         }
         if (!fullLoadPromiseRef.current) {
             const requestedTraceId = previousTraceIdentityRef.current;
+            const requestedSource = sourceInteractionsRef.current;
             setFullInteractionLoadError(null);
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousTraceIdentityRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId && sourceInteractionsRef.current === requestedSource
+                        && loaded.length === requestedSource.length
+                        && loaded.every((item, index) => item._payloadVersion && item._payloadVersion === requestedSource[index]._payloadVersion)) {
                         // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
                         sameTraceReloadRef.current = true;
                         setInteractions(loaded);
+                        return loaded;
                     }
-                    return loaded;
+                    return sourceInteractionsRef.current;
                 })
                 .catch(error => {
                     if (previousTraceIdentityRef.current === requestedTraceId) {

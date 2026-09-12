@@ -1851,7 +1851,7 @@ async function readRecordsInternal(
     const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
     const collapseGoalPlusWorkers = filters?.collapseGoalPlusWorkers === true && !process.env.DB_HOST;
     const projectedGoalPlusWorkerWhere = collapseGoalPlusWorkers
-        ? goalPlusProjectedWorkerExecutionWhere(user)
+        ? await goalPlusProjectedWorkerExecutionWhere(filters?.showAllUsers ? undefined : user)
         : null;
     if (filters?.onlySubagents === true) {
         if (projectedGoalPlusWorkerWhere) {

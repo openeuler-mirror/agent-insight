@@ -106,6 +106,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       "observedAt" DATETIME NOT NULL
     );
     CREATE UNIQUE INDEX "GoalPlusRun_sourceDbId_runId_key" ON "GoalPlusRun"("sourceDbId", "runId");
+    CREATE TABLE "GoalPlusCandidate" ("id" TEXT PRIMARY KEY, "candidateId" TEXT NOT NULL);
     CREATE TABLE "GoalPlusAgentSession" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "runDbId" TEXT NOT NULL,
@@ -382,11 +383,12 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       status: 'running',
       phase: 'search',
       goalDigest: 'digest',
+      searchTasksJson: JSON.stringify([{ runId: 'run-projection' }]),
       activeSessionJson: JSON.stringify({
-        sessionId: 'goal-plus:gpsrc-projection:main-projection',
+        sessionId: 'goal-main-session',
         nativeSessionId: 'pi-native-main',
         mainSessions: [{
-          sessionId: 'goal-plus:gpsrc-projection:main-projection',
+          sessionId: 'goal-main-session',
           nativeSessionId: 'pi-native-main',
         }],
       }),
@@ -441,6 +443,10 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       },
     ],
   });
+  await prismaRaw.session.create({ data: {
+    taskId: 'goal-plus:gpsrc-projection:worker-projection', user: 'alice',
+    interactions: JSON.stringify([{ role: 'assistant', content: 'worker result' }]),
+  } });
   const firstProjection = await projectGoalPlusCollaborations(source.id);
   const secondProjection = await projectGoalPlusCollaborations(source.id);
   assert.equal(firstProjection.projectedEvents, 1);
@@ -496,6 +502,8 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   );
   assert.equal(activeCanonicalProjection.members.length, 1);
   assert.equal(activeCanonicalProjection.rootResolution, 'active-session-alias');
+  assert.equal((await findGoalPlusTraceProjectionMembers('alice', 'goal-main-session')).members.length, 0,
+    'an old linked main must not inherit workers after the active session changes');
   await prismaRaw.$executeRawUnsafe(
     'INSERT INTO "Execution" ("id", "taskId", "user", "framework") VALUES (?, ?, ?, ?)',
     'goal-main-stale-canonical', 'goal-plus:gpsrc-projection:main-old-projection', 'alice', 'pi-agent',
@@ -550,7 +558,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     '/goal-plus optimize projection',
   );
   assert.equal(ambiguousPiAliasProjection.members.length, 0);
-  const projectedWorkerWhere = goalPlusProjectedWorkerExecutionWhere('alice');
+  const projectedWorkerWhere = await goalPlusProjectedWorkerExecutionWhere('alice');
   const rootList = await prismaRaw.execution.findMany({
     where: { user: 'alice', isSubagent: false, AND: [{ NOT: projectedWorkerWhere }] },
     select: { id: true },
@@ -587,4 +595,73 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.equal(ambiguousProjection.members.length, 0);
   const updated = await prismaRaw.collaboration.findUnique({ where: { id: collaboration!.id } });
   assert.match(updated?.diagnosticsJson || '', /ambiguous-main-session/);
+
+  const { relinkGoalPlusSource } = await import('@/lib/ingest/goal-plus/correlate');
+  await t.test('relink rolls back all changes on failure and preserves unchanged link timestamps', async () => {
+    const links = () => prismaRaw.goalPlusExecutionLink.findMany({ where: { sourceDbId: source.id }, orderBy: { id: 'asc' } });
+    await prismaRaw.goalPlusExecutionLink.updateMany({ where: { executionId: 'goal-worker' }, data: { priority: 99 } });
+    const before = await links();
+    await prismaRaw.$executeRawUnsafe(`CREATE TRIGGER fail_worker_relink BEFORE UPDATE ON GoalPlusExecutionLink
+      WHEN NEW.executionId = 'goal-worker' BEGIN SELECT RAISE(ABORT, 'injected relink failure'); END`);
+    await assert.rejects(relinkGoalPlusSource(source.id));
+    assert.deepEqual(await links(), before);
+    await prismaRaw.$executeRawUnsafe('DROP TRIGGER fail_worker_relink');
+    await relinkGoalPlusSource(source.id);
+    const linked = await links();
+    await relinkGoalPlusSource(source.id);
+    assert.deepEqual(await links(), linked, 'idempotent relink must not rewrite timestamps');
+  });
+
+  await t.test('current run excludes historical workers; delayed and failed workers remain visible without duplicate continuation nodes', async () => {
+    const oldRun = await prismaRaw.goalPlusRun.create({ data: {
+      sourceDbId: source.id, goalDbId: goal.id, runId: 'old-run', frozenSpecId: 'old-spec',
+      state: 'failed', observedAt: new Date('2026-09-10T00:00:00Z'),
+    } });
+    for (const [runId, workerId] of [[oldRun.id, 'historical-worker'], [run.id, 'delayed-worker']]) {
+      await prismaRaw.goalPlusAgentSession.create({ data: {
+        runDbId: runId, agentSessionId: workerId, host: 'pi-rpc', role: 'candidate-worker', observedAt: new Date(),
+      } });
+      await prismaRaw.$executeRawUnsafe('INSERT INTO Execution (id, taskId, user, framework) VALUES (?, ?, ?, ?)',
+        workerId, `goal-plus:gpsrc-projection:${workerId}`, 'alice', 'pi-agent');
+    }
+    await prismaRaw.session.create({ data: {
+      taskId: 'goal-plus:gpsrc-projection:historical-worker', user: 'alice',
+      interactions: '[{"role":"assistant","content":"old result"}]',
+    } });
+    await relinkGoalPlusSource(source.id);
+    const current = () => findGoalPlusTraceProjectionMembers('alice', activeCanonicalTaskId);
+    assert.deepEqual((await current()).members.map(member => member.executionId), ['goal-worker']);
+    assert.deepEqual((await goalPlusProjectedWorkerExecutionWhere('alice')).id.in, ['goal-worker']);
+    await prismaRaw.session.create({ data: {
+      taskId: 'goal-plus:gpsrc-projection:delayed-worker', user: 'alice',
+      interactions: '[{"role":"assistant","content":"timeout","status":"error"}]',
+    } });
+    assert.equal((await current()).members.length, 2);
+    await prismaRaw.goalPlusAgentSession.updateMany({
+      where: { agentSessionId: 'delayed-worker' }, data: { countersJson: '{"continuations":2}' },
+    });
+    const snapshots: number[] = [];
+    await Promise.all([
+      ...Array.from({ length: 12 }, () => relinkGoalPlusSource(source.id)),
+      (async () => { for (let i = 0; i < 12; i++) snapshots.push((await current()).members.length); })(),
+    ]);
+    assert.deepEqual(snapshots, Array(12).fill(2));
+    assert.deepEqual(new Set((await goalPlusProjectedWorkerExecutionWhere('alice')).id.in), new Set(['goal-worker', 'delayed-worker']));
+    await prismaRaw.$executeRawUnsafe('INSERT INTO GoalPlusCandidate (id, candidateId) VALUES (?, ?)', 'candidate-current', 'c002');
+    await prismaRaw.goalPlusAgentSession.updateMany({ where: { agentSessionId: 'delayed-worker' }, data: { candidateDbId: 'candidate-current' } });
+    assert.equal((await current()).members.length, 1, 'a stale link with a different candidate must not be projected');
+    await relinkGoalPlusSource(source.id);
+    assert.match((await current()).members.find(member => member.executionId === 'delayed-worker')!.role!, /c002/);
+    const projection = await projectGoalPlusCollaborations(source.id);
+    assert.equal(projection.projectedEvents, 2, 'semantic provider must use the same current run scope');
+    await prismaRaw.session.update({ where: { taskId: 'goal-plus:gpsrc-projection:delayed-worker' }, data: {
+      interactions: JSON.stringify(Array.from({ length: 20_001 }, () => ({ role: 'assistant', content: 'large trace' }))),
+    } });
+    assert.equal((await current()).truncated, true);
+    assert.equal((await goalPlusProjectedWorkerExecutionWhere('alice')).id.in.includes('delayed-worker'), false,
+      'workers exceeding the detail budget must retain an independent list entry');
+    await prismaRaw.goalPlusGoal.update({ where: { id: goal.id }, data: { searchTasksJson: '[]' } });
+    assert.equal((await current()).members.length, 0, 'missing explicit run scope must not fall back to all goal history');
+    assert.deepEqual((await goalPlusProjectedWorkerExecutionWhere('alice')).id.in, []);
+  });
 });

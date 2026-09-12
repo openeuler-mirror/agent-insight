@@ -1,4 +1,5 @@
 import { prismaRaw } from '@/lib/storage/prisma';
+import { goalPlusCurrentRunIds } from '@/lib/ingest/goal-plus/trace-scope';
 
 import {
   deterministicCollaborationEventId,
@@ -80,7 +81,7 @@ export async function projectGoalPlusCollaborations(sourceDbId: string): Promise
   if (!source) return { collaborations: 0, projectedEvents: 0, linkedEndpoints: 0, ambiguousMainSessions: 0 };
   const goals = await prismaRaw.goalPlusGoal.findMany({
     where: { sourceDbId },
-    select: { id: true, goalPlusId: true },
+    select: { id: true, goalPlusId: true, searchTasksJson: true },
   });
   let projectedEvents = 0;
   let linkedEndpoints = 0;
@@ -104,7 +105,7 @@ export async function projectGoalPlusCollaborations(sourceDbId: string): Promise
         select: { executionId: true, linkMethod: true, linkState: true },
       }),
       prismaRaw.goalPlusAgentSession.findMany({
-        where: { run: { sourceDbId, goalDbId: goal.id } },
+        where: { run: { sourceDbId, goalDbId: goal.id, runId: { in: goalPlusCurrentRunIds(goal.searchTasksJson) } } },
         include: {
           run: { select: { runId: true } },
           links: {

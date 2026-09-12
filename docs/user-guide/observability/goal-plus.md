@@ -66,6 +66,8 @@ Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的
 
 Pi/Codex 原生 Trace 的输入、输出、工具参数和工具结果会先递归脱敏，再默认完整写入本地 spool 并转换为 OTLP，不再使用固定的 2000 字符正文上限。Goal Plus Pi 被动导入还会保留 native session 中已写入的 thinking、后续 user/custom message 和完整 tool result。即使单条事件超过默认上传批次大小，也会整条单独上传，不会因此卡住或二次截断；诊断错误摘要上限仍然生效。该行为只影响升级采集器后重新扫描或新产生的 Trace，历史记录中已经写入且源 session 已删除的 `[TRUNCATED ...]` 内容无法恢复。
 
+展示归属以当前 Goal 明确登记的 Search run 为边界，不把同名 Goal 的历史 worker 挂到本次主 Trace。worker 标签带 candidate ID，描述带 run ID，方便核对；同一 Session 的续跑不会生成重复子 Agent。历史、关联有歧义、正文尚未到达或超过展示上限的 worker 保留独立入口。关系更新失败会保留上一次完整结果，不会因后台重关联过程短暂拆开再合并；正常采集延迟仍可能使新 worker 稍后出现。这里仍是“Goal Plus 编排”关系，未凭空确认某个具体 spawn 调用。
+
 ## 隐私、失败恢复与卸载
 
 collector 不上传绝对路径、workspace 内容、diff、完整日志、密钥或隐藏标准答案。Pi native session 已持久化的 thinking 会作为 Trace 正文脱敏后采集；这不代表能够恢复宿主未保存的内部状态。Goal/Run 等语义快照仍有长度和数组上限，超过单快照限制时降级为 `metadata-only`，该限制不截断 Pi native Trace 正文。上传先写按 API Key 隔离的本地 spool，HTTP 2xx 后才推进 checkpoint；429、5xx 或断网会重试并保留 pending，确定性拒绝会进入 rejected 目录。

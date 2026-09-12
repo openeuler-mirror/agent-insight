@@ -40,6 +40,16 @@ Trace 列表显式传 `collapseGoalPlusWorkers=1`。默认“仅主 Agent”范�
 
 ## 数据模型
 
+### Goal Plus 当前运行边界与刷新一致性
+
+上述“同一 Goal 下的 worker”仅指当前 `searchTasks[].runId` 中的成员。成员解析在单个读事务内完成；精确 main link 必须仍命中当前 active Session，防止 Goal 刚切换会话时旧 main link 承接新 run。worker link 同时匹配 source、goal、run、candidate 和 agent session，并拒绝歧义端点。历史 `run.goalDbId`、相同角色名和时间接近度都不能扩张成员范围。历史主 Session 不借用当前 run；历史原生 Trace 仍可独立访问。
+
+列表在读事务中复用详情的成员选择函数，按 Execution ID 集合过滤，包含明确 active canonical 别名，并采用相同的 50 worker / 20000 交互限制。历史 run、正文未到达、超过上限或关联有歧义的 worker 不会被隐藏。角色展示包含 candidate ID（缺失时使用 agent session ID），描述包含 run ID；continuation 复用同一 worker 节点。来源仍为 Goal Plus 编排，不推断具体启动调用。通用 reported 协作协议与解析实现不变。
+
+所有 Session 响应视图为每条交互附加 `_payloadVersion` 正文摘要，structure 保留相同版本。前端仅复用同版本的已加载正文，并拒绝刷新前发起或版本不匹配的异步加载结果，避免索引变化后显示另一 worker 的旧正文。
+
+### 持久化对象
+
 - `Collaboration`：用户与来源范围。
 - `CollaborationEvent`：不可变关系正文与接收审计。
 - `CollaborationSessionBinding`：显式逻辑 Session 到 Trace Session 的不可覆盖绑定及事件时钟声明。

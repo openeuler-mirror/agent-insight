@@ -1,4 +1,10 @@
 import assert from 'node:assert/strict';
+import { goalPlusCurrentRunIds } from '@/lib/ingest/goal-plus/trace-scope';
+
+test('Goal Plus run membership uses explicit IDs, never prompt text or all historical runs', () => {
+  assert.deepEqual(goalPlusCurrentRunIds('[{"runId":"run-a"},{"runId":"run-a"},{"runId":"run-b"}]'), ['run-a', 'run-b']);
+  for (const input of [null, '{', '{}', '[]', '[{"description":"run-a"}]']) assert.deepEqual(goalPlusCurrentRunIds(input), []);
+});
 import test from 'node:test';
 
 import {

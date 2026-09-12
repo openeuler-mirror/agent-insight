@@ -52,6 +52,7 @@ export interface InteractionPart {
 }
 
 export interface RawInteraction {
+    _payloadVersion?: string;
     role: InteractionRole;
     content?: string;
     timestamp?: number | string;

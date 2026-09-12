@@ -70,6 +70,10 @@ gpsnap_ + sha256(sourceId \u001f kind \u001f objectKey \u001f contentHash)
 
 每次 relink 后，服务端用 `sourceId + goalPlusId` 构造稳定 collaboration，以逻辑主节点 `goal-plus:<sourceId>:goal:<goalPlusId>:main` 指向各 `goal-plus:<sourceId>:<agentSessionId>` worker。事件身份还包含 run、agent session 和 role，重复 snapshot 不会新增边。唯一 linked 主会话才解析到具体 Execution；多个主候选保留 `ambiguous-main-session`，不按时间选择。worker 端只复用 `GoalPlusExecutionLink`。该投影默认不保存内容、不使用 fromLocator，失败仅告警，不影响语义 ingest、原生 Trace 或 completeness。
 
+关联一致性：relink 在单个数据库事务内读取 source、语义对象和 Execution，并差量更新链接，不会先对外清空 linked 状态。未变化的链接保留 `linkedAt/updatedAt`，失败整批回滚。同一进程内按 source 合并并发请求；在途期间收到新请求会追加一轮重算，数据库锁冲突最多重试两次。
+
+当前 Goal 的 worker 投影只包含 `searchTasks[].runId` 明确列出的 run，不能仅凭历史 `GoalPlusRun.goalDbId` 纳入成员；没有显式 run 时不猜测。历史 Run、AgentSession 和原生 Trace 保留，过期语义事件的端点标为 superseded。同一 worker Session 的 continuation 不新增成员。列表、详情的实际可读成员与限额由共享查询函数决定，详见 [跨 Session 协作 Trace](13-cross-session-collaboration.md)。
+
 ## 安装组合与故障隔离
 
 `frameworks` 继续表示用户选择的组件，`goalPlusHosts=pi,codex` 声明已经运行 Goal Plus 的 Trace 来源，而不是 Goal Plus 本体的安装目标。共享 install profile 在服务端展开 effective frameworks：Pi 加入 `pi-agent`，Codex 加入 `codex`，已存在的依赖不重复加入。不带 host 的旧 `frameworks=goal-plus` 保持 semantic-only 行为。安装页和生成脚本不得展示或执行 Goal Plus 仓库的安装命令；Agent Insight 只配置观测组件。

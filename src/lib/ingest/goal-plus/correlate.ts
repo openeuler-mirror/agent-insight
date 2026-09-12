@@ -1,5 +1,10 @@
 import { prismaRaw } from '@/lib/storage/prisma';
 
+type Tx = Omit<typeof prismaRaw, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
+type RelinkResult = { linked: number; ambiguous: number; unresolved: number };
+
+const relinks = new Map<string, { dirty: boolean; promise: Promise<RelinkResult> }>();
+
 type LinkIntent = {
   key: string;
   role: string;
@@ -111,12 +116,12 @@ export function goalPlusActiveMainSessionIdentities(
   ));
 }
 
-async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<LinkIntent[]> {
+async function sourceLinkIntents(tx: Tx, sourceDbId: string, sourceId: string): Promise<LinkIntent[]> {
   const [goals, sessions] = await Promise.all([
-    prismaRaw.goalPlusGoal.findMany({ where: { sourceDbId } }),
-    prismaRaw.goalPlusAgentSession.findMany({
+    tx.goalPlusGoal.findMany({ where: { sourceDbId } }),
+    tx.goalPlusAgentSession.findMany({
       where: { run: { sourceDbId } },
-      include: { run: true, candidate: true },
+      include: { run: true },
     }),
   ]);
   const intents: LinkIntent[] = [];
@@ -181,10 +186,10 @@ async function sourceLinkIntents(sourceDbId: string, sourceId: string): Promise<
   return intents.filter(intent => intent.exactIds.length > 0 || intent.taskName);
 }
 
-export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked: number; ambiguous: number; unresolved: number }> {
-  const source = await prismaRaw.goalPlusSource.findUnique({ where: { id: sourceDbId } });
+async function relinkInTransaction(tx: Tx, sourceDbId: string): Promise<RelinkResult> {
+  const source = await tx.goalPlusSource.findUnique({ where: { id: sourceDbId } });
   if (!source) return { linked: 0, ambiguous: 0, unresolved: 0 };
-  const intents = await sourceLinkIntents(sourceDbId, source.sourceId);
+  const intents = await sourceLinkIntents(tx, sourceDbId, source.sourceId);
   const duplicateTaskNames = new Set<string>();
   const taskNameCounts = new Map<string, number>();
   for (const intent of intents) {
@@ -193,17 +198,16 @@ export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked
   }
   for (const [name, count] of taskNameCounts) if (count > 1) duplicateTaskNames.add(name);
 
-  await prismaRaw.goalPlusExecutionLink.updateMany({
-    where: { sourceDbId, linkState: { in: ['linked', 'ambiguous'] } },
-    data: { linkState: 'superseded' },
-  });
+  const previous = await tx.goalPlusExecutionLink.findMany({ where: { sourceDbId } });
+  const byKey = new Map(previous.map(link => [`${link.executionId}\0${link.role}`, link]));
+  const retained = new Set<string>();
 
   let linked = 0;
   let ambiguous = 0;
   let unresolved = 0;
   for (const intent of intents) {
     const exactMatches = intent.exactIds.length
-      ? await prismaRaw.execution.findMany({
+      ? await tx.execution.findMany({
         where: {
           user: source.user,
           ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),
@@ -225,7 +229,7 @@ export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked
       };
     });
     if (candidates.length === 0 && intent.taskName && !duplicateTaskNames.has(intent.taskName)) {
-      const matches = await prismaRaw.execution.findMany({
+      const matches = await tx.execution.findMany({
         where: {
           user: source.user,
           ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),
@@ -255,7 +259,21 @@ export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked
     for (const candidate of unique) {
       const { execution, method, priority } = candidate;
       const candidateState = priority === winnerPriority ? state : 'superseded';
-      await prismaRaw.goalPlusExecutionLink.upsert({
+      const data = {
+        goalDbId: intent.goalDbId ?? null,
+        runDbId: intent.runDbId ?? null,
+        candidateDbId: intent.candidateDbId ?? null,
+        agentSessionDbId: intent.agentSessionDbId ?? null,
+        linkMethod: method,
+        linkState: candidateState,
+        priority,
+        evidenceJson: JSON.stringify({ intent: intent.key, exactIds: intent.exactIds, taskName: intent.taskName }),
+      };
+      const key = `${execution.id}\0${intent.role}`;
+      const existing = byKey.get(key);
+      retained.add(key);
+      if (existing && Object.entries(data).every(([field, value]) => existing[field as keyof typeof existing] === value)) continue;
+      const saved = await tx.goalPlusExecutionLink.upsert({
         where: {
           sourceDbId_executionId_role: {
             sourceDbId,
@@ -265,33 +283,58 @@ export async function relinkGoalPlusSource(sourceDbId: string): Promise<{ linked
         },
         create: {
           sourceDbId,
-          goalDbId: intent.goalDbId,
-          runDbId: intent.runDbId,
-          candidateDbId: intent.candidateDbId,
-          agentSessionDbId: intent.agentSessionDbId,
           executionId: execution.id,
           role: intent.role,
-          linkMethod: method,
-          linkState: candidateState,
-          priority,
-          evidenceJson: JSON.stringify({ intent: intent.key, exactIds: intent.exactIds, taskName: intent.taskName }),
+          ...data,
           linkedAt: candidateState === 'linked' ? new Date() : null,
         },
         update: {
-          goalDbId: intent.goalDbId,
-          runDbId: intent.runDbId,
-          candidateDbId: intent.candidateDbId,
-          agentSessionDbId: intent.agentSessionDbId,
-          linkMethod: method,
-          linkState: candidateState,
-          priority,
-          evidenceJson: JSON.stringify({ intent: intent.key, exactIds: intent.exactIds, taskName: intent.taskName }),
-          linkedAt: candidateState === 'linked' ? new Date() : null,
+          ...data,
+          linkedAt: candidateState === 'linked' ? existing?.linkedAt ?? new Date() : null,
         },
       });
+      byKey.set(key, saved);
     }
   }
+  const staleIds = previous.filter(link => (
+    !retained.has(`${link.executionId}\0${link.role}`) && link.linkState !== 'superseded'
+  )).map(link => link.id);
+  if (staleIds.length) await tx.goalPlusExecutionLink.updateMany({
+    where: { id: { in: staleIds } }, data: { linkState: 'superseded' },
+  });
   return { linked, ambiguous, unresolved };
+}
+
+export function relinkGoalPlusSource(sourceDbId: string): Promise<RelinkResult> {
+  const pending = relinks.get(sourceDbId);
+  if (pending) {
+    pending.dirty = true;
+    return pending.promise;
+  }
+  const state = { dirty: true, promise: Promise.resolve({ linked: 0, ambiguous: 0, unresolved: 0 }) };
+  relinks.set(sourceDbId, state);
+  state.promise = (async () => {
+    let result: RelinkResult = { linked: 0, ambiguous: 0, unresolved: 0 };
+    try {
+      do {
+        state.dirty = false;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            result = await prismaRaw.$transaction(tx => relinkInTransaction(tx, sourceDbId), { maxWait: 10_000, timeout: 30_000 });
+            break;
+          } catch (error) {
+            const code = (error as { code?: string }).code;
+            if (attempt >= 2 || !['P1008', 'P2034', 'P2028'].includes(code || '')) throw error;
+            await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+          }
+        }
+      } while (state.dirty);
+      return result;
+    } finally {
+      relinks.delete(sourceDbId);
+    }
+  })();
+  return state.promise;
 }
 
 export async function relinkGoalPlusForExecution(user: string): Promise<void> {
