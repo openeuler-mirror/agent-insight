@@ -96,6 +96,8 @@ Execution 保存后只重算端点 ID 命中该 Execution 的 reported 事件；
 - Goal Plus 没有原生 spawn 锚点时，虚拟 TASK 仅表示“编排成员关系”，不插入或绑定到某一次原生工具调用。
 - 子节点保留 worker `taskId`，允许继续打开独立 Trace；原生列表、评估与导出数据口径保持不变。
 - 单次投影设成员数和交互数上限，截断状态通过响应元数据显式返回。
+- Goal Plus 内嵌树直接读取既有 `GoalPlusExecutionLink` 的唯一关联，不以 `CollaborationEvent` 已经物化为前提；两者使用相同的确定性身份和可信度边界。
+- 通用 Trace 列表的仅主范围隐藏已投影 worker，仅子范围仍可检索 worker；该分类是查询覆盖层，不回写 `isSubagent`。
 
 ## 7. 安全与故障隔离
 

@@ -223,7 +223,10 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     goalPlusCollaborationIdentity,
     projectGoalPlusCollaborations,
   } = await import('@/lib/ingest/collaboration/providers/goal-plus');
-  const { findGoalPlusTraceProjectionMembers } = await import('@/lib/ingest/collaboration/query');
+  const {
+    findGoalPlusTraceProjectionMembers,
+    goalPlusProjectedWorkerExecutionWhere,
+  } = await import('@/lib/ingest/collaboration/query');
   const { CollaborationStore, sqlDatabase } = await import('@/lib/collaboration/store');
   const { CollaborationService } = await import('@/lib/collaboration/service');
 
@@ -445,6 +448,18 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.equal(traceProjection.members.length, 1);
   assert.equal(traceProjection.members[0].taskId, 'goal-plus:gpsrc-projection:worker-projection');
   assert.equal(traceProjection.members[0].anchorState, 'not_provided');
+  const projectedWorkerWhere = goalPlusProjectedWorkerExecutionWhere('alice');
+  const rootList = await prismaRaw.execution.findMany({
+    where: { user: 'alice', isSubagent: false, AND: [{ NOT: projectedWorkerWhere }] },
+    select: { id: true },
+  });
+  assert.equal(rootList.some(row => row.id === 'goal-main'), true);
+  assert.equal(rootList.some(row => row.id === 'goal-worker'), false);
+  const subagentList = await prismaRaw.execution.findMany({
+    where: { user: 'alice', AND: [{ OR: [{ isSubagent: true }, projectedWorkerWhere] }] },
+    select: { id: true },
+  });
+  assert.equal(subagentList.some(row => row.id === 'goal-worker'), true);
 
   await prismaRaw.$executeRawUnsafe(
     'INSERT INTO "Execution" ("id", "taskId", "user", "framework") VALUES (?, ?, ?, ?)',

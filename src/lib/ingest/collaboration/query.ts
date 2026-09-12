@@ -1,5 +1,7 @@
 import { prismaRaw } from '@/lib/storage/prisma';
 
+import { deterministicCollaborationEventId } from './contracts';
+
 export interface GoalPlusTraceProjectionMemberRef {
   eventId: string;
   taskId: string;
@@ -15,6 +17,29 @@ export interface GoalPlusTraceProjectionMemberRef {
 }
 
 const GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT = 51;
+
+export function goalPlusProjectedWorkerExecutionWhere(user?: string) {
+  return {
+    goalPlusLinks: {
+      some: {
+        linkState: 'linked',
+        role: { not: 'main' },
+        agentSessionDbId: { not: null },
+        ...(user ? { source: { user } } : {}),
+        goal: {
+          is: {
+            links: {
+              some: {
+                role: 'main',
+                linkState: 'linked',
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
 
 function parseJson<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
@@ -162,24 +187,61 @@ export async function findGoalPlusTraceProjectionMembers(
   const rootExecutionIds = rootExecutions.map(execution => execution.id);
   if (!rootExecutionIds.length) return { members: [], truncated: false };
 
-  const events = await prismaRaw.collaborationEvent.findMany({
+  const rootMainLinks = await prismaRaw.goalPlusExecutionLink.findMany({
     where: {
-      sourceType: 'goal-plus-semantic',
-      relationKind: 'orchestrated',
-      collaboration: { user },
-      endpointResolutions: {
-        some: {
-          side: 'from',
-          linkState: 'linked',
-          executionId: { in: rootExecutionIds },
-        },
+      executionId: { in: rootExecutionIds },
+      role: 'main',
+      linkState: 'linked',
+      goalDbId: { not: null },
+      source: { user },
+    },
+    select: {
+      sourceDbId: true,
+      goalDbId: true,
+      source: { select: { sourceId: true } },
+      goal: { select: { goalPlusId: true } },
+    },
+  });
+  if (!rootMainLinks.length) return { members: [], truncated: false };
+
+  const candidateGoalIds = [...new Set(rootMainLinks
+    .map(link => link.goalDbId)
+    .filter((id): id is string => Boolean(id)))];
+  const activeMainLinks = await prismaRaw.goalPlusExecutionLink.findMany({
+    where: {
+      goalDbId: { in: candidateGoalIds },
+      role: 'main',
+      linkState: { in: ['linked', 'ambiguous'] },
+      source: { user },
+    },
+    select: { goalDbId: true, executionId: true, linkState: true },
+  });
+  const validGoalIds = new Set(candidateGoalIds.filter(goalDbId => {
+    const candidates = [...new Map(activeMainLinks
+      .filter(link => link.goalDbId === goalDbId)
+      .map(link => [link.executionId, link])).values()];
+    return candidates.length === 1
+      && candidates[0].linkState === 'linked'
+      && rootExecutionIds.includes(candidates[0].executionId);
+  }));
+  if (!validGoalIds.size) return { members: [], truncated: false };
+
+  const mainByGoal = new Map(rootMainLinks
+    .filter(link => link.goalDbId && validGoalIds.has(link.goalDbId))
+    .map(link => [link.goalDbId as string, link]));
+  const sessions = await prismaRaw.goalPlusAgentSession.findMany({
+    where: {
+      run: {
+        goalDbId: { in: [...validGoalIds] },
+        source: { user },
       },
     },
-    orderBy: [{ receivedAt: 'asc' }, { eventId: 'asc' }],
+    orderBy: [{ observedAt: 'asc' }, { id: 'asc' }],
     take: GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT,
     include: {
-      endpointResolutions: {
-        where: { linkState: 'linked', side: { in: ['from', 'to'] } },
+      run: { select: { runId: true, goalDbId: true, sourceDbId: true } },
+      links: {
+        where: { linkState: 'linked' },
         include: {
           execution: {
             select: {
@@ -198,30 +260,44 @@ export async function findGoalPlusTraceProjectionMembers(
   });
 
   const members: GoalPlusTraceProjectionMemberRef[] = [];
-  for (const event of events.slice(0, GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT - 1)) {
-    const from = event.endpointResolutions.find(resolution => (
-      resolution.side === 'from' && resolution.executionId && rootExecutionIds.includes(resolution.executionId)
-    ));
-    const to = event.endpointResolutions.find(resolution => resolution.side === 'to');
-    const execution = to?.execution;
-    if (!from || !execution?.taskId || execution.user !== user || rootExecutionIds.includes(execution.id)) continue;
+  const seenEvents = new Set<string>();
+  for (const session of sessions.slice(0, GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT - 1)) {
+    const goalDbId = session.run.goalDbId;
+    const main = goalDbId ? mainByGoal.get(goalDbId) : undefined;
+    const linkedExecutions = [...new Map(session.links
+      .filter(link => link.sourceDbId === session.run.sourceDbId && link.goalDbId === goalDbId)
+      .map(link => [link.executionId, link.execution])).values()];
+    if (!main?.goal || linkedExecutions.length !== 1) continue;
+    const execution = linkedExecutions[0];
+    if (!execution?.taskId || execution.user !== user || rootExecutionIds.includes(execution.id)) continue;
+    const role = session.role || 'candidate-worker';
+    const eventId = deterministicCollaborationEventId(
+      main.source.sourceId,
+      main.goal.goalPlusId,
+      'orchestrated',
+      session.run.runId,
+      session.agentSessionId,
+      role,
+    );
+    if (seenEvents.has(eventId)) continue;
+    seenEvents.add(eventId);
     members.push({
-      eventId: event.eventId,
+      eventId,
       taskId: execution.taskId,
       executionId: execution.id,
-      agentName: execution.agentName || execution.subagentName || event.role || execution.framework || 'Worker Agent',
+      agentName: execution.agentName || execution.subagentName || role || execution.framework || 'Worker Agent',
       framework: execution.framework,
-      description: event.description || `Goal Plus 编排 ${event.role || 'worker'}`,
-      sourceType: event.sourceType,
-      relationKind: event.relationKind || undefined,
-      anchorState: from.anchorState || 'not_provided',
-      role: event.role || undefined,
+      description: `Goal Plus 编排 ${role}`,
+      sourceType: 'goal-plus-semantic',
+      relationKind: 'orchestrated',
+      anchorState: 'not_provided',
+      role,
       timestamp: execution.timestamp,
     });
   }
   members.sort((left, right) => left.timestamp.getTime() - right.timestamp.getTime() || left.eventId.localeCompare(right.eventId));
   return {
     members,
-    truncated: events.length >= GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT,
+    truncated: sessions.length >= GOAL_PLUS_TRACE_PROJECTION_MEMBER_LIMIT,
   };
 }

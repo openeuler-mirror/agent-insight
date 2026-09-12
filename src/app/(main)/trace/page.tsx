@@ -786,7 +786,7 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store' })
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store' })
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;

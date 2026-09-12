@@ -103,7 +103,13 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
 async function loadCollaborationProjection(taskId: string, parsed: ParsedSession) {
     const user = typeof parsed.session?.user === 'string' ? parsed.session.user : '';
     if (!user) return null;
-    const refs = await findGoalPlusTraceProjectionMembers(user, taskId);
+    let refs;
+    try {
+        refs = await findGoalPlusTraceProjectionMembers(user, taskId);
+    } catch (error) {
+        console.warn(`[Session-API] Goal Plus trace projection unavailable for task=${taskId}:`, error);
+        return null;
+    }
     if (!refs.members.length) return null;
 
     const loadedMembers = await Promise.all(refs.members.map(async (ref): Promise<CollaborationTraceMember | null> => {

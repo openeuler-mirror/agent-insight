@@ -24,6 +24,6 @@
 
 ## 4. 前端展示
 
-通用 Trace 详情复用现有 Agent Tree，对两端均已 linked 的 Goal Plus `orchestrated` 关系进行只读投影：显示虚拟 TASK、worker 子 Agent 与来源标识，子节点仍可跳转到独立 Trace。没有 confirmed 原生锚点时不得把“编排成员关系”显示成“确定的某次工具调用”。
+通用 Trace 详情复用现有 Agent Tree，直接根据唯一 linked 的 Goal Plus Execution 关系进行只读投影：显示虚拟 TASK、worker 子 Agent 与来源标识，子节点仍可跳转到独立 Trace。仅主 Agent 列表隐藏已投影 worker，仅子 Agent 范围仍可检索 worker；两者都不改写原生 `isSubagent`。没有 confirmed 原生锚点时不得把“编排成员关系”显示成“确定的某次工具调用”。
 
 独立协作图页面与导航仍不开放。后续页面应完整区分 `confirmed`、`candidate`、`time_ordered`、`ambiguous` 和 pending。

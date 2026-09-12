@@ -41,6 +41,7 @@ import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
 import type { FilterClause } from '@/lib/filters/types';
+import { goalPlusProjectedWorkerExecutionWhere } from '@/lib/ingest/collaboration/query';
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
@@ -1193,6 +1194,8 @@ interface ReadRecordFilters {
     includeSubagents?: boolean;
     /** 只返回 sub-agent 行（不含 root），与 includeSubagents 互斥；优先级高于 includeSubagents */
     onlySubagents?: boolean;
+    /** Trace 列表把已关联的 Goal Plus worker 作为只读子 Agent 展示，而不是独立根行。 */
+    collapseGoalPlusWorkers?: boolean;
     /** 列出指定 root 下的所有 sub-agent */
     parentExecutionId?: string | null;
     /**
@@ -1846,8 +1849,19 @@ async function readRecordsInternal(
         ...skillNamesFromClauses,
     ]));
     const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
+    const collapseGoalPlusWorkers = filters?.collapseGoalPlusWorkers === true && !process.env.DB_HOST;
+    const projectedGoalPlusWorkerWhere = collapseGoalPlusWorkers
+        ? goalPlusProjectedWorkerExecutionWhere(user)
+        : null;
     if (filters?.onlySubagents === true) {
-        where.isSubagent = true;
+        if (projectedGoalPlusWorkerWhere) {
+            where.AND = [
+                ...(Array.isArray(where.AND) ? where.AND : []),
+                { OR: [{ isSubagent: true }, projectedGoalPlusWorkerWhere] },
+            ];
+        } else {
+            where.isSubagent = true;
+        }
     } else if (
         filters?.includeSubagents !== true &&
         filters?.parentExecutionId === undefined &&
@@ -1855,6 +1869,12 @@ async function readRecordsInternal(
         !skillFilterActive
     ) {
         where.isSubagent = false;
+        if (projectedGoalPlusWorkerWhere) {
+            where.AND = [
+                ...(Array.isArray(where.AND) ? where.AND : []),
+                { NOT: projectedGoalPlusWorkerWhere },
+            ];
+        }
     }
 
     if (filters?.parentExecutionId !== undefined) {
