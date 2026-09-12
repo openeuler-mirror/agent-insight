@@ -259,3 +259,31 @@
 - v1 Bundle 顶层字段为 `format`、`version`、`exportedAt`、`rootExecutionId`、`executions`；每个节点包含 portable Execution 与可空 Session。Session `interactions` 保留规范化原始值，不做面向展示的时间格式化；Langfuse Session 还可携带完整 `langfuseTraceNodes`，旧版未包含该可选字段的 v1 Bundle 仍可导入。
 - `Execution.id` 与 Execution/Session `taskId` 共享冲突检测空间。无冲突 ID 原样保留；有冲突 ID 才生成 `import_<uuid>`，并同步更新父子 ID、root ID、`agentSessionId`、interactions 中已知的 session/execution 引用及 Langfuse 节点的 `subagentSessionId`。OTel `traceId` / `spanId` / `parentSpanId` 不参与重映射。
 - 导入只创建 Execution、Session 和可重算的 ExecutionSkill；不迁移 Evaluation、TraceEvaluation、AgentDebugReport、ExecutionTag 或基础设施关联，也不调度 LLM 评测。
+
+
+## Cross-session collaboration backend
+
+Source: `src/lib/collaboration/{contracts,store,resolve,service,http,runtime}.ts`.
+
+| Route | Contract |
+|---|---|
+| POST `/api/ingest/collaborations/events` | Immutable relation event; owner+collaborationId+eventId unique; 201 created / 200 duplicate / 409 EVENT_CONFLICT |
+| POST `/api/ingest/collaborations/sessions` | Explicit sessionId→Session.taskId binding within owner+collaborationId; 409 BINDING_CONFLICT on changed binding/clock declaration |
+| GET `/api/observe/collaborations/:collaborationId` | offset≥0, limit 1–100; page endpoints, reported edges, trace references, source evidence and recomputed anchors |
+
+All three routes require header API Key; never accept an explicit user override. Unknown fields, duplicate JSON keys, null optional fields and invalid RFC3339 dates are rejected. Body limit is 64 KiB UTF-8; per-instance rate limit is 120 requests/user/minute, bounded to 10000 active users. Errors use `{error:{code,message,field?}}`; pagination additionally uses 404 for missing/inaccessible collaboration.
+
+`Collaboration`, `CollaborationEvent`, `CollaborationSessionBinding` are additive models. Raw SQL is fixed and parameterized; SQLite uses Prisma transactions, pg/OpenGauss uses pool transactions. Schema bootstrap follows existing db_push/init_opengauss paths. Event body hash is SHA256 over recursively key-sorted JSON; original values are preserved. No Trace ingest, tree builder or parentExecutionId write path is changed.
+
+Resolution loads a complete bounded event group independently of the display page (2000 events/200 sessions); larger groups remain readable but pending. Aggregate resolution budget is 32 MiB of Trace text and 100000 calls per request. Each authorized Session.taskId lookup rechecks owner; Execution references also filter owner and return an executionId only if unique. Unknown bindings do not search by agent name, raw sessionId or nearby time. Same collaboration participants may arrive before Trace. No raw Trace content is returned by this API.
+
+Locator extraction reads only the source Session's own tool_calls/parts, excluding other subagent turns. Shell mapping: bash/Bash/shell/run_shell_command/execute_command→command; exec_command/functions.exec_command→cmd. Exact task/spawn_agent/subagent structured target Session IDs provide direct evidence; no type/FIFO inference. Repeated reports claiming one record remain ambiguous. `sources=[reported,trace]` applies only to confirmed record-level evidence. Existing automatic tree functionality remains on its old path; this API does not create automatic-only collaborations.
+
+Sorting groups use exact locator text and fromSessionId; targets do not partition groups. Full cardinality, unique timestamps, explicit eventClock declaration, execution-sourced call timestamps, no known failure/one-to-many/conflicting evidence or overlap are required. OpenCode part state.time.start and explicitly execution-sourced timing.started_at (Unix milliseconds) are supported; interaction timestamps are never fallback. Inference is recomputed on every read and never persisted as a parent relationship. matchedRecord requires an original stable ID; position indices are current-version references. No ID is minted for a synthetic span.
+
+Writes remain successful when post-save resolution fails. Ingest returns detailApiPath pointing to the existing new GET route, not the proposed but unimplemented UI detailPath. No UI, completion status, realtime push, reliable sender or cross-user sharing is introduced.
+
+Verification: `test/collaboration.test.ts`, `test/collaboration-logging.test.ts`, and `test/collaboration-migration.test.ts`. Local HTTP mock was run against temporary SQLite; the temporary mock script is not distributed. See user-guide observability/view-traces.md for requests and operational limits.
+
+
+Collaboration logs use the shared logger with scope `collaboration`: operation/requestId/HTTP status/duration plus validated identifiers and result or failure reason. Each response includes `x-collaboration-request-id`; resolution warnings share this ID. Database error codes map to safe operational reasons rather than emitting SQL/connection strings. Credentials, description/content and locator text are excluded. Both start scripts redirect stdout/stderr to repository-root server.log; schema sync errors appear in the startup terminal before redirection. Both scripts already call db_push.sh and prisma generate, so no new boot hook is needed. Migration regression applies old→new schema and repeats db_push.sh while preserving existing records.

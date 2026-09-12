@@ -1726,3 +1726,34 @@ model GoalPlusSemanticSnapshot {
   @@unique([sourceDbId, snapshotId])
   @@index([sourceDbId, kind, objectKey, observedAt])
 }
+
+model Collaboration {
+  id String @id
+  user String
+  collaborationId String
+  createdAt String
+  @@unique([user, collaborationId])
+}
+
+model CollaborationEvent {
+  id String @id
+  user String
+  collaborationId String
+  eventId String
+  bodyJson String
+  bodyHash String
+  receivedAt String
+  @@unique([user, collaborationId, eventId])
+  @@index([user, collaborationId, receivedAt, id])
+}
+
+model CollaborationSessionBinding {
+  id String @id
+  user String
+  collaborationId String
+  sessionId String
+  traceSessionId String
+  eventClock String
+  createdAt String
+  @@unique([user, collaborationId, sessionId])
+}

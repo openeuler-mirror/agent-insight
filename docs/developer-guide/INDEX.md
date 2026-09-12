@@ -9,11 +9,11 @@
 
 | Field | Value |
 |---|---|
-| Commit | `3f79d889de177bd2a300b6980bcea6d577dbf55c` (`3f79d889`) |
-| Branch | `master` |
-| Date | 2026-09-07 19:02:35 +0800 |
+| Commit | `f014059489d77af88671c222538978dffd12f109` (`f0140594`) |
+| Branch | `develop0228` |
+| Date | 2026-09-11 15:01:01 +0800 |
 | Author | openeuler-ci-bot |
-| Subject | `!379 perf: 优化智能诊断报告输出与超时控制` |
+| Subject | `!385 Merge branch 'goal_plus'` |
 | Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；补齐 launchd bootout/bootstrap 竞态重试与真实状态校验，让 systemd/launchd 固化安装终端 PATH 以发现用户目录中的 Agent；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，将评测器分数契约与前端范围统一为 0-100，并在实验模型选项中展示 provider 以区分同名模型。当前工作树还修复了未绑定 Skill 会话的右栏空状态，并将历史会话改为带明确文字入口的顶栏临时浮层；同时恢复“运行观测 → 版本分析”导航入口，通过页面顶部“版本分析 / 版本管理”页签将标签管理收为版本分析的子能力，两个既有页面、API 与数据口径保持不变；新增自建评估器 `dataset_input` 变量、确定性数据集匹配门控与 `ExperimentCase.datasetInput` 快照，并统一“预期输出”展示术语；轨迹质量实验恢复独立 Skill 改进建议，并采用评分 5 分钟、建议每次 7 分钟且最多尝试 2 次的专属超时策略；Skill Copilot 的思考与命令过程现统一为默认折叠、可展开的状态行，并通过 `sessionId` 深链接与服务端增量 checkpoint 在多个页面间恢复同一运行状态；OpenCode 插件动态 Agent 发现通过 loopback `/agent` 读取 resolved Agent，每 30 秒在隔离子进程中绕过缓存并同步能力，macOS 后台服务使用独立 launchd helper 对齐交互式 OpenCode 环境，实验向导第一步定时及聚焦刷新候选；本轮另新增与历史组织集成隔离的 IDaaS OAuth 登录路由、模式契约与前端登录流程，并让开发启动在该模式下以状态接口判定就绪、跳过 admin Key 创建，同时让服务端日志输出不含配置值的具体 IDaaS 配置错误，并增加部署根路径下的 `/callback` 回调入口；userinfo 返回的 UUID 去除首尾空白后直接作为本地账号，首次登录自动创建、后续复用同一用户；修复页面重开时错误小写化 UUID 导致的 401，恢复登录保持 UUID 原始大小写；IDaaS 模式保留通用退出菜单，退出仅清理本地认证状态，不触发统一单点登出；新增默认关闭的地区访问限制，在用户创建前及 API Key 恢复时固定以 `uuids` 数组按 UUID 执行欧盟检查，地区服务异常失败关闭，并以独立文案区分地区受限与校验故障。 |
 
 Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评估器及配套需求、设计、验收和使用说明；原轨迹质量评估器保持不变。
@@ -22,7 +22,7 @@ Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评
 
 Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语义 ingest、领域查询与完整度展示；Pi passive importer 使用独立持久化断点，只追加新增或修订事件。服务端对 `goal-plus:` session 启用持久化精确去重、并发锁、写入上限和流式聚合边界，并提供默认只读的历史 spool 修复工具。共享 uploader lock 支持原子发布及旧空锁、损坏锁、本机死进程锁恢复；Goal Plus Pi 上传采用最新分区优先和单轮有界策略，并暴露阻塞原因。Pi RPC Worker 区分受控交接终止与真实超时或 runner 错误；独立接入的 Pi 保持原有 oldest-first 和完整 backlog 处理语义。当前入口暂时隐藏，后端接入与查询能力保留。
 
-**如何更新：** `git diff 3f79d889 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff f0140594 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -72,3 +72,5 @@ Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
 - **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。
+
+本次工作树在上述 HEAD 上新增跨 Session 协作后端（独立事件、明确会话绑定与步骤定位），契约见 `04-api-and-contracts.md` 的 Cross-session collaboration backend；本次未重新生成其他历史指南内容。
