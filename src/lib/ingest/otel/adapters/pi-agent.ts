@@ -71,6 +71,43 @@ function eventUsage(event: OtelTraceEvent) {
   };
 }
 
+const GOAL_PLUS_TERMINAL_STATES = new Set([
+  'complete',
+  'completed',
+  'success',
+  'succeeded',
+  'done',
+  'passed',
+  'promoted',
+  'stop',
+  'stopped',
+  'exhausted',
+  'error',
+  'failed',
+  'aborted',
+  'cancelled',
+  'canceled',
+  'blocked',
+  'invalidated',
+  'timeout',
+  'timed_out',
+]);
+
+function isTerminalAgentEvent(event: OtelTraceEvent): boolean {
+  const eventAttrs = attrs(event);
+  const outcome = String(eventAttrs['tool.outcome'] || '').toLowerCase();
+  if (eventAttrs['goal_plus.import_mode'] !== 'passive_pi_session') {
+    return outcome === 'success' || outcome === 'error' || outcome === 'failed';
+  }
+
+  const terminalState = String(eventAttrs['goal_plus.terminal_state'] || '').toLowerCase();
+  const exitCode = eventAttrs['goal_plus.exit_code'];
+  return GOAL_PLUS_TERMINAL_STATES.has(terminalState)
+    || (exitCode !== undefined && exitCode !== null && exitCode !== '' && Number.isFinite(Number(exitCode)))
+    || outcome === 'error'
+    || outcome === 'failed';
+}
+
 function agentName(event: OtelTraceEvent): string {
   return content(attrs(event)['pi.subagent.name']) ||
     String(event.name || '').replace(/^agent\./, '') ||
@@ -387,14 +424,17 @@ export function aggregatePiAgentTraceEvents(
     (a, b) => (a.startTimeMs || Date.parse(a.receivedAt) || 0) - (b.startTimeMs || Date.parse(b.receivedAt) || 0),
   );
   const rootAgentEvents = sortedAgents.slice(0, 1);
-  const startCandidates = rootAgentEvents.length
-    ? rootAgentEvents.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now())
-    : ordered.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now());
-  const endCandidates = rootAgentEvents.length
-    ? rootAgentEvents.map(eventEndMs)
-    : ordered.map(eventEndMs);
-  const startedAt = Math.min(...startCandidates);
-  const endedAt = Math.max(...endCandidates);
+  const terminalAgent = rootAgentEvents.find(isTerminalAgentEvent);
+  const timingEvents = rootAgentEvents.length ? rootAgentEvents : ordered;
+  let startedAt = Number.POSITIVE_INFINITY;
+  let endedAt = 0;
+  for (const event of timingEvents) {
+    startedAt = Math.min(
+      startedAt,
+      event.startTimeMs || Date.parse(event.receivedAt) || Date.now(),
+    );
+    endedAt = Math.max(endedAt, eventEndMs(event));
+  }
   const query = agentEvents.map(eventInput).find(Boolean) ||
     llmEvents.map(eventInput).find(Boolean) ||
     'Pi Agent Session';
@@ -417,15 +457,31 @@ export function aggregatePiAgentTraceEvents(
     event.usage.input_tokens +
     event.usage.output_tokens
   ), 0);
-  const maxSingleCallTokens = Math.max(
-    0,
-    ...llmEvents.map((event) => (
-      event.usage.total_tokens ||
-      event.usage.input_tokens +
-      event.usage.output_tokens
-    )),
-  );
+  let maxSingleCallTokens = 0;
+  for (const event of llmEvents) {
+    maxSingleCallTokens = Math.max(
+      maxSingleCallTokens,
+      event.usage.total_tokens || event.usage.input_tokens + event.usage.output_tokens,
+    );
+  }
   const model = llmEvents.map(eventModel).find(Boolean) || agentEvents.map(eventModel).find(Boolean) || 'unknown';
+  const failedAgent = [...agentEvents].reverse().find((event) => {
+    const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();
+    return outcome === 'error' || outcome === 'failed';
+  });
+  const failures = failedAgent ? [{
+    failure_type: 'goal_plus_pi_session_failed',
+    description: content(attrs(failedAgent)['goal_plus.terminal_state'])
+      ? `Goal Plus Pi session ended with ${content(attrs(failedAgent)['goal_plus.terminal_state'])}`
+      : 'Goal Plus Pi session did not complete successfully',
+    context: JSON.stringify({
+      sessionId,
+      role: attrs(failedAgent)['goal_plus.role'],
+      exitCode: attrs(failedAgent)['goal_plus.exit_code'],
+    }),
+    recovery: 'Inspect the final model/tool events and the Goal Plus run state.',
+    attribution: 'ENVIRONMENT' as const,
+  }] : undefined;
 
   return {
     task_id: sessionId,
@@ -435,8 +491,9 @@ export function aggregatePiAgentTraceEvents(
     tokens,
     latency: Math.max(0, endedAt - startedAt),
     final_result: finalResult,
+    failures,
     timestamp: new Date(startedAt),
-    trace_completed_at: new Date(endedAt),
+    trace_completed_at: terminalAgent ? new Date(eventEndMs(terminalAgent)) : undefined,
     // Pi 事件是从 task 全量 spool 重聚合的规范快照。显式标记允许历史 Generic 污染
     // 被更小但更正确的树替换，而不是被单调合并永久保留。
     session_merge_strategy: 'snapshot-replace',

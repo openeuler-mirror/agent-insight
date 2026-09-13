@@ -143,7 +143,9 @@ import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/
 // 评测走 /api/experiments/eval-traces → 实验引擎，引擎认全部已登记的预置评估器，
 // 这里不做能力过滤。默认勾选哪几个见 DEFAULT_SELECTED_PRESET_IDS。
 const BUILT_IN_EVALUATORS = [
-    ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
+    ...presetEvaluators
+        .filter(e => e.status === 'ready')
+        .map(e => ({ id: e.id, name: e.name }))
 ];
 
 

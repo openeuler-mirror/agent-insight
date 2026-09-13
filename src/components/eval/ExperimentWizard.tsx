@@ -191,9 +191,9 @@ const SKILL_PRESET_EVALUATORS: Record<SkillExperimentPreset, Array<{
     { id: 'preset-safety-harmfulness', selected: false },
   ],
   'skill-ab': [
-    { id: 'preset-agent-task-completion', selected: true },
-    { id: 'preset-result-accuracy', selected: true },
-    { id: 'preset-agent-trace-quality', selected: true },
+    { id: 'preset-agent-task-completion', selected: false },
+    { id: 'preset-result-accuracy', selected: false },
+    { id: 'preset-agent-trace-quality', selected: false },
     { id: 'preset-safety-harmfulness', selected: false },
   ],
 };

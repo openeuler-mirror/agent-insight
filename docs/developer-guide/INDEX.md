@@ -48,6 +48,12 @@
 
 > 2026-09-11 working-tree overlay：常驻客户端保留每 30 秒完整刷新 Agent、模型与 FI 能力的节拍；每轮 inventory 将 `TMPDIR`/`TMP`/`TEMP` 指向 `~/.agent-insight/client/tmp/inventory-*` 并在成功、失败或超时后清理，避免 OpenCode/OpenTUI 原生 `.so` 堆积系统 `/tmp`。统一安装脚本的客户端 bundle 与 npm 兜底也改在 `~/.agent-insight/client/tmp/install-*` 暂存，系统 `/tmp` 已满时仍可完成客户端更新；临时 `scripts/package.json` 明确 CommonJS 包边界，避免继承 `.agent-insight/package.json` 的 ESM 类型。
 
+> 2026-09-13 upstream overlay：新增步骤效率与执行过程质量两个通用评估器及配套设计、验收和使用说明；原轨迹质量评估器保持不变。
+
+> 2026-09-13 upstream overlay：普通实验的平台生成 Trace、Skill 用例分析与 Skill A/B 测试的单次 Agent 执行默认上限统一为 600 秒；当前分支继续通过共享常量提供该默认值，并保留实验向导中的可配置入口。评估器超时与触发分析的独立 30 秒上限保持不变。
+
+> 2026-09-13 upstream overlay：合入 Goal Plus 双通道 collector、语义 ingest、领域查询、完整度展示及跨 Session 调用关系上报能力；Goal Plus 历史 spool 修复、持久化去重和有界上传策略保持独立。
+
 **如何更新：** `git diff 58c66e7d HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
@@ -63,6 +69,7 @@
 - [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
+- [12-goal-plus-observability.md](12-goal-plus-observability.md)：Goal Plus 双通道观测覆盖层、collector、语义 ingest、领域模型、确定性关联、完整度与 UI 契约。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。

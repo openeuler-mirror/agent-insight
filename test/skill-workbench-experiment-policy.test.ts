@@ -69,3 +69,13 @@ test('用例分析默认不勾选评估器', () => {
   assert.ok(useCaseDefaults, '应保留用例分析评估器配置');
   assert.doesNotMatch(useCaseDefaults, /selected:\s*true/);
 });
+
+test('A/B 测试默认不勾选评估器', () => {
+  const wizard = fs.readFileSync(
+    path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'),
+    'utf8',
+  );
+  const abDefaults = wizard.match(/'skill-ab': \[(.*?)\],\n};/s)?.[1];
+  assert.ok(abDefaults, '应保留 A/B 测试评估器配置');
+  assert.doesNotMatch(abDefaults, /selected:\s*true/);
+});

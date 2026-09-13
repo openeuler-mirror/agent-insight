@@ -59,3 +59,13 @@ test('重复、空白和未知框架不会产生重复或虚假的通道', () =>
     ]);
     assert.deepEqual(getSelectedReportingChannels(['', 'unknown']), []);
 });
+
+test('Goal Plus 同时展示语义快照与原生 Trace 通道', () => {
+    assert.deepEqual(getSelectedReportingChannels(['goal-plus']).map(channel => ({
+        id: channel.id,
+        endpoint: channel.endpoint,
+    })), [
+        { id: 'otlp-traces', endpoint: '/api/ingest/otel/v1/traces' },
+        { id: 'goal-plus-snapshots', endpoint: '/api/ingest/goal-plus/v1/snapshots' },
+    ]);
+});

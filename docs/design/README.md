@@ -19,6 +19,8 @@
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
 | Benchmark 统一接入 | [benchmark](benchmark/) | 以 Manifest、五方法 Adapter 和构建期 Catalog 接入 Benchmark；覆盖共享数据集、Agent 执行、独立 Evaluator、官方 Harness、结果归一化、统一实验前端与扩展约束 | Feature / Refactor | 2026-09-03 | 🟡 主链路、前端与自动化测试已完成；待浏览器验收及 x86_64 Linux 正式计分验收 | —（待补） |
+| Goal Plus 观测接入 | [goal-plus-observability](goal-plus-observability/) | 以只读 `.gp` 语义快照和 Codex/Pi 原生 Trace 双通道构建 Goal、Run、Candidate、Iteration 与 Execution 的确定性关联，并独立呈现完整度和保真度 | Feature | 2026-09-02 | 🟡 已补 Pi 主对话、全 worker 与无截断 native 正文，待真实宿主及浏览器验收 | —（待补） |
+| 跨 Session 调用关系 | [cross-session-collaboration](cross-session-collaboration/) | 独立关系上报、会话绑定、后端调用链和步骤定位，无 UI 改动 | Feature | 2026-09-11 | 🟡 后端与 13 组 HTTP mock 验证完成，待真实框架验证；全量回归有未解决失败 | — |
 | 自定义评估器数据集输入变量 | [custom-evaluator-dataset-input](custom-evaluator-dataset-input/) | 新增 `dataset_input` Judge 变量与确定性数据集匹配门控，保存实验数据集输入快照，并统一“预期输出”展示术语 | Feature | 2026-08-27 | 🟡 代码与自动化验证完成，待浏览器验收 | —（待补） |
 | IDaaS OAuth 登录 | [idaas-oauth-login](idaas-oauth-login/) | 新增与历史组织集成完全隔离的 OAuth 2.0 授权码登录，以 IDaaS UUID 映射本地用户，保护 callback 凭据、保留通用退出入口，并提供默认关闭的欧盟地区访问限制 | Feature | 2026-08-27 | 🟡 代码与专项测试完成，待浏览器验收 | —（待补） |
 | DeepSeek Harness 观测接入 | [deepseek-harness-observability](deepseek-harness-observability/) | 复用 Harness 官方 Session Telemetry，以 Agent Insight 插件完成认证、脱敏和截断，并通过专用 OTLP Logs spool/adapter 生成 Trace、Tool、Skill 与子 Session 观测数据 | Feature | 2026-08-21 | 🟡 实现中 | —（待补） |
@@ -30,6 +32,7 @@
 | Claude Code OTel 工具输出采集补全 | [claude-code-otel-tool-output-followup](claude-code-otel-tool-output-followup/) | 记录 Claude Code 官方 OTel logs 中 `tool_result` 只有 metadata、raw API body file 模式未产出 `body_ref`、本地 transcript 有工具输出但平台 trace 仍缺 output 的遗留问题;后续需在 OTel traces、raw body file 模式或 Claude native JSONL 补充源之间选定稳定方案 | Bugfix | 2026-06-10 | ⬜ 未实现（遗留问题已记录,待后续开发） | —（待补） |
 | 质量监控结果维度评测 | [quality-monitoring](quality-monitoring/) | 对 Agent 最终交付按忠实度、指令遵循、答案质量、准确性四项异步评测，持久化证据并为质量报告、趋势和执行记录提供统一分数 | Feature | 2026-06-23 | 🟡 实现中（代码与自动化验证已完成，浏览器验收待确认） | —（待补） |
 | 内置 Agent 评估器套件 | [build-in-evaluators](build-in-evaluators/) | 新增回答深度性、轨迹工具利用率和 Agent 工具选择合理性评估，并建立 case 级 Tool/Skill 目录契约 | Feature | 2026-07-27 | 🟡 实现中（代码与自动化验证已完成，浏览器验收待确认） | [#163](https://gitcode.com/openeuler/opensource-intern/issues/163) |
+| Agent 执行步骤效率与执行过程质量评估器 | [phase3-development-plan.md](agent-trajectory-evaluation/phase3-development-plan.md) | 新增五维步骤效率评估器和独立六维过程质量评估器；采用离散 Judge、代码聚合、事实锚定和严重问题封顶，原轨迹质量评估器保持不变 | Feature | 2026-08-23 | 🟡 自动化门禁与 DeepSeek Pro 真实 Judge 24×2 验收通过；五层拆分 PR 提交中 | [#168](https://gitcode.com/openeuler/opensource-intern/issues/168) |
 | 标签化版本管理与版本分析 | [tag-based-version-management](tag-based-version-management/) | 通过系统标签、版本标签、业务标签三类标签重构版本管理、链路追踪打标/筛选与版本分析；版本分析只做已有 Trace 指标汇总，不做模型分析 | Feature | 2026-07-06 | 🟡 MVP implemented; browser validation pending | —（待补） |
 | Trace 回流到评测数据集 | [trace-to-dataset-backflow](trace-to-dataset-backflow/) | 支持 Trace 单条/批量回流到评测数据集、数据集新增自定义字段，以及逐条编辑样本字段值；input/output 使用评测执行已有逻辑处理后写入 | Feature | 2026-07-15 | 🟡 实现中（代码与目标测试已完成，浏览器验收待确认） | —（待补） |
 | 评测数据集加载性能优化 | [agent-dataset-loading-performance](agent-dataset-loading-performance/) | 为评测数据集增加样本数与参考答案轻量投影，列表和实验导入不再传输完整轨迹，并在数据库层按用户过滤 | Performance | 2026-08-04 | 🟡 实现中 | —（待补） |

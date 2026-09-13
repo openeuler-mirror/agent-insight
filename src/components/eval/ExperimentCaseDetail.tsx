@@ -179,6 +179,8 @@ const SPECIALIZED_PRESET_IDS = new Set([
   'preset-ras-reliability-fault-injection',
   'preset-ras-reliability-detection-recovery',
   'preset-agent-trace-quality',
+  'preset-agent-step-efficiency',
+  'preset-agent-process-quality',
 ]);
 
 /** 评分点的「状态 / 可归因 skill」标签组（评分点与子项复用）。 */

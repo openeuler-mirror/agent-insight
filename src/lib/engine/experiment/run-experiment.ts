@@ -23,6 +23,7 @@
  * 超时类可重试（退避见 experimentEngineConfig.retryDelaysMs，默认 2s/8s）；
  * 单行超时 5 分钟。
  */
+
 import { prisma } from '@/lib/storage/prisma';
 import {
   buildJudgePrompt,
@@ -57,6 +58,10 @@ import {
   runFaithfulPreset,
   type FaithfulPresetContext,
 } from './faithful-preset-evaluators';
+import {
+  isAgentTrajectoryPresetId,
+  runAgentTrajectoryPreset,
+} from './agent-trajectory-preset-evaluators';
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
@@ -82,6 +87,7 @@ import {
 } from './task-completion-preset-evaluators';
 import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators';
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
+import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -313,6 +319,9 @@ async function evaluateOnce(
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
     return evaluateSkillTriggerAnalysis(runtime.trigger);
   }
+  if (isAgentTrajectoryPresetId(evaluatorId)) {
+    return runAgentTrajectoryPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
     return runFaithfulPreset(evaluatorId, user, runtime.faithfulCtx);
@@ -333,6 +342,9 @@ async function evaluateOnce(
   }
   if (isDepthPresetId(evaluatorId)) {
     return runDepthPreset(user, runtime.faithfulCtx);
+  }
+  if (isRigorPresetId(evaluatorId)) {
+    return runRigorPreset(user, runtime.faithfulCtx);
   }
   if (isAgentToolPresetId(evaluatorId)) {
     return runAgentToolPreset(evaluatorId, user, runtime.faithfulCtx);

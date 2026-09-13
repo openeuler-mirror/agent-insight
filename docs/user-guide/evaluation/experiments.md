@@ -72,6 +72,8 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 **生成 Trace** 使用数据集 Case 重新运行 Agent，再对新产生的 Trace 执行评估。
 
+每个 Case 的 Agent 执行上限默认是 10 分钟，可在实验向导中配置为 30～3600 秒；达到上限仍未结束时，本次 Trace 生成按超时失败处理。该上限只约束 Agent 运行，不改变后续评估器各自的超时与重试规则。
+
 <p align="center">
   <img src="../../images/agent/evaluation/eval_experiment_trace_generate.png" alt="新建实验第二步，选择生成 Trace，包含运行主机 IP、provider/model 和数据集 Case" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>

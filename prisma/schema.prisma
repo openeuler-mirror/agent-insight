@@ -134,6 +134,10 @@ model Execution {
   // Trace ↔ 用户标签的可索引绑定。系统标签不入库，由读路径派生。
   executionTags ExecutionTag[]
 
+  // Goal Plus is an orchestration overlay. These links never replace the
+  // native Execution parent/root tree.
+  goalPlusLinks GoalPlusExecutionLink[]
+
   @@index([parentExecutionId])
   @@index([rootExecutionId])
   @@index([isSubagent, timestamp])
@@ -1726,4 +1730,256 @@ model ReliabilityConfigLoad {
   createdAt     DateTime @default(now())
 
   @@index([clientId, platform, loadedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Goal Plus observability overlay
+// Design: docs/design/goal-plus-observability/
+// ---------------------------------------------------------------------------
+
+model GoalPlusSource {
+  id                     String    @id @default(cuid())
+  user                   String
+  sourceId               String
+  workspaceFingerprint   String
+  label                  String?
+  collectorVersion       String?
+  sourceSchemaVersion    Int?
+  firstSeenAt            DateTime  @default(now())
+  lastSeenAt             DateTime  @default(now())
+  lastScanCompletedAt    DateTime?
+  semanticCheckpointJson String?
+
+  goals     GoalPlusGoal[]
+  runs      GoalPlusRun[]
+  links     GoalPlusExecutionLink[]
+  snapshots GoalPlusSemanticSnapshot[]
+
+  @@unique([user, sourceId])
+  @@index([user, lastSeenAt])
+}
+
+model GoalPlusGoal {
+  id                String         @id @default(cuid())
+  sourceDbId        String
+  source            GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalPlusId        String
+  currentRevision   Int
+  status            String
+  phase             String
+  goalDigest        String
+  boundedGoal       String?
+  policyJson        String         @default("{}")
+  triageJson        String?
+  revisionsJson     String         @default("[]")
+  workItemsJson     String         @default("[]")
+  searchTasksJson   String         @default("[]")
+  finalChecksJson   String         @default("[]")
+  activeSessionJson String?
+  nextActionJson    String?
+  sourceCreatedAt   DateTime?
+  sourceUpdatedAt   DateTime?
+  observedAt        DateTime
+
+  runs  GoalPlusRun[]
+  links GoalPlusExecutionLink[]
+
+  @@unique([sourceDbId, goalPlusId])
+  @@index([sourceDbId, status, observedAt])
+}
+
+model GoalPlusRun {
+  id                   String         @id @default(cuid())
+  sourceDbId           String
+  source               GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalDbId             String?
+  goal                 GoalPlusGoal?  @relation(fields: [goalDbId], references: [id], onDelete: SetNull)
+  runId                String
+  frozenSpecId         String
+  sourceRunId          String?
+  replacementRunId     String?
+  state                String
+  strategy             String?
+  metricName           String?
+  metricDirection      String?
+  bestCandidateId      String?
+  bestScore            Float?
+  selectedCandidateId  String?
+  selectedIteration    Int?
+  selectedScore        Float?
+  selectedGitHead      String?
+  selectedArtifactHash String?
+  invalidationReason   String?
+  invalidationSummary  String?
+  budgetUsedJson       String         @default("{}")
+  selectedModelsJson   String         @default("[]")
+  bestJson             String?
+  reportJson           String?
+  sourceCreatedAt      DateTime?
+  invalidatedAt        DateTime?
+  observedAt           DateTime
+
+  candidates    GoalPlusCandidate[]
+  agentSessions GoalPlusAgentSession[]
+  links         GoalPlusExecutionLink[]
+
+  @@unique([sourceDbId, runId])
+  @@index([sourceDbId, state, observedAt])
+  @@index([goalDbId])
+}
+
+model GoalPlusCandidate {
+  id               String      @id @default(cuid())
+  runDbId          String
+  run              GoalPlusRun @relation(fields: [runDbId], references: [id], onDelete: Cascade)
+  candidateId      String
+  status           String
+  selectedModel    String?
+  baseGitHead      String?
+  bestIteration    Int?
+  bestScore        Float?
+  bestArtifactHash String?
+  taskJson         String      @default("{}")
+  scoreReportJson  String?
+  promotionJson    String?
+  observedAt       DateTime
+
+  iterations    GoalPlusIteration[]
+  agentSessions GoalPlusAgentSession[]
+  links         GoalPlusExecutionLink[]
+
+  @@unique([runDbId, candidateId])
+  @@index([runDbId, status])
+}
+
+model GoalPlusIteration {
+  id               String            @id @default(cuid())
+  candidateDbId    String
+  candidate        GoalPlusCandidate @relation(fields: [candidateDbId], references: [id], onDelete: Cascade)
+  iteration        Int
+  agentSessionId   String?
+  selectedModel    String?
+  score            Float?
+  processPassed    Boolean?
+  disposition      String?
+  failureClass     String?
+  gitHead          String?
+  ledgerGitHead    String?
+  artifactHash     String?
+  changedFilesJson String            @default("[]")
+  metricsJson      String            @default("{}")
+  summary          String?
+  hypothesis       String?
+  sourceCreatedAt  DateTime?
+  observedAt       DateTime
+
+  @@unique([candidateDbId, iteration])
+  @@index([agentSessionId])
+}
+
+model GoalPlusAgentSession {
+  id                    String             @id @default(cuid())
+  runDbId               String
+  run                   GoalPlusRun        @relation(fields: [runDbId], references: [id], onDelete: Cascade)
+  candidateDbId         String?
+  candidate             GoalPlusCandidate? @relation(fields: [candidateDbId], references: [id], onDelete: SetNull)
+  agentSessionId        String
+  host                  String
+  role                  String
+  nativeSessionId       String?
+  taskName              String?
+  transcriptFingerprint String?
+  selectedModel         String?
+  usageJson             String             @default("{}")
+  hostMetadataJson      String             @default("{}")
+  countersJson          String             @default("{}")
+  sourceCreatedAt       DateTime?
+  sourceUpdatedAt       DateTime?
+  observedAt            DateTime
+
+  links GoalPlusExecutionLink[]
+
+  @@unique([runDbId, agentSessionId])
+  @@index([nativeSessionId])
+  @@index([taskName])
+}
+
+model GoalPlusExecutionLink {
+  id               String                @id @default(cuid())
+  sourceDbId       String
+  source           GoalPlusSource        @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalDbId         String?
+  goal             GoalPlusGoal?         @relation(fields: [goalDbId], references: [id], onDelete: SetNull)
+  runDbId          String?
+  run              GoalPlusRun?          @relation(fields: [runDbId], references: [id], onDelete: SetNull)
+  candidateDbId    String?
+  candidate        GoalPlusCandidate?    @relation(fields: [candidateDbId], references: [id], onDelete: SetNull)
+  agentSessionDbId String?
+  agentSession     GoalPlusAgentSession? @relation(fields: [agentSessionDbId], references: [id], onDelete: SetNull)
+  executionId      String
+  execution        Execution             @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  role             String
+  linkMethod       String
+  linkState        String
+  priority         Int
+  evidenceJson     String?
+  linkedAt         DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([sourceDbId, executionId, role])
+  @@index([executionId])
+  @@index([agentSessionDbId, linkState])
+  @@index([goalDbId, linkState])
+  @@index([runDbId, linkState])
+}
+
+model GoalPlusSemanticSnapshot {
+  id                   String         @id @default(cuid())
+  sourceDbId           String
+  source               GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  snapshotId           String
+  kind                 String
+  objectKey            String
+  parentKeysJson       String         @default("{}")
+  contentHash          String
+  sourceSchemaVersion  Int?
+  sanitizedPayloadJson String
+  redactionJson        String         @default("{}")
+  observedAt           DateTime
+  ingestedAt           DateTime       @default(now())
+
+  @@unique([sourceDbId, snapshotId])
+  @@index([sourceDbId, kind, objectKey, observedAt])
+}
+
+model Collaboration {
+  id String @id
+  user String
+  collaborationId String
+  createdAt String
+  @@unique([user, collaborationId])
+}
+
+model CollaborationEvent {
+  id String @id
+  user String
+  collaborationId String
+  eventId String
+  bodyJson String
+  bodyHash String
+  receivedAt String
+  @@unique([user, collaborationId, eventId])
+  @@index([user, collaborationId, receivedAt, id])
+}
+
+model CollaborationSessionBinding {
+  id String @id
+  user String
+  collaborationId String
+  sessionId String
+  traceSessionId String
+  eventClock String
+  createdAt String
+  @@unique([user, collaborationId, sessionId])
 }

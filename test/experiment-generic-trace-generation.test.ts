@@ -365,6 +365,9 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(wizard, /generationCasesFromDataset\(selectedDataset\)/);
   assert.match(wizard, /useState\(\s*String\(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS\)/);
   assert.match(wizard, /timeoutSeconds: agentTimeoutSeconds/);
+  assert.equal(route.match(/: DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;/g)?.length, 2);
+  assert.match(generation, /req\.timeoutSeconds \?\? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS/);
+  assert.match(generation, /Number\(payload\.timeoutSeconds\) \|\| DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS/);
   assert.match(route, /if \(wantGenerate && !wantFi\)/);
   assert.match(route, /generateExperimentTraces/);
   assert.match(route, /caseIds: generated\.readyCaseIds/);
@@ -378,7 +381,7 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(client, /traceId/);
   assert.match(client, /args\.push\('-p', input\.input, '--agent', input\.agent\)/);
   assert.match(generation, /taskId: input\.traceId/);
-  assert.match(generation, /parseTraceIdFromCommandResult\(command\.resultJson\)/);
+  assert.match(generation, /parseTraceIdFromCommandResult\(command\?\.resultJson\)/);
   assert.match(generation, /select: \{ interactions: true, endTime: true \}/);
   assert.doesNotMatch(generation, /query:\s*input\.item\.input/);
   assert.doesNotMatch(generation, /if \(!dispatched\.delivered\)/);

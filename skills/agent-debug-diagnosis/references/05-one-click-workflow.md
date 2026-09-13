@@ -20,4 +20,4 @@
 - 任何 core finding 都不能被删除或改写。
 - `facts`、`anchors`、`details` 必须从原始专项结果无损复制。
 
-最后由当前 Agent 写入 `.agent-insight/agent-debug-final.json` 并调用校验脚本。服务端只读取、标准化、存储和返回该最终报告。
+最后由当前 Agent 写入 `.agent-insight/agent-debug-final.json` 并调用校验脚本。该文件是唯一报告真源；校验通过后 Agent 只返回 `AGENT_DEBUG_REPORT_READY`，服务端读取、标准化、存储并返回文件中的最终报告。

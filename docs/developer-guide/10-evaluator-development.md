@@ -11,7 +11,7 @@
 
 ```
 实验(Experiment)
-  └─ case(ExperimentCase：一条 trace + 实际任务输入/数据集输入/实际输出/预期输出)
+  └─ case(ExperimentCase：一条 trace + 输入/实际输出/参考答案)
        └─ × 每个评估器 → ExperimentEvalResult(status/verdict/summary/score/points/evidence)
 ```
 
@@ -21,11 +21,14 @@
 
 | evaluatorId | 走哪个实现 |
 |---|---|
-| `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
+| `preset-agent-task-completion` | `experiment/faithful-preset-evaluators.ts` |
+| `preset-agent-step-efficiency` / `preset-agent-process-quality` | `experiment/agent-trajectory-preset-evaluators.ts` → 复用 canonical `facts → judge → assessment` |
+| `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` → 保留既有 opencode 轨迹评分 |
 | `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
 | `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
-| `preset-text-*` | `experiment/text-preset-evaluators.ts` |
 | `preset-fluency-text` / `preset-hallucination-text` | `experiment/fluency-preset-evaluators.ts` / `experiment/hallucination-preset-evaluators.ts`（run-experiment 直接分发） |
+| `preset-rigor-content` | `experiment/rigor-preset-evaluators.ts` |
+| `preset-text-*` | `experiment/text-preset-evaluators.ts` |
 | 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -135,9 +138,9 @@ EvalPoint = {
 | 字段 | 取值 | 决定什么 | 改了会怎样 |
 |---|---|---|---|
 | `category` | `res` / `traj` | 结果落在 Trace 评测详情的哪个板块、进哪个类目均分 | 历史行按旧类目算的均分与新的不可比 |
-| `requires` | `['reference']` / `['dataset_input']` / `['tool_catalog']` / `[]` | 实验向导 ④ 步的**硬门控**：检查预期输出、数据集输入匹配或显式 Tool/Skill 目录 | 放宽会让历史上被挡住的组合突然可选，口径变化无记录 |
+| `requires` | `['reference']` / `['tool_catalog']` / `[]` | 实验向导 ④ 步的**硬门控**：检查参考答案或显式 Tool/Skill 目录 | 放宽会让历史上被挡住的组合突然可选，口径变化无记录 |
 
-`requires` 填了 `['reference']`、`['dataset_input']` 或 `['tool_catalog']`，实现仍要处理 `ctx.referenceOutput`、`ctx.datasetInput` 或 `ctx.evaluatorContext` 缺失。历史数据和直接 API 调用可能绕过向导。
+`requires` 填了 `['reference']` 或 `['tool_catalog']`，实现仍要处理 `ctx.referenceOutput` 或 `ctx.evaluatorContext` 缺失。历史数据和直接 API 调用可能绕过向导。
 
 ---
 
@@ -271,13 +274,12 @@ return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 ```ts
 'preset-your-evaluator': {
   category: 'res' | 'traj',
-  requires: ['reference'] | ['dataset_input'] | ['tool_catalog'] | [],
+  requires: ['reference'] | ['tool_catalog'] | [],
 },
 ```
 
-- **category**：只读最终输出（±预期输出）→ `res`；需要读执行过程（步骤/工具/耗时/成本/token）→ `traj`。决定它在 Trace 评测详情里归到「结果评测」还是「轨迹评测」板块，以及进哪个类目均分。
-- **requires**：`reference` 要求每个 case 有预期输出；`dataset_input` 要求实际任务输入确定性包含数据集输入并保存快照；`tool_catalog` 要求每个 case 有显式 Tool/Skill 目录。`availableTools=[]` 表示调用方确认没有可用 Tool，仍满足目录前置条件；上下文字段缺失才触发门控。
-- **互斥组**（`MUTUAL_EXCLUSION_GROUPS`）：若两个评估器评估**同一目标的两种口径**，同选会让该维度在实验综合分里重复加权，就应归入同一互斥组。组内第一项是「优先项」——当它被选中（意味着其前置条件已满足）时，组内其余项在向导 ④ 步被禁用并提示原因。例如任务完成度：`preset-agent-task-completion`（依赖预期输出）为优先项，`preset-task-completion-no-ref`（无预期输出）为其次——有预期输出时选前者，后者不再可选。
+- **category**：只读最终输出（±参考答案）→ `res`；需要读执行过程（步骤/工具/耗时/成本/token）→ `traj`。决定它在 Trace 评测详情里归到「结果评测」还是「轨迹评测」板块，以及进哪个类目均分。
+- **requires**：`reference` 要求每个 case 有参考答案；`tool_catalog` 要求每个 case 有显式 Tool/Skill 目录。`availableTools=[]` 表示调用方确认没有可用 Tool，仍满足目录前置条件；上下文字段缺失才触发门控。
 - **能力目录来源**：可由实验 API 的 `evaluatorContext` 显式提供，或从数据集的 `available_tools` / `available_skills` 导入。trace 只记录实际发生的调用，不能还原执行时完整的可用能力集合，因此不得用已调用集合反推目录。
 - **tags 不用填**，由元数据派生（`deriveEvaluatorTags`）。
 
@@ -304,7 +306,7 @@ async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promi
 
 | 组 | 表面上共用一个文件 | 实际共享了什么 |
 |---|---|---|
-| `faithful-preset-evaluators.ts` | 2 个评估器 | 几乎没有。`runFaithfulPreset` 只是 `if/else` 转发到两个**完全独立**的实现，各自跑各自的 opencode agent；只共用 `coverageToStatus` / `stepsToAnchors` 两个 20 行小工具。它们在一起的真正原因是「都是遗留 opencode 评估器的适配层」——实现历史，不是逻辑复用 |
+| `faithful-preset-evaluators.ts` | 2 个评估器 | 保留 `preset-agent-task-completion` 与 `preset-agent-trace-quality` 的既有 opencode 适配；它们不与新的 canonical 轨迹评估器共享运行时 |
 | `result-preset-evaluators.ts` | 4 个评估器 | 共享 `result-metric-evaluator.ts` 的指标分发与结构化模型传输；这个文件本身只负责 ID→metric 映射、实验输入适配和统一输出映射 |
 
 #### 唯一硬约束：接分发时「一批只加一行」
@@ -393,15 +395,61 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 
 **归属判断必须写成显式 id 清单，不要从卡片派生**（`FAITHFUL_PRESET_IDS` / `RESULT_PRESET_IDS` 就是范例）。写成 `match: id => MY_CARDS.some(c => c.id === id)` 看着更 DRY，但会让「卡登记了、实现没接」这个错误静默消失——那正是 §4.1 第 ⑤ 步守卫要抓的东西。
 
+### 4.5 Issue #168 轨迹评估器的 canonical 边界
+
+`preset-agent-process-quality` 与 `preset-agent-step-efficiency` 共用一套 canonical 轨迹能力，由实验评测链路执行；它们的卡片可在通用实验和三个既有 Skill 评测选择器中按统一的 `status === 'ready'` 规则展示。原 `preset-agent-trace-quality` 仍由 faithful/opencode runner 实现，并继续服务旧 `/eval/trajectory` 入口；不要为复用而把两个语义不同的质量评估器合并。
+
+需求背景、冻结契约与逐项实施计划分别见 [Phase 1 需求分析](../design/agent-trajectory-evaluation/phase1-requirements-analysis.md)、[Phase 2 需求设计](../design/agent-trajectory-evaluation/phase2-requirements-design.md)、[Phase 3 开发计划](../design/agent-trajectory-evaluation/phase3-development-plan.md)。
+
+#### canonical 模块分工
+
+- `src/lib/engine/evaluation/agent-trajectory-facts.ts`
+  - 从 `buildAgentCallTree()` / `walkTree()` 提取可见步骤，跳过 `ras` 事件，生成稳定 `step-N` 索引。
+  - 只在这里做摘要、指纹和确定性候选；参数/输出/文本摘要单字段上限 500 字，完整 Prompt payload 超过 120,000 字符直接抛 `TrajectoryPromptTooLargeError`。
+- `src/lib/engine/evaluation/agent-trajectory-judge.ts`
+  - 只负责编排：`facts -> prompt -> 注入的 JudgeLlmCaller -> JSON parse`，首次契约错误时在同一次 canonical invocation 内追加至多一次安全 repair。
+  - Judge 是离散裁决器，只返回 `met | partial | missing`、问题代码、步骤索引和建议；Judge 不得返回分数、权重、封顶或持久化字段。
+  - 每次 canonical invocation 最多执行 2 次逻辑 `callJudge`（首次调用 + 至多一次 repair）；这不是底层网络请求的硬上限，SDK retry 和 direct→opencode fallback 仍属于传输层。
+- `src/lib/engine/evaluation/agent-trajectory-assessment.ts`
+  - 固化两个 rubric：效率 `agent-step-efficiency/1.0.0`，执行过程质量 `agent-process-quality/1.0.0`。
+  - 在代码侧完成严格 schema 校验、事实锚定、问题去重、维度封顶和总分封顶。
+  - grounding 是硬契约：不存在的步骤、对不上 `toolName` 的问题、没命中确定性候选的 code 都会被丢弃；若某个非 `met` 维度因此失去全部证据，则抛 `JudgeOutputParseError`，不生成兜底分。
+
+#### 新实验评估器与旧轨迹评估器的边界
+
+- `src/lib/engine/experiment/agent-trajectory-preset-evaluators.ts`
+  - 只做实验适配：把 canonical assessment 投影成 `EvaluatorOutput`。
+  - 只认领 `preset-agent-step-efficiency` 与 `preset-agent-process-quality`，两者均不进入 `legacy-trajectory`。
+- `src/lib/engine/experiment/faithful-preset-evaluators.ts`
+  - 继续认领 `preset-agent-task-completion` 与 `preset-agent-trace-quality`；旧质量卡仍调用 `runTrajectoryQuality()` 与 opencode evaluator。
+- `src/lib/engine/evaluation/trajectory-evaluator.ts` 与旧 API
+  - 保持既有 `TrajectoryEvalResult` 契约和旧质量评分行为，不调用新六维 canonical 能力。
+- canonical repair 边界
+  - attempt 1 只有在已经收到输出但契约解析/校验失败时才进入 repair；首次纯 transport 失败不伪装成契约错误，继续走既有 SDK retry、direct→opencode fallback 和实验行级超时分类。
+  - attempt 2 的任何失败统一转为 `AgentTrajectoryContractExhaustedError`。该错误不是 `JudgeOutputParseError`，因此不会触发行级自动重试，防止一次坏输出被放大成多轮 Judge 调用。
+- `src/lib/engine/agent-debug/skills-analysis.ts`
+  - 继续走 `evaluateTrajectoryViaOpencode()` 的旧关键动作诊断链路，不复用新的六维质量总分。
+
+#### 入口边界与测试清单
+
+- `src/lib/evaluators/registry.ts` 只为 `preset-agent-process-quality` 增加现有格式的运行元数据，不扩展公共卡片或 registry 类型。
+- 实验执行引擎由 canonical runner 唯一认领新 ID；单次、批量和灰度三个 Skill 页面继续统一按 `status === 'ready'` 展示，不增加按 ID 特殊隐藏；旧 `/api/eval/trajectory/run` 白名单保持不变。
+- `preset-agent-trace-quality` 的卡片、faithful runner、旧 API 和消费者不得随新评估器修改。
+- 这组评估器至少维护以下定向测试：
+  - `test/agent-trajectory-facts.test.ts`
+  - `test/agent-trajectory-assessment.test.ts`
+  - `test/agent-trajectory-preset-evaluators.test.ts`
+  - `test/evaluator-surface.test.ts`
+  - `test/preset-registry-consistency.test.ts`
+
 ---
 
 ## 5. 新增自建 LLM 评估器（无需改代码）
 
 评估器中心 → 新建，只填**评估提示词**（三段式由系统组装，不要自己拼 system/user）。
 
-- 占位符：`{{input}}`（完整实际任务输入）、`{{dataset_input}}`（确定性匹配的数据集 case 输入）、`{{output}}`、`{{reference_output}}`（预期输出）、`{{trajectory}}`。
-- **`requires` 自动推导**：使用 `{{reference_output}}` 自动标记 `reference`；使用 `{{dataset_input}}` 自动标记 `dataset_input`。向导 ④ 步要求全部已选 case 满足依赖。
-- **数据集输入匹配**：规范化后只接受 `actualInput.includes(datasetInput)`，多项命中取最长项，不以 LLM 语义匹配决定可用性。实验把命中的数据集输入保存到 `ExperimentCase.datasetInput`；运行时再次校验，未命中返回无分的“不适用”结果。
+- 占位符：`{{query}}`、`{{actual_output}}`、`{{reference_output}}`、`{{trace_summary}}`。
+- **`requires` 自动推导**：提示词里用到 `{{reference_output}}` → 自动标记依赖参考数据，向导 ④ 步随之门控。
 - 可选填「评分点清单」：填了就按清单逐条判定（等价于 §3.2 的分解），留空则自由模式。**建议填**。
 - 输出分值统一使用 **0-100**；运行时仍兼容历史 0-1 量纲（如 `0.85` 自动折算为 `85`，`1` 自动折算为 `100`）。
 
@@ -450,6 +498,8 @@ const issueSchema = z.preprocess(
 | 缺维度 / 重复维度 | 分母不完整，分数不可比 |
 | `severity` / `rating` 是未知枚举值（含中文「高」「严重」） | 落到默认档 = 高危静默降级成轻微，且无任何提示 |
 | 非安全档却没给 quote / reason / suggestion | 违反「有分必有据」（§7） |
+
+上表是通用自建/专项评估器的默认约定。Issue #168 的 canonical 轨迹评估器采用 §4.5 的更窄边界：首次 `JudgeOutputParseError` 只触发 canonical 内部一次安全 repair；repair 再失败会转成不可行级重试的 `AgentTrajectoryContractExhaustedError`。
 
 **判据一句话：「模型没判」和「模型判为无风险」是两件事。** 前者必须 failed，不许兜底成中间分。
 
@@ -515,8 +565,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 **注册与口径**
 
 - [ ] 若改了 canonical `result-*`：升了版本号，并确认「可靠性与性能」页不回归
-- [ ] 若依赖预期输出：`requires` 填了 `['reference']`，且实现里对空预期输出有兜底
-- [ ] 若依赖数据集输入：`requires` 填了 `['dataset_input']`，且运行时对缺少匹配快照返回不适用
+- [ ] 若依赖参考答案：`requires` 填了 `['reference']`，且实现里对空参考有兜底
 - [ ] 若依赖能力目录：`requires` 填了 `['tool_catalog']`，并区分缺失目录与显式空目录
 - [ ] 维度与 §8 台账比对过，无覆盖面重叠（§3.6）
 - [ ] 提示词里没有写死验收用例的原句（§5.1）
@@ -533,7 +582,9 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 评估器 | 评分点来自 | 覆盖的维度 |
 |---|---|---|
 | 任务完成度 `preset-agent-task-completion` | 预期输出 | 关键观点覆盖率（召回） |
-| 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 | 完整性（关键动作覆盖）· 工具选择 · 冗余度 |
+| 轨迹质量 `preset-agent-trace-quality` | 执行轨迹 / Skill | 完整性 · 工具选择 · 冗余度（既有 opencode 口径） |
+| 执行过程质量 `preset-agent-process-quality` | 执行轨迹 | 目标对齐 · 规划完整性 · 推理连贯性 · 异常处理 · 路径稳健性 · 信息利用 |
+| 步骤效率 `preset-agent-step-efficiency` | 执行轨迹 | 步骤必要性 · 路径绕行 · 成本效率 · 步骤密度 · 重试效率 |
 | 结果准确性 `preset-result-accuracy` | 实际输出主张 | 对参考判对错（精确） |
 | 答案质量 `preset-result-answer` | 最终答案 | 相关性 · 完整性 · 连贯性 |
 | 忠实度 `preset-result-faithfulness` | 实际输出主张 | 对 trace 证据判有据（防脑补） |
@@ -551,14 +602,15 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
 | Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
-| 工具调用成功率 `preset-agent-tool-success-rate` | 执行轨迹（工具调用步骤与错误码） | 整体成功率 · 按工具聚合失败率 · 错误模式分析 · 失败影响评估（4 维，代码统计 + LLM 离散判断） |
-| 任务完成度（无标准答案） `preset-task-completion-no-ref` | 用户输入（推断需求） | 显式需求完成度 · 隐含约束满足度 · 信息充分性与中立性（3 维，三阶段方法，LLM 做离散判断，代码按规则算分） |
 
-回答深度性与答案质量的边界：答案质量判断"有没有答到、答全、表达是否连贯"，回答深度性判断"对当前问题需要展开的分析层次是否展开"。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
-
-`preset-task-completion-no-ref` 与 `preset-agent-task-completion` 的边界：两者都是"任务完成度"，但评分点来源不同——前者从用户输入推断需求（无参考答案），后者从参考答案提取关键观点（有参考答案）。前者不需要参考答案即可运行，后者必须有参考答案。按 §3.5 的评分点来源维度区分，两者不重叠。
+回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
 
 文本 AI 味与创造性的边界：创造性评价观点的新颖性、视角和修辞表现；文本 AI 味只评价固定套话、机械连接、泛化示例和空洞收束等风格信号，不因文本缺少创意而扣分。文本简洁性与答案质量的边界：简洁性只扣冗余、偏题扩写和必要信息缺失，不重新评价答案事实是否正确。语种一致性只评价语言匹配和无理由切换；格式评估器只评价可读的结构与标记规范，均不承担内容安全判断。
+| 内容严谨性 `preset-rigor-content` | Agent 输出（参考答案可选） | 事实准确性 · 数值精确性 · 逻辑正确性 · 操作建议正确性 · 误导性表述（5 维扣分制 + 严重问题封顶） |
+回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
+
+内容严谨性与结果准确性的边界：结果准确性对照参考答案判对错，内容严谨性面向无参考答案场景，依据评审模型知识与代码审计判定确凿错误，参考答案存在时仅作可选依据。与答案质量的边界：答案质量评相关性、完整性与连贯性，不判内容真伪；内容严谨性只判真伪，不评表达。危险命令只按是否给出风险提示计入操作建议正确性，内容主题的安全性交安全专项评估器；误导性表述只扣与事实共识冲突的过度绝对断言，纯语言形式的绝对化交争议性评估器。
+
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 

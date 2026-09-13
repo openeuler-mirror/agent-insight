@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { loadServerModelForUserById } from '@/lib/engine/general-agent/server-model-config';
@@ -103,6 +104,7 @@ function configuredExecutionSides(config: GrayscaleConfig): Side[] {
 interface RunResult {
     status: CaseStatus;
     jobId?: string;
+    experimentCaseId?: string;
     evaluatorRunId?: string;
     evaluationResultId?: string;
     evaluationClaimId?: string;
@@ -315,7 +317,7 @@ const MAX_EVALUATION_RETRIES = 2;
 // caseStatesJson 整份回写的乐观锁重试次数。评测/执行高并发(默认 5 个 slot)时,
 // 多个 flow 各自 load→改→写整份 JSON, 不做 CAS 会 lost update; 冲突就重新 load 再算。
 const PERSIST_CAS_MAX_RETRIES = 5;
-const GRAYSCALE_AGENT_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_TIMEOUT_MS) || 3 * 60 * 1000;
+const GRAYSCALE_AGENT_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_TIMEOUT_MS) || 10 * 60 * 1000;
 const GRAYSCALE_AGENT_IDLE_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_IDLE_TIMEOUT_MS) || 45 * 1000;
 
 class GrayscaleAgentTimeoutError extends Error {
@@ -1467,6 +1469,7 @@ async function executeSingleAgentRun(args: {
     delete run.toolCalls;
     delete run.failureType;
     delete run.failureDetail;
+    delete run.completedAt;
     run.output = undefined;
     run.timeCost = undefined;
     state[target.side] = rebuildSideAggregate(state[target.side], args.totalRunsPerSide);
@@ -1787,7 +1790,6 @@ async function evaluateSingleRunTarget(args: {
     );
     delete target.run.evaluationResultId;
     delete target.run.evaluationTraceId;
-    target.run.output = undefined;
     await persistRunStatePatch({
         taskId: args.taskId,
         user: args.user,
@@ -1948,6 +1950,7 @@ async function evaluateRunsAsExperimentBatch(args: {
                 actualOutput: target.run.output || '',
                 referenceOutput: datasetCase?.expectedOutput ?? null,
             });
+            target.run.experimentCaseId = experimentCaseId;
             return { target, experimentCaseId };
         }));
         const batch = await startEvalExperimentCases(
@@ -2583,6 +2586,300 @@ async function runGrayscaleTask(args: {
     }
 }
 
+async function prepareExperimentCasesForExecutionRetry(args: {
+    experimentId: string;
+    user: string;
+    runs: RunResult[];
+    datasetCase: DatasetCase;
+    evaluatorIds: string[];
+}) {
+    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const experimentCaseIds: string[] = [];
+        for (const run of args.runs) {
+            const oldSessionId = String(run.sessionId || '').trim();
+            const existing = await tx.experimentCase.findFirst({
+                where: {
+                    experimentId: args.experimentId,
+                    ...(run.experimentCaseId
+                        ? { id: run.experimentCaseId }
+                        : oldSessionId ? { taskId: oldSessionId } : { id: '__missing__' }),
+                    experiment: { user: args.user },
+                },
+                select: { id: true },
+            });
+            const caseData = {
+                executionId: null,
+                taskId: null,
+                input: args.datasetCase.input || '',
+                datasetInput: args.datasetCase.input || null,
+                actualOutput: '',
+                referenceOutput: args.datasetCase.expectedOutput ?? null,
+                caseValuesJson: JSON.stringify(args.datasetCase.values || {}),
+            };
+            const experimentCase = existing
+                ? await tx.experimentCase.update({ where: { id: existing.id }, data: caseData, select: { id: true } })
+                : await tx.experimentCase.create({
+                    data: { experimentId: args.experimentId, ...caseData },
+                    select: { id: true },
+                });
+            await tx.experimentEvalResult.deleteMany({
+                where: { caseId: experimentCase.id, evaluatorId: { notIn: args.evaluatorIds } },
+            });
+            for (const evaluatorId of args.evaluatorIds) {
+                await tx.experimentEvalResult.upsert({
+                    where: { caseId_evaluatorId: { caseId: experimentCase.id, evaluatorId } },
+                    create: {
+                        experimentId: args.experimentId,
+                        caseId: experimentCase.id,
+                        evaluatorId,
+                        status: 'pending',
+                    },
+                    update: {
+                        status: 'pending',
+                        verdict: null,
+                        summary: null,
+                        score: null,
+                        pointsJson: null,
+                        evidenceJson: null,
+                        errorMessage: null,
+                        attempts: 0,
+                        durationMs: null,
+                        humanScore: null,
+                        humanReason: null,
+                        humanBy: null,
+                        humanAt: null,
+                    },
+                });
+            }
+            experimentCaseIds.push(experimentCase.id);
+        }
+        await tx.experiment.updateMany({
+            where: { id: args.experimentId, user: args.user },
+            data: { status: 'running' },
+        });
+        return experimentCaseIds;
+    });
+}
+
+function resetRunForExecutionRetry(run: RunResult, experimentCaseId: string) {
+    run.experimentCaseId = experimentCaseId;
+    run.status = 'pending';
+    delete run.evaluatorRunId;
+    delete run.evaluationResultId;
+    delete run.evaluationTraceId;
+    delete run.evaluationClaimId;
+    delete run.evaluationStartedAt;
+    delete run.evalRetryPending;
+    delete run.score;
+    delete run.tier;
+    delete run.evaluations;
+    delete run.sessionId;
+    delete run.traceIds;
+    delete run.tokenUsage;
+    delete run.skillTriggered;
+    delete run.toolCallCount;
+    delete run.toolCalls;
+    delete run.failureType;
+    delete run.failureDetail;
+    delete run.completedAt;
+    run.output = undefined;
+    run.timeCost = undefined;
+}
+
+async function runGrayscaleExecutionRetry(args: {
+    taskId: string;
+    user: string;
+    caseId: string;
+    targets: Array<{ side: Side; runIndex: number }>;
+    signal: AbortSignal;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        evaluators: normalizeAbEvaluators(task.configJson.evaluators, task.configJson.evaluatorId),
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
+    };
+    if (config.triggerRouting) throw new Error('触发分析不支持此重新执行入口');
+    if (!config.evalExperimentId || config.evaluators.length === 0) throw new Error('评测实验配置不完整');
+    const experiment = await prisma.experiment.findFirst({
+        where: {
+            id: config.evalExperimentId,
+            user: args.user,
+            scope: 'skill-workbench',
+            preset: { in: ['use-case', 'skill-ab'] },
+        },
+        select: { id: true, status: true },
+    });
+    if (!experiment) throw new Error('Skill 实验不存在或不支持重新执行');
+    const retryTargets = args.targets.filter((target, index, all) => (
+        all.findIndex(item => item.side === target.side) === index
+    ));
+    if (!retryTargets.length) throw new Error('缺少需要重新执行的侧');
+    const executionSides = configuredExecutionSides(config);
+    if (retryTargets.some(target => !executionSides.includes(target.side))) {
+        throw new Error('所选侧不参与本次实验');
+    }
+
+    const states = task.caseStatesJson || {};
+    const caseConfigMap = await loadConfiguredCaseMap(args.user, config);
+    const datasetCase = caseConfigMap.get(args.caseId)?.caseEntry;
+    if (!datasetCase?.input?.trim()) throw new Error('数据集 Case 不存在或输入为空');
+    const versionA = await resolveVersion(config.skillId, config.versionAId);
+    const versionB = await resolveVersion(config.skillId, config.versionBId);
+    const retryItems = retryTargets.map(({ side, runIndex }) => {
+        const sideState = states[args.caseId]?.[side];
+        const run = sideState?.runs?.find(item => item.runIndex === runIndex);
+        if (!sideState || !run) throw new Error(`找不到需要重新执行的 ${side.toUpperCase()} 侧 Case`);
+        const experimentSettled = experiment.status === 'done'
+            || experiment.status === 'failed'
+            || experiment.status === 'cancelled';
+        if (!experimentSettled && (run.status === 'pending' || run.status === 'running' || run.status === 'evaluating')) {
+            throw new Error(`${side.toUpperCase()} 侧 Case 正在执行或评测`);
+        }
+        const version = side === 'a' ? versionA : versionB;
+        const versionId = side === 'a' ? config.versionAId : config.versionBId;
+        if (versionId && versionId !== '__NONE__' && !version) {
+            throw new Error(`${side.toUpperCase()} 侧冻结的 Skill 版本已不可用，无法重新执行`);
+        }
+        return { side, runIndex, sideState, run, version, experimentCaseId: '' };
+    });
+
+    const experimentCaseIds = await prepareExperimentCasesForExecutionRetry({
+        experimentId: experiment.id,
+        user: args.user,
+        runs: retryItems.map(item => item.run),
+        datasetCase,
+        evaluatorIds: config.evaluators,
+    });
+    for (const [index, item] of retryItems.entries()) {
+        item.experimentCaseId = experimentCaseIds[index];
+        resetRunForExecutionRetry(item.run, item.experimentCaseId);
+        const prepared = await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config,
+            states,
+            caseId: args.caseId,
+            side: item.side,
+            nextRun: item.run,
+            touchLatestResultAt: true,
+        });
+        if (!prepared) throw new Error(`${item.side.toUpperCase()} 侧重新执行状态保存失败，请稍后重试`);
+    }
+
+    const completion = (async () => {
+        await Promise.all(retryItems.map(async item => {
+            const target: ExecutionTarget = {
+                caseId: args.caseId,
+                side: item.side,
+                runIndex: item.run.runIndex,
+                roundIndex: item.run.roundIndex,
+                run: item.run,
+            };
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => executeSingleAgentRun({
+                        taskId: args.taskId,
+                        user: args.user,
+                        config,
+                        states,
+                        caseMap: new Map([[args.caseId, datasetCase]]),
+                        totalRunsPerSide: item.sideState.runCount || item.sideState.runs?.length || 1,
+                        version: item.version,
+                        referenceSkillName: versionB?.skillName || versionA?.skillName || null,
+                        target,
+                        parentSignal: args.signal,
+                    }),
+                    {
+                        taskType: 'grayscale-ab',
+                        user: args.user,
+                        label: `retry-${item.side}-${args.caseId}-r${item.run.roundIndex}`,
+                        skill: item.version?.skillName,
+                        skillVersion: item.version?.version ?? null,
+                        signal: args.signal,
+                    },
+                );
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                item.run.status = 'fail';
+                item.run.failureType = 'agent_error';
+                item.run.failureDetail = message;
+                item.run.output = message;
+                markRunCompleted(item.run);
+                await persistRunStatePatch({
+                    taskId: args.taskId,
+                    user: args.user,
+                    config,
+                    states,
+                    caseId: args.caseId,
+                    side: item.side,
+                    nextRun: item.run,
+                    touchLatestResultAt: true,
+                }).catch(() => false);
+            }
+        }));
+
+        const evaluationTargets: EvaluationTarget[] = [];
+        for (const item of retryItems) {
+            if (item.run.status !== 'executed' || !item.run.sessionId) {
+                const message = item.run.failureDetail || item.run.output || 'Agent 执行失败';
+                await prisma.$transaction([
+                    prisma.experimentCase.update({
+                        where: { id: item.experimentCaseId },
+                        data: { actualOutput: message },
+                    }),
+                    prisma.experimentEvalResult.updateMany({
+                        where: { caseId: item.experimentCaseId },
+                        data: { status: 'failed', errorMessage: message },
+                    }),
+                ]);
+                continue;
+            }
+
+            const execution = await prisma.execution.findFirst({
+                where: { user: args.user, taskId: item.run.sessionId, isSubagent: false },
+                orderBy: { timestamp: 'desc' },
+                select: { id: true },
+            });
+            await prisma.experimentCase.update({
+                where: { id: item.experimentCaseId },
+                data: {
+                    executionId: execution?.id || null,
+                    taskId: item.run.sessionId,
+                    input: datasetCase.input || '',
+                    datasetInput: datasetCase.input || null,
+                    actualOutput: item.run.output || '',
+                    referenceOutput: datasetCase.expectedOutput ?? null,
+                },
+            });
+            const currentRun = states[args.caseId]?.[item.side]?.runs
+                ?.find(run => run.runIndex === item.runIndex) || item.run;
+            currentRun.experimentCaseId = item.experimentCaseId;
+            evaluationTargets.push({ caseId: args.caseId, side: item.side, run: currentRun });
+        }
+
+        if (evaluationTargets.length) {
+            const active = activeRuns().get(`${args.user}:${args.taskId}`);
+            if (active) active.status = 'evaluating';
+            await evaluateRunsAsExperimentBatch({
+                taskId: args.taskId,
+                user: args.user,
+                config,
+                states,
+                targets: evaluationTargets,
+                evaluatorIds: config.evaluators,
+                caseConfigMap,
+            });
+        } else {
+            await settleExperimentStatus(experiment.id);
+        }
+    })();
+    return { completion };
+}
+
 async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string; evaluatorIds?: string[]; onlyMissingEvaluation?: boolean }) {
     const task = await loadTask(args.taskId, args.user);
     if (!task) throw new Error('task not found');
@@ -2721,6 +3018,16 @@ export async function POST(
         const caseIds = Array.isArray(body.caseIds)
             ? body.caseIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
             : [];
+        const retryCaseId = typeof body.caseId === 'string' ? body.caseId.trim() : '';
+        const retrySide = body.side === 'a' || body.side === 'b' || body.side === 'both'
+            ? body.side as Side | 'both'
+            : null;
+        const retryRunIndex = typeof body.runIndex === 'number' && Number.isFinite(body.runIndex)
+            ? Math.max(1, Math.floor(body.runIndex))
+            : null;
+        const retryRunIndexes = body.runIndexes && typeof body.runIndexes === 'object'
+            ? body.runIndexes as Partial<Record<Side, unknown>>
+            : {};
         const evaluatorId = typeof body.evaluatorId === 'string' ? body.evaluatorId.trim() : undefined;
         const evaluatorIds = normalizeAbEvaluators(body.evaluators, evaluatorId);
         const agentMaxConcurrency = typeof body.agentMaxConcurrency === 'number' && Number.isFinite(body.agentMaxConcurrency)
@@ -2736,6 +3043,7 @@ export async function POST(
             return NextResponse.json({ error: 'caseIds are required' }, { status: 400 });
         }
         const storeKey = `${user}:${taskId}`;
+        const origin = req.nextUrl.origin;
         // === action: abort —— 用户点「终止」按钮 ===
         if (action === 'abort') {
             // 双场景:
@@ -2811,6 +3119,87 @@ export async function POST(
             });
         }
 
+        if (action === 'retry-execution') {
+            const retrySides: Side[] = retrySide === 'both' ? ['a', 'b'] : retrySide ? [retrySide] : [];
+            const retryTargets = retrySides.map(side => {
+                const sideRunIndex = retryRunIndexes[side];
+                const runIndex = typeof sideRunIndex === 'number' && Number.isFinite(sideRunIndex)
+                    ? Math.max(1, Math.floor(sideRunIndex))
+                    : retryRunIndex;
+                return { side, runIndex };
+            });
+            if (!retryCaseId || !retrySide || retryTargets.some(target => target.runIndex == null)) {
+                return NextResponse.json({ error: 'caseId, side and runIndex/runIndexes are required' }, { status: 400 });
+            }
+            if (activeRuns().has(storeKey)) {
+                return NextResponse.json({ error: '该实验正在执行或评测，请稍后再试' }, { status: 409 });
+            }
+            const runId = `gray_retry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const abortController = new AbortController();
+            activeRuns().set(storeKey, {
+                taskId,
+                runId,
+                status: 'running',
+                startedAt: Date.now(),
+                abortController,
+            });
+            try {
+                const retry = await runGrayscaleExecutionRetry({
+                    taskId,
+                    user,
+                    caseId: retryCaseId,
+                    targets: retryTargets as Array<{ side: Side; runIndex: number }>,
+                    signal: abortController.signal,
+                });
+                void retry.completion
+                    .catch(async err => {
+                        console.error('[GRAYSCALE_TASKS_RETRY_EXECUTION] Failed:', err);
+                        const latest = await loadTask(taskId, user).catch(() => null);
+                        if (!latest) return;
+                        const message = err instanceof Error ? err.message : String(err);
+                        for (const target of retryTargets) {
+                            if (target.runIndex == null) continue;
+                            const retryRun = latest.caseStatesJson[retryCaseId]?.[target.side]?.runs
+                                ?.find(item => item.runIndex === target.runIndex);
+                            if (!retryRun) continue;
+                            if (retryRun.status === 'running' || retryRun.status === 'evaluating' || retryRun.status === 'pending') {
+                                retryRun.status = 'fail';
+                                retryRun.failureType = 'agent_error';
+                                retryRun.failureDetail = message;
+                                retryRun.output = message;
+                                markRunCompleted(retryRun);
+                                await persistRunStatePatch({
+                                    taskId,
+                                    user,
+                                    config: latest.configJson,
+                                    states: latest.caseStatesJson,
+                                    caseId: retryCaseId,
+                                    side: target.side,
+                                    nextRun: retryRun,
+                                    touchLatestResultAt: true,
+                                }).catch(() => false);
+                                if (retryRun.experimentCaseId) {
+                                    await prisma.experimentEvalResult.updateMany({
+                                        where: { caseId: retryRun.experimentCaseId },
+                                        data: { status: 'failed', errorMessage: message },
+                                    }).catch(() => undefined);
+                                }
+                            }
+                        }
+                        if (latest.configJson.evalExperimentId) {
+                            await settleExperimentStatus(latest.configJson.evalExperimentId).catch(() => undefined);
+                        }
+                    })
+                    .finally(() => activeRuns().delete(storeKey));
+                return NextResponse.json({ ok: true, runId, action }, { status: 202 });
+            } catch (err) {
+                activeRuns().delete(storeKey);
+                const message = err instanceof Error ? err.message : '重新执行失败';
+                const status = message === 'task not found' ? 404 : 409;
+                return NextResponse.json({ error: message }, { status });
+            }
+        }
+
         // 行级 retry-eval 路径 (action='evaluate' + onlyMissingEvaluation=true)
         // 跳过 single-instance 守门, 允许多个 retry 并行——只针对 frontend retryEvaluation
         // 这种"用户点了 N 条失败 case 的 retry, 期望并行重评"的场景。
@@ -2842,7 +3231,6 @@ export async function POST(
                 data: { status: 'running' },
             });
         }
-        const origin = req.nextUrl.origin;
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const abortController = new AbortController();
         // 并行 retry-eval 不占 activeRuns 主槽位 (否则后续 retry 也会被 guard 拒),

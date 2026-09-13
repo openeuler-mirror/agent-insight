@@ -10,6 +10,8 @@
 
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 
+export type JudgeSamplingProfile = 'canonical-trajectory';
+
 export interface JudgeLlmRequest {
   system: string;
   user: string;
@@ -18,11 +20,42 @@ export interface JudgeLlmRequest {
   modelOptions?: Record<string, unknown>;
   /** opencode session 标题（可观测性用），缺省自动生成 */
   sessionTitle?: string;
+  /** 仅供需要专属直连采样参数的评估请求使用。 */
+  samplingProfile?: JudgeSamplingProfile;
 }
 
 export type JudgeLlmCaller = (username: string, req: JudgeLlmRequest) => Promise<string>;
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.EXPERIMENT_JUDGE_TIMEOUT_MS || 180_000);
+
+export interface DirectJudgeSamplingOptions {
+  temperature: number;
+  topP?: number;
+  modelKwargs: Record<string, unknown>;
+}
+
+/** 构造直连 Judge 的采样参数；seed 属于兼容端点的 best-effort 参数。 */
+export function buildDirectJudgeSamplingOptions(
+  modelId: string,
+  samplingProfile?: JudgeSamplingProfile,
+): DirectJudgeSamplingOptions {
+  const normalizedModelId = modelId.trim().toLowerCase();
+  const isMimo25 = normalizedModelId === 'mimo-v2.5-pro' || normalizedModelId === 'mimo-v2.5';
+  if (samplingProfile === 'canonical-trajectory' && isMimo25) {
+    return {
+      temperature: 0,
+      modelKwargs: {
+        seed: 42,
+        thinking: { type: 'disabled' },
+      },
+    };
+  }
+  return {
+    temperature: 0,
+    topP: 1,
+    modelKwargs: { seed: 42 },
+  };
+}
 
 let injectedCaller: JudgeLlmCaller | null = null;
 
@@ -85,11 +118,9 @@ const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
       baseURL: config.baseUrl || 'https://api.deepseek.com',
       defaultHeaders: config.headers,
     },
-    temperature: 0,
-    topP: 1,
+    ...buildDirectJudgeSamplingOptions(modelId, req.samplingProfile),
     timeout: timeoutMs,
     maxRetries: 2,
-    modelKwargs: { seed: 42 },
   });
 
   const response = await model.invoke([
