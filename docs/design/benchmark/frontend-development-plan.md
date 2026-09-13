@@ -1,20 +1,24 @@
-# Benchmark 前端最小接入开发计划
+# Benchmark 前端接入设计与实现
 
-> 高保真：`http://127.0.0.1:8067/SWE-bench实验流程-高保真.html`。
-> 原则：复用现有实验列表、四步向导、实验详情和通用 API；不再开发独立 Benchmark 前端流程。
+> 原则：复用现有实验列表、四步向导、实验详情和通用 API，不维护独立 Benchmark 前端流程。
 
-## 1. 本期范围
+状态：已实现并纳入自动化测试；待按仓库规范完成浏览器 golden path 与边界场景验收。
 
-本期只增加以下能力：
+## 1. 实现范围
 
-1. 预先导入一个 `SWE-bench Verified` 数据集，并在现有评测数据集页面和实验向导中展示，导入到数据库中，放在810@123.com账号下面就行，不要和内置数据集搞混了；
-2. 在现有评估器中心增加 `SWE-bench Official Harness` 预置评估器说明；实际执行仍由独立评测服务完成；
+当前实现包含：
+
+1. 管理员导入 `SWE-bench Verified` 后，在现有评测数据集页面和实验向导中以系统共享只读数据集展示，不归属某个业务账号，也不标记为内置示例数据集；
+2. 在现有评估器中心展示 `SWE-bench Official Harness`；实际执行由独立评测服务完成；
 3. 选择 Benchmark 数据集后，只允许“生成 Trace”，禁用“选择已有 Trace”和监听模式；
 4. Benchmark 不限定 OpenCode。沿用普通实验的 Agent/客户端轮询与选择逻辑，使用所选 Agent 对应的兼容执行目标；
 5. Benchmark 除自动绑定 Official Harness 外，仍可添加普通评估器；依赖 `reference_output` 的评估器必须禁用；
-6. 所有实验列表行增加“同配置实验”和“复用评测配置”。
+6. 实验列表提供“同配置实验”和“复用评测配置”；
+7. 已完成实验显示同评测基线趋势，SWE-bench 使用固定 Case 分母的 Resolve Rate；
+8. Case 详情展示 Instance ID、Patch 摘要、官方测试计数、失败码，并按需查看或下载 Patch、官方报告、测试输出和运行日志；
+9. Case 重跑重新执行完整链路，Official Harness 单项重评复用最新有效 Patch。
 
-不在本期开发：独立 Benchmark 向导/详情路由、同基线趋势、Case 列表的 Trace/耗时增强、Patch 下载、SWE-bench Lite，以及新的并发策略。现有 Case 重跑和单项重评能力必须保留，并适配 Benchmark 内部执行链路。Benchmark Case 只在现有详情页内增加专属结果渲染。
+当前仍不包含：独立 Benchmark 向导/详情路由、SWE-bench Lite、浏览器维护评测服务目标，以及多 Case 并发调度。Benchmark Case 只在现有实验详情和 Case 详情内增加专属渲染。
 
 ## 2. 页面线框与逻辑对应
 
@@ -41,7 +45,7 @@
 └─ Case 详情（沿用现有路由）
    ├─ 任务输入                                                [I]
    ├─ 参考答案：SWE-bench 官方测试契约，只读且内容隐藏         [J]
-   ├─ 实际输出：model.patch 名称与摘要                         [K]
+   ├─ 实际输出：model.patch 名称、摘要、查看与下载              [K]
    ├─ 结果评测：Official Harness 判定、测试通过数和证据         [L]
    ├─ 轨迹评测：展示本次选择的普通轨迹评估器结果               [M]
    └─ 沿用普通实验操作：[N 重跑 Case] / [N 单项重评]
@@ -57,24 +61,24 @@
 - `[H]` 复用现有评估器 `requires` 门控，并增加 Benchmark 服务端校验；
 - `[I]` 使用 Benchmark Case 的公开 `problemStatement`；
 - `[J]` 只展示契约说明，不返回 Gold Patch、测试 Patch、脚本或测试名单；
-- `[K]` 从当前 Case 的 `BenchmarkArtifact` 返回 `model.patch` 元数据，不返回文件正文；
+- `[K]` 详情响应只返回 `BenchmarkArtifact` 元数据和受控 `contentUrl`；浏览器点击后才读取正文或下载原始文件；
 - `[L]` 把 Official Harness 的 `pass/fail` 映射为 `Resolved/Unresolved`，从现有评分点展示 `FAIL_TO_PASS`、`PASS_TO_PASS` 的 `passed/total`；
 - `[M]` 继续按现有 `res/traj` 分类展示补充评估器；未选择轨迹评估器时显示空状态；
 - `[N]` 继续调用现有通用重试接口；“重跑 Case”重新执行 Agent 并重新评测，“单项重评”复用当前 Trace 或 Patch，只重跑对应评估器。
 
-## 3. 逐区域后端就绪度
+## 3. 实现映射
 
-| 区域 | 当前已有能力 | 仍需开发 |
+| 区域 | 当前实现 | 主要代码 |
 |---|---|---|
-| A/B：复制与复用 | `Experiment` 已有 `configSnapshotJson` 和 `sourceExperimentId` | 普通全局实验也要完整冻结配置；现有 `POST /api/experiments` 增加同配置复制模式；详情响应增加标准化 `reusableConfig` |
-| C：Agent/执行目标 | `GET /api/experiments/agents` 已合并历史 Agent 与在线客户端，并轮询刷新；平台是动态值 | 在同一响应的 target 上补 `supportsBenchmark` 与不可用原因；不能硬编码 OpenCode，也不新增 Benchmark target API 给前端 |
-| D：数据集 | 导入器已同时创建 `AgentEvalDataset` 公共投影和 `BenchmarkDataset` 私有数据，二者有一对一关联 | `DatasetKind`、存储归一化和页面支持 `benchmark`；公共投影补齐向导需要的 `input/instanceId/repo`；导入数据只读 |
-| E：Trace 来源 | 普通向导已有“生成/已有 Trace”和客户端执行逻辑；Benchmark 执行器会返回 `traceId` | Benchmark 数据集强制生成 Trace；创建接口拒绝已有 Trace；执行成功后把已入库 Trace 绑定回 `ExperimentCase` |
-| F：参考答案 | Adapter 已把公开任务与私有测试契约分离，私有字段不会发送给 Agent | 第三步仅显示契约说明；保持 `referenceOutput=null`，禁止编辑、导入或伪造普通参考答案 |
-| G/H：评估器 | 通用预置/自建评估器、依赖门控和评测引擎已存在；Official Harness 已通过评测服务执行并写 `ExperimentEvalResult` | 把 Official Harness 登记到现有评估器目录；Benchmark 创建时自动绑定；调度非参考答案普通评估器；统一实验终态判断 |
-| 列表/实验详情 | `GET /api/experiments`、`GET /api/experiments/{id}` 已覆盖通用列表、聚合、分页 Case 和评估器结果 | 复用原接口和页面；补 Official Harness 名称/说明映射和列表操作，不新增 Benchmark 实验详情路由 |
-| Benchmark Case 详情 | 现有 Case 详情已经有“任务输入/预期输出/实际输出”和“结果评测/轨迹评测”框架；Official 结果已有 `verdict/summary/points/evidence` | 在现有详情响应补安全的 Benchmark 展示字段；按高保真渲染官方契约、Patch 摘要、Resolved 判定、两组测试通过数和证据摘要 |
-| Case 重跑/重评 | 普通实验已有 Case 重跑接口和单个结果重评接口，页面已有对应操作 | 在两个通用接口内部识别 Benchmark：重跑时重新执行 Agent、生成 Trace/Patch 并重跑全部评估器；Official 重评时复用最新 Patch，仅重新调用评测服务 |
+| 配置复制与复用 | 冻结 `configSnapshotJson`；支持 `same-config` 立即创建运行和 `reuseFrom` 向导预填 | `src/app/api/experiments/route.ts`、`src/app/api/experiments/[id]/route.ts` |
+| Agent/执行目标 | 合并历史 Agent 与在线客户端；target 返回 Benchmark 支持状态并按 `clientId + platform + agent` 二次校验 | `src/lib/benchmark/execution-targets.ts`、`src/app/api/experiments/agents/route.ts` |
+| 数据集 | `AgentEvalDataset` 提供公共投影，`BenchmarkDataset` 保存私有原始数据；共享只读且按 Adapter Presentation 展示 | `src/lib/benchmark/public-dataset.ts`、`DatasetItemsPage.tsx`、`ExperimentWizard.tsx` |
+| Trace 来源 | Benchmark 强制生成新 Trace；执行完成后按回传 `traceId` 绑定 `ExperimentCase` | `ExperimentWizard.tsx`、`src/lib/benchmark/experiment-lifecycle.ts` |
+| 参考契约 | 第三步只显示声明式契约说明，不生成普通 `referenceOutput`，不返回私有测试字段 | `ExperimentWizard.tsx`、`src/lib/benchmark/dataset-service.ts` |
+| 评估器 | 自动绑定 `benchmark:<adapterKey>`；补充评估器复用通用引擎，依赖参考答案的评估器被双端拒绝 | `ExperimentWizard.tsx`、`src/lib/benchmark/experiment-service.ts` |
+| 实验详情 | 复用通用详情，展示固定分母主指标、同基线趋势、Instance ID 和分阶段状态 | `ExperimentDetail.tsx`、`ExperimentBaselineTrend.tsx` |
+| Case 详情 | 展示 Patch、官方判定、测试计数、失败信息和按需 Artifact 查看下载 | `ExperimentCaseDetail.tsx`、`BenchmarkArtifactActions.tsx` |
+| Case 重跑/重评 | 重跑创建新执行 Run；Official 重评创建新 Evaluation attempt 并复用最新 Patch | 通用 retry routes、`src/lib/benchmark/evaluation-preparation-service.ts` |
 
 ## 4. API 方案
 
@@ -117,6 +121,7 @@ POST /api/experiments/{id}/results/{resultId}/retry
   "platform": "opencode-or-other-platform",
   "supportsGenericTrace": true,
   "supportsBenchmark": true,
+  "benchmarkKeys": ["swe-bench"],
   "benchmarkUnavailableReason": null
 }
 ```
@@ -171,8 +176,9 @@ GET /api/experiments/{id}?caseId={caseId}
       "sha256": "sha256:..."
     },
     "evidenceArtifacts": [
-      { "name": "report.json", "kind": "report", "sha256": "sha256:..." },
-      { "name": "harness.log", "kind": "log", "sha256": "sha256:..." }
+      { "name": "report.json", "kind": "official-report", "sha256": "sha256:..." },
+      { "name": "test_output.txt", "kind": "test-output", "sha256": "sha256:..." },
+      { "name": "run_instance.log", "kind": "run-log", "sha256": "sha256:..." }
     ]
   }
 }
@@ -231,7 +237,7 @@ Content-Type: application/json
 
 执行器进度回调、Artifact 上传、评测服务接单/回调继续保留 `/api/benchmark/v1/*`。这些是机器间协议，包含签名、幂等和私有评测数据，不属于浏览器 API。现有 `/api/benchmark/v1/experiments/{id}` 不再作为新前端依赖；本期无需为删除它扩大改动面。
 
-## 5. 前后端开发内容
+## 5. 前后端实现内容
 
 ### 5.1 前端
 
@@ -241,9 +247,9 @@ Content-Type: application/json
 4. Step 3 显示官方测试契约说明，不显示或编辑隐藏答案；
 5. Step 4 自动选择 Official Harness，同时展示所有通过现有门控的普通评估器；
 6. 实验列表增加两个操作按钮，并阻止按钮点击冒泡到详情行；
-7. 实验详情继续使用现有页面和 Case 列表，不增加趋势图、Trace 数和耗时列；
-8. 现有 Case 详情根据 `case.benchmark` 切换顶部三块内容，并为 `benchmark:swe-bench` 渲染高保真 Official Harness 卡片；普通结果/轨迹评估器继续用现有卡片；
-9. 保留现有“重跑 Case”和单个结果“重评”入口，不增加 Benchmark 专属按钮或页面；Official 重评提交后按现有详情轮询刷新状态。
+7. 实验详情继续使用现有页面和 Case 列表，并在评估器分解与 Case 明细之间展示同基线趋势；
+8. 现有 Case 详情根据 `case.benchmark` 渲染 Official Harness 卡片、失败提示和 Artifact 操作；普通结果/轨迹评估器继续使用现有卡片；
+9. 保留现有“重跑 Case”和单个结果“重评”入口；Official 重评提交后按现有详情轮询刷新状态。
 
 ### 5.2 后端
 
@@ -259,7 +265,7 @@ Content-Type: application/json
 10. 在现有 Case 重跑和结果重评接口内增加 Benchmark 分支，分别完成 Agent 全链路重跑和基于最新 Patch 的 Official Harness 异步单项重评；
 11. 所有实验创建时统一写完整 `configSnapshotJson`，并实现 `same-config` 复制和 `reusableConfig` 读取。
 
-## 6. 单阶段实施顺序
+## 6. 已落地顺序
 
 1. 数据集类型、公共投影、预导入与只读保护；
 2. Official Harness 评估器目录项与参考答案门控；
@@ -269,11 +275,11 @@ Content-Type: application/json
 6. 全量实验配置快照、同配置实验、复用评测配置；
 7. 适配通用 Case 重跑与单项重评；
 8. 列表、通用实验详情和 Benchmark Case 专属结果卡片；
-9. 使用 `810@123.com` 验收账号完成端到端验证。
+9. 使用隔离测试账号和真实 SWE-bench 单 Case 完成端到端开发 Smoke。
 
 ## 7. 验收标准
 
-1. `810@123.com` 可在现有数据集页面看到只读的 SWE-bench Verified；浏览器响应不含 `goldPatch/testPatch/eval_script` 和测试名称列表，`FAIL_TO_PASS/PASS_TO_PASS` 只返回 `passed/total` 汇总；
+1. 任意平台用户可在现有数据集页面看到系统共享、只读的 SWE-bench Verified；浏览器响应不含 `goldPatch/testPatch/eval_script` 和测试名称列表，`FAIL_TO_PASS/PASS_TO_PASS` 只返回 `passed/total` 汇总；
 2. 新建实验仍是原四步界面；选择 Benchmark 数据集后已有 Trace 和监听不可用；
 3. Agent 候选来自现有轮询接口，可使用任意已上报且兼容 Benchmark 的平台/Agent，不硬编码 OpenCode；
 4. Official Harness 自动选中且不可取消；不依赖参考答案的普通评估器可选，依赖参考答案的预置和自建评估器均不可提交；
@@ -286,3 +292,5 @@ Content-Type: application/json
 11. “同配置实验”一次点击创建并启动新实验，跳转新详情；原实验不变且新实验记录 `sourceExperimentId`；
 12. “复用评测配置”进入可编辑向导并正确预填，未点击开始前不创建实验；
 13. 普通数据集、普通实验、可靠性实验和已有评估器行为不回归。
+
+自动化覆盖位于 `test/benchmark-experiment-wizard-ui.test.ts`、`test/benchmark-detail-status.test.ts`、`test/benchmark-failure-presentation.test.ts`、`test/experiment-baseline-trend.test.ts` 和 Benchmark API/E2E 测试。根据仓库协作约束，浏览器验收需在启动 dev server 后另行执行。

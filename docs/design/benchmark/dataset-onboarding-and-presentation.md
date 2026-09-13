@@ -1,8 +1,8 @@
-# Benchmark 数据集接入与展示开发方案
+# Benchmark 数据集接入与展示设计
 
 > 状态：已实现（待浏览器验收）
 
-## Phase 1：需求
+## 1. 需求
 
 新增 Benchmark 时，开发者除 Adapter、Evaluator 和执行器能力外，还需要提供：
 
@@ -11,9 +11,9 @@
 
 数据集文件不进入 Git 仓库，由平台管理员在部署环境安装一次，所有用户共享读取；实验、Trace 和评测结果仍按用户隔离。
 
-## Phase 2：方案
+## 2. 实现方案
 
-### 1. 接入包
+### 2.1 接入包
 
 沿用现有 Benchmark 接入包，只增加可选 Loader 和声明式展示配置：
 
@@ -51,7 +51,7 @@ presentation:
 
 展示配置只描述平台通用组件，不允许 Benchmark 注入 React、HTML 或 JavaScript。没有配置时回退显示 `input + externalCaseId`。
 
-### 2. Dataset Loader
+### 2.2 Dataset Loader
 
 平台定义统一接口：
 
@@ -67,7 +67,7 @@ Loader 只读取文件并逐条输出 Raw Case，不直接写数据库。每条 
 - Parquet 或官方 SDK 等特殊格式由 Benchmark 开发者提供 Loader；
 - Loader 随代码构建进入 Catalog，下载目录只放数据文件。
 
-### 3. 数据集下载、放置与导入
+### 2.3 数据集下载、放置与导入
 
 这里的“用户”指平台管理员或部署者。普通实验用户不上传数据集。
 
@@ -116,7 +116,7 @@ Cases 及评测所需字段全部写入数据库，运行时不再依赖原文�
 
 该选项只在数据库事务成功且导入结果校验通过后删除 `--source` 指定的单个文件；导入失败时必须保留原文件，不允许删除目录。
 
-### 4. 平台数据集删除
+### 2.4 平台数据集删除
 
 数据集删除由管理员 CLI 完成：
 
@@ -131,7 +131,7 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 
 该命令处理的是数据库数据，与导入时的 `--delete-source-after-import` 无关。
 
-### 5. 多用户规则
+### 2.5 多用户规则
 
 系统数据集使用保留 owner，例如：
 
@@ -146,7 +146,7 @@ __agent_insight_system__
 
 现阶段沿用已有数据表，不新增独立数据集服务，也不为每个用户复制一份 SWE-bench。
 
-## Phase 3：开发步骤
+## 3. 实现与验证
 
 1. **扩展接入协议**
    - 为 `benchmark.yaml` 增加 Dataset Profile、Loader 和 Presentation；

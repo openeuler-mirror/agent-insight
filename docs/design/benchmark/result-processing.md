@@ -1,8 +1,8 @@
-# Benchmark 剩余步骤：结果接收与实验结果处理
+# Benchmark 结果接收与实验结果处理
 
 > 范围：高保真业务步骤 09～10，对应调用级步骤 11～13：接收证据和评测终态、保存原生结果、调用 Adapter 归一化、收敛 Case/实验状态、查询实验结果。
 > 不包含前端、重跑入口、批量 500 调度、评测服务注册，以及 Benchmark/数据集/评估器业务版本。
-> 前序：[评测服务后端设计](benchmark-evaluator.md)；溯源：[高保真源码](../../评测服务文档/Benchmark统一接口设计-SWE-bench示例.html)。
+> 前序：[评测服务后端设计](evaluator.md)。
 
 状态：已实现。证据上传、终态回调、稳定结果契约、异常收敛、`normalizeResult()`、`ExperimentEvalResult` 投影、固定分母聚合、实验结果查询和用户证据下载均已通过 API 验收。
 
@@ -176,7 +176,7 @@ SWE-bench 将 boolean `resolved` 聚合为 `resolvedRate`。Verified 500 的分�
 
 ## 5. 实验结果查询 API
 
-新增：
+现有只读查询接口：
 
 ```text
 GET /api/benchmark/v1/experiments/{experimentId}
@@ -235,17 +235,17 @@ src/lib/benchmark/evaluation-callback-service.ts
 services/evaluator/src/service.cjs                                     # 只重传可重试回调
 src/lib/benchmark/evaluation-continuation-service.ts                   # 持久化终态续跑与租约
 src/lib/benchmark/evaluation-scheduler.ts                              # 下发 owner CAS 与 Evaluation watchdog
-src/lib/benchmark/experiment-result-service.ts                         # 新增
-src/app/api/benchmark/v1/experiments/[experimentId]/route.ts           # 新增
+src/lib/benchmark/experiment-result-service.ts
+src/app/api/benchmark/v1/experiments/[experimentId]/route.ts
 src/app/api/benchmark/v1/evaluations/[evaluationId]/artifacts/
-  [artifactId]/content/route.ts                                        # 新增
-test/benchmark-result-processing-api.test.ts                            # 新增
+  [artifactId]/content/route.ts
+test/benchmark-result-processing-api.test.ts
 test/benchmark-real-e2e.test.ts                                         # 单 Case 显式真实测试
 ```
 
 不新增 Prisma 表；复用 `BenchmarkEvaluation`、`BenchmarkEvaluationArtifact`、`BenchmarkCaseRun`、`BenchmarkExperimentBinding` 和 `ExperimentEvalResult`。`BenchmarkEvaluation` 新增 `continuationStatus/continuationAttempts/continuationTriedAt/continuationError`，并为状态扫描和 continuation 扫描建立组合索引；旧记录默认 `continuationStatus=completed`，不会在升级时重放历史副作用。
 
-## 7. 开发与验收顺序
+## 7. 实现与验收
 
 1. 补 `primaryMetric` 契约及 SWE-bench 映射，限制 `nativeMetrics` 为安全摘要；
 2. 调整 complete 的幂等、异常收敛和返回结构；

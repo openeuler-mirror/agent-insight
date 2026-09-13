@@ -18,14 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
-| Benchmark 数据集接入与展示 | [benchmark-dataset-onboarding-and-presentation](benchmark-dataset-onboarding-and-presentation/) | 为 Benchmark 接入包增加 Dataset Loader 和声明式展示配置，由管理员一次导入、所有用户共享读取 | Feature / Refactor | 2026-09-09 | ✅ 代码与自动化测试已完成，待浏览器验收 | —（待补） |
-| Benchmark 结果接收与实验结果处理 | [benchmark-result-processing.md](benchmark-result-processing.md) | 按高保真剩余步骤接收评测终态、保留 Raw Result、通过 Adapter 归一化并生成固定分母的实验聚合与只读查询结果 | Feature | 2026-09-04 | ✅ 后端、11～13/01～13 API 与单 Case 全真实 E2E 已完成 | —（待补） |
-| Benchmark 零侵入扩展 | [benchmark-extension-refactor-plan.md](../../评测服务文档/benchmark-extension-refactor-plan.md) | 对齐高保真开发者契约，将 Benchmark 接入收敛为 Manifest、五方法 Adapter、Schema 和统一文件 Evaluator 接入包；三端由构建 Catalog 发现，核心服务不再硬编码具体 Benchmark | Refactor | 2026-09-05 | ✅ Catalog、SWE-bench 迁移、扩展一致性测试和 01～13 API 回归已完成 | —（待补） |
-| Benchmark 提交校验与评测下发 | [benchmark-evaluation-dispatch.md](benchmark-evaluation-dispatch.md) | 按高保真步骤 08～09，在 Agent Insight 服务端校验提交、构造不可变 EvaluationJob，并通过可替换的评测目标解析器持久化直推独立评测服务 | Feature | 2026-09-04 | ✅ Agent Insight 侧已完成，并已纳入 01～13 API 验收 | —（待补） |
-| Benchmark 评测服务 | [benchmark-evaluator.md](benchmark-evaluator.md) | 按高保真步骤 09～12，设计评测服务接单、统一文件 Entrypoint、容器化运行官方 Harness、证据与原生结果回传，以及 Adapter 归一化；正式环境使用官方 x86_64 镜像 | Feature | 2026-09-04 | 🟡 后端、API、ARM64 单 Case 09～13 双层 Docker 验收已完成；待 x86_64 Linux 正式计分验收 | —（待补） |
-| Benchmark 评测服务源码一键部署 | [evaluator-source-one-command-deployment-plan.md](../../评测服务文档/evaluator-source-one-command-deployment-plan.md) | 对齐高保真固定源码、一次性 Token、反向注册、systemd、Doctor/Smoke 和已注册目标调度，支持评测服务独立机器部署 | Feature | 2026-09-05 | 🟡 方案已完成，待开发 | —（待补） |
-| Benchmark 执行器 | [benchmark-executor.md](benchmark-executor.md) | 按高保真步骤 04～07，在现有常驻客户端中增加控制指令接单、持久化执行编排、Artifact/终态回调和通用能力注册表，并复用客户端动态上报的可回传 Trace ID Agent Runtime/进程控制能力 | Feature | 2026-09-04 | ✅ 后端、API 与真实 OpenCode generate-only Smoke 已完成；执行目标已支持按平台动态发现 | —（待补） |
-| Benchmark Agent 前置下发 | [benchmark-agent-pre-execution.md](benchmark-agent-pre-execution.md) | 按高保真步骤 01～04，在 Agent Insight 服务端实现统一实验创建、Case 公开/私有拆分、任务信封构造和基于现有客户端控制通道的持久化下发，并提供 SWE-bench Adapter 实例 | Feature | 2026-09-03 | ✅ 已与执行器、评测服务及结果查询完成 01～13 API 串联验证 | —（待补） |
+| Benchmark 统一接入 | [benchmark](benchmark/) | 以 Manifest、五方法 Adapter 和构建期 Catalog 接入 Benchmark；覆盖共享数据集、Agent 执行、独立 Evaluator、官方 Harness、结果归一化、统一实验前端与扩展约束 | Feature / Refactor | 2026-09-03 | 🟡 主链路、前端与自动化测试已完成；待浏览器验收及 x86_64 Linux 正式计分验收 | —（待补） |
 | 自定义评估器数据集输入变量 | [custom-evaluator-dataset-input](custom-evaluator-dataset-input/) | 新增 `dataset_input` Judge 变量与确定性数据集匹配门控，保存实验数据集输入快照，并统一“预期输出”展示术语 | Feature | 2026-08-27 | 🟡 代码与自动化验证完成，待浏览器验收 | —（待补） |
 | IDaaS OAuth 登录 | [idaas-oauth-login](idaas-oauth-login/) | 新增与历史组织集成完全隔离的 OAuth 2.0 授权码登录，以 IDaaS UUID 映射本地用户，保护 callback 凭据、保留通用退出入口，并提供默认关闭的欧盟地区访问限制 | Feature | 2026-08-27 | 🟡 代码与专项测试完成，待浏览器验收 | —（待补） |
 | DeepSeek Harness 观测接入 | [deepseek-harness-observability](deepseek-harness-observability/) | 复用 Harness 官方 Session Telemetry，以 Agent Insight 插件完成认证、脱敏和截断，并通过专用 OTLP Logs spool/adapter 生成 Trace、Tool、Skill 与子 Session 观测数据 | Feature | 2026-08-21 | 🟡 实现中 | —（待补） |

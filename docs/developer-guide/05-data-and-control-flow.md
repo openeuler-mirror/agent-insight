@@ -208,15 +208,15 @@ flowchart LR
 flowchart LR
     parquet["本地 Verified Parquet"] --> official["官方 load_swebench_dataset"]
     official --> isolate["Adapter 白名单拆分 Public / Private"]
-    isolate --> create["POST /api/experiments\nscope=benchmark"]
+    isolate --> create["POST /api/experiments\ndatasetKind=benchmark"]
     create --> freeze["冻结 Dataset / Case / Client / RunConfig"]
     start["POST /api/experiments/:id/run"] --> split["Adapter 拆分 Public / Private"]
     split --> task["Adapter 构造完整 Prompt\n并校验 AgentTaskEnvelope"]
     task --> outbox["事务保存 Task + digest + Outbox"]
-    outbox --> dispatch["POST Executor /api/v1/benchmark-executions"]
-    dispatch --> accepted["202 + runId/digest 匹配\nRun=running_agent"]
+    outbox --> dispatch["RUN_BENCHMARK_CASE\nWSS / HTTPS 长轮询"]
+    dispatch --> accepted["COMMAND_STATUS accepted\nrunId/digest 匹配"]
     accepted --> workspace["按能力 ID 选择 Workspace\nAgent Runtime + Artifact Collector"]
-    workspace --> agent["OpenCode 结构化事件\n错误 / idle / 首模型活动"]
+    workspace --> agent["Agent Runtime 执行\nOpenCode 解析结构化事件"]
     agent --> patch["收集 model.patch"]
     agent --> earlyFail["无模型响应时提前失败"]
     patch --> artifact["POST /api/benchmark/v1/artifacts"]
@@ -237,12 +237,12 @@ flowchart LR
     raw --> normalize["冻结任务 + 证据闭合校验\nAdapter.normalizeResult"]
     normalize --> continuation["事务写终态 + continuation pending\n租约续跑可恢复"]
     continuation --> settle["按最新重试叶子收敛实验\nexpectedCaseCount 固定分母"]
-    settle --> query["GET benchmark/v1/experiments/:id\n分页 Case 与安全指标"]
+    settle --> query["GET /api/experiments/:id（浏览器）\nBenchmark 专用只读查询保留"]
 ```
 
 导入阶段要求真实 Verified 数据恰好包含 500 个唯一 Case。同一实验固定单 Case 串行。`benchmarks/*/benchmark.yaml` 是接入唯一 Manifest，构建期 Catalog 把 Adapter 和 Evaluator 描述装配进三端；核心链路不直接 import 具体 Benchmark。执行器只接收 Public；Private 留在服务端，完整 Prompt 由 Adapter 生成。执行下发和评测下发都先持久化再联网，连接结果未知时使用同一 `runId + requestDigest` 重发；`SERVICE_BUSY` 延迟重试，`RUN_ID_CONFLICT` 永久失败。执行器按统一信封中的能力 ID 选择工作区、Agent Runtime 和每个 Artifact Collector；准备独立 Git 工作区后同时设置子进程 `cwd` 与 `PWD`，收集 diff 时排除协议保留路径 `model.patch`。执行器先逐个上传 Artifact，再清理工作区，最后回传终态。Agent Insight 随后校验 Patch 并下发包含隐藏测试配置但不含 gold patch 的 EvaluationJob；评测服务只能通过鉴权 Artifact API 获取 Patch。常驻 Controller 容器把 Docker Socket 映射到宿主 Docker，并通过统一文件 Entrypoint 运行 Catalog 选中的 Evaluator；SWE-bench Entrypoint 在每 Case 容器中运行官方 Harness。Harness 自身清理后，Controller 再按 evaluation 标签兜底删除遗留容器，然后回传三类证据和 Raw Result。平台先冻结 Raw Result，再归一化和投影；`resolved=false` 是有效业务失败，镜像、Docker 或 Harness 失败才是无分的系统失败，清理异常作为独立事实保留而不覆盖已生成的官方判分。相同 completion 以 digest 幂等重放，不同内容冲突；Raw Schema/映射失败返回非重试 422 并把 Case 收敛为 `evaluation_failed`，数据库持久化失败才保留可重试状态。实验仅在终态 Case 数严格等于 `expectedCaseCount` 时完成；查询服务使用该固定分母计算 `resolvedRate`，只返回安全 `nativeMetrics` 和 Artifact 描述，完整官方报告通过归属校验后的证据下载访问。
 
-Benchmark 的执行目标发现与普通实验共享客户端能力真源：从客户端上报的 `platforms[].agents/models` 中筛选支持 `RUN_EXPERIMENT_CASE` 且可回传 Trace ID 的平台。Adapter Manifest 只校验 Benchmark 固定能力；所选平台在候选查询和创建实验时动态追加 `agent-runtime/{platform}/v1`，执行器守护进程也只为同一批就绪平台注册 Runtime。平台、Agent 或能力在创建前失效时拒绝创建，不进入持久化调度。
+Benchmark 的执行目标发现与普通实验共享客户端能力真源：从客户端上报的 `platforms[].agents/models` 中筛选支持普通 Trace 生成、`RUN_BENCHMARK_CASE` 且可回传 Trace ID 的平台。Adapter Manifest 只校验 Benchmark 固定能力；所选平台在候选查询和创建实验时动态追加 `agent-runtime/{platform}/v1`，执行器守护进程也只为同一批就绪平台注册 Runtime。平台、Agent 或能力在创建前失效时拒绝创建，不进入持久化调度。
 
 前端接入不建立第二套流程：受控导入同时生成只读 `AgentEvalDataset` 公共投影和私有 `BenchmarkDataset`；通用实验创建按公共数据集类型在服务端分流并预建每 Case 的 Official/普通评估结果。Agent 成功后把 Trace ID 绑定回 `ExperimentCase`，Official 完成后再运行不依赖参考答案的补充评估器，全部结果终态后继续下一 Case 并收敛实验。Case 重跑创建新的 `BenchmarkCaseRun`；Official 单项重评复用最新 Patch、新建 attempt，且全局只允许一个重评任务。
 

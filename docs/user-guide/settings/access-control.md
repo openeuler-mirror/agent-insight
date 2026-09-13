@@ -80,13 +80,14 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 ## 功能定位
 
-客户端安装承担四项核心职责：
+客户端安装承担六项核心职责：
 
 - 按目标操作系统生成可直接执行的接入命令
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
 - 选择 OpenCode 时，在 Agent 主机安装普通观测插件与同进程 Agent RAS
+- 为生成 Trace 和 Benchmark 实验提供受控 Agent 执行、Artifact 上传与状态回调通道
 
 ## 页面结构
 
@@ -133,6 +134,7 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 - 注册为系统服务，崩溃后由操作系统自动拉起，不随 Agent 平台启停
 - 主动建立出站 WSS 控制连接（不监听任何入站端口）
 - 自动发现本机 IP、Agent 平台、可用模型并上报
+- 按能力白名单接收普通实验和 `RUN_BENCHMARK_CASE`；Benchmark 在隔离 Git 工作区运行并按 Manifest 收集 Artifact
 - **同时纳管故障注入能力** —— 本机会一并出现在「实验」与「故障注入」页面，
   无需再单独执行 FI Worker 的安装命令
 
@@ -150,7 +152,7 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 > 在 Homebrew / Debian 等 PEP 668「受管控 Python」环境下，安装器不会尝试全局 pip，
 > 因而不需要 `--break-system-packages`，也不会出现 `externally-managed-environment` 安装错误。
 
-客户端只接受固定动作白名单（配置写入、运行实验 Case 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。
+客户端只接受固定动作白名单（配置写入、普通实验 Case、`RUN_BENCHMARK_CASE` 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。Benchmark 任务中的仓库、revision、策略和 Artifact Collector 还会经过协议校验；客户端不开放 Benchmark 入站端口。
 
 > **Note**
 > 未安装 Python 或故障注入组件的主机同样可以正常上线，只是「故障注入能力」显示为不可用，不影响配置下发与观测。

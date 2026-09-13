@@ -1,8 +1,8 @@
 # Benchmark 步骤 09～12：评测服务后端设计
 
 > 范围：评测服务接单、准备并运行 Case 容器、上传证据、回传原生结果，以及 Agent Insight 调用 Adapter 第五个方法归一化结果。
-> 不包含前端、服务注册中心、多机调度、Benchmark/数据集/评估器业务版本。固定源码的独立机器一键部署见[修改方案](../../评测服务文档/evaluator-source-one-command-deployment-plan.md)，一期脚本与配置热加载已经实现。
-> 前序：[提交校验与评测下发](benchmark-evaluation-dispatch.md)；溯源：[高保真源码](../../评测服务文档/Benchmark统一接口设计-SWE-bench示例.html)。
+> 不包含前端、服务注册中心、多机调度、Benchmark/数据集/评估器业务版本。独立机器部署见[用户指南](../../user-guide/evaluation/quickstart.md#swe-bench-等容器-benchmark-的评测服务)。当前脚本与配置热加载已经实现。
+> 前序：[提交校验与评测下发](evaluation-dispatch.md)。
 
 状态：步骤 09～12 的 Controller、协议、SWE-bench 官方 Harness 包装、平台回调和结果归一化已实现；后续步骤 13 查询也已实现，01～13 已在真实数据库和真实 Verified Case 上完成 API 级串联。一期另提供 Linux/macOS `start-evaluator.sh`、容器内外 Doctor、显式 Gold Smoke 和 Agent Insight 专用通信配置热加载。2026-09-04 已在 ARM64 Docker Desktop 上完成双层容器验收：Docker 化 Controller 通过真实 HTTP 接单、下载真实 Artifact、启动官方 `pallets__flask-5014` Case 容器，并将进度、三类证据和原生结果回传 Agent Insight；平台完成归一化和结果查询。该结果只作为 ARM64 单 Case 冒烟，不替代 x86_64 Linux 正式计分验收。
 
@@ -154,7 +154,7 @@ Controller 和 SWE-bench 子进程 Runner 都把 abort 视为不可逆超时：�
 
 ### 步骤 11：上传证据并回传原生结果
 
-Agent Insight 新增三个只供评测服务调用的 API：
+Agent Insight 提供三个只供评测服务调用的 API：
 
 ```http
 POST {callbackBaseUrl}/progress
@@ -241,7 +241,7 @@ lastProgressAt / finishedAt
 continuationStatus / continuationAttempts / continuationTriedAt / continuationError
 ```
 
-新增 `BenchmarkEvaluationArtifact`：
+证据由 `BenchmarkEvaluationArtifact` 保存：
 
 ```text
 id / evaluationId / name / kind / mediaType / sha256 / sizeBytes / storagePath / createdAt
@@ -288,7 +288,7 @@ Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluat
 
 Agent Insight 还每 30 秒扫描一次评测阶段：queued/dispatch 不确定、收集/上传/清理、normalizing 连续 5 分钟无进度即失败；运行 Harness 超过冻结 `timeoutSeconds + 90 秒` 即失败。回收使用 CAS 同时收敛 Evaluation、Outbox、Case 和统一投影，再落持久化 continuation，避免实验永久运行。
 
-## 7. 开发落点
+## 7. 实现落点
 
 ```text
 packages/benchmark-protocol/src/evaluator-contracts.ts
@@ -321,7 +321,7 @@ prisma/schema.prisma
 test/benchmark-evaluator-api.test.ts
 ```
 
-开发顺序按依赖执行即可：协议与表结构 → 平台回调 API 和 Adapter 第五方法 → Controller 接单/journal → 统一 File Entrypoint → SWE-bench 官方 Harness 包装 → Catalog → Docker/真实 API 串联。
+当前实现按以下依赖关系组织：协议与表结构 → 平台回调 API 和 Adapter 第五方法 → Controller 接单/journal → 统一 File Entrypoint → SWE-bench 官方 Harness 包装 → Catalog → Docker/真实 API 串联。
 
 ## 8. API 级验收
 

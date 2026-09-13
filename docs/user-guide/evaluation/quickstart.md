@@ -1,6 +1,6 @@
 ---
 title: "跑通第一次评测"
-description: "使用已有 Trace 完成第一次实验"
+description: "使用已有 Trace 或 Benchmark 数据集完成第一次实验"
 ---
 
 # 跑通第一次评测
@@ -90,6 +90,15 @@ Agent Insight 与执行客户端在同一台机器时，安装 `curl` 使用 `ht
 平台每 30 秒检查一次运行中的 Benchmark。Agent 执行侧：Git 工作区准备阶段最多允许连续 7 分钟无进度；Agent 阶段超过任务上限再加 90 秒宽限期；收集、上传、清理阶段连续 5 分钟没有新进度时回收。评测侧：等待下发、下发结果不确定、证据收集/上传/清理和结果归一化连续 5 分钟无进度时回收；官方 Harness 超过评测任务上限再加 90 秒时回收。回收会把 Case 明确置为失败并通过持久化续跑继续结算实验，服务重启后也会恢复，不会让页面永久停在“正在生成 Trace”或“运行中”。
 
 评测服务只有收到结构完整、字段匹配的终态 ACK 才清除本地待回调任务；空响应、非 JSON 或字段不一致的 HTTP 2xx 仍会保留并重试。SWE-bench 正式结果还会对照冻结的实例、测试名单和 `report.json` 内容复核；常见明确错误码包括 `EVALUATION_TIMEOUT`、`SWE_HARNESS_RESULT_INVALID`、`RAW_RESULT_SCHEMA_INVALID`、`SWE_FORMAL_RESULT_INELIGIBLE`、`SWE_EVIDENCE_CONTRACT_INVALID` 和 `RESULT_MAPPING_FAILED`。
+
+### 首次运行 Benchmark 的额外前置条件
+
+除了启动 Evaluator Controller，还需要完成以下准备：
+
+1. 管理员按[评测数据集](./datasets.md#管理员导入-benchmark-数据集)导入 Benchmark 数据；导入后所有用户看到同一份只读公共数据集。
+2. 在 Agent 主机安装常驻客户端，并确认实验向导中的目标主机显示支持当前 Benchmark；客户端必须上报 `RUN_BENCHMARK_CASE`、Git Workspace、Agent Runtime 和 Artifact Collector 能力。
+3. 新建实验时选择 Benchmark 数据集和要运行的 Case，Trace 来源保持“生成 Trace”；Official Harness 会自动绑定且不能取消。
+4. 当前同一实验按 Case 串行执行。ARM64 适合链路 Smoke，正式 SWE-bench 成绩仍以 Linux x86_64 官方镜像为准。
 
 ## 步骤一：新建实验
 

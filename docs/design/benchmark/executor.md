@@ -2,7 +2,7 @@
 
 > 范围：高保真步骤 04～07——接收任务、运行 Agent、上传 Artifact、本地清理、回传终态。  
 > 不包含前端、Agent Insight 的 Case 拆分/任务构造、`validateSubmission()`、评测服务和 Harness。  
-> 前序设计：[Benchmark Agent 执行前服务端设计](benchmark-agent-pre-execution.md)；溯源：[高保真源码](../../评测服务文档/Benchmark统一接口设计-SWE-bench示例.html)。
+> 前序设计：[Benchmark Agent 执行前服务端设计](agent-pre-execution.md)。
 
 状态：步骤 04～07 后端已实现并通过客户端控制通道测试；步骤 01～07 已使用本地 SWE-bench Verified 真实 Case 串联验证；真实 OpenCode generate-only Smoke 已通过。
 
@@ -24,7 +24,7 @@ RUN_BENCHMARK_CASE（现有 WSS / HTTPS long-poll）
        → POST Agent Insight /runs/{runId}/complete
 ```
 
-同一个 systemd/launchd 服务继续负责心跳、能力上报、WSS/long-poll 指令和故障注入；Benchmark 与原有任务共享一个本地执行槽。客户端不启动 Benchmark HTTP listener，也不需要配置入站地址。第一阶段并发固定为 1。
+同一个 systemd/launchd 服务继续负责心跳、能力上报、WSS/long-poll 指令和故障注入；Benchmark 与原有任务共享一个本地执行槽。客户端不启动 Benchmark HTTP listener，也不需要配置入站地址。当前并发固定为 1。
 
 ## 2. 高保真调用顺序
 
@@ -122,7 +122,7 @@ type AgentTaskEnvelope = {
 }
 ```
 
-相较前序服务端实现，`agentConfig.agentRef` 改成结构化的 `platform + agent`，因为现有执行内核本来就以这两个字段选择本地可执行文件和 Agent。解析展示字符串不能留给执行器猜测；实验创建 API 和服务端 Adapter 要同步调整。
+当前协议使用结构化的 `platform + agent`，因为执行内核以这两个字段选择本地可执行文件和 Agent。执行器不解析或猜测展示字符串。
 
 请求摘要仍按以下四项 canonical JSON 计算，不把 `requestDigest` 自身放进摘要：
 
@@ -199,7 +199,7 @@ interface CleanupManager {
 
 从现有 `runExperimentCase()` 复用：本地解析可执行文件、`opencode run --format json --agent ...`、stdin prompt、模型参数、关联环境变量、Trace ID 提取、超时和进程组终止。变化只有两点：`cwd` 使用 prepared workspace 且子进程 `PWD` 与其一致，输入直接使用 Adapter 已完成渲染的 `task.instruction`。`PWD` 不能继承 Agent Insight 守护进程的启动目录，否则 OpenCode 工具可能在错误仓库中执行。
 
-当前本机执行无法真正隔离“模型 API 网络”和“Agent 工具网络”。因此第一阶段只声明并接受 `network=client-default`；收到 `network=deny` 时返回 `POLICY_UNSUPPORTED`，不能虚假声称已隔离。正式网络隔离后续应增加独立 sandbox capability，可参考 OpenHands 的 Runtime/Sandbox 分层，但不复制其整套 Agent 实现。
+当前本机执行无法真正隔离“模型 API 网络”和“Agent 工具网络”。因此当前协议实现只声明并接受 `network=client-default`；收到 `network=deny` 时返回 `POLICY_UNSUPPORTED`，不能虚假声称已隔离。正式网络隔离后续应增加独立 sandbox capability，可参考 OpenHands 的 Runtime/Sandbox 分层，但不复制其整套 Agent 实现。
 
 ### 7.3 `model.patch`
 
@@ -224,7 +224,7 @@ Benchmark 使用控制总线白名单 action `RUN_BENCHMARK_CASE`。WSS 可用�
       "requestDigest": "sha256:...",
       "task": {},
       "callbackBaseUrl": "https://agent-insight.example.com/api/benchmark/v1/runs/erun_001",
-      "timeoutSeconds": 1800
+      "timeoutSeconds": 600
     }
   }
 }
@@ -278,7 +278,11 @@ Benchmark 使用控制总线白名单 action `RUN_BENCHMARK_CASE`。WSS 可用�
 - `preparing/agent_running/collecting/uploading/cleaning` 等非终态执行阶段：清理残余工作区，标记 `EXECUTOR_RESTARTED`，不得自动重跑 Agent；
 - Artifact 已落本地但上传/终态回调未完成：只重放 `state.json` 中的待上传或待完成数据，不再运行 Agent；
 - terminal：同 digest 重发只返回终态摘要；
-- terminal：本阶段保留本地摘要和 Artifact；TTL 回收策略后续实现。
+- terminal：当前保留本地摘要和 Artifact；TTL 回收策略尚未实现。
+
+Artifact 上传和完成回调使用独立的持久化投递 lane。网络错误按指数退避重试，单次请求最多等待 30 秒；投递重试不占 Agent 执行槽，因此不会阻塞后续 Case。确定性的非重试 `4xx` 会结束投递并保留失败事实。
+
+OpenCode Runtime 直接消费 `--format json` 的结构化事件：会话错误立即失败；会话 idle 或正常退出但没有模型输出/工具调用时返回 `MODEL_NO_RESPONSE`；首个模型活动超过默认 90 秒仍未出现时返回 `MODEL_START_TIMEOUT`。收到首个模型活动后，继续使用实验冻结的 Agent 总超时。
 
 ## 10. 实现与测试结果
 
@@ -297,12 +301,12 @@ Benchmark 使用控制总线白名单 action `RUN_BENCHMARK_CASE`。WSS 可用�
 - 01～07：从本地 Verified Parquet 通过官方 loader 读取 500 个真实 Case，选取真实 Case 经创建实验、客户端控制指令、执行器、Artifact 和 complete 到达 `submitted`；
 - 隔离：下发信封不包含 gold patch、测试补丁或目标测试字段；
 - 回归：协议、SWE-bench Adapter、官方数据导入和原下发测试通过。
-- 真实模型：`deepseek/deepseek-v4-flash` 执行 `pallets__flask-5014`，Run `erun_56961f9212164183917ef336686cd7d6` 到达 `submitted`，OpenCode Session/Trace 为 `ses_f95811fa1ffe4L45GPP9wnDCVX`；核心实现与官方 gold patch 一致，Artifact 与官方隐藏测试补丁共同应用后，本地等价环境运行目标测试得到 `60 passed`。
+- 真实模型：已使用一个真实 SWE-bench Case 完成 OpenCode、Patch 收集、Artifact 上传、官方 Harness 和结果查询的显式开发 Smoke；具体运行 ID 不作为稳定设计契约记录。
 
 `test/benchmark-executor-api.test.ts` 默认使用隔离库；设置 `BENCHMARK_TEST_DATABASE_PATH` 时直接使用指定的现有 SQLite。本轮已在 `~/.agent-insight/data/witty_insight.db` 上完成 04～07 和 01～07 验收，测试记录按本轮唯一 user/client 精确清理，业务数据不参与清理。
 
-后续仍需补更细的进程重启/回调断网故障注入测试。生成出的真实 Artifact 已继续进入 Docker 化评测 Controller，并在其启动的官方 ARM64 `pallets__flask-5014` Case 容器中完成步骤 09～13 冒烟；另已完成真实 OpenCode 到结果查询的 01～13 串联。该结果不代表 x86_64 Linux 正式判分验收完成。
+自动化测试已覆盖 Git 瞬时错误重试、回调失败后台投递、watchdog 回收与迟到回调等关键恢复边界；更长时间的进程重启和真实网络故障演练仍属于发布前验证。生成出的真实 Artifact 已进入 Docker 化评测 Controller，并在官方 ARM64 Case 容器中完成步骤 09～13 冒烟；另已完成真实 OpenCode 到结果查询的 01～13 串联。该结果不代表 x86_64 Linux 正式判分验收完成。
 
-真实 OpenCode + 一个 SWE-bench Case 作为人工 Smoke，会产生调用成本，因此保留为显式脚本而不放进默认单元测试。执行器默认测试不运行 SWE-bench Harness；Harness 由评测服务的显式 Docker 测试覆盖。本阶段不做前端、不实现多任务并发和网络 sandbox。
+真实 OpenCode + 一个 SWE-bench Case 作为人工 Smoke，会产生调用成本，因此保留为显式测试而不放进默认单元测试。执行器默认测试不运行 SWE-bench Harness；Harness 由评测服务的显式 Docker 测试覆盖。执行器范围不包含前端、多任务并发和网络 sandbox。
 
 执行器阶段不需要再下载数据集：接口测试直接复用已导入的 `~/.agent-insight/data/imports/swe-bench-verified/test.parquet` 和 `~/.agent-insight/vendor/SWE-bench`。官方仓库是 Case 字段、`base_commit` 与后续 Harness 语义的第一依据；OpenHands 仅辅助参考“Agent 结束后从基线 commit 收集 diff”的边界。

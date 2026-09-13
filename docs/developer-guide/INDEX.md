@@ -9,12 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Commit | `820d82db0d48b10204e803cb81bf75438e939fd5` (`820d82db`) |
+| Commit | `58c66e7d78df0b69e9fd86b364472e4f5acf44d7` (`58c66e7d`) |
 | Branch | `swebench-develop` |
-| Date | 2026-09-08 |
+| Date | 2026-09-11 |
 | Author | mintuyang |
-| Subject | `修复benmark执行器绑定平台问题` |
-| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；补齐 launchd bootout/bootstrap 竞态重试与真实状态校验，让 systemd/launchd 固化安装终端 PATH 以发现用户目录中的 Agent；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，将评测器分数契约与前端范围统一为 0-100，并在实验模型选项中展示 provider 以区分同名模型。当前工作树还修复了未绑定 Skill 会话的右栏空状态，并将历史会话改为带明确文字入口的顶栏临时浮层；同时恢复“运行观测 → 版本分析”导航入口，通过页面顶部“版本分析 / 版本管理”页签将标签管理收为版本分析的子能力，两个既有页面、API 与数据口径保持不变；新增自建评估器 `dataset_input` 变量、确定性数据集匹配门控与 `ExperimentCase.datasetInput` 快照，并统一“预期输出”展示术语；轨迹质量实验恢复独立 Skill 改进建议，并采用评分 5 分钟、建议每次 7 分钟且最多尝试 2 次的专属超时策略；Skill Copilot 的思考与命令过程现统一为默认折叠、可展开的状态行，并通过 `sessionId` 深链接与服务端增量 checkpoint 在多个页面间恢复同一运行状态；OpenCode 插件动态 Agent 发现通过 loopback `/agent` 读取 resolved Agent，每 30 秒在隔离子进程中绕过缓存并同步能力，macOS 后台服务使用独立 launchd helper 对齐交互式 OpenCode 环境，实验向导第一步定时及聚焦刷新候选；本轮另新增与历史组织集成隔离的 IDaaS OAuth 登录路由、模式契约与前端登录流程，并让开发启动在该模式下以状态接口判定就绪、跳过 admin Key 创建，同时让服务端日志输出不含配置值的具体 IDaaS 配置错误，并增加部署根路径下的 `/callback` 回调入口；userinfo 返回的 UUID 去除首尾空白后直接作为本地账号，首次登录自动创建、后续复用同一用户；修复页面重开时错误小写化 UUID 导致的 401，恢复登录保持 UUID 原始大小写；IDaaS 模式保留通用退出菜单，退出仅清理本地认证状态，不触发统一单点登出；新增默认关闭的地区访问限制，在用户创建前及 API Key 恢复时固定以 `uuids` 数组按 UUID 执行欧盟检查，地区服务异常失败关闭，并以独立文案区分地区受限与校验故障。 |
+| Subject | `修复客户端bug` |
+| Documentation overlay | 本轮未修改源码；补充当前 Benchmark 文件地图、控制通道、用户首次运行前置条件，并将统一设计入口收敛到 `docs/design/benchmark/`。 |
+
+### 旧快照至当前提交的变更摘要
 
 > 2026-09-04 working-tree overlay：新增 Benchmark Agent 步骤 01～13。统一实验入口按 `scope=benchmark` 分流；真实 SWE-bench Verified Parquet 由官方 loader 导入，Adapter 隔离 Harness 数据、构造 Agent Task、校验 Agent Patch、冻结不含 gold patch 的 EvaluationJob，并归一化原生结果。执行器在独立 Git 工作区产出 Patch；常驻 Evaluator Controller 容器通过 Docker Socket 启动官方 Case 镜像，直接调用固定官方源码的 `make_test_spec()` 与 `run_instance()`，再上传证据并回调原生终态。结果处理先冻结 Raw Result，以 `primaryMetric` 做固定分母聚合，仅投影安全 `nativeMetrics`；确定性归一化失败收敛为非重试终态。新增 Benchmark 实验分页结果 API 和带用户/实验归属校验的证据下载 API。01～13 已复用真实数据库和真实 Case 通过 API 级串联；ARM64 Docker Desktop 上的 09～13 双层容器验收和 `deepseek/deepseek-v4-flash` + `pallets__flask-5014` 全真实 01～13 开发冒烟均通过，后者 Harness 判定为 pass；正式计分仍需 x86_64 Linux 验收。仍不包含前端、部署脚本、服务注册与 Verified 500 批量调度。
 
@@ -46,7 +48,7 @@
 
 > 2026-09-11 working-tree overlay：常驻客户端保留每 30 秒完整刷新 Agent、模型与 FI 能力的节拍；每轮 inventory 将 `TMPDIR`/`TMP`/`TEMP` 指向 `~/.agent-insight/client/tmp/inventory-*` 并在成功、失败或超时后清理，避免 OpenCode/OpenTUI 原生 `.so` 堆积系统 `/tmp`。统一安装脚本的客户端 bundle 与 npm 兜底也改在 `~/.agent-insight/client/tmp/install-*` 暂存，系统 `/tmp` 已满时仍可完成客户端更新；临时 `scripts/package.json` 明确 CommonJS 包边界，避免继承 `.agent-insight/package.json` 的 ESM 类型。
 
-**如何更新：** `git diff 820d82db HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 58c66e7d HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -76,7 +78,7 @@
 | 查找哪个文件实现了 X | [03-file-map.md](03-file-map.md) |
 | 调用或扩展某个引擎 API / 类型 | [04-api-and-contracts.md](04-api-and-contracts.md) |
 | 端到端跟踪接入 / 评测流程 | [05-data-and-control-flow.md](05-data-and-control-flow.md) |
-| 接入新的 Benchmark | [07-conventions-and-extension.md](07-conventions-and-extension.md) · [扩展改造方案](../../评测服务文档/benchmark-extension-refactor-plan.md) |
+| 接入新的 Benchmark | [07-conventions-and-extension.md](07-conventions-and-extension.md) · [Benchmark 统一接入设计](../design/benchmark/) |
 | 新增 API 路由或页面 | [01-architecture.md](01-architecture.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
 | 为页面设置样式 / 使用正确的颜色、间距或组件 | [08-design-system.md](08-design-system.md) |
 | 遵循项目的模式 | [07-conventions-and-extension.md](07-conventions-and-extension.md) |

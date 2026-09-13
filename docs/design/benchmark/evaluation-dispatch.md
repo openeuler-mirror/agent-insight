@@ -2,7 +2,7 @@
 
 > 范围：高保真步骤 08、09——Agent Insight 校验执行器提交、构造评测任务、持久化并通过 REST 下发评测服务。  
 > 不包含前端、评测服务内部 Harness 执行、结果回传和 `normalizeResult()`。  
-> 前序：[Agent 执行前服务端设计](benchmark-agent-pre-execution.md)、[执行器后端设计](benchmark-executor.md)；溯源：[高保真源码](../../评测服务文档/Benchmark统一接口设计-SWE-bench示例.html)。
+> 前序：[Agent 执行前服务端设计](agent-pre-execution.md)、[执行器后端设计](executor.md)。
 
 状态：Agent Insight 侧步骤 08～09 已实现；后续评测服务接单、回调、原生结果落库、`normalizeResult()` 和结果查询也已实现。01～13 已使用真实数据库和真实 SWE-bench Verified Case 完成 API 级串联；步骤 09～13 另已由 Docker 化 Controller 使用真实 Artifact 和官方 ARM64 `pallets__flask-5014` Case 镜像完成双层容器 API 验收。
 
@@ -27,7 +27,7 @@
 
 ## 2. Adapter 第 3、4 个方法
 
-在现有 `BenchmarkPreExecutionAdapter` 上扩成完整协议，本阶段只实现新增的两个方法：
+完整 Adapter 协议包含五个业务方法；本环节使用提交校验和评测任务构造两个方法：
 
 ```ts
 type ArtifactDescriptor = {
@@ -92,6 +92,7 @@ interface BenchmarkAdapter<TRaw, TPublic, TPrivate, TEvaluationPayload> {
   buildEvaluationRequest(
     input: BuildEvaluationRequestInput<TPublic, TPrivate>,
   ): EvaluationJob<TEvaluationPayload>
+  normalizeResult(input: NormalizeBenchmarkResultInput): NormalizedBenchmarkResult
 }
 ```
 
@@ -197,6 +198,8 @@ type EvaluatorTarget = {
   targetKey: string
   baseUrl: string
   evaluatorKey: string
+  token?: string
+  configRevision?: string
 }
 
 interface EvaluatorTargetResolver {
@@ -206,14 +209,18 @@ interface EvaluatorTargetResolver {
 class EnvEvaluatorTargetResolver implements EvaluatorTargetResolver {}
 ```
 
-第一版配置：
+类名为兼容历史保留，实际通过 `EvaluatorRuntimeConfigProvider` 读取完整配置快照。优先读取权限为 `0600` 的 `data/config/benchmark-evaluator.env`，文件不存在时回退进程环境变量；非法或半写入更新继续使用上一份有效快照。
+
+当前配置：
 
 ```dotenv
 # Agent Insight → 评测服务；本机开发先这样配置
 AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=http://127.0.0.1:8080
+AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=token
 
-# 两个服务共同配置的随机凭证；不写数据库、不进入任务 JSON
+# 两个服务共同配置的随机凭证；不进入任务 JSON
 AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<random-secret>
+AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=
 
 # 已有变量；评测服务跨机器时必须是对方可访问的 Agent Insight 地址
 AGENT_INSIGHT_PUBLIC_BASE_URL=http://127.0.0.1:3000
@@ -231,14 +238,15 @@ AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=false
 - URL 必须是绝对 `http/https`，拒绝用户名、密码、query 和 fragment；禁止重定向；
 - HTTP 只默认允许 loopback；跨机器部署应使用 HTTPS。内网临时联调若要 HTTP，必须显式设置 `AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=true`；
 - 首次实际下发时把解析出的 `targetKey + baseUrl` 冻结到 Evaluation，之后重发继续使用原地址；配置变化只影响尚未绑定目标的新评测；
+- `token` 为默认模式，当前 Token 用于新任务，宽限期 Token 只用于接受旧任务回调；`none` 模式只有在双向网络边界已经隔离时才能使用；
 - 执行器任务默认使用 Public Base URL 回调；设置可选 Executor Callback Base URL 后只覆盖新建执行 Outbox，Evaluator 仍使用实验绑定中的公开地址；
 - 将来需要多个评测服务时增加 `RegisteredEvaluatorTargetResolver`，步骤 08、09 和 Adapter 不变。
 
-这比直接在业务代码读取一个 IP 更稳：当前仍然只有一个环境变量目标，但地址来源被隔离在 resolver 中，也避免用户输入 URL 带来的 SSRF。
+目标 URL、认证模式、当前 Token 和配置修订来自同一个不可变快照，避免热更新期间拼接新旧配置；实验请求不能传入评测地址，从入口上避免用户制造 SSRF。
 
 ## 5. 持久化与状态
 
-新增两个模型，不复用执行器的一对一 Outbox：
+评测链路使用两个独立模型，不复用执行器的一对一 Outbox：
 
 ```text
 BenchmarkEvaluation
@@ -247,7 +255,9 @@ BenchmarkEvaluation
   attemptNo                  # 首次为 1；只重评时递增
   retryOfEvaluationId?
   status                     # queued/dispatching/dispatch_unknown/
-                             # running_evaluator/dispatch_failed
+                             # running_evaluator/normalizing/completed/
+                             # submission_invalid/normalization_failed/
+                             # failed/dispatch_failed
   adapterKey
   evaluatorKey
   evaluatorTargetKey?
@@ -257,6 +267,10 @@ BenchmarkEvaluation
   callbackBaseUrl
   timeoutSeconds
   progressJson?
+  rawResultJson/rawResultDigest?
+  runtimeFactsJson/cleanupJson?
+  normalizedResultJson/completionDigest?
+  continuationStatus/continuationAttempts/continuationTriedAt/continuationError?
   failureCode/failureMessage?
   timestamps
   UNIQUE(caseRunId, attemptNo)
@@ -314,7 +328,7 @@ BenchmarkEvaluationDispatchOutbox
 
 ```http
 GET {evaluatorBaseUrl}/health
-Authorization: Bearer <configured-token>
+Authorization: Bearer <configured-token>  # authMode=token 时
 ```
 
 健康响应只校验服务状态、busy 和 `swe-bench` 是否 ready，不检查评估器业务版本。最近 30 秒已有健康结果时可跳过重复检查。
@@ -329,7 +343,7 @@ Authorization: Bearer <configured-token>
 
 ```http
 POST {evaluatorBaseUrl}/api/v1/evaluations
-Authorization: Bearer <configured-token>
+Authorization: Bearer <configured-token>  # authMode=token 时
 Idempotency-Key: <evaluationRunId>
 X-Agent-Insight-Request-Digest: sha256:...
 Content-Type: application/json
@@ -341,7 +355,7 @@ Content-Type: application/json
   "requestDigest": "sha256:...",
   "evaluationJob": {},
   "platformBaseUrl": "http://127.0.0.1:3000",
-  "callbackBaseUrl": "http://127.0.0.1:3000/api/benchmark/v1/runs/veval_001",
+  "callbackBaseUrl": "http://127.0.0.1:3000/api/benchmark/v1/evaluations/veval_001",
   "timeoutSeconds": 1800
 }
 ```
@@ -364,7 +378,7 @@ Content-Type: application/json
 - `422 EVALUATION_JOB_INVALID/EVALUATOR_NOT_READY`：结构错误永久失败，未就绪可按服务响应的 `retryable` 标记延迟重试；
 - 用户显式只重评时创建新的 `evaluationRunId`，绝不修改旧运行。
 
-评测服务随后使用同一服务凭证和 `evaluationRunId` 调用 Artifact 下载、progress、complete API。两端使用恒定时间比较验证配置凭证；凭证只出现在 HTTP Header，不进入 Outbox、日志或 Harness 输入。平台必须验证目标 Evaluation 的 `requestJson` 确实引用了该 Artifact；服务凭证不能传入 Harness 容器。
+评测服务随后使用同一认证模式和 `evaluationRunId` 调用 Artifact 下载、progress、artifacts、complete API。`token` 模式使用恒定时间比较验证当前或宽限期凭证；凭证只出现在 HTTP Header，不进入 Outbox、日志或 Harness 输入。`none` 模式省略 Authorization，但不替代防火墙。平台必须验证目标 Evaluation 的 `requestJson` 确实引用了该 Artifact；服务凭证不能传入 Harness 容器。
 
 ## 8. 代码落点与验收
 
@@ -394,4 +408,4 @@ test/benchmark-executor-api.test.ts
 
 已完成的接口验收同时覆盖 04～09 和 01～13：评测端收到真实 HTTP 请求后，只使用服务凭证、`evaluationRunId` 和 Artifact API 反向下载 `model.patch`，再通过独立的 progress、evidence、complete API 回传；01～13 使用本地官方 Verified Parquet 中的真实 Case，并在已备份的真实数据库上复跑通过，最终由实验结果 GET 校验固定分母聚合和安全字段。测试结束后唯一标识的测试记录已清理，原有 Benchmark 数据量未变化。显式 Docker 测试另将 Controller 与官方 ARM64 Case 分别运行在容器中，以真实 Artifact 完成步骤 09～13，1/1 通过。ARM64 结果仅作开发冒烟，正式分数仍以 x86_64 Linux 为准。
 
-本阶段不建立 Benchmark、数据集或评估器业务版本；`protocolVersion` 只表示跨进程消息格式，SHA-256 只用于内容完整性。
+当前实现不建立 Benchmark、数据集或评估器业务版本；`protocolVersion` 只表示跨进程消息格式，SHA-256 只用于内容完整性。
