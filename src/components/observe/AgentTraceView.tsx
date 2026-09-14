@@ -33,6 +33,7 @@ import {
     alignInteractionsToRasAnchors,
 } from '@/lib/ingest/ras/recovery-tree';
 import type { RasTraceMarker } from '@/lib/ingest/ras/trace-markers';
+import { rasEventKindBadgeLabel } from '@/lib/ingest/ras/normalize';
 import {
     RasNodeBadge,
     RasReliabilityDetails,
@@ -54,6 +55,11 @@ import {
 } from '@/lib/shared/interaction-utils';
 
 const SLOW_MS = 60_000;
+const EMPTY_RAS_MARKERS: RasTraceMarker[] = [];
+
+function sameStringSet(left: Set<string>, right: Set<string>): boolean {
+    return left.size === right.size && [...left].every(key => right.has(key));
+}
 
 type NodeStatus = 'error' | 'slow' | 'ok';
 
@@ -92,6 +98,7 @@ function exactTokens(n: number): string {
 
 // Single source of truth for span-type chips (replaces the legacy inline-styled span badges).
 function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs' | 'sm'; className?: string }) {
+    const { locale } = useLocale();
     const meta = KIND_META[kind] ?? KIND_META.tool;
     const sizing = size === 'sm' ? 'h-5 px-1.5 text-xs' : 'h-4 px-1 text-[10px]';
     return (
@@ -103,7 +110,7 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
                 className,
             )}
         >
-            {meta.label}
+            {kind === 'ras' ? rasEventKindBadgeLabel(locale) : meta.label}
         </span>
     );
 }
@@ -412,6 +419,8 @@ export interface AgentTraceViewProps {
     rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
+    /** 跨增量刷新保持树交互状态的稳定 Trace 标识。 */
+    traceIdentity?: string;
     /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
     rasMarkers?: RasTraceMarker[];
 }
@@ -426,15 +435,19 @@ export default function AgentTraceView({
     onSubagentNavigate,
     rootSessionId,
     rootExecutionId,
-    rasMarkers = [],
+    traceIdentity,
+    rasMarkers = EMPTY_RAS_MARKERS,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
-    const { t: tt } = useLocale();
+    const { locale, t: tt } = useLocale();
     const [interactions, setInteractions] = useState<RawInteraction[]>(sourceInteractions);
     const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
-    const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    const stableTraceIdentity = traceIdentity ?? rootExecutionId;
+    const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
+    const treeIdentityInitializedRef = React.useRef(false);
+    const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
     const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
@@ -443,8 +456,9 @@ export default function AgentTraceView({
     );
 
     useEffect(() => {
-        const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
-        previousRootExecutionIdRef.current = rootExecutionId;
+        const traceChanged = previousTraceIdentityRef.current !== stableTraceIdentity;
+        previousTraceIdentityRef.current = stableTraceIdentity;
+        if (traceChanged) sameTraceReloadRef.current = false;
         fullLoadPromiseRef.current = null;
         setInteractionLoadError(null);
         setFullInteractionLoadError(null);
@@ -452,20 +466,21 @@ export default function AgentTraceView({
             if (traceChanged) return sourceInteractions;
             return sourceInteractions.map((item, index) => {
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
-                return loaded && !loaded._payloadDeferred ? loaded : item;
+                const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
+                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred ? loaded : item;
             });
         });
-    }, [sourceInteractions, rootExecutionId]);
+    }, [sourceInteractions, stableTraceIdentity]);
 
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
         if (langfuseProjection) return;
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
-        const requestedTraceId = previousRootExecutionIdRef.current;
+        const requestedTraceId = previousTraceIdentityRef.current;
         setInteractionLoadError(null);
         try {
             const loaded = await loadInteraction(index);
-            if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            if (previousTraceIdentityRef.current !== requestedTraceId) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
             setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
@@ -481,12 +496,12 @@ export default function AgentTraceView({
             return interactions;
         }
         if (!fullLoadPromiseRef.current) {
-            const requestedTraceId = previousRootExecutionIdRef.current;
+            const requestedTraceId = previousTraceIdentityRef.current;
             setFullInteractionLoadError(null);
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId) {
                         // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
                         sameTraceReloadRef.current = true;
                         setInteractions(loaded);
@@ -494,7 +509,7 @@ export default function AgentTraceView({
                     return loaded;
                 })
                 .catch(error => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId) {
                         setFullInteractionLoadError(error instanceof Error ? error.message : 'Failed to load full trace');
                     }
                     return interactions;
@@ -514,8 +529,8 @@ export default function AgentTraceView({
             : (displayInteractions || [])
         const base = langfuseProjection?.tree || buildAgentCallTree(aligned)
         if (!base) return base
-        return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers) : base
-    }, [interactions, langfuseProjection, displayInteractions, rasMarkers]);
+        return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers, locale) : base
+    }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
@@ -567,18 +582,22 @@ export default function AgentTraceView({
     // tree 由 interactions 派生，为同一条 trace 补数据（懒加载单条 / 补全全部）也会产生新的
     // interactions 数组 → 新 tree 对象。若无条件跟着 tree 重置，首次点击 span 触发懒加载后
     // 会被弹回根 Agent，必须点第二次才留得住（手动展开的节点同样会被清掉）。
-    // 这里只跳过「同一条 trace 补数据」这一种已知来源，其余 tree 变化（换 trace、自动刷新、
-    // langfuse 投影变化）一律照旧重置 —— TraceDrawer / TrajectoryTraceView 不传 rootExecutionId，
-    // 不能用它作为 trace 身份来判定。
+    // 同一条 trace 的懒加载或实时增量刷新只补数据，不应清掉用户当前的选择和展开状态。
     useEffect(() => {
         if (!tree) return;
-        if (sameTraceReloadRef.current) {
+        const sameStableTrace = treeIdentityInitializedRef.current
+            && Boolean(stableTraceIdentity)
+            && previousTreeIdentityRef.current === stableTraceIdentity;
+        previousTreeIdentityRef.current = stableTraceIdentity;
+        treeIdentityInitializedRef.current = true;
+        if (sameTraceReloadRef.current || sameStableTrace) {
             sameTraceReloadRef.current = false;
             return;
         }
-        setSelectedKey(agentKey(tree.id));
-        setExpandedKeys(defaultExpandedKeys);
-    }, [tree, defaultExpandedKeys]);
+        const rootKey = agentKey(tree.id);
+        setSelectedKey(current => current === rootKey ? current : rootKey);
+        setExpandedKeys(current => sameStringSet(current, defaultExpandedKeys) ? current : defaultExpandedKeys);
+    }, [tree, defaultExpandedKeys, stableTraceIdentity]);
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
@@ -2626,6 +2645,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
 }
 
 function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
+    const { locale } = useLocale();
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
@@ -2673,7 +2693,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                     {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
                     {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
                     {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
-                    <span style={{ opacity: 0.6 }}>from: {getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
+                    <span style={{ opacity: 0.6 }}>{locale === 'zh' ? '来源：' : 'from: '}{getAgentNodeDisplayLabel(node.agentName, node.subagentType)}</span>
                     {event.toolStatus && !hasError && (
                         <span className="inline-flex items-center gap-1 text-success font-semibold">
                             <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
@@ -3505,6 +3525,7 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
 // ─── TopNPanel ────────────────────────────────────────────────────────────────
 function TopNPanel() {
     const { topNDuration, topNTokens, slowNodesList, rasNodeList, onJumpToKey } = React.useContext(TraceCtx);
+    const { locale } = useLocale();
     const [tab, setTab] = useState<'duration' | 'tokens' | 'slow' | 'ras'>('duration');
 
     if (topNDuration.length === 0 && topNTokens.length === 0 && slowNodesList.length === 0 && rasNodeList.length === 0) return null;
@@ -3512,8 +3533,8 @@ function TopNPanel() {
     const tabs: { id: 'duration' | 'tokens' | 'slow' | 'ras'; icon: string; label: string; count: number }[] = [
         { id: 'duration', icon: '⏱', label: '耗时 Top 5', count: topNDuration.length },
         { id: 'tokens',   icon: '💬', label: 'Token Top 5', count: topNTokens.length },
-        { id: 'slow',     icon: '⚠', label: '异常节点', count: slowNodesList.length },
-        { id: 'ras',      icon: '🛡', label: 'RAS 节点', count: rasNodeList.length },
+        { id: 'slow',     icon: '⚠', label: '慢节点', count: slowNodesList.length },
+        { id: 'ras',      icon: '🛡', label: '故障节点', count: rasNodeList.length },
     ];
 
     const items = tab === 'duration' ? topNDuration : tab === 'tokens' ? topNTokens : slowNodesList;
@@ -3557,7 +3578,7 @@ function TopNPanel() {
                             >
                                 <span className="text-xs text-foreground-muted tabular-nums w-3 shrink-0 text-right">{i + 1}</span>
                                 {ras.marker && <RasNodeBadge markers={[ras.marker]} compact className="shrink-0" />}
-                                {!ras.marker && <span className="inline-flex items-center rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 text-foreground-muted">RAS</span>}
+                                {!ras.marker && <span className="inline-flex items-center rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-semibold leading-none shrink-0 text-foreground-muted">{rasEventKindBadgeLabel(locale)}</span>}
                                 <span className="flex-1 text-xs text-foreground truncate">{ras.label}</span>
                                 <span className="text-xs text-primary shrink-0">→</span>
                             </div>

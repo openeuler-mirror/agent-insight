@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-auth-registration-'));
 process.env.AGENT_INSIGHT_DATA_DIR = testHome;
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+const testDbPath = path.join(testHome, "witty_insight.db");
+fs.closeSync(fs.openSync(testDbPath, "w"));
+process.env.DATABASE_URL = "file:" + testDbPath;
+execFileSync(
+  process.execPath,
+  [path.resolve(__dirname, "../node_modules/prisma/build/index.js"), "db", "push", "--skip-generate"],
+  { cwd: path.resolve(__dirname, ".."), env: process.env, stdio: "ignore" },
+);
 
 let POST: (request: Request) => Promise<Response>;
 let prisma: typeof import('@/lib/storage/prisma').prisma;
@@ -17,6 +25,7 @@ const usernames = {
   casing: `registration-case-${suffix}`,
   race: `registration-race-${suffix}@example.com`,
 };
+const idaasUsername = `Employee-UUID-${suffix}-ABCDEF`;
 
 function register(username: string): Promise<Response> {
   return POST(new Request('http://localhost/api/auth/apikey', {
@@ -41,6 +50,7 @@ test.after(async () => {
     usernames.casing,
     usernames.casing.toUpperCase(),
     usernames.race,
+    idaasUsername,
   ];
 
   await prisma.session.deleteMany({ where: { user: { in: candidates } } });
@@ -99,4 +109,43 @@ test('看起来像邮箱但格式非法的用户名返回 400', async () => {
   const response = await register(`invalid-${suffix}@domain`);
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: 'Username must be a valid email address' });
+});
+
+test('IDaaS 恢复登录时保持 UUID 大小写并校验已有 API key', async () => {
+  const apiKey = `wi_idaas_restore_${suffix}`;
+  await prisma.user.create({
+    data: { username: idaasUsername, apiKey },
+  });
+
+  const previousLoginMode = process.env.LOGIN_MODE;
+  const previousOrganizationMode = process.env.ORGANIZATION_MODE;
+  const previousRegionAccessEnabled = process.env.IDAAS_REGION_ACCESS_ENABLED;
+  process.env.LOGIN_MODE = 'idaas_oauth';
+  delete process.env.ORGANIZATION_MODE;
+  process.env.IDAAS_REGION_ACCESS_ENABLED = "false";
+
+  try {
+    const response = await POST(new Request('http://localhost/api/auth/apikey', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-witty-api-key': apiKey,
+      },
+      body: JSON.stringify({ username: `  ${idaasUsername}  ` }),
+    }));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      username: idaasUsername,
+      apiKey,
+      displayName: idaasUsername,
+    });
+  } finally {
+    if (previousLoginMode === undefined) delete process.env.LOGIN_MODE;
+    else process.env.LOGIN_MODE = previousLoginMode;
+    if (previousOrganizationMode === undefined) delete process.env.ORGANIZATION_MODE;
+    else process.env.ORGANIZATION_MODE = previousOrganizationMode;
+    if (previousRegionAccessEnabled === undefined) delete process.env.IDAAS_REGION_ACCESS_ENABLED;
+    else process.env.IDAAS_REGION_ACCESS_ENABLED = previousRegionAccessEnabled;
+  }
 });

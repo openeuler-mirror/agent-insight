@@ -18,8 +18,31 @@ import {
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { startComparisonRun } from '@/lib/engine/experiment/comparison-runner';
 import { prisma } from '@/lib/storage/prisma';
+import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
+import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
+import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator-runtime-config';
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 
 export const dynamic = 'force-dynamic';
+
+function callbackServiceBaseUrls(req: Request): {
+  publicCallbackOrigin: string;
+  executorCallbackOrigin: string;
+} {
+  const runtimeConfig = defaultEvaluatorRuntimeConfigProvider.snapshot();
+  let publicCallbackOrigin = runtimeConfig.publicBaseUrl?.replace(/\/$/, '');
+  if (!publicCallbackOrigin) {
+    const url = new URL(req.url);
+    const host = req.headers.get('x-forwarded-host') || url.host;
+    const protocol = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
+    const prefix = String(process.env.NEXT_PUBLIC_URL_PREFIX || '').replace(/^\/?/, '/').replace(/\/$/, '');
+    publicCallbackOrigin = `${protocol}://${host}${prefix}`;
+  }
+  return {
+    publicCallbackOrigin,
+    executorCallbackOrigin: runtimeConfig.executorCallbackBaseUrl || publicCallbackOrigin,
+  };
+}
 
 export async function POST(
   req: Request,
@@ -35,10 +58,36 @@ export async function POST(
 
     const currentExperiment = await prisma.experiment.findFirst({
       where: { id, user: username },
-      select: { status: true, type: true },
+      select: { status: true, type: true, scope: true },
     });
     if (!currentExperiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (currentExperiment.scope === 'benchmark') {
+      try {
+        const callbackUrls = callbackServiceBaseUrls(req);
+        const result = await startBenchmarkExperiment({
+          experimentId: id,
+          user: username,
+          ...callbackUrls,
+        });
+        if (!result) {
+          return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+        }
+        result.completion?.catch((error) => {
+          console.error('[Benchmark Dispatch Error]', error);
+        });
+        if (!result.alreadyRunning) {
+          recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
+        }
+        return NextResponse.json({
+          status: result.status,
+          runId: result.runId,
+          ...(result.alreadyRunning ? { alreadyRunning: true } : {}),
+        }, { status: 202 });
+      } catch (error) {
+        return benchmarkErrorResponse(error, 'benchmark/experiments/run');
+      }
     }
     if (currentExperiment.status === 'running') {
       return NextResponse.json({ status: 'running', alreadyRunning: true });
@@ -67,6 +116,32 @@ export async function POST(
     } catch {
       body = {};
     }
+    const frozen = await prisma.experiment.findUnique({
+      where: { id },
+      select: { configSnapshotJson: true },
+    });
+    if (!body.generateTrace && frozen?.configSnapshotJson) {
+      try {
+        const snapshot = JSON.parse(frozen.configSnapshotJson) as Record<string, unknown>;
+        const target = snapshot.executionTarget && typeof snapshot.executionTarget === 'object'
+          ? snapshot.executionTarget as Record<string, unknown>
+          : null;
+        if (snapshot.traceSource === 'generate' && target) {
+          body = {
+            ...body,
+            traceSource: 'generate',
+            fiOrchestrate: snapshot.fiOrchestrate === true,
+            generateTrace: {
+              workerId: target.workerId,
+              platform: target.platform,
+              agent: snapshot.agentName,
+              model: target.model || null,
+              timeoutSeconds: Number(target.timeoutSeconds) || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+            },
+          };
+        }
+      } catch { /* 存量快照不完整时继续走普通运行 */ }
+    }
 
     // generate Trace 的运行参数；普通数据走通用客户端指令，可靠性数据才走 FI。
     const generateTrace = (body.generateTrace && typeof body.generateTrace === 'object')
@@ -93,7 +168,7 @@ export async function POST(
       await assertTraceGenerationTarget({ user: username, workerId, platform, agent });
       const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
         ? generateTrace.timeoutSeconds
-        : 180;
+        : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
 
       await prisma.experiment.updateMany({
         where: { id, user: username },
@@ -151,7 +226,7 @@ export async function POST(
         });
         const timeoutSeconds = typeof generateTrace?.timeoutSeconds === 'number'
           ? generateTrace.timeoutSeconds
-          : 180;
+          : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
         fi = await orchestrateFaultInjection({
           user: username,
           experimentId: id,

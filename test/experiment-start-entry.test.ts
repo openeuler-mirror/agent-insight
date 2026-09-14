@@ -5,12 +5,15 @@ import test from 'node:test';
 
 const root = process.cwd();
 
-test('全局实验详情是纯进度视图，不提供二次启动和重复返回入口', () => {
+test('全局实验详情是纯进度视图，并提供返回实验列表入口', () => {
   const detailPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
 
+  assert.match(detailPage, /<AppTopBar title=\{detail \? detail\.name : '实验详情'\} \/>/);
+  assert.match(detailPage, /<PageContainer[\s\S]*!embedded && \([\s\S]*<Link href="\/experiments">[\s\S]*返回实验列表[\s\S]*<\/Link>/);
+  assert.doesNotMatch(detailPage, /<AppTopBar[\s\S]*title=\{\([\s\S]*返回实验列表/);
   assert.doesNotMatch(detailPage, /开始执行/);
   assert.doesNotMatch(detailPage, /返回上一页/);
   assert.doesNotMatch(detailPage, /router\.back\(\)/);
@@ -19,7 +22,7 @@ test('全局实验详情是纯进度视图，不提供二次启动和重复返�
 
 test('向导仅在 run 请求成功后进入详情，启动失败回滚临时实验', () => {
   const wizardPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentWizard.tsx'),
     'utf8',
   );
   const runRequest = wizardPage.indexOf('const runRes = await apiFetch');
@@ -53,10 +56,52 @@ test('生成 Trace 先进入 running，绑定完成后显式继续调度评估',
 
 test('实验详情展示 Trace 生成进度和失败 Case，失败 Trace 不显示为实际输出', () => {
   const detailPage = fs.readFileSync(
-    path.join(root, 'src/app/(main)/experiments/[id]/page.tsx'),
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
   assert.match(detailPage, /Trace 生成失败/);
   assert.match(detailPage, /已跳过评估且不计入综合得分/);
   assert.match(detailPage, /正在生成 Trace/);
+});
+
+test('Benchmark Case 明细表展示 Instance ID', () => {
+  const detailPage = fs.readFileSync(
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
+    'utf8',
+  );
+
+  assert.match(detailPage, />Instance ID</);
+  assert.match(detailPage, /c\.benchmark\?\.externalCaseId/);
+});
+
+test('Benchmark Patch 已提交但 Harness 未完成时展示官方评测中', () => {
+  const detailPage = fs.readFileSync(
+    path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
+    'utf8',
+  );
+
+  assert.match(detailPage, /isBenchmarkEvaluationInProgress\(c\.benchmark\)/);
+  assert.match(detailPage, /官方评测中…/);
+  assert.match(detailPage, /Patch 已生成，等待执行器确认…/);
+  assert.match(detailPage, /sha256:\{c\.benchmark\.submission\.sha256\}/);
+});
+
+test('Benchmark Case 使用 Run 状态，不被通用 Trace pending 覆盖', () => {
+  const detailRoute = fs.readFileSync(
+    path.join(root, 'src/app/api/experiments/[id]/route.ts'),
+    'utf8',
+  );
+
+  assert.match(detailRoute, /traceStatus: benchmarkRun \? benchmarkTraceStatus : traceState\?\.status \|\| null/);
+  assert.match(detailRoute, /traceError: benchmarkRun \? benchmarkRun\.failureMessage : traceState\?\.error \|\| null/);
+});
+
+test('Benchmark 原始文件菜单向上展开，避免被结果卡底部裁剪', () => {
+  const artifactActions = fs.readFileSync(
+    path.join(root, 'src/components/eval/BenchmarkArtifactActions.tsx'),
+    'utf8',
+  );
+
+  assert.match(artifactActions, /bottom: 'calc\(100% \+ 5px\)'/);
+  assert.doesNotMatch(artifactActions, /top: 'calc\(100% \+ 5px\)'/);
 });

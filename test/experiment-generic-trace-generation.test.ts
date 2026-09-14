@@ -7,7 +7,9 @@ import test from 'node:test';
 
 import {
   assertTraceGenerationTarget,
+  canReconcileGeneratedTraceAttempt,
   collectTraceGenerationCases,
+  isTraceGenerationCommandTerminal,
   isTraceGenerationFailureRetryable,
   loadTraceGenerationRetryRequest,
   parseTraceIdFromCommandResult,
@@ -117,10 +119,25 @@ test('generic trace binding consumes the client Trace ID and never normalizes us
     'ses_early',
   );
   assert.equal(parseTraceIdFromCommandResult(JSON.stringify({ state: 'AGENT_EXITED' })), null);
+  assert.equal(isTraceGenerationCommandTerminal('RUNNING'), false);
+  assert.equal(isTraceGenerationCommandTerminal('FAILED'), true);
+  assert.equal(canReconcileGeneratedTraceAttempt('DELIVERY_FAILED'), true);
+  assert.equal(canReconcileGeneratedTraceAttempt('MODEL_UNAVAILABLE'), false);
   assert.equal(isTraceGenerationFailureRetryable('TRACE_INGEST_TIMEOUT'), true);
   assert.equal(isTraceGenerationFailureRetryable('CLIENT_BUSY'), true);
   assert.equal(isTraceGenerationFailureRetryable('TRACE_ID_MISSING'), false);
   assert.equal(isTraceGenerationFailureRetryable('PLATFORM_NOT_AVAILABLE'), false);
+  for (const code of [
+    'AGENT_TIMEOUT',
+    'MODEL_ERROR',
+    'MODEL_NO_RESPONSE',
+    'MODEL_START_TIMEOUT',
+    'MODEL_UNAVAILABLE',
+    'AGENT_EXIT_NONZERO',
+    'AGENT_NO_OUTPUT',
+  ]) {
+    assert.equal(isTraceGenerationFailureRetryable(code), false, `${code} must not auto-retry`);
+  }
 });
 
 test('experiment detail exposes a failed generic trace generation state', async (t) => {
@@ -321,7 +338,7 @@ test('late long-poll command success is reconciled into the failed Attempt and C
 
 test('experiment wizard and run route split generic generation from reliability FI', () => {
   const wizard = fs.readFileSync(
-    path.join(process.cwd(), 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'),
     'utf8',
   );
   const route = fs.readFileSync(
@@ -346,21 +363,25 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(wizard, /agent-datasets\/\$\{encodeURIComponent\(nextId\)\}.*view=items/);
   assert.match(wizard, /fiOrchestrate: isReliabilityDataset/);
   assert.match(wizard, /generationCasesFromDataset\(selectedDataset\)/);
-  assert.match(wizard, /GENERATED_TRACE_AGENT_TIMEOUT_SECONDS = 300/);
-  assert.match(wizard, /timeoutSeconds: GENERATED_TRACE_AGENT_TIMEOUT_SECONDS/);
+  assert.match(wizard, /useState\(\s*String\(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS\)/);
+  assert.match(wizard, /timeoutSeconds: agentTimeoutSeconds/);
+  assert.equal(route.match(/: DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;/g)?.length, 2);
+  assert.match(generation, /req\.timeoutSeconds \?\? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS/);
+  assert.match(generation, /Number\(payload\.timeoutSeconds\) \|\| DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS/);
   assert.match(route, /if \(wantGenerate && !wantFi\)/);
   assert.match(route, /generateExperimentTraces/);
   assert.match(route, /caseIds: generated\.readyCaseIds/);
   assert.match(client, /buildExperimentCaseArgs/);
   assert.match(client, /buildExperimentCaseInvocation/);
   assert.match(client, /\['run', '--format', 'json', '--agent', input\.agent\]/);
+  assert.match(client, /args\.push\('--auto'\)/);
   assert.match(client, /parseOpencodeSlashCommand\(input\.input\)/);
   assert.match(client, /args\.push\('--command', slashCommand\.command\)/);
   assert.match(client, /return \{ args, stdin: input\.input \}/);
   assert.match(client, /traceId/);
   assert.match(client, /args\.push\('-p', input\.input, '--agent', input\.agent\)/);
   assert.match(generation, /taskId: input\.traceId/);
-  assert.match(generation, /parseTraceIdFromCommandResult\(command\.resultJson\)/);
+  assert.match(generation, /parseTraceIdFromCommandResult\(command\?\.resultJson\)/);
   assert.match(generation, /select: \{ interactions: true, endTime: true \}/);
   assert.doesNotMatch(generation, /query:\s*input\.item\.input/);
   assert.doesNotMatch(generation, /if \(!dispatched\.delivered\)/);

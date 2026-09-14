@@ -19,6 +19,7 @@ TABLE_DEFINITIONS = {
         "columns": [
             ("id", "TEXT PRIMARY KEY"),
             ("username", "TEXT UNIQUE NOT NULL"),
+            ("externalAccount", "TEXT UNIQUE"),
             ("apiKey", "TEXT UNIQUE NOT NULL"),
             ("createdAt", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
         ],
@@ -179,6 +180,21 @@ TABLE_DEFINITIONS = {
     }
 }
 
+TABLE_DEFINITIONS.update({
+    "Collaboration": {
+        "columns": [("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"), ("createdAt", "TEXT NOT NULL")],
+        "unique_constraints": ['UNIQUE ("user", "collaborationId")'],
+    },
+    "CollaborationEvent": {
+        "columns": [("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"), ("eventId", "TEXT NOT NULL"), ("bodyJson", "TEXT NOT NULL"), ("bodyHash", "TEXT NOT NULL"), ("receivedAt", "TEXT NOT NULL")],
+        "unique_constraints": ['UNIQUE ("user", "collaborationId", "eventId")'],
+    },
+    "CollaborationSessionBinding": {
+        "columns": [("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"), ("sessionId", "TEXT NOT NULL"), ("traceSessionId", "TEXT NOT NULL"), ("eventClock", "TEXT NOT NULL"), ("createdAt", "TEXT NOT NULL")],
+        "unique_constraints": ['UNIQUE ("user", "collaborationId", "sessionId")'],
+    },
+})
+
 def get_existing_columns(cursor, table_name):
     cursor.execute("""
         SELECT column_name 
@@ -253,6 +269,7 @@ def init_opengauss_db():
                 else:
                     print(f"  ✓ 表结构完整，无需修改")
 
+        cursor.execute('CREATE INDEX IF NOT EXISTS "CollaborationEvent_page_idx" ON "CollaborationEvent" ("user", "collaborationId", "receivedAt", "id")')
         print("\nOpenGauss 数据库表结构同步完成。")
 
         test_user_id = str(uuid.uuid4())

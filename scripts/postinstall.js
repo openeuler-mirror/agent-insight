@@ -11,6 +11,7 @@ const {
   getDataRoot,
   migrateDataIfNeeded
 } = require('./utils.js')
+const { syncGeneratedPrismaClient } = require('./sync-prisma-client.js')
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
@@ -76,6 +77,17 @@ try {
   const dbPath = path.join(dataRoot, 'data', 'witty_insight.db')
   const dbUrl = `file:${dbPath}`
   process.env.DATABASE_URL = dbUrl
+  const standaloneDir = path.join(PACKAGE_ROOT, '.next', 'standalone')
+
+  console.log('Generating Prisma client...')
+  execSync('npx prisma generate', {
+    stdio: 'inherit',
+    cwd: PACKAGE_ROOT,
+    env: { ...process.env, DATABASE_URL: dbUrl }
+  })
+  syncGeneratedPrismaClient(PACKAGE_ROOT, standaloneDir)
+  console.log('✓ Prisma client generated')
+  console.log()
 
   console.log('Syncing database schema...')
   try {
@@ -105,16 +117,6 @@ try {
   }
   console.log()
 
-  console.log('Generating Prisma client...')
-  execSync('npx prisma generate', {
-    stdio: 'inherit',
-    cwd: PACKAGE_ROOT,
-    env: { ...process.env, DATABASE_URL: dbUrl }
-  })
-  console.log('✓ Prisma client generated')
-  console.log()
-
-  const standaloneDir = path.join(PACKAGE_ROOT, '.next', 'standalone')
   if (fs.existsSync(standaloneDir)) {
     console.log('Setting up standalone environment...')
 
@@ -135,21 +137,8 @@ try {
       console.log('✓ Public files copied to standalone')
     }
 
-    const prismaClientDir = path.join(PACKAGE_ROOT, 'node_modules', '.prisma', 'client')
     const standaloneNodeModules = path.join(standaloneDir, 'node_modules')
-    const standalonePrismaDir = path.join(standaloneNodeModules, '.prisma')
-    const standaloneClientDir = path.join(standalonePrismaDir, 'client')
-
-    if (fs.existsSync(prismaClientDir)) {
-      fs.mkdirSync(standalonePrismaDir, { recursive: true })
-
-      if (fs.existsSync(standaloneClientDir)) {
-        fs.rmSync(standaloneClientDir, { recursive: true, force: true })
-      }
-
-      fs.cpSync(prismaClientDir, standaloneClientDir, { recursive: true })
-      console.log('✓ Prisma client copied to standalone')
-    }
+    const standaloneClientDir = path.join(standaloneNodeModules, '.prisma', 'client')
 
     syncStandaloneSharp(PACKAGE_ROOT, standaloneDir)
 

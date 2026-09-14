@@ -49,10 +49,11 @@ model SkillVersion {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  username  String   @unique
-  apiKey    String   @unique
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  username        String   @unique
+  externalAccount String?  @unique
+  apiKey          String   @unique
+  createdAt       DateTime @default(now())
 }
 
 model Execution {
@@ -133,6 +134,10 @@ model Execution {
 
   // Trace ↔ 用户标签的可索引绑定。系统标签不入库，由读路径派生。
   executionTags ExecutionTag[]
+
+  // Goal Plus is an orchestration overlay. These links never replace the
+  // native Execution parent/root tree.
+  goalPlusLinks GoalPlusExecutionLink[]
 
   @@index([parentExecutionId])
   @@index([rootExecutionId])
@@ -678,6 +683,8 @@ model AgentEvalDataset {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
+  benchmarkDataset BenchmarkDataset?
+
   @@index([user])
   @@index([user, targetSkill])
 }
@@ -1125,10 +1132,12 @@ model Experiment {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  cases         ExperimentCase[]
-  traceAttempts ExperimentTraceAttempt[]
-  comments      ExperimentEvalComment[]
-  groups        ExperimentGroup[]
+  cases            ExperimentCase[]
+  traceAttempts    ExperimentTraceAttempt[]
+  comments         ExperimentEvalComment[]
+  groups           ExperimentGroup[]
+  benchmarkBinding BenchmarkExperimentBinding?
+  benchmarkRuns    BenchmarkCaseRun[]
 
   @@index([user, createdAt])
   @@index([user, scope, skillName])
@@ -1191,6 +1200,7 @@ model ExperimentCase {
 
   results       ExperimentEvalResult[]
   traceAttempts ExperimentTraceAttempt[]
+  benchmarkRuns BenchmarkCaseRun[]
 
   @@unique([experimentId, taskId, groupId])
   @@index([experimentId])
@@ -1198,6 +1208,227 @@ model ExperimentCase {
   @@index([faultInjectionType])
   @@index([traceGenerationCommandId])
   @@index([groupId])
+}
+
+model BenchmarkDataset {
+  id                 String           @id @default(cuid())
+  agentEvalDatasetId String           @unique
+  agentEvalDataset   AgentEvalDataset @relation(fields: [agentEvalDatasetId], references: [id], onDelete: Cascade)
+  user               String
+  name               String
+  adapterKey         String
+  contentHash        String
+  status             String           @default("ready")
+  caseCount          Int              @default(0)
+  sourceJson         String           @default("{}")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  cases    BenchmarkDatasetCase[]
+  bindings BenchmarkExperimentBinding[]
+
+  @@unique([user, name])
+  @@index([user, adapterKey, status])
+}
+
+model BenchmarkDatasetCase {
+  id                 String           @id @default(cuid())
+  datasetId          String
+  dataset            BenchmarkDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  externalCaseId     String
+  rawCaseJson        String
+  publicPayloadJson  String
+  privatePayloadJson String
+  sourceFingerprint  String
+  publicFingerprint  String
+  privateFingerprint String
+  ordinal            Int
+  createdAt          DateTime         @default(now())
+
+  runs BenchmarkCaseRun[]
+
+  @@unique([datasetId, externalCaseId])
+  @@unique([datasetId, ordinal])
+  @@index([datasetId])
+}
+
+model BenchmarkExperimentBinding {
+  experimentId       String           @id
+  experiment         Experiment       @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  datasetId          String
+  dataset            BenchmarkDataset @relation(fields: [datasetId], references: [id])
+  datasetContentHash String
+  adapterKey         String
+  selectionJson      String
+  runConfigJson      String
+  schedulerStatus    String           @default("idle")
+  expectedCaseCount  Int
+  callbackOrigin     String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([datasetId])
+  @@index([schedulerStatus])
+}
+
+model BenchmarkCaseRun {
+  id                 String                @id
+  experimentId       String
+  experiment         Experiment            @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  experimentCaseId   String
+  experimentCase     ExperimentCase        @relation(fields: [experimentCaseId], references: [id], onDelete: Cascade)
+  datasetCaseId      String?
+  datasetCase        BenchmarkDatasetCase? @relation(fields: [datasetCaseId], references: [id], onDelete: SetNull)
+  ordinal            Int
+  status             String                @default("pending")
+  adapterKey         String
+  clientId           String
+  publicPayloadJson  String?
+  privatePayloadJson String?
+  taskEnvelopeJson   String?
+  taskDigest         String?
+  progressJson       String?
+  runFactsJson       String?
+  cleanupJson        String?
+  completionDigest   String?
+  failureCode        String?
+  failureMessage     String?
+  retryOfRunId       String?
+  lastProgressAt     DateTime?
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  dispatch    BenchmarkDispatchOutbox?
+  artifacts   BenchmarkArtifact[]
+  evaluations BenchmarkEvaluation[]
+
+  @@unique([experimentCaseId, id])
+  @@index([experimentId, status, ordinal])
+  @@index([clientId, status])
+  @@index([retryOfRunId])
+}
+
+model BenchmarkArtifact {
+  id          String           @id
+  runId       String
+  run         BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  name        String
+  mediaType   String
+  sha256      String
+  sizeBytes   Int
+  storagePath String
+  createdAt   DateTime         @default(now())
+
+  @@unique([runId, name])
+  @@index([runId])
+  @@index([sha256])
+}
+
+model BenchmarkDispatchOutbox {
+  id                 String           @id @default(cuid())
+  runId              String           @unique
+  run                BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  kind               String           @default("agent_execution")
+  commandId          String?          @unique
+  requestJson        String
+  requestDigest      String
+  status             String           @default("pending")
+  attemptCount       Int              @default(0)
+  nextAttemptAt      DateTime         @default(now())
+  leasedUntil        DateTime?
+  responseJson       String?
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([leasedUntil])
+}
+
+model BenchmarkEvaluation {
+  id                   String           @id
+  caseRunId            String
+  caseRun              BenchmarkCaseRun @relation(fields: [caseRunId], references: [id], onDelete: Cascade)
+  attemptNo            Int              @default(1)
+  retryOfEvaluationId  String?
+  status               String           @default("queued")
+  adapterKey           String
+  evaluatorKey         String
+  evaluatorTargetKey   String?
+  evaluatorBaseUrl     String?
+  requestJson          String
+  requestDigest        String
+  callbackBaseUrl      String
+  timeoutSeconds       Int
+  progressJson         String?
+  rawResultJson        String?
+  rawResultDigest      String?
+  runtimeFactsJson     String?
+  cleanupJson          String?
+  normalizedResultJson String?
+  completionDigest     String?
+  failureCode          String?
+  failureMessage       String?
+  continuationStatus   String           @default("completed")
+  continuationAttempts Int              @default(0)
+  continuationTriedAt  DateTime?
+  continuationError    String?
+  lastProgressAt       DateTime?
+  startedAt            DateTime?
+  finishedAt           DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  dispatch  BenchmarkEvaluationDispatchOutbox?
+  artifacts BenchmarkEvaluationArtifact[]
+
+  @@unique([caseRunId, attemptNo])
+  @@index([status, createdAt])
+  @@index([status, updatedAt])
+  @@index([continuationStatus, continuationTriedAt])
+  @@index([retryOfEvaluationId])
+}
+
+model BenchmarkEvaluationArtifact {
+  id           String              @id
+  evaluationId String
+  evaluation   BenchmarkEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  name         String
+  kind         String
+  mediaType    String
+  sha256       String
+  sizeBytes    Int
+  storagePath  String
+  createdAt    DateTime            @default(now())
+
+  @@unique([evaluationId, name])
+  @@index([evaluationId])
+  @@index([sha256])
+}
+
+model BenchmarkEvaluationDispatchOutbox {
+  id                 String              @id @default(cuid())
+  evaluationId       String              @unique
+  evaluation         BenchmarkEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  destinationBaseUrl String?
+  requestJson        String
+  requestDigest      String
+  status             String              @default("pending")
+  attemptCount       Int                 @default(0)
+  nextAttemptAt      DateTime            @default(now())
+  leasedUntil        DateTime?
+  httpStatus         Int?
+  responseJson       String?
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([leasedUntil])
 }
 
 /// 普通评测数据集生成 Trace 的单次尝试。Trace ID 是唯一运行关联键；输入文本不参与绑定。
@@ -1403,7 +1634,7 @@ model ReliabilityCommand {
   clientId     String
   client       ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
   user         String
-  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|REFRESH_CAPABILITIES
+  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|RUN_BENCHMARK_CASE|REFRESH_CAPABILITIES
   payloadJson  String            @default("{}")
   status       String            @default("CREATED") // CREATED|SENT|RECEIVED|RUNNING|SUCCEEDED|FAILED|EXPIRED|DELIVERY_FAILED
   channel      String? // wss|poll
@@ -1502,4 +1733,256 @@ model ReliabilityConfigLoad {
   createdAt     DateTime @default(now())
 
   @@index([clientId, platform, loadedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Goal Plus observability overlay
+// Design: docs/design/goal-plus-observability/
+// ---------------------------------------------------------------------------
+
+model GoalPlusSource {
+  id                     String    @id @default(cuid())
+  user                   String
+  sourceId               String
+  workspaceFingerprint   String
+  label                  String?
+  collectorVersion       String?
+  sourceSchemaVersion    Int?
+  firstSeenAt            DateTime  @default(now())
+  lastSeenAt             DateTime  @default(now())
+  lastScanCompletedAt    DateTime?
+  semanticCheckpointJson String?
+
+  goals     GoalPlusGoal[]
+  runs      GoalPlusRun[]
+  links     GoalPlusExecutionLink[]
+  snapshots GoalPlusSemanticSnapshot[]
+
+  @@unique([user, sourceId])
+  @@index([user, lastSeenAt])
+}
+
+model GoalPlusGoal {
+  id                String         @id @default(cuid())
+  sourceDbId        String
+  source            GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalPlusId        String
+  currentRevision   Int
+  status            String
+  phase             String
+  goalDigest        String
+  boundedGoal       String?
+  policyJson        String         @default("{}")
+  triageJson        String?
+  revisionsJson     String         @default("[]")
+  workItemsJson     String         @default("[]")
+  searchTasksJson   String         @default("[]")
+  finalChecksJson   String         @default("[]")
+  activeSessionJson String?
+  nextActionJson    String?
+  sourceCreatedAt   DateTime?
+  sourceUpdatedAt   DateTime?
+  observedAt        DateTime
+
+  runs  GoalPlusRun[]
+  links GoalPlusExecutionLink[]
+
+  @@unique([sourceDbId, goalPlusId])
+  @@index([sourceDbId, status, observedAt])
+}
+
+model GoalPlusRun {
+  id                   String         @id @default(cuid())
+  sourceDbId           String
+  source               GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalDbId             String?
+  goal                 GoalPlusGoal?  @relation(fields: [goalDbId], references: [id], onDelete: SetNull)
+  runId                String
+  frozenSpecId         String
+  sourceRunId          String?
+  replacementRunId     String?
+  state                String
+  strategy             String?
+  metricName           String?
+  metricDirection      String?
+  bestCandidateId      String?
+  bestScore            Float?
+  selectedCandidateId  String?
+  selectedIteration    Int?
+  selectedScore        Float?
+  selectedGitHead      String?
+  selectedArtifactHash String?
+  invalidationReason   String?
+  invalidationSummary  String?
+  budgetUsedJson       String         @default("{}")
+  selectedModelsJson   String         @default("[]")
+  bestJson             String?
+  reportJson           String?
+  sourceCreatedAt      DateTime?
+  invalidatedAt        DateTime?
+  observedAt           DateTime
+
+  candidates    GoalPlusCandidate[]
+  agentSessions GoalPlusAgentSession[]
+  links         GoalPlusExecutionLink[]
+
+  @@unique([sourceDbId, runId])
+  @@index([sourceDbId, state, observedAt])
+  @@index([goalDbId])
+}
+
+model GoalPlusCandidate {
+  id               String      @id @default(cuid())
+  runDbId          String
+  run              GoalPlusRun @relation(fields: [runDbId], references: [id], onDelete: Cascade)
+  candidateId      String
+  status           String
+  selectedModel    String?
+  baseGitHead      String?
+  bestIteration    Int?
+  bestScore        Float?
+  bestArtifactHash String?
+  taskJson         String      @default("{}")
+  scoreReportJson  String?
+  promotionJson    String?
+  observedAt       DateTime
+
+  iterations    GoalPlusIteration[]
+  agentSessions GoalPlusAgentSession[]
+  links         GoalPlusExecutionLink[]
+
+  @@unique([runDbId, candidateId])
+  @@index([runDbId, status])
+}
+
+model GoalPlusIteration {
+  id               String            @id @default(cuid())
+  candidateDbId    String
+  candidate        GoalPlusCandidate @relation(fields: [candidateDbId], references: [id], onDelete: Cascade)
+  iteration        Int
+  agentSessionId   String?
+  selectedModel    String?
+  score            Float?
+  processPassed    Boolean?
+  disposition      String?
+  failureClass     String?
+  gitHead          String?
+  ledgerGitHead    String?
+  artifactHash     String?
+  changedFilesJson String            @default("[]")
+  metricsJson      String            @default("{}")
+  summary          String?
+  hypothesis       String?
+  sourceCreatedAt  DateTime?
+  observedAt       DateTime
+
+  @@unique([candidateDbId, iteration])
+  @@index([agentSessionId])
+}
+
+model GoalPlusAgentSession {
+  id                    String             @id @default(cuid())
+  runDbId               String
+  run                   GoalPlusRun        @relation(fields: [runDbId], references: [id], onDelete: Cascade)
+  candidateDbId         String?
+  candidate             GoalPlusCandidate? @relation(fields: [candidateDbId], references: [id], onDelete: SetNull)
+  agentSessionId        String
+  host                  String
+  role                  String
+  nativeSessionId       String?
+  taskName              String?
+  transcriptFingerprint String?
+  selectedModel         String?
+  usageJson             String             @default("{}")
+  hostMetadataJson      String             @default("{}")
+  countersJson          String             @default("{}")
+  sourceCreatedAt       DateTime?
+  sourceUpdatedAt       DateTime?
+  observedAt            DateTime
+
+  links GoalPlusExecutionLink[]
+
+  @@unique([runDbId, agentSessionId])
+  @@index([nativeSessionId])
+  @@index([taskName])
+}
+
+model GoalPlusExecutionLink {
+  id               String                @id @default(cuid())
+  sourceDbId       String
+  source           GoalPlusSource        @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalDbId         String?
+  goal             GoalPlusGoal?         @relation(fields: [goalDbId], references: [id], onDelete: SetNull)
+  runDbId          String?
+  run              GoalPlusRun?          @relation(fields: [runDbId], references: [id], onDelete: SetNull)
+  candidateDbId    String?
+  candidate        GoalPlusCandidate?    @relation(fields: [candidateDbId], references: [id], onDelete: SetNull)
+  agentSessionDbId String?
+  agentSession     GoalPlusAgentSession? @relation(fields: [agentSessionDbId], references: [id], onDelete: SetNull)
+  executionId      String
+  execution        Execution             @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  role             String
+  linkMethod       String
+  linkState        String
+  priority         Int
+  evidenceJson     String?
+  linkedAt         DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([sourceDbId, executionId, role])
+  @@index([executionId])
+  @@index([agentSessionDbId, linkState])
+  @@index([goalDbId, linkState])
+  @@index([runDbId, linkState])
+}
+
+model GoalPlusSemanticSnapshot {
+  id                   String         @id @default(cuid())
+  sourceDbId           String
+  source               GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  snapshotId           String
+  kind                 String
+  objectKey            String
+  parentKeysJson       String         @default("{}")
+  contentHash          String
+  sourceSchemaVersion  Int?
+  sanitizedPayloadJson String
+  redactionJson        String         @default("{}")
+  observedAt           DateTime
+  ingestedAt           DateTime       @default(now())
+
+  @@unique([sourceDbId, snapshotId])
+  @@index([sourceDbId, kind, objectKey, observedAt])
+}
+
+model Collaboration {
+  id String @id
+  user String
+  collaborationId String
+  createdAt String
+  @@unique([user, collaborationId])
+}
+
+model CollaborationEvent {
+  id String @id
+  user String
+  collaborationId String
+  eventId String
+  bodyJson String
+  bodyHash String
+  receivedAt String
+  @@unique([user, collaborationId, eventId])
+  @@index([user, collaborationId, receivedAt, id])
+}
+
+model CollaborationSessionBinding {
+  id String @id
+  user String
+  collaborationId String
+  sessionId String
+  traceSessionId String
+  eventClock String
+  createdAt String
+  @@unique([user, collaborationId, sessionId])
 }

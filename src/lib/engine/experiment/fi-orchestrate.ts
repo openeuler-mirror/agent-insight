@@ -13,6 +13,7 @@ import {
 import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
 import { prisma } from '@/lib/storage/prisma'
 import { resolveCaseFaultInjectionType } from '@/lib/engine/experiment/case-fi-meta'
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants'
 
 export type FiOrchestrateCaseSpec = {
   caseId: string
@@ -150,7 +151,7 @@ export async function orchestrateFaultInjection(
       prompt: item.input,
       workspace,
       model: req.model || null,
-      timeoutSeconds: req.timeoutSeconds ?? 180,
+      timeoutSeconds: req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
       targetWorkerId: req.targetWorkerId || null,
       items: [{ fault: item.fault, submode: item.submode || null }],
     })

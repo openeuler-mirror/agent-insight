@@ -20,6 +20,11 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { getApiUrl } from '@/lib/client/api';
 import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-channels';
+import {
+    FRAMEWORK_OPTIONS,
+    resolveInstallProfile,
+    type GoalPlusHost,
+} from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
 
@@ -30,27 +35,6 @@ import { Term } from '@/components/text/Term';
  * introRow(描述)、双列网格(主区 + 300px sidebar)、panelCard、lucide 图标统一。
  */
 
-/**
- * 可勾选的采集端框架。value 必须与 /api/ingest/setup 的白名单一致——
- * 勾选结果以 ?frameworks=a,b 传给脚本，脚本据此跳过终端内的交互选择。
- */
-const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
-    { value: 'opencode', label: 'OpenCode' },
-    { value: 'claude', label: 'Claude Code' },
-    { value: 'codeagent', label: 'CodeAgent' },
-    { value: 'openclaw', label: 'OpenClaw' },
-    { value: 'hermes', label: 'Hermes' },
-    { value: 'xiaoo', label: 'xiaoO' },
-    { value: 'jiuwen', label: 'JiuwenSwarm' },
-    { value: 'llamaindex', label: 'LlamaIndex' },
-    { value: 'qoder', label: 'Qoder CN product family' },
-    { value: 'trae', label: 'Trae IDE' },
-    { value: 'actrail', label: 'AcTrail' },
-    { value: 'pi-agent', label: 'Pi Agent' },
-    { value: 'qwencode', label: 'Qwen Code' },
-    { value: 'codex', label: 'Codex' },
-    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
-];
 const FRAMEWORK_LABELS = new Map(FRAMEWORK_OPTIONS.map(option => [option.value, option.label]));
 
 export default function AccessInstallPage() {
@@ -67,6 +51,12 @@ export default function AccessInstallPage() {
     const [host, setHost] = useState('');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
+    const [goalPlusHosts, setGoalPlusHosts] = useState<GoalPlusHost[]>(['pi']);
+    const installProfile = resolveInstallProfile(
+        FRAMEWORK_OPTIONS.filter(option => frameworks.includes(option.value)),
+        goalPlusHosts,
+    );
+    const effectiveFrameworks = installProfile.effectiveFrameworks.map(option => option.value);
     useEffect(() => {
         const timer = window.setTimeout(() => {
             const protocol = window.location.protocol;
@@ -84,6 +74,7 @@ export default function AccessInstallPage() {
                 `key=${encodeURIComponent(apiKey)}`,
                 frameworks.length ? `yes=1` : '',
                 frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
+                frameworks.includes('goal-plus') ? `goalPlusHosts=${goalPlusHosts.join(',')}` : '',
                 frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
@@ -91,7 +82,7 @@ export default function AccessInstallPage() {
             setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [apiKey, authReady, frameworks]);
+    }, [apiKey, authReady, frameworks, goalPlusHosts]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -213,6 +204,15 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />
 
+                            {frameworks.includes('goal-plus') && (
+                                <GoalPlusInstallProfile
+                                    hosts={goalPlusHosts}
+                                    onChange={setGoalPlusHosts}
+                                    autoAddedFrameworks={installProfile.autoAddedFrameworks.map(option => option.label)}
+                                    locale={locale}
+                                />
+                            )}
+
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Linux / macOS"
@@ -299,7 +299,7 @@ export default function AccessInstallPage() {
                                 host={host}
                                 user={user}
                                 keyReady={keyReady}
-                                frameworks={frameworks}
+                                frameworks={effectiveFrameworks}
                                 locale={locale}
                             />
                             <DocsPanel locale={locale} />
@@ -316,7 +316,7 @@ export default function AccessInstallPage() {
 function FrameworkPicker({
     options, selected, onToggle, locale,
 }: {
-    options: { value: string; label: string }[];
+    options: readonly { value: string; label: string }[];
     selected: string[];
     onToggle: (value: string) => void;
     locale: string;
@@ -359,6 +359,76 @@ function FrameworkPicker({
                     : (isZh
                         ? '已勾选的框架会写进命令,脚本跳过终端内的交互选择 —— 内网/离线环境无需访问 npm 源。'
                         : 'Selected frameworks are baked into the command, so the script skips the terminal prompt — no npm registry access needed on offline or intranet machines.')}
+            </div>
+        </article>
+    );
+}
+
+function GoalPlusInstallProfile({
+    hosts, onChange, autoAddedFrameworks, locale,
+}: {
+    hosts: GoalPlusHost[];
+    onChange: (hosts: GoalPlusHost[]) => void;
+    autoAddedFrameworks: string[];
+    locale: string;
+}) {
+    const isZh = locale === 'zh';
+    const profiles: Array<{ hosts: GoalPlusHost[]; label: string }> = [
+        { hosts: ['pi'], label: 'Pi' },
+        { hosts: ['codex'], label: 'Codex' },
+        { hosts: ['pi', 'codex'], label: 'Pi + Codex' },
+    ];
+    const activeKey = hosts.join(',');
+    return (
+        <article style={commandCard}>
+            <header style={commandCardHeader}>
+                <span style={commandIconBox}><Boxes size={14} strokeWidth={2.2} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
+                        {isZh ? 'Goal Plus Trace 来源' : 'Goal Plus trace source'}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
+                        {isZh
+                            ? '选择已经安装并运行 Goal Plus 的 Agent；Agent Insight 只配置对应的 Trace 采集器。'
+                            : 'Choose the Agent where Goal Plus is already installed and running; Agent Insight only configures the matching trace collector.'}
+                    </div>
+                </div>
+            </header>
+            <div style={chipRow}>
+                {profiles.map(profile => {
+                    const key = profile.hosts.join(',');
+                    const active = key === activeKey;
+                    return (
+                        <button
+                            key={key}
+                            type="button"
+                            onClick={() => onChange(profile.hosts)}
+                            style={active ? frameworkChipActive : frameworkChip}
+                        >
+                            {active && <Check size={12} strokeWidth={2.6} />}
+                            {profile.label}
+                        </button>
+                    );
+                })}
+            </div>
+            <div style={langfuseNote}>
+                {autoAddedFrameworks.length > 0
+                    ? (isZh
+                        ? `安装命令将自动配置：${autoAddedFrameworks.join('、')}，用于采集 Goal Plus 在所选 Agent 中产生的原生 Trace。不会改变其原有 Trace 采集逻辑。`
+                        : `The setup configures: ${autoAddedFrameworks.join(', ')} to collect native traces produced by Goal Plus in the selected Agent. Existing trace collection behavior is unchanged.`)
+                    : (isZh
+                        ? '需要的原生采集器已经在上方手动选中，安装时不会重复执行。'
+                        : 'The required native collectors are already selected above and will not be installed twice.')}
+            </div>
+            <div style={langfuseNote}>
+                {isZh
+                    ? 'Agent Insight 不会安装或修改 Goal Plus。配置完成后，继续在 Pi/Codex 中按原方式运行已安装的 Goal Plus 即可。'
+                    : 'Agent Insight does not install or modify Goal Plus. After setup, keep running the existing Goal Plus installation through Pi/Codex as usual.'}
+            </div>
+            <div style={langfuseNote}>
+                {isZh
+                    ? '可选语义增强：如需展示 Goal、Run、Candidate 等编排信息，可在 Goal Plus 工作区执行 goal-plus-collector attach /绝对路径/.gp && goal-plus-collector scan && goal-plus-collector start；未配置不影响原生 Trace 采集。'
+                    : 'Optional semantic enrichment: to display Goal, Run, and Candidate orchestration data, run goal-plus-collector attach /absolute/path/.gp && goal-plus-collector scan && goal-plus-collector start in the Goal Plus workspace. Native trace collection does not depend on it.'}
             </div>
         </article>
     );
@@ -793,7 +863,7 @@ const channelItem: CSSProperties = {
     padding: '9px 10px',
     background: 'var(--background-secondary)',
     border: '1px solid var(--border)',
-    borderRadius: 8,
+    borderRadius: 'var(--radius-md)',
     minWidth: 0,
 };
 

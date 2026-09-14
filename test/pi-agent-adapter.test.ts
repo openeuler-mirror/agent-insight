@@ -143,6 +143,128 @@ test("Pi adapter registry uses complete snapshot replacement", () => {
   assert.equal(adapter.sessionMergeStrategy, "snapshot-replace")
 })
 
+test("Pi adapter keeps an incremental snapshot running until the root Agent settles", () => {
+  const events = normalize([
+    canonical({
+      eventId: "llm-running",
+      spanId: "1".repeat(16),
+      kind: "llm",
+      name: "llm.model-a",
+      input: "keep working",
+      output: "I am still working",
+    }),
+  ])
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.equal(record.trace_completed_at, undefined)
+})
+
+test("Pi adapter completes a native snapshot after the root Agent settles", () => {
+  const endedAt = 1_700_000_000_500
+  const events = normalize([
+    canonical({
+      eventId: "agent-complete",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      input: "finish the task",
+      output: "done",
+      endTimeMs: endedAt,
+    }),
+  ])
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.equal(new Date(record.trace_completed_at!).toISOString(), new Date(endedAt).toISOString())
+  assert.equal(record.failures, undefined)
+})
+
+test("Pi adapter keeps Goal Plus business outcome separate from runtime success", () => {
+  const events = normalize([
+    canonical({
+      eventId: "goal-plus-business-blocked",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      input: "/goal-plus improve solver",
+      output: "The run ended without an eligible candidate.",
+      attributes: {
+        "goal_plus.import_mode": "passive_pi_session",
+        "goal_plus.terminal_state": "completed",
+        "goal_plus.business_state": "blocked",
+      },
+    }),
+  ])
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.ok(record.trace_completed_at)
+  assert.equal(record.failures, undefined)
+})
+
+test("Pi adapter requires an explicit Goal Plus terminal signal for passive snapshots", () => {
+  const running = aggregateOtelTraceEvents("pi-session", normalize([
+    canonical({
+      eventId: "goal-plus-running",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      input: "/goal-plus improve solver",
+      output: "candidate one is ready",
+      attributes: {
+        "goal_plus.import_mode": "passive_pi_session",
+        "goal_plus.terminal_state": "running",
+      },
+    }),
+  ]))
+  assert.ok(running)
+  assert.equal(running.trace_completed_at, undefined)
+
+  const complete = aggregateOtelTraceEvents("pi-session", normalize([
+    canonical({
+      eventId: "goal-plus-complete",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      input: "/goal-plus improve solver",
+      output: "done",
+      attributes: {
+        "goal_plus.import_mode": "passive_pi_session",
+        "goal_plus.terminal_state": "complete",
+      },
+    }),
+  ]))
+  assert.ok(complete)
+  assert.ok(complete.trace_completed_at)
+})
+
+test("Pi adapter retains Goal Plus passive-session terminal failure evidence", () => {
+  const events = normalize([
+    canonical({
+      eventId: "agent-failed",
+      spanId: "f".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      status: "error",
+      input: "/goal-plus improve solver",
+      output: "partial result",
+      attributes: {
+        "goal_plus.role": "candidate-worker",
+        "goal_plus.terminal_state": "aborted",
+        "goal_plus.exit_code": 143,
+      },
+    }),
+  ])
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  assert.ok(record.trace_completed_at)
+  assert.deepEqual(record.failures, [{
+    failure_type: "goal_plus_pi_session_failed",
+    description: "Goal Plus Pi session ended with aborted",
+    context: JSON.stringify({ sessionId: "pi-session", role: "candidate-worker", exitCode: 143 }),
+    recovery: "Inspect the final model/tool events and the Goal Plus run state.",
+    attribution: "ENVIRONMENT",
+  }])
+})
+
 test("Pi Skill completion snapshot is retained as one first-class Skill node", () => {
   const agent = "1".repeat(16)
   const skill = "2".repeat(16)

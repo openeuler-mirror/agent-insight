@@ -463,6 +463,7 @@ export default async function WittySkillInsightOtelPlugin() {
         windowsHide: true,
         env: {
           ...process.env,
+          AGENT_INSIGHT_UPLOADER_SPOOL_FILE: outFile,
           ...(force ? { AGENT_INSIGHT_UPLOADER_FORCE: "1" } : {}),
           // 强推限定到本 session：FORCE 是进程级开关，不限定的话 uploader 会把
           // spool 里保留期内的所有历史会话一并重传。

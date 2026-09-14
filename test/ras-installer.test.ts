@@ -310,7 +310,7 @@ test("prepack removes duplicate RAS source from standalone output", () => {
   assert.match(source, /STANDALONE_JUNK_FILES[\s\S]*'server\.log'/)
 })
 
-test("all startup paths run the non-destructive RAS SQLite preflight", () => {
+test("all startup paths run the SQLite schema preflight", () => {
   const migrationSource = fs.readFileSync(
     path.join(process.cwd(), "scripts/prepare-ras-sqlite-schema.js"),
     "utf8",
@@ -321,6 +321,12 @@ test("all startup paths run the non-destructive RAS SQLite preflight", () => {
     migrationSource,
     /CREATE UNIQUE INDEX IF NOT EXISTS "RasAnomalyEvent_taskId_deliveryId_key"/,
   )
+  assert.match(migrationSource, /\['ReliabilityClient', 'executorBaseUrl'\]/)
+  assert.match(migrationSource, /\['BenchmarkCaseRun', 'executorBaseUrl'\]/)
+  assert.match(migrationSource, /\['BenchmarkDispatchOutbox', 'destinationBaseUrl'\]/)
+  assert.match(migrationSource, /ALTER TABLE .* DROP COLUMN/)
+  assert.match(migrationSource, /ADD COLUMN "commandId" TEXT/)
+  assert.match(migrationSource, /"BenchmarkDispatchOutbox_commandId_key"/)
 
   for (const relativePath of [
     "scripts/develop_start.sh",

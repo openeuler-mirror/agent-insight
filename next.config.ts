@@ -22,6 +22,7 @@ const nextConfig: NextConfig = {
       'tmp/**',
       '*.tar',
       '*.tar.*',
+      '*.tgz',
       '*.zip',
       'exclude/**',
       'tests/**',

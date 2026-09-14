@@ -41,6 +41,47 @@ export interface RasIngestRecord {
 /** Filled from GET /api/agent-ras/catalog kindLabels when available. */
 let anomalyKindLabelOverrides: Record<string, { zh: string; en: string }> = {}
 
+const BUILTIN_ANOMALY_KIND_LABELS: Record<string, { zh: string; en: string }> = {
+  repeat_tool_call: { zh: "工具重复调用", en: "Repeated tool call" },
+  tool_call_loop: { zh: "工具调用循环", en: "Tool-call loop" },
+  llm_thinking_loop: { zh: "思考循环", en: "Thinking loop" },
+  llm_thinking_dead_loop: { zh: "思考死循环", en: "Thinking dead loop" },
+  analysis_paralysis: { zh: "分析瘫痪", en: "Analysis paralysis" },
+}
+
+const RAS_ACTION_LABELS: Record<string, string> = {
+  abort_stream: "中断输出流",
+  emit_notice: "发送通知",
+  push_steering: "注入纠偏提示",
+}
+
+const RAS_ACTION_CHANNEL_LABELS: Record<string, string> = {
+  "session.abort": "会话中断",
+  "session.abort.retry": "会话中断重试",
+  "session.interrupt": "会话中止",
+  "session.interrupt.api": "会话中止（API）",
+  "session.prompt": "会话提示",
+  "session.prompt.noReply": "会话提示（无需回复）",
+  "tui.session.interrupt×2": "界面会话中止×2",
+  "tui.toast": "界面通知",
+  "tui.showToast": "界面通知",
+  "tui.publish": "界面通知",
+  abort_escalate: "中断升级",
+  "console.error": "控制台错误",
+  pending_idle: "等待空闲",
+  pending_until_idle: "等待空闲后执行",
+  "http.prompt_async": "异步会话提示",
+  empty: "未执行",
+  none: "无",
+}
+
+const RAS_SUMMARY_DETAIL_LABELS: Record<string, string> = {
+  suffix_cycle: "字面精确循环",
+  similar_clauses: "逻辑死循环",
+  plan_execution_loop_lock: "规划执行循环锁定",
+  refrain_gate: "分析瘫痪门控",
+}
+
 export function setAnomalyKindLabelOverrides(
   labels: Record<string, { zh: string; en: string }>,
 ): void {
@@ -48,8 +89,54 @@ export function setAnomalyKindLabelOverrides(
 }
 
 export function rasKindLabel(kind: string, locale: "zh" | "en" = "zh"): string {
-  const hit = anomalyKindLabelOverrides[kind]
+  const hit = anomalyKindLabelOverrides[kind] || BUILTIN_ANOMALY_KIND_LABELS[kind]
   return hit ? hit[locale] : kind
+}
+
+export function rasEventKindBadgeLabel(locale: "zh" | "en"): string {
+  return locale === "zh" ? "故障" : "RAS"
+}
+
+export function rasMarkerBadgeLabel(
+  marker: { label: string; source?: "fi" | "ras" },
+  locale: "zh" | "en",
+  compact = false,
+): string {
+  if (marker.source === "fi") return compact ? "FI" : `FI · ${marker.label}`
+  if (locale === "zh") return compact ? "故障" : marker.label
+  return compact ? "RAS" : `RAS · ${marker.label}`
+}
+
+export function rasActionLabel(action: string, locale: "zh" | "en"): string {
+  return locale === "zh" ? (RAS_ACTION_LABELS[action] || action) : action
+}
+
+export function rasActionChannelLabel(channel: string, locale: "zh" | "en"): string {
+  if (locale !== "zh") return channel
+  return channel
+    .split("+")
+    .map((part) => RAS_ACTION_CHANNEL_LABELS[part] || part)
+    .join(" + ")
+}
+
+export function rasSummaryLabel(
+  marker: { kind: string; label: string; summary?: string },
+  locale: "zh" | "en",
+): string | undefined {
+  const summary = marker.summary
+  if (!summary || locale !== "zh") return summary
+  if (summary === marker.kind) return marker.label
+  const toolPrefix = `${marker.kind} on `
+  if (summary.startsWith(toolPrefix)) {
+    return `${marker.label}：${summary.slice(toolPrefix.length)}`
+  }
+  const detailPrefix = `${marker.kind} (`
+  if (summary.startsWith(detailPrefix) && summary.endsWith(")")) {
+    const detailValue = summary.slice(detailPrefix.length, -1)
+    const detail = RAS_SUMMARY_DETAIL_LABELS[detailValue] || detailValue
+    return `${marker.label}（${detail}）`
+  }
+  return summary
 }
 
 export const SEVERITY_LABEL: Record<string, { zh: string; en: string }> = {

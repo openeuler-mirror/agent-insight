@@ -30,7 +30,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /linkedDatasetIds:\s*\[dataset\.id\]/);
   assert.match(experimentService, /modelConfigId:\s*activeModel\?\.id/);
   assert.match(experimentService, /interactionPolicy:\s*'auto-deny'/);
-  assert.match(experimentService, /timeoutMs:\s*isTriggerExperiment \? 30 \* 1000 : 3 \* 60 \* 1000/);
+  assert.match(experimentService, /timeoutMs:\s*isTriggerExperiment \? 30 \* 1000 : 10 \* 60 \* 1000/);
   assert.match(experimentService, /retryLimit:\s*isTriggerExperiment \? 1 : 2/);
   assert.match(experimentService, /getSkillExperimentConcurrencyPolicy\(input\.preset\)/);
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);
@@ -53,6 +53,15 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(grayscaleRoute, /const exactIds = new Set\(\[SKILL_TRIGGER_ANALYZER_EVALUATOR_ID\]\)/);
   assert.match(grayscaleRoute, /pointsJson:\s*JSON\.stringify\(exactEvaluation\.points \|\| \[\]\)/);
   assert.match(grayscaleRoute, /action === 'start'[\s\S]*status:\s*'draft'[\s\S]*status:\s*'running'/);
+  assert.match(grayscaleRoute, /action === 'retry-execution'/);
+  assert.match(grayscaleRoute, /prepareExperimentCasesForExecutionRetry/);
+  assert.match(grayscaleRoute, /runGrayscaleExecutionRetry/);
+  assert.match(grayscaleRoute, /retrySide === 'both' \? \['a', 'b'\]/);
+  assert.match(grayscaleRoute, /Promise\.all\(retryItems\.map/);
+  assert.match(grayscaleRoute, /targets:\s*evaluationTargets/);
+  assert.match(grayscaleRoute, /target\.run\.experimentCaseId = experimentCaseId/);
+  assert.match(grayscaleRoute, /const experimentSettled = experiment\.status === 'done'/);
+  assert.match(grayscaleRoute, /!experimentSettled && \(run\.status === 'pending'/);
   assert.match(grayscaleRoute, /loadServerModelForUserById/);
   assert.match(grayscaleRoute, /modelOptions:\s*args\.config\.modelOptions/);
   assert.match(retestService, /snapshot\.runtime\?\.modelConfigId/);
@@ -203,7 +212,7 @@ test('优化记录复用 Monaco 行级 Diff，评测详情限制长内容溢出�
   const records = readFileSync('src/components/skill-workbench/OptimizationRecordsPanel.tsx', 'utf8');
   const recordDiff = readFileSync('src/components/skill-workbench/OptimizationRecordDiff.tsx', 'utf8');
   const legacyDiff = readFileSync('src/app/(main)/skill-opt/_FileDiff.tsx', 'utf8');
-  const caseDetail = readFileSync('src/app/(main)/experiments/[id]/cases/[caseId]/page.tsx', 'utf8');
+  const caseDetail = readFileSync('src/components/eval/ExperimentCaseDetail.tsx', 'utf8');
   assert.match(records, /OptimizationRecordDiff/);
   assert.match(records, /selectedRecordId[\s\S]*onSelectRecordId/);
   assert.match(records, /优化摘要[\s\S]*max-h-64 min-h-28 overflow-y-auto/);
@@ -257,11 +266,11 @@ test('生成快照沿用旧生成与发布门禁，不把工作台静态评估�
 });
 
 test('Skill 实验复用四步向导并仅由预设改变默认配置', () => {
-  const wizard = readFileSync('src/app/(main)/experiments/new/page.tsx', 'utf8');
+  const wizard = readFileSync('src/components/eval/ExperimentWizard.tsx', 'utf8');
   const panel = readFileSync('src/components/skill-workbench/ExperimentPanel.tsx', 'utf8');
   const result = readFileSync('src/components/skill-workbench/SkillExperimentResult.tsx', 'utf8');
-  const experimentDetail = readFileSync('src/app/(main)/experiments/[id]/page.tsx', 'utf8');
-  const caseDetail = readFileSync('src/app/(main)/experiments/[id]/cases/[caseId]/page.tsx', 'utf8');
+  const experimentDetail = readFileSync('src/components/eval/ExperimentDetail.tsx', 'utf8');
+  const caseDetail = readFileSync('src/components/eval/ExperimentCaseDetail.tsx', 'utf8');
   const experimentService = readFileSync('src/lib/skill-workbench/experiment-service.ts', 'utf8');
   const experimentApi = readFileSync('src/app/api/experiments/[id]/route.ts', 'utf8');
   const triggerEvaluator = readFileSync('src/lib/skill-workbench/trigger-evaluator.ts', 'utf8');
@@ -309,6 +318,16 @@ test('Skill 实验复用四步向导并仅由预设改变默认配置', () => {
   assert.match(result, /评估器分解/);
   assert.match(result, /A 胜[\s\S]*B 胜[\s\S]*未配对/);
   assert.match(result, /预期输出[\s\S]*A · \{versionALabel\} 实际输出[\s\S]*B · \{versionBLabel\} 实际输出/);
+  assert.match(result, /action: 'retry-execution'/);
+  assert.match(result, /window\.confirm\(confirmMessage\)/);
+  assert.match(result, /side === 'both' \? \['a', 'b'\]/);
+  assert.match(result, /重新执行 A\+B/);
+  assert.match(result, /setRetryError\(retryKey/);
+  assert.match(result, /重新执行/);
+  assert.match(result, /function runIsActive[\s\S]*Number\.isFinite\(run\.score\)/);
+  assert.match(result, /const experimentSettled = \['done', 'failed', 'cancelled'\]\.includes\(detail\.status\)/);
+  assert.match(result, /!experimentSettled && \(hasActiveRuns \|\| runIsActive\(summary\)\)/);
+  assert.doesNotMatch(result, /retryAbEvaluation|action: 'evaluate'/);
   assert.doesNotMatch(result, /const EVALUATOR_LABELS/);
   assert.doesNotMatch(result, /任务结果正确性|Skill 版本回归|证据忠实度|'执行成本'/);
 });

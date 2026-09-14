@@ -888,6 +888,10 @@ async function buildPluginUploadEnvOverride(user: string): Promise<Record<string
   return overrides
 }
 
+export function buildServerConfigHash(baseConfigHash: string, pluginUploadApiKey?: string): string {
+  return baseConfigHash + '|upload:' + (pluginUploadApiKey || 'no-key')
+}
+
 async function startServerForUser(
   user: string,
   opts: {
@@ -913,7 +917,7 @@ async function startServerForUser(
   // 把 plugin upload 用的 apiKey 也算进 hash —— user 在 UI 改 apiKey 后老实例
   // 会继续用旧 key 上报数据,被 /api/ingest/upload 401 reject,数据丢失。新 hash
   // 触发 ensureOpencodeServer 重启实例,新进程拿新 apiKey。
-  const configHash = baseConfigHash + '|upload:' + (pluginUploadEnv.AGENT_INSIGHT_API_KEY || 'no-key')
+  const configHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY)
 
   const proc = spawn(
     binary,
@@ -1030,8 +1034,9 @@ export async function ensureOpencodeServer(
     // 此时先 graceful-then-forceful 干掉老实例（含真二进制），下面走 spawn 新的。
     let nextHash: string | null = null
     try {
-      const { configHash } = await buildIsolatedOpencodeConfig(userKey)
-      nextHash = configHash
+      const { configHash: baseConfigHash } = await buildIsolatedOpencodeConfig(userKey)
+      const pluginUploadEnv = await buildPluginUploadEnvOverride(userKey)
+      nextHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY)
     } catch {
       /* ignore，按现有实例继续用 */
     }

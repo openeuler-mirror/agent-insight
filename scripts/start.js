@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, execSync } = require('child_process')
+const { spawn, spawnSync, execSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
@@ -14,6 +14,12 @@ const {
   getDataRoot
 } = require('./utils.js')
 const { syncAdminApiKey } = require('./sync_admin_api_key.js')
+const { syncGeneratedPrismaClient } = require('./sync-prisma-client.js')
+const {
+  readCurrentRuntime,
+  resolveBootstrapPython,
+  verifyManagedPython,
+} = require('./lib/fi-python-runtime.js')
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
@@ -44,6 +50,30 @@ function loadEnvFile(envPath) {
   })
 
   return env
+}
+
+function ensureGoalPlusWatcher({ dataRoot, packageRoot = PACKAGE_ROOT }) {
+  const collectorPath = path.join(packageRoot, 'scripts', 'agent-trace-collectors', 'goal-plus', 'goal-plus-collector.cjs')
+  const configPath = path.join(dataRoot, 'collectors', 'goal-plus', 'config.json')
+  if (!fs.existsSync(configPath) || !fs.existsSync(collectorPath)) return null
+
+  const rawInterval = Number(process.env.AGENT_INSIGHT_GOAL_PLUS_INTERVAL_MS || 5000)
+  const intervalMs = Number.isFinite(rawInterval) && rawInterval >= 1000 ? Math.floor(rawInterval) : 5000
+  const child = spawnSync(process.execPath, [
+    collectorPath,
+    'ensure',
+    '--config',
+    configPath,
+    '--interval-ms',
+    String(intervalMs),
+  ], { encoding: 'utf8', env: process.env })
+  if (child.error) throw child.error
+  if (child.status !== 0) throw new Error((child.stderr || child.stdout || `exit ${child.status}`).trim())
+  try {
+    return JSON.parse(child.stdout)
+  } catch {
+    throw new Error(`Goal Plus watcher returned an invalid status: ${child.stdout.trim()}`)
+  }
 }
 
 let spawnedProc = null
@@ -89,6 +119,8 @@ async function run(options) {
   const dbPath = path.join(dataRoot, 'data', 'witty_insight.db')
   const dbUrl = `file:${dbPath}`
   process.env.DATABASE_URL = dbUrl
+  const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
+  const standaloneDir = path.dirname(standaloneServer)
 
   const envPath = path.join(dataRoot, '.env')
   const fileEnv = loadEnvFile(envPath)
@@ -129,6 +161,18 @@ async function run(options) {
   }
 
   try {
+    console.log('Generating Prisma client...')
+    await runCommand('npx prisma generate', {
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
+    syncGeneratedPrismaClient(
+      PACKAGE_ROOT,
+      fs.existsSync(standaloneServer) ? standaloneDir : undefined
+    )
+    console.log('✓ Prisma client generated')
+    console.log()
+
     console.log('Syncing database schema...')
     await runCommand('node scripts/prepare-ras-sqlite-schema.js', {
       cwd: PACKAGE_ROOT,
@@ -139,14 +183,6 @@ async function run(options) {
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
     console.log('✓ Database schema synced')
-    console.log()
-
-    console.log('Generating Prisma client...')
-    await runCommand('npx prisma generate', {
-      cwd: PACKAGE_ROOT,
-      env: { ...process.env, DATABASE_URL: dbUrl }
-    })
-    console.log('✓ Prisma client generated')
     console.log()
   } catch (error) {
     console.error('❌ Database initialization failed:', error.message)
@@ -161,7 +197,6 @@ async function run(options) {
     process.exit(1)
   }
 
-  const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
   const isStandalone = fs.existsSync(standaloneServer)
   const nextDir = path.join(PACKAGE_ROOT, '.next')
   const isProduction = fs.existsSync(nextDir) && fs.existsSync(path.join(nextDir, 'BUILD_ID'))
@@ -196,12 +231,41 @@ async function run(options) {
   // 因此 standalone 下由 control-server.js 承载 Next + WSS。
   const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || port + 1)
 
+  const runtimeEnv = { ...process.env, ...fileEnv }
+  const currentFiRuntime = readCurrentRuntime()
+  const managedFiPython = currentFiRuntime?.python
+    && verifyManagedPython(currentFiRuntime.python)
+    ? currentFiRuntime
+    : null
+  const fiPython = managedFiPython || resolveBootstrapPython({
+    env: runtimeEnv,
+    requiredImports: ['yaml'],
+  })
+  const rasPython = resolveBootstrapPython({
+    env: runtimeEnv,
+    requiredImports: ['pydantic'],
+  })
+  if (fiPython) {
+    runtimeEnv.AGENT_INSIGHT_FI_PYTHON =
+      runtimeEnv.AGENT_INSIGHT_FI_PYTHON || fiPython.python || fiPython.executable
+    console.log(`FI Python runtime: ${runtimeEnv.AGENT_INSIGHT_FI_PYTHON}`)
+  } else {
+    console.warn('⚠️  Python 3.11+ with PyYAML not found; fault injection is unavailable')
+  }
+  if (rasPython) {
+    runtimeEnv.AGENT_INSIGHT_RAS_PYTHON =
+      runtimeEnv.AGENT_INSIGHT_RAS_PYTHON || rasPython.executable
+    console.log(`RAS Python runtime: ${rasPython.executable} (${rasPython.versionText})`)
+  } else {
+    console.warn('⚠️  Python 3.11+ with pydantic not found; RAS config catalog is unavailable')
+  }
+
   const env = {
-    ...process.env,
-    ...fileEnv,
+    ...runtimeEnv,
     DATABASE_URL: dbUrl,
     PORT: port.toString(),
     HOSTNAME: '0.0.0.0',
+    AGENT_INSIGHT_PACKAGE_ROOT: PACKAGE_ROOT,
     AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
@@ -281,6 +345,20 @@ async function run(options) {
       } catch (error) {
         console.log('⚠️  Failed to sync admin API key:', error.message)
       }
+      try {
+        const watcher = ensureGoalPlusWatcher({ dataRoot })
+        if (watcher?.ensured) {
+          console.log(watcher.alreadyRunning
+            ? `✓ Goal Plus watcher already running (PID ${watcher.pid})`
+            : `✓ Goal Plus watcher started (PID ${watcher.pid})`)
+        } else if (watcher?.reason === 'no_sources') {
+          console.log('ℹ️  Goal Plus watcher not started: no .gp source is attached')
+        } else if (watcher?.reason === 'not_configured') {
+          console.log('ℹ️  Goal Plus watcher not started: collector API key is not configured')
+        }
+      } catch (error) {
+        console.log('⚠️  Goal Plus watcher could not be started; Agent Insight remains available:', error.message)
+      }
       return
     }
   }
@@ -289,4 +367,4 @@ async function run(options) {
   process.exit(1)
 }
 
-module.exports = { run }
+module.exports = { ensureGoalPlusWatcher, run }

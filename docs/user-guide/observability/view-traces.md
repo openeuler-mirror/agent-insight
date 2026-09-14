@@ -92,10 +92,10 @@ profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和
 
 设计中尚未实现的检测域不会出现在目录表。子模式**没有**独立开关——启停粒度停在 detector。
 
-普通链路与可靠性观测使用同一登录账号。登录页使用邮箱；OpenCode 上传使用的
-API Key 必须属于该邮箱账号。本地 keyless 模式的数据归属
-`AGENT_INSIGHT_DEFAULT_INGEST_USER`，该值也应配置为同一邮箱。`admin` 这类无法通过
-邮箱登录页提交的旧别名不能用于页面登录。
+普通链路与可靠性观测使用同一登录账号。standalone 登录使用邮箱，IDaaS 登录在内部使用
+userinfo 返回的 UUID，侧边栏可显示人员接口返回的账号别名；OpenCode 上传使用的 API Key 必须属于该账号。本地 keyless 模式的数据归属
+`AGENT_INSIGHT_DEFAULT_INGEST_USER`，该值也应配置为同一个 `User.username`。`admin`
+这类没有对应登录账号的旧别名不能用于页面登录。
 
 可将列表页理解为一次“样本筛选台”：先判断哪些 Trace 值得看，再进入详情做证据级分析。
 
@@ -181,12 +181,12 @@ Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 spa
 - Token 消耗
 - 成本或资源消耗估算
 
-若在 **可靠性观测详情**（`/agent-ras/trace/[taskId]`）打开关联了环内 RAS 的 Trace，顶部会出现可折叠的 **RAS 异常**摘要条：严重度分布芯片、单故障单行列表（操作如 `abort_stream` 以标签展示）。默认收起以免挤占链路；展开后点选某行可定位完整链路中的 RAS 节点，右侧展示检测摘要与恢复动作/结果。这与「故障诊断 / Fault」不同——Fault 是事后 AgentDebug；RAS 标记是环内实时检测落库后的只读回放。
+若在 **可靠性观测详情**（`/agent-ras/trace/[taskId]`）打开关联了环内 RAS 的 Trace，顶部会出现可折叠的 **可靠性异常**摘要条：严重度分布芯片、单故障单行列表（操作如「中断输出流」，原始协议值为 `abort_stream`）。默认收起以免挤占链路；展开后点选某行可定位完整链路中的故障节点，右侧展示检测摘要与恢复动作/结果。这与「故障诊断 / Fault」不同——Fault 是事后 AgentDebug；RAS 标记是环内实时检测落库后的只读回放。
 
 可靠性详情同时提供两种定位方式：
 
 - **摘要条**（推荐扫读）：一次 anomaly 检测一行；恢复 / 中断操作并入同行标签，不另开多卡。
-- **检测点** 链路树中的 **RAS** 节点；选中后右侧按「RAS恢复操作 → 对应结果」交错展示。经宿主写入的恢复通知 / steering 在时间线上标识为 **RAS**（不是 USER）。靠 `action_result.delivery_anchor.message_id` 关联；**不做**正文匹配。时间线不再额外堆叠扁平的「请求处置 / 处置成功」行。
+- **检测点** 链路树中的 **故障** 节点；选中后右侧按「恢复操作 → 对应结果」交错展示，中文界面使用「中断输出流 / 发送通知 / 注入纠偏提示」等展示名，原始协议值仅在悬停提示中保留。经宿主写入的恢复通知 / steering 依然按可靠性事件处理（不是 USER）。靠 `action_result.delivery_anchor.message_id` 关联；**不做**正文匹配。时间线不再额外堆叠扁平的「请求处置 / 处置成功」行。
 
 新产生的事件使用 `messageID + partID` 定位 LLM 输出/思考节点，使用 `callID` 定位工具调用；投递消息另有 `delivery_anchor`。没有精确锚点时检测点仅在一秒时间窗口内兜底匹配，投递行保持 USER。
 
@@ -414,7 +414,7 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 
 - 想对异常执行做自动归因： [智能诊断](./diagnosis)
 - 想看整体健康趋势： [质量监控](./quality-monitoring)
-- 想把典型 Trace 转成数据集： [从 Trace 构建数据集](../evaluation/dataset-from-trace)
+- 想把典型 Trace 转成数据集： [从 Trace 回流数据项](../evaluation/datasets#从-trace-回流数据项)
 - 想回到运行观测总览： [运行观测](./index)
 
 
@@ -427,3 +427,156 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 - 导入归属当前用户。原 Execution ID、task ID 没有冲突时保持不变；只有目标库中已存在的 ID 才会生成新 ID，并同步改写父子关系与 session 引用。OTel trace/span ID 保持原值。
 - 成功弹窗会显示文件名、原 Trace ID、新 Trace ID、节点数和 ID 重映射数量，可直接打开导入后的 Trace。原、新 Trace ID 无论是否发生冲突都会显示；弹窗不展开完整 ID 重映射明细。
 - Bundle 只迁移 Trace 展示所需的 Execution、Session 与 interactions；不会迁移用户标签、评测结果、智能诊断报告或基础设施关联，也不会自动触发 LLM 评测。
+
+
+## 自定义 Agent 调用关系（后端接口）
+
+当 Agent 通过自定义脚本或工具调用另一个 Agent，原框架没有记录父子关系时，可独立上报协作关系。现有 Trace 上传方式不变；当前版本提供后端查询，尚未增加关系图界面，也不会改写原 Trace 树。
+
+### 1. 绑定原 Trace 会话
+
+对每个参与方发送 `POST /api/ingest/collaborations/sessions`，请求头为 `Content-Type: application/json` 和 `x-witty-api-key`：
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "sessionId": "agent-a",
+  "traceSessionId": "original-session-a",
+  "eventClock": "unknown"
+}
+```
+
+`traceSessionId` 是现有 Trace 的会话编号（存储中的 `Session.taskId`，不是 `Session.id` 或 Agent 显示名）。同样绑定 agent-b 到其原会话。可以先绑定后上传 Trace；未绑定也允许保存关系，但不会猜测对应哪条 Trace。同绑定重试返回 200，改绑或修改时钟声明返回 409。编号在同一授权用户内隔离。
+
+`eventClock` 默认 `unknown`。仅当发起方确实使用同一执行端时钟记录事件与调用时设为 `source_session`；跨机器已经同步且时钟可比较时设为 `synchronized`。不要为得到配对结果而虚构声明。未知时钟仍可保存关系和查找候选，只不进行时间排序配对。绑定不提供事件纠错能力。
+
+### 2. 每次联系上报一条事件
+
+发送 `POST /api/ingest/collaborations/events`，使用相同请求头：
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-001",
+  "fromSessionId": "agent-a",
+  "toSessionId": "agent-b",
+  "description": "A 调用 B 做调研",
+  "observedAt": "2026-09-11T10:00:00.125+08:00",
+  "fromLocator": { "recordType": "shell", "commandContains": "agent-run --task research" }
+}
+```
+
+`fromLocator` 和 `observedAt` 可省略。工具名定位使用 `{"recordType":"tool","name":"spawn_agent"}`。工具名区分大小写；Shell 是命令字面包含，只读已采集内容，不执行命令。每次新联系使用新 eventId，网络失败或响应丢失必须使用原 ID 和原正文重试。同一 ID 改正文返回 409；内容字段 `content` 可选，最多 4000 字符。
+
+首次持久保存返回 201；重试返回 200，`receivedAt` 保持首次值。正文最大 64 KiB；不接受 null、未知字段或重复 JSON 键。所有接口要求有效 API Key，单实例每用户每分钟最多 120 次请求，429 可按 Retry-After 原样重试。
+
+### 3. 查询调用链和步骤位置
+
+`GET /api/observe/collaborations/demo-task-001?offset=0&limit=100`，携带 `x-witty-api-key`。返回 `nodes`、`events`、`total`、`nextOffset`。节点范围为当前页事件端点，跨页按 sessionId 合并，边按 eventId 合并；刷新后替换旧定位结果。
+
+- `confirmed`：原始调用中有明确目标会话证据，包含位置及可用的原调用编号。
+- `candidate`：工具名或命令唯一匹配，仅候选，不足以确认实际发起步骤。
+- `time_ordered`：同组重复调用与事件按时间配对，是可能变化的推定。
+- `ambiguous`：数量、时间、重复联系或已有证据有歧义，保留会话关系。
+- `not_provided` / `waiting_trace` / `not_found` / `pending`：分别表示未提供定位、等待 Trace、未找到、暂不能查询。
+
+原生 OpenCode tool part 的 `state.time.start` 可作为调用开始时间；其他上报记录只有显式 `tool_calls[].timing.source="execution"` 且 `started_at` 为执行端 Unix 毫秒时才参与时间排序。不会使用整个交互的时间代替工具时间。定位返回的 `position` 只针对当前 Trace 数据版本，不用于下次事件上报。
+
+每页 1–100 条事件；单次定位最多处理 2000 条协作事件、200 个参与 Session、每条 Trace 8 MiB/20000 交互/20000 调用。单次查询累计正文最多 32 MiB、调用最多 100000 条。超出容量仍可分页获取关系，定位返回 pending，不承诺无限规模。任务结束状态固定 unknown。
+
+### 4. 可直接参考的请求流程
+
+假设 A、B 已按原方式采集 Trace，平台会话编号分别是 `original-session-a` 和 `original-session-b`。框架原会话号经过接入转换时，应使用平台 Trace 记录的 `task_id`（对应 Session.taskId）；不要误用上传记录的 `upload_id`。以下值均为示例，请替换为实际编号。
+
+在调用方环境设置 `AI_BASE_URL`（如 `http://127.0.0.1:3000`）和 `AI_API_KEY`（当前用户在接入配置中使用的采集凭据），然后执行：
+
+```bash
+# 绑定 A 和 B；两条请求的 collaborationId 相同。
+curl -i "$AI_BASE_URL/api/ingest/collaborations/sessions" \
+  -H "x-witty-api-key: $AI_API_KEY" -H 'Content-Type: application/json' \
+  --data '{"collaborationId":"demo-task-001","sessionId":"agent-a","traceSessionId":"original-session-a"}'
+curl -i "$AI_BASE_URL/api/ingest/collaborations/sessions" \
+  -H "x-witty-api-key: $AI_API_KEY" -H 'Content-Type: application/json' \
+  --data '{"collaborationId":"demo-task-001","sessionId":"agent-b","traceSessionId":"original-session-b"}'
+
+# 在 A 实际调用 B 后上报。此接口只记录联系，不会启动 Agent。
+curl -i "$AI_BASE_URL/api/ingest/collaborations/events" \
+  -H "x-witty-api-key: $AI_API_KEY" -H 'Content-Type: application/json' \
+  --data '{"collaborationId":"demo-task-001","eventId":"event-001","fromSessionId":"agent-a","toSessionId":"agent-b","description":"A 调用 B 做调研","fromLocator":{"recordType":"tool","name":"spawn_agent"}}'
+
+curl -i "$AI_BASE_URL/api/observe/collaborations/demo-task-001?offset=0&limit=100" \
+  -H "x-witty-api-key: $AI_API_KEY"
+```
+
+这里的 `spawn_agent` 必须替换为 A 的 Trace 中实际采集到的工具名。通过 Shell 启动时换成第 2 节的 shell 配置。如果没有采到启动步骤，省略 fromLocator 也可以保存 A→B 关系。不要为了匹配修改原 Trace。
+
+首次上报的典型响应（两条 Trace 已明确绑定，A 中只有一个同名工具且没有明确目标会话证据）：
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-001",
+  "result": "created",
+  "receivedAt": "2026-09-11T02:00:01.000Z",
+  "traceResolution": { "from": "resolved", "to": "resolved" },
+  "fromAnchor": {
+    "status": "candidate",
+    "candidateCount": 1,
+    "message": "唯一名称或命令匹配，仅作为候选"
+  },
+  "detailApiPath": "/api/observe/collaborations/demo-task-001"
+}
+```
+
+响应可能包含候选位置等附加字段。重复发送完全相同的请求返回 200/duplicate；修改同 eventId 的正文返回 409/EVENT_CONFLICT。B 再调用 C 时，绑定 C，再上报新的 eventId、fromSessionId=agent-b、toSessionId=agent-c，即可得到 A→B→C。生产接入应由任务发起者生成一次共享 collaborationId，每次联系生成独立 eventId（建议前缀+毫秒时间戳+16字节安全随机串），保存原正文以供重试。
+
+| 字段 | 必填 | 限制与填写方式 |
+|---|---|---|
+| collaborationId、eventId | 是 | 各 1–128 个 ASCII 字母、数字、点、下划线或短横线 |
+| fromSessionId、toSessionId | 是 | 各 1–512 字符，不可全空白；与绑定接口 sessionId 一致，区分大小写 |
+| description | 是 | 1–500 字符，不可全空白，只说明联系，不用于猜测关系 |
+| observedAt | 否 | 实际观察到联系时的 RFC3339 带时区时间，不能使用重试时间 |
+| content | 否 | 传递内容或摘要，最多 4000 字符 |
+| fromLocator | 否 | tool 只填 recordType/name（1–200字符）；shell 只填 recordType/commandContains（1–512字符），不可混填 |
+
+### 5. 查看日志与排查
+
+从仓库根目录通过 `bash scripts/develop_start.sh`（开发）或 `bash scripts/start.sh`（生产）启动后，进程标准输出和错误输出都会写入**仓库根目录 `server.log`**。日志是 JSON 行，协作接口的 scope 为 `collaboration`：
+
+```bash
+# 查看本功能的近期日志
+rg '"scope":"collaboration"' server.log | tail -n 30
+# 持续跟踪
+tail -f server.log | grep --line-buffered '"scope":"collaboration"'
+# 按响应头 x-collaboration-request-id 的值定位一次请求
+rg '返回的请求编号' server.log
+```
+
+日志含时间、requestId、operation（report_event / bind_session / query_graph）、HTTP 状态、耗时，以及校验后可用的协作/事件/Session 编号。成功上报可区分 created 与 duplicate，并查看 anchorStatus/anchorReason；失败记录错误代码和原因。定位查询失败但事件已保存，会另记 warning，不会把已保存事件报告为丢失。
+
+典型成功日志：
+
+```json
+{"ts":"2026-09-11T02:00:01.000Z","level":"info","scope":"collaboration","message":"请求成功","context":{"requestId":"请求编号","operation":"report_event","collaborationId":"demo-task-001","eventId":"event-001","result":"created","anchorStatus":"candidate","anchorReason":"唯一名称或命令匹配，仅作为候选","httpStatus":201,"durationMs":12}}
+```
+
+| 状态/代码 | 排查方式 |
+|---|---|
+| 400 INVALID_ARGUMENT / INVALID_LOCATOR | 根据日志 field 修正字段、长度、时间或定位格式 |
+| 401 UNAUTHORIZED | 检查请求头采集凭据是否有效 |
+| 403 FORBIDDEN / 404 NOT_FOUND | 检查 Trace 和协作是否属于同一用户；不跨用户共享 |
+| 409 EVENT_CONFLICT / BINDING_CONFLICT | 已存数据不可覆盖；重试必须保持原编号与原正文 |
+| 413 / 415 | 检查 64 KiB 上限和 application/json 请求头 |
+| 429 RATE_LIMITED | 按 Retry-After 等待后原样重试 |
+| 500 INTERNAL_ERROR | 用请求编号查日志 causeCode/reason；例如 P2021 表示表不存在，检查启动时 schema 同步是否成功 |
+| 成功响应但 pending / waiting_trace | 关系已保存；根据定位原因检查绑定、Trace 到达情况、容量限制，稍后重新 GET |
+
+不记录 API Key、description/content、Shell 命令正文或原始数据库错误全文。公共 logger 还会尝试写入 `AGENT_INSIGHT_LOG_DIR/agent-insight.log`（默认 `/var/log/agent-insight/agent-insight.log`）；该目录不可写不影响 server.log。默认日志等级包含成功日志；若将 AGENT_INSIGHT_LOG_LEVEL/LOG_LEVEL 设置为 warn/error，会过滤 info，需保持 log/info 才能查看成功记录。直接运行 npm run dev 而未重定向时日志在终端，不会自动创建 server.log。上述启动脚本每次启动会清空 server.log，重启前应保存需要保留的日志。
+
+### 6. 启动时数据库升级
+
+在仓库根目录执行 `bash scripts/develop_start.sh` 或 `bash scripts/start.sh`。两个脚本都会先调用 `scripts/db_push.sh` 同步 SQLite schema，再执行 `prisma generate`，成功后才启动服务。本次只新增 Collaboration、CollaborationEvent、CollaborationSessionBinding 三张表及索引，已有 Trace 无需重传，无需手工建表。旧库增量升级及重复执行已通过独立 SQLite 测试，既有 Session 内容和 Execution 父级保持不变。
+
+数据库同步失败会阻止启动；原因打印在**启动终端**，因为此时服务尚未启动、server.log 重定向尚未开始。不要通过 reset 或随意添加 --accept-data-loss 绕过其他历史 schema 冲突。
+
+配置 DB_HOST 时两个脚本也会调用 `scripts/init_opengauss.py`，本次已补齐对应新表与索引。OpenGauss 实库尚未联调，SQLite 升级测试不代表 OpenGauss 验收。

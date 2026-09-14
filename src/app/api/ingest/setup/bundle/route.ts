@@ -33,6 +33,7 @@ const BUNDLES: Record<string, string[]> = {
     'scripts/install-fault-injection.js',
     'scripts/lib/fi-python-runtime.js',
     'scripts/fi-worker.js',
+    'services/executor/src',
     'agent_ras/platform_adapter/opencode/config_sync.js',
     'agent_fault_injection',
   ],

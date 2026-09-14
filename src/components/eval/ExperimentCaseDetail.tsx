@@ -1,0 +1,993 @@
+'use client';
+
+// Trace 评测详情：任务输入/预期输出/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
+// （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡。
+//
+// 卡片以**结论**为主：卡头 = 结论 chip（达成/部分达成/未达成）+ 一句话结论 + 得分（次要）；
+// 评分点表、证据、失败原因全部收在展开区里——用户先看懂"行不行"，需要核验时才下钻明细。
+// 结论来自评估器上报的 verdict/summary（契约见 eval-output.ts），缺 verdict 时按分数派生，
+// 缺 summary 时回退到证据首段（存量数据的结论一直被塞在 evidence 里）。
+//
+// 得分支持人工修正：分层写 humanScore，机器分只读留存，全部均分按生效分重算。
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
+import { BenchmarkArtifactActions, type BenchmarkArtifactRef } from '@/components/eval/BenchmarkArtifactActions';
+import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
+import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
+import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
+import { AppTopBar } from '@/components/shell/AppTopBar';
+import { PageContainer } from '@/components/shell/PageContainer';
+import { useAuth } from '@/lib/auth/auth-context';
+import { apiFetch } from '@/lib/client/api';
+import { categorySummary, effectiveScore, groupByCategory } from '@/lib/engine/experiment/detail-agg';
+import { deriveVerdict, displaySummary, isEvidenceRedundant, VERDICT_LABELS, type EvalVerdict } from '@/lib/evaluators/eval-output';
+import type { EvaluatorCategory } from '@/lib/evaluators/registry';
+import {
+  summarizeEvaluatorRunConfig,
+  type EvaluatorRunConfigMap,
+} from '@/lib/evaluators/evaluator-run-config';
+
+interface ResultRow {
+  id: string;
+  caseId: string;
+  evaluatorId: string;
+  status: string;
+  verdict: EvalVerdict | null;
+  summary: string | null;
+  score: number | null;
+  points: unknown;
+  evidence: unknown;
+  humanScore: number | null;
+  humanReason: string | null;
+  humanBy: string | null;
+  humanAt: string | null;
+  errorMessage: string | null;
+}
+
+interface ExperimentDetail {
+  id: string;
+  name: string;
+  status: string;
+  scope?: string;
+  evaluatorConfigs: EvaluatorRunConfigMap;
+  cases: Array<{
+    id: string;
+    taskId: string | null;
+    input: string;
+    actualOutput: string;
+    referenceOutput: string | null;
+    traceStatus?: 'pending' | 'ready' | 'failed' | null;
+    traceError?: string | null;
+    benchmark?: {
+      adapterKey: string;
+      displayName: string;
+      presentation: {
+        referencePanel?: { title?: string };
+        result?: { primaryMetric?: { label?: string; type?: string } };
+      } | null;
+      primaryMetric: { key: string; value: boolean | number | null } | null;
+      externalCaseId: string;
+      repo: string;
+      reference: { kind: string; description: string };
+      submission: (BenchmarkArtifactRef & { sha256: string; summary: string }) | null;
+      evidenceArtifacts: Array<BenchmarkArtifactRef & { sha256: string }>;
+      runStatus: string;
+      evaluationStatus: string | null;
+      failure?: { code: string; message: string | null } | null;
+    };
+  }>;
+  results: ResultRow[];
+}
+
+interface PointRow {
+  label: string;
+  score?: number;
+  evidence?: unknown;
+  status?: 'covered' | 'partial' | 'missing';
+  skillAttributable?: boolean;
+  suggestion?: string;
+  anchors?: string[];
+}
+
+function responseError(value: unknown, fallback: string): string {
+  if (!value || typeof value !== 'object') return fallback;
+  const error = (value as { error?: unknown }).error;
+  if (typeof error === 'string' && error) return error;
+  return error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string'
+    ? String((error as { message: string }).message)
+    : fallback;
+}
+
+/** 解析单个评分点；非法（无 label）返回 null。 */
+function parseOnePoint(p: unknown): PointRow | null {
+  if (!p || typeof p !== 'object') return null;
+  const r = p as Record<string, unknown>;
+  if (typeof r.label !== 'string' || !r.label.trim()) return null;
+  const row: PointRow = {
+    label: r.label,
+    score: typeof r.score === 'number' ? r.score : undefined,
+    evidence: r.evidence,
+  };
+  if (r.status === 'covered' || r.status === 'partial' || r.status === 'missing') row.status = r.status;
+  if (typeof r.skillAttributable === 'boolean') row.skillAttributable = r.skillAttributable;
+  if (typeof r.suggestion === 'string' && r.suggestion.trim()) row.suggestion = r.suggestion.trim();
+  if (Array.isArray(r.anchors)) {
+    const a = r.anchors.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+    if (a.length) row.anchors = a;
+  }
+  return row;
+}
+
+/** 宽容解析结果行的 points（脏数据逐条丢弃）。归因字段全可选。 */
+function parsePoints(raw: unknown): PointRow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PointRow[] = [];
+  for (const p of raw) {
+    const row = parseOnePoint(p);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+/** 折叠集合的增删：有则去、无则加。 */
+function toggled(prev: Set<string>, id: string): Set<string> {
+  const next = new Set(prev);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  return next;
+}
+
+/** 未达标评分点数：状态为部分/未覆盖，或有分且低于 60。折叠标题上直接标出来，免得要展开才知道有没有问题。 */
+function unmetCount(points: PointRow[]): number {
+  return points.filter((p) =>
+    p.status === 'partial' || p.status === 'missing' || (typeof p.score === 'number' && p.score < 60),
+  ).length;
+}
+
+const STATUS_CHIP: Record<'covered' | 'partial' | 'missing', { label: string; bg: string; fg: string }> = {
+  covered: { label: '已覆盖', bg: 'var(--tag-green-bg, var(--success-subtle))', fg: 'var(--tag-green-fg, var(--success))' },
+  partial: { label: '部分覆盖', bg: 'var(--tag-amber-bg, var(--warning-subtle))', fg: 'var(--tag-amber-fg, var(--warning))' },
+  missing: { label: '未覆盖', bg: 'var(--background-secondary)', fg: 'var(--foreground-muted)' },
+};
+
+/** 结论 chip 配色（文案统一取 VERDICT_LABELS）。 */
+const VERDICT_CHIP: Record<EvalVerdict, { bg: string; fg: string }> = {
+  pass: { bg: 'var(--tag-green-bg, var(--success-subtle))', fg: 'var(--tag-green-fg, var(--success))' },
+  warn: { bg: 'var(--tag-amber-bg, var(--warning-subtle))', fg: 'var(--tag-amber-fg, var(--warning))' },
+  fail: { bg: 'var(--tag-red-bg, var(--error-subtle))', fg: 'var(--tag-red-fg, var(--error))' },
+};
+
+const CARD: React.CSSProperties = {
+  background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10,
+};
+const TH: React.CSSProperties = {
+  textAlign: 'left', padding: '7px 10px', fontSize: 11, fontWeight: 600,
+  color: 'var(--foreground-muted)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
+};
+const TD: React.CSSProperties = {
+  padding: '8px 10px', fontSize: 12, color: 'var(--foreground)',
+  borderBottom: '1px solid var(--border)', verticalAlign: 'top',
+  wordBreak: 'break-word', overflowWrap: 'anywhere',
+};
+
+const CATEGORY_LABEL: Record<EvaluatorCategory, string> = {
+  res: '结果评测',
+  traj: '轨迹评测',
+};
+
+const SPECIALIZED_PRESET_IDS = new Set([
+  'preset-depth-result',
+  'preset-agent-tool-utilization',
+  'preset-agent-tool-selection',
+  'preset-ras-reliability',
+  'preset-ras-reliability-fault-injection',
+  'preset-ras-reliability-detection-recovery',
+  'preset-agent-trace-quality',
+  'preset-agent-step-efficiency',
+  'preset-agent-process-quality',
+]);
+
+/** 评分点的「状态 / 可归因 skill」标签组（评分点与子项复用）。 */
+function PointBadges({ point }: { point: PointRow }) {
+  if (!point.status && !point.skillAttributable) return null;
+  return (
+    <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {point.status && (
+        <span style={{
+          fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
+          background: STATUS_CHIP[point.status].bg, color: STATUS_CHIP[point.status].fg,
+        }}>{STATUS_CHIP[point.status].label}</span>
+      )}
+      {point.skillAttributable && (
+        <span style={{
+          fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
+          background: 'var(--primary-subtle)', color: 'var(--primary)',
+        }}>可归因 skill</span>
+      )}
+    </div>
+  );
+}
+
+/** 评分点「证据与建议」列内容：同一折叠块内用 Markdown 小节区分，建议为空时不渲染。 */
+function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId: string | null; evaluatorId: string }) {
+  return (
+    <>
+      {point.evidence ? (
+        <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} supplementalMarkdown={point.suggestion} />
+      ) : point.suggestion ? <EvidenceBlock evidence={{ md: `**Skill 改进建议**\n${point.suggestion}` }} /> : null}
+      {point.anchors && point.anchors.length > 0 && (
+        <div style={{ marginTop: 5, minWidth: 0, fontSize: 10.5, color: 'var(--foreground-muted)', overflowWrap: 'anywhere' }}>
+          相关步骤：{point.anchors.map((a) => (
+            <a
+              key={a}
+              href={taskId ? `/trace?taskId=${encodeURIComponent(taskId)}` : undefined}
+              style={{
+                fontFamily: 'var(--font-mono, monospace)', fontSize: 10.5,
+                background: 'var(--background-secondary)', border: '1px solid var(--border)',
+                borderRadius: 4, padding: '0 5px', marginRight: 5,
+                color: 'var(--foreground-secondary)', textDecoration: 'none',
+                cursor: taskId ? 'pointer' : 'default',
+                whiteSpace: 'normal', wordBreak: 'break-all', overflowWrap: 'anywhere',
+              }}
+            >{a}</a>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function TagChip({ text }: { text: string }) {
+  return (
+    <span style={{
+      fontSize: 10.5, padding: '1px 7px', borderRadius: 8,
+      background: 'var(--background-secondary)', color: 'var(--foreground-muted)',
+    }}>
+      {text}
+    </span>
+  );
+}
+
+/** 结论 chip。verdict 为空时按分数派生（deriveVerdict），都取不到则不渲染。 */
+function VerdictChip({ verdict, score }: { verdict: EvalVerdict | null; score: number | null }) {
+  const v = verdict ?? deriveVerdict(score);
+  if (!v) return null;
+  return (
+    <span style={{
+      fontSize: 11, padding: '2px 9px', borderRadius: 8, fontWeight: 600,
+      background: VERDICT_CHIP[v].bg, color: VERDICT_CHIP[v].fg, whiteSpace: 'nowrap',
+    }}>
+      {VERDICT_LABELS[v]}
+    </span>
+  );
+}
+
+/**
+ * 人工修正得分：分层写 humanScore，机器分留在 score 里只读展示。
+ * 改分必须填理由——没有理由的修正日后无法复盘，也没法拿来校准评估器。
+ */
+function ScoreAdjuster({
+  row, experimentId, user, onDone,
+}: {
+  row: ResultRow;
+  experimentId: string;
+  user: string;
+  onDone: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [score, setScore] = useState(String(row.humanScore ?? row.score ?? ''));
+  const [reason, setReason] = useState(row.humanReason ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = useCallback(async (clear = false) => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(experimentId)}/results/${encodeURIComponent(row.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            clear
+              ? { user, humanScore: null }
+              : { user, humanScore: Number(score), humanReason: reason },
+          ),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(String(data?.error || '修正得分失败'));
+      setEditing(false);
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : '修正得分失败');
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, experimentId, row.id, user, score, reason, onDone]);
+
+  if (!editing) {
+    return (
+      <div style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => { setEditing(true); setError(''); }}
+          style={{
+            fontSize: 11, padding: '3px 11px', borderRadius: 6,
+            border: '1px solid var(--border)', background: 'var(--background-secondary)',
+            color: 'var(--foreground)', cursor: 'pointer',
+          }}
+        >
+          {typeof row.humanScore === 'number' ? '↻ 调整人工修正' : '✎ 修正得分'}
+        </button>
+        {typeof row.humanScore === 'number' && (
+          <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
+            由 {row.humanBy || '—'} 修正
+            {row.humanAt && ` · ${new Date(row.humanAt).toLocaleString('zh-CN', { hour12: false })}`}
+            {row.humanReason && ` · ${row.humanReason}`}
+          </span>
+        )}
+        {error && <span style={{ fontSize: 11, color: 'var(--error)' }}>{error}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      marginTop: 9, padding: '9px 11px', borderRadius: 8,
+      border: '1px solid var(--border)', background: 'var(--background-secondary)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 7 }}>
+        <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+          机器分 <b style={{ color: 'var(--foreground)' }}>{typeof row.score === 'number' ? row.score : '—'}</b> →
+        </span>
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={score}
+          onChange={(e) => setScore(e.target.value)}
+          style={{
+            width: 74, height: 28, padding: '0 8px', fontSize: 12, borderRadius: 6,
+            border: '1px solid var(--input-border)', background: 'var(--input-bg)',
+            color: 'var(--foreground)', outline: 'none',
+          }}
+        />
+        <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>人工分（0-100）</span>
+      </div>
+      <input
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="修正理由（必填）——为什么机器这个分不合理"
+        style={{
+          width: '100%', height: 30, padding: '0 9px', fontSize: 12, borderRadius: 6,
+          border: '1px solid var(--input-border)', background: 'var(--input-bg)',
+          color: 'var(--foreground)', outline: 'none', boxSizing: 'border-box',
+        }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => save(false)}
+          disabled={busy || !score.trim() || !reason.trim()}
+          style={{
+            fontSize: 11.5, padding: '4px 13px', borderRadius: 6, fontWeight: 600,
+            border: '1px solid transparent', background: 'var(--accent)', color: '#fff',
+            cursor: busy || !score.trim() || !reason.trim() ? 'default' : 'pointer',
+            opacity: busy || !score.trim() || !reason.trim() ? 0.5 : 1,
+          }}
+        >
+          {busy ? '保存中…' : '保存修正'}
+        </button>
+        <button
+          onClick={() => { setEditing(false); setError(''); }}
+          style={{
+            fontSize: 11.5, padding: '4px 11px', borderRadius: 6,
+            border: '1px solid var(--border)', background: 'var(--card-bg)',
+            color: 'var(--foreground)', cursor: 'pointer',
+          }}
+        >
+          取消
+        </button>
+        {typeof row.humanScore === 'number' && (
+          <button
+            onClick={() => save(true)}
+            disabled={busy}
+            style={{
+              fontSize: 11.5, padding: '4px 11px', borderRadius: 6,
+              border: '1px solid var(--border)', background: 'var(--card-bg)',
+              color: 'var(--foreground-muted)', cursor: busy ? 'default' : 'pointer',
+            }}
+          >
+            撤销修正
+          </button>
+        )}
+        <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+          修正后全部均分按人工分重算；重评会清除此修正
+        </span>
+        {error && <span style={{ fontSize: 11, color: 'var(--error)' }}>{error}</span>}
+      </div>
+    </div>
+  );
+}
+
+export function ExperimentCaseDetail({
+  id,
+  caseId,
+  embedded = false,
+  onBack,
+}: {
+  id: string;
+  caseId: string;
+  embedded?: boolean;
+  onBack?: () => void;
+}) {
+  const { user } = useAuth();
+  const lookup = useEvaluatorLookup(user);
+  const [detail, setDetail] = useState<ExperimentDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [retryingId, setRetryingId] = useState('');
+  // 两级折叠：卡片默认折叠只露卡头（结论 chip + 一句话结论 + 得分）；展开后是完整判断
+  // 依据 + 人工修正 + 评论，**评分点明细再单独折一层**——它是最长最细的部分，展开卡片
+  // 就糊一屏表格的话，等于没做"先看结论"。
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  const [expandedPoints, setExpandedPoints] = useState<Set<string>>(new Set());
+  const toggleCard = useCallback((id: string) => {
+    setExpandedCards((prev) => toggled(prev, id));
+  }, []);
+  const togglePoints = useCallback((id: string) => {
+    setExpandedPoints((prev) => toggled(prev, id));
+  }, []);
+
+  const [comments, setComments] = useState<EvalCommentRow[]>([]);
+
+  const loadComments = useCallback(async () => {
+    if (!user) return;
+    try {
+      // 一次取回本实验全部评论，前端按 case/结果行分组——否则每个结果行各发一次请求
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}/comments?user=${encodeURIComponent(user)}&scope=all`,
+      );
+      const data = await res.json();
+      setComments(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      setComments([]);
+    }
+  }, [user, id]);
+
+  const load = useCallback(async (silent = false) => {
+    if (!user) return;
+    if (!silent) setLoading(true);
+    try {
+      // 带 caseId：让详情 API 精确返回这一条 case（不受 case 列表分页影响，
+      // 否则该 case 不在第 1 页时这里 find 不到 → 详情空白）。
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&caseId=${encodeURIComponent(caseId)}`,
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
+      setDetail(data);
+      setError('');
+    } catch (e: unknown) {
+      if (!silent) {
+        setError(e instanceof Error ? e.message : '加载实验失败');
+        setDetail(null);
+      }
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [user, id, caseId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+  useEffect(() => {
+    if (!detail || (detail.status !== 'running' && !detail.results.some((row) => row.status === 'pending' || row.status === 'running'))) return;
+    const timer = window.setInterval(() => void load(true), 2500);
+    return () => window.clearInterval(timer);
+  }, [detail, load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadComments(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadComments]);
+
+  const retryResult = useCallback(async (resultId: string) => {
+    if (!user || retryingId) return;
+    setRetryingId(resultId);
+    try {
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}/results/${encodeURIComponent(resultId)}/retry?user=${encodeURIComponent(user)}`,
+        { method: 'POST' },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(responseError(data, '重评失败'));
+      await load(true);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '重评失败');
+    } finally {
+      setRetryingId('');
+    }
+  }, [user, id, retryingId, load]);
+
+  const retryCase = useCallback(async () => {
+    if (!user || retryingId) return;
+    setRetryingId(caseId);
+    try {
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(caseId)}/retry?user=${encodeURIComponent(user)}`,
+        { method: 'POST' },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : data?.error?.message || '重跑失败');
+      await load(true);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '重跑失败');
+    } finally {
+      setRetryingId('');
+    }
+  }, [caseId, id, load, retryingId, user]);
+
+  const caseRow = detail?.cases.find((c) => c.id === caseId) ?? null;
+  const caseResults = useMemo(
+    () => (detail ? detail.results.filter((r) => r.caseId === caseId) : []),
+    [detail, caseId],
+  );
+  const byCategory = useMemo(
+    () => groupByCategory(caseResults, lookup.categoryOf),
+    [caseResults, lookup],
+  );
+
+  const inputSummary = (caseRow?.input || '').replace(/\s+/g, ' ').trim();
+  const isBenchmark = detail?.scope === 'benchmark' && Boolean(caseRow?.benchmark);
+
+  return (
+    <>
+      {!embedded && <AppTopBar title={isBenchmark ? 'Benchmark Case 详情' : 'Trace 评测详情'} />}
+      <PageContainer className="min-w-0 max-w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full [&>*]:shrink-0">
+        {loading ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
+        ) : !detail || !caseRow ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>
+            {error || 'case 不存在'}
+          </div>
+        ) : (
+          <>
+            {error && (
+              <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
+            )}
+
+            {/* 页头 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+              {embedded && onBack ? (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  style={{
+                    fontSize: 12, color: 'var(--foreground-secondary)',
+                    padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
+                    background: 'var(--background-secondary)', cursor: 'pointer',
+                  }}
+                >
+                  ‹ 返回实验详情
+                </button>
+              ) : (
+                <Link
+                  href={`/experiments/${encodeURIComponent(id)}`}
+                  style={{
+                    fontSize: 12, color: 'var(--foreground-secondary)', textDecoration: 'none',
+                    padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
+                    background: 'var(--background-secondary)',
+                  }}
+                >
+                  ‹ 返回实验详情
+                </Link>
+              )}
+              <span style={{
+                fontSize: 13, fontWeight: 600, maxWidth: 520, overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {inputSummary.length > 60 ? `${inputSummary.slice(0, 60)}…` : inputSummary || '—'}
+              </span>
+              <span style={{ flex: 1 }} />
+              {isBenchmark && (
+                <button
+                  type="button"
+                  disabled={Boolean(retryingId)}
+                  onClick={() => void retryCase()}
+                  style={{ fontSize: 12, padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--background-secondary)', color: 'var(--foreground)', cursor: retryingId ? 'not-allowed' : 'pointer' }}
+                >
+                  {retryingId === caseId ? '重跑中…' : '↻ 重跑 Case'}
+                </button>
+              )}
+              {caseRow.taskId && (
+                <Link
+                  href={`/trace?taskId=${encodeURIComponent(caseRow.taskId)}`}
+                  style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}
+                >
+                  前往链路观测 →
+                </Link>
+              )}
+            </div>
+
+            {isBenchmark && caseRow.traceStatus === 'failed' && (
+              <BenchmarkFailureNotice
+                code={caseRow.benchmark?.failure?.code}
+                message={caseRow.benchmark?.failure?.message || caseRow.traceError}
+              />
+            )}
+
+            {/* 任务输入 / 参考契约 / 实际输出 三框 */}
+            <div style={{ display: 'grid', minWidth: 0, maxWidth: '100%', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
+              {([
+                { label: '任务输入', value: caseRow.input, missing: '' },
+                isBenchmark
+                  ? {
+                      label: caseRow.benchmark?.presentation?.referencePanel?.title || '参考契约',
+                      value: caseRow.benchmark?.reference.description || '',
+                      missing: 'Benchmark 测试契约不可用',
+                    }
+                  : { label: '预期输出', value: caseRow.referenceOutput || '', missing: '未标注预期输出' },
+                isBenchmark
+                  ? { label: '实际输出', value: caseRow.benchmark?.submission ? `${caseRow.benchmark.submission.name}\n${caseRow.benchmark.submission.summary}` : '', missing: '尚未生成提交产物' }
+                  : { label: '实际输出', value: caseRow.actualOutput, missing: '' },
+              ] as const).map((box) => (
+                <div key={box.label} style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--foreground-muted)', marginBottom: 5 }}>
+                    {box.label}
+                  </div>
+                  <div style={{
+                    ...CARD, flex: 1, padding: '9px 11px', fontSize: 12, lineHeight: 1.6, minHeight: 58,
+                    maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    color: box.value ? 'var(--foreground)' : 'var(--foreground-muted)',
+                  }}>
+                    {box.value || box.missing || '—'}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 结果评测 / 轨迹评测 两类目 panel */}
+            {(['res', 'traj'] as EvaluatorCategory[]).map((cat) => {
+              const rows = byCategory[cat];
+              if (!rows.length) {
+                if (!isBenchmark || cat !== 'traj') return null;
+                return (
+                  <div key={cat} style={{ ...CARD, marginBottom: 14, overflow: 'hidden' }}>
+                    <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', fontSize: 12.5, fontWeight: 600 }}>轨迹评测</div>
+                    <div style={{ padding: 22, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
+                      本次实验未选择普通轨迹评估器
+                    </div>
+                  </div>
+                );
+              }
+              const summary = categorySummary(rows);
+              return (
+                <div key={cat} style={{ ...CARD, minWidth: 0, maxWidth: '100%', overflow: 'hidden', marginBottom: 14 }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '11px 16px', borderBottom: '1px solid var(--border)',
+                  }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600 }}>{CATEGORY_LABEL[cat]}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent)' }}>
+                      {typeof summary.avg === 'number' ? summary.avg : '—'}
+                    </span>
+                    <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+                      类目均分 · {summary.scored}/{summary.total} 项计入
+                      {summary.adjusted > 0 && ` · 含 ${summary.adjusted} 项人工修正`}
+                    </span>
+                  </div>
+                  <div style={{ padding: 12, minWidth: 0, maxWidth: '100%', display: 'grid', gap: 10 }}>
+                    {rows.map((r) => {
+                      const tags = lookup.tagsOf(r.evaluatorId);
+                      const failed = r.status === 'failed';
+                      const pendingLike = r.status === 'pending' || r.status === 'running';
+                      const points = parsePoints(r.points);
+                      const isSpecializedPreset = SPECIALIZED_PRESET_IDS.has(r.evaluatorId);
+                      const open = expandedCards.has(r.id);
+                      const adjusted = typeof r.humanScore === 'number';
+                      const shownScore = effectiveScore(r);
+                      const summary = displaySummary(r.summary, r.evidence);
+                      const rowComments = filterComments(comments, { resultId: r.id });
+                      const configSummary = summarizeEvaluatorRunConfig(
+                        r.evaluatorId,
+                        detail.evaluatorConfigs?.[r.evaluatorId as keyof EvaluatorRunConfigMap],
+                      );
+                      const isBenchmarkEvaluator = isBenchmark && r.evaluatorId.startsWith('benchmark:');
+                      if (isBenchmarkEvaluator) {
+                        const passed = r.verdict === 'pass';
+                        const metric = caseRow.benchmark?.primaryMetric;
+                        const metricLabel = caseRow.benchmark?.presentation?.result?.primaryMetric?.label
+                          || metric?.key
+                          || '结果';
+                        const metricValue = typeof metric?.value === 'boolean'
+                          ? metric.value ? '通过' : '未通过'
+                          : metric?.value ?? '—';
+                        return (
+                          <div key={r.id} style={{ border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden', opacity: failed ? 0.85 : 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '11px 13px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                              <b style={{ fontSize: 12.5 }}>{caseRow.benchmark?.displayName || 'Benchmark'} Evaluator</b>
+                              <TagChip text="预置" />
+                              <TagChip text="官方评测" />
+                              <span style={{ flex: 1 }} />
+                              {pendingLike ? (
+                                <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>{r.status === 'running' ? '评测中…' : '待评测'}</span>
+                              ) : failed ? (
+                                <span style={{ background: VERDICT_CHIP.fail.bg, color: VERDICT_CHIP.fail.fg, fontSize: 11, padding: '2px 9px', borderRadius: 8 }}>评测失败</span>
+                              ) : (
+                                <span style={{ background: VERDICT_CHIP[passed ? 'pass' : r.verdict === 'warn' ? 'warn' : 'fail'].bg, color: VERDICT_CHIP[passed ? 'pass' : r.verdict === 'warn' ? 'warn' : 'fail'].fg, fontSize: 11, padding: '2px 9px', borderRadius: 8, fontWeight: 600 }}>
+                                  {metricLabel}：{metricValue}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ padding: '11px 13px' }}>
+                              <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 10 }}>
+                                {failed ? r.errorMessage || 'Benchmark Evaluator 未产出结果' : r.summary || '等待 Benchmark 评测结果'}
+                              </div>
+                              {points.length > 0 && (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                                  {points.map((point) => {
+                                    const evidence = point.evidence && typeof point.evidence === 'object' && !Array.isArray(point.evidence)
+                                      ? point.evidence as Record<string, unknown>
+                                      : {};
+                                    const hasRatio = Number.isFinite(Number(evidence.passed))
+                                      && Number.isFinite(Number(evidence.total));
+                                    const value = hasRatio
+                                      ? `${Number(evidence.passed)} / ${Number(evidence.total)}`
+                                      : typeof point.score === 'number'
+                                        ? String(point.score)
+                                        : point.status || '—';
+                                  return (
+                                    <div key={point.label} style={{ padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--background-secondary)' }}>
+                                      <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{point.label}</div>
+                                      <b style={{ fontSize: 13 }}>{value}</b>
+                                    </div>
+                                  );
+                                  })}
+                                </div>
+                              )}
+                              {user && (
+                                <BenchmarkArtifactActions
+                                  user={user}
+                                  submission={caseRow.benchmark?.submission || null}
+                                  evidence={caseRow.benchmark?.evidenceArtifacts || []}
+                                />
+                              )}
+                              {!pendingLike && (
+                                <button
+                                  type="button"
+                                  onClick={() => void retryResult(r.id)}
+                                  disabled={Boolean(retryingId)}
+                                  style={{ marginTop: 10, fontSize: 11, padding: '3px 11px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--background-secondary)', color: 'var(--foreground)', cursor: retryingId ? 'not-allowed' : 'pointer' }}
+                                >
+                                  {retryingId === r.id ? '重评中…' : '↻ Benchmark 重评'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+                      // 卡体永远可展开：不止评分点/证据，还有人工修正与评论
+                      return (
+                        <div key={r.id} style={{
+                          border: '1px solid var(--border)', borderRadius: 9,
+                          minWidth: 0, maxWidth: '100%', overflow: 'hidden',
+                          padding: '11px 13px', opacity: failed ? 0.85 : 1,
+                        }}>
+                          {/* 卡头第一行：折叠箭头 + 评估器名 + 标签 + 结论 chip + 得分（次要） */}
+                          <div
+                            onClick={() => toggleCard(r.id)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap',
+                              cursor: 'pointer', userSelect: 'none',
+                            }}
+                          >
+                            <span style={{
+                              fontSize: 12, color: 'var(--foreground-muted)', lineHeight: 1,
+                              display: 'inline-block', transition: 'transform .15s',
+                              transform: open ? 'rotate(90deg)' : 'none',
+                            }}>›</span>
+                            <span style={{ fontSize: 12.5, fontWeight: 600 }}>{lookup.nameOf(r.evaluatorId)}</span>
+                            {tags.map((t) => <TagChip key={t} text={t} />)}
+                            <span style={{ flex: 1 }} />
+                            {failed ? (
+                              <span style={{
+                                fontSize: 11, padding: '1px 8px', borderRadius: 8, fontWeight: 500,
+                                background: 'var(--tag-amber-bg)', color: 'var(--tag-amber-fg)',
+                              }}>
+                                评估失败
+                              </span>
+                            ) : pendingLike ? (
+                              <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
+                                {r.status === 'running' ? '执行中…' : '待执行'}
+                              </span>
+                            ) : (
+                              <>
+                                <VerdictChip verdict={r.verdict} score={shownScore} />
+                                <span style={{
+                                  fontSize: 12, fontWeight: 700,
+                                  color: adjusted ? 'var(--warning)' : 'var(--accent)',
+                                }}>
+                                  总分&nbsp;
+                                  <span style={{ fontSize: 15 }}>{typeof shownScore === 'number' ? shownScore : '—'}</span>
+                                </span>
+                                {adjusted && (
+                                  <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
+                                    人工修正 · 原 {typeof r.score === 'number' ? r.score : '—'}
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </div>
+
+                          {configSummary && (
+                            <div style={{
+                              marginTop: 6, fontSize: 10.5, lineHeight: 1.5,
+                              color: 'var(--primary)',
+                            }}>
+                              运行配置：{configSummary}
+                            </div>
+                          )}
+
+                          {/* 卡头第二行：一句话结论——这是用户要一眼看到的东西，永远展示 */}
+                          {!failed && !pendingLike && summary && (
+                            <div style={{
+                              marginTop: 6, fontSize: 12.5, lineHeight: 1.7,
+                              minWidth: 0, maxWidth: '100%', color: 'var(--foreground)',
+                              wordBreak: 'break-word', overflowWrap: 'anywhere',
+                            }}>
+                              {summary}
+                            </div>
+                          )}
+                          {failed && (
+                            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--foreground-secondary)' }}>
+                              {r.errorMessage || '评估未产出结果——不记 0 分、不入类目均分。'}
+                            </div>
+                          )}
+
+                          {/* 卡体（默认折叠）：评分点表 / 卡级证据 / 重评 / 人工修正 / 评论 */}
+                          {open && (
+                            <>
+                              {failed && (
+                                <div style={{ marginTop: 9 }}>
+                                  <button
+                                    onClick={() => retryResult(r.id)}
+                                    disabled={!!retryingId}
+                                    style={{
+                                      fontSize: 11, padding: '3px 11px', borderRadius: 6,
+                                      border: '1px solid var(--border)', background: 'var(--background-secondary)',
+                                      color: 'var(--foreground)', cursor: retryingId ? 'default' : 'pointer',
+                                      opacity: retryingId && retryingId !== r.id ? 0.5 : 1,
+                                    }}
+                                  >
+                                    {retryingId === r.id ? '重评中…' : '↻ 重评'}
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* 完整判断依据：与卡头那句结论逐字相同就不重复渲染。
+                                  （此前这段在有评分点时被 else 分支吃掉，永远显示不出来。） */}
+                              {r.evidence && !isEvidenceRedundant(r.summary, r.evidence)
+                                && !(isSpecializedPreset && points.length > 0) ? (
+                                <div style={{ marginTop: 9 }}>
+                                  <EvidenceBlock evidence={r.evidence} evaluatorId={r.evaluatorId} />
+                                </div>
+                              ) : null}
+
+                              {/* 评分点明细：二级折叠，默认收起，标题上直接标出有几项没达标 */}
+                              {points.length > 0 && (
+                                <div style={{ marginTop: 9 }}>
+                                  <button
+                                    onClick={() => togglePoints(r.id)}
+                                    style={{
+                                      display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+                                      padding: '5px 0', border: 'none', background: 'none',
+                                      color: 'var(--foreground-secondary)', fontSize: 11.5,
+                                      cursor: 'pointer', textAlign: 'left',
+                                    }}
+                                  >
+                                    <span style={{
+                                      display: 'inline-block', transition: 'transform .15s', lineHeight: 1,
+                                      transform: expandedPoints.has(r.id) ? 'rotate(90deg)' : 'none',
+                                    }}>›</span>
+                                    评分点明细 · {points.length} 项
+                                    {unmetCount(points) > 0 && (
+                                      <span style={{ color: 'var(--warning)' }}>
+                                        （{unmetCount(points)} 项未达标）
+                                      </span>
+                                    )}
+                                  </button>
+                                  {expandedPoints.has(r.id) && (
+                                    <div style={{ minWidth: 0, maxWidth: '100%', overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', tableLayout: 'fixed', marginTop: 4 }}>
+                                      <thead>
+                                        <tr>
+                                          <th style={{ ...TH, width: 180 }}>评分点</th>
+                                          <th style={{ ...TH, width: 52 }}>得分</th>
+                                          <th style={TH}>证据与建议</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {points.map((p, i) => (
+                                          <tr key={i}>
+                                            <td style={{ ...TD, fontWeight: 600, fontSize: 11.5, verticalAlign: 'top' }}>
+                                              {p.label}
+                                              <PointBadges point={p} />
+                                            </td>
+                                            <td style={{ ...TD, verticalAlign: 'top', fontWeight: 700 }}>{typeof p.score === 'number' ? p.score : '—'}</td>
+                                            <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
+                                              <PointEvidence point={p} taskId={caseRow.taskId} evaluatorId={r.evaluatorId} />
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* 人工修正得分（仅已完成的行——失败/待执行没有可对照的机器判断） */}
+                              {r.status === 'done' && user && (
+                                <ScoreAdjuster
+                                  row={r}
+                                  experimentId={id}
+                                  user={user}
+                                  onDone={() => load(true)}
+                                />
+                              )}
+
+                              {/* 该评估器结果的评论 */}
+                              {user && (
+                                <div style={{ marginTop: 11, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                                  <EvalComments
+                                    experimentId={id}
+                                    user={user}
+                                    resultId={r.id}
+                                    comments={rowComments}
+                                    onChanged={loadComments}
+                                    compact
+                                    title="对这项评估的评论"
+                                    placeholder="对这个评估器的判断有什么意见或建议…"
+                                  />
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            {caseResults.length === 0 && (
+              <div style={{ ...CARD, padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
+                该 case 暂无评测结果——实验尚未执行
+              </div>
+            )}
+
+            {/* 本条 case 的整体评论（对单个评估器的意见留在各自卡片里） */}
+            {user && (
+              <div style={{ ...CARD, padding: '14px 16px', marginTop: 14 }}>
+                <EvalComments
+                  experimentId={id}
+                  user={user}
+                  caseId={caseId}
+                  comments={filterComments(comments, { caseId })}
+                  onChanged={loadComments}
+                  title="本条 Case 的评论"
+                  placeholder="对这条 case 的评测结果有什么意见或建议…"
+                />
+              </div>
+            )}
+          </>
+        )}
+      </PageContainer>
+    </>
+  );
+}

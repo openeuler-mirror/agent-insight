@@ -302,6 +302,22 @@ test('experiments API: persist and return normalized evaluator configs', async (
     widthNormalization: true,
     multiCandidateScoring: 'any',
   });
+  assert.deepEqual(detail.reusableConfig.evaluatorConfigs, detail.evaluatorConfigs);
+
+  const cloneRes = await createExperiment(postReq({
+    user: TEST_USER,
+    createMode: 'same-config',
+    sourceExperimentId: id,
+  }));
+  assert.equal(cloneRes.status, 201);
+  const cloned = await cloneRes.json();
+  const clonedDetailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${cloned.id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id: cloned.id }) },
+  );
+  assert.equal(clonedDetailRes.status, 200);
+  const clonedDetail = await clonedDetailRes.json();
+  assert.deepEqual(clonedDetail.evaluatorConfigs, detail.evaluatorConfigs);
 });
 
 test('experiments API: detail 404 for missing experiment', async () => {

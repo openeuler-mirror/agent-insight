@@ -24,15 +24,19 @@ export type EvaluatorRequirement = 'reference' | 'dataset_input' | 'tool_catalog
 export interface EvaluatorMeta {
   category: EvaluatorCategory;
   requires: EvaluatorRequirement[];
+  executionBackend?: 'experiment' | 'benchmark-service';
 }
 
 /** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。 */
 const PRESET_META: Record<string, EvaluatorMeta> = {
+  'benchmark:swe-bench': { category: 'res', requires: [], executionBackend: 'benchmark-service' },
   'skill-trigger-analyzer': { category: 'res', requires: [] },
   // 任务完成度：对照预期输出判定目标达成（团队评审确定为依赖预期输出）
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖预期输出
   'preset-agent-trace-quality': { category: 'traj', requires: [] },
+  'preset-agent-process-quality': { category: 'traj', requires: [] },
+  'preset-agent-step-efficiency': { category: 'traj', requires: [] },
   // 结果评测评估器（抽取自可靠性页；看结果 → res）。仅准确性依赖预期输出。
   'preset-result-accuracy': { category: 'res', requires: ['reference'] },
   'preset-result-answer': { category: 'res', requires: [] },
@@ -66,6 +70,8 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-ras-reliability-detection-recovery': { category: 'traj', requires: [] },
   'preset-agent-tool-success-rate': { category: 'traj', requires: [] },
   'preset-task-completion-no-ref': { category: 'res', requires: [] },
+  // 内容严谨性：只读最终输出；参考答案是可选依据，不做门控
+  'preset-rigor-content': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
@@ -93,6 +99,11 @@ export function hasPresetMeta(id: string): boolean {
   return Object.prototype.hasOwnProperty.call(PRESET_META, id);
 }
 
+export function getPresetExecutionBackend(id: string): 'experiment' | 'benchmark-service' {
+  if (id.startsWith('benchmark:')) return 'benchmark-service';
+  return PRESET_META[id]?.executionBackend ?? 'experiment';
+}
+
 /** 自建 LLM 评估器：requires 由提示词占位符推导。 */
 function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
   const requirements: EvaluatorRequirement[] = [];
@@ -103,6 +114,9 @@ function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
 
 export function getEvaluatorMeta(card: EvaluatorCard): EvaluatorMeta {
   if (card.source === 'preset') {
+    if (card.id.startsWith('benchmark:')) {
+      return { category: 'res', requires: [], executionBackend: 'benchmark-service' };
+    }
     return PRESET_META[card.id] ?? { ...DEFAULT_META, category: card.category ?? 'res' };
   }
   return { category: card.category ?? 'res', requires: deriveCustomRequires(card) };

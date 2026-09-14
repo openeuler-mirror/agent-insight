@@ -1,5 +1,6 @@
 import { db } from '@/lib/storage/prisma';
 import { normalizeConfigDatasetType } from '@/lib/engine/evaluation/config-dataset';
+import { resolveLoginMode } from '@/lib/auth/login-mode';
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
@@ -8,9 +9,11 @@ export async function GET(request: Request) {
     try {
         const { searchParams } = new URL(request.url);
         
-        if (searchParams.get('check_org') === 'true') {
+        if (searchParams.get('check_login') === 'true' || searchParams.get('check_org') === 'true') {
+            const loginMode = resolveLoginMode();
             return NextResponse.json({
-                org_mode: process.env.ORGANIZATION_MODE === 'true',
+                login_mode: loginMode,
+                org_mode: loginMode === 'organization',
                 org_login_redirect_url: process.env.ORG_LOGIN_REDIRECT_URL || ''
             });
         }

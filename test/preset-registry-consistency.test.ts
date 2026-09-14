@@ -12,11 +12,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '../src/lib/evaluators/preset-evaluators';
-import { hasPresetMeta } from '../src/lib/evaluators/registry';
+import { getPresetExecutionBackend, hasPresetMeta } from '../src/lib/evaluators/registry';
 import {
   FAITHFUL_PRESET_IDS,
   isFaithfulPresetId,
 } from '../src/lib/engine/experiment/faithful-preset-evaluators';
+import {
+  AGENT_TRAJECTORY_PRESET_IDS,
+  isAgentTrajectoryPresetId,
+} from '../src/lib/engine/experiment/agent-trajectory-preset-evaluators';
 import {
   RESULT_PRESET_IDS,
   isResultPresetId,
@@ -65,7 +69,10 @@ import {
   HALLUCINATION_PRESET_IDS,
   isHallucinationPresetId,
 } from '../src/lib/engine/experiment/hallucination-preset-evaluators';
-
+import {
+  RIGOR_PRESET_IDS,
+  isRigorPresetId,
+} from '../src/lib/engine/experiment/rigor-preset-evaluators';
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
  * 新增一族预置评估器时，在 evaluateOnce 里接了分发，就同步在这里登记一行。
@@ -77,6 +84,11 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID],
   },
   { name: 'faithful-preset-evaluators.ts', claims: isFaithfulPresetId, ids: FAITHFUL_PRESET_IDS },
+  {
+    name: 'agent-trajectory-preset-evaluators.ts',
+    claims: isAgentTrajectoryPresetId,
+    ids: AGENT_TRAJECTORY_PRESET_IDS,
+  },
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
   { name: 'text-preset-evaluators.ts', claims: isTextPresetId, ids: TEXT_PRESET_IDS },
   { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },
@@ -103,7 +115,21 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     claims: (id) => isFluencyPresetId(id) || isHallucinationPresetId(id),
     ids: [...FLUENCY_PRESET_IDS, ...HALLUCINATION_PRESET_IDS],
   },
+  { name: 'rigor-preset-evaluators.ts', claims: isRigorPresetId, ids: RIGOR_PRESET_IDS },
 ];
+
+test('旧质量卡保留 faithful runner，新过程质量卡与效率卡由 trajectory runner 唯一认领', () => {
+  const efficiency = presetEvaluators.find(card => card.id === 'preset-agent-step-efficiency');
+  const processQuality = presetEvaluators.find(card => card.id === 'preset-agent-process-quality');
+  assert.ok(efficiency, '缺少 Agent 步骤效率预置卡');
+  assert.ok(processQuality, '缺少 Agent 执行过程质量预置卡');
+  assert.equal(hasPresetMeta('preset-agent-step-efficiency'), true);
+  assert.equal(hasPresetMeta('preset-agent-process-quality'), true);
+  assert.equal(isAgentTrajectoryPresetId('preset-agent-step-efficiency'), true);
+  assert.equal(isAgentTrajectoryPresetId('preset-agent-process-quality'), true);
+  assert.equal(isAgentTrajectoryPresetId('preset-agent-trace-quality'), false);
+  assert.equal(isFaithfulPresetId('preset-agent-trace-quality'), true);
+});
 
 test('预置卡 id 唯一', () => {
   const seen = new Set<string>();
@@ -129,9 +155,13 @@ test('每张预置卡都在 registry 登记了元数据（否则静默回退 res
   }
 });
 
-test('每张预置卡都被恰好一个分发谓词认领（否则运行时才抛「缺少可执行的 LLM 配置」）', () => {
+test('普通预置卡由通用实验分发认领，外部调度卡不进入通用分发', () => {
   for (const card of presetEvaluators) {
     const owners = PRESET_RUNNERS.filter((r) => r.claims(card.id)).map((r) => r.name);
+    if (getPresetExecutionBackend(card.id) === 'benchmark-service') {
+      assert.equal(owners.length, 0, `${card.id} 由独立评测服务调度，不应进入通用实验分发`);
+      continue;
+    }
     assert.equal(
       owners.length,
       1,

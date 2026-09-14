@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/storage/prisma';
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
 import { createCommand, getCommand, markSent } from '@/lib/reliability/command-bus';
 import { dispatchCommand } from '@/lib/reliability/control-dispatch';
@@ -39,6 +40,13 @@ export class TraceGenerationError extends Error {
 const TERMINAL_COMMAND_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'EXPIRED', 'DELIVERY_FAILED']);
 const NON_RETRYABLE_FAILURE_CODES = new Set([
   'ACTION_NOT_ALLOWED',
+  'AGENT_EXIT_NONZERO',
+  'AGENT_NO_OUTPUT',
+  'AGENT_TIMEOUT',
+  'MODEL_ERROR',
+  'MODEL_NO_RESPONSE',
+  'MODEL_START_TIMEOUT',
+  'MODEL_UNAVAILABLE',
   'PAYLOAD_FORBIDDEN',
   'PLATFORM_NOT_AVAILABLE',
   'TRACE_ID_MISSING',
@@ -76,6 +84,14 @@ export function parseTraceIdFromCommandResult(resultJson: string | null | undefi
 
 export function isTraceGenerationFailureRetryable(code: string): boolean {
   return !NON_RETRYABLE_FAILURE_CODES.has(code);
+}
+
+export function isTraceGenerationCommandTerminal(status: string): boolean {
+  return TERMINAL_COMMAND_STATUSES.has(status);
+}
+
+export function canReconcileGeneratedTraceAttempt(failureCode: string | null | undefined): boolean {
+  return !failureCode || isTraceGenerationFailureRetryable(failureCode);
 }
 
 function commandFailure(command: CommandRow | null): AttemptFailure {
@@ -132,8 +148,7 @@ async function waitForCommand(commandId: string, timeoutMs: number): Promise<Com
   while (Date.now() - startedAt < timeoutMs) {
     const command = await getCommand(commandId);
     if (!command) return null;
-    if (parseTraceIdFromCommandResult(command.resultJson)) return command as CommandRow;
-    if (TERMINAL_COMMAND_STATUSES.has(command.status)) return command as CommandRow;
+    if (isTraceGenerationCommandTerminal(command.status)) return command as CommandRow;
     if (command.expiresAt.getTime() <= Date.now()) {
       return { ...command, status: 'EXPIRED' } as CommandRow;
     }
@@ -222,9 +237,11 @@ export async function reconcileGeneratedTraceCase(input: {
       id: true,
       traceId: true,
       commandId: true,
+      failureCode: true,
     },
   });
   for (const attempt of previous) {
+    if (!canReconcileGeneratedTraceAttempt(attempt.failureCode)) continue;
     let traceId = attempt.traceId;
     if (!traceId && attempt.commandId) {
       const command = await getCommand(attempt.commandId);
@@ -285,6 +302,7 @@ async function runAttempt(input: {
   });
 
   let failure: AttemptFailure | null = null;
+  let observedTraceId: string | null = null;
   try {
     const frame = await createCommand({
       user: input.req.user,
@@ -320,7 +338,8 @@ async function runAttempt(input: {
     if (dispatched.delivered) await markSent(frame.commandId, 'wss');
     const command = await waitForCommand(frame.commandId, (input.timeoutSeconds + 90) * 1_000);
     const traceId = parseTraceIdFromCommandResult(command?.resultJson);
-    if (!traceId && (!command || command.status !== 'SUCCEEDED')) {
+    observedTraceId = traceId;
+    if (!command || command.status !== 'SUCCEEDED') {
       failure = commandFailure(command);
     } else {
       if (!traceId) {
@@ -377,6 +396,7 @@ async function runAttempt(input: {
       where: { id: attempt.id },
       data: {
         status: retrying ? 'retry_wait' : 'failed',
+        traceId: observedTraceId || undefined,
         failureCode: settledFailure.code,
         errorMessage: settledFailure.message.slice(0, 2_000),
         finishedAt: retrying ? null : new Date(),
@@ -394,7 +414,10 @@ export async function generateExperimentTraces(
   req: TraceGenerationRequest,
   options: TraceGenerationOptions = {},
 ): Promise<TraceGenerationResult> {
-  const timeoutSeconds = Math.max(30, Math.min(req.timeoutSeconds ?? 180, 3_600));
+  const timeoutSeconds = Math.max(
+    30,
+    Math.min(req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS, 3_600),
+  );
   const latestAttempts = await prisma.experimentTraceAttempt.findMany({
     where: { caseId: { in: req.cases.map((item) => item.caseId) } },
     orderBy: { attemptNo: 'desc' },
@@ -496,7 +519,7 @@ export async function loadTraceGenerationRetryRequest(input: {
     select: { clientId: true, payloadJson: true, status: true },
   });
   if (!legacyCommand) return null;
-  if (!TERMINAL_COMMAND_STATUSES.has(legacyCommand.status)) {
+  if (!isTraceGenerationCommandTerminal(legacyCommand.status)) {
     throw new TraceGenerationError('trace_retry_in_progress', '该 Case 正在生成 Trace', 409);
   }
   const payload = parseObject(legacyCommand.payloadJson);
@@ -510,7 +533,7 @@ export async function loadTraceGenerationRetryRequest(input: {
     platform,
     agent,
     model: typeof payload.model === 'string' ? payload.model : null,
-    timeoutSeconds: Number(payload.timeoutSeconds) || 180,
+    timeoutSeconds: Number(payload.timeoutSeconds) || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
     cases: [{ caseId: row.id, input: row.input.trim() }],
   };
 }
