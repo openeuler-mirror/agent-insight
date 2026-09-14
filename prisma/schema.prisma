@@ -1105,6 +1105,8 @@ model Experiment {
   agentName            String    @default("")
   /// 选中的评估器 id 列表（JSON string[]；预置/自建统一 id 空间）
   evaluatorIdsJson     String    @default("[]")
+  /// 可配置预置评估器的实验级运行参数（版本化 JSON；旧实验 `{}` 按严格默认值解释）
+  evaluatorConfigsJson String    @default("{}")
   /// draft | running | done | failed
   status               String    @default("draft")
   /// 来源标记：''=全局实验；'skill-workbench'=Skill 工作台实验；

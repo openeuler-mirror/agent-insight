@@ -24,6 +24,10 @@ import { apiFetch } from '@/lib/client/api';
 import { categorySummary, effectiveScore, groupByCategory } from '@/lib/engine/experiment/detail-agg';
 import { deriveVerdict, displaySummary, isEvidenceRedundant, VERDICT_LABELS, type EvalVerdict } from '@/lib/evaluators/eval-output';
 import type { EvaluatorCategory } from '@/lib/evaluators/registry';
+import {
+  summarizeEvaluatorRunConfig,
+  type EvaluatorRunConfigMap,
+} from '@/lib/evaluators/evaluator-run-config';
 
 interface ResultRow {
   id: string;
@@ -47,6 +51,7 @@ interface ExperimentDetail {
   name: string;
   status: string;
   scope?: string;
+  evaluatorConfigs: EvaluatorRunConfigMap;
   cases: Array<{
     id: string;
     taskId: string | null;
@@ -687,6 +692,10 @@ export function ExperimentCaseDetail({
                       const shownScore = effectiveScore(r);
                       const summary = displaySummary(r.summary, r.evidence);
                       const rowComments = filterComments(comments, { resultId: r.id });
+                      const configSummary = summarizeEvaluatorRunConfig(
+                        r.evaluatorId,
+                        detail.evaluatorConfigs?.[r.evaluatorId as keyof EvaluatorRunConfigMap],
+                      );
                       const isBenchmarkEvaluator = isBenchmark && r.evaluatorId.startsWith('benchmark:');
                       if (isBenchmarkEvaluator) {
                         const passed = r.verdict === 'pass';
@@ -813,6 +822,15 @@ export function ExperimentCaseDetail({
                               </>
                             )}
                           </div>
+
+                          {configSummary && (
+                            <div style={{
+                              marginTop: 6, fontSize: 10.5, lineHeight: 1.5,
+                              color: 'var(--primary)',
+                            }}>
+                              运行配置：{configSummary}
+                            </div>
+                          )}
 
                           {/* 卡头第二行：一句话结论——这是用户要一眼看到的东西，永远展示 */}
                           {!failed && !pendingLike && summary && (

@@ -42,6 +42,9 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-result-answer': { category: 'res', requires: [] },
   'preset-result-faithfulness': { category: 'res', requires: [] },
   'preset-result-instruction': { category: 'res', requires: [] },
+  'preset-text-rouge': { category: 'res', requires: ['reference'] },
+  'preset-text-exact-match': { category: 'res', requires: ['reference'] },
+  'preset-text-entity-f1': { category: 'res', requires: ['reference'] },
   // 内容质量评估器：均不依赖预期输出
   'preset-content-insensitivity': { category: 'res', requires: [] },
   'preset-content-controversy': { category: 'res', requires: [] },

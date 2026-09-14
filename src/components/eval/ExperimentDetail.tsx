@@ -19,6 +19,10 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
+import {
+  summarizeEvaluatorRunConfig,
+  type EvaluatorRunConfigMap,
+} from '@/lib/evaluators/evaluator-run-config';
 import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import {
   isBenchmarkEvaluationInProgress,
@@ -36,6 +40,7 @@ interface ExperimentDetail {
   watchMode?: boolean;
   watchEnabledAt?: string | null;
   evaluatorIds: string[];
+  evaluatorConfigs: EvaluatorRunConfigMap;
   createdAt: string;
   cases: Array<{
     id: string;
@@ -432,7 +437,12 @@ export function ExperimentDetail({
                   评估器分解
                 </div>
                 <div style={{ padding: '12px 16px', display: 'grid', gap: 12 }}>
-                  {breakdown.map((row) => (
+                  {breakdown.map((row) => {
+                    const configSummary = summarizeEvaluatorRunConfig(
+                      row.evaluatorId,
+                      detail.evaluatorConfigs?.[row.evaluatorId as keyof EvaluatorRunConfigMap],
+                    );
+                    return (
                     <div key={row.evaluatorId} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                       <div style={{ width: 240, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -448,6 +458,14 @@ export function ExperimentDetail({
                         <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', marginTop: 2 }}>
                           {lookup.tagsOf(row.evaluatorId).join(' · ') || row.evaluatorId}
                         </div>
+                        {configSummary && (
+                          <div title={configSummary} style={{
+                            fontSize: 10.5, color: 'var(--primary)', marginTop: 2,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            配置：{configSummary}
+                          </div>
+                        )}
                       </div>
                       <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div style={{ flex: 1, height: 8, borderRadius: 5, background: 'var(--background-secondary)', overflow: 'hidden' }}>
@@ -470,7 +488,8 @@ export function ExperimentDetail({
                         )}
                       </span>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

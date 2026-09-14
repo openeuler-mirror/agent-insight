@@ -9,6 +9,10 @@ import {
   EvaluatorContextValidationError,
   serializeEvaluatorCaseContext,
 } from '@/lib/evaluators/evaluator-case-context';
+import {
+  EvaluatorRunConfigValidationError,
+  serializeEvaluatorRunConfigs,
+} from '@/lib/evaluators/evaluator-run-config';
 import { overallAverage } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
@@ -380,6 +384,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
     }
 
+    let evaluatorConfigsJson: string;
+    try {
+      evaluatorConfigsJson = serializeEvaluatorRunConfigs(body.evaluatorConfigs, evaluatorIds);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'invalid evaluatorConfigs';
+      return NextResponse.json(
+        { error: error instanceof EvaluatorRunConfigValidationError ? message : 'invalid evaluatorConfigs' },
+        { status: 400 },
+      );
+    }
+
     let normalizedCases: Array<Omit<CaseInput, 'faultInjectionType'> & {
       evaluatorContextJson: string | null
       faultInjectionType: string | null
@@ -425,6 +440,7 @@ export async function POST(req: Request) {
         type: 'single',
         agentName,
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
+        evaluatorConfigsJson,
         status: 'draft',
         scope,
         skillName,

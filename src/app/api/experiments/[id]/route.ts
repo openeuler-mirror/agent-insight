@@ -14,6 +14,7 @@ import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
@@ -85,7 +86,8 @@ export async function GET(
       where: { id, ...(username ? { user: username } : {}) },
       select: {
         id: true, user: true, name: true, type: true, agentName: true, status: true,
-        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true, createdAt: true,
+        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true,
+        evaluatorConfigsJson: true, createdAt: true,
         scope: true, skillName: true, skillVersion: true, preset: true,
         skillContextJson: true, configSnapshotJson: true, sourceExperimentId: true,
       },
@@ -99,6 +101,10 @@ export async function GET(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
+    const evaluatorConfigs = parseStoredEvaluatorRunConfigs(
+      experiment.evaluatorConfigsJson,
+      evaluatorIds,
+    );
     const benchmarkAdapterKey = evaluatorIds
       .find((evaluatorId) => evaluatorId.startsWith('benchmark:'))
       ?.slice('benchmark:'.length) || '';
@@ -503,6 +509,7 @@ export async function GET(
       watchMode: experiment.watchMode,
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
+      evaluatorConfigs,
       createdAt: experiment.createdAt,
       scope: experiment.scope,
       skillName: experiment.skillName,
@@ -530,6 +537,7 @@ export async function GET(
           : experiment.watchMode ? 'existing' : null,
         agentName: experiment.agentName,
         evaluatorIds,
+        evaluatorConfigs,
         executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
           ? {
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,

@@ -44,6 +44,7 @@
 | 安全与创意预置评估器 | [build-in-evaluators](build-in-evaluators/) | 新增不敏感性、争议性、性别歧视性、创造性 4 个 LLM Judge 预置评估器，专项检测 Agent 输出文本的安全风险与创意质量 | Feature | 2026-07-26 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | [#160](https://gitcode.com/openeuler/opensource-intern/issues/160) |
 | JiuwenSwarm 接入追踪（OTEL seam） | [jiuwenswarm-tracing](jiuwenswarm-tracing/) | 把 agent-insight 接入 openJiuwen / JiuwenSwarm，通过 OTEL seam 端到端追踪一次执行；含持久化 span spool 与 token 归属边界记录 | Feature | 2026-06-13 | ✅ 已验证（spike 结论已落地，见 design.md status: validated） | —（待补） |
 | 链路追踪搜索/过滤改造（langfuse operator 模型） | [langfuse-style-trace-search](langfuse-style-trace-search/) | `/trace` 列表的搜索与过滤对齐 langfuse 的 operator 模型（搜索栏 + 左侧 facet 侧栏） | Feature | 2026-06-15 | 🟡 实现中（front-half 已落地：搜索栏 + facet 侧栏 + skill 接线） | —（待补） |
+| 文本评估器运行配置 | [text-evaluator-run-config](text-evaluator-run-config/) | 为完全精确匹配和实体 F1 增加实验级页面配置、持久化、执行接线与结果配置摘要 | Feature | 2026-08-13 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
 | agent_ras 环内 runtime | [`../agent-ras/designs/architecture.md`](../agent-ras/designs/architecture.md) | 仓根 `agent_ras/` 同进程检测与恢复；旁路经 **`/api/ingest/ras-events`**（见 developer-guide） | Feature | 2026-07-25 | ✅ inproc 已实现 | 安装器 + 可靠性链路 + ingest API |
 | AgentRAS 可靠性独立页面 | [reliability-standalone-ui](reliability-standalone-ui/) | 独立导航「AgentRAS 可靠性」；可靠性追踪 + 故障模式 + 故障注入与评测（已接真实 BFF；UI 含 RasAnomalyStrip） | Feature | 2026-07-28 | ✅ 已实现 | —（待补） |
 | 工具重复死循环检测与恢复 | [`../agent-ras/designs/features/repeat-tool.md`](../agent-ras/designs/features/repeat-tool.md) | 同参重复 / 失败连打 / ping-pong / 全局断路；steering + notice | Feature | 2026-08-13 | ✅ 已实现 | — |

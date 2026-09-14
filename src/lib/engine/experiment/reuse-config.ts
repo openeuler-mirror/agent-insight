@@ -88,6 +88,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
       data: {
         sourceExperimentId: source.id,
         configSnapshotJson: source.configSnapshotJson,
+        evaluatorConfigsJson: source.evaluatorConfigsJson,
       },
     })
     await autoPairGroups(created.id)
@@ -123,6 +124,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
       type: source.type,
       agentName: source.agentName,
       evaluatorIdsJson: source.evaluatorIdsJson,
+      evaluatorConfigsJson: source.evaluatorConfigsJson,
       status: 'draft',
       scope: source.scope,
       skillName: source.skillName,
