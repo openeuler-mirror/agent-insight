@@ -257,7 +257,7 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
 
 2. 根据部署模式完成登录，进入默认 Workspace。
    - 默认 `LOGIN_MODE=standalone`：在登录页输入邮箱。
-   - `LOGIN_MODE=idaas_oauth`：点击“统一身份登录”，在 IDaaS 完成认证；平台使用 IDaaS 返回的唯一 UUID 作为本地账号；用户可从侧边栏退出当前网页账号，再次登录仍进入统一身份授权。
+   - `LOGIN_MODE=idaas_oauth`：点击“统一身份登录”，在 IDaaS 完成认证；平台使用 IDaaS 返回的唯一 UUID 作为本地账号和数据归属；人员接口返回账号别名时，侧边栏优先显示该别名，否则显示 UUID；用户可从侧边栏退出当前网页账号，再次登录仍进入统一身份授权。
    - 历史 `ORGANIZATION_MODE=true`：继续使用原组织网关和 Cookie 登录，不等同于 IDaaS OAuth 登录。
 
    使用 `scripts/develop_start.sh` 启动时，IDaaS OAuth 模式只检查状态接口确认服务就绪，不会创建 `admin` Key；已有客户端 Key 保持不变，没有 Key 时在首次登录后从安装指导获取。

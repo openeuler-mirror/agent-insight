@@ -49,10 +49,11 @@ model SkillVersion {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  username  String   @unique
-  apiKey    String   @unique
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  username        String   @unique
+  externalAccount String?  @unique
+  apiKey          String   @unique
+  createdAt       DateTime @default(now())
 }
 
 model Execution {

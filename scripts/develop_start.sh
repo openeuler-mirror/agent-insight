@@ -246,8 +246,8 @@ if [[ "${DATABASE_URL:-}" == file:* ]]; then
     exit 1
   fi
 fi
-# 走 db_push.sh 而不是直接 npx：它对「整型列加宽 Int→BigInt」这一类无损变更放行，
-# 其余破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
+# 走 db_push.sh 而不是直接 npx：它只对脚本内精确列出的无损变更放行，
+# 其余潜在破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
 if ! sh scripts/db_push.sh; then
   echo ""
   echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
