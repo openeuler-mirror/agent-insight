@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `26f5ecfab282fc40703eda2ec2a489f03c2f5ff7` (`26f5ecfa`) |
+| Commit | `f71471f03450270065b6fe765f07d4dfb621e7dc` (`f71471f0`) |
 | Branch | `codex/fix-issues-298-299-master` |
-| Date | 2026-09-14T11:20:46+08:00 |
+| Date | 2026-09-14T12:15:11+08:00 |
 | Author | mintuyang |
-| Subject | `fix: 实时提取后回写关键观点缓存` |
-| Working tree overlay | 当前工作树在该快照之上更新评估器与评测集指南，记录配置跳转、刷新标签状态、弹窗下拉交互、空数据项校验、本地导入、根因提取缓存策略及评测时单 case 懒写回。 |
+| Subject | `fix: 补齐实验关键观点缓存回写` |
+| Working tree overlay | 当前工作树在该快照之上更新评测器与评测集指南，记录配置跳转、刷新标签状态、弹窗下拉交互、空数据项校验、本地导入，以及普通实验的关键观点缓存复用、实时提取回写与空提取兜底策略。 |
 
 Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评估器及配套需求、设计、验收和使用说明；原轨迹质量评估器保持不变。
 
@@ -22,7 +22,7 @@ Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评
 
 Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语义 ingest、领域查询与完整度展示；Pi passive importer 使用独立持久化断点，只追加新增或修订事件。服务端对 `goal-plus:` session 启用持久化精确去重、并发锁、写入上限和流式聚合边界，并提供默认只读的历史 spool 修复工具。共享 uploader lock 支持原子发布及旧空锁、损坏锁、本机死进程锁恢复；Goal Plus Pi 上传采用最新分区优先和单轮有界策略，并暴露阻塞原因。Pi RPC Worker 区分受控交接终止与真实超时或 runner 错误；独立接入的 Pi 保持原有 oldest-first 和完整 backlog 处理语义。当前入口暂时隐藏，后端接入与查询能力保留。
 
-**如何更新：** `git diff 26f5ecfa HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff f71471f0 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
