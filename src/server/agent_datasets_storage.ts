@@ -776,7 +776,14 @@ export function prepareLiveRootCauseCacheWrite(
 
   const currentCase = dataset.cases[caseIndex];
   if (currentCase.expectedOutput !== expectedOutput) return { status: 'stale' };
-  if (canReuseRootCauseCache(currentCase.expectedOutput, currentCase.rootCauseMeta)) {
+  if (
+    canReuseRootCauseCache(currentCase.expectedOutput, currentCase.rootCauseMeta)
+    && currentCase.rootCauseMeta?.status !== 'failed'
+    && (
+      currentCase.rootCauseMeta?.status === 'empty'
+      || normalizeRootCauseItems(currentCase.rootCauses).length > 0
+    )
+  ) {
     return { status: 'already-cached' };
   }
 

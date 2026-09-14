@@ -93,3 +93,21 @@ test('does not write a failed live extraction', async () => {
   assert.deepEqual(result.rootCauses, []);
   assert.equal(writes, 0);
 });
+
+test('falls back to the full expected output when live extraction returns no key points', async () => {
+  const writes: unknown[] = [];
+  const result = await resolveRootCauses(
+    {
+      ...baseInput,
+      onLiveRootCausesExtracted: rootCauses => {
+        writes.push(rootCauses);
+      },
+    },
+    'tester',
+    async () => [],
+  );
+
+  assert.equal(result.source, 'live-extract');
+  assert.deepEqual(result.rootCauses, [{ content: 'expected answer', weight: 1 }]);
+  assert.deepEqual(writes, [[{ content: 'expected answer', weight: 1 }]]);
+});

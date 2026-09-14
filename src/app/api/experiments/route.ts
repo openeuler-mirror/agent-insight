@@ -3,6 +3,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
+import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,8 @@ interface CaseInput {
   input?: string;
   actualOutput?: string;
   referenceOutput?: string | null;
+  datasetId?: string | null;
+  datasetCaseId?: string | null;
 }
 
 export async function GET(req: Request) {
@@ -111,6 +114,12 @@ export async function POST(req: Request) {
               c.referenceOutput != null && String(c.referenceOutput).trim() !== ''
                 ? String(c.referenceOutput)
                 : null,
+            caseValuesJson: c.datasetId && c.datasetCaseId
+              ? JSON.stringify(withExperimentDatasetCaseBinding(null, {
+                  datasetId: String(c.datasetId),
+                  caseId: String(c.datasetCaseId),
+                }))
+              : null,
           })),
         },
       },

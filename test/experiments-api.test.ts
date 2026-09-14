@@ -31,7 +31,10 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
     name: '冒烟实验',
     agentName: 'smoke-agent',
     cases: [
-      { executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1' },
+      {
+        executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1',
+        datasetId: 'dataset-1', datasetCaseId: 'dataset-case-1',
+      },
       { executionId: 'exec-2', taskId: 'task-2', input: 'q2', actualOutput: 'a2' },
     ],
     evaluatorIds: ['preset-agent-trace-quality', 'preset-agent-task-completion'],
@@ -67,6 +70,14 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   assert.equal(detail.cases.length, 2);
   assert.equal(detail.cases[0].referenceOutput, 'ref1');
   assert.equal(detail.cases[1].referenceOutput, null);
+  const storedCase = await prisma.experimentCase.findFirst({
+    where: { experimentId: id, taskId: 'task-1' },
+    select: { caseValuesJson: true },
+  });
+  assert.deepEqual(JSON.parse(storedCase?.caseValuesJson || '{}').__agentInsightDatasetCase, {
+    datasetId: 'dataset-1',
+    caseId: 'dataset-case-1',
+  });
   assert.deepEqual(detail.results, []);
 });
 

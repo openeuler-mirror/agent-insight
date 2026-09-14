@@ -202,3 +202,53 @@ test('does not overwrite an already valid root cause cache', () => {
   assert.equal(result.status, 'already-cached');
   assert.equal(result.cases, undefined);
 });
+
+test('replaces a failed extraction marker after a later live extraction succeeds', () => {
+  const current = normalizeCase({
+    id: 'case-1',
+    input: 'q',
+    expectedOutput: 'answer',
+    rootCauses: [],
+    rootCauseMeta: {
+      status: 'failed',
+      expectedOutputHash: hashExpectedOutput('answer'),
+      updatedAt: '2026-05-26T00:00:00.000Z',
+      error: 'temporary model failure',
+    },
+  });
+  const result = prepareLiveRootCauseCacheWrite(
+    datasetWithCases([current]),
+    'case-1',
+    'answer',
+    [{ content: 'recovered point', weight: 1 }],
+    new Date('2026-05-27T00:00:00.000Z'),
+  );
+
+  assert.equal(result.status, 'updated');
+  assert.deepEqual(result.cases?.[0]?.rootCauses, [{ content: 'recovered point', weight: 1 }]);
+  assert.equal(result.cases?.[0]?.rootCauseMeta?.status, 'ready');
+});
+
+test('repairs a ready cache that contains no key points for a non-empty expected output', () => {
+  const current = normalizeCase({
+    id: 'case-1',
+    input: 'q',
+    expectedOutput: 'answer',
+    rootCauses: [],
+    rootCauseMeta: {
+      status: 'ready',
+      expectedOutputHash: hashExpectedOutput('answer'),
+      updatedAt: '2026-05-26T00:00:00.000Z',
+    },
+  });
+  const result = prepareLiveRootCauseCacheWrite(
+    datasetWithCases([current]),
+    'case-1',
+    'answer',
+    [{ content: 'fallback point', weight: 1 }],
+    new Date('2026-05-27T00:00:00.000Z'),
+  );
+
+  assert.equal(result.status, 'updated');
+  assert.deepEqual(result.cases?.[0]?.rootCauses, [{ content: 'fallback point', weight: 1 }]);
+});

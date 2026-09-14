@@ -1392,11 +1392,16 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
         caseEntry?.rootCauseMeta
         && canReuseRootCauseCache(caseEntry.expectedOutput, caseEntry.rootCauseMeta),
     );
-    const precomputedRootCauses = cachedRootCausesUsable && caseEntry?.rootCauseMeta?.status === 'ready'
+    const cachedReadyRootCausesUsable = Boolean(
+        cachedRootCausesUsable
+        && caseEntry?.rootCauseMeta?.status === 'ready'
+        && (caseEntry.rootCauses?.length || 0) > 0,
+    );
+    const precomputedRootCauses = cachedReadyRootCausesUsable
         ? caseEntry.rootCauses || []
         : undefined;
     const precomputedRootCauseSource = cachedRootCausesUsable
-        ? (caseEntry?.rootCauseMeta?.status === 'empty' ? 'none' : caseEntry?.rootCauseMeta?.status === 'ready' ? 'dataset-cache' : undefined)
+        ? (caseEntry?.rootCauseMeta?.status === 'empty' ? 'none' : cachedReadyRootCausesUsable ? 'dataset-cache' : undefined)
         : undefined;
     const liveRootCauseCacheTarget = matchedDatasetMeta?.id && caseEntry.id
         ? {

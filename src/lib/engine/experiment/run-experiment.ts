@@ -38,6 +38,8 @@ import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
 import { isSafetyPresetId, runSafetyPreset } from './safety-preset-evaluators';
+import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
+import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -114,13 +116,26 @@ export function extractToolCallNames(interactions: unknown[]): string[] {
   return names;
 }
 
+function parseCaseValues(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadCaseRuntime(caseRow: {
   executionId: string | null;
   taskId: string | null;
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
-}, user: string): Promise<CaseRuntime> {
+  caseValuesJson?: string | null;
+}, user: string, loadRootCauseContext = false): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
   const execution = caseRow.executionId
@@ -166,6 +181,13 @@ async function loadCaseRuntime(caseRow: {
   // 用 Execution.query / Execution.finalResult 兜底（trace 模式无 dataset case）。
   const caseInput = caseRow.input || execution?.query || '';
   const actualOutput = caseRow.actualOutput || execution?.finalResult || '';
+  const rootCauseResolution = loadRootCauseContext
+    ? await loadExperimentRootCauseResolutionContext({
+        user,
+        referenceOutput: caseRow.referenceOutput,
+        caseValues: parseCaseValues(caseRow.caseValuesJson),
+      })
+    : {};
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
@@ -188,6 +210,7 @@ async function loadCaseRuntime(caseRow: {
       skill: execution.skill, skillVersion: execution.skillVersion,
       invokedSkills: execution.invokedSkills, skills: execution.skills,
     } : null,
+    ...rootCauseResolution,
   };
 
   return { judgeCtx, faithfulCtx };
@@ -272,7 +295,11 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   let localAttempts = 0;
   let lastError: unknown = null;
 
-  const runtime = await loadCaseRuntime(row.case, user);
+  const runtime = await loadCaseRuntime(
+    row.case,
+    user,
+    row.evaluatorId === 'preset-agent-task-completion',
+  );
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     localAttempts = attempt;
@@ -550,19 +577,32 @@ export async function addEvalExperimentCase(
     input: string;
     actualOutput: string;
     referenceOutput?: string | null;
+    datasetBinding?: { datasetId: string; caseId: string } | null;
   },
 ): Promise<string> {
   if (c.taskId) {
     const existing = await prisma.experimentCase.findFirst({
       where: { experimentId, taskId: c.taskId },
-      select: { id: true },
+      select: { id: true, caseValuesJson: true },
     });
     if (existing) {
       // 复用已有 case；若这次拿到了参考答案而旧值为空则回填
-      if (c.referenceOutput != null && String(c.referenceOutput).trim()) {
+      if ((c.referenceOutput != null && String(c.referenceOutput).trim()) || c.datasetBinding) {
         await prisma.experimentCase.update({
           where: { id: existing.id },
-          data: { referenceOutput: c.referenceOutput },
+          data: {
+            ...(c.referenceOutput != null && String(c.referenceOutput).trim()
+              ? { referenceOutput: c.referenceOutput }
+              : {}),
+            ...(c.datasetBinding
+              ? {
+                  caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding(
+                    parseCaseValues(existing.caseValuesJson),
+                    c.datasetBinding,
+                  )),
+                }
+              : {}),
+          },
         });
       }
       return existing.id;
@@ -576,6 +616,9 @@ export async function addEvalExperimentCase(
       input: c.input,
       actualOutput: c.actualOutput,
       referenceOutput: c.referenceOutput ?? null,
+      caseValuesJson: c.datasetBinding
+        ? JSON.stringify(withExperimentDatasetCaseBinding(null, c.datasetBinding))
+        : null,
     },
     select: { id: true },
   });
