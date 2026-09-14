@@ -357,9 +357,9 @@ export default function AgentDatasetCenter() {
   };
 
   const openImport = () => {
-    setCreateMenuOpen(false);
     setTableActionError('');
     fileInputRef.current?.click();
+    setCreateMenuOpen(false);
   };
 
   const handleFileChosen = async (file: File | null) => {
@@ -625,20 +625,20 @@ export default function AgentDatasetCenter() {
                 </span>
                 导入本地文件
               </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json,.csv,application/json,text/csv"
-                style={{ display: 'none' }}
-                onChange={e => {
-                  const f = e.target.files?.[0] ?? null;
-                  void handleFileChosen(f);
-                  // 同一文件二次选择也能触发 change
-                  e.target.value = '';
-                }}
-              />
             </div>
           )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.csv,application/json,text/csv"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const f = e.target.files?.[0] ?? null;
+              void handleFileChosen(f);
+              // 同一文件二次选择也能触发 change
+              e.target.value = '';
+            }}
+          />
         </div>
       </div>
 
