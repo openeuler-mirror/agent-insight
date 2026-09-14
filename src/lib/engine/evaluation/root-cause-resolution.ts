@@ -27,7 +27,10 @@ export async function resolveRootCauses(
     return { rootCauses: [], source: 'none' };
   }
   try {
-    const rootCauses = await extractor(input.caseInput, input.expectedOutput, user);
+    const extracted = await extractor(input.caseInput, input.expectedOutput, user);
+    const rootCauses = extracted.length > 0
+      ? extracted
+      : [{ content: String(input.expectedOutput).trim(), weight: 1 }];
     try {
       await input.onLiveRootCausesExtracted?.(rootCauses);
     } catch (error) {

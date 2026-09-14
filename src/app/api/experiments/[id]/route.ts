@@ -15,6 +15,7 @@ import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/deta
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
+import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 
 export const dynamic = 'force-dynamic';
 
@@ -466,7 +467,7 @@ export async function GET(
           try {
             const parsed = JSON.parse(c.caseValuesJson) as unknown;
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              caseValues = parsed as Record<string, unknown>;
+              caseValues = withoutExperimentDatasetCaseBinding(parsed as Record<string, unknown>);
             }
           } catch {
             caseValues = null;

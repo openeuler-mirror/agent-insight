@@ -11,6 +11,7 @@ import {
 } from '@/lib/evaluators/evaluator-case-context';
 import { overallAverage } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
+import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,8 @@ interface CaseInput {
   /** IF-M02：可靠性 case 的故障模式 id，落盘到 ExperimentCase.faultInjectionType */
   faultInjectionType?: string;
   values?: Record<string, unknown>;
+  datasetId?: string;
+  datasetCaseId?: string;
 }
 
 interface ExperimentScoreRow {
@@ -212,13 +215,17 @@ export async function POST(req: Request) {
             ? String(item.values.fault_injection_type).trim()
             : '') ||
           null;
-        const caseValuesJson =
-          item.values && typeof item.values === 'object'
-            ? JSON.stringify({
-                ...item.values,
-                ...(fault ? { fault_injection_type: fault } : {}),
-              })
-            : null;
+        const visibleValues = {
+          ...(item.values && typeof item.values === 'object' ? item.values : {}),
+          ...(fault ? { fault_injection_type: fault } : {}),
+        };
+        const datasetId = String(item.datasetId || '').trim();
+        const datasetCaseId = String(item.datasetCaseId || '').trim();
+        const caseValues = withExperimentDatasetCaseBinding(
+          visibleValues,
+          datasetId && datasetCaseId ? { datasetId, caseId: datasetCaseId } : null,
+        );
+        const caseValuesJson = Object.keys(caseValues).length ? JSON.stringify(caseValues) : null;
         const { faultInjectionType: _ignoredFault, ...rest } = item;
         void _ignoredFault;
         return {
