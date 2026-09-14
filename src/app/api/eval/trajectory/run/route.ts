@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
-import { findAgentDataset, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
+import {
+    cacheLiveRootCausesForDatasetCase,
+    findAgentDataset,
+    type AgentDatasetRecord,
+    type DatasetCase,
+} from '@/server/agent_datasets_storage';
 import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
     evaluateTrajectoryViaOpencode,
@@ -373,6 +378,7 @@ async function evaluateTaskCompletionAgainstExpected(
     actualOutput: string,
     precomputedRootCauses?: RootCauseItem[],
     precomputedRootCauseSource?: 'dataset-cache' | 'none',
+    onLiveRootCausesExtracted?: TaskCompletionEvalInput['onLiveRootCausesExtracted'],
     traceSummaryText?: string,
     skillContext?: TaskCompletionEvalInput['skillContext'],
     skillAttributionMode?: TaskCompletionEvalInput['skillAttributionMode'],
@@ -387,6 +393,7 @@ async function evaluateTaskCompletionAgainstExpected(
             actualOutput,
             precomputedRootCauses,
             precomputedRootCauseSource,
+            onLiveRootCausesExtracted,
             traceSummaryText,
             skillContext,
             skillAttributionMode,
@@ -1413,6 +1420,27 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
     const precomputedRootCauseSource = cachedRootCausesUsable
         ? (caseEntry?.rootCauseMeta?.status === 'empty' ? 'none' : caseEntry?.rootCauseMeta?.status === 'ready' ? 'dataset-cache' : undefined)
         : undefined;
+    const liveRootCauseCacheTarget = matchedDatasetMeta?.id && caseEntry.id
+        ? {
+            datasetId: matchedDatasetMeta.id,
+            caseId: caseEntry.id,
+            expectedOutput: caseEntry.expectedOutput,
+        }
+        : null;
+    const onLiveRootCausesExtracted = liveRootCauseCacheTarget
+        ? async (rootCauses: RootCauseItem[]) => {
+            const status = await cacheLiveRootCausesForDatasetCase({
+                user,
+                ...liveRootCauseCacheTarget,
+                rootCauses,
+            });
+            if (status === 'stale' || status === 'conflict') {
+                console.warn(
+                    `[trajectory/run] skipped live root cause cache write (${status}) for ${liveRootCauseCacheTarget.datasetId}/${liveRootCauseCacheTarget.caseId}`,
+                );
+            }
+        }
+        : undefined;
 
     const taskInputForEvaluation = traceQuery || caseEntry.input || '';
     const caseSnapshot = {
@@ -1644,6 +1672,7 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
                     resultActualOutput,
                     precomputedRootCauses,
                     precomputedRootCauseSource,
+                    onLiveRootCausesExtracted,
                     traceSummaryForResultEvaluation,
                     taskCompletionSkillContext,
                     resultSkillMode,
