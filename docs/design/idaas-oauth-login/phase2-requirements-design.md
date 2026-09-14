@@ -49,9 +49,9 @@ IDaaS 地区访问限制默认关闭；启用时还需配置 `IDAAS_REGION_ACCES
 2. token endpoint 按既有接入约定以 POST + query 参数接收授权码、client ID、client secret、redirect URI。
 3. userinfo endpoint 按既有接入约定以 POST + query 参数接收 scope、client ID、access token。
 4. 读取并校验非空 UUID，去除首尾空白后保持原值。
-5. 地区限制开启时，以 `{ uuids: [uuid] }` 查询人员信息；直接常驻地、组织树或主管常驻地命中欧盟时拒绝。
+5. 地区限制开启时，以 `{ uuids: [uuid] }` 查询人员信息；直接常驻地、组织树或主管常驻地命中欧盟时拒绝。同一响应中的 `w3Account` 只在接口边界读取，进入平台后统一表示为 `externalAccount`。
 6. 地区查询异常、空数据或关键字段缺失时失败关闭，拒绝本次登录。
-7. 仅在地区检查放行后，按 UUID 查找或并发安全地创建本地 User，新用户复用现有示例初始化。
+7. 仅在地区检查放行后，按 UUID 查找或并发安全地创建本地 User，新用户复用现有示例初始化；非空外部账号写入同一 User，已有用户登录时同步更新。
 8. 生成只包含 username、nonce、过期时间的签名登录结果 Cookie，清除 state Cookie。
 9. 跳回 `/login?idaas=complete`，保留已验证的 returnTo。
 
@@ -61,7 +61,7 @@ IDaaS 地区访问限制默认关闭；启用时还需配置 `IDAAS_REGION_ACCES
 
 1. 校验模式及签名登录结果 Cookie。
 2. 按 Cookie 中 username 重新读取 User。
-3. 返回现有 AuthContext 所需的 `username`、`apiKey`，并清除结果 Cookie。
+3. 返回现有 AuthContext 所需的 `username`、`apiKey` 和仅用于界面展示的 `displayName`，并清除结果 Cookie；`displayName` 优先取外部账号，缺失时回退 UUID。
 
 签名密钥从 client secret 通过带固定用途标签的 SHA-256 派生，避免直接混用原始字节。Cookie 均为 HttpOnly、SameSite=Lax；redirect URI 为 HTTPS 时加 Secure。
 
@@ -71,7 +71,8 @@ IDaaS 地区访问限制默认关闭；启用时还需配置 `IDAAS_REGION_ACCES
 - 本地模式继续调用 `POST /api/auth/apikey`。
 - 历史组织模式继续调用 `GET /api/auth/organization`。
 - IDaaS 模式首次登录跳转 authorize；callback 返回后由登录页 POST complete，再复用现有 `login()`。
-- IDaaS 模式恢复本地状态时，`POST /api/auth/apikey` 必须携带已保存 API Key，并以去除首尾空白但保持大小写的 UUID 精确匹配已有用户；standalone 邮箱仍转为小写。服务端先验证现有用户，再执行同一地区检查；受限返回 403，校验不可用返回 503，均不允许恢复或签发 Key。
+- IDaaS 模式恢复本地状态时，`POST /api/auth/apikey` 必须携带已保存 API Key，并以去除首尾空白但保持大小写的 UUID 精确匹配已有用户；standalone 邮箱仍转为小写。服务端先验证现有用户，再执行同一地区检查；受限返回 403，校验不可用返回 503，均不允许恢复或签发 Key。检查放行后同步响应中的外部账号，并返回 `displayName`。
+- `AuthProvider.user` 始终保留 UUID，继续作为所有业务 API 的用户参数；新增 `displayName` 只供界面消费。`AppSidebar` 显示 `displayName || user`，头像首字符采用相同值。
 - `AppSidebar` 在所有登录模式下渲染通用退出菜单；退出清除 `localStorage` 中的 username/API Key 并返回登录页，不吊销 API Key，也不调用 IDaaS logout endpoint。
 
 ## 启动同步
@@ -93,7 +94,9 @@ IDaaS 地区访问限制默认关闭；启用时还需配置 `IDAAS_REGION_ACCES
 
 ## 数据模型
 
-不新增表。User 仍以 `username` 唯一；IDaaS UUID 去除首尾空白后直接作为 username。登录衔接使用短时签名 Cookie，不保存 OAuth token。地区 IAM token 在进程内缓存 10 小时，UUID 和主管人员记录缓存 2 小时，重启清空且多实例之间不共享。
+不新增表。User 仍以 `username` 唯一；IDaaS UUID 去除首尾空白后直接作为 username。User 新增可空且唯一的 `externalAccount`，只保存人员接口返回的账号别名，用于界面展示及运维反查；所有业务表的 `user` 字段仍保存 UUID。登录衔接使用短时签名 Cookie，不保存 OAuth token。地区 IAM token 在进程内缓存 10 小时，UUID 和主管人员记录缓存 2 小时，重启清空且多实例之间不共享。
+
+SQLite 由既有 `prisma db push` 添加字段和唯一索引；`scripts/db_push.sh` 只对 `User.externalAccount` 的精确唯一约束告警自动使用 `--accept-data-loss`，若混入任何其他非白名单告警仍停止启动。OpenGauss 由 `scripts/init_opengauss.py` 为新库建列、为旧库增量补列。新增列可空，因此旧数据无需回填；用户下次成功登录或恢复会话时补齐。
 
 ## 安全边界
 

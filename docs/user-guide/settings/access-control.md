@@ -22,7 +22,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 | --- | --- | --- |
 | 本地登录 | `LOGIN_MODE=standalone`（默认） | 用户输入邮箱，登录即注册，可以主动退出 |
 | 历史组织集成 | `ORGANIZATION_MODE=true`、`ORG_*` | 依赖上游网关 Cookie，并可联动组织 Skill 接口 |
-| IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，按返回 UUID 注册或登录，可退出当前网页账号 |
+| IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，以 UUID 归属数据，侧边栏优先显示人员账号，可退出当前网页账号 |
 
 历史组织集成是以前为特定应用保留的组织接口能力；IDaaS OAuth 登录是独立的 OAuth 2.0 授权码登录。两者不共享配置、接口或 Cookie，也不支持同时开启。冲突配置会显示登录配置错误，不会降级为本地登录。
 
@@ -68,7 +68,9 @@ IDAAS_REGION_ACCESS_IAM_ENTERPRISE=
 IDAAS_REGION_ACCESS_TLS_VERIFY=false
 ```
 
-真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。地区限制开启后，平台在创建用户前固定以 `{ uuids: [uuid] }` 查询人员信息，并在已有账号恢复时复查。欧盟地区显示“您的地区暂无法使用”；IAM/人员接口异常、空数据或关键字段缺失时失败关闭，显示“地区信息校验失败，请稍后重试”。
+真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。地区限制开启后，平台在创建用户前固定以 `{ uuids: [uuid] }` 查询人员信息，并在已有账号恢复时复查。同一人员响应中的 `w3Account` 会保存到 UUID 对应用户的 `externalAccount` 字段，只用于侧边栏展示和运维反查；接口未返回时仍显示 UUID。已有用户会在下次成功登录或恢复会话时自动补齐。欧盟地区显示“您的地区暂无法使用”；IAM/人员接口异常、空数据或关键字段缺失时失败关闭，显示“地区信息校验失败，请稍后重试”。
+
+运维人员可按外部账号查询对应 UUID：`SELECT username FROM "User" WHERE "externalAccount" = ?`。真实账号值只存在部署数据库中，不进入代码仓。
 
 网页登录没有固定的空闲或绝对过期时间。浏览器会在当前 origin 的 `localStorage` 中保存 UUID 和 API Key，重新打开页面时使用两者恢复登录；API Key 有效且数据库用户仍存在时无需重新走 IDaaS。清理站点数据、改用其他协议/域名/IP/端口、API Key 或用户被删除、数据库被重置，或者部署切换登录模式时，需要重新登录。OAuth state 的 5 分钟有效期和 callback 登录票据的 60 秒有效期只约束单次授权跳转，不是网页会话时长；重新走 OAuth 时是否再次输入账号密码，由公司 IDaaS 的 SSO 会话策略决定。
 
