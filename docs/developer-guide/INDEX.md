@@ -117,3 +117,5 @@
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。
 
 本次合并保留本地跨 Session 协作后端、Goal Plus worker 投影及其事务一致性修复，并保留远程 Benchmark、文本评估器、Pi RAS 和 IDaaS 账号别名实现。具体契约分别见对应指南。
+
+本次基于 `8ce387aa` 合并跨 Session Trace 展示修复，保留 Goal Plus worker 投影、折叠与正文版本校验；显式上报关系使用独立投影，无定位时按顺序并列展示。

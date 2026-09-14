@@ -433,7 +433,7 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 
 ## 自定义 Agent 调用关系（后端接口）
 
-当 Agent 通过自定义脚本或工具调用另一个 Agent，原框架没有记录父子关系时，可独立上报协作关系。现有 Trace 上传方式不变；当前版本提供后端查询，尚未增加关系图界面，也不会改写原 Trace 树。
+当 Agent 通过自定义脚本或工具调用另一个 Agent，原框架没有记录父子关系时，可独立上报协作关系。现有 Trace 上传方式不变；默认“主 Agent”列表会合并为一条 Trace，详情复用现有树显示各 Agent 与工具；原始数据不改写，不新增关系图界面。
 
 ### 1. 绑定原 Trace 会话
 
@@ -582,3 +582,31 @@ rg '返回的请求编号' server.log
 数据库同步失败会阻止启动；原因打印在**启动终端**，因为此时服务尚未启动、server.log 重定向尚未开始。不要通过 reset 或随意添加 --accept-data-loss 绕过其他历史 schema 冲突。
 
 配置 DB_HOST 时两个脚本也会调用 `scripts/init_opengauss.py`，本次已补齐对应新表与索引。OpenGauss 实库尚未联调，SQLite 升级测试不代表 OpenGauss 验收。
+
+### 7. 在链路追踪页面验证合并
+
+先用原有上传接口分别上传主 Agent 和子 Agent 的完整 Trace。各自使用不同的 `task_id`，不要求使用原生 `task` 工具，也不要求伪造 `subagent_session_id`。再按上述接口绑定两个 `sessionId` 到各自的 `traceSessionId`（即上传的 `task_id`），最后上报关系。三个步骤使用同一账号的 API Key。
+
+- **提供 `fromLocator`**：复用工具或命令定位逻辑，在匹配的工具步骤下展开子 Agent 及其工具。唯一名称/命令匹配标记为“候选步骤”，不冒充明确调用证据；多候选或未匹配时，子 Agent 仍显示在父 Agent 下，并标注未定位。
+- **省略 `fromLocator`**：兼容为顺序展示。同一条“协作 Trace”中，主 Agent 和其余 Agent 并列排列，不强行认定步骤父子关系。主 Agent 在前，其余按事件 `observedAt` 排序，缺失时按服务端接收时间。该顺序不证明实际运行不存在并发。
+
+无定位的关系请求示例（前提是两个 Session 已上传并完成绑定）：
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-sequential-001",
+  "fromSessionId": "agent-a",
+  "toSessionId": "agent-b",
+  "description": "审查完成后执行后续 Agent",
+  "observedAt": "2026-09-14T10:00:00Z"
+}
+```
+
+省略字段即可，不要传 `fromLocator: null`。已经保存的 eventId 不允许改正文；重试必须原样发送。示例的两种模式应分别用于新的协作，避免在同一组重复声明互相冲突的位置。
+
+回到链路追踪页，使用默认“主 Agent”范围并刷新，应该只看到一条主 Trace。打开后检查子 Agent / 并列 Agent、工具参数与结果、交互原文。分页总数也按合并后的根 Trace 计算；选择“全部 / 子 Agent”或通过 taskId 原始入口查询，仍可访问原记录。关系和绑定允许先于 Trace 到达，正文齐备后重新刷新即可合并。
+
+HTTP 201 只表示关系已保存。`fromAnchor.status=not_provided` 表示采用顺序并列模式，**不是合并失败**。若仍分开显示，先检查两个 Session 是否绑定到正确 task_id、是否属于当前登录账号、是否都有可读取正文。循环、多父级冲突、空正文、重复 Execution、已存在原生子记录、Langfuse 专用树以及超限组会保留原列表，以免隐藏无法展示的数据。投影上限为 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文。
+
+在仓库根 `server.log` 搜索 `collaboration`：接口日志记录成功/失败及定位原因；`stage=projection` 的日志记录 `mergedChildren`（本次合并子 Trace 数）和 `retainedRelations`（未合并关系数），查询失败会记录“保留原始列表”。启动与数据库自动升级仍按上一节执行，本轮合并展示不增加表或迁移。

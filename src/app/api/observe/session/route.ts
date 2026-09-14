@@ -1,3 +1,5 @@
+import { resolveUser } from '@/lib/auth/auth';
+import { collaborationProjection as reportedTraceProjection } from '@/lib/collaboration/runtime';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
@@ -268,7 +270,7 @@ export function toTraceStructureInteractions(interactions: any[]): any[] {
 export function withTracePayloadVersions(interactions: any[]): any[] {
     return interactions.map(interaction => ({
         ...interaction,
-        _payloadVersion: createHash('sha256').update(JSON.stringify(interaction)).digest('base64url'),
+        _payloadVersion: createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(interaction).filter(([key]) => key !== '_collaboration')))).digest('base64url'),
     }));
 }
 
@@ -287,8 +289,13 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
         const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
-        const collaborationProjection = await loadCollaborationProjection(taskId, parsed);
-        const displayInteractions = withTracePayloadVersions(collaborationProjection?.interactions || interactions);
+        const { username } = await resolveUser(request);
+        if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        const rawInteraction = view === 'interaction' && searchParams.get('source') === 'raw';
+        const reportedInteractions = !rawInteraction && username && username === session.user
+            ? await reportedTraceProjection.interactions(username, taskId, loadParsedSession) : null;
+        const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
+        const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);
@@ -321,7 +328,7 @@ export async function GET(request: Request) {
                         truncated: collaborationProjection.truncated,
                     },
                 } : {}),
-                ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
+                ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
             });
         }
 
@@ -370,7 +377,7 @@ export async function GET(request: Request) {
                     truncated: collaborationProjection.truncated,
                 },
             } : {}),
-            ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
+            ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
         });
     } catch (e) {
         console.error('Error reading session from DB:', e);

@@ -1,3 +1,4 @@
+import { collaborationProjection } from '@/lib/collaboration/runtime';
 import { listObservedAgentNames, listObservedFieldValues, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
 import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
@@ -425,7 +426,11 @@ export async function GET(request: Request) {
         }
     }
 
+    const authenticatedUser = (await resolveUser(request)).username;
+    const mergedChildren = authenticatedUser && authenticatedUser === user && !taskId && !taskIds.length && !parentExecutionId && !includeSubagents && !onlySubagents
+        ? (await collaborationProjection.links(authenticatedUser)).map(link => link.child) : [];
     const recordFilters = {
+        excludedTaskIds: mergedChildren,
         query,
         taskId,
         taskIds: taskIds.length > 0 ? taskIds : undefined,
