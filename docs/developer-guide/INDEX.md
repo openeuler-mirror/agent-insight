@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `aa734f57344dd23741698504c5316869c55f8a72` (`aa734f57`) |
+| Commit | `616df21954a9b77b851a1131d4455edbe1749614` (`616df219`) |
 | Branch | `codex/fix-issues-298-299-830` |
-| Date | 2026-09-14T11:20:46+08:00 |
+| Date | 2026-09-14T12:30:17+08:00 |
 | Author | mintuyang |
-| Subject | `fix: 实时提取后回写关键观点缓存` |
+| Subject | `fix: 补齐实验关键观点缓存回写` |
 
-**如何更新：** `git diff aa734f57 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 616df219 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
