@@ -11,6 +11,7 @@
 // 原 opencode 评估器传递依赖 @opencode-ai/sdk（server-only，node --test 无法静态加载）。
 // 与 judge-llm.ts 同策略：惰性 import()，运行时才加载——测试注入/纯函数校验时零加载。
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
+import type { RootCauseResolutionInput } from '../evaluation/root-cause-resolution';
 
 export const FAITHFUL_PRESET_IDS = ['preset-agent-task-completion', 'preset-agent-trace-quality'] as const;
 export type FaithfulPresetId = (typeof FAITHFUL_PRESET_IDS)[number];
@@ -19,7 +20,10 @@ export function isFaithfulPresetId(id: string): id is FaithfulPresetId {
   return (FAITHFUL_PRESET_IDS as readonly string[]).includes(id);
 }
 
-export interface FaithfulPresetContext {
+export interface FaithfulPresetContext extends Pick<
+  RootCauseResolutionInput,
+  'precomputedRootCauses' | 'precomputedRootCauseSource' | 'onLiveRootCausesExtracted'
+> {
   caseInput: string;
   actualOutput: string;
   referenceOutput: string | null;
@@ -102,6 +106,9 @@ async function runTaskCompletion(user: string, ctx: FaithfulPresetContext): Prom
       traceSummaryText: ctx.traceSummaryText ?? undefined,
       skillAttributionMode: skillTargets.length ? 'skill-aware' : 'no-skill',
       skillContext,
+      precomputedRootCauses: ctx.precomputedRootCauses,
+      precomputedRootCauseSource: ctx.precomputedRootCauseSource,
+      onLiveRootCausesExtracted: ctx.onLiveRootCausesExtracted,
     },
     user,
   );

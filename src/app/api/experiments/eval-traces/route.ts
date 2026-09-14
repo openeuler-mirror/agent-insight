@@ -22,14 +22,22 @@ function asStrArr(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
 }
 
-/** 从 datasetIds 反查每个 caseId 的预期输出（评测参考答案），缺失为 null。 */
-async function buildExpectedMap(user: string, datasetIds: string[]): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+interface DatasetReference {
+  datasetId: string;
+  datasetCaseId: string;
+  referenceOutput: string;
+}
+
+/** 从 datasetIds 反查每个 caseId 的预期输出及原数据项身份。 */
+async function buildExpectedMap(user: string, datasetIds: string[]): Promise<Map<string, DatasetReference>> {
+  const map = new Map<string, DatasetReference>();
   for (const id of datasetIds) {
     const ds = await findAgentDataset(user, id).catch(() => null);
     if (!ds) continue;
     for (const c of ds.cases) {
-      if (c.id && typeof c.expectedOutput === 'string' && !map.has(c.id)) map.set(c.id, c.expectedOutput);
+      if (c.id && typeof c.expectedOutput === 'string' && !map.has(c.id)) {
+        map.set(c.id, { datasetId: id, datasetCaseId: c.id, referenceOutput: c.expectedOutput });
+      }
     }
   }
   return map;
@@ -40,7 +48,7 @@ async function buildExpectedMap(user: string, datasetIds: string[]): Promise<Map
  * 作参考答案——否则 accuracy/任务完成度等依赖参考的评估器拿不到标准答案会失败/判"未标注"。
  * 与前端「系统会将 trace 输入与数据集 case 自动匹配」的承诺对齐。取不到返回 null。
  */
-async function resolveTraceReference(user: string, taskId: string, datasetIds: string[]): Promise<string | null> {
+async function resolveTraceReference(user: string, taskId: string, datasetIds: string[]): Promise<DatasetReference | null> {
   if (!datasetIds.length || !taskId) return null;
   const exec = await prisma.execution.findFirst({
     where: { taskId, OR: [{ user }, { user: null }] },
@@ -53,8 +61,16 @@ async function resolveTraceReference(user: string, taskId: string, datasetIds: s
     const m = await matchAgentDatasetCase({
       user, traceQuery: query, allowedDatasetIds: datasetIds, requireExpectedOutput: true,
     });
-    const ref = m.match?.caseEntry.expectedOutput;
-    return ref && String(ref).trim() ? String(ref) : null;
+    const matched = m.match;
+    const caseEntry = matched?.caseEntry;
+    const ref = caseEntry?.expectedOutput;
+    return matched && caseEntry?.id && ref && String(ref).trim()
+      ? {
+          datasetId: matched.dataset.id,
+          datasetCaseId: caseEntry.id,
+          referenceOutput: String(ref),
+        }
+      : null;
   } catch {
     return null;
   }
@@ -83,7 +99,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'taskIds or pairs is required' }, { status: 400 });
     }
 
-    const expectedMap = datasetIds.length ? await buildExpectedMap(username, datasetIds) : new Map<string, string>();
+    const expectedMap = datasetIds.length
+      ? await buildExpectedMap(username, datasetIds)
+      : new Map<string, DatasetReference>();
 
     const skillName = typeof body.skillName === 'string' ? body.skillName : '';
     const skillVersion = typeof body.skillVersion === 'number' ? body.skillVersion
@@ -105,17 +123,34 @@ export async function POST(req: Request) {
 
     // 目标列表：pairs（带 caseId → 参考答案）优先；否则 taskIds（trace 模式，按输入匹配数据集取参考答案）
     const targets = pairs.length
-      ? pairs.map((p) => ({ taskId: p.taskId, caseId: p.caseId, referenceOutput: expectedMap.get(p.caseId) ?? null }))
-      : await Promise.all(taskIds.map(async (t) => ({
-          taskId: t,
-          caseId: undefined as string | undefined,
-          referenceOutput: await resolveTraceReference(username, t, datasetIds),
-        })));
+      ? pairs.map((p) => {
+          const reference = expectedMap.get(p.caseId);
+          return {
+            taskId: p.taskId,
+            caseId: p.caseId,
+            referenceOutput: reference?.referenceOutput ?? null,
+            datasetId: reference?.datasetId,
+            datasetCaseId: reference?.datasetCaseId,
+          };
+        })
+      : await Promise.all(taskIds.map(async (t) => {
+          const reference = await resolveTraceReference(username, t, datasetIds);
+          return {
+            taskId: t,
+            caseId: undefined as string | undefined,
+            referenceOutput: reference?.referenceOutput ?? null,
+            datasetId: reference?.datasetId,
+            datasetCaseId: reference?.datasetCaseId,
+          };
+        }));
 
     const results = [];
     for (const t of targets) {
       const expCaseId = await addEvalExperimentCase(experimentId, {
         taskId: t.taskId, input: '', actualOutput: '', referenceOutput: t.referenceOutput,
+        datasetBinding: t.datasetId && t.datasetCaseId
+          ? { datasetId: t.datasetId, caseId: t.datasetCaseId }
+          : null,
       });
       const rows = await evaluateEvalExperimentCase(experimentId, expCaseId, username);
       const done = rows.filter((r) => r.status === 'done' && typeof r.score === 'number');

@@ -470,6 +470,7 @@ export function TraceBackflowDialog(props: {
                   <div className="grid gap-2">
                     <span className="text-xs font-medium text-foreground-muted">已有数据集</span>
                     <Select
+                      modal={false}
                       value={datasetId}
                       onChange={chooseDataset}
                       options={[
@@ -530,6 +531,7 @@ export function TraceBackflowDialog(props: {
                           ) : <span className="truncate text-sm text-foreground">{field.label}</span>}
                           {editable ? (
                             <Select
+                              modal={false}
                               value={field.type}
                               onChange={type => updateField(field.id, { type })}
                               options={FIELD_TYPE_OPTIONS}
@@ -539,6 +541,7 @@ export function TraceBackflowDialog(props: {
                             />
                           ) : <span className="text-xs text-foreground-muted">{FIELD_TYPE_OPTIONS.find(option => option.value === field.type)?.label}</span>}
                           <Select
+                            modal={false}
                             value={field.source}
                             onChange={source => updateField(field.id, { source })}
                             options={SOURCE_OPTIONS}

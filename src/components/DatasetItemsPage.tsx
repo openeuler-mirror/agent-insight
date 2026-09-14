@@ -12,6 +12,7 @@ import {
   type DatasetField,
   type DatasetFieldType,
   createEmptyCase,
+  hasMeaningfulDatasetCaseValue,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
@@ -318,6 +319,18 @@ export default function DatasetItemsPage() {
     setRowEditor({ mode: 'add', row: createEmptyCase() });
   };
 
+  const openFieldEditor = () => {
+    setFieldDraft({ label: '', type: 'text' });
+    setFieldError('');
+    setFieldEditorOpen(true);
+  };
+
+  const closeFieldEditor = () => {
+    setFieldEditorOpen(false);
+    setFieldDraft({ label: '', type: 'text' });
+    setFieldError('');
+  };
+
   const openEdit = async (row: DatasetCase) => {
     setSaving(true);
     setError('');
@@ -346,7 +359,9 @@ export default function DatasetItemsPage() {
       await load();
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : '字段保存失败');
+      const message = e instanceof Error ? e.message : '字段保存失败';
+      setError(message);
+      setFieldError(message);
       return false;
     } finally {
       setSaving(false);
@@ -370,9 +385,7 @@ export default function DatasetItemsPage() {
       { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
     ]);
     if (ok) {
-      setFieldEditorOpen(false);
-      setFieldDraft({ label: '', type: 'text' });
-      setFieldError('');
+      closeFieldEditor();
     }
   };
 
@@ -394,6 +407,10 @@ export default function DatasetItemsPage() {
 
   const saveRowFromModal = async () => {
     if (!rowEditor || !dataset) return;
+    if (!hasMeaningfulDatasetCaseValue(rowEditor.row, dataset.fields)) {
+      toast.error('请至少填写一个字段');
+      return;
+    }
     const { mode } = rowEditor;
     const values = { ...(rowEditor.row.values || {}) };
     for (const field of dataset.fields) {
@@ -590,7 +607,7 @@ export default function DatasetItemsPage() {
               <button
                 type="button"
                 className={styles.refreshGhost}
-                onClick={() => setFieldEditorOpen(true)}
+                onClick={openFieldEditor}
                 disabled={saving}
               >
                 <Plus size={15} aria-hidden />
@@ -834,8 +851,14 @@ export default function DatasetItemsPage() {
       )}
 
       {fieldEditorOpen && (
-        <div role="presentation" className={styles.modalBackdrop} onClick={() => !saving && setFieldEditorOpen(false)}>
-          <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel} onClick={e => e.stopPropagation()}>
+        <div
+          role="presentation"
+          className={styles.modalBackdrop}
+          onMouseDown={event => {
+            if (event.target === event.currentTarget && !saving) closeFieldEditor();
+          }}
+        >
+          <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel}>
             <div className={styles.modalHeader}>
               <div id="add-field-title" className={styles.modalTitle}>新增字段</div>
             </div>
@@ -847,6 +870,7 @@ export default function DatasetItemsPage() {
               <div style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段类型</span>
                 <Select
+                  modal={false}
                   value={fieldDraft.type}
                   onChange={type => setFieldDraft({ ...fieldDraft, type })}
                   options={[
@@ -864,7 +888,7 @@ export default function DatasetItemsPage() {
               {fieldError && <div className={styles.modalError}>{fieldError}</div>}
             </div>
             <div className={styles.modalFooter}>
-              <button type="button" className={styles.btnGhost} onClick={() => setFieldEditorOpen(false)} disabled={saving}>取消</button>
+              <button type="button" className={styles.btnGhost} onClick={closeFieldEditor} disabled={saving}>取消</button>
               <button type="button" className={styles.btnPrimary} onClick={() => void addField()} disabled={saving}>{saving ? '保存中…' : '新增'}</button>
             </div>
           </div>

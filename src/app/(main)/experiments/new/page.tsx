@@ -52,6 +52,8 @@ interface SelectedCase {
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
+  datasetId?: string;
+  datasetCaseId?: string;
 }
 
 interface DatasetOption {
@@ -59,7 +61,7 @@ interface DatasetOption {
   name: string;
   targetAgent?: string;
   caseCount?: number;
-  cases?: Array<{ input?: string; expectedOutput?: string }>;
+  cases?: Array<{ id?: string; input?: string; expectedOutput?: string }>;
 }
 
 const STEPS = ['实验设计', '关联 Trace', '预期答案', '评估器'];
@@ -506,7 +508,14 @@ export default function NewExperimentPage() {
     setSelected((prev) => {
       const next = new Map(prev);
       const c = next.get(executionId);
-      if (c) next.set(executionId, { ...c, referenceOutput: value && value.trim() ? value : null });
+      if (c) {
+        next.set(executionId, {
+          ...c,
+          referenceOutput: value && value.trim() ? value : null,
+          datasetId: undefined,
+          datasetCaseId: undefined,
+        });
+      }
       return next;
     });
   };
@@ -531,7 +540,17 @@ export default function NewExperimentPage() {
       const next = new Map(prev);
       for (const [key, ref] of Object.entries(result.updates)) {
         const c = next.get(key);
-        if (c) next.set(key, { ...c, referenceOutput: ref });
+        if (!c) continue;
+        const sourceCase = (ds.cases ?? []).find((item) =>
+          String(item.input ?? '').trim() === c.input.trim()
+          && String(item.expectedOutput ?? '').trim() === ref.trim(),
+        );
+        next.set(key, {
+          ...c,
+          referenceOutput: ref,
+          datasetId: sourceCase?.id ? ds.id : undefined,
+          datasetCaseId: sourceCase?.id ? String(sourceCase.id) : undefined,
+        });
       }
       return next;
     });
