@@ -26,10 +26,12 @@ function createPrismaCompatibleWrapper(adapter: DatabaseAdapter): any {
         user: {
             findUnique: async (args: any) => {
                 if (args.where?.apiKey) return adapter.findUserByApiKey(args.where.apiKey);
+                if (args.where?.externalAccount) return adapter.findUserByExternalAccount(args.where.externalAccount);
                 if (args.where?.username) return adapter.findUserByUsername(args.where.username);
                 return null;
             },
             findFirst: async (args: any) => {
+                if (args.where?.externalAccount) return adapter.findUserByExternalAccount(args.where.externalAccount);
                 if (args.where?.username) return adapter.findUserByUsername(args.where.username);
                 return null;
             }

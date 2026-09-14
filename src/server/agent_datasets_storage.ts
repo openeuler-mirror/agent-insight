@@ -236,11 +236,13 @@ export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField
       system: Boolean(obj.system),
     }];
   });
-  // 可靠性集强制保留系统字段，避免客户端漏传导致门控失效。
-  for (const required of defaults.filter((field) => field.system)) {
-    if (!seen.has(required.key)) {
-      fields.unshift(required);
-      seen.add(required.key);
+  if (kind === 'reliability') {
+    // 可靠性集强制保留系统字段，避免客户端漏传导致门控失效。
+    for (const required of defaults.filter((field) => field.system)) {
+      if (!seen.has(required.key)) {
+        fields.unshift(required);
+        seen.add(required.key);
+      }
     }
   }
   return fields.length > 0 ? fields : defaults;
