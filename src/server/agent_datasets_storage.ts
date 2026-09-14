@@ -826,6 +826,15 @@ export async function prepareDatasetCasesForPersistence(
       continue;
     }
 
+    if (prevCase && !expectedOutputChanged && !shouldRetryFailed) {
+      cases.push({
+        ...nextCase,
+        rootCauses: normalizeRootCauseItems(prevCase.rootCauses),
+        rootCauseMeta: prevCase.rootCauseMeta,
+      });
+      continue;
+    }
+
     try {
       const rootCauses = normalizeRootCauseItems(
         await extractor(nextCase.input, nextCase.expectedOutput, user),

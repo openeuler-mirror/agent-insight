@@ -76,6 +76,29 @@ test('re-extracts root causes when expectedOutput changes', async () => {
   );
 });
 
+test('does not backfill unchanged legacy cases during an unrelated dataset save', async () => {
+  let calls = 0;
+  const previousCase = normalizeCase({
+    id: 'legacy-case',
+    input: 'question',
+    expectedOutput: 'legacy answer',
+  });
+
+  const result = await prepareDatasetCasesForPersistence({
+    nextCases: [previousCase],
+    previousCases: [previousCase],
+    extractor: async () => {
+      calls += 1;
+      return [{ content: 'should not run', weight: 1 }];
+    },
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.warnings.length, 0);
+  assert.deepEqual(result.cases[0]?.rootCauses, []);
+  assert.equal(result.cases[0]?.rootCauseMeta, undefined);
+});
+
 test('marks empty expectedOutput without calling extractor', async () => {
   let calls = 0;
   const result = await prepareDatasetCasesForPersistence({
