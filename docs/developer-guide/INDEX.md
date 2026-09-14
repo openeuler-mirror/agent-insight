@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `764ff443e2fdbb7cecc069b8fafcacc11ce4d70a` (`764ff443`) |
-| Branch | `830` |
-| Date | 2026-08-12T21:43:51+08:00 |
-| Author | gyctl |
-| Subject | `merge: 同步830安装指导变更` |
+| Commit | `a6d65587dfb7353c12fcbfddcfaaec4355c53c20` (`a6d65587`) |
+| Branch | `codex/fix-issues-298-299-830` |
+| Date | 2026-09-14T09:55:23+08:00 |
+| Author | mintuyang |
+| Subject | `fix: 修复评测集弹窗交互与保存性能` |
 
-**如何更新：** `git diff 764ff443 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a6d65587 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
