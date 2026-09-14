@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `58c66e7d78df0b69e9fd86b364472e4f5acf44d7` (`58c66e7d`) |
-| Branch | `swebench-develop` |
-| Date | 2026-09-11 |
-| Author | mintuyang |
-| Subject | `修复客户端bug` |
-| Documentation overlay | 本轮未修改源码；补充当前 Benchmark 文件地图、控制通道、用户首次运行前置条件，并将统一设计入口收敛到 `docs/design/benchmark/`。 |
+| Commit | `a7d8aad249ded23d8bab65b872d6ade221eca03a` (`a7d8aad2`) |
+| Branch | `resolve/pr-294` |
+| Date | 2026-09-14 |
+| Author | wangxin-2026 |
+| Subject | `chore: resolve PR #294 conflicts with upstream/master` |
+| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
 
@@ -56,7 +56,9 @@
 
 > 2026-09-14 upstream overlay：IDaaS userinfo 返回的 `w3Account` 作为可选外部账号唯一绑定到 UUID 用户，用于界面展示和数据库反查；权限与数据归属仍以 UUID 为准。
 
-**如何更新：** `git diff 58c66e7d HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+> 2026-09-14 PR #294 merge overlay：ROUGE、完全精确匹配与实体 F1 作为预置评估器接入；Exact Match/Entity F1 的运行配置经共享 `ExperimentWizard` 提交并在实验、Case 详情展示。“同配置实验”和“复用评测配置”保留文本评估器参数，Benchmark 向导继续按 Manifest 渲染。
+
+**如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
