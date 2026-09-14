@@ -35,8 +35,16 @@ const client = require_('../scripts/reliability-client.cjs') as {
       agents: string[]
       runExperimentCase?: { version: number; returnsTraceId: boolean }
     }>
+    components: Record<string, { ready?: boolean } | string>
     faultInjection: { ready: boolean; note?: string }
   }
+  benchmarkAgentPlatformsFromCapabilities: (capabilities: {
+    platforms: Array<{
+      id: string
+      runExperimentCase?: { version: number; returnsTraceId: boolean }
+    }>
+    components: Record<string, unknown>
+  }) => string[]
   buildExperimentCaseInvocation: (
     executable: string,
     input: {
@@ -49,12 +57,35 @@ const client = require_('../scripts/reliability-client.cjs') as {
   ) => { args: string[]; stdin: string | null }
   parseOpencodeSlashCommand: (input: string) => { command: string; arguments: string } | null
   capabilityDiscoveryFingerprint: () => string
+  withInventoryProbeSandbox: <T>(
+    probeEnv: NodeJS.ProcessEnv,
+    action: (sandbox: { tempRoot: string; env: NodeJS.ProcessEnv }) => T,
+    baseDir?: string,
+  ) => T
   refreshCapabilityReports: (
     cfg: Record<string, unknown>,
     opts?: { force?: boolean },
   ) => Promise<boolean>
   normalizeModelIds: (models: unknown) => string[]
   extractTraceIdFromJsonLine: (line: string) => string | null
+  sanitizeAgentDiagnostic: (value: unknown, maxLength?: number) => string
+  classifyAgentExitFailure: (input: {
+    platform: string
+    exitCode: number | null
+    signal?: string | null
+    diagnostic?: string
+    structured?: boolean
+  }) => { code: string; message: string }
+  runExperimentCase: (
+    cfg: Record<string, unknown>,
+    payload: Record<string, unknown>,
+  ) => Promise<{
+    traceId: string
+    exitCode: number
+    timedOut?: boolean
+    startedAt?: string
+    finishedAt?: string
+  }>
   controlUrls: (cfg: Record<string, unknown>) => { websocketUrl: string; pollUrl: string }
   rasRuntimeConfigPath: () => string
   writeRasRuntimeConfig: (snapshot: Record<string, unknown>) => Promise<void>
@@ -68,8 +99,37 @@ const installer = require_('../scripts/install-ras-client.js') as {
   CLIENT_SCRIPT: string
   RUNTIME_DIR: string
   installRuntime?: () => void
-  buildSystemdUnit?: () => string
-  writeSystemdUnit: () => string
+  buildSystemdUnit?: (scope?: 'user' | 'system') => string
+  writeSystemdUnit: (target?: {
+    scope: 'user' | 'system'
+    unitPath: string
+    legacySystemUnit: boolean
+    uid: number | null
+  }) => string
+  resolveSystemdTarget?: (options?: {
+    uid?: number | null
+    existsSync?: (target: string) => boolean
+    userServiceActive?: () => boolean
+  }) => {
+    scope: 'user' | 'system'
+    unitPath: string
+    legacySystemUnit: boolean
+    uid: number | null
+  }
+  systemctlArgs?: (scope: 'user' | 'system', ...args: string[]) => string[]
+  preflightSystemd?: (
+    target: {
+      scope: 'user' | 'system'
+      unitPath: string
+      legacySystemUnit: boolean
+      uid: number | null
+    },
+    runner: (scope: 'user' | 'system', ...args: string[]) => {
+      status: number | null
+      stdout?: string
+      stderr?: string
+    },
+  ) => { ok: boolean; detail: string }
   writeLaunchdPlist?: () => string
   bootstrapLaunchdService?: (
     plistPath: string,
@@ -91,7 +151,13 @@ const installer = require_('../scripts/install-ras-client.js') as {
 test('client whitelist matches the server-side action set', () => {
   assert.deepEqual(
     [...client.WHITELIST].sort(),
-    ['APPLY_CLIENT_CONFIG', 'PREPARE_EXPERIMENT_CASE', 'REFRESH_CAPABILITIES', 'RUN_EXPERIMENT_CASE'],
+    [
+      'APPLY_CLIENT_CONFIG',
+      'PREPARE_EXPERIMENT_CASE',
+      'REFRESH_CAPABILITIES',
+      'RUN_BENCHMARK_CASE',
+      'RUN_EXPERIMENT_CASE',
+    ],
   )
   // 客户端自带一份禁字段表，不能只依赖服务端校验。
   for (const key of ['url', 'config', 'path']) {
@@ -249,7 +315,11 @@ test('readCollectResult finds the nested artifact', () => {
 })
 
 test('installer arg parsing', () => {
-  const args = installer.parseArgs(['--host', 'https://x.test', '--token', 'rit_1', '--no-start'])
+  const args = installer.parseArgs([
+    '--host', 'https://x.test',
+    '--token', 'rit_1',
+    '--no-start',
+  ])
   assert.equal(args.host, 'https://x.test')
   assert.equal(args.token, 'rit_1')
   assert.equal(args.start, false)
@@ -284,6 +354,32 @@ test('capabilities and FI inventory agree on readiness', () => {
   assert.equal(caps.faultInjection.ready, false)
   assert.equal(inv.platforms.opencode.ready, false)
   assert.equal(caps.faultInjection.note, inv.platforms.opencode.note)
+})
+
+test('client advertises benchmark components without an inbound executor endpoint', () => {
+  const capabilities = client.buildCapabilities(
+    { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
+    { refresh: true },
+  )
+  assert.deepEqual(capabilities.components['git-workspace/v1'], { ready: true })
+  assert.deepEqual(capabilities.components['git-patch/v1'], { ready: true })
+})
+
+test('benchmark executor runtime registration follows trace-safe client platforms', () => {
+  assert.deepEqual(client.benchmarkAgentPlatformsFromCapabilities({
+    platforms: [
+      { id: 'opencode', runExperimentCase: { version: 2, returnsTraceId: true } },
+      { id: 'codex', runExperimentCase: { version: 2, returnsTraceId: true } },
+      { id: 'xiaoo', runExperimentCase: { version: 2, returnsTraceId: false } },
+      { id: 'offline-runtime', runExperimentCase: { version: 2, returnsTraceId: true } },
+    ],
+    components: {
+      'agent-runtime/opencode/v1': { ready: true },
+      'agent-runtime/codex/v1': { ready: true },
+      'agent-runtime/xiaoo/v1': { ready: true },
+      'agent-runtime/offline-runtime/v1': { ready: false },
+    },
+  }), ['opencode', 'codex'])
 })
 
 test('model ids normalize from strings and objects alike', () => {
@@ -325,9 +421,49 @@ test('manual and automatic capability refresh bypass the cached probe', () => {
     'utf8',
   )
   assert.match(source, /REFRESH_CAPABILITIES[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
-  assert.match(source, /cachedProbe = await probeFaultInjectionIsolated\(cfg\)[\s\S]*?reportCapabilities\(cfg\)/)
+  assert.match(source, /cacheSuccessfulProbe\(await probeFaultInjectionIsolated\(cfg\)\)[\s\S]*?reportCapabilities\(cfg\)/)
   assert.match(source, /const refreshCapabilities[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
   assert.match(source, /setTimeout\([\s\S]*?setInterval\(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS\)[\s\S]*?CAPABILITY_DISCOVERY_SCAN_MS \/ 2/)
+})
+
+test('capability inventory keeps the 30-second full refresh cadence', () => {
+  assert.equal(client.CAPABILITY_DISCOVERY_SCAN_MS, 30_000)
+})
+
+test('FI inventory temp sandbox redirects native extraction and always cleans up', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inventory-sandbox-test-'))
+  let successfulSandbox = ''
+  let failedSandbox = ''
+  try {
+    const result = client.withInventoryProbeSandbox(
+      { PATH: process.env.PATH },
+      ({ tempRoot, env }) => {
+        successfulSandbox = tempRoot
+        assert.equal(env.TMPDIR, tempRoot)
+        assert.equal(env.TMP, tempRoot)
+        assert.equal(env.TEMP, tempRoot)
+        fs.writeFileSync(path.join(tempRoot, 'libopentui.so'), 'temporary native library')
+        return 'ok'
+      },
+      root,
+    )
+    assert.equal(result, 'ok')
+    assert.equal(fs.existsSync(successfulSandbox), false)
+
+    assert.throws(() => client.withInventoryProbeSandbox(
+      process.env,
+      ({ tempRoot }) => {
+        failedSandbox = tempRoot
+        fs.writeFileSync(path.join(tempRoot, 'libopentui.so'), 'temporary native library')
+        throw new Error('probe failed')
+      },
+      root,
+    ), /probe failed/)
+    assert.equal(fs.existsSync(failedSandbox), false)
+    assert.deepEqual(fs.readdirSync(root), [])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('capability probe runs outside the daemon event loop', () => {
@@ -347,7 +483,7 @@ test('FI inventory uses an isolated launchd helper with aligned PWD on macOS', (
   )
   assert.match(
     source,
-    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'submit'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?'remove', label/,
+    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'submit'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?`TMPDIR=\$\{tempRoot\}`[\s\S]*?'remove', label/,
   )
 })
 
@@ -363,6 +499,130 @@ test('OpenCode JSON events expose the platform Trace ID', () => {
   assert.equal(client.extractTraceIdFromJsonLine('not-json'), null)
 })
 
+test('OpenCode run events distinguish model activity, idle, and session errors', () => {
+  assert.deepEqual(
+    client.inspectOpencodeRunEvent(JSON.stringify({
+      type: 'step_start',
+      sessionID: 'ses_waiting',
+      part: { type: 'step-start' },
+    })),
+    {
+      traceId: 'ses_waiting',
+      idle: false,
+      error: null,
+      modelActivity: false,
+      type: 'step_start',
+    },
+  )
+  assert.equal(client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'text',
+    sessionID: 'ses_active',
+    part: { type: 'text', text: 'working' },
+  }))?.modelActivity, true)
+  assert.equal(client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'session.idle',
+    sessionID: 'ses_idle',
+  }))?.idle, true)
+  assert.equal(client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'event',
+    sessionID: 'ses_nested_idle',
+    event: { type: 'session.idle', properties: { sessionID: 'ses_nested_idle' } },
+  }))?.idle, true)
+  const failed = client.inspectOpencodeRunEvent(JSON.stringify({
+    type: 'session.error',
+    sessionID: 'ses_error',
+    error: { name: 'ProviderAuthError', message: 'Unauthorized provider/model' },
+  }))
+  assert.match(failed?.error || '', /ProviderAuthError/)
+})
+
+test('OpenCode execution terminates early on idle, structured error, and first-response timeout', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-model-signal-'))
+  const binDir = path.join(root, 'bin')
+  const workspace = path.join(root, 'workspace')
+  const executable = path.join(binDir, 'opencode')
+  const previousPath = process.env.PATH
+  const previousMode = process.env.OPENCODE_SIGNAL_TEST_MODE
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.mkdirSync(workspace, { recursive: true })
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+if (process.argv.includes('--help')) {
+  console.log('opencode run --format json')
+  process.exit(0)
+}
+const mode = process.env.OPENCODE_SIGNAL_TEST_MODE
+console.log(JSON.stringify({ type: 'step_start', sessionID: 'ses_' + mode, part: { type: 'step-start' } }))
+if (mode === 'idle') {
+  console.log(JSON.stringify({ type: 'session.idle', sessionID: 'ses_idle' }))
+  setInterval(() => {}, 1000)
+}
+if (mode === 'error') {
+  console.log(JSON.stringify({
+    type: 'session.error',
+    sessionID: 'ses_error',
+    error: { name: 'ProviderAuthError', message: 'Unauthorized provider/test-model' },
+  }))
+  setInterval(() => {}, 1000)
+}
+if (mode === 'error-tail') {
+  process.stdout.write(JSON.stringify({
+    type: 'session.error',
+    sessionID: 'ses_error_tail',
+    error: { name: 'ProviderError', message: 'upstream connection closed' },
+  }))
+}
+if (mode === 'timeout') setInterval(() => {}, 1000)
+if (mode === 'active') {
+  console.log(JSON.stringify({ type: 'text', sessionID: 'ses_active', part: { type: 'text', text: 'done' } }))
+}
+`)
+  fs.chmodSync(executable, 0o755)
+  process.env.PATH = `${binDir}:${previousPath || ''}`
+  const run = (mode: string, firstModelResponseTimeoutSeconds = 5) => {
+    process.env.OPENCODE_SIGNAL_TEST_MODE = mode
+    return client.runExperimentCase({
+      clientId: 'client_model_signal',
+      workspaceBase: root,
+    }, {
+      platform: 'opencode',
+      agent: 'build',
+      input: 'exercise OpenCode lifecycle signals',
+      cwd: workspace,
+      timeoutSeconds: 10,
+      firstModelResponseTimeoutSeconds,
+    })
+  }
+  try {
+    await assert.rejects(run('idle'), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_NO_RESPONSE')
+      return true
+    })
+    await assert.rejects(run('error'), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_UNAVAILABLE')
+      return true
+    })
+    await assert.rejects(run('error-tail'), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_ERROR')
+      return true
+    })
+    const timeoutStartedAt = Date.now()
+    await assert.rejects(run('timeout', 1), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'MODEL_START_TIMEOUT')
+      return true
+    })
+    assert.ok(Date.now() - timeoutStartedAt < 5_000)
+    const active = await run('active', 1)
+    assert.equal(active.modelActivityObserved, true)
+    assert.equal(active.traceId, 'ses_active')
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousMode === undefined) delete process.env.OPENCODE_SIGNAL_TEST_MODE
+    else process.env.OPENCODE_SIGNAL_TEST_MODE = previousMode
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('generic execution reports Trace ID before exit and force-kills timed-out process groups', () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'scripts/reliability-client.cjs'),
@@ -372,7 +632,157 @@ test('generic execution reports Trace ID before exit and force-kills timed-out p
   assert.match(source, /detached: process\.platform !== 'win32'/)
   assert.match(source, /signalProcessTree\(child, 'SIGTERM'\)/)
   assert.match(source, /signalProcessTree\(child, 'SIGKILL'\)/)
+  assert.match(source, /hardStopTimer = setTimeout\(\(\) => void finishAgentRun\(null, 'SIGKILL'\)/)
   assert.match(source, /if \(reliabilityChild\) signalProcessTree\(reliabilityChild, 'SIGKILL'\)/)
+})
+
+test('generic execution aligns PWD with the prepared workspace cwd', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-agent-cwd-'))
+  const binDir = path.join(root, 'bin')
+  const workspace = path.join(root, 'workspace')
+  const capturePath = path.join(root, 'capture.json')
+  const executable = path.join(binDir, 'fake-agent')
+  const previousPath = process.env.PATH
+  const previousPwd = process.env.PWD
+  const previousCapture = process.env.BENCHMARK_CWD_CAPTURE
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.mkdirSync(workspace, { recursive: true })
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.writeFileSync(process.env.BENCHMARK_CWD_CAPTURE, JSON.stringify({ cwd: process.cwd(), pwd: process.env.PWD }))
+console.log(JSON.stringify({ sessionID: 'ses_cwd_alignment' }))
+`)
+  fs.chmodSync(executable, 0o755)
+  process.env.PATH = `${binDir}:${previousPath || ''}`
+  process.env.PWD = '/wrong/inherited/project'
+  process.env.BENCHMARK_CWD_CAPTURE = capturePath
+  try {
+    const result = await client.runExperimentCase({
+      clientId: 'client_cwd_alignment',
+      workspaceBase: root,
+    }, {
+      platform: 'fake-agent',
+      agent: 'build',
+      input: 'run in the prepared workspace',
+      cwd: workspace,
+      timeoutSeconds: 10,
+    })
+    assert.equal(result.traceId, 'ses_cwd_alignment')
+    assert.deepEqual(JSON.parse(fs.readFileSync(capturePath, 'utf8')), {
+      cwd: fs.realpathSync(workspace),
+      pwd: workspace,
+    })
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousPwd === undefined) delete process.env.PWD
+    else process.env.PWD = previousPwd
+    if (previousCapture === undefined) delete process.env.BENCHMARK_CWD_CAPTURE
+    else process.env.BENCHMARK_CWD_CAPTURE = previousCapture
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('generic execution classifies timeout, nonzero exit, and model authentication failures', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-agent-failures-'))
+  const binDir = path.join(root, 'bin')
+  const workspace = path.join(root, 'workspace')
+  const executable = path.join(binDir, 'fake-agent')
+  const previousPath = process.env.PATH
+  const previousMode = process.env.BENCHMARK_FAKE_FAILURE_MODE
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.mkdirSync(workspace, { recursive: true })
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const mode = process.env.BENCHMARK_FAKE_FAILURE_MODE
+console.log(JSON.stringify({ sessionID: 'ses_' + mode }))
+if (mode === 'timeout') setInterval(() => {}, 1000)
+if (mode === 'nonzero') {
+  console.error('repository checkout failed')
+  process.exit(7)
+}
+if (mode === 'model') {
+  console.log(JSON.stringify({
+    type: 'error',
+    sessionID: 'ses_model',
+    error: { name: 'ProviderAuthError', data: { message: 'Unauthorized: invalid API key for provider/test-model' } },
+  }))
+  process.exit(0)
+}
+`)
+  fs.chmodSync(executable, 0o755)
+  process.env.PATH = `${binDir}:${previousPath || ''}`
+  const run = () => client.runExperimentCase({
+    clientId: 'client_failure_classification',
+    workspaceBase: root,
+  }, {
+    platform: 'fake-agent',
+    agent: 'build',
+    input: 'exercise failure classification',
+    cwd: workspace,
+    timeoutSeconds: 1,
+  })
+  try {
+    process.env.BENCHMARK_FAKE_FAILURE_MODE = 'timeout'
+    await assert.rejects(run(), (error: unknown) => {
+      const failure = error as Error & {
+        code?: string
+        runFacts?: { timedOut?: boolean }
+      }
+      assert.equal(failure.code, 'AGENT_TIMEOUT')
+      assert.equal(failure.runFacts?.timedOut, true)
+      return true
+    })
+
+    process.env.BENCHMARK_FAKE_FAILURE_MODE = 'nonzero'
+    await assert.rejects(run(), (error: unknown) => {
+      const failure = error as Error & {
+        code?: string
+        runFacts?: { traceId?: string; exitCode?: number }
+      }
+      assert.equal(failure.code, 'AGENT_EXIT_NONZERO')
+      assert.equal(failure.runFacts?.traceId, 'ses_nonzero')
+      assert.equal(failure.runFacts?.exitCode, 7)
+      return true
+    })
+
+    process.env.BENCHMARK_FAKE_FAILURE_MODE = 'model'
+    await assert.rejects(run(), (error: unknown) => {
+      const failure = error as Error & { code?: string }
+      assert.equal(failure.code, 'MODEL_UNAVAILABLE')
+      return true
+    })
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousMode === undefined) delete process.env.BENCHMARK_FAKE_FAILURE_MODE
+    else process.env.BENCHMARK_FAKE_FAILURE_MODE = previousMode
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Agent diagnostics redact common JSON, environment, query, bearer, and bare secrets', () => {
+  const redacted = client.sanitizeAgentDiagnostic([
+    '{"apiKey":"sk-json-secret-1234567890"}',
+    'OPENAI_API_KEY=sk-env-secret-1234567890',
+    'token: "token-value-123"',
+    'Authorization: Bearer bearer-value-123',
+    'https://provider.test/v1?access_token=query-value-123',
+    'sk-bare-secret-1234567890',
+  ].join('\n'))
+  for (const secret of [
+    'sk-json-secret-1234567890',
+    'sk-env-secret-1234567890',
+    'token-value-123',
+    'bearer-value-123',
+    'query-value-123',
+    'sk-bare-secret-1234567890',
+  ]) assert.equal(redacted.includes(secret), false)
+  assert.match(redacted, /\[REDACTED\]/)
+  assert.equal(client.classifyAgentExitFailure({
+    platform: 'opencode',
+    exitCode: 1,
+    diagnostic: 'workspace model file not found',
+  }).code, 'AGENT_EXIT_NONZERO')
 })
 
 test('client advertises Trace-ID-safe generic execution only for supported platforms', () => {
@@ -449,7 +859,7 @@ test('client writes the config.json that RAS actually reads', async () => {
 
 test('systemd unit preserves the installer PATH and keeps service directives valid', () => {
   assert.equal(typeof installer.buildSystemdUnit, 'function')
-  assert.match(String(installer.writeSystemdUnit), /buildSystemdUnit\(\)/)
+  assert.match(String(installer.writeSystemdUnit), /buildSystemdUnit\(target\.scope\)/)
   const previousPath = process.env.PATH
   process.env.PATH = '/home/alice/.opencode/bin:/opt/Agent Tools/bin:/tmp/%h/"quoted"/\\'
   try {
@@ -475,6 +885,81 @@ test('systemd unit preserves the installer PATH and keeps service directives val
     if (previousPath === undefined) delete process.env.PATH
     else process.env.PATH = previousPath
   }
+})
+
+test('systemd target keeps legacy system services at system scope and avoids root user bus', () => {
+  assert.equal(typeof installer.resolveSystemdTarget, 'function')
+  assert.equal(typeof installer.systemctlArgs, 'function')
+  const systemUnit = `/etc/systemd/system/${installer.SERVICE_NAME}.service`
+
+  const legacy = installer.resolveSystemdTarget?.({
+    uid: 1000,
+    existsSync: (target) => target === systemUnit,
+  })
+  assert.equal(legacy?.scope, 'system')
+  assert.equal(legacy?.unitPath, systemUnit)
+  assert.equal(legacy?.legacySystemUnit, true)
+  assert.deepEqual(
+    installer.systemctlArgs?.('system', 'restart', `${installer.SERVICE_NAME}.service`),
+    ['restart', `${installer.SERVICE_NAME}.service`],
+  )
+
+  const rootFreshInstall = installer.resolveSystemdTarget?.({ uid: 0, existsSync: () => false })
+  assert.equal(rootFreshInstall?.scope, 'system')
+  assert.equal(rootFreshInstall?.unitPath, systemUnit)
+
+  const rootActiveUserInstall = installer.resolveSystemdTarget?.({
+    uid: 0,
+    existsSync: (target) => target.includes(path.join('.config', 'systemd', 'user')),
+    userServiceActive: () => true,
+  })
+  assert.equal(rootActiveUserInstall?.scope, 'user', '已正常运行的 root 用户级服务不能重复安装')
+
+  const rootStaleUserInstall = installer.resolveSystemdTarget?.({
+    uid: 0,
+    existsSync: (target) => target.includes(path.join('.config', 'systemd', 'user')),
+    userServiceActive: () => false,
+  })
+  assert.equal(rootStaleUserInstall?.scope, 'system', '不可用的 root 用户级 unit 应迁移到系统级')
+
+  const regularUserInstall = installer.resolveSystemdTarget?.({ uid: 1000, existsSync: () => false })
+  assert.equal(regularUserInstall?.scope, 'user')
+  assert.match(regularUserInstall?.unitPath || '', /\.config[/\\]systemd[/\\]user/)
+  assert.deepEqual(installer.systemctlArgs?.('user', 'daemon-reload'), ['--user', 'daemon-reload'])
+})
+
+test('systemd preflight rejects an unprivileged legacy migration before registration', () => {
+  assert.equal(typeof installer.preflightSystemd, 'function')
+  let runnerCalled = false
+  const result = installer.preflightSystemd?.(
+    {
+      scope: 'system',
+      unitPath: `/etc/systemd/system/${installer.SERVICE_NAME}.service`,
+      legacySystemUnit: true,
+      uid: 1000,
+    },
+    () => {
+      runnerCalled = true
+      return { status: 0 }
+    },
+  )
+  assert.equal(result?.ok, false)
+  assert.equal(runnerCalled, false)
+  assert.match(result?.detail || '', /root/)
+
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'install-ras-client.js'),
+    'utf8',
+  )
+  assert.ok(
+    source.indexOf('preflightSystemd(systemdTarget)') < source.indexOf('await register({'),
+    'systemd 可用性必须在设备凭证轮换前检查',
+  )
+})
+
+test('system-level unit uses multi-user target while user unit keeps default target', () => {
+  assert.match(installer.buildSystemdUnit?.('system') || '', /WantedBy=multi-user\.target/)
+  assert.match(installer.buildSystemdUnit?.('user') || '', /WantedBy=default\.target/)
 })
 
 test('sd_notify READY precedes capabilities and watchdog is faster than WatchdogSec/2', () => {
@@ -582,6 +1067,7 @@ test('runtime bundle carries config_sync.js next to the client script', () => {
   assert.match(runtimeDir, /\.agent-insight[/\\]client[/\\]runtime$/)
   const src = installer.installRuntime ? String(installer.installRuntime.toString()) : ''
   assert.match(src, /config_sync\.js/, 'installRuntime 必须固化 config_sync.js')
+  assert.match(src, /services.*executor.*src/s, 'installRuntime 必须固化 Benchmark executor')
 })
 
 test('server client bundle includes the managed FI runtime helper', () => {
@@ -590,6 +1076,7 @@ test('server client bundle includes the managed FI runtime helper', () => {
     'utf8',
   )
   assert.match(source, /scripts\/lib\/fi-python-runtime\.js/)
+  assert.match(source, /services\/executor\/src/)
 })
 
 test('long-poll cadence stays under the server command TTL', () => {

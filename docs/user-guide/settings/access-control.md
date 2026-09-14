@@ -82,13 +82,14 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 ## 功能定位
 
-客户端安装承担四项核心职责：
+客户端安装承担六项核心职责：
 
 - 按目标操作系统生成可直接执行的接入命令
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
 - 选择 OpenCode 时，在 Agent 主机安装普通观测插件与同进程 Agent RAS
+- 为生成 Trace 和 Benchmark 实验提供受控 Agent 执行、Artifact 上传与状态回调通道
 
 ## 页面结构
 
@@ -124,13 +125,24 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 > 注册步骤默认安装当前 Insight 服务端随附的客户端版本，不会被执行命令目录中的旧项目副本覆盖；
 > 重跑命令会刷新注册与设备凭证，并按机器标识复用原有客户端记录。
 
+Linux 会按实际权限与既有安装选择 systemd 层级：root 安装或检测到历史
+`/etc/systemd/system/agent-insight-client.service` 时使用系统级服务，普通用户新装使用
+`~/.config/systemd/user/agent-insight-client.service`。安装器会在刷新设备凭证前确认对应的
+systemd manager 可用；普通用户若遇到历史系统级服务，会先退出并提示使用 root 重跑，避免旧进程
+继续持有随后被撤销的凭证。macOS 仍使用当前用户的 `~/Library/LaunchAgents`。
+
 安装完成后客户端会：
 
 - 注册为系统服务，崩溃后由操作系统自动拉起，不随 Agent 平台启停
 - 主动建立出站 WSS 控制连接（不监听任何入站端口）
 - 自动发现本机 IP、Agent 平台、可用模型并上报
+- 按能力白名单接收普通实验和 `RUN_BENCHMARK_CASE`；Benchmark 在隔离 Git 工作区运行并按 Manifest 收集 Artifact
 - **同时纳管故障注入能力** —— 本机会一并出现在「实验」与「故障注入」页面，
   无需再单独执行 FI Worker 的安装命令
+
+客户端每 30 秒完整刷新一次 Agent、模型与故障注入能力；配置变化或手动刷新也会立即重新探测。
+每轮探测使用 `~/.agent-insight/client/tmp/inventory-*` 独立临时目录并在成功、失败或超时后清理，
+安装包也暂存在同一客户端目录下，不会持续向系统 `/tmp` 遗留 OpenCode/OpenTUI 的临时 `.so`。
 
 > **Note**
 > 该命令默认会一并安装故障注入组件。系统 Python 只用于创建 Agent Insight 管理的专用 venv，
@@ -142,7 +154,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 > 在 Homebrew / Debian 等 PEP 668「受管控 Python」环境下，安装器不会尝试全局 pip，
 > 因而不需要 `--break-system-packages`，也不会出现 `externally-managed-environment` 安装错误。
 
-客户端只接受固定动作白名单（配置写入、运行实验 Case 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。
+客户端只接受固定动作白名单（配置写入、普通实验 Case、`RUN_BENCHMARK_CASE` 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。Benchmark 任务中的仓库、revision、策略和 Artifact Collector 还会经过协议校验；客户端不开放 Benchmark 入站端口。
 
 > **Note**
 > 未安装 Python 或故障注入组件的主机同样可以正常上线，只是「故障注入能力」显示为不可用，不影响配置下发与观测。

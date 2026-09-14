@@ -57,7 +57,7 @@ test('空轨迹建议不产生标签或占位内容', () => {
   const points = [{ label: '完整性', score: 100, evidence: { md: '全部覆盖' } }];
   assert.equal(attachTrajectorySkillSuggestions(points, []), points);
 
-  const caseDetail = readFileSync('src/app/(main)/experiments/[id]/cases/[caseId]/page.tsx', 'utf8');
+  const caseDetail = readFileSync('src/components/eval/ExperimentCaseDetail.tsx', 'utf8');
   const evidenceBlock = readFileSync('src/components/eval/EvidenceBlock.tsx', 'utf8');
   assert.match(caseDetail, />证据与建议</);
   assert.match(caseDetail, /supplementalMarkdown=\{point\.suggestion\}/);

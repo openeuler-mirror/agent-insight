@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 
-import { ExperimentDetail } from '@/app/(main)/experiments/[id]/page';
-import { ExperimentCaseDetail } from '@/app/(main)/experiments/[id]/cases/[caseId]/page';
+import { ExperimentDetail } from '@/components/eval/ExperimentDetail';
+import { ExperimentCaseDetail } from '@/components/eval/ExperimentCaseDetail';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { apiFetch } from '@/lib/client/api';
 import {

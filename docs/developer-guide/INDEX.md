@@ -9,20 +9,54 @@
 
 | Field | Value |
 |---|---|
-| Commit | `f014059489d77af88671c222538978dffd12f109` (`f0140594`) |
-| Branch | `develop0228` |
-| Date | 2026-09-11 15:01:01 +0800 |
-| Author | openeuler-ci-bot |
-| Subject | `!385 Merge branch 'goal_plus'` |
-| Working tree overlay | 当前工作树在该快照之上同步了 FI Python 版本化 managed venv、AgentDebug 能力说明与 RAS catalog 解耦；补齐 launchd bootout/bootstrap 竞态重试与真实状态校验，让 systemd/launchd 固化安装终端 PATH 以发现用户目录中的 Agent；同时为可靠性数据集增加独立故障模式说明并施加界面/API 双重只读，将评测器分数契约与前端范围统一为 0-100，并在实验模型选项中展示 provider 以区分同名模型。当前工作树还修复了未绑定 Skill 会话的右栏空状态，并将历史会话改为带明确文字入口的顶栏临时浮层；同时恢复“运行观测 → 版本分析”导航入口，通过页面顶部“版本分析 / 版本管理”页签将标签管理收为版本分析的子能力，两个既有页面、API 与数据口径保持不变；新增自建评估器 `dataset_input` 变量、确定性数据集匹配门控与 `ExperimentCase.datasetInput` 快照，并统一“预期输出”展示术语；轨迹质量实验恢复独立 Skill 改进建议，并采用评分 5 分钟、建议每次 7 分钟且最多尝试 2 次的专属超时策略；Skill Copilot 的思考与命令过程现统一为默认折叠、可展开的状态行，并通过 `sessionId` 深链接与服务端增量 checkpoint 在多个页面间恢复同一运行状态；OpenCode 插件动态 Agent 发现通过 loopback `/agent` 读取 resolved Agent，每 30 秒在隔离子进程中绕过缓存并同步能力，macOS 后台服务使用独立 launchd helper 对齐交互式 OpenCode 环境，实验向导第一步定时及聚焦刷新候选；本轮另新增与历史组织集成隔离的 IDaaS OAuth 登录路由、模式契约与前端登录流程，并让开发启动在该模式下以状态接口判定就绪、跳过 admin Key 创建，同时让服务端日志输出不含配置值的具体 IDaaS 配置错误，并增加部署根路径下的 `/callback` 回调入口；userinfo 返回的 UUID 去除首尾空白后直接作为本地账号，首次登录自动创建、后续复用同一用户；修复页面重开时错误小写化 UUID 导致的 401，恢复登录保持 UUID 原始大小写；IDaaS 模式保留通用退出菜单，退出仅清理本地认证状态，不触发统一单点登出；新增默认关闭的地区访问限制，在用户创建前及 API Key 恢复时固定以 `uuids` 数组按 UUID 执行欧盟检查，地区服务异常失败关闭，并以独立文案区分地区受限与校验故障；人员接口返回的 `w3Account` 作为可选外部账号唯一绑定到 UUID 用户，仅用于界面展示和数据库反查，权限与数据归属仍以 UUID 为准。 |
+| Commit | `58c66e7d78df0b69e9fd86b364472e4f5acf44d7` (`58c66e7d`) |
+| Branch | `swebench-develop` |
+| Date | 2026-09-11 |
+| Author | mintuyang |
+| Subject | `修复客户端bug` |
+| Documentation overlay | 本轮未修改源码；补充当前 Benchmark 文件地图、控制通道、用户首次运行前置条件，并将统一设计入口收敛到 `docs/design/benchmark/`。 |
 
-Issue #168 在该快照上新增步骤效率与执行过程质量两个通用评估器及配套需求、设计、验收和使用说明；原轨迹质量评估器保持不变。
+### 旧快照至当前提交的变更摘要
 
-本轮工作树另将普通实验的平台生成 Trace、Skill 用例分析与 Skill A/B 测试的单次 Agent 执行上限统一为 600 秒；评估器超时与触发分析的独立 30 秒上限保持不变。Skill 用例分析与 A/B 的用户重跑也统一为从目标 Agent 执行开始，成功后重评该 Case/侧的全部评估器。
+> 2026-09-04 working-tree overlay：新增 Benchmark Agent 步骤 01～13。统一实验入口按 `scope=benchmark` 分流；真实 SWE-bench Verified Parquet 由官方 loader 导入，Adapter 隔离 Harness 数据、构造 Agent Task、校验 Agent Patch、冻结不含 gold patch 的 EvaluationJob，并归一化原生结果。执行器在独立 Git 工作区产出 Patch；常驻 Evaluator Controller 容器通过 Docker Socket 启动官方 Case 镜像，直接调用固定官方源码的 `make_test_spec()` 与 `run_instance()`，再上传证据并回调原生终态。结果处理先冻结 Raw Result，以 `primaryMetric` 做固定分母聚合，仅投影安全 `nativeMetrics`；确定性归一化失败收敛为非重试终态。新增 Benchmark 实验分页结果 API 和带用户/实验归属校验的证据下载 API。01～13 已复用真实数据库和真实 Case 通过 API 级串联；ARM64 Docker Desktop 上的 09～13 双层容器验收和 `deepseek/deepseek-v4-flash` + `pallets__flask-5014` 全真实 01～13 开发冒烟均通过，后者 Harness 判定为 pass；正式计分仍需 x86_64 Linux 验收。仍不包含前端、部署脚本、服务注册与 Verified 500 批量调度。
 
-Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语义 ingest、领域查询与完整度展示；Pi passive importer 使用独立持久化断点，只追加新增或修订事件。服务端对 `goal-plus:` session 启用持久化精确去重、并发锁、写入上限和流式聚合边界，并提供默认只读的历史 spool 修复工具。共享 uploader lock 支持原子发布及旧空锁、损坏锁、本机死进程锁恢复；Goal Plus Pi 上传采用最新分区优先和单轮有界策略，并暴露阻塞原因。Pi RPC Worker 区分受控交接终止与真实超时或 runner 错误；独立接入的 Pi 保持原有 oldest-first 和完整 backlog 处理语义。当前入口暂时隐藏，后端接入与查询能力保留。
+> 2026-09-05 working-tree overlay：Benchmark 扩展契约对齐高保真开发者模型。`benchmark.yaml` 成为 Manifest 唯一真源，构建期 Generator 生成平台 Adapter、Manifest 与 Evaluator Catalog；`AbstractBenchmarkAdapter` 收敛为五个业务 hook 并统一执行 Case/Result Schema 与 public/private 边界校验。执行器删除 SWE-bench Profile，改用 Workspace、Agent Runtime 和 Artifact Collector 三类通用能力注册表并支持多 Artifact；评测 Worker 删除 SWE-bench 直接依赖，改用 `doctor`、`evaluate --request ... --output ...` 文件 Entrypoint。SWE-bench 仅作为 `benchmarks/swe-bench/` 接入实例；新增 Benchmark 通常不改公共 API、调度器、执行器 Runner、评测 Worker 或 Prisma Schema。
 
-**如何更新：** `git diff f0140594 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+> 2026-09-08 working-tree overlay：Benchmark 执行目标复用普通实验的客户端动态能力发现，按 `clientId + platform + agent` 返回并二次校验候选；SWE-bench Manifest 不再固定 OpenCode，所选平台动态要求 `agent-runtime/{platform}/v1`。Benchmark Agent 任务改由现有客户端 `RUN_BENCHMARK_CASE` 白名单指令经 WSS/HTTPS 长轮询下发，常驻客户端直接调用本地 Runner，不再保存或配置 `executorBaseUrl`/监听地址；Git 工作区、Patch、Outbox、独立 Evaluator 和 Official Harness 链路不变。
+
+> 2026-09-08 working-tree overlay：Benchmark 前端最小接入复用数据集、四步实验向导、实验列表与详情路由；`SWE-bench Verified` 通过只读公共投影进入普通数据集入口，Official Harness 自动绑定，已有 Trace/监听及依赖参考答案的评估器在 Benchmark 下禁用。通用实验列表新增同配置立即运行与复用配置预填；Benchmark Case 详情只展示官方契约说明、Patch/证据元数据和归一化测试计数。Case 重跑复用通用入口，Official 重评复用最新 Patch 且默认单任务串行。
+
+> 2026-09-08 working-tree overlay：独立 Evaluator Controller 增加 Linux/macOS 源码一键部署、Docker restart policy、当前 context Socket 解析、持久化数据卷、容器内外 Doctor 和显式 SWE-bench Gold Smoke；普通启动不预拉 Case 镜像。每次部署在新镜像就绪后重建 Controller 容器，Doctor 成功后只清理旧 Controller 镜像，保留命名 volume 和 Case 镜像。Agent Insight 增加 `data/config/benchmark-evaluator.env` 原子热加载与进程环境变量兜底，目标 URL 和发送 Token 从同一快照冻结，回调鉴权支持当前/宽限期 Token，切换评测机或通信凭证不再要求重启主进程。Controller 基础健康与各 Evaluator 的 `ready/formalEligible` 分离，并输出宿主、Docker、源码 revision、`sourceDirty` 和镜像事实。版本化的构建期 Catalog 迁移到可见目录 `generated/benchmark-catalog/`，并用 `adapters.ts` 与 `catalog-lock.json` 明确 Adapter 注册表和内容指纹语义。Controller 构建默认使用带官方回退的国内 Debian/PyPI 镜像，SWE-bench Harness 改为下载固定 commit 的官方 GitHub codeload archive 并校验固定 SHA-256；Node 和 Case 镜像默认保留官方名称并复用宿主 registry mirror，仅在显式配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时先经指定代理拉取。
+
+> 2026-09-08 working-tree overlay：Benchmark Evaluator 双向认证新增显式 `token|none` 模式，默认继续使用共享 Bearer Token；仅在安全组或防火墙已限制两台服务互访时可选择 `none`，此时健康检查、任务下发、接单、Artifact 下载和全部评测回调都省略 Authorization。认证模式进入热加载配置与目标修订，启动脚本、Doctor 和配置脚本同步支持无 Token 部署。
+
+> 2026-09-09 working-tree overlay：Benchmark Catalog 新增 Dataset Loader、Dataset Profile 与声明式 Presentation；管理员可从任意服务端可读路径一次导入系统共享数据集，并选择在成功后删除源文件。共享数据集对所有用户只读，实验仍按用户隔离；管理员删除未引用数据，已引用数据改为归档。实验向导、执行目标和 Benchmark 结果卡按当前 Adapter/Manifest 动态渲染，不再依赖 SWE-bench 字段或固定 Evaluator ID。
+
+> 2026-09-10 working-tree overlay：Benchmark 平台新增运行失活 watchdog，按 Git 准备、冻结 Agent 上限加宽限期及后处理阶段分别设置阈值，以 CAS 将无进度 Case 收敛为失败并防止迟到回调复活。客户端执行器将 Artifact/完成回调重试拆为不占 Agent 槽的持久化投递 lane，增加指数退避与单次请求超时；Git shallow fetch 增加进程组级超时、瞬时错误白名单三次重试、工作区重建与命令级 HTTP/1.1 兜底，避免一次模型、回调或 GitHub 链路故障阻塞后续实验。Agent 执行第一阶段新增 `AGENT_TIMEOUT`、高置信 `MODEL_UNAVAILABLE`、`AGENT_EXIT_NONZERO` 与 `AGENT_NO_OUTPUT` 失败码，确定性失败立即终止且不自动重试，并在 Case 详情中明确展示；`0 LLM Turn` 因依赖异步 Trace 入库留待后续追踪阶段。
+
+> 2026-09-10 working-tree overlay：Benchmark 官方评测可靠性进一步收敛。SWE-bench Raw Result 使用严格 boolean 和官方报告结构；归一化同时绑定冻结实例/测试名单、正式资格以及重读并校验摘要的三类证据，字符串 `"false"`、错误实例、空/重复/未知测试或证据漂移均不能产生成绩。Evaluator 的 abort 成为不可逆 `EVALUATION_TIMEOUT`，callback 只接受结构与状态匹配的 ACK。平台增加 Evaluation 分阶段 watchdog、下发 attempt owner CAS、normalizing 恢复和带 owner lease 的持久化 continuation，终态 ACK 前先落续跑意图，服务重启可恢复且补充评估器不重复执行；旧 Run 无法覆盖 Case 重跑后的投影。聚合只取重试图叶子并稳定排序，防止历史尝试重复计分。官方 Harness 判定代码保持不变。
+
+> 2026-09-10 working-tree overlay：Benchmark Case 详情新增 Artifact 查看与下载入口。`model.patch`、`report.json`、`test_output.txt` 和 `run_instance.log` 均按需通过受控内容接口读取，在右侧抽屉展示；下载菜单复用原始 Artifact，不额外生成 ZIP。通用实验详情只投影 Artifact ID 派生的 `contentUrl`，不返回存储路径或文件正文；Patch 的浏览器下载在既有内容路由中新增用户/实验归属校验，同时保留 Evaluator Bearer 下载契约。
+
+> 2026-09-11 working-tree overlay：Linux 常驻客户端安装器按实际 systemd 层级运行：root 新装和历史 `/etc/systemd/system/agent-insight-client.service` 沿用系统级服务，普通用户新装保持用户级服务；systemd manager 预检提前到设备凭证轮换之前，避免旧系统进程继续持有已撤销凭证。
+
+> 2026-09-11 working-tree overlay：普通单组与 Benchmark 实验详情共用“同评测基线趋势”。服务端以冻结数据集、Case 集/契约和评分契约生成基线指纹，最多返回当前及之前 50 次已完成实验；前端默认显示最近 10 次，并可拖动或缩放时间窗口。普通实验展示生效综合分，SWE-bench 展示固定 Case 分母的 Resolve Rate。Agent、模型和执行客户端可变，监听和 A/B 实验暂不纳入。
+
+> 2026-09-11 working-tree overlay：Benchmark 跨机器回调改为按组件各自可达地址发送。执行客户端不新增配置，Artifact、进度和完成回调统一复用安装 `curl` 已写入的 `insightBaseUrl`；Evaluator 新增可选 `--platform-base-url` / `EVALUATOR_AGENT_INSIGHT_BASE_URL`，未配置时兼容任务地址。`token|none` 鉴权模式保持不变。Benchmark 详情以 Run 状态为真源，Patch 已上传时不再被通用 Trace pending 覆盖，并区分等待执行器终态与官方评测中。
+
+> 2026-09-11 working-tree overlay：OpenCode 实验执行不再只等总超时。客户端直接消费 `opencode run --format json` 的结构化事件：`session.error`/错误事件立即失败，`session.idle` 或进程正常退出且没有任何模型活动时收敛为 `MODEL_NO_RESPONSE`，首个模型输出/工具事件默认 90 秒仍未出现时收敛为 `MODEL_START_TIMEOUT`；收到首模型活动后仍沿用实验冻结的 Agent 总超时。这一检测在执行客户端本地完成，不依赖 Trace 先上传，同时适用普通生成 Trace 实验和 Benchmark。
+
+> 2026-09-11 working-tree overlay：常驻客户端保留每 30 秒完整刷新 Agent、模型与 FI 能力的节拍；每轮 inventory 将 `TMPDIR`/`TMP`/`TEMP` 指向 `~/.agent-insight/client/tmp/inventory-*` 并在成功、失败或超时后清理，避免 OpenCode/OpenTUI 原生 `.so` 堆积系统 `/tmp`。统一安装脚本的客户端 bundle 与 npm 兜底也改在 `~/.agent-insight/client/tmp/install-*` 暂存，系统 `/tmp` 已满时仍可完成客户端更新；临时 `scripts/package.json` 明确 CommonJS 包边界，避免继承 `.agent-insight/package.json` 的 ESM 类型。
+
+> 2026-09-13 upstream overlay：新增步骤效率与执行过程质量两个通用评估器及配套设计、验收和使用说明；原轨迹质量评估器保持不变。
+
+> 2026-09-13 upstream overlay：普通实验的平台生成 Trace、Skill 用例分析与 Skill A/B 测试的单次 Agent 执行默认上限统一为 600 秒；当前分支继续通过共享常量提供该默认值，并保留实验向导中的可配置入口。评估器超时与触发分析的独立 30 秒上限保持不变。
+
+> 2026-09-13 upstream overlay：合入 Goal Plus 双通道 collector、语义 ingest、领域查询、完整度展示及跨 Session 调用关系上报能力；Goal Plus 历史 spool 修复、持久化去重和有界上传策略保持独立。
+
+> 2026-09-14 upstream overlay：IDaaS userinfo 返回的 `w3Account` 作为可选外部账号唯一绑定到 UUID 用户，用于界面展示和数据库反查；权限与数据归属仍以 UUID 为准。
+
+**如何更新：** `git diff 58c66e7d HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -53,6 +87,7 @@ Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语
 | 查找哪个文件实现了 X | [03-file-map.md](03-file-map.md) |
 | 调用或扩展某个引擎 API / 类型 | [04-api-and-contracts.md](04-api-and-contracts.md) |
 | 端到端跟踪接入 / 评测流程 | [05-data-and-control-flow.md](05-data-and-control-flow.md) |
+| 接入新的 Benchmark | [07-conventions-and-extension.md](07-conventions-and-extension.md) · [Benchmark 统一接入设计](../design/benchmark/) |
 | 新增 API 路由或页面 | [01-architecture.md](01-architecture.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
 | 为页面设置样式 / 使用正确的颜色、间距或组件 | [08-design-system.md](08-design-system.md) |
 | 遵循项目的模式 | [07-conventions-and-extension.md](07-conventions-and-extension.md) |
@@ -72,5 +107,3 @@ Goal Plus 观测能力也在该快照上合入：新增双通道 collector、语
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。
 - **Ingest**：通过 OpenTelemetry 端点或框架 watcher/插件（包括 OpenCode、Claude、OpenClaw、AcTrail）接收 Agent 运行数据，并将其规范化为 `Execution` 记录。
 - **Skill issue / optimization point**：由静态或动态评测产生的、已发现的改进点（`SkillIssue`）；供 skill-opt 流程消费。
-
-本次工作树在上述 HEAD 上新增跨 Session 协作后端（独立事件、明确会话绑定与步骤定位），契约见 `04-api-and-contracts.md` 的 Cross-session collaboration backend；本次未重新生成其他历史指南内容。

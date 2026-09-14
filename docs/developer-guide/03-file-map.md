@@ -43,6 +43,8 @@
 ## lib — storage / ingest / auth / shared
 | File | Area | Key symbols |
 |---|---|---|
+| `benchmark/{adapter-base,adapter-registry,dataset-admin-service,dataset-loader-registry,dataset-ownership,dataset-service,public-dataset,experiment-service,experiment-lifecycle,orchestrator,scheduler,execution-targets,run-callback-service,detail-status,failure-presentation,evaluation-preparation-service,evaluator-target,evaluator-runtime-config,evaluation-scheduler,evaluation-callback-service,evaluation-continuation-service,experiment-result-service}.ts` | benchmark | 五方法 `AbstractBenchmarkAdapter`、Catalog 驱动的 Adapter/Loader、共享数据集、执行目标、实验与 Run 编排、执行/评测回调、watchdog、持久化 continuation、Raw Result、统一结果投影、固定分母聚合和安全证据读取 |
+| `../../packages/benchmark-protocol/src/{contracts,errors,json-schema,executor-contracts,evaluation-contracts,evaluator-contracts}.ts` / `../../benchmarks/swe-bench/{benchmark.yaml,adapter,dataset,evaluator,schemas,smoke}` / `../../services/{executor,evaluator}` / `../../scripts/{start-evaluator.sh,evaluator-doctor.sh,configure-evaluator-target.js}` / `../../scripts/benchmark/{generate-catalog.cjs,load_official_swebench_dataset.py}` / `../../generated/benchmark-catalog/*` | benchmark protocol / package / services | Agent/评测信封、Manifest/Schema、声明式执行器能力、统一文件 Evaluator Entrypoint、Linux/macOS 一键部署与 Doctor/Gold Smoke、构建期三端 Catalog、官方 Python loader 与 SWE-bench Harness 实例 |
 | `storage/data-service.ts` | storage | `saveExecutionRecord`、`extractInvokedSkillsFromSessionInteractions`、`readRecords`、`readConfig`、`findBestRoutingConfig`、`findBestOutcomeConfig`、`deriveSubagentExecutions`；`ExecutionRecord`、`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem` |
 | `trace-tags.ts` | storage | `listTraceTags`、`createTraceTag`、`updateTraceTag`、`deleteTraceTag`、`getExecutionTraceTags`、`addExecutionTraceTags`、`replaceExecutionTraceTags`、`removeExecutionTraceTag`、`getTraceTagsByExecutionIds` |
 | `storage/db-interface.ts` | storage | `getDatabaseAdapter`；`DatabaseAdapter`、`OpenGaussAdapter.query` |
@@ -115,6 +117,7 @@
 | skill-workbench | `skill-workbench/{sessions/*,skills/[name]/*}` | 会话、工作快照、快照/正式评估、三类实验、触发数据集、候选复测和按来源发布；Skill 对外 key 使用 name |
 | skill-management | `skill-management/skills` | 管理中心服务端搜索、筛选和分页；传入精确 `name + version` 时返回正式版本文件快照 |
 | eval | `eval/{config/*,evaluation,rejudge,settings,trajectory/*}` | 数据集配置、评测运行、轨迹评测 |
+| experiments / benchmark | `experiments`、`experiments/[id]/run`、`benchmark/v1/execution-targets`、`benchmark/v1/artifacts`、`benchmark/v1/artifacts/[artifactId]/content`、`benchmark/v1/runs/[runId]/{progress,complete}`、`benchmark/v1/evaluations/[evaluationId]/{progress,artifacts,complete}`、`benchmark/v1/experiments/[experimentId]`、`benchmark/v1/evaluations/[evaluationId]/artifacts/[artifactId]/content` | 普通与 Benchmark 统一实验生命周期；Benchmark 内部分支冻结 Run，经常驻客户端控制通道下发 Agent 任务，再下发不可变 EvaluationJob、接收并归一化原生结果，并按用户返回固定分母聚合与受控 Artifact 内容 |
 | debug | `debug/{batch-tasks/*,grayscale-tasks/*,execute/*,history/*}` | 批量与灰度（A/B）执行编排 |
 | observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*,version-analysis/*}` | Observability data, infra observation, execution analysis, Trace tag binding, and version-analysis aggregation |
 | tags | `tags`、`tags/[id]` | Trace 用户标签定义 CRUD（版本标签 / 业务标签） |

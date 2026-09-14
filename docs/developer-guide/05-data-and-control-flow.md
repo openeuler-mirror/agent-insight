@@ -14,6 +14,7 @@
 | `POST` skill-generator chat | `src/app/api/skill-generator/chat/route.ts` | HTTP |
 | `POST` skill-opt chat | `src/app/api/skill-opt/chat/route.ts` | HTTP |
 | `POST` fault diagnosis | `src/app/api/fault/diagnosis/stream/route.ts` | HTTP |
+| `POST` benchmark experiment / run | `src/app/api/experiments/route.ts`、`src/app/api/experiments/[id]/run/route.ts` | HTTP |
 | `Claude Code OTel logs` | `src/app/api/ingest/setup/route.ts` | 客户端 OTel 配置 |
 | `AcTrail otel-http setup` | `src/app/api/ingest/setup/actrail-setup.ts` | 已安装 AcTrail 的导出插件配置 |
 | `TRAE VS Code plugin` | `scripts/trae-collector/src/extension.ts` | VS Code 插件采集 |
@@ -191,7 +192,7 @@ Skill 工作台的用例分析与 A/B 通过 `GrayscaleTask` 编排 Agent 运行
 
 用例分析与 A/B 的用户触发重跑统一调用 `POST /api/debug/grayscale-tasks/:taskId` 的 `action='retry-execution'`。服务端用 `caseId + side + runIndex` 锁定单次运行；A/B 的 `side='both'` 同时锁定 `runIndexes.a/b`，两侧 Agent 在同一任务锁内并行执行。重跑保留 backing `ExperimentCase` 的稳定 ID，清空当前绑定与评分后按冻结的 Skill、模型和运行配置重新执行 Agent；执行成功后只对目标 Case/侧启动包含全部已配置评估器的标准实验批次，执行失败则直接把对应评估单元结算为失败。前端不再整份 PATCH `caseStatesJson`，提交后立即轮询，并把 409 等错误显示在当前行；成功结果重新执行前要求确认。操作可用性以 backing `Experiment` 的终态为权威来源，运行记录已有有效得分也视为已结束，避免灰度任务投影未收敛时仍显示“执行中”；后端采用同一口径，保证按钮恢复后请求不会因残留状态被拒绝。这里的用户操作语义与上文“只补失败评估器”的内部自动重试不同。
 
-用例分析与 A/B 测试创建任务时均冻结 600 秒的单次 Agent 执行上限；触发分析继续使用独立的 30 秒上限，后续评估器继续使用各自的超时和重试策略。
+用例分析与 A/B 测试创建任务时均冻结实验向导提交的单次 Agent 执行上限，默认 600 秒、可配置范围为 30～3600 秒；触发分析继续使用独立的 30 秒上限，后续评估器继续使用各自的超时和重试策略。
 
 实验建议同步按稳定 `runId + dedupKey` 更新已有派生行，保留 SkillIssue ID 与优化写入的解决状态。候选质量通过且产生真实文件差异后，执行项、归并计划与相同 dedupKey 的源问题在同一事务中完成状态回写；失败、冲突与 backlog 保持待处理。
 
@@ -208,6 +209,58 @@ flowchart LR
     pool --> settle["全部终态后 settle Experiment"]
     settle --> align["analyze-match / 轨迹归因"]
 ```
+
+## 后端流水线：Benchmark Agent 执行与回传
+
+```mermaid
+flowchart LR
+    parquet["本地 Verified Parquet"] --> official["官方 load_swebench_dataset"]
+    official --> isolate["Adapter 白名单拆分 Public / Private"]
+    isolate --> create["POST /api/experiments\ndatasetKind=benchmark"]
+    create --> freeze["冻结 Dataset / Case / Client / RunConfig"]
+    start["POST /api/experiments/:id/run"] --> split["Adapter 拆分 Public / Private"]
+    split --> task["Adapter 构造完整 Prompt\n并校验 AgentTaskEnvelope"]
+    task --> outbox["事务保存 Task + digest + Outbox"]
+    outbox --> dispatch["RUN_BENCHMARK_CASE\nWSS / HTTPS 长轮询"]
+    dispatch --> accepted["COMMAND_STATUS accepted\nrunId/digest 匹配"]
+    accepted --> workspace["按能力 ID 选择 Workspace\nAgent Runtime + Artifact Collector"]
+    workspace --> agent["Agent Runtime 执行\nOpenCode 解析结构化事件"]
+    agent --> patch["收集 model.patch"]
+    agent --> earlyFail["无模型响应时提前失败"]
+    patch --> artifact["POST /api/benchmark/v1/artifacts"]
+    artifact --> cleanup["清理工作区"]
+    cleanup --> complete["POST /runs/:runId/complete\nRun=submitted"]
+    complete --> validate["Adapter 校验 Artifact\n重算 size + SHA-256"]
+    validate --> evaluation["事务冻结 EvaluationJob + Outbox"]
+    config["运行时配置快照\n文件热加载 + env 兜底"] --> health
+    evaluation --> health["GET Evaluator /health"]
+    health --> evalDispatch["POST Evaluator /api/v1/evaluations"]
+    evalDispatch --> evalAccepted["202 + evaluationId/digest 匹配\nrunning_evaluator"]
+    evalAccepted --> download["Evaluator 经受控 API 下载 model.patch"]
+    download --> entrypoint["统一 evaluator doctor/evaluate\n文件输入输出契约"]
+    entrypoint --> harness["SWE-bench: 官方 make_test_spec + run_instance\n每 Case 独立容器"]
+    harness --> evalCleanup["Harness 清理 + Controller 标签兜底清理"]
+    evalCleanup --> evidence["POST evaluation artifacts\nreport/test_output/run_instance.log"]
+    evidence --> raw["POST evaluation complete\nRaw Result 先落库"]
+    raw --> normalize["冻结任务 + 证据闭合校验\nAdapter.normalizeResult"]
+    normalize --> continuation["事务写终态 + continuation pending\n租约续跑可恢复"]
+    continuation --> settle["按最新重试叶子收敛实验\nexpectedCaseCount 固定分母"]
+    settle --> query["GET /api/experiments/:id（浏览器）\nBenchmark 专用只读查询保留"]
+```
+
+导入阶段要求真实 Verified 数据恰好包含 500 个唯一 Case。同一实验固定单 Case 串行。`benchmarks/*/benchmark.yaml` 是接入唯一 Manifest，构建期 Catalog 把 Adapter 和 Evaluator 描述装配进三端；核心链路不直接 import 具体 Benchmark。执行器只接收 Public；Private 留在服务端，完整 Prompt 由 Adapter 生成。执行下发和评测下发都先持久化再联网，连接结果未知时使用同一 `runId + requestDigest` 重发；`SERVICE_BUSY` 延迟重试，`RUN_ID_CONFLICT` 永久失败。执行器按统一信封中的能力 ID 选择工作区、Agent Runtime 和每个 Artifact Collector；准备独立 Git 工作区后同时设置子进程 `cwd` 与 `PWD`，收集 diff 时排除协议保留路径 `model.patch`。执行器先逐个上传 Artifact，再清理工作区，最后回传终态。Agent Insight 随后校验 Patch 并下发包含隐藏测试配置但不含 gold patch 的 EvaluationJob；评测服务只能通过鉴权 Artifact API 获取 Patch。常驻 Controller 容器把 Docker Socket 映射到宿主 Docker，并通过统一文件 Entrypoint 运行 Catalog 选中的 Evaluator；SWE-bench Entrypoint 在每 Case 容器中运行官方 Harness。Harness 自身清理后，Controller 再按 evaluation 标签兜底删除遗留容器，然后回传三类证据和 Raw Result。平台先冻结 Raw Result，再归一化和投影；`resolved=false` 是有效业务失败，镜像、Docker 或 Harness 失败才是无分的系统失败，清理异常作为独立事实保留而不覆盖已生成的官方判分。相同 completion 以 digest 幂等重放，不同内容冲突；Raw Schema/映射失败返回非重试 422 并把 Case 收敛为 `evaluation_failed`，数据库持久化失败才保留可重试状态。实验仅在终态 Case 数严格等于 `expectedCaseCount` 时完成；查询服务使用该固定分母计算 `resolvedRate`，只返回安全 `nativeMetrics` 和 Artifact 描述，完整官方报告通过归属校验后的证据下载访问。
+
+Benchmark 的执行目标发现与普通实验共享客户端能力真源：从客户端上报的 `platforms[].agents/models` 中筛选支持普通 Trace 生成、`RUN_BENCHMARK_CASE` 且可回传 Trace ID 的平台。Adapter Manifest 只校验 Benchmark 固定能力；所选平台在候选查询和创建实验时动态追加 `agent-runtime/{platform}/v1`，执行器守护进程也只为同一批就绪平台注册 Runtime。平台、Agent 或能力在创建前失效时拒绝创建，不进入持久化调度。
+
+前端接入不建立第二套流程：受控导入同时生成只读 `AgentEvalDataset` 公共投影和私有 `BenchmarkDataset`；通用实验创建按公共数据集类型在服务端分流并预建每 Case 的 Official/普通评估结果。Agent 成功后把 Trace ID 绑定回 `ExperimentCase`，Official 完成后再运行不依赖参考答案的补充评估器，全部结果终态后继续下一 Case 并收敛实验。Case 重跑创建新的 `BenchmarkCaseRun`；Official 单项重评复用最新 Patch、新建 attempt，且全局只允许一个重评任务。
+
+第一阶段在 Agent 子进程与 Artifact 收集边界做确定性失败收敛，`BenchmarkCaseRun.status` 统一进入 `execution_failed`，具体原因保存在 `failureCode` 并由详情页映射展示。OpenCode 执行直接解析 `opencode run --format json` 事件，不等待 Trace 异步入库：结构化 `session.error`/错误事件按确定证据分为 `MODEL_UNAVAILABLE` 或 `MODEL_ERROR`；`session.idle` 或正常退出时若从未看到非空文本、推理、工具或 step finish 则为 `MODEL_NO_RESPONSE`；进程仍活着但默认 90 秒内没有首个模型活动则为 `MODEL_START_TIMEOUT`。以上失败会立即 TERM/KILL 进程组；已观察到模型活动后才继续使用冻结的 Agent 总超时，超时使用 `AGENT_TIMEOUT`。其他非零退出使用 `AGENT_EXIT_NONZERO`；模型已运行但必需 Patch 为空时使用 `AGENT_NO_OUTPUT`。这些确定性失败立即停止当前 Case，不进入 Artifact 上传或 Official Harness，也不参与自动重试；用户修复外部条件后通过 Case 重跑开启新的 Run。
+
+平台运行两类 Benchmark watchdog。Agent Run 在启动时先扫描一次，此后每 30 秒扫描 `running_agent/collecting/uploading/cleaning`：进度为 `preparing` 时阈值 7 分钟，其余 `running_agent` 取冻结 `timeoutSeconds + 90s`，后三阶段固定 5 分钟。Evaluation 同周期扫描 queued/dispatch 不确定、运行 Harness、证据收集/上传/清理和 `normalizing`：除 Harness 取 `timeoutSeconds + 90s` 外，其余阶段固定 5 分钟。活性一律使用服务端接收时间。watchdog、完成回调和下发响应分别以状态/活性时间及 outbox `attemptCount` 做 CAS；胜者写终态，迟到 completion 或 dispatch 不能复活已回收任务。终态事务先持久化结果行、Case 状态和 `continuationStatus=pending` 再 ACK；持久化 continuation 使用递增 attempt 作为 owner lease，服务重启或下次 watchdog 可恢复，且会跳过已经完成的补充评估器。旧 Run 发现后继重跑时直接停止，不能覆盖新投影。执行器把 `complete_pending/upload_pending` 从 Agent 串行槽中拆成独立投递 lane，持久化失败次数和下次投递时间，采用 5 秒起步、最大 5 分钟的指数退避；单次 HTTP 回调 30 秒超时。投递 lane 与新 Agent 任务可并行，重启后均从磁盘状态恢复。Git Workspace Provider 的 fetch 单次超时为 120 秒，只对白名单瞬时网络故障进行总计 3 次尝试，退避为 1 秒、2 秒并附加小幅随机抖动；每次尝试前重建仓库，避免超时遗留 lock/半包，最后一次以 invocation-local `-c http.version=HTTP/1.1` 兜底。fetch 使用独立进程组，超时先 TERM、2 秒后 KILL，并禁用交互式凭据提示；永久仓库、revision、鉴权、证书和磁盘错误不重试。
+
+SWE-bench 的归一化不信任单一回传字段。平台把冻结 `EvaluationJob` 和重读、复核 size/SHA-256 后的 `report.json` 一起交给 Adapter；Adapter 要求实例一致、严格 JSON boolean、`FAIL_TO_PASS/PASS_TO_PASS` 与冻结名单完整且唯一、Raw Result 计数与官方报告一致，并精确验证三类证据契约。字符串 `"false"`、错误实例、空/缺失/重复/未知测试或证据内容漂移都收敛为无分的分类错误，不能产生 pass；运行架构不参与结果准入。Controller 对超时后的进程退出 0 仍固定判为 `EVALUATION_TIMEOUT`，且仅接受结构和状态均匹配的 callback ACK。实验结果查询只采用 Case 重试图中的叶子 Run，并以 `createdAt + id` 稳定排序，避免旧尝试重复计分。
+
+评测通信配置由 `EvaluatorRuntimeConfigProvider` 统一提供：每次相关操作从 `data/config/benchmark-evaluator.env` 读取一份 URL、认证模式、当前/宽限期 Token 与 HTTP 策略的完整快照，文件缺失时回退进程环境变量。合法原子替换在下一次操作生效，非法或半写入更新继续使用上一份有效配置。认证默认使用 `token`；显式 `none` 时 Agent Insight 的健康检查与任务下发、Controller 的接单、Artifact 下载及进度/证据/完成回调都不发送或校验 Authorization，安全边界完全由双向安全组或防火墙承担。`AGENT_INSIGHT_PUBLIC_BASE_URL` 是冻结到实验绑定、供远端 Evaluator 使用的协议地址；Evaluator 可通过 `EVALUATOR_AGENT_INSIGHT_BASE_URL`（启动参数 `--platform-base-url`）覆盖其实际下载 Artifact 和回调 Agent Insight 的网络地址，未配置时沿用任务地址。执行客户端不增加独立部署配置：安装 `curl` 已写入的 `insightBaseUrl` 同时用于 Artifact 上传、进度和完成回调，因而 Agent Insight、执行客户端、Evaluator 三机分离时也不会误用任务中的 loopback origin。可选的 `AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL` 仅作为旧客户端和冻结协议的兼容字段；新版客户端仍校验其 HTTP(S) 协议和精确 Run 路径，但不将该 origin 作为出站目标。Benchmark 执行任务本身通过现有客户端 WSS/长轮询控制通道下发，不要求客户端开放端口。执行 Outbox 仍冻结回调 URL 以保持 digest 和旧客户端兼容；已冻结任务不会被改写。新 Evaluation 同时冻结目标 URL 与认证配置修订，避免切换期间拼接新旧值；已冻结旧目标的重试不会自动采用新认证模式或 Token。Linux/macOS 上由 `start-evaluator.sh` 构建和常驻运行 Controller；构建期 Debian/PyPI 默认使用国内镜像并在失败时回退官方源，SWE-bench Harness 从官方 GitHub codeload 下载固定 commit archive 并校验固定 SHA-256。新 Controller 镜像就绪后，脚本每次都重建同名容器；Doctor 成功后精确清理旧 Controller 镜像，但保留命名 volume 与全部 Case 镜像。Node 基础镜像名称保持官方值并复用宿主 Docker daemon 的 registry mirror；Case 镜像默认同样使用官方名称并复用宿主 registry mirror。显式配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时，才先通过该代理拉取并恢复官方 tag，代理失败再回退官方地址。在线镜像优先冻结 registry digest；`docker save/load` 离线导入且没有 `RepoDigests` 时冻结不可变 Image ID。部署脚本不修改宿主全局配置。默认 Doctor 不拉取 Case 镜像，显式 Gold Smoke 和真实任务才按需拉取。
 
 ## 后端流水线：Skill 生成与优化
 ```mermaid
@@ -260,6 +313,10 @@ flowchart LR
 `.agent-insight/agent-debug-final.json` 是一键诊断的唯一报告真源。每次运行前 runner 会删除同一 workspace 中的旧 final 文件，Agent 校验新文件后只返回 `AGENT_DEBUG_REPORT_READY`，服务端不再解析或要求模型回显完整报告。AgentDebug 将事件流最长时间设为 45 分钟，并给通用 Agent 配置默认 10 分钟“无有效进展” watchdog；只有心跳而没有真实 session 事件时，watchdog 通过 AbortSignal 中止底层 `session.prompt`。重跑同一 Execution 时会重新生成 `AgentDebugReport.id`，并同时刷新 `ranAt` 与 `updatedAt`；`id` 用于区分当前 attempt，`ranAt` 表示该 attempt 的开始边界。
 
 AgentDebug 主诊断后端只向诊断 Agent 提供执行元数据、turn/node/artifact 数量和输入、静态、trace bundle 文件路径，不再把长 turn 摘要嵌入提示词。Skill 依次运行 `agentdebug_static.py` 全量拆分与静态检测、`agentdebug_inspect.py` 生成五模块候选信号并执行有界的 `tail/range/search/repeated-calls` 查询，再由 Agent 补充语义问题和 Phase 2；`agentdebug_validate.py --static` 校验最终报告未删除静态 step、issue 或 Phase 1 证据。超过 4000 字符的节点输入/输出由 trace bundle 外置为 artifact，查询脚本只返回完整 artifact 中的命中片段。
+
+## 实验 Agent 执行超时
+
+普通实验与 Benchmark 实验冻结的 Agent 默认执行上限均为 600 秒。实验向导允许用户配置 30～3600 之间的整数秒数，创建时分别写入普通实验的 `executionTarget.timeoutSeconds` 或 Benchmark 的 `runConfig.timeoutSeconds`；复用实验时会回填冻结值。该值只控制执行器运行 Agent 的时间；Benchmark Evaluator/Harness 使用独立的评测超时配置。
 
 ## 跨模块流程说明
 每条后端流水线都跨越 `app`（路由）→ `lib`（引擎/存储），并经常涉及 `prompts`（LLM 模板）和 `server`（Prisma 仓库）。`lib ↔ server` 循环（见 [01-architecture.md](01-architecture.md#layering--pattern)）意味着存储辅助函数与仓库会相互调用；应将它们视为同一个持久化核心。

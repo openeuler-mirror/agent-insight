@@ -72,7 +72,7 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 
 **生成 Trace** 使用数据集 Case 重新运行 Agent，再对新产生的 Trace 执行评估。
 
-每个 Case 的 Agent 最长执行 10 分钟；达到上限仍未结束时，本次 Trace 生成按超时失败处理。该上限只约束 Agent 运行，不改变后续评估器各自的超时与重试规则。
+每个 Case 的 Agent 执行上限默认是 10 分钟，可在实验向导中配置为 30～3600 秒；达到上限仍未结束时，本次 Trace 生成按超时失败处理。该上限只约束 Agent 运行，不改变后续评估器各自的超时与重试规则。
 
 <p align="center">
   <img src="../../images/agent/evaluation/eval_experiment_trace_generate.png" alt="新建实验第二步，选择生成 Trace，包含运行主机 IP、provider/model 和数据集 Case" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
@@ -86,6 +86,12 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 - 至少勾选一个数据集 Case。
 
 模型按完整的 `provider/model` 标识执行；页面在模型名旁展示 provider，避免同名模型混淆。开始实验后，系统等待新 Trace 完整入库，再运行评估器。
+
+#### Benchmark 实验
+
+选择受控导入的 Benchmark 数据集后仍使用同一套四步向导，但必须生成新 Trace，不能选择已有 Trace 或开启监听。以 `SWE-bench Verified` 为例，系统会自动绑定 `SWE-bench Official Harness`；还可追加不依赖参考答案的普通评估器。
+
+Benchmark Case 详情会展示 Instance ID、Patch 摘要、官方测试计数及失败码，并提供 Patch、官方报告、测试输出和运行日志的查看与原始文件下载。Agent 生成并上传 Patch 后，实际输出会立即显示 Patch 名称、大小和 SHA-256：执行器终态尚未送达时标记“Patch 已生成，等待执行器确认…”，确认后且 Official Harness 尚未结束时标记“官方评测中…”，不再继续显示“正在生成 Trace”。OpenCode 会话若报告错误，或进入 idle/正常退出时仍没有任何模型输出与工具调用，Case 会提前失败；会话一直无明确终态时，默认等待首个模型活动 90 秒后收敛为“等待模型响应超时”，不再等到 600 秒的 Agent 总超时。已完成的 SWE-bench 实验还会展示固定 Case 分母的 Resolve Rate 同基线趋势。重试 Case 会重新执行完整 Agent 与官方评测链路；单独重评 Official Harness 时复用该 Case 最新 Patch。Agent 执行上限默认 600 秒，官方 Harness 使用独立超时。需要部署独立 Evaluator Controller 时，参见[跑通第一次评测](./quickstart#swe-bench-等容器-benchmark-的评测服务)。
 
 ### 第三步：预期答案
 
@@ -180,6 +186,12 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 ### 评估器分解
 
 每个评估器分别展示均分和计入数量。由此可以判断综合分下降来自哪个评分维度，而不是只查看一个总分。
+
+### 同评测基线趋势
+
+已完成、非监听的普通单组实验和 Benchmark 实验会展示最多 50 次同基线趋势。普通实验使用综合得分，SWE-bench 使用 Resolve Rate。
+
+普通实验只比较数据集、Case 集与 Case 契约、Trace 来源和评估器配置都相同的记录；Benchmark 只比较 Adapter、数据集内容版本、Case 集和官方评测契约相同的记录。Agent、模型和执行客户端可以不同。横轴按实验时间从旧到新排列，默认窗口展示最近 10 次；历史超过 10 次时可从下拉框选择最多显示最近 10、20 或 50 次，再通过底部时间窗口缩放或平移。悬停、聚焦或点击节点时，底部摘要会跟随显示该点的日期、指标、Agent、模型及相较前一次的变化；节点浮层中的“查看实验详情”和底部历史实验入口都会进入该点对应的实验。仅有当前一次时显示空状态。A/B 实验暂不展示该趋势。
 
 ### Case 明细
 

@@ -6,7 +6,7 @@ import { FlaskConical, GitCompareArrows, Loader2, MousePointerClick, Rows3 } fro
 import {
   ExperimentWizard,
   type SkillExperimentPreset,
-} from '@/app/(main)/experiments/new/page';
+} from '@/components/eval/ExperimentWizard';
 import { apiFetch } from '@/lib/client/api';
 import { SkillExperimentResult } from './SkillExperimentResult';
 

@@ -212,7 +212,7 @@ test('优化记录复用 Monaco 行级 Diff，评测详情限制长内容溢出�
   const records = readFileSync('src/components/skill-workbench/OptimizationRecordsPanel.tsx', 'utf8');
   const recordDiff = readFileSync('src/components/skill-workbench/OptimizationRecordDiff.tsx', 'utf8');
   const legacyDiff = readFileSync('src/app/(main)/skill-opt/_FileDiff.tsx', 'utf8');
-  const caseDetail = readFileSync('src/app/(main)/experiments/[id]/cases/[caseId]/page.tsx', 'utf8');
+  const caseDetail = readFileSync('src/components/eval/ExperimentCaseDetail.tsx', 'utf8');
   assert.match(records, /OptimizationRecordDiff/);
   assert.match(records, /selectedRecordId[\s\S]*onSelectRecordId/);
   assert.match(records, /优化摘要[\s\S]*max-h-64 min-h-28 overflow-y-auto/);
@@ -266,11 +266,11 @@ test('生成快照沿用旧生成与发布门禁，不把工作台静态评估�
 });
 
 test('Skill 实验复用四步向导并仅由预设改变默认配置', () => {
-  const wizard = readFileSync('src/app/(main)/experiments/new/page.tsx', 'utf8');
+  const wizard = readFileSync('src/components/eval/ExperimentWizard.tsx', 'utf8');
   const panel = readFileSync('src/components/skill-workbench/ExperimentPanel.tsx', 'utf8');
   const result = readFileSync('src/components/skill-workbench/SkillExperimentResult.tsx', 'utf8');
-  const experimentDetail = readFileSync('src/app/(main)/experiments/[id]/page.tsx', 'utf8');
-  const caseDetail = readFileSync('src/app/(main)/experiments/[id]/cases/[caseId]/page.tsx', 'utf8');
+  const experimentDetail = readFileSync('src/components/eval/ExperimentDetail.tsx', 'utf8');
+  const caseDetail = readFileSync('src/components/eval/ExperimentCaseDetail.tsx', 'utf8');
   const experimentService = readFileSync('src/lib/skill-workbench/experiment-service.ts', 'utf8');
   const experimentApi = readFileSync('src/app/api/experiments/[id]/route.ts', 'utf8');
   const triggerEvaluator = readFileSync('src/lib/skill-workbench/trigger-evaluator.ts', 'utf8');

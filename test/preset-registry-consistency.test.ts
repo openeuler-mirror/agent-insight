@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '../src/lib/evaluators/preset-evaluators';
-import { hasPresetMeta } from '../src/lib/evaluators/registry';
+import { getPresetExecutionBackend, hasPresetMeta } from '../src/lib/evaluators/registry';
 import {
   FAITHFUL_PRESET_IDS,
   isFaithfulPresetId,
@@ -155,9 +155,13 @@ test('每张预置卡都在 registry 登记了元数据（否则静默回退 res
   }
 });
 
-test('每张预置卡都被恰好一个分发谓词认领（否则运行时才抛「缺少可执行的 LLM 配置」）', () => {
+test('普通预置卡由通用实验分发认领，外部调度卡不进入通用分发', () => {
   for (const card of presetEvaluators) {
     const owners = PRESET_RUNNERS.filter((r) => r.claims(card.id)).map((r) => r.name);
+    if (getPresetExecutionBackend(card.id) === 'benchmark-service') {
+      assert.equal(owners.length, 0, `${card.id} 由独立评测服务调度，不应进入通用实验分发`);
+      continue;
+    }
     assert.equal(
       owners.length,
       1,
