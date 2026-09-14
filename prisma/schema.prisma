@@ -897,6 +897,8 @@ model ExperimentCase {
   input           String     @default("")
   actualOutput    String     @default("")
   referenceOutput String?
+  /// 数据集 Case 绑定及评测上下文快照；普通实验用它定位关键观点缓存写回目标。
+  caseValuesJson  String?
   createdAt       DateTime   @default(now())
 
   results ExperimentEvalResult[]
