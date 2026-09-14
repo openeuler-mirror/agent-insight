@@ -757,6 +757,93 @@ function buildRootCauseReadyMeta(expectedOutput: string, nowIso: string): Datase
   };
 }
 
+export type DatasetCaseRootCauseCacheWriteStatus =
+  | 'updated'
+  | 'already-cached'
+  | 'stale'
+  | 'not-found'
+  | 'conflict';
+
+export function prepareLiveRootCauseCacheWrite(
+  dataset: AgentDatasetRecord,
+  caseId: string,
+  expectedOutput: string,
+  rootCauses: RootCauseItem[],
+  now: Date,
+): { status: DatasetCaseRootCauseCacheWriteStatus; cases?: DatasetCase[] } {
+  const caseIndex = dataset.cases.findIndex(item => item.id === caseId);
+  if (caseIndex < 0) return { status: 'not-found' };
+
+  const currentCase = dataset.cases[caseIndex];
+  if (currentCase.expectedOutput !== expectedOutput) return { status: 'stale' };
+  if (canReuseRootCauseCache(currentCase.expectedOutput, currentCase.rootCauseMeta)) {
+    return { status: 'already-cached' };
+  }
+
+  const cases = dataset.cases.map((item, index) => index === caseIndex
+    ? {
+        ...item,
+        rootCauses: normalizeRootCauseItems(rootCauses),
+        rootCauseMeta: buildRootCauseReadyMeta(expectedOutput, now.toISOString()),
+      }
+    : item);
+  return { status: 'updated', cases };
+}
+
+export async function cacheLiveRootCausesForDatasetCase(options: {
+  user: string;
+  datasetId: string;
+  caseId: string;
+  expectedOutput: string;
+  rootCauses: RootCauseItem[];
+  now?: Date;
+}): Promise<DatasetCaseRootCauseCacheWriteStatus> {
+  const { user, datasetId, caseId, expectedOutput, rootCauses, now = new Date() } = options;
+  const prisma = tryGetPrisma();
+  if (prisma) {
+    await migrateLegacyJsonIfNeeded(prisma);
+    const row = await prisma.agentEvalDataset.findFirst({ where: { id: datasetId, user } });
+    if (!row) return 'not-found';
+
+    const prepared = prepareLiveRootCauseCacheWrite(
+      recordFromDbRow(row),
+      caseId,
+      expectedOutput,
+      rootCauses,
+      now,
+    );
+    if (!prepared.cases) return prepared.status;
+
+    const projection = buildAgentDatasetProjection(prepared.cases);
+    const result = await prisma.agentEvalDataset.updateMany({
+      where: { id: datasetId, user, updatedAt: row.updatedAt },
+      data: {
+        casesJson: JSON.stringify(prepared.cases),
+        ...projection,
+        projectionReady: true,
+        updatedAt: row.updatedAt,
+      },
+    });
+    return result.count > 0 ? 'updated' : 'conflict';
+  }
+
+  warnFileBackendOnce();
+  const datasets = readLegacyFileSync();
+  const datasetIndex = datasets.findIndex(item => item.id === datasetId && item.user === user);
+  if (datasetIndex < 0) return 'not-found';
+  const prepared = prepareLiveRootCauseCacheWrite(
+    datasets[datasetIndex],
+    caseId,
+    expectedOutput,
+    rootCauses,
+    now,
+  );
+  if (!prepared.cases) return prepared.status;
+  datasets[datasetIndex] = { ...datasets[datasetIndex], cases: prepared.cases };
+  writeLegacyFileSync(datasets);
+  return 'updated';
+}
+
 export interface PrepareDatasetCasesOptions {
   nextCases: DatasetCase[];
   previousCases?: DatasetCase[];

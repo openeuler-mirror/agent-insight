@@ -8,8 +8,27 @@ import {
 import {
   normalizeCase,
   prepareDatasetCasesForPersistence,
+  prepareLiveRootCauseCacheWrite,
+  type AgentDatasetRecord,
   type DatasetCase,
 } from '@/server/agent_datasets_storage';
+
+function datasetWithCases(cases: DatasetCase[]): AgentDatasetRecord {
+  return {
+    id: 'dataset-1',
+    user: 'tester',
+    name: 'dataset',
+    description: '',
+    targetAgent: '',
+    targetSkill: '',
+    tags: [],
+    cases,
+    fields: [],
+    datasetKind: 'ideal_output',
+    createdAt: '2026-05-26T00:00:00.000Z',
+    updatedAt: '2026-05-26T00:00:00.000Z',
+  };
+}
 
 test('reuses cached root causes when expectedOutput is unchanged', async () => {
   let calls = 0;
@@ -126,4 +145,60 @@ test('stores failed metadata and warning when extraction fails', async () => {
   assert.equal(result.cases[0]?.rootCauseMeta?.status, 'failed');
   assert.match(result.cases[0]?.rootCauseMeta?.error || '', /mock extract failed/);
   assert.deepEqual(result.cases[0]?.rootCauses, []);
+});
+
+test('prepares a single-case live extraction cache write', () => {
+  const first = normalizeCase({ id: 'case-1', input: 'q1', expectedOutput: 'answer-1' });
+  const second = normalizeCase({ id: 'case-2', input: 'q2', expectedOutput: 'answer-2' });
+  const result = prepareLiveRootCauseCacheWrite(
+    datasetWithCases([first, second]),
+    'case-1',
+    'answer-1',
+    [{ content: 'point-1', weight: 2 }],
+    new Date('2026-05-27T00:00:00.000Z'),
+  );
+
+  assert.equal(result.status, 'updated');
+  assert.deepEqual(result.cases?.[0]?.rootCauses, [{ content: 'point-1', weight: 2 }]);
+  assert.equal(result.cases?.[0]?.rootCauseMeta?.status, 'ready');
+  assert.equal(result.cases?.[0]?.rootCauseMeta?.expectedOutputHash, hashExpectedOutput('answer-1'));
+  assert.deepEqual(result.cases?.[1], second);
+});
+
+test('rejects a stale live extraction result after expectedOutput changes', () => {
+  const current = normalizeCase({ id: 'case-1', input: 'q', expectedOutput: 'new answer' });
+  const result = prepareLiveRootCauseCacheWrite(
+    datasetWithCases([current]),
+    'case-1',
+    'old answer',
+    [{ content: 'stale point', weight: 1 }],
+    new Date('2026-05-27T00:00:00.000Z'),
+  );
+
+  assert.equal(result.status, 'stale');
+  assert.equal(result.cases, undefined);
+});
+
+test('does not overwrite an already valid root cause cache', () => {
+  const current = normalizeCase({
+    id: 'case-1',
+    input: 'q',
+    expectedOutput: 'answer',
+    rootCauses: [{ content: 'cached point', weight: 1 }],
+    rootCauseMeta: {
+      status: 'ready',
+      expectedOutputHash: hashExpectedOutput('answer'),
+      updatedAt: '2026-05-26T00:00:00.000Z',
+    },
+  });
+  const result = prepareLiveRootCauseCacheWrite(
+    datasetWithCases([current]),
+    'case-1',
+    'answer',
+    [{ content: 'late point', weight: 1 }],
+    new Date('2026-05-27T00:00:00.000Z'),
+  );
+
+  assert.equal(result.status, 'already-cached');
+  assert.equal(result.cases, undefined);
 });
