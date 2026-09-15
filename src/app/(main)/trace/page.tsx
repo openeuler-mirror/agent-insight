@@ -1773,7 +1773,7 @@ function Row({
             </Td>
             {columnVisibility.traceId && (
                 <Td>
-                    <IdChip value={id} head={6} tail={4} />
+                    <IdChip value={id} adaptive />
                 </Td>
             )}
             {columnVisibility.task && (
