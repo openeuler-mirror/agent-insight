@@ -6,7 +6,6 @@ import {
     Key,
     Copy,
     Check,
-    Info,
     BookOpen,
     ExternalLink,
     CircleCheck,
@@ -142,8 +141,8 @@ export default function AccessInstallPage() {
                                     <span style={introDot} />
                                     <span>
                                         {isZh
-                                            ? <>在 AcTrail 实际运行的 <b style={descStrong}>Linux / WSL</b> 环境执行下方命令;脚本只配置上报插件,不会安装或包装 AcTrail。</>
-                                            : <>Run the command below in the <b style={descStrong}>Linux / WSL</b> environment where AcTrail runs. The script only configures telemetry; it does not install or wrap AcTrail.</>}
+                                            ? <>在 AcTrail 实际运行的 <b style={descStrong}>Linux</b> 环境执行下方命令;脚本只配置上报插件,不会安装或包装 AcTrail。</>
+                                            : <>Run the command below in the <b style={descStrong}>Linux</b> environment where AcTrail runs. The script only configures telemetry; it does not install or wrap AcTrail.</>}
                                     </span>
                                 </li>
                             </ul>
@@ -168,7 +167,7 @@ export default function AccessInstallPage() {
 
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
-                                label="Linux / WSL"
+                                label="Linux"
                                 hint={isZh ? '使用 AcTrail 所在环境的 bash / zsh 终端' : 'Use a bash / zsh shell in the AcTrail environment'}
                                 cmd={linuxCmd}
                                 copied={copied === 'linux'}
@@ -176,18 +175,7 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />
 
-                            {/* Footer hint */}
-                            <div style={hintBox}>
-                                <div style={hintIcon}><Info size={16} /></div>
-                                <div style={{ flex: 1, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
-                                    <p>{isZh
-                                        ? <>所有 Linux / WSL 用户：配置完成后，继续使用原来的 <code style={inlineCode}>sudo actrailctl launch --name &lt;名称&gt; -- &lt;Agent 命令&gt;</code> 启动 Agent。</>
-                                        : <>For all Linux / WSL users: after configuration, continue launching agents with <code style={inlineCode}>sudo actrailctl launch --name &lt;name&gt; -- &lt;agent command&gt;</code>.</>}</p>
-                                    <p>{isZh
-                                        ? 'Windows 用户：请先进入安装 AcTrail 的 WSL 发行版，再执行上述配置和启动命令。'
-                                        : 'On Windows, enter the WSL distribution that hosts AcTrail before running the configuration and launch commands.'}</p>
-                                </div>
-                            </div>
+
                         </div>
 
                         {/* --- Right sidebar --- */}
@@ -288,8 +276,8 @@ function ApiKeyPanel({
                 )}
                 <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 10, lineHeight: 1.6 }}>
                     {isZh
-                        ? '脚本运行时提示输入 API Key —— 粘贴上方值即可。'
-                        : 'Paste this when the script prompts for an API key.'}
+                        ? '左侧命令已包含当前账号的 API Key，复制后即可执行。'
+                        : 'The command includes your current API key and is ready to copy and run.'}
                 </div>
             </div>
         </section>
@@ -666,27 +654,6 @@ const copiedBtn: CSSProperties = {
     borderColor: 'var(--success-subtle-border)',
 };
 
-const hintBox: CSSProperties = {
-    marginTop: 4,
-    padding: '14px 18px',
-    border: '1px dashed var(--border-dark)',
-    borderRadius: 10,
-    background: 'var(--background-secondary)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-};
-
-const hintIcon: CSSProperties = {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    background: 'var(--primary-subtle)',
-    color: 'var(--primary)',
-    display: 'grid',
-    placeItems: 'center',
-    flexShrink: 0,
-};
 
 
 const inlineCode: CSSProperties = {

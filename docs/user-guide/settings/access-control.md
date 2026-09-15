@@ -15,7 +15,7 @@ description: "为 AcTrail 配置 Agent Insight 链路上报"
 页面包含三个区域：
 
 1. **AcTrail 接入命令**
-   提供在 Linux / WSL 中执行的一键命令。
+   提供在 Linux 中执行的一键命令。
 2. **凭证与接入信息**
    展示当前账号、API Key、平台地址和 OTLP traces 上报路径。
 3. **相关文档**
@@ -23,33 +23,29 @@ description: "为 AcTrail 配置 Agent Insight 链路上报"
 
 页面生成的命令固定选择 `actrail`，不会进入其他框架的交互式安装流程。
 
-所有 Linux / WSL 用户在配置完成后，都继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>` 启动 Agent。Windows 用户需要先进入安装 AcTrail 的 WSL 发行版，再执行配置和启动命令；这一前置步骤只适用于 Windows。
-
 ## 接入前提
 
 执行命令前确认：
 
 - `actraild` 已安装并运行
 - AcTrail 官方 `otel-http` 插件存在
-- 当前终端位于 AcTrail 实际运行的 Linux / WSL 环境
+- 当前终端位于 AcTrail 实际运行的 Linux 环境
 - 当前登录账号和页面右侧 API Key 归属一致
-
-Windows 用户应进入安装 AcTrail 的 WSL 发行版后执行页面中的 Unix 命令，不要直接在 PowerShell 中执行。
 
 ## 操作流程
 
 1. 进入 **配置 → 安装指导**。
 2. 确认右侧账号、API Key 和平台地址。
-3. 复制 **Linux / WSL** 命令。
+3. 复制 **Linux** 命令。
 4. 在 AcTrail 所在环境执行命令。
 5. 脚本生成 `~/.agent-insight/actrail/otel-http.config.toml`，并通过 `actraild plugin load --persist` 加载 `agent-insight.otel-http` 实例。
-6. 继续使用原有命令启动 Agent：
+6. 在 AcTrail 中运行一次 Agent 任务，然后进入 [链路追踪](../observability/view-traces) 确认上报结果。
 
-   ``bash
-   sudo actrailctl launch --name <名称> -- <Agent 命令>
-   ``
+页面命令格式如下，平台地址和 API Key 由当前登录信息自动填入：
 
-7. 进入 [链路追踪](../observability/view-traces) 确认新的 Trace。
+```bash
+curl -sSf "http://<平台地址>:3000/api/ingest/setup?key=<当前账号API_KEY>&yes=1&frameworks=actrail" | bash
+```
 
 AcTrail 使用 `/api/ingest/otel/v1/traces` 上报 protobuf OTLP traces，并在请求中携带当前用户的 API Key。
 
@@ -89,6 +85,5 @@ export ACTRAIL_PLUGIN_DIR=/path/to/plugins
 
 ## 下一步
 
-- 完成 Agent 资产登记： [Agent 管理](../agent-management)
 - 验证链路是否成功上报： [链路追踪](../observability/view-traces)
 - 继续完成整体接入流程： [5 分钟上手](../quickstart)
