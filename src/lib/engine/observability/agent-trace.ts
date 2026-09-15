@@ -52,6 +52,7 @@ export interface InteractionPart {
 }
 
 export interface RawInteraction {
+    _payloadVersion?: string;
     role: InteractionRole;
     content?: string;
     timestamp?: number | string;
@@ -101,6 +102,15 @@ export interface RawInteraction {
     trace_output?: unknown;
     trace_status?: string;
     trace_synthetic?: boolean;
+    /** Read-only cross-session projection metadata. Never persisted back to the native trace. */
+    trace_relation?: {
+        sourceType: string;
+        relationKind?: string;
+        eventId: string;
+        description: string;
+        anchorState: string;
+        role?: string;
+    };
     status?: string;
     error?: string | { message?: string };
     error_summary?: string;
@@ -139,6 +149,8 @@ export interface AgentEvent {
     summary?: string;
     /** Token usage attached to this event (only meaningful for llm/task) */
     usage?: InteractionUsage;
+    /** Provenance for a virtual cross-session relation rendered as a task row. */
+    relation?: RawInteraction['trace_relation'];
 }
 
 export interface AgentNodeStats {
@@ -187,6 +199,8 @@ export interface AgentNode {
     systemPrompts?: SystemPromptEntry[];
     /** Hook 注入的 additionalContext(collected from role="hook_context" interactions) */
     hookContexts?: HookContextEntry[];
+    /** Provenance inherited from the collaboration relation that attached this node. */
+    relation?: RawInteraction['trace_relation'];
     /** Compaction boundaries inside this slice, chronological. LLM calls whose
      *  interactionIndex is greater than `compactions[k].interactionIndex` saw
      *  the summary of compaction k (and not the original prior context). */
@@ -282,6 +296,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         parallelCount: number;
         /** Original parent interaction index, used for stable FIFO matching. */
         parentInteractionIndex: number;
+        relation?: RawInteraction['trace_relation'];
     }
 
     /** Pending task spawns waiting for their first subagent interaction */
@@ -296,6 +311,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             spawnEvents: [ev],
             parallelCount: 1,
             parentInteractionIndex,
+            relation: ev.relation,
         });
     }
 
@@ -402,7 +418,8 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             continue;
         }
 
-        const isSub = (it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
+        const isProjectedSubUser = it.role === 'user' && !!it.trace_relation;
+        const isSub = (isProjectedSubUser || it.role === 'subagent' || it.role === 'trace' || it.role === 'skill') && !!it.subagent_session_id;
         const sid = isSub ? (it.subagent_session_id as string) : 'TOP';
         const agentName = it.agent || (isSub ? (it.subagent_name || 'Subagent') : rootAgentName);
 
@@ -428,6 +445,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
                     (host as AgentNode).parallelCallCount = claim.parallelCount;
                 }
                 parent.children.push(host);
+                host.relation = claim.relation;
                 sessionToNode.set(sid, host); // rebind: subsequent same-sid interactions extend this newest slice
                 for (const spawnEvent of claim.spawnEvents) {
                     spawnEvent.spawnedChildId = host.id;
@@ -726,6 +744,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,
             completedAt: toMsTimestamp(tc.timing?.completed_at),
             summary: summarizeToolCall(displayName, args),
+            relation: it.trace_relation,
         };
         (ev as any)._toolCallId = tc.id;
         (ev as any).splitParallelTask = !!tc.trace_split_parallel_task;

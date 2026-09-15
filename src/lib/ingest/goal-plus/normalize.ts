@@ -24,6 +24,10 @@ function cleanString(value: string, path: string, truncated: Set<string>): strin
   return `${Array.from(redacted).slice(0, MAX_STRING).join('')}...[TRUNCATED]`;
 }
 
+export function sanitizeGoalPlusText(value: string, path: string, maxLength: number): string {
+  return Array.from(cleanString(value, path, new Set())).slice(0, maxLength).join('');
+}
+
 function sanitize(
   value: unknown,
   path: string,
@@ -74,7 +78,7 @@ export function sanitizeGoalPlusPayload(snapshot: GoalPlusSnapshotEnvelopeV1): S
 
 export function sanitizeGoalPlusLabel(value: string | undefined): string | null {
   if (!value?.trim()) return null;
-  return cleanString(value.trim(), 'source.label', new Set()).slice(0, 160);
+  return sanitizeGoalPlusText(value.trim(), 'source.label', 160);
 }
 
 export function jsonObject(value: unknown): Record<string, unknown> {

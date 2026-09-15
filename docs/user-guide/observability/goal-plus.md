@@ -49,6 +49,8 @@ Pi RPC worker 完成一个 dispatch 后，Goal Plus 会主动关闭常驻 RPC �
 
 当前版本暂不在侧边栏展示 Goal Plus 观测入口，未完成的观测界面不作为当前展示功能对外引导。Goal Plus collector、语义 ingest、原生 Trace 导入、持久化和关联仍正常运行，页面源码也继续保留，供后续完善后重新开放。
 
+服务端还会把每个 Goal 中的逻辑主会话与 worker 投影为跨 Session 协作关系。该能力不要求升级或改造 Goal Plus collector，也不会改变 Pi/Codex 原生 Trace：主 Trace 唯一时关联到具体执行，主 Trace 尚未到达时保留待关联状态，发现多个主会话时明确标记歧义而不会任选一个父级。Pi 会以 active native Session 精确选择本次 passive canonical 主 Trace，历史主 Trace 不会覆盖当前关联；原生 collector 产生 `<nativeSessionId>__taskN` 时，只有 query 明确以 `/goal-plus` 开头且基础 Session ID 唯一命中同一 Goal，才会作为主 Trace 的只读显示别名。独立的协作图前端入口本期仍不开放；但对于两端都已唯一关联的 Goal Plus 关系，通用链路追踪的 **仅主 Agent** 列表隐藏独立 worker 行，详情在查询时把 worker 只读展示为主 Trace 下的 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**；切换到 **仅子 Agent** 或 **主 Agent + 子 Agent** 仍可查到 worker。这个展示不会写回原始 Session 或 Execution，也不会推断未经采集证据确认的具体启动调用位置；无法唯一关联时仍保持独立 Trace。
+
 预留的详情页设计包含：
 
 - 总览：Goal 状态、work-item 依赖、Search run 和关联摘要；
@@ -63,6 +65,8 @@ Pi RPC worker 完成一个 dispatch 后，Goal Plus 会主动关闭常驻 RPC �
 Pi worker 使用 `--no-extensions` 时，collector 从 Goal Plus 明确记录的每个 native session 被动还原 Agent、LLM、Tool、MCP、Skill 和 usage，不因 worker 是 candidate、work item 或 final checker 而漏采。Pi 中输入 `/goal-plus` 的主对话也会从当前 attached 工作区对应的 Pi session 目录定向补采，并按 Goal Plus invocation 分段；它不会扫描其他工作区或仅按时间猜测。其时间通常标记为 `derived`。Codex 与其他已有采集通道保持原有行为；Goal Plus 可使用 host metadata 中的 Codex conversation + turn 构造既有 execution ID，且只匹配 `framework=codex`。关联仍只使用 native/session/execution ID 或唯一的确定性任务名。
 
 Pi/Codex 原生 Trace 的输入、输出、工具参数和工具结果会先递归脱敏，再默认完整写入本地 spool 并转换为 OTLP，不再使用固定的 2000 字符正文上限。Goal Plus Pi 被动导入还会保留 native session 中已写入的 thinking、后续 user/custom message 和完整 tool result。即使单条事件超过默认上传批次大小，也会整条单独上传，不会因此卡住或二次截断；诊断错误摘要上限仍然生效。该行为只影响升级采集器后重新扫描或新产生的 Trace，历史记录中已经写入且源 session 已删除的 `[TRUNCATED ...]` 内容无法恢复。
+
+展示归属以当前 Goal 明确登记的 Search run 为边界，不把同名 Goal 的历史 worker 挂到本次主 Trace。worker 标签带 candidate ID，描述带 run ID，方便核对；同一 Session 的续跑不会生成重复子 Agent。历史、关联有歧义、正文尚未到达或超过展示上限的 worker 保留独立入口。关系更新失败会保留上一次完整结果，不会因后台重关联过程短暂拆开再合并；正常采集延迟仍可能使新 worker 稍后出现。这里仍是“Goal Plus 编排”关系，未凭空确认某个具体 spawn 调用。
 
 ## 隐私、失败恢复与卸载
 

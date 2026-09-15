@@ -356,6 +356,8 @@ export async function GET(request: Request) {
         || searchParams.get('includeSubagents') === 'true';
     const onlySubagents = searchParams.get('onlySubagents') === '1'
         || searchParams.get('onlySubagents') === 'true';
+    const collapseGoalPlusWorkers = searchParams.get('collapseGoalPlusWorkers') === '1'
+        || searchParams.get('collapseGoalPlusWorkers') === 'true';
     const skillVersionStr = searchParams.get('skillVersion');
     const skillVersion = skillVersionStr ? parseInt(skillVersionStr, 10) : undefined;
     const attachEvaluations = includeEvaluationsParam === '1' || includeEvaluationsParam === 'true';
@@ -433,6 +435,7 @@ export async function GET(request: Request) {
         skillVersion,
         includeSubagents,
         onlySubagents,
+        collapseGoalPlusWorkers,
         parentExecutionId,
         clauses,
         userTagIds: userTagIds.length > 0 ? userTagIds : undefined,

@@ -316,8 +316,9 @@ goal-plus:<sourceId>:<agentSessionId>
 
 主会话的 `<agentSessionId>` 使用 `main:<goalId>:<nativeSessionId>:<markerId>`，因此重复
 扫描幂等，同一 Pi session 中的不同 Goal invocation 也不会互相覆盖。发现结果写入
-Goal 的 `activeSession.mainSessions` 关联证据，服务端可同时链接现存 native execution
-和被动导入 execution。
+Goal 的 `activeSession.mainSessions` 关联证据；服务端以顶层 active session ID 与列表中
+native/canonical ID 的唯一交集选择当前主会话，同时链接现存 native execution 和被动
+导入 execution，历史主会话不覆盖当前关联。
 
 native Pi session ID 保存为 attribute：
 
