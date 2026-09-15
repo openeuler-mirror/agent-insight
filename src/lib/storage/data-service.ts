@@ -2036,8 +2036,14 @@ async function readRecordsInternal(
         const totalToolErrors = aggregate._sum.toolCallErrorCount ?? 0;
         stats = {
             total,
-            // 当前生命周期读路径只产出 running/success；failed 保留在 API enrichment 后兼容计算。
-            failedCount: 0,
+            failedCount: await prismaRaw.execution.count({
+                where: {
+                    AND: [where, {
+                        framework: 'actrail',
+                        failures: { contains: '"failure_type":"agent-process-exit"' },
+                    }],
+                },
+            }),
             avgLatencyMs: (aggregate._avg.latency ?? 0) * 1000,
             toolErrorRate: totalTools > 0
                 ? Math.round((totalToolErrors / totalTools) * 1000) / 10

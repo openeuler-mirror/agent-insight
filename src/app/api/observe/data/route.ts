@@ -110,17 +110,19 @@ function toIsoTimestamp(value: unknown): string | null {
     return ms != null && ms > 0 ? new Date(ms).toISOString() : null;
 }
 
-function getTraceLifecycle(completedAt: unknown): {
+function getTraceLifecycle(completedAt: unknown, record?: Record<string, unknown>): {
     traceStatus: TraceLifecycleStatus;
     traceCompletedAt: string | null;
     traceStatusReason: string;
 } {
     const completedIso = toIsoTimestamp(completedAt);
     if (completedIso) {
+        const processFailed = record?.framework === 'actrail' && Array.isArray(record.failures)
+            && record.failures.some(failure => failure?.failure_type === 'agent-process-exit');
         return {
-            traceStatus: 'success',
+            traceStatus: processFailed ? 'failed' : 'success',
             traceCompletedAt: completedIso,
-            traceStatusReason: 'session-ended',
+            traceStatusReason: processFailed ? 'agent-process-exit' : 'session-ended',
         };
     }
 
@@ -533,12 +535,12 @@ export async function GET(request: Request) {
         const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
         const last_eval_status = lastEval?.status ?? null;
         const last_eval_error = lastEval?.errorMessage ?? null;
-        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null);
+        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null, record);
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
         if (skipAutoEvalReady) {
-            const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+            const traceLifecycle = baseTraceLifecycle.traceStatus !== 'running'
                 ? baseTraceLifecycle
                 : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
                     ? getTraceLifecycle((await getAutoEvalReadiness(record)).traceCompletedAt)
@@ -559,7 +561,7 @@ export async function GET(request: Request) {
             };
         }
         const readiness = await getAutoEvalReadiness(record);
-        const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+        const traceLifecycle = baseTraceLifecycle.traceStatus !== 'running'
             ? baseTraceLifecycle
             : getTraceLifecycle(readiness.traceCompletedAt);
         return {
