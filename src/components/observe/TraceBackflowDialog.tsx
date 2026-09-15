@@ -393,7 +393,14 @@ export function TraceBackflowDialog(props: {
       });
       const result = await response.json();
       if (!response.ok || !result?.success) throw new Error(result?.error || '回流保存失败');
-      toast.success(`${result.inserted || previewRows.length} 条 Trace 已加入评测数据集`);
+      const inserted = Number(result.inserted) || 0;
+      const skippedDuplicates = Number(result.skippedDuplicates) || 0;
+      const summary = `新增 ${inserted} 条 Trace，跳过 ${skippedDuplicates} 条重复 Trace`;
+      if (inserted === 0 && skippedDuplicates > 0) {
+        toast.info(summary);
+      } else {
+        toast.success(summary);
+      }
       props.onSaved?.();
       props.onOpenChange(false);
     } catch (reason) {

@@ -68,6 +68,8 @@
 
 > 2026-09-15 working-tree overlay：Benchmark 前端完成通用 Presentation 渲染。数据集详情、创建实验和实验详情共用字段路径与格式化模块；自动绑定使用独立 `evaluatorKey`，Evaluator 文案来自接入包；Case 详情展示完整 Submission/Evidence 列表和归一化评分点，趋势名称使用 `aggregateLabel`，公共组件不再包含 SWE-bench 字段、单 Patch、固定证据文件或 Adapter 特判。
 
+> 2026-09-15 working-tree overlay：Trace 回流按 `traceSource.taskId` 在目标数据集和当前批次内去重；接口分别返回新增数与重复跳过数，全部重复时不修改数据集，前端提示对应结果。
+
 **如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
+  deduplicateTraceBackflowCases,
   mapBackflowCanonicalValues,
   normalizeBackflowValues,
   parseBackflowFieldMappings,
@@ -137,16 +138,20 @@ export async function POST(request: Request) {
       }
     }
 
+    const deduplicated = deduplicateTraceBackflowCases(current?.cases || [], rows);
+    const rowsToInsert = deduplicated.cases;
     let dataset: AgentDatasetRecord;
     if (mode === 'existing' && current) {
       dataset = {
         ...current,
-        fields,
-        cases: [...current.cases, ...rows],
-        updatedAt: new Date().toISOString(),
+        fields: rowsToInsert.length > 0 ? fields : current.fields,
+        cases: [...current.cases, ...rowsToInsert],
+        updatedAt: rowsToInsert.length > 0 ? new Date().toISOString() : current.updatedAt,
       };
-      const updated = await updateAgentDatasetRecord(dataset);
-      if (!updated) return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+      if (rowsToInsert.length > 0) {
+        const updated = await updateAgentDatasetRecord(dataset);
+        if (!updated) return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
+      }
     } else {
       const now = new Date().toISOString();
       dataset = {
@@ -158,7 +163,7 @@ export async function POST(request: Request) {
         targetSkill: '',
         tags: ['trace-backflow'],
         fields,
-        cases: rows,
+        cases: rowsToInsert,
         datasetKind: fields.some(field => field.key === 'trace' || field.key === 'trajectory')
           ? 'trajectory'
           : 'ideal_output',
@@ -168,7 +173,7 @@ export async function POST(request: Request) {
       await createAgentDatasetRecord(dataset);
     }
 
-    const caseIds = rows.map(row => row.id);
+    const caseIds = rowsToInsert.map(row => row.id);
 
     // 回流一次同时构成"链路追踪→回流"与"数据集→Trace 回流"两个功能的有效使用。
     recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.backflow' });
@@ -180,7 +185,10 @@ export async function POST(request: Request) {
       caseId: caseIds[0],
       caseIds,
       inserted: caseIds.length,
-      addedFields: mode === 'existing' ? fields.length - (current?.fields.length || 0) : fields.length,
+      skippedDuplicates: deduplicated.skippedDuplicates,
+      addedFields: mode === 'existing'
+        ? rowsToInsert.length > 0 ? fields.length - (current?.fields.length || 0) : 0
+        : fields.length,
     });
   } catch (error) {
     console.error('agent-datasets backflow POST error:', error);

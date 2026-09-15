@@ -1,13 +1,51 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  deduplicateTraceBackflowCases,
   mapBackflowCanonicalValues,
   normalizeBackflowValues,
   parseBackflowFieldMappings,
   parseBackflowFields,
 } from '@/lib/agent-dataset-backflow';
 import { POST } from '@/app/api/agent-datasets/backflow/route';
+
+function backflowCase(id: string, taskId?: string) {
+  return {
+    id,
+    input: id,
+    expectedOutput: '',
+    evaluationFocus: '',
+    tags: [],
+    trajectory: '',
+    ...(taskId ? {
+      traceSource: { taskId, executionId: `execution-${id}`, capturedAt: '2026-09-15T00:00:00.000Z' },
+    } : {}),
+  };
+}
+
+test('skips trace backflow cases already present in the target dataset', () => {
+  const result = deduplicateTraceBackflowCases(
+    [backflowCase('existing', 'trace-1')],
+    [
+      backflowCase('duplicate-existing', 'trace-1'),
+      backflowCase('new', 'trace-2'),
+      backflowCase('duplicate-batch', 'trace-2'),
+      backflowCase('legacy-without-source'),
+    ],
+  );
+
+  assert.deepEqual(result.cases.map(item => item.id), ['new', 'legacy-without-source']);
+  assert.equal(result.skippedDuplicates, 2);
+});
+
+test('trace backflow toast always reports inserted and skipped counts', () => {
+  const dialog = readFileSync('src/components/observe/TraceBackflowDialog.tsx', 'utf8');
+
+  assert.match(dialog, /`新增 \$\{inserted\} 条 Trace，跳过 \$\{skippedDuplicates\} 条重复 Trace`/);
+  assert.doesNotMatch(dialog, /result\.inserted \|\| previewRows\.length/);
+});
 
 test('keeps trace backflow as a native JSON array', () => {
   const trace = [

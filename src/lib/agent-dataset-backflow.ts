@@ -2,7 +2,7 @@ import {
   defaultTraceBackflowSourceForField,
   type TraceBackflowArtifactSource,
 } from '@/lib/agent-dataset-model';
-import type { DatasetField, DatasetFieldType } from '@/server/agent_datasets_storage';
+import type { DatasetCase, DatasetField, DatasetFieldType } from '@/server/agent_datasets_storage';
 
 const FIELD_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 const FIELD_TYPES = new Set<DatasetFieldType>(['text', 'number', 'boolean', 'json']);
@@ -11,6 +11,32 @@ const ARTIFACT_SOURCES = new Set<TraceBackflowArtifactSource>(['input', 'output'
 export interface BackflowFieldMapping {
   key: string;
   source: TraceBackflowArtifactSource;
+}
+
+function traceBackflowKey(item: DatasetCase): string | null {
+  const taskId = item.traceSource?.taskId?.trim();
+  return taskId ? `task:${taskId}` : null;
+}
+
+export function deduplicateTraceBackflowCases(
+  existingCases: DatasetCase[],
+  candidates: DatasetCase[],
+): { cases: DatasetCase[]; skippedDuplicates: number } {
+  const seen = new Set(existingCases.map(traceBackflowKey).filter((key): key is string => Boolean(key)));
+  const cases: DatasetCase[] = [];
+  let skippedDuplicates = 0;
+
+  for (const candidate of candidates) {
+    const key = traceBackflowKey(candidate);
+    if (key && seen.has(key)) {
+      skippedDuplicates += 1;
+      continue;
+    }
+    if (key) seen.add(key);
+    cases.push(candidate);
+  }
+
+  return { cases, skippedDuplicates };
 }
 
 export function parseBackflowFields(
