@@ -22,7 +22,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 | --- | --- | --- |
 | 本地登录 | `LOGIN_MODE=standalone`（默认） | 用户输入邮箱，登录即注册，可以主动退出 |
 | 历史组织集成 | `ORGANIZATION_MODE=true`、`ORG_*` | 依赖上游网关 Cookie，并可联动组织 Skill 接口 |
-| IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，按返回 UUID 注册或登录，可退出当前网页账号 |
+| IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，以 UUID 归属数据，侧边栏优先显示人员账号，可退出当前网页账号 |
 
 历史组织集成是以前为特定应用保留的组织接口能力；IDaaS OAuth 登录是独立的 OAuth 2.0 授权码登录。两者不共享配置、接口或 Cookie，也不支持同时开启。冲突配置会显示登录配置错误，不会降级为本地登录。
 
@@ -68,7 +68,9 @@ IDAAS_REGION_ACCESS_IAM_ENTERPRISE=
 IDAAS_REGION_ACCESS_TLS_VERIFY=false
 ```
 
-真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。地区限制开启后，平台在创建用户前固定以 `{ uuids: [uuid] }` 查询人员信息，并在已有账号恢复时复查。欧盟地区显示“您的地区暂无法使用”；IAM/人员接口异常、空数据或关键字段缺失时失败关闭，显示“地区信息校验失败，请稍后重试”。
+真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。地区限制开启后，平台在创建用户前固定以 `{ uuids: [uuid] }` 查询人员信息，并在已有账号恢复时复查。同一人员响应中的 `w3Account` 会保存到 UUID 对应用户的 `externalAccount` 字段，只用于侧边栏展示和运维反查；接口未返回时仍显示 UUID。已有用户会在下次成功登录或恢复会话时自动补齐。欧盟地区显示“您的地区暂无法使用”；IAM/人员接口异常、空数据或关键字段缺失时失败关闭，显示“地区信息校验失败，请稍后重试”。
+
+运维人员可按外部账号查询对应 UUID：`SELECT username FROM "User" WHERE "externalAccount" = ?`。真实账号值只存在部署数据库中，不进入代码仓。
 
 网页登录没有固定的空闲或绝对过期时间。浏览器会在当前 origin 的 `localStorage` 中保存 UUID 和 API Key，重新打开页面时使用两者恢复登录；API Key 有效且数据库用户仍存在时无需重新走 IDaaS。清理站点数据、改用其他协议/域名/IP/端口、API Key 或用户被删除、数据库被重置，或者部署切换登录模式时，需要重新登录。OAuth state 的 5 分钟有效期和 callback 登录票据的 60 秒有效期只约束单次授权跳转，不是网页会话时长；重新走 OAuth 时是否再次输入账号密码，由公司 IDaaS 的 SSO 会话策略决定。
 
@@ -80,13 +82,14 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 ## 功能定位
 
-客户端安装承担四项核心职责：
+客户端安装承担六项核心职责：
 
 - 按目标操作系统生成可直接执行的接入命令
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
 - 选择 OpenCode 时，在 Agent 主机安装普通观测插件与同进程 Agent RAS
+- 为生成 Trace 和 Benchmark 实验提供受控 Agent 执行、Artifact 上传与状态回调通道
 
 ## 页面结构
 
@@ -122,13 +125,24 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 > 注册步骤默认安装当前 Insight 服务端随附的客户端版本，不会被执行命令目录中的旧项目副本覆盖；
 > 重跑命令会刷新注册与设备凭证，并按机器标识复用原有客户端记录。
 
+Linux 会按实际权限与既有安装选择 systemd 层级：root 安装或检测到历史
+`/etc/systemd/system/agent-insight-client.service` 时使用系统级服务，普通用户新装使用
+`~/.config/systemd/user/agent-insight-client.service`。安装器会在刷新设备凭证前确认对应的
+systemd manager 可用；普通用户若遇到历史系统级服务，会先退出并提示使用 root 重跑，避免旧进程
+继续持有随后被撤销的凭证。macOS 仍使用当前用户的 `~/Library/LaunchAgents`。
+
 安装完成后客户端会：
 
 - 注册为系统服务，崩溃后由操作系统自动拉起，不随 Agent 平台启停
 - 主动建立出站 WSS 控制连接（不监听任何入站端口）
 - 自动发现本机 IP、Agent 平台、可用模型并上报
+- 按能力白名单接收普通实验和 `RUN_BENCHMARK_CASE`；Benchmark 在隔离 Git 工作区运行并按 Manifest 收集 Artifact
 - **同时纳管故障注入能力** —— 本机会一并出现在「实验」与「故障注入」页面，
   无需再单独执行 FI Worker 的安装命令
+
+客户端每 30 秒完整刷新一次 Agent、模型与故障注入能力；配置变化或手动刷新也会立即重新探测。
+每轮探测使用 `~/.agent-insight/client/tmp/inventory-*` 独立临时目录并在成功、失败或超时后清理，
+安装包也暂存在同一客户端目录下，不会持续向系统 `/tmp` 遗留 OpenCode/OpenTUI 的临时 `.so`。
 
 > **Note**
 > 该命令默认会一并安装故障注入组件。系统 Python 只用于创建 Agent Insight 管理的专用 venv，
@@ -140,7 +154,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 > 在 Homebrew / Debian 等 PEP 668「受管控 Python」环境下，安装器不会尝试全局 pip，
 > 因而不需要 `--break-system-packages`，也不会出现 `externally-managed-environment` 安装错误。
 
-客户端只接受固定动作白名单（配置写入、运行实验 Case 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。
+客户端只接受固定动作白名单（配置写入、普通实验 Case、`RUN_BENCHMARK_CASE` 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。Benchmark 任务中的仓库、revision、策略和 Artifact Collector 还会经过协议校验；客户端不开放 Benchmark 入站端口。
 
 > **Note**
 > 未安装 Python 或故障注入组件的主机同样可以正常上线，只是「故障注入能力」显示为不可用，不影响配置下发与观测。

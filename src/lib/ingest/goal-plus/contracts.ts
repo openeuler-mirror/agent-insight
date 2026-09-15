@@ -89,4 +89,3 @@ export function validateGoalPlusSnapshotIdentity(snapshot: GoalPlusSnapshotEnvel
     snapshot.contentHash,
   );
 }
-

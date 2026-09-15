@@ -16,6 +16,9 @@
 12. 新增 `/callback` 回调入口，并保留原 IDaaS callback 路径兼容。
 13. 新增 IDaaS 地区访问模块，以固定 `uuids` 列表查询人员信息，缓存 IAM token 与人员记录，并在 callback 创建用户前及 API Key 恢复后执行 fail-closed 检查。
 14. 登录页区分 `region_restricted` 与 `region_check_unavailable`，`.env.example` 为每个地区配置项提供注释。
+15. 人员查询复用同一 UUID 响应提取 `w3Account`，以通用 `externalAccount` 保存到 UUID 对应 User，并通过独立 `displayName` 交给侧边栏展示。
+16. 为 SQLite Prisma schema 与 OpenGauss 初始化脚本增加可空唯一账号别名列；旧用户在后续登录或会话恢复时自动补齐。
+17. 扩展 `scripts/db_push.sh` 的无损变更白名单，仅精确放行 `User.externalAccount` 唯一约束；其他唯一约束或混合危险告警继续拒绝。
 
 ## 预计文件
 
@@ -23,6 +26,9 @@
 - `src/lib/auth/idaas-region-access.ts`
 - `src/lib/auth/idaas-oauth.ts`
 - `src/lib/auth/local-user.ts`
+- `src/lib/storage/db-interface.ts`
+- `prisma/schema.prisma`
+- `scripts/init_opengauss.py`
 - `src/app/api/auth/idaas-oauth/{authorize,callback,complete}/route.ts`
 - `src/app/callback/route.ts`
 - `src/app/api/auth/apikey/route.ts`
@@ -43,7 +49,8 @@
 2. `TMPDIR=/tmp npm run test`
 3. 定向运行 IDaaS OAuth 与本地登录注册测试。
 4. 检查提交差异不含专有服务名称、真实 endpoint、client ID、client secret 或用户数据。
-5. 浏览器验证需用户确认后使用 `scripts/develop_start.sh`：
+5. 验证 UUID 仍作为业务身份，外部账号只用于展示和反向查询；字段缺失时回退 UUID。
+6. 浏览器验证需用户确认后使用 `scripts/develop_start.sh`：
    - 本地模式邮箱登录及退出。
    - IDaaS 模式按钮、授权跳转、callback 和 UUID 首次注册。
    - IDaaS 模式退出后清除本地状态，再次登录仍经过统一身份授权。
@@ -54,4 +61,4 @@
 
 - 将 `LOGIN_MODE` 设回 `standalone` 即恢复默认本地登录。
 - 历史组织部署继续只设置 `ORGANIZATION_MODE=true`。
-- 删除新增 IDaaS 路由和模式分支即可回滚代码；无数据库迁移。
+- 代码回滚后新增可空列可以保留且不会影响旧版本；如需物理删除，必须先备份数据库并按部署数据库类型单独迁移。

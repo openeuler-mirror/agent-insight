@@ -19,6 +19,7 @@ TABLE_DEFINITIONS = {
         "columns": [
             ("id", "TEXT PRIMARY KEY"),
             ("username", "TEXT UNIQUE NOT NULL"),
+            ("externalAccount", "TEXT UNIQUE"),
             ("apiKey", "TEXT UNIQUE NOT NULL"),
             ("createdAt", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
         ],

@@ -103,6 +103,63 @@ export async function setupNodeRuntime(): Promise<void> {
     console.warn('[instrumentation] stale grayscale reap failed:', (err as Error)?.message);
   }
 
+  try {
+    const {
+      reapStaleBenchmarkRuns,
+      resumeBenchmarkDispatchesAtStartup,
+      startBenchmarkRunWatchdog,
+    } = await import('@/lib/benchmark/scheduler');
+    const reaped = await reapStaleBenchmarkRuns();
+    if (reaped > 0) {
+      console.warn(`[instrumentation] 回收超时 Benchmark 执行: ${reaped} 条`);
+    }
+    const resumed = await resumeBenchmarkDispatchesAtStartup();
+    if (resumed > 0) {
+      console.warn(`[instrumentation] 恢复 Benchmark 下发: ${resumed} 条`);
+    }
+    startBenchmarkRunWatchdog();
+  } catch (err) {
+    console.warn('[instrumentation] benchmark dispatch resume failed:', (err as Error)?.message);
+  }
+
+  try {
+    const { resumeBenchmarkEvaluationContinuations } = await import(
+      '@/lib/benchmark/evaluation-continuation-service'
+    );
+    const {
+      reapStaleBenchmarkEvaluations,
+      resumeBenchmarkEvaluationDispatchesAtStartup,
+      startBenchmarkEvaluationWatchdog,
+    } = await import('@/lib/benchmark/evaluation-scheduler');
+    startBenchmarkEvaluationWatchdog();
+    try {
+      const reaped = await reapStaleBenchmarkEvaluations();
+      if (reaped > 0) {
+        console.warn(`[instrumentation] 回收超时 Benchmark 评测: ${reaped} 条`);
+      }
+    } catch (err) {
+      console.warn('[instrumentation] benchmark evaluation reap failed:', (err as Error)?.message);
+    }
+    try {
+      const resumed = await resumeBenchmarkEvaluationDispatchesAtStartup();
+      if (resumed > 0) {
+        console.warn(`[instrumentation] 恢复 Benchmark 评测下发: ${resumed} 条`);
+      }
+    } catch (err) {
+      console.warn('[instrumentation] benchmark evaluation dispatch resume failed:', (err as Error)?.message);
+    }
+    try {
+      const continued = await resumeBenchmarkEvaluationContinuations();
+      if (continued > 0) {
+        console.warn(`[instrumentation] 恢复 Benchmark 评测后续处理: ${continued} 条`);
+      }
+    } catch (err) {
+      console.warn('[instrumentation] benchmark evaluation continuation resume failed:', (err as Error)?.message);
+    }
+  } catch (err) {
+    console.warn('[instrumentation] benchmark evaluation watchdog setup failed:', (err as Error)?.message);
+  }
+
   // 启动时跑一次 uploader：把上一轮 dev server 留下的 spool 积压清掉，避免那些 trace
   // 一直没归宿。常态下 plugin 的 kickUploader 在每次 opencode event 都会触发一次
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。

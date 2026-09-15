@@ -27,7 +27,7 @@ test('执行过程质量卡在三个 Skill 入口遵循 ready 通用规则，仍
   const skillPages = [
     'src/app/(main)/skill-eval/page.tsx',
     'src/app/(main)/skill-eval/_batch/page.tsx',
-    'src/app/(main)/skill-eval/grayscale/page.tsx',
+    'src/components/eval/GrayscaleEvaluation.tsx',
   ];
   for (const path of skillPages) {
     const source = readFileSync(path, 'utf8');

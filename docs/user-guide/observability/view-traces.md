@@ -92,8 +92,8 @@ profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和
 
 设计中尚未实现的检测域不会出现在目录表。子模式**没有**独立开关——启停粒度停在 detector。
 
-普通链路与可靠性观测使用同一登录账号。standalone 登录使用邮箱，IDaaS 登录使用
-userinfo 返回的 UUID；OpenCode 上传使用的 API Key 必须属于该账号。本地 keyless 模式的数据归属
+普通链路与可靠性观测使用同一登录账号。standalone 登录使用邮箱，IDaaS 登录在内部使用
+userinfo 返回的 UUID，侧边栏可显示人员接口返回的账号别名；OpenCode 上传使用的 API Key 必须属于该账号。本地 keyless 模式的数据归属
 `AGENT_INSIGHT_DEFAULT_INGEST_USER`，该值也应配置为同一个 `User.username`。`admin`
 这类没有对应登录账号的旧别名不能用于页面登录。
 

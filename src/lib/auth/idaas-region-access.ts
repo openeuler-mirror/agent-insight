@@ -37,6 +37,11 @@ const EU_COUNTRIES = new Set([
 
 export type IdaasRegionAccessDecision = 'allowed' | 'restricted';
 
+export interface IdaasRegionAccessResult {
+  decision: IdaasRegionAccessDecision;
+  externalAccount: string | null;
+}
+
 export interface IdaasRegionAccessConfig {
   iamUrl: string;
   personUrl: string;
@@ -348,23 +353,29 @@ export function createIdaasRegionAccessChecker(
     }
   };
 
-  const check = async (rawUuid: string): Promise<IdaasRegionAccessDecision> => {
+  const inspect = async (rawUuid: string): Promise<IdaasRegionAccessResult> => {
     const config = getIdaasRegionAccessConfig(env);
-    if (!config) return 'allowed';
+    if (!config) return { decision: 'allowed', externalAccount: null };
 
     const uuid = String(rawUuid || '').trim();
     if (!uuid) throw new IdaasRegionAccessRequestError('region_data_missing');
 
     const person = await getPersonByUuid(config, uuid);
+    const externalAccount = stringField(person, 'w3Account') || null;
+    const result = (decision: IdaasRegionAccessDecision): IdaasRegionAccessResult => ({
+      decision,
+      externalAccount,
+    });
+
     const location = stringField(person, 'baseLocationNameEn');
     if (location) {
       const country = countryFromLocation(location);
       if (!country) throw new IdaasRegionAccessRequestError('region_data_missing');
-      return EU_COUNTRIES.has(country) ? 'restricted' : 'allowed';
+      return result(EU_COUNTRIES.has(country) ? 'restricted' : 'allowed');
     }
 
     const organization = stringField(person, 'orgTreeNameEn');
-    if (organization.toLowerCase().includes('european')) return 'restricted';
+    if (organization.toLowerCase().includes('european')) return result('restricted');
 
     const managerNumber = stringField(person, 'orgManagerNumber');
     if (!managerNumber) throw new IdaasRegionAccessRequestError('region_data_missing');
@@ -375,14 +386,22 @@ export function createIdaasRegionAccessChecker(
 
     const managerCountry = countryFromLocation(managerLocation);
     if (!managerCountry) throw new IdaasRegionAccessRequestError('region_data_missing');
-    return EU_COUNTRIES.has(managerCountry) ? 'restricted' : 'allowed';
+    return result(EU_COUNTRIES.has(managerCountry) ? 'restricted' : 'allowed');
   };
 
-  return { check };
+  const check = async (rawUuid: string): Promise<IdaasRegionAccessDecision> => (
+    await inspect(rawUuid)
+  ).decision;
+
+  return { check, inspect };
 }
 
 const defaultIdaasRegionAccessChecker = createIdaasRegionAccessChecker();
 
 export function checkIdaasRegionAccess(uuid: string): Promise<IdaasRegionAccessDecision> {
   return defaultIdaasRegionAccessChecker.check(uuid);
+}
+
+export function inspectIdaasRegionAccess(uuid: string): Promise<IdaasRegionAccessResult> {
+  return defaultIdaasRegionAccessChecker.inspect(uuid);
 }

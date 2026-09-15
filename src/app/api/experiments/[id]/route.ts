@@ -2,7 +2,7 @@
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
 // 对比实验（type='llm'）：按 type 分流调 getComparisonDetail（含 groups+pairing）；
-// 单组实验（type='single'）：走原聚合路径（响应 shape 不变，AC-019）。
+// 单组实验（type='single'）：走原聚合路径，并附加同评测基线趋势。
 import { NextResponse } from 'next/server';
 import type { ExperimentCase, ExperimentEvalResult, Prisma } from '@prisma/client';
 import {
@@ -14,7 +14,12 @@ import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
+import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
+import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
+import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
+import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,8 +85,9 @@ export async function GET(
     const experiment = await prisma.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
       select: {
-        id: true, name: true, type: true, agentName: true, status: true,
-        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true, createdAt: true,
+        id: true, user: true, name: true, type: true, agentName: true, status: true,
+        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true,
+        evaluatorConfigsJson: true, createdAt: true,
         scope: true, skillName: true, skillVersion: true, preset: true,
         skillContextJson: true, configSnapshotJson: true, sourceExperimentId: true,
       },
@@ -95,7 +101,24 @@ export async function GET(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
+    const evaluatorConfigs = parseStoredEvaluatorRunConfigs(
+      experiment.evaluatorConfigsJson,
+      evaluatorIds,
+    );
+    const benchmarkAdapterKey = evaluatorIds
+      .find((evaluatorId) => evaluatorId.startsWith('benchmark:'))
+      ?.slice('benchmark:'.length) || '';
+    let benchmarkManifest: BenchmarkManifest | null = null;
+    if (benchmarkAdapterKey) {
+      try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
+    }
     const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
+    const baselineTrendPromise = ['', 'benchmark'].includes(experiment.scope)
+      ? getExperimentBaselineTrend({ experimentId: experiment.id, user: experiment.user }).catch((error) => {
+          console.error('[Experiment baseline trend]', error);
+          return null;
+        })
+      : Promise.resolve(null);
 
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
@@ -114,6 +137,51 @@ export async function GET(
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
     }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
+
+    const benchmarkRunByCase = new Map<string, {
+      status: string;
+      failureCode: string | null;
+      failureMessage: string | null;
+      publicPayloadJson: string | null;
+      datasetCase: { externalCaseId: string } | null;
+      artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
+      evaluations: Array<{
+        id: string;
+        status: string;
+        normalizedResultJson: string | null;
+        artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
+      }>;
+    }>();
+    if (experiment.scope === 'benchmark' && pagedCases.length) {
+      const runs = await prisma.benchmarkCaseRun.findMany({
+        where: { experimentId: id, experimentCaseId: { in: pagedCases.map((item) => item.id) } },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          datasetCase: { select: { externalCaseId: true } },
+          artifacts: {
+            orderBy: { createdAt: 'asc' },
+            take: 1,
+            select: { id: true, name: true, sha256: true, sizeBytes: true, mediaType: true },
+          },
+          evaluations: {
+            orderBy: { attemptNo: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              normalizedResultJson: true,
+              artifacts: {
+                orderBy: { createdAt: 'asc' },
+                select: { id: true, name: true, kind: true, sha256: true, sizeBytes: true, mediaType: true },
+              },
+            },
+          },
+        },
+      });
+      for (const run of runs) {
+        if (!benchmarkRunByCase.has(run.experimentCaseId)) benchmarkRunByCase.set(run.experimentCaseId, run);
+      }
+    }
 
     const generatedCases = await prisma.experimentCase.findMany({
       where: {
@@ -430,6 +498,7 @@ export async function GET(
         durationMs: r.durationMs,
       })),
     );
+    const baselineTrend = await baselineTrendPromise;
 
     return NextResponse.json({
       id: experiment.id,
@@ -440,16 +509,44 @@ export async function GET(
       watchMode: experiment.watchMode,
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
+      evaluatorConfigs,
       createdAt: experiment.createdAt,
       scope: experiment.scope,
       skillName: experiment.skillName,
       skillVersion: experiment.skillVersion,
       preset: experiment.preset,
       skillContext: parseJsonValue(experiment.skillContextJson),
-      configSnapshot,
+      configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
+      baselineTrend,
+      reusableConfig: {
+        schemaVersion: 1,
+        sourceExperimentId: experiment.id,
+        datasetId: typeof configSnapshot?.agentEvalDatasetId === 'string'
+          ? configSnapshot.agentEvalDatasetId
+          : typeof configSnapshot?.datasetId === 'string' && experiment.scope !== 'benchmark'
+            ? configSnapshot.datasetId
+            : null,
+        datasetCaseIds: Array.isArray(configSnapshot?.caseIds)
+          ? configSnapshot.caseIds.map(String)
+          : [],
+        traceSource: typeof configSnapshot?.traceSource === 'string'
+          ? configSnapshot.traceSource
+          : experiment.watchMode ? 'existing' : null,
+        agentName: experiment.agentName,
+        evaluatorIds,
+        evaluatorConfigs,
+        executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
+          ? {
+              workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
+              platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
+              model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
+              timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
+            }
+          : configSnapshot?.executionTarget || null,
+      },
       cases: pagedCases.map((c) => {
         const traceState = traceStateByCase.get(c.id);
         const effectiveTaskId = c.taskId || traceState?.taskId || null;
@@ -461,6 +558,23 @@ export async function GET(
           (typeof c.faultInjectionType === 'string' && c.faultInjectionType.trim()) ||
           legacyFi.faultInjectionType ||
           null;
+        const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkPayload = benchmarkRun
+          ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
+          : null;
+        const benchmarkNormalized = benchmarkRun?.evaluations[0]?.normalizedResultJson
+          ? parseJsonValue(benchmarkRun.evaluations[0].normalizedResultJson) as {
+              primaryMetric?: { key?: unknown; value?: unknown };
+            } | null
+          : null;
+        const benchmarkPrimaryMetric = benchmarkNormalized?.primaryMetric;
+        const submission = benchmarkRun?.artifacts[0];
+        const benchmarkTraceStatus = deriveBenchmarkTraceStatus({
+          runStatus: benchmarkRun?.status || null,
+          hasSubmission: Boolean(submission),
+          hasExecution: Boolean(c.executionId),
+          hasTask: Boolean(effectiveTaskId),
+        });
         let caseValues: Record<string, unknown> | null = null;
         if (c.caseValuesJson) {
           try {
@@ -494,10 +608,56 @@ export async function GET(
                 || ex.executionSkills.some((item) => item.skillName === experiment.skillName)
               ))
             : null,
-          traceStatus: traceState?.status || null,
-          traceError: traceState?.error || null,
+          traceStatus: benchmarkRun ? benchmarkTraceStatus : traceState?.status || null,
+          traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,
           traceAttemptStatus: traceState?.attemptStatus || null,
+          ...(benchmarkRun ? {
+            benchmark: {
+              adapterKey: benchmarkAdapterKey,
+              displayName: benchmarkManifest?.displayName || benchmarkAdapterKey,
+              presentation: benchmarkManifest?.presentation || null,
+              primaryMetric: benchmarkPrimaryMetric && typeof benchmarkPrimaryMetric.key === 'string'
+                && (typeof benchmarkPrimaryMetric.value === 'boolean'
+                  || typeof benchmarkPrimaryMetric.value === 'number'
+                  || benchmarkPrimaryMetric.value === null)
+                ? { key: benchmarkPrimaryMetric.key, value: benchmarkPrimaryMetric.value }
+                : null,
+              externalCaseId: benchmarkRun.datasetCase?.externalCaseId || '',
+              repo: String(benchmarkPayload?.repo || ''),
+              reference: {
+                kind: 'official-test-contract',
+                description: benchmarkManifest?.presentation?.referencePanel?.description
+                  || '隐藏评测数据仅供评测服务判定，不会发送给 Agent',
+              },
+              submission: submission ? {
+                name: submission.name,
+                sha256: submission.sha256,
+                sizeBytes: submission.sizeBytes,
+                mediaType: submission.mediaType,
+                summary: `${submission.sizeBytes} bytes · ${submission.sha256}`,
+                kind: 'submission',
+                contentUrl: `/api/benchmark/v1/artifacts/${encodeURIComponent(submission.id)}/content`,
+              } : null,
+              evidenceArtifacts: (benchmarkRun.evaluations[0]?.artifacts || []).map((artifact) => ({
+                artifactId: artifact.id,
+                name: artifact.name,
+                kind: artifact.kind,
+                sha256: artifact.sha256,
+                sizeBytes: artifact.sizeBytes,
+                mediaType: artifact.mediaType,
+                contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
+              })),
+              runStatus: benchmarkRun.status,
+              evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
+              failure: benchmarkRun.failureCode || benchmarkRun.failureMessage
+                ? {
+                    code: benchmarkRun.failureCode || 'EXECUTION_FAILED',
+                    message: benchmarkRun.failureMessage,
+                  }
+                : null,
+            },
+          } : {}),
         };
       }),
       results,
