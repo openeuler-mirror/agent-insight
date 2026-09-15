@@ -23,6 +23,8 @@ description: "为 AcTrail 配置 Agent Insight 链路上报"
 
 页面生成的命令固定选择 `actrail`，不会进入其他框架的交互式安装流程。
 
+所有 Linux / WSL 用户在配置完成后，都继续使用原来的 `sudo actrailctl launch --name <名称> -- <Agent 命令>` 启动 Agent。Windows 用户需要先进入安装 AcTrail 的 WSL 发行版，再执行配置和启动命令；这一前置步骤只适用于 Windows。
+
 ## 接入前提
 
 执行命令前确认：

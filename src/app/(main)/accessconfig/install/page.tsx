@@ -180,9 +180,12 @@ export default function AccessInstallPage() {
                             <div style={hintBox}>
                                 <div style={hintIcon}><Info size={16} /></div>
                                 <div style={{ flex: 1, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
-                                    <b style={{ color: 'var(--foreground)', fontWeight: 600 }}>{isZh ? '提示' : 'Tip'}</b> · {isZh
-                                        ? <>Windows 用户请进入安装 AcTrail 的 WSL 发行版后执行上述命令。配置完成后,继续使用原来的 <code style={inlineCode}>sudo actrailctl launch --name &lt;名称&gt; -- &lt;Agent 命令&gt;</code>。</>
-                                        : <>On Windows, enter the WSL distribution that hosts AcTrail before running the command. Continue launching agents with <code style={inlineCode}>sudo actrailctl launch --name &lt;name&gt; -- &lt;agent command&gt;</code>.</>}
+                                    <p>{isZh
+                                        ? <>所有 Linux / WSL 用户：配置完成后，继续使用原来的 <code style={inlineCode}>sudo actrailctl launch --name &lt;名称&gt; -- &lt;Agent 命令&gt;</code> 启动 Agent。</>
+                                        : <>For all Linux / WSL users: after configuration, continue launching agents with <code style={inlineCode}>sudo actrailctl launch --name &lt;name&gt; -- &lt;agent command&gt;</code>.</>}</p>
+                                    <p>{isZh
+                                        ? 'Windows 用户：请先进入安装 AcTrail 的 WSL 发行版，再执行上述配置和启动命令。'
+                                        : 'On Windows, enter the WSL distribution that hosts AcTrail before running the configuration and launch commands.'}</p>
                                 </div>
                             </div>
                         </div>
