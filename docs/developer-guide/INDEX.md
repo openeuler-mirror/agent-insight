@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `c84a2038383cb5162110cb733b79b12a79e099c5` (`c84a2038`) |
-| Branch | `codex/fix-issues-298-299-830` |
-| Date | 2026-09-14T13:06:50+08:00 |
-| Author | mintuyang |
-| Subject | `fix: 补齐830实验Case绑定字段` |
+| Commit | `e6c4ebbb95c337a422e51da6312a23fdbd5beb4f` (`e6c4ebbb`) |
+| Branch | `codex/830-issue-301-20260915` |
+| Date | 2026-09-15T18:04:25+08:00 |
+| Author | gyctl |
+| Subject | `fix: 接收AcTrail根进程退出并结束无回答Trace` |
 
-**如何更新：** `git diff c84a2038 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff e6c4ebbb HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
