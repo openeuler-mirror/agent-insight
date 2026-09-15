@@ -500,7 +500,7 @@ export default function TracePage() {
 }
 
 function TracePageContent() {
-    const { user } = useAuth();
+    const { user, apiKey } = useAuth();
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
     const [total, setTotal] = useState(0);
@@ -786,7 +786,7 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store' })
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -813,6 +813,7 @@ function TracePageContent() {
             });
     }, [
         user,
+        apiKey,
         agentScopeFilter,
         skillFilter,
         selectedUserTagIds,
@@ -1400,7 +1401,7 @@ function TraceDetailView({
     onTagCreated: (tag: TraceUserTag) => void;
 }) {
     const { t, locale } = useLocale();
-    const { user } = useAuth();
+    const { user, apiKey } = useAuth();
     const router = useRouter();
     const searchParams = useSearchParams();
     const [session, setSession] = useState<any | null>(null);
@@ -1465,12 +1466,12 @@ function TraceDetailView({
         if (!taskId) return;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`, { cache: 'no-store' })
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => { setSession(j); setSecondsSinceRefresh(0); })
             .catch(() => { if (!silent && isInitial) setSession({ error: 'Network error' }); })
             .finally(() => { if (!silent && isInitial) setLoading(false); });
-    }, [taskId]);
+    }, [taskId, apiKey]);
 
     useEffect(() => { fetchSession(false); }, [fetchSession]);
 
@@ -1486,20 +1487,24 @@ function TraceDetailView({
     }, []);
 
     const loadInteraction = useCallback(async (index: number) => {
+        const source = sessionRef.current?.interactions?.[index]?._collaboration;
+        const sourceTaskId = source?.taskId ?? taskId;
+        const sourceIndex = source?.index ?? index;
         const response = await apiFetch(
-            `/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interaction&index=${index}`,
+            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
+            { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
         );
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return body?.interaction;
-    }, [taskId]);
+    }, [taskId, apiKey]);
 
     const loadFullInteractions = useCallback(async () => {
-        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interactions`);
+        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interactions`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return Array.isArray(body?.interactions) ? body.interactions : [];
-    }, [taskId]);
+    }, [taskId, apiKey]);
 
     const { framework } = execution;
     // The list row may be a partial snapshot captured while a streaming trace is

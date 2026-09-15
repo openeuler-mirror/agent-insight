@@ -56,3 +56,9 @@ Trace 列表显式传 `collapseGoalPlusWorkers=1`。默认“仅主 Agent”范�
 - `CollaborationEndpointResolution`：可重算的 from/to Execution 引用、证据和步骤候选。
 
 事件内容复用 Goal Plus secret/path 脱敏。Goal Plus projector 不保存 worker 输出、评分或结果摘要；投影和重算错误必须与原生 Trace、语义 snapshot 入库隔离。
+
+### 显式上报关系与 Goal Plus 展示共存
+
+自定义 API 上报关系由 `src/lib/collaboration/projection.ts` 消费，仅查询 `sourceType=reported` 的事件组；Goal Plus 的语义投影、worker 列表折叠与完整度信息沿用本页原有路径。详情优先展示已解析的显式关系，未命中时使用 Goal Plus 投影，不对同一详情重复拼接。
+
+合并后的交互保留 `_collaboration` 源 Session / 索引信息。读取单条原文时以 `view=interaction&source=raw` 请求源 Session 原始索引；`_payloadVersion` 根据原正文计算，不包含 `_collaboration` 展示信息，因此结构视图与原文版本一致。前端仍校验上游新增的正文版本与请求时源数组，避免刷新后旧请求覆盖新内容。

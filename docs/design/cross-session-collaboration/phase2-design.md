@@ -16,9 +16,17 @@ GET /api/observe/collaborations/:collaborationId?offset=0&limit=100 返回分页
 
 时间来源仅接受 OpenCode 原始 tool part state.time.start 或 timing.source=execution 的显式工具时间，不借用交互时间。重复定位组按原配置分组；数量相等、时间可用且不并列、时钟声明可信、无失败/一对多已知证据、明确关联不冲突、无跨组重叠时才排序。每次查询重算；事件不变。单候选可被迟到数据变为多候选。
 
-当前后端返回上报关系及其明确 Trace 证据；旧 Trace 自动关系仍由原路径负责，不增加新 UI 或自动协作列表。数据库支持 SQLite 及 pg 接口；数据库变更只新增表。
+当前后端返回上报关系及其明确 Trace 证据；旧 Trace 自动关系仍由原路径负责，不增加关系图界面或自动协作列表。数据库支持 SQLite 及 pg 接口；数据库变更只新增表。
 
 
 ## 运行日志与自动升级
 
 复用公共 logger 的 collaboration scope，记录请求 ID、操作、HTTP 结果、定位状态、错误代码及原因；响应头回传请求 ID。日志不含采集凭据、传递正文或命令。两个既有启动脚本将 stdout/stderr 写入仓库根 server.log；db_push 和 generate 在启动前执行，新模型沿用该自动升级链路，不关闭破坏性变更保护。SQLite 回归验证旧库升级和重复启动同步；OpenGauss 定义同步但需实库验收。
+
+## 现有 Trace 读取投影
+
+`projection.ts` 读取已认证用户的绑定和事件，列表在数据库分页和计数前过滤已合并子 Session；指定 taskId 的原始入口及“全部 / 子 Agent”筛选保留原记录访问。详情的 structure/full/interactions 返回包含原 Session 标识、源索引、正文版本的交互，懒加载使用源 Session 与索引；刷新版本变化时丢弃旧正文。
+
+`display-tree.ts` 分别构建各 Session 原有树，再组合。提供 fromLocator 的唯一候选挂在对应工具下并标“候选步骤”；confirmed/time_ordered 保留原证据状态。定位失败保留父 Agent 下的子节点和原因。不提供 fromLocator 时使用“协作 Trace”容器，将各 Agent 并列展示，按 observedAt（缺失则接收时间）顺序排列，不构造虚假工具调用。
+
+相同子 Trace 正文只展示一次。循环、多父级冲突、缺失/无权限/空正文、重复 Execution、已有原生子记录或 Langfuse 专用树保留该连通组的原始列表。投影最多扫描 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文，超过限制保留原列表并记录 warning。已有原生子树路径不改写；本轮无数据库模型变化。

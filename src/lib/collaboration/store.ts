@@ -119,7 +119,7 @@ export class CollaborationStore {
         if (!session.interactions || Buffer.byteLength(session.interactions) > 8388608) return { state: 'pending' as const, message: 'Trace 无正文或超过 8 MiB 解析限制' };
         const executions = await this.sql.rows<{ id: string; agentName: string | null; framework: string | null; agentSessionId: string | null }>('SELECT "id","agentName","framework","agentSessionId" FROM "Execution" WHERE "taskId"=? AND "user"=? ORDER BY "id" LIMIT 2', [binding.traceSessionId, user]);
         const interactions: unknown = JSON.parse(session.interactions);
-        if (!Array.isArray(interactions) || interactions.length > 20000) return { state: 'pending' as const, message: 'Trace 结构无效或超过 20000 条交互限制' };
+        if (!Array.isArray(interactions) || interactions.length === 0 || interactions.length > 20000) return { state: 'pending' as const, message: 'Trace 正文为空、结构无效或超过 20000 条交互限制' };
         return { state: 'resolved' as const, interactions, byteCount: Buffer.byteLength(session.interactions), execution: executions.length === 1 ? executions[0] : undefined };
     }
 }
