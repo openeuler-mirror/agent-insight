@@ -466,7 +466,6 @@ function TracePageContent() {
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', parseAsString.withDefault('all'));
     const [agentFilter, setAgentFilter] = useQueryState('agent', parseAsString.withDefault('all'));
     const [skillFilter, setSkillFilter] = useQueryState('skill', parseAsString.withDefault('all'));
-    const [businessTagFilter, setBusinessTagFilter] = useQueryState('bizTag', parseAsString.withDefault('all'));
     const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', parseAsString.withDefault('user'));
     const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', parseAsString.withDefault('root'));
     const [sortKey, setSortKey] = useQueryState('sort', parseAsString.withDefault('timestamp'));
@@ -546,16 +545,6 @@ function TracePageContent() {
         setAvailableTags(prev => mergeTraceTags(prev, tag));
     }, []);
 
-    const businessTagOptions: SelectOption[] = useMemo(() => [
-        { value: 'all', label: locale === 'zh' ? '全部业务标签' : 'All business tags' },
-        ...availableTags
-            .filter(tag => tag.kind === 'business')
-            .map(tag => ({
-                value: tag.id,
-                label: tag.usageCount ? `${tag.name} (${tag.usageCount})` : tag.name,
-            })),
-    ], [availableTags, locale]);
-
     const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
         traceId: t('tracePage.columnTraceId'),
         agent: t('tracePage.columnAgent'),
@@ -597,7 +586,6 @@ function TracePageContent() {
     const listFilterKey = useMemo(() => JSON.stringify([
         agentScopeFilter,
         skillFilter,
-        businessTagFilter,
         search,
         clausesRaw,
         frameworkFilter,
@@ -611,7 +599,6 @@ function TracePageContent() {
     ]), [
         agentScopeFilter,
         skillFilter,
-        businessTagFilter,
         search,
         clausesRaw,
         frameworkFilter,
@@ -677,11 +664,10 @@ function TracePageContent() {
         const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
         const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
         const filtersParam = clauses.length ? `&filters=${encodeURIComponent(JSON.stringify(clauses))}` : '';
-        const bizTagParam = businessTagFilter !== 'all' ? `&bizTag=${encodeURIComponent(businessTagFilter)}` : '';
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${bizTagParam}${frameworkParam}${agentParam}${ownershipParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${frameworkParam}${agentParam}${ownershipParam}`)
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -708,7 +694,6 @@ function TracePageContent() {
         user,
         agentScopeFilter,
         skillFilter,
-        businessTagFilter,
         search,
         clausesRaw,
         frameworkFilter,
@@ -816,7 +801,7 @@ function TracePageContent() {
         if (page > totalPages) setPage(totalPages);
     }, [page, totalPages, setPage]);
 
-    const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || businessTagFilter !== 'all'
+    const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all'
         || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
@@ -824,7 +809,6 @@ function TracePageContent() {
         setOwnershipFilter('all');
         setAgentFilter('all');
         setSkillFilter('all');
-        setBusinessTagFilter('all');
         setAnomalyFilter('all');
         setTimeFilter('all');
         setFrameworkFilter('all');
@@ -949,13 +933,6 @@ function TracePageContent() {
                                 active={frameworkFilter !== 'all'}
                             />
                             <Select
-                                label={t('tracePage.filterBusinessTag')}
-                                value={businessTagFilter}
-                                onChange={setBusinessTagFilter}
-                                options={businessTagOptions}
-                                active={businessTagFilter !== 'all'}
-                            />
-                            <Select
                                 label={t('tracePage.filterMainAgent')}
                                 value={agentFilter}
                                 onChange={setAgentFilter}
@@ -974,7 +951,7 @@ function TracePageContent() {
                                 active={agentScopeFilter !== 'root'}
                             />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto h-7 gap-1 text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={resetFilters} className="h-7 gap-1 text-xs text-foreground-muted">
                                     <XIcon className="size-3" />
                                     {t('tracePage.resetFilters')}
                                 </Button>
