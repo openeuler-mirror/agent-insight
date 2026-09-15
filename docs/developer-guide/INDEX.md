@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `c84a2038383cb5162110cb733b79b12a79e099c5` (`c84a2038`) |
-| Branch | `codex/fix-issues-298-299-830` |
-| Date | 2026-09-14T13:06:50+08:00 |
-| Author | mintuyang |
-| Subject | `fix: 补齐830实验Case绑定字段` |
+| Commit | `1c34c2a0b945dcf8076afaf7001a9e6f29445ae3` (`1c34c2a0`) |
+| Branch | `codex/830-issue-304-20260915` |
+| Date | 2026-09-15T18:52:09+08:00 |
+| Author | gyctl |
+| Subject | `fix: 收敛830链路追踪的展示和筛选范围 (#304)` |
 
-**如何更新：** `git diff c84a2038 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 1c34c2a0 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
