@@ -26,7 +26,7 @@ function span(kind: string, id: string, processId = 7, extra: Record<string, str
     })),
   };
 }
-function body(extra: ReturnType<typeof span>[] = []) {
+function body(extra: ReturnType<typeof span>[] = [], sessionId = traceId) {
   return {
     resourceSpans: [{
       resource: { attributes: [] },
@@ -39,7 +39,7 @@ function body(extra: ReturnType<typeof span>[] = []) {
             'llm.call.request_action_id': 'request', 'actrail.action.status': 'in_progress',
           }),
           ...extra,
-        ],
+        ].map(item => ({ ...item, traceId: sessionId })),
       }],
     }],
   };
@@ -118,35 +118,40 @@ test('AcTrail lifecycle: OTLP endpoint, spool, persistence and both observe read
   const { GET } = await import('@/app/api/observe/data/route');
   const source = listSources().find(item => item.id === 'actrail-otel-traces');
   assert.ok(source);
-  const runningResponse = await POST(new Request('http://localhost/api/ingest/otel/v1/traces', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body()),
-  }));
-  assert.equal(runningResponse.status, 200);
-  const runningRecord = source.aggregate(traceId).record;
-  assert.ok(runningRecord);
-  await saveExecutionRecord(runningRecord);
-  const runningList = await GET(new Request(`http://localhost/api/observe/data?taskId=${traceId}&skipAutoEvalReady=1&fields=light`));
-  assert.equal((await runningList.json())[0].trace_status, 'running');
-  const response = await POST(new Request('http://localhost/api/ingest/otel/v1/traces', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body([span('process.exit', 'exit', 7, { 'process.exit_code': 130 })])),
-  }));
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).received, 4);
-  const { record } = source.aggregate(traceId);
-  assert.ok(record);
-  await saveExecutionRecord(record);
-  const session = await prismaRaw.session.findFirst({ where: { taskId: traceId } });
-  assert.equal(session?.endTime?.toISOString(), '1970-01-01T00:00:09.000Z');
-  for (const query of ['skipAutoEvalReady=1&fields=light', 'skipAutoEvalReady=0', 'paginated=1&databasePagination=1&page=1&pageSize=10&skipAutoEvalReady=1&fields=light&status=failed', 'paginated=1&databasePagination=1&page=1&pageSize=10&skipAutoEvalReady=1&fields=light']) {
-    const result = await GET(new Request(`http://localhost/api/observe/data?taskId=${traceId}&${query}`));
-    assert.equal(result.status, 200);
-    const payload = await result.json();
-    const records = Array.isArray(payload) ? payload : payload.records;
-    if (!Array.isArray(payload)) assert.equal(payload.stats.failedCount, 1, query);
-    assert.equal(records.length, 1, query);
-    assert.equal(records[0].trace_status, 'failed', query);
-    assert.equal(records[0].trace_completed_at, '1970-01-01T00:00:09.000Z');
-    if (query === 'skipAutoEvalReady=0') assert.equal(records[0].auto_eval_ready, false);
+  for (const kind of ['process.exit', 'agent.exit']) {
+    await context.test(`${kind}: nonzero root exit persists and remains failed in all read modes`, async () => {
+      const caseTraceId = kind === 'process.exit' ? traceId : '00000000000000000000000000000302';
+      const runningResponse = await POST(new Request('http://localhost/api/ingest/otel/v1/traces', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body([], caseTraceId)),
+      }));
+      assert.equal(runningResponse.status, 200);
+      const runningRecord = source.aggregate(caseTraceId).record;
+      assert.ok(runningRecord);
+      await saveExecutionRecord(runningRecord);
+      const runningList = await GET(new Request(`http://localhost/api/observe/data?taskId=${caseTraceId}&skipAutoEvalReady=1&fields=light`));
+      assert.equal((await runningList.json())[0].trace_status, 'running');
+      const response = await POST(new Request('http://localhost/api/ingest/otel/v1/traces', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body([span(kind, 'exit', 7, { 'process.exit_code': 130, 'actrail.action.status': 'error' })], caseTraceId)),
+      }));
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).received, 4);
+      const { record } = source.aggregate(caseTraceId);
+      assert.ok(record);
+      await saveExecutionRecord(record);
+      const session = await prismaRaw.session.findFirst({ where: { taskId: caseTraceId } });
+      assert.equal(session?.endTime?.toISOString(), '1970-01-01T00:00:09.000Z');
+      for (const query of ['skipAutoEvalReady=1&fields=light', 'skipAutoEvalReady=0', 'paginated=1&databasePagination=1&page=1&pageSize=10&skipAutoEvalReady=1&fields=light&status=failed', 'paginated=1&databasePagination=1&page=1&pageSize=10&skipAutoEvalReady=1&fields=light']) {
+        const result = await GET(new Request(`http://localhost/api/observe/data?taskId=${caseTraceId}&${query}`));
+        assert.equal(result.status, 200);
+        const payload = await result.json();
+        const records = Array.isArray(payload) ? payload : payload.records;
+        if (!Array.isArray(payload)) assert.equal(payload.stats.failedCount, 1, query);
+        assert.equal(records.length, 1, query);
+        assert.equal(records[0].trace_status, 'failed', query);
+        assert.equal(records[0].trace_completed_at, '1970-01-01T00:00:09.000Z');
+        if (query === 'skipAutoEvalReady=0') assert.equal(records[0].auto_eval_ready, false);
+      }
+    });
   }
 });
