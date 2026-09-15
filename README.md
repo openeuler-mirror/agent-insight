@@ -65,132 +65,20 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 
 ### 1. 安装服务端
 
-**环境要求**
+**830 转测版本的服务端对外仅通过 Docker 镜像交付。** 请按交付清单选择固定镜像名、版本或摘要、目标架构。宿主机需有 Docker Engine 和可用的 3000 端口；无需另外安装服务端 Node.js/npm 包。
 
-- Node.js >= 20.0.0
-- 3000 端口未被占用
+安装顺序：
 
-提供以下两种安装方式，可根据实际应用场景任选其一：
+1. 在线拉取交付清单中的固定镜像，或校验离线包 SHA256 后导入。
+2. 查询交付镜像默认运行用户 uid/gid，准备 `/opt/agent-insight` 持久化目录及权限。
+3. 将其挂载到容器 `/data/agent-insight` 并启动容器。
+4. 检查容器、日志、健康状态，再访问看板。
 
-#### 方式一：使用 npm 快速部署（推荐）
+完整的可复制命令、离线校验、权限准备、启动/停止/升级及安装产物说明见 [5 分钟上手 · Docker 部署服务端](docs/user-guide/quickstart.md#docker-部署服务端830-转测交付)。
 
-通过包管理工具直接安装，适用于快速启动及基础使用的场景。
+默认 SQLite 数据库在宿主机 `/opt/agent-insight/data/witty_insight.db`，配置在 `/opt/agent-insight/.env`；保留挂载目录即可保留运行数据。服务日志通过 `docker logs agent-insight` 查看，预编译 standalone 服务位于镜像内。当前镜像使用 SQLite，设置非空 `DB_HOST` 会被入口脚本拒绝。
 
-```bash
-npx agent-insight install
-```
-
-**平台服务管理命令参考：**
-
-| 命令                                    | 说明               |
-|:------------------------------------- |:---------------- |
-| `npx agent-insight install`           | 一键安装平台及所有组件      |
-| `npx agent-insight start`             | 启动服务（默认 3000 端口） |
-| `npx agent-insight start --port <端口>` | 指定端口启动           |
-| `npx agent-insight stop --port <端口>`  | 停止指定端口的服务        |
-| `npx agent-insight restart`           | 重启服务             |
-| `npx agent-insight status`            | 查看服务运行状态         |
-| `npx agent-insight logs`              | 查看服务日志           |
-
-#### 方式二：基于源码构建
-
-适用于需要二次开发或深度定制的场景。
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git
-cd agent-insight
-npm install
-```
-
-#### 方式三：使用 Docker 镜像部署
-
-适用于服务器部署或希望应用容器与数据目录分离的场景。镜像已发布为多架构，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
-
-**用法一：在线拉取 Docker Hub 镜像**
-
-```bash
-docker pull karaggagent/agent-insight:latest
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-生产环境如需锁定版本号，可以把 `latest` 换成固定版本，例如 `karaggagent/agent-insight:0.5.0`。
-
-**用法二：离线导入 `.tar` 镜像**
-
-如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
-
-```bash
-docker load -i agent-insight-0.5.0-image.tar
-docker images | grep agent-insight
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-```
-
-**用法三：挂载源码运行，代码更新后重启即可生效**
-
-适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -e AGENT_INSIGHT_SOURCE_DIR=/src \
-  -v /srv/agent-insight:/src:ro \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-之后更新代码只需要 `git pull` 加一次重启，容器会按最新源码重新构建再启动：
-
-```bash
-cd /srv/agent-insight && git pull
-docker restart agent-insight
-```
-
-不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
-
-容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
-
-更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
-
-**启动服务**
-
-安装完成后，在工作目录下执行以下命令启动服务：
-
-```bash
-cd agent-insight
-
-# 启动服务端，默认端口是3000
-bash scripts/start.sh
-```
-
-**停止服务**
-
-如果需要停止运行，在工作目录下执行以下命令。该脚本将安全关闭 Next.js 服务端及所有相关的后台子进程：
-
-```bash
-bash scripts/stop.sh
-```
+源码挂载、npm 打包和 RPM 构建资料面向开发者维护，不属于本次对外交付安装选项；需要验证源码时参阅 [维护者源码模式](docs/user-guide/quickstart.md#6-维护者可选docker-源码挂载模式)。
 
 **访问看板**
 

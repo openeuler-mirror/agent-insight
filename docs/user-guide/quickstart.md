@@ -26,194 +26,159 @@ description: "登录看板、注册模型、通过 AcTrail 完成接入，并在
 
 ---
 
-## 可选：用 Docker 部署服务端
+## Docker 部署服务端（830 转测交付）
 
-如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
+**830 服务端对外仅通过 Docker 镜像交付。** 使用交付清单中的固定镜像名、版本（或摘要）、目标架构以及离线包 SHA256。本文中的尖括号内容都是待替换占位，不代表已发布镜像。宿主机需要可用的 Docker Engine、对应架构支持及未被占用的 3000 端口；无需另外安装服务端 Node.js 或 npm 包。
 
-### 可选：通过 RPM 部署
+### 1. 获取固定版本镜像
 
-需要在 openEuler 等 RPM 系 Linux 上从当前源码构建、验包、安装或升级时，请参阅 [RPM 构建与测试](./rpm-build-and-test)。
+在线和离线方式任选一种。以下命令在同一终端按顺序执行，并先替换变量中的占位内容。
 
-### 用法一：在线拉取 Docker Hub 镜像
-
-```bash
-docker pull karaggagent/agent-insight:latest
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker stop agent-insight 2>/dev/null || true
-docker rm agent-insight 2>/dev/null || true
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-
-curl -i http://localhost:3000/
-```
-
-这条命令会把容器内的 `/data/agent-insight` 挂到服务器宿主机当前用户的 `~/.agent-insight`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启、删除、重拉镜像后仍可复用。默认数据库路径是：
-
-```text
-~/.agent-insight/data/witty_insight.db
-```
-
-### 用法二：离线导入 `.tar` 镜像
-
-如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
+**在线拉取：**
 
 ```bash
-docker load -i agent-insight-0.5.0-image.tar
-docker images | grep agent-insight
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker stop agent-insight 2>/dev/null || true
-docker rm agent-insight 2>/dev/null || true
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-
-curl -i http://localhost:3000/
+AI_IMAGE='<交付清单中的镜像名>:<固定版本>'
+docker pull "$AI_IMAGE"
+docker image inspect --format 'ID={{.Id}} Platform={{.Os}}/{{.Architecture}}' "$AI_IMAGE"
 ```
 
-如果 `docker load` 输出的镜像 tag 不是 `karaggagent/agent-insight:0.5.0`，请以 `docker images | grep agent-insight` 看到的实际镜像名为准。
+核对镜像版本、摘要（交付清单提供时）和架构；`linux/amd64` 对应 x86_64，`linux/arm64` 对应 aarch64。仅使用清单实际提供的架构，不能由本文推断某版本已发布多架构。
 
-如果你不想直接挂宿主机目录，也可以使用 Docker volume：
+**离线校验并导入：**
+
+```bash
+AI_IMAGE='<交付清单中的镜像名>:<固定版本>'
+AI_ARCHIVE='agent-insight-830-image.tar'
+AI_EXPECTED_SHA256='<交付清单中的64位SHA256>'
+if ! printf '%s  %s\n' "$AI_EXPECTED_SHA256" "$AI_ARCHIVE" | sha256sum -c -; then
+  echo '镜像包校验失败，请核对交付清单并重新获取文件。' >&2
+  exit 1
+fi
+docker load -i "$AI_ARCHIVE"
+docker image inspect --format 'ID={{.Id}} Platform={{.Os}}/{{.Architecture}}' "$AI_IMAGE"
+```
+
+将 `AI_ARCHIVE` 改为实际离线包文件名。导入后镜像名、tag 和架构必须与交付清单一致；不要把其他旧 tag 当作本次交付版本。
+
+### 2. 准备持久化目录和权限
+
+在首次启动前查询镜像默认运行用户的 uid/gid，再创建宿主机目录。使用 `--entrypoint id` 只查询身份，不运行服务启动脚本。
+
+```bash
+AI_UID=$(docker run --rm --entrypoint id "$AI_IMAGE" -u)
+AI_GID=$(docker run --rm --entrypoint id "$AI_IMAGE" -g)
+sudo mkdir -p /opt/agent-insight
+sudo chown "$AI_UID:$AI_GID" /opt/agent-insight
+sudo chmod 750 /opt/agent-insight
+```
+
+仓库 `Dockerfile` 使用 `USER node`，但交付镜像的实际 uid/gid 以上述查询为准。已有数据目录时，先备份并检查子目录、数据库及 WAL 文件是否可由该用户写入，再按需要修正属主；不要对整个目录开放所有用户写权限。
+
+### 3. 启动和检查
 
 ```bash
 docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v agent-insight-data:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-如果生产环境需要锁定版本号，可以把 `latest` 换成固定版本，例如 `0.5.0`：
-
-```bash
-docker pull karaggagent/agent-insight:0.5.0
-docker stop agent-insight
-docker rm agent-insight
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-```
-
-服务器上用哪个用户运行 Docker，就会挂载哪个用户的 home 目录。升级到新版本时，保留同一个挂载目录即可，容器数据不会随镜像更新丢失。
-
-### 用法三：挂载源码运行，代码更新后重启即可生效
-
-适用于服务器要跟着最新代码跑的场景：不用每次改代码都重新发 npm 包、重新打镜像，`git pull` 之后重启容器即可生效。
-
-给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
-
-# 数据目录要在首次启动前建好并交给容器内的 node 用户(uid 1000),否则 prisma 建表会报
-# "attempt to write a readonly database"——容器自动创建的挂载目录属主是 root。
-mkdir -p ~/.agent-insight/data
-chown -R 1000:1000 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -e AGENT_INSIGHT_SOURCE_DIR=/src \
-  -v /srv/agent-insight:/src:ro \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-对应的 compose 写法（`compose.yaml`），镜像构建也可以一并交给 compose：
-
-```yaml
-services:
-  agent-insight:
-    image: agent-insight:src
-    build:
-      context: /srv/agent-insight              # 用源码仓库根目录的 Dockerfile 构建
-      args:
-        AGENT_INSIGHT_VERSION: "0.5.4"         # 镜像内预装依赖对应的 npm 版本
-    container_name: agent-insight
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      AGENT_INSIGHT_SOURCE_DIR: /src
-      NODE_OPTIONS: --max-old-space-size=2048  # 小内存机器上防止构建被 OOM kill
-    volumes:
-      - /srv/agent-insight:/src:ro             # 源码，只读
-      - ${HOME}/.agent-insight:/data/agent-insight
-      - agent-insight-build:/app/source        # 构建目录，让缓存跨容器重建保留
-
-volumes:
-  agent-insight-build:
-```
-
-更新代码的流程：
-
-```bash
-cd /srv/agent-insight && git pull
-docker compose restart agent-insight   # 非 compose 场景：docker restart agent-insight
-docker compose logs -f agent-insight   # 看到 "Building from source..." 到构建结束即可
-```
-
-注意用 `restart` 而不是 `up -d`：容器配置没变时 `up -d` 什么都不做，不会触发重新构建。只有改了 `package.json` 依赖、需要连镜像一起重建时才用 `docker compose up -d --build`。
-
-需要了解的行为：
-
-- **不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致**，容器直接运行镜像里打好的 `agent-insight` npm 包。
-- 配置之后，容器启动时会把源码复制到容器内的 `/app/source`（跳过 `node_modules`、`.next`、`.git`、`data/`、`exclude/`），再依次执行 `prisma db push`、`prisma generate`、`npm run build`，最后和默认模式一样跑 `node .next/standalone/server.js`。宿主机源码目录以只读挂载即可，不会被写入构建产物，也不需要迁就容器里 `node` 用户的属主。
-- 依赖用的是镜像预装的那一份（含 `tailwindcss`、`typescript` 等构建期依赖），源码目录不需要 `npm install`。**因此源码改了 `package.json` 新增依赖时必须重新构建镜像**；启动日志会打印镜像里缺失的依赖清单作为告警。
-- 首次启动是冷构建，需要几分钟；构建期间端口还没起，容器健康状态显示 `health: starting` 属正常。之后重启会保留 `.next/cache` 走增量构建；容器被删掉重建时，只有像上面那样给 `/app/source` 挂了 volume 才保得住缓存。
-- 构建期间服务不可用（分钟级）。不能停机的话，先用另一个端口起一份新容器验证通过，再切端口或流量。
-- 路径写错（拼错、忘了挂 volume、误填宿主机路径）时容器会**直接报错退出，不会静默回退到镜像内置版本**。配了 `restart: unless-stopped` 就表现为反复重启，`docker logs` 里第一行就是原因。校验在复制源码之前完成，失败时数据目录和上一次的构建缓存都不受影响。
-- 数据目录属主必须是容器里的 uid 1000，且要在**首次启动前**准备好——目录由 Docker 自动创建时属主是 root，`prisma db push` 会报 `attempt to write a readonly database`。
-- 这个变量必须通过容器环境变量传入（`-e` 或 compose `environment`），写进 `~/.agent-insight/.env` 不生效——entrypoint 在读取该文件之前就要决定跑哪份代码。
-
-如果容器启动后访问不到 `3000`，先看容器状态和日志：
-
-```bash
+  -v /opt/agent-insight:/data/agent-insight \
+  "$AI_IMAGE"
 docker ps -a --filter name=agent-insight
-docker logs --tail=200 agent-insight
+docker logs --tail 200 agent-insight
+docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' agent-insight
 curl -i http://127.0.0.1:3000/
 ```
 
-常见的 `unable to open database file` 通常是宿主机挂载目录不存在或权限不足。确认目录已创建，并且容器内的 `node` 用户可以写入 `/data/agent-insight/data`。
+容器名已存在时先检查现有实例，再按升级流程处理。正常启动后在浏览器访问 `http://<服务端地址>:3000`；`curl` 返回页面或跳转只能证明 HTTP 可达，还应登录看板检查核心操作。Agent 接入命令仍在实际运行 Agent 的机器上执行。
 
-如果你需要自己构建镜像，可以直接用仓库根目录的 `Dockerfile`。镜像默认从 npm 拉取 `agent-insight@latest`，不会把源码复制进镜像：
+根据当前 `Dockerfile` 和 `scripts/docker-entrypoint.sh`，首次启动会：
+
+1. 创建 `/data/agent-insight/data`。
+2. 持久化 `.env` 不存在且包内 `.env.example` 存在时，复制生成 `/data/agent-insight/.env`；以后启动保留并加载该配置文件。
+3. 将默认 SQLite 地址定位到 `/data/agent-insight/data/witty_insight.db`，通过 `scripts/db_push.sh` 同步 schema；失败会中止启动。
+4. 执行 `npx prisma generate` 生成 Prisma Client。
+5. 运行镜像中的 `.next/standalone/server.js`，默认模式不在启动时重新编译源码。
+
+当前镜像是 **SQLite-first**。如果环境变量或持久化 `.env` 中设置了非空 `DB_HOST`，入口脚本会拒绝启动；不能据此直接接入 OpenGauss。`.env` 会作为 shell 配置加载，修改时保持合法语法并保护其中的密钥；首次生成后可在宿主机执行 `sudo chmod 600 /opt/agent-insight/.env`。修改持久化配置后重启容器生效；不要修改 `AGENT_INSIGHT_DATA_DIR` 来绕过现有挂载目录。
+
+### 4. 安装后的产物
+
+下表以宿主机 `/opt/agent-insight` 挂载到容器 `/data/agent-insight`、使用默认 SQLite 配置为准：
+
+| 产物 | 容器位置 | 宿主机位置 / 生命周期 |
+|---|---|---|
+| 持久化配置 | `/data/agent-insight/.env` | `/opt/agent-insight/.env`，保留挂载目录时保留；首次有模板时生成 |
+| 默认 SQLite 数据库 | `/data/agent-insight/data/witty_insight.db` | `/opt/agent-insight/data/witty_insight.db`；运行时可能有同目录 `-wal`、`-shm` 文件 |
+| 应用运行数据 | `/data/agent-insight/data/` | `/opt/agent-insight/data/`；附件、评测等子目录按实际使用生成，并非安装后全部立即存在 |
+| 服务代码及预编译入口 | `/app/node_modules/agent-insight/.next/standalone/server.js` | 镜像 / 容器内；不落入宿主机数据目录，替换镜像时更新 |
+| Prisma Client | `/app/node_modules/.prisma` 等镜像依赖目录 | 启动生成于容器内，不属于数据库备份；确切依赖布局以交付镜像为准 |
+| 源码构建目录 | `/app/source` | 仅维护者源码模式使用；默认不持久化 |
+| 服务启动和运行日志 | 进程标准输出 / 标准错误 | 使用 `docker logs agent-insight`；由 Docker 日志驱动管理，不承诺在持久化目录生成固定 `server.log` |
+
+删除容器不会删除上述宿主机挂载目录；镜像本身不包含你的运行数据。备份应覆盖完整的 `/opt/agent-insight`，包括 `.env` 和数据库相关文件。不要把运行中单独复制的 `.db` 文件当作一致性备份；可以停服务后备份完整目录。
+
+### 5. 服务管理与升级
 
 ```bash
-docker build --pull --no-cache -t agent-insight:npm-latest .
-docker run -d --name agent-insight -p 3000:3000 -v agent-insight-data:/data/agent-insight agent-insight:npm-latest
-curl -i http://localhost:3000/
+docker ps -a --filter name=agent-insight
+docker logs --tail 200 agent-insight
+docker restart agent-insight
+docker stop agent-insight
+docker start agent-insight
 ```
 
-需要固定某个 npm 版本时：
+`Dockerfile` 的健康检查参数为：
+
+| 参数 | 值 |
+|---|---|
+| interval | 30 秒 |
+| timeout | 5 秒 |
+| start-period | 600 秒 |
+| retries | 3 次 |
+
+健康检查访问容器内 `/`，HTTP 状态码小于 500 即判通过；它不是完整业务验收。`start-period` 是启动宽限期，不表示每次都需等待 600 秒。
+
+升级前先按步骤 1 获取并核对新的固定镜像。停止当前容器后备份挂载目录，再替换容器并复用同一目录：
 
 ```bash
-docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5.0 .
+docker stop agent-insight
+AI_BACKUP="/opt/agent-insight-backup-$(date +%Y%m%d-%H%M%S).tar"
+if ! sudo tar -C /opt -cf "$AI_BACKUP" agent-insight; then
+  echo '备份失败，保留旧容器并先排查。' >&2
+  exit 1
+fi
+sudo chmod 600 "$AI_BACKUP"
+# 确认备份成功后，删除旧容器；不删除 /opt/agent-insight。
+docker rm agent-insight
+# 将 AI_IMAGE 设为已核验的新固定镜像，再执行步骤 3 的 docker run。
 ```
 
-如果你只是想在服务器上快速验证本地改动，不想每次都先发布 npm 包，可以用上面的[用法三：挂载源码运行](#用法三挂载源码运行代码更新后重启即可生效)，或走“`npm pack` + 上传 `.tgz` + Docker 缓存构建”的测试流程，见 [Docker 测试构建](./docker-testing)。
+新容器启动会再次同步 schema。回退旧镜像前需要核对 schema 兼容性；必要时同时恢复升级前备份。不要让两个容器同时使用这份 SQLite 数据目录。
 
-容器只负责运行 Agent Insight 服务端。OpenCode、Claude Code、OpenClaw、LangChain 等框架的接入命令仍应在对应 Agent 实际运行的机器或容器里执行。当前仓库里的这份 `Dockerfile` 走 **SQLite 优先** 路线，不内置 OpenGauss 运行时依赖。
+常见故障：
 
-如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
+- `unable to open database file` / `attempt to write a readonly database`：检查挂载路径，以及实际容器 uid/gid 对目录和已有数据库文件的写权限。
+- `DB_HOST` 相关拒绝启动：检查容器环境和 `/opt/agent-insight/.env`，按当前 SQLite 交付配置修正。
+- 持续 `starting` / `unhealthy`：检查 `docker logs`、数据库初始化错误与端口；源码构建需要额外时间和资源。
+
+### 6. 维护者可选：Docker 源码挂载模式
+
+以下用于维护者验证指定源码，不是替代 830 固定镜像的对外交付流程。准备好已核对的 `830` 源码目录 `/srv/agent-insight`、与源码依赖匹配的固定镜像和独立测试数据目录；同名容器须先按维护计划处理。
+
+```bash
+docker run -d \
+  --name agent-insight-source-test \
+  --restart unless-stopped \
+  -p 3001:3000 \
+  -e AGENT_INSIGHT_SOURCE_DIR=/src \
+  -v /srv/agent-insight:/src:ro \
+  -v /opt/agent-insight-source-test:/data/agent-insight \
+  "$AI_IMAGE"
+```
+
+首次启动前按步骤 2 的权限方式准备 `/opt/agent-insight-source-test`。`AGENT_INSIGHT_SOURCE_DIR` 必须由 `-e` 或 Compose 环境传入，写进持久化 `.env` 不生效。入口先校验 `/src/package.json` 和 `/src/prisma/schema.prisma`，把源码复制到 `/app/source`，复用镜像依赖，初始化数据库后执行 `npm run build`，再查找实际 standalone 入口启动。宿主机源码保持只读。
+
+源码依赖变化时必须重建匹配镜像；路径错误会退出，不会回退镜像内置代码。源码模式重启会重新构建，服务在构建期间不可用；重建容器后，未挂载的 `/app/source` 缓存不保留。构建方法见维护者专用的 [Docker 测试构建](./docker-testing) 和 [Docker 镜像发布](../developer-guide/docker-image-release.md)。RPM 构建指南保留作维护资料，不作为本次交付安装选项。
 
 ---
 
