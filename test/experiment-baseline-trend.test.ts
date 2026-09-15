@@ -108,26 +108,26 @@ test('普通实验数据集、Case 契约或评估器变化时基线不同', () 
   assert.notEqual(buildExperimentBaselineKey(changedEvaluator), baseline);
 });
 
-test('Benchmark 基线使用数据集内容哈希、Case 集和 Adapter 契约', () => {
+test('Benchmark 基线使用数据集内容哈希、Case 集、Adapter 和 Evaluator 契约', () => {
   const first = experiment({
     scope: 'benchmark',
     evaluatorIdsJson: JSON.stringify(['benchmark:swe-bench', 'trajectory-quality']),
     configSnapshotJson: JSON.stringify({
-      adapterKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['b', 'a'],
+      adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['b', 'a'],
     }),
   });
   const second = experiment({
     scope: 'benchmark',
     evaluatorIdsJson: JSON.stringify(['benchmark:swe-bench']),
     configSnapshotJson: JSON.stringify({
-      adapterKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['a', 'b'],
+      adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['a', 'b'],
       runConfig: { model: 'another-model' },
     }),
   });
   const changedCases = experiment({
     scope: 'benchmark',
     configSnapshotJson: JSON.stringify({
-      adapterKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['a'],
+      adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['a'],
     }),
   });
 
@@ -160,7 +160,7 @@ test('SWE-bench Resolve Rate 使用全部 Case 作为固定分母', () => {
   const benchmark = experiment({
     scope: 'benchmark',
     configSnapshotJson: JSON.stringify({
-      adapterKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['a', 'b', 'c'],
+      adapterKey: 'swe-bench', evaluatorKey: 'swe-bench', datasetContentHash: 'sha256:dataset', caseIds: ['a', 'b', 'c'],
       runConfig: { model: 'provider/model-b' },
     }),
     cases: Array.from({ length: 3 }, (_, index) => ({

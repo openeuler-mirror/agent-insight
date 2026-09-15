@@ -40,6 +40,11 @@ dataset:
       acceptedExtensions: [.parquet]
       expectedCaseCount: 500
 presentation:
+  evaluator:
+    displayName: SWE-bench Official Harness
+    description: 使用 SWE-bench 官方测试契约验证 Agent 提交。
+    runMode: Official Harness
+    outputDescription: 输出 Resolved 及 FAIL_TO_PASS、PASS_TO_PASS 通过情况。
   caseTable:
     searchPaths: [externalCaseId, values.repo]
     searchPlaceholder: 搜索 Instance ID 或仓库
@@ -55,4 +60,15 @@ presentation:
       - { path: values.repo, label: 仓库, type: text }
       - { path: values.base_commit, label: 基线版本, type: code }
   result:
-    primaryMetric: { path: primaryMetric.value, label: Resolved, type: boolean }
+    primaryMetric:
+      path: primaryMetric.value
+      label: Resolved
+      aggregateLabel: Resolve Rate
+      type: boolean
+      trueLabel: 已解决
+      falseLabel: 未解决
+  artifacts:
+    - { source: submission, name: model.patch, label: Agent Patch, order: 10 }
+    - { source: evidence, kind: official-report, label: 官方报告, order: 20 }
+    - { source: evidence, kind: test-output, label: 测试输出, order: 30 }
+    - { source: evidence, kind: harness-log, label: 运行日志, order: 40 }

@@ -24,13 +24,38 @@ export type BenchmarkDatasetProfile = {
   expectedCaseCount?: number
 }
 
+export type BenchmarkPresentationFormat =
+  | 'plain'
+  | 'percentage'
+  | 'bytes'
+  | 'duration-ms'
+  | 'date-time'
+
 export type BenchmarkPresentationColumn = {
   path: string
   label: string
   type: 'text' | 'code' | 'number' | 'boolean'
+  width?: number
+  format?: BenchmarkPresentationFormat
+  truncate?: number
+  description?: string
+}
+
+export type BenchmarkArtifactPresentation = {
+  source: 'submission' | 'evidence'
+  name?: string
+  kind?: string
+  label: string
+  order: number
 }
 
 export type BenchmarkPresentation = {
+  evaluator?: {
+    displayName: string
+    description: string
+    runMode: string
+    outputDescription: string
+  }
   caseTable: {
     searchPaths: readonly string[]
     searchPlaceholder?: string
@@ -46,8 +71,15 @@ export type BenchmarkPresentation = {
       path: string
       label: string
       type: 'text' | 'code' | 'number' | 'boolean'
+      aggregateLabel?: string
+      trueLabel?: string
+      falseLabel?: string
+      format?: BenchmarkPresentationFormat
+      precision?: number
+      unit?: string
     }
   }
+  artifacts?: readonly BenchmarkArtifactPresentation[]
 }
 
 export interface BenchmarkDatasetLoader {

@@ -10,16 +10,17 @@ PORT=8080
 AUTH_MODE=token
 TOKEN=
 PLATFORM_BASE_URL=${EVALUATOR_AGENT_INSIGHT_BASE_URL:-}
-CASE_IMAGE_PROXY_PREFIX=${SWE_BENCH_IMAGE_PROXY_PREFIX:-}
+BENCHMARK_KEY=${BENCHMARK_EVALUATOR_KEY:-swe-bench}
+EVALUATOR_ENV=()
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-evaluator.sh [--auth-mode token --token TOKEN | --auth-mode none] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
+  bash scripts/start-evaluator.sh [--benchmark KEY] [--evaluator-env NAME=VALUE] [--auth-mode token --token TOKEN | --auth-mode none] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
 
 Starts the Evaluator Controller from the current Git checkout on Linux or macOS.
-The command does not pull source code, register with Agent Insight, or preload Case images.
-By default, Case images keep their official names and use the host Docker daemon's registry mirrors.
+The command uses the selected Benchmark package Dockerfile when present, otherwise the generic Controller image.
+It does not pull source code, register with Agent Insight, or preload Benchmark runtime assets.
 EOF
 }
 
@@ -34,7 +35,7 @@ git_checkout() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --token|--auth-mode|--platform-base-url|--bind-address|--port)
+    --token|--auth-mode|--platform-base-url|--bind-address|--port|--benchmark|--evaluator-env)
       [ "$#" -ge 2 ] || fail "$1 缺少参数值"
       case "$1" in
         --token) TOKEN=$2 ;;
@@ -42,6 +43,8 @@ while [ "$#" -gt 0 ]; do
         --platform-base-url) PLATFORM_BASE_URL=$2 ;;
         --bind-address) BIND_ADDRESS=$2 ;;
         --port) PORT=$2 ;;
+        --benchmark) BENCHMARK_KEY=$2 ;;
+        --evaluator-env) EVALUATOR_ENV+=("$2") ;;
       esac
       shift 2
       ;;
@@ -85,10 +88,14 @@ case "$PLATFORM_BASE_URL" in
     ;;
   *) fail '--platform-base-url 必须是 HTTP(S) URL' ;;
 esac
-if [ -n "$CASE_IMAGE_PROXY_PREFIX" ] \
-  && ! printf '%s' "$CASE_IMAGE_PROXY_PREFIX" | LC_ALL=C grep -Eq '^[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)*$'; then
-  fail 'SWE_BENCH_IMAGE_PROXY_PREFIX 必须是无协议的镜像仓库前缀，设置为空可禁用'
-fi
+printf '%s' "$BENCHMARK_KEY" | LC_ALL=C grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$' \
+  || fail '--benchmark 格式不合法'
+[ -f "$REPOSITORY_ROOT/benchmarks/$BENCHMARK_KEY/benchmark.yaml" ] \
+  || fail "Benchmark 接入包不存在：$BENCHMARK_KEY"
+for evaluator_env in "${EVALUATOR_ENV[@]}"; do
+  printf '%s' "$evaluator_env" | LC_ALL=C grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.*$' \
+    || fail '--evaluator-env 必须是 NAME=VALUE'
+done
 
 for command_name in git docker df; do
   command -v "$command_name" >/dev/null 2>&1 || fail "宿主缺少命令：$command_name"
@@ -142,12 +149,17 @@ esac
 SHORT_REVISION=$(printf '%s' "$SOURCE_REVISION" | cut -c1-12)
 DIRTY_SUFFIX=
 if [ "$SOURCE_DIRTY" = true ]; then DIRTY_SUFFIX=-dirty; fi
-IMAGE_TAG="agent-insight-benchmark-evaluator:src-$SHORT_REVISION$DIRTY_SUFFIX"
-PREVIOUS_CONTROLLER_IMAGE_IDS=$(docker image ls --quiet --no-trunc "$CONTAINER_NAME")
+IMAGE_REPOSITORY="agent-insight-benchmark-evaluator-$BENCHMARK_KEY"
+IMAGE_TAG="$IMAGE_REPOSITORY:src-$SHORT_REVISION$DIRTY_SUFFIX"
+EVALUATOR_DOCKERFILE="$REPOSITORY_ROOT/benchmarks/$BENCHMARK_KEY/evaluator/Dockerfile"
+if [ ! -f "$EVALUATOR_DOCKERFILE" ]; then
+  EVALUATOR_DOCKERFILE="$REPOSITORY_ROOT/services/evaluator/Dockerfile"
+fi
+PREVIOUS_CONTROLLER_IMAGE_IDS=$(docker image ls --quiet --no-trunc "$IMAGE_REPOSITORY")
 if [ "$SOURCE_DIRTY" = true ] || ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
   printf '构建 Evaluator Controller：%s\n' "$IMAGE_TAG"
   docker build \
-    --file "$REPOSITORY_ROOT/services/evaluator/Dockerfile" \
+    --file "$EVALUATOR_DOCKERFILE" \
     --build-arg "EVALUATOR_SOURCE_REVISION=$SOURCE_REVISION" \
     --build-arg "EVALUATOR_SOURCE_DIRTY=$SOURCE_DIRTY" \
     --tag "$IMAGE_TAG" \
@@ -173,10 +185,7 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
   printf 'EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
   printf 'EVALUATOR_PLATFORM_TOKEN=%s\n' "$TOKEN"
   printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\n' "$PLATFORM_BASE_URL"
-  printf 'SWE_BENCH_IMAGE_SOURCE=official\n'
-  printf 'SWE_BENCH_IMAGE_PROXY_PREFIX=%s\n' "$CASE_IMAGE_PROXY_PREFIX"
-  printf 'SWE_BENCH_IMAGE_ARCH=auto\n'
-  printf 'SWE_BENCH_ALLOW_NON_OFFICIAL=false\n'
+  for evaluator_env in "${EVALUATOR_ENV[@]}"; do printf '%s\n' "$evaluator_env"; done
   printf 'EVALUATOR_HOST_OS=%s\n' "$HOST_OS"
   printf 'EVALUATOR_HOST_ARCH=%s\n' "$HOST_ARCH"
   printf 'EVALUATOR_SOURCE_REVISION=%s\n' "$SOURCE_REVISION"
@@ -213,7 +222,7 @@ bash "$SCRIPT_DIR/evaluator-doctor.sh" \
   --expected-image-id "$IMAGE_ID"
 
 while IFS='|' read -r CONTROLLER_REPOSITORY CONTROLLER_TAG; do
-  [ "$CONTROLLER_REPOSITORY" = "$CONTAINER_NAME" ] || continue
+  [ "$CONTROLLER_REPOSITORY" = "$IMAGE_REPOSITORY" ] || continue
   [ "$CONTROLLER_TAG" != '<none>' ] || continue
   OLD_CONTROLLER_REF="$CONTROLLER_REPOSITORY:$CONTROLLER_TAG"
   [ "$OLD_CONTROLLER_REF" = "$IMAGE_TAG" ] && continue
@@ -222,7 +231,7 @@ while IFS='|' read -r CONTROLLER_REPOSITORY CONTROLLER_TAG; do
   else
     printf '警告：旧 Controller 镜像仍被其他容器引用，未删除：%s\n' "$OLD_CONTROLLER_REF" >&2
   fi
-done < <(docker image ls --format '{{.Repository}}|{{.Tag}}' "$CONTAINER_NAME")
+done < <(docker image ls --format '{{.Repository}}|{{.Tag}}' "$IMAGE_REPOSITORY")
 
 while IFS= read -r PREVIOUS_CONTROLLER_IMAGE_ID; do
   [ -n "$PREVIOUS_CONTROLLER_IMAGE_ID" ] || continue
@@ -255,4 +264,5 @@ if [ "$AUTH_MODE" = token ]; then
 fi
 printf '日志：docker logs -f %s\n' "$CONTAINER_NAME"
 printf '重启：docker restart %s\n' "$CONTAINER_NAME"
-printf 'Smoke：bash scripts/evaluator-doctor.sh --smoke swe-bench\n'
+printf 'Benchmark: %s\n' "$BENCHMARK_KEY"
+printf 'Smoke：bash scripts/evaluator-doctor.sh --smoke %s\n' "$BENCHMARK_KEY"

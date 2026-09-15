@@ -272,14 +272,46 @@ class BenchmarkEvaluatorService {
 
   async evaluatorHealth() {
     if (this.readiness && this.readiness.expiresAt > Date.now()) return this.readiness.value
-    const value = await Promise.all(this.registry.values().map(async (evaluator) => ({
+    const reports = await Promise.all(this.registry.values().map(async (evaluator) => ({
       key: evaluator.key,
+      benchmarkKey: evaluator.descriptor?.benchmarkKey || '*',
       ...await evaluator.checkReady({
         dataDir: this.dataDir,
         hostOS: process.env.EVALUATOR_HOST_OS || process.platform,
         hostArch: process.env.EVALUATOR_HOST_ARCH || normalizeArchitecture(process.arch),
       }),
     })))
+    const byKey = new Map()
+    for (const report of reports) {
+      const current = byKey.get(report.key) || {
+        key: report.key,
+        ready: true,
+        formalEligible: true,
+        bindings: [],
+      }
+      current.ready = current.ready && report.ready === true
+      current.formalEligible = current.formalEligible && report.formalEligible !== false
+      current.bindings.push({
+        benchmarkKey: report.benchmarkKey,
+        ready: report.ready === true,
+        formalEligible: report.formalEligible !== false,
+        ...(report.reason ? { reason: report.reason } : {}),
+        ...(report.runtimeFacts ? { runtimeFacts: report.runtimeFacts } : {}),
+      })
+      byKey.set(report.key, current)
+    }
+    const value = [...byKey.values()].map((report) => {
+      const failedBindings = report.bindings.filter((binding) => !binding.ready)
+      const reason = failedBindings.length === 1 && failedBindings[0].benchmarkKey === '*'
+        ? failedBindings[0].reason || 'not ready'
+        : failedBindings.map((binding) => (
+            `${binding.benchmarkKey}: ${binding.reason || 'not ready'}`
+          )).join('; ')
+      return {
+        ...report,
+        ...(report.ready ? {} : { reason }),
+      }
+    })
     this.readiness = { value, expiresAt: Date.now() + 10_000 }
     return value
   }
@@ -475,7 +507,10 @@ class BenchmarkEvaluatorService {
       return
     }
 
-    const evaluator = this.registry.get(request.evaluationJob.evaluator.key)
+    const evaluator = this.registry.get(
+      request.evaluationJob.evaluator.key,
+      request.evaluationJob.benchmark.key,
+    )
     const abortController = new AbortController()
     let timedOut = false
     const timeout = setTimeout(() => {
@@ -597,7 +632,10 @@ class BenchmarkEvaluatorService {
       if (await this.hasBusyJob()) {
         throw evaluatorError('SERVICE_BUSY', '评测服务当前忙', 409, true)
       }
-      const evaluator = this.registry.get(request.evaluationJob.evaluator.key)
+      const evaluator = this.registry.get(
+        request.evaluationJob.evaluator.key,
+        request.evaluationJob.benchmark.key,
+      )
       evaluator.validateJob(request.evaluationJob)
       await this.journal.accept(request)
       json(res, 202, {

@@ -26,6 +26,10 @@ export function getBenchmarkAdapter(adapterKey: string): BenchmarkAdapter {
   return adapter
 }
 
+export function benchmarkEvaluatorId(adapterKey: string): string {
+  return `benchmark:${getBenchmarkAdapter(adapterKey).manifest.evaluation.evaluatorKey}`
+}
+
 export function listBenchmarkAdapters(): readonly BenchmarkManifest[] {
   return [...registry.values()].map((adapter) => adapter.manifest)
 }

@@ -40,7 +40,10 @@ export type BenchmarkEvaluationCompletion = {
 
 export type NormalizedBenchmarkPoint = {
   label: string
-  score: number | null
+  value: string | number | boolean | null
+  total?: number
+  format?: 'plain' | 'percentage' | 'ratio'
+  score?: number | null
   evidence?: JsonValue
 }
 

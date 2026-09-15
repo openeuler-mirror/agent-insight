@@ -69,6 +69,15 @@ type NormalizedBenchmarkResult = {
   evidence: JsonValue                  // 只保存 Artifact ID，不保存文件路径
   errorMessage?: string
 }
+
+type NormalizedBenchmarkPoint = {
+  label: string
+  value: string | number | boolean | null
+  total?: number
+  format?: 'plain' | 'percentage' | 'ratio'
+  score?: number | null
+  evidence?: JsonValue
+}
 ```
 
 通用约束：
@@ -189,7 +198,7 @@ GET /api/benchmark/v1/experiments/{experimentId}
 {
   "experimentId": "exp_01",
   "status": "completed",
-  "benchmark": { "key": "swe-bench" },
+  "benchmark": { "key": "swe-bench", "evaluatorKey": "swe-bench", "displayName": "SWE-bench" },
   "progress": { "total": 500, "completed": 500, "pending": 0 },
   "outcomes": { "pass": 312, "fail": 176, "unknown": 12 },
   "metrics": {
@@ -209,9 +218,10 @@ GET /api/benchmark/v1/experiments/{experimentId}
       "failToPass": { "passed": 1, "total": 1 },
       "passToPass": { "passed": 59, "total": 59 }
     },
-    "execution": { "runId": "erun_01", "traceId": "...", "patchArtifactId": "bart_01" },
+    "execution": { "runId": "erun_01", "traceId": "..." },
+    "submissions": [{ "artifactId": "bart_01", "name": "model.patch", "contentUrl": "/api/benchmark/v1/artifacts/bart_01/content" }],
     "evaluation": { "evaluationId": "veval_01", "status": "completed" },
-    "evidence": [{ "artifactId": "beart_01", "name": "report.json", "kind": "official-report" }]
+    "evidenceArtifacts": [{ "artifactId": "beart_01", "name": "report.json", "kind": "official-report", "contentUrl": "/api/benchmark/v1/evaluations/veval_01/artifacts/beart_01/content" }]
   }],
   "pagination": { "page": 1, "pageSize": 20, "total": 500 }
 }

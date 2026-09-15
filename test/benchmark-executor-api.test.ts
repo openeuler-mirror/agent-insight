@@ -763,9 +763,10 @@ async function waitForBenchmarkExperimentResult(
   metrics: { primary: Record<string, unknown> }
   cases: Array<{
     externalCaseId: string
-    execution: { traceId: string; patchArtifactId: string }
+    execution: { traceId: string }
+    submissions: Array<{ artifactId: string; contentUrl: string }>
     nativeMetrics: Record<string, unknown>
-    evidence: Array<{ downloadUrl: string }>
+    evidenceArtifacts: Array<{ contentUrl: string }>
   }>
 }> {
   const deadline = Date.now() + 45_000
@@ -2287,17 +2288,17 @@ test('steps 01-13 cross the client-command and evaluator boundaries with a real 
     for (const hidden of ['goldPatch', 'testPatch', 'eval_script', 'storagePath', 'privatePayloadJson', 'requestJson']) {
       assert.equal(serializedResult.includes(hidden), false)
     }
-    const evidence = resultBody.cases[0].evidence[0]
+    const evidence = resultBody.cases[0].evidenceArtifacts[0]
     const evidenceResponse = await fetch(
-      `${platformListener.origin}${evidence.downloadUrl}?user=${encodeURIComponent(user)}`,
+      `${platformListener.origin}${evidence.contentUrl}?user=${encodeURIComponent(user)}`,
     )
     assert.equal(evidenceResponse.status, 200)
     assert.ok((await evidenceResponse.arrayBuffer()).byteLength > 0)
     const forbiddenEvidence = await fetch(
-      `${platformListener.origin}${evidence.downloadUrl}?user=${encodeURIComponent(`${user}_other`)}`,
+      `${platformListener.origin}${evidence.contentUrl}?user=${encodeURIComponent(`${user}_other`)}`,
     )
     assert.equal(forbiddenEvidence.status, 404)
-    const patchArtifactId = resultBody.cases[0].execution.patchArtifactId
+    const patchArtifactId = resultBody.cases[0].submissions[0].artifactId
     const patchResponse = await fetch(
       `${platformListener.origin}/api/benchmark/v1/artifacts/${encodeURIComponent(patchArtifactId)}/content?user=${encodeURIComponent(user)}`,
     )

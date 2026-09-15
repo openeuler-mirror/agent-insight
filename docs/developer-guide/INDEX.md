@@ -64,6 +64,8 @@
 
 > 2026-09-14 working-tree overlay：实验列表与详情的综合分只在实验 `done` 后发布，运行中不再显示部分均分；单 Case 综合分等待该 Case 的全部已选评估器进入 `done|failed` 终态，结果分和轨迹分也分别等待本类全部已选评估器进入终态，未选择的评估器不阻塞。
 
+> 2026-09-15 working-tree overlay：Benchmark 后端扩展契约完成去 SWE-bench 专用化。Adapter 与 Evaluator 身份独立，数据集字段按 Manifest Presentation 导入并冻结，结果 API 直接返回完整 `submissions[]` / `evidenceArtifacts[]`，不保留 `patchArtifactId` 或单个 `submission`；Controller 基础镜像与 SWE-bench Harness 依赖拆分，Evaluator runtime、网络和资源声明进入实际运行。该改造用于形成“公共框架 + 接入包实例代码”的统一开发规范，不承诺零代码、纯配置接入。
+
 **如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

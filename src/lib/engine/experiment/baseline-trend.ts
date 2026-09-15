@@ -124,16 +124,17 @@ export function buildExperimentBaselineKey(experiment: BaselineExperimentLike): 
 
   if (experiment.scope === 'benchmark') {
     const adapterKey = typeof snapshot.adapterKey === 'string' ? snapshot.adapterKey.trim() : '';
+    const evaluatorKey = typeof snapshot.evaluatorKey === 'string' ? snapshot.evaluatorKey.trim() : '';
     const datasetContentHash = typeof snapshot.datasetContentHash === 'string'
       ? snapshot.datasetContentHash.trim()
       : '';
-    if (!adapterKey || !datasetContentHash) return null;
+    if (!adapterKey || !evaluatorKey || !datasetContentHash) return null;
     return sha256({
       scope: experiment.scope,
       adapterKey,
       datasetContentHash,
       caseIds,
-      evaluatorContract: `benchmark:${adapterKey}`,
+      evaluatorContract: `benchmark:${evaluatorKey}`,
       evaluationProtocol: 'benchmark-evaluation/v1',
     });
   }

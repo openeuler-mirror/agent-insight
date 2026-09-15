@@ -108,6 +108,12 @@ Benchmark 接入包已构建、数据库已初始化且文件可读时，管理�
 
 Cases 及评测所需字段全部写入数据库，运行时不再依赖原文件。数据库只记录原文件名和哈希，不记录个人绝对路径。相同内容重复导入直接复用。
 
+`presentation.caseTable.columns` 在导入时冻结为数据集 `fieldsJson`。字段保留完整 `path`、存储 `type`、展示 `displayType`，以及可选的 `width/format/truncate/description`；嵌套业务值继续通过 `values.*` 路径读取。Manifest 更新不会静默修改已发布数据集，需要时显式运行：
+
+```bash
+npx tsx scripts/benchmark/refresh-dataset-presentation.ts --dataset <dataset-id>
+```
+
 默认保留原文件；如确认不再需要，可在命令中显式增加：
 
 ```bash

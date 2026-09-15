@@ -89,9 +89,6 @@ class AbstractBenchmarkEvaluator {
       }
       names.add(evidence.name)
     }
-    if (output.evidenceFiles.length < 1) {
-      throw new EvaluatorProtocolError('EVALUATION_EVIDENCE_MISSING', 'Evaluator 未生成证据文件', 500)
-    }
     return output
   }
 }
@@ -220,11 +217,30 @@ function runEntrypoint(descriptor, args, options = {}) {
   })
 }
 
+const RUNTIME_STRATEGIES = new Map([
+  ['controller-container', runEntrypoint],
+  ['script-package', runEntrypoint],
+  ['builtin', runEntrypoint],
+])
+
+function runtimeEnvironment(descriptor, limits) {
+  const resources = limits || descriptor.resources
+  return {
+    EVALUATOR_RUNTIME: descriptor.runtime,
+    EVALUATOR_NETWORK_POLICY: descriptor.network,
+    EVALUATOR_CPU_LIMIT: String(resources.cpu),
+    EVALUATOR_MEMORY_MIB_LIMIT: String(resources.memoryMiB),
+    EVALUATOR_TIMEOUT_SECONDS: String(resources.timeoutSeconds),
+  }
+}
+
 class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
-  constructor(descriptor, processRunner = runEntrypoint) {
+  constructor(descriptor, processRunner) {
     super(descriptor.key)
+    const runtimeStrategy = RUNTIME_STRATEGIES.get(descriptor.runtime)
+    if (!runtimeStrategy) throw new TypeError(`unsupported evaluator runtime: ${descriptor.runtime}`)
     this.descriptor = descriptor
-    this.processRunner = processRunner
+    this.processRunner = processRunner || runtimeStrategy
   }
 
   validateBenchmarkJob(job) {
@@ -241,6 +257,15 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
         throw new EvaluatorProtocolError('EVALUATION_ARTIFACT_INVALID', `Artifact 不符合 Manifest：${artifact.name}`)
       }
     }
+    const resources = this.descriptor.resources
+    if (
+      !resources
+      || job.limits.cpu > resources.cpu
+      || job.limits.memoryMiB > resources.memoryMiB
+      || job.limits.timeoutSeconds > resources.timeoutSeconds
+    ) {
+      throw new EvaluatorProtocolError('EVALUATION_RESOURCE_LIMIT_INVALID', 'EvaluationJob 超出 Evaluator 声明的资源上限')
+    }
   }
 
   async checkReady(runtime) {
@@ -250,6 +275,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
           EVALUATOR_DATA_DIR: runtime.dataDir,
           EVALUATOR_HOST_OS: runtime.hostOS,
           EVALUATOR_HOST_ARCH: runtime.hostArch,
+          ...runtimeEnvironment(this.descriptor),
         },
         errorCode: 'EVALUATOR_DOCTOR_FAILED',
       })
@@ -279,6 +305,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
         EVALUATOR_DATA_DIR: runtime.dataDir,
         EVALUATOR_HOST_OS: runtime.hostOS,
         EVALUATOR_HOST_ARCH: runtime.hostArch,
+        ...runtimeEnvironment(this.descriptor),
       },
       errorCode: 'EVALUATOR_SMOKE_FAILED',
       retryable: false,
@@ -316,7 +343,11 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     await fsp.writeFile(casePath, `${JSON.stringify(input.job.payload, null, 2)}\n`, { mode: 0o400 })
     await this.processRunner(this.descriptor, [
       'evaluate', '--request', requestPath, '--output', outputPath,
-    ], { cwd: contractDir, signal: input.signal })
+    ], {
+      cwd: contractDir,
+      signal: input.signal,
+      env: runtimeEnvironment(this.descriptor, input.job.limits),
+    })
     let rawOutput
     try { rawOutput = JSON.parse(await fsp.readFile(outputPath, 'utf8')) }
     catch { throw new EvaluatorProtocolError('EVALUATION_OUTPUT_MISSING', 'Evaluator 未生成 result.json', 500, true) }
@@ -345,14 +376,17 @@ class EvaluatorRegistry {
   }
 
   register(evaluator) {
-    if (this.evaluators.has(evaluator.key)) {
-      throw new TypeError(`duplicate evaluator key: ${evaluator.key}`)
+    const benchmarkKey = evaluator.descriptor?.benchmarkKey || '*'
+    const registryKey = `${evaluator.key}\n${benchmarkKey}`
+    if (this.evaluators.has(registryKey)) {
+      throw new TypeError(`duplicate evaluator binding: ${evaluator.key}/${benchmarkKey}`)
     }
-    this.evaluators.set(evaluator.key, evaluator)
+    this.evaluators.set(registryKey, evaluator)
   }
 
-  get(key) {
-    const evaluator = this.evaluators.get(key)
+  get(key, benchmarkKey) {
+    const evaluator = this.evaluators.get(`${key}\n${benchmarkKey}`)
+      || this.evaluators.get(`${key}\n*`)
     if (!evaluator) throw new EvaluatorProtocolError('EVALUATOR_NOT_FOUND', `未注册 Evaluator：${key}`, 422)
     return evaluator
   }

@@ -126,10 +126,6 @@ const FORBIDDEN_KEYS = new Set([
   'token',
   'credential',
   'privatepayload',
-  'patch',
-  'test_patch',
-  'fail_to_pass',
-  'pass_to_pass',
 ])
 
 function scanForbidden(value, currentPath = '$') {

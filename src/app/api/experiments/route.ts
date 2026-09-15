@@ -23,6 +23,7 @@ import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
 import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership';
+import { benchmarkEvaluatorId } from '@/lib/benchmark/adapter-registry';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,10 +58,10 @@ async function benchmarkEvaluatorIds(user: string, rawIds: unknown, adapterKey: 
   for (const card of await readUserCustomEvaluators(user) as EvaluatorCard[]) {
     if (card && typeof card === 'object' && card.id) catalog.set(card.id, card);
   }
-  const benchmarkEvaluatorId = `benchmark:${adapterKey}`;
-  const selected = new Set<string>([benchmarkEvaluatorId]);
+  const officialEvaluatorId = benchmarkEvaluatorId(adapterKey);
+  const selected = new Set<string>([officialEvaluatorId]);
   for (const id of requested) {
-    if (id === benchmarkEvaluatorId) continue;
+    if (id === officialEvaluatorId) continue;
     if (id.startsWith('benchmark:')) {
       throw new Error(`Benchmark 实验不支持评估器 ${id}`);
     }

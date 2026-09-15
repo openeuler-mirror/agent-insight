@@ -66,18 +66,65 @@ function positiveInteger(value, label) {
 }
 
 const PRESENTATION_TYPES = new Set(['text', 'code', 'number', 'boolean'])
+const PRESENTATION_FORMATS = new Set(['plain', 'percentage', 'bytes', 'duration-ms', 'date-time'])
 const CASE_PRESENTATION_PATH = /^(input|externalCaseId|values(?:\.[A-Za-z0-9_-]+)+)$/
+
+function optionalString(value, label) {
+  return value == null ? undefined : string(value, label)
+}
+
+function boundedInteger(value, label, minimum, maximum) {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    fail(`${label} 必须是 ${minimum}～${maximum} 的整数`)
+  }
+  return value
+}
 
 function presentationColumns(value, label) {
   if (!Array.isArray(value) || !value.length || value.length > 8) fail(`${label} 必须包含 1～8 列`)
+  const paths = new Set()
   return value.map((column, index) => {
     const pathValue = string(column?.path, `${label}[${index}].path`, CASE_PRESENTATION_PATH)
+    if (paths.has(pathValue)) fail(`${label}[${index}].path 重复`)
+    paths.add(pathValue)
     const type = string(column?.type, `${label}[${index}].type`)
     if (!PRESENTATION_TYPES.has(type)) fail(`${label}[${index}].type 不受支持`)
+    const format = column?.format == null ? undefined : string(column.format, `${label}[${index}].format`)
+    if (format && !PRESENTATION_FORMATS.has(format)) fail(`${label}[${index}].format 不受支持`)
     return {
       path: pathValue,
       label: string(column?.label, `${label}[${index}].label`),
       type,
+      ...(column?.width == null ? {} : { width: boundedInteger(column.width, `${label}[${index}].width`, 60, 1200) }),
+      ...(format ? { format } : {}),
+      ...(column?.truncate == null ? {} : { truncate: boundedInteger(column.truncate, `${label}[${index}].truncate`, 1, 10000) }),
+      ...(column?.description == null ? {} : { description: string(column.description, `${label}[${index}].description`) }),
+    }
+  })
+}
+
+function normalizeArtifactPresentation(value) {
+  if (value == null) return undefined
+  if (!Array.isArray(value) || value.length > 64) fail('presentation.artifacts 必须是至多 64 项的数组')
+  const identities = new Set()
+  return value.map((item, index) => {
+    const source = string(item?.source, `presentation.artifacts[${index}].source`)
+    if (!['submission', 'evidence'].includes(source)) {
+      fail(`presentation.artifacts[${index}].source 不受支持`)
+    }
+    const name = optionalString(item?.name, `presentation.artifacts[${index}].name`)
+    const kind = optionalString(item?.kind, `presentation.artifacts[${index}].kind`)
+    if (Boolean(name) === Boolean(kind)) {
+      fail(`presentation.artifacts[${index}] 必须且只能声明 name 或 kind`)
+    }
+    const identity = `${source}:${name ? `name:${name}` : `kind:${kind}`}`
+    if (identities.has(identity)) fail(`presentation.artifacts[${index}] 匹配条件重复`)
+    identities.add(identity)
+    return {
+      source,
+      ...(name ? { name } : { kind }),
+      label: string(item?.label, `presentation.artifacts[${index}].label`),
+      order: boundedInteger(item?.order, `presentation.artifacts[${index}].order`, 0, 10000),
     }
   })
 }
@@ -126,6 +173,14 @@ function normalizePresentation(source, key) {
       columns: presentationColumns(caseTable.columns, 'caseTable.columns'),
     },
   }
+  if (source.evaluator != null) {
+    result.evaluator = {
+      displayName: string(source.evaluator.displayName, 'evaluator.displayName'),
+      description: string(source.evaluator.description, 'evaluator.description'),
+      runMode: string(source.evaluator.runMode, 'evaluator.runMode'),
+      outputDescription: string(source.evaluator.outputDescription, 'evaluator.outputDescription'),
+    }
+  }
   if (source.referencePanel != null) {
     result.referencePanel = {
       title: string(source.referencePanel.title, 'referencePanel.title'),
@@ -137,14 +192,24 @@ function normalizePresentation(source, key) {
     const primaryMetric = source.result.primaryMetric
     const type = string(primaryMetric?.type, 'result.primaryMetric.type')
     if (!PRESENTATION_TYPES.has(type)) fail('result.primaryMetric.type 不受支持')
+    const format = primaryMetric?.format == null ? undefined : string(primaryMetric.format, 'result.primaryMetric.format')
+    if (format && !PRESENTATION_FORMATS.has(format)) fail('result.primaryMetric.format 不受支持')
     result.result = {
       primaryMetric: {
         path: string(primaryMetric?.path, 'result.primaryMetric.path', /^primaryMetric\.value$/),
         label: string(primaryMetric?.label, 'result.primaryMetric.label'),
         type,
+        ...(primaryMetric?.aggregateLabel == null ? {} : { aggregateLabel: string(primaryMetric.aggregateLabel, 'result.primaryMetric.aggregateLabel') }),
+        ...(primaryMetric?.trueLabel == null ? {} : { trueLabel: string(primaryMetric.trueLabel, 'result.primaryMetric.trueLabel') }),
+        ...(primaryMetric?.falseLabel == null ? {} : { falseLabel: string(primaryMetric.falseLabel, 'result.primaryMetric.falseLabel') }),
+        ...(format ? { format } : {}),
+        ...(primaryMetric?.precision == null ? {} : { precision: boundedInteger(primaryMetric.precision, 'result.primaryMetric.precision', 0, 12) }),
+        ...(primaryMetric?.unit == null ? {} : { unit: string(primaryMetric.unit, 'result.primaryMetric.unit') }),
       },
     }
   }
+  const artifacts = normalizeArtifactPresentation(source.artifacts)
+  if (artifacts) result.artifacts = artifacts
   return result
 }
 
@@ -283,6 +348,11 @@ function loadPackage(packageDir) {
       ...(smokeEntrypoint ? { smokeEntrypoint } : {}),
       artifactDigest: digestFiles(evaluatorFiles, evaluatorDir),
       network: evaluator.network === 'allow' ? 'allow' : 'deny',
+      resources: {
+        cpu: Number(evaluator.resources.cpu),
+        memoryMiB: evaluator.resources.memoryMiB,
+        timeoutSeconds: evaluator.resources.timeoutSeconds,
+      },
       requiredArtifacts: normalizedArtifacts,
       rawResultSchema,
     },

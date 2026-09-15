@@ -31,6 +31,12 @@ npx tsx scripts/benchmark/install-dataset.ts \
 
 导入成功后数据已进入数据库，所有用户共享读取，服务重启不需要重新导入。默认保留原文件；增加 `--delete-source-after-import` 可在成功校验后删除它。
 
+数据项列名、顺序和展示类型在导入时按 Benchmark 接入包冻结。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
+
+```bash
+npx tsx scripts/benchmark/refresh-dataset-presentation.ts --dataset <dataset-id>
+```
+
 管理员删除平台数据集时执行：
 
 ```bash

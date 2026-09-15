@@ -133,7 +133,7 @@ export async function finalizeBenchmarkCase(input: {
     where: { id: input.caseRunId },
     include: {
       experiment: { select: { id: true, user: true, evaluatorIdsJson: true } },
-      artifacts: { where: { name: 'model.patch' }, take: 1 },
+      artifacts: { orderBy: { createdAt: 'asc' } },
     },
   })
   if (!run) return true
@@ -149,13 +149,15 @@ export async function finalizeBenchmarkCase(input: {
 
   if (execution) {
     if (!(await shouldContinue())) return false
-    const patch = run.artifacts[0]
+    const artifactSummary = run.artifacts
+      .map((artifact: { name: string; sha256: string }) => `${artifact.name} · ${artifact.sha256}`)
+      .join('\n')
     await prisma.experimentCase.update({
       where: { id: run.experimentCaseId },
       data: {
         executionId: execution.id,
         taskId: execution.taskId || traceId,
-        actualOutput: execution.finalResult || (patch ? `model.patch · ${patch.sha256}` : ''),
+        actualOutput: execution.finalResult || artifactSummary,
         traceGenerationError: null,
       },
     })

@@ -251,6 +251,12 @@ export const generatedBenchmarkManifests = {
           }
         ]
       },
+      "evaluator": {
+        "displayName": "SWE-bench Official Harness",
+        "description": "使用 SWE-bench 官方测试契约验证 Agent 提交。",
+        "runMode": "Official Harness",
+        "outputDescription": "输出 Resolved 及 FAIL_TO_PASS、PASS_TO_PASS 通过情况。"
+      },
       "referencePanel": {
         "title": "SWE-bench 官方测试契约",
         "description": "测试内容和 Gold Patch 只交给评测服务，不会发送给 Agent。",
@@ -276,9 +282,38 @@ export const generatedBenchmarkManifests = {
         "primaryMetric": {
           "path": "primaryMetric.value",
           "label": "Resolved",
-          "type": "boolean"
+          "type": "boolean",
+          "aggregateLabel": "Resolve Rate",
+          "trueLabel": "已解决",
+          "falseLabel": "未解决"
         }
-      }
+      },
+      "artifacts": [
+        {
+          "source": "submission",
+          "name": "model.patch",
+          "label": "Agent Patch",
+          "order": 10
+        },
+        {
+          "source": "evidence",
+          "kind": "official-report",
+          "label": "官方报告",
+          "order": 20
+        },
+        {
+          "source": "evidence",
+          "kind": "test-output",
+          "label": "测试输出",
+          "order": 30
+        },
+        {
+          "source": "evidence",
+          "kind": "harness-log",
+          "label": "运行日志",
+          "order": 40
+        }
+      ]
     }
   }
 } as const satisfies Record<string, BenchmarkManifest>

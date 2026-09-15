@@ -12,8 +12,13 @@ const generatedEvaluatorDescriptors = [
     "command": "node",
     "entrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/entrypoint.cjs"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
-    "artifactDigest": "sha256:9207c312e21ff1cb9e247bbf96ad28945032587d1ecfb487921a2de0deefa446",
+    "artifactDigest": "sha256:9ed184e08c8ce425061a962a165d89e8b648f531658d6e4fd125eb065359d2e9",
     "network": "deny",
+    "resources": {
+      "cpu": 4,
+      "memoryMiB": 16384,
+      "timeoutSeconds": 1800
+    },
     "requiredArtifacts": [
       {
         "name": "model.patch",

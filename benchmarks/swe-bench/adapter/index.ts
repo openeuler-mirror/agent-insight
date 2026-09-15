@@ -512,7 +512,14 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
       const score = total > 0
         ? Math.round((passed / total) * 10_000) / 100
         : null
-      return { label, score, evidence: { passed, total } }
+      return {
+        label,
+        value: passed,
+        total,
+        format: 'ratio' as const,
+        score,
+        evidence: { passed, total },
+      }
     }
     return {
       status: 'done',

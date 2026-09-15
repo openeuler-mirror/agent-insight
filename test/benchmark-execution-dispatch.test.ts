@@ -278,6 +278,12 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     },
   })
 
+  const missingDatasetResponse = await listExecutionTargets(new Request(
+    `http://insight.test/api/benchmark/v1/execution-targets?user=${encodeURIComponent(user)}`,
+  ))
+  assert.equal(missingDatasetResponse.status, 400)
+  assert.equal((await missingDatasetResponse.json()).error.code, 'BENCHMARK_DATASET_REQUIRED')
+
   const targetsResponse = await listExecutionTargets(new Request(
     `http://insight.test/api/benchmark/v1/execution-targets?user=${encodeURIComponent(user)}&datasetId=${encodeURIComponent(imported.id)}`,
   ))
