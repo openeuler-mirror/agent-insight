@@ -143,3 +143,13 @@ test('lazy trace structure preserves a Goal Plus projected worker subtree and pr
     assert.equal(tree?.children[0].relation?.sourceType, 'goal-plus-semantic');
     assert.equal(tree?.events.find(event => event.kind === 'task')?.relation?.anchorState, 'not_provided');
 });
+
+test('reported collaboration structure uses the same payload version as the original source interaction', () => {
+    const source = { role: 'assistant', content: 'child tool result', agent: 'reviewer' };
+    const projected = { ...source, _collaboration: { taskId: 'child', index: 0, version: 'source-v1', parent: 'root' } };
+    const original = withTracePayloadVersions([source])[0];
+    const structure = toTraceStructureInteractions(withTracePayloadVersions([projected]))[0];
+    assert.equal(structure._payloadVersion, original._payloadVersion);
+    assert.equal(structure._collaboration.taskId, 'child');
+    assert.notEqual(withTracePayloadVersions([{ ...source, content: 'updated result' }])[0]._payloadVersion, structure._payloadVersion);
+});

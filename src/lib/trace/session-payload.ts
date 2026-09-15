@@ -115,6 +115,10 @@ export function toTraceStructureInteractions(interactions: any[]): any[] {
 export function withTracePayloadVersions(interactions: any[]): any[] {
     return interactions.map(interaction => ({
         ...interaction,
-        _payloadVersion: createHash('sha256').update(JSON.stringify(interaction)).digest('base64url'),
+        _payloadVersion: createHash('sha256')
+            .update(JSON.stringify(Object.fromEntries(
+                Object.entries(interaction).filter(([key]) => key !== '_collaboration'),
+            )))
+            .digest('base64url'),
     }));
 }

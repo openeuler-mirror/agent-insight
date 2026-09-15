@@ -1182,6 +1182,7 @@ const EVALUATION_FILE = path.join(DATA_DIR, 'evaluation_result.json');
 const AUDIT_DATA_MUTATIONS = process.env.AUDIT_DATA_MUTATIONS === '1' || process.env.AUDIT_DATA_MUTATIONS === 'true';
 
 interface ReadRecordFilters {
+    excludedTaskIds?: string[];
     query?: string;
     taskId?: string;
     taskIds?: string[];
@@ -1975,6 +1976,10 @@ async function readRecordsInternal(
         }
     }
 
+    if (filters?.excludedTaskIds?.length) {
+        where.AND = [...((where.AND as any[]) ?? []), { OR: [{ taskId: null }, { taskId: { notIn: filters.excludedTaskIds } }] }];
+    }
+
     const sortKey = options?.sortKey ?? 'timestamp';
     const sortDir = options?.sortDir ?? 'desc';
     const orderBy = [{ [sortKey]: sortDir }, { id: sortDir }];
@@ -2006,7 +2011,7 @@ async function readRecordsInternal(
         const dedup = selectKeepIdsByTaskId(records);
         keepIds = dedup.keepIds;
         byTaskId = dedup.byTaskId;
-        const filtered = records.filter((r: any) => !r.taskId || keepIds.has(r.id));
+        const filtered = records.filter((r: any) => (!r.taskId || keepIds.has(r.id)) && !filters?.excludedTaskIds?.includes(r.taskId));
         total = filtered.length;
         paged = pageSize > 0
             ? filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
