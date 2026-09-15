@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a7d8aad249ded23d8bab65b872d6ade221eca03a` (`a7d8aad2`) |
-| Branch | `resolve/pr-294` |
-| Date | 2026-09-14 |
-| Author | wangxin-2026 |
-| Subject | `chore: resolve PR #294 conflicts with upstream/master` |
-| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
+| Commit | `230fa6f0c2023e9bf4cdef20d981c6029b4ae815` (`230fa6f0`) |
+| Branch | `codex/fix-issues-298-299-master` |
+| Date | 2026-09-15T19:54:46+08:00 |
+| Author | mintuyang |
+| Subject | `chore: 同步 upstream/master 并解决冲突` |
+| Documentation overlay | 合入 Benchmark、Pi 平台适配与 PR #294 文本评估器运行配置；实验入口迁移到共享 `ExperimentWizard`，并保留 Issue #298/#299 的数据集 Case 绑定与任务完成度关键观点缓存回写。 |
 
 ### 旧快照至当前提交的变更摘要
 
@@ -60,7 +60,7 @@
 
 > 2026-09-14 PR #294 merge overlay：ROUGE、完全精确匹配与实体 F1 作为预置评估器接入；Exact Match/Entity F1 的运行配置经共享 `ExperimentWizard` 提交并在实验、Case 详情展示。“同配置实验”和“复用评测配置”保留文本评估器参数，Benchmark 向导继续按 Manifest 渲染。
 
-**如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 230fa6f0 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
