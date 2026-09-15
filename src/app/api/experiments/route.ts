@@ -13,7 +13,7 @@ import {
   EvaluatorRunConfigValidationError,
   serializeEvaluatorRunConfigs,
 } from '@/lib/evaluators/evaluator-run-config';
-import { overallAverage } from '@/lib/engine/experiment/detail-agg';
+import { publishedOverallAverage } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service';
@@ -142,7 +142,7 @@ export async function GET(req: Request) {
         preset: r.preset,
         caseCount: r._count.cases,
         evaluatorCount,
-        overallScore: overallAverage(scoreRowsByExperiment.get(r.id) || []),
+        overallScore: publishedOverallAverage(r.status, scoreRowsByExperiment.get(r.id) || []),
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
       };

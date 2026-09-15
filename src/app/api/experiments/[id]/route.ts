@@ -11,7 +11,7 @@ import {
 } from '@/lib/engine/experiment/case-fi-meta';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
-import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
+import { publishedOverallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
@@ -423,7 +423,7 @@ export async function GET(
       && (progress.pending > 0 || Boolean(traceProgress?.pending))
       ? 'running'
       : experiment.status;
-    const overall = overallAverage(effectiveAllResults);
+    const overall = publishedOverallAverage(responseStatus, effectiveAllResults);
     const breakdown = evaluatorBreakdown(effectiveAllResults);
 
     // input/actualOutput 兜底：trace/监听模式建的 case 这两字段存空，从对应 Execution

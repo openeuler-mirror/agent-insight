@@ -281,7 +281,11 @@ export function ExperimentDetail({
     if (!detail || detail.type === 'llm' || !detail.cases || !detail.results) return [];
     return detail.cases.map((c) => ({
       ...c,
-      scores: caseScore(detail.results.filter((r) => r.caseId === c.id), lookup.categoryOf),
+      scores: caseScore(
+        detail.results.filter((r) => r.caseId === c.id),
+        lookup.categoryOf,
+        detail.evaluatorIds,
+      ),
     }));
   }, [detail, lookup]);
 

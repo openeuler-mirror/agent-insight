@@ -11,6 +11,7 @@ import {
   evaluatorBreakdown,
   groupByCategory,
   overallAverage,
+  publishedOverallAverage,
   scoredRows,
   type CategoryOf,
   type ResultRowLike,
@@ -51,6 +52,16 @@ test('scoredRows / overallAverage：仅 done 且有分入均分', () => {
   assert.equal(overallAverage([]), null);
 });
 
+test('publishedOverallAverage：运行中不发布部分均分，完成后才发布', () => {
+  const rows = [
+    row({ evaluatorId: 'ev-res-a', score: 90 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'running' }),
+  ];
+  assert.equal(publishedOverallAverage('running', rows), null);
+  assert.equal(publishedOverallAverage('failed', rows), null);
+  assert.equal(publishedOverallAverage('done', rows), 90);
+});
+
 test('evaluatorBreakdown：按评估器归组，N/M 与失败数正确，保持出现顺序', () => {
   const rows: ResultRowLike[] = [
     row({ caseId: 'c1', evaluatorId: 'ev-res-a', score: 80 }),
@@ -78,7 +89,7 @@ test('caseScore：综合/结果/轨迹按类目分别均分，均分保留 1 位
     row({ evaluatorId: 'ev-res-b', score: 71 }),
     row({ evaluatorId: 'ev-traj-a', score: 60 }),
   ];
-  const s = caseScore(rows, categoryOf);
+  const s = caseScore(rows, categoryOf, ['ev-res-a', 'ev-res-b', 'ev-traj-a']);
   assert.equal(s.overall, 73.7); // (90+71+60)/3 = 73.666… → 73.7
   assert.equal(s.res, 80.5);
   assert.equal(s.traj, 60);
@@ -89,7 +100,7 @@ test('caseScore：某类目无分 → 该项 null；全失败 case → 全 null 
   const mixed = caseScore([
     row({ evaluatorId: 'ev-res-a', score: 88 }),
     row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
-  ], categoryOf);
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
   assert.equal(mixed.overall, 88);
   assert.equal(mixed.res, 88);
   assert.equal(mixed.traj, null);
@@ -98,7 +109,7 @@ test('caseScore：某类目无分 → 该项 null；全失败 case → 全 null 
   const allFailed = caseScore([
     row({ evaluatorId: 'ev-res-a', status: 'failed' }),
     row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
-  ], categoryOf);
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
   assert.deepEqual(allFailed, { overall: null, res: null, traj: null, failed: 2, adjusted: 0 });
 });
 
@@ -111,6 +122,44 @@ test('groupByCategory：按类目归组；未知评估器回退 res', () => {
   const g = groupByCategory(rows, categoryOf);
   assert.deepEqual(g.res.map((r) => r.evaluatorId), ['ev-res-a', 'ev-unknown']);
   assert.deepEqual(g.traj.map((r) => r.evaluatorId), ['ev-traj-a']);
+});
+
+test('caseScore：全部已选评估器终态前不发布综合得分', () => {
+  const running = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'running' }),
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
+  assert.equal(running.overall, null);
+  assert.equal(running.res, 88);
+  assert.equal(running.traj, null);
+
+  const resultOnly = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+  ], categoryOf, ['ev-res-a']);
+  assert.equal(resultOnly.overall, 88);
+
+  const settledWithFailure = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
+  assert.equal(settledWithFailure.overall, 88);
+});
+
+test('caseScore：结果分和轨迹分分别等待该类全部已选评估器终态', () => {
+  const partialResult = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+    row({ evaluatorId: 'ev-res-b', status: 'running' }),
+    row({ evaluatorId: 'ev-traj-a', score: 70 }),
+  ], categoryOf, ['ev-res-a', 'ev-res-b', 'ev-traj-a']);
+  assert.equal(partialResult.overall, null);
+  assert.equal(partialResult.res, null);
+  assert.equal(partialResult.traj, 70);
+
+  const noTrajectorySelected = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+  ], categoryOf, ['ev-res-a']);
+  assert.equal(noTrajectorySelected.res, 88);
+  assert.equal(noTrajectorySelected.traj, null);
 });
 
 test('categorySummary：N=有分行 / M=类目结果行总数；空类目与全失败', () => {
@@ -147,7 +196,7 @@ test('人工修正后综合/类目/评估器/单 case 均分全部按人工分�
   ];
   assert.equal(overallAverage(rows), 70);          // (80+60)/2，而非 (60+60)/2
 
-  const s = caseScore(rows, categoryOf);
+  const s = caseScore(rows, categoryOf, ['ev-res-a', 'ev-traj-a']);
   assert.equal(s.overall, 70);
   assert.equal(s.res, 80);
   assert.equal(s.traj, 60);

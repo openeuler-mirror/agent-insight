@@ -12,7 +12,7 @@
 import { prisma } from '@/lib/storage/prisma';
 import { getDimension, type VariableDimension, type DimensionTrace, type TraceCandidate } from './variable-dimension';
 import {
-  overallAverage,
+  publishedOverallAverage,
   evaluatorBreakdown,
   caseScore,
   type ResultRowLike,
@@ -439,7 +439,7 @@ export async function getComparisonDetail(
   for (const g of experiment.groups) {
     const groupCaseIds = new Set(allCases.filter((c) => c.groupId === g.id).map((c) => c.id));
     const groupRows = allResults.filter((r) => groupCaseIds.has(r.caseId));
-    const overall = overallAverage(groupRows);
+    const overall = publishedOverallAverage(experiment.status, groupRows);
     const breakdown = evaluatorBreakdown(groupRows);
     const groupProgress = {
       total: groupRows.length,
@@ -505,7 +505,7 @@ export async function getComparisonDetail(
       const caseA = casesByInputGroup.get(p.taskInput)?.get(groupA.id);
       if (caseA) {
         const rows = (caseA.results as unknown as ResultRowLike[]);
-        const scores = caseScore(rows, categoryOf);
+        const scores = caseScore(rows, categoryOf, evaluatorIds);
         const out = caseA.actualOutput || (caseA.executionId ? execFallback.get(caseA.executionId) ?? '' : '');
         aSide = { caseId: caseA.id, executionId: caseA.executionId, actualOutput: out, scores: { overall: scores.overall, res: scores.res, traj: scores.traj } };
       }
@@ -514,7 +514,7 @@ export async function getComparisonDetail(
       const caseB = casesByInputGroup.get(p.taskInput)?.get(groupB.id);
       if (caseB) {
         const rows = (caseB.results as unknown as ResultRowLike[]);
-        const scores = caseScore(rows, categoryOf);
+        const scores = caseScore(rows, categoryOf, evaluatorIds);
         const out = caseB.actualOutput || (caseB.executionId ? execFallback.get(caseB.executionId) ?? '' : '');
         bSide = { caseId: caseB.id, executionId: caseB.executionId, actualOutput: out, scores: { overall: scores.overall, res: scores.res, traj: scores.traj } };
       }

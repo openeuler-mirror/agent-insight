@@ -62,6 +62,8 @@
 
 > 2026-09-14 PR #294 merge overlay：ROUGE、完全精确匹配与实体 F1 作为预置评估器接入；Exact Match/Entity F1 的运行配置经共享 `ExperimentWizard` 提交并在实验、Case 详情展示。“同配置实验”和“复用评测配置”保留文本评估器参数，Benchmark 向导继续按 Manifest 渲染。
 
+> 2026-09-14 working-tree overlay：实验列表与详情的综合分只在实验 `done` 后发布，运行中不再显示部分均分；单 Case 综合分等待该 Case 的全部已选评估器进入 `done|failed` 终态，结果分和轨迹分也分别等待本类全部已选评估器进入终态，未选择的评估器不阻塞。
+
 **如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
