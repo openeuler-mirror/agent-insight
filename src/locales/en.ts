@@ -249,7 +249,7 @@ export const en = {
     expandAll: 'Expand',
     collapseAll: 'Collapse',
     searchPlaceholder: 'Search agent, tool, content… (Ctrl+F)',
-    slowOnly: 'Anomalies only',
+    slowOnly: 'Slow nodes only (>60s)',
     filters: 'Filters',
     filterType: 'Type',
     filterDuration: 'Duration',

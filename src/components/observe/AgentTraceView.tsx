@@ -641,7 +641,7 @@ export default function AgentTraceView({
 
     const collapseAll = () => {
         if (!tree) return;
-        setExpandedKeys(new Set([agentKey(tree.id)]));
+        setExpandedKeys(new Set());
     };
 
     const toggleExpandAll = () => (isAllExpanded ? collapseAll() : expandAll());
@@ -888,7 +888,7 @@ export default function AgentTraceView({
                             )}
                         </div>
 
-                        {/* Slow / anomaly filter */}
+                        {/* Slow node filter */}
                         <Button
                             variant={slowOnly ? 'default' : 'outline'}
                             size="sm"
@@ -936,12 +936,13 @@ export default function AgentTraceView({
                                 { value: 'user', label: 'User' },
                             ]} onChange={setTreeKindFilter} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
-                            <FilterPill label={tt('traceTree.filterDuration')} value={String(minDurationMs)} options={[
+                            <FilterPill label={tt('traceTree.filterDuration')} value={String(slowOnly ? SLOW_MS : minDurationMs)} disabled={slowOnly} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
                                 { value: '1000', label: '>1s' },
                                 { value: '5000', label: '>5s' },
                                 { value: '10000', label: '>10s' },
                                 { value: '30000', label: '>30s' },
+                                { value: String(SLOW_MS), label: '>60s' },
                             ]} onChange={v => setMinDurationMs(Number(v))} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterToken')} value={String(minTokenK)} options={[
@@ -1042,11 +1043,12 @@ export default function AgentTraceView({
 }
 
 // ─── FilterPill ──────────────────────────────────────────────────────────────
-function FilterPill({ label, value, options, onChange }: {
+function FilterPill({ label, value, options, onChange, disabled = false }: {
     label: string;
     value: string;
     options: { value: string; label: string; accentClass?: string }[];
     onChange: (v: string) => void;
+    disabled?: boolean;
 }) {
     return (
         <div className="flex items-center gap-1.5">
@@ -1057,6 +1059,8 @@ function FilterPill({ label, value, options, onChange }: {
                     return (
                         <button
                             key={o.value}
+                            disabled={disabled}
+                            aria-pressed={isActive}
                             onClick={() => onChange(o.value)}
                             className={cn(
                                 'px-2 py-0.5 text-xs whitespace-nowrap transition-colors',
@@ -1226,7 +1230,7 @@ function UnifiedSpanTree({
         const evTok = ev.usage?.total || 0;
         const evIsSlow = (evDur ?? 0) > SLOW_MS;
         if (treeKindFilter !== 'all' && ev.kind !== treeKindFilter) return null;
-        if (minDurationMs > 0 && (evDur == null || evDur < minDurationMs)) return null;
+        if (minDurationMs > 0 && (evDur == null || evDur <= minDurationMs)) return null;
         if (minTokenK > 0 && evTok < minTokenK * 1000) return null;
         if (ctxSlowOnly && !evIsSlow) return null;
         if (searchQuery && !matchedKeys.has(evKey)) return null;

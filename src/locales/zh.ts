@@ -249,7 +249,7 @@ export const zh = {
     expandAll: '展开',
     collapseAll: '收起',
     searchPlaceholder: '搜索 Agent、Tool、内容… (Ctrl+F)',
-    slowOnly: '仅异常',
+    slowOnly: '仅慢节点（>60s）',
     filters: '筛选',
     filterType: '类型',
     filterDuration: '耗时',
