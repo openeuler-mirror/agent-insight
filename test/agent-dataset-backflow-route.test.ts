@@ -5,9 +5,9 @@ import {
   mapBackflowCanonicalValues,
   normalizeBackflowValues,
   parseBackflowFieldMappings,
-  POST,
   parseBackflowFields,
-} from '@/app/api/agent-datasets/backflow/route';
+} from '@/lib/agent-dataset-backflow';
+import { POST } from '@/app/api/agent-datasets/backflow/route';
 
 test('keeps trace backflow as a native JSON array', () => {
   const trace = [

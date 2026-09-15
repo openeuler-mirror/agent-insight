@@ -66,6 +66,8 @@
 
 > 2026-09-15 working-tree overlay：Benchmark 后端扩展契约完成去 SWE-bench 专用化。Adapter 与 Evaluator 身份独立，数据集字段按 Manifest Presentation 导入并冻结，结果 API 直接返回完整 `submissions[]` / `evidenceArtifacts[]`，不保留 `patchArtifactId` 或单个 `submission`；Controller 基础镜像与 SWE-bench Harness 依赖拆分，Evaluator runtime、网络和资源声明进入实际运行。该改造用于形成“公共框架 + 接入包实例代码”的统一开发规范，不承诺零代码、纯配置接入。
 
+> 2026-09-15 working-tree overlay：Benchmark 前端完成通用 Presentation 渲染。数据集详情、创建实验和实验详情共用字段路径与格式化模块；自动绑定使用独立 `evaluatorKey`，Evaluator 文案来自接入包；Case 详情展示完整 Submission/Evidence 列表和归一化评分点，趋势名称使用 `aggregateLabel`，公共组件不再包含 SWE-bench 字段、单 Patch、固定证据文件或 Adapter 特判。
+
 **如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

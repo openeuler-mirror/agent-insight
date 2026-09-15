@@ -30,7 +30,7 @@ external_account_unique=$(printf '%s\n' "$output" | sed 's/^[[:space:]]*//' | gr
 allowed=$((widenings + external_account_unique))
 
 if [ "$warnings" -gt 0 ] && [ "$warnings" = "$allowed" ]; then
-  echo "  [db push] 待应用的变更仅包含无损白名单项（Int→BigInt: $widenings，User.externalAccount 唯一约束: $external_account_unique），放行。"
+  echo "  [db push] 待应用的变更仅包含无损白名单项（Int→BigInt: ${widenings}，User.externalAccount 唯一约束: ${external_account_unique}），放行。"
   npx prisma db push --accept-data-loss < /dev/null
   exit 0
 fi

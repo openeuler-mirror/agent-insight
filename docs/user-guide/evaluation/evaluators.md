@@ -7,7 +7,7 @@ description: "评估器管理、创建流程与功能说明"
 
 评估器用于定义离线评测的评分标准，并将输入、输出、预期输出或执行轨迹转换为可比较的结构化结果。评测体系中，数据集负责定义样本范围，评估器负责定义判定口径，实验负责将二者与待评测 Agent 组合并产出结果。
 
-当前评估器按来源分为两类；预置评估器包含 LLM 判定、确定性 Code 评估器和 Benchmark 官方 Harness：
+当前评估器按来源分为两类；预置评估器包含 LLM 判定和确定性 Code 评估器，Benchmark 评估器则在选择对应数据集后按接入包动态生成：
 
 - **预置评估器**：平台内置的标准评分模板，适合快速发起评测。
 - **自建评估器**：通过 **评估提示词** 与可选 **评分点** 自定义评分逻辑，适合沉淀业务专用标准。
@@ -15,7 +15,7 @@ description: "评估器管理、创建流程与功能说明"
 > **Note**
 > 预置评估器和自建评估器都可以在全局实验第 4 步选择。系统会根据评估器使用的变量和适用范围，检查已选 Case 是否满足预期输出、数据集输入、Tool/Skill 目录及数据集类型等前置条件。
 
-`SWE-bench Official Harness` 是 Benchmark 数据集自动绑定的预置评估器，由独立评测服务验证 `model.patch`，展示 `Resolved/Unresolved`、`FAIL_TO_PASS` 与 `PASS_TO_PASS`。它不能在 Benchmark 实验中取消；普通评估器仍可追加，但依赖 `reference_output` 的评估器不可选。部署方式见[跑通第一次评测](./quickstart.md#swe-bench-等容器-benchmark-的评测服务)。
+选择 Benchmark 数据集后，系统根据接入包的 `evaluatorKey` 自动绑定对应评估器，并从 Presentation 展示名称、用途、运行方式、输出说明和主指标。该评估器不能取消；普通评估器仍可追加，但依赖 `reference_output` 的评估器不可选。需要独立评测服务的接入包，其部署方式见[跑通第一次评测](./quickstart.md#swe-bench-等容器-benchmark-的评测服务)。
 
 ## 评估器承担的职责
 

@@ -230,9 +230,9 @@ export const TRAJECTORY_PLACEHOLDER = `{
   "root_step": { }
 }`;
 
-export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'>): string[] {
+export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'> & Partial<Pick<AgentDataset, 'fields'>>): string[] {
   if (dataset.datasetKind === 'benchmark') {
-    return ['input', 'instance_id', 'repo', 'base_commit', 'version'];
+    return (dataset.fields || []).map(field => field.label || field.key).filter(Boolean);
   }
   if (dataset.datasetKind === 'trajectory') {
     return ['input', 'reference_output', 'trajectory'];

@@ -34,6 +34,16 @@ const nextConfig: NextConfig = {
       'data/**',
     ],
   },
+  // Next 16.1.4's webpack tracer misses several relative Next runtime
+  // dependencies, leaving an otherwise successful standalone build unable to boot.
+  outputFileTracingIncludes: {
+    '*': [
+      'node_modules/next/dist/server/mcp/**/*',
+      'node_modules/next/dist/next-devtools/**/*',
+      'node_modules/next/dist/lib/metadata/**/*',
+      'node_modules/next/dist/pages/**/*',
+    ],
+  },
   // git worktree 场景：cwd 在 <main>/.claude/worktrees/<id>，依赖装在主仓库 node_modules，
   // worktree 本地 node_modules 不完整——root 必须指向主仓库根，turbopack 才解析得到 next。
   // 非 worktree 场景：不显式设置 root。Windows 上把 root 设为绝对路径会触发 Turbopack

@@ -205,7 +205,9 @@ fi
 
 echo "Building project..."
 # Limit Node memory to 2GB to prevent OOM kills on small servers
-NODE_OPTIONS="--max-old-space-size=2048" npm run build
+# Next 16 Turbopack may trace the mutable .git/refs/codex tree into standalone and
+# then fail when Codex rotates a capture between tracing and copying.
+NODE_OPTIONS="--max-old-space-size=2048" npx next build --webpack
 if [ $? -ne 0 ]; then
     echo "Build failed! Aborting."
     exit 1

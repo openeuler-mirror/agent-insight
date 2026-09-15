@@ -298,7 +298,7 @@ export const generatedBenchmarkManifests = {
         {
           "source": "evidence",
           "kind": "official-report",
-          "label": "官方报告",
+          "label": "报告输出",
           "order": 20
         },
         {

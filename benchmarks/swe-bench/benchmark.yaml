@@ -69,6 +69,6 @@ presentation:
       falseLabel: 未解决
   artifacts:
     - { source: submission, name: model.patch, label: Agent Patch, order: 10 }
-    - { source: evidence, kind: official-report, label: 官方报告, order: 20 }
+    - { source: evidence, kind: official-report, label: 报告输出, order: 20 }
     - { source: evidence, kind: test-output, label: 测试输出, order: 30 }
     - { source: evidence, kind: harness-log, label: 运行日志, order: 40 }

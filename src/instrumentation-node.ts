@@ -96,7 +96,7 @@ export async function setupNodeRuntime(): Promise<void> {
   // 上面的评测行回收覆盖不到。不清的话,用户重跑同一灰度任务时,上一轮崩溃的旧 run 会被惰性标成
   // 「服务重启中断」、混进新一轮里像新跑报错。开机清掉,保证重跑干净、状态一致。
   try {
-    const { reapStaleGrayscaleRunsAtStartup } = await import('@/app/api/debug/grayscale-tasks/[taskId]/route');
+    const { reapStaleGrayscaleRunsAtStartup } = await import('@/lib/grayscale/startup-reap');
     const n = await reapStaleGrayscaleRunsAtStartup();
     if (n > 0) console.warn(`[instrumentation] 回收灰度崩溃残骸: ${n} 个任务的非终态运行 → failed`);
   } catch (err) {

@@ -14,29 +14,16 @@ import { deriveAnomalyStatus, normalizeAnomalyFilter } from '@/lib/reliability/a
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import {
+    hasAssistantOutput,
+    inferQuietWindowTraceCompletedAt,
+    QUIET_WINDOW_INFERRED_FRAMEWORKS,
+    type TimestampCarrier,
+} from '@/lib/trace/lifecycle';
 
 export const dynamic = 'force-dynamic';
 
 const DEFAULT_AUTO_EVAL_TRACE_STABLE_MS = 60_000;
-
-type TimestampCarrier = {
-    // hasAssistantOutput() reads role/content to detect a produced answer; the rest
-    // are the activity-timestamp fields getLatestTraceActivityMs() scans.
-    role?: unknown;
-    content?: unknown;
-    timestamp?: unknown;
-    createdAt?: unknown;
-    completedAt?: unknown;
-    completed_at?: unknown;
-    timeInfo?: {
-        created?: unknown;
-        completed?: unknown;
-    };
-    timing?: {
-        started_at?: unknown;
-        completed_at?: unknown;
-    };
-};
 
 type SessionForReadiness = {
     interactions?: unknown;
@@ -201,30 +188,6 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
 // 缺少可靠结束信号时的读侧兜底:轨迹已产出 assistant 输出后,静默超过稳定窗口即视为结束。
 // Claude Code / jiuwenswarm single-agent 没有 root span;Hermes/OpenCode 有显式完成信号,
 // 但旧接入或异常退出可能漏写 Session.endTime,需要 quiet-window 防止已完成 trace 长期停在"执行中"。
-export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw']);
-
-export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
-    return interactions.some((interaction) => {
-        const role = String(interaction?.role || '').toLowerCase();
-        if (role !== 'assistant' && role !== 'subagent') return false;
-        return Boolean(String(interaction?.content || '').trim());
-    });
-}
-
-export function inferQuietWindowTraceCompletedAt(args: {
-    framework?: unknown;
-    explicitCompleted?: boolean;
-    latestActivityMs?: number;
-    quietLongEnough?: boolean;
-}): string | null {
-    const framework = String(args.framework ?? '').toLowerCase();
-    if (!QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) return null;
-    if (args.explicitCompleted) return null;
-    const latestActivityMs = args.latestActivityMs || 0;
-    if (!args.quietLongEnough || latestActivityMs <= 0) return null;
-    return new Date(latestActivityMs).toISOString();
-}
-
 async function getAutoEvalReadiness(record: Record<string, unknown>) {
     const framework = String(record.framework ?? '').toLowerCase();
     const hasFinalResult = Boolean(String(record.final_result ?? record.finalResult ?? '').trim());

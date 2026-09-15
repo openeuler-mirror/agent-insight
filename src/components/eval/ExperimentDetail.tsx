@@ -1,7 +1,7 @@
 'use client';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
-// → Case 明细表（Benchmark 含 Instance ID；综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
+// → Case 明细表（Benchmark 列由 Presentation 声明；综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -28,6 +28,15 @@ import {
   isBenchmarkEvaluationInProgress,
   isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status';
+import type {
+  BenchmarkPresentation,
+  BenchmarkPresentationColumn,
+} from '../../../packages/benchmark-protocol/src/contracts';
+import {
+  benchmarkPresentationText,
+  benchmarkPresentationValue,
+  truncateBenchmarkText,
+} from '@/lib/benchmark/presentation';
 
 interface ExperimentDetail {
   id: string;
@@ -53,12 +62,33 @@ interface ExperimentDetail {
     traceError: string | null;
     traceAttemptNo: number | null;
     traceAttemptStatus: string | null;
+    caseValues?: Record<string, unknown> | null;
     benchmark?: {
+      adapterKey: string;
       displayName: string;
       externalCaseId: string;
-      repo: string;
+      publicPayload: unknown;
+      presentation: BenchmarkPresentation | null;
       reference: { description: string };
-      submission: { name: string; summary: string; sha256: string; sizeBytes: number } | null;
+      primaryMetric: { key: string; value: boolean | number | null } | null;
+      submissions: Array<{
+        artifactId: string;
+        name: string;
+        kind: string;
+        mediaType: string;
+        sha256: string;
+        sizeBytes: number;
+        contentUrl: string;
+      }>;
+      evidenceArtifacts: Array<{
+        artifactId: string;
+        name: string;
+        kind: string;
+        mediaType: string;
+        sha256: string;
+        sizeBytes: number;
+        contentUrl: string;
+      }>;
       runStatus: string;
       evaluationStatus: string | null;
       failure?: { code: string; message: string | null } | null;
@@ -140,6 +170,10 @@ function responseError(value: unknown, fallback: string): string {
 }
 
 const CASE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const DEFAULT_BENCHMARK_CASE_COLUMNS: readonly BenchmarkPresentationColumn[] = [
+  { path: 'input', label: '输入', type: 'text' },
+  { path: 'externalCaseId', label: 'Case', type: 'code' },
+];
 
 export function ExperimentDetail({
   id,
@@ -302,6 +336,9 @@ export function ExperimentDetail({
   const caseTotal = detail?.caseTotal ?? 0;
   const totalPages = Math.max(1, Math.ceil(caseTotal / casePageSize));
   const pagedRows = caseRows;
+  const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
+  const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
+  const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
   // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
   useEffect(() => {
     if (casePage <= totalPages) return;
@@ -446,6 +483,11 @@ export function ExperimentDetail({
                       row.evaluatorId,
                       detail.evaluatorConfigs?.[row.evaluatorId as keyof EvaluatorRunConfigMap],
                     );
+                    const isBenchmarkEvaluator = detail.scope === 'benchmark'
+                      && row.evaluatorId.startsWith('benchmark:');
+                    const evaluatorName = isBenchmarkEvaluator
+                      ? benchmarkPresentation?.evaluator?.displayName || row.evaluatorId
+                      : lookup.nameOf(row.evaluatorId);
                     return (
                     <div key={row.evaluatorId} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                       <div style={{ width: 240, minWidth: 0 }}>
@@ -456,11 +498,13 @@ export function ExperimentDetail({
                                 'skill-trigger-accuracy': 'skill-trigger-analyzer（历史结果）',
                                 'preset-agent-task-completion': 'skill-trigger-analyzer（历史结果）',
                                 'preset-result-accuracy': 'skill-trigger-analyzer（历史结果）',
-                              }[row.evaluatorId] || lookup.nameOf(row.evaluatorId))
-                            : lookup.nameOf(row.evaluatorId)}
+                              }[row.evaluatorId] || evaluatorName)
+                            : evaluatorName}
                         </div>
                         <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', marginTop: 2 }}>
-                          {lookup.tagsOf(row.evaluatorId).join(' · ') || row.evaluatorId}
+                          {isBenchmarkEvaluator
+                            ? `预置 · Benchmark 评测 · ${benchmarkPresentation?.evaluator?.runMode || row.evaluatorId}`
+                            : lookup.tagsOf(row.evaluatorId).join(' · ') || row.evaluatorId}
                         </div>
                         {configSummary && (
                           <div title={configSummary} style={{
@@ -528,12 +572,22 @@ export function ExperimentDetail({
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: detail.scope === 'benchmark' ? 1280 : 1100 }}>
                   <thead>
                     <tr>
-                      {detail.scope === 'benchmark' && (
-                        <th style={{ ...STICKY_TH, width: 220 }}>Instance ID</th>
-                      )}
-                      <th style={STICKY_TH}>输入</th>
+                      {detail.scope === 'benchmark'
+                        ? benchmarkCaseColumns.map((column) => (
+                            <th
+                              key={column.path}
+                              title={column.description}
+                              style={{ ...STICKY_TH, width: column.width, minWidth: column.width }}
+                            >
+                              {column.label}
+                            </th>
+                          ))
+                        : <th style={STICKY_TH}>输入</th>}
                       <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '参考契约' : '预期输出'}</th>
-                      <th style={STICKY_TH}>实际输出</th>
+                      <th style={STICKY_TH}>{detail.scope === 'benchmark' ? '提交物' : '实际输出'}</th>
+                      {detail.scope === 'benchmark' && (
+                        <th style={STICKY_TH}>{benchmarkMetricPresentation?.label || '主指标'}</th>
+                      )}
                       <th style={{ ...STICKY_TH, width: 72 }}>综合得分</th>
                       <th style={{ ...STICKY_TH, width: 72 }}>结果得分</th>
                       <th style={{ ...STICKY_TH, width: 72 }}>轨迹得分</th>
@@ -543,28 +597,49 @@ export function ExperimentDetail({
                   <tbody>
                     {pagedRows.map((c) => (
                       <tr key={c.id}>
-                        {detail.scope === 'benchmark' && (
-                          <td style={{ ...TD, width: 220, whiteSpace: 'nowrap' }}>
-                            <code title={c.benchmark?.externalCaseId || undefined} style={{ fontSize: 11.5 }}>
-                              {c.benchmark?.externalCaseId || '—'}
-                            </code>
-                          </td>
-                        )}
-                        <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>
+                        {detail.scope === 'benchmark'
+                          ? benchmarkCaseColumns.map((column) => {
+                              const value = benchmarkPresentationText(benchmarkPresentationValue({
+                                input: c.input,
+                                externalCaseId: c.benchmark?.externalCaseId,
+                                values: c.caseValues,
+                                publicPayload: c.benchmark?.publicPayload,
+                              }, column.path), { format: column.format });
+                              return (
+                                <td
+                                  key={column.path}
+                                  title={value}
+                                  style={{
+                                    ...TD,
+                                    width: column.width,
+                                    minWidth: column.width,
+                                    maxWidth: column.width || 280,
+                                    ...(column.type === 'code' ? { fontFamily: 'var(--font-mono, monospace)' } : {}),
+                                    ...(column.type === 'number' ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } : {}),
+                                  }}
+                                >
+                                  {truncateBenchmarkText(value, column.truncate || 80)}
+                                </td>
+                              );
+                            })
+                          : <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>}
                         <td style={{ ...TD, maxWidth: 220 }}>
                           {detail.scope === 'benchmark'
                             ? <span style={{ color: 'var(--foreground-secondary)', fontSize: 11 }}>
-                                {c.benchmark?.displayName || 'Benchmark'} 测试契约 · 内容隐藏
+                                {c.benchmark?.presentation?.referencePanel?.title
+                                  || `${c.benchmark?.displayName || 'Benchmark'} 评测契约`} · 内容隐藏
                               </span>
                             : c.referenceOutput
                             ? truncate(c.referenceOutput, 60)
                             : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
                         </td>
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
-                          {detail.scope === 'benchmark' && c.benchmark?.submission ? (
-                            <div title={c.benchmark.submission.summary} style={{ minWidth: 0 }}>
+                          {detail.scope === 'benchmark' && c.benchmark?.submissions.length ? (
+                            <div style={{ minWidth: 0 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                <span>{c.benchmark.submission.name} · {c.benchmark.submission.sizeBytes} bytes</span>
+                                <span title={c.benchmark.submissions.map((item) => item.name).join('\n')}>
+                                  {c.benchmark.submissions.length} 个提交物 · {c.benchmark.submissions.map((item) => item.name).join('、')}
+                                </span>
                                 {isBenchmarkEvaluationInProgress(c.benchmark) && (
                                   <span style={{
                                     display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -574,7 +649,7 @@ export function ExperimentDetail({
                                     fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
                                   }}>
                                     <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
-                                    官方评测中…
+                                    Benchmark 评测中…
                                   </span>
                                 )}
                                 {!c.benchmark.failure && isBenchmarkSubmissionAwaitingCompletion({
@@ -582,7 +657,7 @@ export function ExperimentDetail({
                                   hasSubmission: true,
                                 }) && (
                                   <span style={{ color: 'var(--warning)', fontSize: 10, fontWeight: 600 }}>
-                                    Patch 已生成，等待执行器确认…
+                                    提交物已生成，等待执行器确认…
                                   </span>
                                 )}
                                 {c.benchmark.failure && !isBenchmarkEvaluationInProgress(c.benchmark) && (
@@ -598,7 +673,9 @@ export function ExperimentDetail({
                                 marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                                 color: 'var(--foreground-muted)', fontSize: 10.5,
                               }}>
-                                sha256:{c.benchmark.submission.sha256}
+                                {c.benchmark.submissions
+                                  .map((item) => `${item.name} sha256:${item.sha256}`)
+                                  .join(' · ')}
                               </div>
                             </div>
                           ) : c.traceStatus === 'failed' ? (
@@ -621,6 +698,22 @@ export function ExperimentDetail({
                             <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
                           ) : truncate(c.actualOutput, 80)}
                         </td>
+                        {detail.scope === 'benchmark' && (
+                          <td style={{ ...TD, fontWeight: 700 }}>
+                            {benchmarkPresentationText(
+                              benchmarkMetricPresentation
+                                ? benchmarkPresentationValue(c.benchmark || {}, benchmarkMetricPresentation.path)
+                                : c.benchmark?.primaryMetric?.value,
+                              {
+                                format: benchmarkMetricPresentation?.format,
+                                precision: benchmarkMetricPresentation?.precision,
+                                unit: benchmarkMetricPresentation?.unit,
+                                trueLabel: benchmarkMetricPresentation?.trueLabel,
+                                falseLabel: benchmarkMetricPresentation?.falseLabel,
+                              },
+                            )}
+                          </td>
+                        )}
                         <td style={{ ...TD, fontWeight: 700 }}>
                           {fmtScore(c.scores.overall)}
                           {c.scores.adjusted > 0 && (
@@ -674,7 +767,12 @@ export function ExperimentDetail({
                     ))}
                     {pagedRows.length === 0 && (
                       <tr>
-                        <td colSpan={7} style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}>暂无 case</td>
+                        <td
+                          colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : 7}
+                          style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}
+                        >
+                          暂无 case
+                        </td>
                       </tr>
                     )}
                   </tbody>

@@ -65,7 +65,7 @@ export default function EvaluatorDetailModal({
 
   const pointLabels = (card.pointsDef ?? []).map(p => p.label).filter(Boolean);
   const outputText = isBenchmarkService
-    ? 'Resolved / Unresolved + FAIL_TO_PASS、PASS_TO_PASS 通过数量 + 证据摘要'
+    ? card.outputDescription || card.mappedMetrics.join(' / ') || '输出由 Benchmark Adapter 归一化'
     : card.evaluatorType === 'LLM'
     ? `score 0-100 + 评分点（${pointLabels.length > 0 ? `${pointLabels.join(' / ')}，逐条强制给分` : 'Judge 自行提取'}）+ 判断依据（Markdown）`
     : 'score 0-100 + 证据（JSON）——具体证据构成见描述。';
@@ -145,11 +145,13 @@ export default function EvaluatorDetailModal({
 
         <DetailSection title="前置条件">
           {isBenchmarkService
-            ? '仅适用于 SWE-bench Benchmark 实验，由系统自动绑定；评测服务读取 Agent 生成的 model.patch，不接受普通 Trace 手工选择。'
+            ? card.runtimeNote || '仅适用于对应的 Benchmark 数据集，由系统自动绑定，不接受普通 Trace 手工选择。'
             : requirementText
             ? `${requirementText}。实验第 ④ 步会对全部已选 case 自动校验门控。`
             : '无——任意已圈选的 trace 均可评。'}
         </DetailSection>
+
+        <DetailSection title="运行方式">{card.runMode || '—'}</DetailSection>
 
         <DetailSection title="输出">
           <code style={{ fontSize: 12, fontFamily: 'var(--font-mono, ui-monospace, monospace)', color: 'var(--foreground)' }}>

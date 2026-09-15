@@ -92,10 +92,12 @@ printf '%s' "$BENCHMARK_KEY" | LC_ALL=C grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$' \
   || fail '--benchmark 格式不合法'
 [ -f "$REPOSITORY_ROOT/benchmarks/$BENCHMARK_KEY/benchmark.yaml" ] \
   || fail "Benchmark 接入包不存在：$BENCHMARK_KEY"
-for evaluator_env in "${EVALUATOR_ENV[@]}"; do
-  printf '%s' "$evaluator_env" | LC_ALL=C grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.*$' \
-    || fail '--evaluator-env 必须是 NAME=VALUE'
-done
+if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
+  for evaluator_env in "${EVALUATOR_ENV[@]}"; do
+    printf '%s' "$evaluator_env" | LC_ALL=C grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.*$' \
+      || fail '--evaluator-env 必须是 NAME=VALUE'
+  done
+fi
 
 for command_name in git docker df; do
   command -v "$command_name" >/dev/null 2>&1 || fail "宿主缺少命令：$command_name"
@@ -185,7 +187,9 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
   printf 'EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
   printf 'EVALUATOR_PLATFORM_TOKEN=%s\n' "$TOKEN"
   printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\n' "$PLATFORM_BASE_URL"
-  for evaluator_env in "${EVALUATOR_ENV[@]}"; do printf '%s\n' "$evaluator_env"; done
+  if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
+    for evaluator_env in "${EVALUATOR_ENV[@]}"; do printf '%s\n' "$evaluator_env"; done
+  fi
   printf 'EVALUATOR_HOST_OS=%s\n' "$HOST_OS"
   printf 'EVALUATOR_HOST_ARCH=%s\n' "$HOST_ARCH"
   printf 'EVALUATOR_SOURCE_REVISION=%s\n' "$SOURCE_REVISION"
