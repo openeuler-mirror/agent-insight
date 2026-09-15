@@ -28,6 +28,7 @@ const WHITELIST = new Set([
   'APPLY_CLIENT_CONFIG',
   'PREPARE_EXPERIMENT_CASE',
   'RUN_EXPERIMENT_CASE',
+  'RUN_BENCHMARK_CASE',
   'REFRESH_CAPABILITIES',
 ])
 
@@ -46,6 +47,7 @@ const FI_PROBE_CHILD_ARG = '--probe-fi-inventory-once'
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
 const LIVENESS_TIMEOUT_MS = 75_000
 const LIVENESS_CHECK_MS = 15_000
+const DEFAULT_OPENCODE_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS = 90
 // 长轮询失败后的重试间隔。必须远小于服务端指令 TTL（默认 30s），
 // 否则指令会在两次轮询的空窗里过期。
 const POLL_RETRY_MS = 3_000
@@ -82,15 +84,6 @@ function loadConfig() {
     // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
   }
-}
-
-function saveConfigPatch(patch) {
-  const prev = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {}
-  fs.mkdirSync(CLIENT_HOME, { recursive: true })
-  const next = { ...prev, ...patch }
-  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600 })
-  fs.renameSync(tmp, CONFIG_PATH)
 }
 
 /**
@@ -251,83 +244,106 @@ function waitSync(ms) {
   Atomics.wait(state, 0, 0, ms)
 }
 
-function runFiInventory(python, cwd, pythonArgs, probeEnv) {
-  const options = {
-    cwd,
-    env: probeEnv,
-    detached: process.platform !== 'win32',
-    encoding: 'utf8',
-    timeout: 60_000,
-    maxBuffer: 8 * 1024 * 1024,
+function withInventoryProbeSandbox(
+  probeEnv,
+  action,
+  baseDir = path.join(CLIENT_HOME, 'tmp'),
+) {
+  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 })
+  const tempRoot = fs.mkdtempSync(path.join(baseDir, 'inventory-'))
+  const env = {
+    ...probeEnv,
+    TMPDIR: tempRoot,
+    TMP: tempRoot,
+    TEMP: tempRoot,
   }
-  if (process.platform !== 'darwin') {
-    const command = process.platform === 'win32' ? python : '/bin/sh'
-    const args = process.platform === 'win32'
-      ? pythonArgs
-      : ['-c', 'exec "$@"', 'agent-insight-fi-inventory', python, ...pythonArgs]
-    return spawnSync(command, args, options)
-  }
-
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-fi-probe-'))
-  const stdoutPath = path.join(tempRoot, 'stdout.json')
-  const stderrPath = path.join(tempRoot, 'stderr.log')
-  const label = `ai.agent-insight.fi-probe.${process.pid}.${randomBytes(4).toString('hex')}`
-  const uid = process.getuid ? process.getuid() : 501
   try {
-    const submitted = spawnSync(
-      'launchctl',
-      [
-        'submit',
-        '-l',
-        label,
-        '-o',
-        stdoutPath,
-        '-e',
-        stderrPath,
-        '--',
-        '/usr/bin/env',
-        `PATH=${probeEnv.PATH || ''}`,
-        `HOME=${os.homedir()}`,
-        `PWD=${cwd}`,
-        '/bin/sh',
-        '-c',
-        'cd "$1" && shift && exec "$@"',
-        'agent-insight-fi-inventory',
-        cwd,
-        python,
-        ...pythonArgs,
-      ],
-      { encoding: 'utf8', env: probeEnv },
-    )
-    if (submitted.status !== 0) return submitted
-
-    const deadline = Date.now() + options.timeout
-    while (Date.now() < deadline) {
-      let stdout = ''
-      let stderr = ''
-      try { stdout = fs.readFileSync(stdoutPath, 'utf8') } catch {}
-      try { stderr = fs.readFileSync(stderrPath, 'utf8') } catch {}
-      if (stdout.trim()) {
-        try {
-          JSON.parse(stdout)
-          return { status: 0, stdout, stderr }
-        } catch {}
-      }
-      const state = spawnSync(
-        'launchctl',
-        ['print', `gui/${uid}/${label}`],
-        { encoding: 'utf8', stdio: 'pipe' },
-      )
-      if (state.status !== 0 || /state = exited/.test(state.stdout || '')) {
-        return { status: 1, stdout, stderr: stderr || 'inventory helper exited without JSON' }
-      }
-      waitSync(100)
-    }
-    return { status: null, stdout: '', stderr: 'inventory helper timed out' }
+    return action({ tempRoot, env })
   } finally {
-    spawnSync('launchctl', ['remove', label], { stdio: 'ignore' })
     fs.rmSync(tempRoot, { recursive: true, force: true })
   }
+}
+
+function runFiInventory(python, cwd, pythonArgs, probeEnv) {
+  return withInventoryProbeSandbox(probeEnv, ({ tempRoot, env }) => {
+    const options = {
+      cwd,
+      env,
+      detached: process.platform !== 'win32',
+      encoding: 'utf8',
+      timeout: 60_000,
+      maxBuffer: 8 * 1024 * 1024,
+    }
+    if (process.platform !== 'darwin') {
+      const command = process.platform === 'win32' ? python : '/bin/sh'
+      const args = process.platform === 'win32'
+        ? pythonArgs
+        : ['-c', 'exec "$@"', 'agent-insight-fi-inventory', python, ...pythonArgs]
+      return spawnSync(command, args, options)
+    }
+
+    const stdoutPath = path.join(tempRoot, 'stdout.json')
+    const stderrPath = path.join(tempRoot, 'stderr.log')
+    const label = `ai.agent-insight.fi-probe.${process.pid}.${randomBytes(4).toString('hex')}`
+    const uid = process.getuid ? process.getuid() : 501
+    try {
+      const submitted = spawnSync(
+        'launchctl',
+        [
+          'submit',
+          '-l',
+          label,
+          '-o',
+          stdoutPath,
+          '-e',
+          stderrPath,
+          '--',
+          '/usr/bin/env',
+          `PATH=${env.PATH || ''}`,
+          `HOME=${env.HOME || os.homedir()}`,
+          `PWD=${cwd}`,
+          `TMPDIR=${tempRoot}`,
+          `TMP=${tempRoot}`,
+          `TEMP=${tempRoot}`,
+          '/bin/sh',
+          '-c',
+          'cd "$1" && shift && exec "$@"',
+          'agent-insight-fi-inventory',
+          cwd,
+          python,
+          ...pythonArgs,
+        ],
+        { encoding: 'utf8', env },
+      )
+      if (submitted.status !== 0) return submitted
+
+      const deadline = Date.now() + options.timeout
+      while (Date.now() < deadline) {
+        let stdout = ''
+        let stderr = ''
+        try { stdout = fs.readFileSync(stdoutPath, 'utf8') } catch {}
+        try { stderr = fs.readFileSync(stderrPath, 'utf8') } catch {}
+        if (stdout.trim()) {
+          try {
+            JSON.parse(stdout)
+            return { status: 0, stdout, stderr }
+          } catch {}
+        }
+        const state = spawnSync(
+          'launchctl',
+          ['print', `gui/${uid}/${label}`],
+          { encoding: 'utf8', stdio: 'pipe' },
+        )
+        if (state.status !== 0 || /state = exited/.test(state.stdout || '')) {
+          return { status: 1, stdout, stderr: stderr || 'inventory helper exited without JSON' }
+        }
+        waitSync(100)
+      }
+      return { status: null, stdout: '', stderr: 'inventory helper timed out' }
+    } finally {
+      spawnSync('launchctl', ['remove', label], { stdio: 'ignore' })
+    }
+  })
 }
 
 /**
@@ -422,8 +438,13 @@ function probeFaultInjectionIsolated(cfg) {
 /** 探测代价高（要 spawn Python），一次探测供两份上报共用。 */
 let cachedProbe = null
 
+function cacheSuccessfulProbe(probe) {
+  if (probe?.ready || !cachedProbe) cachedProbe = probe
+  return cachedProbe
+}
+
 function getProbe(cfg, { refresh = false } = {}) {
-  if (!cachedProbe || refresh) cachedProbe = probeFaultInjection(cfg)
+  if (!cachedProbe || refresh) cacheSuccessfulProbe(probeFaultInjection(cfg))
   return cachedProbe
 }
 
@@ -463,16 +484,39 @@ function buildCapabilities(cfg, opts) {
       }
     }
   }
+  const components = {
+    clientVersion: AGENT_VERSION,
+    'git-workspace/v1': { ready: true },
+    'git-patch/v1': { ready: true },
+  }
+  for (const platform of platforms) {
+    components[`agent-runtime/${platform.id}/v1`] = {
+      ready: platform.runExperimentCase?.returnsTraceId === true && Boolean(which(platform.id)),
+    }
+  }
   return {
     platforms,
     actions: [...WHITELIST],
-    components: { clientVersion: AGENT_VERSION },
+    components,
     faultInjection: {
       ready: fi.ready,
       note: fi.note,
       maxParallel: cfg.maxParallelFi,
     },
   }
+}
+
+function benchmarkAgentPlatformsFromCapabilities(capabilities) {
+  const components = capabilities?.components || {}
+  return [...new Set((capabilities?.platforms || [])
+    .filter((platform) => {
+      const component = components[`agent-runtime/${platform.id}/v1`]
+      const ready = component === true
+        || (component && typeof component === 'object' && component.ready !== false)
+      return platform.runExperimentCase?.returnsTraceId === true && ready
+    })
+    .map((platform) => String(platform.id || '').trim())
+    .filter(Boolean))]
 }
 
 /**
@@ -661,6 +705,17 @@ const activeChildren = new Map()
 let reliabilitySlotHeld = false
 let fiBusy = 0
 let reliabilityChild = null
+let benchmarkExecutor = null
+
+function tryAcquireExecutionSlot() {
+  if (fiBusy > 0 || reliabilitySlotHeld) return false
+  reliabilitySlotHeld = true
+  return true
+}
+
+function releaseExecutionSlot() {
+  reliabilitySlotHeld = false
+}
 
 function resolveWorkspace(logical, workspaceBase) {
   const value = String(logical || '__default__').trim()
@@ -761,7 +816,9 @@ async function executeAction(cfg, frame, sendStatus) {
     await sendStatus('FAILED', { error: { code: 'ACTION_NOT_ALLOWED', message: `未知 action: ${action}` } })
     return
   }
-  const forbidden = action === 'RUN_EXPERIMENT_CASE' ? RUN_FORBIDDEN : CONFIG_FORBIDDEN
+  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'].includes(action)
+    ? RUN_FORBIDDEN
+    : CONFIG_FORBIDDEN
   for (const key of Object.keys(payload)) {
     if (forbidden.includes(key)) {
       await sendStatus('FAILED', {
@@ -801,13 +858,12 @@ async function executeAction(cfg, frame, sendStatus) {
   }
 
   if (action === 'RUN_EXPERIMENT_CASE') {
-    if (fiBusy > 0 || reliabilitySlotHeld) {
+    if (!tryAcquireExecutionSlot()) {
       await sendStatus('FAILED', {
         error: { code: 'CLIENT_BUSY', message: '本机已有 Agent 或故障注入任务运行，拒绝并发执行实验 Case' },
       })
       return
     }
-    reliabilitySlotHeld = true
     await sendStatus('RUNNING', {})
     try {
       const result = await runExperimentCase(cfg, payload, async ({ traceId, startedAt }) => {
@@ -818,10 +874,30 @@ async function executeAction(cfg, frame, sendStatus) {
       await sendStatus('SUCCEEDED', { result })
     } catch (err) {
       await sendStatus('FAILED', {
+        result: err.runFacts || undefined,
         error: { code: err.code || 'CASE_RUN_FAILED', message: err.message },
       })
     } finally {
-      reliabilitySlotHeld = false
+      releaseExecutionSlot()
+    }
+    return
+  }
+
+  if (action === 'RUN_BENCHMARK_CASE') {
+    if (!benchmarkExecutor) {
+      await sendStatus('FAILED', {
+        error: { code: 'BENCHMARK_RUNTIME_UNAVAILABLE', message: 'Benchmark 执行运行时未就绪' },
+      })
+      return
+    }
+    try {
+      const result = await benchmarkExecutor.accept(payload.request)
+      await sendStatus('RUNNING', { result: { state: 'ACCEPTED', runId: result.runId } })
+      await sendStatus('SUCCEEDED', { result })
+    } catch (err) {
+      await sendStatus('FAILED', {
+        error: { code: err.code || 'BENCHMARK_ACCEPT_FAILED', message: err.message },
+      })
     }
   }
 }
@@ -847,6 +923,145 @@ function signalProcessTree(child, signal) {
   }
 }
 
+function collectDiagnosticStrings(value, output = [], depth = 0) {
+  if (depth > 5 || output.length >= 20 || value === null || value === undefined) return output
+  if (typeof value === 'string') {
+    if (value.trim()) output.push(value.trim())
+    return output
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectDiagnosticStrings(item, output, depth + 1)
+    return output
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) collectDiagnosticStrings(item, output, depth + 1)
+  }
+  return output
+}
+
+function extractStructuredAgentError(line) {
+  try {
+    const parsed = JSON.parse(String(line || '').trim())
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const type = String(parsed.type || '').toLowerCase()
+    const nestedEvent = parsed.event && typeof parsed.event === 'object' ? parsed.event : null
+    const nestedType = String(nestedEvent?.type || '').toLowerCase()
+    const nestedError = nestedEvent?.properties?.error || nestedEvent?.error
+    if (
+      !['error', 'session.error'].includes(type)
+      && !['error', 'session.error'].includes(nestedType)
+      && !parsed.error
+      && !nestedError
+    ) return null
+    const values = collectDiagnosticStrings(
+      parsed.error || parsed.message || nestedError || nestedEvent || parsed,
+    )
+    return values.join(' | ').slice(-4_000) || null
+  } catch {
+    return null
+  }
+}
+
+function inspectOpencodeRunEvent(line) {
+  try {
+    const parsed = JSON.parse(String(line || '').trim())
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const nestedEvent = parsed.event && typeof parsed.event === 'object' ? parsed.event : null
+    const outerType = String(parsed.type || '').toLowerCase()
+    const type = outerType === 'event' && nestedEvent?.type
+      ? String(nestedEvent.type).toLowerCase()
+      : String(outerType || nestedEvent?.type || '').toLowerCase()
+    const properties = nestedEvent?.properties || parsed.properties || {}
+    const rawStatus = properties?.status?.type
+      || properties?.status
+      || properties?.info?.status
+      || parsed.status?.type
+      || parsed.status
+    const status = String(rawStatus || '').toLowerCase()
+    const part = parsed.part || properties?.part || {}
+    const partType = String(part?.type || '').toLowerCase()
+    const messageInfo = parsed.message || parsed.info || properties?.info || {}
+    const messageRole = String(messageInfo?.role || parsed.role || '').toLowerCase()
+    const delta = properties?.delta ?? parsed.delta
+    const directText = ['text', 'reasoning'].includes(type)
+      && String(part?.text ?? parsed.text ?? '').length > 0
+    const directModelEvent = directText || [
+      'tool',
+      'tool_use',
+      'tool_result',
+      'step_finish',
+    ].includes(type)
+    const assistantDelta = type === 'message.part.delta'
+      && typeof delta === 'string'
+      && delta.length > 0
+    const assistantPart = type === 'message.part.updated'
+      && (
+        ['reasoning', 'tool', 'tool_use', 'step-finish', 'step_finish'].includes(partType)
+        || (
+          partType === 'text'
+          && messageRole === 'assistant'
+          && typeof part?.text === 'string'
+          && part.text.length > 0
+        )
+      )
+      && messageRole !== 'user'
+    return {
+      traceId: traceIdFromJson(parsed),
+      idle: type === 'session.idle'
+        || ((type === 'session.status' || type === 'session.updated') && status === 'idle'),
+      error: extractStructuredAgentError(line),
+      modelActivity: directModelEvent || assistantDelta || assistantPart,
+      type,
+    }
+  } catch {
+    return null
+  }
+}
+
+function sanitizeAgentDiagnostic(value, maxLength = 800) {
+  const compact = String(value || '')
+    .replace(/(authorization["']?\s*[:=]\s*["']?bearer\s+)[^\s,'"}]+/gi, '$1[REDACTED]')
+    .replace(/((?:[a-z0-9_]*(?:api[_-]?key|access[_-]?token)|token|secret|client[_-]?secret)["']?\s*[:=]\s*["']?)[^\s,'"}]+/gi, '$1[REDACTED]')
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|secret)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/\b(?:sk|rk|pk)-[a-z0-9_-]{16,}\b/gi, '[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return compact.length > maxLength ? compact.slice(-maxLength) : compact
+}
+
+function classifyAgentExitFailure({ platform, exitCode, signal, diagnostic, structured = false }) {
+  const normalized = sanitizeAgentDiagnostic(diagnostic)
+  const strictModelSelectionFailure = /(?:modelnotfound|unknownmodel|invalidmodel|(?:unknown|invalid|unsupported)\s+model|requested\s+model\s+[^.]{0,100}(?:not found|does not exist)|model\s+(?:id|name)\s+[^.]{0,100}(?:not found|does not exist|invalid)|provider\s+(?:[^.]{0,100}\s+)?(?:not found|unknown|invalid)|no\s+(?:model|provider)\s+(?:was\s+)?found|模型(?:名称|标识)?[^。]{0,60}(?:不存在|未找到|无效|不支持))/i
+  const structuredModelSelectionFailure = /(?:model\s+(?:[^.]{0,100}\s+)?(?:not found|does not exist|unknown|invalid|unsupported)|(?:unknown|invalid|unsupported)\s+model)/i
+  const modelContext = /(?:model|provider|\bllm\b|openai|anthropic|gemini|deepseek|api[_ -]?key|模型|提供商|密钥|鉴权)/i
+  const authenticationFailure = /(?:providerauth|authentication\s+(?:failed|required)|unauthori[sz]ed|forbidden|permission\s+denied|access\s+denied|not\s+authorized|invalid\s+(?:api[_ -]?key|credential|access[_ -]?token)|(?:api[_ -]?key|credential|access[_ -]?token)\s+(?:is\s+)?(?:invalid|missing|expired|revoked)|\b(?:401|403)\b|鉴权失败|未授权|密钥[^。]{0,40}(?:无效|缺失|过期))/i
+  const exitDescription = exitCode === null || exitCode === undefined
+    ? `signal ${signal || 'unknown'}`
+    : `exit ${exitCode}`
+
+  if (
+    strictModelSelectionFailure.test(normalized)
+    || (structured && structuredModelSelectionFailure.test(normalized))
+    || (modelContext.test(normalized) && authenticationFailure.test(normalized))
+  ) {
+    return {
+      code: 'MODEL_UNAVAILABLE',
+      message: `平台 ${platform} 无法使用所选模型（模型名称、鉴权或配置错误；${exitDescription}）`,
+    }
+  }
+  return {
+    code: 'AGENT_EXIT_NONZERO',
+    message: `平台 ${platform} Agent 异常退出（${exitDescription}）`,
+  }
+}
+
+function createAgentRunError(code, message, runFacts) {
+  const err = new Error(message)
+  err.code = code
+  err.runFacts = runFacts
+  return err
+}
+
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   const platform = String(payload.platform || '')
   const agent = String(payload.agent || '')
@@ -861,9 +1076,11 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     throw err
   }
 
+  const cwd = payload.cwd ? path.resolve(String(payload.cwd)) : cfg.workspaceBase
   const correlation = payload.correlation || {}
   const env = {
     ...process.env,
+    PWD: cwd,
     AGENT_INSIGHT_CLIENT_ID: cfg.clientId,
     AGENT_INSIGHT_EXPERIMENT_ID: String(correlation.experimentId || ''),
     AGENT_INSIGHT_EXPERIMENT_RUN_ID: String(correlation.experimentRunId || ''),
@@ -879,22 +1096,41 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     correlation,
   })
   const timeoutMs = Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
+  const configuredFirstResponseSeconds = payload.firstModelResponseTimeoutSeconds === null
+    || payload.firstModelResponseTimeoutSeconds === undefined
+    || payload.firstModelResponseTimeoutSeconds === ''
+    ? Number.NaN
+    : Number(payload.firstModelResponseTimeoutSeconds)
+  const firstModelResponseTimeoutSeconds = Number.isFinite(configuredFirstResponseSeconds)
+    ? Math.max(1, Math.min(300, configuredFirstResponseSeconds))
+    : DEFAULT_OPENCODE_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS
+  const firstModelResponseTimeoutMs = firstModelResponseTimeoutSeconds * 1000
   const startedAt = new Date().toISOString()
 
   return new Promise((resolve, reject) => {
+    fs.mkdirSync(cwd, { recursive: true })
     const child = spawn(executable, invocation.args, {
-      cwd: cfg.workspaceBase,
+      cwd,
       env,
       stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     })
     reliabilityChild = child
-    fs.mkdirSync(cfg.workspaceBase, { recursive: true })
     let stderr = ''
     let stdoutBuffer = ''
     let traceId = null
     let stdinError = null
+    let timedOut = false
+    let settled = false
+    let earlyFailure = null
+    let modelActivityObserved = false
+    let firstModelActivityAt = null
+    const structuredErrors = []
     let traceReport = Promise.resolve()
+    let timeoutTimer = null
+    let modelStartTimer = null
+    let forceKillTimer = null
+    let hardStopTimer = null
     if (invocation.stdin !== null && child.stdin) {
       child.stdin.on('error', (err) => {
         stdinError = err
@@ -909,55 +1145,190 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         logErr(`early trace id report failed (${traceId}):`, err.message)
       })
     }
+    const clearTimers = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (modelStartTimer) clearTimeout(modelStartTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+    }
+    const observeModelActivity = () => {
+      if (modelActivityObserved) return
+      modelActivityObserved = true
+      firstModelActivityAt = new Date().toISOString()
+      if (modelStartTimer) {
+        clearTimeout(modelStartTimer)
+        modelStartTimer = null
+      }
+    }
+    const terminateForEarlyFailure = (code, message) => {
+      if (settled || earlyFailure) return
+      earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+      if (modelStartTimer) {
+        clearTimeout(modelStartTimer)
+        modelStartTimer = null
+      }
+      signalProcessTree(child, 'SIGTERM')
+      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
+      hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
+    }
+    const consumeStdoutLine = (line) => {
+      const event = inspectOpencodeRunEvent(line)
+      captureTraceId(event?.traceId || extractTraceIdFromJsonLine(line))
+      const structuredError = event?.error || extractStructuredAgentError(line)
+      if (structuredError) structuredErrors.push(structuredError)
+      if (platform !== 'opencode' || !event) return
+      if (event.modelActivity) observeModelActivity()
+      if (event.error) {
+        const classified = classifyAgentExitFailure({
+          platform,
+          exitCode: null,
+          signal: null,
+          diagnostic: event.error,
+          structured: true,
+        })
+        const code = classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR'
+        const message = classified.code === 'MODEL_UNAVAILABLE'
+          ? classified.message
+          : `OpenCode 会话报告模型错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
+        if (settled) {
+          if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+        } else {
+          terminateForEarlyFailure(code, message)
+        }
+      } else if (event.idle && !modelActivityObserved) {
+        const code = 'MODEL_NO_RESPONSE'
+        const message = 'OpenCode 会话已进入 idle，但未观察到任何模型输出或工具调用'
+        if (settled) {
+          if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+        } else {
+          terminateForEarlyFailure(code, message)
+        }
+      }
+    }
     child.stdout.on('data', (c) => {
       stdoutBuffer += String(c)
       const lines = stdoutBuffer.split(/\r?\n/)
       stdoutBuffer = lines.pop() || ''
-      for (const line of lines) captureTraceId(extractTraceIdFromJsonLine(line))
+      for (const line of lines) {
+        consumeStdoutLine(line)
+      }
+      if (structuredErrors.length > 20) structuredErrors.splice(0, structuredErrors.length - 20)
       captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
       if (stdoutBuffer.length > 1024 * 1024) stdoutBuffer = stdoutBuffer.slice(-1024 * 1024)
     })
     child.stderr.on('data', (c) => {
       stderr += String(c)
+      if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024)
     })
-    let forceKillTimer = null
-    const timer = setTimeout(() => {
+    const waitForTraceReport = () => new Promise((done) => {
+      const reportTimer = setTimeout(done, 5_000)
+      traceReport.finally(() => {
+        clearTimeout(reportTimer)
+        done()
+      })
+    })
+    const finishAgentRun = async (code, signal) => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      if (reliabilityChild === child) reliabilityChild = null
+      consumeStdoutLine(stdoutBuffer)
+      await waitForTraceReport()
+      const finishedAt = new Date().toISOString()
+      const runFacts = {
+        state: 'AGENT_EXITED',
+        ...(traceId ? { traceId } : {}),
+        exitCode: code,
+        signal: signal || undefined,
+        timedOut,
+        modelActivityObserved,
+        firstModelActivityAt: firstModelActivityAt || undefined,
+        firstModelResponseTimeoutSeconds: platform === 'opencode'
+          ? firstModelResponseTimeoutSeconds
+          : undefined,
+        failureDetectedAt: earlyFailure?.detectedAt || undefined,
+        stderr: sanitizeAgentDiagnostic(stderr, 2_000) || undefined,
+        startedAt,
+        finishedAt,
+      }
+      let failure = null
+      if (earlyFailure) {
+        failure = createAgentRunError(earlyFailure.code, earlyFailure.message, runFacts)
+      } else if (timedOut) {
+        failure = createAgentRunError(
+          'AGENT_TIMEOUT',
+          `平台 ${platform} Agent 执行超过 ${Math.ceil(timeoutMs / 1000)} 秒，已终止进程组`,
+          runFacts,
+        )
+      } else if (stdinError) {
+        failure = createAgentRunError(
+          'INPUT_DELIVERY_FAILED',
+          `向平台 ${platform} 传递实验输入失败: ${stdinError.message}`,
+          runFacts,
+        )
+      } else {
+        const structuredFailure = classifyAgentExitFailure({
+          platform,
+          exitCode: code,
+          signal,
+          diagnostic: structuredErrors.join('\n'),
+          structured: true,
+        })
+        if (structuredErrors.length && structuredFailure.code === 'MODEL_UNAVAILABLE') {
+          failure = createAgentRunError(structuredFailure.code, structuredFailure.message, runFacts)
+        }
+      }
+      if (!failure && code !== 0) {
+        const classified = classifyAgentExitFailure({
+          platform,
+          exitCode: code,
+          signal,
+          diagnostic: [...structuredErrors, stderr].filter(Boolean).join('\n'),
+        })
+        failure = createAgentRunError(classified.code, classified.message, runFacts)
+      } else if (!failure && platform === 'opencode' && !modelActivityObserved) {
+        failure = createAgentRunError(
+          'MODEL_NO_RESPONSE',
+          'OpenCode Agent 已结束，但未观察到任何模型输出或工具调用',
+          runFacts,
+        )
+      } else if (!failure && !traceId) {
+        failure = createAgentRunError(
+          platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED',
+          `平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`,
+          runFacts,
+        )
+      }
+      if (failure) {
+        reject(failure)
+        return
+      }
+      // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
+      resolve(runFacts)
+    }
+    timeoutTimer = setTimeout(() => {
+      timedOut = true
       signalProcessTree(child, 'SIGTERM')
-      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 5_000)
+      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
+      hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
     }, timeoutMs)
+    if (platform === 'opencode' && firstModelResponseTimeoutMs < timeoutMs) {
+      modelStartTimer = setTimeout(() => {
+        terminateForEarlyFailure(
+          'MODEL_START_TIMEOUT',
+          `OpenCode 会话在 ${firstModelResponseTimeoutSeconds} 秒内未产生首个模型输出或工具调用，已提前终止`,
+        )
+      }, firstModelResponseTimeoutMs)
+    }
     child.on('error', (err) => {
-      clearTimeout(timer)
-      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (settled) return
+      settled = true
+      clearTimers()
       if (reliabilityChild === child) reliabilityChild = null
       reject(err)
     })
-    child.on('close', async (code) => {
-      clearTimeout(timer)
-      if (forceKillTimer) clearTimeout(forceKillTimer)
-      if (reliabilityChild === child) reliabilityChild = null
-      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
-      if (stdinError) {
-        const err = new Error(`向平台 ${platform} 传递实验输入失败: ${stdinError.message}`)
-        err.code = 'INPUT_DELIVERY_FAILED'
-        reject(err)
-        return
-      }
-      if (!traceId) {
-        const err = new Error(`平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`)
-        err.code = platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED'
-        reject(err)
-        return
-      }
-      await traceReport
-      // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
-      resolve({
-        state: 'AGENT_EXITED',
-        traceId,
-        exitCode: code,
-        stderr: stderr.slice(-2000) || undefined,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-      })
+    child.on('close', (code, signal) => {
+      void finishAgentRun(code, signal)
     })
   })
 }
@@ -1092,7 +1463,7 @@ async function refreshCapabilityReports(cfg, { force = false } = {}) {
   if (!force && fingerprint === lastCapabilityFingerprint) return false
   if (capabilityRefreshInFlight) return capabilityRefreshInFlight
   capabilityRefreshInFlight = (async () => {
-    cachedProbe = await probeFaultInjectionIsolated(cfg)
+    cacheSuccessfulProbe(await probeFaultInjectionIsolated(cfg))
     await reportCapabilities(cfg)
     await sendFiHeartbeat(cfg)
     lastCapabilityFingerprint = fingerprint
@@ -1237,6 +1608,28 @@ async function main() {
   notifyReady()
   setInterval(notifyWatchdog, WATCHDOG_MS)
   notifyWatchdog()
+
+  const runtimeCandidates = [
+    path.join(__dirname, 'executor', 'index.cjs'),
+    path.join(__dirname, '..', 'services', 'executor', 'src', 'index.cjs'),
+  ]
+  const runtimePath = runtimeCandidates.find((candidate) => fs.existsSync(candidate))
+  if (!runtimePath) throw new Error('Benchmark executor runtime 不存在')
+  const { createBenchmarkExecutor } = require(runtimePath)
+  const executorCapabilities = buildCapabilities(cfg)
+  benchmarkExecutor = createBenchmarkExecutor({
+    clientId: cfg.clientId,
+    deviceCredential: cfg.deviceCredential,
+    insightBaseUrl: cfg.insightBaseUrl,
+    baseDir: CLIENT_HOME,
+    tryAcquireSlot: tryAcquireExecutionSlot,
+    releaseSlot: releaseExecutionSlot,
+    agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
+    runAgent: (payload) => runExperimentCase(cfg, payload),
+    logError: (...args) => logErr(...args),
+  })
+  await benchmarkExecutor.recover()
+  log('benchmark executor ready on client control channel')
 
   const heartbeatAll = () => {
     sendHeartbeat(cfg).catch((err) => logErr('heartbeat failed', err.message))
@@ -1488,6 +1881,7 @@ async function fiLoop(cfg) {
 function shutdown() {
   if (reliabilityChild) signalProcessTree(reliabilityChild, 'SIGKILL')
   for (const runId of activeChildren.keys()) killRun(runId)
+  benchmarkExecutor?.close().catch(() => {})
   process.exit(0)
 }
 process.on('SIGTERM', shutdown)
@@ -1498,14 +1892,23 @@ module.exports = {
   rasRuntimeConfigPath,
   writeRasRuntimeConfig,
   resolveFiCwd,
+  withInventoryProbeSandbox,
   buildFiInventory,
   buildCapabilities,
+  benchmarkAgentPlatformsFromCapabilities,
   buildExperimentCaseInvocation,
+  runExperimentCase,
+  tryAcquireExecutionSlot,
+  releaseExecutionSlot,
   parseOpencodeSlashCommand,
   capabilityDiscoveryFingerprint,
   refreshCapabilityReports,
   normalizeModelIds,
   extractTraceIdFromJsonLine,
+  extractStructuredAgentError,
+  inspectOpencodeRunEvent,
+  sanitizeAgentDiagnostic,
+  classifyAgentExitFailure,
   buildCollectorArgs,
   readCollectResult,
   configTargetPath,

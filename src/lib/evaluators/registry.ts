@@ -24,10 +24,12 @@ export type EvaluatorRequirement = 'reference' | 'dataset_input' | 'tool_catalog
 export interface EvaluatorMeta {
   category: EvaluatorCategory;
   requires: EvaluatorRequirement[];
+  executionBackend?: 'experiment' | 'benchmark-service';
 }
 
 /** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。 */
 const PRESET_META: Record<string, EvaluatorMeta> = {
+  'benchmark:swe-bench': { category: 'res', requires: [], executionBackend: 'benchmark-service' },
   'skill-trigger-analyzer': { category: 'res', requires: [] },
   // 任务完成度：对照预期输出判定目标达成（团队评审确定为依赖预期输出）
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
@@ -40,6 +42,9 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-result-answer': { category: 'res', requires: [] },
   'preset-result-faithfulness': { category: 'res', requires: [] },
   'preset-result-instruction': { category: 'res', requires: [] },
+  'preset-text-rouge': { category: 'res', requires: ['reference'] },
+  'preset-text-exact-match': { category: 'res', requires: ['reference'] },
+  'preset-text-entity-f1': { category: 'res', requires: ['reference'] },
   // 内容质量评估器：均不依赖预期输出
   'preset-content-insensitivity': { category: 'res', requires: [] },
   'preset-content-controversy': { category: 'res', requires: [] },
@@ -94,6 +99,11 @@ export function hasPresetMeta(id: string): boolean {
   return Object.prototype.hasOwnProperty.call(PRESET_META, id);
 }
 
+export function getPresetExecutionBackend(id: string): 'experiment' | 'benchmark-service' {
+  if (id.startsWith('benchmark:')) return 'benchmark-service';
+  return PRESET_META[id]?.executionBackend ?? 'experiment';
+}
+
 /** 自建 LLM 评估器：requires 由提示词占位符推导。 */
 function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
   const requirements: EvaluatorRequirement[] = [];
@@ -104,6 +114,9 @@ function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
 
 export function getEvaluatorMeta(card: EvaluatorCard): EvaluatorMeta {
   if (card.source === 'preset') {
+    if (card.id.startsWith('benchmark:')) {
+      return { category: 'res', requires: [], executionBackend: 'benchmark-service' };
+    }
     return PRESET_META[card.id] ?? { ...DEFAULT_META, category: card.category ?? 'res' };
   }
   return { category: card.category ?? 'res', requires: deriveCustomRequires(card) };

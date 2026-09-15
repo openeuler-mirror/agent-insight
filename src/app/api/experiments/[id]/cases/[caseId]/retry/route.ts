@@ -16,6 +16,10 @@ import {
   TraceGenerationError,
 } from '@/lib/engine/experiment/trace-generation';
 import { prisma } from '@/lib/storage/prisma';
+import { randomUUID } from 'node:crypto';
+import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
+import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator-runtime-config';
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 
 export const dynamic = 'force-dynamic';
 
@@ -113,6 +117,18 @@ export async function POST(
         results: {
           select: { id: true, status: true },
         },
+        experiment: { select: { scope: true } },
+        benchmarkRuns: {
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          include: {
+            evaluations: {
+              orderBy: { attemptNo: 'desc' },
+              take: 1,
+              select: { continuationStatus: true },
+            },
+          },
+        },
       },
     });
     if (!row) return NextResponse.json({ error: 'case not found' }, { status: 404 });
@@ -120,6 +136,81 @@ export async function POST(
       result.status === 'pending' || result.status === 'running'
     ))) {
       return NextResponse.json({ error: '该 Case 正在评估' }, { status: 409 });
+    }
+
+    if (row.experiment.scope === 'benchmark') {
+      const previous = row.benchmarkRuns[0];
+      if (!previous || ![
+        'evaluated', 'evaluation_failed', 'submission_invalid', 'execution_failed', 'dispatch_failed', 'blocked',
+      ].includes(previous.status)) {
+        return NextResponse.json({ error: '该 Benchmark Case 当前不能重跑' }, { status: 409 });
+      }
+      if (
+        previous.evaluations[0]
+        && previous.evaluations[0].continuationStatus !== 'completed'
+      ) {
+        return NextResponse.json({ error: '该 Benchmark Case 正在收敛结果，请稍后重跑' }, { status: 409 });
+      }
+      const runId = `erun_${randomUUID().replaceAll('-', '')}`;
+      await prisma.$transaction([
+        prisma.benchmarkCaseRun.create({
+          data: {
+            id: runId,
+            experimentId: id,
+            experimentCaseId: caseId,
+            datasetCaseId: previous.datasetCaseId,
+            ordinal: previous.ordinal,
+            status: 'pending',
+            adapterKey: previous.adapterKey,
+            clientId: previous.clientId,
+            publicPayloadJson: previous.publicPayloadJson,
+            retryOfRunId: previous.id,
+          },
+        }),
+        prisma.experimentCase.update({
+          where: { id: caseId },
+          data: {
+            executionId: null,
+            taskId: null,
+            actualOutput: '',
+            traceGenerationError: null,
+          },
+        }),
+        prisma.experimentEvalResult.updateMany({
+          where: { experimentId: id, caseId },
+          data: {
+            status: 'pending',
+            verdict: null,
+            summary: null,
+            score: null,
+            pointsJson: null,
+            evidenceJson: null,
+            errorMessage: null,
+            durationMs: null,
+            humanScore: null,
+            humanReason: null,
+            humanBy: null,
+            humanAt: null,
+          },
+        }),
+        prisma.experiment.update({ where: { id }, data: { status: 'running' } }),
+        prisma.benchmarkExperimentBinding.update({
+          where: { experimentId: id },
+          data: { schedulerStatus: 'running' },
+        }),
+      ]);
+      const runtime = defaultEvaluatorRuntimeConfigProvider.snapshot();
+      const callbackOrigin = runtime.publicBaseUrl?.replace(/\/$/, '') || new URL(req.url).origin;
+      const started = await startBenchmarkExperiment({
+        experimentId: id,
+        user: username,
+        publicCallbackOrigin: callbackOrigin,
+        executorCallbackOrigin: runtime.executorCallbackBaseUrl || callbackOrigin,
+      });
+      started?.completion?.catch((error) => {
+        console.error('[experiment-case-retry] benchmark dispatch failed', error);
+      });
+      return NextResponse.json({ kind: 'benchmark', status: 'running', runId }, { status: 202 });
     }
 
     const isGenericGeneratedTrace = Boolean(
@@ -177,7 +268,8 @@ export async function POST(
       }
       const taskRequest = parseObject(task.requestJson);
       const runRequest = parseObject(previousRun.requestJson);
-      const timeoutSeconds = Number(runRequest.timeoutSeconds ?? taskRequest.timeoutSeconds) || 600;
+      const timeoutSeconds = Number(runRequest.timeoutSeconds ?? taskRequest.timeoutSeconds)
+        || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
       const targetWorkerId = typeof runRequest.targetWorkerId === 'string'
         ? runRequest.targetWorkerId
         : null;

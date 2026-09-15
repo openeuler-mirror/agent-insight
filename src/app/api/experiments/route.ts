@@ -9,9 +9,21 @@ import {
   EvaluatorContextValidationError,
   serializeEvaluatorCaseContext,
 } from '@/lib/evaluators/evaluator-case-context';
+import {
+  EvaluatorRunConfigValidationError,
+  serializeEvaluatorRunConfigs,
+} from '@/lib/evaluators/evaluator-run-config';
 import { overallAverage } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
+import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
+import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service';
+import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { getEvaluatorMeta } from '@/lib/evaluators/registry';
+import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
+import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
+import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +49,32 @@ interface ExperimentScoreRow {
   status: string
   score: number | null
   humanScore: number | null
+}
+
+async function benchmarkEvaluatorIds(user: string, rawIds: unknown, adapterKey: string): Promise<string[]> {
+  const requested = Array.isArray(rawIds)
+    ? rawIds.map(String).map((id) => id.trim()).filter(Boolean)
+    : [];
+  const catalog = new Map<string, EvaluatorCard>();
+  for (const card of presetEvaluators) catalog.set(card.id, card);
+  for (const card of await readUserCustomEvaluators(user) as EvaluatorCard[]) {
+    if (card && typeof card === 'object' && card.id) catalog.set(card.id, card);
+  }
+  const benchmarkEvaluatorId = `benchmark:${adapterKey}`;
+  const selected = new Set<string>([benchmarkEvaluatorId]);
+  for (const id of requested) {
+    if (id === benchmarkEvaluatorId) continue;
+    if (id.startsWith('benchmark:')) {
+      throw new Error(`Benchmark 实验不支持评估器 ${id}`);
+    }
+    const card = catalog.get(id);
+    if (!card || card.status !== 'ready') throw new Error(`评估器 ${id} 不存在或未就绪`);
+    if (getEvaluatorMeta(card).requires.includes('reference')) {
+      throw new Error(`评估器「${card.name}」依赖预期输出，不能用于 Benchmark 数据集`);
+    }
+    selected.add(id);
+  }
+  return Array.from(selected);
 }
 
 export async function GET(req: Request) {
@@ -128,6 +166,142 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
+    if (body.createMode === 'same-config') {
+      const sourceExperimentId = String(body.sourceExperimentId || '').trim();
+      if (!sourceExperimentId) {
+        return NextResponse.json({ error: 'sourceExperimentId is required' }, { status: 400 });
+      }
+      try {
+        const cloned = await cloneExperimentFromFrozenConfig({ sourceExperimentId, user: username });
+        recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
+        return NextResponse.json(cloned, { status: 201 });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '复制实验配置失败';
+        return NextResponse.json({ error: message }, { status: message === 'source experiment not found' ? 404 : 409 });
+      }
+    }
+
+    const agentEvalDatasetId = String(body.datasetId || '').trim();
+    const publicBenchmarkDataset = agentEvalDatasetId
+      ? await prisma.agentEvalDataset.findFirst({
+          where: {
+            id: agentEvalDatasetId,
+            user: { in: benchmarkDatasetOwners(username) },
+            datasetKind: 'benchmark',
+          },
+          include: { benchmarkDataset: true },
+        })
+      : null;
+    if (publicBenchmarkDataset) {
+      try {
+        if (!publicBenchmarkDataset.benchmarkDataset || publicBenchmarkDataset.benchmarkDataset.status !== 'ready') {
+          return NextResponse.json({ error: 'Benchmark 数据集尚未就绪' }, { status: 409 });
+        }
+        if (body.traceSource !== 'generate' || body.watchMode === true || body.type === 'llm') {
+          return NextResponse.json(
+            { error: 'Benchmark 数据集只支持单组实验并生成新 Trace' },
+            { status: 400 },
+          );
+        }
+        const executionTarget = body.executionTarget && typeof body.executionTarget === 'object'
+          ? body.executionTarget as Record<string, unknown>
+          : {};
+        const agentName = String(body.agentName || '').trim();
+        const evaluatorIds = await benchmarkEvaluatorIds(
+          username,
+          body.evaluatorIds,
+          publicBenchmarkDataset.benchmarkDataset.adapterKey,
+        );
+        const caseIds = Array.isArray(body.datasetCaseIds)
+          ? body.datasetCaseIds.map(String).filter(Boolean)
+          : [];
+        const result = await createBenchmarkExperiment({
+          user: username,
+          name: String(body.name || ''),
+          agentName,
+          datasetId: publicBenchmarkDataset.benchmarkDataset.id,
+          agentEvalDatasetId,
+          caseSelection: caseIds.length
+            ? { mode: 'explicit', caseIds }
+            : { mode: 'all' },
+          clientId: String(executionTarget.workerId || ''),
+          evaluatorIds,
+          runConfig: {
+            platform: String(executionTarget.platform || ''),
+            agent: agentName,
+            model: executionTarget.model ? String(executionTarget.model) : undefined,
+            agentTimeoutSeconds: body.agentTimeoutSeconds == null
+              ? undefined
+              : Number(body.agentTimeoutSeconds),
+            maxParallelAgentCases: 1,
+          },
+        });
+        recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
+        return NextResponse.json(result, { status: 201 });
+      } catch (error) {
+        if (error instanceof Error && !('code' in error)) {
+          return NextResponse.json({ error: error.message }, { status: 400 });
+        }
+        return benchmarkErrorResponse(error, 'benchmark/experiments/create-shared');
+      }
+    }
+
+    if (body.scope === 'benchmark') {
+      try {
+        const benchmark = body.benchmark && typeof body.benchmark === 'object'
+          ? body.benchmark as Record<string, unknown>
+          : {};
+        const executionTarget = benchmark.executionTarget
+          && typeof benchmark.executionTarget === 'object'
+          ? benchmark.executionTarget as Record<string, unknown>
+          : {};
+        const runConfig = benchmark.runConfig && typeof benchmark.runConfig === 'object'
+          ? benchmark.runConfig as Record<string, unknown>
+          : {};
+        const rawSelection = benchmark.caseSelection && typeof benchmark.caseSelection === 'object'
+          ? benchmark.caseSelection as Record<string, unknown>
+          : { mode: 'all' };
+        if (!['all', 'explicit'].includes(String(rawSelection.mode || ''))) {
+          return NextResponse.json(
+            { error: { code: 'CASE_SELECTION_INVALID', message: 'caseSelection.mode 只支持 all 或 explicit' } },
+            { status: 400 },
+          );
+        }
+        const caseSelection = rawSelection.mode === 'explicit'
+          ? {
+              mode: 'explicit' as const,
+              caseIds: Array.isArray(rawSelection.caseIds)
+                ? rawSelection.caseIds.map((id) => String(id))
+                : [],
+            }
+          : { mode: 'all' as const };
+        const result = await createBenchmarkExperiment({
+          user: username,
+          name: String(body.name || ''),
+          agentName: body.agentName ? String(body.agentName) : undefined,
+          datasetId: String(benchmark.datasetId || ''),
+          caseSelection,
+          clientId: String(executionTarget.clientId || ''),
+          runConfig: {
+            platform: String(runConfig.platform || ''),
+            agent: String(runConfig.agent || ''),
+            model: runConfig.model ? String(runConfig.model) : undefined,
+            agentTimeoutSeconds: runConfig.agentTimeoutSeconds == null
+              ? undefined
+              : Number(runConfig.agentTimeoutSeconds),
+            maxParallelAgentCases: runConfig.maxParallelAgentCases == null
+              ? undefined
+              : Number(runConfig.maxParallelAgentCases),
+          },
+          evaluatorIds: Array.isArray(body.evaluatorIds) ? body.evaluatorIds.map(String) : undefined,
+        });
+        recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
+        return NextResponse.json(result, { status: 201 });
+      } catch (error) {
+        return benchmarkErrorResponse(error, 'benchmark/experiments/create');
+      }
+    }
+
     const name = String(body.name || '').trim();
     const agentName = String(body.agentName || '').trim();
     const watchMode = body.watchMode === true;
@@ -156,6 +330,12 @@ export async function POST(req: Request) {
     if (evaluatorIds.length < 1) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
+    if (evaluatorIds.some((id) => id.startsWith('benchmark:'))) {
+      return NextResponse.json(
+        { error: 'Benchmark Evaluator 只能用于 Benchmark 数据集' },
+        { status: 400 },
+      );
+    }
     if (scope && (!skillName || skillVersion == null || !preset)) {
       return NextResponse.json({ error: 'Skill 实验缺少 Skill、版本或预设上下文' }, { status: 400 });
     }
@@ -182,6 +362,12 @@ export async function POST(req: Request) {
           })),
           evaluatorIds,
         });
+        if (configSnapshot) {
+          await prisma.experiment.update({
+            where: { id },
+            data: { configSnapshotJson: JSON.stringify(configSnapshot) },
+          });
+        }
         // autoPairGroups 查候选 trace + 为可比配对创建 case
         await autoPairGroups(id);
         return NextResponse.json({ id });
@@ -199,6 +385,17 @@ export async function POST(req: Request) {
     }
     if (watchMode && !agentName) {
       return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
+    }
+
+    let evaluatorConfigsJson: string;
+    try {
+      evaluatorConfigsJson = serializeEvaluatorRunConfigs(body.evaluatorConfigs, evaluatorIds);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'invalid evaluatorConfigs';
+      return NextResponse.json(
+        { error: error instanceof EvaluatorRunConfigValidationError ? message : 'invalid evaluatorConfigs' },
+        { status: 400 },
+      );
     }
 
     let normalizedCases: Array<Omit<CaseInput, 'faultInjectionType'> & {
@@ -250,6 +447,7 @@ export async function POST(req: Request) {
         type: 'single',
         agentName,
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
+        evaluatorConfigsJson,
         status: 'draft',
         scope,
         skillName,

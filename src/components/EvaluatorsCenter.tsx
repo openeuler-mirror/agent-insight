@@ -43,9 +43,8 @@ interface LlmEvaluatorDraft {
   points: Array<{ label: string; note: string }>;
 }
 
-// 类型筛选：当前预置与自建评估器均为 LLM（judge 形态）；Code / Custom RPC 模板未上线，
-// 不放进选项避免用户点了发现没结果。
-const evaluatorTypes: EvaluatorType[] = ['LLM'];
+// Custom RPC 尚未提供可执行实现，不放进选项避免用户点了发现没结果。
+const evaluatorTypes: EvaluatorType[] = ['LLM', 'Code'];
 // 标签筛选选项（与 deriveEvaluatorTags 派生值对齐；「预置/自建」由 tab 承担，不进筛选）
 const tagFilterOptions = ['LLM Judge', '看结果', '看轨迹', '依赖预期输出', '依赖数据集输入'];
 // 场景：评估对象——"结果" 指评估 agent 最终答复的质量，"轨迹" 指评估 agent 内部执行链路。
@@ -694,7 +693,7 @@ function EvaluatorCardView({
             {tag}
           </span>
         ))}
-        {[...card.objectives, ...card.scenarios.slice(0, 2)].map(tag => (
+        {card.scenarios.map(tag => (
           <span key={tag} style={{ background: 'var(--background-tertiary)', color: 'var(--foreground-secondary)', borderRadius: 4, padding: '3px 7px', fontSize: 11 }}>
             {tag}
           </span>

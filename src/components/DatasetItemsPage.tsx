@@ -100,7 +100,7 @@ function TooltipCell({
       onMouseLeave={() => setShow(false)}
       onClick={onClick}
     >
-      {shortText}
+      <span className={styles.cellText}>{shortText}</span>
       {show && rect && fullText && (
         <div
           style={{
@@ -184,7 +184,7 @@ export default function DatasetItemsPage() {
   const { user } = useAuth();
 
   const [dataset, setDataset] = useState<AgentDataset | null>(null);
-  const isReadOnly = isBuiltinReliabilityDataset(dataset || {});
+  const isReadOnly = Boolean(dataset?.readOnly) || isBuiltinReliabilityDataset(dataset || {});
   const fullDatasetRef = useRef<AgentDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -264,6 +264,8 @@ export default function DatasetItemsPage() {
         cases: Array.isArray(d.cases) ? d.cases : [],
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
+        readOnly: d.readOnly,
+        benchmark: d.benchmark,
       });
       fullDatasetRef.current = null;
     } catch (e) {
@@ -666,6 +668,7 @@ export default function DatasetItemsPage() {
 
   const isTraj = dataset.datasetKind === 'trajectory';
   const isReliability = dataset.datasetKind === 'reliability';
+  const isBenchmark = dataset.datasetKind === 'benchmark';
   const selectedTab = isReliability ? activeTab : 'items';
   const catalogDraftKey = evaluatorCatalogFieldKeyFromLabel(fieldDraft.label);
 
@@ -712,10 +715,10 @@ export default function DatasetItemsPage() {
             </span>
           )}
           <span className="ai-badge ai-badge-gr">
-            {isTraj ? '轨迹评测集' : isReliability ? '可靠性评测集' : '理想输出评测集'}
+            {isBenchmark ? 'Benchmark 数据集' : isTraj ? '轨迹评测集' : isReliability ? '可靠性评测集' : '理想输出评测集'}
           </span>
           {isReadOnly && (
-            <span className={styles.readOnlyBadge} title="内容由系统故障目录统一维护">
+            <span className={styles.readOnlyBadge} title={isBenchmark ? '内容由 Benchmark 导入流程维护' : '内容由系统故障目录统一维护'}>
               只读
             </span>
           )}
@@ -810,7 +813,7 @@ export default function DatasetItemsPage() {
           </div>
 
           {selectedTab === 'items' ? <div className={styles.tableScroll}>
-            <table className={styles.dataTable}>
+            <table className={`${styles.dataTable} ${styles.itemsTable}`}>
               <thead>
                 <tr>
                   <th>ID</th>

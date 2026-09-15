@@ -1,5 +1,162 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
+import {
+  isTextPresetId,
+  parseEntityList,
+  runTextPreset,
+  TEXT_PRESET_IDS,
+  type TextPresetId,
+} from '@/lib/engine/experiment/text-preset-evaluators';
+import type { FaithfulPresetContext } from '@/lib/engine/experiment/faithful-preset-evaluators';
+import { getEvaluatorMeta } from '@/lib/evaluators/registry';
+import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+
+const USER = 'text-evaluator-test';
+
+function context(actualOutput: string, referenceOutput: string | null): FaithfulPresetContext {
+  return {
+    caseInput: '',
+    actualOutput,
+    referenceOutput,
+    traceSummaryText: null,
+    interactions: [],
+    taskId: null,
+    executionId: null,
+  };
+}
+
+describe('文本预置评估器接入', () => {
+  it('三张 Code 卡均登记为结果评估且依赖参考答案', () => {
+    assert.equal(TEXT_PRESET_IDS.length, 7);
+    for (const id of ['preset-text-rouge', 'preset-text-exact-match', 'preset-text-entity-f1'] as const) {
+      assert.ok(isTextPresetId(id));
+      const card = presetEvaluators.find((candidate) => candidate.id === id);
+      assert.ok(card, `${id} 缺少预置卡`);
+      assert.equal(card.evaluatorType, 'Code');
+      assert.deepEqual(getEvaluatorMeta(card).requires, ['reference']);
+      assert.equal(getEvaluatorMeta(card).category, 'res');
+    }
+    assert.equal(isTextPresetId('preset-result-accuracy'), false);
+  });
+
+  it('ROUGE 完全相同文本映射为平台百分制满分', async () => {
+    const output = await runTextPreset(
+      'preset-text-rouge',
+      USER,
+      context('the cat sat on the mat', 'the cat sat on the mat'),
+    );
+    assert.equal(output.score, 100);
+    assert.deepEqual(output.points?.map((point) => point.score), [100, 100, 100]);
+  });
+
+  it('精确匹配预置支持参考答案 JSON 多候选', async () => {
+    const output = await runTextPreset(
+      'preset-text-exact-match',
+      USER,
+      context('OK', '["OK", "Okay", "O.K."]'),
+    );
+    assert.equal(output.score, 100);
+    assert.equal(output.verdict, 'pass');
+  });
+
+  it('精确匹配预置应用页面可配置的大小写、标点、空白和全半角归一化', async () => {
+    const output = await runTextPreset(
+      'preset-text-exact-match',
+      USER,
+      context('  ＯＫ！  ', '["ok"]'),
+      {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        whitespaceNormalization: true,
+        widthNormalization: true,
+        multiCandidateScoring: 'any',
+      },
+    );
+    assert.equal(output.score, 100);
+    const evidence = output.evidence as { json?: { config?: unknown } } | undefined;
+    assert.deepEqual(
+      evidence?.json?.config,
+      {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        whitespaceNormalization: true,
+        widthNormalization: true,
+        multiCandidateScoring: 'any',
+      },
+    );
+  });
+
+  it('实体 F1 接受严格 JSON 字符串数组并以中文展示正确识别/误报/遗漏（TP/FP/FN）', async () => {
+    const output = await runTextPreset(
+      'preset-text-entity-f1',
+      USER,
+      context('["北京", "深圳"]', '["北京", "上海", "广州"]'),
+    );
+    assert.equal(output.score, 40);
+    assert.match(output.summary ?? '', /正确识别 1 个，误报 1 个，遗漏 2 个/);
+    assert.deepEqual(output.points?.map((point) => point.score), [50, 33.3, 40]);
+  });
+
+  it('实体 F1 预置支持模糊匹配和子串匹配配置', async () => {
+    const fuzzy = await runTextPreset(
+      'preset-text-entity-f1',
+      USER,
+      context('["Beijng"]', '["Beijing"]'),
+      {
+        matchMode: 'fuzzy',
+        fuzzyThreshold: 1,
+        caseSensitive: true,
+        widthNormalization: false,
+        whitespaceNormalization: false,
+      },
+    );
+    assert.equal(fuzzy.score, 100);
+
+    const substring = await runTextPreset(
+      'preset-text-entity-f1',
+      USER,
+      context('["北京市"]', '["北京"]'),
+      {
+        matchMode: 'substring',
+        fuzzyThreshold: 1,
+        caseSensitive: true,
+        widthNormalization: false,
+        whitespaceNormalization: false,
+      },
+    );
+    assert.equal(substring.score, 100);
+  });
+
+  it('Agent 实体输出格式错误记零分，参考格式错误则不计分', async () => {
+    const badActual = await runTextPreset(
+      'preset-text-entity-f1',
+      USER,
+      context('[北京, 上海]', '["北京", "上海"]'),
+    );
+    assert.equal(badActual.score, 0);
+    assert.equal(badActual.verdict, 'fail');
+
+    const badReference = await runTextPreset(
+      'preset-text-entity-f1',
+      USER,
+      context('["北京"]', '[北京]'),
+    );
+    assert.equal(badReference.score, undefined);
+    assert.match(badReference.summary ?? '', /参考答案格式无效/);
+  });
+
+  it('缺少参考答案时不计分', async () => {
+    const output = await runTextPreset('preset-text-rouge', USER, context('answer', null));
+    assert.equal(output.score, undefined);
+    assert.match(output.summary ?? '', /未标注参考答案/);
+  });
+
+  it('实体列表解析拒绝非字符串项', () => {
+    assert.deepEqual(parseEntityList('["北京", "上海"]'), ['北京', '上海']);
+    assert.throws(() => parseEntityList('["北京", 1]'), /JSON 字符串数组/);
+  });
+});
+
 import type { EvalPoint } from '../src/lib/evaluators/eval-output';
 import { setJudgeLlmCallerForTest, type JudgeLlmRequest } from '../src/lib/engine/experiment/judge-llm';
 import {
@@ -23,12 +180,11 @@ import {
 } from '../src/lib/engine/experiment/text-conciseness-preset-evaluator';
 import { TEXT_FORMAT_RISK_CONFIG } from '../src/lib/engine/experiment/text-format-preset-evaluator';
 import { TEXT_LANGUAGE_RISK_CONFIG } from '../src/lib/engine/experiment/text-language-consistency-preset-evaluator';
-import { runTextPreset, type TextPresetId } from '../src/lib/engine/experiment/text-preset-evaluators';
-import { presetEvaluators } from '../src/lib/evaluators/preset-evaluators';
 
-const USER = 'text-evaluator-test';
+type JudgeTextPresetId = Exclude<TextPresetId, 'preset-text-rouge' | 'preset-text-exact-match' | 'preset-text-entity-f1'>;
+
 const SEVERITIES = ['safe', 'minor', 'moderate', 'severe'] as const;
-const dimensions: Record<TextPresetId, readonly string[]> = {
+const dimensions: Record<JudgeTextPresetId, readonly string[]> = {
   'preset-text-ai-flavor': ['template_opening', 'template_closing', 'mechanical_transitions', 'generic_names', 'empty_summary', 'politeness_overuse'],
   'preset-text-format': ['numbering_continuity', 'citation_mark_correctness', 'list_hierarchy', 'punctuation_standardization', 'layout_consistency', 'tabular_format', 'special_format_correctness'],
   'preset-text-language-consistency': ['primary_language_match', 'unnecessary_mixing', 'code_switch_rationale', 'bilingual_handling'],
@@ -46,7 +202,7 @@ type Fixture = {
   max?: number;
 };
 
-const REQUIREMENT_FIXTURES: Record<TextPresetId, readonly Fixture[]> = {
+const REQUIREMENT_FIXTURES: Record<JudgeTextPresetId, readonly Fixture[]> = {
   'preset-text-ai-flavor': [
     { name: '完全自然的文本', output: '今天约了老王打球，结果这货放我鸽子。算了，下次再说吧。', exact: 100 },
     { name: '模板化开篇 + 模板化结尾', output: '在当今这个信息技术飞速发展的时代，人工智能已经深刻改变了人们的生活方式。………综上所述，人工智能在带来便利的同时也带来了挑战，值得我们深思。', findings: { template_opening: { severity: 'moderate' }, template_closing: { severity: 'moderate' } }, max: 30 },
@@ -127,7 +283,7 @@ function ctx(output: string, input = '') {
   };
 }
 
-function judgeJson(id: TextPresetId, findings: Record<string, ExpectedFinding> = {}, summary = '文字自然直接，未发现明显质量问题。') {
+function judgeJson(id: JudgeTextPresetId, findings: Record<string, ExpectedFinding> = {}, summary = '文字自然直接，未发现明显质量问题。') {
   return JSON.stringify({
     verdicts: dimensions[id].map((dimension) => {
       const finding = findings[dimension] ?? { severity: 'safe' as const };
@@ -143,7 +299,7 @@ function judgeJson(id: TextPresetId, findings: Record<string, ExpectedFinding> =
   });
 }
 
-function expectedPointScore(id: TextPresetId, _dimension: string, severity: TextSeverity): number {
+function expectedPointScore(id: JudgeTextPresetId, _dimension: string, severity: TextSeverity): number {
   if (id === 'preset-text-ai-flavor') return AI_FLAVOR_POINT_SCORES[severity];
   if (id === 'preset-text-conciseness') return CONCISENESS_POINT_SCORES[severity];
   return TEXT_POINT_SCORES[severity];
@@ -152,7 +308,7 @@ function expectedPointScore(id: TextPresetId, _dimension: string, severity: Text
 afterEach(() => setJudgeLlmCallerForTest(null));
 
 describe('需求自带的 54 条文本质量用例', () => {
-  for (const id of Object.keys(REQUIREMENT_FIXTURES) as TextPresetId[]) {
+  for (const id of Object.keys(REQUIREMENT_FIXTURES) as JudgeTextPresetId[]) {
     for (const fixture of REQUIREMENT_FIXTURES[id]) {
       it(`${id}: ${fixture.name}`, async () => {
         let request: JudgeLlmRequest | undefined;
@@ -485,8 +641,8 @@ describe('文本评估器公式和输出契约', () => {
   });
 
   it('四个文本 Judge 使用可泛化的豁免顺序和严重度锚点', async () => {
-    const prompts = new Map<TextPresetId, string>();
-    for (const id of Object.keys(REQUIREMENT_FIXTURES) as TextPresetId[]) {
+    const prompts = new Map<JudgeTextPresetId, string>();
+    for (const id of Object.keys(REQUIREMENT_FIXTURES) as JudgeTextPresetId[]) {
       setJudgeLlmCallerForTest(async (_user, request) => {
         prompts.set(id, request.system);
         return judgeJson(id);

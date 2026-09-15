@@ -67,6 +67,7 @@ async function createExperiment(
   evaluatorIds: string[],
   referenceOutput: string | null = 'ref answer',
   evaluatorContextJson: string | null = null,
+  evaluatorConfigsJson: string = '{}',
   datasetInput: string | null = null,
 ): Promise<{ experimentId: string; caseId: string }> {
   const exp = await prisma.experiment.create({
@@ -76,6 +77,7 @@ async function createExperiment(
       type: 'single',
       agentName: 'engine-test-agent',
       evaluatorIdsJson: JSON.stringify(evaluatorIds),
+      evaluatorConfigsJson,
       status: 'draft',
       cases: {
         create: [{
@@ -231,6 +233,39 @@ test('engine: 普通实验实时提取写回数据项，下一次评测复用缓
   setFaithfulPresetRunnerForTest(null);
 });
 
+test('engine: 持久化的文本评估器配置会传入 Code 评分器', async () => {
+  const executionId = await createExecution();
+  const evaluatorConfigsJson = JSON.stringify({
+    schemaVersion: 1,
+    configs: {
+      'preset-text-exact-match': {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        whitespaceNormalization: true,
+        widthNormalization: true,
+        multiCandidateScoring: 'any',
+      },
+    },
+  });
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-text-exact-match'],
+    '答案是 42！',
+    null,
+    evaluatorConfigsJson,
+  );
+
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = await prisma.experimentEvalResult.findFirst({ where: { experimentId } });
+  assert.equal(row?.status, 'done');
+  assert.equal(row?.score, 100);
+  const evidence = JSON.parse(row!.evidenceJson!);
+  assert.equal(evidence.json.config.punctuationInsensitive, true);
+  assert.equal(evidence.json.config.caseSensitive, false);
+});
+
 test('engine: dataset_input 命中时注入快照，缺少匹配时直接不计分且不调用 Judge', async () => {
   const prompts: string[] = [];
   setJudgeLlmCallerForTest(async (_user, request) => {
@@ -244,6 +279,7 @@ test('engine: dataset_input 命中时注入快照，缺少匹配时直接不计�
     [CUSTOM_DATASET_INPUT_ID],
     null,
     null,
+    '{}',
     '回答问题 X',
   );
   const matchedRun = await startExperimentRun(matched.experimentId, TEST_USER);

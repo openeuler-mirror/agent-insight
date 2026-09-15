@@ -21,6 +21,10 @@ import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { listFaultModeIds } from '@/lib/reliability/fault-modes';
 import { ensureBuiltinReliabilityDataset } from '@/server/builtin-example/ensure-reliability-dataset';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
+import {
+  decoratePublicBenchmarkDatasets,
+  isReadOnlyBenchmarkDataset,
+} from '@/lib/benchmark/public-dataset';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,10 +45,12 @@ export async function GET(request: Request) {
       : targetSkillParam === '__none__' ? '' : targetSkillParam.trim();
     const view = searchParams.get('view');
     if (view === 'summary') {
-      return NextResponse.json(await readAgentDatasetSummaries(user, wantedTargetSkill));
+      const datasets = await readAgentDatasetSummaries(user, wantedTargetSkill);
+      return NextResponse.json(await decoratePublicBenchmarkDatasets(user, datasets));
     }
     if (view === 'reference') {
-      return NextResponse.json(await readAgentDatasetReferences(user, wantedTargetSkill));
+      const datasets = await readAgentDatasetReferences(user, wantedTargetSkill);
+      return NextResponse.json(await decoratePublicBenchmarkDatasets(user, datasets));
     }
     let datasets = await readUserAgentDatasets(user);
     if (targetSkillParam !== null) {
@@ -53,7 +59,7 @@ export async function GET(request: Request) {
     }
     datasets.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
-    return NextResponse.json(datasets);
+    return NextResponse.json(await decoratePublicBenchmarkDatasets(user, datasets));
   } catch (error) {
     console.error('agent-datasets GET error:', error);
     return NextResponse.json({ error: 'failed to load datasets' }, { status: 500 });
@@ -73,6 +79,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'dataset name is required' }, { status: 400 });
     }
 
+    if (body.datasetKind === 'benchmark') {
+      return NextResponse.json(
+        { error: 'Benchmark 数据集只能通过受控导入流程创建' },
+        { status: 403 },
+      );
+    }
     const datasetKind = normalizeDatasetKind(body.datasetKind);
     const fieldKeyError = validateDatasetFieldKeysForWrite(body.fields);
     if (fieldKeyError) {
@@ -152,6 +164,12 @@ export async function PATCH(request: Request) {
     if (isBuiltinReliabilityDataset(current)) {
       return NextResponse.json(
         { error: '内置可靠性评测集由系统维护，不可编辑' },
+        { status: 403 },
+      );
+    }
+    if (current.datasetKind === 'benchmark' || await isReadOnlyBenchmarkDataset(user, id)) {
+      return NextResponse.json(
+        { error: 'Benchmark 数据集由系统导入并维护，不可编辑' },
         { status: 403 },
       );
     }

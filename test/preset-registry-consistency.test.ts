@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '../src/lib/evaluators/preset-evaluators';
-import { hasPresetMeta } from '../src/lib/evaluators/registry';
+import { getPresetExecutionBackend, hasPresetMeta } from '../src/lib/evaluators/registry';
 import {
   FAITHFUL_PRESET_IDS,
   isFaithfulPresetId,
@@ -25,6 +25,10 @@ import {
   RESULT_PRESET_IDS,
   isResultPresetId,
 } from '../src/lib/engine/experiment/result-preset-evaluators';
+import {
+  TEXT_PRESET_IDS,
+  isTextPresetId,
+} from '../src/lib/engine/experiment/text-preset-evaluators';
 import {
   CONTENT_PRESET_IDS,
   isContentPresetId,
@@ -53,10 +57,6 @@ import {
   SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
   isSkillTriggerAnalyzerId,
 } from '../src/lib/skill-workbench/trigger-evaluator';
-import {
-  TEXT_PRESET_IDS,
-  isTextPresetId,
-} from '../src/lib/engine/experiment/text-preset-evaluators';
 import {
   TASK_COMPLETION_NO_REF_PRESET_IDS,
   isTaskCompletionNoRefPresetId,
@@ -90,6 +90,7 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     ids: AGENT_TRAJECTORY_PRESET_IDS,
   },
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
+  { name: 'text-preset-evaluators.ts', claims: isTextPresetId, ids: TEXT_PRESET_IDS },
   { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },
   { name: 'creativity-preset-evaluators.ts', claims: isCreativityPresetId, ids: CREATIVITY_PRESET_IDS },
   { name: 'safety-preset-evaluators.ts', claims: isSafetyPresetId, ids: SAFETY_PRESET_IDS },
@@ -104,7 +105,6 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
     claims: isRasReliabilityPresetId,
     ids: [RAS_DETECTION_RECOVERY_PRESET_ID],
   },
-  { name: 'text-preset-evaluators.ts', claims: isTextPresetId, ids: TEXT_PRESET_IDS },
   {
     name: 'task-completion-preset-evaluators.ts',
     claims: isTaskCompletionNoRefPresetId,
@@ -155,9 +155,13 @@ test('每张预置卡都在 registry 登记了元数据（否则静默回退 res
   }
 });
 
-test('每张预置卡都被恰好一个分发谓词认领（否则运行时才抛「缺少可执行的 LLM 配置」）', () => {
+test('普通预置卡由通用实验分发认领，外部调度卡不进入通用分发', () => {
   for (const card of presetEvaluators) {
     const owners = PRESET_RUNNERS.filter((r) => r.claims(card.id)).map((r) => r.name);
+    if (getPresetExecutionBackend(card.id) === 'benchmark-service') {
+      assert.equal(owners.length, 0, `${card.id} 由独立评测服务调度，不应进入通用实验分发`);
+      continue;
+    }
     assert.equal(
       owners.length,
       1,

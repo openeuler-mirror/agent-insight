@@ -683,6 +683,8 @@ model AgentEvalDataset {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
+  benchmarkDataset BenchmarkDataset?
+
   @@index([user])
   @@index([user, targetSkill])
 }
@@ -1103,6 +1105,8 @@ model Experiment {
   agentName            String    @default("")
   /// 选中的评估器 id 列表（JSON string[]；预置/自建统一 id 空间）
   evaluatorIdsJson     String    @default("[]")
+  /// 可配置预置评估器的实验级运行参数（版本化 JSON；旧实验 `{}` 按严格默认值解释）
+  evaluatorConfigsJson String    @default("{}")
   /// draft | running | done | failed
   status               String    @default("draft")
   /// 来源标记：''=全局实验；'skill-workbench'=Skill 工作台实验；
@@ -1128,10 +1132,12 @@ model Experiment {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  cases         ExperimentCase[]
-  traceAttempts ExperimentTraceAttempt[]
-  comments      ExperimentEvalComment[]
-  groups        ExperimentGroup[]
+  cases            ExperimentCase[]
+  traceAttempts    ExperimentTraceAttempt[]
+  comments         ExperimentEvalComment[]
+  groups           ExperimentGroup[]
+  benchmarkBinding BenchmarkExperimentBinding?
+  benchmarkRuns    BenchmarkCaseRun[]
 
   @@index([user, createdAt])
   @@index([user, scope, skillName])
@@ -1194,6 +1200,7 @@ model ExperimentCase {
 
   results       ExperimentEvalResult[]
   traceAttempts ExperimentTraceAttempt[]
+  benchmarkRuns BenchmarkCaseRun[]
 
   @@unique([experimentId, taskId, groupId])
   @@index([experimentId])
@@ -1201,6 +1208,227 @@ model ExperimentCase {
   @@index([faultInjectionType])
   @@index([traceGenerationCommandId])
   @@index([groupId])
+}
+
+model BenchmarkDataset {
+  id                 String           @id @default(cuid())
+  agentEvalDatasetId String           @unique
+  agentEvalDataset   AgentEvalDataset @relation(fields: [agentEvalDatasetId], references: [id], onDelete: Cascade)
+  user               String
+  name               String
+  adapterKey         String
+  contentHash        String
+  status             String           @default("ready")
+  caseCount          Int              @default(0)
+  sourceJson         String           @default("{}")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  cases    BenchmarkDatasetCase[]
+  bindings BenchmarkExperimentBinding[]
+
+  @@unique([user, name])
+  @@index([user, adapterKey, status])
+}
+
+model BenchmarkDatasetCase {
+  id                 String           @id @default(cuid())
+  datasetId          String
+  dataset            BenchmarkDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  externalCaseId     String
+  rawCaseJson        String
+  publicPayloadJson  String
+  privatePayloadJson String
+  sourceFingerprint  String
+  publicFingerprint  String
+  privateFingerprint String
+  ordinal            Int
+  createdAt          DateTime         @default(now())
+
+  runs BenchmarkCaseRun[]
+
+  @@unique([datasetId, externalCaseId])
+  @@unique([datasetId, ordinal])
+  @@index([datasetId])
+}
+
+model BenchmarkExperimentBinding {
+  experimentId       String           @id
+  experiment         Experiment       @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  datasetId          String
+  dataset            BenchmarkDataset @relation(fields: [datasetId], references: [id])
+  datasetContentHash String
+  adapterKey         String
+  selectionJson      String
+  runConfigJson      String
+  schedulerStatus    String           @default("idle")
+  expectedCaseCount  Int
+  callbackOrigin     String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([datasetId])
+  @@index([schedulerStatus])
+}
+
+model BenchmarkCaseRun {
+  id                 String                @id
+  experimentId       String
+  experiment         Experiment            @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  experimentCaseId   String
+  experimentCase     ExperimentCase        @relation(fields: [experimentCaseId], references: [id], onDelete: Cascade)
+  datasetCaseId      String?
+  datasetCase        BenchmarkDatasetCase? @relation(fields: [datasetCaseId], references: [id], onDelete: SetNull)
+  ordinal            Int
+  status             String                @default("pending")
+  adapterKey         String
+  clientId           String
+  publicPayloadJson  String?
+  privatePayloadJson String?
+  taskEnvelopeJson   String?
+  taskDigest         String?
+  progressJson       String?
+  runFactsJson       String?
+  cleanupJson        String?
+  completionDigest   String?
+  failureCode        String?
+  failureMessage     String?
+  retryOfRunId       String?
+  lastProgressAt     DateTime?
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  dispatch    BenchmarkDispatchOutbox?
+  artifacts   BenchmarkArtifact[]
+  evaluations BenchmarkEvaluation[]
+
+  @@unique([experimentCaseId, id])
+  @@index([experimentId, status, ordinal])
+  @@index([clientId, status])
+  @@index([retryOfRunId])
+}
+
+model BenchmarkArtifact {
+  id          String           @id
+  runId       String
+  run         BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  name        String
+  mediaType   String
+  sha256      String
+  sizeBytes   Int
+  storagePath String
+  createdAt   DateTime         @default(now())
+
+  @@unique([runId, name])
+  @@index([runId])
+  @@index([sha256])
+}
+
+model BenchmarkDispatchOutbox {
+  id                 String           @id @default(cuid())
+  runId              String           @unique
+  run                BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  kind               String           @default("agent_execution")
+  commandId          String?          @unique
+  requestJson        String
+  requestDigest      String
+  status             String           @default("pending")
+  attemptCount       Int              @default(0)
+  nextAttemptAt      DateTime         @default(now())
+  leasedUntil        DateTime?
+  responseJson       String?
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([leasedUntil])
+}
+
+model BenchmarkEvaluation {
+  id                   String           @id
+  caseRunId            String
+  caseRun              BenchmarkCaseRun @relation(fields: [caseRunId], references: [id], onDelete: Cascade)
+  attemptNo            Int              @default(1)
+  retryOfEvaluationId  String?
+  status               String           @default("queued")
+  adapterKey           String
+  evaluatorKey         String
+  evaluatorTargetKey   String?
+  evaluatorBaseUrl     String?
+  requestJson          String
+  requestDigest        String
+  callbackBaseUrl      String
+  timeoutSeconds       Int
+  progressJson         String?
+  rawResultJson        String?
+  rawResultDigest      String?
+  runtimeFactsJson     String?
+  cleanupJson          String?
+  normalizedResultJson String?
+  completionDigest     String?
+  failureCode          String?
+  failureMessage       String?
+  continuationStatus   String           @default("completed")
+  continuationAttempts Int              @default(0)
+  continuationTriedAt  DateTime?
+  continuationError    String?
+  lastProgressAt       DateTime?
+  startedAt            DateTime?
+  finishedAt           DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  dispatch  BenchmarkEvaluationDispatchOutbox?
+  artifacts BenchmarkEvaluationArtifact[]
+
+  @@unique([caseRunId, attemptNo])
+  @@index([status, createdAt])
+  @@index([status, updatedAt])
+  @@index([continuationStatus, continuationTriedAt])
+  @@index([retryOfEvaluationId])
+}
+
+model BenchmarkEvaluationArtifact {
+  id           String              @id
+  evaluationId String
+  evaluation   BenchmarkEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  name         String
+  kind         String
+  mediaType    String
+  sha256       String
+  sizeBytes    Int
+  storagePath  String
+  createdAt    DateTime            @default(now())
+
+  @@unique([evaluationId, name])
+  @@index([evaluationId])
+  @@index([sha256])
+}
+
+model BenchmarkEvaluationDispatchOutbox {
+  id                 String              @id @default(cuid())
+  evaluationId       String              @unique
+  evaluation         BenchmarkEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  destinationBaseUrl String?
+  requestJson        String
+  requestDigest      String
+  status             String              @default("pending")
+  attemptCount       Int                 @default(0)
+  nextAttemptAt      DateTime            @default(now())
+  leasedUntil        DateTime?
+  httpStatus         Int?
+  responseJson       String?
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([leasedUntil])
 }
 
 /// 普通评测数据集生成 Trace 的单次尝试。Trace ID 是唯一运行关联键；输入文本不参与绑定。
@@ -1406,7 +1634,7 @@ model ReliabilityCommand {
   clientId     String
   client       ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
   user         String
-  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|REFRESH_CAPABILITIES
+  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|RUN_BENCHMARK_CASE|REFRESH_CAPABILITIES
   payloadJson  String            @default("{}")
   status       String            @default("CREATED") // CREATED|SENT|RECEIVED|RUNNING|SUCCEEDED|FAILED|EXPIRED|DELIVERY_FAILED
   channel      String? // wss|poll

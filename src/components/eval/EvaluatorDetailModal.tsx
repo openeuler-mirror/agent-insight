@@ -53,6 +53,7 @@ export default function EvaluatorDetailModal({
   const router = useRouter();
   const meta = getEvaluatorMeta(card);
   const tags = deriveEvaluatorTags(card);
+  const isBenchmarkService = meta.executionBackend === 'benchmark-service';
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -63,7 +64,9 @@ export default function EvaluatorDetailModal({
   }, [onClose]);
 
   const pointLabels = (card.pointsDef ?? []).map(p => p.label).filter(Boolean);
-  const outputText = card.evaluatorType === 'LLM'
+  const outputText = isBenchmarkService
+    ? 'Resolved / Unresolved + FAIL_TO_PASS、PASS_TO_PASS 通过数量 + 证据摘要'
+    : card.evaluatorType === 'LLM'
     ? `score 0-100 + 评分点（${pointLabels.length > 0 ? `${pointLabels.join(' / ')}，逐条强制给分` : 'Judge 自行提取'}）+ 判断依据（Markdown）`
     : 'score 0-100 + 证据（JSON）——具体证据构成见描述。';
   const requirementText = [
@@ -141,7 +144,9 @@ export default function EvaluatorDetailModal({
         </DetailSection>
 
         <DetailSection title="前置条件">
-          {requirementText
+          {isBenchmarkService
+            ? '仅适用于 SWE-bench Benchmark 实验，由系统自动绑定；评测服务读取 Agent 生成的 model.patch，不接受普通 Trace 手工选择。'
+            : requirementText
             ? `${requirementText}。实验第 ④ 步会对全部已选 case 自动校验门控。`
             : '无——任意已圈选的 trace 均可评。'}
         </DetailSection>
@@ -153,12 +158,16 @@ export default function EvaluatorDetailModal({
         </DetailSection>
 
         <DetailSection title="结果呈现位置">
-          {`Trace 评测详情 · 「${meta.category === 'res' ? '结果评测' : '轨迹评测'}」板块（类目为注册时元数据，运行时不可变更）`}
+          {isBenchmarkService
+            ? 'Benchmark Case 详情 · 「结果评测」板块'
+            : `Trace 评测详情 · 「${meta.category === 'res' ? '结果评测' : '轨迹评测'}」板块（类目为注册时元数据，运行时不可变更）`}
         </DetailSection>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 4 }}>
           <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
-            能否勾选以实验 ④ 步的校验为准（按已圈选 trace 检查前置条件）
+            {isBenchmarkService
+              ? '选择 Benchmark 数据集后自动勾选且不可取消。'
+              : '能否勾选以实验 ④ 步的校验为准（按已圈选 trace 检查前置条件）'}
           </span>
           <div style={{ display: 'flex', gap: 8 }}>
             {card.source === 'custom' ? (

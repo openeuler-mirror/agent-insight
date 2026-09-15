@@ -299,6 +299,27 @@ test('accepts valid custom fields and removes duplicate keys', () => {
   assert.deepEqual(fields.map(field => field.key), ['input', 'scenario']);
 });
 
+test('keeps imported benchmark fields without injecting duplicate defaults', () => {
+  const fields = normalizeFields([
+    { key: 'input', label: '任务输入', type: 'text', system: true },
+    { key: 'externalCaseId', label: 'Instance ID', type: 'text', system: true },
+    { key: 'repo', label: '仓库', type: 'text', system: true },
+  ], 'benchmark');
+
+  assert.deepEqual(fields.map(field => field.key), ['input', 'externalCaseId', 'repo']);
+});
+
+test('still injects required reliability fields', () => {
+  const fields = normalizeFields([
+    { key: 'scenario', label: '场景', type: 'text' },
+  ], 'reliability');
+
+  assert.deepEqual(
+    new Set(fields.map(field => field.key)),
+    new Set(['input', 'fault_injection_type', 'reference_output', 'scenario']),
+  );
+});
+
 test('allows datasets and cases without an input field', () => {
   const row = normalizeCase({
     values: {

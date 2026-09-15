@@ -266,6 +266,69 @@ test('experiments API: POST validation rejects empty payloads', async () => {
   }));
   assert.equal(invalidContext.status, 400);
   assert.match(String((await invalidContext.json()).error), /availableTools/);
+
+  const invalidConfig = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a', referenceOutput: 'a' }],
+    evaluatorIds: ['preset-text-entity-f1'],
+    evaluatorConfigs: {
+      'preset-text-entity-f1': { matchMode: 'fuzzy', fuzzyThreshold: 101 },
+    },
+  }));
+  assert.equal(invalidConfig.status, 400);
+  assert.match(String((await invalidConfig.json()).error), /0 到 100/);
+});
+
+test('experiments API: persist and return normalized evaluator configs', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+  const createRes = await createExperiment(postReq({
+    user: TEST_USER,
+    name: '配置实验',
+    agentName: 'smoke-agent',
+    cases: [{ input: 'q', actualOutput: 'ＯＫ！', referenceOutput: 'ok' }],
+    evaluatorIds: ['preset-text-exact-match'],
+    evaluatorConfigs: {
+      'preset-text-exact-match': {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        widthNormalization: true,
+      },
+    },
+  }));
+  assert.equal(createRes.status, 200);
+  const { id } = await createRes.json();
+
+  const detailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.deepEqual(detail.evaluatorConfigs['preset-text-exact-match'], {
+    caseSensitive: false,
+    punctuationInsensitive: true,
+    whitespaceNormalization: false,
+    widthNormalization: true,
+    multiCandidateScoring: 'any',
+  });
+  assert.deepEqual(detail.reusableConfig.evaluatorConfigs, detail.evaluatorConfigs);
+
+  const cloneRes = await createExperiment(postReq({
+    user: TEST_USER,
+    createMode: 'same-config',
+    sourceExperimentId: id,
+  }));
+  assert.equal(cloneRes.status, 201);
+  const cloned = await cloneRes.json();
+  const clonedDetailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${cloned.id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id: cloned.id }) },
+  );
+  assert.equal(clonedDetailRes.status, 200);
+  const clonedDetail = await clonedDetailRes.json();
+  assert.deepEqual(clonedDetail.evaluatorConfigs, detail.evaluatorConfigs);
 });
 
 test('experiments API: detail 404 for missing experiment', async () => {

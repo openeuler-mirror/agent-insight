@@ -1,0 +1,58 @@
+key: swe-bench
+displayName: SWE-bench
+protocols:
+  agentTask: agent-task/v1
+  evaluation: benchmark-evaluation/v1
+implementation:
+  adapter: ./adapter/index.ts
+  adapterExport: sweBenchAdapter
+  datasetLoader: ./dataset/index.ts
+  datasetLoaderExport: sweBenchDatasetLoader
+  evaluator: ./evaluator/evaluator.yaml
+schemas:
+  case: ./schemas/case.schema.json
+  rawResult: ./schemas/result.schema.json
+executor:
+  requiredCapabilities:
+    - git-workspace/v1
+    - git-patch/v1
+  defaultTimeoutSeconds: 600
+submission:
+  artifacts:
+    - name: model.patch
+      mediaType: text/x-diff
+      collector: git-patch/v1
+      maxBytes: 10485760
+evaluation:
+  evaluatorKey: swe-bench
+  defaultTimeoutSeconds: 1800
+  resources:
+    cpu: 4
+    memoryMiB: 16384
+result:
+  primaryMetric:
+    key: resolved
+    aggregation: boolean-rate
+dataset:
+  profiles:
+    - key: verified
+      displayName: SWE-bench Verified
+      acceptedExtensions: [.parquet]
+      expectedCaseCount: 500
+presentation:
+  caseTable:
+    searchPaths: [externalCaseId, values.repo]
+    searchPlaceholder: 搜索 Instance ID 或仓库
+    columns:
+      - { path: input, label: 任务输入, type: text }
+      - { path: externalCaseId, label: Instance ID, type: code }
+      - { path: values.repo, label: 仓库, type: text }
+  referencePanel:
+    title: SWE-bench 官方测试契约
+    description: 测试内容和 Gold Patch 只交给评测服务，不会发送给 Agent。
+    columns:
+      - { path: externalCaseId, label: Case, type: code }
+      - { path: values.repo, label: 仓库, type: text }
+      - { path: values.base_commit, label: 基线版本, type: code }
+  result:
+    primaryMetric: { path: primaryMetric.value, label: Resolved, type: boolean }
