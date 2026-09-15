@@ -68,3 +68,7 @@ const BY_COLUMN = new Map<string, FilterColumn>(TRACE_FILTER_COLUMNS.map((c) => 
 export function resolveTraceColumn(column: string): FilterColumn | undefined {
   return BY_COLUMN.get(column);
 }
+
+export const TRACE_OBSERVATION_COLUMNS = TRACE_FILTER_COLUMNS.filter(column =>
+  !['cost', 'answerScore', 'skillScore', 'skillTriggerRate', 'isAnswerCorrect'].includes(column.column),
+);
