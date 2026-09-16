@@ -8,7 +8,7 @@ description: "高频问题集中解答"
 这里汇总了用户第一次接入、日常使用和问题排查时最常遇到的高频问题。
 
 > **Note**
-> 如果你是第一次使用，建议先看 [5 分钟上手](./quickstart)；
+> 如果你是第一次使用，建议先看 [830 平台安装说明](./quickstart)；
 > 如果你已经开始接入或排障，再回到本页查具体问题会更高效。
 
 ## 接入与登录
@@ -146,7 +146,7 @@ description: "高频问题集中解答"
 
 按你的目标选择：
 
-- 想先接入平台： [5 分钟上手](./quickstart)
+- 想先接入平台： [830 平台安装说明](./quickstart)
 - 想看真实执行： [运行观测](./observability/index)
 - 想做离线验证： [评测中心](./evaluation/index)
 - 想沉淀和优化能力： [Skills 能力](./skills/index)
@@ -269,7 +269,7 @@ bash scripts/db_archive.sh import \
 
 ## 下一步
 
-- 想先跑通接入： [5 分钟上手](./quickstart)
+- 想先跑通接入： [830 平台安装说明](./quickstart)
 - 想正式纳管 Agent： [Agent 管理](./agent-management)
 - 想排查真实问题： [运行观测](./observability/index)
 - 想建立回归验证： [评测中心](./evaluation/index)

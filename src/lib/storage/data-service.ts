@@ -1448,7 +1448,7 @@ export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
     id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
     toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
     cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
-    timestamp: true, model: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
+    timestamp: true, lastIngestedAt: true, model: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
     isSkillCorrect: true, isAnswerCorrect: true, answerScore: true, skillScore: true, judgmentReason: true,
     failures: true, skillIssues: true, skillVersion: true, label: true, user: true, skillTriggerRate: true,
     parentExecutionId: true, rootExecutionId: true, agentSessionId: true, subagentType: true,
@@ -2036,8 +2036,14 @@ async function readRecordsInternal(
         const totalToolErrors = aggregate._sum.toolCallErrorCount ?? 0;
         stats = {
             total,
-            // 当前生命周期读路径只产出 running/success；failed 保留在 API enrichment 后兼容计算。
-            failedCount: 0,
+            failedCount: await prismaRaw.execution.count({
+                where: {
+                    AND: [where, {
+                        framework: 'actrail',
+                        failures: { contains: '"failure_type":"agent-process-exit"' },
+                    }],
+                },
+            }),
             avgLatencyMs: (aggregate._avg.latency ?? 0) * 1000,
             toolErrorRate: totalTools > 0
                 ? Math.round((totalToolErrors / totalTools) * 1000) / 10
@@ -2206,7 +2212,8 @@ export function getDefaultIngestUser(): string | null {
     return v || null;
 }
 
-export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
+export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    const receivedAt = options?.receivedAt === null ? null : options?.receivedAt ?? new Date();
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
 
@@ -2716,6 +2723,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
         ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession))
         : null;
+    const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
+    const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt, receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
     await db.upsertExecution({
         where: { id: recordId },
         create: {
@@ -2727,6 +2736,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cost: targetRecord.cost,
             latency: targetRecord.latency,
             timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
+            lastIngestedAt,
             finalResult: targetRecord.final_result,
             skill: targetRecord.skill,
             skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
@@ -2765,6 +2775,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cost: targetRecord.cost,
             latency: targetRecord.latency,
             timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
+            lastIngestedAt,
             finalResult: targetRecord.final_result,
             skill: targetRecord.skill,
             skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
@@ -2856,6 +2867,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
+                lastIngestedAt,
                 parentTaskId: targetRecord.task_id,
                 parentFramework: targetRecord.framework,
                 parentUser: targetRecord.user,
@@ -2964,6 +2976,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
 interface DeriveSubagentArgs {
     parentExecutionId: string;
+    lastIngestedAt?: Date | null;
     parentTaskId: string;
     parentFramework?: string | null;
     parentUser?: string | null;
@@ -3214,6 +3227,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
 
         const baseFields = {
             taskId: sessionId,
+            ...(args.lastIngestedAt !== undefined ? { lastIngestedAt: args.lastIngestedAt } : {}),
             framework: parentFramework,
             timestamp,
             agentName: node.agentName ?? null,

@@ -225,6 +225,8 @@ export const en = {
     statusRunning: 'Running',
     statusSuccess: 'Success',
     statusFailed: 'Failed',
+    statusTimedOut: 'Timed out',
+    statusTimedOutHint: 'No telemetry updates for 10 minutes. New data restarts the timer.',
     statusNormal: 'Normal',
     metricTokens: 'Tokens',
     metricDuration: 'Duration',

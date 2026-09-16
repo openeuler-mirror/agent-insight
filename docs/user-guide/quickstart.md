@@ -1,338 +1,198 @@
 ---
-title: "5 分钟上手"
-description: "登录看板、注册模型、通过 AcTrail 完成接入，并在 UI 中看到第一条链路。"
+title: "830 平台安装说明"
+description: "830 Linux Docker 镜像安装、产物位置、客户端接入、检查与备份升级。"
 ---
 
-# 5 分钟上手
+# Agent Insight 830 平台安装说明
 
-本指南带你用最短路径跑通 Agent Insight 的第一条完整闭环：完成基础配置、通过 AcTrail 接入 Agent，并在平台里看到真实链路。
+> 更新日期：2026-09-16。服务端使用 Linux Docker 镜像交付；客户端安装指导只展示 Linux curl 接入命令。
+>
+> 本次问题修复对应 PR !402–!406、!408–!409。验收前应确认交付镜像包含所需修复，不能用旧镜像的版本和校验值代替本次交付清单。
 
-完成后你会得到：
+## 1. 安装准备
 
-- 一份可用的模型配置
-- 一套可用的 AcTrail 上报配置
-- 一条真实上报并可查看详情的 Trace
+准备一台已安装 Docker Engine 的 64 位 Linux 服务器，并确认：
 
-> **Note**
-> 本页更贴近当前项目的真实使用流程，默认你已经部署好了 Agent Insight 服务端，
-> 并可以访问看板地址，例如 `http://localhost:3000` 或你的自托管域名。
+- Docker 服务已启动，当前用户可以执行 Docker 命令。
+- 宿主机访问端口可用，本文使用 `3000`。
+- 数据目录所在磁盘有足够空间保存 Trace、评测数据和备份。
+- 已收到镜像包及交付清单。清单应包含镜像文件名、固定镜像标签、CPU 架构、源码提交和镜像包 SHA-256。
 
-## 前置条件
-
-- 你可以访问 Agent Insight 看板
-- 你拥有一个可用的模型 API Key，例如 OpenAI、DeepSeek 或其他兼容供应商
-- 你有一个已安装 AcTrail 的 Linux / WSL Agent 运行环境
-- 如果要走代码集成路径，准备好 Python 3.9+ 或 Node.js 18+
-
----
-
-## 可选：用 Docker 部署服务端
-
-如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
-
-### 可选：通过 RPM 部署
-
-需要在 openEuler 等 RPM 系 Linux 上从当前源码构建、验包、安装或升级时，请参阅 [RPM 构建与测试](./rpm-build-and-test)。
-
-### 用法一：在线拉取 Docker Hub 镜像
+查看服务器架构：
 
 ```bash
-docker pull karaggagent/agent-insight:latest
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker stop agent-insight 2>/dev/null || true
-docker rm agent-insight 2>/dev/null || true
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-
-curl -i http://localhost:3000/
+uname -m
 ```
 
-这条命令会把容器内的 `/data/agent-insight` 挂到服务器宿主机当前用户的 `~/.agent-insight`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启、删除、重拉镜像后仍可复用。默认数据库路径是：
+| 服务器输出 | 镜像架构 |
+| --- | --- |
+| `x86_64` | `linux/amd64` |
+| `aarch64` 或 `arm64` | `linux/arm64` |
 
-```text
-~/.agent-insight/data/witty_insight.db
-```
+将匹配架构的镜像包上传到服务器，后续命令均在服务器的 Bash 终端执行。
 
-### 用法二：离线导入 `.tar` 镜像
+## 2. 校验并加载镜像
 
-如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
+按交付清单填写以下变量；镜像标签必须是固定版本：
 
 ```bash
-docker load -i agent-insight-0.5.0-image.tar
-docker images | grep agent-insight
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker stop agent-insight 2>/dev/null || true
-docker rm agent-insight 2>/dev/null || true
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-
-curl -i http://localhost:3000/
+IMAGE_FILE='/path/to/交付的镜像包.tar.gz'
+IMAGE='交付清单中的镜像名:固定版本'
+IMAGE_SHA256='交付清单中的SHA256'
 ```
 
-如果 `docker load` 输出的镜像 tag 不是 `karaggagent/agent-insight:0.5.0`，请以 `docker images | grep agent-insight` 看到的实际镜像名为准。
+只有校验通过后才加载：
 
-如果你不想直接挂宿主机目录，也可以使用 Docker volume：
+```bash
+if printf '%s  %s\n' "$IMAGE_SHA256" "$IMAGE_FILE" | sha256sum -c -; then
+  docker load -i "$IMAGE_FILE"
+else
+  echo '镜像包校验失败，请重新获取交付包。' >&2
+  exit 1
+fi
+```
+
+Docker 可直接加载 `docker save` 生成的 `.tar` 或其 `.tar.gz` 压缩包，无需手工解包。加载后核对镜像：
+
+```bash
+docker image inspect "$IMAGE" \
+  --format 'os={{.Os}} arch={{.Architecture}} user={{.Config.User}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
+```
+
+确认 `os=linux`、架构与服务器匹配。源码提交应与交付清单一致；镜像没有 revision 标签时由交付方提供版本核对依据。
+
+## 3. 准备持久化目录
+
+本文使用宿主机 `/opt/agent-insight`，挂载到容器 `/data/agent-insight`。
+
+先查询镜像运行用户的 uid/gid：
+
+```bash
+docker run --rm --entrypoint id "$IMAGE"
+```
+
+按实际输出创建目录。以下 `1000:1000` 仅适用于查询结果为 uid 1000、gid 1000 的镜像：
+
+```bash
+sudo install -d -m 750 -o 1000 -g 1000 /opt/agent-insight
+```
+
+使用已有数据前，先停止旧实例并完整备份。新旧实例不能同时使用同一个 SQLite 数据目录。
+
+## 4. 启动平台
 
 ```bash
 docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v agent-insight-data:/data/agent-insight \
-  karaggagent/agent-insight:latest
+  --mount type=bind,src=/opt/agent-insight,dst=/data/agent-insight \
+  "$IMAGE"
 ```
 
-如果生产环境需要锁定版本号，可以把 `latest` 换成固定版本，例如 `0.5.0`：
+首次启动初始化配置和 SQLite schema，然后启动镜像内已编译的服务。宿主机不需要安装 Node.js、npm 或源码。
+
+如果宿主机 `3000` 已被占用，可将映射改为 `-p 3033:3000`，后续通过 `3033` 访问平台。
+
+## 5. 安装产物和位置
+
+| 产物 | 宿主机位置或查看方式 | 用途 |
+| --- | --- | --- |
+| 离线镜像包 | 上传时选择的路径 | 交付、校验和重新加载 |
+| Docker 镜像及应用程序 | 由 Docker 管理；`docker image inspect` 查看 | 平台已编译程序和运行依赖 |
+| 生效配置 | `/opt/agent-insight/.env` | 首次启动从镜像配置模板初始化 |
+| SQLite 数据库 | `/opt/agent-insight/data/witty_insight.db` | Trace、账号及业务数据 |
+| 数据目录内其他文件 | `/opt/agent-insight/data/` | 运行时生成的数据；备份时连同目录一起保存 |
+| 服务日志 | `docker logs agent-insight` | 容器标准输出和标准错误 |
+| 人工备份 | 备份命令指定的目录 | 升级前恢复依据 |
+
+容器内对应路径为 `/data/agent-insight/.env` 和 `/data/agent-insight/data/witty_insight.db`。宿主机应查看挂载源 `/opt/agent-insight`。
+
+SQLite 运行期间可能生成 `-wal`、`-shm` 文件，不要单独删除。日志通过 Docker 查看，不依赖宿主机 `server.log`。
+
+## 6. 配置与安装检查
+
+需要调整配置时，编辑宿主机生效文件并重启容器：
 
 ```bash
-docker pull karaggagent/agent-insight:0.5.0
-docker stop agent-insight
-docker rm agent-insight
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
+sudo vi /opt/agent-insight/.env
+docker restart agent-insight
 ```
 
-服务器上用哪个用户运行 Docker，就会挂载哪个用户的 home 目录。升级到新版本时，保留同一个挂载目录即可，容器数据不会随镜像更新丢失。
+文件应仅允许运维人员和容器运行用户访问，并保持容器用户可读。数据库默认使用 SQLite；不要在本交付方式中设置 `DB_HOST`。
 
-### 用法三：挂载源码运行，代码更新后重启即可生效
-
-适用于服务器要跟着最新代码跑的场景：不用每次改代码都重新发 npm 包、重新打镜像，`git pull` 之后重启容器即可生效。
-
-给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
-
-# 数据目录要在首次启动前建好并交给容器内的 node 用户(uid 1000),否则 prisma 建表会报
-# "attempt to write a readonly database"——容器自动创建的挂载目录属主是 root。
-mkdir -p ~/.agent-insight/data
-chown -R 1000:1000 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -e AGENT_INSIGHT_SOURCE_DIR=/src \
-  -v /srv/agent-insight:/src:ro \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-对应的 compose 写法（`compose.yaml`），镜像构建也可以一并交给 compose：
-
-```yaml
-services:
-  agent-insight:
-    image: agent-insight:src
-    build:
-      context: /srv/agent-insight              # 用源码仓库根目录的 Dockerfile 构建
-      args:
-        AGENT_INSIGHT_VERSION: "0.5.4"         # 镜像内预装依赖对应的 npm 版本
-    container_name: agent-insight
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      AGENT_INSIGHT_SOURCE_DIR: /src
-      NODE_OPTIONS: --max-old-space-size=2048  # 小内存机器上防止构建被 OOM kill
-    volumes:
-      - /srv/agent-insight:/src:ro             # 源码，只读
-      - ${HOME}/.agent-insight:/data/agent-insight
-      - agent-insight-build:/app/source        # 构建目录，让缓存跨容器重建保留
-
-volumes:
-  agent-insight-build:
-```
-
-更新代码的流程：
-
-```bash
-cd /srv/agent-insight && git pull
-docker compose restart agent-insight   # 非 compose 场景：docker restart agent-insight
-docker compose logs -f agent-insight   # 看到 "Building from source..." 到构建结束即可
-```
-
-注意用 `restart` 而不是 `up -d`：容器配置没变时 `up -d` 什么都不做，不会触发重新构建。只有改了 `package.json` 依赖、需要连镜像一起重建时才用 `docker compose up -d --build`。
-
-需要了解的行为：
-
-- **不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致**，容器直接运行镜像里打好的 `agent-insight` npm 包。
-- 配置之后，容器启动时会把源码复制到容器内的 `/app/source`（跳过 `node_modules`、`.next`、`.git`、`data/`、`exclude/`），再依次执行 `prisma db push`、`prisma generate`、`npm run build`，最后和默认模式一样跑 `node .next/standalone/server.js`。宿主机源码目录以只读挂载即可，不会被写入构建产物，也不需要迁就容器里 `node` 用户的属主。
-- 依赖用的是镜像预装的那一份（含 `tailwindcss`、`typescript` 等构建期依赖），源码目录不需要 `npm install`。**因此源码改了 `package.json` 新增依赖时必须重新构建镜像**；启动日志会打印镜像里缺失的依赖清单作为告警。
-- 首次启动是冷构建，需要几分钟；构建期间端口还没起，容器健康状态显示 `health: starting` 属正常。之后重启会保留 `.next/cache` 走增量构建；容器被删掉重建时，只有像上面那样给 `/app/source` 挂了 volume 才保得住缓存。
-- 构建期间服务不可用（分钟级）。不能停机的话，先用另一个端口起一份新容器验证通过，再切端口或流量。
-- 路径写错（拼错、忘了挂 volume、误填宿主机路径）时容器会**直接报错退出，不会静默回退到镜像内置版本**。配了 `restart: unless-stopped` 就表现为反复重启，`docker logs` 里第一行就是原因。校验在复制源码之前完成，失败时数据目录和上一次的构建缓存都不受影响。
-- 数据目录属主必须是容器里的 uid 1000，且要在**首次启动前**准备好——目录由 Docker 自动创建时属主是 root，`prisma db push` 会报 `attempt to write a readonly database`。
-- 这个变量必须通过容器环境变量传入（`-e` 或 compose `environment`），写进 `~/.agent-insight/.env` 不生效——entrypoint 在读取该文件之前就要决定跑哪份代码。
-
-如果容器启动后访问不到 `3000`，先看容器状态和日志：
+查看状态、日志和挂载：
 
 ```bash
 docker ps -a --filter name=agent-insight
-docker logs --tail=200 agent-insight
-curl -i http://127.0.0.1:3000/
+docker logs --tail 200 agent-insight
+docker inspect agent-insight \
+  --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
+docker inspect agent-insight \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
 ```
 
-常见的 `unable to open database file` 通常是宿主机挂载目录不存在或权限不足。确认目录已创建，并且容器内的 `node` 用户可以写入 `/data/agent-insight/data`。
-
-如果你需要自己构建镜像，可以直接用仓库根目录的 `Dockerfile`。镜像默认从 npm 拉取 `agent-insight@latest`，不会把源码复制进镜像：
+预期挂载包含 `/opt/agent-insight -> /data/agent-insight`。检查配置和数据库：
 
 ```bash
-docker build --pull --no-cache -t agent-insight:npm-latest .
-docker run -d --name agent-insight -p 3000:3000 -v agent-insight-data:/data/agent-insight agent-insight:npm-latest
-curl -i http://localhost:3000/
+sudo ls -lah /opt/agent-insight/.env
+sudo ls -lah /opt/agent-insight/data/witty_insight.db
+curl -fsS -o /dev/null http://127.0.0.1:3000/
 ```
 
-需要固定某个 npm 版本时：
+浏览器打开 `http://<服务器地址>:3000/trace`，登录后确认链路追踪页面可访问。容器显示 `healthy` 只说明 HTTP 健康检查通过，还应完成登录和页面检查。
+
+## 7. Linux 客户端接入
+
+本节在 **AcTrail 所在的 Linux 主机** 操作。该主机应已安装并运行 AcTrail，且官方 `otel-http` 插件可用。
+
+1. 登录平台，进入“配置 → 安装指导”。页面仅包含接入命令和凭证/接入信息，不展示“相关文档”。
+2. 确认当前账号及平台地址，复制页面生成的 **Linux** 命令。
+3. 在 AcTrail 所在 Linux 终端执行。命令形态如下，实际地址和 API Key 以页面生成值为准：
 
 ```bash
-docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5.0 .
+curl -sSf "http://<平台地址>:3000/api/ingest/setup?key=<当前账号API_KEY>&yes=1&frameworks=actrail" | bash
 ```
 
-如果你只是想在服务器上快速验证本地改动，不想每次都先发布 npm 包，可以用上面的[用法三：挂载源码运行](#用法三挂载源码运行代码更新后重启即可生效)，或走“`npm pack` + 上传 `.tgz` + Docker 缓存构建”的测试流程，见 [Docker 测试构建](./docker-testing)。
+4. 脚本配置上报插件后，在 AcTrail 中执行一次 Agent 任务。
+5. 返回“运行观测 → 链路追踪”，查询本次任务并打开详情，核对节点及输入输出。
 
-容器只负责运行 Agent Insight 服务端。OpenCode、Claude Code、OpenClaw、LangChain 等框架的接入命令仍应在对应 Agent 实际运行的机器或容器里执行。当前仓库里的这份 `Dockerfile` 走 **SQLite 优先** 路线，不内置 OpenGauss 运行时依赖。
+## 8. 日志与日常管理
 
-如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
+```bash
+docker logs --tail 200 agent-insight
+docker logs -f agent-insight
+docker stop agent-insight
+docker start agent-insight
+docker restart agent-insight
+```
 
----
+上述命令按实际需要单独执行。配置、数据库和运行数据保存在挂载目录，停止或重建容器不会自动删除这些文件。
 
-## 推荐路径
+## 9. 备份与升级
 
-对于大多数用户，建议按下面顺序操作：
+先停止平台，再对整个挂载目录备份：
 
-1. 登录看板并进入当前 Workspace
-2. 在 **模型注册** 中先配置模型
-3. 在 **安装指导** 中完成 AcTrail 接入
-4. 触发一次真实执行
-5. 在 **链路追踪** 中确认第一条 Trace
+```bash
+docker stop agent-insight
+BACKUP_FILE="/tmp/agent-insight-$(date +%Y%m%d-%H%M%S).tar.gz"
+sudo tar -C /opt -czf "$BACKUP_FILE" agent-insight
+```
 
-> **Tip**
-> 如果你是开发者，且希望直接在代码里手工埋点，可以直接查看文末的
-> “可选：通过 SDK 直接接入” 一节。
+将备份移交到可恢复的位置后，按第 2 节校验、加载新版镜像，并将 `IMAGE` 改为新固定标签。删除已停止的旧容器，再按第 4 节使用原挂载目录创建容器：
 
----
+```bash
+docker rm agent-insight
+```
 
-## 步骤一：登录并确认 Workspace
+升级后重新完成第 6 节检查及本轮功能验收。schema 同步失败时先查看日志并保留数据与备份，由维护人员处理；不要用清空数据库的方式跳过失败。
 
-1. 打开你的 Agent Insight 看板地址。
+## 10. 常见问题
 
-   <p align="center">
-     <img src="../images/home.png" alt="Agent Insight 看板首页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
-
-2. 完成登录，进入默认 Workspace。
-3. 确认左侧导航中可以看到以下模块：
-   - **链路追踪**
-   - **评测中心**
-   - **模型注册**
-   - **安装指导**
-
-> **Tip**
-> 如果你同时维护开发、预发和生产环境，建议为不同环境分别创建独立 Agent，
-> 后续看 Trace 和做评测时会更清晰。
-
----
-
-## 步骤二：注册第一个模型
-
-进入侧边栏 **配置 → 模型注册**，完成一个可用模型的配置：
-
-1. 点击 **注册首个模型** 或新增模型
-2. 选择模型供应商
-3. 填入 API Key 与必要的 Endpoint
-4. 点击 **测试连接并保存**
-
-   <p align="center">
-     <img src="../images/llm.png" alt="Agent Insight 模型注册页面" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
-
-完成后，你的 Workspace 就具备了后续执行生成、诊断、评测等能力所需的模型依赖。
-
-> **Warning**
-> 如果模型连接失败，先不要继续后续步骤。很多分析、评测和 Skill 流程都依赖模型可用。
-
----
-
-## 步骤三：按安装指导完成接入
-
-进入 **配置 → 安装指导**，按页面提示完成接入。
-
-按下面步骤完成 AcTrail 接入：
-
-1. 先安装并启动 AcTrail，确认官方 `otel-http` 插件可用。
-2. 在页面复制 **Linux / WSL** 命令。
-
-3. 在 AcTrail 实际运行的 Linux / WSL 环境执行命令。Windows 用户应先进入对应 WSL 发行版。
-4. 脚本会生成 `~/.agent-insight/actrail/otel-http.config.toml`，把平台地址和当前用户 API Key 配给 AcTrail 官方 `otel-http` 插件，并持久化加载 `agent-insight.otel-http` 实例。
-5. 继续使用原来的启动方式运行 Agent：
-
-   ```bash
-   sudo actrailctl launch --name <名称> -- <Agent 命令>
-   ```
-
-如果 AcTrail 使用非默认配置或插件目录，可在运行脚本前分别设置 `ACTRAIL_OPERATOR_CONFIG`、`ACTRAIL_PLUGIN_DIR`。
-
----
-
-## 步骤四：验证生成的 Trace
-
-完成安装或配置后，按下面两步验证是否已生成 Trace。
-
-1. 使用 `sudo actrailctl launch --name <名称> -- <Agent 命令>` 发起一次真实 Agent 执行。
-
-2. 回到平台，进入 **运行观测 → 链路追踪**，确认是否出现新的 Trace。
-
-   <p align="center">
-     <img src="../images/example_trace.png" alt="链路追踪中的 Trace 示例" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
-   </p>
-
-验证时优先确认这些信息：
-
-- 列表里出现新的 Trace 记录
-- 能看到执行状态、耗时、Token 等基本指标
-- 点进详情后，可以看到 Trace 树和各个 Span
-- 如果流程中使用了工具或子 Agent，也能看到对应节点
-
-第一次验证时，不需要追求数据很完整，先确认“**有数据、能展开、能看懂主要步骤**”即可。
-
-确认生成 Trace 后，你就已经完成了平台配置和 AcTrail 接入验证。
-
-> **Warning**
-> 如果 30 秒后仍然看不到数据，按下面顺序排查：
->
-> 1. 检查 `actraild plugin status --instance agent-insight.otel-http` 的状态
-> 2. 确认客户端到服务端的网络是否通顺
-> 3. 是否选中了正确的 Workspace
-> 4. Agent 使用的 API Key / 配置是否来自当前 Agent
->
-> 仍无法解决时，可继续参考 [常见问题](./faq)。
-
-## 继续阅读
-
-- 想先看产品整体结构 → [Agent Insight](./home)
-- 想补齐基础配置 → [模型注册](./settings/model-registry) / [安装指导](./settings/access-control)
-- 想理解平台核心名词 → [核心概念](./concepts)
-- 想继续排查和分析线上执行 → [运行观测](./observability/index)
-- 想建立第一套离线评测 → [评测中心](./evaluation/index)
-- 想沉淀可复用能力 → [Skills 能力](./skills/index)
+| 现象 | 检查方法 |
+| --- | --- |
+| 镜像包校验失败 | 核对文件和清单是否对应；重新获取镜像包后再次校验 |
+| 容器启动后立即退出 | 查看 `docker logs`；核对架构、目录写权限、配置及数据库初始化错误 |
+| 页面无法访问 | 查看容器状态、端口映射、服务器防火墙和 HTTP 响应 |
+| 宿主机找不到 `/data/agent-insight` | 使用 `docker inspect` 查询挂载源，本文为 `/opt/agent-insight` |
+| 客户端配置后没有 Trace | 核对插件加载结果、平台地址可达性、API Key 归属，以及是否实际执行了 Agent 任务 |

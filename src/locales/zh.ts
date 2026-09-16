@@ -225,6 +225,8 @@ export const zh = {
     statusRunning: '执行中',
     statusSuccess: '成功',
     statusFailed: '失败',
+    statusTimedOut: '超时',
+    statusTimedOutHint: '连续 10 分钟未收到采集更新；新信息到达后重新计时。',
     statusNormal: '正常',
     metricTokens: 'Tokens',
     metricDuration: '耗时',

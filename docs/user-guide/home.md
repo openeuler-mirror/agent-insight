@@ -40,7 +40,7 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 
 > **Tip**
 > 如果你是第一次使用，建议按
-> [5 分钟上手](./quickstart) → [核心概念](./concepts) →
+> [830 平台安装说明](./quickstart) → [核心概念](./concepts) →
 > 目标模块文档 的顺序阅读。
 
 ## 主要模块
@@ -94,7 +94,7 @@ Skills 是平台里的核心资产，不只是提示词片段，而是一整套�
 
 如果你希望先看到真实链路、尽快定位错误，优先阅读：
 
-- [5 分钟上手](./quickstart)
+- [830 平台安装说明](./quickstart)
 - [安装指导](./settings/access-control)
 - [运行观测](./observability/index)
 - [核心概念](./concepts)
@@ -129,7 +129,7 @@ Skills 是平台里的核心资产，不只是提示词片段，而是一整套�
 
 ## 下一步
 
-- 第一次接入平台： [5 分钟上手](./quickstart)
+- 第一次接入平台： [830 平台安装说明](./quickstart)
 - 先完成平台基础配置： [模型注册](./settings/model-registry)
 - 想直接复制接入命令： [安装指导](./settings/access-control)
 - 先理解名词和关系： [核心概念](./concepts)
