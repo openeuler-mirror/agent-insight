@@ -65,162 +65,35 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 
 ### 1. 安装服务端
 
-**环境要求**
+**830 转测版本的服务端对外仅通过 Linux Docker 镜像交付。** 按交付清单确认镜像包、固定标签、CPU 架构、源码提交和 SHA-256。
 
-- Node.js >= 20.0.0
-- 3000 端口未被占用
+安装顺序：
 
-提供以下两种安装方式，可根据实际应用场景任选其一：
+1. 校验离线镜像包，只有校验通过才执行 `docker load`。
+2. 核对镜像架构、源码提交和运行用户 uid/gid。
+3. 准备宿主机 `/opt/agent-insight`，以 `750` 权限挂载到容器 `/data/agent-insight`。
+4. 启动容器，检查配置、数据库、日志和页面访问。
 
-#### 方式一：使用 npm 快速部署（推荐）
+完整命令及安装产物、配置检查、备份升级说明见 [830 平台安装说明](docs/user-guide/quickstart.md)。宿主机无需安装服务端 Node.js、npm 或源码。
 
-通过包管理工具直接安装，适用于快速启动及基础使用的场景。
+默认配置为 `/opt/agent-insight/.env`，SQLite 数据库为 `/opt/agent-insight/data/witty_insight.db`，日志通过 `docker logs agent-insight` 查看。不要在本交付方式中设置 `DB_HOST`。
 
-```bash
-npx agent-insight install
-```
+浏览器打开 `http://<服务器地址>:3000/trace`，使用个人邮箱登录。
 
-**平台服务管理命令参考：**
+### 2. Linux 客户端接入
 
-| 命令                                    | 说明               |
-|:------------------------------------- |:---------------- |
-| `npx agent-insight install`           | 一键安装平台及所有组件      |
-| `npx agent-insight start`             | 启动服务（默认 3000 端口） |
-| `npx agent-insight start --port <端口>` | 指定端口启动           |
-| `npx agent-insight stop --port <端口>`  | 停止指定端口的服务        |
-| `npx agent-insight restart`           | 重启服务             |
-| `npx agent-insight status`            | 查看服务运行状态         |
-| `npx agent-insight logs`              | 查看服务日志           |
+在已安装并运行 AcTrail、且官方 `otel-http` 插件可用的 Linux 主机上执行：
 
-#### 方式二：基于源码构建
+1. 登录平台，进入 **配置 → 安装指导**。
+2. 确认当前账号和平台地址，复制页面生成的 **Linux curl** 命令。
+3. 在 AcTrail 所在 Linux 终端执行命令，配置上报插件。
+4. 在 AcTrail 中执行一次 Agent 任务，返回 **运行观测 → 链路追踪**，确认数据和详情。
 
-适用于需要二次开发或深度定制的场景。
+命令形态如下，实际地址和 API Key 以页面生成值为准：
 
 ```bash
-git clone https://gitcode.com/openeuler/agent-insight.git
-cd agent-insight
-npm install
+curl -sSf "http://<平台地址>:3000/api/ingest/setup?key=<当前账号API_KEY>&yes=1&frameworks=actrail" | bash
 ```
-
-#### 方式三：使用 Docker 镜像部署
-
-适用于服务器部署或希望应用容器与数据目录分离的场景。镜像已发布为多架构，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
-
-**用法一：在线拉取 Docker Hub 镜像**
-
-```bash
-docker pull karaggagent/agent-insight:latest
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-生产环境如需锁定版本号，可以把 `latest` 换成固定版本，例如 `karaggagent/agent-insight:0.5.0`。
-
-**用法二：离线导入 `.tar` 镜像**
-
-如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
-
-```bash
-docker load -i agent-insight-0.5.0-image.tar
-docker images | grep agent-insight
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-```
-
-**用法三：挂载源码运行，代码更新后重启即可生效**
-
-适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -e AGENT_INSIGHT_SOURCE_DIR=/src \
-  -v /srv/agent-insight:/src:ro \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-之后更新代码只需要 `git pull` 加一次重启，容器会按最新源码重新构建再启动：
-
-```bash
-cd /srv/agent-insight && git pull
-docker restart agent-insight
-```
-
-不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
-
-容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
-
-更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
-
-**启动服务**
-
-安装完成后，在工作目录下执行以下命令启动服务：
-
-```bash
-cd agent-insight
-
-# 启动服务端，默认端口是3000
-bash scripts/start.sh
-```
-
-**停止服务**
-
-如果需要停止运行，在工作目录下执行以下命令。该脚本将安全关闭 Next.js 服务端及所有相关的后台子进程：
-
-```bash
-bash scripts/stop.sh
-```
-
-**访问看板**
-
-浏览器打开 `http://localhost:3000`，使用个人邮箱登录即可。
-
-<p align="center">
-  <img src="docs/images/login.png" alt="登录" />
-</p>
-
-### 2. Agent 平台接入
-
-当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent-Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent-Insight 插件的具体安装与配置方式：
-
-1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的插件安装命令。
-   
-   <p align="center"><img src="docs/images/guide.png" alt="安装指导" /></p>
-
-2. 在目标 Agent 平台所在的服务器终端执行该安装命令，根据交互提示完成对应平台的插件安装配置。
-   
-   <p align="center"><img src="docs/images/guide-framework.png" alt="选择运行时" /></p>
-
-3. 验证接入配置：在 Agent 平台中触发一次测试任务（仍以 OpenCode 为例，执行任意基础命令）。
-   
-   ```bash
-   opencode run 'hello'
-   ```
-
-4. 登录 Agent-Insight 看板，进入 **链路追踪** 页面。若能观测到刚才执行的测试任务链路数据上报，即表明 Agent 平台已成功接入并正常工作。
-   
-   <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
 ---
 

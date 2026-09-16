@@ -1,285 +1,18 @@
+import { getAutoEvalReadiness } from '@/lib/observe/auto-eval-readiness';
+import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 import { listObservedAgentNames, listObservedFieldValues, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
 import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
-import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
-import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
 import { listTraceTags } from '@/lib/trace-tags';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 
 export const dynamic = 'force-dynamic';
-
-const DEFAULT_AUTO_EVAL_TRACE_STABLE_MS = 60_000;
-
-type TimestampCarrier = {
-    // hasAssistantOutput() reads role/content to detect a produced answer; the rest
-    // are the activity-timestamp fields getLatestTraceActivityMs() scans.
-    role?: unknown;
-    content?: unknown;
-    timestamp?: unknown;
-    createdAt?: unknown;
-    completedAt?: unknown;
-    completed_at?: unknown;
-    timeInfo?: {
-        created?: unknown;
-        completed?: unknown;
-    };
-    timing?: {
-        started_at?: unknown;
-        completed_at?: unknown;
-    };
-};
-
-type SessionForReadiness = {
-    interactions?: unknown;
-    endTime?: unknown;
-};
-
-type TraceLifecycleStatus = 'running' | 'success' | 'failed';
-
-const opencodeCliExitCache = new Map<string, { value: boolean | null; expiresAt: number }>();
-let opencodeTelemetryIndexCache: {
-    expiresAt: number;
-    sessions: Map<string, { hasShutdown: boolean; pids: Set<number> }>;
-} | null = null;
-
-function toMsTimestamp(value: unknown): number | null {
-    if (value == null) return null;
-    if (value instanceof Date) return value.getTime();
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string') {
-        const trimmed = value.trim();
-        if (!trimmed) return null;
-        if (/^\d+$/.test(trimmed)) {
-            const n = Number(trimmed);
-            return Number.isFinite(n) ? n : null;
-        }
-        const parsed = Date.parse(trimmed);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-}
-
-function getAutoEvalStableMs(): number {
-    const configured = Number(process.env.AUTO_EVAL_TRACE_STABLE_MS);
-    return Number.isFinite(configured) && configured >= 0
-        ? configured
-        : DEFAULT_AUTO_EVAL_TRACE_STABLE_MS;
-}
 
 function parsePositiveInt(value: string | null, fallback: number): number {
     const parsed = Number.parseInt(String(value || ''), 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
     return parsed;
-}
-
-function parseInteractionList(raw: unknown): TimestampCarrier[] {
-    if (Array.isArray(raw)) return raw as TimestampCarrier[];
-    if (typeof raw !== 'string' || !raw.trim()) return [];
-    try {
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-}
-
-function getInteractionActivityMs(interaction: TimestampCarrier): number {
-    return Math.max(
-        toMsTimestamp(interaction.timeInfo?.completed) || 0,
-        toMsTimestamp(interaction.timeInfo?.created) || 0,
-        toMsTimestamp(interaction.timing?.completed_at) || 0,
-        toMsTimestamp(interaction.timing?.started_at) || 0,
-        toMsTimestamp(interaction.completedAt) || 0,
-        toMsTimestamp(interaction.completed_at) || 0,
-        toMsTimestamp(interaction.timestamp) || 0,
-        toMsTimestamp(interaction.createdAt) || 0,
-    );
-}
-
-function getLatestTraceActivityMs(interactions: TimestampCarrier[], fallbackTimestamp: unknown): number {
-    const fromInteractions = interactions.reduce((latest, item) => Math.max(latest, getInteractionActivityMs(item)), 0);
-    return Math.max(fromInteractions, toMsTimestamp(fallbackTimestamp) || 0);
-}
-
-function toIsoTimestamp(value: unknown): string | null {
-    const ms = toMsTimestamp(value);
-    return ms != null && ms > 0 ? new Date(ms).toISOString() : null;
-}
-
-function getTraceLifecycle(completedAt: unknown): {
-    traceStatus: TraceLifecycleStatus;
-    traceCompletedAt: string | null;
-    traceStatusReason: string;
-} {
-    const completedIso = toIsoTimestamp(completedAt);
-    if (completedIso) {
-        return {
-            traceStatus: 'success',
-            traceCompletedAt: completedIso,
-            traceStatusReason: 'session-ended',
-        };
-    }
-
-    return {
-        traceStatus: 'running',
-        traceCompletedAt: null,
-        traceStatusReason: 'missing-completion-signal',
-    };
-}
-
-function isPidAlive(pid: number): boolean {
-    if (!Number.isFinite(pid) || pid <= 0) return false;
-    try {
-        process.kill(pid, 0);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-function getOpencodeSpoolDir(): string {
-    return process.env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR
-        || path.join(os.homedir(), fs.existsSync(path.join(os.homedir(), '.agent-insight')) ? '.agent-insight' : '.skill-insight', 'otel_data', 'opencode');
-}
-
-function getOpencodeTelemetryIndex(): Map<string, { hasShutdown: boolean; pids: Set<number> }> {
-    if (opencodeTelemetryIndexCache && opencodeTelemetryIndexCache.expiresAt > Date.now()) {
-        return opencodeTelemetryIndexCache.sessions;
-    }
-    // 防 OOM:有界扫描(只看最近活动文件 + 总量/单文件封顶),不再把整个 spool 读进内存。
-    // 详见 src/lib/observe/opencode-telemetry-index.ts 的注释(spool 堆到 GB 级会把堆撑爆)。
-    const { sessions, skippedFiles, scannedBytes } = buildOpencodeTelemetryIndex(getOpencodeSpoolDir());
-    if (skippedFiles > 0) {
-        console.warn(
-            `[Data-API] opencode 遥测索引:跳过 ${skippedFiles} 个超龄/超预算/超大文件(已扫 ${Math.round(scannedBytes / 1024 / 1024)}MB,防 OOM)`,
-        );
-    }
-    opencodeTelemetryIndexCache = { expiresAt: Date.now() + 30_000, sessions };
-    return sessions;
-}
-
-function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | null {
-    const cached = opencodeCliExitCache.get(taskId);
-    if (cached && cached.expiresAt > Date.now()) return cached.value;
-
-    const setCache = (value: boolean | null) => {
-        opencodeCliExitCache.set(taskId, { value, expiresAt: Date.now() + 10_000 });
-        return value;
-    };
-
-    if (!taskId) return setCache(null);
-    const entry = getOpencodeTelemetryIndex().get(taskId);
-    if (!entry) return setCache(null);
-    if (entry.hasShutdown) return setCache(true);
-    if (entry.pids.size === 0) return setCache(null);
-    const hasAliveProcess = Array.from(entry.pids).some(isPidAlive);
-    if (hasAliveProcess) return setCache(false);
-    return setCache(true);
-}
-
-// 缺少可靠结束信号时的读侧兜底:轨迹已产出 assistant 输出后,静默超过稳定窗口即视为结束。
-// Claude Code / jiuwenswarm single-agent 没有 root span;Hermes/OpenCode 有显式完成信号,
-// 但旧接入或异常退出可能漏写 Session.endTime,需要 quiet-window 防止已完成 trace 长期停在"执行中"。
-export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw']);
-
-export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
-    return interactions.some((interaction) => {
-        const role = String(interaction?.role || '').toLowerCase();
-        if (role !== 'assistant' && role !== 'subagent') return false;
-        return Boolean(String(interaction?.content || '').trim());
-    });
-}
-
-export function inferQuietWindowTraceCompletedAt(args: {
-    framework?: unknown;
-    explicitCompleted?: boolean;
-    latestActivityMs?: number;
-    quietLongEnough?: boolean;
-}): string | null {
-    const framework = String(args.framework ?? '').toLowerCase();
-    if (!QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) return null;
-    if (args.explicitCompleted) return null;
-    const latestActivityMs = args.latestActivityMs || 0;
-    if (!args.quietLongEnough || latestActivityMs <= 0) return null;
-    return new Date(latestActivityMs).toISOString();
-}
-
-async function getAutoEvalReadiness(record: Record<string, unknown>) {
-    const framework = String(record.framework ?? '').toLowerCase();
-    const hasFinalResult = Boolean(String(record.final_result ?? record.finalResult ?? '').trim());
-    if (!hasFinalResult && !QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) {
-        return {
-            autoEvalReady: false,
-            autoEvalWaitReason: 'missing-final-result',
-            traceLastActivityAt: null,
-            traceCompletedAt: null,
-        };
-    }
-
-    const taskId = String(record.task_id || record.taskId || record.upload_id || record.id || '').trim();
-    let session: SessionForReadiness | null = null;
-    if (taskId) {
-        try {
-            session = await db.findSessionByTaskId(taskId) as SessionForReadiness | null;
-        } catch (error) {
-            console.warn(`[Data-API] Failed to load session for auto-eval readiness: ${taskId}`, error);
-        }
-    }
-
-    const interactions = parseInteractionList(session?.interactions);
-    if (!hasFinalResult && !hasAssistantOutput(interactions)) {
-        return {
-            autoEvalReady: false,
-            autoEvalWaitReason: 'missing-final-result',
-            traceLastActivityAt: null,
-            traceCompletedAt: null,
-        };
-    }
-
-    const latestActivityMs = getLatestTraceActivityMs(interactions, record.timestamp);
-    const completedAtMs = toMsTimestamp(session?.endTime);
-    const stableMs = getAutoEvalStableMs();
-    const quietLongEnough = latestActivityMs > 0 && Date.now() - latestActivityMs >= stableMs;
-    const explicitCompleted = completedAtMs != null && completedAtMs > 0;
-    // 已有明确结束时间(endTime)的 session 就别再扫遥测了——它已经判完。这让"服务端自己跑完、已落
-    // endTime"的 trace(灰度/评测/已完成的)完全绕开遥测扫描:大多数 trace 走这条,是防 OOM 的关键。
-    const opencodeCliExited = (framework === 'opencode' && !explicitCompleted)
-        ? inferOpencodeCliExitedFromExistingTelemetry(taskId)
-        : null;
-    if (framework === 'opencode' && !explicitCompleted && opencodeCliExited === true && taskId) {
-        try {
-            await db.updateSession(taskId, { endTime: new Date() });
-            void triggerExperimentWatchForTask(String(record.user || ''), taskId);
-        } catch (error) {
-            console.warn(`[Data-API] Failed to persist inferred opencode completion for ${taskId}`, error);
-        }
-    }
-    const quietWindowCompleted = QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework) && quietLongEnough;
-    const autoEvalReady = explicitCompleted || opencodeCliExited === true || quietWindowCompleted;
-
-    return {
-        autoEvalReady,
-        autoEvalWaitReason: autoEvalReady
-            ? null
-            : latestActivityMs > 0
-                ? 'trace-still-active'
-                : 'missing-trace-activity',
-        traceLastActivityAt: latestActivityMs > 0 ? new Date(latestActivityMs).toISOString() : null,
-        traceCompletedAt: completedAtMs != null && completedAtMs > 0
-            ? new Date(completedAtMs).toISOString()
-            : opencodeCliExited === true
-                ? new Date().toISOString()
-                : inferQuietWindowTraceCompletedAt({
-                    framework,
-                    explicitCompleted,
-                    latestActivityMs,
-                    quietLongEnough,
-                }),
-    };
 }
 
 export async function GET(request: Request) {
@@ -533,16 +266,12 @@ export async function GET(request: Request) {
         const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
         const last_eval_status = lastEval?.status ?? null;
         const last_eval_error = lastEval?.errorMessage ?? null;
-        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null);
+        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null, record);
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
         if (skipAutoEvalReady) {
-            const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
-                ? baseTraceLifecycle
-                : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
-                    ? getTraceLifecycle((await getAutoEvalReadiness(record)).traceCompletedAt)
-                    : baseTraceLifecycle;
+            const traceLifecycle = baseTraceLifecycle;
             return {
                 ...record,
                 is_evaluating,
@@ -550,6 +279,7 @@ export async function GET(request: Request) {
                 last_eval_error,
                 trajectory_score,
                 trajectoryScore: trajectory_score,
+                trace_last_received_at: traceLifecycle.traceLastReceivedAt,
                 trace_status: traceLifecycle.traceStatus,
                 traceStatus: traceLifecycle.traceStatus,
                 trace_completed_at: traceLifecycle.traceCompletedAt,
@@ -559,9 +289,7 @@ export async function GET(request: Request) {
             };
         }
         const readiness = await getAutoEvalReadiness(record);
-        const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
-            ? baseTraceLifecycle
-            : getTraceLifecycle(readiness.traceCompletedAt);
+        const traceLifecycle = baseTraceLifecycle;
         return {
             ...record,
             is_evaluating,
@@ -569,15 +297,16 @@ export async function GET(request: Request) {
             last_eval_error,
             trajectory_score,
             trajectoryScore: trajectory_score,
+            trace_last_received_at: traceLifecycle.traceLastReceivedAt,
             trace_status: traceLifecycle.traceStatus,
             traceStatus: traceLifecycle.traceStatus,
             trace_completed_at: traceLifecycle.traceCompletedAt,
             traceCompletedAt: traceLifecycle.traceCompletedAt,
             trace_status_reason: traceLifecycle.traceStatusReason,
             traceStatusReason: traceLifecycle.traceStatusReason,
-            auto_eval_ready: readiness.autoEvalReady,
-            autoEvalReady: readiness.autoEvalReady,
-            auto_eval_wait_reason: readiness.autoEvalWaitReason,
+            auto_eval_ready: traceLifecycle.traceStatus === 'timed_out' ? false : readiness.autoEvalReady,
+            autoEvalReady: traceLifecycle.traceStatus === 'timed_out' ? false : readiness.autoEvalReady,
+            auto_eval_wait_reason: traceLifecycle.traceStatus === 'timed_out' ? 'inactivity-timeout' : readiness.autoEvalWaitReason,
             trace_last_activity_at: readiness.traceLastActivityAt,
         };
     }));
@@ -589,7 +318,7 @@ export async function GET(request: Request) {
         const statusFiltered = statusParam === 'all'
             ? enrichedData
             : enrichedData.filter((record) => String(record.trace_status ?? record.traceStatus ?? '') === statusParam);
-        const statusOrder: Record<string, number> = { running: 0, failed: 1, success: 2 };
+        const statusOrder: Record<string, number> = { running: 0, timed_out: 1, failed: 2, success: 3 };
         statusFiltered.sort((a, b) => {
             let cmp = 0;
             if (sortParam === 'status') {
@@ -701,7 +430,7 @@ export async function PATCH(request: Request) {
                 upload_id: upload_id || undefined,
                 user_feedback,
                 force_judgment: false
-            });
+            }, { receivedAt: null });
              return NextResponse.json({
                 success: result.success,
                 record: result.record,
@@ -715,7 +444,7 @@ export async function PATCH(request: Request) {
                 upload_id: upload_id || undefined,
                 label: newLabel,
                 force_judgment: false
-            });
+            }, { receivedAt: null });
              return NextResponse.json({
                 success: result.success,
                 record: result.record,
@@ -734,7 +463,7 @@ export async function PATCH(request: Request) {
                 query: newQuery.trim(),
                 skip_evaluation: true,
                 force_query_update: true
-            });
+            }, { receivedAt: null });
 
             return NextResponse.json({
                 success: result.success,
@@ -769,7 +498,7 @@ export async function PATCH(request: Request) {
                     upload_id: upload_id || undefined,
                     final_result: newFinalResult.trim(),
                     force_judgment: true
-                }).catch(err => {
+                }, { receivedAt: null }).catch(err => {
                     console.error('[Background Re-judgment Error]', err);
                 });
 

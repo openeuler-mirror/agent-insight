@@ -191,7 +191,7 @@ export async function POST(request: Request) {
         failures: failureAnalysis.failures,
         skill_issues: failureAnalysis.skill_issues,
         skip_internal_judgment: true
-    });
+    }, { receivedAt: null });
 
     finish(actionUser, taskId, runId);
 

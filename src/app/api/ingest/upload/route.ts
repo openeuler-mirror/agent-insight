@@ -422,7 +422,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
 
     data.skip_evaluation = true;
     data.force_judgment = false;
-    await saveExecutionRecord(data);
+    await saveExecutionRecord(data, { receivedAt: null });
     assertActive(username, taskId, runId);
 
     try {
@@ -469,7 +469,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
     assertActive(username, taskId, runId);
     data.skip_evaluation = false;
     data.skip_internal_judgment = true;
-    await saveExecutionRecord(data);
+    await saveExecutionRecord(data, { receivedAt: null });
     const shouldMarkSessionEnded = data.framework !== 'opencode' || data.opencode_cli_completed === true;
     if (taskId && shouldMarkSessionEnded) {
         try {
