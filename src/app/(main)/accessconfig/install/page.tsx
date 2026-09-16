@@ -6,8 +6,6 @@ import {
     Key,
     Copy,
     Check,
-    BookOpen,
-    ExternalLink,
     CircleCheck,
     UserCircle,
 } from 'lucide-react';
@@ -192,7 +190,6 @@ export default function AccessInstallPage() {
                                 keyReady={keyReady}
                                 locale={locale}
                             />
-                            <DocsPanel locale={locale} />
                         </aside>
                     </div>
                 </div>
@@ -328,37 +325,6 @@ function ConnectionPanel({
                     mono
                     ellipsis
                 />
-            </ul>
-        </section>
-    );
-}
-
-function DocsPanel({ locale }: { locale: string }) {
-    const isZh = locale === 'zh';
-    const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
-        { label: '客户端高级配置', href: '#' },
-        { label: '常见接入问题排查', href: '#' },
-    ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C' },
-        { label: 'Advanced client configuration', href: '#' },
-        { label: 'Troubleshooting installation', href: '#' },
-    ];
-    return (
-        <section style={panelCard}>
-            <header style={panelHeader}>
-                <BookOpen size={13} strokeWidth={2.2} style={{ color: 'var(--foreground-secondary)' }} />
-                <span>{isZh ? '相关文档' : 'Related Docs'}</span>
-            </header>
-            <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
-                {links.map(l => (
-                    <li key={l.label}>
-                        <a href={l.href} target="_blank" rel="noopener noreferrer" style={docLink}>
-                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label}</span>
-                            <ExternalLink size={12} strokeWidth={2} style={{ color: 'var(--foreground-muted)', flexShrink: 0 }} />
-                        </a>
-                    </li>
-                ))}
             </ul>
         </section>
     );
@@ -534,18 +500,6 @@ const panelKv: CSSProperties = {
     padding: 0,
     margin: 0,
     listStyle: 'none',
-};
-
-const docLink: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '7px 8px',
-    fontSize: 12.5,
-    color: 'var(--foreground-secondary)',
-    textDecoration: 'none',
-    borderRadius: 6,
-    transition: 'background .1s',
 };
 
 const commandCard: CSSProperties = {
