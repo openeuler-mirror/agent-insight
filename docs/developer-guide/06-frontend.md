@@ -104,3 +104,7 @@ flowchart TD
 - **开发**：`npm run dev`（或 `bash scripts/restart_dev.sh`——项目规范的开发启动方式）。端口 3000。
 - **构建**：`npm run build`（`next build`）。**启动**：`npm run start`。
 - **根布局 / 启动**：`src/app/layout.tsx`（`RootLayout`）；OpenTelemetry 在 `src/instrumentation.ts` / `instrumentation-node.ts` 中注册。
+
+### 830 链路追踪的展示范围
+
+`/trace` 的直接分析与执行评测入口不在 830 转测范围内，保留详情、导出和加入评测集。搜索与侧栏使用观测字段集合过滤成本及评分字段，旧 URL 中的相关条件也会被忽略；完整过滤契约仍保留，其他调用方不受影响。`AgentTraceView` 的 `showInfra` 默认为 `true`，链路追踪页面显式关闭，其他使用方沿用已有行为。

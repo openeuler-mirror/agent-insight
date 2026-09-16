@@ -338,6 +338,7 @@ interface SpanInfo {
 }
 
 interface TraceCtxValue {
+    showInfra: boolean;
     framework?: string;
     searchQuery: string;
     matchedKeys: Set<string>;
@@ -355,6 +356,7 @@ interface TraceCtxValue {
 }
 
 const defaultCtx: TraceCtxValue = {
+    showInfra: true,
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
     treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
     onJumpToKey: () => {},
@@ -364,6 +366,7 @@ const defaultCtx: TraceCtxValue = {
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
+    showInfra?: boolean;
     interactions: RawInteraction[];
     framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
@@ -386,6 +389,7 @@ export interface AgentTraceViewProps {
 
 export default function AgentTraceView({
     interactions: sourceInteractions,
+    showInfra = true,
     framework,
     langfuseTraceNodes,
     loadInteraction,
@@ -782,6 +786,7 @@ export default function AgentTraceView({
     };
 
     const ctxValue: TraceCtxValue = {
+        showInfra,
         framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
@@ -2846,6 +2851,7 @@ function AgentDetail({
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
     const hasHookContexts = !!(node.hookContexts && node.hookContexts.length > 0);
+    const { showInfra } = React.useContext(TraceCtx);
     const visibleEvents = node.events.filter(event => !event.treeHidden);
 
     const tabs: { id: DetailTab; label: string; count?: number }[] = [
@@ -2854,7 +2860,7 @@ function AgentDetail({
         { id: 'skills', label: 'Skills', count: traceSkills.length },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
         ...(hasHookContexts ? [{ id: 'hooks' as DetailTab, label: 'Hook 上下文', count: node.hookContexts!.length }] : []),
-        { id: 'infra' as DetailTab, label: 'Infra' },
+        ...(showInfra ? [{ id: 'infra' as DetailTab, label: 'Infra' }] : []),
     ];
 
     return (

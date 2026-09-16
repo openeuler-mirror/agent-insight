@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { apiFetch } from '@/lib/client/api';
 import { cn } from '@/lib/utils';
-import { TRACE_FILTER_COLUMNS, resolveTraceColumn } from '@/lib/filters/trace-columns';
+import { TRACE_OBSERVATION_COLUMNS, resolveTraceColumn } from '@/lib/filters/trace-columns';
 import { operatorsForColumn, type FilterClause, type FilterColumn, type Operator } from '@/lib/filters/types';
 
 /**
@@ -23,7 +23,7 @@ import { operatorsForColumn, type FilterClause, type FilterColumn, type Operator
  * v1 只覆盖可下推的实列(排除 computed 的 status/ownership、executionSkill 的 skill——它们仍走既有下拉)。
  */
 
-const BAR_COLUMNS: FilterColumn[] = TRACE_FILTER_COLUMNS.filter(
+const BAR_COLUMNS: FilterColumn[] = TRACE_OBSERVATION_COLUMNS.filter(
   (c) =>
     c.source !== 'computed' &&
     c.source !== 'executionSkill' &&

@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import {
@@ -10,7 +9,6 @@ import {
     RefreshCw,
     X as XIcon,
     XCircle,
-    Wrench,
     Users,
     Layers,
     Terminal,
@@ -34,7 +32,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
-import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
+import { TRACE_OBSERVATION_COLUMNS } from '@/lib/filters/trace-columns';
 import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
 import { Button } from '@/components/ui/button';
@@ -493,7 +491,7 @@ function TracePageContent() {
         if (!clausesRaw) return [];
         try {
             const p = JSON.parse(clausesRaw);
-            return Array.isArray(p) ? (p as FilterClause[]) : [];
+            return Array.isArray(p) ? (p as FilterClause[]).filter(clause => TRACE_OBSERVATION_COLUMNS.some(column => column.column === clause?.column)) : [];
         } catch {
             return [];
         }
@@ -1343,7 +1341,7 @@ function TraceDetailView({
         return Array.isArray(body?.interactions) ? body.interactions : [];
     }, [taskId]);
 
-    const { framework, latency, tokens, cost } = execution;
+    const { framework, latency, tokens } = execution;
     const isRunning = execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
@@ -1430,7 +1428,7 @@ function TraceDetailView({
                     mode="button"
                 />
 
-                {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
+                {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) ? (
                     <Separator orientation="vertical" className="h-5" />
                 ) : null}
                 {typeof tokens === 'number' && tokens > 0 && (
@@ -1439,9 +1437,7 @@ function TraceDetailView({
                 {typeof latency === 'number' && latency > 0 && (
                     <MetricPill label={t('tracePage.metricDuration')} value={formatLatencySeconds(latency)} />
                 )}
-                {typeof cost === 'number' && cost > 0 && (
-                    <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />
-                )}
+
 
                 <div className="ml-auto flex flex-wrap items-center gap-2">
                     <TooltipProvider delayDuration={250}>
@@ -1491,9 +1487,7 @@ function TraceDetailView({
                         <Database className="size-3.5" aria-hidden />
                         {locale === 'zh' ? '加入评测集' : 'Add to dataset'}
                     </Button>
-                    <Button variant="default" size="sm" asChild className="h-7 text-xs">
-                        <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
-                    </Button>
+
                     <Button
                         variant="outline"
                         size="sm"
@@ -1550,6 +1544,7 @@ function TraceDetailView({
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
+                        showInfra={false}
                         rootSessionId={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
                     />
@@ -1742,8 +1737,6 @@ function Row({
     onSelectedChange: () => void;
 }) {
     const { t, locale } = useLocale();
-    const router = useRouter();
-    const { user } = useAuth();
     const id = e.task_id || e.upload_id || '';
     const status = getExecStatus(e);
     const skillCount = getInvokedSkillNames(e).length;
@@ -1851,21 +1844,6 @@ function Row({
 
                         <Button variant="ghost" size="sm" onClick={onClick} className="h-7 px-2 text-xs">
                             {t('tracePage.rowDetail')}
-                        </Button>
-                        <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
-                            <Link href={`${basePath}/fault?taskId=${id}`}>
-                                {t('tracePage.rowAnalysis')}
-                            </Link>
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            title={t('tracePage.rowEval')}
-                            onClick={() => { void drillTraceEvalUrl(user || '', id).then(url => router.push(url)); }}
-                        >
-                            <Wrench className="size-3" />
-                            {t('tracePage.rowEval')}
                         </Button>
                     </div>
                 </Td>

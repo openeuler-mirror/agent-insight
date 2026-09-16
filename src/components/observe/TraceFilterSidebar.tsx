@@ -21,9 +21,6 @@ const SECTIONS: { column: string; kind: SectionKind; defaultOpen?: boolean }[] =
   { column: 'model', kind: 'contains', defaultOpen: true },
   { column: 'latency', kind: 'range', defaultOpen: true },
   { column: 'tokens', kind: 'range' },
-  { column: 'cost', kind: 'range' },
-  { column: 'answerScore', kind: 'range' },
-  { column: 'isAnswerCorrect', kind: 'boolean' },
 ];
 
 interface Props {
