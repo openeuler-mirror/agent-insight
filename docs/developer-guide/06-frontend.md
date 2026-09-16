@@ -29,8 +29,6 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
-`AgentTraceView.EventDetailModal` 中的 Input/Output 共用 `ModalCodeBlock`，启用 `SmartViewer` 工具栏以提供完整内容复制；不同内容格式均调用共享 `copyText`，保留既有格式识别和滚动展示。
-
 ## 导航信息架构（功能模块）
 侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。830 转测导航只展示链路追踪、评测、模型注册和安装指导；其他页面与 API 继续保留，不从侧边栏暴露。
 
@@ -72,11 +70,14 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。Version Analysis page: `app/(main)/version-analysis/page.tsx`; Version Management page: `app/(main)/version-management/page.tsx`。
 - **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`）、`skill-generator/*`。
 - **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。
+- **Trace 树控件** — `AgentTraceView` 的收起保留根 Agent 的 key，展开恢复 Agent、子 Agent 调用及 CHAIN 的可展开 key。按钮复用 TRACE ID 表头的 `TermPopover`（信息图标、150ms 悬停延迟、下方说明卡片及键盘聚焦），按当前操作说明展开/收起子 Agent，根 Agent 收起时仍保持展开。`slowOnly=1` 保留 URL 契约，界面标为“仅慢节点（>60s）”；开启时耗时控件展示固定的 `SLOW_MS`（60000）并禁用编辑，不改写本地 `minDurationMs`，关闭后恢复原选择。耗时选项按严格大于阈值过滤，未知耗时不命中；Agent 行保留作树上下文，慢数量徽标仍统计慢 Agent。类型、Token 和搜索条件继续叠加。
 - **实验向导** — `app/(main)/experiments/new/page.tsx` 的第 ② 步通过 `/api/experiments/traces` 服务端分页选择 root Trace；搜索同时匹配 `Execution.id`、`taskId` 与 `query`，时间支持预设窗口和自定义起止时间，用户标签多选使用 AND 语义。筛选栏下方的独立已选区读取跨页 `selected` Map，支持单条移除和全部清空；筛选状态不清空跨页已选 case，跨页全选沿用当前筛选参数并受 500 条上限保护。这些筛选不持久化为监听模式规则。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
 - **基础组件（复用，不要重建）** — `ui/*`（button、card、dialog、select、switch……）、`feedback/{EmptyState,ErrorState,StatusBadge}.tsx`、`text/*`（`MetricValue`、`RelativeTime`、`TruncateText`）、`SmartViewer/*`。
 
 `Select` 基于 Radix DropdownMenu。放在 `Dialog` 内时传入 `modal={false}`；`DialogContent` 会识别带 `data-slot="dropdown-menu-content"` 的 Portal 内容并阻止将其误判为外部交互，避免选择或重复点击下拉框时关闭外层弹窗。
+
+`AgentTraceView.EventDetailModal` 中的 Input/Output 共用 `ModalCodeBlock`，启用 `SmartViewer` 工具栏以提供完整内容复制；不同内容格式均调用共享 `copyText`，保留既有格式识别和滚动展示。
 
 组件关系（典型组合）：
 ```mermaid

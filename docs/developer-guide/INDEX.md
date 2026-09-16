@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `491e3ae1e4e48962dab9584d398e3c3a6c7b4659` (`491e3ae1`) |
-| Branch | `codex/830-issue-310-20260916` |
-| Date | 2026-09-16T21:30:43+08:00 |
+| Commit | `b5773fb0cece43e57500fbafd3ecb53964fd8872` (`b5773fb0`) |
+| Branch | `codex/830-issue-308-20260915` |
+| Date | 2026-09-16T16:30:33+08:00 |
 | Author | gyctl |
-| Subject | `fix: 补齐时间线事件输入输出全文复制入口 (#310)` |
+| Subject | `merge: 同步最新830并解决PR !406冲突` |
 
-**如何更新：** `git diff 491e3ae1 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff b5773fb0 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
