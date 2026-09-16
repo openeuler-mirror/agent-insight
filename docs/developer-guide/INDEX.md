@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e3f777fb7af2de33ebdbd178741c8b74037fb25d` (`e3f777fb`) |
-| Branch | `codex/830-issue-301-20260915` |
-| Date | 2026-09-15T22:23:24+08:00 |
+| Commit | `5ef7ab99c06fb945e4e183eb05fc38cb7a31f8f1` (`5ef7ab99`) |
+| Branch | `codex/830-issue-309-20260916` |
+| Date | 2026-09-16T16:30:33+08:00 |
 | Author | gyctl |
-| Subject | `fix: 统一所有Agent十分钟无上报超时兜底` |
+| Subject | `merge: 同步最新830并解决PR !413冲突` |
 
-**如何更新：** `git diff e3f777fb HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 5ef7ab99 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
