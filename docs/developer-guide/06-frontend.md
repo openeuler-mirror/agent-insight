@@ -81,6 +81,8 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 
 `Select` 基于 Radix DropdownMenu。放在 `Dialog` 内时传入 `modal={false}`；`DialogContent` 会识别带 `data-slot="dropdown-menu-content"` 的 Portal 内容并阻止将其误判为外部交互，避免选择或重复点击下拉框时关闭外层弹窗。
 
+`AgentTraceView.EventDetailModal` 中的 Input/Output 共用 `ModalCodeBlock`，启用 `SmartViewer` 工具栏以提供完整内容复制；不同内容格式均调用共享 `copyText`，保留既有格式识别和滚动展示。
+
 组件关系（典型组合）：
 ```mermaid
 flowchart TD
