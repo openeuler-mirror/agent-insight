@@ -1968,7 +1968,7 @@ function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultO
                 <span className="text-xs font-semibold shrink-0">{label}</span>
                 {sub && <span className="min-w-0 flex-1 truncate font-mono text-[11px] font-normal text-foreground-muted">{sub}</span>}
                 {meta && <span className={cn('text-[10px] text-foreground-muted tabular-nums shrink-0', !sub && 'ml-auto')}>{meta}</span>}
-                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', !meta && !sub && 'ml-auto', open && 'rotate-180')} />
+                <ChevronRight className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', !meta && !sub && 'ml-auto', open && 'rotate-90')} />
             </button>
             {open && (
                 <div className="bg-transparent">
@@ -2070,7 +2070,7 @@ function ToolCallList({ calls, modalTitle }: {
                 <WrenchIcon className="size-3.5 text-foreground-muted shrink-0" aria-hidden />
                 <span className="text-xs font-semibold">Tool calls</span>
                 <span className="ml-auto text-[10px] text-foreground-muted tabular-nums shrink-0">{calls.length}</span>
-                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', open && 'rotate-180')} />
+                <ChevronRight className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', open && 'rotate-90')} />
             </button>
             {open && (
                 <div className="flex flex-wrap gap-1 bg-transparent py-2 pl-10 pr-3">

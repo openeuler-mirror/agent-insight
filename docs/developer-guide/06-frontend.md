@@ -25,6 +25,8 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/{quality,security,memory,optapi,evaluation/[id]}` | `QualityPage`, `SecurityPage`, `MemoryPage`, `OptApiPage`, `EvaluationDetailPage` | 其他仪表盘 |
 | `/details`, `/skill-detail` | `DetailPage`, `SkillDetailPage` | 可分享的详情视图 |
 
+`AgentTraceView` 的 `DisclosureBar`（Thought / Response）和 `ToolCallList` 使用 `ChevronRight`，仅在自身 `open` 时旋转 90°，与消息及 Input/Output 外层一致；不改变默认折叠状态。
+
 API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-file-map.md](03-file-map.md#api-routes-srcappapi--grouped)。
 
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
