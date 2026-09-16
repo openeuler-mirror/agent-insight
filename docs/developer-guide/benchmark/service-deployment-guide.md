@@ -45,7 +45,7 @@ npm run benchmark:catalog
 
 | 机器 | 必需环境 |
 | --- | --- |
-| Agent Insight | Git、Node.js、npm、Python 3、curl，以及项目支持的数据库 |
+| Agent Insight | Git、Node.js、npm、Python 3（含 `venv`）、curl、tar，以及项目支持的数据库 |
 | Agent 执行端 | Linux 或 macOS、Git、接入包声明的 Agent Runtime/Collector |
 | Evaluator | Linux 或 macOS、Git、Docker、Bash，以及 Benchmark 自身要求的磁盘和内存 |
 
@@ -90,10 +90,18 @@ chmod 600 ~/.agent-insight/.env
 DATABASE_URL="file:/home/<deploy-user>/.agent-insight/data/witty_insight.db"
 ```
 
-启动：
+如果要使用 SWE-bench Verified，直接通过 Benchmark 参数启动：
 
 ```bash
 cd /srv/agent-insight
+bash scripts/start.sh --benchmark swe-bench
+```
+
+首次执行会自动下载并校验固定版本的 SWE-bench 官方源码和 Verified Parquet，在 `~/.agent-insight/vendor/SWE-bench/.venv` 创建隔离 Python 环境，将 500 条 Case 导入为平台共享只读数据集，然后继续构建和启动服务。后续执行会先查询数据库；数据集已经处于 `ready` 状态时直接跳过下载、环境安装和导入，因此本地缓存被清理也不影响服务重启。
+
+不需要 Benchmark 数据集时仍可按原方式启动：
+
+```bash
 bash scripts/start.sh
 ```
 
@@ -103,7 +111,7 @@ bash scripts/start.sh
 curl -I http://127.0.0.1:3000
 ```
 
-预期 Agent Insight 监听 `0.0.0.0:3000`。页面暂时看不到目标 Benchmark 数据集并不一定表示接入包加载失败；数据集需要按第 4 节单独安装。
+预期 Agent Insight 监听 `0.0.0.0:3000`。使用 `--benchmark swe-bench` 后，启动成功即表示 SWE-bench Verified 已经存在或完成导入；页面中应能看到对应数据集。
 
 ## 4. 安装 Benchmark 数据集
 
@@ -111,60 +119,33 @@ curl -I http://127.0.0.1:3000
 
 **当前已提供完整安装流程的 Benchmark 数据集只有 SWE-bench Verified。**
 
-### 4.2 安装 SWE-bench 官方 Loader
-
-```bash
-mkdir -p ~/.agent-insight/vendor
-
-git clone \
-  https://github.com/SWE-bench/SWE-bench.git \
-  ~/.agent-insight/vendor/SWE-bench
-
-git -C ~/.agent-insight/vendor/SWE-bench fetch --depth 1 origin \
-  02e7a74ffd0b707aab73d203fe87bdc7c76afc8e
-
-git -C ~/.agent-insight/vendor/SWE-bench checkout --detach \
-  02e7a74ffd0b707aab73d203fe87bdc7c76afc8e
-
-python3 -m venv ~/.agent-insight/vendor/SWE-bench/.venv
-~/.agent-insight/vendor/SWE-bench/.venv/bin/pip install \
-  ~/.agent-insight/vendor/SWE-bench
-```
-
-### 4.3 下载并校验 SWE-bench Verified
-
-将 `/path/to/swe-bench-verified` 替换为 Agent Insight 服务端可读的实际目录：
-
-```bash
-mkdir -p /path/to/swe-bench-verified
-
-curl --fail --location --retry 5 \
-  'https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified/resolve/78f471bf655a3137b2e8a75af1501690ec009ec3/data/test-00000-of-00001.parquet?download=true' \
-  --output /path/to/swe-bench-verified/test.parquet
-
-printf '%s  %s\n' \
-  '030cfd7f2a704c4c0226e7f104c725a3b41230b1d3517f9c915ad7ea5be3fa25' \
-  /path/to/swe-bench-verified/test.parquet \
-  | sha256sum --check
-```
-
-哈希校验必须返回 `OK`。
-
-### 4.4 导入 Agent Insight
+### 4.2 随服务启动自动安装
 
 ```bash
 cd /srv/agent-insight
-
-npx tsx scripts/benchmark/install-dataset.ts \
-  --benchmark swe-bench \
-  --profile verified \
-  --source /path/to/swe-bench-verified/test.parquet \
-  --name 'SWE-bench Verified'
+bash scripts/start.sh --benchmark swe-bench
 ```
 
-预期返回的 `caseCount` 为 `500`，页面中可以看到平台共享、只读的 `SWE-bench Verified` 数据集。
+脚本执行以下幂等流程：
 
-### 4.5 其他 Benchmark
+1. 查询数据库中是否已有 `ready` 状态的 `swe-bench/verified` 平台共享数据集；
+2. 仅在缺失时下载固定 commit 的 SWE-bench 官方源码并校验 SHA-256；
+3. 创建受管 Python 虚拟环境并安装官方 Loader；
+4. 下载固定 revision 的 SWE-bench Verified Parquet 并校验 SHA-256；
+5. 校验数据集包含 500 个唯一 Case 后导入，再继续启动服务。
+
+受管文件默认写入：
+
+```text
+~/.agent-insight/vendor/SWE-bench/
+~/.agent-insight/data/imports/swe-bench-verified/test.parquet
+```
+
+下载、哈希校验、Loader 安装或导入失败时，启动会明确报错并停止，不会留下一个缺少已请求 Benchmark 数据集的运行中服务。自动流程不会替换数据库中已经导入的数据集，也不会静默升级历史实验使用的数据版本。
+
+当前 `scripts/start.sh --benchmark` 自动准备只支持正式 key `swe-bench`。不接受 `swe` 等别名；传入未支持的 key 会在修改数据库或启动服务前失败。
+
+### 4.3 其他 Benchmark
 
 对于其他 Benchmark，接入包即使已被三端加载，也必须先完成专用 Dataset Profile、Loader 和安装验收，才能在页面中发起正式评测。
 

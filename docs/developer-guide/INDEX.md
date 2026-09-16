@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-16 working-tree overlay：生产启动脚本新增 `--benchmark swe-bench`，在数据库缺少 SWE-bench Verified 时自动下载并校验固定官方源码与 Parquet、创建隔离 Python 环境并导入 500 条共享只读 Case；重复启动先查库并跳过本地准备，已有数据版本不会被静默替换。同步更新 Benchmark 服务安装指南与数据集用户指南。
+
 > 2026-09-16 working-tree overlay：修复 xiaoo Collector 被旧 FI 上传密钥覆盖的问题，改为完整来源选择、当前 RAS 安装配置优先。无 Session ID 的 Hook 按 xiaoo PID + 启动时间隔离，仅在唯一活动会话时归属，终态释放；安装器使用 exec 保持父进程身份。最终根 span 携带显式完成标记，聚合后写入 Session 结束时间，避免退出后仍显示执行中。其他 Agent、公共 OTLP API 与官方评测逻辑不变。
 
 > 2026-09-16 working-tree overlay：xiaoo 模型发现改用标准 TOML 解析，避免行尾注释进入 provider/model。后台实验执行通过用户登录交互 shell 继承现有终端环境，复用 xiaoo 原生密钥读取；shell 启动输出与 CLI 证据分离，沿用进程组超时，无需额外密钥文件或二次输入。

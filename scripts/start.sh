@@ -6,6 +6,49 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
+BENCHMARK_KEY=""
+
+start_usage() {
+  cat <<'EOF'
+Usage: bash scripts/start.sh [--benchmark KEY]
+
+Builds and starts Agent Insight. When KEY is swe-bench, the first start also
+downloads, verifies, and imports SWE-bench Verified with its official loader.
+EOF
+}
+
+start_fail() {
+  echo "启动参数错误：$1" >&2
+  exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --benchmark)
+      [ "$#" -ge 2 ] || start_fail '--benchmark 缺少参数值'
+      [ -z "$BENCHMARK_KEY" ] || start_fail '--benchmark 只能指定一次'
+      BENCHMARK_KEY="$2"
+      shift 2
+      ;;
+    --benchmark=*)
+      [ -z "$BENCHMARK_KEY" ] || start_fail '--benchmark 只能指定一次'
+      BENCHMARK_KEY="${1#--benchmark=}"
+      [ -n "$BENCHMARK_KEY" ] || start_fail '--benchmark 缺少参数值'
+      shift
+      ;;
+    --help|-h)
+      start_usage
+      exit 0
+      ;;
+    *) start_fail "不支持的参数：$1" ;;
+  esac
+done
+
+case "$BENCHMARK_KEY" in
+  ''|swe-bench) ;;
+  *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
+esac
+
 AGENT_INSIGHT_HOME="${AGENT_INSIGHT_DATA_DIR:-$HOME/.agent-insight}"
 AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
 AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME/data"
@@ -201,6 +244,16 @@ if ! npx prisma generate; then
   echo "     启动 server 会用旧 client 查新表，所有数据 API 都可能挂。"
   echo "     退出脚本。修好后重新跑 bash scripts/start.sh。"
   exit 1
+fi
+
+if [ "$BENCHMARK_KEY" = "swe-bench" ]; then
+  echo "Preparing SWE-bench Verified dataset..."
+  if ! AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME" npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts; then
+    echo ""
+    echo "  ⛔ SWE-bench Verified 自动准备或导入失败，服务未启动。"
+    echo "     修复上方错误后重新执行 bash scripts/start.sh --benchmark swe-bench。"
+    exit 1
+  fi
 fi
 
 echo "Building project..."
