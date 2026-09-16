@@ -9,11 +9,11 @@
 
 | Field | Value |
 |---|---|
-| Commit | `ed4da08e0fa367067cf0c4d52db7c69348205faf` (`ed4da08e`) |
+| Commit | `5b61a5d9dce7ffdd93f06d7ea51c62922ab49b46` (`5b61a5d9`) |
 | Branch | `bench-9-16` |
 | Date | 2026-09-16 |
 | Author | mintuyang |
-| Subject | `增加测试文件` |
+| Subject | `实验接入xiaoo` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
@@ -78,7 +78,13 @@
 
 > 2026-09-16 working-tree overlay：xiaoo 实验执行复用客户端通用运行主流程，新增 JSON CLI 适配、模型参数拆分、能力探测和明确失败回写。执行器回报原生 Session ID，与既有 Collector `session.id` / `Execution.taskId` 对齐；OTLP span 哈希仅保留在采集链路。Collector 生产代码不变；更新 `05-data-and-control-flow.md` 与实验用户指南。
 
-**如何更新：** `git diff ed4da08e HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+> 2026-09-16 working-tree overlay：新增 Pi 实验 Runtime Adapter，复用通用执行、登录 shell、workspace/patch 和现有 Collector/OTLP 链路。独立发现 Pi 执行能力，stdin 传参，随机 Session 隔离，绑定 `<base>__task0`，等待重试收敛与 `agent_settled`；同步 `05-data-and-control-flow.md` 和实验用户指南，其他指南未重新审计。
+
+> 2026-09-16 working-tree overlay：Pi 模型发现与执行共用 shell 启动环境及私有输出管道，兼容 bash 登录时的描述符关闭行为；完整展示 Pi 候选模型，不另设白名单或调用验证。实验向导各平台共用支持名称/ID 大小写不敏感字面包含搜索的 `RuntimeModelSelect`，同步数据流与实验用户指南。
+
+> 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
+
+**如何更新：** `git diff 5b61a5d9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

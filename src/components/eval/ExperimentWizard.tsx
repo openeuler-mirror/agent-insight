@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { TextEvaluatorConfigDialog } from '@/components/eval/TextEvaluatorConfigDialog';
+import { RuntimeModelSelect } from '@/components/eval/RuntimeModelSelect';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import {
@@ -1966,12 +1967,9 @@ export function ExperimentWizard({
                   </select>
                 </div>
                 <div>
-                  <label style={FIELDLBL}>运行模型 *</label>
-                  <select style={{ ...INPUT, cursor: 'pointer' }} value={genModel} onChange={(e) => setGenModel(e.target.value)}>
-                    {(selectedTarget?.models || [{ id: '', label: '平台默认' }]).map((model) => (
-                      <option key={model.id || '__default__'} value={model.id}>{model.label || model.id || '平台默认'}</option>
-                    ))}
-                  </select>
+                  <label htmlFor="experiment-runtime-model" style={FIELDLBL}>运行模型 *</label>
+                  <RuntimeModelSelect key={effectiveTargetKey} id="experiment-runtime-model"
+                    models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                 </div>
                 {!skillContext && (
                   <div>

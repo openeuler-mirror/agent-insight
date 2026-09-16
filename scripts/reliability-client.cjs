@@ -39,6 +39,9 @@ const RUN_FORBIDDEN = ['command', 'shell', 'args', 'cwd', 'executable', 'script'
 const AGENT_VERSION = '1.0.0'
 const HEARTBEAT_MS = 30_000
 const CAPABILITY_DISCOVERY_SCAN_MS = 30_000
+const PI_RUNTIME_PROBE_CACHE_MS = 5 * 60_000
+const PI_MODEL_PROBE_TIMEOUT_MS = 20_000
+const PI_MODEL_PROBE_RETRY_MS = 30_000
 // Type=notify + WatchdogSec=30s：systemd 要求约每半周期喂狗，不能绑在 30s HTTP 心跳上。
 const WATCHDOG_MS = 10_000
 const RECONNECT_BASE_MS = 1_000
@@ -232,7 +235,7 @@ function xiaooCollectorInstalled() {
   }
 }
 
-function probeExperimentRuntime(platform, executable = which(platform)) {
+function probeExperimentRuntime(platform, executable = which(runtimeAdapters[platform]?.executableName || platform)) {
   return runtimeAdapters[platform]?.probe(executable) || {
     canResolveTraceId: false,
     ready: false,
@@ -244,6 +247,191 @@ function probeXiaooRuntime(executable) {
   const canResolveTraceId = Boolean(executable)
     && cli.supportsFormatJson && cli.supportsTitle && cli.supportsAgent
   return { ...cli, canResolveTraceId, ready: canResolveTraceId && xiaooCollectorInstalled() }
+}
+
+function piRuntimePaths() {
+  const home = process.env.AGENT_INSIGHT_USER_HOME || os.homedir()
+  const configuredDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent')
+  const agentDir = configuredDir.startsWith('~/') ? path.join(os.homedir(), configuredDir.slice(2)) : path.resolve(configuredDir)
+  const packageDir = path.join(home, '.agent-insight', 'collectors', 'pi-agent')
+  return {
+    home, agentDir, packageDir,
+    settings: path.join(agentDir, 'settings.json'),
+    config: process.env.AGENT_INSIGHT_PI_CONFIG || path.join(packageDir, 'config.json'),
+    core: path.join(packageDir, 'lib', 'pi-trace-core.cjs'),
+  }
+}
+
+const piCliProbeCache = new Map()
+const piRuntimeProbeCache = new Map()
+const piModelProbeCache = new Map()
+const piModelProbeInFlight = new Map()
+const piModelProbeChildren = new Set()
+
+function inspectPiCli(executable) {
+  if (!executable) return { supported: false }
+  const key = executableFingerprint(executable)
+  const cached = piCliProbeCache.get(key)
+  if (cached && Date.now() - cached.checkedAt < PI_RUNTIME_PROBE_CACHE_MS) return cached.result
+  const options = { encoding: 'utf8', timeout: 3_000, maxBuffer: 1024 * 1024 }
+  const versionResult = spawnSync(executable, ['--version'], options)
+  const help = spawnSync(executable, ['--help'], options)
+  const version = String(versionResult.stdout || '').trim()
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
+  const compatible = match && (Number(match[1]) > 0 || Number(match[2]) > 82
+    || (Number(match[2]) === 82 && Number(match[3]) >= 1))
+  const result = {
+    version,
+    supported: Boolean(compatible && versionResult.status === 0 && help.status === 0
+      && ['--mode', '--session-id', '--name', '--model', '--print', '--no-approve']
+        .every(flag => String(help.stdout).includes(flag))),
+  }
+  piCliProbeCache.clear()
+  piCliProbeCache.set(key, { result, checkedAt: Date.now() })
+  return result
+}
+
+function piCollectorRegistered(paths) {
+  try {
+    const settings = JSON.parse(fs.readFileSync(paths.settings, 'utf8').replace(/^\uFEFF/, ''))
+    const manifest = JSON.parse(fs.readFileSync(path.join(paths.packageDir, 'package.json'), 'utf8'))
+    if (!manifest.pi?.extensions?.includes('./extensions/pi-agent-insight.ts')) return false
+    const expected = fs.realpathSync(paths.packageDir)
+    return (settings.packages || []).some(entry => {
+      const source = typeof entry === 'string' ? entry : entry?.source
+      if (typeof source !== 'string') return false
+      if (entry?.autoload === false) return false
+      // Filtered packages are accepted only when the Collector extension is explicitly enabled.
+      if (typeof entry === 'object' && entry.extensions !== undefined
+        && !(Array.isArray(entry.extensions) && entry.extensions.length === 1
+          && ['extensions/pi-agent-insight.ts', './extensions/pi-agent-insight.ts'].includes(entry.extensions[0]))) return false
+      const resolved = source.startsWith('~/') ? path.join(os.homedir(), source.slice(2))
+        : path.resolve(paths.agentDir, source)
+      try { return fs.realpathSync(resolved) === expected } catch { return false }
+    }) && fs.statSync(path.join(paths.packageDir, 'extensions', 'pi-agent-insight.ts')).isFile()
+  } catch { return false }
+}
+
+function piRuntimeProbeKey(executable) {
+  const paths = piRuntimePaths()
+  return createHash('sha256').update([
+    executableFingerprint(executable),
+    ...[paths.settings, paths.config, paths.core, path.join(paths.packageDir, 'package.json'),
+      path.join(paths.packageDir, 'extensions', 'pi-agent-insight.ts'),
+      path.join(paths.agentDir, 'models.json'), path.join(paths.agentDir, 'auth.json')].map(executableFingerprint),
+    process.env.AGENT_INSIGHT_API_KEY || '', process.env.AGENT_INSIGHT_OTLP_ENDPOINT || '',
+    process.env.AGENT_INSIGHT_SUPERVISOR || '', process.env.SHELL || '',
+    process.env.HOME || '', process.env.ZDOTDIR || '',
+  ].join('\n')).digest('hex')
+}
+
+function probePiRuntime(executable) {
+  const cli = inspectPiCli(executable)
+  const unavailable = { ...cli, canResolveTraceId: false, ready: false, models: [] }
+  if (!cli.supported) return unavailable
+  const paths = piRuntimePaths()
+  const key = piRuntimeProbeKey(executable)
+  const withModels = (result) => ({ ...result, models: result.ready ? piModelProbeCache.get(key)?.models || [] : [] })
+  const cached = piRuntimeProbeCache.get(key)
+  if (cached && Date.now() - cached.checkedAt < PI_RUNTIME_PROBE_CACHE_MS) return withModels(cached.result)
+  let ready = false
+  if (fs.existsSync(paths.config) && piCollectorRegistered(paths)) {
+    const check = spawnSync(process.execPath, ['-e',
+      'require(process.argv[1]).selfCheck().then(r => process.stdout.write(JSON.stringify({ok:r.ok,checks:r.checks}))).catch(() => process.exit(1))',
+      paths.core], { encoding: 'utf8', timeout: 3_000, maxBuffer: 1024 * 1024 })
+    try {
+      const result = JSON.parse(check.stdout)
+      ready = check.status === 0 && result.ok === true
+        && ['configured', 'endpoint', 'spoolWritable'].every(name => result.checks?.[name] === true)
+    } catch {}
+  }
+  const result = { ...cli, ready, canResolveTraceId: ready }
+  piRuntimeProbeCache.clear()
+  piRuntimeProbeCache.set(key, { result, checkedAt: Date.now() })
+  return withModels(result)
+}
+
+function probePiModelCatalog(executable, timeoutMs) {
+  return new Promise((resolve) => {
+    let child
+    let timer
+    let settled = false
+    let failure = null
+    let stdout = ''
+    let outputBytes = 0
+    const finish = (error, models = []) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      piModelProbeChildren.delete(child)
+      resolve({ error, models })
+    }
+    const stop = (error) => {
+      failure ||= error
+      signalProcessTree(child, 'SIGKILL')
+    }
+    try {
+      const cwd = piRuntimePaths().home
+      const launch = buildAgentProcessLaunch('pi-agent', executable, {
+        args: ['--no-approve', '--list-models'], stdin: null,
+      }, cwd)
+      child = spawn(launch.executable, launch.args, {
+        cwd, stdio: launch.stdio, detached: process.platform !== 'win32',
+        env: { ...process.env, NO_COLOR: '1' },
+      })
+      piModelProbeChildren.add(child)
+      timer = setTimeout(() => stop('TIMEOUT'), timeoutMs)
+      for (const index of [launch.stdoutIndex, launch.stderrIndex]) {
+        child.stdio[index].setEncoding('utf8')
+        child.stdio[index].on('data', (chunk) => {
+          outputBytes += Buffer.byteLength(chunk)
+          if (outputBytes > 1024 * 1024) stop('OUTPUT_LIMIT')
+          if (!failure && index === launch.stdoutIndex) stdout += chunk
+        })
+      }
+      child.on('error', () => finish('SPAWN_FAILED'))
+      child.on('close', (code, signal) => {
+        if (failure || code !== 0 || signal) return finish(failure || 'EXIT_NONZERO')
+        const models = []
+        for (const line of stdout.split('\n')) {
+          const row = /^(\S+)\s+(\S+)\s+[\d.KM]+\s+[\d.KM]+\s+(?:yes|no)\s+(?:yes|no)\s*$/.exec(line.trim())
+          if (row) models.push(`${row[1]}/${row[2]}`)
+        }
+        if (!models.length && !/no (?:available )?models(?: available)?/i.test(stdout)) return finish('INVALID_OUTPUT')
+        finish(null, [...new Set(models)])
+      })
+    } catch {
+      if (child) stop('SPAWN_FAILED')
+      finish('SPAWN_FAILED')
+    }
+  })
+}
+
+async function refreshPiModelCatalog({ force = false, timeoutMs = PI_MODEL_PROBE_TIMEOUT_MS } = {}) {
+  const executable = which('pi')
+  if (!executable || !probePiRuntime(executable).ready) return { models: [], error: 'RUNTIME_UNAVAILABLE' }
+  const key = piRuntimeProbeKey(executable)
+  if (piModelProbeInFlight.has(key)) return piModelProbeInFlight.get(key)
+  const cached = piModelProbeCache.get(key)
+  if (!force && cached && Date.now() < cached.nextRefreshAt) return cached
+  const pending = (async () => {
+    const started = Date.now()
+    const probe = await probePiModelCatalog(executable, timeoutMs)
+    const result = {
+      models: probe.error ? cached?.models || [] : probe.models,
+      error: probe.error,
+      nextRefreshAt: Date.now() + (probe.error ? PI_MODEL_PROBE_RETRY_MS : PI_RUNTIME_PROBE_CACHE_MS),
+    }
+    if (piRuntimeProbeKey(executable) === key) {
+      piModelProbeCache.clear()
+      piModelProbeCache.set(key, result)
+      const status = probe.error ? `failed=${probe.error} retryMs=${PI_MODEL_PROBE_RETRY_MS}` : 'ok'
+      log(`Pi model catalog: ${status} models=${result.models.length} elapsedMs=${Date.now() - started}`)
+    }
+    return result
+  })()
+  piModelProbeInFlight.set(key, pending)
+  try { return await pending } finally { piModelProbeInFlight.delete(key) }
 }
 
 function capabilityDiscoveryFingerprint() {
@@ -290,6 +478,12 @@ function capabilityDiscoveryFingerprint() {
     path.join(xdgConfigRoot, 'xiaoo', 'config.toml'),
     path.join(insightDataRoot, 'xiaoo-trace-collector', 'plugin.json'),
     which('xiaoo') || path.join(insightDataRoot, 'bin', 'xiaoo'),
+    which('pi') || path.join(insightDataRoot, 'bin', 'pi'),
+    piRuntimePaths().settings,
+    path.join(piRuntimePaths().agentDir, 'models.json'),
+    path.join(piRuntimePaths().agentDir, 'auth.json'),
+    piRuntimePaths().packageDir,
+    piRuntimePaths().config,
   ]) visit(target)
   return createHash('sha256').update(parts.join('\n')).digest('hex')
 }
@@ -545,6 +739,15 @@ function normalizeModelIds(models) {
     : []
 }
 
+function mergePiRuntimeCapability(platforms, runtime) {
+  const capability = {
+    id: 'pi-agent', version: runtime.version, models: runtime.models || [], agents: ['pi-agent'],
+    runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId },
+    actions: ['RUN_EXPERIMENT_CASE'],
+  }
+  return [...platforms.filter(platform => platform.id !== 'pi-agent'), capability]
+}
+
 function buildCapabilities(cfg, opts) {
   const fi = getProbe(cfg, opts)
   const runtimeByPlatform = new Map()
@@ -554,7 +757,7 @@ function buildCapabilities(cfg, opts) {
     }
     return runtimeByPlatform.get(id)
   }
-  const platforms = Object.entries(fi.platforms || {}).map(([id, info]) => {
+  let platforms = Object.entries(fi.platforms || {}).map(([id, info]) => {
     const runtime = runtimeFor(id)
     return {
       id,
@@ -582,6 +785,9 @@ function buildCapabilities(cfg, opts) {
         })
       }
     }
+  }
+  if (which('pi')) {
+    platforms = mergePiRuntimeCapability(platforms, runtimeFor('pi-agent'))
   }
   const components = {
     clientVersion: AGENT_VERSION,
@@ -1141,6 +1347,50 @@ function inspectXiaooRunEvent(line) {
   }
 }
 
+function createPiEventInspector(invocation) {
+  let sessionSeen = false
+  let pendingError = null
+  let settled = false
+  return (line, final = false) => {
+    let event
+    try { event = JSON.parse(String(line || '').trim()) } catch { event = null }
+    const type = event?.type
+    if (type === 'session') {
+      if (event.id !== invocation.sessionId) {
+        return { failureCode: 'TRACE_ID_MISMATCH', error: 'Pi 返回的 Session ID 与本次执行不一致' }
+      }
+      sessionSeen = true
+    }
+    const message = event?.message
+    if (type === 'message_end' && message?.role === 'assistant') {
+      pendingError = ['error', 'aborted'].includes(message.stopReason)
+        ? `Pi model: ${message.errorMessage || message.stopReason}` : null
+    }
+    if (type === 'auto_retry_end' && event.success === false) pendingError = String(event.error || pendingError || 'Pi retry exhausted')
+    if (type === 'error') pendingError = extractStructuredAgentError(line) || 'Pi runtime error'
+    if (type === 'agent_settled') settled = true
+    const delta = event?.assistantMessageEvent
+    const modelActivity = (type === 'message_update'
+      && ((['text_delta', 'thinking_delta', 'toolcall_delta'].includes(delta?.type) && Boolean(delta.delta))
+        || delta?.type === 'toolcall_start'))
+      || (type === 'message_end' && message?.role === 'assistant'
+        && Array.isArray(message.content) && message.content.some(part =>
+          (part.type === 'text' && Boolean(part.text)) || (part.type === 'thinking' && Boolean(part.thinking))
+          || part.type === 'toolCall'))
+      || ['tool_execution_start', 'tool_execution_end'].includes(type)
+    return {
+      type, modelActivity,
+      traceId: sessionSeen ? `${invocation.sessionId}__task0` : null,
+      error: (settled || final) ? pendingError : null,
+      idle: settled,
+      deferFailureUntilExit: settled,
+      ...(final && !settled && !pendingError ? {
+        failureCode: 'AGENT_INCOMPLETE', error: 'Pi 进程退出前未收到 agent_settled',
+      } : {}),
+    }
+  }
+}
+
 const runtimeAdapters = {
   opencode: {
     inspectEvent: inspectOpencodeRunEvent,
@@ -1150,10 +1400,21 @@ const runtimeAdapters = {
     firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
   },
   xiaoo: {
+    useLoginShell: true,
     inspectEvent: inspectXiaooRunEvent,
     buildInvocation: buildXiaooInvocation,
     probe: probeXiaooRuntime,
     noOutputCode: 'AGENT_NO_OUTPUT',
+  },
+  'pi-agent': {
+    executableName: 'pi',
+    useLoginShell: true,
+    createEventInspector: createPiEventInspector,
+    requireReady: true,
+    buildInvocation: buildPiInvocation,
+    probe: probePiRuntime,
+    noOutputCode: 'AGENT_NO_OUTPUT',
+    firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
   },
 }
 
@@ -1180,6 +1441,7 @@ function classifyAgentExitFailure({ platform, exitCode, signal, diagnostic, stru
 
   if (
     strictModelSelectionFailure.test(normalized)
+    || (platform === 'pi-agent' && /Model "[^"]+" not found\./.test(normalized))
     || (structured && structuredModelSelectionFailure.test(normalized))
     || (modelContext.test(normalized) && authenticationFailure.test(normalized))
   ) {
@@ -1209,11 +1471,14 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   const input = String(payload.input || '')
   if (!platform || !agent || !input) throw new Error('platform、agent 与 input 必填')
 
-  const executable = which(platform)
+  const executable = which(runtime?.executableName || platform)
   if (!executable) {
     const err = new Error(`平台可执行文件不可用: ${platform}`)
     err.code = 'PLATFORM_NOT_AVAILABLE'
     throw err
+  }
+  if (runtime?.requireReady && !runtime.probe(executable).ready) {
+    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
   }
 
   const cwd = payload.cwd ? path.resolve(String(payload.cwd)) : cfg.workspaceBase
@@ -1236,6 +1501,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     correlation,
   })
   const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
+  const inspectEvent = runtime?.createEventInspector?.(invocation) || runtime?.inspectEvent
   const timeoutMs = Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
   const configuredFirstResponseSeconds = payload.firstModelResponseTimeoutSeconds === null
     || payload.firstModelResponseTimeoutSeconds === undefined
@@ -1312,10 +1578,10 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
       hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
     }
-    const consumeStdoutLine = (line) => {
-      const event = runtime?.inspectEvent(line)
+    const consumeStdoutLine = (line, final = false) => {
+      const event = inspectEvent?.(line, final)
       captureTraceId(runtime ? event?.traceId : extractTraceIdFromJsonLine(line))
-      const structuredError = event?.error || extractStructuredAgentError(line)
+      const structuredError = event?.error || (!runtime?.createEventInspector && extractStructuredAgentError(line))
       if (structuredError) structuredErrors.push(structuredError)
       if (!runtime || !event) return
       if (event.modelActivity) observeModelActivity()
@@ -1327,11 +1593,11 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
           diagnostic: event.error,
           structured: true,
         })
-        const code = classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR'
+        const code = event.failureCode || (classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR')
         const message = classified.code === 'MODEL_UNAVAILABLE'
           ? classified.message
           : `${platform} 会话报告模型错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
-        if (settled) {
+        if (settled || event.deferFailureUntilExit) {
           if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
         } else {
           terminateForEarlyFailure(code, message)
@@ -1339,13 +1605,15 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       } else if (event.idle && !modelActivityObserved) {
         const code = runtime.noOutputCode
         const message = `${platform} 会话已结束，但未观察到任何模型输出或工具调用`
-        if (settled) {
+        if (settled || event.deferFailureUntilExit) {
           if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
         } else {
           terminateForEarlyFailure(code, message)
         }
       }
     }
+    child.stdio[launch.stdoutIndex].setEncoding('utf8')
+    child.stdio[launch.stderrIndex].setEncoding('utf8')
     child.stdio[launch.stdoutIndex].on('data', (c) => {
       stdoutBuffer += String(c)
       const lines = stdoutBuffer.split(/\r?\n/)
@@ -1354,7 +1622,9 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         consumeStdoutLine(line)
       }
       if (structuredErrors.length > 20) structuredErrors.splice(0, structuredErrors.length - 20)
-      captureTraceId(runtime ? runtime.inspectEvent(stdoutBuffer)?.traceId : extractTraceIdFromJsonLine(stdoutBuffer))
+      if (!runtime?.createEventInspector) {
+        captureTraceId(runtime ? inspectEvent(stdoutBuffer)?.traceId : extractTraceIdFromJsonLine(stdoutBuffer))
+      }
       if (stdoutBuffer.length > 1024 * 1024) stdoutBuffer = stdoutBuffer.slice(-1024 * 1024)
     })
     child.stdio[launch.stderrIndex].on('data', (c) => {
@@ -1374,6 +1644,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       clearTimers()
       if (reliabilityChild === child) reliabilityChild = null
       consumeStdoutLine(stdoutBuffer)
+      if (runtime?.createEventInspector && code === 0 && !timedOut && !earlyFailure && !stdinError) consumeStdoutLine('', true)
       await waitForTraceReport()
       const finishedAt = new Date().toISOString()
       const runFacts = {
@@ -1482,20 +1753,25 @@ function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
     stdoutIndex: 1,
     stderrIndex: 2,
   }
-  if (platform !== 'xiaoo' || !['launchd', 'systemd'].includes(process.env.AGENT_INSIGHT_SUPERVISOR)) {
+  if (!runtimeAdapters[platform]?.useLoginShell || !['launchd', 'systemd'].includes(process.env.AGENT_INSIGHT_SUPERVISOR)) {
     return direct
   }
   const shell = process.env.SHELL || os.userInfo().shell || '/bin/sh'
   const shellName = path.basename(shell)
   if (!path.isAbsolute(shell) || !['zsh', 'bash', 'sh', 'dash', 'ksh'].includes(shellName)) {
-    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'xiaoo 后台执行需要兼容 POSIX 的用户 shell（如 bash 或 zsh）')
+    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', `${platform} 后台执行需要兼容 POSIX 的用户 shell（如 bash 或 zsh）`)
   }
-  // Separate pipes keep shell startup output (including possible credentials) out of Trace and diagnostics.
+  const bashLogin = shellName === 'bash' || (shellName === 'sh' && process.platform === 'darwin')
+  const redirect = bashLogin ? 'exec 1>&20 2>&21 20>&- 21>&-' : 'exec 1>&3 2>&4 3>&- 4>&-'
+  const args = ['-lic', `${redirect} || exit; cd -- "$1" && shift && exec "$@"`,
+    `agent-insight-${platform}`, cwd, executable, ...invocation.args]
+  // Bash login shells close fd 3–19; move the private pipes before loading profiles.
+  if (bashLogin) args.unshift('--noprofile', '--norc', '-ic',
+    'exec 20>&3 21>&4 3>&- 4>&- || exit; exec "$@"', `agent-insight-${platform}-bootstrap`, shell)
   return {
     executable: shell,
-    args: ['-lic', 'exec 1>&3 2>&4; exec 3>&- 4>&-; cd -- "$1" && shift && exec "$@"',
-      'agent-insight-xiaoo', cwd, executable, ...invocation.args],
-    stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
+    args,
+    stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'ignore', 'ignore', 'pipe', 'pipe'],
     stdoutIndex: 3,
     stderrIndex: 4,
   }
@@ -1566,6 +1842,17 @@ function buildXiaooInvocation(executable, input) {
   return { args, stdin: null }
 }
 
+function buildPiInvocation(executable, input) {
+  if (input.agent !== 'pi-agent') throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'Pi 实验执行只支持根 Agent pi-agent')
+  if (!inspectPiCli(executable).supported) throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'Pi CLI 版本或参数不支持实验执行')
+  // --session-id resumes existing sessions; every launch, including a redelivery, must be fresh.
+  const sessionId = `agent-insight-${randomBytes(16).toString('hex')}`
+  const args = ['--mode', 'json', '--session-id', sessionId, '--no-approve', '--print']
+  if (input.correlation?.caseRunId) args.push('--name', String(input.correlation.caseRunId))
+  if (input.model) args.push('--model', input.model)
+  return { args, stdin: input.input, sessionId }
+}
+
 function traceIdFromJson(value, depth = 0) {
   if (!value || depth > 8) return null
   if (Array.isArray(value)) {
@@ -1625,6 +1912,7 @@ async function reportCapabilities(cfg, opts) {
   log(
     `capabilities reported: platforms=${capabilities.platforms.map((p) => p.id).join(',') || 'none'}` +
       ` agents=${capabilities.platforms.map((p) => `${p.id}:${p.agents?.length || 0}`).join(',') || 'none'}` +
+      ` models=${capabilities.platforms.map((p) => `${p.id}:${p.models?.length || 0}`).join(',') || 'none'}` +
       ` fi=${capabilities.faultInjection.ready}`,
   )
   return capabilities
@@ -1638,7 +1926,8 @@ async function refreshCapabilityReports(cfg, { force = false } = {}) {
   if (!force && fingerprint === lastCapabilityFingerprint) return false
   if (capabilityRefreshInFlight) return capabilityRefreshInFlight
   capabilityRefreshInFlight = (async () => {
-    cacheSuccessfulProbe(await probeFaultInjectionIsolated(cfg))
+    const [fi] = await Promise.all([probeFaultInjectionIsolated(cfg), refreshPiModelCatalog()])
+    cacheSuccessfulProbe(fi)
     await reportCapabilities(cfg)
     await sendFiHeartbeat(cfg)
     lastCapabilityFingerprint = fingerprint
@@ -2054,6 +2343,7 @@ async function fiLoop(cfg) {
 }
 
 function shutdown() {
+  for (const child of piModelProbeChildren) signalProcessTree(child, 'SIGKILL')
   if (reliabilityChild) signalProcessTree(reliabilityChild, 'SIGKILL')
   for (const runId of activeChildren.keys()) killRun(runId)
   benchmarkExecutor?.close().catch(() => {})
@@ -2071,6 +2361,7 @@ module.exports = {
   withInventoryProbeSandbox,
   buildFiInventory,
   buildCapabilities,
+  mergePiRuntimeCapability,
   benchmarkAgentPlatformsFromCapabilities,
   buildExperimentCaseInvocation,
   runExperimentCase,
@@ -2084,7 +2375,10 @@ module.exports = {
   extractStructuredAgentError,
   inspectOpencodeRunEvent,
   inspectXiaooRunEvent,
+  createPiEventInspector,
   probeExperimentRuntime,
+  refreshPiModelCatalog,
+  PI_MODEL_PROBE_TIMEOUT_MS,
   sanitizeAgentDiagnostic,
   classifyAgentExitFailure,
   buildCollectorArgs,

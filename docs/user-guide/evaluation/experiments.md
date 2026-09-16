@@ -85,6 +85,20 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 - 已选择运行主机 IP 和该主机上报的可用模型。
 - 至少勾选一个数据集 Case。
 
+Pi Agent 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark 实验。先按[Pi 接入说明](../settings/access-control.md#流程四接入-pi-agent)安装并注册现有 Trace Collector，更新并重启 Reliability Client，再选择平台 `pi-agent`、根 Agent `pi-agent` 和运行主机。仅安装 `pi` CLI 不会开放实验能力；客户端还会检查 CLI 版本与参数、Collector 注册、启用状态、上传配置和 spool 可写性。Pi 实验能力独立于故障注入，不需要 Pi FI 组件，也不将 SubAgent profile 作为可启动目标。
+
+Pi 模型配置仍读取运行用户的 `~/.pi/agent/settings.json`（默认 provider/model）、`models.json`（自定义模型）、`auth.json`（模型凭据）以及 provider 环境变量；设置 `PI_CODING_AGENT_DIR` 时使用该目录。模型列表由 `pi --no-approve --list-models` 发现，完整展示 Pi 在实验运行环境下列出的候选模型，标识为完整 `provider/model`；不增加白名单、不验证模型密钥有效性、余额或模型权限，也不逐个发起模型调用。发现失败时仍可选“平台默认”。
+
+模型发现和实际执行共用同一启动方式：launchd/systemd 托管时按用户配置的 shell 加载登录交互环境，兼容 macOS/Linux 的 bash、zsh 等受支持 shell，不固定读取 `.zshrc`，不另外保存模型密钥。bash 由登录配置决定是否加载 `.bashrc`，zsh 按自身规则读取启动文件。仅在某个终端临时 export 的变量不会自动进入后台服务。CLI/模型探测按文件指纹缓存，Pi 配置修改触发下次能力刷新；修改 shell 环境或安装客户端后请重启客户端并刷新页面。
+
+各平台共用的“运行模型”选择器支持按供应商、模型名称和完整 ID 搜索，采用大小写不敏感的字面包含匹配：输入内容必须连续出现在名称或 ID 中，例如 `deep` 会命中 DeepSeek，但不会命中字母分散在不同位置的模型。每个模型在列表中只显示一行友好名称，完整 ID 仍参与搜索、作为悬停提示并原样提交；相同 ID 会自动去重。搜索只筛选候选项，不改变已选模型；清空搜索恢复完整列表，方向键切换、Enter 选择、Esc 关闭，无匹配时显示提示。模型列表为空时仍保留“平台默认”；列表中的候选模型不代表平台保证调用成功，实际模型错误在实验执行时报告。
+
+Pi 模型目录在后台异步发现，最多等待 20 秒，期间客户端继续发送心跳。成功列表缓存 5 分钟；探测失败会保留同一配置下上次成功的列表，并在 30 秒后的能力刷新中重试。初次启动尚未发现模型时可能暂时只有“平台默认”，能力上报后刷新页面即可。如果持续只有默认项，检查客户端日志中的 `Pi model catalog`：`ok models=0` 表示 Pi 自身列出的目录为空，`failed=TIMEOUT` 则表示探测超时，不能据此判断没有模型。
+
+Pi 每次执行使用全新 Session，通过 stdin 接收 Case 文本；临时模型错误允许 Pi 自行重试，最终错误、无输出、超时或缺失完成事件会明确失败。实验绑定的是 Collector 的 `<session>__task0`，不是 Pi 原始 Session ID 或 OTLP span 哈希。进程退出不代表 Trace 已入库，平台仍等待既有 Collector 上传；本地 self-check 不验证远端网络和平台密钥有效性。Collector 未就绪时修复安装/配置后再运行，Trace 入库超时时检查上传端点、密钥及 spool。
+
+实验使用 `--no-approve`，忽略 Case 仓库中的 `.pi` 项目资源与项目 Skill，保留全局 Collector/Skill。需要评测的 Skill 请安装到受控的全局位置；不要依赖 Case 中的 `.pi/extensions` 或项目模型覆盖。此选项只是项目信任策略，不是工具执行沙箱。
+
 xiaoo 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark 实验。先使用现有 curl 安装流程完成客户端与 xiaoo Trace Collector 安装；更新客户端后重启服务，在 Agent 列表选择 `defaultagent · xiaoo · 可执行 N 台`，再选择对应运行主机。历史 Trace 中的 `xiaoo` 名称本身不表示该机器已具备实验执行能力。平台与运行主机可以分开部署，继续使用客户端安装时配置的平台地址。
 
 客户端要求 xiaoo CLI 支持 JSON 输出、Agent 和标题参数；模型 `provider/model` 会拆为 xiaoo 的 provider 和 model 参数。执行错误、模型鉴权失败、无输出和超时会回写为明确失败，原有 Trace Collector 继续负责上传轨迹。若 CLI 返回 HTTP 401，请修复运行主机上的模型鉴权配置后重跑 Case。

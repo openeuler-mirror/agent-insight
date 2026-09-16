@@ -278,6 +278,24 @@ xiaoo 只从 `session_start` 事件认领本次 Session，避免误取工具输�
 
 能力发现探测 CLI 的 JSON/Agent/title 支持以及 Collector 安装注册；帮助命令探测按二进制文件指纹缓存最多30秒，失败不永久缓存。Benchmark runtime 注册表在常驻客户端启动时建立，安装或更新后需重启客户端。Collector、安装入口、OTLP 接口与官方评测逻辑继续复用。xiaoo 错误事件复用 `MODEL_UNAVAILABLE` / `MODEL_ERROR` 分类，无模型活动返回 `AGENT_NO_OUTPUT`，超时和进程失败沿用通用错误码。xiaoo 默认仅使用实验总超时：当前版本的增量模型事件尚未完成真实验证，不能将最终 `response` 未到当作首模型无响应。显式传入 `firstModelResponseTimeoutSeconds` 时仍可复用首响应计时；OpenCode 默认90秒保护不变。
 
+### Pi Agent 实验 Runtime Adapter
+
+`runtimeAdapters['pi-agent']` 将平台 ID 与可执行名 `pi` 分开，复用 `runExperimentCase()`、登录 shell、首响应/总超时、进程组终止、控制回写以及 Benchmark workspace/Git/patch 链路。不增加 API、数据表、Pi FI 支持或 stdout-to-OTLP 上传器；已有 Extension Collector 与 OTLP Adapter 保持不变。
+
+启动参数为 `pi --mode json --session-id <random-launch-id> --no-approve --print [--name <caseRunId>] [--model <provider/model>]`，Prompt 通过 stdin 传入，避免 Pi 将 `@文件` / `--参数` 解释为 CLI 语法。`--session-id` 会续开已有 Session，因此每次 launch 都生成随机 ID，包括重复下发和同一个 Case 的重试。模型凭据继续由 Pi 原生配置解析；`--no-approve` 禁止项目资源自动加载，但不构成工具执行沙箱。
+
+Pi 使用每次运行独立的 `createEventInspector`，只消费完整 JSON 行（含退出时无换行的最后一行），stdout/stderr 流启用 UTF-8 解码。只有顶层 `session.id` 与本次 ID 一致才回报 `<base>__task0`，对应 Collector `before_agent_start` 派生的 task Session ID 和 `Execution.taskId`，不采信工具返回的嵌套 Session。assistant delta / 有内容的最终 message / 工具事件计入模型活动；用户消息及重试通知不计入。临时错误暂存，成功 assistant 消息清除旧错误，等待 `agent_settled` 后才判断最终结果，并等待进程退出让 Collector 完成收尾上传。新增 `TRACE_ID_MISMATCH` / `AGENT_INCOMPLETE` 分别表示错 Session 和退出前缺少完成事件；模型、无输出、超时错误沿用共享分类。默认复用 OpenCode 的 90 秒首响应保护，收到模型活动后仍由 Case 总超时约束；可显式覆盖首响应时间。
+
+能力探测要求 Pi 至少 0.82.1 且实际支持必需参数；检查标准安装目录的 manifest/extension、全局 `settings.json.packages` 注册与有效 Collector config，并在独立 Node 进程调用现有 `selfCheck()`，逐项确认 `configured/endpoint/spoolWritable`。这是本地检查，不验证远端鉴权。包过滤采用保守规则：支持标准安装产生的路径注册和单一显式 extension；关闭 autoload 或其他无法确认的过滤形式不声明 ready。`PI_CODING_AGENT_DIR`、`AGENT_INSIGHT_USER_HOME` 与 `AGENT_INSIGHT_PI_CONFIG` 遵循各自原有语义。Pi 能力在 FI inventory 非空时仍独立合并；不就绪时同时关闭 `returnsTraceId` 与 runtime ready，实际启动前再次检查。
+
+CLI/Collector 就绪检查保持 3 秒单命令超时及 5 分钟缓存，文件指纹变化即时失效；30 秒能力扫描只检查 settings/models/auth、Collector 与可执行文件，不扫描 Pi 历史 Sessions。`probePiRuntime()` 不再同步调用模型目录，只读取就绪信息和已缓存目录。`refreshCapabilityReports()` 并行等待隔离 FI inventory 与 `refreshPiModelCatalog()`，完成后才上报能力。模型目录通过异步 `spawn` 执行 `--no-approve --list-models`，允许 20 秒，不阻塞主进程心跳；输出合计限制 1 MiB，超时/输出超限杀进程组，服务退出也清理未完成探测。同一配置的并发探测合并为一次；成功缓存 5 分钟，失败保留同指纹上次成功列表并在 30 秒后允许重试，无旧列表时保留“平台默认”，配置变更不沿用旧目录。有效空目录与超时、异常退出、格式错误明确区分，日志 `Pi model catalog` 只记录固定错误码、数量、耗时和重试周期，不记录原始 stdout/stderr 或密钥。模型发现不影响 Collector 就绪判定。
+
+Benchmark runtime 列表仍在客户端启动时固定，安装或修复后重启客户端。`test/reliability-client-pi.test.ts` 覆盖慢于 3 秒时仍可发现模型且定时器持续运行、并发去重、失败重试与成功缓存保留，以及隔离启动、重试、能力合并及真实 Collector→normalize→aggregate 契约；设置 `PI_EXPERIMENT_TEST_CLI=/absolute/path/to/pi` 可额外运行隔离本地 HTTP provider + 真实 Pi/Collector 的测试，不使用真实模型凭据。
+
+模型目录探测也通过 `buildAgentProcessLaunch()` 启动，复用执行时的用户 shell、环境与启动输出隔离，并从 `child.stdio[stdoutIndex]` 而非固定 stdout 读取结果。bash 交互登录会关闭 fd 3–19，因此无 profile 的引导 shell 先将私有管道移至 fd 20/21，再 exec 登录 shell；实际 CLI 启动前还原 stdout/stderr 并关闭额外描述符，进程组管理不变。缓存 key 包含 supervisor、shell、HOME/ZDOTDIR；shell 配置变更需要重启服务。客户端完整接受 Pi 列出的模型，不做额外白名单、凭据有效性/余额/权限探测或逐模型调用。
+
+实验向导通过 `RuntimeModelSelect` 为 Pi、OpenCode、xiaoo 等平台提供同一个可搜索模型选择器，复用 `ui/popover`、`ui/input` 和 `ui/button`；`normalizeRuntimeModels()` 按完整 ID 去重并保留首个非空友好名称，每个选项仅渲染一行，ID 保留在搜索索引、`title` 和提交值中；`filterRuntimeModels()` 分别对名称及完整 ID 做大小写不敏感的字面 `includes` 匹配，不再使用跨字符子序列或多关键词拆分。搜索不修改 `genModel`，选择仍提交原始完整 ID，主机切换重置搜索状态，目录为空仍提供空 ID 的“平台默认”，不改变实验 API 契约。`test/runtime-model-search.test.ts` 覆盖去重、单行展示、大小写与连续子串边界、400+ 模型不截断和选中值渲染。
+
 ## 后端流水线：Skill 生成与优化
 ```mermaid
 flowchart TD
