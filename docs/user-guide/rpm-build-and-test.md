@@ -5,7 +5,7 @@ description: "从当前 Git commit 一键构建 Agent Insight RPM，并完成验
 
 # RPM 构建与测试
 
-本页是维护者打包和兼容性测试资料。830 服务端对外仅通过 Docker 镜像交付，RPM 不属于本次交付安装选项；用户请按 [Docker 部署服务端](./quickstart#docker-部署服务端830-转测交付) 安装。
+本页是维护者打包和兼容性测试资料。830 服务端对外仅通过 Docker 镜像交付，RPM 不属于本次交付安装选项；用户请按 [830 平台安装说明](./quickstart) 安装。
 
 本指南适用于在 openEuler 等 RPM 系 Linux 构建机上，将 Agent Insight 当前 Git commit 构建为二进制 RPM 和 SRPM，并在测试机或相似系统环境中完成安装验证。
 

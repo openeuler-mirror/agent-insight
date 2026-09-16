@@ -174,5 +174,5 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 - 用 **评测中心** 量化 Skill 的真实效果；
 - 用 **Skills 优化** 基于证据持续迭代。
 
-接下来，把这套闭环换成你自己的 Agent 与数据即可：先在 [5 分钟上手](/user-guide/quickstart)
+接下来，把这套闭环换成你自己的 Agent 与数据即可：先在 [830 平台安装说明](/user-guide/quickstart)
 里接入真实 Agent，再用 [评测中心](/user-guide/evaluation/index) 建立你自己的数据集与评测任务。

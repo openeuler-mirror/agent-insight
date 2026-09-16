@@ -194,7 +194,7 @@ Agent 管理页的价值之一，就是让你从资产视角看清当前系统�
 
 ## 下一步
 
-- 想继续完成接入： [5 分钟上手](./quickstart)
+- 想继续完成接入： [830 平台安装说明](./quickstart)
 - 想复制接入命令： [安装指导](./settings/access-control)
 - 想看接入后的真实链路： [运行观测](./observability/index)
 - 想先理解主 Agent / 子 Agent 等术语： [核心概念](./concepts)

@@ -65,50 +65,35 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 
 ### 1. 安装服务端
 
-**830 转测版本的服务端对外仅通过 Docker 镜像交付。** 请按交付清单选择固定镜像名、版本或摘要、目标架构。宿主机需有 Docker Engine 和可用的 3000 端口；无需另外安装服务端 Node.js/npm 包。
+**830 转测版本的服务端对外仅通过 Linux Docker 镜像交付。** 按交付清单确认镜像包、固定标签、CPU 架构、源码提交和 SHA-256。
 
 安装顺序：
 
-1. 在线拉取交付清单中的固定镜像，或校验离线包 SHA256 后导入。
-2. 查询交付镜像默认运行用户 uid/gid，准备 `/opt/agent-insight` 持久化目录及权限。
-3. 将其挂载到容器 `/data/agent-insight` 并启动容器。
-4. 检查容器、日志、健康状态，再访问看板。
+1. 校验离线镜像包，只有校验通过才执行 `docker load`。
+2. 核对镜像架构、源码提交和运行用户 uid/gid。
+3. 准备宿主机 `/opt/agent-insight`，以 `750` 权限挂载到容器 `/data/agent-insight`。
+4. 启动容器，检查配置、数据库、日志和页面访问。
 
-完整的可复制命令、离线校验、权限准备、启动/停止/升级及安装产物说明见 [5 分钟上手 · Docker 部署服务端](docs/user-guide/quickstart.md#docker-部署服务端830-转测交付)。
+完整命令及安装产物、配置检查、备份升级说明见 [830 平台安装说明](docs/user-guide/quickstart.md)。宿主机无需安装服务端 Node.js、npm 或源码。
 
-默认 SQLite 数据库在宿主机 `/opt/agent-insight/data/witty_insight.db`，配置在 `/opt/agent-insight/.env`；保留挂载目录即可保留运行数据。服务日志通过 `docker logs agent-insight` 查看，预编译 standalone 服务位于镜像内。当前镜像使用 SQLite，设置非空 `DB_HOST` 会被入口脚本拒绝。
+默认配置为 `/opt/agent-insight/.env`，SQLite 数据库为 `/opt/agent-insight/data/witty_insight.db`，日志通过 `docker logs agent-insight` 查看。不要在本交付方式中设置 `DB_HOST`。
 
-源码挂载、npm 打包和 RPM 构建资料面向开发者维护，不属于本次对外交付安装选项；需要验证源码时参阅 [维护者源码模式](docs/user-guide/quickstart.md#6-维护者可选docker-源码挂载模式)。
+浏览器打开 `http://<服务器地址>:3000/trace`，使用个人邮箱登录。
 
-**访问看板**
+### 2. Linux 客户端接入
 
-浏览器打开 `http://localhost:3000`，使用个人邮箱登录即可。
+在已安装并运行 AcTrail、且官方 `otel-http` 插件可用的 Linux 主机上执行：
 
-<p align="center">
-  <img src="docs/images/login.png" alt="登录" />
-</p>
+1. 登录平台，进入 **配置 → 安装指导**。
+2. 确认当前账号和平台地址，复制页面生成的 **Linux curl** 命令。
+3. 在 AcTrail 所在 Linux 终端执行命令，配置上报插件。
+4. 在 AcTrail 中执行一次 Agent 任务，返回 **运行观测 → 链路追踪**，确认数据和详情。
 
-### 2. Agent 平台接入
+命令形态如下，实际地址和 API Key 以页面生成值为准：
 
-当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent-Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent-Insight 插件的具体安装与配置方式：
-
-1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的插件安装命令。
-   
-   <p align="center"><img src="docs/images/guide.png" alt="安装指导" /></p>
-
-2. 在目标 Agent 平台所在的服务器终端执行该安装命令，根据交互提示完成对应平台的插件安装配置。
-   
-   <p align="center"><img src="docs/images/guide-framework.png" alt="选择运行时" /></p>
-
-3. 验证接入配置：在 Agent 平台中触发一次测试任务（仍以 OpenCode 为例，执行任意基础命令）。
-   
-   ```bash
-   opencode run 'hello'
-   ```
-
-4. 登录 Agent-Insight 看板，进入 **链路追踪** 页面。若能观测到刚才执行的测试任务链路数据上报，即表明 Agent 平台已成功接入并正常工作。
-   
-   <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
+```bash
+curl -sSf "http://<平台地址>:3000/api/ingest/setup?key=<当前账号API_KEY>&yes=1&frameworks=actrail" | bash
+```
 
 ---
 
