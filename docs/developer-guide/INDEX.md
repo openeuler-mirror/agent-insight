@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `75039c678a206c1eb201d4ad64a2f476e2f5f0dd` (`75039c67`) |
+| Commit | `d308e5ec6a1f5dcedea8e809739a56ca8dbdfff9` (`d308e5ec`) |
 | Branch | `codex/830-issue-308-20260915` |
-| Date | 2026-09-16T15:49:48+08:00 |
+| Date | 2026-09-16T15:58:07+08:00 |
 | Author | gyctl |
-| Subject | `fix: 保留子Agent展开行为并增加悬停说明 (#308)` |
+| Subject | `fix: 对齐Trace展开说明与表头说明卡片 (#308)` |
 
-**如何更新：** `git diff 75039c67 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff d308e5ec HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
