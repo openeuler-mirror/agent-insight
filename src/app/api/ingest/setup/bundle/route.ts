@@ -5,6 +5,7 @@ import path from 'node:path'
 import { NextResponse } from 'next/server'
 
 import { resolveUser } from '@/lib/auth/auth'
+import { runtimePackageRoot } from '@/lib/runtime/package-root'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,16 +73,16 @@ export async function GET(req: Request) {
     )
   }
 
-  const root = process.cwd()
-  const present = entries.filter((rel) => fs.existsSync(path.join(root, rel)))
-  if (!present.length) {
+  const root = runtimePackageRoot()
+  const missing = entries.filter((rel) => !fs.existsSync(path.join(root, rel)))
+  if (missing.length) {
     return NextResponse.json(
-      { error: 'bundle_unavailable', detail: `no source files for "${name}" under ${root}` },
+      { error: 'bundle_unavailable', detail: `incomplete source files for "${name}"`, missing },
       { status: 503 },
     )
   }
 
-  const tar = spawn('tar', ['-czf', '-', ...TAR_EXCLUDES, ...present], {
+  const tar = spawn('tar', ['-czf', '-', ...TAR_EXCLUDES, ...entries], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
   })

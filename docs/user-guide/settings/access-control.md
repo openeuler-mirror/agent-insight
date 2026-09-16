@@ -125,6 +125,8 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 > 注册步骤默认安装当前 Insight 服务端随附的客户端版本，不会被执行命令目录中的旧项目副本覆盖；
 > 重跑命令会刷新注册与设备凭证，并按机器标识复用原有客户端记录。
 
+若安装时报「缺少执行器运行时」或「制品不完整」，需先由服务端部署方修复制品来源，再重跑客户端安装命令；反复重试同一份残缺安装包无法解决。通过 `scripts/start.sh` 部署的服务需更新代码并重新构建、启动，确保 bundle 从完整项目根目录读取。服务端缺少必需文件时，bundle 接口返回 503 和缺失清单，不再返回残缺压缩包。`Telemetry: READY` 仅表示 Trace 采集器就绪，不代表常驻客户端注册成功。
+
 Linux 会按实际权限与既有安装选择 systemd 层级：root 安装或检测到历史
 `/etc/systemd/system/agent-insight-client.service` 时使用系统级服务，普通用户新装使用
 `~/.config/systemd/user/agent-insight-client.service`。安装器会在刷新设备凭证前确认对应的
