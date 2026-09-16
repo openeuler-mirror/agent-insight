@@ -104,7 +104,20 @@ export async function prepareBenchmarkEvaluation(
       },
     }
   })
-  await adapter.validateSubmission({ task, artifacts: artifactReaders })
+  try {
+    await adapter.validateSubmission({ task, artifacts: artifactReaders })
+  } catch (error) {
+    if (error instanceof BenchmarkProtocolError) {
+      throw new BenchmarkProtocolError(
+        error.code,
+        error.message,
+        error.httpStatus,
+        error.retryable,
+        { ...error.details, phase: 'submission-validation' },
+      )
+    }
+    throw error
+  }
 
   const evaluationRunId = `veval_${randomUUID().replaceAll('-', '')}`
   const defaults = adapter.manifest.evaluation
@@ -240,11 +253,19 @@ export async function retryBenchmarkEvaluation(input: {
     orderBy: { createdAt: 'desc' },
     include: {
       evaluations: { orderBy: { attemptNo: 'desc' }, take: 1 },
-      artifacts: { where: { name: 'model.patch' }, take: 1 },
+      artifacts: { select: { name: true } },
     },
   })
-  if (!run?.artifacts.length || !['evaluated', 'evaluation_failed'].includes(run.status)) {
-    throw new BenchmarkProtocolError('BENCHMARK_PATCH_NOT_READY', '当前 Case 没有可复用的有效 model.patch', 409)
+  const requiredNames = run
+    ? getBenchmarkAdapter(run.adapterKey).manifest.requiredArtifacts.map((artifact) => artifact.name)
+    : []
+  const submittedNames = new Set(run?.artifacts.map((artifact: { name: string }) => artifact.name) || [])
+  if (
+    !run
+    || requiredNames.some((name) => !submittedNames.has(name))
+    || !['evaluated', 'evaluation_failed'].includes(run.status)
+  ) {
+    throw new BenchmarkProtocolError('BENCHMARK_SUBMISSION_NOT_READY', '当前 Case 没有可复用的有效提交物', 409)
   }
   if (run.evaluations[0]?.continuationStatus !== 'completed') {
     throw new BenchmarkProtocolError(

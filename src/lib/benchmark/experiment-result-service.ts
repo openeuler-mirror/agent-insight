@@ -10,6 +10,7 @@ import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src
 import { resolveAgentInsightDataPath } from '@/lib/env'
 import { prisma } from '@/lib/storage/prisma'
 import type { ExtendedPrismaClient } from '@/lib/storage/prisma-client'
+import { getBenchmarkAdapter } from './adapter-registry'
 
 const benchmarkPrisma = prisma as ExtendedPrismaClient
 
@@ -96,21 +97,14 @@ export async function getBenchmarkExperimentResult(input: {
     select: {
       id: true,
       status: true,
-      benchmarkBinding: {
-        select: { adapterKey: true, expectedCaseCount: true, runConfigJson: true },
-      },
+      benchmarkBinding: { select: { adapterKey: true, expectedCaseCount: true } },
     },
   })
   if (!experiment?.benchmarkBinding) {
     throw new BenchmarkProtocolError('BENCHMARK_EXPERIMENT_NOT_FOUND', 'Benchmark 实验不存在', 404)
   }
-  const runConfig = parseJson<Record<string, unknown>>(
-    experiment.benchmarkBinding.runConfigJson,
-    {},
-  )
-  const evaluatorKey = typeof runConfig.evaluatorKey === 'string' && runConfig.evaluatorKey.trim()
-    ? runConfig.evaluatorKey
-    : experiment.benchmarkBinding.adapterKey
+  const manifest = getBenchmarkAdapter(experiment.benchmarkBinding.adapterKey).manifest
+  const evaluatorKey = manifest.evaluation.evaluatorKey
   const evaluatorId = `benchmark:${evaluatorKey}`
   const runs = await benchmarkPrisma.benchmarkCaseRun.findMany({
     where: { experimentId: input.experimentId },
@@ -125,9 +119,14 @@ export async function getBenchmarkExperimentResult(input: {
       failureMessage: true,
       datasetCase: { select: { externalCaseId: true } },
       artifacts: {
-        where: { name: 'model.patch' },
-        take: 1,
-        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          mediaType: true,
+          sha256: true,
+          sizeBytes: true,
+        },
       },
       experimentCase: {
         select: {
@@ -213,19 +212,26 @@ export async function getBenchmarkExperimentResult(input: {
       execution: {
         runId: run.id,
         traceId: typeof runFacts.traceId === 'string' ? runFacts.traceId : null,
-        patchArtifactId: run.artifacts[0]?.id || null,
       },
+      submissions: run.artifacts.map((artifact) => ({
+        artifactId: artifact.id,
+        name: artifact.name,
+        mediaType: artifact.mediaType,
+        sha256: artifact.sha256,
+        sizeBytes: artifact.sizeBytes,
+        contentUrl: `/api/benchmark/v1/artifacts/${encodeURIComponent(artifact.id)}/content`,
+      })),
       evaluation: evaluation
         ? { evaluationId: evaluation.id, status: evaluation.status }
         : null,
-      evidence: (evaluation?.artifacts || []).map((artifact) => ({
+      evidenceArtifacts: (evaluation?.artifacts || []).map((artifact) => ({
         artifactId: artifact.id,
         name: artifact.name,
         kind: artifact.kind,
         mediaType: artifact.mediaType,
         sha256: artifact.sha256,
         sizeBytes: artifact.sizeBytes,
-        downloadUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(evaluation!.id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
+        contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(evaluation!.id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
       })),
       failure: run.failureCode
         ? { code: run.failureCode, message: run.failureMessage }
@@ -288,7 +294,12 @@ export async function getBenchmarkExperimentResult(input: {
   return {
     experimentId: experiment.id,
     status: experiment.status === 'done' ? 'completed' : experiment.status,
-    benchmark: { key: experiment.benchmarkBinding.adapterKey },
+    benchmark: {
+      key: manifest.adapterKey,
+      evaluatorKey: manifest.evaluation.evaluatorKey,
+      displayName: manifest.displayName,
+      presentation: manifest.presentation || null,
+    },
     progress: {
       total: expectedTotal,
       completed,

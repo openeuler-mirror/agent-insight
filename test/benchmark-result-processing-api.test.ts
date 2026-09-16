@@ -81,7 +81,22 @@ test('benchmark result counts only the latest run after a Case retry', async () 
     failureCode: null,
     failureMessage: null,
     datasetCase: { externalCaseId: 'fixture__case-1' },
-    artifacts: [],
+    artifacts: [
+      {
+        id: `submission-answer-${id}`,
+        name: 'answer.txt',
+        mediaType: 'text/plain',
+        sha256: `sha256:${'a'.repeat(64)}`,
+        sizeBytes: 6,
+      },
+      {
+        id: `submission-trace-${id}`,
+        name: 'trace.json',
+        mediaType: 'application/json',
+        sha256: `sha256:${'b'.repeat(64)}`,
+        sizeBytes: 12,
+      },
+    ],
     experimentCase: { id: 'case-1', results: [sharedResult] },
     evaluations: [{
       id: evaluationId,
@@ -122,6 +137,11 @@ test('benchmark result counts only the latest run after a Case retry', async () 
     assert.deepEqual(result.pagination, { page: 1, pageSize: 20, total: 1 })
     assert.equal(result.cases.length, 1)
     assert.equal(result.cases[0].execution.runId, 'retry-run')
+    assert.equal('patchArtifactId' in result.cases[0].execution, false)
+    assert.deepEqual(
+      result.cases[0].submissions.map((artifact) => artifact.name),
+      ['answer.txt', 'trace.json'],
+    )
     assert.equal(result.cases[0].evaluation?.evaluationId, 'retry-evaluation')
   } finally {
     Reflect.set(experimentDelegate, 'findFirst', originalFindExperiment)
@@ -353,7 +373,7 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
     })
     assert.equal(invalid.status, 422)
     const invalidBody = await invalid.json()
-    assert.equal(invalidBody.error.code, 'RAW_RESULT_SCHEMA_INVALID')
+    assert.equal(invalidBody.error.code, 'SWE_RAW_RESULT_INVALID')
     assert.equal(invalidBody.error.retryable, false)
     assert.equal(invalidBody.error.details.acceptedRawResult, true)
     const failedEvaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationIds[1] } })
@@ -382,12 +402,12 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
     }
 
     const evidenceResponse = await fetch(
-      `${origin}${partialBody.cases[0].evidence[0].downloadUrl}?user=${encodeURIComponent(dataset.user)}`,
+      `${origin}${partialBody.cases[0].evidenceArtifacts[0].contentUrl}?user=${encodeURIComponent(dataset.user)}`,
     )
     assert.equal(evidenceResponse.status, 200)
     assert.equal(await evidenceResponse.text(), '{"resolved":false}')
     const forbidden = await fetch(
-      `${origin}${partialBody.cases[0].evidence[0].downloadUrl}?user=not-the-owner`,
+      `${origin}${partialBody.cases[0].evidenceArtifacts[0].contentUrl}?user=not-the-owner`,
     )
     assert.equal(forbidden.status, 404)
   } finally {

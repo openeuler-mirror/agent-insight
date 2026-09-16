@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
-import type { DebugJob } from '../route';
+import type { DebugJob } from '@/lib/debug-job';
 
 export const dynamic = 'force-dynamic';
 

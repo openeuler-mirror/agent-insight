@@ -40,12 +40,19 @@ export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'bench
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
 
 export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type DatasetFieldDisplayType = 'text' | 'code' | 'number' | 'boolean';
+export type DatasetFieldFormat = 'plain' | 'percentage' | 'bytes' | 'duration-ms' | 'date-time';
 
 export interface DatasetField {
   id: string;
   key: string;
   label: string;
   type: DatasetFieldType;
+  path?: string;
+  displayType?: DatasetFieldDisplayType;
+  width?: number;
+  format?: DatasetFieldFormat;
+  truncate?: number;
   description?: string;
   system?: boolean;
 }
@@ -198,11 +205,16 @@ function normalizeValues(value: unknown): Record<string, unknown> {
 export function defaultDatasetFields(kind: DatasetKind): DatasetField[] {
   if (kind === 'benchmark') {
     return [
-      { id: 'input', key: 'input', label: '问题描述', type: 'text', system: true },
-      { id: 'instance_id', key: 'instance_id', label: 'Instance ID', type: 'text', system: true },
-      { id: 'repo', key: 'repo', label: '代码仓库', type: 'text', system: true },
-      { id: 'base_commit', key: 'base_commit', label: '基线提交', type: 'text', system: true },
-      { id: 'version', key: 'version', label: '版本', type: 'text', system: true },
+      { id: 'input', key: 'input', path: 'input', label: '输入', type: 'text', displayType: 'text', system: true },
+      {
+        id: 'externalCaseId',
+        key: 'externalCaseId',
+        path: 'externalCaseId',
+        label: 'Case ID',
+        type: 'text',
+        displayType: 'code',
+        system: true,
+      },
     ];
   }
   const fields: DatasetField[] = [
@@ -238,11 +250,26 @@ export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField
     const type: DatasetFieldType = ['number', 'boolean', 'json'].includes(rawType)
       ? rawType as DatasetFieldType
       : 'text';
+    const rawDisplayType = String(obj.displayType || '');
+    const displayType: DatasetFieldDisplayType | undefined = ['text', 'code', 'number', 'boolean'].includes(rawDisplayType)
+      ? rawDisplayType as DatasetFieldDisplayType
+      : undefined;
+    const rawFormat = String(obj.format || '');
+    const format: DatasetFieldFormat | undefined = ['plain', 'percentage', 'bytes', 'duration-ms', 'date-time'].includes(rawFormat)
+      ? rawFormat as DatasetFieldFormat
+      : undefined;
+    const width = Number(obj.width);
+    const truncate = Number(obj.truncate);
     return [{
       id: String(obj.id || key).trim() || key,
       key,
       label: String(obj.label || key).trim() || key,
       type,
+      path: String(obj.path || '').trim() || undefined,
+      displayType,
+      width: Number.isFinite(width) && width > 0 ? width : undefined,
+      format,
+      truncate: Number.isInteger(truncate) && truncate > 0 ? truncate : undefined,
       description: String(obj.description || '').trim() || undefined,
       system: Boolean(obj.system),
     }];

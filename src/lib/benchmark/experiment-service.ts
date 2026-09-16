@@ -5,7 +5,7 @@ import type { JsonValue } from '../../../packages/benchmark-protocol/src/contrac
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { prisma } from '@/lib/storage/prisma'
 
-import { getBenchmarkAdapter } from './adapter-registry'
+import { benchmarkEvaluatorId, getBenchmarkAdapter } from './adapter-registry'
 import { benchmarkDatasetOwners } from './dataset-ownership'
 import { assertBenchmarkExecutionTarget } from './execution-targets'
 
@@ -148,7 +148,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     timeoutSeconds,
   }
   const evaluatorIds = Array.from(new Set([
-    `benchmark:${dataset.adapterKey}`,
+    benchmarkEvaluatorId(dataset.adapterKey),
     ...(input.evaluatorIds || []).map(String).filter(Boolean),
   ]))
   const preparedCases = cases.map((datasetCase, ordinal) => {
@@ -177,6 +177,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
           agentEvalDatasetId: input.agentEvalDatasetId || dataset.agentEvalDatasetId,
           datasetContentHash: dataset.contentHash,
           adapterKey: dataset.adapterKey,
+          evaluatorKey: adapter.manifest.evaluation.evaluatorKey,
           clientId,
           evaluatorIds,
           traceSource: 'generate',
@@ -196,7 +197,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
       },
     })
     for (const row of preparedCases) {
-      const fallbackInput = row.publicPayload.problemStatement ?? row.publicPayload.input
+      const fallbackInput = row.publicPayload.input
       await tx.experimentCase.create({
         data: {
           id: row.experimentCaseId,

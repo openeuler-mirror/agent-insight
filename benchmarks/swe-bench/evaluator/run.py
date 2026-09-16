@@ -25,11 +25,19 @@ from result_policy import classify_harness_result
 
 
 class ControlledContainers:
-    def __init__(self, containers, evaluation_id: str, cpu: float, memory_mib: int):
+    def __init__(
+        self,
+        containers,
+        evaluation_id: str,
+        cpu: float,
+        memory_mib: int,
+        network_policy: str,
+    ):
         self._containers = containers
         self._evaluation_id = evaluation_id
         self._cpu = cpu
         self._memory_mib = memory_mib
+        self._network_policy = network_policy
 
     def create(self, *args, **kwargs):
         labels = dict(kwargs.pop("labels", {}) or {})
@@ -37,6 +45,8 @@ class ControlledContainers:
         kwargs["labels"] = labels
         kwargs["mem_limit"] = f"{self._memory_mib}m"
         kwargs["nano_cpus"] = int(self._cpu * 1_000_000_000)
+        if self._network_policy == "deny":
+            kwargs["network_disabled"] = True
         return self._containers.create(*args, **kwargs)
 
     def __getattr__(self, name):
@@ -44,12 +54,19 @@ class ControlledContainers:
 
 
 class ControlledDockerClient:
-    def __init__(self, client, evaluation_id: str, cpu: float, memory_mib: int):
+    def __init__(
+        self,
+        client,
+        evaluation_id: str,
+        cpu: float,
+        memory_mib: int,
+        network_policy: str,
+    ):
         self._client = client
         self.api = client.api
         self.images = client.images
         self.containers = ControlledContainers(
-            client.containers, evaluation_id, cpu, memory_mib
+            client.containers, evaluation_id, cpu, memory_mib, network_policy
         )
 
     def __getattr__(self, name):
@@ -124,6 +141,7 @@ def main(input_path: str, output_path: str) -> int:
         evaluation_id,
         float(limits["cpu"]),
         int(limits["memoryMiB"]),
+        os.environ.get("EVALUATOR_NETWORK_POLICY", "deny"),
     )
     status = "failed"
     error = None

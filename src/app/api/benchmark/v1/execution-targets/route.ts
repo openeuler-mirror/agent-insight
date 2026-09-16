@@ -21,22 +21,24 @@ export async function GET(req: Request) {
 
   try {
     const datasetId = String(url.searchParams.get('datasetId') || '').trim()
-    let adapterKey = 'swe-bench'
-    if (datasetId) {
-      const dataset = await prisma.benchmarkDataset.findFirst({
-        where: { id: datasetId, user: { in: benchmarkDatasetOwners(username) }, status: 'ready' },
-        select: { adapterKey: true },
-      })
-      if (!dataset) {
-        return NextResponse.json(
-          { error: { code: 'BENCHMARK_DATASET_NOT_FOUND', message: 'Benchmark 数据集不存在或未就绪' } },
-          { status: 404 },
-        )
-      }
-      adapterKey = dataset.adapterKey
+    if (!datasetId) {
+      return NextResponse.json(
+        { error: { code: 'BENCHMARK_DATASET_REQUIRED', message: '缺少 Benchmark 数据集' } },
+        { status: 400 },
+      )
+    }
+    const dataset = await prisma.benchmarkDataset.findFirst({
+      where: { id: datasetId, user: { in: benchmarkDatasetOwners(username) }, status: 'ready' },
+      select: { adapterKey: true },
+    })
+    if (!dataset) {
+      return NextResponse.json(
+        { error: { code: 'BENCHMARK_DATASET_NOT_FOUND', message: 'Benchmark 数据集不存在或未就绪' } },
+        { status: 404 },
+      )
     }
 
-    const manifest = getBenchmarkAdapter(adapterKey).manifest
+    const manifest = getBenchmarkAdapter(dataset.adapterKey).manifest
     const items = await listBenchmarkExecutionTargets(username, manifest)
     return NextResponse.json({ items })
   } catch (error) {

@@ -31,7 +31,7 @@ const FAILURE_META: Record<string, { label: string; message: string }> = {
   },
   AGENT_NO_OUTPUT: {
     label: 'Agent 无有效输出',
-    message: 'Agent 已结束，但没有生成可评测的代码 Patch。',
+    message: 'Agent 已结束，但没有生成有效提交物。',
   },
   TRACE_ID_MISSING: {
     label: 'Trace 未上报',

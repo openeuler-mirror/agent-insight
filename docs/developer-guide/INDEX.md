@@ -62,6 +62,14 @@
 
 > 2026-09-14 PR #294 merge overlay：ROUGE、完全精确匹配与实体 F1 作为预置评估器接入；Exact Match/Entity F1 的运行配置经共享 `ExperimentWizard` 提交并在实验、Case 详情展示。“同配置实验”和“复用评测配置”保留文本评估器参数，Benchmark 向导继续按 Manifest 渲染。
 
+> 2026-09-14 working-tree overlay：实验列表与详情的综合分只在实验 `done` 后发布，运行中不再显示部分均分；单 Case 综合分等待该 Case 的全部已选评估器进入 `done|failed` 终态，结果分和轨迹分也分别等待本类全部已选评估器进入终态，未选择的评估器不阻塞。
+
+> 2026-09-15 working-tree overlay：Benchmark 后端扩展契约完成去 SWE-bench 专用化。Adapter 与 Evaluator 身份独立，数据集字段按 Manifest Presentation 导入并冻结，结果 API 直接返回完整 `submissions[]` / `evidenceArtifacts[]`，不保留 `patchArtifactId` 或单个 `submission`；Controller 基础镜像与 SWE-bench Harness 依赖拆分，Evaluator runtime、网络和资源声明进入实际运行。该改造用于形成“公共框架 + 接入包实例代码”的统一开发规范，不承诺零代码、纯配置接入。
+
+> 2026-09-15 working-tree overlay：Benchmark 前端完成通用 Presentation 渲染。数据集详情、创建实验和实验详情共用字段路径与格式化模块；自动绑定使用独立 `evaluatorKey`，Evaluator 文案来自接入包；Case 详情展示完整 Submission/Evidence 列表和归一化评分点，趋势名称使用 `aggregateLabel`，公共组件不再包含 SWE-bench 字段、单 Patch、固定证据文件或 Adapter 特判。
+
+> 2026-09-15 working-tree overlay：Trace 回流按 `traceSource.taskId` 在目标数据集和当前批次内去重；接口分别返回新增数与重复跳过数，全部重复时不修改数据集，前端提示对应结果。
+
 **如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
@@ -79,6 +87,7 @@
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
 - [12-goal-plus-observability.md](12-goal-plus-observability.md)：Goal Plus 双通道观测覆盖层、collector、语义 ingest、领域模型、确定性关联、完整度与 UI 契约。
 - [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 关系事件、端点解析、查询 API 与 Goal Plus 服务端投影。
+- [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[整体服务安装指南](benchmark/service-deployment-guide.md)。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。
@@ -94,7 +103,8 @@
 | 查找哪个文件实现了 X | [03-file-map.md](03-file-map.md) |
 | 调用或扩展某个引擎 API / 类型 | [04-api-and-contracts.md](04-api-and-contracts.md) |
 | 端到端跟踪接入 / 评测流程 | [05-data-and-control-flow.md](05-data-and-control-flow.md) |
-| 接入新的 Benchmark | [07-conventions-and-extension.md](07-conventions-and-extension.md) · [Benchmark 统一接入设计](../design/benchmark/) |
+| 接入新的 Benchmark | [Benchmark 文档关系与开发指南](benchmark/README.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
+| 部署 Benchmark 整体服务 | [Benchmark 整体服务安装指南](benchmark/service-deployment-guide.md) |
 | 新增 API 路由或页面 | [01-architecture.md](01-architecture.md) · [07-conventions-and-extension.md](07-conventions-and-extension.md) |
 | 为页面设置样式 / 使用正确的颜色、间距或组件 | [08-design-system.md](08-design-system.md) |
 | 遵循项目的模式 | [07-conventions-and-extension.md](07-conventions-and-extension.md) |

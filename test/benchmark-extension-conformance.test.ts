@@ -57,7 +57,7 @@ test('a new benchmark is discovered by adding only its package directory', async
   await fsp.writeFile(path.join(packageDir, 'adapter', 'index.ts'), 'export const fixtureAdapter = {}\n')
   await fsp.writeFile(path.join(packageDir, 'evaluator', 'entrypoint.cjs'), 'process.exit(0)\n')
   await fsp.writeFile(path.join(packageDir, 'evaluator', 'evaluator.yaml'), `
-key: fixture
+key: fixture-evaluator
 runtime: script-package
 entrypoint: ./entrypoint.cjs
 command: node
@@ -89,18 +89,61 @@ submission:
       collector: file/v1
       maxBytes: 1024
 evaluation:
-  evaluatorKey: fixture
+  evaluatorKey: fixture-evaluator
   defaultTimeoutSeconds: 30
   resources: { cpu: 1, memoryMiB: 128 }
 result:
   primaryMetric: { key: passed, aggregation: boolean-rate }
+presentation:
+  caseTable:
+    searchPaths: [externalCaseId, values.metadata.owner]
+    columns:
+      - { path: input, label: Prompt, type: text, truncate: 240 }
+      - { path: externalCaseId, label: Case, type: code, width: 180 }
+      - { path: values.metadata.owner, label: Owner, type: code }
+  artifacts:
+    - { source: submission, name: answer.txt, label: Answer, order: 10 }
 `)
   assert.deepEqual(generator.generate(root), ['fixture'])
   assert.match(
     await fsp.readFile(path.join(root, 'generated', 'benchmark-catalog', 'adapters.ts'), 'utf8'),
     /fixtureAdapter/,
   )
+  const generatedEvaluators = await fsp.readFile(
+    path.join(root, 'generated', 'benchmark-catalog', 'evaluators.cjs'),
+    'utf8',
+  )
+  assert.match(generatedEvaluators, /"key": "fixture-evaluator"/)
+  assert.match(generatedEvaluators, /"timeoutSeconds": 30/)
+  const generatedManifests = await fsp.readFile(
+    path.join(root, 'generated', 'benchmark-catalog', 'manifests.ts'),
+    'utf8',
+  )
+  assert.match(generatedManifests, /"path": "values\.metadata\.owner"/)
+  assert.match(generatedManifests, /"name": "answer\.txt"/)
+  const secondPackageDir = path.join(root, 'benchmarks', 'fixture-two')
+  await fsp.cp(packageDir, secondPackageDir, { recursive: true })
+  const secondManifestPath = path.join(secondPackageDir, 'benchmark.yaml')
+  const secondManifest = (await fsp.readFile(secondManifestPath, 'utf8'))
+    .replace(/^key: fixture$/m, 'key: fixture-two')
+    .replace(/^displayName: Fixture$/m, 'displayName: Fixture Two')
+  await fsp.writeFile(secondManifestPath, secondManifest)
+  assert.deepEqual(generator.generate(root), ['fixture', 'fixture-two'])
+  const sharedEvaluatorCatalog = await fsp.readFile(
+    path.join(root, 'generated', 'benchmark-catalog', 'evaluators.cjs'),
+    'utf8',
+  )
+  assert.equal(sharedEvaluatorCatalog.match(/"key": "fixture-evaluator"/g)?.length, 2)
   await fsp.rm(root, { recursive: true, force: true })
+})
+
+test('Evaluator registry routes a shared evaluator key by Benchmark key', () => {
+  const first = { key: 'shared-evaluator', descriptor: { benchmarkKey: 'fixture-one' } }
+  const second = { key: 'shared-evaluator', descriptor: { benchmarkKey: 'fixture-two' } }
+  const registry = new evaluatorModule.EvaluatorRegistry([first, second])
+  assert.equal(registry.get('shared-evaluator', 'fixture-one'), first)
+  assert.equal(registry.get('shared-evaluator', 'fixture-two'), second)
+  assert.throws(() => registry.get('shared-evaluator', 'missing'))
 })
 
 test('generic executor selects capabilities and collects multiple artifacts without a Benchmark profile', async () => {
@@ -183,13 +226,10 @@ if (args[0] === 'doctor') { process.stdout.write(JSON.stringify({ ready: true, r
 const requestPath = args[args.indexOf('--request') + 1]
 const outputPath = args[args.indexOf('--output') + 1]
 const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'))
-const evidenceDir = path.join(path.dirname(outputPath), 'evidence')
-fs.mkdirSync(evidenceDir, { recursive: true })
-fs.writeFileSync(path.join(evidenceDir, 'report.json'), JSON.stringify({ artifactCount: request.artifacts.length }))
 fs.writeFileSync(outputPath, JSON.stringify({
   protocolVersion: 'evaluator-output/v1',
   completion: { status: 'completed', rawResult: { passed: true }, runtimeFacts: {}, cleanup: { status: 'succeeded' } },
-  evidenceFiles: [{ name: 'report.json', kind: 'report', mediaType: 'application/json', path: 'evidence/report.json' }]
+  evidenceFiles: []
 }))
 `, { mode: 0o700 })
   const descriptor = {
@@ -199,6 +239,8 @@ fs.writeFileSync(outputPath, JSON.stringify({
     command: 'node',
     entrypoint,
     artifactDigest: `sha256:${'a'.repeat(64)}`,
+    network: 'deny',
+    resources: { cpu: 1, memoryMiB: 128, timeoutSeconds: 30 },
     requiredArtifacts: [{ name: 'answer.txt', mediaType: 'text/plain', collector: 'file/v1', maxBytes: 1024 }],
     rawResultSchema: {
       type: 'object', required: ['passed'], properties: { passed: { type: 'boolean' } }, additionalProperties: false,
@@ -232,6 +274,6 @@ fs.writeFileSync(outputPath, JSON.stringify({
     async reportProgress() {},
   })
   assert.deepEqual(result.completion.rawResult, { passed: true })
-  assert.equal(fs.existsSync(result.evidenceFiles[0].path), true)
+  assert.deepEqual(result.evidenceFiles, [])
   await fsp.rm(root, { recursive: true, force: true })
 })

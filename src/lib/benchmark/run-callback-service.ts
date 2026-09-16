@@ -188,7 +188,7 @@ export async function completeBenchmarkRun(input: {
     if (run.status === 'execution_failed') {
       await failBenchmarkCaseResults(
         run.id,
-        run.failureMessage || input.completion.error?.message || 'Agent 执行失败，未生成可评测的 Patch',
+        run.failureMessage || input.completion.error?.message || 'Agent 执行失败，未生成有效提交物',
       )
       return { accepted: true, status: run.status }
     }
@@ -264,7 +264,7 @@ export async function completeBenchmarkRun(input: {
   if (status !== 'submitted') {
     await failBenchmarkCaseResults(
       input.runId,
-      input.completion.error?.message || 'Agent 执行失败，未生成可评测的 Patch',
+      input.completion.error?.message || 'Agent 执行失败，未生成有效提交物',
     )
     return { accepted: true, status }
   }
@@ -279,10 +279,9 @@ export async function completeBenchmarkRun(input: {
       evaluationRunId: prepared.evaluationRunId,
     }
   } catch (error) {
-    if (
-      !(error instanceof BenchmarkProtocolError)
-      || (!error.code.startsWith('ARTIFACT_') && !error.code.startsWith('SWE_PATCH_'))
-    ) throw error
+    if (!(error instanceof BenchmarkProtocolError) || error.details?.phase !== 'submission-validation') {
+      throw error
+    }
     await prisma.benchmarkCaseRun.update({
       where: { id: input.runId },
       data: {

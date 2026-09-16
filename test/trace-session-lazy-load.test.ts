@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { toTraceStructureInteractions, withTracePayloadVersions } from '@/app/api/observe/session/route';
+import { toTraceStructureInteractions, withTracePayloadVersions } from '@/lib/trace/session-payload';
 import { buildAgentCallTree, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { composeCollaborationTrace } from '@/lib/ingest/collaboration/trace-projection';
 import {

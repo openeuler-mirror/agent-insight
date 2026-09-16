@@ -4,12 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
+import { canonicalJson } from '../../../packages/benchmark-protocol/src/contracts'
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
 import { getBenchmarkDatasetLoader } from './dataset-loader-registry'
 import { SYSTEM_BENCHMARK_DATASET_OWNER } from './dataset-ownership'
-import { importBenchmarkDataset } from './dataset-service'
+import { buildBenchmarkDatasetFields, importBenchmarkDataset } from './dataset-service'
 
 function resolveSourcePath(sourcePath: string): string {
   const trimmed = sourcePath.trim()
@@ -127,4 +128,29 @@ export async function removeSystemBenchmarkDataset(datasetId: string): Promise<{
   }
   await prisma.agentEvalDataset.delete({ where: { id: dataset.agentEvalDatasetId } })
   return { id: dataset.id, action: 'deleted' }
+}
+
+export async function refreshSystemBenchmarkDatasetPresentation(datasetId: string): Promise<{
+  id: string
+  agentEvalDatasetId: string
+  adapterKey: string
+}> {
+  const id = datasetId.trim()
+  if (!id) throw new BenchmarkProtocolError('DATASET_ID_REQUIRED', '--dataset 不能为空', 400)
+  const dataset = await prisma.benchmarkDataset.findFirst({
+    where: {
+      user: SYSTEM_BENCHMARK_DATASET_OWNER,
+      OR: [{ id }, { agentEvalDatasetId: id }],
+    },
+    select: { id: true, agentEvalDatasetId: true, adapterKey: true },
+  })
+  if (!dataset) {
+    throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', '平台 Benchmark 数据集不存在', 404)
+  }
+  const adapter = getBenchmarkAdapter(dataset.adapterKey)
+  await prisma.agentEvalDataset.update({
+    where: { id: dataset.agentEvalDatasetId },
+    data: { fieldsJson: canonicalJson(buildBenchmarkDatasetFields(dataset.adapterKey, adapter)) },
+  })
+  return dataset
 }

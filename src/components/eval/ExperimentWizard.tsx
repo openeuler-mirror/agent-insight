@@ -42,6 +42,14 @@ import {
 } from '@/lib/evaluators/evaluator-run-config';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
+import type {
+  BenchmarkPresentation,
+} from '../../../packages/benchmark-protocol/src/contracts';
+import {
+  benchmarkPresentationText,
+  benchmarkPresentationValue,
+  truncateBenchmarkText,
+} from '@/lib/benchmark/presentation';
 import {
   isSkillExperimentDatasetEligible,
   isSkillExperimentEvaluatorEligible,
@@ -101,29 +109,8 @@ interface SelectedCase {
   referenceOutput: string | null;
   evaluatorContext: EvaluatorCaseContext | null;
   faultInjectionType?: string | null;
+  externalCaseId?: string;
   values?: Record<string, unknown>;
-}
-
-interface BenchmarkPresentationColumn {
-  path: string;
-  label: string;
-  type: 'text' | 'code' | 'number' | 'boolean';
-}
-
-interface BenchmarkPresentation {
-  caseTable: {
-    searchPaths: string[];
-    searchPlaceholder?: string;
-    columns: BenchmarkPresentationColumn[];
-  };
-  referencePanel?: {
-    title: string;
-    description: string;
-    columns: BenchmarkPresentationColumn[];
-  };
-  result?: {
-    primaryMetric: BenchmarkPresentationColumn;
-  };
 }
 
 interface DatasetOption {
@@ -140,6 +127,7 @@ interface DatasetOption {
   shared?: boolean;
   benchmark?: {
     adapterKey: string;
+    evaluatorKey: string;
     displayName: string;
     status: string;
     profileKey?: string;
@@ -229,6 +217,9 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
       referenceOutput: match.updates[key] || null,
       evaluatorContext: match.contextUpdates[key] || null,
       faultInjectionType: fault || null,
+      externalCaseId: typeof item.values?.externalCaseId === 'string'
+        ? item.values.externalCaseId
+        : undefined,
       values: {
         ...(item.values || {}),
         ...(item.evaluationFocus ? { trigger_rationale: item.evaluationFocus } : {}),
@@ -236,27 +227,6 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
       },
     };
   });
-}
-
-function benchmarkPresentationValue(item: SelectedCase, path: string): unknown {
-  if (path === 'input') return item.input;
-  if (path === 'externalCaseId') {
-    return item.values?.externalCaseId || item.values?.instance_id || item.executionId;
-  }
-  if (!path.startsWith('values.')) return undefined;
-  let value: unknown = item.values;
-  for (const segment of path.slice('values.'.length).split('.')) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-    value = (value as Record<string, unknown>)[segment];
-  }
-  return value;
-}
-
-function benchmarkPresentationText(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return JSON.stringify(value);
 }
 
 const STEPS = ['实验设计', 'Trace 来源', '预期答案', '评估器与执行'];
@@ -587,8 +557,8 @@ export function ExperimentWizard({
     description: '隐藏评测数据只交给评测服务，不会发送给 Agent。',
     columns: [{ path: 'externalCaseId', label: 'Case', type: 'code' as const }],
   };
-  const benchmarkEvaluatorId = selectedDataset?.benchmark?.adapterKey
-    ? `benchmark:${selectedDataset.benchmark.adapterKey}`
+  const benchmarkEvaluatorId = selectedDataset?.benchmark?.evaluatorKey
+    ? `benchmark:${selectedDataset.benchmark.evaluatorKey}`
     : '';
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.name === agentName) || null,
@@ -1281,21 +1251,27 @@ export function ExperimentWizard({
       if (!isBenchmarkDataset || !benchmarkEvaluatorId) {
         return cards.filter((card) => !card.id.startsWith('benchmark:'));
       }
-      const official = cards.find((card) => card.id === benchmarkEvaluatorId) || {
+      const evaluatorPresentation = selectedDataset?.benchmark?.presentation?.evaluator;
+      const primaryMetric = selectedDataset?.benchmark?.presentation?.result?.primaryMetric;
+      const official = {
         id: benchmarkEvaluatorId,
-        name: `${selectedDataset?.benchmark?.displayName || 'Benchmark'} Evaluator`,
-        description: '使用 Benchmark 接入包声明的官方评测服务判定结果。',
+        name: evaluatorPresentation?.displayName
+          || `${selectedDataset?.benchmark?.displayName || 'Benchmark'} Evaluator`,
+        description: evaluatorPresentation?.description
+          || '使用 Benchmark 接入包声明的评测逻辑判定结果。',
         evaluatorType: 'Code' as const,
         source: 'preset' as const,
         category: 'res' as const,
         targetTypes: ['Benchmark'],
-        objectives: ['官方评测'],
+        objectives: [primaryMetric?.label || 'Benchmark 评测'],
         scenarios: [selectedDataset?.benchmark?.displayName || 'Benchmark'],
-        runMode: '独立评测服务',
-        scoreRange: 'Pass / Fail',
+        runMode: evaluatorPresentation?.runMode || 'Benchmark Evaluator',
+        scoreRange: primaryMetric?.type === 'boolean' ? 'Pass / Fail' : 'Benchmark 指标',
         popularity: 100,
-        mappedMetrics: [selectedDataset?.benchmark?.presentation?.result?.primaryMetric.label || '结果'],
+        mappedMetrics: [primaryMetric?.label || '结果'],
         status: 'ready' as const,
+        outputDescription: evaluatorPresentation?.outputDescription,
+        runtimeNote: '由 Benchmark 数据集自动绑定，隐藏评测数据不会发送给 Agent。',
       };
       return [official, ...cards.filter((card) => !card.id.startsWith('benchmark:'))];
     }
@@ -1600,7 +1576,7 @@ export function ExperimentWizard({
       ? '自动配对 Trace'
       : traceMode === 'generate'
         ? isBenchmarkDataset
-          ? `${selectedDataset?.benchmark?.displayName || 'Benchmark'} 测试契约（内容隐藏）`
+          ? `${selectedDataset?.benchmark?.displayName || 'Benchmark'} 评测契约（内容隐藏）`
           : `数据集预期 ${annotated}/${selectedList.length}`
         : `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
     `已选 ${selectedEvaluators.size} 个`,
@@ -1730,7 +1706,7 @@ export function ExperimentWizard({
                   {selectedDatasetLoading
                     ? '正在加载数据集 Case…'
                     : isBenchmarkDataset
-                      ? 'Benchmark 数据集由系统导入且只读；实验将生成新 Trace，并使用内置官方测试契约评测。'
+                      ? 'Benchmark 数据集由系统导入且只读；实验将生成新 Trace，并使用接入包提供的评测契约。'
                     : skillPreset === 'trigger'
                       ? '仅展示当前 Skill 的触发分析数据集；该数据集可用于同一 Skill 的不同版本回归'
                       : '可选择全部非触发分析数据集；绑定其他 Skill 的数据集会标注来源，但不阻止复用'}
@@ -1964,7 +1940,7 @@ export function ExperimentWizard({
                   {!selectedDataset
                     ? '生成 Trace 需要数据集 Case，请返回第一步选择评测数据集。'
                     : isBenchmarkDataset
-                      ? '当前 Agent 没有可执行 Benchmark 的在线客户端，请检查客户端状态、执行器地址和工作区/Patch 能力。'
+                      ? '当前 Agent 没有满足该 Benchmark 执行要求的在线客户端，请检查客户端状态和执行目标配置。'
                     : isReliabilityDataset
                       ? '当前 Agent 在已配置客户端中没有在线可执行主机，请前往“客户端配置”检查客户端状态和扫描结果。'
                       : '当前 Agent 没有在线且支持回传 Trace ID 的客户端，请检查客户端状态；旧客户端需要升级后才能用于普通数据集生成 Trace。'}
@@ -2094,7 +2070,13 @@ export function ExperimentWizard({
                         <tr>
                           <th style={{ ...STICKY_TH, width: 44 }} aria-label="选择" />
                           {benchmarkCaseColumns.map((column) => (
-                            <th key={column.path} style={STICKY_TH}>{column.label}</th>
+                            <th
+                              key={column.path}
+                              title={column.description}
+                              style={{ ...STICKY_TH, width: column.width, minWidth: column.width }}
+                            >
+                              {column.label}
+                            </th>
                           ))}
                         </tr>
                       </thead>
@@ -2136,6 +2118,7 @@ export function ExperimentWizard({
                               {benchmarkCaseColumns.map((column) => {
                                 const value = benchmarkPresentationText(
                                   benchmarkPresentationValue(item, column.path),
+                                  { format: column.format },
                                 );
                                 return (
                                   <td
@@ -2145,13 +2128,18 @@ export function ExperimentWizard({
                                       overflow: 'hidden',
                                       textOverflow: 'ellipsis',
                                       whiteSpace: 'nowrap',
+                                      width: column.width,
+                                      minWidth: column.width,
                                       ...(column.type === 'code'
                                         ? { fontFamily: 'var(--font-mono, monospace)' }
+                                        : {}),
+                                      ...(column.type === 'number'
+                                        ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
                                         : {}),
                                     }}
                                     title={value}
                                   >
-                                    {value}
+                                    {truncateBenchmarkText(value, column.truncate)}
                                   </td>
                                 );
                               })}
@@ -2611,7 +2599,7 @@ export function ExperimentWizard({
         {step === 3 && expType === 'single' && traceMode === 'generate' && isBenchmarkDataset && (
           <div style={PANEL}>
             <div style={PANEL_B}>
-              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>确认官方测试契约</div>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>确认评测契约</div>
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
                 {benchmarkReferencePanel.description}
               </div>
@@ -2629,7 +2617,13 @@ export function ExperimentWizard({
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                   <thead><tr>
                     {benchmarkReferencePanel.columns.map((column) => (
-                      <th key={column.path} style={STICKY_TH}>{column.label}</th>
+                      <th
+                        key={column.path}
+                        title={column.description}
+                        style={{ ...STICKY_TH, width: column.width, minWidth: column.width }}
+                      >
+                        {column.label}
+                      </th>
                     ))}
                     <th style={STICKY_TH}>参考契约</th>
                   </tr></thead>
@@ -2639,18 +2633,24 @@ export function ExperimentWizard({
                         {benchmarkReferencePanel.columns.map((column) => {
                           const value = benchmarkPresentationText(
                             benchmarkPresentationValue(item, column.path),
+                            { format: column.format },
                           );
                           return (
                             <td
                               key={column.path}
                               style={{
                                 ...TD,
+                                width: column.width,
+                                minWidth: column.width,
                                 ...(column.type === 'code'
                                   ? { fontFamily: 'var(--font-mono, monospace)' }
                                   : {}),
+                                ...(column.type === 'number'
+                                  ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
+                                  : {}),
                               }}
                             >
-                              {column.type === 'code' ? truncate(value, 24) : value}
+                              {truncateBenchmarkText(value, column.truncate)}
                             </td>
                           );
                         })}
@@ -2868,7 +2868,7 @@ export function ExperimentWizard({
                     : traceMode === 'generate'
                       ? `生成 Trace · ${selectedGenerated.size} 个 Case`
                       : `选择 Trace · ${selected.size} 条${watchMode ? ' · 自动监听' : ''}`],
-                  ['预期答案', isBenchmarkDataset ? '官方测试契约 · 内容隐藏' : `${annotated} / ${selectedList.length}`],
+                  ['预期答案', isBenchmarkDataset ? '评测契约 · 内容隐藏' : `${annotated} / ${selectedList.length}`],
                   ...(expType === 'single' && traceMode === 'generate' ? [[
                     '主机 / 模型',
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
@@ -2889,12 +2889,12 @@ export function ExperimentWizard({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
                 {allEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
-                  const isOfficialHarness = isBenchmarkDataset && card.id === benchmarkEvaluatorId;
+                  const isBoundBenchmarkEvaluator = isBenchmarkDataset && card.id === benchmarkEvaluatorId;
                   // 监听模式的新 trace 没有逐条预期输出或 Tool/Skill 目录，带前置条件的评估器不可用。
                   const gate = RELIABILITY_EVALUATOR_IDS.has(card.id) && !isReliabilityDataset
                     ? { usable: false, reason: '该评估器仅适用于可靠性数据集' }
                     : isBenchmarkDataset && meta.requires.includes('reference')
-                    ? { usable: false, reason: 'Benchmark 官方测试契约不会作为普通预期输出提供' }
+                    ? { usable: false, reason: 'Benchmark 隐藏评测契约不会作为普通预期输出提供' }
                     : watchMode && meta.requires.length > 0
                     ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
                     : gateEvaluator(card.id, meta, gateCases, Array.from(selectedEvaluators));
@@ -2907,14 +2907,14 @@ export function ExperimentWizard({
                     <div
                       key={card.id}
                       title={gate.usable ? undefined : (expType === 'llm' ? undefined : gate.reason)}
-                      onClick={() => gate.usable && !isOfficialHarness && toggleEvaluator(card.id)}
+                      onClick={() => gate.usable && !isBoundBenchmarkEvaluator && toggleEvaluator(card.id)}
                       style={{
                         border: `1px solid ${checked ? 'var(--primary)' : 'var(--border)'}`,
                         borderRadius: 11, padding: '13px 15px',
                         background: checked ? 'var(--primary-subtle)' : 'var(--card-bg)',
                         boxShadow: checked ? '0 8px 24px var(--shadow-primary)' : 'none',
                         opacity: gate.usable ? 1 : 0.55,
-                        cursor: gate.usable && !isOfficialHarness ? 'pointer' : gate.usable ? 'default' : 'not-allowed',
+                        cursor: gate.usable && !isBoundBenchmarkEvaluator ? 'pointer' : gate.usable ? 'default' : 'not-allowed',
                         transition: 'all 0.12s',
                       }}
                     >
@@ -2955,7 +2955,7 @@ export function ExperimentWizard({
                         {card.description}
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
-                        {isOfficialHarness && <span style={{ ...CHIP_MUT, color: 'var(--primary)' }}>自动绑定 · 不可取消</span>}
+                        {isBoundBenchmarkEvaluator && <span style={{ ...CHIP_MUT, color: 'var(--primary)' }}>自动绑定 · 不可取消</span>}
                         {deriveEvaluatorTags(card).map((tag) => (
                           <span key={tag} style={CHIP_MUT}>{tag}</span>
                         ))}

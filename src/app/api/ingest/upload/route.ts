@@ -15,6 +15,7 @@ import { clientIpFromRequest } from '@/lib/reliability/client-ip';
 import { normalizeTraceClientMetadata } from '@/lib/reliability/trace-client';
 import { authenticateDevice } from '@/lib/reliability/client-registry';
 import { reliabilityErrorResponse } from '@/lib/reliability/api-error';
+import { isInProgressOpencodeSnapshot } from '@/lib/ingest/opencode-snapshot';
 
 /**
  * 这一发 opencode 上报是不是"进行中快照"——是的话只落库，不跑异步 LLM 分析。
@@ -26,17 +27,6 @@ import { reliabilityErrorResponse } from '@/lib/reliability/api-error';
  * trace_completed_at 由 uploader 在「已产出终稿 && 会话已 idle」时写入，正是本轮结束的
  * 信号；工具死循环的心跳快照两个条件都不满足，自然落进轻通道。
  */
-export function isInProgressOpencodeSnapshot(data: {
-    framework?: unknown;
-    trace_completed_at?: unknown;
-    opencode_cli_completed?: unknown;
-}): boolean {
-    if (String(data.framework ?? '').toLowerCase() !== 'opencode') return false;
-    if (data.opencode_cli_completed === true) return false;
-    if (String(data.trace_completed_at ?? '').trim()) return false;
-    return true;
-}
-
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();

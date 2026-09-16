@@ -11,7 +11,7 @@ import {
 } from '@/lib/engine/experiment/case-fi-meta';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
-import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
+import { publishedOverallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
@@ -90,6 +90,7 @@ export async function GET(
         evaluatorConfigsJson: true, createdAt: true,
         scope: true, skillName: true, skillVersion: true, preset: true,
         skillContextJson: true, configSnapshotJson: true, sourceExperimentId: true,
+        benchmarkBinding: { select: { adapterKey: true } },
       },
     });
     if (!experiment) {
@@ -105,9 +106,7 @@ export async function GET(
       experiment.evaluatorConfigsJson,
       evaluatorIds,
     );
-    const benchmarkAdapterKey = evaluatorIds
-      .find((evaluatorId) => evaluatorId.startsWith('benchmark:'))
-      ?.slice('benchmark:'.length) || '';
+    const benchmarkAdapterKey = experiment.benchmarkBinding?.adapterKey || '';
     let benchmarkManifest: BenchmarkManifest | null = null;
     if (benchmarkAdapterKey) {
       try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
@@ -160,7 +159,6 @@ export async function GET(
           datasetCase: { select: { externalCaseId: true } },
           artifacts: {
             orderBy: { createdAt: 'asc' },
-            take: 1,
             select: { id: true, name: true, sha256: true, sizeBytes: true, mediaType: true },
           },
           evaluations: {
@@ -423,7 +421,7 @@ export async function GET(
       && (progress.pending > 0 || Boolean(traceProgress?.pending))
       ? 'running'
       : experiment.status;
-    const overall = overallAverage(effectiveAllResults);
+    const overall = publishedOverallAverage(responseStatus, effectiveAllResults);
     const breakdown = evaluatorBreakdown(effectiveAllResults);
 
     // input/actualOutput 兜底：trace/监听模式建的 case 这两字段存空，从对应 Execution
@@ -568,10 +566,10 @@ export async function GET(
             } | null
           : null;
         const benchmarkPrimaryMetric = benchmarkNormalized?.primaryMetric;
-        const submission = benchmarkRun?.artifacts[0];
+        const submissions = benchmarkRun?.artifacts || [];
         const benchmarkTraceStatus = deriveBenchmarkTraceStatus({
           runStatus: benchmarkRun?.status || null,
-          hasSubmission: Boolean(submission),
+          hasSubmission: submissions.length > 0,
           hasExecution: Boolean(c.executionId),
           hasTask: Boolean(effectiveTaskId),
         });
@@ -624,21 +622,21 @@ export async function GET(
                 ? { key: benchmarkPrimaryMetric.key, value: benchmarkPrimaryMetric.value }
                 : null,
               externalCaseId: benchmarkRun.datasetCase?.externalCaseId || '',
-              repo: String(benchmarkPayload?.repo || ''),
+              publicPayload: benchmarkPayload,
               reference: {
-                kind: 'official-test-contract',
+                kind: 'private-case',
                 description: benchmarkManifest?.presentation?.referencePanel?.description
                   || '隐藏评测数据仅供评测服务判定，不会发送给 Agent',
               },
-              submission: submission ? {
+              submissions: submissions.map((submission) => ({
+                artifactId: submission.id,
                 name: submission.name,
                 sha256: submission.sha256,
                 sizeBytes: submission.sizeBytes,
                 mediaType: submission.mediaType,
-                summary: `${submission.sizeBytes} bytes · ${submission.sha256}`,
                 kind: 'submission',
                 contentUrl: `/api/benchmark/v1/artifacts/${encodeURIComponent(submission.id)}/content`,
-              } : null,
+              })),
               evidenceArtifacts: (benchmarkRun.evaluations[0]?.artifacts || []).map((artifact) => ({
                 artifactId: artifact.id,
                 name: artifact.name,

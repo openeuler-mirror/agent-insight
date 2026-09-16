@@ -64,26 +64,29 @@ test('实验详情展示 Trace 生成进度和失败 Case，失败 Trace 不显�
   assert.match(detailPage, /正在生成 Trace/);
 });
 
-test('Benchmark Case 明细表展示 Instance ID', () => {
+test('Benchmark Case 明细表按 Presentation 展示列', () => {
   const detailPage = fs.readFileSync(
     path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
 
-  assert.match(detailPage, />Instance ID</);
-  assert.match(detailPage, /c\.benchmark\?\.externalCaseId/);
+  assert.match(detailPage, /benchmarkPresentation\?\.caseTable\.columns/);
+  assert.match(detailPage, /benchmarkCaseColumns\.map/);
+  assert.match(detailPage, /benchmarkPresentationValue/);
+  assert.doesNotMatch(detailPage, />Instance ID</);
 });
 
-test('Benchmark Patch 已提交但 Harness 未完成时展示官方评测中', () => {
+test('Benchmark 提交物已提交但 Evaluator 未完成时展示评测中', () => {
   const detailPage = fs.readFileSync(
     path.join(root, 'src/components/eval/ExperimentDetail.tsx'),
     'utf8',
   );
 
   assert.match(detailPage, /isBenchmarkEvaluationInProgress\(c\.benchmark\)/);
-  assert.match(detailPage, /官方评测中…/);
-  assert.match(detailPage, /Patch 已生成，等待执行器确认…/);
-  assert.match(detailPage, /sha256:\{c\.benchmark\.submission\.sha256\}/);
+  assert.match(detailPage, /Benchmark 评测中…/);
+  assert.match(detailPage, /提交物已生成，等待执行器确认…/);
+  assert.match(detailPage, /c\.benchmark\.submissions/);
+  assert.doesNotMatch(detailPage, /c\.benchmark\.submission\b/);
 });
 
 test('Benchmark Case 使用 Run 状态，不被通用 Trace pending 覆盖', () => {
@@ -96,12 +99,15 @@ test('Benchmark Case 使用 Run 状态，不被通用 Trace pending 覆盖', () 
   assert.match(detailRoute, /traceError: benchmarkRun \? benchmarkRun\.failureMessage : traceState\?\.error \|\| null/);
 });
 
-test('Benchmark 原始文件菜单向上展开，避免被结果卡底部裁剪', () => {
+test('Benchmark 文件使用完整通用列表，并按媒体类型决定是否预览', () => {
   const artifactActions = fs.readFileSync(
     path.join(root, 'src/components/eval/BenchmarkArtifactActions.tsx'),
     'utf8',
   );
 
-  assert.match(artifactActions, /bottom: 'calc\(100% \+ 5px\)'/);
-  assert.doesNotMatch(artifactActions, /top: 'calc\(100% \+ 5px\)'/);
+  assert.match(artifactActions, /presentBenchmarkArtifacts/);
+  assert.match(artifactActions, /canPreviewBenchmarkArtifact/);
+  assert.match(artifactActions, /submissionArtifacts/);
+  assert.match(artifactActions, /evidenceArtifacts/);
+  assert.doesNotMatch(artifactActions, /report\.json|test_output\.txt|run_instance\.log/);
 });
