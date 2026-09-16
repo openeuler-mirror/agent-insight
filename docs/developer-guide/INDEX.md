@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e3f777fb7af2de33ebdbd178741c8b74037fb25d` (`e3f777fb`) |
-| Branch | `codex/830-issue-301-20260915` |
-| Date | 2026-09-15T22:23:24+08:00 |
+| Commit | `dd9e8d70c669288d22d133124d88200b7b362498` (`dd9e8d70`) |
+| Branch | `codex/830-issue-311-20260916` |
+| Date | 2026-09-16T21:49:27+08:00 |
 | Author | gyctl |
-| Subject | `fix: 统一所有Agent十分钟无上报超时兜底` |
+| Subject | `fix: 修复子Agent类型筛选和父子Trace重复跳转` |
 
-**如何更新：** `git diff e3f777fb HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff dd9e8d70 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
