@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `869ecfb4751c00fdb1d6bd4fa1f9b28cf1ca4ccf` (`869ecfb4`) |
+| Commit | `75039c678a206c1eb201d4ad64a2f476e2f5f0dd` (`75039c67`) |
 | Branch | `codex/830-issue-308-20260915` |
-| Date | 2026-09-15T18:09:48+08:00 |
+| Date | 2026-09-16T15:49:48+08:00 |
 | Author | gyctl |
-| Subject | `fix: 修复830 Trace树收起与慢节点筛选反馈` |
+| Subject | `fix: 保留子Agent展开行为并增加悬停说明 (#308)` |
 
-**如何更新：** `git diff 869ecfb4 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 75039c67 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
