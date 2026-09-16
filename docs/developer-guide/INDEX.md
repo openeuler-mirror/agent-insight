@@ -9,14 +9,18 @@
 
 | Field | Value |
 |---|---|
-| Commit | `6aa539e905e7909862cb4bcd3791b66b7d2b1f90` (`6aa539e9`) |
+| Commit | `ed4da08e0fa367067cf0c4d52db7c69348205faf` (`ed4da08e`) |
 | Branch | `bench-9-16` |
 | Date | 2026-09-16 |
-| Author | openeuler-ci-bot |
-| Subject | `!410 完善 Benchmark 端到端评测与结果展示，补充 Benchmark 接入、扩展和部署文档` |
+| Author | mintuyang |
+| Subject | `增加测试文件` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-16 working-tree overlay：修复 xiaoo Collector 被旧 FI 上传密钥覆盖的问题，改为完整来源选择、当前 RAS 安装配置优先。无 Session ID 的 Hook 按 xiaoo PID + 启动时间隔离，仅在唯一活动会话时归属，终态释放；安装器使用 exec 保持父进程身份。最终根 span 携带显式完成标记，聚合后写入 Session 结束时间，避免退出后仍显示执行中。其他 Agent、公共 OTLP API 与官方评测逻辑不变。
+
+> 2026-09-16 working-tree overlay：xiaoo 模型发现改用标准 TOML 解析，避免行尾注释进入 provider/model。后台实验执行通过用户登录交互 shell 继承现有终端环境，复用 xiaoo 原生密钥读取；shell 启动输出与 CLI 证据分离，沿用进程组超时，无需额外密钥文件或二次输入。
 
 > 2026-09-04 working-tree overlay：新增 Benchmark Agent 步骤 01～13。统一实验入口按 `scope=benchmark` 分流；真实 SWE-bench Verified Parquet 由官方 loader 导入，Adapter 隔离 Harness 数据、构造 Agent Task、校验 Agent Patch、冻结不含 gold patch 的 EvaluationJob，并归一化原生结果。执行器在独立 Git 工作区产出 Patch；常驻 Evaluator Controller 容器通过 Docker Socket 启动官方 Case 镜像，直接调用固定官方源码的 `make_test_spec()` 与 `run_instance()`，再上传证据并回调原生终态。结果处理先冻结 Raw Result，以 `primaryMetric` 做固定分母聚合，仅投影安全 `nativeMetrics`；确定性归一化失败收敛为非重试终态。新增 Benchmark 实验分页结果 API 和带用户/实验归属校验的证据下载 API。01～13 已复用真实数据库和真实 Case 通过 API 级串联；ARM64 Docker Desktop 上的 09～13 双层容器验收和 `deepseek/deepseek-v4-flash` + `pallets__flask-5014` 全真实 01～13 开发冒烟均通过，后者 Harness 判定为 pass；正式计分仍需 x86_64 Linux 验收。仍不包含前端、部署脚本、服务注册与 Verified 500 批量调度。
 
@@ -72,7 +76,9 @@
 
 > 2026-09-16 working-tree overlay：本轮仅更新安装 bundle 契约。源码启动导出完整项目根目录，RAS/client bundle 复用该目录并在白名单文件缺失时返回 503；构建恢复 npm 的 prebuild 生命周期。其他指南未重新审计。
 
-**如何更新：** `git diff 6aa539e9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+> 2026-09-16 working-tree overlay：xiaoo 实验执行复用客户端通用运行主流程，新增 JSON CLI 适配、模型参数拆分、能力探测和明确失败回写。执行器回报原生 Session ID，与既有 Collector `session.id` / `Execution.taskId` 对齐；OTLP span 哈希仅保留在采集链路。Collector 生产代码不变；更新 `05-data-and-control-flow.md` 与实验用户指南。
+
+**如何更新：** `git diff ed4da08e HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

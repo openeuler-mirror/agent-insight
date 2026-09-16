@@ -262,6 +262,22 @@ SWE-bench 的归一化不信任单一回传字段。平台把冻结 `EvaluationJ
 
 评测通信配置由 `EvaluatorRuntimeConfigProvider` 统一提供：每次相关操作从 `data/config/benchmark-evaluator.env` 读取一份 URL、认证模式、当前/宽限期 Token 与 HTTP 策略的完整快照，文件缺失时回退进程环境变量。合法原子替换在下一次操作生效，非法或半写入更新继续使用上一份有效配置。认证默认使用 `token`；显式 `none` 时 Agent Insight 的健康检查与任务下发、Controller 的接单、Artifact 下载及进度/证据/完成回调都不发送或校验 Authorization，安全边界完全由双向安全组或防火墙承担。`AGENT_INSIGHT_PUBLIC_BASE_URL` 是冻结到实验绑定、供远端 Evaluator 使用的协议地址；Evaluator 可通过 `EVALUATOR_AGENT_INSIGHT_BASE_URL`（启动参数 `--platform-base-url`）覆盖其实际下载 Artifact 和回调 Agent Insight 的网络地址，未配置时沿用任务地址。执行客户端不增加独立部署配置：安装 `curl` 已写入的 `insightBaseUrl` 同时用于 Artifact 上传、进度和完成回调，因而 Agent Insight、执行客户端、Evaluator 三机分离时也不会误用任务中的 loopback origin。可选的 `AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL` 仅作为旧客户端和冻结协议的兼容字段；新版客户端仍校验其 HTTP(S) 协议和精确 Run 路径，但不将该 origin 作为出站目标。Benchmark 执行任务本身通过现有客户端 WSS/长轮询控制通道下发，不要求客户端开放端口。执行 Outbox 仍冻结回调 URL 以保持 digest 和旧客户端兼容；已冻结任务不会被改写。新 Evaluation 同时冻结目标 URL 与认证配置修订，避免切换期间拼接新旧值；已冻结旧目标的重试不会自动采用新认证模式或 Token。Linux/macOS 上由 `start-evaluator.sh` 构建和常驻运行 Controller；构建期 Debian/PyPI 默认使用国内镜像并在失败时回退官方源，SWE-bench Harness 从官方 GitHub codeload 下载固定 commit archive 并校验固定 SHA-256。新 Controller 镜像就绪后，脚本每次都重建同名容器；Doctor 成功后精确清理旧 Controller 镜像，但保留命名 volume 与全部 Case 镜像。Node 基础镜像名称保持官方值并复用宿主 Docker daemon 的 registry mirror；Case 镜像默认同样使用官方名称并复用宿主 registry mirror。显式配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时，才先通过该代理拉取并恢复官方 tag，代理失败再回退官方地址。在线镜像优先冻结 registry digest；`docker save/load` 离线导入且没有 `RepoDigests` 时冻结不可变 Image ID。部署脚本不修改宿主全局配置。默认 Doctor 不拉取 Case 镜像，显式 Gold Smoke 和真实任务才按需拉取。
 
+### xiaoo 实验 Runtime Adapter
+
+xiaoo Collector 的上传配置按完整来源选择：完整环境变量对 → 当前 RAS 安装配置 → 仅当 RAS 配置文件不存在时使用旧 FI 配置。禁用、损坏或不完整的 RAS 配置不会回退旧密钥，401 也不轮换其他身份重试。此修改局限于 `scripts/xiaoo-trace-collector/`，不改变 RAS/FI 自身或公共 OTLP API。
+
+安装器使用 `exec python3` 启动 Hook，使父进程稳定为 xiaoo；Collector 用父进程 PID 与启动时间派生进程作用域，在 `_active_sessions/<scope>/` 维护活动 Session。显式 Session ID 优先，无 ID 事件仅在该作用域有唯一未过期 Session 时归属；多个候选、进程识别失败或缓存损坏时跳过。idle/终态释放该 Session 的关联，即使上传失败也不占用活动关联（Trace 缓冲仍保留）。旧 `_active_session.json` 不读取。升级需更新安装文件并重启 xiaoo，禁止盲目重放已串线的旧 Trace 缓冲。
+
+Collector 只在生命周期终态 flush 时构建根 Agent span，并写入 `agent.insight.trace.completed=true`。通用 OTLP 聚合器仅在看到该显式标记时投影 `trace_completed_at`，由存储层写入 `Session.endTime`；因此退出 xiaoo 后列表立即从“执行中”收敛为“已完成”，不会以普通 span 的结束时间误判其他 Agent 的运行状态。
+
+xiaoo 模型发现通过 Python 3.11+ 标准库 `tomllib` 读取原生 `[llm]`，正确处理行尾注释、字符串中的 `#`、转义和段落边界；非法 TOML 产生不含配置正文的错误，不上报拼接了注释的模型 ID。launchd/systemd 下运行 xiaoo 时，`buildAgentProcessLaunch()` 用当前用户的 POSIX 登录交互 shell 恢复已保存的终端环境，再恢复 Case 工作目录并以独立 argv `exec` 原始 CLI。密钥仍由 xiaoo 的原生配置、密钥存储和 provider 默认变量规则解析；客户端不持久化或上传密钥，也不创建额外 `model.env`。shell 启动 stdout/stderr 丢弃，CLI 输出使用独立管道，因此 profile 中的输出不会污染 Trace 或诊断。shell 与 CLI 共用现有进程组和超时，OpenCode 继续直接启动。环境只存在于该 Case 子进程，不导入常驻客户端的全局环境。
+
+`scripts/reliability-client.cjs` 的 `runtimeAdapters` 注册表提供 OpenCode/xiaoo 的命令构造、事件解析、能力探测和无输出错误码，`runExperimentCase()` 共用进程启动、工作目录、stdout 分行、模型活动计时、TERM/KILL、错误分类和状态回写。xiaoo 使用 `--cli run --format json --agent defaultagent --title <caseRunId> -p <input>`，旧版原生 CLI 可省略 `--cli`；显式 `provider/model` 拆成两个参数。
+
+xiaoo 只从 `session_start` 事件认领本次 Session，避免误取工具输出中的其他 Session ID。客户端回报的协议字段 `traceId` 是原生 Session ID，按 `Execution.taskId` 绑定：Collector 同时上报原生 `session.id` 与 SHA-256 派生的 span `traceId`，服务端优先采用 `session.id` 聚合，因此不得把 span 哈希当作实验绑定键。`test/reliability-client-xiaoo.test.ts` 直接调用现有 Python Collector，再走真实 normalize/aggregate 校验这一契约。
+
+能力发现探测 CLI 的 JSON/Agent/title 支持以及 Collector 安装注册；帮助命令探测按二进制文件指纹缓存最多30秒，失败不永久缓存。Benchmark runtime 注册表在常驻客户端启动时建立，安装或更新后需重启客户端。Collector、安装入口、OTLP 接口与官方评测逻辑继续复用。xiaoo 错误事件复用 `MODEL_UNAVAILABLE` / `MODEL_ERROR` 分类，无模型活动返回 `AGENT_NO_OUTPUT`，超时和进程失败沿用通用错误码。xiaoo 默认仅使用实验总超时：当前版本的增量模型事件尚未完成真实验证，不能将最终 `response` 未到当作首模型无响应。显式传入 `firstModelResponseTimeoutSeconds` 时仍可复用首响应计时；OpenCode 默认90秒保护不变。
+
 ## 后端流水线：Skill 生成与优化
 ```mermaid
 flowchart TD

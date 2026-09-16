@@ -85,7 +85,19 @@ description: "创建和运行实验、选择 Trace 来源并查看实验与 Case
 - 已选择运行主机 IP 和该主机上报的可用模型。
 - 至少勾选一个数据集 Case。
 
+xiaoo 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark 实验。先使用现有 curl 安装流程完成客户端与 xiaoo Trace Collector 安装；更新客户端后重启服务，在 Agent 列表选择 `defaultagent · xiaoo · 可执行 N 台`，再选择对应运行主机。历史 Trace 中的 `xiaoo` 名称本身不表示该机器已具备实验执行能力。平台与运行主机可以分开部署，继续使用客户端安装时配置的平台地址。
+
+客户端要求 xiaoo CLI 支持 JSON 输出、Agent 和标题参数；模型 `provider/model` 会拆为 xiaoo 的 provider 和 model 参数。执行错误、模型鉴权失败、无输出和超时会回写为明确失败，原有 Trace Collector 继续负责上传轨迹。若 CLI 返回 HTTP 401，请修复运行主机上的模型鉴权配置后重跑 Case。
+
+xiaoo 实验复用运行主机上同一系统用户已有的配置和密钥。由 launchd/systemd 托管时，客户端通过用户的登录交互 shell（如 zsh/bash）启动 xiaoo，读取已配置在 shell 启动文件中的环境变量；xiaoo 继续自行读取原生密钥存储及 provider 默认变量。无需再次录入 API Key，也无需额外创建模型环境文件。请确保终端 TUI 与客户端使用同一用户；只在某个未保存的终端会话内设置的变量无法由新 shell 恢复。配置中的 TOML 行尾注释可以保留。升级后需重新安装/更新客户端及 FI 组件，再重新创建实验，旧实验冻结的错误模型标识不会自动更新。
+
 模型按完整的 `provider/model` 标识执行；页面在模型名旁展示 provider，避免同名模型混淆。开始实验后，系统等待新 Trace 完整入库，再运行评估器。
+
+xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上传鉴权：Collector 使用的是平台安装密钥，不是模型 API Key。Collector 优先读取当前安装的 `ras/config.json` 上传配置，只有该文件不存在时才兼容旧 FI 配置；显式环境覆盖必须同时提供平台密钥与地址，不能拼接不同来源的配置。更新后可在源码目录执行 `node scripts/xiaoo-trace-collector/install.js` 仅更新 xiaoo Collector，再退出并重新打开 xiaoo，让新的 Hook 命令生效。无需重配模型或修改其他 Agent。
+
+实验 CLI 与 TUI 的无会话 ID 事件按 xiaoo 进程隔离；同一进程同时有多个活动会话时，缺失会话 ID 的事件会跳过并记录提示，不会猜测归属。旧版全局会话缓存不再使用，已串线的历史缓冲不会自动重放或修复，验证请新建实验。
+
+正常退出 xiaoo 后，Collector 会随最终上传携带明确的 Trace 完成标记，平台据此写入会话结束时间并显示“已完成”。若旧版本上传的 Trace 已有完整回复却长期显示“执行中”，更新 Collector 后的新 Trace 会恢复；旧记录需按实际退出时间一次性校正，不会自动猜测。
 
 #### Benchmark 实验
 

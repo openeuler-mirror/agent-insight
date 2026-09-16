@@ -47,7 +47,7 @@ const FI_PROBE_CHILD_ARG = '--probe-fi-inventory-once'
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
 const LIVENESS_TIMEOUT_MS = 75_000
 const LIVENESS_CHECK_MS = 15_000
-const DEFAULT_OPENCODE_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS = 90
+const DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS = 90
 // 长轮询失败后的重试间隔。必须远小于服务端指令 TTL（默认 30s），
 // 否则指令会在两次轮询的空窗里过期。
 const POLL_RETRY_MS = 3_000
@@ -160,11 +160,96 @@ function which(bin) {
   return r.status === 0 ? (r.stdout || '').trim() : null
 }
 
+const xiaooCliProbeCache = new Map()
+
+function executableFingerprint(executable) {
+  try {
+    const resolved = fs.realpathSync(executable)
+    const info = fs.statSync(resolved)
+    return `${resolved}:${info.size}:${info.mtimeMs}`
+  } catch {
+    return String(executable || '')
+  }
+}
+
+function inspectXiaooCli(executable) {
+  if (!executable) {
+    return {
+      requiresCliPrefix: false,
+      supportsFormatJson: false,
+      supportsTitle: false,
+      supportsAgent: false,
+      supportsProvider: false,
+      supportsModel: false,
+    }
+  }
+  const cacheKey = executableFingerprint(executable)
+  const cached = xiaooCliProbeCache.get(cacheKey)
+  if (cached && Date.now() - cached.checkedAt < 30_000) return cached.result
+
+  let topLevelHelp = ''
+  try {
+    const help = spawnSync(executable, ['--help'], { encoding: 'utf8', timeout: 3_000 })
+    if (help.status === 0) topLevelHelp = `${help.stdout || ''}\n${help.stderr || ''}`
+  } catch {}
+  const requiresCliPrefix = /(?:^|\s)--cli(?:\s|,|$)/m.test(topLevelHelp)
+    && topLevelHelp.includes('xiaoo --cli')
+  let runHelp = ''
+  try {
+    const helpArgs = requiresCliPrefix ? ['--cli', 'run', '--help'] : ['run', '--help']
+    const help = spawnSync(executable, helpArgs, { encoding: 'utf8', timeout: 3_000 })
+    if (help.status === 0) runHelp = `${help.stdout || ''}\n${help.stderr || ''}`
+  } catch {}
+  const hasFlag = (flag) => new RegExp(`(?:^|\\s)${flag}(?:[\\s=,]|$)`, 'm').test(runHelp)
+  const result = {
+    requiresCliPrefix,
+    supportsFormatJson: hasFlag('--format') && /\bjson\b/.test(runHelp),
+    supportsTitle: hasFlag('--title'),
+    supportsAgent: hasFlag('--agent'),
+    supportsProvider: hasFlag('--provider'),
+    supportsModel: hasFlag('--model'),
+  }
+  xiaooCliProbeCache.clear()
+  xiaooCliProbeCache.set(cacheKey, { result, checkedAt: Date.now() })
+  return result
+}
+
+function xiaooCollectorInstalled() {
+  const dataRoot = process.env.AGENT_INSIGHT_DATA_DIR
+    || path.join(os.homedir(), '.agent-insight')
+  const pluginPath = path.join(dataRoot, 'xiaoo-trace-collector', 'plugin.json')
+  const configPath = process.env.XIAOO_CONFIG
+    || path.join(
+      process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+      'xiaoo',
+      'config.toml',
+    )
+  try {
+    return fs.statSync(pluginPath).isFile()
+      && fs.readFileSync(configPath, 'utf8').includes('xiaoo-trace-collector')
+  } catch {
+    return false
+  }
+}
+
+function probeExperimentRuntime(platform, executable = which(platform)) {
+  return runtimeAdapters[platform]?.probe(executable) || {
+    canResolveTraceId: false,
+    ready: false,
+  }
+}
+
+function probeXiaooRuntime(executable) {
+  const cli = inspectXiaooCli(executable)
+  const canResolveTraceId = Boolean(executable)
+    && cli.supportsFormatJson && cli.supportsTitle && cli.supportsAgent
+  return { ...cli, canResolveTraceId, ready: canResolveTraceId && xiaooCollectorInstalled() }
+}
+
 function capabilityDiscoveryFingerprint() {
-  const configRoot = path.join(
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-    'opencode',
-  )
+  const xdgConfigRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
+  const configRoot = path.join(xdgConfigRoot, 'opencode')
+  const insightDataRoot = process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight')
   const parts = []
   const visit = (target, depth = 0) => {
     let info
@@ -202,6 +287,9 @@ function capabilityDiscoveryFingerprint() {
     path.join(configRoot, 'agents'),
     path.join(configRoot, 'oh-my-openagent.json'),
     path.join(configRoot, 'oh-my-opencode.json'),
+    path.join(xdgConfigRoot, 'xiaoo', 'config.toml'),
+    path.join(insightDataRoot, 'xiaoo-trace-collector', 'plugin.json'),
+    which('xiaoo') || path.join(insightDataRoot, 'bin', 'xiaoo'),
   ]) visit(target)
   return createHash('sha256').update(parts.join('\n')).digest('hex')
 }
@@ -459,26 +547,37 @@ function normalizeModelIds(models) {
 
 function buildCapabilities(cfg, opts) {
   const fi = getProbe(cfg, opts)
-  const platforms = Object.entries(fi.platforms || {}).map(([id, info]) => ({
-    id,
-    version: info?.version ? String(info.version) : undefined,
-    models: normalizeModelIds(info?.models),
-    agents: normalizeModelIds(info?.agents),
-    runExperimentCase: {
-      version: 2,
-      returnsTraceId: id === 'opencode',
-    },
-    actions: [...WHITELIST],
-  }))
+  const runtimeByPlatform = new Map()
+  const runtimeFor = (id) => {
+    if (!runtimeByPlatform.has(id)) {
+      runtimeByPlatform.set(id, probeExperimentRuntime(id))
+    }
+    return runtimeByPlatform.get(id)
+  }
+  const platforms = Object.entries(fi.platforms || {}).map(([id, info]) => {
+    const runtime = runtimeFor(id)
+    return {
+      id,
+      version: info?.version ? String(info.version) : undefined,
+      models: normalizeModelIds(info?.models),
+      agents: normalizeModelIds(info?.agents),
+      runExperimentCase: {
+        version: 2,
+        returnsTraceId: runtime.canResolveTraceId,
+      },
+      actions: [...WHITELIST],
+    }
+  })
   if (!platforms.length) {
     // 没有 FI inventory 时仍上报本机可见的平台可执行文件，配置下发不依赖 FI。
     for (const id of ['opencode', 'xiaoo']) {
       if (which(id)) {
+        const runtime = runtimeFor(id)
         platforms.push({
           id,
           models: [],
-          agents: [],
-          runExperimentCase: { version: 2, returnsTraceId: id === 'opencode' },
+          agents: id === 'xiaoo' ? ['defaultagent'] : [],
+          runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId },
           actions: [...WHITELIST],
         })
       }
@@ -490,8 +589,9 @@ function buildCapabilities(cfg, opts) {
     'git-patch/v1': { ready: true },
   }
   for (const platform of platforms) {
+    const runtime = runtimeFor(platform.id)
     components[`agent-runtime/${platform.id}/v1`] = {
-      ready: platform.runExperimentCase?.returnsTraceId === true && Boolean(which(platform.id)),
+      ready: platform.runExperimentCase?.returnsTraceId === true && runtime.ready,
     }
   }
   return {
@@ -1018,6 +1118,45 @@ function inspectOpencodeRunEvent(line) {
   }
 }
 
+function inspectXiaooRunEvent(line) {
+  try {
+    const parsed = JSON.parse(String(line || '').trim())
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const type = String(parsed.type || '').toLowerCase()
+    const data = parsed.data && typeof parsed.data === 'object' ? parsed.data : {}
+    // Only lifecycle events own a session; tool output may mention another session.
+    const candidate = type === 'session_start' ? traceIdFromJson(data) : null
+    const nativeId = candidate?.includes(':') ? candidate.split(':').slice(1).join(':') : candidate
+    return {
+      traceId: nativeId && nativeId !== 'unknown' ? nativeId : null,
+      idle: ['response', 'done', 'complete'].includes(type),
+      error: extractStructuredAgentError(line),
+      modelActivity: (type === 'response' && typeof data.raw_reply === 'string' && data.raw_reply.trim().length > 0)
+        || (['text', 'reasoning', 'text_delta'].includes(type) && typeof data.text === 'string' && data.text.length > 0)
+        || ['tool', 'tool_call', 'tool_use', 'tool_result'].includes(type),
+      type,
+    }
+  } catch {
+    return null
+  }
+}
+
+const runtimeAdapters = {
+  opencode: {
+    inspectEvent: inspectOpencodeRunEvent,
+    buildInvocation: buildOpencodeInvocation,
+    probe: (executable) => ({ canResolveTraceId: true, ready: Boolean(executable) }),
+    noOutputCode: 'MODEL_NO_RESPONSE',
+    firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
+  },
+  xiaoo: {
+    inspectEvent: inspectXiaooRunEvent,
+    buildInvocation: buildXiaooInvocation,
+    probe: probeXiaooRuntime,
+    noOutputCode: 'AGENT_NO_OUTPUT',
+  },
+}
+
 function sanitizeAgentDiagnostic(value, maxLength = 800) {
   const compact = String(value || '')
     .replace(/(authorization["']?\s*[:=]\s*["']?bearer\s+)[^\s,'"}]+/gi, '$1[REDACTED]')
@@ -1064,6 +1203,7 @@ function createAgentRunError(code, message, runFacts) {
 
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   const platform = String(payload.platform || '')
+  const runtime = runtimeAdapters[platform]
   const agent = String(payload.agent || '')
   const model = payload.model ? String(payload.model) : null
   const input = String(payload.input || '')
@@ -1095,6 +1235,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     input,
     correlation,
   })
+  const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
   const timeoutMs = Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
   const configuredFirstResponseSeconds = payload.firstModelResponseTimeoutSeconds === null
     || payload.firstModelResponseTimeoutSeconds === undefined
@@ -1103,16 +1244,16 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     : Number(payload.firstModelResponseTimeoutSeconds)
   const firstModelResponseTimeoutSeconds = Number.isFinite(configuredFirstResponseSeconds)
     ? Math.max(1, Math.min(300, configuredFirstResponseSeconds))
-    : DEFAULT_OPENCODE_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS
+    : runtime?.firstResponseTimeoutSeconds || timeoutMs / 1000
   const firstModelResponseTimeoutMs = firstModelResponseTimeoutSeconds * 1000
   const startedAt = new Date().toISOString()
 
   return new Promise((resolve, reject) => {
     fs.mkdirSync(cwd, { recursive: true })
-    const child = spawn(executable, invocation.args, {
+    const child = spawn(launch.executable, launch.args, {
       cwd,
       env,
-      stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      stdio: launch.stdio,
       detached: process.platform !== 'win32',
     })
     reliabilityChild = child
@@ -1172,11 +1313,11 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
     }
     const consumeStdoutLine = (line) => {
-      const event = inspectOpencodeRunEvent(line)
-      captureTraceId(event?.traceId || extractTraceIdFromJsonLine(line))
+      const event = runtime?.inspectEvent(line)
+      captureTraceId(runtime ? event?.traceId : extractTraceIdFromJsonLine(line))
       const structuredError = event?.error || extractStructuredAgentError(line)
       if (structuredError) structuredErrors.push(structuredError)
-      if (platform !== 'opencode' || !event) return
+      if (!runtime || !event) return
       if (event.modelActivity) observeModelActivity()
       if (event.error) {
         const classified = classifyAgentExitFailure({
@@ -1189,15 +1330,15 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         const code = classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR'
         const message = classified.code === 'MODEL_UNAVAILABLE'
           ? classified.message
-          : `OpenCode 会话报告模型错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
+          : `${platform} 会话报告模型错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
         if (settled) {
           if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
         } else {
           terminateForEarlyFailure(code, message)
         }
       } else if (event.idle && !modelActivityObserved) {
-        const code = 'MODEL_NO_RESPONSE'
-        const message = 'OpenCode 会话已进入 idle，但未观察到任何模型输出或工具调用'
+        const code = runtime.noOutputCode
+        const message = `${platform} 会话已结束，但未观察到任何模型输出或工具调用`
         if (settled) {
           if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
         } else {
@@ -1205,7 +1346,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         }
       }
     }
-    child.stdout.on('data', (c) => {
+    child.stdio[launch.stdoutIndex].on('data', (c) => {
       stdoutBuffer += String(c)
       const lines = stdoutBuffer.split(/\r?\n/)
       stdoutBuffer = lines.pop() || ''
@@ -1213,10 +1354,10 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         consumeStdoutLine(line)
       }
       if (structuredErrors.length > 20) structuredErrors.splice(0, structuredErrors.length - 20)
-      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
+      captureTraceId(runtime ? runtime.inspectEvent(stdoutBuffer)?.traceId : extractTraceIdFromJsonLine(stdoutBuffer))
       if (stdoutBuffer.length > 1024 * 1024) stdoutBuffer = stdoutBuffer.slice(-1024 * 1024)
     })
-    child.stderr.on('data', (c) => {
+    child.stdio[launch.stderrIndex].on('data', (c) => {
       stderr += String(c)
       if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024)
     })
@@ -1243,7 +1384,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         timedOut,
         modelActivityObserved,
         firstModelActivityAt: firstModelActivityAt || undefined,
-        firstModelResponseTimeoutSeconds: platform === 'opencode'
+        firstModelResponseTimeoutSeconds: runtime
           ? firstModelResponseTimeoutSeconds
           : undefined,
         failureDetectedAt: earlyFailure?.detectedAt || undefined,
@@ -1286,15 +1427,15 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
           diagnostic: [...structuredErrors, stderr].filter(Boolean).join('\n'),
         })
         failure = createAgentRunError(classified.code, classified.message, runFacts)
-      } else if (!failure && platform === 'opencode' && !modelActivityObserved) {
+      } else if (!failure && runtime && !modelActivityObserved) {
         failure = createAgentRunError(
-          'MODEL_NO_RESPONSE',
-          'OpenCode Agent 已结束，但未观察到任何模型输出或工具调用',
+          runtime.noOutputCode,
+          `${platform} Agent 已结束，但未观察到任何模型输出或工具调用`,
           runFacts,
         )
       } else if (!failure && !traceId) {
         failure = createAgentRunError(
-          platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED',
+          runtime ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED',
           `平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`,
           runFacts,
         )
@@ -1312,11 +1453,11 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
       hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
     }, timeoutMs)
-    if (platform === 'opencode' && firstModelResponseTimeoutMs < timeoutMs) {
+    if (runtime && firstModelResponseTimeoutMs < timeoutMs) {
       modelStartTimer = setTimeout(() => {
         terminateForEarlyFailure(
           'MODEL_START_TIMEOUT',
-          `OpenCode 会话在 ${firstModelResponseTimeoutSeconds} 秒内未产生首个模型输出或工具调用，已提前终止`,
+          `${platform} 会话在 ${firstModelResponseTimeoutSeconds} 秒内未产生首个模型输出或工具调用，已提前终止`,
         )
       }, firstModelResponseTimeoutMs)
     }
@@ -1333,6 +1474,33 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   })
 }
 
+function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
+  const direct = {
+    executable,
+    args: invocation.args,
+    stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    stdoutIndex: 1,
+    stderrIndex: 2,
+  }
+  if (platform !== 'xiaoo' || !['launchd', 'systemd'].includes(process.env.AGENT_INSIGHT_SUPERVISOR)) {
+    return direct
+  }
+  const shell = process.env.SHELL || os.userInfo().shell || '/bin/sh'
+  const shellName = path.basename(shell)
+  if (!path.isAbsolute(shell) || !['zsh', 'bash', 'sh', 'dash', 'ksh'].includes(shellName)) {
+    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'xiaoo 后台执行需要兼容 POSIX 的用户 shell（如 bash 或 zsh）')
+  }
+  // Separate pipes keep shell startup output (including possible credentials) out of Trace and diagnostics.
+  return {
+    executable: shell,
+    args: ['-lic', 'exec 1>&3 2>&4; exec 3>&- 4>&-; cd -- "$1" && shift && exec "$@"',
+      'agent-insight-xiaoo', cwd, executable, ...invocation.args],
+    stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
+    stdoutIndex: 3,
+    stderrIndex: 4,
+  }
+}
+
 function buildExperimentCaseArgs(executable, input) {
   if (input.platform === 'opencode') {
     const args = ['run', '--format', 'json', '--agent', input.agent]
@@ -1341,21 +1509,6 @@ function buildExperimentCaseArgs(executable, input) {
       if (`${help.stdout || ''}\n${help.stderr || ''}`.includes('--auto')) args.push('--auto')
     } catch {}
     if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
-    if (input.model) args.push('--model', input.model)
-    return args
-  }
-  if (input.platform === 'xiaoo') {
-    let helpText = ''
-    try {
-      const help = spawnSync(executable, ['--help'], { encoding: 'utf8', timeout: 15_000 })
-      helpText = `${help.stdout || ''}\n${help.stderr || ''}`
-    } catch {
-      helpText = ''
-    }
-    const args = /(?:^|\s)--cli(?:\s|,|$)/.test(helpText) && helpText.includes('xiaoo --cli')
-      ? ['--cli', 'run']
-      : ['run']
-    args.push('-p', input.input, '--agent', input.agent)
     if (input.model) args.push('--model', input.model)
     return args
   }
@@ -1375,20 +1528,42 @@ function parseOpencodeSlashCommand(value) {
 }
 
 function buildExperimentCaseInvocation(executable, input) {
+  const adapter = runtimeAdapters[input.platform]
+  if (adapter) return adapter.buildInvocation(executable, input)
+  return { args: buildExperimentCaseArgs(executable, input), stdin: null }
+}
+
+function buildOpencodeInvocation(executable, input) {
   const args = buildExperimentCaseArgs(executable, input)
-  if (input.platform === 'opencode') {
-    const slashCommand = parseOpencodeSlashCommand(input.input)
-    if (slashCommand) {
-      args.push('--command', slashCommand.command)
-      if (slashCommand.arguments) args.push(slashCommand.arguments)
-      return { args, stdin: null }
+  const slashCommand = parseOpencodeSlashCommand(input.input)
+  if (slashCommand) {
+    args.push('--command', slashCommand.command)
+    if (slashCommand.arguments) args.push(slashCommand.arguments)
+    return { args, stdin: null }
+  }
+  return { args, stdin: input.input }
+}
+
+function buildXiaooInvocation(executable, input) {
+  const cli = inspectXiaooCli(executable)
+  if (!cli.supportsFormatJson || !cli.supportsAgent || !cli.supportsTitle) {
+    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'xiaoo CLI 不支持实验所需的 --format json、--agent 或 --title')
+  }
+  const args = cli.requiresCliPrefix ? ['--cli', 'run'] : ['run']
+  args.push('--format', 'json', '--agent', input.agent, '-p', input.input)
+  if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
+  if (input.model) {
+    const separator = input.model.indexOf('/')
+    if (!cli.supportsModel || (separator > 0 && !cli.supportsProvider)) {
+      throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'xiaoo CLI 不支持所选模型的 --provider/--model 参数')
     }
-    return { args, stdin: input.input }
+    if (separator > 0) {
+      args.push('--provider', input.model.slice(0, separator), '--model', input.model.slice(separator + 1))
+    } else {
+      args.push('--model', input.model)
+    }
   }
-  return {
-    args,
-    stdin: null,
-  }
+  return { args, stdin: null }
 }
 
 function traceIdFromJson(value, depth = 0) {
@@ -1888,6 +2063,7 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 
 module.exports = {
+  buildAgentProcessLaunch,
   controlUrls,
   rasRuntimeConfigPath,
   writeRasRuntimeConfig,
@@ -1907,6 +2083,8 @@ module.exports = {
   extractTraceIdFromJsonLine,
   extractStructuredAgentError,
   inspectOpencodeRunEvent,
+  inspectXiaooRunEvent,
+  probeExperimentRuntime,
   sanitizeAgentDiagnostic,
   classifyAgentExitFailure,
   buildCollectorArgs,

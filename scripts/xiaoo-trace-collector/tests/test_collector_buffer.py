@@ -50,6 +50,11 @@ class CollectorBufferTests(unittest.TestCase):
         self.assertGreaterEqual(len(spans), 2)
         scope = payload["resourceSpans"][0]["scopeSpans"][0]["scope"]["name"]
         self.assertEqual(scope, "agent-insight.xiaoo.otel")
+        root_attrs = {
+            item["key"]: item["value"]
+            for item in spans[0]["attributes"]
+        }
+        self.assertEqual(root_attrs["agent.insight.trace.completed"], {"boolValue": True})
 
     def test_persist_reload(self) -> None:
         sid = "xiaoo:sess-persist"

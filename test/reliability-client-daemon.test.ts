@@ -786,14 +786,24 @@ test('Agent diagnostics redact common JSON, environment, query, bearer, and bare
 })
 
 test('client advertises Trace-ID-safe generic execution only for supported platforms', () => {
-  const caps = client.buildCapabilities(
-    { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
-    { refresh: true },
-  )
-  const opencode = caps.platforms.find((platform) => platform.id === 'opencode')
-  const xiaoo = caps.platforms.find((platform) => platform.id === 'xiaoo')
-  assert.deepEqual(opencode?.runExperimentCase, { version: 2, returnsTraceId: true })
-  assert.equal(xiaoo?.runExperimentCase?.returnsTraceId, false)
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-old-xiaoo-'))
+  const previousPath = process.env.PATH
+  fs.writeFileSync(path.join(root, 'xiaoo'), `#!${process.execPath}\nconsole.log('legacy --agent only')\n`, { mode: 0o755 })
+  process.env.PATH = `${root}:${previousPath || ''}`
+  try {
+    const caps = client.buildCapabilities(
+      { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
+      { refresh: true },
+    )
+    const opencode = caps.platforms.find((platform) => platform.id === 'opencode')
+    const xiaoo = caps.platforms.find((platform) => platform.id === 'xiaoo')
+    assert.deepEqual(opencode?.runExperimentCase, { version: 2, returnsTraceId: true })
+    assert.equal(xiaoo?.runExperimentCase?.returnsTraceId, false)
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('installer defaults to installing FI, and --no-fi opts out', () => {

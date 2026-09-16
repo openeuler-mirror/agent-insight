@@ -45,7 +45,8 @@ function copyTree() {
   const plugin = entries.map(([id, hook_point, op]) => ({
     id,
     hook_point,
-    command: `python3 "${hookerMain}" ${op}`,
+    // exec keeps the xiaoo process as the collector's parent for session isolation.
+    command: `exec python3 '${hookerMain.replace(/'/g, "'\\''")}' ${op}`,
   }))
   fs.writeFileSync(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`, 'utf8')
   return pluginPath

@@ -54,20 +54,11 @@ def load_otlp_config() -> tuple[str | None, str | None]:
     host = (os.environ.get("AGENT_INSIGHT_HOST") or "").strip().rstrip("/")
     if key and host:
         return key, f"{host}/api/ingest/otel/v1/traces"
+    if key or explicit_env or host:
+        logger.warning("incomplete xiaoo OTLP environment configuration; upload skipped")
+        return None, None
 
-    # FI worker config
-    fi_cfg = _insight_home() / "fault-injection" / "config.json"
-    try:
-        if fi_cfg.is_file():
-            data = json.loads(fi_cfg.read_text(encoding="utf-8"))
-            key = key or (str(data.get("apiKey") or "").strip() or None)
-            base = str(data.get("insightBaseUrl") or "").strip().rstrip("/")
-            if key and base:
-                return key, f"{base}/api/ingest/otel/v1/traces"
-    except Exception:
-        logger.debug("failed to read FI config for OTLP", exc_info=True)
-
-    # RAS config (legacy install still has api key / events_url)
+    # The installer refreshes RAS credentials; FI may still belong to an old installation.
     ras_home = os.environ.get(
         "AGENT_INSIGHT_RAS_HOME",
         str(_insight_home() / "ras"),
@@ -79,7 +70,7 @@ def load_otlp_config() -> tuple[str | None, str | None]:
             insight = (data.get("agent_ras") or {}).get("insight") or {}
             if insight.get("enabled") is False:
                 return None, None
-            key = key or (insight.get("api_key") or None)
+            key = str(insight.get("api_key") or "").strip() or None
             explicit = insight.get("otel_traces_url") or insight.get("traces_url")
             if key and explicit:
                 return str(key), str(explicit)
@@ -99,10 +90,23 @@ def load_otlp_config() -> tuple[str | None, str | None]:
                 else:
                     traces = base + "/api/ingest/otel/v1/traces"
                 return str(key), traces
+            logger.warning("incomplete xiaoo OTLP RAS configuration; upload skipped")
+            return None, None
     except Exception:
-        logger.warning("failed to read RAS config for OTLP", exc_info=True)
+        logger.warning("failed to read xiaoo OTLP RAS configuration; upload skipped")
+        return None, None
 
-    return key, None
+    fi_cfg = _insight_home() / "fault-injection" / "config.json"
+    try:
+        if fi_cfg.is_file():
+            data = json.loads(fi_cfg.read_text(encoding="utf-8"))
+            key = str(data.get("apiKey") or "").strip() or None
+            base = str(data.get("insightBaseUrl") or "").strip().rstrip("/")
+            if key and base:
+                return key, f"{base}/api/ingest/otel/v1/traces"
+    except Exception:
+        logger.warning("failed to read legacy xiaoo OTLP configuration; upload skipped")
+    return None, None
 
 
 def post_otlp_traces(payload: dict[str, Any], *, timeout: float = 8.0) -> bool:

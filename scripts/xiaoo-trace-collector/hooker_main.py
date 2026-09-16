@@ -14,9 +14,13 @@ registered as a plugin ``hook_point``. Handler kept for tests only.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import subprocess
 import sys
+import tempfile
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -157,46 +161,85 @@ def _session_key(payload: dict[str, Any]) -> str | None:
 _ACTIVE_SESSION_MAX_AGE_MS = 6 * 60 * 60 * 1000  # 6h
 
 
-def _active_session_path() -> Path:
-    return _buf_root() / "_active_session.json"
+@lru_cache(maxsize=1)
+def _process_scope() -> str | None:
+    # plugin.json uses exec: the parent is xiaoo, not an ephemeral hook shell.
+    pid = os.getppid()
+    if pid <= 1:
+        return None
+    try:
+        identity = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "lstart=", "-o", "comm="],
+            text=True, stderr=subprocess.DEVNULL, timeout=2,
+        ).strip()
+        if not identity or not Path(identity.split()[-1]).name.lower().startswith("xiaoo"):
+            return None
+        return hashlib.sha256(f"{pid}:{identity}".encode()).hexdigest()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _active_session_dir() -> Path | None:
+    scope = _process_scope()
+    return _buf_root() / "_active_sessions" / scope if scope else None
+
+
+def _session_filename(sid: str) -> str:
+    return hashlib.sha256(sid.encode()).hexdigest() + ".json"
 
 
 def remember_active_session(sid: str) -> None:
-    """Persist last known session for hooks that omit session_id (e.g. Llm.complete.post)."""
+    """Track live sessions only within the owning xiaoo process."""
 
+    root = _active_session_dir()
+    if root is None:
+        return
     try:
-        root = _buf_root()
-        root.mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
         row = {"sid": sid, "ts_ms": int(time.time() * 1000)}
-        _active_session_path().write_text(json.dumps(row), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(mode="w", dir=root, delete=False) as stream:
+            tmp = Path(stream.name)
+            json.dump(row, stream)
+        try:
+            tmp.replace(root / _session_filename(sid))
+        finally:
+            tmp.unlink(missing_ok=True)
     except OSError as exc:
         print(f"xiaoo-trace-collector: remember session failed: {exc}", file=sys.stderr)
 
 
-def recall_active_session(*, max_age_ms: int = _ACTIVE_SESSION_MAX_AGE_MS) -> str | None:
-    """Return sticky ``xiaoo:<uuid>`` if recent; else None."""
+def forget_active_session(sid: str) -> None:
+    root = _active_session_dir()
+    if root is not None:
+        (root / _session_filename(sid)).unlink(missing_ok=True)
 
-    path = _active_session_path()
+
+def recall_active_session(*, max_age_ms: int = _ACTIVE_SESSION_MAX_AGE_MS) -> str | None:
+    """Never guess ownership when a process has multiple live sessions."""
+
+    root = _active_session_dir()
+    if root is None:
+        return None
     try:
-        if not path.is_file():
-            return None
-        row = json.loads(path.read_text(encoding="utf-8"))
-        sid = _as_nonempty_str(row.get("sid") if isinstance(row, dict) else None)
-        if not sid or not sid.startswith("xiaoo:"):
-            return None
-        native = strip_platform_prefix(sid)
-        if not native or native.lower() == "unknown":
-            return None
-        ts_ms = int(row.get("ts_ms") or 0) if isinstance(row, dict) else 0
-        if ts_ms and (int(time.time() * 1000) - ts_ms) > max_age_ms:
-            return None
-        return f"xiaoo:{native}"
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        sessions = set()
+        for path in root.glob("*.json"):
+            row = json.loads(path.read_text(encoding="utf-8"))
+            sid = _as_nonempty_str(row.get("sid"))
+            ts_ms = int(row.get("ts_ms") or 0)
+            if not sid or not sid.startswith("xiaoo:") or not ts_ms:
+                return None
+            if int(time.time() * 1000) - ts_ms > max_age_ms:
+                return None
+            sessions.add(sid)
+        if len(sessions) == 1:
+            return sessions.pop()
+        return None
+    except (OSError, AttributeError, TypeError, ValueError):
         return None
 
 
 def resolve_session_key(payload: dict[str, Any], *, allow_sticky: bool = False) -> str | None:
-    """Resolve prefixed session key; optionally fall back to sticky last chat/lifecycle."""
+    """Resolve explicit ownership, or the sole active session in this process."""
 
     sid = _session_key(payload)
     if sid is not None:
@@ -280,11 +323,11 @@ def handle_session_state(payload: dict[str, Any]) -> dict[str, Any]:
     state = str(payload.get("state") or payload.get("outcome") or "").lower()
     if do_flush or state in {"closed", "force_closed", "destroyed", "idle"}:
         _safe(otel_trace.flush_session, sid)
+        _safe(forget_active_session, sid)
     return {"result": "ack"}
 
 
 def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
-    # Tool payloads may omit session_id; sticky from prior chat/lifecycle.
     sid = resolve_session_key(payload, allow_sticky=True)
     _audit_hook("tool_post", payload, sid=sid)
     if sid is None:
@@ -326,7 +369,7 @@ def handle_llm_complete_post(payload: dict[str, Any]) -> dict[str, Any]:
     """Insight ⓪ assistant completion via ``*.Llm.complete.post``.
 
     xiaoO's Llm.complete.post payload has ``response.message.text`` but no
-    ``session_id``; associate via sticky session remembered from chat/lifecycle.
+    ``session_id``; associate only with an unambiguous process-local session.
     """
 
     sid = resolve_session_key(payload, allow_sticky=True)
