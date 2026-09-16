@@ -144,7 +144,7 @@ description: "Agent、Trace、Skill、Evaluator 等核心概念"
 
 ## 怎么继续读
 
-- 想先跑通第一次接入： [5 分钟上手](./quickstart)
+- 想先跑通第一次接入： [830 平台安装说明](./quickstart)
 - 想看平台首页与模块结构： [Agent Insight](./home)
 - 想理解真实执行是怎么记录的： [运行观测](./observability/index)
 - 想建立离线质量回归： [评测中心](./evaluation/index)

@@ -178,4 +178,4 @@ P95 时延用于观察慢请求与长尾体验：
 - 想正式纳管 Agent → [Agent 管理](./agent-management)
 - 想查看具体执行链路 → [链路追踪](./observability/view-traces)
 - 想统一名词口径 → [核心概念](./concepts)
-- 想从 Workspace 首页开始上手 → [5 分钟上手](./quickstart)
+- 想从 Workspace 首页开始上手 → [830 平台安装说明](./quickstart)

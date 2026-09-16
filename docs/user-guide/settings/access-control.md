@@ -84,4 +84,4 @@ export ACTRAIL_PLUGIN_DIR=/path/to/plugins
 ## 下一步
 
 - 验证链路是否成功上报： [链路追踪](../observability/view-traces)
-- 继续完成整体接入流程： [5 分钟上手](../quickstart)
+- 继续完成整体接入流程： [830 平台安装说明](../quickstart)

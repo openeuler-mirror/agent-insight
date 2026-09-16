@@ -5,6 +5,8 @@ description: "不发布 npm 包，直接用本地 npm pack 产物在服务器上
 
 # Docker 测试构建
 
+本页面向维护者验证源码打包，不是 830 服务端对外交付安装步骤。830 仅交付经确认的固定 Docker 镜像；用户请按 [830 平台安装说明](./quickstart) 安装。
+
 本页适用于这样一种场景：
 
 - 你已经有一台服务器
@@ -25,12 +27,6 @@ description: "不发布 npm 包，直接用本地 npm pack 产物在服务器上
 - `apt-get` 和基础镜像层可以复用缓存
 - 改动只体现在 tarball 这一层，重建更快
 - 可以直接验证 Docker 运行时的数据目录是否正确
-
-> **Note**
-> 如果服务器上直接有源码仓库，还有一条更省事的路径：给容器配 `AGENT_INSIGHT_SOURCE_DIR` 挂载源码目录，
-> 之后 `git pull` + `docker restart` 就能跑最新代码，连镜像都不用重建。见
-> [5 分钟上手 · 用法三：挂载源码运行](./quickstart#用法三挂载源码运行代码更新后重启即可生效)。
-> 该路径的依赖来自镜像，源码新增依赖时仍需重建镜像。
 
 ## 本地准备
 
@@ -249,10 +245,6 @@ curl -i http://127.0.0.1:4090/api/health
 
 测试流程只适合验证“当前这份本地代码打出来的 npm 包是否能在 Docker 中正常运行”。
 
-正式发布时，建议还是切回仓库根目录正式 `Dockerfile` 的 npm 拉包方式，例如：
+完成维护者测试后，对外交付应使用交付清单中已验证的固定版本镜像，并附目标架构与离线包 SHA256；不要把临时测试镜像或浮动 tag 当作 830 交付版本。用户安装流程见 [830 平台安装说明](./quickstart)。
 
-```bash
-docker build --build-arg AGENT_INSIGHT_VERSION=latest -t agent-insight:npm-latest .
-```
-
-测试镜像和正式镜像可以并存，互不影响。
+维护者的镜像构建与导出步骤见 [Docker 镜像发布](../developer-guide/docker-image-release.md)。测试镜像可保留用于对照，但不要让测试容器与正式容器同时写入同一 SQLite 数据目录。
