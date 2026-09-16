@@ -29,6 +29,10 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
+## Trace 完整内容弹窗
+
+`AgentTraceView.ContentModal` 向 `SmartViewer` 传入 `fullContent`。该选项仅在完整内容弹窗启用：`JsonRenderer` 关闭默认层级折叠、长字符串截断和大数组分组，用户仍可手动收起节点。预览区继续使用框架对应的 `jsonCollapsed` 配置；复制仍使用完整原文。
+
 ## 导航信息架构（功能模块）
 侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。830 转测导航只展示链路追踪、评测、模型注册和安装指导；其他页面与 API 继续保留，不从侧边栏暴露。
 

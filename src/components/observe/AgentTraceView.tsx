@@ -1651,7 +1651,7 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
                     </Button>
                 </DialogHeader>
                 <div className="overflow-auto flex-1">
-                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" />
+                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" fullContent />
                 </div>
             </DialogContent>
         </Dialog>
