@@ -3927,7 +3927,7 @@ function ModalCodeBlock({ value }: { value: unknown }) {
     return (
         <SmartViewer
             text={text}
-            toolbar={false}
+            toolbar
             maxHeight={560}
             theme="light"
         />

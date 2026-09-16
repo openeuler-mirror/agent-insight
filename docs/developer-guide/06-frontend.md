@@ -29,6 +29,8 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
 
+`AgentTraceView.EventDetailModal` 中的 Input/Output 共用 `ModalCodeBlock`，启用 `SmartViewer` 工具栏以提供完整内容复制；不同内容格式均调用共享 `copyText`，保留既有格式识别和滚动展示。
+
 ## 导航信息架构（功能模块）
 侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。830 转测导航只展示链路追踪、评测、模型注册和安装指导；其他页面与 API 继续保留，不从侧边栏暴露。
 
