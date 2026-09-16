@@ -25,8 +25,6 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/{quality,security,memory,optapi,evaluation/[id]}` | `QualityPage`, `SecurityPage`, `MemoryPage`, `OptApiPage`, `EvaluationDetailPage` | 其他仪表盘 |
 | `/details`, `/skill-detail` | `DetailPage`, `SkillDetailPage` | 可分享的详情视图 |
 
-`AgentTraceView` 的 `DisclosureBar`（Thought / Response）和 `ToolCallList` 使用 `ChevronRight`，仅在自身 `open` 时旋转 90°，与消息及 Input/Output 外层一致；不改变默认折叠状态。
-
 API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-file-map.md](03-file-map.md#api-routes-srcappapi--grouped)。
 
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
@@ -72,6 +70,8 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。Version Analysis page: `app/(main)/version-analysis/page.tsx`; Version Management page: `app/(main)/version-management/page.tsx`。
 - **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`）、`skill-generator/*`。
 - **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。
+- **Trace 树控件** — `AgentTraceView` 的收起保留根 Agent 的 key，展开恢复 Agent、子 Agent 调用及 CHAIN 的可展开 key。按钮复用 TRACE ID 表头的 `TermPopover`（信息图标、150ms 悬停延迟、下方说明卡片及键盘聚焦），按当前操作说明展开/收起子 Agent，根 Agent 收起时仍保持展开。`slowOnly=1` 保留 URL 契约，界面标为“仅慢节点（>60s）”；开启时耗时控件展示固定的 `SLOW_MS`（60000）并禁用编辑，不改写本地 `minDurationMs`，关闭后恢复原选择。耗时选项按严格大于阈值过滤，未知耗时不命中；Agent 行保留作树上下文，慢数量徽标仍统计慢 Agent。类型、Token 和搜索条件继续叠加。
+- **LLM 消息区块** — `AgentTraceView` 的 `DisclosureBar`（Thought / Response）和 `ToolCallList` 使用 `ChevronRight`，仅在自身 `open` 时旋转 90°，与消息及 Input/Output 外层一致；不改变默认折叠状态。
 - **实验向导** — `app/(main)/experiments/new/page.tsx` 的第 ② 步通过 `/api/experiments/traces` 服务端分页选择 root Trace；搜索同时匹配 `Execution.id`、`taskId` 与 `query`，时间支持预设窗口和自定义起止时间，用户标签多选使用 AND 语义。筛选栏下方的独立已选区读取跨页 `selected` Map，支持单条移除和全部清空；筛选状态不清空跨页已选 case，跨页全选沿用当前筛选参数并受 500 条上限保护。这些筛选不持久化为监听模式规则。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
 - **基础组件（复用，不要重建）** — `ui/*`（button、card、dialog、select、switch……）、`feedback/{EmptyState,ErrorState,StatusBadge}.tsx`、`text/*`（`MetricValue`、`RelativeTime`、`TruncateText`）、`SmartViewer/*`。

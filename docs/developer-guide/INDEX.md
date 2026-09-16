@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `58b1446189edce6201ec6e9b32df9a31e34ee4e7` (`58b14461`) |
-| Branch | `codex/830-issue-312-20260916` |
-| Date | 2026-09-16T22:00:35+08:00 |
+| Commit | `b5773fb0cece43e57500fbafd3ecb53964fd8872` (`b5773fb0`) |
+| Branch | `codex/830-issue-308-20260915` |
+| Date | 2026-09-16T16:30:33+08:00 |
 | Author | gyctl |
-| Subject | `fix: 统一LLM消息区块展开收起箭头方向` |
+| Subject | `merge: 同步最新830并解决PR !406冲突` |
 
-**如何更新：** `git diff 58b14461 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff b5773fb0 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
