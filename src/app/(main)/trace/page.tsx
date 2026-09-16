@@ -646,6 +646,7 @@ function TracePageContent() {
         }
         const exec = data.find(e => e.task_id === taskIdParam || e.upload_id === taskIdParam);
         if (exec) {
+            fetchGuardRef.current = null;
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }

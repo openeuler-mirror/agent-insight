@@ -1366,7 +1366,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
 
 /**
  * 某个分类列的观测值 + 出现次数,给过滤器值下拉(facet)用 —— 对标 langfuse SUGGESTIONS 的「值 + 件数」。
- * 仅允许白名单内的真实标量列 groupBy(防任意列注入);root 作用域、按 user 隔离,与其它 facet 口径一致。
+ * 仅允许白名单内的真实标量列 groupBy；子 Agent 类型查询子任务，其他列保持 root 作用域，均按 user 隔离。
  */
 const FACETABLE_COLUMNS = new Set(['framework', 'agentName', 'model', 'subagentType']);
 export async function listObservedFieldValues(
@@ -1392,7 +1392,7 @@ export async function listObservedFieldValues(
         }
     }
     if (!FACETABLE_COLUMNS.has(column)) return [];
-    const where: any = { isSubagent: false, [column]: { not: null } };
+    const where: any = { isSubagent: column === 'subagentType', [column]: { not: null } };
     if (user) where.user = user;
     try {
         const rows = await prismaRaw.execution.groupBy({

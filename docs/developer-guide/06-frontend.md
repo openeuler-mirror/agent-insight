@@ -25,6 +25,8 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/{quality,security,memory,optapi,evaluation/[id]}` | `QualityPage`, `SecurityPage`, `MemoryPage`, `OptApiPage`, `EvaluationDetailPage` | 其他仪表盘 |
 | `/details`, `/skill-detail` | `DetailPage`, `SkillDetailPage` | 可分享的详情视图 |
 
+Trace 详情通过 URL 的 `taskId` 选择执行。命中当前列表缓存时，先清空 `fetchGuardRef` 再更新选中记录；再次打开同一子 Trace 会重新查询，先前子 Trace 的延迟响应也不会覆盖已选回的父执行。
+
 API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-file-map.md](03-file-map.md#api-routes-srcappapi--grouped)。
 
 > **注意**：上表是「磁盘上存在的页面」全集；其中一部分**未挂载到侧边栏导航**（见下一节）。新增页面时，路由文件存在 ≠ 用户可达。
