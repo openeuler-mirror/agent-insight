@@ -250,8 +250,10 @@ export const en = {
   traceTree: {
     expandAll: 'Expand',
     collapseAll: 'Collapse',
+    expandAllHint: 'Expand child Agents and their descendants.',
+    collapseAllHint: 'Collapse child Agents; keep the root Agent and its direct events visible.',
     searchPlaceholder: 'Search agent, tool, content… (Ctrl+F)',
-    slowOnly: 'Anomalies only',
+    slowOnly: 'Slow nodes only (>60s)',
     filters: 'Filters',
     filterType: 'Type',
     filterDuration: 'Duration',

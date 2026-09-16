@@ -250,8 +250,10 @@ export const zh = {
   traceTree: {
     expandAll: '展开',
     collapseAll: '收起',
+    expandAllHint: '展开子 Agent 及其下层节点。',
+    collapseAllHint: '收起子 Agent，根 Agent 及其直接节点保持可见。',
     searchPlaceholder: '搜索 Agent、Tool、内容… (Ctrl+F)',
-    slowOnly: '仅异常',
+    slowOnly: '仅慢节点（>60s）',
     filters: '筛选',
     filterType: '类型',
     filterDuration: '耗时',
