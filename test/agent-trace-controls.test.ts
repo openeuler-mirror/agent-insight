@@ -47,10 +47,10 @@ function expansion(initial: string[]) {
     };
 }
 
-test('collapse hides ordinary events even when the root is the only expandable node', () => {
+test('collapse keeps the root expanded when there are no child Agents', () => {
     const state = expansion(['agent:root']);
     state.collapse();
-    assert.deepEqual(state.keys(), []);
+    assert.deepEqual(state.keys(), ['agent:root']);
     state.expand();
     assert.deepEqual(state.keys(), ['agent:root']);
 });
@@ -59,7 +59,7 @@ test('collapse then expand restores every nested Agent and CHAIN key', () => {
     const keys = ['agent:root', 'event:root:0', 'agent:child', 'event:child:1'];
     const state = expansion(keys);
     state.collapse();
-    assert.deepEqual(state.keys(), []);
+    assert.deepEqual(state.keys(), ['agent:root']);
     state.expand();
     assert.deepEqual(state.keys(), keys);
 });

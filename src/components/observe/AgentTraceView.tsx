@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
@@ -641,7 +642,7 @@ export default function AgentTraceView({
 
     const collapseAll = () => {
         if (!tree) return;
-        setExpandedKeys(new Set());
+        setExpandedKeys(new Set([agentKey(tree.id)]));
     };
 
     const toggleExpandAll = () => (isAllExpanded ? collapseAll() : expandAll());
@@ -842,18 +843,25 @@ export default function AgentTraceView({
                         'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
                         !(showFilters || hasActiveFilters) && 'border-b border-border',
                     )}>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={toggleExpandAll}
-                            aria-pressed={isAllExpanded}
-                            className="h-7 border border-border rounded-md text-xs px-2 gap-1 shrink-0"
-                        >
-                            {isAllExpanded
-                                ? <ChevronsDownUp className="size-3.5" />
-                                : <ChevronsUpDown className="size-3.5" />}
-                            {isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
-                        </Button>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={toggleExpandAll}
+                                    aria-pressed={isAllExpanded}
+                                    className="h-7 border border-border rounded-md text-xs px-2 gap-1 shrink-0"
+                                >
+                                    {isAllExpanded
+                                        ? <ChevronsDownUp className="size-3.5" />
+                                        : <ChevronsUpDown className="size-3.5" />}
+                                    {isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                                {isAllExpanded ? tt('traceTree.collapseAllHint') : tt('traceTree.expandAllHint')}
+                            </TooltipContent>
+                        </Tooltip>
 
                         {/* Global search bar */}
                         <div className="flex-1 min-w-[120px] flex items-center gap-1 px-2 py-0.5 rounded-md border border-border bg-background-secondary focus-within:border-primary transition-colors">
