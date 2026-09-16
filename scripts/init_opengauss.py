@@ -70,6 +70,7 @@ TABLE_DEFINITIONS = {
             ("cost", "FLOAT"),
             ("latency", "FLOAT"),
             ("timestamp", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ("lastIngestedAt", "TIMESTAMP"),
             ("model", "TEXT"),
             ("finalResult", "TEXT"),
             ("skill", "TEXT"),

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { inferQuietWindowTraceCompletedAt } from '@/app/api/observe/data/route';
+import { inferQuietWindowTraceCompletedAt } from '@/lib/observe/auto-eval-readiness';
 import { aggregateJiuwenOtlpFromSpans, type JiuwenSpan } from '@/lib/ingest/otel/jiuwen/aggregate';
 
 // ---- read-side quiet-window inference (single-agent / mid-run team) ----------
