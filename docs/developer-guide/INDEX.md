@@ -9,11 +9,11 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a7d8aad249ded23d8bab65b872d6ade221eca03a` (`a7d8aad2`) |
-| Branch | `resolve/pr-294` |
-| Date | 2026-09-14 |
-| Author | wangxin-2026 |
-| Subject | `chore: resolve PR #294 conflicts with upstream/master` |
+| Commit | `6aa539e905e7909862cb4bcd3791b66b7d2b1f90` (`6aa539e9`) |
+| Branch | `bench-9-16` |
+| Date | 2026-09-16 |
+| Author | openeuler-ci-bot |
+| Subject | `!410 完善 Benchmark 端到端评测与结果展示，补充 Benchmark 接入、扩展和部署文档` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
@@ -70,7 +70,9 @@
 
 > 2026-09-15 working-tree overlay：Trace 回流按 `traceSource.taskId` 在目标数据集和当前批次内去重；接口分别返回新增数与重复跳过数，全部重复时不修改数据集，前端提示对应结果。
 
-**如何更新：** `git diff a7d8aad2 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+> 2026-09-16 working-tree overlay：本轮仅更新安装 bundle 契约。源码启动导出完整项目根目录，RAS/client bundle 复用该目录并在白名单文件缺失时返回 503；构建恢复 npm 的 prebuild 生命周期。其他指南未重新审计。
+
+**如何更新：** `git diff 6aa539e9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

@@ -207,7 +207,7 @@ echo "Building project..."
 # Limit Node memory to 2GB to prevent OOM kills on small servers
 # Next 16 Turbopack may trace the mutable .git/refs/codex tree into standalone and
 # then fail when Codex rotates a capture between tracing and copying.
-NODE_OPTIONS="--max-old-space-size=2048" npx next build --webpack
+NODE_OPTIONS="--max-old-space-size=2048" npm run build -- --webpack
 if [ $? -ne 0 ]; then
     echo "Build failed! Aborting."
     exit 1
@@ -241,6 +241,7 @@ fi
 # 比堆崩更难查)。6G = 在"真正的修复(评测重试不放大 + 评测行并发硬上限)"之外留点余量。
 # HOSTNAME=0.0.0.0：standalone server 默认可能绑到非 loopback，WSL/代理下 curl 127.0.0.1 会 502。
 # 必须在 standalone 目录下启动：server.js 相对解析 .next/static、public、node_modules。
+export AGENT_INSIGHT_PACKAGE_ROOT="$(pwd)"
 LOG_FILE="$(pwd)/server.log"
 : > "$LOG_FILE"
 # 脱离当前 shell 会话，避免 start.sh 退出后把 server 一起带走（仅 nohup 在部分环境下不够）。
