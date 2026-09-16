@@ -1712,9 +1712,10 @@ function SortableTh({
         >
             <span className="inline-flex items-center gap-1">
                 {children}
-                <span className={cn('text-[10px]', active ? 'opacity-100' : 'opacity-40')}>
-                    {active ? (dir === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
-                </span>
+                <svg aria-hidden="true" viewBox="0 0 12 16" className="h-4 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m3 6 3-3 3 3" className={active && dir === 'asc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                    <path d="m3 10 3 3 3-3" className={active && dir === 'desc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                </svg>
             </span>
             {resizable && <ResizeHandle colKey={colKey} currentWidth={currentWidth} onResize={onResize} />}
         </th>
