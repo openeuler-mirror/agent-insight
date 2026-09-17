@@ -809,7 +809,7 @@ function TracePageContent() {
                 }
             })
             .finally(() => {
-                if (listRequestIdRef.current === requestId && !silentRefresh) setLoading(false);
+                if (listRequestIdRef.current === requestId) setLoading(false);
             });
     }, [
         user,

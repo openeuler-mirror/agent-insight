@@ -100,6 +100,8 @@ export default function CollaborationExplorer() {
             {entries.map(item => <Link className="block p-4 hover:bg-muted" key={item.collaborationId} href={`/observe/collaborations/${encodeURIComponent(item.collaborationId)}`}><div className="font-medium break-all">{item.collaborationId}</div><p className="text-sm text-foreground-muted">{item.eventCount} 条事件 · {item.sourceType === 'reported' ? '用户上报' : '自动采集'}</p></Link>)}
             {cursor && <Button className="m-4" variant="outline" disabled={busy} onClick={() => void load(cursor)}>加载更多协作</Button>}
         </div>}
+        {nativeTask && <p className="text-sm text-foreground-muted">当前显示这条 Trace 中有明确证据的原生调用。通过接口上报的跨会话关系，请点击“全部协作”并选择对应的协作编号查看。</p>}
+        {id && <p className="text-sm text-foreground-muted">这里将同一协作的会话和联系展示在一张图中；链路追踪列表仍保留各条原始 Trace。</p>}
         {graph && <>
             <div className="flex flex-wrap gap-4 text-sm"><span className="break-all">{nativeTask || graph.collaborationId}</span><span>{graph.nodes.length} 个会话 · {edges.length} 条可见关系</span><span className="text-foreground-muted">任务结束状态未知</span></div>
             {!graph.resolutionComplete && <p role="status" className="text-warning">当前数据超过单次解析限制，仍可分页查看上报关系；步骤和自动关系可能不完整。</p>}
