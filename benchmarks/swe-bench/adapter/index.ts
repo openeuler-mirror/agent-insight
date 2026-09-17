@@ -152,7 +152,7 @@ function officialMetric(
     || success.some((item) => typeof item !== 'string')
     || failure.some((item) => typeof item !== 'string')
   ) {
-    return rawResultError(`SWE-bench 官方报告 tests_status.${field} 不完整`)
+    return rawResultError(`SWE-bench 报告输出 tests_status.${field} 不完整`)
   }
   const reportedTests = [...success, ...failure]
   if (
@@ -161,7 +161,7 @@ function officialMetric(
     || reportedTests.length !== expectedTests.length
     || reportedTests.some((test) => !expectedTests.includes(test))
   ) {
-    return rawResultError(`SWE-bench 官方报告 tests_status.${field} 与冻结测试名单不一致`)
+    return rawResultError(`SWE-bench 报告输出 tests_status.${field} 与冻结测试名单不一致`)
   }
   return { passed: success.length, total: success.length + failure.length }
 }
@@ -468,7 +468,7 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
     const officialKeys = officialReport ? Object.keys(officialReport) : []
     const caseReport = officialReport ? asRecord(officialReport[expected.instanceId]) : null
     if (officialKeys.length !== 1 || !caseReport) {
-      return rawResultError('SWE-bench 官方报告与冻结评测任务不一致')
+      return rawResultError('SWE-bench 报告输出与冻结评测任务不一致')
     }
     if (
       officialEvidence?.jsonContent === undefined
@@ -476,7 +476,7 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
     ) {
       throw new BenchmarkProtocolError(
         'SWE_EVIDENCE_CONTRACT_INVALID',
-        'SWE-bench report.json 与回调中的官方报告不一致',
+        'SWE-bench report.json 与回调中的报告输出不一致',
         422,
       )
     }
@@ -487,7 +487,7 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
       || caseReport.resolved !== raw.resolved
       || caseReport.patch_successfully_applied !== raw.patchSuccessfullyApplied
     ) {
-      return rawResultError('SWE-bench 原生结果与官方报告判定不一致')
+      return rawResultError('SWE-bench 原生结果与报告输出判定不一致')
     }
     const failToPass = strictMetric(raw.failToPass, 'failToPass')
     const passToPass = strictMetric(raw.passToPass, 'passToPass')
@@ -495,7 +495,7 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
       !sameMetric(failToPass, officialMetric(caseReport, 'FAIL_TO_PASS', expected.failToPass))
       || !sameMetric(passToPass, officialMetric(caseReport, 'PASS_TO_PASS', expected.passToPass))
     ) {
-      return rawResultError('SWE-bench 原生测试计数与官方报告不一致')
+      return rawResultError('SWE-bench 原生测试计数与报告输出不一致')
     }
     if (
       raw.resolved
@@ -512,7 +512,14 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
       const score = total > 0
         ? Math.round((passed / total) * 10_000) / 100
         : null
-      return { label, score, evidence: { passed, total } }
+      return {
+        label,
+        value: passed,
+        total,
+        format: 'ratio' as const,
+        score,
+        evidence: { passed, total },
+      }
     }
     return {
       status: 'done',

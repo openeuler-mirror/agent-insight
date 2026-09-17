@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
-import type { JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
+import type {
+  BenchmarkPresentationColumn,
+  JsonValue,
+} from '../../../packages/benchmark-protocol/src/contracts'
 import { canonicalJson, fingerprintJson } from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { prisma } from '@/lib/storage/prisma'
@@ -25,33 +28,67 @@ function asJsonValue(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue
 }
 
-function datasetFieldType(type: string): 'text' | 'number' | 'boolean' | 'json' {
+function datasetFieldType(type: BenchmarkPresentationColumn['type']): 'text' | 'number' | 'boolean' | 'json' {
   if (type === 'number' || type === 'boolean') return type
   return 'text'
 }
 
-function datasetFields(adapterKey: string, adapter: ReturnType<typeof getBenchmarkAdapter>): JsonValue {
+function datasetFieldKey(path: string): string {
+  const raw = path.startsWith('values.') ? path.slice('values.'.length) : path
+  const normalized = raw.replace(/[^A-Za-z0-9_]/g, '_')
+  return /^[A-Za-z]/.test(normalized) ? normalized : `field_${normalized}`
+}
+
+export function buildBenchmarkDatasetFields(
+  adapterKey: string,
+  adapter: ReturnType<typeof getBenchmarkAdapter>,
+): JsonValue {
   const columns = adapter.manifest.presentation?.caseTable.columns || []
-  const fields = [{ id: 'input', key: 'input', label: '任务输入', type: 'text', system: true }]
-  const seen = new Set(['input'])
+  const fields: Array<Record<string, JsonValue>> = []
+  const seen = new Set<string>()
   for (const column of columns) {
-    const key = column.path === 'externalCaseId'
-      ? 'externalCaseId'
-      : column.path.startsWith('values.')
-        ? column.path.slice('values.'.length)
-        : column.path
-    if (!key || key.includes('.') || seen.has(key)) continue
+    let key = datasetFieldKey(column.path)
+    let suffix = 2
+    while (seen.has(key)) {
+      key = `${datasetFieldKey(column.path)}_${suffix}`
+      suffix += 1
+    }
     seen.add(key)
     fields.push({
       id: key,
       key,
+      path: column.path,
       label: column.label,
       type: datasetFieldType(column.type),
+      displayType: column.type,
+      ...(column.width == null ? {} : { width: column.width }),
+      ...(column.format == null ? {} : { format: column.format }),
+      ...(column.truncate == null ? {} : { truncate: column.truncate }),
+      ...(column.description == null ? {} : { description: column.description }),
       system: true,
     })
   }
-  if (fields.length === 1) {
-    fields.push({ id: 'externalCaseId', key: 'externalCaseId', label: `${adapterKey} Case`, type: 'text', system: true })
+  if (fields.length === 0) {
+    fields.push(
+      {
+        id: 'input',
+        key: 'input',
+        path: 'input',
+        label: '输入',
+        type: 'text',
+        displayType: 'text',
+        system: true,
+      },
+      {
+        id: 'externalCaseId',
+        key: 'externalCaseId',
+        path: 'externalCaseId',
+        label: `${adapterKey} Case`,
+        type: 'text',
+        displayType: 'code',
+        system: true,
+      },
+    )
   }
   return fields as JsonValue
 }
@@ -117,7 +154,7 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
     },
   }))
   const publicCasesJson = canonicalJson(publicCases)
-  const fieldsJson = canonicalJson(datasetFields(input.adapterKey, adapter))
+  const fieldsJson = canonicalJson(buildBenchmarkDatasetFields(input.adapterKey, adapter))
   const referenceCasesJson = canonicalJson(
     publicCases.map(({ id, input: caseInput, expectedOutput, evaluationFocus, tags }) => ({
       id,

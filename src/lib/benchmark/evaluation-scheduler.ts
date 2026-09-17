@@ -485,6 +485,7 @@ async function freezeTarget(evaluationId: string) {
       targetKey: evaluation.evaluatorTargetKey,
       baseUrl: evaluation.evaluatorBaseUrl,
       evaluatorKey: evaluation.evaluatorKey,
+      benchmarkKey: evaluation.adapterKey,
       token: current.token,
       configRevision: current.configRevision,
     }
@@ -503,16 +504,17 @@ async function freezeTarget(evaluationId: string) {
       data: { destinationBaseUrl: target.baseUrl },
     }),
   ])
-  return target
+  return { ...target, benchmarkKey: evaluation.adapterKey }
 }
 
 async function ensureHealthy(
   baseUrl: string,
   evaluatorKey: string,
+  benchmarkKey: string,
   token: string | undefined,
   targetKey: string,
 ): Promise<void> {
-  const cacheKey = `${targetKey}\n${baseUrl}\n${evaluatorKey}`
+  const cacheKey = `${targetKey}\n${baseUrl}\n${evaluatorKey}\n${benchmarkKey}`
   if ((healthCache.get(cacheKey) || 0) > Date.now() - 30_000) return
   const response = await dispatchFetch(`${baseUrl}/health`, {
     method: 'GET',
@@ -530,7 +532,13 @@ async function ensureHealthy(
   const evaluatorState = evaluator && typeof evaluator === 'object'
     ? evaluator as Record<string, unknown>
     : null
-  const ready = evaluatorState?.ready === true
+  const bindings = Array.isArray(evaluatorState?.bindings) ? evaluatorState.bindings : []
+  const binding = bindings.find((item) => {
+    if (!item || typeof item !== 'object') return false
+    const value = item as Record<string, unknown>
+    return value.benchmarkKey === benchmarkKey || value.benchmarkKey === '*'
+  }) as Record<string, unknown> | undefined
+  const ready = bindings.length ? binding?.ready === true : evaluatorState?.ready === true
   if (!response.ok || body.value.status !== 'healthy' || body.value.busy === true || !ready) {
     throw new BenchmarkProtocolError(
       body.value.busy === true ? 'SERVICE_BUSY' : 'EVALUATOR_NOT_READY',
@@ -572,7 +580,13 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
   }
   let postStarted = false
   try {
-    await ensureHealthy(target.baseUrl, target.evaluatorKey, target.token, target.targetKey)
+    await ensureHealthy(
+      target.baseUrl,
+      target.evaluatorKey,
+      target.benchmarkKey,
+      target.token,
+      target.targetKey,
+    )
     postStarted = true
     const response = await dispatchFetch(`${target.baseUrl}/api/v1/evaluations`, {
       method: 'POST',

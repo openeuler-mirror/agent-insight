@@ -289,6 +289,15 @@ export function computeHeartbeatDecision(args: {
   return args.now - since >= args.heartbeatMs ? "kick" : "none"
 }
 
+export function getSessionEventUploadMode(
+  type: string,
+  status: string,
+): "force" | "none" {
+  return type === "session.idle" || (type === "session.updated" && status === "idle")
+    ? "force"
+    : "none"
+}
+
 export type UploaderRuntime = {
   cmd: string
   argsPrefix: string[]
@@ -680,14 +689,14 @@ export default async function WittySkillInsightOtelPlugin() {
           const status = String(
             event?.properties?.info?.status || event?.properties?.status || ""
           ).toLowerCase()
-          const isIdle = type === "session.idle" || (type === "session.updated" && status === "idle")
-          if (isIdle) {
+          const sessionEventUploadMode = getSessionEventUploadMode(type, status)
+          if (sessionEventUploadMode === "force") {
             const sid = sessionID ? String(sessionID) : ""
             appendLogLine(
               pluginLogPath,
               `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
             )
-            kickUploader(sid, false, `event:${type}`)
+            kickUploader(sid, true, `event:${type}`)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
             // 只在有事件流入时才评估，会话真正空闲下来不会白跑。

@@ -17,6 +17,7 @@ import {
   type GoalPlusRejectedSnapshot,
 } from '@/lib/ingest/goal-plus/persist';
 import { relinkGoalPlusSource } from '@/lib/ingest/goal-plus/correlate';
+import { projectGoalPlusCollaborations } from '@/lib/ingest/collaboration/providers/goal-plus';
 import { prismaRaw } from '@/lib/storage/prisma';
 
 export const runtime = 'nodejs';
@@ -113,6 +114,14 @@ export async function POST(request: Request) {
     select: { id: true },
   });
   const correlation = source ? await relinkGoalPlusSource(source.id) : { linked: 0, ambiguous: 0, unresolved: 0 };
+  let collaborationProjection = null;
+  if (source) {
+    try {
+      collaborationProjection = await projectGoalPlusCollaborations(source.id);
+    } catch (error) {
+      console.warn('[Goal-Plus-Ingest] collaboration projection failed:', error);
+    }
+  }
 
   return NextResponse.json({
     status: rejected.length ? 'partially_accepted' : 'accepted',
@@ -120,6 +129,7 @@ export async function POST(request: Request) {
     duplicate: result.duplicate,
     rejected,
     correlation,
+    collaborationProjection,
     retryable: false,
   }, { status: rejected.length && result.accepted === 0 && result.duplicate === 0 ? 422 : 200 });
 }

@@ -2083,7 +2083,7 @@ async function derivePointsAfterDone(
 }
 
 /** 并发执行（concurrency=RUN_CONCURRENCY），失败的行单独标 failed，不影响其他 */
-export async function runEvaluations(user: string, evaluatorRunId: string, resultIds: string[]) {
+async function runEvaluations(user: string, evaluatorRunId: string, resultIds: string[]) {
     const startedAt = Date.now();
     console.log(`[trajectory-eval] run ${evaluatorRunId} started: ${resultIds.length} traces, concurrency=${RUN_CONCURRENCY}`);
 

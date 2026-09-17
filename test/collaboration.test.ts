@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonical, parseEvent, strictJson, validTime, type Binding, type RelationEvent } from '../src/lib/collaboration/contracts';
 import { extractCalls, resolveAnchors, type Call, type Trace } from '../src/lib/collaboration/resolve';
+import { buildAgentCallTree, type RawInteraction } from '../src/lib/engine/observability/agent-trace';
+import { composeCollaborationTrace } from '../src/lib/ingest/collaboration/trace-projection';
 
 const event = (id: string, to = id, extra: Partial<RelationEvent> = {}): RelationEvent => ({ collaborationId: 'c', eventId: id, fromSessionId: 'A', toSessionId: to, description: '调用', fromLocator: { recordType: 'tool', name: 'spawn_agent' }, observedAt: `2026-09-11T10:00:0${id === '1' ? '1' : '2'}Z`, ...extra });
 const call = (id: string, at = Number(id)): Call => ({ key: id, recordId: id, interactionIndex: 0, callIndex: Number(id), name: 'spawn_agent', targets: [], failed: false, startedAt: at, timeSource: 'execution' });
@@ -16,6 +18,7 @@ test('strict JSON rejects duplicate decoded keys, trailing commas, null locator 
     assert.throws(() => parseEvent({ ...event('1'), fromLocator: { recordType: 'tool', name: 'x', commandContains: 'x' } }));
     assert.throws(() => parseEvent({ ...event('1'), unknown: true }));
     assert.throws(() => parseEvent({ ...event('1'), content: null }));
+    assert.throws(() => parseEvent({ ...event('1'), collaborationId: 'collab_gp_reserved' }));
     assert.equal(validTime('2026-02-30T10:00:00Z'), false);
     assert.equal(validTime('2026-09-11T10:00:00'), false);
     assert.equal(validTime('2026-09-11T10:00:00.001+08:00'), true);
@@ -75,4 +78,46 @@ test('part-only positions reference the original parts index and conflicting IDs
     assert.equal(calls[0].recordSource, 'parts'); assert.equal(calls[0].callIndex, 1);
     assert.equal(calls[0].command, 'run-agent');
     assert.throws(() => extractCalls([{ role: 'assistant', parts: [...parts, { ...parts[1], state: { time: { start: 2000 } } }] }], 'A', 'opencode'));
+});
+
+test('Goal Plus collaboration projection renders an independent worker as a labelled task subtree', () => {
+    const root: RawInteraction[] = [
+        { role: 'user', content: '优化目标', timestamp: 1000 },
+        { role: 'assistant', agent: 'Goal Plus 主 Agent', content: '开始编排', timestamp: 1100 },
+    ];
+    const worker: RawInteraction[] = [
+        { role: 'user', content: '搜索候选方案', timestamp: 1200 },
+        {
+            role: 'assistant',
+            agent: 'Search Candidate Worker',
+            content: '读取候选数据',
+            timestamp: 1300,
+            tool_calls: [{ id: 'read-candidate', function: { name: 'read_file', arguments: '{}' } }],
+        },
+        { role: 'assistant', agent: 'Search Candidate Worker', content: '候选搜索完成', timestamp: 1400 },
+    ];
+    const before = JSON.stringify({ root, worker });
+    const projection = composeCollaborationTrace(root, [{
+        eventId: 'evt-goal-worker',
+        taskId: 'goal-plus:source:worker-1',
+        executionId: 'worker-execution',
+        agentName: 'Search Candidate Worker',
+        interactions: worker,
+        description: 'Goal Plus 编排 candidate-worker',
+        sourceType: 'goal-plus-semantic',
+        relationKind: 'orchestrated',
+        anchorState: 'not_provided',
+        role: 'candidate-worker',
+    }]);
+    const tree = buildAgentCallTree(projection.interactions);
+
+    assert.equal(projection.includedMembers, 1);
+    assert.equal(tree?.children.length, 1);
+    assert.equal(tree?.children[0].agentName, 'Search Candidate Worker');
+    assert.equal(tree?.children[0].sessionId, 'goal-plus:source:worker-1');
+    assert.equal(tree?.children[0].relation?.sourceType, 'goal-plus-semantic');
+    assert.equal(tree?.events.find(item => item.kind === 'task')?.relation?.anchorState, 'not_provided');
+    assert.ok(tree?.children[0].events.some(item => item.kind === 'user'));
+    assert.ok(tree?.children[0].events.some(item => item.kind === 'tool'));
+    assert.equal(JSON.stringify({ root, worker }), before, 'projection must not mutate native interactions');
 });

@@ -13,7 +13,7 @@ import {
   EvaluatorRunConfigValidationError,
   serializeEvaluatorRunConfigs,
 } from '@/lib/evaluators/evaluator-run-config';
-import { overallAverage } from '@/lib/engine/experiment/detail-agg';
+import { publishedOverallAverage } from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
@@ -24,6 +24,7 @@ import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
 import { benchmarkDatasetOwners } from '@/lib/benchmark/dataset-ownership';
+import { benchmarkEvaluatorId } from '@/lib/benchmark/adapter-registry';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,10 +61,10 @@ async function benchmarkEvaluatorIds(user: string, rawIds: unknown, adapterKey: 
   for (const card of await readUserCustomEvaluators(user) as EvaluatorCard[]) {
     if (card && typeof card === 'object' && card.id) catalog.set(card.id, card);
   }
-  const benchmarkEvaluatorId = `benchmark:${adapterKey}`;
-  const selected = new Set<string>([benchmarkEvaluatorId]);
+  const officialEvaluatorId = benchmarkEvaluatorId(adapterKey);
+  const selected = new Set<string>([officialEvaluatorId]);
   for (const id of requested) {
-    if (id === benchmarkEvaluatorId) continue;
+    if (id === officialEvaluatorId) continue;
     if (id.startsWith('benchmark:')) {
       throw new Error(`Benchmark 实验不支持评估器 ${id}`);
     }
@@ -145,7 +146,7 @@ export async function GET(req: Request) {
         preset: r.preset,
         caseCount: r._count.cases,
         evaluatorCount,
-        overallScore: overallAverage(scoreRowsByExperiment.get(r.id) || []),
+        overallScore: publishedOverallAverage(r.status, scoreRowsByExperiment.get(r.id) || []),
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
       };

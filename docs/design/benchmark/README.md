@@ -1,6 +1,6 @@
 # Benchmark 统一接入设计
 
-本目录集中维护 Benchmark 从数据集接入、Agent 执行、官方评测到结果展示的设计。文档已按当前 `swebench-develop` 分支实现校正，最后核对日期为 2026-09-13。
+本目录集中维护 Benchmark 从数据集接入、Agent 执行、官方评测到结果展示的设计。最后核对日期为 2026-09-15。
 
 ## 1. 当前实现范围
 
@@ -12,7 +12,7 @@ flowchart LR
     B --> C[冻结 Case 与运行配置]
     C --> D[客户端控制通道下发 Agent 任务]
     D --> E[独立 Git 工作区执行]
-    E --> F[上传 model.patch]
+    E --> F[上传 Manifest 声明的 Submission]
     F --> G[独立 Evaluator Controller]
     G --> H[官方 Case 容器与 Harness]
     H --> I[证据与 Raw Result 回传]
@@ -28,10 +28,10 @@ flowchart LR
 - 通过现有常驻客户端的 `RUN_BENCHMARK_CASE` 控制指令执行任务，不要求客户端开放入站端口；
 - 通用 Workspace、Agent Runtime、Artifact Collector 能力组合；
 - 独立 Evaluator Controller、统一文件 Entrypoint、Docker Case 容器和官方 Harness；
-- Artifact、进度、证据、Raw Result、确定性归一化和持久化 continuation；
+- 完整 Submission/Evidence、进度、Raw Result、确定性归一化和持久化 continuation；
 - Benchmark 数据集、实验向导、Case 详情、Artifact 查看下载、Case 重跑、Official Harness 重评和同基线趋势。
 
-当前接入实例是 `SWE-bench Verified`。正式成绩仍以 x86_64 Linux 和官方镜像为准；ARM64 支持开发 Smoke，不作为正式计分环境。
+当前生产接入实例是 `SWE-bench Verified`。公共框架不解释其 Patch、测试名单和 Resolved 语义；正式成绩仍以 x86_64 Linux 和官方镜像为准。
 
 ## 2. 文档阅读顺序
 
@@ -89,6 +89,6 @@ benchmarks/<key>/
 └── smoke/
 ```
 
-Adapter 实现五个业务 hook：Case 拆分、Agent Task 构造、提交物校验、EvaluationJob 构造和结果归一化。只有现有通用能力无法表达需求时，才扩展执行器能力；不要在平台调度器、Runner 或 Controller 中增加具体 Benchmark 分支。
+Adapter 实现五个业务 hook：Case 拆分、Agent Task 构造、提交物校验、EvaluationJob 构造和结果归一化；Evaluator 实现统一文件协议，独立依赖放入实例 Dockerfile。`adapterKey` 与 `evaluatorKey` 不要求相等。只有现有通用能力无法表达需求时，才扩展执行器能力；不要在平台调度器、Runner 或 Controller 中增加具体 Benchmark 分支。这是统一开发规范，不是零代码、纯配置接入。
 
 详细扩展约束见[开发者指南](../../developer-guide/07-conventions-and-extension.md)。

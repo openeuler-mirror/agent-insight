@@ -65,7 +65,10 @@ async function doctor(options = {}) {
 async function smoke(evaluatorKey, options = {}) {
   if (!evaluatorKey) throw new Error('smoke 需要 --evaluator <key>')
   await fetchHealth(options)
-  const evaluator = registry().get(evaluatorKey)
+  const descriptor = generatedEvaluatorDescriptors.find((item) => item.benchmarkKey === evaluatorKey)
+    || generatedEvaluatorDescriptors.find((item) => item.key === evaluatorKey)
+  if (!descriptor) throw new Error(`未找到 Benchmark 或 Evaluator：${evaluatorKey}`)
+  const evaluator = registry().get(descriptor.key, descriptor.benchmarkKey)
   return evaluator.smoke(runtime())
 }
 

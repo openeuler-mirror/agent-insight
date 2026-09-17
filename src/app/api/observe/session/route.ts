@@ -1,3 +1,5 @@
+import { resolveUser } from '@/lib/auth/auth';
+import { collaborationProjection as reportedTraceProjection } from '@/lib/collaboration/runtime';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
@@ -6,6 +8,12 @@ import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/s
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { NextResponse } from 'next/server';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
+import { findGoalPlusTraceProjectionMembers } from '@/lib/ingest/collaboration/query';
+import {
+    composeCollaborationTrace,
+    type CollaborationTraceMember,
+} from '@/lib/ingest/collaboration/trace-projection';
+import { toTraceStructureInteractions, withTracePayloadVersions } from '@/lib/trace/session-payload';
 
 type ParsedSession = {
     session: any;
@@ -95,130 +103,43 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
     return value;
 }
 
-function previewText(value: unknown, maxChars = 240): unknown {
-    if (typeof value !== 'string') return value;
-    const trimmed = value.trim();
-    if (trimmed.length <= maxChars) return value;
-    return `${trimmed.slice(0, maxChars)}…`;
-}
-
-function pickTaskOrSkillArguments(name: string, raw: unknown): unknown {
-    if (typeof raw !== 'string') return raw;
-    const normalizedName = name.toLowerCase();
-    if (!['task', 'skill', 'load_skill', 'skill_view', 'skill_tool'].includes(normalizedName)) {
-        return raw.length <= 240 ? raw : '{}';
-    }
+async function loadCollaborationProjection(taskId: string, parsed: ParsedSession) {
+    const user = typeof parsed.session?.user === 'string' ? parsed.session.user : '';
+    if (!user) return null;
+    const storedQuery = typeof parsed.session?.query === 'string' ? parsed.session.query.trim() : '';
+    const interactionQuery = parsed.interactions.find(interaction => (
+        interaction?.role === 'user' && typeof interaction?.content === 'string' && interaction.content.trim()
+    ))?.content;
+    const rootQuery = storedQuery || interactionQuery || null;
+    let refs;
     try {
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return previewText(raw);
-        const source = parsed as Record<string, unknown>;
-        const keys = normalizedName === 'task'
-            ? ['subagent_type', 'subagentType', 'session_id', 'sessionId', 'subagent_session_id', 'subagentSessionId', 'description']
-            : ['name', 'skill_name', 'skillName', 'skill', 'version'];
-        const picked: Record<string, unknown> = {};
-        for (const key of keys) {
-            if (source[key] !== undefined) picked[key] = source[key];
-        }
-        return JSON.stringify(picked);
-    } catch {
-        return previewText(raw);
+        refs = await findGoalPlusTraceProjectionMembers(user, taskId, rootQuery);
+    } catch (error) {
+        console.warn(`[Session-API] Goal Plus trace projection unavailable for task=${taskId}:`, error);
+        return null;
     }
-}
+    if (!refs.members.length) return null;
 
-function pickTaskOutput(name: string, value: unknown): unknown {
-    if (name.toLowerCase() !== 'task' || value == null) return undefined;
-    const visit = (input: unknown, depth = 0): unknown => {
-        if (input == null || depth > 3) return undefined;
-        if (typeof input === 'string') {
-            if (input.length <= 240) return input;
-            try {
-                return visit(JSON.parse(input), depth + 1);
-            } catch {
-                return undefined;
-            }
-        }
-        if (Array.isArray(input)) {
-            const values = input.map(item => visit(item, depth + 1)).filter(item => item !== undefined);
-            return values.length ? values : undefined;
-        }
-        if (typeof input === 'object') {
-            const source = input as Record<string, unknown>;
-            const picked: Record<string, unknown> = {};
-            for (const key of ['session_id', 'sessionId', 'subagent_session_id', 'subagentSessionId']) {
-                if (source[key] !== undefined) picked[key] = source[key];
-            }
-            for (const [key, item] of Object.entries(source)) {
-                if (Object.keys(picked).length > 0) break;
-                const nested = visit(item, depth + 1);
-                if (nested !== undefined) picked[key] = nested;
-            }
-            return Object.keys(picked).length ? picked : undefined;
-        }
-        return undefined;
-    };
-    return visit(value);
-}
-
-/** 保留建树所需元数据，长正文通过 view=interaction 按 interaction index 获取。 */
-export function toTraceStructureInteractions(interactions: any[]): any[] {
-    return interactions.map((interaction, index) => {
-        const source = interaction && typeof interaction === 'object' ? interaction : {};
-        const metadata = { ...source };
-        for (const key of [
-            'content',
-            'parts',
-            'tool_calls',
-            'requestMessages',
-            'responseMessage',
-            'raw',
-            'body',
-            'input',
-            'output',
-            'result',
-            'reasoning',
-        ]) {
-            delete metadata[key];
-        }
-        const toolCalls = Array.isArray(source.tool_calls)
-            ? source.tool_calls.map((call: any) => {
-                const name = String(call?.function?.name || call?.name || '');
-                const argumentsValue = call?.function?.arguments ?? call?.arguments;
-                const pickedArguments = pickTaskOrSkillArguments(name, argumentsValue);
-                const pickedOutput = pickTaskOutput(name, call?.output ?? call?.result);
-                return {
-                    id: call?.id,
-                    type: call?.type,
-                    name: call?.name,
-                    function: call?.function
-                        ? { name: call.function.name, arguments: pickedArguments }
-                        : undefined,
-                    arguments: call?.function ? undefined : pickedArguments,
-                    state: call?.state,
-                    timing: call?.timing,
-                    trace_split_parallel_task: call?.trace_split_parallel_task,
-                    ...(pickedOutput !== undefined ? { output: pickedOutput } : {}),
-                };
-            })
-            : undefined;
-        const parts = Array.isArray(source.parts)
-            ? source.parts.map((part: any) => ({
-                type: part?.type,
-                id: part?.id,
-                tool: part?.tool,
-                callID: part?.callID,
-                text: previewText(part?.text),
-                state: part?.state ? { status: part.state.status } : undefined,
-            }))
-            : undefined;
+    const loadedMembers = await Promise.all(refs.members.map(async (ref): Promise<CollaborationTraceMember | null> => {
+        const child = await loadParsedSession(ref.taskId);
+        if (!child || child.session?.user !== user) return null;
         return {
-            ...metadata,
-            content: previewText(source.content),
-            parts,
-            tool_calls: toolCalls,
-            _interactionIndex: index,
-            _payloadDeferred: true,
+            ...ref,
+            interactions: child.interactions,
+            query: child.session?.query,
         };
-    });
+    }));
+    const members = loadedMembers.filter((member): member is CollaborationTraceMember => member !== null);
+    const missingMembers = refs.members.length - members.length;
+    const projection = composeCollaborationTrace(parsed.interactions, members);
+    if (!projection.includedMembers) return null;
+    return {
+        ...projection,
+        truncated: projection.truncated || refs.truncated || missingMembers > 0,
+        availableMembers: refs.members.length,
+        sourceType: 'goal-plus-semantic',
+        rootResolution: refs.rootResolution,
+    };
 }
 
 export async function GET(request: Request) {
@@ -236,16 +157,23 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
         const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
+        const { username } = await resolveUser(request);
+        if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        const rawInteraction = view === 'interaction' && searchParams.get('source') === 'raw';
+        const reportedInteractions = !rawInteraction && username && username === session.user
+            ? await reportedTraceProjection.interactions(username, taskId, loadParsedSession) : null;
+        const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
+        const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);
-            if (!Number.isInteger(index) || index < 0 || index >= interactions.length) {
+            if (!Number.isInteger(index) || index < 0 || index >= displayInteractions.length) {
                 return NextResponse.json({ error: 'Interaction index out of range' }, { status: 400 });
             }
             return NextResponse.json({
                 taskId: session.taskId,
                 index,
-                interaction: interactions[index],
+                interaction: displayInteractions[index],
             });
         }
 
@@ -256,17 +184,35 @@ export async function GET(request: Request) {
                 query: session.query,
                 user: session.user,
                 startTime: session.startTime.getTime(),
-                interactionCount: interactions.length,
-                interactions: toTraceStructureInteractions(interactions),
+                interactionCount: displayInteractions.length,
+                interactions: toTraceStructureInteractions(displayInteractions),
                 execution: executionSummary,
-                ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
+                ...(collaborationProjection ? {
+                    collaborationProjection: {
+                        sourceType: collaborationProjection.sourceType,
+                        rootResolution: collaborationProjection.rootResolution,
+                        includedMembers: collaborationProjection.includedMembers,
+                        availableMembers: collaborationProjection.availableMembers,
+                        truncated: collaborationProjection.truncated,
+                    },
+                } : {}),
+                ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
             });
         }
 
         if (view === 'interactions') {
             return NextResponse.json({
                 taskId: session.taskId,
-                interactions,
+                interactions: displayInteractions,
+                ...(collaborationProjection ? {
+                    collaborationProjection: {
+                        sourceType: collaborationProjection.sourceType,
+                        rootResolution: collaborationProjection.rootResolution,
+                        includedMembers: collaborationProjection.includedMembers,
+                        availableMembers: collaborationProjection.availableMembers,
+                        truncated: collaborationProjection.truncated,
+                    },
+                } : {}),
             });
         }
 
@@ -289,8 +235,17 @@ export async function GET(request: Request) {
             query,
             user: session.user,
             startTime: session.startTime.getTime(),
-            interactions,
-            ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
+            interactions: displayInteractions,
+            ...(collaborationProjection ? {
+                collaborationProjection: {
+                    sourceType: collaborationProjection.sourceType,
+                    rootResolution: collaborationProjection.rootResolution,
+                    includedMembers: collaborationProjection.includedMembers,
+                    availableMembers: collaborationProjection.availableMembers,
+                    truncated: collaborationProjection.truncated,
+                },
+            } : {}),
+            ...(langfuseTraceNodes.length && !reportedInteractions ? { langfuseTraceNodes } : {}),
         });
     } catch (e) {
         console.error('Error reading session from DB:', e);

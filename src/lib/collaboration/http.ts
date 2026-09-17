@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { collaborationLog, failureDetails } from './log';
 import { CollaborationError, identifier, invalid, parseBinding, parseEvent, readBody } from './contracts';
 import { CollaborationService } from './service';
+import { resolveCollaboration } from '@/lib/ingest/collaboration/resolve';
 
 export type CollaborationDependencies = { service: CollaborationService; authenticate: (apiKey: string) => Promise<string | null> };
 export function createCollaborationHandlers({ service, authenticate }: CollaborationDependencies) {
@@ -73,6 +74,10 @@ export function createCollaborationHandlers({ service, authenticate }: Collabora
                 if (!Number.isSafeInteger(value) || value < min || value > max) invalid('分页参数超出范围', key);
                 return value;
             };
+            try { await resolveCollaboration(username, id); }
+            catch (error) {
+                collaborationLog.warn('查询前端点重算暂不可用', { ...context, user: username, collaborationId: id, stage: 'endpoint_resolution', ...failureDetails(error) });
+            }
             const graph = await service.graph(username, id, number('offset', 0, 10000000, 0), number('limit', 100, 100, 1), String(context.requestId));
             Object.assign(context, { total: graph.total, offset: graph.offset, returned: graph.events.length, resolutionComplete: graph.resolutionComplete });
             return response(graph);

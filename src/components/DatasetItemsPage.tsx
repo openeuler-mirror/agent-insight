@@ -34,6 +34,11 @@ import styles from '@/components/DatasetItemsPage.module.css';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 import {
+  benchmarkPresentationText,
+  benchmarkPresentationValue,
+  truncateBenchmarkText,
+} from '@/lib/benchmark/presentation';
+import {
   buildFaultModeGuideGroups,
   type FaultModeGuideOption,
 } from '@/lib/reliability/fault-mode-guide';
@@ -200,6 +205,15 @@ function fieldText(row: DatasetCase, key: string): string {
   if (value === null || value === undefined || value === '') return '';
   if (typeof value === 'string') return value;
   return JSON.stringify(value, null, 2);
+}
+
+function displayFieldText(row: DatasetCase, field: DatasetField): string {
+  if (!field.path) return fieldText(row, field.key);
+  return benchmarkPresentationText(benchmarkPresentationValue({
+    input: row.input,
+    externalCaseId: row.values?.externalCaseId,
+    values: row.values,
+  }, field.path), { format: field.format });
 }
 
 export default function DatasetItemsPage() {
@@ -842,7 +856,15 @@ export default function DatasetItemsPage() {
               <thead>
                 <tr>
                   <th>ID</th>
-                  {dataset.fields.map(field => <th key={field.id}>{field.label}</th>)}
+                  {dataset.fields.map(field => (
+                    <th
+                      key={field.id}
+                      title={field.description || undefined}
+                      style={field.width ? { width: field.width, minWidth: field.width } : undefined}
+                    >
+                      {field.label}
+                    </th>
+                  ))}
                   <th>操作</th>
                 </tr>
               </thead>
@@ -870,19 +892,26 @@ export default function DatasetItemsPage() {
                         <span className={styles.idTag}>{shorten(row.id, 10)}</span>
                       </td>
                       {dataset.fields.map(field => {
-                        const fullText = fieldText(row, field.key);
+                        const fullText = displayFieldText(row, field);
                         const displayText = field.key === 'fault_injection_type' && isReliability
                           ? formatFaultInjectionType(row, fullText)
                           : fullText;
                         const isTrajectoryField = ['trace', 'trajectory'].includes(field.key.trim().toLocaleLowerCase());
+                        const displayType = field.displayType || field.type;
                         return (
                         <TooltipCell
                           key={field.id}
-                          shortText={shorten(displayText, field.type === 'json' ? 40 : 80)}
+                          shortText={truncateBenchmarkText(
+                            displayText || '—',
+                            field.truncate || (field.type === 'json' ? 40 : 80),
+                          )}
                           fullText={displayText}
                           tdStyle={{
-                            maxWidth: field.type === 'json' ? 220 : 260,
-                            ...(field.type === 'json' ? { fontFamily: 'ui-monospace, monospace', fontSize: 12 } : {}),
+                            width: field.width,
+                            minWidth: field.width,
+                            maxWidth: field.width || (field.type === 'json' ? 220 : 260),
+                            ...(['code', 'json'].includes(displayType) ? { fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 12 } : {}),
+                            ...(displayType === 'number' ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } : {}),
                             ...(isTrajectoryField && !isReadOnly ? { cursor: 'pointer', color: 'var(--primary)' } : {}),
                           }}
                           onClick={isTrajectoryField && !isReadOnly ? () => void openEdit(row) : undefined}

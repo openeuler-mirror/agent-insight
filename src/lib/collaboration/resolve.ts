@@ -19,7 +19,7 @@ const shellFields: Record<string, string> = {
     bash: 'command', Bash: 'command', shell: 'command', run_shell_command: 'command',
     exec_command: 'cmd', 'functions.exec_command': 'cmd', execute_command: 'command',
 };
-function decoded(value: unknown): any {
+function decoded(value: unknown): unknown {
     if (typeof value !== 'string') return value;
     try { return JSON.parse(value); } catch { return undefined; }
 }
@@ -28,45 +28,57 @@ function targetIds(value: unknown, depth = 0): string[] {
     const obj = decoded(value);
     if (!obj || typeof obj !== 'object') return [];
     if (Array.isArray(obj)) return obj.flatMap(item => targetIds(item, depth + 1));
-    const direct = ['session_id', 'sessionId', 'subagent_session_id', 'subagentSessionId'].flatMap(key => typeof obj[key] === 'string' && obj[key] ? [obj[key]] : []);
-    return [...new Set([...direct, ...['data', 'result', 'output'].flatMap(key => targetIds(obj[key], depth + 1))])];
+    const record = obj as Record<string, unknown>;
+    const direct = ['session_id', 'sessionId', 'subagent_session_id', 'subagentSessionId'].flatMap(key => typeof record[key] === 'string' && record[key] ? [record[key] as string] : []);
+    return [...new Set([...direct, ...['data', 'result', 'output'].flatMap(key => targetIds(record[key], depth + 1))])];
 }
 function timestamp(value: unknown): number | undefined {
     const n = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
     return Number.isFinite(n) && n > 0 ? n : undefined;
 }
-export function extractCalls(interactions: any[], traceSessionId: string, framework?: string | null): Call[] {
+export function extractCalls(interactions: unknown[], traceSessionId: string, framework?: string | null): Call[] {
     const result: Call[] = [];
     const seen = new Map<string, Call>();
     interactions.forEach((it, interactionIndex) => {
         if (!it || typeof it !== 'object') return;
-        if (it.subagent_session_id && it.subagent_session_id !== traceSessionId) return;
-        const calls = Array.isArray(it.tool_calls) ? it.tool_calls : [];
-        const parts = Array.isArray(it.parts) ? it.parts.map((p: any, index: number) => ({ ...p, originalPartIndex: index })).filter((p: any) => p?.type === 'tool') : [];
-        for (const [callIndex, raw] of [...calls, ...parts].entries()) {
-            if (!raw || typeof raw !== 'object') continue;
+        const interaction = it as Record<string, unknown>;
+        if (interaction.subagent_session_id && interaction.subagent_session_id !== traceSessionId) return;
+        const calls = Array.isArray(interaction.tool_calls) ? interaction.tool_calls : [];
+        const parts = Array.isArray(interaction.parts) ? interaction.parts.flatMap((part, index) => {
+            if (!part || typeof part !== 'object' || (part as Record<string, unknown>).type !== 'tool') return [];
+            return [{ ...(part as Record<string, unknown>), originalPartIndex: index }];
+        }) : [];
+        for (const [callIndex, value] of [...calls, ...parts].entries()) {
+            if (!value || typeof value !== 'object') continue;
+            const raw = value as Record<string, unknown>;
             const part = callIndex >= calls.length;
-            const name = part ? raw.tool : raw.function?.name ?? raw.name;
+            const state = raw.state && typeof raw.state === 'object' ? raw.state as Record<string, unknown> : {};
+            const fn = raw.function && typeof raw.function === 'object' ? raw.function as Record<string, unknown> : {};
+            const timing = raw.timing && typeof raw.timing === 'object' ? raw.timing as Record<string, unknown> : {};
+            const stateTime = state.time && typeof state.time === 'object' ? state.time as Record<string, unknown> : {};
+            const name = part ? raw.tool : fn.name ?? raw.name;
             if (typeof name !== 'string') continue;
-            const args = decoded(part ? raw.state?.input : raw.function?.arguments ?? raw.arguments);
-            const output = part ? raw.state?.output : raw.output ?? raw.result;
+            const args = decoded(part ? state.input : fn.arguments ?? raw.arguments);
+            const argRecord = args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {};
+            const output = part ? state.output : raw.output ?? raw.result;
             const id = part ? raw.callID : raw.id;
             const recordId = typeof id === 'string' && id ? id : undefined;
             const key = recordId ? `id:${recordId}` : `position:${interactionIndex}:${callIndex}`;
-            const status = part || typeof raw.state === 'object' ? raw.state?.status : raw.state;
-            const start = part && framework === 'opencode' ? timestamp(raw.state?.time?.start) : raw.timing?.source === 'execution' ? timestamp(raw.timing.started_at) : undefined;
+            const status = typeof state.status === 'string' ? state.status : typeof raw.state === 'string' ? raw.state : '';
+            const start = part && framework === 'opencode' ? timestamp(stateTime.start) : timing.source === 'execution' ? timestamp(timing.started_at) : undefined;
             const previous = seen.get(key);
             if (previous) {
                 if (previous.name !== name || (previous.startedAt !== undefined && start !== undefined && previous.startedAt !== start)) throw new Error('Conflicting original call identifier');
-                previous.command ??= typeof args?.[shellFields[name]] === 'string' ? args[shellFields[name]] : undefined;
+                previous.command ??= typeof argRecord[shellFields[name]] === 'string' ? argRecord[shellFields[name]] as string : undefined;
                 if (start !== undefined) { previous.startedAt = start; previous.timeSource = part ? 'opencode.part.state.time.start' : 'tool.timing.execution'; }
                 previous.failed ||= ['error', 'failed', 'cancelled'].includes(status);
                 previous.targets = [...new Set([...previous.targets, ...(['task', 'spawn_agent', 'subagent'].includes(name) ? [...targetIds(output), ...targetIds(args)] : [])])];
                 continue;
             }
             const call: Call = {
-                key, recordId, recordSource: callIndex < calls.length ? 'tool_calls' : 'parts', interactionIndex, callIndex: callIndex < calls.length ? callIndex : raw.originalPartIndex, name,
-                command: typeof args?.[shellFields[name]] === 'string' ? args[shellFields[name]] : undefined,
+                key, recordId, recordSource: callIndex < calls.length ? 'tool_calls' : 'parts', interactionIndex,
+                callIndex: callIndex < calls.length ? callIndex : typeof raw.originalPartIndex === 'number' ? raw.originalPartIndex : callIndex,
+                name, command: typeof argRecord[shellFields[name]] === 'string' ? argRecord[shellFields[name]] as string : undefined,
                 startedAt: start, timeSource: start === undefined ? undefined : part ? 'opencode.part.state.time.start' : 'tool.timing.execution',
                 targets: ['task', 'spawn_agent', 'subagent'].includes(name) ? [...new Set([...targetIds(output), ...targetIds(args)])] : [],
                 failed: ['error', 'failed', 'cancelled'].includes(status),

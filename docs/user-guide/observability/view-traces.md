@@ -161,6 +161,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
 
+当 Goal Plus 语义关系已经把一个唯一主 Trace 与当前 Search run 的 worker Trace 确定关联后，**仅主 Agent** 列表隐藏已投影的 worker，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。Pi passive importer 存在多个历史主会话时，以 Goal 当前 active native Session 对应的 canonical Trace 为准；Pi 将同一原生 Session 的任务保存为 `<sessionId>__taskN` 时，明确由 `/goal-plus` 启动且只对应一个 Goal 的主任务也会显示同一子树。candidate ID 和 run ID 可用于核对成员，同一 Session 的续跑不会重复建节点。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。历史 run、主 Trace 不唯一、worker 正文尚未到达、超过投影上限、普通 Pi 任务或端点关联存在歧义时，平台保留独立 Session 入口，不做猜测性合并。
+
 任务完成度、轨迹质量等预置评估器生成的 `direct-llm` Trace，会以本次评估模型请求发出前和响应返回后的时间作为起止点。根 Agent、LLM Span、Session 和列表耗时使用同一次请求的时间窗口，因此新产生的评估 Trace 不会再因写库时间代替模型调用时间而显示为 `0ms`。修复前已经保存且缺少原始起止时间的历史 Trace 无法可靠反推真实耗时，不会自动补算。
 
 Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。`langfuse-langgraph` Trace 详情中所有识别为 JSON 的内容默认展开全部对象和数组层级，仍可手动收起；其他框架沿用默认折叠深度。点击 LLM 节点时，Input 直接使用该 generation 上报的 request messages：`system`、`user`、`assistant` 和真实工具结果会按原始角色与顺序分开显示，旧轮次放入 History，本轮新增用户消息或工具结果放入 Current input；被上报为 `role=tool` 的可用工具 schema 不会冒充工具结果，LLM Output 中的真实工具调用则会以 Assistant 工具调用及参数展示。相邻 CHAIN 节点的 input/output 不会被当成模型对话历史。子 Agent 行和右侧“子 Agent”卡片上的 **Trace** 按钮可直接进入该子 Agent 的独立执行详情；目标执行不存在时，页面会提示未找到，而不会继续停留在父 Trace 造成无响应的错觉。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
@@ -431,7 +433,7 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 
 ## 自定义 Agent 调用关系（后端接口）
 
-当 Agent 通过自定义脚本或工具调用另一个 Agent，原框架没有记录父子关系时，可独立上报协作关系。现有 Trace 上传方式不变；当前版本提供后端查询，尚未增加关系图界面，也不会改写原 Trace 树。
+当 Agent 通过自定义脚本或工具调用另一个 Agent，原框架没有记录父子关系时，可独立上报协作关系。现有 Trace 上传方式不变；默认“主 Agent”列表会合并为一条 Trace，详情复用现有树显示各 Agent 与工具；原始数据不改写，不新增关系图界面。
 
 ### 1. 绑定原 Trace 会话
 
@@ -580,3 +582,31 @@ rg '返回的请求编号' server.log
 数据库同步失败会阻止启动；原因打印在**启动终端**，因为此时服务尚未启动、server.log 重定向尚未开始。不要通过 reset 或随意添加 --accept-data-loss 绕过其他历史 schema 冲突。
 
 配置 DB_HOST 时两个脚本也会调用 `scripts/init_opengauss.py`，本次已补齐对应新表与索引。OpenGauss 实库尚未联调，SQLite 升级测试不代表 OpenGauss 验收。
+
+### 7. 在链路追踪页面验证合并
+
+先用原有上传接口分别上传主 Agent 和子 Agent 的完整 Trace。各自使用不同的 `task_id`，不要求使用原生 `task` 工具，也不要求伪造 `subagent_session_id`。再按上述接口绑定两个 `sessionId` 到各自的 `traceSessionId`（即上传的 `task_id`），最后上报关系。三个步骤使用同一账号的 API Key。
+
+- **提供 `fromLocator`**：复用工具或命令定位逻辑，在匹配的工具步骤下展开子 Agent 及其工具。唯一名称/命令匹配标记为“候选步骤”，不冒充明确调用证据；多候选或未匹配时，子 Agent 仍显示在父 Agent 下，并标注未定位。
+- **省略 `fromLocator`**：兼容为顺序展示。同一条“协作 Trace”中，主 Agent 和其余 Agent 并列排列，不强行认定步骤父子关系。主 Agent 在前，其余按事件 `observedAt` 排序，缺失时按服务端接收时间。该顺序不证明实际运行不存在并发。
+
+无定位的关系请求示例（前提是两个 Session 已上传并完成绑定）：
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-sequential-001",
+  "fromSessionId": "agent-a",
+  "toSessionId": "agent-b",
+  "description": "审查完成后执行后续 Agent",
+  "observedAt": "2026-09-14T10:00:00Z"
+}
+```
+
+省略字段即可，不要传 `fromLocator: null`。已经保存的 eventId 不允许改正文；重试必须原样发送。示例的两种模式应分别用于新的协作，避免在同一组重复声明互相冲突的位置。
+
+回到链路追踪页，使用默认“主 Agent”范围并刷新，应该只看到一条主 Trace。打开后检查子 Agent / 并列 Agent、工具参数与结果、交互原文。分页总数也按合并后的根 Trace 计算；选择“全部 / 子 Agent”或通过 taskId 原始入口查询，仍可访问原记录。关系和绑定允许先于 Trace 到达，正文齐备后重新刷新即可合并。
+
+HTTP 201 只表示关系已保存。`fromAnchor.status=not_provided` 表示采用顺序并列模式，**不是合并失败**。若仍分开显示，先检查两个 Session 是否绑定到正确 task_id、是否属于当前登录账号、是否都有可读取正文。循环、多父级冲突、空正文、重复 Execution、已存在原生子记录、Langfuse 专用树以及超限组会保留原列表，以免隐藏无法展示的数据。投影上限为 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文。
+
+在仓库根 `server.log` 搜索 `collaboration`：接口日志记录成功/失败及定位原因；`stage=projection` 的日志记录 `mergedChildren`（本次合并子 Trace 数）和 `retainedRelations`（未合并关系数），查询失败会记录“保留原始列表”。启动与数据库自动升级仍按上一节执行，本轮合并展示不增加表或迁移。

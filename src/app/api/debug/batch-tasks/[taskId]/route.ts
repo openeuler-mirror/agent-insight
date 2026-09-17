@@ -8,6 +8,7 @@ import {
     evaluateEvalExperimentCase,
 } from '@/lib/engine/experiment/run-experiment';
 import { resolveBatchEvaluationExperimentId } from '@/lib/eval/batch-case-start';
+import { batchActiveRuns } from '@/server/batch_eval_run_registry';
 
 /**
  * BatchEvalTask 用例分析的核心状态机 (跟 grayscale 对齐, 单 side):
@@ -75,32 +76,6 @@ interface BatchEvalTaskRow {
     configJson: string;
     caseStatesJson: string;
     traceEvalStatesJson: string;
-}
-
-/** 简化版任务级 abort 控制器: 用 module-level Map 缓存, key=taskId。
- *  Step 1.2 会换成跟 grayscale activeRuns 一致的机制 (跨 server 进程信息更全), 当前阶段保最小可用。 */
-const batchActiveRuns = new Map<string, { abortController: AbortController; startedAt: number; user: string }>();
-
-/**
- * 终止某 user 名下**全部**在跑的批量执行(供「终止全部」调用):abort 每个 run 的 controller,
- * 并把它们 DB 里残留的非终态 case 重置为「已终止」失败。返回 abort 的 run 数 + reset 的 case 数。
- */
-export async function abortBatchRunsForUser(user: string): Promise<{ abortedRuns: number; resetCases: number }> {
-    if (!user) return { abortedRuns: 0, resetCases: 0 };
-    let abortedRuns = 0;
-    let resetCases = 0;
-    const taskIds: string[] = [];
-    for (const [taskId, entry] of batchActiveRuns) {
-        if (entry.user !== user) continue;
-        try { entry.abortController.abort(); } catch { /* ignore */ }
-        batchActiveRuns.delete(taskId);
-        abortedRuns++;
-        taskIds.push(taskId);
-    }
-    for (const taskId of taskIds) {
-        try { resetCases += await resetStuckCases(taskId, user); } catch { /* ignore */ }
-    }
-    return { abortedRuns, resetCases };
 }
 
 /** GET /api/debug/batch-tasks/[taskId]?user=... — fetch a single task's latest state */

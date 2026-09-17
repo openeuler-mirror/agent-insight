@@ -21,6 +21,7 @@ test('trace and Goal Plus pages refresh while the browser tab is visible', () =>
     assert.match(source, /document\.removeEventListener\(['"]visibilitychange['"], refreshWhenVisible\)/);
   }
   assert.match(tracePage, /cache: ['"]no-store['"]/);
+  assert.match(tracePage, /collapseGoalPlusWorkers=1/);
   assert.match(goalList, /GOAL_PLUS_REFRESH_MS = 5_000/);
   assert.match(goalDetail, /GOAL_PLUS_REFRESH_MS = 5_000/);
 });

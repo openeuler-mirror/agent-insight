@@ -182,16 +182,40 @@ TABLE_DEFINITIONS = {
 
 TABLE_DEFINITIONS.update({
     "Collaboration": {
-        "columns": [("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"), ("createdAt", "TEXT NOT NULL")],
-        "unique_constraints": ['UNIQUE ("user", "collaborationId")'],
+        "columns": [
+            ("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"),
+            ("sourceType", "TEXT NOT NULL DEFAULT 'reported'"), ("sourceRef", "TEXT"),
+            ("diagnosticsJson", "TEXT NOT NULL DEFAULT '[]'"), ("createdAt", "TEXT NOT NULL"),
+            ("updatedAt", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+        ],
+        "unique_constraints": ['UNIQUE ("user", "collaborationId")', 'UNIQUE ("user", "sourceType", "sourceRef")'],
     },
     "CollaborationEvent": {
-        "columns": [("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"), ("eventId", "TEXT NOT NULL"), ("bodyJson", "TEXT NOT NULL"), ("bodyHash", "TEXT NOT NULL"), ("receivedAt", "TEXT NOT NULL")],
-        "unique_constraints": ['UNIQUE ("user", "collaborationId", "eventId")'],
+        "columns": [
+            ("id", "TEXT PRIMARY KEY"), ("collaborationDbId", "TEXT"), ("user", "TEXT NOT NULL"),
+            ("collaborationId", "TEXT NOT NULL"), ("eventId", "TEXT NOT NULL"), ("fromSessionId", "TEXT"),
+            ("toSessionId", "TEXT"), ("description", "TEXT"), ("observedAt", "TEXT"), ("content", "TEXT"),
+            ("fromLocatorJson", "TEXT"), ("sourceType", "TEXT NOT NULL DEFAULT 'reported'"),
+            ("sourceRef", "TEXT"), ("relationKind", "TEXT"), ("role", "TEXT"),
+            ("bodyJson", "TEXT NOT NULL"), ("bodyHash", "TEXT NOT NULL"), ("receivedAt", "TEXT NOT NULL"),
+        ],
+        "unique_constraints": [
+            'UNIQUE ("collaborationDbId", "eventId")',
+            'UNIQUE ("user", "collaborationId", "eventId")',
+        ],
     },
     "CollaborationSessionBinding": {
         "columns": [("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"), ("sessionId", "TEXT NOT NULL"), ("traceSessionId", "TEXT NOT NULL"), ("eventClock", "TEXT NOT NULL"), ("createdAt", "TEXT NOT NULL")],
         "unique_constraints": ['UNIQUE ("user", "collaborationId", "sessionId")'],
+    },
+    "CollaborationEndpointResolution": {
+        "columns": [
+            ("id", "TEXT PRIMARY KEY"), ("eventDbId", "TEXT NOT NULL"), ("side", "TEXT NOT NULL"),
+            ("executionId", "TEXT"), ("linkState", "TEXT NOT NULL DEFAULT 'pending'"), ("linkMethod", "TEXT"),
+            ("evidenceJson", "TEXT NOT NULL DEFAULT '{}'"), ("anchorState", "TEXT"), ("anchorJson", "TEXT"),
+            ("resolvedAt", "TEXT"), ("updatedAt", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+        ],
+        "unique_constraints": ['UNIQUE ("eventDbId", "side")'],
     },
 })
 
@@ -270,6 +294,8 @@ def init_opengauss_db():
                     print(f"  ✓ 表结构完整，无需修改")
 
         cursor.execute('CREATE INDEX IF NOT EXISTS "CollaborationEvent_page_idx" ON "CollaborationEvent" ("user", "collaborationId", "receivedAt", "id")')
+        cursor.execute('CREATE INDEX IF NOT EXISTS "CollaborationEvent_parent_idx" ON "CollaborationEvent" ("collaborationDbId", "receivedAt")')
+        cursor.execute('CREATE INDEX IF NOT EXISTS "CollaborationEndpointResolution_execution_idx" ON "CollaborationEndpointResolution" ("executionId")')
         print("\nOpenGauss 数据库表结构同步完成。")
 
         test_user_id = str(uuid.uuid4())

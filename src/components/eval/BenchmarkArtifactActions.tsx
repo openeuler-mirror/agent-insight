@@ -3,13 +3,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { apiFetch } from '@/lib/client/api';
+import type { BenchmarkPresentation } from '../../../packages/benchmark-protocol/src/contracts';
+import {
+  benchmarkPresentationText,
+  canPreviewBenchmarkArtifact,
+  presentBenchmarkArtifacts,
+} from '@/lib/benchmark/presentation';
 
 export interface BenchmarkArtifactRef {
+  artifactId?: string;
   name: string;
   kind: string;
   mediaType: string;
   sizeBytes: number;
   contentUrl: string;
+  sha256?: string;
 }
 
 function withUser(url: string, user: string): string {
@@ -38,41 +46,42 @@ function responseMessage(raw: string, fallback: string): string {
 
 export function BenchmarkArtifactActions({
   user,
-  submission,
+  submissions,
   evidence,
+  presentation,
 }: {
   user: string;
-  submission: BenchmarkArtifactRef | null;
+  submissions: BenchmarkArtifactRef[];
   evidence: BenchmarkArtifactRef[];
+  presentation?: Pick<BenchmarkPresentation, 'artifacts'> | null;
 }) {
   const [viewer, setViewer] = useState<{
     title: string;
     artifact: BenchmarkArtifactRef;
     content: string;
+    objectUrl: string;
+    previewType: 'text' | 'image' | 'pdf';
     loading: boolean;
     error: string;
   } | null>(null);
-  const [downloadOpen, setDownloadOpen] = useState(false);
   const [downloading, setDownloading] = useState('');
 
-  const report = useMemo(
-    () => evidence.find((artifact) => artifact.kind === 'official-report' || artifact.name === 'report.json') || null,
-    [evidence],
-  );
-  const testOutput = useMemo(
-    () => evidence.find((artifact) => artifact.kind === 'test-output' || artifact.name === 'test_output.txt') || null,
-    [evidence],
-  );
-  const runLog = useMemo(
-    () => evidence.find((artifact) => artifact.kind === 'harness-log' || artifact.name === 'run_instance.log') || null,
-    [evidence],
-  );
-  const artifacts = useMemo(
-    () => [submission, report, testOutput, runLog].filter((artifact): artifact is BenchmarkArtifactRef => Boolean(artifact)),
-    [submission, report, testOutput, runLog],
-  );
+  const artifacts = useMemo(() => presentBenchmarkArtifacts({
+    submissions,
+    evidence,
+    rules: presentation?.artifacts,
+  }), [evidence, presentation?.artifacts, submissions]);
+  const submissionArtifacts = artifacts.filter((item) => item.source === 'submission');
+  const evidenceArtifacts = artifacts.filter((item) => item.source === 'evidence');
 
   const closeViewer = useCallback(() => setViewer(null), []);
+
+  useEffect(() => {
+    const objectUrl = viewer?.objectUrl;
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [viewer?.objectUrl]);
 
   useEffect(() => {
     if (!viewer) return;
@@ -83,20 +92,33 @@ export function BenchmarkArtifactActions({
     return () => window.removeEventListener('keydown', onKey);
   }, [viewer, closeViewer]);
 
-  const viewArtifact = useCallback(async (title: string, artifact: BenchmarkArtifactRef | null) => {
-    if (!artifact) return;
-    setDownloadOpen(false);
-    setViewer({ title, artifact, content: '', loading: true, error: '' });
+  const viewArtifact = useCallback(async (title: string, artifact: BenchmarkArtifactRef) => {
+    const previewType = artifact.mediaType.startsWith('image/')
+      ? 'image' as const
+      : artifact.mediaType === 'application/pdf'
+        ? 'pdf' as const
+        : 'text' as const;
+    setViewer({ title, artifact, content: '', objectUrl: '', previewType, loading: true, error: '' });
     try {
       const response = await apiFetch(withUser(artifact.contentUrl, user));
-      const raw = await response.text();
-      if (!response.ok) throw new Error(responseMessage(raw, '读取 Artifact 失败'));
-      setViewer({ title, artifact, content: formattedContent(artifact, raw), loading: false, error: '' });
+      if (!response.ok) {
+        const raw = await response.text();
+        throw new Error(responseMessage(raw, '读取 Artifact 失败'));
+      }
+      if (previewType === 'text') {
+        const raw = await response.text();
+        setViewer({ title, artifact, content: formattedContent(artifact, raw), objectUrl: '', previewType, loading: false, error: '' });
+      } else {
+        const objectUrl = URL.createObjectURL(await response.blob());
+        setViewer({ title, artifact, content: '', objectUrl, previewType, loading: false, error: '' });
+      }
     } catch (error) {
       setViewer({
         title,
         artifact,
         content: '',
+        objectUrl: '',
+        previewType,
         loading: false,
         error: error instanceof Error ? error.message : '读取 Artifact 失败',
       });
@@ -106,7 +128,6 @@ export function BenchmarkArtifactActions({
   const downloadArtifact = useCallback(async (artifact: BenchmarkArtifactRef) => {
     if (downloading) return;
     setDownloading(artifact.name);
-    setDownloadOpen(false);
     try {
       const response = await apiFetch(withUser(artifact.contentUrl, user));
       if (!response.ok) {
@@ -126,6 +147,8 @@ export function BenchmarkArtifactActions({
         title: `下载 ${artifact.name}`,
         artifact,
         content: '',
+        objectUrl: '',
+        previewType: 'text',
         loading: false,
         error: error instanceof Error ? error.message : '下载 Artifact 失败',
       });
@@ -134,78 +157,60 @@ export function BenchmarkArtifactActions({
     }
   }, [downloading, user]);
 
-  const actions: Array<{ label: string; title: string; artifact: BenchmarkArtifactRef | null }> = [
-    { label: '查看 Patch', title: 'Agent Patch', artifact: submission },
-    { label: '查看官方报告', title: 'SWE-bench 官方报告', artifact: report },
-    { label: '查看测试输出', title: 'SWE-bench 测试输出', artifact: testOutput },
-    { label: '查看运行日志', title: 'SWE-bench 运行日志', artifact: runLog },
-  ];
+  const renderArtifactList = (
+    title: string,
+    items: typeof artifacts,
+  ) => (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--foreground-muted)', marginBottom: 7 }}>
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <div style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>暂无文件</div>
+      ) : (
+        <div style={{ display: 'grid', gap: 6 }}>
+          {items.map(({ source, label, artifact }) => (
+            <div
+              key={`${source}:${artifact.artifactId || artifact.kind}:${artifact.name}`}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
+                padding: '7px 9px', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)', background: 'var(--background-secondary)',
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--foreground)' }}>{label}</div>
+                <div
+                  title={`${artifact.name} · ${artifact.mediaType}${artifact.sha256 ? ` · ${artifact.sha256}` : ''}`}
+                  style={{ marginTop: 2, fontSize: 10.5, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {artifact.name} · {benchmarkPresentationText(artifact.sizeBytes, { format: 'bytes' })}
+                </div>
+              </div>
+              {canPreviewBenchmarkArtifact(artifact) && (
+                <button type="button" className="ai-btn-s" onClick={() => void viewArtifact(label, artifact)}>
+                  查看
+                </button>
+              )}
+              <button
+                type="button"
+                className="ai-btn-s"
+                disabled={Boolean(downloading)}
+                onClick={() => void downloadArtifact(artifact)}
+              >
+                {downloading === artifact.name ? '下载中…' : '下载'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <>
-      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--foreground-muted)', marginBottom: 7 }}>
-          评测文件
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-          {actions.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              className="ai-btn-s"
-              disabled={!action.artifact}
-              onClick={() => void viewArtifact(action.title, action.artifact)}
-              title={action.artifact ? `${action.artifact.name} · ${action.artifact.sizeBytes} bytes` : '文件尚不可用'}
-              style={!action.artifact ? { cursor: 'not-allowed', opacity: 0.5 } : undefined}
-            >
-              {action.label}
-            </button>
-          ))}
-          <span style={{ flex: 1 }} />
-          <div style={{ position: 'relative' }}>
-            <button
-              type="button"
-              className="ai-btn-s"
-              disabled={!artifacts.length || Boolean(downloading)}
-              onClick={() => setDownloadOpen((open) => !open)}
-              style={!artifacts.length ? { cursor: 'not-allowed', opacity: 0.5 } : undefined}
-            >
-              {downloading ? `下载 ${downloading}…` : '↓ 下载原始文件'}
-            </button>
-            {downloadOpen && (
-              <div
-                role="menu"
-                aria-label="下载原始文件"
-                style={{
-                  position: 'absolute', right: 0, bottom: 'calc(100% + 5px)', zIndex: 30,
-                  minWidth: 190, padding: 5, border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)', background: 'var(--card-bg)', boxShadow: 'var(--shadow)',
-                }}
-              >
-                {artifacts.map((artifact) => (
-                  <button
-                    key={`${artifact.kind}:${artifact.name}`}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => void downloadArtifact(artifact)}
-                    style={{
-                      display: 'flex', width: '100%', justifyContent: 'space-between', gap: 12,
-                      padding: '7px 8px', border: 'none', borderRadius: 'var(--radius-sm)',
-                      background: 'transparent', color: 'var(--foreground)', fontSize: 11,
-                      textAlign: 'left', cursor: 'pointer',
-                    }}
-                  >
-                    <span>{artifact.name}</span>
-                    <span style={{ color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
-                      {artifact.sizeBytes} B
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      {renderArtifactList('提交物', submissionArtifacts)}
+      {renderArtifactList('评测证据', evidenceArtifacts)}
 
       {viewer && (
         <div
@@ -247,6 +252,11 @@ export function BenchmarkArtifactActions({
                 <div style={{ color: 'var(--foreground-muted)', fontSize: 12 }}>读取中…</div>
               ) : viewer.error ? (
                 <div style={{ color: 'var(--error)', fontSize: 12 }}>{viewer.error}</div>
+              ) : viewer.previewType === 'image' ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={viewer.objectUrl} alt={viewer.title} style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto' }} />
+              ) : viewer.previewType === 'pdf' ? (
+                <iframe title={viewer.title} src={viewer.objectUrl} style={{ width: '100%', height: '100%', minHeight: 640, border: 0 }} />
               ) : (
                 <pre style={{
                   margin: 0, minHeight: '100%', padding: 14, border: '1px solid var(--border)',

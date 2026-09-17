@@ -85,4 +85,6 @@ export interface EvaluatorCard {
   runtimeHref?: string;
   /** 描述该评估器的运行实现（卡片底部说明用），如 "trajectory-evaluator (deepagents 协作)" */
   runtimeNote?: string;
+  /** Benchmark Presentation 可直接展示的输出说明。 */
+  outputDescription?: string;
 }

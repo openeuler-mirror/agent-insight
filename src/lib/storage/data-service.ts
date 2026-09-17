@@ -41,6 +41,7 @@ import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
 import type { FilterClause } from '@/lib/filters/types';
+import { goalPlusProjectedWorkerExecutionWhere } from '@/lib/ingest/collaboration/query';
 import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
@@ -1181,6 +1182,7 @@ const EVALUATION_FILE = path.join(DATA_DIR, 'evaluation_result.json');
 const AUDIT_DATA_MUTATIONS = process.env.AUDIT_DATA_MUTATIONS === '1' || process.env.AUDIT_DATA_MUTATIONS === 'true';
 
 interface ReadRecordFilters {
+    excludedTaskIds?: string[];
     query?: string;
     taskId?: string;
     taskIds?: string[];
@@ -1193,6 +1195,8 @@ interface ReadRecordFilters {
     includeSubagents?: boolean;
     /** 只返回 sub-agent 行（不含 root），与 includeSubagents 互斥；优先级高于 includeSubagents */
     onlySubagents?: boolean;
+    /** Trace 列表把已关联的 Goal Plus worker 作为只读子 Agent 展示，而不是独立根行。 */
+    collapseGoalPlusWorkers?: boolean;
     /** 列出指定 root 下的所有 sub-agent */
     parentExecutionId?: string | null;
     /**
@@ -1846,8 +1850,19 @@ async function readRecordsInternal(
         ...skillNamesFromClauses,
     ]));
     const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
+    const collapseGoalPlusWorkers = filters?.collapseGoalPlusWorkers === true && !process.env.DB_HOST;
+    const projectedGoalPlusWorkerWhere = collapseGoalPlusWorkers
+        ? await goalPlusProjectedWorkerExecutionWhere(filters?.showAllUsers ? undefined : user)
+        : null;
     if (filters?.onlySubagents === true) {
-        where.isSubagent = true;
+        if (projectedGoalPlusWorkerWhere) {
+            where.AND = [
+                ...(Array.isArray(where.AND) ? where.AND : []),
+                { OR: [{ isSubagent: true }, projectedGoalPlusWorkerWhere] },
+            ];
+        } else {
+            where.isSubagent = true;
+        }
     } else if (
         filters?.includeSubagents !== true &&
         filters?.parentExecutionId === undefined &&
@@ -1855,6 +1870,12 @@ async function readRecordsInternal(
         !skillFilterActive
     ) {
         where.isSubagent = false;
+        if (projectedGoalPlusWorkerWhere) {
+            where.AND = [
+                ...(Array.isArray(where.AND) ? where.AND : []),
+                { NOT: projectedGoalPlusWorkerWhere },
+            ];
+        }
     }
 
     if (filters?.parentExecutionId !== undefined) {
@@ -1955,6 +1976,10 @@ async function readRecordsInternal(
         }
     }
 
+    if (filters?.excludedTaskIds?.length) {
+        where.AND = [...((where.AND as any[]) ?? []), { OR: [{ taskId: null }, { taskId: { notIn: filters.excludedTaskIds } }] }];
+    }
+
     const sortKey = options?.sortKey ?? 'timestamp';
     const sortDir = options?.sortDir ?? 'desc';
     const orderBy = [{ [sortKey]: sortDir }, { id: sortDir }];
@@ -1986,7 +2011,7 @@ async function readRecordsInternal(
         const dedup = selectKeepIdsByTaskId(records);
         keepIds = dedup.keepIds;
         byTaskId = dedup.byTaskId;
-        const filtered = records.filter((r: any) => !r.taskId || keepIds.has(r.id));
+        const filtered = records.filter((r: any) => (!r.taskId || keepIds.has(r.id)) && !filters?.excludedTaskIds?.includes(r.taskId));
         total = filtered.length;
         paged = pageSize > 0
             ? filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
@@ -3089,6 +3114,15 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             await relinkGoalPlusForExecution(targetRecord.user);
         } catch (e) {
             console.warn(`[Data-Service] Goal Plus relink failed for ${recordId}:`, e);
+        }
+        try {
+            const { resolveCollaborationEndpointsForExecution } = await import('@/lib/ingest/collaboration/resolve');
+            await resolveCollaborationEndpointsForExecution(targetRecord.user, [
+                targetRecord.task_id || '',
+                targetRecord.agent_session_id || '',
+            ]);
+        } catch (e) {
+            console.warn(`[Data-Service] collaboration relink failed for ${recordId}:`, e);
         }
     }
 

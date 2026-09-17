@@ -17,4 +17,25 @@ test('Benchmark Trace generation follows public Manifest columns and search path
   assert.match(wizard, /aria-label=\{benchmarkPresentation\?\.caseTable\.searchPlaceholder/);
   assert.match(wizard, /replace\(\/\[\^a-z0-9\]\+\/g, ''\)/);
   assert.match(wizard, /filteredGenerationCases\.map/);
+  assert.match(wizard, /selectedDataset\.benchmark\.evaluatorKey/);
+  assert.match(wizard, /presentation\?\.evaluator/);
+  assert.doesNotMatch(wizard, /values\?\.instance_id/);
+  assert.doesNotMatch(wizard, /benchmark:\$\{selectedDataset\.benchmark\.adapterKey\}/);
+});
+
+test('Benchmark result UI keeps generic submissions, points, and trend contracts', () => {
+  const root = process.cwd();
+  const detail = fs.readFileSync(path.join(root, 'src/components/eval/ExperimentDetail.tsx'), 'utf8');
+  const caseDetail = fs.readFileSync(path.join(root, 'src/components/eval/ExperimentCaseDetail.tsx'), 'utf8');
+  const artifacts = fs.readFileSync(path.join(root, 'src/components/eval/BenchmarkArtifactActions.tsx'), 'utf8');
+  const trend = fs.readFileSync(path.join(root, 'src/lib/engine/experiment/baseline-trend.ts'), 'utf8');
+
+  assert.match(detail, /benchmarkCaseColumns\.map/);
+  assert.match(detail, /benchmarkMetricPresentation\?\.trueLabel/);
+  assert.match(caseDetail, /benchmarkPresentationText\(point\.value/);
+  assert.doesNotMatch(caseDetail, /evidence\.passed|evidence\.total/);
+  assert.match(artifacts, /presentBenchmarkArtifacts/);
+  assert.doesNotMatch(artifacts, /report\.json|test_output\.txt|run_instance\.log/);
+  assert.match(trend, /aggregateLabel/);
+  assert.doesNotMatch(trend, /adapterKey === 'swe-bench'/);
 });

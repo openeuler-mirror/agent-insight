@@ -3,7 +3,11 @@ import type {
   DatasetCaseRootCauseMeta,
   RootCauseItem,
 } from './dataset-case-root-causes';
-import type { BenchmarkPresentation } from '../../packages/benchmark-protocol/src/contracts';
+import type {
+  BenchmarkPresentation,
+  BenchmarkPresentationColumn,
+  BenchmarkPresentationFormat,
+} from '../../packages/benchmark-protocol/src/contracts';
 
 export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
 
@@ -16,6 +20,7 @@ export function coerceDatasetKind(value: unknown): DatasetKind {
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
 
 export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type DatasetFieldDisplayType = BenchmarkPresentationColumn['type'];
 export type TraceBackflowArtifactSource = 'input' | 'output' | 'trace' | 'none';
 
 export function defaultTraceBackflowSourceForField(key: string): TraceBackflowArtifactSource {
@@ -55,6 +60,11 @@ export interface DatasetField {
   key: string;
   label: string;
   type: DatasetFieldType;
+  path?: string;
+  displayType?: DatasetFieldDisplayType;
+  width?: number;
+  format?: BenchmarkPresentationFormat;
+  truncate?: number;
   description?: string;
   system?: boolean;
 }
@@ -136,6 +146,7 @@ export interface AgentDataset {
   shared?: boolean;
   benchmark?: {
     adapterKey: string;
+    evaluatorKey: string;
     displayName: string;
     status: string;
     profileKey?: string;
@@ -185,11 +196,16 @@ export function createEvaluatorCatalogField(
 export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
   if (kind === 'benchmark') {
     return [
-      { id: 'input', key: 'input', label: '问题描述', type: 'text', system: true },
-      { id: 'instance_id', key: 'instance_id', label: 'Instance ID', type: 'text', system: true },
-      { id: 'repo', key: 'repo', label: '代码仓库', type: 'text', system: true },
-      { id: 'base_commit', key: 'base_commit', label: '基线提交', type: 'text', system: true },
-      { id: 'version', key: 'version', label: '版本', type: 'text', system: true },
+      { id: 'input', key: 'input', path: 'input', label: '输入', type: 'text', displayType: 'text', system: true },
+      {
+        id: 'externalCaseId',
+        key: 'externalCaseId',
+        path: 'externalCaseId',
+        label: 'Case ID',
+        type: 'text',
+        displayType: 'code',
+        system: true,
+      },
     ];
   }
   const fields: DatasetField[] = [
@@ -237,9 +253,9 @@ export const TRAJECTORY_PLACEHOLDER = `{
   "root_step": { }
 }`;
 
-export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'>): string[] {
+export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'> & Partial<Pick<AgentDataset, 'fields'>>): string[] {
   if (dataset.datasetKind === 'benchmark') {
-    return ['input', 'instance_id', 'repo', 'base_commit', 'version'];
+    return (dataset.fields || []).map(field => field.label || field.key).filter(Boolean);
   }
   if (dataset.datasetKind === 'trajectory') {
     return ['input', 'reference_output', 'trajectory'];

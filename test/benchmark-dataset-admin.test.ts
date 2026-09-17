@@ -68,7 +68,7 @@ test('admin installs one shared dataset, optionally removes the source, and safe
       requiredArtifacts: [{ name: 'answer.txt', mediaType: 'text/plain', collector: 'fixture/v1', maxBytes: 1024 }],
       schemas: { case: { type: 'object' }, rawResult: { type: 'object' } },
       evaluation: {
-        evaluatorKey: 'fixture-dataset',
+        evaluatorKey: 'fixture-grader',
         defaultTimeoutSeconds: 30,
         defaultResources: { cpu: 1, memoryMiB: 128 },
       },
@@ -78,11 +78,11 @@ test('admin installs one shared dataset, optionally removes the source, and safe
       },
       presentation: {
         caseTable: {
-          searchPaths: ['externalCaseId', 'values.group'],
+          searchPaths: ['externalCaseId', 'values.metadata.group'],
           columns: [
-            { path: 'input', label: '任务', type: 'text' },
-            { path: 'externalCaseId', label: 'Case', type: 'code' },
-            { path: 'values.group', label: '分组', type: 'text' },
+            { path: 'input', label: '任务', type: 'text', truncate: 120 },
+            { path: 'externalCaseId', label: 'Case', type: 'code', width: 160 },
+            { path: 'values.metadata.group', label: '分组', type: 'code', description: '嵌套业务字段' },
           ],
         },
       },
@@ -96,13 +96,14 @@ test('admin installs one shared dataset, optionally removes the source, and safe
         externalCaseId: id,
         publicPayload: { input },
         privatePayload: { expected: `expected:${id}` },
-        catalogProjection: { input, values: { group: String(value.group || '') } },
+        catalogProjection: { input, values: { metadata: { group: String(value.group || '') } } },
         publicFingerprint: `sha256:${'a'.repeat(64)}`,
         privateFingerprint: `sha256:${'b'.repeat(64)}`,
       }
     },
   }
   registry.registerBenchmarkAdapter(fixtureAdapter as never)
+  assert.equal(registry.benchmarkEvaluatorId('fixture-dataset'), 'benchmark:fixture-grader')
 
   const sourcePath = path.join(testDir, 'fixture.json')
   fs.writeFileSync(sourcePath, JSON.stringify([{ id: 'case-1', input: 'do work', group: 'a' }]))
@@ -123,6 +124,24 @@ test('admin installs one shared dataset, optionally removes the source, and safe
     where: { id: dataset?.agentEvalDatasetId },
   })
   assert.equal(publicDataset?.casesJson.includes('expected:case-1'), false)
+  assert.deepEqual(JSON.parse(publicDataset?.fieldsJson || '[]'), [
+    {
+      id: 'input', key: 'input', path: 'input', label: '任务', type: 'text',
+      displayType: 'text', truncate: 120, system: true,
+    },
+    {
+      id: 'externalCaseId', key: 'externalCaseId', path: 'externalCaseId', label: 'Case',
+      type: 'text', displayType: 'code', width: 160, system: true,
+    },
+    {
+      id: 'metadata_group', key: 'metadata_group', path: 'values.metadata.group', label: '分组',
+      type: 'text', displayType: 'code', description: '嵌套业务字段', system: true,
+    },
+  ])
+  assert.equal(
+    JSON.parse(publicDataset?.casesJson || '[]')[0]?.values?.metadata?.group,
+    'a',
+  )
 
   await prismaModule.prisma.agentEvalDataset.create({
     data: {
@@ -142,6 +161,17 @@ test('admin installs one shared dataset, optionally removes the source, and safe
   const publicRows = await decorated.decoratePublicBenchmarkDatasets('user-b', visibleToSecondUser)
   assert.equal(publicRows[0]?.shared, true)
   assert.equal(publicRows[0]?.benchmark?.presentation?.caseTable.columns[2]?.label, '分组')
+
+  fixtureAdapter.manifest.presentation.caseTable.columns[0].label = '更新后的任务列'
+  const frozenBeforeRefresh = await prismaModule.prisma.agentEvalDataset.findUnique({
+    where: { id: dataset?.agentEvalDatasetId },
+  })
+  assert.equal(JSON.parse(frozenBeforeRefresh?.fieldsJson || '[]')[0]?.label, '任务')
+  await admin.refreshSystemBenchmarkDatasetPresentation(imported.id)
+  const refreshed = await prismaModule.prisma.agentEvalDataset.findUnique({
+    where: { id: dataset?.agentEvalDatasetId },
+  })
+  assert.equal(JSON.parse(refreshed?.fieldsJson || '[]')[0]?.label, '更新后的任务列')
 
   const duplicatePath = path.join(testDir, 'duplicate.json')
   fs.writeFileSync(duplicatePath, JSON.stringify([{ id: 'case-1', input: 'do work', group: 'a' }]))

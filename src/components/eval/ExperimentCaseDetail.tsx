@@ -28,6 +28,12 @@ import {
   summarizeEvaluatorRunConfig,
   type EvaluatorRunConfigMap,
 } from '@/lib/evaluators/evaluator-run-config';
+import type { BenchmarkPresentation } from '../../../packages/benchmark-protocol/src/contracts';
+import {
+  benchmarkPresentationText,
+  benchmarkPresentationValue,
+  truncateBenchmarkText,
+} from '@/lib/benchmark/presentation';
 
 interface ResultRow {
   id: string;
@@ -60,18 +66,16 @@ interface ExperimentDetail {
     referenceOutput: string | null;
     traceStatus?: 'pending' | 'ready' | 'failed' | null;
     traceError?: string | null;
+    caseValues?: Record<string, unknown> | null;
     benchmark?: {
       adapterKey: string;
       displayName: string;
-      presentation: {
-        referencePanel?: { title?: string };
-        result?: { primaryMetric?: { label?: string; type?: string } };
-      } | null;
+      presentation: BenchmarkPresentation | null;
       primaryMetric: { key: string; value: boolean | number | null } | null;
       externalCaseId: string;
-      repo: string;
+      publicPayload: unknown;
       reference: { kind: string; description: string };
-      submission: (BenchmarkArtifactRef & { sha256: string; summary: string }) | null;
+      submissions: Array<BenchmarkArtifactRef & { sha256: string }>;
       evidenceArtifacts: Array<BenchmarkArtifactRef & { sha256: string }>;
       runStatus: string;
       evaluationStatus: string | null;
@@ -83,6 +87,9 @@ interface ExperimentDetail {
 
 interface PointRow {
   label: string;
+  value?: string | number | boolean | null;
+  total?: number;
+  format?: 'plain' | 'percentage' | 'ratio';
   score?: number;
   evidence?: unknown;
   status?: 'covered' | 'partial' | 'missing';
@@ -107,6 +114,16 @@ function parseOnePoint(p: unknown): PointRow | null {
   if (typeof r.label !== 'string' || !r.label.trim()) return null;
   const row: PointRow = {
     label: r.label,
+    ...('value' in r && (
+      r.value === null
+      || typeof r.value === 'string'
+      || typeof r.value === 'number'
+      || typeof r.value === 'boolean'
+    ) ? { value: r.value as string | number | boolean | null } : {}),
+    total: typeof r.total === 'number' ? r.total : undefined,
+    format: r.format === 'plain' || r.format === 'percentage' || r.format === 'ratio'
+      ? r.format
+      : undefined,
     score: typeof r.score === 'number' ? r.score : undefined,
     evidence: r.evidence,
   };
@@ -542,6 +559,21 @@ export function ExperimentCaseDetail({
 
   const inputSummary = (caseRow?.input || '').replace(/\s+/g, ' ').trim();
   const isBenchmark = detail?.scope === 'benchmark' && Boolean(caseRow?.benchmark);
+  const benchmarkReferenceText = (() => {
+    const benchmark = caseRow?.benchmark;
+    if (!benchmark) return '';
+    const columns = benchmark.presentation?.referencePanel?.columns || [];
+    const values = columns.map((column) => {
+      const value = benchmarkPresentationText(benchmarkPresentationValue({
+        input: caseRow.input,
+        externalCaseId: benchmark.externalCaseId,
+        values: caseRow.caseValues,
+        publicPayload: benchmark.publicPayload,
+      }, column.path), { format: column.format });
+      return `${column.label}：${truncateBenchmarkText(value, column.truncate)}`;
+    });
+    return [...values, benchmark.reference.description].filter(Boolean).join('\n');
+  })();
 
   return (
     <>
@@ -626,12 +658,18 @@ export function ExperimentCaseDetail({
                 isBenchmark
                   ? {
                       label: caseRow.benchmark?.presentation?.referencePanel?.title || '参考契约',
-                      value: caseRow.benchmark?.reference.description || '',
+                      value: benchmarkReferenceText,
                       missing: 'Benchmark 测试契约不可用',
                     }
                   : { label: '预期输出', value: caseRow.referenceOutput || '', missing: '未标注预期输出' },
                 isBenchmark
-                  ? { label: '实际输出', value: caseRow.benchmark?.submission ? `${caseRow.benchmark.submission.name}\n${caseRow.benchmark.submission.summary}` : '', missing: '尚未生成提交产物' }
+                  ? {
+                      label: '提交物',
+                      value: caseRow.benchmark?.submissions
+                        .map((artifact) => `${artifact.name} · ${benchmarkPresentationText(artifact.sizeBytes, { format: 'bytes' })}`)
+                        .join('\n') || '',
+                      missing: '尚未生成提交物',
+                    }
                   : { label: '实际输出', value: caseRow.actualOutput, missing: '' },
               ] as const).map((box) => (
                 <div key={box.label} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -700,18 +738,31 @@ export function ExperimentCaseDetail({
                       if (isBenchmarkEvaluator) {
                         const passed = r.verdict === 'pass';
                         const metric = caseRow.benchmark?.primaryMetric;
-                        const metricLabel = caseRow.benchmark?.presentation?.result?.primaryMetric?.label
+                        const metricPresentation = caseRow.benchmark?.presentation?.result?.primaryMetric;
+                        const metricLabel = metricPresentation?.label
                           || metric?.key
                           || '结果';
-                        const metricValue = typeof metric?.value === 'boolean'
-                          ? metric.value ? '通过' : '未通过'
-                          : metric?.value ?? '—';
+                        const metricValue = benchmarkPresentationText(
+                          metricPresentation
+                            ? benchmarkPresentationValue({ primaryMetric: metric }, metricPresentation.path)
+                            : metric?.value,
+                          {
+                            format: metricPresentation?.format,
+                            precision: metricPresentation?.precision,
+                            unit: metricPresentation?.unit,
+                            trueLabel: metricPresentation?.trueLabel,
+                            falseLabel: metricPresentation?.falseLabel,
+                          },
+                        );
                         return (
                           <div key={r.id} style={{ border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden', opacity: failed ? 0.85 : 1 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '11px 13px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                              <b style={{ fontSize: 12.5 }}>{caseRow.benchmark?.displayName || 'Benchmark'} Evaluator</b>
+                              <b style={{ fontSize: 12.5 }}>
+                                {caseRow.benchmark?.presentation?.evaluator?.displayName
+                                  || `${caseRow.benchmark?.displayName || 'Benchmark'} Evaluator`}
+                              </b>
                               <TagChip text="预置" />
-                              <TagChip text="官方评测" />
+                              <TagChip text="Benchmark 评测" />
                               <span style={{ flex: 1 }} />
                               {pendingLike ? (
                                 <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>{r.status === 'running' ? '评测中…' : '待评测'}</span>
@@ -730,16 +781,10 @@ export function ExperimentCaseDetail({
                               {points.length > 0 && (
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
                                   {points.map((point) => {
-                                    const evidence = point.evidence && typeof point.evidence === 'object' && !Array.isArray(point.evidence)
-                                      ? point.evidence as Record<string, unknown>
-                                      : {};
-                                    const hasRatio = Number.isFinite(Number(evidence.passed))
-                                      && Number.isFinite(Number(evidence.total));
-                                    const value = hasRatio
-                                      ? `${Number(evidence.passed)} / ${Number(evidence.total)}`
-                                      : typeof point.score === 'number'
-                                        ? String(point.score)
-                                        : point.status || '—';
+                                    const value = benchmarkPresentationText(point.value, {
+                                      format: point.format,
+                                      total: point.total,
+                                    });
                                   return (
                                     <div key={point.label} style={{ padding: '9px 11px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--background-secondary)' }}>
                                       <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{point.label}</div>
@@ -752,8 +797,9 @@ export function ExperimentCaseDetail({
                               {user && (
                                 <BenchmarkArtifactActions
                                   user={user}
-                                  submission={caseRow.benchmark?.submission || null}
+                                  submissions={caseRow.benchmark?.submissions || []}
                                   evidence={caseRow.benchmark?.evidenceArtifacts || []}
+                                  presentation={caseRow.benchmark?.presentation}
                                 />
                               )}
                               {!pendingLike && (

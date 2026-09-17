@@ -1,5 +1,6 @@
 'use client';
 
+import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
@@ -20,7 +21,6 @@ import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/obse
 import {
     AgentEvent,
     AgentNode,
-    buildAgentCallTree,
     findNode,
     firstMeaningfulLine,
     formatDuration,
@@ -111,6 +111,27 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
             )}
         >
             {kind === 'ras' ? rasEventKindBadgeLabel(locale) : meta.label}
+        </span>
+    );
+}
+
+function CollaborationRelationBadge({ relation }: { relation: NonNullable<RawInteraction['trace_relation']> }) {
+    const { locale } = useLocale();
+    const isConfirmed = relation.anchorState === 'confirmed';
+    const label = relation.sourceType === 'goal-plus-semantic'
+        ? (locale === 'zh' ? 'Goal Plus 编排' : 'Goal Plus orchestration')
+        : isConfirmed
+            ? (locale === 'zh' ? '已确认关联' : 'Confirmed relation')
+            : (locale === 'zh' ? '跨会话关联' : 'Cross-session relation');
+    const title = isConfirmed
+        ? relation.description
+        : `${relation.description} · ${locale === 'zh' ? '未推断具体启动调用位置' : 'Exact spawn call was not inferred'}`;
+    return (
+        <span
+            title={title}
+            className="ml-1.5 inline-flex h-4 items-center rounded-sm border border-border bg-background-tertiary px-1 text-[10px] font-medium text-foreground-muted align-middle"
+        >
+            {label}
         </span>
     );
 }
@@ -446,6 +467,8 @@ export default function AgentTraceView({
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
     const stableTraceIdentity = traceIdentity ?? rootExecutionId;
     const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
+    const sourceInteractionsRef = React.useRef(sourceInteractions);
+    sourceInteractionsRef.current = sourceInteractions;
     const treeIdentityInitializedRef = React.useRef(false);
     const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
@@ -467,7 +490,8 @@ export default function AgentTraceView({
             return sourceInteractions.map((item, index) => {
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
                 const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
-                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred ? loaded : item;
+                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred
+                    && sameCollaborationSource(incoming, loaded) && incoming._payloadVersion && incoming._payloadVersion === loaded._payloadVersion ? loaded : item;
             });
         });
     }, [sourceInteractions, stableTraceIdentity]);
@@ -477,13 +501,15 @@ export default function AgentTraceView({
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
         const requestedTraceId = previousTraceIdentityRef.current;
+        const requestedSource = sourceInteractionsRef.current;
         setInteractionLoadError(null);
         try {
             const loaded = await loadInteraction(index);
-            if (previousTraceIdentityRef.current !== requestedTraceId) return;
+            if (previousTraceIdentityRef.current !== requestedTraceId || sourceInteractionsRef.current !== requestedSource
+                || !current._payloadVersion || loaded._payloadVersion !== current._payloadVersion) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
-            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
+            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index && sameCollaborationSource(item, current) ? { ...loaded, ...(collaborationSource(current) ? { _collaboration: collaborationSource(current) } : {}) } : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
         }
@@ -497,16 +523,20 @@ export default function AgentTraceView({
         }
         if (!fullLoadPromiseRef.current) {
             const requestedTraceId = previousTraceIdentityRef.current;
+            const requestedSource = sourceInteractionsRef.current;
             setFullInteractionLoadError(null);
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousTraceIdentityRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId && sourceInteractionsRef.current === requestedSource
+                        && loaded.length === requestedSource.length
+                        && loaded.every((item, index) => item._payloadVersion && item._payloadVersion === requestedSource[index]._payloadVersion)) {
                         // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
                         sameTraceReloadRef.current = true;
                         setInteractions(loaded);
+                        return loaded;
                     }
-                    return loaded;
+                    return sourceInteractionsRef.current;
                 })
                 .catch(error => {
                     if (previousTraceIdentityRef.current === requestedTraceId) {
@@ -527,7 +557,7 @@ export default function AgentTraceView({
         const aligned = rasMarkers.length
             ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
             : (displayInteractions || [])
-        const base = langfuseProjection?.tree || buildAgentCallTree(aligned)
+        const base = langfuseProjection?.tree || buildCollaborationTraceTree(aligned)
         if (!base) return base
         return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers, locale) : base
     }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale]);
@@ -1260,7 +1290,8 @@ function UnifiedSpanTree({
 
     const events = node.events;
     const eventTree = buildAgentEventTree(events);
-    const hasContent = events.length > 0;
+    const unanchoredChildren = node.children.filter(child => !events.some(event => event.spawnedChildId === child.id));
+    const hasContent = events.length > 0 || unanchoredChildren.length > 0;
 
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
@@ -1404,6 +1435,7 @@ function UnifiedSpanTree({
                             ×{node.parallelCallCount}
                         </span>
                     )}
+                    {node.relation && <CollaborationRelationBadge relation={node.relation} />}
                     {depth > 0 && node.sessionId && ctx.onSubagentNavigate && (
                         <button
                             type="button"
@@ -1443,6 +1475,11 @@ function UnifiedSpanTree({
                     )}
                 />
 
+                {(node as AgentNode & { collaborationLabel?: string }).collaborationLabel && (
+                    <span className="text-xs text-foreground-muted" title={(node as any).collaborationReason}>
+                        {(node as any).collaborationLabel}
+                    </span>
+                )}
                 {/* Metrics */}
                 <span className={cn(
                     'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
@@ -1464,9 +1501,16 @@ function UnifiedSpanTree({
                     {eventTree.map((entry, entryIndex) => renderEventEntry(
                         entry,
                         depth + 1,
-                        entryIndex === eventTree.length - 1,
+                        entryIndex === eventTree.length - 1 && unanchoredChildren.length === 0,
                         depth === 0 ? [] : [...prefixBits, !isLast],
                     ))}
+                    {unanchoredChildren.map((child, index) => <UnifiedSpanTree
+                        key={child.id} node={child} nodeMap={nodeMap} expandedKeys={expandedKeys}
+                        onToggleKey={onToggleKey} selectedKey={selectedKey} onSelect={onSelect}
+                        totalStart={totalStart} totalDuration={totalDuration} depth={depth + 1}
+                        isLast={index === unanchoredChildren.length - 1}
+                        prefixBits={depth === 0 ? [] : [...prefixBits, !isLast]}
+                    />)}
                 </div>
             )}
         </div>
@@ -1577,6 +1621,7 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
+                {event.kind === 'task' && event.relation && <CollaborationRelationBadge relation={event.relation} />}
                 {evAnomalyHits.length > 0 && (
                     <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
                 )}
@@ -2706,6 +2751,24 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
             {/* Body — all sections use CompactSection for consistent truncated-preview + modal pattern */}
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.875rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
                 <RasReliabilityDetails markers={eventAnomalies} />
+
+                {event.relation && (
+                    <div className="rounded-md border border-border bg-background-secondary p-3 text-xs text-foreground-secondary">
+                        <div className="mb-1 font-semibold text-foreground">
+                            {event.relation.sourceType === 'goal-plus-semantic'
+                                ? (locale === 'zh' ? 'Goal Plus 编排关系' : 'Goal Plus orchestration relation')
+                                : (locale === 'zh' ? '跨 Session 关系' : 'Cross-session relation')}
+                        </div>
+                        <div>{event.relation.description}</div>
+                        {event.relation.anchorState !== 'confirmed' && (
+                            <div className="mt-1 text-foreground-muted">
+                                {locale === 'zh'
+                                    ? '该节点来自只读关系投影，未改写原生 Trace，也未推断具体启动调用位置。'
+                                    : 'This node is a read-only relation projection; the native trace and exact spawn position were not changed.'}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (

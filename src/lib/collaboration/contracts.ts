@@ -41,7 +41,7 @@ export function strictJson(text: string): unknown {
         if (text[pos] === '{' || text[pos] === '[') {
             const object = text[pos++] === '{';
             const end = object ? '}' : ']';
-            const result: any = object ? Object.create(null) : [];
+            const result: Record<string, unknown> | unknown[] = object ? Object.create(null) : [];
             const keys = new Set<string>();
             space();
             if (text[pos] === end) { pos++; return result; }
@@ -57,7 +57,8 @@ export function strictJson(text: string): unknown {
                     if (text[pos++] !== ':') invalid('JSON 缺少冒号');
                 }
                 const child = value(depth + 1);
-                if (object) result[key] = child; else result.push(child);
+                if (object) (result as Record<string, unknown>)[key] = child;
+                else (result as unknown[]).push(child);
                 space();
                 if (text[pos] === end) { pos++; return result; }
                 if (text[pos++] !== ',') invalid('JSON 格式错误');
@@ -103,7 +104,9 @@ export function validTime(value: unknown): value is string {
 }
 export function parseEvent(value: unknown): RelationEvent {
     const data = object(value, ['collaborationId', 'eventId', 'fromSessionId', 'toSessionId', 'description', 'observedAt', 'content', 'fromLocator']);
-    identifier(data.collaborationId, 'collaborationId'); identifier(data.eventId, 'eventId');
+    const collaborationId = identifier(data.collaborationId, 'collaborationId');
+    if (collaborationId.startsWith('collab_gp_')) invalid('collab_gp_ 仅供内部 Goal Plus 投影使用', 'collaborationId');
+    identifier(data.eventId, 'eventId');
     str(data.fromSessionId, 'fromSessionId', 512); str(data.toSessionId, 'toSessionId', 512); str(data.description, 'description', 500);
     if ('content' in data) str(data.content, 'content', 4000, false);
     if ('observedAt' in data && !validTime(data.observedAt)) invalid('必须是有效的带时区 RFC 3339 时间', 'observedAt');

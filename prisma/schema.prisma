@@ -139,6 +139,10 @@ model Execution {
   // native Execution parent/root tree.
   goalPlusLinks GoalPlusExecutionLink[]
 
+  // Cross-session collaboration only resolves endpoints to an Execution. It
+  // never rewrites the native parent/root tree.
+  collaborationEndpointResolutions CollaborationEndpointResolution[]
+
   @@index([parentExecutionId])
   @@index([rootExecutionId])
   @@index([isSubagent, timestamp])
@@ -1956,33 +1960,88 @@ model GoalPlusSemanticSnapshot {
   @@index([sourceDbId, kind, objectKey, observedAt])
 }
 
+// ---------------------------------------------------------------------------
+// Cross-session collaboration trace overlay
+// Designs: docs/design/cross-session-collaboration*/
+// ---------------------------------------------------------------------------
+
 model Collaboration {
-  id String @id
-  user String
+  id              String  @id @default(cuid())
+  user            String
   collaborationId String
-  createdAt String
+  sourceType      String  @default("reported") // reported | goal-plus-semantic
+  sourceRef       String?
+  diagnosticsJson String  @default("[]")
+  createdAt       String
+  updatedAt       String  @default(dbgenerated("CURRENT_TIMESTAMP"))
+
+  events CollaborationEvent[]
+
   @@unique([user, collaborationId])
+  @@unique([user, sourceType, sourceRef])
+  @@index([user, updatedAt])
 }
 
 model CollaborationEvent {
-  id String @id
-  user String
-  collaborationId String
-  eventId String
-  bodyJson String
-  bodyHash String
-  receivedAt String
+  id                String         @id @default(cuid())
+  collaborationDbId String?
+  collaboration     Collaboration? @relation(fields: [collaborationDbId], references: [id], onDelete: Cascade)
+  user              String
+  collaborationId   String
+  eventId           String
+  fromSessionId     String?
+  toSessionId       String?
+  description       String?
+  observedAt        DateTime?
+  content           String?
+  fromLocatorJson   String?
+  sourceType        String         @default("reported") // reported | goal-plus-semantic
+  sourceRef         String?
+  relationKind      String?
+  role              String?
+  eventBodyJson     String         @map("bodyJson")
+  contentHash       String         @map("bodyHash")
+  receivedAt        String
+
+  endpointResolutions CollaborationEndpointResolution[]
+
+  @@unique([collaborationDbId, eventId])
   @@unique([user, collaborationId, eventId])
+  @@index([collaborationDbId, receivedAt])
   @@index([user, collaborationId, receivedAt, id])
+  @@index([fromSessionId])
+  @@index([toSessionId])
+  @@index([sourceType, sourceRef])
+}
+
+model CollaborationEndpointResolution {
+  id           String             @id @default(cuid())
+  eventDbId    String
+  event        CollaborationEvent @relation(fields: [eventDbId], references: [id], onDelete: Cascade)
+  side         String // from | to
+  executionId  String?
+  execution    Execution?         @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  linkState    String             @default("pending") // pending | linked | ambiguous | superseded
+  linkMethod   String?
+  evidenceJson String             @default("{}")
+  anchorState  String?
+  anchorJson   String?
+  resolvedAt   DateTime?
+  updatedAt    DateTime           @default(now()) @updatedAt
+
+  @@unique([eventDbId, side])
+  @@index([executionId])
+  @@index([linkState, updatedAt])
 }
 
 model CollaborationSessionBinding {
-  id String @id
-  user String
+  id              String @id @default(cuid())
+  user            String
   collaborationId String
-  sessionId String
-  traceSessionId String
-  eventClock String
-  createdAt String
+  sessionId       String
+  traceSessionId  String
+  eventClock      String
+  createdAt       String
+
   @@unique([user, collaborationId, sessionId])
 }

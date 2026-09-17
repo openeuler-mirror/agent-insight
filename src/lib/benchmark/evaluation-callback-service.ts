@@ -85,7 +85,7 @@ async function normalizedEvidenceArtifacts(
   const root = path.resolve(resolveAgentInsightDataPath())
   return Promise.all(artifacts.map(async (artifact) => {
     let jsonContent: JsonValue | undefined
-    if (artifact.kind === 'official-report' && artifact.mediaType === 'application/json') {
+    if (artifact.mediaType.split(';', 1)[0].trim().toLowerCase() === 'application/json') {
       const absolutePath = path.resolve(root, artifact.storagePath)
       if (!absolutePath.startsWith(`${root}${path.sep}`)) {
         throw new BenchmarkProtocolError(
@@ -102,9 +102,11 @@ async function normalizedEvidenceArtifacts(
         jsonContent = JSON.parse(bytes.toString('utf8')) as JsonValue
       } catch {
         throw new BenchmarkProtocolError(
-          'SWE_EVIDENCE_CONTRACT_INVALID',
-          'SWE-bench 官方报告证据内容或摘要不合法',
+          'EVALUATION_EVIDENCE_JSON_INVALID',
+          `评测证据 ${artifact.name} 不是有效的 JSON 文件或摘要不匹配`,
           422,
+          false,
+          { phase: 'evidence-decoding' },
         )
       }
     }
@@ -248,7 +250,6 @@ function validateCompletion(value: BenchmarkEvaluationCompletion): void {
   if (
     !['completed', 'submission_invalid', 'failed'].includes(value.status)
     || !Array.isArray(value.evidenceArtifactIds)
-    || value.evidenceArtifactIds.length < 1
     || value.evidenceArtifactIds.some((artifactId) => (
       typeof artifactId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(artifactId)
     ))
@@ -316,21 +317,27 @@ async function writeExperimentResult(input: {
   })
 }
 
-function normalizationFailureCode(error: unknown): string {
-  if (!(error instanceof BenchmarkProtocolError)) return 'RESULT_MAPPING_FAILED'
-  if (['RAW_RESULT_SCHEMA_INVALID', 'SWE_RAW_RESULT_INVALID'].includes(error.code)) {
-    return 'RAW_RESULT_SCHEMA_INVALID'
+function normalizationFailure(error: unknown): { code: string; category: string } {
+  if (!(error instanceof BenchmarkProtocolError)) {
+    return { code: 'RESULT_MAPPING_FAILED', category: 'RESULT_MAPPING_FAILED' }
   }
-  if (['SWE_FORMAL_RESULT_INELIGIBLE', 'SWE_EVIDENCE_CONTRACT_INVALID'].includes(error.code)) {
-    return error.code
+  return {
+    code: error.code,
+    category: error.details?.phase === 'evidence-decoding'
+      ? 'EVIDENCE_INVALID'
+      : 'BENCHMARK_RESULT_INVALID',
   }
-  return 'RESULT_MAPPING_FAILED'
 }
 
-function nonRetryableNormalizationError(code: string, message: string): BenchmarkProtocolError {
+function nonRetryableNormalizationError(
+  code: string,
+  message: string,
+  errorCategory = 'BENCHMARK_RESULT_INVALID',
+): BenchmarkProtocolError {
   return new BenchmarkProtocolError(code, message, 422, false, {
     acceptedRawResult: true,
     evaluationStatus: 'normalization_failed',
+    errorCategory,
   })
 }
 
@@ -467,7 +474,8 @@ export async function completeBenchmarkEvaluation(input: {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Adapter 归一化失败'
-    const failureCode = normalizationFailureCode(error)
+    const failure = normalizationFailure(error)
+    const failureCode = failure.code
     const failedResult: NormalizedBenchmarkResult = {
       status: 'failed',
       summary: message,
@@ -515,7 +523,7 @@ export async function completeBenchmarkEvaluation(input: {
       return recordPersistenceFailure(input.evaluationId, persistenceError)
     }
     scheduleBenchmarkEvaluationContinuation(evaluation.id)
-    throw nonRetryableNormalizationError(failureCode, message)
+    throw nonRetryableNormalizationError(failureCode, message, failure.category)
   }
 
   const evaluationStatus = normalized.status === 'failed'

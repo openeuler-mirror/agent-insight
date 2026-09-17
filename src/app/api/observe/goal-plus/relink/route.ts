@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { relinkGoalPlusSource } from '@/lib/ingest/goal-plus/correlate';
+import { projectGoalPlusCollaborations } from '@/lib/ingest/collaboration/providers/goal-plus';
 import { prismaRaw } from '@/lib/storage/prisma';
 
 export async function POST(request: Request) {
@@ -14,5 +15,12 @@ export async function POST(request: Request) {
     select: { id: true },
   });
   if (!source) return NextResponse.json({ error: 'Goal Plus source not found' }, { status: 404 });
-  return NextResponse.json({ correlation: await relinkGoalPlusSource(source.id) });
+  const correlation = await relinkGoalPlusSource(source.id);
+  let collaborationProjection = null;
+  try {
+    collaborationProjection = await projectGoalPlusCollaborations(source.id);
+  } catch (error) {
+    console.warn('[Goal-Plus-Relink] collaboration projection failed:', error);
+  }
+  return NextResponse.json({ correlation, collaborationProjection });
 }

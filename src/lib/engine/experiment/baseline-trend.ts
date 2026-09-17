@@ -55,6 +55,7 @@ export interface BenchmarkTrendMetric {
   evaluatorId: string;
   key: string;
   label: string;
+  aggregateLabel?: string;
   aggregation: 'boolean-rate' | 'mean';
 }
 
@@ -124,16 +125,17 @@ export function buildExperimentBaselineKey(experiment: BaselineExperimentLike): 
 
   if (experiment.scope === 'benchmark') {
     const adapterKey = typeof snapshot.adapterKey === 'string' ? snapshot.adapterKey.trim() : '';
+    const evaluatorKey = typeof snapshot.evaluatorKey === 'string' ? snapshot.evaluatorKey.trim() : '';
     const datasetContentHash = typeof snapshot.datasetContentHash === 'string'
       ? snapshot.datasetContentHash.trim()
       : '';
-    if (!adapterKey || !datasetContentHash) return null;
+    if (!adapterKey || !evaluatorKey || !datasetContentHash) return null;
     return sha256({
       scope: experiment.scope,
       adapterKey,
       datasetContentHash,
       caseIds,
-      evaluatorContract: `benchmark:${adapterKey}`,
+      evaluatorContract: `benchmark:${evaluatorKey}`,
       evaluationProtocol: 'benchmark-evaluation/v1',
     });
   }
@@ -307,7 +309,8 @@ export async function getExperimentBaselineTrend(input: {
       benchmarkMetric = {
         evaluatorId: `benchmark:${manifest.evaluation.evaluatorKey}`,
         key: primary.key,
-        label: adapterKey === 'swe-bench' ? 'Resolved' : presentationLabel,
+        label: presentationLabel,
+        aggregateLabel: manifest.presentation?.result?.primaryMetric.aggregateLabel,
         aggregation: primary.aggregation,
       };
     } catch {
@@ -327,19 +330,13 @@ export async function getExperimentBaselineTrend(input: {
 
   const benchmark = current.scope === 'benchmark';
   const percentage = benchmarkMetric?.aggregation === 'boolean-rate';
-  const benchmarkLabel = adapterKey === 'swe-bench'
-    ? 'Resolve Rate'
-    : benchmarkMetric
-      ? `${benchmarkMetric.label}${percentage ? ' Rate' : ''}`
-      : '主指标';
+  const benchmarkLabel = benchmarkMetric?.aggregateLabel || benchmarkMetric?.label || '主指标';
   return {
     metricKey: benchmarkMetric?.key || (benchmark ? `${adapterKey || 'benchmark'}:primary` : 'overall'),
     metricLabel: benchmark ? benchmarkLabel : '综合得分',
     metricKind: percentage ? 'percentage' : 'score',
     baselineDescription: benchmark
-      ? adapterKey === 'swe-bench'
-        ? '只比较数据集版本、Case 集和 Official Harness 相同的实验'
-        : '只比较数据集版本、Case 集和官方评测契约相同的实验'
+      ? '只比较 Benchmark、数据集版本、Case 集、Evaluator 和协议相同的实验'
       : '只比较数据集、Case 集和评估器配置相同的实验',
     points,
   };

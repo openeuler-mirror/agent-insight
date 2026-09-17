@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
+import { goalPlusCurrentRunIds } from '@/lib/ingest/goal-plus/trace-scope';
+
+test('Goal Plus run membership uses explicit IDs, never prompt text or all historical runs', () => {
+  assert.deepEqual(goalPlusCurrentRunIds('[{"runId":"run-a"},{"runId":"run-a"},{"runId":"run-b"}]'), ['run-a', 'run-b']);
+  for (const input of [null, '{', '{}', '[]', '[{"description":"run-a"}]']) assert.deepEqual(goalPlusCurrentRunIds(input), []);
+});
 import test from 'node:test';
 
 import {
+  goalPlusActiveMainSessionIdentities,
   goalPlusCodexExecutionId,
   goalPlusFrameworkForHost,
 } from '@/lib/ingest/goal-plus/correlate';
@@ -24,4 +31,35 @@ test('Goal Plus correlation scopes native identities to their real framework', (
   assert.equal(goalPlusFrameworkForHost('pi'), 'pi-agent');
   assert.equal(goalPlusFrameworkForHost('codex'), 'codex');
   assert.equal(goalPlusFrameworkForHost('unknown'), undefined);
+});
+
+test('Goal Plus selects the discovered canonical main that matches the active native session', () => {
+  const identities = goalPlusActiveMainSessionIdentities({
+    host: 'pi-rpc',
+    sessionId: 'native-current',
+    mainSessions: [
+      { host: 'pi', sessionId: 'canonical-old', nativeSessionId: 'native-old' },
+      { host: 'pi', sessionId: 'canonical-current', nativeSessionId: 'native-current' },
+    ],
+  });
+
+  assert.equal(identities.length, 1);
+  assert.deepEqual(identities[0].exactIds, ['native-current', 'canonical-current']);
+  assert.equal(identities[0].session.sessionId, 'canonical-current');
+});
+
+test('Goal Plus keeps active main identity ambiguous when multiple canonical sessions claim it', () => {
+  const identities = goalPlusActiveMainSessionIdentities({
+    sessionId: 'native-current',
+    mainSessions: [
+      { sessionId: 'canonical-a', nativeSessionId: 'native-current' },
+      { sessionId: 'canonical-b', nativeSessionId: 'native-current' },
+    ],
+  });
+
+  assert.equal(identities.length, 2);
+  assert.deepEqual(identities.map(identity => identity.exactIds), [
+    ['native-current', 'canonical-a'],
+    ['native-current', 'canonical-b'],
+  ]);
 });

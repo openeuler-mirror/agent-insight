@@ -12,6 +12,7 @@ export type PublicBenchmarkDatasetMeta = {
   shared: boolean
   benchmark: {
     adapterKey: string
+    evaluatorKey: string
     displayName: string
     status: string
     profileKey?: string
@@ -43,11 +44,13 @@ export async function publicBenchmarkDatasetMeta(
       profileKey = undefined
     }
     let displayName = row.adapterKey
+    let evaluatorKey = ''
     let presentation: BenchmarkPresentation | undefined
     let status = row.status
     try {
       const manifest = getBenchmarkAdapter(row.adapterKey).manifest
       displayName = manifest.displayName
+      evaluatorKey = manifest.evaluation.evaluatorKey
       presentation = manifest.presentation
     } catch {
       status = 'adapter_missing'
@@ -57,6 +60,7 @@ export async function publicBenchmarkDatasetMeta(
       shared: row.user === SYSTEM_BENCHMARK_DATASET_OWNER,
       benchmark: {
         adapterKey: row.adapterKey,
+        evaluatorKey,
         displayName,
         status,
         ...(profileKey ? { profileKey } : {}),
