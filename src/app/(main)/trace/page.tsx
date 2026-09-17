@@ -984,6 +984,7 @@ function TracePageContent() {
                 title={<Term id="trace" label={t('nav.trace')} />}
                 actions={!selectedExecution ? (
                     <>
+                        <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
                         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
                         <Button variant="outline" size="sm" disabled={!user || importing} onClick={() => importInputRef.current?.click()}>
                             <Download className="size-3.5" aria-hidden />
@@ -1669,6 +1670,7 @@ function TraceDetailView({
                         <Database className="size-3.5" aria-hidden />
                         {locale === 'zh' ? '加入评测集' : 'Add to dataset'}
                     </Button>
+                    <Button variant="outline" size="sm" asChild className="h-7 text-xs"><Link href={`/observe/collaborations?traceTaskId=${encodeURIComponent(taskId)}`}>调用关系图</Link></Button>
                     <Button variant="default" size="sm" asChild className="h-7 text-xs">
                         <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
                     </Button>

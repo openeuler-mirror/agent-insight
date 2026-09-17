@@ -104,11 +104,11 @@ export function resolveAnchors(events: RelationEvent[], bindings: Map<string, Bi
         const target = bindings.get(event.toSessionId)?.traceSessionId;
         const all = trace?.calls ?? [];
         const candidates = event.fromLocator ? all.filter(call => matches(call, event.fromLocator!)) : [];
-        const explicit = all.filter(call => target && call.targets.length === 1 && call.targets[0] === target && !call.failed && (!event.fromLocator || matches(call, event.fromLocator)));
+        const explicit = all.filter(call => target && call.targets.length === 1 && [target, event.toSessionId].includes(call.targets[0]) && !call.failed && (!event.fromLocator || matches(call, event.fromLocator)));
         if (trace?.state === 'pending') anchors.set(event.eventId, { status: 'pending', message: trace.message ?? 'Trace 查询暂不可用' });
         else if (explicit.length === 1) anchors.set(event.eventId, located('confirmed', explicit[0], 1, '原始调用记录明确关联目标 Session'));
         else if (!event.fromLocator) anchors.set(event.eventId, { status: 'not_provided', message: '未提供定位配置且无唯一明确调用依据' });
-        else if (trace?.state !== 'resolved') anchors.set(event.eventId, { status: 'waiting_trace', message: '等待明确绑定的发起方 Trace' });
+        else if (trace?.state !== 'resolved') anchors.set(event.eventId, { status: 'waiting_trace', message: '等待可唯一关联的发起方 Trace' });
         else {
             const status = candidates.length === 0 ? 'not_found' : candidates.length === 1 ? 'candidate' : 'ambiguous';
             anchors.set(event.eventId, {

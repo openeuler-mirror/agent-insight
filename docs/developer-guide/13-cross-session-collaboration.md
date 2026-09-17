@@ -6,7 +6,7 @@
 
 | 模块 | 职责 |
 |-|-|
-| `src/lib/collaboration/*` | 严格 HTTP 契约、API Key、限流、显式 Session 绑定、原始调用步骤定位与安全日志 |
+| `src/lib/collaboration/*` | 严格 HTTP 契约、API Key、限流、自动会话匹配、兼容历史绑定、原始调用步骤定位与安全日志 |
 | `src/lib/ingest/collaboration/contracts.ts` | 外部事件严格校验、稳定正文、SHA-256 与 Goal Plus 确定性 ID |
 | `persist.ts` | Collaboration/Event 幂等保存、正文冲突、端点状态写入 |
 | `resolve.ts` | user 范围内按 session ID 精确关联 Execution，并计算发起位置候选 |
@@ -18,7 +18,7 @@
 
 `POST /api/ingest/collaborations/events` 只接受有效 `x-witty-api-key`，请求最多 64 KiB，并拒绝重复 JSON key、未知字段与内部保留的 `collab_gp_` ID。外部请求不能提供 sourceType，因此永远保存为 `reported`。相同 collaboration/event ID 与相同规范化正文返回 200 duplicate；正文不同返回 409 `EVENT_CONFLICT`。
 
-`POST /api/ingest/collaborations/sessions` 建立逻辑 sessionId 到现有 `Session.taskId` 的显式绑定，并声明事件时钟可信度。绑定不可覆盖，Trace 可以晚到；该路径用于远程原始调用证据定位，与端点自动重算并存。
+`POST /api/ingest/collaborations/sessions` 建立逻辑 sessionId 到现有 `Session.taskId` 的显式绑定，并声明事件时钟可信度。绑定不可覆盖，Trace 可以晚到；该路径仅兼容历史接入，新用户无需调用。
 
 读取接口为 `GET /api/observe/collaborations` 和 `GET /api/observe/collaborations/:collaborationId`，均按当前用户隔离。详情读取会重新解析 reported 端点；`POST /api/observe/collaborations/relink` 可显式触发同一过程。
 
@@ -57,8 +57,8 @@ Trace 列表显式传 `collapseGoalPlusWorkers=1`。默认“仅主 Agent”范�
 
 事件内容复用 Goal Plus secret/path 脱敏。Goal Plus projector 不保存 worker 输出、评分或结果摘要；投影和重算错误必须与原生 Trace、语义 snapshot 入库隔离。
 
-### 显式上报关系与 Goal Plus 展示共存
+### 独立协作图与 Goal Plus 共存
 
-自定义 API 上报关系由 `src/lib/collaboration/projection.ts` 消费，仅查询 `sourceType=reported` 的事件组；Goal Plus 的语义投影、worker 列表折叠与完整度信息沿用本页原有路径。详情优先展示已解析的显式关系，未命中时使用 Goal Plus 投影，不对同一详情重复拼接。
+自定义关系现在在 `/observe/collaborations` 独立展示，默认不合并、隐藏或改写原 Trace。首次事件自动建立图节点；原 Trace 可晚到。页面同时展示分页上报事件和仅由明确原始调用证据导出的自动关系；保留循环、自联系和重复联系。节点可看原 Trace，连线可看上报内容、定位依据及步骤原文。Goal Plus 专用展示沿用上述逻辑，未改动。
 
-合并后的交互保留 `_collaboration` 源 Session / 索引信息。读取单条原文时以 `view=interaction&source=raw` 请求源 Session 原始索引；`_payloadVersion` 根据原正文计算，不包含 `_collaboration` 展示信息，因此结构视图与原文版本一致。前端仍校验上游新增的正文版本与请求时源数组，避免刷新后旧请求覆盖新内容。
+Trace 列表提供协作列表入口，Trace 详情提供不要求上报事件的调用关系图入口。原文读取 `source=raw` 绕过展示投影，正文版本和所有者校验继续保留。完整外部契约见 [04-api-and-contracts.md](04-api-and-contracts.md) 和用户指南。

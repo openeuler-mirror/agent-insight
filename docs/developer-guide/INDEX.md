@@ -10,7 +10,7 @@
 | Field | Value |
 |---|---|
 | Commit | `6aa539e905e7909862cb4bcd3791b66b7d2b1f90` (`6aa539e9`) |
-| Branch | `bench-9-16` |
+| Branch | `develop0228` |
 | Date | 2026-09-16 |
 | Author | openeuler-ci-bot |
 | Subject | `!410 完善 Benchmark 端到端评测与结果展示，补充 Benchmark 接入、扩展和部署文档` |
@@ -22,7 +22,7 @@
 
 > 2026-09-05 working-tree overlay：Benchmark 扩展契约对齐高保真开发者模型。`benchmark.yaml` 成为 Manifest 唯一真源，构建期 Generator 生成平台 Adapter、Manifest 与 Evaluator Catalog；`AbstractBenchmarkAdapter` 收敛为五个业务 hook 并统一执行 Case/Result Schema 与 public/private 边界校验。执行器删除 SWE-bench Profile，改用 Workspace、Agent Runtime 和 Artifact Collector 三类通用能力注册表并支持多 Artifact；评测 Worker 删除 SWE-bench 直接依赖，改用 `doctor`、`evaluate --request ... --output ...` 文件 Entrypoint。SWE-bench 仅作为 `benchmarks/swe-bench/` 接入实例；新增 Benchmark 通常不改公共 API、调度器、执行器 Runner、评测 Worker 或 Prisma Schema。
 
-当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；支持显式 Session 到 Trace 绑定、原始调用步骤定位、迟到 Trace 自动重算，以及 Goal Plus 逻辑主节点到 worker 成员的服务端投影。Goal Plus 仅在唯一主 Trace 时关联具体 Execution，active native Session 唯一对应的 passive canonical main 优先于历史 main，多候选仍保持歧义，且不修改原生树或完整性口径；独立协作入口暂不开放，通用 Trace 的仅主列表隐藏已投影 worker，详情直接从既有 Goal Plus 精确关联只读生成带来源标识的 TASK / 子 Agent 树。当前 passive canonical main 与 Pi 的 `<nativeSessionId>__taskN` 主任务仅在明确 `/goal-plus` 且唯一命中时允许只读显示兜底，通用 reported collaboration 行为不变。
+当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；支持显式 Session 到 Trace 绑定、原始调用步骤定位、迟到 Trace 自动重算，以及 Goal Plus 逻辑主节点到 worker 成员的服务端投影。Goal Plus 仅在唯一主 Trace 时关联具体 Execution，active native Session 唯一对应的 passive canonical main 优先于历史 main，多候选仍保持歧义，且不修改原生树或完整性口径；历史版本中独立协作入口暂不开放（已由文末 v0.9 更新替代），通用 Trace 的仅主列表隐藏已投影 worker，详情直接从既有 Goal Plus 精确关联只读生成带来源标识的 TASK / 子 Agent 树。当前 passive canonical main 与 Pi 的 `<nativeSessionId>__taskN` 主任务仅在明确 `/goal-plus` 且唯一命中时允许只读显示兜底，通用 reported collaboration 行为不变。
 
 本轮工作树补充 Goal Plus 重关联事务化、同 source 并发合并、当前 Search run 归属收敛，以及列表/详情共用成员查询和懒加载正文版本校验。历史采集数据、原生父子关系和 reported 跨 Session 协议不变；对应更新 `12-goal-plus-observability.md`、`13-cross-session-collaboration.md`，其他历史指南未重新生成。
 
@@ -130,4 +130,6 @@
 
 本次合并保留本地跨 Session 协作后端、Goal Plus worker 投影及其事务一致性修复，并保留远程 Benchmark、文本评估器、Pi RAS 和 IDaaS 账号别名实现。具体契约分别见对应指南。
 
-本次基于 `8ce387aa` 合并跨 Session Trace 展示修复，保留 Goal Plus worker 投影、折叠与正文版本校验；显式上报关系使用独立投影，无定位时按顺序并列展示。
+历史版本曾基于 `8ce387aa` 合并跨 Session Trace 展示修复。该版本的自定义关系树投影与无定位顺序拼接已被下述 v0.9 协作图取代；Goal Plus worker 专用投影、折叠与正文版本校验继续保留。
+
+当前工作树按 v0.9 恢复独立协作图：events 单接口接入、自动会话匹配、无 Trace 节点、只读自动关系、节点/连线详情；旧 Trace 不再由自定义关系合并，Goal Plus 专用路径保留。
