@@ -78,7 +78,7 @@ function imageRepository(image) {
 
 function imageProxyPrefix() {
   const configured = process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
-  const prefix = String(configured === undefined ? 'docker.1ms.run' : configured)
+  const prefix = String(configured === undefined ? '' : configured)
     .trim()
     .replace(/\/+$/, '')
   if (prefix && !/^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i.test(prefix)) {

@@ -104,6 +104,26 @@ test('SWE-bench pulls a missing Case image through the configured proxy and rest
   }
 })
 
+test('SWE-bench uses Docker daemon registry mirrors when no proxy prefix is configured', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-image-daemon-mirror-'))
+  const runnerProcess = runnerWithImage(false)
+  const configuredProxy = process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
+  delete process.env.SWE_BENCH_IMAGE_PROXY_PREFIX
+  try {
+    const result = await new SweBenchImageResolver(runnerProcess.runner).resolve(
+      image,
+      'pallets__flask-5014',
+      workDir,
+    )
+    assert.equal(result.imageProxyPrefix, null)
+    assert.deepEqual(runnerProcess.calls.find((call) => call.args[0] === 'pull')?.args, ['pull', image])
+    assert.equal(runnerProcess.calls.some((call) => call.args[0] === 'tag'), false)
+  } finally {
+    process.env.SWE_BENCH_IMAGE_PROXY_PREFIX = configuredProxy
+    await fsp.rm(workDir, { recursive: true, force: true })
+  }
+})
+
 test('SWE-bench falls back to the official image when the configured proxy is unavailable', async () => {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swe-image-fallback-'))
   const process = runnerWithImage(false, true)

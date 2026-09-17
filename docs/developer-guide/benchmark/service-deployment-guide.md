@@ -61,6 +61,23 @@ npm run benchmark:catalog
 
 URL 必须使用对端机器真实可访问的地址，不能在分机部署时填写 `127.0.0.1`。
 
+### 2.4 地址选择：同机与分机
+
+Evaluator 由 Docker 容器运行，因此“Agent Insight 和 Evaluator 在同一台机器”时仍涉及容器到宿主机的通信。以下三个地址含义不同：
+
+- `http://localhost:3000` 或 `http://127.0.0.1:3000`：供浏览器或宿主机进程访问 Agent Insight；在 Evaluator 容器内使用时只会指向容器自身，不能访问宿主机上的 Agent Insight。
+- `http://host.docker.internal:3000`：Docker 提供给容器的宿主机入口。macOS/Windows 由 Docker Desktop 提供；本项目的 `start-evaluator.sh` 会在 Linux 上增加 `host-gateway` 映射。它只表示 Evaluator 所在的那台宿主机，不是公网域名，也不适用于分机部署。
+- `http://<agent-insight-ip>:3000` 或 Agent Insight 的 HTTPS 域名：供另一台机器上的 Evaluator 访问 Agent Insight。该地址必须能从 Evaluator 容器内实际访问，不能只保证 Evaluator 宿主机可访问。
+
+推荐配置如下：
+
+| 部署方式 | `platform-base-url` / `public-base-url` | `evaluator-base-url` | Evaluator 监听地址 |
+| --- | --- | --- | --- |
+| Agent Insight 与 Evaluator 同机 | `http://host.docker.internal:3000` | `http://127.0.0.1:3001` | `127.0.0.1` |
+| Agent Insight 与 Evaluator 分机 | `http(s)://<agent-insight-address>:3000` | `http(s)://<evaluator-address>:3001` | `0.0.0.0` 或 Evaluator 内网地址 |
+
+同机部署时，浏览器仍然访问 `http://localhost:3000`；`host.docker.internal` 只写入平台与 Evaluator 的通信配置，不要求用户在浏览器中打开。
+
 ## 3. 安装 Agent Insight
 
 在 Agent Insight 机器上获取包含目标 Benchmark 的发布版本：
@@ -153,6 +170,8 @@ bash scripts/start.sh --benchmark swe-bench
 
 ## 5. 安装 Evaluator
 
+### 5.1 Agent Insight 与 Evaluator 分机部署
+
 在 Evaluator 机器上获取与 Agent Insight 兼容的代码版本：
 
 ```bash
@@ -183,6 +202,23 @@ bash scripts/start-evaluator.sh \
 - `--platform-base-url` 必须是 Evaluator 容器可访问的 Agent Insight 地址；
 - Benchmark 专用环境变量可通过 `--evaluator-env NAME=VALUE` 传入。
 
+### 5.2 Agent Insight 与 Evaluator 本机部署
+
+如果 Agent Insight 的 `3000` 和 Evaluator 的 `3001` 都运行在当前机器，Evaluator 仍在 Docker 容器内，启动命令应使用 Docker 的宿主机入口：
+
+```bash
+cd /srv/agent-insight
+
+bash scripts/start-evaluator.sh \
+  --benchmark <benchmark-key> \
+  --auth-mode none \
+  --platform-base-url http://host.docker.internal:3000 \
+  --bind-address 127.0.0.1 \
+  --port 3001
+```
+
+这里不能把 `--platform-base-url` 写成 `http://127.0.0.1:3000`，因为该地址在容器内代表 Evaluator 容器自身。`--bind-address 127.0.0.1` 则用于把 Evaluator 的宿主机入口限制在本机，Agent Insight 可通过宿主机回环地址调用它。
+
 生产环境建议使用 `--auth-mode token --token <shared-token>`，并在 Agent Insight 一侧配置同一 Token。
 
 验证：
@@ -203,6 +239,8 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 
 ## 6. 配置 Agent Insight 与 Evaluator
 
+### 6.1 分机部署
+
 在 Agent Insight 机器上执行：
 
 ```bash
@@ -218,6 +256,24 @@ node scripts/configure-evaluator-target.js \
 - `public-base-url` 是 Evaluator 下载 Artifact 和回调 Agent Insight 的地址；
 - `evaluator-base-url` 是 Agent Insight 访问 Evaluator 的地址；
 - 配置会写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，并在后续请求中热加载。
+
+### 6.2 本机部署
+
+Agent Insight 与 Evaluator 同机时执行：
+
+```bash
+cd /srv/agent-insight
+
+node scripts/configure-evaluator-target.js \
+  --auth-mode none \
+  --public-base-url http://host.docker.internal:3000 \
+  --evaluator-base-url http://127.0.0.1:3001 \
+  --allow-insecure-http false
+```
+
+- `public-base-url` 会被冻结到评测任务中，供 Evaluator 容器下载 Submission、回传进度和上传结果，所以同机时使用 `host.docker.internal`；
+- `evaluator-base-url` 由宿主机上的 Agent Insight 使用，因此同机时使用 `127.0.0.1`；
+- `allow-insecure-http=false` 可以保留，因为 Evaluator 地址是本机回环地址。
 
 若 Evaluator 使用 Token，改用 `--auth-mode token --token-file <0600-token-file>`。两端必须使用同一个 Token。
 

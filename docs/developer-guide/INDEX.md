@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-17 working-tree overlay：Benchmark 整体服务安装指南补充 Agent Insight 与 Evaluator 同机部署命令，明确 `localhost`、`host.docker.internal` 与分机可达地址的边界，并分别给出同机、分机通信配置。SWE-bench 未配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时不再内置第三方代理，直接保留官方镜像名并复用宿主 Docker daemon 的 registry mirror；显式代理行为保持不变。
+
 > 2026-09-17 working-tree overlay：xiaoo 空最终回复改为进程退出后判定，仅正常退出且无明确错误时使用本次运行、同一 Session 的 Collector 活动记录兜底；活动记录不包含正文，独立于 Trace 上传缓冲并随运行清理。更新 `05-data-and-control-flow.md` 与实验用户指南，其他指南未重新审计。
 
 > 2026-09-16 working-tree overlay：生产启动脚本新增 `--benchmark swe-bench`，在数据库缺少 SWE-bench Verified 时自动下载并校验固定官方源码与 Parquet、创建隔离 Python 环境并导入 500 条共享只读 Case；重复启动先查库并跳过本地准备，已有数据版本不会被静默替换。同步更新 Benchmark 服务安装指南与数据集用户指南。
