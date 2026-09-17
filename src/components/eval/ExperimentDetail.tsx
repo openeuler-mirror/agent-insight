@@ -121,6 +121,7 @@ const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
   draft: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
+  partial: { label: '部分完成', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
 };
 

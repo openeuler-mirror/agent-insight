@@ -269,6 +269,37 @@ test('engine: judge 输出非法 JSON → 重试用尽 → failed + errorMessage
   assert.equal(exp2!.status, 'done');
 });
 
+test('engine: 成功与失败结果并存时实验终态为 partial', async () => {
+  const executionId = await createExecution();
+  const { experimentId, caseId } = await createExperiment(
+    executionId,
+    [CUSTOM_LLM_ID, CUSTOM_DATASET_INPUT_ID],
+  );
+  await prisma.experimentEvalResult.createMany({
+    data: [
+      {
+        experimentId,
+        caseId,
+        evaluatorId: CUSTOM_LLM_ID,
+        status: 'done',
+        score: 100,
+      },
+      {
+        experimentId,
+        caseId,
+        evaluatorId: CUSTOM_DATASET_INPUT_ID,
+        status: 'failed',
+        errorMessage: '评估器执行失败',
+      },
+    ],
+  });
+
+  await settleExperimentStatus(experimentId);
+
+  const experiment = await prisma.experiment.findUnique({ where: { id: experimentId } });
+  assert.equal(experiment!.status, 'partial');
+});
+
 test('engine: 非可重试异常不重试；同实验 running 时重复触发直接返回', async () => {
   let calls = 0;
   let release: () => void = () => {};

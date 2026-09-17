@@ -48,7 +48,7 @@ async function settleAfterTraceRetryFailure(experimentId: string): Promise<void>
   });
   await prisma.experiment.updateMany({
     where: { id: experimentId },
-    data: { status: completed > 0 ? 'done' : 'failed' },
+    data: { status: completed > 0 ? 'partial' : 'failed' },
   });
 }
 

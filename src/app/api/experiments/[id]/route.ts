@@ -11,7 +11,11 @@ import {
 } from '@/lib/engine/experiment/case-fi-meta';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
-import { publishedOverallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
+import {
+  normalizeTerminalExperimentStatus,
+  publishedOverallAverage,
+  evaluatorBreakdown,
+} from '@/lib/engine/experiment/detail-agg';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
@@ -46,7 +50,7 @@ function deriveGeneratedTraceStatus(input: {
   if (input.attemptStatus === 'failed') return 'failed';
   if (input.runStatus === 'failed' || input.runStatus === 'stopped') return 'failed';
   if (['FAILED', 'EXPIRED', 'DELIVERY_FAILED'].includes(input.commandStatus || '')) return 'failed';
-  if (input.experimentStatus === 'failed' || input.experimentStatus === 'done') return 'failed';
+  if (['failed', 'partial', 'done'].includes(input.experimentStatus)) return 'failed';
   return 'pending';
 }
 
@@ -417,10 +421,11 @@ export async function GET(
       failed,
       pending: Math.max(0, expectedResultTotal - doneResultCount - failed),
     };
-    const responseStatus = experiment.status === 'done'
+    const normalizedStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
+    const responseStatus = normalizedStatus === 'done'
       && (progress.pending > 0 || Boolean(traceProgress?.pending))
       ? 'running'
-      : experiment.status;
+      : normalizedStatus;
     const overall = publishedOverallAverage(responseStatus, effectiveAllResults);
     const breakdown = evaluatorBreakdown(effectiveAllResults);
 

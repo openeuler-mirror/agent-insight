@@ -3,7 +3,7 @@
  *
  * startExperimentRun：Experiment.status → running，为每个 case × evaluator upsert
  * pending 行，异步逐行执行（并发上限 4，SimpleAsyncLimiter）；全部行终态后
- * Experiment.status = 有 done 行 ? 'done' : 'failed'。跨请求防重入：同一 experiment
+ * Experiment.status = 全成功 'done' / 成功失败并存 'partial' / 全失败 'failed'。跨请求防重入：同一 experiment
  * running 时（内存 running 集合或 DB status）重复调用直接返回当前状态。
  *
  * 单行执行：
@@ -94,6 +94,7 @@ import {
 import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators';
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
 import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
+import { deriveSettledExperimentStatus } from './detail-agg';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -547,12 +548,11 @@ export async function settleExperimentStatus(experimentId: string): Promise<void
     where: { experimentId },
     select: { status: true },
   });
-  const anyPending = rows.some((r: { status: string }) => r.status === 'pending' || r.status === 'running');
-  if (anyPending) return; // 尚未全部终态（单项 retry 场景下可能仍有 running）
-  const anyDone = rows.some((r: { status: string }) => r.status === 'done');
+  const status = deriveSettledExperimentStatus(rows);
+  if (!status) return; // 尚未全部终态（单项 retry 场景下可能仍有 running）
   await prisma.experiment.updateMany({
     where: { id: experimentId, status: { not: 'cancelled' } },
-    data: { status: anyDone ? 'done' : 'failed' },
+    data: { status },
   });
   try {
     await syncExperimentSkillIssues(experimentId);

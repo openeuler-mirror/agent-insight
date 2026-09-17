@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-17 working-tree overlay：实验终态新增 `partial`。全部结果成功为 `done`，成功与失败并存为 `partial`，全部失败为 `failed`；列表与详情会按结果行纠正旧版“有成功即完成”的历史状态，部分完成仍发布成功结果的有效均分。
+
 > 2026-09-17 working-tree overlay：Benchmark 整体服务安装指南补充 Agent Insight 与 Evaluator 同机部署命令，明确 `localhost`、`host.docker.internal` 与分机可达地址的边界，并分别给出同机、分机通信配置。SWE-bench 未配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时不再内置第三方代理，直接保留官方镜像名并复用宿主 Docker daemon 的 registry mirror；显式代理行为保持不变。
 
 > 2026-09-17 working-tree overlay：xiaoo 空最终回复改为进程退出后判定，仅正常退出且无明确错误时使用本次运行、同一 Session 的 Collector 活动记录兜底；活动记录不包含正文，独立于 Trace 上传缓冲并随运行清理。更新 `05-data-and-control-flow.md` 与实验用户指南，其他指南未重新审计。

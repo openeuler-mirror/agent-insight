@@ -13,7 +13,10 @@ import {
   EvaluatorRunConfigValidationError,
   serializeEvaluatorRunConfigs,
 } from '@/lib/evaluators/evaluator-run-config';
-import { publishedOverallAverage } from '@/lib/engine/experiment/detail-agg';
+import {
+  normalizeTerminalExperimentStatus,
+  publishedOverallAverage,
+} from '@/lib/engine/experiment/detail-agg';
 import { createComparisonExperiment, autoPairGroups } from '@/lib/engine/experiment/comparison-runner';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service';
@@ -125,6 +128,8 @@ export async function GET(req: Request) {
     }
 
     const items = rows.map((r) => {
+      const resultRows = scoreRowsByExperiment.get(r.id) || [];
+      const status = normalizeTerminalExperimentStatus(r.status, resultRows);
       let evaluatorCount = 0;
       try {
         const ids = JSON.parse(r.evaluatorIdsJson || '[]');
@@ -135,7 +140,7 @@ export async function GET(req: Request) {
         name: r.name,
         type: r.type,
         agentName: r.agentName,
-        status: r.status,
+        status,
         watchMode: r.watchMode,
         scope: r.scope,
         skillName: r.skillName,
@@ -143,7 +148,7 @@ export async function GET(req: Request) {
         preset: r.preset,
         caseCount: r._count.cases,
         evaluatorCount,
-        overallScore: publishedOverallAverage(r.status, scoreRowsByExperiment.get(r.id) || []),
+        overallScore: publishedOverallAverage(status, resultRows),
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
       };

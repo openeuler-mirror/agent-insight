@@ -137,7 +137,7 @@ export async function syncExperimentSkillIssues(experimentId: string): Promise<{
   const source = experiment ? sourceForExperiment(experiment.preset, experiment.scope) : null;
   if (
     !experiment
-    || experiment.status !== 'done'
+    || !['done', 'partial'].includes(experiment.status)
     || !source
     || !experiment.skillName
     || experiment.skillVersion == null
