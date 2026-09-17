@@ -88,7 +88,7 @@ export default function CollaborationExplorer() {
         const angle = count === 1 ? 0 : index * 2 * Math.PI / count - Math.PI / 2;
         return [item.sessionId, { x: size / 2 + (count === 1 ? 0 : radius * Math.cos(angle)), y: size / 2 + (count === 1 ? 0 : radius * Math.sin(angle)) }];
     }));
-    return <main className="p-6 space-y-4">
+    return <main className="h-full overflow-y-auto p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
             <div><h1 className="text-xl font-semibold">Agent 协作图</h1><p className="text-sm text-foreground-muted">查看会话之间的调用与信息传递；节点位置不代表执行顺序。</p></div>
             <div className="flex gap-2"><Button variant="outline" asChild><Link href="/trace">链路追踪</Link></Button>{(id || nativeTask) && <Button variant="outline" asChild><Link href="/observe/collaborations">全部协作</Link></Button>}<Button disabled={busy || !apiKey} onClick={() => void load()}>{busy ? '加载中…' : '刷新'}</Button></div>

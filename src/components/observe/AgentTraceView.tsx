@@ -663,9 +663,11 @@ export default function AgentTraceView({
             return { selectedAgentNode: node, selectedEvent: null };
         }
         if (selectedKey.startsWith('e:')) {
-            const parts = selectedKey.slice(2).split(':');
-            const nodeId = parts[0];
-            const evIdx = parseInt(parts[1], 10);
+            // 合并 Trace 的节点 id 自带冒号（`<taskId>:<nX>`），事件序号固定在最末一段，只能从右侧切分。
+            const body = selectedKey.slice(2);
+            const splitAt = body.lastIndexOf(':');
+            const nodeId = splitAt < 0 ? body : body.slice(0, splitAt);
+            const evIdx = splitAt < 0 ? NaN : parseInt(body.slice(splitAt + 1), 10);
             const node = nodeMap.get(nodeId) || tree;
             const ev = node.events[evIdx] || null;
             return { selectedAgentNode: node, selectedEvent: ev };
