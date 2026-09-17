@@ -88,16 +88,36 @@ function TooltipCell({
   const [show, setShow] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const tdRef = useRef<HTMLTableCellElement>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelHide = () => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  };
+
+  const showTooltip = () => {
+    cancelHide();
+    setRect(tdRef.current?.getBoundingClientRect() ?? null);
+    setShow(true);
+  };
+
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimerRef.current = setTimeout(() => setShow(false), 150);
+  };
+
+  useEffect(() => () => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+  }, []);
 
   return (
     <td
       ref={tdRef}
       style={tdStyle}
-      onMouseEnter={() => {
-        setRect(tdRef.current?.getBoundingClientRect() ?? null);
-        setShow(true);
-      }}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={showTooltip}
+      onMouseLeave={scheduleHide}
       onClick={onClick}
     >
       <span className={styles.cellText}>{shortText}</span>
@@ -121,8 +141,13 @@ function TooltipCell({
             wordBreak: 'break-word',
             boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
             color: 'var(--foreground)',
-            pointerEvents: 'none',
+            pointerEvents: 'auto',
+            userSelect: 'text',
           }}
+          onMouseEnter={cancelHide}
+          onMouseLeave={scheduleHide}
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
         >
           {fullText}
         </div>
