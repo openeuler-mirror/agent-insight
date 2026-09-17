@@ -1,5 +1,7 @@
 'use client';
 
+import { buildCollaborationTraceTree, sameCollaborationSource } from '@/lib/collaboration/display-tree';
+
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
@@ -20,7 +22,6 @@ import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/obse
 import {
     AgentEvent,
     AgentNode,
-    buildAgentCallTree,
     findNode,
     firstMeaningfulLine,
     formatDuration,
@@ -491,6 +492,7 @@ export default function AgentTraceView({
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
                 const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
                 return incoming._payloadDeferred && loaded && !loaded._payloadDeferred
+                    && sameCollaborationSource(incoming, loaded)
                     && incoming._payloadVersion && incoming._payloadVersion === loaded._payloadVersion ? loaded : item;
             });
         });
@@ -509,7 +511,7 @@ export default function AgentTraceView({
                 || !current._payloadVersion || loaded._payloadVersion !== current._payloadVersion) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
-            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
+            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? { ...loaded, ...((current as any)._collaboration ? { _collaboration: (current as any)._collaboration } : {}) } : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
         }
@@ -557,7 +559,7 @@ export default function AgentTraceView({
         const aligned = rasMarkers.length
             ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
             : (displayInteractions || [])
-        const base = langfuseProjection?.tree || buildAgentCallTree(aligned)
+        const base = langfuseProjection?.tree || buildCollaborationTraceTree(aligned)
         if (!base) return base
         return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers, locale) : base
     }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale]);

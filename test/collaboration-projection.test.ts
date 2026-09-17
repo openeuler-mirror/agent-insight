@@ -101,7 +101,7 @@ test('HTTP handlers and SQLite merge locator-free reports, recompute late traces
         for (const id of ['A', 'B', 'C']) {
             await client.execution.create({ data: { id, taskId: id, user: 'alice', framework: 'opencode' } });
             if (id !== 'C') await client.session.create({ data: { taskId: id, user: 'alice', interactions: JSON.stringify([call(id, 'bash', id)]) } });
-            assert.equal((await handlers.bind(request({ collaborationId: 'sequence', sessionId: id, traceSessionId: id }))).status, 201);
+
         }
         const event = { collaborationId: 'sequence', eventId: 'one', fromSessionId: 'A', toSessionId: 'B', description: '顺序执行 B', observedAt: '2026-09-14T01:00:00Z' };
         assert.equal((await handlers.report(request(event))).status, 201);
@@ -117,8 +117,9 @@ test('HTTP handlers and SQLite merge locator-free reports, recompute late traces
             'INSERT INTO "CollaborationEvent" ("id","collaborationDbId","user","collaborationId","eventId","fromSessionId","toSessionId","description","sourceType","bodyJson","bodyHash","receivedAt") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
             'goal-event', 'goal-group', 'alice', 'collab_gp_fixture', 'goal-event', 'A', 'B', 'goal relation',
             'goal-plus-semantic', 'not a reported event JSON', 'fixture-hash', new Date().toISOString());
+        assert.equal((await handlers.report(request({ ...event, eventId: 'return', fromSessionId: 'C', toSessionId: 'A' }))).status, 201);
         const links = await projection.links('alice');
-        assert.deepEqual(links.map(x => [x.parent, x.child, x.sequential]), [['A', 'B', true], ['B', 'C', true]]);
+        assert.deepEqual(links.map(x => [x.parent, x.child, x.sequential]), [['A', 'B', true], ['A', 'C', true]]);
         const merged = await projection.interactions('alice', 'A', async taskId => {
             const session = await client.session.findUnique({ where: { taskId } });
             return session ? { session, interactions: JSON.parse(session.interactions!) } : null;

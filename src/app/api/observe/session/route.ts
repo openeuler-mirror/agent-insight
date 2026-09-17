@@ -1,3 +1,4 @@
+import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { resolveUser } from '@/lib/auth/auth';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
@@ -160,7 +161,9 @@ export async function GET(request: Request) {
         if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         const rawInteraction = searchParams.get('source') === 'raw';
         const collaborationProjection = rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
-        const displayInteractions = withTracePayloadVersions(collaborationProjection?.interactions || interactions);
+        const reportedInteractions = !rawInteraction && username && username === session.user && !collaborationProjection
+            ? await collaborationTraceProjection.interactions(username, taskId, loadParsedSession) : null;
+        const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);

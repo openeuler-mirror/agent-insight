@@ -59,6 +59,9 @@ Trace 列表显式传 `collapseGoalPlusWorkers=1`。默认“仅主 Agent”范�
 
 ### 独立协作图与 Goal Plus 共存
 
-自定义关系现在在 `/observe/collaborations` 独立展示，默认不合并、隐藏或改写原 Trace。首次事件自动建立图节点；原 Trace 可晚到。页面同时展示分页上报事件和仅由明确原始调用证据导出的自动关系；保留循环、自联系和重复联系。节点可看原 Trace，连线可看上报内容、定位依据及步骤原文。Goal Plus 专用展示沿用上述逻辑，未改动。
+自定义关系在 Trace 列表和详情中合并展示，并在 `/observe/collaborations` 保留完整关系图；不改写原始存储。首次事件自动建立图节点；原 Trace 可晚到。页面同时展示分页上报事件和仅由明确原始调用证据导出的自动关系；保留循环、自联系和重复联系。节点可看原 Trace，连线可看上报内容、定位依据及步骤原文。Goal Plus 专用展示沿用上述逻辑，未改动。
 
 Trace 列表提供协作列表入口，Trace 详情提供不要求上报事件的调用关系图入口。原文读取 `source=raw` 绕过展示投影，正文版本和所有者校验继续保留。完整外部契约见 [04-api-and-contracts.md](04-api-and-contracts.md) 和用户指南。
+
+
+2026-09-17 合并展示更新：reported 协作重新接入 Trace 列表和详情。CollaborationProjection 使用图查询中的精确会话对应关系，无需 sessions 预绑定；列表在数据库分页前排除已合并成员，详情附加 _collaboration 来源并使用 buildCollaborationTraceTree。唯一定位挂载到对应工具步骤；其余成员按首次上报顺序并列，循环/回传仅保留在协作图。source=raw 保持原文，懒加载保留来源和版本校验，Goal Plus 专用路径优先。成员缺失、权限或容量异常时保留原列表，不隐藏无法读取的 Trace。

@@ -4,6 +4,10 @@
 
 GET /api/observe/collaborations 提供用户隔离分页列表；GET /api/observe/collaborations/:id 返回分页上报关系与只读自动解析关系。增加同一查询处理器的 native?traceTaskId=... 模式，用于不含上报事件的旧 Trace。只从原始工具的明确目标编号建立自动边，类型/FIFO 兜底不算证据；有明确记录位置对应才合并 reported/trace 来源。
 
-/observe/collaborations 与 /observe/collaborations/:id 展示可点击节点/带说明连线和完整事件列表，节点可打开经鉴权的原文，边显示说明、内容、定位状态及候选。循环、自联系和重复联系均可浏览。采用共享样式令牌。分页刷新重算，不永久保存推定位置。移除上一轮自定义关系在旧 Trace 列表/树中的合并入口，保留上游 Goal Plus 专用功能。
+/observe/collaborations 与 /observe/collaborations/:id 展示可点击节点/带说明连线和完整事件列表，节点可打开经鉴权的原文，边显示说明、内容、定位状态及候选。循环、自联系和重复联系均可浏览。采用共享样式令牌。分页刷新重算，不永久保存推定位置。将协作成员接入 Trace 列表/树合并入口，保留上游 Goal Plus 专用功能。
 
 复用已有表，不新增 Prisma 模型；日志沿用 collaboration scope 和 server.log。查询限额只限制一次解析，关系分页仍可访问，明确提示未完成。不构造虚假 Span、执行数据或完成状态。
+
+
+## 2026-09-17 验收目标修正（用户已确认）
+同一协作的原始 Trace 在链路列表合并为一条，详情包含全部成员。有 fromLocator 的关系按已解析调用步骤挂载 subagent；没有定位或无法确定唯一父级的成员按首次上报顺序并列展示。循环、回传事件保留在协作图，不作为强制父子依据。保留原始数据与 source=raw 查询；合并读取不影响其他框架上报及 Goal Plus 专用投影。测试覆盖无需绑定、步骤定位、无定位、循环、多级及分页列表只保留入口。

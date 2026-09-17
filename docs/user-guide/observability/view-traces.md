@@ -431,9 +431,9 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 - Bundle 只迁移 Trace 展示所需的 Execution、Session 与 interactions；不会迁移用户标签、评测结果、智能诊断报告或基础设施关联，也不会自动触发 LLM 评测。
 
 
-## 自定义 Agent 协作图
+## 自定义 Agent Trace 合并与协作图
 
-本功能按增量关系事件建立独立协作图。用户只需调用一个新上报接口：`POST /api/ingest/collaborations/events`。**不用先登记参与者，不用调用 sessions 绑定接口，没有原 Trace 也能显示节点和关系。** 原 Trace 的列表、正文和父子树不因这些事件发生变化。
+本功能按增量关系事件建立独立协作图。用户只需调用一个新上报接口：`POST /api/ingest/collaborations/events`。**不用先登记参与者，不用调用 sessions 绑定接口，没有原 Trace 也能显示节点和关系。** 成员 Trace 就绪后，链路追踪列表只保留一个合并入口；详情展示全部成员，原始数据库记录保持不变。
 
 ### 1. 最小请求：没有 Trace 也可使用
 
@@ -468,14 +468,14 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 }
 ```
 
-工具名匹配改用 `{"recordType":"tool","name":"spawn_agent"}`。可选字段省略即可，不传 null。fromLocator 只读取发起方已采集的工具/Shell 记录，不执行命令，也不要求用户提供 spanId。工具名精确匹配，命令按字面包含；唯一匹配只是候选，不证明实际发起位置。
+工具名匹配改用 `{"recordType":"tool","name":"spawn_agent"}`。可选字段省略即可，不传 null。fromLocator 只读取发起方已采集的工具/Shell 记录，不执行命令，也不要求用户提供 spanId。工具名精确匹配，命令按字面包含；唯一匹配用于将子 Agent 挂到对应步骤，页面标注“候选步骤”以保留证据强弱。
 
 | 定位结果 | 页面含义 |
 |---|---|
 | not_provided | 未配置定位且无明确记录依据，保留会话关系 |
 | waiting_trace | 发起方 Trace 尚未唯一关联 |
-| not_found | 原 Trace 没有匹配记录 |
-| candidate | 名称/命令唯一候选，不能当成确定父级 |
+| not_found | 原 Trace 没有匹配记录，成员并列展示 |
+| candidate | 名称/命令唯一匹配，挂载到该步骤并标注候选 |
 | ambiguous | 多个候选或匹配依据有歧义 |
 | confirmed | 原始调用记录明确包含目标会话编号 |
 | time_ordered | 满足完整分组、数量、执行时间及可信时钟等条件的顺序推定，可能随迟到数据变化 |
@@ -494,10 +494,10 @@ fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当
 链路追踪列表右上角点击 **协作图**，进入 `/observe/collaborations`，选择协作编号。也可以直接打开 `/observe/collaborations/<collaborationId>`。
 
 - 点击节点：查看会话编号和 Trace 关联状态；已关联时可打开原 Trace，或读取执行原文。
-- 点击箭头或下方事件：查看完整说明、上报内容、发生/接收时间、来源、fromLocator 和位置依据。明确/时间推定位置可打开对应步骤原文；候选不强制挂接。
+- 点击箭头或下方事件：查看完整说明、上报内容、发生/接收时间、来源、fromLocator 和位置依据。明确/时间推定位置可打开对应步骤原文；唯一候选步骤可挂载子 Agent，并保留候选标识。
 - 同向多条联系分别画线，并在事件列表完整列出；循环、自联系、多父级都保留。
 - 默认每次加载 100 条上报事件，点击“加载更多”继续；刷新重新计算节点、自动关系和定位状态。
-- 图的位置不代表执行顺序，没有 fromLocator 不会默认串行排列。始终显示“任务结束状态未知”。
+- 图的位置不代表执行顺序；合并 Trace 内没有 fromLocator 的成员按首次上报顺序并列展示，此顺序不作为真实调用证据。始终显示“任务结束状态未知”。
 
 已有 Trace 无需上报事件：在 Trace 详情点击 **调用关系图**，平台按原始 task/spawn_agent/subagent 调用中明确的目标会话编号画图，保留真实多层关系。不采用 Agent 类型/FIFO 兜底作为确认依据。原始调用与上报事件有唯一明确对应时合并来源；仅双方相同不会合并事件。
 
@@ -516,4 +516,4 @@ fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当
 日志不记录 API Key、上报正文或 Shell 命令。保持日志等级 info 才能查看成功记录；启动脚本会覆盖 server.log，需留存时先备份。两个脚本继续自动执行已有 schema 同步与客户端生成；本轮独立协作图不新增数据库表。
 
 
-协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。后者把多个会话放在同一张关系图中，原始 Trace 仍分别保留在链路追踪列表，不会生成一条合并后的 Trace。返回列表时会重新加载数据，无需手动刷新页面。
+协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。成员 Trace 就绪后，链路列表只展示一个合并入口（复用首个无调用父级的成员 taskId），详情包含全部成员：定位唯一时挂到对应调用步骤，否则按首次上报顺序并列展示。循环和回传联系保留在协作图中，不生成循环的 Trace 树。返回列表时会重新加载数据，无需手动刷新页面。

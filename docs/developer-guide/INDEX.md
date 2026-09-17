@@ -9,11 +9,11 @@
 
 | Field | Value |
 |---|---|
-| Commit | `6aa539e905e7909862cb4bcd3791b66b7d2b1f90` (`6aa539e9`) |
+| Commit | `a9ad30a40558b291929b2d199b1c110e2d589657` (`a9ad30a4`) |
 | Branch | `develop0228` |
-| Date | 2026-09-16 |
-| Author | openeuler-ci-bot |
-| Subject | `!410 完善 Benchmark 端到端评测与结果展示，补充 Benchmark 接入、扩展和部署文档` |
+| Date | 2026-09-17 |
+| Author | ljnkirito |
+| Subject | `fix: 修复协作图返回链路列表卡住并明确查看入口` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
@@ -72,7 +72,7 @@
 
 > 2026-09-16 working-tree overlay：本轮仅更新安装 bundle 契约。源码启动导出完整项目根目录，RAS/client bundle 复用该目录并在白名单文件缺失时返回 503；构建恢复 npm 的 prebuild 生命周期。其他指南未重新审计。
 
-**如何更新：** `git diff 6aa539e9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a9ad30a4 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -132,4 +132,7 @@
 
 历史版本曾基于 `8ce387aa` 合并跨 Session Trace 展示修复。该版本的自定义关系树投影与无定位顺序拼接已被下述 v0.9 协作图取代；Goal Plus worker 专用投影、折叠与正文版本校验继续保留。
 
-当前工作树按 v0.9 恢复独立协作图：events 单接口接入、自动会话匹配、无 Trace 节点、只读自动关系、节点/连线详情；旧 Trace 不再由自定义关系合并，Goal Plus 专用路径保留。
+当前工作树按 v0.9 恢复独立协作图：events 单接口接入、自动会话匹配、无 Trace 节点、只读自动关系、节点/连线详情；旧 Trace 的合并展示按下述 2026-09-17 更新执行，Goal Plus 专用路径保留。
+
+
+2026-09-17 合并展示更新：reported 协作重新接入 Trace 列表和详情。CollaborationProjection 使用图查询中的精确会话对应关系，无需 sessions 预绑定；列表在数据库分页前排除已合并成员，详情附加 _collaboration 来源并使用 buildCollaborationTraceTree。唯一定位挂载到对应工具步骤；其余成员按首次上报顺序并列，循环/回传仅保留在协作图。source=raw 保持原文，懒加载保留来源和版本校验，Goal Plus 专用路径优先。成员缺失、权限或容量异常时保留原列表，不隐藏无法读取的 Trace。

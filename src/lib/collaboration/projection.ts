@@ -65,8 +65,8 @@ export class CollaborationProjection {
             for (const group of groups) {
                 const graph = await this.service.graph(user, group.collaborationId, 0, 2000);
                 const nodes = new Map(graph.nodes.map(node => [node.sessionId, node]));
-                const bindings = (await this.service.store.snapshot(user, group.collaborationId, 0, 1)).bindings;
-                const ids = new Map(bindings.map(binding => [binding.sessionId, binding.traceSessionId]));
+                const ids = new Map(graph.nodes.flatMap(node => node.traceSessionId ? [[node.sessionId, node.traceSessionId] as const] : []));
+                const groupLinks: TraceLink[] = [];
                 for (const id of new Set(ids.values())) {
                     if (sizes.has(id)) continue;
                     if (sizes.size >= 200) throw new ProjectionLimitError('Trace 投影超过 200 个 Session');
@@ -80,9 +80,22 @@ export class CollaborationProjection {
                     const parent = ids.get(event.fromSessionId);
                     const child = ids.get(event.toSessionId);
                     if (!parent || !child) { if (parent) unavailable.add(parent); if (child) unavailable.add(child); continue; }
-                    links.push({ parent, child, anchor: event.fromAnchor as Anchor, sequential: !event.fromLocator, order: event.observedAt ?? event.receivedAt });
+                    groupLinks.push({ parent, child, anchor: event.fromAnchor as Anchor, sequential: !event.fromLocator, order: event.observedAt ?? event.receivedAt });
                     if (!graph.resolutionComplete || !nodes.get(event.fromSessionId)?.executionId || !nodes.get(event.toSessionId)?.executionId) {
                         unavailable.add(parent); unavailable.add(child);
+                    }
+                }
+                const members = [...new Set(graph.events.flatMap(event => [ids.get(event.fromSessionId), ids.get(event.toSessionId)]).filter((id): id is string => Boolean(id)))];
+                const anchored = resolveTraceForest(groupLinks.filter(link => !link.sequential && link.parent !== link.child && Boolean(link.anchor.position || (link.anchor.status === 'candidate' && link.anchor.candidates?.length === 1))));
+                const children = new Set(anchored.map(link => link.child));
+                const root = members.find(id => !children.has(id));
+                if (root) {
+                    links.push(...anchored);
+                    for (const member of members) {
+                        if (member === root || children.has(member)) continue;
+                        const first = groupLinks.find(link => link.parent === member || link.child === member);
+                        links.push({ parent: root, child: member, sequential: true, order: first?.order,
+                            anchor: { status: 'not_provided', message: '无唯一调用父级，按上报顺序并列展示' } });
                     }
                 }
                 if (!graph.resolutionComplete) for (const id of ids.values()) unavailable.add(id);
