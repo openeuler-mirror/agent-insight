@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `5b61a5d9dce7ffdd93f06d7ea51c62922ab49b46` (`5b61a5d9`) |
+| Commit | `61cefb3a45a7c8421a966c194f387b2f333f5573` (`61cefb3a`) |
 | Branch | `bench-9-16` |
-| Date | 2026-09-16 |
+| Date | 2026-09-17 |
 | Author | mintuyang |
-| Subject | `实验接入xiaoo` |
+| Subject | `修复xiaoo安装问题` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-17 working-tree overlay：xiaoo 空最终回复改为进程退出后判定，仅正常退出且无明确错误时使用本次运行、同一 Session 的 Collector 活动记录兜底；活动记录不包含正文，独立于 Trace 上传缓冲并随运行清理。更新 `05-data-and-control-flow.md` 与实验用户指南，其他指南未重新审计。
 
 > 2026-09-16 working-tree overlay：生产启动脚本新增 `--benchmark swe-bench`，在数据库缺少 SWE-bench Verified 时自动下载并校验固定官方源码与 Parquet、创建隔离 Python 环境并导入 500 条共享只读 Case；重复启动先查库并跳过本地准备，已有数据版本不会被静默替换。同步更新 Benchmark 服务安装指南与数据集用户指南。
 
@@ -86,7 +88,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 5b61a5d9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

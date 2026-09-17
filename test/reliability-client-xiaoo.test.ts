@@ -25,7 +25,39 @@ if (process.argv.includes('--help')) {
   process.exit(0)
 }
 if (mode !== 'missing') console.log(${JSON.stringify(JSON.stringify(start))})
-if (mode === 'error') {
+if (mode?.startsWith('collector-')) {
+  const {spawnSync} = require('node:child_process')
+  const target = mode === 'collector-other' ? 'another-session' : ${JSON.stringify(sid)}
+  const script = [
+    'import sys',
+    'sys.path.insert(0, ' + ${JSON.stringify(JSON.stringify(path.resolve('scripts/xiaoo-trace-collector')))} + ')',
+    'import otel_trace',
+    'otel_trace.note_chat(' + JSON.stringify(target) + ', {"message": {"text": "input only"}})',
+    mode === 'collector-user-only' ? '' : mode === 'collector-text'
+      ? 'otel_trace.note_stream(' + JSON.stringify(target) + ', "intermediate reply")'
+      : 'otel_trace.note_tool(' + JSON.stringify(target) + ', {"call": {"tool_name": "file_edit"}, "outcome": {"output": "fixed"}})',
+    'otel_trace.post_otlp_traces = lambda payload: True',
+    'otel_trace.flush_session(' + JSON.stringify(target) + ')',
+  ].join('\\n')
+  const hook = spawnSync('python3', ['-B', '-c', script], {encoding: 'utf8'})
+  if (hook.status !== 0) { console.error(hook.stderr); process.exit(9) }
+  // Record only the temporary path, so cleanup can be checked after execution.
+  require('node:fs').writeFileSync(require('node:path').join(process.cwd(), 'activity-dir.txt'), process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR || '')
+  if (mode === 'collector-stale') {
+    const name = require('node:crypto').createHash('sha256').update(target).digest('hex') + '.json'
+    require('node:fs').writeFileSync(require('node:path').join(process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR, name),
+      JSON.stringify({sessionId: target, modelActivity: true, observedAtMs: 1}))
+  }
+  if (mode === 'collector-error') {
+    console.log(JSON.stringify({type: 'response', data: {raw_reply: ''}}))
+    console.log(JSON.stringify({type: 'error', data: {message: 'LLM provider HTTP 401 Unauthorized'}}))
+    process.exit(1)
+  }
+  if (mode === 'collector-nonzero') process.exit(7)
+  console.log(JSON.stringify({type: 'response', data: {raw_reply: '', session_id: target}}))
+  if (mode === 'collector-timeout') setInterval(() => {}, 1000)
+  else process.exit(0)
+} else if (mode === 'error') {
   process.stdout.write(JSON.stringify({type: 'error', data: {message: 'LLM provider error: HTTP 401 Unauthorized'}}))
 } else if (mode === 'nonzero') {
   console.error('runtime crashed')
@@ -33,6 +65,7 @@ if (mode === 'error') {
 } else if (mode === 'timeout') {
   setInterval(() => {}, 1000)
 } else {
+  if (mode === 'empty-then-text') console.log(JSON.stringify({type: 'response', data: {raw_reply: ''}}))
   setTimeout(() => process.stdout.write(JSON.stringify({type: 'response', data: {
     raw_reply: mode === 'empty' ? '' : 'hello',
     cwd: process.cwd(),
@@ -157,6 +190,7 @@ test('xiaoo reuses shared execution, early trace reporting and deterministic fai
     assert.equal(ok.modelActivityObserved, true)
     assert.equal(ok.exitCode, 0)
     assert.deepEqual(reports, [sid])
+    assert.equal((await run('empty-then-text')).modelActivitySource, 'stdout')
     const withoutEarlyDeadline = await run('success', { firstModelResponseTimeoutSeconds: undefined })
     assert.equal(withoutEarlyDeadline.firstModelResponseTimeoutSeconds, 5)
     await assert.rejects(run('error'), { code: 'MODEL_UNAVAILABLE' })
@@ -169,6 +203,38 @@ test('xiaoo reuses shared execution, early trace reporting and deterministic fai
       assert.equal(err.runFacts.timedOut, true)
       return true
     })
+  } finally { f.close() }
+})
+
+test('xiaoo empty final reply uses only this run/session Collector activity after normal exit', async () => {
+  const f = fixture()
+  try {
+    const run = (mode: string) => {
+      process.env.XIAOO_TEST_MODE = mode
+      return client.runExperimentCase({clientId: 'test', workspaceBase: f.root}, {
+        platform: 'xiaoo', agent: 'defaultagent', input: 'fix fixture', timeoutSeconds: 2,
+      })
+    }
+    for (const mode of ['collector-tool', 'collector-text']) {
+      const result = await run(mode)
+      assert.equal(result.exitCode, 0)
+      assert.equal(result.modelActivityObserved, true)
+      assert.equal(result.modelActivitySource, 'collector')
+      assert.equal(result.traceId, sid)
+      const evidenceDir = fs.readFileSync(path.join(f.root, 'activity-dir.txt'), 'utf8')
+      assert.ok(evidenceDir)
+      assert.equal(fs.existsSync(evidenceDir), false)
+    }
+    for (const [mode, code] of [
+      ['collector-other', 'AGENT_NO_OUTPUT'], ['collector-user-only', 'AGENT_NO_OUTPUT'],
+      ['collector-stale', 'AGENT_NO_OUTPUT'],
+      ['collector-error', 'MODEL_UNAVAILABLE'], ['collector-nonzero', 'AGENT_EXIT_NONZERO'],
+      ['collector-timeout', 'AGENT_TIMEOUT'], ['empty', 'AGENT_NO_OUTPUT'],
+    ]) {
+      await assert.rejects(run(mode), {code})
+      const evidenceDir = fs.readFileSync(path.join(f.root, 'activity-dir.txt'), 'utf8')
+      assert.equal(fs.existsSync(evidenceDir), false)
+    }
   } finally { f.close() }
 })
 

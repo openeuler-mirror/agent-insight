@@ -276,6 +276,8 @@ xiaoo 模型发现通过 Python 3.11+ 标准库 `tomllib` 读取原生 `[llm]`�
 
 xiaoo 只从 `session_start` 事件认领本次 Session，避免误取工具输出中的其他 Session ID。客户端回报的协议字段 `traceId` 是原生 Session ID，按 `Execution.taskId` 绑定：Collector 同时上报原生 `session.id` 与 SHA-256 派生的 span `traceId`，服务端优先采用 `session.id` 聚合，因此不得把 span 哈希当作实验绑定键。`test/reliability-client-xiaoo.test.ts` 直接调用现有 Python Collector，再走真实 normalize/aggregate 校验这一契约。
 
+xiaoo 原生 JSON CLI 可以只返回 `session_start` 和最终 `response`，工具调用后最后一轮没有文本时 `raw_reply` 为空，即使此前已执行工具。因此空 `response` 不提前终止进程；无输出判定延后到正常退出。执行器为每次运行创建私有临时目录，通过内部环境变量 `AGENT_INSIGHT_XIAOO_ACTIVITY_DIR` 传给 Collector；Collector 仅在非空模型文本/推理或具名工具执行后原子写入活动记录，按 Session ID 的 SHA-256 分文件，内容只有 Session ID、活动标记和时间。该记录独立于上传成功后删除的 Trace 缓冲，不依赖平台网络或同机部署。退出码为 0 且没有明确错误/超时的情况下，stdout 未识别活动时才读取本次运行、同一 Session 且时间有效的记录，回报 `modelActivitySource=collector`（直接识别则为 `stdout`）；结束后清理临时目录。用户输入、根 span 完成标记和其他 Session 记录不能作为活动证据；此兜底也不会跳过必需 Patch 校验。需要同时更新客户端和 xiaoo Collector，旧实验不会自动改判。
+
 能力发现探测 CLI 的 JSON/Agent/title 支持以及 Collector 安装注册；帮助命令探测按二进制文件指纹缓存最多30秒，失败不永久缓存。Benchmark runtime 注册表在常驻客户端启动时建立，安装或更新后需重启客户端。Collector、安装入口、OTLP 接口与官方评测逻辑继续复用。xiaoo 错误事件复用 `MODEL_UNAVAILABLE` / `MODEL_ERROR` 分类，无模型活动返回 `AGENT_NO_OUTPUT`，超时和进程失败沿用通用错误码。xiaoo 默认仅使用实验总超时：当前版本的增量模型事件尚未完成真实验证，不能将最终 `response` 未到当作首模型无响应。显式传入 `firstModelResponseTimeoutSeconds` 时仍可复用首响应计时；OpenCode 默认90秒保护不变。
 
 ### Pi Agent 实验 Runtime Adapter

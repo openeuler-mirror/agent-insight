@@ -1347,6 +1347,30 @@ function inspectXiaooRunEvent(line) {
   }
 }
 
+function createXiaooActivityEvidence() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-xiaoo-activity-'))
+  const startedAtMs = Date.now()
+  return {
+    env: { AGENT_INSIGHT_XIAOO_ACTIVITY_DIR: directory },
+    read(sessionId) {
+      if (!sessionId) return null
+      try {
+        const name = createHash('sha256').update(sessionId).digest('hex')
+        const file = path.join(directory, `${name}.json`)
+        if (fs.statSync(file).size > 4096) return null
+        const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+        if (record.sessionId !== sessionId || record.modelActivity !== true
+          || !Number.isSafeInteger(record.observedAtMs)
+          || record.observedAtMs < startedAtMs || record.observedAtMs > Date.now()) return null
+        return record
+      } catch { return null }
+    },
+    cleanup() {
+      try { fs.rmSync(directory, { recursive: true, force: true }) } catch {}
+    },
+  }
+}
+
 function createPiEventInspector(invocation) {
   let sessionSeen = false
   let pendingError = null
@@ -1402,6 +1426,9 @@ const runtimeAdapters = {
   xiaoo: {
     useLoginShell: true,
     inspectEvent: inspectXiaooRunEvent,
+    createActivityEvidence: createXiaooActivityEvidence,
+    // Native JSON CLI omits intermediate tool events and can end with an empty raw_reply.
+    deferNoOutputUntilExit: true,
     buildInvocation: buildXiaooInvocation,
     probe: probeXiaooRuntime,
     noOutputCode: 'AGENT_NO_OUTPUT',
@@ -1516,12 +1543,20 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
 
   return new Promise((resolve, reject) => {
     fs.mkdirSync(cwd, { recursive: true })
-    const child = spawn(launch.executable, launch.args, {
-      cwd,
-      env,
-      stdio: launch.stdio,
-      detached: process.platform !== 'win32',
-    })
+    const activityEvidence = runtime?.createActivityEvidence?.()
+    let child
+    try {
+      child = spawn(launch.executable, launch.args, {
+        cwd,
+        env: { ...env, ...activityEvidence?.env },
+        stdio: launch.stdio,
+        detached: process.platform !== 'win32',
+      })
+    } catch (err) {
+      activityEvidence?.cleanup()
+      reject(err)
+      return
+    }
     reliabilityChild = child
     let stderr = ''
     let stdoutBuffer = ''
@@ -1531,6 +1566,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     let settled = false
     let earlyFailure = null
     let modelActivityObserved = false
+    let modelActivitySource = null
     let firstModelActivityAt = null
     const structuredErrors = []
     let traceReport = Promise.resolve()
@@ -1558,10 +1594,11 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       if (forceKillTimer) clearTimeout(forceKillTimer)
       if (hardStopTimer) clearTimeout(hardStopTimer)
     }
-    const observeModelActivity = () => {
+    const observeModelActivity = (source = 'stdout', observedAtMs = Date.now()) => {
       if (modelActivityObserved) return
       modelActivityObserved = true
-      firstModelActivityAt = new Date().toISOString()
+      modelActivitySource = source
+      firstModelActivityAt = new Date(observedAtMs).toISOString()
       if (modelStartTimer) {
         clearTimeout(modelStartTimer)
         modelStartTimer = null
@@ -1602,7 +1639,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         } else {
           terminateForEarlyFailure(code, message)
         }
-      } else if (event.idle && !modelActivityObserved) {
+      } else if (event.idle && !modelActivityObserved && !runtime.deferNoOutputUntilExit) {
         const code = runtime.noOutputCode
         const message = `${platform} 会话已结束，但未观察到任何模型输出或工具调用`
         if (settled || event.deferFailureUntilExit) {
@@ -1645,6 +1682,11 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       if (reliabilityChild === child) reliabilityChild = null
       consumeStdoutLine(stdoutBuffer)
       if (runtime?.createEventInspector && code === 0 && !timedOut && !earlyFailure && !stdinError) consumeStdoutLine('', true)
+      if (code === 0 && !timedOut && !earlyFailure && !stdinError && !modelActivityObserved) {
+        const evidence = activityEvidence?.read(traceId)
+        if (evidence) observeModelActivity('collector', evidence.observedAtMs)
+      }
+      activityEvidence?.cleanup()
       await waitForTraceReport()
       const finishedAt = new Date().toISOString()
       const runFacts = {
@@ -1654,6 +1696,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         signal: signal || undefined,
         timedOut,
         modelActivityObserved,
+        modelActivitySource: modelActivitySource || undefined,
         firstModelActivityAt: firstModelActivityAt || undefined,
         firstModelResponseTimeoutSeconds: runtime
           ? firstModelResponseTimeoutSeconds
@@ -1736,6 +1779,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       if (settled) return
       settled = true
       clearTimers()
+      activityEvidence?.cleanup()
       if (reliabilityChild === child) reliabilityChild = null
       reject(err)
     })

@@ -103,6 +103,8 @@ xiaoo 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark �
 
 客户端要求 xiaoo CLI 支持 JSON 输出、Agent 和标题参数；模型 `provider/model` 会拆为 xiaoo 的 provider 和 model 参数。执行错误、模型鉴权失败、无输出和超时会回写为明确失败，原有 Trace Collector 继续负责上传轨迹。若 CLI 返回 HTTP 401，请修复运行主机上的模型鉴权配置后重跑 Case。
 
+xiaoo 执行过工具但最后没有文字回复时，不应被判为“无输出”。客户端会在正常退出后结合本次会话的 Collector 活动记录判断；真正无活动、明确执行错误、超时或 Benchmark 必需 Patch 为空仍然失败。升级此修复需同时更新客户端与 xiaoo Collector，并重启客户端服务；此前误判失败的 Case 需重新运行，不会自动恢复。
+
 xiaoo 实验复用运行主机上同一系统用户已有的配置和密钥。由 launchd/systemd 托管时，客户端通过用户的登录交互 shell（如 zsh/bash）启动 xiaoo，读取已配置在 shell 启动文件中的环境变量；xiaoo 继续自行读取原生密钥存储及 provider 默认变量。无需再次录入 API Key，也无需额外创建模型环境文件。请确保终端 TUI 与客户端使用同一用户；只在某个未保存的终端会话内设置的变量无法由新 shell 恢复。配置中的 TOML 行尾注释可以保留。升级后需重新安装/更新客户端及 FI 组件，再重新创建实验，旧实验冻结的错误模型标识不会自动更新。
 
 模型按完整的 `provider/model` 标识执行；页面在模型名旁展示 provider，避免同名模型混淆。开始实验后，系统等待新 Trace 完整入库，再运行评估器。

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import sys
+import hashlib
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -74,6 +78,34 @@ class CollectorBufferTests(unittest.TestCase):
             otel_trace.should_flush_lifecycle({"state": "idle", "outcome": "complete"})
         )
         self.assertTrue(otel_trace.should_flush_lifecycle({"state": "closed"}))
+
+    def test_run_receipt_requires_activity_and_survives_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "AGENT_INSIGHT_XIAOO_ACTIVITY_DIR": directory,
+        }):
+            sid = "receipt-session"
+            receipt = Path(directory) / f"{hashlib.sha256(sid.encode()).hexdigest()}.json"
+            otel_trace.note_chat(sid, {"message": {"text": "input is not model activity"}})
+            otel_trace.note_stream(sid, "   ")
+            otel_trace.note_tool(sid, {})
+            self.assertFalse(receipt.exists())
+            otel_trace.note_tool(f"xiaoo:{sid}", {"call": {"tool_name": "file_edit"}})
+            record = json.loads(receipt.read_text())
+            self.assertEqual(record["sessionId"], sid)
+            self.assertTrue(record["modelActivity"])
+            self.assertIsInstance(record["observedAtMs"], int)
+            self.assertEqual(set(record), {"sessionId", "modelActivity", "observedAtMs"})
+            otel_trace.note_stream(sid, "private text must not appear in receipt")
+            self.assertEqual(json.loads(receipt.read_text()), record)
+            with patch.object(otel_trace, "post_otlp_traces", return_value=True):
+                self.assertTrue(otel_trace.flush_session(sid))
+            self.assertFalse((Path(self._tmpdir.name) / f"{sid}.json").exists())
+            self.assertEqual(json.loads(receipt.read_text()), record)
+
+    def test_receipt_failure_does_not_break_collection(self) -> None:
+        with patch.dict(os.environ, {"AGENT_INSIGHT_XIAOO_ACTIVITY_DIR": self._tmpdir.name + "/missing"}):
+            otel_trace.note_stream("receipt-unavailable", "still collected")
+            self.assertTrue((Path(self._tmpdir.name) / "receipt-unavailable.json").exists())
 
     def test_user_only_has_no_trace_spans(self) -> None:
         buf = SessionSpanBuffer("sess-user-only")
