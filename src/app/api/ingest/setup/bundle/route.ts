@@ -22,8 +22,8 @@ export const dynamic = 'force-dynamic'
  * 与 /api/ingest/setup/opencode 下发单文件是同一模式，只是这里要整目录。
  */
 const BUNDLES: Record<string, string[]> = {
-  // RAS 运行时 + 安装器（install-ras.js 按 __dirname/.. 定位 agent_ras）
-  ras: ['scripts/install-ras.js', 'agent_ras'],
+  // RAS 运行时 + 安装器 + install-ras 顺带部署的 xiaoO Trace collector。
+  ras: ['scripts/install-ras.js', 'scripts/xiaoo-trace-collector', 'agent_ras'],
   // 常驻客户端：安装器 + 守护进程 + WSS 客户端；FI 组件安装由 install-ras-client 串联。
   // config_sync.js 必须带上：客户端靠它把配置合并进 RAS 实际读取的 config.json，
   // 缺了会静默跳过运行时写入（页面显示已写入，RAS 却读不到新值）。

@@ -8,6 +8,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { RUNTIME_FILES, buildPlugin } = require('./manifest')
 
 const SRC = __dirname
 const HOME = process.env.HOME || os.homedir()
@@ -16,38 +17,17 @@ const DEST = path.join(
   'xiaoo-trace-collector',
 )
 
-const COPY_FILES = [
-  'hooker_main.py',
-  'otel_trace.py',
-  'otel_spans.py',
-  'otlp_http.py',
-  'session_ids.py',
-]
-
 function copyTree() {
   fs.mkdirSync(DEST, { recursive: true })
-  for (const name of COPY_FILES) {
+  for (const name of RUNTIME_FILES) {
     const src = path.join(SRC, name)
     if (!fs.existsSync(src)) {
       throw new Error(`missing ${src}`)
     }
     fs.copyFileSync(src, path.join(DEST, name))
   }
-  const hookerMain = path.join(DEST, 'hooker_main.py')
   const pluginPath = path.join(DEST, 'plugin.json')
-  const entries = [
-    ['insight_xiaoo_chat_received', '*.Chat.message.received', 'chat_received'],
-    ['insight_xiaoo_tool_post', '*.Tool.*.post', 'tool_post'],
-    // 4-segment plugin point for assistant text (stream_delta cannot be registered)
-    ['insight_xiaoo_llm_complete_post', '*.Llm.complete.post', 'llm_complete_post'],
-    ['insight_xiaoo_session_state', '*.Session.lifecycle.state', 'session_state'],
-  ]
-  const plugin = entries.map(([id, hook_point, op]) => ({
-    id,
-    hook_point,
-    // exec keeps the xiaoo process as the collector's parent for session isolation.
-    command: `exec python3 '${hookerMain.replace(/'/g, "'\\''")}' ${op}`,
-  }))
+  const plugin = buildPlugin(DEST)
   fs.writeFileSync(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`, 'utf8')
   return pluginPath
 }

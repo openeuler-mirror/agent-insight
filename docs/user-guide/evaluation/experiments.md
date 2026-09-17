@@ -107,7 +107,7 @@ xiaoo 实验复用运行主机上同一系统用户已有的配置和密钥。�
 
 模型按完整的 `provider/model` 标识执行；页面在模型名旁展示 provider，避免同名模型混淆。开始实验后，系统等待新 Trace 完整入库，再运行评估器。
 
-xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上传鉴权：Collector 使用的是平台安装密钥，不是模型 API Key。Collector 优先读取当前安装的 `ras/config.json` 上传配置，只有该文件不存在时才兼容旧 FI 配置；显式环境覆盖必须同时提供平台密钥与地址，不能拼接不同来源的配置。更新后可在源码目录执行 `node scripts/xiaoo-trace-collector/install.js` 仅更新 xiaoo Collector，再退出并重新打开 xiaoo，让新的 Hook 命令生效。无需重配模型或修改其他 Agent。
+xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上传鉴权：Collector 使用的是平台安装密钥，不是模型 API Key。Collector 优先读取当前安装的 `ras/config.json` 上传配置，只有该文件不存在时才兼容旧 FI 配置；显式环境覆盖必须同时提供平台密钥与地址，不能拼接不同来源的配置。可先执行 `node scripts/install-ras.js --check`，检查会校验 xiaoo Collector 运行文件、Hook 插件与 `config.toml` 挂载。更新后可在源码目录执行 `node scripts/xiaoo-trace-collector/install.js` 仅更新 xiaoo Collector，再退出并重新打开 xiaoo，让新的 Hook 命令生效。无需重配模型或修改其他 Agent。
 
 实验 CLI 与 TUI 的无会话 ID 事件按 xiaoo 进程隔离；同一进程同时有多个活动会话时，缺失会话 ID 的事件会跳过并记录提示，不会猜测归属。旧版全局会话缓存不再使用，已串线的历史缓冲不会自动重放或修复，验证请新建实验。
 
