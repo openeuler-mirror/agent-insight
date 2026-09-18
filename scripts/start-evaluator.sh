@@ -10,17 +10,17 @@ PORT=8080
 AUTH_MODE=token
 TOKEN=
 PLATFORM_BASE_URL=${EVALUATOR_AGENT_INSIGHT_BASE_URL:-}
-BENCHMARK_KEY=${BENCHMARK_EVALUATOR_KEY:-swe-bench}
 EVALUATOR_ENV=()
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-evaluator.sh [--benchmark KEY] [--evaluator-env NAME=VALUE] [--auth-mode token --token TOKEN | --auth-mode none] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
+  bash scripts/start-evaluator.sh [--evaluator-env NAME=VALUE] [--auth-mode token --token TOKEN | --auth-mode none] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
 
 Starts the Evaluator Controller from the current Git checkout on Linux or macOS.
-The command uses the selected Benchmark package Dockerfile when present, otherwise the generic Controller image.
-It does not pull source code, register with Agent Insight, or preload Benchmark runtime assets.
+The command always builds the generic Controller image. Benchmark runtimes are resolved
+from the generated Catalog only when an evaluation task requires them.
+It does not pull source code, register with Agent Insight, or preload Benchmark runtimes.
 EOF
 }
 
@@ -35,7 +35,7 @@ git_checkout() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --token|--auth-mode|--platform-base-url|--bind-address|--port|--benchmark|--evaluator-env)
+    --token|--auth-mode|--platform-base-url|--bind-address|--port|--evaluator-env)
       [ "$#" -ge 2 ] || fail "$1 缺少参数值"
       case "$1" in
         --token) TOKEN=$2 ;;
@@ -43,7 +43,6 @@ while [ "$#" -gt 0 ]; do
         --platform-base-url) PLATFORM_BASE_URL=$2 ;;
         --bind-address) BIND_ADDRESS=$2 ;;
         --port) PORT=$2 ;;
-        --benchmark) BENCHMARK_KEY=$2 ;;
         --evaluator-env) EVALUATOR_ENV+=("$2") ;;
       esac
       shift 2
@@ -88,10 +87,6 @@ case "$PLATFORM_BASE_URL" in
     ;;
   *) fail '--platform-base-url 必须是 HTTP(S) URL' ;;
 esac
-printf '%s' "$BENCHMARK_KEY" | LC_ALL=C grep -Eq '^[a-z0-9][a-z0-9._-]{0,63}$' \
-  || fail '--benchmark 格式不合法'
-[ -f "$REPOSITORY_ROOT/benchmarks/$BENCHMARK_KEY/benchmark.yaml" ] \
-  || fail "Benchmark 接入包不存在：$BENCHMARK_KEY"
 if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
   for evaluator_env in "${EVALUATOR_ENV[@]}"; do
     printf '%s' "$evaluator_env" | LC_ALL=C grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.*$' \
@@ -151,12 +146,9 @@ esac
 SHORT_REVISION=$(printf '%s' "$SOURCE_REVISION" | cut -c1-12)
 DIRTY_SUFFIX=
 if [ "$SOURCE_DIRTY" = true ]; then DIRTY_SUFFIX=-dirty; fi
-IMAGE_REPOSITORY="agent-insight-benchmark-evaluator-$BENCHMARK_KEY"
+IMAGE_REPOSITORY=agent-insight-benchmark-evaluator
 IMAGE_TAG="$IMAGE_REPOSITORY:src-$SHORT_REVISION$DIRTY_SUFFIX"
-EVALUATOR_DOCKERFILE="$REPOSITORY_ROOT/benchmarks/$BENCHMARK_KEY/evaluator/Dockerfile"
-if [ ! -f "$EVALUATOR_DOCKERFILE" ]; then
-  EVALUATOR_DOCKERFILE="$REPOSITORY_ROOT/services/evaluator/Dockerfile"
-fi
+EVALUATOR_DOCKERFILE="$REPOSITORY_ROOT/services/evaluator/Dockerfile"
 PREVIOUS_CONTROLLER_IMAGE_IDS=$(docker image ls --quiet --no-trunc "$IMAGE_REPOSITORY")
 if [ "$SOURCE_DIRTY" = true ] || ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
   printf '构建 Evaluator Controller：%s\n' "$IMAGE_TAG"
@@ -183,12 +175,21 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
   printf 'EVALUATOR_LISTEN_HOST=0.0.0.0\n'
   printf 'EVALUATOR_PORT=8080\n'
   printf 'EVALUATOR_DATA_DIR=/data\n'
+  printf 'EVALUATOR_CONTROLLER_CONTAINER_ID=%s\n' "$CONTAINER_NAME"
   printf 'EVALUATOR_MAX_CONCURRENCY=1\n'
   printf 'EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
   printf 'EVALUATOR_PLATFORM_TOKEN=%s\n' "$TOKEN"
   printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\n' "$PLATFORM_BASE_URL"
   if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
+    runtime_env_names=
     for evaluator_env in "${EVALUATOR_ENV[@]}"; do printf '%s\n' "$evaluator_env"; done
+    for evaluator_env in "${EVALUATOR_ENV[@]}"; do
+      evaluator_env_name=${evaluator_env%%=*}
+      if [ -n "$runtime_env_names" ]; then runtime_env_names="$runtime_env_names,$evaluator_env_name"
+      else runtime_env_names=$evaluator_env_name
+      fi
+    done
+    printf 'EVALUATOR_RUNTIME_ENV_NAMES=%s\n' "$runtime_env_names"
   fi
   printf 'EVALUATOR_HOST_OS=%s\n' "$HOST_OS"
   printf 'EVALUATOR_HOST_ARCH=%s\n' "$HOST_ARCH"
@@ -268,5 +269,4 @@ if [ "$AUTH_MODE" = token ]; then
 fi
 printf '日志：docker logs -f %s\n' "$CONTAINER_NAME"
 printf '重启：docker restart %s\n' "$CONTAINER_NAME"
-printf 'Benchmark: %s\n' "$BENCHMARK_KEY"
-printf 'Smoke：bash scripts/evaluator-doctor.sh --smoke %s\n' "$BENCHMARK_KEY"
+printf 'Smoke：bash scripts/evaluator-doctor.sh --smoke <evaluator-key>\n'

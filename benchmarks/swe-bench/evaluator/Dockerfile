@@ -8,9 +8,11 @@ ARG DEBIAN_SECURITY_MIRROR=http://repo.huaweicloud.com/debian-security
 ARG PIP_INDEX_URL=https://repo.huaweicloud.com/repository/pypi/simple
 ARG EVALUATOR_SOURCE_REVISION=unknown
 ARG EVALUATOR_SOURCE_DIRTY=false
+ARG EVALUATOR_ARTIFACT_DIGEST=unknown
 
 LABEL org.opencontainers.image.revision=$EVALUATOR_SOURCE_REVISION
 LABEL org.opencontainers.image.source-dirty=$EVALUATOR_SOURCE_DIRTY
+LABEL agent-insight.evaluator.artifact-digest=$EVALUATOR_ARTIFACT_DIGEST
 
 RUN set -eu; \
   cp /etc/apt/sources.list.d/debian.sources /tmp/debian.sources.official; \
@@ -48,15 +50,11 @@ RUN set -eu; \
 
 WORKDIR /app
 
-COPY services/evaluator ./services/evaluator
-COPY benchmarks ./benchmarks
-COPY generated/benchmark-catalog/evaluators.cjs ./generated/benchmark-catalog/evaluators.cjs
+COPY services/evaluator/src/evaluator-registry.cjs ./services/evaluator/src/evaluator-registry.cjs
+COPY benchmarks/swe-bench ./benchmarks/swe-bench
 
 ENV EVALUATOR_LISTEN_HOST=0.0.0.0 \
-    EVALUATOR_PORT=8080 \
     EVALUATOR_DATA_DIR=/data \
-    EVALUATOR_MAX_CONCURRENCY=1 \
-    EVALUATOR_AUTH_MODE=token \
     EVALUATOR_SOURCE_REVISION=$EVALUATOR_SOURCE_REVISION \
     EVALUATOR_SOURCE_DIRTY=$EVALUATOR_SOURCE_DIRTY \
     SWE_BENCH_PYTHON=/opt/swebench-venv/bin/python \
@@ -65,6 +63,4 @@ ENV EVALUATOR_LISTEN_HOST=0.0.0.0 \
     SWE_BENCH_ALLOW_NON_OFFICIAL=false
 
 VOLUME ["/data"]
-EXPOSE 8080
-
-CMD ["node", "services/evaluator/src/index.cjs"]
+CMD ["node", "benchmarks/swe-bench/evaluator/entrypoint.cjs", "doctor"]

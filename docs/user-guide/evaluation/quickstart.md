@@ -22,14 +22,13 @@ description: "使用已有 Trace 或 Benchmark 数据集完成第一次实验"
 
 ```bash
 bash scripts/start-evaluator.sh \
-  --benchmark swe-bench \
   --token '<与 Agent Insight 一致的共享密钥>' \
   --platform-base-url https://agent-insight.example.com \
   --bind-address 0.0.0.0 \
   --port 8080
 ```
 
-Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本根据 `--benchmark` 优先构建该接入包自己的 `evaluator/Dockerfile`，没有时使用通用 Controller 镜像；具体 Harness、SDK 和镜像配置属于接入包，不进入通用镜像。实例需要额外环境变量时，可重复传入 `--evaluator-env NAME=VALUE`。每次部署会在新镜像就绪后重建 Controller 容器；Doctor 通过后只清理该 Benchmark 的旧 Controller 镜像，持久化数据卷和 Case 镜像不受影响。SWE-bench 接入包仍锁定官方源码和依赖；如需镜像代理，可使用 `--evaluator-env SWE_BENCH_IMAGE_PROXY_PREFIX=<registry-prefix>`。工作树有未提交内容时镜像会标记为 `dirty`，不能视为正式发布构建。默认启动不拉取 Case 镜像；真实任务或显式 Smoke 才按需拉取：
+Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本始终只构建通用 Controller，不再选择 Benchmark，也不会在部署时安装全部 Harness。具体 Harness、SDK 和镜像配置属于 `benchmarks/<key>` 接入包；首个对应任务到达后，Controller 根据 Catalog 自动准备 Runtime 镜像并缓存，后续任务直接复用。实例需要额外环境变量时，可重复传入 `--evaluator-env NAME=VALUE`。SWE-bench 如需镜像代理，可使用 `--evaluator-env SWE_BENCH_IMAGE_PROXY_PREFIX=<registry-prefix>`。默认启动不拉取 Runtime 或 Case 镜像；真实任务或显式 Smoke 才按需准备：
 
 ```bash
 bash scripts/evaluator-doctor.sh
@@ -54,7 +53,6 @@ node scripts/configure-evaluator-target.js \
 ```bash
 # 评测机
 bash scripts/start-evaluator.sh \
-  --benchmark swe-bench \
   --auth-mode none \
   --platform-base-url http://10.0.0.10:3000 \
   --bind-address 0.0.0.0 \

@@ -188,7 +188,6 @@ cd /srv/agent-insight
 
 ```bash
 bash scripts/start-evaluator.sh \
-  --benchmark <benchmark-key> \
   --auth-mode none \
   --platform-base-url http://<agent-insight-ip>:3000 \
   --bind-address 0.0.0.0 \
@@ -197,8 +196,8 @@ bash scripts/start-evaluator.sh \
 
 其中：
 
-- `--benchmark` 必须与 `benchmarks/<benchmark-key>` 一致；不要依赖脚本的 SWE-bench 默认值；
-- 接入包存在 `evaluator/Dockerfile` 时使用该镜像，否则使用通用 Controller 镜像；
+- 启动脚本始终构建通用 Controller，不接受 Benchmark 选择或预热参数；
+- Benchmark Runtime 由任务中的 `benchmark.key + evaluator.key` 通过 Catalog 选择，首次任务按需准备并缓存；
 - `--platform-base-url` 必须是 Evaluator 容器可访问的 Agent Insight 地址；
 - Benchmark 专用环境变量可通过 `--evaluator-env NAME=VALUE` 传入。
 
@@ -210,7 +209,6 @@ bash scripts/start-evaluator.sh \
 cd /srv/agent-insight
 
 bash scripts/start-evaluator.sh \
-  --benchmark <benchmark-key> \
   --auth-mode none \
   --platform-base-url http://host.docker.internal:3000 \
   --bind-address 127.0.0.1 \

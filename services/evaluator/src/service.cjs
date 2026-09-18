@@ -19,6 +19,7 @@ const { AgentInsightPlatformClient, PlatformClientError, sha256 } = require('./p
 const ACTIVE_STAGES = new Set([
   'accepted',
   'downloading_artifacts',
+  'preparing_runtime',
   'resolving_image',
   'running_harness',
   'collecting_evidence',

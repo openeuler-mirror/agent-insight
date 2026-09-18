@@ -8,7 +8,7 @@
 
 ## 1. 最终方案
 
-运行时使用两层容器：
+运行时使用三层容器：
 
 ```text
 Agent Insight
@@ -17,14 +17,15 @@ Agent Insight
             ├─ 持久化任务、下载 Agent Patch、回调平台
             ├─ 构建生成的 Evaluator Catalog
             └─ 统一 FileEvaluatorEntrypoint
-                 └─ evaluator evaluate --request ... --output ...
-                      └─ SWE-bench Entrypoint
-                           └─ 官方 make_test_spec() + run_instance()
-                                └─ SWE-bench Case 容器（每个 Case 一个，用后即删）
+                 └─ Benchmark Runtime 容器（按 Catalog 准备并缓存）
+                      └─ evaluator evaluate --request ... --output ...
+                           └─ SWE-bench Entrypoint
+                                └─ 官方 make_test_spec() + run_instance()
+                                     └─ SWE-bench Case 容器（每个 Case 一个，用后即删）
 ```
 
 - **Controller 容器**：通用 Node.js HTTP/任务编排 + Docker CLI；挂载 Docker Socket 和持久化任务目录，不内置具体 Benchmark Harness。
-- **实例镜像**：`benchmarks/<key>/evaluator/Dockerfile` 安装该 Benchmark 的语言、SDK 和 Harness 依赖；SWE-bench 的 Python 与官方源码只存在于自己的实例镜像。
+- **Runtime 镜像**：`benchmarks/<key>/evaluator/Dockerfile` 安装该 Benchmark 的语言、SDK 和 Harness 依赖；由 Catalog 给出内容派生镜像引用，首次任务按需拉取，源码 checkout 无远端制品时回退本地构建，之后复用 Docker 缓存。SWE-bench 的 Python 与官方源码只存在于自己的 Runtime 镜像。
 - **Case 容器**：执行真正的 Patch 应用和测试。正式评测使用官方 x86_64 SWE-bench 镜像。
 - 不复制官方 Patch 应用、测试执行和判分代码；固定复用本地已下载官方源码 commit `02e7a74ffd0b707aab73d203fe87bdc7c76afc8e` 中的 `make_test_spec()`、`run_instance()` 和 `get_eval_report()`。
 - Controller 与 Agent Insight 可以不在一台机器；双方只通过 REST 和 Artifact 内容传输，不共享文件路径或数据库。
@@ -33,7 +34,7 @@ Agent Insight
 
 ### 2.1 Controller 镜像
 
-项目提供不含具体 Harness 的通用 Controller 镜像；有额外依赖的接入包提供自己的 `evaluator/Dockerfile`。部署脚本按 `--benchmark <key>` 选择构建目标，镜像名按 Benchmark 隔离：
+项目提供不含具体 Harness 的通用 Controller 镜像；部署脚本始终只构建这一镜像，不接受 Benchmark 选择参数。有额外依赖的接入包提供自己的 `evaluator/Dockerfile`，Controller 收到任务后按 Catalog 的 `evaluator.key + benchmark.key` 解析、校验并准备 Runtime 镜像：
 
 ```text
 docker run --restart unless-stopped \
@@ -41,8 +42,10 @@ docker run --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v agent-insight-evaluator-data:/data \
   --env-file evaluator.env \
-  agent-insight-benchmark-evaluator-<key>:<release>
+  agent-insight-benchmark-evaluator:<release>
 ```
+
+Runtime 镜像以接入包内容摘要派生的不可变 tag 和 `agent-insight.evaluator.artifact-digest` label 双重校验。已缓存的相同摘要直接复用；升级接入包会得到新的镜像引用。通用 Controller 不 import 实例实现，也不含任何 SWE-bench 分支。
 
 挂载 Docker Socket 等价于较高宿主权限，因此评测服务必须运行在专用机器或专用 VM，端口只向 Agent Insight 开放。平台凭证不进入 Case 容器。
 
@@ -281,7 +284,7 @@ EVALUATOR_AGENT_INSIGHT_BASE_URL=https://agent-insight.example.com
 # 具体 Benchmark 环境变量由接入包声明并通过 --evaluator-env 传入
 ```
 
-Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluator.sh --benchmark <key>`。脚本接受可选 `--platform-base-url`，并可重复使用 `--evaluator-env NAME=VALUE` 注入实例配置；Evaluator 下载 Artifact、上传证据及进度/完成回调优先使用实际可达地址。脚本构建 revision 镜像、以 `--restart unless-stopped` 运行固定名称 Controller、挂载当前 Docker context 的 Unix Socket 和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不拉取 Case 镜像；显式 `--smoke <benchmark-key>` 才运行该接入包的 Smoke。Controller 的 `status` 只表示 HTTP、journal 和 Docker Socket 状态，每个 `evaluators[]` 独立报告 `ready/reason/formalEligible`。
+Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluator.sh`。脚本接受可选 `--platform-base-url`，并可重复使用 `--evaluator-env NAME=VALUE` 注入实例配置；Evaluator 下载 Artifact、上传证据及进度/完成回调优先使用实际可达地址。脚本构建通用 Controller、以 `--restart unless-stopped` 运行固定名称容器、挂载当前 Docker context 的 Unix Socket和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不准备 Runtime 或 Case 镜像；真实任务首次进入 `preparing_runtime` 时自动准备，后续复用缓存。显式 `--smoke <evaluator-key>` 同样会按需准备该 Runtime。Controller 的 `status` 只表示 HTTP、journal、Docker Socket 和 Catalog 状态，每个 `evaluators[]` 独立报告运行时事实。
 
 本机 Docker 内访问宿主用 `host.docker.internal`；独立评测机使用 Agent Insight 的实际 HTTPS 地址。生产环境应由反向代理终止 TLS，并通过防火墙只允许两台服务互访。
 
@@ -300,6 +303,7 @@ services/evaluator/src/evaluator-registry.cjs
 services/evaluator/src/cli.cjs
 services/evaluator/Dockerfile
 scripts/benchmark/generate-catalog.cjs
+scripts/benchmark/build-evaluator-runtime.cjs
 scripts/start-evaluator.sh
 scripts/evaluator-doctor.sh
 scripts/configure-evaluator-target.js
