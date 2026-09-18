@@ -210,6 +210,7 @@ export async function POST(req: Request) {
           ? body.executionTarget as Record<string, unknown>
           : {};
         const agentName = String(body.agentName || '').trim();
+        const executionAgent = String(executionTarget.agent || agentName).trim();
         const evaluatorIds = await benchmarkEvaluatorIds(
           username,
           body.evaluatorIds,
@@ -231,7 +232,7 @@ export async function POST(req: Request) {
           evaluatorIds,
           runConfig: {
             platform: String(executionTarget.platform || ''),
-            agent: agentName,
+            agent: executionAgent,
             model: executionTarget.model ? String(executionTarget.model) : undefined,
             agentTimeoutSeconds: body.agentTimeoutSeconds == null
               ? undefined

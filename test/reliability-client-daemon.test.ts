@@ -62,6 +62,22 @@ const client = require_('../scripts/reliability-client.cjs') as {
     action: (sandbox: { tempRoot: string; env: NodeJS.ProcessEnv }) => T,
     baseDir?: string,
   ) => T
+  cleanupStaleFiProbeJobs: (
+    runner?: (command: string, args: string[], options: Record<string, unknown>) => {
+      status: number | null
+      stdout?: string
+    },
+    platform?: string,
+  ) => number
+  cleanupStaleInventorySandboxes: (baseDir?: string) => number
+  cleanupStaleInventoryOpencodeServers: (
+    runner?: (command: string, args: string[], options: Record<string, unknown>) => {
+      status: number | null
+      stdout?: string
+    },
+    killFn?: (pid: number, signal: NodeJS.Signals) => true,
+    platform?: string,
+  ) => number
   refreshCapabilityReports: (
     cfg: Record<string, unknown>,
     opts?: { force?: boolean },
@@ -356,6 +372,26 @@ test('capabilities and FI inventory agree on readiness', () => {
   assert.equal(caps.faultInjection.note, inv.platforms.opencode.note)
 })
 
+test('OpenCode remains executable with its built-in build agent when inventory is unavailable', () => {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-fallback-bin-'))
+  const previousPath = process.env.PATH
+  const executable = path.join(binDir, 'opencode')
+  fs.writeFileSync(executable, '#!/bin/sh\nexit 0\n')
+  fs.chmodSync(executable, 0o755)
+  process.env.PATH = `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`
+  try {
+    const caps = client.buildCapabilities(
+      { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
+      { refresh: true },
+    )
+    const opencode = caps.platforms.find((platform) => platform.id === 'opencode')
+    assert.deepEqual(opencode?.agents, ['build'])
+  } finally {
+    process.env.PATH = previousPath
+    fs.rmSync(binDir, { recursive: true, force: true })
+  }
+})
+
 test('client advertises benchmark components without an inbound executor endpoint', () => {
   const capabilities = client.buildCapabilities(
     { fiPackageRoot: '/definitely/not/here', maxParallelFi: 5 },
@@ -466,25 +502,97 @@ test('FI inventory temp sandbox redirects native extraction and always cleans up
   }
 })
 
+test('stale FI launchd helpers are removed by prefix only', () => {
+  const calls: Array<{ command: string; args: string[] }> = []
+  const runner = (command: string, args: string[]) => {
+    calls.push({ command, args })
+    if (args[0] === 'list') {
+      return {
+        status: 0,
+        stdout: [
+          '101\t0\tai.agent-insight.fi-probe.101',
+          '202\t0\tai.agent-insight.client',
+          '303\t0\tai.agent-insight.fi-probe.303',
+        ].join('\n'),
+      }
+    }
+    return { status: 0, stdout: '' }
+  }
+
+  assert.equal(client.cleanupStaleFiProbeJobs(runner, 'darwin'), 2)
+  assert.deepEqual(
+    calls.filter((call) => call.args[0] === 'remove').map((call) => call.args[1]),
+    ['ai.agent-insight.fi-probe.101', 'ai.agent-insight.fi-probe.303'],
+  )
+})
+
+test('stale inventory sandboxes are removed without touching sibling directories', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inventory-cleanup-test-'))
+  try {
+    fs.mkdirSync(path.join(root, 'inventory-old'))
+    fs.mkdirSync(path.join(root, 'keep-me'))
+    assert.equal(client.cleanupStaleInventorySandboxes(root), 1)
+    assert.equal(fs.existsSync(path.join(root, 'inventory-old')), false)
+    assert.equal(fs.existsSync(path.join(root, 'keep-me')), true)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stale inventory OpenCode servers are limited to the managed FI runtime', () => {
+  const managedRoot = path.join(os.homedir(), '.agent-insight', 'fault-injection', 'runtimes')
+  const killed: Array<{ pid: number; signal: NodeJS.Signals }> = []
+  const runner = (command: string, args: string[]) => {
+    if (command === 'ps') {
+      return {
+        status: 0,
+        stdout: [
+          '101 /usr/local/bin/opencode serve --hostname 127.0.0.1 --port 50101',
+          '202 /usr/local/bin/opencode serve --hostname 127.0.0.1 --port 50202',
+          '303 /usr/local/bin/opencode run hello',
+        ].join('\n'),
+      }
+    }
+    const pid = args[args.indexOf('-p') + 1]
+    return {
+      status: 0,
+      stdout: pid === '101'
+        ? `p101\nfcwd\nn${path.join(managedRoot, 'runtime-a')}\n`
+        : 'p202\nfcwd\nn/Users/example/project\n',
+    }
+  }
+  const killFn = (pid: number, signal: NodeJS.Signals) => {
+    killed.push({ pid, signal })
+    return true as const
+  }
+
+  assert.equal(client.cleanupStaleInventoryOpencodeServers(runner, killFn, 'darwin'), 1)
+  assert.deepEqual(killed, [{ pid: -101, signal: 'SIGTERM' }])
+})
+
 test('capability probe runs outside the daemon event loop', () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'scripts/reliability-client.cjs'),
     'utf8',
   )
   assert.match(source, /function probeFaultInjectionIsolated[\s\S]*?spawn\(process\.execPath, \[__filename, FI_PROBE_CHILD_ARG\]/)
+  assert.match(source, /probeFaultInjectionIsolated[\s\S]*?detached: process\.platform !== 'win32'/)
+  assert.match(source, /inventory probe child timed out[\s\S]*?signalProcessTree|signalProcessTree[\s\S]*?inventory probe child timed out/)
+  assert.match(source, /buildCapabilities\(cfg, \{[\s\S]*?initial inventory pending/)
   assert.match(source, /initialCapabilityRefresh\.then\(\(\) => fiLoop\(cfg\)\)/)
   assert.match(source, /process\.argv\.includes\(FI_PROBE_CHILD_ARG\)[\s\S]*?probeFaultInjection\(cfg\)/)
 })
 
-test('FI inventory uses an isolated launchd helper with aligned PWD on macOS', () => {
+test('FI inventory uses one-shot launchctl asuser without registering a persistent job', () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'scripts/reliability-client.cjs'),
     'utf8',
   )
   assert.match(
     source,
-    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'submit'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?`TMPDIR=\$\{tempRoot\}`[\s\S]*?'remove', label/,
+    /function runFiInventory[\s\S]*?process\.platform !== 'darwin'[\s\S]*?'launchctl'[\s\S]*?'asuser'[\s\S]*?`PWD=\$\{cwd\}`[\s\S]*?`TMPDIR=\$\{tempRoot\}`/,
   )
+  assert.doesNotMatch(source, /'launchctl'[\s\S]{0,120}?'submit'/)
 })
 
 test('OpenCode JSON events expose the platform Trace ID', () => {

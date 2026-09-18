@@ -408,6 +408,8 @@ type NormalizedBenchmarkResult = {
 
 ## 9. Evaluator 开发规范
 
+部署入口 `scripts/start-evaluator.sh` 只启动通用 Controller，不接受 Benchmark 选择、Runtime 预热或应用层鉴权参数。Controller 收到任务后，才根据 `benchmark.key + evaluator.key` 从 Catalog 解析并准备对应 Runtime；相同内容摘要的镜像直接复用。Agent Insight 与 Controller 之间不发送或校验 Bearer Token，部署者必须使用白名单、安全组或防火墙限制双向访问。这里的服务互访边界与 `evaluator.yaml` 的 `network` 不同：后者只约束实例 Runtime 执行评测时的容器网络策略。
+
 ### 9.1 `evaluator.yaml`
 
 ```yaml

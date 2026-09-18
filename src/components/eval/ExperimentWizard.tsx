@@ -29,6 +29,7 @@ import {
   toDatasetCases,
 } from '@/lib/engine/experiment/dataset-match';
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
@@ -61,6 +62,7 @@ interface AgentTargetOption {
   host: string;
   hostname: string | null;
   platform: string;
+  agent: string;
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
   supportsGenericTrace: boolean;
@@ -734,7 +736,6 @@ export function ExperimentWizard({
         ? detail.reusableConfig as Record<string, unknown>
         : {};
       const restoredDatasetId = typeof config.datasetId === 'string' ? config.datasetId : '';
-      const restoredAgentName = typeof config.agentName === 'string' ? config.agentName : '';
       const restoredTraceSource = config.traceSource === 'generate' ? 'generate' : 'existing';
       const restoredEvaluators = Array.isArray(config.evaluatorIds)
         ? config.evaluatorIds.map(String).filter(Boolean)
@@ -745,6 +746,10 @@ export function ExperimentWizard({
       const restoredTarget = config.executionTarget && typeof config.executionTarget === 'object'
         ? config.executionTarget as Record<string, unknown>
         : {};
+      const restoredAgentName = canonicalExperimentAgentName(
+        String(restoredTarget.platform || ''),
+        typeof config.agentName === 'string' ? config.agentName : '',
+      );
       setName(`${String(detail?.name || '实验')} · 复用评测配置`);
       setAgentName(restoredAgentName);
       setTraceMode(restoredTraceSource);
@@ -1434,6 +1439,7 @@ export function ExperimentWizard({
           executionTarget: traceMode === 'generate' && selectedTarget ? {
             workerId: selectedTarget.workerId,
             platform: selectedTarget.platform,
+            agent: selectedTarget.agent,
             model: genModel || null,
           } : undefined,
           agentTimeoutSeconds,
@@ -1462,6 +1468,7 @@ export function ExperimentWizard({
               executionTarget: traceMode === 'generate' && selectedTarget ? {
                 workerId: selectedTarget.workerId,
                 platform: selectedTarget.platform,
+                agent: selectedTarget.agent,
                 model: genModel || null,
                 timeoutSeconds: agentTimeoutSeconds,
               } : null,
@@ -1514,7 +1521,7 @@ export function ExperimentWizard({
             generateTrace: {
               workerId: selectedTarget.workerId,
               platform: selectedTarget.platform,
-              agent: agentName,
+              agent: selectedTarget.agent,
               model: genModel || null,
               timeoutSeconds: agentTimeoutSeconds,
             },

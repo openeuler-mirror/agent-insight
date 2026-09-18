@@ -71,12 +71,12 @@ Evaluator 由 Docker 容器运行，因此“Agent Insight 和 Evaluator 在同�
 
 推荐配置如下：
 
-| 部署方式 | `platform-base-url` / `public-base-url` | `evaluator-base-url` | Evaluator 监听地址 |
+| 部署方式 | Evaluator `platform-base-url` | Agent Insight `evaluator-base-url` | Evaluator 监听地址 |
 | --- | --- | --- | --- |
 | Agent Insight 与 Evaluator 同机 | `http://host.docker.internal:3000` | `http://127.0.0.1:3001` | `127.0.0.1` |
 | Agent Insight 与 Evaluator 分机 | `http(s)://<agent-insight-address>:3000` | `http(s)://<evaluator-address>:3001` | `0.0.0.0` 或 Evaluator 内网地址 |
 
-同机部署时，浏览器仍然访问 `http://localhost:3000`；`host.docker.internal` 只写入平台与 Evaluator 的通信配置，不要求用户在浏览器中打开。
+同机部署时，浏览器仍然访问 `http://localhost:3000`；`host.docker.internal` 只作为 Evaluator 启动时的 `--platform-base-url`，不要求用户在浏览器中打开，也不再写入 Agent Insight 配置。
 
 ## 3. 安装 Agent Insight
 
@@ -188,15 +188,14 @@ cd /srv/agent-insight
 
 ```bash
 bash scripts/start-evaluator.sh \
-  --auth-mode none \
-  --platform-base-url http://<agent-insight-ip>:3000 \
-  --bind-address 0.0.0.0 \
-  --port 3001
+  --platform-base-url http://<agent-insight-ip>:3000
 ```
 
 其中：
 
 - 启动脚本始终构建通用 Controller，不接受 Benchmark 选择或预热参数；
+- 默认发布到宿主机 `0.0.0.0:3001`，可通过 `--bind-address` 和 `--port` 覆盖；
+- 不提供应用层鉴权，依赖白名单、安全组或防火墙限制双向访问；
 - Benchmark Runtime 由任务中的 `benchmark.key + evaluator.key` 通过 Catalog 选择，首次任务按需准备并缓存；
 - `--platform-base-url` 必须是 Evaluator 容器可访问的 Agent Insight 地址；
 - Benchmark 专用环境变量可通过 `--evaluator-env NAME=VALUE` 传入。
@@ -209,15 +208,12 @@ bash scripts/start-evaluator.sh \
 cd /srv/agent-insight
 
 bash scripts/start-evaluator.sh \
-  --auth-mode none \
-  --platform-base-url http://host.docker.internal:3000 \
-  --bind-address 127.0.0.1 \
-  --port 3001
+  --platform-base-url http://host.docker.internal:3000
 ```
 
-这里不能把 `--platform-base-url` 写成 `http://127.0.0.1:3000`，因为该地址在容器内代表 Evaluator 容器自身。`--bind-address 127.0.0.1` 则用于把 Evaluator 的宿主机入口限制在本机，Agent Insight 可通过宿主机回环地址调用它。
+这里不能把 `--platform-base-url` 写成 `http://127.0.0.1:3000`，因为该地址在容器内代表 Evaluator 容器自身。默认的 `--bind-address 0.0.0.0` 不影响本机通过 `127.0.0.1:3001` 调用，但也会监听其他网卡；只允许本机访问时应显式传入 `--bind-address 127.0.0.1`。
 
-生产环境建议使用 `--auth-mode token --token <shared-token>`，并在 Agent Insight 一侧配置同一 Token。
+服务不会校验 Bearer Token；必须通过白名单、安全组或防火墙限制 Agent Insight `3000` 与 Evaluator `3001` 的访问范围。
 
 验证：
 
@@ -235,7 +231,7 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 
 `evaluator-key` 来自 `benchmark.yaml` 的 `evaluation.evaluatorKey`，它不一定与 `benchmark-key` 相同。
 
-## 6. 配置 Agent Insight 与 Evaluator
+## 6. 配置 Agent Insight 与 Evaluator 的互访地址
 
 ### 6.1 分机部署
 
@@ -245,14 +241,11 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 cd /srv/agent-insight
 
 node scripts/configure-evaluator-target.js \
-  --auth-mode none \
-  --public-base-url http://<agent-insight-ip>:3000 \
-  --evaluator-base-url http://<evaluator-ip>:3001 \
-  --allow-insecure-http true
+  --evaluator-base-url http://<evaluator-ip>:3001
 ```
 
-- `public-base-url` 是 Evaluator 下载 Artifact 和回调 Agent Insight 的地址；
 - `evaluator-base-url` 是 Agent Insight 访问 Evaluator 的地址；
+- Agent Insight 的公开回调地址从实验启动请求的 `Host` / `X-Forwarded-*` 自动推导，Evaluator 的实际访问地址由其 `--platform-base-url` 覆盖；
 - 配置会写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，并在后续请求中热加载。
 
 ### 6.2 本机部署
@@ -263,19 +256,14 @@ Agent Insight 与 Evaluator 同机时执行：
 cd /srv/agent-insight
 
 node scripts/configure-evaluator-target.js \
-  --auth-mode none \
-  --public-base-url http://host.docker.internal:3000 \
-  --evaluator-base-url http://127.0.0.1:3001 \
-  --allow-insecure-http false
+  --evaluator-base-url http://127.0.0.1:3001
 ```
 
-- `public-base-url` 会被冻结到评测任务中，供 Evaluator 容器下载 Submission、回传进度和上传结果，所以同机时使用 `host.docker.internal`；
 - `evaluator-base-url` 由宿主机上的 Agent Insight 使用，因此同机时使用 `127.0.0.1`；
-- `allow-insecure-http=false` 可以保留，因为 Evaluator 地址是本机回环地址。
+- Evaluator 容器访问 Agent Insight 的 `host.docker.internal:3000` 只在评测机的 `--platform-base-url` 中配置；
+- `allow-insecure-http` 默认是 `true`，适用于已通过白名单、安全组或防火墙隔离的 HTTP 网络；需要强制非回环 Evaluator 使用 HTTPS 时显式设为 `false`。
 
-若 Evaluator 使用 Token，改用 `--auth-mode token --token-file <0600-token-file>`。两端必须使用同一个 Token。
-
-使用 `none` 模式时，必须通过安全组或防火墙限制 Agent Insight `3000` 和 Evaluator `3001` 的访问范围。
+两端没有应用层鉴权配置，必须通过安全组或防火墙限制 Agent Insight `3000` 和 Evaluator `3001` 的访问范围。
 
 ## 7. 安装 Agent 执行客户端
 
@@ -326,7 +314,7 @@ curl -I http://<agent-insight-ip>:3000
 ## 9. 更新与回滚
 
 - **Agent Insight**：更新到目标代码版本，重新执行 `bash scripts/start.sh`；
-- **Evaluator**：更新到兼容版本，使用原完整参数重新执行 `scripts/start-evaluator.sh`；
+- **Evaluator**：更新到兼容版本，按当前互访地址重新执行 `bash scripts/start-evaluator.sh --platform-base-url <Agent-Insight-address>`；
 - **Agent 执行端**：如果变更涉及 Runtime 或 Collector，在每台执行机上重跑客户端安装命令；
 - **数据集**：更新代码或重建服务不会自动删除已安装数据集。
 

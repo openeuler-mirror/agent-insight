@@ -6,18 +6,17 @@ REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 CONTAINER_NAME=agent-insight-benchmark-evaluator
 DATA_VOLUME=agent-insight-benchmark-evaluator-data
 BIND_ADDRESS=0.0.0.0
-PORT=8080
-AUTH_MODE=token
-TOKEN=
+PORT=3001
 PLATFORM_BASE_URL=${EVALUATOR_AGENT_INSIGHT_BASE_URL:-}
 EVALUATOR_ENV=()
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-evaluator.sh [--evaluator-env NAME=VALUE] [--auth-mode token --token TOKEN | --auth-mode none] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
+  bash scripts/start-evaluator.sh [--evaluator-env NAME=VALUE] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
 
 Starts the Evaluator Controller from the current Git checkout on Linux or macOS.
+Defaults: --bind-address 0.0.0.0 --port 3001.
 The command always builds the generic Controller image. Benchmark runtimes are resolved
 from the generated Catalog only when an evaluation task requires them.
 It does not pull source code, register with Agent Insight, or preload Benchmark runtimes.
@@ -35,11 +34,9 @@ git_checkout() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --token|--auth-mode|--platform-base-url|--bind-address|--port|--evaluator-env)
+    --platform-base-url|--bind-address|--port|--evaluator-env)
       [ "$#" -ge 2 ] || fail "$1 缺少参数值"
       case "$1" in
-        --token) TOKEN=$2 ;;
-        --auth-mode) AUTH_MODE=$2 ;;
         --platform-base-url) PLATFORM_BASE_URL=$2 ;;
         --bind-address) BIND_ADDRESS=$2 ;;
         --port) PORT=$2 ;;
@@ -55,21 +52,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-case "$AUTH_MODE" in
-  token)
-    [ -n "$TOKEN" ] || fail 'token 模式必须提供 --token'
-    case "$TOKEN" in
-      eval_once_*) fail '一期不接受一次性 eval_once_* Token，请使用双方一致的共享密钥' ;;
-    esac
-    if printf '%s' "$TOKEN" | LC_ALL=C grep -q '[[:space:],]'; then
-      fail 'Token 必须是不含空白或逗号的单行值'
-    fi
-    ;;
-  none)
-    [ -z "$TOKEN" ] || fail 'none 模式不接受 --token'
-    ;;
-  *) fail '--auth-mode 必须是 token 或 none' ;;
-esac
 case "$PORT" in
   ''|*[!0-9]*) fail '--port 必须是 1～65535 的整数' ;;
 esac
@@ -177,8 +159,6 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT
   printf 'EVALUATOR_DATA_DIR=/data\n'
   printf 'EVALUATOR_CONTROLLER_CONTAINER_ID=%s\n' "$CONTAINER_NAME"
   printf 'EVALUATOR_MAX_CONCURRENCY=1\n'
-  printf 'EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
-  printf 'EVALUATOR_PLATFORM_TOKEN=%s\n' "$TOKEN"
   printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\n' "$PLATFORM_BASE_URL"
   if [ "${#EVALUATOR_ENV[@]}" -gt 0 ]; then
     runtime_env_names=
@@ -253,7 +233,6 @@ printf '\nEvaluator Controller 已就绪。\n'
 printf 'Source revision: %s\n' "$SOURCE_REVISION"
 printf 'Source dirty: %s\n' "$SOURCE_DIRTY"
 printf 'Controller image ID: %s\n' "$IMAGE_ID"
-printf 'Auth mode: %s\n' "$AUTH_MODE"
 if [ -n "$PLATFORM_BASE_URL" ]; then
   printf 'Agent Insight: %s\n' "$PLATFORM_BASE_URL"
 else
@@ -263,10 +242,6 @@ printf 'Listen: %s:%s\n' "$BIND_ADDRESS" "$PORT"
 printf 'Data volume: %s\n' "$DATA_VOLUME"
 printf 'Agent Insight 侧配置示例：\n'
 printf '  AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=https://<evaluator-host>:%s\n' "$PORT"
-printf '  AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=%s\n' "$AUTH_MODE"
-if [ "$AUTH_MODE" = token ]; then
-  printf '  AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<same-shared-secret>\n'
-fi
 printf '日志：docker logs -f %s\n' "$CONTAINER_NAME"
 printf '重启：docker restart %s\n' "$CONTAINER_NAME"
 printf 'Smoke：bash scripts/evaluator-doctor.sh --smoke <evaluator-key>\n'

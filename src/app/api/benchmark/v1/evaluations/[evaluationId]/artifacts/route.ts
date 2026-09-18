@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server'
 import { BenchmarkProtocolError } from '../../../../../../../../packages/benchmark-protocol/src/errors'
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error'
 import { storeBenchmarkEvaluationArtifact } from '@/lib/benchmark/evaluation-callback-service'
-import { authenticateBenchmarkEvaluator } from '@/lib/benchmark/evaluator-target'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,7 +11,6 @@ export async function POST(
   { params }: { params: Promise<{ evaluationId: string }> },
 ) {
   try {
-    authenticateBenchmarkEvaluator(req)
     const { evaluationId } = await params
     let form: FormData
     try {

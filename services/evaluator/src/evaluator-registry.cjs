@@ -279,9 +279,7 @@ async function runOciEntrypoint(descriptor, args, options = {}) {
   ]
   const runtimeEnv = { ...(options.env || {}) }
   const forbiddenRuntimeEnv = new Set([
-    'EVALUATOR_PLATFORM_TOKEN',
     'EVALUATOR_AGENT_INSIGHT_BASE_URL',
-    'EVALUATOR_AUTH_MODE',
     'EVALUATOR_RUNTIME_ENV_NAMES',
   ])
   for (const name of String(process.env.EVALUATOR_RUNTIME_ENV_NAMES || '').split(',').filter(Boolean)) {

@@ -47,6 +47,7 @@ const WATCHDOG_MS = 10_000
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 60_000
 const FI_PROBE_CHILD_ARG = '--probe-fi-inventory-once'
+const FI_PROBE_LAUNCHD_PREFIX = 'ai.agent-insight.fi-probe.'
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
 const LIVENESS_TIMEOUT_MS = 75_000
 const LIVENESS_CHECK_MS = 15_000
@@ -521,9 +522,74 @@ function resolveFiCwd(cfg, python = resolvePython(cfg)) {
 
 let cachedFiCwd
 
-function waitSync(ms) {
-  const state = new Int32Array(new SharedArrayBuffer(4))
-  Atomics.wait(state, 0, 0, ms)
+function cleanupStaleFiProbeJobs(runner = spawnSync, platform = process.platform) {
+  if (platform !== 'darwin') return 0
+  const listed = runner('launchctl', ['list'], { encoding: 'utf8', stdio: 'pipe' })
+  if (listed.status !== 0) return 0
+  const labels = String(listed.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/).at(-1) || '')
+    .filter((label) => label.startsWith(FI_PROBE_LAUNCHD_PREFIX))
+  let removed = 0
+  for (const label of labels) {
+    const result = runner('launchctl', ['remove', label], { stdio: 'ignore' })
+    if (result.status === 0) removed += 1
+  }
+  return removed
+}
+
+function cleanupStaleInventorySandboxes(baseDir = path.join(CLIENT_HOME, 'tmp')) {
+  let removed = 0
+  let entries = []
+  try {
+    entries = fs.readdirSync(baseDir, { withFileTypes: true })
+  } catch {
+    return removed
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('inventory-')) continue
+    try {
+      fs.rmSync(path.join(baseDir, entry.name), { recursive: true, force: true })
+      removed += 1
+    } catch {}
+  }
+  return removed
+}
+
+function cleanupStaleInventoryOpencodeServers(
+  runner = spawnSync,
+  killFn = process.kill,
+  platform = process.platform,
+) {
+  if (platform !== 'darwin') return 0
+  const listed = runner('ps', ['-axo', 'pid=,command='], { encoding: 'utf8', stdio: 'pipe' })
+  if (listed.status !== 0) return 0
+  const runtimeRoot = `${path.join(os.homedir(), '.agent-insight', 'fault-injection', 'runtimes')}${path.sep}`
+  let removed = 0
+  for (const line of String(listed.stdout || '').split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(.+)$/.exec(line)
+    if (!match || !/(?:^|\/)opencode serve --hostname 127\.0\.0\.1 --port \d+(?:\s|$)/.test(match[2])) continue
+    const pid = Number(match[1])
+    const cwdResult = runner('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+    const cwd = String(cwdResult.stdout || '')
+      .split(/\r?\n/)
+      .find((entry) => entry.startsWith('n'))
+      ?.slice(1)
+    if (!cwd?.startsWith(runtimeRoot)) continue
+    try {
+      killFn(-pid, 'SIGTERM')
+      removed += 1
+    } catch {
+      try {
+        killFn(pid, 'SIGTERM')
+        removed += 1
+      } catch {}
+    }
+  }
+  return removed
 }
 
 function withInventoryProbeSandbox(
@@ -551,7 +617,6 @@ function runFiInventory(python, cwd, pythonArgs, probeEnv) {
     const options = {
       cwd,
       env,
-      detached: process.platform !== 'win32',
       encoding: 'utf8',
       timeout: 60_000,
       maxBuffer: 8 * 1024 * 1024,
@@ -564,67 +629,29 @@ function runFiInventory(python, cwd, pythonArgs, probeEnv) {
       return spawnSync(command, args, options)
     }
 
-    const stdoutPath = path.join(tempRoot, 'stdout.json')
-    const stderrPath = path.join(tempRoot, 'stderr.log')
-    const label = `ai.agent-insight.fi-probe.${process.pid}.${randomBytes(4).toString('hex')}`
     const uid = process.getuid ? process.getuid() : 501
-    try {
-      const submitted = spawnSync(
-        'launchctl',
-        [
-          'submit',
-          '-l',
-          label,
-          '-o',
-          stdoutPath,
-          '-e',
-          stderrPath,
-          '--',
-          '/usr/bin/env',
-          `PATH=${env.PATH || ''}`,
-          `HOME=${env.HOME || os.homedir()}`,
-          `PWD=${cwd}`,
-          `TMPDIR=${tempRoot}`,
-          `TMP=${tempRoot}`,
-          `TEMP=${tempRoot}`,
-          '/bin/sh',
-          '-c',
-          'cd "$1" && shift && exec "$@"',
-          'agent-insight-fi-inventory',
-          cwd,
-          python,
-          ...pythonArgs,
-        ],
-        { encoding: 'utf8', env },
-      )
-      if (submitted.status !== 0) return submitted
-
-      const deadline = Date.now() + options.timeout
-      while (Date.now() < deadline) {
-        let stdout = ''
-        let stderr = ''
-        try { stdout = fs.readFileSync(stdoutPath, 'utf8') } catch {}
-        try { stderr = fs.readFileSync(stderrPath, 'utf8') } catch {}
-        if (stdout.trim()) {
-          try {
-            JSON.parse(stdout)
-            return { status: 0, stdout, stderr }
-          } catch {}
-        }
-        const state = spawnSync(
-          'launchctl',
-          ['print', `gui/${uid}/${label}`],
-          { encoding: 'utf8', stdio: 'pipe' },
-        )
-        if (state.status !== 0 || /state = exited/.test(state.stdout || '')) {
-          return { status: 1, stdout, stderr: stderr || 'inventory helper exited without JSON' }
-        }
-        waitSync(100)
-      }
-      return { status: null, stdout: '', stderr: 'inventory helper timed out' }
-    } finally {
-      spawnSync('launchctl', ['remove', label], { stdio: 'ignore' })
-    }
+    return spawnSync(
+      'launchctl',
+      [
+        'asuser',
+        String(uid),
+        '/usr/bin/env',
+        `PATH=${env.PATH || ''}`,
+        `HOME=${env.HOME || os.homedir()}`,
+        `PWD=${cwd}`,
+        `TMPDIR=${tempRoot}`,
+        `TMP=${tempRoot}`,
+        `TEMP=${tempRoot}`,
+        '/bin/sh',
+        '-c',
+        'cd "$1" && shift && exec "$@"',
+        'agent-insight-fi-inventory',
+        cwd,
+        python,
+        ...pythonArgs,
+      ],
+      options,
+    )
   })
 }
 
@@ -678,6 +705,7 @@ function probeFaultInjectionIsolated(cfg) {
     const child = spawn(process.execPath, [__filename, FI_PROBE_CHILD_ARG], {
       cwd: __dirname,
       env: process.env,
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
@@ -691,7 +719,8 @@ function probeFaultInjectionIsolated(cfg) {
       else resolve(value)
     }
     const timer = setTimeout(() => {
-      try { child.kill('SIGKILL') } catch {}
+      cleanupStaleInventoryOpencodeServers()
+      signalProcessTree(child, 'SIGKILL')
       finish(new Error('inventory probe child timed out'))
     }, 70_000)
     child.stdout.on('data', (chunk) => { stdout += String(chunk) })
@@ -749,7 +778,7 @@ function mergePiRuntimeCapability(platforms, runtime) {
 }
 
 function buildCapabilities(cfg, opts) {
-  const fi = getProbe(cfg, opts)
+  const fi = opts?.probe || getProbe(cfg, opts)
   const runtimeByPlatform = new Map()
   const runtimeFor = (id) => {
     if (!runtimeByPlatform.has(id)) {
@@ -779,7 +808,7 @@ function buildCapabilities(cfg, opts) {
         platforms.push({
           id,
           models: [],
-          agents: id === 'xiaoo' ? ['defaultagent'] : [],
+          agents: id === 'xiaoo' ? ['defaultagent'] : ['build'],
           runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId },
           actions: [...WHITELIST],
         })
@@ -2109,6 +2138,15 @@ async function main() {
     process.exit(1)
   }
   fs.mkdirSync(CLIENT_HOME, { recursive: true })
+  const staleProbeJobs = cleanupStaleFiProbeJobs()
+  const staleOpencodeServers = cleanupStaleInventoryOpencodeServers()
+  const staleProbeSandboxes = cleanupStaleInventorySandboxes()
+  if (staleProbeJobs || staleOpencodeServers || staleProbeSandboxes) {
+    log(
+      `cleaned stale inventory resources: launchd=${staleProbeJobs}` +
+      ` opencode=${staleOpencodeServers} sandboxes=${staleProbeSandboxes}`,
+    )
+  }
   log(`clientId=${cfg.clientId} host=${cfg.insightBaseUrl}`)
   log(`fi probe cwd=${resolveFiCwd(cfg) || 'unavailable'}`)
 
@@ -2124,7 +2162,9 @@ async function main() {
   const runtimePath = runtimeCandidates.find((candidate) => fs.existsSync(candidate))
   if (!runtimePath) throw new Error('Benchmark executor runtime 不存在')
   const { createBenchmarkExecutor } = require(runtimePath)
-  const executorCapabilities = buildCapabilities(cfg)
+  const executorCapabilities = buildCapabilities(cfg, {
+    probe: { ready: false, note: 'initial inventory pending', platforms: {} },
+  })
   benchmarkExecutor = createBenchmarkExecutor({
     clientId: cfg.clientId,
     deviceCredential: cfg.deviceCredential,
@@ -2403,6 +2443,9 @@ module.exports = {
   writeRasRuntimeConfig,
   resolveFiCwd,
   withInventoryProbeSandbox,
+  cleanupStaleFiProbeJobs,
+  cleanupStaleInventorySandboxes,
+  cleanupStaleInventoryOpencodeServers,
   buildFiInventory,
   buildCapabilities,
   mergePiRuntimeCapability,

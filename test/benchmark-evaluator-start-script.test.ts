@@ -12,9 +12,9 @@ const sweBenchDockerfile = path.join(repositoryRoot, 'benchmarks', 'swe-bench', 
 test('one-command evaluator script exposes the phase-one CLI and rejects deferred registration flags', () => {
   const help = spawnSync('bash', [startScript, '--help'], { encoding: 'utf8' })
   assert.equal(help.status, 0)
-  assert.match(help.stdout, /--auth-mode token --token TOKEN/)
-  assert.match(help.stdout, /--auth-mode none/)
+  assert.doesNotMatch(help.stdout, /--auth-mode|--token/)
   assert.match(help.stdout, /--platform-base-url URL/)
+  assert.match(help.stdout, /Defaults: --bind-address 0\.0\.0\.0 --port 3001/)
   assert.doesNotMatch(help.stdout, /--benchmark/)
   assert.match(help.stdout, /--evaluator-env NAME=VALUE/)
   assert.match(help.stdout, /Linux or macOS/)
@@ -27,15 +27,11 @@ test('one-command evaluator script exposes the phase-one CLI and rejects deferre
   assert.notEqual(benchmark.status, 0)
   assert.match(benchmark.stderr, /不支持的参数：--benchmark/)
 
-  const oneTime = spawnSync('bash', [startScript, '--token', 'eval_once_example'], { encoding: 'utf8' })
-  assert.notEqual(oneTime.status, 0)
-  assert.match(oneTime.stderr, /不接受一次性/)
-
-  const conflicting = spawnSync('bash', [
-    startScript, '--auth-mode', 'none', '--token', 'not-used',
-  ], { encoding: 'utf8' })
-  assert.notEqual(conflicting.status, 0)
-  assert.match(conflicting.stderr, /none 模式不接受 --token/)
+  for (const removedFlag of ['--auth-mode', '--token']) {
+    const removed = spawnSync('bash', [startScript, removedFlag, 'removed'], { encoding: 'utf8' })
+    assert.notEqual(removed.status, 0)
+    assert.match(removed.stderr, new RegExp(`不支持的参数：${removedFlag}`))
+  }
 })
 
 test('one-command evaluator script preserves the Docker lifecycle and on-demand image boundary', () => {
@@ -50,9 +46,11 @@ test('one-command evaluator script preserves the Docker lifecycle and on-demand 
   assert.doesNotMatch(source, /docker pull/)
   assert.doesNotMatch(source, /BENCHMARK_KEY|BENCHMARK_EVALUATOR_KEY|benchmarks\/\$BENCHMARK_KEY/)
   assert.match(source, /services\/evaluator\/Dockerfile/)
+  assert.match(source, /^BIND_ADDRESS=0\.0\.0\.0$/m)
+  assert.match(source, /^PORT=3001$/m)
   assert.match(source, /--evaluator-env/)
   assert.doesNotMatch(source, /printf 'SWE_BENCH_/)
-  assert.match(source, /printf 'EVALUATOR_AUTH_MODE=%s\\n'/)
+  assert.doesNotMatch(source, /EVALUATOR_AUTH_MODE|EVALUATOR_PLATFORM_TOKEN/)
   assert.match(source, /printf 'EVALUATOR_AGENT_INSIGHT_BASE_URL=%s\\n'/)
   assert.doesNotMatch(source, /systemctl|launchctl/)
   assert.match(source, /Linux\) HOST_OS=linux/)

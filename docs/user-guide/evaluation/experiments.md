@@ -99,7 +99,7 @@ Pi 每次执行使用全新 Session，通过 stdin 接收 Case 文本；临时�
 
 实验使用 `--no-approve`，忽略 Case 仓库中的 `.pi` 项目资源与项目 Skill，保留全局 Collector/Skill。需要评测的 Skill 请安装到受控的全局位置；不要依赖 Case 中的 `.pi/extensions` 或项目模型覆盖。此选项只是项目信任策略，不是工具执行沙箱。
 
-xiaoo 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark 实验。先使用现有 curl 安装流程完成客户端与 xiaoo Trace Collector 安装；更新客户端后重启服务，在 Agent 列表选择 `defaultagent · xiaoo · 可执行 N 台`，再选择对应运行主机。历史 Trace 中的 `xiaoo` 名称本身不表示该机器已具备实验执行能力。平台与运行主机可以分开部署，继续使用客户端安装时配置的平台地址。
+xiaoo 可以通过在线客户端执行普通生成 Trace 实验和 Benchmark 实验。先使用现有 curl 安装流程完成客户端与 xiaoo Trace Collector 安装；更新客户端后重启服务，在 Agent 列表选择 `xiaoo · xiaoo · 可执行 N 台`，再选择对应运行主机。界面将 Collector 上报的 `xiaoo` Trace 身份与 CLI 原生 `defaultagent` 执行 ID 合并展示，实际执行仍使用 `defaultagent`。历史 Trace 中的 `xiaoo` 名称本身不表示该机器已具备实验执行能力。平台与运行主机可以分开部署，继续使用客户端安装时配置的平台地址。
 
 客户端要求 xiaoo CLI 支持 JSON 输出、Agent 和标题参数；模型 `provider/model` 会拆为 xiaoo 的 provider 和 model 参数。执行错误、模型鉴权失败、无输出和超时会回写为明确失败，原有 Trace Collector 继续负责上传轨迹。若 CLI 返回 HTTP 401，请修复运行主机上的模型鉴权配置后重跑 Case。
 

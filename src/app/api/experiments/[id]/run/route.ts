@@ -30,14 +30,11 @@ function callbackServiceBaseUrls(req: Request): {
   executorCallbackOrigin: string;
 } {
   const runtimeConfig = defaultEvaluatorRuntimeConfigProvider.snapshot();
-  let publicCallbackOrigin = runtimeConfig.publicBaseUrl?.replace(/\/$/, '');
-  if (!publicCallbackOrigin) {
-    const url = new URL(req.url);
-    const host = req.headers.get('x-forwarded-host') || url.host;
-    const protocol = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
-    const prefix = String(process.env.NEXT_PUBLIC_URL_PREFIX || '').replace(/^\/?/, '/').replace(/\/$/, '');
-    publicCallbackOrigin = `${protocol}://${host}${prefix}`;
-  }
+  const url = new URL(req.url);
+  const host = req.headers.get('x-forwarded-host') || url.host;
+  const protocol = req.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
+  const prefix = String(process.env.NEXT_PUBLIC_URL_PREFIX || '').replace(/^\/?/, '/').replace(/\/$/, '');
+  const publicCallbackOrigin = `${protocol}://${host}${prefix}`;
   return {
     publicCallbackOrigin,
     executorCallbackOrigin: runtimeConfig.executorCallbackBaseUrl || publicCallbackOrigin,

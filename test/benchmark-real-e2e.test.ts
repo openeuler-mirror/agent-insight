@@ -29,7 +29,6 @@ const databasePath = path.resolve(
     || path.join(agentInsightHome, 'data', 'witty_insight.db'),
 )
 const externalEvaluatorOrigin = process.env.SWE_BENCH_E2E_EVALUATOR_BASE_URL?.replace(/\/$/, '') || ''
-const externalEvaluatorToken = process.env.SWE_BENCH_E2E_EVALUATOR_TOKEN || ''
 const controllerImage = process.env.SWE_BENCH_CONTROLLER_IMAGE || 'agent-insight-benchmark-evaluator:dev'
 const caseExternalId = process.env.SWE_BENCH_E2E_CASE || 'pallets__flask-5014'
 const model = process.env.SWE_BENCH_E2E_MODEL || 'deepseek/deepseek-v4-flash'
@@ -47,8 +46,6 @@ const skipReason = !enabled
       ? 'Docker daemon unavailable'
       : !controllerAvailable
         ? `Controller image missing: ${controllerImage}`
-        : Boolean(externalEvaluatorOrigin) !== Boolean(externalEvaluatorToken)
-          ? 'external Evaluator URL and Token must be configured together'
         : !opencodeAvailable
           ? 'OpenCode CLI unavailable'
           : false
@@ -139,9 +136,6 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
   process.env.AGENT_INSIGHT_DATA_DIR = agentInsightHome
   process.env.DATABASE_URL = `file:${databasePath}`
   process.env.PATH = `/usr/local/bin:${process.env.PATH || ''}`
-  const token = externalEvaluatorToken || `real-e2e-${randomBytes(24).toString('base64url')}`
-  process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN = token
-
   const [
     storage,
     createExperiment,
@@ -222,7 +216,6 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
   })
   const platform = await listen(platformServer, '0.0.0.0')
   publicOrigin = `http://host.docker.internal:${platform.port}`
-  process.env.AGENT_INSIGHT_PUBLIC_BASE_URL = publicOrigin
 
   const suffix = `${Date.now()}_${randomUUID().replaceAll('-', '').slice(0, 8)}`
   const clientId = `real_e2e_client_${suffix}`
@@ -270,7 +263,6 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
         '--add-host', 'host.docker.internal:host-gateway',
         '-v', '/var/run/docker.sock:/var/run/docker.sock',
         '--tmpfs', '/data:rw,nosuid,nodev',
-        '-e', `EVALUATOR_PLATFORM_TOKEN=${token}`,
         '-e', 'SWE_BENCH_IMAGE_SOURCE=official',
         '-e', 'SWE_BENCH_IMAGE_ARCH=auto',
         '-e', 'SWE_BENCH_ALLOW_NON_OFFICIAL=false',
@@ -288,7 +280,7 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
     }
     process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL = evaluatorOrigin
     const healthResponse = await waitFor(
-      async () => fetch(`${evaluatorOrigin}/health`, { headers: { authorization: `Bearer ${token}` } }).catch(() => null),
+      async () => fetch(`${evaluatorOrigin}/health`).catch(() => null),
       (response) => response?.ok === true,
       30_000,
     )
@@ -519,9 +511,7 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
       await fsp.rm(path.join(agentInsightHome, 'data', 'benchmark-evaluation-artifacts', evaluationId), { recursive: true, force: true })
     }
     await fsp.rm(executorBaseDir, { recursive: true, force: true })
-    delete process.env.AGENT_INSIGHT_PUBLIC_BASE_URL
     delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL
-    delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN
     await prisma.$disconnect()
   }
 })

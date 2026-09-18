@@ -67,7 +67,7 @@ scripts/evaluator-doctor.sh         Evaluator Doctor 与 Gold Smoke
 - 浏览器继续使用 `/api/experiments` 和既有实验详情路由；`/api/benchmark/v1/*` 只承载机器间协议和 Benchmark 专用只读结果。
 - Agent 只接收 Public Case 和完整任务说明；Gold Patch、测试补丁和测试名单只保留在平台与 Evaluator 边界内。
 - 执行客户端复用安装时保存的 `insightBaseUrl` 上传 Artifact 和回调，不新增第二套部署地址。
-- Evaluator 配置从 `data/config/benchmark-evaluator.env` 原子热加载；默认使用 Bearer Token，`none` 仅适用于双向网络已隔离的环境。
+- Evaluator 配置从 `data/config/benchmark-evaluator.env` 原子热加载；服务间不设应用层鉴权，双向访问边界由白名单、安全组或防火墙承担。
 - 同一实验当前按 Case 串行；Case 重跑创建新 Run，Official Harness 单项重评复用最新有效 Patch。
 - 聚合只读取重试图叶子，并以冻结的 `expectedCaseCount` 作为分母，避免失败或历史尝试被静默忽略。
 

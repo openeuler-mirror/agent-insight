@@ -200,7 +200,11 @@ export async function POST(
         }),
       ]);
       const runtime = defaultEvaluatorRuntimeConfigProvider.snapshot();
-      const callbackOrigin = runtime.publicBaseUrl?.replace(/\/$/, '') || new URL(req.url).origin;
+      const requestUrl = new URL(req.url);
+      const callbackHost = req.headers.get('x-forwarded-host') || requestUrl.host;
+      const callbackProtocol = req.headers.get('x-forwarded-proto') || requestUrl.protocol.replace(':', '');
+      const callbackPrefix = String(process.env.NEXT_PUBLIC_URL_PREFIX || '').replace(/^\/?/, '/').replace(/\/$/, '');
+      const callbackOrigin = `${callbackProtocol}://${callbackHost}${callbackPrefix}`;
       const started = await startBenchmarkExperiment({
         experimentId: id,
         user: username,

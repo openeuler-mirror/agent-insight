@@ -53,12 +53,8 @@ function assertCompletionAcknowledgement(body, completion) {
 }
 
 class AgentInsightPlatformClient {
-  constructor(token, fetchImpl = fetch, authMode = 'token', platformBaseUrl = '') {
-    if (!['token', 'none'].includes(authMode)) throw new Error('EVALUATOR_AUTH_MODE must be token or none')
-    if (authMode === 'token' && !token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
-    this.token = token
+  constructor(fetchImpl = fetch, platformBaseUrl = '') {
     this.fetch = fetchImpl
-    this.authMode = authMode
     this.platformBaseUrl = String(platformBaseUrl || '').replace(/\/$/, '')
     if (this.platformBaseUrl) {
       let configured
@@ -84,10 +80,6 @@ class AgentInsightPlatformClient {
     return `${this.requestPlatformBaseUrl(request)}/api/benchmark/v1/evaluations/${encodeURIComponent(request.runId)}`
   }
 
-  authorizationHeaders() {
-    return this.authMode === 'token' ? { authorization: `Bearer ${this.token}` } : {}
-  }
-
   async responseJson(response, code) {
     const text = (await response.text()).slice(0, 64 * 1024)
     let body = {}
@@ -110,7 +102,6 @@ class AgentInsightPlatformClient {
         method: 'GET',
         redirect: 'error',
         headers: {
-          ...this.authorizationHeaders(),
           'x-agent-insight-evaluation-id': request.runId,
         },
         signal: AbortSignal.timeout(30_000),
@@ -133,7 +124,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/progress`, {
       method: 'POST',
       redirect: 'error',
-      headers: { ...this.authorizationHeaders(), 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(event),
       signal: AbortSignal.timeout(10_000),
     })
@@ -157,7 +148,6 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/artifacts`, {
       method: 'POST',
       redirect: 'error',
-      headers: this.authorizationHeaders(),
       body: form,
       signal: AbortSignal.timeout(60_000),
     })
@@ -172,7 +162,7 @@ class AgentInsightPlatformClient {
     const response = await this.fetch(`${this.evaluationCallbackBaseUrl(request)}/complete`, {
       method: 'POST',
       redirect: 'error',
-      headers: { ...this.authorizationHeaders(), 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(completion),
       signal: AbortSignal.timeout(30_000),
     })
