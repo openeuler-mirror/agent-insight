@@ -248,6 +248,10 @@ bash scripts/stop.sh
 
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
+   点击任意一条 Trace，可查看 Trace 详情。
+
+   <p align="center"><img src="docs/images/tracedetail.png" alt="Trace详情" /></p>
+
 ---
 
 ## 🧭 上手演练 — Skill 生成 → 评测 → 优化
