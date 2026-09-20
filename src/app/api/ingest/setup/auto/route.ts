@@ -12,7 +12,6 @@ import {
 import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
 import {
     parseFrameworks,
-    parseGoalPlusHosts,
     resolveInstallProfile,
     type GoalPlusHost,
 } from '@/lib/ingest/setup/install-profile';
@@ -45,10 +44,7 @@ export async function GET(request: Request) {
     const apiKey = searchParams.get('apiKey');
     const hostParam = searchParams.get('host');
     const rawFrameworks = searchParams.get('frameworks');
-    const installProfile = resolveInstallProfile(
-        parseFrameworks(rawFrameworks),
-        parseGoalPlusHosts(searchParams.get('goalPlusHosts')),
-    );
+    const installProfile = resolveInstallProfile(parseFrameworks(rawFrameworks));
     const preselected = installProfile.effectiveFrameworks;
     const llamaIndexVenv = (searchParams.get('llamaindexVenv') || '')
         .replace(/[\0\r\n]/g, '')
@@ -265,6 +261,14 @@ if [ -f "$SELECTOR_RESULT" ]; then
 else
     SELECTED_FRAMEWORKS=""
 fi
+fi
+
+if [[ ",$SELECTED_FRAMEWORKS," == *",goal-plus,"* ]]; then
+    GOAL_PLUS_HOSTS="pi"
+    if [[ ",$SELECTED_FRAMEWORKS," != *",pi-agent,"* ]]; then
+        SELECTED_FRAMEWORKS="$SELECTED_FRAMEWORKS,pi-agent"
+        AUTO_ADDED_FRAMEWORKS="pi-agent"
+    fi
 fi
 
 # Set installation flags based on selection
@@ -756,9 +760,9 @@ if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     rm -f "$PI_INSTALLER"
 fi
 
-# 6.31 Install optional Agent Insight Goal Plus semantic collector
+# 6.31 Install Agent Insight Goal Plus worker and relationship collector
 if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
-    echo "⏬ Installing optional Agent Insight Goal Plus semantic collector..."
+    echo "⏬ Installing Agent Insight Goal Plus worker and relationship collector..."
     export AGENT_INSIGHT_API_KEY
     export AGENT_INSIGHT_BASE_URL
     export AGENT_INSIGHT_GOAL_PLUS_HOSTS="$GOAL_PLUS_HOSTS"
@@ -766,7 +770,7 @@ if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
     if curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -o "$GOAL_PLUS_INSTALLER" && sh "$GOAL_PLUS_INSTALLER"; then
         GOAL_PLUS_SETUP_OK=true
     else
-        echo "Warning: optional Goal Plus semantic enrichment is unavailable; installed Pi/Codex Trace collectors were left unchanged."
+        echo "Warning: Goal Plus worker and relationship collection is unavailable; the installed Pi main Trace collector was left unchanged."
     fi
     rm -f "$GOAL_PLUS_INSTALLER"
 fi
@@ -781,10 +785,10 @@ if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then
         if node "$GOAL_PLUS_COMMAND" attach "$GOAL_PLUS_SOURCE_PATH" && node "$GOAL_PLUS_COMMAND" scan && node "$GOAL_PLUS_COMMAND" start; then
             GOAL_PLUS_SOURCE_OK=true
         else
-            echo "Warning: optional Goal Plus semantic enrichment setup failed; native Pi/Codex Trace collection is unchanged."
+            echo "Warning: Goal Plus worker and relationship setup failed; native Pi main Trace collection is unchanged."
         fi
     else
-        echo "ℹ️  No .gp found under the setup working directory. Native Pi/Codex Trace collection does not require it; attach one later only for semantic enrichment."
+        echo "ℹ️  No .gp found under the setup working directory. Main native Trace remains available; attach the current Goal Plus .gp to collect worker traces and relationships."
     fi
 fi
 
@@ -1055,7 +1059,6 @@ fi
 echo ""
 GOAL_PLUS_TRACE_READY=true
 if [[ ",$GOAL_PLUS_HOSTS," == *",pi,"* ]] && [ "$PI_AGENT_SETUP_OK" != "true" ]; then GOAL_PLUS_TRACE_READY=false; fi
-if [[ ",$GOAL_PLUS_HOSTS," == *",codex,"* ]] && [ "$CODEX_SETUP_OK" != "true" ]; then GOAL_PLUS_TRACE_READY=false; fi
 if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then
     echo "❌ Agent-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"
 elif [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -z "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_SETUP_OK" != "true" ]; then
@@ -1098,10 +1101,9 @@ if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
 fi
 if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" = "true" ]; then echo "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS"; fi
 if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then echo "  ❌ Goal Plus native Trace: collector setup is not ready"; fi
-if [ "$GOAL_PLUS_SOURCE_OK" = "true" ]; then echo "  ✅ Goal Plus semantic enrichment: workspace attached; watcher started"; fi
-if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ "$GOAL_PLUS_SOURCE_OK" != "true" ]; then echo "  ℹ️  Goal Plus semantic enrichment: collector installed; no workspace attached (optional)"; fi
-if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ "$GOAL_PLUS_SETUP_OK" != "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then echo "  ℹ️  Goal Plus semantic enrichment: unavailable (optional; native Trace collection is independent)"; fi
-if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ "$GOAL_PLUS_SETUP_OK" != "true" ] && [ -z "$GOAL_PLUS_HOSTS" ]; then echo "  ⚠️  Goal Plus semantic collector: not installed"; fi
+if [ "$GOAL_PLUS_SOURCE_OK" = "true" ]; then echo "  ✅ Goal Plus worker relationships: workspace attached; watcher started"; fi
+if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ "$GOAL_PLUS_SOURCE_OK" != "true" ]; then echo "  ⚠️  Goal Plus worker relationships: collector installed; attach a current .gp workspace"; fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ "$GOAL_PLUS_SETUP_OK" != "true" ]; then echo "  ⚠️  Goal Plus worker and relationship collector: not installed"; fi
 if [ -n "$AUTO_ADDED_FRAMEWORKS" ]; then
     echo "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS"
 fi
@@ -1160,7 +1162,7 @@ if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ]; t
     echo "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus"
 fi
 if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
-    echo "      Optional semantic enrichment: goal-plus-collector attach /absolute/path/to/workspace/.gp && goal-plus-collector scan && goal-plus-collector start"
+    echo "      Worker relationship collection: goal-plus-collector attach /absolute/path/to/workspace/.gp && goal-plus-collector scan && goal-plus-collector start"
 fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  9. Start a new dsh session"
@@ -1343,6 +1345,14 @@ function generatePowerShellScript(
         '} else {',
         '    $SELECTED_FRAMEWORKS = ""',
         '}',
+        '}',
+        '',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
+        '    $GOAL_PLUS_HOSTS = "pi"',
+        '    if ($SELECTED_FRAMEWORKS -notmatch "(^|,)pi-agent(,|$)") {',
+        '        $SELECTED_FRAMEWORKS += ",pi-agent"',
+        '        $AUTO_ADDED_FRAMEWORKS = "pi-agent"',
+        '    }',
         '}',
         '',
         '# Set installation flags based on selection',
@@ -1818,9 +1828,9 @@ function generatePowerShellScript(
         '    }',
         '}',
         '',
-        '# 6.31 Install optional Agent Insight Goal Plus semantic collector',
+        '# 6.31 Install Agent Insight Goal Plus worker and relationship collector',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
-        '    Write-Host "⏬ Installing optional Agent Insight Goal Plus semantic collector..."',
+        '    Write-Host "⏬ Installing Agent Insight Goal Plus worker and relationship collector..."',
         '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
         '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
         '    $env:AGENT_INSIGHT_GOAL_PLUS_HOSTS = $GOAL_PLUS_HOSTS',
@@ -1831,10 +1841,10 @@ function generatePowerShellScript(
         '        if ($LASTEXITCODE -eq 0) {',
         '            $GOAL_PLUS_SETUP_OK = $true',
         '        } else {',
-        '            Write-Host "Warning: optional Goal Plus semantic enrichment is unavailable; installed Pi/Codex Trace collectors were left unchanged."',
+        '            Write-Host "Warning: Goal Plus worker and relationship collection is unavailable; the installed Pi main Trace collector was left unchanged."',
         '        }',
         '    } catch {',
-        '        Write-Host "Warning: optional Goal Plus semantic enrichment is unavailable; installed Pi/Codex Trace collectors were left unchanged."',
+        '        Write-Host "Warning: Goal Plus worker and relationship collection is unavailable; the installed Pi main Trace collector was left unchanged."',
         '    } finally {',
         '        Remove-Item -LiteralPath $goalPlusInstaller -Force -ErrorAction SilentlyContinue',
         '    }',
@@ -1853,10 +1863,10 @@ function generatePowerShellScript(
         '        if ($LASTEXITCODE -eq 0) {',
         '            $GOAL_PLUS_SOURCE_OK = $true',
         '        } else {',
-        '            Write-Host "Warning: optional Goal Plus semantic enrichment setup failed; native Pi/Codex Trace collection is unchanged."',
+        '            Write-Host "Warning: Goal Plus worker and relationship setup failed; native Pi main Trace collection is unchanged."',
         '        }',
         '    } else {',
-        '        Write-Host "ℹ️  No .gp found under the setup working directory. Native Pi/Codex Trace collection does not require it; attach one later only for semantic enrichment."',
+        '        Write-Host "ℹ️  No .gp found under the setup working directory. Main native Trace remains available; attach the current Goal Plus .gp to collect worker traces and relationships."',
         '    }',
         '}',
         '',
@@ -2114,7 +2124,6 @@ function generatePowerShellScript(
         'Write-Host ""',
         '$GOAL_PLUS_TRACE_READY = $true',
         'if ((",$GOAL_PLUS_HOSTS," -match ",pi,") -and -not $PI_AGENT_SETUP_OK) { $GOAL_PLUS_TRACE_READY = $false }',
-        'if ((",$GOAL_PLUS_HOSTS," -match ",codex,") -and -not $CODEX_SETUP_OK) { $GOAL_PLUS_TRACE_READY = $false }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) {',
         '    Write-Host "❌ Skill-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"',
         '} elseif (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_SETUP_OK) {',
@@ -2151,10 +2160,9 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
         'if ($GOAL_PLUS_HOSTS -and $GOAL_PLUS_TRACE_READY) { Write-Host "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS" }',
         'if ($GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) { Write-Host "  ❌ Goal Plus native Trace: collector setup is not ready" }',
-        'if ($GOAL_PLUS_SOURCE_OK) { Write-Host "  ✅ Goal Plus semantic enrichment: workspace attached; watcher started" }',
-        'if ($GOAL_PLUS_SETUP_OK -and -not $GOAL_PLUS_SOURCE_OK) { Write-Host "  ℹ️  Goal Plus semantic enrichment: collector installed; no workspace attached (optional)" }',
-        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK -and $GOAL_PLUS_HOSTS) { Write-Host "  ℹ️  Goal Plus semantic enrichment: unavailable (optional; native Trace collection is independent)" }',
-        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK -and -not $GOAL_PLUS_HOSTS) { Write-Host "  ⚠️  Goal Plus semantic collector: not installed" }',
+        'if ($GOAL_PLUS_SOURCE_OK) { Write-Host "  ✅ Goal Plus worker relationships: workspace attached; watcher started" }',
+        'if ($GOAL_PLUS_SETUP_OK -and -not $GOAL_PLUS_SOURCE_OK) { Write-Host "  ⚠️  Goal Plus worker relationships: collector installed; attach a current .gp workspace" }',
+        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK) { Write-Host "  ⚠️  Goal Plus worker and relationship collector: not installed" }',
         'if ($AUTO_ADDED_FRAMEWORKS) { Write-Host "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS" }',
         'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
         '',
@@ -2198,7 +2206,7 @@ function generatePowerShellScript(
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
-        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "      Optional semantic enrichment: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "      Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 

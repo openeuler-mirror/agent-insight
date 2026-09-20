@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `6aa539e905e7909862cb4bcd3791b66b7d2b1f90` (`6aa539e9`) |
-| Branch | `bench-9-16` |
+| Commit | `7760bb8c60ee7bcad2dd00b409758afba25c6f27` (`7760bb8c`) |
+| Branch | `goal_plus` |
 | Date | 2026-09-16 |
 | Author | openeuler-ci-bot |
-| Subject | `!410 完善 Benchmark 端到端评测与结果展示，补充 Benchmark 接入、扩展和部署文档` |
-| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
+| Subject | `!411 修复客户端安装包缺失问题` |
+| Documentation overlay | 工作树补充重构后 Goal Plus 的 Pi 主 Trace、worker Trace 与 reported collaboration 接入。 |
 
 ### 旧快照至当前提交的变更摘要
 
@@ -25,6 +25,8 @@
 当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；支持显式 Session 到 Trace 绑定、原始调用步骤定位、迟到 Trace 自动重算，以及 Goal Plus 逻辑主节点到 worker 成员的服务端投影。Goal Plus 仅在唯一主 Trace 时关联具体 Execution，active native Session 唯一对应的 passive canonical main 优先于历史 main，多候选仍保持歧义，且不修改原生树或完整性口径；独立协作入口暂不开放，通用 Trace 的仅主列表隐藏已投影 worker，详情直接从既有 Goal Plus 精确关联只读生成带来源标识的 TASK / 子 Agent 树。当前 passive canonical main 与 Pi 的 `<nativeSessionId>__taskN` 主任务仅在明确 `/goal-plus` 且唯一命中时允许只读显示兜底，通用 reported collaboration 行为不变。
 
 本轮工作树补充 Goal Plus 重关联事务化、同 source 并发合并、当前 Search run 归属收敛，以及列表/详情共用成员查询和懒加载正文版本校验。历史采集数据、原生父子关系和 reported 跨 Session 协议不变；对应更新 `12-goal-plus-observability.md`、`13-cross-session-collaboration.md`，其他历史指南未重新生成。
+
+> 2026-09-20 working-tree overlay：Goal Plus 适配重构后的统一 session 格式，仅接受 `agent_harness`、`runtime_provider`、`execution_scope` 和 `session_handle`，不兼容旧 `host` / `host_handle`。Pi collector 通过既有 collaboration sessions API 上报实际 `/goal-plus` task 的主绑定；Goal Plus collector 被动导入 direct/ThinkThread Pi worker Trace，并通过既有 sessions/events API 上报 worker 绑定和主从事件。查询层以 reported collaboration 将 worker 投影到 Pi 主 Trace 下。新版 collector 不再上传或分发 semantic snapshot spool；服务端历史语义数据路径保持可读，但不是本次适配的兼容目标。
 
 > 2026-09-08 working-tree overlay：Benchmark 执行目标复用普通实验的客户端动态能力发现，按 `clientId + platform + agent` 返回并二次校验候选；SWE-bench Manifest 不再固定 OpenCode，所选平台动态要求 `agent-runtime/{platform}/v1`。Benchmark Agent 任务改由现有客户端 `RUN_BENCHMARK_CASE` 白名单指令经 WSS/HTTPS 长轮询下发，常驻客户端直接调用本地 Runner，不再保存或配置 `executorBaseUrl`/监听地址；Git 工作区、Patch、Outbox、独立 Evaluator 和 Official Harness 链路不变。
 
@@ -72,7 +74,7 @@
 
 > 2026-09-16 working-tree overlay：本轮仅更新安装 bundle 契约。源码启动导出完整项目根目录，RAS/client bundle 复用该目录并在白名单文件缺失时返回 503；构建恢复 npm 的 prebuild 生命周期。其他指南未重新审计。
 
-**如何更新：** `git diff 6aa539e9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 7760bb8c HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -87,8 +89,8 @@
 - [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
-- [12-goal-plus-observability.md](12-goal-plus-observability.md)：Goal Plus 双通道观测覆盖层、collector、语义 ingest、领域模型、确定性关联、完整度与 UI 契约。
-- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 关系事件、端点解析、查询 API 与 Goal Plus 服务端投影。
+- [12-goal-plus-observability.md](12-goal-plus-observability.md)：重构后 Goal Plus 的 Pi 主绑定、worker OTLP、关系 outbox 与主从 Trace 展示契约。
+- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 绑定/关系事件、端点解析、查询 API 与 reported Goal Plus 投影。
 - [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[整体服务安装指南](benchmark/service-deployment-guide.md)。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。

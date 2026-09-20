@@ -4,6 +4,7 @@
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { safeContent, sha256 } = require("../../shared/trace-transport.cjs");
+const { goalPlusWorkerRelationship } = require("../../shared/collaboration-transport.cjs");
 
 const FORMAT = "agent-insight.goal-plus-snapshot";
 const VERSION = 1;
@@ -11,7 +12,6 @@ const MAX_FILE_BYTES = 32 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 240 * 1024;
 const PATH_KEYS = /(?:^|_)(path|paths|workspace|session_file|transcript_path|log_paths|report_path|html_report_path|artifact_path)$/i;
 const HIDDEN_KEYS = /(?:hidden|gold|standard_answer|reference_answer|secret|password|api_key|authorization|private_key)/i;
-const TERMINAL_GOAL_STATES = new Set(["complete", "completed", "blocked", "abandoned"]);
 
 function isHiddenKey(key) {
   return HIDDEN_KEYS.test(key) || /^(?:token|auth|cookie)$/i.test(key);
@@ -144,14 +144,7 @@ function parentKeys(kind, payload, relative, context) {
   return result;
 }
 
-function goalPayload(source, mainSessions = []) {
-  const latestMain = mainSessions.at(-1);
-  const activeSession = source.active_session || (latestMain ? {
-    host: "pi",
-    session_id: latestMain.canonicalSessionId,
-    native_session_id: latestMain.nativeSessionId,
-    state: source.status,
-  } : undefined);
+function goalPayload(source) {
   return normalize({
     goal_plus_id: source.goal_plus_id,
     current_revision: source.goal_revision,
@@ -165,16 +158,7 @@ function goalPayload(source, mainSessions = []) {
     work_items: source.work_items,
     search_tasks: source.search_tasks,
     final_checks: source.final_checks,
-    active_session: activeSession ? {
-      ...activeSession,
-      main_sessions: mainSessions.map(session => ({
-        host: "pi",
-        session_id: session.canonicalSessionId,
-        native_session_id: session.nativeSessionId,
-        invocation_id: session.invocationId,
-        marker_id: session.markerId,
-      })),
-    } : undefined,
+    active_session: source.active_session,
     next_action: source.next_action,
     created_at: source.created_at,
     updated_at: source.updated_at,
@@ -196,30 +180,29 @@ function candidatePayload(source) {
 }
 
 function sessionPayload(source) {
-  const metadata = source.host_handle?.metadata || {};
+  const metadata = source.session_handle.metadata || {};
   return normalize({
     agent_session_id: source.agent_session_id,
     run_id: source.run_id,
     candidate_id: source.candidate_id,
-    host: source.host,
+    agent_harness: source.agent_harness,
+    runtime_provider: source.runtime_provider,
+    execution_scope: source.execution_scope,
     role: source.directive?.role || source.launch?.role || "candidate-worker",
-    native_session_id: source.host_handle?.external_id || metadata.native_session_id,
-    task_name: source.host_handle?.task_name || source.launch?.task_name,
+    native_session_id: source.session_handle.external_id,
     transcript_fingerprint: metadata.transcript_fingerprint,
-    host_handle: {
-      host: source.host_handle?.host,
-      external_id: source.host_handle?.external_id,
-      task_name: source.host_handle?.task_name,
-      nickname: source.host_handle?.nickname,
+    session_handle: {
+      agent_harness: source.session_handle.agent_harness,
+      runtime_provider: source.session_handle.runtime_provider,
+      external_id: source.session_handle.external_id,
+      nickname: source.session_handle.nickname,
     },
     selected_model: source.selected_model,
     usage: metadata.usage || metadata.pi_metrics?.usage,
     host_metadata: {
-      continuation: metadata.continuation || source.launch?.continuation,
+      dispatch_count: metadata.dispatch_count,
+      terminal_state: metadata.terminal_state,
       pi_metrics: metadata.pi_metrics ? normalize(metadata.pi_metrics) : undefined,
-      codex_conversation_id: metadata.codex_conversation_id || metadata.conversation_id,
-      codex_turn_id: metadata.codex_turn_id || metadata.turn_id,
-      codex_execution_id: metadata.codex_execution_id || metadata.execution_id,
     },
     counters: source.counters,
     created_at: source.created_at,
@@ -227,10 +210,47 @@ function sessionPayload(source) {
   });
 }
 
-async function piWorkerSessionFile(root, source) {
-  const metadata = source.host_handle?.metadata || {};
+async function existingRegularFile(root, candidate) {
+  if (!candidate) return undefined;
+  const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(root, candidate);
+  try {
+    const stat = await fsp.lstat(resolved);
+    return stat.isFile() && !stat.isSymbolicLink() ? candidate : undefined;
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function thinkThreadArchive(root, source) {
+  const diagnosticsRoot = path.join(root, "host-logs", "session-diagnostics");
+  const externalId = source.session_handle.external_id;
+  const direct = externalId ? path.join(diagnosticsRoot, externalId) : undefined;
+  if (direct) {
+    const index = path.join(direct, "index.json");
+    if (await existingRegularFile(root, index)) return direct;
+  }
+  const entries = await fsp.readdir(diagnosticsRoot, { withFileTypes: true }).catch(error => {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const directory = path.join(diagnosticsRoot, entry.name);
+    try {
+      const index = JSON.parse((await safeStableRead(root, path.join(directory, "index.json"))).bytes.toString("utf8"));
+      if (index?.identity?.agent_session_id === source.agent_session_id) return directory;
+    } catch (error) {
+      if (error?.code !== "ENOENT") continue;
+    }
+  }
+  return undefined;
+}
+
+async function piWorkerSessionSource(root, source) {
+  const metadata = source.session_handle.metadata || {};
   const declared = metadata.session_file || metadata.pi_metrics?.session_file;
-  const externalId = source.host_handle?.external_id;
+  const externalId = source.session_handle.external_id;
   const hostSessionDir = path.join(root, "host-sessions", "pi");
   const candidates = [
     declared,
@@ -242,13 +262,7 @@ async function piWorkerSessionFile(root, source) {
       : undefined,
   ].filter(Boolean);
   for (const candidate of candidates) {
-    const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(root, candidate);
-    try {
-      const stat = await fsp.lstat(resolved);
-      if (stat.isFile() && !stat.isSymbolicLink()) return candidate;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
+    if (await existingRegularFile(root, candidate)) return { sessionFile: candidate, sessionFormat: "pi-jsonl" };
   }
   if (externalId) {
     const matches = (await fsp.readdir(hostSessionDir, { withFileTypes: true }).catch(error => {
@@ -259,10 +273,37 @@ async function piWorkerSessionFile(root, source) {
         entry.name === `${externalId}.jsonl` || entry.name.endsWith(`_${externalId}.jsonl`)
       ))
       .map(entry => path.join(hostSessionDir, entry.name));
-    if (matches.length === 1) return matches[0];
+    if (matches.length === 1) return { sessionFile: matches[0], sessionFormat: "pi-jsonl" };
     if (matches.length > 1) throw new Error(`multiple Pi session files match ${externalId}`);
   }
-  return declared;
+  if (source.runtime_provider === "thinkthread") {
+    const archive = await thinkThreadArchive(root, source);
+    if (archive) return { sessionFile: archive, sessionFormat: "pi-diagnostic-archive" };
+  }
+  return undefined;
+}
+
+function initialPiStartInvocation(goal) {
+  const invocations = invocationEntries(goal)
+    .filter(item => item.agent_harness === "pi" && item.action === "start" && typeof item.session_id === "string")
+    .sort((left, right) => String(left.invoked_at || "").localeCompare(String(right.invoked_at || "")));
+  return invocations[0];
+}
+
+function hasCurrentAgentSessionSchema(source) {
+  const expectedScope = source?.runtime_provider === "thinkthread" ? "thinkthread_private" : "native_root";
+  return ["pi", "codex"].includes(source?.agent_harness)
+    && ["direct", "thinkthread"].includes(source.runtime_provider)
+    && source.execution_scope === expectedScope
+    && source.session_handle
+    && typeof source.session_handle === "object"
+    && !Array.isArray(source.session_handle)
+    && source.session_handle.agent_harness === source.agent_harness
+    && source.session_handle.runtime_provider === source.runtime_provider;
+}
+
+function supportsCurrentAgentSession(source) {
+  return source?.agent_harness === "pi" && hasCurrentAgentSessionSchema(source);
 }
 
 function frozenSpecPayload(source) {
@@ -308,132 +349,10 @@ async function walk(root, relative = "") {
   return files;
 }
 
-function piProjectSessionDir(homeDir, workspaceRoot) {
-  const normalized = path.resolve(workspaceRoot)
-    .replaceAll("\\", "/")
-    .replace(/^\/+/, "")
-    .replace(/[/:]/g, "-");
-  return path.join(homeDir, ".pi", "agent", "sessions", `--${normalized}--`);
-}
-
-function completeJsonlRecords(text) {
-  const lines = text.split(/\r?\n/);
-  if (!text.endsWith("\n")) lines.pop();
-  const records = [];
-  for (let line = 0; line < lines.length; line += 1) {
-    if (!lines[line]) continue;
-    try { records.push({ line, record: JSON.parse(lines[line]) }); }
-    catch { /* Native parser reports malformed records when importing the selected segment. */ }
-  }
-  return records;
-}
-
-function piNativeSessionId(records, filePath) {
-  for (const { record } of records) {
-    if (record?.type !== "session") continue;
-    const value = record.id || record.sessionId || record.session_id;
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return path.basename(filePath, ".jsonl");
-}
-
 function invocationEntries(goal) {
   return Array.isArray(goal.host_command_invocations)
     ? goal.host_command_invocations.filter(item => item && typeof item === "object")
     : [];
-}
-
-function markerGoalId(record) {
-  const value = record?.details?.goal_plus_id
-    || record?.details?.goalPlusId
-    || record?.data?.goal_plus_id
-    || record?.data?.goalPlusId
-    || record?.message?.details?.goal_plus_id
-    || record?.message?.details?.goalPlusId;
-  return typeof value === "string" ? value : undefined;
-}
-
-function isGoalPlusMarker(record) {
-  const type = record?.customType || record?.custom_type || record?.message?.customType || record?.message?.custom_type;
-  return record?.type === "custom_message"
-    && typeof type === "string"
-    && ["goal-plus-created", "goal-plus-started", "goal-plus-resumed"].includes(type);
-}
-
-function mainRuntimeState(goal) {
-  const businessState = String(goal?.status || "").toLowerCase();
-  return TERMINAL_GOAL_STATES.has(businessState) ? "completed" : undefined;
-}
-
-function matchingGoalForMarker(record, goals) {
-  const directGoalId = markerGoalId(record);
-  if (directGoalId && goals.has(directGoalId)) return { goal: goals.get(directGoalId) };
-  const recordId = record?.id || record?.entryId || record?.entry_id;
-  for (const goal of goals.values()) {
-    const invocation = invocationEntries(goal).find(item => (
-      recordId && (item.native_entry_id === recordId || item.nativeEntryId === recordId)
-    ));
-    if (invocation) return { goal, invocation };
-  }
-  return undefined;
-}
-
-async function discoverPiMainSessions(source, goalRecords, homeDir) {
-  if (!homeDir || goalRecords.size === 0) return { sessions: [], diagnostics: [] };
-  const workspaceRoot = path.dirname(source.root);
-  const sessionDir = piProjectSessionDir(homeDir, workspaceRoot);
-  const entries = await fsp.readdir(sessionDir, { withFileTypes: true }).catch(error => {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  });
-  const sessions = [];
-  const diagnostics = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
-    const sessionFile = path.join(sessionDir, entry.name);
-    try {
-      const read = await safeStableRead(source.root, sessionFile, {
-        allowedRoots: [sessionDir],
-        maxBytes: null,
-      });
-      const records = completeJsonlRecords(read.bytes.toString("utf8"));
-      const markers = records
-        .map(({ line, record }) => ({ line, record, match: matchingGoalForMarker(record, goalRecords) }))
-        .filter(item => item.match && isGoalPlusMarker(item.record));
-      const nativeSessionId = piNativeSessionId(records, sessionFile);
-      for (let index = 0; index < markers.length; index += 1) {
-        const marker = markers[index];
-        const goal = marker.match.goal;
-        const invocation = marker.match.invocation || invocationEntries(goal).find(item => (
-          item.native_entry_id === marker.record.id || item.nativeEntryId === marker.record.id
-        ));
-        const markerId = String(marker.record.id || invocation?.native_entry_id || marker.line);
-        const agentSessionId = `main:${goal.goal_plus_id}:${nativeSessionId}:${markerId}`;
-        sessions.push({
-          sourceId: source.sourceId,
-          agentSessionId,
-          canonicalSessionId: `goal-plus:${source.sourceId}:${agentSessionId}`,
-          nativeSessionId,
-          goalId: goal.goal_plus_id,
-          role: "main",
-          sessionKind: "main",
-          sessionFile,
-          allowedRoots: [sessionDir],
-          startLine: marker.line,
-          endLine: markers[index + 1]?.line,
-          input: `/goal-plus ${String(goal.raw_goal || "")}`.trim(),
-          invocationId: invocation?.invocation_id || invocation?.invocationId,
-          markerId,
-          terminalState: mainRuntimeState(goal),
-          businessState: goal.status,
-        });
-      }
-    } catch (error) {
-      diagnostics.push({ relativePath: entry.name, code: "unreadable_pi_main_session", message: error.message });
-    }
-  }
-  sessions.sort((left, right) => left.sessionFile.localeCompare(right.sessionFile) || left.startLine - right.startLine);
-  return { sessions, diagnostics };
 }
 
 async function parseGoalEvents(source, relative, bytes, stat) {
@@ -470,7 +389,7 @@ async function parseGoalEvents(source, relative, bytes, stat) {
   return snapshots;
 }
 
-async function parseGoalPlusRoot(source, options = {}) {
+async function parseGoalPlusRoot(source) {
   const root = source.root;
   const files = (await walk(root)).sort();
   const diagnostics = [];
@@ -494,16 +413,9 @@ async function parseGoalPlusRoot(source, options = {}) {
       diagnostics.push({ relativePath: relative, code: "unreadable_state", message: error.message });
     }
   }
-  const mainDiscovery = await discoverPiMainSessions(source, context.goals, options.homeDir);
-  diagnostics.push(...mainDiscovery.diagnostics);
-  const mainSessionsByGoal = new Map();
-  for (const session of mainDiscovery.sessions) {
-    const existing = mainSessionsByGoal.get(session.goalId) || [];
-    existing.push(session);
-    mainSessionsByGoal.set(session.goalId, existing);
-  }
   const snapshots = [];
-  const piSessions = [...mainDiscovery.sessions];
+  const piSessions = [];
+  const relationships = [];
   for (const relative of files) {
     const kind = kindFor(relative);
     if (!kind) continue;
@@ -516,8 +428,17 @@ async function parseGoalPlusRoot(source, options = {}) {
       const record = rawRecords.get(relative);
       if (!record) continue;
       const { raw, bytes, stat } = record;
+      if (kind === "agent_session" && !hasCurrentAgentSessionSchema(raw)) {
+        diagnostics.push({
+          relativePath: relative,
+          code: "unsupported_goal_plus_schema",
+          message: `Agent session ${raw.agent_session_id || path.basename(relative)} does not use the current agent_harness/runtime_provider/session_handle schema`,
+        });
+        continue;
+      }
+      if (kind === "agent_session" && !supportsCurrentAgentSession(raw)) continue;
       let payload;
-      if (kind === "goal") payload = goalPayload(raw, mainSessionsByGoal.get(raw.goal_plus_id) || []);
+      if (kind === "goal") payload = goalPayload(raw);
       else if (kind === "run") payload = runPayload(raw, context.specs.get(raw.frozen_spec_id));
       else if (kind === "candidate") payload = candidatePayload(raw);
       else if (kind === "agent_session") payload = sessionPayload(raw);
@@ -540,29 +461,32 @@ async function parseGoalPlusRoot(source, options = {}) {
         payload,
         redaction: { contentMode: "bounded", truncatedFields: [], removedFields: ["absolute-paths", "logs", "secrets", "hidden-evaluation-content"] },
       }));
-      const sessionHost = raw.host || raw.host_handle?.host;
-      if (kind === "agent_session" && ["pi-rpc", "pi", "pi-agent"].includes(sessionHost)) {
-        const sessionFile = await piWorkerSessionFile(root, raw);
-        if (sessionFile) {
-          const metadata = raw.host_handle?.metadata || {};
+      if (kind === "agent_session") {
+        const sessionSource = await piWorkerSessionSource(root, raw);
+        if (sessionSource) {
+          const metadata = raw.session_handle.metadata || {};
           const runnerFailed = metadata.runner_failed === true;
           const timedOut = metadata.timed_out === true;
-          const progressStatus = String(metadata.progress_handoff?.status || "").toLowerCase() || undefined;
+          const progressStatus = String(metadata.terminal_state || metadata.progress_handoff?.status || "").toLowerCase() || undefined;
           const exitCode = metadata.pi_metrics?.exit_code ?? metadata.exit_code;
-          const controlledTermination = sessionHost === "pi-rpc"
-            && !runnerFailed
+          const controlledTermination = !runnerFailed
             && !timedOut
             && progressStatus === "completed"
             && [-15, 143].includes(Number(exitCode));
-          piSessions.push({
+          const descriptor = {
             sourceId: source.sourceId,
             agentSessionId: raw.agent_session_id,
+            canonicalSessionId: `goal-plus:${source.sourceId}:${raw.agent_session_id}`,
             goalId: context.runGoals.get(raw.run_id),
             runId: raw.run_id,
             candidateId: raw.candidate_id,
             role: payload.role,
-            host: sessionHost,
-            sessionFile,
+            agentHarness: raw.agent_harness,
+            runtimeProvider: raw.runtime_provider,
+            executionScope: raw.execution_scope,
+            nativeSessionId: raw.session_handle.external_id,
+            sessionFile: sessionSource.sessionFile,
+            sessionFormat: sessionSource.sessionFormat,
             runnerFailed,
             timedOut,
             progressStatus,
@@ -576,11 +500,26 @@ async function parseGoalPlusRoot(source, options = {}) {
                 : progressStatus === "completed"
                   ? "completed"
                   : metadata.pi_metrics?.stop_reason
-                    || raw.status
-                    || raw.state,
+                    || metadata.terminal_state,
             exitCode,
-            errorMessage: metadata.error,
-          });
+            errorMessage: metadata.model_failure || metadata.error,
+          };
+          piSessions.push(descriptor);
+          const goal = context.goals.get(descriptor.goalId);
+          const invocation = goal && initialPiStartInvocation(goal);
+          if (goal && invocation) {
+            relationships.push(goalPlusWorkerRelationship(
+              invocation.session_id,
+              goal.goal_plus_id,
+              descriptor,
+            ));
+          } else {
+            diagnostics.push({
+              relativePath: relative,
+              code: "missing_pi_main_invocation",
+              message: `No Pi start invocation identifies the main session for ${raw.agent_session_id}`,
+            });
+          }
         }
         else diagnostics.push({
           relativePath: relative,
@@ -592,15 +531,17 @@ async function parseGoalPlusRoot(source, options = {}) {
       diagnostics.push({ relativePath: relative, code: "parse_failed", message: error.message });
     }
   }
-  return { snapshots, piSessions, diagnostics, scannedFiles: files.length };
+  return { snapshots, piSessions, relationships, diagnostics, scannedFiles: files.length };
 }
 
 module.exports = {
   contentHash,
   boundSnapshot,
-  discoverPiMainSessions,
+  hasCurrentAgentSessionSchema,
+  initialPiStartInvocation,
   parseGoalPlusRoot,
-  piProjectSessionDir,
+  piWorkerSessionSource,
   safeStableRead,
+  supportsCurrentAgentSession,
   snapshotId,
 };
