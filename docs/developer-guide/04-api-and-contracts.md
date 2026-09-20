@@ -62,6 +62,12 @@
 - **Query contract**: `search` 同时对 `Execution.id`、`taskId`、`query` 做包含匹配；`from` / `to` 接收 ISO 时间并作为闭区间边界；`tagIds` 接收逗号分隔的最多 20 个用户标签 ID，跨版本标签和业务标签使用 AND 语义；`pageSize` 上限 100。响应保持 `{ total, page, pageSize, items }`，其中 `total` 是应用全部筛选后的数量。
 - **Selection contract**: 前端分页和跨页全选必须复用同一组筛选参数；筛选条件只影响已有 Trace 候选，不持久化为 `Experiment.watchMode` 的监听规则。
 
+### 实验自动监听与 Case 追加
+
+- **Entry**: Node 启动时注册 `experiment-watch.ts:startExperimentWatcher`，约每 5 秒从数据库筛选当前用户、所选主 Agent、`Session.startTime > watchEnabledAt` 且链路状态为 `success` 的 Trace。无显式开始时间时 `Session.startTime` 使用首次入库默认值。
+- **Reuse**: 自动监听只传 Trace 标识给 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，复用手动追加的上下文加载、评测及正常重试，不重新执行原始 Trace。上传接口不再直接触发监听。
+- **Idempotency**: `addEvalExperimentCase(experimentId, input)` 仍返回新建或复用的 Case ID，并保留参考数据回填；可选第三参数 `{ onlyIfNew: true }` 仅在新建时返回 ID，已有或并发唯一约束冲突时返回 null。新建带 taskId 的 Case 使用由 experimentId/taskId 派生的稳定主键，无需数据库迁移。自动扫描不会重评已有 Case 或重置人工评分。
+
 ### OTel spool consumer  {#otel-spool-consumer}
 - **External endpoints**: `POST /api/ingest/otel/v1/logs` accepts OTLP http/json payloads. `POST /api/ingest/otel/v1/traces` accepts OTLP http/json and OTLP http/protobuf payloads, normalizes events, appends JSONL spool rows, and returns `status: "accepted"` after the append succeeds. `POST /api/public/otel/v1/traces` is a Langfuse-compatible alias that reuses the same traces handler. `POST /api/ingest/otel/v1/metrics` accepts vLLM OTLP metrics over JSON or protobuf, normalizes them to the infra metric sample shape, persists them best-effort to `InfraMetricSample`, and returns an immediate diagnosis verdict. The response means accepted, not necessarily already visible in every observe query or persisted to `Execution`.
 - **Spool layout**: new OTel writes are day + session sharded: ClaudeCode logs go to `~/.agent-insight/otel_data/claude/YYYY-MM-DD/sessions/<safe-session>/logs.jsonl`; AcTrail traces go to `~/.agent-insight/otel_data/actrail/YYYY-MM-DD/sessions/<safe-session>/traces.jsonl`; Hermes and the remaining generic traces go to `~/.agent-insight/otel_data/traces/YYYY-MM-DD/sessions/<safe-session>/traces.jsonl`. File discovery is recursive and still consumes legacy daily files such as `YYYY-MM-DD/logs.jsonl` and `YYYY-MM-DD/traces.jsonl`.
