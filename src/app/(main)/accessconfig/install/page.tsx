@@ -23,7 +23,6 @@ import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-c
 import {
     FRAMEWORK_OPTIONS,
     resolveInstallProfile,
-    type GoalPlusHost,
 } from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
@@ -51,10 +50,8 @@ export default function AccessInstallPage() {
     const [host, setHost] = useState('');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
-    const [goalPlusHosts, setGoalPlusHosts] = useState<GoalPlusHost[]>(['pi']);
     const installProfile = resolveInstallProfile(
         FRAMEWORK_OPTIONS.filter(option => frameworks.includes(option.value)),
-        goalPlusHosts,
     );
     const effectiveFrameworks = installProfile.effectiveFrameworks.map(option => option.value);
     useEffect(() => {
@@ -74,7 +71,6 @@ export default function AccessInstallPage() {
                 `key=${encodeURIComponent(apiKey)}`,
                 frameworks.length ? `yes=1` : '',
                 frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
-                frameworks.includes('goal-plus') ? `goalPlusHosts=${goalPlusHosts.join(',')}` : '',
                 frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
@@ -82,7 +78,7 @@ export default function AccessInstallPage() {
             setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [apiKey, authReady, frameworks, goalPlusHosts]);
+    }, [apiKey, authReady, frameworks]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -206,8 +202,6 @@ export default function AccessInstallPage() {
 
                             {frameworks.includes('goal-plus') && (
                                 <GoalPlusInstallProfile
-                                    hosts={goalPlusHosts}
-                                    onChange={setGoalPlusHosts}
                                     autoAddedFrameworks={installProfile.autoAddedFrameworks.map(option => option.label)}
                                     locale={locale}
                                 />
@@ -365,51 +359,29 @@ function FrameworkPicker({
 }
 
 function GoalPlusInstallProfile({
-    hosts, onChange, autoAddedFrameworks, locale,
+    autoAddedFrameworks, locale,
 }: {
-    hosts: GoalPlusHost[];
-    onChange: (hosts: GoalPlusHost[]) => void;
     autoAddedFrameworks: string[];
     locale: string;
 }) {
     const isZh = locale === 'zh';
-    const profiles: Array<{ hosts: GoalPlusHost[]; label: string }> = [
-        { hosts: ['pi'], label: 'Pi' },
-        { hosts: ['codex'], label: 'Codex' },
-        { hosts: ['pi', 'codex'], label: 'Pi + Codex' },
-    ];
-    const activeKey = hosts.join(',');
     return (
         <article style={commandCard}>
             <header style={commandCardHeader}>
                 <span style={commandIconBox}><Boxes size={14} strokeWidth={2.2} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                        {isZh ? 'Goal Plus Trace 来源' : 'Goal Plus trace source'}
+                        {isZh ? 'Goal Plus Pi Trace' : 'Goal Plus Pi trace'}
                     </div>
                     <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
                         {isZh
-                            ? '选择已经安装并运行 Goal Plus 的 Agent；Agent Insight 只配置对应的 Trace 采集器。'
-                            : 'Choose the Agent where Goal Plus is already installed and running; Agent Insight only configures the matching trace collector.'}
+                            ? '当前适配固定从运行 Goal Plus 的 Pi 采集主 Trace、worker Trace 和显式关系。'
+                            : 'This integration collects the main trace, worker traces, and explicit relationships from Pi running Goal Plus.'}
                     </div>
                 </div>
             </header>
             <div style={chipRow}>
-                {profiles.map(profile => {
-                    const key = profile.hosts.join(',');
-                    const active = key === activeKey;
-                    return (
-                        <button
-                            key={key}
-                            type="button"
-                            onClick={() => onChange(profile.hosts)}
-                            style={active ? frameworkChipActive : frameworkChip}
-                        >
-                            {active && <Check size={12} strokeWidth={2.6} />}
-                            {profile.label}
-                        </button>
-                    );
-                })}
+                <span style={frameworkChipActive}><Check size={12} strokeWidth={2.6} />Pi</span>
             </div>
             <div style={langfuseNote}>
                 {autoAddedFrameworks.length > 0
@@ -422,13 +394,13 @@ function GoalPlusInstallProfile({
             </div>
             <div style={langfuseNote}>
                 {isZh
-                    ? 'Agent Insight 不会安装或修改 Goal Plus。配置完成后，继续在 Pi/Codex 中按原方式运行已安装的 Goal Plus 即可。'
-                    : 'Agent Insight does not install or modify Goal Plus. After setup, keep running the existing Goal Plus installation through Pi/Codex as usual.'}
+                    ? 'Agent Insight 不会安装或修改 Goal Plus。配置完成后，继续在 Pi 中按原方式运行已安装的 Goal Plus 即可。'
+                    : 'Agent Insight does not install or modify Goal Plus. After setup, keep running the existing Goal Plus installation through Pi as usual.'}
             </div>
             <div style={langfuseNote}>
                 {isZh
-                    ? '可选语义增强：如需展示 Goal、Run、Candidate 等编排信息，可在 Goal Plus 工作区执行 goal-plus-collector attach /绝对路径/.gp && goal-plus-collector scan && goal-plus-collector start；未配置不影响原生 Trace 采集。'
-                    : 'Optional semantic enrichment: to display Goal, Run, and Candidate orchestration data, run goal-plus-collector attach /absolute/path/.gp && goal-plus-collector scan && goal-plus-collector start in the Goal Plus workspace. Native trace collection does not depend on it.'}
+                    ? 'Worker 关系采集：要在 Pi 主 Trace 下展示 Goal Plus worker，请在 Goal Plus 工作区执行 goal-plus-collector attach /绝对路径/.gp && goal-plus-collector scan && goal-plus-collector start；未配置时仍可采集主 Trace，但不会合并 worker。'
+                    : 'Worker relationship collection: to show Goal Plus workers under the Pi main trace, run goal-plus-collector attach /absolute/path/.gp && goal-plus-collector scan && goal-plus-collector start. Without it, the main trace is still collected but workers are not merged.'}
             </div>
         </article>
     );

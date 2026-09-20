@@ -92,7 +92,7 @@ async function installFiles(sourceDir, packageDir, sharedDir) {
     await copyFile(path.join(sourceDir, ...parts), path.join(packageDir, ...parts), mode);
   }
 
-  for (const sharedFile of ["trace-transport.cjs", "pi-trace-helpers.cjs"]) {
+  for (const sharedFile of ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]) {
     const incomingPath = path.resolve(sourceDir, "..", "shared", sharedFile);
     const targetPath = path.join(sharedDir, sharedFile);
     if (fs.existsSync(targetPath)) {
@@ -133,6 +133,10 @@ async function install(options) {
     apiKey,
     endpoint: process.env.AGENT_INSIGHT_PI_ENDPOINT ||
       `${baseUrl}/api/ingest/otel/v1/traces`,
+    collaborationSessionsEndpoint: process.env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
+      || `${baseUrl}/api/ingest/collaborations/sessions`,
+    collaborationEventsEndpoint: process.env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
+      || `${baseUrl}/api/ingest/collaborations/events`,
     uploadIntervalMs: 300000,
     shutdownTimeoutMs: 2200,
   };

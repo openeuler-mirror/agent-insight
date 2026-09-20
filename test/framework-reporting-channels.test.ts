@@ -60,12 +60,23 @@ test('重复、空白和未知框架不会产生重复或虚假的通道', () =>
     assert.deepEqual(getSelectedReportingChannels(['', 'unknown']), []);
 });
 
-test('Goal Plus 同时展示语义快照与原生 Trace 通道', () => {
+test('Goal Plus 展示 worker Trace 与跨 Session 关系通道', () => {
     assert.deepEqual(getSelectedReportingChannels(['goal-plus']).map(channel => ({
         id: channel.id,
         endpoint: channel.endpoint,
     })), [
         { id: 'otlp-traces', endpoint: '/api/ingest/otel/v1/traces' },
-        { id: 'goal-plus-snapshots', endpoint: '/api/ingest/goal-plus/v1/snapshots' },
+        { id: 'collaboration-sessions', endpoint: '/api/ingest/collaborations/sessions' },
+        { id: 'collaboration-events', endpoint: '/api/ingest/collaborations/events' },
+    ]);
+});
+
+test('Pi Agent 展示主 Trace 与主 Session 绑定通道', () => {
+    assert.deepEqual(getSelectedReportingChannels(['pi-agent']).map(channel => ({
+        id: channel.id,
+        endpoint: channel.endpoint,
+    })), [
+        { id: 'otlp-traces', endpoint: '/api/ingest/otel/v1/traces' },
+        { id: 'collaboration-sessions', endpoint: '/api/ingest/collaborations/sessions' },
     ]);
 });

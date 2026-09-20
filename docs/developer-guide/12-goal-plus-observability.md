@@ -1,129 +1,173 @@
-# Goal Plus 观测覆盖层
+# Goal Plus Pi 主从 Trace 接入
 
-Goal Plus 集成不是新的 Agent 运行框架，也不接管 Goal Plus 编排。它把 `.gp` 的权威语义与 Agent Insight 已有 Execution 组合为 composite trace，并保持两条数据面的权威边界。
+本适配面向重构后的 Goal Plus：Pi 和 Goal Plus 使用统一的 session 描述，Agent Insight 复用已有 OTLP Trace ingest 与跨 Session 关系 ingest，把 Pi 原生主 Trace 和 Goal Plus Pi worker Trace 合成为只读的主从展示。
 
-## 架构与数据流
+新版 collector 不再向 Goal Plus semantic snapshot 接口上传数据，也不兼容旧 `host` / `host_handle` session 格式。服务端已有语义模型和接口可以继续读取历史数据，但不属于当前采集路径。
+
+## 数据流与权威边界
 
 ```text
-explicitly attached .gp
-  ├─ goal/spec/run/candidate/agent-session/report
-  │    └─ semantic parser → durable semantic spool
-  │         └─ POST /api/ingest/goal-plus/v1/snapshots
-  │              └─ Goal Plus domain projection + completeness
-  └─ Pi native session
-       ├─ worker: referenced by agent-session metadata
-       └─ main: exact workspace session dir + native-entry/goal marker
-            └─ passive Pi parser → existing canonical OTLP spool
-            └─ POST /api/ingest/otel/v1/traces → Execution/Session
+Pi native session
+  └─ pi-agent collector
+       ├─ POST /api/ingest/otel/v1/traces
+       │    └─ taskId = <nativeSessionId>__taskN
+       └─ POST /api/ingest/collaborations/sessions
+            └─ logical session "main" → taskId
 
-existing Codex/Pi Execution ── deterministic correlation ── Goal/Run/Candidate
-                                      │
-                                      └─ collaboration projector
-                                           └─ logical main → workers
+attached .gp
+  ├─ goal-plus/<goalId>/goal.json
+  │    └─ host_command_invocations: Pi start session
+  └─ runs/<runId>/agent_sessions/<agentSessionId>.json
+       └─ agent_harness/runtime_provider/execution_scope/session_handle
+            ├─ native Pi JSONL or ThinkThread diagnostics archive
+            ├─ POST /api/ingest/otel/v1/traces
+            ├─ POST /api/ingest/collaborations/sessions
+            │    └─ logical worker session → canonical worker taskId
+            └─ POST /api/ingest/collaborations/events
+                 └─ main → worker
+
+collaboration projection
+  └─ main Trace + synthetic TASK + worker interaction copies
 ```
 
-collector 只接受 source registry 中显式 attach 的 canonical `.gp` root。目录遍历跳过符号链接，读取执行 lstat/realpath/root containment 和前后 stat 校验；JSONL 只消费以换行结束的完整记录。Pi 主会话只访问该 attached workspace 精确对应的 Pi project-session 目录，并以 `host_command_invocations.native_entry_id`/`goal_plus_id` 定位，不递归扫描 home。语义与 native spool 均按 API Key 摘要隔离。Pi import checkpoint 在 native spool flush 成功后原子推进，用于保证重复扫描幂等；独立的 uploader checkpoint 仍只在服务端返回 HTTP 2xx 后推进，两者不得合并。
+权威边界：
+
+- Pi 原生 collector 是主 Trace 的唯一正文来源；Goal Plus collector 不再扫描或重复导入主 Pi session。
+- Goal Plus `agent_sessions` 是 worker 身份、角色和 runtime 状态的权威来源。
+- Pi native JSONL 或 ThinkThread 诊断 archive 是 worker 交互正文的权威来源。
+- `CollaborationSessionBinding` 与 `CollaborationEvent` 是主从关系的显式证据；不得根据时间接近度或同名任务猜测关系。
+- 查询投影不写回 `Execution.parentExecutionId`、`rootExecutionId` 或原始 Session。
+
+## 当前 Goal Plus schema
+
+每个可采集 worker 必须满足：
+
+```json
+{
+  "agent_harness": "pi",
+  "runtime_provider": "direct | thinkthread",
+  "execution_scope": "native_root | thinkthread_private",
+  "session_handle": { "...": "..." }
+}
+```
+
+`agent_harness` 必须为 `pi`，`runtime_provider` 仅接受 `direct` 或 `thinkthread`；对应的 `execution_scope` 必须分别为 `native_root` 或 `thinkthread_private`，`session_handle` 中的 harness/provider 必须与当前 agent session 一致。缺字段、身份冲突或旧 `host` / `host_handle` 结构都产生 `unsupported_goal_plus_schema`，该 worker 不上传 Trace 或关系。
+
+`direct` 从 `session_handle.metadata.session_file` 或受限的唯一 session 文件定位 native JSONL。`thinkthread` 从 `host-logs/session-diagnostics` 读取有索引的批次 archive；批次顺序、session 身份和 entry 数量都必须通过校验。所有路径均经过 realpath、根目录包含关系和普通文件检查。
+
+Goal 主端仅接受 `goal.json.host_command_invocations` 中按稳定顺序选择的首个：
+
+```json
+{
+  "agent_harness": "pi",
+  "action": "start",
+  "session_id": "<Pi native session id>"
+}
+```
+
+没有该记录时 worker Trace仍可导入，但不会生成无法证明父级的关系。
+
+## 主绑定
+
+Pi collector 在 task settle 时检查本次真实 user query：
+
+- 只接受 `/goal-plus` 和 `/goal-plus-with-final-check` 的 start 调用；
+- `edit`、`summary`、`pause`、`resume`、`clear` 不产生绑定；
+- `goal_plus_id` 只从 Goal Plus 工具的结构化 args/result，或转换后 prompt 中严格锚定的 `goal_plus_id: ...` 行读取；
+- 普通自然语言里提到 ID 不得触发关联。
+
+Pi 已有分段规则生成实际 taskId `<nativeSessionId>__taskN`。collector 为该 taskId 入队：
+
+```json
+{
+  "collaborationId": "gp.<sha256-prefix>",
+  "sessionId": "main",
+  "traceSessionId": "<nativeSessionId>__taskN",
+  "eventClock": "source_session"
+}
+```
+
+`collaborationId` 由 `initialPiSessionId + NUL + goalPlusId` 确定性生成。使用 initial native session，而不是分段 taskId，使 Pi collector 与 `.gp` parser 能独立计算同一个协作 ID。
+
+每个 start task 最多入队一次；同一 Pi session 后续再次运行 Goal Plus 会绑定到新的 `__taskN`，不会让历史任务覆盖当前主 Trace。
+
+## worker Trace 与关系
+
+worker canonical Trace session 固定为：
+
+```text
+goal-plus:<sourceId>:<agentSessionId>
+```
+
+native importer 复用 Pi 分类、脱敏、OTLP spool、增量 checkpoint 和 uploader。它保留 Agent、LLM、Tool、MCP、Skill、usage 与 runtime outcome；descriptor 或事件语义变化时只追加修订，不重放不变事件。
+
+每个有效 worker 生成一个 session binding 和一个不可变关系事件。逻辑 worker session ID、event ID 均由 run 与 agent session 等稳定字段计算，不使用扫描时间。关系方向固定为 `main → worker`；`fromLocator` 指向主 Trace 中的 `goal_plus_session_run` 工具调用。服务端只能把它作为调用位置候选，不会仅凭时间接近度伪造精确锚点。
+
+Trace 与关系上传顺序为：
+
+1. 将 binding/event 原子写入关系 outbox；
+2. 将 worker native events 写入 OTLP spool，并尝试上传；
+3. 尝试 flush 关系 outbox。
+
+关系可以先于或晚于 Trace 到达，服务端按显式 binding 延迟解析。提前持久化关系 outbox 可以避免进程在 Trace 上传后退出导致关系永久丢失。
+
+## 关系 outbox
+
+`scripts/agent-trace-collectors/shared/collaboration-transport.cjs` 被 Pi 与 Goal Plus collector 共用。状态目录按 framework 与 API Key 摘要隔离，并包含：
+
+- `relationships/pending`：待上传的 binding/event；
+- `relationships/delivered`：2xx 后的交付 tombstone；
+- `relationships/rejected`：确定性拒绝或本地同 key 不同正文冲突。
+
+同一逻辑 key 的规范正文不可覆盖。网络错误、429、5xx 使用有界指数退避并保留 pending；其他 4xx（包括 409）移入 rejected，不无限重试。单轮最多处理 20 条，避免关系 backlog 阻塞 Trace 扫描。`self-check` 在 rejected 非空时失败并报告数量。
 
 ## 代码地图
 
-| 区域 | 入口 | 职责 |
-|---|---|---|
-| collector | `scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs` | attach/list/detach/scan/watch/start/stop/status/self-check，协调双通道 |
-| semantic parser | `goal-plus/lib/gp-snapshot-parser.cjs` | allowlist 解析、版本信封、边界化和路径安全 |
-| Pi importer | `goal-plus/lib/pi-native-parser.cjs` | native JSONL → Pi canonical Agent/LLM/Tool/MCP/Skill event |
-| spool repair | `scripts/repair-goal-plus-pi-spool.cjs` | 对历史 Goal Plus Pi collector/server JSONL 做只读分析或停写压缩 |
-| distribution | `src/app/api/ingest/setup/goal-plus/` | 确定性 ZIP、SHA-256 校验安装器和只读 asset route |
-| install profile | `src/lib/ingest/setup/install-profile.ts` | Goal Plus Pi/Codex 宿主校验、native collector 依赖展开和去重 |
-| ingest | `src/lib/ingest/goal-plus/contracts.ts`、`persist.ts` | envelope 校验、服务端二次脱敏、幂等审计与投影 |
-| correlation | `src/lib/ingest/goal-plus/correlate.ts` | Execution 确定性关联、重关联和 authority 选择 |
-| collaboration projection | `src/lib/ingest/collaboration/providers/goal-plus.ts` | 将 Goal 成员关系投影到通用跨 Session 关系层，不改原生树 |
-| completeness/query | `completeness.ts`、`query.ts` | 批量完整度计算与 composite read model |
-| UI（暂未开放导航） | `src/app/(main)/goal-plus/` | 保留 source/goal 总览及四个详情 tab 的实现，供后续继续开发；当前不挂载侧边栏入口 |
+| 区域 | 职责 |
+|-|-|
+| `scripts/agent-trace-collectors/pi-agent/lib/pi-trace-core.cjs` | 识别 Goal Plus start task、计算实际 taskId、入队 main binding |
+| `scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs` | source 扫描、worker OTLP 导入、关系入队/上传、watcher/self-check |
+| `goal-plus/lib/gp-snapshot-parser.cjs` | 校验当前 Goal Plus schema、发现 worker source、构造确定性关系 |
+| `goal-plus/lib/pi-native-parser.cjs` | direct/ThinkThread Pi session → canonical Pi events |
+| `shared/collaboration-transport.cjs` | 协作 ID、binding/event 构造与持久 outbox |
+| `src/lib/collaboration/projection.ts` | 读取 reported 关系并生成通用 Trace 投影 |
+| `src/lib/ingest/collaboration/*` | 既有 binding/event HTTP 契约、持久化与端点解析 |
 
-专项测试位于 `test/goal-plus-{collector,contract,distribution}.test.ts`；合成 fixture 位于 `test/fixtures/goal-plus/.gp`，不得替换为用户真实数据。
+## 安装与配置
 
-## 语义 ingest 契约
+Goal Plus bundle 包含 worker parser、Pi importer、source registry 和共享 collaboration transport，不再分发 `semantic-spool.cjs`。Pi bundle 也包含同一共享 transport。
 
-`POST /api/ingest/goal-plus/v1/snapshots` 使用 `x-witty-api-key` 认证。batch `format=agent-insight.goal-plus-batch`、`version=1`，最多 100 个 snapshot、请求体最多 4 MiB、单 snapshot 最多 256 KiB。snapshot identity 为：
+Goal Plus managed config 保存：
 
-```text
-gpsnap_ + sha256(sourceId \u001f kind \u001f objectKey \u001f contentHash)
-```
+- `otlpEndpoint`
+- `collaborationSessionsEndpoint`
+- `collaborationEventsEndpoint`
 
-支持 `goal`、`goal_event`、`frozen_spec`、`run`、`candidate`、`agent_session`、`best`、`report_meta`。客户端只发送 allowlist 投影；服务端仍递归移除 secret/hidden/path 字段并记录 redaction audit。未知 snapshot 可逐项拒绝，合法项仍可接受；同一 snapshot ID 重传幂等。父对象迟到时，服务端按 kind 顺序重放该 source 尚未投影的 snapshot。
+专属环境变量优先于 managed config，再回退到通用 base URL/API Key。对应变量为：
 
-读取接口均按 user + source 隔离：
+- `AGENT_INSIGHT_GOAL_PLUS_API_KEY`
+- `AGENT_INSIGHT_GOAL_PLUS_BASE_URL`
+- `AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT`
+- `AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_SESSIONS_ENDPOINT`
+- `AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_EVENTS_ENDPOINT`
+- `AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT`
+- `AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT`
 
-| Method | Path | 用途 |
-|---|---|---|
-| GET | `/api/observe/goal-plus/sources` | source 与对象计数 |
-| GET | `/api/observe/goal-plus/goals` | Goal 列表和批量 completeness |
-| GET | `/api/observe/goal-plus/goals/:goalPlusId` | Goal composite detail |
-| GET | `/api/observe/goal-plus/runs/:runId/trace` | run 对应的去重 native Execution |
-| POST | `/api/observe/goal-plus/relink` | 对用户 source 重跑确定性关联 |
+watcher 指纹覆盖 collector 版本、凭证摘要和三个端点；任一变化都会受控重启。`start` 要求至少一个 attached source，`ensure` 对无 source 安静跳过，对 stale PID 恢复。Goal Plus watcher 失败不停止 Pi 原生 collector；结果是主 Trace 仍可见，但 worker 关系暂不可用。
 
-## 持久化模型
+## 查询与展示契约
 
-`GoalPlusSource` 是隔离和 checkpoint 根。`GoalPlusGoal`、`GoalPlusRun`、`GoalPlusCandidate`、`GoalPlusIteration`、`GoalPlusAgentSession` 保存可查询投影；`GoalPlusSemanticSnapshot` 保存幂等审计和脱敏后的信封；`GoalPlusExecutionLink` 把上述对象关联到既有 `Execution`。外部 key 始终包含 source scope，绝不把不同 `.gp` 中同名 run/candidate 合并。
+服务端 reported collaboration 投影优先于历史 Goal Plus semantic projection。主、worker binding 均唯一解析后，`composeCollaborationTrace` 在主 Trace 的响应中追加 synthetic TASK 和 worker 交互副本；`full`、`structure`、`interactions` 与单条 interaction 读取必须使用同一确定性投影。
 
-新增 Execution 入库后，`saveExecutionRecord` 以非阻断方式触发 Goal Plus relink；语义 ingest 后也会重关联该 source。关联优先级为明确 native/session/execution ID，其次是被动 Pi canonical session ID，再其次是 source 内唯一 deterministic task name。Pi Goal 的 `activeSession.sessionId` 若唯一匹配 `mainSessions[].nativeSessionId/sessionId`，关联器会合并两者的 native 与 canonical ID，只把当前 main 作为权威候选；历史 main link 在 relink 时转为 `superseded`。若同一 active ID 匹配多个 canonical session，则仍保持歧义。Codex host metadata 可携带 `codexConversationId`、`codexTurnId` 或完整 `codexExecutionId`，关联器按既有 `<conversation>:turn:<turn>` 规则匹配，并按宿主限制 `framework`。相同优先级多个候选标记 `ambiguous`，低优先级候选标记 `superseded`；禁止 time-window-only 关联。
+“仅主 Agent”列表可折叠已成功投影的 worker；“仅子 Agent”和混合范围仍可看到独立 worker。歧义、pending、缺失 Trace、跨用户或超过投影上限的 worker 不合并，也不隐藏。
 
-每次 relink 后，服务端用 `sourceId + goalPlusId` 构造稳定 collaboration，以逻辑主节点 `goal-plus:<sourceId>:goal:<goalPlusId>:main` 指向各 `goal-plus:<sourceId>:<agentSessionId>` worker。事件身份还包含 run、agent session 和 role，重复 snapshot 不会新增边。唯一 linked 主会话才解析到具体 Execution；多个主候选保留 `ambiguous-main-session`，不按时间选择。worker 端只复用 `GoalPlusExecutionLink`。该投影默认不保存内容、不使用 fromLocator，失败仅告警，不影响语义 ingest、原生 Trace 或 completeness。
+## 测试重点
 
-关联一致性：relink 在单个数据库事务内读取 source、语义对象和 Execution，并差量更新链接，不会先对外清空 linked 状态。未变化的链接保留 `linkedAt/updatedAt`，失败整批回滚。同一进程内按 source 合并并发请求；在途期间收到新请求会追加一轮重算，数据库锁冲突最多重试两次。
-
-当前 Goal 的 worker 投影只包含 `searchTasks[].runId` 明确列出的 run，不能仅凭历史 `GoalPlusRun.goalDbId` 纳入成员；没有显式 run 时不猜测。历史 Run、AgentSession 和原生 Trace 保留，过期语义事件的端点标为 superseded。同一 worker Session 的 continuation 不新增成员。列表、详情的实际可读成员与限额由共享查询函数决定，详见 [跨 Session 协作 Trace](13-cross-session-collaboration.md)。
-
-## 安装组合与故障隔离
-
-`frameworks` 继续表示用户选择的组件，`goalPlusHosts=pi,codex` 声明已经运行 Goal Plus 的 Trace 来源，而不是 Goal Plus 本体的安装目标。共享 install profile 在服务端展开 effective frameworks：Pi 加入 `pi-agent`，Codex 加入 `codex`，已存在的依赖不重复加入。不带 host 的旧 `frameworks=goal-plus` 保持 semantic-only 行为。安装页和生成脚本不得展示或执行 Goal Plus 仓库的安装命令；Agent Insight 只配置观测组件。
-
-组合安装继续调用既有 Pi/Codex 子安装器；不得复制或修改 native collector core、adapter、OTLP endpoint、Execution ID 和父子树。宿主 profile 的主就绪状态由所选 Pi/Codex native collector 决定：任一所需 native collector 未完成时为 `NOT READY`；全部完成时为 `READY`。Goal Plus semantic collector 在 native collector 之后作为可选增强安装，缺少 `.gp` 或其安装、scan、watcher 失败只单独报告 semantic enrichment 状态，不降低 native Trace 的 `READY`，也不回滚已安装的 native collector。无宿主的 legacy semantic-only 命令继续沿用原 `PARTIAL` 口径。
-
-Goal Plus 后台 watcher 使用 collector managed directory 中独立的 PID、锁和日志。`start` 要求至少一个已 attach source，重复调用幂等；`ensure` 对未配置或无 source 返回可诊断的跳过结果，对失效 PID 则清理并重启。`develop_start.sh`、`start.sh` 和 npm CLI 在 Agent Insight 服务就绪后使用当前发布版本的 collector 执行 `ensure`，因此机器或主服务重启后无需手工恢复 watcher；失败仅输出告警，不阻断主服务，也不接管 Pi/Codex 进程。单次 scan 先完成 native Pi session 的 durable import/upload，再尝试可重试的 semantic upload，避免语义端点超时阻塞主/worker Trace 入队。
-
-Goal Plus collector 的配置优先级为专属环境变量、managed config、通用环境变量。专属变量是 `AGENT_INSIGHT_GOAL_PLUS_API_KEY`、`AGENT_INSIGHT_GOAL_PLUS_BASE_URL`、`AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT` 和语义端点 `AGENT_INSIGHT_GOAL_PLUS_ENDPOINT`。managed config 存在时，冲突的 `AGENT_INSIGHT_API_KEY`/`AGENT_INSIGHT_OTLP_ENDPOINT` 不得静默覆盖它；诊断只打印 Key 摘要。watcher 指纹覆盖 collector 版本、凭证摘要、端点、host/source 配置和 interval，任一变化均触发受控重启。
-
-native Pi 导入按 source 文件指纹、session descriptor 和每个稳定 event identity 的语义 hash 保存独立 checkpoint。文件及 descriptor 未变化时整段跳过；session 增长或终态变化时只追加新增/更新事件；文件截断或替换时重建该 session 基线。顺序固定为 `spool flush → import checkpoint 原子写入 → uploader`，所以网络失败只留下待上传数据，不会让下一次 5 秒扫描再次追加全部 session。
-
-Pi RPC worker 的运行终态以 `runner_failed`、`timed_out`、`progress_handoff.status` 和原生 turn 结果为主，进程退出码只作兜底。`progress_handoff.status=completed` 且未超时、runner 未失败时，Goal Plus 收尾阶段主动发送 SIGTERM 所产生的 `143`/`-15` 是受控关闭，Agent span 仍为 success；相同退出码若伴随 `timed_out=true` 或 `runner_failed=true` 则保持 failure。原始退出码与派生依据均保留在 `goal_plus.*` attributes。状态派生带独立版本号；升级时仅重新解析旧 checkpoint，并只追加语义 hash 发生变化的 Agent event 修订，不重放消息和工具事件。
-
-Goal Plus Pi uploader 每轮优先读取最新日期分区，并限制单轮处理 10 个 batch；当天 Trace 因此不会被历史 backlog 长时间饿死，旧分区由后续轮次继续推进。共享 process lock 通过“完整候选文件 + 原子 hard-link”发布 owner，避免进程在 create/write 窗口退出后留下新的空锁；已存在且超过保护窗口的空锁、损坏锁，以及 owner 已退出的本机锁，会在独占 recovery claim 下回收。存活的本机 owner、其他主机 owner、非普通文件和已有 recovery claim 均 fail closed。`flushOnce()` 在未取得锁时返回结构化 `lockStatus`；Goal Plus scan 将其写入 `nativeUploadStatus` 和 diagnostics，`status`/`self-check` 也会把损坏或孤立 uploader 标为非 ready，而不是只显示 `uploadedEvents=0`。
-
-## Spool 幂等、容量保护与历史修复
-
-服务端只为 `goal-plus:` canonical Pi session 维护 `.trace-event-index-v1` sidecar，并在 session 锁内完成“读取索引、追加、更新索引”。身份键由已认证用户、session ID、`event`/`span` 类型和 event ID（缺失时使用 span ID）组成；语义 hash 只忽略传输时间 `receivedAt`，认证来源升级仍作为有效修订保留。因此完全相同的重传会被跳过，同一事件从 running 更新为 success/failure 等有效修订也不会丢失。sidecar 记录所覆盖的 legacy 文件与 shard 签名，文件被替换或截断时会从 spool 流式重建。session 锁不会按时间抢占存活的本机进程或其他主机所有者，只自动回收已确认退出的本机 PID；无法证明 owner 已退出时失败关闭。单 Goal Plus session 默认最多索引 100,000 个身份（`AGENT_INSIGHT_OTEL_DEDUPE_MAX_IDENTITIES`）；达到上限后拒绝新身份并返回 HTTP 413，collector 因此不会推进 uploader checkpoint。
-
-聚合通过 `visitEventsForSession` 逐行读取 legacy range 和 session shard，不再把整个 JSONL 展开到数组。对 Goal Plus Pi session 的默认上限为 50,000 个唯一事件、64 MiB 保留事件和 16 MiB 单事件，可分别通过 `AGENT_INSIGHT_OTEL_AGG_MAX_UNIQUE_EVENTS`、`AGENT_INSIGHT_OTEL_AGG_MAX_RETAINED_BYTES`、`AGENT_INSIGHT_OTEL_AGG_MAX_EVENT_BYTES` 调整。超过上限的 Goal Plus session 记为确定性 `discard` 并推进 consumer checkpoint，避免同一损坏或异常数据形成无限重试/OOM；日志必须带 limit、actual 和 maximum。普通 standalone Pi 及其他框架仍使用流式读取，但不启用这组 Goal Plus 限额或持久去重，维持原来的写入与聚合语义。首次为已有大 Goal Plus spool 建立 sidecar 仍需完整流式扫描，内存有界但可能长时间占用事件循环，因此已发生膨胀的部署应先离线压缩再启动服务。
-
-历史修复工具默认 dry-run，且只处理 `framework=pi-agent`、`sessionId` 以 `goal-plus:` 开头的记录：
-
-```bash
-node scripts/repair-goal-plus-pi-spool.cjs --kind collector --path ~/.agent-insight/otel_data/pi-agent
-node scripts/repair-goal-plus-pi-spool.cjs --kind server --path ~/.agent-insight/otel_data/traces
-```
-
-目录模式逐文件独立压缩，不跨文件合并 identity。实际写入前必须停止 Goal Plus collector/uploader 和 Agent Insight 服务，再增加 `--apply --confirm-writers-stopped`。工具会先预检目录中的全部目标文件；malformed、未换行、单行超过 64 MiB 或目标 identity 超过 1,000,000 时拒绝修改。每个已修改文件都生成同目录、不可覆盖的 `.bak.<timestamp>` 硬链接备份并立即报告；若后续文件失败，之前的成功项仍可审计和恢复。工具不修改 `uploader-checkpoint.json`/`consumer-checkpoint.json`，只报告受影响的相对路径和能安全映射时的新 byte cursor；操作员必须保留 checkpoint 中其他条目，仅核对报告指出的条目后再重启写入方。
-
-## 完整度与保真度
-
-completeness 是独立状态机：
-
-- `collecting`：Goal/run 未终态，或最新 scan checkpoint 未覆盖 Goal 快照；
-- `complete`：预期 native role、iteration settlement、selection/report 证据齐全；
-- `partial`：已终态但存在明确缺项或歧义；
-- `unsupported`：关键 source schema 超出支持范围。
-
-`timingFidelity` 使用 `exact/mixed/derived/summary-only`，semantic snapshot 的 `contentFidelity` 使用 `bounded/metadata-only/mixed`。它们不能被成功/失败状态替代，也不能把缺失数据显示为零。Pi passive importer 的 canonical session 固定为 `goal-plus:<sourceId>:<agentSessionId>`；主会话的 agent session ID 为 `main:<goalId>:<nativeSessionId>:<markerId>`。continuation 重建同一 Execution；低 authority 的重复 link 不进入默认原生 Trace 列表。
-
-Pi adapter 只在根 Agent 带有可靠运行时终态信号时设置 `trace_completed_at`；Goal Plus passive snapshot 还要求明确 runtime terminal state 或 exit code，增量 LLM/Tool snapshot 保持 running。Pi 主对话的 Goal `complete/blocked/abandoned` 只用于确认本次 invocation 已结束，并作为独立 business state 保留；它不决定 Execution 成败。通用 Trace 列表、Goal Plus 列表/详情和 Trace drawer 在页面可见时以 5 秒周期静默重取；同一 Execution 的 tree 更新必须保留用户的选择和展开状态。
-
-Pi passive importer 将 native session 作为正文权威源：保留所有 assistant `thinking`/`text`、后续 user/custom message、tool 参数和 tool result，只执行共享 secret/path 脱敏，不设置固定 2000 字符或二次字符截断。上传器的 batch byte 值只是多事件组包目标；第一条事件超过该值时仍读取完整换行记录并单独上传，成功后才移动 checkpoint。未恢复的 runtime aborted/cancelled/blocked、worker timeout、runner failure 或非零 exit code 会在 Agent event 和 Execution failures 中保留失败证据；已被后续 continuation 恢复的历史中止和 Goal/Run 的业务 blocked 不会把 Execution 标成失败。
-
-## 扩展约束
-
-- 新 schema 先扩展 versioned parser 和合成 fixture；不要直接上传未知原始 JSON。
-- Goal Plus 仍是语义权威，Agent Insight 不写 `.gp`、不改 Goal 状态、不触发 Search 或 promotion。
-- 不上传 absolute path、workspace、diff、raw log、credential 或 hidden gold；Pi 已写入 native session 的 thinking 视为 trace 正文，脱敏后完整采集，未持久化的内部状态不推断。
-- Pi 分类必须复用 `scripts/agent-trace-collectors/shared/pi-trace-helpers.cjs`；不能复制第三套 Tool/MCP 规则。
-- 新关联方法必须可审计且确定；不得引入仅依靠时间接近度的 fallback。
+- 当前 schema direct 与 ThinkThread archive 都能生成稳定 worker Trace；
+- 旧 schema 明确拒绝且无 fallback；
+- Pi start task 与 `.gp` parser 计算相同 `collaborationId`；
+- `/goal-plus resume` 和普通文本中的 Goal ID 不产生 main binding；
+- 重复扫描不产生不同 binding/event 正文；
+- 断网/5xx 可重试，409 进入 rejected；
+- Goal Plus distribution 不包含 semantic spool，Pi/Goal Plus 都包含 collaboration transport；
+- 最终查询结果是主 Trace 下包含 worker 子树，而不是重复导入一个 Goal Plus 主 Trace。

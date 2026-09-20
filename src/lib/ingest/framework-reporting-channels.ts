@@ -1,4 +1,10 @@
-export type ReportingChannelId = 'otlp-logs' | 'otlp-traces' | 'json-snapshot' | 'goal-plus-snapshots';
+export type ReportingChannelId =
+    | 'otlp-logs'
+    | 'otlp-traces'
+    | 'json-snapshot'
+    | 'goal-plus-snapshots'
+    | 'collaboration-sessions'
+    | 'collaboration-events';
 
 export type ReportingChannel = {
     id: ReportingChannelId;
@@ -36,6 +42,18 @@ export const REPORTING_CHANNELS: readonly ReportingChannel[] = [
         labelZh: 'Goal Plus 语义快照',
         labelEn: 'Goal Plus semantic snapshots',
     },
+    {
+        id: 'collaboration-sessions',
+        endpoint: '/api/ingest/collaborations/sessions',
+        labelZh: '跨 Session 绑定',
+        labelEn: 'Cross-session bindings',
+    },
+    {
+        id: 'collaboration-events',
+        endpoint: '/api/ingest/collaborations/events',
+        labelZh: '跨 Session 关系事件',
+        labelEn: 'Cross-session relation events',
+    },
 ];
 
 const FRAMEWORK_REPORTING_CHANNELS: Readonly<Record<string, readonly ReportingChannelId[]>> = {
@@ -50,8 +68,8 @@ const FRAMEWORK_REPORTING_CHANNELS: Readonly<Record<string, readonly ReportingCh
     qoder: ['otlp-traces'],
     trae: ['json-snapshot'],
     actrail: ['otlp-traces'],
-    'pi-agent': ['otlp-traces'],
-    'goal-plus': ['otlp-traces', 'goal-plus-snapshots'],
+    'pi-agent': ['otlp-traces', 'collaboration-sessions'],
+    'goal-plus': ['otlp-traces', 'collaboration-sessions', 'collaboration-events'],
     qwencode: ['otlp-logs', 'otlp-traces'],
     codex: ['otlp-traces'],
     'deepseek-harness': ['otlp-logs'],

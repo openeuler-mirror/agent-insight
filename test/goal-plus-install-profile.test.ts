@@ -3,12 +3,11 @@ import test from 'node:test';
 
 import {
   parseFrameworks,
-  parseGoalPlusHosts,
   resolveInstallProfile,
 } from '@/lib/ingest/setup/install-profile';
 
-function plan(frameworks: string, hosts = '') {
-  return resolveInstallProfile(parseFrameworks(frameworks), parseGoalPlusHosts(hosts));
+function plan(frameworks: string) {
+  return resolveInstallProfile(parseFrameworks(frameworks));
 }
 
 test('direct Pi and Codex selections do not gain Goal Plus dependencies', () => {
@@ -17,28 +16,21 @@ test('direct Pi and Codex selections do not gain Goal Plus dependencies', () => 
   assert.deepEqual(plan('pi-agent,codex').effectiveFrameworks.map(item => item.value), ['pi-agent', 'codex']);
 });
 
-test('legacy Goal Plus selection remains semantic-only when no host is declared', () => {
+test('Goal Plus selection always adds the Pi collector', () => {
   const profile = plan('goal-plus');
-  assert.deepEqual(profile.effectiveFrameworks.map(item => item.value), ['goal-plus']);
-  assert.deepEqual(profile.goalPlusHosts, []);
-  assert.deepEqual(profile.autoAddedFrameworks, []);
+  assert.deepEqual(profile.effectiveFrameworks.map(item => item.value), ['goal-plus', 'pi-agent']);
+  assert.deepEqual(profile.goalPlusHosts, ['pi']);
+  assert.deepEqual(profile.autoAddedFrameworks.map(item => item.value), ['pi-agent']);
 });
 
-test('Goal Plus host profiles add native collectors once', () => {
-  assert.deepEqual(plan('goal-plus', 'pi').effectiveFrameworks.map(item => item.value), ['goal-plus', 'pi-agent']);
-  assert.deepEqual(plan('goal-plus', 'codex').effectiveFrameworks.map(item => item.value), ['goal-plus', 'codex']);
-  assert.deepEqual(plan('goal-plus', 'pi,codex').effectiveFrameworks.map(item => item.value), [
-    'goal-plus',
-    'pi-agent',
-    'codex',
-  ]);
-  const deduplicated = plan('pi-agent,goal-plus,codex', 'pi,codex');
+test('Goal Plus adds Pi only once and does not alter an explicit Codex selection', () => {
+  const deduplicated = plan('pi-agent,goal-plus,codex');
   assert.deepEqual(deduplicated.effectiveFrameworks.map(item => item.value), ['pi-agent', 'goal-plus', 'codex']);
   assert.deepEqual(deduplicated.autoAddedFrameworks, []);
 });
 
-test('Goal Plus hosts are ignored without Goal Plus and unknown values are rejected', () => {
-  const profile = plan('codex,unknown', 'pi,unknown,codex');
+test('Unknown frameworks are rejected without changing direct Codex selection', () => {
+  const profile = plan('codex,unknown');
   assert.deepEqual(profile.effectiveFrameworks.map(item => item.value), ['codex']);
   assert.deepEqual(profile.goalPlusHosts, []);
 });

@@ -36,7 +36,11 @@ export default function piAgentInsightExtension(pi: PiExtensionApi) {
   })
 
   pi.on("input", (event) => {
-    collector.recordInput(event.text)
+    collector.recordInput(event.text, event.source)
+  })
+
+  pi.on("context", (event) => {
+    collector.recordContext(event.messages)
   })
 
   pi.on("before_agent_start", (event, ctx) => {

@@ -12,6 +12,7 @@ const BUNDLE_FILES = [
   ['pi-agent/install.cjs', ['pi-agent', 'install.cjs']],
   ['shared/trace-transport.cjs', ['shared', 'trace-transport.cjs']],
   ['shared/pi-trace-helpers.cjs', ['shared', 'pi-trace-helpers.cjs']],
+  ['shared/collaboration-transport.cjs', ['shared', 'collaboration-transport.cjs']],
 ] as const;
 
 const ZIP_TIMESTAMP = new Date(1980, 0, 1, 0, 0, 0);

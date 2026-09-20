@@ -63,7 +63,7 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 
 ## Goal Plus 接入
 
-Goal Plus 按 Pi、Codex 或 Pi + Codex Trace 来源 profile 复用对应的原生 Trace collector；独立的只读 `.gp` collector 仅用于可选编排语义增强。安装、attach、scan/start/watch、完整度口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
+Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；只读 `.gp` collector 导入 Pi worker Trace 并上报主从关系，最终在主 Trace 下展示 worker。安装、attach、scan/start/watch、重试口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
 
 ## Hermes 接入
 

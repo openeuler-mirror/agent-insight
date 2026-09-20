@@ -57,7 +57,10 @@ function descriptorFingerprint(descriptor) {
     candidateId: descriptor.candidateId,
     role: descriptor.role,
     sessionKind: descriptor.sessionKind,
-    host: descriptor.host,
+    agentHarness: descriptor.agentHarness,
+    runtimeProvider: descriptor.runtimeProvider,
+    executionScope: descriptor.executionScope,
+    sessionFormat: descriptor.sessionFormat,
     runnerFailed: descriptor.runnerFailed,
     timedOut: descriptor.timedOut,
     progressStatus: descriptor.progressStatus,
@@ -84,8 +87,7 @@ function runtimeOutcome(descriptor, lastAssistantFailed, hasPendingTools) {
   const runnerFailed = descriptor.runnerFailed === true;
   const timedOut = descriptor.timedOut === true;
   const controlledExit = [-15, 143].includes(exitCode);
-  const controlledEvidence = descriptor.controlledTermination === true
-    || (descriptor.host === "pi-rpc" && progressStatus === "completed");
+  const controlledEvidence = descriptor.controlledTermination === true || progressStatus === "completed";
   const controlledTermination = controlledExit
     && !runnerFailed
     && !timedOut
@@ -144,6 +146,9 @@ function sourceFingerprint(sessionPath, stat) {
 }
 
 async function statPiSession(root, descriptor) {
+  if (descriptor.sessionFormat === "pi-diagnostic-archive") {
+    return (await readPiSessionSource(root, descriptor)).source;
+  }
   const sessionPath = resolvedSessionPath(root, descriptor);
   const canonicalRoots = await Promise.all(
     [...new Set([root, ...(descriptor.allowedRoots || [])])].map(item => fsp.realpath(item)),
@@ -160,6 +165,119 @@ async function statPiSession(root, descriptor) {
   const finalIdentity = [final.dev, final.ino, final.size, final.mtimeMs, final.ctimeMs].join(":");
   if (initialIdentity !== finalIdentity) throw new Error("file changed while checking import state");
   return sourceFingerprint(sessionPath, final);
+}
+
+async function readDiagnosticArchive(root, descriptor) {
+  const directory = resolvedSessionPath(root, descriptor);
+  const indexRead = await safeStableRead(root, path.join(directory, "index.json"), { maxBytes: null });
+  const index = JSON.parse(indexRead.bytes.toString("utf8"));
+  if (index?.source !== "thinkthread_messages"
+    || index.agent_harness !== "pi"
+    || !index.batches
+    || typeof index.batches !== "object"
+    || Array.isArray(index.batches)) {
+    throw new Error("invalid ThinkThread diagnostic archive index");
+  }
+  if (index.identity?.agent_session_id !== descriptor.agentSessionId
+    || (index.identity?.thinkthread_id && index.identity.thinkthread_id !== descriptor.nativeSessionId)
+    || (index.identity?.run_id && index.identity.run_id !== descriptor.runId)
+    || (index.identity?.candidate_id && index.identity.candidate_id !== descriptor.candidateId)) {
+    throw new Error("ThinkThread diagnostic archive identity mismatch");
+  }
+  const batches = Object.entries(index.batches)
+    .sort(([, left], [, right]) => (
+      String(left?.captured_at || "").localeCompare(String(right?.captured_at || ""))
+      || String(left?.stream_id || "").localeCompare(String(right?.stream_id || ""))
+      || Number(left?.sequence || 0) - Number(right?.sequence || 0)
+    ));
+  const entries = new Map();
+  const anonymousEntries = [];
+  let activeLeaf;
+  const sourceParts = [indexRead.bytes];
+  let size = indexRead.stat.size;
+  let mtimeMs = indexRead.stat.mtimeMs;
+  let ctimeMs = indexRead.stat.ctimeMs;
+  for (const [digest, metadata] of batches) {
+    if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("invalid ThinkThread diagnostic archive digest");
+    const batchRead = await safeStableRead(root, path.join(directory, `${digest}.json`), { maxBytes: null });
+    const batch = JSON.parse(batchRead.bytes.toString("utf8"));
+    if (!Array.isArray(batch.entries)
+      || Number(batch.sequence) !== Number(metadata?.sequence)
+      || String(batch.stream_id) !== String(metadata?.stream_id)
+      || batch.entries.length !== Number(metadata?.entries)) {
+      throw new Error("ThinkThread diagnostic archive batch integrity check failed");
+    }
+    for (const entry of batch.entries) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      if (typeof entry.id === "string" && entry.id) entries.set(entry.id, entry);
+      else anonymousEntries.push(entry);
+    }
+    if (typeof batch.leaf_id === "string") activeLeaf = batch.leaf_id;
+    sourceParts.push(batchRead.bytes);
+    size += batchRead.stat.size;
+    mtimeMs = Math.max(mtimeMs, batchRead.stat.mtimeMs);
+    ctimeMs = Math.max(ctimeMs, batchRead.stat.ctimeMs);
+  }
+  let orderedEntries = [];
+  if (activeLeaf && entries.has(activeLeaf)) {
+    const branch = [];
+    const visited = new Set();
+    let cursor = activeLeaf;
+    while (cursor && entries.has(cursor) && !visited.has(cursor)) {
+      visited.add(cursor);
+      const entry = entries.get(cursor);
+      branch.push(entry);
+      cursor = typeof entry.parentId === "string" ? entry.parentId : undefined;
+    }
+    orderedEntries = branch.reverse();
+  } else {
+    orderedEntries = [...entries.values()].sort((left, right) => (
+      String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
+      || String(left.id || "").localeCompare(String(right.id || ""))
+    ));
+  }
+  orderedEntries.push(...anonymousEntries);
+  const records = orderedEntries.map((record, line) => ({ line, record }));
+  return {
+    records,
+    stat: { ...indexRead.stat, size, mtimeMs, ctimeMs },
+    source: {
+      ...sourceFingerprint(directory, { ...indexRead.stat, size, mtimeMs, ctimeMs }),
+      contentHash: `sha256:${sha256(Buffer.concat(sourceParts))}`,
+    },
+    diagnostics: index.status === "recorded"
+      ? []
+      : [{ code: "incomplete_pi_diagnostic_archive", status: index.status }],
+  };
+}
+
+async function readPiSessionSource(root, descriptor) {
+  if (descriptor.sessionFormat === "pi-diagnostic-archive") {
+    return readDiagnosticArchive(root, descriptor);
+  }
+  const sessionPath = resolvedSessionPath(root, descriptor);
+  const read = await safeStableRead(root, sessionPath, {
+    allowedRoots: descriptor.allowedRoots || [],
+    maxBytes: null,
+  });
+  const text = read.bytes.toString("utf8");
+  const lines = text.split(/\r?\n/);
+  if (!text.endsWith("\n")) lines.pop();
+  const records = [];
+  const diagnostics = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index]) continue;
+    if (Number.isInteger(descriptor.startLine) && index < descriptor.startLine) continue;
+    if (Number.isInteger(descriptor.endLine) && index >= descriptor.endLine) continue;
+    try { records.push({ line: index, record: JSON.parse(lines[index]) }); }
+    catch { diagnostics.push({ code: "invalid_pi_jsonl_record", line: index + 1 }); }
+  }
+  return {
+    records,
+    stat: read.stat,
+    source: sourceFingerprint(sessionPath, read.stat),
+    diagnostics,
+  };
 }
 
 function sameFingerprint(left, right) {
@@ -260,25 +378,10 @@ function unwrapMessage(record) {
 }
 
 async function parsePiSession(root, descriptor) {
-  const sessionPath = resolvedSessionPath(root, descriptor);
-  const read = await safeStableRead(root, sessionPath, {
-    allowedRoots: descriptor.allowedRoots || [],
-    maxBytes: null,
-  });
-  const text = read.bytes.toString("utf8");
-  const lines = text.split(/\r?\n/);
-  if (!text.endsWith("\n")) lines.pop();
-  const records = [];
-  const diagnostics = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    if (!lines[index]) continue;
-    if (Number.isInteger(descriptor.startLine) && index < descriptor.startLine) continue;
-    if (Number.isInteger(descriptor.endLine) && index >= descriptor.endLine) continue;
-    try { records.push({ line: index, record: JSON.parse(lines[index]) }); }
-    catch { diagnostics.push({ code: "invalid_pi_jsonl_record", line: index + 1 }); }
-  }
+  const read = await readPiSessionSource(root, descriptor);
+  const { records, diagnostics } = read;
   const messages = records.map(item => unwrapMessage(item.record)).filter(Boolean);
-  const source = sourceFingerprint(sessionPath, read.stat);
+  const source = read.source;
   if (!messages.length) return { events: [], fidelity: "summary-only", diagnostics, source };
   const explicitTimes = messages
     .map(message => timestamp(message.timestamp, Number.NaN))
@@ -311,6 +414,9 @@ async function parsePiSession(root, descriptor) {
     "goal_plus.native_session_id": descriptor.nativeSessionId,
     "goal_plus.role": descriptor.role,
     "goal_plus.session_kind": descriptor.sessionKind || "worker",
+    "goal_plus.agent_harness": descriptor.agentHarness,
+    "goal_plus.runtime_provider": descriptor.runtimeProvider,
+    "goal_plus.execution_scope": descriptor.executionScope,
     "goal_plus.business_state": descriptor.businessState,
     "goal_plus.import_mode": "passive_pi_session",
     "goal_plus.timing_fidelity": "derived",
@@ -598,6 +704,7 @@ module.exports = {
   importPiSessions,
   messageText,
   parsePiSession,
+  readPiSessionSource,
   readImportCheckpoint,
   runtimeOutcome,
   statPiSession,
