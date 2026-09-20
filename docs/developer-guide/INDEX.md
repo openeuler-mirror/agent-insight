@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `b5773fb0cece43e57500fbafd3ecb53964fd8872` (`b5773fb0`) |
-| Branch | `codex/830-issue-308-20260915` |
-| Date | 2026-09-16T16:30:33+08:00 |
+| Commit | `2f89e10dc0979050dfc13887d475f725af1b2efe` (`2f89e10d`) |
+| Branch | `codex/830-modal-copy-20260920` |
+| Date | 2026-09-20T09:06:04+08:00 |
 | Author | gyctl |
-| Subject | `merge: 同步最新830并解决PR !406冲突` |
+| Subject | `fix: 修复链路详情弹窗在HTTP下复制失效` |
 
-**如何更新：** `git diff b5773fb0 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 2f89e10d HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
