@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-23 working-tree overlay：实验自动监听改为服务端定时扫描数据库中已完成的 Trace，按用户、主 Agent 与监听开启时间筛选，复用已有 Trace 评测入口；上传接口不再承担 OpenCode 专用监听触发。详情页在监听期间持续刷新。
+
 > 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 
 > 2026-09-22 working-tree overlay：采集器安装增加共享依赖预检、已知旧版本摘要白名单升级和备份；源码生产启动通过 `scripts/verify-standalone.cjs` 校验页面产物，HTTP readiness 拒绝 500。运行中的 standalone 与手动 `npm run build` 仍共用 `.next`，必须先停止旧进程再构建。

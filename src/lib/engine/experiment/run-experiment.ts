@@ -24,6 +24,7 @@
  * 单行超时 5 分钟。
  */
 
+import { createHash } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
 import {
   buildJudgePrompt,
@@ -847,29 +848,41 @@ export async function ensureEvalExperiment(params: {
   return exp.id;
 }
 
-/** 往评测实验加一个 case（trace 已产生），返回 caseId。
- * 按 taskId 幂等：同一实验内该 trace 已有 case 就复用（并回填新拿到的参考答案），
- * 避免同一 trace 被重复评测时建出重复 case。 */
+interface EvalExperimentCaseInput {
+  executionId?: string | null;
+  taskId?: string | null;
+  input: string;
+  datasetInput?: string | null;
+  actualOutput: string;
+  referenceOutput?: string | null;
+  evaluatorContext?: EvaluatorCaseContext | null;
+  datasetBinding?: { datasetId: string; caseId: string } | null;
+}
+
+export function addEvalExperimentCase(experimentId: string, c: EvalExperimentCaseInput): Promise<string>;
+export function addEvalExperimentCase(
+  experimentId: string,
+  c: EvalExperimentCaseInput,
+  options: { onlyIfNew: true },
+): Promise<string | null>;
 export async function addEvalExperimentCase(
   experimentId: string,
-  c: {
-    executionId?: string | null;
-    taskId?: string | null;
-    input: string;
-    datasetInput?: string | null;
-    actualOutput: string;
-    referenceOutput?: string | null;
-    evaluatorContext?: EvaluatorCaseContext | null;
-    datasetBinding?: { datasetId: string; caseId: string } | null;
-  },
-): Promise<string> {
-  const createOrReuse = async (): Promise<string> => {
+  c: EvalExperimentCaseInput,
+  options?: { onlyIfNew: true },
+): Promise<string | null> {
+  const createOrReuse = async (): Promise<string | null> => {
     if (c.taskId) {
       const existing = await prisma.experimentCase.findFirst({
-        where: { experimentId, taskId: c.taskId },
+        where: {
+          experimentId,
+          ...(options?.onlyIfNew && c.executionId
+            ? { OR: [{ taskId: c.taskId }, { executionId: c.executionId }] }
+            : { taskId: c.taskId }),
+        },
         select: { id: true, caseValuesJson: true },
       });
       if (existing) {
+        if (options?.onlyIfNew) return null;
         // 复用已有 case；若这次拿到了参考答案或评估器上下文则回填。
         if (
           (c.datasetInput != null && String(c.datasetInput).trim())
@@ -907,25 +920,40 @@ export async function addEvalExperimentCase(
         return existing.id;
       }
     }
-    const row = await prisma.experimentCase.create({
-      data: {
-        experimentId,
-        executionId: c.executionId ?? null,
-        taskId: c.taskId ?? null,
-        input: c.input,
-        datasetInput: c.datasetInput ?? null,
-        actualOutput: c.actualOutput,
-        referenceOutput: c.referenceOutput ?? null,
-        evaluatorContextJson: c.evaluatorContext
-          ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
-          : null,
-        caseValuesJson: c.datasetBinding
-          ? JSON.stringify(withExperimentDatasetCaseBinding(null, c.datasetBinding))
-          : null,
-      },
-      select: { id: true },
-    });
-    return row.id;
+    const id = c.taskId
+      ? `trace-${createHash('sha256').update(JSON.stringify([experimentId, c.taskId])).digest('hex')}`
+      : undefined;
+    try {
+      const row = await prisma.experimentCase.create({
+        data: {
+          ...(id ? { id } : {}),
+          experimentId,
+          executionId: c.executionId ?? null,
+          taskId: c.taskId ?? null,
+          input: c.input,
+          datasetInput: c.datasetInput ?? null,
+          actualOutput: c.actualOutput,
+          referenceOutput: c.referenceOutput ?? null,
+          evaluatorContextJson: c.evaluatorContext
+            ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
+            : null,
+          caseValuesJson: c.datasetBinding
+            ? JSON.stringify(withExperimentDatasetCaseBinding(null, c.datasetBinding))
+            : null,
+        },
+        select: { id: true },
+      });
+      return row.id;
+    } catch (error) {
+      if (!id || (error as { code?: string })?.code !== 'P2002') throw error;
+      if (options?.onlyIfNew) return null;
+      const existing = await prisma.experimentCase.findFirst({
+        where: { experimentId, taskId: c.taskId },
+        select: { id: true },
+      });
+      if (existing) return existing.id;
+      throw error;
+    }
   };
 
   return c.taskId
@@ -1010,6 +1038,7 @@ export async function evaluateEvalExperimentCase(
     ? configuredEvaluatorIds.filter((evaluatorId) => requestedEvaluatorIds.has(evaluatorId))
     : configuredEvaluatorIds;
 
+  await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } });
   const scheduledRows = await prepareAndScheduleResultRuns(evaluatorIds.map((evaluatorId) => ({
     experimentId, caseId, evaluatorId, user,
   })));
