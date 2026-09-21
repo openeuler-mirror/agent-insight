@@ -30,7 +30,8 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(experimentService, /linkedDatasetIds:\s*\[dataset\.id\]/);
   assert.match(experimentService, /modelConfigId:\s*activeModel\?\.id/);
   assert.match(experimentService, /interactionPolicy:\s*'auto-deny'/);
-  assert.match(experimentService, /timeoutMs:\s*isTriggerExperiment \? 30 \* 1000 : 10 \* 60 \* 1000/);
+  assert.match(experimentService, /agentTimeoutSeconds = input\.agentTimeoutSeconds \?\? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS/);
+  assert.match(experimentService, /timeoutMs:\s*isTriggerExperiment \? 30 \* 1000 : agentTimeoutSeconds \* 1_000/);
   assert.match(experimentService, /retryLimit:\s*isTriggerExperiment \? 1 : 2/);
   assert.match(experimentService, /getSkillExperimentConcurrencyPolicy\(input\.preset\)/);
   assert.match(experimentService, /evaluationConcurrency:\s*runtime\.evaluationConcurrency/);

@@ -1,5 +1,9 @@
 import { prisma } from '@/lib/storage/prisma';
-import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import {
+  DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  MAX_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+} from '@/lib/engine/experiment/constants';
 import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
 import { createCommand, getCommand, markSent } from '@/lib/reliability/command-bus';
 import { dispatchCommand } from '@/lib/reliability/control-dispatch';
@@ -415,8 +419,11 @@ export async function generateExperimentTraces(
   options: TraceGenerationOptions = {},
 ): Promise<TraceGenerationResult> {
   const timeoutSeconds = Math.max(
-    30,
-    Math.min(req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS, 3_600),
+    MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+    Math.min(
+      req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+      MAX_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+    ),
   );
   const latestAttempts = await prisma.experimentTraceAttempt.findMany({
     where: { caseId: { in: req.cases.map((item) => item.caseId) } },

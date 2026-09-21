@@ -1,6 +1,10 @@
 import { randomUUID } from 'crypto';
 
 import { DEFAULT_SELECTED_PRESET_IDS } from '@/lib/evaluators/preset-evaluators';
+import {
+  DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  isValidExperimentAgentTimeoutSeconds,
+} from '@/lib/engine/experiment/constants';
 import { draftTriggerEvalSet } from '@/lib/engine/skill-generation/evaluator/runners/draftTriggerEvalSet';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { getActiveConfig } from '@/lib/storage/server-config';
@@ -99,6 +103,7 @@ export async function createWorkbenchExperiment(input: {
   caseIds?: string[];
   traceSource?: 'existing' | 'generate';
   modelConfigId?: string | null;
+  agentTimeoutSeconds?: number;
 }) {
   if (input.sessionId) {
     const session = await prismaRaw.skillWorkbenchSession.findFirst({
@@ -156,6 +161,10 @@ export async function createWorkbenchExperiment(input: {
     : await getActiveConfig(input.user);
   const concurrencyPolicy = getSkillExperimentConcurrencyPolicy(input.preset);
   const isTriggerExperiment = input.preset === 'trigger';
+  const agentTimeoutSeconds = input.agentTimeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
+  if (!isTriggerExperiment && !isValidExperimentAgentTimeoutSeconds(agentTimeoutSeconds)) {
+    return { kind: 'invalid_agent_timeout' as const };
+  }
   const runtime = {
     agentName: 'grayscale-skill-agent',
     modelConfigId: activeModel?.id || null,
@@ -167,7 +176,7 @@ export async function createWorkbenchExperiment(input: {
     } : null,
     modelOptions: { temperature: 0.7, maxTokens: 2048 },
     interactionPolicy: 'auto-deny' as const,
-    timeoutMs: isTriggerExperiment ? 30 * 1000 : 10 * 60 * 1000,
+    timeoutMs: isTriggerExperiment ? 30 * 1000 : agentTimeoutSeconds * 1_000,
     idleTimeoutMs: 45 * 1000,
     executionConcurrency: concurrencyPolicy.executionConcurrency,
     abPairConcurrency: concurrencyPolicy.abPairConcurrency,

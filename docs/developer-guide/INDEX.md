@@ -56,7 +56,7 @@
 
 > 2026-09-13 upstream overlay：新增步骤效率与执行过程质量两个通用评估器及配套设计、验收和使用说明；原轨迹质量评估器保持不变。
 
-> 2026-09-13 upstream overlay：普通实验的平台生成 Trace、Skill 用例分析与 Skill A/B 测试的单次 Agent 执行默认上限统一为 600 秒；当前分支继续通过共享常量提供该默认值，并保留实验向导中的可配置入口。评估器超时与触发分析的独立 30 秒上限保持不变。
+> 2026-09-13 upstream overlay：普通实验的平台生成 Trace、Skill 用例分析与 Skill A/B 测试的单次 Agent 执行默认上限统一为 600 秒。实验向导统一使用“Agent 单次执行上限”配置，范围为 30～3600 秒；Skill 用例分析仅在生成 Trace 时显示，Skill A/B 无论输入来自数据集还是已有 Trace 都显示，配置随实验快照冻结为 `timeoutMs`。评估器超时与触发分析的独立 30 秒上限保持不变。
 
 > 2026-09-13 upstream overlay：合入 Goal Plus 双通道 collector、语义 ingest、领域查询、完整度展示及跨 Session 调用关系上报能力；Goal Plus 历史 spool 修复、持久化去重和有界上传策略保持独立。
 
