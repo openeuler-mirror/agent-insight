@@ -457,7 +457,7 @@ test('manual and automatic capability refresh bypass the cached probe', () => {
     'utf8',
   )
   assert.match(source, /REFRESH_CAPABILITIES[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
-  assert.match(source, /Promise\.all\(\[probeFaultInjectionIsolated\(cfg\), refreshPiModelCatalog\(\)\]\)[\s\S]*?cacheSuccessfulProbe\(fi\)[\s\S]*?reportCapabilities\(cfg\)/)
+  assert.match(source, /Promise\.all\(\[probeFaultInjectionIsolated\(cfg\), refreshPiModelCatalog\(\)\]\)[\s\S]*?cacheSuccessfulProbe\(fi\)[\s\S]*?syncBenchmarkExecutorCapabilities\(benchmarkExecutor, capabilities\)[\s\S]*?reportCapabilities\(cfg, capabilities\)/)
   assert.match(source, /const refreshCapabilities[\s\S]*?refreshCapabilityReports\(cfg, \{ force: true \}\)/)
   assert.match(source, /setTimeout\([\s\S]*?setInterval\(refreshCapabilities, CAPABILITY_DISCOVERY_SCAN_MS\)[\s\S]*?CAPABILITY_DISCOVERY_SCAN_MS \/ 2/)
 })

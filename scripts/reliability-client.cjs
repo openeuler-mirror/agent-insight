@@ -1968,8 +1968,7 @@ let capabilitiesRevision = 0
 // 否则服务端会把首次上报当成重放而丢弃（表现为 platforms 一直是空）。
 const REVISION_EPOCH = Date.now().toString(36)
 
-async function reportCapabilities(cfg, opts) {
-  const capabilities = buildCapabilities(cfg, opts)
+async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
   capabilitiesRevision += 1
   await api(cfg, 'PUT', '/api/reliability/client/v1/capabilities', {
     revision: `cap_${REVISION_EPOCH}_${capabilitiesRevision}`,
@@ -1994,6 +1993,12 @@ async function reportCapabilities(cfg, opts) {
 let lastCapabilityFingerprint = null
 let capabilityRefreshInFlight = null
 
+function syncBenchmarkExecutorCapabilities(executor, capabilities) {
+  const platforms = benchmarkAgentPlatformsFromCapabilities(capabilities)
+  executor?.setAgentPlatforms(platforms)
+  return platforms
+}
+
 async function refreshCapabilityReports(cfg, { force = false } = {}) {
   const fingerprint = capabilityDiscoveryFingerprint()
   if (!force && fingerprint === lastCapabilityFingerprint) return false
@@ -2001,7 +2006,9 @@ async function refreshCapabilityReports(cfg, { force = false } = {}) {
   capabilityRefreshInFlight = (async () => {
     const [fi] = await Promise.all([probeFaultInjectionIsolated(cfg), refreshPiModelCatalog()])
     cacheSuccessfulProbe(fi)
-    await reportCapabilities(cfg)
+    const capabilities = buildCapabilities(cfg)
+    syncBenchmarkExecutorCapabilities(benchmarkExecutor, capabilities)
+    await reportCapabilities(cfg, capabilities)
     await sendFiHeartbeat(cfg)
     lastCapabilityFingerprint = fingerprint
     return true
@@ -2450,6 +2457,7 @@ module.exports = {
   buildCapabilities,
   mergePiRuntimeCapability,
   benchmarkAgentPlatformsFromCapabilities,
+  syncBenchmarkExecutorCapabilities,
   buildExperimentCaseInvocation,
   runExperimentCase,
   tryAcquireExecutionSlot,

@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-21 working-tree overlay：常驻客户端的 Agent、模型与 FI 能力刷新会同步原子替换 Benchmark 执行器的 Agent Runtime 注册表，并在本地同步完成后才向服务端发布能力。运行期间新增、恢复或失效的 Runtime 无需重启即可作用于新任务，已开始的任务不受注册表刷新影响。
+
 > 2026-09-21 working-tree overlay：SWE-bench x86-64 官方模式默认使用两个公开 SWR Verified 镜像仓库，并支持通过 `SWE_BENCH_VERIFIED_MIRROR_REPOS` 覆盖或以空值禁用；按列表依次尝试，未命中再走既有代理和 Docker Hub 官方源，并冻结实际 registry digest。ARM64、Epoch、数据集镜像字段和官方 Harness 不变。
 
 > 2026-09-18 working-tree overlay：实验向导将 xiaoo Collector 上报的 `xiaoo` Trace 身份与 CLI 原生 `defaultagent` 执行 ID 归并为单个 `xiaoo` 候选；执行 target 独立保留原生 ID，普通生成 Trace 与 Benchmark 下发继续传递 `defaultagent`。

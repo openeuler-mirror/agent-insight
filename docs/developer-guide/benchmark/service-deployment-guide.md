@@ -283,6 +283,8 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 - 它上报了 Benchmark Manifest 要求的 Workspace、Agent Runtime 和 Artifact Collector 能力；
 - 它能访问 Agent Insight 中配置的仓库与必要资源。
 
+常驻客户端会把每轮能力探测结果先同步到本地 Benchmark 执行器，再上报 Agent Insight。运行期间新增、恢复或失效的 Agent Runtime 会在下一轮刷新后自动生效；已开始的任务继续使用创建执行计划时取得的 Runtime，新任务使用刷新后的能力集合。
+
 若新 Benchmark 增加了新 Runtime 或 Collector，必须先发布包含该能力的执行客户端，再在每台执行机上重新安装。
 
 ## 8. 整体验收
