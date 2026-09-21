@@ -155,9 +155,6 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
 }, async () => {
   process.env.DATABASE_URL = `file:${databasePath}`
   process.env.AGENT_INSIGHT_DATA_DIR = path.join(os.homedir(), '.agent-insight')
-  const token = `result-api-${Date.now()}-${process.pid}`
-  process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN = token
-
   const [
     storage,
     artifactRoute,
@@ -304,7 +301,6 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
       form.set('file', new Blob([bytes]), 'report.json')
       const response = await fetch(`${origin}/api/benchmark/v1/evaluations/${evaluationId}/artifacts`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}` },
         body: form,
       })
       assert.equal(response.status, 201)
@@ -327,7 +323,7 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
     }
     const completeA = () => fetch(`${origin}/api/benchmark/v1/evaluations/${evaluationIds[0]}/complete`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(validCompletion),
     })
     const accepted = await completeA()
@@ -340,7 +336,7 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
     assert.deepEqual(await repeated.json(), acceptedBody)
     const conflict = await fetch(`${origin}/api/benchmark/v1/evaluations/${evaluationIds[0]}/complete`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...validCompletion, cleanup: { status: 'changed' } }),
     })
     assert.equal(conflict.status, 409)
@@ -368,7 +364,7 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
     }
     const invalid = await fetch(`${origin}/api/benchmark/v1/evaluations/${evaluationIds[1]}/complete`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(invalidCompletion),
     })
     assert.equal(invalid.status, 422)
@@ -416,7 +412,6 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
     for (const directory of evidenceDirs) {
       await fsp.rm(directory, { recursive: true, force: true })
     }
-    delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN
     await prisma.$disconnect()
   }
 })

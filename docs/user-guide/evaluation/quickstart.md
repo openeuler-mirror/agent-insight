@@ -22,14 +22,10 @@ description: "使用已有 Trace 或 Benchmark 数据集完成第一次实验"
 
 ```bash
 bash scripts/start-evaluator.sh \
-  --benchmark swe-bench \
-  --token '<与 Agent Insight 一致的共享密钥>' \
-  --platform-base-url https://agent-insight.example.com \
-  --bind-address 0.0.0.0 \
-  --port 8080
+  --platform-base-url https://agent-insight.example.com
 ```
 
-Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本根据 `--benchmark` 优先构建该接入包自己的 `evaluator/Dockerfile`，没有时使用通用 Controller 镜像；具体 Harness、SDK 和镜像配置属于接入包，不进入通用镜像。实例需要额外环境变量时，可重复传入 `--evaluator-env NAME=VALUE`。每次部署会在新镜像就绪后重建 Controller 容器；Doctor 通过后只清理该 Benchmark 的旧 Controller 镜像，持久化数据卷和 Case 镜像不受影响。SWE-bench 接入包仍锁定官方源码和依赖；如需镜像代理，可使用 `--evaluator-env SWE_BENCH_IMAGE_PROXY_PREFIX=<registry-prefix>`。工作树有未提交内容时镜像会标记为 `dirty`，不能视为正式发布构建。默认启动不拉取 Case 镜像；真实任务或显式 Smoke 才按需拉取：
+默认监听宿主机 `0.0.0.0:3001`；本机仍可通过 `127.0.0.1:3001` 访问，同时其他机器也可能通过评测机 IP 访问，生产环境应配合防火墙或显式使用 `--bind-address 127.0.0.1` 收窄范围。Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本始终只构建通用 Controller，不再选择 Benchmark，也不会在部署时安装全部 Harness。具体 Harness、SDK 和镜像配置属于 `benchmarks/<key>` 接入包；首个对应任务到达后，Controller 根据 Catalog 自动准备 Runtime 镜像并缓存，后续任务直接复用。实例需要额外环境变量时，可重复传入 `--evaluator-env NAME=VALUE`。SWE-bench 如需镜像代理，可使用 `--evaluator-env SWE_BENCH_IMAGE_PROXY_PREFIX=<registry-prefix>`。默认启动不拉取 Runtime 或 Case 镜像；真实任务或显式 Smoke 才按需准备：
 
 ```bash
 bash scripts/evaluator-doctor.sh
@@ -38,37 +34,28 @@ bash scripts/evaluator-doctor.sh --smoke swe-bench
 
 平台只要求 `/health` 中目标 Evaluator 显示 `ready=true` 即可下发评测。ARM64 环境会自动选择对应架构的 Case 镜像，并按与 x86_64 相同的结果契约完成判定。
 
-在 Agent Insight 主服务所在机器上，用权限为 `0600` 的 Token 文件更新通信目标：
+在 Agent Insight 主服务所在机器上更新通信目标：
 
 ```bash
 node scripts/configure-evaluator-target.js \
-  --public-base-url https://agent-insight.example.com \
-  --evaluator-base-url https://evaluator-01.example.com \
-  --token-file /secure/evaluator-token
+  --evaluator-base-url https://evaluator-01.example.com
 ```
 
 配置写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，下一次 Benchmark 操作自动热加载，不需要重启 `scripts/start.sh` 启动的 Agent Insight。评测服务通过 REST 回传结果，由 Agent Insight API 写入平台数据库和 Artifact Store；评测机不需要平台数据库凭证或独立业务数据库。
 
-默认 `token` 模式适合生产环境。若评测服务端口和 Agent Insight 回调入口已经由安全组或防火墙严格限制为两台机器互访，可显式关闭双向 Bearer 鉴权，双方必须同时使用 `none`：
+Agent Insight 与 Evaluator 不提供应用层鉴权，也不会在任务下发、Artifact 下载、进度、证据或完成回调中发送或校验 Authorization。部署网络必须通过白名单、安全组或防火墙限制服务互访：
 
 ```bash
 # 评测机
 bash scripts/start-evaluator.sh \
-  --benchmark swe-bench \
-  --auth-mode none \
-  --platform-base-url http://10.0.0.10:3000 \
-  --bind-address 0.0.0.0 \
-  --port 3001
+  --platform-base-url http://10.0.0.10:3000
 
 # Agent Insight 主服务机器
 node scripts/configure-evaluator-target.js \
-  --auth-mode none \
-  --public-base-url https://agent-insight.example.com \
-  --evaluator-base-url http://evaluator-01.example.com:3001 \
-  --allow-insecure-http true
+  --evaluator-base-url http://evaluator-01.example.com:3001
 ```
 
-`none` 不再要求 Token 文件，也不会在任务下发、Artifact 下载、进度、证据或完成回调中发送或校验 Authorization。它不会自动配置网络边界；若 3001 或回调入口能被非目标机器访问，不应使用该模式。Doctor 的 `runtime.authMode` 会显示实际生效模式。`--platform-base-url` 是 Evaluator 容器实际访问 Agent Insight 的地址；三台机器分离时填写 Agent Insight 的内网 IP 或可达 HTTP(S) 地址。省略该参数时仍沿用任务中的平台地址，兼容既有隧道部署。
+脚本不会自动配置网络边界；不得把 3001 或回调入口直接暴露给非目标机器。`--platform-base-url` 是 Evaluator 容器实际访问 Agent Insight 的地址；三台机器分离时填写 Agent Insight 的内网 IP 或可达 HTTP(S) 地址。省略该参数时仍沿用任务中的平台地址，兼容既有隧道部署。
 
 执行客户端不需要增加任何配置。用户仍只运行 Agent Insight 页面提供的安装 `curl`；安装程序会把该命令所属的 Agent Insight 地址写入客户端配置，后续的 `model.patch` 上传、进度和完成回调统一复用这个地址。注册多个执行客户端时，每个客户端都使用各自安装时记录的平台地址，彼此不影响。
 
@@ -76,14 +63,11 @@ node scripts/configure-evaluator-target.js \
 
 ```bash
 node scripts/configure-evaluator-target.js \
-  --public-base-url http://host.docker.internal:39001 \
   --executor-callback-base-url http://127.0.0.1:3000 \
-  --evaluator-base-url http://evaluator-dev.example.test:3001 \
-  --allow-insecure-http true \
-  --token-file /secure/evaluator-token
+  --evaluator-base-url http://evaluator-dev.example.test:3001
 ```
 
-`--executor-callback-base-url` 继续保留给旧版执行客户端和已经冻结的任务。升级后的执行客户端会校验下发回调的协议及精确 Run 路径，但真正发起 Artifact、进度和完成请求时使用安装 `curl` 已记录的平台地址，因此不需要用户再维护第二个客户端地址。Evaluator 则优先使用自身的 `--platform-base-url`；未配置时才沿用 `--public-base-url`。前端发起的 Benchmark 与真实 Smoke 共用这套平台配置。
+Agent Insight 会从发起实验请求的 `Host` / `X-Forwarded-*` 自动推导公开回调地址并冻结到实验绑定，不再要求维护 `--public-base-url`。`--executor-callback-base-url` 只保留给旧版执行客户端和已经冻结的任务。升级后的执行客户端会校验下发回调的协议及精确 Run 路径，但真正发起 Artifact、进度和完成请求时使用安装 `curl` 已记录的平台地址。Evaluator 的实际回调目标由评测机启动参数 `--platform-base-url` 决定。
 
 Agent Insight 与执行客户端在同一台机器时，安装 `curl` 使用 `http://127.0.0.1:3000` 即可；跨机器时，安装 `curl` 必须使用执行客户端能够访问的 Agent Insight 地址。配置更新不会改写已经开始的旧任务，旧客户端或旧任务仍可继续使用冻结的执行器回调覆盖地址。
 

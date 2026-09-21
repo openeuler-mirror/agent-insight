@@ -1111,7 +1111,7 @@ model Experiment {
   evaluatorIdsJson     String    @default("[]")
   /// 可配置预置评估器的实验级运行参数（版本化 JSON；旧实验 `{}` 按严格默认值解释）
   evaluatorConfigsJson String    @default("{}")
-  /// draft | running | done | failed
+  /// draft | running | done | partial | failed
   status               String    @default("draft")
   /// 来源标记：''=全局实验；'skill-workbench'=Skill 工作台实验；
   /// 其他历史值由对应评测后端维护。列表必须按数据域过滤，不能跨域混排。

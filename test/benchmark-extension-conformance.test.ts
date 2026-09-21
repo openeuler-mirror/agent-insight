@@ -43,6 +43,9 @@ test('benchmark package catalog is reproducible and registers SWE-bench without 
     /sweBenchDatasetLoader/,
   )
   assert.deepEqual(listBenchmarkAdapters().map((item) => item.adapterKey), ['swe-bench'])
+  const evaluatorCatalog = require('../generated/benchmark-catalog/evaluators.cjs').generatedEvaluatorDescriptors
+  assert.equal(evaluatorCatalog[0].runtime, 'oci-container')
+  assert.match(evaluatorCatalog[0].image, /^agent-insight-benchmark-runtime-swe-bench:artifact-[0-9a-f]{64}$/)
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'src/lib/benchmark/adapter-registry.ts'), 'utf8'), /sweBenchAdapter/)
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'services/executor/src/index.cjs'), 'utf8'), /SweBench/)
   assert.doesNotMatch(fs.readFileSync(path.join(repositoryRoot, 'services/evaluator/src/service.cjs'), 'utf8'), /SweBench/)
@@ -144,6 +147,31 @@ test('Evaluator registry routes a shared evaluator key by Benchmark key', () => 
   assert.equal(registry.get('shared-evaluator', 'fixture-one'), first)
   assert.equal(registry.get('shared-evaluator', 'fixture-two'), second)
   assert.throws(() => registry.get('shared-evaluator', 'missing'))
+})
+
+test('OCI Evaluator Runtime pulls once and reuses the artifact-digest cache', async () => {
+  const calls: string[][] = []
+  let cached = false
+  const descriptor = {
+    image: 'registry.example.test/fixture/runtime:artifact-a',
+    artifactDigest: `sha256:${'a'.repeat(64)}`,
+  }
+  const commandRunner = async (_command: unknown, args: string[]) => {
+    calls.push(args)
+    if (args[0] === 'image') {
+      if (!cached) throw new Error('missing')
+      return { stdout: `${descriptor.artifactDigest}\n`, stderr: '' }
+    }
+    if (args[0] === 'pull') {
+      cached = true
+      return { stdout: '', stderr: '' }
+    }
+    throw new Error(`unexpected docker command: ${args.join(' ')}`)
+  }
+  await evaluatorModule.ensureOciRuntime(descriptor, { commandRunner })
+  await evaluatorModule.ensureOciRuntime(descriptor, { commandRunner })
+  assert.equal(calls.filter((args) => args[0] === 'pull').length, 1)
+  assert.equal(calls.filter((args) => args[0] === 'image').length, 3)
 })
 
 test('generic executor selects capabilities and collects multiple artifacts without a Benchmark profile', async () => {

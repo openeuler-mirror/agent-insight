@@ -6,26 +6,16 @@ import { parse } from 'dotenv'
 import { resolveAgentInsightDataPath } from '@/lib/env'
 
 const CONFIG_KEYS = new Set([
-  'AGENT_INSIGHT_PUBLIC_BASE_URL',
   'AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL',
-  'AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE',
-  'AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN',
-  'AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS',
   'AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP',
 ])
-
-export type EvaluatorAuthMode = 'token' | 'none'
 
 export type EvaluatorRuntimeConfigSnapshot = Readonly<{
   source: 'file' | 'environment'
   revision: string
-  authMode: EvaluatorAuthMode
-  publicBaseUrl?: string
   executorCallbackBaseUrl?: string
   evaluatorBaseUrl?: string
-  activeToken?: string
-  previousTokens: readonly string[]
   allowInsecureHttp: boolean
 }>
 
@@ -57,28 +47,11 @@ function normalizeUrl(value: string | undefined, label: string): string | undefi
 }
 
 function parseBoolean(value: string | undefined): boolean {
-  const normalized = value?.trim() || 'false'
+  const normalized = value?.trim() || 'true'
   if (normalized !== 'true' && normalized !== 'false') {
     throw new Error('AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP 必须是 true 或 false')
   }
   return normalized === 'true'
-}
-
-function parseAuthMode(value: string | undefined): EvaluatorAuthMode {
-  const normalized = value?.trim() || 'token'
-  if (normalized !== 'token' && normalized !== 'none') {
-    throw new Error('AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE 必须是 token 或 none')
-  }
-  return normalized
-}
-
-function normalizeToken(value: string | undefined, label: string): string | undefined {
-  const token = value?.trim()
-  if (!token) return undefined
-  if (!/^[\x21-\x7e]+$/.test(token) || token.includes(',')) {
-    throw new Error(`${label} 必须是不含空白、控制字符或逗号的单行值`)
-  }
-  return token
 }
 
 function isLoopback(hostname: string): boolean {
@@ -90,9 +63,7 @@ function buildSnapshot(
   values: NodeJS.ProcessEnv | Record<string, string>,
   requireComplete: boolean,
 ): EvaluatorRuntimeConfigSnapshot {
-  const authMode = parseAuthMode(values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE)
   const allowInsecureHttp = parseBoolean(values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP)
-  const publicBaseUrl = normalizeUrl(values.AGENT_INSIGHT_PUBLIC_BASE_URL, 'AGENT_INSIGHT_PUBLIC_BASE_URL')
   const executorCallbackBaseUrl = normalizeUrl(
     values.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL,
     'AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL',
@@ -101,28 +72,7 @@ function buildSnapshot(
     values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL,
     'AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL',
   )
-  const configuredToken = normalizeToken(
-    values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN,
-    'AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN',
-  )
-  const configuredPreviousTokens = [
-    ...new Set(String(values.AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS || '')
-      .split(',')
-      .map((token) => normalizeToken(token, 'AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS'))
-      .filter((token): token is string => Boolean(token) && token !== configuredToken)),
-  ]
-  const activeToken = authMode === 'token' ? configuredToken : undefined
-  const previousTokens = Object.freeze(authMode === 'token' ? configuredPreviousTokens : [])
-  if (
-    requireComplete
-    && (!publicBaseUrl || !evaluatorBaseUrl || (authMode === 'token' && !activeToken))
-  ) {
-    throw new Error(
-      authMode === 'token'
-        ? '运行时配置文件必须同时提供 Public Base URL、Evaluator Base URL 和当前 Token'
-        : '运行时配置文件必须同时提供 Public Base URL 和 Evaluator Base URL',
-    )
-  }
+  if (requireComplete && !evaluatorBaseUrl) throw new Error('运行时配置文件必须提供 Evaluator Base URL')
   if (evaluatorBaseUrl) {
     const evaluatorUrl = new URL(evaluatorBaseUrl)
     if (evaluatorUrl.protocol === 'http:' && !isLoopback(evaluatorUrl.hostname) && !allowInsecureHttp) {
@@ -130,24 +80,16 @@ function buildSnapshot(
     }
   }
   const revisionInput = JSON.stringify({
-    authMode,
-    publicBaseUrl,
     executorCallbackBaseUrl,
     evaluatorBaseUrl,
-    activeToken,
-    previousTokens,
     allowInsecureHttp,
   })
   const revision = createHash('sha256').update(revisionInput).digest('hex').slice(0, 24)
   return Object.freeze({
     source,
     revision,
-    authMode,
-    ...(publicBaseUrl ? { publicBaseUrl } : {}),
     ...(executorCallbackBaseUrl ? { executorCallbackBaseUrl } : {}),
     ...(evaluatorBaseUrl ? { evaluatorBaseUrl } : {}),
-    ...(activeToken ? { activeToken } : {}),
-    previousTokens,
     allowInsecureHttp,
   })
 }

@@ -12,6 +12,13 @@ import { getBenchmarkDatasetLoader } from './dataset-loader-registry'
 import { SYSTEM_BENCHMARK_DATASET_OWNER } from './dataset-ownership'
 import { buildBenchmarkDatasetFields, importBenchmarkDataset } from './dataset-service'
 
+export type InstalledSystemBenchmarkDataset = {
+  id: string
+  agentEvalDatasetId: string
+  name: string
+  caseCount: number
+}
+
 function resolveSourcePath(sourcePath: string): string {
   const trimmed = sourcePath.trim()
   if (!trimmed) throw new BenchmarkProtocolError('DATASET_SOURCE_REQUIRED', '--source 不能为空', 400)
@@ -24,6 +31,51 @@ async function sourceSha256(sourcePath: string): Promise<`sha256:${string}`> {
   const hash = createHash('sha256')
   for await (const chunk of fs.createReadStream(sourcePath)) hash.update(chunk)
   return `sha256:${hash.digest('hex')}`
+}
+
+export async function findInstalledSystemBenchmarkDataset(input: {
+  benchmarkKey: string
+  profileKey: string
+}): Promise<InstalledSystemBenchmarkDataset | null> {
+  const adapter = getBenchmarkAdapter(input.benchmarkKey)
+  const profiles = adapter.manifest.dataset?.profiles || []
+  const profile = profiles.find((item) => item.key === input.profileKey)
+  if (!profile) {
+    throw new BenchmarkProtocolError(
+      'DATASET_PROFILE_NOT_FOUND',
+      `Benchmark ${input.benchmarkKey} 没有 Dataset Profile：${input.profileKey}`,
+      404,
+    )
+  }
+
+  const candidates = await prisma.benchmarkDataset.findMany({
+    where: {
+      user: SYSTEM_BENCHMARK_DATASET_OWNER,
+      adapterKey: input.benchmarkKey,
+      status: 'ready',
+      ...(profile.expectedCaseCount == null ? {} : { caseCount: profile.expectedCaseCount }),
+    },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      agentEvalDatasetId: true,
+      name: true,
+      caseCount: true,
+      sourceJson: true,
+    },
+  })
+
+  for (const candidate of candidates) {
+    try {
+      const source = JSON.parse(candidate.sourceJson) as { profileKey?: unknown }
+      if (source.profileKey === profile.key) return candidate
+    } catch {
+      // Legacy rows can have non-profile source metadata; the fallback below handles them.
+    }
+  }
+
+  if (profiles.length === 1 && candidates.length > 0) return candidates[0]
+  return null
 }
 
 export async function installBenchmarkDataset(input: {

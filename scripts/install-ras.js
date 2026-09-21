@@ -202,6 +202,59 @@ function fileSha256(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 }
 
+function loadXiaooTraceCollectorManifest(packageRoot = PACKAGE_ROOT) {
+  const manifestPath = path.join(packageRoot, 'scripts', 'xiaoo-trace-collector', 'manifest.js')
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`xiaoO Trace collector 制品不完整：缺少 ${manifestPath}`)
+  }
+  return require(manifestPath)
+}
+
+function checkXiaooTraceCollector(options = {}) {
+  const env = options.env || process.env
+  const packageRoot = options.packageRoot || PACKAGE_ROOT
+  const home = options.home || os.homedir()
+  const dataRoot = options.dataRoot || getDataRoot(env, home)
+  const sourceRoot = path.join(packageRoot, 'scripts', 'xiaoo-trace-collector')
+  const installedRoot = path.join(dataRoot, 'xiaoo-trace-collector')
+
+  try {
+    const { RUNTIME_FILES, buildPlugin } = loadXiaooTraceCollectorManifest(packageRoot)
+    for (const name of RUNTIME_FILES) {
+      const source = path.join(sourceRoot, name)
+      const installed = path.join(installedRoot, name)
+      const sourceHash = fileSha256(source)
+      const installedHash = fileSha256(installed)
+      if (!sourceHash) return { ok: false, error: `xiaoO Trace collector 源文件缺失：${source}` }
+      if (!installedHash) return { ok: false, error: `xiaoO Trace collector 已安装文件缺失：${installed}` }
+      if (sourceHash !== installedHash) {
+        return { ok: false, error: `xiaoO Trace collector 文件不是当前版本：${name}` }
+      }
+    }
+
+    const pluginPath = path.join(installedRoot, 'plugin.json')
+    if (!fs.existsSync(pluginPath)) {
+      return { ok: false, error: `xiaoO Trace collector 插件缺失：${pluginPath}` }
+    }
+    const plugin = JSON.parse(fs.readFileSync(pluginPath, 'utf8'))
+    if (JSON.stringify(plugin) !== JSON.stringify(buildPlugin(installedRoot))) {
+      return { ok: false, error: 'xiaoO Trace collector plugin.json 不是当前版本' }
+    }
+
+    const configHome = env.XDG_CONFIG_HOME || path.join(home, '.config')
+    const configPath = path.join(configHome, 'xiaoo', 'config.toml')
+    const config = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : ''
+    const normalizedPluginPath = pluginPath.replace(/\\/g, '/')
+    if (!config.includes(pluginPath) && !config.includes(normalizedPluginPath)) {
+      return { ok: false, error: `xiaoO 配置未挂载 Trace collector：${configPath}` }
+    }
+
+    return { ok: true, installedRoot, pluginPath, configPath }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+}
+
 function installXiaooHooker(runtimeRoot, rasRoot, home = os.homedir()) {
   const sourceHooker = path.join(runtimeRoot, 'platform_adapter', 'xiaoo', 'hooker')
   if (!fs.existsSync(sourceHooker)) {
@@ -494,9 +547,14 @@ function checkRasInstallation(options = {}) {
         && fs.existsSync(runtimeHooker)
         && fileSha256(hookerMain) === fileSha256(runtimeHooker)
         && fs.existsSync(path.join(runtimeRoot, 'platform_adapter', 'xiaoo', 'hooks.py'))
-      details.platforms.xiaoo = xiaooOk ? 'ok' : 'missing'
-      if (!xiaooOk && want.length === 1) {
-        return statusResult('failed', 'xiaoO RAS hooker 不是当前版本，请执行 agent-insight install-ras', details)
+      const collector = xiaooOk
+        ? checkXiaooTraceCollector({ env, packageRoot, dataRoot, home: options.home })
+        : { ok: false, error: 'xiaoO RAS hooker 未就绪' }
+      details.platforms.xiaoo = xiaooOk && collector.ok ? 'ok' : 'missing'
+      details.xiaooTraceCollector = collector.ok ? 'ok' : collector.error
+      if ((!xiaooOk || !collector.ok) && want.length === 1) {
+        const subject = xiaooOk ? 'xiaoO Trace collector' : 'xiaoO RAS hooker'
+        return statusResult('failed', `${subject} 不是当前版本，请执行 agent-insight install-ras`, details)
       }
     }
 
@@ -504,9 +562,12 @@ function checkRasInstallation(options = {}) {
       .filter(([, v]) => v !== 'ok')
       .map(([k]) => k)
     if (missing.length && want.length > 1) {
+      const collectorDetail = details.xiaooTraceCollector && details.xiaooTraceCollector !== 'ok'
+        ? `；${details.xiaooTraceCollector}`
+        : ''
       return statusResult(
         'failed',
-        `Agent RAS 核心已就绪，但平台装配不完整：${missing.join(', ')}；请执行 agent-insight install-ras`,
+        `Agent RAS 核心已就绪，但平台装配不完整：${missing.join(', ')}${collectorDetail}；请执行 agent-insight install-ras`,
         details,
       )
     }
@@ -603,22 +664,33 @@ function installRas(options = {}) {
 
     const xiaoo = installXiaooHooker(runtimeRoot, rasRoot, options.home || os.homedir())
     if (!xiaoo.ok) {
-      console.warn(`⚠️  xiaoO hooker install skipped: ${xiaoo.error}`)
+      throw new Error(`xiaoO hooker 安装失败：${xiaoo.error}`)
     } else {
       // Insight ⓪ Trace collector (complete link); RAS hooker no longer owns OTel.
-      const collectorInstall = path.join(__dirname, 'xiaoo-trace-collector', 'install.js')
-      if (fs.existsSync(collectorInstall)) {
-        const col = spawnSync(process.execPath, [collectorInstall], {
-          encoding: 'utf8',
-          env,
-        })
-        if (col.status !== 0) {
-          console.warn(
-            `⚠️  xiaoo-trace-collector install skipped: ${(col.stderr || col.stdout || '').trim()}`,
-          )
-        } else if (col.stdout) {
-          process.stdout.write(col.stdout)
-        }
+      const collectorInstall = path.join(packageRoot, 'scripts', 'xiaoo-trace-collector', 'install.js')
+      if (!fs.existsSync(collectorInstall)) {
+        throw new Error(`xiaoO Trace collector 制品不完整：缺少 ${collectorInstall}`)
+      }
+      const collectorEnv = {
+        ...env,
+        AGENT_INSIGHT_DATA_DIR: dataRoot,
+        ...(options.home ? { HOME: options.home } : {}),
+      }
+      const col = spawnSync(process.execPath, [collectorInstall], {
+        encoding: 'utf8',
+        env: collectorEnv,
+      })
+      if (col.status !== 0) {
+        throw new Error(
+          `xiaoO Trace collector 安装失败：${(col.stderr || col.stdout || col.error?.message || '').trim()}`,
+        )
+      }
+      const collector = checkXiaooTraceCollector({ env, packageRoot, dataRoot, home: options.home })
+      if (!collector.ok) {
+        throw new Error(`xiaoO Trace collector 安装校验失败：${collector.error}`)
+      }
+      if (col.stdout) {
+        process.stdout.write(col.stdout)
       }
     }
 
@@ -678,6 +750,7 @@ if (require.main === module) run()
 
 module.exports = {
   RUNTIME_ENTRIES,
+  checkXiaooTraceCollector,
   checkRasInstallation,
   getDataRoot,
   hashRuntime,

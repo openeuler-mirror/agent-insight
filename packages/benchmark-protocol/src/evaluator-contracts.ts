@@ -5,6 +5,7 @@ export type BenchmarkEvaluationProgress = {
   kind: 'evaluation'
   stage:
     | 'downloading_artifacts'
+    | 'preparing_runtime'
     | 'resolving_image'
     | 'running_harness'
     | 'collecting_evidence'

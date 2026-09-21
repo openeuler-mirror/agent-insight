@@ -20,16 +20,13 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-数据文件可放在服务器上的任意可读目录。Benchmark 接入包和数据库准备完成后执行一次：
+SWE-bench Verified 随 Agent Insight 服务一条命令完成准备和导入：
 
 ```bash
-npx tsx scripts/benchmark/install-dataset.ts \
-  --benchmark swe-bench \
-  --profile verified \
-  --source /path/to/test.parquet
+bash scripts/start.sh --benchmark swe-bench
 ```
 
-导入成功后数据已进入数据库，所有用户共享读取，服务重启不需要重新导入。默认保留原文件；增加 `--delete-source-after-import` 可在成功校验后删除它。
+首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查数据库，数据集已经存在时会跳过全部准备和导入步骤；无需修改 `.env` 或保留原始下载文件。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 

@@ -12,6 +12,7 @@ import {
 
 const require = createRequire(import.meta.url)
 const installer = require("../scripts/install-ras.js")
+const collectorManifest = require("../scripts/xiaoo-trace-collector/manifest.js")
 
 test("RAS installer accepts Python 3.10+ only", () => {
   assert.equal(installer.isSupportedPythonVersion("3.10.0"), true)
@@ -118,6 +119,54 @@ test("invalid JSON is backed up before replacement", () => {
   const backups = fs.readdirSync(root).filter((name) => name.startsWith("config.json.bak."))
   assert.equal(backups.length, 1)
   assert.equal(fs.readFileSync(path.join(root, backups[0]), "utf8"), "{broken")
+})
+
+test("RAS check validates the installed xiaoO Trace collector and plugin mount", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ras-xiaoo-collector-"))
+  const packageRoot = path.join(root, "package")
+  const dataRoot = path.join(root, "data")
+  const configHome = path.join(root, "config")
+  const sourceRoot = path.join(packageRoot, "scripts", "xiaoo-trace-collector")
+  const installedRoot = path.join(dataRoot, "xiaoo-trace-collector")
+  fs.mkdirSync(sourceRoot, { recursive: true })
+  fs.mkdirSync(installedRoot, { recursive: true })
+  fs.mkdirSync(path.join(configHome, "xiaoo"), { recursive: true })
+  fs.copyFileSync(
+    path.join(process.cwd(), "scripts", "xiaoo-trace-collector", "manifest.js"),
+    path.join(sourceRoot, "manifest.js"),
+  )
+  for (const name of collectorManifest.RUNTIME_FILES) {
+    fs.writeFileSync(path.join(sourceRoot, name), `current:${name}`)
+    fs.writeFileSync(path.join(installedRoot, name), `current:${name}`)
+  }
+  const pluginPath = path.join(installedRoot, "plugin.json")
+  fs.writeFileSync(
+    pluginPath,
+    `${JSON.stringify(collectorManifest.buildPlugin(installedRoot), null, 2)}\n`,
+  )
+  fs.writeFileSync(
+    path.join(configHome, "xiaoo", "config.toml"),
+    `[hooker]\nplugins = [${JSON.stringify(pluginPath)}]\n`,
+  )
+
+  const options = {
+    packageRoot,
+    dataRoot,
+    home: path.join(root, "home"),
+    env: { XDG_CONFIG_HOME: configHome },
+  }
+  assert.equal(installer.checkXiaooTraceCollector(options).ok, true)
+
+  fs.writeFileSync(path.join(installedRoot, "otel_spans.py"), "stale")
+  const stale = installer.checkXiaooTraceCollector(options)
+  assert.equal(stale.ok, false)
+  assert.match(stale.error, /otel_spans\.py/)
+
+  fs.writeFileSync(path.join(installedRoot, "otel_spans.py"), "current:otel_spans.py")
+  fs.writeFileSync(pluginPath, "[]\n")
+  const invalidPlugin = installer.checkXiaooTraceCollector(options)
+  assert.equal(invalidPlugin.ok, false)
+  assert.match(invalidPlugin.error, /plugin\.json/)
 })
 
 test("installer reports disabled, unsupported and missing-runtime states", () => {

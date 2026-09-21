@@ -12,6 +12,8 @@
 import { prisma } from '@/lib/storage/prisma';
 import { getDimension, type VariableDimension, type DimensionTrace, type TraceCandidate } from './variable-dimension';
 import {
+  deriveSettledExperimentStatus,
+  normalizeTerminalExperimentStatus,
   publishedOverallAverage,
   evaluatorBreakdown,
   caseScore,
@@ -405,6 +407,7 @@ export async function getComparisonDetail(
     failed: allResults.filter((r) => r.status === 'failed').length,
     pending: allResults.filter((r) => r.status === 'pending' || r.status === 'running').length,
   };
+  const responseStatus = normalizeTerminalExperimentStatus(experiment.status, allResults);
 
   // 全量 case（按组分片）——显式类型避免 prisma 包装器 any 推断
   interface CaseWithResults {
@@ -439,7 +442,7 @@ export async function getComparisonDetail(
   for (const g of experiment.groups) {
     const groupCaseIds = new Set(allCases.filter((c) => c.groupId === g.id).map((c) => c.id));
     const groupRows = allResults.filter((r) => groupCaseIds.has(r.caseId));
-    const overall = publishedOverallAverage(experiment.status, groupRows);
+    const overall = publishedOverallAverage(responseStatus, groupRows);
     const breakdown = evaluatorBreakdown(groupRows);
     const groupProgress = {
       total: groupRows.length,
@@ -542,7 +545,7 @@ export async function getComparisonDetail(
     name: experiment.name,
     type: experiment.type,
     agentName: experiment.agentName,
-    status: experiment.status,
+    status: responseStatus,
     watchMode: experiment.watchMode,
     watchEnabledAt: experiment.watchEnabledAt,
     evaluatorIds,
@@ -566,18 +569,17 @@ export interface StartComparisonRunResult {
   completion?: Promise<void>;
 }
 
-/** 终态谓词（同款 PATTERN，独立实现非导出；G7 不复用单组内部）。任一 pending/running→return；anyDone→'done' else 'failed'。 */
+/** 全部结果终态后收敛为 done / partial / failed。 */
 async function settleComparisonStatus(experimentId: string): Promise<void> {
   const rows: { status: string }[] = await prisma.experimentEvalResult.findMany({
     where: { experimentId },
     select: { status: true },
   });
-  const anyPending = rows.some((r) => r.status === 'pending' || r.status === 'running');
-  if (anyPending) return;
-  const anyDone = rows.some((r) => r.status === 'done');
+  const status = deriveSettledExperimentStatus(rows);
+  if (!status) return;
   await prisma.experiment.update({
     where: { id: experimentId },
-    data: { status: anyDone ? 'done' : 'failed' },
+    data: { status },
   });
 }
 

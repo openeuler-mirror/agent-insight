@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { TextEvaluatorConfigDialog } from '@/components/eval/TextEvaluatorConfigDialog';
+import { RuntimeModelSelect } from '@/components/eval/RuntimeModelSelect';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import {
@@ -28,6 +29,7 @@ import {
   toDatasetCases,
 } from '@/lib/engine/experiment/dataset-match';
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
@@ -60,6 +62,7 @@ interface AgentTargetOption {
   host: string;
   hostname: string | null;
   platform: string;
+  agent: string;
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
   supportsGenericTrace: boolean;
@@ -737,7 +740,6 @@ export function ExperimentWizard({
         ? detail.reusableConfig as Record<string, unknown>
         : {};
       const restoredDatasetId = typeof config.datasetId === 'string' ? config.datasetId : '';
-      const restoredAgentName = typeof config.agentName === 'string' ? config.agentName : '';
       const restoredTraceSource = config.traceSource === 'generate' ? 'generate' : 'existing';
       const restoredEvaluators = Array.isArray(config.evaluatorIds)
         ? config.evaluatorIds.map(String).filter(Boolean)
@@ -748,6 +750,10 @@ export function ExperimentWizard({
       const restoredTarget = config.executionTarget && typeof config.executionTarget === 'object'
         ? config.executionTarget as Record<string, unknown>
         : {};
+      const restoredAgentName = canonicalExperimentAgentName(
+        String(restoredTarget.platform || ''),
+        typeof config.agentName === 'string' ? config.agentName : '',
+      );
       setName(`${String(detail?.name || '实验')} · 复用评测配置`);
       setAgentName(restoredAgentName);
       setTraceMode(restoredTraceSource);
@@ -1456,6 +1462,7 @@ export function ExperimentWizard({
           executionTarget: traceMode === 'generate' && selectedTarget ? {
             workerId: selectedTarget.workerId,
             platform: selectedTarget.platform,
+            agent: selectedTarget.agent,
             model: genModel || null,
           } : undefined,
           agentTimeoutSeconds,
@@ -1484,6 +1491,7 @@ export function ExperimentWizard({
               executionTarget: traceMode === 'generate' && selectedTarget ? {
                 workerId: selectedTarget.workerId,
                 platform: selectedTarget.platform,
+                agent: selectedTarget.agent,
                 model: genModel || null,
                 timeoutSeconds: agentTimeoutSeconds,
               } : null,
@@ -1536,7 +1544,7 @@ export function ExperimentWizard({
             generateTrace: {
               workerId: selectedTarget.workerId,
               platform: selectedTarget.platform,
-              agent: agentName,
+              agent: selectedTarget.agent,
               model: genModel || null,
               timeoutSeconds: agentTimeoutSeconds,
             },
@@ -1989,12 +1997,9 @@ export function ExperimentWizard({
                   </select>
                 </div>
                 <div>
-                  <label style={FIELDLBL}>运行模型 *</label>
-                  <select style={{ ...INPUT, cursor: 'pointer' }} value={genModel} onChange={(e) => setGenModel(e.target.value)}>
-                    {(selectedTarget?.models || [{ id: '', label: '平台默认' }]).map((model) => (
-                      <option key={model.id || '__default__'} value={model.id}>{model.label || model.id || '平台默认'}</option>
-                    ))}
-                  </select>
+                  <label htmlFor="experiment-runtime-model" style={FIELDLBL}>运行模型 *</label>
+                  <RuntimeModelSelect key={effectiveTargetKey} id="experiment-runtime-model"
+                    models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                 </div>
                 {!skillContext && (
                   <div>

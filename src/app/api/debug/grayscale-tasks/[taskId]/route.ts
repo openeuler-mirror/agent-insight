@@ -2734,6 +2734,7 @@ async function runGrayscaleExecutionRetry(args: {
         const run = sideState?.runs?.find(item => item.runIndex === runIndex);
         if (!sideState || !run) throw new Error(`找不到需要重新执行的 ${side.toUpperCase()} 侧 Case`);
         const experimentSettled = experiment.status === 'done'
+            || experiment.status === 'partial'
             || experiment.status === 'failed'
             || experiment.status === 'cancelled';
         if (!experimentSettled && (run.status === 'pending' || run.status === 'running' || run.status === 'evaluating')) {

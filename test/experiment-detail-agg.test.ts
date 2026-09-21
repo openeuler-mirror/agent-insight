@@ -7,9 +7,11 @@ import test from 'node:test';
 import {
   caseScore,
   categorySummary,
+  deriveSettledExperimentStatus,
   effectiveScore,
   evaluatorBreakdown,
   groupByCategory,
+  normalizeTerminalExperimentStatus,
   overallAverage,
   publishedOverallAverage,
   scoredRows,
@@ -52,14 +54,26 @@ test('scoredRows / overallAverage：仅 done 且有分入均分', () => {
   assert.equal(overallAverage([]), null);
 });
 
-test('publishedOverallAverage：运行中不发布部分均分，完成后才发布', () => {
+test('实验终态：混合成功/失败为部分完成，历史 done 会按结果纠正', () => {
+  assert.equal(deriveSettledExperimentStatus([{ status: 'done' }, { status: 'done' }]), 'done');
+  assert.equal(deriveSettledExperimentStatus([{ status: 'failed' }, { status: 'failed' }]), 'failed');
+  assert.equal(deriveSettledExperimentStatus([{ status: 'done' }, { status: 'failed' }]), 'partial');
+  assert.equal(deriveSettledExperimentStatus([{ status: 'done' }, { status: 'running' }]), null);
+  assert.equal(
+    normalizeTerminalExperimentStatus('done', [{ status: 'done' }, { status: 'failed' }]),
+    'partial',
+  );
+});
+
+test('publishedOverallAverage：运行中不发布，完成和部分完成发布有效均分', () => {
   const rows = [
     row({ evaluatorId: 'ev-res-a', score: 90 }),
-    row({ evaluatorId: 'ev-traj-a', status: 'running' }),
+    row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
   ];
   assert.equal(publishedOverallAverage('running', rows), null);
   assert.equal(publishedOverallAverage('failed', rows), null);
   assert.equal(publishedOverallAverage('done', rows), 90);
+  assert.equal(publishedOverallAverage('partial', rows), 90);
 });
 
 test('evaluatorBreakdown：按评估器归组，N/M 与失败数正确，保持出现顺序', () => {

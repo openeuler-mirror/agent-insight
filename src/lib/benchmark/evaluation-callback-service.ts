@@ -133,6 +133,7 @@ export async function recordBenchmarkEvaluationProgress(input: {
   }
   const allowedStages = [
     'downloading_artifacts',
+    'preparing_runtime',
     'resolving_image',
     'running_harness',
     'collecting_evidence',

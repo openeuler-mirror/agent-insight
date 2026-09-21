@@ -48,8 +48,8 @@ flowchart TB
 |------|----------|--------|------------------|
 | **看板「安装指导」** | `curl -fsSL "$HOST/api/setup?key=…" \| bash`（Windows：`irm … \| iex`） | 平台已部署，在 **Agent 实际运行的机器** 接入 | 是（按勾选框架）+ 条件装 RAS |
 | **一键部署步骤 4** | `install` 拉 `/api/setup/auto` 后执行 `~/.agent-insight/auto_setup.sh` | `npx agent-insight install` 本机同机部署 | 同上 |
-| **仅 RAS** | `npx agent-insight install-ras` 或 `node scripts/install-ras.js` | 已有采集器、只补/升级 RAS | 否（但装 xiaoO hooker 成功后会尝试装 `xiaoo-trace-collector`） |
-| **只检查** | `npx agent-insight install-ras --check` | 不改文件，校验指纹与挂载 | — |
+| **仅 RAS** | `npx agent-insight install-ras` 或 `node scripts/install-ras.js` | 已有采集器、只补/升级 RAS | 会同步安装并校验 `xiaoo-trace-collector`；制品缺失或指纹不一致时安装失败 |
+| **只检查** | `npx agent-insight install-ras --check` | 不改文件，校验 RAS 指纹、平台挂载与 xiaoO Trace collector | — |
 
 > **重要**：Insight 服务端 `start` **不会**在 Agent 机上装 RAS。服务与 Agent 不在同一机器时，必须在 **Agent 宿主** 上跑上表命令。
 
@@ -155,7 +155,7 @@ INSTALL_OPENCODE || INSTALL_HERMES || INSTALL_OPENCLAW || INSTALL_XIAOO
 |----|------|------|
 | 0 | 开关 | `AGENT_INSIGHT_RAS=0` → 打印 disabled 并 return 0 |
 | 1 | 本地 checkout | 若 `./scripts/install-ras.js` 与 `./agent_ras/pyproject.toml` 都在，直接跑本地安装器并 return |
-| 2 | 服务端 bundle | `curl` `GET $HOST/api/ingest/setup/bundle?name=ras`（带 API Key）→ 解压 → 跑 `extracted/scripts/install-ras.js`。与执行目录、npm 无关 |
+| 2 | 服务端 bundle | `curl` `GET $HOST/api/ingest/setup/bundle?name=ras`（带 API Key）→ 解压 → 跑 `extracted/scripts/install-ras.js`。bundle 同时携带 `agent_ras/` 与 `scripts/xiaoo-trace-collector/`，与执行目录、npm 无关 |
 | 3 | npm 兜底 | 仅当服务端尚无 bundle 接口：需要 `npm`+`tar`；最多 **3 次** `npm pack --ignore-scripts`；校验 `package/scripts/install-ras.js` 与 `agent_ras/pyproject.toml` |
 | 4 | 执行安装器 | `AGENT_INSIGHT_HOST=… AGENT_INSIGHT_API_KEY=… node …/install-ras.js` |
 | 5 | 预检 | `curl -H "x-witty-api-key: …" "$HOST/api/ingest/ras-events?taskId=__agent_insight_ras_preflight__"`（失败只警告；走 bundle 成功路径时由安装器侧负责，npm 兜底路径在 bash 内再打一次） |
@@ -193,8 +193,10 @@ flowchart TD
   J --> K[写 OpenCode wrapper 插件]
   K --> L[合并 opencode.json + ras-judge]
   L --> M[安装 xiaoO hooker + 改 config.toml]
-  M --> N[尝试 xiaoo-trace-collector/install.js]
-  N --> O[写 ras/install.json marker]
+  M --> N[安装 xiaoo-trace-collector]
+  N --> N1{运行文件指纹 + plugin/config 挂载正确?}
+  N1 -->|否| Z4[failed]
+  N1 -->|是| O[写 ras/install.json marker]
   O --> P[检测 PATH 中是否有 opencode]
 ```
 
@@ -208,7 +210,7 @@ flowchart TD
 
 从包内 `agent_ras/` 对下列入口做内容哈希（SHA-256）：
 
-`core` · `detectors` · `recovery` · `agents` · `platform_adapter` · `ras_runtime` · `config` · `pyproject.toml` · `README.md`
+`core` · `detectors` · `review` · `recovery` · `agents` · `platform_adapter` · `ras_runtime` · `config` · `pyproject.toml` · `README.md`
 
 落盘目录：
 
@@ -245,7 +247,7 @@ flowchart TD
 | `~/.agent-insight/ras/xiaoo/hooker/*` | 从 runtime 复制 hooker；写 `plugin.json`（Chat / Tool / Session 三类 hook） |
 | `~/.config/xiaoo/config.toml` | `[hooker].plugins` 追加 hooker `plugin.json` 路径 |
 
-成功后若存在 [`scripts/xiaoo-trace-collector/install.js`](../../../scripts/xiaoo-trace-collector/install.js)，会再装 **Insight ⓪ Trace 采集器**（完整链路观测；RAS 不再负责 OTel）。
+随后必须安装 **Insight ⓪ Trace 采集器**（完整链路观测；RAS 不再负责 OTel）。安装器会比对 `hooker_main.py` / `otel_trace.py` / `otel_spans.py` / `otlp_http.py` / `session_ids.py` 的源文件与已安装文件指纹，并校验 `plugin.json` 及 `config.toml` 挂载；任一项缺失或不一致都不会写入成功 marker。
 
 ### 6.6 安装标记 `~/.agent-insight/ras/install.json`
 
@@ -386,7 +388,8 @@ test -f ~/.config/opencode/plugins/agent-insight-ras.js && echo opencode_plugin_
 | setup 直接返回 401 | 命令中的 Key 不属于当前 Host / 当前数据库 | 回到当前 Host 的安装指导页，等待身份刷新完成后重新复制命令 |
 | 预检失败 | Host 不可达 / Key 错 | 检查 `AGENT_INSIGHT_HOST`、API Key；安装本身可能已成功 |
 | OpenCode 无 RAS | 未重启 opencode / 插件路径错 | 重启宿主；`--check` 看 platforms.opencode |
-| 有 RAS 无完整 Trace | 只装了 RAS，未装观测采集器 | 再跑安装指导勾选对应框架；xiaoO 确认 collector |
+| `--check` 报 xiaoO Trace collector 缺失/版本不一致 | bundle 不完整、历史安装副本滞后或 plugin/config 挂载被改写 | 重跑当前服务的安装命令，然后退出并重新打开 xiaoO |
+| 有 RAS 无完整 Trace | 对应框架的观测采集器未安装 | 再跑安装指导勾选对应框架；xiaoO 可先用 `install-ras --check` 确认 collector |
 
 ---
 

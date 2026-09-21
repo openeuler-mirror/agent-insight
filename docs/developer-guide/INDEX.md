@@ -9,14 +9,32 @@
 
 | Field | Value |
 |---|---|
-| Commit | `7760bb8c60ee7bcad2dd00b409758afba25c6f27` (`7760bb8c`) |
-| Branch | `goal_plus` |
-| Date | 2026-09-16 |
-| Author | openeuler-ci-bot |
-| Subject | `!411 修复客户端安装包缺失问题` |
-| Documentation overlay | 工作树补充重构后 Goal Plus 的 Pi 主 Trace、worker Trace 与 reported collaboration 接入。 |
+| Commit | `61cefb3a45a7c8421a966c194f387b2f333f5573` (`61cefb3a`) |
+| Branch | `bench-9-16` |
+| Date | 2026-09-17 |
+| Author | mintuyang |
+| Subject | `修复xiaoo安装问题` |
+| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-18 working-tree overlay：实验向导将 xiaoo Collector 上报的 `xiaoo` Trace 身份与 CLI 原生 `defaultagent` 执行 ID 归并为单个 `xiaoo` 候选；执行 target 独立保留原生 ID，普通生成 Trace 与 Benchmark 下发继续传递 `defaultagent`。
+
+> 2026-09-18 working-tree overlay：Agent Insight 与 Evaluator 删除应用层通信鉴权及相关参数，Evaluator 默认监听宿主机 `0.0.0.0:3001`，受控网络的 `allow-insecure-http` 默认值为 `true`。Agent Insight 配置入口删除重复的 `--public-base-url`，公开回调地址由实验请求的 `Host` / `X-Forwarded-*` 自动推导，Evaluator 的实际访问地址只由评测机 `--platform-base-url` 决定。部署必须依赖白名单、安全组或防火墙限制双向访问；可把 `allow-insecure-http` 设为 `false` 强制非回环 Evaluator 使用 HTTPS。本条取代下方历史快照中的 Token 鉴权说明。
+
+> 2026-09-18 working-tree overlay：Evaluator 部署入口移除 `--benchmark`，始终启动不含实例 Harness 的通用 Controller。`benchmarks/<key>/evaluator/evaluator.yaml` 通过构建期 Catalog 声明 OCI Runtime 镜像、容器 Entrypoint、Dockerfile 与资源边界；首个任务按 `evaluator.key + benchmark.key` 自动准备并校验内容摘要，后续复用 Docker 缓存。SWE-bench 仅作为接入包实例，公共 Controller、调度和前端不增加 SWE 专用分支。
+
+> 2026-09-17 working-tree overlay：实验终态新增 `partial`。全部结果成功为 `done`，成功与失败并存为 `partial`，全部失败为 `failed`；列表与详情会按结果行纠正旧版“有成功即完成”的历史状态，部分完成仍发布成功结果的有效均分。
+
+> 2026-09-17 working-tree overlay：Benchmark 整体服务安装指南补充 Agent Insight 与 Evaluator 同机部署命令，明确 `localhost`、`host.docker.internal` 与分机可达地址的边界，并分别给出同机、分机通信配置。SWE-bench 未配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时不再内置第三方代理，直接保留官方镜像名并复用宿主 Docker daemon 的 registry mirror；显式代理行为保持不变。
+
+> 2026-09-17 working-tree overlay：xiaoo 空最终回复改为进程退出后判定，仅正常退出且无明确错误时使用本次运行、同一 Session 的 Collector 活动记录兜底；活动记录不包含正文，独立于 Trace 上传缓冲并随运行清理。更新 `05-data-and-control-flow.md` 与实验用户指南，其他指南未重新审计。
+
+> 2026-09-16 working-tree overlay：生产启动脚本新增 `--benchmark swe-bench`，在数据库缺少 SWE-bench Verified 时自动下载并校验固定官方源码与 Parquet、创建隔离 Python 环境并导入 500 条共享只读 Case；重复启动先查库并跳过本地准备，已有数据版本不会被静默替换。同步更新 Benchmark 服务安装指南与数据集用户指南。
+
+> 2026-09-16 working-tree overlay：修复 xiaoo Collector 被旧 FI 上传密钥覆盖的问题，改为完整来源选择、当前 RAS 安装配置优先。无 Session ID 的 Hook 按 xiaoo PID + 启动时间隔离，仅在唯一活动会话时归属，终态释放；安装器使用 exec 保持父进程身份。最终根 span 携带显式完成标记，聚合后写入 Session 结束时间，避免退出后仍显示执行中。其他 Agent、公共 OTLP API 与官方评测逻辑不变。
+
+> 2026-09-16 working-tree overlay：xiaoo 模型发现改用标准 TOML 解析，避免行尾注释进入 provider/model。后台实验执行通过用户登录交互 shell 继承现有终端环境，复用 xiaoo 原生密钥读取；shell 启动输出与 CLI 证据分离，沿用进程组超时，无需额外密钥文件或二次输入。
 
 > 2026-09-14 Issue #298/#299 overlay：修复评估器配置跳转与局部刷新、评测数据集弹窗下拉交互、空数据项校验和本地导入，并让普通实验保留数据集 Case 绑定；任务完成度评测可复用有效关键观点缓存，在缓存缺失、失效或异常为空时实时提取并懒写回，模型返回空观点时使用完整预期输出兜底。
 
@@ -34,9 +52,9 @@
 
 > 2026-09-08 working-tree overlay：Benchmark 前端最小接入复用数据集、四步实验向导、实验列表与详情路由；`SWE-bench Verified` 通过只读公共投影进入普通数据集入口，Official Harness 自动绑定，已有 Trace/监听及依赖参考答案的评估器在 Benchmark 下禁用。通用实验列表新增同配置立即运行与复用配置预填；Benchmark Case 详情只展示官方契约说明、Patch/证据元数据和归一化测试计数。Case 重跑复用通用入口，Official 重评复用最新 Patch 且默认单任务串行。
 
-> 2026-09-08 working-tree overlay：独立 Evaluator Controller 增加 Linux/macOS 源码一键部署、Docker restart policy、当前 context Socket 解析、持久化数据卷、容器内外 Doctor 和显式 SWE-bench Gold Smoke；普通启动不预拉 Case 镜像。每次部署在新镜像就绪后重建 Controller 容器，Doctor 成功后只清理旧 Controller 镜像，保留命名 volume 和 Case 镜像。Agent Insight 增加 `data/config/benchmark-evaluator.env` 原子热加载与进程环境变量兜底，目标 URL 和发送 Token 从同一快照冻结，回调鉴权支持当前/宽限期 Token，切换评测机或通信凭证不再要求重启主进程。Controller 基础健康与各 Evaluator 的 `ready/formalEligible` 分离，并输出宿主、Docker、源码 revision、`sourceDirty` 和镜像事实。版本化的构建期 Catalog 迁移到可见目录 `generated/benchmark-catalog/`，并用 `adapters.ts` 与 `catalog-lock.json` 明确 Adapter 注册表和内容指纹语义。Controller 构建默认使用带官方回退的国内 Debian/PyPI 镜像，SWE-bench Harness 改为下载固定 commit 的官方 GitHub codeload archive 并校验固定 SHA-256；Node 和 Case 镜像默认保留官方名称并复用宿主 registry mirror，仅在显式配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时先经指定代理拉取。
+> 2026-09-08 working-tree overlay：独立 Evaluator Controller 增加 Linux/macOS 源码一键部署、Docker restart policy、当前 context Socket 解析、持久化数据卷、容器内外 Doctor 和显式 SWE-bench Gold Smoke；普通启动不预拉 Case 镜像。每次部署在新镜像就绪后重建 Controller 容器，Doctor 成功后只清理旧 Controller 镜像，保留命名 volume 和 Case 镜像。Agent Insight 增加 `data/config/benchmark-evaluator.env` 原子热加载与进程环境变量兜底，目标 URL 从运行时快照冻结，切换评测机地址不再要求重启主进程。Controller 基础健康与各 Evaluator 的 `ready/formalEligible` 分离，并输出宿主、Docker、源码 revision、`sourceDirty` 和镜像事实。版本化的构建期 Catalog 迁移到可见目录 `generated/benchmark-catalog/`，并用 `adapters.ts` 与 `catalog-lock.json` 明确 Adapter 注册表和内容指纹语义。Controller 构建默认使用带官方回退的国内 Debian/PyPI 镜像，SWE-bench Harness 改为下载固定 commit 的官方 GitHub codeload archive 并校验固定 SHA-256；Node 和 Case 镜像默认保留官方名称并复用宿主 registry mirror，仅在显式配置 `SWE_BENCH_IMAGE_PROXY_PREFIX` 时先经指定代理拉取。
 
-> 2026-09-08 working-tree overlay：Benchmark Evaluator 双向认证新增显式 `token|none` 模式，默认继续使用共享 Bearer Token；仅在安全组或防火墙已限制两台服务互访时可选择 `none`，此时健康检查、任务下发、接单、Artifact 下载和全部评测回调都省略 Authorization。认证模式进入热加载配置与目标修订，启动脚本、Doctor 和配置脚本同步支持无 Token 部署。
+> 2026-09-08 历史 overlay（已被 2026-09-18 方案取代）：当时 Benchmark Evaluator 曾支持应用层双向认证；当前实现已删除该能力及全部相关参数。
 
 > 2026-09-09 working-tree overlay：Benchmark Catalog 新增 Dataset Loader、Dataset Profile 与声明式 Presentation；管理员可从任意服务端可读路径一次导入系统共享数据集，并选择在成功后删除源文件。共享数据集对所有用户只读，实验仍按用户隔离；管理员删除未引用数据，已引用数据改为归档。实验向导、执行目标和 Benchmark 结果卡按当前 Adapter/Manifest 动态渲染，不再依赖 SWE-bench 字段或固定 Evaluator ID。
 
@@ -44,13 +62,13 @@
 
 > 2026-09-10 working-tree overlay：Benchmark 官方评测可靠性进一步收敛。SWE-bench Raw Result 使用严格 boolean 和官方报告结构；归一化同时绑定冻结实例/测试名单、正式资格以及重读并校验摘要的三类证据，字符串 `"false"`、错误实例、空/重复/未知测试或证据漂移均不能产生成绩。Evaluator 的 abort 成为不可逆 `EVALUATION_TIMEOUT`，callback 只接受结构与状态匹配的 ACK。平台增加 Evaluation 分阶段 watchdog、下发 attempt owner CAS、normalizing 恢复和带 owner lease 的持久化 continuation，终态 ACK 前先落续跑意图，服务重启可恢复且补充评估器不重复执行；旧 Run 无法覆盖 Case 重跑后的投影。聚合只取重试图叶子并稳定排序，防止历史尝试重复计分。官方 Harness 判定代码保持不变。
 
-> 2026-09-10 working-tree overlay：Benchmark Case 详情新增 Artifact 查看与下载入口。`model.patch`、`report.json`、`test_output.txt` 和 `run_instance.log` 均按需通过受控内容接口读取，在右侧抽屉展示；下载菜单复用原始 Artifact，不额外生成 ZIP。通用实验详情只投影 Artifact ID 派生的 `contentUrl`，不返回存储路径或文件正文；Patch 的浏览器下载在既有内容路由中新增用户/实验归属校验，同时保留 Evaluator Bearer 下载契约。
+> 2026-09-10 working-tree overlay：Benchmark Case 详情新增 Artifact 查看与下载入口。`model.patch`、`report.json`、`test_output.txt` 和 `run_instance.log` 均按需通过受控内容接口读取，在右侧抽屉展示；下载菜单复用原始 Artifact，不额外生成 ZIP。通用实验详情只投影 Artifact ID 派生的 `contentUrl`，不返回存储路径或文件正文；Patch 的浏览器下载保留用户/实验归属校验，Evaluator 下载则校验 Evaluation 与 Artifact 所有权并依赖受控网络边界。
 
 > 2026-09-11 working-tree overlay：Linux 常驻客户端安装器按实际 systemd 层级运行：root 新装和历史 `/etc/systemd/system/agent-insight-client.service` 沿用系统级服务，普通用户新装保持用户级服务；systemd manager 预检提前到设备凭证轮换之前，避免旧系统进程继续持有已撤销凭证。
 
 > 2026-09-11 working-tree overlay：普通单组与 Benchmark 实验详情共用“同评测基线趋势”。服务端以冻结数据集、Case 集/契约和评分契约生成基线指纹，最多返回当前及之前 50 次已完成实验；前端默认显示最近 10 次，并可拖动或缩放时间窗口。普通实验展示生效综合分，SWE-bench 展示固定 Case 分母的 Resolve Rate。Agent、模型和执行客户端可变，监听和 A/B 实验暂不纳入。
 
-> 2026-09-11 working-tree overlay：Benchmark 跨机器回调改为按组件各自可达地址发送。执行客户端不新增配置，Artifact、进度和完成回调统一复用安装 `curl` 已写入的 `insightBaseUrl`；Evaluator 新增可选 `--platform-base-url` / `EVALUATOR_AGENT_INSIGHT_BASE_URL`，未配置时兼容任务地址。`token|none` 鉴权模式保持不变。Benchmark 详情以 Run 状态为真源，Patch 已上传时不再被通用 Trace pending 覆盖，并区分等待执行器终态与官方评测中。
+> 2026-09-11 working-tree overlay：Benchmark 跨机器回调改为按组件各自可达地址发送。执行客户端不新增配置，Artifact、进度和完成回调统一复用安装 `curl` 已写入的 `insightBaseUrl`；Evaluator 新增可选 `--platform-base-url` / `EVALUATOR_AGENT_INSIGHT_BASE_URL`，未配置时兼容任务地址。Benchmark 详情以 Run 状态为真源，Patch 已上传时不再被通用 Trace pending 覆盖，并区分等待执行器终态与官方评测中。
 
 > 2026-09-11 working-tree overlay：OpenCode 实验执行不再只等总超时。客户端直接消费 `opencode run --format json` 的结构化事件：`session.error`/错误事件立即失败，`session.idle` 或进程正常退出且没有任何模型活动时收敛为 `MODEL_NO_RESPONSE`，首个模型输出/工具事件默认 90 秒仍未出现时收敛为 `MODEL_START_TIMEOUT`；收到首模型活动后仍沿用实验冻结的 Agent 总超时。这一检测在执行客户端本地完成，不依赖 Trace 先上传，同时适用普通生成 Trace 实验和 Benchmark。
 
@@ -76,7 +94,15 @@
 
 > 2026-09-16 working-tree overlay：本轮仅更新安装 bundle 契约。源码启动导出完整项目根目录，RAS/client bundle 复用该目录并在白名单文件缺失时返回 503；构建恢复 npm 的 prebuild 生命周期。其他指南未重新审计。
 
-**如何更新：** `git diff 7760bb8c HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+> 2026-09-16 working-tree overlay：xiaoo 实验执行复用客户端通用运行主流程，新增 JSON CLI 适配、模型参数拆分、能力探测和明确失败回写。执行器回报原生 Session ID，与既有 Collector `session.id` / `Execution.taskId` 对齐；OTLP span 哈希仅保留在采集链路。Collector 生产代码不变；更新 `05-data-and-control-flow.md` 与实验用户指南。
+
+> 2026-09-16 working-tree overlay：新增 Pi 实验 Runtime Adapter，复用通用执行、登录 shell、workspace/patch 和现有 Collector/OTLP 链路。独立发现 Pi 执行能力，stdin 传参，随机 Session 隔离，绑定 `<base>__task0`，等待重试收敛与 `agent_settled`；同步 `05-data-and-control-flow.md` 和实验用户指南，其他指南未重新审计。
+
+> 2026-09-16 working-tree overlay：Pi 模型发现与执行共用 shell 启动环境及私有输出管道，兼容 bash 登录时的描述符关闭行为；完整展示 Pi 候选模型，不另设白名单或调用验证。实验向导各平台共用支持名称/ID 大小写不敏感字面包含搜索的 `RuntimeModelSelect`，同步数据流与实验用户指南。
+
+> 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
+
+**如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

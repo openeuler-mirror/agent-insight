@@ -60,7 +60,7 @@ test('统一实验冻结执行配置，并用旧灰度执行器认可的数据�
   assert.match(grayscaleRoute, /Promise\.all\(retryItems\.map/);
   assert.match(grayscaleRoute, /targets:\s*evaluationTargets/);
   assert.match(grayscaleRoute, /target\.run\.experimentCaseId = experimentCaseId/);
-  assert.match(grayscaleRoute, /const experimentSettled = experiment\.status === 'done'/);
+  assert.match(grayscaleRoute, /const experimentSettled = experiment\.status === 'done'[\s\S]*experiment\.status === 'partial'/);
   assert.match(grayscaleRoute, /!experimentSettled && \(run\.status === 'pending'/);
   assert.match(grayscaleRoute, /loadServerModelForUserById/);
   assert.match(grayscaleRoute, /modelOptions:\s*args\.config\.modelOptions/);
@@ -325,7 +325,7 @@ test('Skill 实验复用四步向导并仅由预设改变默认配置', () => {
   assert.match(result, /setRetryError\(retryKey/);
   assert.match(result, /重新执行/);
   assert.match(result, /function runIsActive[\s\S]*Number\.isFinite\(run\.score\)/);
-  assert.match(result, /const experimentSettled = \['done', 'failed', 'cancelled'\]\.includes\(detail\.status\)/);
+  assert.match(result, /const experimentSettled = \['done', 'partial', 'failed', 'cancelled'\]\.includes\(detail\.status\)/);
   assert.match(result, /!experimentSettled && \(hasActiveRuns \|\| runIsActive\(summary\)\)/);
   assert.doesNotMatch(result, /retryAbEvaluation|action: 'evaluate'/);
   assert.doesNotMatch(result, /const EVALUATOR_LABELS/);

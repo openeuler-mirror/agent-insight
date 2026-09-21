@@ -293,7 +293,7 @@ export async function getBenchmarkExperimentResult(input: {
   })
   return {
     experimentId: experiment.id,
-    status: experiment.status === 'done' ? 'completed' : experiment.status,
+    status: ['done', 'partial'].includes(experiment.status) ? 'completed' : experiment.status,
     benchmark: {
       key: manifest.adapterKey,
       evaluatorKey: manifest.evaluation.evaluatorKey,

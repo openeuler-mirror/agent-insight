@@ -71,9 +71,6 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
   process.env.SWE_BENCH_IMAGE_SOURCE = process.env.SWE_BENCH_IMAGE_SOURCE || 'official'
   process.env.SWE_BENCH_IMAGE_ARCH = process.env.SWE_BENCH_IMAGE_ARCH || 'auto'
   process.env.SWE_BENCH_ALLOW_NON_OFFICIAL = process.env.SWE_BENCH_ALLOW_NON_OFFICIAL || 'false'
-  const token = `official-smoke-${Date.now()}-${process.pid}`
-  process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN = token
-
   const [
     storage,
     artifactContent,
@@ -287,7 +284,6 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
         '--add-host', 'host.docker.internal:host-gateway',
         '-v', '/var/run/docker.sock:/var/run/docker.sock',
         '--tmpfs', '/data:rw,nosuid,nodev',
-        '-e', `EVALUATOR_PLATFORM_TOKEN=${token}`,
         '-e', 'SWE_BENCH_IMAGE_SOURCE=official',
         '-e', 'SWE_BENCH_IMAGE_ARCH=auto',
         '-e', 'SWE_BENCH_ALLOW_NON_OFFICIAL=false',
@@ -305,7 +301,7 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
       const { BenchmarkEvaluatorService } = require('../services/evaluator/src/service.cjs') as {
         BenchmarkEvaluatorService: new (options: Record<string, unknown>) => { createServer(): http.Server }
       }
-      const service = new BenchmarkEvaluatorService({ dataDir: controllerData, token })
+      const service = new BenchmarkEvaluatorService({ dataDir: controllerData })
       evaluatorListener = await listen(service.createServer())
       evaluatorOrigin = evaluatorListener.origin
     }
@@ -313,9 +309,7 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
     let health: Response | undefined
     while (Date.now() < healthDeadline) {
       try {
-        health = await fetch(`${evaluatorOrigin}/health`, {
-          headers: { authorization: `Bearer ${token}` },
-        })
+        health = await fetch(`${evaluatorOrigin}/health`)
         if (health.ok) break
       } catch {}
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -325,7 +319,6 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
     const accepted = await fetch(`${evaluatorOrigin}/api/v1/evaluations`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${token}`,
         'content-type': 'application/json',
         'idempotency-key': evaluationId,
         'x-agent-insight-request-digest': requestDigest,

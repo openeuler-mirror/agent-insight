@@ -5,7 +5,6 @@ import { resolveUser } from '@/lib/auth/auth'
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error'
 import { benchmarkArtifactAbsolutePath } from '@/lib/benchmark/evaluation-preparation-service'
 import { readBenchmarkRunArtifact } from '@/lib/benchmark/experiment-result-service'
-import { authenticateBenchmarkEvaluator } from '@/lib/benchmark/evaluator-target'
 import { prisma } from '@/lib/storage/prisma'
 import { BenchmarkProtocolError } from '../../../../../../../../packages/benchmark-protocol/src/errors'
 
@@ -29,7 +28,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ artifact
         },
       })
     }
-    authenticateBenchmarkEvaluator(req)
     const evaluationId = req.headers.get('x-agent-insight-evaluation-id')?.trim()
     if (!evaluationId) {
       throw new BenchmarkProtocolError('EVALUATION_ID_MISSING', '缺少评测 Run 标识', 400)
