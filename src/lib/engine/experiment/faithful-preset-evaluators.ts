@@ -16,6 +16,7 @@
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
 import type { EvaluatorCaseContext } from '../../evaluators/evaluator-case-context';
 import type { SkillSuggestion } from '../evaluation/skill-suggestion-agent';
+import type { RootCauseResolutionInput } from '../evaluation/root-cause-resolution';
 
 export const FAITHFUL_PRESET_IDS = ['preset-agent-task-completion', 'preset-agent-trace-quality'] as const;
 export type FaithfulPresetId = (typeof FAITHFUL_PRESET_IDS)[number];
@@ -31,7 +32,10 @@ export function isFaithfulPresetId(id: string): id is FaithfulPresetId {
   return (FAITHFUL_PRESET_IDS as readonly string[]).includes(id);
 }
 
-export interface FaithfulPresetContext {
+export interface FaithfulPresetContext extends Pick<
+  RootCauseResolutionInput,
+  'precomputedRootCauses' | 'precomputedRootCauseSource' | 'onLiveRootCausesExtracted'
+> {
   caseInput: string;
   actualOutput: string;
   referenceOutput: string | null;
@@ -153,6 +157,9 @@ async function runTaskCompletion(user: string, ctx: FaithfulPresetContext): Prom
       traceSummaryText: ctx.traceSummaryText ?? undefined,
       skillAttributionMode: skillTargets.length ? 'skill-aware' : 'no-skill',
       skillContext,
+      precomputedRootCauses: ctx.precomputedRootCauses,
+      precomputedRootCauseSource: ctx.precomputedRootCauseSource,
+      onLiveRootCausesExtracted: ctx.onLiveRootCausesExtracted,
     },
     user,
   );

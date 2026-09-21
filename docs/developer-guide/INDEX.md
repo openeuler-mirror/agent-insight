@@ -36,6 +36,8 @@
 
 > 2026-09-16 working-tree overlay：xiaoo 模型发现改用标准 TOML 解析，避免行尾注释进入 provider/model。后台实验执行通过用户登录交互 shell 继承现有终端环境，复用 xiaoo 原生密钥读取；shell 启动输出与 CLI 证据分离，沿用进程组超时，无需额外密钥文件或二次输入。
 
+> 2026-09-14 Issue #298/#299 overlay：修复评估器配置跳转与局部刷新、评测数据集弹窗下拉交互、空数据项校验和本地导入，并让普通实验保留数据集 Case 绑定；任务完成度评测可复用有效关键观点缓存，在缓存缺失、失效或异常为空时实时提取并懒写回，模型返回空观点时使用完整预期输出兜底。
+
 > 2026-09-04 working-tree overlay：新增 Benchmark Agent 步骤 01～13。统一实验入口按 `scope=benchmark` 分流；真实 SWE-bench Verified Parquet 由官方 loader 导入，Adapter 隔离 Harness 数据、构造 Agent Task、校验 Agent Patch、冻结不含 gold patch 的 EvaluationJob，并归一化原生结果。执行器在独立 Git 工作区产出 Patch；常驻 Evaluator Controller 容器通过 Docker Socket 启动官方 Case 镜像，直接调用固定官方源码的 `make_test_spec()` 与 `run_instance()`，再上传证据并回调原生终态。结果处理先冻结 Raw Result，以 `primaryMetric` 做固定分母聚合，仅投影安全 `nativeMetrics`；确定性归一化失败收敛为非重试终态。新增 Benchmark 实验分页结果 API 和带用户/实验归属校验的证据下载 API。01～13 已复用真实数据库和真实 Case 通过 API 级串联；ARM64 Docker Desktop 上的 09～13 双层容器验收和 `deepseek/deepseek-v4-flash` + `pallets__flask-5014` 全真实 01～13 开发冒烟均通过，后者 Harness 判定为 pass；正式计分仍需 x86_64 Linux 验收。仍不包含前端、部署脚本、服务注册与 Verified 500 批量调度。
 
 > 2026-09-05 working-tree overlay：Benchmark 扩展契约对齐高保真开发者模型。`benchmark.yaml` 成为 Manifest 唯一真源，构建期 Generator 生成平台 Adapter、Manifest 与 Evaluator Catalog；`AbstractBenchmarkAdapter` 收敛为五个业务 hook 并统一执行 Case/Result Schema 与 public/private 边界校验。执行器删除 SWE-bench Profile，改用 Workspace、Agent Runtime 和 Artifact Collector 三类通用能力注册表并支持多 Artifact；评测 Worker 删除 SWE-bench 直接依赖，改用 `doctor`、`evaluate --request ... --output ...` 文件 Entrypoint。SWE-bench 仅作为 `benchmarks/swe-bench/` 接入实例；新增 Benchmark 通常不改公共 API、调度器、执行器 Runner、评测 Worker 或 Prisma Schema。

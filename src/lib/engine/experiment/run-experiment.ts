@@ -95,6 +95,8 @@ import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
 import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 import { deriveSettledExperimentStatus } from './detail-agg';
+import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
+import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -180,6 +182,18 @@ export function extractToolCallNames(interactions: unknown[]): string[] {
   return names;
 }
 
+function parseCaseValues(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadCaseRuntime(caseRow: {
   executionId: string | null;
   taskId: string | null;
@@ -190,7 +204,7 @@ async function loadCaseRuntime(caseRow: {
   evaluatorContextJson: string | null;
   faultInjectionType?: string | null;
   caseValuesJson?: string | null;
-}, user: string, targetSkillName?: string | null): Promise<CaseRuntime> {
+}, user: string, targetSkillName?: string | null, loadRootCauseContext = false): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
   const execution = caseRow.executionId
@@ -239,6 +253,14 @@ async function loadCaseRuntime(caseRow: {
   const evaluatorContextResult = parseExperimentCaseEvaluatorContext(caseRow.evaluatorContextJson);
   const faultInjectionType =
     resolveCaseFaultInjectionType(caseRow) || null;
+  const caseValues = parseCaseValues(caseRow.caseValuesJson);
+  const rootCauseResolution = loadRootCauseContext
+    ? await loadExperimentRootCauseResolutionContext({
+        user,
+        referenceOutput: caseRow.referenceOutput,
+        caseValues,
+      })
+    : {};
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
@@ -265,16 +287,16 @@ async function loadCaseRuntime(caseRow: {
       skill: execution.skill, skillVersion: execution.skillVersion,
       invokedSkills: execution.invokedSkills, skills: execution.skills,
     } : null,
+    ...rootCauseResolution,
   };
 
   let shouldTrigger: boolean | undefined;
   let triggerReason: string | undefined;
-  if (caseRow.caseValuesJson) {
+  if (caseValues) {
     try {
-      const values = JSON.parse(caseRow.caseValuesJson) as Record<string, unknown>;
-      if (typeof values.should_trigger === 'boolean') shouldTrigger = values.should_trigger;
-      if (typeof values.trigger_rationale === 'string' && values.trigger_rationale.trim()) {
-        triggerReason = values.trigger_rationale.trim();
+      if (typeof caseValues.should_trigger === 'boolean') shouldTrigger = caseValues.should_trigger;
+      if (typeof caseValues.trigger_rationale === 'string' && caseValues.trigger_rationale.trim()) {
+        triggerReason = caseValues.trigger_rationale.trim();
       }
     } catch { /* 由触发评估器给出缺少标注的明确错误 */ }
   }
@@ -428,7 +450,12 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   let localAttempts = 0;
   let lastError: unknown = null;
 
-  const runtime = await loadCaseRuntime(row.case, user, row.case.experiment.skillName);
+  const runtime = await loadCaseRuntime(
+    row.case,
+    user,
+    row.case.experiment.skillName,
+    row.evaluatorId === 'preset-agent-task-completion',
+  );
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     localAttempts = attempt;
@@ -833,13 +860,14 @@ export async function addEvalExperimentCase(
     actualOutput: string;
     referenceOutput?: string | null;
     evaluatorContext?: EvaluatorCaseContext | null;
+    datasetBinding?: { datasetId: string; caseId: string } | null;
   },
 ): Promise<string> {
   const createOrReuse = async (): Promise<string> => {
     if (c.taskId) {
       const existing = await prisma.experimentCase.findFirst({
         where: { experimentId, taskId: c.taskId },
-        select: { id: true },
+        select: { id: true, caseValuesJson: true },
       });
       if (existing) {
         // 复用已有 case；若这次拿到了参考答案或评估器上下文则回填。
@@ -847,6 +875,7 @@ export async function addEvalExperimentCase(
           (c.datasetInput != null && String(c.datasetInput).trim())
           || (c.referenceOutput != null && String(c.referenceOutput).trim())
           || c.evaluatorContext !== undefined
+          || c.datasetBinding
         ) {
           await prisma.experimentCase.update({
             where: { id: existing.id },
@@ -862,6 +891,14 @@ export async function addEvalExperimentCase(
                     evaluatorContextJson: c.evaluatorContext
                       ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
                       : null,
+                  }
+                : {}),
+              ...(c.datasetBinding
+                ? {
+                    caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding(
+                      parseCaseValues(existing.caseValuesJson),
+                      c.datasetBinding,
+                    )),
                   }
                 : {}),
             },
@@ -881,6 +918,9 @@ export async function addEvalExperimentCase(
         referenceOutput: c.referenceOutput ?? null,
         evaluatorContextJson: c.evaluatorContext
           ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
+          : null,
+        caseValuesJson: c.datasetBinding
+          ? JSON.stringify(withExperimentDatasetCaseBinding(null, c.datasetBinding))
           : null,
       },
       select: { id: true },
