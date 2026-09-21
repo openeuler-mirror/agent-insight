@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-21 working-tree overlay：SWE-bench x86-64 官方模式默认使用两个公开 SWR Verified 镜像仓库，并支持通过 `SWE_BENCH_VERIFIED_MIRROR_REPOS` 覆盖或以空值禁用；按列表依次尝试，未命中再走既有代理和 Docker Hub 官方源，并冻结实际 registry digest。ARM64、Epoch、数据集镜像字段和官方 Harness 不变。
+
 > 2026-09-18 working-tree overlay：实验向导将 xiaoo Collector 上报的 `xiaoo` Trace 身份与 CLI 原生 `defaultagent` 执行 ID 归并为单个 `xiaoo` 候选；执行 target 独立保留原生 ID，普通生成 Trace 与 Benchmark 下发继续传递 `defaultagent`。
 
 > 2026-09-18 working-tree overlay：Agent Insight 与 Evaluator 删除应用层通信鉴权及相关参数，Evaluator 默认监听宿主机 `0.0.0.0:3001`，受控网络的 `allow-insecure-http` 默认值为 `true`。Agent Insight 配置入口删除重复的 `--public-base-url`，公开回调地址由实验请求的 `Host` / `X-Forwarded-*` 自动推导，Evaluator 的实际访问地址只由评测机 `--platform-base-url` 决定。部署必须依赖白名单、安全组或防火墙限制双向访问；可把 `allow-insecure-http` 设为 `false` 强制非回环 Evaluator 使用 HTTPS。本条取代下方历史快照中的 Token 鉴权说明。
