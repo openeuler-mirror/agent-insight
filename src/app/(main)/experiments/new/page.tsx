@@ -784,7 +784,7 @@ export default function NewExperimentPage() {
               <input type="checkbox" checked={watchMode} onChange={(e) => setWatchMode(e.target.checked)} />
               <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--foreground)' }}>监听模式</span>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.5 }}>
-                开启后本实验绑定「{agentName || '该 Agent'}」——其新上报的 trace 自动进来评测；下方圈选已有 trace 变为可选，可 0 条起步。
+                自动评测「{agentName || '该 Agent'}」在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准。下方已有 Trace 可选，可 0 条起步。
                 <span style={{ color: 'var(--foreground-muted)' }}>（监听 trace 无参考答案，第 ④ 步依赖参考数据的评估器不可选）</span>
               </span>
             </label>

@@ -16,6 +16,7 @@
  * 超时类可重试（退避见 experimentEngineConfig.retryDelaysMs，默认 2s/8s）；
  * 单行超时 5 分钟。
  */
+import { createHash } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
 import {
   buildJudgePrompt,
@@ -566,26 +567,36 @@ export async function ensureEvalExperiment(params: {
   return exp.id;
 }
 
-/** 往评测实验加一个 case（trace 已产生），返回 caseId。
- * 按 taskId 幂等：同一实验内该 trace 已有 case 就复用（并回填新拿到的参考答案），
- * 避免同一 trace 被重复评测时建出重复 case。 */
+interface EvalExperimentCaseInput {
+  executionId?: string | null;
+  taskId?: string | null;
+  input: string;
+  actualOutput: string;
+  referenceOutput?: string | null;
+  datasetBinding?: { datasetId: string; caseId: string } | null;
+}
+
+export function addEvalExperimentCase(experimentId: string, c: EvalExperimentCaseInput): Promise<string>;
+export function addEvalExperimentCase(
+  experimentId: string, c: EvalExperimentCaseInput, options: { onlyIfNew: true },
+): Promise<string | null>;
 export async function addEvalExperimentCase(
   experimentId: string,
-  c: {
-    executionId?: string | null;
-    taskId?: string | null;
-    input: string;
-    actualOutput: string;
-    referenceOutput?: string | null;
-    datasetBinding?: { datasetId: string; caseId: string } | null;
-  },
-): Promise<string> {
+  c: EvalExperimentCaseInput,
+  options?: { onlyIfNew: true },
+): Promise<string | null> {
   if (c.taskId) {
     const existing = await prisma.experimentCase.findFirst({
-      where: { experimentId, taskId: c.taskId },
+      where: {
+        experimentId,
+        ...(options?.onlyIfNew && c.executionId
+          ? { OR: [{ taskId: c.taskId }, { executionId: c.executionId }] }
+          : { taskId: c.taskId }),
+      },
       select: { id: true, caseValuesJson: true },
     });
     if (existing) {
+      if (options?.onlyIfNew) return null;
       // 复用已有 case；若这次拿到了参考答案而旧值为空则回填
       if ((c.referenceOutput != null && String(c.referenceOutput).trim()) || c.datasetBinding) {
         await prisma.experimentCase.update({
@@ -608,21 +619,34 @@ export async function addEvalExperimentCase(
       return existing.id;
     }
   }
-  const row = await prisma.experimentCase.create({
-    data: {
-      experimentId,
-      executionId: c.executionId ?? null,
-      taskId: c.taskId ?? null,
-      input: c.input,
-      actualOutput: c.actualOutput,
-      referenceOutput: c.referenceOutput ?? null,
-      caseValuesJson: c.datasetBinding
-        ? JSON.stringify(withExperimentDatasetCaseBinding(null, c.datasetBinding))
-        : null,
-    },
-    select: { id: true },
-  });
-  return row.id;
+  // 稳定主键让并发追加共用数据库唯一约束，也兼容已有随机 ID 的历史 Case。
+  const id = c.taskId
+    ? `trace-${createHash('sha256').update(JSON.stringify([experimentId, c.taskId])).digest('hex')}`
+    : undefined;
+  try {
+    const row = await prisma.experimentCase.create({
+      data: {
+        ...(id ? { id } : {}),
+        experimentId,
+        executionId: c.executionId ?? null,
+        taskId: c.taskId ?? null,
+        input: c.input,
+        actualOutput: c.actualOutput,
+        referenceOutput: c.referenceOutput ?? null,
+        caseValuesJson: c.datasetBinding
+          ? JSON.stringify(withExperimentDatasetCaseBinding(null, c.datasetBinding))
+          : null,
+      },
+      select: { id: true },
+    });
+    return row.id;
+  } catch (error) {
+    if (id && (error as { code?: string })?.code === 'P2002') {
+      if (options?.onlyIfNew) return null;
+      return addEvalExperimentCase(experimentId, c);
+    }
+    throw error;
+  }
 }
 
 /** 评测一个 case（× 实验的全部 evaluatorIds），同步跑完并读回每个评估器的结果行。 */
@@ -642,6 +666,7 @@ export async function evaluateEvalExperimentCase(
     if (Array.isArray(parsed)) evaluatorIds = parsed.map(String).filter(Boolean);
   } catch { /* 忽略脏数据 */ }
 
+  await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } });
   const out: EvalCaseResultRow[] = [];
   for (const evaluatorId of evaluatorIds) {
     const rowRec = await prisma.experimentEvalResult.upsert({

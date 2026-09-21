@@ -140,7 +140,17 @@ flowchart TD
 
 上传、proxy end 与 `OtelSpoolConsumer` 只负责 trace 落库和既有的流程/失败分析，不调度结果评估器，也不写 `TraceEvaluation`。质量监控的 `collectTraces → buildProblemSummary → scoreDimensions → bucketTrends` 只读取 `Execution`、`Session`、轨迹分析、问题和诊断数据，聚合过程、成本与错误三维。
 
-最终答案的准确性、答案质量、忠实度和指令遵循属于评测中心。用户主动运行实验后，`run-experiment.ts` 将四个结果类预置 evaluator id 分发到 `experiment/result-preset-evaluators.ts`，后者惰性加载 `evaluation/result-metric-evaluator.ts` 及各叶子评估器，并将结果写入 `ExperimentEvalResult`。这条链路不由 trace 上传触发，也不向质量监控回写结果分。
+最终答案的准确性、答案质量、忠实度和指令遵循属于评测中心。用户主动运行实验或开启实验监听后，`run-experiment.ts` 将四个结果类预置 evaluator id 分发到 `experiment/result-preset-evaluators.ts`，后者惰性加载 `evaluation/result-metric-evaluator.ts` 及各叶子评估器，并将结果写入 `ExperimentEvalResult`。这条链路不由 trace 上传回调触发，也不向质量监控回写结果分。
+
+### 实验自动监听
+
+`instrumentation-node.ts` 启动 `experiment-watch.ts:startExperimentWatcher`，进程内通过 `globalThis` 单例避免热更新重复注册。后台约每 5 秒扫描 `watchMode=true` 的实验，按当前用户、Agent、root-only 查询 `Execution JOIN Session`；使用 `Session.startTime > Experiment.watchEnabledAt` 和非空 `endTime` 筛选候选，再复用 `getTraceLifecycle` 排除失败状态。`Session.startTime` 优先接收上报的 `trace_started_at`，缺省时由数据库记录首次入库时间；无明确开始时间的补传不更新它。
+
+查询按执行记录 ID 分页，每页默认 100 条；分页结束后回到起点，不能使用单向上传/完成时间水位线，以免遗漏晚到或后续完成的 Trace。用 `NOT EXISTS ExperimentCase` 排除实验里已有的 taskId/executionId。实验轮转扫描，单进程最多同时评测 4 个新 Case，不等待模型返回再继续发现其他候选；达到并发上限时后续候选留在数据库等待下一轮，不建立无界内存队列。
+
+匹配后调用与手动追加相同的 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，只传 executionId/taskId，不重复实现 input/output/轨迹加载及评估器重试。带 taskId 的新 Case 以 experimentId + taskId 的 SHA-256 生成稳定主键，利用现有主键唯一约束处理并发；历史随机 ID Case 仍按 taskId 查重。自动调用使用 `onlyIfNew`，已有或竞争失败时返回 null，不重置结果或人工评分；手动追加仍复用并回填参考数据。不新增表、迁移或监听专用评测重试规则。
+
+`ingest/upload` 和 OpenCode `session-complete` 只保留原有上传、落库、完成状态更新，不再直接调用实验监听。停止监听后不再接纳新的 Case，已启动的评测按原流程完成；服务重启后扫描从头发现尚未加入实验的 Trace，不自动重跑已有 Case。详情页在 `watchMode=true` 或实验运行中时每 5 秒刷新。
 
 ## 后端流水线：Skill 生成与优化
 ```mermaid
