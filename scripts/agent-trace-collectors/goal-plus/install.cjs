@@ -51,6 +51,25 @@ async function install(options) {
     ? path.resolve(process.env.AGENT_INSIGHT_HOME)
     : path.join(options.homeDir, ".agent-insight");
   const packageDir = path.join(agentInsightHome, "collectors", "goal-plus");
+  const configPath = path.join(packageDir, "config.json");
+  let existingConfig;
+  try {
+    existingConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const preserveDifferentAccount = options.preserveDifferentAccount === true
+    && existingConfig?.apiKey
+    && existingConfig.apiKey !== apiKey;
+  if (preserveDifferentAccount) {
+    return {
+      packageDir,
+      configPath,
+      commandPath: path.join(packageDir, "goal-plus-collector.cjs"),
+      observerEnabled: false,
+      observerStatus: "account-conflict",
+    };
+  }
   for (const relative of PACKAGE_FILES) {
     await copyFile(path.join(options.sourceDir, relative), path.join(packageDir, relative), relative.endsWith(".cjs") ? 0o700 : 0o600);
   }
@@ -64,24 +83,29 @@ async function install(options) {
       await copyFile(sharedSource, sharedTarget);
     }
   }
-  const configPath = path.join(packageDir, "config.json");
+  const preserveCompatibleConfig = options.preserveExistingConfig === true
+    && existingConfig?.apiKey === apiKey
+    && existingConfig.managedBy !== options.managedBy;
   const config = {
     version: 1,
     apiKey,
     baseUrl,
     hosts: configuredHosts("pi"),
+    ...(options.managedBy ? { managedBy: options.managedBy } : {}),
     otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || `${baseUrl}/api/ingest/otel/v1/traces`,
     collaborationSessionsEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_SESSIONS_ENDPOINT
       || `${baseUrl}/api/ingest/collaborations/sessions`,
     collaborationEventsEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_EVENTS_ENDPOINT
       || `${baseUrl}/api/ingest/collaborations/events`,
   };
-  const temporary = `${configPath}.${process.pid}.tmp`;
-  await fsp.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  await fsp.rename(temporary, configPath);
+  if (!preserveCompatibleConfig) {
+    const temporary = `${configPath}.${process.pid}.tmp`;
+    await fsp.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    await fsp.rename(temporary, configPath);
+  }
 
   let commandPath = path.join(packageDir, "goal-plus-collector.cjs");
-  if (process.platform !== "win32") {
+  if (process.platform !== "win32" && options.createWrapper !== false) {
     const binDir = path.join(options.homeDir, ".local", "bin");
     const wrapper = path.join(binDir, "goal-plus-collector");
     if (fs.existsSync(wrapper) && !(await fsp.readFile(wrapper, "utf8")).includes(WRAPPER_MARKER)) {
@@ -91,7 +115,13 @@ async function install(options) {
     await fsp.writeFile(wrapper, `#!/bin/sh\n${WRAPPER_MARKER}\nexec "${process.execPath}" "${commandPath}" "$@"\n`, { mode: 0o700 });
     commandPath = wrapper;
   }
-  return { packageDir, configPath, commandPath };
+  return {
+    packageDir,
+    configPath,
+    commandPath,
+    observerEnabled: true,
+    observerStatus: "dormant",
+  };
 }
 
 async function main() {

@@ -5,7 +5,7 @@
 - 全流程设计：[流程图与状态流](architecture-flow.md)
 - 交互预览：[集成后高保真页面](agent-insight-goal-plus-hifi.html)
 - 基线提交：`679630181999`
-- 最后更新：2026-09-03
+- 最后更新：2026-09-21
 
 ## 1. 设计摘要
 
@@ -65,39 +65,55 @@ Explicitly attached .gp root
 | D-008 | source ID 由 Agent Insight 管理 | 不向 `.gp` 写 source file，满足完全只读 |
 | D-009 | Goal Plus semantic snapshots 走专用 API | OTLP span 不适合表达 revision、selection、promotion 等领域状态 |
 | D-010 | `.gp` semantic snapshot 默认 bounded-content，支持 metadata-only | 编排语义保持有界并保护 hidden-answer；此限制不用于 Pi native Trace 正文 |
-| D-011 | Goal Plus 安装使用独立宿主 profile 展开依赖 | `goal-plus` 仍是 overlay；Pi/Codex collector 继续作为独立组件安装和上报 |
-| D-012 | 未声明宿主的旧 `frameworks=goal-plus` 保持原行为 | 已发布命令继续只安装 Goal Plus collector，避免升级后意外改写 Pi/Codex 配置 |
+| D-011 | Goal Plus 观察器随 Pi bundle 内置并默认休眠 | Goal Plus 是 overlay，用户只选择 Pi；内部分离的 parser/watcher 仍保持独立故障边界 |
+| D-012 | 旧 `frameworks=goal-plus` 映射为 `pi-agent` | 已发布链接继续可用，但不再暴露或执行第二套 Goal Plus 安装 |
 | D-013 | Goal Plus semantic collector 安装、scan 或 watcher 失败不得回滚或降级 native collector | semantic enrichment 是可选状态，不能中断或把已经工作的 Pi/Codex Trace 标成 partial |
 | D-014 | Pi 主对话与 worker 均以 native session 为完整性权威源 | Goal Plus 的 Pi command turn 和 `--no-extensions` worker 都可能绕过实时 hook |
 | D-015 | 主对话只扫描 attached `.gp` 对应工作区的精确 Pi session 目录 | 允许恢复主会话，同时不递归扫描整个 home；用 native entry/goal ID 关联而非时间猜测 |
 | D-016 | native Trace 无固定正文截断，上传批次大小是调度目标而非单事件上限 | 长 tool result/thinking 必须完整；单条大 JSONL 可独立成批，仍执行 secret/path 脱敏 |
 | D-017 | Pi Execution 运行状态与 Goal Plus 业务终态分离 | Trace 成败只反映宿主运行；Goal/Run 的 blocked、selection 与 promotion 继续由 overlay 表达，避免污染运行可靠性统计 |
+| D-018 | 自动激活只接受结构化 start 证据并核验 `.gp` 所有权 | 防止普通文本、管理命令或同机其他 workspace 被误采集 |
+| D-019 | 只修改 Agent Insight，Goal Plus 目录始终只读 | 复用 Goal Plus 已持久化的 command context、cwd、goal record 和 invocation，不增加跨仓发布耦合 |
 
 ### 2.1 Goal Plus 宿主安装 profile
 
-安装请求保留已有 `frameworks` 参数，并增加独立的 `goalPlusHosts=pi,codex`：
+安装请求保留已有 `frameworks` 参数，但 Goal Plus 不再出现在安装页或交互选择器中：
 
 | 请求 | effective frameworks |
 |-|-|
 | `frameworks=pi-agent` | `pi-agent` |
 | `frameworks=codex` | `codex` |
-| `frameworks=goal-plus`，无 host | `goal-plus`（legacy semantic-only） |
-| Goal Plus + `goalPlusHosts=pi` | `goal-plus,pi-agent` |
-| Goal Plus + `goalPlusHosts=codex` | `goal-plus,codex` |
-| Goal Plus + `goalPlusHosts=pi,codex` | `goal-plus,pi-agent,codex` |
+| `frameworks=goal-plus` | `pi-agent`（legacy alias） |
+| `frameworks=goal-plus&goalPlusHosts=pi,codex` | `pi-agent`（忽略已移除的 host 输入） |
+| `frameworks=pi-agent,codex` | `pi-agent,codex` |
 
-不得新增 `goal-plus-pi`、`goal-plus-codex` 伪 framework。安装计划必须同时保留
-`requestedFrameworks` 和去重后的 `effectiveFrameworks`，并调用既有 Pi/Codex 子安装器；
-不得复制或改变 native collector 的安装、hook、OTLP、Execution ID 和 adapter 逻辑。
+不得新增 `goal-plus-pi`、`goal-plus-codex` 伪 framework。安装计划保留 legacy requested
+值用于兼容诊断，但 effective profile 必须移除 `goal-plus` 并去重加入 `pi-agent`。Pi bundle
+内放置独立观察器文件；不得改变 native collector 的 OTLP、Execution ID 和 adapter 逻辑。
 
-安装页在选择 Goal Plus 后显示 Pi/Codex Trace 来源及自动依赖，并明确这些选项只配置
-Agent Insight 观测组件。用户应已在对应 Agent 中安装 Goal Plus；Agent Insight 不展示、
-不执行外部 Goal Plus 仓库脚本，也不修改 Goal Plus 本体。
+安装页只展示 Pi Agent。用户应已在 Pi 中安装 Goal Plus；Agent Insight 不展示、不执行外部
+Goal Plus 仓库脚本，也不修改 Goal Plus 本体。Pi 安装成功只表示主 Trace 已就绪，内置观察器
+为 `DORMANT`；首次真实 Goal Plus start 后才可能变为 `ACTIVE`。
 
-宿主 profile 的就绪状态以 native Trace 为主：所需 Pi/Codex collector 全部配置成功即
-`READY`，任一失败即 `NOT READY`。`.gp` attach、scan 和 watcher 只提供 Goal、Run、
-Candidate 等可选语义增强；缺少 `.gp` 或语义增强失败不得把已就绪的 native Trace 标成
-`PARTIAL`。无宿主的 legacy semantic-only 请求仍保留原有状态语义。
+宿主 profile 的就绪状态以 Pi native Trace 为主：Pi collector 配置成功即 `READY`。
+观察器使用 `DORMANT / DETECTING / ACTIVE / DEGRADED` 独立表达增强状态；缺少 `.gp`、Goal
+Plus 未安装或增强失败不得把已就绪的 native Trace 标成 `PARTIAL`。
+
+### 2.2 自动激活契约
+
+Pi extension 从 `ctx.cwd` 获取实际工作目录，并按 Goal Plus 既有规则解析 runtime root：
+`GOAL_PLUS_ROOT` 绝对路径直接使用，相对路径相对 `ctx.cwd`，未设置时为 `ctx.cwd/.gp`。
+只允许精确路径，不扫描 home。
+
+`goal-plus-created` 或 host-verified command context 提供 `goal_plus_id` 后，观察器必须验证：
+
+1. runtime root 为非 symlink 的真实 `.gp`；
+2. `goal-plus/<goalId>/goal.json` 为普通文件且 ID 一致；
+3. `host_command_invocations` 含当前 Pi native session 的 `agent_harness=pi`、`action=start`。
+
+验证成功后幂等执行 source attach、首次 scan 和 watcher ensure；失败写本地降级状态并允许在
+后续 context/settle 再试，但不得阻塞 Pi turn 或主 Trace 上传。所有写入限定在 Agent Insight
+registry/checkpoint/spool/outbox，`.gp` 始终只读。
 
 ## 3. 组件设计
 
@@ -130,10 +146,12 @@ Candidate 等可选语义增强；缺少 `.gp` 或语义增强失败不得把已
   "sourceId": "gpsrc_01J...",
   "root": "/workspace/project/.gp",
   "workspaceFingerprint": "sha256:<digest>",
-  "mode": "watch",
-  "contentMode": "bounded",
-  "enabled": true,
-  "createdAt": "2026-09-02T10:00:00Z"
+  "label": "project",
+  "attachedAt": "2026-09-02T10:00:00Z",
+  "managedBy": "pi-agent-auto-detect",
+  "goalId": "goal_01J...",
+  "nativeSessionId": "pi-session-id",
+  "lastDetectedAt": "2026-09-02T10:00:00Z"
 }
 ```
 
@@ -142,25 +160,29 @@ workspace fingerprint，不发送绝对路径。
 
 ### 3.2 CLI
 
-collector 至少提供：
+Pi extension 在内部调用强证据激活入口：
 
 ```text
-goal-plus-collector attach --root <workspace/.gp> [--watch]
-goal-plus-collector scan --root <workspace/.gp>
-goal-plus-collector list
-goal-plus-collector self-check --source <source-id>
-goal-plus-collector detach --source <source-id>
-goal-plus-collector watch
+goal-plus-collector activate <workspace/.gp> --goal-id <id> --native-session-id <pi-session-id>
 ```
 
-- `attach` 校验目录形状后登记 source；
-- `scan` 执行一次历史扫描，不长期驻留；
-- `watch` 只观察已登记 source；
-- `detach` 删除 Agent Insight 本地登记和未发送 checkpoint，不删除 `.gp`；
-- `self-check` 显示可读对象数、schema、Pi session 可见性、spool 和最近上传结果。
+`activate` 必须先核验 `goal.json.goal_plus_id` 与当前 Pi native session 的
+`host_command_invocations` start 记录，成功后才幂等登记 source、执行一次 scan 并确保 watcher。
+它不是用户安装步骤。为兼容既有部署，collector 仍保留以下运维命令：
 
-初始实现可以先支持 foreground `watch`；后台 service 安装属于部署任务，不应通过
-未跟踪子进程偷偷常驻。
+```text
+goal-plus-collector attach <workspace/.gp>
+goal-plus-collector scan [source-id|workspace/.gp]
+goal-plus-collector list
+goal-plus-collector self-check
+goal-plus-collector detach <source-id>
+goal-plus-collector start|ensure|stop|status
+```
+
+- `attach` 只作为旧安装的显式兼容入口；新 Pi 安装不要求用户调用；
+- `scan` 执行一次历史扫描；watcher 只观察已登记 source；
+- `detach` 只删除 Agent Insight 本地登记，不删除 `.gp`；
+- `self-check` 同时报告 source、spool、watcher 与 `DORMANT/DETECTING/ACTIVE/DEGRADED` 激活状态。
 
 ### 3.3 Source identity
 

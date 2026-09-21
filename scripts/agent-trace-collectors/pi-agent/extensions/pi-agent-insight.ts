@@ -21,6 +21,7 @@ type PiExtensionEvent = {
 }
 
 type PiExtensionContext = {
+  cwd?: string
   sessionManager: {
     getSessionId(): string
   }
@@ -32,15 +33,15 @@ export default function piAgentInsightExtension(pi: PiExtensionApi) {
   if (!collector) return
 
   pi.on("session_start", (_event, ctx) => {
-    collector.startSession(ctx.sessionManager.getSessionId())
+    collector.startSession(ctx.sessionManager.getSessionId(), ctx)
   })
 
   pi.on("input", (event) => {
     collector.recordInput(event.text, event.source)
   })
 
-  pi.on("context", (event) => {
-    collector.recordContext(event.messages)
+  pi.on("context", (event, ctx) => {
+    collector.recordContext(event.messages, ctx)
   })
 
   pi.on("before_agent_start", (event, ctx) => {

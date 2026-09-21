@@ -16,6 +16,7 @@ const {
 } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
 const { attachSource, loadRegistry } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
 const {
+  activateGoalPlusSource,
   ensureWatcher,
   loadConfig,
   scanSource,
@@ -96,6 +97,64 @@ test('Goal Plus source attach is canonical and idempotent', async t => {
   assert.equal(first.sourceId, second.sourceId);
   assert.equal((await loadRegistry(registryPath)).sources.length, 1);
   assert.match(first.workspaceFingerprint, /^sha256:[a-f0-9]{64}$/);
+});
+
+test('Pi auto-detection activates only a Goal Plus record owned by the current native session', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const configPath = path.join(temporary, 'collector', 'config.json');
+  const config = {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    configPath,
+    registryPath: path.join(path.dirname(configPath), 'sources.json'),
+    otlpEndpoint: 'http://example.invalid/traces',
+    collaborationSessionsEndpoint: 'http://example.invalid/collaboration-sessions',
+    collaborationEventsEndpoint: 'http://example.invalid/collaboration-events',
+  };
+  const calls: string[] = [];
+  const result = await activateGoalPlusSource(root, {
+    goalId: 'gp_demo',
+    nativeSessionId: 'pi-main-session-001',
+  }, config, {
+    scanSource: async () => {
+      calls.push('scan');
+      return { piSessions: 1 };
+    },
+    ensureWatcher: async () => {
+      calls.push('watcher');
+      return { running: true, ensured: true };
+    },
+  });
+
+  assert.equal(result.status, 'ACTIVE');
+  assert.deepEqual(calls, ['scan', 'watcher']);
+  const [source] = (await loadRegistry(config.registryPath)).sources;
+  assert.equal(source.managedBy, 'pi-agent-auto-detect');
+  assert.equal(source.goalId, 'gp_demo');
+  assert.equal(source.nativeSessionId, 'pi-main-session-001');
+  const activation = JSON.parse(await fsp.readFile(path.join(path.dirname(configPath), 'runtime', 'activation.json'), 'utf8'));
+  assert.equal(activation.status, 'ACTIVE');
+});
+
+test('Pi auto-detection refuses an unrelated Goal Plus workspace without attaching it', async t => {
+  const { temporary, root } = await copiedFixture(t);
+  const configPath = path.join(temporary, 'collector', 'config.json');
+  const config = {
+    apiKey: 'synthetic',
+    homeDir: temporary,
+    configPath,
+    registryPath: path.join(path.dirname(configPath), 'sources.json'),
+  };
+  await assert.rejects(() => activateGoalPlusSource(root, {
+    goalId: 'gp_demo',
+    nativeSessionId: 'another-pi-session',
+  }, config, {
+    scanSource: async () => assert.fail('untrusted source must not be scanned'),
+    ensureWatcher: async () => assert.fail('untrusted source must not start a watcher'),
+  }), /does not belong to the current Pi session/);
+  assert.equal((await loadRegistry(config.registryPath)).sources.length, 0);
+  const activation = JSON.parse(await fsp.readFile(path.join(path.dirname(configPath), 'runtime', 'activation.json'), 'utf8'));
+  assert.equal(activation.status, 'DEGRADED');
 });
 
 test('Goal Plus managed watcher stays stopped and rejects startup without attached sources', async t => {

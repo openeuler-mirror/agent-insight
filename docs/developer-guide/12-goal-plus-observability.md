@@ -14,7 +14,7 @@ Pi native session
        └─ POST /api/ingest/collaborations/sessions
             └─ logical session "main" → taskId
 
-attached .gp
+Pi start 后自动确认并登记的 .gp
   ├─ goal-plus/<goalId>/goal.json
   │    └─ host_command_invocations: Pi start session
   └─ runs/<runId>/agent_sessions/<agentSessionId>.json
@@ -125,8 +125,9 @@ Trace 与关系上传顺序为：
 
 | 区域 | 职责 |
 |-|-|
-| `scripts/agent-trace-collectors/pi-agent/lib/pi-trace-core.cjs` | 识别 Goal Plus start task、计算实际 taskId、入队 main binding |
-| `scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs` | source 扫描、worker OTLP 导入、关系入队/上传、watcher/self-check |
+| `scripts/agent-trace-collectors/pi-agent/lib/pi-trace-core.cjs` | 识别 Goal Plus start task、解析 runtime root、异步激活观察器、计算实际 taskId、入队 main binding |
+| `scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs` | 激活证据校验、source 扫描、worker OTLP 导入、关系入队/上传、watcher/self-check |
+| `goal-plus/lib/source-registry.cjs` | canonical `.gp` 登记、自动 source 所有权与最近检测元数据 |
 | `goal-plus/lib/gp-snapshot-parser.cjs` | 校验当前 Goal Plus schema、发现 worker source、构造确定性关系 |
 | `goal-plus/lib/pi-native-parser.cjs` | direct/ThinkThread Pi session → canonical Pi events |
 | `shared/collaboration-transport.cjs` | 协作 ID、binding/event 构造与持久 outbox |
@@ -135,7 +136,26 @@ Trace 与关系上传顺序为：
 
 ## 安装与配置
 
-Goal Plus bundle 包含 worker parser、Pi importer、source registry 和共享 collaboration transport，不再分发 `semantic-spool.cjs`。Pi bundle 也包含同一共享 transport。
+面向用户只有 Pi Agent 安装入口。Pi bundle 同时包含 Pi extension、worker parser、Pi passive importer、source registry 和共享 collaboration transport；安装时将观察器文件放到 `~/.agent-insight/collectors/goal-plus/`，但不登记 source、不扫描、不启动 watcher，也不创建 `goal-plus-collector` 命令 wrapper。独立 Goal Plus bundle/route 仅作为既有安装的兼容入口。
+
+`frameworks=goal-plus` 是旧链接兼容别名：服务端和已下载脚本都将它去重映射为 `pi-agent`。安装页和交互选择器不再展示 Goal Plus framework，也不使用 `goalPlusHosts` 选择宿主。
+
+观察器状态机为：
+
+```text
+DORMANT → DETECTING → ACTIVE
+              └────→ DEGRADED
+```
+
+普通 Pi task 保持 `DORMANT`。Pi extension 只有在当前 start task 获得结构化 `goal-plus-created` / `goal-plus-command-context` 或 Goal Plus tool result 中的 `goal_plus_id` 后才排队激活。失败会写入本地 `runtime/activation.json` 并进入 `DEGRADED`，但不会阻塞 Pi task、主 Trace flush 或后续幂等重试。
+
+runtime root 必须与 Goal Plus 现有行为一致：`GOAL_PLUS_ROOT` 为绝对路径时直接使用；为相对路径时相对 `ctx.cwd`；未设置时使用 `ctx.cwd/.gp`。不得递归扫描 home。激活必须同时验证：
+
+- root 是真实且非 symlink 的 `.gp` 目录；
+- `.gp/goal-plus/<goalId>/goal.json` 是普通文件且正文 ID 匹配；
+- `host_command_invocations` 存在 `agent_harness=pi`、`action=start`、`session_id=<当前 Pi native session>`。
+
+校验通过后，`activate` 原子地执行幂等 source 登记、首次 scan 和 watcher ensure。自动 source 标记 `managedBy=pi-agent-auto-detect`，记录最近的 goal/native session；collector 只写 Agent Insight registry、checkpoint、outbox 和 spool，不写 `.gp`。
 
 Goal Plus managed config 保存：
 
@@ -155,6 +175,8 @@ Goal Plus managed config 保存：
 
 watcher 指纹覆盖 collector 版本、凭证摘要和三个端点；任一变化都会受控重启。`start` 要求至少一个 attached source，`ensure` 对无 source 安静跳过，对 stale PID 恢复。Goal Plus watcher 失败不停止 Pi 原生 collector；结果是主 Trace 仍可见，但 worker 关系暂不可用。
 
+Pi 安装器遇到已有且属于不同 API Key 的 Goal Plus managed config 时不会覆盖它，并在 Pi config 中关闭本账号的自动观察器，避免静默切换采集归属。Pi 卸载会停止 `managedBy=pi-agent` 的 watcher，并默认保留 source registry 与 spool。
+
 ## 查询与展示契约
 
 服务端 reported collaboration 投影优先于历史 Goal Plus semantic projection。主、worker binding 均唯一解析后，`composeCollaborationTrace` 在主 Trace 的响应中追加 synthetic TASK 和 worker 交互副本；`full`、`structure`、`interactions` 与单条 interaction 读取必须使用同一确定性投影。
@@ -167,7 +189,10 @@ watcher 指纹覆盖 collector 版本、凭证摘要和三个端点；任一变�
 - 旧 schema 明确拒绝且无 fallback；
 - Pi start task 与 `.gp` parser 计算相同 `collaborationId`；
 - `/goal-plus resume` 和普通文本中的 Goal ID 不产生 main binding；
+- 普通 Pi task 不激活观察器，结构化 start 证据只激活一次；
+- runtime root 遵循 `GOAL_PLUS_ROOT`/`ctx.cwd` 解析且不扫描 home；
+- goal/session 归属不匹配时不 attach、不 scan、不启动 watcher；
 - 重复扫描不产生不同 binding/event 正文；
 - 断网/5xx 可重试，409 进入 rejected；
-- Goal Plus distribution 不包含 semantic spool，Pi/Goal Plus 都包含 collaboration transport；
+- Pi distribution 自包含休眠观察器；旧 Goal Plus distribution 继续可用且两者都包含 collaboration transport；
 - 最终查询结果是主 Trace 下包含 worker 子树，而不是重复导入一个 Goal Plus 主 Trace。

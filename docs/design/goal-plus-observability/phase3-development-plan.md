@@ -3,7 +3,7 @@
 - 状态：提案
 - 关联文档：[Phase 1](phase1-requirements-analysis.md) / [Phase 2](phase2-requirements-design.md)
 - 基线提交：`679630181999`
-- 最后更新：2026-09-02
+- 最后更新：2026-09-21
 
 ## 1. 交付策略
 
@@ -39,6 +39,20 @@ Wave 0  外部契约与测试基线
 
 Wave 1 和 Wave 2 可以在 Wave 0 完成后并行。Wave 3 需要前两者的稳定 envelope 与
 identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验收。
+
+2026-09-21 在既有交付上增加 Wave 6：收敛安装体验和运行时自动激活，仅修改
+Agent Insight；不新增 Prisma model/API，也不修改 Goal Plus。
+
+### Wave 6：Pi 内置休眠观察器与自动激活
+
+- [x] T601 从用户安装选项和交互选择器移除 Goal Plus，legacy `frameworks=goal-plus` 映射 Pi；
+- [x] T602 Pi bundle 自包含 Goal Plus parser/importer/registry，安装时休眠且不创建命令 wrapper；
+- [x] T603 Pi extension 采集 `ctx.cwd`，按 `GOAL_PLUS_ROOT` 规则解析唯一 runtime root；
+- [x] T604 以结构化 goal ID、goal record 和当前 native session invocation 三重证据激活；
+- [x] T605 激活命令幂等完成 attach、scan、watcher ensure，并记录独立增强状态；
+- [x] T606 观察器失败隔离于 Pi 主 Trace，支持 context/settle 重试；
+- [x] T607 保留独立安装器、既有 registry/spool 和启动 ensure 的兼容性；
+- [x] T608 覆盖普通 Pi、有效激活、错误 workspace、legacy setup 与 bundle 分发测试。
 
 ## 3. 任务清单
 
@@ -207,43 +221,43 @@ identity。Wave 4 依赖服务端投影。Wave 5 完成分发和真实宿主验�
   - 展示 pending/ambiguous/missing sessions、checkpoint 和 fidelity；
   - 提供 self-check/relink 指引，不在 UI 中暴露本地绝对路径。
 
-### Wave 5：分发、文档和真实验收
+### Wave 5：分发、文档和真实验收（原方案，已由 Wave 6 收敛）
 
-- [ ] T501 setup/distribution
+- [x] T501 setup/distribution
   - 新增 Goal Plus collector bundle 和 setup route；
   - 安装器校验 bundle SHA-256、Node version 和目标路径；
   - API key 不进入 asset URL 或日志；
   - uninstall 只删除 managed collector 和可选 spool，不删除 `.gp`。
 
-- [ ] T502 安装指导
-  - 在安装指导中提供 Goal Plus 的 Pi、Codex、Pi + Codex 宿主 profile；
-  - 服务端展开并去重 native collector 依赖，旧 `frameworks=goal-plus` 保持兼容；
-  - 明确 profile 只选择已有 Goal Plus 的 Trace 来源，不安装或修改 Goal Plus 本体；
-  - 说明先安装 Codex/Pi collector，`.gp` attach 只用于可选语义增强；
+- [x] T502 安装指导
+  - 安装指导只展示 Pi Agent；Goal Plus 不再是独立 framework/profile；
+  - Pi bundle 内置默认休眠的 Goal Plus 观察器，旧 `frameworks=goal-plus` 映射为 Pi；
+  - 明确 Agent Insight 不安装或修改 Goal Plus 本体；
+  - 说明真实 `/goal-plus` start 自动激活 `.gp`，普通 Pi 无须额外操作；
   - 说明 remote server 场景必须在 Goal Plus 所在机器运行 local collector；
   - 说明 bounded/metadata-only、历史 scan、detach 和 self-check。
 
-- [ ] T502A native collector 零回归保护
-  - 组合安装只复用既有 Pi/Codex 子安装器，不修改 collector core、adapter 或 Execution ID；
+- [x] T502A native collector 零回归保护
+  - Pi 原生 collector 保持主 Trace 主路径，Goal Plus 增强异步执行并隔离失败；
   - Goal Plus semantic collector 安装、scan、watch 独立报告状态，失败不回滚或降级 native Trace；
   - 所需 native collector 失败时报告 `NOT READY`，全部成功时 native Trace 报告 `READY`；
   - direct Pi、direct Codex、legacy Goal Plus 的生成脚本行为由 golden tests 固定；
   - profile 依赖重复选择时每个组件只安装一次。
 
-- [ ] T502B Goal Plus watcher 生命周期
+- [x] T502B Goal Plus watcher 生命周期
   - Goal Plus collector 独立提供 `start`、`stop`、`status`；
   - PID、日志和锁只落在 Goal Plus managed directory，不接管 native watcher；
   - 无 source 时不得显示 ready，重复 start 必须幂等；
-  - 安装命令执行目录存在 `.gp` 时允许显式 attach/scan，禁止猜测其他工作区路径。
+  - 只有当前 Pi session 的结构化 start 证据匹配时才允许自动 attach/scan，禁止猜测其他工作区路径。
 
-- [ ] T503 用户与开发者文档
+- [x] T503 用户与开发者文档
   - 更新 `docs/user-guide/observability/`；
   - 更新 developer guide 的架构、模块、API/contract、数据流和扩展说明；
   - 按 developer guide 的 provenance 规则更新 source commit；
   - 明确 Goal Plus 零写入、Pi passive timing 和 private CoT 边界。
 
-- [ ] T504 真实 Codex 验收
-  - 运行一个 Goal Mode work DAG；
+- [ ] T504 真实 Pi + Goal Plus 验收
+  - 在安装了 Goal Plus 的 Pi 中运行一个 Goal Mode work DAG；
   - 运行 2 candidate × 2 iteration Search；
   - 验证 main/work item/candidate/final checker 关联、selection/promotion 和完整性；
   - 对照 `.gp` 和 native Execution 逐项核验。

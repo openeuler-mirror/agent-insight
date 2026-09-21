@@ -200,13 +200,6 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />
 
-                            {frameworks.includes('goal-plus') && (
-                                <GoalPlusInstallProfile
-                                    autoAddedFrameworks={installProfile.autoAddedFrameworks.map(option => option.label)}
-                                    locale={locale}
-                                />
-                            )}
-
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Linux / macOS"
@@ -353,54 +346,6 @@ function FrameworkPicker({
                     : (isZh
                         ? '已勾选的框架会写进命令,脚本跳过终端内的交互选择 —— 内网/离线环境无需访问 npm 源。'
                         : 'Selected frameworks are baked into the command, so the script skips the terminal prompt — no npm registry access needed on offline or intranet machines.')}
-            </div>
-        </article>
-    );
-}
-
-function GoalPlusInstallProfile({
-    autoAddedFrameworks, locale,
-}: {
-    autoAddedFrameworks: string[];
-    locale: string;
-}) {
-    const isZh = locale === 'zh';
-    return (
-        <article style={commandCard}>
-            <header style={commandCardHeader}>
-                <span style={commandIconBox}><Boxes size={14} strokeWidth={2.2} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                        {isZh ? 'Goal Plus Pi Trace' : 'Goal Plus Pi trace'}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
-                        {isZh
-                            ? '当前适配固定从运行 Goal Plus 的 Pi 采集主 Trace、worker Trace 和显式关系。'
-                            : 'This integration collects the main trace, worker traces, and explicit relationships from Pi running Goal Plus.'}
-                    </div>
-                </div>
-            </header>
-            <div style={chipRow}>
-                <span style={frameworkChipActive}><Check size={12} strokeWidth={2.6} />Pi</span>
-            </div>
-            <div style={langfuseNote}>
-                {autoAddedFrameworks.length > 0
-                    ? (isZh
-                        ? `安装命令将自动配置：${autoAddedFrameworks.join('、')}，用于采集 Goal Plus 在所选 Agent 中产生的原生 Trace。不会改变其原有 Trace 采集逻辑。`
-                        : `The setup configures: ${autoAddedFrameworks.join(', ')} to collect native traces produced by Goal Plus in the selected Agent. Existing trace collection behavior is unchanged.`)
-                    : (isZh
-                        ? '需要的原生采集器已经在上方手动选中，安装时不会重复执行。'
-                        : 'The required native collectors are already selected above and will not be installed twice.')}
-            </div>
-            <div style={langfuseNote}>
-                {isZh
-                    ? 'Agent Insight 不会安装或修改 Goal Plus。配置完成后，继续在 Pi 中按原方式运行已安装的 Goal Plus 即可。'
-                    : 'Agent Insight does not install or modify Goal Plus. After setup, keep running the existing Goal Plus installation through Pi as usual.'}
-            </div>
-            <div style={langfuseNote}>
-                {isZh
-                    ? 'Worker 关系采集：要在 Pi 主 Trace 下展示 Goal Plus worker，请在 Goal Plus 工作区执行 goal-plus-collector attach /绝对路径/.gp && goal-plus-collector scan && goal-plus-collector start；未配置时仍可采集主 Trace，但不会合并 worker。'
-                    : 'Worker relationship collection: to show Goal Plus workers under the Pi main trace, run goal-plus-collector attach /absolute/path/.gp && goal-plus-collector scan && goal-plus-collector start. Without it, the main trace is still collected but workers are not merged.'}
             </div>
         </article>
     );

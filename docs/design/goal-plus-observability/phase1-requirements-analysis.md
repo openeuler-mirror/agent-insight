@@ -7,6 +7,12 @@
 
 ## 1. 结论
 
+> 2026-09-21 安装体验优化：Goal Plus 继续是 orchestration overlay，不再作为用户可选
+> framework 或独立安装步骤。Pi Agent 安装包内置 Agent Insight 自有的休眠观察器；仅当
+> Pi 中真实执行 `/goal-plus` 并能用 `.gp` 内 Goal/start-session 证据确认归属时自动激活。
+> 本轮只修改 Agent Insight，不要求 Goal Plus 仓库改代码。普通 Pi 与任何检测/增强失败都
+> 保持原生主 Trace 可用。
+
 Agent Insight 可以在不要求 Goal Plus 改代码的前提下接入 Goal Plus，并采集一条
 可审计的完整执行轨迹：
 

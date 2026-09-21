@@ -194,7 +194,6 @@ const frameworks = [
     { name: 'Trae IDE', value: 'trae' },
     { name: 'AcTrail', value: 'actrail' },
     { name: 'Pi Agent', value: 'pi-agent' },
-    { name: 'Goal Plus', value: 'goal-plus' },
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
     { name: 'DeepSeek Harness', value: 'deepseek-harness' }
@@ -263,12 +262,9 @@ else
 fi
 fi
 
+# Legacy Goal Plus selection is now a Pi installation alias.
 if [[ ",$SELECTED_FRAMEWORKS," == *",goal-plus,"* ]]; then
-    GOAL_PLUS_HOSTS="pi"
-    if [[ ",$SELECTED_FRAMEWORKS," != *",pi-agent,"* ]]; then
-        SELECTED_FRAMEWORKS="$SELECTED_FRAMEWORKS,pi-agent"
-        AUTO_ADDED_FRAMEWORKS="pi-agent"
-    fi
+    SELECTED_FRAMEWORKS=$(printf "%s" "$SELECTED_FRAMEWORKS" | awk -F, '{ out=""; for (i=1;i<=NF;i++) { value=($i=="goal-plus" ? "pi-agent" : $i); if (value!="" && "," out "," !~ "," value ",") out=(out=="" ? value : out "," value) } print out }')
 fi
 
 # Set installation flags based on selection
@@ -1276,7 +1272,6 @@ function generatePowerShellScript(
         '    "    { name: \'Trae IDE\', value: \'trae\' },"',
         '    "    { name: \'AcTrail\', value: \'actrail\' },"',
         '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
-        '    "    { name: \'Goal Plus\', value: \'goal-plus\' },"',
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }"',
@@ -1347,12 +1342,9 @@ function generatePowerShellScript(
         '}',
         '}',
         '',
+        '# Legacy Goal Plus selection is now a Pi installation alias.',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
-        '    $GOAL_PLUS_HOSTS = "pi"',
-        '    if ($SELECTED_FRAMEWORKS -notmatch "(^|,)pi-agent(,|$)") {',
-        '        $SELECTED_FRAMEWORKS += ",pi-agent"',
-        '        $AUTO_ADDED_FRAMEWORKS = "pi-agent"',
-        '    }',
+        '    $SELECTED_FRAMEWORKS = (($SELECTED_FRAMEWORKS -split "," | ForEach-Object { if ($_ -eq "goal-plus") { "pi-agent" } else { $_ } } | Select-Object -Unique) -join ",")',
         '}',
         '',
         '# Set installation flags based on selection',
