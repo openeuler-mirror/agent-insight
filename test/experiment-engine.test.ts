@@ -23,6 +23,8 @@ import {
   settleExperimentStatus,
 } from '@/lib/engine/experiment/run-experiment';
 import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
+import { createAgentDatasetRecord, findAgentDataset } from '@/server/agent_datasets_storage';
+import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 
 const TEST_USER = `exp-engine-${Date.now()}`;
 
@@ -98,6 +100,7 @@ async function cleanup() {
   await prisma.session.deleteMany({ where: { user: TEST_USER } });
   await prisma.execution.deleteMany({ where: { user: TEST_USER } });
   await prisma.customEvaluatorList.deleteMany({ where: { user: TEST_USER } });
+  await prisma.agentEvalDataset.deleteMany({ where: { user: TEST_USER } });
 }
 
 test.before(async () => {
@@ -163,6 +166,70 @@ test('engine: 忠实版预置 + 自建 LLM 两行成功落库，实验终态 don
   assert.equal(JSON.parse(llmRow.evidenceJson!).md, '整体判断依据');
   assert.equal(llmRow.attempts, 1);
   assert.ok(typeof llmRow.durationMs === 'number');
+  setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 普通实验实时提取写回数据项，下一次评测复用缓存', async () => {
+  const datasetId = `dataset-${TEST_USER}`;
+  const datasetCaseId = 'case-live-cache';
+  await createAgentDatasetRecord({
+    id: datasetId,
+    user: TEST_USER,
+    name: '实时缓存测试集',
+    description: '',
+    targetAgent: '',
+    targetSkill: '',
+    tags: [],
+    fields: [],
+    datasetKind: 'ideal_output',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    cases: [{
+      id: datasetCaseId,
+      input: '请回答问题 X',
+      expectedOutput: 'ref answer',
+      evaluationFocus: '',
+      tags: [],
+      trajectory: '',
+    }],
+  });
+
+  const runBoundExperiment = async (
+    runner: Parameters<typeof setFaithfulPresetRunnerForTest>[0],
+  ) => {
+    setFaithfulPresetRunnerForTest(runner);
+    const executionId = await createExecution();
+    const created = await createExperiment(executionId, ['preset-agent-task-completion']);
+    await prisma.experimentCase.update({
+      where: { id: created.caseId },
+      data: {
+        caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding(null, {
+          datasetId,
+          caseId: datasetCaseId,
+        })),
+      },
+    });
+    const run = await startExperimentRun(created.experimentId, TEST_USER);
+    await run!.completion;
+  };
+
+  await runBoundExperiment(async (_id, _user, ctx) => {
+    assert.equal(ctx.precomputedRootCauseSource, undefined);
+    assert.equal(typeof ctx.onLiveRootCausesExtracted, 'function');
+    await ctx.onLiveRootCausesExtracted?.([{ content: '实时提取观点', weight: 2 }]);
+    return { score: 80, points: [], evidence: { md: '首次实时提取' } };
+  });
+
+  const written = await findAgentDataset(TEST_USER, datasetId);
+  assert.deepEqual(written?.cases[0].rootCauses, [{ content: '实时提取观点', weight: 2 }]);
+  assert.equal(written?.cases[0].rootCauseMeta?.status, 'ready');
+
+  await runBoundExperiment(async (_id, _user, ctx) => {
+    assert.equal(ctx.precomputedRootCauseSource, 'dataset-cache');
+    assert.deepEqual(ctx.precomputedRootCauses, [{ content: '实时提取观点', weight: 2 }]);
+    assert.equal(ctx.onLiveRootCausesExtracted, undefined);
+    return { score: 80, points: [], evidence: { md: '复用缓存' } };
+  });
   setFaithfulPresetRunnerForTest(null);
 });
 

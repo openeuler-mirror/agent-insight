@@ -111,6 +111,8 @@ interface SelectedCase {
   faultInjectionType?: string | null;
   externalCaseId?: string;
   values?: Record<string, unknown>;
+  datasetId?: string;
+  datasetCaseId?: string;
 }
 
 interface DatasetOption {
@@ -225,6 +227,8 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
         ...(item.evaluationFocus ? { trigger_rationale: item.evaluationFocus } : {}),
         ...(fault ? { fault_injection_type: fault } : {}),
       },
+      datasetId: dataset?.id,
+      datasetCaseId: item.id,
     };
   });
 }
@@ -1020,6 +1024,8 @@ export function ExperimentWizard({
         ...(datasetCase.values || {}),
         ...(datasetCase.evaluationFocus ? { trigger_rationale: datasetCase.evaluationFocus } : {}),
       },
+      datasetId: selectedDataset?.id,
+      datasetCaseId: datasetCase.id,
     };
   };
 
@@ -1182,6 +1188,21 @@ export function ExperimentWizard({
           const c = next.get(key);
           if (c) next.set(key, { ...c, datasetInput });
         }
+        for (const [key, c] of next) {
+          const datasetCase = findBestDatasetInputMatch(c.input, ds.cases || []);
+          const referenceOutput = result.updates[key] ?? c.referenceOutput;
+          if (
+            datasetCase?.id
+            && normalizeDatasetInput(referenceOutput) === normalizeDatasetInput(datasetCase.expectedOutput)
+          ) {
+            next.set(key, {
+              ...c,
+              referenceOutput,
+              datasetId: ds.id,
+              datasetCaseId: datasetCase.id,
+            });
+          }
+        }
         return next;
       });
       setDatasetHint(describeMatchResult(result));
@@ -1334,6 +1355,8 @@ export function ExperimentWizard({
         evaluatorContext: c.evaluatorContext,
         faultInjectionType: c.faultInjectionType || undefined,
         values: c.values,
+        datasetId: c.datasetId,
+        datasetCaseId: c.datasetCaseId,
       }));
       const selectedEvaluatorConfigs = Object.fromEntries(
         Object.entries(evaluatorConfigs).filter(([id]) => selectedEvaluators.has(id)),

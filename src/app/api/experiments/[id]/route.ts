@@ -16,6 +16,7 @@ import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestra
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
+import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
 import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
@@ -578,7 +579,7 @@ export async function GET(
           try {
             const parsed = JSON.parse(c.caseValuesJson) as unknown;
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              caseValues = parsed as Record<string, unknown>;
+              caseValues = withoutExperimentDatasetCaseBinding(parsed as Record<string, unknown>);
             }
           } catch {
             caseValues = null;

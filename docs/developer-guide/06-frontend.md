@@ -14,7 +14,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/agents` | `AgentsPage` (`(main)/agents/page.tsx`) | 已注册/已观测的 agents |
 | `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；列表由服务端过滤、排序和数据库分页，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
-| `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；列表读取不含 cases 的摘要视图，编辑和详情再按需加载完整记录；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值 |
+| `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；列表读取不含 cases 的摘要视图，编辑和详情再按需加载完整记录；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值；本地导入的隐藏文件控件常驻页面，菜单关闭不会中断文件选择 |
 | `/(main)/eval`, `/(main)/eval/run/[runId]`, `/(main)/eval/trajectory/*` | `EvalPage`, `RunDetailPage`, `TrajectoryDetailPage`/`TrajectoryTracePage` | 评测运行与轨迹视图 |
 | `/(main)/skill-eval`, `/(main)/skill-eval/grayscale`, `/(main)/skill-eval/trigger/[skillName]`, `/(main)/skill-eval/_batch` | `SkillAnalysisPage`, `GrayscalePage`, `SkillEvalTriggerPage`, `BatchEvaluation` | Skill 分析：静态、A/B、触发、批量 |
 | `/(main)/skill-generator` | `PlaygroundPage` (`(main)/skill-generator/page.tsx`) | Skill 生成 playground |
@@ -96,6 +96,8 @@ Skill 在持续优化分组中只有一个正式入口，进入统一对话工�
 - **文本评估器配置** — 第 ④ 步的 Exact Match/Entity F1 卡片通过 `components/eval/TextEvaluatorConfigDialog.tsx` 编辑实验级运行参数。弹窗只维护草稿，点击保存后写入 `ExperimentWizard` 状态，最终随创建请求提交；同配置克隆复制 `evaluatorConfigsJson`，复用向导从 `reusableConfig` 恢复配置。`ExperimentWizard`、`ExperimentDetail` 与 `ExperimentCaseDetail` 复用 `summarizeEvaluatorRunConfig()`，避免三处配置文案漂移。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
 - **基础组件（复用，不要重建）** — `ui/*`（button、card、dialog、select、switch……）、`feedback/{EmptyState,ErrorState,StatusBadge}.tsx`、`text/*`（`MetricValue`、`RelativeTime`、`TruncateText`）、`SmartViewer/*`。
+
+`Select` 基于 Radix DropdownMenu。放在 `Dialog` 内时传入 `modal={false}`；`DialogContent` 会识别带 `data-slot="dropdown-menu-content"` 的 Portal 内容并阻止将其误判为外部交互，避免选择或重复点击下拉框时关闭外层弹窗。
 
 组件关系（典型组合）：
 ```mermaid
