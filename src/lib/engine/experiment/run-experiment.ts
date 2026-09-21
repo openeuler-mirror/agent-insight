@@ -364,7 +364,12 @@ async function evaluateOnce(
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isTextPresetId(evaluatorId)) {
-    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorConfig);
+    return runTextPreset(
+      evaluatorId,
+      user,
+      runtime.faithfulCtx,
+      evaluatorConfig && !('threshold' in evaluatorConfig) ? evaluatorConfig : undefined,
+    );
   }
   // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
