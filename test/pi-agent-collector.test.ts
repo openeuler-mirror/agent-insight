@@ -10,6 +10,8 @@ const {
   PiTraceCollector,
   classifyTool,
   createCollector,
+  goalPlusCreatedIdFromCurrentContext,
+  goalPlusStartIdFromContext,
   isSubagentWorkerProcess,
   loadCollectorConfig,
   parseMcpIdentity,
@@ -71,6 +73,21 @@ class MemoryUploader {
   }
 }
 
+class MemoryRelationshipOutbox {
+  sessions: Array<Record<string, unknown>> = []
+  flushed = 0
+
+  async enqueueSession(binding: Record<string, unknown>) {
+    this.sessions.push(binding)
+    return { queued: true, state: "pending" }
+  }
+
+  async flushOnce() {
+    this.flushed += 1
+    return { acquired: true, uploaded: 0, retried: 0, rejected: 0, deferred: 0 }
+  }
+}
+
 async function fixtureSkill(t: test.TestContext, frontmatter = "") {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pi-skill-"))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
@@ -83,26 +100,33 @@ async function fixtureSkill(t: test.TestContext, frontmatter = "") {
   return { name: "fixture-skill", filePath, baseDir: dir }
 }
 
-function collector(writer = new MemoryWriter(), uploader = new MemoryUploader()) {
+function collector(
+  writer = new MemoryWriter(),
+  uploader = new MemoryUploader(),
+  relationshipOutbox = new MemoryRelationshipOutbox(),
+) {
   let now = 1_700_000_000_000
   const instance = new PiTraceCollector({
     config: {
       enabled: true,
       apiKey: "key",
       endpoint: "http://127.0.0.1/otel",
+      collaborationSessionsEndpoint: "http://127.0.0.1/collaboration-sessions",
+      collaborationEventsEndpoint: "http://127.0.0.1/collaboration-events",
       homeDir: os.tmpdir(),
       uploadIntervalMs: 300_000,
       shutdownTimeoutMs: 100,
     },
     writer,
     uploader,
+    relationshipOutbox,
     now: () => {
       now += 10
       return now
     },
   })
   instance.startSession("session-a")
-  return { instance, writer, uploader }
+  return { instance, writer, uploader, relationshipOutbox }
 }
 
 function context() {
@@ -413,6 +437,94 @@ test("Pi collector derives a distinct session id per agent task within one Pi se
   // 每个任务的 agent 事件归属各自 session
   assert.equal(agentEvents[0].sessionId, sessions[0])
   assert.equal(agentEvents[1].sessionId, sessions[1])
+})
+
+test("Pi collector binds only the initial Goal Plus start task to the reported collaboration", async () => {
+  const { instance, relationshipOutbox } = collector()
+  instance.recordInput("/goal-plus improve the solver")
+  instance.beginAgent({
+    prompt: "继续此 Goal Plus 任务。\n\ngoal_plus_id: gp_demo\n\n原始目标：\nimprove the solver",
+    systemPromptOptions: {},
+  }, context())
+  await instance.settleAgent()
+
+  assert.equal(relationshipOutbox.sessions.length, 1)
+  assert.deepEqual(relationshipOutbox.sessions[0], {
+    collaborationId: relationshipOutbox.sessions[0].collaborationId,
+    sessionId: "main",
+    traceSessionId: "session-a__task0",
+    eventClock: "source_session",
+  })
+  assert.match(String(relationshipOutbox.sessions[0].collaborationId), /^gp\.[a-f0-9]{32}$/)
+
+  instance.recordInput("/goal-plus resume")
+  instance.beginAgent({
+    prompt: "goal_plus_id: gp_demo",
+    systemPromptOptions: {},
+  }, context())
+  await instance.settleAgent()
+  assert.equal(relationshipOutbox.sessions.length, 1)
+})
+
+test("Pi collector recognizes the interactive Goal Plus start context but ignores later edit or resume contexts", async () => {
+  const { instance, relationshipOutbox } = collector()
+  instance.recordInput("Continue the authorized Goal Plus task.", "extension")
+  instance.beginAgent({ prompt: "Continue the authorized Goal Plus task.", systemPromptOptions: {} }, context())
+  const startMessages = [
+    { role: "custom", customType: "goal-plus-created", details: { goal_plus_id: "gp_demo" } },
+    { role: "user", content: [{ type: "text", text: "Continue the authorized Goal Plus task." }] },
+    { role: "custom", customType: "goal-plus-command-context", details: { goal_plus_id: "gp_demo" } },
+  ]
+  assert.equal(goalPlusStartIdFromContext(startMessages), "gp_demo")
+  instance.recordContext(startMessages)
+  await instance.settleAgent()
+  assert.equal(relationshipOutbox.sessions.length, 1)
+  assert.equal(relationshipOutbox.sessions[0].traceSessionId, "session-a__task0")
+
+  instance.recordInput("Continue the authorized Goal Plus task.", "extension")
+  instance.beginAgent({ prompt: "Continue the authorized Goal Plus task.", systemPromptOptions: {} }, context())
+  const resumedMessages = [
+    ...startMessages,
+    assistant(),
+    { role: "custom", customType: "goal-plus-control", content: "Goal Plus resume" },
+    { role: "user", content: [{ type: "text", text: "Continue the authorized Goal Plus task." }] },
+    { role: "custom", customType: "goal-plus-command-context", details: { goal_plus_id: "gp_demo" } },
+  ]
+  assert.equal(goalPlusStartIdFromContext(resumedMessages), undefined)
+  instance.recordContext(resumedMessages)
+  await instance.settleAgent()
+  assert.equal(relationshipOutbox.sessions.length, 1)
+})
+
+test("Pi collector recovers a print-mode start id from the current goal-plus-created message", async () => {
+  const { instance, relationshipOutbox } = collector()
+  instance.recordInput("/goal-plus goal_plus_id: misleading prose")
+  instance.beginAgent({
+    prompt: "goal_plus_id: gp_actual\n\nOriginal text also contains\ngoal_plus_id: gp_misleading",
+    systemPromptOptions: {},
+  }, context())
+  const messages = [
+    assistant({ content: [{ type: "text", text: "previous task" }] }),
+    { role: "custom", customType: "goal-plus-created", details: { goal_plus_id: "gp_actual" } },
+    { role: "user", content: [{ type: "text", text: "transformed Goal Plus prompt" }] },
+  ]
+  assert.equal(goalPlusCreatedIdFromCurrentContext(messages), "gp_actual")
+  instance.recordContext(messages)
+  await instance.settleAgent()
+  assert.equal(relationshipOutbox.sessions.length, 1)
+})
+
+test("Pi collector does not infer a Goal Plus id from ordinary prose", async () => {
+  const { instance, relationshipOutbox } = collector()
+  instance.recordInput("/goal-plus improve the solver")
+  instance.beginAgent({
+    prompt: "Continue the task and mention goal_plus_id: gp_wrong in prose.",
+    systemPromptOptions: {},
+  }, context())
+  instance.beginTool({ toolCallId: "other", toolName: "bash", args: { note: "goal_plus_id: gp_wrong" } })
+  instance.endTool({ toolCallId: "other", toolName: "bash", result: { text: "gp_wrong" }, isError: false })
+  await instance.settleAgent()
+  assert.equal(relationshipOutbox.sessions.length, 0)
 })
 
 test("isSubagentWorkerProcess detects only delegation worker processes", () => {

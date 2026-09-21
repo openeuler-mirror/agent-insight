@@ -14,12 +14,13 @@ const {
   inspectProcessLock,
   listSpoolFiles,
   readCheckpoint,
-  safeContent,
   sha256,
 } = require("../shared/trace-transport.cjs");
+const {
+  DurableCollaborationOutbox,
+} = require("../shared/collaboration-transport.cjs");
 const { parseGoalPlusRoot } = require("./lib/gp-snapshot-parser.cjs");
 const { importPiSessions } = require("./lib/pi-native-parser.cjs");
-const { enqueueSemanticBatch, semanticStateDir, uploadSemanticBatches } = require("./lib/semantic-spool.cjs");
 const {
   attachSource,
   defaultRegistryPath,
@@ -28,9 +29,7 @@ const {
   validateGoalPlusRoot,
 } = require("./lib/source-registry.cjs");
 
-const COLLECTOR_VERSION = "1.2.4";
-const MAX_BATCH_SNAPSHOTS = 100;
-const MAX_BATCH_BYTES = 3.5 * 1024 * 1024;
+const COLLECTOR_VERSION = "2.0.0";
 
 function watcherPaths(config) {
   const runtimeDir = path.join(path.dirname(config.configPath), "runtime");
@@ -48,8 +47,9 @@ function configFingerprint(config) {
     configPath: config.configPath ? path.resolve(config.configPath) : null,
     apiKeyHash: config.apiKey ? apiKeyHash(config.apiKey) : null,
     hosts: [...(config.hosts || [])].sort(),
-    semanticEndpoint: config.semanticEndpoint,
     otlpEndpoint: config.otlpEndpoint,
+    collaborationSessionsEndpoint: config.collaborationSessionsEndpoint,
+    collaborationEventsEndpoint: config.collaborationEventsEndpoint,
   }))}`;
 }
 
@@ -189,8 +189,9 @@ async function startWatcher(config, options = {}) {
       collectorVersion: COLLECTOR_VERSION,
       apiKeyHash: apiKeyHash(config.apiKey),
       configFingerprint: configFingerprint(config),
-      semanticEndpoint: endpointIdentity(config.semanticEndpoint),
       otlpEndpoint: endpointIdentity(config.otlpEndpoint),
+      collaborationSessionsEndpoint: endpointIdentity(config.collaborationSessionsEndpoint),
+      collaborationEventsEndpoint: endpointIdentity(config.collaborationEventsEndpoint),
     };
     await atomicWriteJson(paths.pidPath, record);
     return {
@@ -250,42 +251,6 @@ async function stopWatcher(config) {
   return { stopped: true, running: false, ready: false, pid: record.pid };
 }
 
-function buildSemanticBatches(source, parsed, scanStartedAt, scanCompletedAt) {
-  const groups = [];
-  let current = [];
-  let currentBytes = 0;
-  for (const snapshot of parsed.snapshots) {
-    const bytes = Buffer.byteLength(JSON.stringify(snapshot), "utf8");
-    if (current.length && (current.length >= MAX_BATCH_SNAPSHOTS || currentBytes + bytes > MAX_BATCH_BYTES)) {
-      groups.push(current);
-      current = [];
-      currentBytes = 0;
-    }
-    current.push(snapshot);
-    currentBytes += bytes;
-  }
-  if (current.length || !groups.length) groups.push(current);
-  return groups.map((snapshots, index) => ({
-    format: "agent-insight.goal-plus-batch",
-    version: 1,
-    source: {
-      sourceId: source.sourceId,
-      workspaceFingerprint: source.workspaceFingerprint,
-      collectorVersion: COLLECTOR_VERSION,
-      label: safeContent(source.label, 160),
-      ...(index === groups.length - 1 ? { scanCompletedAt } : {}),
-      semanticCheckpoint: {
-        scanStartedAt,
-        scannedFiles: parsed.scannedFiles,
-        snapshotCount: parsed.snapshots.length,
-        batchOrdinal: index,
-        batchCount: groups.length,
-      },
-    },
-    snapshots,
-  }));
-}
-
 function parseArgs(argv) {
   const result = { command: argv[0] || "help", values: [], intervalMs: 5000 };
   for (let index = 1; index < argv.length; index += 1) {
@@ -330,8 +295,9 @@ async function loadConfig(options = {}) {
   const explicitBaseUrl = String(process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL || "").trim();
   const managedBaseUrl = String(file.baseUrl || "").trim();
   const baseUrl = String(explicitBaseUrl || managedBaseUrl || ambientBaseUrl || "http://127.0.0.1:3000").replace(/\/+$/, "");
-  const explicitSemanticEndpoint = String(process.env.AGENT_INSIGHT_GOAL_PLUS_ENDPOINT || "").trim();
   const explicitOtlpEndpoint = String(process.env.AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT || "").trim();
+  const explicitSessionsEndpoint = String(process.env.AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_SESSIONS_ENDPOINT || "").trim();
+  const explicitEventsEndpoint = String(process.env.AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_EVENTS_ENDPOINT || "").trim();
   const ambientOtlpEndpoint = String(process.env.AGENT_INSIGHT_OTLP_ENDPOINT || "").trim();
   if (!explicitOtlpEndpoint && file.otlpEndpoint && ambientOtlpEndpoint && file.otlpEndpoint !== ambientOtlpEndpoint) {
     diagnostics.push({
@@ -346,15 +312,18 @@ async function loadConfig(options = {}) {
     apiKey,
     apiKeySource: explicitApiKey ? "goal-plus-env" : managedApiKey ? "config" : ambientApiKey ? "ambient-env" : "missing",
     configDiagnostics: diagnostics,
-    hosts: Array.isArray(file.hosts) ? file.hosts.filter(host => host === "pi" || host === "codex") : [],
-    semanticEndpoint: explicitSemanticEndpoint || (explicitBaseUrl
-      ? `${baseUrl}/api/ingest/goal-plus/v1/snapshots`
-      : file.semanticEndpoint || `${baseUrl}/api/ingest/goal-plus/v1/snapshots`),
+    hosts: ["pi"],
     otlpEndpoint: explicitOtlpEndpoint || (explicitBaseUrl
       ? `${baseUrl}/api/ingest/otel/v1/traces`
       : file.otlpEndpoint || (managedBaseUrl
         ? `${baseUrl}/api/ingest/otel/v1/traces`
         : ambientOtlpEndpoint || `${baseUrl}/api/ingest/otel/v1/traces`)),
+    collaborationSessionsEndpoint: explicitSessionsEndpoint
+      || (explicitBaseUrl ? "" : file.collaborationSessionsEndpoint)
+      || `${baseUrl}/api/ingest/collaborations/sessions`,
+    collaborationEventsEndpoint: explicitEventsEndpoint
+      || (explicitBaseUrl ? "" : file.collaborationEventsEndpoint)
+      || `${baseUrl}/api/ingest/collaborations/events`,
   };
 }
 
@@ -370,30 +339,36 @@ async function resolveSources(selector, options) {
 async function scanSource(source, config, options = {}) {
   if (!config.apiKey) throw new Error("AGENT_INSIGHT_GOAL_PLUS_API_KEY, managed config apiKey, or AGENT_INSIGHT_API_KEY is required for scanning");
   const scanStartedAt = new Date().toISOString();
-  const parsed = await parseGoalPlusRoot(source, { homeDir: config.homeDir });
-  const scanCompletedAt = new Date().toISOString();
-  const batches = buildSemanticBatches(source, parsed, scanStartedAt, scanCompletedAt);
-  for (const batch of batches) await enqueueSemanticBatch(batch, { apiKey: config.apiKey, homeDir: config.homeDir });
+  const parsed = await parseGoalPlusRoot(source);
   const nativeImporter = options.nativeImporter || importPiSessions;
-  const semanticUploader = options.semanticUploader || uploadSemanticBatches;
+  const relationshipOutbox = options.relationshipOutbox || new DurableCollaborationOutbox({
+    framework: "goal-plus",
+    apiKey: config.apiKey,
+    homeDir: config.homeDir,
+    sessionsEndpoint: config.collaborationSessionsEndpoint,
+    eventsEndpoint: config.collaborationEventsEndpoint,
+  });
+  const relationshipEnqueue = await relationshipOutbox.enqueueRelationships(parsed.relationships);
   const native = await nativeImporter(source.root, parsed.piSessions, {
     apiKey: config.apiKey,
     homeDir: config.homeDir,
     endpoint: config.otlpEndpoint,
     upload: options.upload,
   });
-  const semanticUpload = options.upload === false
-    ? { uploadedBatches: 0, uploadedSnapshots: 0 }
-    : await semanticUploader({ apiKey: config.apiKey, homeDir: config.homeDir, endpoint: config.semanticEndpoint });
+  const relationshipUpload = options.upload === false
+    ? { acquired: true, uploaded: 0, retried: 0, rejected: 0, deferred: 0 }
+    : await relationshipOutbox.flushOnce();
   return {
     sourceId: source.sourceId,
-    snapshots: parsed.snapshots.length,
+    scannedAt: scanStartedAt,
     piSessions: native.imported,
     piSessionsDiscovered: parsed.piSessions.length,
     piSessionsSkipped: native.skipped || 0,
     nativeAppendedEvents: native.appendedEvents || 0,
     nativeUnchangedEvents: native.unchangedEvents || 0,
-    semanticUpload,
+    relationshipsDiscovered: parsed.relationships.length,
+    relationshipEnqueue,
+    relationshipUpload,
     nativeUploadEvents: native.uploadedEvents,
     nativeUploadStatus: native.uploadStatus,
     diagnostics: [...parsed.diagnostics, ...native.diagnostics],
@@ -406,7 +381,7 @@ async function selfCheck(config) {
   for (const source of registry.sources) {
     try {
       await validateGoalPlusRoot(source.root);
-      const parsed = await parseGoalPlusRoot(source, { homeDir: config.homeDir });
+      const parsed = await parseGoalPlusRoot(source);
       const objectCounts = {};
       for (const snapshot of parsed.snapshots) objectCounts[snapshot.kind] = (objectCounts[snapshot.kind] || 0) + 1;
       sources.push({
@@ -425,18 +400,13 @@ async function selfCheck(config) {
     }
   }
   let spoolWritable = false;
-  let spoolBacklog = { semanticPending: 0, semanticRejected: 0, nativePendingFiles: 0 };
+  let spoolBacklog = { relationshipPending: 0, relationshipRejected: 0, nativePendingFiles: 0 };
   if (config.apiKey) {
     const stateDir = collectorStateDir("goal-plus", config.apiKey, config.homeDir);
     const probe = path.join(stateDir, ".self-check");
     await atomicWriteJson(probe, { checkedAt: new Date().toISOString() });
     await fsp.unlink(probe);
     spoolWritable = true;
-    const semanticDir = semanticStateDir(config.apiKey, config.homeDir);
-    const countJson = async directory => (await fsp.readdir(directory).catch(error => {
-      if (error?.code === "ENOENT") return [];
-      throw error;
-    })).filter(name => name.endsWith(".json")).length;
     const nativeStateDir = collectorStateDir("pi-agent", config.apiKey, config.homeDir);
     const nativeFiles = await listSpoolFiles(nativeStateDir);
     const nativeCheckpoint = await readCheckpoint(path.join(nativeStateDir, "uploader-checkpoint.json"));
@@ -445,9 +415,17 @@ async function selfCheck(config) {
       const relative = path.relative(nativeStateDir, filePath).replaceAll(path.sep, "/");
       if ((await fsp.stat(filePath)).size > Number(nativeCheckpoint.files[relative]?.bytes || 0)) nativePendingFiles += 1;
     }
+    const relationshipOutbox = new DurableCollaborationOutbox({
+      framework: "goal-plus",
+      apiKey: config.apiKey,
+      homeDir: config.homeDir,
+      sessionsEndpoint: config.collaborationSessionsEndpoint,
+      eventsEndpoint: config.collaborationEventsEndpoint,
+    });
+    const relationshipStatus = await relationshipOutbox.status();
     spoolBacklog = {
-      semanticPending: await countJson(path.join(semanticDir, "pending")),
-      semanticRejected: await countJson(path.join(semanticDir, "rejected")),
+      relationshipPending: relationshipStatus.pending,
+      relationshipRejected: relationshipStatus.rejected,
       nativePendingFiles,
     };
   }
@@ -455,12 +433,14 @@ async function selfCheck(config) {
   const uploaderBlocked = ["invalid", "orphaned", "recovery-blocked"].includes(watcher.uploader?.state);
   return {
     ok: Boolean(config.apiKey) && spoolWritable && sources.length > 0
-      && sources.every(source => source.ok) && !uploaderBlocked,
+      && sources.every(source => source.ok) && !uploaderBlocked
+      && spoolBacklog.relationshipRejected === 0,
     configured: Boolean(config.apiKey),
     configDiagnostics: config.configDiagnostics || [],
     endpoints: {
-      semantic: /^https?:\/\//.test(config.semanticEndpoint),
       otlp: /^https?:\/\//.test(config.otlpEndpoint),
+      collaborationSessions: /^https?:\/\//.test(config.collaborationSessionsEndpoint),
+      collaborationEvents: /^https?:\/\//.test(config.collaborationEventsEndpoint),
     },
     spoolWritable,
     spoolBacklog,
@@ -554,7 +534,6 @@ if (require.main === module) {
 
 module.exports = {
   COLLECTOR_VERSION,
-  buildSemanticBatches,
   ensureWatcher,
   loadConfig,
   main,

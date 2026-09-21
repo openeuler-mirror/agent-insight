@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { parseGoalPlusRoot, piProjectSessionDir } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
+const { parseGoalPlusRoot } = require('../scripts/agent-trace-collectors/goal-plus/lib/gp-snapshot-parser.cjs');
 const {
   importPiSessions,
   messageText,
@@ -16,7 +16,6 @@ const {
 } = require('../scripts/agent-trace-collectors/goal-plus/lib/pi-native-parser.cjs');
 const { attachSource, loadRegistry } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
 const {
-  buildSemanticBatches,
   ensureWatcher,
   loadConfig,
   scanSource,
@@ -24,13 +23,13 @@ const {
   stopWatcher,
   watcherStatus,
 } = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
-const { enqueueSemanticBatch, uploadSemanticBatches } = require('../scripts/agent-trace-collectors/goal-plus/lib/semantic-spool.cjs');
 const { collectorStateDir } = require('../scripts/agent-trace-collectors/shared/trace-transport.cjs');
 const fixture = path.join(process.cwd(), 'test', 'fixtures', 'goal-plus', '.gp');
 
 type ParsedSnapshot = { snapshotId: string; kind: string; payload?: Record<string, unknown> };
 type PiSessionDescriptor = {
   sessionFile: string;
+  sessionFormat?: string;
   sessionKind?: string;
   nativeSessionId?: string;
   canonicalSessionId?: string;
@@ -45,7 +44,15 @@ type PiSessionDescriptor = {
   exitCode?: number;
   errorMessage?: string;
 };
-type ParsedRoot = { diagnostics: unknown[]; snapshots: ParsedSnapshot[]; piSessions: PiSessionDescriptor[] };
+type ParsedRoot = {
+  diagnostics: Array<{ code?: string }>;
+  snapshots: ParsedSnapshot[];
+  piSessions: PiSessionDescriptor[];
+  relationships: Array<{
+    binding: { collaborationId: string; sessionId: string; traceSessionId: string; eventClock: string };
+    event: { collaborationId: string; eventId: string; fromSessionId: string; toSessionId: string; fromLocator?: unknown };
+  }>;
+};
 type NativeEvent = {
   eventId: string;
   sessionId: string;
@@ -152,8 +159,9 @@ test('Goal Plus managed config rejects a silent ambient API key override', async
   await fsp.writeFile(configPath, JSON.stringify({
     apiKey: 'managed-key',
     baseUrl: 'https://managed-base.invalid/root/',
-    semanticEndpoint: 'https://managed.invalid/semantic',
     otlpEndpoint: 'https://managed.invalid/traces',
+    collaborationSessionsEndpoint: 'https://managed.invalid/collaboration-sessions',
+    collaborationEventsEndpoint: 'https://managed.invalid/collaboration-events',
     hosts: ['pi'],
   }));
   const previousApiKey = process.env.AGENT_INSIGHT_API_KEY;
@@ -177,8 +185,9 @@ test('Goal Plus managed config rejects a silent ambient API key override', async
   const managed = await loadConfig({ homeDir, configPath });
   assert.equal(managed.apiKey, 'managed-key');
   assert.equal(managed.apiKeySource, 'config');
-  assert.equal(managed.semanticEndpoint, 'https://managed.invalid/semantic');
   assert.equal(managed.otlpEndpoint, 'https://managed.invalid/traces');
+  assert.equal(managed.collaborationSessionsEndpoint, 'https://managed.invalid/collaboration-sessions');
+  assert.equal(managed.collaborationEventsEndpoint, 'https://managed.invalid/collaboration-events');
   assert.deepEqual(managed.configDiagnostics.map((item: { code: string }) => item.code), [
     'ignored_ambient_api_key',
     'ignored_ambient_otlp_endpoint',
@@ -198,8 +207,9 @@ test('Goal Plus managed config rejects a silent ambient API key override', async
 
   process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL = 'https://explicit.invalid/base/';
   const baseOverridden = await loadConfig({ homeDir, configPath });
-  assert.equal(baseOverridden.semanticEndpoint, 'https://explicit.invalid/base/api/ingest/goal-plus/v1/snapshots');
   assert.equal(baseOverridden.otlpEndpoint, 'https://explicit.invalid/base/api/ingest/otel/v1/traces');
+  assert.equal(baseOverridden.collaborationSessionsEndpoint, 'https://explicit.invalid/base/api/ingest/collaborations/sessions');
+  assert.equal(baseOverridden.collaborationEventsEndpoint, 'https://explicit.invalid/base/api/ingest/collaborations/events');
 
   delete process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL;
   const baseOnlyConfigPath = path.join(homeDir, 'base-only.json');
@@ -208,8 +218,9 @@ test('Goal Plus managed config rejects a silent ambient API key override', async
     baseUrl: 'https://managed-base.invalid/root/',
   }));
   const baseOnly = await loadConfig({ homeDir, configPath: baseOnlyConfigPath });
-  assert.equal(baseOnly.semanticEndpoint, 'https://managed-base.invalid/root/api/ingest/goal-plus/v1/snapshots');
   assert.equal(baseOnly.otlpEndpoint, 'https://managed-base.invalid/root/api/ingest/otel/v1/traces');
+  assert.equal(baseOnly.collaborationSessionsEndpoint, 'https://managed-base.invalid/root/api/ingest/collaborations/sessions');
+  assert.equal(baseOnly.collaborationEventsEndpoint, 'https://managed-base.invalid/root/api/ingest/collaborations/events');
 });
 
 test('Goal Plus watcher ensure recovers a stale PID after service restart', async t => {
@@ -222,7 +233,6 @@ test('Goal Plus watcher ensure recovers a stale PID after service restart', asyn
   await fsp.writeFile(configPath, JSON.stringify({
     apiKey: 'synthetic',
     hosts: ['pi'],
-    semanticEndpoint: 'http://127.0.0.1:9/semantic',
     otlpEndpoint: 'http://127.0.0.1:9/traces',
   }));
   await attachSource(root, { homeDir });
@@ -251,7 +261,6 @@ test('Goal Plus managed watcher starts idempotently and stops without touching n
   await fsp.writeFile(configPath, JSON.stringify({
     apiKey: 'synthetic',
     hosts: ['codex'],
-    semanticEndpoint: 'http://127.0.0.1:9/semantic',
     otlpEndpoint: 'http://127.0.0.1:9/traces',
   }));
   await attachSource(root, { homeDir });
@@ -287,7 +296,6 @@ test('Goal Plus ensure stops an active watcher after its credential is revoked',
   await fsp.writeFile(configPath, JSON.stringify({
     apiKey: 'synthetic',
     hosts: ['pi'],
-    semanticEndpoint: 'http://127.0.0.1:9/semantic',
     otlpEndpoint: 'http://127.0.0.1:9/traces',
   }));
   await attachSource(root, { homeDir });
@@ -304,7 +312,7 @@ test('Goal Plus ensure stops an active watcher after its credential is revoked',
   assert.equal((await watcherStatus(config)).running, false);
 });
 
-test('semantic parser emits stable bounded snapshots without local paths', async t => {
+test('current Goal Plus parser emits stable bounded state without local paths', async t => {
   const { root } = await copiedFixture(t);
   const source = { sourceId: 'gpsrc_fixture', root, label: 'fixture', workspaceFingerprint: `sha256:${'a'.repeat(64)}` };
   const first = await parseGoalPlusRoot(source) as ParsedRoot;
@@ -318,35 +326,95 @@ test('semantic parser emits stable bounded snapshots without local paths', async
   assert.equal(first.piSessions.length, 1);
 });
 
-test('semantic parser preserves only bounded Codex correlation identities', async t => {
+test('Goal Plus parser rejects the removed host_handle session schema', async t => {
   const { root } = await copiedFixture(t);
   const sessionPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
   const session = JSON.parse(await fsp.readFile(sessionPath, 'utf8'));
-  session.host = 'codex';
-  session.host_handle.host = 'codex';
-  session.host_handle.metadata = {
-    codex_conversation_id: 'conversation-demo',
-    codex_turn_id: 'turn-demo',
-    codex_execution_id: 'conversation-demo:turn:turn-demo',
-    transcript_path: '/home/example/private/transcript.jsonl',
-  };
+  delete session.agent_harness;
+  delete session.runtime_provider;
+  delete session.execution_scope;
+  session.host = 'pi-rpc';
+  session.host_handle = session.session_handle;
+  delete session.session_handle;
   await fsp.writeFile(sessionPath, JSON.stringify(session));
   const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
-  const agentSession = parsed.snapshots.find(item => item.kind === 'agent_session');
-  const hostMetadata = agentSession?.payload?.hostMetadata as Record<string, unknown>;
-  assert.equal(hostMetadata.codexConversationId, 'conversation-demo');
-  assert.equal(hostMetadata.codexTurnId, 'turn-demo');
-  assert.equal(hostMetadata.codexExecutionId, 'conversation-demo:turn:turn-demo');
-  assert.doesNotMatch(JSON.stringify(agentSession), /private\/transcript/);
+  assert.equal(parsed.piSessions.length, 0);
+  assert.equal(parsed.relationships.length, 0);
+  assert.ok(parsed.diagnostics.some(item => item.code === 'unsupported_goal_plus_schema'));
+});
+
+test('Goal Plus parser ignores current Codex sessions outside the Pi-only collection scope', async t => {
+  const { root } = await copiedFixture(t);
+  const sessionPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
+  const session = JSON.parse(await fsp.readFile(sessionPath, 'utf8'));
+  session.agent_harness = 'codex';
+  session.session_handle.agent_harness = 'codex';
+  await fsp.writeFile(sessionPath, JSON.stringify(session));
+  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
+  assert.equal(parsed.piSessions.length, 0);
+  assert.equal(parsed.relationships.length, 0);
+  assert.equal(parsed.diagnostics.length, 0);
+});
+
+test('Goal Plus parser imports current ThinkThread Pi diagnostic archives as worker traces', async t => {
+  const { root } = await copiedFixture(t);
+  const metadataPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
+  const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
+  metadata.runtime_provider = 'thinkthread';
+  metadata.execution_scope = 'thinkthread_private';
+  metadata.session_handle.runtime_provider = 'thinkthread';
+  metadata.session_handle.external_id = 'tt-child';
+  delete metadata.session_handle.metadata.session_file;
+  await fsp.writeFile(metadataPath, JSON.stringify(metadata));
+
+  const nativePath = path.join(root, 'runs', 'run_demo', 'pi_sessions', 'agent_001.jsonl');
+  const entries = (await fsp.readFile(nativePath, 'utf8')).trim().split(/\r?\n/).map((line, index) => ({
+    ...JSON.parse(line),
+    id: `entry-${index}`,
+    parentId: index ? `entry-${index - 1}` : null,
+  }));
+  await fsp.unlink(nativePath);
+  const archive = path.join(root, 'host-logs', 'session-diagnostics', 'tt-child');
+  const digest = 'b'.repeat(64);
+  const batch = {
+    version: 1,
+    session_id: 'pi-native-demo',
+    stream_id: 'stream-1',
+    sequence: 0,
+    captured_at: '2026-09-01T01:08:00.000Z',
+    leaf_id: entries.at(-1)?.id,
+    entries,
+  };
+  await fsp.mkdir(archive, { recursive: true });
+  await fsp.writeFile(path.join(archive, `${digest}.json`), JSON.stringify(batch));
+  await fsp.writeFile(path.join(archive, 'index.json'), JSON.stringify({
+    version: 1,
+    source: 'thinkthread_messages',
+    agent_harness: 'pi',
+    identity: { thinkthread_id: 'tt-child', agent_session_id: 'agent_001', run_id: 'run_demo', candidate_id: 'candidate_001' },
+    batches: { [digest]: { stream_id: 'stream-1', sequence: 0, entries: entries.length } },
+    pending_batches: {},
+    status: 'recorded',
+    session_id: 'pi-native-demo',
+  }));
+
+  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
+  assert.equal(parsed.diagnostics.length, 0);
+  assert.equal(parsed.piSessions.length, 1);
+  assert.equal(parsed.piSessions[0].sessionFormat, 'pi-diagnostic-archive');
+  const trace = await parsePiSession(root, parsed.piSessions[0]) as ParsedPi;
+  assert.ok(trace.events.some(event => event.kind === 'llm'));
+  assert.ok(trace.events.some(event => event.kind === 'tool'));
+  assert.ok(trace.events.every(event => event.sessionId === 'goal-plus:gpsrc_fixture:agent_001'));
 });
 
 test('Pi worker locator recovers uniquely timestamp-prefixed host sessions', async t => {
   const { root } = await copiedFixture(t);
   const metadataPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
   const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
-  delete metadata.host_handle.metadata.session_file;
-  metadata.host_handle.metadata.runner_failed = true;
-  metadata.host_handle.metadata.error = 'synthetic worker failure';
+  delete metadata.session_handle.metadata.session_file;
+  metadata.session_handle.metadata.runner_failed = true;
+  metadata.session_handle.metadata.error = 'synthetic worker failure';
   await fsp.writeFile(metadataPath, JSON.stringify(metadata));
   const original = path.join(root, 'runs', 'run_demo', 'pi_sessions', 'agent_001.jsonl');
   const hostDir = path.join(root, 'host-sessions', 'pi');
@@ -367,8 +435,8 @@ test('Pi worker runtime timeout overrides a stale successful session state', asy
   const metadataPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
   const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
   metadata.status = 'completed';
-  metadata.host_handle.metadata.timed_out = true;
-  metadata.host_handle.metadata.exit_code = 143;
+  metadata.session_handle.metadata.timed_out = true;
+  metadata.session_handle.metadata.exit_code = 143;
   await fsp.writeFile(metadataPath, JSON.stringify(metadata));
 
   const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
@@ -383,24 +451,24 @@ test('Pi worker descriptor recognizes completed RPC cleanup as a controlled term
   const { root } = await copiedFixture(t);
   const metadataPath = path.join(root, 'runs', 'run_demo', 'agent_sessions', 'agent_001.json');
   const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8'));
-  metadata.host_handle.metadata.runner_failed = false;
-  metadata.host_handle.metadata.timed_out = false;
-  metadata.host_handle.metadata.exit_code = 143;
-  metadata.host_handle.metadata.progress_handoff = { status: 'completed' };
+  metadata.session_handle.metadata.runner_failed = false;
+  metadata.session_handle.metadata.timed_out = false;
+  metadata.session_handle.metadata.exit_code = 143;
+  metadata.session_handle.metadata.terminal_state = 'completed';
   metadata.launch.budget_control = { max_runtime_seconds: 179 };
   await fsp.writeFile(metadataPath, JSON.stringify(metadata));
 
   const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
   const descriptor = parsed.piSessions.find(item => item.sessionKind !== 'main');
   assert.ok(descriptor);
-  assert.equal(descriptor.host, 'pi-rpc');
+  assert.equal((descriptor as PiSessionDescriptor & { agentHarness: string }).agentHarness, 'pi');
   assert.equal(descriptor.terminalState, 'completed');
   assert.equal(descriptor.progressStatus, 'completed');
   assert.equal(descriptor.controlledTermination, true);
   assert.equal(descriptor.runtimeBudgetSeconds, 179);
 });
 
-test('semantic parser ignores an incomplete JSONL tail', async t => {
+test('Goal Plus state parser ignores an incomplete JSONL tail', async t => {
   const { root } = await copiedFixture(t);
   await fsp.appendFile(path.join(root, 'goal-plus', 'gp_demo', 'events.jsonl'), '{"event_id":"half');
   const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
@@ -408,28 +476,15 @@ test('semantic parser ignores an incomplete JSONL tail', async t => {
   assert.equal(parsed.snapshots.filter(item => item.kind === 'goal_event').length, 1);
 });
 
-test('semantic batches keep limits and publish scan checkpoint on the final batch', () => {
-  const snapshots = Array.from({ length: 101 }, (_, index) => ({ snapshotId: `snapshot-${index}`, payload: {} }));
-  const batches = buildSemanticBatches(
-    { sourceId: 'source', workspaceFingerprint: `sha256:${'a'.repeat(64)}` },
-    { snapshots, scannedFiles: 101 },
-    '2026-09-03T00:00:00.000Z',
-    '2026-09-03T00:00:01.000Z',
-  );
-  assert.equal(batches.length, 2);
-  assert.equal(batches[0].snapshots.length, 100);
-  assert.equal(batches[0].source.scanCompletedAt, undefined);
-  assert.equal(batches[1].source.scanCompletedAt, '2026-09-03T00:00:01.000Z');
-});
-
-test('Goal Plus scan imports native Pi sessions before attempting semantic upload', async t => {
+test('Goal Plus scan uploads worker traces and then their explicit relationships', async t => {
   const { temporary, root } = await copiedFixture(t);
   const order: string[] = [];
   const config = {
     apiKey: 'synthetic',
     homeDir: temporary,
-    semanticEndpoint: 'http://example.invalid/semantic',
     otlpEndpoint: 'http://example.invalid/traces',
+    collaborationSessionsEndpoint: 'http://example.invalid/collaboration-sessions',
+    collaborationEventsEndpoint: 'http://example.invalid/collaboration-events',
   };
   const source = {
     sourceId: 'gpsrc_fixture',
@@ -438,43 +493,23 @@ test('Goal Plus scan imports native Pi sessions before attempting semantic uploa
   };
 
   await scanSource(source, config, {
+    relationshipOutbox: {
+      async enqueueRelationships(relationships: unknown[]) {
+        order.push(`relationships:${relationships.length}`);
+        return { queued: relationships.length * 2, rejected: 0 };
+      },
+      async flushOnce() {
+        order.push('relationship-upload');
+        return { acquired: true, uploaded: 2, retried: 0, rejected: 0, deferred: 0 };
+      },
+    },
     nativeImporter: async () => {
       order.push('native');
       return { imported: 1, uploadedEvents: 3, diagnostics: [] };
     },
-    semanticUploader: async () => {
-      order.push('semantic');
-      return { uploadedBatches: 1, uploadedSnapshots: 1 };
-    },
   });
 
-  assert.deepEqual(order, ['native', 'semantic']);
-});
-
-test('semantic uploader retries transient responses before acknowledging', async t => {
-  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-spool-'));
-  t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
-  const batch = {
-    format: 'agent-insight.goal-plus-batch',
-    version: 1,
-    source: { sourceId: 'source', semanticCheckpoint: { scanStartedAt: '2026-09-03T00:00:00.000Z', batchOrdinal: 0 } },
-    snapshots: [],
-  };
-  await enqueueSemanticBatch(batch, { apiKey: 'test-key', homeDir });
-  let calls = 0;
-  const result = await uploadSemanticBatches({
-    apiKey: 'test-key',
-    homeDir,
-    endpoint: 'http://example.invalid/upload',
-    sleep: async () => undefined,
-    fetch: async () => {
-      calls += 1;
-      const ok = calls === 3;
-      return { ok, status: ok ? 200 : 503, json: async () => ok ? { accepted: 0, duplicate: 0, rejected: [] } : {} };
-    },
-  });
-  assert.equal(calls, 3);
-  assert.equal(result.uploadedBatches, 1);
+  assert.deepEqual(order, ['relationships:1', 'native', 'relationship-upload']);
 });
 
 test('Pi passive parser uses one stable canonical session with LLM and tool events', async t => {
@@ -832,66 +867,25 @@ test('Pi passive parser preserves thinking and reports aborted Goal Plus workers
   assert.equal(agent?.attributes?.['goal_plus.exit_code'], 143);
 });
 
-test('Goal Plus parser discovers and imports the Pi main conversation deterministically', async t => {
-  const { temporary, root } = await copiedFixture(t);
-  const goalPath = path.join(root, 'goal-plus', 'gp_demo', 'goal.json');
-  const goal = JSON.parse(await fsp.readFile(goalPath, 'utf8'));
-  goal.status = 'blocked';
-  goal.phase = 'search';
-  goal.active_session = null;
-  goal.host_command_invocations = [{
-    action: 'start',
-    host: 'pi',
-    invocation_id: 'pi:invocation-demo',
-    native_entry_id: 'pi-entry-demo',
-  }];
-  await fsp.writeFile(goalPath, JSON.stringify(goal));
+test('Goal Plus parser emits one stable worker binding and edge without re-importing the Pi main trace', async t => {
+  const { root } = await copiedFixture(t);
+  const first = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
+  const second = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }) as ParsedRoot;
 
-  const homeDir = path.join(temporary, 'home');
-  const sessionDir = piProjectSessionDir(homeDir, path.dirname(root));
-  await fsp.mkdir(sessionDir, { recursive: true });
-  const mainFile = path.join(sessionDir, 'main.jsonl');
-  await fsp.writeFile(mainFile, [
-    { type: 'session', id: '01-main-session' },
-    { type: 'custom_message', id: 'pi-entry-demo', customType: 'goal-plus-created', details: { goal_plus_id: 'gp_demo' }, content: 'Goal Plus started' },
-    { type: 'custom_message', id: 'context-demo', customType: 'goal-plus-command-context', details: { goal_plus_id: 'gp_demo' }, content: 'Keep the baseline intact' },
-    { type: 'message', timestamp: '2026-09-01T01:00:01Z', message: { role: 'assistant', model: 'demo', content: [{ type: 'thinking', thinking: 'plan all steps' }, { type: 'text', text: 'Starting work.' }] } },
-    { type: 'message', timestamp: '2026-09-01T01:00:02Z', message: { role: 'user', content: 'Continue with verification.' } },
-    { type: 'message', timestamp: '2026-09-01T01:00:03Z', message: { role: 'assistant', model: 'demo', content: [{ type: 'text', text: 'Everything is complete.' }] } },
-    { type: 'custom_message', id: 'stop-demo', customType: 'goal-plus-stop-continuation', details: { goal_plus_id: 'gp_demo' }, content: 'Stop continuation' },
-  ].map(record => JSON.stringify(record)).join('\n') + '\n');
-
-  const parsed = await parseGoalPlusRoot({ sourceId: 'gpsrc_fixture', root }, { homeDir }) as ParsedRoot;
-  assert.equal(parsed.piSessions.length, 2);
-  const main = parsed.piSessions.find(item => item.sessionKind === 'main');
-  assert.ok(main);
-  assert.equal(main.nativeSessionId, '01-main-session');
-  assert.equal(main.terminalState, 'completed');
-  assert.equal(main.businessState, 'blocked');
-  assert.ok(main.canonicalSessionId);
-  assert.match(main.canonicalSessionId, /^goal-plus:gpsrc_fixture:main:gp_demo:/);
-
-  const goalSnapshot = parsed.snapshots.find(item => item.kind === 'goal');
-  const activeSession = goalSnapshot?.payload?.activeSession as {
-    sessionId: string;
-    mainSessions: Array<{ sessionId: string }>;
-  };
-  assert.equal(activeSession.sessionId, main.canonicalSessionId);
-  assert.equal(activeSession.mainSessions[0].sessionId, main.canonicalSessionId);
-
-  const trace = await parsePiSession(root, main) as ParsedPi;
-  const llms = trace.events.filter(item => item.kind === 'llm');
-  assert.equal(llms.length, 2);
-  assert.match(llms[0].input || '', /^\/goal-plus Improve the synthetic solver/);
-  assert.match(llms[0].input || '', /Goal Plus started/);
-  assert.match(llms[0].input || '', /Keep the baseline intact/);
-  assert.match(llms[0].output || '', /plan all steps/);
-  assert.match(llms[1].input || '', /Continue with verification/);
-  const mainAgent = trace.events.find(item => item.kind === 'agent');
-  assert.equal(mainAgent?.output, 'Everything is complete.');
-  assert.equal(mainAgent?.status, 'success');
-  assert.equal(mainAgent?.attributes?.['goal_plus.terminal_state'], 'completed');
-  assert.equal(mainAgent?.attributes?.['goal_plus.business_state'], 'blocked');
+  assert.equal(first.piSessions.length, 1);
+  assert.equal(first.piSessions.some(item => item.sessionKind === 'main'), false);
+  assert.equal(first.relationships.length, 1);
+  assert.deepEqual(first.relationships, second.relationships);
+  const relationship = first.relationships[0];
+  assert.match(relationship.binding.collaborationId, /^gp\.[a-f0-9]{32}$/);
+  assert.equal(relationship.binding.sessionId, 'worker:run_demo:agent_001');
+  assert.equal(relationship.binding.traceSessionId, 'goal-plus:gpsrc_fixture:agent_001');
+  assert.equal(relationship.binding.eventClock, 'unknown');
+  assert.equal(relationship.event.collaborationId, relationship.binding.collaborationId);
+  assert.match(relationship.event.eventId, /^worker\.[a-f0-9]{32}$/);
+  assert.equal(relationship.event.fromSessionId, 'main');
+  assert.equal(relationship.event.toSessionId, relationship.binding.sessionId);
+  assert.deepEqual(relationship.event.fromLocator, { recordType: 'tool', name: 'goal_plus_session_run' });
 });
 
 test('Pi continuation uses the latest assistant outcome instead of a recovered abort', async t => {

@@ -9,10 +9,10 @@ const BUNDLE_FILES = [
   ['goal-plus/uninstall.cjs', ['goal-plus', 'uninstall.cjs']],
   ['goal-plus/lib/gp-snapshot-parser.cjs', ['goal-plus', 'lib', 'gp-snapshot-parser.cjs']],
   ['goal-plus/lib/pi-native-parser.cjs', ['goal-plus', 'lib', 'pi-native-parser.cjs']],
-  ['goal-plus/lib/semantic-spool.cjs', ['goal-plus', 'lib', 'semantic-spool.cjs']],
   ['goal-plus/lib/source-registry.cjs', ['goal-plus', 'lib', 'source-registry.cjs']],
   ['shared/trace-transport.cjs', ['shared', 'trace-transport.cjs']],
   ['shared/pi-trace-helpers.cjs', ['shared', 'pi-trace-helpers.cjs']],
+  ['shared/collaboration-transport.cjs', ['shared', 'collaboration-transport.cjs']],
 ] as const;
 
 const ZIP_TIMESTAMP = new Date(1980, 0, 1, 0, 0, 0);

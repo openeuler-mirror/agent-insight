@@ -12,14 +12,13 @@ const PACKAGE_FILES = [
   "install.cjs",
   "lib/gp-snapshot-parser.cjs",
   "lib/pi-native-parser.cjs",
-  "lib/semantic-spool.cjs",
   "lib/source-registry.cjs",
   "uninstall.cjs",
 ];
 const WRAPPER_MARKER = "# managed-by-agent-insight-goal-plus";
 
 function configuredHosts(raw = "") {
-  const allowed = new Set(["pi", "codex"]);
+  const allowed = new Set(["pi"]);
   return [...new Set(String(raw).split(",").map(value => value.trim().toLowerCase()).filter(value => allowed.has(value)))];
 }
 
@@ -55,39 +54,27 @@ async function install(options) {
   for (const relative of PACKAGE_FILES) {
     await copyFile(path.join(options.sourceDir, relative), path.join(packageDir, relative), relative.endsWith(".cjs") ? 0o700 : 0o600);
   }
-  const sharedTarget = path.join(agentInsightHome, "collectors", "shared", "trace-transport.cjs");
-  const sharedSource = path.resolve(options.sourceDir, "..", "shared", "trace-transport.cjs");
-  if (fs.existsSync(sharedTarget)) {
-    const [incoming, current] = await Promise.all([fsp.readFile(sharedSource), fsp.readFile(sharedTarget)]);
-    if (!incoming.equals(current)) throw new Error(`Refusing to overwrite a different shared transport at ${sharedTarget}`);
-  } else {
-    await copyFile(sharedSource, sharedTarget);
-  }
-  const piHelpersTarget = path.join(agentInsightHome, "collectors", "shared", "pi-trace-helpers.cjs");
-  const piHelpersSource = path.resolve(options.sourceDir, "..", "shared", "pi-trace-helpers.cjs");
-  if (fs.existsSync(piHelpersTarget)) {
-    const [incoming, current] = await Promise.all([fsp.readFile(piHelpersSource), fsp.readFile(piHelpersTarget)]);
-    if (!incoming.equals(current)) throw new Error(`Refusing to overwrite different shared Pi helpers at ${piHelpersTarget}`);
-  } else {
-    await copyFile(piHelpersSource, piHelpersTarget);
+  for (const sharedFile of ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]) {
+    const sharedTarget = path.join(agentInsightHome, "collectors", "shared", sharedFile);
+    const sharedSource = path.resolve(options.sourceDir, "..", "shared", sharedFile);
+    if (fs.existsSync(sharedTarget)) {
+      const [incoming, current] = await Promise.all([fsp.readFile(sharedSource), fsp.readFile(sharedTarget)]);
+      if (!incoming.equals(current)) throw new Error(`Refusing to overwrite a different shared collector module at ${sharedTarget}`);
+    } else {
+      await copyFile(sharedSource, sharedTarget);
+    }
   }
   const configPath = path.join(packageDir, "config.json");
-  let existingConfig = {};
-  try {
-    existingConfig = JSON.parse(await fsp.readFile(configPath, "utf8"));
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-  }
-  const requestedHosts = String(process.env.AGENT_INSIGHT_GOAL_PLUS_HOSTS || "").trim();
   const config = {
     version: 1,
     apiKey,
     baseUrl,
-    hosts: requestedHosts
-      ? configuredHosts(requestedHosts)
-      : configuredHosts(Array.isArray(existingConfig.hosts) ? existingConfig.hosts.join(",") : ""),
-    semanticEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_ENDPOINT || `${baseUrl}/api/ingest/goal-plus/v1/snapshots`,
+    hosts: configuredHosts("pi"),
     otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || `${baseUrl}/api/ingest/otel/v1/traces`,
+    collaborationSessionsEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_SESSIONS_ENDPOINT
+      || `${baseUrl}/api/ingest/collaborations/sessions`,
+    collaborationEventsEndpoint: process.env.AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_EVENTS_ENDPOINT
+      || `${baseUrl}/api/ingest/collaborations/events`,
   };
   const temporary = `${configPath}.${process.pid}.tmp`;
   await fsp.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });

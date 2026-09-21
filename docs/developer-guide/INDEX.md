@@ -44,6 +44,8 @@
 
 本轮工作树补充 Goal Plus 重关联事务化、同 source 并发合并、当前 Search run 归属收敛，以及列表/详情共用成员查询和懒加载正文版本校验。历史采集数据、原生父子关系和 reported 跨 Session 协议不变；对应更新 `12-goal-plus-observability.md`、`13-cross-session-collaboration.md`，其他历史指南未重新生成。
 
+> 2026-09-20 working-tree overlay：Goal Plus 适配重构后的统一 session 格式，仅接受 `agent_harness`、`runtime_provider`、`execution_scope` 和 `session_handle`，不兼容旧 `host` / `host_handle`。Pi collector 通过既有 collaboration sessions API 上报实际 `/goal-plus` task 的主绑定；Goal Plus collector 被动导入 direct/ThinkThread Pi worker Trace，并通过既有 sessions/events API 上报 worker 绑定和主从事件。查询层以 reported collaboration 将 worker 投影到 Pi 主 Trace 下。新版 collector 不再上传或分发 semantic snapshot spool；服务端历史语义数据路径保持可读，但不是本次适配的兼容目标。
+
 > 2026-09-08 working-tree overlay：Benchmark 执行目标复用普通实验的客户端动态能力发现，按 `clientId + platform + agent` 返回并二次校验候选；SWE-bench Manifest 不再固定 OpenCode，所选平台动态要求 `agent-runtime/{platform}/v1`。Benchmark Agent 任务改由现有客户端 `RUN_BENCHMARK_CASE` 白名单指令经 WSS/HTTPS 长轮询下发，常驻客户端直接调用本地 Runner，不再保存或配置 `executorBaseUrl`/监听地址；Git 工作区、Patch、Outbox、独立 Evaluator 和 Official Harness 链路不变。
 
 > 2026-09-08 working-tree overlay：Benchmark 前端最小接入复用数据集、四步实验向导、实验列表与详情路由；`SWE-bench Verified` 通过只读公共投影进入普通数据集入口，Official Harness 自动绑定，已有 Trace/监听及依赖参考答案的评估器在 Benchmark 下禁用。通用实验列表新增同配置立即运行与复用配置预填；Benchmark Case 详情只展示官方契约说明、Patch/证据元数据和归一化测试计数。Case 重跑复用通用入口，Official 重评复用最新 Patch 且默认单任务串行。
@@ -113,8 +115,8 @@
 - [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
-- [12-goal-plus-observability.md](12-goal-plus-observability.md)：Goal Plus 双通道观测覆盖层、collector、语义 ingest、领域模型、确定性关联、完整度与 UI 契约。
-- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 关系事件、端点解析、查询 API 与 Goal Plus 服务端投影。
+- [12-goal-plus-observability.md](12-goal-plus-observability.md)：重构后 Goal Plus 的 Pi 主绑定、worker OTLP、关系 outbox 与主从 Trace 展示契约。
+- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 绑定/关系事件、端点解析、查询 API 与 reported Goal Plus 投影。
 - [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[整体服务安装指南](benchmark/service-deployment-guide.md)。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
