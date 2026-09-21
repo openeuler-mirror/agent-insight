@@ -35,6 +35,8 @@ API 路由处理器位于其旁的 `src/app/api/**/route.ts` 下——见 [03-fi
 
 `AgentTraceView.ContentModal` 向 `SmartViewer` 传入 `fullContent`。该选项仅在完整内容弹窗启用：`JsonRenderer` 关闭默认层级折叠、长字符串截断和大数组分组，用户仍可手动收起节点。预览区继续使用框架对应的 `jsonCollapsed` 配置；复制仍使用完整原文。
 
+全文复制统一调用 `copyText`。Clipboard API 不可用或被拒绝时，备用文本框放在当前焦点所在的最近弹窗内，避免 Radix `FocusScope` 将焦点拉走而丢失选区；非弹窗场景使用 `document.body`。复制结束后移除文本框并恢复仍有效的原焦点，失败继续向调用方抛出。
+
 ## 导航信息架构（功能模块）
 侧边栏是产品的**功能模块入口**，权威定义在 `src/components/shell/AppSidebar.tsx`（`GROUPS = [AGENT_GROUP, CONFIG_GROUP]`），显示文案在 `src/locales/{zh,en}.ts` 的 `nav.*`。830 转测导航只展示链路追踪、评测、模型注册和安装指导；其他页面与 API 继续保留，不从侧边栏暴露。
 

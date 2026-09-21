@@ -6,8 +6,7 @@
  *   - 非 secure context (HTTP, 非 localhost) → 接口 undefined(内网 http 部署的常态!)
  *   - 某些 iframe 嵌套场景
  *
- * fallback: 隐藏 textarea + document.execCommand('copy') —— deprecated 但
- * 兼容性极好 (所有浏览器都支持,不依赖 secure context / focus 状态)。
+ * fallback: 隐藏 textarea + document.execCommand('copy')，需要保持文本框焦点和选区。
  */
 export async function copyText(text: string): Promise<void> {
   // 先试 modern clipboard API
@@ -23,6 +22,9 @@ export async function copyText(text: string): Promise<void> {
   }
   // Fallback: 隐藏 textarea + execCommand
   if (typeof document === 'undefined') throw new Error('no document available');
+  const activeElement = document.activeElement;
+  // 放在当前弹窗内，避免 Radix FocusScope 把焦点从文本框拉回复制按钮。
+  const container = activeElement?.closest('[role="dialog"], [role="alertdialog"], dialog') ?? document.body;
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.style.position = 'fixed';
@@ -30,12 +32,16 @@ export async function copyText(text: string): Promise<void> {
   ta.style.left = '0';
   ta.style.opacity = '0';
   ta.setAttribute('readonly', '');
-  document.body.appendChild(ta);
-  ta.select();
+  container.appendChild(ta);
   try {
+    ta.focus({ preventScroll: true });
+    ta.select();
     const ok = document.execCommand('copy');
     if (!ok) throw new Error('execCommand("copy") returned false');
   } finally {
-    document.body.removeChild(ta);
+    ta.remove();
+    if (activeElement instanceof HTMLElement && activeElement.isConnected) {
+      activeElement.focus({ preventScroll: true });
+    }
   }
 }
