@@ -69,6 +69,19 @@ test('projection never reads another owner body and preserves original source me
     assert.equal(await projection.interactions('alice', 'A', async id => id === 'B' ? null : load(id)), null);
 });
 
+test('independent Goal Plus workers merge as soon as each body is available', async () => {
+    const projection = new CollaborationProjection({} as CollaborationService);
+    projection.links = async () => [
+        { ...link('A', 'B'), independent: true },
+        { ...link('A', 'C'), independent: true },
+    ];
+    const load = async (id: string) => id === 'B'
+        ? null
+        : { session: { user: 'alice' }, interactions: [call(id, 'bash', id)] };
+    const result = await projection.interactions('alice', 'A', load);
+    assert.deepEqual(result?.map(item => item._collaboration.taskId), ['A', 'C']);
+});
+
 test('no locator places all Agents side by side in one Trace, while located child remains nested', () => {
     const sequential = { ...link('A', 'B'), sequential: true };
     const c = { ...link('B', 'C'), sequential: true };
@@ -135,6 +148,29 @@ test('HTTP handlers and SQLite merge locator-free reports, recompute late traces
         const mergeablePlan = await projection.plan('alice');
         assert.ok(mergeablePlan.hiddenChildren.includes(workerTraceId));
         assert.ok(mergeablePlan.links.some(item => item.parent === mainTraceId && item.child === workerTraceId));
+
+        const pendingWorkerSessionId = 'worker:run-a:search-b';
+        const pendingWorkerTraceId = 'goal-plus-pending-worker-trace';
+        await client.execution.create({ data: { id: pendingWorkerTraceId, taskId: pendingWorkerTraceId, user: 'alice', framework: 'pi-agent' } });
+        assert.equal((await handlers.bind(request({ collaborationId: goalPlusCollaborationId, sessionId: pendingWorkerSessionId, traceSessionId: pendingWorkerTraceId }))).status, 201);
+        assert.equal((await handlers.report(request({
+            collaborationId: goalPlusCollaborationId,
+            eventId: 'goal-plus-pending-worker-started',
+            fromSessionId: 'main',
+            toSessionId: pendingWorkerSessionId,
+            description: 'Goal Plus 启动另一个 worker',
+        }))).status, 201);
+        const partialPlan = await projection.plan('alice');
+        assert.ok(partialPlan.hiddenChildren.includes(pendingWorkerTraceId));
+        assert.ok(partialPlan.pendingChildren.includes(pendingWorkerTraceId));
+        assert.ok(partialPlan.links.some(item => item.child === workerTraceId), 'pending worker must not block the ready worker');
+        assert.equal(partialPlan.links.some(item => item.child === pendingWorkerTraceId), false);
+
+        await client.session.create({ data: { taskId: pendingWorkerTraceId, user: 'alice', interactions: JSON.stringify([call('pending-worker', 'read_file', 'pending-worker')]) } });
+        const completedPlan = await projection.plan('alice');
+        assert.ok(completedPlan.links.some(item => item.child === workerTraceId));
+        assert.ok(completedPlan.links.some(item => item.child === pendingWorkerTraceId));
+        assert.equal(completedPlan.pendingChildren.includes(pendingWorkerTraceId), false);
 
         await client.$executeRawUnsafe(
             'INSERT INTO "Collaboration" ("id","user","collaborationId","sourceType","createdAt") VALUES (?,?,?,?,?)',

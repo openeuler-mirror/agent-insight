@@ -586,6 +586,12 @@ test('Pi passive parser uses one stable canonical session with LLM and tool even
 });
 
 test('Pi worker runtime outcome distinguishes controlled cleanup from timeout and crashes', () => {
+  const active = runtimeOutcome({
+    host: 'pi-rpc',
+  }, false);
+  assert.equal(active.failed, false);
+  assert.equal(active.runtimeState, 'running');
+
   const controlled = runtimeOutcome({
     host: 'pi-rpc',
     terminalState: 'completed',
@@ -593,7 +599,7 @@ test('Pi worker runtime outcome distinguishes controlled cleanup from timeout an
     runnerFailed: false,
     timedOut: false,
     exitCode: 143,
-  }, false, false);
+  }, false);
   assert.equal(controlled.failed, false);
   assert.equal(controlled.controlledTermination, true);
   assert.equal(controlled.runtimeState, 'completed');
@@ -607,7 +613,7 @@ test('Pi worker runtime outcome distinguishes controlled cleanup from timeout an
     timedOut: true,
     runtimeBudgetSeconds: 179,
     exitCode: 143,
-  }, false, false);
+  }, false);
   assert.equal(timedOut.failed, true);
   assert.equal(timedOut.controlledTermination, false);
   assert.equal(timedOut.runtimeState, 'timed_out');
@@ -620,7 +626,7 @@ test('Pi worker runtime outcome distinguishes controlled cleanup from timeout an
     runnerFailed: true,
     timedOut: false,
     exitCode: 143,
-  }, false, false);
+  }, false);
   assert.equal(runnerFailed.failed, true);
   assert.equal(runnerFailed.error, 'Goal Plus Pi worker runner failed');
 
@@ -632,7 +638,7 @@ test('Pi worker runtime outcome distinguishes controlled cleanup from timeout an
     timedOut: false,
     controlledTermination: true,
     exitCode: 1,
-  }, false, false);
+  }, false);
   assert.equal(unexpectedExit.failed, true);
   assert.equal(unexpectedExit.error, 'Goal Plus Pi worker exited unexpectedly with code 1');
 });
@@ -754,7 +760,7 @@ test('Pi importer reparses a legacy outcome checkpoint without replaying unchang
   const checkpoint = JSON.parse(await fsp.readFile(checkpointPath, 'utf8'));
   assert.equal(
     checkpoint.sessions['goal-plus:gpsrc_fixture:agent_001'].outcomeDerivationVersion,
-    2,
+    3,
   );
 });
 

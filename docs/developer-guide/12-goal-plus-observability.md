@@ -27,7 +27,7 @@ Pi start 后自动确认并登记的 .gp
                  └─ main → worker
 
 collaboration projection
-  └─ main Trace + synthetic TASK + worker interaction copies
+  └─ main Trace + each ready worker's synthetic TASK and interaction copies
 ```
 
 权威边界：
@@ -112,6 +112,8 @@ Trace 与关系上传顺序为：
 3. 尝试 flush 关系 outbox。
 
 关系可以先于或晚于 Trace 到达，服务端按显式 binding 延迟解析。提前持久化关系 outbox 可以避免进程在 Trace 上传后退出导致关系永久丢失。
+
+查询投影按 worker 独立判断可用性。main 与某个 worker 的 binding、Execution 和非空 Session 正文都已唯一解析后，该 worker 即可进入正在运行的主 Trace；同一 Goal Plus run 中尚未上报首批正文的其他 worker 只保持 pending，不会阻塞已就绪 worker。已声明但 pending 的 worker 仍从默认主列表隐藏，避免先独立展示、稍后再合并。通用非 Goal Plus collaboration 继续使用整组安全校验。
 
 ## 关系 outbox
 

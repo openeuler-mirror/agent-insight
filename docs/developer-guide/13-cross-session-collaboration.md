@@ -58,7 +58,7 @@ main Agent
 
 `full`、`structure`、`interactions` 和按索引读取单条 interaction 使用同一确定性投影。合并后的交互保留 `_collaboration` 源 Session/索引信息；`_payloadVersion` 仍根据原正文计算，前端拒绝刷新前发起或版本不匹配的异步加载结果。
 
-投影只存在于 API 响应，不修改原生 Session/Execution、评估口径或完整度。主端歧义、任一端 pending、worker Session 缺失、跨用户或被拒绝的关系都不合并。
+投影只存在于 API 响应，不修改原生 Session/Execution、评估口径或完整度。Goal Plus reported 关系按 worker 独立判断：主端和当前 worker 唯一解析且两侧均有非空 Session 正文时即可合并；另一个 worker pending 不阻塞当前 worker。主端歧义、当前 worker 缺失、跨用户或被拒绝的关系仍不合并。非 Goal Plus collaboration 继续按整个连通组件保证可合并性。
 
 单次详情最多投影 50 个 worker、20000 条 worker 交互；超过上限时 `collaborationProjection.truncated=true`。子 Agent 节点保留 worker 的 `taskId`，因此仍可打开独立 worker Trace。
 
@@ -66,7 +66,7 @@ main Agent
 
 Trace 列表显式请求协作 worker 折叠。默认“仅主 Agent”范围排除两类子 Trace：已经成功投影的通用协作子节点，以及 Goal Plus `main → worker:*` 事件中已有 worker binding 的已声明子节点。“仅子 Agent”将这些 worker 与原生 `isSubagent=true` Execution 合并查询；“主 Agent + 子 Agent”保留全部记录。
 
-过滤必须发生在数据库分页和聚合之前，使 page size、total 与统计一致。Goal Plus 的已声明 worker 即使主 binding、主 Trace 或正文仍 pending，也不回退成默认主记录；详情只有完整可解析时才合并。非 Goal Plus 关系继续要求成功投影后才隐藏，超过投影安全限制或查询失败时 fail open。该行为只影响明确启用折叠的 Trace 查询，不改写 `Execution.isSubagent`。
+过滤必须发生在数据库分页和聚合之前，使 page size、total 与统计一致。Goal Plus 的已声明 worker 即使主 binding、主 Trace 或正文仍 pending，也不回退成默认主记录；详情按 worker 在当前两端完整可解析时立即合并，不等待同组其他 worker 或主任务结束。非 Goal Plus 关系继续要求成功投影后才隐藏，超过投影安全限制或查询失败时 fail open。该行为只影响明确启用折叠的 Trace 查询，不改写 `Execution.isSubagent`。
 
 ## 持久化对象与一致性
 
