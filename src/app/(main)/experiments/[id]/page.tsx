@@ -148,12 +148,11 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
 
   useEffect(() => { load(); }, [load]);
 
-  // running 时 5s 轮询进度
   useEffect(() => {
-    if (detail?.status !== 'running') return;
+    if (detail?.status !== 'running' && !detail?.watchMode) return;
     const timer = setInterval(() => { load(true); }, 5000);
     return () => clearInterval(timer);
-  }, [detail?.status, load]);
+  }, [detail?.status, detail?.watchMode, load]);
 
   const startRun = useCallback(async () => {
     if (!user || starting) return;
@@ -199,7 +198,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   const [stoppingWatch, setStoppingWatch] = useState(false);
   const stopWatch = useCallback(async () => {
     if (!user || stoppingWatch) return;
-    if (!window.confirm('停止监听后，该 Agent 后续新上报的 trace 将不再自动进本实验评测（已评结果全部保留）。确认停止？')) return;
+    if (!window.confirm('停止监听后，将不再自动加入新的 Trace；已开始的评测继续完成，已有结果保留。确认停止？')) return;
     setStoppingWatch(true);
     try {
       const res = await apiFetch(
@@ -287,7 +286,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                 }} />
                 <span style={{ fontWeight: 600, color: 'var(--tag-green-fg)' }}>监听中</span>
                 <span style={{ color: 'var(--foreground-secondary)' }}>
-                  Agent <b style={{ color: 'var(--foreground)' }}>{detail.agentName || '—'}</b> 新上报的 trace 会自动进本实验评测
+                  自动评测 Agent <b style={{ color: 'var(--foreground)' }}>{detail.agentName || '—'}</b> 在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准
                   {detail.watchEnabledAt && `（自 ${new Date(detail.watchEnabledAt).toLocaleString('zh-CN', { hour12: false })} 起）`}
                 </span>
                 <button

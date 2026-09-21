@@ -153,4 +153,11 @@ export async function setupNodeRuntime(): Promise<void> {
   } catch (err) {
     console.warn('[instrumentation] startInfraPoller failed (non-fatal):', (err as Error)?.message);
   }
+
+  try {
+    const { startExperimentWatcher } = await import('@/lib/engine/experiment/experiment-watch');
+    startExperimentWatcher();
+  } catch (err) {
+    console.warn('[instrumentation] startExperimentWatcher failed (non-fatal):', (err as Error)?.message);
+  }
 }

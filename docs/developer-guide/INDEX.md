@@ -9,13 +9,15 @@
 
 | Field | Value |
 |---|---|
-| Commit | `2f89e10dc0979050dfc13887d475f725af1b2efe` (`2f89e10d`) |
-| Branch | `codex/830-modal-copy-20260920` |
-| Date | 2026-09-20T09:06:04+08:00 |
-| Author | gyctl |
-| Subject | `fix: 修复链路详情弹窗在HTTP下复制失效` |
+| Commit | `4a77f340788668eff00b0e2ac392e02d8513ddde` (`4a77f340`) |
+| Branch | `830-9-20` |
+| Date | 2026-09-20T09:58:47+08:00 |
+| Author | mintuyang |
+| Subject | `fix: 修复新增字段在部分环境无响应` |
 
-**如何更新：** `git diff 2f89e10d HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 4a77f340 HEAD -- src/ scripts/ prisma/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+
+本次工作区同步更新了实验自动监听的数据流说明（数据库筛选并复用已有 Trace 评测入口），尚未提交。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
