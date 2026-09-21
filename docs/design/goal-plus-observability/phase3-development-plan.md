@@ -276,6 +276,12 @@ Agent Insight；不新增 Prisma model/API，也不修改 Goal Plus。
   - secret、绝对路径、hidden answer 和 private grader payload；
   - 验收：无数据泄露、无 `.gp` 写入、无错误自动关联。
 
+- [x] T507 主从展示时序一致性
+  - Pi 在结构化 Goal Plus start 检测后立即异步 flush main binding，settle/shutdown 保留重试；
+  - binding 与 Execution 晚到都能触发逻辑 Session 到真实 Trace 的端点重算；
+  - 列表用已声明 worker 集合提前隐藏，详情只使用完整可解析 links；
+  - 回归覆盖 main binding 晚到、worker 先到以及最终合并。
+
 ## 4. 测试矩阵
 
 | 测试层 | 覆盖 |

@@ -454,6 +454,10 @@ test("Pi collector binds only the initial Goal Plus start task to the reported c
     prompt: "继续此 Goal Plus 任务。\n\ngoal_plus_id: gp_demo\n\n原始目标：\nimprove the solver",
     systemPromptOptions: {},
   }, context())
+  await instance.relationshipPending
+
+  assert.equal(relationshipOutbox.flushed, 1)
+  assert.equal(relationshipOutbox.sessions.length, 1)
   await instance.settleAgent()
 
   assert.equal(relationshipOutbox.sessions.length, 1)

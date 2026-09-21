@@ -56,7 +56,7 @@ export function createCollaborationHandlers({ service, authenticate }: Collabora
             const username = await user(request, context);
             const binding = parseBinding(await readBody(request));
             Object.assign(context, { collaborationId: binding.collaborationId, sessionId: binding.sessionId, traceSessionId: binding.traceSessionId });
-            const result = await service.store.bind(username, binding);
+            const result = await service.bind(username, binding, String(context.requestId));
             context.result = result.result;
             return response(result, result.result === 'created' ? 201 : 200);
         }),

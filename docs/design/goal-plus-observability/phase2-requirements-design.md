@@ -819,3 +819,9 @@ test/fixtures/goal-plus/
 6. 采集 Pi native session 已持久化的 thinking，但必须移除 credential、绝对 workspace
    path 和 hidden gold；宿主未持久化的内部状态不得推断或伪造。
 7. `complete` 必须可计算，并与 timing/content fidelity 分开。
+
+## 18. 主从展示的时序一致性
+
+Pi collector 获得结构化 Goal ID 后立即把 main binding 写入 durable outbox 并异步 flush；task settle 与 shutdown 负责兜底重试，不允许网络等待阻塞 Pi。服务端端点解析必须先用 `CollaborationSessionBinding` 把 `main` / `worker:*` 逻辑 ID 映射到真实 Trace session，并在 binding 或 Execution 任一侧晚到时重算。
+
+查询投影输出两个集合：`hiddenChildren` 表示已经由 Goal Plus 关系和 worker binding 声明的 worker，`links` 表示主从 Trace 与正文均完整可解析的合并边。默认主列表使用前者，详情合成使用后者。main binding pending 时 worker 可以隐藏但不能合并；这不改写 Execution 原生父子字段，也不影响“仅子 Agent”、混合范围或指定 taskId 的诊断访问。

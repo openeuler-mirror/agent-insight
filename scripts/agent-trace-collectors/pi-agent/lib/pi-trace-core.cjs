@@ -497,7 +497,10 @@ class PiTraceCollector {
     this.currentAgent.goalPlusBindingQueued = true;
     const binding = goalPlusMainBinding(this.baseSessionId, goalPlusId, this.sessionId);
     this.relationshipPending = this.relationshipPending
-      .then(() => this.relationshipOutbox.enqueueSession(binding))
+      .then(async () => {
+        await this.relationshipOutbox.enqueueSession(binding);
+        await this.relationshipOutbox.flushOnce();
+      })
       .catch((error) => this.errors.push(error));
   }
 

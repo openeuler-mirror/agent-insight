@@ -20,6 +20,8 @@
 
 > 2026-09-21 working-tree overlay：Goal Plus 不再作为用户可选 framework 或独立安装步骤；Pi bundle 内置 Agent Insight 自有的休眠观察器，仅在结构化 `/goal-plus` start 证据与 `.gp` 中当前 Pi native session invocation 一致时自动 attach、scan 并确保 watcher。普通 Pi 与增强失败继续采集主 Trace；旧 `frameworks=goal-plus` 映射为 Pi。更新 Goal Plus 用户、开发与三阶段设计文档，未修改 Goal Plus 仓库。
 
+> 2026-09-21 working-tree overlay：Goal Plus 主 binding 在结构化 ID 到达后立即异步 flush，并在任务结束时兜底重试；reported 端点通过 session binding 映射真实 Trace，并在 binding/Execution 晚到时重算。默认主列表将“已声明 worker”与“可合并 links”分离，worker 先到时立即隐藏，主从两端完整后才进入主 Trace 子树，避免运行中独立展示、结束后再合并的跳变。
+
 > 2026-09-18 working-tree overlay：实验向导将 xiaoo Collector 上报的 `xiaoo` Trace 身份与 CLI 原生 `defaultagent` 执行 ID 归并为单个 `xiaoo` 候选；执行 target 独立保留原生 ID，普通生成 Trace 与 Benchmark 下发继续传递 `defaultagent`。
 
 > 2026-09-18 working-tree overlay：Agent Insight 与 Evaluator 删除应用层通信鉴权及相关参数，Evaluator 默认监听宿主机 `0.0.0.0:3001`，受控网络的 `allow-insecure-http` 默认值为 `true`。Agent Insight 配置入口删除重复的 `--public-base-url`，公开回调地址由实验请求的 `Host` / `X-Forwarded-*` 自动推导，Evaluator 的实际访问地址只由评测机 `--platform-base-url` 决定。部署必须依赖白名单、安全组或防火墙限制双向访问；可把 `allow-insecure-http` 设为 `false` 强制非回环 Evaluator 使用 HTTPS。本条取代下方历史快照中的 Token 鉴权说明。

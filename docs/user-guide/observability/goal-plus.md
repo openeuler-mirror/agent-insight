@@ -58,16 +58,18 @@ Pi collector 只在实际执行 `/goal-plus` 或 `/goal-plus-with-final-check` �
 
 ## 展示与状态
 
-关系两端唯一关联后，链路追踪的“仅主 Agent”列表隐藏独立 worker 行；打开 Pi 主 Trace 时，在原生交互之后增加一个标记为“Goal Plus 编排”的 `TASK → 子 Agent` 子树。切换到“仅子 Agent”或“主 Agent + 子 Agent”仍可独立查询 worker Trace。
+Goal Plus worker 的关系事件和 worker binding 到达后，链路追踪的“仅主 Agent”列表就会隐藏对应的独立 worker 行，不等待主 binding 或主 Trace 完成；因此运行过程中不会先把 worker 当成主记录展示、结束后再突然消失。切换到“仅子 Agent”或“主 Agent + 子 Agent”仍可独立查询 worker Trace。
+
+主 binding、主 Trace 与 worker Trace 都可唯一解析后，打开 Pi 主 Trace 会在原生交互之后增加一个标记为“Goal Plus 编排”的 `TASK → 子 Agent` 子树。列表隐藏和详情合并采用两个阶段：前者只确认“这是 Goal Plus worker”，后者必须确认完整、安全的主从关系；缺主 Trace 时不会把 worker错误挂入其他 Trace。
 
 这个子树是只读查询投影：不会改写 Execution 的原生父子关系，也不会把 worker 内容复制回主 Session。关系证据只说明 worker 属于本次 Goal Plus 编排；没有精确调用位置时，不会按时间猜测它对应主 Trace 中的某个工具调用。
 
 数据可能按以下顺序逐步出现：
 
-1. Pi 主 Trace 到达；
-2. Goal Plus worker Trace 到达；
-3. 主/worker 绑定和关系事件上传成功；
-4. 查询层将 worker 投影到主 Trace。
+1. Pi 识别结构化 Goal Plus start 后立即异步上传主 binding；
+2. Goal Plus worker Trace、worker binding 和关系事件独立到达，已声明 worker 从默认主列表隐藏；
+3. Pi 主 Trace 到达，或任务结束时对尚未送达的主 binding 再次重试；
+4. 主从两端完整解析后，查询层将 worker 投影到主 Trace。
 
 因此新 worker 可能比主 Trace 晚数秒出现。关系上传采用本地持久 outbox：断网、429 或 5xx 会保留并重试；确定性 4xx（包括正文冲突）会进入 rejected，`self-check` 会报告异常，不会静默丢弃或无限重试。
 

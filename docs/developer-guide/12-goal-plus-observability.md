@@ -69,7 +69,7 @@ Goal 主端仅接受 `goal.json.host_command_invocations` 中按稳定顺序选�
 
 ## 主绑定
 
-Pi collector 在 task settle 时检查本次真实 user query：
+Pi collector 在任务中检查本次真实 user query：
 
 - 只接受 `/goal-plus` 和 `/goal-plus-with-final-check` 的 start 调用；
 - `edit`、`summary`、`pause`、`resume`、`clear` 不产生绑定；
@@ -90,6 +90,8 @@ Pi 已有分段规则生成实际 taskId `<nativeSessionId>__taskN`。collector 
 `collaborationId` 由 `initialPiSessionId + NUL + goalPlusId` 确定性生成。使用 initial native session，而不是分段 taskId，使 Pi collector 与 `.gp` parser 能独立计算同一个协作 ID。
 
 每个 start task 最多入队一次；同一 Pi session 后续再次运行 Goal Plus 会绑定到新的 `__taskN`，不会让历史任务覆盖当前主 Trace。
+
+获得结构化 `goal_plus_id` 后，collector 将 main binding 写入持久关系 outbox，并立即异步尝试 flush，不等待 task settle。`settleAgent` 与 shutdown 仍会再次 flush，网络错误、429 或 5xx 保留 pending 后重试。这样 main binding 通常在长时间 Goal Plus 任务执行期间即可到达服务端，同时不让遥测网络请求阻塞 Pi 执行。
 
 ## worker Trace 与关系
 
@@ -179,9 +181,12 @@ Pi 安装器遇到已有且属于不同 API Key 的 Goal Plus managed config 时
 
 ## 查询与展示契约
 
-服务端 reported collaboration 投影优先于历史 Goal Plus semantic projection。主、worker binding 均唯一解析后，`composeCollaborationTrace` 在主 Trace 的响应中追加 synthetic TASK 和 worker 交互副本；`full`、`structure`、`interactions` 与单条 interaction 读取必须使用同一确定性投影。
+服务端 reported collaboration 投影优先于历史 Goal Plus semantic projection。投影分成两个读时集合：
 
-“仅主 Agent”列表可折叠已成功投影的 worker；“仅子 Agent”和混合范围仍可看到独立 worker。歧义、pending、缺失 Trace、跨用户或超过投影上限的 worker 不合并，也不隐藏。
+- `hiddenChildren`：`gp.<hash>` 协作中已有 `main → worker:*` 事件且 worker binding 已知的 Trace。默认“仅主 Agent”列表在数据库分页与计数前排除这些 worker，不要求 main binding 已到达。
+- `links`：主、worker binding、Execution 和 Session 正文均可唯一、安全解析的主从边。只有这些边会由 `composeCollaborationTrace` 在主 Trace 响应中追加 synthetic TASK 和 worker 交互副本。
+
+“仅子 Agent”和混合范围仍可看到独立 worker。主端 pending、缺失 Trace 或歧义不会让 worker 回退为默认主列表记录，也不会提前合并；跨用户、非 Goal Plus reported 关系和超过安全投影上限的情况继续 fail open，保留原列表。`full`、`structure`、`interactions` 与单条 interaction 读取必须使用同一确定性 `links` 投影。
 
 ## 测试重点
 

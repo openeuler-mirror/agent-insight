@@ -110,6 +110,32 @@ test('HTTP handlers and SQLite merge locator-free reports, recompute late traces
         assert.equal((await handlers.report(request({ ...event, eventId: 'two', fromSessionId: 'B', toSessionId: 'C', observedAt: '2026-09-14T01:00:01Z' }))).status, 201);
         assert.equal((await projection.links('alice')).length, 0);
         await client.session.create({ data: { taskId: 'C', user: 'alice', interactions: JSON.stringify([call('C', 'read_file', 'C')]) } });
+
+        const goalPlusCollaborationId = `gp.${'a'.repeat(32)}`;
+        const workerSessionId = 'worker:run-a:search-a';
+        const workerTraceId = 'goal-plus-worker-trace';
+        await client.execution.create({ data: { id: workerTraceId, taskId: workerTraceId, user: 'alice', framework: 'pi-agent' } });
+        await client.session.create({ data: { taskId: workerTraceId, user: 'alice', interactions: JSON.stringify([call('worker', 'bash', 'worker')]) } });
+        assert.equal((await handlers.bind(request({ collaborationId: goalPlusCollaborationId, sessionId: workerSessionId, traceSessionId: workerTraceId }))).status, 201);
+        assert.equal((await handlers.report(request({
+            collaborationId: goalPlusCollaborationId,
+            eventId: 'goal-plus-worker-started',
+            fromSessionId: 'main',
+            toSessionId: workerSessionId,
+            description: 'Goal Plus 启动 worker',
+        }))).status, 201);
+        const claimedPlan = await projection.plan('alice');
+        assert.ok(claimedPlan.hiddenChildren.includes(workerTraceId));
+        assert.equal(claimedPlan.links.some(item => item.child === workerTraceId), false);
+
+        const mainTraceId = 'goal-plus-main-trace';
+        await client.execution.create({ data: { id: mainTraceId, taskId: mainTraceId, user: 'alice', framework: 'pi-agent' } });
+        await client.session.create({ data: { taskId: mainTraceId, user: 'alice', interactions: JSON.stringify([call('main', 'goal_plus', 'main')]) } });
+        assert.equal((await handlers.bind(request({ collaborationId: goalPlusCollaborationId, sessionId: 'main', traceSessionId: mainTraceId }))).status, 201);
+        const mergeablePlan = await projection.plan('alice');
+        assert.ok(mergeablePlan.hiddenChildren.includes(workerTraceId));
+        assert.ok(mergeablePlan.links.some(item => item.parent === mainTraceId && item.child === workerTraceId));
+
         await client.$executeRawUnsafe(
             'INSERT INTO "Collaboration" ("id","user","collaborationId","sourceType","createdAt") VALUES (?,?,?,?,?)',
             'goal-group', 'alice', 'collab_gp_fixture', 'goal-plus-semantic', new Date().toISOString());
@@ -118,7 +144,7 @@ test('HTTP handlers and SQLite merge locator-free reports, recompute late traces
             'goal-event', 'goal-group', 'alice', 'collab_gp_fixture', 'goal-event', 'A', 'B', 'goal relation',
             'goal-plus-semantic', 'not a reported event JSON', 'fixture-hash', new Date().toISOString());
         const links = await projection.links('alice');
-        assert.deepEqual(links.map(x => [x.parent, x.child, x.sequential]), [['A', 'B', true], ['B', 'C', true]]);
+        assert.deepEqual(links.filter(x => ['A', 'B', 'C'].includes(x.parent)).map(x => [x.parent, x.child, x.sequential]), [['A', 'B', true], ['B', 'C', true]]);
         const merged = await projection.interactions('alice', 'A', async taskId => {
             const session = await client.session.findUnique({ where: { taskId } });
             return session ? { session, interactions: JSON.parse(session.interactions!) } : null;

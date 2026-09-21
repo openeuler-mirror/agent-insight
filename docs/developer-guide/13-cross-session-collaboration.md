@@ -24,7 +24,7 @@
 
 ## 端点解析
 
-端点只按显式 binding 指向的 `Execution.taskId`，或事件 session ID 对应的 `Execution.agentSessionId` 精确匹配。关系可以先上传，状态保持 pending，目标 Trace 到达后重新解析。
+端点优先读取同一用户、同一 collaboration 下的显式 binding，把事件逻辑 `sessionId` 转换为 `traceSessionId`，再与 `Execution.taskId` / `Execution.agentSessionId` 精确匹配；无 binding 时才直接使用事件 session ID。关系可以先上传，状态保持 pending。新增 binding 会重算命中该逻辑 session 的事件，目标 Trace 到达时也会通过反查 binding 重算对应事件。
 
 `fromLocator` 中的工具名或 Shell 命令片段只是调用位置候选：唯一命中为 candidate；多事件只有在数量相等、时间无缺失或并列、且调用时间来源可信时才返回 time_ordered。无 locator 且已有 Execution 直接父子关系时可返回 confirmed。不得只根据时间接近度选择父级。
 
@@ -32,7 +32,7 @@
 
 重构后的 Goal Plus 适配完全使用公开的 binding/event API，不要求服务端增加 Goal Plus 专用关系接口：
 
-1. Pi collector 在实际 `/goal-plus` start task 完成时上报 `main → <nativeSessionId>__taskN` 绑定；
+1. Pi collector 在实际 `/goal-plus` start task 获得结构化 Goal ID 时立即异步上报 `main → <nativeSessionId>__taskN` 绑定，并在 settle/shutdown 重试；
 2. Goal Plus collector 为每个 Pi worker 上报 `worker:<stable-id> → goal-plus:<sourceId>:<agentSessionId>` 绑定；
 3. Goal Plus collector 上报同一 `collaborationId` 下的 `main → worker` 事件；
 4. reported 解析器在两端 Trace 可用后建立 endpoint resolution；
@@ -64,9 +64,9 @@ main Agent
 
 ## 列表折叠
 
-Trace 列表显式请求协作 worker 折叠。默认“仅主 Agent”范围排除已经成功挂入唯一主 Trace 的 worker；“仅子 Agent”将这些 worker 与原生 `isSubagent=true` Execution 合并查询；“主 Agent + 子 Agent”保留全部记录。
+Trace 列表显式请求协作 worker 折叠。默认“仅主 Agent”范围排除两类子 Trace：已经成功投影的通用协作子节点，以及 Goal Plus `main → worker:*` 事件中已有 worker binding 的已声明子节点。“仅子 Agent”将这些 worker 与原生 `isSubagent=true` Execution 合并查询；“主 Agent + 子 Agent”保留全部记录。
 
-过滤必须发生在数据库分页和聚合之前，使 page size、total 与统计一致。歧义、pending、正文尚未到达、超过展示限制的 worker 不隐藏。该行为只影响明确启用折叠的 Trace 查询，不改写 `Execution.isSubagent`。
+过滤必须发生在数据库分页和聚合之前，使 page size、total 与统计一致。Goal Plus 的已声明 worker 即使主 binding、主 Trace 或正文仍 pending，也不回退成默认主记录；详情只有完整可解析时才合并。非 Goal Plus 关系继续要求成功投影后才隐藏，超过投影安全限制或查询失败时 fail open。该行为只影响明确启用折叠的 Trace 查询，不改写 `Execution.isSubagent`。
 
 ## 持久化对象与一致性
 

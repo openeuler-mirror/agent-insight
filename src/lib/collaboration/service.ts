@@ -3,7 +3,7 @@ import { Binding, RelationEvent } from './contracts';
 import { extractCalls, resolveAnchors, Trace, Anchor } from './resolve';
 import { CollaborationStore, type SavedResolution } from './store';
 import { normalizeCollaborationEvent } from '@/lib/ingest/collaboration/contracts';
-import { collaborationEventResolution, resolveCollaborationEventByDbId } from '@/lib/ingest/collaboration/resolve';
+import { collaborationEventResolution, resolveCollaborationEndpointsForBinding, resolveCollaborationEventByDbId } from '@/lib/ingest/collaboration/resolve';
 
 function parsed(value: string | null): Record<string, unknown> {
     if (!value) return {};
@@ -35,6 +35,14 @@ function storedAnchor(row: SavedResolution | undefined): Anchor | undefined {
 
 export class CollaborationService {
     constructor(public store: CollaborationStore) {}
+    async bind(user: string, binding: Binding, requestId?: string) {
+        const result = await this.store.bind(user, binding);
+        try { await resolveCollaborationEndpointsForBinding(user, binding.collaborationId, binding.sessionId); }
+        catch (error) {
+            collaborationLog.warn('会话绑定已保存，端点关联暂不可用', { requestId, user, collaborationId: binding.collaborationId, sessionId: binding.sessionId, stage: 'endpoint_resolution', ...failureDetails(error) });
+        }
+        return result;
+    }
     async graph(user: string, id: string, offset = 0, limit = 100, requestId?: string) {
         const snapshot = await this.store.snapshot(user, id, offset, limit);
         const bindings = new Map<string, Binding>(snapshot.bindings.map(binding => [binding.sessionId, binding]));

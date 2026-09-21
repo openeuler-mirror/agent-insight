@@ -390,10 +390,10 @@ export async function GET(request: Request) {
     }
 
     const authenticatedUser = (await resolveUser(request)).username;
-    const mergedChildren = authenticatedUser && authenticatedUser === user && !taskId && !taskIds.length && !parentExecutionId && !includeSubagents && !onlySubagents
-        ? (await collaborationProjection.links(authenticatedUser)).map(link => link.child) : [];
+    const hiddenCollaborationChildren = authenticatedUser && authenticatedUser === user && !taskId && !taskIds.length && !parentExecutionId && !includeSubagents && !onlySubagents
+        ? (await collaborationProjection.plan(authenticatedUser)).hiddenChildren : [];
     const recordFilters = {
-        excludedTaskIds: mergedChildren,
+        excludedTaskIds: hiddenCollaborationChildren,
         query,
         taskId,
         taskIds: taskIds.length > 0 ? taskIds : undefined,
