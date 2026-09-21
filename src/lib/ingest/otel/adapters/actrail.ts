@@ -112,11 +112,31 @@ function agentNameFromRequestUserAgent(events: OtelTraceEvent[]): string | undef
   return undefined;
 }
 
-function selectAgentName(events: OtelTraceEvent[]): string {
-  const identity = events.find((event) => actionKind(event) === 'agent.identity');
+function selectAgentName(events: OtelTraceEvent[], rootPairs: LlmPair[]): string {
+  const root = rootPairs[0];
+  const rootProcessId = text(root?.call.attributes?.['actrail.process.id']) ||
+    text(root?.request?.attributes?.['actrail.process.id']);
+  const rootTraceId = root?.call.traceId || root?.request?.traceId;
+  const identities = events.filter((event) =>
+    actionKind(event) === 'agent.identity' &&
+    (!rootTraceId || !event.traceId || event.traceId === rootTraceId)
+  );
+  const identity = identities.find((event) =>
+    rootProcessId && text(event.attributes?.['actrail.process.id']) === rootProcessId
+  ) || (identities.length === 1 &&
+    (!rootProcessId || !text(identities[0].attributes?.['actrail.process.id']))
+    ? identities[0] : undefined);
   const explicitIdentity = text(identity?.attributes?.['agent.name']) ||
     text(identity?.attributes?.['agent.child.executable']);
   if (explicitIdentity) return explicitIdentity;
+
+  const rawAgentType = identity?.attributes?.['actrail.agent.type'];
+  const agentType = typeof rawAgentType === 'string' ? rawAgentType.trim() : '';
+  if (agentType) {
+    if (agentType === 'opencode') return 'OpenCode';
+    if (agentType === 'claude-code') return 'Claude Code';
+    return agentType;
+  }
 
   const requestAgentName = agentNameFromRequestUserAgent(events);
   if (requestAgentName) return requestAgentName;
@@ -130,7 +150,7 @@ function selectAgentName(events: OtelTraceEvent[]): string {
   if (invocationName) return invocationName;
 
   const identityName = text(identity?.name);
-  if (identityName && !/^agent identity process-[\w.-]+$/i.test(identityName)) return identityName;
+  if (identityName && !/^(?:agent\.identity|agent identity process-[\w.-]+)$/i.test(identityName)) return identityName;
   return 'AcTrail Agent';
 }
 
@@ -873,9 +893,9 @@ export function aggregateActrailTraceEvents(
   const pairs = allPairs.filter((pair) => !isInternalLlmPair(pair));
   if (pairs.length === 0) return null;
 
-  const agentName = selectAgentName(ordered);
   const graph = buildActrailGraphProjection(ordered, pairs);
   const rootPairs = pairs.filter((pair) => !graph.pairOwners.has(pair));
+  const agentName = selectAgentName(ordered, rootPairs);
   const promptSelection = rootPromptSelection(rootPairs.length > 0 ? rootPairs : pairs);
   const titlePrompt = primaryTitlePrompt(allPairs);
   const topLevelPrompts = titlePrompt ? new Set<string>() : promptSelection.prompts;

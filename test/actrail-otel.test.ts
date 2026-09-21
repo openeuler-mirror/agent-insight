@@ -60,6 +60,111 @@ function normalizeBodies(bodies: any[]): OtelTraceEvent[] {
   }));
 }
 
+function agentNameEvents(identityAttributes: Record<string, string | number | boolean> = {}) {
+  return normalizeBodies([
+    bodyFor(span({
+      spanId: 'identity',
+      name: 'agent.identity',
+      attributes: Object.entries({
+        'actrail.action.kind': 'agent.identity',
+        'actrail.process.id': 1,
+        ...identityAttributes,
+      }).map(([key, value]) => attr(key, value)),
+    })),
+    bodyFor(span({
+      spanId: 'call',
+      attributes: [
+        attr('actrail.action.kind', 'llm.call'),
+        attr('actrail.process.id', 1),
+        attr('llm.call.model', 'test-model'),
+      ],
+    })),
+  ]);
+}
+
+test('AcTrail agent name: displays v0.7.2 product names without changing the collector', () => {
+  for (const [type, source, expected] of [
+    ['opencode', 'known_product', 'OpenCode'],
+    ['xiaoo', 'known_product', 'xiaoo'],
+    ['claude-code', 'known_product', 'Claude Code'],
+    ['codex', 'known_product', 'codex'],
+    ['my-agent', 'executable', 'my-agent'],
+    ['python3', 'executable', 'python3'],
+    ['  opencode  ', '', 'OpenCode'],
+  ]) {
+    const events = agentNameEvents({ 'actrail.agent.type': type, 'actrail.agent.type.source': source });
+    const record = aggregateOtelTraceEvents(events[0].sessionId, events)!;
+    assert.equal(record.agentName, expected, type);
+    assert.equal(record.agent, expected);
+    assert.equal(record.framework, 'actrail');
+    assert.ok(record.interactions.length > 0);
+    assert.ok(record.interactions.every((item: any) => item.agent === expected));
+  }
+});
+
+test('AcTrail agent name: preserves explicit legacy identity names', () => {
+  for (const key of ['agent.name', 'agent.child.executable']) {
+    const events = agentNameEvents({ [key]: 'Custom Agent', 'actrail.agent.type': 'opencode' });
+    assert.equal(aggregateOtelTraceEvents(events[0].sessionId, events)!.agentName, 'Custom Agent');
+  }
+});
+
+test('AcTrail agent name: missing or invalid product never displays the generic identity span name', () => {
+  const cases: Array<Record<string, string | number | boolean>> = [
+    {}, { 'actrail.agent.type': ' ' }, { 'actrail.agent.type': 42 }, { 'actrail.agent.type': false },
+  ];
+  for (const attributes of cases) {
+    const events = agentNameEvents(attributes);
+    assert.equal(aggregateOtelTraceEvents(events[0].sessionId, events)!.agentName, 'AcTrail Agent');
+  }
+});
+
+test('AcTrail agent name: matches the root process even when child identity and calls arrive first', () => {
+  const events = agentNameEvents({ 'actrail.agent.type': 'opencode' });
+  events.push(
+    { ...events[0], spanId: 'child-identity', startTimeMs: 0, attributes: {
+      'actrail.action.kind': 'agent.identity', 'actrail.process.id': 2, 'actrail.agent.type': 'xiaoo',
+    } },
+    { ...events[1], spanId: 'child-request', startTimeMs: 100, attributes: {
+      'actrail.action.kind': 'llm.request', 'actrail.action.id': 'child-request',
+      'actrail.process.id': 2, 'agent.invocation.action_id': 'child-invocation',
+    } },
+    { ...events[1], spanId: 'child-call', startTimeMs: 100, attributes: {
+      'actrail.action.kind': 'llm.call', 'actrail.process.id': 2,
+      'llm.call.request_action_id': 'child-request',
+    } },
+    { ...events[0], spanId: 'child-invocation', attributes: {
+      'actrail.action.kind': 'agent.invocation', 'actrail.action.id': 'child-invocation',
+      'agent.invocation.agent_type': 'explore',
+    } },
+  );
+  const record = aggregateOtelTraceEvents(events[0].sessionId, events)!;
+  assert.equal(record.agentName, 'OpenCode');
+  assert.equal(record.llm_call_count, 2);
+  const child = record.interactions.find((item: any) => item.role === 'subagent') as any;
+  assert.equal(child.subagent_type, 'explore');
+  assert.equal(child.agent, 'explore');
+});
+
+test('AcTrail agent name: does not borrow another process or trace identity', () => {
+  for (const mismatch of ['process', 'trace']) {
+    const events = agentNameEvents({ 'actrail.agent.type': 'xiaoo' });
+    if (mismatch === 'process') events[0].attributes['actrail.process.id'] = 2;
+    else events[0].traceId = 'another-trace';
+    assert.equal(aggregateOtelTraceEvents(events[0].sessionId, events)!.agentName, 'AcTrail Agent');
+  }
+});
+
+test('AcTrail agent name: accepts an unambiguous legacy identity without process metadata', () => {
+  const events = agentNameEvents({ 'actrail.agent.type': 'opencode' });
+  for (const event of events) delete event.attributes['actrail.process.id'];
+  assert.equal(aggregateOtelTraceEvents(events[0].sessionId, events)!.agentName, 'OpenCode');
+  events.push({ ...events[0], spanId: 'ambiguous-identity', attributes: {
+    'actrail.action.kind': 'agent.identity', 'actrail.agent.type': 'xiaoo',
+  } });
+  assert.equal(aggregateOtelTraceEvents(events[0].sessionId, events)!.agentName, 'AcTrail Agent');
+});
+
 test('AcTrail OTLP: detects semantic-action scope and preserves source metadata', () => {
   const body = bodyFor(span({
     spanId: 'response',

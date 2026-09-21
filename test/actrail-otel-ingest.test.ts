@@ -51,6 +51,7 @@ test('AcTrail OTLP endpoint appends events that aggregate into an execution reco
             attributes: [
               attr('actrail.action.id', requestActionId),
               attr('actrail.action.kind', 'llm.request'),
+              attr('actrail.process.id', 1),
               attr('actrail.action.status', 'success'),
               attr('actrail.action.completeness', 'complete'),
               attr('llm.request.model', 'test-model'),
@@ -66,6 +67,7 @@ test('AcTrail OTLP endpoint appends events that aggregate into an execution reco
             attributes: [
               attr('actrail.action.id', 'trace:9:call'),
               attr('actrail.action.kind', 'llm.call'),
+              attr('actrail.process.id', 1),
               attr('actrail.action.status', 'success'),
               attr('actrail.action.completeness', 'complete'),
               attr('llm.call.model', 'test-model'),
@@ -121,4 +123,42 @@ test('AcTrail OTLP endpoint appends events that aggregate into an execution reco
   assert.equal(aggregation.record.query, 'hello from AcTrail');
   assert.equal(aggregation.record.final_result, 'hello accepted');
   assert.equal(aggregation.record.tokens, 6);
+  assert.equal(aggregation.record.agentName, 'AcTrail Agent');
+
+  const identityBody = {
+    resourceSpans: [{
+      resource: body.resourceSpans[0].resource,
+      scopeSpans: [{
+        scope: { name: 'actrail.semantic_actions', version: '0.7.2' },
+        spans: [{
+          traceId,
+          spanId: 'identity',
+          name: 'agent.identity',
+          startTimeUnixNano: '1000000000',
+          endTimeUnixNano: '1000000000',
+          attributes: [
+            attr('actrail.action.kind', 'agent.identity'),
+            attr('actrail.process.id', 1),
+            attr('actrail.agent.type', 'opencode'),
+            attr('actrail.agent.type.source', 'known_product'),
+          ],
+        }],
+      }],
+    }],
+  };
+  const identityResponse = await POST(new Request('http://localhost/api/ingest/otel/v1/traces', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(identityBody),
+  }));
+  assert.equal(identityResponse.status, 200);
+  const updated = actrailSource.aggregate(traceId);
+  assert.equal(updated.eventCount, 4);
+  assert.equal(updated.record!.agentName, 'OpenCode');
+  assert.equal(updated.record!.framework, 'actrail');
+  assert.equal(updated.record!.query, aggregation.record.query);
+  assert.equal(updated.record!.final_result, aggregation.record.final_result);
+  assert.equal(updated.record!.tokens, aggregation.record.tokens);
+  assert.equal(updated.record!.llm_call_count, aggregation.record.llm_call_count);
+  assert.equal(listOtelTraceSpoolFiles(genericSpoolDirectory).length, 0);
 });

@@ -105,7 +105,7 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
   <img src="../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
-上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。
+上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。AcTrail 采集的 Trace 顶部标签显示实际 Agent 名称（如 OpenCode），悬停提示“采集来源：AcTrail”；缺少 Agent 名称时回退为 AcTrail。列表中的框架筛选及系统标签仍表示采集来源。
 
 在 Agent 的“时间线”中点击工具事件摘要或“查看”，可打开事件详情弹窗。Input 和 Output 内容区顶部均有 **Copy** 按钮，用于复制各自的完整内容；JSON 输入支持复制整个对象，文本输出也可以直接复制。
 
@@ -117,7 +117,7 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。`langfuse-langgraph` Trace 详情中所有识别为 JSON 的内容默认展开全部对象和数组层级，仍可手动收起；其他框架沿用默认折叠深度。点击 LLM 节点时，Input 直接使用该 generation 上报的 request messages：`system`、`user`、`assistant` 和真实工具结果会按原始角色与顺序分开显示，旧轮次放入 History，本轮新增用户消息或工具结果放入 Current input；被上报为 `role=tool` 的可用工具 schema 不会冒充工具结果，LLM Output 中的真实工具调用则会以 Assistant 工具调用及参数展示。相邻 CHAIN 节点的 input/output 不会被当成模型对话历史。子 Agent 行和右侧“子 Agent”卡片上的 **Trace** 按钮可直接进入该子 Agent 的独立执行详情；目标执行不存在时，页面会提示未找到，而不会继续停留在父 Trace 造成无响应的错觉。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
 
-AcTrail Trace 的 LLM Input 同样直接使用每次模型请求上报的完整消息，而不是从相邻事件猜测。内容块会先整理成可读文本，系统提示和旧轮次放入 History；本轮工具交互按调用标识显示为一组 Assistant 工具调用与 User 工具结果，不会因为旧消息的正文发生轻微变化而把多轮历史混入 Current input。单条消息及历史条数仍有上限保护。AcTrail 没有单独上报某个工具结果时，平台会从后续模型请求中按相同工具调用标识回填结果，并将其后连续的文本块一起作为输出。失败的模型调用会显示 AcTrail 实际上报的 HTTP 状态码和原因，例如 `LLM 调用失败：HTTP 404 Not Found`。Agent 名称优先使用 AcTrail 明确上报的名称；如果只上报了 `agent identity process-*` 这类进程占位名，平台会在请求信息足够明确时识别实际 Agent，例如 `claude-cli` 显示为 `Claude Code`。
+AcTrail Trace 的 LLM Input 同样直接使用每次模型请求上报的完整消息，而不是从相邻事件猜测。内容块会先整理成可读文本，系统提示和旧轮次放入 History；本轮工具交互按调用标识显示为一组 Assistant 工具调用与 User 工具结果，不会因为旧消息的正文发生轻微变化而把多轮历史混入 Current input。单条消息及历史条数仍有上限保护。AcTrail 没有单独上报某个工具结果时，平台会从后续模型请求中按相同工具调用标识回填结果，并将其后连续的文本块一起作为输出。失败的模型调用会显示 AcTrail 实际上报的 HTTP 状态码和原因，例如 `LLM 调用失败：HTTP 404 Not Found`。Agent 名称优先使用 AcTrail 明确上报的名称，其次使用根进程 `agent.identity` 上的 `actrail.agent.type`：例如 `opencode` 显示为 `OpenCode`，`claude-code` 显示为 `Claude Code`，`xiaoo` 等其他产品名按上报值显示。该字段是 AcTrail 推断结果；来源为 `executable` 时可能仅是 `python3` 等程序名。字段缺失时仍兼容请求头及旧版命名信息，忽略 `agent.identity`、`agent identity process-*` 通用占位名，最终回退为 `AcTrail Agent`。采集来源仍为 AcTrail；身份信息晚到后会更新名称，历史记录需重新处理保留的采集数据才能更新。
 
 Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 span 到达。平台会等待可确认的顶层 span 后再生成主 Trace，避免把 `intent-agent` 等子 Agent 临时显示为主 Agent。
 

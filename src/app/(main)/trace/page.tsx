@@ -1343,6 +1343,9 @@ function TraceDetailView({
     }, [taskId]);
 
     const { framework, latency, tokens } = execution;
+    const actrailAgentName = framework?.trim().toLowerCase() === 'actrail'
+        ? execution.agentName?.trim() || execution.agent?.trim()
+        : undefined;
     const isRunning = execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
@@ -1418,7 +1421,11 @@ function TraceDetailView({
                         : t('tracePage.statusNormal')
                     }
                 />
-                {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
+                {framework && (
+                    <Tag variant="framework" icon={Terminal} title={actrailAgentName ? (locale === 'zh' ? '采集来源：AcTrail' : 'Collection source: AcTrail') : undefined}>
+                        {actrailAgentName || getFrameworkLabel(framework)}
+                    </Tag>
+                )}
 
                 {/* 用户标签：在详情页原地打标，不必退回列表 */}
                 <TraceTagCell
@@ -2261,13 +2268,15 @@ function Tag({
     children,
     variant = 'framework',
     icon: Icon,
+    title,
 }: {
     children: React.ReactNode;
     variant?: TagVariant;
     icon?: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+    title?: string;
 }) {
     return (
-        <span className={cn(
+        <span title={title} className={cn(
             'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-xs font-medium whitespace-nowrap leading-none',
             TAG_VARIANT_CLASSES[variant],
         )}>
