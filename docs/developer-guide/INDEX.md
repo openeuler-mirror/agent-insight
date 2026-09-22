@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `61cefb3a45a7c8421a966c194f387b2f333f5573` (`61cefb3a`) |
-| Branch | `bench-9-16` |
-| Date | 2026-09-17 |
-| Author | mintuyang |
-| Subject | `修复xiaoo安装问题` |
-| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
+| Commit | `d6da51075cfbc3b58b61e253d8d3a7e3455af959` (`d6da5107`) |
+| Branch | `codex/takeover-pr418-collaboration-trace` |
+| Date | 2026-09-22 |
+| Author | gyctl |
+| Subject | `feat: 接续跨会话协作图并兼容最新 Trace 投影` |
+| Documentation overlay | 接续 PR !418，刷新协作图、普通 reported Trace 合并与 Goal Plus 兼容契约；本轮仅更新相关指南，保留其他页面的历史说明。 |
 
 ### 旧快照至当前提交的变更摘要
 
