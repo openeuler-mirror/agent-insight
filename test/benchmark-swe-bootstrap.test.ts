@@ -7,8 +7,10 @@ import test from 'node:test'
 test('SWE-bench bootstrap skips every local prerequisite after the dataset is installed', async () => {
   const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-swe-bootstrap-'))
   const databasePath = path.join(testDir, 'benchmark.db')
+  const previousDatabaseUrl = process.env.DATABASE_URL
+  const previousHome = process.env.AGENT_INSIGHT_HOME
   process.env.DATABASE_URL = `file:${databasePath}`
-  process.env.AGENT_INSIGHT_DATA_DIR = path.join(testDir, 'missing-managed-home')
+  process.env.AGENT_INSIGHT_HOME = path.join(testDir, 'missing-managed-home')
 
   const sqliteModule = 'node:sqlite'
   const { DatabaseSync } = await import(sqliteModule) as {
@@ -57,8 +59,12 @@ test('SWE-bench bootstrap skips every local prerequisite after the dataset is in
       id: 'benchmark-ready',
       caseCount: 500,
     })
-    assert.equal(fs.existsSync(process.env.AGENT_INSIGHT_DATA_DIR), false)
+    assert.equal(fs.existsSync(process.env.AGENT_INSIGHT_HOME), false)
   } finally {
+    if (previousDatabaseUrl == null) delete process.env.DATABASE_URL
+    else process.env.DATABASE_URL = previousDatabaseUrl
+    if (previousHome == null) delete process.env.AGENT_INSIGHT_HOME
+    else process.env.AGENT_INSIGHT_HOME = previousHome
     fs.rmSync(testDir, { recursive: true, force: true })
   }
 })

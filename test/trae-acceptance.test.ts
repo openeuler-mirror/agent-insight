@@ -16,6 +16,8 @@ function setupTest() {
   const tempToolStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "trae-tool-state-"))
 
   fs.writeFileSync(tempEnvFile, `
+export HOME=${tempSpoolDir}
+export AGENT_INSIGHT_HOME=${tempSpoolDir}
 export AGENT_INSIGHT_DIR=${tempSpoolDir}
 export AGENT_INSIGHT_TRAE_MAX_CONTENT_LENGTH=2000
 export AGENT_INSIGHT_API_KEY=test-api-key-acceptance
@@ -944,6 +946,8 @@ test("DEBUG: TRAE_DEBUG_RAW=1 时保存原始 Hook 输入", () => {
   try {
     const debugEnvFile = path.join(os.tmpdir(), `trae-debug-env-${Math.random().toString(36).slice(2)}.sh`)
     fs.writeFileSync(debugEnvFile, `
+export HOME=${tempSpoolDir}
+export AGENT_INSIGHT_HOME=${tempSpoolDir}
 export AGENT_INSIGHT_DIR=${tempSpoolDir}
 export TRAE_DEBUG_RAW=1
 export AGENT_INSIGHT_API_KEY=test-key-debug
@@ -995,6 +999,8 @@ test("DEBUG: 默认情况下 TRAE_DEBUG_RAW 不产生日志", () => {
     // 显式覆盖全局 .env 中的 TRAE_DEBUG_RAW=1
     const debugOffEnvFile = path.join(os.tmpdir(), `trae-debug-off-${Math.random().toString(36).slice(2)}.sh`)
     fs.writeFileSync(debugOffEnvFile, `
+export HOME=${tempSpoolDir}
+export AGENT_INSIGHT_HOME=${tempSpoolDir}
 export AGENT_INSIGHT_DIR=${tempSpoolDir}
 export TRAE_DEBUG_RAW=0
 export AGENT_INSIGHT_API_KEY=test-key-debug-off

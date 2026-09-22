@@ -154,7 +154,7 @@ test('steps 11-13 persist, normalize, aggregate and expose evidence through HTTP
   timeout: 60_000,
 }, async () => {
   process.env.DATABASE_URL = `file:${databasePath}`
-  process.env.AGENT_INSIGHT_DATA_DIR = path.join(os.homedir(), '.agent-insight')
+  process.env.AGENT_INSIGHT_HOME = path.join(os.homedir(), '.agent-insight')
   const [
     storage,
     artifactRoute,

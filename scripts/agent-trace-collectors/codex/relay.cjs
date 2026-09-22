@@ -15,6 +15,7 @@ const {
   appendJsonl,
   atomicWriteJson,
   collectorStateDir,
+  getAgentInsightHome,
   readCheckpoint,
   readJsonlBatch,
   redactValue,
@@ -24,7 +25,7 @@ const {
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 function defaultCollectorDir(homeDir = os.homedir()) {
-  return path.join(homeDir, ".agent-insight", "collectors", "codex");
+  return path.join(getAgentInsightHome(homeDir), "collectors", "codex");
 }
 
 function loadCollectorConfig(configPath = process.env.AGENT_INSIGHT_CODEX_CONFIG) {

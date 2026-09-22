@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,9 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+    raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -45,7 +49,7 @@ def _emit(result: dict[str, Any]) -> None:
 
 
 def _insight_home() -> Path:
-    data = (os.environ.get("AGENT_INSIGHT_DATA_DIR") or "").strip()
+    data = os.path.expanduser(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or "")).strip()
     if data:
         return Path(data)
     return Path.home() / ".agent-insight"

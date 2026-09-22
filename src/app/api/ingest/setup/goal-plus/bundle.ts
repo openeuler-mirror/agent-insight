@@ -11,6 +11,7 @@ const BUNDLE_FILES = [
   ['goal-plus/lib/pi-native-parser.cjs', ['goal-plus', 'lib', 'pi-native-parser.cjs']],
   ['goal-plus/lib/source-registry.cjs', ['goal-plus', 'lib', 'source-registry.cjs']],
   ['shared/trace-transport.cjs', ['shared', 'trace-transport.cjs']],
+  ['shared/install-modules.cjs', ['shared', 'install-modules.cjs']],
   ['shared/pi-trace-helpers.cjs', ['shared', 'pi-trace-helpers.cjs']],
   ['shared/collaboration-transport.cjs', ['shared', 'collaboration-transport.cjs']],
 ] as const;

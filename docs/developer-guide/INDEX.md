@@ -5,20 +5,36 @@
 > 于 2026-06-04 通过静态分析生成（515 个 TS 文件、2551 个函数、890 个类型、16004 条调用边）。请先阅读本 INDEX，再按需加载所需文件。
 
 ## Source commit (provenance)
-本指南反映**截至下方 commit 的**仓库状态。更新文档时，请与此 commit 做 diff，仅查看自那之后发生的变更，并重新生成受影响的页面。
+本指南以下方 commit 为基础快照，并叠加当前分支在 Documentation overlay 中列出的变更。更新文档时，请与此 commit 做 diff，仅查看自那之后发生的变更，并重新生成受影响的页面。
 
 | Field | Value |
 |---|---|
-| Commit | `d6da51075cfbc3b58b61e253d8d3a7e3455af959` (`d6da5107`) |
-| Branch | `codex/takeover-pr418-collaboration-trace` |
+| Commit | `8f21271657fad1606fd46e5821c1953f28dca589` (`8f212716`) |
+| Branch | `upstream/master` |
 | Date | 2026-09-22 |
-| Author | gyctl |
-| Subject | `feat: 接续跨会话协作图并兼容最新 Trace 投影` |
-| Documentation overlay | 接续 PR !418，刷新协作图、普通 reported Trace 合并与 Goal Plus 兼容契约；本轮仅更新相关指南，保留其他页面的历史说明。 |
+| Author | openeuler-ci-bot |
+| Subject | `!428 swebench默认拉取swr公开仓库，修复数据路径问题` |
+| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 本次保留安装与 Trace 指南、生命周期及前端契约更新，并叠加 PR !426（接续 !418）的协作图、普通 reported Trace 合并与 Goal Plus 兼容契约；保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
 
 > 2026-09-22 working-tree overlay：接入独立协作图和普通 reported Trace 合并。普通事件无需预绑定，按当前用户内精确 Session/Execution 身份解析；唯一调用位置挂树，其余成员并列展示。保留 Goal Plus reported 的已声明 worker 隐藏集合、pending 状态和逐 worker 就绪合并，以及历史 semantic 端点状态；普通 reported 的身份歧义不得由历史持久状态覆盖。
+
+> 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
+
+> 2026-09-22 working-tree overlay：采集器安装增加共享依赖预检、已知旧版本摘要白名单升级和备份；源码生产启动通过 `scripts/verify-standalone.cjs` 校验页面产物，HTTP readiness 拒绝 500。运行中的 standalone 与手动 `npm run build` 仍共用 `.next`，必须先停止旧进程再构建。
+
+> 2026-09-22 working-tree overlay（补充复查）：手动/自动客户端安装器及生成的 shell 包装脚本跟随 `AGENT_INSIGHT_HOME`；补齐 Qwen、Hermes、Trae、Codex IDE、OpenClaw、Qoder 和 LlamaIndex 的配置/缓存默认路径。npm postinstall 与启动共用数据库选择逻辑，自定义路径时不迁移旧默认库。IDE 进程须继承运行根，显式组件路径仍优先；已有安装不自动搬迁。
+
+> 2026-09-22 working-tree overlay：移除 `AGENT_INSIGHT_DATA_DIR` 根目录兼容，非空旧变量明确报错；只使用 `AGENT_INSIGHT_HOME`，默认路径和 Docker 挂载不变。统一服务端 Trace spool、常驻客户端与 Pi Collector 查找路径，npm 启动保留数据库覆盖优先级，更新测试隔离和迁移说明。此条取代下方旧变量兼容说明。
+
+> 2026-09-22 working-tree overlay：SWE-bench 自动准备统一使用 `SWE_BENCH_DATASET_SOURCE` 和 `SWE_BENCH_SOURCE_ARCHIVE_SOURCE`，均接受 HTTP(S) 地址或本机文件路径，显式留空使用官方来源。本机来源只读校验，缺失或哈希错误直接失败；远程来源继续复用缓存并校验 SHA-256。旧 PATH / URL 变量仅在新变量未设置时兼容，更新配置模板及安装指南。
+
+> 2026-09-21 working-tree overlay：运行目录主变量统一为 `AGENT_INSIGHT_HOME`，实际数据子目录由内部 `AGENT_INSIGHT_STORAGE_DIR` 表示，并兼容旧 `AGENT_INSIGHT_DATA_DIR` 根目录语义。`DATABASE_URL` 支持启动命令、用户环境文件和默认值三级覆盖；SWE-bench 自动准备可通过 `AGENT_INSIGHT_BENCHMARK` 常驻启用，同时支持内网数据集与源码归档 URL，继续执行固定 SHA-256 校验。
+
+> 2026-09-21 working-tree overlay：常驻客户端的 Agent、模型与 FI 能力刷新会同步原子替换 Benchmark 执行器的 Agent Runtime 注册表，并在本地同步完成后才向服务端发布能力。运行期间新增、恢复或失效的 Runtime 无需重启即可作用于新任务，已开始的任务不受注册表刷新影响。
+
+> 2026-09-21 working-tree overlay：SWE-bench x86-64 官方模式默认使用两个公开 SWR Verified 镜像仓库，并支持通过 `SWE_BENCH_VERIFIED_MIRROR_REPOS` 覆盖或以空值禁用；按列表依次尝试，未命中再走既有代理和 Docker Hub 官方源，并冻结实际 registry digest。ARM64、Epoch、数据集镜像字段和官方 Harness 不变。
 
 > 2026-09-21 working-tree overlay：Goal Plus 不再作为用户可选 framework 或独立安装步骤；Pi bundle 内置 Agent Insight 自有的休眠观察器，仅在结构化 `/goal-plus` start 证据与 `.gp` 中当前 Pi native session invocation 一致时自动 attach、scan 并确保 watcher。普通 Pi 与增强失败继续采集主 Trace；旧 `frameworks=goal-plus` 映射为 Pi。更新 Goal Plus 用户、开发与三阶段设计文档，未修改 Goal Plus 仓库。
 

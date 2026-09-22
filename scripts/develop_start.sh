@@ -6,9 +6,24 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
-AGENT_INSIGHT_HOME="${AGENT_INSIGHT_DATA_DIR:-$HOME/.agent-insight}"
+PROCESS_DATABASE_URL_IS_SET="${DATABASE_URL+x}"
+PROCESS_DATABASE_URL="${DATABASE_URL:-}"
+
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+  exit 1
+fi
+AGENT_INSIGHT_HOME="${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}"
+case "$AGENT_INSIGHT_HOME" in
+  '~'|'$HOME'|'${HOME}') AGENT_INSIGHT_HOME="$HOME" ;;
+  '~/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\~/}" ;;
+  '$HOME/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$HOME/}" ;;
+  '${HOME}/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$\{HOME\}/}" ;;
+esac
+case "$AGENT_INSIGHT_HOME" in /*) ;; *) AGENT_INSIGHT_HOME="$PWD/$AGENT_INSIGHT_HOME" ;; esac
+RESOLVED_AGENT_INSIGHT_HOME="$AGENT_INSIGHT_HOME"
 AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
-AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME/data"
+AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
 
 load_agent_insight_env() {
@@ -18,8 +33,18 @@ load_agent_insight_env() {
     set +a
   fi
 
+  AGENT_INSIGHT_HOME="$RESOLVED_AGENT_INSIGHT_HOME"
+  AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
+  export AGENT_INSIGHT_HOME
+  export AGENT_INSIGHT_STORAGE_DIR
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+  exit 1
+fi
+  [ "$PROCESS_DATABASE_URL_IS_SET" != x ] || export DATABASE_URL="$PROCESS_DATABASE_URL"
+
   if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "$DEFAULT_DATABASE_URL" ]; then
-    export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+    export DATABASE_URL="file:$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
   elif [[ "$DATABASE_URL" == file:\~* ]]; then
     export DATABASE_URL="file:$HOME${DATABASE_URL#file:\~}"
   fi
@@ -61,11 +86,12 @@ if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
     echo "#"
     cat .env.example
   } > "$AGENT_INSIGHT_ENV_FILE"
+  chmod 600 "$AGENT_INSIGHT_ENV_FILE" 2>/dev/null || true
 fi
 
-if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then
-  echo "Creating data directory at $AGENT_INSIGHT_DATA_DIR..."
-  mkdir -p "$AGENT_INSIGHT_DATA_DIR"
+if [ ! -d "$AGENT_INSIGHT_STORAGE_DIR" ]; then
+  echo "Creating data directory at $AGENT_INSIGHT_STORAGE_DIR..."
+  mkdir -p "$AGENT_INSIGHT_STORAGE_DIR"
 fi
 
 echo "=== Restart Script (DEV MODE) Started ==="
@@ -185,7 +211,7 @@ if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
   # 默认 DATABASE_URL 写在 ~/.agent-insight/.env；默认相对值会在加载时解析到用户数据目录。
   DB_PATH=$(printf '%s' "${DATABASE_URL:-}" | sed -E 's/^"//; s/"$//; s|^file:||')
   if [ -z "$DB_PATH" ]; then
-    DB_PATH="$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+    DB_PATH="$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
   fi
   if [ -f "$DB_PATH" ]; then
     # 召回 → 触发：把历史 Execution.skillRecallRate 改名成 skillTriggerRate。

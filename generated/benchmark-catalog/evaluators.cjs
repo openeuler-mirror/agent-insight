@@ -11,11 +11,11 @@ const generatedEvaluatorDescriptors = [
     "runtime": "oci-container",
     "command": "node",
     "entrypoint": "/app/benchmarks/swe-bench/evaluator/entrypoint.cjs",
-    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-f179363b1664d045a845ae1b84a80711f01697ab7e4d402ad72877c36b6698e6",
+    "image": "agent-insight-benchmark-runtime-swe-bench:artifact-5bb30222644fdd49f47bd25c04932722a2f3f727a03dcdbb4a2231836c84508b",
     "dockerfile": path.resolve(__dirname, "../../benchmarks/swe-bench/evaluator/Dockerfile"),
     "smokeEntrypoint": path.resolve(__dirname, "../../benchmarks/swe-bench/smoke/index.cjs"),
     "runtimeSmokeEntrypoint": "/app/benchmarks/swe-bench/smoke/index.cjs",
-    "artifactDigest": "sha256:f179363b1664d045a845ae1b84a80711f01697ab7e4d402ad72877c36b6698e6",
+    "artifactDigest": "sha256:5bb30222644fdd49f47bd25c04932722a2f3f727a03dcdbb4a2231836c84508b",
     "network": "deny",
     "resources": {
       "cpu": 4,

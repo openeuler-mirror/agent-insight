@@ -24,6 +24,7 @@ const ENTRIES = [
   'goal-plus/lib/source-registry.cjs',
   'goal-plus/uninstall.cjs',
   'shared/collaboration-transport.cjs',
+  'shared/install-modules.cjs',
   'shared/pi-trace-helpers.cjs',
   'shared/trace-transport.cjs',
 ];

@@ -142,6 +142,13 @@ def _read_dotenv(path: Path) -> Dict[str, str]:
     return result
 
 
+def _default_home() -> Path:
+    if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+        raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.")
+    root = os.environ.get("AGENT_INSIGHT_HOME") or str(Path.home() / ".agent-insight")
+    return Path(os.path.expandvars(root)).expanduser().resolve()
+
+
 def _load_config() -> Dict[str, Any]:
     plugin_dir = Path(__file__).resolve().parent
     config: Dict[str, Any] = {}
@@ -152,7 +159,7 @@ def _load_config() -> Dict[str, Any]:
     except (OSError, ValueError):
         pass
 
-    env_file = _read_dotenv(Path.home() / ".agent-insight" / ".env")
+    env_file = _read_dotenv(_default_home() / ".env")
     host = _first(
         os.getenv("AGENT_INSIGHT_HOST"),
         env_file.get("AGENT_INSIGHT_HOST"),
@@ -178,8 +185,8 @@ def _load_config() -> Dict[str, Any]:
     config.setdefault("service_name", "hermes")
     config.setdefault("max_content_chars", DEFAULT_MAX_CONTENT_CHARS)
     config.setdefault("timeout_seconds", 10)
-    config.setdefault("spool_dir", str(Path.home() / ".agent-insight" / "data" / "hermes-otel-spool"))
-    config.setdefault("log_file", str(Path.home() / ".agent-insight" / "logs" / "hermes-plugin.log"))
+    config.setdefault("spool_dir", str(_default_home() / "data" / "hermes-otel-spool"))
+    config.setdefault("log_file", str(_default_home() / "logs" / "hermes-plugin.log"))
     config.setdefault("retry_base_seconds", 1)
     config.setdefault("retry_max_seconds", 60)
     return config
@@ -286,9 +293,9 @@ class _DeltaExporter:
         self.timeout = float(config.get("timeout_seconds") or 10)
         self.retry_base = max(0.1, float(config.get("retry_base_seconds") or 1))
         self.retry_max = max(self.retry_base, float(config.get("retry_max_seconds") or 60))
-        self.spool_dir = Path(str(config.get("spool_dir") or (Path.home() / ".agent-insight" / "data" / "hermes-otel-spool"))).expanduser()
+        self.spool_dir = Path(str(config.get("spool_dir") or (_default_home() / "data" / "hermes-otel-spool"))).expanduser()
         self.spool_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.logger = _FileLogger(str(config.get("log_file") or (Path.home() / ".agent-insight" / "logs" / "hermes-plugin.log")))
+        self.logger = _FileLogger(str(config.get("log_file") or (_default_home() / "logs" / "hermes-plugin.log")))
         self._queue: queue.PriorityQueue[tuple[float, int, Optional[Path]]] = queue.PriorityQueue()
         self._lock = threading.Lock()
         self._scheduled: set[Path] = set()

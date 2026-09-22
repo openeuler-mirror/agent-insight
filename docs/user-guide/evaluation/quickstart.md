@@ -25,7 +25,15 @@ bash scripts/start-evaluator.sh \
   --platform-base-url https://agent-insight.example.com
 ```
 
-默认监听宿主机 `0.0.0.0:3001`；本机仍可通过 `127.0.0.1:3001` 访问，同时其他机器也可能通过评测机 IP 访问，生产环境应配合防火墙或显式使用 `--bind-address 127.0.0.1` 收窄范围。Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本始终只构建通用 Controller，不再选择 Benchmark，也不会在部署时安装全部 Harness。具体 Harness、SDK 和镜像配置属于 `benchmarks/<key>` 接入包；首个对应任务到达后，Controller 根据 Catalog 自动准备 Runtime 镜像并缓存，后续任务直接复用。实例需要额外环境变量时，可重复传入 `--evaluator-env NAME=VALUE`。SWE-bench 如需镜像代理，可使用 `--evaluator-env SWE_BENCH_IMAGE_PROXY_PREFIX=<registry-prefix>`。默认启动不拉取 Runtime 或 Case 镜像；真实任务或显式 Smoke 才按需准备：
+默认监听宿主机 `0.0.0.0:3001`；本机仍可通过 `127.0.0.1:3001` 访问，同时其他机器也可能通过评测机 IP 访问，生产环境应配合防火墙或显式使用 `--bind-address 127.0.0.1` 收窄范围。Linux 账号无 Docker daemon 权限时可显式使用 `sudo bash`；macOS 不使用 `sudo`。脚本始终只构建通用 Controller，不再选择 Benchmark，也不会在部署时安装全部 Harness。具体 Harness、SDK 和镜像配置属于 `benchmarks/<key>` 接入包；首个对应任务到达后，Controller 根据 Catalog 自动准备 Runtime 镜像并缓存，后续任务直接复用。实例需要额外环境变量时，可重复传入 `--evaluator-env NAME=VALUE`。SWE-bench 如需保持官方仓库路径的通用镜像代理，可使用 `--evaluator-env SWE_BENCH_IMAGE_PROXY_PREFIX=<registry-prefix>`。Verified x86-64 默认先使用项目公开的两个 SWR 仓库，无需增加启动参数；如需替换为其他固定仓库，可使用逗号分隔的 `SWE_BENCH_VERIFIED_MIRROR_REPOS`：
+
+```bash
+bash scripts/start-evaluator.sh \
+  --platform-base-url https://agent-insight.example.com \
+  --evaluator-env SWE_BENCH_VERIFIED_MIRROR_REPOS=registry.example.com/team/verified-a,registry.example.com/team/verified-b
+```
+
+评测器仅在 Docker daemon 为 x86-64 且镜像源为 `official` 时依次尝试这些仓库的 `<repository>:<instance_id>`，命中后冻结实际 registry digest；全部未命中时继续尝试旧代理（若配置），最后回退 Docker Hub 官方镜像。可显式传入 `--evaluator-env SWE_BENCH_VERIFIED_MIRROR_REPOS=` 禁用默认 SWR。ARM64 不读取该镜像列表，仍走原有 ARM64 官方镜像或显式 Epoch smoke 配置。默认启动不拉取 Runtime 或 Case 镜像；真实任务或显式 Smoke 才按需准备：
 
 ```bash
 bash scripts/evaluator-doctor.sh

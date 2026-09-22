@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createSupervisorAgent } from "@/lib/engine/skill-generation/supervisor/createSupervisorAgent";
 import type { SkillSpec } from "@/lib/engine/skill-generation/types";
 
-test("skill-generation supervisor: createSupervisorAgent should return a compiled graph", () => {
-  const agent = createSupervisorAgent({ apiKey: "dummy" });
+test("skill-generation supervisor: createSupervisorAgent should return a compiled graph", (t) => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-generation-test-'));
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
+  const agent = createSupervisorAgent({ apiKey: "dummy", workspaceRoot });
   assert.ok(agent);
   assert.equal(typeof agent.invoke, "function");
 });
@@ -15,9 +20,13 @@ test(
   "skill-generation e2e: generate linux cpu diagnosis skill using deepseek",
   {
     timeout: 600_000,
-    skip: DEEPSEEK_API_KEY ? false : "DEEPSEEK_API_KEY not set; skipping real e2e",
+    skip: process.env.RUN_SKILL_GENERATION_E2E !== '1'
+      ? 'Set RUN_SKILL_GENERATION_E2E=1 to enable real model calls'
+      : DEEPSEEK_API_KEY ? false : "DEEPSEEK_API_KEY not set; skipping real e2e",
   },
-  async () => {
+  async (t) => {
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-generation-e2e-'));
+    t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
     const { generateSkill } = await import("@/lib/engine/skill-generation/index");
 
     const spec: SkillSpec = {
@@ -34,6 +43,7 @@ test(
     };
 
     const modelOptions = {
+      workspaceRoot,
       modelId: "deepseek-chat",
       apiKey: DEEPSEEK_API_KEY,
       baseUrl: "https://api.deepseek.com",
@@ -45,4 +55,3 @@ test(
     console.log("E2E Test Final Messages Count:", finalState.messages.length);
   },
 );
-

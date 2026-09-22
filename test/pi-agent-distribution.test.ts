@@ -29,6 +29,7 @@ const BUNDLE_ENTRIES = [
   "pi-agent/scripts/self-check.cjs",
   "pi-agent/scripts/uninstall.cjs",
   "shared/collaboration-transport.cjs",
+  "shared/install-modules.cjs",
   "shared/pi-trace-helpers.cjs",
   "shared/trace-transport.cjs",
 ]

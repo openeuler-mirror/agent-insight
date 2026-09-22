@@ -66,7 +66,7 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
   timeout: 3_600_000,
 }, async (t) => {
   process.env.DATABASE_URL = `file:${databasePath}`
-  process.env.AGENT_INSIGHT_DATA_DIR = path.join(os.homedir(), '.agent-insight')
+  process.env.AGENT_INSIGHT_HOME = path.join(os.homedir(), '.agent-insight')
   process.env.SWE_BENCH_PYTHON = pythonPath
   process.env.SWE_BENCH_IMAGE_SOURCE = process.env.SWE_BENCH_IMAGE_SOURCE || 'official'
   process.env.SWE_BENCH_IMAGE_ARCH = process.env.SWE_BENCH_IMAGE_ARCH || 'auto'

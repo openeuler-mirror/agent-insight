@@ -17,8 +17,9 @@ const RTLD_NOW = 2
 const RTLD_GLOBAL = 0x100
 
 export function insightRasDir(): string {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
   if (process.env.AGENT_INSIGHT_RAS_HOME) return process.env.AGENT_INSIGHT_RAS_HOME
-  const dataDir = process.env.AGENT_INSIGHT_DATA_DIR
+  const dataDir = process.env.AGENT_INSIGHT_HOME?.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => homedir())
   if (dataDir) return join(dataDir, "ras")
   return join(homedir(), ".agent-insight", "ras")
 }
