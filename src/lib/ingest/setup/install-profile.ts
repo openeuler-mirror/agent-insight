@@ -18,18 +18,19 @@ export const FRAMEWORK_OPTIONS: readonly FrameworkOption[] = [
   { value: 'trae', label: 'Trae IDE' },
   { value: 'actrail', label: 'AcTrail' },
   { value: 'pi-agent', label: 'Pi Agent' },
-  { value: 'goal-plus', label: 'Goal Plus' },
   { value: 'qwencode', label: 'Qwen Code' },
   { value: 'codex', label: 'Codex' },
   { value: 'deepseek-harness', label: 'DeepSeek Harness' },
 ];
 
-const FRAMEWORK_BY_VALUE = new Map(FRAMEWORK_OPTIONS.map(option => [option.value, option]));
+const LEGACY_GOAL_PLUS_OPTION = { value: 'goal-plus', label: 'Goal Plus' } as const;
+const INSTALL_PROFILE_OPTIONS = [...FRAMEWORK_OPTIONS, LEGACY_GOAL_PLUS_OPTION];
+const FRAMEWORK_BY_VALUE = new Map(INSTALL_PROFILE_OPTIONS.map(option => [option.value, option]));
 
 export function parseFrameworks(raw: string | null): FrameworkOption[] {
   if (!raw) return [];
   const wanted = new Set(raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean));
-  return FRAMEWORK_OPTIONS.filter(option => wanted.has(option.value)).map(option => ({ ...option }));
+  return INSTALL_PROFILE_OPTIONS.filter(option => wanted.has(option.value)).map(option => ({ ...option }));
 }
 
 export function resolveInstallProfile(
@@ -45,8 +46,8 @@ export function resolveInstallProfile(
     .filter((option): option is FrameworkOption => Boolean(option))
     .map(option => ({ ...option }));
   const hasGoalPlus = requested.some(option => option.value === 'goal-plus');
-  const goalPlusHosts: GoalPlusHost[] = hasGoalPlus ? ['pi'] : [];
-  const effective = [...requested];
+  const goalPlusHosts: GoalPlusHost[] = [];
+  const effective = requested.filter(option => option.value !== 'goal-plus');
   const autoAdded: FrameworkOption[] = [];
   const addDependency = (value: string) => {
     if (effective.some(option => option.value === value)) return;
@@ -56,7 +57,7 @@ export function resolveInstallProfile(
     effective.push(copy);
     autoAdded.push(copy);
   };
-  if (goalPlusHosts.includes('pi')) addDependency('pi-agent');
+  if (hasGoalPlus) addDependency('pi-agent');
   return {
     requestedFrameworks: requested,
     effectiveFrameworks: effective,

@@ -218,6 +218,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     persistCollaborationEvent,
   } = await import('@/lib/ingest/collaboration/persist');
   const {
+    resolveCollaborationEndpointsForExecution,
     resolveCollaborationEventByDbId,
   } = await import('@/lib/ingest/collaboration/resolve');
   const {
@@ -287,6 +288,46 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     },
   });
   assert.doesNotMatch(serviceEvent?.eventBodyJson || '', /service-secret/);
+
+  const boundCollaborationId = `gp.${'b'.repeat(32)}`;
+  const boundEventResult = await reportedService.report('alice', {
+    collaborationId: boundCollaborationId,
+    eventId: 'evt_bound_sessions',
+    fromSessionId: 'main',
+    toSessionId: 'worker:run-b:search-b',
+    description: '逻辑会话通过 binding 关联真实 Trace',
+  });
+  await reportedService.bind('alice', {
+    collaborationId: boundCollaborationId,
+    sessionId: 'main',
+    traceSessionId: 'bound-main-trace',
+    eventClock: 'source_session',
+  });
+  await reportedService.bind('alice', {
+    collaborationId: boundCollaborationId,
+    sessionId: 'worker:run-b:search-b',
+    traceSessionId: 'bound-worker-trace',
+    eventClock: 'source_session',
+  });
+  await prismaRaw.$executeRawUnsafe(
+    'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)',
+    'bound-main-execution', 'bound-main-trace', 'bound-main-trace', 'alice', 'pi-agent',
+    'bound-worker-execution', 'bound-worker-trace', 'bound-worker-trace', 'alice', 'pi-agent',
+  );
+  await resolveCollaborationEndpointsForExecution('alice', ['bound-main-trace', 'bound-worker-trace']);
+  const boundEvent = await prismaRaw.collaborationEvent.findUnique({
+    where: { user_collaborationId_eventId: { user: 'alice', collaborationId: boundCollaborationId, eventId: boundEventResult.eventId } },
+  });
+  const boundResolutions = await prismaRaw.collaborationEndpointResolution.findMany({
+    where: { eventDbId: boundEvent!.id },
+    orderBy: { side: 'asc' },
+  });
+  assert.deepEqual(boundResolutions.map(row => row.linkState), ['linked', 'linked']);
+  assert.deepEqual(boundResolutions.map(row => row.linkMethod), ['session_binding', 'session_binding']);
+  assert.deepEqual(
+    boundResolutions.map(row => JSON.parse(row.evidenceJson).traceSessionId).sort(),
+    ['bound-main-trace', 'bound-worker-trace'],
+  );
 
   await resolveCollaborationEventByDbId(created.eventDbId);
   let resolutions = await prismaRaw.collaborationEndpointResolution.findMany({
