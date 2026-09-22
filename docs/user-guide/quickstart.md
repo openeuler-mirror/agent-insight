@@ -30,120 +30,91 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 
 ## 可选：用 Docker 部署服务端
 
-本节在已安装 Docker Engine 的 Linux 服务器上执行，宿主机无需另外安装 Node.js、npm 或源码。准备镜像交付清单，确认固定标签、CPU 架构、源码提交；离线交付还需提供镜像包 SHA-256。以下占位值需替换为实际交付信息，不能视为已发布版本。
+如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
 
-执行 `uname -m` 确认服务器架构：`x86_64` 对应 `linux/amd64`，`aarch64` / `arm64` 对应 `linux/arm64`。只使用交付清单实际提供且与服务器匹配的架构。
-
-### 用法一：在线拉取固定版本镜像
+### 用法一：在线拉取 Docker Hub 镜像
 
 ```bash
-IMAGE='交付清单中的镜像名:固定版本'
-docker pull "$IMAGE"
-```
+docker pull karaggagent/agent-insight:latest
 
-### 用法二：校验并加载离线镜像
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
 
-无法在线拉取时，将镜像包上传至服务器。先替换变量，只有校验通过才加载：
-
-```bash
-IMAGE_FILE='/path/to/交付的镜像包.tar.gz'
-IMAGE='交付清单中的镜像名:固定版本'
-IMAGE_SHA256='交付清单中的SHA256'
-if printf '%s  %s\n' "$IMAGE_SHA256" "$IMAGE_FILE" | sha256sum -c -; then
-  docker load -i "$IMAGE_FILE"
-else
-  echo '镜像包校验失败，请重新获取交付包。' >&2
-  exit 1
-fi
-```
-
-Docker 可直接加载 `docker save` 生成的 `.tar` 或其 `.tar.gz` 压缩包，无需手工解包。
-
-### 镜像检查、目录准备与启动
-
-在线拉取或离线加载后，在同一终端继续操作。核对操作系统、架构、源码提交与运行用户：
-
-```bash
-docker image inspect "$IMAGE" \
-  --format 'os={{.Os}} arch={{.Architecture}} user={{.Config.User}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
-docker run --rm --entrypoint id "$IMAGE"
-```
-
-镜像没有 revision 标签时，由交付方提供版本核对依据。本文将宿主机 `/opt/agent-insight` 挂载到容器 `/data/agent-insight`。按运行用户的实际 uid/gid 创建目录；以下 `1000:1000` 仅适用于查询结果为 uid 1000、gid 1000 的镜像：
-
-```bash
-sudo install -d -m 750 -o 1000 -g 1000 /opt/agent-insight
+docker stop agent-insight 2>/dev/null || true
+docker rm agent-insight 2>/dev/null || true
 
 docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  --mount type=bind,src=/opt/agent-insight,dst=/data/agent-insight \
-  "$IMAGE"
+  -v ~/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:latest
+
+curl -i http://localhost:3000/
 ```
 
-首次启动初始化配置和 SQLite schema，然后运行镜像内已编译的服务。端口 `3000` 被占用时，可改为 `-p 3033:3000`，后续通过 `3033` 访问。已有实例请先按下方备份升级步骤处理；新旧实例不能同时写入同一个 SQLite 数据目录。
+这条命令会把容器内的 `/data/agent-insight` 挂到服务器宿主机当前用户的 `~/.agent-insight`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启、删除、重拉镜像后仍可复用。默认数据库路径是：
 
-### 安装产物与配置检查
-
-| 产物 | 宿主机位置或查看方式 |
-| --- | --- |
-| Docker 镜像与应用程序 | 由 Docker 管理，使用 `docker image inspect` 查看 |
-| 生效配置 | `/opt/agent-insight/.env`，首次从镜像模板初始化 |
-| SQLite 数据库 | `/opt/agent-insight/data/witty_insight.db` |
-| Skill 附件、评测等运行数据 | `/opt/agent-insight/data/` |
-| 服务日志 | `docker logs agent-insight` |
-
-容器内对应配置和数据库为 `/data/agent-insight/.env`、`/data/agent-insight/data/witty_insight.db`。SQLite 运行时可能生成 `-wal`、`-shm` 文件，不要单独删除；备份时保存整个挂载目录。
-
-调整配置时编辑宿主机文件，再重启容器：
-
-```bash
-sudo vi /opt/agent-insight/.env
-docker restart agent-insight
+```text
+~/.agent-insight/data/witty_insight.db
 ```
 
-配置文件应仅允许运维人员与容器运行用户访问。当前 Docker 镜像使用 SQLite，入口脚本会拒绝非空 `DB_HOST`；不要用它切换到 OpenGauss。
+### 用法二：离线导入 `.tar` 镜像
+
+如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
 
 ```bash
-docker ps -a --filter name=agent-insight
-docker logs --tail 200 agent-insight
-docker inspect agent-insight \
-  --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
-docker inspect agent-insight \
-  --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
-sudo ls -lah /opt/agent-insight/.env
-sudo ls -lah /opt/agent-insight/data/witty_insight.db
-curl -fsS -o /dev/null http://127.0.0.1:3000/
+docker load -i agent-insight-0.5.0-image.tar
+docker images | grep agent-insight
+
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
+
+docker stop agent-insight 2>/dev/null || true
+docker rm agent-insight 2>/dev/null || true
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v ~/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:0.5.0
+
+curl -i http://localhost:3000/
 ```
 
-预期挂载为 `/opt/agent-insight -> /data/agent-insight`。浏览器打开 `http://<服务器地址>:3000/trace`，按部署配置完成登录并检查页面。`healthy` 只表示 HTTP 健康检查通过，还需实际完成登录和链路接入验证。
+如果 `docker load` 输出的镜像 tag 不是 `karaggagent/agent-insight:0.5.0`，请以 `docker images | grep agent-insight` 看到的实际镜像名为准。
 
-### 备份与升级
-
-先停止实例，再完整备份挂载目录：
+如果你不想直接挂宿主机目录，也可以使用 Docker volume：
 
 ```bash
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v agent-insight-data:/data/agent-insight \
+  karaggagent/agent-insight:latest
+```
+
+如果生产环境需要锁定版本号，可以把 `latest` 换成固定版本，例如 `0.5.0`：
+
+```bash
+docker pull karaggagent/agent-insight:0.5.0
 docker stop agent-insight
-BACKUP_FILE="/tmp/agent-insight-$(date +%Y%m%d-%H%M%S).tar.gz"
-sudo tar -C /opt -czf "$BACKUP_FILE" agent-insight
-```
-
-将备份移交到可恢复的位置。按前面的步骤获取、校验并核对新版镜像，更新 `IMAGE` 为新固定标签，然后删除已停止的旧容器：
-
-```bash
 docker rm agent-insight
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v ~/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:0.5.0
 ```
 
-使用原挂载目录重新执行启动命令，再检查配置、数据库、日志和页面。schema 同步失败时保留数据与备份并查看日志，不要通过清空数据库跳过失败。
-
-如果使用 Docker volume 代替宿主机目录，启动命令可改用 `-v agent-insight-data:/data/agent-insight`；数据由 Docker 管理，升级仍需保留并备份同一个 volume，不能按 `/opt/agent-insight` 直接寻找文件。
+服务器上用哪个用户运行 Docker，就会挂载哪个用户的 home 目录。升级到新版本时，保留同一个挂载目录即可，容器数据不会随镜像更新丢失。
 
 ### 用法三：挂载源码运行，代码更新后重启即可生效
 
 适用于服务器要跟着最新代码跑的场景：不用每次改代码都重新发 npm 包、重新打镜像，`git pull` 之后重启容器即可生效。
-
-下面的源码示例使用宿主机 `~/.agent-insight` 作为数据目录，与前面的 `/opt/agent-insight` 二选一。配置、数据库和备份位置都应以实际挂载源为准。
 
 给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
 
