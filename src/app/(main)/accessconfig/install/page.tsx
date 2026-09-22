@@ -3,13 +3,10 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import {
     Terminal,
-    SquareTerminal,
     Key,
     Copy,
     Check,
     Info,
-    BookOpen,
-    ExternalLink,
     CircleCheck,
     Cloud,
     UserCircle,
@@ -46,7 +43,6 @@ export default function AccessInstallPage() {
     // useMemo 同步跑——server 端返回空、client 首次渲染返回实际命令,触发 hydration mismatch。
     // 改成 mount 后再算,server 与 client 首次都渲染空,effect 之后再填入命令。
     const [linuxCmd, setLinuxCmd] = useState('');
-    const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
@@ -62,7 +58,6 @@ export default function AccessInstallPage() {
             setHost(baseUrl);
             if (!authReady || !apiKey) {
                 setLinuxCmd('');
-                setWindowsCmd('');
                 return;
             }
             const setupUrl = getApiUrl('/api/ingest/setup');
@@ -75,7 +70,6 @@ export default function AccessInstallPage() {
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
             setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
-            setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
         }, 0);
         return () => window.clearTimeout(timer);
     }, [apiKey, authReady, frameworks]);
@@ -188,8 +182,8 @@ export default function AccessInstallPage() {
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
                                     {isZh
-                                        ? '先勾选框架,再按系统二选一 —— 同时完成本机纳管'
-                                        : 'Pick frameworks, then your OS — also registers this host'}
+                                        ? '先勾选框架,再在 Agent 所在 Linux 终端执行命令 —— 同时完成本机纳管'
+                                        : 'Pick frameworks, then run the command on the Linux Agent host — also registers this host'}
                                 </span>
                             </div>
 
@@ -202,21 +196,11 @@ export default function AccessInstallPage() {
 
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
-                                label="Linux / macOS"
-                                hint={isZh ? '运行 bash / zsh 的终端' : 'bash / zsh shells'}
+                                label="Linux"
+                                hint={isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host'}
                                 cmd={linuxCmd}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
-                                locale={locale}
-                            />
-
-                            <CommandCard
-                                icon={<SquareTerminal size={14} strokeWidth={2.2} />}
-                                label="Windows (PowerShell)"
-                                hint={isZh ? '以管理员身份运行 PowerShell' : 'Run PowerShell as administrator'}
-                                cmd={windowsCmd}
-                                copied={copied === 'windows'}
-                                onCopy={() => handleCopy(windowsCmd, 'windows')}
                                 locale={locale}
                             />
 
@@ -289,7 +273,6 @@ export default function AccessInstallPage() {
                                 frameworks={effectiveFrameworks}
                                 locale={locale}
                             />
-                            <DocsPanel locale={locale} />
                         </aside>
                     </div>
                 </div>
@@ -424,8 +407,8 @@ function ApiKeyPanel({
                 )}
                 <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 10, lineHeight: 1.6 }}>
                     {isZh
-                        ? '脚本运行时提示输入 API Key —— 粘贴上方值即可。'
-                        : 'Paste this when the script prompts for an API key.'}
+                        ? '左侧命令已包含当前账号的 API Key，复制后即可执行。'
+                        : 'The command includes your current API key and is ready to copy and run.'}
                 </div>
             </div>
         </section>
@@ -544,38 +527,6 @@ function LangfuseEnvCard({
         </article>
     );
 }
-
-function DocsPanel({ locale }: { locale: string }) {
-    const isZh = locale === 'zh';
-    const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
-        { label: '客户端高级配置', href: '#' },
-        { label: '常见接入问题排查', href: '#' },
-    ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
-        { label: 'Advanced client configuration', href: '#' },
-        { label: 'Troubleshooting installation', href: '#' },
-    ];
-    return (
-        <section style={panelCard}>
-            <header style={panelHeader}>
-                <BookOpen size={13} strokeWidth={2.2} style={{ color: 'var(--foreground-secondary)' }} />
-                <span>{isZh ? '相关文档' : 'Related Docs'}</span>
-            </header>
-            <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
-                {links.map(l => (
-                    <li key={l.label}>
-                        <a href={l.href} target="_blank" rel="noopener noreferrer" style={docLink}>
-                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label}</span>
-                            <ExternalLink size={12} strokeWidth={2} style={{ color: 'var(--foreground-muted)', flexShrink: 0 }} />
-                        </a>
-                    </li>
-                ))}
-            </ul>
-        </section>
-    );
-}
-
 
 /**
  * 常驻客户端安装（IF-N01/N02）。
@@ -841,18 +792,6 @@ const langfuseEndpointCode: CSSProperties = {
     color: 'var(--foreground)',
     overflowWrap: 'anywhere',
     textAlign: 'right',
-};
-
-const docLink: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '7px 8px',
-    fontSize: 12.5,
-    color: 'var(--foreground-secondary)',
-    textDecoration: 'none',
-    borderRadius: 6,
-    transition: 'background .1s',
 };
 
 const commandCard: CSSProperties = {

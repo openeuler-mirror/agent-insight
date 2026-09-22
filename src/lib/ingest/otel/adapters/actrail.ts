@@ -823,6 +823,43 @@ function buildActrailGraphProjection(
   };
 }
 
+function rootProcessCompletion(events: OtelTraceEvent[], pairs: LlmPair[]) {
+  const processes = new Map<string, number>();
+  for (const pair of pairs) {
+    const processId = text(pair.call.attributes?.['actrail.process.id']) ||
+      text(pair.request?.attributes?.['actrail.process.id']);
+    if (!processId) return null;
+    processes.set(processId, Math.max(processes.get(processId) || 0, pairStartMs(pair)));
+  }
+  if (processes.size === 0) return null;
+
+  const exits: { event: OtelTraceEvent; code: number; processId: string }[] = [];
+  for (const [processId, lastStartedAt] of processes) {
+    // command.invocation success only confirms exec; it is not a process exit.
+    const event = [...events].reverse().find((candidate) =>
+      (actionKind(candidate) === 'process.exit' || actionKind(candidate) === 'agent.exit') &&
+      text(candidate.attributes?.['actrail.process.id']) === processId &&
+      text(candidate.attributes?.['actrail.action.completeness']) === 'complete' &&
+      candidate.startTimeMs >= lastStartedAt
+    );
+    const rawCode = text(event?.attributes?.['process.exit_code']);
+    if (!event || !rawCode || !/^-?\d+$/.test(rawCode)) return null;
+    const code = Number(rawCode);
+    if (!Number.isSafeInteger(code)) return null;
+    exits.push({ event, code, processId });
+  }
+
+  return {
+    completedAt: Math.max(...exits.map(({ event }) => eventEndMs(event))),
+    failures: exits.filter(({ code }) => code !== 0).map(({ event, code, processId }) => ({
+      failure_type: 'agent-process-exit',
+      description: `Agent process exited with code ${code}`,
+      context: JSON.stringify({ processId, actionId: actionId(event), exitCode: code }),
+      recovery: '',
+    })),
+  };
+}
+
 export function aggregateActrailTraceEvents(
   sessionId: string,
   events: OtelTraceEvent[],
@@ -936,7 +973,8 @@ export function aggregateActrailTraceEvents(
   );
   const firstEvent = ordered[0];
   const traceStartedAt = Math.min(...pairs.map(pairStartMs));
-  const traceCompletedAt = Math.max(...pairs.map(pairEndMs));
+  const processCompletion = rootProcessCompletion(ordered, rootPairs);
+  const traceCompletedAt = processCompletion?.completedAt ?? Math.max(...pairs.map(pairEndMs));
   const finalResult = [...interactions]
     .reverse()
     .find((interaction) => interaction.role === 'assistant' && text(interaction.content))
@@ -965,7 +1003,8 @@ export function aggregateActrailTraceEvents(
     latency: Math.max(0, traceCompletedAt - traceStartedAt) / 1000,
     final_result: finalResult,
     trace_started_at: toIso(traceStartedAt),
-    trace_completed_at: finalResult ? toIso(traceCompletedAt) : undefined,
+    trace_completed_at: processCompletion || finalResult ? toIso(traceCompletedAt) : undefined,
+    failures: processCompletion?.failures.length ? processCompletion.failures : undefined,
     timestamp: new Date(traceStartedAt),
     label: 'AcTrail',
     user: firstEvent.user || 'anonymous',

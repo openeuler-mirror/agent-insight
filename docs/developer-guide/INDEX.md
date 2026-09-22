@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `06e8bc8cd7a177f0233d70c68aa00826d448952e` (`06e8bc8c`) |
-| Branch | `bench-9-16` |
-| Date | 2026-09-21 |
-| Author | mintuyang |
-| Subject | `修复执行器问题` |
-| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
+| Commit | `0c3c38e96ec320d976912ec08e1dfe2515ac9df4` (`0c3c38e9`) |
+| Branch | `codex/master-830-fixes-20260922` |
+| Date | 2026-09-22 |
+| Author | gyctl |
+| Subject | `fix: 同步830安装与链路追踪通用修复到master` |
+| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 本次更新安装与 Trace 指南、生命周期及前端契约，保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 
 > 2026-09-22 working-tree overlay：采集器安装增加共享依赖预检、已知旧版本摘要白名单升级和备份；源码生产启动通过 `scripts/verify-standalone.cjs` 校验页面产物，HTTP readiness 拒绝 500。运行中的 standalone 与手动 `npm run build` 仍共用 `.next`，必须先停止旧进程再构建。
 

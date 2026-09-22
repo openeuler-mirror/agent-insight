@@ -47,6 +47,7 @@ export class OpenClawLogWatcher {
   }
 
   private scheduleParse(filePath: string, eventName: string) {
+    const receivedAt = new Date();
     // 1. Clear existing timeouts
     if (this.watchTimeouts.has(filePath)) {
       clearTimeout(this.watchTimeouts.get(filePath)!);
@@ -58,7 +59,7 @@ export class OpenClawLogWatcher {
     // 2. Schedule UI Sync (Fast, no evaluation)
     const syncTimeout = setTimeout(async () => {
       this.watchTimeouts.delete(filePath);
-      await this.processLogFile(filePath, eventName, { skip_evaluation: true });
+      await this.processLogFile(filePath, eventName, { skip_evaluation: true }, receivedAt);
     }, this.syncDebounceMs);
     this.watchTimeouts.set(filePath, syncTimeout);
 
@@ -66,12 +67,12 @@ export class OpenClawLogWatcher {
     const evalTimeout = setTimeout(async () => {
       this.evalTimeouts.delete(filePath);
       console.log(`[OpenClawWatcher] Session idle for ${this.evalDebounceMs / 1000}s, triggering final Evaluation for: ${filePath}`);
-      await this.processLogFile(filePath, 'evaluation_timeout', { skip_evaluation: false, force_judgment: true });
+      await this.processLogFile(filePath, 'evaluation_timeout', { skip_evaluation: false, force_judgment: true }, receivedAt);
     }, this.evalDebounceMs);
     this.evalTimeouts.set(filePath, evalTimeout);
   }
 
-  private async processLogFile(filePath: string, eventName: string, options: { skip_evaluation: boolean; force_judgment?: boolean }) {
+  private async processLogFile(filePath: string, eventName: string, options: { skip_evaluation: boolean; force_judgment?: boolean }, receivedAt: Date) {
     try {
       const record = await this.parser.parseFile(filePath);
 
@@ -81,7 +82,7 @@ export class OpenClawLogWatcher {
         await saveExecutionRecord({
             ...record,
             ...options
-        } as any);
+        } as any, { receivedAt });
         console.log(`[OpenClawWatcher] Upserted session ${record.task_id} (skip_eval: ${options.skip_evaluation})`);
       }
     } catch (err) {

@@ -1,5 +1,6 @@
-import test from "node:test"
+import test, { after, before } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
@@ -12,14 +13,15 @@ import * as os from "os"
 //   - 多 Agent 拆分：interactions 里的 TASK + subagent turn 派生子 Execution 行，
 //     parentExecutionId/rootExecutionId/isSubagent 正确（AC33 服务端侧）
 //
-// 环境处理：本地 ~/.agent-insight/.env 的 AGENT_INSIGHT_HOME 会让默认库解析
-// 到嵌套空库（data/data/witty_insight.db），因此这里显式固定 DATABASE_URL 到
-// 与服务一致的真库，并在模块加载前设置（动态 import 保证）。表不存在时自动 skip。
+// 使用当前 Prisma schema 初始化私有数据库，避免依赖或修改用户常用库。
 // ============================================================================
 
-// 必须在任何 prisma / data-service 模块加载前固定库地址
-process.env.DATABASE_URL = `file:${path.join(os.homedir(), ".agent-insight", "data", "witty_insight.db")}`
-delete process.env.AGENT_INSIGHT_HOME
+const savedEnv = { ...process.env }
+const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "trae-server-conversion-"))
+process.env.DATABASE_URL = `file:${path.join(testDir, "test.db")}`
+process.env.AGENT_INSIGHT_HOME = testDir
+delete process.env.AGENT_INSIGHT_DATA_DIR
+delete process.env.DB_HOST
 
 type SaveResult = { record: any }
 type PrismaRaw = {
@@ -27,25 +29,33 @@ type PrismaRaw = {
     findUnique(args: { where: { id: string }; select?: Record<string, boolean> }): Promise<any>
     deleteMany(args: { where: Record<string, unknown> }): Promise<unknown>
   }
-  $queryRawUnsafe(sql: string): Promise<Array<{ name: string }>>
   $disconnect(): Promise<void>
 }
+
+let testPrisma: PrismaRaw | undefined
+
+before(() => {
+  fs.writeFileSync(path.join(testDir, "test.db"), "")
+  execFileSync(process.execPath, ["node_modules/prisma/build/index.js", "db", "push", "--skip-generate"], { stdio: "pipe" })
+})
+
+after(async () => {
+  try {
+    await testPrisma?.$disconnect()
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key]
+    Object.assign(process.env, savedEnv)
+    fs.rmSync(testDir, { recursive: true, force: true })
+  }
+})
 
 async function loadServerModules() {
   const dataService = await import("@/lib/storage/data-service")
   const prismaMod = await import("@/lib/storage/prisma")
+  testPrisma = prismaMod.prismaRaw as PrismaRaw
   return {
     saveExecutionRecord: dataService.saveExecutionRecord as (data: any) => Promise<SaveResult>,
     prismaRaw: prismaMod.prismaRaw as PrismaRaw,
-  }
-}
-
-async function assertTableReady(prismaRaw: PrismaRaw): Promise<boolean> {
-  try {
-    const tables = await prismaRaw.$queryRawUnsafe("SELECT name FROM sqlite_master WHERE type='table' AND name='Execution'")
-    return tables.length > 0
-  } catch {
-    return false
   }
 }
 
@@ -110,14 +120,9 @@ function makeTraeRecord(uploadId: string, taskId: string, withSubagent: boolean)
 // ============================================================================
 test("AC36: trae 载荷经 saveExecutionRecord 完整落库", async (t) => {
   const { saveExecutionRecord, prismaRaw } = await loadServerModules()
-  if (!(await assertTableReady(prismaRaw))) {
-    t.skip("Execution 表不存在（DATABASE_URL 未指向已迁移的库），跳过服务端转换测试")
-    return
-  }
   const uploadId = `test-trae-ac36-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   t.after(async () => {
     await prismaRaw.execution.deleteMany({ where: { id: uploadId } })
-    await prismaRaw.$disconnect()
   })
 
   const { record } = await saveExecutionRecord(makeTraeRecord(uploadId, uploadId, false))
@@ -146,14 +151,9 @@ test("AC36: trae 载荷经 saveExecutionRecord 完整落库", async (t) => {
 // ============================================================================
 test("AC36/AC33: subagent interactions 派生子 Execution 且父子关联正确", async (t) => {
   const { saveExecutionRecord, prismaRaw } = await loadServerModules()
-  if (!(await assertTableReady(prismaRaw))) {
-    t.skip("Execution 表不存在，跳过服务端转换测试")
-    return
-  }
   const parentId = `test-trae-ac33-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   t.after(async () => {
     await prismaRaw.execution.deleteMany({ where: { OR: [{ id: parentId }, { parentExecutionId: parentId }] } })
-    await prismaRaw.$disconnect()
   })
 
   await saveExecutionRecord(makeTraeRecord(parentId, parentId, true))
