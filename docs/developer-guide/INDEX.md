@@ -58,6 +58,8 @@
 
 > 2026-09-13 upstream overlay：普通实验的平台生成 Trace、Skill 用例分析与 Skill A/B 测试的单次 Agent 执行默认上限统一为 600 秒。实验向导统一使用“Agent 单次执行上限”配置，范围为 30～3600 秒；Skill 用例分析仅在生成 Trace 时显示，Skill A/B 无论输入来自数据集还是已有 Trace 都显示，配置随实验快照冻结为 `timeoutMs`。评估器超时与触发分析的独立 30 秒上限保持不变。
 
+> 2026-09-21 working-tree overlay：Skill 用例分析与 A/B 测试的结果摘要新增执行项/聚合评测项口径。每个 Agent 运行对应一个执行项和一个评测项，A/B 两侧分别计项；多个评估器只决定聚合评测项是否成功，不扩大总数。接口保留旧 `progress` 兼容字段，并新增 `executionProgress`、`evaluationProgress` 供结果页展示执行成功、执行失败、评测成功和评测失败。
+
 > 2026-09-13 upstream overlay：合入 Goal Plus 双通道 collector、语义 ingest、领域查询、完整度展示及跨 Session 调用关系上报能力；Goal Plus 历史 spool 修复、持久化去重和有界上传策略保持独立。
 
 > 2026-09-14 upstream overlay：IDaaS userinfo 返回的 `w3Account` 作为可选外部账号唯一绑定到 UUID 用户，用于界面展示和数据库反查；权限与数据归属仍以 UUID 为准。

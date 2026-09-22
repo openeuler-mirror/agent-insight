@@ -29,6 +29,8 @@ interface DetailPayload {
   breakdown: Array<{ evaluatorId: string; avg: number | null; scored: number; total: number; failed: number }>;
   progress: { total: number; done: number; failed: number; pending: number };
   traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
+  executionProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
+  evaluationProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
   caseTotal: number;
   cases?: Array<{
     id: string;
@@ -407,17 +409,21 @@ export function SkillExperimentResult({
   const isTrigger = detail.preset === 'trigger';
   const experimentSettled = ['done', 'failed', 'cancelled'].includes(detail.status);
   const abRunsComplete = abProgress.aDone >= abProgress.aTotal && abProgress.bDone >= abProgress.bTotal;
-  const resultRowsComplete = detail.progress.pending === 0;
+  const resultRowsComplete = detail.evaluationProgress
+    ? detail.evaluationProgress.pending === 0
+    : detail.progress.pending === 0;
   const isDone = detail.status === 'done' && resultRowsComplete && (!isAb || abRunsComplete);
   const displayStatus = detail.status === 'done' && !isDone ? 'running' : detail.status;
-  const total = isAb
+  const total = detail.executionProgress?.total || (isAb
     ? abProgress.aTotal + abProgress.bTotal
-    : detail.traceProgress?.total || detail.progress.total || detail.caseTotal;
-  const completed = isAb
-    ? abProgress.aDone + abProgress.bDone
-    : detail.traceProgress
-      ? detail.traceProgress.ready + detail.traceProgress.failed
-      : detail.progress.done + detail.progress.failed;
+    : detail.traceProgress?.total || detail.progress.total || detail.caseTotal);
+  const completed = detail.executionProgress
+    ? detail.executionProgress.succeeded + detail.executionProgress.failed
+    : isAb
+      ? abProgress.aDone + abProgress.bDone
+      : detail.traceProgress
+        ? detail.traceProgress.ready + detail.traceProgress.failed
+        : detail.progress.done + detail.progress.failed;
   const firstScore = detail.breakdown.find((item) => item.evaluatorId === SKILL_TRIGGER_ANALYZER_EVALUATOR_ID)?.avg
     ?? detail.breakdown.find((item) => item.evaluatorId === 'skill-trigger-accuracy')?.avg
     ?? detail.breakdown.find((item) => item.evaluatorId === 'preset-agent-task-completion')?.avg
@@ -486,6 +492,32 @@ export function SkillExperimentResult({
         </div>
 
         {error && <div className="rounded-lg border border-error-subtle-border bg-error-subtle p-3 text-xs text-error">{error}</div>}
+
+        {detail.executionProgress && detail.evaluationProgress && (
+          <section className="overflow-hidden rounded-xl border border-border bg-card">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-border px-4 py-3 text-xs">
+              <span><span className="text-foreground-muted">待评测 Agent：</span><b className="font-semibold text-foreground">{detail.agentName || '—'}</b></span>
+              <span><span className="text-foreground-muted">评估器：</span><b className="font-semibold text-foreground">{detail.evaluatorIds.length}</b></span>
+              <span><span className="text-foreground-muted">统计口径：</span><b className="font-semibold text-foreground">{detail.executionProgress.total} 个执行项 = {detail.evaluationProgress.total} 个评测项</b></span>
+            </div>
+            <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-4">
+              {([
+                ['执行成功', detail.executionProgress.succeeded, 'text-success'],
+                ['执行失败', detail.executionProgress.failed, 'text-error'],
+                ['评测成功', detail.evaluationProgress.succeeded, 'text-success'],
+                ['评测失败', detail.evaluationProgress.failed, 'text-error'],
+              ] as const).map(([label, value, tone]) => (
+                <div key={label} className="bg-card px-4 py-4">
+                  <small className={`text-xs font-medium ${tone}`}>{label}</small>
+                  <b className="mt-2 block text-2xl text-foreground">{value} <span className="text-xs font-normal text-foreground-muted">项</span></b>
+                </div>
+              ))}
+            </div>
+            <div className="bg-background-secondary px-4 py-2.5 text-[11px] text-foreground-muted">
+              一个执行项对应一个聚合评测项；多个评估器只决定该评测项是否成功，不扩大评测项总数。
+            </div>
+          </section>
+        )}
 
         {isAb ? (
           <>

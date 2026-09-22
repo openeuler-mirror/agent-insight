@@ -109,6 +109,8 @@ interface ExperimentDetail {
   }>;
   progress: { total: number; done: number; failed: number; pending: number };
   traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
+  executionProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
+  evaluationProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
   overall: number | null;
   breakdown: EvaluatorBreakdownRow[];
   baselineTrend: BaselineTrend | null;
@@ -334,6 +336,7 @@ export function ExperimentDetail({
   );
 
   const caseTotal = detail?.caseTotal ?? 0;
+  const hasItemProgress = Boolean(detail?.executionProgress && detail?.evaluationProgress);
   const totalPages = Math.max(1, Math.ceil(caseTotal / casePageSize));
   const pagedRows = caseRows;
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
@@ -426,18 +429,27 @@ export function ExperimentDetail({
                 {status.label}
               </span>
               <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.caseTotal}</span>
+              {hasItemProgress ? (
+                <>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>执行成功：</span>{detail.executionProgress!.succeeded} 项</span>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>执行失败：</span>{detail.executionProgress!.failed} 项</span>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>评测成功：</span>{detail.evaluationProgress!.succeeded} 项</span>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>评测失败：</span>{detail.evaluationProgress!.failed} 项</span>
+                </>
+              ) : (
+                <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.caseTotal}</span>
+              )}
               <span><span style={{ color: 'var(--foreground-muted)' }}>评估器：</span>{detail.evaluatorIds.length}</span>
               <span style={{ color: 'var(--foreground-muted)' }}>
                 创建于 {new Date(detail.createdAt).toLocaleString('zh-CN', { hour12: false })}
               </span>
-              {detail.progress?.total > 0 && (
+              {!hasItemProgress && detail.progress?.total > 0 && (
                 <span>
                   <span style={{ color: 'var(--foreground-muted)' }}>进度：</span>
                   {detail.progress.done} 完成 / {detail.progress.failed} 失败 / {detail.progress.pending} 待执行
                 </span>
               )}
-              {detail.traceProgress && (
+              {!hasItemProgress && detail.traceProgress && (
                 <span>
                   <span style={{ color: 'var(--foreground-muted)' }}>Trace：</span>
                   {detail.traceProgress.ready} 已生成 / {detail.traceProgress.failed} 失败 / {detail.traceProgress.pending} 生成中

@@ -19,6 +19,10 @@ import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
 import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
+import {
+  summarizeExistingTraceItemProgress,
+  summarizeWorkbenchItemProgress,
+} from '@/lib/skill-workbench/item-progress';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
 export const dynamic = 'force-dynamic';
@@ -127,7 +131,12 @@ export async function GET(
     });
     // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
     // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
-    const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
+    const allExperimentCases = await prisma.experimentCase.findMany({
+      where: { experimentId: id },
+      select: { id: true },
+    });
+    const allExperimentCaseIds = allExperimentCases.map((item) => item.id);
+    const caseTotal = allExperimentCaseIds.length;
     const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
     const casePage = Math.min(casePageRaw, casePages);
     const pagedCases = await prisma.experimentCase.findMany({
@@ -370,7 +379,12 @@ export async function GET(
     const failedResultCount = effectiveAllResults.filter((r: { status: string }) => r.status === 'failed').length;
     let expectedResultTotal = effectiveAllResults.length;
     let syntheticExecutionFailures = 0;
-    if (experiment.scope === 'skill-workbench' && configSnapshot) {
+    let itemProgress: ReturnType<typeof summarizeWorkbenchItemProgress> | null = null;
+    if (
+      experiment.scope === 'skill-workbench'
+      && (experiment.preset === 'use-case' || experiment.preset === 'skill-ab')
+      && configSnapshot
+    ) {
       const frozenCaseIds = Array.isArray(configSnapshot.caseIds)
         ? configSnapshot.caseIds.map(String).filter(Boolean)
         : [];
@@ -386,12 +400,20 @@ export async function GET(
       const grayscaleTaskId = typeof configSnapshot.grayscaleTaskId === 'string'
         ? configSnapshot.grayscaleTaskId
         : '';
-      if (grayscaleTaskId && evaluatorIds.length) {
+      if (grayscaleTaskId) {
         const grayscaleTask = await prisma.grayscaleTask.findFirst({
           where: { id: grayscaleTaskId, ...(username ? { user: username } : {}) },
           select: { caseStatesJson: true },
         });
         const caseStates = parseJsonValue(grayscaleTask?.caseStatesJson || null) as Record<string, unknown> | null;
+        itemProgress = summarizeWorkbenchItemProgress({
+          caseIds: frozenCaseIds,
+          executionSides,
+          repeatRounds,
+          evaluatorIds,
+          caseStates: (caseStates || {}) as Parameters<typeof summarizeWorkbenchItemProgress>[0]['caseStates'],
+          settled: ['failed', 'cancelled'].includes(experiment.status),
+        });
         if (caseStates) {
           for (const state of Object.values(caseStates)) {
             if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
@@ -408,6 +430,13 @@ export async function GET(
             }
           }
         }
+      } else {
+        itemProgress = summarizeExistingTraceItemProgress({
+          caseIds: allExperimentCaseIds,
+          evaluatorIds,
+          results: effectiveAllResults,
+          settled: ['failed', 'cancelled'].includes(experiment.status),
+        });
       }
     }
     const failed = Math.min(expectedResultTotal, failedResultCount + syntheticExecutionFailures);
@@ -661,6 +690,8 @@ export async function GET(
       results,
       progress,
       traceProgress,
+      executionProgress: itemProgress?.executionProgress || null,
+      evaluationProgress: itemProgress?.evaluationProgress || null,
       caseTotal,
       casePage,
       casePageSize,

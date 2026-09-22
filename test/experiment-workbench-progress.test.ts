@@ -64,6 +64,8 @@ test('Skill 工作台实验使用冻结工作量，done 与 pending 不会同时
   const running = await load();
   assert.equal(running.status, 'running');
   assert.deepEqual(running.progress, { total: 4, done: 2, failed: 0, pending: 2 });
+  assert.deepEqual(running.executionProgress, { total: 2, succeeded: 2, failed: 0, pending: 0 });
+  assert.deepEqual(running.evaluationProgress, { total: 2, succeeded: 1, failed: 0, pending: 1 });
 
   await prisma.grayscaleTask.update({
     where: { id: task.id },
@@ -77,4 +79,6 @@ test('Skill 工作台实验使用冻结工作量，done 与 pending 不会同时
   const completed = await load();
   assert.equal(completed.status, 'done');
   assert.deepEqual(completed.progress, { total: 4, done: 2, failed: 2, pending: 0 });
+  assert.deepEqual(completed.executionProgress, { total: 2, succeeded: 1, failed: 1, pending: 0 });
+  assert.deepEqual(completed.evaluationProgress, { total: 2, succeeded: 1, failed: 1, pending: 0 });
 });
