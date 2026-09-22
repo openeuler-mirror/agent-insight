@@ -26,7 +26,7 @@ const databasePath = externalDatabasePath
   ? path.resolve(externalDatabasePath)
   : path.join(testDir, 'benchmark.db')
 process.env.DATABASE_URL = `file:${databasePath}`
-process.env.AGENT_INSIGHT_DATA_DIR = path.join(testDir, 'agent-insight-home')
+process.env.AGENT_INSIGHT_HOME = path.join(testDir, 'agent-insight-home')
 
 const externalTestUsers = new Set<string>()
 const externalTestClientIds = new Set<string>()
@@ -1387,7 +1387,7 @@ test('a repeated completion resumes an interrupted normalizing evaluation', asyn
   externalTestExperimentIds.add(experimentId)
   try {
     const reportStoragePath = `test/${evidenceIds[0]}.json`
-    const reportAbsolutePath = path.join(process.env.AGENT_INSIGHT_DATA_DIR!, 'data', reportStoragePath)
+    const reportAbsolutePath = path.join(process.env.AGENT_INSIGHT_HOME!, 'data', reportStoragePath)
     const reportBytes = Buffer.from(JSON.stringify(rawResult.officialReport))
     await fsp.mkdir(path.dirname(reportAbsolutePath), { recursive: true })
     await fsp.writeFile(reportAbsolutePath, reportBytes)
@@ -1656,7 +1656,7 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
     assert.equal(JSON.parse(completed.cleanupJson || '{}').status, 'succeeded')
     const artifact = await prisma.benchmarkArtifact.findFirst({ where: { runId } })
     assert.ok(artifact)
-    const artifactBytes = fs.readFileSync(path.join(process.env.AGENT_INSIGHT_DATA_DIR!, 'data', artifact.storagePath))
+    const artifactBytes = fs.readFileSync(path.join(process.env.AGENT_INSIGHT_HOME!, 'data', artifact.storagePath))
     assert.match(artifactBytes.toString('utf8'), /hello benchmark/)
     assert.doesNotMatch(artifactBytes.toString('utf8'), /diff --git a\/model\.patch/)
     assert.equal(fs.existsSync(workspacePath), false)

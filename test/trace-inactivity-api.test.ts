@@ -9,7 +9,8 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-inactivity-'));
   const savedEnv = { ...process.env };
   delete process.env.DB_HOST;
-  process.env.AGENT_INSIGHT_DATA_DIR = dir;
+  delete process.env.AGENT_INSIGHT_DATA_DIR;
+  process.env.AGENT_INSIGHT_HOME = dir;
   process.env.DATABASE_URL = `file:${path.join(dir, 'test.db')}`;
   fs.writeFileSync(path.join(dir, 'test.db'), '');
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { stdio: 'pipe' });

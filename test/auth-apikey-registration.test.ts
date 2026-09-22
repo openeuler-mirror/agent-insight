@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-auth-registration-'));
-process.env.AGENT_INSIGHT_DATA_DIR = testHome;
+process.env.AGENT_INSIGHT_HOME = testHome;
 const testDbPath = path.join(testHome, "witty_insight.db");
 fs.closeSync(fs.openSync(testDbPath, "w"));
 process.env.DATABASE_URL = "file:" + testDbPath;

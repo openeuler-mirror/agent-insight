@@ -9,6 +9,7 @@ import { GET } from '@/app/api/ingest/setup/bundle/route'
 
 const repositoryRoot = path.resolve(__dirname, '..')
 const clientFiles = [
+  'scripts/agent-insight-home.cjs',
   'scripts/install-ras-client.js',
   'scripts/reliability-client.cjs',
   'scripts/ws-client.cjs',
@@ -48,6 +49,7 @@ test('standalone cwd still serves complete client and RAS archives from the pack
   for (const [name, required] of [
     ['client', clientFiles],
     ['ras', [
+      'scripts/agent-insight-home.cjs',
       'scripts/install-ras.js',
       'scripts/xiaoo-trace-collector/install.js',
       'scripts/xiaoo-trace-collector/manifest.js',
@@ -95,7 +97,7 @@ test('an existing RAS installer alone cannot produce a successful RAS bundle', a
   assert.equal(response.status, 503)
   assert.deepEqual(
     (await response.json()).missing,
-    ['scripts/xiaoo-trace-collector', 'agent_ras'],
+    ['scripts/agent-insight-home.cjs', 'scripts/xiaoo-trace-collector', 'agent_ras'],
   )
 })
 

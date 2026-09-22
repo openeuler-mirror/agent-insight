@@ -4,6 +4,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { isolatedHomeEnv } from './helpers/isolated-home'
 
 import { GET as getCentralSetup } from "@/app/api/ingest/setup/route"
 import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
@@ -167,20 +168,19 @@ test("CLI exposes framework preselection and local installations are detectable"
 })
 
 test("Pi Node installer self-checks, reinstalls, and purges only the current-key spool", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-pi-install-"))
+  const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-pi-install-")))
   const homeDir = path.join(tempDir, "home")
   const binDir = path.join(tempDir, "bin")
   const logPath = path.join(tempDir, "pi.log")
   const sourceDir = path.join(ROOT, "scripts", "agent-trace-collectors", "pi-agent")
   const installer = path.join(sourceDir, "install.cjs")
-  const env = {
-    ...process.env,
+  const env = isolatedHomeEnv(homeDir, {
     AGENT_INSIGHT_API_KEY: "test-pi-key",
     AGENT_INSIGHT_BASE_URL: "https://insight.example",
     PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
     USERPROFILE: homeDir,
     HOME: homeDir,
-  }
+  })
   try {
     fs.mkdirSync(binDir, { recursive: true })
     fs.writeFileSync(path.join(binDir, "pi.cmd"), `@echo off\r\necho %*>>"${logPath}"\r\nexit /b 0\r\n`)

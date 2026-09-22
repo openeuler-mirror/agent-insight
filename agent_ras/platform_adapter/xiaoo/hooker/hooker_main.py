@@ -84,7 +84,7 @@ def _append_fi_llm_turn_event(*, message_id: str, channel: str, session_id: str)
 
 def _ensure_path() -> None:
     ras_home = os.environ.get("AGENT_INSIGHT_RAS_HOME") or str(
-        Path.home() / ".agent-insight" / "ras"
+        Path(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or str(Path.home() / ".agent-insight"))).expanduser() / "ras"
     )
     marker = Path(ras_home) / "install.json"
     runtime_root = None

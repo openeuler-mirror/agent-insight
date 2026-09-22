@@ -15,8 +15,9 @@ const os = require('os')
 const path = require('path')
 const { spawnSync } = require('child_process')
 const { ensureManagedFiRuntime } = require('./lib/fi-python-runtime')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
-const CLIENT_HOME = path.join(os.homedir(), '.agent-insight', 'client')
+const CLIENT_HOME = path.join(getAgentInsightHome(), 'client')
 const CONFIG_PATH = path.join(CLIENT_HOME, 'config.json')
 const PACKAGE_ROOT = path.join(__dirname, '..')
 /**
@@ -30,7 +31,7 @@ const RUNTIME_DIR = path.join(CLIENT_HOME, 'runtime')
 const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['reliability-client.cjs', 'ws-client.cjs']
+const RUNTIME_FILES = ['reliability-client.cjs', 'ws-client.cjs', 'agent-insight-home.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })
@@ -371,6 +372,7 @@ NotifyAccess=all
 ExecStart=${nodeBin} ${CLIENT_SCRIPT}
 Environment=AGENT_INSIGHT_SUPERVISOR=systemd
 Environment=${environmentPath}
+Environment=${quoteSystemdValue(`AGENT_INSIGHT_HOME=${getAgentInsightHome()}`)}
 Restart=on-failure
 RestartSec=5s
 WatchdogSec=30s
@@ -475,6 +477,7 @@ function writeLaunchdPlist() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>AGENT_INSIGHT_SUPERVISOR</key><string>launchd</string>
+    <key>AGENT_INSIGHT_HOME</key><string>${getAgentInsightHome().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</string>
     <key>PATH</key><string>${environmentPath}</string>
   </dict>
   <key>RunAtLoad</key><true/>

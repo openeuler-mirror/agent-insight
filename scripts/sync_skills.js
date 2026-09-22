@@ -1,4 +1,9 @@
 "use strict";
+function getAgentInsightHome() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => os.homedir()))
+}
 /**
  * Agent-Insight Skill Synchronizer
  *
@@ -55,7 +60,7 @@ const AGENTS_DIR_MAP = {
 function loadConfiguration() {
     let config = {};
     try {
-        for (const envPath of [path.join(os.homedir(), '.agent-insight', '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
+        for (const envPath of [path.join(getAgentInsightHome(), '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
             if (!fs.existsSync(envPath)) continue;
             const content = fs.readFileSync(envPath, 'utf8');
             content.split('\n').forEach(line => {

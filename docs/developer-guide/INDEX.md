@@ -20,6 +20,20 @@
 
 > 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 
+> 2026-09-22 working-tree overlay：采集器安装增加共享依赖预检、已知旧版本摘要白名单升级和备份；源码生产启动通过 `scripts/verify-standalone.cjs` 校验页面产物，HTTP readiness 拒绝 500。运行中的 standalone 与手动 `npm run build` 仍共用 `.next`，必须先停止旧进程再构建。
+
+> 2026-09-22 working-tree overlay（补充复查）：手动/自动客户端安装器及生成的 shell 包装脚本跟随 `AGENT_INSIGHT_HOME`；补齐 Qwen、Hermes、Trae、Codex IDE、OpenClaw、Qoder 和 LlamaIndex 的配置/缓存默认路径。npm postinstall 与启动共用数据库选择逻辑，自定义路径时不迁移旧默认库。IDE 进程须继承运行根，显式组件路径仍优先；已有安装不自动搬迁。
+
+> 2026-09-22 working-tree overlay：移除 `AGENT_INSIGHT_DATA_DIR` 根目录兼容，非空旧变量明确报错；只使用 `AGENT_INSIGHT_HOME`，默认路径和 Docker 挂载不变。统一服务端 Trace spool、常驻客户端与 Pi Collector 查找路径，npm 启动保留数据库覆盖优先级，更新测试隔离和迁移说明。此条取代下方旧变量兼容说明。
+
+> 2026-09-22 working-tree overlay：SWE-bench 自动准备统一使用 `SWE_BENCH_DATASET_SOURCE` 和 `SWE_BENCH_SOURCE_ARCHIVE_SOURCE`，均接受 HTTP(S) 地址或本机文件路径，显式留空使用官方来源。本机来源只读校验，缺失或哈希错误直接失败；远程来源继续复用缓存并校验 SHA-256。旧 PATH / URL 变量仅在新变量未设置时兼容，更新配置模板及安装指南。
+
+> 2026-09-21 working-tree overlay：运行目录主变量统一为 `AGENT_INSIGHT_HOME`，实际数据子目录由内部 `AGENT_INSIGHT_STORAGE_DIR` 表示，并兼容旧 `AGENT_INSIGHT_DATA_DIR` 根目录语义。`DATABASE_URL` 支持启动命令、用户环境文件和默认值三级覆盖；SWE-bench 自动准备可通过 `AGENT_INSIGHT_BENCHMARK` 常驻启用，同时支持内网数据集与源码归档 URL，继续执行固定 SHA-256 校验。
+
+> 2026-09-21 working-tree overlay：常驻客户端的 Agent、模型与 FI 能力刷新会同步原子替换 Benchmark 执行器的 Agent Runtime 注册表，并在本地同步完成后才向服务端发布能力。运行期间新增、恢复或失效的 Runtime 无需重启即可作用于新任务，已开始的任务不受注册表刷新影响。
+
+> 2026-09-21 working-tree overlay：SWE-bench x86-64 官方模式默认使用两个公开 SWR Verified 镜像仓库，并支持通过 `SWE_BENCH_VERIFIED_MIRROR_REPOS` 覆盖或以空值禁用；按列表依次尝试，未命中再走既有代理和 Docker Hub 官方源，并冻结实际 registry digest。ARM64、Epoch、数据集镜像字段和官方 Harness 不变。
+
 > 2026-09-21 working-tree overlay：Goal Plus 不再作为用户可选 framework 或独立安装步骤；Pi bundle 内置 Agent Insight 自有的休眠观察器，仅在结构化 `/goal-plus` start 证据与 `.gp` 中当前 Pi native session invocation 一致时自动 attach、scan 并确保 watcher。普通 Pi 与增强失败继续采集主 Trace；旧 `frameworks=goal-plus` 映射为 Pi。更新 Goal Plus 用户、开发与三阶段设计文档，未修改 Goal Plus 仓库。
 
 > 2026-09-21 working-tree overlay：Goal Plus 主 binding 在结构化 ID 到达后立即异步 flush，并在任务结束时兜底重试；reported 端点通过 session binding 映射真实 Trace，并在 binding/Execution 晚到时重算。默认主列表将“已声明 worker”与“可合并 links”分离，worker 先到时立即隐藏，主从两端完整后才进入主 Trace 子树，避免运行中独立展示、结束后再合并的跳变。

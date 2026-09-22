@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
+function getAgentInsightHome() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => os.homedir()))
+}
 
 const fs = require("node:fs");
 const http = require("node:http");
@@ -19,7 +24,7 @@ const {
 let activeRuntime;
 
 function collectorConfigPath() {
-  return path.join(os.homedir(), ".agent-insight", "collectors", "codex", "config.json");
+  return path.join(getAgentInsightHome(), "collectors", "codex", "config.json");
 }
 
 function readCollectorConfig() {

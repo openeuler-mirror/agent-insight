@@ -10,7 +10,10 @@ from typing import Any
 
 
 def _default_home() -> Path:
-    return Path(os.environ.get("AGENT_INSIGHT_HOME", Path.home() / ".agent-insight"))
+    if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+        raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.")
+    root = os.environ.get("AGENT_INSIGHT_HOME") or str(Path.home() / ".agent-insight")
+    return Path(os.path.expandvars(root)).expanduser().resolve()
 
 
 def _default_spool_root() -> Path:

@@ -32,6 +32,12 @@ description: "不发布 npm 包，直接用本地 npm pack 产物在服务器上
 > [5 分钟上手 · 用法三：挂载源码运行](./quickstart#用法三挂载源码运行代码更新后重启即可生效)。
 > 该路径的依赖来自镜像，源码新增依赖时仍需重建镜像。
 
+## 运行目录变量迁移
+
+运行根使用 `AGENT_INSIGHT_HOME`，容器默认 `/data/agent-insight`，原数据卷挂载和 `data/witty_insight.db` 路径不变。旧 `AGENT_INSIGHT_DATA_DIR` 非空时新版会明确报错；重建镜像，并将 compose、启动命令或环境文件中的旧变量改名（值保持原根目录），不要同时保留旧变量。挂载新版源码但仍使用旧 entrypoint 的容器也应更新镜像。
+
+主服务与客户端可以位于不同机器，`AGENT_INSIGHT_HOME` 是各自机器上的本地目录，不是共享存储地址。自定义客户端目录时，应在运行安装脚本前导出该变量；IDE 采集器还需要启动 IDE 的进程继承它。默认不设置即可继续使用 `~/.agent-insight`，已有文件不会自动迁移。npm 安装和启动均支持 `DATABASE_URL` 覆盖；测试安装也要传入测试数据库地址，避免初始化默认数据库。
+
 ## 本地准备
 
 在项目根目录执行。注意：`npm pack` 不会自动重新编译 `.next/standalone`，它只会把当前已有的构建产物打进包里；测试本地改动前要先清理并重新构建：
@@ -84,7 +90,7 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
-    AGENT_INSIGHT_DATA_DIR=/data/agent-insight \
+    AGENT_INSIGHT_HOME=/data/agent-insight \
     PATH=/app/node_modules/.bin:$PATH \
     OPENCODE_BIN=/app/node_modules/.bin/opencode
 
@@ -211,7 +217,7 @@ docker exec -it agent-insight sh
 容器内执行：
 
 ```bash
-echo $AGENT_INSIGHT_DATA_DIR
+echo $AGENT_INSIGHT_HOME
 ls -lah /data/agent-insight/data
 ls -lah /data/agent-insight/data/storage/skills
 ```

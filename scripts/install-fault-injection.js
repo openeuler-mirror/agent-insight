@@ -13,6 +13,7 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 const { spawn, spawnSync } = require('child_process')
 const { randomBytes } = require('crypto')
 const {
@@ -20,7 +21,7 @@ const {
   verifyManagedPython,
 } = require('./lib/fi-python-runtime')
 
-const home = path.join(os.homedir(), '.agent-insight', 'fault-injection')
+const home = path.join(getAgentInsightHome(), 'fault-injection')
 
 function normalizeHost(host) {
   let value = String(host || '')

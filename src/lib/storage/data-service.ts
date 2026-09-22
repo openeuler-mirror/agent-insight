@@ -63,6 +63,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'llamaindex',
     'pi-agent',
     'deepseek-harness',
+    'trae',
 ]);
 
 export interface InvokedSkill {

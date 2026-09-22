@@ -84,13 +84,15 @@ Linux 常驻客户端会在轮换设备凭证前确定 systemd 层级并预检 m
 
 环境变量（安装前后常用）：
 
+自定义运行根时，先在执行安装命令的终端中 `export AGENT_INSIGHT_HOME="/absolute/path/agent-insight"`。手动和自动安装器都会将配置、下载组件、缓存和生成的启动脚本放在该目录；生成的 shell 启动脚本保存安装时的运行根，常驻服务也保存该值。不是把变量写进目标 `.env` 来改变其自身位置。IDE 内运行的采集器需要 IDE 进程继承同一个变量（设置后重启 IDE）；单独指定的采集器配置/缓存路径仍优先。已有安装不会自动搬迁，应以同一目录重新安装组件。
+
 | 变量 | 作用 |
 |------|------|
 | `AGENT_INSIGHT_HOST` | Insight 基址（写入事件 URL） |
 | `AGENT_INSIGHT_API_KEY` | 旁路上报鉴权（`x-witty-api-key`） |
 | `AGENT_INSIGHT_RAS=0` | **跳过** RAS 安装 |
 | `AGENT_INSIGHT_RAS_HOME` | 覆盖默认 `~/.agent-insight/ras` |
-| `AGENT_INSIGHT_DATA_DIR` | 覆盖整个数据根 |
+| `AGENT_INSIGHT_HOME` | 覆盖整个运行根；旧 `AGENT_INSIGHT_DATA_DIR` 已移除，非空时报错，请改名并保留原根路径 |
 | `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` | 覆盖 pin 包（源码/私有 .tgz URL） |
 | `AGENT_INSIGHT_CLIENT_SOURCE=local` | 仅开发调试：显式使用当前目录的常驻客户端安装器；默认不用本地 checkout |
 | `AGENT_INSIGHT_RAS_EVENTS_URL` | 直接指定 events URL |

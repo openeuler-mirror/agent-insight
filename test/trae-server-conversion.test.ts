@@ -19,7 +19,8 @@ import * as os from "os"
 const savedEnv = { ...process.env }
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "trae-server-conversion-"))
 process.env.DATABASE_URL = `file:${path.join(testDir, "test.db")}`
-process.env.AGENT_INSIGHT_DATA_DIR = testDir
+process.env.AGENT_INSIGHT_HOME = testDir
+delete process.env.AGENT_INSIGHT_DATA_DIR
 delete process.env.DB_HOST
 
 type SaveResult = { record: any }

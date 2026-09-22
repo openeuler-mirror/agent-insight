@@ -9,6 +9,7 @@ import json
 import hashlib
 import logging
 import os
+
 import threading
 import time
 from pathlib import Path
@@ -17,6 +18,9 @@ from typing import Any
 from otel_spans import SessionSpanBuffer
 from otlp_http import post_otlp_traces
 from session_ids import strip_platform_prefix
+
+if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+    raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +44,7 @@ _DONE_OUTCOMES = {
 
 
 def _insight_home() -> Path:
-    data = (os.environ.get("AGENT_INSIGHT_DATA_DIR") or "").strip()
+    data = os.path.expanduser(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or "")).strip()
     if data:
         return Path(data)
     return Path.home() / ".agent-insight"

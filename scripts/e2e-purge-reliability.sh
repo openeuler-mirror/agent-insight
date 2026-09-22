@@ -6,7 +6,11 @@ set -euo pipefail
 
 EXECUTE=0
 TEST_HOME="${TEST_HOME:-$HOME}"
-DATA_ROOT="${AGENT_INSIGHT_DATA_DIR:-$TEST_HOME/.agent-insight}"
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME." >&2
+  exit 1
+fi
+DATA_ROOT="${AGENT_INSIGHT_HOME:-$TEST_HOME/.agent-insight}"
 OPENCODE_DIR="${XDG_CONFIG_HOME:-$TEST_HOME/.config}/opencode"
 XIAOO_DIR="${XIAOO_HOME:-$TEST_HOME/.xiaoo}"
 
@@ -20,7 +24,7 @@ Usage: scripts/e2e-purge-reliability.sh [--execute] [--help]
 
 Env:
   TEST_HOME              Home root to purge (default: $HOME)
-  AGENT_INSIGHT_DATA_DIR Override data dir (default: $TEST_HOME/.agent-insight)
+  AGENT_INSIGHT_HOME     Override Agent Insight home (default: $TEST_HOME/.agent-insight)
   XIAOO_HOME             Xiaoo config root (default: $TEST_HOME/.xiaoo)
 EOF
 }
@@ -62,9 +66,9 @@ if [ "$EXECUTE" -ne 1 ]; then
   exit 0
 fi
 
-if [ "$TEST_HOME" = "$HOME" ] && [ -z "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
-  echo "Refusing --execute against real \$HOME without AGENT_INSIGHT_DATA_DIR." >&2
-  echo "Set TEST_HOME to a dedicated path, or set AGENT_INSIGHT_DATA_DIR." >&2
+if [ "$TEST_HOME" = "$HOME" ] && [ -z "${AGENT_INSIGHT_HOME:-}" ]; then
+  echo "Refusing --execute against real \$HOME without AGENT_INSIGHT_HOME." >&2
+  echo "Set TEST_HOME to a dedicated path, or set AGENT_INSIGHT_HOME." >&2
   exit 1
 fi
 

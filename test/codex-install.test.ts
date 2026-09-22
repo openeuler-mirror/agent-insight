@@ -6,6 +6,7 @@ import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { isolatedHomeEnv, useIsolatedHome } from './helpers/isolated-home'
 import { createRequire } from "node:module"
 import AdmZip from "adm-zip"
 
@@ -66,6 +67,7 @@ const BUNDLE_ENTRIES = [
   "codex/vscode-extension/extension.vsixmanifest",
   "codex/vscode-extension/ide-trace-core.cjs",
   "codex/vscode-extension/package.json",
+  "shared/install-modules.cjs",
   "shared/trace-transport.cjs",
 ]
 
@@ -85,7 +87,8 @@ function resolveBashCommand(): string | undefined {
 const BASH_COMMAND = resolveBashCommand()
 
 async function tempDir(t: test.TestContext) {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-install-"))
+  const dir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "codex-install-")))
+  useIsolatedHome(t, dir)
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   return dir
 }
@@ -160,10 +163,9 @@ async function runBashInstaller(source: string, homeDir: string) {
     "--skip-version-check",
   ], {
     input: source,
-    env: {
-      ...process.env,
+    env: isolatedHomeEnv(homeDir, {
       AGENT_INSIGHT_API_KEY: "test-codex-key",
-    },
+    }),
   })
 }
 
@@ -174,12 +176,11 @@ async function runPowerShellInstaller(source: string, homeDir: string) {
     "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
   ].join("; ")
   return runProcess("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], {
-    env: {
-      ...process.env,
+    env: isolatedHomeEnv(homeDir, {
       AGENT_INSIGHT_API_KEY: "test-codex-key",
       AGENT_INSIGHT_CODEX_INSTALLER_HOME: homeDir,
       AGENT_INSIGHT_CODEX_INSTALLER_SOURCE: Buffer.from(source).toString("base64"),
-    },
+    }),
   })
 }
 
@@ -737,7 +738,8 @@ test("Codex version parser accepts the baseline and newer semantic releases", ()
 })
 
 test("installer accepts a future Codex CLI from an isolated PATH", async (t) => {
-  const binDir = await tempDir(t)
+  const binDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'codex-test-bin-'))
+  t.after(() => fsp.rm(binDir, { recursive: true, force: true }))
   const homeDir = await tempDir(t)
   const commandName = process.platform === "win32" ? "codex.cmd" : "codex"
   const commandPath = path.join(binDir, commandName)

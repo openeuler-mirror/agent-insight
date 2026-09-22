@@ -98,7 +98,8 @@ test('AcTrail lifecycle: OTLP endpoint, spool, persistence and both observe read
   fs.writeFileSync(databasePath, '');
   delete process.env.DB_HOST;
   process.env.DATABASE_URL = `file:${databasePath}`;
-  process.env.AGENT_INSIGHT_DATA_DIR = path.join(root, 'data');
+  delete process.env.AGENT_INSIGHT_DATA_DIR;
+  process.env.AGENT_INSIGHT_HOME = path.join(root, 'data');
   process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR = path.join(root, 'spool');
   process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = path.join(root, 'generic');
   process.env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR = path.join(root, 'opencode');

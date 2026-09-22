@@ -12,6 +12,7 @@ const {
   migrateDataIfNeeded
 } = require('./utils.js')
 const { syncGeneratedPrismaClient } = require('./sync-prisma-client.js')
+const { resolveStartupDatabaseUrl } = require('./agent-insight-home.cjs')
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
@@ -64,7 +65,16 @@ function syncStandaloneSharp(packageRoot, standaloneDir) {
 console.log('=== Agent-Insight Post-Install Initialization ===\n')
 
 try {
-  migrateDataIfNeeded()
+  const dataRoot = getDataRoot()
+  const envPath = path.join(dataRoot, '.env')
+  const fileEnv = fs.existsSync(envPath) ? require('dotenv').parse(fs.readFileSync(envPath)) : {}
+  const dbUrl = resolveStartupDatabaseUrl(fileEnv, process.env, dataRoot)
+  const dbPath = dbUrl.startsWith('file:') ? dbUrl.slice(5) : dbUrl
+  if (!process.env.AGENT_INSIGHT_HOME && !process.env.DATABASE_URL && !fileEnv.DATABASE_URL) {
+    migrateDataIfNeeded()
+  }
+  process.env.AGENT_INSIGHT_HOME = dataRoot
+  process.env.DATABASE_URL = dbUrl
   console.log()
 
   ensureEnvFile()
@@ -73,10 +83,6 @@ try {
   ensureDataDirectory()
   console.log()
 
-  const dataRoot = getDataRoot()
-  const dbPath = path.join(dataRoot, 'data', 'witty_insight.db')
-  const dbUrl = `file:${dbPath}`
-  process.env.DATABASE_URL = dbUrl
   const standaloneDir = path.join(PACKAGE_ROOT, '.next', 'standalone')
 
   console.log('Generating Prisma client...')

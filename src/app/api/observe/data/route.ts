@@ -13,8 +13,8 @@ import { listTraceTags } from '@/lib/trace-tags';
 import { parseObserveTraceTagFilters } from '@/lib/trace-tag-filters';
 import { deriveAnomalyStatus, normalizeAnomalyFilter } from '@/lib/reliability/anomaly-status';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
+import { getAgentInsightHome } from '@/lib/env';
 import {
     hasAssistantOutput,
     inferQuietWindowTraceCompletedAt,
@@ -109,7 +109,7 @@ function isPidAlive(pid: number): boolean {
 
 function getOpencodeSpoolDir(): string {
     return process.env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR
-        || path.join(os.homedir(), fs.existsSync(path.join(os.homedir(), '.agent-insight')) ? '.agent-insight' : '.skill-insight', 'otel_data', 'opencode');
+        || path.join(getAgentInsightHome(), 'otel_data', 'opencode');
 }
 
 function getOpencodeTelemetryIndex(): Map<string, { hasShutdown: boolean; pids: Set<number> }> {
