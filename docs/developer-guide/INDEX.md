@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-22 working-tree overlay：接入独立协作图和普通 reported Trace 合并。普通事件无需预绑定，按当前用户内精确 Session/Execution 身份解析；唯一调用位置挂树，其余成员并列展示。保留 Goal Plus reported 的已声明 worker 隐藏集合、pending 状态和逐 worker 就绪合并，以及历史 semantic 端点状态；普通 reported 的身份歧义不得由历史持久状态覆盖。
+
 > 2026-09-21 working-tree overlay：Goal Plus 不再作为用户可选 framework 或独立安装步骤；Pi bundle 内置 Agent Insight 自有的休眠观察器，仅在结构化 `/goal-plus` start 证据与 `.gp` 中当前 Pi native session invocation 一致时自动 attach、scan 并确保 watcher。普通 Pi 与增强失败继续采集主 Trace；旧 `frameworks=goal-plus` 映射为 Pi。更新 Goal Plus 用户、开发与三阶段设计文档，未修改 Goal Plus 仓库。
 
 > 2026-09-21 working-tree overlay：Goal Plus 主 binding 在结构化 ID 到达后立即异步 flush，并在任务结束时兜底重试；reported 端点通过 session binding 映射真实 Trace，并在 binding/Execution 晚到时重算。默认主列表将“已声明 worker”与“可合并 links”分离，worker 先到时立即隐藏，主从两端完整后才进入主 Trace 子树，避免运行中独立展示、结束后再合并的跳变。
@@ -48,7 +50,7 @@
 
 > 2026-09-05 working-tree overlay：Benchmark 扩展契约对齐高保真开发者模型。`benchmark.yaml` 成为 Manifest 唯一真源，构建期 Generator 生成平台 Adapter、Manifest 与 Evaluator Catalog；`AbstractBenchmarkAdapter` 收敛为五个业务 hook 并统一执行 Case/Result Schema 与 public/private 边界校验。执行器删除 SWE-bench Profile，改用 Workspace、Agent Runtime 和 Artifact Collector 三类通用能力注册表并支持多 Artifact；评测 Worker 删除 SWE-bench 直接依赖，改用 `doctor`、`evaluate --request ... --output ...` 文件 Entrypoint。SWE-bench 仅作为 `benchmarks/swe-bench/` 接入实例；新增 Benchmark 通常不改公共 API、调度器、执行器 Runner、评测 Worker 或 Prisma Schema。
 
-当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；支持显式 Session 到 Trace 绑定、原始调用步骤定位、迟到 Trace 自动重算，以及 Goal Plus 逻辑主节点到 worker 成员的服务端投影。Goal Plus 仅在唯一主 Trace 时关联具体 Execution，active native Session 唯一对应的 passive canonical main 优先于历史 main，多候选仍保持歧义，且不修改原生树或完整性口径；独立协作入口暂不开放，通用 Trace 的仅主列表隐藏已投影 worker，详情直接从既有 Goal Plus 精确关联只读生成带来源标识的 TASK / 子 Agent 树。当前 passive canonical main 与 Pi 的 `<nativeSessionId>__taskN` 主任务仅在明确 `/goal-plus` 且唯一命中时允许只读显示兜底，通用 reported collaboration 行为不变。
+当前工作树新增跨 Session 协作关系后端：不可变事件与可重算端点关联分离，外部关系接口和只读查询按用户隔离；支持显式 Session 到 Trace 绑定、原始调用步骤定位、迟到 Trace 自动重算，以及 Goal Plus 逻辑主节点到 worker 成员的服务端投影。Goal Plus 仅在唯一主 Trace 时关联具体 Execution，active native Session 唯一对应的 passive canonical main 优先于历史 main，多候选仍保持歧义，且不修改原生树或完整性口径；历史版本中独立协作入口暂不开放（已由文末 v0.9 更新替代），通用 Trace 的仅主列表隐藏已投影 worker，详情直接从既有 Goal Plus 精确关联只读生成带来源标识的 TASK / 子 Agent 树。当前 passive canonical main 与 Pi 的 `<nativeSessionId>__taskN` 主任务仅在明确 `/goal-plus` 且唯一命中时允许只读显示兜底，通用 reported collaboration 行为不变。
 
 本轮工作树补充 Goal Plus 重关联事务化、同 source 并发合并、当前 Search run 归属收敛，以及列表/详情共用成员查询和懒加载正文版本校验。历史采集数据、原生父子关系和 reported 跨 Session 协议不变；对应更新 `12-goal-plus-observability.md`、`13-cross-session-collaboration.md`，其他历史指南未重新生成。
 
@@ -124,7 +126,7 @@
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
 - [11-usage-analytics.md](11-usage-analytics.md)：平台用量统计（管理员专用）。有效使用口径注册表、有界队列与故障隔离约束、双数据库存储契约、新增统计事件的方法。
 - [12-goal-plus-observability.md](12-goal-plus-observability.md)：重构后 Goal Plus 的 Pi 主绑定、worker OTLP、关系 outbox 与主从 Trace 展示契约。
-- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 绑定/关系事件、端点解析、查询 API 与 reported Goal Plus 投影。
+- [13-cross-session-collaboration.md](13-cross-session-collaboration.md)：跨 Session 关系事件、自动身份解析、协作图、Trace 合并与 Goal Plus 专用投影。
 - [benchmark/README.md](benchmark/README.md)：自定义 Benchmark 的客户入口、需求发现、统一接入开发规范和[整体服务安装指南](benchmark/service-deployment-guide.md)。
 - [qoder-cn-acceptance-validation.md](../design/qoder-cn-trace-validation/qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
 - [qoder-cn-cross-machine-validation.md](../design/qoder-cn-trace-validation/qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
@@ -166,4 +168,6 @@
 
 本次合并保留本地跨 Session 协作后端、Goal Plus worker 投影及其事务一致性修复，并保留远程 Benchmark、文本评估器、Pi RAS 和 IDaaS 账号别名实现。具体契约分别见对应指南。
 
-本次基于 `8ce387aa` 合并跨 Session Trace 展示修复，保留 Goal Plus worker 投影、折叠与正文版本校验；显式上报关系使用独立投影，无定位时按顺序并列展示。
+当前协作功能同时提供独立关系图与 Trace 合并入口：普通 reported 事件无需预绑定，使用图查询中精确解析的 taskId；唯一定位的调用树与其余并列成员组成详情，循环和回传联系完整保留在图中。`source=raw`、懒加载来源和正文版本校验保持可用。
+
+Goal Plus reported 路径保留 `hiddenChildren` / `pendingChildren` 与逐 worker 就绪合并：已有 binding 的已声明 worker 即使仍 pending，也不会短暂回到默认主列表；详情只合并两端就绪的 links。普通 reported 成员缺失、权限或容量异常时保留原列表。历史 Goal Plus semantic 关系保留持久化端点状态，不能用该兜底覆盖普通事件当前的身份歧义。

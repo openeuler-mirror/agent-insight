@@ -54,6 +54,11 @@ test('explicit target evidence wins over conflicting order and respects locator'
     assert.equal(result.get('2')?.status, 'ambiguous');
     assert.equal(resolve([event('1', 'B', { fromLocator: { recordType: 'tool', name: 'other' } })], calls, bindings).get('1')?.status, 'not_found');
 });
+test('a logical binding alias is not evidence that the original call targeted its bound Trace', () => {
+    const bindings = [binding, { ...binding, sessionId: 'worker', traceSessionId: 'actual-worker' }];
+    const calls = [{ ...call('1'), targets: ['worker'] }];
+    assert.equal(resolve([event('1', 'worker')], calls, bindings).get('1')?.status, 'candidate');
+});
 test('overlapping shell/tool groups do not assign the same call twice', () => {
     const calls = [call('1'), call('2')].map(c => ({ ...c, command: 'run-agent' }));
     const events = [event('1'), event('2'), event('3', 'D', { fromLocator: { recordType: 'shell', commandContains: 'run-agent' } }), event('4', 'E', { fromLocator: { recordType: 'shell', commandContains: 'run-agent' } })];

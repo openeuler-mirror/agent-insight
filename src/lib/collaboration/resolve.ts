@@ -96,19 +96,20 @@ function located(status: 'confirmed' | 'time_ordered', call: Call, count: number
         position: { interactionIndex: call.interactionIndex, callIndex: call.callIndex, callKey: call.key, recordSource: call.recordSource },
     };
 }
-export function resolveAnchors(events: RelationEvent[], bindings: Map<string, Binding>, traces: Map<string, Trace>): Map<string, Anchor> {
+export function resolveAnchors(events: RelationEvent[], bindings: Map<string, Binding>, traces: Map<string, Trace>, nativeSessionIds: ReadonlyMap<string, string> = new Map()): Map<string, Anchor> {
     const anchors = new Map<string, Anchor>();
     const groups = new Map<string, { events: RelationEvent[]; calls: Call[]; source: string }>();
+    const matchesTarget = (sessionId: string, traceSessionId: string | undefined) => Boolean(traceSessionId && (sessionId === traceSessionId || nativeSessionIds.get(sessionId) === traceSessionId));
     for (const event of events) {
         const trace = traces.get(event.fromSessionId);
         const target = bindings.get(event.toSessionId)?.traceSessionId;
         const all = trace?.calls ?? [];
         const candidates = event.fromLocator ? all.filter(call => matches(call, event.fromLocator!)) : [];
-        const explicit = all.filter(call => target && call.targets.length === 1 && call.targets[0] === target && !call.failed && (!event.fromLocator || matches(call, event.fromLocator)));
+        const explicit = all.filter(call => call.targets.length === 1 && matchesTarget(call.targets[0], target) && !call.failed && (!event.fromLocator || matches(call, event.fromLocator)));
         if (trace?.state === 'pending') anchors.set(event.eventId, { status: 'pending', message: trace.message ?? 'Trace 查询暂不可用' });
         else if (explicit.length === 1) anchors.set(event.eventId, located('confirmed', explicit[0], 1, '原始调用记录明确关联目标 Session'));
         else if (!event.fromLocator) anchors.set(event.eventId, { status: 'not_provided', message: '未提供定位配置且无唯一明确调用依据' });
-        else if (trace?.state !== 'resolved') anchors.set(event.eventId, { status: 'waiting_trace', message: '等待明确绑定的发起方 Trace' });
+        else if (trace?.state !== 'resolved') anchors.set(event.eventId, { status: 'waiting_trace', message: '等待可唯一关联的发起方 Trace' });
         else {
             const status = candidates.length === 0 ? 'not_found' : candidates.length === 1 ? 'candidate' : 'ambiguous';
             anchors.set(event.eventId, {
@@ -154,7 +155,7 @@ export function resolveAnchors(events: RelationEvent[], bindings: Map<string, Bi
             const claims = directClaims.get(canonical([binding.traceSessionId, calls[index].key])) ?? [];
             return (anchor.status === 'confirmed' && anchor.position?.callKey !== calls[index].key)
                 || (claims.length > 0 && (claims.length !== 1 || claims[0].eventId !== event.eventId))
-                || (calls[index].targets.length > 0 && (!target || calls[index].targets[0] !== target));
+                || (calls[index].targets.length > 0 && !matchesTarget(calls[index].targets[0], target));
         });
         if (conflict) { reject('顺序与明确调用证据冲突，保留明确对应'); continue; }
         ordered.forEach((event, index) => {
