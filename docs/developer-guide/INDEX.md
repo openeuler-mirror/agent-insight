@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `61cefb3a45a7c8421a966c194f387b2f333f5573` (`61cefb3a`) |
-| Branch | `bench-9-16` |
-| Date | 2026-09-17 |
-| Author | mintuyang |
-| Subject | `修复xiaoo安装问题` |
-| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
+| Commit | `0c3c38e96ec320d976912ec08e1dfe2515ac9df4` (`0c3c38e9`) |
+| Branch | `codex/master-830-fixes-20260922` |
+| Date | 2026-09-22 |
+| Author | gyctl |
+| Subject | `fix: 同步830安装与链路追踪通用修复到master` |
+| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 本次更新安装与 Trace 指南、生命周期及前端契约，保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 
 > 2026-09-21 working-tree overlay：Goal Plus 不再作为用户可选 framework 或独立安装步骤；Pi bundle 内置 Agent Insight 自有的休眠观察器，仅在结构化 `/goal-plus` start 证据与 `.gp` 中当前 Pi native session invocation 一致时自动 attach、scan 并确保 watcher。普通 Pi 与增强失败继续采集主 Trace；旧 `frameworks=goal-plus` 映射为 Pi。更新 Goal Plus 用户、开发与三阶段设计文档，未修改 Goal Plus 仓库。
 
