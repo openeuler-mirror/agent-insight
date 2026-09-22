@@ -21,7 +21,7 @@ const { classifyTool, parseMcpIdentity, usageFrom } = require("../../shared/pi-t
 const { safeStableRead } = require("./gp-snapshot-parser.cjs");
 
 const IMPORT_CHECKPOINT_VERSION = 1;
-const OUTCOME_DERIVATION_VERSION = 2;
+const OUTCOME_DERIVATION_VERSION = 3;
 const GOAL_PLUS_UPLOAD_MAX_BATCHES_PER_FLUSH = 10;
 const FAILURE_TERMINAL_STATES = new Set([
   "error",
@@ -32,6 +32,18 @@ const FAILURE_TERMINAL_STATES = new Set([
   "blocked",
   "invalidated",
   "timed_out",
+]);
+const SUCCESS_TERMINAL_STATES = new Set([
+  "complete",
+  "completed",
+  "success",
+  "succeeded",
+  "done",
+  "passed",
+  "promoted",
+  "stop",
+  "stopped",
+  "exhausted",
 ]);
 
 function stableJson(value) {
@@ -80,7 +92,7 @@ function eventFingerprint(event) {
   return `sha256:${sha256(stableJson(redactValue(event)))}`;
 }
 
-function runtimeOutcome(descriptor, lastAssistantFailed, hasPendingTools) {
+function runtimeOutcome(descriptor, lastAssistantFailed) {
   const terminalState = String(descriptor.terminalState || "").toLowerCase();
   const progressStatus = String(descriptor.progressStatus || "").toLowerCase();
   const exitCode = descriptor.exitCode == null ? undefined : Number(descriptor.exitCode);
@@ -93,6 +105,11 @@ function runtimeOutcome(descriptor, lastAssistantFailed, hasPendingTools) {
     && !timedOut
     && controlledEvidence;
   const unexpectedExit = Number.isFinite(exitCode) && exitCode !== 0 && !controlledTermination;
+  const terminal = FAILURE_TERMINAL_STATES.has(terminalState)
+    || SUCCESS_TERMINAL_STATES.has(terminalState)
+    || FAILURE_TERMINAL_STATES.has(progressStatus)
+    || SUCCESS_TERMINAL_STATES.has(progressStatus)
+    || Number.isFinite(exitCode);
   const failed = lastAssistantFailed
     || runnerFailed
     || timedOut
@@ -122,7 +139,7 @@ function runtimeOutcome(descriptor, lastAssistantFailed, hasPendingTools) {
     runnerFailed,
     runtimeState: failed
       ? timedOut || terminalState === "timed_out" ? "timed_out" : "failed"
-      : hasPendingTools ? "running" : "completed",
+      : terminal ? "completed" : "running",
     terminalState,
     timedOut,
   };
@@ -546,7 +563,7 @@ async function parsePiSession(root, descriptor) {
       tool: { name: pending.toolName, type: classifyTool(pending.toolName), arguments: pending.args },
     });
   }
-  const outcome = runtimeOutcome(descriptor, lastAssistantFailed, pendingTools.size > 0);
+  const outcome = runtimeOutcome(descriptor, lastAssistantFailed);
   events.push({
     eventId: stableEventId(sessionId, agentSpanId),
     sessionId,
@@ -556,7 +573,7 @@ async function parsePiSession(root, descriptor) {
     name: "agent.pi",
     startTimeMs: startedAt,
     endTimeMs: endedAt,
-    status: outcome.failed ? "error" : pendingTools.size ? "running" : "success",
+    status: outcome.failed ? "error" : outcome.runtimeState === "completed" ? "success" : "running",
     error: outcome.error,
     input,
     output: messageText(lastAssistant),

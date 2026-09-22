@@ -16,6 +16,12 @@ const require = createRequire(import.meta.url)
 const { isSupportedPiVersion } = require("../scripts/agent-trace-collectors/pi-agent/install.cjs")
 
 const BUNDLE_ENTRIES = [
+  "goal-plus/goal-plus-collector.cjs",
+  "goal-plus/install.cjs",
+  "goal-plus/lib/gp-snapshot-parser.cjs",
+  "goal-plus/lib/pi-native-parser.cjs",
+  "goal-plus/lib/source-registry.cjs",
+  "goal-plus/uninstall.cjs",
   "pi-agent/extensions/pi-agent-insight.ts",
   "pi-agent/install.cjs",
   "pi-agent/lib/pi-trace-core.cjs",
@@ -240,6 +246,11 @@ test("PowerShell bootstrap installs a valid Pi bundle end to end", async (t) => 
   assert.match(result.output, /collector installed/)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "pi-agent", "extensions", "pi-agent-insight.ts")), true)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json")), true)
+  assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "goal-plus", "goal-plus-collector.cjs")), true)
+  const piConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json"), "utf8"))
+  assert.equal(piConfig.goalPlusObserverEnabled, true)
+  const goalPlusConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "goal-plus", "config.json"), "utf8"))
+  assert.equal(goalPlusConfig.managedBy, "pi-agent")
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "shared", "trace-transport.cjs")), true)
 })
 

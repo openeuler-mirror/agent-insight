@@ -3,7 +3,8 @@ import { CollaborationService } from './service';
 import { collaborationLog, failureDetails } from './log';
 import type { Anchor } from './resolve';
 
-export interface TraceLink { parent: string; child: string; anchor: Anchor; sequential?: boolean; order?: string }
+export interface TraceLink { parent: string; child: string; anchor: Anchor; sequential?: boolean; order?: string; independent?: boolean }
+export interface CollaborationProjectionPlan { hiddenChildren: string[]; pendingChildren: string[]; links: TraceLink[] }
 
 export function resolveTraceForest(links: TraceLink[]): TraceLink[] {
     const parents = new Map<string, Set<string>>();
@@ -54,55 +55,99 @@ class ProjectionLimitError extends Error {}
 
 export class CollaborationProjection {
     constructor(private service: CollaborationService) {}
-    async links(user: string): Promise<TraceLink[]> {
+    async plan(user: string): Promise<CollaborationProjectionPlan> {
         try {
             const groups = await this.service.store.sql.rows<{ collaborationId: string }>(
                 'SELECT "collaborationId" FROM "Collaboration" WHERE "user"=? AND "id" IN (SELECT "collaborationDbId" FROM "CollaborationEvent" WHERE "sourceType"=\'reported\') ORDER BY "collaborationId" LIMIT 201', [user]);
             if (groups.length > 200) throw new ProjectionLimitError('协作组超过 200，保留原列表');
-            const links: TraceLink[] = [];
-            const unavailable = new Set<string>();
-            const sizes = new Map<string, number>();
+            const claimedGoalPlusChildren = new Set<string>();
+            const inputs: Array<{ collaborationId: string; ids: Map<string, string>; goalPlus: boolean }> = [];
             for (const group of groups) {
-                const graph = await this.service.graph(user, group.collaborationId, 0, 2000);
-                const nodes = new Map(graph.nodes.map(node => [node.sessionId, node]));
-                const bindings = (await this.service.store.snapshot(user, group.collaborationId, 0, 1)).bindings;
+                const snapshot = await this.service.store.snapshot(user, group.collaborationId, 0, 1);
+                const bindings = snapshot.bindings;
                 const ids = new Map(bindings.map(binding => [binding.sessionId, binding.traceSessionId]));
-                for (const id of new Set(ids.values())) {
-                    if (sizes.has(id)) continue;
-                    if (sizes.size >= 200) throw new ProjectionLimitError('Trace 投影超过 200 个 Session');
-                    const rows = await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number }>(
-                        'SELECT LENGTH(s."interactions") AS bytes, s."langfuseTraceNodes" AS embedded, e."isSubagent" FROM "Session" s JOIN "Execution" e ON e."taskId"=s."taskId" AND e."user"=s."user" WHERE s."user"=? AND s."taskId"=? LIMIT 2', [user, id]);
-                    sizes.set(id, Number(rows[0]?.bytes ?? 0));
-                    if (rows.length !== 1 || !rows[0].bytes || rows[0].bytes <= 2 || rows[0].isSubagent || (rows[0].embedded && rows[0].embedded !== '[]')) unavailable.add(id);
-                }
-                if ([...sizes.values()].reduce((sum, size) => sum + size, 0) > 32 * 1024 * 1024) throw new ProjectionLimitError('Trace 投影超过 32 MiB');
-                for (const event of graph.events) {
-                    const parent = ids.get(event.fromSessionId);
-                    const child = ids.get(event.toSessionId);
-                    if (!parent || !child) { if (parent) unavailable.add(parent); if (child) unavailable.add(child); continue; }
-                    links.push({ parent, child, anchor: event.fromAnchor as Anchor, sequential: !event.fromLocator, order: event.observedAt ?? event.receivedAt });
-                    if (!graph.resolutionComplete || !nodes.get(event.fromSessionId)?.executionId || !nodes.get(event.toSessionId)?.executionId) {
-                        unavailable.add(parent); unavailable.add(child);
+                const goalPlus = /^gp\.[a-f0-9]{32}$/.test(group.collaborationId);
+                if (goalPlus) {
+                    for (const row of snapshot.events) {
+                        if (row.sourceType !== 'reported') continue;
+                        let event: { fromSessionId?: string; toSessionId?: string };
+                        try { event = JSON.parse(row.bodyJson); } catch { continue; }
+                        if (event.fromSessionId !== 'main' || !event.toSessionId?.startsWith('worker:')) continue;
+                        const child = ids.get(event.toSessionId);
+                        if (child) claimedGoalPlusChildren.add(child);
                     }
                 }
-                if (!graph.resolutionComplete) for (const id of ids.values()) unavailable.add(id);
-                if (links.length > 2000) throw new ProjectionLimitError('协作关系超过 2000，保留原列表');
+                inputs.push({ collaborationId: group.collaborationId, ids, goalPlus });
             }
-            // Propagate unavailable data to the whole component before removing any list rows.
+            const strictLinks: TraceLink[] = [];
+            const independentLinks: TraceLink[] = [];
+            const unavailable = new Set<string>();
+            const sizes = new Map<string, number>();
+            const ready = new Map<string, boolean>();
+            try {
+                for (const input of inputs) {
+                    const graph = await this.service.graph(user, input.collaborationId, 0, 2000);
+                    const nodes = new Map(graph.nodes.map(node => [node.sessionId, node]));
+                    for (const id of new Set(input.ids.values())) {
+                        if (!sizes.has(id)) {
+                            if (sizes.size >= 200) throw new ProjectionLimitError('Trace 投影超过 200 个 Session');
+                            const rows = await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number }>(
+                                'SELECT LENGTH(s."interactions") AS bytes, s."langfuseTraceNodes" AS embedded, e."isSubagent" FROM "Session" s JOIN "Execution" e ON e."taskId"=s."taskId" AND e."user"=s."user" WHERE s."user"=? AND s."taskId"=? LIMIT 2', [user, id]);
+                            sizes.set(id, Number(rows[0]?.bytes ?? 0));
+                            ready.set(id, rows.length === 1 && Boolean(rows[0].bytes && rows[0].bytes > 2 && !rows[0].isSubagent && (!rows[0].embedded || rows[0].embedded === '[]')));
+                        }
+                        if (!input.goalPlus && !ready.get(id)) unavailable.add(id);
+                    }
+                    if ([...sizes.values()].reduce((sum, size) => sum + size, 0) > 32 * 1024 * 1024) throw new ProjectionLimitError('Trace 投影超过 32 MiB');
+                    for (const event of graph.events) {
+                        const parent = input.ids.get(event.fromSessionId);
+                        const child = input.ids.get(event.toSessionId);
+                        if (input.goalPlus) {
+                            if (event.fromSessionId !== 'main' || !event.toSessionId.startsWith('worker:')
+                                || !parent || !child || !graph.resolutionComplete
+                                || !nodes.get(event.fromSessionId)?.executionId || !nodes.get(event.toSessionId)?.executionId
+                                || !ready.get(parent) || !ready.get(child)) continue;
+                            independentLinks.push({ parent, child, anchor: event.fromAnchor as Anchor, sequential: !event.fromLocator, order: event.observedAt ?? event.receivedAt, independent: true });
+                            continue;
+                        }
+                        if (!parent || !child) { if (parent) unavailable.add(parent); if (child) unavailable.add(child); continue; }
+                        strictLinks.push({ parent, child, anchor: event.fromAnchor as Anchor, sequential: !event.fromLocator, order: event.observedAt ?? event.receivedAt });
+                        if (!graph.resolutionComplete || !nodes.get(event.fromSessionId)?.executionId || !nodes.get(event.toSessionId)?.executionId) {
+                            unavailable.add(parent); unavailable.add(child);
+                        }
+                    }
+                    if (!input.goalPlus && !graph.resolutionComplete) for (const id of input.ids.values()) unavailable.add(id);
+                    if (strictLinks.length + independentLinks.length > 2000) throw new ProjectionLimitError('协作关系超过 2000，保留原列表');
+                }
+            } catch (error) {
+                if (error instanceof ProjectionLimitError) throw error;
+                const hiddenChildren = [...claimedGoalPlusChildren];
+                collaborationLog.warn('Trace 合并查询失败，已声明 Goal Plus worker 继续隐藏', { user, stage: 'projection', hiddenChildren: hiddenChildren.length, ...failureDetails(error) });
+                return { hiddenChildren, pendingChildren: hiddenChildren, links: [] };
+            }
+            // Generic relationships hide children only when the whole component is mergeable.
             let changed = true;
             while (changed) {
                 changed = false;
-                for (const { parent, child } of links) if (unavailable.has(parent) || unavailable.has(child)) {
+                for (const { parent, child } of strictLinks) if (unavailable.has(parent) || unavailable.has(child)) {
                     for (const id of [parent, child]) if (!unavailable.has(id)) { unavailable.add(id); changed = true; }
                 }
             }
-            const resolved = resolveTraceForest(links).filter(link => !unavailable.has(link.parent) && !unavailable.has(link.child));
-            if (links.length) collaborationLog.info('Trace 合并关系已计算', { user, stage: 'projection', reportedRelations: links.length, mergedChildren: resolved.length, retainedRelations: links.length - resolved.length });
-            return resolved;
+            const resolved = resolveTraceForest([...strictLinks, ...independentLinks])
+                .filter(link => link.independent || (!unavailable.has(link.parent) && !unavailable.has(link.child)));
+            const hiddenChildren = [...new Set([...claimedGoalPlusChildren, ...resolved.map(link => link.child)])];
+            const mergedChildren = new Set(resolved.filter(link => link.independent).map(link => link.child));
+            const pendingChildren = [...claimedGoalPlusChildren].filter(child => !mergedChildren.has(child));
+            const reportedRelations = strictLinks.length + independentLinks.length;
+            if (reportedRelations || hiddenChildren.length) collaborationLog.info('Trace 合并关系已计算', { user, stage: 'projection', reportedRelations, hiddenChildren: hiddenChildren.length, pendingChildren: pendingChildren.length, mergedChildren: resolved.length, retainedRelations: reportedRelations - resolved.length });
+            return { hiddenChildren, pendingChildren, links: resolved };
         } catch (error) {
             collaborationLog.warn('Trace 合并查询失败，保留原始列表', { user, stage: 'projection', ...(error instanceof ProjectionLimitError ? { causeCode: 'PROJECTION_LIMIT', reason: error.message } : failureDetails(error)) });
-            return [];
+            return { hiddenChildren: [], pendingChildren: [], links: [] };
         }
+    }
+    async links(user: string): Promise<TraceLink[]> {
+        return (await this.plan(user)).links;
     }
     async interactions(user: string, root: string, load: (id: string) => Promise<{ session: { user?: string | null }; interactions: any[]; langfuseTraceNodes?: any[] } | null>) {
         const links = await this.links(user);
@@ -113,12 +158,17 @@ export class CollaborationProjection {
         }
         if (members.size === 1) return null;
         const result: any[] = [];
+        let includedChildren = 0;
         for (const [taskId, link] of members) {
             const parsed = await load(taskId);
-            if (!parsed || parsed.session.user !== user || !parsed.interactions.length) return null;
+            if (!parsed || parsed.session.user !== user || !parsed.interactions.length) {
+                if (link?.independent) continue;
+                return null;
+            }
             const version = createHash('sha256').update(JSON.stringify(parsed.interactions)).digest('hex');
             parsed.interactions.forEach((item, index) => result.push({ ...item, _collaboration: { taskId, index, version, parent: link?.parent, anchor: link?.anchor, sequential: link?.sequential, order: link?.order } }));
+            if (link) includedChildren += 1;
         }
-        return result;
+        return includedChildren ? result : null;
     }
 }

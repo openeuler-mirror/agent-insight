@@ -13,6 +13,7 @@ type LocatorMatch = {
 type StoredEvent = {
   id: string;
   collaborationDbId: string;
+  collaborationId: string;
   fromSessionId: string;
   toSessionId: string;
   fromLocatorJson: string | null;
@@ -107,10 +108,21 @@ export function findCollaborationLocatorMatches(
 async function resolveReportedEndpoint(event: StoredEvent, side: CollaborationEndpointSide): Promise<void> {
   if (event.sourceType !== 'reported') return;
   const sessionId = side === 'from' ? event.fromSessionId : event.toSessionId;
+  const binding = await prismaRaw.collaborationSessionBinding.findUnique({
+    where: {
+      user_collaborationId_sessionId: {
+        user: event.collaboration.user,
+        collaborationId: event.collaborationId,
+        sessionId,
+      },
+    },
+    select: { traceSessionId: true },
+  });
+  const traceSessionId = binding?.traceSessionId ?? sessionId;
   const matches = await prismaRaw.execution.findMany({
     where: {
       user: event.collaboration.user,
-      OR: [{ taskId: sessionId }, { agentSessionId: sessionId }],
+      OR: [{ taskId: traceSessionId }, { agentSessionId: traceSessionId }],
     },
     select: { id: true, taskId: true, agentSessionId: true, framework: true },
   });
@@ -119,17 +131,17 @@ async function resolveReportedEndpoint(event: StoredEvent, side: CollaborationEn
     await upsertCollaborationEndpointResolution(event.id, side, {
       state: 'linked',
       executionId: unique[0].id,
-      method: 'native_session_id',
-      evidence: { sessionId, framework: unique[0].framework },
+      method: binding ? 'session_binding' : 'native_session_id',
+      evidence: { sessionId, ...(binding ? { traceSessionId } : {}), framework: unique[0].framework },
     });
     return;
   }
   await upsertCollaborationEndpointResolution(event.id, side, {
     state: unique.length ? 'ambiguous' : 'pending',
-    method: unique.length ? 'native_session_id' : undefined,
+    method: unique.length ? (binding ? 'session_binding' : 'native_session_id') : undefined,
     evidence: unique.length
-      ? { sessionId, candidateExecutionIds: unique.map(match => match.id) }
-      : { sessionId },
+      ? { sessionId, ...(binding ? { traceSessionId } : {}), candidateExecutionIds: unique.map(match => match.id) }
+      : { sessionId, ...(binding ? { traceSessionId } : {}) },
   });
 }
 
@@ -281,11 +293,39 @@ export async function resolveCollaborationEndpointsForExecution(
 ): Promise<void> {
   const ids = [...new Set(sessionIds.filter(Boolean))];
   if (!ids.length) return;
+  const bindings = await prismaRaw.collaborationSessionBinding.findMany({
+    where: { user, traceSessionId: { in: ids } },
+    select: { collaborationId: true, sessionId: true },
+  });
   const events = await prismaRaw.collaborationEvent.findMany({
     where: {
       sourceType: 'reported',
       collaboration: { user },
-      OR: [{ fromSessionId: { in: ids } }, { toSessionId: { in: ids } }],
+      OR: [
+        { fromSessionId: { in: ids } },
+        { toSessionId: { in: ids } },
+        ...bindings.flatMap(binding => [
+          { collaborationId: binding.collaborationId, fromSessionId: binding.sessionId },
+          { collaborationId: binding.collaborationId, toSessionId: binding.sessionId },
+        ]),
+      ],
+    },
+    select: { id: true },
+  });
+  for (const event of events) await resolveCollaborationEventByDbId(event.id);
+}
+
+export async function resolveCollaborationEndpointsForBinding(
+  user: string,
+  collaborationId: string,
+  sessionId: string,
+): Promise<void> {
+  const events = await prismaRaw.collaborationEvent.findMany({
+    where: {
+      sourceType: 'reported',
+      collaboration: { user },
+      collaborationId,
+      OR: [{ fromSessionId: sessionId }, { toSessionId: sessionId }],
     },
     select: { id: true },
   });

@@ -327,7 +327,8 @@ Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台�
 ### 流程六：接入 Goal Plus
 
 Goal Plus 应已经安装在 Pi 中。Agent Insight 不安装或修改 Goal Plus 本体；在客户端安装页
-同时勾选 **Pi Agent** 和 **Goal Plus** 后，一键命令会配置两部分：
+只勾选 **Pi Agent** 即可。一键命令会配置 Pi 主采集器，并静默内置一个默认休眠的
+Goal Plus worker/关系观察器：
 
 - Pi Agent 采集器：上传 Pi 原生主 Trace，并上报本次 Goal Plus task 的主 Session 绑定；
 - Goal Plus collector：从 `.gp` 发现 Pi worker，上传 worker Trace、worker 绑定和主从关系。
@@ -335,18 +336,12 @@ Goal Plus 应已经安装在 Pi 中。Agent Insight 不安装或修改 Goal Plus
 配置完成后，继续在 Pi 中按原方式执行 `/goal-plus`。普通 Pi Trace 采集逻辑不变；只有真实
 Goal Plus start task 会生成主绑定，resume、pause、summary 等管理命令不会创建关系。
 
-要在主 Trace 下看到 worker，必须 attach 当前工作区的 `.gp`。在工作区根目录执行一键命令时，
-脚本会自动完成 `attach`、首次 `scan` 和 watcher 启动；否则按输出提示手工运行：
+要在主 Trace 下看到 worker，不需要手工 attach。执行真实 `/goal-plus` start 后，Pi 扩展会从
+当前工作目录（或 `GOAL_PLUS_ROOT`）定位 `.gp`，并核验 Goal ID 与当前 Pi native session 的
+start invocation；通过后自动完成 source 登记、首次 scan 和 watcher 启动。
 
-```bash
-goal-plus-collector attach /绝对路径/到/工作区/.gp
-goal-plus-collector scan
-goal-plus-collector start
-goal-plus-collector status
-```
-
-`status` 的 `ready=true` 表示 worker/关系 collector 的凭证、当前 schema、工作区和 watcher
-均已就绪。未注册 `.gp` 或该 collector 失败时，Pi 主 Trace 仍可正常出现，但 worker 不会挂到
+观察器的 `activation.status=ACTIVE` 和 `ready=true` 表示 worker/关系 collector 的凭证、当前 schema、工作区和 watcher
+均已就绪。未检测到 `.gp` 或该 collector 失败时，Pi 主 Trace 仍可正常出现，但 worker 不会挂到
 主 Trace 下。当前适配只接受重构后的 `agent_harness`、`runtime_provider`、`execution_scope`、
 `session_handle` 格式，不兼容旧 `host` / `host_handle` 格式。
 

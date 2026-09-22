@@ -124,6 +124,17 @@ async function install(options) {
   const packageDir = path.join(collectorsDir, "pi-agent");
   const sharedDir = path.join(collectorsDir, "shared");
   await installFiles(options.sourceDir, packageDir, sharedDir);
+  const goalPlusSourceDir = path.resolve(options.sourceDir, "..", "goal-plus");
+  const { install: installGoalPlusObserver } = require(path.join(goalPlusSourceDir, "install.cjs"));
+  const goalPlusObserver = await installGoalPlusObserver({
+    homeDir: options.homeDir,
+    sourceDir: goalPlusSourceDir,
+    skipVersionCheck: true,
+    createWrapper: false,
+    managedBy: "pi-agent",
+    preserveDifferentAccount: true,
+    preserveExistingConfig: true,
+  });
 
   const configPath = path.join(packageDir, "config.json");
   const tempPath = `${configPath}.${process.pid}.tmp`;
@@ -137,6 +148,8 @@ async function install(options) {
       || `${baseUrl}/api/ingest/collaborations/sessions`,
     collaborationEventsEndpoint: process.env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
       || `${baseUrl}/api/ingest/collaborations/events`,
+    goalPlusObserverEnabled: goalPlusObserver.observerEnabled,
+    goalPlusObserverConfigPath: goalPlusObserver.configPath,
     uploadIntervalMs: 300000,
     shutdownTimeoutMs: 2200,
   };
@@ -158,7 +171,7 @@ async function install(options) {
       AGENT_INSIGHT_USER_HOME: options.homeDir,
     },
   });
-  return { packageDir, agentInsightHome };
+  return { packageDir, agentInsightHome, goalPlusObserver };
 }
 
 async function main() {
