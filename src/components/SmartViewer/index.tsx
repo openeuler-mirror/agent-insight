@@ -20,6 +20,7 @@ export interface SmartViewerProps {
     maxHeight?: number | string;
     className?: string;
     jsonCollapsed?: boolean | number;
+    fullContent?: boolean;
 }
 
 interface SmartViewerConfig {
@@ -50,6 +51,7 @@ export function SmartViewer({
     maxHeight = 500,
     className,
     jsonCollapsed,
+    fullContent = false,
 }: SmartViewerProps) {
     const [copied, setCopied] = useState(false);
     const config = useContext(SmartViewerConfigContext);
@@ -94,6 +96,7 @@ export function SmartViewer({
                         data={detected.data}
                         theme={theme}
                         collapsed={jsonCollapsed ?? config.jsonCollapsed}
+                        fullContent={fullContent}
                     />
                 )}
                 {detected.kind === 'markdown' && (

@@ -1,3 +1,5 @@
+import type { Prisma } from '@prisma/client';
+import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 import fs from 'fs';
 import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
@@ -1389,7 +1391,7 @@ export async function listObservedFieldValues(
         }
     }
     if (!FACETABLE_COLUMNS.has(column)) return [];
-    const where: any = { isSubagent: false, [column]: { not: null } };
+    const where: any = { isSubagent: column === 'subagentType', [column]: { not: null } };
     if (user) where.user = user;
     try {
         const rows = await prismaRaw.execution.groupBy({
@@ -1445,7 +1447,7 @@ export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
     id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
     toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
     cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
-    timestamp: true, model: true, clientId: true, hostIp: true, hostName: true, observedIp: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
+    timestamp: true, lastIngestedAt: true, model: true, clientId: true, hostIp: true, hostName: true, observedIp: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
     isSkillCorrect: true, isAnswerCorrect: true, answerScore: true, skillScore: true, judgmentReason: true,
     failures: true, skillIssues: true, skillVersion: true, label: true, user: true, skillTriggerRate: true,
     parentExecutionId: true, rootExecutionId: true, agentSessionId: true, subagentType: true,
@@ -1815,6 +1817,36 @@ async function hydrateAndNormalizeBatch(
     return normalizedBatch;
 }
 
+async function countFailedTraceRecords(where: Prisma.ExecutionWhereInput): Promise<number> {
+    let count = 0;
+    let cursor: string | undefined;
+    while (true) {
+        const candidates = await prismaRaw.execution.findMany({
+            where: {
+                AND: [where, {
+                    OR: [
+                        { framework: 'actrail', failures: { contains: 'agent-process-exit' } },
+                        { failures: { contains: 'goal_plus_pi_session_failed' } },
+                    ],
+                }],
+            },
+            select: { id: true, taskId: true, framework: true, failures: true },
+            orderBy: { id: 'asc' },
+            take: READ_RECORDS_HYDRATE_BATCH_SIZE,
+            ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        });
+        if (candidates.length === 0) return count;
+        const sessions = await prismaRaw.session.findMany({
+            where: { taskId: { in: candidates.map(row => row.taskId || row.id) }, endTime: { not: null } },
+            select: { taskId: true, endTime: true },
+        });
+        const completedByTask = new Map(sessions.map(session => [session.taskId, session.endTime]));
+        count += candidates.filter(row => getTraceLifecycle(completedByTask.get(row.taskId || row.id), row).traceStatus === 'failed').length;
+        if (candidates.length < READ_RECORDS_HYDRATE_BATCH_SIZE) return count;
+        cursor = candidates[candidates.length - 1].id;
+    }
+}
+
 async function readRecordsInternal(
     user?: string,
     filters?: ReadRecordFilters,
@@ -2068,8 +2100,7 @@ async function readRecordsInternal(
         const totalToolErrors = aggregate._sum.toolCallErrorCount ?? 0;
         stats = {
             total,
-            // 当前生命周期读路径只产出 running/success；failed 保留在 API enrichment 后兼容计算。
-            failedCount: 0,
+            failedCount: await countFailedTraceRecords(where),
             // Execution.latency 已是毫秒，不再 ×1000（见 issue-159-codex-fixed.md Bug 10）
             avgLatencyMs: (aggregate._avg.latency ?? 0),
             toolErrorRate: totalTools > 0
@@ -2296,7 +2327,8 @@ async function normalizeLegacyCodexSessionHistory(
     });
 }
 
-export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
+export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    const receivedAt = options?.receivedAt === null ? null : options?.receivedAt ?? new Date();
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
 
@@ -2839,6 +2871,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
         ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession, storedAgentName, observedAgentOptions))
         : null;
+    const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
+    const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt, receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
     await db.upsertExecution({
         where: { id: recordId },
         create: {
@@ -2850,6 +2884,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cost: targetRecord.cost,
             latency: targetRecord.latency,
             timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
+            lastIngestedAt,
             finalResult: targetRecord.final_result,
             skill: targetRecord.skill,
             skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
@@ -2892,6 +2927,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cost: targetRecord.cost,
             latency: targetRecord.latency,
             timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
+            lastIngestedAt,
             finalResult: targetRecord.final_result,
             skill: targetRecord.skill,
             skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
@@ -2983,6 +3019,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
+                lastIngestedAt,
                 parentTaskId: targetRecord.task_id,
                 parentFramework: targetRecord.framework,
                 parentUser: targetRecord.user,
@@ -3131,6 +3168,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
 interface DeriveSubagentArgs {
     parentExecutionId: string;
+    lastIngestedAt?: Date | null;
     parentTaskId: string;
     parentFramework?: string | null;
     parentUser?: string | null;
@@ -3404,6 +3442,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             const observedAgentOptions = undefined;
         const baseFields = {
             taskId: sessionId,
+            ...(args.lastIngestedAt !== undefined ? { lastIngestedAt: args.lastIngestedAt } : {}),
             framework: parentFramework,
             timestamp,
             agentName: storedAgentName,

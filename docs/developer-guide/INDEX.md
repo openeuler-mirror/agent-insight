@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
+
 > 2026-09-21 working-tree overlay：Goal Plus 不再作为用户可选 framework 或独立安装步骤；Pi bundle 内置 Agent Insight 自有的休眠观察器，仅在结构化 `/goal-plus` start 证据与 `.gp` 中当前 Pi native session invocation 一致时自动 attach、scan 并确保 watcher。普通 Pi 与增强失败继续采集主 Trace；旧 `frameworks=goal-plus` 映射为 Pi。更新 Goal Plus 用户、开发与三阶段设计文档，未修改 Goal Plus 仓库。
 
 > 2026-09-21 working-tree overlay：Goal Plus 主 binding 在结构化 ID 到达后立即异步 flush，并在任务结束时兜底重试；reported 端点通过 session binding 映射真实 Trace，并在 binding/Execution 晚到时重算。默认主列表将“已声明 worker”与“可合并 links”分离，worker 先到时立即隐藏，主从两端完整后才进入主 Trace 子树，避免运行中独立展示、结束后再合并的跳变。

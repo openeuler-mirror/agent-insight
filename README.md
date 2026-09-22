@@ -75,7 +75,7 @@ Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 
 ### 1. 安装服务端
 
-**环境要求**
+**npm / 源码安装环境要求**
 
 - Node.js >= 20.0.0
 - 3000 端口未被占用
@@ -123,72 +123,41 @@ cd scripts/trae-collector && npm install && npm run build
 
 #### 方式三：使用 Docker 镜像部署
 
-适用于服务器部署或希望应用容器与数据目录分离的场景。镜像已发布为多架构，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
+适用于 Linux 服务器部署，宿主机无需另外安装 Node.js、npm 或源码。按交付清单确认固定镜像标签、CPU 架构、源码提交；离线镜像包还需核对 SHA-256。不要把浮动标签或历史示例版本当作本次交付版本。
 
-**用法一：在线拉取 Docker Hub 镜像**
+**在线获取镜像：**
 
 ```bash
-docker pull karaggagent/agent-insight:latest
+IMAGE='交付清单中的镜像名:固定版本'
+docker pull "$IMAGE"
+```
 
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
+离线镜像包需先验证 SHA-256，只有校验通过后才执行 `docker load`。完整命令见 [Docker 部署服务端](docs/user-guide/quickstart.md#可选用-docker-部署服务端)。
+
+**检查镜像并准备数据目录：**
+
+```bash
+docker image inspect "$IMAGE" \
+  --format 'os={{.Os}} arch={{.Architecture}} user={{.Config.User}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
+docker run --rm --entrypoint id "$IMAGE"
+```
+
+确认镜像架构与宿主机匹配；没有 revision 标签时由交付方提供版本核对依据。按查询结果创建目录，以下 `1000:1000` 仅适用于 uid/gid 均为 1000 的镜像：
+
+```bash
+sudo install -d -m 750 -o 1000 -g 1000 /opt/agent-insight
 
 docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
+  --mount type=bind,src=/opt/agent-insight,dst=/data/agent-insight \
+  "$IMAGE"
 ```
 
-生产环境如需锁定版本号，可以把 `latest` 换成固定版本，例如 `karaggagent/agent-insight:0.5.0`。
+配置保存在 `/opt/agent-insight/.env`，SQLite 数据库位于 `/opt/agent-insight/data/witty_insight.db`，日志通过 `docker logs agent-insight` 查看。该镜像不支持设置 `DB_HOST` 切换数据库。升级前停止旧实例、备份整个挂载目录，使用新固定版本镜像复用原目录；新旧实例不能同时写入同一个 SQLite 数据目录。
 
-**用法二：离线导入 `.tar` 镜像**
-
-如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
-
-```bash
-docker load -i agent-insight-0.5.0-image.tar
-docker images | grep agent-insight
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-```
-
-**用法三：挂载源码运行，代码更新后重启即可生效**
-
-适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -e AGENT_INSIGHT_SOURCE_DIR=/src \
-  -v /srv/agent-insight:/src:ro \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-之后更新代码只需要 `git pull` 加一次重启，容器会按最新源码重新构建再启动：
-
-```bash
-cd /srv/agent-insight && git pull
-docker restart agent-insight
-```
-
-不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
-
-容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
+维护者仍可通过 `AGENT_INSIGHT_SOURCE_DIR` 挂载源码，执行 `git pull` 后重启容器触发重新构建；源码新增依赖时需要重建镜像。配置示例、安装产物、检查与备份升级步骤见 [5 分钟上手](docs/user-guide/quickstart.md)。
 
 Docker 容器只运行 Agent Insight 服务端，不会修改宿主机的 OpenCode 配置。选择
 OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行看板“安装指导”生成的
@@ -201,7 +170,7 @@ OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行�
 
 **启动服务**
 
-安装完成后，在工作目录下执行以下命令启动服务：
+通过源码安装时，在工作目录下执行以下命令启动服务；Docker 部署使用前面的容器启动命令：
 
 ```bash
 cd agent-insight
@@ -235,7 +204,7 @@ bash scripts/stop.sh
 
 当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent Insight 插件的具体安装与配置方式：
 
-1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的插件安装命令。
+1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的 **Linux curl** 命令。
 
    <p align="center"><img src="docs/images/guide.png" alt="安装指导" /></p>
 
