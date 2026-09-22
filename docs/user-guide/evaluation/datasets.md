@@ -20,13 +20,37 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-SWE-bench Verified 随 Agent Insight 服务一条命令完成准备和导入：
+SWE-bench Verified 随 Agent Insight 服务启动完成准备和导入。持续启用时，在 `~/.agent-insight/.env` 中配置：
 
-```bash
-bash scripts/start.sh --benchmark swe-bench
+```dotenv
+AGENT_INSIGHT_BENCHMARK=swe-bench
 ```
 
-首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查数据库，数据集已经存在时会跳过全部准备和导入步骤；无需修改 `.env` 或保留原始下载文件。
+之后使用统一启动命令：
+
+```bash
+bash scripts/start.sh
+```
+
+也可用 `bash scripts/start.sh --benchmark swe-bench` 仅对本次启动临时启用，命令行优先于环境配置。
+
+首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查数据库，数据集已经存在时会跳过全部准备和导入步骤。网络受限时，可在同一配置文件中设置内网镜像地址：
+
+```dotenv
+SWE_BENCH_DATASET_SOURCE=http://intranet.example/swe-bench/test.parquet
+SWE_BENCH_SOURCE_ARCHIVE_SOURCE=http://intranet.example/swe-bench/source.tar.gz
+```
+
+这两项也可以直接填写本机文件路径：
+
+```dotenv
+SWE_BENCH_DATASET_SOURCE="/srv/datasets/test.parquet"
+SWE_BENCH_SOURCE_ARCHIVE_SOURCE="/srv/datasets/source.tar.gz"
+```
+
+路径是 Agent Insight 服务所在机器上的路径，推荐使用绝对路径。本机文件与下载文件均按固定的官方 SHA-256 校验；本机文件缺失或校验失败会停止准备，不覆盖原文件。两项留空时使用官方来源，已安装的数据集和可用的受管缓存优先复用。Python 依赖首次安装仍需要可用的 pip 软件源，或通过 `SWE_BENCH_PYTHON` 指定已有环境。
+
+旧的 `SWE_BENCH_DATASET_PATH`、`SWE_BENCH_DATASET_URL` 和 `SWE_BENCH_SOURCE_ARCHIVE_URL` 暂时兼容；新变量存在时优先使用新变量，显式留空表示使用官方来源。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 

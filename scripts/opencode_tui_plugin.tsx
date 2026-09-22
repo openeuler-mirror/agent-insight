@@ -9,13 +9,16 @@ import os from "os"
 // 自包含：内联 insight 路径解析。原先从 "./insight-paths.js" 导入，但安装脚本从不下发该文件，
 // 会导致本插件在 opencode 加载时报“找不到模块”，进而拖垮 opencode 本地服务启动。改为内联，去除外部相对依赖。
 function getPreferredInsightDir() {
-  return path.join(os.homedir(), ".agent-insight")
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), ".agent-insight")
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => os.homedir()))
 }
 function getLegacyInsightDir() {
   return path.join(os.homedir(), ".skill-insight")
 }
 function getExistingInsightDir() {
   const preferred = getPreferredInsightDir()
+  if (process.env.AGENT_INSIGHT_HOME) return preferred
   const legacy = getLegacyInsightDir()
   if (fs.existsSync(preferred)) return preferred
   if (fs.existsSync(legacy)) return legacy

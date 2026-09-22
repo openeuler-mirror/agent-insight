@@ -1121,14 +1121,11 @@ test('service points at a stable runtime path, never a temp extraction dir', () 
     !/__dirname/.test(unit) || /RUNTIME_DIR|CLIENT_SCRIPT/.test(unit),
     'unit 必须引用固化路径',
   )
-  // CLIENT_SCRIPT 应位于 ~/.agent-insight/client/runtime 下，而非包目录或临时目录。
   const script = installer.CLIENT_SCRIPT || ''
-  assert.match(
-    script,
-    /\.agent-insight[/\\]client[/\\]runtime[/\\]reliability-client\.cjs$/,
-    `服务入口应在稳定目录，实际: ${script}`,
-  )
-  assert.ok(!/\/(tmp|T)\//.test(script), '服务入口不得位于临时目录')
+  assert.ok(script, '服务入口不能为空')
+  const insightRoot = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
+  assert.equal(path.resolve(script), path.resolve(insightRoot, 'client', 'runtime', 'reliability-client.cjs'),
+    '服务入口必须位于配置的运行时目录，而非安装包的临时解压目录')
 })
 
 test('launchd service preserves the installer PATH for Agent executables', () => {

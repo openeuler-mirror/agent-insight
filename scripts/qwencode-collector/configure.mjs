@@ -1,10 +1,15 @@
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 export const qwenSettingsPath = join(homedir(), '.qwen', 'settings.json');
 export const qwenEnvPath = join(homedir(), '.qwen', '.env');
-export const agentInsightEnvPath = join(homedir(), '.agent-insight', '.env');
+export function getAgentInsightHome() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.');
+  const root = process.env.AGENT_INSIGHT_HOME || join(homedir(), '.agent-insight');
+  return resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => homedir()));
+}
+export const agentInsightEnvPath = join(getAgentInsightHome(), '.env');
 
 const nativeTelemetryNames = [
   'QWEN_TELEMETRY_ENABLED',

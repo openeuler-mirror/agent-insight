@@ -34,7 +34,7 @@ def resolve_ras_home() -> Path:
     raw = os.environ.get("AGENT_INSIGHT_RAS_HOME")
     if raw:
         return Path(raw).expanduser()
-    return Path.home() / ".agent-insight" / "ras"
+    return Path(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or str(Path.home() / ".agent-insight"))).expanduser() / "ras"
 
 
 def resolve_config_path(ras_home: Path | None = None) -> Path:

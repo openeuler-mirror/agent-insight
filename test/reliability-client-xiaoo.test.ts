@@ -14,7 +14,7 @@ const start = { type: 'session_start', data: { session_id: sid, agent: 'defaulta
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-xiaoo-'))
-  const previous = Object.fromEntries(['PATH', 'XDG_CONFIG_HOME', 'AGENT_INSIGHT_DATA_DIR', 'XIAOO_CONFIG', 'XIAOO_TEST_MODE'].map(k => [k, process.env[k]]))
+  const previous = Object.fromEntries(['PATH', 'XDG_CONFIG_HOME', 'AGENT_INSIGHT_HOME', 'XIAOO_CONFIG', 'XIAOO_TEST_MODE'].map(k => [k, process.env[k]]))
   const executable = path.join(root, 'xiaoo')
   fs.writeFileSync(executable, `#!${process.execPath}
 const mode = process.env.XIAOO_TEST_MODE
@@ -75,12 +75,12 @@ if (mode?.startsWith('collector-')) {
   fs.chmodSync(executable, 0o755)
   process.env.PATH = `${root}:${previous.PATH || ''}`
   process.env.XDG_CONFIG_HOME = path.join(root, 'config')
-  process.env.AGENT_INSIGHT_DATA_DIR = path.join(root, 'data')
+  process.env.AGENT_INSIGHT_HOME = path.join(root, 'data')
   delete process.env.XIAOO_CONFIG
   return {
     root, executable,
     installCollector() {
-      const collector = path.join(process.env.AGENT_INSIGHT_DATA_DIR!, 'xiaoo-trace-collector')
+      const collector = path.join(process.env.AGENT_INSIGHT_HOME!, 'xiaoo-trace-collector')
       const config = path.join(process.env.XDG_CONFIG_HOME!, 'xiaoo')
       fs.mkdirSync(collector, { recursive: true })
       fs.mkdirSync(config, { recursive: true })

@@ -5,6 +5,7 @@ import path from 'node:path'
 import http from 'node:http'
 import { createRequire } from 'node:module'
 import test from 'node:test'
+import { activateIsolatedHome } from './helpers/isolated-home'
 import { normalizeOtlpTraces } from '../src/lib/ingest/otel/normalize'
 import { aggregateOtelTraceEvents } from '../src/lib/ingest/otel/aggregate'
 
@@ -15,6 +16,7 @@ const { canonicalEventsToOtlp } = require('../scripts/agent-trace-collectors/sha
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-pi-'))
+  const restoreHome = activateIsolatedHome(root)
   const keys = ['PATH', 'PI_CODING_AGENT_DIR', 'AGENT_INSIGHT_USER_HOME', 'AGENT_INSIGHT_PI_CONFIG',
     'AGENT_INSIGHT_API_KEY', 'AGENT_INSIGHT_OTLP_ENDPOINT', 'PI_TEST_MODE', 'AGENT_INSIGHT_SUPERVISOR', 'SHELL', 'ZDOTDIR', 'PI_TELEMETRY', 'HOME', 'PI_TEST_CATALOG_AUTH']
   const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]))
@@ -97,6 +99,7 @@ process.stdin.on('end', () => {
         else process.env[key] = value
       }
       fs.rmSync(root, { recursive: true, force: true })
+      restoreHome()
     },
   }
 }

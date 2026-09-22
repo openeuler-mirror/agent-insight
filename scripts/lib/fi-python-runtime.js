@@ -2,10 +2,11 @@ const crypto = require('crypto')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { getAgentInsightHome } = require('../agent-insight-home.cjs')
 const { spawnSync } = require('child_process')
 
 const RUNTIME_SCHEMA_VERSION = 1
-const DEFAULT_FI_HOME = path.join(os.homedir(), '.agent-insight', 'fault-injection')
+const DEFAULT_FI_HOME = path.join(getAgentInsightHome(), 'fault-injection')
 
 function runtimePythonPath(venvRoot, platform = process.platform) {
   return platform === 'win32'

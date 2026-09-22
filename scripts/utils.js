@@ -3,6 +3,7 @@ const fs = require('fs')
 const path = require('path')
 const http = require('http')
 const os = require('os')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
 function getPreferredHomeDataRoot() {
   return path.join(os.homedir(), '.agent-insight')
@@ -21,10 +22,7 @@ function getExistingHomeDataRoot() {
 }
 
 function getDataRoot() {
-  if (process.env.AGENT_INSIGHT_DATA_DIR) {
-    return process.env.AGENT_INSIGHT_DATA_DIR
-  }
-  return getExistingHomeDataRoot()
+  return getAgentInsightHome()
 }
 
 function migrateDataIfNeeded() {
@@ -194,7 +192,7 @@ function ensureEnvFile(packageRoot) {
       '#',
       '',
     ].join('\n')
-    fs.writeFileSync(envPath, header + fs.readFileSync(envExamplePath, 'utf8'))
+    fs.writeFileSync(envPath, header + fs.readFileSync(envExamplePath, 'utf8'), { mode: 0o600 })
     console.log('✓ .env file created at ' + envPath)
   }
 }

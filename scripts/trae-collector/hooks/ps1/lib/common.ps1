@@ -45,7 +45,8 @@ function _Read-EnvFile {
 $_loadedEnv = $null
 function _Get-InsightEnv {
     if ($null -ne $_loadedEnv) { return $_loadedEnv }
-    $_loadedEnv = _Read-EnvFile "$env:USERPROFILE\.agent-insight\.env"
+    $insightDir = if ($env:AGENT_INSIGHT_HOME) { $env:AGENT_INSIGHT_HOME } elseif ($env:AGENT_INSIGHT_DIR) { $env:AGENT_INSIGHT_DIR } else { "$env:USERPROFILE\.agent-insight" }
+    $_loadedEnv = _Read-EnvFile "$insightDir\.env"
     return $_loadedEnv
 }
 
@@ -68,7 +69,7 @@ function _Get-SHA256First16 {
 # 1. Get-SpoolBase
 # ============================================================================
 function Get-SpoolBase {
-    $insightDir = if ($env:AGENT_INSIGHT_DIR) { $env:AGENT_INSIGHT_DIR } else { "$env:USERPROFILE\.agent-insight" }
+    $insightDir = if ($env:AGENT_INSIGHT_HOME) { $env:AGENT_INSIGHT_HOME } elseif ($env:AGENT_INSIGHT_DIR) { $env:AGENT_INSIGHT_DIR } else { "$env:USERPROFILE\.agent-insight" }
     $apiKey = _Get-ApiKey
     if ($apiKey) {
         $keyHash = _Get-SHA256First16 $apiKey

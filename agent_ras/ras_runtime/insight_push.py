@@ -14,6 +14,7 @@ from concurrent.futures import Future as ConcurrentFuture
 import json
 import logging
 import os
+
 import threading
 import time
 import uuid
@@ -21,6 +22,9 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.error import HTTPError, URLError
 from urllib import request
+
+if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+    raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
 
 logger = logging.getLogger(__name__)
 _MAX_POST_ATTEMPTS = 3
@@ -71,7 +75,10 @@ def _load_insight_config() -> tuple[str | None, str | None, str]:
     # 1. RAS config file (written by agent-insight install-ras)
     ras_home = os.environ.get(
         "AGENT_INSIGHT_RAS_HOME",
-        os.environ.get("AGENT_INSIGHT_DATA_DIR", str(Path.home() / ".agent-insight")) + "/ras",
+        (
+            os.path.expanduser(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or ""))
+            or str(Path.home() / ".agent-insight")
+        ) + "/ras",
     )
     cfg_path = Path(ras_home) / "config.json"
     try:

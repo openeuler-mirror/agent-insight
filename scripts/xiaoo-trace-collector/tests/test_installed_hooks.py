@@ -15,7 +15,7 @@ class InstalledHooksTests(unittest.TestCase):
             root = Path(tmp)
             data = root / "data"
             env = {**os.environ, "HOME": tmp, "XDG_CONFIG_HOME": str(root / "config"),
-                   "AGENT_INSIGHT_DATA_DIR": str(data), "AGENT_INSIGHT_XIAOO_OTEL_BUF": str(root / "buf")}
+                   "AGENT_INSIGHT_HOME": str(data), "AGENT_INSIGHT_XIAOO_OTEL_BUF": str(root / "buf")}
             for key in ("AGENT_INSIGHT_API_KEY", "AGENT_INSIGHT_HOST", "AGENT_INSIGHT_OTLP_TRACES_URL", "AGENT_INSIGHT_RAS_HOME"):
                 env.pop(key, None)
             config = root / "config/xiaoo/config.toml"

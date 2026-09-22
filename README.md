@@ -208,12 +208,11 @@ cd agent-insight
 
 # 启动服务端，默认端口是3000
 bash scripts/start.sh
-
-# 启动服务端，并自动下载、校验和导入 SWE-bench Verified 数据集
-bash scripts/start.sh --benchmark swe-bench
 ```
 
-`--benchmark swe-bench` 首次执行会自动准备官方 Loader 和 500 条 Verified Case；后续启动检测到数据集已导入时会直接跳过。完整部署说明见[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)。
+默认使用 `~/.agent-insight/data/witty_insight.db`；如需自定义数据库路径，可在 `~/.agent-insight/.env` 中设置 `DATABASE_URL="file:/absolute/path/to/witty_insight.db"`。
+
+如需安装和配置 SWE-bench 等 Benchmark，请参阅[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)。
 
 **停止服务**
 

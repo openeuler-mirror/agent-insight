@@ -7,6 +7,7 @@ import { codexCollectorBundle } from '../../bundle';
 
 const ROOT = path.join(process.cwd(), 'scripts', 'agent-trace-collectors');
 const LEGACY_ASSETS: Record<string, { path: string[]; contentType: string }> = {
+  'install-modules.cjs': { path: ['shared', 'install-modules.cjs'], contentType: 'text/javascript; charset=utf-8' },
   'trace-transport.cjs': {
     path: ['shared', 'trace-transport.cjs'],
     contentType: 'text/javascript; charset=utf-8',

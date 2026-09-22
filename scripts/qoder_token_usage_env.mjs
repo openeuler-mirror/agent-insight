@@ -77,7 +77,7 @@ function createSystemEnvironmentAdapter({ homeDir = os.homedir(), platform = pro
     }
   }
 
-  const environmentFile = path.join(homeDir, ".agent-insight", "qodercn-token-usage.env")
+  const environmentFile = path.join(getAgentInsightHome(homeDir), "qodercn-token-usage.env")
   const sourceLine = `[ -f "${environmentFile.replace(/\\/g, "/")}" ] && . "${environmentFile.replace(/\\/g, "/")}"`
   return {
     read: (name) => process.env[name],
@@ -114,7 +114,7 @@ function readState(file) {
 }
 
 export function ensureQoderTokenUsageEnvironment(options = {}) {
-  const insightDir = options.insightDir || path.join(options.homeDir || os.homedir(), ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(options.homeDir)
   const owner = String(options.owner || "").trim().toLowerCase()
   if (!owner) throw new Error("Qoder token usage environment owner is required")
   const statePath = path.join(insightDir, STATE_FILE)
@@ -142,7 +142,7 @@ export function ensureQoderTokenUsageEnvironment(options = {}) {
 }
 
 export function releaseQoderTokenUsageEnvironment(options = {}) {
-  const insightDir = options.insightDir || path.join(options.homeDir || os.homedir(), ".agent-insight")
+  const insightDir = options.insightDir || getAgentInsightHome(options.homeDir)
   const owner = String(options.owner || "").trim().toLowerCase()
   if (!owner) throw new Error("Qoder token usage environment owner is required")
   const statePath = path.join(insightDir, STATE_FILE)
@@ -162,4 +162,10 @@ export function releaseQoderTokenUsageEnvironment(options = {}) {
   }
   try { fs.unlinkSync(statePath) } catch {}
   return { name: QODERCN_TOKEN_USAGE_ENV, owners: [], restored, statePath }
+}
+
+function getAgentInsightHome(homeDir = os.homedir()) {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(homeDir, '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => homeDir))
 }

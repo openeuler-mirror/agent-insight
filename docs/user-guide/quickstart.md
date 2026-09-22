@@ -342,6 +342,10 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
    </p>
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
+Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已校验的官方旧版会先备份到
+`$AGENT_INSIGHT_HOME/collectors/shared/*.bak` 再原子替换，同版本不重复备份。
+若提示 `Refusing to overwrite a different shared collector module`，说明文件不是已知可升级版本；
+请保留文件并核对本地改动，不要直接删除整个采集目录。共享模块冲突会在写入框架文件和配置前拦截。
 选择 OpenCode 时，同一个脚本会继续安装普通链路采集插件和 Agent RAS；两者使用同一个
 当前登录账号 API Key。之后重启 Agent Insight 只会同步平台地址，不会把这个客户端
 身份覆盖成内部 `admin` 账号。

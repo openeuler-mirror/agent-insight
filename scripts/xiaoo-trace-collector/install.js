@@ -9,11 +9,12 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { RUNTIME_FILES, buildPlugin } = require('./manifest')
+const { getAgentInsightHome } = require('../agent-insight-home.cjs')
 
 const SRC = __dirname
 const HOME = process.env.HOME || os.homedir()
 const DEST = path.join(
-  process.env.AGENT_INSIGHT_DATA_DIR || path.join(HOME, '.agent-insight'),
+  getAgentInsightHome(),
   'xiaoo-trace-collector',
 )
 

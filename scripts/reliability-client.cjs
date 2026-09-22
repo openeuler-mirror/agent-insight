@@ -19,8 +19,9 @@ const { spawn, spawnSync } = require('child_process')
 const { createHash, randomBytes } = require('crypto')
 
 const { connectWebSocket } = require('./ws-client.cjs')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
-const CLIENT_HOME = path.join(os.homedir(), '.agent-insight', 'client')
+const CLIENT_HOME = path.join(getAgentInsightHome(), 'client')
 const CONFIG_PATH = path.join(CLIENT_HOME, 'config.json')
 const SPOOL_PATH = path.join(CLIENT_HOME, 'spool.json')
 
@@ -219,8 +220,7 @@ function inspectXiaooCli(executable) {
 }
 
 function xiaooCollectorInstalled() {
-  const dataRoot = process.env.AGENT_INSIGHT_DATA_DIR
-    || path.join(os.homedir(), '.agent-insight')
+  const dataRoot = getAgentInsightHome()
   const pluginPath = path.join(dataRoot, 'xiaoo-trace-collector', 'plugin.json')
   const configPath = process.env.XIAOO_CONFIG
     || path.join(
@@ -254,7 +254,7 @@ function piRuntimePaths() {
   const home = process.env.AGENT_INSIGHT_USER_HOME || os.homedir()
   const configuredDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent')
   const agentDir = configuredDir.startsWith('~/') ? path.join(os.homedir(), configuredDir.slice(2)) : path.resolve(configuredDir)
-  const packageDir = path.join(home, '.agent-insight', 'collectors', 'pi-agent')
+  const packageDir = path.join(getAgentInsightHome(process.env, home), 'collectors', 'pi-agent')
   return {
     home, agentDir, packageDir,
     settings: path.join(agentDir, 'settings.json'),
@@ -438,7 +438,7 @@ async function refreshPiModelCatalog({ force = false, timeoutMs = PI_MODEL_PROBE
 function capabilityDiscoveryFingerprint() {
   const xdgConfigRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
   const configRoot = path.join(xdgConfigRoot, 'opencode')
-  const insightDataRoot = process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight')
+  const insightDataRoot = getAgentInsightHome()
   const parts = []
   const visit = (target, depth = 0) => {
     let info
@@ -564,7 +564,7 @@ function cleanupStaleInventoryOpencodeServers(
   if (platform !== 'darwin') return 0
   const listed = runner('ps', ['-axo', 'pid=,command='], { encoding: 'utf8', stdio: 'pipe' })
   if (listed.status !== 0) return 0
-  const runtimeRoot = `${path.join(os.homedir(), '.agent-insight', 'fault-injection', 'runtimes')}${path.sep}`
+  const runtimeRoot = `${path.join(getAgentInsightHome(), 'fault-injection', 'runtimes')}${path.sep}`
   let removed = 0
   for (const line of String(listed.stdout || '').split(/\r?\n/)) {
     const match = /^\s*(\d+)\s+(.+)$/.exec(line)
@@ -906,7 +906,7 @@ function sanitizeSegment(value, fallback) {
 }
 
 function configTargetPath(platform, scope, correlation) {
-  const root = path.join(os.homedir(), '.agent-insight')
+  const root = getAgentInsightHome()
   const platformDir = sanitizeSegment(platform, 'unknown')
   if (scope === 'experiment') {
     const runId = sanitizeSegment(
@@ -977,7 +977,7 @@ async function applyConfigSnapshot(cfg, payload) {
 
 function rasRuntimeConfigPath() {
   const rasHome =
-    process.env.AGENT_INSIGHT_RAS_HOME || path.join(os.homedir(), '.agent-insight', 'ras')
+    process.env.AGENT_INSIGHT_RAS_HOME || path.join(getAgentInsightHome(), 'ras')
   return path.join(rasHome, 'config.json')
 }
 

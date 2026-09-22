@@ -7,7 +7,7 @@ import test from 'node:test'
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-benchmark-'))
 process.env.DATABASE_URL = `file:${path.join(testDir, 'benchmark.db')}`
-process.env.AGENT_INSIGHT_DATA_DIR = testDir
+process.env.AGENT_INSIGHT_HOME = testDir
 
 const user = `benchmark-test-${Date.now()}-${process.pid}`
 const clientId = `benchmark-client-${Date.now()}-${process.pid}`
@@ -167,7 +167,7 @@ test.before(async () => {
 test.after(async () => {
   setCommandDispatcher?.()
   delete process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL
-  delete process.env.AGENT_INSIGHT_DATA_DIR
+  delete process.env.AGENT_INSIGHT_HOME
   await prisma?.$disconnect()
   fs.rmSync(testDir, { recursive: true, force: true })
 })
