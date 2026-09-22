@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `61cefb3a45a7c8421a966c194f387b2f333f5573` (`61cefb3a`) |
-| Branch | `bench-9-16` |
-| Date | 2026-09-17 |
-| Author | mintuyang |
-| Subject | `修复xiaoo安装问题` |
-| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
+| Commit | `0c3c38e96ec320d976912ec08e1dfe2515ac9df4` (`0c3c38e9`) |
+| Branch | `codex/master-830-fixes-20260922` |
+| Date | 2026-09-22 |
+| Author | gyctl |
+| Subject | `fix: 同步830安装与链路追踪通用修复到master` |
+| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 本次更新安装与 Trace 指南、生命周期及前端契约，保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
 
