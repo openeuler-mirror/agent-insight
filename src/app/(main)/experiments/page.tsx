@@ -1,7 +1,7 @@
 'use client';
 
 // 实验列表 —— 评测「实验化」第一切片（本期仅单组实验）。
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FlaskConical, Plus } from 'lucide-react';
 
@@ -27,6 +27,7 @@ interface ExperimentRow {
 }
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const LIST_REFRESH_MS = 5_000;
 
 function responseError(value: unknown, fallback: string): string {
   if (!value || typeof value !== 'object') return fallback;
@@ -109,30 +110,56 @@ export default function ExperimentsPage() {
   const [total, setTotal] = useState(0);
   const [actionId, setActionId] = useState('');
   const [actionError, setActionError] = useState('');
+  const loadSequence = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!user) return;
-    setLoading(true);
+    const sequence = ++loadSequence.current;
+    if (!silent) setLoading(true);
     try {
       const offset = (page - 1) * pageSize;
       const res = await apiFetch(
         `/api/experiments?user=${encodeURIComponent(user)}&limit=${pageSize}&offset=${offset}`,
       );
       const data = await res.json();
+      if (!res.ok) throw new Error(responseError(data, '加载实验失败'));
+      if (sequence !== loadSequence.current) return;
       setRows(Array.isArray(data?.items) ? data.items : []);
       setTotal(typeof data?.total === 'number' ? data.total : 0);
     } catch {
-      setRows([]);
-      setTotal(0);
+      if (!silent && sequence === loadSequence.current) {
+        setRows([]);
+        setTotal(0);
+      }
     } finally {
-      setLoading(false);
+      if (!silent && sequence === loadSequence.current) setLoading(false);
     }
   }, [user, page, pageSize]);
+
+  useEffect(() => () => { loadSequence.current += 1; }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  // 非终态实验完成后服务端状态会变化；串行静默轮询，避免旧响应覆盖新分页快照。
+  useEffect(() => {
+    if (!rows.some((row) => row.status === 'running' || row.status === 'draft')) return;
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await load(true);
+        if (!cancelled) schedule();
+      }, LIST_REFRESH_MS);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [rows, load]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   // 页码/每页条数变化后若越界（如切大页码后减小 pageSize），回夹到末页
