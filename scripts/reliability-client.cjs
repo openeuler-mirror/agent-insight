@@ -30,6 +30,7 @@ const WHITELIST = new Set([
   'PREPARE_EXPERIMENT_CASE',
   'RUN_EXPERIMENT_CASE',
   'RUN_BENCHMARK_CASE',
+  'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
 ])
 
@@ -1041,6 +1042,12 @@ let reliabilitySlotHeld = false
 let fiBusy = 0
 let reliabilityChild = null
 let benchmarkExecutor = null
+const experimentControllers = new Map()
+
+function experimentCancellationFile(commandId) {
+  if (!/^cmd_[A-Za-z0-9_-]+$/.test(String(commandId || ''))) throw new Error('Invalid experiment commandId')
+  return path.join(CLIENT_HOME, 'cancelled-experiments', `${commandId}.json`)
+}
 
 function tryAcquireExecutionSlot() {
   if (fiBusy > 0 || reliabilitySlotHeld) return false
@@ -1145,6 +1152,24 @@ function killRun(runId) {
 
 async function executeAction(cfg, frame, sendStatus) {
   const { action, payload = {} } = frame
+  if (action === 'CANCEL_EXPERIMENT_RUN') {
+    try {
+      let result
+      if (payload.kind === 'benchmark') {
+        if (!benchmarkExecutor) throw new Error('Benchmark runtime unavailable')
+        result = await benchmarkExecutor.cancel(payload.runId)
+      } else if (payload.kind === 'ordinary') {
+        const file = experimentCancellationFile(payload.runId)
+        const prior = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null
+        const active = experimentControllers.get(payload.runId)
+        atomicWriteJson(file, { requestedAt: prior?.requestedAt || new Date().toISOString(), confirmed: prior?.confirmed || false })
+        active?.abort()
+        result = { runId: payload.runId, status: prior?.confirmed ? 'cancelled' : 'cancelling' }
+      } else throw new Error('Unsupported cancellation kind')
+      await sendStatus('SUCCEEDED', { result })
+    } catch (error) { await sendStatus('FAILED', { error: { code: 'CANCEL_FAILED', message: error.message } }) }
+    return
+  }
 
   // 本地白名单二次校验：服务端已校验过，但客户端不能只信服务端。
   if (!WHITELIST.has(action)) {
@@ -1193,6 +1218,12 @@ async function executeAction(cfg, frame, sendStatus) {
   }
 
   if (action === 'RUN_EXPERIMENT_CASE') {
+    const cancellationFile = experimentCancellationFile(frame.commandId)
+    if (fs.existsSync(cancellationFile)) {
+      atomicWriteJson(cancellationFile, { confirmed: true })
+      await sendStatus('FAILED', { error: { code: 'EXECUTION_CANCELLED', message: '实验已取消' } })
+      return
+    }
     if (!tryAcquireExecutionSlot()) {
       await sendStatus('FAILED', {
         error: { code: 'CLIENT_BUSY', message: '本机已有 Agent 或故障注入任务运行，拒绝并发执行实验 Case' },
@@ -1200,19 +1231,26 @@ async function executeAction(cfg, frame, sendStatus) {
       return
     }
     await sendStatus('RUNNING', {})
+    const controller = new AbortController()
+    experimentControllers.set(frame.commandId, controller)
+    if (fs.existsSync(cancellationFile)) controller.abort()
+    let terminationConfirmed = true
     try {
-      const result = await runExperimentCase(cfg, payload, async ({ traceId, startedAt }) => {
+      const result = await runExperimentCase(cfg, { ...payload, signal: controller.signal }, async ({ traceId, startedAt }) => {
         await sendStatus('RUNNING', {
           result: { state: 'TRACE_STARTED', traceId, startedAt },
         })
       })
       await sendStatus('SUCCEEDED', { result })
     } catch (err) {
+      terminationConfirmed = err.code !== 'CANCELLATION_UNCONFIRMED'
       await sendStatus('FAILED', {
         result: err.runFacts || undefined,
         error: { code: err.code || 'CASE_RUN_FAILED', message: err.message },
       })
     } finally {
+      experimentControllers.delete(frame.commandId)
+      if (fs.existsSync(cancellationFile)) atomicWriteJson(cancellationFile, { confirmed: terminationConfirmed })
       releaseExecutionSlot()
     }
     return
@@ -1243,6 +1281,9 @@ async function executeAction(cfg, frame, sendStatus) {
  */
 function signalProcessTree(child, signal) {
   if (!child?.pid) return
+  if (process.platform === 'win32') {
+    return spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5_000, stdio: 'ignore' }).status === 0
+  }
   if (process.platform !== 'win32') {
     try {
       process.kill(-child.pid, signal)
@@ -1520,6 +1561,7 @@ function createAgentRunError(code, message, runFacts) {
 }
 
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
+  payload.signal?.throwIfAborted()
   const platform = String(payload.platform || '')
   const runtime = runtimeAdapters[platform]
   const agent = String(payload.agent || '')
@@ -1594,6 +1636,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     let timedOut = false
     let settled = false
     let earlyFailure = null
+    let cancellationTreeConfirmed = false
     let modelActivityObserved = false
     let modelActivitySource = null
     let firstModelActivityAt = null
@@ -1618,6 +1661,7 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       })
     }
     const clearTimers = () => {
+      payload.signal?.removeEventListener('abort', cancelAgent)
       if (timeoutTimer) clearTimeout(timeoutTimer)
       if (modelStartTimer) clearTimeout(modelStartTimer)
       if (forceKillTimer) clearTimeout(forceKillTimer)
@@ -1640,9 +1684,14 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         clearTimeout(modelStartTimer)
         modelStartTimer = null
       }
-      signalProcessTree(child, 'SIGTERM')
-      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
+      cancellationTreeConfirmed = signalProcessTree(child, 'SIGTERM') === true
+      forceKillTimer = setTimeout(() => { cancellationTreeConfirmed = signalProcessTree(child, 'SIGKILL') === true }, 2_000)
       hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
+    }
+    const cancelAgent = () => {
+      terminateForEarlyFailure('EXECUTION_CANCELLED', '实验已取消')
+      // Cancellation is acknowledged only after the child actually closes.
+      if (hardStopTimer) { clearTimeout(hardStopTimer); hardStopTimer = null }
     }
     const consumeStdoutLine = (line, final = false) => {
       const event = inspectEvent?.(line, final)
@@ -1708,6 +1757,18 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       if (settled) return
       settled = true
       clearTimers()
+      if (payload.signal?.aborted) {
+        let confirmed = cancellationTreeConfirmed || signalProcessTree(child, 'SIGKILL') === true
+        if (process.platform !== 'win32') {
+          const deadline = Date.now() + 2_000
+          do {
+            try { process.kill(-child.pid, 0) }
+            catch (error) { confirmed = error.code === 'ESRCH'; break }
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          } while (Date.now() < deadline)
+        }
+        if (!confirmed) earlyFailure = { code: 'CANCELLATION_UNCONFIRMED', message: '已请求终止，但进程树退出尚未确认' }
+      }
       if (reliabilityChild === child) reliabilityChild = null
       consumeStdoutLine(stdoutBuffer)
       if (runtime?.createEventInspector && code === 0 && !timedOut && !earlyFailure && !stdinError) consumeStdoutLine('', true)
@@ -1790,7 +1851,10 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
       // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
       resolve(runFacts)
     }
+    payload.signal?.addEventListener('abort', cancelAgent, { once: true })
+    if (payload.signal?.aborted) cancelAgent()
     timeoutTimer = setTimeout(() => {
+      if (payload.signal?.aborted) return
       timedOut = true
       signalProcessTree(child, 'SIGTERM')
       forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)

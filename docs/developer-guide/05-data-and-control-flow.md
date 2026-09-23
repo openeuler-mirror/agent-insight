@@ -3,6 +3,25 @@
 > 两个视角：（1）分析器从页面/组件入口点出发，沿 React 调用图追踪出的前端流程；（2）从 API 路由处理器和引擎入口函数重建出的后端流水线。前端追踪使用真实的调用边；后端流水线则是从入口点 + 调用图与命名推导而来（确切的内部调用边可能有所不同——在需要时请核对源码）。
 
 ## Entry points
+
+### 实验取消与本机停服
+
+```text
+停止并删除 → 校验归属 → 同事务持久化删除标记 / 取消目标
+                         ├→ 本地 AbortSignal → 模型请求 / Agent 子进程
+                         ├→ 客户端 CANCEL_EXPERIMENT_RUN → 指定 Run
+                         └→ Evaluator cancel → 指定容器 → 释放镜像使用保护
+                    后台对账 → 全部确认退出才完成取消
+
+stop-evaluator.sh → 与启动互斥 → 持久化停止标记 → 关闭 Controller
+                   → 再次扫描作业 → 定向清理容器 → 可选清理登记镜像
+```
+
+本地取消检查周期 500ms，后台取消对账周期 3 秒，页面待确认列表每 5 秒刷新。轮询不是等待实验自然结束；收到信号后立即请求退出。删除最后一个有效 Case 时，同一事务会将实验标记为已删除并关闭监听；Case 删除响应将此状态返回页面，以便跳转实验列表。后台对账也会收敛此前遗留的普通及 Benchmark 零 Case 实验。仍有有效 Case 时，Case 取消确认后 Benchmark 推进下一 Case，普通实验重新结算；没有有效结果不能判成功。新派发、重试、出队、恢复和回调均检查删除/取消状态。
+
+本地执行记录不按超时擅自过期：平台进程崩溃可能留下尚未确认的执行或子进程，重启后仍显示待确认，需要运维核对。远端离线则自动重发取消指令；旧客户端明确拒绝停止指令时保留待确认并提示升级，在客户端进程重启后再重发，避免每轮对账重复投递。首版不自动推断“心跳消失等于任务已死”，也不提供批量抹除未确认记录的入口。
+
+评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。
 | Entry | File | Kind |
 |---|---|---|
 | `POST` ingest upload | `src/app/api/ingest/upload/route.ts` | HTTP |
@@ -51,6 +70,8 @@ flowchart TD
 ```
 
 ## 后端流水线：接入（agent run → Execution 记录）
+
+源码生产启动在清理端口占用后，通过 `scripts/stop-orphan-trace-consumer.cjs` 检查共享 Trace spool 的 `consumer-owner.lock`。只有锁指向本项目 `.next/standalone`、且该进程已不监听端口时才终止残留进程；其他归属或无法核实时启动失败。新服务随后取得消费锁，按原 checkpoint 处理积压文件。
 
 Trae IDE 通过 VS Code 插件内置的 Hook 系统采集运行数据：Hook 脚本监听 session-start、pre-tool-use、post-tool-use、prompt-submit、stop、subagent-detect 等生命周期事件，将事件序列化为 JSONL 写入本地 spool 目录；插件内的 `UploadEngine` 按 checkpoint 增量消费 spool 文件，经内容截断后 POST 到 `/api/ingest/upload`。服务端通过 `traeAdapter` (`FrameworkAdapter`) 的 `extractSkills` 从 TRAE 特有 interaction 格式中提取 Skill 调用，再经 `saveExecutionRecord` 统一落库。
 

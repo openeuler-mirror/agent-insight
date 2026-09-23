@@ -47,6 +47,8 @@ async function evaluationOrThrow(evaluationId: string) {
   if (!evaluation) {
     throw new BenchmarkProtocolError('EVALUATION_NOT_FOUND', '评测 Run 不存在', 404)
   }
+  const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
+  await assertExperimentActive(evaluation.caseRun.experimentId, evaluation.caseRun.experimentCaseId);
   return evaluation
 }
 
@@ -357,8 +359,8 @@ function isFinalizationLost(error: unknown): boolean {
 
 async function recordPersistenceFailure(evaluationId: string, error: unknown): Promise<never> {
   const message = error instanceof Error ? error.message : '评测结果落库失败'
-  await prisma.benchmarkEvaluation.update({
-    where: { id: evaluationId },
+  await prisma.benchmarkEvaluation.updateMany({
+    where: { id: evaluationId, status: { not: 'cancelled' } },
     data: {
       status: 'normalization_failed',
       failureCode: 'RESULT_PERSISTENCE_FAILED',
@@ -384,6 +386,23 @@ export async function completeBenchmarkEvaluation(input: {
   validateCompletion(input.completion)
   const completionDigest = fingerprintJson(input.completion as unknown as JsonValue)
   let evaluation = await evaluationOrThrow(input.evaluationId)
+  if (input.completion.status === 'failed' && input.completion.error?.code === 'SERVICE_STOPPED') {
+    if (evaluation.failureCode === 'SERVICE_STOPPED') return { accepted: true, evaluationStatus: 'failed', normalizationStatus: 'completed' };
+    if (!ACTIVE_STATUSES.has(evaluation.status)) throw new BenchmarkProtocolError('EVALUATION_NOT_ACTIVE', '已结束的评测不能被停服通知覆盖', 409);
+    await prisma.$transaction(async (tx: any) => {
+      const stopped = await tx.benchmarkEvaluation.updateMany({ where: { id: evaluation.id, status: { in: ['queued', 'dispatch_unknown', 'running_evaluator'] } },
+        data: { status: 'failed', failureCode: 'SERVICE_STOPPED', failureMessage: input.completion.error?.message,
+          continuationStatus: 'completed', finishedAt: new Date() } });
+      if (stopped.count !== 1) throw new BenchmarkProtocolError('EVALUATION_NOT_ACTIVE', '评测状态已变化', 409);
+      await tx.benchmarkCaseRun.updateMany({ where: { id: evaluation.caseRunId, status: { not: 'cancelled' } },
+        data: { status: 'evaluation_failed', failureCode: 'SERVICE_STOPPED', finishedAt: new Date() } });
+      await tx.experiment.updateMany({ where: { id: evaluation.caseRun.experimentId, deletedAt: null }, data: { status: 'failed' } });
+      await tx.benchmarkExperimentBinding.updateMany({ where: { experimentId: evaluation.caseRun.experimentId }, data: { schedulerStatus: 'stopped' } });
+      await tx.experimentEvalResult.updateMany({ where: { caseId: evaluation.caseRun.experimentCaseId, status: { in: ['pending', 'running'] } },
+        data: { status: 'failed', errorMessage: '评测服务被管理员主动停止' } });
+    });
+    return { accepted: true, evaluationStatus: 'failed', normalizationStatus: 'completed' };
+  }
   if (evaluation.completionDigest) {
     if (evaluation.completionDigest !== completionDigest) {
       throw new BenchmarkProtocolError('EVALUATION_COMPLETION_CONFLICT', '评测终态内容冲突', 409)

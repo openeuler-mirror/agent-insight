@@ -333,10 +333,11 @@ async function evaluateTaskCompletionDirectAndRecord(
     const userMsg = buildUserMessage(input, rootCauses);
     const systemPrompt = buildCoordinatorSystemPrompt(input.skillAttributionMode || 'skill-aware');
     const startedAt = new Date();
+    const { experimentSignal } = await import('@/lib/engine/experiment/cancellation-context');
     const response = await model.invoke([
         new SystemMessage(systemPrompt),
         new HumanMessage(userMsg),
-    ]);
+    ], { signal: experimentSignal() });
     const completedAt = new Date();
     const assistantText = typeof response.content === 'string'
         ? response.content
@@ -398,6 +399,7 @@ export async function evaluateTaskCompletionViaOpencode(
      try {
        return await evaluateTaskCompletionDirectAndRecord(input, directConfig, rootCauses, rootCauseSource, user);
      } catch (directErr) {
+       (await import('@/lib/engine/experiment/cancellation-context')).experimentSignal()?.throwIfAborted();
        console.warn(
          '[opencode-task-completion] direct LLM path failed, falling back to opencode transport:',
          (directErr as Error)?.message || directErr,

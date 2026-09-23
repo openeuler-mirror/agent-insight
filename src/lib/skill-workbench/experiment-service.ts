@@ -47,10 +47,11 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
         skillName,
         skillVersion,
         scope: 'skill-workbench',
+        deletedAt: null,
         preset: { in: [...WORKBENCH_EXPERIMENT_PRESETS, 'retest'] },
       },
       orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { cases: true } } },
+      include: { _count: { select: { cases: { where: { deletedAt: null } } } } },
     }),
   ]);
   const taskIds = experiments.map((experiment) => {
@@ -59,12 +60,18 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
   }).filter(Boolean);
   const tasks = taskIds.length ? await prismaRaw.grayscaleTask.findMany({ where: { id: { in: taskIds }, user } }) : [];
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
+  const cancellations = await prismaRaw.experimentCancellation.findMany({
+    where: { experimentId: { in: experiments.map((item) => item.id) }, caseKey: { startsWith: 'dataset:' } },
+    select: { experimentId: true, caseKey: true },
+  });
   return {
     versions: skill.versions.map((version) => ({ id: version.id, version: version.version })),
     datasets,
     evaluators: [...DEFAULT_SELECTED_PRESET_IDS],
     experiments: experiments.map((experiment) => {
       const snapshot = parseJson<Record<string, unknown> & { grayscaleTaskId?: string }>(experiment.configSnapshotJson, {});
+      const deletedCases = new Set(cancellations.filter((item) => item.experimentId === experiment.id).map((item) => item.caseKey.slice(8)));
+      if (Array.isArray(snapshot.caseIds)) snapshot.caseIds = snapshot.caseIds.filter((id) => !deletedCases.has(String(id)));
       const task = snapshot.grayscaleTaskId ? taskMap.get(snapshot.grayscaleTaskId) : null;
       return {
         ...experiment,
@@ -75,7 +82,7 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
         configSnapshot: snapshot,
         grayscaleTask: task ? {
           id: task.id,
-          caseStates: parseJson(task.caseStatesJson, {}),
+          caseStates: Object.fromEntries(Object.entries(parseJson<Record<string, unknown>>(task.caseStatesJson, {})).filter(([id]) => !deletedCases.has(id))),
           config: parseJson(task.configJson, {}),
         } : null,
       };

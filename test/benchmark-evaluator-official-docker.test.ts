@@ -301,7 +301,7 @@ test(`steps 09-13 run a real local Artifact through the official SWE-bench Case 
       const { BenchmarkEvaluatorService } = require('../services/evaluator/src/service.cjs') as {
         BenchmarkEvaluatorService: new (options: Record<string, unknown>) => { createServer(): http.Server }
       }
-      const service = new BenchmarkEvaluatorService({ dataDir: controllerData })
+      const service = new BenchmarkEvaluatorService({ dataDir: controllerData, imagePoolConfig: { enabled: false } })
       evaluatorListener = await listen(service.createServer())
       evaluatorOrigin = evaluatorListener.origin
     }

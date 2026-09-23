@@ -40,7 +40,7 @@ test('start.sh reads the default benchmark from AGENT_INSIGHT_HOME/.env before s
   const managedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-start-config-'))
   fs.writeFileSync(path.join(managedHome, '.env'), 'AGENT_INSIGHT_BENCHMARK=unknown\n', 'utf8')
   try {
-    const env = { ...process.env, AGENT_INSIGHT_HOME: managedHome }
+    const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: managedHome }
     delete env.AGENT_INSIGHT_DATA_DIR
     delete env.AGENT_INSIGHT_BENCHMARK
     const result = spawnSync('bash', [startScript], {
@@ -57,21 +57,22 @@ test('start.sh reads the default benchmark from AGENT_INSIGHT_HOME/.env before s
 
 test('start.sh accepts a one-shot port override before startup side effects', () => {
   const managedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-start-port-'))
-  fs.writeFileSync(path.join(managedHome, '.env'), 'PORT=3100\n', 'utf8')
+  fs.writeFileSync(path.join(managedHome, '.env'), 'AGENT_INSIGHT_PORT=3100\n', 'utf8')
   try {
-    const env = { ...process.env, AGENT_INSIGHT_HOME: managedHome, PORT: 'invalid' }
+    const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: managedHome, AGENT_INSIGHT_PORT: 'invalid' }
+    delete env.PORT
     delete env.AGENT_INSIGHT_DATA_DIR
     const result = spawnSync('bash', [startScript], { encoding: 'utf8', env })
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /PORT 必须是 1 到 65535 的整数：invalid/)
+    assert.match(result.stderr, /AGENT_INSIGHT_PORT \/ --port 必须是 1 到 65535 的整数：invalid/)
     assert.doesNotMatch(result.stdout, /Syncing database schema/)
 
     const cli = spawnSync('bash', [startScript, '--port', 'also-invalid'], {
       encoding: 'utf8',
-      env: { ...env, PORT: '3100' },
+      env: { ...env, AGENT_INSIGHT_PORT: '3100' },
     })
     assert.notEqual(cli.status, 0)
-    assert.match(cli.stderr, /PORT 必须是 1 到 65535 的整数：also-invalid/)
+    assert.match(cli.stderr, /AGENT_INSIGHT_PORT \/ --port 必须是 1 到 65535 的整数：also-invalid/)
     assert.doesNotMatch(cli.stdout, /Syncing database schema/)
   } finally {
     fs.rmSync(managedHome, { recursive: true, force: true })
@@ -83,7 +84,7 @@ test('start.sh explains an inaccessible custom SQLite target before destructive 
   const missingDir = path.join(managedHome, 'missing', 'nested')
   fs.writeFileSync(path.join(managedHome, '.env'), `DATABASE_URL=file:${missingDir}/test.db\n`, 'utf8')
   try {
-    const env = { ...process.env, AGENT_INSIGHT_HOME: managedHome }
+    const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: managedHome }
     delete env.AGENT_INSIGHT_DATA_DIR
     delete env.DATABASE_URL
     const result = spawnSync('bash', [startScript, '--port', '31999'], { encoding: 'utf8', env })

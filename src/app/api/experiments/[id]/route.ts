@@ -69,7 +69,7 @@ export async function GET(
     const wantCaseId = q.get('caseId') || '';
 
     const experimentMeta = await prisma.experiment.findFirst({
-      where: { id, ...(username ? { user: username } : {}) },
+      where: { id, deletedAt: null, ...(username ? { user: username } : {}) },
       select: { id: true, type: true },
     });
     if (!experimentMeta) {
@@ -127,16 +127,16 @@ export async function GET(
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
     const allResults = await prisma.experimentEvalResult.findMany({
-      where: { experimentId: id },
+      where: { experimentId: id, case: { deletedAt: null } },
       select: { caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
     });
     // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
     // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
-    const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
+    const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id, deletedAt: null } });
     const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
     const casePage = Math.min(casePageRaw, casePages);
     const pagedCases = await prisma.experimentCase.findMany({
-      where: wantCaseId ? { id: wantCaseId, experimentId: id } : { experimentId: id },
+      where: { experimentId: id, deletedAt: null, ...(wantCaseId ? { id: wantCaseId } : {}) },
       orderBy: { createdAt: 'asc' },
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
@@ -376,6 +376,9 @@ export async function GET(
     let expectedResultTotal = effectiveAllResults.length;
     let syntheticExecutionFailures = 0;
     if (experiment.scope === 'skill-workbench' && configSnapshot) {
+      const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId: id }, select: { caseKey: true } });
+      const removedDatasetCases = new Set(cancellations.filter((item) => item.caseKey.startsWith('dataset:')).map((item) => item.caseKey.slice(8)));
+      if (Array.isArray(configSnapshot.caseIds)) configSnapshot.caseIds = configSnapshot.caseIds.filter((key) => !removedDatasetCases.has(String(key)));
       const frozenCaseIds = Array.isArray(configSnapshot.caseIds)
         ? configSnapshot.caseIds.map(String).filter(Boolean)
         : [];
@@ -730,6 +733,11 @@ export async function DELETE(
     });
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (url.searchParams.get('stop') === 'true') {
+      const { deleteExperimentExecution } = await import('@/lib/engine/experiment/cancellation-service');
+      const result = await deleteExperimentExecution(username, id);
+      return NextResponse.json({ deleted: true, cancellation: result }, { status: result.status === 'completed' ? 200 : 202 });
     }
     if (experiment.status !== 'draft') {
       return NextResponse.json({

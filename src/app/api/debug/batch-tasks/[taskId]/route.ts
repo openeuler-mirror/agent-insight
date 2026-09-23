@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
+import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import {
@@ -91,12 +92,13 @@ export async function GET(
         }
         const task = await (prisma as any).batchEvalTask.findFirst({ where: { id: taskId, user } });
         if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-        return NextResponse.json({
+        const visible = await visibleExperimentTask({
             ...task,
             configJson: JSON.parse(task.configJson || '{}'),
             caseStatesJson: JSON.parse(task.caseStatesJson || '{}'),
             traceEvalStatesJson: JSON.parse(task.traceEvalStatesJson || '{}'),
         });
+        return visible ? NextResponse.json(visible) : NextResponse.json({ error: 'Task deleted' }, { status: 404 });
     } catch (err) {
         console.error('[BATCH_TASKS_GET_ONE] Failed:', err);
         return NextResponse.json({ error: 'Failed to fetch task' }, { status: 500 });
@@ -425,7 +427,9 @@ async function runBatchTaskBackground(
                 activeCount++;
                 void (async () => {
                     await runOneBatchCase(origin, taskId, user, c, config, states, skillName, skillVersion, signal);
-                })().finally(() => {
+                })().catch((error) => {
+                    if (error?.code !== 'EXPERIMENT_CANCELLED') console.error('[batch-case]', error);
+                }).finally(() => {
                     activeCount--;
                     if (queue.length > 0 && !signal.aborted) tick();
                     else if (activeCount === 0) resolve();
@@ -437,7 +441,18 @@ async function runBatchTaskBackground(
     });
 }
 
-async function runOneBatchCase(
+async function runOneBatchCase(...args: Parameters<typeof runOneBatchCaseImpl>) {
+    const config = args[4];
+    if (!config.evalExperimentId) return runOneBatchCaseImpl(...args);
+    const { withExperimentCancellation } = await import('@/lib/engine/experiment/cancellation-context');
+    return withExperimentCancellation(config.evalExperimentId, `dataset:${args[3].id}`, (signal) => {
+        const next: Parameters<typeof runOneBatchCaseImpl> = [...args];
+        next[8] = AbortSignal.any([args[8], signal]);
+        return runOneBatchCaseImpl(...next);
+    });
+}
+
+async function runOneBatchCaseImpl(
     origin: string,
     taskId: string,
     user: string,
@@ -513,6 +528,7 @@ async function runOneBatchCase(
                 input: c.input || '',
                 actualOutput: '',            // 留空 → 引擎用 Execution.finalResult 兜底
                 referenceOutput: c.expectedOutput ?? null,
+                ...(c.datasetId ? { datasetBinding: { datasetId: c.datasetId, caseId: c.id } } : {}),
             });
             const rows = await evaluateEvalExperimentCase(config.evalExperimentId, caseId, user);
             if (signal.aborted) {

@@ -20,6 +20,21 @@
 
 ## Public API
 
+### 实验停止与逻辑删除（2026-09-23 working-tree overlay）
+
+| 接口 | 契约 |
+|---|---|
+| `DELETE /api/experiments/:id?stop=true` | 校验实验归属，持久化全实验取消与逻辑删除；未带 `stop=true` 保留原草稿补偿删除语义 |
+| `DELETE /api/experiments/:id/cases/:caseId` | 删除所属实验 Case；没有剩余有效 Case 时一并逻辑删除实验。Skill 用例分析/A/B 可用 `dataset:<源CaseId>`，同时覆盖两侧和重复运行 |
+| `GET /api/experiments/cancellations` | 返回当前用户的待确认取消摘要，不接受跨用户查询 |
+| Evaluator `POST /api/v1/evaluations`，`operation=cancel` | `runId` 与 `requestDigest` 定向取消；返回 `cancelling` 或 `cancelled`，未知但合法 ID 可先持久化取消，阻止迟到派发 |
+
+平台沿用 `resolveUser` 鉴权，删除返回 `{ deleted: true, cancellation }`，Case 删除另返回 `experimentDeleted: boolean`，供页面在最后一个 Case 删除后跳转实验列表。状态为 `202`（待确认）或 `200`（已确认）；不存在/越权为 `404`。重复操作复用 `(experimentId, caseKey)` 对应记录。Evaluator 沿用受控网络边界及原任务摘要校验，不新增公开匿名远程管理命令。
+
+`Experiment.deletedAt`、`ExperimentCase.deletedAt` 控制列表和汇总可见性；`ExperimentCancellation` 保存用户、目标集合、确认状态和错误；`ExperimentLocalExecution` 在受控本地工作真正退出后移除。不能把删除标记、取消指令 `SUCCEEDED` 或 HTTP 请求中断当作进程退出证明。取消与执行状态分别记录，迟到结果不能复活条目。
+
+客户端指令 `CANCEL_EXPERIMENT_RUN` 只接受结构化 `kind=ordinary|benchmark` 和 `runId`，不接受远程命令/PID。客户端落盘后中断对应进程树并返回实际退出状态；平台对未确认目标持久化重试。
+
 ### `runGeneralAgent(input: RunGeneralAgentInput): Promise<RunGeneralAgentResult>`  {#run-general-agent}
 - **Location**: `src/lib/engine/general-agent/runner.ts`
 - **Called by**: 约 9 处内部调用点 —— 内部 LangGraph/deepagents 运行时的统一入口；被 skill 生成、优化以及 LLM 评测器使用。

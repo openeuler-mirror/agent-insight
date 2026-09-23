@@ -18,7 +18,11 @@ description: "使用已有 Trace 或 Benchmark 数据集完成第一次实验"
 
 ### SWE-bench 等容器 Benchmark 的评测服务
 
-需要官方 Harness 的 Benchmark 还要求独立 Evaluator Controller。评测机只需安装 Git、Docker 和 Bash，支持 Linux 与 macOS；macOS 需先启动 Docker Desktop。部署者 checkout 平台指定的固定 release 后，在仓库中运行：
+平台端口使用 `AGENT_INSIGHT_PORT`（默认 `3000`），评测服务对外端口使用 `AGENT_INSIGHT_EVALUATOR_PORT`（默认 `3001`）。在各自主机的 `$AGENT_INSIGHT_HOME/.env` 配置；同机部署可写在同一文件中。旧 `PORT` 已移除，非空旧配置会报错，请先改名。也可分别用 `bash scripts/start.sh --port 3100`、`bash scripts/start-evaluator.sh --port 3101` 单次覆盖，完整评测启动仍需配置下方的平台回调地址。
+
+优先级为 `--port > 当前进程环境变量 > .env > 默认值`。评测容器内部端口 `8080` 无需修改。自定义端口启动后，停止仍用 `bash scripts/stop-evaluator.sh`，追加 `--purge-images` 清理受管镜像；停止命令不依赖端口。修改端口后应同步双方通信 URL。
+
+需要官方 Harness 的 Benchmark 还要求独立 Evaluator Controller。评测机只需安装 Git、Docker 和 Bash，支持 Linux 与 macOS；macOS 需先启动 Docker Desktop。服务启停使用镜像自带的管理代码，不要求将本机源码目录共享给 Docker。若停止命令提示旧镜像缺少管理工具，先用当前代码重新运行原启动命令升级服务（会中断旧评测）。可选镜像池支持本机 Linux Docker 传统 image store 和 macOS Docker Desktop（含 containerd）。部署者 checkout 平台指定的固定 release 后，在仓库中运行：
 
 ```bash
 bash scripts/start-evaluator.sh \
@@ -51,7 +55,7 @@ node scripts/configure-evaluator-target.js \
 
 配置写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，下一次 Benchmark 操作自动热加载，不需要重启 `scripts/start.sh` 启动的 Agent Insight。评测服务通过 REST 回传结果，由 Agent Insight API 写入平台数据库和 Artifact Store；评测机不需要平台数据库凭证或独立业务数据库。
 
-Agent Insight 与 Evaluator 不提供应用层鉴权，也不会在任务下发、Artifact 下载、进度、证据或完成回调中发送或校验 Authorization。部署网络必须通过白名单、安全组或防火墙限制服务互访：
+既有评测任务、Artifact 下载、进度、证据和完成回调不提供应用层鉴权，也不会发送或校验 Authorization。镜像池的可选提前准备操作单独校验共享密钥，不能替代整条链路的网络隔离。部署网络必须通过白名单、安全组或防火墙限制服务互访：
 
 ```bash
 # 评测机
@@ -134,6 +138,12 @@ SWE_BENCH_GIT_SOURCE=/srv/swe-git
 4. 点击 **下一步：预期答案**。
 
 首次运行不建议开启监听模式。监听模式更适合已经验证过评估器配置、希望持续评测后续新 Trace 的场景。
+
+容器 Benchmark 的评测服务默认使用[公共镜像池](../../developer-guide/benchmark/service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)管理有限磁盘上的缓存。同机不同 Benchmark 和用户共享一份缓存，不为每个实验另建池；保留 90% 高水位和 30% 安全预留比例，不设低水位，缺空间只回收到够用。在用镜像不会被回收，已完成实验的镜像可能被淘汰，因此下一轮不保证免于重新拉取。
+
+镜像池默认开启，不需要填写单镜像大小或临时空间字节数；服务自动查询镜像清单并保守估算，所有候选源共用最多 2 秒的查询预算，超时使用内部估值。需要关闭时显式传 `--evaluator-env IMAGE_POOL_ENABLED=false`。容量不足时逐个回收闲置镜像，够用即停；无可删镜像或 Docker 已报磁盘满时，该 Case 报容量错误，后续 Case 沿原流程执行并重新检查空间。后台仍每 30 秒检查，不增加高频监测。
+
+预取仍默认关闭。接通可选预取后，当前/下一个 Case 的镜像可与 Agent 执行并行准备，减少开始评测时的等待；不改变 Case 顺序或并发。支持本机 Linux 传统 Docker image store 和 macOS Docker Desktop；参数和双端密钥见部署指南。Mac 按 Docker VM 与宿主磁盘较小余量计算；Docker.raw 在外置盘时，通过 `IMAGE_POOL_MAC_DISK_PATH` 指定同盘空共享目录。修改磁盘映像位置后须重新运行启动命令。预检失败不停止旧服务。Mac 镜像池支持不代表所有 Benchmark 镜像都支持 ARM64，也不改变正式计分资格。比较加速效果时关注整轮耗时和 `runtimeFacts.imagePoolWaitMs`。
 
 ## 步骤三：处理预期输出
 

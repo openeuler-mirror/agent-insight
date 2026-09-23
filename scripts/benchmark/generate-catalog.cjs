@@ -242,6 +242,9 @@ function loadPackage(packageDir) {
   }
   const evaluatorDir = path.dirname(evaluatorYamlPath)
   const entrypoint = resolveInside(evaluatorDir, evaluator.entrypoint, 'evaluator.entrypoint')
+  const imageProvider = evaluator.imageProvider
+    ? resolveInside(evaluatorDir, evaluator.imageProvider, 'evaluator.imageProvider')
+    : null
   const ociRuntime = evaluator.runtime === 'oci-container'
   const imageRepository = ociRuntime
     ? string(evaluator.imageRepository, 'evaluator.imageRepository', /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i)
@@ -359,6 +362,7 @@ function loadPackage(packageDir) {
       runtime: evaluator.runtime,
       command: string(evaluator.command, 'evaluator.command'),
       entrypoint: containerEntrypoint || entrypoint,
+      ...(imageProvider ? { imageProvider } : {}),
       ...(imageRepository ? {
         image: `${imageRepository}:artifact-${evaluatorDigest.slice('sha256:'.length)}`,
         dockerfile: runtimeDockerfile,
@@ -438,6 +442,9 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   ].join('\n')
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
+    ...(item.evaluator.imageProvider
+      ? { imageProvider: path.relative(outputDir, item.evaluator.imageProvider).replaceAll(path.sep, '/') }
+      : {}),
     entrypoint: item.evaluator.runtime === 'oci-container'
       ? item.evaluator.entrypoint
       : path.relative(outputDir, item.evaluator.entrypoint).replaceAll(path.sep, '/'),
@@ -449,6 +456,7 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
       : {}),
   }))
   let descriptorJson = JSON.stringify(descriptors, null, 2)
+  descriptorJson = descriptorJson.replace(/"imageProvider": "([^"/][^"]*)"/g, '"imageProvider": path.resolve(__dirname, "$1")')
   descriptorJson = descriptorJson.replace(/"smokeEntrypoint": "([^"/][^"]*)"/g, '"smokeEntrypoint": path.resolve(__dirname, "$1")')
   descriptorJson = descriptorJson.replace(
     /"entrypoint": "([^"/][^"]*)"/g,

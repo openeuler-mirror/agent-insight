@@ -1,4 +1,5 @@
 'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
 
 import { useCallback, useEffect, useState } from 'react';
 import { FlaskConical, GitCompareArrows, Loader2, MousePointerClick, Rows3 } from 'lucide-react';
@@ -134,6 +135,7 @@ export function ExperimentPanel({
           三个入口创建的都是标准 Skill 实验，只是数据集、对比方式和评估器默认值不同。
         </div>
 
+        <PendingExperimentCancellations user={user} />
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="flex items-center border-b border-border px-4 py-3">
             <FlaskConical className="mr-2 size-4 text-primary" />
@@ -156,7 +158,7 @@ export function ExperimentPanel({
                     <td className="px-4 py-3 text-foreground-secondary">{PRESET_LABELS[row.preset || ''] || '标准实验'}</td>
                     <td className="px-4 py-3 text-foreground-secondary">{row.caseCount ? `${row.caseCount} Cases` : '平台运行'}</td>
                     <td className="px-4 py-3"><span className="rounded bg-background-secondary px-2 py-1 text-[10px] text-foreground-secondary">{STATUS_LABELS[row.status] || row.status}</span></td>
-                    <td className="px-4 py-3 text-foreground-muted">{new Date(row.updatedAt || row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                    <td className="px-4 py-3 text-foreground-muted">{new Date(row.updatedAt || row.createdAt).toLocaleString('zh-CN', { hour12: false })}<br /><DeleteExperimentButton user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} /></td>
                   </tr>
                 ))}
               </tbody>

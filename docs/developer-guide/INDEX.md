@@ -9,16 +9,30 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e78a74e0817ff699daa4e836f9e52ae4ffbc2cd4` (`e78a74e0`) |
+| Commit | `27279a6cee6c6101a826b070329b4680d2ea76e1` (`27279a6c`) |
 | Branch | `bench-9-16` |
 | Date | 2026-09-23 |
 | Author | mintuyang |
-| Subject | `修复实验列表状态及时更新` |
-| Documentation overlay | 本次更新 Benchmark 服务部署指南的 SWE-bench Git 来源策略与执行端配置；保留既有 overlay，其他指南未重新全量审计。 |
+| Subject | `优化swebench评测git源码拉取逻辑，加速评测` |
+| Documentation overlay | 本次更新 Benchmark 服务部署指南的 SWE-bench Git 来源策略与执行端配置；合入 PR #294 文本评估器运行配置，并更新实验、安装、Trace、生命周期及前端契约相关指南；保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-23 working-tree overlay：生产 `start.sh` 增加同项目残留 Trace 消费进程清理。仅对锁文件指向、已失去监听端口的旧 standalone 进程执行终止；无法核实归属时中止启动。更新启动排障 FAQ 与 OTel 消费数据流说明。
+
+> 2026-09-23 working-tree overlay：镜像池改为默认开启，取消用户必填的单镜像/临时空间字节估值，安全预留自动按可管理空间比例计算。新增带总计 2 秒期限和缓存的镜像清单估算，失败使用内部估值；沿用逐个 LRU 回收和 30 秒后台检查，不新增高频监控。明确容量失败不换源重试，沿原 Case 失败流程回调。同步部署、首次评测与镜像池方案；不重启运行中的实例。
+
+> 2026-09-23 working-tree overlay：公共镜像池增加本机 macOS Docker Desktop 传统/containerd 存储支持。启动前同盘校验和只读预检，按 VM/宿主较小可用空间准入，VirtioFS 使用正确分配单位；健康接口增加最近空间采样。保持 Linux 传统存储、LRU/租约/预取规则，未知布局或检测失败拒绝准入。更新部署、首次评测及镜像池方案；不扩展其他 Mac Docker 后端或远程 daemon。
+
+> 2026-09-23 working-tree overlay：评测服务管理容器改用 Controller 镜像内置代码，取消宿主源码目录挂载；无资源挂载预检旧镜像的管理模块，缺失时停止操作并提示升级。更新部署与首次评测指南；不扩展 macOS 镜像池支持，其他指南未重新全量审计。
+
 > 2026-09-23 working-tree overlay：执行器新增 `GitSourcePolicy` 抽象与 SWE-bench 实例策略。`SWE_BENCH_GIT_SOURCE` 在执行机配置：空值走 Gitee → GitHub；本地目录优先 Bare 缓存并按需补存；HTTP(S) 根地址优先指定 Git 源。按 baseCommit 校验完整性、仓库级锁更新缓存、独立 shallow 工作区隔离；其他 Benchmark 保留原行为。不新增预热、数据库字段或 API。
+
+> 2026-09-23 working-tree overlay：平台对外端口改为 `AGENT_INSIGHT_PORT`，评测宿主机对外端口为 `AGENT_INSIGHT_EVALUATOR_PORT`；两端支持 `--port` 单次覆盖并读取统一运行根的 `.env`。非空旧 `PORT` 配置直接报错，不保留兼容；npm 启停与状态查询同步新平台变量。评测容器内部保持 8080，停止/清理按实例定位，与端口无关。更新部署和首次评测指南。
+
+> 2026-09-23 working-tree overlay：新增普通/Benchmark/Skill 用例分析与 A/B 实验及 Case 的停止并逻辑删除、持久化取消对账和定向执行中断；删除最后一个有效 Case 时自动删除实验并返回实验列表，对账补救零 Case 遗留实验。旧客户端拒绝停止指令时提示升级并等重启后重试，避免无效高频投递。评测机提供立即停止及可选离线受管镜像清理。更新 API、控制流、部署及用户指南。定向测试已通过；全量测试和类型检查存在未通过项，浏览器与真实 Docker/多机验收尚未执行。未重新全量审计其他指南。
+
+> 2026-09-22 working-tree overlay：新增默认关闭的跨 Benchmark 公共镜像池，保留安全预留和高水位，不设低水位；按需 LRU 回收、持久化使用保护、固定身份重试及当前/下一 Case 预取。接入包通过可选 `imageProvider` / `imagePreparationInput` 声明需求，SWE-bench 首先接入。准备操作复用原 POST 入口并独立校验共享密钥，不改变既有网络隔离及单评测并发约束。更新 Benchmark 接入、部署和用户指南；其他页面未全量重新审计。
 
 > 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 
@@ -126,7 +140,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 27279a6c HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

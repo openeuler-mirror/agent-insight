@@ -1,4 +1,5 @@
 'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
 
 // 实验列表 —— 评测「实验化」第一切片（本期仅单组实验）。
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -214,6 +215,7 @@ export default function ExperimentsPage() {
         }
       />
       <PageContainer>
+        {user && <PendingExperimentCancellations user={user} />}
         <div style={{
           background: 'var(--card-bg)', border: '1px solid var(--card-border)',
           borderRadius: 10, overflow: 'hidden',
@@ -294,6 +296,7 @@ export default function ExperimentsPage() {
                           onClick={() => router.push(`/experiments/new?reuseFrom=${encodeURIComponent(r.id)}`)}
                           style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
                         >复用评测配置</button>
+                        {user && <DeleteExperimentButton user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
                       </span>
                     </td>
                   </tr>

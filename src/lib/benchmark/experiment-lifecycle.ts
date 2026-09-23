@@ -4,6 +4,8 @@ import { deriveSettledExperimentStatus } from '@/lib/engine/experiment/detail-ag
 
 import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
 import { startBenchmarkExperiment } from './scheduler'
+import { nextImagePreparationRevision, sendImagePreparationWindow } from './image-preparation'
+import { getBenchmarkAdapter } from './adapter-registry'
 
 const TERMINAL_RUN_STATUSES = [
   'evaluated',
@@ -62,17 +64,17 @@ async function waitForExecution(user: string, traceId: string) {
 export async function settleBenchmarkExperimentStatus(experimentId: string): Promise<void> {
   const binding = await prisma.benchmarkExperimentBinding.findUnique({
     where: { experimentId },
-    select: { expectedCaseCount: true },
+    select: { expectedCaseCount: true, adapterKey: true },
   })
   if (!binding) return
   const [runs, resultRows] = await Promise.all([
     prisma.benchmarkCaseRun.findMany({
-      where: { experimentId },
+      where: { experimentId, experimentCase: { deletedAt: null } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: { id: true, retryOfRunId: true, experimentCaseId: true, status: true },
     }),
     prisma.experimentEvalResult.findMany({
-      where: { experimentId },
+      where: { experimentId, case: { deletedAt: null } },
       select: { status: true },
     }),
   ])
@@ -89,12 +91,13 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
   const terminalRuns = Array.from(latestRunStatus.values())
     .filter((status) => TERMINAL_RUN_STATUSES.includes(status)).length
   const resultPending = resultRows.some((row: { status: string }) => row.status === 'pending' || row.status === 'running')
-  if (terminalRuns !== binding.expectedCaseCount || resultPending) return
-  const status = deriveSettledExperimentStatus(resultRows)
+  const expectedCount = await prisma.experimentCase.count({ where: { experimentId, deletedAt: null } });
+  if (terminalRuns !== expectedCount || resultPending) return
+  const status = expectedCount === 0 ? 'cancelled' : deriveSettledExperimentStatus(resultRows)
   if (!status) return
   await prisma.$transaction([
-    prisma.experiment.update({
-      where: { id: experimentId },
+    prisma.experiment.updateMany({
+      where: { id: experimentId, deletedAt: null, status: { not: 'cancelled' } },
       data: { status },
     }),
     prisma.benchmarkExperimentBinding.update({
@@ -102,6 +105,12 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
       data: { schedulerStatus: status },
     }),
   ])
+  if (process.env.BENCHMARK_IMAGE_POOL_PREPARE_TOKEN) {
+    const evaluatorKey = getBenchmarkAdapter(binding.adapterKey).manifest.evaluation.evaluatorKey
+    void sendImagePreparationWindow({ benchmarkKey: binding.adapterKey, evaluatorKey, experimentId,
+      revision: nextImagePreparationRevision(), cases: [] })
+      .catch((error) => console.warn('[benchmark/image-pool] window cleanup failed', error instanceof Error ? error.message : String(error)))
+  }
 }
 
 async function continueExperiment(experimentId: string): Promise<void> {
@@ -121,6 +130,11 @@ async function continueExperiment(experimentId: string): Promise<void> {
   next?.completion?.catch((error) => {
     console.error('[benchmark/lifecycle] next case dispatch failed', error)
   })
+}
+
+export async function continueAfterCaseCancellation(experimentId: string): Promise<void> {
+  await settleBenchmarkExperimentStatus(experimentId);
+  await continueExperiment(experimentId);
 }
 
 export async function finalizeBenchmarkCase(input: {
@@ -236,14 +250,15 @@ export async function finalizeBenchmarkCase(input: {
 export async function failBenchmarkCaseResults(caseRunId: string, message: string): Promise<void> {
   const run = await prisma.benchmarkCaseRun.findUnique({
     where: { id: caseRunId },
-    select: { experimentId: true, experimentCaseId: true },
+    select: { experimentId: true, experimentCaseId: true, status: true },
   })
-  if (!run) return
+  if (!run || run.status === 'cancelled') return
   try {
     await prisma.experimentEvalResult.updateMany({
       where: {
         experimentId: run.experimentId,
         caseId: run.experimentCaseId,
+        case: { deletedAt: null, experiment: { deletedAt: null } },
         status: { in: ['pending', 'running'] },
       },
       data: { status: 'failed', errorMessage: message },

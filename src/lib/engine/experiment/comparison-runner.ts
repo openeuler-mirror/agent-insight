@@ -398,7 +398,7 @@ export async function getComparisonDetail(
 
   // 全量结果（轻量选列）
   const allResults: ResultRowLike[] = await prisma.experimentEvalResult.findMany({
-    where: { experimentId },
+    where: { experimentId, case: { deletedAt: null } },
     select: { caseId: true, evaluatorId: true, status: true, score: true },
   });
   const progress = {
@@ -419,7 +419,7 @@ export async function getComparisonDetail(
     results: ResultRowLike[];
   }
   const allCases: CaseWithResults[] = await prisma.experimentCase.findMany({
-    where: { experimentId },
+    where: { experimentId, deletedAt: null },
     include: { results: { select: { id: true, caseId: true, evaluatorId: true, status: true, score: true } } },
   });
 
@@ -572,13 +572,13 @@ export interface StartComparisonRunResult {
 /** 全部结果终态后收敛为 done / partial / failed。 */
 async function settleComparisonStatus(experimentId: string): Promise<void> {
   const rows: { status: string }[] = await prisma.experimentEvalResult.findMany({
-    where: { experimentId },
+    where: { experimentId, case: { deletedAt: null } },
     select: { status: true },
   });
   const status = deriveSettledExperimentStatus(rows);
   if (!status) return;
-  await prisma.experiment.update({
-    where: { id: experimentId },
+  await prisma.experiment.updateMany({
+    where: { id: experimentId, deletedAt: null, status: { not: 'cancelled' } },
     data: { status },
   });
 }
@@ -612,6 +612,8 @@ export async function startComparisonRun(
   experimentId: string,
   user: string,
 ): Promise<StartComparisonRunResult | null> {
+  const { assertExperimentActive } = await import('./cancellation-context');
+  await assertExperimentActive(experimentId);
   const running = getComparisonRunningSet();
   if (running.has(experimentId)) {
     return { status: 'running', alreadyRunning: true };
@@ -638,7 +640,7 @@ export async function startComparisonRun(
   } catch { /* 忽略脏数据 */ }
 
   const cases = await prisma.experimentCase.findMany({
-    where: { experimentId },
+    where: { experimentId, deletedAt: null },
     select: { id: true },
   });
   const resultIds: string[] = [];
@@ -669,6 +671,8 @@ export async function rescanComparison(
   experimentId: string,
   user: string,
 ): Promise<{ newPairsCount: number; downgradedPairs: number }> {
+  const { assertExperimentActive } = await import('./cancellation-context');
+  await assertExperimentActive(experimentId);
   const experiment = await prisma.experiment.findUnique({
     where: { id: experimentId },
     include: { groups: { orderBy: { key: 'asc' } } },

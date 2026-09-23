@@ -1,7 +1,54 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
+import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
+
+test('managed SWE Harness cannot pull behind the pool and does not remove its own Runtime', () => {
+  const source = fs.readFileSync(path.resolve('benchmarks/swe-bench/evaluator/run.py'), 'utf8')
+  const script = `
+import ast
+tree = ast.parse(${JSON.stringify(source)})
+names = {"PreparedImages", "ControlledDockerClient", "ControlledContainers", "cleanup_labeled"}
+selected = ast.Module(body=[node for node in tree.body if getattr(node, "name", "") in names], type_ignores=[])
+exec(compile(selected, "runner-contract", "exec"))
+
+class Images:
+    def get(self, ref):
+        return ref
+images = PreparedImages(Images())
+assert images.get("frozen") == "frozen"
+for operation in (images.pull, images.build):
+    try:
+        operation("unmanaged")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Runtime bypassed shared pool")
+
+class Container:
+    def __init__(self, role):
+        self.labels = {"agent-insight.role": role}
+        self.removed = False
+    def remove(self, **kwargs):
+        self.removed = True
+runtime, case = Container("evaluator-runtime"), Container("case")
+class Containers:
+    def list(self, **kwargs):
+        return [runtime, case]
+class Client:
+    containers = Containers()
+    images = Images()
+    api = None
+client = Client()
+assert cleanup_labeled(client, "evaluation") == {"status": "succeeded"}
+assert case.removed and not runtime.removed
+assert isinstance(ControlledDockerClient(client, "evaluation", 1, 1024, "deny", True).images, PreparedImages)
+assert ControlledDockerClient(client, "evaluation", 1, 1024, "deny").images is client.images
+`
+  const result = spawnSync('python3', ['-c', script], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+})
 
 test('SWE-bench runner separates benchmark failures from infrastructure failures', () => {
   const evaluatorDir = path.resolve('benchmarks/swe-bench/evaluator')

@@ -123,6 +123,7 @@ export function ExecutionRecordsTable({
     emptyHint,
     onRetry,
     onDelete,
+    allowRunningDelete = false,
     onRowClick,
 }: {
     records: EvalRecordRow[];
@@ -133,6 +134,7 @@ export function ExecutionRecordsTable({
     onRetry?: (record: EvalRecordRow) => void;
     /** 行级删除回调; 不传则不显示删除按钮。进行中(评测中/执行中/排队中)的行会禁用删除。 */
     onDelete?: (record: EvalRecordRow) => void;
+    allowRunningDelete?: boolean;
     /** 点击行(非链接/按钮区)回调, 用于在本页钻取结果详情; 不传则行不可点 */
     onRowClick?: (record: EvalRecordRow) => void;
 }) {
@@ -357,9 +359,9 @@ export function ExecutionRecordsTable({
                                                 <button
                                                     className="v2-action-btn"
                                                     style={{ fontSize: 11, padding: '3px 8px', border: '1px solid ' + (actionsDisabled ? '#E7E5E4' : '#F0C5C5'), background: '#fff', borderRadius: 4, cursor: actionsDisabled ? 'not-allowed' : 'pointer', color: actionsDisabled ? '#B8B6AE' : '#DC2626', opacity: actionsDisabled ? 0.6 : 1 }}
-                                                    disabled={actionsDisabled}
-                                                    title={actionsDisabled ? (zh ? '当前记录暂不可删除' : 'Delete is unavailable') : (zh ? '从评测执行列表删除这条' : 'Delete this record')}
-                                                    onClick={e => { e.stopPropagation(); if (!actionsDisabled) onDelete(rec); }}
+                                                    disabled={actionsDisabled && !allowRunningDelete}
+                                                    title={allowRunningDelete ? '停止并删除本次实验中的 Case' : (zh ? '从评测执行列表删除这条' : 'Delete this record')}
+                                                    onClick={e => { e.stopPropagation(); if (!actionsDisabled || allowRunningDelete) onDelete(rec); }}
                                                 >
                                                     {zh ? '删除' : 'Delete'}
                                                 </button>

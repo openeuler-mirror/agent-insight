@@ -52,6 +52,11 @@ DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh --port 3100
 
 如果你最近切换过账号，尤其要注意是否复制了旧的 API Key。
 
+如果客户端已得到 Trace ID，但列表仍没有记录，可检查 `server.log` 是否出现
+`[OTelConsumer] spool is owned by another process`，以及
+`$AGENT_INSIGHT_HOME/otel_data/traces/consumer-checkpoint.json` 是否持续更新。
+源码部署的 `scripts/start.sh` 会在重启时清理同一项目中已失去监听端口、却仍占有 Trace 消费锁的旧服务进程；锁属于其他项目或仍在监听的服务时，启动会停止并提示处理，避免静默丢失消费能力。
+
 ### 为什么数据跑到别的账号或别的 Workspace 了？
 
 最常见原因是：

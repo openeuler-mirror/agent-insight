@@ -341,6 +341,14 @@ class FileRunStore {
     return this.readJson(path.join(this.runDir(runId), 'request.json'))
   }
 
+  cancellation(runId) {
+    return this.readJson(path.join(this.runDir(runId), 'cancellation.json'))
+  }
+
+  cancel(runId) {
+    return atomicWriteJson(path.join(this.runDir(runId), 'cancellation.json'), { at: new Date().toISOString() })
+  }
+
   writeState(runId, patch) {
     return this.state(runId).then((current) => atomicWriteJson(
       path.join(this.runDir(runId), 'state.json'),
@@ -724,6 +732,7 @@ class BenchmarkExecutionRunner {
   }
 
   async progress(request, stage, message) {
+    if (await this.store.cancellation?.(request.runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
     await this.store.writeState(request.runId, { stage })
     await this.callback.progress(request, stage, { message }).catch(() => undefined)
   }
@@ -748,6 +757,7 @@ class BenchmarkExecutionRunner {
         ...plan.agent,
         cwd: workspace.path,
         timeoutSeconds: Math.min(plan.agent.timeoutSeconds, request.timeoutSeconds),
+        signal,
       })
       runFacts = {
         ...agentResult,
@@ -813,6 +823,7 @@ class BenchmarkExecutionRunner {
         cleanup,
       }
       await this.store.writeState(request.runId, { stage: 'complete_pending', completion: pendingCompletion })
+      if (await this.store.cancellation?.(request.runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
       await this.callback.complete(request, pendingCompletion)
       await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded' })
     } catch (error) {
@@ -828,7 +839,8 @@ class BenchmarkExecutionRunner {
       const normalized = error instanceof BenchmarkExecutorError
         ? error
         : new BenchmarkExecutorError(error?.code || 'EXECUTION_FAILED', error?.message || '执行器运行失败')
-      if (pendingCompletion) {
+      const cancelled = Boolean(await this.store.cancellation?.(request.runId))
+      if (pendingCompletion && !cancelled) {
         this.logError?.(`benchmark completion ${request.runId} pending delivery`, normalized)
         await this.store.writeState(request.runId, {
           stage: 'complete_pending',
@@ -846,6 +858,13 @@ class BenchmarkExecutionRunner {
         cleanup = cleanup || { status: 'succeeded', finishedAt: new Date().toISOString() }
       }
       if (appliedPolicy) await this.policyEnforcer.release(appliedPolicy).catch(() => undefined)
+      if (cancelled) {
+        await this.store.writeState(request.runId, {
+          stage: cleanup?.status === 'succeeded' ? 'terminal' : 'cancelling',
+          terminalStatus: 'cancelled', cleanup,
+        })
+        return
+      }
       if (localArtifacts.length && uploadedArtifacts.length < localArtifacts.length && normalized.retryable) {
         await this.store.writeState(request.runId, {
           stage: 'upload_pending',
@@ -1022,6 +1041,7 @@ function createBenchmarkExecutor(options) {
   }
   const credentialHash = deviceCredentialHash(options.deviceCredential)
   let activeRunId = null
+  const cancellationControllers = new Map()
   let deliveryRetryRunId = null
   let recoveryTimer = null
   let recoveryTimerDueAt = 0
@@ -1064,13 +1084,20 @@ function createBenchmarkExecutor(options) {
   }
 
   function runInBackground(request, state) {
+    const controller = new AbortController()
+    cancellationControllers.set(request.runId, controller)
     queueMicrotask(async () => {
       try {
+        if (await store.cancellation(request.runId)) {
+          if (!state?.stage || state.stage === 'accepted') await store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'cancelled' })
+          return
+        }
         if (state?.stage && state.stage !== 'accepted') await runner.resume(request, state)
-        else await runner.execute(request)
+        else await runner.execute(request, controller.signal)
       } catch (error) {
         options.logError?.(`benchmark run ${request.runId} failed`, error)
       } finally {
+        cancellationControllers.delete(request.runId)
         release(request.runId)
       }
     })
@@ -1158,6 +1185,7 @@ function createBenchmarkExecutor(options) {
   }
 
   async function acceptValidatedRequest(request, { runId }) {
+    if (await store.cancellation(runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
     const existing = await store.request(runId)
     if (existing) {
       const accepted = await store.accept(request)
@@ -1244,6 +1272,7 @@ function createBenchmarkExecutor(options) {
     let nextDeliveryDelay = null
     for (const runId of runIds) {
       if (closed) break
+      if (await store.cancellation(runId)) continue
       const [request, state] = await Promise.all([store.request(runId), store.state(runId)])
       if (!request || !state || state.stage === 'terminal') continue
       if (DELIVERY_RETRY_STAGES.has(state.stage)) {
@@ -1274,6 +1303,16 @@ function createBenchmarkExecutor(options) {
     get activeRunId() { return activeRunId },
     get agentPlatforms() { return agentRuntimes.keys() },
     setAgentPlatforms,
+    async cancel(runId) {
+      const prior = await store.state(runId)
+      await store.cancel(runId)
+      cancellationControllers.get(runId)?.abort()
+      if (!prior || (prior.stage === 'accepted' || prior.cleanup?.status === 'succeeded') && activeRunId !== runId) {
+        await store.writeState(runId, { stage: 'terminal', terminalStatus: 'cancelled' })
+      }
+      const state = await store.state(runId)
+      return { runId, status: state?.stage === 'terminal' && activeRunId !== runId ? 'cancelled' : 'cancelling' }
+    },
     async accept(request) {
       const validated = validateRequest(request, true)
       await acceptValidatedRequest(request, validated)

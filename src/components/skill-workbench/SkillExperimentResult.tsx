@@ -1,4 +1,5 @@
 'use client';
+import { DeleteExperimentButton } from '@/components/eval/DeleteExperimentButton';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
@@ -682,7 +683,7 @@ export function SkillExperimentResult({
                       ))?.id || '';
                       return (
                         <tr key={comparison.caseId} className="align-top hover:bg-background-secondary/60">
-                          <td className="px-3 py-3"><ExpandableCellText value={input} /></td>
+                          <td className="px-3 py-3"><ExpandableCellText value={input} /><DeleteExperimentButton user={user} experimentId={experimentId} caseId={`dataset:${comparison.caseId}`} onDeleted={() => load(true)} /></td>
                           <td className="px-3 py-3"><ExpandableCellText value={reference} muted /></td>
                           <td className="px-3 py-3"><ExpandableCellText value={comparison.a.output} muted /></td>
                           <td className="px-2 py-3 font-semibold text-foreground">{scoreText(comparison.a.score, comparison.a.status)}</td>
@@ -770,7 +771,7 @@ export function SkillExperimentResult({
                           const busy = Boolean(retryingRun) || (!experimentSettled && (hasActiveRuns || runIsActive(summary)));
                           return (
                             <tr key={caseId} className="align-top hover:bg-background-secondary/60">
-                              <td className="px-3 py-3"><ExpandableCellText value={input} /></td>
+                              <td className="px-3 py-3"><ExpandableCellText value={input} /><DeleteExperimentButton user={user} experimentId={experimentId} caseId={`dataset:${caseId}`} onDeleted={() => load(true)} /></td>
                               <td className="px-3 py-3"><ExpandableCellText value={reference} muted /></td>
                               <td className="px-3 py-3"><ExpandableCellText value={summary.output} muted /></td>
                               <td className="px-2 py-3 font-semibold text-foreground">{scoreText(summary.score, summary.status)}</td>

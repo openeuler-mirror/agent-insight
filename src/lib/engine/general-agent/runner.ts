@@ -260,6 +260,11 @@ export interface RunGeneralAgentResult {
 export async function runGeneralAgent(
   input: RunGeneralAgentInput,
 ): Promise<RunGeneralAgentResult> {
+  const { experimentSignal } = await import('@/lib/engine/experiment/cancellation-context');
+  const cancellation = experimentSignal();
+  cancellation?.throwIfAborted();
+  if (cancellation) input = { ...input, chatOptions: { ...input.chatOptions,
+    signal: input.chatOptions?.signal ? AbortSignal.any([input.chatOptions.signal, cancellation]) : cancellation } };
   const user = String(input.user || '').trim();
   if (!user) throw new Error('user is required');
   // 把 query 里的 `~/` 展开成执行机绝对 HOME, 再交给 agent —— `~` 是 shell 语法糖, agent 用

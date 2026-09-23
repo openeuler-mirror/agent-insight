@@ -11,7 +11,7 @@ START_PORT=""
 
 start_usage() {
   cat <<'EOF'
-Usage: [PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--benchmark KEY]
+Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--benchmark KEY]
 
 Builds and starts Agent Insight. Benchmark selection precedence is CLI,
 AGENT_INSIGHT_BENCHMARK from the process environment, then ~/.agent-insight/.env.
@@ -42,6 +42,7 @@ while [ "$#" -gt 0 ]; do
     --port)
       [ "$#" -ge 2 ] || start_fail '--port 缺少参数值'
       [ -z "$START_PORT" ] || start_fail '--port 只能指定一次'
+      [ -n "$2" ] || start_fail '--port 缺少参数值'
       START_PORT="$2"
       shift 2
       ;;
@@ -53,6 +54,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ -n "${PORT:-}" ]; then
+  start_fail 'PORT 已移除，请改用 AGENT_INSIGHT_PORT 并移除旧 PORT 配置'
+fi
 case "$BENCHMARK_KEY" in
   ''|swe-bench) ;;
   *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
@@ -79,7 +83,7 @@ load_agent_insight_env() {
   local name
   local overrides=()
   # 保留启动环境的显式空值，使其也能覆盖 .env。
-  for name in PORT DATABASE_URL AGENT_INSIGHT_BENCHMARK \
+  for name in AGENT_INSIGHT_PORT DATABASE_URL AGENT_INSIGHT_BENCHMARK \
     SWE_BENCH_DATASET_SOURCE SWE_BENCH_SOURCE_ARCHIVE_SOURCE SWE_BENCH_DATASET_PATH \
     SWE_BENCH_DATASET_URL SWE_BENCH_SOURCE_ARCHIVE_URL SWE_BENCH_PYTHON; do
     if [ "${!name+x}" = x ]; then
@@ -227,15 +231,17 @@ find_pid_on_port() {
 # Check for OpenGauss configuration in ~/.agent-insight/.env
 load_agent_insight_env
 
-PORT="${START_PORT:-${PORT:-3000}}"
-case "$PORT" in
-  *[!0-9]*|'') start_fail "PORT 必须是 1 到 65535 的整数：$PORT" ;;
-esac
-if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
-  start_fail "PORT 必须是 1 到 65535 的整数：$PORT"
+if [ -n "${PORT:-}" ]; then
+  start_fail 'PORT 已移除，请改用 AGENT_INSIGHT_PORT 并移除旧 PORT 配置'
 fi
-export PORT
-echo "Checking port $PORT..."
+PLATFORM_PORT="${START_PORT:-${AGENT_INSIGHT_PORT:-3000}}"
+case "$PLATFORM_PORT" in
+  *[!0-9]*|'') start_fail "AGENT_INSIGHT_PORT / --port 必须是 1 到 65535 的整数：$PLATFORM_PORT" ;;
+esac
+if [ "${#PLATFORM_PORT}" -gt 5 ] || [ "$PLATFORM_PORT" -lt 1 ] || [ "$PLATFORM_PORT" -gt 65535 ]; then
+  start_fail "AGENT_INSIGHT_PORT / --port 必须是 1 到 65535 的整数：$PLATFORM_PORT"
+fi
+echo "Checking port $PLATFORM_PORT..."
 
 if [ -z "$BENCHMARK_KEY" ]; then
   BENCHMARK_KEY="${AGENT_INSIGHT_BENCHMARK:-}"
@@ -274,10 +280,10 @@ else
 fi
 
 # 1. Try finding PID specifically
-PIDS=$(find_pid_on_port $PORT)
+PIDS=$(find_pid_on_port $PLATFORM_PORT)
 
 if [ -n "$PIDS" ]; then
-  echo "Found process(es) occupying port $PORT: $PIDS"
+  echo "Found process(es) occupying port $PLATFORM_PORT: $PIDS"
   echo "Killing PIDS..."
   kill -9 $PIDS
 else
@@ -302,21 +308,28 @@ fi
 # 2. Force kill using fuser if available (very reliable)
 if command -v fuser >/dev/null 2>&1; then
   echo "Attempting to force kill with fuser..."
-  fuser -k -n tcp $PORT >/dev/null 2>&1
+  fuser -k -n tcp $PLATFORM_PORT >/dev/null 2>&1
+fi
+
+# 旧 standalone 可能已释放监听端口，却因后台 consumer 定时器继续存活并占住 spool 锁。
+# 只终止锁文件指向、cwd 属于本项目且不再监听任何端口的进程。
+if ! node scripts/stop-orphan-trace-consumer.cjs "$AGENT_INSIGHT_HOME" "$(pwd)"; then
+  echo "CRITICAL ERROR: 无法安全清理旧 Trace 消费进程，已停止启动。" >&2
+  exit 1
 fi
 
 # 3. Double check
 echo "Waiting for port to release..."
 sleep 2
 
-PIDS_REMAINING=$(find_pid_on_port $PORT)
+PIDS_REMAINING=$(find_pid_on_port $PLATFORM_PORT)
 if [ -n "$PIDS_REMAINING" ]; then
-  echo "CRITICAL ERROR: Port $PORT is STILL in use by PID: $PIDS_REMAINING"
+  echo "CRITICAL ERROR: Port $PLATFORM_PORT is STILL in use by PID: $PIDS_REMAINING"
   echo "Please manually kill this process: kill -9 $PIDS_REMAINING"
   exit 1
 fi
 
-echo "Port $PORT is confirmed free."
+echo "Port $PLATFORM_PORT is confirmed free."
 
 # 4. Build
 echo "-----------------------------------"
@@ -392,8 +405,8 @@ echo "-----------------------------------"
 echo "Starting server (standalone)..."
 
 # One last check before start
-if [ -n "$(find_pid_on_port $PORT)" ]; then
-    echo "ERROR: Port $PORT was taken during build!"
+if [ -n "$(find_pid_on_port $PLATFORM_PORT)" ]; then
+    echo "ERROR: Port $PLATFORM_PORT was taken during build!"
     exit 1
 fi
 
@@ -409,14 +422,14 @@ LOG_FILE="$(pwd)/server.log"
 if command -v setsid >/dev/null 2>&1; then
   NEW_PID=$(
     cd "$STANDALONE_DIR" || exit 1
-    setsid env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
+    setsid env HOSTNAME=0.0.0.0 PORT="$PLATFORM_PORT" NODE_OPTIONS="--max-old-space-size=6144" \
       node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
     echo $!
   )
 else
   NEW_PID=$(
     cd "$STANDALONE_DIR" || exit 1
-    nohup env HOSTNAME=0.0.0.0 PORT="$PORT" NODE_OPTIONS="--max-old-space-size=6144" \
+    nohup env HOSTNAME=0.0.0.0 PORT="$PLATFORM_PORT" NODE_OPTIONS="--max-old-space-size=6144" \
       node ./server.js >> "$LOG_FILE" 2>&1 < /dev/null &
     echo $!
   )
@@ -424,29 +437,29 @@ fi
 # 清掉历史版本留下的旁路文件（若存在）
 rm -f "${LOG_FILE}.pid"
 
-echo "Waiting for port $PORT to accept connections..."
+echo "Waiting for port $PLATFORM_PORT to accept connections..."
 READY=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
   sleep 1
-  if curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/" >/dev/null 2>&1 \
-    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/dataset" >/dev/null 2>&1 \
-    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/fault" >/dev/null 2>&1; then
+  if curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PLATFORM_PORT/" >/dev/null 2>&1 \
+    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PLATFORM_PORT/dataset" >/dev/null 2>&1 \
+    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PLATFORM_PORT/fault" >/dev/null 2>&1; then
     READY=1
     break
   fi
 done
 
 if [ "$READY" -ne 1 ]; then
-  echo "CRITICAL ERROR: Server process spawned (PID ${NEW_PID:-unknown}) but http://127.0.0.1:$PORT 无响应。"
+  echo "CRITICAL ERROR: Server process spawned (PID ${NEW_PID:-unknown}) but http://127.0.0.1:$PLATFORM_PORT 无响应。"
   echo "Check server.log for details."
   tail -n 40 "$LOG_FILE" 2>/dev/null || true
   exit 1
 fi
 
 echo "Server started successfully."
-echo "PID: ${NEW_PID:-$(find_pid_on_port $PORT | tr '\n' ' ')}"
+echo "PID: ${NEW_PID:-$(find_pid_on_port $PLATFORM_PORT | tr '\n' ' ')}"
 echo "Standalone: $STANDALONE_DIR/server.js"
 echo "Log file: server.log"
-echo "URL: http://localhost:$PORT"
+echo "URL: http://localhost:$PLATFORM_PORT"
 ensure_goal_plus_watcher
 echo "-----------------------------------"

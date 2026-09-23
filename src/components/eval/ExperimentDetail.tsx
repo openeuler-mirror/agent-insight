@@ -1,9 +1,11 @@
 'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations, isCompletedExperimentCase } from './DeleteExperimentButton';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
 // → Case 明细表（Benchmark 列由 Presentation 声明；综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
@@ -188,6 +190,7 @@ export function ExperimentDetail({
   onOpenCase?: (caseId: string) => void;
 }) {
   const { user } = useAuth();
+  const router = useRouter();
   const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -365,6 +368,7 @@ export function ExperimentDetail({
         {embedded && onBack && (
           <button type="button" onClick={onBack} style={{ ...ACTION_BTN, marginBottom: 12 }}>‹ 返回实验记录</button>
         )}
+        {user && <PendingExperimentCancellations user={user} />}
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : error && !detail ? (
@@ -749,6 +753,9 @@ export function ExperimentDetail({
                                 详情
                               </Link>
                             )}
+                            {user && <DeleteExperimentButton user={user} experimentId={id} caseId={c.id}
+                              completed={isCompletedExperimentCase(detail.status, c.benchmark?.runStatus)}
+                              onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
                             {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
@@ -772,7 +779,7 @@ export function ExperimentDetail({
                           colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : 7}
                           style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}
                         >
-                          暂无 case
+                          无有效 Case，暂无评测结果
                         </td>
                       </tr>
                     )}

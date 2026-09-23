@@ -104,7 +104,7 @@ export async function POST(
 
   try {
     const row = await prisma.experimentCase.findFirst({
-      where: { id: caseId, experimentId: id, experiment: { user: username } },
+      where: { id: caseId, experimentId: id, deletedAt: null, experiment: { user: username, deletedAt: null } },
       select: {
         id: true,
         input: true,

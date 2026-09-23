@@ -59,6 +59,7 @@ async function evaluate(requestPath, outputPath) {
   try {
     const result = await evaluator.evaluate({
       job: payload.evaluationJob,
+      preparedImages: payload.preparedImages,
       artifacts,
       workDir,
       signal: abortController.signal,

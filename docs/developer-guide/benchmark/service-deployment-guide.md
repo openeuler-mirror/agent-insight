@@ -115,6 +115,22 @@ DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh
 
 配置优先级是“当前启动命令的环境变量 > `~/.agent-insight/.env` > 默认值”。如需将整个运行根目录迁到其他位置，应在启动进程、Docker 或 systemd 环境中设置 `AGENT_INSIGHT_HOME`；该变量决定 `.env` 文件本身的位置，因此不能依赖目标 `.env` 修改自己的位置。
 
+平台与评测服务的对外端口分别配置，写入各自机器的 `$AGENT_INSIGHT_HOME/.env`（同机部署可共用一份）：
+
+```dotenv
+AGENT_INSIGHT_PORT=3000
+AGENT_INSIGHT_EVALUATOR_PORT=3001
+```
+
+两者端口优先级均为 `--port > 当前进程同名环境变量 > $AGENT_INSIGHT_HOME/.env > 默认值`；环境变量显式留空时使用默认端口。旧 `PORT` 不再兼容：启动入口发现非空旧值会提示改名并退出，不会退回旧值。npm 命令的 start/stop/status/restart 也使用 `AGENT_INSIGHT_PORT`，不再读取工作目录下的 `.env`。Next.js 子进程仍由启动器内部传入 `PORT`，这是框架运行参数，不是用户配置入口。
+
+```bash
+bash scripts/start.sh --port 3100
+bash scripts/start-evaluator.sh --port 3101 --platform-base-url http://<agent-insight-ip>:3100
+```
+
+评测容器内部固定监听 `8080`，只改变宿主机映射端口；不要通过 `--evaluator-env EVALUATOR_PORT=...` 覆盖，脚本会拒绝。更改评测对外端口后，还须更新平台登记的评测服务 URL（第 6 节）；更改平台端口时，同步评测服务的 `--platform-base-url`。
+
 源码 `start.sh`、开发启动入口和 npm 启动入口均支持 `DATABASE_URL` 单次覆盖。`AGENT_INSIGHT_BENCHMARK` 自动准备目前由 `scripts/start.sh` 执行，不代表 npm / Docker 入口也会自动导入。Docker 默认运行根是 `/data/agent-insight`。
 
 npm 安装阶段的 `postinstall` 同样遵守上述数据库优先级。使用自定义运行根或数据库时，安装和启动应传入相同配置。
@@ -234,7 +250,7 @@ bash scripts/start-evaluator.sh \
 其中：
 
 - 启动脚本始终构建通用 Controller，不接受 Benchmark 选择或预热参数；
-- 默认发布到宿主机 `0.0.0.0:3001`，可通过 `--bind-address` 和 `--port` 覆盖；
+- 默认发布到宿主机 `0.0.0.0:3001`，可通过 `--bind-address` 调整地址，使用 `AGENT_INSIGHT_EVALUATOR_PORT` 或 `--port` 调整对外端口；
 - 不提供应用层鉴权，依赖白名单、安全组或防火墙限制双向访问；
 - Benchmark Runtime 由任务中的 `benchmark.key + evaluator.key` 通过 Catalog 选择，首次任务按需准备并缓存；
 - `--platform-base-url` 必须是 Evaluator 容器可访问的 Agent Insight 地址；
@@ -270,6 +286,67 @@ bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
 ```
 
 `evaluator-key` 来自 `benchmark.yaml` 的 `evaluation.evaluatorKey`，它不一定与 `benchmark-key` 相同。
+
+启动、停止与清理共用的管理容器执行 Controller 镜像内的 `/app/services/evaluator/src/manage.cjs`，不挂载宿主源码目录，避免 Docker Desktop 对 `Documents` 等目录的访问权限影响管理操作。执行前用不挂载 Docker Socket 或数据卷的只读容器检查管理模块可加载；旧镜像缺少工具时明确失败，不执行停止或清理。可先用当前代码重新运行原启动命令，启动脚本使用新构建镜像管理旧实例（会中断旧评测）。Socket 和评测数据命名卷仍按原规则挂载。
+
+### 5.3 可选：跨 Benchmark 共享镜像池
+
+镜像池默认开启，正常运行 `start-evaluator.sh` 无需传启用开关或空间字节数。同一 Docker daemon 上接入的 Benchmark 共用空间预算、拉取去重和 LRU 回收；不改变评测并发，不清理 Build Cache、Volume、Controller 或 Runtime 制品。已有但未由池登记拥有的镜像只复用，不自动删除。
+
+支持本机 Linux Docker 的传统 image store，以及本机 macOS + Docker Desktop 的传统/containerd image store。远程 daemon、Colima、OrbStack 和 Linux containerd 独立数据盘仍不支持。每个 daemon 只部署一个池管理 Controller，保留同一个 `/data` 命名卷，不能用多个数据卷各建一份池。
+
+Linux 把 `DockerRootDir` 只读挂载到 `/host-docker`。Mac 同时只读挂载 Docker VM 数据目录和宿主空探测目录；containerd 模式额外验证 `/var/lib/desktop-containerd/daemon/io.containerd.content.v1.content`。不支持的目录布局直接拒绝开启，不回退读取 Controller 根分区。Mac 使用镜像内已有 Python 的 `statvfs.f_frsize` 计算容量，避免 VirtioFS 的 I/O 块大小放大读数；不增加宿主 Python 依赖或后台代理。
+
+脚本读取 Docker Desktop 的 `settings-store.json`（旧版本为 `settings.json`）中的 `DataFolder` / `dataFolder`，未设置时使用默认 `~/Library/Containers/com.docker.docker/Data/vms/0/data`，确认其中存在 `Docker.raw`。默认创建评测管理目录下的 `space-probe` 空目录，并用宿主文件系统设备号校验它与 `Docker.raw` 同盘。若磁盘映像已移到外置盘，通过 `--evaluator-env 'IMAGE_POOL_MAC_DISK_PATH=/Volumes/example/empty-probe'` 指定该盘上已存在的空共享目录。仅用于读空间，不改变磁盘映像位置；不挂载或读取 `Docker.raw` 内容。共享权限不足、同盘校验失败、未知布局或空间检测失败均拒绝开启。移动 Docker 磁盘映像后必须重新运行启动命令进行校验。
+
+停止旧 Controller、替换已保存配置之前，会用新镜像执行无网络、只读的磁盘预检。失败保留旧服务；预检只查询 Docker，不拉取或删除镜像。实际启动仍校验同 daemon 的唯一镜像池管理者。
+
+以下均为可选覆盖，通过 `--evaluator-env` 传入。已移除 `IMAGE_POOL_ESTIMATE_BYTES` 和 `IMAGE_POOL_TEMPORARY_BYTES`，旧值不再读取，可从部署配置中删除。安全预留自动按比例计算，不再另设固定临时空间下限。
+
+| Controller 配置 | 含义 / 默认值 |
+|---|---|
+| `IMAGE_POOL_ENABLED` | `true`；设为 `false` 显式关闭 |
+| `IMAGE_POOL_RESERVE_RATIO` | `0.3` |
+| `IMAGE_POOL_HIGH_WATERMARK` | `0.9` |
+| `IMAGE_POOL_MAX_PULLS` | `2`；预取最多占 1 个槽位 |
+| `IMAGE_POOL_WAIT_SECONDS` | `600`；还受任务总期限限制 |
+| `IMAGE_POOL_MAC_DISK_PATH` | Mac 可选：与 Docker.raw 同文件系统的空共享目录；由启动脚本消费 |
+| `IMAGE_POOL_PREFETCH_ENABLED` | `false`；接通双端准备消息后设为 `true` |
+| `IMAGE_POOL_PREPARE_TOKEN` | 启用预取时必填，与平台的密钥一致 |
+
+```text
+当前可用空间 = Linux：Docker 数据盘可用空间
+             Mac：min(Docker VM 各数据盘可用空间, Docker.raw 所在 Mac 文件系统可用空间)
+可管理空间 = 当前可用空间 + 本池镜像占用估计
+安全预留   = 可管理空间 × 30%
+池容量     = max(0, 可管理空间 - 安全预留)
+高水位     = 池容量 × 90%
+准入条件   = 可用空间 >= 安全预留 + 在途拉取预留 + 本次新增估值
+```
+
+拉取估值由服务内部完成：本地已有镜像不发起远程估算；接入包已提供有效 `estimatedBytes` 时复用，否则用 `docker manifest inspect --verbose` 查询对应 Linux 架构的压缩层大小。所有候选源共用 2 秒查询预算，超时终止元数据查询子进程，不额外重试。成功时按压缩层总大小 × 4 估算（内部下限 256 MiB）；失败、超时、架构不匹配或未知格式时回退到内部 8 GiB 估值。成功结果缓存 15 分钟，回退结果缓存 1 分钟，最多 256 项；同一需求合并查询。这里只读镜像清单、不下载层，不放宽 TLS 校验、不要求新凭据；CLI 版本或仓库鉴权不支持查询时安全回退。上述系数和回退值是内部估算规则，不是镜像池容量，也不是空间充足保证。
+
+没有低水位，也没有“先清一半、再全部清空”的批量策略。缺空间时按 LRU 逐个回收，每删一个读取实际空闲空间，够用即停。在用和容器引用镜像不能回收；近期准备镜像优先保留，但实际使用请求可回收尚未使用的预取镜像。后台保持每 30 秒检查，不增加拉取期间的高频检查；达到高水位则复查近期需求，不为水位本身批量删除。占用统计最多每 60 秒刷新，按 image ID 去重：传统存储使用 Docker 独占层估计，统计缺失时保留逻辑大小估值；containerd 标记 `containerd-logical-estimate`，不声称是物理独占空间。删除成功不等于空间立即回收，仍以实际空闲空间决定是否准入。
+
+没有可安全回收的镜像且容量仍不足，当前请求返回不可自动重试的 `IMAGE_POOL_SPACE_LOW`；Docker 明确报告 `ENOSPC`、磁盘满或磁盘配额不足时也映射为此错误，不再换源拉取。当前 Case 经原失败回调结束，后续 Case 由现有平台流程推进，并各自重新检查空间；等待拉取槽位仍服从已有期限。Docker 连接中断等结果不确定的情况仍保留在途预算并阻止新拉取，不把停止等待视为下载结束。安全预留不是文件系统配额，未知镜像解压或外部写入仍可能突破估值；磁盘彻底耗尽时日志/状态持久化也可能失败，不保证下一 Case 一定能运行。
+
+`/health.imagePool.storage` 返回最近一次采样的 `mode`、`freeBytes`、`measuredAt`；Mac 额外返回 `vmFreeBytes` 和 `hostFreeBytes`。采样失败记录 `error`，后续请求重新检测，不沿用历史可用空间放行。此字段不是每次健康请求同步刷新，不能把健康接口返回成功单独视为容量充足。
+
+预取还需在 Agent Insight 进程环境设置相同的 `BENCHMARK_IMAGE_POOL_PREPARE_TOKEN` 并重启平台；该密钥不放在地址热加载文件，也不传给实例 Runtime。准备消息复用 `POST /api/v1/evaluations` 的 `operation: prepare-images`，仅该操作新增专用密钥校验；原评测/回调通道仍依赖网络隔离，不因此具备全通道鉴权。
+
+```text
+平台：更新当前/下一 Case 窗口 → Agent 执行 → 提交评测 → 下一 Case
+池：        准备当前镜像 ─────→ 获取时登记保护 → 容器清理后释放
+                     准备下一镜像 ─────────────────→ 等待使用
+```
+
+实验结束清空窗口，平台现有 watchdog 清理已取消实验的窗口；消息失败或平台重启时，窗口最多保留 30 分钟。过期只撤销软保护，不影响正在使用的镜像。无窗口或发送失败不阻断实验，按需拉取仍独立工作。
+
+`[benchmark/image-pool]` 日志记录实际获取等待 `waitMs`、拉取/删除 `elapsedMs`、水位与跳过回收原因。结果 `runtimeFacts.imagePoolWaitMs` 保存该次镜像准备的实际阻塞时间，可按实验累计；验收重点是整轮等待时间和总耗时，不只看命中率。
+
+重启先清理带任务标识的残留 Runtime/Case 容器，再释放使用者；清理失败继续保护。Docker 连接中断或遗留操作未确认结束时保留预算/隔离状态，暂停新拉取，已有安全镜像仍可用，`/health.imagePool.recoveryRequired` 和日志提示人工对账。运维须停止 Controller，确认旧拉取/删除已结束（无法确认时安排维护窗口重启 daemon），备份 `/data/image-pool/state.json`，然后仅解除已核实结束的 `operations` 条目或 `deleting` 标识；不要删除整个归属状态文件。
+
+部署后先用小规模实验验证真实回收行为。需要关闭时重新部署并显式传 `--evaluator-env IMAGE_POOL_ENABLED=false`，保留数据卷；此后恢复原镜像解析路径，不再自动回收。省略开关会开启镜像池；不支持的存储布局会在预检阶段报错，需显式关闭后才按旧路径启动。
 
 ## 6. 配置 Agent Insight 与 Evaluator 的互访地址
 
@@ -399,3 +476,25 @@ curl -I http://<agent-insight-ip>:3000
 - 执行端能力与 Manifest 匹配；
 - 成功 Case 和至少一个异常 Case 完成端到端验收；
 - Submission、Evidence、指标、状态和页面展示符合该 Benchmark 契约。
+
+## 11. 立即停止与镜像清理
+
+在评测机的仓库目录执行：
+
+```bash
+bash scripts/stop-evaluator.sh --purge-images --dry-run
+bash scripts/stop-evaluator.sh
+bash scripts/stop-evaluator.sh --purge-images
+```
+
+三条命令分别为预览、立即停止且保留镜像、立即停止并清理受管镜像。不必先执行第二条才能执行第三条；已停止的服务也能离线清理。脚本只使用当前主机的 Unix Docker socket，不自动连接其他机器。指定了 `AGENT_INSIGHT_EVALUATOR_HOME` 的部署，停止时必须使用同一配置目录。
+
+停止和清理按容器实例及资源登记定位，不按端口杀进程，因此自定义端口启动后仍使用上述命令，不需要 `--port`。即使随后修改了端口配置，仍可停止原实例。目前同一 Docker daemon 为单实例，换端口不会另建第二套评测服务或镜像池。
+
+停止先持久化停止意图，禁止接单/恢复并关闭 Controller 自动重启，给予最多 2 秒容器退出窗口，再强制移除本实例 Runtime/Case 容器；不等待长实验自然完成。保留数据卷、配置、日志与 Artifact。取消记录持久化后，下次启动不会自动恢复这些旧任务；服务恢复后重试向平台报告 `SERVICE_STOPPED`。服务离线期间平台状态可能暂未收敛，需要终止远端 Agent 时仍应在平台停止并删除对应实验。
+
+`--purge-images` 逐个非强制删除登记拥有的 Case、Runtime、Controller 镜像引用，Controller 在离线工具退出后删除。未登记的历史镜像、其他容器引用、身份已变化或拉取/构建尚未确认的镜像会跳过并报告。不会运行全局 `docker system prune`、清理 Build Cache、删除 volume 或强删共享镜像。共享 layer 不保证随引用删除释放空间。
+
+返回码 `0` 表示操作完成，`2` 表示有未确认/跳过项，`1` 表示配置、归属或执行错误。报告中的空间数值取自数据卷文件系统，且不包括工具退出后删除 Controller 所释放的空间。部分失败后可重复执行；不要用清空登记数据的方式绕过安全检查。
+
+升级部署前备份平台数据库，通过既有启动流程同步 Prisma schema（新增逻辑删除字段、取消记录和本地执行记录），更新平台、评测机及所有常驻执行客户端。旧客户端不识别取消指令，平台会保留待确认状态。此次代码验证使用临时数据库与模拟 Docker，正式部署仍需一轮真实取消、离线重连、停服和清理冒烟。

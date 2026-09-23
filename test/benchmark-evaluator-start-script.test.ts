@@ -9,6 +9,16 @@ const startScript = path.join(repositoryRoot, 'scripts', 'start-evaluator.sh')
 const evaluatorDockerfile = path.join(repositoryRoot, 'services', 'evaluator', 'Dockerfile')
 const sweBenchDockerfile = path.join(repositoryRoot, 'benchmarks', 'swe-bench', 'evaluator', 'Dockerfile')
 
+test('optional image pool binds the daemon data filesystem read-only and keeps its secret out of Runtime env', () => {
+  const source = fs.readFileSync(startScript, 'utf8')
+  const storage = fs.readFileSync(path.join(repositoryRoot, 'scripts/evaluator-image-pool.sh'), 'utf8')
+  assert.match(storage, /POOL_ENABLED=true/)
+  assert.match(storage, /docker info --format '\{\{\.DockerRootDir\}\}'/)
+  assert.match(storage, /dst=\/host-docker,readonly/)
+  assert.match(storage, /IMAGE_POOL_DISK_PATH=\/host-docker/)
+  assert.match(source, /IMAGE_POOL_\*\) continue/)
+})
+
 test('one-command evaluator script exposes the phase-one CLI and rejects deferred registration flags', () => {
   const help = spawnSync('bash', [startScript, '--help'], { encoding: 'utf8' })
   assert.equal(help.status, 0)
@@ -47,7 +57,7 @@ test('one-command evaluator script preserves the Docker lifecycle and on-demand 
   assert.doesNotMatch(source, /BENCHMARK_KEY|BENCHMARK_EVALUATOR_KEY|benchmarks\/\$BENCHMARK_KEY/)
   assert.match(source, /services\/evaluator\/Dockerfile/)
   assert.match(source, /^BIND_ADDRESS=0\.0\.0\.0$/m)
-  assert.match(source, /^PORT=3001$/m)
+  assert.match(source, /EVALUATOR_HOST_PORT=\$\{EVALUATOR_HOST_PORT:-\$\{FILE_EVALUATOR_PORT:-3001\}\}/)
   assert.match(source, /--evaluator-env/)
   assert.doesNotMatch(source, /printf 'SWE_BENCH_/)
   assert.doesNotMatch(source, /EVALUATOR_AUTH_MODE|EVALUATOR_PLATFORM_TOKEN/)
@@ -59,7 +69,7 @@ test('one-command evaluator script preserves the Docker lifecycle and on-demand 
 
 test('one-command evaluator script recreates the Controller and removes only old Controller images after Doctor', () => {
   const source = fs.readFileSync(startScript, 'utf8')
-  const removeContainerIndex = source.indexOf('docker rm -f "$CONTAINER_NAME"')
+  const removeContainerIndex = source.indexOf('evaluator_management_run "$IMAGE_ID"')
   const runContainerIndex = source.indexOf('docker run --detach --pull never')
   const doctorIndex = source.indexOf('bash "$SCRIPT_DIR/evaluator-doctor.sh"')
   const removeOldImageIndex = source.indexOf('docker image rm "$OLD_CONTROLLER_REF"')
