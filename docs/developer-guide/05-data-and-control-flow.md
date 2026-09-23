@@ -71,7 +71,7 @@ flowchart TD
 
 ## 后端流水线：接入（agent run → Execution 记录）
 
-源码生产启动在清理端口占用后，通过 `scripts/stop-orphan-trace-consumer.cjs` 检查共享 Trace spool 的 `consumer-owner.lock`。只有锁指向本项目 `.next/standalone`、且该进程已不监听端口时才终止残留进程；其他归属或无法核实时启动失败。新服务随后取得消费锁，按原 checkpoint 处理积压文件。
+源码生产启动在确认端口释放后，通过 `scripts/stop-orphan-trace-consumer.cjs` 检查共享 Trace spool 的 `consumer-owner.lock`。只有锁指向本项目 `.next/standalone`、且该进程已不监听端口时才终止残留进程；Linux 已退出但尚未回收的僵尸进程只清除其遗留的消费锁。其他归属或无法核实时启动失败。新服务随后取得消费锁，按原 checkpoint 处理积压文件。
 
 Trae IDE 通过 VS Code 插件内置的 Hook 系统采集运行数据：Hook 脚本监听 session-start、pre-tool-use、post-tool-use、prompt-submit、stop、subagent-detect 等生命周期事件，将事件序列化为 JSONL 写入本地 spool 目录；插件内的 `UploadEngine` 按 checkpoint 增量消费 spool 文件，经内容截断后 POST 到 `/api/ingest/upload`。服务端通过 `traeAdapter` (`FrameworkAdapter`) 的 `extractSkills` 从 TRAE 特有 interaction 格式中提取 Skill 调用，再经 `saveExecutionRecord` 统一落库。
 

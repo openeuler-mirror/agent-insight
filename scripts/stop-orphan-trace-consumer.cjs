@@ -22,12 +22,57 @@ try {
 const pid = owner?.pid;
 if (!Number.isSafeInteger(pid) || pid <= 0) process.exit(0);
 
+function lockStillOwned(lockFile, expectedOwner) {
+  try {
+    const current = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+    return current.pid === expectedOwner.pid && current.token === expectedOwner.token;
+  } catch {
+    return false;
+  }
+}
+
+function clearZombieLocks() {
+  const spoolRoot = path.join(insightHome, 'otel_data');
+  for (const entry of fs.readdirSync(spoolRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const file = path.join(spoolRoot, entry.name, 'consumer-owner.lock');
+    let candidate;
+    try {
+      candidate = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (candidate.pid === pid && typeof candidate.token === 'string'
+      && lockStillOwned(file, candidate)) fs.unlinkSync(file);
+  }
+}
+
 try {
   process.kill(pid, 0);
 } catch (error) {
   if (error.code === 'ESRCH') process.exit(0);
   console.error(`无法检查 Trace 消费锁进程 ${pid}: ${error.message}`);
   process.exit(1);
+}
+
+if (process.platform === 'linux') {
+  try {
+    const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+    if (/^State:\s*[ZX]/m.test(status)) {
+      if (!lockStillOwned(lockPath, owner)) {
+        console.error('Trace 消费锁归属已变化，拒绝清理');
+        process.exit(1);
+      }
+      clearZombieLocks();
+      console.log(`Cleared Trace consumer locks left by exited process ${pid}`);
+      process.exit(0);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error(`无法检查 Trace 消费锁进程 ${pid} 状态: ${error.message}`);
+      process.exit(1);
+    }
+  }
 }
 
 function lsof(args) {
@@ -56,8 +101,7 @@ try {
     throw new Error(`Trace 消费锁进程 ${pid} 仍在监听端口，请先停止该服务`);
   }
 
-  const currentOwner = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-  if (currentOwner.pid !== pid || currentOwner.token !== owner.token) {
+  if (!lockStillOwned(lockPath, owner)) {
     throw new Error('Trace 消费锁归属已变化，拒绝终止进程');
   }
 

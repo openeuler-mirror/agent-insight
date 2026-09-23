@@ -389,6 +389,7 @@ class BenchmarkEvaluatorService {
       status: controller.ready ? 'healthy' : 'degraded',
       busy: await this.hasBusyJob(),
       imagePool: { enabled: Boolean(this.imagePool), prefetch: Boolean(this.imagePool?.config.prefetch),
+        storage: this.imagePool?.store?.diskStatus || null,
         recoveryRequired: this.imagePool ? Object.values(this.imagePool.state.operations).some((op) => op.uncertain)
           || Object.values(this.imagePool.state.images).some((entry) => entry.uncertain) : false },
       runtime: this.runtimeFacts(controller.runtimeFacts),

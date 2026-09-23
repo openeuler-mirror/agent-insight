@@ -311,13 +311,6 @@ if command -v fuser >/dev/null 2>&1; then
   fuser -k -n tcp $PLATFORM_PORT >/dev/null 2>&1
 fi
 
-# 旧 standalone 可能已释放监听端口，却因后台 consumer 定时器继续存活并占住 spool 锁。
-# 只终止锁文件指向、cwd 属于本项目且不再监听任何端口的进程。
-if ! node scripts/stop-orphan-trace-consumer.cjs "$AGENT_INSIGHT_HOME" "$(pwd)"; then
-  echo "CRITICAL ERROR: 无法安全清理旧 Trace 消费进程，已停止启动。" >&2
-  exit 1
-fi
-
 # 3. Double check
 echo "Waiting for port to release..."
 sleep 2
@@ -330,6 +323,13 @@ if [ -n "$PIDS_REMAINING" ]; then
 fi
 
 echo "Port $PLATFORM_PORT is confirmed free."
+
+# 旧 standalone 可能已释放监听端口，却因后台 consumer 定时器继续存活并占住 spool 锁。
+# 等端口释放后再核对进程；Linux 僵尸进程需清除其遗留的全部 consumer 锁。
+if ! node scripts/stop-orphan-trace-consumer.cjs "$AGENT_INSIGHT_HOME" "$(pwd)"; then
+  echo "CRITICAL ERROR: 无法安全清理旧 Trace 消费进程，已停止启动。" >&2
+  exit 1
+fi
 
 # 4. Build
 echo "-----------------------------------"
