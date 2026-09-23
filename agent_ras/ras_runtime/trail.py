@@ -6,8 +6,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+
 from pathlib import Path
 from typing import Any
+
+if os.environ.get("AGENT_INSIGHT_DATA_DIR"):
+    raise RuntimeError("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,7 @@ def append_trail(op: str, session_id: str, result: dict[str, Any]) -> None:
     path = os.environ.get("RAS_EMBED_E2E_LOG")
     if not path:
         # Always keep a short trail for diagnosing "didn't work" reports.
-        data_dir = os.environ.get("AGENT_INSIGHT_DATA_DIR")
+        data_dir = os.path.expanduser(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or ""))
         if data_dir:
             path = str(Path(data_dir) / "ras" / "ras_inproc.jsonl")
         else:

@@ -79,7 +79,7 @@ export RPM_TOPDIR=/mnt/sdc/ymt/agent-insight-rpm/rpmbuild
 export RPM_TMPDIR=/mnt/sdc/ymt/agent-insight-rpm/tmp
 export npm_config_cache=/mnt/sdc/ymt/agent-insight-rpm/npm-cache
 export TMPDIR=/mnt/sdc/ymt/agent-insight-rpm/tmp
-export AGENT_INSIGHT_DATA_DIR=/mnt/sdc/ymt/agent-insight-rpm/build-data
+export AGENT_INSIGHT_HOME=/mnt/sdc/ymt/agent-insight-rpm/build-data
 ```
 
 确认 Node/npm：
@@ -169,7 +169,7 @@ NEXT_TELEMETRY_DISABLED=1
 HOSTNAME=0.0.0.0
 PORT=3000
 HOME=/var/lib/agent-insight
-AGENT_INSIGHT_DATA_DIR=/var/lib/agent-insight
+AGENT_INSIGHT_HOME=/var/lib/agent-insight
 DATABASE_URL=file:/var/lib/agent-insight/data/witty_insight.db
 OPENCODE_BIN=/usr/lib/agent-insight/node_modules/.bin/opencode
 ```
@@ -311,10 +311,10 @@ This package includes a private Node.js 20.18.2 runtime.
 %build
 export PATH=/usr/bin:/bin
 export HOME=%{_builddir}/agent-insight-build-home
-export AGENT_INSIGHT_DATA_DIR=%{_builddir}/agent-insight-build-data
+export AGENT_INSIGHT_HOME=%{_builddir}/agent-insight-build-data
 export npm_config_cache=%{_topdir}/../npm-cache
 export TMPDIR=%{_tmppath}
-mkdir -p "$HOME" "$AGENT_INSIGHT_DATA_DIR" "$npm_config_cache" "$TMPDIR"
+mkdir -p "$HOME" "$AGENT_INSIGHT_HOME" "$npm_config_cache" "$TMPDIR"
 /usr/bin/npm ci
 /usr/bin/node %{SOURCE4}
 set +e
@@ -520,7 +520,7 @@ NEXT_TELEMETRY_DISABLED=1
 HOSTNAME=0.0.0.0
 PORT=3001
 HOME=/var/lib/agent-insight-rpm-test
-AGENT_INSIGHT_DATA_DIR=/var/lib/agent-insight-rpm-test
+AGENT_INSIGHT_HOME=/var/lib/agent-insight-rpm-test
 DATABASE_URL=file:/var/lib/agent-insight-rpm-test/data/witty_insight.db
 OPENCODE_BIN=/usr/lib/agent-insight/node_modules/.bin/opencode
 ```

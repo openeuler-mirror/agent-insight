@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -12,7 +11,8 @@ const require = createRequire(import.meta.url)
 const { createBenchmarkExecutor } = require('../../services/executor/src/index.cjs')
 const { runExperimentCase } = require('../reliability-client.cjs')
 
-const agentInsightHome = process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight')
+const { getAgentInsightHome } = require('../agent-insight-home.cjs')
+const agentInsightHome = getAgentInsightHome()
 const databasePath = process.env.BENCHMARK_SMOKE_DATABASE_PATH
   || path.join(agentInsightHome, 'data', 'witty_insight.db')
 const platformOrigin = (process.env.BENCHMARK_SMOKE_PLATFORM_ORIGIN || 'http://127.0.0.1:3000').replace(/\/$/, '')
@@ -22,7 +22,7 @@ const caseExternalId = process.env.BENCHMARK_SMOKE_CASE || 'pallets__flask-5014'
 const timeoutSeconds = Number(process.env.BENCHMARK_SMOKE_TIMEOUT_SECONDS || 600)
 const user = process.env.BENCHMARK_SMOKE_USER || 'admin'
 
-process.env.AGENT_INSIGHT_DATA_DIR = agentInsightHome
+process.env.AGENT_INSIGHT_HOME = agentInsightHome
 process.env.DATABASE_URL = `file:${databasePath}`
 process.env.PATH = `/usr/local/bin:${process.env.PATH || ''}`
 

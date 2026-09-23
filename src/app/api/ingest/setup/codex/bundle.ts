@@ -18,6 +18,7 @@ const BUNDLE_FILES = [
   ['codex/vscode-extension/extension.vsixmanifest', ['codex', 'vscode-extension', 'extension.vsixmanifest']],
   ['codex/vscode-extension/[Content_Types].xml', ['codex', 'vscode-extension', '[Content_Types].xml']],
   ['shared/trace-transport.cjs', ['shared', 'trace-transport.cjs']],
+  ['shared/install-modules.cjs', ['shared', 'install-modules.cjs']],
 ] as const;
 
 const ZIP_TIMESTAMP = new Date(1980, 0, 1, 0, 0, 0);

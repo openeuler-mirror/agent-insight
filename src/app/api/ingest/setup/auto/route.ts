@@ -1,3 +1,4 @@
+import { SETUP_BASH_HOME, SETUP_POWERSHELL_HOME } from '@/lib/ingest/setup/home';
 import { NextResponse } from 'next/server';
 
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
@@ -114,6 +115,7 @@ function generateBashScript(
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
     const frameworksPreselected = preselected.length > 0;
     const script = `#!/bin/bash
+${SETUP_BASH_HOME}
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
 # =============================================================================
@@ -150,8 +152,8 @@ fi
 echo "✅ Node.js version: $NODE_VERSION"
 
 # 1. Setup Directories
-mkdir -p "$HOME/.agent-insight"
-mkdir -p "$HOME/.agent-insight/logs"
+mkdir -p "$AGENT_INSIGHT_HOME"
+mkdir -p "$AGENT_INSIGHT_HOME/logs"
 mkdir -p "$HOME/.opencode/skills"
 mkdir -p "$HOME/.claude/projects"
 mkdir -p "$HOME/.openclaw/agents"
@@ -167,11 +169,11 @@ else
 # 2b. Interactive Framework Selection with inquirer
 echo ""
 
-SELECTOR_SCRIPT="$HOME/.agent-insight/framework_selector.mjs"
-SELECTOR_RESULT="$HOME/.agent-insight/.selector_result"
+SELECTOR_SCRIPT="$AGENT_INSIGHT_HOME/framework_selector.mjs"
+SELECTOR_RESULT="$AGENT_INSIGHT_HOME/.selector_result"
 
 # Install inquirer and tsx if not already installed
-cd "$HOME/.agent-insight"
+cd "$AGENT_INSIGHT_HOME"
 if [ ! -d "node_modules/inquirer" ] || [ ! -d "node_modules/tsx" ]; then
     echo "📦 Installing dependencies for interactive selection..."
     npm install inquirer tsx --save 2>/dev/null
@@ -251,7 +253,7 @@ SELECTOR_EOF
 # Run the selector interactively from /dev/tty
 # Export the result file path so the selector knows where to write
 export SELECTOR_RESULT_FILE="$SELECTOR_RESULT"
-cd "$HOME/.agent-insight" && ./node_modules/.bin/tsx "$SELECTOR_SCRIPT" < /dev/tty
+cd "$AGENT_INSIGHT_HOME" && ./node_modules/.bin/tsx "$SELECTOR_SCRIPT" < /dev/tty
 
 # Read the selection result from file
 if [ -f "$SELECTOR_RESULT" ]; then
@@ -349,7 +351,7 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     echo "⏬ Downloading OpenCode Uploader..."
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$AGENT_INSIGHT_HOME/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
     mkdir -p "$OPENCODE_CONFIG_DIR/commands"
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
@@ -417,7 +419,7 @@ fi
 
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "⏬ Downloading OpenClaw Watcher..."
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$AGENT_INSIGHT_HOME/openclaw_watcher_client.ts"
 fi
 
 if [ "$INSTALL_JIUWEN" = "true" ]; then
@@ -479,7 +481,7 @@ if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
         else
         LLAMAINDEX_ARCHIVE=$(mktemp "\${TMPDIR:-/tmp}/agent-insight-llamaindex.XXXXXX.zip")
         LLAMAINDEX_PACKAGE_URL="$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"
-        LLAMAINDEX_ROOT="$HOME/.agent-insight/collectors/llamaindex"
+        LLAMAINDEX_ROOT="$AGENT_INSIGHT_HOME/collectors/llamaindex"
         LLAMAINDEX_SOURCE_DIR="$LLAMAINDEX_ROOT/current"
         LLAMAINDEX_STAGING="$LLAMAINDEX_ROOT/.install-$$"
         LLAMAINDEX_BACKUP="$LLAMAINDEX_ROOT/.previous-$$"
@@ -502,43 +504,43 @@ if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
         rm -f "$LLAMAINDEX_ARCHIVE"
         rm -rf "$LLAMAINDEX_STAGING" "$LLAMAINDEX_BACKUP"
         if [ "$LLAMAINDEX_READY" = "true" ]; then
-            cat > "$HOME/.agent-insight/llamaindex_env.sh" << 'LLAMAINDEX_ENV_EOF'
+            agent_insight_write_script > "$AGENT_INSIGHT_HOME/llamaindex_env.sh" << 'LLAMAINDEX_ENV_EOF'
 # Agent Insight LlamaIndex collector path (direct deployment)
-LLAMAINDEX_COLLECTOR_DIR="$HOME/.agent-insight/collectors/llamaindex/current"
+LLAMAINDEX_COLLECTOR_DIR="$AGENT_INSIGHT_HOME/collectors/llamaindex/current"
 case ":\${PYTHONPATH:-}:" in
   *":$LLAMAINDEX_COLLECTOR_DIR:"*) ;;
   *) export PYTHONPATH="$LLAMAINDEX_COLLECTOR_DIR\${PYTHONPATH:+:$PYTHONPATH}" ;;
 esac
 LLAMAINDEX_ENV_EOF
-            printf 'export AGENT_INSIGHT_LLAMAINDEX_PYTHON=%q\n' "$LLAMAINDEX_PYTHON" >> "$HOME/.agent-insight/llamaindex_env.sh"
-            if [ -n "$LLAMAINDEX_VENV" ]; then printf 'export AGENT_INSIGHT_LLAMAINDEX_VENV=%q\n' "$LLAMAINDEX_VENV" >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
-            if [ -z "$LLAMAINDEX_VENV" ]; then echo 'unset AGENT_INSIGHT_LLAMAINDEX_VENV' >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
-            . "$HOME/.agent-insight/llamaindex_env.sh"
+            printf 'export AGENT_INSIGHT_LLAMAINDEX_PYTHON=%q\n' "$LLAMAINDEX_PYTHON" >> "$AGENT_INSIGHT_HOME/llamaindex_env.sh"
+            if [ -n "$LLAMAINDEX_VENV" ]; then printf 'export AGENT_INSIGHT_LLAMAINDEX_VENV=%q\n' "$LLAMAINDEX_VENV" >> "$AGENT_INSIGHT_HOME/llamaindex_env.sh"; fi
+            if [ -z "$LLAMAINDEX_VENV" ]; then echo 'unset AGENT_INSIGHT_LLAMAINDEX_VENV' >> "$AGENT_INSIGHT_HOME/llamaindex_env.sh"; fi
+            . "$AGENT_INSIGHT_HOME/llamaindex_env.sh"
             case "\${SHELL:-}" in */zsh) SHELL_RC="$HOME/.zshrc" ;; *) SHELL_RC="$HOME/.bashrc" ;; esac
             touch "$SHELL_RC"
-            if ! grep -q "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC"; then
-                echo "source \"$HOME/.agent-insight/llamaindex_env.sh\"" >> "$SHELL_RC"
+            if ! grep -Fq "$AGENT_INSIGHT_HOME/llamaindex_env.sh" "$SHELL_RC"; then
+                echo "source \"$AGENT_INSIGHT_HOME/llamaindex_env.sh\"" >> "$SHELL_RC"
             fi
-            cat > "$HOME/.agent-insight/uninstall_llamaindex_collector.sh" << 'LLAMAINDEX_UNINSTALL_EOF'
+            agent_insight_write_script > "$AGENT_INSIGHT_HOME/uninstall_llamaindex_collector.sh" << 'LLAMAINDEX_UNINSTALL_EOF'
 #!/bin/bash
 set -e
 if [ "\${1:-}" = "--purge" ]; then
-  rm -rf "$HOME/.agent-insight/otel_data/llamaindex"
-  rm -f "$HOME/.agent-insight/llamaindex.json" "$HOME/.agent-insight/llamaindex.env"
+  rm -rf "$AGENT_INSIGHT_HOME/otel_data/llamaindex"
+  rm -f "$AGENT_INSIGHT_HOME/llamaindex.json" "$AGENT_INSIGHT_HOME/llamaindex.env"
 fi
-rm -rf "$HOME/.agent-insight/collectors/llamaindex"
-rm -f "$HOME/.agent-insight/llamaindex_env.sh"
+rm -rf "$AGENT_INSIGHT_HOME/collectors/llamaindex"
+rm -f "$AGENT_INSIGHT_HOME/llamaindex_env.sh"
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
   if [ -f "$SHELL_RC" ]; then
     CLEANED_RC="\${SHELL_RC}.agent-insight-llamaindex.$$"
-    grep -v "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC" > "$CLEANED_RC" || true
+    grep -Fv "$AGENT_INSIGHT_HOME/llamaindex_env.sh" "$SHELL_RC" > "$CLEANED_RC" || true
     mv "$CLEANED_RC" "$SHELL_RC"
   fi
 done
-rm -f "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+rm -f "$AGENT_INSIGHT_HOME/uninstall_llamaindex_collector.sh"
 echo "LlamaIndex collector removed. Restart running Python processes to unload existing handlers."
 LLAMAINDEX_UNINSTALL_EOF
-            chmod +x "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+            chmod +x "$AGENT_INSIGHT_HOME/uninstall_llamaindex_collector.sh"
         fi
         fi
     fi
@@ -546,7 +548,7 @@ fi
 
 if [ "$INSTALL_QODER" = "true" ]; then
     echo "Downloading Agent Insight Qoder CN collectors..."
-    QODER_DIST_DIR="$HOME/.agent-insight/qoder-distribution"
+    QODER_DIST_DIR="$AGENT_INSIGHT_HOME/qoder-distribution"
     mkdir -p "$QODER_DIST_DIR"
     for component in qoder_setup.mjs qoder_token_usage_env.mjs qoder_trace_collector.mjs qoder_uploader_client.mjs qoder_work_setup.mjs; do
         curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -o "$QODER_DIST_DIR/$component"
@@ -659,7 +661,7 @@ if [ "$INSTALL_QWENCODE" = "true" ]; then
 fi
 
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
-AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
+AGENT_INSIGHT_CONFIG_FILE="$AGENT_INSIGHT_HOME/.env"
 FINAL_SHOW_TASK_STATS="true"
 if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
   EXISTING_SHOW_TASK_STATS=$(grep '^AGENT_INSIGHT_SHOW_TASK_STATS=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
@@ -697,13 +699,13 @@ echo "AGENT_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$AGENT_INSIGHT_C
 echo "AGENT_INSIGHT_RETENTION_DAYS=10" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_CLIENT_KEY_HASH=$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode/$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$HOME/.agent-insight/opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$AGENT_INSIGHT_HOME/otel_data/opencode/$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$AGENT_INSIGHT_HOME/opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=$UPLOAD_SINCE_MS" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$HOME/.agent-insight/claude_raw_bodies" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/codeagent" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$AGENT_INSIGHT_HOME/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$AGENT_INSIGHT_HOME/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$AGENT_INSIGHT_HOME/claude_raw_bodies" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=$AGENT_INSIGHT_HOME/otel_data/codeagent" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_TOOL_IO=4000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_EVENT_STRING=20000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"
@@ -777,7 +779,7 @@ if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then
     if [ "$(basename "$SETUP_WORKING_DIR")" = ".gp" ]; then GOAL_PLUS_SOURCE_PATH="$SETUP_WORKING_DIR"; fi
     if [ -n "$GOAL_PLUS_SOURCE_PATH" ]; then
         echo "🔗 Attaching Goal Plus workspace: $GOAL_PLUS_SOURCE_PATH"
-        GOAL_PLUS_COMMAND="$HOME/.agent-insight/collectors/goal-plus/goal-plus-collector.cjs"
+        GOAL_PLUS_COMMAND="$AGENT_INSIGHT_HOME/collectors/goal-plus/goal-plus-collector.cjs"
         if node "$GOAL_PLUS_COMMAND" attach "$GOAL_PLUS_SOURCE_PATH" && node "$GOAL_PLUS_COMMAND" scan && node "$GOAL_PLUS_COMMAND" start; then
             GOAL_PLUS_SOURCE_OK=true
         else
@@ -799,7 +801,7 @@ if [ "$INSTALL_QODER" = "true" ]; then
     if node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop --owner=desktop && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains --owner=jetbrains && node "$QODER_DIST_DIR/qoder_work_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY"; then
         echo "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."
         echo ""
-        QODER_PLUGIN_DIR="$HOME/.agent-insight/packages/qoder"
+        QODER_PLUGIN_DIR="$AGENT_INSIGHT_HOME/packages/qoder"
         mkdir -p "$QODER_PLUGIN_DIR"
         download_qoder_plugin() {
             local label="$1" url="$2" target="$3" temp="\${3}.tmp.$$"
@@ -855,8 +857,8 @@ if [ "$INSTALL_HERMES" = "true" ]; then
   "api_key": "$AGENT_INSIGHT_API_KEY",
   "service_name": "hermes",
   "max_content_chars": 200000,
-  "spool_dir": "$HOME/.agent-insight/data/hermes-otel-spool",
-  "log_file": "$HOME/.agent-insight/logs/hermes-plugin.log"
+  "spool_dir": "$AGENT_INSIGHT_HOME/data/hermes-otel-spool",
+  "log_file": "$AGENT_INSIGHT_HOME/logs/hermes-plugin.log"
 }
 HERMES_CONFIG_EOF
     echo "Agent Insight Hermes config written to $HERMES_PLUGIN_DIR/config.json"
@@ -898,7 +900,7 @@ if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo ""
     echo "📦 Installing watcher dependencies..."
     if command -v npm &> /dev/null; then
-      cd "$HOME/.agent-insight"
+      cd "$AGENT_INSIGHT_HOME"
       if [ ! -f "package.json" ]; then
         echo '{"name": "agent-insight-watcher", "version": "1.0.0", "type": "module", "dependencies": {}}' > package.json
       fi
@@ -911,14 +913,14 @@ fi
 
 # 6.5 Configure Claude Code official OTel logs
 if [ "$INSTALL_CLAUDE" = "true" ]; then
-    cat > "$HOME/.agent-insight/claude_otel_env.sh" << 'CLAUDE_OTEL_EOF'
+    agent_insight_write_script > "$AGENT_INSIGHT_HOME/claude_otel_env.sh" << 'CLAUDE_OTEL_EOF'
 # Agent-Insight Claude Code OpenTelemetry integration
 unalias claude 2>/dev/null || true
 
 _skill_insight_claude_load_env() {
-  if [ -f "$HOME/.agent-insight/.env" ]; then
+  if [ -f "$AGENT_INSIGHT_HOME/.env" ]; then
     set -a
-    . "$HOME/.agent-insight/.env"
+    . "$AGENT_INSIGHT_HOME/.env"
     set +a
   fi
 }
@@ -928,7 +930,7 @@ claude() {
   local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
   case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
   _si_host="\${_si_host%/}"
-  mkdir -p "$HOME/.agent-insight/claude_raw_bodies" 2>/dev/null || true
+  mkdir -p "$AGENT_INSIGHT_HOME/claude_raw_bodies" 2>/dev/null || true
   env \\
     CLAUDE_CODE_ENABLE_TELEMETRY=1 \\
     OTEL_LOGS_EXPORTER=otlp \\
@@ -939,34 +941,34 @@ claude() {
     OTEL_LOG_USER_PROMPTS=1 \\
     OTEL_LOG_TOOL_DETAILS=1 \\
     OTEL_LOG_TOOL_CONTENT=1 \\
-    OTEL_LOG_RAW_API_BODIES="\${AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-file:$HOME/.agent-insight/claude_raw_bodies}" \\
+    OTEL_LOG_RAW_API_BODIES="\${AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-file:$AGENT_INSIGHT_HOME/claude_raw_bodies}" \\
     claude "$@"
 }
 CLAUDE_OTEL_EOF
     SHELL_RC="$HOME/.zshrc"
     [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
-    if [ -f "$SHELL_RC" ] && ! grep -q "\\.agent-insight/claude_otel_env\\.sh" "$SHELL_RC"; then
+    if [ -f "$SHELL_RC" ] && ! grep -Fq "$AGENT_INSIGHT_HOME/claude_otel_env.sh" "$SHELL_RC"; then
         echo "" >> "$SHELL_RC"
         echo "# Agent-Insight Claude Code OTel" >> "$SHELL_RC"
-        echo "source \\"$HOME/.agent-insight/claude_otel_env.sh\\"" >> "$SHELL_RC"
+        echo "source \\"$AGENT_INSIGHT_HOME/claude_otel_env.sh\\"" >> "$SHELL_RC"
     fi
-    echo "✅ Claude Code OTel env installed at $HOME/.agent-insight/claude_otel_env.sh"
-    echo "   Restart your terminal or run: source $HOME/.agent-insight/claude_otel_env.sh"
+    echo "✅ Claude Code OTel env installed at $AGENT_INSIGHT_HOME/claude_otel_env.sh"
+    echo "   Restart your terminal or run: source $AGENT_INSIGHT_HOME/claude_otel_env.sh"
     # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,
     # OTel 事件里没有(详见脚本头部注释),靠 Stop 等 hook 每轮异步补发,SessionEnd 最终兜底。
     echo "⏬ Downloading Claude Code context uploader..."
-    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$HOME/.agent-insight/claude_context_uploader.cjs"; then
+    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$AGENT_INSIGHT_HOME/claude_context_uploader.cjs"; then
         if command -v node &> /dev/null; then
-            node "$HOME/.agent-insight/claude_context_uploader.cjs" --install-hook || \
-                echo "⚠️  注册 Claude 上下文补传 hook 失败,可稍后手动执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook"
+            node "$AGENT_INSIGHT_HOME/claude_context_uploader.cjs" --install-hook || \
+                echo "⚠️  注册 Claude 上下文补传 hook 失败,可稍后手动执行:node $AGENT_INSIGHT_HOME/claude_context_uploader.cjs --install-hook"
         else
-            echo "⚠️  未找到 node,跳过 Claude 上下文补传 hook 注册(装好 node 后执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook)"
+            echo "⚠️  未找到 node,跳过 Claude 上下文补传 hook 注册(装好 node 后执行:node $AGENT_INSIGHT_HOME/claude_context_uploader.cjs --install-hook)"
         fi
     else
         echo "⚠️  下载上下文补传器失败,system prompt / hook 上下文将无法跨机上报"
     fi
     pkill -f "claude_watcher_client.ts" 2>/dev/null || true
-    rm -f "$HOME/.agent-insight/claude_watcher_client.ts" "$HOME/.agent-insight/start_claude_watcher.sh" "$HOME/.agent-insight/stop_claude_watcher.sh" "$HOME/.agent-insight/claude_watcher.pid"
+    rm -f "$AGENT_INSIGHT_HOME/claude_watcher_client.ts" "$AGENT_INSIGHT_HOME/start_claude_watcher.sh" "$AGENT_INSIGHT_HOME/stop_claude_watcher.sh" "$AGENT_INSIGHT_HOME/claude_watcher.pid"
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
 
@@ -986,57 +988,57 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
 
     # OpenClaw Watcher Start Script
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        cat > "$HOME/.agent-insight/start_openclaw_watcher.sh" << 'WATCHER_EOF'
+        agent_insight_write_script > "$AGENT_INSIGHT_HOME/start_openclaw_watcher.sh" << 'WATCHER_EOF'
 #!/bin/bash
 # Stop existing watcher if running
 pkill -f "openclaw_watcher_client.ts" 2>/dev/null
 
 # Start watcher in background
-cd "$HOME/.agent-insight" && nohup npx -y tsx "$HOME/.agent-insight/openclaw_watcher_client.ts" > "$HOME/.agent-insight/logs/openclaw_watcher.log" 2>&1 &
-echo $! > "$HOME/.agent-insight/openclaw_watcher.pid"
-echo "OpenClaw watcher started with PID $(cat $HOME/.agent-insight/openclaw_watcher.pid)"
+cd "$AGENT_INSIGHT_HOME" && nohup npx -y tsx "$AGENT_INSIGHT_HOME/openclaw_watcher_client.ts" > "$AGENT_INSIGHT_HOME/logs/openclaw_watcher.log" 2>&1 &
+echo $! > "$AGENT_INSIGHT_HOME/openclaw_watcher.pid"
+echo "OpenClaw watcher started with PID $(cat $AGENT_INSIGHT_HOME/openclaw_watcher.pid)"
 WATCHER_EOF
-        chmod +x "$HOME/.agent-insight/start_openclaw_watcher.sh"
+        chmod +x "$AGENT_INSIGHT_HOME/start_openclaw_watcher.sh"
         echo "✅ OpenClaw watcher start script created"
 
         # OpenClaw Watcher Stop Script
-        cat > "$HOME/.agent-insight/stop_openclaw_watcher.sh" << 'STOP_OPENCLAW_EOF'
+        agent_insight_write_script > "$AGENT_INSIGHT_HOME/stop_openclaw_watcher.sh" << 'STOP_OPENCLAW_EOF'
 #!/bin/bash
 echo "Stopping OpenClaw watcher..."
 pkill -f "openclaw_watcher_client.ts" 2>/dev/null
-rm -f "$HOME/.agent-insight/openclaw_watcher.pid"
+rm -f "$AGENT_INSIGHT_HOME/openclaw_watcher.pid"
 echo "OpenClaw watcher stopped"
 STOP_OPENCLAW_EOF
-        chmod +x "$HOME/.agent-insight/stop_openclaw_watcher.sh"
+        chmod +x "$AGENT_INSIGHT_HOME/stop_openclaw_watcher.sh"
         echo "✅ OpenClaw watcher stop script created"
     fi
 
     # Combined Start Script - Dynamic generation
-    cat > "$HOME/.agent-insight/start_watchers.sh" << 'WATCHER_HEADER'
+    agent_insight_write_script > "$AGENT_INSIGHT_HOME/start_watchers.sh" << 'WATCHER_HEADER'
 #!/bin/bash
 echo "Starting Agent-Insight watchers..."
 WATCHER_HEADER
 
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        echo '"$HOME/.agent-insight/start_openclaw_watcher.sh"' >> "$HOME/.agent-insight/start_watchers.sh"
+        echo '"$AGENT_INSIGHT_HOME/start_openclaw_watcher.sh"' >> "$AGENT_INSIGHT_HOME/start_watchers.sh"
     fi
 
-    echo 'echo "All watchers started!"' >> "$HOME/.agent-insight/start_watchers.sh"
-    chmod +x "$HOME/.agent-insight/start_watchers.sh"
+    echo 'echo "All watchers started!"' >> "$AGENT_INSIGHT_HOME/start_watchers.sh"
+    chmod +x "$AGENT_INSIGHT_HOME/start_watchers.sh"
     echo "✅ Combined start script created"
 
     # Combined Stop Script - Dynamic generation
-    cat > "$HOME/.agent-insight/stop_watchers.sh" << 'STOP_HEADER'
+    agent_insight_write_script > "$AGENT_INSIGHT_HOME/stop_watchers.sh" << 'STOP_HEADER'
 #!/bin/bash
 echo "Stopping Agent-Insight watchers..."
 STOP_HEADER
 
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        echo '"$HOME/.agent-insight/stop_openclaw_watcher.sh"' >> "$HOME/.agent-insight/stop_watchers.sh"
+        echo '"$AGENT_INSIGHT_HOME/stop_openclaw_watcher.sh"' >> "$AGENT_INSIGHT_HOME/stop_watchers.sh"
     fi
 
-    echo 'echo "All watchers stopped!"' >> "$HOME/.agent-insight/stop_watchers.sh"
-    chmod +x "$HOME/.agent-insight/stop_watchers.sh"
+    echo 'echo "All watchers stopped!"' >> "$AGENT_INSIGHT_HOME/stop_watchers.sh"
+    chmod +x "$AGENT_INSIGHT_HOME/stop_watchers.sh"
     echo "✅ Combined stop script created"
 fi
 
@@ -1045,7 +1047,7 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
     echo "🚀 Starting telemetry watchers..."
     if command -v npx &> /dev/null; then
-        "$HOME/.agent-insight/start_watchers.sh"
+        "$AGENT_INSIGHT_HOME/start_watchers.sh"
     else
         echo "⚠️  Node.js (npx) not found. Skipping watcher startup."
     fi
@@ -1187,6 +1189,7 @@ function generatePowerShellScript(
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
     const frameworksPreselected = preselected.length > 0;
     const script = [
+        SETUP_POWERSHELL_HOME,
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
         '# =============================================================================',
@@ -1221,7 +1224,7 @@ function generatePowerShellScript(
         'Write-Host "✅ Node.js version: $nodeVersion"',
         '',
         '# 1. Setup Directories',
-        '$skillInsightDir = Join-Path $env:USERPROFILE ".agent-insight"',
+        '$skillInsightDir = $env:AGENT_INSIGHT_HOME',
         '$skillInsightLogsDir = Join-Path $skillInsightDir "logs"',
         '$opencodePluginsDir = Join-Path $env:USERPROFILE ".opencode\\plugins"',
         '$opencodeSkillsDir = Join-Path $env:USERPROFILE ".opencode\\skills"',
@@ -1524,7 +1527,7 @@ function generatePowerShellScript(
         '        $llamaIndexNonce = [Guid]::NewGuid().ToString("N")',
         '        $llamaIndexArchive = Join-Path ([System.IO.Path]::GetTempPath()) "agent-insight-llamaindex-$llamaIndexNonce.zip"',
         '        $llamaIndexPackageUrl = "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"',
-        '        $llamaIndexRoot = Join-Path $env:USERPROFILE ".agent-insight\\collectors\\llamaindex"',
+        '        $llamaIndexRoot = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\llamaindex"',
         '        $llamaIndexSourceDir = Join-Path $llamaIndexRoot "current"',
         '        $llamaIndexStaging = Join-Path $llamaIndexRoot ".install-$llamaIndexNonce"',
         '        $llamaIndexBackup = Join-Path $llamaIndexRoot ".previous-$llamaIndexNonce"',
@@ -1554,9 +1557,10 @@ function generatePowerShellScript(
         '            if ($LLAMAINDEX_READY) { Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue }',
         '        }',
         '        if ($LLAMAINDEX_READY) {',
-        '            $llamaIndexEnvPath = Join-Path $env:USERPROFILE ".agent-insight\\llamaindex_env.ps1"',
+        '            $llamaIndexEnvPath = Join-Path $env:AGENT_INSIGHT_HOME "llamaindex_env.ps1"',
         '            $llamaIndexEnvScript = @\'',
-        '$llamaIndexCollectorDir = Join-Path $HOME ".agent-insight\\collectors\\llamaindex\\current"',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
+        '$llamaIndexCollectorDir = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\llamaindex\\current"',
         'if ($env:PYTHONPATH) {',
         '  $llamaIndexPaths = $env:PYTHONPATH -split [IO.Path]::PathSeparator',
         '  if ($llamaIndexPaths -notcontains $llamaIndexCollectorDir) { $env:PYTHONPATH = "$llamaIndexCollectorDir$([IO.Path]::PathSeparator)$env:PYTHONPATH" }',
@@ -1573,10 +1577,11 @@ function generatePowerShellScript(
         '            if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }',
         '            if (-not ((Get-Content $PROFILE -Raw) -match "llamaindex_env.ps1")) { Add-Content -Path $PROFILE -Value ". `"$llamaIndexEnvPath`"" }',
         '            . $llamaIndexEnvPath',
-        '            $llamaIndexUninstallPath = Join-Path $env:USERPROFILE ".agent-insight\\uninstall_llamaindex_collector.ps1"',
+        '            $llamaIndexUninstallPath = Join-Path $env:AGENT_INSIGHT_HOME "uninstall_llamaindex_collector.ps1"',
         '            $llamaIndexUninstallScript = @\'',
         'param([switch]$Purge)',
-        '$agentInsightHome = Join-Path $HOME ".agent-insight"',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
+        '$agentInsightHome = $env:AGENT_INSIGHT_HOME',
         'if ($Purge) {',
         '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "otel_data\\llamaindex") -Recurse -Force -ErrorAction SilentlyContinue',
         '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "llamaindex.json"), (Join-Path $agentInsightHome "llamaindex.env") -Force -ErrorAction SilentlyContinue',
@@ -1848,7 +1853,7 @@ function generatePowerShellScript(
         '    if ((Split-Path -Leaf $SETUP_WORKING_DIR) -eq ".gp") { $goalPlusSourcePath = $SETUP_WORKING_DIR }',
         '    if ($goalPlusSourcePath) {',
         '        Write-Host "🔗 Attaching Goal Plus workspace: $goalPlusSourcePath"',
-        '        $goalPlusCommand = Join-Path $env:USERPROFILE ".agent-insight\\collectors\\goal-plus\\goal-plus-collector.cjs"',
+        '        $goalPlusCommand = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\goal-plus\\goal-plus-collector.cjs"',
         '        & node $goalPlusCommand attach $goalPlusSourcePath',
         '        if ($LASTEXITCODE -eq 0) { & node $goalPlusCommand scan }',
         '        if ($LASTEXITCODE -eq 0) { & node $goalPlusCommand start }',
@@ -1982,8 +1987,9 @@ function generatePowerShellScript(
         '# 6.5 Configure Claude Code official OTel logs',
         'if ($INSTALL_CLAUDE) {',
         '    $claudeOtelScript = @\'',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
         'function Invoke-SkillInsightClaude {',
-        '  $envFile = Join-Path $env:USERPROFILE ".agent-insight\\.env"',
+        '  $envFile = Join-Path $env:AGENT_INSIGHT_HOME ".env"',
         '  if (Test-Path $envFile) {',
         '    Get-Content $envFile | ForEach-Object {',
         '      if ($_ -match "^([^#=]+)=(.*)$") { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") }',
@@ -2001,7 +2007,7 @@ function generatePowerShellScript(
         '  $env:OTEL_LOG_USER_PROMPTS = "1"',
         '  $env:OTEL_LOG_TOOL_DETAILS = "1"',
         '  $env:OTEL_LOG_TOOL_CONTENT = "1"',
-        '  $rawBodyDir = Join-Path $env:USERPROFILE ".agent-insight\\claude_raw_bodies"',
+        '  $rawBodyDir = Join-Path $env:AGENT_INSIGHT_HOME "claude_raw_bodies"',
         '  New-Item -ItemType Directory -Path $rawBodyDir -Force | Out-Null',
         '  if (-not $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES) { $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "file:$rawBodyDir" }',
         '  $env:OTEL_LOG_RAW_API_BODIES = $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES',
@@ -2016,7 +2022,7 @@ function generatePowerShellScript(
         '    $profileDir = Split-Path $PROFILE -Parent',
         '    if ($profileDir) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }',
         '    $profileText = if (Test-Path $PROFILE) { Get-Content $PROFILE -Raw } else { "" }',
-        '    if (-not ($profileText.Contains(".agent-insight\\claude_otel_env.ps1") -or $profileText.Contains(".agent-insight/claude_otel_env.ps1"))) {',
+        '    if (-not $profileText.Contains($claudeOtelPath)) {',
         '        Add-Content -Path $PROFILE -Value ""',
         '        Add-Content -Path $PROFILE -Value "# Skill-Insight Claude Code OTel"',
         '        Add-Content -Path $PROFILE -Value ". `"$claudeOtelPath`""',
@@ -2054,11 +2060,12 @@ function generatePowerShellScript(
         '    # OpenClaw Watcher Start Script',
         '    if ($INSTALL_OPENCLAW) {',
         '        $startOpenclawScript = @\'',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
         '# Stop existing watcher if running',
         'Get-Process | Where-Object { $_.CommandLine -like "*openclaw_watcher_client.ts*" } | Stop-Process -Force -ErrorAction SilentlyContinue',
         '',
         '# Start watcher in background',
-        '$skillInsightDir = Join-Path $env:USERPROFILE ".agent-insight"',
+        '$skillInsightDir = $env:AGENT_INSIGHT_HOME',
         '$logFile = Join-Path $skillInsightDir "logs\\openclaw_watcher.log"',
         '$scriptPath = Join-Path $skillInsightDir "openclaw_watcher_client.ts"',
         '',
@@ -2071,6 +2078,7 @@ function generatePowerShellScript(
         '',
         '        # OpenClaw Watcher Stop Script',
         '        $stopOpenclawScript = @\'',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
         'Write-Host "Stopping OpenClaw watcher..."',
         'Get-Process | Where-Object { $_.CommandLine -like "*openclaw_watcher_client.ts*" } | Stop-Process -Force -ErrorAction SilentlyContinue',
         'Write-Host "OpenClaw watcher stopped"',
@@ -2149,14 +2157,14 @@ function generatePowerShellScript(
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
-        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:AGENT_INSIGHT_HOME\\collectors\\pi-agent" }',
         'if ($GOAL_PLUS_HOSTS -and $GOAL_PLUS_TRACE_READY) { Write-Host "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS" }',
         'if ($GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) { Write-Host "  ❌ Goal Plus native Trace: collector setup is not ready" }',
         'if ($GOAL_PLUS_SOURCE_OK) { Write-Host "  ✅ Goal Plus worker relationships: workspace attached; watcher started" }',
         'if ($GOAL_PLUS_SETUP_OK -and -not $GOAL_PLUS_SOURCE_OK) { Write-Host "  ⚠️  Goal Plus worker relationships: collector installed; attach a current .gp workspace" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK) { Write-Host "  ⚠️  Goal Plus worker and relationship collector: not installed" }',
         'if ($AUTO_ADDED_FRAMEWORKS) { Write-Host "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS" }',
-        'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
+        'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:AGENT_INSIGHT_HOME\\collectors\\codex" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',

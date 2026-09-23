@@ -69,8 +69,7 @@ function collectorStateDir(framework, apiKey, homeDir = os.homedir()) {
     throw new Error(`Collector home directory must be absolute: ${homeDir}`);
   }
   const namespaceRoot = path.resolve(
-    suppliedHome,
-    ".agent-insight",
+    getAgentInsightHome(suppliedHome),
     "otel_data",
     safeFramework,
   );
@@ -790,7 +789,15 @@ class DurableTraceUploader {
   }
 }
 
+
+function getAgentInsightHome(homeDir = os.homedir()) {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.');
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(homeDir, '.agent-insight');
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => homeDir));
+}
+
 module.exports = {
+  getAgentInsightHome,
   DEFAULT_BATCH_BYTES,
   DEFAULT_BATCH_EVENTS,
   DEFAULT_MAX_CONTENT_CHARS,

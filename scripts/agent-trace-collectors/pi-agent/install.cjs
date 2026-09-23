@@ -2,11 +2,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { installSharedModules } = require("../shared/install-modules.cjs");
 
 const PACKAGE_FILES = [
   ["package.json"],
@@ -87,26 +87,13 @@ async function copyFile(source, target, mode = 0o600) {
 }
 
 async function installFiles(sourceDir, packageDir, sharedDir) {
+  await installSharedModules(path.resolve(sourceDir, "..", "shared"), sharedDir,
+    ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]);
   for (const parts of PACKAGE_FILES) {
     const mode = parts[0] === "scripts" ? 0o700 : 0o600;
     await copyFile(path.join(sourceDir, ...parts), path.join(packageDir, ...parts), mode);
   }
 
-  for (const sharedFile of ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]) {
-    const incomingPath = path.resolve(sourceDir, "..", "shared", sharedFile);
-    const targetPath = path.join(sharedDir, sharedFile);
-    if (fs.existsSync(targetPath)) {
-      const [incoming, current] = await Promise.all([
-        fsp.readFile(incomingPath),
-        fsp.readFile(targetPath),
-      ]);
-      if (!incoming.equals(current)) {
-        throw new Error(`Refusing to overwrite a different shared collector module at ${targetPath}`);
-      }
-    } else {
-      await copyFile(incomingPath, targetPath);
-    }
-  }
 }
 
 async function install(options) {

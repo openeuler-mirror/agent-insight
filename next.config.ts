@@ -1,10 +1,16 @@
 import type { NextConfig } from "next";
 import { config } from "dotenv";
-import os from "node:os";
 import path from "path";
+import { assertSupportedHomeEnv, getAgentInsightHome } from './scripts/agent-insight-home.cjs';
 
-config({ path: path.join(process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), ".agent-insight"), ".env") });
-config();
+const agentInsightHome = getAgentInsightHome();
+
+const managedEnv = config({ path: path.join(agentInsightHome, ".env") });
+assertSupportedHomeEnv(managedEnv.parsed || {});
+const projectEnv = config();
+assertSupportedHomeEnv(projectEnv.parsed || {});
+assertSupportedHomeEnv();
+process.env.AGENT_INSIGHT_HOME = agentInsightHome;
 
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',

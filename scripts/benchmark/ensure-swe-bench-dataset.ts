@@ -20,8 +20,8 @@ export const SWE_BENCH_DATASET_REVISION = '78f471bf655a3137b2e8a75af1501690ec009
 export const SWE_BENCH_DATASET_SHA256 = '030cfd7f2a704c4c0226e7f104c725a3b41230b1d3517f9c915ad7ea5be3fa25'
 export const SWE_BENCH_VERIFIED_CASE_COUNT = 500
 
-const SOURCE_ARCHIVE_URL = `https://codeload.github.com/swe-bench/SWE-bench/tar.gz/${SWE_BENCH_SOURCE_COMMIT}`
-const DATASET_URL = `https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified/resolve/${SWE_BENCH_DATASET_REVISION}/data/test-00000-of-00001.parquet?download=true`
+const DEFAULT_SOURCE_ARCHIVE_URL = `https://codeload.github.com/swe-bench/SWE-bench/tar.gz/${SWE_BENCH_SOURCE_COMMIT}`
+const DEFAULT_DATASET_URL = `https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified/resolve/${SWE_BENCH_DATASET_REVISION}/data/test-00000-of-00001.parquet?download=true`
 
 export type SweBenchProvisionPaths = {
   vendorRoot: string
@@ -29,32 +29,58 @@ export type SweBenchProvisionPaths = {
   sourcePath: string
   pythonPath: string
   datasetPath: string
+  sourceArchiveSource: string
+  datasetSource: string
   customPythonPath: boolean
-  customDatasetPath: boolean
 }
 
 function expandConfiguredPath(value: string): string {
   if (value === '~') return os.homedir()
   if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2))
+  if (value.startsWith('$HOME/')) return path.join(os.homedir(), value.slice(6))
+  if (value.startsWith('${HOME}/')) return path.join(os.homedir(), value.slice(8))
   return path.resolve(value)
+}
+
+function isRemoteSource(source: string): boolean {
+  return /^https?:\/\//i.test(source)
+}
+
+function resolveSource(value: string): string {
+  if (isRemoteSource(value)) {
+    new URL(value)
+    return value
+  }
+  if (/^[a-z][a-z\d+.-]*:/i.test(value) && !/^[a-z]:[\\/]/i.test(value)) {
+    throw new Error('SWE-bench 来源必须是 HTTP(S) 下载地址或本机文件路径')
+  }
+  return expandConfiguredPath(value)
 }
 
 export function resolveSweBenchProvisionPaths(): SweBenchProvisionPaths {
   const vendorRoot = path.join(getAgentInsightHome(), 'vendor', 'SWE-bench')
   const customPythonPath = Boolean(process.env.SWE_BENCH_PYTHON?.trim())
-  const customDatasetPath = Boolean(process.env.SWE_BENCH_DATASET_PATH?.trim())
+  // 新变量显式留空时使用官方来源，不再回退到旧变量。
+  const datasetSource = resolveSource((process.env.SWE_BENCH_DATASET_SOURCE
+    ?? (process.env.SWE_BENCH_DATASET_PATH?.trim() || process.env.SWE_BENCH_DATASET_URL))?.trim()
+    || DEFAULT_DATASET_URL)
+  const sourceArchiveSource = resolveSource((process.env.SWE_BENCH_SOURCE_ARCHIVE_SOURCE
+    ?? process.env.SWE_BENCH_SOURCE_ARCHIVE_URL)?.trim() || DEFAULT_SOURCE_ARCHIVE_URL)
   return {
     vendorRoot,
-    sourceArchivePath: path.join(vendorRoot, 'downloads', `${SWE_BENCH_SOURCE_COMMIT}.tar.gz`),
+    sourceArchivePath: isRemoteSource(sourceArchiveSource)
+      ? path.join(vendorRoot, 'downloads', `${SWE_BENCH_SOURCE_COMMIT}.tar.gz`)
+      : sourceArchiveSource,
     sourcePath: path.join(vendorRoot, `source-${SWE_BENCH_SOURCE_COMMIT}`),
     pythonPath: customPythonPath
       ? expandConfiguredPath(process.env.SWE_BENCH_PYTHON!.trim())
       : path.join(vendorRoot, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
-    datasetPath: customDatasetPath
-      ? expandConfiguredPath(process.env.SWE_BENCH_DATASET_PATH!.trim())
-      : path.join(getAgentInsightDataDir(), 'imports', 'swe-bench-verified', 'test.parquet'),
+    datasetPath: isRemoteSource(datasetSource)
+      ? path.join(getAgentInsightDataDir(), 'imports', 'swe-bench-verified', 'test.parquet')
+      : datasetSource,
+    sourceArchiveSource,
+    datasetSource,
     customPythonPath,
-    customDatasetPath,
   }
 }
 
@@ -96,38 +122,44 @@ async function ensureCommand(command: string, versionArgs: string[]): Promise<vo
   }
 }
 
-async function ensurePinnedDownload(input: {
+export async function ensurePinnedFile(input: {
   label: string
-  url: string
+  source: string
   sha256: string
   targetPath: string
-  replaceInvalid: boolean
 }): Promise<void> {
-  if (await isRegularFile(input.targetPath)) {
-    const actual = await sha256File(input.targetPath)
+  const remote = isRemoteSource(input.source)
+  const filePath = remote ? input.targetPath : input.source
+  if (await isRegularFile(filePath)) {
+    const actual = await sha256File(filePath)
     if (actual === input.sha256) {
-      process.stdout.write(`复用已校验的${input.label}：${input.targetPath}\n`)
+      process.stdout.write(`复用已校验的${input.label}：${filePath}\n`)
       return
     }
-    if (!input.replaceInvalid) {
-      throw new Error(`${input.label}哈希不匹配，拒绝覆盖自定义路径：${input.targetPath}`)
+    if (!remote) {
+      throw new Error(`${input.label}哈希不匹配，拒绝覆盖本机文件：${filePath}`)
     }
+  }
+  if (!remote) {
+    throw new Error(`${input.label}本机文件不存在或不是普通文件：${filePath}`)
   }
 
   await ensureCommand('curl', ['--version'])
   await fs.promises.mkdir(path.dirname(input.targetPath), { recursive: true })
   const temporaryPath = `${input.targetPath}.download-${process.pid}`
   await fs.promises.rm(temporaryPath, { force: true })
-  process.stdout.write(`下载${input.label}：${input.url}\n`)
+  process.stdout.write(`下载${input.label}：${input.source}\n`)
   try {
     await run('curl', [
       '--fail',
       '--location',
+      '--proto', '=http,https',
+      '--proto-redir', '=http,https',
       '--retry', '5',
       '--retry-delay', '2',
       '--connect-timeout', '20',
       '--max-time', '600',
-      input.url,
+      input.source,
       '--output', temporaryPath,
     ])
     const actual = await sha256File(temporaryPath)
@@ -170,12 +202,11 @@ async function ensureOfficialSource(paths: SweBenchProvisionPaths): Promise<void
     // The managed source cache is rebuilt below when absent or incomplete.
   }
 
-  await ensurePinnedDownload({
+  await ensurePinnedFile({
     label: 'SWE-bench 官方源码',
-    url: SOURCE_ARCHIVE_URL,
+    source: paths.sourceArchiveSource,
     sha256: SWE_BENCH_SOURCE_ARCHIVE_SHA256,
     targetPath: paths.sourceArchivePath,
-    replaceInvalid: true,
   })
   await ensureCommand('tar', ['--version'])
   const stagingPath = `${paths.sourcePath}.extract-${process.pid}`
@@ -261,12 +292,11 @@ export async function ensureSweBenchDataset(): Promise<{
     }
 
     const paths = resolveSweBenchProvisionPaths()
-    await ensurePinnedDownload({
+    await ensurePinnedFile({
       label: 'SWE-bench Verified 数据集',
-      url: DATASET_URL,
+      source: paths.datasetSource,
       sha256: SWE_BENCH_DATASET_SHA256,
       targetPath: paths.datasetPath,
-      replaceInvalid: !paths.customDatasetPath,
     })
     await ensureOfficialPython(paths)
     process.env.SWE_BENCH_DATASET_PATH = paths.datasetPath

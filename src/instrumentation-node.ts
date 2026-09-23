@@ -12,8 +12,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawn } from 'child_process';
+import { getAgentInsightHome } from '@/lib/env';
 
 export async function setupNodeRuntime(): Promise<void> {
   // 注册内置系统 Agent（skill-generator-agent 等）。失败不阻塞启动——惰性注册作为兜底。
@@ -165,8 +165,7 @@ export async function setupNodeRuntime(): Promise<void> {
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。
   try {
     const uploader = path.join(
-      os.homedir(),
-      fs.existsSync(path.join(os.homedir(), '.agent-insight')) ? '.agent-insight' : '.skill-insight',
+      getAgentInsightHome(),
       'opencode_uploader_client.js',
     );
     // 用仓库最新版刷新部署副本: 旧副本可能读 legacy 的 SKILL_INSIGHT_API_KEY → 拿错 key 上传 401、

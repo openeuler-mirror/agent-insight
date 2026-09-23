@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { installSharedModules } = require("../shared/install-modules.cjs");
 
 const PACKAGE_FILES = [
   "goal-plus-collector.cjs",
@@ -54,18 +55,11 @@ async function install(options) {
     : path.join(options.homeDir, ".agent-insight");
   const packageDir = path.join(agentInsightHome, "collectors", "goal-plus");
   const configPath = path.join(packageDir, "config.json");
+  await installSharedModules(path.resolve(options.sourceDir, "..", "shared"),
+    path.join(agentInsightHome, "collectors", "shared"),
+    ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]);
   for (const relative of PACKAGE_FILES) {
     await copyFile(path.join(options.sourceDir, relative), path.join(packageDir, relative), relative.endsWith(".cjs") ? 0o700 : 0o600);
-  }
-  for (const sharedFile of ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]) {
-    const sharedTarget = path.join(agentInsightHome, "collectors", "shared", sharedFile);
-    const sharedSource = path.resolve(options.sourceDir, "..", "shared", sharedFile);
-    if (fs.existsSync(sharedTarget)) {
-      const [incoming, current] = await Promise.all([fsp.readFile(sharedSource), fsp.readFile(sharedTarget)]);
-      if (!incoming.equals(current)) throw new Error(`Refusing to overwrite a different shared collector module at ${sharedTarget}`);
-    } else {
-      await copyFile(sharedSource, sharedTarget);
-    }
   }
   const config = {
     version: 1,

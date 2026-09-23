@@ -225,6 +225,19 @@ class CapabilityRegistry {
     return this
   }
 
+  replace(entries = []) {
+    const capabilities = new Map()
+    for (const [key, capability] of entries) {
+      if (!/^[a-z0-9][a-z0-9._/-]{0,127}$/.test(String(key || ''))) {
+        throw new TypeError(`${this.kind} capability key is invalid`)
+      }
+      if (capabilities.has(key)) throw new TypeError(`duplicate ${this.kind} capability: ${key}`)
+      capabilities.set(key, capability)
+    }
+    this.capabilities = capabilities
+    return this
+  }
+
   get(key) {
     const capability = this.capabilities.get(key)
     if (!capability) {
@@ -941,8 +954,22 @@ function createBenchmarkExecutor(options) {
   const agentPlatforms = [
     ...new Set(configuredAgentPlatforms.map((platform) => String(platform || '').trim()).filter(Boolean)),
   ]
-  const agentRuntimes = options.agentRuntimes
-    || new AgentRuntimeRegistry(agentPlatforms.map((platform) => [platform, { run: options.runAgent }]))
+  const managesAgentRuntimes = !options.agentRuntimes
+  const agentRuntimes = options.agentRuntimes || new AgentRuntimeRegistry()
+  const runtimeCapability = { run: options.runAgent }
+  const setAgentPlatforms = (platforms) => {
+    if (!managesAgentRuntimes) {
+      throw new Error('agent runtime registry is managed externally')
+    }
+    const normalized = [
+      ...new Set((Array.isArray(platforms) ? platforms : [])
+        .map((platform) => String(platform || '').trim())
+        .filter(Boolean)),
+    ]
+    agentRuntimes.replace(normalized.map((platform) => [platform, runtimeCapability]))
+    return normalized
+  }
+  if (managesAgentRuntimes) setAgentPlatforms(agentPlatforms)
   const collectors = options.collectors instanceof ArtifactCollectorRegistry
     ? options.collectors
     : new ArtifactCollectorRegistry(options.collectors || [['git-patch/v1', new GitPatchCollector()]])
@@ -1212,6 +1239,8 @@ function createBenchmarkExecutor(options) {
     store,
     runner,
     get activeRunId() { return activeRunId },
+    get agentPlatforms() { return agentRuntimes.keys() },
+    setAgentPlatforms,
     async accept(request) {
       const validated = validateRequest(request, true)
       await acceptValidatedRequest(request, validated)

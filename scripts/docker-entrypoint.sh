@@ -3,15 +3,30 @@ set -eu
 
 : "${PORT:=3000}"
 : "${HOSTNAME:=0.0.0.0}"
-: "${AGENT_INSIGHT_DATA_DIR:=/data/agent-insight}"
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+  exit 1
+fi
+: "${AGENT_INSIGHT_HOME:=/data/agent-insight}"
+case "$AGENT_INSIGHT_HOME" in
+  '~'|'$HOME'|'${HOME}') AGENT_INSIGHT_HOME="$HOME" ;;
+  '~/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\~/}" ;;
+  '$HOME/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$HOME/}" ;;
+  '${HOME}/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$\{HOME\}/}" ;;
+esac
+case "$AGENT_INSIGHT_HOME" in /*) ;; *) AGENT_INSIGHT_HOME="$PWD/$AGENT_INSIGHT_HOME" ;; esac
+AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
+RESOLVED_AGENT_INSIGHT_HOME="$AGENT_INSIGHT_HOME"
+PROCESS_DATABASE_URL_IS_SET="${DATABASE_URL+x}"
+PROCESS_DATABASE_URL="${DATABASE_URL:-}"
 : "${OPENCODE_BIN:=/app/node_modules/.bin/opencode}"
 # 源码模式:指向挂载进来的源码目录。为空(默认)时完全走镜像里烤好的 agent-insight npm 包。
-# 注意它必须由容器环境变量传入,这里读不到 $AGENT_INSIGHT_DATA_DIR/.env 里的配置。
+# 注意它必须由容器环境变量传入,这里读不到 $AGENT_INSIGHT_HOME/.env 里的配置。
 : "${AGENT_INSIGHT_SOURCE_DIR:=}"
 
 PACKAGE_ROOT="/app/node_modules/agent-insight"
 SOURCE_WORKDIR="/app/source"
-ENV_FILE="$AGENT_INSIGHT_DATA_DIR/.env"
+ENV_FILE="$AGENT_INSIGHT_HOME/.env"
 
 # 把挂载进来的源码复制到容器内再构建:宿主机源码目录可以只读挂载,不会被写入 .next/node_modules,
 # 也不用让宿主机目录属主匹配容器里的 node 用户。
@@ -82,10 +97,11 @@ if [ -n "$AGENT_INSIGHT_SOURCE_DIR" ]; then
   PACKAGE_ROOT="$SOURCE_WORKDIR"
 fi
 
-mkdir -p "$AGENT_INSIGHT_DATA_DIR/data"
+mkdir -p "$AGENT_INSIGHT_STORAGE_DIR"
 
 if [ ! -f "$ENV_FILE" ] && [ -f "$PACKAGE_ROOT/.env.example" ]; then
   cp "$PACKAGE_ROOT/.env.example" "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
 fi
 
 if [ -f "$ENV_FILE" ]; then
@@ -95,10 +111,19 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
+AGENT_INSIGHT_HOME="$RESOLVED_AGENT_INSIGHT_HOME"
+AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 export PORT
 export HOSTNAME
-export AGENT_INSIGHT_DATA_DIR
+export AGENT_INSIGHT_HOME
+export AGENT_INSIGHT_STORAGE_DIR
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+  exit 1
+fi
 export PATH="/app/node_modules/.bin:$PATH"
+
+[ "$PROCESS_DATABASE_URL_IS_SET" != x ] || export DATABASE_URL="$PROCESS_DATABASE_URL"
 
 if [ -x "$OPENCODE_BIN" ]; then
   export OPENCODE_BIN
@@ -110,7 +135,7 @@ fi
 
 case "${DATABASE_URL:-}" in
   ""|"file:../data/witty_insight.db")
-    export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/data/witty_insight.db"
+    export DATABASE_URL="file:$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
     ;;
 esac
 

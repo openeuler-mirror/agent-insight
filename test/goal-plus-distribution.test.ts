@@ -12,6 +12,7 @@ import { GET as getInstaller } from '@/app/api/ingest/setup/goal-plus/route';
 import { GET as getAsset } from '@/app/api/ingest/setup/goal-plus/assets/[asset]/route';
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
 import { GET as getAutoSetup } from '@/app/api/ingest/setup/auto/route';
+import { useIsolatedHome } from './helpers/isolated-home';
 
 const require = createRequire(import.meta.url);
 const { install } = require('../scripts/agent-trace-collectors/goal-plus/install.cjs');
@@ -30,6 +31,7 @@ const ENTRIES = [
   'goal-plus/lib/source-registry.cjs',
   'goal-plus/uninstall.cjs',
   'shared/collaboration-transport.cjs',
+  'shared/install-modules.cjs',
   'shared/pi-trace-helpers.cjs',
   'shared/trace-transport.cjs',
 ];
@@ -88,16 +90,8 @@ test('legacy Goal Plus setup input is transparently mapped to the Pi installatio
 test('Goal Plus installer writes only managed collector state', async t => {
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-install-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
-  const previousKey = process.env.AGENT_INSIGHT_API_KEY;
-  const previousHome = process.env.AGENT_INSIGHT_HOME;
+  useIsolatedHome(t, homeDir);
   process.env.AGENT_INSIGHT_API_KEY = 'synthetic-install-key';
-  delete process.env.AGENT_INSIGHT_HOME;
-  t.after(() => {
-    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
-    else process.env.AGENT_INSIGHT_API_KEY = previousKey;
-    if (previousHome === undefined) delete process.env.AGENT_INSIGHT_HOME;
-    else process.env.AGENT_INSIGHT_HOME = previousHome;
-  });
   const result = await install({ homeDir, sourceDir: path.join(process.cwd(), 'scripts', 'agent-trace-collectors', 'goal-plus'), skipVersionCheck: true });
   assert.equal(result.packageDir, path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus'));
   const config = JSON.parse(await fsp.readFile(result.configPath, 'utf8'));
@@ -113,6 +107,7 @@ test('Goal Plus installer writes only managed collector state', async t => {
 test('Pi-managed Goal Plus installation replaces an existing configuration', async t => {
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-compatible-install-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  useIsolatedHome(t, homeDir);
   const packageDir = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus');
   const configPath = path.join(packageDir, 'config.json');
   await fsp.mkdir(packageDir, { recursive: true });
@@ -154,18 +149,14 @@ test('Pi-managed Goal Plus installation replaces an existing configuration', asy
 test('Pi installation replaces a different-account Goal Plus collector', async t => {
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-account-replace-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  useIsolatedHome(t, homeDir);
   const packageDir = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus');
   const configPath = path.join(packageDir, 'config.json');
   const collectorPath = path.join(packageDir, 'goal-plus-collector.cjs');
   await fsp.mkdir(packageDir, { recursive: true });
   await fsp.writeFile(configPath, '{"version":1,"apiKey":"another-account"}\n');
   await fsp.writeFile(collectorPath, 'manual collector\n');
-  const previousKey = process.env.AGENT_INSIGHT_API_KEY;
   process.env.AGENT_INSIGHT_API_KEY = 'pi-account';
-  t.after(() => {
-    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
-    else process.env.AGENT_INSIGHT_API_KEY = previousKey;
-  });
 
   const result = await install({
     homeDir,
@@ -184,6 +175,7 @@ test('Pi installation replaces a different-account Goal Plus collector', async t
 test('Pi-managed reinstall restarts an existing Goal Plus watcher with the new identity', async t => {
   if (process.platform === 'win32') return t.skip('detached process signaling differs on Windows');
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-account-restart-'));
+  useIsolatedHome(t, homeDir);
   let activeConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
   t.after(async () => {
     if (activeConfig) await stopWatcher(activeConfig);
