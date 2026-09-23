@@ -2,11 +2,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { installSharedModules } = require("../shared/install-modules.cjs");
 
 const PACKAGE_FILES = [
   ["package.json"],
@@ -87,26 +87,13 @@ async function copyFile(source, target, mode = 0o600) {
 }
 
 async function installFiles(sourceDir, packageDir, sharedDir) {
+  await installSharedModules(path.resolve(sourceDir, "..", "shared"), sharedDir,
+    ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]);
   for (const parts of PACKAGE_FILES) {
     const mode = parts[0] === "scripts" ? 0o700 : 0o600;
     await copyFile(path.join(sourceDir, ...parts), path.join(packageDir, ...parts), mode);
   }
 
-  for (const sharedFile of ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]) {
-    const incomingPath = path.resolve(sourceDir, "..", "shared", sharedFile);
-    const targetPath = path.join(sharedDir, sharedFile);
-    if (fs.existsSync(targetPath)) {
-      const [incoming, current] = await Promise.all([
-        fsp.readFile(incomingPath),
-        fsp.readFile(targetPath),
-      ]);
-      if (!incoming.equals(current)) {
-        throw new Error(`Refusing to overwrite a different shared collector module at ${targetPath}`);
-      }
-    } else {
-      await copyFile(incomingPath, targetPath);
-    }
-  }
 }
 
 async function install(options) {
@@ -124,6 +111,17 @@ async function install(options) {
   const packageDir = path.join(collectorsDir, "pi-agent");
   const sharedDir = path.join(collectorsDir, "shared");
   await installFiles(options.sourceDir, packageDir, sharedDir);
+  const goalPlusSourceDir = path.resolve(options.sourceDir, "..", "goal-plus");
+  const { install: installGoalPlusObserver } = require(path.join(goalPlusSourceDir, "install.cjs"));
+  const goalPlusObserver = await installGoalPlusObserver({
+    homeDir: options.homeDir,
+    sourceDir: goalPlusSourceDir,
+    skipVersionCheck: true,
+    createWrapper: false,
+    managedBy: "pi-agent",
+    preserveDifferentAccount: true,
+    preserveExistingConfig: true,
+  });
 
   const configPath = path.join(packageDir, "config.json");
   const tempPath = `${configPath}.${process.pid}.tmp`;
@@ -137,6 +135,8 @@ async function install(options) {
       || `${baseUrl}/api/ingest/collaborations/sessions`,
     collaborationEventsEndpoint: process.env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
       || `${baseUrl}/api/ingest/collaborations/events`,
+    goalPlusObserverEnabled: goalPlusObserver.observerEnabled,
+    goalPlusObserverConfigPath: goalPlusObserver.configPath,
     uploadIntervalMs: 300000,
     shutdownTimeoutMs: 2200,
   };
@@ -158,7 +158,7 @@ async function install(options) {
       AGENT_INSIGHT_USER_HOME: options.homeDir,
     },
   });
-  return { packageDir, agentInsightHome };
+  return { packageDir, agentInsightHome, goalPlusObserver };
 }
 
 async function main() {

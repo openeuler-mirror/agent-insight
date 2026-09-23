@@ -7,6 +7,12 @@
 
 ## 1. 结论
 
+> 2026-09-21 安装体验优化：Goal Plus 继续是 orchestration overlay，不再作为用户可选
+> framework 或独立安装步骤。Pi Agent 安装包内置 Agent Insight 自有的休眠观察器；仅当
+> Pi 中真实执行 `/goal-plus` 并能用 `.gp` 内 Goal/start-session 证据确认归属时自动激活。
+> 本轮只修改 Agent Insight，不要求 Goal Plus 仓库改代码。普通 Pi 与任何检测/增强失败都
+> 保持原生主 Trace 可用。
+
 Agent Insight 可以在不要求 Goal Plus 改代码的前提下接入 Goal Plus，并采集一条
 可审计的完整执行轨迹：
 
@@ -185,6 +191,7 @@ session、语义 snapshot、关联信息、内容还是精确 timing。
 | FR-017 | Pi Goal Plus 主对话按 native entry ID/goal ID 从当前工作区的 Pi session 目录确定性发现、分段并导入 |
 | FR-018 | 每个 `.gp/runs/*/agent_sessions/*` 中可定位的 Pi worker，不论 candidate/work-item/final-checker 角色，均生成独立完整 Execution |
 | FR-019 | Pi native message、thinking、tool 参数与结果不使用固定字符截断，超出上传批次目标的单条 JSONL 仍可完整发送 |
+| FR-020 | 已有 worker 关系与 binding 时，worker 不得在默认主 Trace 列表独立展示；主从两端完整解析后再合并到主 Trace |
 
 ## 6. 非功能需求
 
@@ -262,6 +269,7 @@ allowlist，Agent Insight 可以增加更高精度的 live timing，但本期设
 | AC-014 | `.gp` 中所有带 native Pi session 的 agent session 均有对应 Execution；中止/非零退出不得显示为正常成功 |
 | AC-015 | 超过 2000 字符及超过默认上传批次字节目标的 native 正文往返后内容长度与源 session 一致（脱敏替换除外） |
 | AC-016 | Pi Execution 状态只反映运行时结果；Goal/Run 业务 blocked 单独展示，普通 Pi 接入行为保持不变 |
+| AC-017 | 长任务执行中 main binding 尚未到达时，已声明 Goal Plus worker 不出现在默认主列表；main binding 到达后同一 worker 只在主 Trace 子树展示 |
 
 ## 10. 已知前置问题
 

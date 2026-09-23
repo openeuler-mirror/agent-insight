@@ -256,6 +256,8 @@ function parseArgs(argv) {
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--label") result.label = argv[++index];
+    else if (arg === "--goal-id") result.goalId = argv[++index];
+    else if (arg === "--native-session-id") result.nativeSessionId = argv[++index];
     else if (arg === "--home") result.homeDir = path.resolve(argv[++index]);
     else if (arg === "--config") result.configPath = path.resolve(argv[++index]);
     else if (arg === "--interval-ms") result.intervalMs = Math.max(1000, Number(argv[++index]) || 5000);
@@ -325,6 +327,102 @@ async function loadConfig(options = {}) {
       || (explicitBaseUrl ? "" : file.collaborationEventsEndpoint)
       || `${baseUrl}/api/ingest/collaborations/events`,
   };
+}
+
+function activationStatusPath(config) {
+  return path.join(path.dirname(config.configPath), "runtime", "activation.json");
+}
+
+async function writeActivationStatus(config, status) {
+  await atomicWriteJson(activationStatusPath(config), {
+    version: 1,
+    observedAt: new Date().toISOString(),
+    ...status,
+  });
+}
+
+async function readActivationStatus(config) {
+  try {
+    return JSON.parse(await fsp.readFile(activationStatusPath(config), "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT" || error instanceof SyntaxError) return { status: "DORMANT" };
+    throw error;
+  }
+}
+
+async function validateActivationEvidence(root, goalId, nativeSessionId) {
+  if (!/^[A-Za-z0-9_.:-]+$/.test(String(goalId || "")) || [".", ".."].includes(goalId)) {
+    throw new Error("Goal Plus activation requires a valid goal id");
+  }
+  if (!String(nativeSessionId || "").trim()) {
+    throw new Error("Goal Plus activation requires the current Pi native session id");
+  }
+  const goalPath = path.join(root, "goal-plus", goalId, "goal.json");
+  const stat = await fsp.lstat(goalPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("Goal Plus activation evidence must be a real goal.json file");
+  }
+  const realGoalPath = await fsp.realpath(goalPath);
+  if (realGoalPath !== path.resolve(goalPath)) {
+    throw new Error("Goal Plus activation evidence must not traverse symbolic links");
+  }
+  const goal = JSON.parse(await fsp.readFile(realGoalPath, "utf8"));
+  if (goal?.goal_plus_id !== goalId) {
+    throw new Error("Goal Plus activation evidence does not match the reported goal id");
+  }
+  const invocation = Array.isArray(goal.host_command_invocations)
+    ? goal.host_command_invocations.find(item => (
+      item?.agent_harness === "pi"
+      && item?.action === "start"
+      && item?.session_id === nativeSessionId
+    ))
+    : undefined;
+  if (!invocation) {
+    throw new Error("Goal Plus activation evidence does not belong to the current Pi session");
+  }
+  return { goal, invocation };
+}
+
+async function activateGoalPlusSource(inputPath, identity, config, options = {}) {
+  const goalId = String(identity?.goalId || "").trim();
+  const nativeSessionId = String(identity?.nativeSessionId || "").trim();
+  try {
+    await writeActivationStatus(config, { status: "DETECTING", goalId, nativeSessionId });
+    const root = await validateGoalPlusRoot(inputPath);
+    await validateActivationEvidence(root, goalId, nativeSessionId);
+    const source = await attachSource(root, {
+      homeDir: config.homeDir,
+      registryPath: config.registryPath,
+      managedBy: "pi-agent-auto-detect",
+      goalId,
+      nativeSessionId,
+    });
+    const scan = await (options.scanSource || scanSource)(source, config, options);
+    const watcher = await (options.ensureWatcher || ensureWatcher)(config, options);
+    const result = {
+      status: "ACTIVE",
+      sourceId: source.sourceId,
+      goalId,
+      nativeSessionId,
+      scan,
+      watcher,
+    };
+    await writeActivationStatus(config, {
+      status: result.status,
+      sourceId: result.sourceId,
+      goalId,
+      nativeSessionId,
+    });
+    return result;
+  } catch (error) {
+    await writeActivationStatus(config, {
+      status: "DEGRADED",
+      goalId,
+      nativeSessionId,
+      error: error.message,
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function resolveSources(selector, options) {
@@ -430,6 +528,7 @@ async function selfCheck(config) {
     };
   }
   const watcher = await watcherStatus(config);
+  const activation = await readActivationStatus(config);
   const uploaderBlocked = ["invalid", "orphaned", "recovery-blocked"].includes(watcher.uploader?.state);
   return {
     ok: Boolean(config.apiKey) && spoolWritable && sources.length > 0
@@ -445,6 +544,7 @@ async function selfCheck(config) {
     spoolWritable,
     spoolBacklog,
     watcher,
+    activation,
     sources,
   };
 }
@@ -474,6 +574,17 @@ async function main(argv = process.argv.slice(2)) {
     const result = await selfCheck(config);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  if (options.command === "activate") {
+    if (!options.values[0]) throw new Error("activate requires a .gp path");
+    if (!options.goalId) throw new Error("activate requires --goal-id");
+    if (!options.nativeSessionId) throw new Error("activate requires --native-session-id");
+    const result = await activateGoalPlusSource(options.values[0], {
+      goalId: options.goalId,
+      nativeSessionId: options.nativeSessionId,
+    }, config, options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
   if (options.command === "start") {
@@ -514,7 +625,8 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   process.stdout.write([
-    "Usage: goal-plus-collector <attach|detach|list|scan|watch|start|ensure|stop|status|self-check> [path|sourceId]",
+    "Usage: goal-plus-collector <activate|attach|detach|list|scan|watch|start|ensure|stop|status|self-check> [path|sourceId]",
+    "  activate <.gp> --goal-id <id> --native-session-id <id>",
     "  attach <.gp> [--label name]",
     "  scan [sourceId|.gp] [--no-upload]",
     "  watch [sourceId|.gp] [--interval-ms 5000]",
@@ -534,10 +646,13 @@ if (require.main === module) {
 
 module.exports = {
   COLLECTOR_VERSION,
+  activateGoalPlusSource,
+  activationStatusPath,
   ensureWatcher,
   loadConfig,
   main,
   parseArgs,
+  readActivationStatus,
   scanSource,
   selfCheck,
   startWatcher,

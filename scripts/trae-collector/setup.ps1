@@ -5,7 +5,7 @@
 $ErrorActionPreference = 'Continue'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HookSrc = Join-Path $ScriptDir "hooks"
-$InsightDir = if ($env:AGENT_INSIGHT_DIR) { $env:AGENT_INSIGHT_DIR } else { Join-Path $env:USERPROFILE ".agent-insight" }
+$InsightDir = if ($env:AGENT_INSIGHT_HOME) { $env:AGENT_INSIGHT_HOME } elseif ($env:AGENT_INSIGHT_DIR) { $env:AGENT_INSIGHT_DIR } else { Join-Path $env:USERPROFILE ".agent-insight" }
 $TraeHookDir = Join-Path $InsightDir "trae-hooks"
 $TraeCnDir = Join-Path $env:USERPROFILE ".trae-cn"
 

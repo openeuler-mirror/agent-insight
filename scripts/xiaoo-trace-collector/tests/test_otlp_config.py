@@ -16,7 +16,7 @@ class OtlpConfigTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        env = patch.dict(os.environ, {"AGENT_INSIGHT_DATA_DIR": tmp.name}, clear=True)
+        env = patch.dict(os.environ, {"AGENT_INSIGHT_HOME": tmp.name}, clear=True)
         env.start()
         self.addCleanup(env.stop)
         self.write("fault-injection/config.json", {"apiKey": "old-fi", "insightBaseUrl": "http://old.invalid"})

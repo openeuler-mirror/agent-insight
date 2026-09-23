@@ -76,7 +76,7 @@ test('常驻客户端默认使用服务端 bundle，本地 checkout 只能显式
     clientBlock.indexOf('/api/ingest/setup/bundle?name=client') < clientBlock.indexOf('npm pack'),
     '服务端 bundle 应先于 npm 兜底',
   );
-  assert.match(clientBlock, /pkg_tmp_root="\$HOME\/\.agent-insight\/client\/tmp"/);
+  assert.match(clientBlock, /pkg_tmp_root="\$AGENT_INSIGHT_HOME\/client\/tmp"/);
   assert.match(clientBlock, /mktemp -d "\$pkg_tmp_root\/install\.XXXXXX"/);
   assert.doesNotMatch(clientBlock, /mktemp -d "\$\{TMPDIR:-\/tmp\}\/agent-insight-client/);
   assert.match(clientBlock, /\{"type":"commonjs"\}.*> "\$pkg_tmp\/x\/scripts\/package\.json"/);
@@ -114,9 +114,7 @@ test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python �
   const page = fs.readFileSync(path.resolve(__dirname, '../src/app/(main)/accessconfig/install/page.tsx'), 'utf8');
   assert.match(page, /frameworks\.length \? `yes=1` : ''/);
   assert.doesNotMatch(page, /goalPlusHosts=/);
-  assert.match(page, /Goal Plus Pi Trace/);
-  assert.match(page, /Agent Insight 不会安装或修改 Goal Plus/);
-  assert.match(page, /未配置时仍可采集主 Trace/);
+  assert.doesNotMatch(page, /Goal Plus Pi Trace|goal-plus-collector attach/);
   assert.doesNotMatch(page, /\.\/install\.sh --(?:pi|codex)/);
   assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
   assert.match(page, /apiKey, authReady/);

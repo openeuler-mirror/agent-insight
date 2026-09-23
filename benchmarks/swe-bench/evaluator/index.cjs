@@ -13,6 +13,10 @@ const {
 } = require('../../../services/evaluator/src/evaluator-registry.cjs')
 
 const OFFICIAL_COMMIT = '02e7a74ffd0b707aab73d203fe87bdc7c76afc8e'
+const DEFAULT_VERIFIED_IMAGE_MIRROR_REPOSITORIES = [
+  'swr.cn-east-3.myhuaweicloud.com/agent-insight/swebench-verified-x86-64-a',
+  'swr.cn-east-3.myhuaweicloud.com/agent-insight/swebench-verified-x86-64-b',
+]
 
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -87,6 +91,28 @@ function imageProxyPrefix() {
   return prefix
 }
 
+function verifiedImageMirrorRepositories() {
+  const configured = process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS === undefined
+    ? DEFAULT_VERIFIED_IMAGE_MIRROR_REPOSITORIES.join(',')
+    : String(process.env.SWE_BENCH_VERIFIED_MIRROR_REPOS).trim()
+  if (!configured) return []
+  const repositories = configured.split(',').map((value) => value.trim())
+  if (
+    repositories.length > 8
+    || repositories.some((repository) => (
+      !repository
+      || !/^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(repository)
+    ))
+  ) {
+    throw new EvaluatorProtocolError(
+      'SWE_IMAGE_CONFIGURATION_INVALID',
+      'SWE-bench Verified 镜像仓库配置不合法',
+      500,
+    )
+  }
+  return [...new Set(repositories)]
+}
+
 class SweBenchImageResolver {
   constructor(processRunner = runProcess) {
     this.processRunner = processRunner
@@ -155,11 +181,16 @@ class SweBenchImageResolver {
     const selected = this.imageFor(jobImage, instanceId, daemonArch)
     const proxyPrefix = imageProxyPrefix()
     const proxyImage = proxyPrefix ? `${proxyPrefix}/${selected.image}` : null
+    const mirrorRepositories = selected.source === 'official' && selected.arch === 'x86_64'
+      ? verifiedImageMirrorRepositories()
+      : []
+    const mirrorImages = mirrorRepositories.map((repository) => `${repository}:${instanceId}`)
     const inspectArgs = [
       'image', 'inspect', selected.image,
       '--format', '{{json .RepoDigests}}|{{.Id}}',
     ]
     let inspected
+    let resolvedImageReference = selected.image
     try {
       inspected = await this.processRunner('docker', inspectArgs, {
         signal,
@@ -167,7 +198,25 @@ class SweBenchImageResolver {
         retryable: false,
       })
     } catch {
-      if (proxyImage) {
+      let pulled = false
+      for (const mirrorImage of mirrorImages) {
+        try {
+          await this.processRunner('docker', ['pull', mirrorImage], {
+            signal,
+            errorCode: 'SWE_IMAGE_MIRROR_UNAVAILABLE',
+          })
+          await this.processRunner('docker', ['tag', mirrorImage, selected.image], {
+            signal,
+            errorCode: 'SWE_IMAGE_TAG_FAILED',
+          })
+          resolvedImageReference = mirrorImage
+          pulled = true
+          break
+        } catch (error) {
+          if (signal?.aborted) throw error
+        }
+      }
+      if (!pulled && proxyImage) {
         try {
           await this.processRunner('docker', ['pull', proxyImage], {
             signal,
@@ -177,13 +226,13 @@ class SweBenchImageResolver {
             signal,
             errorCode: 'SWE_IMAGE_TAG_FAILED',
           })
-        } catch {
-          await this.processRunner('docker', ['pull', selected.image], {
-            signal,
-            errorCode: 'SWE_IMAGE_UNAVAILABLE',
-          })
+          resolvedImageReference = proxyImage
+          pulled = true
+        } catch (error) {
+          if (signal?.aborted) throw error
         }
-      } else {
+      }
+      if (!pulled) {
         await this.processRunner('docker', ['pull', selected.image], {
           signal,
           errorCode: 'SWE_IMAGE_UNAVAILABLE',
@@ -200,6 +249,7 @@ class SweBenchImageResolver {
     let digests
     try { digests = JSON.parse(digestsJson.trim()) } catch {}
     const repositories = [imageRepository(selected.image)]
+    repositories.push(...mirrorImages.map(imageRepository))
     if (proxyImage) repositories.push(imageRepository(proxyImage))
     const repositoryDigest = Array.isArray(digests)
       ? digests.find((value) => repositories.some((repository) => (
@@ -211,7 +261,14 @@ class SweBenchImageResolver {
     if (!pinnedImage) {
       throw new EvaluatorProtocolError('SWE_IMAGE_DIGEST_MISSING', '无法固定 Case 镜像 digest', 500)
     }
-    const frozen = { ...selected, daemonArch, pinnedImage, imageProxyPrefix: proxyPrefix || null }
+    const frozen = {
+      ...selected,
+      daemonArch,
+      pinnedImage,
+      resolvedImageReference,
+      imageMirrorRepositories: mirrorRepositories,
+      imageProxyPrefix: proxyPrefix || null,
+    }
     const temporary = `${frozenPath}.${process.pid}.tmp`
     await fs.writeFile(temporary, JSON.stringify(frozen, null, 2), { mode: 0o600 })
     await fs.rename(temporary, frozenPath)
@@ -281,6 +338,9 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
       const hostArch = process.env.EVALUATOR_HOST_ARCH || runtime.hostArch || os.arch()
       const imageSource = String(process.env.SWE_BENCH_IMAGE_SOURCE || 'official').trim()
       const proxyPrefix = imageProxyPrefix()
+      const mirrorRepositories = arch === 'x86_64' && imageSource === 'official'
+        ? verifiedImageMirrorRepositories()
+        : []
       const formalEligible = hostOS === 'linux' && arch === 'x86_64' && imageSource === 'official'
       return {
         ready: true,
@@ -293,6 +353,7 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
           python: python.stdout.trim() || this.python,
           dataDir: runtime.dataDir,
           imageSource,
+          imageMirrorRepositories: mirrorRepositories,
           imageProxyPrefix: proxyPrefix || null,
         },
       }
@@ -332,6 +393,8 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
       runtimeFacts: {
         harnessSourceCommit: OFFICIAL_COMMIT,
         caseImage: image.pinnedImage,
+        resolvedImageReference: image.resolvedImageReference,
+        imageMirrorRepositories: image.imageMirrorRepositories,
         imageSource: image.source,
         dockerArch: image.daemonArch,
         formalEligible: image.formalEligible,

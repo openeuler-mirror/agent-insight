@@ -79,6 +79,7 @@ model Execution {
   maxSingleCallTokens      Int?
   reasoningTokens          BigInt?
   timestamp                DateTime @default(now())
+  lastIngestedAt           DateTime?
   model                    String?
   // 真实推理源 URL（scheme://host:port），用作 session↔infra 关联键。
   endpoint                 String?

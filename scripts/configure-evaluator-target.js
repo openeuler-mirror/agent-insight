@@ -2,8 +2,8 @@
 'use strict'
 
 const fs = require('node:fs')
-const os = require('node:os')
 const path = require('node:path')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
 function usage() {
   return [
@@ -58,7 +58,7 @@ function isLoopback(hostname) {
 }
 
 function defaultConfigPath() {
-  const agentInsightHome = process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight')
+  const agentInsightHome = getAgentInsightHome()
   return path.join(agentInsightHome, 'data', 'config', 'benchmark-evaluator.env')
 }
 

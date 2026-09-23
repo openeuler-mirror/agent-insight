@@ -7,13 +7,16 @@
 cd "$(dirname "$0")/.."
 
 BENCHMARK_KEY=""
+START_PORT=""
 
 start_usage() {
   cat <<'EOF'
-Usage: bash scripts/start.sh [--benchmark KEY]
+Usage: [PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--benchmark KEY]
 
-Builds and starts Agent Insight. When KEY is swe-bench, the first start also
-downloads, verifies, and imports SWE-bench Verified with its official loader.
+Builds and starts Agent Insight. Benchmark selection precedence is CLI,
+AGENT_INSIGHT_BENCHMARK from the process environment, then ~/.agent-insight/.env.
+When the selected KEY is swe-bench, the first start also downloads, verifies,
+and imports SWE-bench Verified with its official loader.
 EOF
 }
 
@@ -36,6 +39,12 @@ while [ "$#" -gt 0 ]; do
       [ -n "$BENCHMARK_KEY" ] || start_fail '--benchmark 缺少参数值'
       shift
       ;;
+    --port)
+      [ "$#" -ge 2 ] || start_fail '--port 缺少参数值'
+      [ -z "$START_PORT" ] || start_fail '--port 只能指定一次'
+      START_PORT="$2"
+      shift 2
+      ;;
     --help|-h)
       start_usage
       exit 0
@@ -49,22 +58,99 @@ case "$BENCHMARK_KEY" in
   *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
 esac
 
-AGENT_INSIGHT_HOME="${AGENT_INSIGHT_DATA_DIR:-$HOME/.agent-insight}"
+if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+  echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+  exit 1
+fi
+AGENT_INSIGHT_HOME="${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}"
+case "$AGENT_INSIGHT_HOME" in
+  '~'|'$HOME'|'${HOME}') AGENT_INSIGHT_HOME="$HOME" ;;
+  '~/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\~/}" ;;
+  '$HOME/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$HOME/}" ;;
+  '${HOME}/'*) AGENT_INSIGHT_HOME="$HOME/${AGENT_INSIGHT_HOME#\$\{HOME\}/}" ;;
+esac
+case "$AGENT_INSIGHT_HOME" in /*) ;; *) AGENT_INSIGHT_HOME="$PWD/$AGENT_INSIGHT_HOME" ;; esac
+RESOLVED_AGENT_INSIGHT_HOME="$AGENT_INSIGHT_HOME"
 AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
-AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME/data"
+AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
 
 load_agent_insight_env() {
+  local name
+  local overrides=()
+  # 保留启动环境的显式空值，使其也能覆盖 .env。
+  for name in PORT DATABASE_URL AGENT_INSIGHT_BENCHMARK \
+    SWE_BENCH_DATASET_SOURCE SWE_BENCH_SOURCE_ARCHIVE_SOURCE SWE_BENCH_DATASET_PATH \
+    SWE_BENCH_DATASET_URL SWE_BENCH_SOURCE_ARCHIVE_URL SWE_BENCH_PYTHON; do
+    if [ "${!name+x}" = x ]; then
+      overrides+=("$name=${!name}")
+    fi
+  done
+
   if [ -f "$AGENT_INSIGHT_ENV_FILE" ]; then
     set -a
     . "$AGENT_INSIGHT_ENV_FILE"
     set +a
   fi
 
+  AGENT_INSIGHT_HOME="$RESOLVED_AGENT_INSIGHT_HOME"
+  AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
+  export AGENT_INSIGHT_HOME
+  export AGENT_INSIGHT_STORAGE_DIR
+  if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
+    echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
+    exit 1
+  fi
+
+  if [ "${#overrides[@]}" -gt 0 ]; then
+    export "${overrides[@]}"
+  fi
+
   if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "$DEFAULT_DATABASE_URL" ]; then
-    export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+    export DATABASE_URL="file:$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
   elif [[ "$DATABASE_URL" == file:\~* ]]; then
     export DATABASE_URL="file:$HOME${DATABASE_URL#file:\~}"
+  fi
+}
+
+check_sqlite_database_target() {
+  [[ "${DATABASE_URL:-}" == file:* ]] || return 0
+  local database_path="${DATABASE_URL#file:}"
+  database_path="${database_path%%\?*}"
+  if [ -z "$database_path" ]; then
+    echo "Error: DATABASE_URL 没有 SQLite 文件路径：$DATABASE_URL" >&2
+    exit 1
+  fi
+  if [[ "$database_path" != /* ]]; then
+    echo "Warning: SQLite 使用相对路径，无法可靠预检实际文件位置：$database_path" >&2
+    echo "建议改用绝对路径，例如 DATABASE_URL=\"file:$AGENT_INSIGHT_STORAGE_DIR/test.db\"。" >&2
+    return 0
+  fi
+
+  local database_dir
+  database_dir="$(dirname "$database_path")"
+  if [ ! -d "$database_dir" ]; then
+    echo "Error: SQLite 数据库父目录不存在：$database_dir" >&2
+    echo "当前用户：$(id -un 2>/dev/null || echo unknown)" >&2
+    echo "请先创建并授权该目录，或把 DATABASE_URL 改到当前用户可写的绝对路径。" >&2
+    echo "例如：mkdir -p \"$database_dir\"" >&2
+    exit 1
+  fi
+  if [ ! -x "$database_dir" ] || [ ! -w "$database_dir" ]; then
+    echo "Error: 当前用户无法进入或写入 SQLite 数据库目录：$database_dir" >&2
+    echo "当前用户：$(id -un 2>/dev/null || echo unknown)" >&2
+    echo "请修复目录属主/权限，或修改 DATABASE_URL。" >&2
+    exit 1
+  fi
+  if [ -e "$database_path" ] && [ ! -f "$database_path" ]; then
+    echo "Error: SQLite 数据库目标存在但不是普通文件：$database_path" >&2
+    exit 1
+  fi
+  if [ -f "$database_path" ] && { [ ! -r "$database_path" ] || [ ! -w "$database_path" ]; }; then
+    echo "Error: 当前用户无法读写 SQLite 数据库文件：$database_path" >&2
+    echo "当前用户：$(id -un 2>/dev/null || echo unknown)" >&2
+    echo "请修复文件属主/权限，或修改 DATABASE_URL。" >&2
+    exit 1
   fi
 }
 
@@ -104,11 +190,12 @@ if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
     echo "#"
     cat .env.example
   } > "$AGENT_INSIGHT_ENV_FILE"
+  chmod 600 "$AGENT_INSIGHT_ENV_FILE" 2>/dev/null || true
 fi
 
-if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then
-  echo "Creating data directory at $AGENT_INSIGHT_DATA_DIR..."
-  mkdir -p "$AGENT_INSIGHT_DATA_DIR"
+if [ ! -d "$AGENT_INSIGHT_STORAGE_DIR" ]; then
+  echo "Creating data directory at $AGENT_INSIGHT_STORAGE_DIR..."
+  mkdir -p "$AGENT_INSIGHT_STORAGE_DIR"
 fi
 
 echo "=== Start Script Started ==="
@@ -137,14 +224,30 @@ find_pid_on_port() {
   echo "$pid"
 }
 
-PORT=3000
-echo "Checking port $PORT..."
-
 # Check for OpenGauss configuration in ~/.agent-insight/.env
 load_agent_insight_env
 
+PORT="${START_PORT:-${PORT:-3000}}"
+case "$PORT" in
+  *[!0-9]*|'') start_fail "PORT 必须是 1 到 65535 的整数：$PORT" ;;
+esac
+if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  start_fail "PORT 必须是 1 到 65535 的整数：$PORT"
+fi
+export PORT
+echo "Checking port $PORT..."
+
+if [ -z "$BENCHMARK_KEY" ]; then
+  BENCHMARK_KEY="${AGENT_INSIGHT_BENCHMARK:-}"
+fi
+case "$BENCHMARK_KEY" in
+  ''|swe-bench) ;;
+  *) start_fail "暂不支持自动准备 Benchmark：$BENCHMARK_KEY（当前支持：swe-bench）" ;;
+esac
+
 if [[ "${DATABASE_URL:-}" == file:* ]]; then
   echo "SQLite database target: ${DATABASE_URL#file:}"
+  check_sqlite_database_target
 else
   echo "Using custom database configuration."
 fi
@@ -248,10 +351,10 @@ fi
 
 if [ "$BENCHMARK_KEY" = "swe-bench" ]; then
   echo "Preparing SWE-bench Verified dataset..."
-  if ! AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME" npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts; then
+  if ! npx tsx scripts/benchmark/ensure-swe-bench-dataset.ts; then
     echo ""
     echo "  ⛔ SWE-bench Verified 自动准备或导入失败，服务未启动。"
-    echo "     修复上方错误后重新执行 bash scripts/start.sh --benchmark swe-bench。"
+    echo "     修复上方错误后重新执行 bash scripts/start.sh。"
     exit 1
   fi
 fi
@@ -279,6 +382,10 @@ mkdir -p "$STANDALONE_DIR/.next/static" "$STANDALONE_DIR/public"
 # 不要跑 prepare-npm-package.js：它会 prune 掉 agent_ras/ 等运行时目录。
 cp -a .next/static/. "$STANDALONE_DIR/.next/static/"
 cp -a public/. "$STANDALONE_DIR/public/"
+if ! node scripts/verify-standalone.cjs "$STANDALONE_DIR"; then
+  echo "Build artifacts are incomplete; refusing to start."
+  exit 1
+fi
 
 # 5. Start
 echo "-----------------------------------"
@@ -321,8 +428,9 @@ echo "Waiting for port $PORT to accept connections..."
 READY=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
   sleep 1
-  if curl --noproxy '*' -sS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/" >/dev/null 2>&1 \
-    || curl --noproxy '*' -sS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/trace" >/dev/null 2>&1; then
+  if curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/" >/dev/null 2>&1 \
+    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/dataset" >/dev/null 2>&1 \
+    && curl --noproxy '*' -fsS -m 2 -o /dev/null -w '' "http://127.0.0.1:$PORT/fault" >/dev/null 2>&1; then
     READY=1
     break
   fi

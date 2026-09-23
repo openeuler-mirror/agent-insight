@@ -42,13 +42,27 @@ async function attachSource(inputPath, options = {}) {
   const root = await validateGoalPlusRoot(inputPath);
   const registry = await loadRegistry(registryPath);
   const existing = registry.sources.find(source => source.root === root);
-  if (existing) return existing;
+  if (existing) {
+    if (existing.managedBy === "pi-agent-auto-detect" && options.managedBy === existing.managedBy) {
+      existing.goalId = options.goalId || existing.goalId;
+      existing.nativeSessionId = options.nativeSessionId || existing.nativeSessionId;
+      existing.lastDetectedAt = options.detectedAt || new Date().toISOString();
+      await atomicWriteJson(registryPath, registry);
+    }
+    return existing;
+  }
   const source = {
     sourceId: `gpsrc_${crypto.randomUUID().replaceAll("-", "")}`,
     root,
     label: options.label || path.basename(path.dirname(root)),
     workspaceFingerprint: `sha256:${sha256(path.dirname(root))}`,
     attachedAt: new Date().toISOString(),
+    ...(options.managedBy ? {
+      managedBy: options.managedBy,
+      goalId: options.goalId,
+      nativeSessionId: options.nativeSessionId,
+      lastDetectedAt: options.detectedAt || new Date().toISOString(),
+    } : {}),
   };
   registry.sources.push(source);
   await atomicWriteJson(registryPath, registry);

@@ -14,6 +14,7 @@ const {
   getDataRoot
 } = require('./utils.js')
 const { syncAdminApiKey } = require('./sync_admin_api_key.js')
+const { resolveStartupDatabaseUrl } = require('./agent-insight-home.cjs')
 const { syncGeneratedPrismaClient } = require('./sync-prisma-client.js')
 const {
   readCurrentRuntime,
@@ -101,6 +102,10 @@ process.on('SIGTERM', () => {
 async function run(options) {
   const port = getPort(options)
   const dataRoot = getDataRoot()
+  const fileEnv = loadEnvFile(path.join(dataRoot, '.env'))
+  const dbUrl = resolveStartupDatabaseUrl(fileEnv, process.env, dataRoot)
+  const dbPath = dbUrl.startsWith('file:') ? dbUrl.slice(5) : dbUrl
+  process.env.AGENT_INSIGHT_HOME = dataRoot
 
   console.log('=== Starting Agent-Insight Service ===\n')
 
@@ -116,14 +121,11 @@ async function run(options) {
     process.exit(1)
   }
 
-  const dbPath = path.join(dataRoot, 'data', 'witty_insight.db')
-  const dbUrl = `file:${dbPath}`
   process.env.DATABASE_URL = dbUrl
   const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
   const standaloneDir = path.dirname(standaloneServer)
 
   const envPath = path.join(dataRoot, '.env')
-  const fileEnv = loadEnvFile(envPath)
 
   if (fileEnv.DB_HOST) {
     console.log('OpenGauss configuration detected (DB_HOST=' + fileEnv.DB_HOST + ')')
@@ -231,7 +233,7 @@ async function run(options) {
   // 因此 standalone 下由 control-server.js 承载 Next + WSS。
   const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || port + 1)
 
-  const runtimeEnv = { ...process.env, ...fileEnv }
+  const runtimeEnv = { ...fileEnv, ...process.env }
   const currentFiRuntime = readCurrentRuntime()
   const managedFiPython = currentFiRuntime?.python
     && verifyManagedPython(currentFiRuntime.python)
@@ -367,4 +369,4 @@ async function run(options) {
   process.exit(1)
 }
 
-module.exports = { ensureGoalPlusWatcher, run }
+module.exports = { ensureGoalPlusWatcher, resolveStartupDatabaseUrl, run }

@@ -85,7 +85,7 @@ test('Windows setup offers the same LlamaIndex installation path', async () => {
     assert.match(script, /llamaIndexEnvScript.*AGENT_INSIGHT_LLAMAINDEX_PYTHON/);
     assert.match(script, /api\/ingest\/setup\/llamaindex-collector/);
     assert.match(script, /pip install --disable-pip-version-check "llama-index-observability-otel==0\.6\.4"/);
-    assert.match(script, /\.agent-insight\\collectors\\llamaindex/);
+    assert.match(script, /collectors\\llamaindex/);
     assert.match(script, /& \$llamaIndexPython -m zipfile -e/);
     assert.match(script, /\[Guid\]::NewGuid\(\)/);
     assert.match(script, /finally \{/);
@@ -396,7 +396,7 @@ test('Unix uninstaller removes only LlamaIndex files and preserves trace data by
   }));
   const setupScript = await response.text();
   const match = setupScript.match(
-    /cat > "\$HOME\/\.agent-insight\/uninstall_llamaindex_collector\.sh" << 'LLAMAINDEX_UNINSTALL_EOF'\n([\s\S]*?)\nLLAMAINDEX_UNINSTALL_EOF/,
+    /agent_insight_write_script > "\$AGENT_INSIGHT_HOME\/uninstall_llamaindex_collector\.sh" << 'LLAMAINDEX_UNINSTALL_EOF'\n([\s\S]*?)\nLLAMAINDEX_UNINSTALL_EOF/,
   );
   assert.ok(match, 'generated setup must contain the scoped uninstaller');
 
@@ -415,13 +415,13 @@ test('Unix uninstaller removes only LlamaIndex files and preserves trace data by
   writeFileSync(environment, '');
   writeFileSync(otherCollector, 'preserve');
   writeFileSync(path.join(home, '.bashrc'), [
-    'source "$HOME/.agent-insight/llamaindex_env.sh"',
-    'source "$HOME/.agent-insight/claude_otel_env.sh"',
+    `source "${agentInsightHome}/llamaindex_env.sh"`,
+    'source "$AGENT_INSIGHT_HOME/claude_otel_env.sh"',
   ].join('\n'));
   writeFileSync(uninstaller, match[1], { mode: 0o700 });
 
   const result = spawnSync('bash', [uninstaller], {
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, AGENT_INSIGHT_HOME: agentInsightHome },
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
@@ -465,8 +465,8 @@ test('Windows uninstaller removes only LlamaIndex files and preserves trace data
   writeFileSync(environment, '');
   writeFileSync(otherCollector, 'preserve');
   writeFileSync(profile, [
-    '. "$HOME/.agent-insight/llamaindex_env.ps1"',
-    '. "$HOME/.agent-insight/openclaw_otel_env.ps1"',
+    '. "$AGENT_INSIGHT_HOME/llamaindex_env.ps1"',
+    '. "$AGENT_INSIGHT_HOME/openclaw_otel_env.ps1"',
   ].join('\n'));
   writeFileSync(uninstaller, match[1]);
 

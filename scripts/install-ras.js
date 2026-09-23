@@ -5,6 +5,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { spawnSync } = require('child_process')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 const RUNTIME_ENTRIES = [
@@ -25,7 +26,7 @@ function statusResult(status, message, extra = {}) {
 }
 
 function getDataRoot(env = process.env, home = os.homedir()) {
-  return env.AGENT_INSIGHT_DATA_DIR || path.join(home, '.agent-insight')
+  return getAgentInsightHome(env, home)
 }
 
 function parsePythonVersion(version) {
@@ -673,7 +674,7 @@ function installRas(options = {}) {
       }
       const collectorEnv = {
         ...env,
-        AGENT_INSIGHT_DATA_DIR: dataRoot,
+        AGENT_INSIGHT_HOME: dataRoot,
         ...(options.home ? { HOME: options.home } : {}),
       }
       const col = spawnSync(process.execPath, [collectorInstall], {

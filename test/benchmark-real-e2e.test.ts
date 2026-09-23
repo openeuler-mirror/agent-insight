@@ -23,7 +23,7 @@ const { runExperimentCase } = require('../scripts/reliability-client.cjs') as {
 }
 
 const enabled = process.env.RUN_BENCHMARK_REAL_E2E === 'true'
-const agentInsightHome = process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight')
+const agentInsightHome = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
 const databasePath = path.resolve(
   process.env.BENCHMARK_TEST_DATABASE_PATH
     || path.join(agentInsightHome, 'data', 'witty_insight.db'),
@@ -133,7 +133,7 @@ test('steps 01-13 run OpenCode, Docker Controller and official SWE-bench Harness
   skip: skipReason,
   timeout: 3_600_000,
 }, async (t) => {
-  process.env.AGENT_INSIGHT_DATA_DIR = agentInsightHome
+  process.env.AGENT_INSIGHT_HOME = agentInsightHome
   process.env.DATABASE_URL = `file:${databasePath}`
   process.env.PATH = `/usr/local/bin:${process.env.PATH || ''}`
   const [
