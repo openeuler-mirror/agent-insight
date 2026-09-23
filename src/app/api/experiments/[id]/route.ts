@@ -33,6 +33,12 @@ function parseJsonValue(value: string | null): unknown {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 type GeneratedTraceStatus = 'pending' | 'ready' | 'failed';
 
 function deriveGeneratedTraceStatus(input: {
@@ -146,6 +152,8 @@ export async function GET(
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
+      progressJson: string | null;
+      taskEnvelopeJson: string | null;
       publicPayloadJson: string | null;
       datasetCase: { externalCaseId: string } | null;
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
@@ -566,6 +574,9 @@ export async function GET(
           legacyFi.faultInjectionType ||
           null;
         const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
+        const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
+        const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
         const benchmarkPayload = benchmarkRun
           ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
           : null;
@@ -656,6 +667,8 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
+              workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
               failure: benchmarkRun.failureCode || benchmarkRun.failureMessage
                 ? {

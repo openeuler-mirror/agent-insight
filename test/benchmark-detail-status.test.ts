@@ -2,12 +2,34 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  benchmarkCaseProgressLabel,
   deriveBenchmarkTraceStatus,
   isBenchmarkEvaluationInProgress,
   isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status'
 
-test('Benchmark Agent 执行阶段仍显示 Trace 生成中', () => {
+test('Benchmark 排队与执行阶段使用公共进度文案', () => {
+  assert.equal(benchmarkCaseProgressLabel({ runStatus: 'pending' }), '等待开始')
+  assert.equal(benchmarkCaseProgressLabel({ runStatus: 'preparing' }), '正在准备任务…')
+  assert.equal(benchmarkCaseProgressLabel({ runStatus: 'dispatching' }), '正在下发任务…')
+  assert.equal(benchmarkCaseProgressLabel({ runStatus: 'running_agent' }), '等待执行器启动…')
+  assert.equal(benchmarkCaseProgressLabel({ runStatus: 'running_agent', progressStage: 'agent_running' }), 'Agent 执行中…')
+  assert.equal(benchmarkCaseProgressLabel({ runStatus: 'collecting' }), '正在收集提交物…')
+})
+
+test('只有 Git 工作区的准备阶段显示 Git 文案', () => {
+  assert.equal(benchmarkCaseProgressLabel({
+    runStatus: 'running_agent', progressStage: 'preparing', workspaceProvider: 'git',
+  }), '正在准备 Git 工作区…')
+  assert.equal(benchmarkCaseProgressLabel({
+    runStatus: 'running_agent', progressStage: 'preparing', workspaceProvider: 'other',
+  }), '正在准备执行环境…')
+  assert.equal(benchmarkCaseProgressLabel({
+    runStatus: 'pending', progressStage: 'preparing', workspaceProvider: 'git',
+  }), '等待开始')
+})
+
+test('Benchmark 活动阶段保持未完成的聚合状态', () => {
   for (const runStatus of [
     'pending',
     'preparing',

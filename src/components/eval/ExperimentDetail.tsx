@@ -27,6 +27,7 @@ import {
 } from '@/lib/evaluators/evaluator-run-config';
 import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import {
+  benchmarkCaseProgressLabel,
   isBenchmarkEvaluationInProgress,
   isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status';
@@ -92,6 +93,8 @@ interface ExperimentDetail {
         contentUrl: string;
       }>;
       runStatus: string;
+      progressStage: string | null;
+      workspaceProvider: string | null;
       evaluationStatus: string | null;
       failure?: { code: string; message: string | null } | null;
     };
@@ -696,11 +699,21 @@ export function ExperimentDetail({
                               </span>
                             )
                           ) : c.traceStatus === 'pending' ? (
-                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
-                              正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
+                            <span style={{ color: detail.scope === 'benchmark' && c.benchmark?.runStatus === 'pending' ? 'var(--foreground-muted)' : 'var(--warning)', fontSize: 11 }}>
+                              {detail.scope === 'benchmark'
+                                ? benchmarkCaseProgressLabel({
+                                    runStatus: c.benchmark?.runStatus,
+                                    progressStage: c.benchmark?.progressStage,
+                                    workspaceProvider: c.benchmark?.workspaceProvider,
+                                  })
+                                : `正在生成 Trace${c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…`}
                             </span>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
-                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
+                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>
+                              {detail.scope === 'benchmark'
+                                ? benchmarkCaseProgressLabel({ runStatus: c.benchmark?.runStatus })
+                                : 'Trace 已生成（无最终输出）'}
+                            </span>
                           ) : truncate(c.actualOutput, 80)}
                         </td>
                         {detail.scope === 'benchmark' && (

@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `5c768159dfc8ef5c29cfd534676fa9e041dc2d3c` (`5c768159`) |
+| Commit | `21519b8e68ff2204996e4f11ef1f8c14a23e6078` (`21519b8e`) |
 | Branch | `bench-9-16` |
 | Date | 2026-09-23 |
 | Author | mintuyang |
-| Subject | `修复启动bug` |
-| Documentation overlay | 延续 Benchmark 服务部署指南的 SWE-bench Git 来源策略、执行端配置及其他既有 overlay；本轮补充 Benchmark 接入指南的 SWE-bench Case 网络隔离语义，其他指南未重新全量审计。 |
+| Subject | `修复case容器运行问题` |
+| Documentation overlay | 延续 Benchmark 服务部署指南的 SWE-bench Git 来源策略、执行端配置及其他既有 overlay；本轮补充 Benchmark Case 公共进度展示的 API 契约和用户指南，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-23 working-tree overlay：Benchmark 实验详情按公共 Run 状态和执行器进度显示 Case 阶段；排队显示等待开始，只有 Git 工作区准备显示 Git 文案，其他 Provider 使用通用文案。详情 API 仅返回阶段与 Provider，不公开任务信封。更新 API 契约和用户指南。
 
 > 2026-09-23 working-tree overlay：SWE-bench Case 容器在 `network: deny` 下使用 Docker `network_mode=none`，保留容器内 localhost 与回环套接字，同时阻断外部网络，修复 pytest 插件启动时的名称解析失败。更新 Benchmark 接入指南。
 

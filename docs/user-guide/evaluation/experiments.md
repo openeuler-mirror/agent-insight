@@ -123,6 +123,8 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 
 Benchmark 的 Case 列、参考契约标题、主指标和评估器文案均来自接入包 Presentation。Case 详情完整展示本次运行的所有提交物与评测证据：配置命中的文件使用友好名称和顺序，未命中的新文件仍按原名显示；文本、JSON、Diff、图片和 PDF 可直接查看，其余格式可下载。提交物上传后，执行器终态尚未送达时标记“提交物已生成，等待执行器确认…”，之后显示“Benchmark 评测中…”，不再继续显示“正在生成 Trace”。归一化评分点直接按 `label/value/total/format` 展示，不从证据内容推断业务指标。重试 Case 会重新执行完整 Agent 与评测链路；单独重评 Benchmark Evaluator 时复用该 Case 最新有效提交物。Agent 执行和 Evaluator 使用各自冻结的超时。需要部署独立 Evaluator Controller 时，参见[跑通第一次评测](./quickstart#swe-bench-等容器-benchmark-的评测服务)。
 
+Benchmark 实验的 Case 列表按实际执行阶段显示进度：尚未轮到的 Case 显示“等待开始”，下发和 Agent 执行分别显示对应状态；执行器准备 Git 工作区时显示“正在准备 Git 工作区…”，其他工作区类型使用通用的“正在准备执行环境…”。这些状态不表示所有 Case 同时运行，也不代表 Git 拉取百分比。
+
 ### 第三步：预期答案
 
 第 3 步用于确认每条 Case 的预期输出、数据集输入快照和评估上下文。
