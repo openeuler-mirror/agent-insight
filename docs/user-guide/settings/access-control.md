@@ -345,6 +345,10 @@ start invocation；通过后自动完成 source 登记、首次 scan 和 watcher
 主 Trace 下。当前适配只接受重构后的 `agent_harness`、`runtime_provider`、`execution_scope`、
 `session_handle` 格式，不兼容旧 `host` / `host_handle` 格式。
 
+Pi 主采集器和 Goal Plus worker 观察器不允许使用不同账号。每次执行 Pi 一键接入都会用当前
+API Key 和端点覆盖两者的 managed config，并重启已有 Goal Plus watcher；切换 Agent Insight
+账号后应重新执行该接入命令，旧账号配置不会继续保留。
+
 ### 流程七：排查“无数据上报”
 
 1. 回到客户端安装页确认当前账号、API Key 与平台地址。

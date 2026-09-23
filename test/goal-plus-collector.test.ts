@@ -210,7 +210,7 @@ test('Goal Plus config keeps its source registry adjacent to a custom managed di
   assert.equal(config.registryPath, path.join(path.dirname(configPath), 'sources.json'));
 });
 
-test('Goal Plus managed config rejects a silent ambient API key override', async t => {
+test('Goal Plus managed config keeps the installed identity authoritative', async t => {
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-config-authority-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
   const configPath = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus', 'config.json');
@@ -229,7 +229,7 @@ test('Goal Plus managed config rejects a silent ambient API key override', async
   const previousGoalPlusBaseUrl = process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL;
   process.env.AGENT_INSIGHT_API_KEY = 'ambient-key';
   process.env.AGENT_INSIGHT_OTLP_ENDPOINT = 'https://ambient.invalid/traces';
-  delete process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY;
+  process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY = 'independent-worker-key';
   t.after(() => {
     if (previousApiKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
     else process.env.AGENT_INSIGHT_API_KEY = previousApiKey;
@@ -248,21 +248,13 @@ test('Goal Plus managed config rejects a silent ambient API key override', async
   assert.equal(managed.collaborationSessionsEndpoint, 'https://managed.invalid/collaboration-sessions');
   assert.equal(managed.collaborationEventsEndpoint, 'https://managed.invalid/collaboration-events');
   assert.deepEqual(managed.configDiagnostics.map((item: { code: string }) => item.code), [
-    'ignored_ambient_api_key',
     'ignored_ambient_otlp_endpoint',
   ]);
   assert.doesNotMatch(JSON.stringify(managed.configDiagnostics), /managed-key|ambient-key/);
 
-  const legacyAmbient = await loadConfig({ homeDir, configPath: path.join(homeDir, 'missing-config.json') });
-  assert.equal(legacyAmbient.apiKey, 'ambient-key');
-  assert.equal(legacyAmbient.apiKeySource, 'ambient-env');
-  assert.equal(legacyAmbient.otlpEndpoint, 'https://ambient.invalid/traces');
-
-  process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY = 'explicit-key';
-  const explicitlyOverridden = await loadConfig({ homeDir, configPath });
-  assert.equal(explicitlyOverridden.apiKey, 'explicit-key');
-  assert.equal(explicitlyOverridden.apiKeySource, 'goal-plus-env');
-  assert.equal(explicitlyOverridden.configDiagnostics.some((item: { code: string }) => item.code === 'ignored_ambient_api_key'), false);
+  const missing = await loadConfig({ homeDir, configPath: path.join(homeDir, 'missing-config.json') });
+  assert.equal(missing.apiKey, '');
+  assert.equal(missing.apiKeySource, 'missing');
 
   process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL = 'https://explicit.invalid/base/';
   const baseOverridden = await loadConfig({ homeDir, configPath });

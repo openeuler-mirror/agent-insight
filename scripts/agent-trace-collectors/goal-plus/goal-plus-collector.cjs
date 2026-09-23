@@ -158,7 +158,7 @@ async function startWatcher(config, options = {}) {
       return { ...current, alreadyRunning: true };
     }
     if (current.running) await stopWatcher(config);
-    if (!config.apiKey) throw new Error("AGENT_INSIGHT_GOAL_PLUS_API_KEY, managed config apiKey, or AGENT_INSIGHT_API_KEY is required for watcher startup");
+    if (!config.apiKey) throw new Error("Managed Goal Plus config apiKey is required for watcher startup");
     if (current.sourceCount === 0) throw new Error("No Goal Plus sources are attached; run attach before start");
     const logFd = fs.openSync(paths.logPath, "a", 0o600);
     let child;
@@ -284,15 +284,7 @@ async function loadConfig(options = {}) {
   }
   const diagnostics = [];
   const managedApiKey = String(file.apiKey || "").trim();
-  const ambientApiKey = String(process.env.AGENT_INSIGHT_API_KEY || "").trim();
-  const explicitApiKey = String(process.env.AGENT_INSIGHT_GOAL_PLUS_API_KEY || "").trim();
-  if (!explicitApiKey && managedApiKey && ambientApiKey && managedApiKey !== ambientApiKey) {
-    diagnostics.push({
-      code: "ignored_ambient_api_key",
-      message: `Ignored conflicting AGENT_INSIGHT_API_KEY (env sha256:${apiKeyHash(ambientApiKey)}, config sha256:${apiKeyHash(managedApiKey)}); managed Goal Plus config is authoritative. Use AGENT_INSIGHT_GOAL_PLUS_API_KEY for an explicit override.`,
-    });
-  }
-  const apiKey = explicitApiKey || managedApiKey || ambientApiKey;
+  const apiKey = managedApiKey;
   const ambientBaseUrl = String(process.env.AGENT_INSIGHT_BASE_URL || "").trim();
   const explicitBaseUrl = String(process.env.AGENT_INSIGHT_GOAL_PLUS_BASE_URL || "").trim();
   const managedBaseUrl = String(file.baseUrl || "").trim();
@@ -312,7 +304,7 @@ async function loadConfig(options = {}) {
     configPath,
     registryPath: path.join(path.dirname(configPath), "sources.json"),
     apiKey,
-    apiKeySource: explicitApiKey ? "goal-plus-env" : managedApiKey ? "config" : ambientApiKey ? "ambient-env" : "missing",
+    apiKeySource: managedApiKey ? "config" : "missing",
     configDiagnostics: diagnostics,
     hosts: ["pi"],
     otlpEndpoint: explicitOtlpEndpoint || (explicitBaseUrl
@@ -435,7 +427,7 @@ async function resolveSources(selector, options) {
 }
 
 async function scanSource(source, config, options = {}) {
-  if (!config.apiKey) throw new Error("AGENT_INSIGHT_GOAL_PLUS_API_KEY, managed config apiKey, or AGENT_INSIGHT_API_KEY is required for scanning");
+  if (!config.apiKey) throw new Error("Managed Goal Plus config apiKey is required for scanning");
   const scanStartedAt = new Date().toISOString();
   const parsed = await parseGoalPlusRoot(source);
   const nativeImporter = options.nativeImporter || importPiSessions;

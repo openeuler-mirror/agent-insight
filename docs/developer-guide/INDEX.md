@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `61cefb3a45a7c8421a966c194f387b2f333f5573` (`61cefb3a`) |
-| Branch | `bench-9-16` |
-| Date | 2026-09-17 |
-| Author | mintuyang |
-| Subject | `修复xiaoo安装问题` |
+| Commit | `5b97c9285727edb02927e807287d28cb3c1047bc` (`5b97c928`) |
+| Branch | `goal_plus` |
+| Date | 2026-09-21 |
+| Author | huang |
+| Subject | `fix: 支持 Goal Plus worker Trace 实时合并` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-23 working-tree overlay：Pi 安装器不再保留旧版、手工或不同账号的 Goal Plus collector 配置；主 Trace 与 worker Trace 强制复用同一 managed API Key 和上报端点，安装时停止并按当前配置恢复 watcher，runtime 检测到身份不一致时先停 watcher 再 fail closed。同步更新 Goal Plus 用户与开发者指南。
 
 > 2026-09-21 working-tree overlay：Goal Plus 不再作为用户可选 framework 或独立安装步骤；Pi bundle 内置 Agent Insight 自有的休眠观察器，仅在结构化 `/goal-plus` start 证据与 `.gp` 中当前 Pi native session invocation 一致时自动 attach、scan 并确保 watcher。普通 Pi 与增强失败继续采集主 Trace；旧 `frameworks=goal-plus` 映射为 Pi。更新 Goal Plus 用户、开发与三阶段设计文档，未修改 Goal Plus 仓库。
 
@@ -108,7 +110,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 5b97c928 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

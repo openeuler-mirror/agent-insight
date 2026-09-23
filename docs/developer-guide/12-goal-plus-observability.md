@@ -163,13 +163,13 @@ runtime root 必须与 Goal Plus 现有行为一致：`GOAL_PLUS_ROOT` 为绝对
 
 Goal Plus managed config 保存：
 
+- `apiKey`（必须与 Pi managed config 一致）
 - `otlpEndpoint`
 - `collaborationSessionsEndpoint`
 - `collaborationEventsEndpoint`
 
-专属环境变量优先于 managed config，再回退到通用 base URL/API Key。对应变量为：
+API Key 只读取安装器写入的 managed config，不接受运行时通用变量或 Goal Plus 专属变量覆盖。端点仍可使用以下专属变量覆盖：
 
-- `AGENT_INSIGHT_GOAL_PLUS_API_KEY`
 - `AGENT_INSIGHT_GOAL_PLUS_BASE_URL`
 - `AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT`
 - `AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_SESSIONS_ENDPOINT`
@@ -179,7 +179,7 @@ Goal Plus managed config 保存：
 
 watcher 指纹覆盖 collector 版本、凭证摘要和三个端点；任一变化都会受控重启。`start` 要求至少一个 attached source，`ensure` 对无 source 安静跳过，对 stale PID 恢复。Goal Plus watcher 失败不停止 Pi 原生 collector；结果是主 Trace 仍可见，但 worker 关系暂不可用。
 
-Pi 安装器遇到已有且属于不同 API Key 的 Goal Plus managed config 时不会覆盖它，并在 Pi config 中关闭本账号的自动观察器，避免静默切换采集归属。Pi 卸载会停止 `managedBy=pi-agent` 的 watcher，并默认保留 source registry 与 spool。
+Pi 安装器以当前 Pi API Key、OTLP 端点和两个 collaboration 端点无条件覆盖 Goal Plus managed config，不兼容或保留旧版、手工配置及其他账号的 collector 身份。写入前停止已有 watcher，写入后对已有 source 执行 `ensure`，因此新进程不会继续持有旧账号。Pi runtime 激活观察器时还会比较两份 managed API Key；不一致时先停止 watcher 再 fail closed，禁止跨用户上传 worker Trace。Pi 卸载会停止 `managedBy=pi-agent` 的 watcher，并默认保留 source registry 与 spool。
 
 ## 查询与展示契约
 
@@ -202,4 +202,5 @@ Pi 安装器遇到已有且属于不同 API Key 的 Goal Plus managed config 时
 - 重复扫描不产生不同 binding/event 正文；
 - 断网/5xx 可重试，409 进入 rejected；
 - Pi distribution 自包含休眠观察器；旧 Goal Plus distribution 继续可用且两者都包含 collaboration transport；
+- Pi 安装会覆盖不同账号的 Goal Plus 配置、同步主/worker 端点，并在 runtime 身份不一致时 fail closed；
 - 最终查询结果是主 Trace 下包含 worker 子树，而不是重复导入一个 Goal Plus 主 Trace。
