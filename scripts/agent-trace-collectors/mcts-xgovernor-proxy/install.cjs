@@ -59,7 +59,7 @@ async function install(options) {
     version: 1,
     apiKey,
     baseUrl,
-    upstreamUrl: process.env.XGOVERNOR_BASE_URL || "http://127.0.0.1:8787",
+    upstreamUrl: process.env.AGENT_INSIGHT_MCTS_UPSTREAM_URL || "http://127.0.0.1:8787",
     otlpEndpoint: process.env.AGENT_INSIGHT_OTLP_ENDPOINT || `${baseUrl}/api/ingest/otel/v1/traces`,
     collaborationSessionsEndpoint: process.env.AGENT_INSIGHT_MCTS_COLLABORATION_SESSIONS_ENDPOINT || `${baseUrl}/api/ingest/collaborations/sessions`,
     collaborationEventsEndpoint: process.env.AGENT_INSIGHT_MCTS_COLLABORATION_EVENTS_ENDPOINT || `${baseUrl}/api/ingest/collaborations/events`,

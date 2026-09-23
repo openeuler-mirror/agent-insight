@@ -124,7 +124,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-> 2026-09-22 working-tree overlay：新增 MCTS xGovernor 非侵入式采集器。外部启动器只覆盖子进程的 `XGOVERNOR_BASE_URL`，透明 HTTP/SSE 网关采集标准化 turn/tool/usage，以 checkpoint HMAC ledger 重建 Runtime 血缘，并通过既有 OTLP 与 Collaboration API 展示；MCTS 源码和原生 Execution 父子树均不修改。stdout 仅采集稳定摘要，node/runtime 不做时间推断。
+> 2026-09-23 working-tree overlay：新增 MCTS xGovernor 非侵入式采集器及独立安装项。外部启动器只覆盖子进程的 `XGOVERNOR_BASE_URL`，透明 HTTP/SSE 网关采集标准化 turn/tool/usage，以 checkpoint HMAC ledger 重建 Runtime 血缘，并通过既有 OTLP 与 Collaboration API 展示；MCTS 源码和原生 Execution 父子树均不修改。安装页和两条 setup 路由以 `mcts-xgovernor` 独立分发校验过的 ZIP，不隐式安装 Pi/xiaoO；stdout 仅采集稳定摘要，node/runtime 不做时间推断。
 
 **如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 

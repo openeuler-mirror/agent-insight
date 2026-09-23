@@ -16,18 +16,29 @@ Runtime 角色按可验证行为标记为 `solver-initial`、`solver-child`、`a
 
 前置条件：Node.js 不低于 22.19.0、Agent Insight 服务可访问、已有当前用户 API Key，xGovernor 已运行。
 
-在 agent-insight 仓库根目录执行：
+推荐从 Agent Insight 的“安装指导”页面安装：
+
+1. 只勾选 `MCTS (xGovernor)`；它是独立安装项，不会连带安装 Pi Agent、xiaoO 或 Goal Plus。
+2. 填写 MCTS 主机能够访问的 xGovernor 地址，默认是 `http://127.0.0.1:8787`。
+3. 在运行 MCTS 的 Linux/macOS 主机执行页面生成的命令。Windows 主机应在 WSL 内安装和运行。
+
+页面生成的命令会使用当前登录账号的 API Key 下载并校验专用安装包，然后创建：
+
+- `~/.agent-insight/collectors/mcts-xgovernor-proxy/`：透明代理运行文件和权限为 `0600` 的配置；
+- `~/.local/bin/agent-insight-mcts-run`：包裹原 MCTS 命令的启动器。
+
+安装器不会写入 MCTS 仓库。若 `~/.local/bin` 不在 PATH，可直接使用启动器的完整路径。
+
+在 agent-insight 源码仓库内开发或排查安装器时，也可直接执行：
 
 ```bash
 AGENT_INSIGHT_API_KEY='<your-api-key>' \
 AGENT_INSIGHT_BASE_URL='http://127.0.0.1:3000' \
-XGOVERNOR_BASE_URL='http://127.0.0.1:8787' \
+AGENT_INSIGHT_MCTS_UPSTREAM_URL='http://127.0.0.1:8787' \
 node scripts/agent-trace-collectors/mcts-xgovernor-proxy/install.cjs
 ```
 
-安装器把运行文件放到 `~/.agent-insight/collectors/mcts-xgovernor-proxy/`，把权限为 `0600` 的配置写到同目录，并创建 `~/.local/bin/agent-insight-mcts-run`。它不会写入 MCTS 仓库。
-
-如果 `~/.local/bin` 不在 PATH，可直接使用完整命令路径。
+`AGENT_INSIGHT_MCTS_UPSTREAM_URL` 是安装配置的唯一上游环境变量；未设置时使用默认回环地址，不读取旧安装变量。
 
 ## 运行 MCTS
 

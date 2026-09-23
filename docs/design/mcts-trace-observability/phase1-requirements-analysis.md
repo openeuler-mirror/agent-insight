@@ -5,9 +5,10 @@
 | 项目 | 内容 |
 |-|-|
 | 需求类型 | Feature / Observability |
-| 设计状态 | 待评审，未实现 |
+| 设计状态 | 核心采集与统一安装接入已实现，待真实环境及浏览器验收 |
 | 首次分析日期 | 2026-09-21 |
 | 非侵入式方案修订日期 | 2026-09-22 |
+| 统一安装接入修订日期 | 2026-09-23 |
 | Agent Insight 基线 | `a02c9cb56388`（`master`） |
 | MCTS 基线 | `f963c345517e`（`rebuild`） |
 | 硬约束 | 不修改 MCTS 仓库中的任何源码、脚本、配置文件或依赖 |
@@ -98,6 +99,7 @@ MCTS 的 `xgovernor_client.py` 已通过单一 Base URL 访问以下路径：
 - 查看 MCTS stdout 能够证明的 choose、score、最终树和 official result 摘要。
 - 明确区分 confirmed、degraded、unavailable，不能为了视觉完整而推断不存在的关联。
 - 采集失败时优先保证 MCTS 原始命令可运行和退出语义不变。
+- 在 Agent Insight 安装页把 `MCTS (xGovernor)` 作为独立接入项，通过当前账号 API Key 安装 collector 并生成启动器，不要求目标机器持有 Agent Insight 源码仓库。
 
 ## 6. 非目标
 
@@ -109,6 +111,7 @@ MCTS 的 `xgovernor_client.py` 已通过单一 Base URL 访问以下路径：
 - 不把临时 score/official checkout 作为 Agent 节点。
 - 一期不新增 Prisma model、摄入 API 或 MCTS 专用页面。
 - 一期不合并 xiaoO/Pi 原生 collector 与代理 Trace；避免同一 runtime 双写产生重复 Execution。
+- 不因选择 MCTS 自动安装 Pi Agent 或 xiaoO collector；MCTS 的 `--runtime` 是单次运行参数，不是安装时依赖。
 
 ## 7. 目标展示模型
 

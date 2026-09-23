@@ -71,6 +71,19 @@ flowchart LR
 
 ## 4. 部署与启动边界
 
+### 4.0 安装模型
+
+Agent Insight 安装页把 `MCTS (xGovernor)` 作为独立安装项，canonical value 为 `mcts-xgovernor`。该安装项复用统一安装命令和专用 bundle 分发，但不自动添加 `pi-agent` 或 `xiaoo`：proxy SSE 同时适配两种 runtime，原生 collector 不是 MCTS Trace 的依赖，自动安装反而可能产生重复 Execution。
+
+安装分发 API 只提供 collector 制品，不新增摄入协议：
+
+```text
+/api/ingest/setup/mcts-xgovernor
+/api/ingest/setup/mcts-xgovernor/assets/mcts-xgovernor-collector.zip
+```
+
+安装页允许配置 xGovernor upstream，默认 `http://127.0.0.1:8787`。安装脚本使用当前登录账号的 API Key，落盘到权限为 `0600` 的 collector 配置，因此 MCTS Trace 与该账号的其他 Trace 保持同一用户归属。目标机器只需 Node.js、curl 与 unzip，不依赖 Agent Insight 源码 checkout。
+
 ### 4.1 组件位置
 
 所有新文件位于 Agent Insight，例如：
@@ -522,7 +535,7 @@ proxy SSE 是本方案的统一权威源，可同时适配 `xiaoo` 和 `pi`。�
 | `AGENT_INSIGHT_BASE_URL` | 必填 | Agent Insight 地址 |
 | `AGENT_INSIGHT_API_KEY` | 必填才上传 | 只进入请求头 |
 | `AGENT_INSIGHT_MCTS_PROXY_ENABLED` | `true`（启动器内） | 是否启用网关；false 直接 bypass |
-| `AGENT_INSIGHT_MCTS_UPSTREAM_URL` | 原 `XGOVERNOR_BASE_URL` 或默认值 | xGovernor upstream |
+| `AGENT_INSIGHT_MCTS_UPSTREAM_URL` | 原 `XGOVERNOR_BASE_URL` 或默认值 | xGovernor upstream；安装与运行时统一优先读取 |
 | `AGENT_INSIGHT_MCTS_CAPTURE_REASONING` | `false` | reasoning 正文开关 |
 | `AGENT_INSIGHT_MCTS_SPOOL_DIR` | Agent Insight 数据目录 | 不允许指向 MCTS 仓库 |
 | `AGENT_INSIGHT_MCTS_MAX_TEXT_BYTES` | 待评审 | input/output/summary 截断上限 |
