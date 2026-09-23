@@ -29,4 +29,4 @@ GET /api/observe/collaborations/:collaborationId?offset=0&limit=100 返回分页
 
 `display-tree.ts` 分别构建各 Session 原有树，再组合。提供 fromLocator 的唯一候选挂在对应工具下并标“候选步骤”；confirmed/time_ordered 保留原证据状态。定位失败保留父 Agent 下的子节点和原因。不提供 fromLocator 时使用“协作 Trace”容器，将各 Agent 并列展示，按 observedAt（缺失则接收时间）顺序排列，不构造虚假工具调用。
 
-相同子 Trace 正文只展示一次。循环、多父级冲突、缺失/无权限/空正文、重复 Execution、已有原生子记录或 Langfuse 专用树保留该连通组的原始列表。投影最多扫描 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文，超过限制保留原列表并记录 warning。已有原生子树路径不改写；本轮无数据库模型变化。
+相同子 Trace 正文只展示一次。循环、多父级冲突、缺失/无权限/空正文、重复 Execution、已有原生子记录或 Langfuse 专用树不进入详情合并。通用关系在这些情况下保留原始列表；Goal Plus `gp.<hash>` 的 `main → worker:*` 关系只要已有 worker binding，就把该 worker 记入列表隐藏集合，避免 main binding 晚到期间把 worker误当成独立主记录。隐藏不等于合并：只有主从两端完整解析后才生成详情 links。投影最多扫描 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文，超过限制保留原列表并记录 warning。已有原生子树路径不改写；本轮无数据库模型变化。

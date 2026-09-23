@@ -36,6 +36,15 @@
 
 ## 二、服务端开发工作
 
+### 共享模块升级契约
+
+Pi Agent、Codex、Goal Plus 的 ZIP 分发均包含 `shared/install-modules.cjs`。
+安装器在写入框架文件、配置和 hooks 前预检全部共享依赖：内容相同则复用，不存在则安装；
+只有摘要列入已知旧版白名单的文件才允许升级。目前白名单仅覆盖根目录环境变量迁移前的
+`trace-transport.cjs`。升级保留权限为 `0600` 的随机命名 `.bak`，使用同目录临时文件加 rename 替换。
+未知内容或符号链接报错，不能把“不同文件”直接当作可覆盖的旧版本。
+后续共享模块变更须核验并登记兼容旧版摘要、更新三个分发包及升级回归测试，不能仅测试全新安装。
+
 ### 2.1 新增 Adapter 文件
 
 **位置**：`src/lib/ingest/otel/adapters/<framework-name>.ts`
@@ -360,7 +369,7 @@ return NextResponse.json({
 | Qwen Code | `adapters/qwencode.ts` | `scripts/qwencode-collector/` + Qwen Code 原生 OTLP | 原生 Telemetry 模式，支持 Agent/Subagent/LLM/Tool/Skill/MCP/Plan，按账号隔离 spool |
 | Qoder CN 产品家族 | `adapters/qoder.ts` | `scripts/qoder_trace_collector.mjs`、Desktop VSIX、JetBrains Plugin、Work setup | 共享 Hook/OTLP 核心，按产品与账号隔离 spool，支持 Quest/Experts/Subagent/Skill/MCP/连接器 |
 | Generic | `adapters/generic.ts` | 标准OTLP SDK | 兜底适配，支持OpenInference标准 |
-| xiaoO | `adapters/generic.ts`（`service.name=xiaoo`） | [`scripts/xiaoo-trace-collector/`](../../scripts/xiaoo-trace-collector/) | Hooker plugin；session buffer → OTLP；**不**经 RAS；安装 `node scripts/xiaoo-trace-collector/install.js`（`install-ras` 会顺带调用） |
+| xiaoO | `adapters/generic.ts`（`service.name=xiaoo`） | [`scripts/xiaoo-trace-collector/`](../../scripts/xiaoo-trace-collector/) | Hooker plugin；session buffer → OTLP；**不**经 RAS；安装 `node scripts/xiaoo-trace-collector/install.js`；RAS bundle 必须携带该目录，`install-ras` 安装后会校验 5 个运行文件指纹、`plugin.json` 语义与 `config.toml` 挂载，缺失时不得静默成功 |
 
 ---
 

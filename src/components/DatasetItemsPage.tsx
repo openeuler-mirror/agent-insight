@@ -15,6 +15,7 @@ import {
   createEvaluatorCatalogField,
   createEmptyCase,
   evaluatorCatalogFieldKeyFromLabel,
+  hasMeaningfulDatasetCaseValue,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
@@ -92,16 +93,36 @@ function TooltipCell({
   const [show, setShow] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const tdRef = useRef<HTMLTableCellElement>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelHide = () => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  };
+
+  const showTooltip = () => {
+    cancelHide();
+    setRect(tdRef.current?.getBoundingClientRect() ?? null);
+    setShow(true);
+  };
+
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimerRef.current = setTimeout(() => setShow(false), 150);
+  };
+
+  useEffect(() => () => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+  }, []);
 
   return (
     <td
       ref={tdRef}
       style={tdStyle}
-      onMouseEnter={() => {
-        setRect(tdRef.current?.getBoundingClientRect() ?? null);
-        setShow(true);
-      }}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={showTooltip}
+      onMouseLeave={scheduleHide}
       onClick={onClick}
     >
       <span className={styles.cellText}>{shortText}</span>
@@ -125,8 +146,13 @@ function TooltipCell({
             wordBreak: 'break-word',
             boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
             color: 'var(--foreground)',
-            pointerEvents: 'none',
+            pointerEvents: 'auto',
+            userSelect: 'text',
           }}
+          onMouseEnter={cancelHide}
+          onMouseLeave={scheduleHide}
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
         >
           {fullText}
         </div>
@@ -450,6 +476,18 @@ export default function DatasetItemsPage() {
     setRowEditor({ mode: 'add', row: createEmptyCase() });
   };
 
+  const openFieldEditor = () => {
+    setFieldDraft({ label: '', type: 'text' });
+    setFieldError('');
+    setFieldEditorOpen(true);
+  };
+
+  const closeFieldEditor = () => {
+    setFieldEditorOpen(false);
+    setFieldDraft({ label: '', type: 'text' });
+    setFieldError('');
+  };
+
   const openEdit = async (row: DatasetCase) => {
     if (isReadOnly) return;
     setSaving(true);
@@ -483,7 +521,9 @@ export default function DatasetItemsPage() {
       await load();
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : '字段保存失败');
+      const message = e instanceof Error ? e.message : '字段保存失败';
+      setError(message);
+      setFieldError(message);
       return false;
     } finally {
       setSaving(false);
@@ -514,9 +554,7 @@ export default function DatasetItemsPage() {
         : { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
     ]);
     if (ok) {
-      setFieldEditorOpen(false);
-      setFieldDraft({ label: '', type: 'text' });
-      setFieldError('');
+      closeFieldEditor();
     }
   };
 
@@ -539,6 +577,10 @@ export default function DatasetItemsPage() {
 
   const saveRowFromModal = async () => {
     if (!rowEditor || !dataset) return;
+    if (!hasMeaningfulDatasetCaseValue(rowEditor.row, dataset.fields)) {
+      toast.error('请至少填写一个字段');
+      return;
+    }
     const { mode } = rowEditor;
     const values = { ...(rowEditor.row.values || {}) };
     for (const field of dataset.fields) {
@@ -770,7 +812,7 @@ export default function DatasetItemsPage() {
               <button
                 type="button"
                 className={styles.refreshGhost}
-                onClick={() => setFieldEditorOpen(true)}
+                onClick={openFieldEditor}
                 disabled={saving || isReadOnly}
                 title={isReadOnly ? '内置可靠性评测集不可新增字段' : '新增字段'}
               >
@@ -1094,8 +1136,14 @@ export default function DatasetItemsPage() {
       )}
 
       {fieldEditorOpen && (
-        <div role="presentation" className={styles.modalBackdrop} onClick={() => !saving && setFieldEditorOpen(false)}>
-          <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel} onClick={e => e.stopPropagation()}>
+        <div
+          role="presentation"
+          className={styles.modalBackdrop}
+          onMouseDown={event => {
+            if (event.target === event.currentTarget && !saving) closeFieldEditor();
+          }}
+        >
+          <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel}>
             <div className={styles.modalHeader}>
               <div id="add-field-title" className={styles.modalTitle}>新增字段</div>
             </div>
@@ -1117,6 +1165,7 @@ export default function DatasetItemsPage() {
               <div style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段类型</span>
                 <Select
+                  modal={false}
                   value={catalogDraftKey ? 'json' : fieldDraft.type}
                   onChange={type => {
                     if (!catalogDraftKey) setFieldDraft({ ...fieldDraft, type });
@@ -1141,7 +1190,7 @@ export default function DatasetItemsPage() {
               {fieldError && <div className={styles.modalError}>{fieldError}</div>}
             </div>
             <div className={styles.modalFooter}>
-              <button type="button" className={styles.btnGhost} onClick={() => setFieldEditorOpen(false)} disabled={saving}>取消</button>
+              <button type="button" className={styles.btnGhost} onClick={closeFieldEditor} disabled={saving}>取消</button>
               <button type="button" className={styles.btnPrimary} onClick={() => void addField()} disabled={saving}>{saving ? '保存中…' : '新增'}</button>
             </div>
           </div>

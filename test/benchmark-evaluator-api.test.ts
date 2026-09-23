@@ -41,9 +41,7 @@ const { runProcess } = require('../benchmarks/swe-bench/evaluator/index.cjs') as
 }
 const { AgentInsightPlatformClient, PlatformClientError } = require('../services/evaluator/src/platform-client.cjs') as {
   AgentInsightPlatformClient: new (
-    token: string,
     fetchImpl: typeof fetch,
-    authMode: string,
     platformBaseUrl?: string,
   ) => {
     downloadArtifact(request: Record<string, unknown>, descriptor: Record<string, unknown>): Promise<Buffer>
@@ -55,7 +53,7 @@ const { AgentInsightPlatformClient, PlatformClientError } = require('../services
 
 test('Evaluator platform requests use its deployment-specific Agent Insight address', async () => {
   const requestedUrls: string[] = []
-  const client = new AgentInsightPlatformClient('', async (input) => {
+  const client = new AgentInsightPlatformClient(async (input) => {
     const url = String(input)
     requestedUrls.push(url)
     if (url.endsWith('/content')) return new Response('patch')
@@ -63,7 +61,7 @@ test('Evaluator platform requests use its deployment-specific Agent Insight addr
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
-  }, 'none', 'http://119.3.152.42:3000/platform')
+  }, 'http://119.3.152.42:3000/platform')
 
   const request = {
     runId: 'beval_remote_callback',
@@ -149,24 +147,23 @@ function requestFor(runId: string) {
   return { ...request, requestDigest: evaluationDispatchDigest(request) }
 }
 
-function headers(token: string, request: ReturnType<typeof requestFor>) {
+function headers(request: ReturnType<typeof requestFor>) {
   return {
-    authorization: `Bearer ${token}`,
     'content-type': 'application/json',
     'idempotency-key': request.runId,
     'x-agent-insight-request-digest': request.requestDigest,
   }
 }
 
-test('none auth platform client omits bearer credentials from callbacks', async () => {
+test('platform client omits bearer credentials from callbacks', async () => {
   let authorization: string | null = 'not-called'
-  const client = new AgentInsightPlatformClient('', async (_input, init) => {
+  const client = new AgentInsightPlatformClient(async (_input, init) => {
     authorization = new Headers(init?.headers).get('authorization')
     return new Response('{"accepted":true,"desiredState":"continue"}', {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
-  }, 'none')
+  })
 
   await client.progress(
     { callbackBaseUrl: 'http://agent-insight.test/api/benchmark/v1/evaluations/veval_no_auth' },
@@ -180,7 +177,7 @@ test('platform client rejects malformed successful callback acknowledgements as 
     new Response('not-json', { status: 200, headers: { 'content-type': 'text/html' } }),
     new Response('{"accepted":true}', { status: 200, headers: { 'content-type': 'application/json' } }),
   ]
-  const client = new AgentInsightPlatformClient('', async () => responses.shift()!, 'none')
+  const client = new AgentInsightPlatformClient(async () => responses.shift()!)
   const request = {
     callbackBaseUrl: 'http://agent-insight.test/api/benchmark/v1/evaluations/veval_invalid_ack',
   }
@@ -212,12 +209,12 @@ test('platform client rejects malformed successful callback acknowledgements as 
 })
 
 test('platform client accepts only a terminal completion acknowledgement matching the submitted status', async () => {
-  const client = new AgentInsightPlatformClient('', async () => new Response(JSON.stringify({
+  const client = new AgentInsightPlatformClient(async () => new Response(JSON.stringify({
     accepted: true,
     evaluationStatus: 'failed',
     normalizationStatus: 'completed',
     normalizedResult: { status: 'failed' },
-  }), { status: 200, headers: { 'content-type': 'application/json' } }), 'none')
+  }), { status: 200, headers: { 'content-type': 'application/json' } }))
 
   const acknowledgement = await client.complete(
     { callbackBaseUrl: 'http://agent-insight.test/api/benchmark/v1/evaluations/veval_valid_ack' },
@@ -282,7 +279,6 @@ test('aborted evaluator subprocesses fail with EVALUATION_TIMEOUT even when SIGT
 
 test('evaluator service converts a late successful output into an EVALUATION_TIMEOUT completion', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-deadline-'))
-  const token = 'evaluator-controller-deadline-token'
   const completions: Array<Record<string, any>> = []
   const evaluator = {
     key: 'swe-bench',
@@ -323,7 +319,6 @@ test('evaluator service converts a late successful output into an EVALUATION_TIM
   }
   const service = new BenchmarkEvaluatorService({
     dataDir,
-    token,
     platformClient: platform,
     registry: new EvaluatorRegistry([evaluator]),
     cleanupContainers: async () => ({ status: 'succeeded', removedContainerIds: [] }),
@@ -335,7 +330,7 @@ test('evaluator service converts a late successful output into an EVALUATION_TIM
   request.requestDigest = evaluationDispatchDigest(request)
   try {
     assert.equal((await fetch(`${listener.origin}/api/v1/evaluations`, {
-      method: 'POST', headers: headers(token, request), body: JSON.stringify(request),
+      method: 'POST', headers: headers(request), body: JSON.stringify(request),
     })).status, 202)
     await waitFor(async () => (
       completions.length === 1
@@ -353,11 +348,10 @@ test('evaluator service converts a late successful output into an EVALUATION_TIM
 
 test('invalid successful completion acknowledgement keeps the local journal callback_pending', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-ack-journal-'))
-  const token = 'evaluator-controller-ack-journal-token'
-  const callbackClient = new AgentInsightPlatformClient('', async () => new Response('not-json', {
+  const callbackClient = new AgentInsightPlatformClient(async () => new Response('not-json', {
     status: 200,
     headers: { 'content-type': 'text/html' },
-  }), 'none')
+  }))
   const evaluator = {
     key: 'swe-bench',
     async checkReady() { return { ready: true } },
@@ -390,7 +384,6 @@ test('invalid successful completion acknowledgement keeps the local journal call
   }
   const service = new BenchmarkEvaluatorService({
     dataDir,
-    token,
     platformClient: platform,
     registry: new EvaluatorRegistry([evaluator]),
     cleanupContainers: async () => ({ status: 'succeeded', removedContainerIds: [] }),
@@ -400,7 +393,7 @@ test('invalid successful completion acknowledgement keeps the local journal call
   const request = requestFor(`veval_invalid_ack_${Date.now()}`)
   try {
     assert.equal((await fetch(`${listener.origin}/api/v1/evaluations`, {
-      method: 'POST', headers: headers(token, request), body: JSON.stringify(request),
+      method: 'POST', headers: headers(request), body: JSON.stringify(request),
     })).status, 202)
     await waitFor(async () => (
       (await service.journal.state(request.runId))?.callbackErrorCode
@@ -425,9 +418,8 @@ async function waitFor(predicate: () => boolean | Promise<boolean>) {
   throw new Error('condition not reached')
 }
 
-test('step 09 evaluator HTTP API authenticates, journals, executes and replays idempotently', async () => {
+test('step 09 evaluator HTTP API journals, executes and replays idempotently without app authentication', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-api-'))
-  const token = 'evaluator-controller-api-token'
   const completions: Array<Record<string, unknown>> = []
   let failFirstCompletion = true
   let evaluatorRuns = 0
@@ -486,7 +478,6 @@ test('step 09 evaluator HTTP API authenticates, journals, executes and replays i
   }
   const service = new BenchmarkEvaluatorService({
     dataDir,
-    token,
     platformClient: platform,
     registry: new EvaluatorRegistry([evaluator]),
     controllerProbe: async () => ({ dockerArch: 'x86_64', dockerOSType: 'linux' }),
@@ -498,18 +489,13 @@ test('step 09 evaluator HTTP API authenticates, journals, executes and replays i
   const listener = await listen(service.createServer())
   const request = requestFor(`veval_api_${Date.now()}`)
   try {
-    const unauthorized = await fetch(`${listener.origin}/health`)
-    assert.equal(unauthorized.status, 401)
-
-    const health = await fetch(`${listener.origin}/health`, {
-      headers: { authorization: `Bearer ${token}` },
-    })
+    const health = await fetch(`${listener.origin}/health`)
     assert.equal(health.status, 200)
     assert.equal((await health.json()).status, 'healthy')
 
     const accepted = await fetch(`${listener.origin}/api/v1/evaluations`, {
       method: 'POST',
-      headers: headers(token, request),
+      headers: headers(request),
       body: JSON.stringify(request),
     })
     assert.equal(accepted.status, 202)
@@ -532,7 +518,7 @@ test('step 09 evaluator HTTP API authenticates, journals, executes and replays i
 
     const replay = await fetch(`${listener.origin}/api/v1/evaluations`, {
       method: 'POST',
-      headers: headers(token, request),
+      headers: headers(request),
       body: JSON.stringify(request),
     })
     assert.equal(replay.status, 202)
@@ -544,7 +530,7 @@ test('step 09 evaluator HTTP API authenticates, journals, executes and replays i
     changed.requestDigest = evaluationDispatchDigest(changed)
     const conflict = await fetch(`${listener.origin}/api/v1/evaluations`, {
       method: 'POST',
-      headers: headers(token, changed),
+      headers: headers(changed),
       body: JSON.stringify(changed),
     })
     assert.equal(conflict.status, 409)
@@ -557,7 +543,6 @@ test('step 09 evaluator HTTP API authenticates, journals, executes and replays i
 
 test('step 11 non-retryable normalization rejection stops callback replay without rerunning Harness', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-nonretryable-'))
-  const token = 'evaluator-controller-nonretryable-token'
   let evaluatorRuns = 0
   let completionCalls = 0
   const evaluator = {
@@ -602,7 +587,6 @@ test('step 11 non-retryable normalization rejection stops callback replay withou
   }
   const service = new BenchmarkEvaluatorService({
     dataDir,
-    token,
     platformClient: platform,
     registry: new EvaluatorRegistry([evaluator]),
     cleanupContainers: async () => ({ status: 'succeeded', removedContainerIds: [] }),
@@ -611,7 +595,7 @@ test('step 11 non-retryable normalization rejection stops callback replay withou
   const request = requestFor(`veval_nonretryable_${Date.now()}`)
   try {
     assert.equal((await fetch(`${listener.origin}/api/v1/evaluations`, {
-      method: 'POST', headers: headers(token, request), body: JSON.stringify(request),
+      method: 'POST', headers: headers(request), body: JSON.stringify(request),
     })).status, 202)
     await waitFor(async () => (await service.journal.state(request.runId))?.stage === 'failed')
     await new Promise((resolve) => setTimeout(resolve, 1_100))
@@ -628,7 +612,6 @@ test('step 11 non-retryable normalization rejection stops callback replay withou
 
 test('step 10 preserves a valid judgment and records Controller cleanup failure', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-cleanup-'))
-  const token = 'evaluator-controller-cleanup-token'
   const completions: Array<Record<string, any>> = []
   let cleanupCalls = 0
   const evaluator = {
@@ -666,7 +649,6 @@ test('step 10 preserves a valid judgment and records Controller cleanup failure'
   }
   const service = new BenchmarkEvaluatorService({
     dataDir,
-    token,
     platformClient: platform,
     registry: new EvaluatorRegistry([evaluator]),
     cleanupContainers: async () => {
@@ -680,7 +662,7 @@ test('step 10 preserves a valid judgment and records Controller cleanup failure'
   const request = requestFor(`veval_cleanup_${Date.now()}`)
   try {
     assert.equal((await fetch(`${listener.origin}/api/v1/evaluations`, {
-      method: 'POST', headers: headers(token, request), body: JSON.stringify(request),
+      method: 'POST', headers: headers(request), body: JSON.stringify(request),
     })).status, 202)
     await waitFor(() => completions.length === 1)
     assert.equal(completions[0].status, 'completed')
@@ -696,7 +678,6 @@ test('step 10 preserves a valid judgment and records Controller cleanup failure'
 
 test('step 09 rejects a second evaluation while the single slot is busy', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-busy-'))
-  const token = 'evaluator-controller-busy-token'
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
   const evaluator = {
@@ -727,7 +708,6 @@ test('step 09 rejects a second evaluation while the single slot is busy', async 
   }
   const service = new BenchmarkEvaluatorService({
     dataDir,
-    token,
     platformClient: platform,
     registry: new EvaluatorRegistry([evaluator]),
     cleanupContainers: async () => ({ status: 'succeeded', removedContainerIds: [] }),
@@ -737,10 +717,10 @@ test('step 09 rejects a second evaluation while the single slot is busy', async 
   const second = requestFor(`veval_busy_2_${Date.now()}`)
   try {
     assert.equal((await fetch(`${listener.origin}/api/v1/evaluations`, {
-      method: 'POST', headers: headers(token, first), body: JSON.stringify(first),
+      method: 'POST', headers: headers(first), body: JSON.stringify(first),
     })).status, 202)
     const busy = await fetch(`${listener.origin}/api/v1/evaluations`, {
-      method: 'POST', headers: headers(token, second), body: JSON.stringify(second),
+      method: 'POST', headers: headers(second), body: JSON.stringify(second),
     })
     assert.equal(busy.status, 409)
     const body = await busy.json()

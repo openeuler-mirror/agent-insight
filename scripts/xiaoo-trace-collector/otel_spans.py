@@ -196,6 +196,7 @@ class SessionSpanBuffer:
         root_attrs = {
             **self._base_session_attrs(),
             "gen_ai.span.kind": "agent",
+            "agent.insight.trace.completed": True,
         }
         spans.append(
             self._span(

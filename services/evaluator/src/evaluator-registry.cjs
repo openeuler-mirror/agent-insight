@@ -217,7 +217,87 @@ function runEntrypoint(descriptor, args, options = {}) {
   })
 }
 
+async function inspectOciRuntime(descriptor, options = {}) {
+  const commandRunner = options.commandRunner || runEntrypoint
+  try {
+    const result = await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
+      'image', 'inspect', descriptor.image,
+      '--format', '{{index .Config.Labels "agent-insight.evaluator.artifact-digest"}}',
+    ], { ...options, errorCode: 'EVALUATOR_RUNTIME_IMAGE_NOT_FOUND', retryable: false })
+    return result.stdout.trim() === descriptor.artifactDigest
+  } catch {
+    return false
+  }
+}
+
+async function ensureOciRuntime(descriptor, options = {}) {
+  const commandRunner = options.commandRunner || runEntrypoint
+  if (!descriptor.image || !/^sha256:[0-9a-f]{64}$/i.test(String(descriptor.artifactDigest || ''))) {
+    throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_INVALID', 'Evaluator OCI Runtime 描述不合法', 500)
+  }
+  if (await inspectOciRuntime(descriptor, options)) return
+  try {
+    await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
+      'pull', descriptor.image,
+    ], { ...options, errorCode: 'EVALUATOR_RUNTIME_IMAGE_UNAVAILABLE' })
+  } catch (pullError) {
+    if (!descriptor.dockerfile || !fs.existsSync(descriptor.dockerfile)) throw pullError
+    await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
+      'build', '--file', descriptor.dockerfile,
+      '--build-arg', `EVALUATOR_SOURCE_REVISION=${process.env.EVALUATOR_SOURCE_REVISION || 'unknown'}`,
+      '--build-arg', `EVALUATOR_SOURCE_DIRTY=${process.env.EVALUATOR_SOURCE_DIRTY || 'false'}`,
+      '--build-arg', `EVALUATOR_ARTIFACT_DIGEST=${descriptor.artifactDigest}`,
+      '--tag', descriptor.image,
+      path.resolve(__dirname, '../../..'),
+    ], { ...options, errorCode: 'EVALUATOR_RUNTIME_BUILD_FAILED' })
+  }
+  if (!await inspectOciRuntime(descriptor, options)) {
+    throw new EvaluatorProtocolError(
+      'EVALUATOR_RUNTIME_IMAGE_MISMATCH',
+      'Evaluator Runtime 镜像与 Catalog artifact digest 不一致',
+      500,
+      false,
+    )
+  }
+}
+
+async function runOciEntrypoint(descriptor, args, options = {}) {
+  await ensureOciRuntime(descriptor, options)
+  const controllerContainer = String(process.env.EVALUATOR_CONTROLLER_CONTAINER_ID || process.env.HOSTNAME || '').trim()
+  if (!/^[A-Za-z0-9_.-]+$/.test(controllerContainer)) {
+    throw new EvaluatorProtocolError('EVALUATOR_CONTROLLER_ID_MISSING', '无法识别 Controller 容器', 500)
+  }
+  const resources = options.resources || descriptor.resources
+  const dockerArgs = [
+    'run', '--rm', '--init', '--volumes-from', controllerContainer,
+    '--workdir', options.cwd || '/data',
+    '--network', descriptor.network === 'allow' ? 'bridge' : 'none',
+    '--cpus', String(resources.cpu),
+    '--memory', `${resources.memoryMiB}m`,
+    '--label', `agent-insight.benchmark-key=${descriptor.benchmarkKey}`,
+    '--label', `agent-insight.evaluator-key=${descriptor.key}`,
+  ]
+  const runtimeEnv = { ...(options.env || {}) }
+  const forbiddenRuntimeEnv = new Set([
+    'EVALUATOR_AGENT_INSIGHT_BASE_URL',
+    'EVALUATOR_RUNTIME_ENV_NAMES',
+  ])
+  for (const name of String(process.env.EVALUATOR_RUNTIME_ENV_NAMES || '').split(',').filter(Boolean)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !forbiddenRuntimeEnv.has(name) && process.env[name] != null) {
+      runtimeEnv[name] = process.env[name]
+    }
+  }
+  for (const [name, value] of Object.entries(runtimeEnv)) {
+    dockerArgs.push('--env', `${name}=${value}`)
+  }
+  dockerArgs.push(descriptor.image)
+  if (descriptor.command !== 'direct') dockerArgs.push(descriptor.command)
+  dockerArgs.push(descriptor.entrypoint, ...args)
+  return runEntrypoint({ command: 'direct', entrypoint: 'docker' }, dockerArgs, options)
+}
+
 const RUNTIME_STRATEGIES = new Map([
+  ['oci-container', runOciEntrypoint],
   ['controller-container', runEntrypoint],
   ['script-package', runEntrypoint],
   ['builtin', runEntrypoint],
@@ -269,6 +349,18 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
   }
 
   async checkReady(runtime) {
+    if (this.descriptor.runtime === 'oci-container' && !await inspectOciRuntime(this.descriptor)) {
+      return {
+        ready: true,
+        formalEligible: true,
+        runtimeFacts: {
+          runtime: this.descriptor.runtime,
+          artifactDigest: this.descriptor.artifactDigest,
+          image: this.descriptor.image,
+          cached: false,
+        },
+      }
+    }
     try {
       const result = await this.processRunner(this.descriptor, ['doctor'], {
         env: {
@@ -299,7 +391,10 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     if (!this.descriptor.smokeEntrypoint) {
       return { supported: false, evaluatorKey: this.key, reason: '该 Evaluator 未提供部署 Smoke' }
     }
-    const descriptor = { ...this.descriptor, entrypoint: this.descriptor.smokeEntrypoint }
+    const descriptor = {
+      ...this.descriptor,
+      entrypoint: this.descriptor.runtimeSmokeEntrypoint || this.descriptor.smokeEntrypoint,
+    }
     const result = await this.processRunner(descriptor, [], {
       env: {
         EVALUATOR_DATA_DIR: runtime.dataDir,
@@ -341,12 +436,20 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
       artifacts,
     }, null, 2)}\n`, { mode: 0o400 })
     await fsp.writeFile(casePath, `${JSON.stringify(input.job.payload, null, 2)}\n`, { mode: 0o400 })
+    if (this.descriptor.runtime === 'oci-container') {
+      await input.reportProgress({
+        kind: 'evaluation',
+        stage: 'preparing_runtime',
+        occurredAt: new Date().toISOString(),
+      })
+    }
     await this.processRunner(this.descriptor, [
       'evaluate', '--request', requestPath, '--output', outputPath,
     ], {
       cwd: contractDir,
       signal: input.signal,
       env: runtimeEnvironment(this.descriptor, input.job.limits),
+      resources: input.job.limits,
     })
     let rawOutput
     try { rawOutput = JSON.parse(await fsp.readFile(outputPath, 'utf8')) }
@@ -401,8 +504,10 @@ module.exports = {
   EvaluatorProtocolError,
   EvaluatorRegistry,
   FileEvaluatorEntrypoint,
+  ensureOciRuntime,
   evaluationTimeoutError,
   runEntrypoint,
+  runOciEntrypoint,
   schemaIssue,
   signalProcessTree,
 }

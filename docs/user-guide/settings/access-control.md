@@ -84,7 +84,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 客户端安装承担六项核心职责：
 
-- 按目标操作系统生成可直接执行的接入命令
+- 按所选框架生成可直接执行的 Linux curl 接入命令
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
@@ -93,20 +93,16 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 ## 页面结构
 
-客户端安装页面通常由四个功能区组成：
+客户端安装页面由两个主要区域组成：
 
-1. **常驻客户端区（Agent RAS）**
-   生成带一次性令牌的安装命令，安装独立常驻客户端服务。
-2. **安装命令区**
-   按操作系统展示一键接入命令。
-3. **凭证与接入信息区**
-   展示当前 API Key、账号信息、平台地址与上报路径。
-4. **相关文档区**
-   提供 API Key、客户端接入与常见问题的辅助说明入口。
+1. **安装命令区**
+   选择框架并复制 Linux curl 接入命令；保留 LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
+2. **凭证与接入信息区**
+   展示当前 API Key、账号信息、平台地址与所选框架的上报路径。
 
-### 常驻客户端区（Agent RAS）
+### 脚本安装的常驻客户端（Agent RAS）
 
-与下方的 Trace 采集器安装是两件不同的事：
+常驻客户端由一键接入脚本安装，页面不再单独提供安装区。它与 Trace 采集器的职责不同：
 
 | | Trace 采集器 | 常驻客户端 |
 |---|---|---|
@@ -116,12 +112,10 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 | 凭证 | 账号 API Key | 设备凭证（一机一把，可单独撤销） |
 | 支持平台 | 全部 | 仅 Linux 与 macOS |
 
-点击「生成安装命令」后会得到一条带一次性令牌的命令，**令牌 10 分钟内有效且只能使用一次**；过期或已被使用时需重新生成。
-
 > **Note**
 > 安装 Trace 采集器（`/api/ingest/setup`）时会**顺带注册常驻客户端**，本机随即出现在「客户端配置」页。
 > 该步骤失败只告警不中断 —— Trace 采集照常工作，只是本机暂时无法在配置页管理；
-> 届时按下方命令单独安装即可。
+> 排除告警原因后，重新执行页面生成的一键接入命令即可。
 > 注册步骤默认安装当前 Insight 服务端随附的客户端版本，不会被执行命令目录中的旧项目副本覆盖；
 > 重跑命令会刷新注册与设备凭证，并按机器标识复用原有客户端记录。
 
@@ -142,7 +136,7 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 - **同时纳管故障注入能力** —— 本机会一并出现在「实验」与「故障注入」页面，
   无需再单独执行 FI Worker 的安装命令
 
-客户端每 30 秒完整刷新一次 Agent、模型与故障注入能力；配置变化或手动刷新也会立即重新探测。
+客户端每 30 秒完整刷新一次 Agent、模型与故障注入能力；配置变化或手动刷新也会立即重新探测。刷新发现新增、恢复或失效的 Agent Runtime 时，会同时更新 Benchmark 本地执行能力，无需重启常驻客户端。
 每轮探测使用 `~/.agent-insight/client/tmp/inventory-*` 独立临时目录并在成功、失败或超时后清理，
 安装包也暂存在同一客户端目录下，不会持续向系统 `/tmp` 遗留 OpenCode/OpenTUI 的临时 `.so`。
 
@@ -165,11 +159,10 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 
 安装命令区通常包含：
 
-- **Linux / macOS 命令**：用于 Bash 环境的一键接入
-- **Windows PowerShell 命令**：用于 PowerShell 环境的一键接入
+- **Linux curl 命令**：在 Agent 所在 Linux 主机的 Bash / Zsh 终端执行
 - **Langfuse Python SDK 环境变量**：用于已经接入 Langfuse Python SDK 或 LangChain CallbackHandler 的项目
-- **复制按钮**：用于复制对应平台命令
-- **说明提示区**：说明命令执行后通常需要输入 API Key，并完成后续初始化
+- **复制按钮**：用于复制已包含当前账号 API Key 的接入命令
+- **说明提示区**：提醒身份验证完成后再复制命令，平台地址或服务变化后应重新获取命令
 
 ### 凭证与接入信息区
 
@@ -177,7 +170,6 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 
 - **当前 API Key 面板**：展示当前账号的接入凭证，并提供复制能力
 - **接入信息面板**：展示邮箱、平台地址、API Key 状态，并根据已选框架展示实际使用的主上报通道
-- **相关文档面板**：提供 API Key、客户端配置和常见问题说明入口
 
 主上报通道会随框架选择实时变化；多选框架共用同一通道时，页面只展示一次，并在通道下列出对应框架。未选择任何框架时，页面提示将在终端中继续选择。当前三类主通道为：
 
@@ -199,7 +191,7 @@ Langfuse/LangGraph 不在上方框架选择器中，其环境变量配置区单�
 
 | 配置项 | 说明 |
 | --- | --- |
-| **安装命令** | 按目标操作系统生成的接入脚本入口，用于初始化客户端配置。 |
+| **安装命令** | 按所选框架生成的 Linux curl 接入脚本入口，已包含当前账号 API Key。 |
 | **API Key** | 当前账号的接入凭证，用于绑定上报身份与数据归属。 |
 | **平台地址** | Agent Insight 服务端地址，客户端通过该地址上报执行数据。 |
 | **当前上报通道** | 根据已选框架显示 OTLP Logs、OTLP Traces 或 JSON 会话快照入口；同一入口会自动去重。 |
@@ -218,7 +210,7 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 > **Warning**
 > 账号或平台地址切换后，应重新打开本页并复制新命令，不要复用浏览器历史、聊天记录或终端历史中的旧命令。
 > `/api/ingest/setup` 会在下发脚本前校验命令中的 API Key；Key 不属于当前服务时返回 401，
-> `curl -f` / `irm` 不会继续执行安装脚本。
+> `curl -f` 不会继续执行安装脚本。
 
 ## 操作流程
 
@@ -226,9 +218,9 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 1. 在 [Agent 概览](../agent-management) 中完成目标 Agent 登记。
 2. 进入 **客户端安装** 页面。
-3. 在安装命令区选择目标操作系统。
-4. 复制对应的一键接入命令。
-5. 在目标 Agent 所在运行环境执行该命令。
+3. 在安装命令区选择要接入的框架。
+4. 复制 **Linux** 一键接入命令。
+5. 在目标 Agent 所在 Linux 运行环境执行该命令。
 6. 脚本写入当前账号 API Key；选择 OpenCode 时同时安装普通观测插件和 Agent RAS。
 7. 触发一次最小执行。
 8. 在 [链路追踪](../observability/view-traces) 中确认首条 Trace 是否生成。
@@ -244,7 +236,7 @@ OpenCode uploader 优先复用 `~/.agent-insight/client/config.json` 中的 `cli
 
 1. 进入 **客户端安装** 页面。
 2. 等待当前账号、API Key 与平台地址显示为已就绪。
-3. 重新复制当前操作系统对应命令。
+3. 重新选择框架并复制 **Linux** 命令。
 4. 在新的运行环境执行初始化命令。
 5. 脚本校验当前 API Key，并为本机重新换发该 Host 的设备凭据。
 6. 触发一次验证执行并观察链路数据是否恢复。
@@ -327,7 +319,8 @@ Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台�
 ### 流程六：接入 Goal Plus
 
 Goal Plus 应已经安装在 Pi 中。Agent Insight 不安装或修改 Goal Plus 本体；在客户端安装页
-同时勾选 **Pi Agent** 和 **Goal Plus** 后，一键命令会配置两部分：
+只勾选 **Pi Agent** 即可。一键命令会配置 Pi 主采集器，并静默内置一个默认休眠的
+Goal Plus worker/关系观察器：
 
 - Pi Agent 采集器：上传 Pi 原生主 Trace，并上报本次 Goal Plus task 的主 Session 绑定；
 - Goal Plus collector：从 `.gp` 发现 Pi worker，上传 worker Trace、worker 绑定和主从关系。
@@ -335,18 +328,12 @@ Goal Plus 应已经安装在 Pi 中。Agent Insight 不安装或修改 Goal Plus
 配置完成后，继续在 Pi 中按原方式执行 `/goal-plus`。普通 Pi Trace 采集逻辑不变；只有真实
 Goal Plus start task 会生成主绑定，resume、pause、summary 等管理命令不会创建关系。
 
-要在主 Trace 下看到 worker，必须 attach 当前工作区的 `.gp`。在工作区根目录执行一键命令时，
-脚本会自动完成 `attach`、首次 `scan` 和 watcher 启动；否则按输出提示手工运行：
+要在主 Trace 下看到 worker，不需要手工 attach。执行真实 `/goal-plus` start 后，Pi 扩展会从
+当前工作目录（或 `GOAL_PLUS_ROOT`）定位 `.gp`，并核验 Goal ID 与当前 Pi native session 的
+start invocation；通过后自动完成 source 登记、首次 scan 和 watcher 启动。
 
-```bash
-goal-plus-collector attach /绝对路径/到/工作区/.gp
-goal-plus-collector scan
-goal-plus-collector start
-goal-plus-collector status
-```
-
-`status` 的 `ready=true` 表示 worker/关系 collector 的凭证、当前 schema、工作区和 watcher
-均已就绪。未注册 `.gp` 或该 collector 失败时，Pi 主 Trace 仍可正常出现，但 worker 不会挂到
+观察器的 `activation.status=ACTIVE` 和 `ready=true` 表示 worker/关系 collector 的凭证、当前 schema、工作区和 watcher
+均已就绪。未检测到 `.gp` 或该 collector 失败时，Pi 主 Trace 仍可正常出现，但 worker 不会挂到
 主 Trace 下。当前适配只接受重构后的 `agent_harness`、`runtime_provider`、`execution_scope`、
 `session_handle` 格式，不兼容旧 `host` / `host_handle` 格式。
 

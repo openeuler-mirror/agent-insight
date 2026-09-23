@@ -210,6 +210,10 @@ cd agent-insight
 bash scripts/start.sh
 ```
 
+默认使用 `~/.agent-insight/data/witty_insight.db`；如需自定义数据库路径，可在 `~/.agent-insight/.env` 中设置 `DATABASE_URL="file:/absolute/path/to/witty_insight.db"`。
+
+如需安装和配置 SWE-bench 等 Benchmark，请参阅[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)。
+
 **停止服务**
 
 如果需要停止运行，在工作目录下执行以下命令。该脚本将安全关闭 Next.js 服务端及所有相关的后台子进程：

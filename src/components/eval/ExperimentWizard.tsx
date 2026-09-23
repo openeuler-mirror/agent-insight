@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { TextEvaluatorConfigDialog } from '@/components/eval/TextEvaluatorConfigDialog';
+import { RuntimeModelSelect } from '@/components/eval/RuntimeModelSelect';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import {
@@ -33,6 +34,7 @@ import {
   MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
   isValidExperimentAgentTimeoutSeconds,
 } from '@/lib/engine/experiment/constants';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
@@ -65,6 +67,7 @@ interface AgentTargetOption {
   host: string;
   hostname: string | null;
   platform: string;
+  agent: string;
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
   supportsGenericTrace: boolean;
@@ -116,6 +119,8 @@ interface SelectedCase {
   faultInjectionType?: string | null;
   externalCaseId?: string;
   values?: Record<string, unknown>;
+  datasetId?: string;
+  datasetCaseId?: string;
 }
 
 interface DatasetOption {
@@ -230,6 +235,8 @@ function generationCasesFromDataset(dataset: DatasetOption | null): SelectedCase
         ...(item.evaluationFocus ? { trigger_rationale: item.evaluationFocus } : {}),
         ...(fault ? { fault_injection_type: fault } : {}),
       },
+      datasetId: dataset?.id,
+      datasetCaseId: item.id,
     };
   });
 }
@@ -780,7 +787,6 @@ export function ExperimentWizard({
         ? detail.reusableConfig as Record<string, unknown>
         : {};
       const restoredDatasetId = typeof config.datasetId === 'string' ? config.datasetId : '';
-      const restoredAgentName = typeof config.agentName === 'string' ? config.agentName : '';
       const restoredTraceSource = config.traceSource === 'generate' ? 'generate' : 'existing';
       const restoredEvaluators = Array.isArray(config.evaluatorIds)
         ? config.evaluatorIds.map(String).filter(Boolean)
@@ -791,6 +797,10 @@ export function ExperimentWizard({
       const restoredTarget = config.executionTarget && typeof config.executionTarget === 'object'
         ? config.executionTarget as Record<string, unknown>
         : {};
+      const restoredAgentName = canonicalExperimentAgentName(
+        String(restoredTarget.platform || ''),
+        typeof config.agentName === 'string' ? config.agentName : '',
+      );
       setName(`${String(detail?.name || '实验')} · 复用评测配置`);
       setAgentName(restoredAgentName);
       setTraceMode(restoredTraceSource);
@@ -1065,6 +1075,8 @@ export function ExperimentWizard({
         ...(datasetCase.values || {}),
         ...(datasetCase.evaluationFocus ? { trigger_rationale: datasetCase.evaluationFocus } : {}),
       },
+      datasetId: selectedDataset?.id,
+      datasetCaseId: datasetCase.id,
     };
   };
 
@@ -1227,6 +1239,21 @@ export function ExperimentWizard({
           const c = next.get(key);
           if (c) next.set(key, { ...c, datasetInput });
         }
+        for (const [key, c] of next) {
+          const datasetCase = findBestDatasetInputMatch(c.input, ds.cases || []);
+          const referenceOutput = result.updates[key] ?? c.referenceOutput;
+          if (
+            datasetCase?.id
+            && normalizeDatasetInput(referenceOutput) === normalizeDatasetInput(datasetCase.expectedOutput)
+          ) {
+            next.set(key, {
+              ...c,
+              referenceOutput,
+              datasetId: ds.id,
+              datasetCaseId: datasetCase.id,
+            });
+          }
+        }
         return next;
       });
       setDatasetHint(describeMatchResult(result));
@@ -1379,6 +1406,8 @@ export function ExperimentWizard({
         evaluatorContext: c.evaluatorContext,
         faultInjectionType: c.faultInjectionType || undefined,
         values: c.values,
+        datasetId: c.datasetId,
+        datasetCaseId: c.datasetCaseId,
       }));
       const selectedEvaluatorConfigs = Object.fromEntries(
         Object.entries(evaluatorConfigs).filter(([id]) => selectedEvaluators.has(id)),
@@ -1479,6 +1508,7 @@ export function ExperimentWizard({
           executionTarget: traceMode === 'generate' && selectedTarget ? {
             workerId: selectedTarget.workerId,
             platform: selectedTarget.platform,
+            agent: selectedTarget.agent,
             model: genModel || null,
           } : undefined,
           agentTimeoutSeconds,
@@ -1507,6 +1537,7 @@ export function ExperimentWizard({
               executionTarget: traceMode === 'generate' && selectedTarget ? {
                 workerId: selectedTarget.workerId,
                 platform: selectedTarget.platform,
+                agent: selectedTarget.agent,
                 model: genModel || null,
                 timeoutSeconds: agentTimeoutSeconds,
               } : null,
@@ -1559,7 +1590,7 @@ export function ExperimentWizard({
             generateTrace: {
               workerId: selectedTarget.workerId,
               platform: selectedTarget.platform,
-              agent: agentName,
+              agent: selectedTarget.agent,
               model: genModel || null,
               timeoutSeconds: agentTimeoutSeconds,
             },
@@ -2014,12 +2045,9 @@ export function ExperimentWizard({
                   </select>
                 </div>
                 <div>
-                  <label style={FIELDLBL}>运行模型 *</label>
-                  <select style={{ ...INPUT, cursor: 'pointer' }} value={genModel} onChange={(e) => setGenModel(e.target.value)}>
-                    {(selectedTarget?.models || [{ id: '', label: '平台默认' }]).map((model) => (
-                      <option key={model.id || '__default__'} value={model.id}>{model.label || model.id || '平台默认'}</option>
-                    ))}
-                  </select>
+                  <label htmlFor="experiment-runtime-model" style={FIELDLBL}>运行模型 *</label>
+                  <RuntimeModelSelect key={effectiveTargetKey} id="experiment-runtime-model"
+                    models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                 </div>
                 {skillPreset !== 'trigger' && (
                   <AgentTimeoutField

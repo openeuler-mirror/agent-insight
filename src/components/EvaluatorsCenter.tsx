@@ -130,6 +130,7 @@ export default function EvaluatorsCenter() {
   const [customCreate, setCustomCreate] = useState<null | 'llm'>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [loading, setLoading] = useState(true);
+  const [reloadVersion, setReloadVersion] = useState(0);
   const [error, setError] = useState('');
   /** 详情弹窗当前查看的卡片（预置 / 自建通用） */
   const [inspectCard, setInspectCard] = useState<EvaluatorCard | null>(null);
@@ -218,7 +219,7 @@ export default function EvaluatorsCenter() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, reloadVersion]);
 
   useEffect(() => {
     if (!user || !evaluatorsHydrated) return;
@@ -370,7 +371,7 @@ export default function EvaluatorsCenter() {
         </div>
         {activeTab === 'preset' && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button type="button" className="ai-btn-s" onClick={() => window.location.reload()}>
+            <button type="button" className="ai-btn-s" onClick={() => setReloadVersion(version => version + 1)}>
               刷新
             </button>
           </div>
@@ -427,7 +428,7 @@ export default function EvaluatorsCenter() {
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button type="button" className="ai-btn-s" title="刷新" onClick={() => window.location.reload()}>
+              <button type="button" className="ai-btn-s" title="刷新" onClick={() => setReloadVersion(version => version + 1)}>
                 ↻
               </button>
               <button
@@ -459,7 +460,7 @@ export default function EvaluatorsCenter() {
                   activeTab={activeTab}
                   onInspect={setInspectCard}
                   activeModel={activeModel}
-                  onModelConfigClick={() => router.push('/modelconfig/defaults')}
+                  onModelConfigClick={() => router.push('/modelconfig')}
                   onDeleteCustom={deleteCustomEvaluator}
                 />
               ))}
@@ -542,7 +543,7 @@ export default function EvaluatorsCenter() {
                     activeTab={activeTab}
                     onInspect={setInspectCard}
                     activeModel={activeModel}
-                    onModelConfigClick={() => router.push('/modelconfig/defaults')}
+                    onModelConfigClick={() => router.push('/modelconfig')}
                     onDeleteCustom={deleteCustomEvaluator}
                   />
                 ))}

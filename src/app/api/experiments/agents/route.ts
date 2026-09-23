@@ -7,6 +7,7 @@ import { listWorkerExecutionTargets } from '@/lib/fault-injection/worker-protoco
 import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
 import { listBenchmarkAdapters } from '@/lib/benchmark/adapter-registry';
 import { listBenchmarkExecutionTargets } from '@/lib/benchmark/execution-targets';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,7 +58,8 @@ export async function GET(req: Request) {
     };
     const byName = new Map<string, Candidate>();
     for (const row of grouped) {
-      const name = String(row.agentName || '').trim();
+      const framework = String(row.framework || '').trim();
+      const name = canonicalExperimentAgentName(framework, String(row.agentName || ''));
       if (!name) continue;
       const current = byName.get(name) || {
         name,
@@ -66,7 +68,6 @@ export async function GET(req: Request) {
         targets: [],
       };
       current.traces += row._count.agentName;
-      const framework = String(row.framework || '').trim();
       if (framework) current.frameworks.add(framework);
       byName.set(name, current);
     }
@@ -74,7 +75,7 @@ export async function GET(req: Request) {
       target: (typeof faultInjectionTargets)[number],
       capability: 'generic' | 'fault-injection',
     ) => {
-      const name = target.agent.trim();
+      const name = canonicalExperimentAgentName(target.platform, target.agent);
       if (!name || name === 'ras-judge') return;
       const current = byName.get(name) || {
         name,
@@ -114,7 +115,7 @@ export async function GET(req: Request) {
         const matchingBenchmarks = benchmarkTargets.filter((item) => (
           item.clientId === target.workerId
           && item.platform === target.platform
-          && item.agents.includes(candidate.name)
+          && item.agents.includes(target.agent)
         ));
         if (!matchingBenchmarks.length) continue;
         for (const benchmark of matchingBenchmarks) {
@@ -142,6 +143,7 @@ export async function GET(req: Request) {
           host: target.host,
           hostname: target.hostname,
           platform: target.platform,
+          agent: target.agent,
           models: target.models,
           lastSeenAt: target.lastSeenAt,
           supportsGenericTrace: target.supportsGenericTrace,

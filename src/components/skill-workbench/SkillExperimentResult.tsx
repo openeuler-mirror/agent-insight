@@ -408,13 +408,17 @@ export function SkillExperimentResult({
 
   const isAb = detail.preset === 'skill-ab';
   const isTrigger = detail.preset === 'trigger';
-  const experimentSettled = ['done', 'failed', 'cancelled'].includes(detail.status);
+  const experimentSettled = ['done', 'partial', 'failed', 'cancelled'].includes(detail.status);
   const abRunsComplete = abProgress.aDone >= abProgress.aTotal && abProgress.bDone >= abProgress.bTotal;
   const resultRowsComplete = detail.evaluationProgress
     ? detail.evaluationProgress.pending === 0
     : detail.progress.pending === 0;
-  const isDone = detail.status === 'done' && resultRowsComplete && (!isAb || abRunsComplete);
-  const displayStatus = detail.status === 'done' && !isDone ? 'running' : detail.status;
+  const isDone = ['done', 'partial'].includes(detail.status)
+    && resultRowsComplete
+    && (!isAb || abRunsComplete);
+  const displayStatus = ['done', 'partial'].includes(detail.status) && !isDone
+    ? 'running'
+    : detail.status;
   const total = detail.executionProgress?.total || (isAb
     ? abProgress.aTotal + abProgress.bTotal
     : detail.traceProgress?.total || detail.progress.total || detail.caseTotal);

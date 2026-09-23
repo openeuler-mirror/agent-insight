@@ -116,6 +116,12 @@ test('admin installs one shared dataset, optionally removes the source, and safe
   assert.equal(imported.caseCount, 1)
   assert.equal(imported.sourceDeleted, true)
   assert.equal(fs.existsSync(sourcePath), false)
+  const installed = await admin.findInstalledSystemBenchmarkDataset({
+    benchmarkKey: 'fixture-dataset',
+    profileKey: 'default',
+  })
+  assert.equal(installed?.id, imported.id)
+  assert.equal(installed?.caseCount, 1)
 
   const dataset = await prismaModule.prisma.benchmarkDataset.findUnique({ where: { id: imported.id } })
   assert.equal(dataset?.user, ownership.SYSTEM_BENCHMARK_DATASET_OWNER)
@@ -210,6 +216,10 @@ test('admin installs one shared dataset, optionally removes the source, and safe
   assert.equal(archived.action, 'archived')
   const archivedDataset = await prismaModule.prisma.benchmarkDataset.findUnique({ where: { id: referenced.id } })
   assert.equal(archivedDataset?.status, 'archived')
+  assert.equal(await admin.findInstalledSystemBenchmarkDataset({
+    benchmarkKey: 'fixture-dataset',
+    profileKey: 'default',
+  }), null)
 
   const invalidPath = path.join(testDir, 'invalid.json')
   fs.writeFileSync(invalidPath, JSON.stringify([]))

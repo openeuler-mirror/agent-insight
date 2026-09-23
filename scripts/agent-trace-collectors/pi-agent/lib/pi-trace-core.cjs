@@ -68,11 +68,34 @@ function loadCollectorConfig(options = {}) {
     endpoint,
     collaborationSessionsEndpoint,
     collaborationEventsEndpoint,
+    goalPlusObserverEnabled: file.goalPlusObserverEnabled === true,
+    goalPlusObserverConfigPath: file.goalPlusObserverConfigPath,
     configPath,
     homeDir,
     uploadIntervalMs: Number(file.uploadIntervalMs) || 5 * 60 * 1000,
     shutdownTimeoutMs: Math.min(2500, Math.max(100, Number(file.shutdownTimeoutMs) || 2200)),
   };
+}
+
+function resolveGoalPlusRuntimeRoot(cwd, env = process.env) {
+  const workingDirectory = path.resolve(String(cwd || process.cwd()));
+  const configured = String(env.GOAL_PLUS_ROOT || "").trim();
+  if (!configured) return path.join(workingDirectory, ".gp");
+  return path.isAbsolute(configured)
+    ? path.resolve(configured)
+    : path.resolve(workingDirectory, configured);
+}
+
+async function activateGoalPlusObserver(request, config) {
+  const collector = require("../../goal-plus/goal-plus-collector.cjs");
+  const goalPlusConfig = await collector.loadConfig({
+    homeDir: config.homeDir,
+    configPath: config.goalPlusObserverConfigPath,
+  });
+  return collector.activateGoalPlusSource(request.root, {
+    goalId: request.goalId,
+    nativeSessionId: request.nativeSessionId,
+  }, goalPlusConfig);
 }
 
 function messageText(message) {
@@ -264,15 +287,24 @@ class PiTraceCollector {
     this.lastOutput = "";
     this.errors = [];
     this.relationshipPending = Promise.resolve();
+    this.goalPlusActivator = options.goalPlusActivator || activateGoalPlusObserver;
+    this.goalPlusActivationPending = Promise.resolve();
+    this.goalPlusActivated = new Set();
+    this.runtimeCwd = process.cwd();
   }
 
-  startSession(sessionId) {
+  updateRuntimeContext(ctx) {
+    if (typeof ctx?.cwd === "string" && ctx.cwd.trim()) this.runtimeCwd = path.resolve(ctx.cwd);
+  }
+
+  startSession(sessionId, ctx) {
     // Pi 的 sessionId 在整个交互会话内保持不变；若多个 agent 任务共享同一
     // sessionId，服务端会把多任务事件聚合成一条 ExecutionRecord 并相互覆盖。
     // 这里保存基 sessionId，并在 beginAgent 时为每个任务派生独立子 sessionId。
     this.baseSessionId = String(sessionId);
     this.sessionId = String(sessionId);
     this.traceId = stableTraceId("pi-agent", this.sessionId);
+    this.updateRuntimeContext(ctx);
     this.uploader.start(this.config.uploadIntervalMs);
   }
 
@@ -281,8 +313,9 @@ class PiTraceCollector {
     this.rawInput = String(text || "");
   }
 
-  recordContext(messages) {
+  recordContext(messages, ctx) {
     if (!this.currentAgent) return;
+    this.updateRuntimeContext(ctx);
     const goalPlusId = goalPlusStartIdFromContext(messages)
       || (this.currentAgent.goalPlusStart ? goalPlusCreatedIdFromCurrentContext(messages) : undefined);
     if (!goalPlusId) return;
@@ -298,6 +331,7 @@ class PiTraceCollector {
   }
 
   beginAgent(event, ctx) {
+    this.updateRuntimeContext(ctx);
     if (!this.sessionId) this.startSession(ctx.sessionManager.getSessionId());
     // 每个 agent 任务独立 sessionId（基于 Pi 会话 sessionId + agent 序号），
     // 使服务端按 session 聚合出独立 ExecutionRecord，避免多任务相互覆盖。
@@ -321,6 +355,7 @@ class PiTraceCollector {
       provider: ctx.model?.provider || this.currentModel?.provider,
       goalPlusStart: isGoalPlusStartCommand(this.rawInput),
       goalPlusBindingQueued: false,
+      goalPlusId: undefined,
     };
     if (this.currentAgent.goalPlusStart) {
       const goalPlusId = structuredGoalPlusId(event) || goalPlusIdFromStartPrompt(event.prompt);
@@ -455,11 +490,35 @@ class PiTraceCollector {
   }
 
   queueGoalPlusMainBinding(goalPlusId) {
-    if (!this.currentAgent?.goalPlusStart || this.currentAgent.goalPlusBindingQueued || !this.baseSessionId) return;
+    if (!this.currentAgent?.goalPlusStart || !this.baseSessionId) return;
+    this.currentAgent.goalPlusId = goalPlusId;
+    this.queueGoalPlusActivation(goalPlusId);
+    if (this.currentAgent.goalPlusBindingQueued) return;
     this.currentAgent.goalPlusBindingQueued = true;
     const binding = goalPlusMainBinding(this.baseSessionId, goalPlusId, this.sessionId);
     this.relationshipPending = this.relationshipPending
-      .then(() => this.relationshipOutbox.enqueueSession(binding))
+      .then(async () => {
+        await this.relationshipOutbox.enqueueSession(binding);
+        await this.relationshipOutbox.flushOnce();
+      })
+      .catch((error) => this.errors.push(error));
+  }
+
+  queueGoalPlusActivation(goalPlusId) {
+    if (this.config.goalPlusObserverEnabled !== true || !this.baseSessionId || !goalPlusId) return;
+    const root = resolveGoalPlusRuntimeRoot(this.runtimeCwd);
+    const key = [root, goalPlusId, this.baseSessionId].join("\0");
+    if (this.goalPlusActivated.has(key)) return;
+    this.goalPlusActivationPending = this.goalPlusActivationPending
+      .then(async () => {
+        if (this.goalPlusActivated.has(key)) return;
+        await this.goalPlusActivator({
+          root,
+          goalId: goalPlusId,
+          nativeSessionId: this.baseSessionId,
+        }, this.config);
+        this.goalPlusActivated.add(key);
+      })
       .catch((error) => this.errors.push(error));
   }
 
@@ -635,6 +694,7 @@ class PiTraceCollector {
     if (!this.currentAgent) return;
     const endedAt = this.now();
     const agent = this.currentAgent;
+    if (agent.goalPlusId) this.queueGoalPlusActivation(agent.goalPlusId);
     for (const skill of this.activeSkills) {
       const details = await skill.detailsPromise;
       this.append({
@@ -690,6 +750,10 @@ class PiTraceCollector {
     if (this.currentAgent) await this.settleAgent();
     await this.writer.flush();
     await this.relationshipPending;
+    await Promise.race([
+      this.goalPlusActivationPending,
+      new Promise((resolve) => setTimeout(resolve, this.config.shutdownTimeoutMs)),
+    ]);
     const upload = Promise.all([
       this.uploader.flushOnce(),
       this.relationshipOutbox.flushOnce(),
@@ -758,6 +822,7 @@ module.exports = {
   loadCollectorConfig,
   messageText,
   parseMcpIdentity,
+  resolveGoalPlusRuntimeRoot,
   selfCheck,
   structuredGoalPlusId,
   goalPlusIdFromStartPrompt,

@@ -20,16 +20,37 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 
 ## 管理员导入 Benchmark 数据集
 
-数据文件可放在服务器上的任意可读目录。Benchmark 接入包和数据库准备完成后执行一次：
+SWE-bench Verified 随 Agent Insight 服务启动完成准备和导入。持续启用时，在 `~/.agent-insight/.env` 中配置：
 
-```bash
-npx tsx scripts/benchmark/install-dataset.ts \
-  --benchmark swe-bench \
-  --profile verified \
-  --source /path/to/test.parquet
+```dotenv
+AGENT_INSIGHT_BENCHMARK=swe-bench
 ```
 
-导入成功后数据已进入数据库，所有用户共享读取，服务重启不需要重新导入。默认保留原文件；增加 `--delete-source-after-import` 可在成功校验后删除它。
+之后使用统一启动命令：
+
+```bash
+bash scripts/start.sh
+```
+
+也可用 `bash scripts/start.sh --benchmark swe-bench` 仅对本次启动临时启用，命令行优先于环境配置。
+
+首次执行会自动下载并校验固定版本的官方源码与 Verified 数据文件、创建隔离 Python 环境、导入 500 条 Case，然后启动服务。后续启动先检查数据库，数据集已经存在时会跳过全部准备和导入步骤。网络受限时，可在同一配置文件中设置内网镜像地址：
+
+```dotenv
+SWE_BENCH_DATASET_SOURCE=http://intranet.example/swe-bench/test.parquet
+SWE_BENCH_SOURCE_ARCHIVE_SOURCE=http://intranet.example/swe-bench/source.tar.gz
+```
+
+这两项也可以直接填写本机文件路径：
+
+```dotenv
+SWE_BENCH_DATASET_SOURCE="/srv/datasets/test.parquet"
+SWE_BENCH_SOURCE_ARCHIVE_SOURCE="/srv/datasets/source.tar.gz"
+```
+
+路径是 Agent Insight 服务所在机器上的路径，推荐使用绝对路径。本机文件与下载文件均按固定的官方 SHA-256 校验；本机文件缺失或校验失败会停止准备，不覆盖原文件。两项留空时使用官方来源，已安装的数据集和可用的受管缓存优先复用。Python 依赖首次安装仍需要可用的 pip 软件源，或通过 `SWE_BENCH_PYTHON` 指定已有环境。
+
+旧的 `SWE_BENCH_DATASET_PATH`、`SWE_BENCH_DATASET_URL` 和 `SWE_BENCH_SOURCE_ARCHIVE_URL` 暂时兼容；新变量存在时优先使用新变量，显式留空表示使用官方来源。
 
 数据项列名、顺序、宽度、截断和展示格式在导入时按 Benchmark 接入包冻结。不同 Benchmark 可以展示不同业务列，页面不会补充固定的仓库、版本等字段。接入包后续只修改展示配置时，不会静默改变已发布数据集；管理员可显式刷新字段定义（不会重新导入 Case）：
 
@@ -85,6 +106,7 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 - **搜索名称**：按评测集名称筛选卡片，用于在大量数据集中快速定位。
 - **刷新**：重新拉取最新状态与统计信息。
 - **新建评测集**：打开新建面板，创建评测集定义。
+- **导入本地文件**：从新建菜单选择本地 `.json` 或 `.csv` 文件，并打开导入预览。
 - **数据集卡片**：展示名称、字段标签、状态标签、数据量、评测状态与更新时间；点击卡片进入对应的 **数据项** 页。
 - **编辑信息**：修改评测集的名称、描述与类型定义。
 - **删除**：删除当前评测集及其数据项。
@@ -133,6 +155,7 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 
 > **Note**
 > `reference_output` 是可选的预期输出字段。没有该字段或字段值为空不影响样本保存；只有依赖预期输出的评测指标会缺少对比基线。
+> 新增样本或修改预期输出时，系统会缓存从预期输出提取的关键观点。历史样本没有有效缓存时，无论从“实验”还是已有 Trace 评测入口运行任务完成度评测，系统都会实时提取并在成功后回写当前样本；无关的数据集编辑不会批量处理全部历史数据。非空预期输出如果没有拆出独立观点，会把完整预期输出作为一个兜底观点，避免短答案无法参与任务完成度评测。
 
 ## 维护数据项
 
@@ -152,7 +175,7 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 
 1. 打开目标数据集卡片，或在保存评测集后停留在跳转页。
 2. 确认页面顶部显示评测集名称、状态标签与数据项数量。
-3. 如需扩展数据结构，点击 **新增字段**，填写字段名称、key 和类型。
+3. 如需扩展数据结构，点击 **新增字段**，填写字段名称并选择类型；内部 key 由系统自动生成。
 4. 点击 **单个添加** 录入单条样例。
 5. 点击 **批量导入** 一次写入多条样例。
 6. 点击 **编辑** 修改该条样本的任意字段值。
@@ -168,8 +191,8 @@ npx tsx scripts/benchmark/remove-dataset.ts --dataset <dataset-id>
 - **顶部信息区**：显示 **返回**、评测集名称、状态标签、评测集类型、更新时间与总数据项数。
 - **数据项表格**：按照当前数据集字段动态展示列。
 - **故障模式说明**：仅可靠性评测集显示；按当前数据集实际使用的故障模式和子模式说明注入逻辑，不展示具体触发文本等实现细节。
-- **新增字段**：填写唯一的字段名称并选择文本、数字、布尔值或 JSON 类型；系统自动生成内部标识。已有样本在新字段下显示为空，可逐条补充。
-- **单个添加**：逐条录入样例，适合补充关键案例或修订单条数据。
+- **新增字段**：填写唯一的字段名称并选择文本、数字、布尔值或 JSON 类型；系统自动生成内部标识。取消后再次打开时使用空白表单；已有样本在新字段下显示为空，可逐条补充。
+- **单个添加**：逐条录入样例，适合补充关键案例或修订单条数据；至少填写一个字段才能保存，数字 `0` 和布尔值 `false` 均视为有效值。
 - **批量导入**：通过 JSON、CSV 文本或文件上传一次写入多条数据项。
 - **编辑**：更新单条数据项的所有字段值，包括自定义字段。
 - **删除**：移除错误、重复或失效的样例。

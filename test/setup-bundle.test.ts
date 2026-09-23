@@ -9,6 +9,7 @@ import { GET } from '@/app/api/ingest/setup/bundle/route'
 
 const repositoryRoot = path.resolve(__dirname, '..')
 const clientFiles = [
+  'scripts/agent-insight-home.cjs',
   'scripts/install-ras-client.js',
   'scripts/reliability-client.cjs',
   'scripts/ws-client.cjs',
@@ -47,7 +48,14 @@ test('standalone cwd still serves complete client and RAS archives from the pack
 
   for (const [name, required] of [
     ['client', clientFiles],
-    ['ras', ['scripts/install-ras.js', 'agent_ras/platform_adapter/opencode/plugin.js']],
+    ['ras', [
+      'scripts/agent-insight-home.cjs',
+      'scripts/install-ras.js',
+      'scripts/xiaoo-trace-collector/install.js',
+      'scripts/xiaoo-trace-collector/manifest.js',
+      'scripts/xiaoo-trace-collector/otel_spans.py',
+      'agent_ras/platform_adapter/opencode/plugin.js',
+    ]],
   ] as const) {
     const response = await GET(new Request(`http://localhost/api/ingest/setup/bundle?name=${name}`))
     assert.equal(response.status, 200)
@@ -87,7 +95,10 @@ test('an existing RAS installer alone cannot produce a successful RAS bundle', a
   fs.writeFileSync(path.join(temporary, 'scripts/install-ras.js'), 'fixture')
   const response = await GET(new Request('http://localhost/api/ingest/setup/bundle?name=ras'))
   assert.equal(response.status, 503)
-  assert.deepEqual((await response.json()).missing, ['agent_ras'])
+  assert.deepEqual(
+    (await response.json()).missing,
+    ['scripts/agent-insight-home.cjs', 'scripts/xiaoo-trace-collector', 'agent_ras'],
+  )
 })
 
 test('bundle whitelist and authentication still apply with a configured package root', async (t) => {

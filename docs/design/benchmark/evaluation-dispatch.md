@@ -198,7 +198,6 @@ type EvaluatorTarget = {
   targetKey: string
   baseUrl: string
   evaluatorKey: string
-  token?: string
   configRevision?: string
 }
 
@@ -215,30 +214,23 @@ class EnvEvaluatorTargetResolver implements EvaluatorTargetResolver {}
 
 ```dotenv
 # Agent Insight → 评测服务；本机开发先这样配置
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=http://127.0.0.1:8080
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=token
-
-# 两个服务共同配置的随机凭证；不进入任务 JSON
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<random-secret>
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=
-
-# 已有变量；评测服务跨机器时必须是对方可访问的 Agent Insight 地址
-AGENT_INSIGHT_PUBLIC_BASE_URL=http://127.0.0.1:3000
+AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=http://127.0.0.1:3001
 
 # 可选；仅在执行器需要使用不同本地入口时设置
 AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=http://127.0.0.1:3000
 
-# 仅限内网开发联调；默认 false
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=false
+# 受控白名单网络默认允许 HTTP；设为 false 可强制非回环 Evaluator 使用 HTTPS
+AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=true
 ```
 
 规则：
 
 - 未配置评测地址时，合法提交仍可形成 `Evaluation(queued)`，调度停在 `EVALUATOR_NOT_CONFIGURED`；
+- Agent Insight 从实验启动请求的 `Host` / `X-Forwarded-*` 推导并冻结任务协议中的平台回调地址，不再读取 `AGENT_INSIGHT_PUBLIC_BASE_URL`；
 - URL 必须是绝对 `http/https`，拒绝用户名、密码、query 和 fragment；禁止重定向；
-- HTTP 只默认允许 loopback；跨机器部署应使用 HTTPS。内网临时联调若要 HTTP，必须显式设置 `AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=true`；
+- 默认允许受控白名单网络中的 HTTP；显式设置 `AGENT_INSIGHT_BENCHMARK_EVALUATOR_ALLOW_INSECURE_HTTP=false` 后，非回环 Evaluator 必须使用 HTTPS；
 - 首次实际下发时把解析出的 `targetKey + baseUrl` 冻结到 Evaluation，之后重发继续使用原地址；配置变化只影响尚未绑定目标的新评测；
-- `token` 为默认模式，当前 Token 用于新任务，宽限期 Token 只用于接受旧任务回调；`none` 模式只有在双向网络边界已经隔离时才能使用；
+- `none` 为默认模式，依赖双向网络边界隔离；显式 `token` 时，当前 Token 用于新任务，宽限期 Token 只用于接受旧任务回调；
 - 执行器任务默认使用 Public Base URL 回调；设置可选 Executor Callback Base URL 后只覆盖新建执行 Outbox，Evaluator 仍使用实验绑定中的公开地址；
 - 将来需要多个评测服务时增加 `RegisteredEvaluatorTargetResolver`，步骤 08、09 和 Adapter 不变。
 
@@ -328,7 +320,6 @@ BenchmarkEvaluationDispatchOutbox
 
 ```http
 GET {evaluatorBaseUrl}/health
-Authorization: Bearer <configured-token>  # authMode=token 时
 ```
 
 健康响应只校验服务状态、busy 和 `swe-bench` 是否 ready，不检查评估器业务版本。最近 30 秒已有健康结果时可跳过重复检查。
@@ -343,7 +334,6 @@ Authorization: Bearer <configured-token>  # authMode=token 时
 
 ```http
 POST {evaluatorBaseUrl}/api/v1/evaluations
-Authorization: Bearer <configured-token>  # authMode=token 时
 Idempotency-Key: <evaluationRunId>
 X-Agent-Insight-Request-Digest: sha256:...
 Content-Type: application/json
@@ -378,7 +368,7 @@ Content-Type: application/json
 - `422 EVALUATION_JOB_INVALID/EVALUATOR_NOT_READY`：结构错误永久失败，未就绪可按服务响应的 `retryable` 标记延迟重试；
 - 用户显式只重评时创建新的 `evaluationRunId`，绝不修改旧运行。
 
-评测服务随后使用同一认证模式和 `evaluationRunId` 调用 Artifact 下载、progress、artifacts、complete API。`token` 模式使用恒定时间比较验证当前或宽限期凭证；凭证只出现在 HTTP Header，不进入 Outbox、日志或 Harness 输入。`none` 模式省略 Authorization，但不替代防火墙。平台必须验证目标 Evaluation 的 `requestJson` 确实引用了该 Artifact；服务凭证不能传入 Harness 容器。
+评测服务随后使用 `evaluationRunId` 调用 Artifact 下载、progress、artifacts、complete API；这些接口不发送或校验 Authorization，必须部署在白名单、安全组或防火墙限制的受控网络内。平台仍验证目标 Evaluation 的 `requestJson` 确实引用了该 Artifact，Harness 容器不获得额外平台凭证。
 
 ## 8. 代码落点与验收
 

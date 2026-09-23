@@ -124,8 +124,8 @@ interface Execution {
     model?: string;
     label?: string;
     is_evaluating?: boolean;
-    trace_status?: 'running' | 'success' | 'failed' | string | null;
-    traceStatus?: 'running' | 'success' | 'failed' | string | null;
+    trace_status?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
+    traceStatus?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
     trace_completed_at?: string | null;
     traceCompletedAt?: string | null;
     trace_status_reason?: string | null;
@@ -228,9 +228,9 @@ function getInvokedSkillNames(execution: Execution): string[] {
     return Array.from(names);
 }
 
-function getExecStatus(e: Execution): 'running' | 'success' | 'failed' {
+function getExecStatus(e: Execution): 'running' | 'success' | 'failed' | 'timed_out' {
     const status = String(e.trace_status ?? e.traceStatus ?? '').trim().toLowerCase();
-    if (status === 'running' || status === 'success' || status === 'failed') return status;
+    if (status === 'running' || status === 'success' || status === 'failed' || status === 'timed_out') return status;
     return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
 }
 
@@ -535,6 +535,11 @@ function TracePageContent() {
         };
     }, [user]);
 
+    const handleExecutionRefresh = useCallback((latest: Execution) => {
+        setSelectedExecution(previous => previous?.task_id === latest.task_id ? latest : previous);
+        setData(previous => previous.map(item => item.upload_id === latest.upload_id ? latest : item));
+    }, []);
+
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
     const [anomalyFilter, setAnomalyFilter] = useQueryState('status', parseAsString.withDefault('all'));
@@ -733,6 +738,7 @@ function TracePageContent() {
         }
         const exec = data.find(e => e.task_id === taskIdParam || e.upload_id === taskIdParam);
         if (exec) {
+            fetchGuardRef.current = null;
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
@@ -955,6 +961,7 @@ function TracePageContent() {
         { value: 'running', label: t('tracePage.statusRunning') },
         { value: 'success', label: t('tracePage.statusSuccess') },
         { value: 'failed', label: t('tracePage.statusFailed') },
+        { value: 'timed_out', label: t('tracePage.statusTimedOut') },
     ];
     const reliabilityAnomalyOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },
@@ -998,6 +1005,7 @@ function TracePageContent() {
                     <TraceDetailView
                         key={selectedExecution.task_id || selectedExecution.upload_id}
                         execution={selectedExecution}
+                        onExecutionRefresh={handleExecutionRefresh}
                         onBack={() => handleSelectExecution(null)}
                         availableTags={availableTags}
                         onTagsChanged={handleTraceTagsChanged}
@@ -1102,7 +1110,7 @@ function TracePageContent() {
                                 active={agentScopeFilter !== 'root'}
                             />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto h-7 gap-1 text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={resetFilters} className="h-7 gap-1 text-xs text-foreground-muted">
                                     <XIcon className="size-3" />
                                     {t('tracePage.resetFilters')}
                                 </Button>
@@ -1389,12 +1397,14 @@ function TracePageContent() {
 
 function TraceDetailView({
     execution,
+    onExecutionRefresh,
     onBack,
     availableTags,
     onTagsChanged,
     onTagCreated,
 }: {
     execution: Execution;
+    onExecutionRefresh: (execution: Execution) => void;
     onBack: () => void;
     availableTags: TraceUserTag[];
     onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
@@ -1435,7 +1445,7 @@ function TraceDetailView({
     }, [parentExecutionId, navigateToTaskId]);
 
     const execStatus = getExecStatus(execution);
-    const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running');
+    const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running' || execStatus === 'timed_out');
     const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
     const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
     const [rasMarkers, setRasMarkers] = useState<any[]>([]);
@@ -1466,19 +1476,30 @@ function TraceDetailView({
         if (!taskId) return;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskId)}&fields=light&includeTags=1&includeEvaluations=0&skipAutoEvalReady=1`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(response => response.ok ? response.json() : null)
+            .then(records => { if (Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
+            .catch(() => {});
         apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => { setSession(j); setSecondsSinceRefresh(0); })
             .catch(() => { if (!silent && isInitial) setSession({ error: 'Network error' }); })
             .finally(() => { if (!silent && isInitial) setLoading(false); });
-    }, [taskId, apiKey]);
+    }, [taskId, apiKey, onExecutionRefresh]);
 
     useEffect(() => { fetchSession(false); }, [fetchSession]);
 
     useEffect(() => {
-        if (!autoRefresh || execStatus !== 'running') return;
-        const id = setInterval(() => fetchSession(true), refreshIntervalSec * 1000);
-        return () => clearInterval(id);
+        if (!autoRefresh || (execStatus !== 'running' && execStatus !== 'timed_out')) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible') fetchSession(true);
+        };
+        const id = window.setInterval(refreshWhenVisible, refreshIntervalSec * 1000);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(id);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
     }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus]);
 
     useEffect(() => {
@@ -1520,7 +1541,7 @@ function TraceDetailView({
     const cost = typeof latestExecution?.cost === 'number'
         ? latestExecution.cost
         : execution.cost;
-    const isRunning = execStatus === 'running';
+    const isRunning = execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
     const downloadSessionJson = async () => {
@@ -1586,9 +1607,11 @@ function TraceDetailView({
                 )}
                 <IdChip value={taskId} head={8} tail={6} />
                 <StatusBadge
-                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : 'success'}
+                    title={execStatus === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined}
+                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : execStatus === 'timed_out' ? 'warning' : 'success'}
                     label={
                         execStatus === 'running' ? t('tracePage.statusRunning')
+                        : execStatus === 'timed_out' ? t('tracePage.statusTimedOut')
                         : execStatus === 'failed' ? t('tracePage.statusFailed')
                         : t('tracePage.statusNormal')
                     }
@@ -1891,9 +1914,10 @@ function SortableTh({
         >
             <span className="inline-flex items-center gap-1">
                 {children}
-                <span className={cn('text-[10px]', active ? 'opacity-100' : 'opacity-40')}>
-                    {active ? (dir === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
-                </span>
+                <svg aria-hidden="true" viewBox="0 0 12 16" className="h-4 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m3 6 3-3 3 3" className={active && dir === 'asc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                    <path d="m3 10 3 3 3-3" className={active && dir === 'desc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                </svg>
             </span>
             {resizable && <ResizeHandle colKey={colKey} currentWidth={currentWidth} onResize={onResize} />}
         </th>
@@ -1927,8 +1951,9 @@ function Row({
     const skillCount = getInvokedSkillNames(e).length;
     const agentCount = new Set((e.agents ?? []).filter(Boolean)).size;
     const isMultiAgent = agentCount > 1;
-    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : 'success';
+    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : status === 'timed_out' ? 'warning' : 'success';
     const statusLabel = status === 'running' ? t('tracePage.statusRunning')
+        : status === 'timed_out' ? t('tracePage.statusTimedOut')
         : status === 'failed' ? t('tracePage.statusFailed')
         : t('tracePage.statusSuccess');
 
@@ -1955,7 +1980,7 @@ function Row({
             </Td>
             {columnVisibility.traceId && (
                 <Td>
-                    <IdChip value={id} head={6} tail={4} />
+                    <IdChip value={id} adaptive />
                 </Td>
             )}
             {columnVisibility.task && (
@@ -1981,7 +2006,7 @@ function Row({
             )}
             {columnVisibility.status && (
                 <Td>
-                    <StatusBadge status={statusKind} label={statusLabel} />
+                    <StatusBadge status={statusKind} label={statusLabel} title={status === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined} />
                 </Td>
             )}
             {columnVisibility.anomaly && (

@@ -408,13 +408,19 @@ type NormalizedBenchmarkResult = {
 
 ## 9. Evaluator 开发规范
 
+部署入口 `scripts/start-evaluator.sh` 只启动通用 Controller，不接受 Benchmark 选择、Runtime 预热或应用层鉴权参数。Controller 收到任务后，才根据 `benchmark.key + evaluator.key` 从 Catalog 解析并准备对应 Runtime；相同内容摘要的镜像直接复用。Agent Insight 与 Controller 之间不发送或校验 Bearer Token，部署者必须使用白名单、安全组或防火墙限制双向访问。这里的服务互访边界与 `evaluator.yaml` 的 `network` 不同：后者只约束实例 Runtime 执行评测时的容器网络策略。
+
 ### 9.1 `evaluator.yaml`
 
 ```yaml
 key: repository-quality
-runtime: script-package
+runtime: oci-container
+imageRepository: your-registry.example.com/benchmark/repository-quality-runtime
+dockerfile: ./Dockerfile
 entrypoint: ./entrypoint.cjs
+containerEntrypoint: /app/benchmarks/repository-quality/evaluator/entrypoint.cjs
 smokeEntrypoint: ../smoke/index.cjs
+containerSmokeEntrypoint: /app/benchmarks/repository-quality/smoke/index.cjs
 command: node
 network: deny
 resources:
@@ -425,11 +431,11 @@ resources:
 
 允许值：
 
-- `runtime`：`controller-container`、`script-package`、`builtin`；
+- `runtime`：有独立依赖的公开接入使用 `oci-container`；`script-package`、`builtin` 只适用于与 Controller 共享依赖的内置实现；
 - `command`：`node`、`python3`、`direct`；
 - `network`：`deny` 或 `allow`。
 
-Entrypoint 和 Smoke 文件必须位于接入包内。运行依赖归接入包或其独立构建制品所有，不要加入通用 Controller 基础依赖。
+Entrypoint、Smoke 和 Dockerfile 必须位于接入包内。Catalog 按接入包内容摘要生成 Runtime 镜像 tag，并在运行时校验镜像 label；发布方可用 `node scripts/benchmark/build-evaluator-runtime.cjs <key>` 构建并推送该制品。未命中远端制品的源码 checkout 会在首次任务中回退本地构建，之后复用缓存。运行依赖归接入包制品所有，不要加入通用 Controller 基础依赖，也不要在 Controller 公共代码中加入 Benchmark 分支。
 
 ### 9.2 Entrypoint 命令
 

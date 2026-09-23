@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/storage/prisma'
 import { evaluateEvalExperimentCase } from '@/lib/engine/experiment/run-experiment'
+import { deriveSettledExperimentStatus } from '@/lib/engine/experiment/detail-agg'
 
 import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
 import { startBenchmarkExperiment } from './scheduler'
@@ -89,15 +90,16 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
     .filter((status) => TERMINAL_RUN_STATUSES.includes(status)).length
   const resultPending = resultRows.some((row: { status: string }) => row.status === 'pending' || row.status === 'running')
   if (terminalRuns !== binding.expectedCaseCount || resultPending) return
-  const anyDone = resultRows.some((row: { status: string }) => row.status === 'done')
+  const status = deriveSettledExperimentStatus(resultRows)
+  if (!status) return
   await prisma.$transaction([
     prisma.experiment.update({
       where: { id: experimentId },
-      data: { status: anyDone ? 'done' : 'failed' },
+      data: { status },
     }),
     prisma.benchmarkExperimentBinding.update({
       where: { experimentId },
-      data: { schedulerStatus: anyDone ? 'done' : 'failed' },
+      data: { schedulerStatus: status },
     }),
   ])
 }

@@ -106,6 +106,29 @@ export interface DatasetCase {
   rootCauseMeta?: DatasetCaseRootCauseMeta;
 }
 
+export function hasMeaningfulDatasetCaseValue(
+  datasetCase: DatasetCase,
+  fields: readonly DatasetField[],
+): boolean {
+  return fields.some(field => {
+    const value = datasetCase.values && Object.hasOwn(datasetCase.values, field.key)
+      ? datasetCase.values[field.key]
+      : field.key === 'input'
+        ? datasetCase.input
+        : field.key === 'reference_output'
+          ? datasetCase.expectedOutput
+          : field.key === 'trajectory' || field.key === 'trace'
+            ? datasetCase.trajectory
+            : undefined;
+
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    return true;
+  });
+}
+
 export interface AgentDataset {
   id: string;
   name: string;

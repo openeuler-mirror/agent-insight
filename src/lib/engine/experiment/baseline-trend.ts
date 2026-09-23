@@ -235,7 +235,7 @@ export async function getExperimentBaselineTrend(input: {
       },
     },
   }) as BaselineExperimentLike | null;
-  if (!current || current.status !== 'done') return null;
+  if (!current || !['done', 'partial'].includes(current.status)) return null;
   const currentKey = buildExperimentBaselineKey(current);
   if (!currentKey) return null;
 
@@ -243,7 +243,7 @@ export async function getExperimentBaselineTrend(input: {
     user: current.user,
     type: 'single',
     scope: current.scope,
-    status: 'done',
+    status: { in: ['done', 'partial'] },
     watchMode: false,
     configSnapshotJson: { not: null },
     createdAt: { lte: current.createdAt },

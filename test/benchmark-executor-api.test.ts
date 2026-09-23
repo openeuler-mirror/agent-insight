@@ -26,7 +26,7 @@ const databasePath = externalDatabasePath
   ? path.resolve(externalDatabasePath)
   : path.join(testDir, 'benchmark.db')
 process.env.DATABASE_URL = `file:${databasePath}`
-process.env.AGENT_INSIGHT_DATA_DIR = path.join(testDir, 'agent-insight-home')
+process.env.AGENT_INSIGHT_HOME = path.join(testDir, 'agent-insight-home')
 
 const externalTestUsers = new Set<string>()
 const externalTestClientIds = new Set<string>()
@@ -436,7 +436,7 @@ type EvaluationDispatchBody = {
   }
 }
 
-function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}) {
+function evaluatorServer(options: { autoComplete?: boolean } = {}) {
   let origin = ''
   const jobs: Array<{ headers: Headers; body: EvaluationDispatchBody }> = []
   const downloadedArtifacts: Buffer[] = []
@@ -446,10 +446,6 @@ function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}
     try {
       const request = await nodeRequest(req, origin)
       const url = new URL(request.url)
-      if (request.headers.get('authorization') !== `Bearer ${token}`) {
-        await writeNodeResponse(new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED' } }), { status: 401 }), res)
-        return
-      }
       if (req.method === 'GET' && url.pathname === '/health') {
         await writeNodeResponse(new Response(JSON.stringify({
           status: 'healthy',
@@ -465,10 +461,7 @@ function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}
         const artifactResponse = await fetch(
           `${body.platformBaseUrl}/api/benchmark/v1/artifacts/${encodeURIComponent(artifactId)}/content`,
           {
-            headers: {
-              authorization: `Bearer ${token}`,
-              'x-agent-insight-evaluation-id': String(body.runId),
-            },
+            headers: { 'x-agent-insight-evaluation-id': String(body.runId) },
           },
         )
         assert.equal(artifactResponse.status, 200)
@@ -481,7 +474,7 @@ function evaluatorServer(token: string, options: { autoComplete?: boolean } = {}
         if (options.autoComplete) {
           setImmediate(() => void (async () => {
             try {
-              const callbackHeaders = { authorization: `Bearer ${token}` }
+              const callbackHeaders = {}
               const instance = body.evaluationJob.payload.instance
               const officialReport = {
                 [instance.instance_id]: {
@@ -1394,7 +1387,7 @@ test('a repeated completion resumes an interrupted normalizing evaluation', asyn
   externalTestExperimentIds.add(experimentId)
   try {
     const reportStoragePath = `test/${evidenceIds[0]}.json`
-    const reportAbsolutePath = path.join(process.env.AGENT_INSIGHT_DATA_DIR!, 'data', reportStoragePath)
+    const reportAbsolutePath = path.join(process.env.AGENT_INSIGHT_HOME!, 'data', reportStoragePath)
     const reportBytes = Buffer.from(JSON.stringify(rawResult.officialReport))
     await fsp.mkdir(path.dirname(reportAbsolutePath), { recursive: true })
     await fsp.writeFile(reportAbsolutePath, reportBytes)
@@ -1543,12 +1536,10 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
   const platform = platformServer()
   const platformListener = await listen(platform.server)
   platform.setOrigin(platformListener.origin)
-  const evaluatorToken = `evaluator_${runId}`
-  const evaluator = evaluatorServer(evaluatorToken)
+  const evaluator = evaluatorServer()
   const evaluatorListener = await listen(evaluator.server)
   evaluator.setOrigin(evaluatorListener.origin)
   process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL = evaluatorListener.origin
-  process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN = evaluatorToken
   const executorBaseDir = path.join(testDir, `executor-${runId}`)
   let workspacePath = ''
   let agentRuns = 0
@@ -1665,7 +1656,7 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
     assert.equal(JSON.parse(completed.cleanupJson || '{}').status, 'succeeded')
     const artifact = await prisma.benchmarkArtifact.findFirst({ where: { runId } })
     assert.ok(artifact)
-    const artifactBytes = fs.readFileSync(path.join(process.env.AGENT_INSIGHT_DATA_DIR!, 'data', artifact.storagePath))
+    const artifactBytes = fs.readFileSync(path.join(process.env.AGENT_INSIGHT_HOME!, 'data', artifact.storagePath))
     assert.match(artifactBytes.toString('utf8'), /hello benchmark/)
     assert.doesNotMatch(artifactBytes.toString('utf8'), /diff --git a\/model\.patch/)
     assert.equal(fs.existsSync(workspacePath), false)
@@ -1718,7 +1709,6 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
     await evaluatorListener.close()
     await platformListener.close()
     delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL
-    delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN
   }
 })
 
@@ -2075,12 +2065,10 @@ test('steps 01-13 cross the client-command and evaluator boundaries with a real 
   const platform = platformServer()
   const platformListener = await listen(platform.server)
   platform.setOrigin(platformListener.origin)
-  const evaluatorToken = `full_evaluator_${suffix}`
-  const evaluator = evaluatorServer(evaluatorToken, { autoComplete: true })
+  const evaluator = evaluatorServer({ autoComplete: true })
   const evaluatorListener = await listen(evaluator.server)
   evaluator.setOrigin(evaluatorListener.origin)
   process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL = evaluatorListener.origin
-  process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN = evaluatorToken
   const executorBaseDir = path.join(testDir, `full-executor-${suffix}`)
   let agentRuns = 0
   const patchBytes = Buffer.from('diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-old\n+new\n')
@@ -2314,6 +2302,5 @@ test('steps 01-13 cross the client-command and evaluator boundaries with a real 
     await evaluatorListener.close()
     await platformListener.close()
     delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL
-    delete process.env.AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN
   }
 })

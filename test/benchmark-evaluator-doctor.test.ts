@@ -36,7 +36,6 @@ function listen(server: http.Server): Promise<{ port: number; close(): Promise<v
 
 test('Controller health stays healthy when one platform-specific Evaluator is not ready', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-doctor-'))
-  const token = 'doctor-shared-token'
   const evaluator = {
     key: 'platform-specific',
     async checkReady() {
@@ -45,22 +44,19 @@ test('Controller health stays healthy when one platform-specific Evaluator is no
   }
   const service = new BenchmarkEvaluatorService({
     dataDir,
-    token,
     registry: new EvaluatorRegistry([evaluator]),
     controllerProbe: async () => ({ dockerArch: 'arm64', dockerOSType: 'linux' }),
   })
   const listener = await listen(service.createServer())
   try {
-    const response = await fetch(`http://127.0.0.1:${listener.port}/health`, {
-      headers: { authorization: `Bearer ${token}` },
-    })
+    const response = await fetch(`http://127.0.0.1:${listener.port}/health`)
     const health = await response.json()
     assert.equal(health.status, 'healthy')
     assert.equal(health.controller.ready, true)
     assert.equal(health.runtime.sourceDirty, false)
     assert.equal(health.evaluators[0].ready, false)
 
-    const report = await doctor({ port: listener.port, token, timeoutMs: 1_000 })
+    const report = await doctor({ port: listener.port, timeoutMs: 1_000 })
     assert.equal(report.ok, true)
     assert.equal(report.checks.catalog, true)
     assert.equal(report.evaluators[0].reason, 'unsupported on this architecture')
@@ -70,14 +66,13 @@ test('Controller health stays healthy when one platform-specific Evaluator is no
   }
 })
 
-test('Controller and Doctor allow health checks without a token in explicit none mode', async () => {
+test('Controller and Doctor require no application credential', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-evaluator-doctor-none-'))
   const evaluator = {
     key: 'no-auth-evaluator',
     async checkReady() { return { ready: true, formalEligible: true } },
   }
   const service = new BenchmarkEvaluatorService({
-    authMode: 'none',
     dataDir,
     registry: new EvaluatorRegistry([evaluator]),
     controllerProbe: async () => ({ dockerArch: 'x86_64', dockerOSType: 'linux' }),
@@ -86,9 +81,9 @@ test('Controller and Doctor allow health checks without a token in explicit none
   try {
     const response = await fetch(`http://127.0.0.1:${listener.port}/health`)
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).runtime.authMode, 'none')
+    assert.equal((await response.json()).runtime.authMode, undefined)
 
-    const report = await doctor({ port: listener.port, authMode: 'none', timeoutMs: 1_000 })
+    const report = await doctor({ port: listener.port, timeoutMs: 1_000 })
     assert.equal(report.ok, true)
   } finally {
     await listener.close()

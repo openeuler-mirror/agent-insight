@@ -15,6 +15,7 @@ const {
   isSubagentWorkerProcess,
   loadCollectorConfig,
   parseMcpIdentity,
+  resolveGoalPlusRuntimeRoot,
   skillVersion,
 } = require("../scripts/agent-trace-collectors/pi-agent/lib/pi-trace-core.cjs")
 
@@ -104,6 +105,11 @@ function collector(
   writer = new MemoryWriter(),
   uploader = new MemoryUploader(),
   relationshipOutbox = new MemoryRelationshipOutbox(),
+  options: {
+    config?: Record<string, unknown>
+    context?: Record<string, unknown>
+    goalPlusActivator?: (request: Record<string, string>) => Promise<unknown>
+  } = {},
 ) {
   let now = 1_700_000_000_000
   const instance = new PiTraceCollector({
@@ -116,16 +122,18 @@ function collector(
       homeDir: os.tmpdir(),
       uploadIntervalMs: 300_000,
       shutdownTimeoutMs: 100,
+      ...options.config,
     },
     writer,
     uploader,
     relationshipOutbox,
+    goalPlusActivator: options.goalPlusActivator,
     now: () => {
       now += 10
       return now
     },
   })
-  instance.startSession("session-a")
+  instance.startSession("session-a", options.context)
   return { instance, writer, uploader, relationshipOutbox }
 }
 
@@ -413,7 +421,7 @@ test("collector config honors environment precedence and remains disabled withou
   assert.equal(disabled.enabled, false)
 })
 
-test("Pi collector derives a distinct session id per agent task within one Pi session", async (t) => {
+test("Pi collector derives a distinct session id per agent task within one Pi session", async () => {
   const { instance, writer } = collector()
   // 任务 1
   instance.recordInput("task one")
@@ -446,6 +454,10 @@ test("Pi collector binds only the initial Goal Plus start task to the reported c
     prompt: "继续此 Goal Plus 任务。\n\ngoal_plus_id: gp_demo\n\n原始目标：\nimprove the solver",
     systemPromptOptions: {},
   }, context())
+  await instance.relationshipPending
+
+  assert.equal(relationshipOutbox.flushed, 1)
+  assert.equal(relationshipOutbox.sessions.length, 1)
   await instance.settleAgent()
 
   assert.equal(relationshipOutbox.sessions.length, 1)
@@ -512,6 +524,62 @@ test("Pi collector recovers a print-mode start id from the current goal-plus-cre
   instance.recordContext(messages)
   await instance.settleAgent()
   assert.equal(relationshipOutbox.sessions.length, 1)
+})
+
+test("Pi collector activates the dormant Goal Plus observer only after structured start evidence", async () => {
+  const activations: Array<Record<string, string>> = []
+  const { instance } = collector(
+    new MemoryWriter(),
+    new MemoryUploader(),
+    new MemoryRelationshipOutbox(),
+    {
+      config: { goalPlusObserverEnabled: true },
+      context: { cwd: "/workspace/demo" },
+      goalPlusActivator: async (request) => {
+        activations.push(request)
+        return { status: "ACTIVE" }
+      },
+    },
+  )
+  instance.recordInput("Continue the authorized Goal Plus task.", "extension")
+  instance.beginAgent({ prompt: "Continue the authorized Goal Plus task.", systemPromptOptions: {} }, context())
+  instance.recordContext([
+    { role: "custom", customType: "goal-plus-created", details: { goal_plus_id: "gp_demo" } },
+    { role: "user", content: [{ type: "text", text: "Continue the authorized Goal Plus task." }] },
+    { role: "custom", customType: "goal-plus-command-context", details: { goal_plus_id: "gp_demo", entrypoint_status: "host_verified" } },
+  ], { cwd: "/workspace/demo" })
+  await instance.settleAgent()
+  await instance.shutdown()
+
+  assert.deepEqual(activations, [{
+    root: path.join("/workspace/demo", ".gp"),
+    goalId: "gp_demo",
+    nativeSessionId: "session-a",
+  }])
+})
+
+test("Pi collector leaves ordinary Pi tasks on the native-only path", async () => {
+  let activations = 0
+  const { instance } = collector(
+    new MemoryWriter(),
+    new MemoryUploader(),
+    new MemoryRelationshipOutbox(),
+    {
+      config: { goalPlusObserverEnabled: true },
+      goalPlusActivator: async () => { activations += 1 },
+    },
+  )
+  instance.recordInput("review the implementation")
+  instance.beginAgent({ prompt: "review the implementation", systemPromptOptions: {} }, context())
+  await instance.settleAgent()
+  await instance.shutdown()
+  assert.equal(activations, 0)
+})
+
+test("Goal Plus runtime root mirrors GOAL_PLUS_ROOT resolution", () => {
+  assert.equal(resolveGoalPlusRuntimeRoot("/workspace/demo", {}), path.join("/workspace/demo", ".gp"))
+  assert.equal(resolveGoalPlusRuntimeRoot("/workspace/demo", { GOAL_PLUS_ROOT: ".runtime/gp" }), path.join("/workspace/demo", ".runtime/gp"))
+  assert.equal(resolveGoalPlusRuntimeRoot("/workspace/demo", { GOAL_PLUS_ROOT: "/var/lib/gp" }), path.resolve("/var/lib/gp"))
 })
 
 test("Pi collector does not infer a Goal Plus id from ordinary prose", async () => {

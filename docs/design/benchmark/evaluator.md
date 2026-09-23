@@ -8,7 +8,7 @@
 
 ## 1. 最终方案
 
-运行时使用两层容器：
+运行时使用三层容器：
 
 ```text
 Agent Insight
@@ -17,14 +17,15 @@ Agent Insight
             ├─ 持久化任务、下载 Agent Patch、回调平台
             ├─ 构建生成的 Evaluator Catalog
             └─ 统一 FileEvaluatorEntrypoint
-                 └─ evaluator evaluate --request ... --output ...
-                      └─ SWE-bench Entrypoint
-                           └─ 官方 make_test_spec() + run_instance()
-                                └─ SWE-bench Case 容器（每个 Case 一个，用后即删）
+                 └─ Benchmark Runtime 容器（按 Catalog 准备并缓存）
+                      └─ evaluator evaluate --request ... --output ...
+                           └─ SWE-bench Entrypoint
+                                └─ 官方 make_test_spec() + run_instance()
+                                     └─ SWE-bench Case 容器（每个 Case 一个，用后即删）
 ```
 
 - **Controller 容器**：通用 Node.js HTTP/任务编排 + Docker CLI；挂载 Docker Socket 和持久化任务目录，不内置具体 Benchmark Harness。
-- **实例镜像**：`benchmarks/<key>/evaluator/Dockerfile` 安装该 Benchmark 的语言、SDK 和 Harness 依赖；SWE-bench 的 Python 与官方源码只存在于自己的实例镜像。
+- **Runtime 镜像**：`benchmarks/<key>/evaluator/Dockerfile` 安装该 Benchmark 的语言、SDK 和 Harness 依赖；由 Catalog 给出内容派生镜像引用，首次任务按需拉取，源码 checkout 无远端制品时回退本地构建，之后复用 Docker 缓存。SWE-bench 的 Python 与官方源码只存在于自己的 Runtime 镜像。
 - **Case 容器**：执行真正的 Patch 应用和测试。正式评测使用官方 x86_64 SWE-bench 镜像。
 - 不复制官方 Patch 应用、测试执行和判分代码；固定复用本地已下载官方源码 commit `02e7a74ffd0b707aab73d203fe87bdc7c76afc8e` 中的 `make_test_spec()`、`run_instance()` 和 `get_eval_report()`。
 - Controller 与 Agent Insight 可以不在一台机器；双方只通过 REST 和 Artifact 内容传输，不共享文件路径或数据库。
@@ -33,7 +34,7 @@ Agent Insight
 
 ### 2.1 Controller 镜像
 
-项目提供不含具体 Harness 的通用 Controller 镜像；有额外依赖的接入包提供自己的 `evaluator/Dockerfile`。部署脚本按 `--benchmark <key>` 选择构建目标，镜像名按 Benchmark 隔离：
+项目提供不含具体 Harness 的通用 Controller 镜像；部署脚本始终只构建这一镜像，不接受 Benchmark 选择参数。有额外依赖的接入包提供自己的 `evaluator/Dockerfile`，Controller 收到任务后按 Catalog 的 `evaluator.key + benchmark.key` 解析、校验并准备 Runtime 镜像：
 
 ```text
 docker run --restart unless-stopped \
@@ -41,8 +42,10 @@ docker run --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v agent-insight-evaluator-data:/data \
   --env-file evaluator.env \
-  agent-insight-benchmark-evaluator-<key>:<release>
+  agent-insight-benchmark-evaluator:<release>
 ```
+
+Runtime 镜像以接入包内容摘要派生的不可变 tag 和 `agent-insight.evaluator.artifact-digest` label 双重校验。已缓存的相同摘要直接复用；升级接入包会得到新的镜像引用。通用 Controller 不 import 实例实现，也不含任何 SWE-bench 分支。
 
 挂载 Docker Socket 等价于较高宿主权限，因此评测服务必须运行在专用机器或专用 VM，端口只向 Agent Insight 开放。平台凭证不进入 Case 容器。
 
@@ -161,8 +164,9 @@ Agent Insight 提供三个只供评测服务调用的 API：
 POST {callbackBaseUrl}/progress
 POST {callbackBaseUrl}/artifacts
 POST {callbackBaseUrl}/complete
-Authorization: Bearer <evaluator-token>
 ```
+
+这些入口不校验应用层凭证，只允许从受控网络访问。
 
 其中 `callbackBaseUrl=/api/benchmark/v1/evaluations/{evaluationId}`，不复用执行器的 `/runs/{runId}` 路由，避免两类身份、状态和 DTO 混在一起。
 
@@ -256,16 +260,12 @@ UNIQUE(evaluationId, name)
 Agent Insight 侧优先从 `~/.agent-insight/data/config/benchmark-evaluator.env` 热加载以下配置，进程环境变量作为文件不存在时的兼容兜底：
 
 ```dotenv
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=http://127.0.0.1:8080
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_AUTH_MODE=token
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_TOKEN=<shared-secret>
-AGENT_INSIGHT_BENCHMARK_EVALUATOR_PREVIOUS_TOKENS=
-AGENT_INSIGHT_PUBLIC_BASE_URL=http://host.docker.internal:3000
+AGENT_INSIGHT_BENCHMARK_EVALUATOR_BASE_URL=http://127.0.0.1:3001
 # 可选；仅在平台与执行器同机、Evaluator 远端的开发拓扑中设置
 AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL=http://127.0.0.1:3000
 ```
 
-`scripts/configure-evaluator-target.js` 默认在 `token` 模式从权限为 `0600` 的 Token 文件读取密钥，也支持显式 `--auth-mode none` 在受安全组或防火墙隔离的网络中关闭双向 Bearer 鉴权。脚本以临时文件、`fsync`、`rename` 原子替换配置。每次 Benchmark 操作读取一份不可变快照；非法或半写入更新保留上一份有效快照。认证模式、当前 Token、旧 Token 与地址共同进入配置修订；当前 Token 用于新任务下发，当前与旧 Token 都可通过回调鉴权。`none` 模式不要求 Token，任务下发、Artifact 下载、进度、证据和完成回调均省略 Authorization，但不替代网络访问控制。公开地址冻结到实验绑定并供 Evaluator 使用；可选执行器回调地址只冻结到新建执行 Outbox，未配置时回退公开地址。已冻结旧目标的任务不会自动拿新认证配置或新回调地址请求旧地址。
+`scripts/configure-evaluator-target.js` 以临时文件、`fsync`、`rename` 原子替换配置。每次 Benchmark 操作读取一份不可变快照；非法或半写入更新保留上一份有效快照。Agent Insight 与 Evaluator 不发送或校验 Authorization，双向访问必须由白名单、安全组或防火墙限制。Agent Insight 公开回调地址从实验启动请求的 `Host` / `X-Forwarded-*` 自动推导并冻结到实验绑定；Evaluator 的实际访问地址由评测机 `--platform-base-url` 覆盖。可选执行器回调地址只冻结到新建执行 Outbox，未配置时使用自动推导的地址。已冻结旧目标的任务不会因配置更新而改写目标地址。
 
 评测服务侧：
 
@@ -274,14 +274,12 @@ EVALUATOR_LISTEN_HOST=0.0.0.0
 EVALUATOR_PORT=8080
 EVALUATOR_DATA_DIR=/data
 EVALUATOR_MAX_CONCURRENCY=1
-EVALUATOR_AUTH_MODE=token
-EVALUATOR_PLATFORM_TOKEN=<same-shared-secret>
 # 可选；Evaluator 容器实际访问 Agent Insight 的地址
 EVALUATOR_AGENT_INSIGHT_BASE_URL=https://agent-insight.example.com
 # 具体 Benchmark 环境变量由接入包声明并通过 --evaluator-env 传入
 ```
 
-Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluator.sh --benchmark <key>`。脚本接受可选 `--platform-base-url`，并可重复使用 `--evaluator-env NAME=VALUE` 注入实例配置；Evaluator 下载 Artifact、上传证据及进度/完成回调优先使用实际可达地址。脚本构建 revision 镜像、以 `--restart unless-stopped` 运行固定名称 Controller、挂载当前 Docker context 的 Unix Socket 和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不拉取 Case 镜像；显式 `--smoke <benchmark-key>` 才运行该接入包的 Smoke。Controller 的 `status` 只表示 HTTP、journal 和 Docker Socket 状态，每个 `evaluators[]` 独立报告 `ready/reason/formalEligible`。
+Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluator.sh`。脚本接受可选 `--platform-base-url`，并可重复使用 `--evaluator-env NAME=VALUE` 注入实例配置；Evaluator 下载 Artifact、上传证据及进度/完成回调优先使用实际可达地址。脚本构建通用 Controller、以 `--restart unless-stopped` 运行固定名称容器、挂载当前 Docker context 的 Unix Socket和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不准备 Runtime 或 Case 镜像；真实任务首次进入 `preparing_runtime` 时自动准备，后续复用缓存。显式 `--smoke <evaluator-key>` 同样会按需准备该 Runtime。Controller 的 `status` 只表示 HTTP、journal、Docker Socket 和 Catalog 状态，每个 `evaluators[]` 独立报告运行时事实。
 
 本机 Docker 内访问宿主用 `host.docker.internal`；独立评测机使用 Agent Insight 的实际 HTTPS 地址。生产环境应由反向代理终止 TLS，并通过防火墙只允许两台服务互访。
 
@@ -300,6 +298,7 @@ services/evaluator/src/evaluator-registry.cjs
 services/evaluator/src/cli.cjs
 services/evaluator/Dockerfile
 scripts/benchmark/generate-catalog.cjs
+scripts/benchmark/build-evaluator-runtime.cjs
 scripts/start-evaluator.sh
 scripts/evaluator-doctor.sh
 scripts/configure-evaluator-target.js
@@ -326,7 +325,7 @@ test/benchmark-evaluator-api.test.ts
 
 不使用临时或合成数据集，使用当前真实数据库、本地 Verified Parquet 和官方源码：
 
-1. **09～11**：真实 HTTP 下发 → 评测服务下载真实 Artifact → 官方 Case 容器运行 → 上传真实报告 → complete 回调；覆盖鉴权、幂等、冲突、断网重传和重启恢复。
+1. **09～11**：真实 HTTP 下发 → 评测服务下载真实 Artifact → 官方 Case 容器运行 → 上传真实报告 → complete 回调；覆盖幂等、冲突、断网重传和重启恢复。
 2. **01～13**：创建真实 Benchmark 实验 → OpenCode 生成 Patch → 执行器上传 → Agent Insight 下发评测 → 官方 Harness → `normalizeResult()` → 调用实验结果 GET。
 3. 本机 smoke 首选已有真实 Case `pallets__flask-5014` 和已生成 Patch；ARM64 镜像必须实际存在且 digest 匹配。该结果标记非正式。
 4. 正式验收在 x86_64 Linux 上先跑独立 Gold Control，再跑真实 Agent Patch。Gold Control 仅验证 Harness 环境，Gold Patch 作为该控制任务的 prediction，绝不进入真实 Agent 任务或其 EvaluationJob。

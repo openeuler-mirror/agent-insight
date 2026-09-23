@@ -23,19 +23,15 @@ import {
     recordEvaluatorExecution,
     shouldForceOpencodeEvalTransport,
 } from './evaluator-execution-recorder';
-import { extractRootCausesFromExpected } from './root-cause-extractor';
 import {
     deriveTaskCompletionScoreFromFindings,
     stripSkillAttributionFromKeyPointFindings,
 } from './task-completion-scoring';
 import { normalizeResultIssues, parseLooseJson } from './task-completion-json';
+import { resolveRootCauses, type RootCauseResolutionInput } from './root-cause-resolution';
 
-export interface TaskCompletionEvalInput {
-    caseInput: string;
-    expectedOutput: string;
+export interface TaskCompletionEvalInput extends RootCauseResolutionInput {
     actualOutput: string;
-    precomputedRootCauses?: RootCauseItem[];
-    precomputedRootCauseSource?: 'dataset-cache' | 'none';
     traceSummaryText?: string;
     skillAttributionMode?: 'skill-aware' | 'no-skill';
     skillContext?: {
@@ -203,32 +199,6 @@ function isTaskCompletionPayload(parsed: Record<string, unknown>): boolean {
     if (typeof parsed.is_correct !== 'undefined') return true;
     if (Array.isArray(parsed.key_point_findings)) return true;
     return false;
-}
-
-async function resolveRootCauses(
-    input: TaskCompletionEvalInput,
-    user?: string | null,
-): Promise<{ rootCauses: RootCauseItem[]; source: 'dataset-cache' | 'live-extract' | 'none' }> {
-    if (input.precomputedRootCauseSource === 'none') {
-        return { rootCauses: [], source: 'none' };
-    }
-    if (input.precomputedRootCauseSource === 'dataset-cache') {
-        return {
-            rootCauses: Array.isArray(input.precomputedRootCauses) ? input.precomputedRootCauses : [],
-            source: 'dataset-cache',
-        };
-    }
-    if (!String(input.expectedOutput || '').trim()) {
-        return { rootCauses: [], source: 'none' };
-    }
-    try {
-        return {
-            rootCauses: await extractRootCausesFromExpected(input.caseInput, input.expectedOutput, user),
-            source: 'live-extract',
-        };
-    } catch {
-        return { rootCauses: [], source: 'none' };
-    }
 }
 
 function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseItem[]): string {
@@ -411,10 +381,11 @@ export async function evaluateTaskCompletionViaOpencode(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TaskCompletionEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
+   const resolvedRootCauses = resolveRootCauses(input, user);
    // PRIMARY: 直连 LLM 单轮 judge —— 不起 opencode 进程、不建 session（省 ~1.6s 固定开销/次）。
    // 评测 trace 由 recordDirectEvaluatorExecution 合成落库。EVAL_FORCE_OPENCODE_TRANSPORT=1 回退旧路径。
    if (!shouldForceOpencodeEvalTransport()) {
-     const { rootCauses, source: rootCauseSource } = await resolveRootCauses(input, user);
+     const { rootCauses, source: rootCauseSource } = await resolvedRootCauses;
      const directConfig = await getActiveConfig(user);
      if (!directConfig) {
        return {
@@ -434,7 +405,7 @@ export async function evaluateTaskCompletionViaOpencode(
      }
    }
    return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
-    const { rootCauses, source: rootCauseSource } = await resolveRootCauses(input, user);
+    const { rootCauses, source: rootCauseSource } = await resolvedRootCauses;
     const skillAttributionMode = input.skillAttributionMode || 'skill-aware';
     const config = await getActiveConfig(user);
     if (!config) {

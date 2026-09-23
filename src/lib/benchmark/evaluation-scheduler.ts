@@ -476,8 +476,8 @@ async function freezeTarget(evaluationId: string) {
       )
     ) {
       throw new BenchmarkProtocolError(
-        'EVALUATOR_TARGET_CREDENTIAL_STALE',
-        '评测目标或发送凭证已切换；旧目标任务不能自动改用新凭证',
+        'EVALUATOR_TARGET_STALE',
+        '评测目标已切换；旧目标任务不能自动改用新地址',
         409,
       )
     }
@@ -486,7 +486,6 @@ async function freezeTarget(evaluationId: string) {
       baseUrl: evaluation.evaluatorBaseUrl,
       evaluatorKey: evaluation.evaluatorKey,
       benchmarkKey: evaluation.adapterKey,
-      token: current.token,
       configRevision: current.configRevision,
     }
   }
@@ -511,7 +510,6 @@ async function ensureHealthy(
   baseUrl: string,
   evaluatorKey: string,
   benchmarkKey: string,
-  token: string | undefined,
   targetKey: string,
 ): Promise<void> {
   const cacheKey = `${targetKey}\n${baseUrl}\n${evaluatorKey}\n${benchmarkKey}`
@@ -519,7 +517,6 @@ async function ensureHealthy(
   const response = await dispatchFetch(`${baseUrl}/health`, {
     method: 'GET',
     redirect: 'error',
-    ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}),
     signal: AbortSignal.timeout(5_000),
   })
   const body = await responseBody(response)
@@ -584,7 +581,6 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       target.baseUrl,
       target.evaluatorKey,
       target.benchmarkKey,
-      target.token,
       target.targetKey,
     )
     postStarted = true
@@ -592,7 +588,6 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       method: 'POST',
       redirect: 'error',
       headers: {
-        ...(target.token ? { authorization: `Bearer ${target.token}` } : {}),
         'content-type': 'application/json',
         'idempotency-key': evaluationId,
         'x-agent-insight-request-digest': outbox.requestDigest,

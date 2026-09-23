@@ -23,6 +23,29 @@ export interface ResultRowLike {
 
 export type CategoryOf = (evaluatorId: string) => EvaluatorCategory;
 
+export type SettledExperimentStatus = 'done' | 'partial' | 'failed';
+
+/** 全部结果行终态后，按成功/失败组合收敛实验状态。 */
+export function deriveSettledExperimentStatus(
+  rows: Array<{ status: string }>,
+): SettledExperimentStatus | null {
+  if (!rows.length) return null;
+  if (rows.some((row) => row.status === 'pending' || row.status === 'running')) return null;
+  const anyDone = rows.some((row) => row.status === 'done');
+  const anyNotDone = rows.some((row) => row.status !== 'done');
+  if (anyDone && anyNotDone) return 'partial';
+  return anyDone ? 'done' : 'failed';
+}
+
+/** 读取历史终态时按结果行纠正旧版“有成功即 done”的状态。 */
+export function normalizeTerminalExperimentStatus(
+  storedStatus: string,
+  rows: Array<{ status: string }>,
+): string {
+  if (!['done', 'partial', 'failed'].includes(storedStatus)) return storedStatus;
+  return deriveSettledExperimentStatus(rows) ?? storedStatus;
+}
+
 /** 生效分：人工修正分优先，回落机器分；都没有 → null。 */
 export function effectiveScore(row: ResultRowLike): number | null {
   if (typeof row.humanScore === 'number') return row.humanScore;
@@ -49,12 +72,14 @@ export function overallAverage(rows: ResultRowLike[]): number | null {
   return averageScore(toScored(rows));
 }
 
-/** 实验级综合分只在实验完成后发布，运行中不暴露部分均分。 */
+/** 实验级综合分只在实验终态（完成或部分完成）后发布，运行中不暴露部分均分。 */
 export function publishedOverallAverage(
   experimentStatus: string,
   rows: ResultRowLike[],
 ): number | null {
-  return experimentStatus === 'done' ? overallAverage(rows) : null;
+  return experimentStatus === 'done' || experimentStatus === 'partial'
+    ? overallAverage(rows)
+    : null;
 }
 
 export interface EvaluatorBreakdownRow {

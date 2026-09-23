@@ -13,6 +13,33 @@ description: "高频问题集中解答"
 
 ## 接入与登录
 
+### 怎样单次使用另一个数据库或端口启动？
+
+源码部署可在启动命令前设置 `DATABASE_URL`，并通过 `--port` 设置本次监听端口。
+这些值只对本次进程生效，并优先于 `$AGENT_INSIGHT_HOME/.env`。SQLite 请使用绝对路径，例如：
+
+```bash
+DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh --port 3100
+```
+
+端口必须是 1 到 65535 的整数；未设置时为 3000。该命令会停止并替换目标端口上的旧服务。
+同一个源码目录的不同端口实例不能并行执行 `start.sh`：它们共用 `.next` 和 `server.log`，重建会破坏
+仍在运行的旧实例。需要并行测试时，请使用独立 Git worktree，并为它设置独立的
+`AGENT_INSIGHT_HOME`、`DATABASE_URL` 和 `PORT`。
+
+启动会在停止旧服务和清理 `.next` 之前预检绝对 SQLite 路径：父目录必须已经存在且当前用户
+可进入、可写；已有数据库文件必须为当前用户可读写的普通文件。检查失败会输出目标路径、
+当前用户和修复建议，不会继续构建。脚本不会自动创建自定义父目录，以免 root 用户因拼写错误
+在错误位置创建目录。
+
+### 为什么服务有响应，但打开页面显示 Internal Server Error？
+
+先检查 `server.log`。如果出现 `client reference manifest ... does not exist` 或
+缺失 `.next/server/pages/500.html`，属于构建产物不完整，不代表数据库损坏。
+不要在同一源码目录的服务运行期间执行 `npm run build` 或清理 `.next`，这会使旧进程失去页面文件。
+本地源码部署可使用 `bash scripts/start.sh` 停旧服务、完整构建后再启动；启动会检查页面清单，
+并要求首页、数据集和故障页面不返回 HTTP 错误。失败时先查看日志，不要删除数据库。
+
 ### 为什么我已经完成接入，但链路追踪里还是没有数据？
 
 优先按下面顺序检查：

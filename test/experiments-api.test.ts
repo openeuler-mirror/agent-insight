@@ -33,6 +33,8 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
     cases: [
       {
         executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1',
+        datasetId: 'dataset-1', datasetCaseId: 'dataset-case-1',
+        values: { visible_note: 'keep me' },
         evaluatorContext: {
           schemaVersion: 1,
           availableTools: [{ name: 'search', description: '搜索' }],
@@ -91,6 +93,15 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
     availableSkills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
   });
   assert.equal(detail.cases[1].evaluatorContext, null);
+  assert.deepEqual(detail.cases[0].caseValues, { visible_note: 'keep me' });
+  const storedCase = await prisma.experimentCase.findFirst({
+    where: { experimentId: id, taskId: 'task-1' },
+    select: { caseValuesJson: true },
+  });
+  assert.deepEqual(JSON.parse(storedCase?.caseValuesJson || '{}').__agentInsightDatasetCase, {
+    datasetId: 'dataset-1',
+    caseId: 'dataset-case-1',
+  });
   assert.deepEqual(detail.results, []);
 });
 

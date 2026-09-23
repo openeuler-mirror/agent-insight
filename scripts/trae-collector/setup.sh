@@ -3,7 +3,7 @@ set +e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOK_SRC="$SCRIPT_DIR/hooks"
-INSIGHT_DIR="${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}"
+INSIGHT_DIR="${AGENT_INSIGHT_HOME:-${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}}"
 TRAE_HOOK_DIR="$INSIGHT_DIR/trae-hooks"
 TRAE_CN_DIR="${HOME}/.trae-cn"
 

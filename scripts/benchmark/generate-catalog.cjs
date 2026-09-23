@@ -234,7 +234,7 @@ function loadPackage(packageDir) {
   if (string(evaluator.key, 'evaluator.key') !== string(source.evaluation?.evaluatorKey, 'evaluation.evaluatorKey')) {
     fail(`${key} 的 evaluator key 与 benchmark.yaml 不一致`)
   }
-  if (!['controller-container', 'script-package', 'builtin'].includes(evaluator.runtime)) {
+  if (!['oci-container', 'controller-container', 'script-package', 'builtin'].includes(evaluator.runtime)) {
     fail(`${key} 的 evaluator.runtime 不受支持`)
   }
   if (!['node', 'python3', 'direct'].includes(evaluator.command)) {
@@ -242,8 +242,21 @@ function loadPackage(packageDir) {
   }
   const evaluatorDir = path.dirname(evaluatorYamlPath)
   const entrypoint = resolveInside(evaluatorDir, evaluator.entrypoint, 'evaluator.entrypoint')
+  const ociRuntime = evaluator.runtime === 'oci-container'
+  const imageRepository = ociRuntime
+    ? string(evaluator.imageRepository, 'evaluator.imageRepository', /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i)
+    : null
+  const containerEntrypoint = ociRuntime
+    ? string(evaluator.containerEntrypoint, 'evaluator.containerEntrypoint', /^\/[A-Za-z0-9._/-]+$/)
+    : null
+  const runtimeDockerfile = ociRuntime
+    ? resolveInside(evaluatorDir, evaluator.dockerfile || './Dockerfile', 'evaluator.dockerfile')
+    : null
   const smokeEntrypoint = evaluator.smokeEntrypoint
     ? resolvePackageFile(packageDir, evaluatorDir, evaluator.smokeEntrypoint, 'evaluator.smokeEntrypoint')
+    : null
+  const runtimeSmokeEntrypoint = ociRuntime && smokeEntrypoint
+    ? string(evaluator.containerSmokeEntrypoint, 'evaluator.containerSmokeEntrypoint', /^\/[A-Za-z0-9._/-]+$/)
     : null
   const artifacts = source.submission?.artifacts
   if (!Array.isArray(artifacts) || !artifacts.length) fail(`${key} 至少声明一个 Artifact`)
@@ -296,6 +309,7 @@ function loadPackage(packageDir) {
     ...listFiles(evaluatorDir),
     ...(smokeEntrypoint ? listFiles(path.dirname(smokeEntrypoint)) : []),
   ])]
+  const evaluatorDigest = digestFiles(evaluatorFiles, evaluatorDir)
   const files = [
     yamlPath,
     adapterPath,
@@ -344,9 +358,14 @@ function loadPackage(packageDir) {
       benchmarkKey: key,
       runtime: evaluator.runtime,
       command: string(evaluator.command, 'evaluator.command'),
-      entrypoint,
+      entrypoint: containerEntrypoint || entrypoint,
+      ...(imageRepository ? {
+        image: `${imageRepository}:artifact-${evaluatorDigest.slice('sha256:'.length)}`,
+        dockerfile: runtimeDockerfile,
+      } : {}),
       ...(smokeEntrypoint ? { smokeEntrypoint } : {}),
-      artifactDigest: digestFiles(evaluatorFiles, evaluatorDir),
+      ...(runtimeSmokeEntrypoint ? { runtimeSmokeEntrypoint } : {}),
+      artifactDigest: evaluatorDigest,
       network: evaluator.network === 'allow' ? 'allow' : 'deny',
       resources: {
         cpu: Number(evaluator.resources.cpu),
@@ -419,15 +438,25 @@ function generate(rootDir = path.resolve(__dirname, '../..')) {
   ].join('\n')
   const descriptors = packages.map((item) => ({
     ...item.evaluator,
-    entrypoint: path.relative(outputDir, item.evaluator.entrypoint).replaceAll(path.sep, '/'),
+    entrypoint: item.evaluator.runtime === 'oci-container'
+      ? item.evaluator.entrypoint
+      : path.relative(outputDir, item.evaluator.entrypoint).replaceAll(path.sep, '/'),
     ...(item.evaluator.smokeEntrypoint
       ? { smokeEntrypoint: path.relative(outputDir, item.evaluator.smokeEntrypoint).replaceAll(path.sep, '/') }
       : {}),
+    ...(item.evaluator.dockerfile
+      ? { dockerfile: path.relative(outputDir, item.evaluator.dockerfile).replaceAll(path.sep, '/') }
+      : {}),
   }))
   let descriptorJson = JSON.stringify(descriptors, null, 2)
+  descriptorJson = descriptorJson.replace(/"smokeEntrypoint": "([^"/][^"]*)"/g, '"smokeEntrypoint": path.resolve(__dirname, "$1")')
   descriptorJson = descriptorJson.replace(
-    /"(entrypoint|smokeEntrypoint)": "([^"]+)"/g,
-    '"$1": path.resolve(__dirname, "$2")',
+    /"entrypoint": "([^"/][^"]*)"/g,
+    '"entrypoint": path.resolve(__dirname, "$1")',
+  )
+  descriptorJson = descriptorJson.replace(
+    /"dockerfile": "([^"]+)"/g,
+    '"dockerfile": path.resolve(__dirname, "$1")',
   )
   const evaluatorSource = [
     "'use strict'",

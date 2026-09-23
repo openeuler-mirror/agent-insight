@@ -1,6 +1,5 @@
 'use strict'
 
-const { createHash, timingSafeEqual } = require('node:crypto')
 const fs = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
@@ -19,6 +18,7 @@ const { AgentInsightPlatformClient, PlatformClientError, sha256 } = require('./p
 const ACTIVE_STAGES = new Set([
   'accepted',
   'downloading_artifacts',
+  'preparing_runtime',
   'resolving_image',
   'running_harness',
   'collecting_evidence',
@@ -152,15 +152,6 @@ function errorResponse(res, error) {
   })
 }
 
-function authorized(headers, token, authMode = 'token') {
-  if (authMode === 'none') return true
-  const match = /^Bearer\s+(.+)$/i.exec(String(headers.authorization || '').trim())
-  const actual = match?.[1] || ''
-  const expectedHash = createHash('sha256').update(token).digest()
-  const actualHash = createHash('sha256').update(actual).digest()
-  return Boolean(actual) && timingSafeEqual(expectedHash, actualHash)
-}
-
 function removeLabeledContainers(evaluationId) {
   return new Promise((resolve) => {
     const query = spawn('docker', [
@@ -242,12 +233,6 @@ async function defaultControllerProbe(dataDir) {
 class BenchmarkEvaluatorService {
   constructor(options = {}) {
     this.dataDir = options.dataDir || process.env.EVALUATOR_DATA_DIR || '/data'
-    this.authMode = options.authMode || process.env.EVALUATOR_AUTH_MODE || 'token'
-    if (!['token', 'none'].includes(this.authMode)) {
-      throw new Error('EVALUATOR_AUTH_MODE must be token or none')
-    }
-    this.token = options.token || process.env.EVALUATOR_PLATFORM_TOKEN || ''
-    if (this.authMode === 'token' && !this.token) throw new Error('EVALUATOR_PLATFORM_TOKEN is required')
     this.platformBaseUrl = options.platformBaseUrl || process.env.EVALUATOR_AGENT_INSIGHT_BASE_URL || ''
     this.maxConcurrency = Number(options.maxConcurrency || process.env.EVALUATOR_MAX_CONCURRENCY || 1)
     if (!Number.isInteger(this.maxConcurrency) || this.maxConcurrency !== 1) {
@@ -255,9 +240,7 @@ class BenchmarkEvaluatorService {
     }
     this.journal = options.journal || new EvaluationJobJournal(this.dataDir)
     this.platform = options.platformClient || new AgentInsightPlatformClient(
-      this.token,
       fetch,
-      this.authMode,
       this.platformBaseUrl,
     )
     this.registry = options.registry || new EvaluatorRegistry(
@@ -324,7 +307,6 @@ class BenchmarkEvaluatorService {
       sourceRevision: process.env.EVALUATOR_SOURCE_REVISION || 'unknown',
       sourceDirty: String(process.env.EVALUATOR_SOURCE_DIRTY || 'false').toLowerCase() === 'true',
       controllerImageId: process.env.EVALUATOR_CONTROLLER_IMAGE_ID || 'unknown',
-      authMode: this.authMode,
       platformBaseUrlConfigured: Boolean(this.platformBaseUrl),
     }
   }
@@ -603,9 +585,6 @@ class BenchmarkEvaluatorService {
 
   async handle(req, res) {
     try {
-      if (!authorized(req.headers, this.token, this.authMode)) {
-        throw evaluatorError('EVALUATOR_UNAUTHORIZED', '评测服务凭证无效', 401)
-      }
       const url = new URL(req.url, 'http://evaluator.local')
       if (req.method === 'GET' && url.pathname === '/health') {
         return json(res, 200, await this.healthReport())

@@ -5,6 +5,7 @@ import {
   createEvaluatorCatalogField,
   defaultTraceBackflowSourceForField,
   evaluatorCatalogFieldKeyFromLabel,
+  hasMeaningfulDatasetCaseValue,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
   sortTraceBackflowDatasetsByRecency,
@@ -106,6 +107,19 @@ test('keeps Tool/Skill catalog fields under evaluator-readable JSON keys', () =>
     createEvaluatorCatalogField('available_tools'),
     createEvaluatorCatalogField('available_skills'),
   ]);
+});
+
+test('rejects an entirely empty single dataset item but keeps false and zero as values', () => {
+  const fields = [
+    { id: 'input', key: 'input', label: '输入', type: 'text' as const },
+    { id: 'score', key: 'score', label: '分数', type: 'number' as const },
+    { id: 'enabled', key: 'enabled', label: '启用', type: 'boolean' as const },
+  ];
+  const empty = normalizeCase({ id: 'empty', input: '', expectedOutput: '', values: {} });
+
+  assert.equal(hasMeaningfulDatasetCaseValue(empty, fields), false);
+  assert.equal(hasMeaningfulDatasetCaseValue({ ...empty, values: { score: 0 } }, fields), true);
+  assert.equal(hasMeaningfulDatasetCaseValue({ ...empty, values: { enabled: false } }, fields), true);
 });
 
 test('maps standard dataset fields to trace backflow artifacts by default', () => {
