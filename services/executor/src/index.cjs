@@ -6,6 +6,8 @@ const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
+const { SweBenchGitSourcePolicy } = require('./benchmarks/swe-bench.cjs')
 
 const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
 const DELIVERY_RETRY_BASE_MS = 5_000
@@ -369,6 +371,7 @@ class FileRunStore {
 
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted) return reject(options.signal.reason || new Error('Execution cancelled'))
     const useProcessGroup = Boolean(options.killProcessGroup) && process.platform !== 'win32'
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -386,6 +389,7 @@ function runProcess(command, args, options = {}) {
     let hardStopTimer = null
     const timeoutMs = Number(options.timeoutMs)
     const clearTimers = () => {
+      options.signal?.removeEventListener('abort', abort)
       if (timeoutTimer) clearTimeout(timeoutTimer)
       if (forceKillTimer) clearTimeout(forceKillTimer)
       if (hardStopTimer) clearTimeout(hardStopTimer)
@@ -402,6 +406,12 @@ function runProcess(command, args, options = {}) {
         else child.kill(signal)
       } catch {}
     }
+    const abort = () => {
+      terminate('SIGTERM')
+      forceKillTimer = setTimeout(() => terminate('SIGKILL'), 2_000)
+      forceKillTimer.unref?.()
+    }
+    options.signal?.addEventListener('abort', abort, { once: true })
     const processError = (code, signal) => {
       const error = timedOut
         ? new BenchmarkExecutorError(
@@ -426,7 +436,8 @@ function runProcess(command, args, options = {}) {
       settle(() => reject(error))
     })
     child.on('close', (code, signal) => {
-      if (!timedOut && code === 0) settle(() => resolve({ stdout, stderr }))
+      if (options.signal?.aborted) settle(() => reject(options.signal.reason || new Error('Execution cancelled')))
+      else if (!timedOut && code === 0) settle(() => resolve({ stdout, stderr }))
       else settle(() => reject(processError(code, signal)))
     })
     if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
@@ -460,6 +471,8 @@ class GitWorkspaceProvider {
   constructor(rootDir, processRunner = runProcess, options = {}) {
     this.rootDir = rootDir
     this.processRunner = processRunner
+    this.sourcePolicies = options.sourcePolicies || new Map()
+    this.sourceWorkspace = new GitSourceWorkspace({ run: processRunner, ErrorType: BenchmarkExecutorError, log: options.log })
     const fetchAttempts = Number(options.fetchAttempts ?? GIT_FETCH_ATTEMPTS)
     const fetchTimeoutMs = Number(options.fetchTimeoutMs ?? GIT_FETCH_TIMEOUT_MS)
     const retryBaseMs = Number(options.retryBaseMs ?? GIT_FETCH_RETRY_BASE_MS)
@@ -529,13 +542,26 @@ class GitWorkspaceProvider {
 
   async prepare(spec, context) {
     const workspace = path.join(this.rootDir, context.runId)
-    await this.fetchRevision(workspace, spec)
-    await this.processRunner('git', ['checkout', '--quiet', '--detach', 'FETCH_HEAD'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
-    const head = await this.processRunner('git', ['rev-parse', 'HEAD'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
-    if (head.stdout.trim().toLowerCase() !== spec.revision.toLowerCase()) {
-      throw new BenchmarkExecutorError('WORKSPACE_REVISION_MISMATCH', 'Git HEAD 与 baseCommit 不一致')
+    const policy = this.sourcePolicies.get(context.benchmarkKey)
+    try {
+      if (policy) {
+        await this.sourceWorkspace.prepare(this, spec, workspace, policy.resolve(spec), context.signal)
+      } else {
+        await this.fetchRevision(workspace, spec)
+      }
+      context.signal?.throwIfAborted()
+      await this.processRunner('git', ['checkout', '--quiet', '--detach', 'FETCH_HEAD'], {
+        cwd: workspace, signal: context.signal, errorCode: 'WORKSPACE_PREPARE_FAILED',
+      })
+      const head = await this.processRunner('git', ['rev-parse', 'HEAD'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
+      if (head.stdout.trim().toLowerCase() !== spec.revision.toLowerCase()) {
+        throw new BenchmarkExecutorError('WORKSPACE_REVISION_MISMATCH', 'Git HEAD 与 baseCommit 不一致')
+      }
+      return { path: workspace, baseCommit: spec.revision }
+    } catch (error) {
+      await fsp.rm(workspace, { recursive: true, force: true })
+      throw error
     }
-    return { path: workspace, baseCommit: spec.revision }
   }
 }
 
@@ -702,7 +728,7 @@ class BenchmarkExecutionRunner {
     await this.callback.progress(request, stage, { message }).catch(() => undefined)
   }
 
-  async execute(request) {
+  async execute(request, signal) {
     const plan = buildExecutionPlan(request.task, this)
     let workspace = null
     let appliedPolicy = null
@@ -713,7 +739,9 @@ class BenchmarkExecutionRunner {
     let pendingCompletion = null
     try {
       await this.progress(request, 'preparing', '正在准备 Git 工作区')
-      workspace = await plan.workspaceProvider.prepare(plan.workspace, { runId: request.runId })
+      workspace = await plan.workspaceProvider.prepare(plan.workspace, {
+        runId: request.runId, benchmarkKey: request.task.benchmark.key, signal,
+      })
       appliedPolicy = await this.policyEnforcer.apply(plan.policy, { runId: request.runId })
       await this.progress(request, 'agent_running', '正在运行 Agent')
       const agentResult = await plan.agentRuntime.run({
@@ -945,7 +973,12 @@ function createBenchmarkExecutor(options) {
   const baseDir = options.baseDir || path.join(os.homedir(), '.agent-insight', 'client')
   const store = options.store || new FileRunStore(path.join(baseDir, 'benchmark-runs'))
   const workspaceProvider = options.workspaceProvider
-    || new GitWorkspaceProvider(path.join(baseDir, 'workspaces', 'benchmark'))
+    || new GitWorkspaceProvider(path.join(baseDir, 'workspaces', 'benchmark'), runProcess, {
+      sourcePolicies: options.sourcePolicies || new Map([
+        ['swe-bench', new SweBenchGitSourcePolicy({ home: options.agentInsightHome || path.dirname(baseDir) })],
+      ]),
+      log: options.log || (() => {}),
+    })
   const workspaceProviders = options.workspaceProviders
     || new WorkspaceProviderRegistry([['git', workspaceProvider]])
   const configuredAgentPlatforms = options.agentPlatforms === undefined

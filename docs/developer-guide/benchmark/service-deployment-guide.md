@@ -327,6 +327,33 @@ curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-ke
 
 若新 Benchmark 增加了新 Runtime 或 Collector，必须先发布包含该能力的执行客户端，再在每台执行机上重新安装。
 
+### 7.1 配置 SWE-bench Case 源码来源（可选）
+
+在**运行 Agent 的客户端机器**上，使用安装客户端的账号编辑 `~/.agent-insight/.env`；root 账号对应 `/root/.agent-insight/.env`。自定义了 `AGENT_INSIGHT_HOME` 时，配置文件为该目录下的 `.env`。不要只配在平台或评测服务机器上。
+
+```bash
+mkdir -p "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}"
+vi "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/.env"
+```
+
+添加或修改这一行，下面示例启用本地缓存（目录需对客户端账号可写）：
+
+```ini
+SWE_BENCH_GIT_SOURCE=/srv/swe-git
+```
+
+| 配置值 | 行为 |
+|---|---|
+| 留空或不配置 | Gitee → GitHub，不保留本地缓存 |
+| 本地目录，如 `/srv/swe-git` | 本地缓存 → Gitee → GitHub，缺失源码下载后自动缓存 |
+| Git 根地址，如 `https://git.example.com` | 指定来源 → Gitee → GitHub，不保留本地缓存 |
+
+Git 根地址按 `根地址/owner/repo.git` 访问，例如 `https://git.example.com/pallets/flask.git`，不是压缩包下载地址。本地目录不需要手动创建每个仓库，也不会提前下载全部 500 个 Case。
+
+旧客户端需先重新执行页面提供的安装命令升级。升级后修改 `.env` 对下一次任务生效；若启动客户端时设置了同名环境变量，则以该变量为准（包括空值），修改它后需重启客户端。
+
+此项只影响 SWE-bench Case 仓库源码；与 `SWE_BENCH_SOURCE_ARCHIVE_SOURCE`（SWE-bench 工具源码归档）、数据集和 SWR 容器镜像配置无关。
+
 ## 8. 整体验收
 
 先完成三向连通性检查：

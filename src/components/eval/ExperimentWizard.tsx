@@ -496,6 +496,7 @@ export function ExperimentWizard({
   const [selectingAll, setSelectingAll] = useState(false);
   const [selected, setSelected] = useState<Map<string, SelectedCase>>(new Map());
   const [selectedGenerated, setSelectedGenerated] = useState<Map<string, SelectedCase>>(new Map());
+  const [benchmarkSelectedCasesExpanded, setBenchmarkSelectedCasesExpanded] = useState(true);
   const [benchmarkInstanceSearch, setBenchmarkInstanceSearch] = useState('');
   const [traceSearchDraft, setTraceSearchDraft] = useState('');
   const [traceSearch, setTraceSearch] = useState('');
@@ -602,6 +603,10 @@ export function ExperimentWizard({
         || (compactQuery.length > 0 && value.replace(/[^a-z0-9]+/g, '').includes(compactQuery));
     }));
   }, [benchmarkInstanceSearch, benchmarkPresentation, generationCases, isBenchmarkDataset]);
+  const selectedGeneratedCases = useMemo(
+    () => Array.from(selectedGenerated.values()),
+    [selectedGenerated],
+  );
 
   const refreshAgents = useCallback(async () => {
     if (!user) return;
@@ -2052,6 +2057,102 @@ export function ExperimentWizard({
                   取消全选
                 </button>
               </div>
+              {isBenchmarkDataset && selectedGeneratedCases.length > 0 && (
+                <div style={{ border: '1px solid var(--border)', borderRadius: 10, marginBottom: 8, overflow: 'hidden' }}>
+                  <button
+                    type="button"
+                    aria-expanded={benchmarkSelectedCasesExpanded}
+                    onClick={() => setBenchmarkSelectedCasesExpanded((expanded) => !expanded)}
+                    style={{
+                      width: '100%', height: 34, padding: '0 12px', border: 0,
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      background: 'var(--background-secondary)', color: 'var(--foreground)', cursor: 'pointer',
+                    }}
+                  >
+                    <b style={{ fontSize: 11.5 }}>已选 Case（{selectedGeneratedCases.length}）</b>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+                      {benchmarkSelectedCasesExpanded ? '收起' : '展开'}
+                    </span>
+                    <ChevronDown
+                      size={14}
+                      style={{
+                        color: 'var(--foreground-muted)',
+                        transform: benchmarkSelectedCasesExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                        transition: 'transform 160ms ease',
+                      }}
+                    />
+                  </button>
+                  {benchmarkSelectedCasesExpanded && (
+                    <div style={{ maxHeight: 140, overflow: 'auto', borderTop: '1px solid var(--border)' }}>
+                      <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...STICKY_TH, width: 44 }} aria-label="选择" />
+                            {benchmarkCaseColumns.map((column) => (
+                              <th
+                                key={column.path}
+                                title={column.description}
+                                style={{ ...STICKY_TH, width: column.width, minWidth: column.width }}
+                              >
+                                {column.label}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedGeneratedCases.map((item) => (
+                            <tr key={item.executionId}>
+                              <td style={{ ...TD, width: 44 }}>
+                                <input
+                                  type="checkbox"
+                                  aria-label={`取消选择 ${benchmarkPresentationText(benchmarkPresentationValue(item, 'externalCaseId'))}`}
+                                  checked
+                                  onChange={() => {
+                                    setSelectedGenerated((previous) => {
+                                      const next = new Map(previous);
+                                      next.delete(item.executionId);
+                                      return next;
+                                    });
+                                  }}
+                                />
+                              </td>
+                              {benchmarkCaseColumns.map((column) => {
+                                const value = benchmarkPresentationText(
+                                  benchmarkPresentationValue(item, column.path),
+                                  { format: column.format },
+                                );
+                                return (
+                                  <td
+                                    key={column.path}
+                                    style={{
+                                      ...TD,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      width: column.width,
+                                      minWidth: column.width,
+                                      ...(column.type === 'code'
+                                        ? { fontFamily: 'var(--font-mono, monospace)' }
+                                        : {}),
+                                      ...(column.type === 'number'
+                                        ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
+                                        : {}),
+                                    }}
+                                    title={value}
+                                  >
+                                    {truncateBenchmarkText(value, column.truncate)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
               {isBenchmarkDataset && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                   <div style={{ position: 'relative', width: 'min(420px, 100%)' }}>

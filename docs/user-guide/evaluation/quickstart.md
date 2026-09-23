@@ -79,7 +79,29 @@ Agent Insight 会从发起实验请求的 `Host` / `X-Forwarded-*` 自动推导�
 
 Agent Insight 与执行客户端在同一台机器时，安装 `curl` 使用 `http://127.0.0.1:3000` 即可；跨机器时，安装 `curl` 必须使用执行客户端能够访问的 Agent Insight 地址。配置更新不会改写已经开始的旧任务，旧客户端或旧任务仍可继续使用冻结的执行器回调覆盖地址。
 
-执行客户端会把 Artifact 上传和完成回调作为独立的持久化投递队列处理：网络失败时按指数退避重试，单次回调最多等待 30 秒，并且重试期间不占用 Agent 执行槽，后续 Case 仍可执行。Git 工作区的 shallow fetch 单次最多等待 120 秒，只对白名单内的 DNS、连接中断、超时、curl 传输和部分 5xx 等瞬时网络错误进行最多 3 次尝试；每次重试都重建临时仓库，第三次仅对该命令使用 HTTP/1.1，不修改宿主 Git 配置。仓库不存在、revision 不存在、鉴权、证书或磁盘错误不会重试。
+执行客户端会把 Artifact 上传和完成回调作为独立的持久化投递队列处理：网络失败时按指数退避重试，单次回调最多等待 30 秒，并且重试期间不占用 Agent 执行槽，后续 Case 仍可执行。Git 工作区的 shallow fetch 单次最多等待 120 秒。SWE-bench 按下方来源顺序获取指定 commit，每个远程来源尝试一次，失败再换源；磁盘空间、权限等本地错误直接失败。其他 Benchmark 保持原行为：瞬时网络错误最多尝试 3 次，每次重建临时仓库，第三次仅对该命令使用 HTTP/1.1；仓库、revision、鉴权、证书或磁盘错误不重试。不修改宿主 Git 配置。
+
+### SWE-bench Case 仓库源码来源
+
+在**运行 Agent 的客户端机器**上，用安装客户端的账号编辑 `~/.agent-insight/.env`（root 账号为 `/root/.agent-insight/.env`；自定义运行根时为 `$AGENT_INSIGHT_HOME/.env`）。平台或 Evaluator 单独配置此变量不会影响另一台机器的客户端。旧客户端需先重新执行页面提供的安装命令升级。
+
+| 值 | 获取顺序 |
+|---|---|
+| 空或未设置 | Gitee 镜像 → GitHub 原仓；不使用持久缓存 |
+| `/srv/swe-git` 等本地绝对目录 | 本地 Bare 缓存 → Gitee → GitHub；远程获取成功后按需写入缓存 |
+| `https://git.example.com` 等 HTTP(S) Git 根地址 | `根地址/owner/repo.git` → Gitee → GitHub；不使用持久缓存、不向远程写入 |
+
+例如希望复用本机缓存，在执行机环境文件中写入：
+
+```ini
+SWE_BENCH_GIT_SOURCE=/srv/swe-git
+```
+
+目录需对客户端账号可写，各仓库会自动按需创建，不会提前下载全部 500 个 Case。HTTP(S) 值是 Git 根地址，例如配置 `https://git.example.com` 后会访问 `https://git.example.com/pallets/flask.git`，不是网页或压缩包地址。
+
+修改 `.env` 对下一次任务生效；启动客户端时的同名环境变量优先（包括空值），修改它后需重启客户端。只有已完整缓存的源码可离线复用，不影响模型调用和容器镜像的网络需求。
+
+`SWE_BENCH_SOURCE_ARCHIVE_SOURCE` 是启动导入时使用的 **SWE-bench 工具源码归档**，不是 Flask、Django 等 **Case 仓库源码**，不能代替此配置。
 
 平台每 30 秒检查一次运行中的 Benchmark。Agent 执行侧：Git 工作区准备阶段最多允许连续 7 分钟无进度；Agent 阶段超过任务上限再加 90 秒宽限期；收集、上传、清理阶段连续 5 分钟没有新进度时回收。评测侧：等待下发、下发结果不确定、证据收集/上传/清理和结果归一化连续 5 分钟无进度时回收；官方 Harness 超过评测任务上限再加 90 秒时回收。回收会把 Case 明确置为失败并通过持久化续跑继续结算实验，服务重启后也会恢复，不会让页面永久停在“正在生成 Trace”或“运行中”。
 

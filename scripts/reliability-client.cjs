@@ -2177,6 +2177,8 @@ async function main() {
     deviceCredential: cfg.deviceCredential,
     insightBaseUrl: cfg.insightBaseUrl,
     baseDir: CLIENT_HOME,
+    agentInsightHome: getAgentInsightHome(),
+    log: (...args) => log(...args),
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,
     agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),

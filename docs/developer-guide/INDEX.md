@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `0c3c38e96ec320d976912ec08e1dfe2515ac9df4` (`0c3c38e9`) |
-| Branch | `codex/master-830-fixes-20260922` |
-| Date | 2026-09-22 |
-| Author | gyctl |
-| Subject | `fix: 同步830安装与链路追踪通用修复到master` |
-| Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 本次更新安装与 Trace 指南、生命周期及前端契约，保留既有 overlay，其他指南未重新全量审计。 |
+| Commit | `e78a74e0817ff699daa4e836f9e52ae4ffbc2cd4` (`e78a74e0`) |
+| Branch | `bench-9-16` |
+| Date | 2026-09-23 |
+| Author | mintuyang |
+| Subject | `修复实验列表状态及时更新` |
+| Documentation overlay | 本次更新 Benchmark 服务部署指南的 SWE-bench Git 来源策略与执行端配置；保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-23 working-tree overlay：执行器新增 `GitSourcePolicy` 抽象与 SWE-bench 实例策略。`SWE_BENCH_GIT_SOURCE` 在执行机配置：空值走 Gitee → GitHub；本地目录优先 Bare 缓存并按需补存；HTTP(S) 根地址优先指定 Git 源。按 baseCommit 校验完整性、仓库级锁更新缓存、独立 shallow 工作区隔离；其他 Benchmark 保留原行为。不新增预热、数据库字段或 API。
 
 > 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 

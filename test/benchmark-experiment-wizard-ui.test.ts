@@ -17,6 +17,12 @@ test('Benchmark Trace generation follows public Manifest columns and search path
   assert.match(wizard, /aria-label=\{benchmarkPresentation\?\.caseTable\.searchPlaceholder/);
   assert.match(wizard, /replace\(\/\[\^a-z0-9\]\+\/g, ''\)/);
   assert.match(wizard, /filteredGenerationCases\.map/);
+  assert.match(wizard, /已选 Case（\{selectedGeneratedCases\.length\}）/);
+  assert.match(wizard, /maxHeight: 140, overflow: 'auto'/);
+  assert.match(wizard, /aria-label=\{`取消选择/);
+  assert.match(wizard, /checked\s+onChange=\{\(\) => \{/);
+  assert.match(wizard, /next\.delete\(item\.executionId\)/);
+  assert.doesNotMatch(wizard, />操作<\/th>/);
   assert.match(wizard, /selectedDataset\.benchmark\.evaluatorKey/);
   assert.match(wizard, /presentation\?\.evaluator/);
   assert.doesNotMatch(wizard, /values\?\.instance_id/);
