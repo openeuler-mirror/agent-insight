@@ -9,12 +9,12 @@
 
 | Field | Value |
 |---|---|
-| Commit | `21519b8e68ff2204996e4f11ef1f8c14a23e6078` (`21519b8e`) |
+| Commit | `bcd8851c3927caf815d50408fe673642aeda37ed` (`bcd8851c`) |
 | Branch | `bench-9-16` |
 | Date | 2026-09-23 |
 | Author | mintuyang |
-| Subject | `修复case容器运行问题` |
-| Documentation overlay | 延续 Benchmark 服务部署指南的 SWE-bench Git 来源策略、执行端配置及其他既有 overlay；本轮补充 Benchmark Case 公共进度展示的 API 契约和用户指南，其他指南未重新全量审计。 |
+| Subject | `完整评测过程显示问题` |
+| Documentation overlay | 延续 Benchmark 服务部署指南的 SWE-bench Git 来源策略、执行端配置及其他既有 overlay；补充 Benchmark Case 公共进度展示的 API 契约和用户指南，并合入 upstream/master 的 Goal Plus 主从 Trace 同账号约束；其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
 
@@ -37,6 +37,8 @@
 > 2026-09-23 working-tree overlay：新增普通/Benchmark/Skill 用例分析与 A/B 实验及 Case 的停止并逻辑删除、持久化取消对账和定向执行中断；删除最后一个有效 Case 时自动删除实验并返回实验列表，对账补救零 Case 遗留实验。旧客户端拒绝停止指令时提示升级并等重启后重试，避免无效高频投递。评测机提供立即停止及可选离线受管镜像清理。更新 API、控制流、部署及用户指南。定向测试已通过；全量测试和类型检查存在未通过项，浏览器与真实 Docker/多机验收尚未执行。未重新全量审计其他指南。
 
 > 2026-09-22 working-tree overlay：新增默认关闭的跨 Benchmark 公共镜像池，保留安全预留和高水位，不设低水位；按需 LRU 回收、持久化使用保护、固定身份重试及当前/下一 Case 预取。接入包通过可选 `imageProvider` / `imagePreparationInput` 声明需求，SWE-bench 首先接入。准备操作复用原 POST 入口并独立校验共享密钥，不改变既有网络隔离及单评测并发约束。更新 Benchmark 接入、部署和用户指南；其他页面未全量重新审计。
+
+> 2026-09-23 working-tree overlay：Pi 安装器不再保留旧版、手工或不同账号的 Goal Plus collector 配置；主 Trace 与 worker Trace 强制复用同一 managed API Key 和上报端点，安装时停止并按当前配置恢复 watcher，runtime 检测到身份不一致时先停 watcher 再 fail closed。同步更新 Goal Plus 用户与开发者指南。
 
 > 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 
@@ -144,7 +146,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 5c768159 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff bcd8851c HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
