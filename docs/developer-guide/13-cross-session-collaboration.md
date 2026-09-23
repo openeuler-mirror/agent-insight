@@ -42,6 +42,18 @@
 
 这条 reported 路径优先于历史 `GoalPlusExecutionLink` 语义投影。同一主 Trace 已存在 resolved reported 关系时，不再叠加内部 Goal Plus 投影，避免 worker 重复。旧 semantic projection 只服务已有历史记录，不属于当前 collector 的兼容目标。
 
+## MCTS xGovernor reported 路径
+
+MCTS collector 不增加关系 API 或 Prisma 模型，直接使用公开 binding/event 契约：
+
+1. 每个 xGovernor `lease.client_id` 派生一个 collaboration 与 coordinator Trace Session；
+2. open/load 中的 Runtime ID 派生不可逆的逻辑 session ID，并绑定各自 OTLP Trace Session；
+3. open Runtime 第一次提交 turn 时，上报 `coordinator → runtime`；
+4. checkpoint 响应只登记 checkpoint 摘要及所有者；后续 `load` 使用同一摘要且实际提交 turn 时，上报 `parent runtime → child runtime`；
+5. 发起方 Trace 同时写入带执行时间的合成 `task` tool，event 使用 `fromLocator={recordType:'tool',name:'task'}`，使一对一或等量有序调用可按现有规则定位。
+
+只 load 而未提交 turn 的评分/官测临时 checkout 不创建协作成员。Runtime 和 checkpoint 原始 ID 不写入关系正文；node score/tree stdout 摘要也不参与端点推定。
+
 ## Trace 只读投影
 
 通用 Trace 详情读取 `/api/observe/session` 时，`composeCollaborationTrace` 在响应中追加带 `trace_synthetic`、`trace_relation` 元数据的虚拟 TASK，以及 worker 原生交互的展示副本，从而渲染：
