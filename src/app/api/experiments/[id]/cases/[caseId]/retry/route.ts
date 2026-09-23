@@ -320,13 +320,10 @@ export async function POST(
       return NextResponse.json({ kind: 'trace', status: 'running' });
     }
 
-    if (row.executionId) {
-      const failedResults = row.results.filter(
-        (result: { id: string; status: string }) => result.status === 'failed',
-      );
-      if (!failedResults.length) {
-        return NextResponse.json({ error: '该 Case 没有失败的评估结果' }, { status: 409 });
-      }
+    const failedResults = row.results.filter(
+      (result: { id: string; status: string }) => result.status === 'failed',
+    );
+    if (failedResults.length) {
       const statuses = [];
       for (const result of failedResults) {
         statuses.push(await retryResultRow(id, result.id, username));

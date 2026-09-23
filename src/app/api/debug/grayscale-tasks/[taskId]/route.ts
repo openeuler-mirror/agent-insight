@@ -37,6 +37,7 @@ import {
     normalizeGrayscaleTaskBinding,
     type GrayscaleTaskBoundSide,
 } from '@/lib/grayscale/task-binding';
+import { resolveGrayscaleRetryMode } from '@/lib/grayscale/retry-policy';
 
 export const dynamic = 'force-dynamic';
 
@@ -2880,6 +2881,189 @@ async function runGrayscaleExecutionRetry(args: {
     return { completion };
 }
 
+async function runGrayscaleEvaluationRetry(args: {
+    taskId: string;
+    user: string;
+    caseId: string;
+    targets: Array<{ side: Side; runIndex: number }>;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        evaluators: normalizeAbEvaluators(task.configJson.evaluators, task.configJson.evaluatorId),
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
+    };
+    if (config.triggerRouting) throw new Error('触发分析不支持此重评入口');
+    if (!config.evalExperimentId || config.evaluators.length === 0) throw new Error('评测实验配置不完整');
+
+    const experiment = await prisma.experiment.findFirst({
+        where: {
+            id: config.evalExperimentId,
+            user: args.user,
+            scope: 'skill-workbench',
+            preset: { in: ['use-case', 'skill-ab'] },
+        },
+        select: { id: true },
+    });
+    if (!experiment) throw new Error('Skill 实验不存在或不支持重评');
+
+    const states = task.caseStatesJson || {};
+    const retryItems = [];
+    for (const target of args.targets) {
+        const sideState = states[args.caseId]?.[target.side];
+        const run = sideState?.runs?.find(item => item.runIndex === target.runIndex);
+        if (!sideState || !run) throw new Error(`找不到需要重评的 ${target.side.toUpperCase()} 侧 Case`);
+        if (!run.sessionId || run.failureType) {
+            throw new Error(`${target.side.toUpperCase()} 侧缺少可复用 Trace，请重新执行`);
+        }
+        const experimentCase = await prisma.experimentCase.findFirst({
+            where: {
+                experimentId: experiment.id,
+                experiment: { user: args.user },
+                OR: [
+                    ...(run.experimentCaseId ? [{ id: run.experimentCaseId }] : []),
+                    { taskId: run.sessionId },
+                ],
+            },
+            select: { id: true, actualOutput: true },
+        });
+        if (!experimentCase) throw new Error(`${target.side.toUpperCase()} 侧找不到已绑定的评测 Case`);
+        const failedRows = await prisma.experimentEvalResult.findMany({
+            where: { experimentId: experiment.id, caseId: experimentCase.id, status: 'failed' },
+            select: { evaluatorId: true },
+        });
+        const evaluatorIds = Array.from(new Set([
+            ...getFailedOrMissingEvaluatorIds(run, config.evaluators),
+            ...failedRows.map((row: { evaluatorId: string }) => row.evaluatorId),
+        ])).filter(id => config.evaluators.includes(id));
+        if (!evaluatorIds.length) throw new Error(`${target.side.toUpperCase()} 侧没有可重试的失败评估项`);
+        retryItems.push({ ...target, run, evaluatorIds, experimentCase });
+    }
+
+    await prisma.experiment.updateMany({
+        where: { id: experiment.id, user: args.user },
+        data: { status: 'running' },
+    });
+    for (const item of retryItems) {
+        const existing = new Map((item.run.evaluations || []).map(evaluation => [evaluation.evaluatorId, evaluation]));
+        item.run.evaluations = mergeRunEvaluations(
+            item.run.evaluations,
+            item.evaluatorIds.map(evaluatorId => ({
+                ...(existing.get(evaluatorId) || {}),
+                evaluatorId,
+                evaluatorName: existing.get(evaluatorId)?.evaluatorName || abEvaluatorName(evaluatorId),
+                status: 'pending' as const,
+                score: undefined,
+                errorMessage: undefined,
+            })),
+        );
+        item.run.status = 'evaluating';
+        const retainedScore = aggregateEvaluationScore(item.run.evaluations);
+        if (typeof retainedScore === 'number') {
+            item.run.score = retainedScore;
+            item.run.tier = scoreTier(retainedScore);
+        } else {
+            delete item.run.score;
+            delete item.run.tier;
+        }
+        delete item.run.failureType;
+        delete item.run.failureDetail;
+        delete item.run.completedAt;
+        const prepared = await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config,
+            states,
+            caseId: args.caseId,
+            side: item.side,
+            nextRun: item.run,
+            touchLatestResultAt: true,
+        });
+        if (!prepared) throw new Error(`${item.side.toUpperCase()} 侧重评状态保存失败，请稍后重试`);
+    }
+
+    const active = activeRuns().get(`${args.user}:${args.taskId}`);
+    if (active) active.status = 'evaluating';
+    const completion = (async () => {
+        await Promise.all(retryItems.map(async item => {
+            try {
+                const rows = await evaluateEvalExperimentCase(
+                    experiment.id,
+                    item.experimentCase.id,
+                    args.user,
+                    { evaluatorIds: item.evaluatorIds, settleExperiment: false },
+                );
+                applyExpRowsToRun(item.run, rows, experiment.id);
+                if (item.run.status === 'pass' && item.experimentCase.actualOutput) {
+                    item.run.output = item.experimentCase.actualOutput;
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                item.run.evaluations = mergeRunEvaluations(
+                    item.run.evaluations,
+                    item.evaluatorIds.map(evaluatorId => ({
+                        evaluatorId,
+                        evaluatorName: abEvaluatorName(evaluatorId),
+                        status: 'failed' as const,
+                        errorMessage: message,
+                    })),
+                );
+                item.run.status = 'fail';
+                item.run.output = message;
+                markRunCompleted(item.run);
+            }
+            await persistRunStatePatch({
+                taskId: args.taskId,
+                user: args.user,
+                config,
+                states,
+                caseId: args.caseId,
+                side: item.side,
+                nextRun: item.run,
+                touchLatestResultAt: true,
+            });
+        }));
+        await settleExperimentStatus(experiment.id);
+    })();
+    return { completion };
+}
+
+async function runGrayscaleStageRetry(args: {
+    taskId: string;
+    user: string;
+    caseId: string;
+    targets: Array<{ side: Side; runIndex: number }>;
+    signal: AbortSignal;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    const modes: Partial<Record<Side, 'execution' | 'evaluation'>> = {};
+    const executionTargets: Array<{ side: Side; runIndex: number }> = [];
+    const evaluationTargets: Array<{ side: Side; runIndex: number }> = [];
+    for (const target of args.targets) {
+        const run = task.caseStatesJson[args.caseId]?.[target.side]?.runs
+            ?.find(item => item.runIndex === target.runIndex);
+        if (!run) throw new Error(`找不到需要重试的 ${target.side.toUpperCase()} 侧 Case`);
+        const mode = resolveGrayscaleRetryMode(run);
+        modes[target.side] = mode;
+        (mode === 'evaluation' ? evaluationTargets : executionTargets).push(target);
+    }
+
+    const completions: Promise<void>[] = [];
+    if (evaluationTargets.length) {
+        const retry = await runGrayscaleEvaluationRetry({ ...args, targets: evaluationTargets });
+        completions.push(retry.completion);
+    }
+    if (executionTargets.length) {
+        const retry = await runGrayscaleExecutionRetry({ ...args, targets: executionTargets });
+        completions.push(retry.completion);
+    }
+    return { modes, completion: Promise.all(completions).then(() => undefined) };
+}
+
 async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string; evaluatorIds?: string[]; onlyMissingEvaluation?: boolean }) {
     const task = await loadTask(args.taskId, args.user);
     if (!task) throw new Error('task not found');
@@ -3119,7 +3303,7 @@ export async function POST(
             });
         }
 
-        if (action === 'retry-execution') {
+        if (action === 'retry-run' || action === 'retry-execution') {
             const retrySides: Side[] = retrySide === 'both' ? ['a', 'b'] : retrySide ? [retrySide] : [];
             const retryTargets = retrySides.map(side => {
                 const sideRunIndex = retryRunIndexes[side];
@@ -3144,16 +3328,27 @@ export async function POST(
                 abortController,
             });
             try {
-                const retry = await runGrayscaleExecutionRetry({
-                    taskId,
-                    user,
-                    caseId: retryCaseId,
-                    targets: retryTargets as Array<{ side: Side; runIndex: number }>,
-                    signal: abortController.signal,
-                });
+                const retry = action === 'retry-run'
+                    ? await runGrayscaleStageRetry({
+                        taskId,
+                        user,
+                        caseId: retryCaseId,
+                        targets: retryTargets as Array<{ side: Side; runIndex: number }>,
+                        signal: abortController.signal,
+                    })
+                    : await runGrayscaleExecutionRetry({
+                        taskId,
+                        user,
+                        caseId: retryCaseId,
+                        targets: retryTargets as Array<{ side: Side; runIndex: number }>,
+                        signal: abortController.signal,
+                    });
+                const retryModes = 'modes' in retry
+                    ? retry.modes as Partial<Record<Side, 'execution' | 'evaluation'>>
+                    : {};
                 void retry.completion
                     .catch(async err => {
-                        console.error('[GRAYSCALE_TASKS_RETRY_EXECUTION] Failed:', err);
+                        console.error('[GRAYSCALE_TASKS_RETRY] Failed:', err);
                         const latest = await loadTask(taskId, user).catch(() => null);
                         if (!latest) return;
                         const message = err instanceof Error ? err.message : String(err);
@@ -3164,8 +3359,19 @@ export async function POST(
                             if (!retryRun) continue;
                             if (retryRun.status === 'running' || retryRun.status === 'evaluating' || retryRun.status === 'pending') {
                                 retryRun.status = 'fail';
-                                retryRun.failureType = 'agent_error';
-                                retryRun.failureDetail = message;
+                                const retryMode = retryModes[target.side] || 'execution';
+                                if (retryMode === 'evaluation') {
+                                    delete retryRun.failureType;
+                                    delete retryRun.failureDetail;
+                                    retryRun.evaluations = (retryRun.evaluations || []).map(evaluation => (
+                                        evaluation.status === 'pending' || evaluation.status === 'running'
+                                            ? { ...evaluation, status: 'failed', errorMessage: message }
+                                            : evaluation
+                                    ));
+                                } else {
+                                    retryRun.failureType = 'agent_error';
+                                    retryRun.failureDetail = message;
+                                }
                                 retryRun.output = message;
                                 markRunCompleted(retryRun);
                                 await persistRunStatePatch({
@@ -3191,10 +3397,15 @@ export async function POST(
                         }
                     })
                     .finally(() => activeRuns().delete(storeKey));
-                return NextResponse.json({ ok: true, runId, action }, { status: 202 });
+                return NextResponse.json({
+                    ok: true,
+                    runId,
+                    action,
+                    ...(Object.keys(retryModes).length ? { modes: retryModes } : {}),
+                }, { status: 202 });
             } catch (err) {
                 activeRuns().delete(storeKey);
-                const message = err instanceof Error ? err.message : '重新执行失败';
+                const message = err instanceof Error ? err.message : action === 'retry-run' ? '重试失败' : '重新执行失败';
                 const status = message === 'task not found' ? 404 : 409;
                 return NextResponse.json({ error: message }, { status });
             }

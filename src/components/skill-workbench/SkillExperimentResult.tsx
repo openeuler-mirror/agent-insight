@@ -15,6 +15,7 @@ import {
   type AbSideState,
 } from '@/lib/skill-workbench/ab-comparison';
 import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigger-evaluator';
+import { resolveGrayscaleRetryMode } from '@/lib/grayscale/retry-policy';
 
 interface DetailPayload {
   id: string;
@@ -334,7 +335,7 @@ export function SkillExperimentResult({
     };
   }, [abComparison, caseIds, detail?.preset, states]);
 
-  const retryExecution = useCallback(async (caseId: string, side: 'a' | 'b' | 'both') => {
+  const retryRun = useCallback(async (caseId: string, side: 'a' | 'b' | 'both') => {
     const task = workbenchExperiment?.grayscaleTask;
     if (!task?.id || !task.caseStates) return;
     const retryKey = `${caseId}:${side}`;
@@ -368,7 +369,7 @@ export function SkillExperimentResult({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           user,
-          action: 'retry-execution',
+          action: 'retry-run',
           caseId,
           side,
           runIndexes: Object.fromEntries(targets.map((target) => [
@@ -697,6 +698,8 @@ export function SkillExperimentResult({
                       const bTraceScore = average(comparison.b.evaluations.filter((item) => evaluatorLookup.categoryOf(item.evaluatorId) === 'traj' && item.status === 'done').map((item) => item.score));
                       const aRun = [...sideRuns(states[comparison.caseId]?.a)].reverse()[0];
                       const bRun = [...sideRuns(states[comparison.caseId]?.b)].reverse()[0];
+                      const aRetryMode = aRun ? resolveGrayscaleRetryMode(aRun) : 'execution';
+                      const bRetryMode = bRun ? resolveGrayscaleRetryMode(bRun) : 'execution';
                       const retryBusy = Boolean(retryingRun) || (!experimentSettled && hasActiveRuns);
                       const aBusy = !experimentSettled && runIsActive(comparison.a);
                       const bBusy = !experimentSettled && runIsActive(comparison.b);
@@ -724,19 +727,19 @@ export function SkillExperimentResult({
                           <td className="sticky right-64 bg-card px-2 py-3">
                             <div className="flex items-center gap-2">
                               <button type="button" disabled={!aExperimentCaseId} onClick={() => aExperimentCaseId && setCaseDetailId(aExperimentCaseId)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                              <button type="button" disabled={retryBusy || aBusy} onClick={() => void retryExecution(comparison.caseId, 'a')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:a` ? '提交中' : aBusy ? '执行中' : '重新执行'}</button>
+                              <button type="button" disabled={retryBusy || aBusy} onClick={() => void retryRun(comparison.caseId, 'a')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:a` ? '提交中' : aBusy ? (aRetryMode === 'evaluation' ? '评测中' : '执行中') : aRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                             </div>
                             {retryError.key === `${comparison.caseId}:a` && <small className="mt-1 block whitespace-normal text-[10px] leading-4 text-error">{retryError.message}</small>}
                           </td>
                           <td className="sticky right-32 bg-card px-2 py-3">
                             <div className="flex items-center gap-2">
                               <button type="button" disabled={!bExperimentCaseId} onClick={() => bExperimentCaseId && setCaseDetailId(bExperimentCaseId)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                              <button type="button" disabled={retryBusy || bBusy} onClick={() => void retryExecution(comparison.caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:b` ? '提交中' : bBusy ? '执行中' : '重新执行'}</button>
+                              <button type="button" disabled={retryBusy || bBusy} onClick={() => void retryRun(comparison.caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:b` ? '提交中' : bBusy ? (bRetryMode === 'evaluation' ? '评测中' : '执行中') : bRetryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                             </div>
                             {retryError.key === `${comparison.caseId}:b` && <small className="mt-1 block whitespace-normal text-[10px] leading-4 text-error">{retryError.message}</small>}
                           </td>
                           <td className="sticky right-0 bg-card px-2 py-3">
-                            <button type="button" disabled={!aRun || !bRun || retryBusy || aBusy || bBusy} onClick={() => void retryExecution(comparison.caseId, 'both')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:both` ? '提交中' : aBusy || bBusy ? '执行中' : '重新执行 A+B'}</button>
+                            <button type="button" disabled={!aRun || !bRun || retryBusy || aBusy || bBusy} onClick={() => void retryRun(comparison.caseId, 'both')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === `${comparison.caseId}:both` ? '提交中' : aBusy || bBusy ? '重试中' : aRetryMode === bRetryMode ? (aRetryMode === 'evaluation' ? '重新评测 A+B' : '重新执行 A+B') : '重试 A+B'}</button>
                             {retryError.key === `${comparison.caseId}:both` && <small className="mt-1 block whitespace-normal text-[10px] leading-4 text-error">{retryError.message}</small>}
                           </td>
                         </tr>
@@ -785,6 +788,7 @@ export function SkillExperimentResult({
                           const summary = summarizeAbSide(sideState);
                           const runs = sideRuns(sideState);
                           const latestRun = [...runs].reverse().find((run) => run.runIndex != null || run.roundIndex != null);
+                          const retryMode = latestRun ? resolveGrayscaleRetryMode(latestRun) : 'execution';
                           const experimentCase = detail.cases?.find((item) => (
                             (latestRun?.experimentCaseId && item.id === latestRun.experimentCaseId)
                             || (summary.sessionId && item.taskId === summary.sessionId)
@@ -807,7 +811,7 @@ export function SkillExperimentResult({
                               <td className="sticky right-0 bg-card px-3 py-3">
                                 <div className="flex items-center gap-2">
                                   <button type="button" disabled={!experimentCase?.id} onClick={() => experimentCase?.id && setCaseDetailId(experimentCase.id)} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">详情</button>
-                                  <button type="button" disabled={!latestRun || busy} onClick={() => void retryExecution(caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === retryKey ? '提交中' : busy ? '执行中' : '重新执行'}</button>
+                                  <button type="button" disabled={!latestRun || busy} onClick={() => void retryRun(caseId, 'b')} className="text-primary hover:underline disabled:cursor-not-allowed disabled:text-foreground-muted">{retryingRun === retryKey ? '提交中' : busy ? (retryMode === 'evaluation' ? '评测中' : '执行中') : retryMode === 'evaluation' ? '重新评测' : '重新执行'}</button>
                                 </div>
                                 {retryError.key === retryKey && <small className="mt-1 block whitespace-normal text-[10px] leading-4 text-error">{retryError.message}</small>}
                               </td>
