@@ -53,7 +53,7 @@ function loadCollectorConfig(options = {}) {
     options.configPath ||
     path.join(homeDir, ".agent-insight", "collectors", "pi-agent", "config.json");
   const file = readJsonIfExists(configPath);
-  const apiKey = env.AGENT_INSIGHT_API_KEY || file.apiKey;
+  const apiKey = String(file.apiKey || "").trim();
   const endpoint = env.AGENT_INSIGHT_OTLP_ENDPOINT || file.endpoint || DEFAULT_ENDPOINT;
   const collaborationSessionsEndpoint = env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
     || file.collaborationSessionsEndpoint
@@ -92,6 +92,10 @@ async function activateGoalPlusObserver(request, config) {
     homeDir: config.homeDir,
     configPath: config.goalPlusObserverConfigPath,
   });
+  if (!config.apiKey || goalPlusConfig.apiKey !== config.apiKey) {
+    await collector.stopWatcher(goalPlusConfig);
+    throw new Error("Pi and Goal Plus collectors must use the same managed API key; reinstall the Pi collector");
+  }
   return collector.activateGoalPlusSource(request.root, {
     goalId: request.goalId,
     nativeSessionId: request.nativeSessionId,
@@ -815,6 +819,7 @@ module.exports = {
   DEFAULT_COLLABORATION_EVENTS_ENDPOINT,
   DEFAULT_COLLABORATION_SESSIONS_ENDPOINT,
   PiTraceCollector,
+  activateGoalPlusObserver,
   classifyTool,
   createCollector,
   isSubagentWorkerProcess,

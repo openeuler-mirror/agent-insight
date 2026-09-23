@@ -8,6 +8,7 @@ import { createRequire } from "node:module"
 const require = createRequire(import.meta.url)
 const {
   PiTraceCollector,
+  activateGoalPlusObserver,
   classifyTool,
   createCollector,
   goalPlusCreatedIdFromCurrentContext,
@@ -392,7 +393,7 @@ test("Tool classifier and MCP parser preserve explicit framework semantics", () 
   assert.equal(parseMcpIdentity("custom"), null)
 })
 
-test("collector config honors environment precedence and remains disabled without a key", async (t) => {
+test("collector config keeps the installed identity authoritative and remains disabled without a key", async (t) => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pi-config-"))
   t.after(() => fsp.rm(dir, { recursive: true, force: true }))
   const configPath = path.join(dir, "config.json")
@@ -410,7 +411,7 @@ test("collector config honors environment precedence and remains disabled withou
     },
   })
   assert.equal(config.enabled, true)
-  assert.equal(config.apiKey, "env-key")
+  assert.equal(config.apiKey, "file-key")
   assert.equal(config.endpoint, "http://env-endpoint")
 
   const disabled = loadCollectorConfig({
@@ -419,6 +420,27 @@ test("collector config honors environment precedence and remains disabled withou
     env: {},
   })
   assert.equal(disabled.enabled, false)
+})
+
+test("Goal Plus activation fails closed when its managed identity differs from Pi", async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "pi-goal-plus-identity-"))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const goalPlusConfigPath = path.join(dir, "goal-plus", "config.json")
+  await fsp.mkdir(path.dirname(goalPlusConfigPath), { recursive: true })
+  await fsp.writeFile(goalPlusConfigPath, JSON.stringify({
+    apiKey: "worker-account-key",
+    baseUrl: "http://127.0.0.1:9",
+  }))
+
+  await assert.rejects(() => activateGoalPlusObserver({
+    root: path.join(dir, ".gp"),
+    goalId: "gp_test",
+    nativeSessionId: "pi-session",
+  }, {
+    apiKey: "main-account-key",
+    homeDir: dir,
+    goalPlusObserverConfigPath: goalPlusConfigPath,
+  }), /must use the same managed API key/)
 })
 
 test("Pi collector derives a distinct session id per agent task within one Pi session", async () => {

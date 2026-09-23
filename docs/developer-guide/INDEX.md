@@ -18,6 +18,8 @@
 
 ### 旧快照至当前提交的变更摘要
 
+> 2026-09-23 working-tree overlay：Pi 安装器不再保留旧版、手工或不同账号的 Goal Plus collector 配置；主 Trace 与 worker Trace 强制复用同一 managed API Key 和上报端点，安装时停止并按当前配置恢复 watcher，runtime 检测到身份不一致时先停 watcher 再 fail closed。同步更新 Goal Plus 用户与开发者指南。
+
 > 2026-09-22 working-tree overlay：同步 830 已验收的安装与 Trace 通用修复：安装页保留 Linux curl、移除相关文档卡；所有未结束 Trace 采用十分钟无上报超时并自动刷新，AcTrail 明确根进程退出保留终态；修复列表、子 Agent 筛选与导航、完整内容及弹窗复制。保留 master 多框架、Goal Plus、RAS、标签和评测入口。同步安装、Trace 用户指南及 API/前端契约；未重新审计其他指南。
 
 > 2026-09-22 working-tree overlay：采集器安装增加共享依赖预检、已知旧版本摘要白名单升级和备份；源码生产启动通过 `scripts/verify-standalone.cjs` 校验页面产物，HTTP readiness 拒绝 500。运行中的 standalone 与手动 `npm run build` 仍共用 `.next`，必须先停止旧进程再构建。
@@ -124,7 +126,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 0c3c38e9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

@@ -44,7 +44,7 @@ Pi collector 只在实际执行 `/goal-plus` 或 `/goal-plus-with-final-check` �
 - Node.js 版本不低于 22.19.0。
 - Goal Plus 已安装在 Pi 中并使用当前 session 格式。
 
-在“安装指导”中只勾选 **Pi Agent**，执行生成的一键接入命令。安装器会配置 Pi 原生采集器，并在其安装包中放入 Agent Insight 自有的 Goal Plus worker/关系观察器；不会安装或修改 Goal Plus 本体。
+在“安装指导”中只勾选 **Pi Agent**，执行生成的一键接入命令。安装器会配置 Pi 原生采集器，并在其安装包中放入 Agent Insight 自有的 Goal Plus worker/关系观察器；不会安装或修改 Goal Plus 本体。两套采集器始终写入同一份当前账号凭据和上报端点；重新接入或切换账号时，安装器会覆盖旧的 Goal Plus 采集配置并重启已有 watcher，避免主 Trace 与 worker Trace 分属不同用户。
 
 此时观察器状态为 `DORMANT`，不会扫描 home 目录，也不会启动 watcher：
 
@@ -54,7 +54,7 @@ Pi collector 只在实际执行 `/goal-plus` 或 `/goal-plus-with-final-check` �
 4. 只有 Goal ID、当前 Pi native session 和 `goal.json.host_command_invocations` 全部匹配时，观察器才自动登记 source、首次 scan 并确保 watcher 运行。
 5. `.gp` 不存在、Goal Plus 未安装、证据不匹配或观察器失败时，Pi 主 Trace 继续正常采集，增强状态记为 `DEGRADED`。
 
-旧的 `frameworks=goal-plus` 安装链接仍可使用，但会在服务端映射为 Pi Agent 安装，不再执行第二套 Goal Plus 安装。已有 `goal-plus-collector`、source registry 和 spool 保持兼容。自动登记对同一 canonical root 幂等；服务重启后 `ensure` 会恢复已有 source 的 watcher。
+旧的 `frameworks=goal-plus` 安装链接仍会映射为 Pi Agent 安装，不再执行第二套 Goal Plus 安装。重新安装时不保留旧版或其他账号的 Goal Plus collector 配置；source registry 和 spool 保留，已有 source 会由当前账号的 watcher 重新扫描。自动登记对同一 canonical root 幂等；服务重启后 `ensure` 会恢复已有 source 的 watcher。
 
 ## 展示与状态
 
@@ -85,6 +85,7 @@ node "$HOME/.agent-insight/collectors/goal-plus/goal-plus-collector.cjs" status
 重点检查：
 
 - 执行真实 Goal Plus start 后，`activation.status` 为 `ACTIVE`、`sourceCount` 大于 0 且 watcher 为 running；未运行 Goal Plus 时 `DORMANT` 是正常状态；
+- `pi-agent/config.json` 与 `goal-plus/config.json` 由同一次 Pi 接入生成；账号切换后必须重新执行 Pi 一键接入；
 - `relationshipRejected` 为 0；
 - worker metadata 使用当前四个字段，并且 `agent_harness=pi`；
 - Goal 的 `host_command_invocations` 含 `agent_harness=pi`、`action=start` 和 `session_id`；
@@ -92,13 +93,12 @@ node "$HOME/.agent-insight/collectors/goal-plus/goal-plus-collector.cjs" status
 
 可覆盖的专属配置包括：
 
-- `AGENT_INSIGHT_GOAL_PLUS_API_KEY`
 - `AGENT_INSIGHT_GOAL_PLUS_BASE_URL`
 - `AGENT_INSIGHT_GOAL_PLUS_OTLP_ENDPOINT`
 - `AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_SESSIONS_ENDPOINT`
 - `AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_EVENTS_ENDPOINT`
 
-Pi 主绑定端点也可分别通过 `AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT` 和 `AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT` 覆盖。通常只配置 base URL 即可，安装器会生成默认接口地址。
+Goal Plus 不再接受独立 API Key；身份只读取安装器写入的 managed config。Pi 主绑定端点也可分别通过 `AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT` 和 `AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT` 覆盖。通常只配置 base URL 即可，安装器会为主 Trace 和 worker Trace 写入相同接口地址。
 
 ## 隐私与卸载
 

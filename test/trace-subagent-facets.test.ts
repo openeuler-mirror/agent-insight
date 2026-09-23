@@ -9,7 +9,7 @@ test('subagent type facets count owned child executions while other facets retai
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-facet-'));
     const saved = { ...process.env };
     delete process.env.DB_HOST;
-    process.env.AGENT_INSIGHT_DATA_DIR = dir;
+    process.env.AGENT_INSIGHT_HOME = dir;
     process.env.DATABASE_URL = `file:${path.join(dir, 'test.db')}`;
     fs.writeFileSync(path.join(dir, 'test.db'), '');
     execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { stdio: 'pipe' });
