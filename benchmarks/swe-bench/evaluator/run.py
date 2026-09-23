@@ -49,7 +49,7 @@ class ControlledContainers:
         kwargs["mem_limit"] = f"{self._memory_mib}m"
         kwargs["nano_cpus"] = int(self._cpu * 1_000_000_000)
         if self._network_policy == "deny":
-            kwargs["network_disabled"] = True
+            kwargs["network_mode"] = "none"
         return self._containers.create(*args, **kwargs)
 
     def __getattr__(self, name):

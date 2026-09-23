@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `27279a6cee6c6101a826b070329b4680d2ea76e1` (`27279a6c`) |
+| Commit | `5c768159dfc8ef5c29cfd534676fa9e041dc2d3c` (`5c768159`) |
 | Branch | `bench-9-16` |
 | Date | 2026-09-23 |
 | Author | mintuyang |
-| Subject | `优化swebench评测git源码拉取逻辑，加速评测` |
-| Documentation overlay | 本次更新 Benchmark 服务部署指南的 SWE-bench Git 来源策略与执行端配置；合入 PR #294 文本评估器运行配置，并更新实验、安装、Trace、生命周期及前端契约相关指南；保留既有 overlay，其他指南未重新全量审计。 |
+| Subject | `修复启动bug` |
+| Documentation overlay | 延续 Benchmark 服务部署指南的 SWE-bench Git 来源策略、执行端配置及其他既有 overlay；本轮补充 Benchmark 接入指南的 SWE-bench Case 网络隔离语义，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-23 working-tree overlay：SWE-bench Case 容器在 `network: deny` 下使用 Docker `network_mode=none`，保留容器内 localhost 与回环套接字，同时阻断外部网络，修复 pytest 插件启动时的名称解析失败。更新 Benchmark 接入指南。
 
 > 2026-09-23 working-tree overlay：生产 `start.sh` 增加同项目残留 Trace 消费进程清理。端口释放后核对锁归属，仅终止已失去监听的旧 standalone；Linux 旧进程成为僵尸时清理其遗留锁。无法核实归属时中止启动。更新启动排障 FAQ 与 OTel 消费数据流说明。
 
@@ -140,7 +142,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 27279a6c HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 5c768159 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

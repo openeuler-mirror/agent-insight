@@ -8,6 +8,7 @@ test('managed SWE Harness cannot pull behind the pool and does not remove its ow
   const source = fs.readFileSync(path.resolve('benchmarks/swe-bench/evaluator/run.py'), 'utf8')
   const script = `
 import ast
+import os
 tree = ast.parse(${JSON.stringify(source)})
 names = {"PreparedImages", "ControlledDockerClient", "ControlledContainers", "cleanup_labeled"}
 selected = ast.Module(body=[node for node in tree.body if getattr(node, "name", "") in names], type_ignores=[])
@@ -36,6 +37,8 @@ runtime, case = Container("evaluator-runtime"), Container("case")
 class Containers:
     def list(self, **kwargs):
         return [runtime, case]
+    def create(self, *args, **kwargs):
+        return kwargs
 class Client:
     containers = Containers()
     images = Images()
@@ -45,6 +48,13 @@ assert cleanup_labeled(client, "evaluation") == {"status": "succeeded"}
 assert case.removed and not runtime.removed
 assert isinstance(ControlledDockerClient(client, "evaluation", 1, 1024, "deny", True).images, PreparedImages)
 assert ControlledDockerClient(client, "evaluation", 1, 1024, "deny").images is client.images
+denied = ControlledDockerClient(client, "evaluation", 1, 1024, "deny").containers.create("image")
+assert denied["network_mode"] == "none"
+assert "network_disabled" not in denied
+assert denied["labels"]["agent-insight.role"] == "evaluator-case"
+allowed = ControlledDockerClient(client, "evaluation", 1, 1024, "allow").containers.create("image")
+assert "network_mode" not in allowed
+assert "network_disabled" not in allowed
 `
   const result = spawnSync('python3', ['-c', script], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr || result.stdout)
