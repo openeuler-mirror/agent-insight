@@ -20,6 +20,25 @@
 
 ## Public API
 
+### 实验重命名
+
+`PATCH /api/experiments/:id` 接收 `{ user, name }`，只更新当前用户未删除的普通或 Skill 实验。名称会去除首尾空白，长度须为 1～120 个字符；成功返回 `{ success: true, name }`，不存在或无权访问返回 `404`。该接口原有的 `{ user, watchMode: false }` 停止监听契约保留，两类修改不能合并在一次请求中。重命名只修改 `Experiment.name`，不改冻结配置、执行状态或评测结果。
+
+### 实验停止与逻辑删除（2026-09-23 working-tree overlay）
+
+| 接口 | 契约 |
+|---|---|
+| `DELETE /api/experiments/:id?stop=true` | 校验实验归属，持久化全实验取消与逻辑删除；未带 `stop=true` 保留原草稿补偿删除语义 |
+| `DELETE /api/experiments/:id/cases/:caseId` | 删除所属实验 Case；没有剩余有效 Case 时一并逻辑删除实验。Skill 用例分析/A/B 可用 `dataset:<源CaseId>`，同时覆盖两侧和重复运行 |
+| `GET /api/experiments/cancellations` | 返回当前用户的待确认取消摘要，不接受跨用户查询 |
+| Evaluator `POST /api/v1/evaluations`，`operation=cancel` | `runId` 与 `requestDigest` 定向取消；返回 `cancelling` 或 `cancelled`，未知但合法 ID 可先持久化取消，阻止迟到派发 |
+
+平台沿用 `resolveUser` 鉴权，删除返回 `{ deleted: true, cancellation }`，Case 删除另返回 `experimentDeleted: boolean`，供页面在最后一个 Case 删除后跳转实验列表。状态为 `202`（待确认）或 `200`（已确认）；不存在/越权为 `404`。重复操作复用 `(experimentId, caseKey)` 对应记录。Evaluator 沿用受控网络边界及原任务摘要校验，不新增公开匿名远程管理命令。
+
+`Experiment.deletedAt`、`ExperimentCase.deletedAt` 控制列表和汇总可见性；`ExperimentCancellation` 保存用户、目标集合、确认状态和错误；`ExperimentLocalExecution` 在受控本地工作真正退出后移除。不能把删除标记、取消指令 `SUCCEEDED` 或 HTTP 请求中断当作进程退出证明。取消与执行状态分别记录，迟到结果不能复活条目。
+
+客户端指令 `CANCEL_EXPERIMENT_RUN` 只接受结构化 `kind=ordinary|benchmark` 和 `runId`，不接受远程命令/PID。客户端落盘后中断对应进程树并返回实际退出状态；平台对未确认目标持久化重试。
+
 ### `runGeneralAgent(input: RunGeneralAgentInput): Promise<RunGeneralAgentResult>`  {#run-general-agent}
 - **Location**: `src/lib/engine/general-agent/runner.ts`
 - **Called by**: 约 9 处内部调用点 —— 内部 LangGraph/deepagents 运行时的统一入口；被 skill 生成、优化以及 LLM 评测器使用。
@@ -205,6 +224,7 @@
 - **Benchmark Agent 与评测链路** — `BenchmarkAdapter` 的五个方法是 `validateAndSplitCase()`、`buildAgentTask()`、`validateSubmission()`、`buildEvaluationRequest()`、`normalizeResult()`；`AbstractBenchmarkAdapter` 统一处理 Schema、公开/私有边界、上下文、Artifact 和归一化不变量，实例 Adapter/Evaluator 承载具体业务语义。`benchmark.yaml` 是接入唯一 Manifest，构建期 Catalog 注册 Adapter、Manifest 和 Evaluator descriptor；官方评估器 ID 必须取 `evaluation.evaluatorKey`，不得假设它等于 `adapterKey`。执行器只根据 workspace provider、Agent platform 和 Artifact collector 组合能力，公共层不解释 `model.patch`、测试名单或 `SWE_*`。Controller 通过统一文件协议运行实例 Entrypoint，按 descriptor 的 runtime、网络策略和资源上限执行；`application/json` Evidence 统一解析，业务一致性由 Adapter/Evaluator 判断。`NormalizedBenchmarkPoint` 以 `label + value` 为通用事实，可选 `total/format/score/evidence`。结果 API 只返回完整 `submissions[]` 与 `evidenceArtifacts[]` 及受控 `contentUrl`，不保留 `patchArtifactId` 或单个 `submission`。业务层不建立 Benchmark、数据集或评估器版本；协议中的 `/v1` 只表示跨进程兼容。
 - **Benchmark 动态执行目标** — `GET /api/benchmark/v1/execution-targets?datasetId=` 复用普通实验的客户端平台能力判定：只接受声明 `RUN_EXPERIMENT_CASE`、`RUN_BENCHMARK_CASE`、`runExperimentCase.returnsTraceId=true` 且上报至少一个 Agent 的平台，再叠加客户端在线/服务健康、Adapter 静态能力以及动态 `agent-runtime/{platform}/v1` 检查。创建 Benchmark 实验时对同一 `clientId + platform + agent` 精确组合再次校验，不能仅凭客户端拥有另一种 Runtime 放行。执行任务通过已有 WSS/长轮询控制通道按 `clientId` 投递，客户端不需要执行器 URL 或监听端口。SWE-bench Manifest 因此只固定 `git-workspace/v1` 与 `git-patch/v1`，不固定 OpenCode。
 - **Benchmark 浏览器契约** — 浏览器继续使用 `/api/agent-datasets`、`/api/experiments/agents`、`/api/experiments` 和通用详情/重试接口。`datasetKind=benchmark` 的公共投影携带 `readOnly`、`shared`、`adapterKey`、独立的 `evaluatorKey`、声明式 Presentation 与公开 Case。创建接口按 Manifest 自动绑定 `benchmark:<evaluatorKey>`。详情的 `case.benchmark` 返回 `publicPayload`、`submissions[]` 和 `evidenceArtifacts[]`；文件只暴露元数据与受控 `contentUrl`，不返回私有 Case、存储路径或正文。运行状态由通用 Run/Evaluation 状态表达，具体文件名称和业务标签由 `presentation.artifacts` 匹配，缺少匹配规则时仍返回原始文件名。
+- **Benchmark Case 进度** — 通用实验详情的 `case.benchmark` 额外返回 `runStatus`、`progressStage` 和 `workspaceProvider`。`runStatus=pending` 表示等待开始；执行器回调的 `progressStage=preparing` 仅表示当前 Case 正在准备工作区，公共前端只在 `workspaceProvider=git` 时显示 Git 文案，其他 Provider 回退为通用执行环境文案。执行器接收任务但尚未回传进度时显示等待启动，不推断为 Agent 已运行；不公开完整任务信封、工作区路径或 Git 来源地址。
 - **Benchmark 数据集管理契约** — `BenchmarkDatasetLoader` 只从服务端可读文件逐条产生 Raw Case，Adapter 的 `validateAndSplitCase()` 负责校验、公开/私有拆分和 `catalogProjection`。管理员通过 `install-dataset.ts` 导入系统共享只读数据集；后端按 `presentation.caseTable.columns` 生成并冻结字段快照，完整保留嵌套 `values.*` 路径和 `code` 等展示类型。Manifest 更新不静默改变历史数据集；`refresh-dataset-presentation.ts --dataset <id>` 才显式刷新字段定义。`remove-dataset.ts` 删除未引用数据集，被引用数据集只归档。
 - **Benchmark Evaluator 运行配置与部署** — 评测机入口为无 Benchmark 参数的 `scripts/start-evaluator.sh`，始终构建不含具体 Harness 的通用 Controller。Evaluator descriptor 以 `runtime=oci-container`、内容派生镜像引用、容器 Entrypoint、network 和资源上限描述实例运行时；首个任务按 `evaluator.key + benchmark.key` 自动准备并校验 Runtime，后续复用缓存。实例环境变量通过重复的 `--evaluator-env NAME=VALUE` 传入 Runtime。服务间不设应用层鉴权，访问范围由部署网络控制；目标地址热加载、journal、回调重试、watchdog 与所有权边界保持不变。
 - **Benchmark 文档入口** — 浏览器读取通用 `GET /api/experiments/:id` 的 Benchmark 展示投影；`GET /api/benchmark/v1/experiments/:id` 保留为 Benchmark 专用只读分页契约。完整协议边界、调用顺序和扩展方式见 [Benchmark 统一接入设计](../design/benchmark/)。

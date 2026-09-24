@@ -328,6 +328,7 @@ test('experiments API: persist and return normalized evaluator configs', async (
   );
   assert.equal(clonedDetailRes.status, 200);
   const clonedDetail = await clonedDetailRes.json();
+  assert.match(clonedDetail.name, /^Agent 评测 \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
   assert.deepEqual(clonedDetail.evaluatorConfigs, detail.evaluatorConfigs);
 });
 

@@ -18,7 +18,11 @@ description: "使用已有 Trace 或 Benchmark 数据集完成第一次实验"
 
 ### SWE-bench 等容器 Benchmark 的评测服务
 
-需要官方 Harness 的 Benchmark 还要求独立 Evaluator Controller。评测机只需安装 Git、Docker 和 Bash，支持 Linux 与 macOS；macOS 需先启动 Docker Desktop。部署者 checkout 平台指定的固定 release 后，在仓库中运行：
+平台端口使用 `AGENT_INSIGHT_PORT`（默认 `3000`），评测服务对外端口使用 `AGENT_INSIGHT_EVALUATOR_PORT`（默认 `3001`）。在各自主机的 `$AGENT_INSIGHT_HOME/.env` 配置；同机部署可写在同一文件中。旧 `PORT` 已移除，非空旧配置会报错，请先改名。也可分别用 `bash scripts/start.sh --port 3100`、`bash scripts/start-evaluator.sh --port 3101` 单次覆盖，完整评测启动仍需配置下方的平台回调地址。
+
+优先级为 `--port > 当前进程环境变量 > .env > 默认值`。评测容器内部端口 `8080` 无需修改。自定义端口启动后，停止仍用 `bash scripts/stop-evaluator.sh`，追加 `--purge-images` 清理受管镜像；停止命令不依赖端口。修改端口后应同步双方通信 URL。
+
+需要官方 Harness 的 Benchmark 还要求独立 Evaluator Controller。评测机只需安装 Git、Docker 和 Bash，支持 Linux 与 macOS；macOS 需先启动 Docker Desktop。服务启停使用镜像自带的管理代码，不要求将本机源码目录共享给 Docker。若停止命令提示旧镜像缺少管理工具，先用当前代码重新运行原启动命令升级服务（会中断旧评测）。可选镜像池支持本机 Linux Docker 传统 image store 和 macOS Docker Desktop（含 containerd）。部署者 checkout 平台指定的固定 release 后，在仓库中运行：
 
 ```bash
 bash scripts/start-evaluator.sh \
@@ -51,7 +55,7 @@ node scripts/configure-evaluator-target.js \
 
 配置写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，下一次 Benchmark 操作自动热加载，不需要重启 `scripts/start.sh` 启动的 Agent Insight。评测服务通过 REST 回传结果，由 Agent Insight API 写入平台数据库和 Artifact Store；评测机不需要平台数据库凭证或独立业务数据库。
 
-Agent Insight 与 Evaluator 不提供应用层鉴权，也不会在任务下发、Artifact 下载、进度、证据或完成回调中发送或校验 Authorization。部署网络必须通过白名单、安全组或防火墙限制服务互访：
+既有评测任务、Artifact 下载、进度、证据和完成回调不提供应用层鉴权，也不会发送或校验 Authorization。镜像池的可选提前准备操作单独校验共享密钥，不能替代整条链路的网络隔离。部署网络必须通过白名单、安全组或防火墙限制服务互访：
 
 ```bash
 # 评测机
@@ -79,7 +83,29 @@ Agent Insight 会从发起实验请求的 `Host` / `X-Forwarded-*` 自动推导�
 
 Agent Insight 与执行客户端在同一台机器时，安装 `curl` 使用 `http://127.0.0.1:3000` 即可；跨机器时，安装 `curl` 必须使用执行客户端能够访问的 Agent Insight 地址。配置更新不会改写已经开始的旧任务，旧客户端或旧任务仍可继续使用冻结的执行器回调覆盖地址。
 
-执行客户端会把 Artifact 上传和完成回调作为独立的持久化投递队列处理：网络失败时按指数退避重试，单次回调最多等待 30 秒，并且重试期间不占用 Agent 执行槽，后续 Case 仍可执行。Git 工作区的 shallow fetch 单次最多等待 120 秒，只对白名单内的 DNS、连接中断、超时、curl 传输和部分 5xx 等瞬时网络错误进行最多 3 次尝试；每次重试都重建临时仓库，第三次仅对该命令使用 HTTP/1.1，不修改宿主 Git 配置。仓库不存在、revision 不存在、鉴权、证书或磁盘错误不会重试。
+执行客户端会把 Artifact 上传和完成回调作为独立的持久化投递队列处理：网络失败时按指数退避重试，单次回调最多等待 30 秒，并且重试期间不占用 Agent 执行槽，后续 Case 仍可执行。Git 工作区的 shallow fetch 单次最多等待 120 秒。SWE-bench 按下方来源顺序获取指定 commit，每个远程来源尝试一次，失败再换源；磁盘空间、权限等本地错误直接失败。其他 Benchmark 保持原行为：瞬时网络错误最多尝试 3 次，每次重建临时仓库，第三次仅对该命令使用 HTTP/1.1；仓库、revision、鉴权、证书或磁盘错误不重试。不修改宿主 Git 配置。
+
+### SWE-bench Case 仓库源码来源
+
+在**运行 Agent 的客户端机器**上，用安装客户端的账号编辑 `~/.agent-insight/.env`（root 账号为 `/root/.agent-insight/.env`；自定义运行根时为 `$AGENT_INSIGHT_HOME/.env`）。平台或 Evaluator 单独配置此变量不会影响另一台机器的客户端。旧客户端需先重新执行页面提供的安装命令升级。
+
+| 值 | 获取顺序 |
+|---|---|
+| 空或未设置 | Gitee 镜像 → GitHub 原仓；不使用持久缓存 |
+| `/srv/swe-git` 等本地绝对目录 | 本地 Bare 缓存 → Gitee → GitHub；远程获取成功后按需写入缓存 |
+| `https://git.example.com` 等 HTTP(S) Git 根地址 | `根地址/owner/repo.git` → Gitee → GitHub；不使用持久缓存、不向远程写入 |
+
+例如希望复用本机缓存，在执行机环境文件中写入：
+
+```ini
+SWE_BENCH_GIT_SOURCE=/srv/swe-git
+```
+
+目录需对客户端账号可写，各仓库会自动按需创建，不会提前下载全部 500 个 Case。HTTP(S) 值是 Git 根地址，例如配置 `https://git.example.com` 后会访问 `https://git.example.com/pallets/flask.git`，不是网页或压缩包地址。
+
+修改 `.env` 对下一次任务生效；启动客户端时的同名环境变量优先（包括空值），修改它后需重启客户端。只有已完整缓存的源码可离线复用，不影响模型调用和容器镜像的网络需求。
+
+`SWE_BENCH_SOURCE_ARCHIVE_SOURCE` 是启动导入时使用的 **SWE-bench 工具源码归档**，不是 Flask、Django 等 **Case 仓库源码**，不能代替此配置。
 
 平台每 30 秒检查一次运行中的 Benchmark。Agent 执行侧：Git 工作区准备阶段最多允许连续 7 分钟无进度；Agent 阶段超过任务上限再加 90 秒宽限期；收集、上传、清理阶段连续 5 分钟没有新进度时回收。评测侧：等待下发、下发结果不确定、证据收集/上传/清理和结果归一化连续 5 分钟无进度时回收；官方 Harness 超过评测任务上限再加 90 秒时回收。回收会把 Case 明确置为失败并通过持久化续跑继续结算实验，服务重启后也会恢复，不会让页面永久停在“正在生成 Trace”或“运行中”。
 
@@ -112,6 +138,12 @@ Agent Insight 与执行客户端在同一台机器时，安装 `curl` 使用 `ht
 4. 点击 **下一步：预期答案**。
 
 首次运行不建议开启监听模式。监听模式更适合已经验证过评估器配置、希望持续评测后续新 Trace 的场景。
+
+容器 Benchmark 的评测服务默认使用[公共镜像池](../../developer-guide/benchmark/service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)管理有限磁盘上的缓存。同机不同 Benchmark 和用户共享一份缓存，不为每个实验另建池；保留 90% 高水位和 30% 安全预留比例，不设低水位，缺空间只回收到够用。在用镜像不会被回收，已完成实验的镜像可能被淘汰，因此下一轮不保证免于重新拉取。
+
+镜像池默认开启，不需要填写单镜像大小或临时空间字节数；服务自动查询镜像清单并保守估算，所有候选源共用最多 2 秒的查询预算，超时使用内部估值。需要关闭时显式传 `--evaluator-env IMAGE_POOL_ENABLED=false`。容量不足时逐个回收闲置镜像，够用即停；无可删镜像或 Docker 已报磁盘满时，该 Case 报容量错误，后续 Case 沿原流程执行并重新检查空间。后台仍每 30 秒检查，不增加高频监测。
+
+预取仍默认关闭。接通可选预取后，当前/下一个 Case 的镜像可与 Agent 执行并行准备，减少开始评测时的等待；不改变 Case 顺序或并发。支持本机 Linux 传统 Docker image store 和 macOS Docker Desktop；参数和双端密钥见部署指南。Mac 按 Docker VM 与宿主磁盘较小余量计算；Docker.raw 在外置盘时，通过 `IMAGE_POOL_MAC_DISK_PATH` 指定同盘空共享目录。修改磁盘映像位置后须重新运行启动命令。预检失败不停止旧服务。Mac 镜像池支持不代表所有 Benchmark 镜像都支持 ARM64，也不改变正式计分资格。比较加速效果时关注整轮耗时和 `runtimeFacts.imagePoolWaitMs`。
 
 ## 步骤三：处理预期输出
 

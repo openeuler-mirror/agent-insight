@@ -1,9 +1,11 @@
 'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations, isCompletedExperimentCase } from './DeleteExperimentButton';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
 // → Case 明细表（Benchmark 列由 Presentation 声明；综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
@@ -11,6 +13,8 @@ import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDi
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
+import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -25,6 +29,7 @@ import {
 } from '@/lib/evaluators/evaluator-run-config';
 import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import {
+  benchmarkCaseProgressLabel,
   isBenchmarkEvaluationInProgress,
   isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status';
@@ -90,6 +95,8 @@ interface ExperimentDetail {
         contentUrl: string;
       }>;
       runStatus: string;
+      progressStage: string | null;
+      workspaceProvider: string | null;
       evaluationStatus: string | null;
       failure?: { code: string; message: string | null } | null;
     };
@@ -188,6 +195,7 @@ export function ExperimentDetail({
   onOpenCase?: (caseId: string) => void;
 }) {
   const { user } = useAuth();
+  const router = useRouter();
   const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -349,7 +357,20 @@ export function ExperimentDetail({
 
   return (
     <>
-      {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
+      {!embedded && <AppTopBar
+        title={detail ? displayedExperimentName(detail.name, detail.createdAt) : '实验详情'}
+        actions={user && detail ? <ExperimentRenameButton
+          experimentId={detail.id}
+          user={user}
+          name={detail.name}
+          createdAt={detail.createdAt}
+          onRenamed={(name) => {
+            setDetail((current) => current ? { ...current, name } : current);
+            void load(true);
+          }}
+          showLabel
+        /> : undefined}
+      />}
       <PageContainer
         variant={embedded ? 'canvas' : 'default'}
         className={embedded ? 'overflow-visible [&>*]:shrink-0' : '!pt-2 [&>*]:shrink-0'}
@@ -365,6 +386,7 @@ export function ExperimentDetail({
         {embedded && onBack && (
           <button type="button" onClick={onBack} style={{ ...ACTION_BTN, marginBottom: 12 }}>‹ 返回实验记录</button>
         )}
+        {user && <PendingExperimentCancellations user={user} />}
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : error && !detail ? (
@@ -692,11 +714,21 @@ export function ExperimentDetail({
                               </span>
                             )
                           ) : c.traceStatus === 'pending' ? (
-                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
-                              正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
+                            <span style={{ color: detail.scope === 'benchmark' && c.benchmark?.runStatus === 'pending' ? 'var(--foreground-muted)' : 'var(--warning)', fontSize: 11 }}>
+                              {detail.scope === 'benchmark'
+                                ? benchmarkCaseProgressLabel({
+                                    runStatus: c.benchmark?.runStatus,
+                                    progressStage: c.benchmark?.progressStage,
+                                    workspaceProvider: c.benchmark?.workspaceProvider,
+                                  })
+                                : `正在生成 Trace${c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…`}
                             </span>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
-                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
+                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>
+                              {detail.scope === 'benchmark'
+                                ? benchmarkCaseProgressLabel({ runStatus: c.benchmark?.runStatus })
+                                : 'Trace 已生成（无最终输出）'}
+                            </span>
                           ) : truncate(c.actualOutput, 80)}
                         </td>
                         {detail.scope === 'benchmark' && (
@@ -749,6 +781,9 @@ export function ExperimentDetail({
                                 详情
                               </Link>
                             )}
+                            {user && <DeleteExperimentButton user={user} experimentId={id} caseId={c.id}
+                              completed={isCompletedExperimentCase(detail.status, c.benchmark?.runStatus)}
+                              onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
                             {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
@@ -772,7 +807,7 @@ export function ExperimentDetail({
                           colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : 7}
                           style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}
                         >
-                          暂无 case
+                          无有效 Case，暂无评测结果
                         </td>
                       </tr>
                     )}

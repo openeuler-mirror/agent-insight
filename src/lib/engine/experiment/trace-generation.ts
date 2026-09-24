@@ -274,6 +274,12 @@ async function runAttempt(input: {
   canRetry: boolean;
   reconcilePrevious: boolean;
 }): Promise<{ ready: boolean; failure?: AttemptFailure }> {
+  const { assertExperimentActive } = await import('./cancellation-context');
+  try { await assertExperimentActive(input.req.experimentId, input.item.caseId); }
+  catch (error) {
+    if ((error as { code?: string }).code !== 'EXPERIMENT_CANCELLED') throw error;
+    return { ready: false, failure: { code: 'EXPERIMENT_CANCELLED', message: '用户停止并删除', retryable: false } };
+  }
   if (input.reconcilePrevious && await reconcileGeneratedTraceCase({
     user: input.req.user,
     caseId: input.item.caseId,
@@ -304,7 +310,10 @@ async function runAttempt(input: {
   let failure: AttemptFailure | null = null;
   let observedTraceId: string | null = null;
   try {
-    const frame = await createCommand({
+    const frame = await prisma.$transaction(async (tx: any) => {
+      const activeCase = await tx.experimentCase.findFirst({ where: { id: input.item.caseId, deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } } } });
+      if (!activeCase) throw Object.assign(new Error('实验或 Case 已取消'), { code: 'EXPERIMENT_CANCELLED' });
+      const command = await createCommand({
       user: input.req.user,
       clientId: input.req.workerId,
       action: 'RUN_EXPERIMENT_CASE',
@@ -322,18 +331,19 @@ async function runAttempt(input: {
           traceAttemptId: attempt.id,
         },
       },
-    });
-    await prisma.$transaction([
-      prisma.experimentTraceAttempt.update({
+      }, tx);
+      await tx.experimentTraceAttempt.update({
         where: { id: attempt.id },
-        data: { commandId: frame.commandId, status: 'running' },
-      }),
-      prisma.experimentCase.update({
+        data: { commandId: command.commandId, status: 'running' },
+      });
+      await tx.experimentCase.update({
         where: { id: input.item.caseId },
-        data: { traceGenerationCommandId: frame.commandId, traceGenerationError: null },
-      }),
-    ]);
+        data: { traceGenerationCommandId: command.commandId, traceGenerationError: null },
+      });
+      return command;
+    });
 
+    await assertExperimentActive(input.req.experimentId, input.item.caseId);
     const dispatched = await dispatchCommand(input.req.workerId, frame);
     if (dispatched.delivered) await markSent(frame.commandId, 'wss');
     const command = await waitForCommand(frame.commandId, (input.timeoutSeconds + 90) * 1_000);

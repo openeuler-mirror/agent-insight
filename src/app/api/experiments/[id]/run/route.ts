@@ -54,7 +54,7 @@ export async function POST(
     }
 
     const currentExperiment = await prisma.experiment.findFirst({
-      where: { id, user: username },
+      where: { id, user: username, deletedAt: null },
       select: { status: true, type: true, scope: true },
     });
     if (!currentExperiment) {

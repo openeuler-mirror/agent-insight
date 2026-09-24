@@ -17,6 +17,9 @@ const clientFiles = [
   'scripts/lib/fi-python-runtime.js',
   'scripts/fi-worker.js',
   'services/executor/src/index.cjs',
+  'services/executor/src/git-source.cjs',
+  'services/executor/src/git-source-workspace.cjs',
+  'services/executor/src/benchmarks/swe-bench.cjs',
   'agent_ras/platform_adapter/opencode/config_sync.js',
   'agent_fault_injection/pyproject.toml',
 ]

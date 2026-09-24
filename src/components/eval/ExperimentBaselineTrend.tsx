@@ -19,6 +19,7 @@ import type {
   ExperimentBaselineTrend as BaselineTrend,
   ExperimentBaselineTrendPoint,
 } from '@/lib/engine/experiment/baseline-trend';
+import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 
 interface ChartPoint extends ExperimentBaselineTrendPoint {
   label: string;
@@ -68,7 +69,7 @@ function TrendTooltip({
       borderRadius: 'var(--radius-md)', background: 'var(--card-bg)', boxShadow: 'var(--shadow)',
       fontSize: 11,
     }}>
-      <div style={{ fontWeight: 700, marginBottom: 5 }}>{point.name}</div>
+      <div style={{ fontWeight: 700, marginBottom: 5 }}>{displayedExperimentName(point.name, point.createdAt)}</div>
       <div style={{ color: 'var(--foreground-secondary)' }}>
         {point.agentName || '未记录 Agent'}{point.model ? ` / ${point.model}` : ''}
       </div>
@@ -154,7 +155,7 @@ export function ExperimentBaselineTrend({ trend }: { trend: BaselineTrend }) {
         strokeWidth={isSelected ? 3 : 2}
         role="button"
         tabIndex={0}
-        aria-label={`选择实验 ${point.name}，${formatValue(point.value, percentage)}，${point.summary}`}
+        aria-label={`选择实验 ${displayedExperimentName(point.name, point.createdAt)}，${formatValue(point.value, percentage)}，${point.summary}`}
         onMouseEnter={select}
         onFocus={select}
         onClick={(event) => {

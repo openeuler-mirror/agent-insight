@@ -14,6 +14,7 @@ export const WHITELISTED_ACTIONS = [
   'PREPARE_EXPERIMENT_CASE',
   'RUN_EXPERIMENT_CASE',
   'RUN_BENCHMARK_CASE',
+  'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
 ] as const
 
@@ -83,7 +84,7 @@ export async function createCommand(input: {
   action: CommandAction
   payload?: Record<string, unknown>
   ttlMs?: number
-}): Promise<CommandFrame> {
+}, store = prisma): Promise<CommandFrame> {
   if (!isWhitelistedAction(input.action)) {
     throw new ReliabilityError('COMMAND_ACTION_UNKNOWN', `未知 action: ${input.action}`, 400)
   }
@@ -93,7 +94,7 @@ export async function createCommand(input: {
   const commandId = newCommandId()
   const now = new Date()
   const expiresAt = new Date(now.getTime() + (input.ttlMs ?? commandTtlMs()))
-  await prisma.reliabilityCommand.create({
+  await store.reliabilityCommand.create({
     data: {
       commandId,
       clientId: input.clientId,

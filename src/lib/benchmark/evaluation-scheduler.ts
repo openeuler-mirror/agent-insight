@@ -548,9 +548,14 @@ async function ensureHealthy(
 }
 
 export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise<void> {
+  const evaluation = await prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId }, include: { caseRun: true } });
+  if (!evaluation || evaluation.status === 'cancelled') return;
+  const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
+  await assertExperimentActive(evaluation.caseRun.experimentId, evaluation.caseRun.experimentCaseId);
   const claimed = await prisma.benchmarkEvaluationDispatchOutbox.updateMany({
     where: {
       evaluationId,
+      evaluation: { status: { not: 'cancelled' } },
       status: { in: ['pending', 'unknown'] },
       nextAttemptAt: { lte: new Date() },
       OR: [{ leasedUntil: null }, { leasedUntil: { lt: new Date() } }],
@@ -583,6 +588,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       target.benchmarkKey,
       target.targetKey,
     )
+    await assertExperimentActive(evaluation.caseRun.experimentId, evaluation.caseRun.experimentCaseId);
     postStarted = true
     const response = await dispatchFetch(`${target.baseUrl}/api/v1/evaluations`, {
       method: 'POST',

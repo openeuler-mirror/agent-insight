@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/storage/prisma';
+import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { loadServerModelForUserById } from '@/lib/engine/general-agent/server-model-config';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
@@ -845,13 +846,14 @@ async function persistTaskState(
 }
 
 /** 构造 GET 响应: 去掉仅供内部乐观锁用的 rawCaseStatesJson, 不外泄到前端 payload。 */
-function respondTask(
+async function respondTask(
     task: NonNullable<Awaited<ReturnType<typeof loadTask>>>,
     activeRun: ActiveGrayscaleRun | null,
 ) {
     const { rawCaseStatesJson, ...rest } = task;
     void rawCaseStatesJson;
-    return NextResponse.json({ ...rest, activeRun });
+    const visible = await visibleExperimentTask({ ...rest, activeRun });
+    return visible ? NextResponse.json(visible) : NextResponse.json({ error: 'Task deleted' }, { status: 404 });
 }
 
 async function persistRunStatePatch(args: {
@@ -1432,7 +1434,14 @@ type ResolvedVersion = Awaited<ReturnType<typeof resolveVersion>>;
 type ExecutionTarget = { caseId: string; side: Side; roundIndex: number; runIndex: number; run: RunResult };
 type EvaluationTarget = { caseId: string; side: Side; run: RunResult; evaluatorIds?: string[] };
 
-async function executeSingleAgentRun(args: {
+async function executeSingleAgentRun(args: Parameters<typeof executeSingleAgentRunImpl>[0]) {
+    if (!args.config.evalExperimentId) return executeSingleAgentRunImpl(args);
+    const { withExperimentCancellation } = await import('@/lib/engine/experiment/cancellation-context');
+    return withExperimentCancellation(args.config.evalExperimentId, `dataset:${args.target.caseId}`, (signal) =>
+        executeSingleAgentRunImpl({ ...args, parentSignal: args.parentSignal ? AbortSignal.any([args.parentSignal, signal]) : signal }));
+}
+
+async function executeSingleAgentRunImpl(args: {
     taskId: string;
     user: string;
     config: GrayscaleConfig;
@@ -2076,7 +2085,7 @@ async function evaluateRunsWithConcurrency(args: {
     if (targets.length === 0) {
         if (args.config.evalExperimentId && !args.onlyMissingEvaluation) {
             await prisma.experiment.updateMany({
-                where: { id: args.config.evalExperimentId, user: args.user },
+                where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
                 data: { status: 'failed' },
             });
         }
@@ -2085,7 +2094,7 @@ async function evaluateRunsWithConcurrency(args: {
 
     if (args.config.evalExperimentId) {
         await prisma.experiment.updateMany({
-            where: { id: args.config.evalExperimentId, user: args.user },
+            where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
             data: { status: 'running' },
         });
     }
@@ -2244,7 +2253,7 @@ async function runWorkbenchTriggerTask(args: {
     }
     await persistTaskState(args.taskId, args.user, config, states);
     await prisma.experiment.updateMany({
-        where: { id: config.evalExperimentId, user: args.user },
+        where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
         data: { status: 'running' },
     });
 
@@ -2384,7 +2393,7 @@ async function runWorkbenchTriggerTask(args: {
         where: { experimentId: config.evalExperimentId, status: 'failed' },
     });
     await prisma.experiment.updateMany({
-        where: { id: config.evalExperimentId, user: args.user },
+        where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
         data: { status: failed ? 'failed' : 'done' },
     });
 }
@@ -2654,7 +2663,7 @@ async function prepareExperimentCasesForExecutionRetry(args: {
             experimentCaseIds.push(experimentCase.id);
         }
         await tx.experiment.updateMany({
-            where: { id: args.experimentId, user: args.user },
+            where: { id: args.experimentId, user: args.user, deletedAt: null },
             data: { status: 'running' },
         });
         return experimentCaseIds;
@@ -2924,6 +2933,9 @@ export async function GET(
         const task = await loadTask(taskId, user);
         if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
 
+        const visible = await visibleExperimentTask(task);
+        if (!visible) return NextResponse.json({ error: 'Task deleted' }, { status: 404 });
+        task.caseStatesJson = visible.caseStatesJson;
         const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
         const executionsReconciled = await reconcileFinishedExecutions({
             user,
@@ -3228,7 +3240,7 @@ export async function POST(
         }
         if (action === 'start' && task.configJson.evalExperimentId) {
             await prisma.experiment.updateMany({
-                where: { id: task.configJson.evalExperimentId, user, status: 'draft' },
+                where: { id: task.configJson.evalExperimentId, user, status: 'draft', deletedAt: null },
                 data: { status: 'running' },
             });
         }
@@ -3244,11 +3256,18 @@ export async function POST(
             abortController,
         });
 
-        const job = action === 'evaluate'
+        const runJob = () => action === 'evaluate'
             ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, onlyMissingEvaluation })
             : task.configJson.triggerRouting
                 ? runWorkbenchTriggerTask({ taskId, user, caseIds, evaluatorIds, signal: abortController.signal })
                 : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, agentMaxConcurrency });
+        const { withExperimentCancellation } = await import('@/lib/engine/experiment/cancellation-context');
+        const job = task.configJson.evalExperimentId
+            ? withExperimentCancellation(task.configJson.evalExperimentId, undefined, async (signal) => {
+                const stop = () => abortController.abort(signal.reason);
+                signal.addEventListener('abort', stop, { once: true });
+                try { return await runJob(); } finally { signal.removeEventListener('abort', stop); }
+            }) : runJob();
 
         void job
             .catch(async err => {
@@ -3268,7 +3287,7 @@ export async function POST(
                     await persistTaskState(taskId, user, task.configJson, states).catch(() => {});
                     if (task.configJson.evalExperimentId) {
                         await prisma.experiment.updateMany({
-                            where: { id: task.configJson.evalExperimentId, user },
+                            where: { id: task.configJson.evalExperimentId, user, deletedAt: null },
                             data: { status: 'failed' },
                         }).catch(() => undefined);
                     }
