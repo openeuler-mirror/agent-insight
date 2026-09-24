@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 
 import { ExperimentDetail } from '@/components/eval/ExperimentDetail';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { ExperimentCaseDetail } from '@/components/eval/ExperimentCaseDetail';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { apiFetch } from '@/lib/client/api';
@@ -20,6 +21,7 @@ import { SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } from '@/lib/skill-workbench/trigg
 interface DetailPayload {
   id: string;
   name: string;
+  createdAt: string;
   agentName: string;
   status: string;
   preset: 'trigger' | 'use-case' | 'skill-ab' | 'retest' | null;
@@ -482,7 +484,19 @@ export function SkillExperimentResult({
         <div className="flex items-start gap-3">
           <button type="button" onClick={onBack} className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs text-foreground-secondary">‹ 返回</button>
           <div>
-            <h2 className="text-base font-semibold text-foreground">{detail.name}</h2>
+            <div className="flex items-center gap-1">
+              <h2 className="text-base font-semibold text-foreground">{detail.name}</h2>
+              <ExperimentRenameButton
+                experimentId={detail.id}
+                user={user}
+                name={detail.name}
+                createdAt={detail.createdAt}
+                onRenamed={(name) => {
+                  setDetail((current) => current ? { ...current, name } : current);
+                  void load(true);
+                }}
+              />
+            </div>
             <p className="mt-1 text-xs text-foreground-muted">{PRESET_LABELS[detail.preset || ''] || 'Skill 实验'} · 统一实验流程 · {traceSource}</p>
           </div>
           <span className={`ml-auto rounded-md px-2 py-1 text-[10px] font-medium ${displayStatus === 'failed' ? 'bg-error-subtle text-error' : isDone ? 'bg-success-subtle text-success' : 'bg-primary-subtle text-primary'}`}>

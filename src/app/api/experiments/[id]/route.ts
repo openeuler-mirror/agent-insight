@@ -694,7 +694,7 @@ export async function GET(
 }
 
 // 停止监听：把监听实验的 watchMode 置回 false（触发查询 where watchMode=true 即不再命中，
-// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。目前仅支持关闭。
+// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -704,6 +704,22 @@ export async function PATCH(
     const body = await req.json().catch(() => ({}));
     const { username } = await resolveUser(req, body?.user);
     if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+
+    if (body && Object.prototype.hasOwnProperty.call(body, 'name')) {
+      if (body.watchMode !== undefined) {
+        return NextResponse.json({ error: '一次只能修改一个实验字段' }, { status: 400 });
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!name || name.length > 120) {
+        return NextResponse.json({ error: '实验名称须为 1～120 个字符' }, { status: 400 });
+      }
+      const updated = await prisma.experiment.updateMany({
+        where: { id, user: username, deletedAt: null },
+        data: { name },
+      });
+      if (updated.count === 0) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+      return NextResponse.json({ success: true, name });
+    }
 
     if (body?.watchMode !== false) {
       return NextResponse.json({ error: 'only supports watchMode:false (stop watching)' }, { status: 400 });

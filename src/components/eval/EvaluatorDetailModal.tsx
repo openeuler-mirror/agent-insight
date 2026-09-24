@@ -111,7 +111,7 @@ export default function EvaluatorDetailModal({
               {card.name}
             </h2>
             <span className={`ai-badge ${card.source === 'preset' ? 'ai-badge-b' : 'ai-badge-g'}`}>
-              {card.source === 'preset' ? '预置' : '自建'}
+              {isBenchmarkService ? 'Benchmark 接入包' : card.source === 'preset' ? '预置' : '自建'}
             </span>
           </div>
           <button type="button" className="ai-btn-s" aria-label="关闭" onClick={onClose}>

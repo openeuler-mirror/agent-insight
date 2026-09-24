@@ -3,8 +3,8 @@
   "packages": [
     {
       "key": "swe-bench",
-      "digest": "sha256:a2c1e4787a43ec5aebda84a89f8a7a2ee830471429384a4dc07b88249c001682",
-      "evaluatorDigest": "sha256:58aba941a4af434a819679a834c79346ea986a259230ee6e872436b5eb666fad"
+      "digest": "sha256:6cca1f0e7131e3f8064b4cf56523b3c2085731e3ac8ed06fd551861ee67ebdf0",
+      "evaluatorDigest": "sha256:8eb915a3161ea9eb81a1ec7394b5293cc332df1f524eafa27f2df04f383d9309"
     }
   ]
 }

@@ -20,6 +20,10 @@
 
 ## Public API
 
+### 实验重命名
+
+`PATCH /api/experiments/:id` 接收 `{ user, name }`，只更新当前用户未删除的普通或 Skill 实验。名称会去除首尾空白，长度须为 1～120 个字符；成功返回 `{ success: true, name }`，不存在或无权访问返回 `404`。该接口原有的 `{ user, watchMode: false }` 停止监听契约保留，两类修改不能合并在一次请求中。重命名只修改 `Experiment.name`，不改冻结配置、执行状态或评测结果。
+
 ### 实验停止与逻辑删除（2026-09-23 working-tree overlay）
 
 | 接口 | 契约 |

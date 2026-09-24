@@ -9,9 +9,11 @@ import { FlaskConical, Plus } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 
 interface ExperimentRow {
   id: string;
@@ -260,7 +262,21 @@ export default function ExperimentsPage() {
                     onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--background-secondary)'; }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                   >
-                    <td style={{ ...TD, fontWeight: 500 }}>{r.name}</td>
+                    <td style={{ ...TD, fontWeight: 500 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {displayedExperimentName(r.name, r.createdAt)}
+                        {user && <ExperimentRenameButton
+                          experimentId={r.id}
+                          user={user}
+                          name={r.name}
+                          createdAt={r.createdAt}
+                          onRenamed={(name) => {
+                            setRows((current) => current.map((item) => item.id === r.id ? { ...item, name } : item));
+                            void load(true);
+                          }}
+                        />}
+                      </span>
+                    </td>
                     <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentName || '—'}</td>
                     <td style={TD}><TypeChip scope={r.scope} /></td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>

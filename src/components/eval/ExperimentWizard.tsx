@@ -30,7 +30,9 @@ import {
 } from '@/lib/engine/experiment/dataset-match';
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
+import { defaultExperimentName } from '@/lib/engine/experiment/experiment-name';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { benchmarkEvaluatorCard } from '@/lib/evaluators/benchmark-evaluator-cards';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
@@ -78,11 +80,6 @@ interface AgentOption {
   frameworks: string[];
   executable: boolean;
   targets: AgentTargetOption[];
-}
-
-function defaultExperimentName(now = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `Agent 评测 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
 interface TraceItem {
@@ -759,7 +756,7 @@ export function ExperimentWizard({
         String(restoredTarget.platform || ''),
         typeof config.agentName === 'string' ? config.agentName : '',
       );
-      setName(`${String(detail?.name || '实验')} · 复用评测配置`);
+      setName(defaultExperimentName());
       setAgentName(restoredAgentName);
       setTraceMode(restoredTraceSource);
       setWatchMode(false);
@@ -1283,28 +1280,11 @@ export function ExperimentWizard({
       if (!isBenchmarkDataset || !benchmarkEvaluatorId) {
         return cards.filter((card) => !card.id.startsWith('benchmark:'));
       }
-      const evaluatorPresentation = selectedDataset?.benchmark?.presentation?.evaluator;
-      const primaryMetric = selectedDataset?.benchmark?.presentation?.result?.primaryMetric;
-      const official = {
-        id: benchmarkEvaluatorId,
-        name: evaluatorPresentation?.displayName
-          || `${selectedDataset?.benchmark?.displayName || 'Benchmark'} Evaluator`,
-        description: evaluatorPresentation?.description
-          || '使用 Benchmark 接入包声明的评测逻辑判定结果。',
-        evaluatorType: 'Code' as const,
-        source: 'preset' as const,
-        category: 'res' as const,
-        targetTypes: ['Benchmark'],
-        objectives: [primaryMetric?.label || 'Benchmark 评测'],
-        scenarios: [selectedDataset?.benchmark?.displayName || 'Benchmark'],
-        runMode: evaluatorPresentation?.runMode || 'Benchmark Evaluator',
-        scoreRange: primaryMetric?.type === 'boolean' ? 'Pass / Fail' : 'Benchmark 指标',
-        popularity: 100,
-        mappedMetrics: [primaryMetric?.label || '结果'],
-        status: 'ready' as const,
-        outputDescription: evaluatorPresentation?.outputDescription,
-        runtimeNote: '由 Benchmark 数据集自动绑定，隐藏评测数据不会发送给 Agent。',
-      };
+      const official = benchmarkEvaluatorCard({
+        evaluatorKey: selectedDataset?.benchmark?.evaluatorKey || '',
+        benchmarkName: selectedDataset?.benchmark?.displayName || 'Benchmark',
+        presentation: selectedDataset?.benchmark?.presentation,
+      });
       return [official, ...cards.filter((card) => !card.id.startsWith('benchmark:'))];
     }
     const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));

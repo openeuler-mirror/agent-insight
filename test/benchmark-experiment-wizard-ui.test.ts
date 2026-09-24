@@ -24,7 +24,7 @@ test('Benchmark Trace generation follows public Manifest columns and search path
   assert.match(wizard, /next\.delete\(item\.executionId\)/);
   assert.doesNotMatch(wizard, />操作<\/th>/);
   assert.match(wizard, /selectedDataset\.benchmark\.evaluatorKey/);
-  assert.match(wizard, /presentation\?\.evaluator/);
+  assert.match(wizard, /benchmarkEvaluatorCard\(\{/);
   assert.doesNotMatch(wizard, /values\?\.instance_id/);
   assert.doesNotMatch(wizard, /benchmark:\$\{selectedDataset\.benchmark\.adapterKey\}/);
 });

@@ -13,6 +13,8 @@ import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDi
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
+import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -355,7 +357,20 @@ export function ExperimentDetail({
 
   return (
     <>
-      {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
+      {!embedded && <AppTopBar
+        title={detail ? displayedExperimentName(detail.name, detail.createdAt) : '实验详情'}
+        actions={user && detail ? <ExperimentRenameButton
+          experimentId={detail.id}
+          user={user}
+          name={detail.name}
+          createdAt={detail.createdAt}
+          onRenamed={(name) => {
+            setDetail((current) => current ? { ...current, name } : current);
+            void load(true);
+          }}
+          showLabel
+        /> : undefined}
+      />}
       <PageContainer
         variant={embedded ? 'canvas' : 'default'}
         className={embedded ? 'overflow-visible [&>*]:shrink-0' : '!pt-2 [&>*]:shrink-0'}
