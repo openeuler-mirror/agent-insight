@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `8f21271657fad1606fd46e5821c1953f28dca589` (`8f212716`) |
+| Commit | `b7b37c7627f6e901645a5c112a37b55b74b5d734` (`b7b37c76`) |
 | Branch | `upstream/master` |
-| Date | 2026-09-22 |
+| Date | 2026-09-23 |
 | Author | openeuler-ci-bot |
-| Subject | `!428 swebench默认拉取swr公开仓库，修复数据路径问题` |
+| Subject | `!429 强制主从 Trace 使用同一账号` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 本次保留安装与 Trace 指南、生命周期及前端契约更新，并叠加 PR !426（接续 !418）的协作图、普通 reported Trace 合并与 Goal Plus 兼容契约；保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-23 working-tree overlay：Pi 安装器不再保留旧版、手工或不同账号的 Goal Plus collector 配置；主 Trace 与 worker Trace 强制复用同一 managed API Key 和上报端点，安装时停止并按当前配置恢复 watcher，runtime 检测到身份不一致时先停 watcher 再 fail closed。同步更新 Goal Plus 用户与开发者指南。
 
 > 2026-09-22 working-tree overlay：接入独立协作图和普通 reported Trace 合并。普通事件无需预绑定，按当前用户内精确 Session/Execution 身份解析；唯一调用位置挂树，其余成员并列展示。保留 Goal Plus reported 的已声明 worker 隐藏集合、pending 状态和逐 worker 就绪合并，以及历史 semantic 端点状态；普通 reported 的身份歧义不得由历史持久状态覆盖。
 
@@ -126,7 +128,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 0c3c38e9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

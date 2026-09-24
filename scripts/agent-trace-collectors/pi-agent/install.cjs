@@ -110,6 +110,12 @@ async function install(options) {
   const collectorsDir = path.join(agentInsightHome, "collectors");
   const packageDir = path.join(collectorsDir, "pi-agent");
   const sharedDir = path.join(collectorsDir, "shared");
+  const endpoint = process.env.AGENT_INSIGHT_PI_ENDPOINT ||
+    `${baseUrl}/api/ingest/otel/v1/traces`;
+  const collaborationSessionsEndpoint = process.env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
+    || `${baseUrl}/api/ingest/collaborations/sessions`;
+  const collaborationEventsEndpoint = process.env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
+    || `${baseUrl}/api/ingest/collaborations/events`;
   await installFiles(options.sourceDir, packageDir, sharedDir);
   const goalPlusSourceDir = path.resolve(options.sourceDir, "..", "goal-plus");
   const { install: installGoalPlusObserver } = require(path.join(goalPlusSourceDir, "install.cjs"));
@@ -119,8 +125,11 @@ async function install(options) {
     skipVersionCheck: true,
     createWrapper: false,
     managedBy: "pi-agent",
-    preserveDifferentAccount: true,
-    preserveExistingConfig: true,
+    apiKey,
+    baseUrl,
+    otlpEndpoint: endpoint,
+    collaborationSessionsEndpoint,
+    collaborationEventsEndpoint,
   });
 
   const configPath = path.join(packageDir, "config.json");
@@ -129,12 +138,9 @@ async function install(options) {
     version: 1,
     enabled: true,
     apiKey,
-    endpoint: process.env.AGENT_INSIGHT_PI_ENDPOINT ||
-      `${baseUrl}/api/ingest/otel/v1/traces`,
-    collaborationSessionsEndpoint: process.env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
-      || `${baseUrl}/api/ingest/collaborations/sessions`,
-    collaborationEventsEndpoint: process.env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
-      || `${baseUrl}/api/ingest/collaborations/events`,
+    endpoint,
+    collaborationSessionsEndpoint,
+    collaborationEventsEndpoint,
     goalPlusObserverEnabled: goalPlusObserver.observerEnabled,
     goalPlusObserverConfigPath: goalPlusObserver.configPath,
     uploadIntervalMs: 300000,
