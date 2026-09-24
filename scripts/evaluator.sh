@@ -15,9 +15,15 @@ source "$SCRIPT_DIR/evaluator-image-pool.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/start-evaluator.sh [--evaluator-env NAME=VALUE] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
+  bash scripts/evaluator.sh start [--evaluator-env NAME=VALUE] [--platform-base-url URL] [--bind-address ADDRESS] [--port PORT]
+  bash scripts/evaluator.sh status
+  bash scripts/evaluator.sh stop [--purge-images] [--dry-run]
+  bash scripts/evaluator.sh images list
+  bash scripts/evaluator.sh images purge [--dry-run]
 
-Starts the Evaluator Controller from the current Git checkout on Linux or macOS.
+The start command builds and starts the Evaluator Controller from the current Git
+checkout on Linux or macOS. The stop command stops it immediately. Image commands
+keep the Controller running and operate only on the shared Benchmark image pool.
 Defaults: --bind-address 0.0.0.0 --port 3001.
 Port precedence: --port > AGENT_INSIGHT_EVALUATOR_PORT in process environment
 > $AGENT_INSIGHT_HOME/.env (default: $HOME/.agent-insight/.env) > 3001.
@@ -29,13 +35,162 @@ EOF
 }
 
 fail() {
-  printf 'Evaluator 启动失败：%s\n' "$1" >&2
+  printf 'Evaluator 管理失败：%s\n' "$1" >&2
   exit 1
 }
 
 git_checkout() {
   git -c "safe.directory=$REPOSITORY_ROOT" -C "$REPOSITORY_ROOT" "$@"
 }
+
+prepare_management() {
+  command -v docker >/dev/null 2>&1 || fail '宿主缺少命令：docker'
+  docker info >/dev/null || fail 'Docker daemon 不可用'
+  local docker_context socket_url
+  docker_context=$(docker context show)
+  socket_url=${DOCKER_HOST:-$(docker context inspect "$docker_context" --format '{{.Endpoints.docker.Host}}')}
+  case "$socket_url" in
+    unix:///*) DOCKER_SOCKET=${socket_url#unix://} ;;
+    *) fail '仅支持当前主机 Unix Docker socket，不自动操作远端主机' ;;
+  esac
+  EVALUATOR_MANAGEMENT_HOME=${AGENT_INSIGHT_EVALUATOR_HOME:-$HOME/.agent-insight/evaluator}
+  CONFIG_FILE=$EVALUATOR_MANAGEMENT_HOME/evaluator.env
+  MANAGEMENT_IMAGE=$(docker container inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)
+  if [ -z "$MANAGEMENT_IMAGE" ] && [ -f "$CONFIG_FILE" ]; then
+    MANAGEMENT_IMAGE=$(awk -F= '$1 == "EVALUATOR_CONTROLLER_IMAGE_ID" { print $2 }' "$CONFIG_FILE" | tail -1)
+  fi
+  DATA_VOLUME_PRESENT=false
+  if docker volume inspect "$DATA_VOLUME" >/dev/null 2>&1; then DATA_VOLUME_PRESENT=true; fi
+}
+
+stop_evaluator() {
+  local purge=false dry_run=false argument management_output result marker expected_id reference actual_id daemon_id
+  for argument in "$@"; do
+    case "$argument" in
+      --purge-images) purge=true ;;
+      --dry-run) dry_run=true ;;
+      --help|-h) usage; return 0 ;;
+      *) fail "stop 不支持的参数：$argument" ;;
+    esac
+  done
+  [ "$dry_run" = false ] || [ "$purge" = true ] || fail 'stop --dry-run 必须与 --purge-images 一起使用'
+  prepare_management
+  daemon_id=$(docker info --format '{{.ID}}')
+  if [ "$DATA_VOLUME_PRESENT" = false ]; then
+    if [ -z "$MANAGEMENT_IMAGE" ]; then printf '未发现评测服务部署，无需停止。\n'; return 0; fi
+    fail '缺少登记数据卷，拒绝猜测资源归属'
+  fi
+  if [ -z "$MANAGEMENT_IMAGE" ] || ! docker image inspect "$MANAGEMENT_IMAGE" >/dev/null 2>&1; then
+    if [ -f "$EVALUATOR_MANAGEMENT_HOME/purge-completed" ] \
+      && [ "$(head -1 "$EVALUATOR_MANAGEMENT_HOME/purge-completed")" = "$daemon_id|$MANAGEMENT_IMAGE" ] \
+      && [ -z "$(docker ps -aq --filter "label=agent-insight.evaluator-instance=$CONTAINER_NAME")" ] \
+      && ! docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+      printf '服务已停止；上次镜像清理已完成。数据卷和配置保留。\n'
+      return 0
+    fi
+    fail '缺少离线管理运行镜像，无法核对数据卷；请先使用 evaluator.sh start 恢复管理环境'
+  fi
+  MANAGEMENT_ARGS=()
+  [ "$purge" = false ] || MANAGEMENT_ARGS+=(--purge-images)
+  if [ "$dry_run" = true ]; then
+    MANAGEMENT_READONLY=,readonly
+    MANAGEMENT_ARGS+=(--dry-run)
+    evaluator_management_run "$MANAGEMENT_IMAGE" "${MANAGEMENT_ARGS[@]}"
+    return
+  fi
+  evaluator_management_lock || fail '管理操作冲突'
+  management_output=$(mktemp "${TMPDIR:-/tmp}/evaluator-stop.XXXXXX")
+  trap 'rm -f "${management_output:-}"; rmdir "$EVALUATOR_MANAGEMENT_LOCK" 2>/dev/null || true' EXIT
+  result=0
+  if [ "${#MANAGEMENT_ARGS[@]}" -gt 0 ]; then
+    evaluator_management_run "$MANAGEMENT_IMAGE" "${MANAGEMENT_ARGS[@]}" > "$management_output" || result=$?
+  else
+    evaluator_management_run "$MANAGEMENT_IMAGE" > "$management_output" || result=$?
+  fi
+  cat "$management_output"
+  if [ "$purge" = true ]; then
+    while IFS=$'\t' read -r marker expected_id reference; do
+      [ "$marker" = CONTROLLER_IMAGE ] || continue
+      actual_id=$(docker image inspect "$reference" --format '{{.Id}}' 2>/dev/null || true)
+      [ -n "$actual_id" ] || continue
+      if [ "$actual_id" != "$expected_id" ]; then
+        printf '跳过已变更的 Controller 引用：%s\n' "$reference" >&2
+        result=2
+      elif ! docker image rm "$reference"; then result=2
+      fi
+    done < "$management_output"
+  fi
+  if [ "$purge" = true ] && [ "$result" -eq 0 ]; then
+    printf '%s|%s\n' "$daemon_id" "$MANAGEMENT_IMAGE" > "$EVALUATOR_MANAGEMENT_HOME/purge-completed"
+  fi
+  exit "$result"
+}
+
+images_evaluator() {
+  local action=${1:-} dry_run=false argument
+  [ -n "$action" ] || fail 'images 需要 list 或 purge 子命令'
+  shift || true
+  case "$action" in
+    list)
+      [ "$#" -eq 0 ] || fail 'images list 不接受其他参数' ;;
+    purge)
+      for argument in "$@"; do
+        case "$argument" in --dry-run) dry_run=true ;; *) fail "images purge 不支持的参数：$argument" ;; esac
+      done ;;
+    *) fail 'images 需要 list 或 purge 子命令' ;;
+  esac
+  prepare_management
+  [ "$DATA_VOLUME_PRESENT" = true ] || fail '缺少评测服务登记数据卷'
+  [ -n "$MANAGEMENT_IMAGE" ] && docker image inspect "$MANAGEMENT_IMAGE" >/dev/null 2>&1 \
+    || fail '缺少包含管理工具的 Controller 镜像'
+  MANAGEMENT_READONLY=,readonly
+  if [ "$action" = list ]; then
+    evaluator_management_run "$MANAGEMENT_IMAGE" --images-list
+    return
+  fi
+  if [ "$dry_run" = true ]; then
+    evaluator_management_run "$MANAGEMENT_IMAGE" --images-purge --dry-run
+    return
+  fi
+  evaluator_management_lock || fail '管理操作冲突'
+  evaluator_management_run "$MANAGEMENT_IMAGE" --images-purge
+}
+
+status_evaluator() {
+  [ "$#" -eq 0 ] || fail 'status 不接受参数'
+  command -v docker >/dev/null 2>&1 || fail '宿主缺少命令：docker'
+  local inspect_error
+  if ! inspect_error=$(docker container inspect "$CONTAINER_NAME" 2>&1 >/dev/null); then
+    if printf '%s' "$inspect_error" | LC_ALL=C grep -Eqi 'no such (container|object)'; then
+      printf 'deployed: false\nrunning: false\n'
+      return 3
+    fi
+    fail "无法检查 Controller：$inspect_error"
+  fi
+  local running image ports health
+  running=$(docker container inspect "$CONTAINER_NAME" --format '{{.State.Running}}')
+  image=$(docker container inspect "$CONTAINER_NAME" --format '{{.Image}}')
+  ports=$(docker container port "$CONTAINER_NAME" 8080/tcp 2>/dev/null || true)
+  health=null
+  if [ "$running" = true ]; then
+    health=$(docker exec "$CONTAINER_NAME" node -e 'fetch("http://127.0.0.1:8080/health").then(async r=>{const b=await r.text();if(!r.ok)process.exitCode=1;process.stdout.write(b)}).catch(e=>{console.error(e.message);process.exitCode=1})' 2>/dev/null || printf 'null')
+  fi
+  printf 'deployed: true\nrunning: %s\nimage: %s\nports: %s\nhealth: %s\n' \
+    "$running" "$image" "${ports:-none}" "$health"
+  [ "$running" = true ]
+}
+
+[ "$#" -gt 0 ] || { usage; exit 1; }
+COMMAND=$1
+shift
+case "$COMMAND" in
+  start) ;;
+  status) status_evaluator "$@"; exit $? ;;
+  stop) stop_evaluator "$@"; exit $? ;;
+  images) images_evaluator "$@"; exit $? ;;
+  --help|-h|help) usage; exit 0 ;;
+  *) fail "不支持的命令：$COMMAND" ;;
+esac
 
 while [ "$#" -gt 0 ]; do
   case "$1" in

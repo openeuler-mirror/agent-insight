@@ -7,7 +7,7 @@ import test from 'node:test';
 
 const root = path.resolve(__dirname, '..');
 const platformScript = path.join(root, 'scripts/start.sh');
-const evaluatorScript = path.join(root, 'scripts/start-evaluator.sh');
+const evaluatorScript = path.join(root, 'scripts/evaluator.sh');
 
 function fixture(t: any, config = '') {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'service-port-config-'));
@@ -24,7 +24,8 @@ function resolvePort(script: string, env: NodeJS.ProcessEnv, args: string[] = []
   const offset = source.indexOf(marker);
   assert.ok(offset > 0);
   const variable = script === platformScript ? 'PLATFORM_PORT' : 'EVALUATOR_HOST_PORT';
-  return spawnSync('bash', ['-c', `${source.slice(0, offset)}\nprintf 'RESOLVED=%s\\n' "$${variable}"`, script, ...args], { env, encoding: 'utf8' });
+  const commandArgs = script === evaluatorScript ? ['start', ...args] : args;
+  return spawnSync('bash', ['-c', `${source.slice(0, offset)}\nprintf 'RESOLVED=%s\\n' "$${variable}"`, script, ...commandArgs], { env, encoding: 'utf8' });
 }
 
 for (const [label, script, variable, defaultPort] of [
@@ -113,7 +114,7 @@ esac
 `, { mode: 0o755 });
   const calls = path.join(f.home, 'docker-calls');
   for (const args of [[], ['--purge-images'], ['--purge-images', '--dry-run']]) {
-    const result = spawnSync('bash', [path.join(root, 'scripts/stop-evaluator.sh'), ...args], {
+    const result = spawnSync('bash', [path.join(root, 'scripts/evaluator.sh'), 'stop', ...args], {
       env: { ...f.env, PATH: `${bin}:${process.env.PATH}`, PORT_TEST_CALLS: calls, AGENT_INSIGHT_EVALUATOR_PORT: '4201' }, encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
@@ -122,5 +123,6 @@ esac
   assert.match(log, /container inspect agent-insight-benchmark-evaluator/);
   assert.match(log, /EVALUATOR_INSTANCE_ID=agent-insight-benchmark-evaluator/);
   assert.match(log, /--purge-images/);
+  assert.doesNotMatch(log, /unbound variable/);
   assert.doesNotMatch(log, /4201|prune|publish/);
 });

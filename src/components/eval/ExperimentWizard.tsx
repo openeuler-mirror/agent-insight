@@ -2065,7 +2065,7 @@ export function ExperimentWizard({
                   </button>
                   {benchmarkSelectedCasesExpanded && (
                     <div style={{ maxHeight: 140, overflow: 'auto', borderTop: '1px solid var(--border)' }}>
-                      <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                      <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed', marginTop: 0 }}>
                         <thead>
                           <tr>
                             <th style={{ ...STICKY_TH, width: 44 }} aria-label="选择" />
@@ -2174,7 +2174,7 @@ export function ExperimentWizard({
                       未找到匹配的 Case
                     </div>
                   ) : (
-                    <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                    <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed', marginTop: 0 }}>
                       <thead>
                         <tr>
                           <th style={{ ...STICKY_TH, width: 44 }} aria-label="选择" />

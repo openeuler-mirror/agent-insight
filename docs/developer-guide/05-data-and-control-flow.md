@@ -13,15 +13,19 @@
                          └→ Evaluator cancel → 指定容器 → 释放镜像使用保护
                     后台对账 → 全部确认退出才完成取消
 
-stop-evaluator.sh → 与启动互斥 → 持久化停止标记 → 关闭 Controller
+evaluator.sh stop → 与启动互斥 → 持久化停止标记 → 关闭 Controller
                    → 再次扫描作业 → 定向清理容器 → 可选清理登记镜像
+
+evaluator.sh images {list|purge} → 管理容器 → 数据卷内 manager.sock
+                                      → 当前 Controller 镜像池互斥
+                                      → 列表或逐个清理空闲自有 Case 镜像
 ```
 
 本地取消检查周期 500ms，后台取消对账周期 3 秒，页面待确认列表每 5 秒刷新。轮询不是等待实验自然结束；收到信号后立即请求退出。删除最后一个有效 Case 时，同一事务会将实验标记为已删除并关闭监听；Case 删除响应将此状态返回页面，以便跳转实验列表。后台对账也会收敛此前遗留的普通及 Benchmark 零 Case 实验。仍有有效 Case 时，Case 取消确认后 Benchmark 推进下一 Case，普通实验重新结算；没有有效结果不能判成功。新派发、重试、出队、恢复和回调均检查删除/取消状态。
 
 本地执行记录不按超时擅自过期：平台进程崩溃可能留下尚未确认的执行或子进程，重启后仍显示待确认，需要运维核对。远端离线则自动重发取消指令；旧客户端明确拒绝停止指令时保留待确认并提示升级，在客户端进程重启后再重发，避免每轮对账重复投递。首版不自动推断“心跳消失等于任务已死”，也不提供批量抹除未确认记录的入口。
 
-评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。
+评测机停服不默认取消全平台实验；本机终止结果通过持久化日志在服务恢复后补报，远端 Agent 通过平台实验删除单独停止。镜像清理与平台结果的逻辑删除互不等同。在线镜像命令不新增 HTTP 管理接口，必须挂载同一命名卷，并由正在运行的 Controller 执行；管理容器不直接并发改写 `image-pool/state.json`。
 | Entry | File | Kind |
 |---|---|---|
 | `POST` ingest upload | `src/app/api/ingest/upload/route.ts` | HTTP |
@@ -282,7 +286,7 @@ Benchmark 的执行目标发现与普通实验共享客户端能力真源：从�
 
 SWE-bench 的归一化不信任单一回传字段。平台把冻结 `EvaluationJob` 和重读、复核 size/SHA-256 后的 `report.json` 一起交给 Adapter；Adapter 要求实例一致、严格 JSON boolean、`FAIL_TO_PASS/PASS_TO_PASS` 与冻结名单完整且唯一、Raw Result 计数与官方报告一致，并精确验证三类证据契约。字符串 `"false"`、错误实例、空/缺失/重复/未知测试或证据内容漂移都收敛为无分的分类错误，不能产生 pass；运行架构不参与结果准入。Controller 对超时后的进程退出 0 仍固定判为 `EVALUATION_TIMEOUT`，且仅接受结构和状态均匹配的 callback ACK。实验结果查询只采用 Case 重试图中的叶子 Run，并以 `createdAt + id` 稳定排序，避免旧尝试重复计分。
 
-评测通信配置由 `EvaluatorRuntimeConfigProvider` 统一提供：每次相关操作从 `data/config/benchmark-evaluator.env` 读取 Evaluator URL 与 HTTP 策略的完整快照，文件缺失时回退进程环境变量。合法原子替换在下一次操作生效，非法或半写入更新继续使用上一份有效配置。Agent Insight 的健康检查与任务下发、Controller 的接单、Artifact 下载及进度/证据/完成回调都不发送或校验 Authorization，安全边界由双向白名单、安全组或防火墙承担。Agent Insight 从实验启动请求的 `Host` / `X-Forwarded-*` 自动推导并冻结公开回调地址；Evaluator 可通过 `EVALUATOR_AGENT_INSIGHT_BASE_URL`（启动参数 `--platform-base-url`）覆盖其实际下载 Artifact 和回调 Agent Insight 的网络地址，未配置时沿用任务中冻结的地址。执行客户端不增加独立部署配置：安装 `curl` 已写入的 `insightBaseUrl` 同时用于 Artifact 上传、进度和完成回调，因而 Agent Insight、执行客户端、Evaluator 三机分离时也不会误用任务中的 loopback origin。可选的 `AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL` 仅作为旧客户端和冻结协议的兼容字段；新版客户端仍校验其 HTTP(S) 协议和精确 Run 路径，但不将该 origin 作为出站目标。Benchmark 执行任务本身通过现有客户端 WSS/长轮询控制通道下发，不要求客户端开放端口。执行 Outbox 仍冻结回调 URL 以保持 digest 和旧客户端兼容；已冻结任务不会被改写。新 Evaluation 冻结目标 URL 与配置修订；已冻结旧目标的重试不会自动改用新地址。Linux/macOS 上由 `start-evaluator.sh` 构建和常驻运行不含具体 Harness 的通用 Controller；脚本不接受 Benchmark 选择或预热参数。任务到达后，Controller 按 Catalog 检查内容摘要相符的 Runtime 镜像，本地缺失时先拉取，源码部署且远端制品不可用时才用接入包 Dockerfile 构建。SWE-bench Harness 的固定源码、Python 环境和依赖仅存在于 SWE-bench Runtime 镜像。新 Controller 镜像就绪后，脚本每次都重建同名容器；Doctor 成功后精确清理旧 Controller 镜像，但保留命名 volume、Runtime 镜像与全部 Case 镜像。Node 基础镜像名称保持官方值并复用宿主 Docker daemon 的 registry mirror；Case 镜像默认同样使用官方名称并复用宿主 registry mirror。x86-64 官方模式默认按顺序尝试两个公开 SWR Verified 仓库的 `<repository>:<instance_id>`；`SWE_BENCH_VERIFIED_MIRROR_REPOS` 可覆盖默认列表，显式空值可禁用。成功后恢复官方 tag，并把命中的镜像引用、候选仓库和 registry digest 写入 `resolved-image.json`；候选全部失败后继续尝试 `SWE_BENCH_IMAGE_PROXY_PREFIX`，最后回退官方地址。ARM64 和 Epoch 路径不读取 Verified x86-64 镜像列表。在线 Case 镜像优先冻结 registry digest；`docker save/load` 离线导入且没有 `RepoDigests` 时冻结不可变 Image ID。部署脚本不修改宿主全局配置。默认 Doctor 不准备 Runtime 或 Case 镜像，显式 Smoke 和真实任务才按需准备 Runtime；Case 镜像仍由具体 Benchmark 实现按任务拉取。
+评测通信配置由 `EvaluatorRuntimeConfigProvider` 统一提供：每次相关操作从 `data/config/benchmark-evaluator.env` 读取 Evaluator URL 与 HTTP 策略的完整快照，文件缺失时回退进程环境变量。合法原子替换在下一次操作生效，非法或半写入更新继续使用上一份有效配置。Agent Insight 的健康检查与任务下发、Controller 的接单、Artifact 下载及进度/证据/完成回调都不发送或校验 Authorization，安全边界由双向白名单、安全组或防火墙承担。Agent Insight 从实验启动请求的 `Host` / `X-Forwarded-*` 自动推导并冻结公开回调地址；Evaluator 可通过 `EVALUATOR_AGENT_INSIGHT_BASE_URL`（启动参数 `--platform-base-url`）覆盖其实际下载 Artifact 和回调 Agent Insight 的网络地址，未配置时沿用任务中冻结的地址。执行客户端不增加独立部署配置：安装 `curl` 已写入的 `insightBaseUrl` 同时用于 Artifact 上传、进度和完成回调，因而 Agent Insight、执行客户端、Evaluator 三机分离时也不会误用任务中的 loopback origin。可选的 `AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL` 仅作为旧客户端和冻结协议的兼容字段；新版客户端仍校验其 HTTP(S) 协议和精确 Run 路径，但不将该 origin 作为出站目标。Benchmark 执行任务本身通过现有客户端 WSS/长轮询控制通道下发，不要求客户端开放端口。执行 Outbox 仍冻结回调 URL 以保持 digest 和旧客户端兼容；已冻结任务不会被改写。新 Evaluation 冻结目标 URL 与配置修订；已冻结旧目标的重试不会自动改用新地址。Linux/macOS 上由 `evaluator.sh start` 构建和常驻运行不含具体 Harness 的通用 Controller；脚本不接受 Benchmark 选择或预热参数。任务到达后，Controller 按 Catalog 检查内容摘要相符的 Runtime 镜像，本地缺失时先拉取，源码部署且远端制品不可用时才用接入包 Dockerfile 构建。SWE-bench Harness 的固定源码、Python 环境和依赖仅存在于 SWE-bench Runtime 镜像。新 Controller 镜像就绪后，脚本每次都重建同名容器；Doctor 成功后精确清理旧 Controller 镜像，但保留命名 volume、Runtime 镜像与全部 Case 镜像。Node 基础镜像名称保持官方值并复用宿主 Docker daemon 的 registry mirror；Case 镜像默认同样使用官方名称并复用宿主 registry mirror。x86-64 官方模式默认按顺序尝试两个公开 SWR Verified 仓库的 `<repository>:<instance_id>`；`SWE_BENCH_VERIFIED_MIRROR_REPOS` 可覆盖默认列表，显式空值可禁用。成功后恢复官方 tag，并把命中的镜像引用、候选仓库和 registry digest 写入 `resolved-image.json`；候选全部失败后继续尝试 `SWE_BENCH_IMAGE_PROXY_PREFIX`，最后回退官方地址。ARM64 和 Epoch 路径不读取 Verified x86-64 镜像列表。在线 Case 镜像优先冻结 registry digest；`docker save/load` 离线导入且没有 `RepoDigests` 时冻结不可变 Image ID。部署脚本不修改宿主全局配置。默认 Doctor 不准备 Runtime 或 Case 镜像，显式 Smoke 和真实任务才按需准备 Runtime；Case 镜像仍由具体 Benchmark 实现按任务拉取。
 
 ### xiaoo 实验 Runtime Adapter
 

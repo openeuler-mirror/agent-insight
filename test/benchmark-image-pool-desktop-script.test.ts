@@ -84,7 +84,7 @@ printf '%s\\n' "$POOL_MAC_DISK_PATH"
 })
 
 test('storage preflight happens before replacing configuration or stopping the old Controller', () => {
-  const source = fs.readFileSync(path.join(root, 'scripts/start-evaluator.sh'), 'utf8')
+  const source = fs.readFileSync(path.join(root, 'scripts/evaluator.sh'), 'utf8')
   const preflight = source.indexOf('const store=new DockerImageStore({checkManagers:false})')
   assert.ok(preflight > 0)
   assert.ok(preflight < source.indexOf('mv -f "$TEMP_CONFIG" "$CONFIG_FILE"'))
