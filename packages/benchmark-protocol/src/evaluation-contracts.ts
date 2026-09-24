@@ -77,6 +77,7 @@ export interface BenchmarkAdapter<
   TPrivate extends JsonValue = JsonValue,
   TEvaluationPayload extends JsonValue = JsonValue,
 > extends BenchmarkPreExecutionAdapter<TRaw, TPublic, TPrivate> {
+  imagePreparationInput?(publicPayload: TPublic, privatePayload: TPrivate): JsonValue | null
   validateSubmission(input: ValidateSubmissionInput): Promise<void>
   buildEvaluationRequest(
     input: BuildEvaluationRequestInput<TPublic, TPrivate>,

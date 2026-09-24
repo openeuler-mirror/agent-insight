@@ -1,4 +1,5 @@
 'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
 
 import { useCallback, useEffect, useState } from 'react';
 import { FlaskConical, GitCompareArrows, Loader2, MousePointerClick, Rows3 } from 'lucide-react';
@@ -7,6 +8,7 @@ import {
   ExperimentWizard,
   type SkillExperimentPreset,
 } from '@/components/eval/ExperimentWizard';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { apiFetch } from '@/lib/client/api';
 import { SkillExperimentResult } from './SkillExperimentResult';
 
@@ -134,6 +136,7 @@ export function ExperimentPanel({
           三个入口创建的都是标准 Skill 实验，只是数据集、对比方式和评估器默认值不同。
         </div>
 
+        <PendingExperimentCancellations user={user} />
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="flex items-center border-b border-border px-4 py-3">
             <FlaskConical className="mr-2 size-4 text-primary" />
@@ -152,11 +155,23 @@ export function ExperimentPanel({
               <tbody>
                 {rows.map((row) => (
                   <tr key={row.id} onClick={() => setDetailId(row.id)} className="cursor-pointer border-t border-border text-xs hover:bg-background-secondary">
-                    <td className="px-4 py-3"><b className="font-medium text-foreground">{row.name}</b><br /><span className="text-[10px] text-foreground-muted">{row.id}</span></td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex items-center gap-1">
+                        <b className="font-medium text-foreground">{row.name}</b>
+                        <ExperimentRenameButton
+                          experimentId={row.id}
+                          user={user}
+                          name={row.name}
+                          createdAt={row.createdAt}
+                          onRenamed={(name) => setRows((current) => current.map((item) => item.id === row.id ? { ...item, name } : item))}
+                        />
+                      </span>
+                      <br /><span className="text-[10px] text-foreground-muted">{row.id}</span>
+                    </td>
                     <td className="px-4 py-3 text-foreground-secondary">{PRESET_LABELS[row.preset || ''] || '标准实验'}</td>
                     <td className="px-4 py-3 text-foreground-secondary">{row.caseCount ? `${row.caseCount} Cases` : '平台运行'}</td>
                     <td className="px-4 py-3"><span className="rounded bg-background-secondary px-2 py-1 text-[10px] text-foreground-secondary">{STATUS_LABELS[row.status] || row.status}</span></td>
-                    <td className="px-4 py-3 text-foreground-muted">{new Date(row.updatedAt || row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                    <td className="px-4 py-3 text-foreground-muted">{new Date(row.updatedAt || row.createdAt).toLocaleString('zh-CN', { hour12: false })}<br /><DeleteExperimentButton user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} /></td>
                   </tr>
                 ))}
               </tbody>

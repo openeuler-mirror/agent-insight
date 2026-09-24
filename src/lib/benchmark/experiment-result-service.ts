@@ -93,7 +93,7 @@ export async function getBenchmarkExperimentResult(input: {
     throw new BenchmarkProtocolError('CASE_VERDICT_FILTER_INVALID', 'Case 判定筛选值不合法', 400)
   }
   const experiment = await benchmarkPrisma.experiment.findFirst({
-    where: { id: input.experimentId, user: input.user, scope: 'benchmark' },
+    where: { id: input.experimentId, user: input.user, scope: 'benchmark', deletedAt: null },
     select: {
       id: true,
       status: true,
@@ -107,7 +107,7 @@ export async function getBenchmarkExperimentResult(input: {
   const evaluatorKey = manifest.evaluation.evaluatorKey
   const evaluatorId = `benchmark:${evaluatorKey}`
   const runs = await benchmarkPrisma.benchmarkCaseRun.findMany({
-    where: { experimentId: input.experimentId },
+    where: { experimentId: input.experimentId, experimentCase: { deletedAt: null } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: {
       id: true,
@@ -240,7 +240,7 @@ export async function getBenchmarkExperimentResult(input: {
     }
   })
 
-  const expectedTotal = experiment.benchmarkBinding.expectedCaseCount
+  const expectedTotal = await benchmarkPrisma.experimentCase.count({ where: { experimentId: input.experimentId, deletedAt: null } });
   const terminalRows = rows.filter((row) => TERMINAL_CASE_STATUSES.has(row.runStatus))
   const outcomes = { pass: 0, warn: 0, fail: 0, unknown: 0 }
   for (const row of terminalRows) {

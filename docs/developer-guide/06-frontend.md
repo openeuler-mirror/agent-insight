@@ -84,6 +84,15 @@ Skill 在持续优化分组中只有一个正式入口，进入统一对话工�
 
 ## 组件组织
 组件按功能与可复用基础组件进行分组（`src/components/`）：
+
+Benchmark 评估器目录由服务端 `app/(main)/metrics/page.tsx` 遍历 `listBenchmarkAdapters()`，通过 `benchmark-evaluator-cards.ts` 只投影 Manifest Presentation 的卡片展示字段，再传给客户端 `MetricsPageClient` 与 `EvaluatorsCenter`；不把完整 Case Schema 传到浏览器。目录展示所有已安装接入包，与数据集是否导入无关；实验向导复用同一卡片转换函数。`benchmark:<evaluatorKey>` 仍只随对应 Benchmark 数据集自动绑定，普通 Trace 实验不能单独选择；目录中的“已接入”不表示独立评测服务在线。同一 `evaluatorKey` 重复会显式报错。`EvaluatorsCenter` 对预置与自建列表分别维护页码，筛选后每页最多显示 6 张卡片；筛选变化、刷新和创建时回到第一页，结果数缩小时渲染页码自动收敛到末页。
+
+`AgentDatasetCenter` 对已加载的摘要先按名称和类型筛选，再每页显示最多 12 张卡片；宽屏固定 4 列、最多 3 行，窄屏响应式减少列数。搜索、类型切换、刷新、保存与删除回到第一页；异步数据变化导致页码越界时按末页渲染。列表底部显示范围和上一页／下一页，翻页滚回列表顶部。保持现有摘要 API，不新增服务端分页协议。
+
+全局实验默认名称由 `engine/experiment/experiment-name.ts` 统一生成。“同配置实验”的服务端复制和“复用评测配置”的客户端向导都使用当前时间生成新名称，不继承原实验名称；配置复用与来源关联保持原流程。列表和详情对带旧复用后缀的存量名称，按实验 `createdAt` 投影标准标题，不改写数据库中的原名称。
+
+`ExperimentRenameButton` 复用同一 `PATCH /api/experiments/:id` 名称更新契约，在普通实验与 Skill 实验的列表、详情入口使用；保存成功后各视图更新本地名称，下一次列表或详情读取以数据库值为准。重命名不触发评测重跑。
+
 - **应用外壳** — `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader,providers}.tsx`。页面在 `<PageContainer>` 内渲染（左对齐、全幅——不要手写居中）。
 - **评测** — `eval/*`（`Dashboard`、`SkillEvaluation`、`TrajectoryEvalCenter`、`EvaluationRunDetailView`、`ExecutionRecordsTable`、`EvaluatorFindingsView`）以及 `evaluation/*`（`EvaluationContent`、`EvaluationFindings`）。
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard,VersionWorkspaceTabs}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。筛选栏的用户标签下拉支持版本/业务标签混合多选，按类型及名称前缀聚类；前缀作为无框行标题，标签以可换行的胶囊横向排列。多个标签使用 AND 语义并写入 `tagIds` URL 参数。`version-workspace-navigation.ts` 定义版本分析与版本管理两个页签的路由归属；页面分别位于 `app/(main)/version-analysis/page.tsx` 与 `app/(main)/version-management/page.tsx`。

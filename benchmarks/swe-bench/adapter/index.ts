@@ -214,6 +214,10 @@ export class SweBenchAdapter extends AbstractBenchmarkAdapter<
 > {
   readonly manifest = getGeneratedBenchmarkManifest('swe-bench')
 
+  imagePreparationInput(publicPayload: SweBenchPublicCase, privatePayload: SweBenchPrivateCase) {
+    return { instance: { instance_id: publicPayload.instanceId, image: privatePayload.evaluation.image } }
+  }
+
   protected splitCase(rawInput: RawSweBenchCase) {
     const parsed = RawSweBenchCaseSchema.safeParse(rawInput)
     if (!parsed.success) {

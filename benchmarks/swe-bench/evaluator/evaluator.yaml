@@ -3,6 +3,7 @@ runtime: oci-container
 imageRepository: agent-insight-benchmark-runtime-swe-bench
 dockerfile: ./Dockerfile
 entrypoint: ./entrypoint.cjs
+imageProvider: ./images.cjs
 containerEntrypoint: /app/benchmarks/swe-bench/evaluator/entrypoint.cjs
 smokeEntrypoint: ../smoke/index.cjs
 containerSmokeEntrypoint: /app/benchmarks/swe-bench/smoke/index.cjs

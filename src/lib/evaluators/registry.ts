@@ -126,6 +126,7 @@ export function deriveEvaluatorTags(card: EvaluatorCard): string[] {
   const meta = getEvaluatorMeta(card);
   const tags: string[] = [];
   tags.push(card.source === 'preset' ? '预置' : '自建');
+  if (card.id.startsWith('benchmark:')) tags.push('Benchmark');
   tags.push(card.evaluatorType === 'LLM' ? 'LLM Judge' : '代码');
   tags.push(meta.category === 'res' ? '看结果' : '看轨迹');
   if (meta.requires.includes('reference')) tags.push('依赖预期输出');

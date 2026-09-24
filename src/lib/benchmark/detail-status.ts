@@ -1,5 +1,29 @@
 export type BenchmarkTraceStatus = 'pending' | 'ready' | 'failed' | null
 
+export function benchmarkCaseProgressLabel(input: {
+  runStatus: string | null | undefined
+  progressStage?: string | null
+  workspaceProvider?: string | null
+}): string {
+  switch (input.runStatus) {
+    case 'pending': return '等待开始'
+    case 'preparing': return '正在准备任务…'
+    case 'dispatching': return '正在下发任务…'
+    case 'dispatch_unknown': return '正在确认任务下发…'
+    case 'running_agent':
+      if (input.progressStage === 'preparing') {
+        return input.workspaceProvider === 'git' ? '正在准备 Git 工作区…' : '正在准备执行环境…'
+      }
+      return input.progressStage === 'agent_running' ? 'Agent 执行中…' : '等待执行器启动…'
+    case 'collecting': return '正在收集提交物…'
+    case 'uploading': return '正在上传提交物…'
+    case 'cleaning': return '正在清理执行环境…'
+    case 'submitted': return '等待评测…'
+    case 'evaluated': return '已完成'
+    default: return '正在处理 Case…'
+  }
+}
+
 const AGENT_ACTIVE_RUN_STATUSES = new Set([
   'pending',
   'preparing',

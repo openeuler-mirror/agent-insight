@@ -89,6 +89,7 @@ export async function GET(req: Request) {
     const skillName = String(q.get('skillName') || '').trim();
     const userFilter = username ? { user: username } : {};
     const listFilter = {
+      deletedAt: null,
       ...userFilter,
       ...(skillName ? { skillName } : {}),
       scope: { notIn: ['skill-workbench', 'skill-case-analysis', 'grayscale-ab'] },
@@ -105,14 +106,14 @@ export async function GET(req: Request) {
         orderBy: { createdAt: 'desc' },
         skip: offset,
         take: limit,
-        include: { _count: { select: { cases: true } } },
+        include: { _count: { select: { cases: { where: { deletedAt: null } } } } },
       }),
     ]);
     const rows = rawRows as Array<Experiment & { _count: { cases: number } }>;
     const experimentIds = rows.map((row) => row.id);
     const scoreRows = (experimentIds.length
       ? await prisma.experimentEvalResult.findMany({
-          where: { experimentId: { in: experimentIds } },
+          where: { experimentId: { in: experimentIds }, case: { deletedAt: null } },
           select: {
             experimentId: true,
             caseId: true,

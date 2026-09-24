@@ -42,11 +42,14 @@ class ControlledContainers:
     def create(self, *args, **kwargs):
         labels = dict(kwargs.pop("labels", {}) or {})
         labels["agent-insight.evaluation-id"] = self._evaluation_id
+        if os.environ.get("EVALUATOR_INSTANCE_ID"):
+            labels["agent-insight.evaluator-instance"] = os.environ["EVALUATOR_INSTANCE_ID"]
+        labels["agent-insight.role"] = "evaluator-case"
         kwargs["labels"] = labels
         kwargs["mem_limit"] = f"{self._memory_mib}m"
         kwargs["nano_cpus"] = int(self._cpu * 1_000_000_000)
         if self._network_policy == "deny":
-            kwargs["network_disabled"] = True
+            kwargs["network_mode"] = "none"
         return self._containers.create(*args, **kwargs)
 
     def __getattr__(self, name):
@@ -61,16 +64,31 @@ class ControlledDockerClient:
         cpu: float,
         memory_mib: int,
         network_policy: str,
+        managed_image: bool = False,
     ):
         self._client = client
         self.api = client.api
-        self.images = client.images
+        self.images = PreparedImages(client.images) if managed_image else client.images
         self.containers = ControlledContainers(
             client.containers, evaluation_id, cpu, memory_mib, network_policy
         )
 
     def __getattr__(self, name):
         return getattr(self._client, name)
+
+
+class PreparedImages:
+    def __init__(self, images):
+        self._images = images
+
+    def pull(self, *args, **kwargs):
+        raise RuntimeError("Managed image is missing; reacquire through the shared image pool")
+
+    def build(self, *args, **kwargs):
+        raise RuntimeError("Managed images must be prepared by the shared image pool")
+
+    def __getattr__(self, name):
+        return getattr(self._images, name)
 
 
 def ensure_file(path: Path, content: str) -> None:
@@ -99,6 +117,8 @@ def cleanup_labeled(client, evaluation_id: str) -> dict:
     for container in client.containers.list(
         all=True, filters={"label": f"agent-insight.evaluation-id={evaluation_id}"}
     ):
+        if container.labels.get("agent-insight.role") == "evaluator-runtime":
+            continue
         try:
             container.remove(force=True)
         except Exception as error:
@@ -142,6 +162,7 @@ def main(input_path: str, output_path: str) -> int:
         float(limits["cpu"]),
         int(limits["memoryMiB"]),
         os.environ.get("EVALUATOR_NETWORK_POLICY", "deny"),
+        bool(payload.get("managedImage")),
     )
     status = "failed"
     error = None

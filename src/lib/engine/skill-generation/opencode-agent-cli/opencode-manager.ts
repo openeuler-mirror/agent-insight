@@ -1217,6 +1217,9 @@ export async function runWithEphemeralOpencodeServer<T>(
   const userKey = opts.user || ANONYMOUS_USER_KEY
   const verbose = opts.verbose ?? false
   const telemetryEnabled = opts.telemetryEnabled ?? !opts.isolateHome
+  const { experimentSignal, markExperimentCleanupUnconfirmed } = await import('@/lib/engine/experiment/cancellation-context')
+  const cancellation = experimentSignal()
+  cancellation?.throwIfAborted()
   // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
   let homeCleanup: (() => Promise<void>) | null = null
   let homeOverride: string | undefined = undefined
@@ -1228,17 +1231,26 @@ export async function runWithEphemeralOpencodeServer<T>(
   // 注意: 直接调内部 startServerForUser 不走 cache, 也不写 state.servers。
   // 多个 ephemeral 调用并发时各自起独立进程,互不复用,自然隔离。
   const inst = await startServerForUser(userKey, { verbose, homeOverride, telemetryEnabled })
+  const cancel = () => { void terminateOpencodeProcess(inst.process, 'experiment cancellation').catch(() => {}) }
+  cancellation?.addEventListener('abort', cancel, { once: true })
+  if (cancellation?.aborted) cancel()
   try {
+    cancellation?.throwIfAborted()
     return await fn(inst.baseUrl)
   } finally {
+    cancellation?.removeEventListener('abort', cancel)
     try {
       await terminateOpencodeProcess(inst.process, `ephemeral cleanup for ${userKey}`)
     } catch (cleanupErr) {
+      markExperimentCleanupUnconfirmed()
       // cleanup 失败不应该掩盖 fn 的真错误,只 warn 不抛
       console.warn(
         `[opencode] ephemeral cleanup for ${userKey} failed:`,
         cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
       )
+    }
+    if (typeof inst.process.pid === 'number' && processGroupExists(inst.process.pid)) {
+      markExperimentCleanupUnconfirmed()
     }
     // 隔离 HOME 临时目录在 server 死透之后清, 避免 server 还在引用文件被 unlink
     if (homeCleanup) {

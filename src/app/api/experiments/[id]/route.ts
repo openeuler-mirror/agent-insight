@@ -33,6 +33,12 @@ function parseJsonValue(value: string | null): unknown {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 type GeneratedTraceStatus = 'pending' | 'ready' | 'failed';
 
 function deriveGeneratedTraceStatus(input: {
@@ -69,7 +75,7 @@ export async function GET(
     const wantCaseId = q.get('caseId') || '';
 
     const experimentMeta = await prisma.experiment.findFirst({
-      where: { id, ...(username ? { user: username } : {}) },
+      where: { id, deletedAt: null, ...(username ? { user: username } : {}) },
       select: { id: true, type: true },
     });
     if (!experimentMeta) {
@@ -127,16 +133,16 @@ export async function GET(
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
     const allResults = await prisma.experimentEvalResult.findMany({
-      where: { experimentId: id },
+      where: { experimentId: id, case: { deletedAt: null } },
       select: { caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
     });
     // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
     // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
-    const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
+    const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id, deletedAt: null } });
     const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
     const casePage = Math.min(casePageRaw, casePages);
     const pagedCases = await prisma.experimentCase.findMany({
-      where: wantCaseId ? { id: wantCaseId, experimentId: id } : { experimentId: id },
+      where: { experimentId: id, deletedAt: null, ...(wantCaseId ? { id: wantCaseId } : {}) },
       orderBy: { createdAt: 'asc' },
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
@@ -146,6 +152,8 @@ export async function GET(
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
+      progressJson: string | null;
+      taskEnvelopeJson: string | null;
       publicPayloadJson: string | null;
       datasetCase: { externalCaseId: string } | null;
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
@@ -376,6 +384,9 @@ export async function GET(
     let expectedResultTotal = effectiveAllResults.length;
     let syntheticExecutionFailures = 0;
     if (experiment.scope === 'skill-workbench' && configSnapshot) {
+      const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId: id }, select: { caseKey: true } });
+      const removedDatasetCases = new Set(cancellations.filter((item) => item.caseKey.startsWith('dataset:')).map((item) => item.caseKey.slice(8)));
+      if (Array.isArray(configSnapshot.caseIds)) configSnapshot.caseIds = configSnapshot.caseIds.filter((key) => !removedDatasetCases.has(String(key)));
       const frozenCaseIds = Array.isArray(configSnapshot.caseIds)
         ? configSnapshot.caseIds.map(String).filter(Boolean)
         : [];
@@ -563,6 +574,9 @@ export async function GET(
           legacyFi.faultInjectionType ||
           null;
         const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
+        const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
+        const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
         const benchmarkPayload = benchmarkRun
           ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
           : null;
@@ -653,6 +667,8 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
+              workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
               failure: benchmarkRun.failureCode || benchmarkRun.failureMessage
                 ? {
@@ -678,7 +694,7 @@ export async function GET(
 }
 
 // 停止监听：把监听实验的 watchMode 置回 false（触发查询 where watchMode=true 即不再命中，
-// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。目前仅支持关闭。
+// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -688,6 +704,22 @@ export async function PATCH(
     const body = await req.json().catch(() => ({}));
     const { username } = await resolveUser(req, body?.user);
     if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+
+    if (body && Object.prototype.hasOwnProperty.call(body, 'name')) {
+      if (body.watchMode !== undefined) {
+        return NextResponse.json({ error: '一次只能修改一个实验字段' }, { status: 400 });
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!name || name.length > 120) {
+        return NextResponse.json({ error: '实验名称须为 1～120 个字符' }, { status: 400 });
+      }
+      const updated = await prisma.experiment.updateMany({
+        where: { id, user: username, deletedAt: null },
+        data: { name },
+      });
+      if (updated.count === 0) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+      return NextResponse.json({ success: true, name });
+    }
 
     if (body?.watchMode !== false) {
       return NextResponse.json({ error: 'only supports watchMode:false (stop watching)' }, { status: 400 });
@@ -730,6 +762,11 @@ export async function DELETE(
     });
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (url.searchParams.get('stop') === 'true') {
+      const { deleteExperimentExecution } = await import('@/lib/engine/experiment/cancellation-service');
+      const result = await deleteExperimentExecution(username, id);
+      return NextResponse.json({ deleted: true, cancellation: result }, { status: result.status === 'completed' ? 200 : 202 });
     }
     if (experiment.status !== 'draft') {
       return NextResponse.json({

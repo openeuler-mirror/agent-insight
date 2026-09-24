@@ -162,17 +162,18 @@ function killProcess(pid) {
 }
 
 function getPort(options) {
-  if (options.port) return options.port
-  if (process.env.PORT) return parseInt(process.env.PORT)
-
-  const envPath = path.join(process.cwd(), '.env')
-  if (fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, 'utf8')
-    const match = envContent.match(/^PORT=(\d+)$/m)
-    if (match) return parseInt(match[1])
+  const envPath = path.join(getDataRoot(), '.env')
+  const fileEnv = fs.existsSync(envPath) ? require('dotenv').parse(fs.readFileSync(envPath)) : {}
+  if (process.env.PORT || fileEnv.PORT) {
+    throw new Error('PORT 已移除，请改用 AGENT_INSIGHT_PORT 并移除旧 PORT 配置')
   }
-
-  return 3000
+  const configured = process.env.AGENT_INSIGHT_PORT !== undefined
+    ? process.env.AGENT_INSIGHT_PORT : fileEnv.AGENT_INSIGHT_PORT
+  const value = String(options?.port ?? (configured || 3000))
+  if (!/^\d{1,5}$/.test(value) || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error('AGENT_INSIGHT_PORT / --port 必须是 1 到 65535 的整数')
+  }
+  return Number(value)
 }
 
 function ensureEnvFile(packageRoot) {

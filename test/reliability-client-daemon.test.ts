@@ -169,6 +169,7 @@ test('client whitelist matches the server-side action set', () => {
     [...client.WHITELIST].sort(),
     [
       'APPLY_CLIENT_CONFIG',
+      'CANCEL_EXPERIMENT_RUN',
       'PREPARE_EXPERIMENT_CASE',
       'REFRESH_CAPABILITIES',
       'RUN_BENCHMARK_CASE',

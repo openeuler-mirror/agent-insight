@@ -30,7 +30,9 @@ import {
 } from '@/lib/engine/experiment/dataset-match';
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
+import { defaultExperimentName } from '@/lib/engine/experiment/experiment-name';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { benchmarkEvaluatorCard } from '@/lib/evaluators/benchmark-evaluator-cards';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
 import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
@@ -78,11 +80,6 @@ interface AgentOption {
   frameworks: string[];
   executable: boolean;
   targets: AgentTargetOption[];
-}
-
-function defaultExperimentName(now = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `Agent 评测 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
 interface TraceItem {
@@ -496,6 +493,7 @@ export function ExperimentWizard({
   const [selectingAll, setSelectingAll] = useState(false);
   const [selected, setSelected] = useState<Map<string, SelectedCase>>(new Map());
   const [selectedGenerated, setSelectedGenerated] = useState<Map<string, SelectedCase>>(new Map());
+  const [benchmarkSelectedCasesExpanded, setBenchmarkSelectedCasesExpanded] = useState(true);
   const [benchmarkInstanceSearch, setBenchmarkInstanceSearch] = useState('');
   const [traceSearchDraft, setTraceSearchDraft] = useState('');
   const [traceSearch, setTraceSearch] = useState('');
@@ -602,6 +600,10 @@ export function ExperimentWizard({
         || (compactQuery.length > 0 && value.replace(/[^a-z0-9]+/g, '').includes(compactQuery));
     }));
   }, [benchmarkInstanceSearch, benchmarkPresentation, generationCases, isBenchmarkDataset]);
+  const selectedGeneratedCases = useMemo(
+    () => Array.from(selectedGenerated.values()),
+    [selectedGenerated],
+  );
 
   const refreshAgents = useCallback(async () => {
     if (!user) return;
@@ -754,7 +756,7 @@ export function ExperimentWizard({
         String(restoredTarget.platform || ''),
         typeof config.agentName === 'string' ? config.agentName : '',
       );
-      setName(`${String(detail?.name || '实验')} · 复用评测配置`);
+      setName(defaultExperimentName());
       setAgentName(restoredAgentName);
       setTraceMode(restoredTraceSource);
       setWatchMode(false);
@@ -1278,28 +1280,11 @@ export function ExperimentWizard({
       if (!isBenchmarkDataset || !benchmarkEvaluatorId) {
         return cards.filter((card) => !card.id.startsWith('benchmark:'));
       }
-      const evaluatorPresentation = selectedDataset?.benchmark?.presentation?.evaluator;
-      const primaryMetric = selectedDataset?.benchmark?.presentation?.result?.primaryMetric;
-      const official = {
-        id: benchmarkEvaluatorId,
-        name: evaluatorPresentation?.displayName
-          || `${selectedDataset?.benchmark?.displayName || 'Benchmark'} Evaluator`,
-        description: evaluatorPresentation?.description
-          || '使用 Benchmark 接入包声明的评测逻辑判定结果。',
-        evaluatorType: 'Code' as const,
-        source: 'preset' as const,
-        category: 'res' as const,
-        targetTypes: ['Benchmark'],
-        objectives: [primaryMetric?.label || 'Benchmark 评测'],
-        scenarios: [selectedDataset?.benchmark?.displayName || 'Benchmark'],
-        runMode: evaluatorPresentation?.runMode || 'Benchmark Evaluator',
-        scoreRange: primaryMetric?.type === 'boolean' ? 'Pass / Fail' : 'Benchmark 指标',
-        popularity: 100,
-        mappedMetrics: [primaryMetric?.label || '结果'],
-        status: 'ready' as const,
-        outputDescription: evaluatorPresentation?.outputDescription,
-        runtimeNote: '由 Benchmark 数据集自动绑定，隐藏评测数据不会发送给 Agent。',
-      };
+      const official = benchmarkEvaluatorCard({
+        evaluatorKey: selectedDataset?.benchmark?.evaluatorKey || '',
+        benchmarkName: selectedDataset?.benchmark?.displayName || 'Benchmark',
+        presentation: selectedDataset?.benchmark?.presentation,
+      });
       return [official, ...cards.filter((card) => !card.id.startsWith('benchmark:'))];
     }
     const catalog = new Map([...presetEvaluators, ...customEvaluators].map((card) => [card.id, card]));
@@ -2052,6 +2037,102 @@ export function ExperimentWizard({
                   取消全选
                 </button>
               </div>
+              {isBenchmarkDataset && selectedGeneratedCases.length > 0 && (
+                <div style={{ border: '1px solid var(--border)', borderRadius: 10, marginBottom: 8, overflow: 'hidden' }}>
+                  <button
+                    type="button"
+                    aria-expanded={benchmarkSelectedCasesExpanded}
+                    onClick={() => setBenchmarkSelectedCasesExpanded((expanded) => !expanded)}
+                    style={{
+                      width: '100%', height: 34, padding: '0 12px', border: 0,
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      background: 'var(--background-secondary)', color: 'var(--foreground)', cursor: 'pointer',
+                    }}
+                  >
+                    <b style={{ fontSize: 11.5 }}>已选 Case（{selectedGeneratedCases.length}）</b>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+                      {benchmarkSelectedCasesExpanded ? '收起' : '展开'}
+                    </span>
+                    <ChevronDown
+                      size={14}
+                      style={{
+                        color: 'var(--foreground-muted)',
+                        transform: benchmarkSelectedCasesExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                        transition: 'transform 160ms ease',
+                      }}
+                    />
+                  </button>
+                  {benchmarkSelectedCasesExpanded && (
+                    <div style={{ maxHeight: 140, overflow: 'auto', borderTop: '1px solid var(--border)' }}>
+                      <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...STICKY_TH, width: 44 }} aria-label="选择" />
+                            {benchmarkCaseColumns.map((column) => (
+                              <th
+                                key={column.path}
+                                title={column.description}
+                                style={{ ...STICKY_TH, width: column.width, minWidth: column.width }}
+                              >
+                                {column.label}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedGeneratedCases.map((item) => (
+                            <tr key={item.executionId}>
+                              <td style={{ ...TD, width: 44 }}>
+                                <input
+                                  type="checkbox"
+                                  aria-label={`取消选择 ${benchmarkPresentationText(benchmarkPresentationValue(item, 'externalCaseId'))}`}
+                                  checked
+                                  onChange={() => {
+                                    setSelectedGenerated((previous) => {
+                                      const next = new Map(previous);
+                                      next.delete(item.executionId);
+                                      return next;
+                                    });
+                                  }}
+                                />
+                              </td>
+                              {benchmarkCaseColumns.map((column) => {
+                                const value = benchmarkPresentationText(
+                                  benchmarkPresentationValue(item, column.path),
+                                  { format: column.format },
+                                );
+                                return (
+                                  <td
+                                    key={column.path}
+                                    style={{
+                                      ...TD,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      width: column.width,
+                                      minWidth: column.width,
+                                      ...(column.type === 'code'
+                                        ? { fontFamily: 'var(--font-mono, monospace)' }
+                                        : {}),
+                                      ...(column.type === 'number'
+                                        ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
+                                        : {}),
+                                    }}
+                                    title={value}
+                                  >
+                                    {truncateBenchmarkText(value, column.truncate)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
               {isBenchmarkDataset && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                   <div style={{ position: 'relative', width: 'min(420px, 100%)' }}>

@@ -1,4 +1,6 @@
 'use client';
+import { useRouter } from 'next/navigation';
+import { DeleteExperimentButton, isCompletedExperimentCase } from './DeleteExperimentButton';
 
 // Trace 评测详情：任务输入/预期输出/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
 // （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡。
@@ -441,6 +443,7 @@ export function ExperimentCaseDetail({
   onBack?: () => void;
 }) {
   const { user } = useAuth();
+  const router = useRouter();
   const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -579,6 +582,11 @@ export function ExperimentCaseDetail({
     <>
       {!embedded && <AppTopBar title={isBenchmark ? 'Benchmark Case 详情' : 'Trace 评测详情'} />}
       <PageContainer className="min-w-0 max-w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full [&>*]:shrink-0">
+        {user && caseRow && detail && <DeleteExperimentButton user={user} experimentId={id} caseId={caseId}
+          completed={isCompletedExperimentCase(detail.status, caseRow.benchmark?.runStatus)}
+          onDeleted={(experimentDeleted) => experimentDeleted
+            ? router.replace('/experiments')
+            : onBack ? onBack() : router.push(`/experiments/${encodeURIComponent(id)}`)} />}
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : !detail || !caseRow ? (
