@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 实验删除与评测服务停止清理 | [experiment-cancellation](experiment-cancellation/phase1-requirements.md) | 实验及 Case 定向停止和逻辑删除、立即停服、离线镜像清理，保留共享资源及未确认取消记录 | Feature | 2026-09-23 | 🟡 工作区实现，专项通过，待全量与部署验收 | — |
 | Trace 无上报超时 | [trace-inactivity-timeout](trace-inactivity-timeout/) | 所有 Agent 采集的未结束 Trace 连续十分钟无上报后显示超时，新上报恢复执行中，列表和详情自动刷新 | Bugfix | 2026-09-15 | ✅ 830 已验收，master 专项自动化验证通过 | [#301](https://atomgit.com/openeuler/agent-insight/issues/301) |
 | 跨 Session 协作 Trace | [cross-session-collaboration-trace](cross-session-collaboration-trace/) | 以不可变关系事件和可重算端点解析连接分散 Session，并由服务端将 Goal Plus 语义成员关系投影为逻辑主节点到 worker 的关系，不改原生 Execution 树 | Feature | 2026-09-12 | ✅ 已与协作上报、显式绑定及步骤定位实现兼容合并，前端暂不开放 | —（待补） |
 | Benchmark 统一接入 | [benchmark](benchmark/) | 以 Manifest、五方法 Adapter 和构建期 Catalog 接入 Benchmark；覆盖共享数据集、Agent 执行、独立 Evaluator、官方 Harness、结果归一化、统一实验前端与扩展约束 | Feature / Refactor | 2026-09-03 | 🟡 主链路、前端与自动化测试已完成；待浏览器验收及 x86_64 Linux 正式计分验收 | —（待补） |

@@ -4,6 +4,7 @@ const fs = require('node:fs/promises')
 const http = require('node:http')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const { timingSafeEqual } = require('node:crypto')
 
 const { generatedEvaluatorDescriptors } = require('../../../generated/benchmark-catalog/evaluators.cjs')
 const {
@@ -12,7 +13,9 @@ const {
   EvaluatorRegistry,
   FileEvaluatorEntrypoint,
 } = require('./evaluator-registry.cjs')
-const { EvaluationJobJournal } = require('./job-journal.cjs')
+const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
+const { BenchmarkImagePool, imagePoolConfig } = require('./image-pool.cjs')
+const { ServiceControl } = require('./service-control.cjs')
 const { AgentInsightPlatformClient, PlatformClientError, sha256 } = require('./platform-client.cjs')
 
 const ACTIVE_STAGES = new Set([
@@ -249,8 +252,67 @@ class BenchmarkEvaluatorService {
     this.cleanupContainers = options.cleanupContainers || removeLabeledContainers
     this.controllerProbe = options.controllerProbe || defaultControllerProbe
     this.active = new Map()
+    this.controllers = new Map()
+    this.control = new ServiceControl(this.dataDir)
     this.retryAttempts = new Map()
     this.readiness = null
+    const poolConfig = options.imagePoolConfig || imagePoolConfig()
+    this.imagePool = options.imagePool || (poolConfig.enabled ? new BenchmarkImagePool({ dataDir: this.dataDir, config: poolConfig }) : null)
+    this.imagePoolToken = options.imagePoolToken || process.env.IMAGE_POOL_PREPARE_TOKEN || ''
+    if (this.imagePool?.config.prefetch && !this.imagePoolToken) throw new Error('IMAGE_POOL_PREPARE_TOKEN is required for prefetch')
+  }
+
+  async prepareImageWindow(request, headers) {
+    await this.control.assertRunning()
+    const token = Buffer.from(String(headers['x-agent-insight-image-pool-token'] || ''))
+    const expected = Buffer.from(this.imagePoolToken)
+    if (!expected.length || token.length !== expected.length || !timingSafeEqual(token, expected)) {
+      throw evaluatorError('IMAGE_POOL_FORBIDDEN', '镜像准备鉴权失败', 403)
+    }
+    const { requestDigest, ...payload } = request
+    if (requestDigest !== sha256(Buffer.from(canonicalJson(payload)))
+      || headers['x-agent-insight-request-digest'] !== requestDigest
+      || !/^[A-Za-z0-9_-]{1,160}$/.test(String(request.experimentId || ''))
+      || !Number.isSafeInteger(request.revision) || request.revision < 0
+      || !Array.isArray(request.cases) || request.cases.length > 2) {
+      throw evaluatorError('IMAGE_POOL_WINDOW_INVALID', '镜像准备消息不合法', 422)
+    }
+    if (!this.imagePool?.config.prefetch) return { enabled: false }
+    const evaluator = this.registry.get(request.evaluatorKey, request.benchmarkKey)
+    await this.imagePool.initialize()
+    const specs = []
+    for (const item of request.cases) specs.push(...await evaluator.describeImages(item, this.imagePool.arch))
+    return this.imagePool.updateWindow({ benchmarkKey: request.benchmarkKey, experimentId: request.experimentId }, request.revision, specs)
+  }
+
+  async acquireJobImages(request, evaluator, signal) {
+    if (!this.imagePool || !evaluator.describeImages) return undefined
+    await this.imagePool.initialize()
+    let specs = await evaluator.describeImages(request.evaluationJob.payload, this.imagePool.arch)
+    if (!specs.length) return undefined
+    const frozenPath = path.join(this.journal.jobDir(request.runId), 'pool-images.json')
+    const frozen = await this.journal.readJson(frozenPath)
+    if (frozen) {
+      specs = specs.map((spec) => {
+        const prior = frozen.find((image) => image.key === spec.key)
+        if (!prior) throw evaluatorError('IMAGE_POOL_FROZEN_MISMATCH', '冻结镜像与任务不一致', 500)
+        const repository = (ref) => ref.split('@')[0].replace(/:[^/:]+$/, '')
+        if (!prior.pinnedImage.includes('@sha256:')) {
+          // Local-only IDs can be reused but never silently replaced with a moving tag.
+          if (!/^sha256:[a-f0-9]{64}$/i.test(prior.pinnedImage)) throw evaluatorError('IMAGE_POOL_FROZEN_MISMATCH', '冻结镜像身份不合法', 500)
+        } else if (!spec.references.some((ref) => repository(ref) === repository(prior.pinnedImage))) {
+          throw evaluatorError('IMAGE_POOL_FROZEN_FORBIDDEN', '冻结镜像已不在接入包允许范围内', 403)
+        }
+        return { ...spec, references: [prior.pinnedImage] }
+      })
+    }
+    const images = await this.imagePool.acquire(this.imageOwner(request), specs, { signal })
+    await atomicWriteJson(frozenPath, images)
+    return images
+  }
+
+  imageOwner(request) {
+    return { benchmarkKey: request.evaluationJob.benchmark.key, experimentId: request.evaluationJob.context.experimentId, runId: request.runId }
   }
 
   async evaluatorHealth() {
@@ -326,6 +388,10 @@ class BenchmarkEvaluatorService {
     return {
       status: controller.ready ? 'healthy' : 'degraded',
       busy: await this.hasBusyJob(),
+      imagePool: { enabled: Boolean(this.imagePool), prefetch: Boolean(this.imagePool?.config.prefetch),
+        storage: this.imagePool?.store?.diskStatus || null,
+        recoveryRequired: this.imagePool ? Object.values(this.imagePool.state.operations).some((op) => op.uncertain)
+          || Object.values(this.imagePool.state.images).some((entry) => entry.uncertain) : false },
       runtime: this.runtimeFacts(controller.runtimeFacts),
       controller: {
         ready: controller.ready,
@@ -346,6 +412,7 @@ class BenchmarkEvaluatorService {
   }
 
   async reportProgress(request, event) {
+    await this.control.assertRunning(request.runId)
     await this.journal.writeState(request.runId, { stage: event.stage, progress: event })
     try { await this.platform.progress(request, event) }
     catch (error) {
@@ -405,6 +472,7 @@ class BenchmarkEvaluatorService {
   }
 
   async deliverResult(request, result) {
+    await this.control.assertRunning(request.runId)
     await this.reportProgress(request, {
       kind: 'evaluation',
       stage: 'uploading_evidence',
@@ -412,6 +480,7 @@ class BenchmarkEvaluatorService {
     })
     const uploads = []
     for (const evidence of result.evidenceFiles) {
+      await this.control.assertRunning(request.runId)
       uploads.push(await this.platform.uploadEvidence(request, evidence))
     }
     const completion = {
@@ -420,6 +489,7 @@ class BenchmarkEvaluatorService {
     }
     await this.journal.writeResult(request.runId, { completion })
     await this.journal.writeState(request.runId, { stage: 'callback_pending' })
+    await this.control.assertRunning(request.runId)
     await this.platform.complete(request, completion)
     await this.journal.writeState(request.runId, {
       stage: completion.status === 'failed' ? 'failed' : 'completed',
@@ -464,6 +534,7 @@ class BenchmarkEvaluatorService {
   }
 
   async execute(runId) {
+    await this.control.assertRunning(runId)
     const request = await this.journal.request(runId)
     if (!request) return
     const existingResult = await this.journal.result(runId)
@@ -494,6 +565,7 @@ class BenchmarkEvaluatorService {
       request.evaluationJob.benchmark.key,
     )
     const abortController = new AbortController()
+    this.controllers.set(runId, abortController)
     let timedOut = false
     const timeout = setTimeout(() => {
       timedOut = true
@@ -501,8 +573,10 @@ class BenchmarkEvaluatorService {
     }, request.timeoutSeconds * 1000)
     const assertWithinDeadline = () => {
       if (timedOut) throw evaluationTimeoutError()
+      if (abortController.signal.aborted) throw evaluatorError('EVALUATION_CANCELLED', '评测已取消', 409)
     }
     let result
+    let imagePoolWaitMs = 0
     try {
       const staleCleanup = await this.cleanupContainers(runId)
       if (staleCleanup.status !== 'succeeded') {
@@ -520,8 +594,15 @@ class BenchmarkEvaluatorService {
       })
       const artifacts = await this.downloadArtifacts(request)
       assertWithinDeadline()
+      if (this.imagePool) await this.reportProgress(request, { kind: 'evaluation', stage: 'resolving_image', occurredAt: new Date().toISOString() })
+      const imageWaitStarted = Date.now()
+      let preparedImages
+      try { preparedImages = await this.acquireJobImages(request, evaluator, abortController.signal) }
+      finally { imagePoolWaitMs = Date.now() - imageWaitStarted }
+      assertWithinDeadline()
       result = await evaluator.evaluate({
         job: request.evaluationJob,
+        preparedImages,
         artifacts,
         workDir: this.journal.jobDir(runId),
         signal: abortController.signal,
@@ -538,6 +619,10 @@ class BenchmarkEvaluatorService {
       result = await this.fallbackResult(request, timedOut ? evaluationTimeoutError() : error)
     } finally {
       clearTimeout(timeout)
+    }
+    if (await this.control.stopped() || await this.control.cancelled(runId)) {
+      await this.cleanupCancelled(runId)
+      return
     }
     await this.reportProgress(request, {
       kind: 'evaluation',
@@ -557,7 +642,12 @@ class BenchmarkEvaluatorService {
       evaluator: result.completion.cleanup,
       controller: controllerCleanup,
     }
+    if (this.imagePool && controllerCleanup.status === 'succeeded') {
+      try { await this.imagePool.release(this.imageOwner(request)) }
+      catch (error) { console.error('[benchmark/image-pool] release failed; protection retained', error.message) }
+    }
     result.completion.runtimeFacts = this.runtimeFacts(result.completion.runtimeFacts)
+    if (this.imagePool) result.completion.runtimeFacts.imagePoolWaitMs = imagePoolWaitMs
     await this.journal.writeResult(runId, { evaluatorOutput: result })
     try {
       await this.deliverResult(request, result)
@@ -566,19 +656,98 @@ class BenchmarkEvaluatorService {
     }
   }
 
+  async cleanupCancelled(runId) {
+    const cleanup = await this.cleanupContainers(runId)
+    const request = await this.journal.request(runId)
+    if (cleanup.status === 'succeeded' && this.imagePool && request) {
+      await this.imagePool.release(this.imageOwner(request))
+    }
+    const intent = await this.control.cancelled(runId) || await this.control.stopped()
+    await this.journal.writeState(runId, {
+      stage: cleanup.status === 'succeeded' ? 'cancelled' : 'cancelling',
+      cancellationReason: intent?.reason || 'EVALUATION_CANCELLED',
+      cancellationCleanup: cleanup,
+      cancellationCallbackPending: true,
+    })
+    return cleanup
+  }
+
+  async cancel(runId, reason = 'EVALUATION_CANCELLED') {
+    await this.control.cancel(runId, reason)
+    this.controllers.get(runId)?.abort()
+    // An active run may still be unwinding; its final cleanup confirms termination.
+    if (this.active.has(runId)) return { runId, status: 'cancelling' }
+    if (!await this.journal.request(runId)) return { runId, status: 'cancelled' }
+    const cleanup = await this.cleanupCancelled(runId)
+    return { runId, status: cleanup.status === 'succeeded' ? 'cancelled' : 'cancelling' }
+  }
+
+  async shutdown() {
+    await this.control.stop()
+    for (const controller of this.controllers.values()) controller.abort()
+    for (const runId of await this.journal.listRunIds()) {
+      if (ACTIVE_STAGES.has((await this.journal.state(runId))?.stage)) {
+        await this.control.cancel(runId, 'SERVICE_STOPPED')
+        await this.journal.writeState(runId, { stage: 'cancelling', cancellationReason: 'SERVICE_STOPPED' })
+      }
+    }
+    await this.imagePool?.close()
+  }
+
+  async flushStopNotifications() {
+    if (this.flushingStopNotifications) return
+    this.flushingStopNotifications = true
+    try {
+    for (const runId of await this.journal.listRunIds()) {
+      const state = await this.journal.state(runId)
+      const intent = await this.control.cancelled(runId)
+      if (!state?.cancellationCallbackPending || intent?.reason !== 'SERVICE_STOPPED' || state.stage !== 'cancelled') continue
+      const request = await this.journal.request(runId)
+      try {
+        await this.platform.complete(request, { status: 'failed', rawResult: {}, evidenceArtifactIds: [],
+          runtimeFacts: this.runtimeFacts(), cleanup: state.cancellationCleanup || { status: 'succeeded' },
+          error: { code: 'SERVICE_STOPPED', message: '评测服务被管理员主动停止', retryable: false } })
+        await this.journal.writeState(runId, { cancellationCallbackPending: false })
+      } catch (error) {
+        await this.journal.writeState(runId, { cancellationCallbackError: error.message })
+      }
+    }
+    } finally { this.flushingStopNotifications = false }
+  }
+
   async start(runId) {
     if (this.active.has(runId)) return this.active.get(runId)
-    const task = this.execute(runId).finally(() => this.active.delete(runId))
+    await this.control.assertRunning(runId)
+    const task = this.execute(runId).catch(async (error) => {
+      if (await this.control.cancelled(runId) || await this.control.stopped()) await this.cleanupCancelled(runId)
+      else throw error
+    }).finally(() => { this.active.delete(runId); this.controllers.delete(runId) })
     this.active.set(runId, task)
     return task
   }
 
   async recover() {
+    await this.control.assertRunning()
+    if (this.imagePool) {
+      await this.imagePool.initialize()
+      const owners = Object.values(this.imagePool.state.images).flatMap((entry) => Object.values(entry.users))
+      for (const owner of owners) {
+        const request = await this.journal.request(owner.runId)
+        if (!request) continue
+        const cleanup = await this.cleanupContainers(owner.runId)
+        if (cleanup.status === 'succeeded') await this.imagePool.release(owner)
+      }
+    }
     const recoverable = []
     for (const runId of await this.journal.listRunIds()) {
+      if (await this.control.cancelled(runId)) {
+        if ((await this.journal.state(runId))?.stage !== 'cancelled') await this.cleanupCancelled(runId)
+        continue
+      }
       const state = await this.journal.state(runId)
       if (ACTIVE_STAGES.has(state?.stage)) recoverable.push(runId)
     }
+    void this.flushStopNotifications().catch((error) => console.error('[evaluator/stop-notifications]', error))
     if (recoverable.length) void this.start(recoverable[0])
     return recoverable.length
   }
@@ -593,7 +762,22 @@ class BenchmarkEvaluatorService {
         return json(res, 404, { error: { code: 'NOT_FOUND', message: '接口不存在', retryable: false } })
       }
       const request = await readJson(req)
+      if (request?.operation === 'cancel') {
+        this.journal.jobDir(request.runId)
+        const existing = await this.journal.request(request.runId)
+        if (existing && existing.requestDigest !== request.requestDigest) {
+          throw evaluatorError('RUN_ID_CONFLICT', '取消请求摘要与原任务不一致', 409)
+        }
+        if (typeof request.requestDigest !== 'string' || !request.requestDigest) {
+          throw evaluatorError('CANCEL_INVALID', '取消请求缺少原任务摘要', 422)
+        }
+        return json(res, 202, await this.cancel(request.runId))
+      }
+      if (request?.operation === 'prepare-images') {
+        return json(res, 202, await this.prepareImageWindow(request, req.headers))
+      }
       validateRequest(request, req.headers)
+      await this.control.assertRunning(request.runId)
       const existing = await this.journal.request(request.runId)
       if (existing) {
         if (existing.requestDigest !== request.requestDigest) {
@@ -631,7 +815,9 @@ class BenchmarkEvaluatorService {
   }
 
   createServer() {
-    return http.createServer((req, res) => void this.handle(req, res))
+    const server = http.createServer((req, res) => void this.handle(req, res))
+    server.once('close', () => { void this.imagePool?.close() })
+    return server
   }
 }
 

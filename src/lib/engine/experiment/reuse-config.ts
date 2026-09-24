@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/storage/prisma'
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service'
 import { loadTraceGenerationRetryRequest } from '@/lib/engine/experiment/trace-generation'
+import { defaultExperimentName } from '@/lib/engine/experiment/experiment-name'
 
 import { autoPairGroups, createComparisonExperiment } from './comparison-runner'
 
@@ -39,7 +40,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
   if (!source) throw new Error('source experiment not found')
   const evaluatorIds = parseStringArray(source.evaluatorIdsJson)
   const snapshot = parseObject(source.configSnapshotJson)
-  const name = `${source.name} · 同配置`
+  const name = defaultExperimentName()
 
   if (source.scope === 'benchmark') {
     const binding = source.benchmarkBinding

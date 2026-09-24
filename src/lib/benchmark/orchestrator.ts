@@ -12,6 +12,7 @@ import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
+import { nextImagePreparationRevision, sendImagePreparationWindow } from './image-preparation'
 
 const ACTIVE_RUN_STATUSES = [
   'preparing',
@@ -36,6 +37,8 @@ export async function prepareNextBenchmarkCaseRun(input: {
   experimentId: string
   callbackOrigin: string
 }): Promise<{ runId: string } | null> {
+  const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
+  await assertExperimentActive(input.experimentId);
   const active = await prisma.benchmarkCaseRun.findFirst({
     where: { experimentId: input.experimentId, status: { in: ACTIVE_RUN_STATUSES } },
     select: { id: true },
@@ -43,7 +46,7 @@ export async function prepareNextBenchmarkCaseRun(input: {
   if (active) return null
 
   const candidate = await prisma.benchmarkCaseRun.findFirst({
-    where: { experimentId: input.experimentId, status: 'pending' },
+    where: { experimentId: input.experimentId, status: 'pending', experimentCase: { deletedAt: null } },
     orderBy: { ordinal: 'asc' },
     select: { id: true },
   })
@@ -140,6 +143,30 @@ export async function prepareNextBenchmarkCaseRun(input: {
         },
       })
     })
+    if (adapter.imagePreparationInput && process.env.BENCHMARK_IMAGE_POOL_PREPARE_TOKEN) {
+      const revision = nextImagePreparationRevision()
+      void (async () => {
+        const cases: JsonValue[] = []
+        const current = adapter.imagePreparationInput!(split.publicPayload, split.privatePayload)
+        if (current) cases.push(current)
+        const next = await prisma.benchmarkCaseRun.findFirst({
+          where: { experimentId: run.experimentId, status: 'pending' },
+          orderBy: { ordinal: 'asc' },
+          include: { datasetCase: true },
+        })
+        if (next?.datasetCase) {
+          const rawNext = JSON.parse(next.datasetCase.rawCaseJson) as JsonValue
+          if (fingerprintJson(rawNext) !== next.datasetCase.sourceFingerprint) throw new Error('下一 Case 数据指纹不匹配')
+          const nextSplit = adapter.validateAndSplitCase(rawNext)
+          const preparation = adapter.imagePreparationInput!(nextSplit.publicPayload, nextSplit.privatePayload)
+          if (preparation) cases.push(preparation)
+        }
+        const experiment = await prisma.experiment.findUnique({ where: { id: run.experimentId }, select: { status: true } })
+        if (experiment?.status !== 'running') return
+        await sendImagePreparationWindow({ benchmarkKey: run.adapterKey, evaluatorKey: adapter.manifest.evaluation.evaluatorKey,
+          experimentId: run.experimentId, revision, cases })
+      })().catch((error) => console.warn('[benchmark/image-pool] preparation skipped', error instanceof Error ? error.message : String(error)))
+    }
     return { runId: run.id }
   } catch (error) {
     const protocolError = error instanceof BenchmarkProtocolError

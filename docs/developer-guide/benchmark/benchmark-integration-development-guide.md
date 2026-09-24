@@ -433,7 +433,7 @@ resources:
 
 - `runtime`：有独立依赖的公开接入使用 `oci-container`；`script-package`、`builtin` 只适用于与 Controller 共享依赖的内置实现；
 - `command`：`node`、`python3`、`direct`；
-- `network`：`deny` 或 `allow`。
+- `network`：`deny` 或 `allow`。`deny` 使用 Docker `network_mode=none` 隔离外部网络，同时保留容器内部 `localhost` 解析与回环套接字；`allow` 使用 bridge 网络。SWE-bench 官方 Case 容器与其 Evaluator Runtime 遵循同一策略，测试插件需要的本地通信不会被误禁用。
 
 Entrypoint、Smoke 和 Dockerfile 必须位于接入包内。Catalog 按接入包内容摘要生成 Runtime 镜像 tag，并在运行时校验镜像 label；发布方可用 `node scripts/benchmark/build-evaluator-runtime.cjs <key>` 构建并推送该制品。未命中远端制品的源码 checkout 会在首次任务中回退本地构建，之后复用缓存。运行依赖归接入包制品所有，不要加入通用 Controller 基础依赖，也不要在 Controller 公共代码中加入 Benchmark 分支。
 
@@ -470,6 +470,8 @@ entrypoint/
 ```
 
 `request.json` 包含 `schemaVersion: evaluator-entrypoint/v1`、完整 `evaluationJob` 和只读 Artifact 相对路径。Evaluator 只能从输入目录读取提交物，把 Evidence 写入输出目录。
+
+可选的 `preparedImages` 数组由公共 Controller 写入输入契约，包含 `imageId`、不可变 `pinnedImage`、实际来源及接入包提供的上下文；不得直接信任客户端提交的同名字段。启用池的实例使用这些引用，不再自行拉取缺失镜像；缺失时失败并通过 Controller 重试。未接入镜像池的 Evaluator 保持原有输入和运行方式。
 
 ### 9.3 `result.json`
 
@@ -510,6 +512,20 @@ entrypoint/
 - `finally` 中清理进程、容器、临时目录和策略；
 - 错误中不得输出 Token、隐藏测试正文或私有 Payload；
 - 相同 EvaluationJob 和 Artifact 应得到可解释、可重放的结果。
+
+### 9.5 可选：公共镜像池接入
+
+镜像池位于 `services/evaluator/src/image-pool.cjs`，按 Docker daemon 共享，不属于某个 Benchmark。接入包只声明需求，不另建空间预算或回收器，也不需要增加公共 API 路由。
+
+1. 在 `evaluator.yaml` 增加 `imageProvider: ./images.cjs`。该 Node 模块随 Catalog 加载，在 Controller 内导出 `describeImages(payload, daemonArch)`，返回数组；可无镜像或一个 Case 多镜像。这里只解析/校验元数据，不执行拉取、Shell 或 Harness，也不引入 Runtime 专属依赖。
+2. 每项包含 `{ key, arch, references, estimatedBytes?, context? }`。`references` 是经接入包校验的来源和回退顺序；`estimatedBytes` 是新增占用的保守估值，省略使用主机默认值；`context` 是 Runtime 所需安全元数据。命中本地镜像也须校验允许范围和架构。公共层按架构和来源列表合并在途请求，解析后按实际 image ID 合并归属和使用者，不按 Benchmark/case 名称合并。
+3. 若需提前准备，Adapter 可增加 `imagePreparationInput(publicPayload, privatePayload)`，返回准备所需 JSON 或 `null`，不发送答案、测试补丁或完整私有载荷。平台在 Agent 下发前异步发送当前/下一个 Case 的元数据，Controller 使用同一个 `describeImages` 校验。此优化 hook 不替代五个必需业务 hook。
+4. Controller 获取镜像后持久化使用者，把 `preparedImages` 交给 Runtime；任务目录的 `pool-images.json` 冻结身份。重试重新检查本地镜像，仅按冻结 digest 重拉；仅本地 image ID 消失时明确失败，不回退到新 `latest`。
+5. 所有评测容器必须带 `agent-insight.evaluation-id` 标签，最终容器清理成功后 Controller 才释放使用者。OCI Runtime 同样带此标签及 `agent-insight.role=evaluator-runtime`；Runtime 内部清理不能删除自己，退出后由 Controller 兜底清理。清理或操作结果不确定时保留保护，不能用超时推断 Docker 操作已停止。
+
+准备消息复用 `POST /api/v1/evaluations`：`{ operation: 'prepare-images', benchmarkKey, evaluatorKey, experimentId, revision, cases, requestDigest }`，`cases` 最多两个 Case；摘要覆盖其余完整消息。请求携带 `x-agent-insight-image-pool-token` 和 `x-agent-insight-request-digest`，双端密钥匹配后才接受。按 Benchmark/实验保存递增窗口版本，旧消息不能恢复旧窗口；空数组撤销该实验的准备。第一版信任单个平台服务身份，不增加用户配额或多平台协调。
+
+后台准备不占评测执行槽，发送失败降级到按需准备；无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
 
 ## 10. Presentation
 

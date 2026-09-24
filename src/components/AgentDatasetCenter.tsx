@@ -36,6 +36,8 @@ type AgentDatasetListItem = Omit<AgentDataset, 'cases'> & {
   cases?: DatasetCase[];
 };
 
+const DATASETS_PER_PAGE = 12;
+
 const emptyDraft: DatasetDraft = {
   name: '',
   description: '',
@@ -244,6 +246,7 @@ export default function AgentDatasetCenter() {
   const [refreshing, setRefreshing] = useState(false);
   const [kindFilter, setKindFilter] = useState<'all' | DatasetKind>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<DatasetDraft>(emptyDraft);
@@ -251,6 +254,7 @@ export default function AgentDatasetCenter() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
+  const listTopRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [tableActionError, setTableActionError] = useState('');
 
@@ -329,6 +333,16 @@ export default function AgentDatasetCenter() {
       );
     });
   }, [datasets, searchQuery, kindFilter]);
+  const pageCount = Math.max(1, Math.ceil(filteredDatasets.length / DATASETS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount);
+  const pageDatasets = filteredDatasets.slice(
+    (currentPage - 1) * DATASETS_PER_PAGE,
+    currentPage * DATASETS_PER_PAGE,
+  );
+  const goToPage = (nextPage: number) => {
+    setPage(nextPage);
+    listTopRef.current?.scrollIntoView({ block: 'start' });
+  };
 
   const openEditorForDataset = async (dataset: AgentDatasetListItem) => {
     if (!user) return;
@@ -432,6 +446,7 @@ export default function AgentDatasetCenter() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || '删除失败');
       if (editorOpen && draft.id === item.id) closeEditor();
+      setPage(1);
       await loadDatasets({ isRefresh: true });
     } catch (e) {
       setTableActionError(e instanceof Error ? e.message : '删除失败');
@@ -482,6 +497,7 @@ export default function AgentDatasetCenter() {
 
       const newId = result.dataset?.id as string | undefined;
 
+      setPage(1);
       const datasetsNext = await loadDatasets({ isRefresh: true });
       if (creating && newId) {
         setCreating(false);
@@ -529,6 +545,7 @@ export default function AgentDatasetCenter() {
       ) : null}
 
       <div
+        ref={listTopRef}
         style={{
           display: 'flex',
           flexWrap: 'wrap',
@@ -540,7 +557,10 @@ export default function AgentDatasetCenter() {
         <input
           type="search"
           value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          onChange={e => {
+            setSearchQuery(e.target.value);
+            setPage(1);
+          }}
           placeholder="搜索名称"
           aria-label="搜索评测集名称"
           style={{
@@ -568,7 +588,10 @@ export default function AgentDatasetCenter() {
               key={key}
               type="button"
               className="ai-btn-s"
-              onClick={() => setKindFilter(key)}
+              onClick={() => {
+                setKindFilter(key);
+                setPage(1);
+              }}
               style={{
                 opacity: kindFilter === key ? 1 : 0.7,
                 borderColor: kindFilter === key ? 'var(--primary)' : undefined,
@@ -582,7 +605,10 @@ export default function AgentDatasetCenter() {
         <button
           type="button"
           className="ai-btn-s"
-          onClick={() => void loadDatasets({ isRefresh: true })}
+          onClick={() => {
+            setPage(1);
+            void loadDatasets({ isRefresh: true });
+          }}
           disabled={refreshing}
           title={refreshing ? '刷新列表' : `刷新列表（共 ${datasets.length} 个评测集）`}
         >
@@ -679,14 +705,9 @@ export default function AgentDatasetCenter() {
           无匹配结果，请调整搜索关键词。
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 340px), 1fr))',
-            gap: 14,
-          }}
-        >
-          {filteredDatasets.map(item => {
+        <>
+        <div className="grid grid-cols-1 gap-[14px] md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {pageDatasets.map(item => {
             const stat = datasetPrimaryStatLine(item);
             const status = datasetCardStatus(item);
             const badgeBg =
@@ -908,6 +929,13 @@ export default function AgentDatasetCenter() {
             );
           })}
         </div>
+        <nav aria-label="数据集分页" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 16, color: 'var(--foreground-muted)', fontSize: 12 }}>
+          <span>显示 {(currentPage - 1) * DATASETS_PER_PAGE + 1}–{Math.min(currentPage * DATASETS_PER_PAGE, filteredDatasets.length)} / 共 {filteredDatasets.length} 个</span>
+          <button type="button" className="ai-btn-s" disabled={currentPage === 1} style={{ opacity: currentPage === 1 ? 0.45 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }} onClick={() => goToPage(currentPage - 1)}>上一页</button>
+          <span aria-live="polite">{currentPage} / {pageCount} 页</span>
+          <button type="button" className="ai-btn-s" disabled={currentPage === pageCount} style={{ opacity: currentPage === pageCount ? 0.45 : 1, cursor: currentPage === pageCount ? 'not-allowed' : 'pointer' }} onClick={() => goToPage(currentPage + 1)}>下一页</button>
+        </nav>
+        </>
       )}
 
       {editorOpen && (

@@ -12,9 +12,16 @@ import { GET as getInstaller } from '@/app/api/ingest/setup/goal-plus/route';
 import { GET as getAsset } from '@/app/api/ingest/setup/goal-plus/assets/[asset]/route';
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
 import { GET as getAutoSetup } from '@/app/api/ingest/setup/auto/route';
+import { useIsolatedHome } from './helpers/isolated-home';
 
 const require = createRequire(import.meta.url);
 const { install } = require('../scripts/agent-trace-collectors/goal-plus/install.cjs');
+const { attachSource } = require('../scripts/agent-trace-collectors/goal-plus/lib/source-registry.cjs');
+const {
+  loadConfig,
+  startWatcher,
+  stopWatcher,
+} = require('../scripts/agent-trace-collectors/goal-plus/goal-plus-collector.cjs');
 
 const ENTRIES = [
   'goal-plus/goal-plus-collector.cjs',
@@ -83,16 +90,8 @@ test('legacy Goal Plus setup input is transparently mapped to the Pi installatio
 test('Goal Plus installer writes only managed collector state', async t => {
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-install-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
-  const previousKey = process.env.AGENT_INSIGHT_API_KEY;
-  const previousHome = process.env.AGENT_INSIGHT_HOME;
+  useIsolatedHome(t, homeDir);
   process.env.AGENT_INSIGHT_API_KEY = 'synthetic-install-key';
-  delete process.env.AGENT_INSIGHT_HOME;
-  t.after(() => {
-    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
-    else process.env.AGENT_INSIGHT_API_KEY = previousKey;
-    if (previousHome === undefined) delete process.env.AGENT_INSIGHT_HOME;
-    else process.env.AGENT_INSIGHT_HOME = previousHome;
-  });
   const result = await install({ homeDir, sourceDir: path.join(process.cwd(), 'scripts', 'agent-trace-collectors', 'goal-plus'), skipVersionCheck: true });
   assert.equal(result.packageDir, path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus'));
   const config = JSON.parse(await fsp.readFile(result.configPath, 'utf8'));
@@ -105,9 +104,10 @@ test('Goal Plus installer writes only managed collector state', async t => {
   assert.deepEqual(reinstalled.hosts, ['pi']);
 });
 
-test('Pi-managed Goal Plus installation preserves a compatible manual configuration', async t => {
+test('Pi-managed Goal Plus installation replaces an existing configuration', async t => {
   const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-compatible-install-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  useIsolatedHome(t, homeDir);
   const packageDir = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus');
   const configPath = path.join(packageDir, 'config.json');
   await fsp.mkdir(packageDir, { recursive: true });
@@ -119,42 +119,44 @@ test('Pi-managed Goal Plus installation preserves a compatible manual configurat
     otlpEndpoint: 'https://manual.example/custom/traces',
   };
   await fsp.writeFile(configPath, `${JSON.stringify(manualConfig, null, 2)}\n`);
-  const previousKey = process.env.AGENT_INSIGHT_API_KEY;
-  process.env.AGENT_INSIGHT_API_KEY = manualConfig.apiKey;
-  t.after(() => {
-    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
-    else process.env.AGENT_INSIGHT_API_KEY = previousKey;
-  });
-
   const result = await install({
     homeDir,
     sourceDir: path.join(process.cwd(), 'scripts', 'agent-trace-collectors', 'goal-plus'),
     skipVersionCheck: true,
     createWrapper: false,
     managedBy: 'pi-agent',
-    preserveDifferentAccount: true,
-    preserveExistingConfig: true,
+    apiKey: 'pi-managed-key',
+    baseUrl: 'https://pi.example',
+    otlpEndpoint: 'https://pi.example/traces',
+    collaborationSessionsEndpoint: 'https://pi.example/sessions',
+    collaborationEventsEndpoint: 'https://pi.example/events',
   });
 
   assert.equal(result.observerEnabled, true);
-  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), manualConfig);
+  assert.deepEqual(JSON.parse(await fsp.readFile(configPath, 'utf8')), {
+    version: 1,
+    apiKey: 'pi-managed-key',
+    baseUrl: 'https://pi.example',
+    hosts: ['pi'],
+    managedBy: 'pi-agent',
+    otlpEndpoint: 'https://pi.example/traces',
+    collaborationSessionsEndpoint: 'https://pi.example/sessions',
+    collaborationEventsEndpoint: 'https://pi.example/events',
+  });
+  assert.equal(result.watcher.reason, 'no_sources');
 });
 
-test('Pi installation leaves a different-account Goal Plus collector untouched', async t => {
-  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-account-conflict-'));
+test('Pi installation replaces a different-account Goal Plus collector', async t => {
+  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-account-replace-'));
   t.after(() => fsp.rm(homeDir, { recursive: true, force: true }));
+  useIsolatedHome(t, homeDir);
   const packageDir = path.join(homeDir, '.agent-insight', 'collectors', 'goal-plus');
   const configPath = path.join(packageDir, 'config.json');
   const collectorPath = path.join(packageDir, 'goal-plus-collector.cjs');
   await fsp.mkdir(packageDir, { recursive: true });
   await fsp.writeFile(configPath, '{"version":1,"apiKey":"another-account"}\n');
   await fsp.writeFile(collectorPath, 'manual collector\n');
-  const previousKey = process.env.AGENT_INSIGHT_API_KEY;
   process.env.AGENT_INSIGHT_API_KEY = 'pi-account';
-  t.after(() => {
-    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY;
-    else process.env.AGENT_INSIGHT_API_KEY = previousKey;
-  });
 
   const result = await install({
     homeDir,
@@ -162,13 +164,50 @@ test('Pi installation leaves a different-account Goal Plus collector untouched',
     skipVersionCheck: true,
     createWrapper: false,
     managedBy: 'pi-agent',
-    preserveDifferentAccount: true,
-    preserveExistingConfig: true,
   });
 
-  assert.equal(result.observerEnabled, false);
-  assert.equal(result.observerStatus, 'account-conflict');
-  assert.equal(await fsp.readFile(collectorPath, 'utf8'), 'manual collector\n');
+  assert.equal(result.observerEnabled, true);
+  assert.equal(result.observerStatus, 'dormant');
+  assert.equal(JSON.parse(await fsp.readFile(configPath, 'utf8')).apiKey, 'pi-account');
+  assert.match(await fsp.readFile(collectorPath, 'utf8'), /COLLECTOR_VERSION/);
+});
+
+test('Pi-managed reinstall restarts an existing Goal Plus watcher with the new identity', async t => {
+  if (process.platform === 'win32') return t.skip('detached process signaling differs on Windows');
+  const homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'goal-plus-account-restart-'));
+  useIsolatedHome(t, homeDir);
+  let activeConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+  t.after(async () => {
+    if (activeConfig) await stopWatcher(activeConfig);
+    await fsp.rm(homeDir, { recursive: true, force: true });
+  });
+  const sourceDir = path.join(process.cwd(), 'scripts', 'agent-trace-collectors', 'goal-plus');
+  const common = {
+    homeDir,
+    sourceDir,
+    skipVersionCheck: true,
+    createWrapper: false,
+    managedBy: 'pi-agent',
+    baseUrl: 'http://127.0.0.1:9',
+    otlpEndpoint: 'http://127.0.0.1:9/traces',
+    collaborationSessionsEndpoint: 'http://127.0.0.1:9/sessions',
+    collaborationEventsEndpoint: 'http://127.0.0.1:9/events',
+  };
+  const first = await install({ ...common, apiKey: 'first-account-key' });
+  const fixture = path.join(process.cwd(), 'test', 'fixtures', 'goal-plus', '.gp');
+  await attachSource(fixture, { homeDir });
+  const firstConfig = await loadConfig({ homeDir, configPath: first.configPath });
+  activeConfig = firstConfig;
+  const started = await startWatcher(firstConfig, { intervalMs: 60_000 });
+  assert.equal(started.running, true);
+
+  const second = await install({ ...common, apiKey: 'second-account-key' });
+  const secondConfig = await loadConfig({ homeDir, configPath: second.configPath });
+  activeConfig = secondConfig;
+  assert.equal(second.stoppedWatcher.stopped, true);
+  assert.equal(second.watcher.running, true);
+  assert.notEqual(second.watcher.pid, started.pid);
+  assert.equal(secondConfig.apiKey, 'second-account-key');
 });
 
 test('Agent Insight launch paths re-ensure Goal Plus watcher without blocking the server', async () => {
