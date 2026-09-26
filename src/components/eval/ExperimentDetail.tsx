@@ -117,7 +117,7 @@ interface ExperimentDetail {
   progress: { total: number; done: number; failed: number; pending: number };
   traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
   executionProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
-  evaluationProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
+  evaluationProgress: { total: number; succeeded: number; failed: number; pending: number; skipped?: number; unscored?: number } | null;
   overall: number | null;
   breakdown: EvaluatorBreakdownRow[];
   baselineTrend: BaselineTrend | null;
@@ -463,6 +463,8 @@ export function ExperimentDetail({
                   <span><span style={{ color: 'var(--foreground-muted)' }}>执行失败：</span>{detail.executionProgress!.failed} 项</span>
                   <span><span style={{ color: 'var(--foreground-muted)' }}>评测成功：</span>{detail.evaluationProgress!.succeeded} 项</span>
                   <span><span style={{ color: 'var(--foreground-muted)' }}>评测失败：</span>{detail.evaluationProgress!.failed} 项</span>
+                  <span>未评测：{detail.evaluationProgress!.skipped || 0} 项</span>
+                  <span>未计分：{detail.evaluationProgress!.unscored || 0} 项</span>
                 </>
               ) : (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.caseTotal}</span>
@@ -566,8 +568,9 @@ export function ExperimentDetail({
                           {fmtScore(row.avg)}
                         </span>
                       </div>
-                      <span style={{ width: 90, fontSize: 10.5, color: 'var(--foreground-muted)', textAlign: 'right' }}>
-                        {row.scored}/{row.total} 项计入
+                      <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: 'var(--foreground-muted)', textAlign: 'right' }}>
+                        已计分 {row.scored} / {detail.caseTotal} 项
+                        {row.scored < detail.caseTotal && <span style={{ display: 'block' }}>均分仅含已计分项</span>}
                         {row.failed > 0 && (
                           <span style={{ display: 'block', color: 'var(--error)' }}>{row.failed} 项评估失败</span>
                         )}
@@ -727,7 +730,9 @@ export function ExperimentDetail({
                               />
                             ) : (
                               <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
-                                Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
+                                {detail.scope === 'skill-workbench' && detail.preset === 'trigger'
+                                  ? truncate(c.actualOutput || `执行失败：${c.traceError || '未生成有效 Trace'}`, 100)
+                                  : <>Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}</>}
                               </span>
                             )
                           ) : c.traceStatus === 'pending' ? (
@@ -738,7 +743,9 @@ export function ExperimentDetail({
                                     progressStage: c.benchmark?.progressStage,
                                     workspaceProvider: c.benchmark?.workspaceProvider,
                                   })
-                                : `正在生成 Trace${c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…`}
+                                : detail.scope === 'skill-workbench' && detail.preset === 'trigger' && !c.traceAttemptNo
+                                  ? '等待执行'
+                                  : `正在生成 Trace${c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…`}
                             </span>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
                             <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>
@@ -799,7 +806,9 @@ export function ExperimentDetail({
                               </Link>
                             )}
                             {user && <DeleteExperimentButton user={user} experimentId={id} caseId={c.id}
-                              completed={isCompletedExperimentCase(detail.status, c.benchmark?.runStatus)}
+                              completed={isCompletedExperimentCase(detail.status, c.benchmark?.runStatus, {
+                                ...c, evaluatorIds: detail.evaluatorIds, results: detail.results.filter((row) => row.caseId === c.id),
+                              })}
                               onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
                             {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button

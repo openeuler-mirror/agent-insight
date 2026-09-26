@@ -67,7 +67,7 @@ export function createExperimentWatcher(options: {
           select: { id: true },
         })
       : [];
-    const ownedExecutionIds = new Set(ownedExecutions.map(execution => execution.id));
+    const ownedExecutionIds = new Set(ownedExecutions.map((execution: { id: string }) => execution.id));
 
     for (const trace of traces) {
       if (active.size >= concurrency) return;

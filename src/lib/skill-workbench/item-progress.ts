@@ -5,9 +5,16 @@ export interface ExperimentItemProgress {
   pending: number;
 }
 
+export interface ExperimentEvaluationProgress extends ExperimentItemProgress {
+  skipped: number;
+  unscored: number;
+}
+
 interface EvaluationLike {
   evaluatorId?: string;
   status?: string;
+  score?: number | null;
+  unscored?: boolean;
 }
 
 interface RunLike {
@@ -28,9 +35,10 @@ interface ResultLike {
   caseId: string;
   evaluatorId: string;
   status: string;
+  score?: number | null;
 }
 
-type ItemState = 'succeeded' | 'failed' | 'pending';
+type ItemState = 'succeeded' | 'failed' | 'pending' | 'skipped' | 'unscored';
 
 function summarize(states: ItemState[]): ExperimentItemProgress {
   return {
@@ -39,6 +47,17 @@ function summarize(states: ItemState[]): ExperimentItemProgress {
     failed: states.filter((state) => state === 'failed').length,
     pending: states.filter((state) => state === 'pending').length,
   };
+}
+
+function summarizeEvaluations(states: ItemState[]): ExperimentEvaluationProgress {
+  return { ...summarize(states), skipped: states.filter(state => state === 'skipped').length, unscored: states.filter(state => state === 'unscored').length };
+}
+
+export function workbenchCompletionStatus(status: string, execution: ExperimentItemProgress, evaluation: ExperimentEvaluationProgress): string {
+  if (status === 'cancelled' || !['done', 'partial', 'failed'].includes(status)) return status;
+  if (execution.pending || evaluation.pending) return 'running';
+  if (execution.failed || evaluation.failed) return evaluation.succeeded || evaluation.unscored ? 'partial' : 'failed';
+  return 'done';
 }
 
 function sideRuns(side: SideLike | undefined, repeatRounds: number): Array<RunLike | undefined> {
@@ -62,18 +81,22 @@ function executionState(run: RunLike | undefined, settled: boolean): ItemState {
 
 function evaluationState(run: RunLike | undefined, evaluatorIds: string[], settled: boolean): ItemState {
   const execution = executionState(run, settled);
-  if (execution === 'failed') return 'failed';
+  if (execution === 'failed') return 'skipped';
   if (execution === 'pending' || !run) return 'pending';
-  if (run.status === 'fail' || run.status === 'failed') return 'failed';
   const latestByEvaluator = new Map<string, EvaluationLike>();
   for (const evaluation of run.evaluations || []) {
     if (evaluation.evaluatorId) latestByEvaluator.set(evaluation.evaluatorId, evaluation);
   }
   const configured = evaluatorIds.map((id) => latestByEvaluator.get(id));
+  if (configured.some((evaluation) => ['pending', 'running'].includes(evaluation?.status || ''))) return 'pending';
+  if (!settled && !['pass', 'done', 'fail', 'failed'].includes(run.status || '') && configured.some((evaluation) => !evaluation)) return 'pending';
   if (configured.some((evaluation) => evaluation?.status === 'failed')) return 'failed';
   if (configured.length > 0 && configured.every((evaluation) => evaluation?.status === 'done')) {
-    return 'succeeded';
+    return configured.some(evaluation => evaluation?.unscored || evaluation?.score === null)
+      || (['fail', 'failed'].includes(run.status || '') && !configured.some(evaluation => typeof evaluation?.score === 'number'))
+      ? 'unscored' : 'succeeded';
   }
+  if (run.status === 'fail' || run.status === 'failed') return 'failed';
   if (run.status === 'pass' || run.status === 'done') return 'succeeded';
   return settled ? 'failed' : 'pending';
 }
@@ -85,7 +108,7 @@ export function summarizeWorkbenchItemProgress(input: {
   evaluatorIds: string[];
   caseStates: CaseStatesLike;
   settled?: boolean;
-}): { executionProgress: ExperimentItemProgress; evaluationProgress: ExperimentItemProgress } {
+}): { executionProgress: ExperimentItemProgress; evaluationProgress: ExperimentEvaluationProgress } {
   const executionStates: ItemState[] = [];
   const evaluationStates: ItemState[] = [];
   const repeatRounds = Math.max(1, Math.floor(input.repeatRounds) || 1);
@@ -99,7 +122,7 @@ export function summarizeWorkbenchItemProgress(input: {
   }
   return {
     executionProgress: summarize(executionStates),
-    evaluationProgress: summarize(evaluationStates),
+    evaluationProgress: summarizeEvaluations(evaluationStates),
   };
 }
 
@@ -108,7 +131,7 @@ export function summarizeExistingTraceItemProgress(input: {
   evaluatorIds: string[];
   results: ResultLike[];
   settled: boolean;
-}): { executionProgress: ExperimentItemProgress; evaluationProgress: ExperimentItemProgress } {
+}): { executionProgress: ExperimentItemProgress; evaluationProgress: ExperimentEvaluationProgress } {
   const executionStates: ItemState[] = input.caseIds.map(() => 'succeeded');
   const evaluationStates = input.caseIds.map<ItemState>((caseId) => {
     const latestByEvaluator = new Map<string, ResultLike>();
@@ -116,12 +139,14 @@ export function summarizeExistingTraceItemProgress(input: {
       if (result.caseId === caseId) latestByEvaluator.set(result.evaluatorId, result);
     }
     const configured = input.evaluatorIds.map((id) => latestByEvaluator.get(id));
+    if (configured.some((result) => ['pending', 'running'].includes(result?.status || ''))) return 'pending';
+    if (!input.settled && configured.some((result) => !result)) return 'pending';
     if (configured.some((result) => result?.status === 'failed')) return 'failed';
-    if (configured.length > 0 && configured.every((result) => result?.status === 'done')) return 'succeeded';
+    if (configured.length > 0 && configured.every((result) => result?.status === 'done')) return configured.some(result => result?.score === null) ? 'unscored' : 'succeeded';
     return input.settled ? 'failed' : 'pending';
   });
   return {
     executionProgress: summarize(executionStates),
-    evaluationProgress: summarize(evaluationStates),
+    evaluationProgress: summarizeEvaluations(evaluationStates),
   };
 }

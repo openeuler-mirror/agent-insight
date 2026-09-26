@@ -1,6 +1,20 @@
-export function defaultExperimentName(now = new Date()): string {
+export function formatExperimentTimestamp(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `Agent 评测 ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+export function defaultExperimentName(now = new Date()): string {
+  return `Agent 评测 ${formatExperimentTimestamp(now)}`;
+}
+
+export function defaultSkillExperimentName(
+  skillName: string,
+  preset: 'trigger' | 'use-case' | 'skill-ab',
+  version: number,
+  now = new Date(),
+): string {
+  const label = preset === 'trigger' ? '触发分析' : preset === 'skill-ab' ? 'A/B 测试' : '用例分析';
+  return `${skillName} · ${label} · v${version} · ${formatExperimentTimestamp(now)}`;
 }
 
 export function displayedExperimentName(name: string, createdAt: string | Date): string {

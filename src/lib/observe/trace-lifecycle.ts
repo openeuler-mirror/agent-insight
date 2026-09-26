@@ -17,14 +17,16 @@ export function getTraceLifecycle(completedAt: unknown, record: Record<string, u
     if (typeof failures === 'string') {
       try { failures = JSON.parse(failures); } catch { failures = []; }
     }
+    const opencodeFailed = record.framework === 'opencode' && Array.isArray(failures)
+      && failures.some(failure => failure?.failure_type === 'opencode-session-error');
     const goalPlusFailed = Array.isArray(failures)
       && failures.some(failure => failure?.failure_type === 'goal_plus_pi_session_failed');
     const processFailed = record.framework === 'actrail' && Array.isArray(failures)
       && failures.some(failure => failure?.failure_type === 'agent-process-exit');
     return {
-      traceStatus: (goalPlusFailed || processFailed ? 'failed' : 'success') as TraceLifecycleStatus,
+      traceStatus: (opencodeFailed || goalPlusFailed || processFailed ? 'failed' : 'success') as TraceLifecycleStatus,
       traceCompletedAt: new Date(completedMs).toISOString(),
-      traceStatusReason: goalPlusFailed ? 'goal-plus-session-failed' : processFailed ? 'agent-process-exit' : 'session-ended',
+      traceStatusReason: opencodeFailed ? 'opencode-session-error' : goalPlusFailed ? 'goal-plus-session-failed' : processFailed ? 'agent-process-exit' : 'session-ended',
       traceLastReceivedAt,
     };
   }

@@ -134,6 +134,13 @@ export async function reconcileCancellation(id: string): Promise<any> {
           if (command?.status === 'SUCCEEDED') {
             const result = JSON.parse(command.resultJson || '{}');
             target.confirmed = result.runId === target.runId && result.status === 'cancelled';
+            if (!target.confirmed && result.reason === 'RUN_STATE_UNAVAILABLE') {
+              throw new Error('旧客户端未保存执行进程状态，无法确认退出；请核查执行机进程后处理该停止记录');
+            }
+            if (!target.confirmed && result.reason === 'RUN_PROCESS_UNCONFIRMED') {
+              target.error = '执行进程退出尚未确认，平台将继续核查';
+              if (command.completedAt && Date.now() - command.completedAt.getTime() < 5_000) continue;
+            }
           }
           if (command?.status === 'FAILED' && command.errorCode === 'ACTION_NOT_ALLOWED') {
             const client = await prisma.reliabilityClient.findUnique({
@@ -153,7 +160,7 @@ export async function reconcileCancellation(id: string): Promise<any> {
             if (sent.delivered) await markSent(frame.commandId, 'wss');
           }
         }
-        delete target.error;
+        if (target.confirmed || target.error !== '执行进程退出尚未确认，平台将继续核查') delete target.error;
       } catch (error) { target.error = error instanceof Error ? error.message : String(error); }
     }
     const completed = targets.every((target) => target.confirmed);

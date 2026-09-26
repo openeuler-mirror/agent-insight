@@ -27,6 +27,7 @@ import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
 import {
   summarizeExistingTraceItemProgress,
   summarizeWorkbenchItemProgress,
+  workbenchCompletionStatus,
 } from '@/lib/skill-workbench/item-progress';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
@@ -47,13 +48,14 @@ type GeneratedTraceStatus = 'pending' | 'ready' | 'failed';
 
 function deriveGeneratedTraceStatus(input: {
   usable: boolean;
+  triggerDecisionReady?: boolean;
   runStatus?: string | null;
   commandStatus?: string | null;
   attemptStatus?: string | null;
   generationError?: string | null;
   experimentStatus: string;
 }): GeneratedTraceStatus {
-  if (input.usable) return 'ready';
+  if (input.usable || input.triggerDecisionReady) return 'ready';
   if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(input.attemptStatus || '')) {
     return 'pending';
   }
@@ -146,7 +148,7 @@ export async function GET(
       where: { experimentId: id, deletedAt: null },
       select: { id: true },
     });
-    const allExperimentCaseIds = allExperimentCases.map((item) => item.id);
+    const allExperimentCaseIds = allExperimentCases.map((item: Pick<ExperimentCase, 'id'>) => item.id);
     const caseTotal = allExperimentCaseIds.length;
     const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
     const casePage = Math.min(casePageRaw, casePages);
@@ -206,10 +208,12 @@ export async function GET(
     const generatedCases = await prisma.experimentCase.findMany({
       where: {
         experimentId: id,
+        deletedAt: null,
         OR: [
           { fiRunId: { not: null } },
           { traceGenerationCommandId: { not: null } },
           { traceAttempts: { some: {} } },
+          ...(experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' ? [{ executionId: null }] : []),
         ],
       },
       select: {
@@ -348,6 +352,7 @@ export async function GET(
       const usable = Boolean(execution && hasUsableTraceInteractions(session?.interactions));
       const status = deriveGeneratedTraceStatus({
         usable,
+        triggerDecisionReady: experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' && attempt?.status === 'ready',
         runStatus: run?.status,
         commandStatus: command?.status,
         attemptStatus: attempt?.status,
@@ -393,11 +398,12 @@ export async function GET(
     let expectedResultTotal = effectiveAllResults.length;
     let syntheticExecutionFailures = 0;
     let itemProgress: ReturnType<typeof summarizeWorkbenchItemProgress> | null = null;
+    let sideProgress: Partial<Record<'a' | 'b', ReturnType<typeof summarizeWorkbenchItemProgress>>> | null = null;
     if (experiment.scope === 'skill-workbench' && configSnapshot) {
       const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId: id }, select: { caseKey: true } });
       const removedDatasetCases = new Set(cancellations.filter((item) => item.caseKey.startsWith('dataset:')).map((item) => item.caseKey.slice(8)));
       if (Array.isArray(configSnapshot.caseIds)) configSnapshot.caseIds = configSnapshot.caseIds.filter((key) => !removedDatasetCases.has(String(key)));
-      const supportsItemProgress = experiment.preset === 'use-case' || experiment.preset === 'skill-ab';
+      const supportsItemProgress = ['trigger', 'use-case', 'skill-ab'].includes(experiment.preset || '');
       const frozenCaseIds = Array.isArray(configSnapshot.caseIds)
         ? configSnapshot.caseIds.map(String).filter(Boolean)
         : [];
@@ -420,14 +426,20 @@ export async function GET(
         });
         const caseStates = parseJsonValue(grayscaleTask?.caseStatesJson || null) as Record<string, unknown> | null;
         if (supportsItemProgress) {
-          itemProgress = summarizeWorkbenchItemProgress({
+          const progressInput = {
             caseIds: frozenCaseIds,
-            executionSides,
             repeatRounds,
             evaluatorIds,
             caseStates: (caseStates || {}) as Parameters<typeof summarizeWorkbenchItemProgress>[0]['caseStates'],
             settled: ['failed', 'cancelled'].includes(experiment.status),
-          });
+          };
+          itemProgress = summarizeWorkbenchItemProgress({ ...progressInput, executionSides });
+          if (experiment.preset === 'skill-ab') {
+            sideProgress = {
+              a: summarizeWorkbenchItemProgress({ ...progressInput, executionSides: ['a'] }),
+              b: summarizeWorkbenchItemProgress({ ...progressInput, executionSides: ['b'] }),
+            };
+          }
         }
         if (caseStates) {
           for (const state of Object.values(caseStates)) {
@@ -462,10 +474,11 @@ export async function GET(
       pending: Math.max(0, expectedResultTotal - doneResultCount - failed),
     };
     const normalizedStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
-    const responseStatus = normalizedStatus === 'done'
+    const aggregateStatus = itemProgress ? workbenchCompletionStatus(normalizedStatus, itemProgress.executionProgress, itemProgress.evaluationProgress) : normalizedStatus;
+    const responseStatus = aggregateStatus === 'done'
       && (progress.pending > 0 || Boolean(traceProgress?.pending))
       ? 'running'
-      : normalizedStatus;
+      : aggregateStatus;
     const overall = publishedOverallAverage(responseStatus, effectiveAllResults);
     const breakdown = evaluatorBreakdown(effectiveAllResults);
 
@@ -484,6 +497,8 @@ export async function GET(
       query: string;
       finalResult: string;
       skill: string | null;
+      model: string | null;
+      hostIp: string | null;
       executionSkills: Array<{ skillName: string; skillVersion: number | null }>;
     };
     const execFallback = new Map<string, ExecutionFallback>();
@@ -503,6 +518,8 @@ export async function GET(
           query: true,
           finalResult: true,
           skill: true,
+          model: true,
+          hostIp: true,
           executionSkills: { select: { skillName: true, skillVersion: true } },
         },
       });
@@ -512,6 +529,8 @@ export async function GET(
           query: e.query || '',
           finalResult: e.finalResult || '',
           skill: e.skill,
+          model: e.model,
+          hostIp: e.hostIp,
           executionSkills: e.executionSkills,
         };
         if (e.taskId && !execFallback.has(e.taskId)) {
@@ -641,6 +660,8 @@ export async function GET(
           input: c.input || ex?.query || '',
           datasetInput: c.datasetInput,
           actualOutput: c.actualOutput || ex?.finalResult || '',
+          actualModel: ex?.model || (typeof caseValues?.routing_model === 'string' ? caseValues.routing_model : null),
+          actualHost: ex?.hostIp || null,
           referenceOutput: c.referenceOutput,
           faultInjectionType,
           caseValues,
@@ -648,12 +669,8 @@ export async function GET(
           fiRunId: c.fiRunId || legacyFi.fiRunId,
           evaluatorContext: evaluatorContext.context,
           evaluatorContextError: evaluatorContext.error,
-          skillTriggered: experiment.preset === 'trigger'
-            ? Boolean(ex && (
-                ex.skill === experiment.skillName
-                || ex.executionSkills.some((item) => item.skillName === experiment.skillName)
-              ))
-            : null,
+          skillTriggered: experiment.preset === 'trigger' && typeof caseValues?.skill_triggered === 'boolean'
+            ? caseValues.skill_triggered : null,
           traceStatus: benchmarkRun ? benchmarkTraceStatus : traceState?.status || null,
           traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,
@@ -713,6 +730,7 @@ export async function GET(
       traceProgress,
       executionProgress: itemProgress?.executionProgress || null,
       evaluationProgress: itemProgress?.evaluationProgress || null,
+      sideProgress,
       caseTotal,
       casePage,
       casePageSize,

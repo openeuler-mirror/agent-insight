@@ -7,6 +7,7 @@ import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice
 import { benchmarkFailurePresentation } from '@/lib/benchmark/failure-presentation';
 
 const EXPECTED_LABELS = {
+  EVENT_MONITOR_UNAVAILABLE: '失败监测通道未就绪',
   AGENT_TIMEOUT: 'Agent 执行超时',
   MODEL_ERROR: '模型调用失败',
   MODEL_NO_RESPONSE: '模型未响应',

@@ -1,4 +1,5 @@
 import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
+import { extractStructuredAgentError, sanitizeAgentDiagnostic } from '../../../../scripts/agent-run-diagnostics.cjs';
 
 interface MessageListClientLike {
   listMessages(sessionId: string): Promise<unknown[]>;
@@ -20,6 +21,9 @@ interface RecordEvaluatorExecutionInput {
   skillVersion?: number | null;
   /** Fallback assistant output used when opencode has no persisted messages yet. */
   fallbackOutput?: string | null;
+  failure?: { code: string; message: string };
+  startedAt?: string;
+  completedAt?: string;
 }
 
 interface OpencodeTokenUsage {
@@ -40,6 +44,9 @@ interface OpencodeTimeInfo {
 export interface EvaluatorTraceInteraction {
   role: string;
   content?: string;
+  error?: { code?: string; message: string };
+  status?: string;
+  error_summary?: string;
   timestamp?: string;
   timeInfo?: { created?: unknown; completed?: unknown };
   agent?: string;
@@ -190,6 +197,11 @@ export function normalizeEvaluatorExecutionInteractions(messages: unknown[]): Ev
       return {
         role,
         content: content || undefined,
+        ...(info.error ? {
+          status: 'error',
+          error_summary: sanitizeAgentDiagnostic(extractStructuredAgentError({ error: info.error })),
+          error: { message: sanitizeAgentDiagnostic(extractStructuredAgentError({ error: info.error })) },
+        } : {}),
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
         usage,
         timestamp: createdTimestamp !== null ? new Date(createdTimestamp).toISOString() : undefined,
@@ -225,7 +237,7 @@ export function inferCompletionTimestampFromInteractions(interactions: Evaluator
 }
 
 function buildFallbackInteractions(input: RecordEvaluatorExecutionInput): EvaluatorTraceInteraction[] {
-  const now = new Date().toISOString();
+  const now = input.startedAt || new Date().toISOString();
   const query = String(input.query || '').trim();
   const output = String(input.fallbackOutput || '').trim();
   const interactions: EvaluatorTraceInteraction[] = [];
@@ -273,36 +285,60 @@ export async function recordEvaluatorExecution(
   const agentName = String(input.agentName || '').trim();
   if (!taskId || !agentName) return 0;
 
-  const rawMessages = await client.listMessages(taskId);
-  const interactions = ensureEvaluatorExecutionInteractions(
-    normalizeEvaluatorExecutionInteractions(Array.isArray(rawMessages) ? rawMessages : []),
-    input,
-  );
+  const rawMessages = await client.listMessages(taskId).catch((error) => {
+    if (!input.failure) throw error;
+    return [];
+  });
+  const record = buildOpencodeExecutionRecord(Array.isArray(rawMessages) ? rawMessages : [], input);
+  const interactions = record.interactions as EvaluatorTraceInteraction[];
+  await saveExecutionRecord(record);
 
-  await saveExecutionRecord({
-    task_id: taskId,
-    upload_id: taskId,
+  return interactions.length;
+}
+
+export function buildOpencodeExecutionRecord(rawMessages: unknown[], input: RecordEvaluatorExecutionInput): ExecutionRecord {
+  const interactions = ensureEvaluatorExecutionInteractions(
+    normalizeEvaluatorExecutionInteractions(rawMessages),
+    input.failure ? { ...input, fallbackOutput: null } : input,
+  );
+  const startedAt = input.startedAt || inferTimestampFromInteractions(interactions).toISOString();
+  const completedAt = input.completedAt || inferCompletionTimestampFromInteractions(interactions).toISOString();
+  if (input.failure) {
+    interactions.push({
+      role: 'system',
+      error: { code: input.failure.code, message: sanitizeAgentDiagnostic(input.failure.message) },
+      timestamp: completedAt,
+      timeInfo: { created: startedAt, completed: completedAt },
+      agent: input.agentName,
+    });
+  }
+  return {
+    task_id: input.taskId,
+    upload_id: input.taskId,
     query: String(input.query || '').trim() || undefined,
     framework: input.framework || 'opencode',
     user: input.user ?? null,
-    agent: agentName,
-    agentName,
-    final_result: String(input.fallbackOutput || '').trim() || undefined,
-    // caller (runner.ts) 给 baseline / grayscale-skill-agent 这些后台 agent 主动填 skill,
-    // 让"从 Trace"按 skill 过滤能搜到。不传时让 saveExecutionRecord 自己推断。
+    agent: input.agentName,
+    agentName: input.agentName,
+    final_result: input.failure ? undefined : String(input.fallbackOutput || '').trim() || undefined,
     skill: input.skill ?? undefined,
     skill_version: input.skillVersion ?? undefined,
     interactions,
-    timestamp: inferTimestampFromInteractions(interactions),
+    timestamp: new Date(startedAt),
+    trace_started_at: startedAt,
+    trace_completed_at: completedAt,
     skip_evaluation: true,
     skip_internal_judgment: true,
-    failures: [],
+    failures: input.failure ? [{
+      failure_type: 'opencode-session-error',
+      description: sanitizeAgentDiagnostic(input.failure.message),
+      context: input.failure.code,
+      recovery: '重新执行',
+    }] : [],
     skill_issues: [],
     force_query_update: true,
     opencode_cli_completed: true,
-  });
-
-  return interactions.length;
+  };
 }
 
 // =========================================================================
