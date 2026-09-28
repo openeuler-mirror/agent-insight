@@ -3,20 +3,44 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/client/api';
 
-export function isCompletedExperimentCase(experimentStatus: string, benchmarkRunStatus?: string | null): boolean {
+type CaseProcessingState = {
+  traceStatus?: string | null;
+  traceAttemptStatus?: string | null;
+  evaluatorIds?: string[];
+  results?: Array<{ evaluatorId: string; status: string }>;
+};
+
+export function isCompletedExperimentCase(experimentStatus: string, benchmarkRunStatus?: string | null, state?: CaseProcessingState): boolean {
   if (benchmarkRunStatus) {
     return ['evaluated', 'evaluation_failed', 'submission_invalid', 'execution_failed', 'dispatch_failed', 'blocked', 'cancelled'].includes(benchmarkRunStatus);
+  }
+  if (state) {
+    if (['queued', 'dispatching', 'running', 'retry_wait'].includes(state.traceAttemptStatus || '')
+      || state.results?.some((row) => ['pending', 'running'].includes(row.status))) return false;
+    if (state.traceStatus === 'failed') return true;
+    if (state.traceStatus === 'pending') return ['failed', 'cancelled'].includes(experimentStatus);
+    if (state.evaluatorIds?.length && state.evaluatorIds.every((id) => state.results?.some(
+      (row) => row.evaluatorId === id && ['done', 'failed'].includes(row.status),
+    ))) return true;
   }
   return ['done', 'partial', 'failed', 'cancelled'].includes(experimentStatus);
 }
 
-export function DeleteExperimentButton({ user, experimentId, caseId, completed = false, onDeleted }: {
-  user: string; experimentId: string; caseId?: string; completed?: boolean; onDeleted: (experimentDeleted: boolean) => void | Promise<void>;
+export function emptyCaseEvaluationMessage(experimentStatus: string, state: CaseProcessingState): string {
+  if (state.traceStatus === 'failed') return '执行失败，未进入评测。请查看上方失败原因后重试。';
+  if (['failed', 'cancelled', 'done', 'partial'].includes(experimentStatus)) return '实验已结束，本项未产生评测结果。';
+  if (state.traceStatus === 'ready') return '执行已完成，等待评测。';
+  if (['dispatching', 'running'].includes(state.traceAttemptStatus || '')) return '正在执行，尚未进入评测。';
+  return '等待执行，尚未进入评测。';
+}
+
+export function DeleteExperimentButton({ user, experimentId, caseId, completed = false, className = 'text-xs', onDeleted }: {
+  user: string; experimentId: string; caseId?: string; completed?: boolean; className?: string; onDeleted: (experimentDeleted: boolean) => void | Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   return <span onClick={(event) => event.stopPropagation()}>
-    <button type="button" disabled={busy} className="text-xs text-foreground-muted hover:text-foreground disabled:opacity-50"
+    <button type="button" disabled={busy} className={`${className} text-foreground-muted hover:text-foreground disabled:opacity-50`}
       onClick={async () => {
         if (!window.confirm(caseId
           ? `${completed ? '删除' : '停止并删除'}本次实验中的这个 Case？其他 Case 和源数据集不受影响。`
@@ -56,8 +80,9 @@ export function PendingExperimentCancellations({ user }: { user: string }) {
     return () => { disposed = true; window.clearInterval(timer); window.removeEventListener('experiment-cancellation-updated', refresh); };
   }, [user]);
   if (!rows.length) return null;
+  const requiresAttention = rows.some((row) => row.error);
   return <details className="my-3 rounded border border-border p-3 text-xs text-foreground-secondary">
-    <summary>停止待确认：{rows.length} 项（已从默认列表移除，后台继续处理）</summary>
+    <summary>停止待确认：{rows.length} 项（{requiresAttention ? '存在需要处理的问题，展开查看' : '后台继续确认退出'}）</summary>
     <ul className="mt-2 space-y-1">{rows.map((row) => <li key={row.id}>{row.experimentId}{row.caseKey ? ` / ${row.caseKey}` : ''}：{row.error || '等待执行器确认退出'}</li>)}</ul>
   </details>;
 }

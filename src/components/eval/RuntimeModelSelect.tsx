@@ -7,11 +7,12 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { filterRuntimeModels, normalizeRuntimeModels, type RuntimeModelOption } from '@/lib/client/model-search';
 
-export function RuntimeModelSelect({ id, models = [], value, onChange }: {
+export function RuntimeModelSelect({ id, models = [], value, onChange, allowDefault = true }: {
   id: string;
   models?: RuntimeModelOption[];
   value: string;
   onChange: (value: string) => void;
+  allowDefault?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -20,9 +21,9 @@ export function RuntimeModelSelect({ id, models = [], value, onChange }: {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
   const options = useMemo(() => [
-    { id: '', label: '平台默认' },
-    ...normalizeRuntimeModels(models),
-  ], [models]);
+    ...(allowDefault ? [{ id: '', label: '平台默认' }] : []),
+    ...normalizeRuntimeModels(models).filter((model) => allowDefault || Boolean(model.id)),
+  ], [models, allowDefault]);
   const filtered = useMemo(() => filterRuntimeModels(options, query), [options, query]);
   const active = filtered[Math.min(activeIndex, filtered.length - 1)];
   const selected = options.find((model) => model.id === value);
@@ -45,8 +46,8 @@ export function RuntimeModelSelect({ id, models = [], value, onChange }: {
     }}>
       <PopoverTrigger asChild>
         <Button id={id} type="button" variant="outline" className="w-full min-w-0 justify-between font-normal"
-          aria-label={`运行模型：${selected ? label(selected) : value || '平台默认'}`}>
-          <span className="truncate">{selected ? label(selected) : value || '平台默认'}</span>
+          aria-label={`运行模型：${selected ? label(selected) : value || (allowDefault ? '平台默认' : '请选择运行模型')}`}>
+          <span className="truncate">{selected ? label(selected) : value || (allowDefault ? '平台默认' : '请选择运行模型')}</span>
           <ChevronDown aria-hidden="true" />
         </Button>
       </PopoverTrigger>

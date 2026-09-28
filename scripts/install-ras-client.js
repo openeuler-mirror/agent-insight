@@ -31,7 +31,7 @@ const RUNTIME_DIR = path.join(CLIENT_HOME, 'runtime')
 const CLIENT_SCRIPT = path.join(RUNTIME_DIR, 'reliability-client.cjs')
 
 /** 常驻进程自身及其本地依赖 —— 少拷一个都会在启动时 MODULE_NOT_FOUND。 */
-const RUNTIME_FILES = ['reliability-client.cjs', 'ws-client.cjs', 'agent-insight-home.cjs']
+const RUNTIME_FILES = ['reliability-client.cjs', 'ordinary-experiment-state.cjs', 'skill-experiment-workspace.cjs', 'agent-run-diagnostics.cjs', 'opencode-experiment-events.cjs', 'opencode-experiment-events.mjs', 'ws-client.cjs', 'agent-insight-home.cjs']
 
 function installRuntime() {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true })

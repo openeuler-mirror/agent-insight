@@ -1,9 +1,19 @@
 import { prisma } from '@/lib/storage/prisma';
-import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import type { Prisma } from '@prisma/client';
+import {
+  DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  MAX_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  TRIGGER_STARTUP_TIMEOUT_SECONDS,
+} from '@/lib/engine/experiment/constants';
 import { listClientTraceGenerationTargets } from '@/lib/engine/experiment/execution-targets';
 import { createCommand, getCommand, markSent } from '@/lib/reliability/command-bus';
 import { dispatchCommand } from '@/lib/reliability/control-dispatch';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
+import type { SkillExecutionSnapshot } from '@/lib/skill-workbench/execution-target';
+import { executionModelMatches } from '@/lib/skill-workbench/execution-model';
+import { isTraceGenerationFailureRetryable } from './trace-retry-policy';
+export { isTraceGenerationFailureRetryable } from './trace-retry-policy';
 
 export type TraceGenerationCaseSpec = { caseId: string; input: string };
 
@@ -16,9 +26,23 @@ export type TraceGenerationRequest = {
   model?: string | null;
   timeoutSeconds?: number;
   cases: TraceGenerationCaseSpec[];
+  skillExecution?: { version: 1; skill: SkillExecutionSnapshot | null }
+    | { version: 2; mode: 'trigger'; targetSkillName: string; skills: SkillExecutionSnapshot[] };
+  signal?: AbortSignal;
 };
 
-export type TraceGenerationResult = { readyCaseIds: string[]; failedCaseIds: string[] };
+export type TriggerDecision = {
+  triggered: boolean;
+  competingSkill: string | null;
+  sessionId: string;
+  actualModel: string;
+};
+
+export type TraceGenerationResult = {
+  readyCaseIds: string[];
+  failedCaseIds: string[];
+  triggerDecisions?: Record<string, TriggerDecision>;
+};
 
 export type TraceGenerationOptions = {
   /** 用户明确点击 Trace 重试时开启：首轮必须新执行，历史 Attempt 不参与绑定。 */
@@ -38,20 +62,6 @@ export class TraceGenerationError extends Error {
 }
 
 const TERMINAL_COMMAND_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'EXPIRED', 'DELIVERY_FAILED']);
-const NON_RETRYABLE_FAILURE_CODES = new Set([
-  'ACTION_NOT_ALLOWED',
-  'AGENT_EXIT_NONZERO',
-  'AGENT_NO_OUTPUT',
-  'AGENT_TIMEOUT',
-  'MODEL_ERROR',
-  'MODEL_NO_RESPONSE',
-  'MODEL_START_TIMEOUT',
-  'MODEL_UNAVAILABLE',
-  'PAYLOAD_FORBIDDEN',
-  'PLATFORM_NOT_AVAILABLE',
-  'TRACE_ID_MISSING',
-  'TRACE_ID_UNSUPPORTED',
-]);
 const AUTO_RETRY_DELAYS_MS = [5_000, 20_000];
 const TRACE_INGEST_TIMEOUT_MS = 60_000;
 
@@ -77,13 +87,32 @@ function parseObject(value: string | null | undefined): Record<string, unknown> 
   }
 }
 
+export function readTriggerDecision(resultJson: string | null | undefined, targetSkillName: string, requestedModel?: string | null): TriggerDecision {
+  const facts = parseObject(resultJson);
+  const decision = facts.triggerDecision as Record<string, unknown> | undefined;
+  if (facts.state !== 'AGENT_EXITED' || facts.eventMonitorReady !== true || facts.modelActivityObserved !== true
+    || facts.timedOut !== false || facts.failureDetectedAt || !decision
+    || decision.targetSkillName !== targetSkillName || typeof decision.triggered !== 'boolean'
+    || typeof decision.sessionId !== 'string' || !decision.sessionId
+    || typeof decision.actualModel !== 'string' || !decision.actualModel
+    || decision.endReason !== (decision.triggered ? 'skill_loaded' : 'completed')
+    || (!decision.triggered && (facts.exitCode !== 0 || facts.signal))) {
+    throw new TraceGenerationError('TRIGGER_EVIDENCE_MISSING', '客户端未返回完整、可信的 Skill 路由判定证据');
+  }
+  if (requestedModel && !executionModelMatches(requestedModel, decision.actualModel)) {
+    throw new TraceGenerationError('MODEL_MISMATCH', `配置模型 ${requestedModel} 与实际模型 ${decision.actualModel} 不一致，不进入触发评测`);
+  }
+  return {
+    triggered: decision.triggered,
+    competingSkill: typeof decision.competingSkill === 'string' ? decision.competingSkill : null,
+    sessionId: decision.sessionId,
+    actualModel: decision.actualModel,
+  };
+}
+
 export function parseTraceIdFromCommandResult(resultJson: string | null | undefined): string | null {
   const traceId = parseObject(resultJson).traceId;
   return typeof traceId === 'string' && traceId.trim() ? traceId.trim() : null;
-}
-
-export function isTraceGenerationFailureRetryable(code: string): boolean {
-  return !NON_RETRYABLE_FAILURE_CODES.has(code);
 }
 
 export function isTraceGenerationCommandTerminal(status: string): boolean {
@@ -92,6 +121,20 @@ export function isTraceGenerationCommandTerminal(status: string): boolean {
 
 export function canReconcileGeneratedTraceAttempt(failureCode: string | null | undefined): boolean {
   return !failureCode || isTraceGenerationFailureRetryable(failureCode);
+}
+
+export function assertSkillExecutionOutput(execution: { finalResult?: string | null; model?: string | null }, requestedModel?: string | null) {
+  if (!execution.finalResult?.trim()) throw new TraceGenerationError('AGENT_NO_OUTPUT', 'Agent 未生成有效输出，不进入评测');
+  if (!requestedModel) return;
+  if (!execution.model) throw new TraceGenerationError('MODEL_UNCONFIRMED', 'Trace 未记录实际执行模型，无法确认所选模型已生效，不进入评测');
+  if (!executionModelMatches(requestedModel, execution.model)) {
+    throw new TraceGenerationError('MODEL_MISMATCH', `配置模型 ${requestedModel} 与实际模型 ${execution.model} 不一致，不进入评测`);
+  }
+}
+
+export function assertTriggerExecutionEvidence(execution: { clientId?: string | null; llmCallCount?: number | null }, workerId: string) {
+  if (execution.clientId !== workerId) throw new TraceGenerationError('CLIENT_MISMATCH', 'Trace 未确认来自所选执行客户端，不进入触发评测');
+  if (!execution.llmCallCount || execution.llmCallCount < 1) throw new TraceGenerationError('MODEL_NO_RESPONSE', 'Trace 未记录有效模型调用，不进入触发评测');
 }
 
 function commandFailure(command: CommandRow | null): AttemptFailure {
@@ -143,9 +186,10 @@ export async function assertTraceGenerationTarget(input: {
   }
 }
 
-async function waitForCommand(commandId: string, timeoutMs: number): Promise<CommandRow | null> {
+async function waitForCommand(commandId: string, timeoutMs: number, signal?: AbortSignal): Promise<CommandRow | null> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
+    signal?.throwIfAborted();
     const command = await getCommand(commandId);
     if (!command) return null;
     if (isTraceGenerationCommandTerminal(command.status)) return command as CommandRow;
@@ -158,25 +202,44 @@ async function waitForCommand(commandId: string, timeoutMs: number): Promise<Com
   return command ? { ...command, status: 'EXPIRED' } as CommandRow : null;
 }
 
-async function findExecutionByTraceId(input: { user: string; traceId: string }) {
+export async function findExecutionByTraceId(input: {
+  user: string;
+  traceId: string;
+  completedTriggerCommand?: { status: string; resultJson: string | null };
+}) {
   const session = await prisma.session.findFirst({
     where: { user: input.user, taskId: input.traceId },
     select: { interactions: true, endTime: true },
   });
-  if (!session?.endTime || !hasUsableTraceInteractions(session.interactions)) return null;
-  return prisma.execution.findFirst({
+  if (!session || !hasUsableTraceInteractions(session.interactions)) return null;
+  const facts = parseObject(input.completedTriggerCommand?.resultJson);
+  const completedTriggerRun = input.completedTriggerCommand?.status === 'SUCCEEDED'
+    && facts.state === 'AGENT_EXITED'
+    && facts.traceId === input.traceId
+    && facts.exitCode === 0
+    && facts.timedOut === false
+    && !facts.signal
+    && !facts.failureDetectedAt
+    && facts.modelActivityObserved === true;
+  if (!session.endTime && !completedTriggerRun) return null;
+  const execution = await prisma.execution.findFirst({
     where: { user: input.user, taskId: input.traceId, isSubagent: false },
     orderBy: { timestamp: 'desc' },
   });
+  if (!session.endTime && !execution?.finalResult?.trim()) return null;
+  return execution;
 }
 
 async function waitForExecutionByTraceId(input: {
   user: string;
   traceId: string;
   timeoutMs: number;
+  signal?: AbortSignal;
+  completedTriggerCommand?: { status: string; resultJson: string | null };
 }) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < input.timeoutMs) {
+    input.signal?.throwIfAborted();
     const execution = await findExecutionByTraceId(input);
     if (execution) return execution;
     await sleep(2_000);
@@ -273,14 +336,15 @@ async function runAttempt(input: {
   timeoutSeconds: number;
   canRetry: boolean;
   reconcilePrevious: boolean;
-}): Promise<{ ready: boolean; failure?: AttemptFailure }> {
+}): Promise<{ ready: boolean; failure?: AttemptFailure; triggerDecision?: TriggerDecision }> {
   const { assertExperimentActive } = await import('./cancellation-context');
+  if (input.req.signal?.aborted) return { ready: false, failure: { code: 'EXPERIMENT_CANCELLED', message: '实验已取消', retryable: false } };
   try { await assertExperimentActive(input.req.experimentId, input.item.caseId); }
   catch (error) {
     if ((error as { code?: string }).code !== 'EXPERIMENT_CANCELLED') throw error;
     return { ready: false, failure: { code: 'EXPERIMENT_CANCELLED', message: '用户停止并删除', retryable: false } };
   }
-  if (input.reconcilePrevious && await reconcileGeneratedTraceCase({
+  if (!input.req.skillExecution && input.reconcilePrevious && await reconcileGeneratedTraceCase({
     user: input.req.user,
     caseId: input.item.caseId,
     minAttemptNo: input.item.cycleStartAttemptNo,
@@ -309,21 +373,27 @@ async function runAttempt(input: {
 
   let failure: AttemptFailure | null = null;
   let observedTraceId: string | null = null;
+  let detachCancellation: (() => void) | undefined;
+  let cancellation: Promise<void> | undefined;
+  const startupSeconds = input.req.skillExecution?.version === 2 ? TRIGGER_STARTUP_TIMEOUT_SECONDS : 0;
+  const commandWaitMs = (input.timeoutSeconds + startupSeconds + 90) * 1_000;
   try {
-    const frame = await prisma.$transaction(async (tx: any) => {
+    const frame = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const activeCase = await tx.experimentCase.findFirst({ where: { id: input.item.caseId, deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } } } });
       if (!activeCase) throw Object.assign(new Error('实验或 Case 已取消'), { code: 'EXPERIMENT_CANCELLED' });
       const command = await createCommand({
       user: input.req.user,
       clientId: input.req.workerId,
       action: 'RUN_EXPERIMENT_CASE',
-      ttlMs: (input.timeoutSeconds + 90) * 1_000,
+      ttlMs: commandWaitMs,
       payload: {
         platform: input.req.platform,
         agent: input.req.agent,
         model: input.req.model || null,
         input: input.item.input,
         timeoutSeconds: input.timeoutSeconds,
+        ...(startupSeconds ? { startupTimeoutSeconds: startupSeconds } : {}),
+        ...(input.req.skillExecution ? { skillExecution: input.req.skillExecution } : {}),
         correlation: {
           experimentId: input.req.experimentId,
           experimentRunId: input.req.experimentId,
@@ -343,14 +413,45 @@ async function runAttempt(input: {
       return command;
     });
 
+    const cancel = () => {
+      cancellation ??= (async () => {
+        const stop = await createCommand({ user: input.req.user, clientId: input.req.workerId,
+          action: 'CANCEL_EXPERIMENT_RUN', payload: { kind: 'ordinary', runId: frame.commandId } });
+        const sent = await dispatchCommand(input.req.workerId, stop);
+        if (sent.delivered) await markSent(stop.commandId, 'wss');
+      })();
+      void cancellation.catch(() => undefined);
+    };
+    input.req.signal?.addEventListener('abort', cancel, { once: true });
+    detachCancellation = () => input.req.signal?.removeEventListener('abort', cancel);
+    if (input.req.signal?.aborted) cancel();
+    input.req.signal?.throwIfAborted();
     await assertExperimentActive(input.req.experimentId, input.item.caseId);
     const dispatched = await dispatchCommand(input.req.workerId, frame);
     if (dispatched.delivered) await markSent(frame.commandId, 'wss');
-    const command = await waitForCommand(frame.commandId, (input.timeoutSeconds + 90) * 1_000);
+    const command = await waitForCommand(frame.commandId, commandWaitMs, input.req.signal);
     const traceId = parseTraceIdFromCommandResult(command?.resultJson);
     observedTraceId = traceId;
     if (!command || command.status !== 'SUCCEEDED') {
       failure = commandFailure(command);
+    } else if (input.req.skillExecution?.version === 2) {
+      if (command.clientId !== input.req.workerId) {
+        throw new TraceGenerationError('CLIENT_MISMATCH', '触发分析结果不是来自所选客户端');
+      }
+      const decision = readTriggerDecision(command.resultJson, input.req.skillExecution.targetSkillName, input.req.model);
+      await assertExperimentActive(input.req.experimentId, input.item.caseId);
+      input.req.signal?.throwIfAborted();
+      await prisma.$transaction([
+        prisma.experimentTraceAttempt.update({
+          where: { id: attempt.id },
+          data: { status: 'ready', traceId: traceId || null, failureCode: null, errorMessage: null, finishedAt: new Date() },
+        }),
+        prisma.experimentCase.update({
+          where: { id: input.item.caseId },
+          data: { actualOutput: decision.triggered ? 'Skill 已触发' : 'Skill 未触发', traceGenerationError: null },
+        }),
+      ]);
+      return { ready: true, triggerDecision: decision };
     } else {
       if (!traceId) {
         failure = {
@@ -366,12 +467,16 @@ async function runAttempt(input: {
         const execution = await waitForExecutionByTraceId({
           user: input.req.user,
           traceId,
+          signal: input.req.signal,
           timeoutMs: Math.max(
             TRACE_INGEST_TIMEOUT_MS,
             (input.timeoutSeconds + 90) * 1_000,
           ),
         });
         if (execution) {
+          if (input.req.skillExecution) assertSkillExecutionOutput(execution, input.req.model);
+          await assertExperimentActive(input.req.experimentId, input.item.caseId);
+          input.req.signal?.throwIfAborted();
           await bindExecution({
             caseId: input.item.caseId,
             attemptId: attempt.id,
@@ -388,11 +493,15 @@ async function runAttempt(input: {
       }
     }
   } catch (error) {
+    const code = input.req.signal?.aborted ? 'EXPERIMENT_CANCELLED' : error instanceof TraceGenerationError ? error.code : 'CASE_RUN_FAILED';
     failure = {
-      code: error instanceof TraceGenerationError ? error.code : 'CASE_RUN_FAILED',
+      code,
       message: error instanceof Error ? error.message : String(error || 'Trace 生成失败'),
-      retryable: true,
+      retryable: isTraceGenerationFailureRetryable(code),
     };
+  } finally {
+    detachCancellation?.();
+    if (cancellation) await cancellation;
   }
 
   const settledFailure = failure || {
@@ -425,8 +534,11 @@ export async function generateExperimentTraces(
   options: TraceGenerationOptions = {},
 ): Promise<TraceGenerationResult> {
   const timeoutSeconds = Math.max(
-    30,
-    Math.min(req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS, 3_600),
+    MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+    Math.min(
+      req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+      MAX_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+    ),
   );
   const latestAttempts = await prisma.experimentTraceAttempt.findMany({
     where: { caseId: { in: req.cases.map((item) => item.caseId) } },
@@ -444,6 +556,7 @@ export async function generateExperimentTraces(
     return { ...item, nextAttemptNo, cycleStartAttemptNo: nextAttemptNo };
   });
   const readyCaseIds: string[] = [];
+  const triggerDecisions: Record<string, TriggerDecision> = {};
 
   for (let round = 0; round <= AUTO_RETRY_DELAYS_MS.length && pending.length; round += 1) {
     if (round > 0) await sleep(AUTO_RETRY_DELAYS_MS[round - 1]);
@@ -458,6 +571,7 @@ export async function generateExperimentTraces(
       });
       if (result.ready) {
         readyCaseIds.push(item.caseId);
+        if (result.triggerDecision) triggerDecisions[item.caseId] = result.triggerDecision;
       } else if (result.failure?.retryable && round < AUTO_RETRY_DELAYS_MS.length) {
         nextRound.push({ ...item, nextAttemptNo: item.nextAttemptNo + 1 });
       }
@@ -469,6 +583,7 @@ export async function generateExperimentTraces(
   return {
     readyCaseIds,
     failedCaseIds: req.cases.map((item) => item.caseId).filter((caseId) => !readySet.has(caseId)),
+    ...(req.skillExecution?.version === 2 ? { triggerDecisions } : {}),
   };
 }
 
@@ -492,6 +607,7 @@ export async function loadTraceGenerationRetryRequest(input: {
         take: 1,
         select: {
           workerId: true,
+          commandId: true,
           platform: true,
           agent: true,
           model: true,
@@ -507,6 +623,7 @@ export async function loadTraceGenerationRetryRequest(input: {
     if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(attempt.status)) {
       throw new TraceGenerationError('trace_retry_in_progress', '该 Case 正在生成 Trace', 409);
     }
+    const payload = attempt.commandId ? parseObject((await getCommand(attempt.commandId))?.payloadJson) : {};
     return {
       user: input.user,
       experimentId: input.experimentId,
@@ -514,6 +631,7 @@ export async function loadTraceGenerationRetryRequest(input: {
       platform: attempt.platform,
       agent: attempt.agent,
       model: attempt.model,
+      ...(payload.skillExecution ? { skillExecution: payload.skillExecution as NonNullable<TraceGenerationRequest['skillExecution']> } : {}),
       timeoutSeconds: attempt.timeoutSeconds,
       cases: [{ caseId: row.id, input: row.input.trim() }],
     };

@@ -1828,6 +1828,7 @@ async function countFailedTraceRecords(where: Prisma.ExecutionWhereInput): Promi
                     OR: [
                         { framework: 'actrail', failures: { contains: 'agent-process-exit' } },
                         { failures: { contains: 'goal_plus_pi_session_failed' } },
+                        { framework: 'opencode', failures: { contains: 'opencode-session-error' } },
                     ],
                 }],
             },
@@ -3120,7 +3121,7 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
         if (hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
         }
-        if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true) {
+        if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true && !hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });
         }
     }

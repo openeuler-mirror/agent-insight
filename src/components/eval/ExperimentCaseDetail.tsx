@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { DeleteExperimentButton, isCompletedExperimentCase } from './DeleteExperimentButton';
+import { DeleteExperimentButton, isCompletedExperimentCase, emptyCaseEvaluationMessage } from './DeleteExperimentButton';
 
 // Trace 评测详情：任务输入/预期输出/实际输出三框 → 「结果评测」「轨迹评测」两类目 panel
 // （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡。
@@ -60,6 +60,7 @@ interface ExperimentDetail {
   status: string;
   scope?: string;
   evaluatorConfigs: EvaluatorRunConfigMap;
+  evaluatorIds: string[];
   cases: Array<{
     id: string;
     taskId: string | null;
@@ -68,6 +69,7 @@ interface ExperimentDetail {
     referenceOutput: string | null;
     traceStatus?: 'pending' | 'ready' | 'failed' | null;
     traceError?: string | null;
+    traceAttemptStatus?: string | null;
     caseValues?: Record<string, unknown> | null;
     benchmark?: {
       adapterKey: string;
@@ -583,7 +585,9 @@ export function ExperimentCaseDetail({
       {!embedded && <AppTopBar title={isBenchmark ? 'Benchmark Case 详情' : 'Trace 评测详情'} />}
       <PageContainer className="min-w-0 max-w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full [&>*]:shrink-0">
         {user && caseRow && detail && <DeleteExperimentButton user={user} experimentId={id} caseId={caseId}
-          completed={isCompletedExperimentCase(detail.status, caseRow.benchmark?.runStatus)}
+          completed={isCompletedExperimentCase(detail.status, caseRow.benchmark?.runStatus, {
+            ...caseRow, evaluatorIds: detail.evaluatorIds, results: caseResults,
+          })}
           onDeleted={(experimentDeleted) => experimentDeleted
             ? router.replace('/experiments')
             : onBack ? onBack() : router.push(`/experiments/${encodeURIComponent(id)}`)} />}
@@ -1021,7 +1025,7 @@ export function ExperimentCaseDetail({
 
             {caseResults.length === 0 && (
               <div style={{ ...CARD, padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
-                该 case 暂无评测结果——实验尚未执行
+                {emptyCaseEvaluationMessage(detail.status, caseRow)}
               </div>
             )}
 

@@ -78,6 +78,44 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   assert.match(stillPending.error || '', /更新并重启该客户端/);
   assert.equal(await prisma.reliabilityCommand.count({ where: { clientId: oldClient.clientId } }), 1);
 
+  const oldRun = await prisma.reliabilityCommand.create({ data: { commandId: 'old-running-run',
+    clientId: oldClient.clientId, user: 'owner', action: 'RUN_EXPERIMENT_CASE', status: 'RUNNING',
+    expiresAt: new Date(Date.now() + 30_000) } });
+  const unknownStop = await prisma.reliabilityCommand.create({ data: { commandId: 'unknown-stop',
+    clientId: oldClient.clientId, user: 'owner', action: 'CANCEL_EXPERIMENT_RUN', status: 'SUCCEEDED',
+    resultJson: JSON.stringify({ runId: oldRun.commandId, status: 'cancelling', reason: 'RUN_STATE_UNAVAILABLE' }),
+    expiresAt: new Date(Date.now() + 30_000) } });
+  const oldExperiment = await prisma.experiment.create({ data: { user: 'owner', name: 'old run without state',
+    status: 'cancelled', deletedAt: new Date() } });
+  const oldCancellation = await prisma.experimentCancellation.create({ data: { id: 'old-run-cancellation',
+    user: 'owner', experimentId: oldExperiment.id,
+    targetsJson: JSON.stringify([{ kind: 'ordinary', runId: oldRun.commandId, clientId: oldClient.clientId,
+      commandId: unknownStop.commandId }]) } });
+  const oldPending = await reconcileCancellation(oldCancellation.id);
+  assert.equal(oldPending.status, 'pending');
+  assert.match(oldPending.error || '', /未保存执行进程状态/);
+  assert.equal(await prisma.reliabilityCommand.count({ where: { clientId: oldClient.clientId } }), 3);
+  await prisma.reliabilityCommand.update({ where: { commandId: oldRun.commandId }, data: { status: 'FAILED', errorCode: 'EXECUTION_CANCELLED' } });
+  assert.equal((await reconcileCancellation(oldCancellation.id)).status, 'completed');
+
+  const uncertainRun = await prisma.reliabilityCommand.create({ data: { commandId: 'uncertain-running-run',
+    clientId: oldClient.clientId, user: 'owner', action: 'RUN_EXPERIMENT_CASE', status: 'RUNNING',
+    expiresAt: new Date(Date.now() + 30_000) } });
+  const uncertainStop = await prisma.reliabilityCommand.create({ data: { commandId: 'uncertain-stop',
+    clientId: oldClient.clientId, user: 'owner', action: 'CANCEL_EXPERIMENT_RUN', status: 'SUCCEEDED',
+    resultJson: JSON.stringify({ runId: uncertainRun.commandId, status: 'cancelling', reason: 'RUN_PROCESS_UNCONFIRMED' }),
+    completedAt: new Date(), expiresAt: new Date(Date.now() + 30_000) } });
+  const uncertainExperiment = await prisma.experiment.create({ data: { user: 'owner', name: 'run process still uncertain',
+    status: 'cancelled', deletedAt: new Date() } });
+  const uncertainRecord = await prisma.experimentCancellation.create({ data: { id: 'uncertain-run-cancellation',
+    user: 'owner', experimentId: uncertainExperiment.id,
+    targetsJson: JSON.stringify([{ kind: 'ordinary', runId: uncertainRun.commandId,
+      clientId: oldClient.clientId, commandId: uncertainStop.commandId }]) } });
+  const uncertainPending = await reconcileCancellation(uncertainRecord.id);
+  assert.equal(uncertainPending.status, 'pending');
+  assert.match(uncertainPending.error || '', /继续核查/);
+  assert.equal(await prisma.reliabilityCommand.count({ where: { clientId: oldClient.clientId } }), 5);
+
   const skill = await prisma.experiment.create({ data: { user: 'owner', name: 'A/B cancel', scope: 'grayscale-ab', status: 'running',
     configSnapshotJson: JSON.stringify({ caseIds: ['shared-case', 'keep-case'] }),
     cases: { create: ['a', 'b'].map((side) => ({ id: `skill-${side}`, caseValuesJson: JSON.stringify({ __agentInsightDatasetCase: { caseId: 'shared-case' } }) })) } } });

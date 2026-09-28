@@ -45,6 +45,7 @@ export async function GET(req: Request) {
 
     type CandidateTarget = (typeof faultInjectionTargets)[number] & {
       supportsGenericTrace: boolean;
+      supportsTriggerRouting?: boolean;
       supportsFaultInjection: boolean;
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
@@ -88,6 +89,7 @@ export async function GET(req: Request) {
         item.workerId === target.workerId && item.platform === target.platform);
       if (existing) {
         existing.supportsGenericTrace ||= capability === 'generic';
+        if (capability === 'generic') existing.supportsTriggerRouting = Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting);
         existing.supportsFaultInjection ||= capability === 'fault-injection';
         const models = new Map(existing.models.map((model) => [model.id, model]));
         for (const model of target.models) models.set(model.id, model);
@@ -96,6 +98,7 @@ export async function GET(req: Request) {
         current.targets.push({
           ...target,
           supportsGenericTrace: capability === 'generic',
+          supportsTriggerRouting: capability === 'generic' && Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting),
           supportsFaultInjection: capability === 'fault-injection',
           supportsBenchmark: false,
           benchmarkKeys: [],
@@ -147,6 +150,7 @@ export async function GET(req: Request) {
           models: target.models,
           lastSeenAt: target.lastSeenAt,
           supportsGenericTrace: target.supportsGenericTrace,
+          supportsTriggerRouting: target.supportsTriggerRouting,
           supportsFaultInjection: target.supportsFaultInjection,
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,

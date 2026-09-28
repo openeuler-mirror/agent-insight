@@ -388,12 +388,14 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(retryRoute, /generateExperimentTraces\(genericRequest, \{ forceNewTrace: true \}\)/);
   assert.match(retryRoute, /prepareGeneratedTraceRetry\(id, caseId\)/);
   assert.ok(
-    retryRoute.indexOf('if (genericRequest)') < retryRoute.indexOf('if (row.executionId)'),
+    retryRoute.indexOf('if (genericRequest)') < retryRoute.indexOf('const failedResults'),
     'generated Trace retry must take precedence over evaluation retry even after an Execution is bound',
   );
   assert.ok(
     retryRoute.indexOf('if (row.fiTaskId && row.fiRunId && row.faultInjectionType)')
-      < retryRoute.indexOf('if (row.executionId)'),
+      < retryRoute.indexOf('const failedResults'),
     'FI-generated Trace retry must take precedence over evaluation retry',
   );
+  assert.doesNotMatch(retryRoute, /if \(row\.executionId\)/);
+  assert.match(retryRoute, /if \(failedResults\.length\)/);
 });

@@ -19,7 +19,6 @@ interface ExperimentRow {
   status: string;
   caseCount: number;
   createdAt: string;
-  updatedAt: string;
 }
 
 const PRESETS: Array<{
@@ -66,6 +65,9 @@ export function ExperimentPanel({
   const [loading, setLoading] = useState(true);
   const [preset, setPreset] = useState<SkillExperimentPreset | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [reuseFromExperimentId, setReuseFromExperimentId] = useState('');
+  const [actionId, setActionId] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,6 +93,45 @@ export function ExperimentPanel({
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  const createSameConfigExperiment = async (sourceExperimentId: string) => {
+    if (actionId) return;
+    setActionId(sourceExperimentId);
+    setActionError('');
+    try {
+      const response = await apiFetch('/api/experiments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, createMode: 'same-config', sourceExperimentId }),
+      });
+      const created = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(created.error || '复制 Skill 实验配置失败');
+      const experimentId = String(created.id || '');
+      if (!experimentId) throw new Error('复制实验后未返回实验 ID');
+      try {
+        const taskId = typeof created.grayscaleTaskId === 'string' ? created.grayscaleTaskId : '';
+        const caseIds = Array.isArray(created.caseIds) ? created.caseIds.map(String) : [];
+        const evaluators = Array.isArray(created.evaluatorIds) ? created.evaluatorIds.map(String) : [];
+        const runResponse = taskId
+          ? await apiFetch(`/api/debug/grayscale-tasks/${encodeURIComponent(taskId)}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user, action: 'start', caseIds, evaluators }),
+            })
+          : await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+            });
+        const started = await runResponse.json().catch(() => ({}));
+        if (!runResponse.ok) throw new Error(started.error || '启动 Skill 实验失败');
+      } catch (runError) {
+        await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`, { method: 'DELETE' }).catch(() => undefined);
+        throw runError;
+      }
+      setDetailId(experimentId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '同配置实验创建失败');
+    } finally {
+      setActionId('');
+    }
+  };
+
   if (detailId) {
     return <SkillExperimentResult user={user} skillName={skillName} version={version} experimentId={detailId} onBack={() => { setDetailId(null); void load(); }} />;
   }
@@ -99,9 +140,10 @@ export function ExperimentPanel({
     return (
       <ExperimentWizard
         embedded
+        reuseFromExperimentId={reuseFromExperimentId}
         skillContext={{ skillName, skillVersion: version, preset, versions, optimizationRecordId }}
-        onBack={() => { setPreset(null); void load(); }}
-        onCreated={(experimentId) => { setPreset(null); setDetailId(experimentId); }}
+        onBack={() => { setPreset(null); setReuseFromExperimentId(''); void load(); }}
+        onCreated={(experimentId) => { setPreset(null); setReuseFromExperimentId(''); setDetailId(experimentId); }}
       />
     );
   }
@@ -121,7 +163,7 @@ export function ExperimentPanel({
           {PRESETS.map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.id} type="button" onClick={() => setPreset(item.id)} className="rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary">
+              <button key={item.id} type="button" onClick={() => { setReuseFromExperimentId(''); setPreset(item.id); }} className="rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary">
                 <span className="flex size-8 items-center justify-center rounded-lg bg-primary-subtle text-primary"><Icon className="size-4" /></span>
                 <b className="mt-3 block text-sm text-foreground">{item.label}</b>
                 <p className="mt-1 text-[11px] leading-5 text-foreground-muted">{item.description}</p>
@@ -137,6 +179,7 @@ export function ExperimentPanel({
         </div>
 
         <PendingExperimentCancellations user={user} />
+        {actionError && <p role="alert" className="text-xs text-error">{actionError}</p>}
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="flex items-center border-b border-border px-4 py-3">
             <FlaskConical className="mr-2 size-4 text-primary" />
@@ -150,7 +193,7 @@ export function ExperimentPanel({
           ) : (
             <table className="w-full border-collapse text-left">
               <thead className="bg-background-secondary text-[10px] text-foreground-muted">
-                <tr><th className="px-4 py-2 font-medium">实验</th><th className="px-4 py-2 font-medium">模板</th><th className="px-4 py-2 font-medium">数据来源</th><th className="px-4 py-2 font-medium">状态</th><th className="px-4 py-2 font-medium">更新时间</th></tr>
+                <tr><th className="px-4 py-2 font-medium">实验</th><th className="px-4 py-2 font-medium">模板</th><th className="px-4 py-2 font-medium">数据来源</th><th className="px-4 py-2 font-medium">状态</th><th className="px-4 py-2 font-medium">创建时间</th><th className="px-4 py-2 font-medium">操作</th></tr>
               </thead>
               <tbody>
                 {rows.map((row) => (
@@ -171,7 +214,18 @@ export function ExperimentPanel({
                     <td className="px-4 py-3 text-foreground-secondary">{PRESET_LABELS[row.preset || ''] || '标准实验'}</td>
                     <td className="px-4 py-3 text-foreground-secondary">{row.caseCount ? `${row.caseCount} Cases` : '平台运行'}</td>
                     <td className="px-4 py-3"><span className="rounded bg-background-secondary px-2 py-1 text-[10px] text-foreground-secondary">{STATUS_LABELS[row.status] || row.status}</span></td>
-                    <td className="px-4 py-3 text-foreground-muted">{new Date(row.updatedAt || row.createdAt).toLocaleString('zh-CN', { hour12: false })}<br /><DeleteExperimentButton user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} /></td>
+                    <td className="px-4 py-3 text-foreground-muted">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                    <td className="whitespace-nowrap px-4 py-3" onClick={(event) => event.stopPropagation()}>
+                      <span className="inline-flex items-center gap-3">
+                        {row.preset && row.preset !== 'retest' && <>
+                          <button type="button" disabled={Boolean(actionId)} onClick={() => void createSameConfigExperiment(row.id)} className="text-primary disabled:opacity-50">
+                            {actionId === row.id ? '创建中…' : '同配置实验'}
+                          </button>
+                          <button type="button" disabled={Boolean(actionId)} onClick={() => { setReuseFromExperimentId(row.id); setPreset(row.preset as SkillExperimentPreset); }} className="text-primary disabled:opacity-50">复用同配置</button>
+                        </>}
+                        <DeleteExperimentButton user={user} experimentId={row.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(row.status)} onDeleted={load} />
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>

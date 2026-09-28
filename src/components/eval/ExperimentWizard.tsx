@@ -28,9 +28,14 @@ import {
   matchDatasetCases,
   toDatasetCases,
 } from '@/lib/engine/experiment/dataset-match';
-import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import {
+  DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  MAX_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
+  isValidExperimentAgentTimeoutSeconds,
+} from '@/lib/engine/experiment/constants';
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
-import { defaultExperimentName } from '@/lib/engine/experiment/experiment-name';
+import { defaultExperimentName, defaultSkillExperimentName } from '@/lib/engine/experiment/experiment-name';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { benchmarkEvaluatorCard } from '@/lib/evaluators/benchmark-evaluator-cards';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
@@ -68,6 +73,7 @@ interface AgentTargetOption {
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
   supportsGenericTrace: boolean;
+  supportsTriggerRouting?: boolean;
   supportsFaultInjection: boolean;
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
@@ -336,6 +342,50 @@ const FCHIP: React.CSSProperties = {
   border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground-secondary)',
 };
 
+function AgentTimeoutField({
+  value,
+  valid,
+  preset,
+  onChange,
+}: {
+  value: string;
+  valid: boolean;
+  preset?: SkillExperimentPreset;
+  onChange: (value: string) => void;
+}) {
+  const hint = preset === 'trigger'
+    ? '从路由会话就绪后计时；启动准备另设 120 秒上限。命中目标 Skill 后立即结束；允许范围：30～3600 秒'
+    : preset === 'skill-ab'
+    ? 'A、B 两侧的每次 Agent 执行分别应用该上限；允许范围：30～3600 秒'
+    : '每个 Case 单次 Agent 执行的最长时间；允许范围：30～3600 秒';
+  return (
+    <div>
+      <label style={FIELDLBL}>Agent 单次执行上限（秒）*</label>
+      <input
+        type="number"
+        min={MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS}
+        max={MAX_EXPERIMENT_AGENT_TIMEOUT_SECONDS}
+        step={30}
+        style={{
+          ...INPUT,
+          borderColor: valid ? 'var(--input-border)' : 'var(--error)',
+        }}
+        value={value}
+        aria-invalid={!valid}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <div style={{
+        marginTop: 5,
+        fontSize: 10.5,
+        color: valid ? 'var(--foreground-muted)' : 'var(--error)',
+        lineHeight: 1.5,
+      }}>
+        {valid ? hint : '请输入 30～3600 之间的整数'}
+      </div>
+    </div>
+  );
+}
+
 function truncate(text: string | null | undefined, max: number): string {
   const t = (text || '').replace(/\s+/g, ' ').trim();
   if (!t) return '—';
@@ -458,11 +508,12 @@ export function ExperimentWizard({
 
   // ① 实验设计
   const [name, setName] = useState(() => skillContext
-    ? `${skillContext.skillName} · ${SKILL_PRESET_LABELS[skillContext.preset]} · v${skillContext.skillVersion}`
+    ? defaultSkillExperimentName(skillContext.skillName, skillContext.preset, skillContext.skillVersion)
     : defaultExperimentName());
   const [agentName, setAgentName] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [wizardDatasets, setWizardDatasets] = useState<DatasetOption[]>([]);
+  const [wizardDatasetsLoaded, setWizardDatasetsLoaded] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState('');
   const [selectedDatasetDetail, setSelectedDatasetDetail] = useState<DatasetOption | null>(null);
   const [selectedDatasetLoading, setSelectedDatasetLoading] = useState(false);
@@ -549,9 +600,9 @@ export function ExperimentWizard({
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const isBenchmarkDataset = selectedDataset?.datasetKind === 'benchmark';
   const agentTimeoutSeconds = Number(agentTimeoutInput);
-  const agentTimeoutValid = Number.isInteger(agentTimeoutSeconds)
-    && agentTimeoutSeconds >= 30
-    && agentTimeoutSeconds <= 3_600;
+  const agentTimeoutValid = isValidExperimentAgentTimeoutSeconds(agentTimeoutSeconds);
+  const agentTimeoutRequired = skillPreset === 'skill-ab'
+    || traceMode === 'generate';
   const benchmarkPresentation = selectedDataset?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || [
     { path: 'input', label: '任务输入', type: 'text' as const },
@@ -571,12 +622,14 @@ export function ExperimentWizard({
   );
   const targetOptions = useMemo(
     () => (selectedAgent?.targets || []).filter((target) =>
-      isBenchmarkDataset
+      skillPreset === 'trigger'
+        ? target.supportsTriggerRouting
+        : isBenchmarkDataset
         ? target.supportsBenchmark && target.benchmarkKeys.includes(selectedDataset?.benchmark?.adapterKey || '')
         : isReliabilityDataset
           ? target.supportsFaultInjection
           : target.supportsGenericTrace),
-    [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey],
+    [isBenchmarkDataset, isReliabilityDataset, selectedAgent, selectedDataset?.benchmark?.adapterKey, skillPreset],
   );
   const selectedTarget = targetOptions.find(
     (target) => `${target.workerId}::${target.platform}` === selectedTargetKey,
@@ -648,7 +701,8 @@ export function ExperimentWizard({
     apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setWizardDatasets(Array.isArray(d) ? d : []))
-      .catch(() => setWizardDatasets([]));
+      .catch(() => setWizardDatasets([]))
+      .finally(() => setWizardDatasetsLoaded(true));
     apiFetch('/api/reliability/fault-modes')
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d) => {
@@ -673,8 +727,14 @@ export function ExperimentWizard({
     return () => window.clearTimeout(timer);
   }, [agentName, agents, skillContext]);
 
-  const selectWizardDataset = useCallback(async (nextId: string): Promise<DatasetOption | null> => {
+  const selectWizardDataset = useCallback(async (
+    nextId: string,
+    traceSource?: 'existing' | 'generate',
+  ): Promise<DatasetOption | null> => {
     const requestId = ++datasetRequestIdRef.current;
+    const nextTraceMode = expType === 'llm' ? 'existing' : traceSource ?? (nextId ? 'generate' : 'existing');
+    setTraceMode(nextTraceMode);
+    if (nextTraceMode === 'generate') setWatchMode(false);
     setSelectedDatasetId(nextId);
     setSelectedDatasetDetail(null);
     setSelected(new Map());
@@ -707,7 +767,7 @@ export function ExperimentWizard({
     } finally {
       if (datasetRequestIdRef.current === requestId) setSelectedDatasetLoading(false);
     }
-  }, [user]);
+  }, [expType, user]);
 
   useEffect(() => {
     if (
@@ -720,9 +780,10 @@ export function ExperimentWizard({
   }, [eligibleWizardDatasets, selectWizardDataset, selectedDatasetId, skillContext, skillPreset]);
 
   useEffect(() => {
-    if (skillContext || !user || initialConfigLoadedRef.current || wizardDatasets.length === 0) return;
+    if (!user || initialConfigLoadedRef.current || !wizardDatasetsLoaded) return;
     const requestedDatasetId = initialDatasetId.trim();
     const reuseFrom = reuseFromExperimentId.trim();
+    if (skillContext && !reuseFrom) return;
     if (!requestedDatasetId && !reuseFrom) {
       initialConfigLoadedRef.current = true;
       return;
@@ -735,14 +796,22 @@ export function ExperimentWizard({
         }
         return;
       }
-      const response = await apiFetch(`/api/experiments/${encodeURIComponent(reuseFrom)}?user=${encodeURIComponent(user)}`);
+      const response = await apiFetch(`/api/experiments/${encodeURIComponent(reuseFrom)}?user=${encodeURIComponent(user)}&casePageSize=100`);
       const detail = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(detail?.error || '读取原实验配置失败');
+      if (skillContext && (
+        detail.scope !== 'skill-workbench'
+        || detail.skillName !== skillContext.skillName
+        || detail.skillVersion !== skillContext.skillVersion
+        || detail.preset !== skillContext.preset
+      )) throw new Error('原实验不属于当前 Skill、版本或实验类型');
       const config = detail?.reusableConfig && typeof detail.reusableConfig === 'object'
         ? detail.reusableConfig as Record<string, unknown>
         : {};
+      const sourceSnapshot = detail?.configSnapshot && typeof detail.configSnapshot === 'object'
+        ? detail.configSnapshot as Record<string, unknown> : {};
       const restoredDatasetId = typeof config.datasetId === 'string' ? config.datasetId : '';
-      const restoredTraceSource = config.traceSource === 'generate' ? 'generate' : 'existing';
+      const restoredTraceSource = skillPreset === 'skill-ab' || config.traceSource === 'generate' ? 'generate' : 'existing';
       const restoredEvaluators = Array.isArray(config.evaluatorIds)
         ? config.evaluatorIds.map(String).filter(Boolean)
         : [];
@@ -756,7 +825,7 @@ export function ExperimentWizard({
         String(restoredTarget.platform || ''),
         typeof config.agentName === 'string' ? config.agentName : '',
       );
-      setName(defaultExperimentName());
+      if (!skillContext) setName(defaultExperimentName());
       setAgentName(restoredAgentName);
       setTraceMode(restoredTraceSource);
       setWatchMode(false);
@@ -768,14 +837,22 @@ export function ExperimentWizard({
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
-      const restoredTimeoutSeconds = Number(restoredTarget.timeoutSeconds);
-      if (Number.isInteger(restoredTimeoutSeconds)
-        && restoredTimeoutSeconds >= 30
-        && restoredTimeoutSeconds <= 3_600) {
+      const runtime = sourceSnapshot.runtime && typeof sourceSnapshot.runtime === 'object'
+        ? sourceSnapshot.runtime as Record<string, unknown> : {};
+      const restoredTimeoutSeconds = skillContext
+        ? Number(runtime.timeoutMs) / 1_000 : Number(restoredTarget.timeoutSeconds);
+      if (isValidExperimentAgentTimeoutSeconds(restoredTimeoutSeconds)) {
         setAgentTimeoutInput(String(restoredTimeoutSeconds));
       }
+      if (skillPreset === 'skill-ab') {
+        const sourceSkillContext = detail.skillContext && typeof detail.skillContext === 'object'
+          ? detail.skillContext as Record<string, unknown> : {};
+        const versionB = Number(sourceSkillContext.versionB);
+        if (skillContext?.versions.some((item) => item.version === versionB)) setCompareVersion(versionB);
+        setVersionAEnabled(sourceSnapshot.versionAId !== '__NONE__');
+      }
       if (restoredDatasetId && wizardDatasets.some((dataset) => dataset.id === restoredDatasetId)) {
-        const restoredDataset = await selectWizardDataset(restoredDatasetId);
+        const restoredDataset = await selectWizardDataset(restoredDatasetId, restoredTraceSource);
         if (restoredDataset && restoredCaseIds.size > 0) {
           const restoredCases = generationCasesFromDataset(restoredDataset)
             .filter((item) => restoredCaseIds.has(item.executionId));
@@ -784,12 +861,38 @@ export function ExperimentWizard({
           }
         }
         setSelectedEvaluators(new Set(restoredEvaluators));
+      } else if (skillContext && (restoredDatasetId || skillPreset !== 'use-case' || restoredTraceSource !== 'existing')) {
+        throw new Error('原实验的数据集已不可用，请重新选择数据集');
+      }
+      if (skillContext && restoredTraceSource === 'existing') {
+        const cases = Array.isArray(detail.cases) ? [...detail.cases] as Array<Record<string, unknown>> : [];
+        const pages = Math.ceil(Number(detail.caseTotal || cases.length) / 100);
+        for (let page = 2; page <= pages; page += 1) {
+          const nextResponse = await apiFetch(`/api/experiments/${encodeURIComponent(reuseFrom)}?user=${encodeURIComponent(user)}&casePageSize=100&casePage=${page}`);
+          if (!nextResponse.ok) throw new Error('读取原实验 Case 失败');
+          const nextDetail = await nextResponse.json();
+          if (Array.isArray(nextDetail.cases)) cases.push(...nextDetail.cases);
+        }
+        const restoredCases = cases.filter((item) => typeof item.executionId === 'string' && item.executionId);
+        if (!restoredCases.length) throw new Error('原实验没有可复用的已有 Trace');
+        setSelected(new Map(restoredCases.map((item) => [String(item.executionId), {
+          executionId: String(item.executionId),
+          taskId: typeof item.taskId === 'string' ? item.taskId : null,
+          input: String(item.input || ''),
+          datasetInput: typeof item.datasetInput === 'string' ? item.datasetInput : null,
+          actualOutput: String(item.actualOutput || ''),
+          referenceOutput: typeof item.referenceOutput === 'string' ? item.referenceOutput : null,
+          evaluatorContext: item.evaluatorContext && typeof item.evaluatorContext === 'object'
+            ? item.evaluatorContext as EvaluatorCaseContext : null,
+          values: item.caseValues && typeof item.caseValues === 'object'
+            ? item.caseValues as Record<string, unknown> : undefined,
+        }])));
       }
     };
     void loadInitialConfig().catch((error) => {
       setSubmitError(error instanceof Error ? error.message : '读取原实验配置失败');
     });
-  }, [initialDatasetId, reuseFromExperimentId, selectWizardDataset, skillContext, user, wizardDatasets]);
+  }, [initialDatasetId, reuseFromExperimentId, selectWizardDataset, skillContext, skillPreset, user, wizardDatasets, wizardDatasetsLoaded]);
 
   useEffect(() => {
     if (!isBenchmarkDataset || !benchmarkEvaluatorId) return;
@@ -1333,8 +1436,8 @@ export function ExperimentWizard({
     setSubmitting(true);
     setSubmitError('');
     try {
-      if (!skillContext && traceMode === 'generate' && !agentTimeoutValid) {
-        throw new Error('Agent 执行上限必须是 30～3600 之间的整数秒数');
+      if (agentTimeoutRequired && !agentTimeoutValid) {
+        throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
@@ -1403,6 +1506,19 @@ export function ExperimentWizard({
             evaluatorIds: Array.from(selectedEvaluators),
             caseIds: abCaseIds,
             traceSource: traceMode,
+            executionTarget: selectedTarget ? {
+              workerId: selectedTarget.workerId,
+              host: selectedTarget.host,
+              platform: selectedTarget.platform,
+              agent: selectedTarget.agent,
+              model: genModel || null,
+            } : null,
+            traceGenerationTarget: traceMode === 'generate' && selectedTarget ? {
+              host: selectedTarget.host,
+              platform: selectedTarget.platform,
+              model: genModel || null,
+            } : null,
+            agentTimeoutSeconds,
           }),
         });
         const created = await createResponse.json();
@@ -1572,13 +1688,17 @@ export function ExperimentWizard({
     && (selectedDatasetDetail.cases || []).some((item) => !Boolean(item.values?.should_trigger)),
   );
   const step1Valid = name.trim() !== '' && agentName !== '' && triggerDatasetReady
+    && (skillPreset !== 'skill-ab' || eligibleWizardDatasets.some((dataset) => dataset.id === selectedDatasetId))
     && (skillPreset !== 'skill-ab' || compareVersion !== null)
     && (expType === 'single' || (groupAValue.trim() !== '' && groupBValue.trim() !== '' && groupAValue.trim() !== groupBValue.trim()));
   // 对比模式：case 由 autoPairGroups 自动产生（POST /api/experiments 内部调），无需手选 trace
   // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
-  const step2Valid = expType === 'llm' || (traceMode === 'generate'
-    ? generateAvailable && selectedGenerated.size >= 1 && (Boolean(skillContext) || agentTimeoutValid)
-    : (watchMode || selected.size >= 1));
+  const step2SelectionValid = traceMode === 'generate'
+    ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
+    : (watchMode || selected.size >= 1);
+  const step2Valid = expType === 'llm'
+    || (step2SelectionValid && (!agentTimeoutRequired || agentTimeoutValid)
+      && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const stepSummaries = [
@@ -1693,16 +1813,19 @@ export function ExperimentWizard({
               </div>
 
               <div style={{ marginBottom: 16 }}>
-                <label style={FIELDLBL}>评测数据集（可选）</label>
+                <label style={FIELDLBL}>评测数据集{skillPreset === 'skill-ab' ? ' *' : '（可选）'}</label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <select
                     style={{ ...INPUT, cursor: 'pointer', flex: 1 }}
                     value={selectedDatasetId}
+                    disabled={skillPreset === 'skill-ab' && eligibleWizardDatasets.length === 0}
                     onChange={(e) => {
                       void selectWizardDataset(e.target.value);
                     }}
                   >
-                    <option value="">{skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集'}</option>
+                    {skillPreset === 'skill-ab'
+                      ? eligibleWizardDatasets.length === 0 && <option value="" disabled>暂无可用数据集</option>
+                      : <option value="">{skillPreset === 'trigger' ? '选择触发分析数据集' : '不选择数据集'}</option>}
                     {eligibleWizardDatasets.map((dataset) => (
                       <option key={dataset.id} value={dataset.id}>
                         {dataset.name} · {DATASET_KIND_LABELS[dataset.datasetKind || ''] || '评测数据集'}（{dataset.cases?.length ?? dataset.caseCount ?? 0}）
@@ -1721,6 +1844,8 @@ export function ExperimentWizard({
                 <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
                   {selectedDatasetLoading
                     ? '正在加载数据集 Case…'
+                    : skillPreset === 'skill-ab' && eligibleWizardDatasets.length === 0
+                      ? '暂无可用数据集，请先创建非触发分析数据集。'
                     : isBenchmarkDataset
                       ? 'Benchmark 数据集由系统导入且只读；实验将生成新 Trace，并使用接入包提供的评测契约。'
                     : skillPreset === 'trigger'
@@ -1823,7 +1948,12 @@ export function ExperimentWizard({
                   <>
                     <button
                       type="button"
-                      onClick={() => setExpType('single')}
+                      onClick={() => {
+                        if (expType === 'single') return;
+                        setExpType('single');
+                        setTraceMode(selectedDatasetId ? 'generate' : 'existing');
+                        setWatchMode(false);
+                      }}
                       style={{
                         ...FCHIP,
                         background: expType === 'single' ? 'var(--primary-subtle)' : 'var(--background-secondary)',
@@ -1955,6 +2085,8 @@ export function ExperimentWizard({
                 <div style={{ padding: 18, border: '1px dashed var(--border-dark)', borderRadius: 10, color: 'var(--foreground-secondary)', fontSize: 12, lineHeight: 1.6 }}>
                   {!selectedDataset
                     ? '生成 Trace 需要数据集 Case，请返回第一步选择评测数据集。'
+                    : skillPreset === 'trigger'
+                      ? '没有支持只读触发分析的在线 OpenCode 客户端，请升级并连接客户端后重试。'
                     : isBenchmarkDataset
                       ? '当前 Agent 没有满足该 Benchmark 执行要求的在线客户端，请检查客户端状态和执行目标配置。'
                     : isReliabilityDataset
@@ -1983,34 +2115,15 @@ export function ExperimentWizard({
                 </div>
                 <div>
                   <label htmlFor="experiment-runtime-model" style={FIELDLBL}>运行模型 *</label>
-                  <RuntimeModelSelect key={effectiveTargetKey} id="experiment-runtime-model"
+                  <RuntimeModelSelect key={effectiveTargetKey} id="experiment-runtime-model" allowDefault={skillPreset !== 'trigger'}
                     models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                 </div>
-                {!skillContext && (
-                  <div>
-                    <label style={FIELDLBL}>Agent 执行上限（秒）*</label>
-                    <input
-                      type="number"
-                      min={30}
-                      max={3600}
-                      step={30}
-                      style={{
-                        ...INPUT,
-                        borderColor: agentTimeoutValid ? 'var(--input-border)' : 'var(--error)',
-                      }}
-                      value={agentTimeoutInput}
-                      aria-invalid={!agentTimeoutValid}
-                      onChange={(event) => setAgentTimeoutInput(event.target.value)}
-                    />
-                    <div style={{
-                      marginTop: 5,
-                      fontSize: 10.5,
-                      color: agentTimeoutValid ? 'var(--foreground-muted)' : 'var(--error)',
-                    }}>
-                      {agentTimeoutValid ? '允许范围：30～3600 秒' : '请输入 30～3600 之间的整数'}
-                    </div>
-                  </div>
-                )}
+                  <AgentTimeoutField
+                    value={agentTimeoutInput}
+                    valid={agentTimeoutValid}
+                    preset={skillPreset}
+                    onChange={setAgentTimeoutInput}
+                  />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
@@ -2335,6 +2448,24 @@ export function ExperimentWizard({
                   生成 Trace
                 </button>
               </div>
+              {skillPreset === 'skill-ab' && (
+                <div style={{ maxWidth: 360, marginBottom: 12 }}>
+                  <p className="mb-2 text-sm text-foreground-secondary">已有 Trace 仅提供输入样本；A/B 两侧仍需在所选主机上重新执行。</p>
+                  <label style={FIELDLBL}>运行主机 IP *</label>
+                  <select style={INPUT} value={effectiveTargetKey} onChange={(event) => { setSelectedTargetKey(event.target.value); setGenModel(''); }}>
+                    {targetOptions.map((target) => <option key={`${target.workerId}::${target.platform}`} value={`${target.workerId}::${target.platform}`}>{target.host} · {target.platform}</option>)}
+                  </select>
+                  {!selectedTarget && <p className="text-sm text-error">没有可用的在线执行目标</p>}
+                  <label htmlFor="ab-existing-runtime-model" style={FIELDLBL}>运行模型 *</label>
+                  <RuntimeModelSelect id="ab-existing-runtime-model" models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
+                  <AgentTimeoutField
+                    value={agentTimeoutInput}
+                    valid={agentTimeoutValid}
+                    preset={skillPreset}
+                    onChange={setAgentTimeoutInput}
+                  />
+                </div>
+              )}
             </div>
             <label style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', marginBottom: 12,
@@ -2344,7 +2475,7 @@ export function ExperimentWizard({
               <input type="checkbox" checked={watchMode} onChange={(e) => setWatchMode(e.target.checked)} />
               <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--foreground)' }}>监听模式</span>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.5 }}>
-                开启后本实验绑定「{agentName || '该 Agent'}」——其新上报的 trace 自动进来评测；下方圈选已有 trace 变为可选，可 0 条起步。
+                自动评测「{agentName || '该 Agent'}」在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准。下方已有 Trace 可选，可 0 条起步。
                 <span style={{ color: 'var(--foreground-muted)' }}>（监听 trace 无逐条预期输出或数据集输入，第 ④ 步带相关依赖的评估器不可选）</span>
               </span>
             </label>
@@ -2981,10 +3112,13 @@ export function ExperimentWizard({
                   ...(expType === 'single' && traceMode === 'generate' ? [[
                     '主机 / 模型',
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
-                  ], ...(!skillContext ? [[
-                    'Agent 执行上限',
-                    `${agentTimeoutSeconds} 秒`,
-                  ]] : [])] : []),
+                  ]] : []),
+                  ...(agentTimeoutRequired ? [[
+                    'Agent 单次执行上限',
+                    skillPreset === 'skill-ab'
+                      ? `${agentTimeoutSeconds} 秒（A、B 每侧每次执行）`
+                      : `${agentTimeoutSeconds} 秒（每个 Case）`,
+                  ]] : []),
                 ].map(([label, value]) => (
                   <div key={label} style={{ padding: '10px 12px', background: 'var(--background-secondary)' }}>
                     <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginBottom: 3 }}>{label}</div>

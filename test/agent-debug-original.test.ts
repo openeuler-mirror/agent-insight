@@ -186,7 +186,7 @@ test('fault diagnosis trace persistence uses one mode-specific skill label', () 
   const diagnosisRoute = fs.readFileSync(path.join(process.cwd(), 'src', 'app', 'api', 'fault', 'diagnosis', 'stream', 'route.ts'), 'utf-8');
 
   assert.ok(generalRunner.includes('const effectiveTraceSkill = skillMeta?.name ?? input.skill ?? input.tagSkill ?? systemAgentDefinition?.traceSkill'));
-  assert.equal(generalRunner.match(/skill: effectiveTraceSkill/g)?.length, 2);
+  assert.equal(generalRunner.match(/skill: effectiveTraceSkill/g)?.length, 3);
   assert.match(agentDebugRunner, /tagSkill: AGENT_DEBUG_SKILL_NAME/);
   assert.match(diagnosisRoute, /tagSkill: 'agent-debug-diagnosis'/);
 });
@@ -219,7 +219,7 @@ test('agent-debug aborts provider prompts after prolonged heartbeat-only executi
   assert.match(generalRunner, /event\.type !== 'server\.connected' && event\.type !== 'server\.heartbeat'/);
   assert.match(generalRunner, /progressController\.abort/);
   assert.match(generalRunner, /signal: progressController\.signal/);
-  assert.match(client, /sendPrompt\(sessionId, payload, \{ signal \}\)/);
+  assert.match(client, /sendPrompt\(sessionId, payload, \{\s*signal: executionSignal/);
   assert.match(agentDebugRunner, /AGENT_DEBUG_AGENT_PROGRESS_TIMEOUT_MS \|\| 10 \* 60_000/);
   assert.match(agentDebugRunner, /AGENT_DEBUG_AGENT_TIMEOUT_MS \|\| 45 \* 60_000/);
 });
