@@ -1,16 +1,43 @@
 'use strict'
 
 const fs = require('node:fs/promises')
+const net = require('node:net')
 const path = require('node:path')
 const { DockerImageStore } = require('./image-pool-docker.cjs')
 const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
 const { ServiceControl, readJson, recordManagedImage } = require('./service-control.cjs')
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
+const MANAGEMENT_PROTOCOL_VERSION = 2
+
+function imagePoolCommand(dataDir, command, options = {}) {
+  return new Promise((resolve, reject) => {
+    const socket = path.join(dataDir, 'image-pool', 'manager.sock')
+    const connection = net.connect(socket)
+    let body = ''
+    connection.setEncoding('utf8')
+    connection.setTimeout(15 * 60_000, () => connection.destroy(new Error('Image pool management command timed out')))
+    connection.once('connect', () => connection.write(`${JSON.stringify({ version: 1, command, ...options })}\n`))
+    connection.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 16 * 1024 * 1024) connection.destroy(new Error('Image pool management response exceeds limit'))
+    })
+    connection.once('end', () => {
+      try {
+        const response = JSON.parse(body)
+        if (!response.ok) return reject(Object.assign(new Error(response.error?.message || 'Image pool command failed'), { code: response.error?.code }))
+        resolve(response.result)
+      } catch (error) { reject(error) }
+    })
+    connection.once('error', (error) => reject(Object.assign(new Error(`Image pool Controller is unavailable: ${error.message}`), { code: 'IMAGE_POOL_CONTROLLER_UNAVAILABLE' })))
+  })
+}
 
 async function manage(options) {
   const { dataDir, instance, dryRun = false, purge = false, mode = 'stop' } = options
   if (!/^[A-Za-z0-9_.-]+$/.test(instance || '')) throw new Error('Invalid evaluator instance')
+  if (mode === 'images-list') return imagePoolCommand(dataDir, 'list')
+  if (mode === 'images-purge') return imagePoolCommand(dataDir, 'purge', { dryRun })
   const docker = options.docker || new DockerImageStore()
   const control = new ServiceControl(dataDir)
   const journal = new EvaluationJobJournal(dataDir)
@@ -141,14 +168,21 @@ async function manage(options) {
 
 if (require.main === module) {
   const args = new Set(process.argv.slice(2))
+  const modes = ['--start', '--images-list', '--images-purge'].filter((flag) => args.has(flag))
+  if (modes.length > 1) {
+    console.error('Only one evaluator management mode may be selected')
+    process.exitCode = 1
+  } else {
+    const mode = args.has('--start') ? 'start' : args.has('--images-list') ? 'images-list' : args.has('--images-purge') ? 'images-purge' : 'stop'
   manage({ dataDir: '/data', instance: process.env.EVALUATOR_INSTANCE_ID,
     volume: process.env.EVALUATOR_VOLUME, imageReference: process.env.EVALUATOR_IMAGE_REFERENCE,
-    mode: args.has('--start') ? 'start' : 'stop', dryRun: args.has('--dry-run'), purge: args.has('--purge-images') })
+    mode, dryRun: args.has('--dry-run'), purge: args.has('--purge-images') })
     .then((result) => {
       console.log(JSON.stringify(result, null, 2))
       for (const record of result.controllerImages || []) console.log(`CONTROLLER_IMAGE\t${record.id}\t${record.reference}`)
       if (!result.dryRun && (result.skipped?.length || result.stopped === false)) process.exitCode = 2
     }).catch((error) => { console.error(error.message); process.exitCode = 1 })
+  }
 }
 
-module.exports = { manage }
+module.exports = { MANAGEMENT_PROTOCOL_VERSION, manage, imagePoolCommand }

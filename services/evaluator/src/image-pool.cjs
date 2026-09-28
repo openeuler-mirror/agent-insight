@@ -105,7 +105,7 @@ class BenchmarkImagePool {
       })
       if (live) throw poolError('IMAGE_POOL_ALREADY_RUNNING', '同一数据目录已有镜像池管理入口', false)
       await fs.unlink(socket).catch((error) => { if (error.code !== 'ENOENT') throw error })
-      this.lockServer = net.createServer((connection) => connection.destroy())
+      this.lockServer = net.createServer((connection) => this.handleManagementConnection(connection))
       await new Promise((resolve, reject) => { this.lockServer.once('error', reject); this.lockServer.listen(socket, resolve) })
       this.lockServer.unref()
     }
@@ -133,14 +133,105 @@ class BenchmarkImagePool {
       this.log({ event: 'recovery_required', message: '未确认结束的 Docker 拉取仍占用预算；暂停新拉取，已有镜像仍可使用' })
     }
     await this.save()
+    this.ready = true
     this.timer = setInterval(() => { void this.maintain().catch((error) => this.log({ event: 'maintenance_failed', code: error.code, message: error.message })) }, 30_000)
     this.timer.unref()
   }
 
   async close() {
     this.closed = true
+    this.ready = false
     clearInterval(this.timer)
     if (this.lockServer) await new Promise((resolve) => this.lockServer.close(resolve))
+  }
+
+  handleManagementConnection(connection) {
+    connection.setEncoding('utf8')
+    let body = ''
+    let handled = false
+    const respond = (payload) => { if (!connection.destroyed) connection.end(`${JSON.stringify(payload)}\n`) }
+    connection.setTimeout(15 * 60_000, () => connection.destroy())
+    connection.on('data', (chunk) => {
+      if (handled) return
+      body += chunk
+      if (body.length > 4096) {
+        handled = true
+        respond({ ok: false, error: { code: 'IMAGE_POOL_COMMAND_INVALID', message: '镜像池管理命令过长' } })
+        return
+      }
+      const newline = body.indexOf('\n')
+      if (newline < 0) return
+      handled = true
+      let request
+      try { request = JSON.parse(body.slice(0, newline)) }
+      catch { respond({ ok: false, error: { code: 'IMAGE_POOL_COMMAND_INVALID', message: '镜像池管理命令格式不合法' } }); return }
+      void this.managementCommand(request).then((result) => respond({ ok: true, result }), (error) => respond({
+        ok: false, error: { code: error.code || 'IMAGE_POOL_COMMAND_FAILED', message: error.message || String(error) },
+      }))
+    })
+    connection.on('error', () => {})
+  }
+
+  async managementCommand(request) {
+    if (!this.ready || this.closed) throw poolError('IMAGE_POOL_NOT_READY', '镜像池尚未就绪')
+    if (!request || request.version !== 1) throw poolError('IMAGE_POOL_COMMAND_INVALID', '镜像池管理协议版本不支持', false)
+    if (request.command === 'list') return this.inventory()
+    if (request.command === 'purge') return this.purgeIdle({ dryRun: request.dryRun === true })
+    throw poolError('IMAGE_POOL_COMMAND_INVALID', '不支持的镜像池管理命令', false)
+  }
+
+  imageStatus(entry, protectedKeys = this.protectedKeys()) {
+    if (!entry.ownedReferences.length && !entry.ownedDigests.length) return 'reused'
+    if (entry.uncertain || entry.deleting) return 'uncertain'
+    if (Object.keys(entry.users).length) return 'in-use'
+    if (entry.keys.some((key) => this.demandKeys.has(key) || this.inflight.has(key))) return 'preparing'
+    if (entry.keys.some((key) => protectedKeys.has(key))) return 'prepared'
+    if (entry.retryAfter > this.now()) return 'retry-wait'
+    return 'idle'
+  }
+
+  async inventory() {
+    const snapshot = await this.atomic(async () => JSON.parse(JSON.stringify(this.state)))
+    const protectedKeys = this.protectedKeys()
+    const images = []
+    for (const entry of Object.values(snapshot.images)) {
+      const actual = await this.store.inspect(entry.id)
+      images.push({
+        id: entry.id,
+        bytes: entry.bytes,
+        estimateQuality: entry.estimateQuality,
+        status: this.imageStatus(entry, protectedKeys),
+        owned: Boolean(entry.ownedReferences.length || entry.ownedDigests.length),
+        ownedReferences: entry.ownedReferences,
+        ownedDigests: entry.ownedDigests,
+        references: actual?.references || [],
+        digests: actual?.digests || [],
+        users: Object.values(entry.users || {}),
+        lastUsedAt: entry.lastUsedAt,
+      })
+    }
+    images.sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.id.localeCompare(b.id))
+    return {
+      operations: Object.keys(snapshot.operations || {}).length,
+      windows: Object.values(snapshot.windows || {}).filter((window) => window.expiresAt > this.now() && window.specs.length).length,
+      images,
+    }
+  }
+
+  async purgeIdle({ dryRun = false } = {}) {
+    const before = await this.inventory()
+    const candidates = before.images.filter((image) => image.status === 'idle')
+    if (dryRun || before.operations) {
+      return { dryRun, blockedByOperations: before.operations, candidates, removed: [], images: before.images }
+    }
+    const removed = []
+    while (!this.closed) {
+      const priorIds = new Set(Object.keys(this.state.images))
+      if (!await this.evictOne(false)) break
+      for (const id of priorIds) if (!this.state.images[id] && !removed.includes(id)) removed.push(id)
+    }
+    const after = await this.inventory()
+    return { dryRun: false, blockedByOperations: 0, candidates, removed, images: after.images }
   }
 
   key(spec) { return createHash('sha256').update(JSON.stringify([normalizeArch(spec.arch), spec.references])).digest('hex') }

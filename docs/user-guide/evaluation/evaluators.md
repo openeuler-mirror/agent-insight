@@ -15,7 +15,7 @@ description: "评估器管理、创建流程与功能说明"
 > **Note**
 > 预置评估器和自建评估器都可以在全局实验第 4 步选择。系统会根据评估器使用的变量和适用范围，检查已选 Case 是否满足预期输出、数据集输入、Tool/Skill 目录及数据集类型等前置条件。
 
-Benchmark 评估器在 **预置评估器** 页展示，即使对应数据集尚未导入也能查看卡片和详情；可用 **Benchmark** 场景或标签筛选。卡片表示接入包已注册，不代表独立评测服务当前在线。选择对应 Benchmark 数据集后，系统根据接入包的 `evaluatorKey` 自动绑定评估器，名称、用途、运行方式、输出说明和主指标均来自 Presentation。该评估器不能取消，也不能用于普通 Trace 实验；普通评估器仍可追加，但依赖 `reference_output` 的评估器不可选。需要独立评测服务的接入包，其部署方式见[跑通第一次评测](./quickstart.md#swe-bench-等容器-benchmark-的评测服务)。
+Benchmark 评估器在 **预置评估器** 页展示，即使对应数据集尚未导入也能查看卡片和详情；可用 **Benchmark** 场景或标签筛选。卡片表示接入包已注册，不代表独立评测服务当前在线。选择对应 Benchmark 数据集后，系统根据接入包的 `evaluatorKey` 自动绑定评估器，名称、用途、运行方式、输出说明和主指标均来自 Presentation。该评估器不能取消，也不能用于普通 Trace 实验；普通评估器仍可追加，但依赖 `reference_output` 的评估器不可选。需要独立评测服务的接入包，其部署方式见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md)。
 
 ## 评估器承担的职责
 

@@ -42,8 +42,9 @@ flowchart LR
 | 3 | [执行器](executor.md) | 工作区准备、Agent Runtime、Artifact 收集与回调 |
 | 4 | [提交校验与评测下发](evaluation-dispatch.md) | Patch 校验、EvaluationJob 冻结和评测 Outbox |
 | 5 | [评测服务](evaluator.md) | Controller、统一文件协议、官方 Harness 和证据回传 |
-| 6 | [结果处理](result-processing.md) | Raw Result、归一化、固定分母聚合与查询 |
-| 7 | [前端接入](frontend-development-plan.md) | 统一向导、详情、Artifact、重试/重评和趋势 |
+| 6 | [镜像池](image-pool.md) | 跨 Benchmark 镜像缓存、空间控制、淘汰与预取 |
+| 7 | [结果处理](result-processing.md) | Raw Result、归一化、固定分母聚合与查询 |
+| 8 | [前端接入](frontend-development-plan.md) | 统一向导、详情、Artifact、重试/重评和趋势 |
 
 ## 3. 代码落点
 
@@ -58,7 +59,7 @@ services/executor/                 由常驻客户端加载的通用执行器 Ru
 services/evaluator/                独立部署的 Evaluator Controller
 src/components/eval/               实验向导、详情、趋势和 Artifact 交互
 scripts/benchmark/                 Catalog 与数据集工具
-scripts/start-evaluator.sh          Evaluator 部署入口
+scripts/evaluator.sh                Evaluator 管理入口（start/status/stop/images）
 scripts/evaluator-doctor.sh         Evaluator Doctor 与 Gold Smoke
 ```
 

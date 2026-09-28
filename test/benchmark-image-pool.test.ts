@@ -9,6 +9,7 @@ import { sweBenchAdapter } from '../benchmarks/swe-bench/adapter'
 
 const { BenchmarkImagePool, imagePoolConfig } = require('../services/evaluator/src/image-pool.cjs')
 const { poolError, DockerImageStore, desktopSpace } = require('../services/evaluator/src/image-pool-docker.cjs')
+const { imagePoolCommand } = require('../services/evaluator/src/manage.cjs')
 const { describeImages } = require('../benchmarks/swe-bench/evaluator/images.cjs')
 
 type Image = { id: string; size: number; arch: string; references: string[]; digests: string[] }
@@ -149,6 +150,67 @@ test('preexisting local images can be used but are not silently adopted for dele
   assert.equal(store.pulls.length, 0)
   assert.equal(await pool.evictOne(true), false)
   assert.equal((await pool.budget()).occupied, 0)
+})
+
+test('online image management lists ownership and purges only idle pool-owned images', async (t) => {
+  const { pool, store } = await fixture(t)
+  const idle = await cache(pool, 'idle-managed')
+  const [active] = await pool.acquire(owner('active-managed'), [spec('active-managed')])
+  store.add(spec('reused').references[0])
+  const reused = await cache(pool, 'reused')
+  const listed = await pool.inventory()
+  assert.equal(listed.images.find((image: any) => image.id === idle.imageId).status, 'idle')
+  assert.equal(listed.images.find((image: any) => image.id === active.imageId).status, 'in-use')
+  assert.equal(listed.images.find((image: any) => image.id === reused.imageId).status, 'reused')
+  const preview = await pool.purgeIdle({ dryRun: true })
+  assert.deepEqual(preview.candidates.map((image: any) => image.id), [idle.imageId])
+  assert.deepEqual(preview.removed, [])
+  const purged = await pool.purgeIdle()
+  assert.deepEqual(purged.removed, [idle.imageId])
+  assert.ok(await store.inspect(active.imageId))
+  assert.ok(await store.inspect(reused.imageId))
+})
+
+test('online purge does not delete while a Docker pull operation is recorded', async (t) => {
+  const { pool, store } = await fixture(t)
+  await cache(pool, 'idle-during-pull')
+  pool.state.operations.pull = { bytes: 100, startedAt: Date.now(), uncertain: false }
+  const result = await pool.purgeIdle()
+  assert.equal(result.blockedByOperations, 1)
+  assert.deepEqual(result.removed, [])
+  assert.equal(store.removed.length, 0)
+})
+
+test('live management protocol serializes list and dry-run purge through the Controller pool', async (t) => {
+  const { pool, store } = await fixture(t)
+  pool.ready = true
+  await cache(pool, 'protocol-managed')
+  const listed = await pool.managementCommand({ version: 1, command: 'list' })
+  assert.equal(listed.images.length, 1)
+  const preview = await pool.managementCommand({ version: 1, command: 'purge', dryRun: true })
+  assert.equal(preview.candidates.length, 1)
+  assert.equal(store.removed.length, 0)
+})
+
+test('management helper reaches the live pool over its Unix socket', async (t) => {
+  const directory = await fs.mkdtemp('/tmp/benchmark-image-pool-control-')
+  const store = new FakeDocker()
+  const pool = new BenchmarkImagePool({ dataDir: directory, store, estimator: { estimate: async () => ({ bytes: 100, source: 'test' }) },
+    config, log: () => {} })
+  try {
+    await pool.initialize()
+  } catch (error: any) {
+    await fs.rm(directory, { recursive: true, force: true })
+    if (error.code === 'EPERM') return t.skip('Unix sockets are disabled by the test sandbox')
+    throw error
+  }
+  t.after(async () => { await pool.close(); await fs.rm(directory, { recursive: true, force: true }) })
+  await cache(pool, 'socket-managed')
+  const listed = await imagePoolCommand(directory, 'list')
+  assert.equal(listed.images.length, 1)
+  const preview = await imagePoolCommand(directory, 'purge', { dryRun: true })
+  assert.equal(preview.candidates.length, 1)
+  assert.equal(store.removed.length, 0)
 })
 
 test('capacity reserve scales with actual free space without a fixed temporary-space floor', async (t) => {

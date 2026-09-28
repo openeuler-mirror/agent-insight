@@ -9,8 +9,8 @@ const { manage } = require('../services/evaluator/src/manage.cjs')
 const { ServiceControl, recordManagedImage } = require('../services/evaluator/src/service-control.cjs')
 const { EvaluationJobJournal, atomicWriteJson } = require('../services/evaluator/src/job-journal.cjs')
 
-test('management uses bundled code without a host source mount for start, stop and purge', () => {
-  for (const args of ['', '--start', '--purge-images', '--purge-images --dry-run']) {
+test('management uses bundled code without a host source mount for service and image-pool commands', () => {
+  for (const args of ['', '--start', '--purge-images', '--purge-images --dry-run', '--images-list', '--images-purge', '--images-purge --dry-run']) {
     const result = spawnSync('bash', ['-c', `
 set -eu
 source "$1"
@@ -25,6 +25,7 @@ evaluator_management_run sha256:test ${args}
     const calls = result.stderr.trim().split('\n')
     assert.equal(calls.length, 2)
     assert.match(calls[0], /--read-only/)
+    assert.match(calls[0], /MANAGEMENT_PROTOCOL_VERSION !== 2/)
     assert.doesNotMatch(calls[0], /--mount/)
     assert.match(calls[1], /sha256:test \/app\/services\/evaluator\/src\/manage\.cjs/)
     assert.match(calls[1], /type=volume,src=test-data,dst=\/data,readonly/)
@@ -43,7 +44,7 @@ evaluator_management_run sha256:legacy --purge-images
 `, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /尚未执行停止或清理/)
-  assert.match(result.stderr, /start-evaluator.sh/)
+  assert.match(result.stderr, /evaluator\.sh start/)
   assert.doesNotMatch(result.stderr, /--mount|--purge-images/)
 })
 
