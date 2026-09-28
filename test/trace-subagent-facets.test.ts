@@ -9,6 +9,7 @@ test('subagent type facets count owned child executions while other facets retai
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-facet-'));
     const saved = { ...process.env };
     delete process.env.DB_HOST;
+    delete process.env.AGENT_INSIGHT_DATA_DIR;
     process.env.AGENT_INSIGHT_HOME = dir;
     process.env.DATABASE_URL = `file:${path.join(dir, 'test.db')}`;
     fs.writeFileSync(path.join(dir, 'test.db'), '');
