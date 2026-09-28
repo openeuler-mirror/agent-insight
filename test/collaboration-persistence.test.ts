@@ -359,7 +359,14 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     where: { eventDbId: created.eventDbId },
   });
   assert.equal(resolutions.every(row => row.linkState === 'linked'), true);
-  assert.equal(resolutions.find(row => row.side === 'from')?.anchorState, 'candidate');
+  const candidateResolution = resolutions.find(row => row.side === 'from');
+  assert.equal(candidateResolution?.anchorState, 'candidate');
+  assert.deepEqual(JSON.parse(candidateResolution?.anchorJson || '{}').position, {
+    interactionIndex: 0,
+    callIndex: 0,
+    callKey: 'id:spawn-call',
+    recordSource: 'tool_calls',
+  });
 
   await prismaRaw.$executeRawUnsafe(
     'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?)',
@@ -407,6 +414,10 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.deepEqual(
     orderedAnchors.map(row => JSON.parse(row.anchorJson || '{}').orderIndex).sort(),
     [1, 2],
+  );
+  assert.deepEqual(
+    orderedAnchors.map(row => JSON.parse(row.anchorJson || '{}').position.callIndex).sort(),
+    [0, 1],
   );
 
   const source = await prismaRaw.goalPlusSource.create({

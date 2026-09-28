@@ -186,7 +186,7 @@ class MctsProxyCore {
       updatedAt: startedAt,
       runtimes: new Map(),
       checkpoints: new Map(),
-      taskEdges: new Set(),
+      taskEdges: new Map(),
       summaryCount: 0,
       boundRuntimeCount: 0,
       projectionTruncated: false,
@@ -282,7 +282,10 @@ class MctsProxyCore {
     } else if (operation === "files/read" && runtimeId) {
       const runtime = this.ensureRuntime(run, runtimeId);
       runtime.fileReads += 1;
-      if (runtime.hasTurn) await this.emitAgent(run, runtime);
+      if (runtime.hasTurn) {
+        await this.emitAgent(run, runtime);
+        await this.maybeEmitParentEdge(run, runtime, runtime.updatedAt);
+      }
     } else if ((operation === "close" || operation === "cancel") && runtimeId) {
       const runtime = this.ensureRuntime(run, runtimeId);
       runtime.closed = true;
@@ -304,7 +307,10 @@ class MctsProxyCore {
       runtime.hasCheckpoint = true;
       runtime.updatedAt = response.endedAt || this.now();
       run.checkpoints.set(checkpointKey(run.runKey, body.checkpoint_id), runtime.key);
-      if (runtime.hasTurn) await this.emitAgent(run, runtime);
+      if (runtime.hasTurn) {
+        await this.emitAgent(run, runtime);
+        await this.maybeEmitParentEdge(run, runtime, runtime.updatedAt);
+      }
     } else if (context.operation === "turns" && context.runtimeId && text(body.turn_id)) {
       const runtime = this.ensureRuntime(run, context.runtimeId);
       const turnKey = `turn.${sha256(`${runtime.key}\0${body.turn_id}`).slice(0, 32)}`;
@@ -394,14 +400,16 @@ class MctsProxyCore {
       : runtime.openType === "open" ? "coordinator" : undefined;
     if (!parentKey || parentKey === runtime.key) return;
     const edgeKey = `${parentKey}->${runtime.key}`;
-    if (run.taskEdges.has(edgeKey)) return;
-    run.taskEdges.add(edgeKey);
     const parent = parentKey === "coordinator"
       ? { key: "coordinator", sessionId: run.sessionId }
       : run.runtimes.get(parentKey);
     if (!parent || (parentKey !== "coordinator" && !parent.bindingQueued)) return;
     const spanId = stableSpanId(`${run.runKey}\0${edgeKey}`);
     const role = roleFor(runtime);
+    const previous = run.taskEdges.get(edgeKey);
+    if (previous?.role === role) return;
+    const edgeStartedAt = previous?.startedAt || observedAt;
+    run.taskEdges.set(edgeKey, { role, startedAt: edgeStartedAt });
     await this.writer.append({
       sessionId: parent.sessionId,
       traceId: stableTraceId(FRAMEWORK, parent.sessionId),
@@ -410,8 +418,8 @@ class MctsProxyCore {
       kind: "tool",
       name: "tool.task",
       status: "success",
-      startTimeMs: observedAt,
-      endTimeMs: observedAt,
+      startTimeMs: edgeStartedAt,
+      endTimeMs: edgeStartedAt,
       tool: {
         name: "task",
         type: "subagent",
@@ -420,16 +428,18 @@ class MctsProxyCore {
       },
       attributes: { "mcts.synthetic": true, "mcts.child.session_id": runtime.key },
     });
-    await this.collaborationOutbox?.enqueueEvent({
-      collaborationId: run.collaborationId,
-      eventId: `edge.${sha256(edgeKey).slice(0, 40)}`,
-      fromSessionId: parent.key,
-      toSessionId: runtime.key,
-      description: role === "unknown" ? "MCTS root runtime" : `MCTS ${role} runtime`,
-      observedAt: new Date(observedAt).toISOString(),
-      content: `evidence=${runtime.parentCheckpointHash ? "checkpoint-lineage" : "open-turn"}; role=${role}`,
-      fromLocator: { recordType: "tool", name: "task" },
-    });
+    if (!previous) {
+      await this.collaborationOutbox?.enqueueEvent({
+        collaborationId: run.collaborationId,
+        eventId: `edge.${sha256(edgeKey).slice(0, 40)}`,
+        fromSessionId: parent.key,
+        toSessionId: runtime.key,
+        description: role === "unknown" ? "MCTS root runtime" : `MCTS ${role} runtime`,
+        observedAt: new Date(edgeStartedAt).toISOString(),
+        content: `evidence=${runtime.parentCheckpointHash ? "checkpoint-lineage" : "open-turn"}; role=${role}`,
+        fromLocator: { recordType: "tool", name: "task" },
+      });
+    }
   }
 
   async emitAgent(run, runtime, terminal = false) {
@@ -529,7 +539,7 @@ class MctsProxyCore {
       startTimeMs: run.updatedAt,
       endTimeMs: run.updatedAt,
       tool: { name: `mcts.summary.${parsed.type}`, type: "stdout-summary", arguments: parsed, result: parsed },
-      attributes: { "mcts.summary.unbound": true },
+      attributes: { "mcts.summary.unbound": true, "mcts.synthetic": true },
     });
   }
 
@@ -543,7 +553,7 @@ class MctsProxyCore {
       startedAt: run.startedAt,
       updatedAt: run.updatedAt,
       checkpoints: [...run.checkpoints.entries()],
-      taskEdges: [...run.taskEdges],
+      taskEdges: [...run.taskEdges.entries()],
       runtimes: [...run.runtimes.values()].map(runtime => ({
         key: runtime.key,
         sessionId: runtime.sessionId,

@@ -109,6 +109,17 @@ test('MCTS proxy core reconstructs only confirmed checkpoint runtime edges', asy
     event.kind === 'llm'
     && (event.attributes as Record<string, unknown>)['mcts.reasoning'] === 'reasoning'
   )), true);
+  const parentTaskSnapshots = writer.events.filter(event => (
+    event.kind === 'tool'
+    && event.name === 'tool.task'
+    && event.sessionId === [...core.runs.values()][0].sessionId
+  ));
+  assert.equal(parentTaskSnapshots.length, 2);
+  assert.equal(parentTaskSnapshots[0].spanId, parentTaskSnapshots[1].spanId);
+  assert.equal(
+    ((parentTaskSnapshots.at(-1)?.tool as { arguments: { subagent_type: string } }).arguments.subagent_type),
+    'solver-initial',
+  );
   assert.doesNotMatch(JSON.stringify([...core.runs.values()]), /raw-secret-checkpoint|secret prompt|union-sensitive-run-id/);
   assert.equal(roleFor([...core.runs.values()][0].runtimes.get(runtimeKey('runtime-child'))), 'solver-child');
 });
@@ -127,6 +138,19 @@ test('MCTS stdout parser accepts only the documented stable summary lines', () =
   assert.equal(inspectableJson('/api/v1/sessions/files/read'), true);
   assert.equal(inspectableJson('/api/v1/sessions/exec'), false);
   assert.equal(inspectableJson('/api/v1/sessions/files/write'), false);
+});
+
+test('MCTS stdout summaries are synthetic observations', async () => {
+  const writer = new MemoryWriter();
+  const core = new MctsProxyCore({ writer, now: () => 1_700_000_000_000 });
+  await core.observeRequest({
+    id: 'open', path: '/api/v1/sessions/open', startedAt: 1_700_000_000_000,
+    body: requestBody('summary-run', { runtime_id: 'runtime-summary' }),
+  });
+  await core.observeStdoutLine('▶ choose  iter=2  node=root/c0');
+  const summary = writer.events.find(event => event.name === 'mcts.summary.choose');
+  assert.equal((summary?.attributes as Record<string, unknown>)['mcts.summary.unbound'], true);
+  assert.equal((summary?.attributes as Record<string, unknown>)['mcts.synthetic'], true);
 });
 
 test('MCTS role classifier uses structural evidence and keeps uncertain runtimes unknown', () => {

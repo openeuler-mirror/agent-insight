@@ -6,6 +6,10 @@ import { upsertCollaborationEndpointResolution, type CollaborationEndpointSide }
 type LocatorMatch = {
   recordType: 'tool' | 'shell';
   recordId?: string;
+  interactionIndex: number;
+  callIndex: number;
+  callKey: string;
+  recordSource: 'tool_calls';
   startedAt?: number;
   trustedTime: boolean;
 };
@@ -95,11 +99,15 @@ export function findCollaborationLocatorMatches(
       matches.push({
         recordType: locator.recordType,
         recordId: typeof call.id === 'string' && call.id ? call.id : undefined,
+        interactionIndex,
+        callIndex,
+        callKey: typeof call.id === 'string' && call.id
+          ? `id:${call.id}`
+          : `position:${interactionIndex}:${callIndex}`,
+        recordSource: 'tool_calls',
         startedAt: timing.value,
         trustedTime: timing.trusted,
       });
-      void interactionIndex;
-      void callIndex;
     });
   });
   return matches;
@@ -154,6 +162,21 @@ async function setAnchor(
     where: { eventDbId_side: { eventDbId, side: 'from' } },
     data: { anchorState: state, anchorJson: JSON.stringify(value) },
   });
+}
+
+function locatedAnchor(match: LocatorMatch, candidateCount: number): Record<string, unknown> {
+  return {
+    candidateCount,
+    matchedRecord: match.recordId
+      ? { recordType: match.recordType, recordId: match.recordId }
+      : undefined,
+    position: {
+      interactionIndex: match.interactionIndex,
+      callIndex: match.callIndex,
+      callKey: match.callKey,
+      recordSource: match.recordSource,
+    },
+  };
 }
 
 async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
@@ -216,10 +239,7 @@ async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
   }
   if (group.length === 1 && matches.length === 1) {
     await setAnchor(event.id, 'candidate', {
-      candidateCount: 1,
-      matchedRecord: matches[0].recordId
-        ? { recordType: matches[0].recordType, recordId: matches[0].recordId }
-        : undefined,
+      ...locatedAnchor(matches[0], 1),
       message: '定位条件唯一命中，作为候选位置展示',
     });
     return;
@@ -245,11 +265,8 @@ async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
   await Promise.all(orderedEvents.map((item, index) => {
     const match = orderedCalls[index];
     return setAnchor(item.id, 'time_ordered', {
-      candidateCount: matches.length,
+      ...locatedAnchor(match, matches.length),
       orderIndex: index + 1,
-      matchedRecord: match.recordId
-        ? { recordType: match.recordType, recordId: match.recordId }
-        : undefined,
       message: `同组 ${matches.length} 次调用与关系事件按可信时间顺序推定，后续数据到达后会重算`,
     });
   }));

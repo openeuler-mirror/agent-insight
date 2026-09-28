@@ -10,7 +10,7 @@ Agent Insight 可以在不修改 MCTS 源码的前提下采集 `/Users/qzh/huawe
 - `checkpoint(A) → load(checkpoint, B) → turn(B)` 证实的 Runtime 父子关系；
 - MCTS stdout 中稳定的 startup、choose、node score、final tree 和 official PASS/FAIL 摘要。
 
-Runtime 角色按可验证行为标记为 `solver-initial`、`solver-child`、`author`、`selector`、`memory-helper` 或 `unknown`。无法可靠识别时保留 `unknown`，不会按并发先后猜测。
+Runtime 角色按可验证行为标记为 `solver-initial`、`solver-child`、`author`、`selector`、`memory-helper` 或 `unknown`。采集初期允许暂时显示 `unknown`；后续出现 checkpoint、load、文件读取或 profile 证据后，最终角色会覆盖早期未知状态。始终没有可靠证据时才保留 `unknown`，不会按并发先后猜测。
 
 ## 安装
 
@@ -79,6 +79,8 @@ Agent Insight 链路追踪
 ```
 
 每个 Runtime 使用独立 Trace Session，父子关系通过现有跨 Session binding/event 接口上报。运行期间每 10 秒尝试增量上传，结束时再做一次有界刷新。关系数据和 Trace 可乱序到达；网络失败时本地 spool/outbox 会保留并在后续刷新时重试。
+
+父级的 TASK 行表示一次 Runtime 派生关系：关联成功后显示子 Trace 的真实耗时，关系尚未定位时显示 `-`，不会把瞬时关系事件误报为 `0ms`。stdout 调度摘要只显示对应的观测/Tool 行，不代表发生了一次模型调用，也不会额外生成 LLM 行。
 
 ## 隐私和边界
 

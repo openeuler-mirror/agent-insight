@@ -126,6 +126,8 @@
 
 > 2026-09-23 working-tree overlay：新增 MCTS xGovernor 非侵入式采集器及独立安装项。外部启动器只覆盖子进程的 `XGOVERNOR_BASE_URL`，透明 HTTP/SSE 网关采集标准化 turn/tool/usage，以 checkpoint HMAC ledger 重建 Runtime 血缘，并通过既有 OTLP 与 Collaboration API 展示；MCTS 源码和原生 Execution 父子树均不修改。安装页和两条 setup 路由以 `mcts-xgovernor` 独立分发校验过的 ZIP，不隐式安装 Pi/xiaoO；stdout 仅采集稳定摘要，node/runtime 不做时间推断。
 
+> 2026-09-28 working-tree overlay：MCTS Runtime 角色聚合改为优先使用最新的非 `unknown` Agent 快照，稳定 TASK span 会在角色证据到达后更新；stdout summary 作为 synthetic Tool 观测，不再派生虚假 LLM。reported anchor 持久化精确 interaction/call 位置，TASK 成功挂载后显示子 Trace 耗时，未挂载时显示 `-`。
+
 **如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

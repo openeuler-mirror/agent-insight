@@ -66,7 +66,7 @@ main Agent
             └─ Tool / Skill / MCP
 ```
 
-虚拟 TASK 追加在主 Trace 原生交互之后。关系能证明编排成员身份，但不一定能证明 worker 位于哪一次原生工具调用；`anchorState != confirmed` 时前端必须显示未确认定位，不能伪造调用层级。
+虚拟 TASK 追加在主 Trace 原生交互之后。持久化 resolver 在唯一候选或可信时间排序命中时同时保存 `interactionIndex`、`callIndex`、`callKey` 和可用的 `recordId`，展示树据此挂载到具体调用；候选或时间推定仍显示对应的不确定性标签。没有位置证据时只保留 Agent 级关系，不能伪造调用层级。已挂载 TASK 的展示耗时取子 Trace，未挂载的瞬时关系事件显示 `-`。
 
 `full`、`structure`、`interactions` 和按索引读取单条 interaction 使用同一确定性投影。合并后的交互保留 `_collaboration` 源 Session/索引信息；`_payloadVersion` 仍根据原正文计算，前端拒绝刷新前发起或版本不匹配的异步加载结果。
 

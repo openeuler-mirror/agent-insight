@@ -776,8 +776,8 @@ export default function AgentTraceView({
                     return;
                 }
                 const evKey = eventKey(node.id, idx);
-                const dur = childNode
-                    ? childNode.stats.durationMs ?? undefined
+                const dur = ev.kind === 'task'
+                    ? childNode?.stats.durationMs
                     : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
                 const tok = ev.usage?.total || 0;
                 const label = ev.kind === 'task' && ev.spawnedChildId
@@ -1339,8 +1339,8 @@ function UnifiedSpanTree({
 
         const hasChildren = entry.children.length > 0 || !!childNode;
         const isEvExpanded = hasChildren && expandedKeys.has(evKey);
-        const evDur = childNode
-            ? childNode.stats.durationMs
+        const evDur = ev.kind === 'task'
+            ? childNode?.stats.durationMs
             : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
         const evTok = ev.usage?.total || 0;
         const evIsSlow = (evDur ?? 0) > SLOW_MS;
@@ -1544,8 +1544,8 @@ function UnifiedEventRow({
     const evAnomalyHits = findEventAnomalies?.(event) ?? [];
 
     // Duration: for task events, use child agent duration
-    const spanDurationMs = event.kind === 'task' && childNode
-        ? childNode.stats.durationMs
+    const spanDurationMs = event.kind === 'task'
+        ? childNode?.stats.durationMs
         : (event.startedAt != null && event.completedAt != null)
             ? event.completedAt - event.startedAt
             : undefined;
@@ -2704,8 +2704,6 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
-    const dur = (event.startedAt != null && event.completedAt != null)
-        ? formatDuration(event.completedAt - event.startedAt) : null;
     const startClock = formatClockMs(event.startedAt);
     const endClock = formatClockMs(event.completedAt);
     const title = event.name || firstMeaningfulLine(event.summary) || km.label;
@@ -2713,6 +2711,12 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const spawnedChild = event.kind === 'task' && event.spawnedChildId
         ? node.children.find(c => c.id === event.spawnedChildId)
         : undefined;
+    const durationMs = event.kind === 'task'
+        ? spawnedChild?.stats.durationMs
+        : (event.startedAt != null && event.completedAt != null)
+            ? event.completedAt - event.startedAt
+            : undefined;
+    const dur = durationMs == null ? null : formatDuration(durationMs);
 
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')

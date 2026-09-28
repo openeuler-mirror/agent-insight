@@ -89,12 +89,16 @@ function dedupe(events: OtelTraceEvent[]): OtelTraceEvent[] {
   return [...bySpan.values(), ...unkeyed].sort((left, right) => left.startTimeMs - right.startTimeMs);
 }
 
+function latestConfirmedRole(events: OtelTraceEvent[]): string | undefined {
+  return [...events]
+    .sort((left, right) => endMs(right) - endMs(left))
+    .map(event => content(attributes(event)['mcts.role']))
+    .find(role => role !== undefined && role.toLowerCase() !== 'unknown');
+}
+
 function roleOf(events: OtelTraceEvent[]): string {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const role = content(attributes(events[index])['mcts.role']);
-    if (role) return role;
-  }
-  return 'unknown';
+  const agentRole = latestConfirmedRole(events.filter(event => semanticKind(event) === 'agent'));
+  return agentRole || latestConfirmedRole(events) || 'unknown';
 }
 
 function aggregate(sessionId: string, source: OtelTraceEvent[]): ExecutionRecord | null {
@@ -152,7 +156,10 @@ function aggregate(sessionId: string, source: OtelTraceEvent[]): ExecutionRecord
       agent: agentName,
       content: '',
       timestamp: new Date(startedAt).toISOString(),
-      trace_synthetic: attributes(event)['mcts.synthetic'] === true || attributes(event)['mcts.synthetic'] === 'true',
+      trace_synthetic: attributes(event)['mcts.synthetic'] === true
+        || attributes(event)['mcts.synthetic'] === 'true'
+        || attributes(event)['mcts.summary.unbound'] === true
+        || attributes(event)['mcts.summary.unbound'] === 'true',
       tool_calls: [call],
     });
   }
