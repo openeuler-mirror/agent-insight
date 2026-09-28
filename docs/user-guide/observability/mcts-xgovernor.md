@@ -6,7 +6,7 @@ Agent Insight 可以在不修改 MCTS 源码的前提下采集 `/Users/qzh/huawe
 
 - MCTS coordinator，以及每个真正提交过 turn 的 xGovernor Runtime；
 - xGovernor 标准化 turn 的输入、assistant 输出、模型、Token、状态与耗时；
-- `tool_activity` 的工具名、结果摘要和成功/失败状态；
+- `tool_activity` 的工具输入、结果摘要和成功/失败状态；
 - `checkpoint(A) → load(checkpoint, B) → turn(B)` 证实的 Runtime 父子关系；
 - MCTS stdout 中稳定的 startup、choose、node score、final tree 和 official PASS/FAIL 摘要。
 
@@ -80,7 +80,9 @@ Agent Insight 链路追踪
 
 每个 Runtime 使用独立 Trace Session，父子关系通过现有跨 Session binding/event 接口上报。运行期间每 10 秒尝试增量上传，结束时再做一次有界刷新。关系数据和 Trace 可乱序到达；网络失败时本地 spool/outbox 会保留并在后续刷新时重试。
 
-父级的 TASK 行表示一次 Runtime 派生关系：关联成功后显示子 Trace 的真实耗时，关系尚未定位时显示 `-`，不会把瞬时关系事件误报为 `0ms`。stdout 调度摘要只显示对应的观测/Tool 行，不代表发生了一次模型调用，也不会额外生成 LLM 行。
+父级的 TASK 行表示一次 Runtime 派生关系，不是另一次 LLM 调用。TASK 的 `session_id` 与子 Runtime 的逻辑 Session ID 精确一致时，子 Agent 会展开在该 TASK 下，并显示子 Trace 的真实耗时；关系尚未定位时显示 `-`，不会把瞬时关系事件误报为 `0ms`。stdout 调度摘要只显示对应的观测/Tool 行，不代表发生了一次模型调用，也不会额外生成 LLM 行。
+
+xGovernor 把工具输入放在 `tool_activity(begin)`、把结果放在 `tool_activity(end)`。透明代理按同一个 activity ID 合并两端，因此 Bash 等工具的 Input 显示实际结构化参数，Output 显示执行结果。若上游未发送 begin，Input 保持空对象并在 Trace 元数据中标记采集缺失；采集到的字段仍经过通用密钥、账号和本地路径脱敏。
 
 ## 隐私和边界
 

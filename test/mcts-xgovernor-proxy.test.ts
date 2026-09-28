@@ -92,6 +92,34 @@ test('MCTS proxy core reconstructs only confirmed checkpoint runtime edges', asy
   });
   await core.observeSse({
     runtimeId: 'runtime-child', turnId: 'turn-child-id', receivedAt: now,
+    event: {
+      kind: 'tool_activity', activity_id: 'bash-call', phase: 'begin', name: 'bash', status: 'running',
+      summary: JSON.stringify({ command: 'pwd' }),
+    },
+  });
+  await core.observeSse({
+    runtimeId: 'runtime-child', turnId: 'turn-child-id', receivedAt: now,
+    event: {
+      kind: 'tool_activity', activity_id: 'bash-call', phase: 'end', name: 'bash', status: 'succeeded',
+      summary: JSON.stringify({ content: [{ type: 'text', text: '/workspace' }] }),
+    },
+  });
+  await core.observeSse({
+    runtimeId: 'runtime-child', turnId: 'turn-child-id', receivedAt: now,
+    event: {
+      kind: 'tool_activity', activity_id: 'late-input', phase: 'end', name: 'read', status: 'succeeded',
+      summary: JSON.stringify({ content: 'source' }),
+    },
+  });
+  await core.observeSse({
+    runtimeId: 'runtime-child', turnId: 'turn-child-id', receivedAt: now,
+    event: {
+      kind: 'tool_activity', activity_id: 'late-input', phase: 'begin', name: 'read', status: 'running',
+      summary: JSON.stringify({ path: 'README.md' }),
+    },
+  });
+  await core.observeSse({
+    runtimeId: 'runtime-child', turnId: 'turn-child-id', receivedAt: now,
     event: { kind: 'turn_completed', usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 } },
   });
   await core.finish(0, null);
@@ -109,6 +137,16 @@ test('MCTS proxy core reconstructs only confirmed checkpoint runtime edges', asy
     event.kind === 'llm'
     && (event.attributes as Record<string, unknown>)['mcts.reasoning'] === 'reasoning'
   )), true);
+  const bash = writer.events.find(event => event.name === 'tool.bash');
+  assert.deepEqual((bash?.tool as { arguments: unknown }).arguments, { command: 'pwd' });
+  assert.deepEqual((bash?.tool as { result: unknown }).result, { content: [{ type: 'text', text: '/workspace' }] });
+  assert.equal((bash?.attributes as Record<string, unknown>)['mcts.tool.input.missing'], false);
+  const readSnapshots = writer.events.filter(event => event.name === 'tool.read');
+  assert.equal(readSnapshots.length, 2, 'a late begin event refreshes the completed tool span');
+  assert.equal((readSnapshots[0].attributes as Record<string, unknown>)['mcts.tool.input.missing'], true);
+  assert.equal(readSnapshots[1].status, 'success', 'a late begin event must not downgrade the terminal status');
+  assert.deepEqual((readSnapshots[1].tool as { arguments: unknown }).arguments, { path: 'README.md' });
+  assert.deepEqual((readSnapshots[1].tool as { result: unknown }).result, { content: 'source' });
   const parentTaskSnapshots = writer.events.filter(event => (
     event.kind === 'tool'
     && event.name === 'tool.task'

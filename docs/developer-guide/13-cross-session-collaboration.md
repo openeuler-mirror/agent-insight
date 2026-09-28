@@ -26,7 +26,9 @@
 
 端点优先读取同一用户、同一 collaboration 下的显式 binding，把事件逻辑 `sessionId` 转换为 `traceSessionId`，再与 `Execution.taskId` / `Execution.agentSessionId` 精确匹配；无 binding 时才直接使用事件 session ID。关系可以先上传，状态保持 pending。新增 binding 会重算命中该逻辑 session 的事件，目标 Trace 到达时也会通过反查 binding 重算对应事件。
 
-`fromLocator` 中的工具名或 Shell 命令片段只是调用位置候选：唯一命中为 candidate；多事件只有在数量相等、时间无缺失或并列、且调用时间来源可信时才返回 time_ordered。无 locator 且已有 Execution 直接父子关系时可返回 confirmed。不得只根据时间接近度选择父级。
+`fromLocator` 中的工具名或 Shell 命令片段通常只是调用位置候选：唯一名称命中为 candidate；多事件只有在数量相等、时间无缺失或并列、且调用时间来源可信时才返回 time_ordered。若命中的 `task`/spawn 调用参数或结果携带的 `session_id`、`sessionId`、`subagent_session_id`、`subagentSessionId` 与事件 `toSessionId` 一致，则属于原始调用直接证据，保存为 confirmed。无 locator 且已有 Execution 直接父子关系时也可返回 confirmed。不得只根据时间接近度选择父级。
+
+endpoint/anchor resolver 的持久化结果是读取与 Trace 投影的唯一真源；查询侧不得再用另一套临时 resolver 覆盖已保存的 `anchorState`、`matchedRecord` 和 `position`。只有旧数据不存在持久化 anchor 时才能使用查询期结果兜底。
 
 ## Goal Plus reported 路径
 
@@ -50,7 +52,7 @@ MCTS collector 不增加关系 API 或 Prisma 模型，直接使用公开 bindin
 2. open/load 中的 Runtime ID 派生不可逆的逻辑 session ID，并绑定各自 OTLP Trace Session；
 3. open Runtime 第一次提交 turn 时，上报 `coordinator → runtime`；
 4. checkpoint 响应只登记 checkpoint 摘要及所有者；后续 `load` 使用同一摘要且实际提交 turn 时，上报 `parent runtime → child runtime`；
-5. 发起方 Trace 同时写入带执行时间的合成 `task` tool，event 使用 `fromLocator={recordType:'tool',name:'task'}`，使一对一或等量有序调用可按现有规则定位。
+5. 发起方 Trace 同时写入带执行时间的合成 `task` tool，工具参数 `session_id` 与 event 的 `toSessionId` 使用同一个逻辑 Runtime ID；event 使用 `fromLocator={recordType:'tool',name:'task'}`，resolver 据此形成 confirmed 精确关联，不依赖 Runtime Trace taskId 的命名空间或时间猜测。
 
 只 load 而未提交 turn 的评分/官测临时 checkout 不创建协作成员。Runtime 和 checkpoint 原始 ID 不写入关系正文；node score/tree stdout 摘要也不参与端点推定。
 
@@ -66,7 +68,7 @@ main Agent
             └─ Tool / Skill / MCP
 ```
 
-虚拟 TASK 追加在主 Trace 原生交互之后。持久化 resolver 在唯一候选或可信时间排序命中时同时保存 `interactionIndex`、`callIndex`、`callKey` 和可用的 `recordId`，展示树据此挂载到具体调用；候选或时间推定仍显示对应的不确定性标签。没有位置证据时只保留 Agent 级关系，不能伪造调用层级。已挂载 TASK 的展示耗时取子 Trace，未挂载的瞬时关系事件显示 `-`。
+虚拟 TASK 追加在主 Trace 原生交互之后。持久化 resolver 在目标 Session 精确命中、唯一候选或可信时间排序命中时同时保存 `interactionIndex`、`callIndex`、`callKey` 和可用的 `recordId`，展示树据此挂载到具体调用；候选或时间推定仍显示对应的不确定性标签。没有位置证据时只保留 Agent 级关系，不能伪造调用层级。已挂载 TASK 的展示耗时取子 Trace，未挂载的瞬时关系事件显示 `-`。
 
 `full`、`structure`、`interactions` 和按索引读取单条 interaction 使用同一确定性投影。合并后的交互保留 `_collaboration` 源 Session/索引信息；`_payloadVersion` 仍根据原正文计算，前端拒绝刷新前发起或版本不匹配的异步加载结果。
 

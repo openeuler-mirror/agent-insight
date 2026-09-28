@@ -79,6 +79,17 @@ function appendBounded(current, delta, maximum) {
   return { value: next.slice(0, maximum), truncated: true };
 }
 
+function structuredSummary(value, maximum) {
+  const raw = text(value);
+  if (raw === undefined) return { value: undefined, truncated: false };
+  const bounded = appendBounded("", raw, maximum);
+  try {
+    return { value: JSON.parse(bounded.value), truncated: bounded.truncated };
+  } catch {
+    return bounded;
+  }
+}
+
 class MctsStdoutParser {
   parse(rawLine) {
     const line = String(rawLine || "").replace(ANSI_RE, "").trimEnd();
@@ -370,14 +381,24 @@ class MctsProxyCore {
       const activityId = text(event.activity_id) || `activity-${turn.tools.size}`;
       const key = sha256(`${turn.key}\0${activityId}`).slice(0, 32);
       const previous = turn.tools.get(key) || { key, startedAt: message.receivedAt || this.now() };
-      turn.tools.set(key, {
+      const summary = structuredSummary(event.summary, this.maxTextChars);
+      const tool = {
         ...previous,
         name: text(event.name) || previous.name || "tool",
-        status: text(event.status) || previous.status,
-        summary: event.phase === "end" ? text(event.summary) : previous.summary,
+        status: event.phase === "begin" && previous.endedAt
+          ? previous.status
+          : text(event.status) || previous.status,
+        arguments: event.phase === "begin" && summary.value !== undefined ? summary.value : previous.arguments,
+        result: event.phase === "end" && summary.value !== undefined ? summary.value : previous.result,
+        inputTruncated: event.phase === "begin" && summary.value !== undefined ? summary.truncated : previous.inputTruncated,
+        resultTruncated: event.phase === "end" && summary.value !== undefined ? summary.truncated : previous.resultTruncated,
         endedAt: event.phase === "end" ? message.receivedAt || this.now() : previous.endedAt,
-      });
-      if (event.phase === "end") await this.emitTool(run, runtime, turn, turn.tools.get(key));
+      };
+      turn.tools.set(key, tool);
+      turn.degraded = turn.degraded || summary.truncated;
+      if (event.phase === "end" || (event.phase === "begin" && tool.endedAt)) {
+        await this.emitTool(run, runtime, turn, tool);
+      }
     } else if (kind === "interaction_requested") {
       turn.degraded = true;
       turn.error = "xGovernor requested unsupported interactive input";
@@ -518,8 +539,13 @@ class MctsProxyCore {
       status: tool.status === "succeeded" ? "success" : "error",
       startTimeMs: tool.startedAt,
       endTimeMs: tool.endedAt || tool.startedAt,
-      tool: { name: tool.name, type: "xgovernor", arguments: {}, result: tool.summary },
-      attributes: { "mcts.role": roleFor(runtime) },
+      tool: { name: tool.name, type: "xgovernor", arguments: tool.arguments ?? {}, result: tool.result },
+      attributes: {
+        "mcts.role": roleFor(runtime),
+        "mcts.tool.input.missing": tool.arguments === undefined,
+        "mcts.tool.input.truncated": tool.inputTruncated === true,
+        "mcts.tool.result.truncated": tool.resultTruncated === true,
+      },
     });
   }
 

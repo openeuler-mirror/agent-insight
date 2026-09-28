@@ -42,7 +42,7 @@ test('MCTS xGovernor adapter renders LLM, tool and exact task anchor records', (
     }),
     canonical({
       eventId: 'tool', spanId: '3'.repeat(16), parentSpanId: llmSpan, kind: 'tool', name: 'tool.file_edit',
-      tool: { name: 'file_edit', type: 'xgovernor', arguments: {}, result: 'done' },
+      tool: { name: 'file_edit', type: 'xgovernor', arguments: { path: 'README.md' }, result: 'done' },
       endTimeMs: 1_700_000_000_200,
     }),
     canonical({
@@ -97,8 +97,9 @@ test('MCTS xGovernor adapter renders LLM, tool and exact task anchor records', (
   assert.equal(tree.events.filter(event => event.kind === 'llm').length, 1);
   assert.equal(tree.events.some(event => event.name === 'mcts.summary.node-score'), true);
   const llmInteraction = interactions.find(interaction => interaction.spanId === llmSpan);
-  const calls = llmInteraction?.tool_calls as Array<{ function?: { name?: string } }>;
+  const calls = llmInteraction?.tool_calls as Array<{ function?: { name?: string; arguments?: string } }>;
   assert.equal(calls[0]?.function?.name, 'file_edit');
+  assert.deepEqual(JSON.parse(calls[0]?.function?.arguments || '{}'), { path: 'README.md' });
 });
 
 test('MCTS xGovernor adapter keeps unknown only when no confirmed role exists', () => {

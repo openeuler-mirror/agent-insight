@@ -128,6 +128,8 @@
 
 > 2026-09-28 working-tree overlay：MCTS Runtime 角色聚合改为优先使用最新的非 `unknown` Agent 快照，稳定 TASK span 会在角色证据到达后更新；stdout summary 作为 synthetic Tool 观测，不再派生虚假 LLM。reported anchor 持久化精确 interaction/call 位置，TASK 成功挂载后显示子 Trace 耗时，未挂载时显示 `-`。
 
+> 2026-09-28 working-tree overlay：MCTS `task.session_id` 与 collaboration `toSessionId` 作为精确父子证据，reported Trace 投影统一消费持久化 anchor，不再被查询期旧 resolver 覆盖；xGovernor `tool_activity(begin/end)` 分别保存结构化 Input/Output，并对缺失、截断与 begin 晚到状态显式处理。
+
 **如何更新：** `git diff 61cefb3a HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents

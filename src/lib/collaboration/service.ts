@@ -121,7 +121,7 @@ export class CollaborationService {
                 const toEndpoint = endpoint(resolutions.find(item => item.side === 'to'));
                 const persistedAnchor = storedAnchor(resolutions.find(item => item.side === 'from'));
                 const resolvedAnchor = anchors.get(event.eventId) ?? { status: 'pending', message: '超过单次解析容量，未对不完整数据执行定位' };
-                const fromAnchor = row.sourceType === 'goal-plus-semantic' && persistedAnchor ? persistedAnchor : resolvedAnchor;
+                const fromAnchor = persistedAnchor ?? resolvedAnchor;
                 return { ...event, sourceType: row.sourceType, receivedAt: row.receivedAt,
                     sources: fromAnchor.status === 'confirmed' ? [row.sourceType, 'trace'] : [row.sourceType],
                     traceResolution: {
