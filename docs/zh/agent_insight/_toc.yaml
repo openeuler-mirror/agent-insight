@@ -1,6 +1,6 @@
 label: Agent Insight 用户指南
 isManual: true
-description: 安装 Agent Insight，接入 Agent 运行数据，查看执行链路并开展评测。
+description: 通过 RPM 安装 Agent Insight，接入 Agent 运行数据，查看执行链路并开展评测。
 sections:
   - label: 认识 Agent Insight
     href: ./agent_insight_overview.md

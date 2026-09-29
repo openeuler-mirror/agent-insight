@@ -1,204 +1,183 @@
 # 安装与维护
 
-本文介绍 Linux 主机上的源码、npm 安装包和 Docker 镜像部署，默认使用 SQLite 数据库。选择一种方式完成安装，再进行登录、模型注册和 Agent 接入。
+本文介绍在 openEuler 上通过 RPM 安装 Agent Insight，并使用 systemd 启动和管理服务。平台默认使用 SQLite 保存数据。
 
 ## 前提条件
 
-- 已准备 Linux 服务器，计划使用的端口可用。本文默认使用 `3000`。
-- 数据目录有足够空间保存 Trace、评测数据和备份，并允许运行账号读写。
-- 通过网络安装时，可以访问所需的源码、npm 依赖或镜像源；离线部署时，已取得匹配目标架构和源码版本的交付包。
-- 执行升级前已停止旧实例并备份数据。
+- 已准备 x86_64 或 aarch64 架构的 openEuler 主机，并具有 sudo 权限。
+- 已配置提供 `agent-insight` 及其依赖的软件源，或已取得适用于当前系统版本和 CPU 架构的 RPM 安装包。
+- 依赖软件源可用。RPM 依赖包括 Node.js 20 或以上版本、OpenCode 1.14.39 或以上版本以及 OpenSSL 3，由 `dnf` 检查并安装；离线环境需预先准备这些依赖的 RPM 包或本地软件源。
+- 服务端口可用，默认端口为 `3000`。远程访问时，客户端到服务器的访问路径应允许该端口。
+- `/var/lib/agent-insight` 所在磁盘有足够空间保存 Trace、评测数据和备份。
 
-## 安装方式选择
+AcTrail 和需要观测的业务 Agent 由用户在任务运行环境中准备。安装 Agent Insight RPM 不会完成这些客户端的部署与数据接入；服务启动后按[接入 Agent](./agent_insight_connection.md)配置。
 
-Agent Insight 可以通过源码、npm 安装包或 Docker 镜像部署。本文的界面操作基于 830 分支提交 `732fceb203c29d427e0075468a4fb679dcd9fb41`；使用 npm 包或镜像时，必须确认该产物对应的源码版本。相同的版本号或 `latest` 标签不能证明包含本手册对应的功能。
+## 安装 RPM
 
-| 方式 | 适用情况 | 需要准备 |
-| --- | --- | --- |
-| 源码部署 | 需要运行本文明确对应的 830 代码，或需要修改源代码 | Git、Node.js 和 npm |
-| npm 安装包 | 已取得与目标源码版本对应的发布包 | Node.js、npm 和固定版本 npm 包或本地 `.tgz` 安装包 |
-| Docker 镜像 | 使用预先构建的在线或离线镜像 | Docker、匹配服务器 CPU 架构的镜像、可写的持久化目录 |
+### 从软件源安装
 
-对于源码和 npm 部署，建议准备 Node.js 22.13 或以上的 22.x 环境。客户端接入脚本检查 Node.js 主版本不低于 20。Docker 预构建镜像已包含服务端运行环境，宿主机无需另外安装 Node.js 或 npm。
-
-## 从源码部署
-
-在 Linux 主机准备 Git、Node.js 22.13 或以上的 22.x 版本和 npm。先确认版本：
+先查看系统、架构和当前软件源提供的软件包：
 
 ```bash
-git --version
-node --version
-npm --version
+cat /etc/openEuler-release
+uname -m
+dnf info agent-insight
 ```
 
-获取 830 分支，并固定到本手册对应的代码：
+确认可用包适配当前系统后，执行安装：
 
 ```bash
-git clone --branch 830 --single-branch https://gitcode.com/openeuler/agent-insight.git
-cd agent-insight
-git checkout --detach 732fceb203c29d427e0075468a4fb679dcd9fb41
-git rev-parse HEAD
+sudo dnf install agent-insight
+rpm -q agent-insight
 ```
 
-安装依赖、构建并准备 standalone 运行文件：
+如果 `dnf info agent-insight` 未找到软件包，先向软件源提供方确认是否已提供该包，或使用下面的本地 RPM 安装方式。
+
+### 从本地 RPM 安装
+
+取得匹配系统版本和 CPU 架构的 RPM 后，在安装包所在目录执行以下命令，将文件名替换为实际包名：
 
 ```bash
-npm ci
-npm run build
-node scripts/prepare-npm-package.js
+sudo dnf install './agent-insight-<版本及发行号>.<架构>.rpm'
+rpm -q agent-insight
 ```
 
-`npm ci` 的安装后脚本会初始化当前用户的数据目录和 Prisma。生产构建后需准备静态资源，再通过本地 CLI 启动：
+`dnf` 同样需要从已配置的软件源解析并安装依赖。安装完成后即可启动服务。
+
+## 启动和验证
+
+安装完成后，启用开机启动并立即启动服务：
 
 ```bash
-node bin/cli.js start --port 3000
-node bin/cli.js status --port 3000
+sudo systemctl enable --now agent-insight.service
+sudo systemctl status agent-insight.service --no-pager
+sudo journalctl -u agent-insight.service -n 100 --no-pager
 ```
 
-打开 `http://<服务器地址>:3000/trace`。默认文件位置为：
+首次启动会初始化数据库；后续启动会检查并同步数据结构。确认服务状态为 `active (running)` 后，检查 HTTP 访问：
 
-| 内容 | 默认位置 |
+```bash
+curl -fsS -o /dev/null http://127.0.0.1:3000/
+```
+
+在浏览器打开 `http://<服务器地址>:3000/trace`，完成登录并确认可以打开 **链路追踪**。继续按[快速上手](./agent_insight_quickstart.md)配置模型和接入数据。
+
+## 服务配置与文件位置
+
+RPM 创建 `agent-insight` 系统用户和用户组，服务以该用户运行。默认文件位置如下：
+
+| 内容 | 位置或查看方式 |
 | --- | --- |
-| 生效配置 | `~/.agent-insight/.env` |
-| SQLite 数据库 | `~/.agent-insight/data/witty_insight.db` |
-| CLI 启动的服务日志 | `~/.agent-insight/server.log` |
+| 服务配置 | `/etc/agent-insight/agent-insight.env` |
+| 数据根目录及服务用户 HOME | `/var/lib/agent-insight` |
+| SQLite 数据库 | `/var/lib/agent-insight/data/witty_insight.db` |
+| 服务端程序 | `/usr/lib/agent-insight` |
+| systemd 服务单元 | `/usr/lib/systemd/system/agent-insight.service` |
+| 服务日志 | `journalctl -u agent-insight.service` |
 
-启动后修改配置时，编辑生效的 `.env` 文件；仓库里的 `.env.example` 是首次初始化模板，修改模板不会更新已有配置。
-
-停止、重启和查看日志：
-
-```bash
-node bin/cli.js stop --port 3000
-node bin/cli.js start --port 3000
-tail -n 200 "$HOME/.agent-insight/server.log"
-```
-
-上面的管理命令按需分别执行。确保指定端口属于本实例。自定义数据目录的用户按实际目录查看日志和备份数据。
-
-## 使用 npm 安装包部署
-
-在空目录中安装与本手册代码匹配的固定版本包。由维护者提供的本地 `.tgz` 可按以下方式安装：
+使用以下命令编辑配置：
 
 ```bash
-mkdir agent-insight-deploy
-cd agent-insight-deploy
-npm init -y
-npm install /path/to/agent-insight-package.tgz
-npx agent-insight start --port 3000
-npx agent-insight status --port 3000
+sudoedit /etc/agent-insight/agent-insight.env
 ```
 
-如果使用 npm 仓库中的包，将安装命令改为 `npm install agent-insight@<固定版本号>`，安装前核对发布说明中的对应源码。不要用 `npm install agent-insight@latest` 作为运行 830 分支的证明。
+常用配置项如下：
 
-默认数据和配置位置与源码 CLI 部署相同。停止时执行：
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `HOSTNAME` | `0.0.0.0` | 服务监听地址。 |
+| `PORT` | `3000` | HTTP 服务端口。 |
+| `AGENT_INSIGHT_DATA_DIR` | `/var/lib/agent-insight` | 数据根目录，数据库默认保存在其中的 `data` 子目录。 |
+| `DATABASE_URL` | `file:/var/lib/agent-insight/data/witty_insight.db` | SQLite 数据库路径。 |
+
+例如，将 `PORT=3000` 改为 `PORT=3033`，保存后执行：
 
 ```bash
-npx agent-insight stop --port 3000
+sudo systemctl restart agent-insight.service
+sudo systemctl status agent-insight.service --no-pager
+curl -fsS -o /dev/null http://127.0.0.1:3033/
 ```
 
-## 使用 Docker 镜像部署
+随后通过 3033 端口访问页面，已接入客户端也需更新平台地址。修改此配置文件后重启服务即可，无需修改服务单元。
 
-### 准备镜像与数据目录
+建议保留默认数据目录。更换数据目录需要同时迁移数据、调整目录权限和数据库路径，并修改 systemd 的可写目录配置，仅修改一个环境变量不足以完成迁移。
 
-使用已安装 Docker Engine 的 64 位 Linux 主机。运行 `uname -m` 查看 CPU 架构：`x86_64` 对应 `linux/amd64`，`aarch64` 或 `arm64` 对应 `linux/arm64`。
+## 日常管理
 
-获取与目标版本对应的镜像包及清单。清单至少应注明文件名、固定镜像标签、CPU 架构、源码提交和 SHA-256。按清单填写并校验：
+按需执行以下命令：
+
+| 操作 | 命令 |
+| --- | --- |
+| 查看状态 | `sudo systemctl status agent-insight.service --no-pager` |
+| 启动 | `sudo systemctl start agent-insight.service` |
+| 停止 | `sudo systemctl stop agent-insight.service` |
+| 重启 | `sudo systemctl restart agent-insight.service` |
+| 查看最近日志 | `sudo journalctl -u agent-insight.service -n 200 --no-pager` |
+| 持续查看日志 | `sudo journalctl -u agent-insight.service -f` |
+| 取消开机启动 | `sudo systemctl disable agent-insight.service` |
+
+## 备份与升级
+
+### 备份
+
+备份前停止服务，完整保存配置和数据根目录，避免只复制运行中的数据库主文件而遗漏 WAL 等文件：
 
 ```bash
-IMAGE_FILE='/path/to/agent-insight-image.tar.gz'
-IMAGE='镜像名:固定版本'
-IMAGE_SHA256='交付清单中的SHA256'
-if printf '%s  %s\n' "$IMAGE_SHA256" "$IMAGE_FILE" | sha256sum -c -; then
-  docker load -i "$IMAGE_FILE"
-else
-  echo '镜像包校验失败，请重新获取镜像包。' >&2
-  exit 1
-fi
+sudo systemctl stop agent-insight.service
+sudo install -d -m 700 /var/backups/agent-insight
+BACKUP_FILE="/var/backups/agent-insight/agent-insight-$(date +%Y%m%d-%H%M%S).tar.gz"
+sudo tar -C / -czf "$BACKUP_FILE" etc/agent-insight var/lib/agent-insight
+sudo chmod 600 "$BACKUP_FILE"
+sudo tar -tzf "$BACKUP_FILE" > /dev/null
 ```
 
-Docker 可直接加载由 `docker save` 生成的 `.tar` 或 `.tar.gz` 包。加载后核对架构和运行用户：
+确认备份命令成功后，可以继续升级；仅执行备份时，使用 `sudo systemctl start agent-insight.service` 恢复服务。备份包含平台配置和用户数据，应存放在受控位置。
+
+### 升级
+
+完成备份并确认服务已停止后，使用软件源中的新版本升级：
 
 ```bash
-docker image inspect "$IMAGE" \
-  --format 'os={{.Os}} arch={{.Architecture}} user={{.Config.User}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
-docker run --rm --entrypoint id "$IMAGE"
+sudo dnf upgrade agent-insight
+rpm -q agent-insight
 ```
 
-本文把宿主机 `/opt/agent-insight` 挂载到容器 `/data/agent-insight`。根据上一条命令返回的 uid/gid 创建目录；下面示例适用于 uid=1000、gid=1000 的镜像：
+使用本地 RPM 时，以新包执行 `sudo dnf install ./实际包名.rpm`。RPM 会保留已经修改的服务配置；升级后检查 `/etc/agent-insight` 下是否生成 `.rpmnew` 文件，并按新版本要求合并需要的配置。
+
+启动服务，检查日志和页面：
 
 ```bash
-sudo install -d -m 750 -o 1000 -g 1000 /opt/agent-insight
+sudo systemctl start agent-insight.service
+sudo systemctl status agent-insight.service --no-pager
+sudo journalctl -u agent-insight.service -n 200 --no-pager
 ```
 
-已有数据目录先停止旧实例并备份，避免两个实例同时使用同一个 SQLite 数据目录。
+确认历史 Trace 和评测数据可读，再执行一次客户端任务验证新数据上报。数据库结构同步失败时，保留原始数据和备份，按日志处理。
 
-### 启动和检查
+### 恢复备份
+
+恢复时先停止服务，保留当前 `/etc/agent-insight` 和 `/var/lib/agent-insight` 目录，使用与备份兼容的 RPM 版本，将备份中的两个目录还原到原位置，并保留文件属主及权限。不要让运行中的服务继续写入待恢复的数据库，也不要把旧数据库与现有 WAL 文件混合。
+
+还原后重新检测 Node.js 路径，再启动服务：
 
 ```bash
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  --mount type=bind,src=/opt/agent-insight,dst=/data/agent-insight \
-  "$IMAGE"
-docker logs --tail 200 agent-insight
-docker inspect agent-insight \
-  --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
+sudo /usr/libexec/agent-insight-node-setup
+sudo systemctl start agent-insight.service
+sudo systemctl status agent-insight.service --no-pager
+sudo journalctl -u agent-insight.service -n 200 --no-pager
 ```
 
-默认生效配置为 `/opt/agent-insight/.env`，SQLite 数据库为 `/opt/agent-insight/data/witty_insight.db`。镜像的启动脚本使用 SQLite；该镜像不包含 OpenGauss 运行依赖，不能通过填写 `DB_HOST` 切换到 OpenGauss。
-
-浏览器打开 `http://<服务器地址>:3000/trace`。容器健康检查通过后，还应完成登录、打开链路追踪并验证一次数据上报。
-
-Docker 方式使用以下命令管理：
-
-```bash
-docker stop agent-insight
-docker start agent-insight
-docker restart agent-insight
-docker logs -f agent-insight
-```
-
-命令按需单独执行。宿主机端口冲突时，可以把映射改成 `-p 3033:3000`，然后访问 3033 端口。
-
-## 备份与维护
-
-SQLite 部署在备份前停止服务，完整保存配置及数据目录，不能只复制运行中的数据库主文件而遗漏 WAL 等文件。
-
-CLI 部署示例（先执行相应 stop 命令）：
-
-```bash
-BACKUP_FILE="/tmp/agent-insight-$(date +%Y%m%d-%H%M%S).tar.gz"
-tar -C "$HOME" -czf "$BACKUP_FILE" .agent-insight
-```
-
-Docker 部署示例：
-
-```bash
-docker stop agent-insight
-BACKUP_FILE="/tmp/agent-insight-$(date +%Y%m%d-%H%M%S).tar.gz"
-sudo tar -C /opt -czf "$BACKUP_FILE" agent-insight
-```
-
-升级后检查服务、数据库初始化和页面，并重新完成一次数据接入验证。schema 同步失败时保留原始数据和备份，按错误处理，不能通过清空数据库或直接接受数据损失来跳过失败。
-
-## 结果验证
-
-1. 在服务端执行 `curl -fsS -o /dev/null http://127.0.0.1:3000/`，确认 HTTP 可访问。
-2. 在浏览器打开 `http://<服务器地址>:3000/trace`。
-3. 完成登录，确认可以打开 **链路追踪**。
-4. 接入 AcTrail 并执行一次任务，确认可以查看新产生的 Trace。
-
-容器显示 `healthy` 或端口处于监听状态，只能说明服务已响应检查，仍需完成页面和数据上报验证。
+确认页面、历史数据及新任务上报正常后再结束恢复操作。
 
 ## 常见问题
 
 | 现象 | 处理方法 |
 | --- | --- |
-| 页面无法访问 | 检查服务进程或容器状态、访问端口、防火墙和服务日志。 |
-| 端口已经占用 | 为本实例选择空闲端口；Docker 修改宿主机端口映射。 |
-| 提示数据库只读 | 核对持久化目录属主、运行用户和目录权限。 |
-| schema 同步失败 | 保留数据与备份，根据日志处理；不要直接清空数据库或忽略初始化失败。 |
-| Docker 容器启动后退出 | 检查镜像架构、挂载权限、`DB_HOST` 配置和 `docker logs`。 |
-| 宿主机找不到 `/data/agent-insight` | 该路径在容器内；执行 `docker inspect` 查询宿主机挂载源，本文为 `/opt/agent-insight`。 |
-| npm 安装出现 Node.js engine 提示 | 核对运行环境与目标包依赖要求，源码安装建议使用 Node.js 22.13 或以上的 22.x 版本。 |
+| 软件源中找不到 `agent-insight` | 确认软件源已提供该包，或取得匹配系统和架构的本地 RPM。 |
+| 安装提示缺少依赖 | 检查依赖软件源，确保能提供 RPM 要求的 Node.js、OpenCode 和 OpenSSL 等软件包；离线环境补齐相应 RPM。 |
+| 服务启动失败 | 先查看 `systemctl status` 和 `journalctl`，根据首个错误处理。 |
+| 提示服务用户无法使用 Node.js | 确认已安装符合要求的 Node.js，再执行 `sudo /usr/libexec/agent-insight-node-setup` 后重启服务。 |
+| 本机可访问，其他机器无法访问 | 检查监听地址、访问端口、主机防火墙和网络访问规则。 |
+| 端口已经占用 | 修改服务配置中的 `PORT`，重启后使用新端口访问。 |
+| 提示数据库只读 | 核对 `/var/lib/agent-insight` 及 `data` 子目录属主、`agent-insight` 用户权限和磁盘状态。 |
+| 数据库结构同步失败 | 保留数据和备份，按日志处理；不要通过清空数据库或忽略初始化失败继续启动。 |

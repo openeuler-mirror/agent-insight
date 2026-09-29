@@ -1,6 +1,6 @@
 # 登录和接入 Agent
 
-本章介绍首次登录及通过 AcTrail 上报 Agent 运行数据。830 版本的 **安装指导** 页面提供 AcTrail 的 Linux 接入命令。
+本章介绍首次登录及通过 AcTrail 上报 Agent 运行数据。**安装指导** 页面提供 AcTrail 的 Linux 接入命令。
 
 ## 首次登录
 
@@ -15,15 +15,16 @@
 
 ## 接入前提
 
-在 AcTrail 实际运行的 Linux 主机上确认以下条件：
+AcTrail 和业务 Agent 是外部采集环境，由用户另行安装和管理。完成 Agent Insight 平台的 RPM 安装后，在 AcTrail 实际运行的 Linux 主机上确认以下条件：
 
+- 业务 Agent 已安装，并能够正常执行任务。
 - 已安装并启动 AcTrail，`actraild` 可执行文件可找到。
 - 已安装 AcTrail 官方 `otel-http` 插件，版本支持完整请求和工具结果导出配置。
 - 已安装 Bash、curl 和 Node.js 20 或以上版本。
 - 当前用户可使用 root 或 sudo 权限管理 AcTrail 插件和配置。使用 sudo 时，确认 `sudo node --version` 同样可执行；仅在普通用户的 nvm 环境中配置 Node.js 可能无法满足这一条件。
 - 客户端可以访问浏览器中显示的平台地址。
 
-接入命令配置 AcTrail 的上报插件，不安装 AcTrail 本身。
+页面中的接入命令用于配置已有 AcTrail 的上报插件。
 
 ## 配置数据上报
 
