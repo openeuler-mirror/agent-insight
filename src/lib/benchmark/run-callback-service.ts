@@ -263,6 +263,8 @@ export async function completeBenchmarkRun(input: {
   if (updated.count !== 1) {
     return completeBenchmarkRun(input)
   }
+  const { continueExperiment } = await import('./experiment-lifecycle')
+  void continueExperiment(run.experimentId).catch((error) => console.error('[benchmark/run-callback] refill failed', error))
   if (status !== 'submitted') {
     await failBenchmarkCaseResults(
       input.runId,

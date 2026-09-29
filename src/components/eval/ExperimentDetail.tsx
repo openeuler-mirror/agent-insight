@@ -31,6 +31,7 @@ import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/expe
 import {
   benchmarkCaseProgressLabel,
   isBenchmarkEvaluationInProgress,
+  benchmarkEvaluationProgressLabel,
   isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status';
 import type {
@@ -50,6 +51,11 @@ interface ExperimentDetail {
   agentName: string;
   status: string;
   scope?: string;
+  executionConcurrency?: number | null;
+  reusableConfig?: {
+    traceSource?: string | null;
+    executionTarget?: { model?: string | null } | null;
+  };
   preset?: string | null;
   watchMode?: boolean;
   watchEnabledAt?: string | null;
@@ -98,6 +104,7 @@ interface ExperimentDetail {
       progressStage: string | null;
       workspaceProvider: string | null;
       evaluationStatus: string | null;
+      evaluationWaitCode?: string | null;
       failure?: { code: string; message: string | null } | null;
     };
   }>;
@@ -457,6 +464,10 @@ export function ExperimentDetail({
                 {status.label}
               </span>
               <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
+              {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
+                <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
+              )}
+              {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
               {hasItemProgress ? (
                 <>
                   <span><span style={{ color: 'var(--foreground-muted)' }}>执行成功：</span>{detail.executionProgress!.succeeded} 项</span>
@@ -692,7 +703,7 @@ export function ExperimentDetail({
                                     fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
                                   }}>
                                     <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
-                                    Benchmark 评测中…
+                                    {benchmarkEvaluationProgressLabel(c.benchmark)}
                                   </span>
                                 )}
                                 {!c.benchmark.failure && isBenchmarkSubmissionAwaitingCompletion({

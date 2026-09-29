@@ -42,7 +42,7 @@ if (mode?.startsWith('collector-')) {
   const hook = spawnSync('python3', ['-B', '-c', script], {encoding: 'utf8'})
   if (hook.status !== 0) { console.error(hook.stderr); process.exit(9) }
   // Record only the temporary path, so cleanup can be checked after execution.
-  require('node:fs').writeFileSync(require('node:path').join(process.cwd(), 'activity-dir.txt'), process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR || '')
+  require('node:fs').writeFileSync(${JSON.stringify(path.join(root, 'activity-dir.txt'))}, process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR || '')
   if (mode === 'collector-stale') {
     const name = require('node:crypto').createHash('sha256').update(target).digest('hex') + '.json'
     require('node:fs').writeFileSync(require('node:path').join(process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR, name),

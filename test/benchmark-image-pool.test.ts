@@ -74,9 +74,16 @@ async function cache(pool: any, name: string) {
 
 test('image pool defaults on without byte settings, can opt out, and validates remaining configuration', () => {
   assert.equal(imagePoolConfig({}).enabled, true)
+  assert.equal(imagePoolConfig({}).prefetch, true)
   assert.equal(imagePoolConfig({ IMAGE_POOL_ENABLED: '' }).enabled, true)
+  assert.equal(imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: '' }).prefetch, true)
+  assert.equal(imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'false' }).prefetch, false)
   assert.equal(imagePoolConfig({ IMAGE_POOL_ENABLED: 'false' }).enabled, false)
+  assert.equal(imagePoolConfig({ IMAGE_POOL_ENABLED: 'false' }).prefetch, false)
   assert.throws(() => imagePoolConfig({ IMAGE_POOL_ENABLED: 'invalid' }))
+  assert.throws(() => imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'invalid' }))
+  assert.throws(() => imagePoolConfig({ IMAGE_POOL_MAX_PULLS: '1' }))
+  assert.equal(imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'false', IMAGE_POOL_MAX_PULLS: '1' }).maxPulls, 1)
   assert.throws(() => imagePoolConfig({ IMAGE_POOL_PREFETCH_ENABLED: 'true', IMAGE_POOL_MAX_PULLS: '1' }))
   assert.equal(imagePoolConfig({}).maxPulls, 2)
   assert.equal(imagePoolConfig({ IMAGE_POOL_ESTIMATE_BYTES: 'invalid', IMAGE_POOL_TEMPORARY_BYTES: 'invalid' }).estimateBytes, undefined)
@@ -406,28 +413,21 @@ test('expired windows release soft protection and cannot be resurrected by stale
 })
 
 test('platform retires a cancelled experiment on its original target without clearing active windows', async () => {
-  const previous = process.env.BENCHMARK_IMAGE_POOL_PREPARE_TOKEN
-  process.env.BENCHMARK_IMAGE_POOL_PREPARE_TOKEN = 'fixture-token'
   const sent: Array<{ url: string; body: any }> = []
   const fetcher: typeof fetch = async (url, init) => {
     sent.push({ url: String(url), body: JSON.parse(String(init?.body)) })
     return new Response('{}', { status: 202 })
   }
-  try {
-    await sendImagePreparationWindow({ benchmarkKey: 'fixture', evaluatorKey: 'fixture', experimentId: 'cancelled-window', revision: nextImagePreparationRevision(), cases: [{ image: 'allowed:tag' }] }, fetcher, 'http://original.example.test')
-    await retireImagePreparationWindows(async () => true, fetcher)
-    assert.equal(sent.length, 1)
-    await retireImagePreparationWindows(async () => false, fetcher)
-    assert.equal(sent.length, 2)
-    assert.equal(sent[1].url, sent[0].url)
-    assert.deepEqual(sent[1].body.cases, [])
-    assert.ok(sent[1].body.revision > sent[0].body.revision)
-    await retireImagePreparationWindows(async () => false, fetcher)
-    assert.equal(sent.length, 2)
-  } finally {
-    if (previous === undefined) delete process.env.BENCHMARK_IMAGE_POOL_PREPARE_TOKEN
-    else process.env.BENCHMARK_IMAGE_POOL_PREPARE_TOKEN = previous
-  }
+  await sendImagePreparationWindow({ benchmarkKey: 'fixture', evaluatorKey: 'fixture', experimentId: 'cancelled-window', revision: nextImagePreparationRevision(), cases: [{ image: 'allowed:tag' }] }, fetcher, 'http://original.example.test')
+  await retireImagePreparationWindows(async () => true, fetcher)
+  assert.equal(sent.length, 1)
+  await retireImagePreparationWindows(async () => false, fetcher)
+  assert.equal(sent.length, 2)
+  assert.equal(sent[1].url, sent[0].url)
+  assert.deepEqual(sent[1].body.cases, [])
+  assert.ok(sent[1].body.revision > sent[0].body.revision)
+  await retireImagePreparationWindows(async () => false, fetcher)
+  assert.equal(sent.length, 2)
 })
 
 test('SWE preparation metadata excludes private patches, answers and test contracts', () => {
@@ -568,4 +568,18 @@ test('containerd estimates remain labelled and deletion cannot spend space not a
   await Promise.allSettled([...pool.inflight.values()])
   assert.deepEqual(store.removed, [image.imageId])
   assert.equal(store.pulls.length, 1)
+})
+
+test('global preparation snapshot replaces old experiments atomically and rejects stale revisions', async (t) => {
+  const { pool } = await fixture(t, { prefetch: true })
+  await cache(pool, 'shared')
+  const window = (experimentId: string) => ({ benchmarkKey: 'bench-a', experimentId, caseIds: [`case-${experimentId}`], specs: [spec('shared')] })
+  await pool.replaceWindows(100, [window('a'), window('b')])
+  assert.equal(Object.keys(pool.state.windows).length, 2)
+  await pool.replaceWindows(102, [window('c')])
+  assert.equal((await pool.replaceWindows(101, [window('old')])).accepted, false)
+  assert.deepEqual(Object.values(pool.state.windows).map((item: any) => item.caseIds), [['case-c']])
+  await pool.replaceWindows(103, [])
+  assert.equal(pool.protectedKeys().size, 0)
+  await Promise.all([...pool.inflight.values()])
 })

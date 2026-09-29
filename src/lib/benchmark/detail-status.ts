@@ -80,3 +80,17 @@ export function isBenchmarkEvaluationInProgress(input: {
   return input.runStatus === 'submitted'
     || ACTIVE_EVALUATION_STATUSES.has(input.evaluationStatus || '')
 }
+
+export function benchmarkEvaluationProgressLabel(input: {
+  evaluationStatus?: string | null
+  evaluationWaitCode?: string | null
+}): string {
+  if (input.evaluationStatus === 'dispatch_unknown') return '正在确认评测下发…'
+  if (input.evaluationStatus === 'queued') {
+    if (input.evaluationWaitCode === 'IMAGE_POOL_SPACE_LOW') return '等待镜像空间…'
+    if (input.evaluationWaitCode === 'IMAGE_POOL_PREPARING') return '等待镜像准备…'
+    return '等待评测配额…'
+  }
+  if (input.evaluationStatus === 'normalizing') return '正在处理评测结果…'
+  return 'Benchmark 评测中…'
+}

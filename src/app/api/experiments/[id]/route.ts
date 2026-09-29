@@ -171,6 +171,7 @@ export async function GET(
       evaluations: Array<{
         id: string;
         status: string;
+        failureCode: string | null;
         normalizedResultJson: string | null;
         artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
@@ -191,6 +192,7 @@ export async function GET(
             select: {
               id: true,
               status: true,
+              failureCode: true,
               normalizedResultJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
@@ -579,6 +581,10 @@ export async function GET(
       preset: experiment.preset,
       skillContext: parseJsonValue(experiment.skillContextJson),
       configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
+      executionConcurrency: experiment.scope === 'benchmark'
+        ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
+        : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
+          ? Number(configSnapshot.executionConcurrency) || 1 : null,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
@@ -715,6 +721,7 @@ export async function GET(
               progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
               workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
+              evaluationWaitCode: benchmarkRun.evaluations[0]?.failureCode || null,
               failure: benchmarkRun.failureCode || benchmarkRun.failureMessage
                 ? {
                     code: benchmarkRun.failureCode || 'EXECUTION_FAILED',

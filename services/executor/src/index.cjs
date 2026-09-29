@@ -1040,7 +1040,7 @@ function createBenchmarkExecutor(options) {
     throw new Error('runAgent is required')
   }
   const credentialHash = deviceCredentialHash(options.deviceCredential)
-  let activeRunId = null
+  const activeRunIds = new Set()
   const cancellationControllers = new Map()
   let deliveryRetryRunId = null
   let recoveryTimer = null
@@ -1070,16 +1070,15 @@ function createBenchmarkExecutor(options) {
   }
 
   function tryAcquire(runId) {
-    if (activeRunId) return false
-    if (options.tryAcquireSlot && !options.tryAcquireSlot('benchmark')) return false
-    activeRunId = runId
+    if (activeRunIds.has(runId)) return false
+    if (options.tryAcquireSlot && !options.tryAcquireSlot('benchmark', runId)) return false
+    activeRunIds.add(runId)
     return true
   }
 
   function release(runId) {
-    if (activeRunId !== runId) return
-    activeRunId = null
-    options.releaseSlot?.('benchmark')
+    if (!activeRunIds.delete(runId)) return
+    options.releaseSlot?.('benchmark', runId)
     scheduleRecovery()
   }
 
@@ -1191,7 +1190,7 @@ function createBenchmarkExecutor(options) {
       const accepted = await store.accept(request)
       if (DELIVERY_RETRY_STAGES.has(accepted.state?.stage)) {
         scheduleRecovery(0)
-      } else if (!activeRunId && accepted.state?.stage !== 'terminal' && tryAcquire(runId)) {
+      } else if (!activeRunIds.has(runId) && accepted.state?.stage !== 'terminal' && tryAcquire(runId)) {
         runInBackground(request, accepted.state)
       }
       return
@@ -1225,7 +1224,8 @@ function createBenchmarkExecutor(options) {
         sendJson(res, 200, {
           serviceId: options.clientId,
           status: 'healthy',
-          busy: Boolean(activeRunId),
+          busy: activeRunIds.size > 0,
+          concurrentExecution: true,
           capabilities: options.capabilities || [
             ...workspaceProviders.keys().map((key) => `${key}-workspace/v1`),
             ...agentRuntimes.keys().map((key) => `agent-runtime/${key}/v1`),
@@ -1267,7 +1267,7 @@ function createBenchmarkExecutor(options) {
   async function recover() {
     const runIds = await store.listRunIds()
     const now = Date.now()
-    let executionCandidate = null
+    const executionCandidates = []
     let deliveryCandidate = null
     let nextDeliveryDelay = null
     for (const runId of runIds) {
@@ -1284,15 +1284,15 @@ function createBenchmarkExecutor(options) {
         }
         continue
       }
-      if (!executionCandidate) executionCandidate = { runId, request, state }
+      if (!activeRunIds.has(runId)) executionCandidates.push({ runId, request, state })
     }
     if (!deliveryRetryRunId && deliveryCandidate) {
       retryDeliveryInBackground(deliveryCandidate.request, deliveryCandidate.state)
     } else if (!deliveryCandidate && nextDeliveryDelay !== null) {
       scheduleRecovery(nextDeliveryDelay)
     }
-    if (!activeRunId && executionCandidate && tryAcquire(executionCandidate.runId)) {
-      runInBackground(executionCandidate.request, executionCandidate.state)
+    for (const candidate of executionCandidates) {
+      if (tryAcquire(candidate.runId)) runInBackground(candidate.request, candidate.state)
     }
   }
 
@@ -1300,18 +1300,19 @@ function createBenchmarkExecutor(options) {
     server,
     store,
     runner,
-    get activeRunId() { return activeRunId },
+    get activeRunId() { return activeRunIds.values().next().value || null },
+    get activeRunIds() { return [...activeRunIds] },
     get agentPlatforms() { return agentRuntimes.keys() },
     setAgentPlatforms,
     async cancel(runId) {
       const prior = await store.state(runId)
       await store.cancel(runId)
       cancellationControllers.get(runId)?.abort()
-      if (!prior || (prior.stage === 'accepted' || prior.cleanup?.status === 'succeeded') && activeRunId !== runId) {
+      if (!prior || (prior.stage === 'accepted' || prior.cleanup?.status === 'succeeded') && !activeRunIds.has(runId)) {
         await store.writeState(runId, { stage: 'terminal', terminalStatus: 'cancelled' })
       }
       const state = await store.state(runId)
-      return { runId, status: state?.stage === 'terminal' && activeRunId !== runId ? 'cancelled' : 'cancelling' }
+      return { runId, status: state?.stage === 'terminal' && !activeRunIds.has(runId) ? 'cancelled' : 'cancelling' }
     },
     async accept(request) {
       const validated = validateRequest(request, true)

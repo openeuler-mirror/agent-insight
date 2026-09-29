@@ -82,7 +82,7 @@ npm ci
 
 ### 3.2 配置
 
-配置文件默认位于 `~/.agent-insight/.env`。不需要修改默认值时可以跳过。
+平台配置文件默认位于 `~/.agent-insight/.env`。首次运行 `scripts/start.sh` 时若文件不存在，会从仓库的 `.env.example` 生成；之后请修改这个实际配置文件，改 `.env.example` 不会更新已生成的配置。不需要修改默认值时可以跳过。
 
 ```dotenv
 AGENT_INSIGHT_PORT=3000
@@ -227,6 +227,55 @@ bash scripts/evaluator.sh start \
 ```
 
 镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。
+
+提前准备镜像默认开启，无需增加启动参数；默认的 `IMAGE_POOL_MAX_PULLS=2` 为按需拉取保留容量，开启预取时不能设为 1。平台通过 `/health` 发现预取状态，无需配置额外令牌。Evaluator 端口应只允许 Agent Insight 平台访问。需要关闭预取时，在 Evaluator 启动命令中增加：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --bind-address 127.0.0.1 \
+  --evaluator-env IMAGE_POOL_PREFETCH_ENABLED=false
+```
+
+分机部署时按 5.1 节替换地址和绑定参数。预取窗口及空间不足的处理见[并发调度方案](../../../评测服务文档/benchmark并发执行与评测调度方案.md#51-镜像准备)。
+
+### 5.4 评测并发与 Case 数量上限
+
+普通实验和 Benchmark 实验的“执行并发”由用户在实验创建向导设置，默认 1；操作方法见[实验使用指南](../../user-guide/evaluation/experiments.md)。以下是平台和 Evaluator 的部署配置：
+
+| 配置 | 设置位置 | 默认值 | 含义 |
+|---|---|---:|---|
+| `EVALUATOR_MAX_CONCURRENCY` | Evaluator 启动参数 `--evaluator-env` 或启动进程环境 | 1 | 评测服务同时运行的 Case 数 |
+| `AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER` | 平台机 `~/.agent-insight/.env` | 留空，跟随 Evaluator 总并发 | 单用户跨实验同时评测的 Case 数量上限 |
+| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS` | 平台机 `~/.agent-insight/.env` | 256 | 全平台执行中或尚未完成评测的 Benchmark Case 数量上限 |
+| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER` | 平台机 `~/.agent-insight/.env` | 128 | 每个用户执行中或尚未完成评测的 Benchmark Case 数量上限 |
+
+表中四项均可省略或留空，分别按默认值生效；显式设置时须为正整数。Evaluator 启动脚本只会从评测机的 `~/.agent-insight/.env` 读取对外端口；评测并发须通过 `--evaluator-env` 或启动进程环境传入。
+
+例如，设置评测总并发为 2，单用户额度留空。在平台机的 `~/.agent-insight/.env` 中加入或修改以下行，保留其他设置：
+
+```dotenv
+AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER=
+AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS=
+AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER=
+```
+
+重启 Agent Insight 使配置生效。在 Evaluator 机器运行（以下为本机部署示例；分机部署按 5.1 节替换地址和绑定参数）：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --bind-address 127.0.0.1 \
+  --evaluator-env EVALUATOR_MAX_CONCURRENCY=2
+```
+
+启动后验证：
+
+```bash
+curl -fsS http://127.0.0.1:3001/health
+```
+
+确认返回的 `maxConcurrency` 为 2；使用其他端口时替换 `3001`。并发值的实测方法、Case 数量上限的统计方式及调度行为见[并发调度方案](../../../评测服务文档/benchmark并发执行与评测调度方案.md)。
 
 ## 6. 配置 Agent Insight 与 Evaluator 的互访地址
 
