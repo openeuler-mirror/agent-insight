@@ -1102,6 +1102,7 @@ model InfraMetricSample {
 /// LLM 对比实验 = 1 个 Experiment(type='llm') + N 个 ExperimentGroup + 带 groupId的 ExperimentCase。
 model Experiment {
   id                   String    @id @default(cuid())
+  deletedAt            DateTime?
   user                 String
   name                 String
   /// 'single'（默认）| 'llm'（对比实验）| 'framework' | 'skill'（Skill 工作台对比）
@@ -1151,6 +1152,31 @@ model Experiment {
   @@index([optimizationRecordId])
 }
 
+model ExperimentCancellation {
+  id           String   @id
+  user         String
+  experimentId String
+  caseKey      String   @default("")
+  status       String   @default("pending")
+  targetsJson  String   @default("[]")
+  error        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([experimentId, caseKey])
+  @@index([status, updatedAt])
+  @@index([user, status])
+}
+
+model ExperimentLocalExecution {
+  id           String   @id
+  experimentId String
+  caseKey      String   @default("")
+  createdAt    DateTime @default(now())
+
+  @@index([experimentId, caseKey])
+}
+
 /// 对比实验的分组记录。1 个 Experiment(type='llm') 关联 N（本期固定 2：A/B）个 Group。
 /// variableValue 为该组变量取值（LLM 维度对应 Execution.model）。
 model ExperimentGroup {
@@ -1173,6 +1199,7 @@ model ExperimentGroup {
 /// groupId 关联 ExperimentGroup（对比实验用）；单组实验的 case groupId=null 完全向后兼容。
 model ExperimentCase {
   id                       String           @id @default(cuid())
+  deletedAt                DateTime?
   experimentId             String
   experiment               Experiment       @relation(fields: [experimentId], references: [id], onDelete: Cascade)
   executionId              String?

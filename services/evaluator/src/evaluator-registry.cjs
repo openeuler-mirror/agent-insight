@@ -236,6 +236,14 @@ async function ensureOciRuntime(descriptor, options = {}) {
     throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_INVALID', 'Evaluator OCI Runtime 描述不合法', 500)
   }
   if (await inspectOciRuntime(descriptor, options)) return
+  const { recordManagedImage } = require('./service-control.cjs')
+  const dataDir = process.env.EVALUATOR_DATA_DIR
+  let ownership
+  if (dataDir && !options.commandRunner) {
+    const daemon = await commandRunner({ command: 'direct', entrypoint: 'docker' }, ['info', '--format', '{{.ID}}'], options)
+    ownership = { reference: descriptor.image, daemonId: daemon.stdout.trim(), role: 'runtime', uncertain: true }
+    await recordManagedImage(dataDir, ownership)
+  }
   try {
     await commandRunner({ command: 'direct', entrypoint: 'docker' }, [
       'pull', descriptor.image,
@@ -259,6 +267,10 @@ async function ensureOciRuntime(descriptor, options = {}) {
       false,
     )
   }
+  if (ownership) {
+    const inspected = await commandRunner({ command: 'direct', entrypoint: 'docker' }, ['image', 'inspect', descriptor.image, '--format', '{{.Id}}'], options)
+    await recordManagedImage(dataDir, { ...ownership, id: inspected.stdout.trim(), uncertain: false })
+  }
 }
 
 async function runOciEntrypoint(descriptor, args, options = {}) {
@@ -276,14 +288,18 @@ async function runOciEntrypoint(descriptor, args, options = {}) {
     '--memory', `${resources.memoryMiB}m`,
     '--label', `agent-insight.benchmark-key=${descriptor.benchmarkKey}`,
     '--label', `agent-insight.evaluator-key=${descriptor.key}`,
+    '--label', 'agent-insight.role=evaluator-runtime',
+    '--label', `agent-insight.evaluator-instance=${controllerContainer}`,
   ]
   const runtimeEnv = { ...(options.env || {}) }
+  runtimeEnv.EVALUATOR_INSTANCE_ID = controllerContainer
+  if (options.evaluationId) dockerArgs.push('--label', `agent-insight.evaluation-id=${options.evaluationId}`)
   const forbiddenRuntimeEnv = new Set([
     'EVALUATOR_AGENT_INSIGHT_BASE_URL',
     'EVALUATOR_RUNTIME_ENV_NAMES',
   ])
   for (const name of String(process.env.EVALUATOR_RUNTIME_ENV_NAMES || '').split(',').filter(Boolean)) {
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !forbiddenRuntimeEnv.has(name) && process.env[name] != null) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !name.startsWith('IMAGE_POOL_') && !forbiddenRuntimeEnv.has(name) && process.env[name] != null) {
       runtimeEnv[name] = process.env[name]
     }
   }
@@ -321,6 +337,11 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     if (!runtimeStrategy) throw new TypeError(`unsupported evaluator runtime: ${descriptor.runtime}`)
     this.descriptor = descriptor
     this.processRunner = processRunner || runtimeStrategy
+  }
+
+  async describeImages(payload, arch) {
+    if (!this.descriptor.imageProvider) return []
+    return require(this.descriptor.imageProvider).describeImages(payload, arch)
   }
 
   validateBenchmarkJob(job) {
@@ -433,6 +454,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
     await fsp.writeFile(requestPath, `${JSON.stringify({
       schemaVersion: 'evaluator-entrypoint/v1',
       evaluationJob: input.job,
+      ...(input.preparedImages ? { preparedImages: input.preparedImages } : {}),
       artifacts,
     }, null, 2)}\n`, { mode: 0o400 })
     await fsp.writeFile(casePath, `${JSON.stringify(input.job.payload, null, 2)}\n`, { mode: 0o400 })
@@ -450,6 +472,7 @@ class FileEvaluatorEntrypoint extends AbstractBenchmarkEvaluator {
       signal: input.signal,
       env: runtimeEnvironment(this.descriptor, input.job.limits),
       resources: input.job.limits,
+      evaluationId: input.job.evaluationId,
     })
     let rawOutput
     try { rawOutput = JSON.parse(await fsp.readFile(outputPath, 'utf8')) }

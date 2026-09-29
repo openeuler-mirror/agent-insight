@@ -9,6 +9,7 @@
  */
 
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
+import { experimentSignal } from './cancellation-context';
 
 export type JudgeSamplingProfile = 'canonical-trajectory';
 
@@ -71,6 +72,7 @@ export function hasJudgeLlmTestInjection(): boolean {
 
 /** 统一入口：引擎只认这一个函数，实现可被测试替换。 */
 export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Promise<string> {
+  experimentSignal()?.throwIfAborted();
   if (injectedCaller) return injectedCaller(username, req);
 
   const { shouldForceOpencodeEvalTransport } = await import(
@@ -84,6 +86,7 @@ export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Prom
   try {
     return await directJudgeCaller(username, req);
   } catch (directErr) {
+    experimentSignal()?.throwIfAborted();
     console.warn(
       '[experiment-judge] direct LLM path failed, falling back to opencode transport:',
       (directErr as Error)?.message || directErr,
@@ -126,7 +129,7 @@ const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
   const response = await model.invoke([
     new SystemMessage(req.system),
     new HumanMessage(req.user),
-  ]);
+  ], { signal: experimentSignal() });
   const raw = typeof response.content === 'string'
     ? response.content
     : JSON.stringify(response.content);
@@ -201,7 +204,7 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
               onText: (e: { delta: string }) => { raw += e.delta; },
               onError: (e: Error) => { runtimeError = e; },
             },
-            { streamTimeoutMs: timeoutMs, idleTimeoutMs: timeoutMs },
+            { streamTimeoutMs: timeoutMs, idleTimeoutMs: timeoutMs, signal: experimentSignal() },
           ),
           new Promise<never>((_, reject) => {
             timer = setTimeout(

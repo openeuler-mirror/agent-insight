@@ -5,6 +5,10 @@ export interface BenchmarkFailurePresentation {
 }
 
 const FAILURE_META: Record<string, { label: string; message: string }> = {
+  EVENT_MONITOR_UNAVAILABLE: {
+    label: '失败监测通道未就绪',
+    message: 'OpenCode 事件插件未就绪，请更新客户端并检查插件加载。',
+  },
   AGENT_TIMEOUT: {
     label: 'Agent 执行超时',
     message: 'Agent 在规定时间内未完成，执行进程已终止。',

@@ -373,16 +373,25 @@ class SweBenchEvaluator extends AbstractBenchmarkEvaluator {
       stage: 'resolving_image',
       occurredAt: new Date().toISOString(),
     })
-    const image = await this.imageResolver.resolve(
+    const prepared = input.preparedImages?.[0]
+    const image = prepared || await this.imageResolver.resolve(
       instance.image,
       instance.instance_id,
       input.workDir,
       input.signal,
     )
+    if (prepared) {
+      const selected = this.imageResolver.imageFor(instance.image, instance.instance_id, prepared.daemonArch)
+      if (prepared.image !== selected.image || !/^sha256:[a-f0-9]{64}$/i.test(prepared.imageId)) {
+        throw new EvaluatorProtocolError('SWE_PREPARED_IMAGE_INVALID', '公共池镜像与评测实例不匹配', 500)
+      }
+      await this.processRunner('docker', ['image', 'inspect', prepared.imageId], { signal: input.signal, errorCode: 'SWE_PREPARED_IMAGE_MISSING' })
+    }
     const runnerInputPath = path.join(input.workDir, 'harness-input.json')
     const runnerOutputPath = path.join(input.workDir, 'harness-output.json')
     await fs.writeFile(runnerInputPath, JSON.stringify({
       evaluationId: input.job.evaluationId,
+      managedImage: Boolean(prepared),
       instance: { ...instance, image: image.pinnedImage },
       prediction: {
         instance_id: input.job.payload.prediction.instance_id,
@@ -437,4 +446,6 @@ module.exports = {
   SweBenchEvaluator,
   SweBenchImageResolver,
   runProcess,
+  imageProxyPrefix,
+  verifiedImageMirrorRepositories,
 }

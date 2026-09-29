@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { listBenchmarkAdapters } from '@/lib/benchmark/adapter-registry';
+import {
+  benchmarkEvaluatorCard,
+  benchmarkEvaluatorCardsFromManifests,
+} from '@/lib/evaluators/benchmark-evaluator-cards';
 
 import {
   benchmarkPresentationText,
@@ -20,6 +25,35 @@ test('Benchmark Presentation resolves only the shared case projection paths', ()
   assert.equal(benchmarkPresentationValue(item, 'externalCaseId'), 'case-1');
   assert.equal(benchmarkPresentationValue(item, 'values.repository.name'), 'demo');
   assert.equal(benchmarkPresentationValue(item, 'values.missing'), undefined);
+});
+
+test('Benchmark evaluator catalog projects public card data from installed packages', () => {
+  const [manifest] = listBenchmarkAdapters();
+  const [card] = benchmarkEvaluatorCardsFromManifests([manifest]);
+  assert.equal(card.id, `benchmark:${manifest.evaluation.evaluatorKey}`);
+  assert.equal(card.name, manifest.presentation?.evaluator?.displayName);
+  assert.equal(card.outputDescription, manifest.presentation?.evaluator?.outputDescription);
+  assert.deepEqual(card.targetTypes, ['Benchmark']);
+  assert.deepEqual(card.scenarios, [manifest.displayName]);
+  assert.equal('schemas' in card, false);
+  assert.equal('evaluation' in card, false);
+  assert.deepEqual(card, benchmarkEvaluatorCard({
+    evaluatorKey: manifest.evaluation.evaluatorKey,
+    benchmarkName: manifest.displayName,
+    presentation: manifest.presentation,
+  }));
+
+  const another = {
+    ...manifest,
+    adapterKey: 'another-benchmark',
+    displayName: 'Another Benchmark',
+    evaluation: { ...manifest.evaluation, evaluatorKey: 'another-evaluator' },
+  };
+  assert.deepEqual(
+    benchmarkEvaluatorCardsFromManifests([manifest, another]).map((item) => item.id),
+    [card.id, 'benchmark:another-evaluator'],
+  );
+  assert.throws(() => benchmarkEvaluatorCardsFromManifests([manifest, manifest]), /evaluatorKey 重复/);
 });
 
 test('Benchmark Presentation formats values without reading Evidence', () => {

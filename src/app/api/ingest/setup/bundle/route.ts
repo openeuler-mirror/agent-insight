@@ -30,6 +30,11 @@ const BUNDLES: Record<string, string[]> = {
   client: [
     'scripts/install-ras-client.js',
     'scripts/reliability-client.cjs',
+    'scripts/ordinary-experiment-state.cjs',
+    'scripts/skill-experiment-workspace.cjs',
+    'scripts/agent-run-diagnostics.cjs',
+    'scripts/opencode-experiment-events.cjs',
+    'scripts/opencode-experiment-events.mjs',
     'scripts/agent-insight-home.cjs',
     'scripts/ws-client.cjs',
     'scripts/install-fault-injection.js',

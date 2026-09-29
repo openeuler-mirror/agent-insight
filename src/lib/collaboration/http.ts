@@ -62,6 +62,12 @@ export function createCollaborationHandlers({ service, authenticate }: Collabora
         }),
         graph: (request: Request, id: string) => handle('query_graph', async context => {
             const username = await user(request, context);
+            const nativeTaskId = new URL(request.url).searchParams.get('traceTaskId');
+            if (id === 'native' && nativeTaskId !== null) {
+                if (!nativeTaskId.trim() || nativeTaskId.length > 512) invalid('会话编号长度不合法', 'traceTaskId');
+                context.traceTaskId = nativeTaskId;
+                return response(await service.nativeGraph(username, nativeTaskId));
+            }
             identifier(id, 'collaborationId');
             context.collaborationId = id;
             const params = new URL(request.url).searchParams;

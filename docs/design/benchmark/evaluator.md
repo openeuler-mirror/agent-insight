@@ -1,10 +1,10 @@
 # Benchmark 步骤 09～12：评测服务后端设计
 
 > 范围：评测服务接单、准备并运行 Case 容器、上传证据、回传原生结果，以及 Agent Insight 调用 Adapter 第五个方法归一化结果。
-> 不包含前端、服务注册中心、多机调度、Benchmark/数据集/评估器业务版本。独立机器部署见[用户指南](../../user-guide/evaluation/quickstart.md#swe-bench-等容器-benchmark-的评测服务)。当前脚本与配置热加载已经实现。
+> 不包含前端、服务注册中心、多机调度、Benchmark/数据集/评估器业务版本。独立机器部署见[服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md)。当前脚本与配置热加载已经实现。
 > 前序：[提交校验与评测下发](evaluation-dispatch.md)。
 
-状态：步骤 09～12 的 Controller、协议、SWE-bench 官方 Harness 包装、平台回调和结果归一化已实现；后续步骤 13 查询也已实现，01～13 已在真实数据库和真实 Verified Case 上完成 API 级串联。一期另提供 Linux/macOS `start-evaluator.sh`、容器内外 Doctor、显式 Gold Smoke 和 Agent Insight 专用通信配置热加载。2026-09-04 已在 ARM64 Docker Desktop 上完成双层容器验收：Docker 化 Controller 通过真实 HTTP 接单、下载真实 Artifact、启动官方 `pallets__flask-5014` Case 容器，并将进度、三类证据和原生结果回传 Agent Insight；平台完成归一化和结果查询。该结果只作为 ARM64 单 Case 冒烟，不替代 x86_64 Linux 正式计分验收。
+状态：步骤 09～12 的 Controller、协议、SWE-bench 官方 Harness 包装、平台回调和结果归一化已实现；后续步骤 13 查询也已实现，01～13 已在真实数据库和真实 Verified Case 上完成 API 级串联。一期另提供 Linux/macOS `evaluator.sh start`、容器内外 Doctor、显式 Gold Smoke 和 Agent Insight 专用通信配置热加载。2026-09-04 已在 ARM64 Docker Desktop 上完成双层容器验收：Docker 化 Controller 通过真实 HTTP 接单、下载真实 Artifact、启动官方 `pallets__flask-5014` Case 容器，并将进度、三类证据和原生结果回传 Agent Insight；平台完成归一化和结果查询。该结果只作为 ARM64 单 Case 冒烟，不替代 x86_64 Linux 正式计分验收。
 
 ## 1. 最终方案
 
@@ -279,7 +279,7 @@ EVALUATOR_AGENT_INSIGHT_BASE_URL=https://agent-insight.example.com
 # 具体 Benchmark 环境变量由接入包声明并通过 --evaluator-env 传入
 ```
 
-Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/start-evaluator.sh`。脚本接受可选 `--platform-base-url`，并可重复使用 `--evaluator-env NAME=VALUE` 注入实例配置；Evaluator 下载 Artifact、上传证据及进度/完成回调优先使用实际可达地址。脚本构建通用 Controller、以 `--restart unless-stopped` 运行固定名称容器、挂载当前 Docker context 的 Unix Socket和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不准备 Runtime 或 Case 镜像；真实任务首次进入 `preparing_runtime` 时自动准备，后续复用缓存。显式 `--smoke <evaluator-key>` 同样会按需准备该 Runtime。Controller 的 `status` 只表示 HTTP、journal、Docker Socket 和 Catalog 状态，每个 `evaluators[]` 独立报告运行时事实。
+Linux 或 macOS 评测机在固定 Git revision 中执行 `scripts/evaluator.sh start`。脚本接受可选 `--platform-base-url`，并可重复使用 `--evaluator-env NAME=VALUE` 注入实例配置；Evaluator 下载 Artifact、上传证据及进度/完成回调优先使用实际可达地址。脚本构建通用 Controller、以 `--restart unless-stopped` 运行固定名称容器、挂载当前 Docker context 的 Unix Socket和独立数据卷，并自动执行 `scripts/evaluator-doctor.sh`。默认 Doctor 不准备 Runtime 或 Case 镜像；真实任务首次进入 `preparing_runtime` 时自动准备，后续复用缓存。显式 `--smoke <evaluator-key>` 同样会按需准备该 Runtime。Controller 的 `status` 只表示 HTTP、journal、Docker Socket 和 Catalog 状态，每个 `evaluators[]` 独立报告运行时事实。
 
 本机 Docker 内访问宿主用 `host.docker.internal`；独立评测机使用 Agent Insight 的实际 HTTPS 地址。生产环境应由反向代理终止 TLS，并通过防火墙只允许两台服务互访。
 
@@ -299,7 +299,7 @@ services/evaluator/src/cli.cjs
 services/evaluator/Dockerfile
 scripts/benchmark/generate-catalog.cjs
 scripts/benchmark/build-evaluator-runtime.cjs
-scripts/start-evaluator.sh
+scripts/evaluator.sh
 scripts/evaluator-doctor.sh
 scripts/configure-evaluator-target.js
 benchmarks/swe-bench/benchmark.yaml

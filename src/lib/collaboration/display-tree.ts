@@ -54,7 +54,7 @@ export function buildCollaborationTraceTree(interactions: RawInteraction[]): Age
         if (!child || !parentGroup?.tree) continue;
         if (group.source.sequential) {
             parallelRoots.push(child);
-            Object.assign(child, { collaborationLabel: '上报关联 · 顺序展示', collaborationReason: '未提供 fromLocator，按上报顺序并列展示' });
+            Object.assign(child, { collaborationLabel: '上报关联 · 顺序展示', collaborationReason: '无唯一调用位置，按首次上报顺序并列展示' });
             continue;
         }
         const anchor = group.source.anchor;

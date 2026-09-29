@@ -84,6 +84,9 @@ const client = require_('../scripts/reliability-client.cjs') as {
   ) => Promise<boolean>
   normalizeModelIds: (models: unknown) => string[]
   extractTraceIdFromJsonLine: (line: string) => string | null
+  inspectOpencodeRunEvent: (line: string) => (import('../scripts/agent-run-diagnostics.cjs').OpencodeFailureEvent & {
+    traceId: string | null; idle: boolean; modelActivity: boolean;
+  }) | null
   sanitizeAgentDiagnostic: (value: unknown, maxLength?: number) => string
   classifyAgentExitFailure: (input: {
     platform: string
@@ -99,6 +102,7 @@ const client = require_('../scripts/reliability-client.cjs') as {
     traceId: string
     exitCode: number
     timedOut?: boolean
+    modelActivityObserved?: boolean
     startedAt?: string
     finishedAt?: string
   }>
@@ -169,6 +173,7 @@ test('client whitelist matches the server-side action set', () => {
     [...client.WHITELIST].sort(),
     [
       'APPLY_CLIENT_CONFIG',
+      'CANCEL_EXPERIMENT_RUN',
       'PREPARE_EXPERIMENT_CASE',
       'REFRESH_CAPABILITIES',
       'RUN_BENCHMARK_CASE',
@@ -618,6 +623,7 @@ test('OpenCode run events distinguish model activity, idle, and session errors',
       traceId: 'ses_waiting',
       idle: false,
       error: null,
+      modelResponse: false,
       modelActivity: false,
       type: 'step_start',
     },
@@ -659,6 +665,14 @@ if (process.argv.includes('--help')) {
   process.exit(0)
 }
 const mode = process.env.OPENCODE_SIGNAL_TEST_MODE
+const send = (kind) => require('node:fs').writeSync(3, JSON.stringify({ protocol: 1, token: process.env.AGENT_INSIGHT_EVENT_TOKEN, kind, sessionId: 'ses_' + mode }) + '\\n')
+if (mode !== 'no-monitor' && mode !== 'slow-ready') { send('ready'); send('session') }
+if (mode === 'slow-ready') {
+  setTimeout(() => {
+    send('ready'); send('session')
+    console.log(JSON.stringify({ type: 'text', sessionID: 'ses_slow-ready', part: { type: 'text', text: 'done' } }))
+  }, 1300)
+}
 console.log(JSON.stringify({ type: 'step_start', sessionID: 'ses_' + mode, part: { type: 'step-start' } }))
 if (mode === 'idle') {
   console.log(JSON.stringify({ type: 'session.idle', sessionID: 'ses_idle' }))
@@ -683,6 +697,34 @@ if (mode === 'timeout') setInterval(() => {}, 1000)
 if (mode === 'active') {
   console.log(JSON.stringify({ type: 'text', sessionID: 'ses_active', part: { type: 'text', text: 'done' } }))
 }
+if (mode === 'no-monitor') console.log(JSON.stringify({ type: 'text', sessionID: 'ses_no_monitor', part: { text: 'done' } }))
+const retryEvent = (attempt) => ({ type: 'session.status', properties: { status: {
+  type: 'retry', attempt, message: 'Cannot connect to API: socket connection closed',
+} } })
+if (['retry', 'midrun-retry', 'retry-recovered', 'retry-window'].includes(mode)) {
+  if (mode === 'midrun-retry') console.log(JSON.stringify({ type: 'text', part: { text: 'initial response' } }))
+  console.log(JSON.stringify(retryEvent(1)))
+  if (mode === 'retry-recovered') {
+    setTimeout(() => console.log(JSON.stringify({ type: 'text', sessionID: 'ses_retry-recovered', part: { text: 'recovered' } })), 30)
+  } else {
+    if (mode !== 'retry-window') setTimeout(() => process.stdout.write(JSON.stringify(retryEvent(2))), 30)
+    setInterval(() => {}, 1000)
+  }
+}
+if (mode === 'stderr-auth') {
+  process.stderr.write('Error: ProviderAuthError: invalid api key')
+  setInterval(() => {}, 1000)
+}
+if (mode === 'stderr-retry') {
+  process.stderr.write('Cannot con')
+  setTimeout(() => process.stderr.write('nect to API: socket closed [retrying in 1s attempt #2]'), 30)
+  // 失败信号后的迟到输出和正常退出不能覆盖失败。
+  process.on('SIGTERM', () => {
+    console.log(JSON.stringify({ type: 'text', part: { text: 'late response' } }))
+    process.exit(0)
+  })
+  setInterval(() => {}, 1000)
+}
 `)
   fs.chmodSync(executable, 0o755)
   process.env.PATH = `${binDir}:${previousPath || ''}`
@@ -696,7 +738,8 @@ if (mode === 'active') {
       agent: 'build',
       input: 'exercise OpenCode lifecycle signals',
       cwd: workspace,
-      timeoutSeconds: 10,
+      timeoutSeconds: mode === 'retry-window' ? 20 : 10,
+      startupTimeoutSeconds: mode === 'no-monitor' ? 1 : 3,
       firstModelResponseTimeoutSeconds,
     })
   }
@@ -722,6 +765,28 @@ if (mode === 'active') {
     const active = await run('active', 1)
     assert.equal(active.modelActivityObserved, true)
     assert.equal(active.traceId, 'ses_active')
+    const slowReady = await run('slow-ready', 1)
+    assert.equal(slowReady.eventMonitorReady, true)
+    assert.equal(slowReady.modelActivityObserved, true)
+    await assert.rejects(run('no-monitor'), { code: 'EVENT_MONITOR_UNAVAILABLE' })
+    for (const mode of ['retry', 'midrun-retry', 'stderr-retry', 'stderr-auth']) {
+      const started = Date.now()
+      await assert.rejects(run(mode), (error: unknown) => {
+        assert.equal((error as { code: string }).code, mode === 'stderr-auth' ? 'MODEL_UNAVAILABLE' : 'MODEL_ERROR')
+        return true
+      })
+      assert.ok(Date.now() - started < 5_000, mode)
+    }
+    const recovered = await run('retry-recovered')
+    assert.equal(recovered.modelActivityObserved, true)
+    assert.equal(recovered.traceId, 'ses_retry-recovered')
+    const retryStarted = Date.now()
+    await assert.rejects(run('retry-window', 15), (error: unknown) => {
+      assert.equal((error as { code: string }).code, 'MODEL_ERROR')
+      assert.match((error as Error).message, /10 秒内未恢复/)
+      return true
+    })
+    assert.ok(Date.now() - retryStarted < 15_000)
   } finally {
     if (previousPath === undefined) delete process.env.PATH
     else process.env.PATH = previousPath
@@ -905,7 +970,7 @@ test('client advertises Trace-ID-safe generic execution only for supported platf
     )
     const opencode = caps.platforms.find((platform) => platform.id === 'opencode')
     const xiaoo = caps.platforms.find((platform) => platform.id === 'xiaoo')
-    assert.deepEqual(opencode?.runExperimentCase, { version: 2, returnsTraceId: true })
+    assert.deepEqual(opencode?.runExperimentCase, { version: 2, returnsTraceId: true, skillSnapshotVersion: 4 })
     assert.equal(xiaoo?.runExperimentCase?.returnsTraceId, false)
   } finally {
     if (previousPath === undefined) delete process.env.PATH

@@ -38,6 +38,8 @@ async function ownedRun(runId: string, clientId: string) {
   if (run.clientId !== clientId) {
     throw new BenchmarkProtocolError('RUN_CLIENT_MISMATCH', 'Run 不属于当前执行器', 403)
   }
+  const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
+  await assertExperimentActive(run.experimentId, run.experimentCaseId);
   return run
 }
 
@@ -282,8 +284,8 @@ export async function completeBenchmarkRun(input: {
     if (!(error instanceof BenchmarkProtocolError) || error.details?.phase !== 'submission-validation') {
       throw error
     }
-    await prisma.benchmarkCaseRun.update({
-      where: { id: input.runId },
+    await prisma.benchmarkCaseRun.updateMany({
+      where: { id: input.runId, status: { not: 'cancelled' } },
       data: {
         status: 'submission_invalid',
         failureCode: error.code,

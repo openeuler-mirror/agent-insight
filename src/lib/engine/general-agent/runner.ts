@@ -1,3 +1,4 @@
+import { createAgentRunError, sanitizeAgentDiagnostic, type AgentRunError } from '../../../../scripts/agent-run-diagnostics.cjs';
 import { randomUUID } from 'node:crypto';
 import { Agent, setGlobalDispatcher } from 'undici';
 
@@ -260,6 +261,11 @@ export interface RunGeneralAgentResult {
 export async function runGeneralAgent(
   input: RunGeneralAgentInput,
 ): Promise<RunGeneralAgentResult> {
+  const { experimentSignal } = await import('@/lib/engine/experiment/cancellation-context');
+  const cancellation = experimentSignal();
+  cancellation?.throwIfAborted();
+  if (cancellation) input = { ...input, chatOptions: { ...input.chatOptions,
+    signal: input.chatOptions?.signal ? AbortSignal.any([input.chatOptions.signal, cancellation]) : cancellation } };
   const user = String(input.user || '').trim();
   if (!user) throw new Error('user is required');
   // 把 query 里的 `~/` 展开成执行机绝对 HOME, 再交给 agent —— `~` 是 shell 语法糖, agent 用
@@ -513,10 +519,33 @@ async function runGeneralAgentWithClient(
   };
 
   console.log('[general-agent] calling client.chat, sessionId:', sessionId);
+  const executionStartedAt = new Date().toISOString();
   resetProgressWatchdog();
   const result = await (async () => {
     try {
-      return await client.chat(sessionId, payload, mergedHandlers, chatOptions);
+      const response = await client.chat(sessionId, payload, mergedHandlers, chatOptions);
+      if (progressTimedOut) throw createAgentRunError('AGENT_TIMEOUT', `general agent made no progress for ${progressTimeoutMs}ms`);
+      return response;
+    } catch (error) {
+      const source = error as Partial<AgentRunError>;
+      const failure = createAgentRunError(
+        progressTimedOut ? 'AGENT_TIMEOUT' : source.code || 'MODEL_ERROR',
+        sanitizeAgentDiagnostic(error instanceof Error ? error.message : String(error)),
+        { ...source.runFacts, traceId: sessionId, startedAt: executionStartedAt, finishedAt: new Date().toISOString() },
+      );
+      if (input.recordTraceAs) {
+        try {
+          const { recordEvaluatorExecution } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
+          await recordEvaluatorExecution(client, {
+            taskId: sessionId, agentName: input.recordTraceAs, user, query,
+            skill: effectiveTraceSkill, skillVersion: skillMeta?.version ?? input.skillVersion,
+            failure, startedAt: executionStartedAt, completedAt: failure.runFacts?.finishedAt,
+          });
+        } catch (recordError) {
+          console.warn('[general-agent] failed to preserve failed Trace:', sanitizeAgentDiagnostic(recordError));
+        }
+      }
+      throw failure;
     } finally {
       clearProgressWatchdog();
       externalSignal?.removeEventListener('abort', abortFromExternalSignal);
@@ -552,6 +581,8 @@ async function runGeneralAgentWithClient(
         skill: effectiveTraceSkill,
         skillVersion: skillMeta?.version ?? input.skillVersion,
         fallbackOutput: result.text,
+        startedAt: executionStartedAt,
+        completedAt: new Date().toISOString(),
       });
     } catch (err) {
       console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);

@@ -568,6 +568,67 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.equal(collaboration?.sourceType, 'goal-plus-semantic');
   assert.equal(collaboration?.events.length, 1);
   assert.equal(collaboration?.events[0].endpointResolutions.every(row => row.linkState === 'linked'), true);
+  await t.test('graph preserves authoritative Goal Plus endpoints without explicit session bindings', async () => {
+    const graph = await reportedService.graph('alice', identity.collaborationId);
+    const main = graph.nodes.find(node => node.sessionId === identity.mainSessionId);
+    assert.ok(main);
+    assert.equal(main.traceResolution, 'resolved');
+    assert.equal(main.executionId, 'goal-main');
+    assert.equal(main.message, undefined);
+    assert.deepEqual(graph.events[0].traceResolution, { from: 'resolved', to: 'resolved' });
+    assert.equal(graph.events[0].endpointResolutions.from.status, 'resolved');
+    assert.equal(graph.events[0].fromAnchor.status, 'not_provided');
+  });
+  await t.test('reported graph and retries keep new session ambiguity despite previously linked endpoints', async () => {
+    await prismaRaw.$executeRawUnsafe(
+      'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?)',
+      'alias-first', 'alias-first-trace', 'shared-alias', 'alice', 'opencode',
+    );
+    await prismaRaw.session.create({ data: {
+      taskId: 'alias-first-trace', user: 'alice', interactions: '[{"role":"assistant","content":"done"}]',
+    } });
+    await reportedService.report('alice', {
+      collaborationId: 'reported-alias', eventId: 'alias-event',
+      fromSessionId: 'shared-alias', toSessionId: 'session-b', description: '传递结果',
+    });
+    await prismaRaw.$executeRawUnsafe(
+      'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?)',
+      'alias-second', 'alias-second-trace', 'shared-alias', 'alice', 'opencode',
+    );
+    const graph = await reportedService.graph('alice', 'reported-alias');
+    assert.equal(graph.events[0].endpointResolutions.from.status, 'resolved');
+    assert.equal(graph.events[0].traceResolution.from, 'unresolved');
+    assert.equal(graph.nodes.find(node => node.sessionId === 'shared-alias')?.traceResolution, 'unresolved');
+    const retry = await reportedService.report('alice', {
+      collaborationId: 'reported-alias', eventId: 'alias-event',
+      fromSessionId: 'shared-alias', toSessionId: 'session-b', description: '传递结果',
+    });
+    const refreshed = await reportedService.graph('alice', 'reported-alias');
+    assert.equal(retry.result, 'duplicate');
+    assert.equal(retry.endpointResolutions?.from.status, 'ambiguous');
+    assert.deepEqual(retry.traceResolution, refreshed.events[0].traceResolution);
+  });
+  await t.test('report does not replace a checked native target with a persisted parent relationship', async () => {
+    await prismaRaw.session.create({ data: {
+      taskId: 'bound-main-trace', user: 'alice', interactions: JSON.stringify([{
+        role: 'assistant', tool_calls: [{ id: 'bound-call', function: { name: 'task', arguments: JSON.stringify({ session_id: 'worker:run-b:search-b' }) } }],
+      }]),
+    } });
+    await prismaRaw.session.create({ data: { taskId: 'bound-worker-trace', user: 'alice', interactions: '[{"role":"assistant","content":"done"}]' } });
+    await prismaRaw.session.create({ data: { taskId: 'worker:run-b:search-b', user: 'alice', interactions: '[{"role":"assistant","content":"other Trace"}]' } });
+    await prismaRaw.$executeRawUnsafe(
+      'UPDATE "Execution" SET "parentExecutionId"=? WHERE "id"=?',
+      'bound-main-execution', 'bound-worker-execution',
+    );
+    const retry = await reportedService.report('alice', {
+      collaborationId: boundCollaborationId, eventId: 'evt_bound_sessions',
+      fromSessionId: 'main', toSessionId: 'worker:run-b:search-b', description: '逻辑会话通过 binding 关联真实 Trace',
+    });
+    const graph = await reportedService.graph('alice', boundCollaborationId);
+    assert.equal(graph.events[0].fromAnchor.status, 'not_provided');
+    assert.equal(retry.fromAnchor.status, graph.events[0].fromAnchor.status);
+    assert.deepEqual(graph.automaticEvents, []);
+  });
   const traceProjection = await findGoalPlusTraceProjectionMembers('alice', 'goal-main-session');
   assert.equal(traceProjection.members.length, 1);
   assert.equal(traceProjection.members[0].taskId, 'goal-plus:gpsrc-projection:worker-projection');

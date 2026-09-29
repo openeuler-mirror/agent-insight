@@ -26,6 +26,7 @@ import {
   parseBatchFromFileContent,
   readFileAsText,
 } from '@/lib/dataset-batch-import';
+import { safeUUID } from '@/lib/safe-uuid';
 import { useAuth } from '@/lib/auth/auth-context';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
@@ -551,7 +552,7 @@ export default function DatasetItemsPage() {
       ...dataset.fields,
       catalogKey
         ? createEvaluatorCatalogField(catalogKey, label)
-        : { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
+        : { id: safeUUID(), key, label, type: fieldDraft.type },
     ]);
     if (ok) {
       closeFieldEditor();
@@ -1140,7 +1141,7 @@ export default function DatasetItemsPage() {
           role="presentation"
           className={styles.modalBackdrop}
           onMouseDown={event => {
-            if (event.target === event.currentTarget && !saving) closeFieldEditor();
+            if (event.button === 0 && event.target === event.currentTarget && !saving) closeFieldEditor();
           }}
         >
           <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel}>
