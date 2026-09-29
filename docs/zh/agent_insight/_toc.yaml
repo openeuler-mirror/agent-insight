@@ -1,0 +1,24 @@
+label: Agent Insight 用户指南
+isManual: true
+description: 通过 RPM 安装 Agent Insight，接入 Agent 运行数据，查看执行链路并开展评测。
+sections:
+  - label: 认识 Agent Insight
+    href: ./agent_insight_overview.md
+  - label: 安装与维护
+    href: ./agent_insight_installation.md
+  - label: 快速上手
+    href: ./agent_insight_quickstart.md
+  - label: 登录和接入 Agent
+    href: ./agent_insight_connection.md
+  - label: 注册模型
+    href: ./agent_insight_models.md
+  - label: 链路追踪
+    href: ./agent_insight_trace.md
+  - label: 管理评测数据集
+    href: ./agent_insight_datasets.md
+  - label: 管理评估器
+    href: ./agent_insight_evaluators.md
+  - label: 运行评测实验
+    href: ./agent_insight_experiments.md
+  - label: 常见问题
+    href: ./agent_insight_faq.md
