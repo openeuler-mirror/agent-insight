@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
+import { en } from '../src/locales/en';
+import { zh } from '../src/locales/zh';
 
 const source = fs.readFileSync(new URL('../src/app/(main)/trace/page.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('trace.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -33,17 +35,24 @@ test('Trace status preserves timed_out from either API naming convention', () =>
     assert.equal(status({ trace_completed_at: '2026-09-22T00:00:00Z' }), 'success');
 });
 
+test('inactivity is presented as an observability timeout rather than an execution result', () => {
+    assert.equal(zh.tracePage.statusTimedOut, '观测超时');
+    assert.match(zh.tracePage.statusTimedOutHint, /无法确认任务是否仍在执行/);
+    assert.equal(en.tracePage.statusTimedOut, 'Telemetry timeout');
+    assert.match(en.tracePage.statusTimedOutHint, /execution may still be active/);
+});
+
 test('detail refresh updates timeout metadata independently of the pending session', async () => {
     const node = find(n => ts.isVariableDeclaration(n) && n.name.getText(ast) === 'fetchSession') as ts.VariableDeclaration;
     const callback = (node.initializer as ts.CallExpression).arguments[0];
-    const requests: Array<{ url: string; options: any }> = [];
+    const requests: Array<{ url: string; options: RequestInit }> = [];
     const metadata = { task_id: 'trace-timeout', trace_status: 'timed_out' };
     const updates: unknown[] = [];
     const refresh = evaluate<(silent: boolean) => void>(callback.getText(ast), {
         taskId: 'trace-timeout', apiKey: 'test-key', sessionRef: { current: {} },
         setLoading() {}, setSession() {}, setSecondsSinceRefresh() {},
         onExecutionRefresh: (value: unknown) => updates.push(value),
-        apiFetch: (url: string, options: unknown) => {
+        apiFetch: (url: string, options: RequestInit) => {
             requests.push({ url, options });
             if (url.startsWith('/api/observe/data?')) {
                 return Promise.resolve({ ok: true, json: async () => [metadata] });
@@ -56,8 +65,9 @@ test('detail refresh updates timeout metadata independently of the pending sessi
     assert.equal(requests.length, 2, 'session and lightweight metadata refresh in parallel');
     assert.deepEqual(updates, [metadata]);
     for (const request of requests) {
+        const headers = request.options.headers as Record<string, string>;
         assert.equal(request.options.cache, 'no-store');
-        assert.equal(request.options.headers['x-witty-api-key'], 'test-key');
+        assert.equal(headers['x-witty-api-key'], 'test-key');
     }
     assert.match(requests.find(r => r.url.startsWith('/api/observe/data?'))!.url, /fields=light/);
 });

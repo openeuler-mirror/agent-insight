@@ -179,6 +179,16 @@ class MctsProxyCore {
     });
   }
 
+  pulse(observedAt = this.now()) {
+    return this.queue(async () => {
+      for (const run of this.runs.values()) {
+        run.updatedAt = Math.max(run.updatedAt, observedAt);
+        await this.emitAgent(run, undefined, false, { "mcts.observer.liveness": "launcher-process" });
+      }
+      await this.persist();
+    });
+  }
+
   backgroundTask(operation) {
     this.background = this.background.then(operation).catch(() => undefined);
   }
@@ -463,7 +473,7 @@ class MctsProxyCore {
     }
   }
 
-  async emitAgent(run, runtime, terminal = false) {
+  async emitAgent(run, runtime, terminal = false, extraAttributes = {}) {
     const sessionId = runtime?.sessionId || run.sessionId;
     const startedAt = runtime?.startedAt || run.startedAt;
     const endedAt = runtime?.updatedAt || run.updatedAt || startedAt;
@@ -498,6 +508,7 @@ class MctsProxyCore {
         "mcts.memory_pool.events": "unavailable",
         "mcts.projection.truncated": run.projectionTruncated,
         "mcts.observer.dropped": this.droppedObservations,
+        ...extraAttributes,
       },
     });
   }

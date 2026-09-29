@@ -19,6 +19,8 @@ const {
 } = require("../shared/trace-transport.cjs");
 const { DurableCollaborationOutbox } = require("../shared/collaboration-transport.cjs");
 
+const LIVENESS_INTERVAL_MS = 60_000;
+
 function parseArgs(argv) {
   const separator = argv.indexOf("--");
   const flags = separator >= 0 ? argv.slice(0, separator) : [];
@@ -213,21 +215,40 @@ async function main(argv = process.argv.slice(2)) {
   relationshipTimer.unref?.();
   const child = runChild(args.command, { ...process.env, XGOVERNOR_BASE_URL: gateway.url }, line => core.observeStdoutLine(line));
   const forward = signal => child.kill(signal);
+  const onSighup = () => forward("SIGHUP");
   const onSigint = () => forward("SIGINT");
   const onSigterm = () => forward("SIGTERM");
+  const livenessTimer = setInterval(() => { void core.pulse(Date.now()); }, LIVENESS_INTERVAL_MS);
+  livenessTimer.unref?.();
+  process.on("SIGHUP", onSighup);
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
-  const result = await childResult(child);
-  process.off("SIGINT", onSigint);
-  process.off("SIGTERM", onSigterm);
-  clearInterval(traceTimer);
-  clearInterval(relationshipTimer);
-  await bounded(() => traceFlush);
-  await bounded(() => relationshipFlush);
-  await core.finish(result.code, result.signal);
-  await bounded(() => uploader.flushOnce());
-  await bounded(() => outbox.flushOnce());
-  await gateway.close();
+  let result;
+  let failure;
+  const cleanupErrors = [];
+  const cleanup = async operation => {
+    try { await operation(); } catch (error) { cleanupErrors.push(error); }
+  };
+  try {
+    result = await childResult(child);
+  } catch (error) {
+    failure = error;
+  } finally {
+    process.off("SIGHUP", onSighup);
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    clearInterval(livenessTimer);
+    clearInterval(traceTimer);
+    clearInterval(relationshipTimer);
+    await cleanup(() => bounded(() => traceFlush));
+    await cleanup(() => bounded(() => relationshipFlush));
+    await cleanup(() => core.finish(result?.code ?? 1, result?.signal ?? null));
+    await cleanup(() => bounded(() => uploader.flushOnce()));
+    await cleanup(() => bounded(() => outbox.flushOnce()));
+    await cleanup(() => bounded(() => gateway.close()));
+  }
+  if (failure) throw failure;
+  if (cleanupErrors.length) throw cleanupErrors[0];
   process.exitCode = result.code ?? signalExitCode(result.signal);
 }
 
@@ -236,4 +257,4 @@ if (require.main === module) main().catch(error => {
   process.exitCode = 1;
 });
 
-module.exports = { bounded, childResult, loadConfig, main, parseArgs, preflightUpstream, runChild, signalExitCode, teeLines };
+module.exports = { LIVENESS_INTERVAL_MS, bounded, childResult, loadConfig, main, parseArgs, preflightUpstream, runChild, signalExitCode, teeLines };

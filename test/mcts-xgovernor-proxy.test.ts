@@ -15,7 +15,10 @@ const {
 } = require('../scripts/agent-trace-collectors/mcts-xgovernor-proxy/core.cjs');
 const { createGateway, inspectableJson } = require('../scripts/agent-trace-collectors/mcts-xgovernor-proxy/gateway.cjs');
 const { install } = require('../scripts/agent-trace-collectors/mcts-xgovernor-proxy/install.cjs');
-const { preflightUpstream } = require('../scripts/agent-trace-collectors/mcts-xgovernor-proxy/run.cjs');
+const {
+  LIVENESS_INTERVAL_MS,
+  preflightUpstream,
+} = require('../scripts/agent-trace-collectors/mcts-xgovernor-proxy/run.cjs');
 
 class MemoryWriter {
   events: Array<Record<string, unknown>> = [];
@@ -189,6 +192,36 @@ test('MCTS stdout summaries are synthetic observations', async () => {
   const summary = writer.events.find(event => event.name === 'mcts.summary.choose');
   assert.equal((summary?.attributes as Record<string, unknown>)['mcts.summary.unbound'], true);
   assert.equal((summary?.attributes as Record<string, unknown>)['mcts.synthetic'], true);
+});
+
+test('MCTS launcher pulse refreshes only the stable coordinator snapshot', async () => {
+  const writer = new MemoryWriter();
+  let now = 1_700_000_000_000;
+  const core = new MctsProxyCore({ writer, now: () => now });
+
+  await core.pulse(now);
+  assert.equal(writer.events.length, 0, 'a pulse cannot create a run before MCTS identifies itself');
+
+  await core.observeRequest({
+    id: 'open', path: '/api/v1/sessions/open', startedAt: now,
+    body: requestBody('liveness-run', { runtime_id: 'runtime-liveness' }),
+  });
+  now += LIVENESS_INTERVAL_MS;
+  await core.pulse(now);
+
+  const coordinatorSnapshots = writer.events.filter(event => event.name === 'agent.mcts.coordinator');
+  assert.equal(coordinatorSnapshots.length, 2);
+  assert.equal(coordinatorSnapshots[0].spanId, coordinatorSnapshots[1].spanId);
+  assert.equal(coordinatorSnapshots[1].endTimeMs, now);
+  assert.equal(
+    (coordinatorSnapshots[1].attributes as Record<string, unknown>)['mcts.observer.liveness'],
+    'launcher-process',
+  );
+  assert.equal(
+    (coordinatorSnapshots[1].attributes as Record<string, unknown>)['agent.insight.trace.completed'],
+    false,
+  );
+  assert.equal(writer.events.some(event => event.kind === 'tool' || event.kind === 'llm'), false);
 });
 
 test('MCTS role classifier uses structural evidence and keeps uncertain runtimes unknown', () => {

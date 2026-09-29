@@ -78,7 +78,9 @@ Agent Insight 链路追踪
             └─ LLM / Tool
 ```
 
-每个 Runtime 使用独立 Trace Session，父子关系通过现有跨 Session binding/event 接口上报。运行期间每 10 秒尝试增量上传，结束时再做一次有界刷新。关系数据和 Trace 可乱序到达；网络失败时本地 spool/outbox 会保留并在后续刷新时重试。
+每个 Runtime 使用独立 Trace Session，父子关系通过现有跨 Session binding/event 接口上报。运行期间每 10 秒尝试增量上传；只要启动器管理的 MCTS 子进程仍存活，还会每 60 秒刷新同一个 coordinator Agent 快照。这个保活不会新增 Tool/LLM 节点或调用次数，但能让长时间 official test、远端 exec 等无模型事件阶段继续显示“执行中”。结束时启动器写入终态并再做一次有界刷新。关系数据和 Trace 可乱序到达；网络失败时本地 spool/outbox 会保留并在后续刷新时重试。
+
+“观测超时”表示连续 10 分钟没有收到采集更新，不能据此断定 MCTS 已停止。正常运行的启动器会通过上述保活避免这种状态；如果启动器被强制终止、宿主机掉电或采集网络长期不可用，远端任务可能仍在继续，而页面会显示“观测超时”。新 Trace 到达后状态会自动恢复为“执行中”。
 
 父级的 TASK 行表示一次 Runtime 派生关系，不是另一次 LLM 调用。TASK 的 `session_id` 与子 Runtime 的逻辑 Session ID 精确一致时，子 Agent 会展开在该 TASK 下，并显示子 Trace 的真实耗时；关系尚未定位时显示 `-`，不会把瞬时关系事件误报为 `0ms`。stdout 调度摘要只显示对应的观测/Tool 行，不代表发生了一次模型调用，也不会额外生成 LLM 行。
 
@@ -94,7 +96,7 @@ xGovernor 把工具输入放在 `tool_activity(begin)`、把结果放在 `tool_a
 - 当前 xGovernor 一次提交只暴露一个标准化 turn；其内部多次 LLM 调用不可从现有协议恢复。
 - 并发 MCTS 的 `node_id ↔ runtime_id` 没有稳定协议字段，因此 node score/tree 摘要显示在 coordinator 下，不伪造与 Runtime 的绑定。
 
-本实现不改动 MCTS 文件，但透明代理位于运行时网络路径中。默认启动失败会旁路；运行过程中代理进程异常仍可能导致当前 xGovernor 请求失败，这是剩余风险。
+本实现不改动 MCTS 文件，但透明代理位于运行时网络路径中。默认启动失败会旁路；运行过程中代理进程异常仍可能导致当前 xGovernor 请求失败，这是剩余风险。启动器会在正常退出及 `SIGHUP`、`SIGINT`、`SIGTERM` 路径停止保活、写入 coordinator/Runtime 终态并刷新本地数据；`SIGKILL`、OOM 或宿主机掉电无法执行进程内清理，只能由“观测超时”标识失联。
 
 ## 排查
 
@@ -105,3 +107,5 @@ xGovernor 把工具输入放在 `tool_activity(begin)`、把结果放在 `tool_a
 3. 查看 `~/.agent-insight/otel_data/mcts-xgovernor/<api-key-hash>/` 是否有待上传事件和关系 outbox；
 4. 去掉 `--strict` 可验证 MCTS 原命令本身是否正常；
 5. 用 `--upstream` 明确指定原 xGovernor 地址，避免安装时配置已过期。
+
+如果执行记录显示“观测超时”但远端任务仍在运行，先检查 `agent-insight-mcts-run` 是否仍存活。启动器存活时应至少每 60 秒产生一次 coordinator 快照；只有 xGovernor/E2B 远端任务存活而本地启动器已经退出时，Agent Insight 无法继续确认其执行状态。
