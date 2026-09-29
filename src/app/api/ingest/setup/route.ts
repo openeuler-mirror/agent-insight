@@ -57,6 +57,16 @@ function queryFlagEnabled(raw: string | null): boolean {
     return raw !== null && !['0', 'false', 'no'].includes(raw.trim().toLowerCase());
 }
 
+function normalizeMctsUpstream(raw: string | null): string {
+    const value = (raw || 'http://127.0.0.1:8787').trim();
+    if (!value || value.length > 2048 || /[\0\r\n]/.test(value)) throw new Error('Invalid MCTS xGovernor upstream URL');
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+        throw new Error('MCTS xGovernor upstream must be an HTTP(S) URL without credentials');
+    }
+    return parsed.toString().replace(/\/+$/, '');
+}
+
 function detectPlatform(request: Request): 'windows' | 'unix' {
     const userAgent = request.headers.get('user-agent') || '';
     const platformHeader = request.headers.get('x-platform') || '';
@@ -98,6 +108,7 @@ function generateBashScript(
     promptLlamaIndexPython: boolean,
     noninteractive: boolean,
     forceNoKey: boolean,
+    mctsUpstream: string,
     goalPlusHosts: GoalPlusHost[],
     autoAddedFrameworks: string[],
 ): string {
@@ -126,6 +137,7 @@ function generateBashScript(
         'NONINTERACTIVE_FRAMEWORKS="' + bashDoubleQuoted(preselected.map(f => f.value).join(',') || 'opencode') + '"',
         'PROMPT_LLAMAINDEX_PYTHON=' + (promptLlamaIndexPython ? 'true' : 'false'),
         'FORCE_NO_KEY=' + (forceNoKey ? 'true' : 'false'),
+        'MCTS_XGOVERNOR_UPSTREAM="' + bashDoubleQuoted(mctsUpstream) + '"',
         'for arg in "$@"; do',
         '    case "$arg" in',
         '        -y|--yes|--non-interactive|--noninteractive) NONINTERACTIVE=true ;;',
@@ -228,7 +240,8 @@ function generateBashScript(
         '    { name: \'Pi Agent\', value: \'pi-agent\' },',
         '    { name: \'Codex\', value: \'codex\' },',
         '    { name: \'Qwen Code\', value: \'qwencode\' },',
-        '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }',
+        '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
+        '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' }',
         '];',
         '',
         'async function select() {',
@@ -314,7 +327,9 @@ function generateBashScript(
         'INSTALL_CODEX=false',
         'INSTALL_QWENCODE=false',
         'INSTALL_DEEPSEEK_HARNESS=false',
+        'INSTALL_MCTS_XGOVERNOR=false',
         'DEEPSEEK_HARNESS_SETUP_OK=false',
+        'MCTS_XGOVERNOR_SETUP_OK=false',
         'CODEX_SETUP_OK=false',
         'PI_AGENT_SETUP_OK=false',
         'GOAL_PLUS_SETUP_OK=false',
@@ -362,9 +377,12 @@ function generateBashScript(
         'if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then',
         '    INSTALL_DEEPSEEK_HARNESS=true',
         'fi',
+        'if [[ ",$SELECTED_FRAMEWORKS," == *",mcts-xgovernor,"* ]]; then',
+        '    INSTALL_MCTS_XGOVERNOR=true',
+        'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ]; then',
+        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
@@ -906,6 +924,23 @@ function generateBashScript(
         '    fi',
         'fi',
         '',
+        '# 6.30 Install MCTS xGovernor collector',
+        'if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then',
+        '    if [ -z "$FINAL_KEY" ]; then',
+        '        echo "Warning: MCTS xGovernor collector installation requires an API key; configure one and rerun setup."',
+        '    else',
+        '        echo "⏬ Installing MCTS xGovernor collector..."',
+        '        export AGENT_INSIGHT_API_KEY="$FINAL_KEY"',
+        '        export AGENT_INSIGHT_BASE_URL',
+        '        export AGENT_INSIGHT_MCTS_UPSTREAM_URL="$MCTS_XGOVERNOR_UPSTREAM"',
+        '        MCTS_INSTALLER="$(mktemp)"',
+        '        curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/mcts-xgovernor" -o "$MCTS_INSTALLER"',
+        '        if ! sh "$MCTS_INSTALLER"; then rm -f "$MCTS_INSTALLER"; exit 1; fi',
+        '        MCTS_XGOVERNOR_SETUP_OK=true',
+        '        rm -f "$MCTS_INSTALLER"',
+        '    fi',
+        'fi',
+        '',
         '# 6.31 Install Agent Insight Goal Plus worker and relationship collector',
         'if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then',
         '    if [ -z "$FINAL_KEY" ]; then',
@@ -1267,7 +1302,9 @@ function generateBashScript(
         'echo ""',
         'GOAL_PLUS_TRACE_READY=true',
         'if [[ ",$GOAL_PLUS_HOSTS," == *",pi,"* ]] && [ "$PI_AGENT_SETUP_OK" != "true" ]; then GOAL_PLUS_TRACE_READY=false; fi',
-        'if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then',
+        'if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ] && [ "$MCTS_XGOVERNOR_SETUP_OK" != "true" ]; then',
+        '    echo "❌ Agent-Insight Telemetry: NOT READY (MCTS xGovernor collector setup failed)"',
+        'elif [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then',
         '    echo "❌ Agent-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"',
         'elif [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -z "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_SETUP_OK" != "true" ]; then',
         '    echo "⚠️  Agent-Insight Telemetry: PARTIAL"',
@@ -1288,6 +1325,8 @@ function generateBashScript(
         'if [ "$INSTALL_TRAE" = "true" ]; then echo "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"; fi',
         'if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then echo "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"; fi',
         'if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"; fi',
+        'if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then echo "  ✅ MCTS xGovernor Collector: ~/.agent-insight/collectors/mcts-xgovernor-proxy"; fi',
+        'if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ] && [ "$MCTS_XGOVERNOR_SETUP_OK" != "true" ]; then echo "  ❌ MCTS xGovernor Collector: not installed"; fi',
         'if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" = "true" ]; then echo "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS"; fi',
         'if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then echo "  ❌ Goal Plus native Trace: collector setup is not ready"; fi',
         'if [ "$GOAL_PLUS_SOURCE_OK" = "true" ]; then echo "  ✅ Goal Plus worker relationships: workspace attached; watcher started"; fi',
@@ -1316,6 +1355,7 @@ function generateBashScript(
         'if [ "$INSTALL_TRAE" = "true" ]; then echo "  6. Restart TRAE IDE to activate the collector"; fi',
         'if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then echo "  7. Use actrailctl launch as usual; AcTrail will upload automatically"; fi',
         'if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then echo "  7. Start a new Pi session"; fi',
+        'if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then echo "  MCTS: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]"; fi',
         'if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ]; then echo "  8. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus"; fi',
         'if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then echo "     Worker relationship collection: goal-plus-collector attach /absolute/path/to/workspace/.gp && goal-plus-collector scan && goal-plus-collector start"; fi',
         'if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then echo "  8. Start a new dsh session"; fi',
@@ -1335,6 +1375,7 @@ function generatePowerShellScript(
     promptLlamaIndexPython: boolean,
     noninteractive: boolean,
     forceNoKey: boolean,
+    mctsUpstream: string,
     goalPlusHosts: GoalPlusHost[],
     autoAddedFrameworks: string[],
 ): string {
@@ -1362,6 +1403,7 @@ function generatePowerShellScript(
         'if ($env:AGENT_INSIGHT_FRAMEWORKS) { $NONINTERACTIVE = $true; $NONINTERACTIVE_FRAMEWORKS = $env:AGENT_INSIGHT_FRAMEWORKS }',
         'if ($env:AGENT_INSIGHT_NO_KEY -eq "1" -or $env:AGENT_INSIGHT_NO_KEY -eq "true") { $FORCE_NO_KEY = $true }',
         '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
+        '$MCTS_XGOVERNOR_UPSTREAM = "' + powerShellDoubleQuoted(mctsUpstream) + '"',
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -1444,7 +1486,8 @@ function generatePowerShellScript(
         '    { name: \'Pi Agent\', value: \'pi-agent\' },',
         '    { name: \'Codex\', value: \'codex\' },',
         '    { name: \'Qwen Code\', value: \'qwencode\' },',
-        '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }',
+        '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
+        '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' }',
         '];',
         '',
         'async function select() {',
@@ -1533,6 +1576,8 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
+        '$INSTALL_MCTS_XGOVERNOR = $false',
+        '$MCTS_XGOVERNOR_SETUP_OK = $false',
         '$CODEX_SETUP_OK = $false',
         '$PI_AGENT_SETUP_OK = $false',
         '$GOAL_PLUS_SETUP_OK = $false',
@@ -1580,9 +1625,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)mcts-xgovernor(,|$)") {',
+        '    $INSTALL_MCTS_XGOVERNOR = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_MCTS_XGOVERNOR) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -2058,6 +2106,11 @@ function generatePowerShellScript(
         '    }',
         '}',
         '',
+        '# 6.30 MCTS xGovernor collector requires Linux/macOS',
+        'if ($INSTALL_MCTS_XGOVERNOR) {',
+        '    Write-Warning "MCTS xGovernor collector requires Linux or macOS. Use WSL on Windows."',
+        '}',
+        '',
         '# 6.31 Install Agent Insight Goal Plus worker and relationship collector',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
         '    if (-not $FINAL_KEY) {',
@@ -2417,7 +2470,9 @@ function generatePowerShellScript(
         'Write-Host ""',
         '$GOAL_PLUS_TRACE_READY = $true',
         'if ((",$GOAL_PLUS_HOSTS," -match ",pi,") -and -not $PI_AGENT_SETUP_OK) { $GOAL_PLUS_TRACE_READY = $false }',
-        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) {',
+        'if ($INSTALL_MCTS_XGOVERNOR -and -not $MCTS_XGOVERNOR_SETUP_OK) {',
+        '    Write-Host "❌ Agent-Insight Telemetry: NOT READY (MCTS xGovernor collector requires WSL/Linux)"',
+        '} elseif (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) {',
         '    Write-Host "❌ Agent-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"',
         '} elseif (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_SETUP_OK) {',
         '    Write-Host "⚠️  Agent-Insight Telemetry: PARTIAL"',
@@ -2437,6 +2492,7 @@ function generatePowerShellScript(
         'if (\$INSTALL_TRAE) { Write-Host "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0" }',
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) { Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:AGENT_INSIGHT_HOME\\collectors\\pi-agent" }',
+        'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  ❌ MCTS xGovernor Collector: use the Linux installer inside WSL" }',
         'if ($GOAL_PLUS_HOSTS -and $GOAL_PLUS_TRACE_READY) { Write-Host "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS" }',
         'if ($GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) { Write-Host "  ❌ Goal Plus native Trace: collector setup is not ready" }',
         'if ($GOAL_PLUS_SOURCE_OK) { Write-Host "  ✅ Goal Plus worker relationships: workspace attached; watcher started" }',
@@ -2464,6 +2520,7 @@ function generatePowerShellScript(
         'if ($INSTALL_TRAE) { Write-Host "  6. Restart TRAE IDE to activate the collector" }',
         'if ($INSTALL_ACTRAIL) { Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  7. Start a new Pi session" }',
+        'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  MCTS: run the generated Linux command inside WSL" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  8. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "     Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
         'Write-Host "------------------------------------------------"',
@@ -2533,6 +2590,15 @@ export async function GET(request: Request) {
     const promptLlamaIndexPython = queryFlagEnabled(
         requestUrl.searchParams.get('llamaindexPromptPython'),
     );
+    let mctsUpstream: string;
+    try {
+        mctsUpstream = normalizeMctsUpstream(requestUrl.searchParams.get('mctsUpstream'));
+    } catch (error) {
+        return NextResponse.json(
+            { error: error instanceof Error ? error.message : 'Invalid MCTS xGovernor upstream URL' },
+            { status: 400, headers: { 'Cache-Control': 'no-store' } },
+        );
+    }
 
     const platform = detectPlatform(request);
 
@@ -2548,6 +2614,7 @@ export async function GET(request: Request) {
             promptLlamaIndexPython,
             noninteractive,
             forceNoKey,
+            mctsUpstream,
             installProfile.goalPlusHosts,
             installProfile.autoAddedFrameworks.map(framework => framework.value),
         );
@@ -2569,6 +2636,7 @@ export async function GET(request: Request) {
             promptLlamaIndexPython,
             noninteractive,
             forceNoKey,
+            mctsUpstream,
             installProfile.goalPlusHosts,
             installProfile.autoAddedFrameworks.map(framework => framework.value),
         );

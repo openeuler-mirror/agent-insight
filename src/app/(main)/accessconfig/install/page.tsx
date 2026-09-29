@@ -44,6 +44,7 @@ export default function AccessInstallPage() {
     // 改成 mount 后再算,server 与 client 首次都渲染空,effect 之后再填入命令。
     const [linuxCmd, setLinuxCmd] = useState('');
     const [host, setHost] = useState('');
+    const [mctsUpstream, setMctsUpstream] = useState('http://127.0.0.1:8787');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
     const installProfile = resolveInstallProfile(
@@ -67,12 +68,15 @@ export default function AccessInstallPage() {
                 frameworks.length ? `yes=1` : '',
                 frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
                 frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
+                frameworks.includes('mcts-xgovernor')
+                    ? `mctsUpstream=${encodeURIComponent(mctsUpstream.trim())}`
+                    : '',
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
             setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [apiKey, authReady, frameworks]);
+    }, [apiKey, authReady, frameworks, mctsUpstream]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -194,6 +198,14 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />
 
+                            {frameworks.includes('mcts-xgovernor') && (
+                                <MctsUpstreamField
+                                    value={mctsUpstream}
+                                    onChange={setMctsUpstream}
+                                    locale={locale}
+                                />
+                            )}
+
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
                                 label="Linux"
@@ -278,6 +290,36 @@ export default function AccessInstallPage() {
                 </div>
             </div>
         </>
+    );
+}
+
+function MctsUpstreamField({
+    value, onChange, locale,
+}: {
+    value: string;
+    onChange: (value: string) => void;
+    locale: string;
+}) {
+    const isZh = locale === 'zh';
+    return (
+        <article style={commandCard}>
+            <label htmlFor="mcts-xgovernor-upstream" style={configLabel}>
+                {isZh ? 'MCTS xGovernor 地址' : 'MCTS xGovernor upstream'}
+            </label>
+            <input
+                id="mcts-xgovernor-upstream"
+                type="url"
+                value={value}
+                onChange={event => onChange(event.target.value)}
+                placeholder="http://127.0.0.1:8787"
+                style={configInput}
+            />
+            <div style={langfuseNote}>
+                {isZh
+                    ? '该地址由执行 MCTS 的 Linux 主机访问。安装完成后，必须使用 agent-insight-mcts-run 包裹原命令。'
+                    : 'This address is resolved on the Linux MCTS host. After installation, run the original command through agent-insight-mcts-run.'}
+            </div>
+        </article>
     );
 }
 
@@ -808,6 +850,24 @@ const commandCardHeader: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 12,
+};
+
+const configLabel: CSSProperties = {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--foreground)',
+};
+
+const configInput: CSSProperties = {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '9px 11px',
+    color: 'var(--foreground)',
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    fontSize: 12,
 };
 
 const commandIconBox: CSSProperties = {

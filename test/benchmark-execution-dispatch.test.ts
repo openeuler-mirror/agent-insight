@@ -54,15 +54,25 @@ test.before(async () => {
       updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE Experiment (
-      id TEXT PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'single',
-      agentName TEXT NOT NULL DEFAULT '', evaluatorIdsJson TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'draft',
+      id TEXT PRIMARY KEY, deletedAt DATETIME, user TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'single',
+      agentName TEXT NOT NULL DEFAULT '', evaluatorIdsJson TEXT NOT NULL DEFAULT '[]', evaluatorConfigsJson TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'draft',
       scope TEXT NOT NULL DEFAULT '', skillName TEXT NOT NULL DEFAULT '', skillVersion INTEGER, preset TEXT,
       skillContextJson TEXT, configSnapshotJson TEXT, sourceExperimentId TEXT, optimizationRecordId TEXT,
       watchMode INTEGER NOT NULL DEFAULT 0, watchEnabledAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE ExperimentCancellation (
+      id TEXT PRIMARY KEY, user TEXT NOT NULL, experimentId TEXT NOT NULL, caseKey TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending', targetsJson TEXT NOT NULL DEFAULT '[]', error TEXT,
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (experimentId, caseKey)
+    );
+    CREATE TABLE ExperimentLocalExecution (
+      id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, caseKey TEXT NOT NULL DEFAULT '',
+      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE ExperimentCase (
-      id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, executionId TEXT, taskId TEXT, input TEXT NOT NULL DEFAULT '',
+      id TEXT PRIMARY KEY, deletedAt DATETIME, experimentId TEXT NOT NULL, executionId TEXT, taskId TEXT, input TEXT NOT NULL DEFAULT '',
       datasetInput TEXT, actualOutput TEXT NOT NULL DEFAULT '', referenceOutput TEXT, evaluatorContextJson TEXT,
       groupId TEXT, faultInjectionType TEXT, caseValuesJson TEXT, fiTaskId TEXT, fiRunId TEXT,
       traceGenerationCommandId TEXT, traceGenerationError TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

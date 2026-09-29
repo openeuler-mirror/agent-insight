@@ -130,3 +130,18 @@ test('slow-only and manual >60s agree at missing, 59999ms, 60000ms and 60001ms b
         assert.equal(eventVisible(duration, false, 60_000), duration === 60_001, `manual ${duration}`);
     }
 });
+
+test('TASK rows use child duration and leave unresolved coordination events without a duration', () => {
+    const unresolved = variable<number | undefined>('spanDurationMs', {
+        event: { kind: 'task', startedAt: 100, completedAt: 100 }, childNode: undefined,
+    });
+    const linked = variable<number | undefined>('spanDurationMs', {
+        event: { kind: 'task', startedAt: 100, completedAt: 100 }, childNode: { stats: { durationMs: 44_000 } },
+    });
+    const regular = variable<number | undefined>('spanDurationMs', {
+        event: { kind: 'tool', startedAt: 100, completedAt: 350 }, childNode: undefined,
+    });
+    assert.equal(unresolved, undefined);
+    assert.equal(linked, 44_000);
+    assert.equal(regular, 250);
+});

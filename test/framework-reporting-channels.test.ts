@@ -80,3 +80,11 @@ test('Pi Agent 展示主 Trace 与主 Session 绑定通道', () => {
         { id: 'collaboration-sessions', endpoint: '/api/ingest/collaborations/sessions' },
     ]);
 });
+
+test('MCTS xGovernor 展示 Trace 与 Runtime 关系通道', () => {
+    assert.deepEqual(getSelectedReportingChannels(['mcts-xgovernor']).map(channel => channel.id), [
+        'otlp-traces',
+        'collaboration-sessions',
+        'collaboration-events',
+    ]);
+});

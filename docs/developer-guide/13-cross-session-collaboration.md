@@ -28,7 +28,9 @@
 
 端点优先读取同一用户、同一 collaboration 下的显式 binding；无 binding 时，按 `Session.taskId` / `Execution.taskId` / `Execution.agentSessionId` 精确匹配。多个候选对应不同 taskId 时保留身份歧义，不按名称或时间猜测。Trace 可以晚到；新增 binding 和 Execution 触发端点重算，图刷新重新读取身份与正文。
 
-`fromLocator` 只搜索当前源 Trace 的原始工具记录。唯一工具名或 Shell 命令匹配为 candidate；明确 task/spawn_agent/subagent 调用中的目标会话编号可确认位置。多个事件只有在数量相等、时间无缺失或并列、事件时钟可信且调用时间来自执行端等条件均满足时才返回 time_ordered。未知事件时钟不参与时间推定，交互时间不代替工具开始时间；类型/FIFO 和 description 不作为调用证据。
+`fromLocator` 只搜索当前源 Trace 的原始工具记录。唯一工具名或 Shell 命令匹配为 candidate；若命中的 `task`/spawn 调用参数或结果携带的 `session_id`、`sessionId`、`subagent_session_id`、`subagentSessionId` 与事件 `toSessionId` 一致，则属于原始调用直接证据，保存为 confirmed。无 locator 且已有 Execution 直接父子关系时也可返回 confirmed。多个事件只有在数量相等、时间无缺失或并列、事件时钟可信且调用时间来自执行端等条件均满足时才返回 time_ordered。未知事件时钟不参与时间推定，交互时间不代替工具开始时间；类型/FIFO 和 description 不作为调用证据，不得只根据时间接近度选择父级。
+
+Trace 投影以 endpoint/anchor resolver 的持久化结果为真源，不得用查询期临时结果覆盖已保存的 `anchorState`、`matchedRecord` 和 `position`。独立协作图会按当前原始调用重新核验普通 reported 关系，避免已变化或歧义的原生目标被旧父子关系覆盖；带 locator 且已由持久化 resolver 直接确认为目标 Session 的调用继续使用精确位置，历史 `goal-plus-semantic` 仍回退持久化结果。
 
 自动边只来自成功原始调用中的唯一明确目标。仅当上报关系与原始调用位置、目标均唯一对应时才合并 `reported` / `trace` 来源。循环、自联系、重复联系、多父级和回传消息保留为图中的事件，不强制解释为新的子 Agent。
 
@@ -57,11 +59,25 @@
 
 Goal Plus reported 关系按 worker 独立判断：主端与当前 worker 唯一解析且两侧有非空 Session 正文时即可合并；另一个 worker pending 不阻塞当前 worker，也不要求主任务结束。主端歧义、当前 worker 缺失、跨用户或被拒绝的关系不生成详情 links。单个 worker 在加载期间暂不可读时跳过该成员，不中断其他就绪 worker。
 
+## MCTS xGovernor reported 路径
+
+MCTS collector 不增加关系 API 或 Prisma 模型，直接使用公开 binding/event 契约：
+
+1. 每个 xGovernor `lease.client_id` 派生一个 collaboration 与 coordinator Trace Session；
+2. open/load 中的 Runtime ID 派生不可逆的逻辑 session ID，并绑定各自 OTLP Trace Session；
+3. open Runtime 第一次提交 turn 时，上报 `coordinator → runtime`；
+4. checkpoint 响应只登记 checkpoint 摘要及所有者；后续 `load` 使用同一摘要且实际提交 turn 时，上报 `parent runtime → child runtime`；
+5. 发起方 Trace 同时写入带执行时间的合成 `task` tool，工具参数 `session_id` 与 event 的 `toSessionId` 使用同一个逻辑 Runtime ID；event 使用 `fromLocator={recordType:'tool',name:'task'}`，resolver 据此形成 confirmed 精确关联，不依赖 Runtime Trace taskId 的命名空间或时间猜测。
+
+只 load 而未提交 turn 的评分/官测临时 checkout 不创建协作成员。Runtime 和 checkpoint 原始 ID 不写入关系正文；node score/tree stdout 摘要也不参与端点推定。
+
 ## Goal Plus 专用投影与正文读取
 
 历史 Goal Plus 语义数据继续通过 `GoalPlusExecutionLink` 选择当前 run 的明确成员，并由 `composeCollaborationTrace` 追加带 `trace_synthetic`、`trace_relation` 元数据的只读 TASK / 子 Agent 展示流。当前活跃主 Session、唯一 main link、worker 的 source/goal/run/candidate/session 身份和 owner 仍是成员边界；历史 run、歧义端点或普通 Pi 任务不借用该投影。详见 [Goal Plus 观测契约](12-goal-plus-observability.md)。
 
 虚拟 TASK 追加在主 Trace 原生交互之后，标注“Goal Plus 编排”。关系可证明成员身份，不一定证明具体启动位置；`anchorState != confirmed` 时必须显示未确认定位。专用投影单次最多 50 个 worker、20000 条 worker 交互，超限或关联正文暂不可读时 `collaborationProjection.truncated=true`。子 Agent 保留 worker taskId，可继续打开独立详情。reported 关系投影优先；没有可用 reported 合并结果时才回退历史 semantic 专用投影。同一响应不叠加两套成员副本，避免重复显示。
+
+虚拟 TASK 追加在主 Trace 原生交互之后。持久化 resolver 在目标 Session 精确命中、唯一候选或可信时间排序命中时同时保存 `interactionIndex`、`callIndex`、`callKey` 和可用的 `recordId`，展示树据此挂载到具体调用；候选或时间推定仍显示对应的不确定性标签。没有位置证据时只保留 Agent 级关系，不能伪造调用层级。已挂载 TASK 的展示耗时取子 Trace，未挂载的瞬时关系事件显示 `-`。
 
 `full`、`structure`、`interactions` 和单条 interaction 读取使用一致投影。普通合并交互保留 `_collaboration` 源 Session/索引/版本，所有 Session 响应保留 `_payloadVersion`；前端拒绝刷新前发起或版本不匹配的异步加载结果。`source=raw` 绕过展示投影，读取仍验证当前用户。
 

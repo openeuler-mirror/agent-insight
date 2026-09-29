@@ -108,7 +108,16 @@ test('locator matching keeps tool and shell candidates separate with trusted tim
     ],
   }];
   const tools = findCollaborationLocatorMatches(interactions, { recordType: 'tool', name: 'spawn_agent' });
-  assert.deepEqual(tools, [{ recordType: 'tool', recordId: 'spawn-1', startedAt: 10, trustedTime: true }]);
+  assert.deepEqual(tools, [{
+    recordType: 'tool',
+    recordId: 'spawn-1',
+    interactionIndex: 0,
+    callIndex: 0,
+    callKey: 'id:spawn-1',
+    recordSource: 'tool_calls',
+    startedAt: 10,
+    trustedTime: true,
+  }]);
   const shells = findCollaborationLocatorMatches(interactions, {
     recordType: 'shell',
     commandContains: 'risk-check',

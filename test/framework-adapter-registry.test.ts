@@ -53,6 +53,7 @@ test("registry exposes the framework descriptor list", () => {
       "trae",
       "actrail",
       "pi-agent",
+      "mcts-xgovernor",
     ]
   )
 })

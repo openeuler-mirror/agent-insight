@@ -21,6 +21,7 @@ export const FRAMEWORK_OPTIONS: readonly FrameworkOption[] = [
   { value: 'qwencode', label: 'Qwen Code' },
   { value: 'codex', label: 'Codex' },
   { value: 'deepseek-harness', label: 'DeepSeek Harness' },
+  { value: 'mcts-xgovernor', label: 'MCTS (xGovernor)' },
 ];
 
 const LEGACY_GOAL_PLUS_OPTION = { value: 'goal-plus', label: 'Goal Plus' } as const;

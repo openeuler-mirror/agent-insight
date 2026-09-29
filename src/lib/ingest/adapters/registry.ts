@@ -13,6 +13,7 @@ import { opencodeAdapter } from "./opencode"
 import { piAgentAdapter } from "./pi-agent"
 import { qoderAdapter } from "./qoder"
 import { qwencodeAdapter } from "./qwencode"
+import { mctsXgovernorAdapter } from './mcts-xgovernor'
 import type { FrameworkAdapter, FrameworkDescriptor } from "./types"
 
 const adapters = [
@@ -31,6 +32,7 @@ const adapters = [
   traeAdapter,
   actrailAdapter,
   piAgentAdapter,
+  mctsXgovernorAdapter,
 ] as const
 
 const fallbackAdapter: FrameworkAdapter = {
