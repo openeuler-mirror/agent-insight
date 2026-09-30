@@ -219,7 +219,7 @@ test('pi-mcts accepts a client configured Python outside the repository', async 
   } finally { f.close() }
 })
 
-test('pi-mcts retains a real venv and its dependencies through the original bash launcher', async () => {
+test('pi-mcts checks a real venv without importing slow dependencies and retains it through the bash launcher', async () => {
   const f = fixture()
   try {
     const venv = path.join(f.root, "python env's runtime")
@@ -228,7 +228,11 @@ test('pi-mcts retains a real venv and its dependencies through the original bash
     const python = path.join(venv, 'bin', 'python')
     const purelib = spawnSync(python, ['-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'], { encoding: 'utf8' })
     assert.equal(purelib.status, 0, purelib.stderr)
-    fs.writeFileSync(path.join(purelib.stdout.trim(), 'datasets.py'), 'def load_dataset(): return "venv dependency"\n')
+    const config = { ...f.config, mctsPython: python }
+    assert.deepEqual(runtime.probeMctsBenchmarkRuntime(config), {
+      ready: false, reason: 'MCTS Python 环境中未找到 datasets，请使用该环境的 Python 安装',
+    })
+    fs.writeFileSync(path.join(purelib.stdout.trim(), 'datasets.py'), 'import time\ntime.sleep(2.2)\ndef load_dataset(): return "venv dependency"\n')
     const marker = path.join(f.root, 'python-environment.json')
     fs.writeFileSync(path.join(f.repoDir, 'testcases_union', 'run_union.sh'), [
       '#!/bin/bash',
@@ -239,12 +243,30 @@ test('pi-mcts retains a real venv and its dependencies through the original bash
       `Path(${JSON.stringify(marker)}).write_text(json.dumps([sys.prefix, sys.executable, load_dataset()]))`,
       'PY', '',
     ].join('\n'))
-    const config = { ...f.config, mctsPython: python }
     assert.deepEqual(runtime.probeMctsBenchmarkRuntime(config), { ready: true })
     await assert.rejects(runtime.runMctsBenchmarkCase(config, f.payload, async (_command: string, args: string[], options: Record<string, unknown>) => {
       return runProcess('bash', args.slice(args.indexOf('--') + 2), options)
     }), { code: 'AGENT_NO_OUTPUT' })
     assert.deepEqual(JSON.parse(fs.readFileSync(marker, 'utf8')), [venv, python, 'venv dependency'])
+  } finally { f.close() }
+})
+
+test('MCTS reports Python check timeouts separately from missing dependencies and old versions', () => {
+  const f = fixture()
+  try {
+    const python = path.join(f.repoDir, '.venv', 'bin', 'python')
+    fs.writeFileSync(python, '#!/bin/sh\necho 3.10\n')
+    assert.deepEqual(runtime.probeMctsBenchmarkRuntime(f.config), {
+      ready: false, reason: 'MCTS Python 需要 3.11+，当前版本为 3.10',
+    })
+    fs.writeFileSync(python, '#!/bin/sh\nexit 1\n')
+    assert.deepEqual(runtime.probeMctsBenchmarkRuntime(f.config), {
+      ready: false, reason: 'MCTS Python 环境检查失败（1）',
+    })
+    fs.writeFileSync(python, '#!/bin/sh\nexec sleep 10\n')
+    assert.deepEqual(runtime.probeMctsBenchmarkRuntime(f.config), {
+      ready: false, reason: 'MCTS Python 环境检查超过 5 秒，请检查客户端负载后重试',
+    })
   } finally { f.close() }
 })
 

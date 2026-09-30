@@ -374,6 +374,8 @@ AGENT_INSIGHT_MCTS_PYTHON=/path/on/this/client/python-env/bin/python
 
 客户端启动时只读取 `.env` 中这三个 MCTS 路径变量，不向进程环境导入其他配置。配置优先级为：进程环境变量 → `.env` → 原有 JSON 字段 `mctsRepoDir` / `mctsPython` / `mctsTraceLauncher` → 默认值，空值跳过。已配置的 systemd 同名环境变量会覆盖 `.env`，迁移时应移除或同步更新。仅修改 `.env` 后执行 `systemctl restart agent-insight-client.service` 即可，无需 `daemon-reload`。
 
+MCTS 就绪探测通过配置的 Python 检查版本及 `importlib.util.find_spec("datasets")`，不导入 `datasets` 及其传递依赖。探测上限为 5 秒，超时、无法启动、缺包、异常退出与版本不足分别返回明确原因，避免将执行机临时负载造成的超时误报为依赖未安装。实际 MCTS 运行仍正常导入依赖；运行时导入失败按实际进程错误处理。
+
 这些是执行机本地配置，不进入服务端下发的 Case 任务。缺少 MCTS 脚本、Python、Trace 代理配置或所需 MCTS 版本时，客户端会将 `agent-runtime/pi-mcts/v1` 标为未就绪。`pi-mcts` 不会出现在普通生成 Trace 实验中。
 
 Trace 代理的 `upstreamUrl` 或 `AGENT_INSIGHT_MCTS_UPSTREAM_URL` 填真实 xGovernor 地址。MCTS 的 `testcases_union/config.env` 需要保留启动器注入的地址，例如 `export XGOVERNOR_BASE_URL="${XGOVERNOR_BASE_URL:-http://127.0.0.1:8787}"`；直接赋值会覆盖代理地址并绕过采集。该文件中的访问 token 和模型设置由部署者配置。

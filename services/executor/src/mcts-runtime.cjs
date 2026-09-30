@@ -50,13 +50,18 @@ function probeMctsBenchmarkRuntime(config) {
       return { ready: false, reason: 'MCTS 未支持 --output-dir' }
     }
   } catch { return { ready: false, reason: 'MCTS 程序不可读' } }
-  const python = spawnSync(paths.python, ['-c', 'import sys; import datasets; print(f"{sys.version_info.major}.{sys.version_info.minor}")'], {
-    encoding: 'utf8', timeout: 2_000,
+  const python = spawnSync(paths.python, ['-c', 'import sys, importlib.util; print(f"{sys.version_info.major}.{sys.version_info.minor}"); sys.exit(0 if importlib.util.find_spec("datasets") is not None else 42)'], {
+    encoding: 'utf8', timeout: 5_000,
   })
+  if (python.error?.code === 'ETIMEDOUT') return { ready: false, reason: 'MCTS Python 环境检查超过 5 秒，请检查客户端负载后重试' }
+  if (python.error) return { ready: false, reason: `MCTS Python 无法启动（${python.error.code || '未知错误'}）` }
+  if (python.status === 42) return { ready: false, reason: 'MCTS Python 环境中未找到 datasets，请使用该环境的 Python 安装' }
+  if (python.status !== 0) return { ready: false, reason: `MCTS Python 环境检查失败（${python.signal || python.status}）` }
   const pythonVersion = /^([0-9]+)\.([0-9]+)$/.exec(String(python.stdout || '').trim())
-  if (python.status !== 0 || !pythonVersion || Number(pythonVersion[1]) < 3
+  if (!pythonVersion) return { ready: false, reason: 'MCTS Python 版本检测结果不合法' }
+  if (Number(pythonVersion[1]) < 3
     || (Number(pythonVersion[1]) === 3 && Number(pythonVersion[2]) < 11)) {
-    return { ready: false, reason: 'MCTS Python 需要 3.11+ 和 datasets' }
+    return { ready: false, reason: `MCTS Python 需要 3.11+，当前版本为 ${pythonVersion[0]}` }
   }
   const configPath = path.join(path.dirname(paths.traceLauncher), 'config.json')
   try {

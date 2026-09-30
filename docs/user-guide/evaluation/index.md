@@ -92,3 +92,4 @@ description: "实验、评测数据集与评估器的职责和使用入口"
 - 准备可复用样本：[评测数据集](./datasets)
 - 了解评分标准：[评估器](./evaluators)
 - 创建并查看实验：[实验](./experiments)
+- 执行 Pi + MCTS 的 SWE-bench 实验：[MCTS 实验用户使用说明书](./mcts-experiments)
