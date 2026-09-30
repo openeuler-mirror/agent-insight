@@ -10,7 +10,7 @@
  *   - 执行白名单 action，回报 RECEIVED / RUNNING / SUCCEEDED / FAILED
  *   - 吸收 FI Worker：领取故障注入 run、跑采集器、上传结果
  *
- * 配置：~/.agent-insight/client/config.json
+ * 配置：~/.agent-insight/client/config.json；MCTS 路径可写在 ~/.agent-insight/.env
  */
 const fs = require('fs')
 const os = require('os')
@@ -73,7 +73,25 @@ function logErr(...args) {
 
 // ---------------------------------------------------------------- config
 
+function readMctsEnvFile() {
+  const envPath = path.join(getAgentInsightHome(), '.env')
+  let content
+  try {
+    content = fs.readFileSync(envPath, 'utf8')
+  } catch (error) {
+    if (error.code === 'ENOENT') return {}
+    throw error
+  }
+  const values = {}
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?(AGENT_INSIGHT_MCTS_(?:REPO_DIR|PYTHON|TRACE_LAUNCHER))\s*=\s*(?:"([^"]*)"|'([^']*)'|([^#]*?))\s*(?:#.*)?$/)
+    if (match) values[match[1]] = match[2] ?? match[3] ?? match[4].trim()
+  }
+  return values
+}
+
 function loadConfig() {
+  const fileEnv = readMctsEnvFile()
   const raw = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {}
   return {
     insightBaseUrl: (process.env.AGENT_INSIGHT_HOST || raw.insightBaseUrl || '').replace(/\/$/, ''),
@@ -94,7 +112,20 @@ function loadConfig() {
     fiCwd: process.env.AGENT_INSIGHT_FI_CWD || raw.fiCwd || '',
     // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
+    mctsRepoDir: process.env.AGENT_INSIGHT_MCTS_REPO_DIR || fileEnv.AGENT_INSIGHT_MCTS_REPO_DIR || raw.mctsRepoDir || '',
+    mctsPython: process.env.AGENT_INSIGHT_MCTS_PYTHON || fileEnv.AGENT_INSIGHT_MCTS_PYTHON || raw.mctsPython || '',
+    mctsTraceLauncher: process.env.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || fileEnv.AGENT_INSIGHT_MCTS_TRACE_LAUNCHER || raw.mctsTraceLauncher
+      || path.join(getAgentInsightHome(), 'collectors', 'mcts-xgovernor-proxy', 'run.cjs'),
   }
+}
+
+function mctsRuntime() {
+  const candidates = [
+    path.join(__dirname, 'executor', 'mcts-runtime.cjs'),
+    path.join(__dirname, '..', 'services', 'executor', 'src', 'mcts-runtime.cjs'),
+  ]
+  const runtimePath = candidates.find(candidate => fs.existsSync(candidate))
+  return runtimePath ? require(runtimePath) : null
 }
 
 /**
@@ -441,11 +472,17 @@ async function refreshPiModelCatalog({ force = false, timeoutMs = PI_MODEL_PROBE
   try { return await pending } finally { piModelProbeInFlight.delete(key) }
 }
 
-function capabilityDiscoveryFingerprint() {
+function capabilityDiscoveryFingerprint(cfg = {}) {
   const xdgConfigRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
   const configRoot = path.join(xdgConfigRoot, 'opencode')
   const insightDataRoot = getAgentInsightHome()
   const parts = []
+  const mctsRepoDir = cfg.mctsRepoDir || process.env.AGENT_INSIGHT_MCTS_REPO_DIR || ''
+  const mctsPython = cfg.mctsPython || process.env.AGENT_INSIGHT_MCTS_PYTHON
+    || path.join(mctsRepoDir || insightDataRoot, '.venv', 'bin', 'python')
+  const mctsTraceLauncher = cfg.mctsTraceLauncher
+    || path.join(insightDataRoot, 'collectors', 'mcts-xgovernor-proxy', 'run.cjs')
+  parts.push(`mcts-repo:${mctsRepoDir}`)
   const visit = (target, depth = 0) => {
     let info
     try {
@@ -491,6 +528,13 @@ function capabilityDiscoveryFingerprint() {
     path.join(piRuntimePaths().agentDir, 'auth.json'),
     piRuntimePaths().packageDir,
     piRuntimePaths().config,
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'run_union.sh'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'config.env'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'core', 'main.py'),
+    path.join(mctsRepoDir || insightDataRoot, 'testcases_union', 'res', 'xgovernor_client.py'),
+    mctsPython,
+    mctsTraceLauncher,
+    path.join(path.dirname(mctsTraceLauncher), 'config.json'),
   ]) visit(target)
   return createHash('sha256').update(parts.join('\n')).digest('hex')
 }
@@ -825,6 +869,20 @@ function buildCapabilities(cfg, opts) {
   if (which('pi')) {
     platforms = mergePiRuntimeCapability(platforms, runtimeFor('pi-agent'))
   }
+  const mcts = mctsRuntime()
+  const mctsConfigured = Boolean(String(cfg.mctsRepoDir || '').trim())
+  const mctsProbe = mctsConfigured && mcts
+    ? mcts.probeMctsBenchmarkRuntime(cfg)
+    : { ready: false, reason: mcts ? 'MCTS 仓库路径未配置' : 'MCTS 执行器模块不存在' }
+  if (mctsConfigured) {
+    platforms = platforms.filter(platform => platform.id !== 'pi-mcts')
+    platforms.push({
+      id: 'pi-mcts', models: [], agents: ['pi-mcts'],
+      runBenchmarkCase: { version: 1, returnsTraceId: true,
+        agentOptionCapabilities: mcts?.agentOptionCapabilities || [] },
+      actions: ['RUN_BENCHMARK_CASE'],
+    })
+  }
   const components = {
     clientVersion: AGENT_VERSION,
     'git-workspace/v1': { ready: true },
@@ -832,6 +890,11 @@ function buildCapabilities(cfg, opts) {
     'git-patch/v1': { ready: true },
   }
   for (const platform of platforms) {
+    if (platform.id === 'pi-mcts') {
+      components['agent-runtime/pi-mcts/v1'] = { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
+      for (const capability of mcts?.agentOptionCapabilities || []) components[capability] = { ready: mctsProbe.ready }
+      continue
+    }
     const runtime = runtimeFor(platform.id)
     components[`agent-runtime/${platform.id}/v1`] = {
       ready: platform.runExperimentCase?.returnsTraceId === true && runtime.ready,
@@ -856,7 +919,9 @@ function benchmarkAgentPlatformsFromCapabilities(capabilities) {
       const component = components[`agent-runtime/${platform.id}/v1`]
       const ready = component === true
         || (component && typeof component === 'object' && component.ready !== false)
-      return platform.runExperimentCase?.returnsTraceId === true && ready
+      const benchmarkTrace = platform.runBenchmarkCase?.returnsTraceId === true
+        || platform.runExperimentCase?.returnsTraceId === true
+      return benchmarkTrace && ready
     })
     .map((platform) => String(platform.id || '').trim())
     .filter(Boolean))]
@@ -2160,7 +2225,7 @@ function syncBenchmarkExecutorCapabilities(executor, capabilities) {
 }
 
 async function refreshCapabilityReports(cfg, { force = false } = {}) {
-  const fingerprint = capabilityDiscoveryFingerprint()
+  const fingerprint = capabilityDiscoveryFingerprint(cfg)
   if (!force && fingerprint === lastCapabilityFingerprint) return false
   if (capabilityRefreshInFlight) return capabilityRefreshInFlight
   capabilityRefreshInFlight = (async () => {
@@ -2343,7 +2408,9 @@ async function main() {
     tryAcquireSlot: tryAcquireExecutionSlot,
     releaseSlot: releaseExecutionSlot,
     agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
-    runAgent: (payload) => runExperimentCase(cfg, payload),
+    runAgent: (payload) => payload.platform === 'pi-mcts'
+      ? mctsRuntime().runMctsBenchmarkCase(cfg, payload)
+      : runExperimentCase(cfg, payload),
     logError: (...args) => logErr(...args),
   })
   await benchmarkExecutor.recover()
@@ -2620,6 +2687,7 @@ process.on('SIGTERM', () => void shutdown())
 process.on('SIGINT', () => void shutdown())
 
 module.exports = {
+  loadConfig,
   executeAction,
   buildAgentProcessLaunch,
   controlUrls,

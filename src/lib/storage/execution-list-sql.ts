@@ -104,7 +104,7 @@ const failed = Prisma.sql`EXISTS (
     SELECT 1 FROM json_each(CASE WHEN json_valid(e.failures) THEN
         CASE WHEN json_type(e.failures) = 'array' THEN e.failures ELSE '[]' END ELSE '[]' END) failure
     WHERE json_extract(CASE WHEN failure.type = 'object' THEN failure.value ELSE '{}' END, '$.failure_type') = 'goal_plus_pi_session_failed'
-       OR (e.framework = 'actrail' AND json_extract(CASE WHEN failure.type = 'object' THEN failure.value ELSE '{}' END, '$.failure_type') = 'agent-process-exit')
+       OR (e.framework IN ('actrail', 'mcts-xgovernor') AND json_extract(CASE WHEN failure.type = 'object' THEN failure.value ELSE '{}' END, '$.failure_type') = 'agent-process-exit')
        OR (e.framework = 'opencode' AND json_extract(CASE WHEN failure.type = 'object' THEN failure.value ELSE '{}' END, '$.failure_type') = 'opencode-session-error')
 )`;
 

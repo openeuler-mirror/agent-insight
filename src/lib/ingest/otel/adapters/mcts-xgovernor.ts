@@ -176,6 +176,7 @@ function aggregate(sessionId: string, source: OtelTraceEvent[]): ExecutionRecord
   });
   const startedAt = Math.min(...events.map(event => event.startTimeMs || Date.parse(event.receivedAt) || Date.now()));
   const completedAt = terminal ? endMs(terminal) : undefined;
+  const terminalFailed = terminal && ['error', 'failed'].includes(String(attributes(terminal)['tool.outcome'] || '').toLowerCase());
 
   return {
     task_id: sessionId,
@@ -190,6 +191,12 @@ function aggregate(sessionId: string, source: OtelTraceEvent[]): ExecutionRecord
     timestamp: new Date(startedAt),
     trace_started_at: new Date(startedAt),
     trace_completed_at: completedAt ? new Date(completedAt) : undefined,
+    failures: terminalFailed ? [{
+      failure_type: 'agent-process-exit',
+      description: 'MCTS process failed or was interrupted',
+      context: outputOf(terminal) || '',
+      recovery: '',
+    }] : [],
     final_result: finalOutput,
     label: agentName,
     user: first.user || 'anonymous',

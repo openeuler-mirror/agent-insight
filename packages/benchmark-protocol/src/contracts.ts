@@ -1,6 +1,15 @@
 import { createHash } from 'node:crypto'
 
 import { BenchmarkProtocolError } from './errors'
+import { normalizeAgentOptions, type AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
+export type { AgentOptions } from '../../../services/executor/src/mcts-options.cjs'
+
+export function normalizeBenchmarkAgentOptions(value: unknown): AgentOptions | undefined {
+  try { return normalizeAgentOptions(value) }
+  catch (error) {
+    throw new BenchmarkProtocolError('AGENT_OPTIONS_INVALID', error instanceof Error ? error.message : 'Agent 参数不合法')
+  }
+}
 
 export type JsonValue =
   | null
@@ -123,6 +132,7 @@ export type BenchmarkRunConfig = {
   agent: string
   model?: string
   timeoutSeconds: number
+  agentOptions?: AgentOptions
 }
 
 export type BenchmarkRunContext = {
@@ -301,6 +311,7 @@ export function validateTaskEnvelope(
   ) {
     throw new BenchmarkProtocolError('TASK_AGENT_CONFIG_INVALID', 'Agent 配置不合法')
   }
+  normalizeBenchmarkAgentOptions(task.agentConfig.agentOptions)
   scanForbiddenKeys(taskValue(task))
 }
 

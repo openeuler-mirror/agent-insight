@@ -50,6 +50,7 @@ export async function GET(req: Request) {
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
       benchmarkUnavailableReason: string | null;
+      agentOptionCapabilities: string[];
     };
     type Candidate = {
       name: string;
@@ -74,7 +75,7 @@ export async function GET(req: Request) {
     }
     const attachTarget = (
       target: (typeof faultInjectionTargets)[number],
-      capability: 'generic' | 'fault-injection',
+      capability: 'generic' | 'fault-injection' | 'benchmark',
     ) => {
       const name = canonicalExperimentAgentName(target.platform, target.agent);
       if (!name || name === 'ras-judge') return;
@@ -103,6 +104,7 @@ export async function GET(req: Request) {
           supportsBenchmark: false,
           benchmarkKeys: [],
           benchmarkUnavailableReason: '该执行目标未上报 Benchmark 所需能力',
+          agentOptionCapabilities: [],
         });
       }
       byName.set(name, current);
@@ -112,6 +114,24 @@ export async function GET(req: Request) {
     }
     for (const target of faultInjectionTargets) {
       attachTarget(target, 'fault-injection');
+    }
+    for (const target of benchmarkTargets) {
+      if (!target.ready) continue;
+      for (const agent of target.agents) {
+        attachTarget({
+          workerId: target.clientId,
+          host: target.hostname || target.name || target.clientId,
+          hostname: target.hostname,
+          platform: target.platform,
+          agent,
+          agentLabel: agent,
+          models: [
+            { id: '', label: '平台默认' },
+            ...target.models.map((id) => ({ id, label: id })),
+          ],
+          lastSeenAt: target.lastSeenAt.toISOString(),
+        }, 'benchmark');
+      }
     }
     for (const candidate of byName.values()) {
       for (const target of candidate.targets) {
@@ -125,6 +145,9 @@ export async function GET(req: Request) {
           if (benchmark.ready && !target.benchmarkKeys.includes(benchmark.adapterKey)) {
             target.benchmarkKeys.push(benchmark.adapterKey);
           }
+          if (benchmark.ready) target.agentOptionCapabilities = Array.from(new Set([
+            ...target.agentOptionCapabilities, ...benchmark.agentOptionCapabilities,
+          ]));
         }
         target.supportsBenchmark = target.benchmarkKeys.length > 0;
         target.benchmarkUnavailableReason = target.supportsBenchmark
@@ -155,6 +178,7 @@ export async function GET(req: Request) {
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,
           benchmarkUnavailableReason: target.benchmarkUnavailableReason,
+          agentOptionCapabilities: target.agentOptionCapabilities,
         })),
       }));
 

@@ -8,6 +8,7 @@ const path = require('node:path')
 const { spawn } = require('node:child_process')
 const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
 const { SweBenchGitSourcePolicy } = require('./benchmarks/swe-bench.cjs')
+const { normalizeAgentOptions, MCTS_RUNTIMES } = require('./mcts-options.cjs')
 
 const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
 const DELIVERY_RETRY_BASE_MS = 5_000
@@ -194,6 +195,12 @@ function validateTaskEnvelope(task, runId) {
   ) {
     throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '提交物或 Agent 配置不合法')
   }
+  let agentOptions
+  try { agentOptions = normalizeAgentOptions(task.agentConfig.agentOptions) }
+  catch (error) { throw new BenchmarkExecutorError('AGENT_OPTIONS_INVALID', error.message) }
+  if (agentOptions?.mcts && !Object.hasOwn(MCTS_RUNTIMES, task.agentConfig.platform)) {
+    throw new BenchmarkExecutorError('AGENT_OPTIONS_UNSUPPORTED', '所选执行平台不支持 MCTS 搜索参数')
+  }
   const artifactNames = new Set()
   for (const artifact of task.submission.requiredArtifacts) {
     if (
@@ -274,6 +281,9 @@ function buildExecutionPlan(task, registries) {
     agent: {
       ...task.agentConfig,
       input: task.task.instruction,
+      benchmarkKey: task.benchmark.key,
+      benchmarkPayload: task.task.benchmarkPayload,
+      workspace: task.workspace,
       correlation: {
         experimentId: task.context.experimentId,
         caseRunId: task.context.runId,
@@ -415,8 +425,8 @@ function runProcess(command, args, options = {}) {
       } catch {}
     }
     const abort = () => {
-      terminate('SIGTERM')
-      forceKillTimer = setTimeout(() => terminate('SIGKILL'), 2_000)
+      terminate(options.abortSignal || 'SIGTERM')
+      forceKillTimer = setTimeout(() => terminate('SIGKILL'), Number(options.terminateGraceMs) || 2_000)
       forceKillTimer.unref?.()
     }
     options.signal?.addEventListener('abort', abort, { once: true })
@@ -438,8 +448,13 @@ function runProcess(command, args, options = {}) {
       error.stderr = stderr.slice(-2000)
       return error
     }
-    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
-    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    const appendOutput = (current, chunk) => {
+      const next = current + String(chunk)
+      const max = Number(options.maxOutputBytes)
+      return Number.isFinite(max) && max > 0 ? next.slice(-max) : next
+    }
+    child.stdout.on('data', (chunk) => { stdout = appendOutput(stdout, chunk) })
+    child.stderr.on('data', (chunk) => { stderr = appendOutput(stderr, chunk) })
     child.on('error', (error) => {
       settle(() => reject(error))
     })
@@ -451,12 +466,12 @@ function runProcess(command, args, options = {}) {
     if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true
-        terminate('SIGTERM')
-        forceKillTimer = setTimeout(() => terminate('SIGKILL'), 2_000)
+        terminate(options.timeoutSignal || 'SIGTERM')
+        forceKillTimer = setTimeout(() => terminate('SIGKILL'), Number(options.terminateGraceMs) || 2_000)
         forceKillTimer.unref?.()
         hardStopTimer = setTimeout(() => {
           settle(() => reject(processError(null, 'SIGKILL')))
-        }, 5_000)
+        }, (Number(options.terminateGraceMs) || 2_000) + 3_000)
         hardStopTimer.unref?.()
       }, timeoutMs)
       timeoutTimer.unref?.()

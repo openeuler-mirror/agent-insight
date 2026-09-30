@@ -9,6 +9,8 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
+import { MctsOptionsFields } from '@/components/eval/MctsOptionsFields';
+import { mctsOptionsState, mctsOptionsToInputs, summarizeMctsOptions, type MctsOptionInputs } from '@/lib/engine/experiment/mcts-options';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -78,6 +80,7 @@ interface AgentTargetOption {
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
   benchmarkUnavailableReason: string | null;
+  agentOptionCapabilities?: string[];
 }
 
 interface AgentOption {
@@ -285,6 +288,9 @@ const FIELDLBL: React.CSSProperties = {
   display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--foreground-muted)',
   textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 7,
 };
+const FIELD_HINT: React.CSSProperties = {
+  marginTop: 5, fontSize: 10.5, color: 'var(--foreground-muted)', lineHeight: 1.5,
+};
 const INPUT: React.CSSProperties = {
   width: '100%', height: 34, padding: '0 10px', fontSize: 13, borderRadius: 8,
   border: '1px solid var(--input-border)', background: 'var(--input-bg)',
@@ -375,10 +381,8 @@ function AgentTimeoutField({
         onChange={(event) => onChange(event.target.value)}
       />
       <div style={{
-        marginTop: 5,
-        fontSize: 10.5,
+        ...FIELD_HINT,
         color: valid ? 'var(--foreground-muted)' : 'var(--error)',
-        lineHeight: 1.5,
       }}>
         {valid ? hint : '请输入 30～3600 之间的整数'}
       </div>
@@ -525,6 +529,8 @@ export function ExperimentWizard({
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
+  const [mctsInputs, setMctsInputs] = useState<MctsOptionInputs>(() => mctsOptionsToInputs(undefined));
+  const [mctsOptionsPlatform, setMctsOptionsPlatform] = useState('');
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
@@ -642,6 +648,8 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const mctsState = mctsOptionsState(isBenchmarkDataset && traceMode === 'generate' ? selectedTarget : null,
+    mctsInputs, mctsOptionsPlatform, selectedDataset?.benchmark?.adapterKey);
   const generationCases = useMemo(
     () => generationCasesFromDataset(selectedDataset),
     [selectedDataset],
@@ -843,6 +851,8 @@ export function ExperimentWizard({
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
+      setMctsInputs(mctsOptionsToInputs(restoredTarget.agentOptions));
+      setMctsOptionsPlatform(restoredTarget.agentOptions ? platform : '');
       const runtime = sourceSnapshot.runtime && typeof sourceSnapshot.runtime === 'object'
         ? sourceSnapshot.runtime as Record<string, unknown> : {};
       const restoredTimeoutSeconds = skillContext
@@ -1446,6 +1456,7 @@ export function ExperimentWizard({
       if (agentTimeoutRequired && !agentTimeoutValid) {
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
+      if (mctsState.error) throw new Error(mctsState.error);
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
@@ -1572,6 +1583,7 @@ export function ExperimentWizard({
             platform: selectedTarget.platform,
             agent: selectedTarget.agent,
             model: genModel || null,
+            ...(mctsState.agentOptions ? { agentOptions: mctsState.agentOptions } : {}),
           } : undefined,
           agentTimeoutSeconds,
           ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
@@ -1706,7 +1718,7 @@ export function ExperimentWizard({
     ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
     : (watchMode || selected.size >= 1);
   const step2Valid = expType === 'llm'
-    || (step2SelectionValid && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
+    || (step2SelectionValid && !mctsState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -2104,7 +2116,7 @@ export function ExperimentWizard({
                 </div>
               ) : (
                 <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignItems: 'start', gap: 12, marginBottom: 10 }}>
                 <div>
                   <label style={FIELDLBL}>运行主机 IP *</label>
                   <select
@@ -2128,13 +2140,15 @@ export function ExperimentWizard({
                     models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                 </div>
                   {executionConcurrencyRequired && (
-                    <label style={{ display: 'grid', gap: 6, marginBottom: 12, color: 'var(--foreground-secondary)' }}>
-                      执行并发
-                      <input className="ai-input" type="number" min={1} step={1} value={executionConcurrencyInput}
+                    <div>
+                      <label htmlFor="experiment-execution-concurrency" style={FIELDLBL}>执行并发</label>
+                      <input id="experiment-execution-concurrency" style={{ ...INPUT,
+                        borderColor: executionConcurrencyValid ? 'var(--input-border)' : 'var(--error)' }}
+                        type="number" min={1} step={1} value={executionConcurrencyInput} aria-invalid={!executionConcurrencyValid}
                         onChange={(event) => setExecutionConcurrencyInput(event.target.value)} aria-label="执行并发" />
-                      <span style={{ fontSize: 12 }}>控制本实验同时执行的 Case 数，请根据所选客户端资源及其他运行任务设置。</span>
-                      {!executionConcurrencyValid && <span role="alert">执行并发必须为正整数</span>}
-                    </label>
+                      <div style={FIELD_HINT}>控制本实验同时执行的 Case 数，请根据所选客户端资源及其他运行任务设置。</div>
+                      {!executionConcurrencyValid && <div style={{ ...FIELD_HINT, color: 'var(--error)' }} role="alert">执行并发必须为正整数</div>}
+                    </div>
                   )}
                   <AgentTimeoutField
                     value={agentTimeoutInput}
@@ -2143,6 +2157,8 @@ export function ExperimentWizard({
                     onChange={setAgentTimeoutInput}
                   />
               </div>
+              {mctsState.active && <MctsOptionsFields value={mctsInputs} error={mctsState.error}
+                onChange={value => { setMctsInputs(value); setMctsOptionsPlatform(selectedTarget?.platform || ''); }} />}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
                 <span style={{ flex: 1 }} />
@@ -3132,6 +3148,7 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
+                  ...(mctsState.active ? [['MCTS 搜索参数', summarizeMctsOptions(mctsState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'

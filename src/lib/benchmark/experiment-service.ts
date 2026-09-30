@@ -1,8 +1,10 @@
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity'
 import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
 import type { JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
+import { normalizeBenchmarkAgentOptions } from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { prisma } from '@/lib/storage/prisma'
 
@@ -27,6 +29,7 @@ export type CreateBenchmarkExperimentInput = {
     platform: string
     agent: string
     model?: string
+    agentOptions?: unknown
     agentTimeoutSeconds?: number
     executionConcurrency?: number
     maxParallelAgentCases?: number
@@ -88,6 +91,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   const clientId = input.clientId.trim()
   const platform = input.runConfig.platform.trim()
   const agent = input.runConfig.agent.trim()
+  const agentOptions = normalizeBenchmarkAgentOptions(input.runConfig.agentOptions)
   if (!user || !name || !datasetId || !clientId || !platform || !agent) {
     throw new BenchmarkProtocolError(
       'BENCHMARK_EXPERIMENT_INVALID',
@@ -137,7 +141,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   if (!client || client.unboundAt) {
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
-  assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent })
+  assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
   if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
     throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '执行并发大于 1 需要升级客户端', 400)
   }
@@ -145,6 +149,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   const runConfig = {
     platform,
     agent,
+    ...(agentOptions ? { agentOptions } : {}),
     ...(input.runConfig.model?.trim() ? { model: input.runConfig.model.trim() } : {}),
     timeoutSeconds,
     executionConcurrency,
@@ -170,7 +175,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
         user,
         name,
         type: 'single',
-        agentName: input.agentName?.trim() || agent,
+        agentName: canonicalExperimentAgentName(platform, input.agentName?.trim() || agent),
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
         status: 'draft',
         scope: 'benchmark',

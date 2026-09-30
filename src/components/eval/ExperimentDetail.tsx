@@ -15,6 +15,7 @@ import { EvalComments, filterComments, type EvalCommentRow } from '@/components/
 import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
+import { MCTS_OPTION_FIELDS } from '@/lib/engine/experiment/mcts-options';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -52,9 +53,10 @@ interface ExperimentDetail {
   status: string;
   scope?: string;
   executionConcurrency?: number | null;
+  executionAgentOptions?: { mcts?: Record<string, number> } | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null } | null;
+    executionTarget?: { model?: string | null; timeoutSeconds?: number | null } | null;
   };
   preset?: string | null;
   watchMode?: boolean;
@@ -363,6 +365,9 @@ export function ExperimentDetail({
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
+  const mctsParameters = detail?.scope === 'benchmark' ? detail.executionAgentOptions?.mcts : undefined;
+  const mctsParameterFields = MCTS_OPTION_FIELDS.filter((field) => mctsParameters?.[field.key] !== undefined);
+  const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
   // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
   useEffect(() => {
     if (casePage <= totalPages) return;
@@ -455,8 +460,9 @@ export function ExperimentDetail({
             {/* 顶部状态条 */}
             <div style={{
               ...CARD, padding: 16, marginBottom: 14,
-              display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', fontSize: 12,
+              fontSize: 12,
             }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
               <span style={{
                 fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
                 background: status.bg, color: status.fg,
@@ -468,6 +474,9 @@ export function ExperimentDetail({
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
+              {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
+                <span><span style={{ color: 'var(--foreground-muted)' }}>Agent 单次执行上限：</span>{executionTimeoutSeconds} 秒</span>
+              )}
               {hasItemProgress ? (
                 <>
                   <span><span style={{ color: 'var(--foreground-muted)' }}>执行成功：</span>{detail.executionProgress!.succeeded} 项</span>
@@ -495,6 +504,20 @@ export function ExperimentDetail({
                   <span style={{ color: 'var(--foreground-muted)' }}>Trace：</span>
                   {detail.traceProgress.ready} 已生成 / {detail.traceProgress.failed} 失败 / {detail.traceProgress.pending} 生成中
                 </span>
+              )}
+              </div>
+              {mctsParameterFields.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 border-t border-[var(--border)] pt-3">
+                  <span className="font-semibold">MCTS 搜索参数</span>
+                  <dl className="flex flex-wrap gap-x-5 gap-y-2">
+                    {mctsParameterFields.map((field) => (
+                      <div key={field.key} className="flex">
+                        <dt className="text-[var(--foreground-muted)]">{field.label}：</dt>
+                        <dd>{field.key === 'tokenFuseLimit' && mctsParameters![field.key] === 0 ? '关闭（0）' : mctsParameters![field.key]}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
               )}
             </div>
 

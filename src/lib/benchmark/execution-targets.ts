@@ -1,8 +1,8 @@
 import type { ReliabilityClient } from '@prisma/client'
 
-import type { BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
+import { normalizeBenchmarkAgentOptions, type BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
+import { MCTS_SEARCH_OPTIONS_CAPABILITY } from '../../../services/executor/src/mcts-options.cjs'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
-import { listTraceGenerationPlatforms } from '@/lib/engine/experiment/execution-targets'
 import {
   deriveServiceHealth,
   deriveStatus,
@@ -21,6 +21,7 @@ export type BenchmarkExecutionTarget = {
   platform: string
   agents: string[]
   models: string[]
+  agentOptionCapabilities: string[]
   status: ClientStatus
   serviceHealth: ServiceHealth
   ready: boolean
@@ -47,7 +48,13 @@ export function inspectBenchmarkExecutionTargets(
   const status = deriveStatus(client)
   const serviceHealth = deriveServiceHealth(client)
 
-  return listTraceGenerationPlatforms(capabilities).flatMap((platform) => {
+  return capabilities.platforms.filter((platform) => {
+    const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
+    return actions.has('RUN_BENCHMARK_CASE') && (
+      platform.runBenchmarkCase?.returnsTraceId === true
+      || platform.runExperimentCase?.returnsTraceId === true
+    )
+  }).flatMap((platform) => {
     const agents = [...new Set(platform.agents || [])]
     if (!agents.length) return []
     const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
@@ -74,6 +81,8 @@ export function inspectBenchmarkExecutionTargets(
       platform: platform.id,
       agents,
       models: [...new Set(platform.models || [])],
+      agentOptionCapabilities: (platform.runBenchmarkCase?.agentOptionCapabilities || [])
+        .filter(capability => componentReady(capabilities.components?.[capability])),
       status,
       serviceHealth,
       ready: unavailableReasons.length === 0,
@@ -99,7 +108,7 @@ export async function listBenchmarkExecutionTargets(
 export function assertBenchmarkExecutionTarget(
   client: ReliabilityClient,
   manifest: BenchmarkManifest,
-  input: { platform: string; agent: string },
+  input: { platform: string; agent: string; agentOptions?: unknown },
 ): BenchmarkExecutionTarget {
   const target = inspectBenchmarkExecutionTargets(client, manifest).find(item => (
     item.platform === input.platform && item.agents.includes(input.agent)
@@ -107,7 +116,7 @@ export function assertBenchmarkExecutionTarget(
   if (!target) {
     throw new BenchmarkProtocolError(
       'EXECUTION_TARGET_UNAVAILABLE',
-      '所选客户端未上报可执行的 platform 与 agent 组合，或该平台不能安全回传 Trace ID',
+      '所选客户端未上报可执行的 Benchmark platform 与 agent 组合，或该平台不能安全回传 Trace ID',
       409,
     )
   }
@@ -126,6 +135,10 @@ export function assertBenchmarkExecutionTarget(
       target.unavailableReasons.join('；') || '执行客户端当前不可用',
       409,
     )
+  }
+  const options = normalizeBenchmarkAgentOptions(input.agentOptions)
+  if (options?.mcts && !target.agentOptionCapabilities.includes(MCTS_SEARCH_OPTIONS_CAPABILITY)) {
+    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '所选客户端不支持 MCTS 搜索参数，请升级客户端', 409)
   }
   return target
 }

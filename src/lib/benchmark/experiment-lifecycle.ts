@@ -6,6 +6,7 @@ import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-confi
 import { startBenchmarkExperiment } from './scheduler'
 import { nextImagePreparationRevision, sendImagePreparationWindow } from './image-preparation'
 import { getBenchmarkAdapter } from './adapter-registry'
+import { findBenchmarkExecution as findExecution } from './trace-reference'
 
 const TERMINAL_RUN_STATUSES = [
   'evaluated',
@@ -24,27 +25,6 @@ function parsedObject(value: string | null): Record<string, unknown> {
       : {}
   } catch {
     return {}
-  }
-}
-
-async function findExecution(user: string, traceId: string) {
-  try {
-    return await prisma.execution.findFirst({
-      where: {
-        user,
-        isSubagent: false,
-        OR: [
-          { id: traceId },
-          { taskId: traceId },
-          { agentSessionId: traceId },
-        ],
-      },
-      orderBy: { timestamp: 'desc' },
-      select: { id: true, taskId: true, finalResult: true },
-    })
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'P2021') return null
-    throw error
   }
 }
 
@@ -112,6 +92,7 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
 }
 
 export async function continueExperiment(experimentId: string): Promise<void> {
+  await settleBenchmarkExperimentStatus(experimentId)
   const experiment = await prisma.experiment.findUnique({
     where: { id: experimentId },
     include: { benchmarkBinding: true },
@@ -124,6 +105,7 @@ export async function continueExperiment(experimentId: string): Promise<void> {
     user: experiment.user,
     publicCallbackOrigin: callbackOrigin,
     executorCallbackOrigin: runtime.executorCallbackBaseUrl || callbackOrigin,
+    resumeOnly: true,
   })
   next?.completion?.catch((error) => {
     console.error('[benchmark/lifecycle] next case dispatch failed', error)
