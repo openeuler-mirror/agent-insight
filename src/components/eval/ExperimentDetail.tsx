@@ -56,7 +56,7 @@ interface ExperimentDetail {
   executionAgentOptions?: { mcts?: Record<string, number> } | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null } | null;
+    executionTarget?: { model?: string | null; timeoutSeconds?: number | null } | null;
   };
   preset?: string | null;
   watchMode?: boolean;
@@ -367,6 +367,7 @@ export function ExperimentDetail({
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
   const mctsParameters = detail?.scope === 'benchmark' ? detail.executionAgentOptions?.mcts : undefined;
   const mctsParameterFields = MCTS_OPTION_FIELDS.filter((field) => mctsParameters?.[field.key] !== undefined);
+  const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
   // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
   useEffect(() => {
     if (casePage <= totalPages) return;
@@ -473,6 +474,9 @@ export function ExperimentDetail({
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
+              {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
+                <span><span style={{ color: 'var(--foreground-muted)' }}>Agent 单次执行上限：</span>{executionTimeoutSeconds} 秒</span>
+              )}
               {hasItemProgress ? (
                 <>
                   <span><span style={{ color: 'var(--foreground-muted)' }}>执行成功：</span>{detail.executionProgress!.succeeded} 项</span>

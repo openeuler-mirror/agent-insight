@@ -38,10 +38,9 @@ test('experiment wizard exposes and submits the Agent execution timeout', () => 
   assert.match(wizard, /agentTimeoutSeconds,/);
   assert.match(wizard, /timeoutSeconds: agentTimeoutSeconds/);
   assert.match(wizard, /agentTimeoutRequired = skillPreset === 'skill-ab'/);
-  assert.match(wizard, /skillPreset !== 'trigger' \? \{ agentTimeoutSeconds \} : \{\}/);
   assert.match(wizard, /Agent 单次执行上限[\s\S]*\$\{agentTimeoutSeconds\} 秒/);
   assert.match(skillExperimentRoute, /isValidExperimentAgentTimeoutSeconds\(agentTimeoutSeconds\)/);
-  assert.match(skillExperimentRoute, /agentTimeoutSeconds: preset === 'trigger' \? undefined : agentTimeoutSeconds/);
-  assert.match(skillExperimentService, /timeoutMs: isTriggerExperiment \? 30 \* 1000 : agentTimeoutSeconds \* 1_000/);
+  assert.match(skillExperimentRoute, /agentTimeoutSeconds,/);
+  assert.match(skillExperimentService, /timeoutMs: agentTimeoutSeconds \* 1_000/);
   assert.doesNotMatch(skillExperimentService, /10 \* 60 \* 1000/);
 });

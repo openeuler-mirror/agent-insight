@@ -40,7 +40,7 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
     components: { 'git-workspace/v1': true, 'git-patch/v1': true, 'agent-runtime/pi-mcts/v1': true, [capability]: true } }
   await prisma.reliabilityClient.create({ data: { clientId: 'options-client', user: 'options-user', name: 'options',
     hostname: 'fixture', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), capabilitiesJson: JSON.stringify(capabilities) } })
-  const body = { user: 'options-user', name: 'MCTS options', agentName: 'mcts-coordinator', datasetId: catalog.id,
+  const body = { user: 'options-user', name: 'MCTS options', agentName: 'mcts-coordinator', datasetId: catalog.id, agentTimeoutSeconds: 900,
     traceSource: 'generate', executionTarget: { workerId: 'options-client', platform: 'pi-mcts', agent: 'pi-mcts', agentOptions: options } }
   const response = await create(new Request('http://fixture.invalid/api/experiments', { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
@@ -54,6 +54,7 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
   const view = await detailResponse.json()
   assert.deepEqual(view.executionAgentOptions, options)
   assert.deepEqual(view.reusableConfig.executionTarget.agentOptions, options)
+  assert.equal(view.reusableConfig.executionTarget.timeoutSeconds, 900)
   const clone = await cloneExperimentFromFrozenConfig({ sourceExperimentId: experimentId, user: 'options-user' })
   assert.deepEqual(JSON.parse((await prisma.benchmarkExperimentBinding.findUniqueOrThrow({ where: { experimentId: clone.id } })).runConfigJson).agentOptions, options)
   await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } })
