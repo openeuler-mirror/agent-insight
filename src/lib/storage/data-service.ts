@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
-import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
+import { aggregateExecutionList } from '@/lib/storage/execution-list-sql';
+import { selectComputedRecordPage, type ComputedRecordPageOptions } from '@/lib/storage/computed-record-page';
 import fs from 'fs';
 import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
@@ -1234,6 +1235,8 @@ interface ReadRecordsOptions {
     sortDir?: 'asc' | 'desc';
     /** Trace 列表显式启用；其他 readRecordPage 调用方保持原有全量去重后分页语义。 */
     databasePagination?: boolean;
+    computedPage?: Pick<ComputedRecordPageOptions, 'status' | 'anomaly' | 'sortKey'>;
+    lifecycleNow?: number;
 }
 
 export interface ReadRecordPageStats {
@@ -1297,11 +1300,14 @@ export async function listObservedAgentNames(user?: string, observedAgentFallbac
         where.user = user;
     }
 
-    const records = await db.findExecutions(
-        where,
-        { timestamp: 'desc' },
-        { framework: true, agentName: true, observedAgents: true },
-    );
+    const records = process.env.DB_HOST
+        ? await db.findExecutions(where, { timestamp: 'desc' }, { agentName: true, observedAgents: true })
+        : await prismaRaw.execution.groupBy({
+            by: ['agentName', 'observedAgents'],
+            where,
+            _max: { timestamp: true },
+            orderBy: { _max: { timestamp: 'desc' } },
+        });
     const names: string[] = [];
     const seen = new Set<string>();
     for (const record of records) {
@@ -1818,37 +1824,6 @@ async function hydrateAndNormalizeBatch(
     return normalizedBatch;
 }
 
-async function countFailedTraceRecords(where: Prisma.ExecutionWhereInput): Promise<number> {
-    let count = 0;
-    let cursor: string | undefined;
-    while (true) {
-        const candidates = await prismaRaw.execution.findMany({
-            where: {
-                AND: [where, {
-                    OR: [
-                        { framework: 'actrail', failures: { contains: 'agent-process-exit' } },
-                        { failures: { contains: 'goal_plus_pi_session_failed' } },
-                        { framework: 'opencode', failures: { contains: 'opencode-session-error' } },
-                    ],
-                }],
-            },
-            select: { id: true, taskId: true, framework: true, failures: true },
-            orderBy: { id: 'asc' },
-            take: READ_RECORDS_HYDRATE_BATCH_SIZE,
-            ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-        });
-        if (candidates.length === 0) return count;
-        const sessions = await prismaRaw.session.findMany({
-            where: { taskId: { in: candidates.map(row => row.taskId || row.id) }, endTime: { not: null } },
-            select: { taskId: true, endTime: true },
-        });
-        const completedByTask = new Map(sessions.map(session => [session.taskId, session.endTime]));
-        count += candidates.filter(row => getTraceLifecycle(completedByTask.get(row.taskId || row.id), row).traceStatus === 'failed').length;
-        if (candidates.length < READ_RECORDS_HYDRATE_BATCH_SIZE) return count;
-        cursor = candidates[candidates.length - 1].id;
-    }
-}
-
 async function readRecordsInternal(
     user?: string,
     filters?: ReadRecordFilters,
@@ -2021,20 +1996,36 @@ async function readRecordsInternal(
     let paged: any[] = [];
     let byTaskId = new Map<string, any[]>();
     let keepIds = new Set<string>();
+    let computedStats: ReadRecordPageStats | undefined;
 
-    if (pageSize > 0 && options?.databasePagination === true && !process.env.DB_HOST) {
+    if (pageSize > 0 && options?.databasePagination === true && options.computedPage && !process.env.DB_HOST) {
+        const selected = await selectComputedRecordPage(where, {
+            ...options.computedPage, sortDir, page, pageSize, lifecycleNow: options.lifecycleNow,
+        });
+        total = selected.total;
+        computedStats = selected.stats;
+        const rows = selected.ids.length ? await prismaRaw.execution.findMany({
+            where: { id: { in: selected.ids } }, select: LIGHT_EXECUTION_SELECT as any,
+        }) : [];
+        const byId = new Map<string, any>(rows.map((row: any) => [row.id, row]));
+        paged = selected.ids.map(id => byId.get(id)).filter(Boolean);
+    } else if (pageSize > 0 && options?.databasePagination === true && !process.env.DB_HOST) {
         // SQLite/Prisma 主路径：过滤、排序、分页都在数据库中完成。列表后续的标签、状态、
         // 评测补充只处理当前页，避免“全量 hydrate 后再 slice”的假分页。
-        [total, paged] = await prismaRaw.$transaction([
-            prismaRaw.execution.count({ where }),
-            prismaRaw.execution.findMany({
+        const [stats, rows] = await prismaRaw.$transaction(async transaction => {
+            const stats = await aggregateExecutionList(where, { lifecycleNow: options.lifecycleNow }, transaction);
+            const rows = await transaction.execution.findMany({
                 where,
                 orderBy,
                 skip: (page - 1) * pageSize,
                 take: pageSize,
                 select: LIGHT_EXECUTION_SELECT as any,
-            }),
-        ]);
+            });
+            return [stats, rows] as const;
+        });
+        total = stats.total;
+        computedStats = stats;
+        paged = rows;
     } else {
         // OpenGauss 适配器和非分页旧调用保持原行为；本次不扩展其它页面/数据库适配层。
         const records = await db.findExecutions(
@@ -2092,23 +2083,10 @@ async function readRecordsInternal(
         out.push(...normalizedBatch);
     }
     let stats: ReadRecordPageStats;
-    if (pageSize > 0 && !process.env.DB_HOST) {
-        const aggregate = await prismaRaw.execution.aggregate({
-            where,
-            _avg: { latency: true },
-            _sum: { toolCallCount: true, toolCallErrorCount: true },
-        });
-        const totalTools = aggregate._sum.toolCallCount ?? 0;
-        const totalToolErrors = aggregate._sum.toolCallErrorCount ?? 0;
-        stats = {
-            total,
-            failedCount: await countFailedTraceRecords(where),
-            // Execution.latency 已是毫秒，不再 ×1000（见 issue-159-codex-fixed.md Bug 10）
-            avgLatencyMs: (aggregate._avg.latency ?? 0),
-            toolErrorRate: totalTools > 0
-                ? Math.round((totalToolErrors / totalTools) * 1000) / 10
-                : 0,
-        };
+    if (computedStats) {
+        stats = computedStats;
+    } else if (pageSize > 0 && !process.env.DB_HOST) {
+        stats = { ...await aggregateExecutionList(where, { lifecycleNow: options?.lifecycleNow }), total };
     } else {
         const totalTools = out.reduce((sum, item) => sum + (item.tool_call_count ?? 0), 0);
         const totalToolErrors = out.reduce((sum, item) => sum + (item.tool_call_error_count ?? 0), 0);
