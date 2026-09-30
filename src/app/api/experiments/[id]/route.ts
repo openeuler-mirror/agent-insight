@@ -131,6 +131,10 @@ export async function GET(
       try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
     }
     const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
+    const savedAgentOptions = asRecord(asRecord(configSnapshot?.runConfig)?.agentOptions);
+    const savedMctsOptions = asRecord(savedAgentOptions?.mcts);
+    const executionAgentOptions = experiment.scope === 'benchmark' && benchmarkAdapterKey === 'swe-bench'
+      && savedMctsOptions && Object.keys(savedMctsOptions).length > 0 ? savedAgentOptions : null;
     const baselineTrendPromise = ['', 'benchmark'].includes(experiment.scope)
       ? getExperimentBaselineTrend({ experimentId: experiment.id, user: experiment.user }).catch((error) => {
           console.error('[Experiment baseline trend]', error);
@@ -600,8 +604,7 @@ export async function GET(
         ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
         : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
           ? Number(configSnapshot.executionConcurrency) || 1 : null,
-      executionAgentOptions: experiment.scope === 'benchmark'
-        ? asRecord(configSnapshot?.runConfig)?.agentOptions || null : null,
+      executionAgentOptions,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,

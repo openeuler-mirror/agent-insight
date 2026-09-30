@@ -138,7 +138,7 @@ export function assertBenchmarkExecutionTarget(
   }
   const options = normalizeBenchmarkAgentOptions(input.agentOptions)
   if (options?.mcts && !target.agentOptionCapabilities.includes(MCTS_SEARCH_OPTIONS_CAPABILITY)) {
-    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '所选客户端不支持 MCTS 搜索参数，请升级客户端或恢复默认参数', 409)
+    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '所选客户端不支持 MCTS 搜索参数，请升级客户端', 409)
   }
   return target
 }

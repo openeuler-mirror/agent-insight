@@ -13,6 +13,8 @@ const MCTS_OPTION_FIELDS = Object.freeze([
 ])
 const MCTS_QUICK_OPTIONS = Object.freeze({ maxIters: 1, branching: 1, maxTurnsInit: 20,
   maxTurnsStep: 10, maxTurnsAuthor: 20, maxTurnsAuthorStep: 10, tokenFuseLimit: 0 })
+const MCTS_DEFAULT_OPTIONS = Object.freeze({ maxIters: 5, branching: 3, maxTurnsInit: 160,
+  maxTurnsStep: 80, maxTurnsAuthor: 160, maxTurnsAuthorStep: 80, tokenFuseLimit: 30000000 })
 
 function object(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${label} 必须是对象`)
@@ -41,8 +43,9 @@ function normalizeAgentOptions(value) {
 function parseMctsOptionInputs(inputs) {
   const values = {}
   for (const field of MCTS_OPTION_FIELDS) {
-    const text = String(inputs[field.key] ?? '').trim()
-    if (text) values[field.key] = Number(text)
+    const text = String(inputs[field.key] ?? MCTS_DEFAULT_OPTIONS[field.key]).trim()
+    if (!text) throw new TypeError(`${field.label}不能为空`)
+    values[field.key] = Number(text)
   }
   return normalizeAgentOptions({ mcts: values })
 }
@@ -54,4 +57,4 @@ function mctsOptionArgs(options) {
 }
 
 module.exports = { MCTS_SEARCH_OPTIONS_CAPABILITY, MCTS_RUNTIMES, MCTS_OPTION_FIELDS,
-  MCTS_QUICK_OPTIONS, normalizeAgentOptions, parseMctsOptionInputs, mctsOptionArgs }
+  MCTS_QUICK_OPTIONS, MCTS_DEFAULT_OPTIONS, normalizeAgentOptions, parseMctsOptionInputs, mctsOptionArgs }

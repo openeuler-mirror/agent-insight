@@ -529,7 +529,7 @@ export function ExperimentWizard({
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
-  const [mctsInputs, setMctsInputs] = useState<MctsOptionInputs>({});
+  const [mctsInputs, setMctsInputs] = useState<MctsOptionInputs>(() => mctsOptionsToInputs(undefined));
   const [mctsOptionsPlatform, setMctsOptionsPlatform] = useState('');
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
@@ -649,7 +649,7 @@ export function ExperimentWizard({
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
   const mctsState = mctsOptionsState(isBenchmarkDataset && traceMode === 'generate' ? selectedTarget : null,
-    mctsInputs, mctsOptionsPlatform);
+    mctsInputs, mctsOptionsPlatform, selectedDataset?.benchmark?.adapterKey);
   const generationCases = useMemo(
     () => generationCasesFromDataset(selectedDataset),
     [selectedDataset],
@@ -852,7 +852,7 @@ export function ExperimentWizard({
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
       setMctsInputs(mctsOptionsToInputs(restoredTarget.agentOptions));
-      setMctsOptionsPlatform(platform);
+      setMctsOptionsPlatform(restoredTarget.agentOptions ? platform : '');
       const runtime = sourceSnapshot.runtime && typeof sourceSnapshot.runtime === 'object'
         ? sourceSnapshot.runtime as Record<string, unknown> : {};
       const restoredTimeoutSeconds = skillContext

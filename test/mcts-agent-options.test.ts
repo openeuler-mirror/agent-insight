@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MctsOptionsFields } from '../src/components/eval/MctsOptionsFields'
-import { MCTS_QUICK_OPTIONS, mctsOptionArgs, normalizeAgentOptions } from '../services/executor/src/mcts-options.cjs'
+import { MCTS_DEFAULT_OPTIONS, MCTS_QUICK_OPTIONS, mctsOptionArgs, normalizeAgentOptions } from '../services/executor/src/mcts-options.cjs'
 import { mctsOptionsState, mctsOptionsToInputs, summarizeMctsOptions } from '../src/lib/engine/experiment/mcts-options'
 import { normalizeBenchmarkAgentOptions } from '../packages/benchmark-protocol/src/contracts'
 import { assertBenchmarkExecutionTarget } from '../src/lib/benchmark/execution-targets'
@@ -21,20 +21,42 @@ test('MCTS parameter fields render the seven controls, explicit zero and validat
   assert.match(markup, /恢复默认/)
 })
 
-test('MCTS form uses declared capabilities across runtimes, clears overrides and omits them on another target', () => {
+test('MCTS form uses declared capabilities across runtimes and requires a SWE-bench dataset', () => {
   const inputs = mctsOptionsToInputs({ mcts: MCTS_QUICK_OPTIONS })
   assert.equal(inputs.tokenFuseLimit, '0')
   for (const platform of ['pi-mcts', 'xiao-mcts', 'another-mcts']) {
-    const state = mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, inputs, 'pi-mcts')
+    const state = mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, inputs, 'pi-mcts', 'swe-bench')
     assert.equal(state.active, true)
     assert.deepEqual(state.agentOptions, { mcts: MCTS_QUICK_OPTIONS })
     assert.equal(state.error, null)
-    assert.equal(mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, {}, platform).agentOptions, undefined)
+    assert.deepEqual(mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, {}, platform, 'swe-bench').agentOptions,
+      { mcts: MCTS_DEFAULT_OPTIONS })
+    for (const benchmark of [undefined, '', 'another-benchmark']) {
+      assert.deepEqual(mctsOptionsState({ platform, agentOptionCapabilities: [capability] }, inputs, platform, benchmark),
+        { active: false, error: null })
+    }
   }
-  assert.deepEqual(mctsOptionsState({ platform: 'opencode' }, inputs, 'pi-mcts'), { active: false, error: null })
-  assert.match(mctsOptionsState({ platform: 'pi-mcts' }, inputs, 'pi-mcts').error!, /升级客户端/)
-  assert.match(mctsOptionsState({ platform: 'pi-mcts', agentOptionCapabilities: [capability] }, { branching: '1.5' }, '').error!, /正安全整数/)
+  assert.deepEqual(mctsOptionsState({ platform: 'opencode' }, inputs, 'pi-mcts', 'swe-bench'), { active: false, error: null })
+  assert.match(mctsOptionsState({ platform: 'pi-mcts' }, inputs, 'pi-mcts', 'swe-bench').error!, /升级客户端/)
+  assert.match(mctsOptionsState({ platform: 'pi-mcts', agentOptionCapabilities: [capability] }, { branching: '1.5' }, '', 'swe-bench').error!, /正安全整数/)
   assert.equal(summarizeMctsOptions({ mcts: { tokenFuseLimit: 0 } }), 'Token 熔断阈值：关闭')
+})
+
+test('MCTS defaults are visible, frozen in options and required after an input is cleared', () => {
+  const inputs = mctsOptionsToInputs(undefined)
+  assert.deepEqual(inputs, { maxIters: '5', branching: '3', maxTurnsInit: '160', maxTurnsStep: '80',
+    maxTurnsAuthor: '160', maxTurnsAuthorStep: '80', tokenFuseLimit: '30000000' })
+  const target = { platform: 'pi-mcts', agentOptionCapabilities: [capability] }
+  assert.deepEqual(mctsOptionsState(target, inputs, '', 'swe-bench').agentOptions, { mcts: MCTS_DEFAULT_OPTIONS })
+  assert.match(mctsOptionsState(target, { ...inputs, maxIters: '' }, '', 'swe-bench').error!, /不能为空/)
+  assert.equal(mctsOptionsToInputs({ mcts: { tokenFuseLimit: 0 } }).tokenFuseLimit, '0')
+  assert.equal(mctsOptionsToInputs({ mcts: { tokenFuseLimit: 0 } }).maxIters, '5')
+  const markup = renderToStaticMarkup(createElement(MctsOptionsFields, { value: inputs, error: null, onChange: () => {} }))
+  assert.doesNotMatch(markup, /沿用 MCTS 配置|placeholder=/)
+  assert.match(markup, /value="30000000"/)
+  assert.deepEqual(mctsOptionArgs({ mcts: MCTS_DEFAULT_OPTIONS }), ['--max-iters', '5', '--branching', '3',
+    '--max-turns-init', '160', '--max-turns-step', '80', '--max-turns-author', '160', '--max-turns-author-step', '80',
+    '--token-fuse-limit', '30000000'])
 })
 
 test('MCTS options reject unknown fields, unsafe integers and invalid types at the protocol boundary', () => {
