@@ -65,6 +65,10 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 
 Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只读观察器在确认真实 `/goal-plus` 启动后自动登记 `.gp`、导入 worker Trace 并上报主从关系，最终在主 Trace 下展示 worker。安装、自动激活、重试口径及卸载说明见 [Goal Plus 观测接入](goal-plus.md)。
 
+## MCTS xGovernor 接入
+
+MCTS 可通过外部启动器和本机透明 xGovernor 代理接入，无需修改 MCTS 源码。平台展示 coordinator、Runtime、标准化 LLM turn、工具活动和 checkpoint 派生关系；安装、运行、隐私边界及已知限制见 [MCTS xGovernor Trace 非侵入式接入](mcts-xgovernor.md)。
+
 ## Hermes 接入
 
 客户端安装页下发的普通交互版 setup 和 auto setup 都支持选择 Hermes。选择后脚本会从 Agent Insight 服务下载固定版本的轻量插件到 `$HERMES_HOME/plugins/agent_insight_hermes/`（未设置 `HERMES_HOME` 时默认为 `~/.hermes`），写入 `plugin.yaml` 与 `config.json`，然后启用 `agent_insight_hermes`。该插件只使用 Python 标准库，不需要访问 GitHub、探测 Hermes venv 或额外安装 OpenTelemetry Python 依赖。setup 不会启用、禁用或改写其他 Hermes 插件；上游 `hermes_otel` 可以继续用于 Langfuse 等独立目的。若两个插件都被配置为向同一个 Agent Insight 端点上报，同一轮对话可能产生重复 telemetry，需要由用户自行调整其中一个插件的 endpoint 或启用状态。

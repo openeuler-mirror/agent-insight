@@ -70,6 +70,7 @@ const FRAMEWORK_REPORTING_CHANNELS: Readonly<Record<string, readonly ReportingCh
     actrail: ['otlp-traces'],
     'pi-agent': ['otlp-traces', 'collaboration-sessions'],
     'goal-plus': ['otlp-traces', 'collaboration-sessions', 'collaboration-events'],
+    'mcts-xgovernor': ['otlp-traces', 'collaboration-sessions', 'collaboration-events'],
     qwencode: ['otlp-logs', 'otlp-traces'],
     codex: ['otlp-traces'],
     'deepseek-harness': ['otlp-logs'],

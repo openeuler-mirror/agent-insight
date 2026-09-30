@@ -348,7 +348,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       interactions: JSON.stringify([{
         tool_calls: [{
           id: 'spawn-call',
-          function: { name: 'spawn_agent', arguments: '{}' },
+          function: { name: 'spawn_agent', arguments: JSON.stringify({ session_id: 'session-b' }) },
           timing: { started_at: 100, source: 'execution' },
         }],
       }]),
@@ -359,7 +359,71 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     where: { eventDbId: created.eventDbId },
   });
   assert.equal(resolutions.every(row => row.linkState === 'linked'), true);
-  assert.equal(resolutions.find(row => row.side === 'from')?.anchorState, 'candidate');
+  const candidateResolution = resolutions.find(row => row.side === 'from');
+  assert.equal(candidateResolution?.anchorState, 'confirmed');
+  assert.deepEqual(JSON.parse(candidateResolution?.anchorJson || '{}').position, {
+    interactionIndex: 0,
+    callIndex: 0,
+    callKey: 'id:spawn-call',
+    recordSource: 'tool_calls',
+  });
+  const reportedGraph = await reportedService.graph('alice', 'collab_reported');
+  assert.equal(reportedGraph.events[0]?.fromAnchor.status, 'confirmed');
+  assert.equal(reportedGraph.events[0]?.fromAnchor.matchedRecord?.recordId, 'spawn-call');
+
+  const mctsCollaborationId = 'mcts.namespaced-run';
+  await reportedService.report('alice', {
+    collaborationId: mctsCollaborationId,
+    eventId: 'edge-runtime-author',
+    fromSessionId: 'coordinator',
+    toSessionId: 'runtime.author',
+    description: 'MCTS author runtime',
+    observedAt: '2026-09-12T00:00:00Z',
+    fromLocator: { recordType: 'tool', name: 'task' },
+  });
+  await reportedService.bind('alice', {
+    collaborationId: mctsCollaborationId,
+    sessionId: 'coordinator',
+    traceSessionId: 'mcts.run.root',
+    eventClock: 'source_session',
+  });
+  await reportedService.bind('alice', {
+    collaborationId: mctsCollaborationId,
+    sessionId: 'runtime.author',
+    traceSessionId: 'mcts.run.root.runtime.author',
+    eventClock: 'source_session',
+  });
+  await prismaRaw.$executeRawUnsafe(
+    'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)',
+    'mcts-root-execution', 'mcts.run.root', 'mcts.run.root', 'alice', 'mcts-xgovernor',
+    'mcts-author-execution', 'mcts.run.root.runtime.author', 'mcts.run.root.runtime.author', 'alice', 'mcts-xgovernor',
+  );
+  await prismaRaw.session.create({
+    data: {
+      taskId: 'mcts.run.root',
+      user: 'alice',
+      interactions: JSON.stringify([{
+        tool_calls: [{
+          id: 'mcts-author-task',
+          function: { name: 'task', arguments: JSON.stringify({ session_id: 'runtime.author', subagent_type: 'author' }) },
+          timing: { started_at: 300, source: 'execution' },
+        }],
+      }]),
+    },
+  });
+  await resolveCollaborationEndpointsForExecution('alice', [
+    'mcts.run.root',
+    'mcts.run.root.runtime.author',
+  ]);
+  const mctsGraph = await reportedService.graph('alice', mctsCollaborationId);
+  assert.equal(mctsGraph.events[0]?.fromAnchor.status, 'confirmed');
+  assert.equal(mctsGraph.events[0]?.fromAnchor.matchedRecord?.recordId, 'mcts-author-task');
+  assert.deepEqual(mctsGraph.events[0]?.fromAnchor.position, {
+    interactionIndex: 0,
+    callIndex: 0,
+    callKey: 'id:mcts-author-task',
+    recordSource: 'tool_calls',
+  });
 
   await prismaRaw.$executeRawUnsafe(
     'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?)',
@@ -407,6 +471,10 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.deepEqual(
     orderedAnchors.map(row => JSON.parse(row.anchorJson || '{}').orderIndex).sort(),
     [1, 2],
+  );
+  assert.deepEqual(
+    orderedAnchors.map(row => JSON.parse(row.anchorJson || '{}').position.callIndex).sort(),
+    [0, 1],
   );
 
   const source = await prismaRaw.goalPlusSource.create({

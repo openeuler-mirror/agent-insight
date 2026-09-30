@@ -18,6 +18,7 @@
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| MCTS 执行 Trace 非侵入式接入 | [mcts-trace-observability](mcts-trace-observability/) | 不修改 MCTS 代码，由独立安装的外部启动器和透明 xGovernor 观测网关采集精确 Runtime Trace 与 checkpoint 血缘；MCTS node/score/final tree 仅按 stdout 权威边界独立展示 | Feature / Observability | 2026-09-23 | 🟡 核心实现、独立安装分发与自动化测试完成；待真实 MCTS golden path 和浏览器验收 | —（待补） |
 | 实验删除与评测服务停止清理 | [experiment-cancellation](experiment-cancellation/phase1-requirements.md) | 实验及 Case 定向停止和逻辑删除、立即停服、离线镜像清理，保留共享资源及未确认取消记录 | Feature | 2026-09-23 | 🟡 工作区实现，专项通过，待全量与部署验收 | — |
 | Trace 无上报超时 | [trace-inactivity-timeout](trace-inactivity-timeout/) | 所有 Agent 采集的未结束 Trace 连续十分钟无上报后显示超时，新上报恢复执行中，列表和详情自动刷新 | Bugfix | 2026-09-15 | ✅ 830 已验收，master 专项自动化验证通过 | [#301](https://atomgit.com/openeuler/agent-insight/issues/301) |
 | 跨 Session 协作 Trace | [cross-session-collaboration-trace](cross-session-collaboration-trace/) | 以不可变关系事件和可重算端点解析连接分散 Session，并由服务端将 Goal Plus 语义成员关系投影为逻辑主节点到 worker 的关系，不改原生 Execution 树 | Feature | 2026-09-12 | 🟡 已完成合成数据 HTTP 与浏览器验证；55 项专项通过；全量未全绿，未做真实客户端 E2E | —（待补） |

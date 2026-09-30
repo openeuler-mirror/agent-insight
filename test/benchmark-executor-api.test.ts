@@ -1539,11 +1539,12 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
       evaluator.jobs[0].headers.get('x-agent-insight-request-digest'),
       evaluator.jobs[0].body.requestDigest,
     )
-    const unauthorizedArtifact = await fetch(
+    const evaluationArtifactResponse = await fetch(
       `${platformListener.origin}/api/benchmark/v1/artifacts/${artifact.id}/content`,
       { headers: { 'x-agent-insight-evaluation-id': evaluation.id } },
     )
-    assert.equal(unauthorizedArtifact.status, 401)
+    assert.equal(evaluationArtifactResponse.status, 200)
+    assert.deepEqual(Buffer.from(await evaluationArtifactResponse.arrayBuffer()), artifactBytes)
 
     assert.equal((await dispatch()).status, 202)
     await new Promise((resolve) => setTimeout(resolve, 100))

@@ -40,6 +40,16 @@ function detectPlatform(request: Request): 'windows' | 'unix' {
     return 'unix';
 }
 
+function normalizeMctsUpstream(raw: string | null): string {
+    const value = (raw || 'http://127.0.0.1:8787').trim();
+    if (!value || value.length > 2048 || /[\0\r\n]/.test(value)) throw new Error('Invalid MCTS xGovernor upstream URL');
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+        throw new Error('MCTS xGovernor upstream must be an HTTP(S) URL without credentials');
+    }
+    return parsed.toString().replace(/\/+$/, '');
+}
+
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const apiKey = searchParams.get('apiKey');
@@ -55,6 +65,15 @@ export async function GET(request: Request) {
     const llamaIndexPythonMode = requestedPythonMode === 'global' || requestedPythonMode === 'venv'
         ? requestedPythonMode
         : 'auto';
+    let mctsUpstream: string;
+    try {
+        mctsUpstream = normalizeMctsUpstream(searchParams.get('mctsUpstream'));
+    } catch (error) {
+        return new NextResponse(error instanceof Error ? error.message : 'Invalid MCTS xGovernor upstream URL', {
+            status: 400,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        });
+    }
 
     if (!apiKey || !hostParam) {
         return new NextResponse('Missing required parameters: apiKey and host', {
@@ -83,6 +102,7 @@ export async function GET(request: Request) {
             preselected,
             llamaIndexVenv,
             llamaIndexPythonMode,
+            mctsUpstream,
             installProfile.goalPlusHosts,
             installProfile.autoAddedFrameworks.map(framework => framework.value),
         );
@@ -95,6 +115,7 @@ export async function GET(request: Request) {
         preselected,
         llamaIndexVenv,
         llamaIndexPythonMode,
+        mctsUpstream,
         installProfile.goalPlusHosts,
         installProfile.autoAddedFrameworks.map(framework => framework.value),
     );
@@ -107,6 +128,7 @@ function generateBashScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    mctsUpstream: string,
     goalPlusHosts: GoalPlusHost[],
     autoAddedFrameworks: string[],
 ): NextResponse {
@@ -123,6 +145,7 @@ ${SETUP_BASH_HOME}
 AGENT_INSIGHT_HOST="${bashDoubleQuoted(hostParam)}"
 AGENT_INSIGHT_BASE_URL="${bashDoubleQuoted(baseUrl)}"
 AGENT_INSIGHT_API_KEY="${bashDoubleQuoted(apiKey)}"
+MCTS_XGOVERNOR_UPSTREAM="${bashDoubleQuoted(mctsUpstream)}"
 SETUP_WORKING_DIR="$PWD"
 GOAL_PLUS_HOSTS="${bashDoubleQuoted(goalPlusHosts.join(','))}"
 AUTO_ADDED_FRAMEWORKS="${bashDoubleQuoted(autoAddedFrameworks.join(','))}"
@@ -198,7 +221,8 @@ const frameworks = [
     { name: 'Pi Agent', value: 'pi-agent' },
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
-    { name: 'DeepSeek Harness', value: 'deepseek-harness' }
+    { name: 'DeepSeek Harness', value: 'deepseek-harness' },
+    { name: 'MCTS (xGovernor)', value: 'mcts-xgovernor' }
 ];
 
 async function select() {
@@ -286,7 +310,9 @@ INSTALL_ACTRAIL=false
 INSTALL_CODEX=false
 INSTALL_QWENCODE=false
 INSTALL_DEEPSEEK_HARNESS=false
+INSTALL_MCTS_XGOVERNOR=false
 DEEPSEEK_HARNESS_SETUP_OK=false
+MCTS_XGOVERNOR_SETUP_OK=false
 CODEX_SETUP_OK=false
 PI_AGENT_SETUP_OK=false
 GOAL_PLUS_SETUP_OK=false
@@ -334,9 +360,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
     INSTALL_DEEPSEEK_HARNESS=true
 fi
+if [[ ",$SELECTED_FRAMEWORKS," == *",mcts-xgovernor,"* ]]; then
+    INSTALL_MCTS_XGOVERNOR=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -758,6 +787,19 @@ if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     rm -f "$PI_INSTALLER"
 fi
 
+# 6.30 Install MCTS xGovernor transparent proxy
+if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then
+    echo "⏬ Installing MCTS xGovernor transparent proxy..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    export AGENT_INSIGHT_MCTS_UPSTREAM_URL="$MCTS_XGOVERNOR_UPSTREAM"
+    MCTS_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/mcts-xgovernor" -o "$MCTS_INSTALLER"
+    if ! sh "$MCTS_INSTALLER"; then rm -f "$MCTS_INSTALLER"; exit 1; fi
+    MCTS_XGOVERNOR_SETUP_OK=true
+    rm -f "$MCTS_INSTALLER"
+fi
+
 # 6.31 Install Agent Insight Goal Plus worker and relationship collector
 if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
     echo "⏬ Installing Agent Insight Goal Plus worker and relationship collector..."
@@ -1057,7 +1099,9 @@ fi
 echo ""
 GOAL_PLUS_TRACE_READY=true
 if [[ ",$GOAL_PLUS_HOSTS," == *",pi,"* ]] && [ "$PI_AGENT_SETUP_OK" != "true" ]; then GOAL_PLUS_TRACE_READY=false; fi
-if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then
+if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ] && [ "$MCTS_XGOVERNOR_SETUP_OK" != "true" ]; then
+    echo "❌ Agent-Insight Telemetry: NOT READY (MCTS xGovernor proxy setup failed)"
+elif [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then
     echo "❌ Agent-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"
 elif [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -z "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_SETUP_OK" != "true" ]; then
     echo "⚠️  Agent-Insight Telemetry: PARTIAL"
@@ -1096,6 +1140,11 @@ if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
 fi
 if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"
+fi
+if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then
+    echo "  ✅ MCTS xGovernor Proxy: ~/.agent-insight/collectors/mcts-xgovernor-proxy"
+elif [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then
+    echo "  ❌ MCTS xGovernor Proxy: not installed"
 fi
 if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" = "true" ]; then echo "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS"; fi
 if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then echo "  ❌ Goal Plus native Trace: collector setup is not ready"; fi
@@ -1156,6 +1205,9 @@ fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
 fi
+if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then
+    echo "  9. Run MCTS through the proxy: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]"
+fi
 if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ]; then
     echo "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus"
 fi
@@ -1182,6 +1234,7 @@ function generatePowerShellScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    mctsUpstream: string,
     goalPlusHosts: GoalPlusHost[],
     autoAddedFrameworks: string[],
 ): NextResponse {
@@ -1197,6 +1250,7 @@ function generatePowerShellScript(
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(hostParam) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
         '$AGENT_INSIGHT_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
+        '$MCTS_XGOVERNOR_UPSTREAM = "' + powerShellDoubleQuoted(mctsUpstream) + '"',
         '$SETUP_WORKING_DIR = (Get-Location).Path',
         '$GOAL_PLUS_HOSTS = "' + powerShellDoubleQuoted(goalPlusHosts.join(',')) + '"',
         '$AUTO_ADDED_FRAMEWORKS = "' + powerShellDoubleQuoted(autoAddedFrameworks.join(',')) + '"',
@@ -1277,7 +1331,8 @@ function generatePowerShellScript(
         '    "    { name: \'Pi Agent\', value: \'pi-agent\' },"',
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
-        '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' }"',
+        '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
+        '    "    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1366,6 +1421,8 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
+        '$INSTALL_MCTS_XGOVERNOR = $false',
+        '$MCTS_XGOVERNOR_SETUP_OK = $false',
         '$CODEX_SETUP_OK = $false',
         '$PI_AGENT_SETUP_OK = $false',
         '$GOAL_PLUS_SETUP_OK = $false',
@@ -1413,9 +1470,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)mcts-xgovernor(,|$)") {',
+        '    $INSTALL_MCTS_XGOVERNOR = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_MCTS_XGOVERNOR) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1825,6 +1885,11 @@ function generatePowerShellScript(
         '    }',
         '}',
         '',
+        '# 6.30 MCTS xGovernor transparent proxy requires Linux/macOS',
+        'if ($INSTALL_MCTS_XGOVERNOR) {',
+        '    Write-Warning "MCTS xGovernor transparent proxy currently requires Linux or macOS. Run the generated shell installer inside WSL on Windows."',
+        '}',
+        '',
         '# 6.31 Install Agent Insight Goal Plus worker and relationship collector',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
         '    Write-Host "⏬ Installing Agent Insight Goal Plus worker and relationship collector..."',
@@ -2124,7 +2189,9 @@ function generatePowerShellScript(
         'Write-Host ""',
         '$GOAL_PLUS_TRACE_READY = $true',
         'if ((",$GOAL_PLUS_HOSTS," -match ",pi,") -and -not $PI_AGENT_SETUP_OK) { $GOAL_PLUS_TRACE_READY = $false }',
-        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) {',
+        'if ($INSTALL_MCTS_XGOVERNOR) {',
+        '    Write-Host "❌ Skill-Insight Telemetry: NOT READY (MCTS xGovernor proxy requires Linux/macOS; use WSL)"',
+        '} elseif (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) {',
         '    Write-Host "❌ Skill-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"',
         '} elseif (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_SETUP_OK) {',
         '    Write-Host "⚠️  Skill-Insight Telemetry: PARTIAL"',
@@ -2158,6 +2225,7 @@ function generatePowerShellScript(
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:AGENT_INSIGHT_HOME\\collectors\\pi-agent" }',
+        'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  ⚠️  MCTS xGovernor Proxy: install the Linux collector inside WSL" }',
         'if ($GOAL_PLUS_HOSTS -and $GOAL_PLUS_TRACE_READY) { Write-Host "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS" }',
         'if ($GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) { Write-Host "  ❌ Goal Plus native Trace: collector setup is not ready" }',
         'if ($GOAL_PLUS_SOURCE_OK) { Write-Host "  ✅ Goal Plus worker relationships: workspace attached; watcher started" }',
@@ -2205,6 +2273,7 @@ function generatePowerShellScript(
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
+        'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  9. In WSL run: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "      Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
         'Write-Host "------------------------------------------------"',
