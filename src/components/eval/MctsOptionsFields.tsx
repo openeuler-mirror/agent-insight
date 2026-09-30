@@ -7,14 +7,14 @@ export function MctsOptionsFields({ value, error, onChange }: {
   error: string | null
   onChange: (value: MctsOptionInputs) => void
 }) {
-  return <section className="grid gap-3 md:col-span-2" aria-label="MCTS 搜索参数">
+  return <section className="mb-4 grid gap-3" aria-label="MCTS 搜索参数">
     <div className="flex flex-wrap items-center gap-2">
       <h3 className="text-sm font-semibold">MCTS 搜索参数</h3>
       <Button type="button" variant="outline" size="sm" onClick={() => onChange(mctsOptionsToInputs({ mcts: MCTS_QUICK_OPTIONS }))}>填入联调参数</Button>
       <Button type="button" variant="ghost" size="sm" onClick={() => onChange({})}>恢复默认</Button>
     </div>
     <p className="text-xs text-foreground-muted">留空沿用执行机的 MCTS 配置。Token 熔断阈值为 0 时关闭熔断；Agent 超时独立生效。</p>
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
       {MCTS_OPTION_FIELDS.map(field => <label key={field.key} className="grid gap-1 text-xs">
         {field.label}
         <Input className="border-card-border placeholder:text-foreground-muted focus-visible:border-primary focus-visible:ring-primary/20"

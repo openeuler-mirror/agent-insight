@@ -2153,9 +2153,9 @@ export function ExperimentWizard({
                     preset={skillPreset}
                     onChange={setAgentTimeoutInput}
                   />
-                  {mctsState.active && <MctsOptionsFields value={mctsInputs} error={mctsState.error}
-                    onChange={value => { setMctsInputs(value); setMctsOptionsPlatform(selectedTarget?.platform || ''); }} />}
               </div>
+              {mctsState.active && <MctsOptionsFields value={mctsInputs} error={mctsState.error}
+                onChange={value => { setMctsInputs(value); setMctsOptionsPlatform(selectedTarget?.platform || ''); }} />}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
                 <span style={{ flex: 1 }} />
