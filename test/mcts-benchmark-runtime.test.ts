@@ -189,8 +189,7 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
     assert.equal((launches[0].options.env as Record<string, string>).AGENT_INSIGHT_HOME,
       path.join(f.outputDir, '.agent-insight'))
     assert.ok((launches[0].options.env as Record<string, string>).PATH.startsWith(path.join(f.outputDir, '.agent-insight', 'bin')))
-    assert.equal(fs.readlinkSync(path.join(f.outputDir, '.agent-insight', 'bin', 'python')),
-      path.join(f.repoDir, '.venv', 'bin', 'python'))
+    assert.equal(fs.lstatSync(path.join(f.outputDir, '.agent-insight', 'bin', 'python')).isSymbolicLink(), false)
     assert.equal(launches[0].options.abortSignal, 'SIGINT')
     assert.equal(launches[0].options.killProcessGroup, true)
   } finally { f.close() }
@@ -210,8 +209,39 @@ test('pi-mcts accepts a client configured Python outside the repository', async 
       throw new Error('stop after launch')
     }))
     assert.ok(actualEnv?.PATH.startsWith(path.join(f.outputDir, '.agent-insight', 'bin')))
-    assert.equal(fs.readlinkSync(path.join(f.outputDir, '.agent-insight', 'bin', 'python')), customPython)
+    const invokedPython = spawnSync('python', ['-c', 'import datasets'], { env: actualEnv, encoding: 'utf8' })
+    assert.equal(invokedPython.status, 0, invokedPython.stderr)
+    assert.equal(invokedPython.stdout.trim(), '3.11')
     assert.equal(actualEnv?.MCTS_PYTHON, undefined)
+  } finally { f.close() }
+})
+
+test('pi-mcts retains a real venv and its dependencies through the original bash launcher', async () => {
+  const f = fixture()
+  try {
+    const venv = path.join(f.root, "python env's runtime")
+    const create = spawnSync('python3', ['-m', 'venv', '--without-pip', venv], { encoding: 'utf8' })
+    assert.equal(create.status, 0, create.stderr)
+    const python = path.join(venv, 'bin', 'python')
+    const purelib = spawnSync(python, ['-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'], { encoding: 'utf8' })
+    assert.equal(purelib.status, 0, purelib.stderr)
+    fs.writeFileSync(path.join(purelib.stdout.trim(), 'datasets.py'), 'def load_dataset(): return "venv dependency"\n')
+    const marker = path.join(f.root, 'python-environment.json')
+    fs.writeFileSync(path.join(f.repoDir, 'testcases_union', 'run_union.sh'), [
+      '#!/bin/bash',
+      "python - <<'PY'",
+      'import json, sys',
+      'from pathlib import Path',
+      'from datasets import load_dataset',
+      `Path(${JSON.stringify(marker)}).write_text(json.dumps([sys.prefix, sys.executable, load_dataset()]))`,
+      'PY', '',
+    ].join('\n'))
+    const config = { ...f.config, mctsPython: python }
+    assert.deepEqual(runtime.probeMctsBenchmarkRuntime(config), { ready: true })
+    await assert.rejects(runtime.runMctsBenchmarkCase(config, f.payload, async (_command: string, args: string[], options: Record<string, unknown>) => {
+      return runProcess('bash', args.slice(args.indexOf('--') + 2), options)
+    }), { code: 'AGENT_NO_OUTPUT' })
+    assert.deepEqual(JSON.parse(fs.readFileSync(marker, 'utf8')), [venv, python, 'venv dependency'])
   } finally { f.close() }
 })
 

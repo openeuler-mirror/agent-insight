@@ -112,6 +112,7 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
 }
 
 export async function continueExperiment(experimentId: string): Promise<void> {
+  await settleBenchmarkExperimentStatus(experimentId)
   const experiment = await prisma.experiment.findUnique({
     where: { id: experimentId },
     include: { benchmarkBinding: true },
@@ -124,6 +125,7 @@ export async function continueExperiment(experimentId: string): Promise<void> {
     user: experiment.user,
     publicCallbackOrigin: callbackOrigin,
     executorCallbackOrigin: runtime.executorCallbackBaseUrl || callbackOrigin,
+    resumeOnly: true,
   })
   next?.completion?.catch((error) => {
     console.error('[benchmark/lifecycle] next case dispatch failed', error)

@@ -121,7 +121,8 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
   await fsp.mkdir(outputDir, { recursive: true })
   const interpreterBin = path.join(observerHome, 'bin')
   await fsp.mkdir(interpreterBin, { recursive: true })
-  await fsp.symlink(paths.python, path.join(interpreterBin, 'python'))
+  const quotedPython = `'${paths.python.replace(/'/g, "'\\''")}'`
+  await fsp.writeFile(path.join(interpreterBin, 'python'), `#!/bin/sh\nexec ${quotedPython} "$@"\n`, { mode: 0o700 })
   const env = {
     ...process.env,
     PATH: `${interpreterBin}${path.delimiter}${process.env.PATH || ''}`,

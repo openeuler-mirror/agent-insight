@@ -420,6 +420,7 @@ export async function startBenchmarkExperiment(input: {
   user: string
   publicCallbackOrigin: string
   executorCallbackOrigin: string
+  resumeOnly?: boolean
 }): Promise<{
   status: 'running'
   alreadyRunning: boolean
@@ -435,6 +436,7 @@ export async function startBenchmarkExperiment(input: {
   if (!experiment?.benchmarkBinding) return null
 
   const alreadyRunning = experiment.status === 'running'
+  if (input.resumeOnly && !alreadyRunning) return null
   if (!alreadyRunning) {
     await prisma.$transaction([
       prisma.experiment.update({
@@ -515,10 +517,13 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
   let resumed = 0
   const executorCallbackBaseUrl = defaultEvaluatorRuntimeConfigProvider.snapshot().executorCallbackBaseUrl
   for (const binding of bindings) {
+    const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
+    await settleBenchmarkExperimentStatus(binding.experimentId)
     const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
     if (!experiment || !binding.callbackOrigin) continue
     const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
-      publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin })
+      publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
+      resumeOnly: true })
     if (result?.runId) resumed++
     void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
   }

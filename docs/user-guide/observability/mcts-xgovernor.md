@@ -135,6 +135,8 @@ sudo systemctl restart agent-insight-client.service
 
 在平台确认客户端在线且 `pi-mcts` 已就绪，再创建 SWE-bench Benchmark 实验，选择 `pi-mcts` 平台与 Agent、平台默认模型，并设置足够长的 Agent 超时。模型沿用 MCTS/xGovernor 的部署配置。
 
+客户端会直接调用配置的 Python 解释器，保留该虚拟环境中的依赖，不需要在交互终端中激活环境。
+
 平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；搜索参数保留正式默认值。用户无需每次手动运行启动命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，同时关联本次根 Trace；平台仍会独立运行 Benchmark 评测。停止实验会向进程组发送 SIGINT，留出 30 秒让 MCTS 释放本次会话/checkpoint 并刷新 Trace。
 
 常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。部署与评测服务要求见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
