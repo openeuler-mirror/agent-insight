@@ -165,6 +165,7 @@ export class WorkBuddyCollector {
       endpoint: this.endpoint,
       homeDir: this.homeDir,
       redactLocalPaths: false,
+      fileOrder: "newest-first",
     });
     this.processedPath = path.join(this.stateRoot, apiKeyHash(this.apiKey), "processed-traces.json");
     this.processed = new Set();
