@@ -105,15 +105,13 @@ export async function settleBenchmarkExperimentStatus(experimentId: string): Pro
       data: { schedulerStatus: status },
     }),
   ])
-  if (process.env.BENCHMARK_IMAGE_POOL_PREPARE_TOKEN) {
-    const evaluatorKey = getBenchmarkAdapter(binding.adapterKey).manifest.evaluation.evaluatorKey
-    void sendImagePreparationWindow({ benchmarkKey: binding.adapterKey, evaluatorKey, experimentId,
-      revision: nextImagePreparationRevision(), cases: [] })
-      .catch((error) => console.warn('[benchmark/image-pool] window cleanup failed', error instanceof Error ? error.message : String(error)))
-  }
+  const evaluatorKey = getBenchmarkAdapter(binding.adapterKey).manifest.evaluation.evaluatorKey
+  void sendImagePreparationWindow({ benchmarkKey: binding.adapterKey, evaluatorKey, experimentId,
+    revision: nextImagePreparationRevision(), cases: [] })
+    .catch((error) => console.warn('[benchmark/image-pool] window cleanup failed', error instanceof Error ? error.message : String(error)))
 }
 
-async function continueExperiment(experimentId: string): Promise<void> {
+export async function continueExperiment(experimentId: string): Promise<void> {
   const experiment = await prisma.experiment.findUnique({
     where: { id: experimentId },
     include: { benchmarkBinding: true },

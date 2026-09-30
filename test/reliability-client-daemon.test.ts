@@ -806,7 +806,7 @@ test('generic execution reports Trace ID before exit and force-kills timed-out p
   assert.match(source, /signalProcessTree\(child, 'SIGTERM'\)/)
   assert.match(source, /signalProcessTree\(child, 'SIGKILL'\)/)
   assert.match(source, /hardStopTimer = setTimeout\(\(\) => void finishAgentRun\(null, 'SIGKILL'\)/)
-  assert.match(source, /if \(reliabilityChild\) signalProcessTree\(reliabilityChild, 'SIGKILL'\)/)
+  assert.match(source, /for \(const child of experimentChildren\) signalProcessTree\(child, 'SIGKILL'\)/)
 })
 
 test('generic execution aligns PWD with the prepared workspace cwd', async () => {

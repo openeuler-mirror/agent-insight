@@ -24,7 +24,7 @@ function poolError(code, message, retryable = true) {
 
 function pullError(message) {
   if (/\bENOSPC\b|no space left on device|disk quota exceeded/i.test(message)) {
-    return poolError('IMAGE_POOL_SPACE_LOW', `镜像准备空间不足：${message.slice(-1000)}`, false)
+    return Object.assign(poolError('IMAGE_POOL_SPACE_LOW', `镜像准备空间不足：${message.slice(-1000)}`, false), { actualDiskFull: true })
   }
   return poolError('IMAGE_POOL_PULL_FAILED', message)
 }

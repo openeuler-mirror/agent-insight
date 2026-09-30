@@ -26,10 +26,12 @@ function waitForImage(work, signal, timeoutMs) {
 function imagePoolConfig(env = process.env) {
   const setting = env.IMAGE_POOL_ENABLED || 'true'
   if (!['true', 'false'].includes(setting)) throw poolError('IMAGE_POOL_CONFIG_INVALID', 'IMAGE_POOL_ENABLED 必须为 true 或 false', false)
+  const prefetchSetting = env.IMAGE_POOL_PREFETCH_ENABLED || 'true'
+  if (!['true', 'false'].includes(prefetchSetting)) throw poolError('IMAGE_POOL_CONFIG_INVALID', 'IMAGE_POOL_PREFETCH_ENABLED 必须为 true 或 false', false)
   const enabled = setting === 'true'
   const config = {
     enabled,
-    prefetch: enabled && env.IMAGE_POOL_PREFETCH_ENABLED === 'true',
+    prefetch: enabled && prefetchSetting === 'true',
     reserveRatio: Number(env.IMAGE_POOL_RESERVE_RATIO || 0.3),
     highWatermark: Number(env.IMAGE_POOL_HIGH_WATERMARK || 0.9),
     maxPulls: Number(env.IMAGE_POOL_MAX_PULLS || 2),
@@ -271,6 +273,9 @@ class BenchmarkImagePool {
       candidates.sort((a, b) => Number(a.keys.some((key) => protectedKeys.has(key))) - Number(b.keys.some((key) => protectedKeys.has(key))) || a.lastUsedAt - b.lastUsedAt)
       const selected = candidates[0]
       if (!selected) return null
+      if (allowPrepared) for (const window of Object.values(this.state.windows)) {
+        window.specs = window.specs.filter((spec) => !selected.keys.includes(this.key(spec)))
+      }
       selected.deleting = true
       await this.save()
       return selected
@@ -327,6 +332,7 @@ class BenchmarkImagePool {
       const budget = await this.budget(bytes)
       if (!budget.enough) {
         if (await this.evictOne(!prefetch)) continue
+        if (prefetch) return Promise.reject(poolError('IMAGE_POOL_SPACE_LOW', '空间不足，暂缓预取'))
         throw poolError('IMAGE_POOL_SPACE_LOW', '镜像准备空间不足，已无可安全回收的镜像', false)
       }
       await sleep(100)
@@ -430,7 +436,7 @@ class BenchmarkImagePool {
 
   async acquire(owner, specs, options = {}) {
     await this.initialize()
-    if (!owner?.benchmarkKey || !owner?.runId || !owner?.experimentId || !Array.isArray(specs) || specs.length > 16) {
+    if (!owner?.benchmarkKey || !owner?.runId || !owner?.experimentId || !Array.isArray(specs) || specs.length > 4096) {
       throw poolError('IMAGE_POOL_OWNER_INVALID', '镜像使用者不合法', false)
     }
     const ownerKey = JSON.stringify([owner.benchmarkKey, owner.experimentId, owner.runId])
@@ -491,17 +497,35 @@ class BenchmarkImagePool {
     })
   }
 
+  async replaceWindows(revision, windows) {
+    await this.initialize()
+    for (const window of windows) for (const spec of window.specs) validateImageSpec(spec, this.arch)
+    const accepted = await this.atomic(async () => {
+      if ((this.state.windowRevision ?? -1) >= revision) return false
+      const next = {}
+      for (const window of windows) next[JSON.stringify([window.benchmarkKey, window.experimentId])] = {
+        revision, specs: window.specs, caseCount: window.caseIds.length, caseIds: window.caseIds, expiresAt: this.now() + 30 * 60_000,
+      }
+      this.state.windows = next
+      this.state.windowRevision = revision
+      await this.save()
+      return true
+    })
+    if (accepted) void this.prefetch(windows.flatMap((window) => window.specs)).catch((error) => this.log({ event: 'prefetch_failed', code: error.code, message: error.message }))
+    return { enabled: true, accepted }
+  }
+
   async updateWindow(scope, revision, specs) {
     await this.initialize()
     if (!this.config.prefetch) return { enabled: false }
-    if (!scope.benchmarkKey || !scope.experimentId || !Number.isSafeInteger(revision) || revision < 0 || !Array.isArray(specs) || specs.length > 16) {
+    if (!scope.benchmarkKey || !scope.experimentId || !Number.isSafeInteger(revision) || revision < 0 || !Array.isArray(specs) || specs.length > 4096) {
       throw poolError('IMAGE_POOL_WINDOW_INVALID', '准备窗口不合法', false)
     }
     for (const spec of specs) validateImageSpec(spec, this.arch)
     const key = JSON.stringify([scope.benchmarkKey, scope.experimentId])
     const accepted = await this.atomic(async () => {
       if ((this.state.windows[key]?.revision ?? -1) >= revision) return false
-      this.state.windows[key] = { revision, specs, expiresAt: this.now() + 30 * 60_000 }
+      this.state.windows[key] = { revision, specs, caseCount: scope.caseCount, expiresAt: this.now() + 30 * 60_000 }
       await this.save()
       return true
     })

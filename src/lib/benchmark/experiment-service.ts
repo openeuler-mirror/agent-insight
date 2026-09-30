@@ -1,3 +1,4 @@
+import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
 import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
@@ -27,6 +28,7 @@ export type CreateBenchmarkExperimentInput = {
     agent: string
     model?: string
     agentTimeoutSeconds?: number
+    executionConcurrency?: number
     maxParallelAgentCases?: number
   }
 }
@@ -93,13 +95,9 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
       400,
     )
   }
-  if (input.runConfig.maxParallelAgentCases != null && input.runConfig.maxParallelAgentCases !== 1) {
-    throw new BenchmarkProtocolError(
-      'AGENT_PARALLELISM_UNSUPPORTED',
-      '第一阶段 maxParallelAgentCases 只支持 1',
-      400,
-    )
-  }
+  let executionConcurrency: number
+  try { executionConcurrency = parseExecutionConcurrency(input.runConfig.executionConcurrency ?? input.runConfig.maxParallelAgentCases) }
+  catch { throw new BenchmarkProtocolError('EXECUTION_CONCURRENCY_INVALID', '执行并发必须为正整数', 400) }
   const dataset = await prisma.benchmarkDataset.findFirst({
     where: { id: datasetId, user: { in: benchmarkDatasetOwners(user) } },
     include: {
@@ -140,12 +138,16 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
   assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent })
+  if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
+    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '执行并发大于 1 需要升级客户端', 400)
+  }
 
   const runConfig = {
     platform,
     agent,
     ...(input.runConfig.model?.trim() ? { model: input.runConfig.model.trim() } : {}),
     timeoutSeconds,
+    executionConcurrency,
   }
   const evaluatorIds = Array.from(new Set([
     benchmarkEvaluatorId(dataset.adapterKey),

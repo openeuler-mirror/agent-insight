@@ -828,6 +828,7 @@ function buildCapabilities(cfg, opts) {
   const components = {
     clientVersion: AGENT_VERSION,
     'git-workspace/v1': { ready: true },
+    'concurrent-execution/v1': { ready: true },
     'git-patch/v1': { ready: true },
   }
   for (const platform of platforms) {
@@ -1045,8 +1046,9 @@ async function writeRasRuntimeConfig(snapshot) {
 const activeChildren = new Map()
 /** 可靠性 Case 独占槽：持有期间不领 FI run，避免多个故障注入互相污染。 */
 let reliabilitySlotHeld = false
+const parallelExecutionSlots = new Set()
+const experimentChildren = new Set()
 let fiBusy = 0
-let reliabilityChild = null
 let benchmarkExecutor = null
 const experimentControllers = new Map()
 const experimentSettled = new Map()
@@ -1056,14 +1058,21 @@ function experimentCancellationFile(commandId) {
   return path.join(CLIENT_HOME, 'cancelled-experiments', `${commandId}.json`)
 }
 
-function tryAcquireExecutionSlot() {
+function tryAcquireExecutionSlot(kind, id) {
   if (fiBusy > 0 || reliabilitySlotHeld) return false
-  reliabilitySlotHeld = true
+  if (id && ['benchmark', 'ordinary'].includes(kind)) {
+    if (parallelExecutionSlots.has(id)) return false
+    parallelExecutionSlots.add(id)
+  } else {
+    if (parallelExecutionSlots.size) return false
+    reliabilitySlotHeld = true
+  }
   return true
 }
 
-function releaseExecutionSlot() {
-  reliabilitySlotHeld = false
+function releaseExecutionSlot(kind, id) {
+  if (id && ['benchmark', 'ordinary'].includes(kind)) parallelExecutionSlots.delete(id)
+  else reliabilitySlotHeld = false
 }
 
 function resolveWorkspace(logical, workspaceBase) {
@@ -1233,7 +1242,8 @@ async function executeAction(cfg, frame, sendStatus) {
       await sendStatus('FAILED', { error: { code: 'EXECUTION_CANCELLED', message: '实验已取消' } })
       return
     }
-    if (!tryAcquireExecutionSlot()) {
+    const executionKind = payload.skillExecution ? 'skill' : 'ordinary'
+    if (!tryAcquireExecutionSlot(executionKind, frame.commandId)) {
       await sendStatus('FAILED', {
         error: { code: 'CLIENT_BUSY', message: '本机已有 Agent 或故障注入任务运行，拒绝并发执行实验 Case' },
       })
@@ -1267,7 +1277,7 @@ async function executeAction(cfg, frame, sendStatus) {
       experimentControllers.delete(frame.commandId)
       try { ordinaryExperimentStore.finish(frame.commandId, terminationConfirmed) }
       finally {
-        releaseExecutionSlot()
+        releaseExecutionSlot(executionKind, frame.commandId)
         experimentSettled.delete(frame.commandId)
         markSettled()
       }
@@ -1504,7 +1514,13 @@ const runtimeAdapters = {
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   payload.signal?.throwIfAborted()
   const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
-  const isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
+  let isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
+  if (!payload.skillExecution && !payload.cwd) {
+    const root = path.join(cfg.workspaceBase || CLIENT_HOME, 'experiment-workspaces')
+    fs.mkdirSync(root, { recursive: true })
+    const cwd = fs.mkdtempSync(path.join(root, 'case-'))
+    isolated = { cwd, env: {}, cleanup() { fs.rmSync(cwd, { recursive: true, force: true }) } }
+  }
   try {
     return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
   } finally { isolated?.cleanup(Boolean(payload.signal?.aborted)) }
@@ -1593,13 +1609,13 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       reject(err)
       return
     }
-    reliabilityChild = child
+    experimentChildren.add(child)
     if (payload.onChildSpawn) {
       try { payload.onChildSpawn(child) }
       catch (error) {
         signalProcessTree(child, 'SIGKILL')
         activityEvidence?.cleanup()
-        reliabilityChild = null
+        experimentChildren.delete(child)
         error.code ||= 'RUN_STATE_WRITE_FAILED'
         reject(error)
         return
@@ -1838,7 +1854,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
         }
         if (!confirmed) earlyFailure = { code: 'CANCELLATION_UNCONFIRMED', message: '已请求终止，但进程树退出尚未确认' }
       }
-      if (reliabilityChild === child) reliabilityChild = null
+      experimentChildren.delete(child)
       consumeStdoutLine(stdoutBuffer)
       if (runtime?.createEventInspector && code === 0 && !timedOut && !earlyFailure && !stdinError) consumeStdoutLine('', true)
       if (code === 0 && !timedOut && !earlyFailure && !stdinError && !modelActivityObserved) {
@@ -1953,7 +1969,7 @@ async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
       settled = true
       clearTimers()
       activityEvidence?.cleanup()
-      if (reliabilityChild === child) reliabilityChild = null
+      experimentChildren.delete(child)
       reject(err)
     })
     child.on('close', (code, signal) => {
@@ -2384,13 +2400,15 @@ async function sendCommandStatus(cfg, commandId, status, extra = {}) {
 
 /** 已处理过的 commandId —— 同一指令不得重复执行。 */
 const handledCommands = new Set()
+const executingCommands = new Set()
 
 async function handleCommand(cfg, frame, sendVia) {
   if (!frame?.commandId) return
   if (handledCommands.has(frame.commandId)) return
   handledCommands.add(frame.commandId)
+  executingCommands.add(frame.commandId)
   if (handledCommands.size > 1000) {
-    for (const id of [...handledCommands].slice(0, 500)) handledCommands.delete(id)
+    for (const id of [...handledCommands].filter((id) => !executingCommands.has(id)).slice(0, 500)) handledCommands.delete(id)
   }
 
   const sendStatus = async (status, extra) => {
@@ -2402,8 +2420,10 @@ async function handleCommand(cfg, frame, sendVia) {
   }
 
   // 先 ACK：服务端据此把指令从 SENT 推进到 RECEIVED。
-  await sendStatus('RECEIVED', {})
-  await executeAction(cfg, frame, sendStatus)
+  try {
+    await sendStatus('RECEIVED', {})
+    await executeAction(cfg, frame, sendStatus)
+  } finally { executingCommands.delete(frame.commandId) }
 }
 
 async function controlLoop(cfg) {
@@ -2517,9 +2537,12 @@ async function pollLoop(cfg) {
 async function pollOnce(cfg) {
   const frame = await api(cfg, 'GET', '/api/reliability/client/v1/commands/next?waitSeconds=25')
   if (!frame) return
-  await handleCommand(cfg, frame, (commandId, status, extra) =>
+  const handling = handleCommand(cfg, frame, (commandId, status, extra) =>
     sendCommandStatus(cfg, commandId, status, extra),
   )
+  if (frame.action === 'RUN_EXPERIMENT_CASE' && !frame.payload?.skillExecution) {
+    void handling.catch((error) => logErr('command failed', error.message))
+  } else await handling
 }
 
 /**
@@ -2536,7 +2559,7 @@ async function fiLoop(cfg) {
   }
   for (;;) {
     try {
-      if (!reliabilitySlotHeld && fiBusy < cfg.maxParallelFi) {
+      if (!reliabilitySlotHeld && !parallelExecutionSlots.size && fiBusy < cfg.maxParallelFi) {
         const claim = await api(cfg, 'POST', '/api/fault-injection/worker/claim', {
           workerId: cfg.clientId,
           limit: Math.max(0, cfg.maxParallelFi - fiBusy),
@@ -2588,7 +2611,7 @@ async function shutdown() {
   for (const controller of experimentControllers.values()) controller.abort()
   const settled = [...experimentSettled.values()]
   if (settled.length) await Promise.race([Promise.allSettled(settled), new Promise((resolve) => setTimeout(resolve, 6000))])
-  if (reliabilityChild) signalProcessTree(reliabilityChild, 'SIGKILL')
+  for (const child of experimentChildren) signalProcessTree(child, 'SIGKILL')
   for (const runId of activeChildren.keys()) killRun(runId)
   benchmarkExecutor?.close().catch(() => {})
   process.exit(0)

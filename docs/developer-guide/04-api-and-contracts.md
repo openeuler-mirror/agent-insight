@@ -337,3 +337,11 @@ Filtering occurs before database count/skip/take and aggregations. Explicit task
 Collaboration logs use scope `collaboration`: requestId/operation/HTTP status/duration plus validated identifiers and safe result/failure reasons. Responses include `x-collaboration-request-id`. Credentials, description/content and locator text are excluded. Existing start scripts redirect stdout/stderr to repository-root server.log; schema errors appear in the startup terminal before redirection, and db_push.sh/prisma generate still run before startup.
 
 Regression coverage lives in `collaboration.test.ts`, `collaboration-logging.test.ts`, `collaboration-migration.test.ts`, `collaboration-original-design.test.ts`, `collaboration-persistence.test.ts` and `collaboration-projection.test.ts`. Automated, local HTTP and browser verification are separate evidence layers; user requests and operational limits are documented in [view-traces.md](../user-guide/observability/view-traces.md).
+
+### 实验执行并发
+
+`POST /api/experiments` 的普通生成 Trace 和 Benchmark 数据集请求支持正整数 `executionConcurrency`，缺省 1；显式 Benchmark 请求放在 `benchmark.runConfig.executionConcurrency`，兼容旧 `maxParallelAgentCases` 字段。普通值写入 `configSnapshotJson`，Benchmark 写入冻结的 `runConfigJson`。Skill、FI 与已有 Trace 不使用这个设置。运行时使用冻结值，执行并发大于 1 要求客户端上报 `components.concurrent-execution/v1.ready=true`。
+
+`GET /api/experiments/:id` 返回适用实验的 `executionConcurrency`；Case 的 Benchmark 元数据增加 `evaluationWaitCode`，用于区分配额、镜像准备和镜像空间等待。评测服务 `/health` 返回 `maxConcurrency`、`activeCount`。同一个 `runId + requestDigest` 始终幂等，容量满返回可重试 `SERVICE_BUSY`，镜像未就绪返回 `IMAGE_POOL_PREPARING`；镜像仓库临时拉取失败返回可重试的 `IMAGE_POOL_PULL_FAILED`，平台保留待评测任务并重试下发。
+
+镜像预取继续使用已有 `POST /api/v1/evaluations`：`operation=prepare-images` 支持 `revision + windows[]` 全量快照；每个窗口含 `benchmarkKey/evaluatorKey/experimentId/caseIds/cases`，总 Case 数不超过服务并发加 1。预取开关由 Evaluator 的 `/health` 报告给平台；准备消息保留摘要校验和单实验窗口兼容，无需额外令牌。

@@ -1,6 +1,7 @@
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
+import { refreshBenchmarkImagePreparation } from './image-preparation'
 
 import {
   defaultEvaluatorTargetResolver,
@@ -15,6 +16,7 @@ type DispatchFetch = typeof fetch
 let dispatchFetch: DispatchFetch = fetch
 let targetResolver: EvaluatorTargetResolver = defaultEvaluatorTargetResolver
 const healthCache = new Map<string, number>()
+const capacityCache = new Map<string, number>()
 const EVALUATION_WATCHDOG_INTERVAL_MS = 30_000
 const EVALUATION_WATCHDOG_GRACE_MS = 90_000
 const EVALUATION_STALL_TIMEOUT_MS = 5 * 60_000
@@ -40,11 +42,13 @@ let evaluationWatchdogSweep: Promise<number> | null = null
 export function setBenchmarkEvaluationDispatchFetchForTest(replacement?: DispatchFetch): void {
   dispatchFetch = replacement || fetch
   healthCache.clear()
+  capacityCache.clear()
 }
 
 export function setEvaluatorTargetResolverForTest(replacement?: EvaluatorTargetResolver): void {
   targetResolver = replacement || defaultEvaluatorTargetResolver
   healthCache.clear()
+  capacityCache.clear()
 }
 
 function scheduleDispatch(evaluationId: string, delayMs: number): void {
@@ -89,11 +93,14 @@ function evaluationTimeout(input: {
   status: string
   timeoutSeconds: number
   progressJson: string | null
+  failureCode?: string | null
   lastProgressAt: Date | null
   startedAt: Date | null
   createdAt: Date
   updatedAt: Date
 }, now: Date, graceMs: number): { code: string; message: string } | null {
+  if (input.status === 'dispatch_unknown') return null
+  if (input.status === 'queued' && (!input.failureCode || ['SERVICE_BUSY', 'EVALUATION_QUOTA_WAIT', 'IMAGE_POOL_SPACE_LOW', 'IMAGE_POOL_PREPARING'].includes(input.failureCode))) return null
   const progress = parseJsonRecord(input.progressJson)
   const stage = typeof progress.stage === 'string' ? progress.stage : ''
   let deadline: Date
@@ -143,6 +150,7 @@ export async function reapStaleBenchmarkEvaluations(options: {
       status: true,
       timeoutSeconds: true,
       progressJson: true,
+      failureCode: true,
       lastProgressAt: true,
       startedAt: true,
       createdAt: true,
@@ -225,6 +233,7 @@ export function startBenchmarkEvaluationWatchdog(
     evaluationWatchdogSweep = reapStaleBenchmarkEvaluations()
       .then(async (count) => {
         await resumeBenchmarkEvaluationContinuations()
+        await resumeBenchmarkEvaluationDispatchesAtStartup()
         if (count > 0) console.warn(`[benchmark/evaluation-watchdog] 回收超时评测任务: ${count} 条`)
         return count
       })
@@ -256,7 +265,7 @@ async function markPending(evaluationId: string, input: {
         status: { in: [...DISPATCH_ACTIVE_EVALUATION_STATUSES] },
         completionDigest: null,
       },
-      data: { status: 'queued', failureCode: input.code, failureMessage: input.message },
+      data: { status: 'queued', progressJson: JSON.stringify({ stage: 'waiting_resources' }), failureCode: input.code, failureMessage: input.message },
     })
     if (evaluation.count !== 1) return false
     const outbox = await tx.benchmarkEvaluationDispatchOutbox.updateMany({
@@ -511,6 +520,7 @@ async function ensureHealthy(
   evaluatorKey: string,
   benchmarkKey: string,
   targetKey: string,
+  allowBusy = false,
 ): Promise<void> {
   const cacheKey = `${targetKey}\n${baseUrl}\n${evaluatorKey}\n${benchmarkKey}`
   if ((healthCache.get(cacheKey) || 0) > Date.now() - 30_000) return
@@ -536,7 +546,7 @@ async function ensureHealthy(
     return value.benchmarkKey === benchmarkKey || value.benchmarkKey === '*'
   }) as Record<string, unknown> | undefined
   const ready = bindings.length ? binding?.ready === true : evaluatorState?.ready === true
-  if (!response.ok || body.value.status !== 'healthy' || body.value.busy === true || !ready) {
+  if (!response.ok || body.value.status !== 'healthy' || (!allowBusy && body.value.busy === true) || !ready) {
     throw new BenchmarkProtocolError(
       body.value.busy === true ? 'SERVICE_BUSY' : 'EVALUATOR_NOT_READY',
       body.value.busy === true ? '评测服务当前忙' : '评测服务未就绪',
@@ -544,6 +554,7 @@ async function ensureHealthy(
       true,
     )
   }
+  capacityCache.set(baseUrl, Number.isSafeInteger(body.value.maxConcurrency) && Number(body.value.maxConcurrency) > 0 ? Number(body.value.maxConcurrency) : 1)
   healthCache.set(cacheKey, Date.now())
 }
 
@@ -573,6 +584,11 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
     const protocolError = error instanceof BenchmarkProtocolError
       ? error
       : new BenchmarkProtocolError('EVALUATOR_CONFIGURATION_INVALID', '评测服务配置不合法', 500)
+    if (evaluation.status === 'dispatch_unknown') {
+      await markUnknown(evaluationId, attemptNo, protocolError.message)
+      scheduleDispatch(evaluationId, 5000)
+      return
+    }
     await markFailed(evaluationId, {
       attemptNo,
       code: protocolError.code,
@@ -587,7 +603,66 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       target.evaluatorKey,
       target.benchmarkKey,
       target.targetKey,
+      evaluation.status === 'dispatch_unknown',
     )
+    const capacity = capacityCache.get(target.baseUrl) || 1
+    const configuredQuota = process.env.AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER
+    const userQuota = configuredQuota === undefined || configuredQuota === '' ? capacity : Number(configuredQuota)
+    if (!Number.isSafeInteger(userQuota) || userQuota < 1) throw new BenchmarkProtocolError('EVALUATION_QUOTA_INVALID', '单用户评测并发必须为正整数', 500)
+    const admitted = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Taking the SQLite write lock before counting makes concurrent dispatchers share one reservation budget.
+      const lease = await tx.benchmarkEvaluationDispatchOutbox.updateMany({ where: { evaluationId, status: 'sending', attemptCount: attemptNo }, data: { status: 'sending' } })
+      if (!lease.count) return false
+      const current = await tx.benchmarkEvaluation.findUnique({ where: { id: evaluationId }, include: { caseRun: { include: { experiment: true } } } })
+      if (!current || !DISPATCH_ACTIVE_EVALUATION_STATUSES.includes(current.status as typeof DISPATCH_ACTIVE_EVALUATION_STATUSES[number]) || current.caseRun.experiment.deletedAt || current.caseRun.experiment.status === 'cancelled') return false
+      if (current.status === 'dispatch_unknown' || current.status === 'running_evaluator') return true
+      const occupied = await tx.benchmarkEvaluation.findMany({
+        where: { id: { not: evaluationId }, evaluatorBaseUrl: target.baseUrl,
+          OR: [{ status: { in: ['running_evaluator', 'dispatch_unknown'] } },
+            { status: 'queued', progressJson: { contains: 'dispatch_reserved' } }] },
+        include: { caseRun: { include: { experiment: true } } },
+      })
+      const cancellations = await tx.experimentCancellation.findMany({ where: { status: { not: 'completed' } }, select: { targetsJson: true } })
+      const cancellingIds = new Set<string>()
+      for (const record of cancellations) {
+        const targets = JSON.parse(record.targetsJson) as Array<{ kind: string; runId: string; confirmed?: boolean }>
+        for (const target of targets) if (target.kind === 'evaluation' && !target.confirmed) cancellingIds.add(target.runId)
+      }
+      if (cancellingIds.size) occupied.push(...await tx.benchmarkEvaluation.findMany({
+        where: { id: { in: [...cancellingIds] }, evaluatorBaseUrl: target.baseUrl, status: 'cancelled' },
+        include: { caseRun: { include: { experiment: true } } },
+      }))
+      if (occupied.length >= capacity || occupied.filter((item) => item.caseRun.experiment.user === current.caseRun.experiment.user).length >= userQuota) return false
+      const queued = await tx.benchmarkEvaluation.findMany({
+        where: { status: 'queued', caseRun: { experiment: { status: 'running', deletedAt: null } },
+          OR: [{ evaluatorBaseUrl: target.baseUrl }, { evaluatorBaseUrl: null }] },
+        include: { caseRun: { include: { experiment: true } }, dispatch: true }, orderBy: { createdAt: 'asc' },
+      })
+      const recent = await tx.benchmarkEvaluation.findMany({
+        where: { evaluatorBaseUrl: target.baseUrl, startedAt: { not: null } },
+        include: { caseRun: { include: { experiment: true } } }, orderBy: { startedAt: 'desc' }, take: 1000,
+      })
+      const lastUser = new Map<string, number>(), lastExperiment = new Map<string, number>()
+      for (const item of recent) {
+        if (!lastUser.has(item.caseRun.experiment.user)) lastUser.set(item.caseRun.experiment.user, item.startedAt!.getTime())
+        if (!lastExperiment.has(item.caseRun.experimentId)) lastExperiment.set(item.caseRun.experimentId, item.startedAt!.getTime())
+      }
+      const candidates = queued.filter((item) => (item.evaluatorBaseUrl || targetResolver.resolve(item.evaluatorKey).baseUrl) === target.baseUrl
+        && item.dispatch && item.dispatch.nextAttemptAt <= new Date()
+        && !item.progressJson?.includes('dispatch_reserved')
+        && occupied.filter((run) => run.caseRun.experiment.user === item.caseRun.experiment.user).length < userQuota)
+      candidates.sort((a, b) => (lastUser.get(a.caseRun.experiment.user) || 0) - (lastUser.get(b.caseRun.experiment.user) || 0)
+        || (lastExperiment.get(a.caseRun.experimentId) || 0) - (lastExperiment.get(b.caseRun.experimentId) || 0)
+        || a.createdAt.getTime() - b.createdAt.getTime())
+      if (candidates.length && candidates[0].id !== evaluationId) return false
+      await tx.benchmarkEvaluation.updateMany({ where: { id: evaluationId, status: 'queued' },
+        data: { progressJson: JSON.stringify({ stage: 'dispatch_reserved' }), startedAt: new Date() } })
+      return true
+    })
+    if (!admitted) {
+      await markPending(evaluationId, { attemptNo, code: 'EVALUATION_QUOTA_WAIT', message: '等待评测资源配额', delayMs: 1000 })
+      return
+    }
     await assertExperimentActive(evaluation.caseRun.experimentId, evaluation.caseRun.experimentCaseId);
     postStarted = true
     const response = await dispatchFetch(`${target.baseUrl}/api/v1/evaluations`, {
@@ -612,11 +687,12 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
         status: response.status,
         responseJson: body.text,
       })
+      void refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool]', error))
       return
     }
     const remoteCode = responseErrorCode(body.value)
     const retryable = response.status === 503
-      || remoteCode === 'SERVICE_BUSY'
+      || ['SERVICE_BUSY', 'IMAGE_POOL_SPACE_LOW', 'IMAGE_POOL_PREPARING'].includes(remoteCode)
       || (response.status === 422 && body.value.retryable === true)
     if (retryable) {
       await markPending(evaluationId, {
@@ -642,6 +718,11 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       message: `评测服务拒绝任务（HTTP ${response.status}）`,
     })
   } catch (error) {
+    if (evaluation.status === 'dispatch_unknown') {
+      await markUnknown(evaluationId, attemptNo, error instanceof Error ? error.message : '评测下发结果待确认')
+      scheduleDispatch(evaluationId, 5000)
+      return
+    }
     if (error instanceof BenchmarkProtocolError) {
       if (error.retryable) {
         await markPending(evaluationId, {
@@ -656,9 +737,14 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
       return
     }
     const message = error instanceof Error ? error.message : '评测服务连接中断'
-    if (postStarted && attemptNo < 2) {
+    if (postStarted) {
       const state = await markUnknown(evaluationId, attemptNo, message)
-      if (state === 'unknown') await dispatchBenchmarkEvaluation(evaluationId)
+      if (state === 'unknown') scheduleDispatch(evaluationId, 5000)
+      return
+    }
+    if (!postStarted && evaluation.status === 'dispatch_unknown') {
+      await markUnknown(evaluationId, attemptNo, message)
+      scheduleDispatch(evaluationId, 5000)
       return
     }
     if (!postStarted) {
@@ -680,6 +766,7 @@ export async function dispatchBenchmarkEvaluation(evaluationId: string): Promise
 
 export async function resumeBenchmarkEvaluationDispatchesAtStartup(limit = 20): Promise<number> {
   const now = new Date()
+  await prisma.benchmarkEvaluation.updateMany({ where: { status: 'queued', dispatch: { status: 'sending', leasedUntil: { lt: now } } }, data: { status: 'dispatch_unknown' } })
   await prisma.benchmarkEvaluationDispatchOutbox.updateMany({
     where: { status: 'sending', leasedUntil: { lt: now } },
     data: { status: 'unknown', leasedUntil: null, errorCode: 'EVALUATION_DISPATCH_LEASE_EXPIRED' },
@@ -689,7 +776,7 @@ export async function resumeBenchmarkEvaluationDispatchesAtStartup(limit = 20): 
       nextAttemptAt: { lte: now },
       OR: [
         { status: 'pending' },
-        { status: 'unknown', attemptCount: { lt: 2 } },
+        { status: 'unknown' },
       ],
     },
     orderBy: { createdAt: 'asc' },

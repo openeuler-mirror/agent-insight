@@ -520,6 +520,7 @@ export function ExperimentWizard({
   const datasetRequestIdRef = useRef(0);
   const initialConfigLoadedRef = useRef(false);
   const [genModel, setGenModel] = useState('');
+  const [executionConcurrencyInput, setExecutionConcurrencyInput] = useState('1');
   const [agentTimeoutInput, setAgentTimeoutInput] = useState(
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
@@ -599,6 +600,9 @@ export function ExperimentWizard({
   }), [skillContext, skillPreset, wizardDatasets]);
   const isReliabilityDataset = selectedDataset?.datasetKind === 'reliability';
   const isBenchmarkDataset = selectedDataset?.datasetKind === 'benchmark';
+  const executionConcurrency = Number(executionConcurrencyInput);
+  const executionConcurrencyRequired = !skillContext && traceMode === 'generate' && !isReliabilityDataset;
+  const executionConcurrencyValid = Number.isSafeInteger(executionConcurrency) && executionConcurrency >= 1;
   const agentTimeoutSeconds = Number(agentTimeoutInput);
   const agentTimeoutValid = isValidExperimentAgentTimeoutSeconds(agentTimeoutSeconds);
   const agentTimeoutRequired = skillPreset === 'skill-ab'
@@ -810,6 +814,8 @@ export function ExperimentWizard({
         : {};
       const sourceSnapshot = detail?.configSnapshot && typeof detail.configSnapshot === 'object'
         ? detail.configSnapshot as Record<string, unknown> : {};
+      const restoredConcurrency = detail.executionConcurrency ?? sourceSnapshot.executionConcurrency ?? (sourceSnapshot.runConfig as Record<string, unknown> | undefined)?.executionConcurrency;
+      setExecutionConcurrencyInput(String(restoredConcurrency ?? 1));
       const restoredDatasetId = typeof config.datasetId === 'string' ? config.datasetId : '';
       const restoredTraceSource = skillPreset === 'skill-ab' || config.traceSource === 'generate' ? 'generate' : 'existing';
       const restoredEvaluators = Array.isArray(config.evaluatorIds)
@@ -1436,6 +1442,7 @@ export function ExperimentWizard({
     setSubmitting(true);
     setSubmitError('');
     try {
+      if (executionConcurrencyRequired && !executionConcurrencyValid) throw new Error('执行并发必须为正整数');
       if (agentTimeoutRequired && !agentTimeoutValid) {
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
@@ -1567,6 +1574,7 @@ export function ExperimentWizard({
             model: genModel || null,
           } : undefined,
           agentTimeoutSeconds,
+          ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
           ...(expType === 'llm' ? {
             type: 'llm',
             variableDimension: 'llm',
@@ -1597,6 +1605,7 @@ export function ExperimentWizard({
                 timeoutSeconds: agentTimeoutSeconds,
               } : null,
               fiOrchestrate: isReliabilityDataset,
+              ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
             },
           } : {}),
           ...(skillContext ? {
@@ -1697,7 +1706,7 @@ export function ExperimentWizard({
     ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
     : (watchMode || selected.size >= 1);
   const step2Valid = expType === 'llm'
-    || (step2SelectionValid && (!agentTimeoutRequired || agentTimeoutValid)
+    || (step2SelectionValid && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -2118,6 +2127,15 @@ export function ExperimentWizard({
                   <RuntimeModelSelect key={effectiveTargetKey} id="experiment-runtime-model" allowDefault={skillPreset !== 'trigger'}
                     models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                 </div>
+                  {executionConcurrencyRequired && (
+                    <label style={{ display: 'grid', gap: 6, marginBottom: 12, color: 'var(--foreground-secondary)' }}>
+                      执行并发
+                      <input className="ai-input" type="number" min={1} step={1} value={executionConcurrencyInput}
+                        onChange={(event) => setExecutionConcurrencyInput(event.target.value)} aria-label="执行并发" />
+                      <span style={{ fontSize: 12 }}>控制本实验同时执行的 Case 数，请根据所选客户端资源及其他运行任务设置。</span>
+                      {!executionConcurrencyValid && <span role="alert">执行并发必须为正整数</span>}
+                    </label>
+                  )}
                   <AgentTimeoutField
                     value={agentTimeoutInput}
                     valid={agentTimeoutValid}
@@ -3113,6 +3131,7 @@ export function ExperimentWizard({
                     '主机 / 模型',
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
+                  ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'

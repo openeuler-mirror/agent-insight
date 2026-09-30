@@ -1,3 +1,4 @@
+import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 // 触发实验执行：置 running + 逐行异步执行（fire-and-forget），立即返回当前状态。
 // type='llm' 走对比执行；type='single' 可选生成 Trace/FI 后再走单组执行。
 import { NextResponse } from 'next/server';
@@ -167,10 +168,19 @@ export async function POST(
         ? generateTrace.timeoutSeconds
         : DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS;
 
-      await prisma.experiment.updateMany({
-        where: { id, user: username },
+      const snapshot = frozen?.configSnapshotJson ? JSON.parse(frozen.configSnapshotJson) : {};
+      let executionConcurrency: number;
+      try { executionConcurrency = currentExperiment.scope === 'skill-workbench' ? 1 : parseExecutionConcurrency(snapshot.executionConcurrency); }
+      catch { return NextResponse.json({ error: '执行并发必须为正整数' }, { status: 400 }); }
+      if (executionConcurrency > 1) {
+        const client = await prisma.reliabilityClient.findUnique({ where: { clientId: workerId } });
+        if (JSON.parse(client?.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) return NextResponse.json({ error: '执行并发大于 1 需要升级客户端' }, { status: 400 });
+      }
+      const started = await prisma.experiment.updateMany({
+        where: { id, user: username, deletedAt: null, status: { notIn: ['running', 'cancelled'] } },
         data: { status: 'running' },
       });
+      if (!started.count) return NextResponse.json({ status: 'running', alreadyRunning: true });
       recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
       void (async () => {
         try {
@@ -183,10 +193,11 @@ export async function POST(
             model: generateTrace?.model != null ? String(generateTrace.model) : null,
             timeoutSeconds,
             cases,
+            executionConcurrency,
           });
           if (!generated.readyCaseIds.length) {
             await prisma.experiment.updateMany({
-              where: { id, user: username },
+              where: { id, user: username, deletedAt: null, status: 'running' },
               data: { status: 'failed' },
             });
             return;

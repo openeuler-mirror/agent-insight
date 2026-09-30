@@ -523,7 +523,7 @@ entrypoint/
 4. Controller 获取镜像后持久化使用者，把 `preparedImages` 交给 Runtime；任务目录的 `pool-images.json` 冻结身份。重试重新检查本地镜像，仅按冻结 digest 重拉；仅本地 image ID 消失时明确失败，不回退到新 `latest`。
 5. 所有评测容器必须带 `agent-insight.evaluation-id` 标签，最终容器清理成功后 Controller 才释放使用者。OCI Runtime 同样带此标签及 `agent-insight.role=evaluator-runtime`；Runtime 内部清理不能删除自己，退出后由 Controller 兜底清理。清理或操作结果不确定时保留保护，不能用超时推断 Docker 操作已停止。
 
-准备消息复用 `POST /api/v1/evaluations`：`{ operation: 'prepare-images', benchmarkKey, evaluatorKey, experimentId, revision, cases, requestDigest }`，`cases` 最多两个 Case；摘要覆盖其余完整消息。请求携带 `x-agent-insight-image-pool-token` 和 `x-agent-insight-request-digest`，双端密钥匹配后才接受。按 Benchmark/实验保存递增窗口版本，旧消息不能恢复旧窗口；空数组撤销该实验的准备。第一版信任单个平台服务身份，不增加用户配额或多平台协调。
+准备消息复用 `POST /api/v1/evaluations`：`operation=prepare-images` 可下发 `revision + windows[]` 全服务窗口快照，兼容原有单实验窗口消息；总 Case 数不超过服务评测并发加 1。摘要覆盖完整消息，请求携带 `x-agent-insight-request-digest`，不再配置专用准备令牌。Controller 校验摘要与递增窗口版本，旧消息不能恢复旧窗口；空数组撤销准备。Evaluator 端口仅向平台开放，不增加用户配额或多平台协调。
 
 后台准备不占评测执行槽，发送失败降级到按需准备；无镜像依赖的包不需要实现以上 hook。主机配置、空间口径、异常恢复及性能指标见[部署指南](./service-deployment-guide.md#53-可选跨-benchmark-共享镜像池)。
 

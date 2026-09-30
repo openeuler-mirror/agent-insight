@@ -230,7 +230,21 @@ async function inspectOciRuntime(descriptor, options = {}) {
   }
 }
 
+const runtimePreparations = new Map()
+
 async function ensureOciRuntime(descriptor, options = {}) {
+  const key = `${descriptor.image}:${descriptor.artifactDigest}`
+  let work = runtimePreparations.get(key)
+  if (!work) {
+    work = prepareOciRuntime(descriptor, { ...options, signal: undefined })
+    runtimePreparations.set(key, work)
+    work.finally(() => { if (runtimePreparations.get(key) === work) runtimePreparations.delete(key) }).catch(() => {})
+  }
+  await work
+  options.signal?.throwIfAborted()
+}
+
+async function prepareOciRuntime(descriptor, options = {}) {
   const commandRunner = options.commandRunner || runEntrypoint
   if (!descriptor.image || !/^sha256:[0-9a-f]{64}$/i.test(String(descriptor.artifactDigest || ''))) {
     throw new EvaluatorProtocolError('EVALUATOR_RUNTIME_INVALID', 'Evaluator OCI Runtime 描述不合法', 500)
