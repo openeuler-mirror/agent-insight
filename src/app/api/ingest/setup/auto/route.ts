@@ -222,7 +222,8 @@ const frameworks = [
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
     { name: 'DeepSeek Harness', value: 'deepseek-harness' },
-    { name: 'MCTS (xGovernor)', value: 'mcts-xgovernor' }
+    { name: 'MCTS (xGovernor)', value: 'mcts-xgovernor' },
+    { name: 'WorkBuddy', value: 'workbuddy' }
 ];
 
 async function select() {
@@ -362,6 +363,9 @@ if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
 fi
 if [[ ",$SELECTED_FRAMEWORKS," == *",mcts-xgovernor,"* ]]; then
     INSTALL_MCTS_XGOVERNOR=true
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"workbuddy"* ]]; then
+    echo "ℹ️  WorkBuddy 是 Windows 桌面应用，采集器仅支持 Windows。请在 Windows 上运行 npx agent-insight install 接入 WorkBuddy。"
 fi
 
 # Exit if nothing selected
@@ -1332,7 +1336,8 @@ function generatePowerShellScript(
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
-        '    "    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' }"',
+        '    "    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },"',
+        '    "    { name: \'WorkBuddy\', value: \'workbuddy\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1421,6 +1426,7 @@ function generatePowerShellScript(
         '$INSTALL_CODEX = $false',
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
+        '$INSTALL_WORKBUDDY = $false',
         '$INSTALL_MCTS_XGOVERNOR = $false',
         '$MCTS_XGOVERNOR_SETUP_OK = $false',
         '$CODEX_SETUP_OK = $false',
@@ -1470,12 +1476,15 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "workbuddy") {',
+        '    $INSTALL_WORKBUDDY = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)mcts-xgovernor(,|$)") {',
         '    $INSTALL_MCTS_XGOVERNOR = $true',
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_MCTS_XGOVERNOR) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_WORKBUDDY -and -not $INSTALL_MCTS_XGOVERNOR) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -2000,6 +2009,31 @@ function generatePowerShellScript(
         '    Write-Host "✅ Qwen Code native OTLP telemetry configured"',
         '}',
         '',
+        '# 6.36 Install WorkBuddy collector (Windows desktop only)',
+        'if ($INSTALL_WORKBUDDY) {',
+        '    if (-not $AGENT_INSIGHT_API_KEY) {',
+        '        Write-Host "Warning: WorkBuddy collector installation requires an API key; configure one and rerun setup."',
+        '    } else {',
+        '        Write-Host "⏬ Installing WorkBuddy Trace Collector..."',
+        '        $wbSrc = Join-Path $env:USERPROFILE ".agent-insight\\workbuddy-collector-source"',
+        '        New-Item -ItemType Directory -Path (Join-Path $wbSrc "workbuddy-collector") -Force | Out-Null',
+        '        New-Item -ItemType Directory -Path (Join-Path $wbSrc "agent-trace-collectors\\shared") -Force | Out-Null',
+        '        $wbBase = "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/workbuddy-collector"',
+        '        try {',
+        '            Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/workbuddy_setup.mjs" -OutFile (Join-Path $wbSrc "workbuddy_setup.mjs")',
+        '            @("collector.mjs", "session-registry.mjs", "mapper.cjs", "sdk-log.cjs") | ForEach-Object {',
+        '                Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/$_" -OutFile (Join-Path (Join-Path $wbSrc "workbuddy-collector") $_)',
+        '            }',
+        '            Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/trace-transport.cjs" -OutFile (Join-Path (Join-Path $wbSrc "agent-trace-collectors\\shared") "trace-transport.cjs")',
+        '            & node (Join-Path $wbSrc "workbuddy_setup.mjs") "--host=$AGENT_INSIGHT_HOST" "--token=$AGENT_INSIGHT_API_KEY"',
+        '            if ($LASTEXITCODE -ne 0) { Write-Host "⚠️  WorkBuddy collector setup exited with code $LASTEXITCODE (可能未检测到 WorkBuddy；请确认已安装并至少打开过一次)。" }',
+        '            else { Write-Host "✅ WorkBuddy collector installed (登录自启动的常驻任务，无需手动启动)。" }',
+        '        } catch {',
+        '            Write-Host "⚠️  WorkBuddy collector installation failed: $_"',
+        '        }',
+        '    }',
+        '}',
+        '',
         '# 6.4 Configure Agent Insight Hermes plugin',
         'if ($INSTALL_HERMES) {',
         '    $hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
@@ -2224,6 +2258,7 @@ function generatePowerShellScript(
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  [OK] WorkBuddy Collector: $env:USERPROFILE\\.agent-insight\\packages\\workbuddy (scheduled task: AgentInsight-WorkBuddyCollector)" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:AGENT_INSIGHT_HOME\\collectors\\pi-agent" }',
         'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  ⚠️  MCTS xGovernor Proxy: install the Linux collector inside WSL" }',
         'if ($GOAL_PLUS_HOSTS -and $GOAL_PLUS_TRACE_READY) { Write-Host "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS" }',
@@ -2273,6 +2308,7 @@ function generatePowerShellScript(
         '    Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch"',
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  9. Open WorkBuddy and start a conversation; traces auto-collect (task: schtasks /query /tn AgentInsight-WorkBuddyCollector)" }',
         'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  9. In WSL run: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "      Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',

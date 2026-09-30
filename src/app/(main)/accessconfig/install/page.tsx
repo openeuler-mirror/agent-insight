@@ -43,6 +43,7 @@ export default function AccessInstallPage() {
     // useMemo 同步跑——server 端返回空、client 首次渲染返回实际命令,触发 hydration mismatch。
     // 改成 mount 后再算,server 与 client 首次都渲染空,effect 之后再填入命令。
     const [linuxCmd, setLinuxCmd] = useState('');
+    const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
     const [mctsUpstream, setMctsUpstream] = useState('http://127.0.0.1:8787');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
@@ -59,6 +60,7 @@ export default function AccessInstallPage() {
             setHost(baseUrl);
             if (!authReady || !apiKey) {
                 setLinuxCmd('');
+                setWindowsCmd('');
                 return;
             }
             const setupUrl = getApiUrl('/api/ingest/setup');
@@ -74,6 +76,7 @@ export default function AccessInstallPage() {
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
             setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
+            setWindowsCmd(`Invoke-Expression (Invoke-RestMethod -Uri "${baseUrl}${setupUrl}${suffix}" -Headers @{'x-platform'='windows'})`);
         }, 0);
         return () => window.clearTimeout(timer);
     }, [apiKey, authReady, frameworks, mctsUpstream]);
@@ -186,8 +189,8 @@ export default function AccessInstallPage() {
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
                                     {isZh
-                                        ? '先勾选框架,再在 Agent 所在 Linux 终端执行命令 —— 同时完成本机纳管'
-                                        : 'Pick frameworks, then run the command on the Linux Agent host — also registers this host'}
+                                        ? '先勾选框架,再在目标 Agent 主机执行对应系统的命令 —— 同时完成本机纳管'
+                                        : 'Pick frameworks, then run the matching command on the target Agent host — also registers this host'}
                                 </span>
                             </div>
 
@@ -213,6 +216,16 @@ export default function AccessInstallPage() {
                                 cmd={linuxCmd}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
+                                locale={locale}
+                            />
+
+                            <CommandCard
+                                icon={<Terminal size={14} strokeWidth={2.2} />}
+                                label="Windows (PowerShell)"
+                                hint={isZh ? '在 Windows PowerShell 中运行' : 'Run in Windows PowerShell'}
+                                cmd={windowsCmd}
+                                copied={copied === 'windows'}
+                                onCopy={() => handleCopy(windowsCmd, 'windows')}
                                 locale={locale}
                             />
 

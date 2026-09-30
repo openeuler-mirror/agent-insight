@@ -195,6 +195,57 @@ test("agent trace: failed LLM summary fallback is framework-neutral", () => {
   assert.equal(tree!.events.find((event) => event.kind === "llm")?.summary, "provider quota exhausted")
 })
 
+test("fault path: assistant interactions carrying requestMessages snapshots are not unwrapped into user messages", () => {
+  // 复现 trace 959aabcd…（framework=workbuddy）：每条 assistant 交互都带 requestMessages
+  // 快照元数据（本轮发给模型的内容），这不是"传输包装层"。旧逻辑据此解包，把 assistant
+  // 正文/tool_calls 丢成一堆重复 user 消息，导致故障诊断树里 WorkBuddy 节点下全是"用户输入"。
+  const steps = buildFaultPathSteps([
+    { role: "user", content: "diagnose the failure", timestamp: 1 },
+    {
+      role: "assistant",
+      content: "let me read the file",
+      timestamp: 2,
+      requestMessages: [{ role: "user", content: "diagnose the failure" }],
+      tool_calls: [
+        {
+          id: "c1",
+          type: "function",
+          function: { name: "read", arguments: JSON.stringify({ file_path: "a.ts" }) },
+          state: "success",
+          output: "file contents",
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: "here is the answer",
+      timestamp: 3,
+      requestMessages: [{ role: "user", content: "diagnose the failure" }],
+      usage: { total: 10 },
+    },
+  ] as any, "zh")
+
+  // 真实调用被保留：assistant 变成 llm 步、tool_calls 变成 tool 步；不再退化成"全是用户输入"。
+  // 旧逻辑会把两条 assistant 解包成重复 user，导致 0 个 llm / 0 个 tool、user 步爆炸。
+  assert.ok(steps.some((step) => step.kind === "llm"), "assistant turns must survive as llm steps")
+  assert.ok(steps.some((step) => step.kind === "tool"), "tool calls must survive")
+  // 只应有根用户输入 + 树内的那一条真实用户轮，不应因误解包而膨胀。
+  assert.ok(steps.filter((step) => step.kind === "user").length <= 2)
+})
+
+test("fault path: legacy role-less transport wrappers are still unwrapped", () => {
+  // 守护另一侧：没有 role、只裹 requestMessages/responseMessage 的历史包装容器仍需解包。
+  const steps = buildFaultPathSteps([
+    {
+      requestMessages: [{ role: "user", content: "go", timestamp: 1 }],
+      responseMessage: { role: "assistant", content: "done", timestamp: 2, usage: { total: 5 } },
+    },
+  ] as any, "zh")
+
+  assert.ok(steps.some((step) => step.kind === "user"), "unwrapped requestMessages must build a user step")
+  assert.ok(steps.some((step) => step.kind === "llm"), "unwrapped responseMessage must build an llm step")
+})
+
 test("agent trace: ISO timestamps produce finite durations", () => {
   const tree = buildAgentCallTree([
     {

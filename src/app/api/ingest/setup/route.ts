@@ -113,6 +113,7 @@ function generateBashScript(
     autoAddedFrameworks: string[],
 ): string {
     const llamaIndexOnly = preselected.length === 1 && preselected[0].value === 'llamaindex';
+    const workbuddyOnly = preselected.length === 1 && preselected[0].value === 'workbuddy';
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const packageSpec = getAgentInsightClientPackageSpec();
     const frameworksPreselected = preselected.length > 0;
@@ -153,9 +154,12 @@ function generateBashScript(
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
-        ...(llamaIndexOnly ? [
-            '# 0. LlamaIndex-only setup runs in the project Python environment',
-            'echo "🐍 LlamaIndex-only setup: Node.js check skipped"',
+        ...((llamaIndexOnly || workbuddyOnly) ? [
+            '# 0. Node.js check skipped for this selection',
+            '#    (LlamaIndex-only runs in project Python; WorkBuddy-only reuses WorkBuddy bundled runtime)',
+            'echo "ℹ️  ' + (llamaIndexOnly
+                ? 'LlamaIndex-only setup: Node.js check skipped (runs in project Python)'
+                : 'WorkBuddy-only setup: Node.js check skipped (reuses WorkBuddy bundled runtime)') + '"',
         ] : [
             '# 0. Check Node.js version',
             'if ! command -v node &> /dev/null; then',
@@ -241,7 +245,8 @@ function generateBashScript(
         '    { name: \'Codex\', value: \'codex\' },',
         '    { name: \'Qwen Code\', value: \'qwencode\' },',
         '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
-        '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' }',
+        '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },',
+        '    { name: \'WorkBuddy\', value: \'workbuddy\' }',
         '];',
         '',
         'async function select() {',
@@ -379,6 +384,9 @@ function generateBashScript(
         'fi',
         'if [[ ",$SELECTED_FRAMEWORKS," == *",mcts-xgovernor,"* ]]; then',
         '    INSTALL_MCTS_XGOVERNOR=true',
+        'fi',
+        'if [[ "$SELECTED_FRAMEWORKS" == *"workbuddy"* ]]; then',
+        '    echo "ℹ️  WorkBuddy 是 Windows 桌面应用，采集器仅支持 Windows。请在 Windows PowerShell 中运行本安装命令接入 WorkBuddy。"',
         'fi',
         '',
         '# Exit if nothing selected',
@@ -1380,6 +1388,7 @@ function generatePowerShellScript(
     autoAddedFrameworks: string[],
 ): string {
     const llamaIndexOnly = preselected.length === 1 && preselected[0].value === 'llamaindex';
+    const workbuddyOnly = preselected.length === 1 && preselected[0].value === 'workbuddy';
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const frameworksPreselected = preselected.length > 0;
     const lines = [
@@ -1407,9 +1416,12 @@ function generatePowerShellScript(
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
-        ...(llamaIndexOnly ? [
-            '# 0. LlamaIndex-only setup runs in the project Python environment',
-            'Write-Host "🐍 LlamaIndex-only setup: Node.js check skipped"',
+        ...((llamaIndexOnly || workbuddyOnly) ? [
+            '# 0. Node.js check skipped for this selection',
+            '#    (LlamaIndex-only runs in project Python; WorkBuddy-only reuses WorkBuddy bundled runtime)',
+            'Write-Host "ℹ️  ' + (llamaIndexOnly
+                ? 'LlamaIndex-only setup: Node.js check skipped (runs in project Python)'
+                : 'WorkBuddy-only setup: Node.js check skipped (reuses WorkBuddy bundled runtime)') + '"',
         ] : [
             '# 0. Check Node.js version',
             '$nodeCmd = Get-Command node -ErrorAction SilentlyContinue',
@@ -1487,7 +1499,8 @@ function generatePowerShellScript(
         '    { name: \'Codex\', value: \'codex\' },',
         '    { name: \'Qwen Code\', value: \'qwencode\' },',
         '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
-        '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' }',
+        '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },',
+        '    { name: \'WorkBuddy\', value: \'workbuddy\' }',
         '];',
         '',
         'async function select() {',
@@ -1582,6 +1595,7 @@ function generatePowerShellScript(
         '$PI_AGENT_SETUP_OK = $false',
         '$GOAL_PLUS_SETUP_OK = $false',
         '$GOAL_PLUS_SOURCE_OK = $false',
+        '$INSTALL_WORKBUDDY = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1625,12 +1639,15 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "deepseek-harness") {',
         '    $INSTALL_DEEPSEEK_HARNESS = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "workbuddy") {',
+        '    $INSTALL_WORKBUDDY = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)mcts-xgovernor(,|$)") {',
         '    $INSTALL_MCTS_XGOVERNOR = $true',
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_MCTS_XGOVERNOR) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_WORKBUDDY -and -not $INSTALL_MCTS_XGOVERNOR) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -2077,6 +2094,47 @@ function generatePowerShellScript(
         '    }',
         '}',
         '',
+        '# 6.36 Install WorkBuddy collector (Windows desktop only)',
+        'if ($INSTALL_WORKBUDDY) {',
+        '    if (-not $FINAL_KEY) {',
+        '        Write-Host "Warning: WorkBuddy collector installation requires an API key; configure one and rerun setup."',
+        '    } else {',
+        '        Write-Host "⏬ Installing WorkBuddy Trace Collector..."',
+        '        $wbSrc = Join-Path $homeDir ".agent-insight\\workbuddy-collector-source"',
+        '        New-Item -ItemType Directory -Path (Join-Path $wbSrc "workbuddy-collector") -Force | Out-Null',
+        '        New-Item -ItemType Directory -Path (Join-Path $wbSrc "agent-trace-collectors\\shared") -Force | Out-Null',
+        '        $wbBase = "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/workbuddy-collector"',
+        '        try {',
+        '            Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/workbuddy_setup.mjs" -OutFile (Join-Path $wbSrc "workbuddy_setup.mjs")',
+        '            @("collector.mjs", "session-registry.mjs", "mapper.cjs", "sdk-log.cjs") | ForEach-Object {',
+        '                Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/$_" -OutFile (Join-Path (Join-Path $wbSrc "workbuddy-collector") $_)',
+        '            }',
+        '            Invoke-WebRequest -UseBasicParsing -Uri "$wbBase/trace-transport.cjs" -OutFile (Join-Path (Join-Path $wbSrc "agent-trace-collectors\\shared") "trace-transport.cjs")',
+        '            # 优先用 WorkBuddy 自带 Electron 当 Node 运行时（免装 Node）；找不到才回退到 node。',
+        '            $wbExe = Join-Path $env:LOCALAPPDATA "Programs\\WorkBuddy\\WorkBuddy.exe"',
+        '            $wbSetup = Join-Path $wbSrc "workbuddy_setup.mjs"',
+        '            $wbCode = 1',
+        '            if (Test-Path $wbExe) {',
+        '                # WorkBuddy.exe 是 GUI 程序，用 & 调用不会同步等待（$LASTEXITCODE 取不到）；',
+        '                # 必须用 Start-Process -Wait -PassThru 才能真正等待并拿到退出码。',
+        '                $env:ELECTRON_RUN_AS_NODE = "1"',
+        '                $wbProc = Start-Process -FilePath $wbExe -ArgumentList @($wbSetup, "--host=$FINAL_HOST", "--token=$FINAL_KEY") -NoNewWindow -Wait -PassThru',
+        '                Remove-Item Env:\\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue',
+        '                $wbCode = $wbProc.ExitCode',
+        '            } elseif (Get-Command node -ErrorAction SilentlyContinue) {',
+        '                & node $wbSetup "--host=$FINAL_HOST" "--token=$FINAL_KEY"',
+        '                $wbCode = $LASTEXITCODE',
+        '            } else {',
+        '                Write-Host "⚠️  未找到 WorkBuddy.exe，也没有 Node.js，无法安装 WorkBuddy 采集器。"',
+        '            }',
+        '            if ($wbCode -ne 0) { Write-Host "⚠️  WorkBuddy collector setup exited with code $wbCode (可能未检测到 WorkBuddy；请确认已安装并至少打开过一次)。" }',
+        '            else { Write-Host "✅ WorkBuddy collector installed (复用 WorkBuddy 自带运行时，登录自启动，无需手动启动/无需装 Node)。" }',
+        '        } catch {',
+        '            Write-Host "⚠️  WorkBuddy collector installation failed: $_"',
+        '        }',
+        '    }',
+        '}',
+        '',
         'if ($LLAMAINDEX_READY) {',
         '    $env:AGENT_INSIGHT_API_KEY = $FINAL_KEY',
         '    & $llamaIndexPython -m agent_insight_llamaindex.cli configure --endpoint $FINAL_HOST',
@@ -2499,6 +2557,7 @@ function generatePowerShellScript(
         'if ($GOAL_PLUS_SETUP_OK -and -not $GOAL_PLUS_SOURCE_OK) { Write-Host "  ⚠️  Goal Plus worker relationships: collector installed; attach a current .gp workspace" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK) { Write-Host "  ⚠️  Goal Plus worker and relationship collector: not installed" }',
         'if ($AUTO_ADDED_FRAMEWORKS) { Write-Host "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS" }',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  [OK] WorkBuddy Collector: $env:USERPROFILE\\.agent-insight\\packages\\workbuddy (scheduled task: AgentInsight-WorkBuddyCollector)" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2520,6 +2579,7 @@ function generatePowerShellScript(
         'if ($INSTALL_TRAE) { Write-Host "  6. Restart TRAE IDE to activate the collector" }',
         'if ($INSTALL_ACTRAIL) { Write-Host "  7. Run the Unix curl setup inside WSL before using actrailctl launch" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  7. Start a new Pi session" }',
+        'if ($INSTALL_WORKBUDDY) { Write-Host "  8. Open WorkBuddy and start a conversation; traces auto-collect (task: schtasks /query /tn AgentInsight-WorkBuddyCollector)" }',
         'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  MCTS: run the generated Linux command inside WSL" }',
         'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  8. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
         'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "     Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
