@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test, { type TestContext } from 'node:test'
+import { createHash } from 'node:crypto'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-lifecycle-'))
 process.env.AGENT_INSIGHT_HOME = root
@@ -115,4 +116,62 @@ test('background recovery repairs a stale running experiment whose Case already 
   const f = await fixture(t, [{ run: 'execution_failed', result: 'failed' }])
   assert.equal(await scheduler.resumeBenchmarkDispatchesAtStartup(), 0)
   await assertStatus(f.id, 'failed')
+})
+
+for (const legacy of [false, true]) {
+  test(`MCTS failure links its exact coordinator Trace with ${legacy ? 'legacy OTLP hash' : 'session ID'}`, async (t) => {
+    const f = await fixture(t, [{ run: 'execution_failed', result: 'failed' }])
+    const sessionId = `mcts.run.${(legacy ? 'b' : 'a').repeat(32)}`
+    const traceId = legacy ? createHash('sha256').update(`mcts-xgovernor\u001f${sessionId}`).digest('hex').slice(0, 32) : sessionId
+    const execution = await prisma.execution.create({ data: {
+      taskId: sessionId, framework: 'mcts-xgovernor', agentName: 'mcts-coordinator', user: 'fixture-user',
+    } })
+    t.after(async () => { await prisma.execution.delete({ where: { id: execution.id } }) })
+    const run = await prisma.benchmarkCaseRun.update({ where: { id: f.runIds[0] }, data: { runFactsJson: JSON.stringify({ traceId }) } })
+    if (legacy) {
+      const { findBenchmarkExecution } = await import('../src/lib/benchmark/trace-reference')
+      assert.equal(await findBenchmarkExecution('other-user', traceId), null)
+      assert.equal(await findBenchmarkExecution('fixture-user', 'f'.repeat(32)), null)
+      await prisma.experiment.update({ where: { id: f.id }, data: {
+        agentName: 'pi-mcts', configSnapshotJson: '{"runConfig":{"platform":"pi-mcts","agent":"pi-mcts"}}',
+      } })
+      await prisma.experimentCase.update({ where: { id: run.experimentCaseId }, data: { taskId: traceId } })
+      const { GET } = await import('../src/app/api/experiments/[id]/route')
+      const response = await GET(new Request(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`),
+        { params: Promise.resolve({ id: f.id }) })
+      assert.equal(response.status, 200)
+      const detail = await response.json()
+      assert.equal(detail.agentName, 'mcts-coordinator')
+      assert.equal(detail.reusableConfig.agentName, 'mcts-coordinator')
+      assert.equal(detail.reusableConfig.executionTarget.platform, 'pi-mcts')
+      assert.equal(detail.cases[0].taskId, sessionId)
+      assert.equal(detail.cases[0].executionId, execution.id)
+      assert.equal((await prisma.experimentCase.findUniqueOrThrow({ where: { id: run.experimentCaseId } })).taskId, traceId)
+    }
+    await lifecycle.finalizeBenchmarkCase({ caseRunId: run.id, runSupplementalEvaluators: false, continueCases: false })
+    const c = await prisma.experimentCase.findUniqueOrThrow({ where: { id: run.experimentCaseId } })
+    assert.equal(c.taskId, sessionId)
+    assert.equal(c.executionId, execution.id)
+  })
+}
+
+test('MCTS interrupted Trace is failed in SQL filtering and aggregate counts', async (t) => {
+  const taskId = 'mcts.run.' + 'c'.repeat(32)
+  const execution = await prisma.execution.create({ data: {
+    user: 'fixture-user', taskId, framework: 'mcts-xgovernor',
+    failures: JSON.stringify([{ failure_type: 'agent-process-exit', context: '{"signal":"SIGINT"}' }]),
+  } })
+  const session = await prisma.session.create({ data: { taskId, endTime: new Date() } })
+  t.after(async () => {
+    await prisma.session.delete({ where: { id: session.id } })
+    await prisma.execution.delete({ where: { id: execution.id } })
+  })
+  const { selectComputedRecordPage } = await import('../src/lib/storage/computed-record-page')
+  const { aggregateExecutionList } = await import('../src/lib/storage/execution-list-sql')
+  const where = { id: execution.id, user: 'fixture-user' }
+  const page = await selectComputedRecordPage(where, { status: 'failed', anomaly: 'all', sortKey: 'status', sortDir: 'asc', page: 1, pageSize: 20 })
+  assert.deepEqual(page.ids, [execution.id])
+  assert.equal(page.total, 1)
+  assert.equal(page.stats.failedCount, 1)
+  assert.equal((await aggregateExecutionList(where)).failedCount, 1)
 })

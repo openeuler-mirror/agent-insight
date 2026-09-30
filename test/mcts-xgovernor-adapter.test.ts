@@ -8,6 +8,7 @@ import { normalizeOtlpTraces } from '../src/lib/ingest/otel/normalize';
 import { findCollaborationLocatorMatches } from '../src/lib/ingest/collaboration/resolve';
 import { getAdapter } from '../src/lib/ingest/adapters/registry';
 import { buildAgentCallTree } from '../src/lib/engine/observability/agent-trace';
+import { getTraceLifecycle } from '../src/lib/observe/trace-lifecycle';
 
 const require = createRequire(import.meta.url);
 const { canonicalEventsToOtlp } = require('../scripts/agent-trace-collectors/shared/trace-transport.cjs');
@@ -113,3 +114,22 @@ test('MCTS xGovernor adapter keeps unknown only when no confirmed role exists', 
   assert.equal(record?.agentType, 'unknown');
   assert.equal(record?.agentName, 'mcts-unknown');
 });
+
+for (const outcome of ['success', 'error']) {
+  test(`MCTS terminal ${outcome} retains the root process outcome through ingestion`, () => {
+    const records = [false, true].map(completed => {
+      const events = normalizeOtlpTraces(canonicalEventsToOtlp([
+        canonical({ eventId: 'root', spanId: '7'.repeat(16), kind: 'agent', name: 'agent.mcts.coordinator',
+          status: outcome, output: { exit_code: outcome === 'error' ? 1 : 0, signal: outcome === 'error' ? 'SIGINT' : null },
+          attributes: { 'mcts.role': 'coordinator', 'agent.insight.trace.completed': completed },
+        }),
+      ], { framework: 'mcts-xgovernor' }), { authenticatedUser: 'alice' });
+      return aggregateOtelTraceEvents('mcts-runtime-session', events)!;
+    });
+    assert.equal(getTraceLifecycle(records[0].trace_completed_at, { framework: records[0].framework, timestamp: records[0].timestamp }, 1_700_000_000_050).traceStatus, 'running');
+    const terminal = records[1];
+    const state = getTraceLifecycle(terminal.trace_completed_at, { framework: terminal.framework, failures: terminal.failures });
+    assert.equal(state.traceStatus, outcome === 'error' ? 'failed' : 'success');
+    if (outcome === 'error') assert.equal(JSON.parse(terminal.failures![0].context).signal, 'SIGINT');
+  });
+}

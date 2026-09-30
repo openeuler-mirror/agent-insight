@@ -24,6 +24,8 @@ import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dat
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
 import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
+import { findBenchmarkExecution } from '@/lib/benchmark/trace-reference';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
 import {
   summarizeExistingTraceItemProgress,
   summarizeWorkbenchItemProgress,
@@ -486,9 +488,22 @@ export async function GET(
 
     // input/actualOutput 兜底：trace/监听模式建的 case 这两字段存空，从对应 Execution
     // 的 query/finalResult 兜底（与评估时 loadCaseRuntime 口径一致），否则详情页显示为 "-"。
+    const legacyTraceReferences = new Map<string, { id: string; taskId: string | null }>();
+    const benchmarkPlatform = experiment.scope === 'benchmark'
+      ? String(asRecord(configSnapshot?.runConfig)?.platform || (experiment.agentName === 'pi-mcts' ? 'pi-mcts' : '')) : '';
+    const displayAgentName = experiment.agentName
+      ? canonicalExperimentAgentName(benchmarkPlatform, experiment.agentName) : experiment.agentName;
+    if (benchmarkPlatform === 'pi-mcts') {
+      const legacyTaskIds = Array.from(new Set(pagedCases.map(c => c.taskId)
+        .filter((taskId): taskId is string => Boolean(taskId && /^[0-9a-f]{32}$/.test(taskId)))));
+      await Promise.all(legacyTaskIds.map(async taskId => {
+        const execution = await findBenchmarkExecution(experiment.user, taskId);
+        if (execution?.taskId) legacyTraceReferences.set(taskId, execution);
+      }));
+    }
     const needExecTaskIds = Array.from(new Set(
       pagedCases
-        .map((c) => c.taskId || traceStateByCase.get(c.id)?.taskId)
+        .map((c) => (c.taskId && legacyTraceReferences.get(c.taskId)?.taskId) || c.taskId || traceStateByCase.get(c.id)?.taskId)
         .filter((taskId): taskId is string => Boolean(taskId)),
     ));
     const needExecutionIds = Array.from(new Set(
@@ -568,7 +583,7 @@ export async function GET(
       id: experiment.id,
       name: experiment.name,
       type: experiment.type,
-      agentName: experiment.agentName,
+      agentName: displayAgentName,
       status: responseStatus,
       watchMode: experiment.watchMode,
       watchEnabledAt: experiment.watchEnabledAt,
@@ -603,7 +618,7 @@ export async function GET(
         traceSource: typeof configSnapshot?.traceSource === 'string'
           ? configSnapshot.traceSource
           : experiment.watchMode ? 'existing' : null,
-        agentName: experiment.agentName,
+        agentName: displayAgentName,
         evaluatorIds,
         evaluatorConfigs,
         executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
@@ -617,7 +632,8 @@ export async function GET(
       },
       cases: pagedCases.map((c) => {
         const traceState = traceStateByCase.get(c.id);
-        const effectiveTaskId = c.taskId || traceState?.taskId || null;
+        const legacyReference = c.taskId ? legacyTraceReferences.get(c.taskId) : undefined;
+        const effectiveTaskId = legacyReference?.taskId || c.taskId || traceState?.taskId || null;
         const ex = (c.executionId ? execFallbackById.get(c.executionId) : undefined)
           || (effectiveTaskId ? execFallback.get(effectiveTaskId) : undefined);
         const evaluatorContext = parseExperimentCaseEvaluatorContext(c.evaluatorContextJson);
@@ -643,7 +659,7 @@ export async function GET(
         const benchmarkTraceStatus = deriveBenchmarkTraceStatus({
           runStatus: benchmarkRun?.status || null,
           hasSubmission: submissions.length > 0,
-          hasExecution: Boolean(c.executionId),
+          hasExecution: Boolean(c.executionId || legacyReference?.id),
           hasTask: Boolean(effectiveTaskId),
         });
         let caseValues: Record<string, unknown> | null = null;
@@ -661,7 +677,7 @@ export async function GET(
         }
         return {
           id: c.id,
-          executionId: c.executionId || traceState?.executionId || null,
+          executionId: c.executionId || legacyReference?.id || traceState?.executionId || null,
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
           datasetInput: c.datasetInput,

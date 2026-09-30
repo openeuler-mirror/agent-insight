@@ -2,6 +2,7 @@ import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-con
 // 评测「实验」API —— 列表 + 创建（单组 type='single' + LLM 对比 type='llm'）。
 // 对比类型：createComparisonExperiment + autoPairGroups（跳过 case 校验，case 由配对产生）。
 import { NextResponse } from 'next/server';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
 import type { Experiment } from '@prisma/client';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { prisma } from '@/lib/storage/prisma';
@@ -144,7 +145,8 @@ export async function GET(req: Request) {
         id: r.id,
         name: r.name,
         type: r.type,
-        agentName: r.agentName,
+        agentName: r.agentName ? canonicalExperimentAgentName(r.scope === 'benchmark' && r.agentName === 'pi-mcts'
+          ? 'pi-mcts' : '', r.agentName) : r.agentName,
         status,
         watchMode: r.watchMode,
         scope: r.scope,

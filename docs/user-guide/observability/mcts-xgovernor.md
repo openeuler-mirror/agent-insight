@@ -133,11 +133,11 @@ AGENT_INSIGHT_MCTS_REPO_DIR=/path/to/MCTS
 sudo systemctl restart agent-insight-client.service
 ```
 
-在平台确认客户端在线且 `pi-mcts` 已就绪，再创建 SWE-bench Benchmark 实验，选择 `pi-mcts` 平台与 Agent、平台默认模型，并设置足够长的 Agent 超时。模型沿用 MCTS/xGovernor 的部署配置。
+在平台确认客户端在线且 `pi-mcts` 已就绪，再创建 SWE-bench Benchmark 实验，选择 `mcts-coordinator` Agent、`pi-mcts` 执行平台和平台默认模型，并设置足够长的 Agent 超时。模型沿用 MCTS/xGovernor 的部署配置。
 
 客户端会直接调用配置的 Python 解释器，保留该虚拟环境中的依赖，不需要在交互终端中激活环境。
 
-平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；搜索参数保留正式默认值。用户无需每次手动运行启动命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，同时关联本次根 Trace；平台仍会独立运行 Benchmark 评测。停止实验会向进程组发送 SIGINT，留出 30 秒让 MCTS 释放本次会话/checkpoint 并刷新 Trace。
+平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；搜索参数保留正式默认值。用户无需每次手动运行启动命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，同时关联本次根 Trace；平台仍会独立运行 Benchmark 评测。停止实验会向进程组发送 SIGINT，留出 30 秒让 MCTS 释放本次会话/checkpoint 并刷新 Trace。实验 Agent 超时从 MCTS 命令启动时计时，覆盖准备、搜索、MCTS 官测和退出上传；根 Trace 从首次 xGovernor 调用开始记录，显示耗时可能短于实验执行耗时。采集到分支 Trace 不代表已生成最终提交物。
 
 常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。部署与评测服务要求见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
 
@@ -159,7 +159,7 @@ Agent Insight 链路追踪
             └─ LLM / Tool
 ```
 
-每个 Runtime 使用独立 Trace Session，父子关系通过现有跨 Session binding/event 接口上报。运行期间每 10 秒尝试增量上传；只要启动器管理的 MCTS 子进程仍存活，还会每 60 秒刷新同一个 coordinator Agent 快照。这个保活不会新增 Tool/LLM 节点或调用次数，但能让长时间 official test、远端 exec 等无模型事件阶段继续显示“执行中”。结束时启动器写入终态并再做一次有界刷新。关系数据和 Trace 可乱序到达；网络失败时本地 spool/outbox 会保留并在后续刷新时重试。
+每个 Runtime 使用独立 Trace Session，父子关系通过现有跨 Session binding/event 接口上报。运行期间每 10 秒尝试增量上传；只要启动器管理的 MCTS 子进程仍存活，还会每 60 秒刷新同一个 coordinator Agent 快照。这个保活不会新增 Tool/LLM 节点或调用次数，但能让长时间 official test、远端 exec 等无模型事件阶段继续显示“执行中”。结束时启动器写入终态并再做一次有界刷新。进程异常退出或被中断时，根 Trace 显示执行失败。关系数据和 Trace 可乱序到达；网络失败时本地 spool/outbox 会保留并在后续刷新时重试。
 
 “观测超时”表示连续 10 分钟没有收到采集更新，不能据此断定 MCTS 已停止。正常运行的启动器会通过上述保活避免这种状态；如果启动器被强制终止、宿主机掉电或采集网络长期不可用，远端任务可能仍在继续，而页面会显示“观测超时”。新 Trace 到达后状态会自动恢复为“执行中”。
 

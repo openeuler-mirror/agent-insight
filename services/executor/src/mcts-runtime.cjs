@@ -1,6 +1,5 @@
 'use strict'
 
-const { createHash } = require('node:crypto')
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
@@ -79,7 +78,7 @@ async function mctsTraceId(observerHome) {
   if (!Array.isArray(ledger.runs) || ledger.runs.length !== 1 || !/^mcts\.run\.[0-9a-f]{32}$/.test(ledger.runs[0]?.sessionId)) {
     throw new BenchmarkExecutorError('MCTS_TRACE_UNAVAILABLE', 'MCTS 未生成唯一的根 Trace')
   }
-  return createHash('sha256').update(`mcts-xgovernor\u001f${ledger.runs[0].sessionId}`).digest('hex').slice(0, 32)
+  return ledger.runs[0].sessionId
 }
 
 function validateMctsTask(payload) {

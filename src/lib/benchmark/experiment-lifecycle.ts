@@ -6,6 +6,7 @@ import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-confi
 import { startBenchmarkExperiment } from './scheduler'
 import { nextImagePreparationRevision, sendImagePreparationWindow } from './image-preparation'
 import { getBenchmarkAdapter } from './adapter-registry'
+import { findBenchmarkExecution as findExecution } from './trace-reference'
 
 const TERMINAL_RUN_STATUSES = [
   'evaluated',
@@ -24,27 +25,6 @@ function parsedObject(value: string | null): Record<string, unknown> {
       : {}
   } catch {
     return {}
-  }
-}
-
-async function findExecution(user: string, traceId: string) {
-  try {
-    return await prisma.execution.findFirst({
-      where: {
-        user,
-        isSubagent: false,
-        OR: [
-          { id: traceId },
-          { taskId: traceId },
-          { agentSessionId: traceId },
-        ],
-      },
-      orderBy: { timestamp: 'desc' },
-      select: { id: true, taskId: true, finalResult: true },
-    })
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'P2021') return null
-    throw error
   }
 }
 

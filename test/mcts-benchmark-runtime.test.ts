@@ -177,8 +177,8 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
       return runProcess(command, args, options)
     }
     const result = await runtime.runMctsBenchmarkCase(f.config, f.payload, runner)
-    assert.equal(result.traceId, '6bdf5e0958c25ac591cfdb4b7aecca53')
-    assert.match(result.traceId, /^[0-9a-f]{32}$/)
+    assert.equal(result.traceId, 'mcts.run.' + 'b'.repeat(32))
+    assert.match(result.traceId, /^mcts\.run\.[0-9a-f]{32}$/)
     assert.equal(fs.readFileSync(path.join(f.workspace, 'hello.txt'), 'utf8'), 'after\n')
     assert.deepEqual(launches[0].args, [
       f.config.mctsTraceLauncher, '--strict', '--config', path.join(path.dirname(f.config.mctsTraceLauncher), 'config.json'),
@@ -271,7 +271,7 @@ test('pi-mcts retains its root Trace ID when the run fails', async () => {
         return true
       },
     )
-    assert.equal(traceId, '6bdf5e0958c25ac591cfdb4b7aecca53')
+    assert.equal(traceId, 'mcts.run.' + 'b'.repeat(32))
   } finally { f.close() }
 })
 
@@ -298,6 +298,7 @@ test('pi-mcts appears only as a ready Benchmark target', () => {
 
 for (const scenario of [
   { name: 'Benchmark-only MCTS without historical Trace', platform: 'pi-mcts', generic: false, ready: true },
+  { name: 'MCTS with historical coordinator Trace', platform: 'pi-mcts', generic: false, ready: true, historical: true },
   { name: 'an unready MCTS runtime', platform: 'pi-mcts', generic: false, ready: false },
   { name: 'a shared generic and Benchmark runtime', platform: 'opencode', generic: true, ready: true },
 ]) {
@@ -321,7 +322,7 @@ for (const scenario of [
     }
     const overrides = [
       [prismaRaw.registeredAgent, 'findMany', async () => []],
-      [prisma.execution, 'groupBy', async () => []],
+      [prisma.execution, 'groupBy', async () => 'historical' in scenario ? [{ framework: 'mcts-xgovernor', agentName: 'mcts-coordinator', _count: { agentName: 3 } }] : []],
       [prisma.faultInjectionWorker, 'findMany', async () => []],
       [prisma.reliabilityClient, 'findMany', async () => [row]],
     ] as const
@@ -340,11 +341,13 @@ for (const scenario of [
     }
     assert.equal(body.agents.length, 1)
     const agent = body.agents[0]
-    assert.equal(agent.name, scenario.platform)
-    assert.equal(agent.traces, 0)
+    assert.equal(agent.name, scenario.platform === 'pi-mcts' ? 'mcts-coordinator' : scenario.platform)
+    assert.equal(agent.traces, 'historical' in scenario ? 3 : 0)
     assert.equal(agent.targets.length, 1)
     const target = agent.targets[0]
     assert.equal(target.workerId, row.clientId)
+    assert.equal(target.agent, scenario.platform)
+    assert.equal(target.platform, scenario.platform)
     assert.equal(target.supportsGenericTrace, scenario.generic)
     assert.equal(target.supportsFaultInjection, false)
     assert.equal(target.supportsBenchmark, true)

@@ -1,4 +1,5 @@
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity'
 import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
@@ -170,7 +171,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
         user,
         name,
         type: 'single',
-        agentName: input.agentName?.trim() || agent,
+        agentName: canonicalExperimentAgentName(platform, input.agentName?.trim() || agent),
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
         status: 'draft',
         scope: 'benchmark',
