@@ -12,7 +12,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/dashboard` | `DashboardPage` (`(main)/dashboard/page.tsx`) | 概览：健康度、趋势、RAS 可靠性、性能、模型/工具/Agent/编排监控 |
 | `/(main)/quickstart` | `QuickstartPage` (`(main)/quickstart/page.tsx`) | 五阶段推荐使用路径与现有模块入口 |
 | `/(main)/agents` | `AgentsPage` (`(main)/agents/page.tsx`) | 已注册/已观测的 agents |
-| `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；列表由服务端过滤、排序和数据库分页，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
+| `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；SQLite 列表在数据库执行普通与计算字段的过滤、排序、分页及统计，详情先加载轻量 interaction 结构并按需读取完整内容；支持标签、列筛选、跨页多选，并通过统一的 `TraceBackflowDialog` 单条或批量回流到评测数据集 |
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
 | `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；列表读取不含 cases 的摘要视图，编辑和详情再按需加载完整记录；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值；本地导入的隐藏文件控件常驻页面，菜单关闭不会中断文件选择 |
 | `/(main)/eval`, `/(main)/eval/run/[runId]`, `/(main)/eval/trajectory/*` | `EvalPage`, `RunDetailPage`, `TrajectoryDetailPage`/`TrajectoryTracePage` | 评测运行与轨迹视图 |
@@ -96,7 +96,9 @@ Benchmark 评估器目录由服务端 `app/(main)/metrics/page.tsx` 遍历 `list
 - **应用外壳** — `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader,providers}.tsx`。页面在 `<PageContainer>` 内渲染（左对齐、全幅——不要手写居中）。
 - **评测** — `eval/*`（`Dashboard`、`SkillEvaluation`、`TrajectoryEvalCenter`、`EvaluationRunDetailView`、`ExecutionRecordsTable`、`EvaluatorFindingsView`）以及 `evaluation/*`（`EvaluationContent`、`EvaluationFindings`）。
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard,VersionWorkspaceTabs}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。筛选栏的用户标签下拉支持版本/业务标签混合多选，按类型及名称前缀聚类；前缀作为无框行标题，标签以可换行的胶囊横向排列。多个标签使用 AND 语义并写入 `tagIds` URL 参数。`version-workspace-navigation.ts` 定义版本分析与版本管理两个页签的路由归属；页面分别位于 `app/(main)/version-analysis/page.tsx` 与 `app/(main)/version-management/page.tsx`。
-  - 列表保留可见页面的五秒静默刷新、Goal Plus worker 折叠和多选标签；Trace 列表内详情并行请求 Session 与轻量 Execution 元数据，状态更新不等待大正文，执行中/超时继续轮询，成功/失败停止。重复父子 Trace 导航会释放旧 fetch guard。
+  - 列表保留可见页面的五秒静默刷新、Goal Plus worker 折叠和多选标签；当前请求未结束时跳过自动刷新，切换筛选/分页或卸载时通过 `AbortController` 取消旧请求。请求序号拦截迟到响应，最新请求完成后统一释放加载状态，避免慢请求被轮询替换后一直显示骨架。后台刷新失败保留已有记录。Trace 列表内详情并行请求 Session 与轻量 Execution 元数据，状态更新不等待大正文，执行中/超时继续轮询，成功/失败停止。重复父子 Trace 导航会释放旧 fetch guard。
+  - Trace 页面、顶部搜索栏与筛选侧栏通过 `src/lib/client/trace-facets.ts` 共享同一用户、同一字段正在进行的筛选项请求，统一读取 JSON 后分发给各调用方。请求成功或失败后即释放，不缓存已完成结果；后续打开筛选仍重新取数，各组件继续独立处理卸载与失败。列表请求和全局 `apiFetch` 不参与这一去重。
+  - 列表点击详情与导入后的“打开 Trace”仅在这两类导航动作上给 `setTaskIdParam` 指定 `history: 'push'`，保留列表 URL 中的筛选和分页，支持浏览器后退/前进。页面内“返回列表”和无效 `taskId` 清理继续使用 `replace`；筛选参数与全局 `NuqsAdapter` 的默认历史策略不变。父子 Trace 之间继续通过 `router.push` 导航。
   - Trace ID 使用 `IdChip` 的自适应宽度模式；可排序表头使用统一双三角图标。子 Agent 展开/收起复用 `TermPopover` 提示，根 Agent 保持展开；`slowOnly` 使用严格 `duration > 60000` 的事件筛选，锁定耗时选择但保留 Agent 层级上下文。
   - `ContentModal` 为 `SmartViewer` 启用 `fullContent`，展开弹窗 JSON 全部层级并显示完整长字符串和大数组，普通内联预览保持限长；时间线 `ModalCodeBlock` 给输入/输出提供复制动作。共享 `copy-text.ts` 优先 Clipboard API，回退 textarea 放在当前聚焦的 dialog/alertdialog 内，兼容焦点锁；清理后恢复原焦点。
 - **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`、`SkillWorkspaceTabs`）、`skill-generator/*`；`skill-workspace-navigation.ts` 定义四个页签的路由归属。
