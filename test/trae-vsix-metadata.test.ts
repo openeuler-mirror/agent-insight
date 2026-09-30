@@ -67,8 +67,8 @@ test("AC2: Settings 配置项 14 项齐全", () => {
 })
 
 test("AC2: 状态栏相关命令齐全（showStatus/flushNow/openSpoolDir/openLogs）", () => {
-  const commands: string[] = pkg.contributes?.commands ?? []
-  const ids = commands.map((c: { command: string }) => c.command)
+  const commands: { command: string }[] = pkg.contributes?.commands ?? []
+  const ids = commands.map((c) => c.command)
   for (const id of [
     "agent-insight-trae.showStatus",
     "agent-insight-trae.flushNow",

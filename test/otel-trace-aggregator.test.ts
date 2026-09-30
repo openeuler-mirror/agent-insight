@@ -1303,8 +1303,12 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
         "generic",
       ],
     );
-  assert.equal(getOtelTraceAdapter([hermesEvent]).id, "hermes");
-  assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");
+  const hermesAdapter = getOtelTraceAdapter([hermesEvent]);
+  const genericAdapter = getOtelTraceAdapter([genericEvent]);
+  assert.ok(hermesAdapter);
+  assert.ok(genericAdapter);
+  assert.equal(hermesAdapter.id, "hermes");
+  assert.equal(genericAdapter.id, "generic");
 });
 
 test("OTel trace adapter registry selects the Pi adapter when Pi is installed", () => {

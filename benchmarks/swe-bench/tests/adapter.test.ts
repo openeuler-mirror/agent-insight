@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import { getBenchmarkAdapter } from '../../../src/lib/benchmark/adapter-registry'
 import { sweBenchAdapter } from '../adapter'
+import type { JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
 import type {
   EvaluationJob,
   ReadonlySubmissionArtifact,
@@ -289,7 +290,7 @@ test('SWE-bench adapter accepts ARM64 results and rejects mismatched or incomple
   const normalize = (overrides: {
     jobInstanceId?: string
     evidenceArtifacts?: typeof evidenceArtifacts
-    rawResult?: Record<string, unknown>
+    rawResult?: Record<string, JsonValue>
     formalEligible?: boolean
   } = {}) => {
     const result = overrides.rawResult || rawResult

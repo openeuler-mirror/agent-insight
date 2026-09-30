@@ -42,7 +42,9 @@ test("Codex OTLP adapter matches first-party framework attributes before generic
       output: "done",
     }),
   ])
-  assert.equal(getOtelTraceAdapter(events).id, "codex")
+  const adapter = getOtelTraceAdapter(events)
+  assert.ok(adapter)
+  assert.equal(adapter.id, "codex")
   assert.equal(getAdapter("codex").descriptor.label, "Codex")
 })
 test("Codex adapter accepts collector canonical events before OTLP normalization", () => {
@@ -69,7 +71,9 @@ test("Codex adapter accepts collector canonical events before OTLP normalization
     }),
   ] as unknown as OtelTraceEvent[]
 
-  assert.equal(getOtelTraceAdapter(events).id, "codex")
+  const adapter = getOtelTraceAdapter(events)
+  assert.ok(adapter)
+  assert.equal(adapter.id, "codex")
   const record = aggregateOtelTraceEvents("codex-session", events)
   assert.ok(record)
   assert.equal(record.query, "read the current file")
@@ -1123,8 +1127,10 @@ test("Codex adapter supplies the trace start together with trace completion", ()
       endTimeMs: endedAt,
     }),
   ]))
-  assert.equal(record?.trace_started_at?.toISOString(), new Date(startedAt).toISOString())
-  assert.equal(record?.trace_completed_at?.toISOString(), new Date(endedAt).toISOString())
+  assert.ok(record?.trace_started_at instanceof Date)
+  assert.ok(record.trace_completed_at instanceof Date)
+  assert.equal(record.trace_started_at.toISOString(), new Date(startedAt).toISOString())
+  assert.equal(record.trace_completed_at.toISOString(), new Date(endedAt).toISOString())
 })
 
 test("Codex adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage", () => {

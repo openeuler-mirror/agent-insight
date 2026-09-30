@@ -58,8 +58,8 @@ const client = require_('../scripts/reliability-client.cjs') as {
   parseOpencodeSlashCommand: (input: string) => { command: string; arguments: string } | null
   capabilityDiscoveryFingerprint: () => string
   withInventoryProbeSandbox: <T>(
-    probeEnv: NodeJS.ProcessEnv,
-    action: (sandbox: { tempRoot: string; env: NodeJS.ProcessEnv }) => T,
+    probeEnv: Partial<NodeJS.ProcessEnv>,
+    action: (sandbox: { tempRoot: string; env: Partial<NodeJS.ProcessEnv> }) => T,
     baseDir?: string,
   ) => T
   cleanupStaleFiProbeJobs: (
@@ -103,6 +103,7 @@ const client = require_('../scripts/reliability-client.cjs') as {
     exitCode: number
     timedOut?: boolean
     modelActivityObserved?: boolean
+    eventMonitorReady?: boolean
     startedAt?: string
     finishedAt?: string
   }>

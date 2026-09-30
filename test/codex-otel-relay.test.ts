@@ -19,7 +19,10 @@ const {
 const transport = require("../scripts/agent-trace-collectors/shared/trace-transport.cjs")
 
 type CapturedEvent = {
-  sessionId?: string
+  sessionId: string
+  startTimeMs: number
+  endTimeMs: number
+  input?: unknown
   spanId: string
   parentSpanId?: string
   kind: string
@@ -453,7 +456,9 @@ test("Hook and native OTel merge exact Token, TTFT, and Tool facts by stable ids
     total: 999,
   })
   assert.equal(new Set(tools.map((event) => event.spanId)).size, 1)
-  assert.equal(tools.at(-1)?.tool?.arguments?.command, "pwd")
+  const toolArguments = tools.at(-1)?.tool?.arguments
+  assert.ok(toolArguments && typeof toolArguments === "object" && "command" in toolArguments)
+  assert.equal(toolArguments.command, "pwd")
   assert.equal(tools.at(-1)?.tool?.result, "otel output")
   assert.deepEqual(llm?.usage, {
     input: 120,

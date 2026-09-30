@@ -54,5 +54,8 @@ test('步骤效率预置评估器独立认领新 ID，并输出五个维度', as
 
   assert.equal(result.score, 100);
   assert.equal(result.points?.length, 5);
-  assert.equal(result.evidence?.json?.rubricVersion, 'agent-step-efficiency/1.0.0');
+  assert.ok(result.evidence && 'json' in result.evidence);
+  const evidence = result.evidence.json;
+  assert.ok(evidence && typeof evidence === 'object' && 'rubricVersion' in evidence);
+  assert.equal(evidence.rubricVersion, 'agent-step-efficiency/1.0.0');
 });

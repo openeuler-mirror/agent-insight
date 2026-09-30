@@ -104,6 +104,8 @@ function runProcess(
       env: options.env,
       windowsHide: true,
     })
+    assert.ok(child.stdout)
+    assert.ok(child.stderr)
     let stdout = ""
     let stderr = ""
     child.stdout.setEncoding("utf8")
@@ -112,7 +114,10 @@ function runProcess(
     child.stderr.on("data", (chunk) => { stderr += chunk })
     child.on("error", reject)
     child.on("close", (code) => resolve({ code, stdout, stderr }))
-    if (options.input !== undefined) child.stdin.end(options.input)
+    if (options.input !== undefined) {
+      assert.ok(child.stdin)
+      child.stdin.end(options.input)
+    }
   })
 }
 

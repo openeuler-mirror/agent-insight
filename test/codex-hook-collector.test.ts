@@ -20,6 +20,9 @@ const {
 } = require("../scripts/agent-trace-collectors/codex/hook-handler.cjs")
 
 type CapturedEvent = {
+  sessionId: string
+  startTimeMs: number
+  endTimeMs: number
   eventId: string
   spanId: string
   parentSpanId?: string
@@ -161,7 +164,9 @@ test("Codex collector joins prompt, Tool lifecycle, and Stop without reading tra
   assert.equal(root?.output, "inspection complete")
   assert.equal(tool?.tool?.name, "Bash")
   assert.equal(tool?.tool?.type, "shell")
-  assert.equal(tool?.tool?.result?.output, "/repo")
+  const toolResult = tool?.tool?.result
+  assert.ok(toolResult && typeof toolResult === "object" && "output" in toolResult)
+  assert.equal(toolResult.output, "/repo")
   assertAcyclic(writer.events)
 })
 
