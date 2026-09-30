@@ -288,6 +288,9 @@ const FIELDLBL: React.CSSProperties = {
   display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--foreground-muted)',
   textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 7,
 };
+const FIELD_HINT: React.CSSProperties = {
+  marginTop: 5, fontSize: 10.5, color: 'var(--foreground-muted)', lineHeight: 1.5,
+};
 const INPUT: React.CSSProperties = {
   width: '100%', height: 34, padding: '0 10px', fontSize: 13, borderRadius: 8,
   border: '1px solid var(--input-border)', background: 'var(--input-bg)',
@@ -378,10 +381,8 @@ function AgentTimeoutField({
         onChange={(event) => onChange(event.target.value)}
       />
       <div style={{
-        marginTop: 5,
-        fontSize: 10.5,
+        ...FIELD_HINT,
         color: valid ? 'var(--foreground-muted)' : 'var(--error)',
-        lineHeight: 1.5,
       }}>
         {valid ? hint : '请输入 30～3600 之间的整数'}
       </div>
@@ -2115,7 +2116,7 @@ export function ExperimentWizard({
                 </div>
               ) : (
                 <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignItems: 'start', gap: 12, marginBottom: 10 }}>
                 <div>
                   <label style={FIELDLBL}>运行主机 IP *</label>
                   <select
@@ -2139,13 +2140,15 @@ export function ExperimentWizard({
                     models={selectedTarget?.models} value={genModel} onChange={setGenModel} />
                 </div>
                   {executionConcurrencyRequired && (
-                    <label style={{ display: 'grid', gap: 6, marginBottom: 12, color: 'var(--foreground-secondary)' }}>
-                      执行并发
-                      <input className="ai-input" type="number" min={1} step={1} value={executionConcurrencyInput}
+                    <div>
+                      <label htmlFor="experiment-execution-concurrency" style={FIELDLBL}>执行并发</label>
+                      <input id="experiment-execution-concurrency" style={{ ...INPUT,
+                        borderColor: executionConcurrencyValid ? 'var(--input-border)' : 'var(--error)' }}
+                        type="number" min={1} step={1} value={executionConcurrencyInput} aria-invalid={!executionConcurrencyValid}
                         onChange={(event) => setExecutionConcurrencyInput(event.target.value)} aria-label="执行并发" />
-                      <span style={{ fontSize: 12 }}>控制本实验同时执行的 Case 数，请根据所选客户端资源及其他运行任务设置。</span>
-                      {!executionConcurrencyValid && <span role="alert">执行并发必须为正整数</span>}
-                    </label>
+                      <div style={FIELD_HINT}>控制本实验同时执行的 Case 数，请根据所选客户端资源及其他运行任务设置。</div>
+                      {!executionConcurrencyValid && <div style={{ ...FIELD_HINT, color: 'var(--error)' }} role="alert">执行并发必须为正整数</div>}
+                    </div>
                   )}
                   <AgentTimeoutField
                     value={agentTimeoutInput}
