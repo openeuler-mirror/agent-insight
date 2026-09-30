@@ -112,12 +112,13 @@ async function setupRasPiExtension(pi: any) {
     onActions: async (sessionId: string, actions: any[], anomaly: any) => {
       const sessionHost = createPiSessionHost({ pi, ctxRef, sessionId })
       await applyActions(sessionHost, actions, {
-        onResult: (result: any) =>
-          ras.reportActionResult(sessionId, {
+        onResult: async (result) => {
+          await ras.reportActionResult(sessionId, {
             ...result,
             trace_anchor: anomaly?.trace_anchor,
             delivery_anchor: result?.delivery_anchor,
-          }),
+          })
+        },
       })
     },
   })

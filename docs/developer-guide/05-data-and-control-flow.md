@@ -87,6 +87,13 @@ flowchart TD
 
 ## 后端流水线：接入（agent run → Execution 记录）
 
+接收缓存回收由 `runtime-cleanup` 后台扫描器负责。默认正常 7 天策略需要明确结束和成功持久化记录；异常、未处理或失活记录默认按最后实际接收时间保留 14 天。扫描和聚合重试不刷新接收时间。历史文件能确认会话归属和安全目录时，以 mtime 作为接收时间的保守替代，按异常保留期回收；所有权不明、超出有限读取预算而不能核实的超大历史文件跳过。消费者与清理操作必须协调，不能用 EOF checkpoint 或 `.processed` 名称代替落库成功凭据；迟到数据在已清理会话中保留原始缓存，并禁止以缺少历史内容的聚合结果覆盖原 Trace。
+
+`readCleanupConfig` 在调度器启动时读取配置并保留代码兜底值，`.env.example` 只作为部署模板。`createCleanupSweep` 将日志保留天数、轮转时间 / 大小、总量目标、临时 HOME 期限及接收缓存期限传给对应扫描器；调度器使用同一配置中的启动延迟、轮次间隔、分批操作数 / 时间 / 读取预算。数值非法或低于下限时回退默认，超过上限时截断；异常期限至少等于正常期限，日志总量目标至少等于单文件轮转阈值。改动实际环境配置后需重启。日志清理只使用文件元信息和小型控制文件，执行 rename / unlink，不读取日志正文或生成压缩文件；旧 `.gz` 归档继续按相同期限和容量规则回收。
+
+扫描来源来自 OTel consumer registry，另包含 Jiuwen spool；每个来源单独隔离失败并交替推进。已清理会话的小型身份元数据和去重索引继续保留，仍随会话数量增长；有限读取、分片与过期策略针对大内容缓存，不能解释为所有磁盘占用固定上限。接收状态与轻量清理记录用于文件回收，不删除 Session / Execution / 评测 / 诊断数据，也不运行数据库归档或 VACUUM。日志扫描只处理登记的应用日志名称，容量回收每次保留最多 256 个最旧候选，再逐个复查删除；1 GiB 为每轮软目标，轮次之间活动日志可能超出目标。1 MiB 为每片内容读取预算，少量锁与状态元数据读取另计。过期进程锁恢复用独占 `.reaping` 标记串行化，恢复中崩溃会保留该标记并拒绝自动抢占，需人工核查后处理。临时目录仅匹配平台 `.opencode-runtime/<user>/isolated-home-*`，同时验证同主机服务 PID 与子进程组已退出，跳过符号链接目标和未知所有权目录。
+
+
 源码生产启动在确认端口释放后，通过 `scripts/stop-orphan-trace-consumer.cjs` 检查共享 Trace spool 的 `consumer-owner.lock`。只有锁指向本项目 `.next/standalone`、且该进程已不监听端口时才终止残留进程；Linux 已退出但尚未回收的僵尸进程只清除其遗留的消费锁。其他归属或无法核实时启动失败。新服务随后取得消费锁，按原 checkpoint 处理积压文件。
 
 Trae IDE 通过 VS Code 插件内置的 Hook 系统采集运行数据：Hook 脚本监听 session-start、pre-tool-use、post-tool-use、prompt-submit、stop、subagent-detect 等生命周期事件，将事件序列化为 JSONL 写入本地 spool 目录；插件内的 `UploadEngine` 按 checkpoint 增量消费 spool 文件，经内容截断后 POST 到 `/api/ingest/upload`。服务端通过 `traeAdapter` (`FrameworkAdapter`) 的 `extractSkills` 从 TRAE 特有 interaction 格式中提取 Skill 调用，再经 `saveExecutionRecord` 统一落库。

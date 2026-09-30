@@ -281,6 +281,7 @@ test('AcTrail OTLP: displays the reported HTTP status and reason for failed LLM 
   assert.deepEqual(failedCall.error, { message: 'LLM 调用失败：HTTP 429 Too Many Requests' });
 
   const tree = buildAgentCallTree(record.interactions);
+  assert.ok(tree);
   assert.equal(tree.events.find((event) => event.kind === 'llm')?.summary, 'LLM 调用失败：HTTP 429 Too Many Requests');
 });
 

@@ -35,12 +35,12 @@ test('both installers render valid Bash and share root configuration on both pla
 
 test('generated shell wrappers retain the installation root in a fresh environment', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight wrapper space-'))
-  const env = { ...process.env, AGENT_INSIGHT_HOME: root }
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: root }
   delete env.AGENT_INSIGHT_DATA_DIR
   try {
     const result = spawnSync('bash', ['-c', SETUP_BASH_HOME + '\nagent_insight_write_script <<\'EOF\'\nprintf "%s" "$AGENT_INSIGHT_HOME"\nEOF'], { env, encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr)
-    const fresh = { ...env }
+    const fresh: NodeJS.ProcessEnv = { ...env }
     delete fresh.AGENT_INSIGHT_HOME
     const run = spawnSync('bash', [], { input: result.stdout, env: fresh, encoding: 'utf8' })
     assert.equal(run.status, 0, run.stderr)
@@ -92,7 +92,7 @@ for fn in [hermes['_default_home'], llama['_default_home']]:
 test('postinstall selects the requested database before any initialization or migration', () => {
   const source = fs.readFileSync('scripts/postinstall.js', 'utf8').split("  const standaloneDir =")[0] + '\n} catch (error) { throw error }'
   for (const selected of [undefined, '', 'file:/tmp/isolated.db']) {
-    const env: NodeJS.ProcessEnv = { AGENT_INSIGHT_HOME: '/tmp/custom-root' }
+    const env: Record<string, string | undefined> = { AGENT_INSIGHT_HOME: '/tmp/custom-root' }
     if (selected !== undefined) env.DATABASE_URL = selected
     let migrated = false
     vm.runInNewContext(source, {

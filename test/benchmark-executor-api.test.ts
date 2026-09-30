@@ -18,6 +18,7 @@ import {
   createBenchmarkDispatchToken,
   createBenchmarkHealthToken,
   deviceCredentialHash,
+  type BenchmarkExecutionCompletion,
 } from '../packages/benchmark-protocol/src/executor-contracts'
 
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-executor-api-'))
@@ -811,18 +812,8 @@ test('Benchmark failure completion preserves Agent run facts', async () => {
   const runId = `erun_agent_failure_${suffix}`
   const baseDir = path.join(testDir, `agent-failure-${suffix}`)
   const insightBaseUrl = 'http://127.0.0.1:43202'
-  let completion: {
-    status?: string
-    error?: { code?: string }
-    runFacts?: {
-      traceId?: string
-      timedOut?: boolean
-      platform?: string
-      agent?: string
-    }
-  } | null = null
-  let resolveCompletion!: () => void
-  const completionGate = new Promise<void>((resolve) => { resolveCompletion = resolve })
+  let resolveCompletion!: (completion: BenchmarkExecutionCompletion) => void
+  const completionGate = new Promise<BenchmarkExecutionCompletion>((resolve) => { resolveCompletion = resolve })
   const executor = executorModule.createBenchmarkExecutor({
     clientId: `agent_failure_client_${suffix}`,
     deviceCredential: `dc_agent_failure_${suffix}`,
@@ -833,9 +824,8 @@ test('Benchmark failure completion preserves Agent run facts', async () => {
       async uploadArtifact() {
         throw new Error('artifact upload must not run after Agent failure')
       },
-      async complete(_request: unknown, body: NonNullable<typeof completion>) {
-        completion = body
-        resolveCompletion()
+      async complete(_request: unknown, body: BenchmarkExecutionCompletion) {
+        resolveCompletion(body)
       },
     },
     workspaceProvider: {
@@ -872,9 +862,9 @@ test('Benchmark failure completion preserves Agent run facts', async () => {
 
   try {
     await executor.accept(request)
-    await Promise.race([
+    const completion = await Promise.race([
       completionGate,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('failure completion timed out')), 5_000)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('failure completion timed out')), 5_000)),
     ])
     assert.equal(completion?.status, 'failed')
     assert.equal(completion?.error?.code, 'AGENT_TIMEOUT')

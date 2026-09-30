@@ -4,6 +4,7 @@ process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insigh
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { ExperimentEvalResult } from '@prisma/client';
 import { POST as evaluateTraces } from '@/app/api/experiments/eval-traces/route';
 import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
 import { setFaithfulPresetRunnerForTest } from '@/lib/engine/experiment/faithful-preset-evaluators';
@@ -263,7 +264,7 @@ test('并行提交多个评测任务时共用同一个行级并发上限', async
   release();
 
   await waitFor(async () => {
-    const rows = await prisma.experimentEvalResult.findMany({
+    const rows: ExperimentEvalResult[] = await prisma.experimentEvalResult.findMany({
       where: { experimentId: { in: [firstExperiment.experimentId, secondExperiment.experimentId] } },
     });
     return rows.length === 6 && rows.every((row) => row.status === 'done');

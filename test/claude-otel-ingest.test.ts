@@ -694,8 +694,8 @@ test("Claude OTel: classifies Pi and OpenInference semantic span kinds", () => {
           attributes: [
             { key: "session.id", value: { stringValue: "session-pi" } },
             { key: "agent.insight.framework", value: { stringValue: "pi-agent" } },
-            ...(item.insightKind ? [{ key: "agent.insight.kind", value: { stringValue: item.insightKind } }] : []),
-            ...(item.openinferenceKind ? [{ key: "openinference.span.kind", value: { stringValue: item.openinferenceKind } }] : []),
+            ...('insightKind' in item ? [{ key: "agent.insight.kind", value: { stringValue: item.insightKind } }] : []),
+            ...('openinferenceKind' in item ? [{ key: "openinference.span.kind", value: { stringValue: item.openinferenceKind } }] : []),
           ],
         })),
       }],

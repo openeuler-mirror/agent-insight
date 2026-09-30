@@ -42,7 +42,9 @@ test("Pi OTLP adapter matches first-party framework attributes before generic", 
       output: "done",
     }),
   ])
-  assert.equal(getOtelTraceAdapter(events).id, "pi-agent")
+  const adapter = getOtelTraceAdapter(events)
+  assert.ok(adapter)
+  assert.equal(adapter.id, "pi-agent")
   assert.equal(getAdapter("pi-agent").descriptor.label, "Pi Agent")
 })
 
@@ -356,12 +358,16 @@ test("Pi Skill completion snapshot is retained as one first-class Skill node", (
   const skillInteraction = interactions.find((item) => item.role === "skill")
   assert.ok(skillInteraction)
   assert.equal(skillInteraction.tool_calls?.length, 1)
-  assert.deepEqual(JSON.parse(skillInteraction.tool_calls[0].function.arguments), {
+  const skillCall = skillInteraction.tool_calls?.[0]
+  assert.ok(skillCall)
+  const skillArguments = skillCall.function?.arguments
+  assert.ok(typeof skillArguments === "string")
+  assert.deepEqual(JSON.parse(skillArguments), {
     name: "zephyr-checksum",
     version: "1.0.0",
     trigger_mode: "explicit",
   })
-  assert.equal(skillInteraction.tool_calls[0].output, "<skill>source</skill>")
+  assert.equal(skillCall.output, "<skill>source</skill>")
 
   const tree = buildAgentCallTree(interactions)
   assert.ok(tree)

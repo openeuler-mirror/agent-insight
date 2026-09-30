@@ -21,6 +21,7 @@ const {
 } = require("../scripts/agent-trace-collectors/pi-agent/lib/pi-trace-core.cjs")
 
 type CapturedEvent = {
+  sessionId: string
   eventId?: string
   kind: string
   spanId: string
@@ -170,7 +171,7 @@ function assertAcyclic(events: CapturedEvent[]) {
   for (const event of events) {
     if (event.parentSpanId) assert.ok(byId.has(event.parentSpanId), `orphan ${event.spanId}`)
     const visited = new Set<string>()
-    let cursor = event
+    let cursor: CapturedEvent | undefined = event
     while (cursor?.parentSpanId) {
       assert.equal(visited.has(cursor.spanId), false, `cycle at ${cursor.spanId}`)
       visited.add(cursor.spanId)
@@ -210,6 +211,7 @@ test("Pi collector records explicit Skill, exact native usage, Tool ownership, a
   const llmEvent = writer.events.find((event) => event.kind === "llm")
   assert.ok(skillStart)
   assert.ok(skillEvent)
+  assert.ok(skillEvent.skill)
   assert.ok(toolEvent)
   assert.ok(llmEvent)
   assert.equal(skillEvent.skill.version, "2.4.0")
@@ -263,6 +265,7 @@ test("Pi collector detects automatic Skill invocation from a loaded SKILL.md rea
   const skillEvent = writer.events.find((event) => event.kind === "skill" && event.status === "success")
   const readEvent = writer.events.find((event) => event.tool?.name === "read")
   assert.ok(skillEvent)
+  assert.ok(skillEvent.skill)
   assert.ok(readEvent)
   assert.equal(skillEvent.skill.triggerMode, "automatic")
   assert.equal(skillEvent.skill.version, expectedHash)

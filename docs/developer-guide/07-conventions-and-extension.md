@@ -10,7 +10,8 @@
 - **OpenTelemetry** —— 框架无关的接入；新增框架的采集入口放在 `src/lib/ingest/*` 下，而不是路由里。
 
 ## Coding conventions
-- **TypeScript**：`strict: true`、`moduleResolution: bundler`、`noEmit`（由 Next 编译）。通过路径别名 **`@/* → src/*`** 导入（`tsconfig.json`）。CLI 使用单独的 `tsconfig.cli.json`。
+- **TypeScript**：`strict: true`、`moduleResolution: bundler`、`noEmit`（由 Next 编译）。根项目以 ES2020 检查 BigInt 等现有语法，并允许直接由运行器加载的 `.ts` 扩展名导入。通过路径别名 **`@/* → src/*`** 导入（`tsconfig.json`）。CLI 使用单独的 `tsconfig.cli.json`。
+- **类型验证**：`npx tsc --noEmit` 检查根项目中的应用、测试和适配器；`npx tsc --noEmit -p tsconfig.next.json` 只检查 Next 应用。检查前应按当前 `prisma/schema.prisma` 执行 `npx prisma generate`；不同 Schema 的 worktree 不应共用可写的 Prisma 生成目录，否则会出现模型或字段不存在的连锁报错。生成 Client 不等于执行数据库迁移。
 - **Lint**：ESLint 9 扁平配置（`eslint.config.mjs`、`eslint-config-next`）。运行 `npm run lint`。
 - **Comments**：项目约定是*默认不加注释*——只有当 WHY 不显而易见时（隐藏的约束或反直觉的变通）才写一行注释。不要写"它做了什么"这类注释。
 - **Don't create docs/README files**，除非被明确要求。
