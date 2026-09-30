@@ -84,7 +84,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 客户端安装承担六项核心职责：
 
-- 按所选框架生成可直接执行的 Linux curl 接入命令
+- 按所选框架生成可直接执行的 Linux curl 或 Windows PowerShell 接入命令
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
@@ -96,7 +96,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 客户端安装页面由两个主要区域组成：
 
 1. **安装命令区**
-   选择框架并复制 Linux curl 接入命令；保留 LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
+   选择框架并复制 Linux curl 或 Windows PowerShell 接入命令；保留 LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
 2. **凭证与接入信息区**
    展示当前 API Key、账号信息、平台地址与所选框架的上报路径。
 
@@ -160,6 +160,7 @@ systemd manager 可用；普通用户若遇到历史系统级服务，会先退�
 安装命令区通常包含：
 
 - **Linux curl 命令**：在 Agent 所在 Linux 主机的 Bash / Zsh 终端执行
+- **Windows PowerShell 命令**：在 Windows Agent 主机的 PowerShell 中执行
 - **Langfuse Python SDK 环境变量**：用于已经接入 Langfuse Python SDK 或 LangChain CallbackHandler 的项目
 - **复制按钮**：用于复制已包含当前账号 API Key 的接入命令
 - **说明提示区**：提醒身份验证完成后再复制命令，平台地址或服务变化后应重新获取命令
@@ -191,7 +192,7 @@ Langfuse/LangGraph 不在上方框架选择器中，其环境变量配置区单�
 
 | 配置项 | 说明 |
 | --- | --- |
-| **安装命令** | 按所选框架生成的 Linux curl 接入脚本入口，已包含当前账号 API Key。 |
+| **安装命令** | 按所选框架和目标系统生成的 Linux curl 或 Windows PowerShell 接入脚本入口，已包含当前账号 API Key。 |
 | **API Key** | 当前账号的接入凭证，用于绑定上报身份与数据归属。 |
 | **平台地址** | Agent Insight 服务端地址，客户端通过该地址上报执行数据。 |
 | **当前上报通道** | 根据已选框架显示 OTLP Logs、OTLP Traces 或 JSON 会话快照入口；同一入口会自动去重。 |
@@ -219,8 +220,8 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 1. 在 [Agent 概览](../agent-management) 中完成目标 Agent 登记。
 2. 进入 **客户端安装** 页面。
 3. 在安装命令区选择要接入的框架。
-4. 复制 **Linux** 一键接入命令。
-5. 在目标 Agent 所在 Linux 运行环境执行该命令。
+4. 根据目标 Agent 的系统复制 **Linux** 或 **Windows (PowerShell)** 一键接入命令。
+5. 在目标 Agent 主机对应的 Bash / Zsh 或 PowerShell 环境执行该命令。
 6. 脚本写入当前账号 API Key；选择 OpenCode 时同时安装普通观测插件和 Agent RAS。
 7. 触发一次最小执行。
 8. 在 [链路追踪](../observability/view-traces) 中确认首条 Trace 是否生成。
