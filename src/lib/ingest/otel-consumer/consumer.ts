@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { guardAttribution } from '@/lib/ingest/claude-otel/attribution-guard';
 import { currentSpoolDay, readNewLinesSince, type SpoolCursor } from '@/lib/ingest/claude-otel/spool';
 import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
@@ -8,7 +9,8 @@ import {
   seedToEof,
   toCheckpointRelPath,
 } from './checkpoint';
-import { compactProcessedSpoolFiles } from './retention';
+import { acquireSpoolUse, readSpoolState, recordSpoolPersistence } from '@/lib/runtime-cleanup/spool-state';
+import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 import { listSources, type SpoolAggregationResult, type SpoolSource } from './sources';
 import { acquireConsumerProcessLocks, type ConsumerProcessLocks } from './process-lock';
 
@@ -520,7 +522,17 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
     if (session.parked) break;
     const source = state.sourcesById.get(sourceId);
     if (!source) continue;
+    const spoolDir = source.spoolDir();
+    const release = acquireSpoolUse(spoolDir);
+    if (!release) continue;
     try {
+      const receipt = readSpoolState(spoolDir, session.sessionId);
+      if (receipt?.purgedAt) {
+        markSourceDone(state, session.sessionId, sourceId);
+        session.sourceIds.delete(sourceId);
+        session.lastAggregate = undefined;
+        continue;
+      }
       const result = aggregateForSession(state, session, source);
       if (result.disposition === 'retry-later') {
         session.failures = 0;
@@ -540,22 +552,35 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
         continue;
       }
 
+      const record = result.record;
+      if (!record) throw new Error('Telemetry aggregation returned no execution record');
+      const recordPersistence = () => {
+        if (!receipt?.generation) return;
+        const lifecycle = getTraceLifecycle(record.trace_completed_at, record);
+        recordSpoolPersistence(spoolDir, session.sessionId, receipt.generation, {
+          taskId: record.task_id,
+          completedAt: lifecycle.traceCompletedAt ? Date.parse(lifecycle.traceCompletedAt) : undefined,
+          failed: lifecycle.traceStatus === 'failed',
+        });
+      };
       if (mode === 'fast') {
         const saved = await state.saveExecution({
-          ...result.record,
+          ...record,
           skip_evaluation: source.defaultSkipEvaluation(),
         }, { receivedAt: new Date(session.lastDataAt) });
         if (!saved.success) throw new Error('execution persistence returned success=false');
+        recordPersistence();
         session.failures = 0;
         markSourceDone(state, session.sessionId, sourceId);
       } else {
         const saved = await state.saveExecution({
-          ...result.record,
+          ...record,
           skip_evaluation: false,
           skip_internal_judgment: true,
           force_judgment: true,
         }, { receivedAt: new Date(session.lastDataAt) });
         if (!saved.success) throw new Error('execution persistence returned success=false');
+        recordPersistence();
         session.failures = 0;
         // 存量积压场景下 fast 和 evaluated 会同时到点，dispatcher 直接跑 evaluated 跳过 fast，
         // 所以这里必须也推进文件归属簿记 —— 否则 pendingFiles 永远不减、checkpoint 游标永不推进，
@@ -567,6 +592,8 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
     } catch (err) {
       handleSessionFailure(state, session.sessionId, err);
       if (session.parked) break;
+    } finally {
+      release();
     }
   }
 }
@@ -676,21 +703,6 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
           scheduleSession(state, sessionId, source, fileKey, resetTimers);
         }
       }
-      try {
-        const retention = compactProcessedSpoolFiles(spoolDir, files, state.retentionDays);
-        if (retention.archived > 0) {
-          state.log('[OTelConsumer] retention archived processed spool files', {
-            source: source.id,
-            archived: retention.archived,
-          });
-          state.fileLists.delete(source.id);
-        }
-      } catch (err) {
-        state.warn('[OTelConsumer] retention failed', {
-          source: source.id,
-          message: (err as Error)?.message || String(err),
-        });
-      }
     }
   } finally {
     state.ticking = false;
@@ -771,4 +783,35 @@ export function stopOtelSpoolConsumer(): void {
 
 export function getOtelSpoolConsumerForTest(): OtelSpoolConsumerState | undefined {
   return globalThis.__otelSpoolConsumer;
+}
+
+export function forgetOtelSpoolFile(spoolDir: string, file: string): void {
+  const state = globalThis.__otelSpoolConsumer;
+  if (!state) return;
+  const canonical = (directory: string) => {
+    try { return fs.realpathSync(directory); } catch { return path.resolve(directory); }
+  };
+  const root = canonical(spoolDir);
+  const canonicalFile = path.join(canonical(path.dirname(file)), path.basename(file));
+  for (const source of state.sources) {
+    if (canonical(source.spoolDir()) !== root) continue;
+    state.fileLists.delete(source.id);
+    const fileKey = `${source.id}:${toCheckpointRelPath(root, canonicalFile)}`;
+    const pending = state.pendingFiles.get(fileKey);
+    if (!pending) continue;
+    state.pendingFiles.delete(fileKey);
+    for (const sessionId of pending.sessions) {
+      const session = state.sessions.get(sessionId);
+      if (!session) continue;
+      session.pendingFileKeys.delete(fileKey);
+      session.lastAggregate = undefined;
+      if (session.pendingFileKeys.size === 0) {
+        session.fastDueAt = undefined;
+        session.evaluatedDueAt = undefined;
+        session.maxDueAt = undefined;
+        session.parked = false;
+        evictIdleSession(state, session);
+      }
+    }
+  }
 }

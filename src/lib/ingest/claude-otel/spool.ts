@@ -7,6 +7,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { ClaudeOtelAppendResult, ClaudeOtelEvent, OtelTraceAppendResult, OtelTraceEvent } from './types';
 import { getExistingInsightDir } from '@/lib/agent-insight-paths';
 import { visitLegacyEventsForSession } from './legacy-session-index';
+import { acquireSpoolUse, noteSpoolReceived } from '@/lib/runtime-cleanup/spool-state';
 
 export type SpoolCursor = {
   bytes: number;
@@ -71,7 +72,7 @@ function dayString(date = new Date()): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function safeSessionPathSegment(sessionId: string): string {
+export function safeSessionPathSegment(sessionId: string): string {
   const raw = String(sessionId || 'unknown').trim() || 'unknown';
   const sanitized = raw
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
@@ -93,6 +94,19 @@ function appendJsonl(file: string, rows: unknown[]): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const text = rows.map((row) => JSON.stringify(row)).join('\n') + '\n';
   fs.appendFileSync(file, text, 'utf8');
+}
+
+function appendSessionRows(spoolDir: string, fileName: string, sessionId: string, rows: unknown[]): void {
+  if (!rows.length) return;
+  fs.mkdirSync(spoolDir, { recursive: true });
+  const release = acquireSpoolUse(spoolDir);
+  if (!release) throw new Error('Telemetry spool maintenance in progress; retry this batch');
+  try {
+    appendJsonl(sessionSpoolFile(spoolDir, fileName, sessionId), rows);
+    noteSpoolReceived(spoolDir, sessionId);
+  } finally {
+    release();
+  }
 }
 
 function positiveEnvNumber(name: string, fallback: number): number {
@@ -392,7 +406,7 @@ export function appendJsonlBySession<T extends { sessionId?: string }>(spoolDir:
     }
   }
   for (const [sessionId, rows] of groups) {
-    appendJsonl(sessionSpoolFile(spoolDir, fileName, sessionId), rows);
+    appendSessionRows(spoolDir, fileName, sessionId, rows);
   }
 }
 
@@ -411,7 +425,7 @@ function collectJsonlSpoolFiles(dir: string, fileName: string | undefined, out: 
     return;
   }
   for (const entry of entries) {
-    if (entry.isDirectory() && entry.name === TRACE_DEDUPE_INDEX_DIR) continue;
+    if (entry.isDirectory() && (entry.name === TRACE_DEDUPE_INDEX_DIR || entry.name === '.retention-v1')) continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       collectJsonlSpoolFiles(fullPath, fileName, out);
@@ -425,7 +439,7 @@ export function listJsonlSpoolFiles(spoolDir: string, fileName?: string): string
   const out: string[] = [];
   try {
     const days = fs.readdirSync(spoolDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name !== TRACE_DEDUPE_INDEX_DIR);
+      .filter((entry) => entry.isDirectory() && entry.name !== TRACE_DEDUPE_INDEX_DIR && entry.name !== '.retention-v1');
     for (const day of days) {
       collectJsonlSpoolFiles(path.join(spoolDir, day.name), fileName, out);
     }
@@ -457,66 +471,74 @@ export function appendOtelTraceEvents(events: OtelTraceEvent[], spoolDir = getOt
   let rejectedEvents = 0;
   for (const [sessionId, rows] of groups) {
     if (!sessionId.startsWith('goal-plus:')) {
-      appendJsonl(sessionSpoolFile(spoolDir, 'traces.jsonl', sessionId), rows);
+      appendSessionRows(spoolDir, 'traces.jsonl', sessionId, rows);
       for (const row of rows) appended.push(row);
       dirtySessionIds.push(sessionId);
       continue;
     }
-    withTraceDedupeLock(spoolDir, sessionId, () => {
-      const indexFile = traceDedupeIndexFile(spoolDir, sessionId);
-      const sources = traceDedupeSources(spoolDir, sessionId);
-      let index = readTraceDedupeIndex(indexFile);
-      if (!index || !sameTraceDedupeSources(index.sources, sources)) {
-        index = rebuildTraceDedupeIndex(spoolDir, sessionId, sources);
-      }
+    fs.mkdirSync(spoolDir, { recursive: true });
+    const release = acquireSpoolUse(spoolDir);
+    if (!release) throw new Error('Telemetry spool maintenance in progress; retry this batch');
+    try {
+      withTraceDedupeLock(spoolDir, sessionId, () => {
+        const indexFile = traceDedupeIndexFile(spoolDir, sessionId);
+        const sources = traceDedupeSources(spoolDir, sessionId);
+        let index = readTraceDedupeIndex(indexFile);
+        if (!index || !sameTraceDedupeSources(index.sources, sources)) {
+          index = rebuildTraceDedupeIndex(spoolDir, sessionId, sources);
+        }
 
-      const maxIdentities = positiveEnvNumber(
-        'AGENT_INSIGHT_OTEL_DEDUPE_MAX_IDENTITIES',
-        DEFAULT_TRACE_DEDUPE_MAX_IDENTITIES,
-      );
-      let identityCount = Object.keys(index.hashes).length;
-      const accepted: OtelTraceEvent[] = [];
-      let rejectedForIdentityLimit = 0;
-      for (const event of rows) {
-        const identity = traceDedupeIdentity(event);
-        if (!identity) {
-          accepted.push(event);
-          continue;
-        }
-        const semanticHash = traceSemanticHash(event);
-        if (index.hashes[identity] === semanticHash) {
-          deduplicatedEvents += 1;
-          continue;
-        }
-        if (!(identity in index.hashes)) {
-          if (identityCount >= maxIdentities) {
-            index.overflow = true;
-            rejectedForIdentityLimit += 1;
-            rejectedEvents += 1;
+        const maxIdentities = positiveEnvNumber(
+          'AGENT_INSIGHT_OTEL_DEDUPE_MAX_IDENTITIES',
+          DEFAULT_TRACE_DEDUPE_MAX_IDENTITIES,
+        );
+        let identityCount = Object.keys(index.hashes).length;
+        const accepted: OtelTraceEvent[] = [];
+        let rejectedForIdentityLimit = 0;
+        for (const event of rows) {
+          const identity = traceDedupeIdentity(event);
+          if (!identity) {
+            accepted.push(event);
             continue;
           }
-          identityCount += 1;
+          const semanticHash = traceSemanticHash(event);
+          if (index.hashes[identity] === semanticHash) {
+            deduplicatedEvents += 1;
+            continue;
+          }
+          if (!(identity in index.hashes)) {
+            if (identityCount >= maxIdentities) {
+              index.overflow = true;
+              rejectedForIdentityLimit += 1;
+              rejectedEvents += 1;
+              continue;
+            }
+            identityCount += 1;
+          }
+          accepted.push(event);
+          index.hashes[identity] = semanticHash;
         }
-        accepted.push(event);
-        index.hashes[identity] = semanticHash;
-      }
 
-      if (rejectedForIdentityLimit > 0) {
-        console.warn('[OTel] Rejected trace events after session identity limit', {
-          sessionId,
-          rejectedEvents: rejectedForIdentityLimit,
-          maximum: maxIdentities,
-        });
-      }
+        if (rejectedForIdentityLimit > 0) {
+          console.warn('[OTel] Rejected trace events after session identity limit', {
+            sessionId,
+            rejectedEvents: rejectedForIdentityLimit,
+            maximum: maxIdentities,
+          });
+        }
 
-      if (accepted.length > 0) {
-        appendJsonl(sessionSpoolFile(spoolDir, 'traces.jsonl', sessionId), accepted);
-        for (const event of accepted) appended.push(event);
-        dirtySessionIds.push(sessionId);
-      }
-      index.sources = traceDedupeSources(spoolDir, sessionId);
-      persistTraceDedupeIndex(indexFile, index);
-    });
+        if (accepted.length > 0) {
+          appendJsonl(sessionSpoolFile(spoolDir, 'traces.jsonl', sessionId), accepted);
+          noteSpoolReceived(spoolDir, sessionId);
+          for (const event of accepted) appended.push(event);
+          dirtySessionIds.push(sessionId);
+        }
+        index.sources = traceDedupeSources(spoolDir, sessionId);
+        persistTraceDedupeIndex(indexFile, index);
+      });
+    } finally {
+      release();
+    }
   }
   return { events: appended, dirtySessionIds, deduplicatedEvents, rejectedEvents };
 }

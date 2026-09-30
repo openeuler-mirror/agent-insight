@@ -259,6 +259,7 @@ erDiagram
 直接来自 `detected_concerns` 与代码：
 
 - **可观测性** `[确证]`：OpenTelemetry SDK + Langfuse；`src/instrumentation.ts`（运行时门控，仅 Node.js runtime 加载）→ `src/instrumentation-node.ts`（注册系统 agent `ensureAllSystemAgents`、opencode 子进程退出清理、拉起 uploader 处理待上报 spool）。OTel 接入端点 `src/app/api/ingest/otel/v1/{traces,logs,metrics}`，并在根路径 `/v1/*` rewrite 直收 collector 上报。
+- **运行缓存清理**：Node.js instrumentation 非阻塞注册 `src/lib/runtime-cleanup/index.ts` 的进程级单例。注册只安排计时器；默认延迟 60 秒后才动态加载日志、临时目录和接收缓存扫描器。异步生成器按分类和 spool 来源轮询，每片默认最多 100 步 / 50 ms / 1 MiB 读取，片间休息 5 秒，完整扫描后每小时重跑；单次 I/O 不能由该预算强制中断。异常按分类隔离，汇总只在整轮结束时输出。清理范围不包含数据库业务表，保留规则与运维开关见[用户 FAQ](../user-guide/faq.md#服务端自动清理)。
 - **数据持久化** `[确证]`：见 §6，`DatabaseAdapter` 抽象 + `data-service.ts` 高层服务。
 - **认证 / 多用户** `[确证]`：`User` 表（`apiKey` 唯一），`src/lib/auth/*`，按 `user` 字段做行级隔离；API Key 用于客户端接入鉴权。IDaaS 模式仍以 UUID 写入 `username`，可空唯一的 `externalAccount` 只保存人员账号别名，供界面展示和运维反查；standalone 模式仍为任意邮箱登录。
 - **向后兼容** `[确证]`：`next.config.ts` 维护一大批 `legacyAliases`，把旧扁平 `/api/*` 重写到分层后的 `ingest/observe/eval/*`，保证外部客户端不断。
