@@ -74,7 +74,7 @@ export async function GET(req: Request) {
     }
     const attachTarget = (
       target: (typeof faultInjectionTargets)[number],
-      capability: 'generic' | 'fault-injection',
+      capability: 'generic' | 'fault-injection' | 'benchmark',
     ) => {
       const name = canonicalExperimentAgentName(target.platform, target.agent);
       if (!name || name === 'ras-judge') return;
@@ -112,6 +112,24 @@ export async function GET(req: Request) {
     }
     for (const target of faultInjectionTargets) {
       attachTarget(target, 'fault-injection');
+    }
+    for (const target of benchmarkTargets) {
+      if (!target.ready) continue;
+      for (const agent of target.agents) {
+        attachTarget({
+          workerId: target.clientId,
+          host: target.hostname || target.name || target.clientId,
+          hostname: target.hostname,
+          platform: target.platform,
+          agent,
+          agentLabel: agent,
+          models: [
+            { id: '', label: '平台默认' },
+            ...target.models.map((id) => ({ id, label: id })),
+          ],
+          lastSeenAt: target.lastSeenAt.toISOString(),
+        }, 'benchmark');
+      }
     }
     for (const candidate of byName.values()) {
       for (const target of candidate.targets) {

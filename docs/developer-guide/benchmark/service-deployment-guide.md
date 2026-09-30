@@ -356,6 +356,8 @@ Git 根地址会拼接为 `根地址/owner/repo.git`。例如 Flask 仓库对应
 
 ### 7.2 接入 pi-mcts 执行器
 
+实验候选接口会独立合并已就绪的 Benchmark 执行目标，因此仅声明 `runBenchmarkCase` 的 `pi-mcts` 可直接出现在 Agent 列表；它不依赖普通执行能力或历史 Trace。同一客户端、平台和 Agent 的目标合并后保留各自的执行能力标记。
+
 已有 MCTS/xGovernor 服务的使用方可直接按 [MCTS 接入指南](../../user-guide/observability/mcts-xgovernor.md#接入前确认) 完成采集器安装、连接配置和客户端绑定，无需重新部署已有服务。
 
 `pi-mcts` 只用于 SWE-bench Benchmark 实验。按 MCTS README 完成一次性安装：**实际执行 Case 的客户端机器**准备 MCTS、Python 3.11+ 与 `datasets`、Reliability Client 和已启用的 `mcts-xgovernor-proxy` Trace 代理；**xGovernor 主机**准备 Pi CLI、Pi 桥接扩展和 Pi/E2B worker，并确保 E2B 的 SWE-bench 模板可用。两者可以分机部署，客户端不探测本地 Pi CLI。默认使用客户端 MCTS 仓库下的 `.venv/bin/python`；虚拟环境放在别处时可通过本机配置指定解释器。客户端不依赖交互终端的 venv 激活状态。MCTS 版本需支持 `--output-dir`，无需修改 MCTS 源码。执行机运行 Reliability Client 的账户必须能读取 MCTS 仓库及 `testcases_union/config.env`，并能在 `testcases_union/output/` 下写入；xGovernor 与 Trace 上报地址必须可达。

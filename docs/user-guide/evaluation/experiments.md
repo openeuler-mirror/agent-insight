@@ -137,6 +137,8 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 
 #### Benchmark 实验
 
+在线且已就绪的 Benchmark 专用执行器会直接出现在“待执行 Agent”列表，不需要先产生历史 Trace。`pi-mcts` 不支持普通生成 Trace；选择它后需搭配 SWE-bench Benchmark 数据集。
+
 选择受控导入的 Benchmark 数据集后仍使用同一套四步向导，但必须生成新 Trace，不能选择已有 Trace 或开启监听。系统会按接入包声明自动绑定对应 Evaluator，并显示其名称、判分用途、运行方式和主指标；还可追加不依赖参考答案的普通评估器。
 
 SWE-bench 可以选择 Benchmark 专用的 `pi-mcts` 平台与 `pi-mcts` Agent。模型选择“平台默认”；MCTS 使用部署时配置的 xGovernor 模型。每个 Case 使用独立运行 ID 和输出目录，页面关联 MCTS 的根 Trace，并将最终选中的 Patch 作为 `model.patch` 提交。首次使用需由管理员在执行机配置 MCTS、Trace 代理及客户端，在 xGovernor 主机准备 Pi 和 E2B；两者可以分机部署，步骤见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。采集通过 MCTS xGovernor 透明代理完成。平台执行使用 MCTS 默认搜索参数，README 的快速验证参数只用于联调。MCTS 会执行自己的最终节点官测，平台收到 Patch 后仍按 Benchmark 配置执行平台评测；请按实际运行时间提高 Agent 超时。

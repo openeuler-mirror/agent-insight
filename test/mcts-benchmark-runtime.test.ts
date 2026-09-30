@@ -7,6 +7,8 @@ import test from 'node:test'
 import { inspectBenchmarkExecutionTargets } from '../src/lib/benchmark/execution-targets'
 import { listTraceGenerationPlatforms } from '../src/lib/engine/experiment/execution-targets'
 import { parseCapabilities } from '../src/lib/reliability/client-registry'
+import { GET as listExperimentAgents } from '../src/app/api/experiments/agents/route'
+import { prisma, prismaRaw } from '../src/lib/storage/prisma'
 
 const runtime = require('../services/executor/src/mcts-runtime.cjs')
 const { runProcess } = require('../services/executor/src/index.cjs')
@@ -263,6 +265,64 @@ test('pi-mcts appears only as a ready Benchmark target', () => {
   assert.equal(targets[0].platform, 'pi-mcts')
   assert.equal(targets[0].ready, true)
 })
+
+for (const scenario of [
+  { name: 'Benchmark-only MCTS without historical Trace', platform: 'pi-mcts', generic: false, ready: true },
+  { name: 'an unready MCTS runtime', platform: 'pi-mcts', generic: false, ready: false },
+  { name: 'a shared generic and Benchmark runtime', platform: 'opencode', generic: true, ready: true },
+]) {
+  test(`experiment Agent list handles ${scenario.name}`, async (t) => {
+    const row = {
+      clientId: 'fixture-client', user: 'fixture-user', name: 'fixture host', hostname: 'host',
+      os: 'linux', arch: 'x64', status: 'online', serviceHealth: 'healthy',
+      lastSeenAt: new Date(), unboundAt: null,
+      capabilitiesJson: JSON.stringify({
+        actions: ['RUN_BENCHMARK_CASE', ...(scenario.generic ? ['RUN_EXPERIMENT_CASE'] : [])],
+        platforms: [{
+          id: scenario.platform, agents: [scenario.platform], models: [],
+          runBenchmarkCase: { version: 1, returnsTraceId: true },
+          ...(scenario.generic ? { runExperimentCase: { version: 2, returnsTraceId: true } } : {}),
+        }],
+        components: {
+          'git-workspace/v1': { ready: true }, 'git-patch/v1': { ready: true },
+          [`agent-runtime/${scenario.platform}/v1`]: { ready: scenario.ready },
+        },
+      }),
+    }
+    const overrides = [
+      [prismaRaw.registeredAgent, 'findMany', async () => []],
+      [prisma.execution, 'groupBy', async () => []],
+      [prisma.faultInjectionWorker, 'findMany', async () => []],
+      [prisma.reliabilityClient, 'findMany', async () => [row]],
+    ] as const
+    for (const [delegate, key, implementation] of overrides) {
+      const methods = delegate as unknown as Record<string, unknown>
+      const original = methods[key]
+      methods[key] = implementation
+      t.after(() => { methods[key] = original })
+    }
+    const response = await listExperimentAgents(new Request('http://localhost/api/experiments/agents?user=fixture-user'))
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    if (!scenario.ready) {
+      assert.deepEqual(body.agents, [])
+      return
+    }
+    assert.equal(body.agents.length, 1)
+    const agent = body.agents[0]
+    assert.equal(agent.name, scenario.platform)
+    assert.equal(agent.traces, 0)
+    assert.equal(agent.targets.length, 1)
+    const target = agent.targets[0]
+    assert.equal(target.workerId, row.clientId)
+    assert.equal(target.supportsGenericTrace, scenario.generic)
+    assert.equal(target.supportsFaultInjection, false)
+    assert.equal(target.supportsBenchmark, true)
+    assert.ok(target.benchmarkKeys.includes('swe-bench'))
+    assert.equal(target.benchmarkUnavailableReason, null)
+    assert.deepEqual(target.models, [{ id: '', label: '平台默认' }])
+  })
+}
 
 test('process group cancellation sends SIGINT and lets child clean up', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcts-cancel-'))
