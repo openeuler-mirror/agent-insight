@@ -600,6 +600,8 @@ export async function GET(
         ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
         : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
           ? Number(configSnapshot.executionConcurrency) || 1 : null,
+      executionAgentOptions: experiment.scope === 'benchmark'
+        ? asRecord(configSnapshot?.runConfig)?.agentOptions || null : null,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
@@ -625,6 +627,7 @@ export async function GET(
           ? {
               workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
               platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
+              agentOptions: (configSnapshot.runConfig as Record<string, unknown>).agentOptions || null,
               model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
               timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
             }

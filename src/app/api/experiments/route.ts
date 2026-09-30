@@ -240,6 +240,7 @@ export async function POST(req: Request) {
           runConfig: {
             platform: String(executionTarget.platform || ''),
             agent: executionAgent,
+            agentOptions: executionTarget.agentOptions,
             model: executionTarget.model ? String(executionTarget.model) : undefined,
             agentTimeoutSeconds: body.agentTimeoutSeconds == null
               ? undefined
@@ -296,6 +297,7 @@ export async function POST(req: Request) {
           runConfig: {
             platform: String(runConfig.platform || ''),
             agent: String(runConfig.agent || ''),
+            agentOptions: runConfig.agentOptions,
             model: runConfig.model ? String(runConfig.model) : undefined,
             agentTimeoutSeconds: runConfig.agentTimeoutSeconds == null
               ? undefined

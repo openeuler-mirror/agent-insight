@@ -878,7 +878,8 @@ function buildCapabilities(cfg, opts) {
     platforms = platforms.filter(platform => platform.id !== 'pi-mcts')
     platforms.push({
       id: 'pi-mcts', models: [], agents: ['pi-mcts'],
-      runBenchmarkCase: { version: 1, returnsTraceId: true },
+      runBenchmarkCase: { version: 1, returnsTraceId: true,
+        agentOptionCapabilities: mcts?.agentOptionCapabilities || [] },
       actions: ['RUN_BENCHMARK_CASE'],
     })
   }
@@ -891,6 +892,7 @@ function buildCapabilities(cfg, opts) {
   for (const platform of platforms) {
     if (platform.id === 'pi-mcts') {
       components['agent-runtime/pi-mcts/v1'] = { ready: mctsProbe.ready, ...(mctsProbe.reason ? { note: mctsProbe.reason } : {}) }
+      for (const capability of mcts?.agentOptionCapabilities || []) components[capability] = { ready: mctsProbe.ready }
       continue
     }
     const runtime = runtimeFor(platform.id)

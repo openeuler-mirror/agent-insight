@@ -50,6 +50,7 @@ export async function GET(req: Request) {
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
       benchmarkUnavailableReason: string | null;
+      agentOptionCapabilities: string[];
     };
     type Candidate = {
       name: string;
@@ -103,6 +104,7 @@ export async function GET(req: Request) {
           supportsBenchmark: false,
           benchmarkKeys: [],
           benchmarkUnavailableReason: '该执行目标未上报 Benchmark 所需能力',
+          agentOptionCapabilities: [],
         });
       }
       byName.set(name, current);
@@ -143,6 +145,9 @@ export async function GET(req: Request) {
           if (benchmark.ready && !target.benchmarkKeys.includes(benchmark.adapterKey)) {
             target.benchmarkKeys.push(benchmark.adapterKey);
           }
+          if (benchmark.ready) target.agentOptionCapabilities = Array.from(new Set([
+            ...target.agentOptionCapabilities, ...benchmark.agentOptionCapabilities,
+          ]));
         }
         target.supportsBenchmark = target.benchmarkKeys.length > 0;
         target.benchmarkUnavailableReason = target.supportsBenchmark
@@ -173,6 +178,7 @@ export async function GET(req: Request) {
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,
           benchmarkUnavailableReason: target.benchmarkUnavailableReason,
+          agentOptionCapabilities: target.agentOptionCapabilities,
         })),
       }));
 

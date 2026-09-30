@@ -156,6 +156,9 @@ test('pi-mcts runs through the proxy without a local Pi CLI, applies the selecte
     })
     assert.ok(caps.platforms.some((item: { id: string }) => item.id === 'pi-mcts'))
     assert.deepEqual(caps.components['agent-runtime/pi-mcts/v1'], { ready: true })
+    assert.deepEqual(caps.components['mcts-search-options/v1'], { ready: true })
+    assert.deepEqual(caps.platforms.find((item: { id: string }) => item.id === 'pi-mcts').runBenchmarkCase.agentOptionCapabilities,
+      ['mcts-search-options/v1'])
     assert.ok(client.benchmarkAgentPlatformsFromCapabilities(caps).includes('pi-mcts'))
     const launches: { command: string; args: string[]; options: Record<string, unknown> }[] = []
     const runner = async (command: string, args: string[], options: Record<string, unknown>) => {
@@ -299,6 +302,7 @@ test('pi-mcts appears only as a ready Benchmark target', () => {
 for (const scenario of [
   { name: 'Benchmark-only MCTS without historical Trace', platform: 'pi-mcts', generic: false, ready: true },
   { name: 'MCTS with historical coordinator Trace', platform: 'pi-mcts', generic: false, ready: true, historical: true },
+  { name: 'xiao MCTS with shared search parameters', platform: 'xiao-mcts', generic: false, ready: true, searchOptions: true },
   { name: 'an unready MCTS runtime', platform: 'pi-mcts', generic: false, ready: false },
   { name: 'a shared generic and Benchmark runtime', platform: 'opencode', generic: true, ready: true },
 ]) {
@@ -311,12 +315,14 @@ for (const scenario of [
         actions: ['RUN_BENCHMARK_CASE', ...(scenario.generic ? ['RUN_EXPERIMENT_CASE'] : [])],
         platforms: [{
           id: scenario.platform, agents: [scenario.platform], models: [],
-          runBenchmarkCase: { version: 1, returnsTraceId: true },
+          runBenchmarkCase: { version: 1, returnsTraceId: true,
+            agentOptionCapabilities: 'searchOptions' in scenario ? ['mcts-search-options/v1'] : [] },
           ...(scenario.generic ? { runExperimentCase: { version: 2, returnsTraceId: true } } : {}),
         }],
         components: {
           'git-workspace/v1': { ready: true }, 'git-patch/v1': { ready: true },
           [`agent-runtime/${scenario.platform}/v1`]: { ready: scenario.ready },
+          'mcts-search-options/v1': { ready: true },
         },
       }),
     }
@@ -341,7 +347,7 @@ for (const scenario of [
     }
     assert.equal(body.agents.length, 1)
     const agent = body.agents[0]
-    assert.equal(agent.name, scenario.platform === 'pi-mcts' ? 'mcts-coordinator' : scenario.platform)
+    assert.equal(agent.name, ['pi-mcts', 'xiao-mcts'].includes(scenario.platform) ? 'mcts-coordinator' : scenario.platform)
     assert.equal(agent.traces, 'historical' in scenario ? 3 : 0)
     assert.equal(agent.targets.length, 1)
     const target = agent.targets[0]
@@ -353,7 +359,30 @@ for (const scenario of [
     assert.equal(target.supportsBenchmark, true)
     assert.ok(target.benchmarkKeys.includes('swe-bench'))
     assert.equal(target.benchmarkUnavailableReason, null)
+    assert.deepEqual(target.agentOptionCapabilities, 'searchOptions' in scenario ? ['mcts-search-options/v1'] : [])
     assert.deepEqual(target.models, [{ id: '', label: '平台默认' }])
+  })
+}
+
+for (const platform of ['pi-mcts', 'xiao-mcts']) {
+  test(`${platform} maps shared MCTS options to its runtime and keeps zero token fuse`, async () => {
+    const f = fixture()
+    const options = { maxIters: 1, branching: 1, maxTurnsInit: 20, maxTurnsStep: 10,
+      maxTurnsAuthor: 20, maxTurnsAuthorStep: 10, tokenFuseLimit: 0 }
+    try {
+      await assert.rejects(runtime.runMctsBenchmarkCase(f.config, { ...f.payload, platform, agent: platform, agentOptions: { mcts: options } },
+        async (_command: string, args: string[]) => {
+          assert.equal(args[args.indexOf('--runtime') + 1], platform === 'pi-mcts' ? 'pi' : 'xiaoo')
+          assert.deepEqual(args.slice(-14), ['--max-iters', '1', '--branching', '1', '--max-turns-init', '20',
+            '--max-turns-step', '10', '--max-turns-author', '20', '--max-turns-author-step', '10', '--token-fuse-limit', '0'])
+          f.writeTrace()
+          throw new Error('fixture interruption')
+        }), (error: { runFacts: { agentOptions: unknown; mctsRuntime: string } }) => {
+        assert.deepEqual(error.runFacts.agentOptions, { mcts: options })
+        assert.equal(error.runFacts.mctsRuntime, platform === 'pi-mcts' ? 'pi' : 'xiaoo')
+        return true
+      })
+    } finally { f.close() }
   })
 }
 

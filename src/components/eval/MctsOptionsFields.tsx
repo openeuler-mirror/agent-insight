@@ -1,0 +1,28 @@
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { MCTS_OPTION_FIELDS, MCTS_QUICK_OPTIONS, mctsOptionsToInputs, type MctsOptionInputs } from '@/lib/engine/experiment/mcts-options'
+
+export function MctsOptionsFields({ value, error, onChange }: {
+  value: MctsOptionInputs
+  error: string | null
+  onChange: (value: MctsOptionInputs) => void
+}) {
+  return <section className="grid gap-3 md:col-span-2" aria-label="MCTS 搜索参数">
+    <div className="flex flex-wrap items-center gap-2">
+      <h3 className="text-sm font-semibold">MCTS 搜索参数</h3>
+      <Button type="button" variant="outline" size="sm" onClick={() => onChange(mctsOptionsToInputs({ mcts: MCTS_QUICK_OPTIONS }))}>填入联调参数</Button>
+      <Button type="button" variant="ghost" size="sm" onClick={() => onChange({})}>恢复默认</Button>
+    </div>
+    <p className="text-xs text-foreground-muted">留空沿用执行机的 MCTS 配置。Token 熔断阈值为 0 时关闭熔断；Agent 超时独立生效。</p>
+    <div className="grid gap-3 sm:grid-cols-2">
+      {MCTS_OPTION_FIELDS.map(field => <label key={field.key} className="grid gap-1 text-xs">
+        {field.label}
+        <Input className="border-card-border placeholder:text-foreground-muted focus-visible:border-primary focus-visible:ring-primary/20"
+          type="number" min={field.min} step={1} aria-label={field.label}
+          placeholder="沿用 MCTS 配置" value={value[field.key] ?? ''}
+          onChange={event => onChange({ ...value, [field.key]: event.target.value })} />
+      </label>)}
+    </div>
+    {error && <p className="text-sm text-error" role="alert">{error}</p>}
+  </section>
+}

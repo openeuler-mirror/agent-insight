@@ -1,6 +1,7 @@
 import type { ReliabilityClient } from '@prisma/client'
 
-import type { BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
+import { normalizeBenchmarkAgentOptions, type BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
+import { MCTS_SEARCH_OPTIONS_CAPABILITY } from '../../../services/executor/src/mcts-options.cjs'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import {
   deriveServiceHealth,
@@ -20,6 +21,7 @@ export type BenchmarkExecutionTarget = {
   platform: string
   agents: string[]
   models: string[]
+  agentOptionCapabilities: string[]
   status: ClientStatus
   serviceHealth: ServiceHealth
   ready: boolean
@@ -79,6 +81,8 @@ export function inspectBenchmarkExecutionTargets(
       platform: platform.id,
       agents,
       models: [...new Set(platform.models || [])],
+      agentOptionCapabilities: (platform.runBenchmarkCase?.agentOptionCapabilities || [])
+        .filter(capability => componentReady(capabilities.components?.[capability])),
       status,
       serviceHealth,
       ready: unavailableReasons.length === 0,
@@ -104,7 +108,7 @@ export async function listBenchmarkExecutionTargets(
 export function assertBenchmarkExecutionTarget(
   client: ReliabilityClient,
   manifest: BenchmarkManifest,
-  input: { platform: string; agent: string },
+  input: { platform: string; agent: string; agentOptions?: unknown },
 ): BenchmarkExecutionTarget {
   const target = inspectBenchmarkExecutionTargets(client, manifest).find(item => (
     item.platform === input.platform && item.agents.includes(input.agent)
@@ -131,6 +135,10 @@ export function assertBenchmarkExecutionTarget(
       target.unavailableReasons.join('；') || '执行客户端当前不可用',
       409,
     )
+  }
+  const options = normalizeBenchmarkAgentOptions(input.agentOptions)
+  if (options?.mcts && !target.agentOptionCapabilities.includes(MCTS_SEARCH_OPTIONS_CAPABILITY)) {
+    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '所选客户端不支持 MCTS 搜索参数，请升级客户端或恢复默认参数', 409)
   }
   return target
 }

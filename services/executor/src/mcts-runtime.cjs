@@ -5,6 +5,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 const { BenchmarkExecutorError, runProcess } = require('./index.cjs')
+const { MCTS_SEARCH_OPTIONS_CAPABILITY, MCTS_RUNTIMES, normalizeAgentOptions, mctsOptionArgs } = require('./mcts-options.cjs')
 
 const RUN_ID = /^erun_[0-9a-f]{32}$/
 const INSTANCE_ID = /^[A-Za-z0-9_.-]{1,200}$/
@@ -88,8 +89,9 @@ function validateMctsTask(payload) {
   const repo = String(publicCase?.repo || '')
   const baseCommit = String(publicCase?.baseCommit || '')
   const expectedRepository = `https://github.com/${repo}.git`
-  if (payload.benchmarkKey !== 'swe-bench' || payload.platform !== 'pi-mcts' || payload.agent !== 'pi-mcts') {
-    throw new BenchmarkExecutorError('MCTS_TASK_UNSUPPORTED', 'MCTS 仅支持 SWE-bench 的 pi-mcts Agent')
+  const runtime = Object.hasOwn(MCTS_RUNTIMES, payload.platform) ? MCTS_RUNTIMES[payload.platform] : null
+  if (payload.benchmarkKey !== 'swe-bench' || !runtime || payload.agent !== payload.platform) {
+    throw new BenchmarkExecutorError('MCTS_TASK_UNSUPPORTED', 'MCTS 仅支持 SWE-bench 的 MCTS 执行目标')
   }
   if (!RUN_ID.test(runId) || !INSTANCE_ID.test(instanceId)) {
     throw new BenchmarkExecutorError('MCTS_TASK_INVALID', 'MCTS 运行 ID 或 SWE-bench Case ID 不合法')
@@ -100,11 +102,14 @@ function validateMctsTask(payload) {
   if (payload.workspace?.repository !== expectedRepository || payload.workspace?.revision !== baseCommit) {
     throw new BenchmarkExecutorError('MCTS_TASK_MISMATCH', 'SWE-bench Case 与 Git 工作区版本不一致')
   }
-  return { runId, instanceId }
+  let agentOptions
+  try { agentOptions = normalizeAgentOptions(payload.agentOptions) }
+  catch (error) { throw new BenchmarkExecutorError('AGENT_OPTIONS_INVALID', error.message) }
+  return { runId, instanceId, runtime, agentOptions }
 }
 
 async function runMctsBenchmarkCase(config, payload, processRunner = runProcess) {
-  const { runId, instanceId } = validateMctsTask(payload)
+  const { runId, instanceId, runtime, agentOptions } = validateMctsTask(payload)
   const readiness = probeMctsBenchmarkRuntime(config)
   if (!readiness.ready) throw new BenchmarkExecutorError('MCTS_RUNTIME_UNAVAILABLE', readiness.reason, 503)
   const paths = mctsPaths(config)
@@ -131,8 +136,9 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
     await processRunner(process.execPath, [
       paths.traceLauncher, '--strict', '--config', path.join(path.dirname(paths.traceLauncher), 'config.json'),
       '--', 'bash', paths.entrypoint,
-      '--mode', 'sweverified', '--runtime', 'pi', '--testbench', 'sweverified', '--instance-id', instanceId,
+      '--mode', 'sweverified', '--runtime', runtime, '--testbench', 'sweverified', '--instance-id', instanceId,
       '--split', 'test', '--output-dir', runId,
+      ...mctsOptionArgs(agentOptions),
     ], {
       cwd: paths.repoDir,
       env,
@@ -160,14 +166,17 @@ async function runMctsBenchmarkCase(config, payload, processRunner = runProcess)
     await processRunner('git', ['apply', '--binary', patchPath], {
       cwd: payload.cwd, signal: payload.signal, errorCode: 'MCTS_PATCH_INVALID',
     })
-    return { traceId: await mctsTraceId(observerHome), exitCode: 0, timedOut: false }
+    return { traceId: await mctsTraceId(observerHome), exitCode: 0, timedOut: false,
+      mctsRuntime: runtime, ...(agentOptions ? { agentOptions } : {}) }
   } catch (error) {
     if (error && typeof error === 'object') {
       const traceId = await mctsTraceId(observerHome).catch(() => null)
-      if (traceId) error.runFacts = { traceId }
+      error.runFacts = { ...(traceId ? { traceId } : {}), mctsRuntime: runtime,
+        ...(agentOptions ? { agentOptions } : {}) }
     }
     throw error
   }
 }
 
-module.exports = { mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask }
+module.exports = { mctsTraceId, probeMctsBenchmarkRuntime, runMctsBenchmarkCase, validateMctsTask,
+  agentOptionCapabilities: [MCTS_SEARCH_OPTIONS_CAPABILITY] }

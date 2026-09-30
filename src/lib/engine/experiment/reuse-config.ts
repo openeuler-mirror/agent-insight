@@ -73,6 +73,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
       runConfig: {
         platform: String(runConfig.platform || ''),
         agent: String(runConfig.agent || source.agentName),
+        agentOptions: runConfig.agentOptions,
         model: typeof runConfig.model === 'string' ? runConfig.model : undefined,
         agentTimeoutSeconds: Number(runConfig.timeoutSeconds) || undefined,
         executionConcurrency: Number(runConfig.executionConcurrency) || 1,

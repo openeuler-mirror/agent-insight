@@ -9,6 +9,8 @@ import { ChevronDown, Plus, Search, Trash2, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
+import { MctsOptionsFields } from '@/components/eval/MctsOptionsFields';
+import { mctsOptionsState, mctsOptionsToInputs, summarizeMctsOptions, type MctsOptionInputs } from '@/lib/engine/experiment/mcts-options';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -78,6 +80,7 @@ interface AgentTargetOption {
   supportsBenchmark: boolean;
   benchmarkKeys: string[];
   benchmarkUnavailableReason: string | null;
+  agentOptionCapabilities?: string[];
 }
 
 interface AgentOption {
@@ -525,6 +528,8 @@ export function ExperimentWizard({
     String(DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS),
   );
   const [selectedTargetKey, setSelectedTargetKey] = useState('');
+  const [mctsInputs, setMctsInputs] = useState<MctsOptionInputs>({});
+  const [mctsOptionsPlatform, setMctsOptionsPlatform] = useState('');
   const [faultModeLabels, setFaultModeLabels] = useState<Map<string, string>>(() => new Map());
 
   // ② 关联 Trace
@@ -642,6 +647,8 @@ export function ExperimentWizard({
     ? `${selectedTarget.workerId}::${selectedTarget.platform}`
     : '';
   const generateAvailable = Boolean(selectedDataset && selectedTarget);
+  const mctsState = mctsOptionsState(isBenchmarkDataset && traceMode === 'generate' ? selectedTarget : null,
+    mctsInputs, mctsOptionsPlatform);
   const generationCases = useMemo(
     () => generationCasesFromDataset(selectedDataset),
     [selectedDataset],
@@ -843,6 +850,8 @@ export function ExperimentWizard({
       const platform = String(restoredTarget.platform || '');
       setSelectedTargetKey(workerId && platform ? `${workerId}::${platform}` : '');
       setGenModel(typeof restoredTarget.model === 'string' ? restoredTarget.model : '');
+      setMctsInputs(mctsOptionsToInputs(restoredTarget.agentOptions));
+      setMctsOptionsPlatform(platform);
       const runtime = sourceSnapshot.runtime && typeof sourceSnapshot.runtime === 'object'
         ? sourceSnapshot.runtime as Record<string, unknown> : {};
       const restoredTimeoutSeconds = skillContext
@@ -1446,6 +1455,7 @@ export function ExperimentWizard({
       if (agentTimeoutRequired && !agentTimeoutValid) {
         throw new Error('Agent 单次执行上限必须是 30～3600 之间的整数秒数');
       }
+      if (mctsState.error) throw new Error(mctsState.error);
       const casesPayload = selectedList.map((c) => ({
         executionId: traceMode === 'generate' ? undefined : c.executionId,
         taskId: c.taskId || undefined,
@@ -1572,6 +1582,7 @@ export function ExperimentWizard({
             platform: selectedTarget.platform,
             agent: selectedTarget.agent,
             model: genModel || null,
+            ...(mctsState.agentOptions ? { agentOptions: mctsState.agentOptions } : {}),
           } : undefined,
           agentTimeoutSeconds,
           ...(executionConcurrencyRequired ? { executionConcurrency } : {}),
@@ -1706,7 +1717,7 @@ export function ExperimentWizard({
     ? generateAvailable && selectedGenerated.size >= 1 && (skillPreset !== 'trigger' || Boolean(genModel))
     : (watchMode || selected.size >= 1);
   const step2Valid = expType === 'llm'
-    || (step2SelectionValid && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
+    || (step2SelectionValid && !mctsState.error && (!executionConcurrencyRequired || executionConcurrencyValid) && (!agentTimeoutRequired || agentTimeoutValid)
       && (skillPreset !== 'skill-ab' || Boolean(selectedTarget)));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -2142,6 +2153,8 @@ export function ExperimentWizard({
                     preset={skillPreset}
                     onChange={setAgentTimeoutInput}
                   />
+                  {mctsState.active && <MctsOptionsFields value={mctsInputs} error={mctsState.error}
+                    onChange={value => { setMctsInputs(value); setMctsOptionsPlatform(selectedTarget?.platform || ''); }} />}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>数据集 Case</div>
@@ -3132,6 +3145,7 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
+                  ...(mctsState.active ? [['MCTS 搜索参数', summarizeMctsOptions(mctsState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',
                     skillPreset === 'skill-ab'

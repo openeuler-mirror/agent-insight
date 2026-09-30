@@ -137,7 +137,7 @@ sudo systemctl restart agent-insight-client.service
 
 客户端会直接调用配置的 Python 解释器，保留该虚拟环境中的依赖，不需要在交互终端中激活环境。
 
-平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；搜索参数保留正式默认值。用户无需每次手动运行启动命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，同时关联本次根 Trace；平台仍会独立运行 Benchmark 评测。停止实验会向进程组发送 SIGINT，留出 30 秒让 MCTS 释放本次会话/checkpoint 并刷新 Trace。实验 Agent 超时从 MCTS 命令启动时计时，覆盖准备、搜索、MCTS 官测和退出上传；根 Trace 从首次 xGovernor 调用开始记录，显示耗时可能短于实验执行耗时。采集到分支 Trace 不代表已生成最终提交物。
+平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；搜索参数默认保留正式默认值。支持参数能力的执行主机可在实验向导中填写 MCTS 搜索参数；留空继承配置，Token 熔断阈值为 `0` 时关闭熔断。平台保存覆盖值，复用实验和重跑 Case 时沿用。Pi 与后续 xiaoO 使用相同的 MCTS 配置项。用户无需每次手动运行启动命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，同时关联本次根 Trace；平台仍会独立运行 Benchmark 评测。停止实验会向进程组发送 SIGINT，留出 30 秒让 MCTS 释放本次会话/checkpoint 并刷新 Trace。实验 Agent 超时从 MCTS 命令启动时计时，覆盖准备、搜索、MCTS 官测和退出上传；根 Trace 从首次 xGovernor 调用开始记录，显示耗时可能短于实验执行耗时。采集到分支 Trace 不代表已生成最终提交物。
 
 常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。部署与评测服务要求见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。
 

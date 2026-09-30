@@ -8,12 +8,14 @@ import {
   benchmarkDispatchDigest,
   canonicalJson,
   fingerprintJson,
+  normalizeBenchmarkAgentOptions,
 } from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
 import { refreshBenchmarkImagePreparation } from './image-preparation'
+import { assertBenchmarkExecutionTarget } from './execution-targets'
 
 const ACTIVE_RUN_STATUSES = [
   'preparing',
@@ -108,6 +110,14 @@ export async function prepareNextBenchmarkCaseRun(input: {
       binding.runConfigJson,
       'BENCHMARK_RUN_CONFIG_INVALID',
     )
+    const agentOptions = normalizeBenchmarkAgentOptions(runConfig.agentOptions)
+    if (agentOptions) {
+      const client = await prisma.reliabilityClient.findFirst({ where: {
+        clientId: run.clientId, user: run.experiment.user, unboundAt: null,
+      } })
+      if (!client) throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
+      assertBenchmarkExecutionTarget(client, adapter.manifest, { ...runConfig, agentOptions })
+    }
     const task = adapter.buildAgentTask({
       publicPayload: split.publicPayload,
       runConfig,

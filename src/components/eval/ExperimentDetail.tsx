@@ -15,6 +15,7 @@ import { EvalComments, filterComments, type EvalCommentRow } from '@/components/
 import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
+import { summarizeMctsOptions } from '@/lib/engine/experiment/mcts-options';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -52,6 +53,7 @@ interface ExperimentDetail {
   status: string;
   scope?: string;
   executionConcurrency?: number | null;
+  executionAgentOptions?: unknown;
   reusableConfig?: {
     traceSource?: string | null;
     executionTarget?: { model?: string | null } | null;
@@ -468,6 +470,7 @@ export function ExperimentDetail({
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
+              {detail.executionAgentOptions != null && <span><span style={{ color: 'var(--foreground-muted)' }}>MCTS 搜索参数：</span>{summarizeMctsOptions(detail.executionAgentOptions)}</span>}
               {hasItemProgress ? (
                 <>
                   <span><span style={{ color: 'var(--foreground-muted)' }}>执行成功：</span>{detail.executionProgress!.succeeded} 项</span>
