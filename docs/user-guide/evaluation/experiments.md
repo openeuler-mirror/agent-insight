@@ -139,6 +139,8 @@ xiaoo 实验成功但没有链路跟踪时，需区分模型鉴权和 Trace 上�
 
 选择受控导入的 Benchmark 数据集后仍使用同一套四步向导，但必须生成新 Trace，不能选择已有 Trace 或开启监听。系统会按接入包声明自动绑定对应 Evaluator，并显示其名称、判分用途、运行方式和主指标；还可追加不依赖参考答案的普通评估器。
 
+SWE-bench 可以选择 Benchmark 专用的 `pi-mcts` 平台与 `pi-mcts` Agent。模型选择“平台默认”；MCTS 使用部署时配置的 xGovernor 模型。每个 Case 使用独立运行 ID 和输出目录，页面关联 MCTS 的根 Trace，并将最终选中的 Patch 作为 `model.patch` 提交。首次使用需由管理员在执行机配置 MCTS、Trace 代理及客户端，在 xGovernor 主机准备 Pi 和 E2B；两者可以分机部署，步骤见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md#72-接入-pi-mcts-执行器)。采集通过 MCTS xGovernor 透明代理完成。平台执行使用 MCTS 默认搜索参数，README 的快速验证参数只用于联调。MCTS 会执行自己的最终节点官测，平台收到 Patch 后仍按 Benchmark 配置执行平台评测；请按实际运行时间提高 Agent 超时。
+
 Benchmark 的 Case 列、参考契约标题、主指标和评估器文案均来自接入包 Presentation。Case 详情完整展示本次运行的所有提交物与评测证据：配置命中的文件使用友好名称和顺序，未命中的新文件仍按原名显示；文本、JSON、Diff、图片和 PDF 可直接查看，其余格式可下载。提交物上传后，执行器终态尚未送达时标记“提交物已生成，等待执行器确认…”，之后显示“Benchmark 评测中…”，不再继续显示“正在生成 Trace”。归一化评分点直接按 `label/value/total/format` 展示，不从证据内容推断业务指标。重试 Case 会重新执行完整 Agent 与评测链路；单独重评 Benchmark Evaluator 时复用该 Case 最新有效提交物。Agent 执行和 Evaluator 使用各自冻结的超时。需要部署独立 Evaluator Controller 时，参见 [Benchmark 服务安装指南](../../developer-guide/benchmark/service-deployment-guide.md)。
 
 Benchmark 实验的 Case 列表按实际执行阶段显示进度：尚未轮到的 Case 显示“等待开始”，下发和 Agent 执行分别显示对应状态；执行器准备 Git 工作区时显示“正在准备 Git 工作区…”，其他工作区类型使用通用的“正在准备执行环境…”。这些状态不表示所有 Case 同时运行，也不代表 Git 拉取百分比。

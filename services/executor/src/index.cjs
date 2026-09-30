@@ -274,6 +274,9 @@ function buildExecutionPlan(task, registries) {
     agent: {
       ...task.agentConfig,
       input: task.task.instruction,
+      benchmarkKey: task.benchmark.key,
+      benchmarkPayload: task.task.benchmarkPayload,
+      workspace: task.workspace,
       correlation: {
         experimentId: task.context.experimentId,
         caseRunId: task.context.runId,
@@ -415,8 +418,8 @@ function runProcess(command, args, options = {}) {
       } catch {}
     }
     const abort = () => {
-      terminate('SIGTERM')
-      forceKillTimer = setTimeout(() => terminate('SIGKILL'), 2_000)
+      terminate(options.abortSignal || 'SIGTERM')
+      forceKillTimer = setTimeout(() => terminate('SIGKILL'), Number(options.terminateGraceMs) || 2_000)
       forceKillTimer.unref?.()
     }
     options.signal?.addEventListener('abort', abort, { once: true })
@@ -438,8 +441,13 @@ function runProcess(command, args, options = {}) {
       error.stderr = stderr.slice(-2000)
       return error
     }
-    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
-    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    const appendOutput = (current, chunk) => {
+      const next = current + String(chunk)
+      const max = Number(options.maxOutputBytes)
+      return Number.isFinite(max) && max > 0 ? next.slice(-max) : next
+    }
+    child.stdout.on('data', (chunk) => { stdout = appendOutput(stdout, chunk) })
+    child.stderr.on('data', (chunk) => { stderr = appendOutput(stderr, chunk) })
     child.on('error', (error) => {
       settle(() => reject(error))
     })
@@ -451,12 +459,12 @@ function runProcess(command, args, options = {}) {
     if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true
-        terminate('SIGTERM')
-        forceKillTimer = setTimeout(() => terminate('SIGKILL'), 2_000)
+        terminate(options.timeoutSignal || 'SIGTERM')
+        forceKillTimer = setTimeout(() => terminate('SIGKILL'), Number(options.terminateGraceMs) || 2_000)
         forceKillTimer.unref?.()
         hardStopTimer = setTimeout(() => {
           settle(() => reject(processError(null, 'SIGKILL')))
-        }, 5_000)
+        }, (Number(options.terminateGraceMs) || 2_000) + 3_000)
         hardStopTimer.unref?.()
       }, timeoutMs)
       timeoutTimer.unref?.()

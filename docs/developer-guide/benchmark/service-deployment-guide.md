@@ -354,6 +354,32 @@ SWE_BENCH_GIT_SOURCE=https://git.example.com
 
 Git 根地址会拼接为 `根地址/owner/repo.git`。例如 Flask 仓库对应 `https://git.example.com/pallets/flask.git`。
 
+### 7.2 接入 pi-mcts 执行器
+
+已有 MCTS/xGovernor 服务的使用方可直接按 [MCTS 接入指南](../../user-guide/observability/mcts-xgovernor.md#接入前确认) 完成采集器安装、连接配置和客户端绑定，无需重新部署已有服务。
+
+`pi-mcts` 只用于 SWE-bench Benchmark 实验。按 MCTS README 完成一次性安装：**实际执行 Case 的客户端机器**准备 MCTS、Python 3.11+ 与 `datasets`、Reliability Client 和已启用的 `mcts-xgovernor-proxy` Trace 代理；**xGovernor 主机**准备 Pi CLI、Pi 桥接扩展和 Pi/E2B worker，并确保 E2B 的 SWE-bench 模板可用。两者可以分机部署，客户端不探测本地 Pi CLI。默认使用客户端 MCTS 仓库下的 `.venv/bin/python`；虚拟环境放在别处时可通过本机配置指定解释器。客户端不依赖交互终端的 venv 激活状态。MCTS 版本需支持 `--output-dir`，无需修改 MCTS 源码。执行机运行 Reliability Client 的账户必须能读取 MCTS 仓库及 `testcases_union/config.env`，并能在 `testcases_union/output/` 下写入；xGovernor 与 Trace 上报地址必须可达。
+
+在每台需要执行 MCTS 的客户端机器上，更新兼容版本的客户端，将该机器的路径写入它自己的 `~/.agent-insight/.env`，然后重启该客户端。设置了 `AGENT_INSIGHT_HOME` 时使用 `$AGENT_INSIGHT_HOME/.env`，读取位置不依赖客户端的工作目录。路径无需与 Agent Insight 服务端或其他客户端相同：
+
+```dotenv
+AGENT_INSIGHT_MCTS_REPO_DIR=/path/on/this/client/MCTS
+# 可选：虚拟环境放在仓库外时填写
+AGENT_INSIGHT_MCTS_PYTHON=/path/on/this/client/python-env/bin/python
+```
+
+`AGENT_INSIGHT_MCTS_PYTHON` 可省略，此时使用 MCTS 仓库下的 `.venv/bin/python`。Trace 启动器默认是该客户端 `~/.agent-insight/collectors/mcts-xgovernor-proxy/run.cjs`；安装器生成的 `~/.local/bin/agent-insight-mcts-run` 包装同一个启动器，无需额外安装 Pi 原生采集器。若代理安装在其他位置，在 `.env` 中设置 `AGENT_INSIGHT_MCTS_TRACE_LAUNCHER`。
+
+客户端启动时只读取 `.env` 中这三个 MCTS 路径变量，不向进程环境导入其他配置。配置优先级为：进程环境变量 → `.env` → 原有 JSON 字段 `mctsRepoDir` / `mctsPython` / `mctsTraceLauncher` → 默认值，空值跳过。已配置的 systemd 同名环境变量会覆盖 `.env`，迁移时应移除或同步更新。仅修改 `.env` 后执行 `systemctl restart agent-insight-client.service` 即可，无需 `daemon-reload`。
+
+这些是执行机本地配置，不进入服务端下发的 Case 任务。缺少 MCTS 脚本、Python、Trace 代理配置或所需 MCTS 版本时，客户端会将 `agent-runtime/pi-mcts/v1` 标为未就绪。`pi-mcts` 不会出现在普通生成 Trace 实验中。
+
+Trace 代理的 `upstreamUrl` 或 `AGENT_INSIGHT_MCTS_UPSTREAM_URL` 填真实 xGovernor 地址。MCTS 的 `testcases_union/config.env` 需要保留启动器注入的地址，例如 `export XGOVERNOR_BASE_URL="${XGOVERNOR_BASE_URL:-http://127.0.0.1:8787}"`；直接赋值会覆盖代理地址并绕过采集。该文件中的访问 token 和模型设置由部署者配置。
+
+每个 Case 的执行命令由客户端固定为 `run_union.sh --mode sweverified --runtime pi --testbench sweverified --instance-id <Case ID> --split test --output-dir <runId>`，并通过严格模式 Trace 代理启动。搜索参数使用 MCTS 默认值，不注入 README 的快速验证参数（1 次迭代、1 个分支及 20/10 turns）；token 熔断可由 MCTS `config.env` 中的 `XIAOO_MCTS_TOKEN_FUSE_LIMIT` 配置。客户端为配置的 Python 解释器建立本次运行专用的 `python` 链接，再运行原版 `run_union.sh`。MCTS 只将最终选中节点写入 `testcases_union/output/sweverified/<runId>/artifact.patch`；客户端检查 Patch 后应用到该 Case 的冻结 Git 工作区，再由现有 `git-patch/v1` Collector 生成并上传 `model.patch`。Trace 代理的本地状态按 Case 隔离，客户端从其运行记录取得真实根 Trace ID。停止实验时客户端向进程组发送 SIGINT，给 MCTS 的 `finally` 清理和 Trace 代理上传留出 30 秒，然后强制终止仍未退出的进程。
+
+部署后先运行一个 SWE-bench Case：选择 `pi-mcts`、默认模型及已就绪执行机，设置足够长的 Agent 超时；完成后检查 Case 中的根 Trace 链接、`model.patch` 和平台评测结果。MCTS 自身的最终节点官测是搜索过程的一部分，不能代替平台的 Benchmark 评测。
+
 ## 8. 整体验收
 
 ### 8.1 检查网络

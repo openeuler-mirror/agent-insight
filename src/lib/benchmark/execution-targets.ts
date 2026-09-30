@@ -2,7 +2,6 @@ import type { ReliabilityClient } from '@prisma/client'
 
 import type { BenchmarkManifest } from '../../../packages/benchmark-protocol/src/contracts'
 import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
-import { listTraceGenerationPlatforms } from '@/lib/engine/experiment/execution-targets'
 import {
   deriveServiceHealth,
   deriveStatus,
@@ -47,7 +46,13 @@ export function inspectBenchmarkExecutionTargets(
   const status = deriveStatus(client)
   const serviceHealth = deriveServiceHealth(client)
 
-  return listTraceGenerationPlatforms(capabilities).flatMap((platform) => {
+  return capabilities.platforms.filter((platform) => {
+    const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
+    return actions.has('RUN_BENCHMARK_CASE') && (
+      platform.runBenchmarkCase?.returnsTraceId === true
+      || platform.runExperimentCase?.returnsTraceId === true
+    )
+  }).flatMap((platform) => {
     const agents = [...new Set(platform.agents || [])]
     if (!agents.length) return []
     const actions = new Set([...(capabilities.actions || []), ...(platform.actions || [])])
@@ -107,7 +112,7 @@ export function assertBenchmarkExecutionTarget(
   if (!target) {
     throw new BenchmarkProtocolError(
       'EXECUTION_TARGET_UNAVAILABLE',
-      '所选客户端未上报可执行的 platform 与 agent 组合，或该平台不能安全回传 Trace ID',
+      '所选客户端未上报可执行的 Benchmark platform 与 agent 组合，或该平台不能安全回传 Trace ID',
       409,
     )
   }
