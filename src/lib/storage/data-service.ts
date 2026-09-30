@@ -80,6 +80,12 @@ const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
 
+export function allowsSnapshotShrinkForFramework(framework: string | null | undefined): boolean {
+    const adapter = getAdapter(framework);
+    return adapter.capabilities?.allowSnapshotShrink === true
+        || (adapter.descriptor.id === 'jiuwenswarm' && process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true');
+}
+
 /** semver 如 "1.0.0"（skill frontmatter 常用格式）解析为整数主版本号；无法解析返回 null。 */
 function numericSemverMajor(value: unknown): number | null {
     if (value === undefined || value === null || value === '') return null;
@@ -1218,6 +1224,13 @@ interface ReadRecordFilters {
     observedAgentFallback?: boolean;
 }
 
+export function resolveExecutionSubagentFilter(filters?: ReadRecordFilters): boolean | undefined {
+    if (filters?.onlySubagents === true) return true;
+    if (filters?.includeSubagents === true || filters?.parentExecutionId !== undefined
+        || filters?.taskId || filters?.taskIds?.length) return undefined;
+    return false;
+}
+
 interface ReadRecordsOptions {
     attachEvaluations?: boolean;
     page?: number;
@@ -1842,14 +1855,7 @@ async function readRecordsInternal(
         where.user = user;
     }
 
-    // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
-    // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
-    // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
-    const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
-    // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
-    // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
-    // skill 既可来自单值 filters.skill(旧路径 / ?skill= 深链),也可来自结构化过滤的
-    // `skill any of [...]` clause(左侧栏 facet 多选)。合并成一组 skillName 一次反查。
+    const subagentFilter = resolveExecutionSubagentFilter(filters);
     const skillNamesFromClauses = (filters?.clauses ?? [])
         .filter((c) => c.column === 'skill' && (c.operator === 'any of' || c.operator === '='))
         .flatMap((c) => (Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []))
@@ -1863,7 +1869,7 @@ async function readRecordsInternal(
     const projectedGoalPlusWorkerWhere = collapseGoalPlusWorkers
         ? await goalPlusProjectedWorkerExecutionWhere(filters?.showAllUsers ? undefined : user)
         : null;
-    if (filters?.onlySubagents === true) {
+    if (subagentFilter === true) {
         if (projectedGoalPlusWorkerWhere) {
             where.AND = [
                 ...(Array.isArray(where.AND) ? where.AND : []),
@@ -1872,12 +1878,7 @@ async function readRecordsInternal(
         } else {
             where.isSubagent = true;
         }
-    } else if (
-        filters?.includeSubagents !== true &&
-        filters?.parentExecutionId === undefined &&
-        !hasExplicitTaskIdFilter &&
-        !skillFilterActive
-    ) {
+    } else if (subagentFilter === false) {
         where.isSubagent = false;
         if (projectedGoalPlusWorkerWhere) {
             where.AND = [
@@ -2528,10 +2529,9 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
                 // snapshot-replace 防退化护栏：上游或服务端聚合层每批都重新形成「当前会话快照」后整条
                 // 覆盖，正常情况下 incoming 是越来越全的快照。但若 span spool 在极端下仍残缺（历史 span
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
-                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
-                // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true'
-                    || targetRecord.complete_session_snapshot === true;
+                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。只有适配器声明完整快照
+                // 能力的框架允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
+                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
                     let existingInteractions = existingSession?.interactions
@@ -2544,7 +2544,9 @@ export async function saveExecutionRecord(data: ExecutionRecord, options?: { rec
                         console.warn(
                             `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
                             `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
-                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
+                            (storageAdapter.descriptor.id === 'jiuwenswarm'
+                                ? `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`
+                                : `当前框架未声明允许快照缩小。`),
                         );
                         return { success: true, record: targetRecord };
                     }

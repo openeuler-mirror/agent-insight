@@ -108,12 +108,17 @@ test('snapshot shrink: only trusted server-side framework capabilities can enabl
     delete process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
     try {
         assert.equal(allowsSnapshotShrinkForFramework('qoder'), true);
+        for (const framework of ['qoder-cn', 'codex', 'pi-agent', 'mcts-xgovernor']) {
+            assert.equal(allowsSnapshotShrinkForFramework(framework), true);
+        }
         assert.equal(allowsSnapshotShrinkForFramework('opencode'), false);
         assert.equal(allowsSnapshotShrinkForFramework('unknown-framework'), false);
         assert.equal(allowsSnapshotShrinkForFramework('jiuwen'), false);
 
         process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK = 'true';
         assert.equal(allowsSnapshotShrinkForFramework('jiuwen'), true);
+        assert.equal(allowsSnapshotShrinkForFramework('openJiuwen'), true);
+        assert.equal(allowsSnapshotShrinkForFramework('jiuwenswarm'), true);
         assert.equal(allowsSnapshotShrinkForFramework('opencode'), false);
     } finally {
         if (previousJiuwen === undefined) delete process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;

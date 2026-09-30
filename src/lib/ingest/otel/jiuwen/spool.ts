@@ -21,6 +21,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { getExistingInsightDir } from '@/lib/agent-insight-paths';
 import type { JiuwenSpan } from './aggregate';
+import { acquireSpoolUse, noteSpoolReceived } from '@/lib/runtime-cleanup/spool-state';
 
 export function getJiuwenSpoolDir(): string {
   return (
@@ -61,7 +62,7 @@ export function isMultiTraceSpan(s: JiuwenSpan): boolean {
 // ── 文件名安全化 ─────────────────────────────────────────────────────────────
 
 // traceId 是 hex，安全；session 兜底可能含异常字符，需净化（并对碰撞加哈希后缀）。
-function safeBucketSegment(key: string): string {
+export function safeBucketSegment(key: string): string {
   const raw = String(key || 'jiuwen').trim() || 'jiuwen';
   const sanitized =
     raw
@@ -137,24 +138,36 @@ export function appendJiuwenSpans(spans: JiuwenSpan[]): AppendResult {
     }
   }
 
-  // 写 span 桶文件
-  for (const [key, bucketSpans] of byBucket) {
-    appendJsonl(bucketFile(key), bucketSpans);
-  }
-
-  // 写 session-index（带进程内去重；marker 由 false→true 时补一行）
-  const indexRows: Array<{ key: string; session: string; marker: boolean }> = [];
-  for (const [ks, { key, session, marker }] of pairMarker) {
-    if (!appendedPairs.has(ks)) {
-      appendedPairs.add(ks);
-      if (marker) markerPairs.add(ks);
-      indexRows.push({ key, session, marker });
-    } else if (marker && !markerPairs.has(ks)) {
-      markerPairs.add(ks);
-      indexRows.push({ key, session, marker: true });
+  const root = getJiuwenSpoolDir();
+  fs.mkdirSync(root, { recursive: true });
+  const release = acquireSpoolUse(root);
+  if (!release) throw new Error('Telemetry spool maintenance in progress; retry this batch');
+  try {
+    for (const [key, bucketSpans] of byBucket) {
+      appendJsonl(bucketFile(key), bucketSpans);
+      noteSpoolReceived(root, key);
     }
+    for (const session of new Set([...pairMarker.values()].map(pair => pair.session))) {
+      noteSpoolReceived(root, `session:${session}`);
+    }
+
+    // 写 session-index（带进程内去重；marker 由 false→true 时补一行）
+    const indexRows: Array<{ key: string; session: string; marker: boolean }> = [];
+    for (const [ks, { key, session, marker }] of pairMarker) {
+      if (!appendedPairs.has(ks)) {
+        appendedPairs.add(ks);
+        if (marker) markerPairs.add(ks);
+        indexRows.push({ key, session, marker });
+      } else if (marker && !markerPairs.has(ks)) {
+        markerPairs.add(ks);
+        indexRows.push({ key, session, marker: true });
+      }
+    }
+    appendJsonl(sessionIndexFile(), indexRows);
+
+  } finally {
+    release();
   }
-  appendJsonl(sessionIndexFile(), indexRows);
 
   return { touchedKeys: Array.from(byBucket.keys()) };
 }

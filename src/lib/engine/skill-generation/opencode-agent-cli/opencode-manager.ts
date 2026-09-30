@@ -10,6 +10,7 @@ import { resolveAgentInsightDataPath, getAgentInsightHome } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
 import { isModelConnectionReady } from '@/lib/shared/model-connection'
 import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
+import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -534,6 +535,9 @@ export async function prepareIsolatedHome(
   fs.mkdirSync(path.join(root, '.opencode', 'skills'), { recursive: true })
   fs.mkdirSync(path.join(root, '.claude', 'skills'), { recursive: true })
   fs.mkdirSync(path.join(root, '.agents', 'skills'), { recursive: true })
+  try { await markTemporaryHome(root) } catch (error) {
+    console.warn('[isolated-home] ownership marker unavailable; automatic cleanup will skip this directory:', error)
+  }
 
   // Symlink user 真实的 trace 上报 plugin (~/.opencode/plugins/Witty-Skill-Insight.ts)
   // 到隔离 HOME 下的 .opencode/plugins/, 保留 trace 上报链路。
@@ -992,6 +996,12 @@ async function startServerForUser(
   proc.on('error', (err) => {
     console.error(`[opencode:${user}] failed to spawn server:`, err.message)
   })
+
+  if (homeOverride && typeof proc.pid === 'number') {
+    try { await markTemporaryHome(homeOverride, proc.pid) } catch (error) {
+      console.warn('[isolated-home] child ownership unavailable; automatic cleanup will skip this directory:', error)
+    }
+  }
 
   // 等 server ready,失败时杀掉进程
   try {

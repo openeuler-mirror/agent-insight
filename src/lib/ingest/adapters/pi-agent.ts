@@ -11,6 +11,7 @@ export const piAgentAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
+    allowSnapshotShrink: true,
     skillScope: "agent-tree",
   },
   // Pi 的 OTLP consumer 每次都会从同一 task 的完整 spool 重聚合。保存时必须以完整

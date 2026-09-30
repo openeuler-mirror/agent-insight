@@ -52,6 +52,17 @@ import {
 
 const SESSION_ID = "qoder-session-1"
 
+async function loadSqlite() {
+  const sqliteModule = "node:sqlite"
+  return await import(sqliteModule) as {
+    DatabaseSync: new (filename: string) => {
+      exec(sql: string): void
+      prepare(sql: string): { run(...values: Array<string | number>): void }
+      close(): void
+    }
+  }
+}
+
 function testProcessIsAlive(pid: number | undefined): boolean {
   if (!Number.isInteger(pid) || Number(pid) <= 0) return false
   try {
@@ -313,6 +324,7 @@ test("Qoder collector keeps authenticated ownership while retaining the API key 
   const rootSpan = payload.resourceSpans[0].scopeSpans[0].spans.find(
     (span: any) => span.name === "qoder.agent",
   )
+  assert.ok(rootSpan)
   const rootAttributes = Object.fromEntries(
     rootSpan.attributes.map((attribute: any) => [
       attribute.key,
@@ -898,6 +910,7 @@ test("Qoder Work unwraps lazy qw_mcp_call into the target MCP server, tool, and 
   assert.equal(callAttrs["qoder.tool.type"], "mcp")
   assert.equal(callAttrs["mcp.server.name"], "trace-echo")
   assert.equal(callAttrs["mcp.tool.name"], "trace_echo")
+  assert.ok(callAttrs["tool.arguments"])
   assert.deepEqual(JSON.parse(callAttrs["tool.arguments"]), { message: "qoderwork-mcp-trace-test" })
 
   const events = normalizeOtlpTraces(payload, { receivedAt: "2026-07-22T09:46:45.000Z", authenticatedUser: "alice" })
@@ -1063,13 +1076,16 @@ test("Qoder default main Agent names are independent from the product surface", 
 
   for (const [product, { expected: expectedName, legacy }] of expectedNames) {
     const capture = sampleCapture()
-    capture.transcriptRecords.unshift({
-      type: "session_meta",
-      sessionId: SESSION_ID,
-      timestamp: "2026-07-21T11:59:59.000Z",
-      data: { meta_type: "session_info", content: { mode: "agent", agentName: legacy } },
+    const payload = buildQoderOtlpPayload({
+      ...capture,
+      product,
+      transcriptRecords: [{
+        type: "session_meta",
+        sessionId: SESSION_ID,
+        timestamp: "2026-07-21T11:59:59.000Z",
+        data: { meta_type: "session_info", content: { mode: "agent", agentName: legacy } },
+      }, ...capture.transcriptRecords],
     })
-    const payload = buildQoderOtlpPayload({ ...capture, product })
     const rootSpan = payload.resourceSpans[0].scopeSpans[0].spans[0]
     const rootAttrs = Object.fromEntries(rootSpan.attributes.map(
       (attribute: { key: string; value: { stringValue?: string } }) => [attribute.key, attribute.value.stringValue],
@@ -1306,6 +1322,7 @@ test("Qoder Desktop isolates reused-session turns and restores parallel Agent to
   })
   const record = aggregateOtelTraceEvents(SESSION_ID, events)!
   const tree = buildAgentCallTree(record.interactions as never[])
+  assert.ok(tree)
   assert.equal(tree.children.length, 2, JSON.stringify(record.interactions, null, 2))
   assert.ok(tree.children.every((child) => child.agentName === "Search"))
 })
@@ -1775,7 +1792,7 @@ test("AC24 Qoder SessionEnd reaches the OTLP endpoint within three seconds", asy
       response.end("{}")
       resolveRequest?.({ receivedAt: Date.now(), body })
     })
-    request.on("error", rejectRequest)
+    request.on("error", (error) => rejectRequest?.(error))
   })
 
   try {
@@ -1837,6 +1854,7 @@ test("Qoder OTLP adapter converts the latest snapshot into an ExecutionRecord", 
   const adapter = getOtelTraceAdapter(events)
   const record = aggregateOtelTraceEvents(SESSION_ID, events)
 
+  assert.ok(adapter)
   assert.equal(adapter.id, "qoder")
   assert.ok(record)
   assert.equal(record.framework, "qoder")
@@ -1999,7 +2017,7 @@ test("Qoder local SQLite reader extracts only exact usage for the requested sess
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-token-db-"))
   const databasePath = path.join(root, "local.db")
   try {
-    const sqlite: any = await import("node:sqlite")
+    const sqlite = await loadSqlite()
     const database = new sqlite.DatabaseSync(databasePath)
     database.exec(`
       CREATE TABLE chat_message (
@@ -2042,7 +2060,7 @@ test("AC35 exact Qoder token usage stays below five percent error across all fou
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-ac35-token-db-"))
   const databasePath = path.join(root, "local.db")
   try {
-    const sqlite: any = await import("node:sqlite")
+    const sqlite = await loadSqlite()
     const database = new sqlite.DatabaseSync(databasePath)
     database.exec(`
       CREATE TABLE chat_message (
