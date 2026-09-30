@@ -9,6 +9,7 @@ export const mctsXgovernorAdapter: FrameworkAdapter = {
   },
   capabilities: {
     subagentTree: true,
+    allowSnapshotShrink: true,
   },
   sessionMergeStrategy: 'snapshot-replace',
 };
