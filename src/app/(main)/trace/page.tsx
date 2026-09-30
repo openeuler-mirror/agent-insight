@@ -36,6 +36,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
+import { loadTraceFacetValues } from '@/lib/client/trace-facets';
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
@@ -521,11 +522,14 @@ function TracePageContent() {
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
+    const listRequestPendingRef = useRef(false);
 
     useEffect(() => {
         if (!user) return;
         const refreshWhenVisible = () => {
-            if (document.visibilityState === 'visible') setReloadKey(value => value + 1);
+            if (document.visibilityState === 'visible' && !listRequestPendingRef.current) {
+                setReloadKey(value => value + 1);
+            }
         };
         const timer = window.setInterval(refreshWhenVisible, TRACE_LIST_REFRESH_MS);
         document.addEventListener('visibilitychange', refreshWhenVisible);
@@ -596,8 +600,7 @@ function TracePageContent() {
             return;
         }
         Promise.all([
-            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=framework`)
-                .then(r => r.ok ? r.json() : []),
+            loadTraceFacetValues(user, 'framework').catch(() => []),
             apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&summary=agents&databasePagination=1`)
                 .then(r => r.ok ? r.json() : { agents: [] }),
         ]).then(([frameworkRows, agentRows]) => {
@@ -685,7 +688,7 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        setTaskIdParam(id);
+        void setTaskIdParam(id, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
     }, [setTaskIdParam, reportTraceDetailView]);
 
@@ -775,6 +778,8 @@ function TracePageContent() {
             return;
         }
         if (!user) return;
+        const controller = new AbortController();
+        listRequestPendingRef.current = true;
         const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
         previousListRequestKeyRef.current = listRequestKey;
         if (!silentRefresh) setLoading(true);
@@ -792,7 +797,7 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -815,8 +820,17 @@ function TracePageContent() {
                 }
             })
             .finally(() => {
-                if (listRequestIdRef.current === requestId && !silentRefresh) setLoading(false);
+                if (listRequestIdRef.current !== requestId) return;
+                listRequestPendingRef.current = false;
+                setLoading(false);
             });
+        return () => {
+            controller.abort();
+            if (listRequestIdRef.current === requestId) {
+                listRequestIdRef.current += 1;
+                listRequestPendingRef.current = false;
+            }
+        };
     }, [
         user,
         apiKey,
@@ -1384,7 +1398,7 @@ function TracePageContent() {
                         <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
                             const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
                             setImportResult(null);
-                            if (targetId) void setTaskIdParam(targetId);
+                            if (targetId) void setTaskIdParam(targetId, { history: 'push' });
                         }}>
                             {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
                         </Button>

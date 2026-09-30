@@ -81,7 +81,9 @@ profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和
 - 超时只表示这段时间没有收到新数据，不会伪造完成时间；再次收到数据后恢复执行中，收到真正的完成信号后进入成功或失败。评测、标签和人工修改不会延后超时。
 - 部分采集器会依据实际根 span、交互时间或 OpenCode `session.idle` 补齐完成时间；页面不再因静默 60 秒或本机无法找到远端进程而推断成功。
 
-列表在页面可见时每五秒刷新；详情中的执行中和超时 Trace 也会自动刷新状态。隐藏页面暂停轮询，重新可见后继续检查。
+列表每页显示 20 条。筛选和排序作用于当前账号及所选条件下的全部匹配记录，顶部统计也按该范围计算；它们不会只统计当前页。SQLite 部署由数据库完成这些计算，筛选范围越大，精确统计和复杂排序仍可能耗时更长。
+
+列表在页面可见时每五秒检查刷新；上一轮尚未返回时会等待，不重复加载。首次结果返回后显示列表，后续刷新期间保留已有记录。详情中的执行中和超时 Trace 也会自动刷新状态。隐藏页面暂停轮询，重新可见后继续检查。
 
 **环内 RAS（可靠性）与普通链路追踪解耦。** 「运行观测 / 链路追踪」（`/trace`）列表与详情**不再**展示 RAS 徽章或异常面板；环内异常与恢复请到侧栏 **AgentRAS 可靠性 / 可靠性观测**（`/agent-ras/trace`）查看。该页以当前账号的根 Trace（Execution）左连接 RAS 事件，并合并**仅有 RAS 事件、无 Execution** 的任务（例如 xiaoO CLI / inproc 注入），同时包含无故障 Trace 和异常 Trace。详情页顶部用**可折叠 RAS 异常摘要条**（默认收起，保证完整链路在首屏）：按**一次 anomaly 检测**一行展示类型、严重度、摘要、操作标签与恢复结果；同一次故障的恢复 / 中断等操作并入该行，不拆成多张卡。点选行会联动下方链路树中的 RAS 节点，右侧展示完整摘要与动作详情。有 Execution / 平台观测上报时复用完整链路视图并**叠 RAS 标记**（前端展示不变）；**仅有 RAS 事件、无平台对话链路**时不展示链路树。完整链路由 **agent-insight** 采集器提供（OpenCode：插件 + uploader → `/api/ingest/upload`；xiaoO：`scripts/xiaoo-trace-collector` → `/api/ingest/otel/v1/traces`）。排查「有 RAS 无 Trace」时先确认对应 Insight 采集器已安装（xiaoo：`node scripts/xiaoo-trace-collector/install.js` 或跑过 `install-ras`），**不要**把完整链路 Trace 当成 RAS 职责。RAS / FI 只上报自身事件并在对应页展示（可靠性观测叠 RAS；故障注入 Run 叠 RAS + FI），**不会**为进可靠性列表用 FI collect 合成 `Execution`。
 
@@ -159,6 +161,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 ## 详情页总览
 
 详情页承担“还原过程”和“定位原因”两类工作，适合对单条 Trace 做完整复盘。
+
+从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
 
 <p align="center">
   <img src="../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />

@@ -9,14 +9,16 @@
 
 | Field | Value |
 |---|---|
-| Commit | `0c3c38e96ec320d976912ec08e1dfe2515ac9df4` (`0c3c38e9`) |
-| Branch | `codex/master-830-fixes-20260922` |
-| Date | 2026-09-22 |
-| Author | gyctl |
-| Subject | `fix: 同步830安装与链路追踪通用修复到master` |
+| Commit | `b7b37c7627f6e901645a5c112a37b55b74b5d734` (`b7b37c76`) |
+| Branch | `codex/trace-loading-back` |
+| Date | 2026-09-23 |
+| Author | openeuler-ci-bot |
+| Subject | `!429 强制主从 Trace 使用同一账号` |
 | Documentation overlay | 合入 PR #294 文本评估器运行配置；更新实验向导、详情、Case 详情和复用配置的数据流，保留 Benchmark 实验的现有入口。 本次更新安装与 Trace 指南、生命周期及前端契约，保留既有 overlay，其他指南未重新全量审计。 |
 
 ### 旧快照至当前提交的变更摘要
+
+> 2026-09-29 working-tree overlay：Trace 列表请求未完成时跳过自动刷新，最新响应释放加载状态；进入详情保留列表浏览器历史。SQLite 普通与计算字段的筛选、排序、分页及精确统计在数据库执行，应用只取得当前页和聚合结果；Agent 名称在数据库分组。精确统计、计算排序与深页仍受数据规模影响。Trace 页面和筛选组件共享同一用户、同一字段正在进行的筛选项请求，完成后即释放，避免重复查询并保留后续取数。同步 Trace 用户指南及 API/前端契约；其余指南未重新审计，OpenGauss 保留旧读取路径。
 
 > 2026-09-23 working-tree overlay：Pi 安装器不再保留旧版、手工或不同账号的 Goal Plus collector 配置；主 Trace 与 worker Trace 强制复用同一 managed API Key 和上报端点，安装时停止并按当前配置恢复 watcher，runtime 检测到身份不一致时先停 watcher 再 fail closed。同步更新 Goal Plus 用户与开发者指南。
 
@@ -126,7 +128,7 @@
 
 > 2026-09-16 working-tree overlay：Pi 模型目录改为异步子进程探测，超时从 3 秒扩至 20 秒，与 FI inventory 并行刷新；新增并发去重、失败短周期重试、保留成功缓存及固定错误码日志，避免慢目录导致只剩“平台默认”或阻塞主进程心跳。
 
-**如何更新：** `git diff 0c3c38e9 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff b7b37c76 HEAD -- src/ scripts/ packages/ benchmarks/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

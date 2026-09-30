@@ -216,6 +216,7 @@ async function getAutoEvalReadiness(record: Record<string, unknown>) {
 
 export async function GET(request: Request) {
   try {
+    const lifecycleNow = Date.now();
     const { searchParams } = new URL(request.url);
     const user = searchParams.get('user') || undefined;
     const query = searchParams.get('query') || undefined;
@@ -363,15 +364,13 @@ export async function GET(request: Request) {
         ownership,
         observedAgentFallback: databasePagination,
     };
-    // status 是读时生命周期字段，cost 是按模型价格计算的展示字段，二者无法保证与 Execution
-    // 原始列直接等价；只有用户主动使用这些过滤/排序时保留兼容全量路径。默认列表及其它过滤
-    // 走真正数据库分页。
-    const requiresComputedPass = paginated && databasePagination && (
+    const computedPage = paginated && databasePagination && (
         statusParam !== 'all'
         || anomalyParam !== 'all'
         || sortParam === 'status'
         || sortParam === 'cost'
     );
+    const requiresComputedPass = computedPage && !!process.env.DB_HOST;
     const pageResult = paginated && !requiresComputedPass
         ? await readRecordPage(user, recordFilters, {
             attachEvaluations,
@@ -382,6 +381,12 @@ export async function GET(request: Request) {
             sortKey,
             sortDir: sortDirParam,
             databasePagination,
+            lifecycleNow,
+            ...(computedPage ? { computedPage: {
+                status: statusParam,
+                anomaly: anomalyParam,
+                sortKey: sortParam === 'status' ? 'status' as const : sortKey,
+            } } : {}),
         })
         : null;
     const data = pageResult
@@ -502,6 +507,7 @@ export async function GET(request: Request) {
         const baseTraceLifecycle = getTraceLifecycle(
             recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null,
             record,
+            lifecycleNow,
         );
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
