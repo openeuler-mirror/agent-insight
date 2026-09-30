@@ -20,7 +20,7 @@ test('experiment schema keeps comparison groups and generated trace attempts', (
 })
 
 test('experiment UI and run route keep comparison and generated trace flows separate', () => {
-  const page = read('src/app/(main)/experiments/new/page.tsx')
+  const page = read('src/components/eval/ExperimentWizard.tsx')
   const runRoute = read('src/app/api/experiments/[id]/run/route.ts')
 
   assert.match(page, /useState<'single' \| 'llm'>\('single'\)/)

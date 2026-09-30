@@ -13,6 +13,8 @@ export const WHITELISTED_ACTIONS = [
   'APPLY_CLIENT_CONFIG',
   'PREPARE_EXPERIMENT_CASE',
   'RUN_EXPERIMENT_CASE',
+  'RUN_BENCHMARK_CASE',
+  'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
 ] as const
 
@@ -39,7 +41,9 @@ export function isWhitelistedAction(value: unknown): value is CommandAction {
 
 export function assertPayloadSafe(action: CommandAction, payload: Record<string, unknown>): void {
   const forbidden =
-    action === 'RUN_EXPERIMENT_CASE' ? RUN_FORBIDDEN_KEYS : CONFIG_FORBIDDEN_KEYS
+    action === 'RUN_EXPERIMENT_CASE' || action === 'RUN_BENCHMARK_CASE'
+      ? RUN_FORBIDDEN_KEYS
+      : CONFIG_FORBIDDEN_KEYS
   for (const key of Object.keys(payload || {})) {
     if (forbidden.includes(key)) {
       throw new ReliabilityError(
@@ -80,7 +84,7 @@ export async function createCommand(input: {
   action: CommandAction
   payload?: Record<string, unknown>
   ttlMs?: number
-}): Promise<CommandFrame> {
+}, store = prisma): Promise<CommandFrame> {
   if (!isWhitelistedAction(input.action)) {
     throw new ReliabilityError('COMMAND_ACTION_UNKNOWN', `未知 action: ${input.action}`, 400)
   }
@@ -90,7 +94,7 @@ export async function createCommand(input: {
   const commandId = newCommandId()
   const now = new Date()
   const expiresAt = new Date(now.getTime() + (input.ttlMs ?? commandTtlMs()))
-  await prisma.reliabilityCommand.create({
+  await store.reliabilityCommand.create({
     data: {
       commandId,
       clientId: input.clientId,
@@ -115,6 +119,22 @@ export async function markSent(commandId: string, channel: 'wss' | 'poll'): Prom
   await prisma.reliabilityCommand.updateMany({
     where: { commandId, status: 'CREATED' },
     data: { status: 'SENT', sentAt: new Date(), channel },
+  })
+}
+
+export async function markCommandDeliveryFailed(
+  commandId: string,
+  code: string,
+  message: string,
+): Promise<void> {
+  await prisma.reliabilityCommand.updateMany({
+    where: { commandId, status: { in: ['CREATED', 'SENT', 'RECEIVED'] } },
+    data: {
+      status: 'DELIVERY_FAILED',
+      errorCode: code,
+      errorMessage: message,
+      completedAt: new Date(),
+    },
   })
 }
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
@@ -7,6 +8,7 @@ import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { TermPopover } from '@/components/text/TermPopover';
 import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
@@ -20,7 +22,6 @@ import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/obse
 import {
     AgentEvent,
     AgentNode,
-    buildAgentCallTree,
     findNode,
     firstMeaningfulLine,
     formatDuration,
@@ -55,6 +56,11 @@ import {
 } from '@/lib/shared/interaction-utils';
 
 const SLOW_MS = 60_000;
+const EMPTY_RAS_MARKERS: RasTraceMarker[] = [];
+
+function sameStringSet(left: Set<string>, right: Set<string>): boolean {
+    return left.size === right.size && [...left].every(key => right.has(key));
+}
 
 type NodeStatus = 'error' | 'slow' | 'ok';
 
@@ -106,6 +112,27 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
             )}
         >
             {kind === 'ras' ? rasEventKindBadgeLabel(locale) : meta.label}
+        </span>
+    );
+}
+
+function CollaborationRelationBadge({ relation }: { relation: NonNullable<RawInteraction['trace_relation']> }) {
+    const { locale } = useLocale();
+    const isConfirmed = relation.anchorState === 'confirmed';
+    const label = relation.sourceType === 'goal-plus-semantic'
+        ? (locale === 'zh' ? 'Goal Plus 编排' : 'Goal Plus orchestration')
+        : isConfirmed
+            ? (locale === 'zh' ? '已确认关联' : 'Confirmed relation')
+            : (locale === 'zh' ? '跨会话关联' : 'Cross-session relation');
+    const title = isConfirmed
+        ? relation.description
+        : `${relation.description} · ${locale === 'zh' ? '未推断具体启动调用位置' : 'Exact spawn call was not inferred'}`;
+    return (
+        <span
+            title={title}
+            className="ml-1.5 inline-flex h-4 items-center rounded-sm border border-border bg-background-tertiary px-1 text-[10px] font-medium text-foreground-muted align-middle"
+        >
+            {label}
         </span>
     );
 }
@@ -414,6 +441,8 @@ export interface AgentTraceViewProps {
     rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
+    /** 跨增量刷新保持树交互状态的稳定 Trace 标识。 */
+    traceIdentity?: string;
     /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
     rasMarkers?: RasTraceMarker[];
 }
@@ -428,7 +457,8 @@ export default function AgentTraceView({
     onSubagentNavigate,
     rootSessionId,
     rootExecutionId,
-    rasMarkers = [],
+    traceIdentity,
+    rasMarkers = EMPTY_RAS_MARKERS,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { locale, t: tt } = useLocale();
@@ -436,7 +466,12 @@ export default function AgentTraceView({
     const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
-    const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    const stableTraceIdentity = traceIdentity ?? rootExecutionId;
+    const previousTraceIdentityRef = React.useRef(stableTraceIdentity);
+    const sourceInteractionsRef = React.useRef(sourceInteractions);
+    sourceInteractionsRef.current = sourceInteractions;
+    const treeIdentityInitializedRef = React.useRef(false);
+    const previousTreeIdentityRef = React.useRef(stableTraceIdentity);
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
     const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
@@ -445,8 +480,9 @@ export default function AgentTraceView({
     );
 
     useEffect(() => {
-        const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
-        previousRootExecutionIdRef.current = rootExecutionId;
+        const traceChanged = previousTraceIdentityRef.current !== stableTraceIdentity;
+        previousTraceIdentityRef.current = stableTraceIdentity;
+        if (traceChanged) sameTraceReloadRef.current = false;
         fullLoadPromiseRef.current = null;
         setInteractionLoadError(null);
         setFullInteractionLoadError(null);
@@ -454,23 +490,28 @@ export default function AgentTraceView({
             if (traceChanged) return sourceInteractions;
             return sourceInteractions.map((item, index) => {
                 const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
-                return loaded && !loaded._payloadDeferred ? loaded : item;
+                const incoming = item as RawInteraction & { _payloadDeferred?: boolean };
+                return incoming._payloadDeferred && loaded && !loaded._payloadDeferred
+                    && sameCollaborationSource(incoming, loaded)
+                    && incoming._payloadVersion && incoming._payloadVersion === loaded._payloadVersion ? loaded : item;
             });
         });
-    }, [sourceInteractions, rootExecutionId]);
+    }, [sourceInteractions, stableTraceIdentity]);
 
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
         if (langfuseProjection) return;
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
-        const requestedTraceId = previousRootExecutionIdRef.current;
+        const requestedTraceId = previousTraceIdentityRef.current;
+        const requestedSource = sourceInteractionsRef.current;
         setInteractionLoadError(null);
         try {
             const loaded = await loadInteraction(index);
-            if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            if (previousTraceIdentityRef.current !== requestedTraceId || sourceInteractionsRef.current !== requestedSource
+                || !current._payloadVersion || loaded._payloadVersion !== current._payloadVersion) return;
             // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
             sameTraceReloadRef.current = true;
-            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
+            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index && sameCollaborationSource(item, current) ? { ...loaded, ...(collaborationSource(current) ? { _collaboration: collaborationSource(current) } : {}) } : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
         }
@@ -483,20 +524,24 @@ export default function AgentTraceView({
             return interactions;
         }
         if (!fullLoadPromiseRef.current) {
-            const requestedTraceId = previousRootExecutionIdRef.current;
+            const requestedTraceId = previousTraceIdentityRef.current;
+            const requestedSource = sourceInteractionsRef.current;
             setFullInteractionLoadError(null);
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId && sourceInteractionsRef.current === requestedSource
+                        && loaded.length === requestedSource.length
+                        && loaded.every((item, index) => item._payloadVersion && item._payloadVersion === requestedSource[index]._payloadVersion)) {
                         // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
                         sameTraceReloadRef.current = true;
                         setInteractions(loaded);
+                        return loaded;
                     }
-                    return loaded;
+                    return sourceInteractionsRef.current;
                 })
                 .catch(error => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceIdentityRef.current === requestedTraceId) {
                         setFullInteractionLoadError(error instanceof Error ? error.message : 'Failed to load full trace');
                     }
                     return interactions;
@@ -514,7 +559,7 @@ export default function AgentTraceView({
         const aligned = rasMarkers.length
             ? alignInteractionsToRasAnchors(displayInteractions || [], rasMarkers)
             : (displayInteractions || [])
-        const base = langfuseProjection?.tree || buildAgentCallTree(aligned)
+        const base = langfuseProjection?.tree || buildCollaborationTraceTree(aligned)
         if (!base) return base
         return rasMarkers.length ? applyRasRecoveryTree(base, rasMarkers, locale) : base
     }, [interactions, langfuseProjection, displayInteractions, rasMarkers, locale]);
@@ -569,18 +614,22 @@ export default function AgentTraceView({
     // tree 由 interactions 派生，为同一条 trace 补数据（懒加载单条 / 补全全部）也会产生新的
     // interactions 数组 → 新 tree 对象。若无条件跟着 tree 重置，首次点击 span 触发懒加载后
     // 会被弹回根 Agent，必须点第二次才留得住（手动展开的节点同样会被清掉）。
-    // 这里只跳过「同一条 trace 补数据」这一种已知来源，其余 tree 变化（换 trace、自动刷新、
-    // langfuse 投影变化）一律照旧重置 —— TraceDrawer / TrajectoryTraceView 不传 rootExecutionId，
-    // 不能用它作为 trace 身份来判定。
+    // 同一条 trace 的懒加载或实时增量刷新只补数据，不应清掉用户当前的选择和展开状态。
     useEffect(() => {
         if (!tree) return;
-        if (sameTraceReloadRef.current) {
+        const sameStableTrace = treeIdentityInitializedRef.current
+            && Boolean(stableTraceIdentity)
+            && previousTreeIdentityRef.current === stableTraceIdentity;
+        previousTreeIdentityRef.current = stableTraceIdentity;
+        treeIdentityInitializedRef.current = true;
+        if (sameTraceReloadRef.current || sameStableTrace) {
             sameTraceReloadRef.current = false;
             return;
         }
-        setSelectedKey(agentKey(tree.id));
-        setExpandedKeys(defaultExpandedKeys);
-    }, [tree, defaultExpandedKeys]);
+        const rootKey = agentKey(tree.id);
+        setSelectedKey(current => current === rootKey ? current : rootKey);
+        setExpandedKeys(current => sameStringSet(current, defaultExpandedKeys) ? current : defaultExpandedKeys);
+    }, [tree, defaultExpandedKeys, stableTraceIdentity]);
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
@@ -614,9 +663,11 @@ export default function AgentTraceView({
             return { selectedAgentNode: node, selectedEvent: null };
         }
         if (selectedKey.startsWith('e:')) {
-            const parts = selectedKey.slice(2).split(':');
-            const nodeId = parts[0];
-            const evIdx = parseInt(parts[1], 10);
+            // 合并 Trace 的节点 id 自带冒号（`<taskId>:<nX>`），事件序号固定在最末一段，只能从右侧切分。
+            const body = selectedKey.slice(2);
+            const splitAt = body.lastIndexOf(':');
+            const nodeId = splitAt < 0 ? body : body.slice(0, splitAt);
+            const evIdx = splitAt < 0 ? NaN : parseInt(body.slice(splitAt + 1), 10);
             const node = nodeMap.get(nodeId) || tree;
             const ev = node.events[evIdx] || null;
             return { selectedAgentNode: node, selectedEvent: ev };
@@ -728,8 +779,8 @@ export default function AgentTraceView({
                     return;
                 }
                 const evKey = eventKey(node.id, idx);
-                const dur = childNode
-                    ? childNode.stats.durationMs ?? undefined
+                const dur = ev.kind === 'task'
+                    ? childNode?.stats.durationMs
                     : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
                 const tok = ev.usage?.total || 0;
                 const label = ev.kind === 'task' && ev.spawnedChildId
@@ -903,18 +954,23 @@ export default function AgentTraceView({
                         'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
                         !(showFilters || hasActiveFilters) && 'border-b border-border',
                     )}>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={toggleExpandAll}
-                            aria-pressed={isAllExpanded}
-                            className="h-7 border border-border rounded-md text-xs px-2 gap-1 shrink-0"
+                        <TermPopover
+                            term={isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
+                            body={isAllExpanded ? tt('traceTree.collapseAllHint') : tt('traceTree.expandAllHint')}
                         >
-                            {isAllExpanded
-                                ? <ChevronsDownUp className="size-3.5" />
-                                : <ChevronsUpDown className="size-3.5" />}
-                            {isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
-                        </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={toggleExpandAll}
+                                aria-pressed={isAllExpanded}
+                                className="h-7 border border-border rounded-md text-xs px-2 gap-1 shrink-0"
+                            >
+                                {isAllExpanded
+                                    ? <ChevronsDownUp className="size-3.5" />
+                                    : <ChevronsUpDown className="size-3.5" />}
+                                {isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
+                            </Button>
+                        </TermPopover>
 
                         {/* Global search bar */}
                         <div className="flex-1 min-w-[120px] flex items-center gap-1 px-2 py-0.5 rounded-md border border-border bg-background-secondary focus-within:border-primary transition-colors">
@@ -949,7 +1005,7 @@ export default function AgentTraceView({
                             )}
                         </div>
 
-                        {/* Slow / anomaly filter */}
+                        {/* Slow node filter */}
                         <Button
                             variant={slowOnly ? 'default' : 'outline'}
                             size="sm"
@@ -997,12 +1053,13 @@ export default function AgentTraceView({
                                 { value: 'user', label: 'User' },
                             ]} onChange={setTreeKindFilter} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
-                            <FilterPill label={tt('traceTree.filterDuration')} value={String(minDurationMs)} options={[
+                            <FilterPill label={tt('traceTree.filterDuration')} value={String(slowOnly ? SLOW_MS : minDurationMs)} disabled={slowOnly} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
                                 { value: '1000', label: '>1s' },
                                 { value: '5000', label: '>5s' },
                                 { value: '10000', label: '>10s' },
                                 { value: '30000', label: '>30s' },
+                                { value: String(SLOW_MS), label: '>60s' },
                             ]} onChange={v => setMinDurationMs(Number(v))} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterToken')} value={String(minTokenK)} options={[
@@ -1103,11 +1160,12 @@ export default function AgentTraceView({
 }
 
 // ─── FilterPill ──────────────────────────────────────────────────────────────
-function FilterPill({ label, value, options, onChange }: {
+function FilterPill({ label, value, options, onChange, disabled = false }: {
     label: string;
     value: string;
     options: { value: string; label: string; accentClass?: string }[];
     onChange: (v: string) => void;
+    disabled?: boolean;
 }) {
     return (
         <div className="flex items-center gap-1.5">
@@ -1118,6 +1176,8 @@ function FilterPill({ label, value, options, onChange }: {
                     return (
                         <button
                             key={o.value}
+                            disabled={disabled}
+                            aria-pressed={isActive}
                             onClick={() => onChange(o.value)}
                             className={cn(
                                 'px-2 py-0.5 text-xs whitespace-nowrap transition-colors',
@@ -1243,7 +1303,8 @@ function UnifiedSpanTree({
 
     const events = node.events;
     const eventTree = buildAgentEventTree(events);
-    const hasContent = events.length > 0;
+    const unanchoredChildren = node.children.filter(child => !events.some(event => event.spawnedChildId === child.id));
+    const hasContent = events.length > 0 || unanchoredChildren.length > 0;
 
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
@@ -1281,13 +1342,13 @@ function UnifiedSpanTree({
 
         const hasChildren = entry.children.length > 0 || !!childNode;
         const isEvExpanded = hasChildren && expandedKeys.has(evKey);
-        const evDur = childNode
-            ? childNode.stats.durationMs
+        const evDur = ev.kind === 'task'
+            ? childNode?.stats.durationMs
             : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
         const evTok = ev.usage?.total || 0;
         const evIsSlow = (evDur ?? 0) > SLOW_MS;
         if (treeKindFilter !== 'all' && ev.kind !== treeKindFilter) return null;
-        if (minDurationMs > 0 && (evDur == null || evDur < minDurationMs)) return null;
+        if (minDurationMs > 0 && (evDur == null || evDur <= minDurationMs)) return null;
         if (minTokenK > 0 && evTok < minTokenK * 1000) return null;
         if (ctxSlowOnly && !evIsSlow) return null;
         if (searchQuery && !matchedKeys.has(evKey)) return null;
@@ -1387,6 +1448,7 @@ function UnifiedSpanTree({
                             ×{node.parallelCallCount}
                         </span>
                     )}
+                    {node.relation && <CollaborationRelationBadge relation={node.relation} />}
                     {depth > 0 && node.sessionId && ctx.onSubagentNavigate && (
                         <button
                             type="button"
@@ -1426,6 +1488,11 @@ function UnifiedSpanTree({
                     )}
                 />
 
+                {(node as AgentNode & { collaborationLabel?: string }).collaborationLabel && (
+                    <span className="text-xs text-foreground-muted" title={(node as any).collaborationReason}>
+                        {(node as any).collaborationLabel}
+                    </span>
+                )}
                 {/* Metrics */}
                 <span className={cn(
                     'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
@@ -1447,9 +1514,16 @@ function UnifiedSpanTree({
                     {eventTree.map((entry, entryIndex) => renderEventEntry(
                         entry,
                         depth + 1,
-                        entryIndex === eventTree.length - 1,
+                        entryIndex === eventTree.length - 1 && unanchoredChildren.length === 0,
                         depth === 0 ? [] : [...prefixBits, !isLast],
                     ))}
+                    {unanchoredChildren.map((child, index) => <UnifiedSpanTree
+                        key={child.id} node={child} nodeMap={nodeMap} expandedKeys={expandedKeys}
+                        onToggleKey={onToggleKey} selectedKey={selectedKey} onSelect={onSelect}
+                        totalStart={totalStart} totalDuration={totalDuration} depth={depth + 1}
+                        isLast={index === unanchoredChildren.length - 1}
+                        prefixBits={depth === 0 ? [] : [...prefixBits, !isLast]}
+                    />)}
                 </div>
             )}
         </div>
@@ -1473,8 +1547,8 @@ function UnifiedEventRow({
     const evAnomalyHits = findEventAnomalies?.(event) ?? [];
 
     // Duration: for task events, use child agent duration
-    const spanDurationMs = event.kind === 'task' && childNode
-        ? childNode.stats.durationMs
+    const spanDurationMs = event.kind === 'task'
+        ? childNode?.stats.durationMs
         : (event.startedAt != null && event.completedAt != null)
             ? event.completedAt - event.startedAt
             : undefined;
@@ -1560,6 +1634,7 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
+                {event.kind === 'task' && event.relation && <CollaborationRelationBadge relation={event.relation} />}
                 {evAnomalyHits.length > 0 && (
                     <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
                 )}
@@ -1704,7 +1779,7 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
                     </Button>
                 </DialogHeader>
                 <div className="overflow-auto flex-1">
-                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" />
+                    <SmartViewer text={raw} toolbar={false} maxHeight="none" theme="light" fullContent />
                 </div>
             </DialogContent>
         </Dialog>
@@ -2031,7 +2106,7 @@ function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultO
                 <span className="text-xs font-semibold shrink-0">{label}</span>
                 {sub && <span className="min-w-0 flex-1 truncate font-mono text-[11px] font-normal text-foreground-muted">{sub}</span>}
                 {meta && <span className={cn('text-[10px] text-foreground-muted tabular-nums shrink-0', !sub && 'ml-auto')}>{meta}</span>}
-                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', !meta && !sub && 'ml-auto', open && 'rotate-180')} />
+                <ChevronRight className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', !meta && !sub && 'ml-auto', open && 'rotate-90')} />
             </button>
             {open && (
                 <div className="bg-transparent">
@@ -2133,7 +2208,7 @@ function ToolCallList({ calls, modalTitle }: {
                 <WrenchIcon className="size-3.5 text-foreground-muted shrink-0" aria-hidden />
                 <span className="text-xs font-semibold">Tool calls</span>
                 <span className="ml-auto text-[10px] text-foreground-muted tabular-nums shrink-0">{calls.length}</span>
-                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', open && 'rotate-180')} />
+                <ChevronRight className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', open && 'rotate-90')} />
             </button>
             {open && (
                 <div className="flex flex-wrap gap-1 bg-transparent py-2 pl-10 pr-3">
@@ -2632,8 +2707,6 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const { findEventAnomalies } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
-    const dur = (event.startedAt != null && event.completedAt != null)
-        ? formatDuration(event.completedAt - event.startedAt) : null;
     const startClock = formatClockMs(event.startedAt);
     const endClock = formatClockMs(event.completedAt);
     const title = event.name || firstMeaningfulLine(event.summary) || km.label;
@@ -2641,6 +2714,12 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
     const spawnedChild = event.kind === 'task' && event.spawnedChildId
         ? node.children.find(c => c.id === event.spawnedChildId)
         : undefined;
+    const durationMs = event.kind === 'task'
+        ? spawnedChild?.stats.durationMs
+        : (event.startedAt != null && event.completedAt != null)
+            ? event.completedAt - event.startedAt
+            : undefined;
+    const dur = durationMs == null ? null : formatDuration(durationMs);
 
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')
@@ -2689,6 +2768,24 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
             {/* Body — all sections use CompactSection for consistent truncated-preview + modal pattern */}
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.875rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
                 <RasReliabilityDetails markers={eventAnomalies} />
+
+                {event.relation && (
+                    <div className="rounded-md border border-border bg-background-secondary p-3 text-xs text-foreground-secondary">
+                        <div className="mb-1 font-semibold text-foreground">
+                            {event.relation.sourceType === 'goal-plus-semantic'
+                                ? (locale === 'zh' ? 'Goal Plus 编排关系' : 'Goal Plus orchestration relation')
+                                : (locale === 'zh' ? '跨 Session 关系' : 'Cross-session relation')}
+                        </div>
+                        <div>{event.relation.description}</div>
+                        {event.relation.anchorState !== 'confirmed' && (
+                            <div className="mt-1 text-foreground-muted">
+                                {locale === 'zh'
+                                    ? '该节点来自只读关系投影，未改写原生 Trace，也未推断具体启动调用位置。'
+                                    : 'This node is a read-only relation projection; the native trace and exact spawn position were not changed.'}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
@@ -4021,7 +4118,7 @@ function ModalCodeBlock({ value }: { value: unknown }) {
     return (
         <SmartViewer
             text={text}
-            toolbar={false}
+            toolbar
             maxHeight={560}
             theme="light"
         />

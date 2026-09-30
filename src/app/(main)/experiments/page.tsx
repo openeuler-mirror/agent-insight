@@ -1,16 +1,19 @@
 'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
 
 // 实验列表 —— 评测「实验化」第一切片（本期仅单组实验）。
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FlaskConical, Plus } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { EmptyState } from '@/components/feedback/EmptyState';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 
 interface ExperimentRow {
   id: string;
@@ -18,6 +21,7 @@ interface ExperimentRow {
   type: string;
   agentName: string;
   status: string;
+  scope?: string;
   watchMode?: boolean;
   caseCount: number;
   evaluatorCount: number;
@@ -26,11 +30,24 @@ interface ExperimentRow {
 }
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const LIST_REFRESH_MS = 5_000;
+
+function responseError(value: unknown, fallback: string): string {
+  if (!value || typeof value !== 'object') return fallback;
+  const error = (value as { error?: unknown; code?: unknown }).error;
+  if (typeof error === 'string' && error) return error;
+  if (error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string') {
+    return String((error as { message: string }).message);
+  }
+  const code = (value as { code?: unknown }).code;
+  return typeof code === 'string' && code ? code : fallback;
+}
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
   draft: { label: '启动中', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
   running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
+  partial: { label: '部分完成', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
   failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
 };
 
@@ -65,13 +82,13 @@ function WatchChip() {
   );
 }
 
-function TypeChip() {
+function TypeChip({ scope }: { scope?: string }) {
   return (
     <span style={{
       fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
       background: 'var(--primary-subtle)', color: 'var(--primary)', whiteSpace: 'nowrap',
     }}>
-      单组实验
+      {scope === 'benchmark' ? 'Benchmark' : '单组实验'}
     </span>
   );
 }
@@ -94,30 +111,58 @@ export default function ExperimentsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
+  const [actionId, setActionId] = useState('');
+  const [actionError, setActionError] = useState('');
+  const loadSequence = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!user) return;
-    setLoading(true);
+    const sequence = ++loadSequence.current;
+    if (!silent) setLoading(true);
     try {
       const offset = (page - 1) * pageSize;
       const res = await apiFetch(
         `/api/experiments?user=${encodeURIComponent(user)}&limit=${pageSize}&offset=${offset}`,
       );
       const data = await res.json();
+      if (!res.ok) throw new Error(responseError(data, '加载实验失败'));
+      if (sequence !== loadSequence.current) return;
       setRows(Array.isArray(data?.items) ? data.items : []);
       setTotal(typeof data?.total === 'number' ? data.total : 0);
     } catch {
-      setRows([]);
-      setTotal(0);
+      if (!silent && sequence === loadSequence.current) {
+        setRows([]);
+        setTotal(0);
+      }
     } finally {
-      setLoading(false);
+      if (!silent && sequence === loadSequence.current) setLoading(false);
     }
   }, [user, page, pageSize]);
+
+  useEffect(() => () => { loadSequence.current += 1; }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  // 非终态实验完成后服务端状态会变化；串行静默轮询，避免旧响应覆盖新分页快照。
+  useEffect(() => {
+    if (!rows.some((row) => row.status === 'running' || row.status === 'draft')) return;
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await load(true);
+        if (!cancelled) schedule();
+      }, LIST_REFRESH_MS);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [rows, load]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   // 页码/每页条数变化后若越界（如切大页码后减小 pageSize），回夹到末页
@@ -126,6 +171,39 @@ export default function ExperimentsPage() {
     const timer = window.setTimeout(() => setPage(totalPages), 0);
     return () => window.clearTimeout(timer);
   }, [page, totalPages]);
+
+  const createSameConfigExperiment = async (sourceExperimentId: string) => {
+    if (!user || actionId) return;
+    setActionId(sourceExperimentId);
+    setActionError('');
+    try {
+      const createResponse = await apiFetch('/api/experiments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, createMode: 'same-config', sourceExperimentId }),
+      });
+      const created = await createResponse.json().catch(() => ({}));
+      if (!createResponse.ok) throw new Error(responseError(created, '复制实验配置失败'));
+      const experimentId = String(created?.id || '');
+      if (!experimentId) throw new Error('复制实验后未返回实验 ID');
+      const runResponse = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/run?user=${encodeURIComponent(user)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const started = await runResponse.json().catch(() => ({}));
+      if (!runResponse.ok) {
+        await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}?user=${encodeURIComponent(user)}`, {
+          method: 'DELETE',
+        }).catch(() => undefined);
+        throw new Error(responseError(started, '启动实验失败'));
+      }
+      router.push(`/experiments/${experimentId}`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '同配置实验创建失败');
+      setActionId('');
+    }
+  };
 
   return (
     <>
@@ -139,6 +217,7 @@ export default function ExperimentsPage() {
         }
       />
       <PageContainer>
+        {user && <PendingExperimentCancellations user={user} />}
         <div style={{
           background: 'var(--card-bg)', border: '1px solid var(--card-border)',
           borderRadius: 10, overflow: 'hidden',
@@ -171,6 +250,7 @@ export default function ExperimentsPage() {
                   <th style={{ ...TH, textAlign: 'right' }}>综合分</th>
                   <th style={TH}>状态</th>
                   <th style={TH}>创建</th>
+                  <th style={TH}>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -182,9 +262,23 @@ export default function ExperimentsPage() {
                     onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--background-secondary)'; }}
                     onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                   >
-                    <td style={{ ...TD, fontWeight: 500 }}>{r.name}</td>
+                    <td style={{ ...TD, fontWeight: 500 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {displayedExperimentName(r.name, r.createdAt)}
+                        {user && <ExperimentRenameButton
+                          experimentId={r.id}
+                          user={user}
+                          name={r.name}
+                          createdAt={r.createdAt}
+                          onRenamed={(name) => {
+                            setRows((current) => current.map((item) => item.id === r.id ? { ...item, name } : item));
+                            void load(true);
+                          }}
+                        />}
+                      </span>
+                    </td>
                     <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentName || '—'}</td>
-                    <td style={TD}><TypeChip /></td>
+                    <td style={TD}><TypeChip scope={r.scope} /></td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>
                     <td style={{
@@ -202,12 +296,33 @@ export default function ExperimentsPage() {
                     <td style={{ ...TD, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
                       {new Date(r.createdAt).toLocaleString('zh-CN', { hour12: false })}
                     </td>
+                    <td style={{ ...TD, whiteSpace: 'nowrap' }} onClick={(event) => event.stopPropagation()}>
+                      <span style={{ display: 'inline-flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          disabled={Boolean(actionId)}
+                          onClick={() => void createSameConfigExperiment(r.id)}
+                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
+                        >
+                          {actionId === r.id ? '创建中…' : '同配置实验'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(actionId)}
+                          onClick={() => router.push(`/experiments/new?reuseFrom=${encodeURIComponent(r.id)}`)}
+                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: actionId ? 'not-allowed' : 'pointer' }}
+                        >复用评测配置</button>
+                        {user && <DeleteExperimentButton user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
         </div>
+
+        {actionError && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--error)' }}>{actionError}</div>}
 
         {!loading && total > 0 && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>

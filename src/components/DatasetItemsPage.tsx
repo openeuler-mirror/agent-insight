@@ -15,6 +15,7 @@ import {
   createEvaluatorCatalogField,
   createEmptyCase,
   evaluatorCatalogFieldKeyFromLabel,
+  hasMeaningfulDatasetCaseValue,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
@@ -25,6 +26,7 @@ import {
   parseBatchFromFileContent,
   readFileAsText,
 } from '@/lib/dataset-batch-import';
+import { safeUUID } from '@/lib/safe-uuid';
 import { useAuth } from '@/lib/auth/auth-context';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
@@ -32,6 +34,11 @@ import { Select } from '@/components/ui/select';
 import styles from '@/components/DatasetItemsPage.module.css';
 import { formatReliabilityFaultTypeFromCaseValues } from '@/lib/reliability/fault-type-display';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
+import {
+  benchmarkPresentationText,
+  benchmarkPresentationValue,
+  truncateBenchmarkText,
+} from '@/lib/benchmark/presentation';
 import {
   buildFaultModeGuideGroups,
   type FaultModeGuideOption,
@@ -87,19 +94,39 @@ function TooltipCell({
   const [show, setShow] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const tdRef = useRef<HTMLTableCellElement>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelHide = () => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  };
+
+  const showTooltip = () => {
+    cancelHide();
+    setRect(tdRef.current?.getBoundingClientRect() ?? null);
+    setShow(true);
+  };
+
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimerRef.current = setTimeout(() => setShow(false), 150);
+  };
+
+  useEffect(() => () => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+  }, []);
 
   return (
     <td
       ref={tdRef}
       style={tdStyle}
-      onMouseEnter={() => {
-        setRect(tdRef.current?.getBoundingClientRect() ?? null);
-        setShow(true);
-      }}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={showTooltip}
+      onMouseLeave={scheduleHide}
       onClick={onClick}
     >
-      {shortText}
+      <span className={styles.cellText}>{shortText}</span>
       {show && rect && fullText && (
         <div
           style={{
@@ -120,8 +147,13 @@ function TooltipCell({
             wordBreak: 'break-word',
             boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
             color: 'var(--foreground)',
-            pointerEvents: 'none',
+            pointerEvents: 'auto',
+            userSelect: 'text',
           }}
+          onMouseEnter={cancelHide}
+          onMouseLeave={scheduleHide}
+          onMouseDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
         >
           {fullText}
         </div>
@@ -176,6 +208,15 @@ function fieldText(row: DatasetCase, key: string): string {
   return JSON.stringify(value, null, 2);
 }
 
+function displayFieldText(row: DatasetCase, field: DatasetField): string {
+  if (!field.path) return fieldText(row, field.key);
+  return benchmarkPresentationText(benchmarkPresentationValue({
+    input: row.input,
+    externalCaseId: row.values?.externalCaseId,
+    values: row.values,
+  }, field.path), { format: field.format });
+}
+
 export default function DatasetItemsPage() {
   const params = useParams();
   const router = useRouter();
@@ -183,7 +224,7 @@ export default function DatasetItemsPage() {
   const { user } = useAuth();
 
   const [dataset, setDataset] = useState<AgentDataset | null>(null);
-  const isReadOnly = isBuiltinReliabilityDataset(dataset || {});
+  const isReadOnly = Boolean(dataset?.readOnly) || isBuiltinReliabilityDataset(dataset || {});
   const fullDatasetRef = useRef<AgentDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -263,6 +304,8 @@ export default function DatasetItemsPage() {
         cases: Array.isArray(d.cases) ? d.cases : [],
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
+        readOnly: d.readOnly,
+        benchmark: d.benchmark,
       });
       fullDatasetRef.current = null;
     } catch (e) {
@@ -434,6 +477,18 @@ export default function DatasetItemsPage() {
     setRowEditor({ mode: 'add', row: createEmptyCase() });
   };
 
+  const openFieldEditor = () => {
+    setFieldDraft({ label: '', type: 'text' });
+    setFieldError('');
+    setFieldEditorOpen(true);
+  };
+
+  const closeFieldEditor = () => {
+    setFieldEditorOpen(false);
+    setFieldDraft({ label: '', type: 'text' });
+    setFieldError('');
+  };
+
   const openEdit = async (row: DatasetCase) => {
     if (isReadOnly) return;
     setSaving(true);
@@ -467,7 +522,9 @@ export default function DatasetItemsPage() {
       await load();
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : '字段保存失败');
+      const message = e instanceof Error ? e.message : '字段保存失败';
+      setError(message);
+      setFieldError(message);
       return false;
     } finally {
       setSaving(false);
@@ -495,12 +552,10 @@ export default function DatasetItemsPage() {
       ...dataset.fields,
       catalogKey
         ? createEvaluatorCatalogField(catalogKey, label)
-        : { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
+        : { id: safeUUID(), key, label, type: fieldDraft.type },
     ]);
     if (ok) {
-      setFieldEditorOpen(false);
-      setFieldDraft({ label: '', type: 'text' });
-      setFieldError('');
+      closeFieldEditor();
     }
   };
 
@@ -523,6 +578,10 @@ export default function DatasetItemsPage() {
 
   const saveRowFromModal = async () => {
     if (!rowEditor || !dataset) return;
+    if (!hasMeaningfulDatasetCaseValue(rowEditor.row, dataset.fields)) {
+      toast.error('请至少填写一个字段');
+      return;
+    }
     const { mode } = rowEditor;
     const values = { ...(rowEditor.row.values || {}) };
     for (const field of dataset.fields) {
@@ -649,6 +708,7 @@ export default function DatasetItemsPage() {
 
   const isTraj = dataset.datasetKind === 'trajectory';
   const isReliability = dataset.datasetKind === 'reliability';
+  const isBenchmark = dataset.datasetKind === 'benchmark';
   const selectedTab = isReliability ? activeTab : 'items';
   const catalogDraftKey = evaluatorCatalogFieldKeyFromLabel(fieldDraft.label);
 
@@ -695,10 +755,10 @@ export default function DatasetItemsPage() {
             </span>
           )}
           <span className="ai-badge ai-badge-gr">
-            {isTraj ? '轨迹评测集' : isReliability ? '可靠性评测集' : '理想输出评测集'}
+            {isBenchmark ? 'Benchmark 数据集' : isTraj ? '轨迹评测集' : isReliability ? '可靠性评测集' : '理想输出评测集'}
           </span>
           {isReadOnly && (
-            <span className={styles.readOnlyBadge} title="内容由系统故障目录统一维护">
+            <span className={styles.readOnlyBadge} title={isBenchmark ? '内容由 Benchmark 导入流程维护' : '内容由系统故障目录统一维护'}>
               只读
             </span>
           )}
@@ -753,7 +813,7 @@ export default function DatasetItemsPage() {
               <button
                 type="button"
                 className={styles.refreshGhost}
-                onClick={() => setFieldEditorOpen(true)}
+                onClick={openFieldEditor}
                 disabled={saving || isReadOnly}
                 title={isReadOnly ? '内置可靠性评测集不可新增字段' : '新增字段'}
               >
@@ -793,11 +853,19 @@ export default function DatasetItemsPage() {
           </div>
 
           {selectedTab === 'items' ? <div className={styles.tableScroll}>
-            <table className={styles.dataTable}>
+            <table className={`${styles.dataTable} ${styles.itemsTable}`}>
               <thead>
                 <tr>
                   <th>ID</th>
-                  {dataset.fields.map(field => <th key={field.id}>{field.label}</th>)}
+                  {dataset.fields.map(field => (
+                    <th
+                      key={field.id}
+                      title={field.description || undefined}
+                      style={field.width ? { width: field.width, minWidth: field.width } : undefined}
+                    >
+                      {field.label}
+                    </th>
+                  ))}
                   <th>操作</th>
                 </tr>
               </thead>
@@ -825,19 +893,26 @@ export default function DatasetItemsPage() {
                         <span className={styles.idTag}>{shorten(row.id, 10)}</span>
                       </td>
                       {dataset.fields.map(field => {
-                        const fullText = fieldText(row, field.key);
+                        const fullText = displayFieldText(row, field);
                         const displayText = field.key === 'fault_injection_type' && isReliability
                           ? formatFaultInjectionType(row, fullText)
                           : fullText;
                         const isTrajectoryField = ['trace', 'trajectory'].includes(field.key.trim().toLocaleLowerCase());
+                        const displayType = field.displayType || field.type;
                         return (
                         <TooltipCell
                           key={field.id}
-                          shortText={shorten(displayText, field.type === 'json' ? 40 : 80)}
+                          shortText={truncateBenchmarkText(
+                            displayText || '—',
+                            field.truncate || (field.type === 'json' ? 40 : 80),
+                          )}
                           fullText={displayText}
                           tdStyle={{
-                            maxWidth: field.type === 'json' ? 220 : 260,
-                            ...(field.type === 'json' ? { fontFamily: 'ui-monospace, monospace', fontSize: 12 } : {}),
+                            width: field.width,
+                            minWidth: field.width,
+                            maxWidth: field.width || (field.type === 'json' ? 220 : 260),
+                            ...(['code', 'json'].includes(displayType) ? { fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 12 } : {}),
+                            ...(displayType === 'number' ? { textAlign: 'right', fontVariantNumeric: 'tabular-nums' } : {}),
                             ...(isTrajectoryField && !isReadOnly ? { cursor: 'pointer', color: 'var(--primary)' } : {}),
                           }}
                           onClick={isTrajectoryField && !isReadOnly ? () => void openEdit(row) : undefined}
@@ -1062,8 +1137,14 @@ export default function DatasetItemsPage() {
       )}
 
       {fieldEditorOpen && (
-        <div role="presentation" className={styles.modalBackdrop} onClick={() => !saving && setFieldEditorOpen(false)}>
-          <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel} onClick={e => e.stopPropagation()}>
+        <div
+          role="presentation"
+          className={styles.modalBackdrop}
+          onMouseDown={event => {
+            if (event.button === 0 && event.target === event.currentTarget && !saving) closeFieldEditor();
+          }}
+        >
+          <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel}>
             <div className={styles.modalHeader}>
               <div id="add-field-title" className={styles.modalTitle}>新增字段</div>
             </div>
@@ -1085,6 +1166,7 @@ export default function DatasetItemsPage() {
               <div style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段类型</span>
                 <Select
+                  modal={false}
                   value={catalogDraftKey ? 'json' : fieldDraft.type}
                   onChange={type => {
                     if (!catalogDraftKey) setFieldDraft({ ...fieldDraft, type });
@@ -1109,7 +1191,7 @@ export default function DatasetItemsPage() {
               {fieldError && <div className={styles.modalError}>{fieldError}</div>}
             </div>
             <div className={styles.modalFooter}>
-              <button type="button" className={styles.btnGhost} onClick={() => setFieldEditorOpen(false)} disabled={saving}>取消</button>
+              <button type="button" className={styles.btnGhost} onClick={closeFieldEditor} disabled={saving}>取消</button>
               <button type="button" className={styles.btnPrimary} onClick={() => void addField()} disabled={saving}>{saving ? '保存中…' : '新增'}</button>
             </div>
           </div>

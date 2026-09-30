@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getAgentInsightHome } from './env';
 
 export function getPreferredInsightDir(): string {
-  return path.join(os.homedir(), '.agent-insight');
+  return getAgentInsightHome();
 }
 
 export function getLegacyInsightDir(): string {
@@ -12,6 +13,7 @@ export function getLegacyInsightDir(): string {
 
 export function getExistingInsightDir(): string {
   const preferred = getPreferredInsightDir();
+  if (process.env.AGENT_INSIGHT_HOME) return preferred;
   const legacy = getLegacyInsightDir();
   if (fs.existsSync(preferred)) return preferred;
   if (fs.existsSync(legacy)) return legacy;

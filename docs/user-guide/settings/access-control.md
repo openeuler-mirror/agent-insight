@@ -22,7 +22,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 | --- | --- | --- |
 | 本地登录 | `LOGIN_MODE=standalone`（默认） | 用户输入邮箱，登录即注册，可以主动退出 |
 | 历史组织集成 | `ORGANIZATION_MODE=true`、`ORG_*` | 依赖上游网关 Cookie，并可联动组织 Skill 接口 |
-| IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，按返回 UUID 注册或登录，可退出当前网页账号 |
+| IDaaS OAuth 登录 | `LOGIN_MODE=idaas_oauth`、`IDAAS_OAUTH_*` | 跳转统一身份认证，以 UUID 归属数据，侧边栏优先显示人员账号，可退出当前网页账号 |
 
 历史组织集成是以前为特定应用保留的组织接口能力；IDaaS OAuth 登录是独立的 OAuth 2.0 授权码登录。两者不共享配置、接口或 Cookie，也不支持同时开启。冲突配置会显示登录配置错误，不会降级为本地登录。
 
@@ -68,7 +68,9 @@ IDAAS_REGION_ACCESS_IAM_ENTERPRISE=
 IDAAS_REGION_ACCESS_TLS_VERIFY=false
 ```
 
-真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。地区限制开启后，平台在创建用户前固定以 `{ uuids: [uuid] }` 查询人员信息，并在已有账号恢复时复查。欧盟地区显示“您的地区暂无法使用”；IAM/人员接口异常、空数据或关键字段缺失时失败关闭，显示“地区信息校验失败，请稍后重试”。
+真实 endpoint、client ID、client secret、redirect URI 和 scope 只进入部署环境，不提交到代码仓。callback 推荐使用部署地址下的 `/callback`，同时兼容原 `/api/auth/idaas-oauth/callback`；环境变量必须与 IDaaS 登记值完全一致。IDaaS 返回的 UUID 会去除首尾空白、保持原始大小写并直接作为本地账号；首次登录自动创建用户并注入现有示例，后续登录复用该 UUID 的数据。地区限制开启后，平台在创建用户前固定以 `{ uuids: [uuid] }` 查询人员信息，并在已有账号恢复时复查。同一人员响应中的 `w3Account` 会保存到 UUID 对应用户的 `externalAccount` 字段，只用于侧边栏展示和运维反查；接口未返回时仍显示 UUID。已有用户会在下次成功登录或恢复会话时自动补齐。欧盟地区显示“您的地区暂无法使用”；IAM/人员接口异常、空数据或关键字段缺失时失败关闭，显示“地区信息校验失败，请稍后重试”。
+
+运维人员可按外部账号查询对应 UUID：`SELECT username FROM "User" WHERE "externalAccount" = ?`。真实账号值只存在部署数据库中，不进入代码仓。
 
 网页登录没有固定的空闲或绝对过期时间。浏览器会在当前 origin 的 `localStorage` 中保存 UUID 和 API Key，重新打开页面时使用两者恢复登录；API Key 有效且数据库用户仍存在时无需重新走 IDaaS。清理站点数据、改用其他协议/域名/IP/端口、API Key 或用户被删除、数据库被重置，或者部署切换登录模式时，需要重新登录。OAuth state 的 5 分钟有效期和 callback 登录票据的 60 秒有效期只约束单次授权跳转，不是网页会话时长；重新走 OAuth 时是否再次输入账号密码，由公司 IDaaS 的 SSO 会话策略决定。
 
@@ -80,30 +82,27 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 ## 功能定位
 
-客户端安装承担四项核心职责：
+客户端安装承担六项核心职责：
 
-- 按目标操作系统生成可直接执行的接入命令
+- 按所选框架生成可直接执行的 Linux curl 接入命令
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
 - 选择 OpenCode 时，在 Agent 主机安装普通观测插件与同进程 Agent RAS
+- 为生成 Trace 和 Benchmark 实验提供受控 Agent 执行、Artifact 上传与状态回调通道
 
 ## 页面结构
 
-客户端安装页面通常由四个功能区组成：
+客户端安装页面由两个主要区域组成：
 
-1. **常驻客户端区（Agent RAS）**
-   生成带一次性令牌的安装命令，安装独立常驻客户端服务。
-2. **安装命令区**
-   按操作系统展示一键接入命令。
-3. **凭证与接入信息区**
-   展示当前 API Key、账号信息、平台地址与上报路径。
-4. **相关文档区**
-   提供 API Key、客户端接入与常见问题的辅助说明入口。
+1. **安装命令区**
+   选择框架并复制 Linux curl 接入命令；保留 LangChain / LangGraph 环境变量与 LlamaIndex 应用注册说明。
+2. **凭证与接入信息区**
+   展示当前 API Key、账号信息、平台地址与所选框架的上报路径。
 
-### 常驻客户端区（Agent RAS）
+### 脚本安装的常驻客户端（Agent RAS）
 
-与下方的 Trace 采集器安装是两件不同的事：
+常驻客户端由一键接入脚本安装，页面不再单独提供安装区。它与 Trace 采集器的职责不同：
 
 | | Trace 采集器 | 常驻客户端 |
 |---|---|---|
@@ -113,22 +112,33 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 | 凭证 | 账号 API Key | 设备凭证（一机一把，可单独撤销） |
 | 支持平台 | 全部 | 仅 Linux 与 macOS |
 
-点击「生成安装命令」后会得到一条带一次性令牌的命令，**令牌 10 分钟内有效且只能使用一次**；过期或已被使用时需重新生成。
-
 > **Note**
 > 安装 Trace 采集器（`/api/ingest/setup`）时会**顺带注册常驻客户端**，本机随即出现在「客户端配置」页。
 > 该步骤失败只告警不中断 —— Trace 采集照常工作，只是本机暂时无法在配置页管理；
-> 届时按下方命令单独安装即可。
+> 排除告警原因后，重新执行页面生成的一键接入命令即可。
 > 注册步骤默认安装当前 Insight 服务端随附的客户端版本，不会被执行命令目录中的旧项目副本覆盖；
 > 重跑命令会刷新注册与设备凭证，并按机器标识复用原有客户端记录。
+
+若安装时报「缺少执行器运行时」或「制品不完整」，需先由服务端部署方修复制品来源，再重跑客户端安装命令；反复重试同一份残缺安装包无法解决。通过 `scripts/start.sh` 部署的服务需更新代码并重新构建、启动，确保 bundle 从完整项目根目录读取。服务端缺少必需文件时，bundle 接口返回 503 和缺失清单，不再返回残缺压缩包。`Telemetry: READY` 仅表示 Trace 采集器就绪，不代表常驻客户端注册成功。
+
+Linux 会按实际权限与既有安装选择 systemd 层级：root 安装或检测到历史
+`/etc/systemd/system/agent-insight-client.service` 时使用系统级服务，普通用户新装使用
+`~/.config/systemd/user/agent-insight-client.service`。安装器会在刷新设备凭证前确认对应的
+systemd manager 可用；普通用户若遇到历史系统级服务，会先退出并提示使用 root 重跑，避免旧进程
+继续持有随后被撤销的凭证。macOS 仍使用当前用户的 `~/Library/LaunchAgents`。
 
 安装完成后客户端会：
 
 - 注册为系统服务，崩溃后由操作系统自动拉起，不随 Agent 平台启停
 - 主动建立出站 WSS 控制连接（不监听任何入站端口）
 - 自动发现本机 IP、Agent 平台、可用模型并上报
+- 按能力白名单接收普通实验和 `RUN_BENCHMARK_CASE`；Benchmark 在隔离 Git 工作区运行并按 Manifest 收集 Artifact
 - **同时纳管故障注入能力** —— 本机会一并出现在「实验」与「故障注入」页面，
   无需再单独执行 FI Worker 的安装命令
+
+客户端每 30 秒完整刷新一次 Agent、模型与故障注入能力；配置变化或手动刷新也会立即重新探测。刷新发现新增、恢复或失效的 Agent Runtime 时，会同时更新 Benchmark 本地执行能力，无需重启常驻客户端。
+每轮探测使用 `~/.agent-insight/client/tmp/inventory-*` 独立临时目录并在成功、失败或超时后清理，
+安装包也暂存在同一客户端目录下，不会持续向系统 `/tmp` 遗留 OpenCode/OpenTUI 的临时 `.so`。
 
 > **Note**
 > 该命令默认会一并安装故障注入组件。系统 Python 只用于创建 Agent Insight 管理的专用 venv，
@@ -140,7 +150,7 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 > 在 Homebrew / Debian 等 PEP 668「受管控 Python」环境下，安装器不会尝试全局 pip，
 > 因而不需要 `--break-system-packages`，也不会出现 `externally-managed-environment` 安装错误。
 
-客户端只接受固定动作白名单（配置写入、运行实验 Case 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。
+客户端只接受固定动作白名单（配置写入、普通实验 Case、`RUN_BENCHMARK_CASE` 等），服务端**不能**下发任意命令、任意文件路径或任意下载地址。Benchmark 任务中的仓库、revision、策略和 Artifact Collector 还会经过协议校验；客户端不开放 Benchmark 入站端口。
 
 > **Note**
 > 未安装 Python 或故障注入组件的主机同样可以正常上线，只是「故障注入能力」显示为不可用，不影响配置下发与观测。
@@ -149,11 +159,10 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 安装命令区通常包含：
 
-- **Linux / macOS 命令**：用于 Bash 环境的一键接入
-- **Windows PowerShell 命令**：用于 PowerShell 环境的一键接入
+- **Linux curl 命令**：在 Agent 所在 Linux 主机的 Bash / Zsh 终端执行
 - **Langfuse Python SDK 环境变量**：用于已经接入 Langfuse Python SDK 或 LangChain CallbackHandler 的项目
-- **复制按钮**：用于复制对应平台命令
-- **说明提示区**：说明命令执行后通常需要输入 API Key，并完成后续初始化
+- **复制按钮**：用于复制已包含当前账号 API Key 的接入命令
+- **说明提示区**：提醒身份验证完成后再复制命令，平台地址或服务变化后应重新获取命令
 
 ### 凭证与接入信息区
 
@@ -161,7 +170,6 @@ IDAAS_REGION_ACCESS_TLS_VERIFY=false
 
 - **当前 API Key 面板**：展示当前账号的接入凭证，并提供复制能力
 - **接入信息面板**：展示邮箱、平台地址、API Key 状态，并根据已选框架展示实际使用的主上报通道
-- **相关文档面板**：提供 API Key、客户端配置和常见问题说明入口
 
 主上报通道会随框架选择实时变化；多选框架共用同一通道时，页面只展示一次，并在通道下列出对应框架。未选择任何框架时，页面提示将在终端中继续选择。当前三类主通道为：
 
@@ -183,7 +191,7 @@ Langfuse/LangGraph 不在上方框架选择器中，其环境变量配置区单�
 
 | 配置项 | 说明 |
 | --- | --- |
-| **安装命令** | 按目标操作系统生成的接入脚本入口，用于初始化客户端配置。 |
+| **安装命令** | 按所选框架生成的 Linux curl 接入脚本入口，已包含当前账号 API Key。 |
 | **API Key** | 当前账号的接入凭证，用于绑定上报身份与数据归属。 |
 | **平台地址** | Agent Insight 服务端地址，客户端通过该地址上报执行数据。 |
 | **当前上报通道** | 根据已选框架显示 OTLP Logs、OTLP Traces 或 JSON 会话快照入口；同一入口会自动去重。 |
@@ -202,7 +210,7 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 > **Warning**
 > 账号或平台地址切换后，应重新打开本页并复制新命令，不要复用浏览器历史、聊天记录或终端历史中的旧命令。
 > `/api/ingest/setup` 会在下发脚本前校验命令中的 API Key；Key 不属于当前服务时返回 401，
-> `curl -f` / `irm` 不会继续执行安装脚本。
+> `curl -f` 不会继续执行安装脚本。
 
 ## 操作流程
 
@@ -210,9 +218,9 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 1. 在 [Agent 概览](../agent-management) 中完成目标 Agent 登记。
 2. 进入 **客户端安装** 页面。
-3. 在安装命令区选择目标操作系统。
-4. 复制对应的一键接入命令。
-5. 在目标 Agent 所在运行环境执行该命令。
+3. 在安装命令区选择要接入的框架。
+4. 复制 **Linux** 一键接入命令。
+5. 在目标 Agent 所在 Linux 运行环境执行该命令。
 6. 脚本写入当前账号 API Key；选择 OpenCode 时同时安装普通观测插件和 Agent RAS。
 7. 触发一次最小执行。
 8. 在 [链路追踪](../observability/view-traces) 中确认首条 Trace 是否生成。
@@ -228,7 +236,7 @@ OpenCode uploader 优先复用 `~/.agent-insight/client/config.json` 中的 `cli
 
 1. 进入 **客户端安装** 页面。
 2. 等待当前账号、API Key 与平台地址显示为已就绪。
-3. 重新复制当前操作系统对应命令。
+3. 重新选择框架并复制 **Linux** 命令。
 4. 在新的运行环境执行初始化命令。
 5. 脚本校验当前 API Key，并为本机重新换发该 Host 的设备凭据。
 6. 触发一次验证执行并观察链路数据是否恢复。
@@ -286,14 +294,6 @@ spool 必须显式追加 `--purge-all --yes`：
 node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
 ```
 
-### 流程五：排查“无数据上报”
-
-1. 回到客户端安装页确认当前账号、API Key 与平台地址。
-2. 确认执行命令的机器就是目标 Agent 实际运行环境。
-3. 确认客户端已完成至少一次真实执行。
-4. 确认服务端地址与上报路径可达。
-5. 进入链路追踪确认是否已有新 Trace 写入。
-
 ### 流程五：接入 Codex CLI 与 VS Code-family 编辑器
 
 1. 确认目标机器安装了兼容的 Codex CLI、Node.js 20 或更高版本。
@@ -315,6 +315,39 @@ SHA-256。摘要不匹配时安装立即停止，不会运行包内的 `install.
 编辑器 Settings 中的 `cloudAgentId` 是用户手工关联值，事件会标记 `source=user`。只有
 Codex 原生 OTel 真正提供 `auth.agent_id` 或 `auth.task_id` 时，平台才把它计为自动 Cloud
 关联证据。
+
+### 流程六：接入 Goal Plus
+
+Goal Plus 应已经安装在 Pi 中。Agent Insight 不安装或修改 Goal Plus 本体；在客户端安装页
+只勾选 **Pi Agent** 即可。一键命令会配置 Pi 主采集器，并静默内置一个默认休眠的
+Goal Plus worker/关系观察器：
+
+- Pi Agent 采集器：上传 Pi 原生主 Trace，并上报本次 Goal Plus task 的主 Session 绑定；
+- Goal Plus collector：从 `.gp` 发现 Pi worker，上传 worker Trace、worker 绑定和主从关系。
+
+配置完成后，继续在 Pi 中按原方式执行 `/goal-plus`。普通 Pi Trace 采集逻辑不变；只有真实
+Goal Plus start task 会生成主绑定，resume、pause、summary 等管理命令不会创建关系。
+
+要在主 Trace 下看到 worker，不需要手工 attach。执行真实 `/goal-plus` start 后，Pi 扩展会从
+当前工作目录（或 `GOAL_PLUS_ROOT`）定位 `.gp`，并核验 Goal ID 与当前 Pi native session 的
+start invocation；通过后自动完成 source 登记、首次 scan 和 watcher 启动。
+
+观察器的 `activation.status=ACTIVE` 和 `ready=true` 表示 worker/关系 collector 的凭证、当前 schema、工作区和 watcher
+均已就绪。未检测到 `.gp` 或该 collector 失败时，Pi 主 Trace 仍可正常出现，但 worker 不会挂到
+主 Trace 下。当前适配只接受重构后的 `agent_harness`、`runtime_provider`、`execution_scope`、
+`session_handle` 格式，不兼容旧 `host` / `host_handle` 格式。
+
+Pi 主采集器和 Goal Plus worker 观察器不允许使用不同账号。每次执行 Pi 一键接入都会用当前
+API Key 和端点覆盖两者的 managed config，并重启已有 Goal Plus watcher；切换 Agent Insight
+账号后应重新执行该接入命令，旧账号配置不会继续保留。
+
+### 流程七：排查“无数据上报”
+
+1. 回到客户端安装页确认当前账号、API Key 与平台地址。
+2. 确认执行命令的机器就是目标 Agent 实际运行环境。
+3. 确认客户端已完成至少一次真实执行。
+4. 确认服务端地址与上报路径可达。
+5. 进入链路追踪确认是否已有新 Trace 写入。
 
 ## 维护建议
 

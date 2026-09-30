@@ -65,22 +65,31 @@ profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和
 
 表格是列表页的核心区域，通常包含以下字段：
 
-- **Trace ID**：当前执行的唯一标识
+- **Trace ID**：当前执行的唯一标识；拖宽该列可显示更多字符，复制按钮始终复制完整 ID
 - **Agent**：发起或承载该执行的 Agent
-- **执行状态**：已完成、失败、执行中等状态结果
+- **执行状态**：成功、失败、执行中或超时；可在状态筛选中单独查看超时 Trace
 - **用户标签**：用户维护的版本标签和业务标签，可在列表内直接添加或移除
 - **系统标签**：系统从 Trace 派生的只读标签，例如 Multi-Agent、Skills、SUB 和框架名，默认隐藏
 - **任务内容**：本次执行的任务摘要或问题内容
 - **执行时间**：以浏览器本地时区显示完整发生时间（`YYYY-MM-DD HH:mm:ss`），用于回溯事件窗口；悬停可查看相对时间
 - **操作**：继续进入详情、分析或评测流程
 
-其中，**执行状态**只表示 Trace 生命周期：平台收到明确完成信号后显示已完成；尚未收到完成信号时显示执行中。它不等同于评测状态；部分接入会在有最终回答且能从 Trace 时间戳推断完成点时补齐完成时间，例如 Hermes 可使用根 span/交互时间，OpenCode 可使用 `session.idle`；Hermes/OpenCode 的旧记录或漏写完成信号时还会用 60 秒静默窗口兜底，但不会只凭回答文本判定完成。
+其中，**执行状态**表示 Trace 生命周期，与评测状态分开：
+
+- 收到完成信号后，按采集到的终态显示成功或失败。AcTrail 根 Agent 进程非零退出、Goal Plus Pi Session 的明确失败均显示失败；普通工具错误或 RAS 恢复动作不会单独把整条 Trace 判为失败。
+- 尚未收到完成信号时显示执行中。所有 Agent 框架统一使用十分钟无上报兜底：从服务端最后一次接收该 Trace 数据起满十分钟，显示超时。
+- 超时只表示这段时间没有收到新数据，不会伪造完成时间；再次收到数据后恢复执行中，收到真正的完成信号后进入成功或失败。评测、标签和人工修改不会延后超时。
+- 部分采集器会依据实际根 span、交互时间或 OpenCode `session.idle` 补齐完成时间；页面不再因静默 60 秒或本机无法找到远端进程而推断成功。
+
+列表每页显示 20 条。筛选和排序作用于当前账号及所选条件下的全部匹配记录，顶部统计也按该范围计算；它们不会只统计当前页。SQLite 部署由数据库完成这些计算，筛选范围越大，精确统计和复杂排序仍可能耗时更长。
+
+列表在页面可见时每五秒检查刷新；上一轮尚未返回时会等待，不重复加载。首次结果返回后显示列表，后续刷新期间保留已有记录。详情中的执行中和超时 Trace 也会自动刷新状态。隐藏页面暂停轮询，重新可见后继续检查。
 
 **环内 RAS（可靠性）与普通链路追踪解耦。** 「运行观测 / 链路追踪」（`/trace`）列表与详情**不再**展示 RAS 徽章或异常面板；环内异常与恢复请到侧栏 **AgentRAS 可靠性 / 可靠性观测**（`/agent-ras/trace`）查看。该页以当前账号的根 Trace（Execution）左连接 RAS 事件，并合并**仅有 RAS 事件、无 Execution** 的任务（例如 xiaoO CLI / inproc 注入），同时包含无故障 Trace 和异常 Trace。详情页顶部用**可折叠 RAS 异常摘要条**（默认收起，保证完整链路在首屏）：按**一次 anomaly 检测**一行展示类型、严重度、摘要、操作标签与恢复结果；同一次故障的恢复 / 中断等操作并入该行，不拆成多张卡。点选行会联动下方链路树中的 RAS 节点，右侧展示完整摘要与动作详情。有 Execution / 平台观测上报时复用完整链路视图并**叠 RAS 标记**（前端展示不变）；**仅有 RAS 事件、无平台对话链路**时不展示链路树。完整链路由 **agent-insight** 采集器提供（OpenCode：插件 + uploader → `/api/ingest/upload`；xiaoO：`scripts/xiaoo-trace-collector` → `/api/ingest/otel/v1/traces`）。排查「有 RAS 无 Trace」时先确认对应 Insight 采集器已安装（xiaoo：`node scripts/xiaoo-trace-collector/install.js` 或跑过 `install-ras`），**不要**把完整链路 Trace 当成 RAS 职责。RAS / FI 只上报自身事件并在对应页展示（可靠性观测叠 RAS；故障注入 Run 叠 RAS + FI），**不会**为进可靠性列表用 FI collect 合成 `Execution`。
 
 可靠性观测列表额外提供 **平台**列，以及顶部的 **搜索 / 平台 / 状态** 过滤（交互对齐「链路追踪」页的筛选条，字段集更精简）。**RAS 处置**列按「有故障 → 是否启动恢复 → 恢复是否成功」展示，与 **执行状态** 解耦：
 
-- **执行状态**与普通「链路追踪」同一口径：只看 Session 是否收到完成信号（`endTime`）→ 执行中 / 正常完成。**不看** `finalResult`、recorded `failures`，也**不看** RAS/FI 判责。RAS 下发的 `abort_stream` 不会单独改写执行状态——该动作是恢复手段，是否成功看 **RAS 处置**列。
+- **执行状态**：可靠性观测列表当前按 Session 完成信号（`endTime`）显示执行中 / 正常完成；该列表的状态计算独立于普通链路追踪的十分钟超时和采集终态判定。RAS 下发的 `abort_stream` 不会单独改写执行状态，该动作的恢复结果看 **RAS 处置**列。
 - **RAS 处置**取值：无故障；有故障 · 未启动恢复；有故障 · 已启动 · 恢复成功 / 恢复失败 / 结果未知。「结果未知」表示已有处置请求（`actions`）但缺少对应 `action_result`，此时列表信息不足以断言恢复成败，需进详情或核对推送是否漏报。若处置含 `abort_stream`，单元格会附带「含流中断动作」提示，仍不表示执行失败。
 - **时间**列显示精确本地时间（年-月-日 时:分:秒），不再使用「x 分钟前」相对文案；列头可点击，在升序 / 降序之间切换（默认最新在前）。
 - 列表支持**多选删除**：勾选一条或多条链路后点删除，会移除当前账号下对应的根 Execution、Session 与关联 RAS 事件；删除前有确认，且只能删自己名下的数据。
@@ -92,8 +101,8 @@ profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和
 
 设计中尚未实现的检测域不会出现在目录表。子模式**没有**独立开关——启停粒度停在 detector。
 
-普通链路与可靠性观测使用同一登录账号。standalone 登录使用邮箱，IDaaS 登录使用
-userinfo 返回的 UUID；OpenCode 上传使用的 API Key 必须属于该账号。本地 keyless 模式的数据归属
+普通链路与可靠性观测使用同一登录账号。standalone 登录使用邮箱，IDaaS 登录在内部使用
+userinfo 返回的 UUID，侧边栏可显示人员接口返回的账号别名；OpenCode 上传使用的 API Key 必须属于该账号。本地 keyless 模式的数据归属
 `AGENT_INSIGHT_DEFAULT_INGEST_USER`，该值也应配置为同一个 `User.username`。`admin`
 这类没有对应登录账号的旧别名不能用于页面登录。
 
@@ -153,6 +162,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 详情页承担“还原过程”和“定位原因”两类工作，适合对单条 Trace 做完整复盘。
 
+从列表点击进入详情，或在导入成功后点击“打开 Trace”，均可用浏览器后退返回原列表，保留原来的筛选条件和页码；浏览器前进可重新打开详情。详情顶部的“返回列表”始终打开当前筛选下的列表，通过分享链接直接进入详情时也可使用。
+
 <p align="center">
   <img src="../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
@@ -160,6 +171,10 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。
 
 当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
+
+当前 Goal Plus 采集器使用 main/worker 绑定和关系事件。默认 **仅主 Agent** 列表在收到明确的 worker 声明及绑定后就将它作为子 Agent 隐藏，即使主 Trace 或 worker 正文还未到齐；此时可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围查看已有记录。主端与某个 worker 的正文就绪、身份唯一后，该 worker 即可进入主 Trace，无须等待其他 worker 或主任务结束。列表隐藏与详情合并是两件事，等待中的 worker 不会生成虚假正文。reported 合并优先，同一 worker 不会与历史语义投影重复显示。
+
+对于历史 Goal Plus 语义数据，当语义关系已经把一个唯一主 Trace 与当前 Search run 的 worker Trace 确定关联后，**仅主 Agent** 列表隐藏已投影的 worker，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。Pi passive importer 存在多个历史主会话时，以 Goal 当前 active native Session 对应的 canonical Trace 为准；Pi 将同一原生 Session 的任务保存为 `<sessionId>__taskN` 时，明确由 `/goal-plus` 启动且只对应一个 Goal 的主任务也会显示同一子树。candidate ID 和 run ID 可用于核对成员，同一 Session 的续跑不会重复建节点。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。历史 run、主 Trace 不唯一、worker 正文尚未到达、超过投影上限、普通 Pi 任务或端点关联存在歧义时，平台保留独立 Session 入口，不做猜测性合并。
 
 任务完成度、轨迹质量等预置评估器生成的 `direct-llm` Trace，会以本次评估模型请求发出前和响应返回后的时间作为起止点。根 Agent、LLM Span、Session 和列表耗时使用同一次请求的时间窗口，因此新产生的评估 Trace 不会再因写库时间代替模型调用时间而显示为 `0ms`。修复前已经保存且缺少原始起止时间的历史 Trace 无法可靠反推真实耗时，不会自动补算。
 
@@ -233,6 +248,10 @@ Span 列表适合完成三件事：
 - 判断关键步骤是否按预期发生
 - 识别是否出现了多余调用、重复调用或错误分支
 
+链路树的展开、收起按钮控制子 Agent，悬停说明与列表 Trace ID 表头使用相同样式；收起后仍保留根 Agent。折叠箭头向右，展开后向下。
+
+**仅慢节点（>60s）**按事件节点的耗时严格筛选：恰好 60 秒以及缺少耗时的事件不匹配。开启后耗时筛选固定为 `>60s`，关闭后可重新选择。根 Agent 保留为层级入口，子 Agent 行不直接按自身耗时筛选，但会随所属父事件被过滤或因折叠而隐藏。因此，保留下来的 Agent 行不代表其耗时一定超过 60 秒。
+
 #### 4. 时间轴
 
 中间时间轴用于展示各个 Span 的持续时间和前后关系，是判断性能瓶颈与执行顺序的关键区域。
@@ -256,6 +275,8 @@ Span 列表适合完成三件事：
 - 关键步骤摘要
 
 这一面板适合判断当前节点是否就是问题核心，也适合在复杂 Trace 中快速理解“这个节点到底承担了什么职责”。
+
+工具输入和输出的“查看全部”弹窗显示完整内容，包括深层 JSON、长字符串和大数组，复制按钮复制完整内容。弹窗内的复制支持普通 HTTP 访问，复制后保留当前操作焦点。时间线事件中的工具输入和输出也各自提供复制按钮；内容继续按原有格式和 JSON 折叠规则展示。重复从父 Trace 进入子 Trace、返回后再进入时，会重新加载所选详情。
 
 ## 关键功能与名词解释
 
@@ -427,3 +448,91 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 - 导入归属当前用户。原 Execution ID、task ID 没有冲突时保持不变；只有目标库中已存在的 ID 才会生成新 ID，并同步改写父子关系与 session 引用。OTel trace/span ID 保持原值。
 - 成功弹窗会显示文件名、原 Trace ID、新 Trace ID、节点数和 ID 重映射数量，可直接打开导入后的 Trace。原、新 Trace ID 无论是否发生冲突都会显示；弹窗不展开完整 ID 重映射明细。
 - Bundle 只迁移 Trace 展示所需的 Execution、Session 与 interactions；不会迁移用户标签、评测结果、智能诊断报告或基础设施关联，也不会自动触发 LLM 评测。
+
+
+## 自定义 Agent Trace 合并与协作图
+
+本功能按增量关系事件建立独立协作图。用户只需调用一个新上报接口：`POST /api/ingest/collaborations/events`。**普通自定义协作不用先登记参与者，不用调用 sessions 绑定接口，没有原 Trace 也能显示节点和关系。** 成员 Trace 唯一关联且完整可读后，链路追踪列表只保留一个合并入口；详情展示全部成员，原始数据库记录保持不变。已有绑定仍然有效，Goal Plus 采集器的专用 main/worker 绑定和实时合并规则继续保留。
+
+### 1. 最小请求：没有 Trace 也可使用
+
+请求头：`Content-Type: application/json`、`x-witty-api-key: <你的采集凭据>`。
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-001",
+  "fromSessionId": "session-a",
+  "toSessionId": "session-b",
+  "description": "A 启动 B 做调研"
+}
+```
+
+第一次保存返回 201；同 eventId、同正文重试返回 200/duplicate。同 eventId 修改正文返回 409，不能覆盖。每次新联系使用新的 eventId，网络失败或响应丢失时保存并重发原编号和原正文。多个执行端共享同一 collaborationId，但必须属于同一授权账号。
+
+首次出现的 from/to 自动成为图中节点。A→B、B→C、C→A 都可以保留；同一对会话多次联系不会合成一条事件。description 只是用户说明，“返回结果”“发送消息”不会被当作新建子 Agent 的依据。
+
+### 2. 可选内容和步骤定位
+
+```json
+{
+  "collaborationId": "demo-task-001",
+  "eventId": "event-002",
+  "fromSessionId": "session-a",
+  "toSessionId": "session-c",
+  "description": "启动方案 Agent",
+  "content": "根据调研结果整理方案",
+  "observedAt": "2026-09-16T10:00:00+08:00",
+  "fromLocator": { "recordType": "shell", "commandContains": "agent-run --task plan" }
+}
+```
+
+工具名匹配改用 `{"recordType":"tool","name":"spawn_agent"}`。可选字段省略即可，不传 null。fromLocator 只读取发起方已采集的工具/Shell 记录，不执行命令，也不要求用户提供 spanId。工具名精确匹配，命令按字面包含；唯一匹配用于将子 Agent 挂到对应步骤，页面标注“候选步骤”以保留证据强弱。
+
+| 定位结果 | 页面含义 |
+|---|---|
+| not_provided | 未配置定位且无明确记录依据，保留会话关系 |
+| waiting_trace | 发起方 Trace 尚未唯一关联 |
+| not_found | 原 Trace 没有匹配记录，成员并列展示 |
+| candidate | 名称/命令唯一匹配，挂载到该步骤并标注候选 |
+| ambiguous | 多个候选或匹配依据有歧义 |
+| confirmed | 原始调用记录明确包含目标会话编号 |
+| time_ordered | 满足完整分组、数量、执行时间及可信时钟等条件的顺序推定，可能随迟到数据变化 |
+| pending | 查询暂不可用或超过单次解析容量 |
+
+只有存在可信执行端时钟依据时才进行组内时间推定。仅传 observedAt 不证明跨机器时钟已同步；当前无已知时钟依据时保留候选/歧义，并显示原因。不按接收顺序、最近时间或 Agent 名称猜测步骤。
+
+### 3. 如何关联原 Trace
+
+fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当前账号内，精确匹配 `Session.taskId` 或 `Execution.taskId / agentSessionId`；唯一对应一个 Trace 才关联，多个对应则提示歧义。编号不相同且无明确映射时不会猜测。
+
+没有 Trace 时仍展示关系和上报内容，节点说明执行详情尚未关联；Trace 后续到达，点击刷新即可补齐。历史 `/sessions` 绑定接口保留兼容老接入，但不是新接入的必需步骤。这个事件接口不上传完整工具执行正文，也不会凭空生成输入输出。
+
+### 4. 页面入口与操作
+
+链路追踪列表右上角点击 **协作图**，进入 `/observe/collaborations`，选择协作编号。也可以直接打开 `/observe/collaborations/<collaborationId>`。
+
+- 点击节点：查看会话编号和 Trace 关联状态；已关联时可打开原 Trace，或读取执行原文。
+- 点击箭头或下方事件：查看完整说明、上报内容、发生/接收时间、来源、fromLocator 和位置依据。明确/时间推定位置可打开对应步骤原文；唯一候选步骤可挂载子 Agent，并保留候选标识。
+- 同向多条联系分别画线，并在事件列表完整列出；循环、自联系、多父级都保留。
+- 默认每次加载 100 条上报事件，点击“加载更多”继续；刷新重新计算节点、自动关系和定位状态。
+- 图的位置不代表执行顺序；合并 Trace 内没有唯一调用位置的成员并列展示，排序使用 observedAt，缺失时使用接收时间，此顺序不作为真实调用证据。始终显示“任务结束状态未知”。
+
+已有 Trace 无需上报事件：在 Trace 详情点击 **调用关系图**，平台按原始 task/spawn_agent/subagent 调用中明确的目标会话编号画图，保留真实多层关系。不采用 Agent 类型/FIFO 兜底作为确认依据。原始调用与上报事件有唯一明确对应时合并来源；仅双方相同不会合并事件。
+
+### 5. 查询、日志与限制
+
+携带相同 API Key 查询：
+
+- `GET /api/observe/collaborations?limit=50`：协作列表，按 nextCursor 分页。
+- `GET /api/observe/collaborations/demo-task-001?offset=0&limit=100`：分页上报 events、nodes、只读 automaticEvents 和定位结果。
+- `GET /api/observe/collaborations/native?traceTaskId=<会话编号>`：已有 Trace 的明确调用图，不写入协作事件。
+
+请求体最大 64 KiB，description 最多 500 字符，content 最多 4000 字符；不接受未知字段、重复 JSON 键或错误类型。单实例每用户每分钟最多 120 次关系接口请求，429 按 Retry-After 原样重试。单组最多解析 2000 条事件、200 个会话，正文累计 32 MiB、调用 100000 条；超限保留分页关系并标注解析不完整，不能将不完整数据用于排序。
+
+运行 `bash scripts/develop_start.sh` 或 `bash scripts/start.sh` 后，日志位于仓库根目录 **server.log**。搜索 `collaboration` 或响应头 `x-collaboration-request-id`，可看到操作、账号、协作/事件编号、HTTP 状态、定位结果和失败原因。401 检查凭据；400 检查字段；409 检查是否修改了重试正文；500 检查数据库和启动迁移日志。201 只表示事件保存成功，不表示步骤已经明确定位。
+
+日志不记录 API Key、上报正文或 Shell 命令。保持日志等级 info 才能查看成功记录；启动脚本会覆盖 server.log，需留存时先备份。两个脚本继续自动执行已有 schema 同步与客户端生成；本轮独立协作图不新增数据库表。
+
+
+协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。成员 Trace 就绪后，链路列表只展示一个合并入口（复用首个无调用父级的成员 taskId），详情包含全部成员：定位唯一时挂到对应调用步骤，否则按关系的 observedAt（缺失时为接收时间）并列展示。循环和回传联系保留在协作图中，不生成循环的 Trace 树。普通协作成员缺失、身份歧义、无权读取、正文为空、已有原生子记录、Langfuse 专用树或超过容量时，保留相关原 Trace 列表入口，避免隐藏无法展示的数据；Goal Plus 已声明 worker 的等待规则见前文。返回列表时会重新加载数据，无需手动刷新页面。

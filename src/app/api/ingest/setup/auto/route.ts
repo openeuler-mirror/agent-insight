@@ -1,3 +1,4 @@
+import { SETUP_BASH_HOME, SETUP_POWERSHELL_HOME } from '@/lib/ingest/setup/home';
 import { NextResponse } from 'next/server';
 
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
@@ -10,33 +11,12 @@ import {
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
 import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller } from '@/lib/ingest/setup-package';
+import {
+    parseFrameworks,
+    resolveInstallProfile,
+    type GoalPlusHost,
+} from '@/lib/ingest/setup/install-profile';
 
-// `frameworks` is inserted into generated shell scripts. Keep this an explicit
-// allowlist instead of interpolating arbitrary query values.
-const FRAMEWORKS: { value: string; label: string }[] = [
-    { value: 'opencode', label: 'OpenCode' },
-    { value: 'claude', label: 'Claude Code' },
-    { value: 'codeagent', label: 'CodeAgent' },
-    { value: 'hermes', label: 'Hermes' },
-    { value: 'openclaw', label: 'OpenClaw' },
-    { value: 'xiaoo', label: 'xiaoO' },
-    { value: 'jiuwen', label: 'JiuwenSwarm' },
-    { value: 'llamaindex', label: 'LlamaIndex' },
-    { value: 'qoder', label: 'Qoder CN product family' },
-    { value: 'trae', label: 'Trae IDE' },
-    { value: 'actrail', label: 'AcTrail' },
-    { value: 'pi-agent', label: 'Pi Agent' },
-    { value: 'codex', label: 'Codex' },
-    { value: 'qwencode', label: 'Qwen Code' },
-    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
-    { value: 'workbuddy', label: 'WorkBuddy' },
-];
-
-function parseFrameworks(raw: string | null): { value: string; label: string }[] {
-    if (!raw) return [];
-    const wanted = new Set(raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean));
-    return FRAMEWORKS.filter(framework => wanted.has(framework.value));
-}
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -60,12 +40,23 @@ function detectPlatform(request: Request): 'windows' | 'unix' {
     return 'unix';
 }
 
+function normalizeMctsUpstream(raw: string | null): string {
+    const value = (raw || 'http://127.0.0.1:8787').trim();
+    if (!value || value.length > 2048 || /[\0\r\n]/.test(value)) throw new Error('Invalid MCTS xGovernor upstream URL');
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+        throw new Error('MCTS xGovernor upstream must be an HTTP(S) URL without credentials');
+    }
+    return parsed.toString().replace(/\/+$/, '');
+}
+
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const apiKey = searchParams.get('apiKey');
     const hostParam = searchParams.get('host');
     const rawFrameworks = searchParams.get('frameworks');
-    const preselected = parseFrameworks(rawFrameworks);
+    const installProfile = resolveInstallProfile(parseFrameworks(rawFrameworks));
+    const preselected = installProfile.effectiveFrameworks;
     const llamaIndexVenv = (searchParams.get('llamaindexVenv') || '')
         .replace(/[\0\r\n]/g, '')
         .trim()
@@ -74,6 +65,15 @@ export async function GET(request: Request) {
     const llamaIndexPythonMode = requestedPythonMode === 'global' || requestedPythonMode === 'venv'
         ? requestedPythonMode
         : 'auto';
+    let mctsUpstream: string;
+    try {
+        mctsUpstream = normalizeMctsUpstream(searchParams.get('mctsUpstream'));
+    } catch (error) {
+        return new NextResponse(error instanceof Error ? error.message : 'Invalid MCTS xGovernor upstream URL', {
+            status: 400,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        });
+    }
 
     if (!apiKey || !hostParam) {
         return new NextResponse('Missing required parameters: apiKey and host', {
@@ -95,10 +95,30 @@ export async function GET(request: Request) {
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        return generatePowerShellScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
+        return generatePowerShellScript(
+            baseUrl,
+            hostParam,
+            apiKey,
+            preselected,
+            llamaIndexVenv,
+            llamaIndexPythonMode,
+            mctsUpstream,
+            installProfile.goalPlusHosts,
+            installProfile.autoAddedFrameworks.map(framework => framework.value),
+        );
     }
     
-    return generateBashScript(baseUrl, hostParam, apiKey, preselected, llamaIndexVenv, llamaIndexPythonMode);
+    return generateBashScript(
+        baseUrl,
+        hostParam,
+        apiKey,
+        preselected,
+        llamaIndexVenv,
+        llamaIndexPythonMode,
+        mctsUpstream,
+        installProfile.goalPlusHosts,
+        installProfile.autoAddedFrameworks.map(framework => framework.value),
+    );
 }
 
 function generateBashScript(
@@ -108,12 +128,16 @@ function generateBashScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    mctsUpstream: string,
+    goalPlusHosts: GoalPlusHost[],
+    autoAddedFrameworks: string[],
 ): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const packageSpec = getAgentInsightClientPackageSpec();
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
     const frameworksPreselected = preselected.length > 0;
     const script = `#!/bin/bash
+${SETUP_BASH_HOME}
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
 # =============================================================================
@@ -121,6 +145,10 @@ function generateBashScript(
 AGENT_INSIGHT_HOST="${bashDoubleQuoted(hostParam)}"
 AGENT_INSIGHT_BASE_URL="${bashDoubleQuoted(baseUrl)}"
 AGENT_INSIGHT_API_KEY="${bashDoubleQuoted(apiKey)}"
+MCTS_XGOVERNOR_UPSTREAM="${bashDoubleQuoted(mctsUpstream)}"
+SETUP_WORKING_DIR="$PWD"
+GOAL_PLUS_HOSTS="${bashDoubleQuoted(goalPlusHosts.join(','))}"
+AUTO_ADDED_FRAMEWORKS="${bashDoubleQuoted(autoAddedFrameworks.join(','))}"
 AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
@@ -147,8 +175,8 @@ fi
 echo "✅ Node.js version: $NODE_VERSION"
 
 # 1. Setup Directories
-mkdir -p "$HOME/.agent-insight"
-mkdir -p "$HOME/.agent-insight/logs"
+mkdir -p "$AGENT_INSIGHT_HOME"
+mkdir -p "$AGENT_INSIGHT_HOME/logs"
 mkdir -p "$HOME/.opencode/skills"
 mkdir -p "$HOME/.claude/projects"
 mkdir -p "$HOME/.openclaw/agents"
@@ -164,11 +192,11 @@ else
 # 2b. Interactive Framework Selection with inquirer
 echo ""
 
-SELECTOR_SCRIPT="$HOME/.agent-insight/framework_selector.mjs"
-SELECTOR_RESULT="$HOME/.agent-insight/.selector_result"
+SELECTOR_SCRIPT="$AGENT_INSIGHT_HOME/framework_selector.mjs"
+SELECTOR_RESULT="$AGENT_INSIGHT_HOME/.selector_result"
 
 # Install inquirer and tsx if not already installed
-cd "$HOME/.agent-insight"
+cd "$AGENT_INSIGHT_HOME"
 if [ ! -d "node_modules/inquirer" ] || [ ! -d "node_modules/tsx" ]; then
     echo "📦 Installing dependencies for interactive selection..."
     npm install inquirer tsx --save 2>/dev/null
@@ -194,6 +222,7 @@ const frameworks = [
     { name: 'Codex', value: 'codex' },
     { name: 'Qwen Code', value: 'qwencode' },
     { name: 'DeepSeek Harness', value: 'deepseek-harness' },
+    { name: 'MCTS (xGovernor)', value: 'mcts-xgovernor' },
     { name: 'WorkBuddy', value: 'workbuddy' }
 ];
 
@@ -249,7 +278,7 @@ SELECTOR_EOF
 # Run the selector interactively from /dev/tty
 # Export the result file path so the selector knows where to write
 export SELECTOR_RESULT_FILE="$SELECTOR_RESULT"
-cd "$HOME/.agent-insight" && ./node_modules/.bin/tsx "$SELECTOR_SCRIPT" < /dev/tty
+cd "$AGENT_INSIGHT_HOME" && ./node_modules/.bin/tsx "$SELECTOR_SCRIPT" < /dev/tty
 
 # Read the selection result from file
 if [ -f "$SELECTOR_RESULT" ]; then
@@ -258,6 +287,11 @@ if [ -f "$SELECTOR_RESULT" ]; then
 else
     SELECTED_FRAMEWORKS=""
 fi
+fi
+
+# Legacy Goal Plus selection is now a Pi installation alias.
+if [[ ",$SELECTED_FRAMEWORKS," == *",goal-plus,"* ]]; then
+    SELECTED_FRAMEWORKS=$(printf "%s" "$SELECTED_FRAMEWORKS" | awk -F, '{ out=""; for (i=1;i<=NF;i++) { value=($i=="goal-plus" ? "pi-agent" : $i); if (value!="" && "," out "," !~ "," value ",") out=(out=="" ? value : out "," value) } print out }')
 fi
 
 # Set installation flags based on selection
@@ -277,7 +311,13 @@ INSTALL_ACTRAIL=false
 INSTALL_CODEX=false
 INSTALL_QWENCODE=false
 INSTALL_DEEPSEEK_HARNESS=false
+INSTALL_MCTS_XGOVERNOR=false
 DEEPSEEK_HARNESS_SETUP_OK=false
+MCTS_XGOVERNOR_SETUP_OK=false
+CODEX_SETUP_OK=false
+PI_AGENT_SETUP_OK=false
+GOAL_PLUS_SETUP_OK=false
+GOAL_PLUS_SOURCE_OK=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -321,12 +361,15 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"deepseek-harness"* ]]; then
     INSTALL_DEEPSEEK_HARNESS=true
 fi
+if [[ ",$SELECTED_FRAMEWORKS," == *",mcts-xgovernor,"* ]]; then
+    INSTALL_MCTS_XGOVERNOR=true
+fi
 if [[ "$SELECTED_FRAMEWORKS" == *"workbuddy"* ]]; then
     echo "ℹ️  WorkBuddy 是 Windows 桌面应用，采集器仅支持 Windows。请在 Windows 上运行 npx agent-insight install 接入 WorkBuddy。"
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -341,7 +384,7 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     echo "⏬ Downloading OpenCode Uploader..."
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$AGENT_INSIGHT_HOME/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
     mkdir -p "$OPENCODE_CONFIG_DIR/commands"
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
@@ -409,7 +452,7 @@ fi
 
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "⏬ Downloading OpenClaw Watcher..."
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$AGENT_INSIGHT_HOME/openclaw_watcher_client.ts"
 fi
 
 if [ "$INSTALL_JIUWEN" = "true" ]; then
@@ -471,7 +514,7 @@ if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
         else
         LLAMAINDEX_ARCHIVE=$(mktemp "\${TMPDIR:-/tmp}/agent-insight-llamaindex.XXXXXX.zip")
         LLAMAINDEX_PACKAGE_URL="$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"
-        LLAMAINDEX_ROOT="$HOME/.agent-insight/collectors/llamaindex"
+        LLAMAINDEX_ROOT="$AGENT_INSIGHT_HOME/collectors/llamaindex"
         LLAMAINDEX_SOURCE_DIR="$LLAMAINDEX_ROOT/current"
         LLAMAINDEX_STAGING="$LLAMAINDEX_ROOT/.install-$$"
         LLAMAINDEX_BACKUP="$LLAMAINDEX_ROOT/.previous-$$"
@@ -494,43 +537,43 @@ if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
         rm -f "$LLAMAINDEX_ARCHIVE"
         rm -rf "$LLAMAINDEX_STAGING" "$LLAMAINDEX_BACKUP"
         if [ "$LLAMAINDEX_READY" = "true" ]; then
-            cat > "$HOME/.agent-insight/llamaindex_env.sh" << 'LLAMAINDEX_ENV_EOF'
+            agent_insight_write_script > "$AGENT_INSIGHT_HOME/llamaindex_env.sh" << 'LLAMAINDEX_ENV_EOF'
 # Agent Insight LlamaIndex collector path (direct deployment)
-LLAMAINDEX_COLLECTOR_DIR="$HOME/.agent-insight/collectors/llamaindex/current"
+LLAMAINDEX_COLLECTOR_DIR="$AGENT_INSIGHT_HOME/collectors/llamaindex/current"
 case ":\${PYTHONPATH:-}:" in
   *":$LLAMAINDEX_COLLECTOR_DIR:"*) ;;
   *) export PYTHONPATH="$LLAMAINDEX_COLLECTOR_DIR\${PYTHONPATH:+:$PYTHONPATH}" ;;
 esac
 LLAMAINDEX_ENV_EOF
-            printf 'export AGENT_INSIGHT_LLAMAINDEX_PYTHON=%q\n' "$LLAMAINDEX_PYTHON" >> "$HOME/.agent-insight/llamaindex_env.sh"
-            if [ -n "$LLAMAINDEX_VENV" ]; then printf 'export AGENT_INSIGHT_LLAMAINDEX_VENV=%q\n' "$LLAMAINDEX_VENV" >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
-            if [ -z "$LLAMAINDEX_VENV" ]; then echo 'unset AGENT_INSIGHT_LLAMAINDEX_VENV' >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
-            . "$HOME/.agent-insight/llamaindex_env.sh"
+            printf 'export AGENT_INSIGHT_LLAMAINDEX_PYTHON=%q\n' "$LLAMAINDEX_PYTHON" >> "$AGENT_INSIGHT_HOME/llamaindex_env.sh"
+            if [ -n "$LLAMAINDEX_VENV" ]; then printf 'export AGENT_INSIGHT_LLAMAINDEX_VENV=%q\n' "$LLAMAINDEX_VENV" >> "$AGENT_INSIGHT_HOME/llamaindex_env.sh"; fi
+            if [ -z "$LLAMAINDEX_VENV" ]; then echo 'unset AGENT_INSIGHT_LLAMAINDEX_VENV' >> "$AGENT_INSIGHT_HOME/llamaindex_env.sh"; fi
+            . "$AGENT_INSIGHT_HOME/llamaindex_env.sh"
             case "\${SHELL:-}" in */zsh) SHELL_RC="$HOME/.zshrc" ;; *) SHELL_RC="$HOME/.bashrc" ;; esac
             touch "$SHELL_RC"
-            if ! grep -q "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC"; then
-                echo "source \"$HOME/.agent-insight/llamaindex_env.sh\"" >> "$SHELL_RC"
+            if ! grep -Fq "$AGENT_INSIGHT_HOME/llamaindex_env.sh" "$SHELL_RC"; then
+                echo "source \"$AGENT_INSIGHT_HOME/llamaindex_env.sh\"" >> "$SHELL_RC"
             fi
-            cat > "$HOME/.agent-insight/uninstall_llamaindex_collector.sh" << 'LLAMAINDEX_UNINSTALL_EOF'
+            agent_insight_write_script > "$AGENT_INSIGHT_HOME/uninstall_llamaindex_collector.sh" << 'LLAMAINDEX_UNINSTALL_EOF'
 #!/bin/bash
 set -e
 if [ "\${1:-}" = "--purge" ]; then
-  rm -rf "$HOME/.agent-insight/otel_data/llamaindex"
-  rm -f "$HOME/.agent-insight/llamaindex.json" "$HOME/.agent-insight/llamaindex.env"
+  rm -rf "$AGENT_INSIGHT_HOME/otel_data/llamaindex"
+  rm -f "$AGENT_INSIGHT_HOME/llamaindex.json" "$AGENT_INSIGHT_HOME/llamaindex.env"
 fi
-rm -rf "$HOME/.agent-insight/collectors/llamaindex"
-rm -f "$HOME/.agent-insight/llamaindex_env.sh"
+rm -rf "$AGENT_INSIGHT_HOME/collectors/llamaindex"
+rm -f "$AGENT_INSIGHT_HOME/llamaindex_env.sh"
 for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
   if [ -f "$SHELL_RC" ]; then
     CLEANED_RC="\${SHELL_RC}.agent-insight-llamaindex.$$"
-    grep -v "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC" > "$CLEANED_RC" || true
+    grep -Fv "$AGENT_INSIGHT_HOME/llamaindex_env.sh" "$SHELL_RC" > "$CLEANED_RC" || true
     mv "$CLEANED_RC" "$SHELL_RC"
   fi
 done
-rm -f "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+rm -f "$AGENT_INSIGHT_HOME/uninstall_llamaindex_collector.sh"
 echo "LlamaIndex collector removed. Restart running Python processes to unload existing handlers."
 LLAMAINDEX_UNINSTALL_EOF
-            chmod +x "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+            chmod +x "$AGENT_INSIGHT_HOME/uninstall_llamaindex_collector.sh"
         fi
         fi
     fi
@@ -538,7 +581,7 @@ fi
 
 if [ "$INSTALL_QODER" = "true" ]; then
     echo "Downloading Agent Insight Qoder CN collectors..."
-    QODER_DIST_DIR="$HOME/.agent-insight/qoder-distribution"
+    QODER_DIST_DIR="$AGENT_INSIGHT_HOME/qoder-distribution"
     mkdir -p "$QODER_DIST_DIR"
     for component in qoder_setup.mjs qoder_token_usage_env.mjs qoder_trace_collector.mjs qoder_uploader_client.mjs qoder_work_setup.mjs; do
         curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -o "$QODER_DIST_DIR/$component"
@@ -651,7 +694,7 @@ if [ "$INSTALL_QWENCODE" = "true" ]; then
 fi
 
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
-AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
+AGENT_INSIGHT_CONFIG_FILE="$AGENT_INSIGHT_HOME/.env"
 FINAL_SHOW_TASK_STATS="true"
 if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
   EXISTING_SHOW_TASK_STATS=$(grep '^AGENT_INSIGHT_SHOW_TASK_STATS=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
@@ -689,13 +732,13 @@ echo "AGENT_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$AGENT_INSIGHT_C
 echo "AGENT_INSIGHT_RETENTION_DAYS=10" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_CLIENT_KEY_HASH=$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode/$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$HOME/.agent-insight/opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$AGENT_INSIGHT_HOME/otel_data/opencode/$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$AGENT_INSIGHT_HOME/opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=$UPLOAD_SINCE_MS" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$HOME/.agent-insight/claude_raw_bodies" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/codeagent" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$AGENT_INSIGHT_HOME/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$AGENT_INSIGHT_HOME/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$AGENT_INSIGHT_HOME/claude_raw_bodies" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=$AGENT_INSIGHT_HOME/otel_data/codeagent" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_TOOL_IO=4000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_EVENT_STRING=20000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"
@@ -725,6 +768,7 @@ if [ "$INSTALL_CODEX" = "true" ]; then
     CODEX_INSTALLER="$(mktemp)"
     curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" -o "$CODEX_INSTALLER"
     if ! sh "$CODEX_INSTALLER"; then rm -f "$CODEX_INSTALLER"; exit 1; fi
+    CODEX_SETUP_OK=true
     rm -f "$CODEX_INSTALLER"
 fi
 
@@ -743,7 +787,53 @@ if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     PI_INSTALLER="$(mktemp)"
     curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -o "$PI_INSTALLER"
     if ! sh "$PI_INSTALLER"; then rm -f "$PI_INSTALLER"; exit 1; fi
+    PI_AGENT_SETUP_OK=true
     rm -f "$PI_INSTALLER"
+fi
+
+# 6.30 Install MCTS xGovernor transparent proxy
+if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then
+    echo "⏬ Installing MCTS xGovernor transparent proxy..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    export AGENT_INSIGHT_MCTS_UPSTREAM_URL="$MCTS_XGOVERNOR_UPSTREAM"
+    MCTS_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/mcts-xgovernor" -o "$MCTS_INSTALLER"
+    if ! sh "$MCTS_INSTALLER"; then rm -f "$MCTS_INSTALLER"; exit 1; fi
+    MCTS_XGOVERNOR_SETUP_OK=true
+    rm -f "$MCTS_INSTALLER"
+fi
+
+# 6.31 Install Agent Insight Goal Plus worker and relationship collector
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
+    echo "⏬ Installing Agent Insight Goal Plus worker and relationship collector..."
+    export AGENT_INSIGHT_API_KEY
+    export AGENT_INSIGHT_BASE_URL
+    export AGENT_INSIGHT_GOAL_PLUS_HOSTS="$GOAL_PLUS_HOSTS"
+    GOAL_PLUS_INSTALLER="$(mktemp)"
+    if curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -o "$GOAL_PLUS_INSTALLER" && sh "$GOAL_PLUS_INSTALLER"; then
+        GOAL_PLUS_SETUP_OK=true
+    else
+        echo "Warning: Goal Plus worker and relationship collection is unavailable; the installed Pi main Trace collector was left unchanged."
+    fi
+    rm -f "$GOAL_PLUS_INSTALLER"
+fi
+
+if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ -n "$GOAL_PLUS_HOSTS" ]; then
+    GOAL_PLUS_SOURCE_PATH=""
+    if [ -d "$SETUP_WORKING_DIR/.gp" ]; then GOAL_PLUS_SOURCE_PATH="$SETUP_WORKING_DIR/.gp"; fi
+    if [ "$(basename "$SETUP_WORKING_DIR")" = ".gp" ]; then GOAL_PLUS_SOURCE_PATH="$SETUP_WORKING_DIR"; fi
+    if [ -n "$GOAL_PLUS_SOURCE_PATH" ]; then
+        echo "🔗 Attaching Goal Plus workspace: $GOAL_PLUS_SOURCE_PATH"
+        GOAL_PLUS_COMMAND="$AGENT_INSIGHT_HOME/collectors/goal-plus/goal-plus-collector.cjs"
+        if node "$GOAL_PLUS_COMMAND" attach "$GOAL_PLUS_SOURCE_PATH" && node "$GOAL_PLUS_COMMAND" scan && node "$GOAL_PLUS_COMMAND" start; then
+            GOAL_PLUS_SOURCE_OK=true
+        else
+            echo "Warning: Goal Plus worker and relationship setup failed; native Pi main Trace collection is unchanged."
+        fi
+    else
+        echo "ℹ️  No .gp found under the setup working directory. Main native Trace remains available; attach the current Goal Plus .gp to collect worker traces and relationships."
+    fi
 fi
 
 # 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)
@@ -757,7 +847,7 @@ if [ "$INSTALL_QODER" = "true" ]; then
     if node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop --owner=desktop && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains --owner=jetbrains && node "$QODER_DIST_DIR/qoder_work_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY"; then
         echo "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."
         echo ""
-        QODER_PLUGIN_DIR="$HOME/.agent-insight/packages/qoder"
+        QODER_PLUGIN_DIR="$AGENT_INSIGHT_HOME/packages/qoder"
         mkdir -p "$QODER_PLUGIN_DIR"
         download_qoder_plugin() {
             local label="$1" url="$2" target="$3" temp="\${3}.tmp.$$"
@@ -813,8 +903,8 @@ if [ "$INSTALL_HERMES" = "true" ]; then
   "api_key": "$AGENT_INSIGHT_API_KEY",
   "service_name": "hermes",
   "max_content_chars": 200000,
-  "spool_dir": "$HOME/.agent-insight/data/hermes-otel-spool",
-  "log_file": "$HOME/.agent-insight/logs/hermes-plugin.log"
+  "spool_dir": "$AGENT_INSIGHT_HOME/data/hermes-otel-spool",
+  "log_file": "$AGENT_INSIGHT_HOME/logs/hermes-plugin.log"
 }
 HERMES_CONFIG_EOF
     echo "Agent Insight Hermes config written to $HERMES_PLUGIN_DIR/config.json"
@@ -856,7 +946,7 @@ if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo ""
     echo "📦 Installing watcher dependencies..."
     if command -v npm &> /dev/null; then
-      cd "$HOME/.agent-insight"
+      cd "$AGENT_INSIGHT_HOME"
       if [ ! -f "package.json" ]; then
         echo '{"name": "agent-insight-watcher", "version": "1.0.0", "type": "module", "dependencies": {}}' > package.json
       fi
@@ -869,14 +959,14 @@ fi
 
 # 6.5 Configure Claude Code official OTel logs
 if [ "$INSTALL_CLAUDE" = "true" ]; then
-    cat > "$HOME/.agent-insight/claude_otel_env.sh" << 'CLAUDE_OTEL_EOF'
+    agent_insight_write_script > "$AGENT_INSIGHT_HOME/claude_otel_env.sh" << 'CLAUDE_OTEL_EOF'
 # Agent-Insight Claude Code OpenTelemetry integration
 unalias claude 2>/dev/null || true
 
 _skill_insight_claude_load_env() {
-  if [ -f "$HOME/.agent-insight/.env" ]; then
+  if [ -f "$AGENT_INSIGHT_HOME/.env" ]; then
     set -a
-    . "$HOME/.agent-insight/.env"
+    . "$AGENT_INSIGHT_HOME/.env"
     set +a
   fi
 }
@@ -886,7 +976,7 @@ claude() {
   local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
   case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
   _si_host="\${_si_host%/}"
-  mkdir -p "$HOME/.agent-insight/claude_raw_bodies" 2>/dev/null || true
+  mkdir -p "$AGENT_INSIGHT_HOME/claude_raw_bodies" 2>/dev/null || true
   env \\
     CLAUDE_CODE_ENABLE_TELEMETRY=1 \\
     OTEL_LOGS_EXPORTER=otlp \\
@@ -897,34 +987,34 @@ claude() {
     OTEL_LOG_USER_PROMPTS=1 \\
     OTEL_LOG_TOOL_DETAILS=1 \\
     OTEL_LOG_TOOL_CONTENT=1 \\
-    OTEL_LOG_RAW_API_BODIES="\${AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-file:$HOME/.agent-insight/claude_raw_bodies}" \\
+    OTEL_LOG_RAW_API_BODIES="\${AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-file:$AGENT_INSIGHT_HOME/claude_raw_bodies}" \\
     claude "$@"
 }
 CLAUDE_OTEL_EOF
     SHELL_RC="$HOME/.zshrc"
     [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
-    if [ -f "$SHELL_RC" ] && ! grep -q "\\.agent-insight/claude_otel_env\\.sh" "$SHELL_RC"; then
+    if [ -f "$SHELL_RC" ] && ! grep -Fq "$AGENT_INSIGHT_HOME/claude_otel_env.sh" "$SHELL_RC"; then
         echo "" >> "$SHELL_RC"
         echo "# Agent-Insight Claude Code OTel" >> "$SHELL_RC"
-        echo "source \\"$HOME/.agent-insight/claude_otel_env.sh\\"" >> "$SHELL_RC"
+        echo "source \\"$AGENT_INSIGHT_HOME/claude_otel_env.sh\\"" >> "$SHELL_RC"
     fi
-    echo "✅ Claude Code OTel env installed at $HOME/.agent-insight/claude_otel_env.sh"
-    echo "   Restart your terminal or run: source $HOME/.agent-insight/claude_otel_env.sh"
+    echo "✅ Claude Code OTel env installed at $AGENT_INSIGHT_HOME/claude_otel_env.sh"
+    echo "   Restart your terminal or run: source $AGENT_INSIGHT_HOME/claude_otel_env.sh"
     # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,
     # OTel 事件里没有(详见脚本头部注释),靠 Stop 等 hook 每轮异步补发,SessionEnd 最终兜底。
     echo "⏬ Downloading Claude Code context uploader..."
-    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$HOME/.agent-insight/claude_context_uploader.cjs"; then
+    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$AGENT_INSIGHT_HOME/claude_context_uploader.cjs"; then
         if command -v node &> /dev/null; then
-            node "$HOME/.agent-insight/claude_context_uploader.cjs" --install-hook || \
-                echo "⚠️  注册 Claude 上下文补传 hook 失败,可稍后手动执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook"
+            node "$AGENT_INSIGHT_HOME/claude_context_uploader.cjs" --install-hook || \
+                echo "⚠️  注册 Claude 上下文补传 hook 失败,可稍后手动执行:node $AGENT_INSIGHT_HOME/claude_context_uploader.cjs --install-hook"
         else
-            echo "⚠️  未找到 node,跳过 Claude 上下文补传 hook 注册(装好 node 后执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook)"
+            echo "⚠️  未找到 node,跳过 Claude 上下文补传 hook 注册(装好 node 后执行:node $AGENT_INSIGHT_HOME/claude_context_uploader.cjs --install-hook)"
         fi
     else
         echo "⚠️  下载上下文补传器失败,system prompt / hook 上下文将无法跨机上报"
     fi
     pkill -f "claude_watcher_client.ts" 2>/dev/null || true
-    rm -f "$HOME/.agent-insight/claude_watcher_client.ts" "$HOME/.agent-insight/start_claude_watcher.sh" "$HOME/.agent-insight/stop_claude_watcher.sh" "$HOME/.agent-insight/claude_watcher.pid"
+    rm -f "$AGENT_INSIGHT_HOME/claude_watcher_client.ts" "$AGENT_INSIGHT_HOME/start_claude_watcher.sh" "$AGENT_INSIGHT_HOME/stop_claude_watcher.sh" "$AGENT_INSIGHT_HOME/claude_watcher.pid"
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
 
@@ -944,57 +1034,57 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
 
     # OpenClaw Watcher Start Script
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        cat > "$HOME/.agent-insight/start_openclaw_watcher.sh" << 'WATCHER_EOF'
+        agent_insight_write_script > "$AGENT_INSIGHT_HOME/start_openclaw_watcher.sh" << 'WATCHER_EOF'
 #!/bin/bash
 # Stop existing watcher if running
 pkill -f "openclaw_watcher_client.ts" 2>/dev/null
 
 # Start watcher in background
-cd "$HOME/.agent-insight" && nohup npx -y tsx "$HOME/.agent-insight/openclaw_watcher_client.ts" > "$HOME/.agent-insight/logs/openclaw_watcher.log" 2>&1 &
-echo $! > "$HOME/.agent-insight/openclaw_watcher.pid"
-echo "OpenClaw watcher started with PID $(cat $HOME/.agent-insight/openclaw_watcher.pid)"
+cd "$AGENT_INSIGHT_HOME" && nohup npx -y tsx "$AGENT_INSIGHT_HOME/openclaw_watcher_client.ts" > "$AGENT_INSIGHT_HOME/logs/openclaw_watcher.log" 2>&1 &
+echo $! > "$AGENT_INSIGHT_HOME/openclaw_watcher.pid"
+echo "OpenClaw watcher started with PID $(cat $AGENT_INSIGHT_HOME/openclaw_watcher.pid)"
 WATCHER_EOF
-        chmod +x "$HOME/.agent-insight/start_openclaw_watcher.sh"
+        chmod +x "$AGENT_INSIGHT_HOME/start_openclaw_watcher.sh"
         echo "✅ OpenClaw watcher start script created"
 
         # OpenClaw Watcher Stop Script
-        cat > "$HOME/.agent-insight/stop_openclaw_watcher.sh" << 'STOP_OPENCLAW_EOF'
+        agent_insight_write_script > "$AGENT_INSIGHT_HOME/stop_openclaw_watcher.sh" << 'STOP_OPENCLAW_EOF'
 #!/bin/bash
 echo "Stopping OpenClaw watcher..."
 pkill -f "openclaw_watcher_client.ts" 2>/dev/null
-rm -f "$HOME/.agent-insight/openclaw_watcher.pid"
+rm -f "$AGENT_INSIGHT_HOME/openclaw_watcher.pid"
 echo "OpenClaw watcher stopped"
 STOP_OPENCLAW_EOF
-        chmod +x "$HOME/.agent-insight/stop_openclaw_watcher.sh"
+        chmod +x "$AGENT_INSIGHT_HOME/stop_openclaw_watcher.sh"
         echo "✅ OpenClaw watcher stop script created"
     fi
 
     # Combined Start Script - Dynamic generation
-    cat > "$HOME/.agent-insight/start_watchers.sh" << 'WATCHER_HEADER'
+    agent_insight_write_script > "$AGENT_INSIGHT_HOME/start_watchers.sh" << 'WATCHER_HEADER'
 #!/bin/bash
 echo "Starting Agent-Insight watchers..."
 WATCHER_HEADER
 
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        echo '"$HOME/.agent-insight/start_openclaw_watcher.sh"' >> "$HOME/.agent-insight/start_watchers.sh"
+        echo '"$AGENT_INSIGHT_HOME/start_openclaw_watcher.sh"' >> "$AGENT_INSIGHT_HOME/start_watchers.sh"
     fi
 
-    echo 'echo "All watchers started!"' >> "$HOME/.agent-insight/start_watchers.sh"
-    chmod +x "$HOME/.agent-insight/start_watchers.sh"
+    echo 'echo "All watchers started!"' >> "$AGENT_INSIGHT_HOME/start_watchers.sh"
+    chmod +x "$AGENT_INSIGHT_HOME/start_watchers.sh"
     echo "✅ Combined start script created"
 
     # Combined Stop Script - Dynamic generation
-    cat > "$HOME/.agent-insight/stop_watchers.sh" << 'STOP_HEADER'
+    agent_insight_write_script > "$AGENT_INSIGHT_HOME/stop_watchers.sh" << 'STOP_HEADER'
 #!/bin/bash
 echo "Stopping Agent-Insight watchers..."
 STOP_HEADER
 
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        echo '"$HOME/.agent-insight/stop_openclaw_watcher.sh"' >> "$HOME/.agent-insight/stop_watchers.sh"
+        echo '"$AGENT_INSIGHT_HOME/stop_openclaw_watcher.sh"' >> "$AGENT_INSIGHT_HOME/stop_watchers.sh"
     fi
 
-    echo 'echo "All watchers stopped!"' >> "$HOME/.agent-insight/stop_watchers.sh"
-    chmod +x "$HOME/.agent-insight/stop_watchers.sh"
+    echo 'echo "All watchers stopped!"' >> "$AGENT_INSIGHT_HOME/stop_watchers.sh"
+    chmod +x "$AGENT_INSIGHT_HOME/stop_watchers.sh"
     echo "✅ Combined stop script created"
 fi
 
@@ -1003,7 +1093,7 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
     echo "🚀 Starting telemetry watchers..."
     if command -v npx &> /dev/null; then
-        "$HOME/.agent-insight/start_watchers.sh"
+        "$AGENT_INSIGHT_HOME/start_watchers.sh"
     else
         echo "⚠️  Node.js (npx) not found. Skipping watcher startup."
     fi
@@ -1011,7 +1101,17 @@ fi
 
 # 10. Final Summary
 echo ""
-echo "🌟 Agent-Insight Telemetry: READY"
+GOAL_PLUS_TRACE_READY=true
+if [[ ",$GOAL_PLUS_HOSTS," == *",pi,"* ]] && [ "$PI_AGENT_SETUP_OK" != "true" ]; then GOAL_PLUS_TRACE_READY=false; fi
+if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ] && [ "$MCTS_XGOVERNOR_SETUP_OK" != "true" ]; then
+    echo "❌ Agent-Insight Telemetry: NOT READY (MCTS xGovernor proxy setup failed)"
+elif [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then
+    echo "❌ Agent-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"
+elif [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -z "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_SETUP_OK" != "true" ]; then
+    echo "⚠️  Agent-Insight Telemetry: PARTIAL"
+else
+    echo "🌟 Agent-Insight Telemetry: READY"
+fi
 echo "------------------------------------------------"
 echo "Installed Components:"
 if [ "$INSTALL_OPENCODE" = "true" ]; then
@@ -1044,6 +1144,19 @@ if [ "$INSTALL_ACTRAIL" = "true" ] && [ "$ACTRAIL_SETUP_OK" = "true" ]; then
 fi
 if [[ "$SELECTED_FRAMEWORKS" == *"pi-agent"* ]]; then
     echo "  ✅ Pi Agent Collector: ~/.agent-insight/collectors/pi-agent"
+fi
+if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then
+    echo "  ✅ MCTS xGovernor Proxy: ~/.agent-insight/collectors/mcts-xgovernor-proxy"
+elif [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then
+    echo "  ❌ MCTS xGovernor Proxy: not installed"
+fi
+if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" = "true" ]; then echo "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS"; fi
+if [ -n "$GOAL_PLUS_HOSTS" ] && [ "$GOAL_PLUS_TRACE_READY" != "true" ]; then echo "  ❌ Goal Plus native Trace: collector setup is not ready"; fi
+if [ "$GOAL_PLUS_SOURCE_OK" = "true" ]; then echo "  ✅ Goal Plus worker relationships: workspace attached; watcher started"; fi
+if [ "$GOAL_PLUS_SETUP_OK" = "true" ] && [ "$GOAL_PLUS_SOURCE_OK" != "true" ]; then echo "  ⚠️  Goal Plus worker relationships: collector installed; attach a current .gp workspace"; fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ "$GOAL_PLUS_SETUP_OK" != "true" ]; then echo "  ⚠️  Goal Plus worker and relationship collector: not installed"; fi
+if [ -n "$AUTO_ADDED_FRAMEWORKS" ]; then
+    echo "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS"
 fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  ✅ Codex Collector: ~/.agent-insight/collectors/codex"
@@ -1096,6 +1209,15 @@ fi
 if [ "$INSTALL_CODEX" = "true" ]; then
     echo "  8. Start Codex, run /hooks, and trust the Agent Insight handlers"
 fi
+if [ "$MCTS_XGOVERNOR_SETUP_OK" = "true" ]; then
+    echo "  9. Run MCTS through the proxy: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]"
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]] && [ -n "$GOAL_PLUS_HOSTS" ]; then
+    echo "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus"
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"goal-plus"* ]]; then
+    echo "      Worker relationship collection: goal-plus-collector attach /absolute/path/to/workspace/.gp && goal-plus-collector scan && goal-plus-collector start"
+fi
 if [ "$DEEPSEEK_HARNESS_SETUP_OK" = "true" ]; then
     echo "  9. Start a new dsh session"
 fi
@@ -1116,11 +1238,15 @@ function generatePowerShellScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    mctsUpstream: string,
+    goalPlusHosts: GoalPlusHost[],
+    autoAddedFrameworks: string[],
 ): NextResponse {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const selectedFrameworks = preselected.map(framework => framework.value).join(',');
     const frameworksPreselected = preselected.length > 0;
     const script = [
+        SETUP_POWERSHELL_HOME,
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
         '# =============================================================================',
@@ -1128,6 +1254,10 @@ function generatePowerShellScript(
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(hostParam) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
         '$AGENT_INSIGHT_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
+        '$MCTS_XGOVERNOR_UPSTREAM = "' + powerShellDoubleQuoted(mctsUpstream) + '"',
+        '$SETUP_WORKING_DIR = (Get-Location).Path',
+        '$GOAL_PLUS_HOSTS = "' + powerShellDoubleQuoted(goalPlusHosts.join(',')) + '"',
+        '$AUTO_ADDED_FRAMEWORKS = "' + powerShellDoubleQuoted(autoAddedFrameworks.join(',')) + '"',
         '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -1152,7 +1282,7 @@ function generatePowerShellScript(
         'Write-Host "✅ Node.js version: $nodeVersion"',
         '',
         '# 1. Setup Directories',
-        '$skillInsightDir = Join-Path $env:USERPROFILE ".agent-insight"',
+        '$skillInsightDir = $env:AGENT_INSIGHT_HOME',
         '$skillInsightLogsDir = Join-Path $skillInsightDir "logs"',
         '$opencodePluginsDir = Join-Path $env:USERPROFILE ".opencode\\plugins"',
         '$opencodeSkillsDir = Join-Path $env:USERPROFILE ".opencode\\skills"',
@@ -1206,6 +1336,7 @@ function generatePowerShellScript(
         '    "    { name: \'Codex\', value: \'codex\' },"',
         '    "    { name: \'Qwen Code\', value: \'qwencode\' },"',
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
+        '    "    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },"',
         '    "    { name: \'WorkBuddy\', value: \'workbuddy\' }"',
         '    "];"',
         '    ""',
@@ -1274,6 +1405,11 @@ function generatePowerShellScript(
         '}',
         '}',
         '',
+        '# Legacy Goal Plus selection is now a Pi installation alias.',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
+        '    $SELECTED_FRAMEWORKS = (($SELECTED_FRAMEWORKS -split "," | ForEach-Object { if ($_ -eq "goal-plus") { "pi-agent" } else { $_ } } | Select-Object -Unique) -join ",")',
+        '}',
+        '',
         '# Set installation flags based on selection',
         '$INSTALL_OPENCODE = $false',
         '$INSTALL_CLAUDE = $false',
@@ -1291,6 +1427,12 @@ function generatePowerShellScript(
         '$INSTALL_QWENCODE = $false',
         '$INSTALL_DEEPSEEK_HARNESS = $false',
         '$INSTALL_WORKBUDDY = $false',
+        '$INSTALL_MCTS_XGOVERNOR = $false',
+        '$MCTS_XGOVERNOR_SETUP_OK = $false',
+        '$CODEX_SETUP_OK = $false',
+        '$PI_AGENT_SETUP_OK = $false',
+        '$GOAL_PLUS_SETUP_OK = $false',
+        '$GOAL_PLUS_SOURCE_OK = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -1337,9 +1479,12 @@ function generatePowerShellScript(
         'if ($SELECTED_FRAMEWORKS -match "workbuddy") {',
         '    $INSTALL_WORKBUDDY = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)mcts-xgovernor(,|$)") {',
+        '    $INSTALL_MCTS_XGOVERNOR = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_WORKBUDDY) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_XIAOO -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE -and -not $INSTALL_ACTRAIL -and -not $INSTALL_CODEX -and -not $INSTALL_QWENCODE -and -not $INSTALL_DEEPSEEK_HARNESS -and -not $INSTALL_WORKBUDDY -and -not $INSTALL_MCTS_XGOVERNOR) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1451,7 +1596,7 @@ function generatePowerShellScript(
         '        $llamaIndexNonce = [Guid]::NewGuid().ToString("N")',
         '        $llamaIndexArchive = Join-Path ([System.IO.Path]::GetTempPath()) "agent-insight-llamaindex-$llamaIndexNonce.zip"',
         '        $llamaIndexPackageUrl = "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"',
-        '        $llamaIndexRoot = Join-Path $env:USERPROFILE ".agent-insight\\collectors\\llamaindex"',
+        '        $llamaIndexRoot = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\llamaindex"',
         '        $llamaIndexSourceDir = Join-Path $llamaIndexRoot "current"',
         '        $llamaIndexStaging = Join-Path $llamaIndexRoot ".install-$llamaIndexNonce"',
         '        $llamaIndexBackup = Join-Path $llamaIndexRoot ".previous-$llamaIndexNonce"',
@@ -1481,9 +1626,10 @@ function generatePowerShellScript(
         '            if ($LLAMAINDEX_READY) { Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue }',
         '        }',
         '        if ($LLAMAINDEX_READY) {',
-        '            $llamaIndexEnvPath = Join-Path $env:USERPROFILE ".agent-insight\\llamaindex_env.ps1"',
+        '            $llamaIndexEnvPath = Join-Path $env:AGENT_INSIGHT_HOME "llamaindex_env.ps1"',
         '            $llamaIndexEnvScript = @\'',
-        '$llamaIndexCollectorDir = Join-Path $HOME ".agent-insight\\collectors\\llamaindex\\current"',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
+        '$llamaIndexCollectorDir = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\llamaindex\\current"',
         'if ($env:PYTHONPATH) {',
         '  $llamaIndexPaths = $env:PYTHONPATH -split [IO.Path]::PathSeparator',
         '  if ($llamaIndexPaths -notcontains $llamaIndexCollectorDir) { $env:PYTHONPATH = "$llamaIndexCollectorDir$([IO.Path]::PathSeparator)$env:PYTHONPATH" }',
@@ -1500,10 +1646,11 @@ function generatePowerShellScript(
         '            if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }',
         '            if (-not ((Get-Content $PROFILE -Raw) -match "llamaindex_env.ps1")) { Add-Content -Path $PROFILE -Value ". `"$llamaIndexEnvPath`"" }',
         '            . $llamaIndexEnvPath',
-        '            $llamaIndexUninstallPath = Join-Path $env:USERPROFILE ".agent-insight\\uninstall_llamaindex_collector.ps1"',
+        '            $llamaIndexUninstallPath = Join-Path $env:AGENT_INSIGHT_HOME "uninstall_llamaindex_collector.ps1"',
         '            $llamaIndexUninstallScript = @\'',
         'param([switch]$Purge)',
-        '$agentInsightHome = Join-Path $HOME ".agent-insight"',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
+        '$agentInsightHome = $env:AGENT_INSIGHT_HOME',
         'if ($Purge) {',
         '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "otel_data\\llamaindex") -Recurse -Force -ErrorAction SilentlyContinue',
         '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "llamaindex.json"), (Join-Path $agentInsightHome "llamaindex.env") -Force -ErrorAction SilentlyContinue',
@@ -1716,6 +1863,7 @@ function generatePowerShellScript(
         '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" -OutFile $codexInstaller',
         '        & $codexInstaller',
         '        if ($LASTEXITCODE -ne 0) { throw "Codex collector installer failed with exit code $LASTEXITCODE." }',
+        '        $CODEX_SETUP_OK = $true',
         '    } finally {',
         '        Remove-Item -LiteralPath $codexInstaller -Force -ErrorAction SilentlyContinue',
         '    }',
@@ -1740,8 +1888,56 @@ function generatePowerShellScript(
         '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/pi-agent" -OutFile $piInstaller',
         '        & $piInstaller',
         '        if ($LASTEXITCODE -ne 0) { throw "Pi Agent collector installer failed with exit code $LASTEXITCODE." }',
+        '        $PI_AGENT_SETUP_OK = $true',
         '    } finally {',
         '        Remove-Item -LiteralPath $piInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        '',
+        '# 6.30 MCTS xGovernor transparent proxy requires Linux/macOS',
+        'if ($INSTALL_MCTS_XGOVERNOR) {',
+        '    Write-Warning "MCTS xGovernor transparent proxy currently requires Linux or macOS. Run the generated shell installer inside WSL on Windows."',
+        '}',
+        '',
+        '# 6.31 Install Agent Insight Goal Plus worker and relationship collector',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") {',
+        '    Write-Host "⏬ Installing Agent Insight Goal Plus worker and relationship collector..."',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    $env:AGENT_INSIGHT_BASE_URL = $AGENT_INSIGHT_BASE_URL',
+        '    $env:AGENT_INSIGHT_GOAL_PLUS_HOSTS = $GOAL_PLUS_HOSTS',
+        '    $goalPlusInstaller = Join-Path ([IO.Path]::GetTempPath()) ("agent-insight-goal-plus-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+        '    try {',
+        '        Invoke-WebRequest -UseBasicParsing -Headers @{ "x-platform" = "windows" } -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/goal-plus" -OutFile $goalPlusInstaller',
+        '        & $goalPlusInstaller',
+        '        if ($LASTEXITCODE -eq 0) {',
+        '            $GOAL_PLUS_SETUP_OK = $true',
+        '        } else {',
+        '            Write-Host "Warning: Goal Plus worker and relationship collection is unavailable; the installed Pi main Trace collector was left unchanged."',
+        '        }',
+        '    } catch {',
+        '        Write-Host "Warning: Goal Plus worker and relationship collection is unavailable; the installed Pi main Trace collector was left unchanged."',
+        '    } finally {',
+        '        Remove-Item -LiteralPath $goalPlusInstaller -Force -ErrorAction SilentlyContinue',
+        '    }',
+        '}',
+        'if ($GOAL_PLUS_SETUP_OK -and $GOAL_PLUS_HOSTS) {',
+        '    $goalPlusSourcePath = $null',
+        '    $childSource = Join-Path $SETUP_WORKING_DIR ".gp"',
+        '    if (Test-Path -LiteralPath $childSource -PathType Container) { $goalPlusSourcePath = $childSource }',
+        '    if ((Split-Path -Leaf $SETUP_WORKING_DIR) -eq ".gp") { $goalPlusSourcePath = $SETUP_WORKING_DIR }',
+        '    if ($goalPlusSourcePath) {',
+        '        Write-Host "🔗 Attaching Goal Plus workspace: $goalPlusSourcePath"',
+        '        $goalPlusCommand = Join-Path $env:AGENT_INSIGHT_HOME "collectors\\goal-plus\\goal-plus-collector.cjs"',
+        '        & node $goalPlusCommand attach $goalPlusSourcePath',
+        '        if ($LASTEXITCODE -eq 0) { & node $goalPlusCommand scan }',
+        '        if ($LASTEXITCODE -eq 0) { & node $goalPlusCommand start }',
+        '        if ($LASTEXITCODE -eq 0) {',
+        '            $GOAL_PLUS_SOURCE_OK = $true',
+        '        } else {',
+        '            Write-Host "Warning: Goal Plus worker and relationship setup failed; native Pi main Trace collection is unchanged."',
+        '        }',
+        '    } else {',
+        '        Write-Host "ℹ️  No .gp found under the setup working directory. Main native Trace remains available; attach the current Goal Plus .gp to collect worker traces and relationships."',
         '    }',
         '}',
         '',
@@ -1890,8 +2086,9 @@ function generatePowerShellScript(
         '# 6.5 Configure Claude Code official OTel logs',
         'if ($INSTALL_CLAUDE) {',
         '    $claudeOtelScript = @\'',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
         'function Invoke-SkillInsightClaude {',
-        '  $envFile = Join-Path $env:USERPROFILE ".agent-insight\\.env"',
+        '  $envFile = Join-Path $env:AGENT_INSIGHT_HOME ".env"',
         '  if (Test-Path $envFile) {',
         '    Get-Content $envFile | ForEach-Object {',
         '      if ($_ -match "^([^#=]+)=(.*)$") { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") }',
@@ -1909,7 +2106,7 @@ function generatePowerShellScript(
         '  $env:OTEL_LOG_USER_PROMPTS = "1"',
         '  $env:OTEL_LOG_TOOL_DETAILS = "1"',
         '  $env:OTEL_LOG_TOOL_CONTENT = "1"',
-        '  $rawBodyDir = Join-Path $env:USERPROFILE ".agent-insight\\claude_raw_bodies"',
+        '  $rawBodyDir = Join-Path $env:AGENT_INSIGHT_HOME "claude_raw_bodies"',
         '  New-Item -ItemType Directory -Path $rawBodyDir -Force | Out-Null',
         '  if (-not $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES) { $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "file:$rawBodyDir" }',
         '  $env:OTEL_LOG_RAW_API_BODIES = $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES',
@@ -1924,7 +2121,7 @@ function generatePowerShellScript(
         '    $profileDir = Split-Path $PROFILE -Parent',
         '    if ($profileDir) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }',
         '    $profileText = if (Test-Path $PROFILE) { Get-Content $PROFILE -Raw } else { "" }',
-        '    if (-not ($profileText.Contains(".agent-insight\\claude_otel_env.ps1") -or $profileText.Contains(".agent-insight/claude_otel_env.ps1"))) {',
+        '    if (-not $profileText.Contains($claudeOtelPath)) {',
         '        Add-Content -Path $PROFILE -Value ""',
         '        Add-Content -Path $PROFILE -Value "# Skill-Insight Claude Code OTel"',
         '        Add-Content -Path $PROFILE -Value ". `"$claudeOtelPath`""',
@@ -1962,11 +2159,12 @@ function generatePowerShellScript(
         '    # OpenClaw Watcher Start Script',
         '    if ($INSTALL_OPENCLAW) {',
         '        $startOpenclawScript = @\'',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
         '# Stop existing watcher if running',
         'Get-Process | Where-Object { $_.CommandLine -like "*openclaw_watcher_client.ts*" } | Stop-Process -Force -ErrorAction SilentlyContinue',
         '',
         '# Start watcher in background',
-        '$skillInsightDir = Join-Path $env:USERPROFILE ".agent-insight"',
+        '$skillInsightDir = $env:AGENT_INSIGHT_HOME',
         '$logFile = Join-Path $skillInsightDir "logs\\openclaw_watcher.log"',
         '$scriptPath = Join-Path $skillInsightDir "openclaw_watcher_client.ts"',
         '',
@@ -1979,6 +2177,7 @@ function generatePowerShellScript(
         '',
         '        # OpenClaw Watcher Stop Script',
         '        $stopOpenclawScript = @\'',
+        '$env:AGENT_INSIGHT_HOME = $PSScriptRoot',
         'Write-Host "Stopping OpenClaw watcher..."',
         'Get-Process | Where-Object { $_.CommandLine -like "*openclaw_watcher_client.ts*" } | Stop-Process -Force -ErrorAction SilentlyContinue',
         'Write-Host "OpenClaw watcher stopped"',
@@ -2022,7 +2221,17 @@ function generatePowerShellScript(
         '',
         '# 10. Final Summary',
         'Write-Host ""',
-        'Write-Host "🌟 Skill-Insight Telemetry: READY"',
+        '$GOAL_PLUS_TRACE_READY = $true',
+        'if ((",$GOAL_PLUS_HOSTS," -match ",pi,") -and -not $PI_AGENT_SETUP_OK) { $GOAL_PLUS_TRACE_READY = $false }',
+        'if ($INSTALL_MCTS_XGOVERNOR) {',
+        '    Write-Host "❌ Skill-Insight Telemetry: NOT READY (MCTS xGovernor proxy requires Linux/macOS; use WSL)"',
+        '} elseif (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) {',
+        '    Write-Host "❌ Skill-Insight Telemetry: NOT READY (Goal Plus native Trace collector setup failed)"',
+        '} elseif (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_SETUP_OK) {',
+        '    Write-Host "⚠️  Skill-Insight Telemetry: PARTIAL"',
+        '} else {',
+        '    Write-Host "🌟 Skill-Insight Telemetry: READY"',
+        '}',
         'Write-Host "------------------------------------------------"',
         'Write-Host "Installed Components:"',
         'if ($INSTALL_OPENCODE) {',
@@ -2049,9 +2258,16 @@ function generatePowerShellScript(
         'if ($INSTALL_ACTRAIL -and $ACTRAIL_SETUP_OK) {',
         '    Write-Host "  ✅ AcTrail otel-http: ~/.agent-insight/actrail/otel-http.config.toml"',
         '}',
-        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:USERPROFILE\\.agent-insight\\collectors\\pi-agent" }',
-        'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:USERPROFILE\\.agent-insight\\collectors\\codex" }',
         'if ($INSTALL_WORKBUDDY) { Write-Host "  [OK] WorkBuddy Collector: $env:USERPROFILE\\.agent-insight\\packages\\workbuddy (scheduled task: AgentInsight-WorkBuddyCollector)" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)pi-agent(,|$)") { Write-Host "  ✅ Pi Agent Collector: $env:AGENT_INSIGHT_HOME\\collectors\\pi-agent" }',
+        'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  ⚠️  MCTS xGovernor Proxy: install the Linux collector inside WSL" }',
+        'if ($GOAL_PLUS_HOSTS -and $GOAL_PLUS_TRACE_READY) { Write-Host "  ✅ Goal Plus native Trace: ready via $GOAL_PLUS_HOSTS" }',
+        'if ($GOAL_PLUS_HOSTS -and -not $GOAL_PLUS_TRACE_READY) { Write-Host "  ❌ Goal Plus native Trace: collector setup is not ready" }',
+        'if ($GOAL_PLUS_SOURCE_OK) { Write-Host "  ✅ Goal Plus worker relationships: workspace attached; watcher started" }',
+        'if ($GOAL_PLUS_SETUP_OK -and -not $GOAL_PLUS_SOURCE_OK) { Write-Host "  ⚠️  Goal Plus worker relationships: collector installed; attach a current .gp workspace" }',
+        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and -not $GOAL_PLUS_SETUP_OK) { Write-Host "  ⚠️  Goal Plus worker and relationship collector: not installed" }',
+        'if ($AUTO_ADDED_FRAMEWORKS) { Write-Host "  ℹ️  Trace collectors configured for Goal Plus: $AUTO_ADDED_FRAMEWORKS" }',
+        'if ($INSTALL_CODEX) { Write-Host "  ✅ Codex Collector: $env:AGENT_INSIGHT_HOME\\collectors\\codex" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -2093,6 +2309,9 @@ function generatePowerShellScript(
         '}',
         'if ($INSTALL_CODEX) { Write-Host "  8. Start Codex, run /hooks, and trust the Agent Insight handlers" }',
         'if ($INSTALL_WORKBUDDY) { Write-Host "  9. Open WorkBuddy and start a conversation; traces auto-collect (task: schtasks /query /tn AgentInsight-WorkBuddyCollector)" }',
+        'if ($INSTALL_MCTS_XGOVERNOR) { Write-Host "  9. In WSL run: ~/.local/bin/agent-insight-mcts-run --strict -- bash run_union.sh [args...]" }',
+        'if (($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") -and $GOAL_PLUS_HOSTS) { Write-Host "  10. Run your existing Goal Plus installation through $GOAL_PLUS_HOSTS as usual; Agent Insight does not install or modify Goal Plus" }',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)goal-plus(,|$)") { Write-Host "      Worker relationship collection: goal-plus-collector attach C:\\absolute\\path\\to\\workspace\\.gp; goal-plus-collector scan; goal-plus-collector start" }',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
 

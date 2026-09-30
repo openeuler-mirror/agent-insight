@@ -40,6 +40,8 @@
 - **新增自定义评测器**：用 `LlmEvaluatorConfig` / `CodeEvaluatorConfig`（`src/lib/evaluators/custom-evaluator-model.ts`）建模；通过 `src/server/user_evaluators_storage.ts` 持久化。
 - **新增预置评估器**：实现放 `src/lib/engine/experiment/<族>-preset-evaluators.ts`（一族一文件），另需在卡片/元数据/分发/守卫测试四处登记。落点、命名与打分方法论见 [10-evaluator-development.md](./10-evaluator-development.md)——**动手前必读**，这条路径上的坑基本都记在那里了。
 - **新增框架接入路径**：在 `src/lib/ingest/*` 下加 parser/watcher 或 OTel 聚合器，并在 `src/lib/ingest/adapters/` 注册 `FrameworkAdapter`（descriptor、skill 抽取、必要的 `normalizeForStorage`）。路由层不要再手写框架分支；通过 `saveExecutionRecord` 归一化为 `Execution`。安装脚本框架清单仍是后续治理范围。
+- **新增 Benchmark**：目标是统一开发规范，不是零代码、纯配置接入。通常只新增 `benchmarks/<key>/` 接入包：`benchmark.yaml`、实现五个业务 hook 的 `adapter/index.ts`、`schemas/{case,result}.schema.json`、`evaluator/evaluator.yaml`、遵循 `doctor` / `evaluate --request ... --output ...` 文件契约的 Entrypoint，以及需要独立依赖时的 `evaluator/Dockerfile`。`adapterKey` 与 `evaluation.evaluatorKey` 是不同身份，不能假设相等。Adapter 生成完整 Agent Prompt；判分语义留在实例 Evaluator；执行器只按 workspace provider、Agent platform 和 Artifact collector 选择通用能力。增加真实 Case smoke 和 conformance 后运行 `npm run benchmark:catalog`、相关 API 测试及 `npm run test`。禁止手改 `generated/benchmark-catalog/*`，也不在公共 API、调度器、Runner 或 Controller 中增加具体 Benchmark 分支。只有现有工作区、Agent Runtime 或 Artifact Collector 无法表达需求时，才新增可跨 Benchmark 复用的能力组件。完整设计见 [`docs/design/benchmark/`](../design/benchmark/)。
+- **Benchmark 数据集与展示**：有官方数据集时，在 `benchmark.yaml` 声明 `dataset.profiles` 和受控 `presentation`；特殊格式再提供 `dataset/index.ts` 的 `BenchmarkDatasetLoader`。Adapter 的 `validateAndSplitCase()` 返回公开 `catalogProjection`，其中业务字段走完整 `values.*` 路径。导入时后端把 `caseTable.columns` 冻结为 `fieldsJson`，包含 `path/label/type` 及可选 `width/format/truncate/description`；Manifest 后续变化不会静默覆盖已发布数据集，需要管理员运行 `scripts/benchmark/refresh-dataset-presentation.ts` 显式刷新。`presentation.artifacts` 只配置 Submission/Evidence 的标签与顺序，不能改变校验或过滤结果；结果 API 始终返回完整文件列表。禁止接入包注入 React、HTML 或 JavaScript。
 - **流程闸门**（`AGENTS.md` §4）：对 **Prisma schema** 的任何改动，或任何**新增 API 路由**，都需要先在 `docs/plans/YYYY-MM-DD-<topic>-design.md` 下产出一份 Plan 文档，对齐后再编码。
 
 ### 新增专项诊断器
@@ -78,8 +80,8 @@
 - **Client identity**：平台启动仍生成内部 admin key 并保存到 `.admin_api_key`，但只在
   `~/.agent-insight/.env` 缺少客户端 Key 时初始化它。安装指导已经注册的邮箱用户 Key
   必须保留，普通 OpenCode telemetry 与 RAS config 使用同一个身份。
-- **RAS SQLite schema preflight**：源码、npm 与 Docker 启动入口在 `prisma db push`
-  前统一执行 `scripts/prepare-ras-sqlite-schema.js`。旧数据库缺少
+- **SQLite schema preflight**：源码、npm 与 Docker 启动入口在 `prisma db push`
+  前统一执行 `scripts/prepare-ras-sqlite-schema.js`。它补齐 Agent RAS 幂等性字段和 Benchmark 指令关联列，并幂等删除 Benchmark 执行器直连方案废弃的端点和探测列。旧数据库缺少
   `RasAnomalyEvent.deliveryId` 时，仅补充 nullable 列，并在确认
   `(taskId, deliveryId)` 无重复数据后创建唯一索引；发现冲突会明确失败，不使用
   `--accept-data-loss` 绕过迁移警告。

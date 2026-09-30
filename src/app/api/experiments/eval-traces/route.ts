@@ -40,6 +40,8 @@ function asStrArr(v: unknown): string[] {
 }
 
 interface DatasetEvaluationContext {
+  datasetId: string;
+  datasetCaseId: string;
   datasetInput: string | null;
   referenceOutput: string | null;
   evaluatorContext?: EvaluatorCaseContext;
@@ -71,6 +73,8 @@ async function buildDatasetContextMap(
         }
       }
       map.set(c.id, {
+        datasetId: id,
+        datasetCaseId: c.id,
         datasetInput: typeof c.input === 'string' && c.input.trim() ? c.input : null,
         referenceOutput: typeof c.expectedOutput === 'string' && c.expectedOutput.trim()
           ? c.expectedOutput
@@ -139,15 +143,15 @@ async function resolveTraceDatasetBinding(
   taskId: string,
   datasetIds: string[],
   options: { requireExpectedOutput: boolean; allowSemanticMatch: boolean },
-): Promise<Pick<DatasetEvaluationContext, 'datasetInput' | 'referenceOutput'>> {
-  if (!datasetIds.length || !taskId) return { datasetInput: null, referenceOutput: null };
+): Promise<Pick<DatasetEvaluationContext, 'datasetId' | 'datasetCaseId' | 'datasetInput' | 'referenceOutput'> | null> {
+  if (!datasetIds.length || !taskId) return null;
   const exec = await prisma.execution.findFirst({
     where: { taskId, OR: [{ user }, { user: null }] },
     orderBy: { timestamp: 'desc' },
     select: { query: true },
   });
   const query = String(exec?.query || '').trim();
-  if (!query) return { datasetInput: null, referenceOutput: null };
+  if (!query) return null;
   try {
     const m = await matchAgentDatasetCase({
       user,
@@ -157,14 +161,17 @@ async function resolveTraceDatasetBinding(
       allowSemanticMatch: options.allowSemanticMatch,
     });
     const caseEntry = m.match?.caseEntry;
+    if (!m.match || !caseEntry?.id) return null;
     return {
+      datasetId: m.match.dataset.id,
+      datasetCaseId: caseEntry.id,
       datasetInput: caseEntry?.input && String(caseEntry.input).trim() ? String(caseEntry.input) : null,
       referenceOutput: caseEntry?.expectedOutput && String(caseEntry.expectedOutput).trim()
         ? String(caseEntry.expectedOutput)
         : null,
     };
   } catch {
-    return { datasetInput: null, referenceOutput: null };
+    return null;
   }
 }
 
@@ -255,6 +262,8 @@ export async function POST(req: Request) {
             datasetInput: datasetContext?.datasetInput ?? null,
             referenceOutput: datasetContext?.referenceOutput ?? null,
             evaluatorContext,
+            datasetId: datasetContext?.datasetId,
+            datasetCaseId: datasetContext?.datasetCaseId,
           };
         })
       : await Promise.all(taskIds.map(async (t) => {
@@ -265,7 +274,10 @@ export async function POST(req: Request) {
           return {
             taskId: t,
             caseId: undefined as string | undefined,
-            ...binding,
+            datasetInput: binding?.datasetInput ?? null,
+            referenceOutput: binding?.referenceOutput ?? null,
+            datasetId: binding?.datasetId,
+            datasetCaseId: binding?.datasetCaseId,
             evaluatorContext: hasDefaultContext
               ? defaultContext
               : (await resolveTraceToolCatalog(username, t, datasetIds)) ?? undefined,
@@ -281,6 +293,9 @@ export async function POST(req: Request) {
         actualOutput: '',
         referenceOutput: t.referenceOutput,
         evaluatorContext: t.evaluatorContext,
+        datasetBinding: t.datasetId && t.datasetCaseId
+          ? { datasetId: t.datasetId, caseId: t.datasetCaseId }
+          : null,
       });
       prepared.push({ target: t, experimentCaseId: expCaseId });
     }

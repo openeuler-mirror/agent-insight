@@ -44,12 +44,12 @@ test('curl setup scripts install a valid CodeAgent Unix PATH shim', async () => 
     const script = await response.text();
     const wrapper = heredocBody(
       script,
-      'cat > "$CODEAGENT_WRAPPER_PATH" << \'CODEAGENT_WRAPPER_EOF\'',
+      'agent_insight_write_script > "$CODEAGENT_WRAPPER_PATH" << \'CODEAGENT_WRAPPER_EOF\'',
       'CODEAGENT_WRAPPER_EOF',
     );
     const envScript = heredocBody(
       script,
-      'cat > "$HOME/.agent-insight/codeagent_otel_env.sh" << \'CODEAGENT_OTEL_EOF\'',
+      'agent_insight_write_script > "$AGENT_INSIGHT_HOME/codeagent_otel_env.sh" << \'CODEAGENT_OTEL_EOF\'',
       'CODEAGENT_OTEL_EOF',
     );
 
@@ -113,12 +113,12 @@ test('Unix PATH shim injects OTel for a non-interactive child script and prefers
     const script = await response.text();
     const wrapper = heredocBody(
       script,
-      'cat > "$CODEAGENT_WRAPPER_PATH" << \'CODEAGENT_WRAPPER_EOF\'',
+      'agent_insight_write_script > "$CODEAGENT_WRAPPER_PATH" << \'CODEAGENT_WRAPPER_EOF\'',
       'CODEAGENT_WRAPPER_EOF',
     );
     const envScript = heredocBody(
       script,
-      'cat > "$HOME/.agent-insight/codeagent_otel_env.sh" << \'CODEAGENT_OTEL_EOF\'',
+      'agent_insight_write_script > "$AGENT_INSIGHT_HOME/codeagent_otel_env.sh" << \'CODEAGENT_OTEL_EOF\'',
       'CODEAGENT_OTEL_EOF',
     );
     const wrapperPath = join(wrapperDir, 'codeagent');
@@ -129,7 +129,7 @@ test('Unix PATH shim injects OTel for a non-interactive child script and prefers
     chmodSync(wrapperPath, 0o755);
 
     const currentProbe = spawnSync('bash', ['-c', [
-      'source "$HOME/.agent-insight/codeagent_otel_env.sh"',
+      'source "$AGENT_INSIGHT_HOME/codeagent_otel_env.sh"',
       'bash "$HOME/driver.sh"',
       'printf "PARENT=%s\\n" "${CODEAGENT3_ENABLE_TELEMETRY-}"',
     ].join('\n')], {
@@ -137,6 +137,7 @@ test('Unix PATH shim injects OTel for a non-interactive child script and prefers
       env: {
         ...process.env,
         HOME: homeDir,
+        AGENT_INSIGHT_HOME: configDir,
         PATH: `${currentBinDir}:${process.env.PATH ?? ''}`,
       },
     });
@@ -150,13 +151,14 @@ test('Unix PATH shim injects OTel for a non-interactive child script and prefers
     assert.match(currentProbe.stdout, /PARENT=$/m);
 
     const fallbackProbe = spawnSync('bash', ['-c', [
-      'source "$HOME/.agent-insight/codeagent_otel_env.sh"',
+      'source "$AGENT_INSIGHT_HOME/codeagent_otel_env.sh"',
       'bash "$HOME/driver.sh"',
     ].join('\n')], {
       encoding: 'utf8',
       env: {
         ...process.env,
         HOME: homeDir,
+        AGENT_INSIGHT_HOME: configDir,
         PATH: '/usr/bin:/bin',
       },
     });

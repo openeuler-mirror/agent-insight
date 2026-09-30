@@ -10,10 +10,11 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 const { spawn, spawnSync } = require('child_process')
 const { randomBytes, randomUUID } = require('crypto')
 
-const homeFi = path.join(os.homedir(), '.agent-insight', 'fault-injection')
+const homeFi = path.join(getAgentInsightHome(), 'fault-injection')
 const configPath = path.join(homeFi, "config.json")
 
 function isValidClientId(value) {
@@ -30,7 +31,7 @@ function readClientIdentity(clientFile) {
 }
 
 function ensureClientIdentity(options = {}) {
-  const dataDir = options.dataDir || path.join(os.homedir(), ".agent-insight")
+  const dataDir = options.dataDir || getAgentInsightHome()
   const registeredFile = options.registeredClientFile || path.join(dataDir, "client", "config.json")
   const registered = readClientIdentity(registeredFile)
   if (registered) return registered

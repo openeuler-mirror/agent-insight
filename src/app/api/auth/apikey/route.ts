@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
-import { findOrCreateLocalUser } from '@/lib/auth/local-user';
+import { findOrCreateLocalUser, syncLocalUserExternalAccount } from '@/lib/auth/local-user';
 import {
-  checkIdaasRegionAccess,
+  inspectIdaasRegionAccess,
   describeIdaasRegionAccessError,
 } from '@/lib/auth/idaas-region-access';
 
@@ -32,9 +32,11 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
       }
 
+      let externalAccount: string | null = null;
       try {
-        const regionAccess = await checkIdaasRegionAccess(user.username);
-        if (regionAccess === 'restricted') {
+        const regionAccess = await inspectIdaasRegionAccess(user.username);
+        externalAccount = regionAccess.externalAccount;
+        if (regionAccess.decision === 'restricted') {
           console.warn('[Auth/IDaaS] Login restore blocked: region_restricted');
           return NextResponse.json(
             { error: 'Region restricted', code: 'region_restricted' },
@@ -51,7 +53,15 @@ export async function POST(request: Request) {
         );
       }
 
-      return NextResponse.json({ username: user.username, apiKey: user.apiKey });
+      const refreshedUser = await syncLocalUserExternalAccount(
+        user,
+        externalAccount || undefined,
+      );
+      return NextResponse.json({
+        username: refreshedUser.username,
+        apiKey: refreshedUser.apiKey,
+        displayName: refreshedUser.externalAccount || refreshedUser.username,
+      });
     }
 
     const user = await findOrCreateLocalUser(username);

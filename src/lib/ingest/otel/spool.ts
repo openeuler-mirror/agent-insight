@@ -7,6 +7,7 @@ export {
   getOtelTraceSpoolDir,
   listOtelTraceSpoolFiles,
   readOtelTraceEventsForSession,
+  visitEventsForSession,
 } from '@/lib/ingest/claude-otel/spool';
 
 export function getActrailOtelTraceSpoolDir(): string {

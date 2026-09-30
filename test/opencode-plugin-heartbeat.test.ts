@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { computeHeartbeatDecision } from "../scripts/opencode_plugin_otel"
+import {
+  computeHeartbeatDecision,
+  getSessionEventUploadMode,
+} from "../scripts/opencode_plugin_otel"
 
 const HB = 60_000
 
@@ -66,4 +69,10 @@ test("plugin heartbeat: heartbeatMs<=0 完全关闭", () => {
       `heartbeatMs=${heartbeatMs} 应关闭心跳`,
     )
   }
+})
+
+test("plugin heartbeat: session.idle 必须强制上传，不受心跳冷却限制", () => {
+  assert.equal(getSessionEventUploadMode("session.idle", ""), "force")
+  assert.equal(getSessionEventUploadMode("session.updated", "idle"), "force")
+  assert.equal(getSessionEventUploadMode("session.updated", "busy"), "none")
 })

@@ -260,7 +260,7 @@ erDiagram
 
 - **可观测性** `[确证]`：OpenTelemetry SDK + Langfuse；`src/instrumentation.ts`（运行时门控，仅 Node.js runtime 加载）→ `src/instrumentation-node.ts`（注册系统 agent `ensureAllSystemAgents`、opencode 子进程退出清理、拉起 uploader 处理待上报 spool）。OTel 接入端点 `src/app/api/ingest/otel/v1/{traces,logs,metrics}`，并在根路径 `/v1/*` rewrite 直收 collector 上报。
 - **数据持久化** `[确证]`：见 §6，`DatabaseAdapter` 抽象 + `data-service.ts` 高层服务。
-- **认证 / 多用户** `[确证]`：`User` 表（`apiKey` 唯一），`src/lib/auth/*`，按 `user` 字段做行级隔离；API Key 用于客户端接入鉴权。`[推断]` 登录为「任意邮箱即可」（README），表明是单机自托管的轻量身份模型，非企业 SSO。
+- **认证 / 多用户** `[确证]`：`User` 表（`apiKey` 唯一），`src/lib/auth/*`，按 `user` 字段做行级隔离；API Key 用于客户端接入鉴权。IDaaS 模式仍以 UUID 写入 `username`，可空唯一的 `externalAccount` 只保存人员账号别名，供界面展示和运维反查；standalone 模式仍为任意邮箱登录。
 - **向后兼容** `[确证]`：`next.config.ts` 维护一大批 `legacyAliases`，把旧扁平 `/api/*` 重写到分层后的 `ingest/observe/eval/*`，保证外部客户端不断。
 - **缓存 / 消息队列**：`[确证]` **未发现**独立缓存层（Redis/CDN）或消息中间件；异步靠 DB 状态机 + 内存（见 §3.2 异步任务）。
 - **国际化** `[确证]`：`src/locales/*`（多语言）。
@@ -269,7 +269,7 @@ erDiagram
 
 ## 8. 部署架构（Deployment）
 
-`[确证]`：核心服务提供基于 npm 包的 `Dockerfile`：镜像构建时从 npm 安装 `agent-insight@latest`（可通过 `AGENT_INSIGHT_VERSION` 构建参数固定版本），不复制源码；运行时由 `scripts/docker-entrypoint.sh` 初始化持久化目录、同步数据库 schema，并以前台进程启动 Next.js standalone server。所有运行时数据均以 `AGENT_INSIGHT_DATA_DIR` 为根：SQLite、Skill 附件、评测 runtime 文件默认落到 `/data/agent-insight/data/`，避免写入 Next.js standalone 目录。镜像同时显式导出 `OPENCODE_BIN=/app/node_modules/.bin/opencode`，以支持 `opencode-live` 评测在服务端容器内直接 spawn `opencode serve`。当前默认镜像走 SQLite-first 路线，不打包 OpenGauss 的 Python 依赖；若部署侧设置了 `DB_HOST`，entrypoint 会直接报错退出。主服务部署方式是：
+`[确证]`：核心服务提供基于 npm 包的 `Dockerfile`：镜像构建时从 npm 安装 `agent-insight@latest`（可通过 `AGENT_INSIGHT_VERSION` 构建参数固定版本），不复制源码；运行时由 `scripts/docker-entrypoint.sh` 初始化持久化目录、同步数据库 schema，并以前台进程启动 Next.js standalone server。所有运行时数据均以 `AGENT_INSIGHT_HOME` 为根，实际持久化子目录为内部变量 `AGENT_INSIGHT_STORAGE_DIR=$AGENT_INSIGHT_HOME/data`：SQLite、Skill 附件、评测 runtime 文件默认落到 `/data/agent-insight/data/`，避免写入 Next.js standalone 目录。旧的 `AGENT_INSIGHT_DATA_DIR` 已移除；非空时入口报错，不静默回落默认目录。TS 与 Node 启动工具共用 `scripts/agent-insight-home.cjs` 解析根路径，Trace spool 默认同样跟随运行根；客户端分发包包含该模块，守护服务显式保存运行根。镜像同时显式导出 `OPENCODE_BIN=/app/node_modules/.bin/opencode`，以支持 `opencode-live` 评测在服务端容器内直接 spawn `opencode serve`。当前默认镜像走 SQLite-first 路线，不打包 OpenGauss 的 Python 依赖；若部署侧设置了 `DB_HOST`，entrypoint 会直接报错退出。主服务部署方式是：
 
 - **单 Node 进程**，`next start -p 3000`（`output: 'standalone'`）。
 - **CLI 安装器** `bin/cli.js` → `scripts/{install,start,stop,status,restart}.js`，供 `npx @witty-ai/skill-insight install` 一键装。

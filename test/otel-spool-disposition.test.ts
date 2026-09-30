@@ -68,13 +68,19 @@ test('OTel spool sources classify persistability instead of overloading record=n
   const previous = {
     claude: process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR,
     codeAgent: process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR,
+    deepSeek: process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR,
+    actrail: process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR,
     traces: process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR,
   };
   const claudeDir = path.join(root, 'claude');
   const codeAgentDir = path.join(root, 'codeagent');
+  const deepSeekDir = path.join(root, 'deepseek-harness');
+  const actrailDir = path.join(root, 'actrail');
   const traceDir = path.join(root, 'traces');
   process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = claudeDir;
   process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR = codeAgentDir;
+  process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR = deepSeekDir;
+  process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR = actrailDir;
   process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = traceDir;
 
   try {
@@ -102,6 +108,10 @@ test('OTel spool sources classify persistability instead of overloading record=n
     else process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = previous.claude;
     if (previous.codeAgent === undefined) delete process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR;
     else process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR = previous.codeAgent;
+    if (previous.deepSeek === undefined) delete process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR = previous.deepSeek;
+    if (previous.actrail === undefined) delete process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR = previous.actrail;
     if (previous.traces === undefined) delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
     else process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = previous.traces;
     fs.rmSync(root, { recursive: true, force: true });
@@ -113,13 +123,19 @@ test('OTel spool consumer advances only sources whose disposition is acknowledge
   const previous = {
     claude: process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR,
     codeAgent: process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR,
+    deepSeek: process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR,
+    actrail: process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR,
     traces: process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR,
   };
   const claudeDir = path.join(root, 'claude');
   const codeAgentDir = path.join(root, 'codeagent');
+  const deepSeekDir = path.join(root, 'deepseek-harness');
+  const actrailDir = path.join(root, 'actrail');
   const traceDir = path.join(root, 'traces');
   process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = claudeDir;
   process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR = codeAgentDir;
+  process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR = deepSeekDir;
+  process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR = actrailDir;
   process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = traceDir;
   stopOtelSpoolConsumer();
 
@@ -182,6 +198,10 @@ test('OTel spool consumer advances only sources whose disposition is acknowledge
     else process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = previous.claude;
     if (previous.codeAgent === undefined) delete process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR;
     else process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR = previous.codeAgent;
+    if (previous.deepSeek === undefined) delete process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_DEEPSEEK_HARNESS_OTEL_SPOOL_DIR = previous.deepSeek;
+    if (previous.actrail === undefined) delete process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_ACTRAIL_OTEL_SPOOL_DIR = previous.actrail;
     if (previous.traces === undefined) delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
     else process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = previous.traces;
     fs.rmSync(root, { recursive: true, force: true });

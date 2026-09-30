@@ -4,14 +4,13 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { isolatedHomeEnv } from './helpers/isolated-home'
 
 import { GET as getCentralSetup } from "@/app/api/ingest/setup/route"
 import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
 
 const ROOT = process.cwd()
-const EXPECTED_PAGE = ["opencode", "claude", "codeagent", "openclaw", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "workbuddy"]
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "workbuddy"]
-const EXPECTED_AUTO = ["opencode", "claude", "codeagent", "hermes", "openclaw", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "codex", "qwencode", "deepseek-harness", "workbuddy"]
+const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "mcts-xgovernor", "workbuddy"]
 
 function frameworkValues(source: string, constantName: string): string[] {
   const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
@@ -75,14 +74,16 @@ async function autoScript(platform: "unix" | "windows", frameworks?: string): Pr
   return response.text()
 }
 
-test("Pi is appended without reordering any existing central framework list", () => {
+test("Pi remains in the shared framework allowlist used by every setup entry", () => {
   const page = read("src/app/(main)/accessconfig/install/page.tsx")
   const central = read("src/app/api/ingest/setup/route.ts")
   const auto = read("src/app/api/ingest/setup/auto/route.ts")
+  const catalog = read("src/lib/ingest/setup/install-profile.ts")
 
-  assert.deepEqual(frameworkValues(page, "FRAMEWORK_OPTIONS"), EXPECTED_PAGE)
-  assert.deepEqual(frameworkValues(central, "FRAMEWORKS"), EXPECTED_CENTRAL)
-  assert.deepEqual(frameworkValues(auto, "FRAMEWORKS"), EXPECTED_AUTO)
+  assert.deepEqual(frameworkValues(catalog, "FRAMEWORK_OPTIONS"), EXPECTED_CENTRAL)
+  for (const consumer of [page, central, auto]) {
+    assert.match(consumer, /ingest\/setup\/install-profile/)
+  }
   assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/)
 })
 
@@ -167,20 +168,19 @@ test("CLI exposes framework preselection and local installations are detectable"
 })
 
 test("Pi Node installer self-checks, reinstalls, and purges only the current-key spool", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-pi-install-"))
+  const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-pi-install-")))
   const homeDir = path.join(tempDir, "home")
   const binDir = path.join(tempDir, "bin")
   const logPath = path.join(tempDir, "pi.log")
   const sourceDir = path.join(ROOT, "scripts", "agent-trace-collectors", "pi-agent")
   const installer = path.join(sourceDir, "install.cjs")
-  const env = {
-    ...process.env,
+  const env = isolatedHomeEnv(homeDir, {
     AGENT_INSIGHT_API_KEY: "test-pi-key",
     AGENT_INSIGHT_BASE_URL: "https://insight.example",
     PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
     USERPROFILE: homeDir,
     HOME: homeDir,
-  }
+  })
   try {
     fs.mkdirSync(binDir, { recursive: true })
     fs.writeFileSync(path.join(binDir, "pi.cmd"), `@echo off\r\necho %*>>"${logPath}"\r\nexit /b 0\r\n`)

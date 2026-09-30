@@ -14,7 +14,7 @@ import { acquireConsumerProcessLocks, type ConsumerProcessLocks } from './proces
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type IntervalHandle = ReturnType<typeof setInterval>;
-type SaveExecution = (data: ExecutionRecord) => Promise<{ success: boolean; record: ExecutionRecord }>;
+type SaveExecution = (data: ExecutionRecord, options?: { receivedAt?: Date }) => Promise<{ success: boolean; record: ExecutionRecord }>;
 
 type PendingFile = {
   source: SpoolSource;
@@ -199,7 +199,7 @@ function wrapSaveExecutionWithAttributionGuard(
   inner: SaveExecution,
   log: (...args: any[]) => void,
 ): SaveExecution {
-  return async (data) => {
+  return async (data, options) => {
     // Qoder uploads carry server-stamped credential provenance. In a
     // single-user installation the valid API key commonly belongs to `admin`,
     // which the generic guard otherwise treats as an internal service owner.
@@ -224,7 +224,7 @@ function wrapSaveExecutionWithAttributionGuard(
       return { success: true, record: data };
     }
 
-    return inner(data);
+    return inner(data, options);
   };
 }
 
@@ -544,7 +544,7 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
         const saved = await state.saveExecution({
           ...result.record,
           skip_evaluation: source.defaultSkipEvaluation(),
-        });
+        }, { receivedAt: new Date(session.lastDataAt) });
         if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
         markSourceDone(state, session.sessionId, sourceId);
@@ -554,7 +554,7 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
           skip_evaluation: false,
           skip_internal_judgment: true,
           force_judgment: true,
-        });
+        }, { receivedAt: new Date(session.lastDataAt) });
         if (!saved.success) throw new Error('execution persistence returned success=false');
         session.failures = 0;
         // 存量积压场景下 fast 和 evaluated 会同时到点，dispatcher 直接跑 evaluated 跳过 fast，

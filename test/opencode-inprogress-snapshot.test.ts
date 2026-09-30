@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { isInProgressOpencodeSnapshot } from "../src/app/api/ingest/upload/route"
+import { isInProgressOpencodeSnapshot } from "../src/lib/ingest/opencode-snapshot"
 
 // 回归护栏：这个门曾经用 opencode_cli_completed 判定，导致正常交互式使用（CLI 一直开着）
 // 的每一条 trace 都被当成"进行中"，评分/诊断/流程图要等用户退出 opencode 才出。

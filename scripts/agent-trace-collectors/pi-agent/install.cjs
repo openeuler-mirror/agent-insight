@@ -2,11 +2,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
-const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { installSharedModules } = require("../shared/install-modules.cjs");
 
 const PACKAGE_FILES = [
   ["package.json"],
@@ -87,24 +87,13 @@ async function copyFile(source, target, mode = 0o600) {
 }
 
 async function installFiles(sourceDir, packageDir, sharedDir) {
+  await installSharedModules(path.resolve(sourceDir, "..", "shared"), sharedDir,
+    ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]);
   for (const parts of PACKAGE_FILES) {
     const mode = parts[0] === "scripts" ? 0o700 : 0o600;
     await copyFile(path.join(sourceDir, ...parts), path.join(packageDir, ...parts), mode);
   }
 
-  const incomingPath = path.resolve(sourceDir, "..", "shared", "trace-transport.cjs");
-  const targetPath = path.join(sharedDir, "trace-transport.cjs");
-  if (fs.existsSync(targetPath)) {
-    const [incoming, current] = await Promise.all([
-      fsp.readFile(incomingPath),
-      fsp.readFile(targetPath),
-    ]);
-    if (!incoming.equals(current)) {
-      throw new Error(`Refusing to overwrite a different shared transport at ${targetPath}`);
-    }
-  } else {
-    await copyFile(incomingPath, targetPath);
-  }
 }
 
 async function install(options) {
@@ -121,7 +110,27 @@ async function install(options) {
   const collectorsDir = path.join(agentInsightHome, "collectors");
   const packageDir = path.join(collectorsDir, "pi-agent");
   const sharedDir = path.join(collectorsDir, "shared");
+  const endpoint = process.env.AGENT_INSIGHT_PI_ENDPOINT ||
+    `${baseUrl}/api/ingest/otel/v1/traces`;
+  const collaborationSessionsEndpoint = process.env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
+    || `${baseUrl}/api/ingest/collaborations/sessions`;
+  const collaborationEventsEndpoint = process.env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
+    || `${baseUrl}/api/ingest/collaborations/events`;
   await installFiles(options.sourceDir, packageDir, sharedDir);
+  const goalPlusSourceDir = path.resolve(options.sourceDir, "..", "goal-plus");
+  const { install: installGoalPlusObserver } = require(path.join(goalPlusSourceDir, "install.cjs"));
+  const goalPlusObserver = await installGoalPlusObserver({
+    homeDir: options.homeDir,
+    sourceDir: goalPlusSourceDir,
+    skipVersionCheck: true,
+    createWrapper: false,
+    managedBy: "pi-agent",
+    apiKey,
+    baseUrl,
+    otlpEndpoint: endpoint,
+    collaborationSessionsEndpoint,
+    collaborationEventsEndpoint,
+  });
 
   const configPath = path.join(packageDir, "config.json");
   const tempPath = `${configPath}.${process.pid}.tmp`;
@@ -129,8 +138,11 @@ async function install(options) {
     version: 1,
     enabled: true,
     apiKey,
-    endpoint: process.env.AGENT_INSIGHT_PI_ENDPOINT ||
-      `${baseUrl}/api/ingest/otel/v1/traces`,
+    endpoint,
+    collaborationSessionsEndpoint,
+    collaborationEventsEndpoint,
+    goalPlusObserverEnabled: goalPlusObserver.observerEnabled,
+    goalPlusObserverConfigPath: goalPlusObserver.configPath,
     uploadIntervalMs: 300000,
     shutdownTimeoutMs: 2200,
   };
@@ -152,7 +164,7 @@ async function install(options) {
       AGENT_INSIGHT_USER_HOME: options.homeDir,
     },
   });
-  return { packageDir, agentInsightHome };
+  return { packageDir, agentInsightHome, goalPlusObserver };
 }
 
 async function main() {

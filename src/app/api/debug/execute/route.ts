@@ -4,6 +4,7 @@ import { extractDebugJobTokenUsage } from '@/lib/skill-analysis/grayscale-utils'
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { prisma } from '@/lib/storage/prisma';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import type { DebugJob } from '@/lib/debug-job';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,16 +12,6 @@ export const dynamic = 'force-dynamic';
 declare global {
   // eslint-disable-next-line no-var
   var __debugJobStore: Map<string, DebugJob> | undefined;
-}
-
-export interface DebugJob {
-  status: 'running' | 'completed' | 'failed';
-  startedAt: number;
-  output?: string;
-  timeCost?: string;
-  tokenUsage?: number;
-  sessionId?: string;
-  error?: string;
 }
 
 function getJobStore(): Map<string, DebugJob> {

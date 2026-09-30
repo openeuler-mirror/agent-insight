@@ -14,6 +14,8 @@ function setupTest() {
   const tempStateFile = path.join(tempSpoolDir, "subagent-state.json")
   
   fs.writeFileSync(tempEnvFile, `
+export HOME=${tempSpoolDir}
+export AGENT_INSIGHT_HOME=${tempSpoolDir}
 export AGENT_INSIGHT_DIR=${tempSpoolDir}
 export AGENT_INSIGHT_TRAE_MAX_CONTENT_LENGTH=2000
 export AGENT_INSIGHT_API_KEY=test-api-key-123

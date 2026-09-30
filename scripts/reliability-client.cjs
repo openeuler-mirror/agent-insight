@@ -19,8 +19,14 @@ const { spawn, spawnSync } = require('child_process')
 const { createHash, randomBytes } = require('crypto')
 
 const { connectWebSocket } = require('./ws-client.cjs')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
+const { prepareSkillExperimentWorkspace } = require('./skill-experiment-workspace.cjs')
+const { prepareOpencodeEventChannel, createOpencodeEventReader } = require('./opencode-experiment-events.cjs')
+const { createOrdinaryExperimentStore } = require('./ordinary-experiment-state.cjs')
+const { extractStructuredAgentError, sanitizeAgentDiagnostic, classifyAgentExitFailure, createAgentRunError, createOpencodeFailureMonitor } = require('./agent-run-diagnostics.cjs')
 
-const CLIENT_HOME = path.join(os.homedir(), '.agent-insight', 'client')
+const CLIENT_HOME = path.join(getAgentInsightHome(), 'client')
+const ordinaryExperimentStore = createOrdinaryExperimentStore(CLIENT_HOME)
 const CONFIG_PATH = path.join(CLIENT_HOME, 'config.json')
 const SPOOL_PATH = path.join(CLIENT_HOME, 'spool.json')
 
@@ -28,6 +34,8 @@ const WHITELIST = new Set([
   'APPLY_CLIENT_CONFIG',
   'PREPARE_EXPERIMENT_CASE',
   'RUN_EXPERIMENT_CASE',
+  'RUN_BENCHMARK_CASE',
+  'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
 ])
 
@@ -38,14 +46,19 @@ const RUN_FORBIDDEN = ['command', 'shell', 'args', 'cwd', 'executable', 'script'
 const AGENT_VERSION = '1.0.0'
 const HEARTBEAT_MS = 30_000
 const CAPABILITY_DISCOVERY_SCAN_MS = 30_000
+const PI_RUNTIME_PROBE_CACHE_MS = 5 * 60_000
+const PI_MODEL_PROBE_TIMEOUT_MS = 20_000
+const PI_MODEL_PROBE_RETRY_MS = 30_000
 // Type=notify + WatchdogSec=30s：systemd 要求约每半周期喂狗，不能绑在 30s HTTP 心跳上。
 const WATCHDOG_MS = 10_000
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 60_000
 const FI_PROBE_CHILD_ARG = '--probe-fi-inventory-once'
+const FI_PROBE_LAUNCHD_PREFIX = 'ai.agent-insight.fi-probe.'
 // 服务端 ping 间隔 30s；连续两次没动静就判定连接已死。
 const LIVENESS_TIMEOUT_MS = 75_000
 const LIVENESS_CHECK_MS = 15_000
+const DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS = 90
 // 长轮询失败后的重试间隔。必须远小于服务端指令 TTL（默认 30s），
 // 否则指令会在两次轮询的空窗里过期。
 const POLL_RETRY_MS = 3_000
@@ -82,15 +95,6 @@ function loadConfig() {
     // 安装器始终写入版本化 managed venv 的绝对解释器路径。
     fiPython: process.env.AGENT_FI_PYTHON || raw.fiPython || '',
   }
-}
-
-function saveConfigPatch(patch) {
-  const prev = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) : {}
-  fs.mkdirSync(CLIENT_HOME, { recursive: true })
-  const next = { ...prev, ...patch }
-  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600 })
-  fs.renameSync(tmp, CONFIG_PATH)
 }
 
 /**
@@ -167,11 +171,280 @@ function which(bin) {
   return r.status === 0 ? (r.stdout || '').trim() : null
 }
 
+const xiaooCliProbeCache = new Map()
+
+function executableFingerprint(executable) {
+  try {
+    const resolved = fs.realpathSync(executable)
+    const info = fs.statSync(resolved)
+    return `${resolved}:${info.size}:${info.mtimeMs}`
+  } catch {
+    return String(executable || '')
+  }
+}
+
+function inspectXiaooCli(executable) {
+  if (!executable) {
+    return {
+      requiresCliPrefix: false,
+      supportsFormatJson: false,
+      supportsTitle: false,
+      supportsAgent: false,
+      supportsProvider: false,
+      supportsModel: false,
+    }
+  }
+  const cacheKey = executableFingerprint(executable)
+  const cached = xiaooCliProbeCache.get(cacheKey)
+  if (cached && Date.now() - cached.checkedAt < 30_000) return cached.result
+
+  let topLevelHelp = ''
+  try {
+    const help = spawnSync(executable, ['--help'], { encoding: 'utf8', timeout: 3_000 })
+    if (help.status === 0) topLevelHelp = `${help.stdout || ''}\n${help.stderr || ''}`
+  } catch {}
+  const requiresCliPrefix = /(?:^|\s)--cli(?:\s|,|$)/m.test(topLevelHelp)
+    && topLevelHelp.includes('xiaoo --cli')
+  let runHelp = ''
+  try {
+    const helpArgs = requiresCliPrefix ? ['--cli', 'run', '--help'] : ['run', '--help']
+    const help = spawnSync(executable, helpArgs, { encoding: 'utf8', timeout: 3_000 })
+    if (help.status === 0) runHelp = `${help.stdout || ''}\n${help.stderr || ''}`
+  } catch {}
+  const hasFlag = (flag) => new RegExp(`(?:^|\\s)${flag}(?:[\\s=,]|$)`, 'm').test(runHelp)
+  const result = {
+    requiresCliPrefix,
+    supportsFormatJson: hasFlag('--format') && /\bjson\b/.test(runHelp),
+    supportsTitle: hasFlag('--title'),
+    supportsAgent: hasFlag('--agent'),
+    supportsProvider: hasFlag('--provider'),
+    supportsModel: hasFlag('--model'),
+  }
+  xiaooCliProbeCache.clear()
+  xiaooCliProbeCache.set(cacheKey, { result, checkedAt: Date.now() })
+  return result
+}
+
+function xiaooCollectorInstalled() {
+  const dataRoot = getAgentInsightHome()
+  const pluginPath = path.join(dataRoot, 'xiaoo-trace-collector', 'plugin.json')
+  const configPath = process.env.XIAOO_CONFIG
+    || path.join(
+      process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+      'xiaoo',
+      'config.toml',
+    )
+  try {
+    return fs.statSync(pluginPath).isFile()
+      && fs.readFileSync(configPath, 'utf8').includes('xiaoo-trace-collector')
+  } catch {
+    return false
+  }
+}
+
+function probeExperimentRuntime(platform, executable = which(runtimeAdapters[platform]?.executableName || platform)) {
+  return runtimeAdapters[platform]?.probe(executable) || {
+    canResolveTraceId: false,
+    ready: false,
+  }
+}
+
+function probeXiaooRuntime(executable) {
+  const cli = inspectXiaooCli(executable)
+  const canResolveTraceId = Boolean(executable)
+    && cli.supportsFormatJson && cli.supportsTitle && cli.supportsAgent
+  return { ...cli, canResolveTraceId, ready: canResolveTraceId && xiaooCollectorInstalled() }
+}
+
+function piRuntimePaths() {
+  const home = process.env.AGENT_INSIGHT_USER_HOME || os.homedir()
+  const configuredDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent')
+  const agentDir = configuredDir.startsWith('~/') ? path.join(os.homedir(), configuredDir.slice(2)) : path.resolve(configuredDir)
+  const packageDir = path.join(getAgentInsightHome(process.env, home), 'collectors', 'pi-agent')
+  return {
+    home, agentDir, packageDir,
+    settings: path.join(agentDir, 'settings.json'),
+    config: process.env.AGENT_INSIGHT_PI_CONFIG || path.join(packageDir, 'config.json'),
+    core: path.join(packageDir, 'lib', 'pi-trace-core.cjs'),
+  }
+}
+
+const piCliProbeCache = new Map()
+const piRuntimeProbeCache = new Map()
+const piModelProbeCache = new Map()
+const piModelProbeInFlight = new Map()
+const piModelProbeChildren = new Set()
+
+function inspectPiCli(executable) {
+  if (!executable) return { supported: false }
+  const key = executableFingerprint(executable)
+  const cached = piCliProbeCache.get(key)
+  if (cached && Date.now() - cached.checkedAt < PI_RUNTIME_PROBE_CACHE_MS) return cached.result
+  const options = { encoding: 'utf8', timeout: 3_000, maxBuffer: 1024 * 1024 }
+  const versionResult = spawnSync(executable, ['--version'], options)
+  const help = spawnSync(executable, ['--help'], options)
+  const version = String(versionResult.stdout || '').trim()
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
+  const compatible = match && (Number(match[1]) > 0 || Number(match[2]) > 82
+    || (Number(match[2]) === 82 && Number(match[3]) >= 1))
+  const result = {
+    version,
+    supported: Boolean(compatible && versionResult.status === 0 && help.status === 0
+      && ['--mode', '--session-id', '--name', '--model', '--print', '--no-approve']
+        .every(flag => String(help.stdout).includes(flag))),
+  }
+  piCliProbeCache.clear()
+  piCliProbeCache.set(key, { result, checkedAt: Date.now() })
+  return result
+}
+
+function piCollectorRegistered(paths) {
+  try {
+    const settings = JSON.parse(fs.readFileSync(paths.settings, 'utf8').replace(/^\uFEFF/, ''))
+    const manifest = JSON.parse(fs.readFileSync(path.join(paths.packageDir, 'package.json'), 'utf8'))
+    if (!manifest.pi?.extensions?.includes('./extensions/pi-agent-insight.ts')) return false
+    const expected = fs.realpathSync(paths.packageDir)
+    return (settings.packages || []).some(entry => {
+      const source = typeof entry === 'string' ? entry : entry?.source
+      if (typeof source !== 'string') return false
+      if (entry?.autoload === false) return false
+      // Filtered packages are accepted only when the Collector extension is explicitly enabled.
+      if (typeof entry === 'object' && entry.extensions !== undefined
+        && !(Array.isArray(entry.extensions) && entry.extensions.length === 1
+          && ['extensions/pi-agent-insight.ts', './extensions/pi-agent-insight.ts'].includes(entry.extensions[0]))) return false
+      const resolved = source.startsWith('~/') ? path.join(os.homedir(), source.slice(2))
+        : path.resolve(paths.agentDir, source)
+      try { return fs.realpathSync(resolved) === expected } catch { return false }
+    }) && fs.statSync(path.join(paths.packageDir, 'extensions', 'pi-agent-insight.ts')).isFile()
+  } catch { return false }
+}
+
+function piRuntimeProbeKey(executable) {
+  const paths = piRuntimePaths()
+  return createHash('sha256').update([
+    executableFingerprint(executable),
+    ...[paths.settings, paths.config, paths.core, path.join(paths.packageDir, 'package.json'),
+      path.join(paths.packageDir, 'extensions', 'pi-agent-insight.ts'),
+      path.join(paths.agentDir, 'models.json'), path.join(paths.agentDir, 'auth.json')].map(executableFingerprint),
+    process.env.AGENT_INSIGHT_API_KEY || '', process.env.AGENT_INSIGHT_OTLP_ENDPOINT || '',
+    process.env.AGENT_INSIGHT_SUPERVISOR || '', process.env.SHELL || '',
+    process.env.HOME || '', process.env.ZDOTDIR || '',
+  ].join('\n')).digest('hex')
+}
+
+function probePiRuntime(executable) {
+  const cli = inspectPiCli(executable)
+  const unavailable = { ...cli, canResolveTraceId: false, ready: false, models: [] }
+  if (!cli.supported) return unavailable
+  const paths = piRuntimePaths()
+  const key = piRuntimeProbeKey(executable)
+  const withModels = (result) => ({ ...result, models: result.ready ? piModelProbeCache.get(key)?.models || [] : [] })
+  const cached = piRuntimeProbeCache.get(key)
+  if (cached && Date.now() - cached.checkedAt < PI_RUNTIME_PROBE_CACHE_MS) return withModels(cached.result)
+  let ready = false
+  if (fs.existsSync(paths.config) && piCollectorRegistered(paths)) {
+    const check = spawnSync(process.execPath, ['-e',
+      'require(process.argv[1]).selfCheck().then(r => process.stdout.write(JSON.stringify({ok:r.ok,checks:r.checks}))).catch(() => process.exit(1))',
+      paths.core], { encoding: 'utf8', timeout: 3_000, maxBuffer: 1024 * 1024 })
+    try {
+      const result = JSON.parse(check.stdout)
+      ready = check.status === 0 && result.ok === true
+        && ['configured', 'endpoint', 'spoolWritable'].every(name => result.checks?.[name] === true)
+    } catch {}
+  }
+  const result = { ...cli, ready, canResolveTraceId: ready }
+  piRuntimeProbeCache.clear()
+  piRuntimeProbeCache.set(key, { result, checkedAt: Date.now() })
+  return withModels(result)
+}
+
+function probePiModelCatalog(executable, timeoutMs) {
+  return new Promise((resolve) => {
+    let child
+    let timer
+    let settled = false
+    let failure = null
+    let stdout = ''
+    let outputBytes = 0
+    const finish = (error, models = []) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      piModelProbeChildren.delete(child)
+      resolve({ error, models })
+    }
+    const stop = (error) => {
+      failure ||= error
+      signalProcessTree(child, 'SIGKILL')
+    }
+    try {
+      const cwd = piRuntimePaths().home
+      const launch = buildAgentProcessLaunch('pi-agent', executable, {
+        args: ['--no-approve', '--list-models'], stdin: null,
+      }, cwd)
+      child = spawn(launch.executable, launch.args, {
+        cwd, stdio: launch.stdio, detached: process.platform !== 'win32',
+        env: { ...process.env, NO_COLOR: '1' },
+      })
+      piModelProbeChildren.add(child)
+      timer = setTimeout(() => stop('TIMEOUT'), timeoutMs)
+      for (const index of [launch.stdoutIndex, launch.stderrIndex]) {
+        child.stdio[index].setEncoding('utf8')
+        child.stdio[index].on('data', (chunk) => {
+          outputBytes += Buffer.byteLength(chunk)
+          if (outputBytes > 1024 * 1024) stop('OUTPUT_LIMIT')
+          if (!failure && index === launch.stdoutIndex) stdout += chunk
+        })
+      }
+      child.on('error', () => finish('SPAWN_FAILED'))
+      child.on('close', (code, signal) => {
+        if (failure || code !== 0 || signal) return finish(failure || 'EXIT_NONZERO')
+        const models = []
+        for (const line of stdout.split('\n')) {
+          const row = /^(\S+)\s+(\S+)\s+[\d.KM]+\s+[\d.KM]+\s+(?:yes|no)\s+(?:yes|no)\s*$/.exec(line.trim())
+          if (row) models.push(`${row[1]}/${row[2]}`)
+        }
+        if (!models.length && !/no (?:available )?models(?: available)?/i.test(stdout)) return finish('INVALID_OUTPUT')
+        finish(null, [...new Set(models)])
+      })
+    } catch {
+      if (child) stop('SPAWN_FAILED')
+      finish('SPAWN_FAILED')
+    }
+  })
+}
+
+async function refreshPiModelCatalog({ force = false, timeoutMs = PI_MODEL_PROBE_TIMEOUT_MS } = {}) {
+  const executable = which('pi')
+  if (!executable || !probePiRuntime(executable).ready) return { models: [], error: 'RUNTIME_UNAVAILABLE' }
+  const key = piRuntimeProbeKey(executable)
+  if (piModelProbeInFlight.has(key)) return piModelProbeInFlight.get(key)
+  const cached = piModelProbeCache.get(key)
+  if (!force && cached && Date.now() < cached.nextRefreshAt) return cached
+  const pending = (async () => {
+    const started = Date.now()
+    const probe = await probePiModelCatalog(executable, timeoutMs)
+    const result = {
+      models: probe.error ? cached?.models || [] : probe.models,
+      error: probe.error,
+      nextRefreshAt: Date.now() + (probe.error ? PI_MODEL_PROBE_RETRY_MS : PI_RUNTIME_PROBE_CACHE_MS),
+    }
+    if (piRuntimeProbeKey(executable) === key) {
+      piModelProbeCache.clear()
+      piModelProbeCache.set(key, result)
+      const status = probe.error ? `failed=${probe.error} retryMs=${PI_MODEL_PROBE_RETRY_MS}` : 'ok'
+      log(`Pi model catalog: ${status} models=${result.models.length} elapsedMs=${Date.now() - started}`)
+    }
+    return result
+  })()
+  piModelProbeInFlight.set(key, pending)
+  try { return await pending } finally { piModelProbeInFlight.delete(key) }
+}
+
 function capabilityDiscoveryFingerprint() {
-  const configRoot = path.join(
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-    'opencode',
-  )
+  const xdgConfigRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
+  const configRoot = path.join(xdgConfigRoot, 'opencode')
+  const insightDataRoot = getAgentInsightHome()
   const parts = []
   const visit = (target, depth = 0) => {
     let info
@@ -209,6 +482,15 @@ function capabilityDiscoveryFingerprint() {
     path.join(configRoot, 'agents'),
     path.join(configRoot, 'oh-my-openagent.json'),
     path.join(configRoot, 'oh-my-opencode.json'),
+    path.join(xdgConfigRoot, 'xiaoo', 'config.toml'),
+    path.join(insightDataRoot, 'xiaoo-trace-collector', 'plugin.json'),
+    which('xiaoo') || path.join(insightDataRoot, 'bin', 'xiaoo'),
+    which('pi') || path.join(insightDataRoot, 'bin', 'pi'),
+    piRuntimePaths().settings,
+    path.join(piRuntimePaths().agentDir, 'models.json'),
+    path.join(piRuntimePaths().agentDir, 'auth.json'),
+    piRuntimePaths().packageDir,
+    piRuntimePaths().config,
   ]) visit(target)
   return createHash('sha256').update(parts.join('\n')).digest('hex')
 }
@@ -246,49 +528,126 @@ function resolveFiCwd(cfg, python = resolvePython(cfg)) {
 
 let cachedFiCwd
 
-function waitSync(ms) {
-  const state = new Int32Array(new SharedArrayBuffer(4))
-  Atomics.wait(state, 0, 0, ms)
+function cleanupStaleFiProbeJobs(runner = spawnSync, platform = process.platform) {
+  if (platform !== 'darwin') return 0
+  const listed = runner('launchctl', ['list'], { encoding: 'utf8', stdio: 'pipe' })
+  if (listed.status !== 0) return 0
+  const labels = String(listed.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/).at(-1) || '')
+    .filter((label) => label.startsWith(FI_PROBE_LAUNCHD_PREFIX))
+  let removed = 0
+  for (const label of labels) {
+    const result = runner('launchctl', ['remove', label], { stdio: 'ignore' })
+    if (result.status === 0) removed += 1
+  }
+  return removed
+}
+
+function cleanupStaleInventorySandboxes(baseDir = path.join(CLIENT_HOME, 'tmp')) {
+  let removed = 0
+  let entries = []
+  try {
+    entries = fs.readdirSync(baseDir, { withFileTypes: true })
+  } catch {
+    return removed
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('inventory-')) continue
+    try {
+      fs.rmSync(path.join(baseDir, entry.name), { recursive: true, force: true })
+      removed += 1
+    } catch {}
+  }
+  return removed
+}
+
+function cleanupStaleInventoryOpencodeServers(
+  runner = spawnSync,
+  killFn = process.kill,
+  platform = process.platform,
+) {
+  if (platform !== 'darwin') return 0
+  const listed = runner('ps', ['-axo', 'pid=,command='], { encoding: 'utf8', stdio: 'pipe' })
+  if (listed.status !== 0) return 0
+  const runtimeRoot = `${path.join(getAgentInsightHome(), 'fault-injection', 'runtimes')}${path.sep}`
+  let removed = 0
+  for (const line of String(listed.stdout || '').split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(.+)$/.exec(line)
+    if (!match || !/(?:^|\/)opencode serve --hostname 127\.0\.0\.1 --port \d+(?:\s|$)/.test(match[2])) continue
+    const pid = Number(match[1])
+    const cwdResult = runner('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+    const cwd = String(cwdResult.stdout || '')
+      .split(/\r?\n/)
+      .find((entry) => entry.startsWith('n'))
+      ?.slice(1)
+    if (!cwd?.startsWith(runtimeRoot)) continue
+    try {
+      killFn(-pid, 'SIGTERM')
+      removed += 1
+    } catch {
+      try {
+        killFn(pid, 'SIGTERM')
+        removed += 1
+      } catch {}
+    }
+  }
+  return removed
+}
+
+function withInventoryProbeSandbox(
+  probeEnv,
+  action,
+  baseDir = path.join(CLIENT_HOME, 'tmp'),
+) {
+  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 })
+  const tempRoot = fs.mkdtempSync(path.join(baseDir, 'inventory-'))
+  const env = {
+    ...probeEnv,
+    TMPDIR: tempRoot,
+    TMP: tempRoot,
+    TEMP: tempRoot,
+  }
+  try {
+    return action({ tempRoot, env })
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true })
+  }
 }
 
 function runFiInventory(python, cwd, pythonArgs, probeEnv) {
-  const options = {
-    cwd,
-    env: probeEnv,
-    detached: process.platform !== 'win32',
-    encoding: 'utf8',
-    timeout: 60_000,
-    maxBuffer: 8 * 1024 * 1024,
-  }
-  if (process.platform !== 'darwin') {
-    const command = process.platform === 'win32' ? python : '/bin/sh'
-    const args = process.platform === 'win32'
-      ? pythonArgs
-      : ['-c', 'exec "$@"', 'agent-insight-fi-inventory', python, ...pythonArgs]
-    return spawnSync(command, args, options)
-  }
+  return withInventoryProbeSandbox(probeEnv, ({ tempRoot, env }) => {
+    const options = {
+      cwd,
+      env,
+      encoding: 'utf8',
+      timeout: 60_000,
+      maxBuffer: 8 * 1024 * 1024,
+    }
+    if (process.platform !== 'darwin') {
+      const command = process.platform === 'win32' ? python : '/bin/sh'
+      const args = process.platform === 'win32'
+        ? pythonArgs
+        : ['-c', 'exec "$@"', 'agent-insight-fi-inventory', python, ...pythonArgs]
+      return spawnSync(command, args, options)
+    }
 
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-fi-probe-'))
-  const stdoutPath = path.join(tempRoot, 'stdout.json')
-  const stderrPath = path.join(tempRoot, 'stderr.log')
-  const label = `ai.agent-insight.fi-probe.${process.pid}.${randomBytes(4).toString('hex')}`
-  const uid = process.getuid ? process.getuid() : 501
-  try {
-    const submitted = spawnSync(
+    const uid = process.getuid ? process.getuid() : 501
+    return spawnSync(
       'launchctl',
       [
-        'submit',
-        '-l',
-        label,
-        '-o',
-        stdoutPath,
-        '-e',
-        stderrPath,
-        '--',
+        'asuser',
+        String(uid),
         '/usr/bin/env',
-        `PATH=${probeEnv.PATH || ''}`,
-        `HOME=${os.homedir()}`,
+        `PATH=${env.PATH || ''}`,
+        `HOME=${env.HOME || os.homedir()}`,
         `PWD=${cwd}`,
+        `TMPDIR=${tempRoot}`,
+        `TMP=${tempRoot}`,
+        `TEMP=${tempRoot}`,
         '/bin/sh',
         '-c',
         'cd "$1" && shift && exec "$@"',
@@ -297,37 +656,9 @@ function runFiInventory(python, cwd, pythonArgs, probeEnv) {
         python,
         ...pythonArgs,
       ],
-      { encoding: 'utf8', env: probeEnv },
+      options,
     )
-    if (submitted.status !== 0) return submitted
-
-    const deadline = Date.now() + options.timeout
-    while (Date.now() < deadline) {
-      let stdout = ''
-      let stderr = ''
-      try { stdout = fs.readFileSync(stdoutPath, 'utf8') } catch {}
-      try { stderr = fs.readFileSync(stderrPath, 'utf8') } catch {}
-      if (stdout.trim()) {
-        try {
-          JSON.parse(stdout)
-          return { status: 0, stdout, stderr }
-        } catch {}
-      }
-      const state = spawnSync(
-        'launchctl',
-        ['print', `gui/${uid}/${label}`],
-        { encoding: 'utf8', stdio: 'pipe' },
-      )
-      if (state.status !== 0 || /state = exited/.test(state.stdout || '')) {
-        return { status: 1, stdout, stderr: stderr || 'inventory helper exited without JSON' }
-      }
-      waitSync(100)
-    }
-    return { status: null, stdout: '', stderr: 'inventory helper timed out' }
-  } finally {
-    spawnSync('launchctl', ['remove', label], { stdio: 'ignore' })
-    fs.rmSync(tempRoot, { recursive: true, force: true })
-  }
+  })
 }
 
 /**
@@ -380,6 +711,7 @@ function probeFaultInjectionIsolated(cfg) {
     const child = spawn(process.execPath, [__filename, FI_PROBE_CHILD_ARG], {
       cwd: __dirname,
       env: process.env,
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
@@ -393,7 +725,8 @@ function probeFaultInjectionIsolated(cfg) {
       else resolve(value)
     }
     const timer = setTimeout(() => {
-      try { child.kill('SIGKILL') } catch {}
+      cleanupStaleInventoryOpencodeServers()
+      signalProcessTree(child, 'SIGKILL')
       finish(new Error('inventory probe child timed out'))
     }, 70_000)
     child.stdout.on('data', (chunk) => { stdout += String(chunk) })
@@ -422,8 +755,13 @@ function probeFaultInjectionIsolated(cfg) {
 /** 探测代价高（要 spawn Python），一次探测供两份上报共用。 */
 let cachedProbe = null
 
+function cacheSuccessfulProbe(probe) {
+  if (probe?.ready || !cachedProbe) cachedProbe = probe
+  return cachedProbe
+}
+
 function getProbe(cfg, { refresh = false } = {}) {
-  if (!cachedProbe || refresh) cachedProbe = probeFaultInjection(cfg)
+  if (!cachedProbe || refresh) cacheSuccessfulProbe(probeFaultInjection(cfg))
   return cachedProbe
 }
 
@@ -436,43 +774,92 @@ function normalizeModelIds(models) {
     : []
 }
 
+function mergePiRuntimeCapability(platforms, runtime) {
+  const capability = {
+    id: 'pi-agent', version: runtime.version, models: runtime.models || [], agents: ['pi-agent'],
+    runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId },
+    actions: ['RUN_EXPERIMENT_CASE'],
+  }
+  return [...platforms.filter(platform => platform.id !== 'pi-agent'), capability]
+}
+
 function buildCapabilities(cfg, opts) {
-  const fi = getProbe(cfg, opts)
-  const platforms = Object.entries(fi.platforms || {}).map(([id, info]) => ({
-    id,
-    version: info?.version ? String(info.version) : undefined,
-    models: normalizeModelIds(info?.models),
-    agents: normalizeModelIds(info?.agents),
-    runExperimentCase: {
-      version: 2,
-      returnsTraceId: id === 'opencode',
-    },
-    actions: [...WHITELIST],
-  }))
+  const fi = opts?.probe || getProbe(cfg, opts)
+  const runtimeByPlatform = new Map()
+  const runtimeFor = (id) => {
+    if (!runtimeByPlatform.has(id)) {
+      runtimeByPlatform.set(id, probeExperimentRuntime(id))
+    }
+    return runtimeByPlatform.get(id)
+  }
+  let platforms = Object.entries(fi.platforms || {}).map(([id, info]) => {
+    const runtime = runtimeFor(id)
+    return {
+      id,
+      version: info?.version ? String(info.version) : undefined,
+      models: normalizeModelIds(info?.models),
+      agents: normalizeModelIds(info?.agents),
+      runExperimentCase: {
+        version: 2,
+        returnsTraceId: runtime.canResolveTraceId,
+        ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}),
+      },
+      actions: [...WHITELIST],
+    }
+  })
   if (!platforms.length) {
     // 没有 FI inventory 时仍上报本机可见的平台可执行文件，配置下发不依赖 FI。
     for (const id of ['opencode', 'xiaoo']) {
       if (which(id)) {
+        const runtime = runtimeFor(id)
         platforms.push({
           id,
           models: [],
-          agents: [],
-          runExperimentCase: { version: 2, returnsTraceId: id === 'opencode' },
+          agents: id === 'xiaoo' ? ['defaultagent'] : ['build'],
+          runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(id === 'opencode' ? { skillSnapshotVersion: 4 } : {}) },
           actions: [...WHITELIST],
         })
       }
     }
   }
+  if (which('pi')) {
+    platforms = mergePiRuntimeCapability(platforms, runtimeFor('pi-agent'))
+  }
+  const components = {
+    clientVersion: AGENT_VERSION,
+    'git-workspace/v1': { ready: true },
+    'concurrent-execution/v1': { ready: true },
+    'git-patch/v1': { ready: true },
+  }
+  for (const platform of platforms) {
+    const runtime = runtimeFor(platform.id)
+    components[`agent-runtime/${platform.id}/v1`] = {
+      ready: platform.runExperimentCase?.returnsTraceId === true && runtime.ready,
+    }
+  }
   return {
     platforms,
     actions: [...WHITELIST],
-    components: { clientVersion: AGENT_VERSION },
+    components,
     faultInjection: {
       ready: fi.ready,
       note: fi.note,
       maxParallel: cfg.maxParallelFi,
     },
   }
+}
+
+function benchmarkAgentPlatformsFromCapabilities(capabilities) {
+  const components = capabilities?.components || {}
+  return [...new Set((capabilities?.platforms || [])
+    .filter((platform) => {
+      const component = components[`agent-runtime/${platform.id}/v1`]
+      const ready = component === true
+        || (component && typeof component === 'object' && component.ready !== false)
+      return platform.runExperimentCase?.returnsTraceId === true && ready
+    })
+    .map((platform) => String(platform.id || '').trim())
+    .filter(Boolean))]
 }
 
 /**
@@ -527,7 +914,7 @@ function sanitizeSegment(value, fallback) {
 }
 
 function configTargetPath(platform, scope, correlation) {
-  const root = path.join(os.homedir(), '.agent-insight')
+  const root = getAgentInsightHome()
   const platformDir = sanitizeSegment(platform, 'unknown')
   if (scope === 'experiment') {
     const runId = sanitizeSegment(
@@ -598,7 +985,7 @@ async function applyConfigSnapshot(cfg, payload) {
 
 function rasRuntimeConfigPath() {
   const rasHome =
-    process.env.AGENT_INSIGHT_RAS_HOME || path.join(os.homedir(), '.agent-insight', 'ras')
+    process.env.AGENT_INSIGHT_RAS_HOME || path.join(getAgentInsightHome(), 'ras')
   return path.join(rasHome, 'config.json')
 }
 
@@ -659,8 +1046,34 @@ async function writeRasRuntimeConfig(snapshot) {
 const activeChildren = new Map()
 /** 可靠性 Case 独占槽：持有期间不领 FI run，避免多个故障注入互相污染。 */
 let reliabilitySlotHeld = false
+const parallelExecutionSlots = new Set()
+const experimentChildren = new Set()
 let fiBusy = 0
-let reliabilityChild = null
+let benchmarkExecutor = null
+const experimentControllers = new Map()
+const experimentSettled = new Map()
+
+function experimentCancellationFile(commandId) {
+  if (!/^cmd_[A-Za-z0-9_-]+$/.test(String(commandId || ''))) throw new Error('Invalid experiment commandId')
+  return path.join(CLIENT_HOME, 'cancelled-experiments', `${commandId}.json`)
+}
+
+function tryAcquireExecutionSlot(kind, id) {
+  if (fiBusy > 0 || reliabilitySlotHeld) return false
+  if (id && ['benchmark', 'ordinary'].includes(kind)) {
+    if (parallelExecutionSlots.has(id)) return false
+    parallelExecutionSlots.add(id)
+  } else {
+    if (parallelExecutionSlots.size) return false
+    reliabilitySlotHeld = true
+  }
+  return true
+}
+
+function releaseExecutionSlot(kind, id) {
+  if (id && ['benchmark', 'ordinary'].includes(kind)) parallelExecutionSlots.delete(id)
+  else reliabilitySlotHeld = false
+}
 
 function resolveWorkspace(logical, workspaceBase) {
   const value = String(logical || '__default__').trim()
@@ -755,13 +1168,33 @@ function killRun(runId) {
 
 async function executeAction(cfg, frame, sendStatus) {
   const { action, payload = {} } = frame
+  if (action === 'CANCEL_EXPERIMENT_RUN') {
+    try {
+      let result
+      if (payload.kind === 'benchmark') {
+        if (!benchmarkExecutor) throw new Error('Benchmark runtime unavailable')
+        result = await benchmarkExecutor.cancel(payload.runId)
+      } else if (payload.kind === 'ordinary') {
+        ordinaryExperimentStore.requestCancellation(payload.runId)
+        const active = experimentControllers.get(payload.runId)
+        active?.abort()
+        const confirmation = active ? { confirmed: false } : await ordinaryExperimentStore.reconcile(payload.runId)
+        result = { runId: payload.runId, status: confirmation.confirmed ? 'cancelled' : 'cancelling',
+          ...(confirmation.reason ? { reason: confirmation.reason } : {}) }
+      } else throw new Error('Unsupported cancellation kind')
+      await sendStatus('SUCCEEDED', { result })
+    } catch (error) { await sendStatus('FAILED', { error: { code: 'CANCEL_FAILED', message: error.message } }) }
+    return
+  }
 
   // 本地白名单二次校验：服务端已校验过，但客户端不能只信服务端。
   if (!WHITELIST.has(action)) {
     await sendStatus('FAILED', { error: { code: 'ACTION_NOT_ALLOWED', message: `未知 action: ${action}` } })
     return
   }
-  const forbidden = action === 'RUN_EXPERIMENT_CASE' ? RUN_FORBIDDEN : CONFIG_FORBIDDEN
+  const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'].includes(action)
+    ? RUN_FORBIDDEN
+    : CONFIG_FORBIDDEN
   for (const key of Object.keys(payload)) {
     if (forbidden.includes(key)) {
       await sendStatus('FAILED', {
@@ -801,27 +1234,72 @@ async function executeAction(cfg, frame, sendStatus) {
   }
 
   if (action === 'RUN_EXPERIMENT_CASE') {
-    if (fiBusy > 0 || reliabilitySlotHeld) {
+    const cancellationFile = experimentCancellationFile(frame.commandId)
+    if (fs.existsSync(cancellationFile)) {
+      atomicWriteJson(cancellationFile, { confirmed: true })
+      ordinaryExperimentStore.accept(frame.commandId)
+      ordinaryExperimentStore.finish(frame.commandId)
+      await sendStatus('FAILED', { error: { code: 'EXECUTION_CANCELLED', message: '实验已取消' } })
+      return
+    }
+    const executionKind = payload.skillExecution ? 'skill' : 'ordinary'
+    if (!tryAcquireExecutionSlot(executionKind, frame.commandId)) {
       await sendStatus('FAILED', {
         error: { code: 'CLIENT_BUSY', message: '本机已有 Agent 或故障注入任务运行，拒绝并发执行实验 Case' },
       })
       return
     }
-    reliabilitySlotHeld = true
-    await sendStatus('RUNNING', {})
+    const controller = new AbortController()
+    experimentControllers.set(frame.commandId, controller)
+    let markSettled
+    experimentSettled.set(frame.commandId, new Promise((resolve) => { markSettled = resolve }))
+    if (fs.existsSync(cancellationFile)) controller.abort()
+    let terminationConfirmed = true
     try {
-      const result = await runExperimentCase(cfg, payload, async ({ traceId, startedAt }) => {
+      ordinaryExperimentStore.accept(frame.commandId)
+      await sendStatus('RUNNING', {})
+      const result = await runExperimentCase(cfg, { ...payload, signal: controller.signal,
+        onBeforeChildSpawn: () => ordinaryExperimentStore.launching(frame.commandId),
+        onChildSpawn: (child) => ordinaryExperimentStore.started(frame.commandId, child),
+      }, async ({ traceId, startedAt }) => {
         await sendStatus('RUNNING', {
           result: { state: 'TRACE_STARTED', traceId, startedAt },
         })
       })
       await sendStatus('SUCCEEDED', { result })
     } catch (err) {
+      terminationConfirmed = !['CANCELLATION_UNCONFIRMED', 'RUN_STATE_WRITE_FAILED'].includes(err.code)
       await sendStatus('FAILED', {
+        result: err.runFacts || undefined,
         error: { code: err.code || 'CASE_RUN_FAILED', message: err.message },
       })
     } finally {
-      reliabilitySlotHeld = false
+      experimentControllers.delete(frame.commandId)
+      try { ordinaryExperimentStore.finish(frame.commandId, terminationConfirmed) }
+      finally {
+        releaseExecutionSlot(executionKind, frame.commandId)
+        experimentSettled.delete(frame.commandId)
+        markSettled()
+      }
+    }
+    return
+  }
+
+  if (action === 'RUN_BENCHMARK_CASE') {
+    if (!benchmarkExecutor) {
+      await sendStatus('FAILED', {
+        error: { code: 'BENCHMARK_RUNTIME_UNAVAILABLE', message: 'Benchmark 执行运行时未就绪' },
+      })
+      return
+    }
+    try {
+      const result = await benchmarkExecutor.accept(payload.request)
+      await sendStatus('RUNNING', { result: { state: 'ACCEPTED', runId: result.runId } })
+      await sendStatus('SUCCEEDED', { result })
+    } catch (err) {
+      await sendStatus('FAILED', {
+        error: { code: err.code || 'BENCHMARK_ACCEPT_FAILED', message: err.message },
+      })
     }
   }
 }
@@ -832,6 +1310,9 @@ async function executeAction(cfg, frame, sendStatus) {
  */
 function signalProcessTree(child, signal) {
   if (!child?.pid) return
+  if (process.platform === 'win32') {
+    return spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5_000, stdio: 'ignore' }).status === 0
+  }
   if (process.platform !== 'win32') {
     try {
       process.kill(-child.pid, signal)
@@ -847,23 +1328,235 @@ function signalProcessTree(child, signal) {
   }
 }
 
+function inspectOpencodeRunEvent(line) {
+  try {
+    const parsed = JSON.parse(String(line || '').trim())
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const nestedEvent = parsed.event && typeof parsed.event === 'object' ? parsed.event : null
+    const outerType = String(parsed.type || '').toLowerCase()
+    const type = outerType === 'event' && nestedEvent?.type
+      ? String(nestedEvent.type).toLowerCase()
+      : String(outerType || nestedEvent?.type || '').toLowerCase()
+    const properties = nestedEvent?.properties || parsed.properties || {}
+    const rawStatus = properties?.status?.type
+      || properties?.status
+      || properties?.info?.status
+      || parsed.status?.type
+      || parsed.status
+    const status = String(rawStatus || '').toLowerCase()
+    const statusInfo = properties.status || parsed.status || {}
+    const part = parsed.part || properties?.part || {}
+    const partType = String(part?.type || '').toLowerCase()
+    const messageInfo = parsed.message || parsed.info || properties?.info || {}
+    const messageRole = String(messageInfo?.role || parsed.role || '').toLowerCase()
+    const delta = properties?.delta ?? parsed.delta
+    const directText = ['text', 'reasoning'].includes(type)
+      && String(part?.text ?? parsed.text ?? '').length > 0
+    const directModelEvent = directText || [
+      'tool',
+      'tool_use',
+      'tool_result',
+      'step_finish',
+    ].includes(type)
+    const assistantDelta = type === 'message.part.delta'
+      && typeof delta === 'string'
+      && delta.length > 0
+    const assistantPart = type === 'message.part.updated'
+      && (
+        ['reasoning', 'tool', 'tool_use', 'step-finish', 'step_finish'].includes(partType)
+        || (
+          partType === 'text'
+          && messageRole === 'assistant'
+          && typeof part?.text === 'string'
+          && part.text.length > 0
+        )
+      )
+      && messageRole !== 'user'
+    return {
+      traceId: traceIdFromJson(parsed),
+      idle: type === 'session.idle'
+        || ((type === 'session.status' || type === 'session.updated') && status === 'idle'),
+      error: extractStructuredAgentError(line),
+      ...(type === 'session.status' && status === 'retry' ? {
+        retry: { message: statusInfo.message || '模型请求重试', attempt: statusInfo.attempt },
+      } : {}),
+      modelResponse: directText || ['tool', 'tool_use'].includes(type) || assistantDelta
+        || (assistantPart && !['step-finish', 'step_finish'].includes(partType)),
+      modelActivity: directModelEvent || assistantDelta || assistantPart,
+      type,
+    }
+  } catch {
+    return null
+  }
+}
+
+function inspectXiaooRunEvent(line) {
+  try {
+    const parsed = JSON.parse(String(line || '').trim())
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const type = String(parsed.type || '').toLowerCase()
+    const data = parsed.data && typeof parsed.data === 'object' ? parsed.data : {}
+    // Only lifecycle events own a session; tool output may mention another session.
+    const candidate = type === 'session_start' ? traceIdFromJson(data) : null
+    const nativeId = candidate?.includes(':') ? candidate.split(':').slice(1).join(':') : candidate
+    return {
+      traceId: nativeId && nativeId !== 'unknown' ? nativeId : null,
+      idle: ['response', 'done', 'complete'].includes(type),
+      error: extractStructuredAgentError(line),
+      modelActivity: (type === 'response' && typeof data.raw_reply === 'string' && data.raw_reply.trim().length > 0)
+        || (['text', 'reasoning', 'text_delta'].includes(type) && typeof data.text === 'string' && data.text.length > 0)
+        || ['tool', 'tool_call', 'tool_use', 'tool_result'].includes(type),
+      type,
+    }
+  } catch {
+    return null
+  }
+}
+
+function createXiaooActivityEvidence() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-xiaoo-activity-'))
+  const startedAtMs = Date.now()
+  return {
+    env: { AGENT_INSIGHT_XIAOO_ACTIVITY_DIR: directory },
+    read(sessionId) {
+      if (!sessionId) return null
+      try {
+        const name = createHash('sha256').update(sessionId).digest('hex')
+        const file = path.join(directory, `${name}.json`)
+        if (fs.statSync(file).size > 4096) return null
+        const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+        if (record.sessionId !== sessionId || record.modelActivity !== true
+          || !Number.isSafeInteger(record.observedAtMs)
+          || record.observedAtMs < startedAtMs || record.observedAtMs > Date.now()) return null
+        return record
+      } catch { return null }
+    },
+    cleanup() {
+      try { fs.rmSync(directory, { recursive: true, force: true }) } catch {}
+    },
+  }
+}
+
+function createPiEventInspector(invocation) {
+  let sessionSeen = false
+  let pendingError = null
+  let settled = false
+  return (line, final = false) => {
+    let event
+    try { event = JSON.parse(String(line || '').trim()) } catch { event = null }
+    const type = event?.type
+    if (type === 'session') {
+      if (event.id !== invocation.sessionId) {
+        return { failureCode: 'TRACE_ID_MISMATCH', error: 'Pi 返回的 Session ID 与本次执行不一致' }
+      }
+      sessionSeen = true
+    }
+    const message = event?.message
+    if (type === 'message_end' && message?.role === 'assistant') {
+      pendingError = ['error', 'aborted'].includes(message.stopReason)
+        ? `Pi model: ${message.errorMessage || message.stopReason}` : null
+    }
+    if (type === 'auto_retry_end' && event.success === false) pendingError = String(event.error || pendingError || 'Pi retry exhausted')
+    if (type === 'error') pendingError = extractStructuredAgentError(line) || 'Pi runtime error'
+    if (type === 'agent_settled') settled = true
+    const delta = event?.assistantMessageEvent
+    const modelActivity = (type === 'message_update'
+      && ((['text_delta', 'thinking_delta', 'toolcall_delta'].includes(delta?.type) && Boolean(delta.delta))
+        || delta?.type === 'toolcall_start'))
+      || (type === 'message_end' && message?.role === 'assistant'
+        && Array.isArray(message.content) && message.content.some(part =>
+          (part.type === 'text' && Boolean(part.text)) || (part.type === 'thinking' && Boolean(part.thinking))
+          || part.type === 'toolCall'))
+      || ['tool_execution_start', 'tool_execution_end'].includes(type)
+    return {
+      type, modelActivity,
+      traceId: sessionSeen ? `${invocation.sessionId}__task0` : null,
+      error: (settled || final) ? pendingError : null,
+      idle: settled,
+      deferFailureUntilExit: settled,
+      ...(final && !settled && !pendingError ? {
+        failureCode: 'AGENT_INCOMPLETE', error: 'Pi 进程退出前未收到 agent_settled',
+      } : {}),
+    }
+  }
+}
+
+const runtimeAdapters = {
+  opencode: {
+    inspectEvent: inspectOpencodeRunEvent,
+    buildInvocation: buildOpencodeInvocation,
+    probe: (executable) => ({ canResolveTraceId: true, ready: Boolean(executable) }),
+    noOutputCode: 'MODEL_NO_RESPONSE',
+    firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
+  },
+  xiaoo: {
+    useLoginShell: true,
+    inspectEvent: inspectXiaooRunEvent,
+    createActivityEvidence: createXiaooActivityEvidence,
+    // Native JSON CLI omits intermediate tool events and can end with an empty raw_reply.
+    deferNoOutputUntilExit: true,
+    buildInvocation: buildXiaooInvocation,
+    probe: probeXiaooRuntime,
+    noOutputCode: 'AGENT_NO_OUTPUT',
+  },
+  'pi-agent': {
+    executableName: 'pi',
+    useLoginShell: true,
+    createEventInspector: createPiEventInspector,
+    requireReady: true,
+    buildInvocation: buildPiInvocation,
+    probe: probePiRuntime,
+    noOutputCode: 'AGENT_NO_OUTPUT',
+    firstResponseTimeoutSeconds: DEFAULT_FIRST_MODEL_RESPONSE_TIMEOUT_SECONDS,
+  },
+}
+
 async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
+  payload.signal?.throwIfAborted()
+  const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
+  let isolated = payload.skillExecution && executable ? prepareSkillExperimentWorkspace(executable, payload, undefined, cfg.clientId) : null
+  if (!payload.skillExecution && !payload.cwd) {
+    const root = path.join(cfg.workspaceBase || CLIENT_HOME, 'experiment-workspaces')
+    fs.mkdirSync(root, { recursive: true })
+    const cwd = fs.mkdtempSync(path.join(root, 'case-'))
+    isolated = { cwd, env: {}, cleanup() { fs.rmSync(cwd, { recursive: true, force: true }) } }
+  }
+  try {
+    return await runExperimentCaseImpl(cfg, payload, onTraceId, isolated)
+  } finally { isolated?.cleanup(Boolean(payload.signal?.aborted)) }
+}
+
+async function runExperimentCaseImpl(cfg, payload, onTraceId, isolated) {
+  payload.signal?.throwIfAborted()
   const platform = String(payload.platform || '')
+  const runtime = runtimeAdapters[platform]
   const agent = String(payload.agent || '')
   const model = payload.model ? String(payload.model) : null
   const input = String(payload.input || '')
+  const triggerRouting = payload.skillExecution?.version === 2 && payload.skillExecution.mode === 'trigger'
+  const triggerTarget = triggerRouting
+    ? String(payload.skillExecution.targetSkillName || '') : null
   if (!platform || !agent || !input) throw new Error('platform、agent 与 input 必填')
+  if (triggerRouting && (!triggerTarget || !payload.skillExecution.skills?.some((skill) => skill.name === triggerTarget))) {
+    throw createAgentRunError('TRIGGER_EVIDENCE_MISSING', '触发分析目标 Skill 不在冻结快照中')
+  }
 
-  const executable = which(platform)
+  const executable = which(runtime?.executableName || platform)
   if (!executable) {
     const err = new Error(`平台可执行文件不可用: ${platform}`)
     err.code = 'PLATFORM_NOT_AVAILABLE'
     throw err
   }
+  if (runtime?.requireReady && !runtime.probe(executable).ready) {
+    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', `${platform} CLI 或 Trace Collector 未就绪，请检查安装注册与上传配置`)
+  }
 
+  const cwd = isolated?.cwd || (payload.cwd ? path.resolve(String(payload.cwd)) : cfg.workspaceBase)
   const correlation = payload.correlation || {}
   const env = {
     ...process.env,
+    ...isolated?.env,
+    PWD: cwd,
     AGENT_INSIGHT_CLIENT_ID: cfg.clientId,
     AGENT_INSIGHT_EXPERIMENT_ID: String(correlation.experimentId || ''),
     AGENT_INSIGHT_EXPERIMENT_RUN_ID: String(correlation.experimentRunId || ''),
@@ -876,25 +1569,83 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
     agent,
     model,
     input,
+    literalInput: triggerRouting,
     correlation,
   })
+  const launch = buildAgentProcessLaunch(platform, executable, invocation, cwd)
+  const eventChannel = platform === 'opencode' ? prepareOpencodeEventChannel(env) : null
+  if (eventChannel) {
+    Object.assign(env, eventChannel.env)
+    launch.stdio = [...launch.stdio, 'pipe']
+  }
+  const inspectEvent = runtime?.createEventInspector?.(invocation) || runtime?.inspectEvent
   const timeoutMs = Math.max(1, Number(payload.timeoutSeconds) || 600) * 1000
+  const startupTimeoutSeconds = Math.max(1, Math.min(120, Number(payload.startupTimeoutSeconds) || 120))
+  const configuredFirstResponseSeconds = payload.firstModelResponseTimeoutSeconds === null
+    || payload.firstModelResponseTimeoutSeconds === undefined
+    || payload.firstModelResponseTimeoutSeconds === ''
+    ? Number.NaN
+    : Number(payload.firstModelResponseTimeoutSeconds)
+  const firstModelResponseTimeoutSeconds = Number.isFinite(configuredFirstResponseSeconds)
+    ? Math.max(1, Math.min(300, configuredFirstResponseSeconds))
+    : runtime?.firstResponseTimeoutSeconds || timeoutMs / 1000
+  const firstModelResponseTimeoutMs = firstModelResponseTimeoutSeconds * 1000
   const startedAt = new Date().toISOString()
 
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, invocation.args, {
-      cwd: cfg.workspaceBase,
-      env,
-      stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
-    })
-    reliabilityChild = child
-    fs.mkdirSync(cfg.workspaceBase, { recursive: true })
+    fs.mkdirSync(cwd, { recursive: true })
+    const activityEvidence = runtime?.createActivityEvidence?.()
+    let child
+    try {
+      payload.onBeforeChildSpawn?.()
+      child = spawn(launch.executable, launch.args, {
+        cwd,
+        env: { ...env, ...activityEvidence?.env },
+        stdio: launch.stdio,
+        detached: process.platform !== 'win32',
+      })
+    } catch (err) {
+      activityEvidence?.cleanup()
+      reject(err)
+      return
+    }
+    experimentChildren.add(child)
+    if (payload.onChildSpawn) {
+      try { payload.onChildSpawn(child) }
+      catch (error) {
+        signalProcessTree(child, 'SIGKILL')
+        activityEvidence?.cleanup()
+        experimentChildren.delete(child)
+        error.code ||= 'RUN_STATE_WRITE_FAILED'
+        reject(error)
+        return
+      }
+    }
     let stderr = ''
     let stdoutBuffer = ''
     let traceId = null
     let stdinError = null
+    let timedOut = false
+    let settled = false
+    let earlyFailure = null
+    let cancellationTreeConfirmed = false
+    let modelActivityObserved = false
+    let modelActivitySource = null
+    let firstModelActivityAt = null
+    const structuredErrors = []
     let traceReport = Promise.resolve()
+    let timeoutTimer = null
+    let modelStartTimer = null
+    let forceKillTimer = null
+    let hardStopTimer = null
+    let failureMonitor = null
+    let eventReader = null
+    let eventReadyTimer = null
+    let startupTimer = null
+    let routingStartedAt = null
+    let observedModel = null
+    let triggerHit = false
+    const triggeredSkills = new Set()
     if (invocation.stdin !== null && child.stdin) {
       child.stdin.on('error', (err) => {
         stdinError = err
@@ -909,57 +1660,354 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
         logErr(`early trace id report failed (${traceId}):`, err.message)
       })
     }
-    child.stdout.on('data', (c) => {
+    const clearTimers = () => {
+      if (startupTimer) clearTimeout(startupTimer)
+      if (eventReadyTimer) clearTimeout(eventReadyTimer)
+      failureMonitor?.dispose()
+      payload.signal?.removeEventListener('abort', cancelAgent)
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (modelStartTimer) clearTimeout(modelStartTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+    }
+    const observeModelActivity = (source = 'stdout', observedAtMs = Date.now()) => {
+      if (modelActivityObserved) return
+      modelActivityObserved = true
+      modelActivitySource = source
+      firstModelActivityAt = new Date(observedAtMs).toISOString()
+      if (modelStartTimer) {
+        clearTimeout(modelStartTimer)
+        modelStartTimer = null
+      }
+    }
+    const terminateForEarlyFailure = (code, message) => {
+      if (settled || earlyFailure || (triggerHit && !payload.signal?.aborted)) return
+      earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+      failureMonitor?.dispose()
+      if (modelStartTimer) {
+        clearTimeout(modelStartTimer)
+        modelStartTimer = null
+      }
+      cancellationTreeConfirmed = signalProcessTree(child, 'SIGTERM') === true
+      forceKillTimer = setTimeout(() => { cancellationTreeConfirmed = signalProcessTree(child, 'SIGKILL') === true }, 2_000)
+      hardStopTimer = setTimeout(() => void finishAgentRun(null, 'SIGKILL'), 5_000)
+    }
+    const stopAfterTriggerHit = () => {
+      if (triggerHit || settled || earlyFailure || timedOut || payload.signal?.aborted) return
+      triggerHit = true
+      failureMonitor?.dispose()
+      if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
+      if (modelStartTimer) { clearTimeout(modelStartTimer); modelStartTimer = null }
+      signalProcessTree(child, 'SIGTERM')
+      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 2_000)
+      hardStopTimer = setTimeout(() => {
+        earlyFailure = { code: 'CANCELLATION_UNCONFIRMED', message: 'Skill 已触发，但 Agent 进程未确认退出' }
+        void finishAgentRun(null, 'SIGKILL')
+      }, 5_000)
+    }
+    const cancelAgent = () => {
+      terminateForEarlyFailure('EXECUTION_CANCELLED', '实验已取消')
+      // Cancellation is acknowledged only after the child actually closes.
+      if (hardStopTimer) { clearTimeout(hardStopTimer); hardStopTimer = null }
+    }
+    const startModelResponseTimer = () => {
+      if (runtime && !modelActivityObserved && !modelStartTimer && firstModelResponseTimeoutMs < timeoutMs) {
+        modelStartTimer = setTimeout(() => terminateForEarlyFailure(
+          'MODEL_START_TIMEOUT',
+          `${platform} 会话在 ${firstModelResponseTimeoutSeconds} 秒内未产生首个模型输出或工具调用，已提前终止`,
+        ), firstModelResponseTimeoutMs)
+      }
+    }
+    const startExecutionTimers = () => {
+      if (timeoutTimer || settled || earlyFailure || payload.signal?.aborted) return
+      if (startupTimer) { clearTimeout(startupTimer); startupTimer = null }
+      if (triggerRouting) routingStartedAt = new Date().toISOString()
+      timeoutTimer = setTimeout(() => {
+        if (payload.signal?.aborted || settled || earlyFailure || triggerHit) return
+        timedOut = true
+        terminateForEarlyFailure(triggerRouting ? 'TRIGGER_ROUTING_TIMEOUT' : 'AGENT_TIMEOUT', triggerRouting
+          ? `Skill 路由在会话就绪后超过 ${Math.ceil(timeoutMs / 1000)} 秒，无法判定是否触发`
+          : `平台 ${platform} Agent 执行超过 ${Math.ceil(timeoutMs / 1000)} 秒，已终止进程组`)
+      }, timeoutMs)
+      if (triggerRouting || !eventChannel) startModelResponseTimer()
+    }
+    const consumeStdoutLine = (line, final = false, source = 'stdout') => {
+      const event = inspectEvent?.(line, final)
+      if (!triggerHit) failureMonitor?.onEvent(event)
+      captureTraceId(runtime ? event?.traceId : extractTraceIdFromJsonLine(line))
+      const structuredError = event?.error || (!runtime?.createEventInspector && extractStructuredAgentError(line))
+      if (structuredError && !triggerHit) structuredErrors.push(structuredError)
+      if (!runtime || !event) return
+      if (event.modelActivity) observeModelActivity(source)
+      if (event.error && !triggerHit) {
+        const classified = classifyAgentExitFailure({
+          platform,
+          exitCode: null,
+          signal: null,
+          diagnostic: event.error,
+          structured: true,
+        })
+        const code = event.failureCode || (classified.code === 'MODEL_UNAVAILABLE' ? classified.code : 'MODEL_ERROR')
+        const message = classified.code === 'MODEL_UNAVAILABLE'
+          ? classified.message
+          : `${platform} 会话报告模型错误: ${sanitizeAgentDiagnostic(event.error) || '未知错误'}`
+        if (settled || event.deferFailureUntilExit) {
+          if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+        } else {
+          terminateForEarlyFailure(code, message)
+        }
+      } else if (event.idle && !modelActivityObserved && !triggerHit && !runtime.deferNoOutputUntilExit) {
+        const code = runtime.noOutputCode
+        const message = `${platform} 会话已结束，但未观察到任何模型输出或工具调用`
+        if (settled || event.deferFailureUntilExit) {
+          if (!earlyFailure) earlyFailure = { code, message, detectedAt: new Date().toISOString() }
+        } else {
+          terminateForEarlyFailure(code, message)
+        }
+      }
+    }
+    if (platform === 'opencode') failureMonitor = createOpencodeFailureMonitor({
+      inspectEvent, onFailure: terminateForEarlyFailure,
+    })
+    if (eventChannel) {
+      eventReader = createOpencodeEventReader(eventChannel.token, {
+        onReady: () => {},
+        onSession: (sessionId) => {
+          captureTraceId(sessionId)
+          if (triggerRouting) startExecutionTimers()
+          else {
+            if (eventReadyTimer) { clearTimeout(eventReadyTimer); eventReadyTimer = null }
+            startModelResponseTimer()
+          }
+        },
+        onEvent: (event) => { if (!settled && !earlyFailure && !triggerHit) consumeStdoutLine(JSON.stringify(event), false, 'event-channel') },
+        onModel: (value) => {
+          if (typeof value === 'string' && value.trim() && !observedModel) observedModel = value.trim()
+        },
+        onTrigger: (skillName) => {
+          if (settled || earlyFailure || timedOut || payload.signal?.aborted) return
+          if (!triggerTarget || typeof skillName !== 'string' || !payload.skillExecution.skills.some((skill) => skill.name === skillName)) return
+          triggeredSkills.add(skillName)
+          observeModelActivity('event-channel')
+          if (skillName === triggerTarget) stopAfterTriggerHit()
+        },
+      })
+      if (!triggerRouting) eventReadyTimer = setTimeout(() => terminateForEarlyFailure(
+        'EVENT_MONITOR_UNAVAILABLE', eventReader?.ready
+          ? `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未创建根会话；请查看启动日志`
+          : `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，尚未收到监测通道就绪信号；请查看启动日志`,
+      ), startupTimeoutSeconds * 1000)
+      child.stdio[3].setEncoding('utf8')
+      child.stdio[3].on('data', (chunk) => eventReader.push(String(chunk)))
+      child.stdio[3].on('error', () => terminateForEarlyFailure('EVENT_MONITOR_UNAVAILABLE', 'OpenCode 失败监测通道异常断开'))
+    }
+    child.stdio[launch.stdoutIndex].setEncoding('utf8')
+    child.stdio[launch.stderrIndex].setEncoding('utf8')
+    child.stdio[launch.stdoutIndex].on('data', (c) => {
       stdoutBuffer += String(c)
       const lines = stdoutBuffer.split(/\r?\n/)
       stdoutBuffer = lines.pop() || ''
-      for (const line of lines) captureTraceId(extractTraceIdFromJsonLine(line))
-      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
+      for (const line of lines) {
+        consumeStdoutLine(line)
+      }
+      if (structuredErrors.length > 20) structuredErrors.splice(0, structuredErrors.length - 20)
+      if (platform === 'opencode' && inspectEvent(stdoutBuffer)) {
+        consumeStdoutLine(stdoutBuffer)
+        stdoutBuffer = ''
+      } else if (!runtime?.createEventInspector) {
+        captureTraceId(runtime ? inspectEvent(stdoutBuffer)?.traceId : extractTraceIdFromJsonLine(stdoutBuffer))
+      }
       if (stdoutBuffer.length > 1024 * 1024) stdoutBuffer = stdoutBuffer.slice(-1024 * 1024)
     })
-    child.stderr.on('data', (c) => {
+    child.stdio[launch.stderrIndex].on('data', (c) => {
       stderr += String(c)
+      if (!triggerHit) failureMonitor?.onStderr(String(c))
+      if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024)
     })
-    let forceKillTimer = null
-    const timer = setTimeout(() => {
-      signalProcessTree(child, 'SIGTERM')
-      forceKillTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 5_000)
-    }, timeoutMs)
-    child.on('error', (err) => {
-      clearTimeout(timer)
-      if (forceKillTimer) clearTimeout(forceKillTimer)
-      if (reliabilityChild === child) reliabilityChild = null
-      reject(err)
-    })
-    child.on('close', async (code) => {
-      clearTimeout(timer)
-      if (forceKillTimer) clearTimeout(forceKillTimer)
-      if (reliabilityChild === child) reliabilityChild = null
-      captureTraceId(extractTraceIdFromJsonLine(stdoutBuffer))
-      if (stdinError) {
-        const err = new Error(`向平台 ${platform} 传递实验输入失败: ${stdinError.message}`)
-        err.code = 'INPUT_DELIVERY_FAILED'
-        reject(err)
-        return
-      }
-      if (!traceId) {
-        const err = new Error(`平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`)
-        err.code = platform === 'opencode' ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED'
-        reject(err)
-        return
-      }
-      await traceReport
-      // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
-      resolve({
-        state: 'AGENT_EXITED',
-        traceId,
-        exitCode: code,
-        stderr: stderr.slice(-2000) || undefined,
-        startedAt,
-        finishedAt: new Date().toISOString(),
+    const waitForTraceReport = () => new Promise((done) => {
+      const reportTimer = setTimeout(done, 5_000)
+      traceReport.finally(() => {
+        clearTimeout(reportTimer)
+        done()
       })
     })
+    const finishAgentRun = async (code, signal) => {
+      if (settled) return
+      settled = true
+      consumeStdoutLine(stdoutBuffer)
+      stdoutBuffer = ''
+      const monitorFailure = triggerHit ? null : failureMonitor?.finish()
+      if (!earlyFailure && monitorFailure) earlyFailure = monitorFailure
+      if (!earlyFailure && !timedOut && !payload.signal?.aborted && eventReader && !eventReader.ready) {
+        earlyFailure = { code: 'EVENT_MONITOR_UNAVAILABLE', message: 'OpenCode 失败监测通道未就绪，请检查插件加载' }
+      }
+      clearTimers()
+      if (payload.signal?.aborted) {
+        let confirmed = cancellationTreeConfirmed || signalProcessTree(child, 'SIGKILL') === true
+        if (process.platform !== 'win32') {
+          const deadline = Date.now() + 2_000
+          do {
+            try { process.kill(-child.pid, 0) }
+            catch (error) { confirmed = error.code === 'ESRCH'; break }
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          } while (Date.now() < deadline)
+        }
+        if (!confirmed) earlyFailure = { code: 'CANCELLATION_UNCONFIRMED', message: '已请求终止，但进程树退出尚未确认' }
+      }
+      experimentChildren.delete(child)
+      consumeStdoutLine(stdoutBuffer)
+      if (runtime?.createEventInspector && code === 0 && !timedOut && !earlyFailure && !stdinError) consumeStdoutLine('', true)
+      if (code === 0 && !timedOut && !earlyFailure && !stdinError && !modelActivityObserved) {
+        const evidence = activityEvidence?.read(traceId)
+        if (evidence) observeModelActivity('collector', evidence.observedAtMs)
+      }
+      activityEvidence?.cleanup()
+      await waitForTraceReport()
+      const finishedAt = new Date().toISOString()
+      const runFacts = {
+        state: 'AGENT_EXITED',
+        ...(traceId ? { traceId } : {}),
+        exitCode: code,
+        signal: signal || undefined,
+        timedOut,
+        modelActivityObserved,
+        ...(eventReader ? { eventMonitorReady: eventReader.ready, eventSignalCount: eventReader.signalCount } : {}),
+        ...(triggerTarget ? { observedModel } : {}),
+        ...(triggerRouting ? {
+          routingStartedAt, startupTimeoutSeconds,
+          startupDurationMs: routingStartedAt ? Date.parse(routingStartedAt) - Date.parse(startedAt) : null,
+          workspaceReused: Boolean(isolated?.reused),
+        } : {}),
+        modelActivitySource: modelActivitySource || undefined,
+        firstModelActivityAt: firstModelActivityAt || undefined,
+        firstModelResponseTimeoutSeconds: runtime
+          ? firstModelResponseTimeoutSeconds
+          : undefined,
+        failureDetectedAt: earlyFailure?.detectedAt || undefined,
+        stderr: sanitizeAgentDiagnostic(stderr, 2_000) || undefined,
+        startedAt,
+        finishedAt,
+      }
+      let failure = null
+      if (earlyFailure) {
+        failure = createAgentRunError(earlyFailure.code, earlyFailure.message, runFacts)
+      } else if (timedOut) {
+        failure = createAgentRunError(
+          'AGENT_TIMEOUT',
+          `平台 ${platform} Agent 执行超过 ${Math.ceil(timeoutMs / 1000)} 秒，已终止进程组`,
+          runFacts,
+        )
+      } else if (stdinError) {
+        failure = createAgentRunError(
+          'INPUT_DELIVERY_FAILED',
+          `向平台 ${platform} 传递实验输入失败: ${stdinError.message}`,
+          runFacts,
+        )
+      } else {
+        const structuredFailure = classifyAgentExitFailure({
+          platform,
+          exitCode: code,
+          signal,
+          diagnostic: structuredErrors.join('\n'),
+          structured: true,
+        })
+        if (!triggerHit && structuredErrors.length && structuredFailure.code === 'MODEL_UNAVAILABLE') {
+          failure = createAgentRunError(structuredFailure.code, structuredFailure.message, runFacts)
+        }
+      }
+      if (!failure && code !== 0 && !(triggerTarget && triggerHit)) {
+        const classified = classifyAgentExitFailure({
+          platform,
+          exitCode: code,
+          signal,
+          diagnostic: [...structuredErrors, stderr].filter(Boolean).join('\n'),
+        })
+        failure = createAgentRunError(classified.code, classified.message, runFacts)
+      } else if (!failure && runtime && !modelActivityObserved) {
+        failure = createAgentRunError(
+          runtime.noOutputCode,
+          `${platform} Agent 已结束，但未观察到任何模型输出或工具调用`,
+          runFacts,
+        )
+      } else if (!failure && !triggerTarget && !traceId) {
+        failure = createAgentRunError(
+          runtime ? 'TRACE_ID_MISSING' : 'TRACE_ID_UNSUPPORTED',
+          `平台 ${platform} 未返回 Trace ID，无法安全绑定本次执行`,
+          runFacts,
+        )
+      }
+      if (!failure && triggerTarget && (!eventReader?.sessionId || !observedModel || (!triggerHit && !eventReader.completed))) {
+        failure = createAgentRunError('TRIGGER_EVIDENCE_MISSING', '触发分析缺少会话、实际模型或正常结束证据，无法判定', runFacts)
+      }
+      if (failure) {
+        reject(failure)
+        return
+      }
+      if (triggerTarget) runFacts.triggerDecision = {
+        triggered: triggerHit,
+        targetSkillName: triggerTarget,
+        competingSkill: [...triggeredSkills].find((skill) => skill !== triggerTarget) || null,
+        actualModel: observedModel,
+        sessionId: eventReader.sessionId,
+        endReason: triggerHit ? 'skill_loaded' : 'completed',
+      }
+      // Agent 进程结束 ≠ Trace 已入库；这里只回报进程级结果。
+      resolve(runFacts)
+    }
+    payload.signal?.addEventListener('abort', cancelAgent, { once: true })
+    if (payload.signal?.aborted) cancelAgent()
+    if (triggerRouting && !payload.signal?.aborted) {
+      startupTimer = setTimeout(() => {
+        if (settled || earlyFailure || triggerHit || payload.signal?.aborted) return
+        timedOut = true
+        terminateForEarlyFailure('AGENT_STARTUP_TIMEOUT',
+          `OpenCode 启动准备超过 ${startupTimeoutSeconds} 秒，${eventReader?.ready ? '路由会话尚未就绪' : '尚未收到插件就绪信号'}；请检查启动日志与依赖加载`)
+      }, startupTimeoutSeconds * 1000)
+    } else startExecutionTimers()
+    child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      activityEvidence?.cleanup()
+      experimentChildren.delete(child)
+      reject(err)
+    })
+    child.on('close', (code, signal) => {
+      void finishAgentRun(code, signal)
+    })
   })
+}
+
+function buildAgentProcessLaunch(platform, executable, invocation, cwd) {
+  const direct = {
+    executable,
+    args: invocation.args,
+    stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    stdoutIndex: 1,
+    stderrIndex: 2,
+  }
+  if (!runtimeAdapters[platform]?.useLoginShell || !['launchd', 'systemd'].includes(process.env.AGENT_INSIGHT_SUPERVISOR)) {
+    return direct
+  }
+  const shell = process.env.SHELL || os.userInfo().shell || '/bin/sh'
+  const shellName = path.basename(shell)
+  if (!path.isAbsolute(shell) || !['zsh', 'bash', 'sh', 'dash', 'ksh'].includes(shellName)) {
+    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', `${platform} 后台执行需要兼容 POSIX 的用户 shell（如 bash 或 zsh）`)
+  }
+  const bashLogin = shellName === 'bash' || (shellName === 'sh' && process.platform === 'darwin')
+  const redirect = bashLogin ? 'exec 1>&20 2>&21 20>&- 21>&-' : 'exec 1>&3 2>&4 3>&- 4>&-'
+  const args = ['-lic', `${redirect} || exit; cd -- "$1" && shift && exec "$@"`,
+    `agent-insight-${platform}`, cwd, executable, ...invocation.args]
+  // Bash login shells close fd 3–19; move the private pipes before loading profiles.
+  if (bashLogin) args.unshift('--noprofile', '--norc', '-ic',
+    'exec 20>&3 21>&4 3>&- 4>&- || exit; exec "$@"', `agent-insight-${platform}-bootstrap`, shell)
+  return {
+    executable: shell,
+    args,
+    stdio: [invocation.stdin === null ? 'ignore' : 'pipe', 'ignore', 'ignore', 'pipe', 'pipe'],
+    stdoutIndex: 3,
+    stderrIndex: 4,
+  }
 }
 
 function buildExperimentCaseArgs(executable, input) {
@@ -970,21 +2018,6 @@ function buildExperimentCaseArgs(executable, input) {
       if (`${help.stdout || ''}\n${help.stderr || ''}`.includes('--auto')) args.push('--auto')
     } catch {}
     if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
-    if (input.model) args.push('--model', input.model)
-    return args
-  }
-  if (input.platform === 'xiaoo') {
-    let helpText = ''
-    try {
-      const help = spawnSync(executable, ['--help'], { encoding: 'utf8', timeout: 15_000 })
-      helpText = `${help.stdout || ''}\n${help.stderr || ''}`
-    } catch {
-      helpText = ''
-    }
-    const args = /(?:^|\s)--cli(?:\s|,|$)/.test(helpText) && helpText.includes('xiaoo --cli')
-      ? ['--cli', 'run']
-      : ['run']
-    args.push('-p', input.input, '--agent', input.agent)
     if (input.model) args.push('--model', input.model)
     return args
   }
@@ -1004,20 +2037,53 @@ function parseOpencodeSlashCommand(value) {
 }
 
 function buildExperimentCaseInvocation(executable, input) {
+  const adapter = runtimeAdapters[input.platform]
+  if (adapter) return adapter.buildInvocation(executable, input)
+  return { args: buildExperimentCaseArgs(executable, input), stdin: null }
+}
+
+function buildOpencodeInvocation(executable, input) {
   const args = buildExperimentCaseArgs(executable, input)
-  if (input.platform === 'opencode') {
-    const slashCommand = parseOpencodeSlashCommand(input.input)
-    if (slashCommand) {
-      args.push('--command', slashCommand.command)
-      if (slashCommand.arguments) args.push(slashCommand.arguments)
-      return { args, stdin: null }
+  const slashCommand = input.literalInput ? null : parseOpencodeSlashCommand(input.input)
+  if (slashCommand) {
+    args.push('--command', slashCommand.command)
+    if (slashCommand.arguments) args.push(slashCommand.arguments)
+    return { args, stdin: null }
+  }
+  return { args, stdin: input.input }
+}
+
+function buildXiaooInvocation(executable, input) {
+  const cli = inspectXiaooCli(executable)
+  if (!cli.supportsFormatJson || !cli.supportsAgent || !cli.supportsTitle) {
+    throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'xiaoo CLI 不支持实验所需的 --format json、--agent 或 --title')
+  }
+  const args = cli.requiresCliPrefix ? ['--cli', 'run'] : ['run']
+  args.push('--format', 'json', '--agent', input.agent, '-p', input.input)
+  if (input.correlation?.caseRunId) args.push('--title', String(input.correlation.caseRunId))
+  if (input.model) {
+    const separator = input.model.indexOf('/')
+    if (!cli.supportsModel || (separator > 0 && !cli.supportsProvider)) {
+      throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'xiaoo CLI 不支持所选模型的 --provider/--model 参数')
     }
-    return { args, stdin: input.input }
+    if (separator > 0) {
+      args.push('--provider', input.model.slice(0, separator), '--model', input.model.slice(separator + 1))
+    } else {
+      args.push('--model', input.model)
+    }
   }
-  return {
-    args,
-    stdin: null,
-  }
+  return { args, stdin: null }
+}
+
+function buildPiInvocation(executable, input) {
+  if (input.agent !== 'pi-agent') throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'Pi 实验执行只支持根 Agent pi-agent')
+  if (!inspectPiCli(executable).supported) throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'Pi CLI 版本或参数不支持实验执行')
+  // --session-id resumes existing sessions; every launch, including a redelivery, must be fresh.
+  const sessionId = `agent-insight-${randomBytes(16).toString('hex')}`
+  const args = ['--mode', 'json', '--session-id', sessionId, '--no-approve', '--print']
+  if (input.correlation?.caseRunId) args.push('--name', String(input.correlation.caseRunId))
+  if (input.model) args.push('--model', input.model)
+  return { args, stdin: input.input, sessionId }
 }
 
 function traceIdFromJson(value, depth = 0) {
@@ -1062,8 +2128,7 @@ let capabilitiesRevision = 0
 // 否则服务端会把首次上报当成重放而丢弃（表现为 platforms 一直是空）。
 const REVISION_EPOCH = Date.now().toString(36)
 
-async function reportCapabilities(cfg, opts) {
-  const capabilities = buildCapabilities(cfg, opts)
+async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
   capabilitiesRevision += 1
   await api(cfg, 'PUT', '/api/reliability/client/v1/capabilities', {
     revision: `cap_${REVISION_EPOCH}_${capabilitiesRevision}`,
@@ -1079,6 +2144,7 @@ async function reportCapabilities(cfg, opts) {
   log(
     `capabilities reported: platforms=${capabilities.platforms.map((p) => p.id).join(',') || 'none'}` +
       ` agents=${capabilities.platforms.map((p) => `${p.id}:${p.agents?.length || 0}`).join(',') || 'none'}` +
+      ` models=${capabilities.platforms.map((p) => `${p.id}:${p.models?.length || 0}`).join(',') || 'none'}` +
       ` fi=${capabilities.faultInjection.ready}`,
   )
   return capabilities
@@ -1087,13 +2153,22 @@ async function reportCapabilities(cfg, opts) {
 let lastCapabilityFingerprint = null
 let capabilityRefreshInFlight = null
 
+function syncBenchmarkExecutorCapabilities(executor, capabilities) {
+  const platforms = benchmarkAgentPlatformsFromCapabilities(capabilities)
+  executor?.setAgentPlatforms(platforms)
+  return platforms
+}
+
 async function refreshCapabilityReports(cfg, { force = false } = {}) {
   const fingerprint = capabilityDiscoveryFingerprint()
   if (!force && fingerprint === lastCapabilityFingerprint) return false
   if (capabilityRefreshInFlight) return capabilityRefreshInFlight
   capabilityRefreshInFlight = (async () => {
-    cachedProbe = await probeFaultInjectionIsolated(cfg)
-    await reportCapabilities(cfg)
+    const [fi] = await Promise.all([probeFaultInjectionIsolated(cfg), refreshPiModelCatalog()])
+    cacheSuccessfulProbe(fi)
+    const capabilities = buildCapabilities(cfg)
+    syncBenchmarkExecutorCapabilities(benchmarkExecutor, capabilities)
+    await reportCapabilities(cfg, capabilities)
     await sendFiHeartbeat(cfg)
     lastCapabilityFingerprint = fingerprint
     return true
@@ -1230,6 +2305,16 @@ async function main() {
     process.exit(1)
   }
   fs.mkdirSync(CLIENT_HOME, { recursive: true })
+  await ordinaryExperimentStore.recover()
+  const staleProbeJobs = cleanupStaleFiProbeJobs()
+  const staleOpencodeServers = cleanupStaleInventoryOpencodeServers()
+  const staleProbeSandboxes = cleanupStaleInventorySandboxes()
+  if (staleProbeJobs || staleOpencodeServers || staleProbeSandboxes) {
+    log(
+      `cleaned stale inventory resources: launchd=${staleProbeJobs}` +
+      ` opencode=${staleOpencodeServers} sandboxes=${staleProbeSandboxes}`,
+    )
+  }
   log(`clientId=${cfg.clientId} host=${cfg.insightBaseUrl}`)
   log(`fi probe cwd=${resolveFiCwd(cfg) || 'unavailable'}`)
 
@@ -1237,6 +2322,32 @@ async function main() {
   notifyReady()
   setInterval(notifyWatchdog, WATCHDOG_MS)
   notifyWatchdog()
+
+  const runtimeCandidates = [
+    path.join(__dirname, 'executor', 'index.cjs'),
+    path.join(__dirname, '..', 'services', 'executor', 'src', 'index.cjs'),
+  ]
+  const runtimePath = runtimeCandidates.find((candidate) => fs.existsSync(candidate))
+  if (!runtimePath) throw new Error('Benchmark executor runtime 不存在')
+  const { createBenchmarkExecutor } = require(runtimePath)
+  const executorCapabilities = buildCapabilities(cfg, {
+    probe: { ready: false, note: 'initial inventory pending', platforms: {} },
+  })
+  benchmarkExecutor = createBenchmarkExecutor({
+    clientId: cfg.clientId,
+    deviceCredential: cfg.deviceCredential,
+    insightBaseUrl: cfg.insightBaseUrl,
+    baseDir: CLIENT_HOME,
+    agentInsightHome: getAgentInsightHome(),
+    log: (...args) => log(...args),
+    tryAcquireSlot: tryAcquireExecutionSlot,
+    releaseSlot: releaseExecutionSlot,
+    agentPlatforms: benchmarkAgentPlatformsFromCapabilities(executorCapabilities),
+    runAgent: (payload) => runExperimentCase(cfg, payload),
+    logError: (...args) => logErr(...args),
+  })
+  await benchmarkExecutor.recover()
+  log('benchmark executor ready on client control channel')
 
   const heartbeatAll = () => {
     sendHeartbeat(cfg).catch((err) => logErr('heartbeat failed', err.message))
@@ -1289,13 +2400,15 @@ async function sendCommandStatus(cfg, commandId, status, extra = {}) {
 
 /** 已处理过的 commandId —— 同一指令不得重复执行。 */
 const handledCommands = new Set()
+const executingCommands = new Set()
 
 async function handleCommand(cfg, frame, sendVia) {
   if (!frame?.commandId) return
   if (handledCommands.has(frame.commandId)) return
   handledCommands.add(frame.commandId)
+  executingCommands.add(frame.commandId)
   if (handledCommands.size > 1000) {
-    for (const id of [...handledCommands].slice(0, 500)) handledCommands.delete(id)
+    for (const id of [...handledCommands].filter((id) => !executingCommands.has(id)).slice(0, 500)) handledCommands.delete(id)
   }
 
   const sendStatus = async (status, extra) => {
@@ -1307,8 +2420,10 @@ async function handleCommand(cfg, frame, sendVia) {
   }
 
   // 先 ACK：服务端据此把指令从 SENT 推进到 RECEIVED。
-  await sendStatus('RECEIVED', {})
-  await executeAction(cfg, frame, sendStatus)
+  try {
+    await sendStatus('RECEIVED', {})
+    await executeAction(cfg, frame, sendStatus)
+  } finally { executingCommands.delete(frame.commandId) }
 }
 
 async function controlLoop(cfg) {
@@ -1422,9 +2537,12 @@ async function pollLoop(cfg) {
 async function pollOnce(cfg) {
   const frame = await api(cfg, 'GET', '/api/reliability/client/v1/commands/next?waitSeconds=25')
   if (!frame) return
-  await handleCommand(cfg, frame, (commandId, status, extra) =>
+  const handling = handleCommand(cfg, frame, (commandId, status, extra) =>
     sendCommandStatus(cfg, commandId, status, extra),
   )
+  if (frame.action === 'RUN_EXPERIMENT_CASE' && !frame.payload?.skillExecution) {
+    void handling.catch((error) => logErr('command failed', error.message))
+  } else await handling
 }
 
 /**
@@ -1441,7 +2559,7 @@ async function fiLoop(cfg) {
   }
   for (;;) {
     try {
-      if (!reliabilitySlotHeld && fiBusy < cfg.maxParallelFi) {
+      if (!reliabilitySlotHeld && !parallelExecutionSlots.size && fiBusy < cfg.maxParallelFi) {
         const claim = await api(cfg, 'POST', '/api/fault-injection/worker/claim', {
           workerId: cfg.clientId,
           limit: Math.max(0, cfg.maxParallelFi - fiBusy),
@@ -1485,27 +2603,56 @@ async function fiLoop(cfg) {
   }
 }
 
-function shutdown() {
-  if (reliabilityChild) signalProcessTree(reliabilityChild, 'SIGKILL')
+let shuttingDown = false
+async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  for (const child of piModelProbeChildren) signalProcessTree(child, 'SIGKILL')
+  for (const controller of experimentControllers.values()) controller.abort()
+  const settled = [...experimentSettled.values()]
+  if (settled.length) await Promise.race([Promise.allSettled(settled), new Promise((resolve) => setTimeout(resolve, 6000))])
+  for (const child of experimentChildren) signalProcessTree(child, 'SIGKILL')
   for (const runId of activeChildren.keys()) killRun(runId)
+  benchmarkExecutor?.close().catch(() => {})
   process.exit(0)
 }
-process.on('SIGTERM', shutdown)
-process.on('SIGINT', shutdown)
+process.on('SIGTERM', () => void shutdown())
+process.on('SIGINT', () => void shutdown())
 
 module.exports = {
+  executeAction,
+  buildAgentProcessLaunch,
   controlUrls,
   rasRuntimeConfigPath,
   writeRasRuntimeConfig,
   resolveFiCwd,
+  withInventoryProbeSandbox,
+  cleanupStaleFiProbeJobs,
+  cleanupStaleInventorySandboxes,
+  cleanupStaleInventoryOpencodeServers,
   buildFiInventory,
   buildCapabilities,
+  mergePiRuntimeCapability,
+  benchmarkAgentPlatformsFromCapabilities,
+  syncBenchmarkExecutorCapabilities,
   buildExperimentCaseInvocation,
+  runExperimentCase,
+  tryAcquireExecutionSlot,
+  releaseExecutionSlot,
   parseOpencodeSlashCommand,
   capabilityDiscoveryFingerprint,
   refreshCapabilityReports,
   normalizeModelIds,
   extractTraceIdFromJsonLine,
+  extractStructuredAgentError,
+  inspectOpencodeRunEvent,
+  inspectXiaooRunEvent,
+  createPiEventInspector,
+  probeExperimentRuntime,
+  refreshPiModelCatalog,
+  PI_MODEL_PROBE_TIMEOUT_MS,
+  sanitizeAgentDiagnostic,
+  classifyAgentExitFailure,
   buildCollectorArgs,
   readCollectResult,
   configTargetPath,

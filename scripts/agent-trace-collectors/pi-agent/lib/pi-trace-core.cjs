@@ -16,8 +16,19 @@ const {
   stableSpanId,
   stableTraceId,
 } = require("../../shared/trace-transport.cjs");
+const {
+  DurableCollaborationOutbox,
+  goalPlusMainBinding,
+} = require("../../shared/collaboration-transport.cjs");
+const {
+  classifyTool,
+  parseMcpIdentity,
+  usageFrom,
+} = require("../../shared/pi-trace-helpers.cjs");
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:3000/api/ingest/otel/v1/traces";
+const DEFAULT_COLLABORATION_SESSIONS_ENDPOINT = "http://127.0.0.1:3000/api/ingest/collaborations/sessions";
+const DEFAULT_COLLABORATION_EVENTS_ENDPOINT = "http://127.0.0.1:3000/api/ingest/collaborations/events";
 const DEFAULT_CONFIG_PATH = path.join(
   os.homedir(),
   ".agent-insight",
@@ -42,18 +53,53 @@ function loadCollectorConfig(options = {}) {
     options.configPath ||
     path.join(homeDir, ".agent-insight", "collectors", "pi-agent", "config.json");
   const file = readJsonIfExists(configPath);
-  const apiKey = env.AGENT_INSIGHT_API_KEY || file.apiKey;
+  const apiKey = String(file.apiKey || "").trim();
   const endpoint = env.AGENT_INSIGHT_OTLP_ENDPOINT || file.endpoint || DEFAULT_ENDPOINT;
+  const collaborationSessionsEndpoint = env.AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT
+    || file.collaborationSessionsEndpoint
+    || DEFAULT_COLLABORATION_SESSIONS_ENDPOINT;
+  const collaborationEventsEndpoint = env.AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT
+    || file.collaborationEventsEndpoint
+    || DEFAULT_COLLABORATION_EVENTS_ENDPOINT;
   const enabled = file.enabled !== false && Boolean(apiKey);
   return {
     enabled,
     apiKey,
     endpoint,
+    collaborationSessionsEndpoint,
+    collaborationEventsEndpoint,
+    goalPlusObserverEnabled: file.goalPlusObserverEnabled === true,
+    goalPlusObserverConfigPath: file.goalPlusObserverConfigPath,
     configPath,
     homeDir,
     uploadIntervalMs: Number(file.uploadIntervalMs) || 5 * 60 * 1000,
     shutdownTimeoutMs: Math.min(2500, Math.max(100, Number(file.shutdownTimeoutMs) || 2200)),
   };
+}
+
+function resolveGoalPlusRuntimeRoot(cwd, env = process.env) {
+  const workingDirectory = path.resolve(String(cwd || process.cwd()));
+  const configured = String(env.GOAL_PLUS_ROOT || "").trim();
+  if (!configured) return path.join(workingDirectory, ".gp");
+  return path.isAbsolute(configured)
+    ? path.resolve(configured)
+    : path.resolve(workingDirectory, configured);
+}
+
+async function activateGoalPlusObserver(request, config) {
+  const collector = require("../../goal-plus/goal-plus-collector.cjs");
+  const goalPlusConfig = await collector.loadConfig({
+    homeDir: config.homeDir,
+    configPath: config.goalPlusObserverConfigPath,
+  });
+  if (!config.apiKey || goalPlusConfig.apiKey !== config.apiKey) {
+    await collector.stopWatcher(goalPlusConfig);
+    throw new Error("Pi and Goal Plus collectors must use the same managed API key; reinstall the Pi collector");
+  }
+  return collector.activateGoalPlusSource(request.root, {
+    goalId: request.goalId,
+    nativeSessionId: request.nativeSessionId,
+  }, goalPlusConfig);
 }
 
 function messageText(message) {
@@ -66,42 +112,6 @@ function messageText(message) {
     .map((part) => String(part.text || part.thinking || ""))
     .filter(Boolean)
     .join("\n");
-}
-
-function usageFrom(value) {
-  const usage = value?.usage || value || {};
-  const input = Number(usage.input) || 0;
-  const output = Number(usage.output) || 0;
-  const reasoning = Number(usage.reasoning) || 0;
-  const cacheRead = Number(usage.cacheRead) || 0;
-  const cacheWrite = Number(usage.cacheWrite) || 0;
-  return {
-    input,
-    output,
-    reasoning,
-    cacheRead,
-    cacheWrite,
-    total: Number(usage.totalTokens) || input + output,
-  };
-}
-
-function classifyTool(toolName) {
-  const name = String(toolName || "").toLowerCase();
-  if (/^(bash|shell|terminal|exec|command)$/.test(name)) return "shell";
-  if (/^(read|write|edit|ls|find|grep|glob|cat)$/.test(name)) return "file";
-  if (/^(search|web_search|websearch|grep|find)$/.test(name)) return "search";
-  if (name === "subagent") return "subagent";
-  if (name.startsWith("mcp__")) return "mcp";
-  return "custom";
-}
-
-function parseMcpIdentity(toolName, args, result) {
-  const match = /^mcp__([^_]+(?:_[^_]+)*)__([^_].*)$/.exec(String(toolName || ""));
-  const metadata = result?.details?.metadata || result?.details || args?.metadata || {};
-  const serverName = metadata.serverName || metadata.server_name || match?.[1];
-  const mcpToolName = metadata.toolName || metadata.tool_name || match?.[2];
-  if (!serverName || !mcpToolName) return null;
-  return { serverName: String(serverName), toolName: String(mcpToolName) };
 }
 
 function normalizeFilePath(filePath) {
@@ -135,6 +145,83 @@ async function skillVersion(skill) {
 
 function resultText(result) {
   return messageText(result) || safeContent(result?.content) || safeContent(result) || "";
+}
+
+function isGoalPlusStartCommand(value) {
+  const match = /^\/(goal-plus|goal-plus-with-final-check)(?:\s+([\s\S]*))?$/i.exec(String(value || "").trim());
+  if (!match) return false;
+  const firstWord = String(match[2] || "").trim().split(/\s+/, 1)[0].toLowerCase();
+  return !["edit", "summary", "pause", "resume", "clear"].includes(firstWord);
+}
+
+function structuredGoalPlusId(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 6 || value == null) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
+    try { return structuredGoalPlusId(JSON.parse(trimmed), depth + 1, seen); }
+    catch { return undefined; }
+  }
+  if (typeof value !== "object") return undefined;
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+  const direct = value.goal_plus_id || value.goalPlusId;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = structuredGoalPlusId(child, depth + 1, seen);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function goalPlusIdFromStartPrompt(value) {
+  const matches = [...String(value || "").matchAll(/^goal_plus_id:\s*([A-Za-z0-9_.:-]+)\s*$/gm)];
+  return matches.length === 1 ? matches[0][1] : undefined;
+}
+
+function goalPlusStartIdFromContext(messages) {
+  if (!Array.isArray(messages)) return undefined;
+  let commandIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "custom" && messages[index]?.customType === "goal-plus-command-context") {
+      commandIndex = index;
+      break;
+    }
+  }
+  if (commandIndex < 0 || messages.slice(commandIndex + 1).some(message => message?.role === "assistant")) {
+    return undefined;
+  }
+  const goalPlusId = structuredGoalPlusId(messages[commandIndex]?.details);
+  if (!goalPlusId) return undefined;
+  let boundary = -1;
+  for (let index = commandIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "assistant"
+      || (messages[index]?.role === "custom" && messages[index]?.customType === "goal-plus-command-context")) {
+      boundary = index;
+      break;
+    }
+  }
+  return messages.slice(boundary + 1, commandIndex).some(message => (
+    message?.role === "custom"
+      && message?.customType === "goal-plus-created"
+      && structuredGoalPlusId(message.details) === goalPlusId
+  )) ? goalPlusId : undefined;
+}
+
+function goalPlusCreatedIdFromCurrentContext(messages) {
+  if (!Array.isArray(messages)) return undefined;
+  let boundary = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "assistant") {
+      boundary = index;
+      break;
+    }
+  }
+  for (let index = messages.length - 1; index > boundary; index -= 1) {
+    if (messages[index]?.role !== "custom" || messages[index]?.customType !== "goal-plus-created") continue;
+    return structuredGoalPlusId(messages[index].details);
+  }
+  return undefined;
 }
 
 // Pi 的 subagent/skill 委派工具会 spawn 一个独立 `pi` 进程执行子任务：
@@ -183,6 +270,13 @@ class PiTraceCollector {
       endpoint: this.config.endpoint,
       homeDir: this.config.homeDir,
     });
+    this.relationshipOutbox = options.relationshipOutbox || new DurableCollaborationOutbox({
+      framework: "pi-agent",
+      apiKey: this.config.apiKey,
+      homeDir: this.config.homeDir,
+      sessionsEndpoint: this.config.collaborationSessionsEndpoint,
+      eventsEndpoint: this.config.collaborationEventsEndpoint,
+    });
     this.now = options.now || Date.now;
     this.sessionId = "";
     this.traceId = "";
@@ -196,20 +290,41 @@ class PiTraceCollector {
     this.loadedSkills = [];
     this.lastOutput = "";
     this.errors = [];
+    this.relationshipPending = Promise.resolve();
+    this.goalPlusActivator = options.goalPlusActivator || activateGoalPlusObserver;
+    this.goalPlusActivationPending = Promise.resolve();
+    this.goalPlusActivated = new Set();
+    this.runtimeCwd = process.cwd();
   }
 
-  startSession(sessionId) {
+  updateRuntimeContext(ctx) {
+    if (typeof ctx?.cwd === "string" && ctx.cwd.trim()) this.runtimeCwd = path.resolve(ctx.cwd);
+  }
+
+  startSession(sessionId, ctx) {
     // Pi 的 sessionId 在整个交互会话内保持不变；若多个 agent 任务共享同一
     // sessionId，服务端会把多任务事件聚合成一条 ExecutionRecord 并相互覆盖。
     // 这里保存基 sessionId，并在 beginAgent 时为每个任务派生独立子 sessionId。
     this.baseSessionId = String(sessionId);
     this.sessionId = String(sessionId);
     this.traceId = stableTraceId("pi-agent", this.sessionId);
+    this.updateRuntimeContext(ctx);
     this.uploader.start(this.config.uploadIntervalMs);
   }
 
-  recordInput(text) {
+  recordInput(text, source) {
+    if (source === "extension") return;
     this.rawInput = String(text || "");
+  }
+
+  recordContext(messages, ctx) {
+    if (!this.currentAgent) return;
+    this.updateRuntimeContext(ctx);
+    const goalPlusId = goalPlusStartIdFromContext(messages)
+      || (this.currentAgent.goalPlusStart ? goalPlusCreatedIdFromCurrentContext(messages) : undefined);
+    if (!goalPlusId) return;
+    this.currentAgent.goalPlusStart = true;
+    this.queueGoalPlusMainBinding(goalPlusId);
   }
 
   setModel(model) {
@@ -220,6 +335,7 @@ class PiTraceCollector {
   }
 
   beginAgent(event, ctx) {
+    this.updateRuntimeContext(ctx);
     if (!this.sessionId) this.startSession(ctx.sessionManager.getSessionId());
     // 每个 agent 任务独立 sessionId（基于 Pi 会话 sessionId + agent 序号），
     // 使服务端按 session 聚合出独立 ExecutionRecord，避免多任务相互覆盖。
@@ -241,7 +357,14 @@ class PiTraceCollector {
       input: event.prompt,
       model: ctx.model?.id || ctx.model?.model || this.currentModel?.id,
       provider: ctx.model?.provider || this.currentModel?.provider,
+      goalPlusStart: isGoalPlusStartCommand(this.rawInput),
+      goalPlusBindingQueued: false,
+      goalPlusId: undefined,
     };
+    if (this.currentAgent.goalPlusStart) {
+      const goalPlusId = structuredGoalPlusId(event) || goalPlusIdFromStartPrompt(event.prompt);
+      if (goalPlusId) this.queueGoalPlusMainBinding(goalPlusId);
+    }
 
     const explicit = /^\/skill:([a-z0-9-]+)(?:\s|$)/i.exec(this.rawInput.trim());
     if (explicit) {
@@ -363,6 +486,44 @@ class PiTraceCollector {
     if (String(started.toolName).toLowerCase() === "subagent") {
       this.emitSubagentResults(event.result?.details, started.spanId, event.toolCallId, started.startedAt);
     }
+    if (this.currentAgent.goalPlusStart
+      && String(started.toolName).toLowerCase().startsWith("goal_plus")) {
+      const goalPlusId = structuredGoalPlusId(started.args) || structuredGoalPlusId(event.result);
+      if (goalPlusId) this.queueGoalPlusMainBinding(goalPlusId);
+    }
+  }
+
+  queueGoalPlusMainBinding(goalPlusId) {
+    if (!this.currentAgent?.goalPlusStart || !this.baseSessionId) return;
+    this.currentAgent.goalPlusId = goalPlusId;
+    this.queueGoalPlusActivation(goalPlusId);
+    if (this.currentAgent.goalPlusBindingQueued) return;
+    this.currentAgent.goalPlusBindingQueued = true;
+    const binding = goalPlusMainBinding(this.baseSessionId, goalPlusId, this.sessionId);
+    this.relationshipPending = this.relationshipPending
+      .then(async () => {
+        await this.relationshipOutbox.enqueueSession(binding);
+        await this.relationshipOutbox.flushOnce();
+      })
+      .catch((error) => this.errors.push(error));
+  }
+
+  queueGoalPlusActivation(goalPlusId) {
+    if (this.config.goalPlusObserverEnabled !== true || !this.baseSessionId || !goalPlusId) return;
+    const root = resolveGoalPlusRuntimeRoot(this.runtimeCwd);
+    const key = [root, goalPlusId, this.baseSessionId].join("\0");
+    if (this.goalPlusActivated.has(key)) return;
+    this.goalPlusActivationPending = this.goalPlusActivationPending
+      .then(async () => {
+        if (this.goalPlusActivated.has(key)) return;
+        await this.goalPlusActivator({
+          root,
+          goalId: goalPlusId,
+          nativeSessionId: this.baseSessionId,
+        }, this.config);
+        this.goalPlusActivated.add(key);
+      })
+      .catch((error) => this.errors.push(error));
   }
 
   recordMessage(message) {
@@ -537,6 +698,7 @@ class PiTraceCollector {
     if (!this.currentAgent) return;
     const endedAt = this.now();
     const agent = this.currentAgent;
+    if (agent.goalPlusId) this.queueGoalPlusActivation(agent.goalPlusId);
     for (const skill of this.activeSkills) {
       const details = await skill.detailsPromise;
       this.append({
@@ -578,7 +740,9 @@ class PiTraceCollector {
     this.activeTools.clear();
     this.currentAgent = null;
     await this.writer.flush();
+    await this.relationshipPending;
     this.uploader.flushOnce().catch((error) => this.errors.push(error));
+    this.relationshipOutbox.flushOnce().catch((error) => this.errors.push(error));
   }
 
   append(event) {
@@ -589,7 +753,15 @@ class PiTraceCollector {
     this.uploader.stop();
     if (this.currentAgent) await this.settleAgent();
     await this.writer.flush();
-    const upload = this.uploader.flushOnce().catch((error) => {
+    await this.relationshipPending;
+    await Promise.race([
+      this.goalPlusActivationPending,
+      new Promise((resolve) => setTimeout(resolve, this.config.shutdownTimeoutMs)),
+    ]);
+    const upload = Promise.all([
+      this.uploader.flushOnce(),
+      this.relationshipOutbox.flushOnce(),
+    ]).catch((error) => {
       this.errors.push(error);
     });
     await Promise.race([
@@ -616,30 +788,51 @@ async function selfCheck(options = {}) {
   const probe = path.join(stateDir, ".self-check");
   await atomicWriteJson(probe, { checkedAt: new Date().toISOString() });
   await fsp.unlink(probe);
+  const relationshipOutbox = new DurableCollaborationOutbox({
+    framework: "pi-agent",
+    apiKey: config.apiKey,
+    homeDir: config.homeDir,
+    sessionsEndpoint: config.collaborationSessionsEndpoint,
+    eventsEndpoint: config.collaborationEventsEndpoint,
+  });
+  const relationshipStatus = await relationshipOutbox.status();
   return {
-    ok: true,
+    ok: relationshipStatus.rejected === 0,
     checks: {
       configured: true,
       endpoint: /^https?:\/\//.test(config.endpoint),
+      collaborationSessionsEndpoint: /^https?:\/\//.test(config.collaborationSessionsEndpoint),
+      collaborationEventsEndpoint: /^https?:\/\//.test(config.collaborationEventsEndpoint),
       spoolWritable: true,
+      relationshipRejected: relationshipStatus.rejected === 0,
     },
     configPath: config.configPath,
     stateDir,
     endpoint: config.endpoint,
+    relationshipStatus,
   };
 }
 
 module.exports = {
   DEFAULT_CONFIG_PATH,
   DEFAULT_ENDPOINT,
+  DEFAULT_COLLABORATION_EVENTS_ENDPOINT,
+  DEFAULT_COLLABORATION_SESSIONS_ENDPOINT,
   PiTraceCollector,
+  activateGoalPlusObserver,
   classifyTool,
   createCollector,
   isSubagentWorkerProcess,
+  isGoalPlusStartCommand,
   loadCollectorConfig,
   messageText,
   parseMcpIdentity,
+  resolveGoalPlusRuntimeRoot,
   selfCheck,
+  structuredGoalPlusId,
+  goalPlusIdFromStartPrompt,
+  goalPlusCreatedIdFromCurrentContext,
+  goalPlusStartIdFromContext,
   skillVersion,
   usageFrom,
 };

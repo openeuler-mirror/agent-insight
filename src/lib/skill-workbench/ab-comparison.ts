@@ -4,10 +4,14 @@ export interface AbEvaluationState {
   status?: string;
   score?: number;
   evaluationResultId?: string;
+  unscored?: boolean;
+  summary?: string;
+  errorMessage?: string;
 }
 
 export interface AbRunState {
   status?: string;
+  experimentCaseId?: string;
   score?: number;
   output?: string;
   timeCost?: string;
@@ -20,6 +24,7 @@ export interface AbRunState {
   evaluationTraceId?: string;
   tier?: string;
   failureType?: string;
+  failureCode?: string;
   failureDetail?: string;
   completedAt?: string;
   skillTriggered?: boolean;
@@ -61,6 +66,19 @@ function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+export function formatWorkbenchScore(score: number | null | undefined, status?: string): string {
+  if (finite(score)) return score.toFixed(1);
+  if (status === 'not-evaluated') return '未评测';
+  if (status === 'pending') return '等待执行';
+  if (status === 'running') return '执行中';
+  if (status === 'executed') return '待评测';
+  if (status === 'evaluating') return '评测中';
+  if (status === 'fail' || status === 'failed') return '失败';
+  if (status === 'unscored') return '未计分';
+  if (status === 'cancelled') return '已取消';
+  return '—';
+}
+
 function average(values: unknown[]): number | null {
   const numbers = values.filter(finite);
   return numbers.length ? numbers.reduce((sum, value) => sum + value, 0) / numbers.length : null;
@@ -68,6 +86,15 @@ function average(values: unknown[]): number | null {
 
 function runsOf(side?: AbSideState): AbRunState[] {
   return side?.runs?.length ? side.runs : side ? [side] : [];
+}
+
+export function isCompletedWorkbenchCase(experimentStatus: string, sides: Array<AbSideState | undefined>): boolean {
+  const runsBySide = sides.map(runsOf);
+  if (runsBySide.some((runs) => runs.some((run) => !['pass', 'fail', 'done', 'failed', 'cancelled'].includes(run.status || '')))) {
+    return false;
+  }
+  if (runsBySide.length > 0 && runsBySide.every((runs) => runs.length > 0)) return true;
+  return ['done', 'partial', 'failed', 'cancelled'].includes(experimentStatus);
 }
 
 export function summarizeAbSide(side?: AbSideState): AbSideSummary {

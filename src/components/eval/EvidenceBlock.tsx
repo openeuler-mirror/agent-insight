@@ -21,6 +21,15 @@ const SPECIALIZED_EVALUATOR_IDS = new Set([
   'preset-depth-result',
   'preset-agent-tool-utilization',
   'preset-agent-tool-selection',
+  'preset-agent-step-efficiency',
+  'preset-agent-process-quality',
+]);
+
+// 文本指标评估器：落库仍是机器可读 JSON，展示层统一转成中文自然语言描述。
+const TEXT_METRIC_EVALUATOR_IDS = new Set([
+  'preset-text-rouge',
+  'preset-text-exact-match',
+  'preset-text-entity-f1',
 ]);
 
 const SPECIALIZED_LABELS: Record<string, string> = {
@@ -41,6 +50,17 @@ const SPECIALIZED_LABELS: Record<string, string> = {
   parameter_validity: '参数合理性',
   result_utilization: '工具结果利用率',
   call_order: '调用顺序合理性',
+  step_necessity: '步骤必要性',
+  path_detour: '路径绕行',
+  cost_efficiency: '成本效率',
+  step_density: '步骤密度',
+  retry_efficiency: '重试效率',
+  goal_alignment: '目标对齐',
+  planning_completeness: '规划完整性',
+  reasoning_coherence: '推理连贯性',
+  exception_handling: '异常处理',
+  path_robustness: '路径稳健性',
+  information_utilization: '信息利用',
   met: '达成', partial: '部分达成', missing: '未达成', not_applicable: '不适用',
   none: '不适用', light: '轻度展开', full: '充分展开',
   required: '必要', optional: '可选', useful: '有用', irrelevant: '无关',
@@ -51,6 +71,22 @@ const SPECIALIZED_LABELS: Record<string, string> = {
   dependency_order_violation: '依赖调用顺序错误',
   irrelevant_call: '无关调用', redundant_call: '重复调用', invalid_argument: '参数不符合约束',
   out_of_catalog: '目录外调用', redundant: '冗余调用', ineffective: '无效调用',
+  duplicate_no_gain: '重复调用且无信息增量',
+  irrelevant_detour: '无关绕路',
+  unchanged_retry_loop: '未调整策略的重试循环',
+  avoidable_llm_overuse: '可避免的 LLM 过度使用',
+  fragmented_mergeable_steps: '可合并步骤过度拆分',
+  excessive_detour: '过度绕路',
+  unused_tool_result_processing: '工具结果的冗余处理',
+  overrollback: '过度回滚',
+  goal_drift: '目标偏移',
+  missing_required_step: '缺少必要步骤',
+  unsupported_reasoning_jump: '缺少依据的推理跳跃',
+  unhandled_recoverable_error: '未处理可恢复错误',
+  contradicted_tool_result: '结论与工具结果冲突',
+  decision_thrashing: '方案反复摇摆',
+  internal_contradiction: '内部结论矛盾',
+  unused_required_information: '未使用必要信息',
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -182,6 +218,120 @@ function specializedEvidenceMarkdown(value: unknown): string {
   return lines.length ? lines.join('\n') : '未提供可展示的专项评估依据。';
 }
 
+function pctText(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  // 评分点证据是 0~1 比值，卡级证据已折算为百分制，按量级自适应。
+  const normalized = Math.abs(value) <= 1 ? value * 100 : value;
+  return `${Math.round(normalized * 10) / 10}%`;
+}
+
+function rougeTokenizerLabel(tokenizer: unknown): string {
+  const text = valueText(tokenizer);
+  if (text.includes('unicode-char(cjk)')) return '中文按 Unicode 字符级计算';
+  if (text.includes('Intl.Segmenter')) return '词级分词（Intl.Segmenter）';
+  if (text.includes('fallback')) return '字符/词级混合兜底分词';
+  return text || '默认分词';
+}
+
+function textEvalConfigSummary(config: unknown): string {
+  const record = asRecord(config);
+  if (!record) return '';
+  const parts: string[] = [];
+  const mode = valueText(record.matchMode);
+  if (mode === 'exact') parts.push('完全一致匹配');
+  if (mode === 'fuzzy') parts.push(`模糊匹配（编辑距离 ≤ ${valueText(record.fuzzyThreshold)}）`);
+  if (mode === 'substring') parts.push('子串匹配');
+  if (typeof record.caseSensitive === 'boolean') parts.push(record.caseSensitive ? '区分大小写' : '忽略大小写');
+  if (record.punctuationInsensitive === true) parts.push('忽略标点');
+  if (record.whitespaceNormalization === true) parts.push('归一化空白');
+  if (record.widthNormalization === true) parts.push('全半角归一');
+  const scoring = valueText(record.multiCandidateScoring);
+  if (scoring === 'any') parts.push('任一候选命中即满分');
+  if (scoring === 'fraction') parts.push('按候选命中比例计分');
+  return parts.join('；');
+}
+
+function textMetricEvidenceMarkdown(value: unknown): string {
+  const record = asRecord(value);
+  if (!record) return '未提供可展示的评估依据。';
+  const unscoredReason = valueText(record.unscoredReason);
+  if (unscoredReason) return unscoredReason;
+  const parseError = valueText(record.parseError);
+  if (parseError) return `输出无法解析为实体列表，记 0 分：${parseError}`;
+
+  const lines: string[] = [];
+
+  if (valueText(record.metric) === 'ROUGE') {
+    lines.push(`综合公式：${valueText(record.formula) || '总分 = [ROUGE-1（单词重叠） + ROUGE-2（连续两词重叠） + ROUGE-L（最长公共子序列）] 三项 F1（精确率与召回率的调和平均）的平均值'}`);
+    lines.push(`分词方式：${rougeTokenizerLabel(record.tokenizer)}`);
+    const stats = [
+      typeof record.generatedTokenCount === 'number' ? `生成文本 ${record.generatedTokenCount} 个分词单元（token）` : '',
+      typeof record.referenceTokenCount === 'number' ? `参考文本 ${record.referenceTokenCount} 个分词单元（token）` : '',
+    ].filter(Boolean);
+    if (stats.length) lines.push(`分词统计：${stats.join('，')}`);
+    return lines.join('\n');
+  }
+
+  if (typeof record.lcsLength === 'number' || typeof record.overlapCount === 'number') {
+    if (typeof record.lcsLength === 'number') {
+      lines.push(`最长公共子序列（LCS）长度 ${record.lcsLength}（生成侧 ${valueText(record.generatedTokenCount) || 0} 个、参考侧 ${valueText(record.referenceTokenCount) || 0} 个）`);
+    } else {
+      lines.push(`重叠 n-gram（连续词组）${record.overlapCount} 个（生成侧 ${valueText(record.generatedNgramCount) || 0} 个、参考侧 ${valueText(record.referenceNgramCount) || 0} 个）`);
+    }
+    lines.push(`精确率 ${pctText(record.precision)}，召回率 ${pctText(record.recall)}，F1（精确率与召回率的调和平均）${pctText(record.f1)}`);
+    return lines.join('\n');
+  }
+
+  if (Array.isArray(record.candidates)) {
+    lines.push(`原始输出："${valueText(record.rawOutput)}"`);
+    lines.push(`标准化后："${valueText(record.normalizedOutput)}"`);
+    const candidates = record.candidates.map(asRecord).filter((item): item is Record<string, unknown> => item !== null);
+    if (candidates.length) lines.push(`参考答案：${candidates.map((c) => `"${valueText(c.raw)}"`).join('、')}`);
+    const indices = Array.isArray(record.matchedCandidateIndices)
+      ? record.matchedCandidateIndices.filter((i): i is number => typeof i === 'number')
+      : [];
+    const candidateCount = typeof record.candidateCount === 'number' ? record.candidateCount : candidates.length;
+    lines.push(indices.length
+      ? `匹配结果：命中第 ${indices.map((i) => i + 1).join('、')} 个候选（共 ${candidateCount} 个）`
+      : `匹配结果：标准化后未命中任何候选（共 ${candidateCount} 个）`);
+    const configSummary = textEvalConfigSummary(record.config);
+    if (configSummary) lines.push(`生效配置：${configSummary}`);
+    return lines.join('\n');
+  }
+
+  if (Array.isArray(record.matched)) {
+    lines.push(`正确识别 ${valueText(record.truePositiveCount) || '0'} 个，误报 ${valueText(record.falsePositiveCount) || '0'} 个，遗漏 ${valueText(record.falseNegativeCount) || '0'} 个`);
+    lines.push(`精确率 ${pctText(record.precision)}，召回率 ${pctText(record.recall)}，F1（精确率与召回率的调和平均）${pctText(record.f1)}`);
+    const pairs = record.matched.map(asRecord).filter((item): item is Record<string, unknown> => item !== null);
+    if (pairs.length) {
+      lines.push('匹配明细：');
+      for (const pair of pairs) {
+        const distance = typeof pair.distance === 'number' ? `（编辑距离 ${pair.distance}）` : '';
+        lines.push(`- 「${valueText(pair.predicted)}」↔「${valueText(pair.reference)}」${distance}`);
+      }
+    }
+    const falsePositives = Array.isArray(record.falsePositives) ? record.falsePositives.map(valueText).filter(Boolean) : [];
+    if (falsePositives.length) lines.push(`误报实体：${falsePositives.join('、')}`);
+    const falseNegatives = Array.isArray(record.falseNegatives) ? record.falseNegatives.map(valueText).filter(Boolean) : [];
+    if (falseNegatives.length) lines.push(`遗漏实体：${falseNegatives.join('、')}`);
+    const discarded = (typeof record.discardedEmptyPredictions === 'number' ? record.discardedEmptyPredictions : 0)
+      + (typeof record.discardedEmptyReferences === 'number' ? record.discardedEmptyReferences : 0);
+    if (discarded > 0) lines.push(`已忽略空实体 ${discarded} 个`);
+    const configSummary = textEvalConfigSummary(record.config);
+    if (configSummary) lines.push(`生效配置：${configSummary}`);
+    return lines.join('\n');
+  }
+
+  if (typeof record.predictedCount === 'number' && typeof record.truePositiveCount === 'number') {
+    return `共提取 ${record.predictedCount} 个实体，其中 ${record.truePositiveCount} 个与标准实体匹配`;
+  }
+  if (typeof record.referenceCount === 'number' && typeof record.truePositiveCount === 'number') {
+    return `标准实体共 ${record.referenceCount} 个，其中 ${record.truePositiveCount} 个被成功提取`;
+  }
+
+  return '未提供可展示的评估依据。';
+}
+
 /** 行内轻量 Markdown：**粗体** 与 `code`。 */
 function renderInline(text: string): ReactNode[] {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
@@ -247,6 +397,10 @@ function preview(ev: EvidenceLike, evaluatorId?: string): string {
   }
   if (evaluatorId && SPECIALIZED_EVALUATOR_IDS.has(evaluatorId)) {
     return specializedEvidenceMarkdown(ev.json).replace(/[*`#]/g, '').split('\n')
+      .map((line) => line.trim().replace(/^-\s*/, '')).filter(Boolean).join('；');
+  }
+  if (evaluatorId && TEXT_METRIC_EVALUATOR_IDS.has(evaluatorId)) {
+    return textMetricEvidenceMarkdown(ev.json).replace(/[*`#]/g, '').split('\n')
       .map((line) => line.trim().replace(/^-\s*/, '')).filter(Boolean).join('；');
   }
   const j = ev.json;
@@ -318,6 +472,8 @@ export function EvidenceBlock({
               {renderMd('**证据**')}
               {evaluatorId && SPECIALIZED_EVALUATOR_IDS.has(evaluatorId) ? (
                 renderMd(specializedEvidenceMarkdown(ev.json))
+              ) : evaluatorId && TEXT_METRIC_EVALUATOR_IDS.has(evaluatorId) ? (
+                renderMd(textMetricEvidenceMarkdown(ev.json))
               ) : (
                 <pre
                   style={{

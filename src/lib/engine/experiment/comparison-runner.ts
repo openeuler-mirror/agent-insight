@@ -12,7 +12,9 @@
 import { prisma } from '@/lib/storage/prisma';
 import { getDimension, type VariableDimension, type DimensionTrace, type TraceCandidate } from './variable-dimension';
 import {
-  overallAverage,
+  deriveSettledExperimentStatus,
+  normalizeTerminalExperimentStatus,
+  publishedOverallAverage,
   evaluatorBreakdown,
   caseScore,
   type ResultRowLike,
@@ -396,7 +398,7 @@ export async function getComparisonDetail(
 
   // 全量结果（轻量选列）
   const allResults: ResultRowLike[] = await prisma.experimentEvalResult.findMany({
-    where: { experimentId },
+    where: { experimentId, case: { deletedAt: null } },
     select: { caseId: true, evaluatorId: true, status: true, score: true },
   });
   const progress = {
@@ -405,6 +407,7 @@ export async function getComparisonDetail(
     failed: allResults.filter((r) => r.status === 'failed').length,
     pending: allResults.filter((r) => r.status === 'pending' || r.status === 'running').length,
   };
+  const responseStatus = normalizeTerminalExperimentStatus(experiment.status, allResults);
 
   // 全量 case（按组分片）——显式类型避免 prisma 包装器 any 推断
   interface CaseWithResults {
@@ -416,7 +419,7 @@ export async function getComparisonDetail(
     results: ResultRowLike[];
   }
   const allCases: CaseWithResults[] = await prisma.experimentCase.findMany({
-    where: { experimentId },
+    where: { experimentId, deletedAt: null },
     include: { results: { select: { id: true, caseId: true, evaluatorId: true, status: true, score: true } } },
   });
 
@@ -439,7 +442,7 @@ export async function getComparisonDetail(
   for (const g of experiment.groups) {
     const groupCaseIds = new Set(allCases.filter((c) => c.groupId === g.id).map((c) => c.id));
     const groupRows = allResults.filter((r) => groupCaseIds.has(r.caseId));
-    const overall = overallAverage(groupRows);
+    const overall = publishedOverallAverage(responseStatus, groupRows);
     const breakdown = evaluatorBreakdown(groupRows);
     const groupProgress = {
       total: groupRows.length,
@@ -505,7 +508,7 @@ export async function getComparisonDetail(
       const caseA = casesByInputGroup.get(p.taskInput)?.get(groupA.id);
       if (caseA) {
         const rows = (caseA.results as unknown as ResultRowLike[]);
-        const scores = caseScore(rows, categoryOf);
+        const scores = caseScore(rows, categoryOf, evaluatorIds);
         const out = caseA.actualOutput || (caseA.executionId ? execFallback.get(caseA.executionId) ?? '' : '');
         aSide = { caseId: caseA.id, executionId: caseA.executionId, actualOutput: out, scores: { overall: scores.overall, res: scores.res, traj: scores.traj } };
       }
@@ -514,7 +517,7 @@ export async function getComparisonDetail(
       const caseB = casesByInputGroup.get(p.taskInput)?.get(groupB.id);
       if (caseB) {
         const rows = (caseB.results as unknown as ResultRowLike[]);
-        const scores = caseScore(rows, categoryOf);
+        const scores = caseScore(rows, categoryOf, evaluatorIds);
         const out = caseB.actualOutput || (caseB.executionId ? execFallback.get(caseB.executionId) ?? '' : '');
         bSide = { caseId: caseB.id, executionId: caseB.executionId, actualOutput: out, scores: { overall: scores.overall, res: scores.res, traj: scores.traj } };
       }
@@ -542,7 +545,7 @@ export async function getComparisonDetail(
     name: experiment.name,
     type: experiment.type,
     agentName: experiment.agentName,
-    status: experiment.status,
+    status: responseStatus,
     watchMode: experiment.watchMode,
     watchEnabledAt: experiment.watchEnabledAt,
     evaluatorIds,
@@ -566,18 +569,17 @@ export interface StartComparisonRunResult {
   completion?: Promise<void>;
 }
 
-/** 终态谓词（同款 PATTERN，独立实现非导出；G7 不复用单组内部）。任一 pending/running→return；anyDone→'done' else 'failed'。 */
+/** 全部结果终态后收敛为 done / partial / failed。 */
 async function settleComparisonStatus(experimentId: string): Promise<void> {
   const rows: { status: string }[] = await prisma.experimentEvalResult.findMany({
-    where: { experimentId },
+    where: { experimentId, case: { deletedAt: null } },
     select: { status: true },
   });
-  const anyPending = rows.some((r) => r.status === 'pending' || r.status === 'running');
-  if (anyPending) return;
-  const anyDone = rows.some((r) => r.status === 'done');
-  await prisma.experiment.update({
-    where: { id: experimentId },
-    data: { status: anyDone ? 'done' : 'failed' },
+  const status = deriveSettledExperimentStatus(rows);
+  if (!status) return;
+  await prisma.experiment.updateMany({
+    where: { id: experimentId, deletedAt: null, status: { not: 'cancelled' } },
+    data: { status },
   });
 }
 
@@ -610,6 +612,8 @@ export async function startComparisonRun(
   experimentId: string,
   user: string,
 ): Promise<StartComparisonRunResult | null> {
+  const { assertExperimentActive } = await import('./cancellation-context');
+  await assertExperimentActive(experimentId);
   const running = getComparisonRunningSet();
   if (running.has(experimentId)) {
     return { status: 'running', alreadyRunning: true };
@@ -636,7 +640,7 @@ export async function startComparisonRun(
   } catch { /* 忽略脏数据 */ }
 
   const cases = await prisma.experimentCase.findMany({
-    where: { experimentId },
+    where: { experimentId, deletedAt: null },
     select: { id: true },
   });
   const resultIds: string[] = [];
@@ -667,6 +671,8 @@ export async function rescanComparison(
   experimentId: string,
   user: string,
 ): Promise<{ newPairsCount: number; downgradedPairs: number }> {
+  const { assertExperimentActive } = await import('./cancellation-context');
+  await assertExperimentActive(experimentId);
   const experiment = await prisma.experiment.findUnique({
     where: { id: experimentId },
     include: { groups: { orderBy: { key: 'asc' } } },

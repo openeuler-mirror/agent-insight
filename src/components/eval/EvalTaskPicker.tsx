@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { useAuth } from '@/lib/auth/auth-context';
+import { DeleteExperimentButton } from './DeleteExperimentButton';
 
 export interface EvalTaskOption {
     runId: string;
@@ -32,6 +34,8 @@ export function EvalTaskPicker({
     locale?: string;
 }) {
     const zh = locale === 'zh';
+    const { user } = useAuth();
+    const [deleted, setDeleted] = useState<string[]>([]);
     const [open, setOpen] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
 
@@ -109,7 +113,7 @@ export function EvalTaskPicker({
                 }}>
                     {tasks.length === 0 ? (
                         <div style={{ padding: '10px 12px', fontSize: 13, color: '#A1A1AA' }}>{zh ? '暂无历史评测任务' : 'No eval tasks yet'}</div>
-                    ) : tasks.map(t => {
+                    ) : tasks.filter((task) => !deleted.includes(task.runId)).map(t => {
                         const on = t.runId === selectedRunId;
                         return (
                             <div
@@ -135,6 +139,10 @@ export function EvalTaskPicker({
                                     {t.runningCount ? ` · ${zh ? '进行中' : 'running'} ${t.runningCount}` : ''}
                                     {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleDateString()}` : ''}
                                 </div>
+                                {user && <DeleteExperimentButton user={user} experimentId={t.runId} onDeleted={() => {
+                                    setDeleted((items) => [...items, t.runId]);
+                                    if (selectedRunId === t.runId) onSelect({ runId: '' });
+                                }} />}
                             </div>
                         );
                     })}

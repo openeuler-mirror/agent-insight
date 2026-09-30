@@ -105,7 +105,7 @@ function loadCapabilityConfig() {
   let recovery = {}
   let debug = false
   try {
-    const rasHome = process.env.AGENT_INSIGHT_RAS_HOME || join(homedir(), ".agent-insight", "ras")
+    const rasHome = process.env.AGENT_INSIGHT_RAS_HOME || join((process.env.AGENT_INSIGHT_HOME || join(homedir(), ".agent-insight")).replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => homedir()), "ras")
     const p = join(rasHome, "config.json")
     if (existsSync(p)) {
       const cfg = JSON.parse(readFileSync(p, "utf8"))

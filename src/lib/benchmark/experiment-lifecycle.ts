@@ -1,0 +1,282 @@
+import { prisma } from '@/lib/storage/prisma'
+import { evaluateEvalExperimentCase } from '@/lib/engine/experiment/run-experiment'
+import { deriveSettledExperimentStatus } from '@/lib/engine/experiment/detail-agg'
+
+import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-config'
+import { startBenchmarkExperiment } from './scheduler'
+import { nextImagePreparationRevision, sendImagePreparationWindow } from './image-preparation'
+import { getBenchmarkAdapter } from './adapter-registry'
+
+const TERMINAL_RUN_STATUSES = [
+  'evaluated',
+  'evaluation_failed',
+  'submission_invalid',
+  'execution_failed',
+  'dispatch_failed',
+  'blocked',
+]
+
+function parsedObject(value: string | null): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || '{}') as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+async function findExecution(user: string, traceId: string) {
+  try {
+    return await prisma.execution.findFirst({
+      where: {
+        user,
+        isSubagent: false,
+        OR: [
+          { id: traceId },
+          { taskId: traceId },
+          { agentSessionId: traceId },
+        ],
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, taskId: true, finalResult: true },
+    })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'P2021') return null
+    throw error
+  }
+}
+
+async function waitForExecution(user: string, traceId: string) {
+  const deadline = Date.now() + 30_000
+  do {
+    const execution = await findExecution(user, traceId)
+    if (execution) return execution
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 500)
+      timer.unref?.()
+    })
+  } while (Date.now() < deadline)
+  return null
+}
+
+export async function settleBenchmarkExperimentStatus(experimentId: string): Promise<void> {
+  const binding = await prisma.benchmarkExperimentBinding.findUnique({
+    where: { experimentId },
+    select: { expectedCaseCount: true, adapterKey: true },
+  })
+  if (!binding) return
+  const [runs, resultRows] = await Promise.all([
+    prisma.benchmarkCaseRun.findMany({
+      where: { experimentId, experimentCase: { deletedAt: null } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, retryOfRunId: true, experimentCaseId: true, status: true },
+    }),
+    prisma.experimentEvalResult.findMany({
+      where: { experimentId, case: { deletedAt: null } },
+      select: { status: true },
+    }),
+  ])
+  const retriedRunIds = new Set(
+    runs
+      .map((run: { retryOfRunId: string | null }) => run.retryOfRunId)
+      .filter((id: string | null): id is string => Boolean(id)),
+  )
+  const latestRunStatus = new Map<string, string>()
+  for (const run of runs) {
+    if (retriedRunIds.has(run.id)) continue
+    if (!latestRunStatus.has(run.experimentCaseId)) latestRunStatus.set(run.experimentCaseId, run.status)
+  }
+  const terminalRuns = Array.from(latestRunStatus.values())
+    .filter((status) => TERMINAL_RUN_STATUSES.includes(status)).length
+  const resultPending = resultRows.some((row: { status: string }) => row.status === 'pending' || row.status === 'running')
+  const expectedCount = await prisma.experimentCase.count({ where: { experimentId, deletedAt: null } });
+  if (terminalRuns !== expectedCount || resultPending) return
+  const status = expectedCount === 0 ? 'cancelled' : deriveSettledExperimentStatus(resultRows)
+  if (!status) return
+  await prisma.$transaction([
+    prisma.experiment.updateMany({
+      where: { id: experimentId, deletedAt: null, status: { not: 'cancelled' } },
+      data: { status },
+    }),
+    prisma.benchmarkExperimentBinding.update({
+      where: { experimentId },
+      data: { schedulerStatus: status },
+    }),
+  ])
+  const evaluatorKey = getBenchmarkAdapter(binding.adapterKey).manifest.evaluation.evaluatorKey
+  void sendImagePreparationWindow({ benchmarkKey: binding.adapterKey, evaluatorKey, experimentId,
+    revision: nextImagePreparationRevision(), cases: [] })
+    .catch((error) => console.warn('[benchmark/image-pool] window cleanup failed', error instanceof Error ? error.message : String(error)))
+}
+
+export async function continueExperiment(experimentId: string): Promise<void> {
+  const experiment = await prisma.experiment.findUnique({
+    where: { id: experimentId },
+    include: { benchmarkBinding: true },
+  })
+  const callbackOrigin = experiment?.benchmarkBinding?.callbackOrigin
+  if (!experiment || !callbackOrigin || experiment.status !== 'running') return
+  const runtime = defaultEvaluatorRuntimeConfigProvider.snapshot()
+  const next = await startBenchmarkExperiment({
+    experimentId,
+    user: experiment.user,
+    publicCallbackOrigin: callbackOrigin,
+    executorCallbackOrigin: runtime.executorCallbackBaseUrl || callbackOrigin,
+  })
+  next?.completion?.catch((error) => {
+    console.error('[benchmark/lifecycle] next case dispatch failed', error)
+  })
+}
+
+export async function continueAfterCaseCancellation(experimentId: string): Promise<void> {
+  await settleBenchmarkExperimentStatus(experimentId);
+  await continueExperiment(experimentId);
+}
+
+export async function finalizeBenchmarkCase(input: {
+  caseRunId: string
+  runSupplementalEvaluators: boolean
+  continueCases: boolean
+  shouldContinue?: () => Promise<boolean>
+}): Promise<boolean> {
+  const shouldContinue = input.shouldContinue || (async () => true)
+  if (!(await shouldContinue())) return false
+  const run = await prisma.benchmarkCaseRun.findUnique({
+    where: { id: input.caseRunId },
+    include: {
+      experiment: { select: { id: true, user: true, evaluatorIdsJson: true } },
+      artifacts: { orderBy: { createdAt: 'asc' } },
+    },
+  })
+  if (!run) return true
+
+  const facts = parsedObject(run.runFactsJson)
+  const traceId = typeof facts.traceId === 'string' ? facts.traceId.trim() : ''
+  let execution: { id: string; taskId: string | null; finalResult: string | null } | null = null
+  if (traceId) {
+    execution = run.status === 'execution_failed'
+      ? await findExecution(run.experiment.user, traceId)
+      : await waitForExecution(run.experiment.user, traceId)
+  }
+
+  if (execution) {
+    if (!(await shouldContinue())) return false
+    const artifactSummary = run.artifacts
+      .map((artifact: { name: string; sha256: string }) => `${artifact.name} · ${artifact.sha256}`)
+      .join('\n')
+    await prisma.experimentCase.update({
+      where: { id: run.experimentCaseId },
+      data: {
+        executionId: execution.id,
+        taskId: execution.taskId || traceId,
+        actualOutput: execution.finalResult || artifactSummary,
+        traceGenerationError: null,
+      },
+    })
+  } else if (traceId && run.status === 'execution_failed') {
+    if (!(await shouldContinue())) return false
+    await prisma.experimentCase.update({
+      where: { id: run.experimentCaseId },
+      data: { taskId: traceId },
+    })
+  }
+
+  let evaluatorIds: string[] = []
+  try {
+    const parsed = JSON.parse(run.experiment.evaluatorIdsJson || '[]')
+    if (Array.isArray(parsed)) evaluatorIds = parsed.map(String).filter((id) => !id.startsWith('benchmark:'))
+  } catch {
+    evaluatorIds = []
+  }
+
+  if (input.runSupplementalEvaluators && evaluatorIds.length) {
+    const existing = await prisma.experimentEvalResult.findMany({
+      where: {
+        experimentId: run.experimentId,
+        caseId: run.experimentCaseId,
+        evaluatorId: { in: evaluatorIds },
+      },
+      select: { evaluatorId: true, status: true },
+    })
+    const settled = new Set(
+      existing
+        .filter((result: { evaluatorId: string; status: string }) => (
+          ['done', 'failed'].includes(result.status)
+        ))
+        .map((result: { evaluatorId: string; status: string }) => result.evaluatorId),
+    )
+    evaluatorIds = evaluatorIds.filter((evaluatorId) => !settled.has(evaluatorId))
+    if (!(await shouldContinue())) return false
+    if (execution) {
+      if (evaluatorIds.length) {
+        await evaluateEvalExperimentCase(
+          run.experimentId,
+          run.experimentCaseId,
+          run.experiment.user,
+          { evaluatorIds, settleExperiment: false },
+        )
+      }
+    } else if (evaluatorIds.length) {
+      await prisma.experimentEvalResult.updateMany({
+        where: {
+          experimentId: run.experimentId,
+          caseId: run.experimentCaseId,
+          evaluatorId: { in: evaluatorIds },
+          status: { in: ['pending', 'running'] },
+        },
+        data: {
+          status: 'failed',
+          errorMessage: traceId
+            ? 'Agent Trace 尚未入库，无法执行补充评估器'
+            : '执行器未返回 Trace ID，无法执行补充评估器',
+        },
+      })
+    }
+  }
+
+  if (!(await shouldContinue())) return false
+  await settleBenchmarkExperimentStatus(run.experimentId)
+  if (input.continueCases) {
+    if (!(await shouldContinue())) return false
+    await continueExperiment(run.experimentId)
+  }
+  return true
+}
+
+export async function failBenchmarkCaseResults(caseRunId: string, message: string): Promise<void> {
+  const run = await prisma.benchmarkCaseRun.findUnique({
+    where: { id: caseRunId },
+    select: { experimentId: true, experimentCaseId: true, status: true },
+  })
+  if (!run || run.status === 'cancelled') return
+  try {
+    await prisma.experimentEvalResult.updateMany({
+      where: {
+        experimentId: run.experimentId,
+        caseId: run.experimentCaseId,
+        case: { deletedAt: null, experiment: { deletedAt: null } },
+        status: { in: ['pending', 'running'] },
+      },
+      data: { status: 'failed', errorMessage: message },
+    })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'P2021') {
+      await prisma.$transaction([
+        prisma.experiment.update({ where: { id: run.experimentId }, data: { status: 'failed' } }),
+        prisma.benchmarkExperimentBinding.update({
+          where: { experimentId: run.experimentId },
+          data: { schedulerStatus: 'failed' },
+        }),
+      ])
+      return
+    }
+    throw error
+  }
+  await finalizeBenchmarkCase({
+    caseRunId,
+    runSupplementalEvaluators: false,
+    continueCases: true,
+  })
+}

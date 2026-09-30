@@ -9,6 +9,7 @@ import { qoderOtelTraceAdapter } from './adapters/qoder';
 import { codexOtelTraceAdapter } from './adapters/codex';
 import { qwenCodeOtelTraceAdapter } from './adapters/qwencode';
 import { workbuddyOtelTraceAdapter } from './adapters/workbuddy';
+import { mctsXgovernorOtelTraceAdapter } from './adapters/mcts-xgovernor';
 import type { OtelTraceAdapter } from './adapters/types';
 import type { OtelTraceEvent } from './types';
 
@@ -23,6 +24,7 @@ const frameworkAdapters: readonly OtelTraceAdapter[] = [
   qoderOtelTraceAdapter,
   piAgentOtelTraceAdapter,
   workbuddyOtelTraceAdapter,
+  mctsXgovernorOtelTraceAdapter,
 ];
 
 const adapters: readonly OtelTraceAdapter[] = [

@@ -211,6 +211,10 @@ cd agent-insight
 bash scripts/start.sh
 ```
 
+默认使用 `~/.agent-insight/data/witty_insight.db`；如需自定义数据库路径，可在 `~/.agent-insight/.env` 中设置 `DATABASE_URL="file:/absolute/path/to/witty_insight.db"`。
+
+如需安装和配置 SWE-bench 等 Benchmark，请参阅[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)。
+
 **停止服务**
 
 如果需要停止运行，在工作目录下执行以下命令。该脚本将安全关闭 Next.js 服务端及所有相关的后台子进程：
@@ -249,6 +253,10 @@ bash scripts/stop.sh
 
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
+   点击任意一条 Trace，可查看 Trace 详情。
+
+   <p align="center"><img src="docs/images/tracedetail.png" alt="Trace详情" /></p>
+
 ---
 
 ## 🧭 上手演练 — Skill 生成 → 评测 → 优化
@@ -256,6 +264,8 @@ bash scripts/stop.sh
 完整体验在 Agent Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
 
 > 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
+
+> 🧩 **自定义 Benchmark**：如需接入新的 Benchmark 评测，请从 [Benchmark 文档关系与开发指南](docs/developer-guide/benchmark/README.md) 开始。客户只需用自然语言描述评测目标并提供已有材料，AI 会协助完成需求确认、接入包开发和验证。接入包完成后，按[《Benchmark 整体服务安装指南》](docs/developer-guide/benchmark/service-deployment-guide.md)部署 Agent Insight、Agent 执行端、Evaluator 和数据集。
 
 ### 注册模型
 

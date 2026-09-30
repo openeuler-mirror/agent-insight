@@ -1,0 +1,13 @@
+{
+  "repo": "example/project",
+  "instance_id": "example__project-1",
+  "base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "problem_statement": "Correct the public behavior described by this synthetic fixture.",
+  "hints_text": "",
+  "patch": "diff --git a/private-answer b/private-answer\n+hidden answer\n",
+  "test_patch": "diff --git a/private-test b/private-test\n+hidden test\n",
+  "FAIL_TO_PASS": "[\"test_hidden_regression\"]",
+  "PASS_TO_PASS": "[\"test_public_regression\"]",
+  "environment_setup_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "version": "1.0"
+}

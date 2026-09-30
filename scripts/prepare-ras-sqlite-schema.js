@@ -2,6 +2,66 @@
 
 const { PrismaClient } = require('@prisma/client')
 
+const OBSOLETE_BENCHMARK_COLUMNS = [
+  ['ReliabilityClient', 'executorBaseUrl'],
+  ['ReliabilityClient', 'executorReachability'],
+  ['ReliabilityClient', 'executorCheckedAt'],
+  ['BenchmarkCaseRun', 'executorBaseUrl'],
+  ['BenchmarkDispatchOutbox', 'destinationBaseUrl'],
+  ['BenchmarkDispatchOutbox', 'httpStatus'],
+]
+
+async function tableExists(prisma, tableName) {
+  const tables = await prisma.$queryRawUnsafe(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+    tableName,
+  )
+  return Array.isArray(tables) && tables.length > 0
+}
+
+async function dropObsoleteBenchmarkColumns(prisma) {
+  const removed = []
+  for (const [tableName, columnName] of OBSOLETE_BENCHMARK_COLUMNS) {
+    if (!(await tableExists(prisma, tableName))) continue
+    const columns = await prisma.$queryRawUnsafe(`PRAGMA table_info("${tableName}")`)
+    if (!columns.some(column => column.name === columnName)) continue
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "${tableName}" DROP COLUMN "${columnName}"`,
+    )
+    removed.push(`${tableName}.${columnName}`)
+  }
+  return removed
+}
+
+async function prepareBenchmarkDispatchCommandId(prisma) {
+  if (!(await tableExists(prisma, 'BenchmarkDispatchOutbox'))) return false
+  const columns = await prisma.$queryRawUnsafe('PRAGMA table_info("BenchmarkDispatchOutbox")')
+  const added = !columns.some(column => column.name === 'commandId')
+  if (added) {
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE "BenchmarkDispatchOutbox" ADD COLUMN "commandId" TEXT',
+    )
+  }
+  const duplicates = await prisma.$queryRawUnsafe(`
+    SELECT "commandId", COUNT(*) AS "count"
+    FROM "BenchmarkDispatchOutbox"
+    WHERE "commandId" IS NOT NULL
+    GROUP BY "commandId"
+    HAVING COUNT(*) > 1
+    LIMIT 1
+  `)
+  if (Array.isArray(duplicates) && duplicates.length > 0) {
+    throw new Error(
+      'BenchmarkDispatchOutbox contains duplicate commandId rows; back up and deduplicate them before schema sync',
+    )
+  }
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "BenchmarkDispatchOutbox_commandId_key"
+    ON "BenchmarkDispatchOutbox"("commandId")
+  `)
+  return added
+}
+
 async function prepareRasSqliteSchema(databaseUrl = process.env.DATABASE_URL) {
   if (!databaseUrl || !String(databaseUrl).startsWith('file:')) {
     return { status: 'skipped', reason: 'not-sqlite' }
@@ -12,11 +72,12 @@ async function prepareRasSqliteSchema(databaseUrl = process.env.DATABASE_URL) {
   })
 
   try {
-    const tables = await prisma.$queryRawUnsafe(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'RasAnomalyEvent'",
-    )
-    if (!Array.isArray(tables) || tables.length === 0) {
-      return { status: 'skipped', reason: 'table-missing' }
+    const removedColumns = await dropObsoleteBenchmarkColumns(prisma)
+    const commandIdAdded = await prepareBenchmarkDispatchCommandId(prisma)
+    if (!(await tableExists(prisma, 'RasAnomalyEvent'))) {
+      return removedColumns.length > 0 || commandIdAdded
+        ? { status: 'ready', removedColumns, commandIdAdded }
+        : { status: 'skipped', reason: 'table-missing' }
     }
 
     const columns = await prisma.$queryRawUnsafe('PRAGMA table_info("RasAnomalyEvent")')
@@ -44,7 +105,7 @@ async function prepareRasSqliteSchema(databaseUrl = process.env.DATABASE_URL) {
       CREATE UNIQUE INDEX IF NOT EXISTS "RasAnomalyEvent_taskId_deliveryId_key"
       ON "RasAnomalyEvent"("taskId", "deliveryId")
     `)
-    return { status: 'ready' }
+    return { status: 'ready', removedColumns, commandIdAdded }
   } finally {
     await prisma.$disconnect()
   }
@@ -53,7 +114,13 @@ async function prepareRasSqliteSchema(databaseUrl = process.env.DATABASE_URL) {
 async function run() {
   const result = await prepareRasSqliteSchema()
   if (result.status === 'ready') {
-    console.log('✓ Agent RAS SQLite schema preflight complete')
+    if (result.removedColumns?.length > 0) {
+      console.log(`✓ Removed obsolete Benchmark columns: ${result.removedColumns.join(', ')}`)
+    }
+    if (result.commandIdAdded) {
+      console.log('✓ Added BenchmarkDispatchOutbox.commandId')
+    }
+    console.log('✓ SQLite schema preflight complete')
   }
 }
 

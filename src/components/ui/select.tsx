@@ -31,6 +31,7 @@ interface SelectProps<T extends string = string> {
     size?: 'sm' | 'md';
     className?: string;
     contentClassName?: string;
+    modal?: boolean;
     'aria-label'?: string;
 }
 
@@ -43,13 +44,14 @@ export function Select<T extends string = string>({
     size = 'sm',
     className,
     contentClassName,
+    modal = true,
     'aria-label': ariaLabel,
 }: SelectProps<T>) {
     const current = options.find(o => o.value === value);
     const heightClass = size === 'sm' ? 'h-7 text-xs' : 'h-8 text-sm';
 
     return (
-        <DropdownMenu>
+        <DropdownMenu modal={modal}>
             <DropdownMenuTrigger
                 aria-label={ariaLabel || (typeof label === 'string' ? label : undefined)}
                 className={cn(

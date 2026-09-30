@@ -26,12 +26,13 @@
 3. IDaaS 登录使用 authorization code、client ID、client secret、redirect URI 和 scope。
 4. callback 校验随机 `state`，使用相同 redirect URI 换取 access token，并通过 userinfo 取得 `uuid`。
 5. IDaaS UUID 全局唯一；本地 `User.username` 直接使用去除首尾空白后的 UUID。不存在时自动注册并注入现有新用户示例。
-6. IDaaS access token 只用于本次 userinfo 请求，不持久化、不返回浏览器。
-7. callback 通过短时签名 HttpOnly Cookie 把登录结果交给登录页，浏览器 URL 不携带 API Key、UUID 或 userinfo。
-8. IDaaS OAuth 登录模式保留通用退出入口；退出只清除当前浏览器的本地账号和 API Key，不执行 IDaaS 单点登出。
-9. IDaaS OAuth 登录与历史组织集成不支持同时开启，冲突配置必须失败关闭，不能降级到本地登录。
-10. 可选地区访问限制只作用于 IDaaS 模式，以 userinfo UUID 通过固定 `uuids` 数组查询人员信息；欧盟用户在本地用户创建前被拒绝，已有用户恢复登录时也必须复查。
-11. 地区接口不可用、返回空数据或缺少判断字段时失败关闭，不创建或恢复账号；明确区分“地区受限”和“地区校验失败”。
+6. 地区人员接口返回非空 `w3Account` 时，将其作为该 UUID 用户的外部账号别名保存并显示；缺失时回退显示 UUID，不影响登录。
+7. IDaaS access token 只用于本次 userinfo 请求，不持久化、不返回浏览器。
+8. callback 通过短时签名 HttpOnly Cookie 把登录结果交给登录页，浏览器 URL 不携带 API Key、UUID 或 userinfo。
+9. IDaaS OAuth 登录模式保留通用退出入口；退出只清除当前浏览器的本地账号和 API Key，不执行 IDaaS 单点登出。
+10. IDaaS OAuth 登录与历史组织集成不支持同时开启，冲突配置必须失败关闭，不能降级到本地登录。
+11. 可选地区访问限制只作用于 IDaaS 模式，以 userinfo UUID 通过固定 `uuids` 数组查询人员信息；欧盟用户在本地用户创建前被拒绝，已有用户恢复登录时也必须复查。
+12. 地区接口不可用、返回空数据或缺少判断字段时失败关闭，不创建或恢复账号；明确区分“地区受限”和“地区校验失败”。
 
 ## 非功能需求
 
@@ -40,7 +41,7 @@
 - 兼容 `NEXT_PUBLIC_URL_PREFIX`。
 - authorization、callback、complete 响应禁止缓存。
 - OAuth 网络请求设置固定超时，错误响应不泄露 token、secret 或原始 userinfo。
-- 保持 SQLite/OpenGauss 双数据库行为；本期不新增数据库表。
+- 保持 SQLite/OpenGauss 双数据库行为；`User` 新增可空且唯一的 `externalAccount`，不改变各业务表以 UUID 归属数据的现有契约。
 - IAM token 进程内缓存 10 小时，人员信息缓存 2 小时；地区请求 TLS 校验使用独立开关，禁止通过全局环境变量影响其他 HTTPS 请求。
 
 ## 非目标
@@ -56,6 +57,7 @@
 - IDaaS OAuth 完成授权、callback、UUID 注册和页面登录。
 - redirect URI 前后一致，错误 state 或缺少 UUID 时登录失败。
 - IDaaS 模式不能通过本地邮箱接口绕过 OAuth。
+- 人员接口返回 `w3Account` 时，侧边栏显示该账号，并可由数据库别名反查 UUID；缺失时显示 UUID。
 - 三种模式都显示退出按钮；IDaaS 退出后再次登录仍经过统一身份授权。
 - 源码与提交差异中不含专有服务名称和真实配置。
 - 地区限制关闭时原三种登录行为不变；开启时 UUID 使用 `uuids` 列表查询，欧盟用户看见“您的地区暂无法使用”，查询故障看见“地区信息校验失败，请稍后重试”。

@@ -3,11 +3,16 @@ import type {
   DatasetCaseRootCauseMeta,
   RootCauseItem,
 } from './dataset-case-root-causes';
+import type {
+  BenchmarkPresentation,
+  BenchmarkPresentationColumn,
+  BenchmarkPresentationFormat,
+} from '../../packages/benchmark-protocol/src/contracts';
 
-export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability';
+export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
 
 export function coerceDatasetKind(value: unknown): DatasetKind {
-  if (value === 'trajectory' || value === 'reliability') return value;
+  if (value === 'trajectory' || value === 'reliability' || value === 'benchmark') return value;
   return 'ideal_output';
 }
 
@@ -15,6 +20,7 @@ export function coerceDatasetKind(value: unknown): DatasetKind {
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
 
 export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type DatasetFieldDisplayType = BenchmarkPresentationColumn['type'];
 export type TraceBackflowArtifactSource = 'input' | 'output' | 'trace' | 'none';
 
 export function defaultTraceBackflowSourceForField(key: string): TraceBackflowArtifactSource {
@@ -54,6 +60,11 @@ export interface DatasetField {
   key: string;
   label: string;
   type: DatasetFieldType;
+  path?: string;
+  displayType?: DatasetFieldDisplayType;
+  width?: number;
+  format?: BenchmarkPresentationFormat;
+  truncate?: number;
   description?: string;
   system?: boolean;
 }
@@ -95,6 +106,29 @@ export interface DatasetCase {
   rootCauseMeta?: DatasetCaseRootCauseMeta;
 }
 
+export function hasMeaningfulDatasetCaseValue(
+  datasetCase: DatasetCase,
+  fields: readonly DatasetField[],
+): boolean {
+  return fields.some(field => {
+    const value = datasetCase.values && Object.hasOwn(datasetCase.values, field.key)
+      ? datasetCase.values[field.key]
+      : field.key === 'input'
+        ? datasetCase.input
+        : field.key === 'reference_output'
+          ? datasetCase.expectedOutput
+          : field.key === 'trajectory' || field.key === 'trace'
+            ? datasetCase.trajectory
+            : undefined;
+
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    return true;
+  });
+}
+
 export interface AgentDataset {
   id: string;
   name: string;
@@ -108,6 +142,16 @@ export interface AgentDataset {
   cases: DatasetCase[];
   createdAt: string;
   updatedAt: string;
+  readOnly?: boolean;
+  shared?: boolean;
+  benchmark?: {
+    adapterKey: string;
+    evaluatorKey: string;
+    displayName: string;
+    status: string;
+    profileKey?: string;
+    presentation?: BenchmarkPresentation;
+  };
 }
 
 export const EVALUATOR_CATALOG_FIELD_KEYS = ['available_tools', 'available_skills'] as const;
@@ -150,6 +194,20 @@ export function createEvaluatorCatalogField(
 }
 
 export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
+  if (kind === 'benchmark') {
+    return [
+      { id: 'input', key: 'input', path: 'input', label: '输入', type: 'text', displayType: 'text', system: true },
+      {
+        id: 'externalCaseId',
+        key: 'externalCaseId',
+        path: 'externalCaseId',
+        label: 'Case ID',
+        type: 'text',
+        displayType: 'code',
+        system: true,
+      },
+    ];
+  }
   const fields: DatasetField[] = [
     { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
   ];
@@ -195,7 +253,10 @@ export const TRAJECTORY_PLACEHOLDER = `{
   "root_step": { }
 }`;
 
-export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'>): string[] {
+export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'> & Partial<Pick<AgentDataset, 'fields'>>): string[] {
+  if (dataset.datasetKind === 'benchmark') {
+    return (dataset.fields || []).map(field => field.label || field.key).filter(Boolean);
+  }
   if (dataset.datasetKind === 'trajectory') {
     return ['input', 'reference_output', 'trajectory'];
   }
@@ -241,6 +302,12 @@ export interface DatasetDefaultFieldDef {
 
 /** 两种场景下的默认列配置 */
 export function defaultFieldsForKind(kind: DatasetKind): DatasetDefaultFieldDef[] {
+  if (kind === 'benchmark') {
+    return [
+      { key: 'input', dataType: 'String', required: '是', description: '公开任务输入' },
+      { key: 'externalCaseId', dataType: 'String', required: '是', description: 'Benchmark Case 标识' },
+    ];
+  }
   const base: DatasetDefaultFieldDef[] = [
     {
       key: 'input',

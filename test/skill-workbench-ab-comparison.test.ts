@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildAbComparison } from '../src/lib/skill-workbench/ab-comparison';
+import { buildAbComparison, formatWorkbenchScore, summarizeAbSide } from '../src/lib/skill-workbench/ab-comparison';
+
+test('用例得分列按实际阶段区分等待执行、执行中、待评测和评测中', () => {
+  for (const [status, expected] of [
+    ['pending', '等待执行'], ['running', '执行中'],
+    ['executed', '待评测'], ['evaluating', '评测中'],
+    ['failed', '失败'], ['fail', '失败'], ['unscored', '未计分'], ['cancelled', '已取消'],
+  ]) {
+    const summary = summarizeAbSide({ runs: [{ status, runIndex: 1 }] });
+    assert.equal(formatWorkbenchScore(summary.score, summary.status), expected);
+  }
+  assert.equal(formatWorkbenchScore(undefined), '—');
+});
+
+test('A/B 一侧仍执行而另一侧已评测时，得分列分别显示实际阶段', () => {
+  const result = buildAbComparison(['case'], {
+    case: {
+      a: { runs: [{ status: 'running' }] },
+      b: { runs: [{ status: 'evaluating' }] },
+    },
+  }, ['result']);
+  assert.equal(formatWorkbenchScore(result.cases[0].a.score, result.cases[0].a.status), '执行中');
+  assert.equal(formatWorkbenchScore(result.cases[0].b.score, result.cases[0].b.status), '评测中');
+  assert.equal(formatWorkbenchScore(0, 'pass'), '0.0');
+  assert.equal(formatWorkbenchScore(85, 'evaluating'), '85.0');
+});
 
 test('A/B 汇总只使用两侧均有综合分的可比 Case', () => {
   const result = buildAbComparison(['case-1', 'case-2', 'case-3', 'case-4'], {

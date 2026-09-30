@@ -36,6 +36,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
+import { loadTraceFacetValues } from '@/lib/client/trace-facets';
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
@@ -124,8 +125,8 @@ interface Execution {
     model?: string;
     label?: string;
     is_evaluating?: boolean;
-    trace_status?: 'running' | 'success' | 'failed' | string | null;
-    traceStatus?: 'running' | 'success' | 'failed' | string | null;
+    trace_status?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
+    traceStatus?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
     trace_completed_at?: string | null;
     traceCompletedAt?: string | null;
     trace_status_reason?: string | null;
@@ -166,6 +167,7 @@ type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
+const TRACE_LIST_REFRESH_MS = 5_000;
 
 type TraceColumnKey = 'traceId' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
 type ResizableColKey = TraceColumnKey;
@@ -227,9 +229,9 @@ function getInvokedSkillNames(execution: Execution): string[] {
     return Array.from(names);
 }
 
-function getExecStatus(e: Execution): 'running' | 'success' | 'failed' {
+function getExecStatus(e: Execution): 'running' | 'success' | 'failed' | 'timed_out' {
     const status = String(e.trace_status ?? e.traceStatus ?? '').trim().toLowerCase();
-    if (status === 'running' || status === 'success' || status === 'failed') return status;
+    if (status === 'running' || status === 'success' || status === 'failed' || status === 'timed_out') return status;
     return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
 }
 
@@ -499,7 +501,7 @@ export default function TracePage() {
 }
 
 function TracePageContent() {
-    const { user } = useAuth();
+    const { user, apiKey } = useAuth();
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
     const [total, setTotal] = useState(0);
@@ -520,6 +522,27 @@ function TracePageContent() {
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
     const [reloadKey, setReloadKey] = useState(0);
+    const listRequestPendingRef = useRef(false);
+
+    useEffect(() => {
+        if (!user) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible' && !listRequestPendingRef.current) {
+                setReloadKey(value => value + 1);
+            }
+        };
+        const timer = window.setInterval(refreshWhenVisible, TRACE_LIST_REFRESH_MS);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
+    }, [user]);
+
+    const handleExecutionRefresh = useCallback((latest: Execution) => {
+        setSelectedExecution(previous => previous?.task_id === latest.task_id ? latest : previous);
+        setData(previous => previous.map(item => item.upload_id === latest.upload_id ? latest : item));
+    }, []);
 
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
@@ -577,8 +600,7 @@ function TracePageContent() {
             return;
         }
         Promise.all([
-            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=framework`)
-                .then(r => r.ok ? r.json() : []),
+            loadTraceFacetValues(user, 'framework').catch(() => []),
             apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&summary=agents&databasePagination=1`)
                 .then(r => r.ok ? r.json() : { agents: [] }),
         ]).then(([frameworkRows, agentRows]) => {
@@ -666,7 +688,7 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        setTaskIdParam(id);
+        void setTaskIdParam(id, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
     }, [setTaskIdParam, reportTraceDetailView]);
 
@@ -703,7 +725,14 @@ function TracePageContent() {
         sortDir,
         pageSize,
     ]);
+    const listRequestKey = useMemo(() => JSON.stringify([
+        user,
+        listFilterKey,
+        reliabilityAnomalyFilter,
+        page,
+    ]), [listFilterKey, page, reliabilityAnomalyFilter, user]);
     const previousListFilterKeyRef = useRef(listFilterKey);
+    const previousListRequestKeyRef = useRef<string | null>(null);
     useEffect(() => {
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
@@ -712,6 +741,7 @@ function TracePageContent() {
         }
         const exec = data.find(e => e.task_id === taskIdParam || e.upload_id === taskIdParam);
         if (exec) {
+            fetchGuardRef.current = null;
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
@@ -748,7 +778,11 @@ function TracePageContent() {
             return;
         }
         if (!user) return;
-        setLoading(true);
+        const controller = new AbortController();
+        listRequestPendingRef.current = true;
+        const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
+        previousListRequestKeyRef.current = listRequestKey;
+        if (!silentRefresh) setLoading(true);
         const scopeParam = agentScopeFilter === 'subagent'
             ? '&onlySubagents=1'
             : agentScopeFilter === 'all'
@@ -763,7 +797,7 @@ function TracePageContent() {
         const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
         const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
         const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${agentParam}${ownershipParam}`, { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.json())
             .then((response: TracePageResponse) => {
                 if (listRequestIdRef.current !== requestId) return;
@@ -779,15 +813,27 @@ function TracePageContent() {
             })
             .catch(() => {
                 if (listRequestIdRef.current !== requestId) return;
-                setData([]);
-                setTotal(0);
-                setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
+                if (!silentRefresh) {
+                    setData([]);
+                    setTotal(0);
+                    setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
+                }
             })
             .finally(() => {
-                if (listRequestIdRef.current === requestId) setLoading(false);
+                if (listRequestIdRef.current !== requestId) return;
+                listRequestPendingRef.current = false;
+                setLoading(false);
             });
+        return () => {
+            controller.abort();
+            if (listRequestIdRef.current === requestId) {
+                listRequestIdRef.current += 1;
+                listRequestPendingRef.current = false;
+            }
+        };
     }, [
         user,
+        apiKey,
         agentScopeFilter,
         skillFilter,
         selectedUserTagIds,
@@ -805,6 +851,7 @@ function TracePageContent() {
         pageSize,
         reloadKey,
         listFilterKey,
+        listRequestKey,
         setPage,
     ]);
 
@@ -928,6 +975,7 @@ function TracePageContent() {
         { value: 'running', label: t('tracePage.statusRunning') },
         { value: 'success', label: t('tracePage.statusSuccess') },
         { value: 'failed', label: t('tracePage.statusFailed') },
+        { value: 'timed_out', label: t('tracePage.statusTimedOut') },
     ];
     const reliabilityAnomalyOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },
@@ -957,6 +1005,7 @@ function TracePageContent() {
                 title={<Term id="trace" label={t('nav.trace')} />}
                 actions={!selectedExecution ? (
                     <>
+                        <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
                         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
                         <Button variant="outline" size="sm" disabled={!user || importing} onClick={() => importInputRef.current?.click()}>
                             <Download className="size-3.5" aria-hidden />
@@ -969,7 +1018,9 @@ function TracePageContent() {
             <PageContainer>
                 {selectedExecution ? (
                     <TraceDetailView
+                        key={selectedExecution.task_id || selectedExecution.upload_id}
                         execution={selectedExecution}
+                        onExecutionRefresh={handleExecutionRefresh}
                         onBack={() => handleSelectExecution(null)}
                         availableTags={availableTags}
                         onTagsChanged={handleTraceTagsChanged}
@@ -1074,7 +1125,7 @@ function TracePageContent() {
                                 active={agentScopeFilter !== 'root'}
                             />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto h-7 gap-1 text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={resetFilters} className="h-7 gap-1 text-xs text-foreground-muted">
                                     <XIcon className="size-3" />
                                     {t('tracePage.resetFilters')}
                                 </Button>
@@ -1348,7 +1399,7 @@ function TracePageContent() {
                         <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
                             const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
                             setImportResult(null);
-                            if (targetId) void setTaskIdParam(targetId);
+                            if (targetId) void setTaskIdParam(targetId, { history: 'push' });
                         }}>
                             {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
                         </Button>
@@ -1361,19 +1412,21 @@ function TracePageContent() {
 
 function TraceDetailView({
     execution,
+    onExecutionRefresh,
     onBack,
     availableTags,
     onTagsChanged,
     onTagCreated,
 }: {
     execution: Execution;
+    onExecutionRefresh: (execution: Execution) => void;
     onBack: () => void;
     availableTags: TraceUserTag[];
     onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
     onTagCreated: (tag: TraceUserTag) => void;
 }) {
     const { t, locale } = useLocale();
-    const { user } = useAuth();
+    const { user, apiKey } = useAuth();
     const router = useRouter();
     const searchParams = useSearchParams();
     const [session, setSession] = useState<any | null>(null);
@@ -1407,7 +1460,7 @@ function TraceDetailView({
     }, [parentExecutionId, navigateToTaskId]);
 
     const execStatus = getExecStatus(execution);
-    const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running');
+    const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running' || execStatus === 'timed_out');
     const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
     const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
     const [rasMarkers, setRasMarkers] = useState<any[]>([]);
@@ -1438,19 +1491,30 @@ function TraceDetailView({
         if (!taskId) return;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`)
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskId)}&fields=light&includeTags=1&includeEvaluations=0&skipAutoEvalReady=1`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(response => response.ok ? response.json() : null)
+            .then(records => { if (Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
+            .catch(() => {});
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => { setSession(j); setSecondsSinceRefresh(0); })
             .catch(() => { if (!silent && isInitial) setSession({ error: 'Network error' }); })
             .finally(() => { if (!silent && isInitial) setLoading(false); });
-    }, [taskId]);
+    }, [taskId, apiKey, onExecutionRefresh]);
 
     useEffect(() => { fetchSession(false); }, [fetchSession]);
 
     useEffect(() => {
-        if (!autoRefresh || execStatus !== 'running') return;
-        const id = setInterval(() => fetchSession(true), refreshIntervalSec * 1000);
-        return () => clearInterval(id);
+        if (!autoRefresh || (execStatus !== 'running' && execStatus !== 'timed_out')) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible') fetchSession(true);
+        };
+        const id = window.setInterval(refreshWhenVisible, refreshIntervalSec * 1000);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(id);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
     }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus]);
 
     useEffect(() => {
@@ -1459,20 +1523,24 @@ function TraceDetailView({
     }, []);
 
     const loadInteraction = useCallback(async (index: number) => {
+        const source = sessionRef.current?.interactions?.[index]?._collaboration;
+        const sourceTaskId = source?.taskId ?? taskId;
+        const sourceIndex = source?.index ?? index;
         const response = await apiFetch(
-            `/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interaction&index=${index}`,
+            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
+            { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
         );
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return body?.interaction;
-    }, [taskId]);
+    }, [taskId, apiKey]);
 
     const loadFullInteractions = useCallback(async () => {
-        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interactions`);
+        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interactions`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
         return Array.isArray(body?.interactions) ? body.interactions : [];
-    }, [taskId]);
+    }, [taskId, apiKey]);
 
     const { framework } = execution;
     // The list row may be a partial snapshot captured while a streaming trace is
@@ -1488,7 +1556,7 @@ function TraceDetailView({
     const cost = typeof latestExecution?.cost === 'number'
         ? latestExecution.cost
         : execution.cost;
-    const isRunning = execStatus === 'running';
+    const isRunning = execStatus === 'running' || execStatus === 'timed_out';
     const canDownloadSession = !exporting && !!user && !!taskId;
 
     const downloadSessionJson = async () => {
@@ -1554,9 +1622,11 @@ function TraceDetailView({
                 )}
                 <IdChip value={taskId} head={8} tail={6} />
                 <StatusBadge
-                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : 'success'}
+                    title={execStatus === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined}
+                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : execStatus === 'timed_out' ? 'warning' : 'success'}
                     label={
                         execStatus === 'running' ? t('tracePage.statusRunning')
+                        : execStatus === 'timed_out' ? t('tracePage.statusTimedOut')
                         : execStatus === 'failed' ? t('tracePage.statusFailed')
                         : t('tracePage.statusNormal')
                     }
@@ -1637,6 +1707,7 @@ function TraceDetailView({
                         <Database className="size-3.5" aria-hidden />
                         {locale === 'zh' ? '加入评测集' : 'Add to dataset'}
                     </Button>
+                    <Button variant="outline" size="sm" asChild className="h-7 text-xs"><Link href={`/observe/collaborations?traceTaskId=${encodeURIComponent(taskId)}`}>调用关系图</Link></Button>
                     <Button variant="default" size="sm" asChild className="h-7 text-xs">
                         <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
                     </Button>
@@ -1859,9 +1930,10 @@ function SortableTh({
         >
             <span className="inline-flex items-center gap-1">
                 {children}
-                <span className={cn('text-[10px]', active ? 'opacity-100' : 'opacity-40')}>
-                    {active ? (dir === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
-                </span>
+                <svg aria-hidden="true" viewBox="0 0 12 16" className="h-4 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m3 6 3-3 3 3" className={active && dir === 'asc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                    <path d="m3 10 3 3 3-3" className={active && dir === 'desc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                </svg>
             </span>
             {resizable && <ResizeHandle colKey={colKey} currentWidth={currentWidth} onResize={onResize} />}
         </th>
@@ -1895,8 +1967,9 @@ function Row({
     const skillCount = getInvokedSkillNames(e).length;
     const agentCount = new Set((e.agents ?? []).filter(Boolean)).size;
     const isMultiAgent = agentCount > 1;
-    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : 'success';
+    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : status === 'timed_out' ? 'warning' : 'success';
     const statusLabel = status === 'running' ? t('tracePage.statusRunning')
+        : status === 'timed_out' ? t('tracePage.statusTimedOut')
         : status === 'failed' ? t('tracePage.statusFailed')
         : t('tracePage.statusSuccess');
 
@@ -1923,7 +1996,7 @@ function Row({
             </Td>
             {columnVisibility.traceId && (
                 <Td>
-                    <IdChip value={id} head={6} tail={4} />
+                    <IdChip value={id} adaptive />
                 </Td>
             )}
             {columnVisibility.task && (
@@ -1949,7 +2022,7 @@ function Row({
             )}
             {columnVisibility.status && (
                 <Td>
-                    <StatusBadge status={statusKind} label={statusLabel} />
+                    <StatusBadge status={statusKind} label={statusLabel} title={status === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined} />
                 </Td>
             )}
             {columnVisibility.anomaly && (

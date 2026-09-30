@@ -1,0 +1,4 @@
+{"type":"message","timestamp":"2026-09-01T01:05:00Z","message":{"role":"user","content":"Improve the synthetic candidate."}}
+{"type":"message","timestamp":"2026-09-01T01:05:10Z","message":{"role":"assistant","model":"synthetic-model","provider":"example","usage":{"input":20,"output":5,"totalTokens":25},"content":[{"type":"text","text":"I will inspect the candidate."},{"type":"toolCall","id":"call_001","name":"read","arguments":{"path":"skills/demo-skill/SKILL.md"}}]}}
+{"type":"message","timestamp":"2026-09-01T01:05:11Z","message":{"role":"toolResult","toolCallId":"call_001","toolName":"read","content":"bounded synthetic file content","isError":false}}
+{"type":"message","timestamp":"2026-09-01T01:05:30Z","message":{"role":"assistant","model":"synthetic-model","provider":"example","usage":{"input":30,"output":10,"totalTokens":40},"content":[{"type":"text","text":"The synthetic candidate improved."}]}}

@@ -3,7 +3,7 @@
  *
  * startExperimentRun：Experiment.status → running，为每个 case × evaluator upsert
  * pending 行，异步逐行执行（并发上限 4，SimpleAsyncLimiter）；全部行终态后
- * Experiment.status = 有 done 行 ? 'done' : 'failed'。跨请求防重入：同一 experiment
+ * Experiment.status = 全成功 'done' / 成功失败并存 'partial' / 全失败 'failed'。跨请求防重入：同一 experiment
  * running 时（内存 running 集合或 DB status）重复调用直接返回当前状态。
  *
  * 单行执行：
@@ -23,6 +23,8 @@
  * 超时类可重试（退避见 experimentEngineConfig.retryDelaysMs，默认 2s/8s）；
  * 单行超时 5 分钟。
  */
+
+import { createHash } from 'node:crypto';
 import { prisma } from '@/lib/storage/prisma';
 import {
   buildJudgePrompt,
@@ -57,7 +59,18 @@ import {
   runFaithfulPreset,
   type FaithfulPresetContext,
 } from './faithful-preset-evaluators';
+import {
+  isAgentTrajectoryPresetId,
+  runAgentTrajectoryPreset,
+} from './agent-trajectory-preset-evaluators';
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
+import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
+import {
+  isConfigurableTextEvaluatorId,
+  parseStoredEvaluatorRunConfigs,
+  type ConfigurableTextEvaluatorId,
+  type EvaluatorRunConfigMap,
+} from '@/lib/evaluators/evaluator-run-config';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
 import { isSafetyPresetId, runSafetyPreset } from './safety-preset-evaluators';
@@ -75,13 +88,17 @@ import {
   isSkillTriggerAnalyzerId,
 } from '@/lib/skill-workbench/trigger-evaluator';
 import { syncExperimentSkillIssues } from './sync-skill-issues';
-import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
 import {
   isTaskCompletionNoRefPresetId,
   runTaskCompletionNoRef,
 } from './task-completion-preset-evaluators';
 import { isFluencyPresetId, runFluencyPreset } from './fluency-preset-evaluators';
 import { isHallucinationPresetId, runHallucinationPreset } from './hallucination-preset-evaluators';
+import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
+import { deriveSettledExperimentStatus } from './detail-agg';
+import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
+import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
+import { activeCaseOperations, assertExperimentActive, withExperimentCancellation } from './cancellation-context';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -167,6 +184,18 @@ export function extractToolCallNames(interactions: unknown[]): string[] {
   return names;
 }
 
+function parseCaseValues(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadCaseRuntime(caseRow: {
   executionId: string | null;
   taskId: string | null;
@@ -177,7 +206,7 @@ async function loadCaseRuntime(caseRow: {
   evaluatorContextJson: string | null;
   faultInjectionType?: string | null;
   caseValuesJson?: string | null;
-}, user: string, targetSkillName?: string | null): Promise<CaseRuntime> {
+}, user: string, targetSkillName?: string | null, loadRootCauseContext = false): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
   const execution = caseRow.executionId
@@ -226,6 +255,14 @@ async function loadCaseRuntime(caseRow: {
   const evaluatorContextResult = parseExperimentCaseEvaluatorContext(caseRow.evaluatorContextJson);
   const faultInjectionType =
     resolveCaseFaultInjectionType(caseRow) || null;
+  const caseValues = parseCaseValues(caseRow.caseValuesJson);
+  const rootCauseResolution = loadRootCauseContext
+    ? await loadExperimentRootCauseResolutionContext({
+        user,
+        referenceOutput: caseRow.referenceOutput,
+        caseValues,
+      })
+    : {};
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
@@ -252,16 +289,16 @@ async function loadCaseRuntime(caseRow: {
       skill: execution.skill, skillVersion: execution.skillVersion,
       invokedSkills: execution.invokedSkills, skills: execution.skills,
     } : null,
+    ...rootCauseResolution,
   };
 
   let shouldTrigger: boolean | undefined;
   let triggerReason: string | undefined;
-  if (caseRow.caseValuesJson) {
+  if (caseValues) {
     try {
-      const values = JSON.parse(caseRow.caseValuesJson) as Record<string, unknown>;
-      if (typeof values.should_trigger === 'boolean') shouldTrigger = values.should_trigger;
-      if (typeof values.trigger_rationale === 'string' && values.trigger_rationale.trim()) {
-        triggerReason = values.trigger_rationale.trim();
+      if (typeof caseValues.should_trigger === 'boolean') shouldTrigger = caseValues.should_trigger;
+      if (typeof caseValues.trigger_rationale === 'string' && caseValues.trigger_rationale.trim()) {
+        triggerReason = caseValues.trigger_rationale.trim();
       }
     } catch { /* 由触发评估器给出缺少标注的明确错误 */ }
   }
@@ -308,10 +345,14 @@ async function evaluateOnce(
   user: string,
   evaluatorId: string,
   runtime: CaseRuntime,
+  evaluatorConfig?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
     return evaluateSkillTriggerAnalysis(runtime.trigger);
+  }
+  if (isAgentTrajectoryPresetId(evaluatorId)) {
+    return runAgentTrajectoryPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
@@ -320,6 +361,9 @@ async function evaluateOnce(
   // 结果评测预置评估器：复用可靠性页同一 canonical 结果评估能力
   if (isResultPresetId(evaluatorId)) {
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isTextPresetId(evaluatorId)) {
+    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorConfig);
   }
   // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
@@ -334,14 +378,14 @@ async function evaluateOnce(
   if (isDepthPresetId(evaluatorId)) {
     return runDepthPreset(user, runtime.faithfulCtx);
   }
+  if (isRigorPresetId(evaluatorId)) {
+    return runRigorPreset(user, runtime.faithfulCtx);
+  }
   if (isAgentToolPresetId(evaluatorId)) {
     return runAgentToolPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isRasReliabilityPresetId(evaluatorId)) {
     return runRasReliabilityPreset(evaluatorId, user, runtime.faithfulCtx);
-  }
-  if (isTextPresetId(evaluatorId)) {
-    return runTextPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   // 任务完成度（无标准答案）预置评估器
   if (isTaskCompletionNoRefPresetId(evaluatorId)) {
@@ -386,9 +430,18 @@ async function evaluateOnce(
 export async function executeResultRow(user: string, resultId: string): Promise<'done' | 'failed'> {
   const row = await prisma.experimentEvalResult.findUnique({
     where: { id: resultId },
-    include: { case: { include: { experiment: { select: { skillName: true } } } } },
+    include: {
+      case: {
+        include: {
+          experiment: {
+            select: { evaluatorIdsJson: true, evaluatorConfigsJson: true, skillName: true },
+          },
+        },
+      },
+    },
   });
   if (!row) throw new Error(`ExperimentEvalResult ${resultId} 不存在`);
+  await assertExperimentActive(row.experimentId, row.caseId);
 
   await prisma.experimentEvalResult.update({
     where: { id: resultId },
@@ -400,19 +453,42 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   let localAttempts = 0;
   let lastError: unknown = null;
 
-  const runtime = await loadCaseRuntime(row.case, user, row.case.experiment.skillName);
+  const runtime = await loadCaseRuntime(
+    row.case,
+    user,
+    row.case.experiment.skillName,
+    row.evaluatorId === 'preset-agent-task-completion',
+  );
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await assertExperimentActive(row.experimentId, row.caseId);
     localAttempts = attempt;
     try {
+      let evaluatorConfig: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined;
+      const evaluatorId = String(row.evaluatorId);
+      if (isConfigurableTextEvaluatorId(evaluatorId)) {
+        let evaluatorIds: string[];
+        try {
+          const parsed = JSON.parse(row.case.experiment.evaluatorIdsJson || '[]');
+          if (!Array.isArray(parsed)) throw new Error('evaluatorIdsJson 必须是数组');
+          evaluatorIds = parsed.map(String);
+        } catch {
+          throw new Error('实验评估器列表不是有效 JSON 数组');
+        }
+        const configs = parseStoredEvaluatorRunConfigs(
+          row.case.experiment.evaluatorConfigsJson,
+          evaluatorIds,
+        );
+        evaluatorConfig = configs[evaluatorId];
+      }
       const out = await withTimeout(
-        evaluateOnce(user, row.evaluatorId, runtime),
+        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, evaluatorConfig)),
         row.evaluatorId === 'preset-agent-trace-quality'
           ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs
           : experimentEngineConfig.rowTimeoutMs,
       );
-      await prisma.experimentEvalResult.update({
-        where: { id: resultId },
+      await prisma.experimentEvalResult.updateMany({
+        where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
         data: {
           status: 'done',
           verdict: out.verdict ?? null,
@@ -437,8 +513,8 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError || '未知错误');
-  await prisma.experimentEvalResult.update({
-    where: { id: resultId },
+  await prisma.experimentEvalResult.updateMany({
+    where: { id: resultId, status: 'running', case: { deletedAt: null, experiment: { deletedAt: null } } },
     data: {
       status: 'failed',
       errorMessage: message.slice(0, 2000),
@@ -464,6 +540,10 @@ function getResultRuns(): Map<string, Promise<void>> {
   const g = globalThis as unknown as Record<symbol, Map<string, Promise<void>>>;
   if (!g[RESULT_RUNS_KEY]) g[RESULT_RUNS_KEY] = new Map<string, Promise<void>>();
   return g[RESULT_RUNS_KEY];
+}
+
+export async function isExperimentCaseExecuting(caseId: string, experimentId: string): Promise<boolean> {
+  return activeCaseOperations(caseId, experimentId) > 0 || await prisma.experimentEvalResult.count({ where: { experimentId, caseId, status: 'running' } }) > 0;
 }
 
 const ROW_LIMITER_KEY = Symbol.for('agent-insight.experiment.row-limiter');
@@ -500,15 +580,26 @@ async function withKeyedLock<T>(key: string, operation: () => Promise<T>): Promi
 
 export async function settleExperimentStatus(experimentId: string): Promise<void> {
   const rows = await prisma.experimentEvalResult.findMany({
-    where: { experimentId },
+    where: { experimentId, case: { deletedAt: null } },
     select: { status: true },
   });
-  const anyPending = rows.some((r: { status: string }) => r.status === 'pending' || r.status === 'running');
-  if (anyPending) return; // 尚未全部终态（单项 retry 场景下可能仍有 running）
-  const anyDone = rows.some((r: { status: string }) => r.status === 'done');
+  let emptyAfterDeletion = !rows.length
+    && await prisma.experimentCase.count({ where: { experimentId, deletedAt: null } }) === 0
+    && await prisma.experimentCancellation.count({ where: { experimentId } }) > 0;
+  if (emptyAfterDeletion) {
+    const experiment = await prisma.experiment.findUnique({ where: { id: experimentId } });
+    const snapshot = JSON.parse(experiment?.configSnapshotJson || '{}');
+    if (Array.isArray(snapshot.caseIds)) {
+      const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId }, select: { caseKey: true } });
+      const removed = new Set(cancellations.map((item) => item.caseKey));
+      emptyAfterDeletion = snapshot.caseIds.every((id: string) => removed.has(`dataset:${id}`));
+    }
+  }
+  const status = emptyAfterDeletion ? 'cancelled' : deriveSettledExperimentStatus(rows);
+  if (!status) return; // 尚未全部终态（单项 retry 场景下可能仍有 running）
   await prisma.experiment.updateMany({
-    where: { id: experimentId, status: { not: 'cancelled' } },
-    data: { status: anyDone ? 'done' : 'failed' },
+    where: { id: experimentId, deletedAt: null, status: { not: 'cancelled' } },
+    data: { status },
   });
   try {
     await syncExperimentSkillIssues(experimentId);
@@ -536,12 +627,13 @@ export async function startExperimentRun(
   user: string,
   options: { allowPersistedRunning?: boolean; caseIds?: string[] } = {},
 ): Promise<StartExperimentRunResult | null> {
+  await assertExperimentActive(experimentId);
   const running = getRunningSet();
   if (running.has(experimentId)) return { status: 'running', alreadyRunning: true };
 
   const experiment = await prisma.experiment.findFirst({
     where: { id: experimentId, user },
-    include: { cases: { orderBy: { createdAt: 'asc' } } },
+    include: { cases: { where: { deletedAt: null }, orderBy: { createdAt: 'asc' } } },
   });
   if (!experiment) return null;
   if (experiment.status === 'running' && !options.allowPersistedRunning) {
@@ -600,8 +692,8 @@ function getOrStartResultRun(user: string, resultId: string): Promise<void> {
       // executeResultRow 内部已写 failed；这里兜底行本身不存在等意外
       console.error(`[experiment-engine] row ${resultId} failed:`, (e as Error)?.message);
       try {
-        await prisma.experimentEvalResult.update({
-          where: { id: resultId },
+        await prisma.experimentEvalResult.updateMany({
+          where: { id: resultId, status: { in: ['pending', 'running'] }, case: { deletedAt: null, experiment: { deletedAt: null } } },
           data: {
             status: 'failed',
             errorMessage: ((e as Error)?.message || '未知错误').slice(0, 2000),
@@ -609,7 +701,12 @@ function getOrStartResultRun(user: string, resultId: string): Promise<void> {
         });
       } catch { /* 行不存在时放弃 */ }
     } finally {
-      limiter.release();
+      try {
+        const row = await prisma.experimentEvalResult.findUnique({ where: { id: resultId }, select: { caseId: true, experimentId: true } });
+        if (row && !activeCaseOperations(row.caseId, row.experimentId)) {
+          await prisma.experimentEvalResult.updateMany({ where: { id: resultId, status: 'running', case: { deletedAt: { not: null } } }, data: { status: 'cancelled' } });
+        }
+      } finally { limiter.release(); }
     }
   })();
   const tracked = execution.finally(() => {
@@ -643,6 +740,7 @@ async function resetResultRun(params: {
   evaluatorId: string;
   user: string;
 }): Promise<{ resultId: string; completion?: Promise<void> }> {
+  await assertExperimentActive(params.experimentId, params.caseId);
   return withKeyedLock(`eval-result:${params.caseId}:${params.evaluatorId}`, async () => {
     const existingRow = await prisma.experimentEvalResult.findUnique({
       where: { caseId_evaluatorId: { caseId: params.caseId, evaluatorId: params.evaluatorId } },
@@ -754,7 +852,7 @@ export async function ensureEvalExperiment(params: {
       where: { id: params.existingId, user: params.user },
       select: { id: true },
     });
-    if (found) return found.id;
+    if (found) { await assertExperimentActive(found.id); return found.id; }
   }
   const exp = await prisma.experiment.create({
     data: {
@@ -776,33 +874,50 @@ export async function ensureEvalExperiment(params: {
   return exp.id;
 }
 
-/** 往评测实验加一个 case（trace 已产生），返回 caseId。
- * 按 taskId 幂等：同一实验内该 trace 已有 case 就复用（并回填新拿到的参考答案），
- * 避免同一 trace 被重复评测时建出重复 case。 */
+interface EvalExperimentCaseInput {
+  executionId?: string | null;
+  taskId?: string | null;
+  input: string;
+  datasetInput?: string | null;
+  actualOutput: string;
+  referenceOutput?: string | null;
+  evaluatorContext?: EvaluatorCaseContext | null;
+  datasetBinding?: { datasetId: string; caseId: string } | null;
+}
+
+export function addEvalExperimentCase(experimentId: string, c: EvalExperimentCaseInput): Promise<string>;
+export function addEvalExperimentCase(
+  experimentId: string,
+  c: EvalExperimentCaseInput,
+  options: { onlyIfNew: true },
+): Promise<string | null>;
 export async function addEvalExperimentCase(
   experimentId: string,
-  c: {
-    executionId?: string | null;
-    taskId?: string | null;
-    input: string;
-    datasetInput?: string | null;
-    actualOutput: string;
-    referenceOutput?: string | null;
-    evaluatorContext?: EvaluatorCaseContext | null;
-  },
-): Promise<string> {
-  const createOrReuse = async (): Promise<string> => {
+  c: EvalExperimentCaseInput,
+  options?: { onlyIfNew: true },
+): Promise<string | null> {
+  await assertExperimentActive(experimentId);
+  const createOrReuse = async (): Promise<string | null> => {
+    if (c.datasetBinding) await assertExperimentActive(experimentId, `dataset:${c.datasetBinding.caseId}`);
     if (c.taskId) {
       const existing = await prisma.experimentCase.findFirst({
-        where: { experimentId, taskId: c.taskId },
-        select: { id: true },
+        where: {
+          experimentId,
+          ...(options?.onlyIfNew && c.executionId
+            ? { OR: [{ taskId: c.taskId }, { executionId: c.executionId }] }
+            : { taskId: c.taskId }),
+        },
+        select: { id: true, caseValuesJson: true },
       });
       if (existing) {
+        if (options?.onlyIfNew) return null;
+        await assertExperimentActive(experimentId, existing.id);
         // 复用已有 case；若这次拿到了参考答案或评估器上下文则回填。
         if (
           (c.datasetInput != null && String(c.datasetInput).trim())
           || (c.referenceOutput != null && String(c.referenceOutput).trim())
           || c.evaluatorContext !== undefined
+          || c.datasetBinding
         ) {
           await prisma.experimentCase.update({
             where: { id: existing.id },
@@ -820,28 +935,57 @@ export async function addEvalExperimentCase(
                       : null,
                   }
                 : {}),
+              ...(c.datasetBinding
+                ? {
+                    caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding(
+                      parseCaseValues(existing.caseValuesJson),
+                      c.datasetBinding,
+                    )),
+                  }
+                : {}),
             },
           });
         }
         return existing.id;
       }
     }
-    const row = await prisma.experimentCase.create({
-      data: {
-        experimentId,
-        executionId: c.executionId ?? null,
-        taskId: c.taskId ?? null,
-        input: c.input,
-        datasetInput: c.datasetInput ?? null,
-        actualOutput: c.actualOutput,
-        referenceOutput: c.referenceOutput ?? null,
-        evaluatorContextJson: c.evaluatorContext
-          ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
-          : null,
-      },
-      select: { id: true },
-    });
-    return row.id;
+    const id = c.taskId
+      ? `trace-${createHash('sha256').update(JSON.stringify([experimentId, c.taskId])).digest('hex')}`
+      : undefined;
+    try {
+      const row = await prisma.experimentCase.create({
+        data: {
+          ...(id ? { id } : {}),
+          experimentId,
+          executionId: c.executionId ?? null,
+          taskId: c.taskId ?? null,
+          input: c.input,
+          datasetInput: c.datasetInput ?? null,
+          actualOutput: c.actualOutput,
+          referenceOutput: c.referenceOutput ?? null,
+          evaluatorContextJson: c.evaluatorContext
+            ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
+            : null,
+          caseValuesJson: c.datasetBinding
+            ? JSON.stringify(withExperimentDatasetCaseBinding(null, c.datasetBinding))
+            : null,
+        },
+        select: { id: true },
+      });
+      return row.id;
+    } catch (error) {
+      if (!id || (error as { code?: string })?.code !== 'P2002') throw error;
+      if (options?.onlyIfNew) return null;
+      const existing = await prisma.experimentCase.findFirst({
+        where: { experimentId, taskId: c.taskId },
+        select: { id: true },
+      });
+      if (existing) {
+        await assertExperimentActive(experimentId, existing.id);
+        return existing.id;
+      }
+      throw error;
+    }
   };
 
   return c.taskId
@@ -862,6 +1006,7 @@ export async function startEvalExperimentCases(
   caseIds: string[],
   user: string,
 ): Promise<StartEvalExperimentCasesResult | null> {
+  await assertExperimentActive(experimentId);
   return withKeyedLock(`eval-start:${experimentId}`, async () => {
     const experiment = await prisma.experiment.findFirst({
       where: { id: experimentId, user },
@@ -877,7 +1022,7 @@ export async function startEvalExperimentCases(
 
     const uniqueCaseIds = Array.from(new Set(caseIds.map(String).filter(Boolean)));
     const ownedCases = await prisma.experimentCase.findMany({
-      where: { experimentId, id: { in: uniqueCaseIds } },
+      where: { experimentId, deletedAt: null, id: { in: uniqueCaseIds } },
       select: { id: true },
     });
     if (!evaluatorIds.length || !ownedCases.length) {
@@ -926,6 +1071,7 @@ export async function evaluateEvalExperimentCase(
     ? configuredEvaluatorIds.filter((evaluatorId) => requestedEvaluatorIds.has(evaluatorId))
     : configuredEvaluatorIds;
 
+  await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } });
   const scheduledRows = await prepareAndScheduleResultRuns(evaluatorIds.map((evaluatorId) => ({
     experimentId, caseId, evaluatorId, user,
   })));

@@ -36,6 +36,15 @@
 
 ## 二、服务端开发工作
 
+### 共享模块升级契约
+
+Pi Agent、Codex、Goal Plus 的 ZIP 分发均包含 `shared/install-modules.cjs`。
+安装器在写入框架文件、配置和 hooks 前预检全部共享依赖：内容相同则复用，不存在则安装；
+只有摘要列入已知旧版白名单的文件才允许升级。目前白名单仅覆盖根目录环境变量迁移前的
+`trace-transport.cjs`。升级保留权限为 `0600` 的随机命名 `.bak`，使用同目录临时文件加 rename 替换。
+未知内容或符号链接报错，不能把“不同文件”直接当作可覆盖的旧版本。
+后续共享模块变更须核验并登记兼容旧版摘要、更新三个分发包及升级回归测试，不能仅测试全新安装。
+
 ### 2.1 新增 Adapter 文件
 
 **位置**：`src/lib/ingest/otel/adapters/<framework-name>.ts`
@@ -307,6 +316,8 @@ export OTEL_SERVICE_NAME=new-framework
 
 两个入口必须同步维护：`setup/route.ts` 由“安装指导”页面给出的 `curl .../api/ingest/setup | bash`（Windows 为 PowerShell）触发；`setup/auto/route.ts` 由本地制作并安装的 Agent Insight npm 包在执行 `npx agent-insight install` 时触发。验证新采集器时要分别覆盖两条路径。本地 npm 包只用于验证，不上传 npm 仓库。框架选择列表采用追加式兼容策略：只能在现有条目末尾增加新框架，不得删除、重命名、改值或调整已有框架顺序。
 
+MCTS 使用独立的 `mcts-xgovernor` 安装 profile，不是 Goal Plus 的宿主依赖：profile 解析不能自动加入 Pi Agent 或 xiaoO。安装页仅在选中该项时发送 `mctsUpstream`；普通 setup 与 auto setup 的 Unix 脚本都必须下载 `/api/ingest/setup/mcts-xgovernor` 并输出透明启动器用法。专用 route 分发固定白名单的确定性 ZIP，bootstrap 校验 SHA-256 后才执行安装器。原生 PowerShell 不安装该代理，而是明确要求在 WSL 中执行 Linux 安装命令。
+
 添加新框架的接入引导逻辑：
 
 ```typescript
@@ -360,7 +371,8 @@ return NextResponse.json({
 | Qwen Code | `adapters/qwencode.ts` | `scripts/qwencode-collector/` + Qwen Code 原生 OTLP | 原生 Telemetry 模式，支持 Agent/Subagent/LLM/Tool/Skill/MCP/Plan，按账号隔离 spool |
 | Qoder CN 产品家族 | `adapters/qoder.ts` | `scripts/qoder_trace_collector.mjs`、Desktop VSIX、JetBrains Plugin、Work setup | 共享 Hook/OTLP 核心，按产品与账号隔离 spool，支持 Quest/Experts/Subagent/Skill/MCP/连接器 |
 | Generic | `adapters/generic.ts` | 标准OTLP SDK | 兜底适配，支持OpenInference标准 |
-| xiaoO | `adapters/generic.ts`（`service.name=xiaoo`） | [`scripts/xiaoo-trace-collector/`](../../scripts/xiaoo-trace-collector/) | Hooker plugin；session buffer → OTLP；**不**经 RAS；安装 `node scripts/xiaoo-trace-collector/install.js`（`install-ras` 会顺带调用） |
+| xiaoO | `adapters/generic.ts`（`service.name=xiaoo`） | [`scripts/xiaoo-trace-collector/`](../../scripts/xiaoo-trace-collector/) | Hooker plugin；session buffer → OTLP；**不**经 RAS；安装 `node scripts/xiaoo-trace-collector/install.js`；RAS bundle 必须携带该目录，`install-ras` 安装后会校验 5 个运行文件指纹、`plugin.json` 语义与 `config.toml` 挂载，缺失时不得静默成功 |
+| MCTS xGovernor | `adapters/mcts-xgovernor.ts` | `scripts/agent-trace-collectors/mcts-xgovernor-proxy/` | 独立安装 profile；透明 HTTP/SSE 代理；只覆盖被包裹 MCTS 子进程的 `XGOVERNOR_BASE_URL`；通过 OTLP 与 Collaboration API 上报 |
 
 ---
 

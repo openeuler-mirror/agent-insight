@@ -1,7 +1,7 @@
 // 实验 API 冒烟：POST 创建 → GET 列表 → GET 详情（落在仓库 data/witty_insight.db）。
 // 显式钉住 DATABASE_URL：loadAgentInsightEnv 不覆盖已存在的 env，避免测试写到 ~/.agent-insight。
 import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -9,6 +9,7 @@ import test from 'node:test';
 import { GET as listExperiments, POST as createExperiment } from '@/app/api/experiments/route';
 import { DELETE as deleteExperiment, GET as getExperiment } from '@/app/api/experiments/[id]/route';
 import { prisma } from '@/lib/storage/prisma';
+import { createWorkbenchExperiment } from '@/lib/skill-workbench/experiment-service';
 
 const TEST_USER = `exp-smoke-${Date.now()}`;
 
@@ -33,6 +34,8 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
     cases: [
       {
         executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1',
+        datasetId: 'dataset-1', datasetCaseId: 'dataset-case-1',
+        values: { visible_note: 'keep me' },
         evaluatorContext: {
           schemaVersion: 1,
           availableTools: [{ name: 'search', description: '搜索' }],
@@ -91,6 +94,15 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
     availableSkills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
   });
   assert.equal(detail.cases[1].evaluatorContext, null);
+  assert.deepEqual(detail.cases[0].caseValues, { visible_note: 'keep me' });
+  const storedCase = await prisma.experimentCase.findFirst({
+    where: { experimentId: id, taskId: 'task-1' },
+    select: { caseValuesJson: true },
+  });
+  assert.deepEqual(JSON.parse(storedCase?.caseValuesJson || '{}').__agentInsightDatasetCase, {
+    datasetId: 'dataset-1',
+    caseId: 'dataset-case-1',
+  });
   assert.deepEqual(detail.results, []);
 });
 
@@ -255,6 +267,70 @@ test('experiments API: POST validation rejects empty payloads', async () => {
   }));
   assert.equal(invalidContext.status, 400);
   assert.match(String((await invalidContext.json()).error), /availableTools/);
+
+  const invalidConfig = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a', referenceOutput: 'a' }],
+    evaluatorIds: ['preset-text-entity-f1'],
+    evaluatorConfigs: {
+      'preset-text-entity-f1': { matchMode: 'fuzzy', fuzzyThreshold: 101 },
+    },
+  }));
+  assert.equal(invalidConfig.status, 400);
+  assert.match(String((await invalidConfig.json()).error), /0 到 100/);
+});
+
+test('experiments API: persist and return normalized evaluator configs', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+  const createRes = await createExperiment(postReq({
+    user: TEST_USER,
+    name: '配置实验',
+    agentName: 'smoke-agent',
+    cases: [{ input: 'q', actualOutput: 'ＯＫ！', referenceOutput: 'ok' }],
+    evaluatorIds: ['preset-text-exact-match'],
+    evaluatorConfigs: {
+      'preset-text-exact-match': {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        widthNormalization: true,
+      },
+    },
+  }));
+  assert.equal(createRes.status, 200);
+  const { id } = await createRes.json();
+
+  const detailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.deepEqual(detail.evaluatorConfigs['preset-text-exact-match'], {
+    caseSensitive: false,
+    punctuationInsensitive: true,
+    whitespaceNormalization: false,
+    widthNormalization: true,
+    multiCandidateScoring: 'any',
+  });
+  assert.deepEqual(detail.reusableConfig.evaluatorConfigs, detail.evaluatorConfigs);
+
+  const cloneRes = await createExperiment(postReq({
+    user: TEST_USER,
+    createMode: 'same-config',
+    sourceExperimentId: id,
+  }));
+  assert.equal(cloneRes.status, 201);
+  const cloned = await cloneRes.json();
+  const clonedDetailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${cloned.id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id: cloned.id }) },
+  );
+  assert.equal(clonedDetailRes.status, 200);
+  const clonedDetail = await clonedDetailRes.json();
+  assert.match(clonedDetail.name, /^Agent 评测 \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.deepEqual(clonedDetail.evaluatorConfigs, detail.evaluatorConfigs);
 });
 
 test('experiments API: detail 404 for missing experiment', async () => {
@@ -263,4 +339,152 @@ test('experiments API: detail 404 for missing experiment', async () => {
     { params: Promise.resolve({ id: 'nope' }) },
   );
   assert.equal(res.status, 404);
+});
+
+test('Skill 用例分析复用已有 Trace 时只复制未删除的 Case，并保留来源关联', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+  const created = await createExperiment(postReq({
+    user: TEST_USER,
+    name: 'Skill 用例分析',
+    agentName: 'case-agent',
+    scope: 'skill-workbench',
+    skillName: 'test-skill',
+    skillVersion: 1,
+    preset: 'use-case',
+    evaluatorIds: ['preset-agent-task-completion'],
+    cases: [
+      { executionId: 'trace-keep', taskId: 'task-keep', input: 'keep', actualOutput: 'ok' },
+      { executionId: 'trace-delete', taskId: 'task-delete', input: 'delete', actualOutput: 'ok' },
+    ],
+    configSnapshot: { traceSource: 'existing', caseIds: ['trace-keep', 'trace-delete'] },
+  }));
+  assert.equal(created.status, 200);
+  const sourceId = String((await created.json()).id);
+  const removed = await prisma.experimentCase.findFirstOrThrow({
+    where: { experimentId: sourceId, executionId: 'trace-delete' },
+  });
+  await prisma.experimentCase.update({ where: { id: removed.id }, data: { deletedAt: new Date() } });
+
+  const copied = await createExperiment(postReq({
+    user: TEST_USER, createMode: 'same-config', sourceExperimentId: sourceId,
+  }));
+  assert.equal(copied.status, 201);
+  const cloneId = String((await copied.json()).id);
+  const clone = await prisma.experiment.findUniqueOrThrow({
+    where: { id: cloneId }, include: { cases: true },
+  });
+  assert.match(clone.name, /^test-skill · 用例分析 · v1 · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.equal(clone.sourceExperimentId, sourceId);
+  assert.deepEqual(clone.cases.map((item: { executionId: string | null }) => item.executionId), ['trace-keep']);
+  assert.deepEqual(JSON.parse(clone.configSnapshotJson || '{}').caseIds, ['trace-keep']);
+});
+
+test('Skill A/B 和触发分析同配置实验创建独立任务并沿用冻结的版本文件', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+    await prisma.grayscaleTask.deleteMany({ where: { user: TEST_USER } });
+    await prisma.agentEvalDataset.deleteMany({ where: { user: TEST_USER } });
+    await prisma.reliabilityClient.deleteMany({ where: { user: TEST_USER } });
+    await prisma.skill.deleteMany({ where: { user: TEST_USER } });
+  });
+  const skillName = `reuse-skill-${Date.now()}`;
+  const skill = await prisma.skill.create({
+    data: {
+      name: skillName, user: TEST_USER,
+      versions: { create: [
+        { version: 1, content: '---\nname: reuse-skill\ndescription: original\n---\nOriginal' },
+        { version: 2, content: '---\nname: reuse-skill\ndescription: compare\n---\nCompare' },
+      ] },
+    },
+    include: { versions: true },
+  });
+  const datasetId = `reuse-dataset-${Date.now()}`;
+  await prisma.agentEvalDataset.create({
+    data: {
+      id: datasetId, user: TEST_USER, name: 'A/B Case', targetSkill: skillName,
+      casesJson: JSON.stringify([
+        { id: 'case-a', input: 'first', expectedOutput: 'one' },
+        { id: 'case-b', input: 'second', expectedOutput: 'two' },
+      ]),
+    },
+  });
+  const workerId = `reuse-worker-${Date.now()}`;
+  await prisma.reliabilityClient.create({
+    data: {
+      clientId: workerId, user: TEST_USER, name: 'test client', hostname: 'test-host',
+      status: 'online', lastSeenAt: new Date(),
+      capabilitiesJson: JSON.stringify({
+        actions: ['RUN_EXPERIMENT_CASE'],
+        platforms: [{
+          id: 'opencode', agents: ['build'], models: ['test/model'],
+          runExperimentCase: { version: 1, returnsTraceId: true, skillSnapshotVersion: 4 },
+        }],
+      }),
+    },
+  });
+  const source = await createWorkbenchExperiment({
+    user: TEST_USER, skillName, version: 1, preset: 'skill-ab', compareVersion: 2,
+    datasetId, caseIds: ['case-a', 'case-b'], agentName: 'build',
+    evaluatorIds: ['preset-agent-task-completion'],
+    executionTarget: { workerId, host: 'test-host', platform: 'opencode', agent: 'build', model: 'test/model' },
+  });
+  assert.equal(source.kind, 'created');
+  if (source.kind !== 'created') return;
+  assert.match(source.experiment.name, new RegExp(`^${skillName} · A/B 测试 · v1 · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`));
+  await prisma.experimentCancellation.create({
+    data: { id: `reuse-cancel-${Date.now()}`, user: TEST_USER, experimentId: source.experiment.id, caseKey: 'dataset:case-b' },
+  });
+  await prisma.skillVersion.update({
+    where: { id: skill.versions.find((item: { version: number; id: string }) => item.version === 1)!.id },
+    data: { content: 'Changed after the original experiment' },
+  });
+
+  const copied = await createExperiment(postReq({
+    user: TEST_USER, createMode: 'same-config', sourceExperimentId: source.experiment.id,
+  }));
+  assert.equal(copied.status, 201);
+  const clone = await copied.json();
+  assert.notEqual(clone.grayscaleTaskId, source.grayscaleTask.id);
+  assert.deepEqual(clone.caseIds, ['case-a']);
+  assert.deepEqual(clone.evaluatorIds, ['preset-agent-task-completion']);
+  const newTask = await prisma.grayscaleTask.findUniqueOrThrow({ where: { id: clone.grayscaleTaskId } });
+  const config = JSON.parse(newTask.configJson);
+  assert.equal(config.evalExperimentId, clone.id);
+  assert.equal(config.runCount, 1);
+  assert.match(config.skillSnapshots.a.files['SKILL.md'], /Original/);
+  const newExperiment = await prisma.experiment.findUniqueOrThrow({ where: { id: clone.id } });
+  assert.match(newExperiment.name, new RegExp(`^${skillName} · A/B 测试 · v1 · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`));
+  assert.equal(newExperiment.sourceExperimentId, source.experiment.id);
+
+  const triggerDatasetId = `reuse-trigger-dataset-${Date.now()}`;
+  await prisma.agentEvalDataset.create({
+    data: {
+      id: triggerDatasetId, user: TEST_USER, name: 'Trigger Case', targetSkill: skillName,
+      tagsJson: JSON.stringify(['trigger']),
+      fieldsJson: JSON.stringify([{ id: 'should_trigger', key: 'should_trigger', label: '应触发', type: 'boolean' }]),
+      casesJson: JSON.stringify([
+        { id: 'positive', input: 'use skill', values: { should_trigger: true } },
+        { id: 'negative', input: 'ignore skill', values: { should_trigger: false } },
+      ]),
+    },
+  });
+  const triggerSource = await createWorkbenchExperiment({
+    user: TEST_USER, skillName, version: 2, preset: 'trigger', datasetId: triggerDatasetId,
+    caseIds: ['positive', 'negative'], agentName: 'build',
+    executionTarget: { workerId, host: 'test-host', platform: 'opencode', agent: 'build', model: 'test/model' },
+  });
+  assert.equal(triggerSource.kind, 'created');
+  if (triggerSource.kind !== 'created') return;
+  assert.match(triggerSource.experiment.name, new RegExp(`^${skillName} · 触发分析 · v2 · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`));
+  const triggerCopied = await createExperiment(postReq({
+    user: TEST_USER, createMode: 'same-config', sourceExperimentId: triggerSource.experiment.id,
+  }));
+  assert.equal(triggerCopied.status, 201);
+  const triggerClone = await triggerCopied.json();
+  assert.notEqual(triggerClone.grayscaleTaskId, triggerSource.grayscaleTask.id);
+  const sourceTriggerTask = await prisma.grayscaleTask.findUniqueOrThrow({ where: { id: triggerSource.grayscaleTask.id } });
+  const copiedTriggerTask = await prisma.grayscaleTask.findUniqueOrThrow({ where: { id: triggerClone.grayscaleTaskId } });
+  assert.deepEqual(JSON.parse(copiedTriggerTask.configJson).triggerSkills, JSON.parse(sourceTriggerTask.configJson).triggerSkills);
 });

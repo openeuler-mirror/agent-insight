@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { syncLocalUserExternalAccount } from '@/lib/auth/local-user';
 import {
   createIdaasRegionAccessChecker,
   getIdaasRegionAccessConfig,
@@ -65,19 +66,42 @@ test('人员查询固定发送 uuids 数组，直接常驻地命中欧盟时拒�
       if (String(url).includes('/token')) return response({ access_token: 'iam-token' });
       return response({
         data: {
-          result: [{ baseLocationNameEn: 'France\\Paris' }],
+          result: [{ baseLocationNameEn: 'France\\Paris', w3Account: '  employee.account  ' }],
         },
       });
     }) as any,
   });
 
-  assert.equal(await checker.check('employee-uuid-001'), 'restricted');
+  assert.deepEqual(await checker.inspect('employee-uuid-001'), {
+    decision: 'restricted',
+    externalAccount: 'employee.account',
+  });
   assert.equal(tlsVerify, false);
   assert.equal(requests.length, 2);
   assert.deepEqual(JSON.parse(requests[1].init.body), {
     uuids: ['employee-uuid-001'],
   });
   assert.equal(requests[1].init.headers.Authorization, 'iam-token');
+});
+
+test('人员响应缺少展示账号时回退 UUID', async () => {
+  const checker = createIdaasRegionAccessChecker({
+    env: regionEnv(),
+    dispatcherFactory: () => ({} as any),
+    fetcher: (async (url: string | URL) => {
+      if (String(url).includes('/token')) return response({ access_token: 'iam-token' });
+      return response({
+        data: {
+          result: [{ baseLocationNameEn: 'Canada\\Toronto' }],
+        },
+      });
+    }) as any,
+  });
+
+  assert.deepEqual(await checker.inspect('employee-uuid-no-account'), {
+    decision: 'allowed',
+    externalAccount: null,
+  });
 });
 
 test('IAM token 缓存 10 小时，人员数据缓存 2 小时', async () => {
@@ -228,14 +252,44 @@ test('缓存 IAM token 被人员接口拒绝时刷新一次后重试', async () 
   assert.equal(personRequests, 2);
 });
 
+test('外部账号只绑定到同一 UUID 用户', async () => {
+  const user = { username: 'employee-uuid-001', apiKey: 'test-key', externalAccount: null };
+  const updates: Array<[string, string]> = [];
+
+  const store = {
+    findUserByExternalAccount: async () => null,
+    updateUserExternalAccount: async (username: string, externalAccount: string) => {
+      updates.push([username, externalAccount]);
+      return { ...user, externalAccount };
+    },
+  };
+
+  const updated = await syncLocalUserExternalAccount(
+    user,
+    "  employee.account  ",
+    store,
+  );
+  assert.equal(updated.username, user.username);
+  assert.equal(updated.externalAccount, "employee.account");
+  assert.deepEqual(updates, [["employee-uuid-001", "employee.account"]]);
+
+  await assert.rejects(
+    () => syncLocalUserExternalAccount(user, "employee.account", {
+      ...store,
+      findUserByExternalAccount: async () => ({ username: "another-uuid" }),
+    }),
+    /already linked to another user/,
+  );
+});
+
 test('地区校验发生在创建用户之前，登录页区分两种地区错误', () => {
   const callback = fs.readFileSync(
     path.resolve(__dirname, '../src/app/api/auth/idaas-oauth/callback/route.ts'),
     'utf8',
   );
   assert.ok(
-    callback.indexOf('checkIdaasRegionAccess(userInfo.uuid)')
-      < callback.indexOf('findOrCreateLocalUser(userInfo.uuid)'),
+    callback.indexOf('inspectIdaasRegionAccess(userInfo.uuid)')
+      < callback.indexOf('findOrCreateLocalUser(userInfo.uuid,'),
   );
   assert.match(callback, /fail\('region_restricted'/);
   assert.match(callback, /fail\('region_check_unavailable'/);
@@ -253,7 +307,7 @@ test('地区校验发生在创建用户之前，登录页区分两种地区错�
   );
   assert.ok(
     apiKeyRoute.indexOf('user.username !== username')
-      < apiKeyRoute.indexOf('checkIdaasRegionAccess(user.username)'),
+      < apiKeyRoute.indexOf('inspectIdaasRegionAccess(user.username)'),
   );
   assert.match(apiKeyRoute, /code: 'region_restricted'/);
   assert.match(apiKeyRoute, /code: 'region_check_unavailable'/);
@@ -263,4 +317,18 @@ test('地区校验发生在创建用户之前，登录页区分两种地区错�
     'utf8',
   );
   assert.match(authContext, /IDAAS_REGION_ERROR_CODES/);
+  assert.ok(authContext.includes('displayName: string | null'));
+
+  const sidebar = fs.readFileSync(
+    path.resolve(__dirname, '../src/components/shell/AppSidebar.tsx'),
+    'utf8',
+  );
+  assert.ok(sidebar.includes('const userLabel = displayName || user'));
+
+  const schema = fs.readFileSync(
+    path.resolve(__dirname, '../prisma/schema.prisma'),
+    'utf8',
+  );
+  const userModel = schema.split('model User {')[1]?.split('model Execution {')[0] || '';
+  assert.ok(userModel.includes('externalAccount') && userModel.includes('@unique'));
 });

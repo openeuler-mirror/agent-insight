@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
+import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import {
@@ -8,6 +9,7 @@ import {
     evaluateEvalExperimentCase,
 } from '@/lib/engine/experiment/run-experiment';
 import { resolveBatchEvaluationExperimentId } from '@/lib/eval/batch-case-start';
+import { batchActiveRuns } from '@/server/batch_eval_run_registry';
 
 /**
  * BatchEvalTask 用例分析的核心状态机 (跟 grayscale 对齐, 单 side):
@@ -77,32 +79,6 @@ interface BatchEvalTaskRow {
     traceEvalStatesJson: string;
 }
 
-/** 简化版任务级 abort 控制器: 用 module-level Map 缓存, key=taskId。
- *  Step 1.2 会换成跟 grayscale activeRuns 一致的机制 (跨 server 进程信息更全), 当前阶段保最小可用。 */
-const batchActiveRuns = new Map<string, { abortController: AbortController; startedAt: number; user: string }>();
-
-/**
- * 终止某 user 名下**全部**在跑的批量执行(供「终止全部」调用):abort 每个 run 的 controller,
- * 并把它们 DB 里残留的非终态 case 重置为「已终止」失败。返回 abort 的 run 数 + reset 的 case 数。
- */
-export async function abortBatchRunsForUser(user: string): Promise<{ abortedRuns: number; resetCases: number }> {
-    if (!user) return { abortedRuns: 0, resetCases: 0 };
-    let abortedRuns = 0;
-    let resetCases = 0;
-    const taskIds: string[] = [];
-    for (const [taskId, entry] of batchActiveRuns) {
-        if (entry.user !== user) continue;
-        try { entry.abortController.abort(); } catch { /* ignore */ }
-        batchActiveRuns.delete(taskId);
-        abortedRuns++;
-        taskIds.push(taskId);
-    }
-    for (const taskId of taskIds) {
-        try { resetCases += await resetStuckCases(taskId, user); } catch { /* ignore */ }
-    }
-    return { abortedRuns, resetCases };
-}
-
 /** GET /api/debug/batch-tasks/[taskId]?user=... — fetch a single task's latest state */
 export async function GET(
     req: NextRequest,
@@ -116,12 +92,13 @@ export async function GET(
         }
         const task = await (prisma as any).batchEvalTask.findFirst({ where: { id: taskId, user } });
         if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-        return NextResponse.json({
+        const visible = await visibleExperimentTask({
             ...task,
             configJson: JSON.parse(task.configJson || '{}'),
             caseStatesJson: JSON.parse(task.caseStatesJson || '{}'),
             traceEvalStatesJson: JSON.parse(task.traceEvalStatesJson || '{}'),
         });
+        return visible ? NextResponse.json(visible) : NextResponse.json({ error: 'Task deleted' }, { status: 404 });
     } catch (err) {
         console.error('[BATCH_TASKS_GET_ONE] Failed:', err);
         return NextResponse.json({ error: 'Failed to fetch task' }, { status: 500 });
@@ -450,7 +427,9 @@ async function runBatchTaskBackground(
                 activeCount++;
                 void (async () => {
                     await runOneBatchCase(origin, taskId, user, c, config, states, skillName, skillVersion, signal);
-                })().finally(() => {
+                })().catch((error) => {
+                    if (error?.code !== 'EXPERIMENT_CANCELLED') console.error('[batch-case]', error);
+                }).finally(() => {
                     activeCount--;
                     if (queue.length > 0 && !signal.aborted) tick();
                     else if (activeCount === 0) resolve();
@@ -462,7 +441,18 @@ async function runBatchTaskBackground(
     });
 }
 
-async function runOneBatchCase(
+async function runOneBatchCase(...args: Parameters<typeof runOneBatchCaseImpl>) {
+    const config = args[4];
+    if (!config.evalExperimentId) return runOneBatchCaseImpl(...args);
+    const { withExperimentCancellation } = await import('@/lib/engine/experiment/cancellation-context');
+    return withExperimentCancellation(config.evalExperimentId, `dataset:${args[3].id}`, (signal) => {
+        const next: Parameters<typeof runOneBatchCaseImpl> = [...args];
+        next[8] = AbortSignal.any([args[8], signal]);
+        return runOneBatchCaseImpl(...next);
+    });
+}
+
+async function runOneBatchCaseImpl(
     origin: string,
     taskId: string,
     user: string,
@@ -538,6 +528,7 @@ async function runOneBatchCase(
                 input: c.input || '',
                 actualOutput: '',            // 留空 → 引擎用 Execution.finalResult 兜底
                 referenceOutput: c.expectedOutput ?? null,
+                ...(c.datasetId ? { datasetBinding: { datasetId: c.datasetId, caseId: c.id } } : {}),
             });
             const rows = await evaluateEvalExperimentCase(config.evalExperimentId, caseId, user);
             if (signal.aborted) {

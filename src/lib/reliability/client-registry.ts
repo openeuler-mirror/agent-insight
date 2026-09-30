@@ -17,6 +17,7 @@ export type ClientPlatformCapability = {
   runExperimentCase?: {
     version: number
     returnsTraceId: boolean
+    skillSnapshotVersion?: number
   }
   actions?: string[]
 }
@@ -304,6 +305,7 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
                     ? Number(rec.runExperimentCase.version)
                     : 1,
                   returnsTraceId: rec.runExperimentCase.returnsTraceId === true,
+                  ...(Number(rec.runExperimentCase.skillSnapshotVersion) > 0 ? { skillSnapshotVersion: Number(rec.runExperimentCase.skillSnapshotVersion) } : {}),
                 }
               : undefined,
             actions: Array.isArray(rec.actions) ? rec.actions.map((a) => String(a)) : undefined,

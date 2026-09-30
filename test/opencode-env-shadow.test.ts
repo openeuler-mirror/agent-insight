@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { activateIsolatedHome } from './helpers/isolated-home'
 
 /**
  * 「重跑 setup 指向新平台，上报却还发往老地址」的回归看护。
@@ -17,15 +18,13 @@ process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = "1"
 /** 造一个假 HOME，往 <home>/.agent-insight/.env 写内容 */
 function withFakeHome(envText: string, run: () => void): void {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "env-shadow-home-"))
-  const previousHome = process.env.HOME
+  const restoreHome = activateIsolatedHome(home)
   try {
     fs.mkdirSync(path.join(home, ".agent-insight"), { recursive: true })
     fs.writeFileSync(path.join(home, ".agent-insight", ".env"), envText, "utf8")
-    process.env.HOME = home
     run()
   } finally {
-    if (previousHome === undefined) delete process.env.HOME
-    else process.env.HOME = previousHome
+    restoreHome()
     fs.rmSync(home, { recursive: true, force: true })
   }
 }

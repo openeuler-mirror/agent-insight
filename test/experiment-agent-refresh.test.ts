@@ -5,7 +5,7 @@ import test from 'node:test';
 
 test('experiment wizard refreshes executable agents while design step is visible', () => {
   const source = fs.readFileSync(
-    path.join(process.cwd(), 'src/app/(main)/experiments/new/page.tsx'),
+    path.join(process.cwd(), 'src/components/eval/ExperimentWizard.tsx'),
     'utf8',
   );
   assert.match(source, /const refreshAgents = useCallback/);

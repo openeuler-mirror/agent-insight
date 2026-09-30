@@ -5,7 +5,7 @@ import { X, ChevronLeft, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { apiFetch } from '@/lib/client/api';
+import { loadTraceFacetValues } from '@/lib/client/trace-facets';
 import { cn } from '@/lib/utils';
 import { TRACE_FILTER_COLUMNS, resolveTraceColumn } from '@/lib/filters/trace-columns';
 import { operatorsForColumn, type FilterClause, type FilterColumn, type Operator } from '@/lib/filters/types';
@@ -157,8 +157,7 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
   useEffect(() => {
     if (stage !== 'value' || !col || !FACETED.has(col.column)) return;
     let alive = true;
-    apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=${encodeURIComponent(col.column)}`)
-      .then((r) => r.json())
+    loadTraceFacetValues(user, col.column)
       .then((rows) => {
         if (alive) setFacet(Array.isArray(rows) ? rows : []);
       })
@@ -175,8 +174,7 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
     let alive = true;
     Promise.all(
       showcase.map((c) =>
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=${encodeURIComponent(c.column)}`)
-          .then((r) => r.json())
+        loadTraceFacetValues(user, c.column)
           .then((rows) =>
             Array.isArray(rows) && rows[0] ? { column: c.column, value: rows[0].value, count: rows[0].count } : null,
           )

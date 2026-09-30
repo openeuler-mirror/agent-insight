@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from unittest import TestCase
+from unittest.mock import MagicMock, call, patch
 
+from agent_fault_injection.platform_adapters.opencode import catalog
 from agent_fault_injection.platform_adapters.opencode.catalog import (
     agent_matches_oh_my_key,
     choose_default_agent,
@@ -66,6 +68,53 @@ _AGENT_API = [
 
 
 class OpenCodeCatalogParseTests(TestCase):
+    @patch.object(catalog.os, "name", "posix")
+    @patch.object(catalog, "_wait_for_process_group_exit", return_value=True)
+    @patch.object(catalog.os, "killpg", create=True)
+    def test_stop_process_tree_signals_group_after_launcher_exits(
+        self,
+        killpg: MagicMock,
+        wait_for_exit: MagicMock,
+    ) -> None:
+        process = MagicMock(pid=4321)
+        process.poll.return_value = 0
+
+        catalog._stop_process_tree(process)
+
+        killpg.assert_called_once_with(4321, catalog.signal.SIGTERM)
+        wait_for_exit.assert_called_once_with(process, timeout=2.0)
+
+    @patch.object(catalog.os, "name", "posix")
+    @patch.object(
+        catalog,
+        "_wait_for_process_group_exit",
+        side_effect=[False, True],
+    )
+    @patch.object(catalog.os, "killpg", create=True)
+    def test_stop_process_tree_kills_group_remaining_after_term(
+        self,
+        killpg: MagicMock,
+        wait_for_exit: MagicMock,
+    ) -> None:
+        process = MagicMock(pid=4321)
+
+        catalog._stop_process_tree(process)
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                call(4321, catalog.signal.SIGTERM),
+                call(4321, catalog.signal.SIGKILL),
+            ],
+        )
+        self.assertEqual(
+            wait_for_exit.call_args_list,
+            [
+                call(process, timeout=2.0),
+                call(process, timeout=2.0),
+            ],
+        )
+
     def test_parse_agents_excludes_system_agents(self) -> None:
         agents = parse_opencode_agent_list_output(_AGENT_CLI)
         ids = [item["id"] for item in agents]

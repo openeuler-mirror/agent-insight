@@ -5,6 +5,7 @@ import path from 'node:path'
 import { NextResponse } from 'next/server'
 
 import { resolveUser } from '@/lib/auth/auth'
+import { runtimePackageRoot } from '@/lib/runtime/package-root'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,18 +22,25 @@ export const dynamic = 'force-dynamic'
  * 与 /api/ingest/setup/opencode 下发单文件是同一模式，只是这里要整目录。
  */
 const BUNDLES: Record<string, string[]> = {
-  // RAS 运行时 + 安装器（install-ras.js 按 __dirname/.. 定位 agent_ras）
-  ras: ['scripts/install-ras.js', 'agent_ras'],
+  // RAS 运行时 + 安装器 + install-ras 顺带部署的 xiaoO Trace collector。
+  ras: ['scripts/install-ras.js', 'scripts/agent-insight-home.cjs', 'scripts/xiaoo-trace-collector', 'agent_ras'],
   // 常驻客户端：安装器 + 守护进程 + WSS 客户端；FI 组件安装由 install-ras-client 串联。
   // config_sync.js 必须带上：客户端靠它把配置合并进 RAS 实际读取的 config.json，
   // 缺了会静默跳过运行时写入（页面显示已写入，RAS 却读不到新值）。
   client: [
     'scripts/install-ras-client.js',
     'scripts/reliability-client.cjs',
+    'scripts/ordinary-experiment-state.cjs',
+    'scripts/skill-experiment-workspace.cjs',
+    'scripts/agent-run-diagnostics.cjs',
+    'scripts/opencode-experiment-events.cjs',
+    'scripts/opencode-experiment-events.mjs',
+    'scripts/agent-insight-home.cjs',
     'scripts/ws-client.cjs',
     'scripts/install-fault-injection.js',
     'scripts/lib/fi-python-runtime.js',
     'scripts/fi-worker.js',
+    'services/executor/src',
     'agent_ras/platform_adapter/opencode/config_sync.js',
     'agent_fault_injection',
   ],
@@ -71,16 +79,16 @@ export async function GET(req: Request) {
     )
   }
 
-  const root = process.cwd()
-  const present = entries.filter((rel) => fs.existsSync(path.join(root, rel)))
-  if (!present.length) {
+  const root = runtimePackageRoot()
+  const missing = entries.filter((rel) => !fs.existsSync(path.join(root, rel)))
+  if (missing.length) {
     return NextResponse.json(
-      { error: 'bundle_unavailable', detail: `no source files for "${name}" under ${root}` },
+      { error: 'bundle_unavailable', detail: `incomplete source files for "${name}"`, missing },
       { status: 503 },
     )
   }
 
-  const tar = spawn('tar', ['-czf', '-', ...TAR_EXCLUDES, ...present], {
+  const tar = spawn('tar', ['-czf', '-', ...TAR_EXCLUDES, ...entries], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
   })

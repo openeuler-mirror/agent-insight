@@ -16,12 +16,21 @@ const require = createRequire(import.meta.url)
 const { isSupportedPiVersion } = require("../scripts/agent-trace-collectors/pi-agent/install.cjs")
 
 const BUNDLE_ENTRIES = [
+  "goal-plus/goal-plus-collector.cjs",
+  "goal-plus/install.cjs",
+  "goal-plus/lib/gp-snapshot-parser.cjs",
+  "goal-plus/lib/pi-native-parser.cjs",
+  "goal-plus/lib/source-registry.cjs",
+  "goal-plus/uninstall.cjs",
   "pi-agent/extensions/pi-agent-insight.ts",
   "pi-agent/install.cjs",
   "pi-agent/lib/pi-trace-core.cjs",
   "pi-agent/package.json",
   "pi-agent/scripts/self-check.cjs",
   "pi-agent/scripts/uninstall.cjs",
+  "shared/collaboration-transport.cjs",
+  "shared/install-modules.cjs",
+  "shared/pi-trace-helpers.cjs",
   "shared/trace-transport.cjs",
 ]
 
@@ -123,6 +132,50 @@ test("Pi setup serves one complete bundle whose SHA-256 matches the bootstrap", 
     { params: Promise.resolve({ asset: "constructor" }) },
   )
   assert.equal(prototypeAsset.status, 404)
+})
+
+test("Pi installer writes one identity and endpoint set for main and Goal Plus traces", (t) => {
+  if (process.platform === "win32") return t.skip("Unix launcher fixture is not used on Windows")
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-pi-install-"))
+  const homeDir = path.join(tempDir, "user")
+  const agentInsightHome = path.join(tempDir, "agent-insight")
+  const binDir = path.join(tempDir, "bin")
+  const piPath = path.join(binDir, "pi")
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.writeFileSync(piPath, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'pi 0.82.1'; fi",
+    "exit 0",
+    "",
+  ].join("\n"), { mode: 0o700 })
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }))
+
+  const sourceDir = path.join(process.cwd(), "scripts", "agent-trace-collectors", "pi-agent")
+  const result = spawnSync(process.execPath, [
+    path.join(sourceDir, "install.cjs"),
+    "--home", homeDir,
+    "--source-dir", sourceDir,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      AGENT_INSIGHT_API_KEY: "same-account-key",
+      AGENT_INSIGHT_BASE_URL: "https://insight.example",
+      AGENT_INSIGHT_HOME: agentInsightHome,
+      AGENT_INSIGHT_PI_ENDPOINT: "https://insight.example/main-traces",
+      AGENT_INSIGHT_PI_COLLABORATION_SESSIONS_ENDPOINT: "https://insight.example/sessions",
+      AGENT_INSIGHT_PI_COLLABORATION_EVENTS_ENDPOINT: "https://insight.example/events",
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    },
+  })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+
+  const piConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json"), "utf8"))
+  const goalPlusConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "goal-plus", "config.json"), "utf8"))
+  assert.equal(goalPlusConfig.apiKey, piConfig.apiKey)
+  assert.equal(goalPlusConfig.otlpEndpoint, piConfig.endpoint)
+  assert.equal(goalPlusConfig.collaborationSessionsEndpoint, piConfig.collaborationSessionsEndpoint)
+  assert.equal(goalPlusConfig.collaborationEventsEndpoint, piConfig.collaborationEventsEndpoint)
 })
 
 test("PowerShell bootstrap rejects a tampered Pi bundle before installation", async (t) => {
@@ -238,6 +291,15 @@ test("PowerShell bootstrap installs a valid Pi bundle end to end", async (t) => 
   assert.match(result.output, /collector installed/)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "pi-agent", "extensions", "pi-agent-insight.ts")), true)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json")), true)
+  assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "goal-plus", "goal-plus-collector.cjs")), true)
+  const piConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "pi-agent", "config.json"), "utf8"))
+  assert.equal(piConfig.goalPlusObserverEnabled, true)
+  const goalPlusConfig = JSON.parse(fs.readFileSync(path.join(agentInsightHome, "collectors", "goal-plus", "config.json"), "utf8"))
+  assert.equal(goalPlusConfig.managedBy, "pi-agent")
+  assert.equal(goalPlusConfig.apiKey, piConfig.apiKey)
+  assert.equal(goalPlusConfig.otlpEndpoint, piConfig.endpoint)
+  assert.equal(goalPlusConfig.collaborationSessionsEndpoint, piConfig.collaborationSessionsEndpoint)
+  assert.equal(goalPlusConfig.collaborationEventsEndpoint, piConfig.collaborationEventsEndpoint)
   assert.equal(fs.existsSync(path.join(agentInsightHome, "collectors", "shared", "trace-transport.cjs")), true)
 })
 

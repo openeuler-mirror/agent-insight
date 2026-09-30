@@ -7,7 +7,9 @@ import os from "node:os"
 import { URL } from "node:url"
 
 function getPreferredInsightDir() {
-  return path.join(os.homedir(), ".agent-insight")
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), ".agent-insight")
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => os.homedir()))
 }
 
 function getLegacyInsightDir() {
@@ -16,6 +18,7 @@ function getLegacyInsightDir() {
 
 function getExistingInsightDir() {
   const preferred = getPreferredInsightDir()
+  if (process.env.AGENT_INSIGHT_HOME) return preferred
   const legacy = getLegacyInsightDir()
   if (fs.existsSync(preferred)) return preferred
   if (fs.existsSync(legacy)) return legacy

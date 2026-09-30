@@ -3,13 +3,10 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import {
     Terminal,
-    SquareTerminal,
     Key,
     Copy,
     Check,
     Info,
-    BookOpen,
-    ExternalLink,
     CircleCheck,
     Cloud,
     UserCircle,
@@ -20,6 +17,10 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { getApiUrl } from '@/lib/client/api';
 import { getSelectedReportingChannels } from '@/lib/ingest/framework-reporting-channels';
+import {
+    FRAMEWORK_OPTIONS,
+    resolveInstallProfile,
+} from '@/lib/ingest/setup/install-profile';
 import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
 
@@ -30,28 +31,6 @@ import { Term } from '@/components/text/Term';
  * introRow(描述)、双列网格(主区 + 300px sidebar)、panelCard、lucide 图标统一。
  */
 
-/**
- * 可勾选的采集端框架。value 必须与 /api/ingest/setup 的白名单一致——
- * 勾选结果以 ?frameworks=a,b 传给脚本，脚本据此跳过终端内的交互选择。
- */
-const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
-    { value: 'opencode', label: 'OpenCode' },
-    { value: 'claude', label: 'Claude Code' },
-    { value: 'codeagent', label: 'CodeAgent' },
-    { value: 'openclaw', label: 'OpenClaw' },
-    { value: 'hermes', label: 'Hermes' },
-    { value: 'xiaoo', label: 'xiaoO' },
-    { value: 'jiuwen', label: 'JiuwenSwarm' },
-    { value: 'llamaindex', label: 'LlamaIndex' },
-    { value: 'qoder', label: 'Qoder CN product family' },
-    { value: 'trae', label: 'Trae IDE' },
-    { value: 'actrail', label: 'AcTrail' },
-    { value: 'pi-agent', label: 'Pi Agent' },
-    { value: 'qwencode', label: 'Qwen Code' },
-    { value: 'codex', label: 'Codex' },
-    { value: 'deepseek-harness', label: 'DeepSeek Harness' },
-    { value: 'workbuddy', label: 'WorkBuddy' },
-];
 const FRAMEWORK_LABELS = new Map(FRAMEWORK_OPTIONS.map(option => [option.value, option.label]));
 
 export default function AccessInstallPage() {
@@ -64,10 +43,14 @@ export default function AccessInstallPage() {
     // useMemo 同步跑——server 端返回空、client 首次渲染返回实际命令,触发 hydration mismatch。
     // 改成 mount 后再算,server 与 client 首次都渲染空,effect 之后再填入命令。
     const [linuxCmd, setLinuxCmd] = useState('');
-    const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
+    const [mctsUpstream, setMctsUpstream] = useState('http://127.0.0.1:8787');
     // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
     const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
+    const installProfile = resolveInstallProfile(
+        FRAMEWORK_OPTIONS.filter(option => frameworks.includes(option.value)),
+    );
+    const effectiveFrameworks = installProfile.effectiveFrameworks.map(option => option.value);
     useEffect(() => {
         const timer = window.setTimeout(() => {
             const protocol = window.location.protocol;
@@ -76,7 +59,6 @@ export default function AccessInstallPage() {
             setHost(baseUrl);
             if (!authReady || !apiKey) {
                 setLinuxCmd('');
-                setWindowsCmd('');
                 return;
             }
             const setupUrl = getApiUrl('/api/ingest/setup');
@@ -86,13 +68,15 @@ export default function AccessInstallPage() {
                 frameworks.length ? `yes=1` : '',
                 frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
                 frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
+                frameworks.includes('mcts-xgovernor')
+                    ? `mctsUpstream=${encodeURIComponent(mctsUpstream.trim())}`
+                    : '',
             ].filter(Boolean).join('&');
             const suffix = query ? `?${query}` : '';
             setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
-            setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [apiKey, authReady, frameworks]);
+    }, [apiKey, authReady, frameworks, mctsUpstream]);
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
@@ -202,8 +186,8 @@ export default function AccessInstallPage() {
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
                                     {isZh
-                                        ? '先勾选框架,再按系统二选一 —— 同时完成本机纳管'
-                                        : 'Pick frameworks, then your OS — also registers this host'}
+                                        ? '先勾选框架,再在 Agent 所在 Linux 终端执行命令 —— 同时完成本机纳管'
+                                        : 'Pick frameworks, then run the command on the Linux Agent host — also registers this host'}
                                 </span>
                             </div>
 
@@ -214,23 +198,21 @@ export default function AccessInstallPage() {
                                 locale={locale}
                             />
 
+                            {frameworks.includes('mcts-xgovernor') && (
+                                <MctsUpstreamField
+                                    value={mctsUpstream}
+                                    onChange={setMctsUpstream}
+                                    locale={locale}
+                                />
+                            )}
+
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
-                                label="Linux / macOS"
-                                hint={isZh ? '运行 bash / zsh 的终端' : 'bash / zsh shells'}
+                                label="Linux"
+                                hint={isZh ? '使用 Agent 所在 Linux 环境的 bash / zsh 终端' : 'Use a bash / zsh shell on the Linux Agent host'}
                                 cmd={linuxCmd}
                                 copied={copied === 'linux'}
                                 onCopy={() => handleCopy(linuxCmd, 'linux')}
-                                locale={locale}
-                            />
-
-                            <CommandCard
-                                icon={<SquareTerminal size={14} strokeWidth={2.2} />}
-                                label="Windows (PowerShell)"
-                                hint={isZh ? '以管理员身份运行 PowerShell' : 'Run PowerShell as administrator'}
-                                cmd={windowsCmd}
-                                copied={copied === 'windows'}
-                                onCopy={() => handleCopy(windowsCmd, 'windows')}
                                 locale={locale}
                             />
 
@@ -300,10 +282,9 @@ export default function AccessInstallPage() {
                                 host={host}
                                 user={user}
                                 keyReady={keyReady}
-                                frameworks={frameworks}
+                                frameworks={effectiveFrameworks}
                                 locale={locale}
                             />
-                            <DocsPanel locale={locale} />
                         </aside>
                     </div>
                 </div>
@@ -312,12 +293,42 @@ export default function AccessInstallPage() {
     );
 }
 
+function MctsUpstreamField({
+    value, onChange, locale,
+}: {
+    value: string;
+    onChange: (value: string) => void;
+    locale: string;
+}) {
+    const isZh = locale === 'zh';
+    return (
+        <article style={commandCard}>
+            <label htmlFor="mcts-xgovernor-upstream" style={configLabel}>
+                {isZh ? 'MCTS xGovernor 地址' : 'MCTS xGovernor upstream'}
+            </label>
+            <input
+                id="mcts-xgovernor-upstream"
+                type="url"
+                value={value}
+                onChange={event => onChange(event.target.value)}
+                placeholder="http://127.0.0.1:8787"
+                style={configInput}
+            />
+            <div style={langfuseNote}>
+                {isZh
+                    ? '该地址由执行 MCTS 的 Linux 主机访问。安装完成后，必须使用 agent-insight-mcts-run 包裹原命令。'
+                    : 'This address is resolved on the Linux MCTS host. After installation, run the original command through agent-insight-mcts-run.'}
+            </div>
+        </article>
+    );
+}
+
 /* ====================== Sub-components ====================== */
 
 function FrameworkPicker({
     options, selected, onToggle, locale,
 }: {
-    options: { value: string; label: string }[];
+    options: readonly { value: string; label: string }[];
     selected: string[];
     onToggle: (value: string) => void;
     locale: string;
@@ -438,8 +449,8 @@ function ApiKeyPanel({
                 )}
                 <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 10, lineHeight: 1.6 }}>
                     {isZh
-                        ? '脚本运行时提示输入 API Key —— 粘贴上方值即可。'
-                        : 'Paste this when the script prompts for an API key.'}
+                        ? '左侧命令已包含当前账号的 API Key，复制后即可执行。'
+                        : 'The command includes your current API key and is ready to copy and run.'}
                 </div>
             </div>
         </section>
@@ -558,38 +569,6 @@ function LangfuseEnvCard({
         </article>
     );
 }
-
-function DocsPanel({ locale }: { locale: string }) {
-    const isZh = locale === 'zh';
-    const links = isZh ? [
-        { label: '用户使用手册', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
-        { label: '客户端高级配置', href: '#' },
-        { label: '常见接入问题排查', href: '#' },
-    ] : [
-        { label: 'User manual', href: 'https://atomgit.com/openeuler/agent-insight/blob/master/docs/user-guide/home.md' },
-        { label: 'Advanced client configuration', href: '#' },
-        { label: 'Troubleshooting installation', href: '#' },
-    ];
-    return (
-        <section style={panelCard}>
-            <header style={panelHeader}>
-                <BookOpen size={13} strokeWidth={2.2} style={{ color: 'var(--foreground-secondary)' }} />
-                <span>{isZh ? '相关文档' : 'Related Docs'}</span>
-            </header>
-            <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
-                {links.map(l => (
-                    <li key={l.label}>
-                        <a href={l.href} target="_blank" rel="noopener noreferrer" style={docLink}>
-                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label}</span>
-                            <ExternalLink size={12} strokeWidth={2} style={{ color: 'var(--foreground-muted)', flexShrink: 0 }} />
-                        </a>
-                    </li>
-                ))}
-            </ul>
-        </section>
-    );
-}
-
 
 /**
  * 常驻客户端安装（IF-N01/N02）。
@@ -794,7 +773,7 @@ const channelItem: CSSProperties = {
     padding: '9px 10px',
     background: 'var(--background-secondary)',
     border: '1px solid var(--border)',
-    borderRadius: 8,
+    borderRadius: 'var(--radius-md)',
     minWidth: 0,
 };
 
@@ -857,18 +836,6 @@ const langfuseEndpointCode: CSSProperties = {
     textAlign: 'right',
 };
 
-const docLink: CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '7px 8px',
-    fontSize: 12.5,
-    color: 'var(--foreground-secondary)',
-    textDecoration: 'none',
-    borderRadius: 6,
-    transition: 'background .1s',
-};
-
 const commandCard: CSSProperties = {
     background: 'var(--card-bg)',
     border: '1px solid var(--card-border)',
@@ -883,6 +850,24 @@ const commandCardHeader: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 12,
+};
+
+const configLabel: CSSProperties = {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--foreground)',
+};
+
+const configInput: CSSProperties = {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '9px 11px',
+    color: 'var(--foreground)',
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    fontSize: 12,
 };
 
 const commandIconBox: CSSProperties = {
