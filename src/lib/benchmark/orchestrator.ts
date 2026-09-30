@@ -1,3 +1,4 @@
+import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
 import type {
   BenchmarkRunConfig,
   JsonValue,
@@ -12,6 +13,7 @@ import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src
 import { prisma } from '@/lib/storage/prisma'
 
 import { getBenchmarkAdapter } from './adapter-registry'
+import { refreshBenchmarkImagePreparation } from './image-preparation'
 
 const ACTIVE_RUN_STATUSES = [
   'preparing',
@@ -21,7 +23,6 @@ const ACTIVE_RUN_STATUSES = [
   'collecting',
   'uploading',
   'cleaning',
-  'submitted',
 ]
 
 function parseJson<T>(json: string, errorCode: string): T {
@@ -36,23 +37,38 @@ export async function prepareNextBenchmarkCaseRun(input: {
   experimentId: string
   callbackOrigin: string
 }): Promise<{ runId: string } | null> {
-  const active = await prisma.benchmarkCaseRun.findFirst({
-    where: { experimentId: input.experimentId, status: { in: ACTIVE_RUN_STATUSES } },
-    select: { id: true },
-  })
-  if (active) return null
-
-  const candidate = await prisma.benchmarkCaseRun.findFirst({
-    where: { experimentId: input.experimentId, status: 'pending' },
-    orderBy: { ordinal: 'asc' },
-    select: { id: true },
+  const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
+  await assertExperimentActive(input.experimentId);
+  const candidate = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const locked = await tx.benchmarkExperimentBinding.updateMany({
+      where: { experimentId: input.experimentId, experiment: { status: 'running', deletedAt: null } },
+      data: { schedulerStatus: 'running' },
+    })
+    if (!locked.count) return null
+    const binding = await tx.benchmarkExperimentBinding.findUnique({ where: { experimentId: input.experimentId } })
+    const concurrency = parseExecutionConcurrency(parseJson<BenchmarkRunConfig>(binding!.runConfigJson, 'BENCHMARK_RUN_CONFIG_INVALID').executionConcurrency)
+    const active = await tx.benchmarkCaseRun.count({ where: { experimentId: input.experimentId, status: { in: ACTIVE_RUN_STATUSES } } })
+    if (active >= concurrency) return null
+    const budget = Number(process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS || 256)
+    if (!Number.isSafeInteger(budget) || budget < 1) throw new Error('AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS 必须为正整数')
+    const occupied = await tx.benchmarkCaseRun.count({ where: { status: { in: [...ACTIVE_RUN_STATUSES, 'submitted'] } } })
+    if (occupied >= budget) return null
+    const userBudget = Number(process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER || 128)
+    if (!Number.isSafeInteger(userBudget) || userBudget < 1) throw new Error('AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER 必须为正整数')
+    const experiment = await tx.experiment.findUnique({ where: { id: input.experimentId }, select: { user: true } })
+    if (await tx.benchmarkCaseRun.count({ where: { experiment: { user: experiment!.user }, status: { in: [...ACTIVE_RUN_STATUSES, 'submitted'] } } }) >= userBudget) return null
+    const next = await tx.benchmarkCaseRun.findFirst({
+      where: { experimentId: input.experimentId, status: 'pending', experimentCase: { deletedAt: null } },
+      orderBy: { ordinal: 'asc' }, select: { id: true },
+    })
+    if (!next) return null
+    const claimed = await tx.benchmarkCaseRun.updateMany({
+      where: { id: next.id, status: 'pending' },
+      data: { status: 'preparing', failureCode: null, failureMessage: null },
+    })
+    return claimed.count === 1 ? next : null
   })
   if (!candidate) return null
-  const claimed = await prisma.benchmarkCaseRun.updateMany({
-    where: { id: candidate.id, status: 'pending' },
-    data: { status: 'preparing', failureCode: null, failureMessage: null },
-  })
-  if (claimed.count !== 1) return null
 
   try {
     const run = await prisma.benchmarkCaseRun.findUnique({
@@ -140,6 +156,7 @@ export async function prepareNextBenchmarkCaseRun(input: {
         },
       })
     })
+    void refreshBenchmarkImagePreparation().catch((error) => console.warn('[benchmark/image-pool] preparation skipped', error))
     return { runId: run.id }
   } catch (error) {
     const protocolError = error instanceof BenchmarkProtocolError

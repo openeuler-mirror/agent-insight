@@ -1,5 +1,5 @@
+import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { resolveUser } from '@/lib/auth/auth';
-import { collaborationProjection as reportedTraceProjection } from '@/lib/collaboration/runtime';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
@@ -159,9 +159,9 @@ export async function GET(request: Request) {
         const { session, interactions, langfuseTraceNodes, executionSummary } = parsed;
         const { username } = await resolveUser(request);
         if (username && session.user && username !== session.user) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-        const rawInteraction = view === 'interaction' && searchParams.get('source') === 'raw';
+        const rawInteraction = searchParams.get('source') === 'raw';
         const reportedInteractions = !rawInteraction && username && username === session.user
-            ? await reportedTraceProjection.interactions(username, taskId, loadParsedSession) : null;
+            ? await collaborationTraceProjection.interactions(username, taskId, loadParsedSession) : null;
         const collaborationProjection = reportedInteractions || rawInteraction ? null : await loadCollaborationProjection(taskId, parsed);
         const displayInteractions = withTracePayloadVersions(reportedInteractions || collaborationProjection?.interactions || interactions);
 

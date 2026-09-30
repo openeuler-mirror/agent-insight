@@ -113,6 +113,13 @@ export class CollaborationStore {
         const placeholders = eventIds.map(() => '?').join(',');
         return this.sql.rows<SavedResolution>(`SELECT "eventDbId","side","executionId","linkState","linkMethod","evidenceJson","anchorState","anchorJson" FROM "CollaborationEndpointResolution" WHERE "eventDbId" IN (${placeholders})`, eventIds);
     }
+    async identify(user: string, collaborationId: string, sessionId: string): Promise<{ binding?: Binding; message?: string }> {
+        const rows = await this.sql.rows<{ taskId: string }>(
+            'SELECT "taskId" FROM "Session" WHERE "user"=? AND "taskId"=? UNION SELECT "taskId" FROM "Execution" WHERE "user"=? AND ("taskId"=? OR "agentSessionId"=?) AND "taskId" IS NOT NULL LIMIT 2',
+            [user, sessionId, user, sessionId, sessionId]);
+        if (rows.length !== 1) return { message: rows.length ? '会话编号对应多个 Trace，无法唯一关联' : '对应 Trace 尚未到达' };
+        return { binding: { collaborationId, sessionId, traceSessionId: rows[0].taskId, eventClock: 'unknown' } };
+    }
     async trace(user: string, binding: Binding) {
         const [session] = await this.sql.rows<{ taskId: string; interactions: string | null; byteSize: number | bigint; user: string }>('SELECT "taskId","user", CASE WHEN LENGTH("interactions") <= 8388608 THEN "interactions" ELSE NULL END AS "interactions", LENGTH("interactions") AS "byteSize" FROM "Session" WHERE "taskId"=? AND "user"=?', [binding.traceSessionId, user]);
         if (!session) return null;

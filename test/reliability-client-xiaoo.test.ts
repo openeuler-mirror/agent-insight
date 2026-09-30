@@ -42,7 +42,7 @@ if (mode?.startsWith('collector-')) {
   const hook = spawnSync('python3', ['-B', '-c', script], {encoding: 'utf8'})
   if (hook.status !== 0) { console.error(hook.stderr); process.exit(9) }
   // Record only the temporary path, so cleanup can be checked after execution.
-  require('node:fs').writeFileSync(require('node:path').join(process.cwd(), 'activity-dir.txt'), process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR || '')
+  require('node:fs').writeFileSync(${JSON.stringify(path.join(root, 'activity-dir.txt'))}, process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR || '')
   if (mode === 'collector-stale') {
     const name = require('node:crypto').createHash('sha256').update(target).digest('hex') + '.json'
     require('node:fs').writeFileSync(require('node:path').join(process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR, name),
@@ -204,6 +204,24 @@ test('xiaoo reuses shared execution, early trace reporting and deterministic fai
       return true
     })
   } finally { f.close() }
+})
+
+test('ordinary experiment cancellation interrupts a live Agent process without waiting for its timeout', async () => {
+  const f = fixture()
+  const controller = new AbortController()
+  try {
+    process.env.XIAOO_TEST_MODE = 'timeout'
+    const started = Date.now()
+    await assert.rejects(client.runExperimentCase({ clientId: 'test', workspaceBase: f.root }, {
+      platform: 'xiaoo', agent: 'defaultagent', input: 'cancel this fixture', timeoutSeconds: 60,
+      signal: controller.signal,
+    }, async () => { controller.abort() }), (error: any) => {
+      assert.equal(error.code, 'EXECUTION_CANCELLED')
+      assert.equal(error.runFacts.timedOut, false)
+      return true
+    })
+    assert.ok(Date.now() - started < 10_000)
+  } finally { controller.abort(); f.close() }
 })
 
 test('xiaoo empty final reply uses only this run/session Collector activity after normal exit', async () => {

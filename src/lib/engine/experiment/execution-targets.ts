@@ -16,6 +16,8 @@ export type ClientTraceGenerationTarget = {
   agentLabel: string;
   models: Array<{ id: string; label: string }>;
   lastSeenAt: string;
+  supportsSkillSnapshot?: boolean;
+  supportsTriggerRouting?: boolean;
 };
 
 export function listTraceGenerationPlatforms(
@@ -60,6 +62,8 @@ export async function listClientTraceGenerationTargets(
           agentLabel: agent,
           models,
           lastSeenAt: client.lastSeenAt.toISOString(),
+          supportsSkillSnapshot: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 1,
+          supportsTriggerRouting: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 4,
         });
       }
     }

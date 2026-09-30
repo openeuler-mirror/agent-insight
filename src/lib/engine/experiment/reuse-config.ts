@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/storage/prisma'
 import { createBenchmarkExperiment } from '@/lib/benchmark/experiment-service'
 import { loadTraceGenerationRetryRequest } from '@/lib/engine/experiment/trace-generation'
+import { defaultExperimentName, defaultSkillExperimentName } from '@/lib/engine/experiment/experiment-name'
+import { cloneWorkbenchExperimentFromFrozenConfig } from '@/lib/skill-workbench/experiment-service'
 
 import { autoPairGroups, createComparisonExperiment } from './comparison-runner'
 
@@ -27,7 +29,7 @@ function parseObject(value: string | null): Record<string, unknown> {
 export async function cloneExperimentFromFrozenConfig(input: {
   sourceExperimentId: string
   user: string
-}): Promise<{ id: string; scope: string }> {
+}): Promise<{ id: string; scope: string; grayscaleTaskId?: string; caseIds?: string[]; evaluatorIds?: string[] }> {
   const source = await prisma.experiment.findFirst({
     where: { id: input.sourceExperimentId, user: input.user },
     include: {
@@ -39,7 +41,16 @@ export async function cloneExperimentFromFrozenConfig(input: {
   if (!source) throw new Error('source experiment not found')
   const evaluatorIds = parseStringArray(source.evaluatorIdsJson)
   const snapshot = parseObject(source.configSnapshotJson)
-  const name = `${source.name} · 同配置`
+  const name = source.scope === 'skill-workbench' && source.skillName && source.skillVersion != null
+    ? defaultSkillExperimentName(source.skillName, 'use-case', source.skillVersion)
+    : defaultExperimentName()
+
+  if (source.scope === 'skill-workbench' && snapshot.grayscaleTaskId) {
+    return cloneWorkbenchExperimentFromFrozenConfig(input.user, source.id)
+  }
+  if (source.scope === 'skill-workbench' && (snapshot.traceSource === 'generate' || source.preset !== 'use-case')) {
+    throw new Error('原 Skill 实验缺少冻结的任务配置，请通过复用同配置重新确认')
+  }
 
   if (source.scope === 'benchmark') {
     const binding = source.benchmarkBinding
@@ -64,6 +75,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
         agent: String(runConfig.agent || source.agentName),
         model: typeof runConfig.model === 'string' ? runConfig.model : undefined,
         agentTimeoutSeconds: Number(runConfig.timeoutSeconds) || undefined,
+        executionConcurrency: Number(runConfig.executionConcurrency) || 1,
         maxParallelAgentCases: 1,
       },
     })
@@ -117,6 +129,11 @@ export async function cloneExperimentFromFrozenConfig(input: {
       timeoutSeconds: request.timeoutSeconds,
     }
   }
+  const activeCases = source.cases.filter((item: { deletedAt: Date | null }) => !item.deletedAt)
+  if (source.scope === 'skill-workbench') {
+    if (!activeCases.length) throw new Error('原 Skill 实验没有可复用的 Case')
+    snapshot.caseIds = activeCases.map((item: { executionId: string | null }) => item.executionId).filter(Boolean)
+  }
   const created = await prisma.experiment.create({
     data: {
       user: input.user,
@@ -136,7 +153,7 @@ export async function cloneExperimentFromFrozenConfig(input: {
       watchMode: source.watchMode,
       watchEnabledAt: source.watchMode ? new Date() : null,
       cases: {
-        create: source.cases.map((item: {
+        create: activeCases.map((item: {
           executionId: string | null
           taskId: string | null
           input: string

@@ -11,6 +11,7 @@ import { History, Play, ExternalLink, Plus } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { DeleteExperimentButton, PendingExperimentCancellations } from './DeleteExperimentButton';
 import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult, type AbScoreBreakdown, type AbTone } from '@/lib/skill-analysis/ab-scoring';
 import {
     AB_EVALUATOR_RETRY_DISPATCH_STATUS,
@@ -79,6 +80,7 @@ interface GrayscaleTask {
     taskName: string;
     createdAt: string;
     configJson?: {
+        evalExperimentId?: string;
         skillId?: string;
         versionAId?: string;
         versionBId?: string;
@@ -3118,6 +3120,9 @@ export function GrayscaleEvaluation({
 
                                 {/* 操作列: 失败行才显示重试按钮; in-flight 时显示"重试中"灰按钮 */}
                                 <div style={{ textAlign: 'right' }}>
+                                    {user && currentTask?.configJson?.evalExperimentId && <DeleteExperimentButton user={user} experimentId={currentTask.configJson.evalExperimentId} caseId={`dataset:${record.caseId}`} onDeleted={() => {
+                                        setCaseStates((states) => { const next = { ...states }; delete next[record.caseId]; return next; });
+                                    }} />}
                                     {(() => {
                                         const ri = record.roundIndex || 1;
                                         const flightKey = retryKey(record.caseId, side, ri);
@@ -3354,6 +3359,7 @@ export function GrayscaleEvaluation({
 
     return (
         <div className={`ab-page-v2${hifi ? ' gray-hifi' : ''}`} style={{ paddingBottom: 60 }}>
+            {user && <PendingExperimentCancellations user={user} />}
             {/* Stepper & Header Block */}
             <div style={{ padding: '24px 28px 12px 28px' }}>
                 {hifi && (
@@ -4853,6 +4859,10 @@ export function GrayscaleEvaluation({
                                         {t.configJson?.taskDescription && (
                                             <div className="d-history-item-query">{t.configJson.taskDescription}</div>
                                         )}
+                                        {user && t.configJson?.evalExperimentId && <DeleteExperimentButton user={user} experimentId={t.configJson.evalExperimentId} onDeleted={() => {
+                                            setTaskHistory((tasks) => tasks.filter((task) => task.id !== t.id));
+                                            if (currentTask?.id === t.id) { setCurrentTask(null); setCaseStates({}); }
+                                        }} />}
                                     </div>
                                 ))}
                             </div>

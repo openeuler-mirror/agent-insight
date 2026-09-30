@@ -6,8 +6,13 @@ import { upsertCollaborationEndpointResolution, type CollaborationEndpointSide }
 type LocatorMatch = {
   recordType: 'tool' | 'shell';
   recordId?: string;
+  interactionIndex: number;
+  callIndex: number;
+  callKey: string;
+  recordSource: 'tool_calls';
   startedAt?: number;
   trustedTime: boolean;
+  targets?: string[];
 };
 
 type StoredEvent = {
@@ -41,6 +46,27 @@ function parseArguments(value: unknown): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function targetSessionIds(value: unknown, depth = 0): string[] {
+  if (value == null || depth > 3) return [];
+  if (typeof value === 'string') {
+    try {
+      return targetSessionIds(JSON.parse(value), depth + 1);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(value)) {
+    return [...new Set(value.flatMap(item => targetSessionIds(item, depth + 1)))];
+  }
+  if (typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  const direct = ['session_id', 'sessionId', 'subagent_session_id', 'subagentSessionId']
+    .flatMap(key => typeof record[key] === 'string' && record[key] ? [record[key] as string] : []);
+  const nested = ['data', 'result', 'output']
+    .flatMap(key => targetSessionIds(record[key], depth + 1));
+  return [...new Set([...direct, ...nested])];
 }
 
 function shellCommand(call: Record<string, unknown>): string {
@@ -92,14 +118,26 @@ export function findCollaborationLocatorMatches(
         : shellTools.has(name.toLowerCase()) && shellCommand(call).includes(locator.commandContains);
       if (!matchesLocator) return;
       const timing = toolStartedAt(call);
+      const fn = call.function && typeof call.function === 'object'
+        ? call.function as Record<string, unknown>
+        : {};
+      const targets = targetSessionIds([
+        fn.arguments ?? call.arguments ?? call.args,
+        call.output ?? call.result,
+      ]);
       matches.push({
         recordType: locator.recordType,
         recordId: typeof call.id === 'string' && call.id ? call.id : undefined,
+        interactionIndex,
+        callIndex,
+        callKey: typeof call.id === 'string' && call.id
+          ? `id:${call.id}`
+          : `position:${interactionIndex}:${callIndex}`,
+        recordSource: 'tool_calls',
         startedAt: timing.value,
         trustedTime: timing.trusted,
+        ...(targets.length ? { targets } : {}),
       });
-      void interactionIndex;
-      void callIndex;
     });
   });
   return matches;
@@ -156,6 +194,21 @@ async function setAnchor(
   });
 }
 
+function locatedAnchor(match: LocatorMatch, candidateCount: number): Record<string, unknown> {
+  return {
+    candidateCount,
+    matchedRecord: match.recordId
+      ? { recordType: match.recordType, recordId: match.recordId }
+      : undefined,
+    position: {
+      interactionIndex: match.interactionIndex,
+      callIndex: match.callIndex,
+      callKey: match.callKey,
+      recordSource: match.recordSource,
+    },
+  };
+}
+
 async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
   if (event.sourceType !== 'reported') return;
   const resolutions = await prismaRaw.collaborationEndpointResolution.findMany({
@@ -207,6 +260,21 @@ async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
     },
     select: { id: true, observedAt: true },
   });
+  const directMatches = matches.filter(match => match.targets?.includes(event.toSessionId));
+  if (directMatches.length === 1) {
+    await setAnchor(event.id, 'confirmed', {
+      ...locatedAnchor(directMatches[0], matches.length),
+      message: '原始调用参数明确关联目标 Session',
+    });
+    return;
+  }
+  if (directMatches.length > 1) {
+    await setAnchor(event.id, 'ambiguous', {
+      candidateCount: directMatches.length,
+      message: '多个调用参数指向同一目标 Session，无法确定具体步骤',
+    });
+    return;
+  }
   if (matches.length === 0) {
     await Promise.all(group.map(item => setAnchor(item.id, 'not_found', {
       candidateCount: 0,
@@ -216,10 +284,7 @@ async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
   }
   if (group.length === 1 && matches.length === 1) {
     await setAnchor(event.id, 'candidate', {
-      candidateCount: 1,
-      matchedRecord: matches[0].recordId
-        ? { recordType: matches[0].recordType, recordId: matches[0].recordId }
-        : undefined,
+      ...locatedAnchor(matches[0], 1),
       message: '定位条件唯一命中，作为候选位置展示',
     });
     return;
@@ -245,11 +310,8 @@ async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
   await Promise.all(orderedEvents.map((item, index) => {
     const match = orderedCalls[index];
     return setAnchor(item.id, 'time_ordered', {
-      candidateCount: matches.length,
+      ...locatedAnchor(match, matches.length),
       orderIndex: index + 1,
-      matchedRecord: match.recordId
-        ? { recordType: match.recordType, recordId: match.recordId }
-        : undefined,
       message: `同组 ${matches.length} 次调用与关系事件按可信时间顺序推定，后续数据到达后会重算`,
     });
   }));

@@ -118,6 +118,7 @@ export type BenchmarkManifest = {
 }
 
 export type BenchmarkRunConfig = {
+  executionConcurrency?: number
   platform: string
   agent: string
   model?: string

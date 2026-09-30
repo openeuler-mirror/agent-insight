@@ -24,6 +24,11 @@ import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dat
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
 import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
+import {
+  summarizeExistingTraceItemProgress,
+  summarizeWorkbenchItemProgress,
+  workbenchCompletionStatus,
+} from '@/lib/skill-workbench/item-progress';
 import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
 
 export const dynamic = 'force-dynamic';
@@ -33,17 +38,24 @@ function parseJsonValue(value: string | null): unknown {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 type GeneratedTraceStatus = 'pending' | 'ready' | 'failed';
 
 function deriveGeneratedTraceStatus(input: {
   usable: boolean;
+  triggerDecisionReady?: boolean;
   runStatus?: string | null;
   commandStatus?: string | null;
   attemptStatus?: string | null;
   generationError?: string | null;
   experimentStatus: string;
 }): GeneratedTraceStatus {
-  if (input.usable) return 'ready';
+  if (input.usable || input.triggerDecisionReady) return 'ready';
   if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(input.attemptStatus || '')) {
     return 'pending';
   }
@@ -69,7 +81,7 @@ export async function GET(
     const wantCaseId = q.get('caseId') || '';
 
     const experimentMeta = await prisma.experiment.findFirst({
-      where: { id, ...(username ? { user: username } : {}) },
+      where: { id, deletedAt: null, ...(username ? { user: username } : {}) },
       select: { id: true, type: true },
     });
     if (!experimentMeta) {
@@ -127,16 +139,21 @@ export async function GET(
     // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
     // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
     const allResults = await prisma.experimentEvalResult.findMany({
-      where: { experimentId: id },
+      where: { experimentId: id, case: { deletedAt: null } },
       select: { caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
     });
     // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
     // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
-    const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
+    const allExperimentCases = await prisma.experimentCase.findMany({
+      where: { experimentId: id, deletedAt: null },
+      select: { id: true },
+    });
+    const allExperimentCaseIds = allExperimentCases.map((item: Pick<ExperimentCase, 'id'>) => item.id);
+    const caseTotal = allExperimentCaseIds.length;
     const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
     const casePage = Math.min(casePageRaw, casePages);
     const pagedCases = await prisma.experimentCase.findMany({
-      where: wantCaseId ? { id: wantCaseId, experimentId: id } : { experimentId: id },
+      where: { experimentId: id, deletedAt: null, ...(wantCaseId ? { id: wantCaseId } : {}) },
       orderBy: { createdAt: 'asc' },
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
@@ -146,12 +163,15 @@ export async function GET(
       status: string;
       failureCode: string | null;
       failureMessage: string | null;
+      progressJson: string | null;
+      taskEnvelopeJson: string | null;
       publicPayloadJson: string | null;
       datasetCase: { externalCaseId: string } | null;
       artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
       evaluations: Array<{
         id: string;
         status: string;
+        failureCode: string | null;
         normalizedResultJson: string | null;
         artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
       }>;
@@ -172,6 +192,7 @@ export async function GET(
             select: {
               id: true,
               status: true,
+              failureCode: true,
               normalizedResultJson: true,
               artifacts: {
                 orderBy: { createdAt: 'asc' },
@@ -189,10 +210,12 @@ export async function GET(
     const generatedCases = await prisma.experimentCase.findMany({
       where: {
         experimentId: id,
+        deletedAt: null,
         OR: [
           { fiRunId: { not: null } },
           { traceGenerationCommandId: { not: null } },
           { traceAttempts: { some: {} } },
+          ...(experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' ? [{ executionId: null }] : []),
         ],
       },
       select: {
@@ -331,6 +354,7 @@ export async function GET(
       const usable = Boolean(execution && hasUsableTraceInteractions(session?.interactions));
       const status = deriveGeneratedTraceStatus({
         usable,
+        triggerDecisionReady: experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' && attempt?.status === 'ready',
         runStatus: run?.status,
         commandStatus: command?.status,
         attemptStatus: attempt?.status,
@@ -375,7 +399,13 @@ export async function GET(
     const failedResultCount = effectiveAllResults.filter((r: { status: string }) => r.status === 'failed').length;
     let expectedResultTotal = effectiveAllResults.length;
     let syntheticExecutionFailures = 0;
+    let itemProgress: ReturnType<typeof summarizeWorkbenchItemProgress> | null = null;
+    let sideProgress: Partial<Record<'a' | 'b', ReturnType<typeof summarizeWorkbenchItemProgress>>> | null = null;
     if (experiment.scope === 'skill-workbench' && configSnapshot) {
+      const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId: id }, select: { caseKey: true } });
+      const removedDatasetCases = new Set(cancellations.filter((item) => item.caseKey.startsWith('dataset:')).map((item) => item.caseKey.slice(8)));
+      if (Array.isArray(configSnapshot.caseIds)) configSnapshot.caseIds = configSnapshot.caseIds.filter((key) => !removedDatasetCases.has(String(key)));
+      const supportsItemProgress = ['trigger', 'use-case', 'skill-ab'].includes(experiment.preset || '');
       const frozenCaseIds = Array.isArray(configSnapshot.caseIds)
         ? configSnapshot.caseIds.map(String).filter(Boolean)
         : [];
@@ -397,6 +427,22 @@ export async function GET(
           select: { caseStatesJson: true },
         });
         const caseStates = parseJsonValue(grayscaleTask?.caseStatesJson || null) as Record<string, unknown> | null;
+        if (supportsItemProgress) {
+          const progressInput = {
+            caseIds: frozenCaseIds,
+            repeatRounds,
+            evaluatorIds,
+            caseStates: (caseStates || {}) as Parameters<typeof summarizeWorkbenchItemProgress>[0]['caseStates'],
+            settled: ['failed', 'cancelled'].includes(experiment.status),
+          };
+          itemProgress = summarizeWorkbenchItemProgress({ ...progressInput, executionSides });
+          if (experiment.preset === 'skill-ab') {
+            sideProgress = {
+              a: summarizeWorkbenchItemProgress({ ...progressInput, executionSides: ['a'] }),
+              b: summarizeWorkbenchItemProgress({ ...progressInput, executionSides: ['b'] }),
+            };
+          }
+        }
         if (caseStates) {
           for (const state of Object.values(caseStates)) {
             if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
@@ -413,6 +459,13 @@ export async function GET(
             }
           }
         }
+      } else if (supportsItemProgress) {
+        itemProgress = summarizeExistingTraceItemProgress({
+          caseIds: allExperimentCaseIds,
+          evaluatorIds,
+          results: effectiveAllResults,
+          settled: ['failed', 'cancelled'].includes(experiment.status),
+        });
       }
     }
     const failed = Math.min(expectedResultTotal, failedResultCount + syntheticExecutionFailures);
@@ -423,10 +476,11 @@ export async function GET(
       pending: Math.max(0, expectedResultTotal - doneResultCount - failed),
     };
     const normalizedStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
-    const responseStatus = normalizedStatus === 'done'
+    const aggregateStatus = itemProgress ? workbenchCompletionStatus(normalizedStatus, itemProgress.executionProgress, itemProgress.evaluationProgress) : normalizedStatus;
+    const responseStatus = aggregateStatus === 'done'
       && (progress.pending > 0 || Boolean(traceProgress?.pending))
       ? 'running'
-      : normalizedStatus;
+      : aggregateStatus;
     const overall = publishedOverallAverage(responseStatus, effectiveAllResults);
     const breakdown = evaluatorBreakdown(effectiveAllResults);
 
@@ -445,6 +499,8 @@ export async function GET(
       query: string;
       finalResult: string;
       skill: string | null;
+      model: string | null;
+      hostIp: string | null;
       executionSkills: Array<{ skillName: string; skillVersion: number | null }>;
     };
     const execFallback = new Map<string, ExecutionFallback>();
@@ -464,6 +520,8 @@ export async function GET(
           query: true,
           finalResult: true,
           skill: true,
+          model: true,
+          hostIp: true,
           executionSkills: { select: { skillName: true, skillVersion: true } },
         },
       });
@@ -473,6 +531,8 @@ export async function GET(
           query: e.query || '',
           finalResult: e.finalResult || '',
           skill: e.skill,
+          model: e.model,
+          hostIp: e.hostIp,
           executionSkills: e.executionSkills,
         };
         if (e.taskId && !execFallback.has(e.taskId)) {
@@ -521,6 +581,10 @@ export async function GET(
       preset: experiment.preset,
       skillContext: parseJsonValue(experiment.skillContextJson),
       configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
+      executionConcurrency: experiment.scope === 'benchmark'
+        ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
+        : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
+          ? Number(configSnapshot.executionConcurrency) || 1 : null,
       sourceExperimentId: experiment.sourceExperimentId,
       overall,
       breakdown,
@@ -563,6 +627,9 @@ export async function GET(
           legacyFi.faultInjectionType ||
           null;
         const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
+        const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
+        const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
         const benchmarkPayload = benchmarkRun
           ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
           : null;
@@ -599,6 +666,8 @@ export async function GET(
           input: c.input || ex?.query || '',
           datasetInput: c.datasetInput,
           actualOutput: c.actualOutput || ex?.finalResult || '',
+          actualModel: ex?.model || (typeof caseValues?.routing_model === 'string' ? caseValues.routing_model : null),
+          actualHost: ex?.hostIp || null,
           referenceOutput: c.referenceOutput,
           faultInjectionType,
           caseValues,
@@ -606,12 +675,8 @@ export async function GET(
           fiRunId: c.fiRunId || legacyFi.fiRunId,
           evaluatorContext: evaluatorContext.context,
           evaluatorContextError: evaluatorContext.error,
-          skillTriggered: experiment.preset === 'trigger'
-            ? Boolean(ex && (
-                ex.skill === experiment.skillName
-                || ex.executionSkills.some((item) => item.skillName === experiment.skillName)
-              ))
-            : null,
+          skillTriggered: experiment.preset === 'trigger' && typeof caseValues?.skill_triggered === 'boolean'
+            ? caseValues.skill_triggered : null,
           traceStatus: benchmarkRun ? benchmarkTraceStatus : traceState?.status || null,
           traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
           traceAttemptNo: traceState?.attemptNo || null,
@@ -653,7 +718,10 @@ export async function GET(
                 contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
               })),
               runStatus: benchmarkRun.status,
+              progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
+              workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
               evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
+              evaluationWaitCode: benchmarkRun.evaluations[0]?.failureCode || null,
               failure: benchmarkRun.failureCode || benchmarkRun.failureMessage
                 ? {
                     code: benchmarkRun.failureCode || 'EXECUTION_FAILED',
@@ -667,6 +735,9 @@ export async function GET(
       results,
       progress,
       traceProgress,
+      executionProgress: itemProgress?.executionProgress || null,
+      evaluationProgress: itemProgress?.evaluationProgress || null,
+      sideProgress,
       caseTotal,
       casePage,
       casePageSize,
@@ -678,7 +749,7 @@ export async function GET(
 }
 
 // 停止监听：把监听实验的 watchMode 置回 false（触发查询 where watchMode=true 即不再命中，
-// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。目前仅支持关闭。
+// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -688,6 +759,22 @@ export async function PATCH(
     const body = await req.json().catch(() => ({}));
     const { username } = await resolveUser(req, body?.user);
     if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+
+    if (body && Object.prototype.hasOwnProperty.call(body, 'name')) {
+      if (body.watchMode !== undefined) {
+        return NextResponse.json({ error: '一次只能修改一个实验字段' }, { status: 400 });
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!name || name.length > 120) {
+        return NextResponse.json({ error: '实验名称须为 1～120 个字符' }, { status: 400 });
+      }
+      const updated = await prisma.experiment.updateMany({
+        where: { id, user: username, deletedAt: null },
+        data: { name },
+      });
+      if (updated.count === 0) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+      return NextResponse.json({ success: true, name });
+    }
 
     if (body?.watchMode !== false) {
       return NextResponse.json({ error: 'only supports watchMode:false (stop watching)' }, { status: 400 });
@@ -730,6 +817,11 @@ export async function DELETE(
     });
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (url.searchParams.get('stop') === 'true') {
+      const { deleteExperimentExecution } = await import('@/lib/engine/experiment/cancellation-service');
+      const result = await deleteExperimentExecution(username, id);
+      return NextResponse.json({ deleted: true, cancellation: result }, { status: result.status === 'completed' ? 200 : 202 });
     }
     if (experiment.status !== 'draft') {
       return NextResponse.json({

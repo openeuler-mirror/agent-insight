@@ -5,12 +5,43 @@ import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 
 const repositoryRoot = path.resolve(__dirname, '..')
-const startScript = path.join(repositoryRoot, 'scripts', 'start-evaluator.sh')
+const startScript = path.join(repositoryRoot, 'scripts', 'evaluator.sh')
 const evaluatorDockerfile = path.join(repositoryRoot, 'services', 'evaluator', 'Dockerfile')
 const sweBenchDockerfile = path.join(repositoryRoot, 'benchmarks', 'swe-bench', 'evaluator', 'Dockerfile')
 
-test('one-command evaluator script exposes the phase-one CLI and rejects deferred registration flags', () => {
+test('evaluator management has one public script with service and image subcommands', () => {
   const help = spawnSync('bash', [startScript, '--help'], { encoding: 'utf8' })
+  assert.equal(help.status, 0, help.stderr)
+  for (const command of ['evaluator.sh start', 'evaluator.sh status', 'evaluator.sh stop', 'evaluator.sh images list', 'evaluator.sh images purge']) {
+    assert.match(help.stdout, new RegExp(command.replace('.', '\\.')))
+  }
+  assert.equal(fs.existsSync(path.join(repositoryRoot, 'scripts', 'start-evaluator.sh')), false)
+  assert.equal(fs.existsSync(path.join(repositoryRoot, 'scripts', 'stop-evaluator.sh')), false)
+})
+
+test('status distinguishes an absent Controller from a Docker permission failure', (t) => {
+  const directory = fs.mkdtempSync(path.join('/tmp', 'evaluator-status-'))
+  const docker = path.join(directory, 'docker')
+  fs.writeFileSync(docker, '#!/bin/sh\necho "permission denied while trying to connect to the docker API" >&2\nexit 1\n', { mode: 0o755 })
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const result = spawnSync('bash', [startScript, 'status'], { encoding: 'utf8', env: { ...process.env, PATH: `${directory}:${process.env.PATH}` } })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /无法检查 Controller.*permission denied/)
+  assert.doesNotMatch(result.stdout, /deployed: false/)
+})
+
+test('optional image pool binds the daemon data filesystem read-only and keeps its secret out of Runtime env', () => {
+  const source = fs.readFileSync(startScript, 'utf8')
+  const storage = fs.readFileSync(path.join(repositoryRoot, 'scripts/evaluator-image-pool.sh'), 'utf8')
+  assert.match(storage, /POOL_ENABLED=true/)
+  assert.match(storage, /docker info --format '\{\{\.DockerRootDir\}\}'/)
+  assert.match(storage, /dst=\/host-docker,readonly/)
+  assert.match(storage, /IMAGE_POOL_DISK_PATH=\/host-docker/)
+  assert.match(source, /IMAGE_POOL_\*\) continue/)
+})
+
+test('one-command evaluator script exposes the phase-one CLI and rejects deferred registration flags', () => {
+  const help = spawnSync('bash', [startScript, 'start', '--help'], { encoding: 'utf8' })
   assert.equal(help.status, 0)
   assert.doesNotMatch(help.stdout, /--auth-mode|--token/)
   assert.match(help.stdout, /--platform-base-url URL/)
@@ -19,16 +50,16 @@ test('one-command evaluator script exposes the phase-one CLI and rejects deferre
   assert.match(help.stdout, /--evaluator-env NAME=VALUE/)
   assert.match(help.stdout, /Linux or macOS/)
 
-  const deferred = spawnSync('bash', [startScript, '--server', 'https://example.test'], { encoding: 'utf8' })
+  const deferred = spawnSync('bash', [startScript, 'start', '--server', 'https://example.test'], { encoding: 'utf8' })
   assert.notEqual(deferred.status, 0)
   assert.match(deferred.stderr, /不支持的参数：--server/)
 
-  const benchmark = spawnSync('bash', [startScript, '--benchmark', 'swe-bench'], { encoding: 'utf8' })
+  const benchmark = spawnSync('bash', [startScript, 'start', '--benchmark', 'swe-bench'], { encoding: 'utf8' })
   assert.notEqual(benchmark.status, 0)
   assert.match(benchmark.stderr, /不支持的参数：--benchmark/)
 
   for (const removedFlag of ['--auth-mode', '--token']) {
-    const removed = spawnSync('bash', [startScript, removedFlag, 'removed'], { encoding: 'utf8' })
+    const removed = spawnSync('bash', [startScript, 'start', removedFlag, 'removed'], { encoding: 'utf8' })
     assert.notEqual(removed.status, 0)
     assert.match(removed.stderr, new RegExp(`不支持的参数：${removedFlag}`))
   }
@@ -47,7 +78,7 @@ test('one-command evaluator script preserves the Docker lifecycle and on-demand 
   assert.doesNotMatch(source, /BENCHMARK_KEY|BENCHMARK_EVALUATOR_KEY|benchmarks\/\$BENCHMARK_KEY/)
   assert.match(source, /services\/evaluator\/Dockerfile/)
   assert.match(source, /^BIND_ADDRESS=0\.0\.0\.0$/m)
-  assert.match(source, /^PORT=3001$/m)
+  assert.match(source, /EVALUATOR_HOST_PORT=\$\{EVALUATOR_HOST_PORT:-\$\{FILE_EVALUATOR_PORT:-3001\}\}/)
   assert.match(source, /--evaluator-env/)
   assert.doesNotMatch(source, /printf 'SWE_BENCH_/)
   assert.doesNotMatch(source, /EVALUATOR_AUTH_MODE|EVALUATOR_PLATFORM_TOKEN/)
@@ -59,7 +90,7 @@ test('one-command evaluator script preserves the Docker lifecycle and on-demand 
 
 test('one-command evaluator script recreates the Controller and removes only old Controller images after Doctor', () => {
   const source = fs.readFileSync(startScript, 'utf8')
-  const removeContainerIndex = source.indexOf('docker rm -f "$CONTAINER_NAME"')
+  const removeContainerIndex = source.indexOf('evaluator_management_run "$IMAGE_ID"')
   const runContainerIndex = source.indexOf('docker run --detach --pull never')
   const doctorIndex = source.indexOf('bash "$SCRIPT_DIR/evaluator-doctor.sh"')
   const removeOldImageIndex = source.indexOf('docker image rm "$OLD_CONTROLLER_REF"')

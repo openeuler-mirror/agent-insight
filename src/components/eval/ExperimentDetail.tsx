@@ -1,9 +1,11 @@
 'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations, isCompletedExperimentCase } from './DeleteExperimentButton';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
 // → Case 明细表（Benchmark 列由 Presentation 声明；综合/结果/轨迹得分 + sticky 操作列：详情 / 统一重试）→ 实验级评论。
 // 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
@@ -11,6 +13,8 @@ import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDi
 import { BenchmarkFailureNotice } from '@/components/eval/BenchmarkFailureNotice';
 import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTrend';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
+import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -25,7 +29,9 @@ import {
 } from '@/lib/evaluators/evaluator-run-config';
 import type { ExperimentBaselineTrend as BaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import {
+  benchmarkCaseProgressLabel,
   isBenchmarkEvaluationInProgress,
+  benchmarkEvaluationProgressLabel,
   isBenchmarkSubmissionAwaitingCompletion,
 } from '@/lib/benchmark/detail-status';
 import type {
@@ -45,6 +51,11 @@ interface ExperimentDetail {
   agentName: string;
   status: string;
   scope?: string;
+  executionConcurrency?: number | null;
+  reusableConfig?: {
+    traceSource?: string | null;
+    executionTarget?: { model?: string | null } | null;
+  };
   preset?: string | null;
   watchMode?: boolean;
   watchEnabledAt?: string | null;
@@ -90,7 +101,10 @@ interface ExperimentDetail {
         contentUrl: string;
       }>;
       runStatus: string;
+      progressStage: string | null;
+      workspaceProvider: string | null;
       evaluationStatus: string | null;
+      evaluationWaitCode?: string | null;
       failure?: { code: string; message: string | null } | null;
     };
   }>;
@@ -109,6 +123,8 @@ interface ExperimentDetail {
   }>;
   progress: { total: number; done: number; failed: number; pending: number };
   traceProgress: { total: number; ready: number; failed: number; pending: number } | null;
+  executionProgress: { total: number; succeeded: number; failed: number; pending: number } | null;
+  evaluationProgress: { total: number; succeeded: number; failed: number; pending: number; skipped?: number; unscored?: number } | null;
   overall: number | null;
   breakdown: EvaluatorBreakdownRow[];
   baselineTrend: BaselineTrend | null;
@@ -188,6 +204,7 @@ export function ExperimentDetail({
   onOpenCase?: (caseId: string) => void;
 }) {
   const { user } = useAuth();
+  const router = useRouter();
   const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -248,9 +265,14 @@ export function ExperimentDetail({
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  // 运行中或仍有未收敛子任务时持续轮询；串行发请求，避免旧响应覆盖新快照。
+  // 运行中、仍有未收敛子任务或监听开启时持续轮询；串行发请求，避免旧响应覆盖新快照。
   useEffect(() => {
-    if (!detail || (detail.status !== 'running' && detail.progress.pending === 0 && !detail.traceProgress?.pending)) return;
+    if (!detail || (
+      detail.status !== 'running'
+      && detail.progress.pending === 0
+      && !detail.traceProgress?.pending
+      && !detail.watchMode
+    )) return;
     let cancelled = false;
     let timer = 0;
     const schedule = () => {
@@ -288,7 +310,7 @@ export function ExperimentDetail({
   const [stoppingWatch, setStoppingWatch] = useState(false);
   const stopWatch = useCallback(async () => {
     if (!user || stoppingWatch) return;
-    if (!window.confirm('停止监听后，该 Agent 后续新上报的 trace 将不再自动进本实验评测（已评结果全部保留）。确认停止？')) return;
+    if (!window.confirm('停止监听后，将不再自动加入新的 Trace；已开始的评测继续完成，已有结果保留。确认停止？')) return;
     setStoppingWatch(true);
     try {
       const res = await apiFetch(
@@ -335,6 +357,7 @@ export function ExperimentDetail({
   );
 
   const caseTotal = detail?.caseTotal ?? 0;
+  const hasItemProgress = Boolean(detail?.executionProgress && detail?.evaluationProgress);
   const totalPages = Math.max(1, Math.ceil(caseTotal / casePageSize));
   const pagedRows = caseRows;
   const benchmarkPresentation = detail?.cases.find((item) => item.benchmark?.presentation)?.benchmark?.presentation;
@@ -349,7 +372,20 @@ export function ExperimentDetail({
 
   return (
     <>
-      {!embedded && <AppTopBar title={detail ? detail.name : '实验详情'} />}
+      {!embedded && <AppTopBar
+        title={detail ? displayedExperimentName(detail.name, detail.createdAt) : '实验详情'}
+        actions={user && detail ? <ExperimentRenameButton
+          experimentId={detail.id}
+          user={user}
+          name={detail.name}
+          createdAt={detail.createdAt}
+          onRenamed={(name) => {
+            setDetail((current) => current ? { ...current, name } : current);
+            void load(true);
+          }}
+          showLabel
+        /> : undefined}
+      />}
       <PageContainer
         variant={embedded ? 'canvas' : 'default'}
         className={embedded ? 'overflow-visible [&>*]:shrink-0' : '!pt-2 [&>*]:shrink-0'}
@@ -365,6 +401,7 @@ export function ExperimentDetail({
         {embedded && onBack && (
           <button type="button" onClick={onBack} style={{ ...ACTION_BTN, marginBottom: 12 }}>‹ 返回实验记录</button>
         )}
+        {user && <PendingExperimentCancellations user={user} />}
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : error && !detail ? (
@@ -397,7 +434,7 @@ export function ExperimentDetail({
                 }} />
                 <span style={{ fontWeight: 600, color: 'var(--tag-green-fg)' }}>监听中</span>
                 <span style={{ color: 'var(--foreground-secondary)' }}>
-                  Agent <b style={{ color: 'var(--foreground)' }}>{detail.agentName || '—'}</b> 新上报的 trace 会自动进本实验评测
+                  自动评测 Agent <b style={{ color: 'var(--foreground)' }}>{detail.agentName || '—'}</b> 在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准
                   {detail.watchEnabledAt && `（自 ${new Date(detail.watchEnabledAt).toLocaleString('zh-CN', { hour12: false })} 起）`}
                 </span>
                 <button
@@ -427,18 +464,33 @@ export function ExperimentDetail({
                 {status.label}
               </span>
               <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.caseTotal}</span>
+              {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
+                <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
+              )}
+              {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
+              {hasItemProgress ? (
+                <>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>执行成功：</span>{detail.executionProgress!.succeeded} 项</span>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>执行失败：</span>{detail.executionProgress!.failed} 项</span>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>评测成功：</span>{detail.evaluationProgress!.succeeded} 项</span>
+                  <span><span style={{ color: 'var(--foreground-muted)' }}>评测失败：</span>{detail.evaluationProgress!.failed} 项</span>
+                  <span>未评测：{detail.evaluationProgress!.skipped || 0} 项</span>
+                  <span>未计分：{detail.evaluationProgress!.unscored || 0} 项</span>
+                </>
+              ) : (
+                <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.caseTotal}</span>
+              )}
               <span><span style={{ color: 'var(--foreground-muted)' }}>评估器：</span>{detail.evaluatorIds.length}</span>
               <span style={{ color: 'var(--foreground-muted)' }}>
                 创建于 {new Date(detail.createdAt).toLocaleString('zh-CN', { hour12: false })}
               </span>
-              {detail.progress?.total > 0 && (
+              {!hasItemProgress && detail.progress?.total > 0 && (
                 <span>
                   <span style={{ color: 'var(--foreground-muted)' }}>进度：</span>
                   {detail.progress.done} 完成 / {detail.progress.failed} 失败 / {detail.progress.pending} 待执行
                 </span>
               )}
-              {detail.traceProgress && (
+              {!hasItemProgress && detail.traceProgress && (
                 <span>
                   <span style={{ color: 'var(--foreground-muted)' }}>Trace：</span>
                   {detail.traceProgress.ready} 已生成 / {detail.traceProgress.failed} 失败 / {detail.traceProgress.pending} 生成中
@@ -527,8 +579,9 @@ export function ExperimentDetail({
                           {fmtScore(row.avg)}
                         </span>
                       </div>
-                      <span style={{ width: 90, fontSize: 10.5, color: 'var(--foreground-muted)', textAlign: 'right' }}>
-                        {row.scored}/{row.total} 项计入
+                      <span style={{ width: 120, flexShrink: 0, fontSize: 10.5, color: 'var(--foreground-muted)', textAlign: 'right' }}>
+                        已计分 {row.scored} / {detail.caseTotal} 项
+                        {row.scored < detail.caseTotal && <span style={{ display: 'block' }}>均分仅含已计分项</span>}
                         {row.failed > 0 && (
                           <span style={{ display: 'block', color: 'var(--error)' }}>{row.failed} 项评估失败</span>
                         )}
@@ -650,7 +703,7 @@ export function ExperimentDetail({
                                     fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
                                   }}>
                                     <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
-                                    Benchmark 评测中…
+                                    {benchmarkEvaluationProgressLabel(c.benchmark)}
                                   </span>
                                 )}
                                 {!c.benchmark.failure && isBenchmarkSubmissionAwaitingCompletion({
@@ -688,15 +741,29 @@ export function ExperimentDetail({
                               />
                             ) : (
                               <span title={c.traceError || undefined} style={{ color: 'var(--error)', fontSize: 11 }}>
-                                Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}
+                                {detail.scope === 'skill-workbench' && detail.preset === 'trigger'
+                                  ? truncate(c.actualOutput || `执行失败：${c.traceError || '未生成有效 Trace'}`, 100)
+                                  : <>Trace 生成失败{c.traceAttemptNo ? `（已尝试 ${c.traceAttemptNo} 次）` : ''}</>}
                               </span>
                             )
                           ) : c.traceStatus === 'pending' ? (
-                            <span style={{ color: 'var(--warning)', fontSize: 11 }}>
-                              正在生成 Trace{c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…
+                            <span style={{ color: detail.scope === 'benchmark' && c.benchmark?.runStatus === 'pending' ? 'var(--foreground-muted)' : 'var(--warning)', fontSize: 11 }}>
+                              {detail.scope === 'benchmark'
+                                ? benchmarkCaseProgressLabel({
+                                    runStatus: c.benchmark?.runStatus,
+                                    progressStage: c.benchmark?.progressStage,
+                                    workspaceProvider: c.benchmark?.workspaceProvider,
+                                  })
+                                : detail.scope === 'skill-workbench' && detail.preset === 'trigger' && !c.traceAttemptNo
+                                  ? '等待执行'
+                                  : `正在生成 Trace${c.traceAttemptNo ? `（第 ${c.traceAttemptNo} 次）` : ''}…`}
                             </span>
                           ) : c.traceStatus === 'ready' && !c.actualOutput ? (
-                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>Trace 已生成（无最终输出）</span>
+                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>
+                              {detail.scope === 'benchmark'
+                                ? benchmarkCaseProgressLabel({ runStatus: c.benchmark?.runStatus })
+                                : 'Trace 已生成（无最终输出）'}
+                            </span>
                           ) : truncate(c.actualOutput, 80)}
                         </td>
                         {detail.scope === 'benchmark' && (
@@ -749,6 +816,11 @@ export function ExperimentDetail({
                                 详情
                               </Link>
                             )}
+                            {user && <DeleteExperimentButton user={user} experimentId={id} caseId={c.id}
+                              completed={isCompletedExperimentCase(detail.status, c.benchmark?.runStatus, {
+                                ...c, evaluatorIds: detail.evaluatorIds, results: detail.results.filter((row) => row.caseId === c.id),
+                              })}
+                              onDeleted={(experimentDeleted) => experimentDeleted ? router.replace('/experiments') : load(true)} />}
                             {(c.traceStatus === 'failed' || c.scores.failed > 0) && (
                               <button
                                 onClick={() => retryCase(c.id)}
@@ -772,7 +844,7 @@ export function ExperimentDetail({
                           colSpan={detail.scope === 'benchmark' ? benchmarkCaseColumns.length + 7 : 7}
                           style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}
                         >
-                          暂无 case
+                          无有效 Case，暂无评测结果
                         </td>
                       </tr>
                     )}

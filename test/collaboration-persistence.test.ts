@@ -348,7 +348,7 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
       interactions: JSON.stringify([{
         tool_calls: [{
           id: 'spawn-call',
-          function: { name: 'spawn_agent', arguments: '{}' },
+          function: { name: 'spawn_agent', arguments: JSON.stringify({ session_id: 'session-b' }) },
           timing: { started_at: 100, source: 'execution' },
         }],
       }]),
@@ -359,7 +359,71 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
     where: { eventDbId: created.eventDbId },
   });
   assert.equal(resolutions.every(row => row.linkState === 'linked'), true);
-  assert.equal(resolutions.find(row => row.side === 'from')?.anchorState, 'candidate');
+  const candidateResolution = resolutions.find(row => row.side === 'from');
+  assert.equal(candidateResolution?.anchorState, 'confirmed');
+  assert.deepEqual(JSON.parse(candidateResolution?.anchorJson || '{}').position, {
+    interactionIndex: 0,
+    callIndex: 0,
+    callKey: 'id:spawn-call',
+    recordSource: 'tool_calls',
+  });
+  const reportedGraph = await reportedService.graph('alice', 'collab_reported');
+  assert.equal(reportedGraph.events[0]?.fromAnchor.status, 'confirmed');
+  assert.equal(reportedGraph.events[0]?.fromAnchor.matchedRecord?.recordId, 'spawn-call');
+
+  const mctsCollaborationId = 'mcts.namespaced-run';
+  await reportedService.report('alice', {
+    collaborationId: mctsCollaborationId,
+    eventId: 'edge-runtime-author',
+    fromSessionId: 'coordinator',
+    toSessionId: 'runtime.author',
+    description: 'MCTS author runtime',
+    observedAt: '2026-09-12T00:00:00Z',
+    fromLocator: { recordType: 'tool', name: 'task' },
+  });
+  await reportedService.bind('alice', {
+    collaborationId: mctsCollaborationId,
+    sessionId: 'coordinator',
+    traceSessionId: 'mcts.run.root',
+    eventClock: 'source_session',
+  });
+  await reportedService.bind('alice', {
+    collaborationId: mctsCollaborationId,
+    sessionId: 'runtime.author',
+    traceSessionId: 'mcts.run.root.runtime.author',
+    eventClock: 'source_session',
+  });
+  await prismaRaw.$executeRawUnsafe(
+    'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)',
+    'mcts-root-execution', 'mcts.run.root', 'mcts.run.root', 'alice', 'mcts-xgovernor',
+    'mcts-author-execution', 'mcts.run.root.runtime.author', 'mcts.run.root.runtime.author', 'alice', 'mcts-xgovernor',
+  );
+  await prismaRaw.session.create({
+    data: {
+      taskId: 'mcts.run.root',
+      user: 'alice',
+      interactions: JSON.stringify([{
+        tool_calls: [{
+          id: 'mcts-author-task',
+          function: { name: 'task', arguments: JSON.stringify({ session_id: 'runtime.author', subagent_type: 'author' }) },
+          timing: { started_at: 300, source: 'execution' },
+        }],
+      }]),
+    },
+  });
+  await resolveCollaborationEndpointsForExecution('alice', [
+    'mcts.run.root',
+    'mcts.run.root.runtime.author',
+  ]);
+  const mctsGraph = await reportedService.graph('alice', mctsCollaborationId);
+  assert.equal(mctsGraph.events[0]?.fromAnchor.status, 'confirmed');
+  assert.equal(mctsGraph.events[0]?.fromAnchor.matchedRecord?.recordId, 'mcts-author-task');
+  assert.deepEqual(mctsGraph.events[0]?.fromAnchor.position, {
+    interactionIndex: 0,
+    callIndex: 0,
+    callKey: 'id:mcts-author-task',
+    recordSource: 'tool_calls',
+  });
 
   await prismaRaw.$executeRawUnsafe(
     'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?)',
@@ -407,6 +471,10 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.deepEqual(
     orderedAnchors.map(row => JSON.parse(row.anchorJson || '{}').orderIndex).sort(),
     [1, 2],
+  );
+  assert.deepEqual(
+    orderedAnchors.map(row => JSON.parse(row.anchorJson || '{}').position.callIndex).sort(),
+    [0, 1],
   );
 
   const source = await prismaRaw.goalPlusSource.create({
@@ -500,6 +568,67 @@ test('collaboration persistence, late trace resolution, and Goal Plus projection
   assert.equal(collaboration?.sourceType, 'goal-plus-semantic');
   assert.equal(collaboration?.events.length, 1);
   assert.equal(collaboration?.events[0].endpointResolutions.every(row => row.linkState === 'linked'), true);
+  await t.test('graph preserves authoritative Goal Plus endpoints without explicit session bindings', async () => {
+    const graph = await reportedService.graph('alice', identity.collaborationId);
+    const main = graph.nodes.find(node => node.sessionId === identity.mainSessionId);
+    assert.ok(main);
+    assert.equal(main.traceResolution, 'resolved');
+    assert.equal(main.executionId, 'goal-main');
+    assert.equal(main.message, undefined);
+    assert.deepEqual(graph.events[0].traceResolution, { from: 'resolved', to: 'resolved' });
+    assert.equal(graph.events[0].endpointResolutions.from.status, 'resolved');
+    assert.equal(graph.events[0].fromAnchor.status, 'not_provided');
+  });
+  await t.test('reported graph and retries keep new session ambiguity despite previously linked endpoints', async () => {
+    await prismaRaw.$executeRawUnsafe(
+      'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?)',
+      'alias-first', 'alias-first-trace', 'shared-alias', 'alice', 'opencode',
+    );
+    await prismaRaw.session.create({ data: {
+      taskId: 'alias-first-trace', user: 'alice', interactions: '[{"role":"assistant","content":"done"}]',
+    } });
+    await reportedService.report('alice', {
+      collaborationId: 'reported-alias', eventId: 'alias-event',
+      fromSessionId: 'shared-alias', toSessionId: 'session-b', description: '传递结果',
+    });
+    await prismaRaw.$executeRawUnsafe(
+      'INSERT INTO "Execution" ("id", "taskId", "agentSessionId", "user", "framework") VALUES (?, ?, ?, ?, ?)',
+      'alias-second', 'alias-second-trace', 'shared-alias', 'alice', 'opencode',
+    );
+    const graph = await reportedService.graph('alice', 'reported-alias');
+    assert.equal(graph.events[0].endpointResolutions.from.status, 'resolved');
+    assert.equal(graph.events[0].traceResolution.from, 'unresolved');
+    assert.equal(graph.nodes.find(node => node.sessionId === 'shared-alias')?.traceResolution, 'unresolved');
+    const retry = await reportedService.report('alice', {
+      collaborationId: 'reported-alias', eventId: 'alias-event',
+      fromSessionId: 'shared-alias', toSessionId: 'session-b', description: '传递结果',
+    });
+    const refreshed = await reportedService.graph('alice', 'reported-alias');
+    assert.equal(retry.result, 'duplicate');
+    assert.equal(retry.endpointResolutions?.from.status, 'ambiguous');
+    assert.deepEqual(retry.traceResolution, refreshed.events[0].traceResolution);
+  });
+  await t.test('report does not replace a checked native target with a persisted parent relationship', async () => {
+    await prismaRaw.session.create({ data: {
+      taskId: 'bound-main-trace', user: 'alice', interactions: JSON.stringify([{
+        role: 'assistant', tool_calls: [{ id: 'bound-call', function: { name: 'task', arguments: JSON.stringify({ session_id: 'worker:run-b:search-b' }) } }],
+      }]),
+    } });
+    await prismaRaw.session.create({ data: { taskId: 'bound-worker-trace', user: 'alice', interactions: '[{"role":"assistant","content":"done"}]' } });
+    await prismaRaw.session.create({ data: { taskId: 'worker:run-b:search-b', user: 'alice', interactions: '[{"role":"assistant","content":"other Trace"}]' } });
+    await prismaRaw.$executeRawUnsafe(
+      'UPDATE "Execution" SET "parentExecutionId"=? WHERE "id"=?',
+      'bound-main-execution', 'bound-worker-execution',
+    );
+    const retry = await reportedService.report('alice', {
+      collaborationId: boundCollaborationId, eventId: 'evt_bound_sessions',
+      fromSessionId: 'main', toSessionId: 'worker:run-b:search-b', description: '逻辑会话通过 binding 关联真实 Trace',
+    });
+    const graph = await reportedService.graph('alice', boundCollaborationId);
+    assert.equal(graph.events[0].fromAnchor.status, 'not_provided');
+    assert.equal(retry.fromAnchor.status, graph.events[0].fromAnchor.status);
+    assert.deepEqual(graph.automaticEvents, []);
+  });
   const traceProjection = await findGoalPlusTraceProjectionMembers('alice', 'goal-main-session');
   assert.equal(traceProjection.members.length, 1);
   assert.equal(traceProjection.members[0].taskId, 'goal-plus:gpsrc-projection:worker-projection');

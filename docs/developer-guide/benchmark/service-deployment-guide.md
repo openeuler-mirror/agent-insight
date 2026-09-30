@@ -1,6 +1,6 @@
 # Benchmark 整体服务安装指南
 
-本指南用于部署一个**已完成开发和验证**的 Benchmark 接入包。文档不说明 Adapter 和 Evaluator 的开发方法，只说明 Agent Insight、Agent 执行端和 Evaluator 的安装、配置与验收。
+本指南只说明安装步骤、执行命令和参数含义。架构与实现细节见 [`docs/design/benchmark/`](../../design/benchmark/README.md)。
 
 ## 1. 部署结构
 
@@ -23,64 +23,51 @@ Agent Insight :3000 ──下发评测任务──> Evaluator :3001
 
 ### 2.1 版本与接入包
 
-三端必须使用互相兼容的代码版本。目标代码中应已包含：
+三端使用相互兼容的代码版本。代码中应包含目标 Benchmark：
 
 ```text
 benchmarks/<benchmark-key>/benchmark.yaml
 benchmarks/<benchmark-key>/adapter/
 benchmarks/<benchmark-key>/evaluator/
-benchmarks/<benchmark-key>/schemas/
 generated/benchmark-catalog/
 ```
 
-发布前应已执行并提交 Catalog 生成结果：
+开发或发布接入包时生成 Catalog：
 
 ```bash
 npm run benchmark:catalog
 ```
 
-不要在生产机器上手工修改 `benchmark.yaml` 或 `generated/benchmark-catalog/`。
-
 ### 2.2 运行环境
 
 | 机器 | 必需环境 |
-| --- | --- |
-| Agent Insight | Git、Node.js、npm、Python 3（含 `venv`）、curl、tar，以及项目支持的数据库 |
-| Agent 执行端 | Linux 或 macOS、Git、接入包声明的 Agent Runtime/Collector |
-| Evaluator | Linux 或 macOS、Git、Docker、Bash，以及 Benchmark 自身要求的磁盘和内存 |
-
-若 Benchmark 需要镜像、模型、数据目录或凭据，应在其接入包的发布说明中单独列出，不能直接照搬 SWE-bench 的环境要求。
+|---|---|
+| Agent Insight | Git、Node.js、npm、Python 3、curl、tar |
+| Agent 执行端 | Linux 或 macOS、Git、Benchmark 要求的 Agent Runtime |
+| Evaluator | Linux 或 macOS、Git、Docker、Bash |
 
 ### 2.3 网络
 
-| 访问方向 | 用途 |
-| --- | --- |
-| Agent 执行端 → Agent Insight `3000` | 领取任务，上传 Trace、Submission 和执行结果 |
-| Agent Insight → Evaluator `3001` | 下发 EvaluationJob |
-| Evaluator → Agent Insight `3000` | 下载 Artifact，回传进度、Evidence 和结果 |
+确保以下方向可以访问：
 
-URL 必须使用对端机器真实可访问的地址，不能在分机部署时填写 `127.0.0.1`。
+| 访问方向 | 地址示例 |
+|---|---|
+| Agent 执行端 → Agent Insight | `http://<agent-insight-ip>:3000` |
+| Agent Insight → Evaluator | `http://<evaluator-ip>:3001` |
+| Evaluator → Agent Insight | `http://<agent-insight-ip>:3000` |
+
+分机部署不能使用 `127.0.0.1` 代替另一台机器的地址。
 
 ### 2.4 地址选择：同机与分机
 
-Evaluator 由 Docker 容器运行，因此“Agent Insight 和 Evaluator 在同一台机器”时仍涉及容器到宿主机的通信。以下三个地址含义不同：
-
-- `http://localhost:3000` 或 `http://127.0.0.1:3000`：供浏览器或宿主机进程访问 Agent Insight；在 Evaluator 容器内使用时只会指向容器自身，不能访问宿主机上的 Agent Insight。
-- `http://host.docker.internal:3000`：Docker 提供给容器的宿主机入口。macOS/Windows 由 Docker Desktop 提供；本项目的 `start-evaluator.sh` 会在 Linux 上增加 `host-gateway` 映射。它只表示 Evaluator 所在的那台宿主机，不是公网域名，也不适用于分机部署。
-- `http://<agent-insight-ip>:3000` 或 Agent Insight 的 HTTPS 域名：供另一台机器上的 Evaluator 访问 Agent Insight。该地址必须能从 Evaluator 容器内实际访问，不能只保证 Evaluator 宿主机可访问。
-
-推荐配置如下：
-
-| 部署方式 | Evaluator `platform-base-url` | Agent Insight `evaluator-base-url` | Evaluator 监听地址 |
-| --- | --- | --- | --- |
-| Agent Insight 与 Evaluator 同机 | `http://host.docker.internal:3000` | `http://127.0.0.1:3001` | `127.0.0.1` |
-| Agent Insight 与 Evaluator 分机 | `http(s)://<agent-insight-address>:3000` | `http(s)://<evaluator-address>:3001` | `0.0.0.0` 或 Evaluator 内网地址 |
-
-同机部署时，浏览器仍然访问 `http://localhost:3000`；`host.docker.internal` 只作为 Evaluator 启动时的 `--platform-base-url`，不要求用户在浏览器中打开，也不再写入 Agent Insight 配置。
+| 部署方式 | Evaluator 启动参数 `--platform-base-url` | Agent Insight 配置 `--evaluator-base-url` |
+|---|---|---|
+| 同机 | `http://host.docker.internal:3000` | `http://127.0.0.1:3001` |
+| 分机 | `http(s)://<agent-insight-address>:3000` | `http(s)://<evaluator-address>:3001` |
 
 ## 3. 安装 Agent Insight
 
-在 Agent Insight 机器上获取包含目标 Benchmark 的发布版本：
+### 3.1 获取代码
 
 ```bash
 git clone \
@@ -93,126 +80,86 @@ cd /srv/agent-insight
 npm ci
 ```
 
-默认运行根目录是 `$HOME/.agent-insight`。首次执行 `scripts/start.sh` 会自动创建该目录，并从 `.env.example` 生成权限受控的 `~/.agent-insight/.env`；也可以提前初始化：
+### 3.2 配置
 
-```bash
-mkdir -p ~/.agent-insight/data
-cp .env.example ~/.agent-insight/.env
-chmod 600 ~/.agent-insight/.env
-```
-
-默认 SQLite 数据库是 `~/.agent-insight/data/witty_insight.db`，无需显式配置。自定义长期数据库时，在 `~/.agent-insight/.env` 中设置：
+平台配置文件默认位于 `~/.agent-insight/.env`。首次运行 `scripts/start.sh` 时若文件不存在，会从仓库的 `.env.example` 生成；之后请修改这个实际配置文件，改 `.env.example` 不会更新已生成的配置。不需要修改默认值时可以跳过。
 
 ```dotenv
-DATABASE_URL="file:/home/<deploy-user>/.agent-insight/data/witty_insight.db"
-```
-
-临时测试不同数据库、不修改配置文件时，可只覆盖单次命令：
-
-```bash
-DATABASE_URL="file:/tmp/agent-insight-test.db" bash scripts/start.sh
-```
-
-配置优先级是“当前启动命令的环境变量 > `~/.agent-insight/.env` > 默认值”。如需将整个运行根目录迁到其他位置，应在启动进程、Docker 或 systemd 环境中设置 `AGENT_INSIGHT_HOME`；该变量决定 `.env` 文件本身的位置，因此不能依赖目标 `.env` 修改自己的位置。
-
-源码 `start.sh`、开发启动入口和 npm 启动入口均支持 `DATABASE_URL` 单次覆盖。`AGENT_INSIGHT_BENCHMARK` 自动准备目前由 `scripts/start.sh` 执行，不代表 npm / Docker 入口也会自动导入。Docker 默认运行根是 `/data/agent-insight`。
-
-npm 安装阶段的 `postinstall` 同样遵守上述数据库优先级。使用自定义运行根或数据库时，安装和启动应传入相同配置。
-
-如果要持续使用 SWE-bench Verified，在 `~/.agent-insight/.env` 中设置：
-
-```dotenv
+AGENT_INSIGHT_PORT=3000
 AGENT_INSIGHT_BENCHMARK=swe-bench
 ```
 
-之后使用统一启动命令：
+| 配置 | 含义 |
+|---|---|
+| `AGENT_INSIGHT_PORT` | Agent Insight 对外端口 |
+| `AGENT_INSIGHT_BENCHMARK=swe-bench` | 启动时自动准备 SWE-bench Verified 数据集 |
+
+旧变量 `PORT` 不再支持。
+
+### 3.3 启动与验证
 
 ```bash
 cd /srv/agent-insight
 bash scripts/start.sh
-```
-
-`bash scripts/start.sh --benchmark swe-bench` 仍可作为单次覆盖；Benchmark 选择优先级是“命令行 > 当前进程环境 > `~/.agent-insight/.env` > 不自动准备”。
-
-首次执行会自动下载并校验固定版本的 SWE-bench 官方源码和 Verified Parquet，在 `~/.agent-insight/vendor/SWE-bench/.venv` 创建隔离 Python 环境，将 500 条 Case 导入为平台共享只读数据集，然后继续构建和启动服务。后续执行会先查询数据库；数据集已经处于 `ready` 状态时直接跳过下载、环境安装和导入，因此本地缓存被清理也不影响服务重启。
-
-不需要自动准备 Benchmark 时，将 `AGENT_INSIGHT_BENCHMARK` 留空，然后按原方式启动：
-
-```bash
-bash scripts/start.sh
-```
-
-验证：
-
-```bash
 curl -I http://127.0.0.1:3000
 ```
 
-预期 Agent Insight 监听 `0.0.0.0:3000`。启用 `swe-bench` 后，启动成功即表示 SWE-bench Verified 已经存在或完成导入；页面中应能看到对应数据集。
+单次指定端口或 Benchmark：
+
+```bash
+bash scripts/start.sh --port 3100 --benchmark swe-bench
+```
+
+| 参数 | 含义 |
+|---|---|
+| `--port` | 本次启动使用的 Agent Insight 端口 |
+| `--benchmark swe-bench` | 本次启动自动准备 SWE-bench Verified |
 
 ## 4. 安装 Benchmark 数据集
 
 ### 4.1 当前支持边界
 
-**当前已提供完整安装流程的 Benchmark 数据集只有 SWE-bench Verified。**
+当前提供自动安装流程的数据集是 SWE-bench Verified。
 
 ### 4.2 随服务启动自动安装
 
+在 `~/.agent-insight/.env` 中设置：
+
+```dotenv
+AGENT_INSIGHT_BENCHMARK=swe-bench
+```
+
+然后启动 Agent Insight：
+
 ```bash
-cd /srv/agent-insight
 bash scripts/start.sh
 ```
 
-脚本执行以下幂等流程：
+首次启动会下载并导入数据集，后续启动会复用已安装的数据集。
 
-1. 查询数据库中是否已有 `ready` 状态的 `swe-bench/verified` 平台共享数据集；
-2. 仅在缺失时下载固定 commit 的 SWE-bench 官方源码并校验 SHA-256；
-3. 创建受管 Python 虚拟环境并安装官方 Loader；
-4. 下载固定 revision 的 SWE-bench Verified Parquet 并校验 SHA-256；
-5. 校验数据集包含 500 个唯一 Case 后导入，再继续启动服务。
-
-受管文件默认写入：
-
-```text
-~/.agent-insight/vendor/SWE-bench/
-~/.agent-insight/data/imports/swe-bench-verified/test.parquet
-```
-
-下载、哈希校验、Loader 安装或导入失败时，启动会明确报错并停止，不会留下一个缺少已请求 Benchmark 数据集的运行中服务。自动流程不会替换数据库中已经导入的数据集，也不会静默升级历史实验使用的数据版本。
-
-网络无法访问 Hugging Face 或 GitHub 时，可在 `~/.agent-insight/.env` 配置内网文件地址：
+如需使用内网文件或本机文件，可增加：
 
 ```dotenv
-SWE_BENCH_DATASET_SOURCE=http://intranet.example/swe-bench/test.parquet
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE=http://intranet.example/swe-bench/source.tar.gz
+SWE_BENCH_DATASET_SOURCE=/srv/datasets/test.parquet
+SWE_BENCH_SOURCE_ARCHIVE_SOURCE=/srv/datasets/source.tar.gz
 ```
 
-两个来源也支持本机文件：
+两个配置也可以填写 HTTP/HTTPS 下载地址。
+
+例如使用内网文件服务：
 
 ```dotenv
-SWE_BENCH_DATASET_SOURCE="/srv/datasets/test.parquet"
-SWE_BENCH_SOURCE_ARCHIVE_SOURCE="/srv/datasets/source.tar.gz"
+SWE_BENCH_DATASET_SOURCE=https://mirror.example.com/swe-bench/test.parquet
+SWE_BENCH_SOURCE_ARCHIVE_SOURCE=https://mirror.example.com/swe-bench/source.tar.gz
 ```
-
-来源支持 HTTP/HTTPS 下载直链或文件路径，路径位于 Agent Insight 主机上，推荐使用绝对路径；支持 `~/`、`$HOME/` 和 `${HOME}/` 前缀。两项留空时使用固定版本的官方 Hugging Face / GitHub 地址。先检查数据库是否已安装；未安装时，本机来源直接校验并使用，远程来源先复用已校验缓存再下载。源码在已有可用 Python 环境或受管源码缓存时无需重复准备。
-
-统一来源只改变文件位置，本机与下载文件都必须通过代码内固定 SHA-256。本机文件缺失或校验失败立即报错，不自动联网或覆盖本机文件；下载失败或校验失败不会覆盖已有缓存。Python 依赖首次安装仍需要 pip 软件源，或通过 `SWE_BENCH_PYTHON` 复用已有环境。
-
-旧配置兼容规则：新变量未设置时，数据集回退 `SWE_BENCH_DATASET_PATH`、`SWE_BENCH_DATASET_URL`；源码回退 `SWE_BENCH_SOURCE_ARCHIVE_URL`。新变量一旦设置（包括空值），不再读取对应旧变量；从旧配置迁移时将原路径或 URL 填入对应的新变量即可。启动命令可临时覆盖同名 `.env` 配置。
-
-当前自动准备只支持正式 key `swe-bench`。不接受 `swe` 等别名；传入未支持的 key 会在修改数据库或启动服务前失败。
 
 ### 4.3 其他 Benchmark
 
-对于其他 Benchmark，接入包即使已被三端加载，也必须先完成专用 Dataset Profile、Loader 和安装验收，才能在页面中发起正式评测。
-
-当前不应将普通评测数据集的页面导入当作 Benchmark 数据集安装方案。若新 Benchmark 未同时交付数据集安装能力，则本次部署只能完成服务加载，不具备完整实验条件。
+其他 Benchmark 必须提供自己的数据集安装方式。普通数据集页面导入不能替代 Benchmark 数据集安装。
 
 ## 5. 安装 Evaluator
 
-### 5.1 Agent Insight 与 Evaluator 分机部署
-
-在 Evaluator 机器上获取与 Agent Insight 兼容的代码版本：
+Evaluator 机器需要与 Agent Insight 兼容的代码版本：
 
 ```bash
 git clone \
@@ -224,151 +171,274 @@ git clone \
 cd /srv/agent-insight
 ```
 
-在受控内网中，可使用无 Token 方式：
+### 5.1 Agent Insight 与 Evaluator 分机部署
+
+需要固定 Evaluator 端口时，在 Evaluator 机器的 `~/.agent-insight/.env` 中设置 `AGENT_INSIGHT_EVALUATOR_PORT=3001`，或启动时直接使用 `--port`。
 
 ```bash
-bash scripts/start-evaluator.sh \
+bash scripts/evaluator.sh start \
   --platform-base-url http://<agent-insight-ip>:3000
 ```
 
-其中：
+例如 Agent Insight 地址为 `192.168.1.10:3100`，Evaluator 对外使用 `3101`：
 
-- 启动脚本始终构建通用 Controller，不接受 Benchmark 选择或预热参数；
-- 默认发布到宿主机 `0.0.0.0:3001`，可通过 `--bind-address` 和 `--port` 覆盖；
-- 不提供应用层鉴权，依赖白名单、安全组或防火墙限制双向访问；
-- Benchmark Runtime 由任务中的 `benchmark.key + evaluator.key` 通过 Catalog 选择，首次任务按需准备并缓存；
-- `--platform-base-url` 必须是 Evaluator 容器可访问的 Agent Insight 地址；
-- Benchmark 专用环境变量可通过 `--evaluator-env NAME=VALUE` 传入。
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://192.168.1.10:3100 \
+  --port 3101
+```
 
 ### 5.2 Agent Insight 与 Evaluator 本机部署
 
-如果 Agent Insight 的 `3000` 和 Evaluator 的 `3001` 都运行在当前机器，Evaluator 仍在 Docker 容器内，启动命令应使用 Docker 的宿主机入口：
-
 ```bash
-cd /srv/agent-insight
-
-bash scripts/start-evaluator.sh \
-  --platform-base-url http://host.docker.internal:3000
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --bind-address 127.0.0.1
 ```
 
-这里不能把 `--platform-base-url` 写成 `http://127.0.0.1:3000`，因为该地址在容器内代表 Evaluator 容器自身。默认的 `--bind-address 0.0.0.0` 不影响本机通过 `127.0.0.1:3001` 调用，但也会监听其他网卡；只允许本机访问时应显式传入 `--bind-address 127.0.0.1`。
+常用参数：
 
-服务不会校验 Bearer Token；必须通过白名单、安全组或防火墙限制 Agent Insight `3000` 与 Evaluator `3001` 的访问范围。
+| 参数 | 含义 |
+|---|---|
+| `--platform-base-url URL` | Evaluator 回访 Agent Insight 的地址 |
+| `--port PORT` | Evaluator 对外端口，默认 `3001` |
+| `--bind-address ADDRESS` | Evaluator 监听地址，默认 `0.0.0.0` |
+| `--evaluator-env NAME=VALUE` | 传入 Evaluator 环境变量 |
 
-验证：
+验证 Evaluator：
+
+```bash
+curl -fsS http://127.0.0.1:3001/health
+bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
+```
+
+健康接口应返回 `healthy`。没有提供 Smoke 的 Benchmark 可以跳过第二条命令。
+
+### 5.3 可选：跨 Benchmark 共享镜像池
+
+镜像池默认开启，无需额外参数。同一 Docker daemon 上的不同 Benchmark 和用户共享一个镜像池。
+
+关闭镜像池：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url <agent-insight-url> \
+  --evaluator-env IMAGE_POOL_ENABLED=false
+```
+
+镜像池详细设计见[镜像池设计方案](../../design/benchmark/image-pool.md)。
+
+提前准备镜像默认开启，无需增加启动参数；默认的 `IMAGE_POOL_MAX_PULLS=2` 为按需拉取保留容量，开启预取时不能设为 1。平台通过 `/health` 发现预取状态，无需配置额外令牌。Evaluator 端口应只允许 Agent Insight 平台访问。需要关闭预取时，在 Evaluator 启动命令中增加：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --bind-address 127.0.0.1 \
+  --evaluator-env IMAGE_POOL_PREFETCH_ENABLED=false
+```
+
+分机部署时按 5.1 节替换地址和绑定参数。预取窗口及空间不足的处理见[并发调度方案](../../../评测服务文档/benchmark并发执行与评测调度方案.md#51-镜像准备)。
+
+### 5.4 评测并发与 Case 数量上限
+
+普通实验和 Benchmark 实验的“执行并发”由用户在实验创建向导设置，默认 1；操作方法见[实验使用指南](../../user-guide/evaluation/experiments.md)。以下是平台和 Evaluator 的部署配置：
+
+| 配置 | 设置位置 | 默认值 | 含义 |
+|---|---|---:|---|
+| `EVALUATOR_MAX_CONCURRENCY` | Evaluator 启动参数 `--evaluator-env` 或启动进程环境 | 1 | 评测服务同时运行的 Case 数 |
+| `AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER` | 平台机 `~/.agent-insight/.env` | 留空，跟随 Evaluator 总并发 | 单用户跨实验同时评测的 Case 数量上限 |
+| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS` | 平台机 `~/.agent-insight/.env` | 256 | 全平台执行中或尚未完成评测的 Benchmark Case 数量上限 |
+| `AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER` | 平台机 `~/.agent-insight/.env` | 128 | 每个用户执行中或尚未完成评测的 Benchmark Case 数量上限 |
+
+表中四项均可省略或留空，分别按默认值生效；显式设置时须为正整数。Evaluator 启动脚本只会从评测机的 `~/.agent-insight/.env` 读取对外端口；评测并发须通过 `--evaluator-env` 或启动进程环境传入。
+
+例如，设置评测总并发为 2，单用户额度留空。在平台机的 `~/.agent-insight/.env` 中加入或修改以下行，保留其他设置：
+
+```dotenv
+AGENT_INSIGHT_BENCHMARK_EVAL_MAX_CONCURRENCY_PER_USER=
+AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS=
+AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER=
+```
+
+重启 Agent Insight 使配置生效。在 Evaluator 机器运行（以下为本机部署示例；分机部署按 5.1 节替换地址和绑定参数）：
+
+```bash
+bash scripts/evaluator.sh start \
+  --platform-base-url http://host.docker.internal:3000 \
+  --bind-address 127.0.0.1 \
+  --evaluator-env EVALUATOR_MAX_CONCURRENCY=2
+```
+
+启动后验证：
 
 ```bash
 curl -fsS http://127.0.0.1:3001/health
 ```
 
-预期 `status` 为 `healthy`，且 `evaluators` 中目标 `benchmarkKey/evaluatorKey` 的 `ready` 为 `true`。
-
-若接入包提供部署 Smoke，继续执行：
-
-```bash
-bash scripts/evaluator-doctor.sh --smoke <evaluator-key>
-```
-
-`evaluator-key` 来自 `benchmark.yaml` 的 `evaluation.evaluatorKey`，它不一定与 `benchmark-key` 相同。
+确认返回的 `maxConcurrency` 为 2；使用其他端口时替换 `3001`。并发值的实测方法、Case 数量上限的统计方式及调度行为见[并发调度方案](../../../评测服务文档/benchmark并发执行与评测调度方案.md)。
 
 ## 6. 配置 Agent Insight 与 Evaluator 的互访地址
 
+以下命令在 Agent Insight 机器的仓库目录执行。
+
 ### 6.1 分机部署
 
-在 Agent Insight 机器上执行：
-
 ```bash
-cd /srv/agent-insight
-
 node scripts/configure-evaluator-target.js \
   --evaluator-base-url http://<evaluator-ip>:3001
 ```
 
-- `evaluator-base-url` 是 Agent Insight 访问 Evaluator 的地址；
-- Agent Insight 的公开回调地址从实验启动请求的 `Host` / `X-Forwarded-*` 自动推导，Evaluator 的实际访问地址由其 `--platform-base-url` 覆盖；
-- 配置会写入 `~/.agent-insight/data/config/benchmark-evaluator.env`，并在后续请求中热加载。
+例如 Evaluator 地址为 `192.168.1.20:3101`：
+
+```bash
+node scripts/configure-evaluator-target.js \
+  --evaluator-base-url http://192.168.1.20:3101
+```
 
 ### 6.2 本机部署
 
-Agent Insight 与 Evaluator 同机时执行：
-
 ```bash
-cd /srv/agent-insight
-
 node scripts/configure-evaluator-target.js \
   --evaluator-base-url http://127.0.0.1:3001
 ```
 
-- `evaluator-base-url` 由宿主机上的 Agent Insight 使用，因此同机时使用 `127.0.0.1`；
-- Evaluator 容器访问 Agent Insight 的 `host.docker.internal:3000` 只在评测机的 `--platform-base-url` 中配置；
-- `allow-insecure-http` 默认是 `true`，适用于已通过白名单、安全组或防火墙隔离的 HTTP 网络；需要强制非回环 Evaluator 使用 HTTPS 时显式设为 `false`。
+| 参数 | 含义 |
+|---|---|
+| `--evaluator-base-url URL` | Agent Insight 调用 Evaluator 的地址 |
+| `--allow-insecure-http true|false` | 是否允许非本机 HTTP 地址，默认 `true` |
 
-两端没有应用层鉴权配置，必须通过安全组或防火墙限制 Agent Insight `3000` 和 Evaluator `3001` 的访问范围。
+配置会自动保存并在后续请求中生效，无需重启 Agent Insight。
 
 ## 7. 安装 Agent 执行客户端
 
-在 Agent Insight 页面进入 **配置 → 客户端安装**，选择 Benchmark 要求的 Agent Runtime，然后在每一台执行机上执行页面生成的完整安装命令。
-
-Linux/macOS 命令形如：
+在 Agent Insight 页面进入 **配置 → 客户端安装**，选择 Agent Runtime，并在执行机运行页面生成的命令：
 
 ```bash
 curl -sSf "http://<agent-insight-ip>:3000/api/ingest/setup?key=<generated-api-key>&yes=1&frameworks=<agent-runtime>" | bash
 ```
 
-以页面生成的命令为准，不要手工构造 API Key。
+请使用页面生成的完整命令，不要手工填写 API Key。
 
-安装后应确认：
+安装后确认：
 
-- 执行端在平台中显示为在线；
-- 它上报了 Benchmark Manifest 要求的 Workspace、Agent Runtime 和 Artifact Collector 能力；
-- 它能访问 Agent Insight 中配置的仓库与必要资源。
+- 客户端在平台显示为在线；
+- 客户端具备 Benchmark 要求的 Agent Runtime；
+- 客户端可以访问代码仓库和 Agent Insight。
 
-常驻客户端会把每轮能力探测结果先同步到本地 Benchmark 执行器，再上报 Agent Insight。运行期间新增、恢复或失效的 Agent Runtime 会在下一轮刷新后自动生效；已开始的任务继续使用创建执行计划时取得的 Runtime，新任务使用刷新后的能力集合。
+### 7.1 配置 SWE-bench Case 源码来源（可选）
 
-若新 Benchmark 增加了新 Runtime 或 Collector，必须先发布包含该能力的执行客户端，再在每台执行机上重新安装。
+在 Agent 执行机上创建或编辑配置文件：
+
+```bash
+mkdir -p "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}"
+vi "${AGENT_INSIGHT_HOME:-$HOME/.agent-insight}/.env"
+```
+
+使用本地缓存目录：
+
+```dotenv
+SWE_BENCH_GIT_SOURCE=/srv/swe-git
+```
+
+使用指定的 Git 服务：
+
+```dotenv
+SWE_BENCH_GIT_SOURCE=https://git.example.com
+```
+
+| 配置值 | 行为 |
+|---|---|
+| 不配置 | 从默认远程源获取，不保留本地缓存 |
+| 本地目录，如 `/srv/swe-git` | 优先使用并维护本地仓库缓存 |
+| Git 根地址，如 `https://git.example.com` | 优先从指定 Git 服务获取 |
+
+Git 根地址会拼接为 `根地址/owner/repo.git`。例如 Flask 仓库对应 `https://git.example.com/pallets/flask.git`。
 
 ## 8. 整体验收
 
-先完成三向连通性检查：
+### 8.1 检查网络
 
 ```bash
-# Agent Insight 机器
+# Agent Insight 机器访问 Evaluator
 curl -fsS http://<evaluator-ip>:3001/health
 
-# Evaluator 机器
+# Evaluator 机器访问 Agent Insight
 curl -I http://<agent-insight-ip>:3000
 
-# Agent 执行机
+# Agent 执行机访问 Agent Insight
 curl -I http://<agent-insight-ip>:3000
 ```
 
-然后在 Agent Insight 页面中验证：
+同机部署时，将对应 IP 改为 `127.0.0.1`；Evaluator 容器回访 Agent Insight 仍使用 `host.docker.internal`。
 
-1. Benchmark 数据集已出现，数量和公开字段正确，且为共享只读；
-2. 至少一个具备所需能力的 Agent 执行端在线；
-3. 选择一个 Smoke Case 创建实验；
-4. Agent 执行状态、Trace 终态和 Submission 回传完整；
-5. Evaluator 完成 Harness，回传 Evidence 和 Raw Result；
-6. 实验在全部 Case 达到终态后结算，页面显示正确的结论、主指标、评分点和文件。
+### 8.2 运行实验
 
-还应至少验证一个异常场景：缺失 Submission、Submission 无效、Evaluator 超时或 Harness 失败。业务未通过与基础设施故障必须显示为不同结果。
+在 Agent Insight 页面依次确认：
+
+1. Benchmark 数据集可以选择；
+2. Agent 执行客户端在线；
+3. 创建一个单 Case 实验；
+4. Agent 执行、Submission 上传和 Evaluator 评测均完成；
+5. 页面能够查看结果、Evidence 和 Artifact。
+
+再运行一个失败 Case，确认页面能展示失败原因。
 
 ## 9. 更新与回滚
 
-- **Agent Insight**：更新到目标代码版本，重新执行 `bash scripts/start.sh`；
-- **Evaluator**：更新到兼容版本，按当前互访地址重新执行 `bash scripts/start-evaluator.sh --platform-base-url <Agent-Insight-address>`；
-- **Agent 执行端**：如果变更涉及 Runtime 或 Collector，在每台执行机上重跑客户端安装命令；
-- **数据集**：更新代码或重建服务不会自动删除已安装数据集。
+更新代码后分别重新执行：
 
-回滚时三端应同时回到相互兼容的代码版本。若新版本已写入不可向后兼容的数据库结构或结果数据，必须按该版本的发布说明处理，不得仅回滚代码。
+```bash
+# Agent Insight 机器
+bash scripts/start.sh
+
+# Evaluator 机器
+bash scripts/evaluator.sh start \
+  --platform-base-url <agent-insight-url>
+```
+
+如果更新包含 Agent Runtime 或 Collector，在每台执行机重新运行页面生成的客户端安装命令。
+
+回滚时，Agent Insight、Evaluator 和 Agent 执行客户端应回到相互兼容的版本。
 
 ## 10. 安装完成标准
 
-只有以下条件全部满足，才视为 Benchmark 服务安装完成：
+- Agent Insight 页面可访问；
+- Evaluator 健康检查通过；
+- Benchmark 数据集可以选择；
+- Agent 执行客户端在线且能力匹配；
+- 成功 Case 和失败 Case 均完成验收；
+- 页面能够查看结果、Evidence 和 Artifact。
 
-- Agent Insight、Agent 执行端和 Evaluator 均使用兼容版本；
-- Evaluator Health/Doctor 通过，目标 Evaluator 为 Ready；
-- Benchmark 数据集已安装且可被实验选择；
-- 执行端能力与 Manifest 匹配；
-- 成功 Case 和至少一个异常 Case 完成端到端验收；
-- Submission、Evidence、指标、状态和页面展示符合该 Benchmark 契约。
+## 11. 立即停止与镜像清理
+
+以下命令在 Evaluator 机器的仓库目录执行：
+
+```bash
+# 查看服务状态
+bash scripts/evaluator.sh status
+
+# 查看镜像池管理的镜像
+bash scripts/evaluator.sh images list
+
+# 预览可清理的空闲镜像
+bash scripts/evaluator.sh images purge --dry-run
+
+# 保持服务运行，清理空闲镜像
+bash scripts/evaluator.sh images purge
+
+# 立即停止服务，保留镜像
+bash scripts/evaluator.sh stop
+
+# 预览停服后的镜像清理范围
+bash scripts/evaluator.sh stop --purge-images --dry-run
+
+# 立即停止服务并清理受管镜像
+bash scripts/evaluator.sh stop --purge-images
+```
+
+| 参数 | 含义 |
+|---|---|
+| `--dry-run` | 只预览，不停止服务，不删除镜像 |
+| `--purge-images` | 停止服务时同时清理评测服务管理的镜像 |
+
+停止服务不需要传端口参数，自定义端口启动的服务也使用相同命令。

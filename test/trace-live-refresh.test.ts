@@ -37,3 +37,22 @@ test('TraceDrawer silently refreshes an open trace and keeps its tree identity s
   assert.match(traceView, /const sameStableTrace =/);
   assert.match(traceView, /incoming\._payloadDeferred && loaded && !loaded\._payloadDeferred/);
 });
+
+
+test('latest list request clears loading even when a silent refresh supersedes initial loading', () => {
+  const source = read('src/app/(main)/trace/page.tsx');
+  const effect = source.slice(source.indexOf('const requestId = ++listRequestIdRef.current;'));
+  const finalizer = effect.match(/\.finally\(\(\) => \{([\s\S]*?)\}\);/);
+  assert.ok(finalizer, 'list request must settle loading');
+  const settle = new Function('listRequestIdRef', 'listRequestPendingRef', 'requestId', 'silentRefresh', 'setLoading', finalizer[1]);
+  let loading = true;
+  const latest = { current: 2 };
+  const pending = { current: true };
+  const setLoading = (value: boolean) => { loading = value; };
+  settle(latest, pending, 1, false, setLoading);
+  assert.equal(loading, true, 'stale request must not settle the current request');
+  assert.equal(pending.current, true, 'stale request must not permit another polling request');
+  settle(latest, pending, 2, true, setLoading);
+  assert.equal(loading, false, 'replacement silent request must release the loading indicator');
+  assert.equal(pending.current, false, 'the current request must permit subsequent polling');
+});

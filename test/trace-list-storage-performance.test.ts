@@ -107,11 +107,16 @@ test('Trace list storage keeps work bounded and preserves lifecycle and agent fa
     await context.test('failed totals require exact failure types and a positive session completion time', async () => {
         const processFailure = JSON.stringify([{ failure_type: 'agent-process-exit' }]);
         const goalFailure = JSON.stringify([{ failure_type: 'goal_plus_pi_session_failed' }]);
+        const opencodeFailure = JSON.stringify([{ failure_type: 'opencode-session-error' }]);
         const cases = [
             { id: 'process', framework: 'actrail', failures: processFailure, endTime: 1, expected: true },
             { id: 'goal', framework: 'pi-agent', failures: goalFailure, endTime: 1, expected: true },
             { id: 'goal-other-framework', framework: 'opencode', failures: goalFailure, endTime: 1, expected: true },
             { id: 'process-other-framework', framework: 'opencode', failures: processFailure, endTime: 1, expected: false },
+            { id: 'opencode', framework: 'opencode', failures: opencodeFailure, endTime: 1, expected: true },
+            { id: 'opencode-other-framework', framework: 'actrail', failures: opencodeFailure, endTime: 1, expected: false },
+            { id: 'opencode-unfinished', framework: 'opencode', failures: opencodeFailure, endTime: null, expected: false },
+            { id: 'opencode-description-only', framework: 'opencode', failures: '[{"description":"opencode-session-error"}]', endTime: 1, expected: false },
             { id: 'missing-session', framework: 'actrail', failures: processFailure, expected: false },
             { id: 'unfinished', framework: 'actrail', failures: processFailure, endTime: null, expected: false },
             { id: 'epoch', framework: 'actrail', failures: processFailure, endTime: 0, expected: false },

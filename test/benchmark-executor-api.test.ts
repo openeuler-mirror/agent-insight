@@ -131,143 +131,11 @@ let setCommandDispatcher: typeof import('@/lib/benchmark/scheduler').setBenchmar
 
 test.before(async () => {
   if (!externalDatabasePath) {
-    const sqliteModule = 'node:sqlite'
-    const { DatabaseSync } = await import(sqliteModule) as {
-      DatabaseSync: new (filename: string) => { exec(sql: string): void; close(): void }
-    }
-    const database = new DatabaseSync(databasePath)
-    database.exec(`
-    PRAGMA foreign_keys=ON;
-    CREATE TABLE AgentEvalDataset (
-      id TEXT PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-      targetAgent TEXT NOT NULL DEFAULT '', targetSkill TEXT NOT NULL DEFAULT '', tagsJson TEXT NOT NULL DEFAULT '[]',
-      fieldsJson TEXT NOT NULL DEFAULT '[]', casesJson TEXT NOT NULL DEFAULT '[]', caseCount INTEGER NOT NULL DEFAULT 0,
-      referenceCasesJson TEXT NOT NULL DEFAULT '[]', projectionReady INTEGER NOT NULL DEFAULT 0,
-      datasetKind TEXT NOT NULL DEFAULT 'ideal_output', createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE Experiment (
-      id TEXT PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'single',
-      agentName TEXT NOT NULL DEFAULT '', evaluatorIdsJson TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'draft',
-      scope TEXT NOT NULL DEFAULT '', skillName TEXT NOT NULL DEFAULT '', skillVersion INTEGER, preset TEXT,
-      skillContextJson TEXT, configSnapshotJson TEXT, sourceExperimentId TEXT, optimizationRecordId TEXT,
-      watchMode INTEGER NOT NULL DEFAULT 0, watchEnabledAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE ExperimentCase (
-      id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, executionId TEXT, taskId TEXT, input TEXT NOT NULL DEFAULT '',
-      datasetInput TEXT, actualOutput TEXT NOT NULL DEFAULT '', referenceOutput TEXT, evaluatorContextJson TEXT,
-      groupId TEXT, faultInjectionType TEXT, caseValuesJson TEXT, fiTaskId TEXT, fiRunId TEXT,
-      traceGenerationCommandId TEXT, traceGenerationError TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (experimentId) REFERENCES Experiment(id) ON DELETE CASCADE
-    );
-    CREATE TABLE ReliabilityClient (
-      id TEXT PRIMARY KEY, clientId TEXT NOT NULL UNIQUE, user TEXT NOT NULL, name TEXT NOT NULL, hostname TEXT,
-      reportedIp TEXT, observedIp TEXT, os TEXT, arch TEXT, status TEXT NOT NULL DEFAULT 'offline',
-      serviceHealth TEXT NOT NULL DEFAULT 'unknown', supervisor TEXT, processStartedAt DATETIME,
-      restartCount INTEGER NOT NULL DEFAULT 0, lastSeenAt DATETIME NOT NULL, agentVersion TEXT,
-      capabilitiesJson TEXT NOT NULL DEFAULT '{}', capabilitiesRevision TEXT, unboundAt DATETIME,
-      unboundToClientId TEXT, machineId TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE ReliabilityClientCredential (
-      id TEXT PRIMARY KEY, clientId TEXT NOT NULL, credentialHash TEXT NOT NULL UNIQUE,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, lastUsedAt DATETIME, revokedAt DATETIME,
-      FOREIGN KEY (clientId) REFERENCES ReliabilityClient(clientId) ON DELETE CASCADE
-    );
-    CREATE TABLE BenchmarkDataset (
-      id TEXT PRIMARY KEY, agentEvalDatasetId TEXT NOT NULL UNIQUE, user TEXT NOT NULL, name TEXT NOT NULL,
-      adapterKey TEXT NOT NULL, contentHash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready',
-      caseCount INTEGER NOT NULL DEFAULT 0, sourceJson TEXT NOT NULL DEFAULT '{}',
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (agentEvalDatasetId) REFERENCES AgentEvalDataset(id) ON DELETE CASCADE,
-      UNIQUE (user, name)
-    );
-    CREATE TABLE BenchmarkDatasetCase (
-      id TEXT PRIMARY KEY, datasetId TEXT NOT NULL, externalCaseId TEXT NOT NULL, rawCaseJson TEXT NOT NULL,
-      publicPayloadJson TEXT NOT NULL, privatePayloadJson TEXT NOT NULL, sourceFingerprint TEXT NOT NULL,
-      publicFingerprint TEXT NOT NULL, privateFingerprint TEXT NOT NULL, ordinal INTEGER NOT NULL,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (datasetId) REFERENCES BenchmarkDataset(id) ON DELETE CASCADE,
-      UNIQUE (datasetId, externalCaseId), UNIQUE (datasetId, ordinal)
-    );
-    CREATE TABLE BenchmarkExperimentBinding (
-      experimentId TEXT PRIMARY KEY, datasetId TEXT NOT NULL, datasetContentHash TEXT NOT NULL, adapterKey TEXT NOT NULL,
-      selectionJson TEXT NOT NULL, runConfigJson TEXT NOT NULL, schedulerStatus TEXT NOT NULL DEFAULT 'idle',
-      expectedCaseCount INTEGER NOT NULL, callbackOrigin TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (experimentId) REFERENCES Experiment(id) ON DELETE CASCADE,
-      FOREIGN KEY (datasetId) REFERENCES BenchmarkDataset(id)
-    );
-    CREATE TABLE BenchmarkCaseRun (
-      id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, experimentCaseId TEXT NOT NULL, datasetCaseId TEXT,
-      ordinal INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', adapterKey TEXT NOT NULL, clientId TEXT NOT NULL,
-      publicPayloadJson TEXT, privatePayloadJson TEXT, taskEnvelopeJson TEXT,
-      taskDigest TEXT, progressJson TEXT, runFactsJson TEXT, cleanupJson TEXT, completionDigest TEXT,
-      failureCode TEXT, failureMessage TEXT, retryOfRunId TEXT, lastProgressAt DATETIME,
-      startedAt DATETIME, finishedAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (experimentId) REFERENCES Experiment(id) ON DELETE CASCADE,
-      FOREIGN KEY (experimentCaseId) REFERENCES ExperimentCase(id) ON DELETE CASCADE,
-      FOREIGN KEY (datasetCaseId) REFERENCES BenchmarkDatasetCase(id) ON DELETE SET NULL
-    );
-    CREATE TABLE BenchmarkArtifact (
-      id TEXT PRIMARY KEY, runId TEXT NOT NULL, name TEXT NOT NULL, mediaType TEXT NOT NULL,
-      sha256 TEXT NOT NULL, sizeBytes INTEGER NOT NULL, storagePath TEXT NOT NULL,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (runId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE,
-      UNIQUE (runId, name)
-    );
-    CREATE TABLE BenchmarkDispatchOutbox (
-      id TEXT PRIMARY KEY, runId TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'agent_execution',
-      commandId TEXT UNIQUE, requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending', attemptCount INTEGER NOT NULL DEFAULT 0,
-      nextAttemptAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, leasedUntil DATETIME,
-      responseJson TEXT, errorCode TEXT, errorMessage TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (runId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE
-    );
-    CREATE TABLE BenchmarkEvaluation (
-      id TEXT PRIMARY KEY, caseRunId TEXT NOT NULL, attemptNo INTEGER NOT NULL DEFAULT 1,
-      retryOfEvaluationId TEXT, status TEXT NOT NULL DEFAULT 'queued', adapterKey TEXT NOT NULL,
-      evaluatorKey TEXT NOT NULL, evaluatorTargetKey TEXT, evaluatorBaseUrl TEXT,
-      requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL, callbackBaseUrl TEXT NOT NULL,
-      timeoutSeconds INTEGER NOT NULL, progressJson TEXT, rawResultJson TEXT, rawResultDigest TEXT,
-      runtimeFactsJson TEXT, cleanupJson TEXT, normalizedResultJson TEXT, completionDigest TEXT,
-      failureCode TEXT, failureMessage TEXT, continuationStatus TEXT NOT NULL DEFAULT 'completed',
-      continuationAttempts INTEGER NOT NULL DEFAULT 0, continuationTriedAt DATETIME, continuationError TEXT,
-      lastProgressAt DATETIME, startedAt DATETIME,
-      finishedAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (caseRunId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE,
-      UNIQUE (caseRunId, attemptNo)
-    );
-    CREATE TABLE BenchmarkEvaluationDispatchOutbox (
-      id TEXT PRIMARY KEY, evaluationId TEXT NOT NULL UNIQUE, destinationBaseUrl TEXT,
-      requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-      attemptCount INTEGER NOT NULL DEFAULT 0, nextAttemptAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      leasedUntil DATETIME, httpStatus INTEGER, responseJson TEXT, errorCode TEXT, errorMessage TEXT,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (evaluationId) REFERENCES BenchmarkEvaluation(id) ON DELETE CASCADE
-    );
-    CREATE TABLE BenchmarkEvaluationArtifact (
-      id TEXT PRIMARY KEY, evaluationId TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
-      mediaType TEXT NOT NULL, sha256 TEXT NOT NULL, sizeBytes INTEGER NOT NULL, storagePath TEXT NOT NULL,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (evaluationId) REFERENCES BenchmarkEvaluation(id) ON DELETE CASCADE,
-      UNIQUE (evaluationId, name)
-    );
-    CREATE TABLE ExperimentEvalResult (
-      id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, caseId TEXT NOT NULL, evaluatorId TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending', verdict TEXT, summary TEXT, score REAL, pointsJson TEXT,
-      evidenceJson TEXT, humanScore REAL, humanReason TEXT, humanBy TEXT, humanAt DATETIME,
-      errorMessage TEXT, attempts INTEGER NOT NULL DEFAULT 0, durationMs INTEGER,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (caseId) REFERENCES ExperimentCase(id) ON DELETE CASCADE,
-      UNIQUE (caseId, evaluatorId)
-    );
-    `)
-    database.close()
+    fs.closeSync(fs.openSync(databasePath, 'a'))
+    const result = spawnSync(process.execPath, [path.resolve('node_modules/prisma/build/index.js'), 'db', 'push',
+      '--schema', path.resolve('prisma/schema.prisma'), '--skip-generate'], { env: process.env, encoding: 'utf8', timeout: 30000 })
+    assert.equal(result.status, 0, result.stderr)
+
   }
   const [
     storage, artifact, artifactContent, progress, complete,
@@ -1121,7 +989,7 @@ test('evaluation watchdog fails a stale Harness run and durably finalizes its Ca
   }
 })
 
-test('a late evaluation dispatch response cannot revive a watchdog failure', async () => {
+test('resource queue waiting does not consume the evaluation execution timeout', async () => {
   const suffix = `${Date.now()}_${process.pid}`
   const fixtureUser = `eval_dispatch_race_user_${suffix}`
   const experimentId = `exp_eval_dispatch_race_${suffix}`
@@ -1227,7 +1095,7 @@ test('a late evaluation dispatch response cannot revive a watchdog failure', asy
       outbox = await prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId } })
     }
     assert.equal(outbox?.status, 'sending')
-    assert.equal(await scheduler.reapStaleBenchmarkEvaluations({ now, experimentId }), 1)
+    assert.equal(await scheduler.reapStaleBenchmarkEvaluations({ now, experimentId }), 0)
     releasePost()
     await dispatch
 
@@ -1235,9 +1103,9 @@ test('a late evaluation dispatch response cannot revive a watchdog failure', asy
       prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } }),
       prisma.benchmarkEvaluationDispatchOutbox.findUnique({ where: { evaluationId } }),
     ])
-    assert.equal(evaluation?.status, 'failed')
-    assert.equal(evaluation?.failureCode, 'EVALUATION_DISPATCH_TIMEOUT')
-    assert.equal(settledOutbox?.status, 'failed')
+    assert.equal(evaluation?.status, 'running_evaluator')
+    assert.equal(evaluation?.failureCode, null)
+    assert.equal(settledOutbox?.status, 'accepted')
   } finally {
     releasePost()
     scheduler.setBenchmarkEvaluationDispatchFetchForTest()
@@ -1671,11 +1539,12 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
       evaluator.jobs[0].headers.get('x-agent-insight-request-digest'),
       evaluator.jobs[0].body.requestDigest,
     )
-    const unauthorizedArtifact = await fetch(
+    const evaluationArtifactResponse = await fetch(
       `${platformListener.origin}/api/benchmark/v1/artifacts/${artifact.id}/content`,
       { headers: { 'x-agent-insight-evaluation-id': evaluation.id } },
     )
-    assert.equal(unauthorizedArtifact.status, 401)
+    assert.equal(evaluationArtifactResponse.status, 200)
+    assert.deepEqual(Buffer.from(await evaluationArtifactResponse.arrayBuffer()), artifactBytes)
 
     assert.equal((await dispatch()).status, 202)
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -1712,12 +1581,13 @@ test('steps 04-09 cross real HTTP APIs, validate and dispatch a Git patch idempo
   }
 })
 
-test('step 04 exposes authenticated health and returns retryable SERVICE_BUSY', async () => {
+test('executor admits independent runs concurrently and exposes authenticated health', async () => {
   const suffix = `${Date.now()}_${process.pid}`
   const clientId = `busy_client_${suffix}`
   const deviceCredential = `dc_busy_${suffix}`
   const insightBaseUrl = 'http://127.0.0.1:43199'
   const baseDir = path.join(testDir, `busy-executor-${suffix}`)
+  let startedAgents = 0
   let unblockAgent!: () => void
   const agentGate = new Promise<void>((resolve) => { unblockAgent = resolve })
   const executor = executorModule.createBenchmarkExecutor({
@@ -1752,6 +1622,7 @@ test('step 04 exposes authenticated health and returns retryable SERVICE_BUSY', 
       },
     }]]),
     async runAgent() {
+      startedAgents++
       await agentGate
       return { traceId: 'trace_busy', exitCode: 0 }
     },
@@ -1796,11 +1667,12 @@ test('step 04 exposes authenticated health and returns retryable SERVICE_BUSY', 
     assert.equal(health.status, 200)
     assert.equal((await health.json()).busy, true)
 
-    const busy = await dispatch(`erun_busy_2_${suffix}`)
-    assert.equal(busy.status, 409)
-    const busyBody = await busy.json()
-    assert.equal(busyBody.error.code, 'SERVICE_BUSY')
-    assert.equal(busyBody.error.retryable, true)
+    const second = await dispatch(`erun_busy_2_${suffix}`)
+    assert.equal(second.status, 202)
+    assert.equal((await dispatch(`erun_busy_1_${suffix}`)).status, 202)
+    const startedDeadline = Date.now() + 5000
+    while (startedAgents < 2 && Date.now() < startedDeadline) await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(startedAgents, 2)
   } finally {
     unblockAgent()
     const deadline = Date.now() + 5_000

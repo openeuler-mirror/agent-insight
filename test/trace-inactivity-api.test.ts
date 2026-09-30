@@ -56,7 +56,7 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
       assert.equal(payload.stats.failedCount, status === 'timed_out' ? 0 : 2, status);
     }
   });
-  const frameworks = ['actrail', 'opencode', 'claudecode', 'hermes', 'openclaw', 'jiuwenswarm', 'langfuse-langgraph', 'new-framework'];
+  const frameworks = ['actrail', 'opencode', 'claudecode', 'hermes', 'openclaw', 'jiuwenswarm', 'langfuse-langgraph', 'mcts-xgovernor', 'new-framework'];
   const receivedAt = new Date(Date.now() - 601_000);
   for (const framework of frameworks) {
     const taskId = `timeout-${framework}`;

@@ -18,6 +18,7 @@ import {
 } from '@/lib/evaluators/custom-evaluator-model';
 
 type TabKey = 'custom' | 'preset';
+const CARDS_PER_PAGE = 6;
 
 interface FilterState {
   query: string;
@@ -46,11 +47,9 @@ interface LlmEvaluatorDraft {
 // Custom RPC 尚未提供可执行实现，不放进选项避免用户点了发现没结果。
 const evaluatorTypes: EvaluatorType[] = ['LLM', 'Code'];
 // 标签筛选选项（与 deriveEvaluatorTags 派生值对齐；「预置/自建」由 tab 承担，不进筛选）
-const tagFilterOptions = ['LLM Judge', '看结果', '看轨迹', '依赖预期输出', '依赖数据集输入'];
+const tagFilterOptions = ['LLM Judge', 'Benchmark', '看结果', '看轨迹', '依赖预期输出', '依赖数据集输入'];
 // 场景：评估对象——"结果" 指评估 agent 最终答复的质量，"轨迹" 指评估 agent 内部执行链路。
 // 老词是 'Agent'，含义模糊（agent 既可指评估主体也可指被评估面），统一改成"结果"避免歧义。
-const targetTypes = Array.from(new Set(presetEvaluators.flatMap(card => card.targetTypes)));
-const objectives = Array.from(new Set(presetEvaluators.flatMap(card => card.objectives)));
 
 /** System Prompt 占位符插入按钮（与 CUSTOM_EVALUATOR_ALLOWED_VARIABLES 对齐） */
 const placeholderButtons = [
@@ -94,7 +93,7 @@ function emptyCustomToolbar(): CustomToolbarState {
 
 function matchesFilter(card: EvaluatorCard, filters: FilterState) {
   const query = filters.query.trim().toLowerCase();
-  const haystack = `${card.name} ${card.description} ${card.mappedMetrics.join(' ')}`.toLowerCase();
+  const haystack = `${card.name} ${card.description} ${card.mappedMetrics.join(' ')} ${card.scenarios.join(' ')}`.toLowerCase();
   if (query && !haystack.includes(query)) return false;
   if (filters.evaluatorTypes.length > 0 && !filters.evaluatorTypes.includes(card.evaluatorType)) return false;
   if (filters.targetTypes.length > 0 && !filters.targetTypes.some(item => card.targetTypes.includes(item))) return false;
@@ -118,7 +117,9 @@ function toggleFilter<T extends string>(values: T[], value: T) {
   return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 }
 
-export default function EvaluatorsCenter() {
+export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
+  benchmarkEvaluatorCards: EvaluatorCard[];
+}) {
   const { user } = useAuth();
   const router = useRouter();
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
@@ -129,6 +130,10 @@ export default function EvaluatorsCenter() {
   const [llmDraft, setLlmDraft] = useState<LlmEvaluatorDraft>(blankLlmDraft);
   const [customCreate, setCustomCreate] = useState<null | 'llm'>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [customPage, setCustomPage] = useState(1);
+  const [presetPage, setPresetPage] = useState(1);
+  const customListRef = useRef<HTMLDivElement>(null);
+  const presetListRef = useRef<HTMLElement>(null);
   const [loading, setLoading] = useState(true);
   const [reloadVersion, setReloadVersion] = useState(0);
   const [error, setError] = useState('');
@@ -136,6 +141,18 @@ export default function EvaluatorsCenter() {
   const [inspectCard, setInspectCard] = useState<EvaluatorCard | null>(null);
   /** 用户当前激活的评测模型，所有可执行评估器（含轨迹评估器）的运行模型 */
   const [activeModel, setActiveModel] = useState<{ id: string; name: string; model: string } | null>(null);
+  const presetCards = useMemo(
+    () => [...benchmarkEvaluatorCards, ...presetEvaluators],
+    [benchmarkEvaluatorCards],
+  );
+  const targetTypes = useMemo(
+    () => Array.from(new Set(presetCards.flatMap(card => card.targetTypes))),
+    [presetCards],
+  );
+  const objectives = useMemo(
+    () => Array.from(new Set(presetCards.flatMap(card => card.objectives))),
+    [presetCards],
+  );
 
   useEffect(() => {
     if (!user) {
@@ -236,9 +253,21 @@ export default function EvaluatorsCenter() {
   }, [user, evaluatorsHydrated, customEvaluators]);
 
   const visibleCards = useMemo(() => {
-    if (activeTab === 'preset') return presetEvaluators.filter(card => matchesFilter(card, filters));
+    if (activeTab === 'preset') return presetCards.filter(card => matchesFilter(card, filters));
     return customEvaluators.filter(card => matchesCustomToolbar(card, customToolbar, user));
-  }, [activeTab, customEvaluators, filters, customToolbar, user]);
+  }, [activeTab, customEvaluators, filters, customToolbar, user, presetCards]);
+  const totalPages = Math.max(1, Math.ceil(visibleCards.length / CARDS_PER_PAGE));
+  const currentPage = Math.min(activeTab === 'preset' ? presetPage : customPage, totalPages);
+  const pageCards = visibleCards.slice((currentPage - 1) * CARDS_PER_PAGE, currentPage * CARDS_PER_PAGE);
+  const setCurrentPage = activeTab === 'preset' ? setPresetPage : setCustomPage;
+  const goToPage = (page: number) => {
+    setCurrentPage(page);
+    (activeTab === 'preset' ? presetListRef : customListRef).current?.scrollIntoView({ block: 'start' });
+  };
+  const updatePresetFilters = (update: (current: FilterState) => FilterState) => {
+    setFilters(update);
+    setPresetPage(1);
+  };
 
   const openLlmCreateFlow = () => {
     setLlmDraft(blankLlmDraft());
@@ -303,6 +332,7 @@ export default function EvaluatorsCenter() {
     };
 
     setCustomEvaluators(prev => [item, ...prev]);
+    setCustomPage(1);
     setCustomCreate(null);
     setLlmDraft(blankLlmDraft());
     setActiveTab('custom');
@@ -322,6 +352,7 @@ export default function EvaluatorsCenter() {
     const prev = customEvaluators;
     const next = prev.filter(item => item.id !== card.id);
     setCustomEvaluators(next);
+    setCustomPage(1);
     try {
       const res = await apiFetch('/api/user-evaluators', {
         method: 'PUT',
@@ -371,7 +402,11 @@ export default function EvaluatorsCenter() {
         </div>
         {activeTab === 'preset' && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button type="button" className="ai-btn-s" onClick={() => setReloadVersion(version => version + 1)}>
+            <button type="button" className="ai-btn-s" onClick={() => {
+              setReloadVersion(version => version + 1);
+              setPresetPage(1);
+              router.refresh();
+            }}>
               刷新
             </button>
           </div>
@@ -397,7 +432,7 @@ export default function EvaluatorsCenter() {
           onSubmit={finalizeLlmEvaluator}
         />
       ) : activeTab === 'custom' ? (
-        <div style={{ paddingTop: 16 }}>
+        <div ref={customListRef} style={{ paddingTop: 16 }}>
           <div
             style={{
               display: 'flex',
@@ -411,7 +446,10 @@ export default function EvaluatorsCenter() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, flex: 1, minWidth: 280 }}>
               <input
                 value={customToolbar.nameQuery}
-                onChange={e => setCustomToolbar(prev => ({ ...prev, nameQuery: e.target.value }))}
+                onChange={e => {
+                  setCustomToolbar(prev => ({ ...prev, nameQuery: e.target.value }));
+                  setCustomPage(1);
+                }}
                 placeholder="搜索名称"
                 style={{
                   minWidth: 160,
@@ -428,7 +466,10 @@ export default function EvaluatorsCenter() {
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button type="button" className="ai-btn-s" title="刷新" onClick={() => setReloadVersion(version => version + 1)}>
+              <button type="button" className="ai-btn-s" title="刷新" onClick={() => {
+                setReloadVersion(version => version + 1);
+                setCustomPage(1);
+              }}>
                 ↻
               </button>
               <button
@@ -453,7 +494,7 @@ export default function EvaluatorsCenter() {
             <CustomEmptyState onCreateLlm={openLlmCreateFlow} />
           ) : viewMode === 'grid' ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(320px, 1fr))', gap: 12 }}>
-              {visibleCards.map(card => (
+              {pageCards.map(card => (
                 <EvaluatorCardView
                   key={card.id}
                   card={card}
@@ -467,7 +508,7 @@ export default function EvaluatorsCenter() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {visibleCards.map(card => (
+              {pageCards.map(card => (
                 <EvaluatorListRow
                   key={card.id}
                   card={card}
@@ -477,13 +518,21 @@ export default function EvaluatorsCenter() {
               ))}
             </div>
           )}
+          {visibleCards.length > 0 && (
+            <EvaluatorPagination
+              total={visibleCards.length}
+              page={currentPage}
+              pageCount={totalPages}
+              onPageChange={goToPage}
+            />
+          )}
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)', minHeight: 620 }}>
           <aside style={{ borderRight: '1px solid var(--border)', padding: '16px 18px 16px 0' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div className="ai-section-title">评估器筛选</div>
-              <button type="button" className="ai-btn-s" onClick={() => setFilters(emptyFilters())}>
+              <button type="button" className="ai-btn-s" onClick={() => updatePresetFilters(emptyFilters)}>
                 清空
               </button>
             </div>
@@ -491,33 +540,33 @@ export default function EvaluatorsCenter() {
               title="类型"
               options={evaluatorTypes}
               values={filters.evaluatorTypes}
-              onToggle={value => setFilters(prev => ({ ...prev, evaluatorTypes: toggleFilter(prev.evaluatorTypes, value) }))}
+              onToggle={value => updatePresetFilters(prev => ({ ...prev, evaluatorTypes: toggleFilter(prev.evaluatorTypes, value) }))}
             />
             <FilterGroup
               title="场景"
               options={targetTypes}
               values={filters.targetTypes}
-              onToggle={value => setFilters(prev => ({ ...prev, targetTypes: toggleFilter(prev.targetTypes, value) }))}
+              onToggle={value => updatePresetFilters(prev => ({ ...prev, targetTypes: toggleFilter(prev.targetTypes, value) }))}
             />
             <FilterGroup
               title="评估目标"
               options={objectives}
               values={filters.objectives}
-              onToggle={value => setFilters(prev => ({ ...prev, objectives: toggleFilter(prev.objectives, value) }))}
+              onToggle={value => updatePresetFilters(prev => ({ ...prev, objectives: toggleFilter(prev.objectives, value) }))}
             />
             <FilterGroup
               title="标签"
               options={tagFilterOptions}
               values={filters.tags}
-              onToggle={value => setFilters(prev => ({ ...prev, tags: toggleFilter(prev.tags, value) }))}
+              onToggle={value => updatePresetFilters(prev => ({ ...prev, tags: toggleFilter(prev.tags, value) }))}
             />
           </aside>
 
-          <main style={{ padding: 16 }}>
+          <main ref={presetListRef} style={{ padding: 16 }}>
             <div style={{ marginBottom: 14 }}>
               <input
                 value={filters.query}
-                onChange={event => setFilters(prev => ({ ...prev, query: event.target.value }))}
+                onChange={event => updatePresetFilters(prev => ({ ...prev, query: event.target.value }))}
                 placeholder="搜索评估器名称、说明或指标"
                 style={{
                   width: '100%',
@@ -536,7 +585,7 @@ export default function EvaluatorsCenter() {
               <EmptyState />
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(320px, 1fr))', gap: 12 }}>
-                {visibleCards.map(card => (
+                {pageCards.map(card => (
                   <EvaluatorCardView
                     key={card.id}
                     card={card}
@@ -548,6 +597,14 @@ export default function EvaluatorsCenter() {
                   />
                 ))}
               </div>
+            )}
+            {visibleCards.length > 0 && (
+              <EvaluatorPagination
+                total={visibleCards.length}
+                page={currentPage}
+                pageCount={totalPages}
+                onPageChange={goToPage}
+              />
             )}
           </main>
         </div>
@@ -580,6 +637,22 @@ function TabButton({ active, children, onClick }: { active: boolean; children: R
     >
       {children}
     </button>
+  );
+}
+
+function EvaluatorPagination({ total, page, pageCount, onPageChange }: {
+  total: number;
+  page: number;
+  pageCount: number;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <nav aria-label="评估器分页" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 16, color: 'var(--foreground-muted)', fontSize: 12 }}>
+      <span>显示 {(page - 1) * CARDS_PER_PAGE + 1}–{Math.min(page * CARDS_PER_PAGE, total)} / 共 {total} 个</span>
+      <button type="button" className="ai-btn-s" disabled={page === 1} style={{ opacity: page === 1 ? 0.45 : 1, cursor: page === 1 ? 'not-allowed' : 'pointer' }} onClick={() => onPageChange(page - 1)}>上一页</button>
+      <span aria-live="polite">{page} / {pageCount} 页</span>
+      <button type="button" className="ai-btn-s" disabled={page === pageCount} style={{ opacity: page === pageCount ? 0.45 : 1, cursor: page === pageCount ? 'not-allowed' : 'pointer' }} onClick={() => onPageChange(page + 1)}>下一页</button>
+    </nav>
   );
 }
 
@@ -829,7 +902,7 @@ function EvaluatorListRow({
       </span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span className={`ai-badge ${card.status === 'ready' ? 'ai-badge-g' : card.status === 'draft' ? 'ai-badge-gr' : 'ai-badge-b'}`}>
-          {card.status === 'ready' ? '已就绪' : card.status === 'draft' ? '草稿' : '预置'}
+          {card.id.startsWith('benchmark:') ? '已接入' : card.status === 'ready' ? '已就绪' : card.status === 'draft' ? '草稿' : '预置'}
         </span>
         {card.source === 'custom' && onDeleteCustom ? (
           <button

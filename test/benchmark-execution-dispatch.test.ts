@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -8,6 +9,7 @@ import test from 'node:test'
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-benchmark-'))
 process.env.DATABASE_URL = `file:${path.join(testDir, 'benchmark.db')}`
 process.env.AGENT_INSIGHT_HOME = testDir
+fs.closeSync(fs.openSync(path.join(testDir, 'benchmark.db'), 'a'))
 
 const user = `benchmark-test-${Date.now()}-${process.pid}`
 const clientId = `benchmark-client-${Date.now()}-${process.pid}`
@@ -38,104 +40,9 @@ let resumeDispatches: typeof import('@/lib/benchmark/scheduler').resumeBenchmark
 let reapStaleRuns: typeof import('@/lib/benchmark/scheduler').reapStaleBenchmarkRuns
 
 test.before(async () => {
-  const sqliteModule = 'node:sqlite'
-  const { DatabaseSync } = await import(sqliteModule) as {
-    DatabaseSync: new (filename: string) => { exec(sql: string): void; close(): void }
-  }
-  const database = new DatabaseSync(path.join(testDir, 'benchmark.db'))
-  database.exec(`
-    PRAGMA foreign_keys=ON;
-    CREATE TABLE AgentEvalDataset (
-      id TEXT PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-      targetAgent TEXT NOT NULL DEFAULT '', targetSkill TEXT NOT NULL DEFAULT '', tagsJson TEXT NOT NULL DEFAULT '[]',
-      fieldsJson TEXT NOT NULL DEFAULT '[]', casesJson TEXT NOT NULL DEFAULT '[]', caseCount INTEGER NOT NULL DEFAULT 0,
-      referenceCasesJson TEXT NOT NULL DEFAULT '[]', projectionReady INTEGER NOT NULL DEFAULT 0,
-      datasetKind TEXT NOT NULL DEFAULT 'ideal_output', createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE Experiment (
-      id TEXT PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'single',
-      agentName TEXT NOT NULL DEFAULT '', evaluatorIdsJson TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'draft',
-      scope TEXT NOT NULL DEFAULT '', skillName TEXT NOT NULL DEFAULT '', skillVersion INTEGER, preset TEXT,
-      skillContextJson TEXT, configSnapshotJson TEXT, sourceExperimentId TEXT, optimizationRecordId TEXT,
-      watchMode INTEGER NOT NULL DEFAULT 0, watchEnabledAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE ExperimentCase (
-      id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, executionId TEXT, taskId TEXT, input TEXT NOT NULL DEFAULT '',
-      datasetInput TEXT, actualOutput TEXT NOT NULL DEFAULT '', referenceOutput TEXT, evaluatorContextJson TEXT,
-      groupId TEXT, faultInjectionType TEXT, caseValuesJson TEXT, fiTaskId TEXT, fiRunId TEXT,
-      traceGenerationCommandId TEXT, traceGenerationError TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (experimentId) REFERENCES Experiment(id) ON DELETE CASCADE
-    );
-    CREATE TABLE ReliabilityClient (
-      id TEXT PRIMARY KEY, clientId TEXT NOT NULL UNIQUE, user TEXT NOT NULL, name TEXT NOT NULL, hostname TEXT,
-      reportedIp TEXT, observedIp TEXT, os TEXT, arch TEXT, status TEXT NOT NULL DEFAULT 'offline',
-      serviceHealth TEXT NOT NULL DEFAULT 'unknown', supervisor TEXT, processStartedAt DATETIME,
-      restartCount INTEGER NOT NULL DEFAULT 0, lastSeenAt DATETIME NOT NULL, agentVersion TEXT,
-      capabilitiesJson TEXT NOT NULL DEFAULT '{}', capabilitiesRevision TEXT, unboundAt DATETIME,
-      unboundToClientId TEXT, machineId TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE ReliabilityClientCredential (
-      id TEXT PRIMARY KEY, clientId TEXT NOT NULL, credentialHash TEXT NOT NULL UNIQUE,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, lastUsedAt DATETIME, revokedAt DATETIME,
-      FOREIGN KEY (clientId) REFERENCES ReliabilityClient(clientId) ON DELETE CASCADE
-    );
-    CREATE TABLE BenchmarkDataset (
-      id TEXT PRIMARY KEY, agentEvalDatasetId TEXT NOT NULL UNIQUE, user TEXT NOT NULL, name TEXT NOT NULL,
-      adapterKey TEXT NOT NULL, contentHash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready',
-      caseCount INTEGER NOT NULL DEFAULT 0, sourceJson TEXT NOT NULL DEFAULT '{}',
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (agentEvalDatasetId) REFERENCES AgentEvalDataset(id) ON DELETE CASCADE,
-      UNIQUE (user, name)
-    );
-    CREATE TABLE BenchmarkDatasetCase (
-      id TEXT PRIMARY KEY, datasetId TEXT NOT NULL, externalCaseId TEXT NOT NULL, rawCaseJson TEXT NOT NULL,
-      publicPayloadJson TEXT NOT NULL, privatePayloadJson TEXT NOT NULL, sourceFingerprint TEXT NOT NULL,
-      publicFingerprint TEXT NOT NULL, privateFingerprint TEXT NOT NULL, ordinal INTEGER NOT NULL,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (datasetId) REFERENCES BenchmarkDataset(id) ON DELETE CASCADE,
-      UNIQUE (datasetId, externalCaseId), UNIQUE (datasetId, ordinal)
-    );
-    CREATE TABLE BenchmarkExperimentBinding (
-      experimentId TEXT PRIMARY KEY, datasetId TEXT NOT NULL, datasetContentHash TEXT NOT NULL, adapterKey TEXT NOT NULL,
-      selectionJson TEXT NOT NULL, runConfigJson TEXT NOT NULL, schedulerStatus TEXT NOT NULL DEFAULT 'idle',
-      expectedCaseCount INTEGER NOT NULL, callbackOrigin TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (experimentId) REFERENCES Experiment(id) ON DELETE CASCADE,
-      FOREIGN KEY (datasetId) REFERENCES BenchmarkDataset(id)
-    );
-    CREATE TABLE BenchmarkCaseRun (
-      id TEXT PRIMARY KEY, experimentId TEXT NOT NULL, experimentCaseId TEXT NOT NULL, datasetCaseId TEXT,
-      ordinal INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', adapterKey TEXT NOT NULL, clientId TEXT NOT NULL,
-      publicPayloadJson TEXT, privatePayloadJson TEXT, taskEnvelopeJson TEXT,
-      taskDigest TEXT, progressJson TEXT, runFactsJson TEXT, cleanupJson TEXT, completionDigest TEXT,
-      failureCode TEXT, failureMessage TEXT, retryOfRunId TEXT, lastProgressAt DATETIME,
-      startedAt DATETIME, finishedAt DATETIME, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (experimentId) REFERENCES Experiment(id) ON DELETE CASCADE,
-      FOREIGN KEY (experimentCaseId) REFERENCES ExperimentCase(id) ON DELETE CASCADE,
-      FOREIGN KEY (datasetCaseId) REFERENCES BenchmarkDatasetCase(id) ON DELETE SET NULL
-    );
-    CREATE TABLE BenchmarkArtifact (
-      id TEXT PRIMARY KEY, runId TEXT NOT NULL, name TEXT NOT NULL, mediaType TEXT NOT NULL,
-      sha256 TEXT NOT NULL, sizeBytes INTEGER NOT NULL, storagePath TEXT NOT NULL,
-      createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (runId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE,
-      UNIQUE (runId, name)
-    );
-    CREATE TABLE BenchmarkDispatchOutbox (
-      id TEXT PRIMARY KEY, runId TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'agent_execution',
-      commandId TEXT UNIQUE, requestJson TEXT NOT NULL, requestDigest TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending', attemptCount INTEGER NOT NULL DEFAULT 0,
-      nextAttemptAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, leasedUntil DATETIME,
-      responseJson TEXT, errorCode TEXT, errorMessage TEXT, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (runId) REFERENCES BenchmarkCaseRun(id) ON DELETE CASCADE
-    );
-  `)
-  database.close()
+  const schema = spawnSync(process.execPath, [path.resolve('node_modules/prisma/build/index.js'), 'db', 'push',
+    '--schema', path.resolve('prisma/schema.prisma'), '--skip-generate'], { env: process.env, encoding: 'utf8', timeout: 30000 })
+  assert.equal(schema.status, 0, schema.stderr)
   const [
     storage,
     datasetService,
@@ -175,7 +82,7 @@ test.after(async () => {
 async function waitForAcceptedRun(experimentId: string) {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
-    const run = await prisma.benchmarkCaseRun.findFirst({ where: { experimentId } })
+    const run = await prisma.benchmarkCaseRun.findFirst({ where: { experimentId, status: 'running_agent' } })
     if (run?.status === 'running_agent') return run
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
@@ -413,6 +320,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     agent: 'review',
     model: 'configured-default',
     timeoutSeconds: 60,
+    executionConcurrency: 1,
   })
   assert.equal(dispatched.task.task.benchmarkPayload.instanceId, 'example__project-1')
   const outbox = await prisma.benchmarkDispatchOutbox.findUnique({ where: { runId: acceptedRun.id } })
@@ -555,6 +463,8 @@ test('watchdog settles a stale running Agent task once', async () => {
       status: 'accepted',
     },
   })
+
+  await prisma.experimentEvalResult.create({ data: { experimentId, caseId, evaluatorId: 'benchmark:swe-bench', status: 'pending' } })
 
   assert.equal(await reapStaleRuns({ now, graceMs: 0, experimentId }), 0)
   await prisma.benchmarkCaseRun.update({
@@ -741,4 +651,39 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
   assert.equal(rejectedOutbox?.commandId, 'cmd_rejected')
   assert.equal(rejectedOutbox?.status, 'failed')
   setCommandDispatcher()
+})
+
+test('parallel Case claims use default budgets when platform limits are blank', async (t) => {
+  const previousGlobalBudget = process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS
+  const previousUserBudget = process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER
+  process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS = ''
+  process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER = ''
+  t.after(() => {
+    if (previousGlobalBudget === undefined) delete process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS
+    else process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS = previousGlobalBudget
+    if (previousUserBudget === undefined) delete process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER
+    else process.env.AGENT_INSIGHT_BENCHMARK_MAX_PENDING_EVALUATIONS_PER_USER = previousUserBudget
+  })
+  const { prepareNextBenchmarkCaseRun } = await import('@/lib/benchmark/orchestrator')
+  const fixture = JSON.parse(fs.readFileSync(path.resolve('benchmarks/swe-bench/fixtures/smoke-case.json'), 'utf8'))
+  const dataset = await importBenchmarkDataset({ user, name: `parallel-${Date.now()}`, adapterKey: 'swe-bench', source: { kind: 'test' },
+    cases: [1, 2, 3].map((i) => ({ ...fixture, instance_id: `example__parallel-${i}` })) })
+  const clientId = `parallel-client-${Date.now()}`
+  const capabilities = { platforms: [{ id: 'codex', agents: ['review'], runExperimentCase: { version: 2, returnsTraceId: true }, actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'] }],
+    components: { 'git-workspace/v1': { ready: true }, 'agent-runtime/codex/v1': { ready: true }, 'git-patch/v1': { ready: true }, 'concurrent-execution/v1': { ready: true } } }
+  await prisma.reliabilityClient.create({ data: { clientId, user, name: 'parallel', status: 'online', serviceHealth: 'healthy', capabilitiesJson: JSON.stringify(capabilities), lastSeenAt: new Date() } })
+  const response = await createExperiment(new Request('http://insight.test/api/experiments', { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ user, scope: 'benchmark', name: 'parallel claims',
+      benchmark: { datasetId: dataset.id, executionTarget: { clientId }, caseSelection: { mode: 'all' },
+        runConfig: { platform: 'codex', agent: 'review', executionConcurrency: 2 } } }) }))
+  assert.equal(response.status, 201)
+  const experiment = await response.json()
+  await prisma.experiment.update({ where: { id: experiment.id }, data: { status: 'running' } })
+  const claim = () => prepareNextBenchmarkCaseRun({ experimentId: experiment.id, callbackOrigin: 'http://platform.test' })
+  const claimed = (await Promise.all([claim(), claim(), claim()])).filter((row) => row !== null)
+  assert.equal(claimed.length, 2)
+  assert.equal(new Set(claimed.map((row) => row.runId)).size, 2)
+  await prisma.benchmarkCaseRun.update({ where: { id: claimed[0].runId }, data: { status: 'submitted' } })
+  assert.ok(await claim())
+  assert.equal(await claim(), null)
 })

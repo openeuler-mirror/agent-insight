@@ -1,3 +1,4 @@
+import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 // 评测「实验」API —— 列表 + 创建（单组 type='single' + LLM 对比 type='llm'）。
 // 对比类型：createComparisonExperiment + autoPairGroups（跳过 case 校验，case 由配对产生）。
 import { NextResponse } from 'next/server';
@@ -89,6 +90,7 @@ export async function GET(req: Request) {
     const skillName = String(q.get('skillName') || '').trim();
     const userFilter = username ? { user: username } : {};
     const listFilter = {
+      deletedAt: null,
       ...userFilter,
       ...(skillName ? { skillName } : {}),
       scope: { notIn: ['skill-workbench', 'skill-case-analysis', 'grayscale-ab'] },
@@ -105,14 +107,14 @@ export async function GET(req: Request) {
         orderBy: { createdAt: 'desc' },
         skip: offset,
         take: limit,
-        include: { _count: { select: { cases: true } } },
+        include: { _count: { select: { cases: { where: { deletedAt: null } } } } },
       }),
     ]);
     const rows = rawRows as Array<Experiment & { _count: { cases: number } }>;
     const experimentIds = rows.map((row) => row.id);
     const scoreRows = (experimentIds.length
       ? await prisma.experimentEvalResult.findMany({
-          where: { experimentId: { in: experimentIds } },
+          where: { experimentId: { in: experimentIds }, case: { deletedAt: null } },
           select: {
             experimentId: true,
             caseId: true,
@@ -240,7 +242,7 @@ export async function POST(req: Request) {
             agentTimeoutSeconds: body.agentTimeoutSeconds == null
               ? undefined
               : Number(body.agentTimeoutSeconds),
-            maxParallelAgentCases: 1,
+            executionConcurrency: body.executionConcurrency,
           },
         });
         recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
@@ -296,6 +298,7 @@ export async function POST(req: Request) {
             agentTimeoutSeconds: runConfig.agentTimeoutSeconds == null
               ? undefined
               : Number(runConfig.agentTimeoutSeconds),
+            executionConcurrency: runConfig.executionConcurrency as number | undefined,
             maxParallelAgentCases: runConfig.maxParallelAgentCases == null
               ? undefined
               : Number(runConfig.maxParallelAgentCases),
@@ -327,9 +330,16 @@ export async function POST(req: Request) {
     const skillContext = body.skillContext && typeof body.skillContext === 'object' && !Array.isArray(body.skillContext)
       ? body.skillContext
       : null;
-    const configSnapshot = body.configSnapshot && typeof body.configSnapshot === 'object' && !Array.isArray(body.configSnapshot)
+    let configSnapshot = body.configSnapshot && typeof body.configSnapshot === 'object' && !Array.isArray(body.configSnapshot)
       ? body.configSnapshot
       : null;
+
+    if (!scope && body.traceSource === 'generate' && configSnapshot?.fiOrchestrate !== true) {
+      let executionConcurrency: number;
+      try { executionConcurrency = parseExecutionConcurrency(body.executionConcurrency ?? configSnapshot?.executionConcurrency); }
+      catch { return NextResponse.json({ error: '执行并发必须为正整数' }, { status: 400 }); }
+      configSnapshot = { ...configSnapshot, executionConcurrency };
+    }
 
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });

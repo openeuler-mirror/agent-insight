@@ -49,6 +49,12 @@ test('Trace SQL matches Prisma filters and established lifecycle, pricing, and s
         { id: 'p-null-input', query: 'ALPHA', inputTokens: null, model: 'gpt-4o-mini-version' },
         { id: 'q-shared-a', query: 'shared', taskId: 'shared-task', endTime: 100, agentName: 'same' },
         { id: 'r-shared-b', query: 'shared', taskId: 'shared-task', agentName: 'same' },
+        { id: 's-opencode-failed', query: 'OpenCode error', framework: 'opencode', failures: '[{"failure_type":"opencode-session-error"}]', endTime: 1 },
+        { id: 't-opencode-running', query: 'OpenCode active', framework: 'opencode', failures: '[{"failure_type":"opencode-session-error"}]' },
+        { id: 'u-opencode-timeout', query: 'OpenCode timeout', framework: 'opencode', failures: '[{"failure_type":"opencode-session-error"}]', endTime: 0, lastReceived: snapshot - 600_000 },
+        { id: 'v-opencode-other-framework', query: 'Other framework', framework: 'actrail', failures: '[{"failure_type":"opencode-session-error"}]', endTime: 1 },
+        { id: 'w-opencode-description-only', query: 'Description only', framework: 'opencode', failures: '[{"description":"opencode-session-error"}]', endTime: 1 },
+        { id: 'x-opencode-invalid-json', query: 'Invalid error JSON', framework: 'opencode', failures: '[{"failure_type":"opencode-session-error"}', endTime: 1 },
     ];
     const rows = definitions.map((definition, index) => ({
         id: definition.id,
@@ -179,6 +185,18 @@ test('Trace SQL matches Prisma filters and established lifecycle, pricing, and s
     const completed = new Map(sessions.map(session => [session.taskId, session.endTime]));
     const abnormal = new Set([taskAnomaly.id, executionAnomaly.id]);
     const statusRanks = { running: 0, timed_out: 1, failed: 2, success: 3 };
+    await context.test('OpenCode error filtering, status ordering and aggregate match completed-session semantics', async () => {
+        const ids = definitions.slice(-6).map(row => row.id);
+        const where = { user: owner, id: { in: ids } };
+        const options = { anomaly: 'all' as const, sortKey: 'status' as const, sortDir: 'asc' as const, page: 1, pageSize: 20, lifecycleNow: snapshot };
+        const failed = await selectComputedRecordPage(where, { ...options, status: 'failed' });
+        assert.deepEqual(failed.ids, ['s-opencode-failed']);
+        assert.equal(failed.total, 1);
+        assert.equal(failed.stats.failedCount, 1);
+        const all = await selectComputedRecordPage(where, { ...options, status: 'all' });
+        assert.deepEqual(all.ids, ['t-opencode-running', 'u-opencode-timeout', 's-opencode-failed', 'v-opencode-other-framework', 'x-opencode-invalid-json', 'w-opencode-description-only']);
+        assert.equal((await aggregateExecutionList(where)).failedCount, 1);
+    });
     function referenceCost(row: typeof rows[number]) {
         const pricing = row.model ? getModelPricing(row.model)?.pricing : undefined;
         return pricing && row.inputTokens != null && row.outputTokens != null

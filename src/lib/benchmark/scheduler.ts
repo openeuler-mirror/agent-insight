@@ -13,6 +13,7 @@ import { defaultEvaluatorRuntimeConfigProvider } from './evaluator-runtime-confi
 import { prepareBenchmarkEvaluation } from './evaluation-preparation-service'
 import { dispatchBenchmarkEvaluation } from './evaluation-scheduler'
 import { prepareNextBenchmarkCaseRun } from './orchestrator'
+import { retireImagePreparationWindows, refreshBenchmarkImagePreparation } from './image-preparation'
 
 type BenchmarkCommandOutcome = {
   commandId: string
@@ -137,6 +138,16 @@ export function startBenchmarkRunWatchdog(
         if (count > 0) console.warn(`[benchmark/watchdog] 回收超时执行任务: ${count} 条`)
         return count
       })
+      .then(async (count) => {
+        await refreshBenchmarkImagePreparation()
+        await resumeBenchmarkDispatchesAtStartup()
+
+        await retireImagePreparationWindows(async (experimentId) => {
+          const experiment = await prisma.experiment.findUnique({ where: { id: experimentId }, select: { status: true } })
+          return experiment?.status === 'running'
+        })
+        return count
+      })
       .catch((error) => {
         console.error('[benchmark/watchdog] sweep failed', error)
         return 0
@@ -245,8 +256,8 @@ async function markDispatchFailed(
         errorMessage: input.message,
       },
     }),
-    prisma.benchmarkCaseRun.update({
-      where: { id: runId },
+    prisma.benchmarkCaseRun.updateMany({
+      where: { id: runId, status: { not: 'cancelled' } },
       data: {
         status: 'dispatch_failed',
         failureCode: input.code,
@@ -262,6 +273,10 @@ async function markDispatchFailed(
 }
 
 export async function dispatchBenchmarkRun(runId: string): Promise<void> {
+  const targetRun = await prisma.benchmarkCaseRun.findUnique({ where: { id: runId } });
+  if (!targetRun || targetRun.status === 'cancelled') return;
+  const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
+  await assertExperimentActive(targetRun.experimentId, targetRun.experimentCaseId);
   const leasedUntil = new Date(Date.now() + 30_000)
   const claimed = await prisma.benchmarkDispatchOutbox.updateMany({
     where: {
@@ -315,8 +330,8 @@ export async function dispatchBenchmarkRun(runId: string): Promise<void> {
             nextAttemptAt: new Date(Date.now() + 1_000),
           },
         }),
-        prisma.benchmarkCaseRun.update({
-          where: { id: runId },
+        prisma.benchmarkCaseRun.updateMany({
+          where: { id: runId, status: { not: 'cancelled' } },
           data: {
             status: 'dispatching',
             failureCode: outcome.code || 'CLIENT_BUSY',
@@ -386,8 +401,8 @@ export async function dispatchBenchmarkRun(runId: string): Promise<void> {
           nextAttemptAt: new Date(),
         },
       })
-      await prisma.benchmarkCaseRun.update({
-        where: { id: runId },
+      await prisma.benchmarkCaseRun.updateMany({
+        where: { id: runId, status: { not: 'cancelled' } },
         data: { status: 'dispatch_unknown', failureCode: code, failureMessage: message },
       })
       await dispatchBenchmarkRun(runId)
@@ -411,6 +426,8 @@ export async function startBenchmarkExperiment(input: {
   runId: string | null
   completion?: Promise<void>
 } | null> {
+  const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
+  await assertExperimentActive(input.experimentId);
   const experiment = await prisma.experiment.findFirst({
     where: { id: input.experimentId, user: input.user, scope: 'benchmark' },
     include: { benchmarkBinding: true },
@@ -444,64 +461,35 @@ export async function startBenchmarkExperiment(input: {
     data: { status: 'pending', failureCode: 'PREPARATION_LEASE_EXPIRED' },
   })
 
-  const active = await prisma.benchmarkCaseRun.findFirst({
-    where: {
-      experimentId: experiment.id,
-      status: {
-        in: [
-          'dispatching',
-          'dispatch_unknown',
-          'running_agent',
-          'collecting',
-          'uploading',
-          'cleaning',
-          'submitted',
-        ],
-      },
-    },
+  const active = await prisma.benchmarkCaseRun.findMany({
+    where: { experimentId: experiment.id, status: { in: ['dispatching', 'dispatch_unknown', 'submitted'] } },
     select: { id: true, status: true },
   })
-  if (active) {
-    const outbox = await prisma.benchmarkDispatchOutbox.findUnique({ where: { runId: active.id } })
-    const shouldResume = outbox && ['pending', 'unknown'].includes(outbox.status)
-    const completion = active.status === 'submitted'
-      ? resumeSubmittedBenchmarkEvaluation(active.id)
-      : shouldResume
-        ? dispatchBenchmarkRun(active.id)
-        : undefined
-    return {
-      status: 'running',
-      alreadyRunning: true,
-      runId: active.id,
-      ...(completion ? { completion } : {}),
+  const completions: Promise<void>[] = active.map((run: { id: string; status: string }) => run.status === 'submitted'
+    ? resumeSubmittedBenchmarkEvaluation(run.id) : dispatchBenchmarkRun(run.id))
+  let firstRunId = active[0]?.id || null
+  for (;;) {
+    let prepared
+    try {
+      prepared = await prepareNextBenchmarkCaseRun({ experimentId: experiment.id, callbackOrigin: input.executorCallbackOrigin })
+    } catch (error) {
+      console.error('[benchmark/scheduler] preparation failed', error)
+      const failed = await prisma.benchmarkCaseRun.findFirst({
+        where: { experimentId: experiment.id, status: 'blocked' }, orderBy: { updatedAt: 'desc' },
+      })
+      if (failed) {
+        const { failBenchmarkCaseResults } = await import('./experiment-lifecycle')
+        await failBenchmarkCaseResults(failed.id, failed.failureMessage || 'Case 准备失败')
+      }
+      break
     }
+    if (!prepared) break
+    firstRunId ||= prepared.runId
+    completions.push(dispatchBenchmarkRun(prepared.runId))
   }
+  return { status: 'running', alreadyRunning, runId: firstRunId,
+    completion: Promise.all(completions).then(() => undefined) }
 
-  let prepared: { runId: string } | null
-  try {
-    prepared = await prepareNextBenchmarkCaseRun({
-      experimentId: experiment.id,
-      callbackOrigin: input.executorCallbackOrigin,
-    })
-  } catch (error) {
-    await prisma.$transaction([
-      prisma.experiment.update({
-        where: { id: experiment.id },
-        data: { status: 'failed' },
-      }),
-      prisma.benchmarkExperimentBinding.update({
-        where: { experimentId: experiment.id },
-        data: { schedulerStatus: 'failed' },
-      }),
-    ])
-    throw error
-  }
-  return {
-    status: 'running',
-    alreadyRunning,
-    runId: prepared?.runId || null,
-    ...(prepared ? { completion: dispatchBenchmarkRun(prepared.runId) } : {}),
-  }
 }
 
 export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<number> {
@@ -527,45 +515,12 @@ export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<nu
   let resumed = 0
   const executorCallbackBaseUrl = defaultEvaluatorRuntimeConfigProvider.snapshot().executorCallbackBaseUrl
   for (const binding of bindings) {
-    const accepted = await prisma.benchmarkCaseRun.findFirst({
-      where: {
-        experimentId: binding.experimentId,
-        status: { in: ['running_agent', 'collecting', 'uploading', 'cleaning', 'submitted'] },
-      },
-      select: { id: true, status: true },
-    })
-    if (accepted?.status === 'submitted') {
-      resumed += 1
-      void resumeSubmittedBenchmarkEvaluation(accepted.id).catch((error) => {
-        console.error('[benchmark/scheduler] startup evaluation resume failed', error)
-      })
-      continue
-    }
-    if (accepted) continue
-
-    const dueOutbox = await prisma.benchmarkDispatchOutbox.findFirst({
-      where: {
-        run: { experimentId: binding.experimentId },
-        status: { in: ['pending', 'unknown'] },
-        attemptCount: { lt: 2 },
-        nextAttemptAt: { lte: now },
-      },
-      orderBy: { createdAt: 'asc' },
-      select: { runId: true },
-    })
-    let runId = dueOutbox?.runId || null
-    if (!runId && binding.callbackOrigin) {
-      const prepared = await prepareNextBenchmarkCaseRun({
-        experimentId: binding.experimentId,
-        callbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
-      }).catch(() => null)
-      runId = prepared?.runId || null
-    }
-    if (!runId) continue
-    resumed += 1
-    void dispatchBenchmarkRun(runId).catch((error) => {
-      console.error('[benchmark/scheduler] startup dispatch failed', error)
-    })
+    const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
+    if (!experiment || !binding.callbackOrigin) continue
+    const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
+      publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin })
+    if (result?.runId) resumed++
+    void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
   }
   return resumed
 }

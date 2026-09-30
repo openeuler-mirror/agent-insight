@@ -39,7 +39,8 @@
         "platform": { "type": "string", "minLength": 1 },
         "agent": { "type": "string", "minLength": 1 },
         "model": { "type": "string", "minLength": 1 },
-        "timeoutSeconds": { "type": "integer", "minimum": 1 }
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "executionConcurrency": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": false
     }

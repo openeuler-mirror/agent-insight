@@ -1,11 +1,12 @@
 import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
+import { createIsolatedDatabase } from './helpers/isolated-database';
+const database = createIsolatedDatabase();
 
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
+const {
   assertTraceGenerationTarget,
   canReconcileGeneratedTraceAttempt,
   collectTraceGenerationCases,
@@ -14,9 +15,10 @@ import {
   loadTraceGenerationRetryRequest,
   parseTraceIdFromCommandResult,
   reconcileGeneratedTraceCase,
-} from '@/lib/engine/experiment/trace-generation';
-import { GET as getExperiment } from '@/app/api/experiments/[id]/route';
-import { prisma } from '@/lib/storage/prisma';
+} = require('@/lib/engine/experiment/trace-generation') as typeof import('@/lib/engine/experiment/trace-generation');
+const { GET: getExperiment } = require('@/app/api/experiments/[id]/route') as typeof import('@/app/api/experiments/[id]/route');
+const { prisma } = require('@/lib/storage/prisma') as typeof import('@/lib/storage/prisma');
+test.after(async () => { await prisma.$disconnect(); database.dispose(); });
 
 const TEST_USER = `generic-trace-${Date.now()}`;
 const CLIENT_ID = `generic-client-${Date.now()}`;
@@ -379,7 +381,6 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(client, /args\.push\('--command', slashCommand\.command\)/);
   assert.match(client, /return \{ args, stdin: input\.input \}/);
   assert.match(client, /traceId/);
-  assert.match(client, /args\.push\('-p', input\.input, '--agent', input\.agent\)/);
   assert.match(generation, /taskId: input\.traceId/);
   assert.match(generation, /parseTraceIdFromCommandResult\(command\?\.resultJson\)/);
   assert.match(generation, /select: \{ interactions: true, endTime: true \}/);
@@ -388,12 +389,46 @@ test('experiment wizard and run route split generic generation from reliability 
   assert.match(retryRoute, /generateExperimentTraces\(genericRequest, \{ forceNewTrace: true \}\)/);
   assert.match(retryRoute, /prepareGeneratedTraceRetry\(id, caseId\)/);
   assert.ok(
-    retryRoute.indexOf('if (genericRequest)') < retryRoute.indexOf('if (row.executionId)'),
+    retryRoute.indexOf('if (genericRequest)') < retryRoute.indexOf('const failedResults'),
     'generated Trace retry must take precedence over evaluation retry even after an Execution is bound',
   );
   assert.ok(
     retryRoute.indexOf('if (row.fiTaskId && row.fiRunId && row.faultInjectionType)')
-      < retryRoute.indexOf('if (row.executionId)'),
+      < retryRoute.indexOf('const failedResults'),
     'FI-generated Trace retry must take precedence over evaluation retry',
   );
+  assert.doesNotMatch(retryRoute, /if \(row\.executionId\)/);
+  assert.match(retryRoute, /if \(failedResults\.length\)/);
+});
+
+test('ordinary trace generation admits two attempts, refills one slot and keeps Case commands separate', async (t) => {
+  const { generateExperimentTraces } = require('@/lib/engine/experiment/trace-generation') as typeof import('@/lib/engine/experiment/trace-generation');
+  const user = `${TEST_USER}-parallel`;
+  await prisma.reliabilityClient.create({ data: { clientId: 'parallel-client', user, name: 'parallel', lastSeenAt: new Date() } });
+  t.after(async () => { await prisma.reliabilityClient.deleteMany({ where: { clientId: 'parallel-client' } }); });
+  const experiment = await prisma.experiment.create({ data: { user, name: 'parallel', status: 'running', configSnapshotJson: '{"executionConcurrency":2}',
+    cases: { create: [{ input: 'one' }, { input: 'two' }, { input: 'three' }] } }, include: { cases: true } });
+  t.after(async () => { await prisma.experiment.deleteMany({ where: { id: experiment.id } }); await prisma.reliabilityCommand.deleteMany({ where: { user } }); });
+  const controller = new AbortController();
+  const work = generateExperimentTraces({ user, experimentId: experiment.id, workerId: 'parallel-client', platform: 'opencode', agent: 'build',
+    executionConcurrency: 2, signal: controller.signal, cases: experiment.cases.map((row: { id: string; input: string }) => ({ caseId: row.id, input: row.input })) });
+  const commands = () => prisma.reliabilityCommand.findMany({ where: { user, action: 'RUN_EXPERIMENT_CASE' }, orderBy: { createdAt: 'asc' } });
+  const waitCount = async (count: number) => {
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) { const rows = await commands(); if (rows.length === count) return rows; await new Promise((r) => setTimeout(r, 20)); }
+    throw new Error(`expected ${count} commands`);
+  };
+  try {
+    const first = await waitCount(2);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal((await commands()).length, 2);
+    await prisma.reliabilityCommand.update({ where: { commandId: first[0].commandId }, data: { status: 'FAILED', errorCode: 'MODEL_ERROR' } });
+    const all = await waitCount(3);
+    assert.equal(new Set(all.map((row: { payloadJson: string }) => JSON.parse(row.payloadJson).correlation.caseRunId)).size, 3);
+    assert.equal(await prisma.experimentTraceAttempt.count({ where: { experimentId: experiment.id, status: { in: ['dispatching', 'running', 'waiting_trace'] } } }), 2);
+    await prisma.reliabilityCommand.updateMany({ where: { user }, data: { status: 'FAILED', errorCode: 'MODEL_ERROR' } });
+    const result = await work;
+    assert.equal(result.failedCaseIds.length, 3);
+    assert.equal(await prisma.experimentTraceAttempt.count({ where: { experimentId: experiment.id } }), 3);
+  } finally { controller.abort(); await work.catch(() => undefined); }
 });

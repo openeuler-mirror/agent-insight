@@ -172,7 +172,9 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
 
-当 Goal Plus 语义关系已经把一个唯一主 Trace 与当前 Search run 的 worker Trace 确定关联后，**仅主 Agent** 列表隐藏已投影的 worker，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。Pi passive importer 存在多个历史主会话时，以 Goal 当前 active native Session 对应的 canonical Trace 为准；Pi 将同一原生 Session 的任务保存为 `<sessionId>__taskN` 时，明确由 `/goal-plus` 启动且只对应一个 Goal 的主任务也会显示同一子树。candidate ID 和 run ID 可用于核对成员，同一 Session 的续跑不会重复建节点。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。历史 run、主 Trace 不唯一、worker 正文尚未到达、超过投影上限、普通 Pi 任务或端点关联存在歧义时，平台保留独立 Session 入口，不做猜测性合并。
+当前 Goal Plus 采集器使用 main/worker 绑定和关系事件。默认 **仅主 Agent** 列表在收到明确的 worker 声明及绑定后就将它作为子 Agent 隐藏，即使主 Trace 或 worker 正文还未到齐；此时可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围查看已有记录。主端与某个 worker 的正文就绪、身份唯一后，该 worker 即可进入主 Trace，无须等待其他 worker 或主任务结束。列表隐藏与详情合并是两件事，等待中的 worker 不会生成虚假正文。reported 合并优先，同一 worker 不会与历史语义投影重复显示。
+
+对于历史 Goal Plus 语义数据，当语义关系已经把一个唯一主 Trace 与当前 Search run 的 worker Trace 确定关联后，**仅主 Agent** 列表隐藏已投影的 worker，已关联 worker 可在 **仅子 Agent** 或 **主 Agent + 子 Agent** 范围中单独检索；打开主 Trace 时，这些独立 Session 会在现有链路树中展示为 **TASK → 子 Agent** 子树，并标注 **Goal Plus 编排**。Pi passive importer 存在多个历史主会话时，以 Goal 当前 active native Session 对应的 canonical Trace 为准；Pi 将同一原生 Session 的任务保存为 `<sessionId>__taskN` 时，明确由 `/goal-plus` 启动且只对应一个 Goal 的主任务也会显示同一子树。candidate ID 和 run ID 可用于核对成员，同一 Session 的续跑不会重复建节点。这是查询时生成的只读跨 Session 投影：主 Trace、worker Trace 及其原始采集内容仍分别保存，平台不会改写原生父子关系，也不会把编排关系伪装成已确认的具体启动调用位置。点击子 Agent 的 **Trace** 可继续打开该 worker 的独立详情。历史 run、主 Trace 不唯一、worker 正文尚未到达、超过投影上限、普通 Pi 任务或端点关联存在歧义时，平台保留独立 Session 入口，不做猜测性合并。
 
 任务完成度、轨迹质量等预置评估器生成的 `direct-llm` Trace，会以本次评估模型请求发出前和响应返回后的时间作为起止点。根 Agent、LLM Span、Session 和列表耗时使用同一次请求的时间窗口，因此新产生的评估 Trace 不会再因写库时间代替模型调用时间而显示为 `0ms`。修复前已经保存且缺少原始起止时间的历史 Trace 无法可靠反推真实耗时，不会自动补算。
 
@@ -448,182 +450,89 @@ dsh plugin --profile web remove agent-insight-deepseek-harness-observability
 - Bundle 只迁移 Trace 展示所需的 Execution、Session 与 interactions；不会迁移用户标签、评测结果、智能诊断报告或基础设施关联，也不会自动触发 LLM 评测。
 
 
-## 自定义 Agent 调用关系（后端接口）
+## 自定义 Agent Trace 合并与协作图
 
-当 Agent 通过自定义脚本或工具调用另一个 Agent，原框架没有记录父子关系时，可独立上报协作关系。现有 Trace 上传方式不变；默认“主 Agent”列表会合并为一条 Trace，详情复用现有树显示各 Agent 与工具；原始数据不改写，不新增关系图界面。
+本功能按增量关系事件建立独立协作图。用户只需调用一个新上报接口：`POST /api/ingest/collaborations/events`。**普通自定义协作不用先登记参与者，不用调用 sessions 绑定接口，没有原 Trace 也能显示节点和关系。** 成员 Trace 唯一关联且完整可读后，链路追踪列表只保留一个合并入口；详情展示全部成员，原始数据库记录保持不变。已有绑定仍然有效，Goal Plus 采集器的专用 main/worker 绑定和实时合并规则继续保留。
 
-### 1. 绑定原 Trace 会话
+### 1. 最小请求：没有 Trace 也可使用
 
-对每个参与方发送 `POST /api/ingest/collaborations/sessions`，请求头为 `Content-Type: application/json` 和 `x-witty-api-key`：
-
-```json
-{
-  "collaborationId": "demo-task-001",
-  "sessionId": "agent-a",
-  "traceSessionId": "original-session-a",
-  "eventClock": "unknown"
-}
-```
-
-`traceSessionId` 是现有 Trace 的会话编号（存储中的 `Session.taskId`，不是 `Session.id` 或 Agent 显示名）。同样绑定 agent-b 到其原会话。可以先绑定后上传 Trace；未绑定也允许保存关系，但不会猜测对应哪条 Trace。同绑定重试返回 200，改绑或修改时钟声明返回 409。编号在同一授权用户内隔离。
-
-`eventClock` 默认 `unknown`。仅当发起方确实使用同一执行端时钟记录事件与调用时设为 `source_session`；跨机器已经同步且时钟可比较时设为 `synchronized`。不要为得到配对结果而虚构声明。未知时钟仍可保存关系和查找候选，只不进行时间排序配对。绑定不提供事件纠错能力。
-
-### 2. 每次联系上报一条事件
-
-发送 `POST /api/ingest/collaborations/events`，使用相同请求头：
+请求头：`Content-Type: application/json`、`x-witty-api-key: <你的采集凭据>`。
 
 ```json
 {
   "collaborationId": "demo-task-001",
   "eventId": "event-001",
-  "fromSessionId": "agent-a",
-  "toSessionId": "agent-b",
-  "description": "A 调用 B 做调研",
-  "observedAt": "2026-09-11T10:00:00.125+08:00",
-  "fromLocator": { "recordType": "shell", "commandContains": "agent-run --task research" }
+  "fromSessionId": "session-a",
+  "toSessionId": "session-b",
+  "description": "A 启动 B 做调研"
 }
 ```
 
-`fromLocator` 和 `observedAt` 可省略。工具名定位使用 `{"recordType":"tool","name":"spawn_agent"}`。工具名区分大小写；Shell 是命令字面包含，只读已采集内容，不执行命令。每次新联系使用新 eventId，网络失败或响应丢失必须使用原 ID 和原正文重试。同一 ID 改正文返回 409；内容字段 `content` 可选，最多 4000 字符。
+第一次保存返回 201；同 eventId、同正文重试返回 200/duplicate。同 eventId 修改正文返回 409，不能覆盖。每次新联系使用新的 eventId，网络失败或响应丢失时保存并重发原编号和原正文。多个执行端共享同一 collaborationId，但必须属于同一授权账号。
 
-首次持久保存返回 201；重试返回 200，`receivedAt` 保持首次值。正文最大 64 KiB；不接受 null、未知字段或重复 JSON 键。所有接口要求有效 API Key，单实例每用户每分钟最多 120 次请求，429 可按 Retry-After 原样重试。
+首次出现的 from/to 自动成为图中节点。A→B、B→C、C→A 都可以保留；同一对会话多次联系不会合成一条事件。description 只是用户说明，“返回结果”“发送消息”不会被当作新建子 Agent 的依据。
 
-### 3. 查询调用链和步骤位置
-
-`GET /api/observe/collaborations/demo-task-001?offset=0&limit=100`，携带 `x-witty-api-key`。返回 `nodes`、`events`、`total`、`nextOffset`。节点范围为当前页事件端点，跨页按 sessionId 合并，边按 eventId 合并；刷新后替换旧定位结果。
-
-- `confirmed`：原始调用中有明确目标会话证据，包含位置及可用的原调用编号。
-- `candidate`：工具名或命令唯一匹配，仅候选，不足以确认实际发起步骤。
-- `time_ordered`：同组重复调用与事件按时间配对，是可能变化的推定。
-- `ambiguous`：数量、时间、重复联系或已有证据有歧义，保留会话关系。
-- `not_provided` / `waiting_trace` / `not_found` / `pending`：分别表示未提供定位、等待 Trace、未找到、暂不能查询。
-
-原生 OpenCode tool part 的 `state.time.start` 可作为调用开始时间；其他上报记录只有显式 `tool_calls[].timing.source="execution"` 且 `started_at` 为执行端 Unix 毫秒时才参与时间排序。不会使用整个交互的时间代替工具时间。定位返回的 `position` 只针对当前 Trace 数据版本，不用于下次事件上报。
-
-每页 1–100 条事件；单次定位最多处理 2000 条协作事件、200 个参与 Session、每条 Trace 8 MiB/20000 交互/20000 调用。单次查询累计正文最多 32 MiB、调用最多 100000 条。超出容量仍可分页获取关系，定位返回 pending，不承诺无限规模。任务结束状态固定 unknown。
-
-### 4. 可直接参考的请求流程
-
-假设 A、B 已按原方式采集 Trace，平台会话编号分别是 `original-session-a` 和 `original-session-b`。框架原会话号经过接入转换时，应使用平台 Trace 记录的 `task_id`（对应 Session.taskId）；不要误用上传记录的 `upload_id`。以下值均为示例，请替换为实际编号。
-
-在调用方环境设置 `AI_BASE_URL`（如 `http://127.0.0.1:3000`）和 `AI_API_KEY`（当前用户在接入配置中使用的采集凭据），然后执行：
-
-```bash
-# 绑定 A 和 B；两条请求的 collaborationId 相同。
-curl -i "$AI_BASE_URL/api/ingest/collaborations/sessions" \
-  -H "x-witty-api-key: $AI_API_KEY" -H 'Content-Type: application/json' \
-  --data '{"collaborationId":"demo-task-001","sessionId":"agent-a","traceSessionId":"original-session-a"}'
-curl -i "$AI_BASE_URL/api/ingest/collaborations/sessions" \
-  -H "x-witty-api-key: $AI_API_KEY" -H 'Content-Type: application/json' \
-  --data '{"collaborationId":"demo-task-001","sessionId":"agent-b","traceSessionId":"original-session-b"}'
-
-# 在 A 实际调用 B 后上报。此接口只记录联系，不会启动 Agent。
-curl -i "$AI_BASE_URL/api/ingest/collaborations/events" \
-  -H "x-witty-api-key: $AI_API_KEY" -H 'Content-Type: application/json' \
-  --data '{"collaborationId":"demo-task-001","eventId":"event-001","fromSessionId":"agent-a","toSessionId":"agent-b","description":"A 调用 B 做调研","fromLocator":{"recordType":"tool","name":"spawn_agent"}}'
-
-curl -i "$AI_BASE_URL/api/observe/collaborations/demo-task-001?offset=0&limit=100" \
-  -H "x-witty-api-key: $AI_API_KEY"
-```
-
-这里的 `spawn_agent` 必须替换为 A 的 Trace 中实际采集到的工具名。通过 Shell 启动时换成第 2 节的 shell 配置。如果没有采到启动步骤，省略 fromLocator 也可以保存 A→B 关系。不要为了匹配修改原 Trace。
-
-首次上报的典型响应（两条 Trace 已明确绑定，A 中只有一个同名工具且没有明确目标会话证据）：
+### 2. 可选内容和步骤定位
 
 ```json
 {
   "collaborationId": "demo-task-001",
-  "eventId": "event-001",
-  "result": "created",
-  "receivedAt": "2026-09-11T02:00:01.000Z",
-  "traceResolution": { "from": "resolved", "to": "resolved" },
-  "fromAnchor": {
-    "status": "candidate",
-    "candidateCount": 1,
-    "message": "唯一名称或命令匹配，仅作为候选"
-  },
-  "detailApiPath": "/api/observe/collaborations/demo-task-001"
+  "eventId": "event-002",
+  "fromSessionId": "session-a",
+  "toSessionId": "session-c",
+  "description": "启动方案 Agent",
+  "content": "根据调研结果整理方案",
+  "observedAt": "2026-09-16T10:00:00+08:00",
+  "fromLocator": { "recordType": "shell", "commandContains": "agent-run --task plan" }
 }
 ```
 
-响应可能包含候选位置等附加字段。重复发送完全相同的请求返回 200/duplicate；修改同 eventId 的正文返回 409/EVENT_CONFLICT。B 再调用 C 时，绑定 C，再上报新的 eventId、fromSessionId=agent-b、toSessionId=agent-c，即可得到 A→B→C。生产接入应由任务发起者生成一次共享 collaborationId，每次联系生成独立 eventId（建议前缀+毫秒时间戳+16字节安全随机串），保存原正文以供重试。
+工具名匹配改用 `{"recordType":"tool","name":"spawn_agent"}`。可选字段省略即可，不传 null。fromLocator 只读取发起方已采集的工具/Shell 记录，不执行命令，也不要求用户提供 spanId。工具名精确匹配，命令按字面包含；唯一匹配用于将子 Agent 挂到对应步骤，页面标注“候选步骤”以保留证据强弱。
 
-| 字段 | 必填 | 限制与填写方式 |
-|---|---|---|
-| collaborationId、eventId | 是 | 各 1–128 个 ASCII 字母、数字、点、下划线或短横线 |
-| fromSessionId、toSessionId | 是 | 各 1–512 字符，不可全空白；与绑定接口 sessionId 一致，区分大小写 |
-| description | 是 | 1–500 字符，不可全空白，只说明联系，不用于猜测关系 |
-| observedAt | 否 | 实际观察到联系时的 RFC3339 带时区时间，不能使用重试时间 |
-| content | 否 | 传递内容或摘要，最多 4000 字符 |
-| fromLocator | 否 | tool 只填 recordType/name（1–200字符）；shell 只填 recordType/commandContains（1–512字符），不可混填 |
-
-### 5. 查看日志与排查
-
-从仓库根目录通过 `bash scripts/develop_start.sh`（开发）或 `bash scripts/start.sh`（生产）启动后，进程标准输出和错误输出都会写入**仓库根目录 `server.log`**。日志是 JSON 行，协作接口的 scope 为 `collaboration`：
-
-```bash
-# 查看本功能的近期日志
-rg '"scope":"collaboration"' server.log | tail -n 30
-# 持续跟踪
-tail -f server.log | grep --line-buffered '"scope":"collaboration"'
-# 按响应头 x-collaboration-request-id 的值定位一次请求
-rg '返回的请求编号' server.log
-```
-
-日志含时间、requestId、operation（report_event / bind_session / query_graph）、HTTP 状态、耗时，以及校验后可用的协作/事件/Session 编号。成功上报可区分 created 与 duplicate，并查看 anchorStatus/anchorReason；失败记录错误代码和原因。定位查询失败但事件已保存，会另记 warning，不会把已保存事件报告为丢失。
-
-典型成功日志：
-
-```json
-{"ts":"2026-09-11T02:00:01.000Z","level":"info","scope":"collaboration","message":"请求成功","context":{"requestId":"请求编号","operation":"report_event","collaborationId":"demo-task-001","eventId":"event-001","result":"created","anchorStatus":"candidate","anchorReason":"唯一名称或命令匹配，仅作为候选","httpStatus":201,"durationMs":12}}
-```
-
-| 状态/代码 | 排查方式 |
+| 定位结果 | 页面含义 |
 |---|---|
-| 400 INVALID_ARGUMENT / INVALID_LOCATOR | 根据日志 field 修正字段、长度、时间或定位格式 |
-| 401 UNAUTHORIZED | 检查请求头采集凭据是否有效 |
-| 403 FORBIDDEN / 404 NOT_FOUND | 检查 Trace 和协作是否属于同一用户；不跨用户共享 |
-| 409 EVENT_CONFLICT / BINDING_CONFLICT | 已存数据不可覆盖；重试必须保持原编号与原正文 |
-| 413 / 415 | 检查 64 KiB 上限和 application/json 请求头 |
-| 429 RATE_LIMITED | 按 Retry-After 等待后原样重试 |
-| 500 INTERNAL_ERROR | 用请求编号查日志 causeCode/reason；例如 P2021 表示表不存在，检查启动时 schema 同步是否成功 |
-| 成功响应但 pending / waiting_trace | 关系已保存；根据定位原因检查绑定、Trace 到达情况、容量限制，稍后重新 GET |
+| not_provided | 未配置定位且无明确记录依据，保留会话关系 |
+| waiting_trace | 发起方 Trace 尚未唯一关联 |
+| not_found | 原 Trace 没有匹配记录，成员并列展示 |
+| candidate | 名称/命令唯一匹配，挂载到该步骤并标注候选 |
+| ambiguous | 多个候选或匹配依据有歧义 |
+| confirmed | 原始调用记录明确包含目标会话编号 |
+| time_ordered | 满足完整分组、数量、执行时间及可信时钟等条件的顺序推定，可能随迟到数据变化 |
+| pending | 查询暂不可用或超过单次解析容量 |
 
-不记录 API Key、description/content、Shell 命令正文或原始数据库错误全文。公共 logger 还会尝试写入 `AGENT_INSIGHT_LOG_DIR/agent-insight.log`（默认 `/var/log/agent-insight/agent-insight.log`）；该目录不可写不影响 server.log。默认日志等级包含成功日志；若将 AGENT_INSIGHT_LOG_LEVEL/LOG_LEVEL 设置为 warn/error，会过滤 info，需保持 log/info 才能查看成功记录。直接运行 npm run dev 而未重定向时日志在终端，不会自动创建 server.log。上述启动脚本每次启动会清空 server.log，重启前应保存需要保留的日志。
+只有存在可信执行端时钟依据时才进行组内时间推定。仅传 observedAt 不证明跨机器时钟已同步；当前无已知时钟依据时保留候选/歧义，并显示原因。不按接收顺序、最近时间或 Agent 名称猜测步骤。
 
-### 6. 启动时数据库升级
+### 3. 如何关联原 Trace
 
-在仓库根目录执行 `bash scripts/develop_start.sh` 或 `bash scripts/start.sh`。两个脚本都会先调用 `scripts/db_push.sh` 同步 SQLite schema，再执行 `prisma generate`，成功后才启动服务。本次只新增 Collaboration、CollaborationEvent、CollaborationSessionBinding 三张表及索引，已有 Trace 无需重传，无需手工建表。旧库增量升级及重复执行已通过独立 SQLite 测试，既有 Session 内容和 Execution 父级保持不变。
+fromSessionId/toSessionId 优先复用框架原有会话编号。平台仅在当前账号内，精确匹配 `Session.taskId` 或 `Execution.taskId / agentSessionId`；唯一对应一个 Trace 才关联，多个对应则提示歧义。编号不相同且无明确映射时不会猜测。
 
-数据库同步失败会阻止启动；原因打印在**启动终端**，因为此时服务尚未启动、server.log 重定向尚未开始。不要通过 reset 或随意添加 --accept-data-loss 绕过其他历史 schema 冲突。
+没有 Trace 时仍展示关系和上报内容，节点说明执行详情尚未关联；Trace 后续到达，点击刷新即可补齐。历史 `/sessions` 绑定接口保留兼容老接入，但不是新接入的必需步骤。这个事件接口不上传完整工具执行正文，也不会凭空生成输入输出。
 
-配置 DB_HOST 时两个脚本也会调用 `scripts/init_opengauss.py`，本次已补齐对应新表与索引。OpenGauss 实库尚未联调，SQLite 升级测试不代表 OpenGauss 验收。
+### 4. 页面入口与操作
 
-### 7. 在链路追踪页面验证合并
+链路追踪列表右上角点击 **协作图**，进入 `/observe/collaborations`，选择协作编号。也可以直接打开 `/observe/collaborations/<collaborationId>`。
 
-先用原有上传接口分别上传主 Agent 和子 Agent 的完整 Trace。各自使用不同的 `task_id`，不要求使用原生 `task` 工具，也不要求伪造 `subagent_session_id`。再按上述接口绑定两个 `sessionId` 到各自的 `traceSessionId`（即上传的 `task_id`），最后上报关系。三个步骤使用同一账号的 API Key。
+- 点击节点：查看会话编号和 Trace 关联状态；已关联时可打开原 Trace，或读取执行原文。
+- 点击箭头或下方事件：查看完整说明、上报内容、发生/接收时间、来源、fromLocator 和位置依据。明确/时间推定位置可打开对应步骤原文；唯一候选步骤可挂载子 Agent，并保留候选标识。
+- 同向多条联系分别画线，并在事件列表完整列出；循环、自联系、多父级都保留。
+- 默认每次加载 100 条上报事件，点击“加载更多”继续；刷新重新计算节点、自动关系和定位状态。
+- 图的位置不代表执行顺序；合并 Trace 内没有唯一调用位置的成员并列展示，排序使用 observedAt，缺失时使用接收时间，此顺序不作为真实调用证据。始终显示“任务结束状态未知”。
 
-- **提供 `fromLocator`**：复用工具或命令定位逻辑，在匹配的工具步骤下展开子 Agent 及其工具。唯一名称/命令匹配标记为“候选步骤”，不冒充明确调用证据；多候选或未匹配时，子 Agent 仍显示在父 Agent 下，并标注未定位。
-- **省略 `fromLocator`**：兼容为顺序展示。同一条“协作 Trace”中，主 Agent 和其余 Agent 并列排列，不强行认定步骤父子关系。主 Agent 在前，其余按事件 `observedAt` 排序，缺失时按服务端接收时间。该顺序不证明实际运行不存在并发。
+已有 Trace 无需上报事件：在 Trace 详情点击 **调用关系图**，平台按原始 task/spawn_agent/subagent 调用中明确的目标会话编号画图，保留真实多层关系。不采用 Agent 类型/FIFO 兜底作为确认依据。原始调用与上报事件有唯一明确对应时合并来源；仅双方相同不会合并事件。
 
-无定位的关系请求示例（前提是两个 Session 已上传并完成绑定）：
+### 5. 查询、日志与限制
 
-```json
-{
-  "collaborationId": "demo-task-001",
-  "eventId": "event-sequential-001",
-  "fromSessionId": "agent-a",
-  "toSessionId": "agent-b",
-  "description": "审查完成后执行后续 Agent",
-  "observedAt": "2026-09-14T10:00:00Z"
-}
-```
+携带相同 API Key 查询：
 
-省略字段即可，不要传 `fromLocator: null`。已经保存的 eventId 不允许改正文；重试必须原样发送。示例的两种模式应分别用于新的协作，避免在同一组重复声明互相冲突的位置。
+- `GET /api/observe/collaborations?limit=50`：协作列表，按 nextCursor 分页。
+- `GET /api/observe/collaborations/demo-task-001?offset=0&limit=100`：分页上报 events、nodes、只读 automaticEvents 和定位结果。
+- `GET /api/observe/collaborations/native?traceTaskId=<会话编号>`：已有 Trace 的明确调用图，不写入协作事件。
 
-回到链路追踪页，使用默认“主 Agent”范围并刷新，应该只看到一条主 Trace。打开后检查子 Agent / 并列 Agent、工具参数与结果、交互原文。分页总数也按合并后的根 Trace 计算；选择“全部 / 子 Agent”或通过 taskId 原始入口查询，仍可访问原记录。关系和绑定允许先于 Trace 到达，正文齐备后重新刷新即可合并。
+请求体最大 64 KiB，description 最多 500 字符，content 最多 4000 字符；不接受未知字段、重复 JSON 键或错误类型。单实例每用户每分钟最多 120 次关系接口请求，429 按 Retry-After 原样重试。单组最多解析 2000 条事件、200 个会话，正文累计 32 MiB、调用 100000 条；超限保留分页关系并标注解析不完整，不能将不完整数据用于排序。
 
-HTTP 201 只表示关系已保存。`fromAnchor.status=not_provided` 表示采用顺序并列模式，**不是合并失败**。若仍分开显示，先检查两个 Session 是否绑定到正确 task_id、是否属于当前登录账号、是否都有可读取正文。循环、多父级冲突、空正文、重复 Execution、已存在原生子记录、Langfuse 专用树以及超限组会保留原列表，以免隐藏无法展示的数据。投影上限为 200 个协作组、2000 条关系、200 个 Session、32 MiB 正文。
+运行 `bash scripts/develop_start.sh` 或 `bash scripts/start.sh` 后，日志位于仓库根目录 **server.log**。搜索 `collaboration` 或响应头 `x-collaboration-request-id`，可看到操作、账号、协作/事件编号、HTTP 状态、定位结果和失败原因。401 检查凭据；400 检查字段；409 检查是否修改了重试正文；500 检查数据库和启动迁移日志。201 只表示事件保存成功，不表示步骤已经明确定位。
 
-在仓库根 `server.log` 搜索 `collaboration`：接口日志记录成功/失败及定位原因；`stage=projection` 的日志记录 `mergedChildren`（本次合并子 Trace 数）和 `retainedRelations`（未合并关系数），查询失败会记录“保留原始列表”。启动与数据库自动升级仍按上一节执行，本轮合并展示不增加表或迁移。
+日志不记录 API Key、上报正文或 Shell 命令。保持日志等级 info 才能查看成功记录；启动脚本会覆盖 server.log，需留存时先备份。两个脚本继续自动执行已有 schema 同步与客户端生成；本轮独立协作图不新增数据库表。
+
+
+协作图有两个入口：Trace 详情的“调用关系图”展示该 Trace 可自动解析的原生调用；Trace 列表的“协作图”进入协作列表，选择上报的 `collaborationId` 后查看完整上报关系。成员 Trace 就绪后，链路列表只展示一个合并入口（复用首个无调用父级的成员 taskId），详情包含全部成员：定位唯一时挂到对应调用步骤，否则按关系的 observedAt（缺失时为接收时间）并列展示。循环和回传联系保留在协作图中，不生成循环的 Trace 树。普通协作成员缺失、身份歧义、无权读取、正文为空、已有原生子记录、Langfuse 专用树或超过容量时，保留相关原 Trace 列表入口，避免隐藏无法展示的数据；Goal Plus 已声明 worker 的等待规则见前文。返回列表时会重新加载数据，无需手动刷新页面。
