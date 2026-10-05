@@ -183,19 +183,33 @@ const ANSWER_MATCH_JUDGE_SYSTEM = [
   '',
   '【输出格式】只输出一个 JSON 对象，不要额外文字：',
   '{',
-  '  "judgments": [ {"point": "<信息点原文>", "result": "matched|not_matched|uncertain", "reason": "判定依据（中文，引用回答中的对应内容）"} ],',
+  '  "judgments": [ {"index": 1, "result": "matched|not_matched|uncertain", "reason": "判定依据（中文，引用回答中的对应内容）"} ],',
   '  "overall_reason": "整体说明（中文，可选）"',
   '}',
-  'result 必须使用 matched|not_matched|uncertain 之一，不得自创；point 必须使用输入列表中的原文、不得改写或遗漏。',
+  'index 是「待判定信息点」列表中的序号；每个序号必须恰好出现一次，不得遗漏、重复或自创。',
+  'result 必须使用 matched|not_matched|uncertain 之一，不得自创。',
 ].join('\n');
 
+const JUDGE_RESULTS = ['matched', 'not_matched', 'uncertain'] as const;
+type JudgeResult = (typeof JUDGE_RESULTS)[number];
+
+function parseJudgeResult(value: unknown): JudgeResult | null {
+  const s = str(value).toLowerCase();
+  return (JUDGE_RESULTS as readonly string[]).includes(s) ? (s as JudgeResult) : null;
+}
+
+/**
+ * 判定结果按序号与 pending 一一对齐返回（数组下标 = pending 下标）。
+ * 序号越界、判定值非法或信息点被遗漏时抛 SimilarityJudgeParseError（可重试），
+ * 避免「LLM 漏返某个点」被静默当成未覆盖而扣分。
+ */
 async function judgeRemainingPoints(
   user: string,
   question: string,
   answer: string,
   reference: string,
   pending: KeyPoint[],
-): Promise<Map<string, { result: string; reason: string }>> {
+): Promise<Array<{ result: JudgeResult; reason: string }>> {
   const list = pending.map((p, i) => `${i + 1}. ${p.text}`).join('\n');
   const text = await callJudgeLlm(user, {
     system: ANSWER_MATCH_JUDGE_SYSTEM,
@@ -212,21 +226,33 @@ async function judgeRemainingPoints(
   if (!Array.isArray(raw.judgments)) {
     throw new SimilarityJudgeParseError('LLM 返回的 judgments 缺失或不是数组', text);
   }
-  const byPoint = new Map<string, { result: string; reason: string }>();
+  const byIndex = new Map<number, { result: JudgeResult; reason: string }>();
   for (const item of raw.judgments as unknown[]) {
     if (!item || typeof item !== 'object') continue;
     const j = item as Record<string, unknown>;
-    const pointText = str(j.point).trim();
-    const result = str(j.result).toLowerCase();
-    if (!pointText || !['matched', 'not_matched', 'uncertain'].includes(result)) {
+    const index = typeof j.index === 'number' ? j.index : NaN;
+    if (!Number.isInteger(index) || index < 1 || index > pending.length) {
       throw new SimilarityJudgeParseError(
-        `LLM 返回了非法的判定结果「${j.result}」，合法值为 matched|not_matched|uncertain`,
+        `LLM 返回了越界的信息点序号「${String(j.index)}」，合法范围为 1-${pending.length}`,
         text,
       );
     }
-    byPoint.set(pointText, { result, reason: str(j.reason).trim() });
+    const result = parseJudgeResult(j.result);
+    if (!result) {
+      throw new SimilarityJudgeParseError(
+        `LLM 返回了非法的判定结果「${String(j.result)}」，合法值为 ${JUDGE_RESULTS.join('|')}`,
+        text,
+      );
+    }
+    byIndex.set(index, { result, reason: str(j.reason).trim() });
   }
-  return byPoint;
+  return pending.map((_, i) => {
+    const j = byIndex.get(i + 1);
+    if (!j) {
+      throw new SimilarityJudgeParseError(`LLM 未对第 ${i + 1} 个信息点给出判定结果`, text);
+    }
+    return j;
+  });
 }
 
 // ── 4. 综合评分 ────────────────────────────────────────────────────────────
@@ -252,11 +278,10 @@ function computeAnswerMatchScore(points: MatchedPoint[]): { score: number; base:
 export async function runAnswerMatch(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   const reference = (ctx.referenceOutput ?? '').trim();
   if (!reference) {
+    // 不给分：无分的结果只展示原因，不计入综合分与类目均分。
     return normalizeEvaluatorOutput({
-      verdict: 'fail',
       summary: '未标注标准参考答案，无法评估答案匹配——不记分。',
-      score: 0,
-      evidence: { md: '未标注标准参考答案，无法进行客观答案匹配评估。' },
+      evidence: { md: '未标注标准参考答案，无法进行客观答案匹配评估，本次不记分（不计入综合分与类目均分）。' },
     });
   }
   const answer = (ctx.actualOutput ?? '').trim();
@@ -266,10 +291,8 @@ export async function runAnswerMatch(user: string, ctx: FaithfulPresetContext): 
   const keyPoints = await extractKeyPoints(user, reference);
   if (!keyPoints.length) {
     return normalizeEvaluatorOutput({
-      verdict: 'warn',
       summary: '标准答案无可提取的关键信息点，无法评估——不记分。',
-      score: 0,
-      evidence: { md: '标准答案中未提取到关键信息点（数值/专有名词/核心结论/必要条件），无法进行答案匹配评估。' },
+      evidence: { md: '标准答案中未提取到关键信息点（数值/专有名词/核心结论/必要条件），无法进行答案匹配评估，本次不记分（不计入综合分与类目均分）。' },
     });
   }
 
@@ -283,19 +306,19 @@ export async function runAnswerMatch(user: string, ctx: FaithfulPresetContext): 
     else pending.push(p);
   }
 
-  // 3. LLM 层语义判同
+  // 3. LLM 层语义判同（结果与 pending 下标一一对应）
   if (pending.length) {
     const judgments = await judgeRemainingPoints(user, question, answer, reference, pending);
-    for (const p of pending) {
-      const j = judgments.get(p.text);
-      if (j?.result === 'matched') {
+    pending.forEach((p, i) => {
+      const j = judgments[i];
+      if (j.result === 'matched') {
         matched.push({ ...p, score: 100, status: 'covered', evidence: j.reason ? `LLM 层语义判同：${j.reason}` : 'LLM 层语义判同。' });
-      } else if (j?.result === 'uncertain') {
+      } else if (j.result === 'uncertain') {
         matched.push({ ...p, score: 0, status: 'missing', evidence: j.reason ? `LLM 层判定不确定：${j.reason}` : 'LLM 层判定不确定。' });
       } else {
-        matched.push({ ...p, score: 0, status: 'missing', evidence: j?.reason ? `LLM 层判定不匹配：${j.reason}` : 'LLM 层判定不匹配。' });
+        matched.push({ ...p, score: 0, status: 'missing', evidence: j.reason ? `LLM 层判定不匹配：${j.reason}` : 'LLM 层判定不匹配。' });
       }
-    }
+    });
   }
 
   // 4. 综合评分

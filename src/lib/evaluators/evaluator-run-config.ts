@@ -74,6 +74,18 @@ export function isConfigurableTextEvaluatorId(id: string): id is ConfigurableTex
   return (CONFIGURABLE_TEXT_EVALUATOR_IDS as readonly string[]).includes(id);
 }
 
+/**
+ * 取某个评估器自己的运行配置；该评估器不支持运行配置 → undefined。
+ * 按 id 取键，因此不可能把 A 的配置交给 B——**不要**改成按字段特征猜配置类型
+ * （例如 `'threshold' in config`）：那会让新增字段变成隐式的评估器身份判断。
+ */
+export function evaluatorRunConfigOf(
+  configs: EvaluatorRunConfigMap,
+  evaluatorId: string,
+): EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined {
+  return isConfigurableTextEvaluatorId(evaluatorId) ? configs[evaluatorId] : undefined;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -207,13 +219,12 @@ export function normalizeSimilarityTextRunConfig(value: unknown): SimilarityText
   }
   assertKnownFields(SIMILARITY_TEXT_EVALUATOR_ID, value, ['threshold']);
   const raw = value.threshold ?? DEFAULT_SIMILARITY_TEXT_RUN_CONFIG.threshold;
-  const threshold = Number(raw);
-  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 100) {
     throw new EvaluatorRunConfigValidationError(
       `${SIMILARITY_TEXT_EVALUATOR_ID}.threshold 必须是 0 到 100 之间的数`,
     );
   }
-  return { threshold: Math.round(threshold) };
+  return { threshold: Math.round(raw) };
 }
 
 export function normalizeEvaluatorRunConfigs(

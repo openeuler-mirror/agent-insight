@@ -298,7 +298,7 @@ export function TextEvaluatorConfigDialog({
                 合格阈值
               </label>
               <p className="mt-0.5 text-xs leading-5 text-foreground-muted">
-                相似度 ≥ 阈值判 PASS，否则 FAIL；取值 0–100，默认 80。
+                相似度 ≥ 阈值判 PASS，否则 FAIL；取值 0–100，默认 {DEFAULT_SIMILARITY_TEXT_RUN_CONFIG.threshold}。
               </p>
               <Input
                 id="similarity-threshold"

@@ -11,12 +11,11 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { setJudgeLlmCallerForTest } from '../src/lib/engine/experiment/judge-llm';
 import type { FaithfulPresetContext } from '../src/lib/engine/experiment/faithful-preset-evaluators';
+import { runTextSimilarity } from '../src/lib/engine/experiment/similarity-text-evaluator';
 import {
-  runTextSimilarity,
-  DEFAULT_THRESHOLD,
-  resolveTextSimilarityThreshold,
-} from '../src/lib/engine/experiment/similarity-text-evaluator';
-import type { SimilarityTextRunConfig } from '../src/lib/evaluators/evaluator-run-config';
+  DEFAULT_SIMILARITY_TEXT_RUN_CONFIG,
+  normalizeSimilarityTextRunConfig,
+} from '../src/lib/evaluators/evaluator-run-config';
 import {
   runAnswerMatch,
   transferChineseNumber,
@@ -110,19 +109,22 @@ describe('文本相似度评估器', () => {
     assert.strictEqual(r.verdict, 'fail');
   });
 
-  it('边界——空文本 → 0 且不调 LLM（用例 7）', async () => {
+  it('边界——空文本 → 不给分（不入均分）且不调 LLM（用例 7）', async () => {
     let calls = 0;
     setJudgeLlmCallerForTest(async () => { calls += 1; return '{}'; });
     const r = await runTextSimilarity(USER, simCtx('', 'some text'));
-    assert.strictEqual(r.score, 0);
+    assert.strictEqual(r.score, undefined);
+    assert.strictEqual(r.verdict, undefined);
+    assert.match(r.summary!, /不记分/);
     assert.strictEqual(calls, 0);
   });
 
-  it('参考文本为空 → 0 不调 LLM', async () => {
+  it('参考文本为空 → 不给分且不调 LLM', async () => {
     let calls = 0;
     setJudgeLlmCallerForTest(async () => { calls += 1; return '{}'; });
     const r = await runTextSimilarity(USER, simCtx('some text', null));
-    assert.strictEqual(r.score, 0);
+    assert.strictEqual(r.score, undefined);
+    assert.strictEqual(r.verdict, undefined);
     assert.strictEqual(calls, 0);
   });
 
@@ -164,15 +166,22 @@ describe('文本相似度评估器', () => {
     assert.strictEqual(r.verdict, 'pass');
   });
 
-  it('阈值默认 80（未配置时回退）', () => {
-    assert.strictEqual(DEFAULT_THRESHOLD, 80);
-    assert.strictEqual(resolveTextSimilarityThreshold(null), 80);
-    assert.strictEqual(resolveTextSimilarityThreshold(undefined), 80);
-    assert.strictEqual(resolveTextSimilarityThreshold({ threshold: 150 }), 80); // 越界回退
-    assert.strictEqual(
-      resolveTextSimilarityThreshold({ threshold: 'abc' } as unknown as SimilarityTextRunConfig),
-      80,
-    ); // 非法回退
+  it('阈值默认 80，非法值由配置校验拦下（不静默回退）', () => {
+    assert.strictEqual(DEFAULT_SIMILARITY_TEXT_RUN_CONFIG.threshold, 80);
+    assert.strictEqual(normalizeSimilarityTextRunConfig(undefined).threshold, 80);
+    assert.strictEqual(normalizeSimilarityTextRunConfig(null).threshold, 80);
+    assert.strictEqual(normalizeSimilarityTextRunConfig({ threshold: 60.4 }).threshold, 60); // 小数取整
+    assert.throws(() => normalizeSimilarityTextRunConfig({ threshold: 150 }), /0 到 100/);
+    assert.throws(() => normalizeSimilarityTextRunConfig({ threshold: -1 }), /0 到 100/);
+    assert.throws(() => normalizeSimilarityTextRunConfig({ threshold: '80' }), /0 到 100/);
+    assert.throws(() => normalizeSimilarityTextRunConfig({ threshold: true }), /0 到 100/);
+  });
+
+  it('未配置阈值 → 用默认 80 判定', async () => {
+    inject(JSON.stringify({ level: 'partially_similar', reason: '部分语义重合' }));
+    const r = await runTextSimilarity(USER, simCtx('a', 'b'));
+    assert.strictEqual(r.score, 65);
+    assert.strictEqual(r.verdict, 'fail'); // 65 < 80
   });
 
   it('阈值可配置：threshold=60 → partially_similar(65) PASS（默认 80 下该档 FAIL）', async () => {
@@ -231,7 +240,7 @@ describe('客观答案匹配评估器', () => {
     injectSequence(
       JSON.stringify({ points: [{ type: 'conclusion', text: 'Transformer 的核心是 Self-Attention 机制' }] }),
       JSON.stringify({
-        judgments: [{ point: 'Transformer 的核心是 Self-Attention 机制', result: 'matched', reason: '回答以「自注意力机制」描述同一概念' }],
+        judgments: [{ index: 1, result: 'matched', reason: '回答以「自注意力机制」描述同一概念' }],
       }),
     );
     const r = await runAnswerMatch(USER, simCtx(
@@ -248,8 +257,8 @@ describe('客观答案匹配评估器', () => {
       JSON.stringify({ points: [{ type: 'number', text: '1234.5' }, { type: 'conclusion', text: '营收为 1234.5 亿元' }] }),
       JSON.stringify({
         judgments: [
-          { point: '1234.5', result: 'not_matched', reason: '回答未提及任何具体数值' },
-          { point: '营收为 1234.5 亿元', result: 'matched', reason: '回答提到营收增长' },
+          { index: 1, result: 'not_matched', reason: '回答未提及任何具体数值' },
+          { index: 2, result: 'matched', reason: '回答提到营收增长' },
         ],
       }),
     );
@@ -261,7 +270,7 @@ describe('客观答案匹配评估器', () => {
   it('用例 5：专有名词错误（TensorFlow vs PyTorch）→ 0', async () => {
     injectSequence(
       JSON.stringify({ points: [{ type: 'term', text: 'PyTorch' }] }),
-      JSON.stringify({ judgments: [{ point: 'PyTorch', result: 'not_matched', reason: '回答说的是 TensorFlow' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答说的是 TensorFlow' }] }),
     );
     const r = await runAnswerMatch(USER, simCtx('TensorFlow', 'PyTorch', '最流行的深度学习框架？'));
     assert.strictEqual(r.score, 0);
@@ -276,7 +285,7 @@ describe('客观答案匹配评估器', () => {
   it('用例 7：回答正确但语序完全不同 → 100（LLM 判同）', async () => {
     injectSequence(
       JSON.stringify({ points: [{ type: 'conclusion', text: '先有蛋' }] }),
-      JSON.stringify({ judgments: [{ point: '先有蛋', result: 'matched', reason: '回答同样给出「蛋」的结论' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'matched', reason: '回答同样给出「蛋」的结论' }] }),
     );
     const r = await runAnswerMatch(USER, simCtx(
       '蛋，因为根据进化论…',
@@ -291,8 +300,8 @@ describe('客观答案匹配评估器', () => {
       JSON.stringify({ points: [{ type: 'conclusion', text: '使用 Dropout' }, { type: 'conclusion', text: '使用正则化、早停和数据增强' }] }),
       JSON.stringify({
         judgments: [
-          { point: '使用 Dropout', result: 'matched', reason: '回答明确提到 Dropout' },
-          { point: '使用正则化、早停和数据增强', result: 'not_matched', reason: '回答未提及这些方法' },
+          { index: 1, result: 'matched', reason: '回答明确提到 Dropout' },
+          { index: 2, result: 'not_matched', reason: '回答未提及这些方法' },
         ],
       }),
     );
@@ -309,29 +318,65 @@ describe('客观答案匹配评估器', () => {
   it('用例 10：回答与问题无关 → 0', async () => {
     injectSequence(
       JSON.stringify({ points: [{ type: 'term', text: '巴黎' }] }),
-      JSON.stringify({ judgments: [{ point: '巴黎', result: 'not_matched', reason: '回答说的是罗马' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'not_matched', reason: '回答说的是罗马' }] }),
     );
     const r = await runAnswerMatch(USER, simCtx('意大利的首都是罗马', '巴黎', '法国的首都是哪里？'));
     assert.strictEqual(r.score, 0);
   });
 
-  it('边界：未标注标准答案 → 0 且不调 LLM', async () => {
+  it('边界：未标注标准答案 → 不给分（不入均分）且不调 LLM', async () => {
     let calls = 0;
     setJudgeLlmCallerForTest(async () => { calls += 1; return '{}'; });
     const r = await runAnswerMatch(USER, simCtx('some answer', null));
-    assert.strictEqual(r.score, 0);
+    assert.strictEqual(r.score, undefined);
+    assert.strictEqual(r.verdict, undefined);
+    assert.match(r.summary!, /不记分/);
     assert.strictEqual(calls, 0);
   });
 
-  it('边界：标准答案无可提取信息点 → 0 且不调判同', async () => {
+  it('边界：标准答案无可提取信息点 → 不给分且不调判同', async () => {
     let calls = 0;
     setJudgeLlmCallerForTest(async () => {
       calls += 1;
       return JSON.stringify({ points: [] });
     });
     const r = await runAnswerMatch(USER, simCtx('some answer', '（无实质内容）'));
-    assert.strictEqual(r.score, 0);
+    assert.strictEqual(r.score, undefined);
+    assert.strictEqual(r.verdict, undefined);
     assert.strictEqual(calls, 1); // 只调了提取，未调判同
+  });
+
+  it('判同返回遗漏信息点 → 抛解析错误（不静默当成未覆盖）', async () => {
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'conclusion', text: 'A 结论' }, { type: 'conclusion', text: 'B 结论' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'matched', reason: '回答包含' }] }), // 漏了序号 2
+    );
+    await assert.rejects(
+      () => runAnswerMatch(USER, simCtx('A 结论', 'A 结论、B 结论', 'q')),
+      /未对第 2 个信息点给出判定结果/,
+    );
+  });
+
+  it('判同返回越界序号 → 抛解析错误（不误判为未覆盖）', async () => {
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'conclusion', text: 'A 结论' }] }),
+      JSON.stringify({ judgments: [{ index: 2, result: 'matched', reason: 'x' }] }),
+    );
+    await assert.rejects(
+      () => runAnswerMatch(USER, simCtx('A 结论', 'A 结论', 'q')),
+      /越界的信息点序号/,
+    );
+  });
+
+  it('判同返回非法判定值 → 抛解析错误', async () => {
+    injectSequence(
+      JSON.stringify({ points: [{ type: 'conclusion', text: 'A 结论' }] }),
+      JSON.stringify({ judgments: [{ index: 1, result: 'maybe', reason: 'x' }] }),
+    );
+    await assert.rejects(
+      () => runAnswerMatch(USER, simCtx('A 结论', 'A 结论', 'q')),
+      /非法的判定结果/,
+    );
   });
 
   it('LLM 提取非法信息点类型 → 抛解析错误', async () => {
@@ -352,9 +397,9 @@ describe('客观答案匹配评估器', () => {
       ] }),
       JSON.stringify({
         judgments: [
-          { point: 'A 结论', result: 'matched', reason: '回答包含' },
-          { point: 'B 结论', result: 'matched', reason: '回答包含' },
-          { point: 'C 结论', result: 'not_matched', reason: '回答遗漏' },
+          { index: 1, result: 'matched', reason: '回答包含' },
+          { index: 2, result: 'matched', reason: '回答包含' },
+          { index: 3, result: 'not_matched', reason: '回答遗漏' },
         ],
       }),
     );

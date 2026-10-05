@@ -7,10 +7,14 @@
  */
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import { JudgeOutputParseError } from '../../evaluators/judge-assembly';
-import type { SimilarityTextRunConfig } from '../../evaluators/evaluator-run-config';
+import {
+  normalizeSimilarityTextRunConfig,
+  type ConfigurableTextEvaluatorId,
+  type EvaluatorRunConfigMap,
+} from '../../evaluators/evaluator-run-config';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { runTextSimilarity } from './similarity-text-evaluator'
-import { runAnswerMatch } from './similarity-answer-match-evaluator'
+import { runTextSimilarity } from './similarity-text-evaluator';
+import { runAnswerMatch } from './similarity-answer-match-evaluator';
 
 
 export const SIMILARITY_PRESET_IDS = [
@@ -60,9 +64,11 @@ export async function runSimilarityPreset(
   id: SimilarityPresetId,
   user: string,
   ctx: FaithfulPresetContext,
-  config?: SimilarityTextRunConfig | null,
+  config?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | null,
 ): Promise<EvaluatorOutput> {
-  if (id === 'preset-similarity-text') return runTextSimilarity(user, ctx, config);
+  if (id === 'preset-similarity-text') {
+    return runTextSimilarity(user, ctx, normalizeSimilarityTextRunConfig(config));
+  }
   return runAnswerMatch(user, ctx);
 }
 

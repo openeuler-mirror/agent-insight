@@ -1,26 +1,16 @@
 /**
  * 通用文本相似度评估器（preset-similarity-text），LLM 模式
- * 
- * 直接调用LLM进行五档锚定打分
+ *
+ * 直接调用 LLM 进行五档锚定打分
  */
 import { callJudgeLlm } from './judge-llm';
-import { SimilarityJudgeParseError, extractJson, str } from './similarity-preset-evaluators'
+import { SimilarityJudgeParseError, extractJson, str } from './similarity-preset-evaluators';
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint } from '../../evaluators/eval-output';
-import type { SimilarityTextRunConfig } from '../../evaluators/evaluator-run-config';
+import {
+  DEFAULT_SIMILARITY_TEXT_RUN_CONFIG,
+  type SimilarityTextRunConfig,
+} from '../../evaluators/evaluator-run-config';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-
-
-/** 文本相似度默认合格阈值 */
-export const DEFAULT_THRESHOLD = 80;
-
-export function resolveTextSimilarityThreshold(
-  config: SimilarityTextRunConfig | null | undefined,
-): number {
-  const raw = config?.threshold;
-  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
-  if (Number.isFinite(n) && n >= 0 && n <= 100) return Math.round(n);
-  return DEFAULT_THRESHOLD;
-}
 
 /** 五档锚定（离散判断 + 确定性汇总） */
 const SIMILARITY_LEVELS: Record<string, { score: number; label: string }> = {
@@ -91,11 +81,10 @@ export async function runTextSimilarity(
   const reference = (ctx.referenceOutput ?? '').trim();
   if (!generated || !reference) {
     const reason = !generated ? '生成文本为空' : '参考文本为空';
+    // 不给分：无分的结果只展示原因，不计入综合分与类目均分。
     return normalizeEvaluatorOutput({
-      verdict: 'fail',
       summary: `${reason}，无法计算相似度——不记分。`,
-      score: 0,
-      evidence: { md: `${reason}，无法进行语义相似度比较。` },
+      evidence: { md: `${reason}，无法进行语义相似度比较，本次不记分（不计入综合分与类目均分）。` },
     });
   }
 
@@ -116,7 +105,7 @@ export async function runTextSimilarity(
   }
   const reason = str(raw.reason).trim();
   const score = levelDef.score;
-  const threshold = resolveTextSimilarityThreshold(config);
+  const threshold = (config ?? DEFAULT_SIMILARITY_TEXT_RUN_CONFIG).threshold;
   const passed = score >= threshold;
   const deviation = score - threshold;
 

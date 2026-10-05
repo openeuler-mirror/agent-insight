@@ -66,9 +66,9 @@ import {
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isTextPresetId, runTextPreset } from './text-preset-evaluators';
 import {
+  evaluatorRunConfigOf,
   isConfigurableTextEvaluatorId,
   parseStoredEvaluatorRunConfigs,
-  type ConfigurableTextEvaluatorId,
   type EvaluatorRunConfigMap,
 } from '@/lib/evaluators/evaluator-run-config';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
@@ -346,7 +346,7 @@ async function evaluateOnce(
   user: string,
   evaluatorId: string,
   runtime: CaseRuntime,
-  evaluatorConfig?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
+  configs: EvaluatorRunConfigMap,
 ): Promise<EvaluatorOutput> {
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
@@ -364,12 +364,7 @@ async function evaluateOnce(
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isTextPresetId(evaluatorId)) {
-    return runTextPreset(
-      evaluatorId,
-      user,
-      runtime.faithfulCtx,
-      evaluatorConfig && !('threshold' in evaluatorConfig) ? evaluatorConfig : undefined,
-    );
+    return runTextPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorRunConfigOf(configs, evaluatorId));
   }
   // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
@@ -405,12 +400,7 @@ async function evaluateOnce(
     return runHallucinationPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isSimilarityPresetId(evaluatorId)) {
-    return runSimilarityPreset(
-      evaluatorId,
-      user,
-      runtime.faithfulCtx,
-      evaluatorConfig && 'threshold' in evaluatorConfig ? evaluatorConfig : undefined,
-    );
+    return runSimilarityPreset(evaluatorId, user, runtime.faithfulCtx, evaluatorRunConfigOf(configs, evaluatorId));
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
@@ -478,7 +468,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
     await assertExperimentActive(row.experimentId, row.caseId);
     localAttempts = attempt;
     try {
-      let evaluatorConfig: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId] | undefined;
+      let configs: EvaluatorRunConfigMap = {};
       const evaluatorId = String(row.evaluatorId);
       if (isConfigurableTextEvaluatorId(evaluatorId)) {
         let evaluatorIds: string[];
@@ -489,14 +479,13 @@ export async function executeResultRow(user: string, resultId: string): Promise<
         } catch {
           throw new Error('实验评估器列表不是有效 JSON 数组');
         }
-        const configs = parseStoredEvaluatorRunConfigs(
+        configs = parseStoredEvaluatorRunConfigs(
           row.case.experiment.evaluatorConfigsJson,
           evaluatorIds,
         );
-        evaluatorConfig = configs[evaluatorId];
       }
       const out = await withTimeout(
-        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, evaluatorConfig)),
+        withExperimentCancellation(row.experimentId, row.caseId, () => evaluateOnce(user, row.evaluatorId, runtime, configs)),
         row.evaluatorId === 'preset-agent-trace-quality'
           ? EXPERIMENT_TRAJECTORY_TIMEOUTS.resultRowMs
           : experimentEngineConfig.rowTimeoutMs,
