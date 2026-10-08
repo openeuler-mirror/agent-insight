@@ -68,6 +68,8 @@ Goal Plus worker 的关系事件和 worker binding 到达后，链路追踪的�
 
 这个子树是只读查询投影：不会改写 Execution 的原生父子关系，也不会把 worker 内容复制回主 Session。关系证据只说明 worker 属于本次 Goal Plus 编排；没有精确调用位置时，不会按时间猜测它对应主 Trace 中的某个工具调用。
 
+打开 worker 的独立 Trace 后，右侧概览显示“父 Agent”及 **Trace** 按钮，可返回直接父 Trace；通过链接直接进入或使用 Trace 抽屉也支持。父信息来自同一份已校验的协作关系，无需重新安装采集器或补采数据。父 Trace 晚到时先显示“等待父 Trace”，自动刷新后恢复入口；多父级冲突、自环或循环关系不会生成可点击入口。父卡片不计入 worker 的调用与 Token 统计。
+
 数据可能按以下顺序逐步出现：
 
 1. Pi 识别结构化 Goal Plus start 后立即异步上传主 binding；
