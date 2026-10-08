@@ -17,7 +17,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from architecture.genome import SkillGenome
-from constants import ENV_FILE
+from constants import ENV_FILE, GLOBAL_CONFIG_DIR
 from engine.report_generator import OptimizationReportGenerator
 from optimizer import SkillOptimizer
 from skill_insight_api import get_skill_logs
