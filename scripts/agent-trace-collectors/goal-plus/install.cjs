@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { installSharedModules } = require("../shared/install-modules.cjs");
+const { MANIFEST, checkManifest, installSharedModules, prepareSharedModules, validatePackage, withFileRollback, writeManifest } = require("../shared/install-modules.cjs");
 
 const PACKAGE_FILES = [
   "goal-plus-collector.cjs",
@@ -40,7 +40,7 @@ async function copyFile(source, target, mode = 0o600) {
   await fsp.chmod(target, mode).catch(() => undefined);
 }
 
-async function install(options) {
+async function installPackage(options) {
   const apiKey = String(options.apiKey || process.env.AGENT_INSIGHT_API_KEY || "").trim();
   if (!apiKey) throw new Error("AGENT_INSIGHT_API_KEY is required");
   const [major, minor] = process.versions.node.split(".").map(Number);
@@ -77,14 +77,13 @@ async function install(options) {
       || process.env.AGENT_INSIGHT_GOAL_PLUS_COLLABORATION_EVENTS_ENDPOINT
       || `${baseUrl}/api/ingest/collaborations/events`,
   };
-  const collector = require(path.join(packageDir, "goal-plus-collector.cjs"));
-  const stoppedWatcher = await collector.stopWatcher({ homeDir: options.homeDir, configPath });
+  require(path.join(packageDir, "goal-plus-collector.cjs"));
+  const stoppedWatcher = options.stoppedWatcher || { stopped: false };
   const temporary = `${configPath}.${process.pid}.tmp`;
   await fsp.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   await fsp.rename(temporary, configPath);
   await fsp.chmod(configPath, 0o600).catch(() => undefined);
-  const managedConfig = await collector.loadConfig({ homeDir: options.homeDir, configPath });
-  const watcher = await collector.ensureWatcher(managedConfig);
+  const watcher = { ensured: false };
 
   let commandPath = path.join(packageDir, "goal-plus-collector.cjs");
   if (process.platform !== "win32" && options.createWrapper !== false) {
@@ -97,7 +96,10 @@ async function install(options) {
     await fsp.writeFile(wrapper, `#!/bin/sh\n${WRAPPER_MARKER}\nexec "${process.execPath}" "${commandPath}" "$@"\n`, { mode: 0o700 });
     commandPath = wrapper;
   }
+  const manifest = await writeManifest(packageDir, PACKAGE_FILES);
+  if (!(await checkManifest(packageDir)).ok) throw new Error("Goal Plus installed files failed verification");
   return {
+    buildId: manifest.buildId,
     packageDir,
     configPath,
     commandPath,
@@ -106,6 +108,53 @@ async function install(options) {
     stoppedWatcher,
     watcher,
   };
+}
+
+async function install(options) {
+  const agentInsightHome = process.env.AGENT_INSIGHT_HOME
+    ? path.resolve(process.env.AGENT_INSIGHT_HOME) : path.join(options.homeDir, ".agent-insight");
+  const packageDir = path.join(agentInsightHome, "collectors", "goal-plus");
+  const sharedDir = path.join(agentInsightHome, "collectors", "shared");
+  const configPath = path.join(packageDir, "config.json");
+  const shared = await prepareSharedModules(path.resolve(options.sourceDir, "..", "shared"), sharedDir,
+    ["trace-transport.cjs", "pi-trace-helpers.cjs", "collaboration-transport.cjs"]);
+  await validatePackage(options.sourceDir, packageDir, PACKAGE_FILES);
+  const files = [...PACKAGE_FILES, "config.json", MANIFEST].map(name => path.join(packageDir, name));
+  if (process.platform !== "win32" && options.createWrapper !== false) {
+    const wrapper = path.join(options.homeDir, ".local", "bin", "goal-plus-collector");
+    if (fs.existsSync(wrapper) && !(await fsp.readFile(wrapper, "utf8")).includes(WRAPPER_MARKER)) {
+      throw new Error(`Refusing to replace unmanaged command wrapper at ${wrapper}`);
+    }
+    files.push(wrapper);
+  }
+  files.push(...shared.plans.map(item => item.target), path.join(sharedDir, MANIFEST));
+  const lifecycle = require("./goal-plus-collector.cjs");
+  let stoppedWatcher;
+  try {
+    return await withFileRollback(files, async () => {
+      stoppedWatcher = await lifecycle.stopWatcher({ homeDir: options.homeDir, configPath });
+      try {
+        const result = await installPackage({ ...options, stoppedWatcher });
+        if (!options.deferWatcher) {
+          const installed = require(path.join(packageDir, "goal-plus-collector.cjs"));
+          result.watcher = await installed.ensureWatcher(await installed.loadConfig({ homeDir: options.homeDir, configPath }));
+          result.observerStatus = result.watcher.ensured ? "active" : "dormant";
+        }
+        return result;
+      } catch (error) {
+        await lifecycle.stopWatcher({ homeDir: options.homeDir, configPath });
+        throw error;
+      }
+    });
+  } catch (error) {
+    if (stoppedWatcher?.stopped) {
+      try {
+        const previous = require(path.join(packageDir, "goal-plus-collector.cjs"));
+        await previous.ensureWatcher(await previous.loadConfig({ homeDir: options.homeDir, configPath }));
+      } catch (restoreError) { throw new Error(`${error.message}; watcher restore failed: ${restoreError.message}`); }
+    }
+    throw error;
+  }
 }
 
 async function main() {

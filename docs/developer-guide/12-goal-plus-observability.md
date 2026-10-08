@@ -53,7 +53,7 @@ collaboration projection
 
 `agent_harness` 必须为 `pi`，`runtime_provider` 仅接受 `direct` 或 `thinkthread`；对应的 `execution_scope` 必须分别为 `native_root` 或 `thinkthread_private`，`session_handle` 中的 harness/provider 必须与当前 agent session 一致。缺字段、身份冲突或旧 `host` / `host_handle` 结构都产生 `unsupported_goal_plus_schema`，该 worker 不上传 Trace 或关系。
 
-`direct` 从 `session_handle.metadata.session_file` 或受限的唯一 session 文件定位 native JSONL。`thinkthread` 从 `host-logs/session-diagnostics` 读取有索引的批次 archive；批次顺序、session 身份和 entry 数量都必须通过校验。所有路径均经过 realpath、根目录包含关系和普通文件检查。
+`direct` 优先从 `session_handle.metadata.session_file` / `pi_metrics.session_file` 定位 native JSONL；未声明或文件尚未出现时，查找旧 `runs/<run>/pi_sessions/` 路径及 `host-sessions/pi/`，包括 `sessions/<workspace>/` 嵌套目录。每轮复用一个 session 文件索引，最多检查 10,000 个目录条目、四层嵌套；超过限制产生 `pi_session_scan_limit`，不把未扫描完当作没有数据。查找不遍历 candidate workspace 或用户 home。候选文件必须在 source 内、不经过符号链接，首行 header 必须为 `type=session` 且 `id` 与 handle 的 `external_id` 相同；首行读取上限 64 KiB。缺失/未完整写入的 header 下轮重试，多候选报 `ambiguous_pi_session_file`，身份不符报 `pi_session_identity_mismatch`。`thinkthread` 从 `host-logs/session-diagnostics` 读取有索引的批次 archive；批次顺序、session 身份和 entry 数量都必须通过校验。所有路径均经过 realpath、根目录包含关系和普通文件检查。
 
 Goal 主端仅接受 `goal.json.host_command_invocations` 中按稳定顺序选择的首个：
 
@@ -140,7 +140,7 @@ Trace 与关系上传顺序为：
 
 ## 安装与配置
 
-面向用户只有 Pi Agent 安装入口。Pi bundle 同时包含 Pi extension、worker parser、Pi passive importer、source registry 和共享 collaboration transport；安装时将观察器文件放到 `~/.agent-insight/collectors/goal-plus/`，但不登记 source、不扫描、不启动 watcher，也不创建 `goal-plus-collector` 命令 wrapper。独立 Goal Plus bundle/route 仅作为既有安装的兼容入口。
+面向用户只有 Pi Agent 安装入口。Pi bundle 同时包含 Pi extension、worker parser、Pi passive importer、source registry 和共享 collaboration transport；安装时将观察器文件放到 `~/.agent-insight/collectors/goal-plus/`，不自动登记 source，也不创建 `goal-plus-collector` 命令 wrapper。首次安装且没有已有 source 时不启动 watcher；重装后已有 source 会恢复扫描。独立 Goal Plus bundle/route 仅作为既有安装的兼容入口。
 
 `frameworks=goal-plus` 是旧链接兼容别名：服务端和已下载脚本都将它去重映射为 `pi-agent`。安装页和交互选择器不再展示 Goal Plus framework，也不使用 `goalPlusHosts` 选择宿主。
 
@@ -180,6 +180,16 @@ API Key 只读取安装器写入的 managed config，不接受运行时通用变
 watcher 指纹覆盖 collector 版本、凭证摘要和三个端点；任一变化都会受控重启。`start` 要求至少一个 attached source，`ensure` 对无 source 安静跳过，对 stale PID 恢复。Goal Plus watcher 失败不停止 Pi 原生 collector；结果是主 Trace 仍可见，但 worker 关系暂不可用。
 
 Pi 安装器以当前 Pi API Key、OTLP 端点和两个 collaboration 端点无条件覆盖 Goal Plus managed config，不兼容或保留旧版、手工配置及其他账号的 collector 身份。写入前停止已有 watcher，写入后对已有 source 执行 `ensure`，因此新进程不会继续持有旧账号。Pi runtime 激活观察器时还会比较两份 managed API Key；不一致时先停止 watcher 再 fail closed，禁止跨用户上传 worker Trace。Pi 卸载会停止 `managedBy=pi-agent` 的 watcher，并默认保留 source registry 与 spool。
+
+## 安装升级与诊断
+
+共享模块、Pi 包和 Goal Plus 包各有 `installation.json`，记录格式版本、代码文件 SHA-256 和由文件清单派生的 `buildId`；不包含账号配置或凭证。共享模块额外声明 `sharedAbi=1`。后续受管升级要求本机文件仍匹配安装清单；首次迁移支持已核验的历史共享模块哈希，包括 9 月 7 日版本的 transport。无清单的旧 Pi / Goal Plus 包沿用覆盖安装行为，成功后建立清单。相同文件可重复安装；共享模块或受管包的未知修改、不同 shared ABI 在写入前拒绝。清单是完整性记录，不能替代兼容性验证：修改共享模块必须保持相同 ABI 下其他采集器的导出与行为合同，破坏性变更不能仅通过修改哈希放行。
+
+Pi 安装先预检双方包与全部共享依赖，并加载 incoming 模块图，再停止 watcher、更新文件/配置、注册 Pi 和执行安装后检查。可捕获的复制、注册或检查失败会恢复受影响的代码、manifest、配置、Pi settings，并尝试恢复原先运行的 watcher；恢复失败单独报告。registry、checkpoint、outbox、spool 与数据库不参与替换。此恢复不是断电事务；SIGKILL 或主机断电后需要核对 manifest 并重跑安装。共享旧代码升级前另留 `.bak`。
+
+Pi 自检验证文件清单、端点、关系拒绝计数及 Pi/Goal Plus 配置一致性，JSON 模式失败也返回非零。未运行 Goal Plus 时无 source 属于正常 `DORMANT`。新 Pi 进程在加载扩展时固定构建标识，session 启动时写入 `runtime/loaded-<pid>.json`；旧进程不因磁盘升级而自动成为新版本。
+
+观察器 `ACTIVE` 只表示激活成功。每轮扫描把覆盖率及去重后的诊断保存到 `runtime/scans.json`，由 `status` 暴露。`coverage` 的 `workers/supported/found/pending/failed` 仅统计 Pi 范围（无法识别的 session 计入失败）；短暂缺失为 `WAITING`，连续不完整 30 秒后为 `PARTIAL` 或 `DEGRADED`，日志恢复后重新计算。一个 worker 失败不阻塞其他 worker。watch 日志在覆盖率/诊断改变或有新数据交付时输出，避免每五秒重复同一故障。
 
 ## 查询与展示契约
 

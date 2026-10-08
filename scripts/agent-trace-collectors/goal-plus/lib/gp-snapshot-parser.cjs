@@ -247,34 +247,88 @@ async function thinkThreadArchive(root, source) {
   return undefined;
 }
 
-async function piWorkerSessionSource(root, source) {
+function locatorError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+async function verifyPiHeader(root, candidate, nativeSessionId) {
+  const file = path.resolve(root, candidate);
+  if (!await existingRegularFile(root, file)) return false;
+  const canonical = await fsp.realpath(file);
+  const canonicalRoot = await fsp.realpath(root);
+  if (canonical !== path.resolve(canonicalRoot, path.relative(path.resolve(root), file)) || !canonical.startsWith(`${canonicalRoot}${path.sep}`)) {
+    throw locatorError("invalid_pi_session_path", "Pi session must be a non-symlink file inside the source root");
+  }
+  const handle = await fsp.open(file, "r");
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const end = buffer.subarray(0, bytesRead).indexOf(10);
+    if (end < 0 && bytesRead < buffer.length) {
+      throw locatorError("pi_session_pending", "Pi session header is not complete yet");
+    }
+    if (end < 0) throw locatorError("invalid_pi_session_header", "Pi session header exceeds the size limit");
+    let header;
+    try { header = JSON.parse(buffer.subarray(0, end).toString("utf8")); }
+    catch { throw locatorError("invalid_pi_session_header", "Pi session header is not valid JSON"); }
+    if (header.type !== "session" || !nativeSessionId || header.id !== nativeSessionId) {
+      throw locatorError("pi_session_identity_mismatch", "Pi session header does not match the worker native session id");
+    }
+    return true;
+  } finally { await handle.close(); }
+}
+
+async function indexPiSessions(root) {
+  const files = [];
+  let visited = 0;
+  const canonicalRoot = await fsp.realpath(root);
+  async function visit(directory, depth) {
+    let canonical;
+    try { canonical = await fsp.realpath(directory); }
+    catch (error) { if (error.code === "ENOENT") return; throw error; }
+    if (canonical !== path.resolve(canonicalRoot, path.relative(path.resolve(root), directory))
+      || !canonical.startsWith(`${canonicalRoot}${path.sep}`)) {
+      throw locatorError("invalid_pi_session_path", "Pi session index must stay inside a non-symlink source directory");
+    }
+    const entries = await fsp.readdir(directory, { withFileTypes: true }).catch(error => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      if (++visited > 10000) throw locatorError("pi_session_scan_limit", "Pi session index exceeded 10000 entries");
+      if (entry.isSymbolicLink()) continue;
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (depth >= 4) throw locatorError("pi_session_scan_limit", "Pi session index exceeded four nested directories");
+        await visit(file, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(file);
+    }
+  }
+  await visit(path.join(root, "host-sessions", "pi"), 0);
+  return files;
+}
+
+async function piWorkerSessionSource(root, source, sessionIndex = () => indexPiSessions(root)) {
   const metadata = source.session_handle.metadata || {};
   const declared = metadata.session_file || metadata.pi_metrics?.session_file;
   const externalId = source.session_handle.external_id;
-  const hostSessionDir = path.join(root, "host-sessions", "pi");
-  const candidates = [
-    declared,
-    externalId
-      ? path.join(hostSessionDir, `${externalId}.jsonl`)
-      : undefined,
-    source.run_id && source.agent_session_id
-      ? path.join(root, "runs", source.run_id, "pi_sessions", `${source.agent_session_id}.jsonl`)
-      : undefined,
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (await existingRegularFile(root, candidate)) return { sessionFile: candidate, sessionFormat: "pi-jsonl" };
+  if (declared && await verifyPiHeader(root, declared, externalId)) {
+    return { sessionFile: path.resolve(root, declared), sessionFormat: "pi-jsonl" };
+  }
+  const candidates = new Set();
+  if (source.run_id && source.agent_session_id) {
+    const legacy = path.join(root, "runs", source.run_id, "pi_sessions", `${source.agent_session_id}.jsonl`);
+    if (await existingRegularFile(root, legacy)) candidates.add(legacy);
   }
   if (externalId) {
-    const matches = (await fsp.readdir(hostSessionDir, { withFileTypes: true }).catch(error => {
-      if (error?.code === "ENOENT") return [];
-      throw error;
-    }))
-      .filter(entry => entry.isFile() && (
-        entry.name === `${externalId}.jsonl` || entry.name.endsWith(`_${externalId}.jsonl`)
-      ))
-      .map(entry => path.join(hostSessionDir, entry.name));
-    if (matches.length === 1) return { sessionFile: matches[0], sessionFormat: "pi-jsonl" };
-    if (matches.length > 1) throw new Error(`multiple Pi session files match ${externalId}`);
+    for (const file of await sessionIndex()) {
+      const name = path.basename(file);
+      if (name === `${externalId}.jsonl` || name.endsWith(`_${externalId}.jsonl`)) candidates.add(file);
+    }
+  }
+  if (candidates.size > 1) throw locatorError("ambiguous_pi_session_file", `Multiple Pi session files match ${externalId}`);
+  for (const file of candidates) {
+    if (await verifyPiHeader(root, file, externalId)) return { sessionFile: file, sessionFormat: "pi-jsonl" };
   }
   if (source.runtime_provider === "thinkthread") {
     const archive = await thinkThreadArchive(root, source);
@@ -343,7 +397,12 @@ async function walk(root, relative = "") {
   for (const entry of entries) {
     if (entry.isSymbolicLink()) continue;
     const child = relative ? `${relative}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) files.push(...await walk(root, child));
+    if (entry.isDirectory()) {
+      if (!relative && !["goal-plus", "runs", "specs"].includes(entry.name)) continue;
+      if (/^runs\/[^/]+$/.test(relative) && !["agent_sessions", "candidates"].includes(entry.name)) continue;
+      if (relative.split("/").length >= 4) continue;
+      files.push(...await walk(root, child));
+    }
     else if (entry.isFile()) files.push(child);
   }
   return files;
@@ -393,6 +452,7 @@ async function parseGoalPlusRoot(source) {
   const root = source.root;
   const files = (await walk(root)).sort();
   const diagnostics = [];
+  const coverage = { workers: 0, supported: 0, found: 0, pending: 0, failed: 0 };
   const context = { runGoals: new Map(), specs: new Map(), goals: new Map() };
   const rawRecords = new Map();
   for (const relative of files) {
@@ -410,12 +470,18 @@ async function parseGoalPlusRoot(source) {
       }
       if (kind === "frozen_spec") context.specs.set(raw.frozen_spec_id, raw);
     } catch (error) {
+      if (kind === "agent_session") {
+        coverage.workers += 1;
+        coverage.failed += 1;
+      }
       diagnostics.push({ relativePath: relative, code: "unreadable_state", message: error.message });
     }
   }
   const snapshots = [];
   const piSessions = [];
   const relationships = [];
+  let sessionIndex;
+  const getSessionIndex = () => sessionIndex ||= indexPiSessions(root);
   for (const relative of files) {
     const kind = kindFor(relative);
     if (!kind) continue;
@@ -428,7 +494,9 @@ async function parseGoalPlusRoot(source) {
       const record = rawRecords.get(relative);
       if (!record) continue;
       const { raw, bytes, stat } = record;
+      if (kind === "agent_session" && raw.agent_harness !== "codex") coverage.workers += 1;
       if (kind === "agent_session" && !hasCurrentAgentSessionSchema(raw)) {
+        if (raw.agent_harness !== "codex") coverage.failed += 1;
         diagnostics.push({
           relativePath: relative,
           code: "unsupported_goal_plus_schema",
@@ -462,7 +530,8 @@ async function parseGoalPlusRoot(source) {
         redaction: { contentMode: "bounded", truncatedFields: [], removedFields: ["absolute-paths", "logs", "secrets", "hidden-evaluation-content"] },
       }));
       if (kind === "agent_session") {
-        const sessionSource = await piWorkerSessionSource(root, raw);
+        coverage.supported += 1;
+        const sessionSource = await piWorkerSessionSource(root, raw, getSessionIndex);
         if (sessionSource) {
           const metadata = raw.session_handle.metadata || {};
           const runnerFailed = metadata.runner_failed === true;
@@ -504,6 +573,7 @@ async function parseGoalPlusRoot(source) {
             exitCode,
             errorMessage: metadata.model_failure || metadata.error,
           };
+          coverage.found += 1;
           piSessions.push(descriptor);
           const goal = context.goals.get(descriptor.goalId);
           const invocation = goal && initialPiStartInvocation(goal);
@@ -521,17 +591,24 @@ async function parseGoalPlusRoot(source) {
             });
           }
         }
-        else diagnostics.push({
-          relativePath: relative,
-          code: "missing_pi_session_file",
-          message: `No Pi native session file was recorded for ${raw.agent_session_id}`,
-        });
+        else {
+          coverage.pending += 1;
+          diagnostics.push({
+            relativePath: relative,
+            code: "missing_pi_session_file",
+            message: `No Pi native session file was recorded for ${raw.agent_session_id}; retrying on the next scan`,
+          });
+        }
       }
     } catch (error) {
-      diagnostics.push({ relativePath: relative, code: "parse_failed", message: error.message });
+      if (kind === "agent_session") {
+        if (error.code === "pi_session_pending") coverage.pending += 1;
+        else coverage.failed += 1;
+      }
+      diagnostics.push({ relativePath: relative, code: error.code || "parse_failed", message: error.message });
     }
   }
-  return { snapshots, piSessions, relationships, diagnostics, scannedFiles: files.length };
+  return { snapshots, piSessions, relationships, diagnostics, coverage, scannedFiles: files.length };
 }
 
 module.exports = {
