@@ -157,6 +157,8 @@ xGovernor 把工具输入放在 `tool_activity(begin)`、把结果放在 `tool_a
 
 ## 排查
 
+安装时若在“Installing MCTS xGovernor collector”处出现 HTTP 500，应由平台管理员更新并重新构建、重启 Agent Insight 服务后，再执行页面安装命令。平台日志中 `ENOENT ... services/executor/src/mcts-config.cjs` 表示平台安装包来源目录或 standalone 构建缺少文件，不需要修改 MCTS 仓库或模型/E2B 配置。
+
 启动时 stderr 应出现 `Agent Insight MCTS observer active`。如果平台没有新 Trace：
 
 1. 确认 MCTS 确实通过 xGovernor 发起 `open/load/turns`；
