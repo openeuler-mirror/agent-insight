@@ -7,14 +7,16 @@ import re
 from typing import Any, AsyncGenerator, Callable
 
 
-try:
-    from agentscope.middleware import MiddlewareBase as _MiddlewareBase
-except ImportError:
-    class _MiddlewareBase:
-        """Fallback when agentscope is unavailable (unit tests)."""
+class _MiddlewareBase:
+    """Lightweight fallback for QwenPaw/AgentScope middleware protocol.
 
-        def is_implemented(self, hook_name: str) -> bool:
-            return hook_name == "on_acting"
+    Importing AgentScope's concrete MiddlewareBase at plugin import time can
+    trigger host-side initialization. QwenPaw registers middleware by protocol,
+    so this class keeps the collector cheap and import-safe.
+    """
+
+    def is_implemented(self, hook_name: str) -> bool:
+        return hook_name == "on_acting"
 
 
 class AgentInsightToolMiddleware(_MiddlewareBase):
